@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from collections.abc import Mapping
+from typing import Any
 
 import pyarrow as pa
 
@@ -24,16 +24,19 @@ def schema_fingerprint(schema: pa.Schema) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def table_summary(table: pa.Table) -> Dict[str, Any]:
+def table_summary(table: pa.Table) -> dict[str, Any]:
     """
     Returns a compact summary for a table suitable for manifest recording.
     """
     sch_fp = schema_fingerprint(table.schema)
     return {
         "rows": int(table.num_rows),
-        "columns": int(len(table.column_names)),
+        "columns": len(table.column_names),
         "schema_fingerprint": sch_fp,
-        "schema": [{"name": f.name, "type": str(f.type), "nullable": bool(f.nullable)} for f in table.schema],
+        "schema": [
+            {"name": f.name, "type": str(f.type), "nullable": bool(f.nullable)}
+            for f in table.schema
+        ],
     }
 
 
@@ -51,7 +54,7 @@ def dataset_stats_table(tables: Mapping[str, pa.Table]) -> pa.Table:
             {
                 "dataset_name": str(name),
                 "rows": int(t.num_rows),
-                "columns": int(len(t.column_names)),
+                "columns": len(t.column_names),
                 "schema_fingerprint": sch_fp,
             }
         )

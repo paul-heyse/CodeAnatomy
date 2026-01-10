@@ -1,9 +1,11 @@
+"""Extract Python bytecode artifacts into Arrow tables."""
+
 from __future__ import annotations
 
 import dis
 import types as pytypes
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional, Sequence
 
 import pyarrow as pa
 
@@ -22,6 +24,7 @@ class BytecodeExtractOptions:
     - include_cfg_derivations implements the blocks/CFG edges derivation recipe.
       :contentReference[oaicite:18]{index=18}
     """
+
     optimize: int = 0
     dont_inherit: bool = True
     adaptive: bool = False
@@ -31,6 +34,8 @@ class BytecodeExtractOptions:
 
 @dataclass(frozen=True)
 class BytecodeExtractResult:
+    """Extracted bytecode tables for code units, instructions, and edges."""
+
     py_bc_code_units: pa.Table
     py_bc_instructions: pa.Table
     py_bc_exception_table: pa.Table
@@ -138,7 +143,7 @@ ERRORS_SCHEMA = pa.schema(
 )
 
 
-def _jump_target(ins: dis.Instruction) -> Optional[int]:
+def _jump_target(ins: dis.Instruction) -> int | None:
     jt = getattr(ins, "jump_target", None)
     if isinstance(jt, int):
         return jt
@@ -158,14 +163,23 @@ def _is_unconditional_jump(opname: str) -> bool:
     return ("IF" not in opname) and (opname != "FOR_ITER")
 
 
-def _iter_code_objects(co: pytypes.CodeType, parent: Optional[pytypes.CodeType] = None):
+def _iter_code_objects(co: pytypes.CodeType, parent: pytypes.CodeType | None = None):
     yield co, parent
     for c in co.co_consts:
         if isinstance(c, pytypes.CodeType):
             yield from _iter_code_objects(c, co)
 
 
-def extract_bytecode(repo_files: pa.Table, options: Optional[BytecodeExtractOptions] = None) -> BytecodeExtractResult:
+def extract_bytecode(
+    repo_files: pa.Table, options: BytecodeExtractOptions | None = None
+) -> BytecodeExtractResult:
+    """Extract bytecode tables from repository files.
+
+    Returns
+    -------
+    BytecodeExtractResult
+        Tables for bytecode code units, instructions, exception data, and edges.
+    """
     options = options or BytecodeExtractOptions()
 
     cu_rows: list[dict] = []
@@ -214,9 +228,9 @@ def extract_bytecode(repo_files: pa.Table, options: Optional[BytecodeExtractOpti
         # Assign deterministic code_unit_id + qualpath
         co_to_id: dict[int, str] = {}
         co_to_qual: dict[int, str] = {}
-        co_to_parent_id: dict[int, Optional[str]] = {}
+        co_to_parent_id: dict[int, str | None] = {}
 
-        def _qual_for(co: pytypes.CodeType, parent_qual: Optional[str]) -> str:
+        def _qual_for(co: pytypes.CodeType, parent_qual: str | None) -> str:
             name = co.co_name
             if parent_qual is None:
                 return "<module>"
@@ -252,7 +266,7 @@ def extract_bytecode(repo_files: pa.Table, options: Optional[BytecodeExtractOpti
                     "nlocals": int(getattr(co, "co_nlocals", 0)),
                     "flags": int(getattr(co, "co_flags", 0)),
                     "stacksize": int(getattr(co, "co_stacksize", 0)),
-                    "code_len": int(len(co.co_code)),
+                    "code_len": len(co.co_code),
                 }
             )
 
@@ -315,8 +329,12 @@ def extract_bytecode(repo_files: pa.Table, options: Optional[BytecodeExtractOpti
                         "argrepr": ins.argrepr,
                         "is_jump_target": bool(ins.is_jump_target),
                         "jump_target_offset": int(jt) if jt is not None else None,
-                        "starts_line": int(ins.starts_line) if ins.starts_line is not None else None,
-                        "pos_start_line": int(pos_start_line) if pos_start_line is not None else None,
+                        "starts_line": int(ins.starts_line)
+                        if ins.starts_line is not None
+                        else None,
+                        "pos_start_line": int(pos_start_line)
+                        if pos_start_line is not None
+                        else None,
                         "pos_end_line": int(pos_end_line) if pos_end_line is not None else None,
                         "pos_start_col": int(pos_start_col) if pos_start_col is not None else None,
                         "pos_end_col": int(pos_end_col) if pos_end_col is not None else None,
@@ -328,7 +346,7 @@ def extract_bytecode(repo_files: pa.Table, options: Optional[BytecodeExtractOpti
 
             # Derive blocks + edges (Step 1-4 recipe)
             # Boundaries: 0, jump targets, after terminators, exception start/end/target, end of code
-            boundaries: set[int] = {0, int(len(co.co_code))}
+            boundaries: set[int] = {0, len(co.co_code)}
             for ins in insns:
                 jt = _jump_target(ins)
                 if jt is not None:
@@ -360,7 +378,7 @@ def extract_bytecode(repo_files: pa.Table, options: Optional[BytecodeExtractOpti
             off_to_block: dict[int, str] = {}
             target_offsets = {int(getattr(ex, "target", 0)) for ex in exc_entries}
 
-            for (s, e) in blocks:
+            for s, e in blocks:
                 kind = "entry" if s == 0 else ("handler" if s in target_offsets else "normal")
                 block_id = stable_id("bc_block", cu_id, str(s), str(e))
                 blk_rows.append(
@@ -380,13 +398,15 @@ def extract_bytecode(repo_files: pa.Table, options: Optional[BytecodeExtractOpti
             # Normal edges
             # Identify last instruction of each block and emit fallthrough/jump edges
             # Note: block boundaries are instruction offsets; last insn is max offset in [s,e).
-            for (s, e) in blocks:
+            for s, e in blocks:
                 ins_in_block = [i for i in insns if s <= int(i.offset) < e]
                 if not ins_in_block:
                     continue
                 last = ins_in_block[-1]
                 src = off_to_block[int(ins_in_block[0].offset)]
-                last_id = stable_id("bc_insn", cu_id, str(by_off[int(last.offset)]), str(last.offset))
+                last_id = stable_id(
+                    "bc_insn", cu_id, str(by_off[int(last.offset)]), str(last.offset)
+                )
 
                 jt = _jump_target(last)
                 if jt is not None and jt in off_to_block:
@@ -413,7 +433,9 @@ def extract_bytecode(repo_files: pa.Table, options: Optional[BytecodeExtractOpti
                             edge_rows.append(
                                 {
                                     "schema_version": SCHEMA_VERSION,
-                                    "edge_id": stable_id("bc_cfg", cu_id, src, next_block, "next", str(e)),
+                                    "edge_id": stable_id(
+                                        "bc_cfg", cu_id, src, next_block, "next", str(e)
+                                    ),
                                     "code_unit_id": cu_id,
                                     "src_block_id": src,
                                     "dst_block_id": next_block,
@@ -454,7 +476,7 @@ def extract_bytecode(repo_files: pa.Table, options: Optional[BytecodeExtractOpti
                     continue
 
                 # all blocks that overlap [start,end)
-                for (s, e) in blocks:
+                for s, e in blocks:
                     if not (e <= start or s >= end):
                         src = off_to_block.get(s)
                         if src is None:

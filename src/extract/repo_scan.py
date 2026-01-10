@@ -3,14 +3,12 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import io
-import os
 import tokenize
-from dataclasses import dataclass, field
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Optional, Sequence
 
 import pyarrow as pa
-
 
 SCHEMA_VERSION = 1
 
@@ -32,7 +30,7 @@ def stable_id(prefix: str, *parts: str) -> str:
 
 @dataclass(frozen=True)
 class RepoScanOptions:
-    repo_id: Optional[str] = None
+    repo_id: str | None = None
     include_globs: Sequence[str] = ("**/*.py",)
     exclude_dirs: Sequence[str] = (
         ".git",
@@ -49,20 +47,20 @@ class RepoScanOptions:
     follow_symlinks: bool = False
     include_bytes: bool = True
     include_text: bool = True
-    max_file_bytes: Optional[int] = None
+    max_file_bytes: int | None = None
 
 
 REPO_FILES_SCHEMA = pa.schema(
     [
         ("schema_version", pa.int32()),
         ("file_id", pa.string()),
-        ("path", pa.string()),         # repo-relative POSIX
-        ("abs_path", pa.string()),     # absolute path on disk
+        ("path", pa.string()),  # repo-relative POSIX
+        ("abs_path", pa.string()),  # absolute path on disk
         ("size_bytes", pa.int64()),
         ("file_sha256", pa.string()),  # sha256 hex of file bytes
         ("encoding", pa.string()),
-        ("text", pa.string()),         # decoded best-effort (nullable)
-        ("bytes", pa.binary()),        # raw bytes (nullable if include_bytes=False)
+        ("text", pa.string()),  # decoded best-effort (nullable)
+        ("bytes", pa.binary()),  # raw bytes (nullable if include_bytes=False)
     ]
 )
 
@@ -80,7 +78,7 @@ def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _detect_encoding_and_decode(data: bytes) -> tuple[str, Optional[str]]:
+def _detect_encoding_and_decode(data: bytes) -> tuple[str, str | None]:
     """
     Detect encoding using tokenize rules (PEP 263) and decode best-effort.
     """
@@ -119,7 +117,7 @@ def iter_repo_files(repo_root: Path, options: RepoScanOptions) -> Iterator[Path]
                 yield rel
 
 
-def scan_repo(repo_root: Path, options: Optional[RepoScanOptions] = None) -> pa.Table:
+def scan_repo(repo_root: Path, options: RepoScanOptions | None = None) -> pa.Table:
     """
     Scans repo for Python files and returns a "repo_files" Arrow table.
 
@@ -146,7 +144,7 @@ def scan_repo(repo_root: Path, options: Optional[RepoScanOptions] = None) -> pa.
         file_id = stable_id("file", *(filter(None, [options.repo_id, rel_posix])))
 
         encoding = "utf-8"
-        text: Optional[str] = None
+        text: str | None = None
         if options.include_text:
             encoding, text = _detect_encoding_and_decode(data)
 
@@ -155,7 +153,7 @@ def scan_repo(repo_root: Path, options: Optional[RepoScanOptions] = None) -> pa.
             "file_id": file_id,
             "path": rel_posix,
             "abs_path": str(abs_path),
-            "size_bytes": int(len(data)),
+            "size_bytes": len(data),
             "file_sha256": file_sha256,
             "encoding": encoding,
             "text": text,

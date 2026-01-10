@@ -1,22 +1,33 @@
+"""Contracts and policy specs for Arrow table outputs."""
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Literal, Dict, Optional, Sequence, Tuple
-
+from typing import Literal, TypeAlias
 
 import pyarrow as pa
 
-
-InvariantFn = Callable[["pa.Table"], Tuple["pa.Array", str]]  # (bad_mask, error_code)
+InvariantFn: TypeAlias = Callable[[pa.Table], tuple[pa.Array, str]]
 
 
 @dataclass(frozen=True)
 class SortKey:
+    """Sort key specification for deterministic ordering.
+
+    Parameters
+    ----------
+    column:
+        Column name to sort by.
+    order:
+        Sort order ("ascending" or "descending").
+    """
+
     column: str
     order: Literal["ascending", "descending"] = "ascending"
 
 
-DedupeStrategy = Literal[
+DedupeStrategy: TypeAlias = Literal[
     "KEEP_FIRST_AFTER_SORT",
     "KEEP_BEST_BY_SCORE",
     "COLLAPSE_LIST",
@@ -26,51 +37,63 @@ DedupeStrategy = Literal[
 
 @dataclass(frozen=True)
 class DedupeSpec:
-    """Dedupe semantics are explicit, centralized policy."""
+    """Dedupe semantics for a table.
 
-    keys: Tuple[str, ...]
-    tie_breakers: Tuple[SortKey, ...] = ()
+    Parameters
+    ----------
+    keys:
+        Key columns that define duplicates.
+    tie_breakers:
+        Additional sort keys used for deterministic winner selection.
+    strategy:
+        Dedupe strategy name.
+    """
+
+    keys: tuple[str, ...]
+    tie_breakers: tuple[SortKey, ...] = ()
     strategy: DedupeStrategy = "KEEP_FIRST_AFTER_SORT"
 
 
 @dataclass(frozen=True)
 class Contract:
-    """Output contract (schema + invariants + determinism policy)."""
+    """Output contract: schema, invariants, and determinism policy."""
 
     name: str
-    schema: "pa.Schema"
+    schema: pa.Schema
 
-    key_fields: Tuple[str, ...] = ()
-    required_non_null: Tuple[str, ...] = ()
-    invariants: Tuple[InvariantFn, ...] = ()
+    key_fields: tuple[str, ...] = ()
+    required_non_null: tuple[str, ...] = ()
+    invariants: tuple[InvariantFn, ...] = ()
 
-    dedupe: Optional[DedupeSpec] = None
-    canonical_sort: Tuple[SortKey, ...] = ()
+    dedupe: DedupeSpec | None = None
+    canonical_sort: tuple[SortKey, ...] = ()
 
-    version: Optional[int] = None
+    version: int | None = None
 
-    # NEW: properties required by downstream consumers but not stored as columns
-    # Example: origin="scip" injected by the edge emission stage.
-    virtual_fields: Tuple[str, ...] = ()
+    virtual_fields: tuple[str, ...] = ()
+    virtual_field_docs: dict[str, str] | None = None
 
-    # Optional docs for virtual fields (helpful for debugging)
-    virtual_field_docs: Optional[Dict[str, str]] = None
+    def with_versioned_schema(self) -> pa.Schema:
+        """Return the schema with contract metadata attached.
 
-
-    def with_versioned_schema(self) -> "pa.Schema":
-        """Attach contract metadata to schema (best effort)."""
-        import pyarrow as pa
-
+        Returns
+        -------
+        pyarrow.Schema
+            Schema containing contract name/version metadata when available.
+        """
         meta = dict(self.schema.metadata or {})
         meta[b"contract_name"] = str(self.name).encode("utf-8")
         if self.version is not None:
             meta[b"contract_version"] = str(self.version).encode("utf-8")
         return self.schema.with_metadata(meta)
 
+    def available_fields(self) -> tuple[str, ...]:
+        """Return all visible field names (columns + virtual fields).
 
-    def available_fields(self) -> Tuple[str, ...]:
+        Returns
+        -------
+        tuple[str, ...]
+            Field names visible to validators and downstream consumers.
         """
-        Columns + declared virtual fields. Used by validators.
-        """
-        cols = tuple(self.schema.names) if self.schema is not None else ()
-        return tuple(cols) + tuple(self.virtual_fields or ())
+        cols = tuple(self.schema.names)
+        return cols + tuple(self.virtual_fields)

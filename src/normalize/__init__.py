@@ -14,28 +14,28 @@ Core responsibilities:
   3) Stable IDs: deterministic hashing for ids/keys/edges, so downstream graph building is reproducible.
 """
 
-from .spans import (
-    FileTextIndex,
-    RepoTextIndex,
-    build_repo_text_index,
-    add_ast_byte_spans,
-    add_scip_occurrence_byte_spans,
-    normalize_cst_callsites_spans,
-    normalize_cst_imports_spans,
-    normalize_cst_defs_spans,
+from .ids import (
+    add_span_id_column,
+    span_id,
+    stable_id,
+    stable_int64,
 )
 from .schema_infer import (
     SchemaInferOptions,
-    unify_schemas,
-    infer_schema_from_tables,
     align_table_to_schema,
     align_tables_to_unified_schema,
+    infer_schema_from_tables,
+    unify_schemas,
 )
-from .ids import (
-    stable_id,
-    stable_int64,
-    span_id,
-    add_span_id_column,
+from .spans import (
+    FileTextIndex,
+    RepoTextIndex,
+    add_ast_byte_spans,
+    add_scip_occurrence_byte_spans,
+    build_repo_text_index,
+    normalize_cst_callsites_spans,
+    normalize_cst_defs_spans,
+    normalize_cst_imports_spans,
 )
 
 __all__ = [

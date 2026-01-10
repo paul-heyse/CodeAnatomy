@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import pathlib
 import platform
 import sys
 import time
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Union
+from collections.abc import Mapping
+from typing import Any
 
 import pyarrow as pa
 
@@ -20,14 +22,15 @@ except Exception:  # pragma: no cover
 # Basic environment capture
 # -----------------------
 
-def _pkg_version(name: str) -> Optional[str]:
+
+def _pkg_version(name: str) -> str | None:
     try:
         return importlib_metadata.version(name)
     except Exception:
         return None
 
 
-def try_get_git_info(repo_root: Optional[str]) -> Dict[str, Any]:
+def try_get_git_info(repo_root: str | None) -> dict[str, Any]:
     """
     Best-effort git info without shelling out.
     Looks for:
@@ -38,11 +41,11 @@ def try_get_git_info(repo_root: Optional[str]) -> Dict[str, Any]:
 
     git_dir = os.path.join(repo_root, ".git")
     head_path = os.path.join(git_dir, "HEAD")
-    if not os.path.exists(head_path):
+    if not pathlib.Path(head_path).exists():
         return {"present": False}
 
     try:
-        head = open(head_path, "r", encoding="utf-8").read().strip()
+        head = pathlib.Path(head_path).open("r", encoding="utf-8").read().strip()
     except Exception:
         return {"present": True, "error": "failed_to_read_HEAD"}
 
@@ -50,9 +53,9 @@ def try_get_git_info(repo_root: Optional[str]) -> Dict[str, Any]:
         ref = head.split(":", 1)[1].strip()
         ref_path = os.path.join(git_dir, ref.replace("/", os.sep))
         sha = None
-        if os.path.exists(ref_path):
+        if pathlib.Path(ref_path).exists():
             try:
-                sha = open(ref_path, "r", encoding="utf-8").read().strip()
+                sha = pathlib.Path(ref_path).open("r", encoding="utf-8").read().strip()
             except Exception:
                 sha = None
         return {"present": True, "head": head, "ref": ref, "commit": sha}
@@ -61,13 +64,15 @@ def try_get_git_info(repo_root: Optional[str]) -> Dict[str, Any]:
     return {"present": True, "head": "detached", "commit": head}
 
 
-def collect_repro_info(repo_root: Optional[str] = None, *, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def collect_repro_info(
+    repo_root: str | None = None, *, extra: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """
     Captures a compact reproducibility bundle.
 
     Intentionally avoids huge payloads (pip freeze, full env vars).
     """
-    info: Dict[str, Any] = {
+    info: dict[str, Any] = {
         "python": {
             "version": sys.version,
             "executable": sys.executable,
@@ -93,8 +98,9 @@ def collect_repro_info(repo_root: Optional[str] = None, *, extra: Optional[Dict[
 # JSON serialization helpers
 # -----------------------
 
+
 def _ensure_dir(path: str) -> None:
-    os.makedirs(path, exist_ok=True)
+    pathlib.Path(path).mkdir(exist_ok=True, parents=True)
 
 
 def _json_default(obj: Any) -> Any:
@@ -123,9 +129,9 @@ def _json_default(obj: Any) -> Any:
 
 def _write_json(path: str, data: Any, *, overwrite: bool = True) -> str:
     _ensure_dir(os.path.dirname(path) or ".")
-    if overwrite and os.path.exists(path):
-        os.remove(path)
-    with open(path, "w", encoding="utf-8") as f:
+    if overwrite and pathlib.Path(path).exists():
+        pathlib.Path(path).unlink()
+    with pathlib.Path(path).open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False, sort_keys=True, default=_json_default)
     return path
 
@@ -134,11 +140,11 @@ def _write_json(path: str, data: Any, *, overwrite: bool = True) -> str:
 # Schema + contract + rule snapshots
 # -----------------------
 
-def arrow_schema_to_dict(schema: pa.Schema) -> Dict[str, Any]:
+
+def arrow_schema_to_dict(schema: pa.Schema) -> dict[str, Any]:
     return {
         "fields": [
-            {"name": f.name, "type": str(f.type), "nullable": bool(f.nullable)}
-            for f in schema
+            {"name": f.name, "type": str(f.type), "nullable": bool(f.nullable)} for f in schema
         ]
     }
 
@@ -148,7 +154,7 @@ def schema_fingerprint(schema: pa.Schema) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def serialize_contract(contract: Any) -> Dict[str, Any]:
+def serialize_contract(contract: Any) -> dict[str, Any]:
     """
     Serialize an arrowdsl.contracts.Contract-like object.
     Works with our earlier Contract shape, but is intentionally defensive.
@@ -193,7 +199,7 @@ def serialize_contract(contract: Any) -> Dict[str, Any]:
     }
 
 
-def serialize_contract_catalog(contract_catalog: Any) -> Dict[str, Any]:
+def serialize_contract_catalog(contract_catalog: Any) -> dict[str, Any]:
     """
     Serialize a ContractCatalog-like object from relspec/registry.py
     """
@@ -205,15 +211,20 @@ def serialize_contract_catalog(contract_catalog: Any) -> Dict[str, Any]:
 
     out = {"contracts": []}
     for name in names:
-        c = contract_catalog.get(name) if hasattr(contract_catalog, "get") else contract_catalog._contracts[name]  # type: ignore
+        c = (
+            contract_catalog.get(name)
+            if hasattr(contract_catalog, "get")
+            else contract_catalog._contracts[name]
+        )  # type: ignore
         out["contracts"].append(serialize_contract(c))
     return out
 
 
-def serialize_relationship_rule(rule: Any) -> Dict[str, Any]:
+def serialize_relationship_rule(rule: Any) -> dict[str, Any]:
     """
     Serialize a relspec.model.RelationshipRule-like object.
     """
+
     def _drefs() -> list[str]:
         ins = getattr(rule, "inputs", None) or []
         names = []
@@ -231,14 +242,22 @@ def serialize_relationship_rule(rule: Any) -> Dict[str, Any]:
         "emit_rule_meta": bool(getattr(rule, "emit_rule_meta", True)),
         "inputs": _drefs(),
         # configs (best-effort)
-        "hash_join": getattr(getattr(rule, "hash_join", None), "__dict__", getattr(rule, "hash_join", None)),
-        "interval_align": getattr(getattr(rule, "interval_align", None), "__dict__", getattr(rule, "interval_align", None)),
-        "project": getattr(getattr(rule, "project", None), "__dict__", getattr(rule, "project", None)),
-        "post_kernels": [getattr(k, "__dict__", str(k)) for k in (getattr(rule, "post_kernels", None) or [])],
+        "hash_join": getattr(
+            getattr(rule, "hash_join", None), "__dict__", getattr(rule, "hash_join", None)
+        ),
+        "interval_align": getattr(
+            getattr(rule, "interval_align", None), "__dict__", getattr(rule, "interval_align", None)
+        ),
+        "project": getattr(
+            getattr(rule, "project", None), "__dict__", getattr(rule, "project", None)
+        ),
+        "post_kernels": [
+            getattr(k, "__dict__", str(k)) for k in (getattr(rule, "post_kernels", None) or [])
+        ],
     }
 
 
-def serialize_relationship_registry(registry: Any) -> Dict[str, Any]:
+def serialize_relationship_registry(registry: Any) -> dict[str, Any]:
     """
     Serialize a RelationshipRegistry-like object from relspec/registry.py
     """
@@ -255,12 +274,12 @@ def serialize_relationship_registry(registry: Any) -> Dict[str, Any]:
     }
 
 
-def serialize_dataset_locations(locations: Mapping[str, Any]) -> Dict[str, Any]:
+def serialize_dataset_locations(locations: Mapping[str, Any]) -> dict[str, Any]:
     """
     Serialize the mapping returned by persist_relspec_input_datasets.
     Supports either DatasetLocation dataclass objects or plain dicts.
     """
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for name, loc in locations.items():
         if isinstance(loc, dict):
             out[name] = dict(loc)
@@ -273,11 +292,11 @@ def serialize_dataset_locations(locations: Mapping[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def serialize_compiled_outputs(compiled: Mapping[str, Any]) -> Dict[str, Any]:
+def serialize_compiled_outputs(compiled: Mapping[str, Any]) -> dict[str, Any]:
     """
     Serialize compiled relationship outputs (CompiledOutput-like objects).
     """
-    out: Dict[str, Any] = {"outputs": {}}
+    out: dict[str, Any] = {"outputs": {}}
     for key, obj in compiled.items():
         # CompiledOutput(output_dataset, contract_name, contributors)
         rec = {
@@ -294,8 +313,7 @@ def serialize_compiled_outputs(compiled: Mapping[str, Any]) -> Dict[str, Any]:
                     "priority": getattr(rule, "priority", None),
                     "kind": str(getattr(rule, "kind", None)),
                     "inputs": [
-                        getattr(d, "name", str(d))
-                        for d in (getattr(rule, "inputs", None) or [])
+                        getattr(d, "name", str(d)) for d in (getattr(rule, "inputs", None) or [])
                     ],
                 }
             )
@@ -308,12 +326,15 @@ def serialize_compiled_outputs(compiled: Mapping[str, Any]) -> Dict[str, Any]:
 # Run bundle writer
 # -----------------------
 
+
 def make_run_bundle_name(run_manifest: Mapping[str, Any], run_config: Mapping[str, Any]) -> str:
     """
     Deterministic-ish bundle name: run_<created_at>_<hash10>
     """
     ts = int(run_manifest.get("created_at_unix_s") or time.time())
-    payload = json.dumps({"manifest": run_manifest, "config": run_config}, sort_keys=True, default=str).encode("utf-8")
+    payload = json.dumps(
+        {"manifest": run_manifest, "config": run_config}, sort_keys=True, default=str
+    ).encode("utf-8")
     h = hashlib.sha256(payload).hexdigest()[:10]
     return f"run_{ts}_{h}"
 
@@ -323,23 +344,19 @@ def write_run_bundle(
     base_dir: str,
     run_manifest: Mapping[str, Any],
     run_config: Mapping[str, Any],
-
     # snapshots
-    relationship_registry: Optional[Any] = None,
-    relationship_contracts: Optional[Any] = None,
-    compiled_relationship_outputs: Optional[Mapping[str, Any]] = None,
-
+    relationship_registry: Any | None = None,
+    relationship_contracts: Any | None = None,
+    compiled_relationship_outputs: Mapping[str, Any] | None = None,
     # persisted locations (filesystem mode)
-    relspec_input_locations: Optional[Mapping[str, Any]] = None,
-
+    relspec_input_locations: Mapping[str, Any] | None = None,
     # schema snapshots (tables)
-    relspec_input_tables: Optional[Mapping[str, pa.Table]] = None,
-    relationship_output_tables: Optional[Mapping[str, pa.Table]] = None,
-    cpg_output_tables: Optional[Mapping[str, pa.Table]] = None,
-
+    relspec_input_tables: Mapping[str, pa.Table] | None = None,
+    relationship_output_tables: Mapping[str, pa.Table] | None = None,
+    cpg_output_tables: Mapping[str, pa.Table] | None = None,
     include_schemas: bool = True,
     overwrite: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Writes a “run bundle” directory capturing enough metadata to replay a run later,
     even if code changes.
@@ -359,17 +376,17 @@ def write_run_bundle(
     bundle_name = make_run_bundle_name(run_manifest, run_config)
     bundle_dir = os.path.join(base_dir, bundle_name)
 
-    if overwrite and os.path.exists(bundle_dir):
+    if overwrite and pathlib.Path(bundle_dir).exists():
         # remove contents
         for root, dirs, files in os.walk(bundle_dir, topdown=False):
             for fn in files:
                 try:
-                    os.remove(os.path.join(root, fn))
+                    pathlib.Path(os.path.join(root, fn)).unlink()
                 except Exception:
                     pass
             for dn in dirs:
                 try:
-                    os.rmdir(os.path.join(root, dn))
+                    pathlib.Path(os.path.join(root, dn)).rmdir()
                 except Exception:
                     pass
 
@@ -378,14 +395,20 @@ def write_run_bundle(
     files_written: list[str] = []
 
     # 1) manifest
-    files_written.append(_write_json(os.path.join(bundle_dir, "manifest.json"), dict(run_manifest), overwrite=True))
+    files_written.append(
+        _write_json(os.path.join(bundle_dir, "manifest.json"), dict(run_manifest), overwrite=True)
+    )
 
     # 2) config (the values that drove this run)
-    files_written.append(_write_json(os.path.join(bundle_dir, "config.json"), dict(run_config), overwrite=True))
+    files_written.append(
+        _write_json(os.path.join(bundle_dir, "config.json"), dict(run_config), overwrite=True)
+    )
 
     # 3) repro info (env, pkg versions, git)
     repo_root = run_config.get("repo_root") if isinstance(run_config, dict) else None
-    repro = collect_repro_info(repo_root=str(repo_root) if repo_root else None, extra={"bundle_name": bundle_name})
+    repro = collect_repro_info(
+        repo_root=str(repo_root) if repo_root else None, extra={"bundle_name": bundle_name}
+    )
     files_written.append(_write_json(os.path.join(bundle_dir, "repro.json"), repro, overwrite=True))
 
     # 4) dataset locations (filesystem mode)
@@ -393,7 +416,9 @@ def write_run_bundle(
         ds_dir = os.path.join(bundle_dir, "datasets")
         _ensure_dir(ds_dir)
         locs = serialize_dataset_locations(relspec_input_locations)
-        files_written.append(_write_json(os.path.join(ds_dir, "locations.json"), locs, overwrite=True))
+        files_written.append(
+            _write_json(os.path.join(ds_dir, "locations.json"), locs, overwrite=True)
+        )
 
     # 5) relationship registry + contracts + compiled outputs snapshots
     relspec_dir = os.path.join(bundle_dir, "relspec")
@@ -401,15 +426,21 @@ def write_run_bundle(
 
     if relationship_registry is not None:
         snap = serialize_relationship_registry(relationship_registry)
-        files_written.append(_write_json(os.path.join(relspec_dir, "rules.json"), snap, overwrite=True))
+        files_written.append(
+            _write_json(os.path.join(relspec_dir, "rules.json"), snap, overwrite=True)
+        )
 
     if relationship_contracts is not None:
         snap = serialize_contract_catalog(relationship_contracts)
-        files_written.append(_write_json(os.path.join(relspec_dir, "contracts.json"), snap, overwrite=True))
+        files_written.append(
+            _write_json(os.path.join(relspec_dir, "contracts.json"), snap, overwrite=True)
+        )
 
     if compiled_relationship_outputs is not None:
         snap = serialize_compiled_outputs(compiled_relationship_outputs)
-        files_written.append(_write_json(os.path.join(relspec_dir, "compiled_outputs.json"), snap, overwrite=True))
+        files_written.append(
+            _write_json(os.path.join(relspec_dir, "compiled_outputs.json"), snap, overwrite=True)
+        )
 
     # 6) schema snapshots for tables
     if include_schemas:
@@ -423,7 +454,9 @@ def write_run_bundle(
                 "schema_fingerprint": schema_fingerprint(t.schema),
                 "schema": arrow_schema_to_dict(t.schema),
             }
-            files_written.append(_write_json(os.path.join(schemas_dir, f"{name}.schema.json"), doc, overwrite=True))
+            files_written.append(
+                _write_json(os.path.join(schemas_dir, f"{name}.schema.json"), doc, overwrite=True)
+            )
 
         # relspec input schemas
         if relspec_input_tables:

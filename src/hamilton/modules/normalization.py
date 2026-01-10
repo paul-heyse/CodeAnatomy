@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
 import pyarrow as pa
+
 from hamilton.function_modifiers import cache, extract_fields, tag
 
 from ...arrowdsl.runtime import ExecutionContext
 from ...normalize.spans import (
     RepoTextIndex,
-    build_repo_text_index,
     add_scip_occurrence_byte_spans,
-    normalize_cst_imports_spans,
+    build_repo_text_index,
     normalize_cst_defs_spans,
+    normalize_cst_imports_spans,
 )
+
 
 @cache()
 @tag(layer="normalize", artifact="dim_qualified_names", kind="table")
@@ -28,7 +28,7 @@ def dim_qualified_names(
       - qname_id (stable)
       - qname (string)
     """
-    qnames: List[str] = []
+    qnames: list[str] = []
 
     # From callsites: callee_qnames may be a list of strings per row
     if cst_callsites is not None and "callee_qnames" in cst_callsites.column_names:
@@ -49,7 +49,9 @@ def dim_qualified_names(
                     qnames.append(str(s))
 
     if not qnames:
-        return pa.Table.from_pylist([], schema=pa.schema([("qname_id", pa.string()), ("qname", pa.string())]))
+        return pa.Table.from_pylist(
+            [], schema=pa.schema([("qname_id", pa.string()), ("qname", pa.string())])
+        )
 
     # distinct + deterministic
     uniq = sorted(set(qnames))
@@ -78,7 +80,11 @@ def callsite_qname_candidates(
       - call_bend
       - qname_source (optional)
     """
-    if cst_callsites is None or cst_callsites.num_rows == 0 or "callee_qnames" not in cst_callsites.column_names:
+    if (
+        cst_callsites is None
+        or cst_callsites.num_rows == 0
+        or "callee_qnames" not in cst_callsites.column_names
+    ):
         return pa.Table.from_pylist(
             [],
             schema=pa.schema(
@@ -104,15 +110,19 @@ def callsite_qname_candidates(
 
     # bring along evidence span columns by joining back on call_id (cheap)
     # For simplicity we do python-side index; for large scale convert to hash join later.
-    call_meta: Dict[str, Dict[str, object]] = {}
+    call_meta: dict[str, dict[str, object]] = {}
     for r in cst_callsites.select(
-        [c for c in ["call_id", "path", "call_bstart", "call_bend", "qname_source"] if c in cst_callsites.column_names]
+        [
+            c
+            for c in ["call_id", "path", "call_bstart", "call_bend", "qname_source"]
+            if c in cst_callsites.column_names
+        ]
     ).to_pylist():
         cid = r.get("call_id")
         if cid:
             call_meta[str(cid)] = r
 
-    rows: List[Dict[str, object]] = []
+    rows: list[dict[str, object]] = []
     for r in exploded.to_pylist():
         cid = r.get("call_id")
         qn = r.get("qname")
@@ -131,6 +141,7 @@ def callsite_qname_candidates(
         )
 
     return pa.Table.from_pylist(rows)
+
 
 @cache()
 @tag(layer="normalize", artifact="repo_text_index", kind="object")
@@ -151,7 +162,7 @@ def scip_occurrences_norm_bundle(
     scip_occurrences: pa.Table,
     repo_text_index: RepoTextIndex,
     ctx: ExecutionContext,
-) -> Dict[str, pa.Table]:
+) -> dict[str, pa.Table]:
     """
     Converts SCIP occurrence (line/col spans) into byte offsets bstart/bend.
     """

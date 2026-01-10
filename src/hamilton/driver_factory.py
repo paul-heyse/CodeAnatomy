@@ -2,18 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any
 
 from hamilton import driver
 
 
-def default_modules() -> List[Any]:
+def default_modules() -> list[Any]:
     """
     Default Hamilton module set for the CodeIntel CPG pipeline.
     """
-    from .modules import inputs, extraction, normalization, cpg_build, outputs
+    from .modules import cpg_build, extraction, inputs, normalization, outputs
 
     return [inputs, extraction, normalization, cpg_build, outputs]
 
@@ -29,7 +29,7 @@ def config_fingerprint(config: Mapping[str, Any]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _maybe_build_tracker_adapter(config: Mapping[str, Any]) -> Optional[Any]:
+def _maybe_build_tracker_adapter(config: Mapping[str, Any]) -> Any | None:
     """
     Optional Hamilton UI tracker adapter (if hamilton_sdk is installed).
 
@@ -69,7 +69,7 @@ def _maybe_build_tracker_adapter(config: Mapping[str, Any]) -> Optional[Any]:
 def build_driver(
     *,
     config: Mapping[str, Any],
-    modules: Optional[Sequence[Any]] = None,
+    modules: Sequence[Any] | None = None,
 ) -> Any:
     """
     Build a Hamilton Driver for the CodeIntel CPG pipeline.
@@ -91,8 +91,10 @@ def build_driver(
 
         b = (
             b.enable_dynamic_execution(allow_experimental_mode=True)
-             .with_local_executor(executors.SynchronousLocalTaskExecutor())
-             .with_remote_executor(executors.MultiProcessingExecutor(max_tasks=int(config.get("max_tasks", 4))))
+            .with_local_executor(executors.SynchronousLocalTaskExecutor())
+            .with_remote_executor(
+                executors.MultiProcessingExecutor(max_tasks=int(config.get("max_tasks", 4)))
+            )
         )
 
     # Optional: caching
@@ -122,8 +124,9 @@ class DriverFactory:
     Use this if you're embedding the pipeline into a service where config changes
     are relatively infrequent but executions are frequent.
     """
-    modules: Optional[Sequence[Any]] = None
-    _cache: Dict[str, Any] = None  # fingerprint -> Driver
+
+    modules: Sequence[Any] | None = None
+    _cache: dict[str, Any] = None  # fingerprint -> Driver
 
     def __post_init__(self) -> None:
         if self._cache is None:

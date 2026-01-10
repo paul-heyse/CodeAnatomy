@@ -35,7 +35,7 @@ Instead, from a normal shell on this machine run:
 
   bash scripts/bootstrap.sh
 
-That will install uv (if needed), Python ${PY_VER_DEFAULT:-3.13.11}, create .venv,
+That will install uv (if needed), Python ${PY_VER_DEFAULT:-3.14.2}, create .venv,
 and install all dependencies. Then re-run this script from Codex.
 EOF
   exit 1

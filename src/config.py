@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Optional
 
 from .arrowdsl.runtime import DeterminismTier, RuntimeProfile, ScanProfile
 
@@ -22,7 +22,7 @@ class CodeIntelCPGConfig:
 
     # Execution policy
     runtime_profile: str = "DEV_FAST"
-    determinism: Optional[DeterminismTier] = None  # override profile if set
+    determinism: DeterminismTier | None = None  # override profile if set
     provenance: bool = False
 
     # Finalize behavior

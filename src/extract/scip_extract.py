@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any
 
 import pyarrow as pa
 
@@ -21,10 +22,11 @@ class SCIPIndexOptions:
       scip-python index . --project-name <name> [--environment <env.json>] [--output <path>]
     :contentReference[oaicite:10]{index=10}:contentReference[oaicite:11]{index=11}
     """
+
     repo_root: Path
     project_name: str
-    output_path: Optional[Path] = None
-    environment_json: Optional[Path] = None
+    output_path: Path | None = None
+    environment_json: Path | None = None
     extra_args: Sequence[str] = ()
 
 
@@ -38,8 +40,9 @@ class SCIPParseOptions:
     - If you want to avoid protobuf codegen, downstream can use `scip print --json` streaming,
       but that is a different interface and generally higher overhead. :contentReference[oaicite:13]{index=13}
     """
+
     prefer_protobuf: bool = True
-    scip_pb2_import: Optional[str] = None  # e.g. "codeintel_cpg.extract.proto.scip_pb2"
+    scip_pb2_import: str | None = None  # e.g. "codeintel_cpg.extract.proto.scip_pb2"
 
 
 @dataclass(frozen=True)
@@ -80,14 +83,12 @@ SCIP_OCCURRENCES_SCHEMA = pa.schema(
         ("path", pa.string()),
         ("symbol", pa.string()),
         ("symbol_roles", pa.int32()),
-
         # occurrence range (token span)
         ("start_line", pa.int32()),
         ("start_char", pa.int32()),
         ("end_line", pa.int32()),
         ("end_char", pa.int32()),
         ("range_len", pa.int32()),
-
         # enclosing range (full syntactic span), when present
         ("enc_start_line", pa.int32()),
         ("enc_start_char", pa.int32()),
@@ -156,10 +157,7 @@ def run_scip_python_index(opts: SCIPIndexOptions) -> Path:
     )
     if proc.returncode != 0:
         raise RuntimeError(
-            "scip-python failed.\n"
-            f"cmd={cmd}\n"
-            f"stdout:\n{proc.stdout}\n"
-            f"stderr:\n{proc.stderr}\n"
+            f"scip-python failed.\ncmd={cmd}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}\n"
         )
 
     if not out.exists():
@@ -183,13 +181,15 @@ def _normalize_range(rng: Sequence[int]) -> tuple[int, int, int, int, int]:
     return 0, 0, 0, 0, 0
 
 
-def parse_index_scip(index_path: Path, parse_opts: Optional[SCIPParseOptions] = None) -> Any:
+def parse_index_scip(index_path: Path, parse_opts: SCIPParseOptions | None = None) -> Any:
     """
     Parse index.scip into a protobuf Index object (preferred).
     """
     parse_opts = parse_opts or SCIPParseOptions()
     if not parse_opts.prefer_protobuf:
-        raise NotImplementedError("JSON-stream parsing is available, but this code path expects protobuf.")
+        raise NotImplementedError(
+            "JSON-stream parsing is available, but this code path expects protobuf."
+        )
 
     # Import generated scip_pb2
     scip_pb2 = None
@@ -225,10 +225,14 @@ def extract_scip_tables(index: Any) -> SCIPExtractResult:
     """
     # Metadata
     tool_name = getattr(getattr(getattr(index, "metadata", None), "tool_info", None), "name", None)
-    tool_version = getattr(getattr(getattr(index, "metadata", None), "tool_info", None), "version", None)
+    tool_version = getattr(
+        getattr(getattr(index, "metadata", None), "tool_info", None), "version", None
+    )
     project_root = getattr(getattr(index, "metadata", None), "project_root", None)
     protocol_version = getattr(getattr(index, "metadata", None), "protocol_version", None)
-    text_document_encoding = getattr(getattr(index, "metadata", None), "text_document_encoding", None)
+    text_document_encoding = getattr(
+        getattr(index, "metadata", None), "text_document_encoding", None
+    )
 
     meta_rows = [
         {
@@ -236,7 +240,9 @@ def extract_scip_tables(index: Any) -> SCIPExtractResult:
             "tool_name": tool_name,
             "tool_version": tool_version,
             "project_root": project_root,
-            "text_document_encoding": str(text_document_encoding) if text_document_encoding is not None else None,
+            "text_document_encoding": str(text_document_encoding)
+            if text_document_encoding is not None
+            else None,
             "protocol_version": str(protocol_version) if protocol_version is not None else None,
         }
     ]
@@ -259,7 +265,9 @@ def extract_scip_tables(index: Any) -> SCIPExtractResult:
                 "document_id": document_id,
                 "path": rel_path,
                 "language": str(language) if language is not None else None,
-                "position_encoding": str(position_encoding) if position_encoding is not None else None,
+                "position_encoding": str(position_encoding)
+                if position_encoding is not None
+                else None,
             }
         )
 
@@ -276,7 +284,9 @@ def extract_scip_tables(index: Any) -> SCIPExtractResult:
             occ_rows.append(
                 {
                     "schema_version": SCHEMA_VERSION,
-                    "occurrence_id": stable_id("scip_occ", document_id, str(i), str(sl), str(sc), str(el), str(ec)),
+                    "occurrence_id": stable_id(
+                        "scip_occ", document_id, str(i), str(sl), str(sc), str(el), str(ec)
+                    ),
                     "document_id": document_id,
                     "path": rel_path,
                     "symbol": symbol,
@@ -305,11 +315,15 @@ def extract_scip_tables(index: Any) -> SCIPExtractResult:
                         "diagnostic_id": stable_id("scip_diag", document_id, str(i), str(j)),
                         "document_id": document_id,
                         "path": rel_path,
-                        "severity": str(getattr(d, "severity", None)) if hasattr(d, "severity") else None,
+                        "severity": str(getattr(d, "severity", None))
+                        if hasattr(d, "severity")
+                        else None,
                         "code": str(getattr(d, "code", None)) if hasattr(d, "code") else None,
                         "message": getattr(d, "message", None),
                         "source": getattr(d, "source", None),
-                        "tags": [str(t) for t in getattr(d, "tags", [])] if hasattr(d, "tags") else [],
+                        "tags": [str(t) for t in getattr(d, "tags", [])]
+                        if hasattr(d, "tags")
+                        else [],
                         "start_line": dsl,
                         "start_char": dsc,
                         "end_line": del_,
@@ -327,8 +341,12 @@ def extract_scip_tables(index: Any) -> SCIPExtractResult:
                 "symbol": symbol,
                 "display_name": getattr(si, "display_name", None),
                 "kind": str(getattr(si, "kind", None)) if hasattr(si, "kind") else None,
-                "enclosing_symbol": getattr(si, "enclosing_symbol", None) if hasattr(si, "enclosing_symbol") else None,
-                "documentation": list(getattr(si, "documentation", [])) if hasattr(si, "documentation") else [],
+                "enclosing_symbol": getattr(si, "enclosing_symbol", None)
+                if hasattr(si, "enclosing_symbol")
+                else None,
+                "documentation": list(getattr(si, "documentation", []))
+                if hasattr(si, "documentation")
+                else [],
             }
         )
 

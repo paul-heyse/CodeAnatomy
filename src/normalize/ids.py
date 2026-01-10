@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
-from typing import Iterable, Optional
 
 import pyarrow as pa
 
@@ -35,7 +33,7 @@ def stable_int64(*parts: str) -> int:
     return int(v)
 
 
-def span_id(path: str, bstart: int, bend: int, kind: Optional[str] = None) -> str:
+def span_id(path: str, bstart: int, bend: int, kind: str | None = None) -> str:
     """
     Stable ID for a source span, optionally keyed by kind.
 
@@ -56,7 +54,7 @@ def add_span_id_column(
     path_col: str = "path",
     bstart_col: str = "bstart",
     bend_col: str = "bend",
-    kind: Optional[str] = None,
+    kind: str | None = None,
     out_col: str = "span_id",
 ) -> pa.Table:
     """
@@ -68,11 +66,19 @@ def add_span_id_column(
     if out_col in table.column_names:
         return table
 
-    path_arr = table[path_col].to_pylist() if path_col in table.column_names else [None] * table.num_rows
-    bs_arr = table[bstart_col].to_pylist() if bstart_col in table.column_names else [None] * table.num_rows
-    be_arr = table[bend_col].to_pylist() if bend_col in table.column_names else [None] * table.num_rows
+    path_arr = (
+        table[path_col].to_pylist() if path_col in table.column_names else [None] * table.num_rows
+    )
+    bs_arr = (
+        table[bstart_col].to_pylist()
+        if bstart_col in table.column_names
+        else [None] * table.num_rows
+    )
+    be_arr = (
+        table[bend_col].to_pylist() if bend_col in table.column_names else [None] * table.num_rows
+    )
 
-    out: list[Optional[str]] = []
+    out: list[str | None] = []
     for p, bs, be in zip(path_arr, bs_arr, be_arr):
         if p is None or bs is None or be is None:
             out.append(None)

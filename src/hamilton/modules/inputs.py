@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from hamilton.function_modifiers import tag
 
@@ -16,7 +16,7 @@ def ctx() -> ExecutionContext:
 
 
 @tag(layer="inputs", kind="scalar")
-def include_globs() -> List[str]:
+def include_globs() -> list[str]:
     """
     Default include globs for repo scanning.
     Override via execute(overrides={"include_globs": [...]})
@@ -25,7 +25,7 @@ def include_globs() -> List[str]:
 
 
 @tag(layer="inputs", kind="scalar")
-def exclude_globs() -> List[str]:
+def exclude_globs() -> list[str]:
     """
     Default exclude globs for repo scanning.
     Override via execute(overrides={"exclude_globs": [...]})
@@ -50,7 +50,7 @@ def max_files() -> int:
 
 
 @tag(layer="inputs", kind="scalar")
-def output_dir() -> Optional[str]:
+def output_dir() -> str | None:
     """
     Default: no output directory.
     Override to materialize artifacts.
@@ -59,7 +59,7 @@ def output_dir() -> Optional[str]:
 
 
 @tag(layer="inputs", kind="scalar")
-def work_dir() -> Optional[str]:
+def work_dir() -> str | None:
     """
     Default: None (pipeline will choose a local working directory).
     Override if you want all intermediate datasets written somewhere specific.
@@ -68,7 +68,7 @@ def work_dir() -> Optional[str]:
 
 
 @tag(layer="inputs", kind="scalar")
-def scip_index_path() -> Optional[str]:
+def scip_index_path() -> str | None:
     """
     Default: no SCIP input. Override to attach SCIP data.
     """
@@ -94,7 +94,7 @@ def overwrite_intermediate_datasets() -> bool:
 
 
 @tag(layer="inputs", kind="scalar")
-def hamilton_tags() -> Dict[str, Any]:
+def hamilton_tags() -> dict[str, Any]:
     """
     Optional metadata tags for introspection, trackers, etc.
     """

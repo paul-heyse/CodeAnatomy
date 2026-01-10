@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 
 class DeterminismTier(str, Enum):
@@ -32,18 +32,18 @@ class Ordering:
     """
 
     level: OrderingLevel = OrderingLevel.UNORDERED
-    keys: Tuple[Tuple[str, str], ...] = ()
+    keys: tuple[tuple[str, str], ...] = ()
 
     @staticmethod
-    def unordered() -> "Ordering":
+    def unordered() -> Ordering:
         return Ordering(OrderingLevel.UNORDERED, ())
 
     @staticmethod
-    def implicit() -> "Ordering":
+    def implicit() -> Ordering:
         return Ordering(OrderingLevel.IMPLICIT, ())
 
     @staticmethod
-    def explicit(keys: Tuple[Tuple[str, str], ...]) -> "Ordering":
+    def explicit(keys: tuple[tuple[str, str], ...]) -> Ordering:
         return Ordering(OrderingLevel.EXPLICIT, tuple(keys))
 
 
@@ -52,18 +52,18 @@ class ScanProfile:
     """Central policy for dataset scanning (Scanner/ScanNodeOptions surface)."""
 
     name: str
-    batch_size: Optional[int] = None
-    batch_readahead: Optional[int] = None
-    fragment_readahead: Optional[int] = None
+    batch_size: int | None = None
+    batch_readahead: int | None = None
+    fragment_readahead: int | None = None
     use_threads: bool = True
 
     # Determinism-oriented scan knobs (Acero scan node options)
     require_sequenced_output: bool = False
     implicit_ordering: bool = False
 
-    def scanner_kwargs(self) -> Dict[str, Any]:
+    def scanner_kwargs(self) -> dict[str, Any]:
         """Kwargs for ds.Scanner.from_dataset (excluding columns/filter)."""
-        kw: Dict[str, Any] = {"use_threads": self.use_threads}
+        kw: dict[str, Any] = {"use_threads": self.use_threads}
         if self.batch_size is not None:
             kw["batch_size"] = self.batch_size
         if self.batch_readahead is not None:
@@ -72,9 +72,9 @@ class ScanProfile:
             kw["fragment_readahead"] = self.fragment_readahead
         return kw
 
-    def scan_node_kwargs(self) -> Dict[str, Any]:
+    def scan_node_kwargs(self) -> dict[str, Any]:
         """Kwargs for acero.ScanNodeOptions (excluding dataset/columns/filter)."""
-        kw: Dict[str, Any] = {}
+        kw: dict[str, Any] = {}
         if self.require_sequenced_output:
             kw["require_sequenced_output"] = True
         if self.implicit_ordering:
@@ -89,8 +89,8 @@ class RuntimeProfile:
     name: str
 
     # Global Arrow thread pools (process scope). None => leave default.
-    cpu_threads: Optional[int] = None
-    io_threads: Optional[int] = None
+    cpu_threads: int | None = None
+    io_threads: int | None = None
 
     scan: ScanProfile = ScanProfile(name="DEFAULT")
     plan_use_threads: bool = True
@@ -109,7 +109,7 @@ class RuntimeProfile:
         if self.io_threads is not None:
             pa.set_io_thread_count(int(self.io_threads))
 
-    def with_determinism(self, tier: DeterminismTier) -> "RuntimeProfile":
+    def with_determinism(self, tier: DeterminismTier) -> RuntimeProfile:
         return RuntimeProfile(
             name=self.name,
             cpu_threads=self.cpu_threads,
@@ -152,7 +152,7 @@ class ExecutionContext:
         """Dataset scanning threading (Scanner.from_dataset)."""
         return self.runtime.scan.use_threads
 
-    def with_mode(self, mode: str) -> "ExecutionContext":
+    def with_mode(self, mode: str) -> ExecutionContext:
         return ExecutionContext(
             runtime=self.runtime,
             mode=mode,
@@ -161,7 +161,7 @@ class ExecutionContext:
             debug=self.debug,
         )
 
-    def with_provenance(self, provenance: bool) -> "ExecutionContext":
+    def with_provenance(self, provenance: bool) -> ExecutionContext:
         return ExecutionContext(
             runtime=self.runtime,
             mode=self.mode,

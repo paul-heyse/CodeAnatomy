@@ -1,7 +1,10 @@
+"""Finalize Arrow tables against contracts and invariants."""
+
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from .contracts import Contract
 from .kernels import apply_dedupe, canonical_sort_if_canonical
@@ -13,33 +16,43 @@ if TYPE_CHECKING:  # pragma: no cover
 
 @dataclass(frozen=True)
 class FinalizeResult:
-    good: "pa.Table"
-    errors: "pa.Table"
-    stats: "pa.Table"
-    alignment: "pa.Table"
+    """Finalize output tables for good rows, errors, stats, and alignment."""
+
+    good: pa.Table
+    errors: pa.Table
+    stats: pa.Table
+    alignment: pa.Table
 
 
-def _list_str_array(xss: List[List[str]]) -> "pa.Array":
+def _list_str_array(xss: list[list[str]]) -> pa.Array:
     import pyarrow as pa
 
     return pa.array(xss, type=pa.list_(pa.string()))
 
 
-def _align_to_schema(table: "pa.Table", *, schema: "pa.Schema", safe_cast: bool) -> Tuple["pa.Table", Dict[str, object]]:
-    """Align/cast/reorder table to match schema."""
+def _align_to_schema(
+    table: pa.Table, *, schema: pa.Schema, safe_cast: bool
+) -> tuple[pa.Table, dict[str, object]]:
+    """Align, cast, and reorder a table to match a schema.
+
+    Returns
+    -------
+    tuple[pa.Table, dict[str, object]]
+        The aligned table and alignment metadata.
+    """
     import pyarrow as pa
     import pyarrow.compute as pc
 
-    info: Dict[str, object] = {}
+    info: dict[str, object] = {}
     info["input_cols"] = list(table.column_names)
     info["input_rows"] = int(table.num_rows)
 
     target_names = [f.name for f in schema]
     missing = [name for name in target_names if name not in table.column_names]
     extra = [name for name in table.column_names if name not in target_names]
-    casted: List[str] = []
+    casted: list[str] = []
 
-    arrays: List[pa.Array | pa.ChunkedArray] = []
+    arrays: list[pa.Array | pa.ChunkedArray] = []
     for field in schema:
         if field.name in table.column_names:
             col = table[field.name]
@@ -64,13 +77,19 @@ def _align_to_schema(table: "pa.Table", *, schema: "pa.Schema", safe_cast: bool)
     return aligned, info
 
 
-def _required_non_null_mask(table: "pa.Table", cols: Sequence[str]) -> Optional["pa.Array"]:
-    """Return a per-row boolean mask for required non-null violations."""
+def _required_non_null_mask(table: pa.Table, cols: Sequence[str]) -> pa.Array | None:
+    """Return a per-row mask for required non-null violations.
+
+    Returns
+    -------
+    pa.Array | None
+        Boolean mask for violations, or None when no columns are required.
+    """
     import pyarrow.compute as pc
 
     if not cols:
         return None
-    bad: Optional["pa.Array"] = None
+    bad: pa.Array | None = None
     for c in cols:
         m = pc.is_null(table[c])
         bad = m if bad is None else (bad | m)
@@ -78,16 +97,27 @@ def _required_non_null_mask(table: "pa.Table", cols: Sequence[str]) -> Optional[
     return pc.fill_null(bad, False)
 
 
-def finalize(table: "pa.Table", *, contract: Contract, ctx: ExecutionContext) -> FinalizeResult:
-    """Single correctness boundary: schema alignment + invariants + error tables + determinism."""
+def finalize(table: pa.Table, *, contract: Contract, ctx: ExecutionContext) -> FinalizeResult:
+    """Finalize a table against schema, invariants, and determinism policy.
+
+    Returns
+    -------
+    FinalizeResult
+        Tables for good rows, errors, stats, and alignment metadata.
+
+    Raises
+    ------
+    ValueError
+        Raised in strict mode when validation errors are present.
+    """
     import pyarrow as pa
     import pyarrow.compute as pc
 
     schema = contract.with_versioned_schema()
     aligned, align_info = _align_to_schema(table, schema=schema, safe_cast=ctx.safe_cast)
 
-    error_parts: List[pa.Table] = []
-    masks: List[Tuple[pa.Array, str]] = []
+    error_parts: list[pa.Table] = []
+    masks: list[tuple[pa.Array, str]] = []
 
     nn_mask = _required_non_null_mask(aligned, contract.required_non_null)
     if nn_mask is not None:
@@ -113,7 +143,9 @@ def finalize(table: "pa.Table", *, contract: Contract, ctx: ExecutionContext) ->
         bad_rows = aligned.filter(m)
         if bad_rows.num_rows == 0:
             continue
-        bad_rows = bad_rows.append_column("error_code", pa.array([code] * bad_rows.num_rows, type=pa.string()))
+        bad_rows = bad_rows.append_column(
+            "error_code", pa.array([code] * bad_rows.num_rows, type=pa.string())
+        )
         error_parts.append(bad_rows)
 
     if error_parts:
@@ -141,10 +173,13 @@ def finalize(table: "pa.Table", *, contract: Contract, ctx: ExecutionContext) ->
 
     if errors.num_rows:
         vc = pc.value_counts(errors["error_code"])
-        stats = pa.Table.from_arrays([vc.field("values"), vc.field("counts")], names=["error_code", "count"])
+        stats = pa.Table.from_arrays(
+            [vc.field("values"), vc.field("counts")], names=["error_code", "count"]
+        )
     else:
         stats = pa.Table.from_arrays(
-            [pa.array([], type=pa.string()), pa.array([], type=pa.int64())], names=["error_code", "count"]
+            [pa.array([], type=pa.string()), pa.array([], type=pa.int64())],
+            names=["error_code", "count"],
         )
 
     alignment = pa.table(

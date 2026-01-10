@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
+import pathlib
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Dict, Mapping, Optional
 
 import pyarrow as pa
 import pyarrow.dataset as ds
@@ -15,25 +16,27 @@ class ParquetWriteOptions:
     """
     “Reasonable defaults” for Parquet writes in a scan-heavy pipeline.
 
-    Notes:
+    Notes
+    -----
       - compression="zstd" is usually a good trade-off for speed/size.
       - use_dictionary=True helps with string-y categorical columns.
       - write_statistics=True helps pushdown + debugging.
     """
+
     compression: str = "zstd"
     use_dictionary: bool = True
     write_statistics: bool = True
-    data_page_size: Optional[int] = None
+    data_page_size: int | None = None
     max_rows_per_file: int = 1_000_000  # used for dataset writes
     allow_truncated_timestamps: bool = True
 
 
 def _ensure_dir(path: str) -> None:
-    os.makedirs(path, exist_ok=True)
+    pathlib.Path(path).mkdir(exist_ok=True, parents=True)
 
 
 def _rm_tree(path: str) -> None:
-    if os.path.exists(path):
+    if pathlib.Path(path).exists():
         shutil.rmtree(path)
 
 
@@ -48,8 +51,8 @@ def write_table_parquet(
     Write a single Parquet file to `path`.
     """
     _ensure_dir(os.path.dirname(path) or ".")
-    if overwrite and os.path.exists(path):
-        os.remove(path)
+    if overwrite and pathlib.Path(path).exists():
+        pathlib.Path(path).unlink()
 
     pq.write_table(
         table,
@@ -112,7 +115,7 @@ def write_named_datasets_parquet(
     *,
     opts: ParquetWriteOptions = ParquetWriteOptions(),
     overwrite: bool = True,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Write a set of named tables to:
 
@@ -121,7 +124,7 @@ def write_named_datasets_parquet(
     Returns {dataset_name: dataset_dir_path}.
     """
     _ensure_dir(base_dir)
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     for name, table in datasets.items():
         ds_dir = os.path.join(base_dir, name)
         write_dataset_parquet(table, ds_dir, opts=opts, overwrite=overwrite)

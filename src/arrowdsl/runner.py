@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Callable, Optional, Sequence, TYPE_CHECKING
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING
 
 from .contracts import Contract
 from .finalize import FinalizeResult, finalize
@@ -19,7 +20,7 @@ def run_pipeline(
     plan: Plan,
     contract: Contract,
     ctx: ExecutionContext,
-    mode: Optional[str] = None,
+    mode: str | None = None,
     post: Sequence[KernelFn] = (),
 ) -> FinalizeResult:
     """Execute a Plan, optionally apply kernel-lane post transforms, then finalize."""

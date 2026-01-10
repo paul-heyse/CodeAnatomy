@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Dict, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:  # pragma: no cover
     import pyarrow.compute as pc
@@ -22,8 +23,8 @@ class ProjectionSpec:
       plan-time Project node for semantic consistency.
     """
 
-    base: Tuple[str, ...]
-    derived: Mapping[str, "pc.Expression"] = field(default_factory=dict)
+    base: tuple[str, ...]
+    derived: Mapping[str, pc.Expression] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -31,8 +32,8 @@ class QuerySpec:
     """Declarative scan spec for a dataset."""
 
     projection: ProjectionSpec
-    predicate: Optional["pc.Expression"] = None
-    pushdown_predicate: Optional["pc.Expression"] = None
+    predicate: pc.Expression | None = None
+    pushdown_predicate: pc.Expression | None = None
 
     def scan_columns(self, *, provenance: bool) -> ColumnsSpec:
         """Return columns spec for ds.Scanner/ScanNodeOptions.
@@ -45,7 +46,7 @@ class QuerySpec:
         if not provenance and not self.projection.derived:
             return list(self.projection.base)
 
-        cols: Dict[str, "pc.Expression"] = {c: pc.field(c) for c in self.projection.base}
+        cols: dict[str, pc.Expression] = {c: pc.field(c) for c in self.projection.base}
         cols.update(dict(self.projection.derived))
 
         if provenance:
@@ -62,9 +63,9 @@ class QuerySpec:
     @staticmethod
     def simple(
         *cols: str,
-        predicate: Optional["pc.Expression"] = None,
-        pushdown_predicate: Optional["pc.Expression"] = None,
-    ) -> "QuerySpec":
+        predicate: pc.Expression | None = None,
+        pushdown_predicate: pc.Expression | None = None,
+    ) -> QuerySpec:
         return QuerySpec(
             projection=ProjectionSpec(base=tuple(cols)),
             predicate=predicate,

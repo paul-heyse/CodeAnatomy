@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from typing import Dict, Optional
-
 import pyarrow as pa
+
 from hamilton.function_modifiers import cache, extract_fields, tag
 
 from ...arrowdsl.runtime import ExecutionContext
@@ -45,7 +44,7 @@ def repo_files(
     cst_defs=pa.Table,
 )
 @tag(layer="extract", artifact="cst_bundle", kind="bundle")
-def cst_bundle(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> Dict[str, pa.Table]:
+def cst_bundle(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> dict[str, pa.Table]:
     """
     LibCST extraction bundle.
 
@@ -67,7 +66,7 @@ def cst_bundle(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> D
     ast_defs=pa.Table,
 )
 @tag(layer="extract", artifact="ast_bundle", kind="bundle")
-def ast_bundle(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> Dict[str, pa.Table]:
+def ast_bundle(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> dict[str, pa.Table]:
     """
     Python AST extraction bundle.
     """
@@ -83,10 +82,10 @@ def ast_bundle(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> D
 )
 @tag(layer="extract", artifact="scip_bundle", kind="bundle")
 def scip_bundle(
-    scip_index_path: Optional[str],
+    scip_index_path: str | None,
     repo_root: str,
     ctx: ExecutionContext,
-) -> Dict[str, pa.Table]:
+) -> dict[str, pa.Table]:
     """
     SCIP extraction bundle.
 

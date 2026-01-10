@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import pyarrow as pa
-
 
 SCHEMA_VERSION = 1
 
@@ -18,8 +17,9 @@ class ASTExtractOptions:
     feature_version controls parsing behavior across Python versions when supported
     by your runtime (ast.parse(feature_version=...)).
     """
+
     type_comments: bool = True
-    feature_version: Optional[int] = None  # e.g. 11 for Python 3.11 grammar
+    feature_version: int | None = None  # e.g. 11 for Python 3.11 grammar
 
 
 @dataclass(frozen=True)
@@ -78,14 +78,14 @@ AST_ERRORS_SCHEMA = pa.schema(
 )
 
 
-def _maybe_int(x: Any) -> Optional[int]:
+def _maybe_int(x: Any) -> int | None:
     return int(x) if x is not None else None
 
 
-def _node_name(node: ast.AST) -> Optional[str]:
+def _node_name(node: ast.AST) -> str | None:
     # Common "naming" fields used for joins or debugging
-    if hasattr(node, "name") and isinstance(getattr(node, "name"), str):
-        return getattr(node, "name")
+    if hasattr(node, "name") and isinstance(node.name, str):
+        return node.name
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.arg):
@@ -97,7 +97,7 @@ def _node_name(node: ast.AST) -> Optional[str]:
     return None
 
 
-def _node_value_repr(node: ast.AST) -> Optional[str]:
+def _node_value_repr(node: ast.AST) -> str | None:
     if isinstance(node, ast.Constant):
         try:
             return repr(node.value)
@@ -106,7 +106,7 @@ def _node_value_repr(node: ast.AST) -> Optional[str]:
     return None
 
 
-def extract_ast(repo_files: pa.Table, options: Optional[ASTExtractOptions] = None) -> ASTExtractResult:
+def extract_ast(repo_files: pa.Table, options: ASTExtractOptions | None = None) -> ASTExtractResult:
     """
     Extracts a minimal AST fact set per file:
       - nodes (preorder, with parent pointer + field)
@@ -178,7 +178,7 @@ def extract_ast(repo_files: pa.Table, options: Optional[ASTExtractOptions] = Non
             continue
 
         # Preorder traversal with explicit parent/field context.
-        stack: list[tuple[ast.AST, Optional[int], Optional[str], Optional[int]]] = [(root, None, None, None)]
+        stack: list[tuple[ast.AST, int | None, str | None, int | None]] = [(root, None, None, None)]
         idx_map: dict[int, int] = {}  # id(node) -> ast_idx
 
         while stack:
@@ -229,7 +229,9 @@ def extract_ast(repo_files: pa.Table, options: Optional[ASTExtractOptions] = Non
                         "path": path,
                         "file_sha256": file_sha256,
                         "parent_ast_idx": ast_idx,
-                        "child_ast_idx": len(idx_map),  # provisional; replaced by join on traversal if needed
+                        "child_ast_idx": len(
+                            idx_map
+                        ),  # provisional; replaced by join on traversal if needed
                         "field_name": f,
                         "field_pos": i,
                     }

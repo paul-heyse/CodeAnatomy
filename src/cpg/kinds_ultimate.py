@@ -25,14 +25,15 @@ Note:
     Validation helpers can be wired accordingly.
 """
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Literal, Union
-
+from typing import Literal
 
 # ----------------------------
 # Enums
 # ----------------------------
+
 
 class SourceKind(str, Enum):
     LIBCST = "libcst"
@@ -98,10 +99,10 @@ class NodeKind(str, Enum):
     # -------------------------
     SYM_SCOPE = "SYM_SCOPE"
     SYM_SYMBOL = "SYM_SYMBOL"
-    PY_SCOPE = "PY_SCOPE"          # normalized scope (symtable + libcst)
-    PY_BINDING = "PY_BINDING"      # normalized binding slot (scope,name)
-    PY_DEF_SITE = "PY_DEF_SITE"    # anchored definition site (name span)
-    PY_USE_SITE = "PY_USE_SITE"    # anchored use site (name span)
+    PY_SCOPE = "PY_SCOPE"  # normalized scope (symtable + libcst)
+    PY_BINDING = "PY_BINDING"  # normalized binding slot (scope,name)
+    PY_DEF_SITE = "PY_DEF_SITE"  # anchored definition site (name span)
+    PY_USE_SITE = "PY_USE_SITE"  # anchored use site (name span)
 
     # -------------------------
     # SCIP global symbols
@@ -154,9 +155,9 @@ class EdgeKind(str, Enum):
     # -------------------------
     # Containment / structure
     # -------------------------
-    REPO_CONTAINS = "REPO_CONTAINS"               # repo -> file
-    FILE_DECLARES_MODULE = "FILE_DECLARES_MODULE" # file -> module
-    FILE_CONTAINS = "FILE_CONTAINS"               # file -> anchored node
+    REPO_CONTAINS = "REPO_CONTAINS"  # repo -> file
+    FILE_DECLARES_MODULE = "FILE_DECLARES_MODULE"  # file -> module
+    FILE_CONTAINS = "FILE_CONTAINS"  # file -> anchored node
 
     CST_PARENT_OF = "CST_PARENT_OF"
     AST_PARENT_OF = "AST_PARENT_OF"
@@ -165,12 +166,12 @@ class EdgeKind(str, Enum):
     # -------------------------
     # Names / scopes / bindings
     # -------------------------
-    SCOPE_PARENT = "SCOPE_PARENT"                 # scope -> parent scope
-    SCOPE_BINDS = "SCOPE_BINDS"                   # scope -> binding
-    BINDING_RESOLVES_TO = "BINDING_RESOLVES_TO"   # binding -> binding (closure/global/nonlocal)
+    SCOPE_PARENT = "SCOPE_PARENT"  # scope -> parent scope
+    SCOPE_BINDS = "SCOPE_BINDS"  # scope -> binding
+    BINDING_RESOLVES_TO = "BINDING_RESOLVES_TO"  # binding -> binding (closure/global/nonlocal)
 
-    DEF_SITE_OF = "DEF_SITE_OF"                   # def_site -> binding
-    USE_SITE_OF = "USE_SITE_OF"                   # use_site -> binding
+    DEF_SITE_OF = "DEF_SITE_OF"  # def_site -> binding
+    USE_SITE_OF = "USE_SITE_OF"  # use_site -> binding
 
     # -------------------------
     # Qualified name candidates
@@ -204,7 +205,7 @@ class EdgeKind(str, Enum):
     # -------------------------
     # Bytecode anchors + flow
     # -------------------------
-    BYTECODE_ANCHOR = "BYTECODE_ANCHOR"           # instr -> source anchor
+    BYTECODE_ANCHOR = "BYTECODE_ANCHOR"  # instr -> source anchor
 
     CFG_NEXT = "CFG_NEXT"
     CFG_JUMP = "CFG_JUMP"
@@ -213,9 +214,9 @@ class EdgeKind(str, Enum):
     CFG_BRANCH = "CFG_BRANCH"
     CFG_EXC = "CFG_EXC"
 
-    STEP_DEF = "STEP_DEF"                         # df_def/instr -> binding
-    STEP_USE = "STEP_USE"                         # df_use/instr -> binding
-    REACHES = "REACHES"                           # df_def -> df_use
+    STEP_DEF = "STEP_DEF"  # df_def/instr -> binding
+    STEP_USE = "STEP_USE"  # df_use/instr -> binding
+    REACHES = "REACHES"  # df_def -> df_use
 
     # -------------------------
     # Runtime overlay
@@ -249,11 +250,12 @@ class PropSpec:
     enum_values:
       If provided, property is string with constrained values.
     """
+
     type: PropPrimitive
     description: str = ""
-    enum_values: Optional[Tuple[str, ...]] = None
+    enum_values: tuple[str, ...] | None = None
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "type": self.type,
             "description": self.description,
@@ -261,17 +263,21 @@ class PropSpec:
         }
 
 
-def p_str(desc: str = "", enum: Optional[Sequence[str]] = None) -> PropSpec:
+def p_str(desc: str = "", enum: Sequence[str] | None = None) -> PropSpec:
     return PropSpec("string", desc, tuple(enum) if enum else None)
+
 
 def p_int(desc: str = "") -> PropSpec:
     return PropSpec("int", desc)
 
+
 def p_float(desc: str = "") -> PropSpec:
     return PropSpec("float", desc)
 
+
 def p_bool(desc: str = "") -> PropSpec:
     return PropSpec("bool", desc)
+
 
 def p_json(desc: str = "") -> PropSpec:
     return PropSpec("json", desc)
@@ -294,13 +300,14 @@ class NodeKindContract:
     allowed_sources:
       Which sources are allowed to emit this kind (useful for validation).
     """
+
     requires_anchor: bool
     required_props: Mapping[str, PropSpec] = field(default_factory=dict)
     optional_props: Mapping[str, PropSpec] = field(default_factory=dict)
-    allowed_sources: Tuple[SourceKind, ...] = ()
+    allowed_sources: tuple[SourceKind, ...] = ()
     description: str = ""
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "requires_anchor": self.requires_anchor,
             "required_props": {k: v.to_dict() for k, v in self.required_props.items()},
@@ -324,13 +331,14 @@ class EdgeKindContract:
     optional_props:
       Additional recommended metadata.
     """
+
     requires_evidence_anchor: bool
     required_props: Mapping[str, PropSpec] = field(default_factory=dict)
     optional_props: Mapping[str, PropSpec] = field(default_factory=dict)
-    allowed_sources: Tuple[SourceKind, ...] = ()
+    allowed_sources: tuple[SourceKind, ...] = ()
     description: str = ""
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "requires_evidence_anchor": self.requires_evidence_anchor,
             "required_props": {k: v.to_dict() for k, v in self.required_props.items()},
@@ -377,16 +385,17 @@ class DerivationSpec:
     status:
       "implemented" or "planned" so your pipeline can enforce availability.
     """
+
     extractor: str
     provider_or_field: str
-    join_keys: Tuple[str, ...]
+    join_keys: tuple[str, ...]
     id_recipe: str
     confidence_policy: str
     ambiguity_policy: str
     status: DerivationStatus = "implemented"
     notes: str = ""
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "extractor": self.extractor,
             "provider_or_field": self.provider_or_field,
@@ -403,7 +412,7 @@ class DerivationSpec:
 # Contracts (NODE_KIND_CONTRACTS / EDGE_KIND_CONTRACTS)
 # ----------------------------
 
-NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
+NODE_KIND_CONTRACTS: dict[NodeKind, NodeKindContract] = {
     # ---- repo/files ----
     NodeKind.PY_REPO: NodeKindContract(
         requires_anchor=False,
@@ -446,7 +455,6 @@ NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
         allowed_sources=(SourceKind.PIPELINE, SourceKind.DERIVED),
         description="Package identity node (optional).",
     ),
-
     # ---- LibCST ----
     NodeKind.CST_NODE: NodeKindContract(
         requires_anchor=True,
@@ -463,7 +471,10 @@ NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
     ),
     NodeKind.CST_DEF: NodeKindContract(
         requires_anchor=True,
-        required_props={"name": p_str("Definition name"), "def_kind": p_str(enum=["function", "class", "lambda"])},
+        required_props={
+            "name": p_str("Definition name"),
+            "def_kind": p_str(enum=["function", "class", "lambda"]),
+        },
         optional_props={
             "is_async": p_bool(),
             "decorator_count": p_int(),
@@ -496,7 +507,10 @@ NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
     NodeKind.CST_PARAM: NodeKindContract(
         requires_anchor=True,
         required_props={"name": p_str("Parameter name")},
-        optional_props={"kind": p_str(enum=["positional", "vararg", "kwonly", "varkw"]), "has_default": p_bool()},
+        optional_props={
+            "kind": p_str(enum=["positional", "vararg", "kwonly", "varkw"]),
+            "has_default": p_bool(),
+        },
         allowed_sources=(SourceKind.LIBCST,),
         description="LibCST parameter node.",
     ),
@@ -541,7 +555,9 @@ NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
     NodeKind.CST_ATTRIBUTE_ACCESS: NodeKindContract(
         requires_anchor=True,
         required_props={"attr": p_str("Attribute name")},
-        optional_props={"base_shape": p_str(enum=["NAME", "ATTRIBUTE", "CALL", "SUBSCRIPT", "OTHER"])},
+        optional_props={
+            "base_shape": p_str(enum=["NAME", "ATTRIBUTE", "CALL", "SUBSCRIPT", "OTHER"])
+        },
         allowed_sources=(SourceKind.LIBCST,),
         description="LibCST Attribute access occurrence.",
     ),
@@ -571,7 +587,22 @@ NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
     ),
     NodeKind.CST_LITERAL: NodeKindContract(
         requires_anchor=True,
-        required_props={"literal_kind": p_str(enum=["string", "bytes", "int", "float", "complex", "bool", "none", "ellipsis", "fstring", "other"])},
+        required_props={
+            "literal_kind": p_str(
+                enum=[
+                    "string",
+                    "bytes",
+                    "int",
+                    "float",
+                    "complex",
+                    "bool",
+                    "none",
+                    "ellipsis",
+                    "fstring",
+                    "other",
+                ]
+            )
+        },
         optional_props={"literal_text": p_str()},
         allowed_sources=(SourceKind.LIBCST,),
         description="Literal node (CST-level).",
@@ -590,18 +621,24 @@ NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
         allowed_sources=(SourceKind.LIBCST,),
         description="Comment node (trivia).",
     ),
-
     # ---- Python AST ----
     NodeKind.AST_NODE: NodeKindContract(
         requires_anchor=False,  # line/col may be missing for some nodes; normalization can add bytes later
         required_props={"ast_type": p_str("ast.AST type name (e.g., Call, Name, FunctionDef)")},
-        optional_props={"lineno": p_int(), "col_offset": p_int(), "end_lineno": p_int(), "end_col_offset": p_int()},
+        optional_props={
+            "lineno": p_int(),
+            "col_offset": p_int(),
+            "end_lineno": p_int(),
+            "end_col_offset": p_int(),
+        },
         allowed_sources=(SourceKind.PY_AST,),
         description="Generic python ast node (abstract syntax lens).",
     ),
     NodeKind.AST_DEF: NodeKindContract(
         requires_anchor=False,
-        required_props={"ast_type": p_str(enum=["FunctionDef", "AsyncFunctionDef", "ClassDef", "Lambda"])},
+        required_props={
+            "ast_type": p_str(enum=["FunctionDef", "AsyncFunctionDef", "ClassDef", "Lambda"])
+        },
         optional_props={"name": p_str(), "lineno": p_int(), "end_lineno": p_int()},
         allowed_sources=(SourceKind.PY_AST,),
         description="AST definition node (def/class/lambda).",
@@ -627,7 +664,6 @@ NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
         allowed_sources=(SourceKind.PY_AST,),
         description="AST Attribute node.",
     ),
-
     # ---- tree-sitter ----
     NodeKind.TS_NODE: NodeKindContract(
         requires_anchor=True,
@@ -650,7 +686,6 @@ NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
         allowed_sources=(SourceKind.TREESITTER,),
         description="tree-sitter missing-token node (recovery inserted).",
     ),
-
     # ---- symtable / bindings ----
     NodeKind.SYM_SCOPE: NodeKindContract(
         requires_anchor=False,
@@ -701,9 +736,19 @@ NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
             "binding_id": p_str("binding_id = f'{scope_id}:BIND:{name}'"),
             "scope_id": p_str(),
             "name": p_str(),
-            "binding_kind": p_str(enum=[
-                "local", "param", "import", "global_ref", "nonlocal_ref", "free_ref", "namespace", "annot_only", "unknown"
-            ]),
+            "binding_kind": p_str(
+                enum=[
+                    "local",
+                    "param",
+                    "import",
+                    "global_ref",
+                    "nonlocal_ref",
+                    "free_ref",
+                    "namespace",
+                    "annot_only",
+                    "unknown",
+                ]
+            ),
         },
         optional_props={
             "declared_here": p_bool(),
@@ -717,18 +762,21 @@ NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
     NodeKind.PY_DEF_SITE: NodeKindContract(
         requires_anchor=True,
         required_props={"binding_id": p_str("Binding this site defines"), "name": p_str()},
-        optional_props={"def_site_kind": p_str(enum=["function", "class", "import", "assign", "param", "other"])},
+        optional_props={
+            "def_site_kind": p_str(enum=["function", "class", "import", "assign", "param", "other"])
+        },
         allowed_sources=(SourceKind.DERIVED,),
         description="Anchored definition site (name span) mapped to a binding.",
     ),
     NodeKind.PY_USE_SITE: NodeKindContract(
         requires_anchor=True,
         required_props={"binding_id": p_str("Binding this site uses"), "name": p_str()},
-        optional_props={"use_kind": p_str(enum=["read", "write", "del", "call", "import", "other"])},
+        optional_props={
+            "use_kind": p_str(enum=["read", "write", "del", "call", "import", "other"])
+        },
         allowed_sources=(SourceKind.DERIVED,),
         description="Anchored use site (name span) mapped to a binding.",
     ),
-
     # ---- SCIP ----
     NodeKind.SCIP_INDEX: NodeKindContract(
         requires_anchor=False,
@@ -747,7 +795,11 @@ NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
     NodeKind.SCIP_SYMBOL: NodeKindContract(
         requires_anchor=False,
         required_props={"symbol": p_str("SCIP symbol string (global identity)")},
-        optional_props={"display_name": p_str(), "symbol_kind": p_str(), "enclosing_symbol": p_str()},
+        optional_props={
+            "display_name": p_str(),
+            "symbol_kind": p_str(),
+            "enclosing_symbol": p_str(),
+        },
         allowed_sources=(SourceKind.SCIP,),
         description="SCIP symbol node.",
     ),
@@ -768,12 +820,15 @@ NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
         allowed_sources=(SourceKind.SCIP,),
         description="SCIP diagnostic node (if present).",
     ),
-
     # ---- qualified names ----
     NodeKind.PY_QUALIFIED_NAME: NodeKindContract(
         requires_anchor=False,
         required_props={"qname": p_str("Qualified name string")},
-        optional_props={"qname_source": p_str(enum=["QualifiedNameProvider", "FullyQualifiedNameProvider", "syntactic", "other"])},
+        optional_props={
+            "qname_source": p_str(
+                enum=["QualifiedNameProvider", "FullyQualifiedNameProvider", "syntactic", "other"]
+            )
+        },
         allowed_sources=(SourceKind.LIBCST, SourceKind.DERIVED),
         description="Qualified name candidate/canonical node.",
     ),
@@ -784,7 +839,6 @@ NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
         allowed_sources=(SourceKind.LIBCST, SourceKind.DERIVED),
         description="Module fully qualified name node (optional).",
     ),
-
     # ---- bytecode / flow ----
     NodeKind.BC_CODE_UNIT: NodeKindContract(
         requires_anchor=False,
@@ -830,30 +884,44 @@ NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
     ),
     NodeKind.DF_DEF: NodeKindContract(
         requires_anchor=False,
-        required_props={"df_id": p_str(), "binding_id": p_str(), "instr_id": p_str(), "code_unit_id": p_str()},
+        required_props={
+            "df_id": p_str(),
+            "binding_id": p_str(),
+            "instr_id": p_str(),
+            "code_unit_id": p_str(),
+        },
         optional_props={"def_kind": p_str()},
         allowed_sources=(SourceKind.DERIVED,),
         description="Dataflow definition event node (optional separate node).",
     ),
     NodeKind.DF_USE: NodeKindContract(
         requires_anchor=False,
-        required_props={"df_id": p_str(), "binding_id": p_str(), "instr_id": p_str(), "code_unit_id": p_str()},
+        required_props={
+            "df_id": p_str(),
+            "binding_id": p_str(),
+            "instr_id": p_str(),
+            "code_unit_id": p_str(),
+        },
         optional_props={"use_kind": p_str()},
         allowed_sources=(SourceKind.DERIVED,),
         description="Dataflow use event node (optional separate node).",
     ),
-
     # ---- types ----
     NodeKind.TYPE_EXPR: NodeKindContract(
         requires_anchor=True,
         required_props={"expr_text": p_str("Rendered annotation/type expression")},
-        optional_props={"expr_kind": p_str(enum=["annotation", "type_comment", "typing_alias", "other"])},
+        optional_props={
+            "expr_kind": p_str(enum=["annotation", "type_comment", "typing_alias", "other"])
+        },
         allowed_sources=(SourceKind.LIBCST, SourceKind.PY_AST),
         description="Annotation/type expression node anchored in source.",
     ),
     NodeKind.TYPE: NodeKindContract(
         requires_anchor=False,
-        required_props={"type_repr": p_str("Normalized type representation (string or JSON)"), "type_form": p_str()},
+        required_props={
+            "type_repr": p_str("Normalized type representation (string or JSON)"),
+            "type_form": p_str(),
+        },
         optional_props={"origin": p_str(enum=["annotation", "inferred", "runtime", "heuristic"])},
         allowed_sources=(SourceKind.DERIVED, SourceKind.LIBCST, SourceKind.INSPECT),
         description="Normalized type node (may represent unions/overloads).",
@@ -872,11 +940,14 @@ NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
         allowed_sources=(SourceKind.DERIVED, SourceKind.SYMTABLE),
         description="Type alias node (typing scopes).",
     ),
-
     # ---- runtime overlay ----
     NodeKind.RT_OBJECT: NodeKindContract(
         requires_anchor=False,
-        required_props={"rt_id": p_str("Runtime object identity"), "qualname": p_str(), "module": p_str()},
+        required_props={
+            "rt_id": p_str("Runtime object identity"),
+            "qualname": p_str(),
+            "module": p_str(),
+        },
         optional_props={"object_type": p_str(), "file": p_str(), "line": p_int()},
         allowed_sources=(SourceKind.INSPECT,),
         description="Runtime object node (optional overlay).",
@@ -902,19 +973,27 @@ NODE_KIND_CONTRACTS: Dict[NodeKind, NodeKindContract] = {
         allowed_sources=(SourceKind.INSPECT,),
         description="Runtime member node (getmembers_static row).",
     ),
-
     # ---- diagnostics ----
     NodeKind.DIAG: NodeKindContract(
         requires_anchor=True,
-        required_props={"severity": p_str(enum=["INFO", "WARNING", "ERROR"]), "message": p_str(), "diag_source": p_str()},
+        required_props={
+            "severity": p_str(enum=["INFO", "WARNING", "ERROR"]),
+            "message": p_str(),
+            "diag_source": p_str(),
+        },
         optional_props={"code": p_str(), "details_json": p_json()},
-        allowed_sources=(SourceKind.TREESITTER, SourceKind.SCIP, SourceKind.PIPELINE, SourceKind.DERIVED),
+        allowed_sources=(
+            SourceKind.TREESITTER,
+            SourceKind.SCIP,
+            SourceKind.PIPELINE,
+            SourceKind.DERIVED,
+        ),
         description="Generic diagnostic node (any stage/source).",
     ),
 }
 
 
-EDGE_KIND_CONTRACTS: Dict[EdgeKind, EdgeKindContract] = {
+EDGE_KIND_CONTRACTS: dict[EdgeKind, EdgeKindContract] = {
     # ---- structure ----
     EdgeKind.REPO_CONTAINS: EdgeKindContract(
         requires_evidence_anchor=False,
@@ -932,7 +1011,9 @@ EDGE_KIND_CONTRACTS: Dict[EdgeKind, EdgeKindContract] = {
     ),
     EdgeKind.FILE_CONTAINS: EdgeKindContract(
         requires_evidence_anchor=False,
-        required_props={"role": p_str(enum=["syntax", "scope", "symbol", "flow", "diag", "runtime", "type"])},
+        required_props={
+            "role": p_str(enum=["syntax", "scope", "symbol", "flow", "diag", "runtime", "type"])
+        },
         optional_props={},
         allowed_sources=(SourceKind.PIPELINE, SourceKind.DERIVED),
         description="File contains an anchored node (typed by role).",
@@ -958,7 +1039,6 @@ EDGE_KIND_CONTRACTS: Dict[EdgeKind, EdgeKindContract] = {
         allowed_sources=(SourceKind.TREESITTER,),
         description="tree-sitter structural parent edge.",
     ),
-
     # ---- scopes/bindings ----
     EdgeKind.SCOPE_PARENT: EdgeKindContract(
         requires_evidence_anchor=False,
@@ -983,19 +1063,22 @@ EDGE_KIND_CONTRACTS: Dict[EdgeKind, EdgeKindContract] = {
     ),
     EdgeKind.DEF_SITE_OF: EdgeKindContract(
         requires_evidence_anchor=True,
-        required_props={"def_site_kind": p_str(enum=["function", "class", "import", "assign", "param", "other"])},
+        required_props={
+            "def_site_kind": p_str(enum=["function", "class", "import", "assign", "param", "other"])
+        },
         optional_props={},
         allowed_sources=(SourceKind.DERIVED,),
         description="Definition site establishes a binding (anchored evidence).",
     ),
     EdgeKind.USE_SITE_OF: EdgeKindContract(
         requires_evidence_anchor=True,
-        required_props={"use_kind": p_str(enum=["read", "write", "del", "call", "import", "other"])},
+        required_props={
+            "use_kind": p_str(enum=["read", "write", "del", "call", "import", "other"])
+        },
         optional_props={},
         allowed_sources=(SourceKind.DERIVED,),
         description="Use site consumes a binding (anchored evidence).",
     ),
-
     # ---- qname candidates ----
     EdgeKind.NAME_REF_CANDIDATE_QNAME: EdgeKindContract(
         requires_evidence_anchor=True,
@@ -1018,60 +1101,85 @@ EDGE_KIND_CONTRACTS: Dict[EdgeKind, EdgeKindContract] = {
         allowed_sources=(SourceKind.LIBCST, SourceKind.DERIVED),
         description="Attribute access -> qualified name candidate edge (multi-valued).",
     ),
-
     # ---- SCIP semantic edges ----
     EdgeKind.PY_DEFINES_SYMBOL: EdgeKindContract(
         requires_evidence_anchor=True,
-        required_props={"symbol_roles": p_int(), "origin": p_str(enum=["scip"]), "resolution_method": p_str()},
+        required_props={
+            "symbol_roles": p_int(),
+            "origin": p_str(enum=["scip"]),
+            "resolution_method": p_str(),
+        },
         optional_props={"score": p_float(), "rule_priority": p_int(), "rule_name": p_str()},
         allowed_sources=(SourceKind.SCIP, SourceKind.DERIVED),
         description="Definition occurrence defines SCIP symbol.",
     ),
     EdgeKind.PY_REFERENCES_SYMBOL: EdgeKindContract(
         requires_evidence_anchor=True,
-        required_props={"symbol_roles": p_int(), "origin": p_str(enum=["scip"]), "resolution_method": p_str()},
+        required_props={
+            "symbol_roles": p_int(),
+            "origin": p_str(enum=["scip"]),
+            "resolution_method": p_str(),
+        },
         optional_props={"score": p_float(), "rule_priority": p_int(), "rule_name": p_str()},
         allowed_sources=(SourceKind.SCIP, SourceKind.DERIVED),
         description="Reference occurrence references SCIP symbol.",
     ),
     EdgeKind.PY_IMPORTS_SYMBOL: EdgeKindContract(
         requires_evidence_anchor=True,
-        required_props={"symbol_roles": p_int(), "origin": p_str(enum=["scip"]), "resolution_method": p_str()},
+        required_props={
+            "symbol_roles": p_int(),
+            "origin": p_str(enum=["scip"]),
+            "resolution_method": p_str(),
+        },
         optional_props={"score": p_float(), "rule_priority": p_int(), "rule_name": p_str()},
         allowed_sources=(SourceKind.SCIP, SourceKind.DERIVED),
         description="Import occurrence imports SCIP symbol.",
     ),
     EdgeKind.PY_READS_SYMBOL: EdgeKindContract(
         requires_evidence_anchor=True,
-        required_props={"symbol_roles": p_int(), "origin": p_str(enum=["scip"]), "resolution_method": p_str()},
+        required_props={
+            "symbol_roles": p_int(),
+            "origin": p_str(enum=["scip"]),
+            "resolution_method": p_str(),
+        },
         optional_props={},
         allowed_sources=(SourceKind.SCIP, SourceKind.DERIVED),
         description="Occurrence reads SCIP symbol (role bit).",
     ),
     EdgeKind.PY_WRITES_SYMBOL: EdgeKindContract(
         requires_evidence_anchor=True,
-        required_props={"symbol_roles": p_int(), "origin": p_str(enum=["scip"]), "resolution_method": p_str()},
+        required_props={
+            "symbol_roles": p_int(),
+            "origin": p_str(enum=["scip"]),
+            "resolution_method": p_str(),
+        },
         optional_props={},
         allowed_sources=(SourceKind.SCIP, SourceKind.DERIVED),
         description="Occurrence writes SCIP symbol (role bit).",
     ),
-
     # ---- calls ----
     EdgeKind.PY_CALLS_SYMBOL: EdgeKindContract(
         requires_evidence_anchor=True,
-        required_props={"origin": p_str(enum=["scip"]), "resolution_method": p_str(), "score": p_float()},
+        required_props={
+            "origin": p_str(enum=["scip"]),
+            "resolution_method": p_str(),
+            "score": p_float(),
+        },
         optional_props={"symbol_roles": p_int(), "rule_priority": p_int()},
         allowed_sources=(SourceKind.SCIP, SourceKind.DERIVED),
         description="Callsite resolved to SCIP symbol (preferred).",
     ),
     EdgeKind.PY_CALLS_QNAME: EdgeKindContract(
         requires_evidence_anchor=True,
-        required_props={"origin": p_str(enum=["qname"]), "qname_source": p_str(), "score": p_float()},
+        required_props={
+            "origin": p_str(enum=["qname"]),
+            "qname_source": p_str(),
+            "score": p_float(),
+        },
         optional_props={"ambiguity_group_id": p_str()},
         allowed_sources=(SourceKind.LIBCST, SourceKind.DERIVED),
         description="Callsite resolved to qualified name candidate (fallback).",
     ),
-
     # ---- types ----
     EdgeKind.HAS_ANNOTATION: EdgeKindContract(
         requires_evidence_anchor=True,
@@ -1082,7 +1190,10 @@ EDGE_KIND_CONTRACTS: Dict[EdgeKind, EdgeKindContract] = {
     ),
     EdgeKind.INFERRED_TYPE: EdgeKindContract(
         requires_evidence_anchor=False,
-        required_props={"origin": p_str(enum=["inferred", "runtime", "heuristic"]), "score": p_float()},
+        required_props={
+            "origin": p_str(enum=["inferred", "runtime", "heuristic"]),
+            "score": p_float(),
+        },
         optional_props={"engine": p_str()},
         allowed_sources=(SourceKind.LIBCST, SourceKind.INSPECT, SourceKind.DERIVED),
         description="Node inferred to have a type.",
@@ -1094,11 +1205,13 @@ EDGE_KIND_CONTRACTS: Dict[EdgeKind, EdgeKindContract] = {
         allowed_sources=(SourceKind.DERIVED, SourceKind.SYMTABLE),
         description="Type parameter belongs to a def/class/type.",
     ),
-
     # ---- bytecode/flow/dfg ----
     EdgeKind.BYTECODE_ANCHOR: EdgeKindContract(
         requires_evidence_anchor=False,
-        required_props={"mapping_method": p_str(enum=["line_table", "offset_span", "heuristic"]), "score": p_float()},
+        required_props={
+            "mapping_method": p_str(enum=["line_table", "offset_span", "heuristic"]),
+            "score": p_float(),
+        },
         optional_props={"anchor_kind": p_str(), "notes": p_str()},
         allowed_sources=(SourceKind.DERIVED, SourceKind.DIS),
         description="Bytecode instruction anchored to a source span node.",
@@ -1166,7 +1279,6 @@ EDGE_KIND_CONTRACTS: Dict[EdgeKind, EdgeKindContract] = {
         allowed_sources=(SourceKind.DERIVED,),
         description="Dataflow reaching-definitions edge: def reaches use.",
     ),
-
     # ---- runtime overlay ----
     EdgeKind.RT_HAS_SIGNATURE: EdgeKindContract(
         requires_evidence_anchor=False,
@@ -1196,7 +1308,6 @@ EDGE_KIND_CONTRACTS: Dict[EdgeKind, EdgeKindContract] = {
         allowed_sources=(SourceKind.INSPECT,),
         description="Runtime object wraps another object (unwrap chain).",
     ),
-
     # ---- diagnostics ----
     EdgeKind.HAS_DIAGNOSTIC: EdgeKindContract(
         requires_evidence_anchor=False,
@@ -1212,7 +1323,7 @@ EDGE_KIND_CONTRACTS: Dict[EdgeKind, EdgeKindContract] = {
 # Derivation Manifest (NODE_DERIVATIONS / EDGE_DERIVATIONS)
 # ----------------------------
 
-NODE_DERIVATIONS: Dict[NodeKind, List[DerivationSpec]] = {
+NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     NodeKind.PY_REPO: [
         DerivationSpec(
             extractor="codeintel_cpg.extract.repo_scan:scan_repo",
@@ -1257,7 +1368,6 @@ NODE_DERIVATIONS: Dict[NodeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     # LibCST nodes (all use ByteSpanPositionProvider)
     NodeKind.CST_NODE: [
         DerivationSpec(
@@ -1458,7 +1568,6 @@ NODE_DERIVATIONS: Dict[NodeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     # AST
     NodeKind.AST_NODE: [
         DerivationSpec(
@@ -1515,7 +1624,6 @@ NODE_DERIVATIONS: Dict[NodeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     # tree-sitter
     NodeKind.TS_NODE: [
         DerivationSpec(
@@ -1550,7 +1658,6 @@ NODE_DERIVATIONS: Dict[NodeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     # symtable/bindings
     NodeKind.SYM_SCOPE: [
         DerivationSpec(
@@ -1618,7 +1725,6 @@ NODE_DERIVATIONS: Dict[NodeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     # SCIP
     NodeKind.SCIP_INDEX: [
         DerivationSpec(
@@ -1675,7 +1781,6 @@ NODE_DERIVATIONS: Dict[NodeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     # qualified names
     NodeKind.PY_QUALIFIED_NAME: [
         DerivationSpec(
@@ -1699,7 +1804,6 @@ NODE_DERIVATIONS: Dict[NodeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     # bytecode / flow
     NodeKind.BC_CODE_UNIT: [
         DerivationSpec(
@@ -1767,7 +1871,6 @@ NODE_DERIVATIONS: Dict[NodeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     # types
     NodeKind.TYPE_EXPR: [
         DerivationSpec(
@@ -1813,7 +1916,6 @@ NODE_DERIVATIONS: Dict[NodeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     # runtime overlay
     NodeKind.RT_OBJECT: [
         DerivationSpec(
@@ -1859,7 +1961,6 @@ NODE_DERIVATIONS: Dict[NodeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     NodeKind.DIAG: [
         DerivationSpec(
             extractor="codeintel_cpg.normalize.diagnostics:collect_diags",
@@ -1874,7 +1975,7 @@ NODE_DERIVATIONS: Dict[NodeKind, List[DerivationSpec]] = {
 }
 
 
-EDGE_DERIVATIONS: Dict[EdgeKind, List[DerivationSpec]] = {
+EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     EdgeKind.REPO_CONTAINS: [
         DerivationSpec(
             extractor="codeintel_cpg.extract.repo_scan:scan_repo",
@@ -1908,7 +2009,6 @@ EDGE_DERIVATIONS: Dict[EdgeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     # structural
     EdgeKind.CST_PARENT_OF: [
         DerivationSpec(
@@ -1943,7 +2043,6 @@ EDGE_DERIVATIONS: Dict[EdgeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     # scopes/bindings
     EdgeKind.SCOPE_PARENT: [
         DerivationSpec(
@@ -2000,7 +2099,6 @@ EDGE_DERIVATIONS: Dict[EdgeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     # qname candidate edges
     EdgeKind.NAME_REF_CANDIDATE_QNAME: [
         DerivationSpec(
@@ -2035,7 +2133,6 @@ EDGE_DERIVATIONS: Dict[EdgeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     # SCIP semantic edges (span join)
     EdgeKind.PY_DEFINES_SYMBOL: [
         DerivationSpec(
@@ -2069,9 +2166,7 @@ EDGE_DERIVATIONS: Dict[EdgeKind, List[DerivationSpec]] = {
         DerivationSpec(
             extractor="codeintel_cpg.relspec.RelationshipRule(kind=INTERVAL_ALIGN) + compiler",
             provider_or_field="SCIP Occurrence.symbol_roles bitmask & Import",
-            join_keys=(
-                "interval_align: left import alias span contains occurrence span",
-            ),
+            join_keys=("interval_align: left import alias span contains occurrence span",),
             id_recipe="edge_id = sha('PY_IMPORTS_SYMBOL:'+src_id+':'+symbol+':'+path+':'+bstart+':'+bend)[:16]",
             confidence_policy="confidence=1.0; score=-span_len",
             ambiguity_policy="dedupe by (src_id,symbol,span) + tie-break by rule_priority",
@@ -2100,15 +2195,12 @@ EDGE_DERIVATIONS: Dict[EdgeKind, List[DerivationSpec]] = {
             status="implemented",
         )
     ],
-
     # Calls
     EdgeKind.PY_CALLS_SYMBOL: [
         DerivationSpec(
             extractor="codeintel_cpg.relspec.RelationshipRule(kind=INTERVAL_ALIGN) + compiler",
             provider_or_field="SCIP occurrence aligned to callee span",
-            join_keys=(
-                "interval_align: callsite.callee_span contains occurrence span",
-            ),
+            join_keys=("interval_align: callsite.callee_span contains occurrence span",),
             id_recipe="edge_id = sha('PY_CALLS_SYMBOL:'+call_id+':'+symbol+':'+call_span)[:16]",
             confidence_policy="confidence=1.0; score=-span_len",
             ambiguity_policy="if multiple, keep best by score then rule_priority",
@@ -2126,7 +2218,6 @@ EDGE_DERIVATIONS: Dict[EdgeKind, List[DerivationSpec]] = {
             status="implemented",
         )
     ],
-
     # Types
     EdgeKind.HAS_ANNOTATION: [
         DerivationSpec(
@@ -2161,7 +2252,6 @@ EDGE_DERIVATIONS: Dict[EdgeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     # Bytecode/flow/dfg
     EdgeKind.BYTECODE_ANCHOR: [
         DerivationSpec(
@@ -2273,7 +2363,6 @@ EDGE_DERIVATIONS: Dict[EdgeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     # Runtime overlay
     EdgeKind.RT_HAS_SIGNATURE: [
         DerivationSpec(
@@ -2319,7 +2408,6 @@ EDGE_DERIVATIONS: Dict[EdgeKind, List[DerivationSpec]] = {
             status="planned",
         )
     ],
-
     # Diagnostics
     EdgeKind.HAS_DIAGNOSTIC: [
         DerivationSpec(
@@ -2339,6 +2427,7 @@ EDGE_DERIVATIONS: Dict[EdgeKind, List[DerivationSpec]] = {
 # Validation helpers
 # ----------------------------
 
+
 def validate_registry_completeness() -> None:
     """
     Ensures every enum value has a contract and at least one derivation entry.
@@ -2346,8 +2435,12 @@ def validate_registry_completeness() -> None:
     """
     missing_node_contracts = [k for k in NodeKind if k not in NODE_KIND_CONTRACTS]
     missing_edge_contracts = [k for k in EdgeKind if k not in EDGE_KIND_CONTRACTS]
-    missing_node_derivs = [k for k in NodeKind if k not in NODE_DERIVATIONS or not NODE_DERIVATIONS[k]]
-    missing_edge_derivs = [k for k in EdgeKind if k not in EDGE_DERIVATIONS or not EDGE_DERIVATIONS[k]]
+    missing_node_derivs = [
+        k for k in NodeKind if k not in NODE_DERIVATIONS or not NODE_DERIVATIONS[k]
+    ]
+    missing_edge_derivs = [
+        k for k in EdgeKind if k not in EDGE_DERIVATIONS or not EDGE_DERIVATIONS[k]
+    ]
 
     errs = []
     if missing_node_contracts:
@@ -2365,7 +2458,7 @@ def validate_registry_completeness() -> None:
 
 def validate_derivations_implemented_only(
     *,
-    allowed_sources: Optional[Sequence[SourceKind]] = None,
+    allowed_sources: Sequence[SourceKind] | None = None,
     allow_planned: bool = False,
 ) -> None:
     """
@@ -2387,7 +2480,10 @@ def validate_derivations_implemented_only(
         if allowed_sources_set is None:
             return True
         contract = NODE_KIND_CONTRACTS[k]
-        return any(src in allowed_sources_set for src in contract.allowed_sources) or not contract.allowed_sources
+        return (
+            any(src in allowed_sources_set for src in contract.allowed_sources)
+            or not contract.allowed_sources
+        )
 
     def _has_acceptable_derivation_for_edge(k: EdgeKind) -> bool:
         derivs = EDGE_DERIVATIONS.get(k, [])
@@ -2399,7 +2495,10 @@ def validate_derivations_implemented_only(
         if allowed_sources_set is None:
             return True
         contract = EDGE_KIND_CONTRACTS[k]
-        return any(src in allowed_sources_set for src in contract.allowed_sources) or not contract.allowed_sources
+        return (
+            any(src in allowed_sources_set for src in contract.allowed_sources)
+            or not contract.allowed_sources
+        )
 
     missing_nodes = [k.value for k in NodeKind if not _has_acceptable_derivation_for_node(k)]
     missing_edges = [k.value for k in EdgeKind if not _has_acceptable_derivation_for_edge(k)]
@@ -2407,13 +2506,17 @@ def validate_derivations_implemented_only(
     if missing_nodes or missing_edges:
         msg = []
         if missing_nodes:
-            msg.append("No acceptable implemented derivation for node kinds: " + ", ".join(missing_nodes))
+            msg.append(
+                "No acceptable implemented derivation for node kinds: " + ", ".join(missing_nodes)
+            )
         if missing_edges:
-            msg.append("No acceptable implemented derivation for edge kinds: " + ", ".join(missing_edges))
+            msg.append(
+                "No acceptable implemented derivation for edge kinds: " + ", ".join(missing_edges)
+            )
         raise ValueError("\n".join(msg))
 
 
-def registry_to_jsonable() -> Dict[str, object]:
+def registry_to_jsonable() -> dict[str, object]:
     """
     Returns a JSON-serializable view of the entire registry.
     Useful for run bundles / manifests / validation reports.
@@ -2423,8 +2526,12 @@ def registry_to_jsonable() -> Dict[str, object]:
         "edge_kinds": [k.value for k in EdgeKind],
         "node_kind_contracts": {k.value: v.to_dict() for k, v in NODE_KIND_CONTRACTS.items()},
         "edge_kind_contracts": {k.value: v.to_dict() for k, v in EDGE_KIND_CONTRACTS.items()},
-        "node_derivations": {k.value: [d.to_dict() for d in v] for k, v in NODE_DERIVATIONS.items()},
-        "edge_derivations": {k.value: [d.to_dict() for d in v] for k, v in EDGE_DERIVATIONS.items()},
+        "node_derivations": {
+            k.value: [d.to_dict() for d in v] for k, v in NODE_DERIVATIONS.items()
+        },
+        "edge_derivations": {
+            k.value: [d.to_dict() for d in v] for k, v in EDGE_DERIVATIONS.items()
+        },
     }
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence, Tuple
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -17,16 +17,20 @@ class SchemaInferOptions:
       - columns that change type across partitions/sources
       - partial extraction results
     """
+
     promote_options: str = "permissive"
     keep_extra_columns: bool = False
     safe_cast: bool = False  # False is usually what you want for “accept ambiguity” systems.
 
 
-def unify_schemas(schemas: Sequence[pa.Schema], opts: Optional[SchemaInferOptions] = None) -> pa.Schema:
+def unify_schemas(
+    schemas: Sequence[pa.Schema], opts: SchemaInferOptions | None = None
+) -> pa.Schema:
     """
     Unify schemas across tables/fragments with permissive promotion.
 
-    Notes:
+    Notes
+    -----
       - pa.unify_schemas supports promote_options in modern pyarrow.
       - we fall back if the runtime pyarrow is older.
     """
@@ -41,7 +45,9 @@ def unify_schemas(schemas: Sequence[pa.Schema], opts: Optional[SchemaInferOption
         return pa.unify_schemas(list(schemas))
 
 
-def infer_schema_from_tables(tables: Sequence[pa.Table], opts: Optional[SchemaInferOptions] = None) -> pa.Schema:
+def infer_schema_from_tables(
+    tables: Sequence[pa.Table], opts: SchemaInferOptions | None = None
+) -> pa.Schema:
     """
     Computes a unified schema for a set of tables.
     """
@@ -58,7 +64,7 @@ def align_table_to_schema(
     table: pa.Table,
     schema: pa.Schema,
     *,
-    opts: Optional[SchemaInferOptions] = None,
+    opts: SchemaInferOptions | None = None,
 ) -> pa.Table:
     """
     Align `table` to `schema` by:
@@ -117,8 +123,8 @@ def align_table_to_schema(
 def align_tables_to_unified_schema(
     tables: Sequence[pa.Table],
     *,
-    opts: Optional[SchemaInferOptions] = None,
-) -> Tuple[pa.Schema, List[pa.Table]]:
+    opts: SchemaInferOptions | None = None,
+) -> tuple[pa.Schema, list[pa.Table]]:
     """
     Convenience: infer unified schema and align all tables to it.
     """

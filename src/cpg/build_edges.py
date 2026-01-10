@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional, Sequence, Tuple
 
 import pyarrow as pa
 
@@ -9,13 +9,13 @@ from ..arrowdsl.finalize import FinalizeResult, finalize
 from ..arrowdsl.runtime import ExecutionContext
 from ..normalize.ids import stable_id
 from .kinds import (
-    EdgeKind,
     SCIP_ROLE_DEFINITION,
     SCIP_ROLE_IMPORT,
     SCIP_ROLE_READ,
     SCIP_ROLE_WRITE,
+    EdgeKind,
 )
-from .schemas import SCHEMA_VERSION, CPG_EDGES_CONTRACT, CPG_EDGES_SCHEMA, empty_edges
+from .schemas import CPG_EDGES_CONTRACT, CPG_EDGES_SCHEMA, SCHEMA_VERSION, empty_edges
 
 
 def _const_str(n: int, value: str) -> pa.Array:
@@ -36,7 +36,9 @@ def _get(t: pa.Table, col: str, *, default_type: pa.DataType) -> pa.Array:
     return pa.array([None] * t.num_rows, type=default_type)
 
 
-def _role_mask_filter(symbol_roles: Sequence[Optional[int]], mask: int, *, must_set: bool) -> list[bool]:
+def _role_mask_filter(
+    symbol_roles: Sequence[int | None], mask: int, *, must_set: bool
+) -> list[bool]:
     out: list[bool] = []
     for r in symbol_roles:
         if r is None:
@@ -54,8 +56,8 @@ def _compute_edge_ids(
     path: list,
     bstart: list,
     bend: list,
-) -> list[Optional[str]]:
-    ids: list[Optional[str]] = []
+) -> list[str | None]:
+    ids: list[str | None] = []
     for s, d, p, bs, be in zip(src, dst, path, bstart, bend):
         if s is None or d is None:
             ids.append(None)
@@ -64,7 +66,9 @@ def _compute_edge_ids(
         if p is None or bs is None or be is None:
             ids.append(stable_id("edge", edge_kind, str(s), str(d)))
         else:
-            ids.append(stable_id("edge", edge_kind, str(s), str(d), str(p), str(int(bs)), str(int(be))))
+            ids.append(
+                stable_id("edge", edge_kind, str(s), str(d), str(p), str(int(bs)), str(int(be)))
+            )
     return ids
 
 
@@ -136,7 +140,9 @@ def _emit_edges_from_relation(
         schema=CPG_EDGES_SCHEMA,
     )
     # Drop rows with missing edge_id/src/dst (finalize will also catch these, but better here)
-    mask = [eid is not None and s is not None and d is not None for eid, s, d in zip(edge_ids, src, dst)]
+    mask = [
+        eid is not None and s is not None and d is not None for eid, s, d in zip(edge_ids, src, dst)
+    ]
     if not any(mask):
         return empty_edges()
     return out.filter(pa.array(mask, type=pa.bool_()))
@@ -150,6 +156,7 @@ class EdgeBuildOptions:
     This builder expects finalized relationship datasets (relspec outputs), but it is tolerant:
     missing inputs => that edge family is skipped.
     """
+
     emit_symbol_role_edges: bool = True
     emit_import_edges: bool = True
     emit_call_edges: bool = True
@@ -158,11 +165,11 @@ class EdgeBuildOptions:
 
 def build_cpg_edges_raw(
     *,
-    rel_name_symbol: Optional[pa.Table] = None,
-    rel_import_symbol: Optional[pa.Table] = None,
-    rel_callsite_symbol: Optional[pa.Table] = None,
-    rel_callsite_qname: Optional[pa.Table] = None,
-    options: Optional[EdgeBuildOptions] = None,
+    rel_name_symbol: pa.Table | None = None,
+    rel_import_symbol: pa.Table | None = None,
+    rel_callsite_symbol: pa.Table | None = None,
+    rel_callsite_qname: pa.Table | None = None,
+    options: EdgeBuildOptions | None = None,
 ) -> pa.Table:
     """
     Emit CPG edges (raw, not finalized).
@@ -175,7 +182,9 @@ def build_cpg_edges_raw(
         roles = _get(rel_name_symbol, "symbol_roles", default_type=pa.int32()).to_pylist()
 
         # defines: Definition bit set
-        mask_def = pa.array(_role_mask_filter(roles, SCIP_ROLE_DEFINITION, must_set=True), type=pa.bool_())
+        mask_def = pa.array(
+            _role_mask_filter(roles, SCIP_ROLE_DEFINITION, must_set=True), type=pa.bool_()
+        )
         parts.append(
             _emit_edges_from_relation(
                 rel_name_symbol.filter(mask_def),
@@ -191,7 +200,9 @@ def build_cpg_edges_raw(
         )
 
         # references: Definition bit NOT set
-        mask_ref = pa.array(_role_mask_filter(roles, SCIP_ROLE_DEFINITION, must_set=False), type=pa.bool_())
+        mask_ref = pa.array(
+            _role_mask_filter(roles, SCIP_ROLE_DEFINITION, must_set=False), type=pa.bool_()
+        )
         parts.append(
             _emit_edges_from_relation(
                 rel_name_symbol.filter(mask_ref),
@@ -207,7 +218,9 @@ def build_cpg_edges_raw(
         )
 
         # reads: ReadAccess bit set
-        mask_read = pa.array(_role_mask_filter(roles, SCIP_ROLE_READ, must_set=True), type=pa.bool_())
+        mask_read = pa.array(
+            _role_mask_filter(roles, SCIP_ROLE_READ, must_set=True), type=pa.bool_()
+        )
         parts.append(
             _emit_edges_from_relation(
                 rel_name_symbol.filter(mask_read),
@@ -223,7 +236,9 @@ def build_cpg_edges_raw(
         )
 
         # writes: WriteAccess bit set
-        mask_write = pa.array(_role_mask_filter(roles, SCIP_ROLE_WRITE, must_set=True), type=pa.bool_())
+        mask_write = pa.array(
+            _role_mask_filter(roles, SCIP_ROLE_WRITE, must_set=True), type=pa.bool_()
+        )
         parts.append(
             _emit_edges_from_relation(
                 rel_name_symbol.filter(mask_write),
@@ -241,9 +256,15 @@ def build_cpg_edges_raw(
     # --- Import edges (import alias -> symbol) ---
     if options.emit_import_edges and rel_import_symbol is not None and rel_import_symbol.num_rows:
         roles = _get(rel_import_symbol, "symbol_roles", default_type=pa.int32()).to_pylist()
-        mask_imp = pa.array(_role_mask_filter(roles, SCIP_ROLE_IMPORT, must_set=True), type=pa.bool_())
+        mask_imp = pa.array(
+            _role_mask_filter(roles, SCIP_ROLE_IMPORT, must_set=True), type=pa.bool_()
+        )
 
-        src_col = "import_alias_id" if "import_alias_id" in rel_import_symbol.column_names else "import_id"
+        src_col = (
+            "import_alias_id"
+            if "import_alias_id" in rel_import_symbol.column_names
+            else "import_id"
+        )
         # evidence: alias span is preferred; normalized imports should have bstart/bend
         bstart_col = "bstart" if "bstart" in rel_import_symbol.column_names else "alias_bstart"
         bend_col = "bend" if "bend" in rel_import_symbol.column_names else "alias_bend"
@@ -271,7 +292,9 @@ def build_cpg_edges_raw(
                 src_col="call_id",
                 dst_col="symbol",
                 path_col="path",
-                bstart_col="call_bstart" if "call_bstart" in rel_callsite_symbol.column_names else "bstart",
+                bstart_col="call_bstart"
+                if "call_bstart" in rel_callsite_symbol.column_names
+                else "bstart",
                 bend_col="call_bend" if "call_bend" in rel_callsite_symbol.column_names else "bend",
                 origin="scip",
                 default_resolution_method="CALLEE_SPAN_EXACT",
@@ -294,7 +317,10 @@ def build_cpg_edges_raw(
         # Filter rel_callsite_qname to unresolved call_ids
         if "call_id" in rel_callsite_qname.column_names:
             mask = pa.array(
-                [False if (cid is None or str(cid) in resolved) else True for cid in rel_callsite_qname["call_id"].to_pylist()],
+                [
+                    False if (cid is None or str(cid) in resolved) else True
+                    for cid in rel_callsite_qname["call_id"].to_pylist()
+                ],
                 type=pa.bool_(),
             )
             qnp = rel_callsite_qname.filter(mask)
@@ -329,11 +355,11 @@ def build_cpg_edges_raw(
 def build_cpg_edges(
     *,
     ctx: ExecutionContext,
-    rel_name_symbol: Optional[pa.Table] = None,
-    rel_import_symbol: Optional[pa.Table] = None,
-    rel_callsite_symbol: Optional[pa.Table] = None,
-    rel_callsite_qname: Optional[pa.Table] = None,
-    options: Optional[EdgeBuildOptions] = None,
+    rel_name_symbol: pa.Table | None = None,
+    rel_import_symbol: pa.Table | None = None,
+    rel_callsite_symbol: pa.Table | None = None,
+    rel_callsite_qname: pa.Table | None = None,
+    options: EdgeBuildOptions | None = None,
 ) -> FinalizeResult:
     """
     Build + finalize cpg_edges (schema alignment, dedupe, canonical sort).

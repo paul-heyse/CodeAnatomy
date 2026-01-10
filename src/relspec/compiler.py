@@ -1,50 +1,42 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple, Union
+from typing import Any, Protocol
 
 import pyarrow as pa
 
-from ..arrowdsl.plan import Plan
-from ..arrowdsl.runtime import ExecutionContext
+from ..arrowdsl.contracts import Contract, SortKey
+from ..arrowdsl.dataset_io import compile_to_acero_scan, open_dataset
 from ..arrowdsl.expr import E
+from ..arrowdsl.finalize import FinalizeResult, finalize
 from ..arrowdsl.joins import JoinSpec, hash_join
 from ..arrowdsl.kernels import (
     apply_dedupe,
     canonical_sort,
     explode_list_column,
 )
-from ..arrowdsl.runner import run_pipeline
-from ..arrowdsl.finalize import FinalizeResult, finalize
-from ..arrowdsl.contracts import Contract, DedupeSpec, SortKey
-
-from ..arrowdsl.dataset_io import open_dataset, compile_to_acero_scan
-from ..arrowdsl.queryspec import QuerySpec, ProjectionSpec
-
-from .model import (
-    DatasetRef,
-    RuleKind,
-    RelationshipRule,
-    HashJoinConfig,
-    IntervalAlignConfig,
-    ProjectConfig,
-    KernelSpecT,
-    AddLiteralSpec,
-    DropColumnsSpec,
-    RenameColumnsSpec,
-    ExplodeListSpec,
-    DedupeKernelSpec,
-    CanonicalSortKernelSpec,
-)
-from .registry import DatasetCatalog, DatasetLocation, ContractCatalog
-
+from ..arrowdsl.plan import Plan
+from ..arrowdsl.queryspec import ProjectionSpec, QuerySpec
+from ..arrowdsl.runtime import ExecutionContext
 from .edge_contract_validation import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
 )
-
-
+from .model import (
+    AddLiteralSpec,
+    CanonicalSortKernelSpec,
+    DatasetRef,
+    DedupeKernelSpec,
+    DropColumnsSpec,
+    ExplodeListSpec,
+    IntervalAlignConfig,
+    ProjectConfig,
+    RelationshipRule,
+    RenameColumnsSpec,
+    RuleKind,
+)
+from .registry import ContractCatalog, DatasetCatalog
 
 KernelFn = Callable[[pa.Table, ExecutionContext], pa.Table]
 
@@ -53,13 +45,17 @@ class PlanResolver(Protocol):
     """
     Resolves a DatasetRef to an Acero-backed Plan.
     """
+
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> Plan: ...
 
 
 def _scan_ordering_for_ctx(ctx: ExecutionContext):
     # If scan is configured to produce implicit ordering, mark as implicit; else unordered.
     from ..arrowdsl.runtime import Ordering
-    if getattr(ctx.runtime.scan, "implicit_ordering", False) or getattr(ctx.runtime.scan, "require_sequenced_output", False):
+
+    if getattr(ctx.runtime.scan, "implicit_ordering", False) or getattr(
+        ctx.runtime.scan, "require_sequenced_output", False
+    ):
         return Ordering.implicit()
     return Ordering.unordered()
 
@@ -72,6 +68,7 @@ class FilesystemPlanResolver:
       - arrowdsl.dataset_io.open_dataset(...)
       - arrowdsl.dataset_io.compile_to_acero_scan(...)
     """
+
     def __init__(self, catalog: DatasetCatalog) -> None:
         self.catalog = catalog
 
@@ -100,7 +97,8 @@ class InMemoryPlanResolver:
     """
     Test/dev resolver: dataset names map to in-memory Tables or Plans.
     """
-    def __init__(self, mapping: Mapping[str, Union[pa.Table, Plan]]) -> None:
+
+    def __init__(self, mapping: Mapping[str, pa.Table | Plan]) -> None:
         self.mapping = dict(mapping)
 
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> Plan:
@@ -116,44 +114,56 @@ class InMemoryPlanResolver:
 # Kernel compilation helpers
 # -------------------------
 
-def _compile_post_kernels(rule: RelationshipRule) -> List[KernelFn]:
+
+def _compile_post_kernels(rule: RelationshipRule) -> list[KernelFn]:
     """
     Turn KernelSpecT into concrete post-processing functions.
 
     These run in the kernel lane (on pa.Table).
     """
-    fns: List[KernelFn] = []
+    fns: list[KernelFn] = []
 
     # Optional rule meta injection (useful for winner selection and observability)
     if rule.emit_rule_meta:
+
         def _add_rule_meta(t: pa.Table, ctx: ExecutionContext) -> pa.Table:
             n = t.num_rows
             if rule.rule_name_col not in t.column_names:
                 t = t.append_column(rule.rule_name_col, pa.array([rule.name] * n, type=pa.string()))
             if rule.rule_priority_col not in t.column_names:
-                t = t.append_column(rule.rule_priority_col, pa.array([int(rule.priority)] * n, type=pa.int32()))
+                t = t.append_column(
+                    rule.rule_priority_col, pa.array([int(rule.priority)] * n, type=pa.int32())
+                )
             return t
+
         fns.append(_add_rule_meta)
 
     for ks in rule.post_kernels:
         if isinstance(ks, AddLiteralSpec):
+
             def _mk_add_literal(spec: AddLiteralSpec) -> KernelFn:
                 def _fn(t: pa.Table, ctx: ExecutionContext) -> pa.Table:
                     if spec.name in t.column_names:
                         return t
                     return t.append_column(spec.name, pa.array([spec.value] * t.num_rows))
+
                 return _fn
+
             fns.append(_mk_add_literal(ks))
 
         elif isinstance(ks, DropColumnsSpec):
+
             def _mk_drop(spec: DropColumnsSpec) -> KernelFn:
                 def _fn(t: pa.Table, ctx: ExecutionContext) -> pa.Table:
                     cols = [c for c in spec.columns if c in t.column_names]
                     return t.drop(cols) if cols else t
+
                 return _fn
+
             fns.append(_mk_drop(ks))
 
         elif isinstance(ks, RenameColumnsSpec):
+
             def _mk_rename(spec: RenameColumnsSpec) -> KernelFn:
                 def _fn(t: pa.Table, ctx: ExecutionContext) -> pa.Table:
                     if not spec.mapping:
@@ -161,10 +171,13 @@ def _compile_post_kernels(rule: RelationshipRule) -> List[KernelFn]:
                     names = list(t.column_names)
                     new_names = [spec.mapping.get(n, n) for n in names]
                     return t.rename_columns(new_names)
+
                 return _fn
+
             fns.append(_mk_rename(ks))
 
         elif isinstance(ks, ExplodeListSpec):
+
             def _mk_explode(spec: ExplodeListSpec) -> KernelFn:
                 def _fn(t: pa.Table, ctx: ExecutionContext) -> pa.Table:
                     return explode_list_column(
@@ -174,21 +187,29 @@ def _compile_post_kernels(rule: RelationshipRule) -> List[KernelFn]:
                         out_parent_col=spec.out_parent_col,
                         out_value_col=spec.out_value_col,
                     )
+
                 return _fn
+
             fns.append(_mk_explode(ks))
 
         elif isinstance(ks, DedupeKernelSpec):
+
             def _mk_dedupe(spec: DedupeKernelSpec) -> KernelFn:
                 def _fn(t: pa.Table, ctx: ExecutionContext) -> pa.Table:
                     return apply_dedupe(t, spec=spec.spec, ctx=ctx)
+
                 return _fn
+
             fns.append(_mk_dedupe(ks))
 
         elif isinstance(ks, CanonicalSortKernelSpec):
+
             def _mk_sort(spec: CanonicalSortKernelSpec) -> KernelFn:
                 def _fn(t: pa.Table, ctx: ExecutionContext) -> pa.Table:
                     return canonical_sort(t, sort_keys=spec.sort_keys)
+
                 return _fn
+
             fns.append(_mk_sort(ks))
 
         else:
@@ -197,7 +218,9 @@ def _compile_post_kernels(rule: RelationshipRule) -> List[KernelFn]:
     return fns
 
 
-def _apply_project_to_plan(plan: Plan, project: Optional[ProjectConfig], *, rule: RelationshipRule) -> Plan:
+def _apply_project_to_plan(
+    plan: Plan, project: ProjectConfig | None, *, rule: RelationshipRule
+) -> Plan:
     """
     Apply a projection in plan lane when possible.
 
@@ -214,8 +237,8 @@ def _apply_project_to_plan(plan: Plan, project: Optional[ProjectConfig], *, rule
 
     import pyarrow.compute as pc
 
-    exprs: List[pc.Expression] = []
-    names: List[str] = []
+    exprs: list[pc.Expression] = []
+    names: list[str] = []
 
     for col in project.select:
         exprs.append(E.field(col))
@@ -235,7 +258,8 @@ def _apply_project_to_plan(plan: Plan, project: Optional[ProjectConfig], *, rule
 # Interval alignment (kernel lane)
 # -------------------------
 
-def _col_pylist(t: pa.Table, name: str) -> List[Any]:
+
+def _col_pylist(t: pa.Table, name: str) -> list[Any]:
     if name not in t.column_names:
         return [None] * t.num_rows
     return t[name].to_pylist()
@@ -257,12 +281,12 @@ def _cmp_values(a: Any, b: Any) -> int:
 
 
 def _pick_best_candidate(
-    candidates: List[dict],
+    candidates: list[dict],
     *,
-    tie_breakers: Tuple[SortKey, ...],
-) -> Optional[dict]:
+    tie_breakers: tuple[SortKey, ...],
+) -> dict | None:
     """
-    candidates are dicts with at least:
+    Candidates are dicts with at least:
       - "_span_len" (int)
       - plus any tie_breaker columns
     Lower _span_len is better (more specific).
@@ -289,6 +313,7 @@ def _pick_best_candidate(
         return 0
 
     from functools import cmp_to_key
+
     return sorted(candidates, key=cmp_to_key(cmp))[0]
 
 
@@ -310,16 +335,24 @@ def _interval_align(left: pa.Table, right: pa.Table, cfg: IntervalAlignConfig) -
     re = _col_pylist(right, cfg.right_end_col)
 
     # Index right rows by path
-    right_by_path: Dict[str, List[int]] = {}
+    right_by_path: dict[str, list[int]] = {}
     for i, p in enumerate(rp):
         if p is None:
             continue
         right_by_path.setdefault(str(p), []).append(i)
 
-    left_cols = {c: _col_pylist(left, c) for c in cfg.select_left} if cfg.select_left else {c: _col_pylist(left, c) for c in left.column_names}
-    right_cols = {c: _col_pylist(right, c) for c in cfg.select_right} if cfg.select_right else {c: _col_pylist(right, c) for c in right.column_names}
+    left_cols = (
+        {c: _col_pylist(left, c) for c in cfg.select_left}
+        if cfg.select_left
+        else {c: _col_pylist(left, c) for c in left.column_names}
+    )
+    right_cols = (
+        {c: _col_pylist(right, c) for c in cfg.select_right}
+        if cfg.select_right
+        else {c: _col_pylist(right, c) for c in right.column_names}
+    )
 
-    out_rows: List[dict] = []
+    out_rows: list[dict] = []
 
     for i in range(left.num_rows):
         p = lp[i]
@@ -328,7 +361,7 @@ def _interval_align(left: pa.Table, right: pa.Table, cfg: IntervalAlignConfig) -
                 row = {}
                 for c, arr in left_cols.items():
                     row[c] = arr[i]
-                for c in right_cols.keys():
+                for c in right_cols:
                     row[c] = None
                 if cfg.emit_match_meta:
                     row[cfg.match_kind_col] = "NO_PATH_OR_SPAN"
@@ -341,7 +374,7 @@ def _interval_align(left: pa.Table, right: pa.Table, cfg: IntervalAlignConfig) -
         lend = int(le[i])
 
         cand_idxs = right_by_path.get(p, [])
-        candidates: List[dict] = []
+        candidates: list[dict] = []
 
         for j in cand_idxs:
             if rs[j] is None or re[j] is None:
@@ -350,9 +383,9 @@ def _interval_align(left: pa.Table, right: pa.Table, cfg: IntervalAlignConfig) -
             rend = int(re[j])
 
             if cfg.mode == "EXACT":
-                ok = (rstart == lstart and rend == lend)
+                ok = rstart == lstart and rend == lend
             elif cfg.mode == "CONTAINED_BEST":
-                ok = (rstart >= lstart and rend <= lend)
+                ok = rstart >= lstart and rend <= lend
             else:  # OVERLAP_BEST
                 ok = not (rend <= lstart or rstart >= lend)
 
@@ -375,7 +408,7 @@ def _interval_align(left: pa.Table, right: pa.Table, cfg: IntervalAlignConfig) -
                 row = {}
                 for c, arr in left_cols.items():
                     row[c] = arr[i]
-                for c in right_cols.keys():
+                for c in right_cols:
                     row[c] = None
                 if cfg.emit_match_meta:
                     row[cfg.match_kind_col] = "NO_MATCH"
@@ -405,6 +438,7 @@ def _interval_align(left: pa.Table, right: pa.Table, cfg: IntervalAlignConfig) -
 # Compilation outputs
 # -------------------------
 
+
 @dataclass(frozen=True)
 class CompiledRule:
     """
@@ -413,10 +447,11 @@ class CompiledRule:
     - If plan is set: execute = plan.to_table(ctx) + post_kernels
     - If execute_fn is set: execute_fn(ctx, resolver) returns a pa.Table (composite/kernel-lane)
     """
+
     rule: RelationshipRule
-    plan: Optional[Plan]
-    execute_fn: Optional[Callable[[ExecutionContext, PlanResolver], pa.Table]]
-    post_kernels: Tuple[KernelFn, ...] = ()
+    plan: Plan | None
+    execute_fn: Callable[[ExecutionContext, PlanResolver], pa.Table] | None
+    post_kernels: tuple[KernelFn, ...] = ()
 
     def execute(self, *, ctx: ExecutionContext, resolver: PlanResolver) -> pa.Table:
         if self.execute_fn is not None:
@@ -442,11 +477,14 @@ class CompiledOutput:
       - concat_tables(promote=True)
       - finalize against the output Contract
     """
-    output_dataset: str
-    contract_name: Optional[str]
-    contributors: Tuple[CompiledRule, ...] = ()
 
-    def execute(self, *, ctx: ExecutionContext, resolver: PlanResolver, contracts: ContractCatalog) -> FinalizeResult:
+    output_dataset: str
+    contract_name: str | None
+    contributors: tuple[CompiledRule, ...] = ()
+
+    def execute(
+        self, *, ctx: ExecutionContext, resolver: PlanResolver, contracts: ContractCatalog
+    ) -> FinalizeResult:
         if not self.contributors:
             raise ValueError(f"CompiledOutput {self.output_dataset!r} has no contributors")
 
@@ -468,6 +506,7 @@ class CompiledOutput:
 # Compiler
 # -------------------------
 
+
 class RelationshipRuleCompiler:
     """
     Compiles RelationshipRules into executable units (Plans + kernel lane transforms).
@@ -477,6 +516,7 @@ class RelationshipRuleCompiler:
       - do non-relational joins (interval spans) explicitly in kernel lane
       - ensure rule meta exists to support deterministic winner selection
     """
+
     def __init__(self, *, resolver: PlanResolver) -> None:
         self.resolver = resolver
 
@@ -525,8 +565,9 @@ class RelationshipRuleCompiler:
             return CompiledRule(rule=rule, plan=plan, execute_fn=None, post_kernels=post)
 
         if rule.kind == RuleKind.UNION_ALL:
+
             def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> pa.Table:
-                parts: List[pa.Table] = []
+                parts: list[pa.Table] = []
                 for inp in rule.inputs:
                     p = resolver.resolve(inp, ctx=ctx2)
                     parts.append(p.to_table(ctx=ctx2))
@@ -554,8 +595,8 @@ class RelationshipRuleCompiler:
         *,
         ctx: ExecutionContext,
         contracts: Any = None,
-        edge_validation: Optional[EdgeContractValidationConfig] = None,
-    ) -> Dict[str, CompiledOutput]:
+        edge_validation: EdgeContractValidationConfig | None = None,
+    ) -> dict[str, CompiledOutput]:
         """
         Compile a set of relationship rules into executable outputs.
 
@@ -570,17 +611,19 @@ class RelationshipRuleCompiler:
                 config=edge_validation or EdgeContractValidationConfig(),
             )
 
-        by_out: Dict[str, List[RelationshipRule]] = {}
+        by_out: dict[str, list[RelationshipRule]] = {}
         for r in registry_rules:
             by_out.setdefault(r.output_dataset, []).append(r)
 
-        compiled: Dict[str, CompiledOutput] = {}
+        compiled: dict[str, CompiledOutput] = {}
         for out_name, rules in by_out.items():
             rules_sorted = sorted(rules, key=lambda rr: (rr.priority, rr.name))
             # enforce contract consistency
             contracts = {rr.contract_name for rr in rules_sorted}
             if len(contracts) > 1:
-                raise ValueError(f"Output {out_name!r} has inconsistent contract_name across rules: {contracts}")
+                raise ValueError(
+                    f"Output {out_name!r} has inconsistent contract_name across rules: {contracts}"
+                )
 
             contrib = tuple(self.compile_rule(r, ctx=ctx) for r in rules_sorted)
             compiled[out_name] = CompiledOutput(

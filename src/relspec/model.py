@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Union, Literal, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal, Union
 
 from ..arrowdsl.contracts import DedupeSpec, SortKey
 
@@ -25,8 +26,9 @@ class DatasetRef:
     label:
       Optional override for plan labeling/debug.
     """
+
     name: str
-    query: Optional["QuerySpec"] = None
+    query: QuerySpec | None = None
     label: str = ""
 
 
@@ -44,6 +46,7 @@ class RuleKind(str, Enum):
       - EXPLODE_LIST
       - WINNER_SELECT (dedupe)
     """
+
     FILTER_PROJECT = "filter_project"
     HASH_JOIN = "hash_join"
     UNION_ALL = "union_all"
@@ -60,13 +63,14 @@ class HashJoinConfig:
     join_type examples:
       "inner", "left outer", "right outer", "full outer", "left semi", "left anti"
     """
+
     join_type: str = "inner"
-    left_keys: Tuple[str, ...] = ()
-    right_keys: Tuple[str, ...] = ()
+    left_keys: tuple[str, ...] = ()
+    right_keys: tuple[str, ...] = ()
 
     # Which columns are emitted from each side by the join node
-    left_output: Tuple[str, ...] = ()
-    right_output: Tuple[str, ...] = ()
+    left_output: tuple[str, ...] = ()
+    right_output: tuple[str, ...] = ()
 
     # If collisions happen, specify suffixes
     output_suffix_for_left: str = ""
@@ -91,6 +95,7 @@ class IntervalAlignConfig:
       1) minimal right span length (more specific is better)
       2) tie_breakers (SortKey columns from right row)
     """
+
     mode: Literal["EXACT", "CONTAINED_BEST", "OVERLAP_BEST"] = "CONTAINED_BEST"
     how: Literal["inner", "left"] = "inner"
 
@@ -102,11 +107,11 @@ class IntervalAlignConfig:
     right_start_col: str = "bstart"
     right_end_col: str = "bend"
 
-    select_left: Tuple[str, ...] = ()
-    select_right: Tuple[str, ...] = ()
+    select_left: tuple[str, ...] = ()
+    select_right: tuple[str, ...] = ()
 
     # Tie-breaking columns from right rows (after span-length)
-    tie_breakers: Tuple[SortKey, ...] = ()
+    tie_breakers: tuple[SortKey, ...] = ()
 
     # Optional match metadata columns
     emit_match_meta: bool = True
@@ -126,13 +131,15 @@ class ProjectConfig:
     exprs:
       New computed columns as {name: Expression}.
     """
-    select: Tuple[str, ...] = ()
+
+    select: tuple[str, ...] = ()
     exprs: Mapping[str, Expression] = field(default_factory=dict)
 
 
 # -------------------------
 # Post-kernel specs
 # -------------------------
+
 
 @dataclass(frozen=True)
 class KernelSpec:
@@ -149,7 +156,7 @@ class AddLiteralSpec(KernelSpec):
 @dataclass(frozen=True)
 class DropColumnsSpec(KernelSpec):
     kind: Literal["drop_columns"] = "drop_columns"
-    columns: Tuple[str, ...] = ()
+    columns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -176,7 +183,7 @@ class DedupeKernelSpec(KernelSpec):
 @dataclass(frozen=True)
 class CanonicalSortKernelSpec(KernelSpec):
     kind: Literal["canonical_sort"] = "canonical_sort"
-    sort_keys: Tuple[SortKey, ...] = ()
+    sort_keys: tuple[SortKey, ...] = ()
 
 
 KernelSpecT = Union[
@@ -203,19 +210,20 @@ class RelationshipRule:
       - if emit_rule_meta=True, compiler will add rule_name + rule_priority columns.
         You should include these in contracts if you want them persisted.
     """
+
     name: str
     kind: RuleKind
     output_dataset: str
-    contract_name: Optional[str] = None
+    contract_name: str | None = None
 
-    inputs: Tuple[DatasetRef, ...] = ()
+    inputs: tuple[DatasetRef, ...] = ()
 
     # kind-specific configs
-    hash_join: Optional[HashJoinConfig] = None
-    interval_align: Optional[IntervalAlignConfig] = None
+    hash_join: HashJoinConfig | None = None
+    interval_align: IntervalAlignConfig | None = None
 
-    project: Optional[ProjectConfig] = None
-    post_kernels: Tuple[KernelSpecT, ...] = ()
+    project: ProjectConfig | None = None
+    post_kernels: tuple[KernelSpecT, ...] = ()
 
     # meta/winner selection
     priority: int = 100

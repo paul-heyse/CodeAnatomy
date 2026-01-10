@@ -1,33 +1,33 @@
 from __future__ import annotations
 
-from .model import (
-    DatasetRef,
-    RuleKind,
-    HashJoinConfig,
-    IntervalAlignConfig,
-    ProjectConfig,
-    KernelSpec,
-    AddLiteralSpec,
-    DropColumnsSpec,
-    RenameColumnsSpec,
-    ExplodeListSpec,
-    DedupeKernelSpec,
-    CanonicalSortKernelSpec,
-    RelationshipRule,
-)
-from .registry import (
-    DatasetLocation,
-    DatasetCatalog,
-    ContractCatalog,
-    RelationshipRegistry,
-)
 from .compiler import (
-    PlanResolver,
+    CompiledOutput,
+    CompiledRule,
     FilesystemPlanResolver,
     InMemoryPlanResolver,
-    CompiledRule,
-    CompiledOutput,
+    PlanResolver,
     RelationshipRuleCompiler,
+)
+from .model import (
+    AddLiteralSpec,
+    CanonicalSortKernelSpec,
+    DatasetRef,
+    DedupeKernelSpec,
+    DropColumnsSpec,
+    ExplodeListSpec,
+    HashJoinConfig,
+    IntervalAlignConfig,
+    KernelSpec,
+    ProjectConfig,
+    RelationshipRule,
+    RenameColumnsSpec,
+    RuleKind,
+)
+from .registry import (
+    ContractCatalog,
+    DatasetCatalog,
+    DatasetLocation,
+    RelationshipRegistry,
 )
 
 __all__ = [

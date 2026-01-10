@@ -31,8 +31,6 @@
 **You are an autonomous Python engineer. Follow this sequence for *every* change:**
 
 1) **Load context fast**
-   - Read this file end‑to‑end.
-   - Open the relevant spec/proposal under `openspec/` (when applicable).
    - Bootstrap environment and run local checks:
     ```bash
     scripts/bootstrap_codex.sh
@@ -45,20 +43,12 @@
 
 3) **Validate quality gates locally**
   ```bash
-  uv run python -m tools.quality_report --output build/quality-results/quality_report.json
-  # If OpenAPI changed: lint spec (e.g., spectral lint openapi.yaml)
-  After resolving quality report items, uv run pytest -q for first the targeted subset of tests that are likely impacted by the scope of work, then for each of the major directories (build, serving, etc.). Running all pytests at once will take 15 minutes or more, soafter validating affected tests in a focused manner, it is preferable to do the final validation in a segmented manner by subdirectory
-
-  ```
-  - The consolidated report is written to `build/quality-results/quality_report.json`
-    (also printed to stdout) with per-tool status, stdout/stderr, and timing metadata.
-  - The script executes, in order:
+  - The key quality gates that you should check are in order:
     - `uv run ruff check --fix` (lint + autofix for style/import issues).
-    - `uv run pyright --warnings --pythonversion=3.13` (strict type checking with warnings).
     - `uv run pyrefly check` (additional type and contract validation).
-  - Report structure (LLM-friendly JSON):
-    - Top-level: `suite`, `generated_at`, `overall_status`, `duration_seconds`, `output_path`, and `results`.
-    - Each `results` entry: `name`, `command`, `status`, `return_code`, `started_at`, `ended_at`, `duration_seconds`, `stdout`, `stderr`, and optional `exception`.
+    - `uv run pyright --warnings --pythonversion=3.14` (strict type checking with warnings).
+
+
 
 4) **Git protocol**
 - Do not use git checkout or any other file manipulation via git under any circumstance. If you notice file changes unrelated to your changes, assume they are conscientious changes by the user that your are not involved with and that you do not have to address them in any way. 
@@ -200,7 +190,7 @@ Security and Dangerous Functions:
     • When using the logging format strings, ensure the number of %s placeholders matches the number of arguments (Pylint will error on too many or few args)[83].
     • Async/Await: All coroutine functions (marked with async def) must actually be awaited or used, not left un-awaited. If an AI writes async code, it must ensure not to ignore coroutine objects (document rare fire-and-forget behavior explicitly). Also, within an async function, use await for async calls; do not call asynchronous functions without awaiting them (flake8-async rules ensure proper await usage).
     • Self Use in Methods: Avoid using attributes named “self” outside of method definitions. Also, do not assign to self (the name) in a method – use it only as the instance reference. Flake8-self also flags instances of accessing private members of classes: do not access another class’s private variables (e.g., something that starts with _ClassName__), and do not use double prefix __var names in ways that rely on name-mangling inconsistently[99].
-    • Typing Imports: Prefer modern typing syntax and imports. Use built-in generic types (like list[str] not typing.List[str]) on Python 3.13+ as appropriate (target version is py313[100]). Also prefer from collections.abc import Iterable instead of importing the old typing.Iterable if applicable. The code should be compatible with Python 3.13’s typing features.
+    • Typing Imports: Prefer modern typing syntax and imports. Use built-in generic types (like list[str] not typing.List[str]) on Python 3.14+ as appropriate (target version is py313[100]). Also prefer from collections.abc import Iterable instead of importing the old typing.Iterable if applicable. The code should be compatible with Python 3.14’s typing features.
 (Pyrefly and Pyright will enforce that any type errors are eliminated. In summary: the code must type-check cleanly with no errors or unresolved types[101], and must conform to the strictest interpretation of the type hints provided.)
 ##### Part VI: Documentation and Comments
     • Docstrings Required: Every public module, class, function, and method must include a docstring explaining its purpose. This project treats missing docstrings as violations (via Pydocstyle’s rules under the NumPy convention). All API elements should be documented.
@@ -667,13 +657,13 @@ If any answer is “no,” revise the test to move it closer to production reali
 ## Environment Setup (Agent‑grade, deterministic)
 
 - **Canonical manager:** `uv`
-- **Python:** pinned to **3.13.11**
+- **Python:** pinned to **3.14.2**
 - **Virtual env:** project‑local `.venv/` only (never system Python)
 - **One-shot bootstrap (REQUIRED):** use `scripts/bootstrap.sh`
   ```bash
   scripts/bootstrap.sh
   ```
-  The script lives at `scripts/bootstrap.sh` and provisions uv, pins Python 3.13.11, syncs dependencies, activates the project `.venv/`, and sets project paths correctly. It is REQUIRED, the code will not function correctly if you do not run this script. Pass `--help` for options.
+  The script lives at `scripts/bootstrap.sh` and provisions uv, pins Python 3.14.2, syncs dependencies, activates the project `.venv/`, and sets project paths correctly. It is REQUIRED, the code will not function correctly if you do not run this script. Pass `--help` for options.
 
   If you are having difficulties with reaching the directory even after running `scripts/bootstrap.sh` please attempt to run the bash command "/bin/bash -lc 'pwd && ls -la'"
 
@@ -714,7 +704,7 @@ Read these first when editing configs or debugging local vs CI drift:
 
 - **Static analysis (strict mode):**
   ```bash
-  uv run pyright --warnings --pythonversion=3.13
+  uv run pyright --warnings --pythonversion=3.14
   ```
 - **First-line check (semantics):**
   ```bash
@@ -948,7 +938,7 @@ Example `PATH_MAP`:
 uv run ruff format && uv run ruff check --fix
 
 # Types (pyright strict + pyrefly sharp)
-uv run pyright --warnings --pythonversion=3.13
+uv run pyright --warnings --pythonversion=3.14
 uv run pyrefly check
 
 # Tests (incl. doctests/xdoctest via pytest.ini)

@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Tuple
 
 import pyarrow as pa
-
-from .ids import stable_id
 
 
 @dataclass(frozen=True)
@@ -20,13 +17,14 @@ class FileTextIndex:
     Important: lines are split with keepends=True so that cumulative byte lengths reproduce
     file-length coordinates (including newlines).
     """
+
     file_id: str
     path: str
-    file_sha256: Optional[str]
-    encoding: Optional[str]
+    file_sha256: str | None
+    encoding: str | None
     text: str
-    lines: List[str]                # splitlines(keepends=True)
-    line_start_utf8: List[int]      # length = len(lines)+1; line_start_utf8[i] = byte start of line i
+    lines: list[str]  # splitlines(keepends=True)
+    line_start_utf8: list[int]  # length = len(lines)+1; line_start_utf8[i] = byte start of line i
 
 
 @dataclass(frozen=True)
@@ -34,11 +32,12 @@ class RepoTextIndex:
     """
     Repo-wide indices for fast lookup.
     """
-    by_file_id: Dict[str, FileTextIndex]
-    by_path: Dict[str, FileTextIndex]
+
+    by_file_id: dict[str, FileTextIndex]
+    by_path: dict[str, FileTextIndex]
 
 
-def _decode_repo_row_text(rf: dict) -> Optional[str]:
+def _decode_repo_row_text(rf: dict) -> str | None:
     t = rf.get("text")
     if isinstance(t, str) and t:
         return t
@@ -52,7 +51,7 @@ def _decode_repo_row_text(rf: dict) -> Optional[str]:
     return None
 
 
-def _build_line_index_utf8(text: str) -> Tuple[List[str], List[int]]:
+def _build_line_index_utf8(text: str) -> tuple[list[str], list[int]]:
     lines = text.splitlines(keepends=True)
     starts = [0]
     acc = 0
@@ -69,8 +68,8 @@ def build_repo_text_index(repo_files: pa.Table) -> RepoTextIndex:
     Expects columns:
       file_id, path, file_sha256, encoding, text/bytes
     """
-    by_file_id: Dict[str, FileTextIndex] = {}
-    by_path: Dict[str, FileTextIndex] = {}
+    by_file_id: dict[str, FileTextIndex] = {}
+    by_path: dict[str, FileTextIndex] = {}
 
     for rf in repo_files.to_pylist():
         file_id = rf["file_id"]
@@ -101,6 +100,7 @@ def build_repo_text_index(repo_files: pa.Table) -> RepoTextIndex:
 # -----------------------------
 # SCIP position encoding helpers
 # -----------------------------
+
 
 def normalize_position_encoding(value) -> int:
     """
@@ -164,7 +164,7 @@ def line_char_to_byte_offset(
     line0: int,
     char_off: int,
     position_encoding: int,
-) -> Optional[int]:
+) -> int | None:
     """
     Convert (0-based line, char offset in position_encoding units) -> byte offset in UTF-8 bytes.
     """
@@ -185,7 +185,7 @@ def scip_range_to_byte_span(
     end_line: int,
     end_char: int,
     position_encoding: int,
-) -> Tuple[Optional[int], Optional[int]]:
+) -> tuple[int | None, int | None]:
     """
     Convert SCIP normalized Range4 (0-based) into a (bstart, bend) UTF-8 byte span.
     """
@@ -198,13 +198,14 @@ def scip_range_to_byte_span(
 # AST span conversion
 # -----------------------------
 
+
 def ast_range_to_byte_span(
     fidx: FileTextIndex,
-    lineno_1: Optional[int],
-    col_utf8_bytes: Optional[int],
-    end_lineno_1: Optional[int],
-    end_col_utf8_bytes: Optional[int],
-) -> Tuple[Optional[int], Optional[int]]:
+    lineno_1: int | None,
+    col_utf8_bytes: int | None,
+    end_lineno_1: int | None,
+    end_col_utf8_bytes: int | None,
+) -> tuple[int | None, int | None]:
     """
     Convert CPython AST (1-based lineno, col offsets in UTF-8 bytes) to (bstart,bend).
 
@@ -234,6 +235,7 @@ def ast_range_to_byte_span(
 # Table-level normalizers
 # -----------------------------
 
+
 def add_ast_byte_spans(
     repo_index: RepoTextIndex,
     py_ast_nodes: pa.Table,
@@ -258,11 +260,19 @@ def add_ast_byte_spans(
     fids = py_ast_nodes[file_id_col].to_pylist()
     linenos = py_ast_nodes[lineno_col].to_pylist()
     cols = py_ast_nodes[col_col].to_pylist()
-    end_linenos = py_ast_nodes[end_lineno_col].to_pylist() if end_lineno_col in py_ast_nodes.column_names else [None] * py_ast_nodes.num_rows
-    end_cols = py_ast_nodes[end_col_col].to_pylist() if end_col_col in py_ast_nodes.column_names else [None] * py_ast_nodes.num_rows
+    end_linenos = (
+        py_ast_nodes[end_lineno_col].to_pylist()
+        if end_lineno_col in py_ast_nodes.column_names
+        else [None] * py_ast_nodes.num_rows
+    )
+    end_cols = (
+        py_ast_nodes[end_col_col].to_pylist()
+        if end_col_col in py_ast_nodes.column_names
+        else [None] * py_ast_nodes.num_rows
+    )
 
-    bstarts: list[Optional[int]] = []
-    bends: list[Optional[int]] = []
+    bstarts: list[int | None] = []
+    bends: list[int | None] = []
     oks: list[bool] = []
 
     for fid, ln, co, eln, eco in zip(fids, linenos, cols, end_linenos, end_cols):
@@ -305,7 +315,7 @@ def add_scip_occurrence_byte_spans(
     out_enc_bstart: str = "enc_bstart",
     out_enc_bend: str = "enc_bend",
     out_ok: str = "span_ok",
-) -> Tuple[pa.Table, pa.Table]:
+) -> tuple[pa.Table, pa.Table]:
     """
     Adds byte spans to scip_occurrences using Document.position_encoding.
 
@@ -314,7 +324,7 @@ def add_scip_occurrence_byte_spans(
     span_errors_table is intended for observability/debugging (invalid line/char, missing file text, etc.)
     """
     # Build doc_id -> posenc map
-    doc_posenc: Dict[str, int] = {}
+    doc_posenc: dict[str, int] = {}
     for row in scip_documents.to_pylist():
         did = row.get(document_id_col)
         pe = normalize_position_encoding(row.get(doc_posenc_col))
@@ -330,16 +340,35 @@ def add_scip_occurrence_byte_spans(
     els = scip_occurrences[occ_end_line].to_pylist()
     ecs = scip_occurrences[occ_end_char].to_pylist()
 
-    has_enc = all(c in scip_occurrences.column_names for c in (enc_start_line, enc_start_char, enc_end_line, enc_end_char))
-    esls = scip_occurrences[enc_start_line].to_pylist() if has_enc else [None] * scip_occurrences.num_rows
-    escs = scip_occurrences[enc_start_char].to_pylist() if has_enc else [None] * scip_occurrences.num_rows
-    eels = scip_occurrences[enc_end_line].to_pylist() if has_enc else [None] * scip_occurrences.num_rows
-    eecs = scip_occurrences[enc_end_char].to_pylist() if has_enc else [None] * scip_occurrences.num_rows
+    has_enc = all(
+        c in scip_occurrences.column_names
+        for c in (enc_start_line, enc_start_char, enc_end_line, enc_end_char)
+    )
+    esls = (
+        scip_occurrences[enc_start_line].to_pylist()
+        if has_enc
+        else [None] * scip_occurrences.num_rows
+    )
+    escs = (
+        scip_occurrences[enc_start_char].to_pylist()
+        if has_enc
+        else [None] * scip_occurrences.num_rows
+    )
+    eels = (
+        scip_occurrences[enc_end_line].to_pylist()
+        if has_enc
+        else [None] * scip_occurrences.num_rows
+    )
+    eecs = (
+        scip_occurrences[enc_end_char].to_pylist()
+        if has_enc
+        else [None] * scip_occurrences.num_rows
+    )
 
-    bstarts: list[Optional[int]] = []
-    bends: list[Optional[int]] = []
-    ebstarts: list[Optional[int]] = []
-    ebends: list[Optional[int]] = []
+    bstarts: list[int | None] = []
+    bends: list[int | None] = []
+    ebstarts: list[int | None] = []
+    ebends: list[int | None] = []
     oks: list[bool] = []
 
     err_rows: list[dict] = []
@@ -364,7 +393,9 @@ def add_scip_occurrence_byte_spans(
             ebstarts.append(None)
             ebends.append(None)
             oks.append(False)
-            err_rows.append({"document_id": did_s, "path": str(path), "reason": "missing_repo_text_for_path"})
+            err_rows.append(
+                {"document_id": did_s, "path": str(path), "reason": "missing_repo_text_for_path"}
+            )
             continue
 
         if sl is None or sc is None or el is None or ec is None:
@@ -373,7 +404,9 @@ def add_scip_occurrence_byte_spans(
             ebstarts.append(None)
             ebends.append(None)
             oks.append(False)
-            err_rows.append({"document_id": did_s, "path": fidx.path, "reason": "missing_range_fields"})
+            err_rows.append(
+                {"document_id": did_s, "path": fidx.path, "reason": "missing_range_fields"}
+            )
             continue
 
         bs, be = scip_range_to_byte_span(fidx, int(sl), int(sc), int(el), int(ec), posenc)
@@ -389,10 +422,12 @@ def add_scip_occurrence_byte_spans(
             ebstarts.append(ebs)
             ebends.append(ebe)
 
-        ok = (bs is not None and be is not None)
+        ok = bs is not None and be is not None
         oks.append(ok)
         if not ok:
-            err_rows.append({"document_id": did_s, "path": fidx.path, "reason": "range_to_byte_span_failed"})
+            err_rows.append(
+                {"document_id": did_s, "path": fidx.path, "reason": "range_to_byte_span_failed"}
+            )
 
     out = scip_occurrences
     if out_bstart not in out.column_names:
@@ -406,9 +441,17 @@ def add_scip_occurrence_byte_spans(
     if out_ok not in out.column_names:
         out = out.append_column(out_ok, pa.array(oks, type=pa.bool_()))
 
-    err_t = pa.Table.from_pylist(err_rows, schema=ERR_SCHEMA) if err_rows else pa.Table.from_arrays(
-        [pa.array([], type=pa.string()), pa.array([], type=pa.string()), pa.array([], type=pa.string())],
-        names=["document_id", "path", "reason"],
+    err_t = (
+        pa.Table.from_pylist(err_rows, schema=ERR_SCHEMA)
+        if err_rows
+        else pa.Table.from_arrays(
+            [
+                pa.array([], type=pa.string()),
+                pa.array([], type=pa.string()),
+                pa.array([], type=pa.string()),
+            ],
+            names=["document_id", "path", "reason"],
+        )
     )
     return out, err_t
 
@@ -417,7 +460,8 @@ def add_scip_occurrence_byte_spans(
 # CST span canonicalization
 # -----------------------------
 
-def _append_alias_cols(table: pa.Table, aliases: Dict[str, str]) -> pa.Table:
+
+def _append_alias_cols(table: pa.Table, aliases: dict[str, str]) -> pa.Table:
     """
     aliases: new_col -> existing_col
     """
@@ -435,7 +479,7 @@ def _append_alias_cols(table: pa.Table, aliases: Dict[str, str]) -> pa.Table:
 def normalize_cst_callsites_spans(
     py_cst_callsites: pa.Table,
     *,
-    primary: str = "callee",   # "callee" or "call"
+    primary: str = "callee",  # "callee" or "call"
 ) -> pa.Table:
     """
     Ensure callsites have canonical (bstart,bend) for joins.

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, Union
-
+from typing import Any
 
 # Default mapping: relationship output dataset -> edge kinds it can emit downstream.
 # You can override this in config or add more datasets as you expand the registry.
-DEFAULT_REL_OUTPUT_TO_EDGE_KINDS: Dict[str, Tuple[str, ...]] = {
+DEFAULT_REL_OUTPUT_TO_EDGE_KINDS: dict[str, tuple[str, ...]] = {
     # name_ref_id + symbol + roles => defines/references/reads/writes
     "rel_name_symbol": (
         "PY_DEFINES_SYMBOL",
@@ -15,17 +15,11 @@ DEFAULT_REL_OUTPUT_TO_EDGE_KINDS: Dict[str, Tuple[str, ...]] = {
         "PY_WRITES_SYMBOL",
     ),
     # import_alias_id + symbol => import edges
-    "rel_import_symbol": (
-        "PY_IMPORTS_SYMBOL",
-    ),
+    "rel_import_symbol": ("PY_IMPORTS_SYMBOL",),
     # call_id + symbol => call edges (preferred)
-    "rel_callsite_symbol": (
-        "PY_CALLS_SYMBOL",
-    ),
+    "rel_callsite_symbol": ("PY_CALLS_SYMBOL",),
     # call_id + qname_id => call edges (fallback)
-    "rel_callsite_qname": (
-        "PY_CALLS_QNAME",
-    ),
+    "rel_callsite_qname": ("PY_CALLS_QNAME",),
 }
 
 
@@ -34,6 +28,7 @@ class EdgeContractValidationConfig:
     """
     Configuration for validating relationship output contracts against CPG EdgeKind contracts.
     """
+
     dataset_to_edge_kinds: Mapping[str, Sequence[str]] = DEFAULT_REL_OUTPUT_TO_EDGE_KINDS
 
     # If True, we error when a dataset is mapped to edge kinds but has no contract_name.
@@ -46,24 +41,25 @@ class EdgeContractValidationConfig:
     error_on_unknown_edge_kind: bool = True
 
 
-def _load_edge_kind_required_props() -> Dict[str, Set[str]]:
+def _load_edge_kind_required_props() -> dict[str, set[str]]:
     """
     Loads EDGE_KIND_CONTRACTS from codeintel_cpg.cpg.kinds_ultimate.
 
-    Returns:
+    Returns
+    -------
       { "EDGE_KIND_NAME": {"required_prop_a", ...}, ... }
     """
     from codeintel_cpg.cpg.kinds_ultimate import EDGE_KIND_CONTRACTS  # lazy import
 
-    out: Dict[str, Set[str]] = {}
+    out: dict[str, set[str]] = {}
     for edge_kind_enum, contract in EDGE_KIND_CONTRACTS.items():
         # edge_kind_enum is an Enum value; contract.required_props is dict prop->PropSpec
         out[str(edge_kind_enum.value)] = set(contract.required_props.keys())
     return out
 
 
-def _stringify_edge_kinds(edge_kinds: Sequence[Any]) -> Tuple[str, ...]:
-    out: List[str] = []
+def _stringify_edge_kinds(edge_kinds: Sequence[Any]) -> tuple[str, ...]:
+    out: list[str] = []
     for ek in edge_kinds:
         if ek is None:
             continue
@@ -74,7 +70,7 @@ def _stringify_edge_kinds(edge_kinds: Sequence[Any]) -> Tuple[str, ...]:
     return tuple(out)
 
 
-def _contract_available_fields(contract: Any) -> Set[str]:
+def _contract_available_fields(contract: Any) -> set[str]:
     """
     Returns available fields for validation:
       - schema column names
@@ -88,7 +84,7 @@ def _contract_available_fields(contract: Any) -> Set[str]:
         except Exception:
             pass
 
-    fields: Set[str] = set()
+    fields: set[str] = set()
 
     schema = getattr(contract, "schema", None)
     if schema is not None and hasattr(schema, "names"):
@@ -111,7 +107,7 @@ def validate_relationship_output_contracts_for_edge_kinds(
     *,
     rules: Sequence[Any],
     contract_catalog: Any,
-    config: Optional[EdgeContractValidationConfig] = None,
+    config: EdgeContractValidationConfig | None = None,
 ) -> None:
     """
     Validates that whenever a relationship output dataset feeds a CPG edge kind X, the dataset's
@@ -127,13 +123,13 @@ def validate_relationship_output_contracts_for_edge_kinds(
     required_props_by_edge_kind = _load_edge_kind_required_props()
 
     # Group rules by output_dataset
-    rules_by_out: Dict[str, List[Any]] = {}
+    rules_by_out: dict[str, list[Any]] = {}
     for r in rules:
         out_ds = getattr(r, "output_dataset", None)
         if out_ds:
             rules_by_out.setdefault(str(out_ds), []).append(r)
 
-    errors: List[str] = []
+    errors: list[str] = []
 
     # Validate each output dataset that maps to some edge kinds
     for out_ds, edge_kinds in cfg.dataset_to_edge_kinds.items():
@@ -169,7 +165,9 @@ def validate_relationship_output_contracts_for_edge_kinds(
 
         # Get contract from catalog
         if not hasattr(contract_catalog, "get"):
-            errors.append(f"[relspec] Contract catalog has no .get(); cannot validate '{contract_name}'.")
+            errors.append(
+                f"[relspec] Contract catalog has no .get(); cannot validate '{contract_name}'."
+            )
             continue
 
         contract = contract_catalog.get(contract_name)
@@ -204,4 +202,6 @@ def validate_relationship_output_contracts_for_edge_kinds(
                 )
 
     if errors:
-        raise ValueError("Edge contract validation failed:\n" + "\n".join(f" - {e}" for e in errors))
+        raise ValueError(
+            "Edge contract validation failed:\n" + "\n".join(f" - {e}" for e in errors)
+        )

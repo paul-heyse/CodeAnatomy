@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+import pathlib
+from typing import Any
 
 import pyarrow as pa
+
 from hamilton.function_modifiers import cache, extract_fields, tag
 
 from ...arrowdsl.contracts import Contract, DedupeSpec, SortKey
@@ -23,15 +25,18 @@ from ...relspec.model import (
     RelationshipRule,
     RuleKind,
 )
-from ...relspec.registry import ContractCatalog, RelationshipRegistry
+from ...relspec.registry import (
+    ContractCatalog,
+    DatasetCatalog,
+    DatasetLocation,
+    RelationshipRegistry,
+)
 from ...storage.parquet import ParquetWriteOptions, write_named_datasets_parquet
-from ...relspec.registry import DatasetLocation, DatasetCatalog
-from ...relspec.compiler import FilesystemPlanResolver
-
 
 # -----------------------------
 # Relationship contracts
 # -----------------------------
+
 
 @tag(layer="relspec", artifact="relationship_contracts", kind="catalog")
 def relationship_contracts() -> ContractCatalog:
@@ -135,7 +140,10 @@ def relationship_contracts() -> ContractCatalog:
             virtual_fields=("origin",),  # NEW: injected downstream by edge emitter
             dedupe=DedupeSpec(
                 keys=("import_alias_id", "symbol", "path", "bstart", "bend"),
-                tie_breakers=(SortKey("score", "descending"), SortKey("rule_priority", "ascending")),
+                tie_breakers=(
+                    SortKey("score", "descending"),
+                    SortKey("rule_priority", "ascending"),
+                ),
                 strategy="KEEP_FIRST_AFTER_SORT",
             ),
             canonical_sort=(
@@ -154,7 +162,10 @@ def relationship_contracts() -> ContractCatalog:
             virtual_fields=("origin",),  # NEW: injected downstream by edge emitter
             dedupe=DedupeSpec(
                 keys=("call_id", "symbol", "path", "call_bstart", "call_bend"),
-                tie_breakers=(SortKey("score", "descending"), SortKey("rule_priority", "ascending")),
+                tie_breakers=(
+                    SortKey("score", "descending"),
+                    SortKey("rule_priority", "ascending"),
+                ),
                 strategy="KEEP_FIRST_AFTER_SORT",
             ),
             canonical_sort=(
@@ -173,7 +184,10 @@ def relationship_contracts() -> ContractCatalog:
             virtual_fields=("origin",),  # NEW: injected downstream by edge emitter
             dedupe=DedupeSpec(
                 keys=("call_id", "qname_id"),
-                tie_breakers=(SortKey("score", "descending"), SortKey("rule_priority", "ascending")),
+                tie_breakers=(
+                    SortKey("score", "descending"),
+                    SortKey("rule_priority", "ascending"),
+                ),
                 strategy="KEEP_FIRST_AFTER_SORT",
             ),
             canonical_sort=(SortKey("call_id", "ascending"), SortKey("qname_id", "ascending")),
@@ -186,6 +200,7 @@ def relationship_contracts() -> ContractCatalog:
 # -----------------------------
 # Relationship rules
 # -----------------------------
+
 
 @tag(layer="relspec", artifact="relationship_registry", kind="registry")
 def relationship_registry() -> RelationshipRegistry:
@@ -292,8 +307,9 @@ def relationship_registry() -> RelationshipRegistry:
 # Alternate resolver mode (memory vs filesystem)
 # -----------------------------
 
+
 @tag(layer="relspec", artifact="relspec_work_dir", kind="scalar")
-def relspec_work_dir(work_dir: Optional[str], output_dir: Optional[str]) -> str:
+def relspec_work_dir(work_dir: str | None, output_dir: str | None) -> str:
     """
     Choose a working directory for intermediate dataset materialization.
 
@@ -303,7 +319,7 @@ def relspec_work_dir(work_dir: Optional[str], output_dir: Optional[str]) -> str:
       3) local fallback: ./.codeintel_cpg_work
     """
     base = work_dir or output_dir or ".codeintel_cpg_work"
-    os.makedirs(base, exist_ok=True)
+    pathlib.Path(base).mkdir(exist_ok=True, parents=True)
     return base
 
 
@@ -313,7 +329,7 @@ def relspec_input_dataset_dir(relspec_work_dir: str) -> str:
     Where we write relationship-input datasets in filesystem resolver mode.
     """
     p = os.path.join(relspec_work_dir, "relspec_inputs")
-    os.makedirs(p, exist_ok=True)
+    pathlib.Path(p).mkdir(exist_ok=True, parents=True)
     return p
 
 
@@ -326,7 +342,7 @@ def relspec_input_datasets(
     scip_occurrences_norm: pa.Table,
     callsite_qname_candidates: pa.Table,
     dim_qualified_names: pa.Table,
-) -> Dict[str, pa.Table]:
+) -> dict[str, pa.Table]:
     """
     Canonical mapping from dataset name -> table that relationship rules refer to.
 
@@ -346,10 +362,10 @@ def relspec_input_datasets(
 @tag(layer="relspec", artifact="persisted_relspec_inputs", kind="object")
 def persist_relspec_input_datasets(
     relspec_mode: str,
-    relspec_input_datasets: Dict[str, pa.Table],
+    relspec_input_datasets: dict[str, pa.Table],
     relspec_input_dataset_dir: str,
     overwrite_intermediate_datasets: bool,
-) -> Dict[str, DatasetLocation]:
+) -> dict[str, DatasetLocation]:
     """
     Writes relspec input datasets to disk in filesystem mode.
 
@@ -368,7 +384,7 @@ def persist_relspec_input_datasets(
         overwrite=bool(overwrite_intermediate_datasets),
     )
 
-    out: Dict[str, DatasetLocation] = {}
+    out: dict[str, DatasetLocation] = {}
     for name, path in paths.items():
         out[name] = DatasetLocation(
             path=path,
@@ -382,8 +398,8 @@ def persist_relspec_input_datasets(
 @tag(layer="relspec", artifact="relspec_resolver", kind="runtime")
 def relspec_resolver(
     relspec_mode: str,
-    relspec_input_datasets: Dict[str, pa.Table],
-    persist_relspec_input_datasets: Dict[str, DatasetLocation],
+    relspec_input_datasets: dict[str, pa.Table],
+    persist_relspec_input_datasets: dict[str, DatasetLocation],
 ) -> Any:
     """
     Resolver selection:
@@ -404,6 +420,7 @@ def relspec_resolver(
 # Relationship compilation + execution
 # -----------------------------
 
+
 @cache()
 @tag(layer="relspec", artifact="compiled_relationship_outputs", kind="object")
 def compiled_relationship_outputs(
@@ -411,11 +428,11 @@ def compiled_relationship_outputs(
     relspec_resolver: Any,
     relationship_contracts: ContractCatalog,  # add dep
     ctx: ExecutionContext,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     compiler = RelationshipRuleCompiler(resolver=relspec_resolver)
     return compiler.compile_registry(
-        relationship_registry.rules(), 
-        ctx=ctx, 
+        relationship_registry.rules(),
+        ctx=ctx,
         contracts=relationship_contracts,
         edge_validation=EdgeContractValidationConfig(),  # optional override
     )
@@ -430,12 +447,12 @@ def compiled_relationship_outputs(
 )
 @tag(layer="relspec", artifact="relationship_tables", kind="bundle")
 def relationship_tables(
-    compiled_relationship_outputs: Dict[str, Any],
+    compiled_relationship_outputs: dict[str, Any],
     relspec_resolver: Any,
     relationship_contracts: ContractCatalog,
     ctx: ExecutionContext,
-) -> Dict[str, pa.Table]:
-    out: Dict[str, pa.Table] = {}
+) -> dict[str, pa.Table]:
+    out: dict[str, pa.Table] = {}
     for key, compiled in compiled_relationship_outputs.items():
         res = compiled.execute(ctx=ctx, resolver=relspec_resolver, contracts=relationship_contracts)
         out[key] = res.table
@@ -451,6 +468,7 @@ def relationship_tables(
 # -----------------------------
 # CPG build
 # -----------------------------
+
 
 @cache()
 @tag(layer="cpg", artifact="cpg_nodes_final", kind="table")

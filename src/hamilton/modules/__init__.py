@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from . import inputs, extraction, normalization, cpg_build, outputs
+from . import cpg_build, extraction, inputs, normalization, outputs
 
 ALL_MODULES = [inputs, extraction, normalization, cpg_build, outputs]
 
 __all__ = [
-    "inputs",
-    "extraction",
-    "normalization",
-    "cpg_build",
-    "outputs",
     "ALL_MODULES",
+    "cpg_build",
+    "extraction",
+    "inputs",
+    "normalization",
+    "outputs",
 ]

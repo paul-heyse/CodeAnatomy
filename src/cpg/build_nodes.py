@@ -1,15 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional, Sequence
 
 import pyarrow as pa
 
 from ..arrowdsl.finalize import FinalizeResult, finalize
 from ..arrowdsl.runtime import ExecutionContext
-from ..normalize.ids import stable_id
 from .kinds import NodeKind
-from .schemas import SCHEMA_VERSION, CPG_NODES_CONTRACT, CPG_NODES_SCHEMA, empty_nodes
+from .schemas import CPG_NODES_CONTRACT, CPG_NODES_SCHEMA, SCHEMA_VERSION, empty_nodes
 
 
 def _const_str(n: int, value: str) -> pa.Array:
@@ -20,7 +19,7 @@ def _const_i32(n: int, value: int) -> pa.Array:
     return pa.array([int(value)] * n, type=pa.int32())
 
 
-def _pick_col(t: pa.Table, names: Sequence[str]) -> Optional[pa.ChunkedArray]:
+def _pick_col(t: pa.Table, names: Sequence[str]) -> pa.ChunkedArray | None:
     for n in names:
         if n in t.column_names:
             return t[n]
@@ -35,7 +34,7 @@ def _nodes_from_anchored(
     path_col: str = "path",
     bstart_col: str = "bstart",
     bend_col: str = "bend",
-    file_id_col: Optional[str] = "file_id",
+    file_id_col: str | None = "file_id",
 ) -> pa.Table:
     n = t.num_rows
     if n == 0:
@@ -43,7 +42,9 @@ def _nodes_from_anchored(
 
     node_id = t[id_col]
     path = t[path_col] if path_col in t.column_names else pa.array([None] * n, type=pa.string())
-    bstart = t[bstart_col] if bstart_col in t.column_names else pa.array([None] * n, type=pa.int64())
+    bstart = (
+        t[bstart_col] if bstart_col in t.column_names else pa.array([None] * n, type=pa.int64())
+    )
     bend = t[bend_col] if bend_col in t.column_names else pa.array([None] * n, type=pa.int64())
 
     file_id = None
@@ -83,15 +84,15 @@ class NodeBuildOptions:
 
 def build_cpg_nodes_raw(
     *,
-    repo_files: Optional[pa.Table] = None,
-    cst_name_refs: Optional[pa.Table] = None,
-    cst_imports: Optional[pa.Table] = None,
-    cst_callsites: Optional[pa.Table] = None,
-    cst_defs: Optional[pa.Table] = None,
-    dim_qualified_names: Optional[pa.Table] = None,
-    scip_symbol_information: Optional[pa.Table] = None,
-    scip_occurrences: Optional[pa.Table] = None,
-    options: Optional[NodeBuildOptions] = None,
+    repo_files: pa.Table | None = None,
+    cst_name_refs: pa.Table | None = None,
+    cst_imports: pa.Table | None = None,
+    cst_callsites: pa.Table | None = None,
+    cst_defs: pa.Table | None = None,
+    dim_qualified_names: pa.Table | None = None,
+    scip_symbol_information: pa.Table | None = None,
+    scip_occurrences: pa.Table | None = None,
+    options: NodeBuildOptions | None = None,
 ) -> pa.Table:
     """
     Build cpg_nodes without finalization (schema alignment/dedupe/sort happens in build_cpg_nodes()).
@@ -111,7 +112,9 @@ def build_cpg_nodes_raw(
         else:
             if options.file_span_from_size_bytes and size is not None:
                 bstart = pa.array([0] * n, type=pa.int64())
-                bend = pa.array([int(x) if x is not None else None for x in size.to_pylist()], type=pa.int64())
+                bend = pa.array(
+                    [int(x) if x is not None else None for x in size.to_pylist()], type=pa.int64()
+                )
             else:
                 bstart = pa.array([None] * n, type=pa.int64())
                 bend = pa.array([None] * n, type=pa.int64())
@@ -194,7 +197,11 @@ def build_cpg_nodes_raw(
         )
 
     # PY_QUALIFIED_NAME nodes (dimension)
-    if options.include_qname_nodes and dim_qualified_names is not None and dim_qualified_names.num_rows:
+    if (
+        options.include_qname_nodes
+        and dim_qualified_names is not None
+        and dim_qualified_names.num_rows
+    ):
         # dim_qualified_names expected to contain qname_id and qname
         if "qname_id" in dim_qualified_names.column_names:
             parts.append(
@@ -202,7 +209,7 @@ def build_cpg_nodes_raw(
                     dim_qualified_names,
                     id_col="qname_id",
                     kind=NodeKind.PY_QUALIFIED_NAME,
-                    path_col="path",   # likely missing; will become null
+                    path_col="path",  # likely missing; will become null
                     bstart_col="bstart",
                     bend_col="bend",
                     file_id_col=None,
@@ -251,15 +258,15 @@ def build_cpg_nodes_raw(
 def build_cpg_nodes(
     *,
     ctx: ExecutionContext,
-    repo_files: Optional[pa.Table] = None,
-    cst_name_refs: Optional[pa.Table] = None,
-    cst_imports: Optional[pa.Table] = None,
-    cst_callsites: Optional[pa.Table] = None,
-    cst_defs: Optional[pa.Table] = None,
-    dim_qualified_names: Optional[pa.Table] = None,
-    scip_symbol_information: Optional[pa.Table] = None,
-    scip_occurrences: Optional[pa.Table] = None,
-    options: Optional[NodeBuildOptions] = None,
+    repo_files: pa.Table | None = None,
+    cst_name_refs: pa.Table | None = None,
+    cst_imports: pa.Table | None = None,
+    cst_callsites: pa.Table | None = None,
+    cst_defs: pa.Table | None = None,
+    dim_qualified_names: pa.Table | None = None,
+    scip_symbol_information: pa.Table | None = None,
+    scip_occurrences: pa.Table | None = None,
+    options: NodeBuildOptions | None = None,
 ) -> FinalizeResult:
     """
     Build + finalize cpg_nodes (schema alignment, dedupe, canonical sort, error table).

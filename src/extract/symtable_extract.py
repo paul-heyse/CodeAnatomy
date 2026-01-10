@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import pyarrow as pa
 
@@ -22,6 +21,7 @@ class SymtableExtractOptions:
 
     SYM-ALG-1 reference: :contentReference[oaicite:16]{index=16}
     """
+
     compile_type: str = "exec"
 
 
@@ -116,7 +116,9 @@ FUNC_PARTS_SCHEMA = pa.schema(
 )
 
 
-def extract_symtable(repo_files: pa.Table, options: Optional[SymtableExtractOptions] = None) -> SymtableExtractResult:
+def extract_symtable(
+    repo_files: pa.Table, options: SymtableExtractOptions | None = None
+) -> SymtableExtractResult:
     import symtable as _symtable
 
     options = options or SymtableExtractOptions()

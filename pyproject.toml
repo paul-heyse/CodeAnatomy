@@ -1,0 +1,169 @@
+[project]
+name = "codeanatomy"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "pip>=25.3",
+    "setuptools>=80.9.0",
+    "datafusion>=50.1.0",
+    "rustworkx>=0.17.1",
+    "rpygrep>=0.2.1",
+    "pyyaml>=6.0.3",
+    "protobuf>=6.33.2",
+    "grpcio-tools>=1.76.0",
+    "grpcio>=1.76.0",
+    "sf-hamilton[dask,rich,sdk,tqdm,ui]>=1.89.0",
+    "tqdm>=4.67.1",
+    "pytest-asyncio>=1.3.0",
+    "pytest-anyio>=0.0.0",
+    "coverage>=7.12.0",
+    "cyclopts>=4.3.0",
+    "pandera>=0.27.0",
+    "polars>=1.36.1",
+    "sqlglot>=28.1.0",
+    "pydeps>=3.0.1",
+    "pylint>=4.0.4",
+    "graphviz>=0.21",
+    "pathspec>=0.12.1",
+    "plotly",
+    "pyarrow",
+    "pydantic",
+    "pydoclint",
+    "pydocstyle",
+    "pyrefly",
+    "pyright",
+    "pytest",
+    "pytest-cov",
+    "pytest-logging",
+    "pytest-json-report",
+    "pytest-xdist>=3.8.0",
+    "rich",
+    "ruff",
+    "tree-sitter",
+    "tree-sitter-language-pack",
+    "tree-sitter-python>=0.25.0",
+    "anyio>=4.11.0",
+    "ast-grep-py",
+    "asyncio>=4.0.0",
+    "basedpyright",
+    "cython",
+    "docstr-coverage",
+    "docstring-parser",
+    "duckdb",
+    "fastapi",
+    "fastmcp>=2.14.1,<3",
+    "libcst",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+required-version = ">=0.14.8"
+output-format = "grouped"
+src = ["src"]
+
+[tool.ruff.lint.per-file-ignores]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = [
+    "F",
+    "E4",
+    "E7",
+    "E9",
+    "I",
+    "N",
+    "UP",
+    "SIM",
+    "C4",
+    "B",
+    "RUF",
+    "ANN",
+    "D",
+    "RET",
+    "RSE",
+    "TRY",
+    "EM",
+    "G",
+    "LOG",
+    "ISC",
+    "TID",
+    "ICN",
+    "TD",
+    "ERA",
+    "PGH",
+    "C90",
+    "PLR",
+    "W",
+    "A",
+    "ARG",
+    "BLE",
+    "DTZ",
+    "PTH",
+    "PIE",
+    "PT",
+    "T20",
+    "PLW",
+    "PLC",
+    "PERF",
+    "YTT",
+    "PYI",
+    "TC",      # Type-checking imports (typing gates enforcement)
+    "SLOT",
+    "FBT",
+    "SLF",
+    "ASYNC",
+    "INP",     # Input validation (implicit namespace packages)
+    "EXE",     # Executable shebang checks
+    "FIX",
+    "NPY",
+    "PD",
+    "PLE",
+    "DOC",
+]
+ignore = ["Q", "E203", "D203", "D213", "D205", "TC001", "TC002", "TC003", "N802", "RUF067"]
+preview = true
+extend-select = ["RUF100", "D401", "D417"]
+
+# Typing gates enforcement: escalate these to errors via explicit config
+extend-ignore = []  # Placeholder for potential future ignores
+# Note: TC, INP, EXE rules are ERRORS by default; PLC2701 (typing-only import) treated specially per-file
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-branches = 12
+max-returns = 6
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.flake8-type-checking]
+strict = true
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+
+[tool.pydoclint]
+exclude = ""
+allow-init-docstring = true  # Project policy: document constructor parameters in __init__ docstrings
+ignore-underscore-args = true
+
+[tool.pydocstyle]
+convention = "numpy"
+add-ignore = []
+
+[tool.codeintel.docstrings.policy]
+coverage-threshold = 0.9
+coverage-action = "error"
+missing-params-action = "error"
+missing-returns-action = "error"

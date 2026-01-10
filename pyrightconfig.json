@@ -1,0 +1,53 @@
+{
+  "typeCheckingMode": "basic",
+  "pythonVersion": "3.14",
+  "pythonPlatform": "Linux",
+  "venvPath": ".",
+  "venv": ".venv",
+  "useLibraryCodeForTypes": true,
+  "stubPath": "typings",
+  "include": ["src", "tests"],
+  "exclude": [
+    ".git",
+    ".venv",
+    ".ruff_cache",
+    ".pytest_cache",
+    "docs/**",
+    "tests/fixtures/heuristics/**"
+  ],
+  "extraPaths": [
+    ".",
+    "src",
+    "tests",
+    "mkdocs_gen"
+  ],
+  "executionEnvironments": [
+    {
+      "root": "src",
+      "extraPaths": [
+        ".",
+        "src",
+        "tests",
+        "mkdocs_gen"
+      ],
+      "pythonVersion": "3.14"
+    },
+    {
+      "root": "tests",
+      "extraPaths": [
+        ".",
+        "src",
+        "tests",
+      ],
+      "pythonVersion": "3.14"
+    },
+    {
+      "root": "mkdocs_gen",
+      "extraPaths": [
+        ".",
+        "src"
+      ],
+      "pythonVersion": "3.14"
+    }
+  ]
+}

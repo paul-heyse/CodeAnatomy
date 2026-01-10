@@ -1,0 +1,24 @@
+project-includes = ["src", "tests"]
+project-excludes = [
+    "**/.venv/**",
+    "**/__pycache__/**",
+    "**/tests/fixtures/heuristics/**",
+]
+search-path = ["src", "typings", "."]
+python-version = "3.14.2"
+
+# Type-check behavior
+infer-with-first-use = true
+untyped-def-behavior = "check-and-infer-return-type"
+permissive-ignores = false
+replace-imports-with-any = [
+]
+ignore-errors-in-generated-code = false
+
+# Opt into powerful optional errors
+[errors]
+missing-source = true
+implicit-any = true
+implicitly-defined-attribute = true
+implicit-abstract-class = true
+assert-type = true

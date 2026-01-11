@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
 import pyarrow as pa
 
+from arrowdsl.iter import iter_arrays
 from normalize.ids import add_span_id_column
 
 type RowValue = object | None
@@ -77,10 +78,12 @@ class ScipOccurrenceColumns:
     start_char: str = "start_char"
     end_line: str = "end_line"
     end_char: str = "end_char"
+    range_len: str = "range_len"
     enc_start_line: str = "enc_start_line"
     enc_start_char: str = "enc_start_char"
     enc_end_line: str = "enc_end_line"
     enc_end_char: str = "enc_end_char"
+    enc_range_len: str = "enc_range_len"
     out_bstart: str = "bstart"
     out_bend: str = "bend"
     out_enc_bstart: str = "enc_bstart"
@@ -98,10 +101,12 @@ class OccurrenceRow:
     start_char: RowValue
     end_line: RowValue
     end_char: RowValue
+    range_len: RowValue
     enc_start_line: RowValue
     enc_start_char: RowValue
     enc_end_line: RowValue
     enc_end_char: RowValue
+    enc_range_len: RowValue
 
 
 @dataclass(frozen=True)
@@ -123,19 +128,6 @@ SPAN_ERROR_SCHEMA = pa.schema(
         ("reason", pa.string()),
     ]
 )
-
-
-def _iter_array_values(array: ArrayLike) -> Iterator[RowValue]:
-    for value in array:
-        if isinstance(value, pa.Scalar):
-            yield value.as_py()
-        else:
-            yield value
-
-
-def _iter_arrays(arrays: Sequence[ArrayLike]) -> Iterator[tuple[RowValue, ...]]:
-    iters = [_iter_array_values(array) for array in arrays]
-    yield from zip(*iters, strict=True)
 
 
 def _column_or_null(table: pa.Table, col: str, dtype: pa.DataType) -> ArrayLike:
@@ -234,9 +226,14 @@ def build_repo_text_index(
         _column_or_null(repo_files, "text", pa.string()),
         _column_or_null(repo_files, "bytes", pa.binary()),
     ]
-    for file_id_value, path_value, file_sha256_value, encoding_value, text_value, bytes_value in _iter_arrays(
-        arrays
-    ):
+    for (
+        file_id_value,
+        path_value,
+        file_sha256_value,
+        encoding_value,
+        text_value,
+        bytes_value,
+    ) in iter_arrays(arrays):
         if not isinstance(file_id_value, str) or not isinstance(path_value, str):
             continue
 
@@ -449,7 +446,7 @@ def _compute_ast_spans(
     bstarts: list[int | None] = []
     bends: list[int | None] = []
     oks: list[bool] = []
-    for fid, ln, co, eln, eco in _iter_arrays(
+    for fid, ln, co, eln, eco in iter_arrays(
         [inputs.file_ids, inputs.linenos, inputs.col_offsets, inputs.end_linenos, inputs.end_cols]
     ):
         fid_key = str(fid) if fid is not None else None
@@ -542,7 +539,7 @@ def _build_doc_posenc_map(
         _column_or_null(scip_documents, columns.document_id, pa.string()),
         _column_or_null(scip_documents, columns.doc_posenc, pa.string()),
     ]
-    for did, posenc in _iter_arrays(arrays):
+    for did, posenc in iter_arrays(arrays):
         if did is None:
             continue
         doc_posenc[str(did)] = normalize_position_encoding(posenc)
@@ -567,13 +564,15 @@ def _build_occurrence_rows(
         _column_or_null(scip_occurrences, columns.start_char, pa.int64()),
         _column_or_null(scip_occurrences, columns.end_line, pa.int64()),
         _column_or_null(scip_occurrences, columns.end_char, pa.int64()),
+        _column_or_null(scip_occurrences, columns.range_len, pa.int64()),
         _column_or_null(scip_occurrences, columns.enc_start_line, pa.int64()),
         _column_or_null(scip_occurrences, columns.enc_start_char, pa.int64()),
         _column_or_null(scip_occurrences, columns.enc_end_line, pa.int64()),
         _column_or_null(scip_occurrences, columns.enc_end_char, pa.int64()),
+        _column_or_null(scip_occurrences, columns.enc_range_len, pa.int64()),
     ]
     rows: list[OccurrenceRow] = []
-    for did, path, sl, sc, el, ec, esl, esc, eel, eec in _iter_arrays(base_arrays):
+    for did, path, sl, sc, el, ec, rl, esl, esc, eel, eec, erl in iter_arrays(base_arrays):
         rows.append(
             OccurrenceRow(
                 document_id=did,
@@ -582,10 +581,12 @@ def _build_occurrence_rows(
                 start_char=sc,
                 end_line=el,
                 end_char=ec,
+                range_len=rl,
                 enc_start_line=esl,
                 enc_start_char=esc,
                 enc_end_line=eel,
                 enc_end_char=eec,
+                enc_range_len=erl,
             )
         )
     return rows
@@ -618,6 +619,17 @@ def _compute_occurrence_span(
             error=_span_error(did, path_value, "missing_repo_text_for_path"),
         )
 
+    range_len = _row_value_int(row.range_len)
+    if range_len is None or range_len <= 0:
+        return OccurrenceSpanResult(
+            bstart=None,
+            bend=None,
+            enc_bstart=None,
+            enc_bend=None,
+            ok=False,
+            error=_span_error(did, fidx.path, "invalid_range_len"),
+        )
+
     main_range = _normalized_range(row.start_line, row.start_char, row.end_line, row.end_char)
     if main_range is None:
         return OccurrenceSpanResult(
@@ -637,19 +649,21 @@ def _compute_occurrence_span(
     )
     enc_bstart: int | None = None
     enc_bend: int | None = None
-    enc_range = _normalized_range(
-        row.enc_start_line,
-        row.enc_start_char,
-        row.enc_end_line,
-        row.enc_end_char,
-    )
-    if enc_range is not None:
-        enc_bstart, enc_bend = scip_range_to_byte_span(
-            fidx,
-            (enc_range[0], enc_range[1]),
-            (enc_range[2], enc_range[3]),
-            posenc,
+    enc_range_len = _row_value_int(row.enc_range_len)
+    if enc_range_len is not None and enc_range_len > 0:
+        enc_range = _normalized_range(
+            row.enc_start_line,
+            row.enc_start_char,
+            row.enc_end_line,
+            row.enc_end_char,
         )
+        if enc_range is not None:
+            enc_bstart, enc_bend = scip_range_to_byte_span(
+                fidx,
+                (enc_range[0], enc_range[1]),
+                (enc_range[2], enc_range[3]),
+                posenc,
+            )
 
     ok = bstart is not None and bend is not None
     error = _span_error(did, fidx.path, "range_to_byte_span_failed") if not ok else None

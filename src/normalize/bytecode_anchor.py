@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
 
+from arrowdsl.iter import iter_arrays
 from normalize.spans import FileTextIndex, RepoTextIndex, ast_range_to_byte_span
 
 type ArrayLike = pa.Array | pa.ChunkedArray
@@ -28,19 +28,6 @@ def _column_or_null(table: pa.Table, col: str, dtype: pa.DataType) -> ArrayLike:
     if col in table.column_names:
         return table[col]
     return pa.nulls(table.num_rows, type=dtype)
-
-
-def _iter_array_values(array: ArrayLike) -> Iterator[object | None]:
-    for value in array:
-        if isinstance(value, pa.Scalar):
-            yield value.as_py()
-        else:
-            yield value
-
-
-def _iter_arrays(arrays: Sequence[ArrayLike]) -> Iterator[tuple[object | None, ...]]:
-    iters = [_iter_array_values(array) for array in arrays]
-    yield from zip(*iters, strict=True)
 
 
 @dataclass(frozen=True)
@@ -107,7 +94,7 @@ def anchor_instructions(
         _column_or_null(py_bc_instructions, cols.end_line, pa.int64()),
         _column_or_null(py_bc_instructions, cols.end_col, pa.int64()),
     ]
-    for file_id, path, start_line, start_col, end_line, end_col in _iter_arrays(arrays):
+    for file_id, path, start_line, start_col, end_line, end_col in iter_arrays(arrays):
         fidx = _file_index(repo_index, file_id, path)
         if fidx is None:
             bstarts.append(None)

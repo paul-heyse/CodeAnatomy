@@ -25,6 +25,7 @@ def _hash_id(prefix: str, *parts: str) -> str:
     hashed = hash64_from_parts(*parts, prefix=prefix)
     return f"{prefix}:{hashed}"
 
+
 INVALID_PAYLOAD_TYPE = "Runtime inspect output is not a JSON object."
 
 

@@ -11,6 +11,7 @@ import pyarrow.compute as pc
 
 from arrowdsl.contracts import Contract
 from arrowdsl.ids import hash64_from_columns
+from arrowdsl.iter import iter_array_values
 from arrowdsl.kernels import apply_dedupe, canonical_sort_if_canonical
 from arrowdsl.runtime import ExecutionContext
 from arrowdsl.schema import AlignmentInfo, align_to_schema
@@ -377,9 +378,14 @@ def finalize(table: pa.Table, *, contract: Contract, ctx: ExecutionContext) -> F
 
     if ctx.mode == "strict" and raw_errors.num_rows > 0:
         vc = pc.value_counts(raw_errors["error_code"])
-        pairs = list(
-            zip(vc.field("values").to_pylist(), vc.field("counts").to_pylist(), strict=True)
-        )
+        pairs = [
+            (value, count)
+            for value, count in zip(
+                iter_array_values(vc.field("values")),
+                iter_array_values(vc.field("counts")),
+                strict=True,
+            )
+        ]
         msg = f"Finalize(strict) failed for contract={contract.name!r}: errors={pairs}"
         raise ValueError(msg)
 

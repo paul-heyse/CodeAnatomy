@@ -10,6 +10,8 @@ from typing import Literal
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from arrowdsl.iter import iter_array_values
+
 type ArrayLike = pa.Array | pa.ChunkedArray
 type ArrayOrScalar = ArrayLike | pa.Scalar
 type MissingPolicy = Literal["raise", "null"]
@@ -47,8 +49,9 @@ def _hash64_udf(
         if value is None:
             return pa.scalar(None, type=pa.int64())
         return pa.scalar(_hash64_int(str(value)), type=pa.int64())
-    values = array.to_pylist()
-    out = [_hash64_int(str(value)) if value is not None else None for value in values]
+    out = [
+        _hash64_int(str(value)) if value is not None else None for value in iter_array_values(array)
+    ]
     return pa.array(out, type=pa.int64())
 
 

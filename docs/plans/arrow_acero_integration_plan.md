@@ -62,14 +62,15 @@ file_id = pc.binary_join_element_wise(pa.scalar("file"), pc.cast(file_hash, pa.s
 - [x] Vectorized `span_id` column in `src/normalize/spans.py`.
 - [x] Vectorized qname IDs in `src/hamilton_pipeline/modules/normalization.py`.
 - [x] Vectorized `df_event` IDs in `src/normalize/bytecode_dfg.py`.
-- [ ] Replace remaining `stable_id` usage in normalization (`src/normalize/diagnostics.py`,
-  `src/normalize/types.py`, `src/normalize/bytecode_dfg.py` reaching-def edges) or document
-  intentional exceptions.
-- [ ] Replace remaining `stable_id` usage in extraction layers
+- [x] Replaced remaining `stable_id` usage in normalization (`src/normalize/diagnostics.py`,
+  `src/normalize/types.py`, `src/normalize/bytecode_dfg.py` reaching-def edges).
+- [x] Replaced remaining `stable_id` usage in extraction layers
   (`src/extract/ast_extract.py`, `src/extract/bytecode_extract.py`, `src/extract/cst_extract.py`,
   `src/extract/scip_extract.py`, `src/extract/symtable_extract.py`,
-  `src/extract/tree_sitter_extract.py`, `src/extract/runtime_inspect_extract.py`) or document
-  intentional exceptions.
+  `src/extract/tree_sitter_extract.py`, `src/extract/runtime_inspect_extract.py`).
+- [x] `stable_id` remains as a hash64-backed wrapper in `src/normalize/ids.py` and
+  `src/extract/repo_scan.py` for API compatibility; recipes in `src/cpg/kinds_ultimate.py`
+  are informational only.
 - [x] Keep prefixed string IDs as output schema (int64 reserved for internal row_id).
 
 ---
@@ -216,13 +217,15 @@ def coalesce_string(table: pa.Table, cols: list[str], out: str) -> pa.Table:
   `src/normalize/bytecode_dfg.py`).
 - [x] Replaced `to_pylist()` in `src/cpg/build_edges.py`, `src/cpg/build_props.py`, and
   `src/normalize/bytecode_anchor.py`.
-- [ ] Replace remaining `to_pylist()` loops in `src/normalize/spans.py`,
+- [x] Replaced remaining `to_pylist()` loops in `src/normalize/spans.py`,
   `src/normalize/types.py`, `src/normalize/diagnostics.py`, `src/cpg/build_nodes.py`,
   `src/relspec/compiler.py`, `src/hamilton_pipeline/modules/normalization.py`.
-- [ ] Review extraction layers using `to_pylist()` (`src/extract/ast_extract.py`,
+- [x] Replaced extraction-layer `to_pylist()` loops in `src/extract/ast_extract.py`,
   `src/extract/bytecode_extract.py`, `src/extract/cst_extract.py`,
-  `src/extract/symtable_extract.py`, `src/extract/tree_sitter_extract.py`) and decide
-  which should remain Python loops vs. columnar compute.
+  `src/extract/symtable_extract.py`, `src/extract/tree_sitter_extract.py`,
+  `src/extract/runtime_inspect_extract.py`.
+- [x] `to_pylist()` remains only in `src/arrowdsl/ids.py` (hash64 UDF) and
+  `src/arrowdsl/finalize.py` (value_counts aggregation) where Arrow kernels are required.
 - [x] Validate no behavior drift in output schemas.
 
 ---
@@ -328,7 +331,7 @@ if provenance:
 - [x] `canonical_sort_if_canonical` appends provenance columns when present.
 - [x] Compiler enables provenance when determinism is canonical.
 - [x] Scan profiles set `implicit_ordering`/`require_sequenced_output` for canonical determinism.
-- [ ] Decide which outputs require provenance tie-breakers beyond the default append.
+- [x] No additional outputs require provenance tie-breakers beyond the default append.
 
 ---
 
@@ -386,7 +389,8 @@ good = canonical_sort_if_canonical(good, sort_keys=contract.canonical_sort, ctx=
 ### Implementation status
 - [x] Finalize applies dedupe and canonical sort gates.
 - [x] Normalization canonical sorts removed where present.
-- [ ] Audit relspec configs for `CanonicalSortKernelSpec` and migrate to finalize-only policy.
+- [x] CanonicalSortKernelSpec usage is blocked in `src/relspec/compiler.py`; finalize-only policy
+  enforced via contract `canonical_sort`.
 
 ---
 

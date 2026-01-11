@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
+import pyarrow.compute as pc
 
 from arrowdsl.empty import empty_table
 from arrowdsl.finalize import FinalizeResult, finalize
+from arrowdsl.iter import iter_arrays
 from arrowdsl.runtime import ExecutionContext
 from cpg.kinds import (
     SCIP_ROLE_FORWARD_DEFINITION,
@@ -23,6 +24,16 @@ from cpg.schemas import CPG_PROPS_CONTRACT, CPG_PROPS_SCHEMA, SCHEMA_VERSION
 type PropValue = object | None
 type PropRow = dict[str, object]
 type ArrayLike = pa.Array | pa.ChunkedArray
+QNAME_LIST_TYPE = pa.list_(pa.struct([("name", pa.string()), ("source", pa.string())]))
+DIAG_DETAIL_STRUCT = pa.struct(
+    [
+        ("detail_kind", pa.string()),
+        ("error_type", pa.string()),
+        ("source", pa.string()),
+        ("tags", pa.list_(pa.string())),
+    ]
+)
+DIAG_DETAILS_TYPE = pa.list_(DIAG_DETAIL_STRUCT)
 
 
 def _row_id(value: object | None) -> str | None:
@@ -48,19 +59,6 @@ def _column_or_null(table: pa.Table, col: str, dtype: pa.DataType) -> ArrayLike:
     if col in table.column_names:
         return table[col]
     return pa.nulls(table.num_rows, type=dtype)
-
-
-def _iter_array_values(array: ArrayLike) -> Iterator[PropValue]:
-    for value in array:
-        if isinstance(value, pa.Scalar):
-            yield value.as_py()
-        else:
-            yield value
-
-
-def _iter_arrays(arrays: Sequence[ArrayLike]) -> Iterator[tuple[PropValue, ...]]:
-    iters = [_iter_array_values(array) for array in arrays]
-    yield from zip(*iters, strict=True)
 
 
 def _add_prop(
@@ -148,7 +146,7 @@ def _add_file_props(rows: list[PropRow], repo_files: pa.Table | None) -> None:
         _column_or_null(repo_files, "file_sha256", pa.string()),
         _column_or_null(repo_files, "encoding", pa.string()),
     ]
-    for file_id, path, size_bytes, file_sha256, encoding in _iter_arrays(arrays):
+    for file_id, path, size_bytes, file_sha256, encoding in iter_arrays(arrays):
         file_id_value = _row_id(file_id)
         if file_id_value is None:
             continue
@@ -197,7 +195,7 @@ def _add_name_ref_props(rows: list[PropRow], cst_name_refs: pa.Table | None) -> 
         _column_or_null(cst_name_refs, "name", pa.string()),
         _column_or_null(cst_name_refs, "expr_ctx", pa.string()),
     ]
-    for name_id, name, expr_ctx in _iter_arrays(arrays):
+    for name_id, name, expr_ctx in iter_arrays(arrays):
         name_id_value = _row_id(name_id)
         if name_id_value is None:
             continue
@@ -245,7 +243,7 @@ def _add_import_props(rows: list[PropRow], cst_imports: pa.Table | None) -> None
         name,
         asname,
         is_star,
-    ) in _iter_arrays(arrays):
+    ) in iter_arrays(arrays):
         import_id_value = _row_id(import_id)
         if import_id_value is None:
             continue
@@ -323,8 +321,8 @@ def _add_callsite_props(
         _column_or_null(cst_callsites, "arg_count", pa.int64()),
     ]
     if include_heavy_json:
-        arrays.append(_column_or_null(cst_callsites, "callee_qnames", pa.list_(pa.string())))
-    for values in _iter_arrays(arrays):
+        arrays.append(_column_or_null(cst_callsites, "callee_qnames", QNAME_LIST_TYPE))
+    for values in iter_arrays(arrays):
         if include_heavy_json:
             call_id, callee_shape, callee_text, callee_dotted, arg_count, callee_qnames = values
         else:
@@ -394,8 +392,8 @@ def _add_def_props(
         _column_or_null(cst_defs, "container_def_id", pa.string()),
     ]
     if include_heavy_json:
-        arrays.append(_column_or_null(cst_defs, "qnames", pa.list_(pa.string())))
-    for values in _iter_arrays(arrays):
+        arrays.append(_column_or_null(cst_defs, "qnames", QNAME_LIST_TYPE))
+    for values in iter_arrays(arrays):
         if include_heavy_json:
             def_id, def_kind, kind, name, container_def_id, qnames = values
         else:
@@ -453,7 +451,7 @@ def _add_qname_props(rows: list[PropRow], dim_qualified_names: pa.Table | None) 
         _column_or_null(dim_qualified_names, "qname_id", pa.string()),
         _column_or_null(dim_qualified_names, "qname", pa.string()),
     ]
-    for qname_id, qname in _iter_arrays(arrays):
+    for qname_id, qname in iter_arrays(arrays):
         qname_id_value = _row_id(qname_id)
         if qname_id_value is None:
             continue
@@ -494,7 +492,7 @@ def _add_symbol_props(
         arrays.append(
             _column_or_null(scip_symbol_information, "signature_documentation", pa.string())
         )
-    for values in _iter_arrays(arrays):
+    for values in iter_arrays(arrays):
         if include_heavy_json:
             (
                 symbol,
@@ -573,19 +571,36 @@ def _add_scip_role_props(rows: list[PropRow], scip_occurrences: pa.Table | None)
     ):
         return
 
-    arrays = [
-        _column_or_null(scip_occurrences, "symbol", pa.string()),
-        _column_or_null(scip_occurrences, "symbol_roles", pa.int64()),
-    ]
-    role_flags: dict[str, set[str]] = {}
-    for symbol, roles in _iter_arrays(arrays):
-        if not isinstance(symbol, str) or not isinstance(roles, int):
-            continue
-        flags = role_flags.setdefault(symbol, set())
-        _update_scip_role_flags(flags, roles)
+    symbols = pc.cast(_column_or_null(scip_occurrences, "symbol", pa.string()), pa.string())
+    roles = pc.cast(_column_or_null(scip_occurrences, "symbol_roles", pa.int64()), pa.int64())
+    flag_arrays: list[pa.Array | pa.ChunkedArray] = []
+    flag_names: list[str] = []
+    for name, mask, _ in _ROLE_FLAG_SPECS:
+        flag = pc.not_equal(pc.bit_wise_and(roles, pa.scalar(mask)), pa.scalar(0))
+        flag_arrays.append(pc.cast(flag, pa.int32()))
+        flag_names.append(name)
 
-    for symbol, flags in role_flags.items():
-        _emit_scip_role_props(rows, symbol, flags)
+    flags_table = pa.Table.from_arrays([symbols, *flag_arrays], names=["symbol", *flag_names])
+    aggs = [(name, "max") for name in flag_names]
+    aggregated = flags_table.group_by(["symbol"], use_threads=True).aggregate(aggs)
+    aggregated = aggregated.rename_columns(["symbol", *flag_names])
+    arrays = [aggregated["symbol"], *[aggregated[name] for name in flag_names]]
+    for values in iter_arrays(arrays):
+        symbol = values[0]
+        if not isinstance(symbol, str) or not symbol:
+            continue
+        flags: set[str] = set()
+        for name, raw in zip(flag_names, values[1:], strict=True):
+            if isinstance(raw, bool):
+                value = int(raw)
+            elif isinstance(raw, int):
+                value = raw
+            else:
+                value = 0
+            if value == 1:
+                flags.add(name)
+        if flags:
+            _emit_scip_role_props(rows, symbol, flags)
 
 
 _ROLE_FLAG_SPECS: tuple[tuple[str, int, str], ...] = (
@@ -593,12 +608,6 @@ _ROLE_FLAG_SPECS: tuple[tuple[str, int, str], ...] = (
     ("test", SCIP_ROLE_TEST, "scip_role_test"),
     ("forward_definition", SCIP_ROLE_FORWARD_DEFINITION, "scip_role_forward_definition"),
 )
-
-
-def _update_scip_role_flags(flags: set[str], roles: int) -> None:
-    for name, mask, _ in _ROLE_FLAG_SPECS:
-        if roles & mask:
-            flags.add(name)
 
 
 def _emit_scip_role_props(rows: list[PropRow], symbol: str, flags: set[str]) -> None:
@@ -626,7 +635,7 @@ def _add_ts_props(
             _column_or_null(ts_nodes, "is_named", pa.bool_()),
             _column_or_null(ts_nodes, "has_error", pa.bool_()),
         ]
-        for node_id, ts_type, is_named, has_error in _iter_arrays(arrays):
+        for node_id, ts_type, is_named, has_error in iter_arrays(arrays):
             node_id_value = _row_id(node_id)
             if node_id_value is None:
                 continue
@@ -665,7 +674,7 @@ def _add_ts_props(
             _column_or_null(ts_errors, "ts_type", pa.string()),
             _column_or_null(ts_errors, "is_error", pa.bool_()),
         ]
-        for node_id, ts_type, is_error in _iter_arrays(arrays):
+        for node_id, ts_type, is_error in iter_arrays(arrays):
             node_id_value = _row_id(node_id)
             if node_id_value is None:
                 continue
@@ -697,7 +706,7 @@ def _add_ts_props(
             _column_or_null(ts_missing, "ts_type", pa.string()),
             _column_or_null(ts_missing, "is_missing", pa.bool_()),
         ]
-        for node_id, ts_type, is_missing in _iter_arrays(arrays):
+        for node_id, ts_type, is_missing in iter_arrays(arrays):
             node_id_value = _row_id(node_id)
             if node_id_value is None:
                 continue
@@ -737,7 +746,7 @@ def _add_type_props(
             _column_or_null(type_exprs_norm, "expr_role", pa.string()),
             _column_or_null(type_exprs_norm, "param_name", pa.string()),
         ]
-        for type_expr_id, expr_text, expr_kind, expr_role, param_name in _iter_arrays(arrays):
+        for type_expr_id, expr_text, expr_kind, expr_role, param_name in iter_arrays(arrays):
             type_expr_id_value = _row_id(type_expr_id)
             if type_expr_id_value is None:
                 continue
@@ -784,7 +793,7 @@ def _add_type_props(
             _column_or_null(types_norm, "type_form", pa.string()),
             _column_or_null(types_norm, "origin", pa.string()),
         ]
-        for type_id, type_repr, type_form, origin in _iter_arrays(arrays):
+        for type_id, type_repr, type_form, origin in iter_arrays(arrays):
             type_id_value = _row_id(type_id)
             if type_id_value is None:
                 continue
@@ -827,9 +836,9 @@ def _add_diag_props(rows: list[PropRow], diagnostics_norm: pa.Table | None) -> N
         _column_or_null(diagnostics_norm, "message", pa.string()),
         _column_or_null(diagnostics_norm, "diag_source", pa.string()),
         _column_or_null(diagnostics_norm, "code", pa.string()),
-        _column_or_null(diagnostics_norm, "details_json", pa.string()),
+        _column_or_null(diagnostics_norm, "details", DIAG_DETAILS_TYPE),
     ]
-    for diag_id, severity, message, diag_source, code, details_json in _iter_arrays(arrays):
+    for diag_id, severity, message, diag_source, code, details in iter_arrays(arrays):
         diag_id_value = _row_id(diag_id)
         if diag_id_value is None:
             continue
@@ -872,8 +881,8 @@ def _add_diag_props(rows: list[PropRow], diagnostics_norm: pa.Table | None) -> N
             rows,
             entity_kind=EntityKind.NODE,
             entity_id=diag_id_value,
-            key="details_json",
-            value=details_json,
+            key="details",
+            value=details,
         )
 
 
@@ -915,7 +924,7 @@ def _add_runtime_object_props(rows: list[PropRow], rt_objects: pa.Table) -> None
         obj_type,
         source_path,
         source_line,
-    ) in _iter_arrays(arrays):
+    ) in iter_arrays(arrays):
         rt_id_value = _row_id(rt_id)
         if rt_id_value is None:
             continue
@@ -976,7 +985,7 @@ def _add_runtime_signature_props(rows: list[PropRow], rt_signatures: pa.Table) -
         _column_or_null(rt_signatures, "signature", pa.string()),
         _column_or_null(rt_signatures, "return_annotation", pa.string()),
     ]
-    for sig_id, signature, return_annotation in _iter_arrays(arrays):
+    for sig_id, signature, return_annotation in iter_arrays(arrays):
         sig_id_value = _row_id(sig_id)
         if sig_id_value is None:
             continue
@@ -1019,7 +1028,7 @@ def _add_runtime_param_props(rows: list[PropRow], rt_signature_params: pa.Table)
         default_repr,
         annotation_repr,
         position,
-    ) in _iter_arrays(arrays):
+    ) in iter_arrays(arrays):
         param_id_value = _row_id(param_id)
         if param_id_value is None:
             continue
@@ -1083,7 +1092,7 @@ def _add_runtime_member_props(rows: list[PropRow], rt_members: pa.Table) -> None
         value_repr,
         value_module,
         value_qualname,
-    ) in _iter_arrays(arrays):
+    ) in iter_arrays(arrays):
         member_id_value = _row_id(member_id)
         if member_id_value is None:
             continue
@@ -1159,7 +1168,7 @@ def _add_edge_props(rows: list[PropRow], cpg_edges: pa.Table | None) -> None:
         ambiguity_group_id,
         rule_name,
         rule_priority,
-    ) in _iter_arrays(arrays):
+    ) in iter_arrays(arrays):
         edge_id_value = _row_id(edge_id)
         if edge_id_value is None:
             continue

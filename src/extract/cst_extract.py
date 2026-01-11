@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterator, Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -21,6 +21,8 @@ from libcst.metadata import (
 
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_parts
+from arrowdsl.iter import iter_table_rows
+from arrowdsl.nested import build_list_array, build_list_of_structs
 
 SCHEMA_VERSION = 1
 
@@ -33,20 +35,35 @@ def _hash_id(prefix: str, *parts: str) -> str:
     return f"{prefix}:{hashed}"
 
 
-def _iter_array_values(array: pa.Array | pa.ChunkedArray) -> Iterator[object | None]:
-    for value in array:
-        if isinstance(value, pa.Scalar):
-            yield value.as_py()
+def _offsets_start() -> list[int]:
+    return [0]
+
+
+def _append_string_list(
+    offsets: list[int],
+    values: list[str | None],
+    items: Sequence[object],
+) -> None:
+    for item in items:
+        if item is None:
+            values.append(None)
+        elif isinstance(item, str):
+            values.append(item)
         else:
-            yield value
+            values.append(str(item))
+    offsets.append(len(values))
 
 
-def _iter_table_rows(table: pa.Table) -> Iterator[Row]:
-    columns = list(table.column_names)
-    arrays = [table[col] for col in columns]
-    iters = [_iter_array_values(array) for array in arrays]
-    for values in zip(*iters, strict=True):
-        yield dict(zip(columns, values, strict=True))
+def _append_qname_list(
+    offsets: list[int],
+    names: list[str],
+    sources: list[str],
+    qnames: Sequence[tuple[str, str]],
+) -> None:
+    for name, source in qnames:
+        names.append(name)
+        sources.append(source)
+    offsets.append(len(names))
 
 
 @dataclass(frozen=True)
@@ -216,11 +233,19 @@ class CSTExtractContext:
 
     options: CSTExtractOptions
     manifest_rows: list[Row]
+    manifest_future_imports_offsets: list[int]
+    manifest_future_imports_values: list[str | None]
     error_rows: list[Row]
     name_ref_rows: list[Row]
     import_rows: list[Row]
     call_rows: list[Row]
+    call_qname_offsets: list[int]
+    call_qname_names: list[str]
+    call_qname_sources: list[str]
     def_rows: list[Row]
+    def_qname_offsets: list[int]
+    def_qname_names: list[str]
+    def_qname_sources: list[str]
     type_expr_rows: list[Row]
 
     @classmethod
@@ -235,11 +260,19 @@ class CSTExtractContext:
         return cls(
             options=options,
             manifest_rows=[],
+            manifest_future_imports_offsets=_offsets_start(),
+            manifest_future_imports_values=[],
             error_rows=[],
             name_ref_rows=[],
             import_rows=[],
             call_rows=[],
+            call_qname_offsets=_offsets_start(),
+            call_qname_names=[],
+            call_qname_sources=[],
             def_rows=[],
+            def_qname_offsets=_offsets_start(),
+            def_qname_names=[],
+            def_qname_sources=[],
             type_expr_rows=[],
         )
 
@@ -371,7 +404,7 @@ def _manifest_row(
         "default_indent": getattr(module, "default_indent", None),
         "default_newline": getattr(module, "default_newline", None),
         "has_trailing_newline": bool(getattr(module, "has_trailing_newline", False)),
-        "future_imports": list(getattr(module, "future_imports", []) or []),
+        "future_imports": None,
         "module_name": module_name,
         "package_name": package_name,
     }
@@ -453,7 +486,13 @@ class CSTCollector(cst.CSTVisitor):
         self._name_ref_rows = ctx.extract_ctx.name_ref_rows
         self._import_rows = ctx.extract_ctx.import_rows
         self._call_rows = ctx.extract_ctx.call_rows
+        self._call_qname_offsets = ctx.extract_ctx.call_qname_offsets
+        self._call_qname_names = ctx.extract_ctx.call_qname_names
+        self._call_qname_sources = ctx.extract_ctx.call_qname_sources
         self._def_rows = ctx.extract_ctx.def_rows
+        self._def_qname_offsets = ctx.extract_ctx.def_qname_offsets
+        self._def_qname_names = ctx.extract_ctx.def_qname_names
+        self._def_qname_sources = ctx.extract_ctx.def_qname_sources
         self._type_expr_rows = ctx.extract_ctx.type_expr_rows
         self._skip_name_nodes: set[cst.Name] = set()
         self._def_stack: list[str] = []
@@ -472,12 +511,12 @@ class CSTCollector(cst.CSTVisitor):
         except (AttributeError, ValueError):
             return None
 
-    def _qnames(self, node: cst.CSTNode) -> list[Row]:
+    def _qnames(self, node: cst.CSTNode) -> list[tuple[str, str]]:
         qset = self._qn_map.get(node)
         if not qset:
             return []
         qualified = sorted(qset, key=lambda q: (q.name, str(q.source)))
-        return [{"name": q.name, "source": str(q.source)} for q in qualified]
+        return [(q.name, str(q.source)) for q in qualified]
 
     def _record_type_expr(
         self,
@@ -534,6 +573,13 @@ class CSTCollector(cst.CSTVisitor):
         def_id = _hash_id(
             "cst_def", self._file_ctx.file_id, def_kind, str(def_bstart), str(def_bend)
         )
+        qnames = self._qnames(node)
+        _append_qname_list(
+            self._def_qname_offsets,
+            self._def_qname_names,
+            self._def_qname_sources,
+            qnames,
+        )
 
         self._def_rows.append(
             {
@@ -549,7 +595,7 @@ class CSTCollector(cst.CSTVisitor):
                 "def_bend": def_bend,
                 "name_bstart": name_bstart,
                 "name_bend": name_bend,
-                "qnames": self._qnames(node),
+                "qnames": None,
             }
         )
         if node.returns is not None:
@@ -596,6 +642,13 @@ class CSTCollector(cst.CSTVisitor):
         def_id = _hash_id(
             "cst_def", self._file_ctx.file_id, def_kind, str(def_bstart), str(def_bend)
         )
+        qnames = self._qnames(node)
+        _append_qname_list(
+            self._def_qname_offsets,
+            self._def_qname_names,
+            self._def_qname_sources,
+            qnames,
+        )
 
         self._def_rows.append(
             {
@@ -611,7 +664,7 @@ class CSTCollector(cst.CSTVisitor):
                 "def_bend": def_bend,
                 "name_bstart": name_bstart,
                 "name_bend": name_bend,
-                "qnames": self._qnames(node),
+                "qnames": None,
             }
         )
         self._def_stack.append(def_id)
@@ -814,6 +867,12 @@ class CSTCollector(cst.CSTVisitor):
         qnames = self._qnames(node.func)
         if not qnames:
             qnames = self._qnames(node)
+        _append_qname_list(
+            self._call_qname_offsets,
+            self._call_qname_names,
+            self._call_qname_sources,
+            qnames,
+        )
 
         self._call_rows.append(
             {
@@ -832,7 +891,7 @@ class CSTCollector(cst.CSTVisitor):
                 "callee_text": callee_text,
                 "arg_count": int(arg_count),
                 "callee_dotted": callee_dotted,
-                "callee_qnames": qnames,
+                "callee_qnames": None,
             }
         )
         return True
@@ -871,6 +930,12 @@ def _extract_cst_for_row(rf: dict[str, object], ctx: CSTExtractContext) -> None:
         options=ctx.options,
     )
     if ctx.options.include_parse_manifest:
+        future_imports = getattr(module, "future_imports", []) or []
+        _append_string_list(
+            ctx.manifest_future_imports_offsets,
+            ctx.manifest_future_imports_values,
+            future_imports,
+        )
         ctx.manifest_rows.append(
             _manifest_row(file_ctx, module, module_name=module_name, package_name=package_name)
         )
@@ -889,7 +954,7 @@ def extract_cst(repo_files: pa.Table, options: CSTExtractOptions | None = None) 
     options = options or CSTExtractOptions()
     ctx = CSTExtractContext.build(options)
 
-    for rf in _iter_table_rows(repo_files):
+    for rf in iter_table_rows(repo_files):
         _extract_cst_for_row(rf, ctx)
 
     return _build_cst_result(ctx)
@@ -901,6 +966,13 @@ def _build_cst_result(ctx: CSTExtractContext) -> CSTExtractResult:
         if ctx.manifest_rows
         else empty_table(PARSE_MANIFEST_SCHEMA)
     )
+    if ctx.manifest_rows:
+        future_imports = build_list_array(
+            pa.array(ctx.manifest_future_imports_offsets, type=pa.int32()),
+            pa.array(ctx.manifest_future_imports_values, type=pa.string()),
+        )
+        idx = t_manifest.schema.get_field_index("future_imports")
+        t_manifest = t_manifest.set_column(idx, "future_imports", future_imports)
     t_errs = (
         pa.Table.from_pylist(ctx.error_rows, schema=PARSE_ERRORS_SCHEMA)
         if ctx.error_rows
@@ -921,11 +993,31 @@ def _build_cst_result(ctx: CSTExtractContext) -> CSTExtractResult:
         if ctx.call_rows
         else empty_table(CALLSITES_SCHEMA)
     )
+    if ctx.call_rows:
+        call_qnames = build_list_of_structs(
+            pa.array(ctx.call_qname_offsets, type=pa.int32()),
+            {
+                "name": pa.array(ctx.call_qname_names, type=pa.string()),
+                "source": pa.array(ctx.call_qname_sources, type=pa.string()),
+            },
+        )
+        idx = t_calls.schema.get_field_index("callee_qnames")
+        t_calls = t_calls.set_column(idx, "callee_qnames", call_qnames)
     t_defs = (
         pa.Table.from_pylist(ctx.def_rows, schema=DEFS_SCHEMA)
         if ctx.def_rows
         else empty_table(DEFS_SCHEMA)
     )
+    if ctx.def_rows:
+        def_qnames = build_list_of_structs(
+            pa.array(ctx.def_qname_offsets, type=pa.int32()),
+            {
+                "name": pa.array(ctx.def_qname_names, type=pa.string()),
+                "source": pa.array(ctx.def_qname_sources, type=pa.string()),
+            },
+        )
+        idx = t_defs.schema.get_field_index("qnames")
+        t_defs = t_defs.set_column(idx, "qnames", def_qnames)
     t_type_exprs = (
         pa.Table.from_pylist(ctx.type_expr_rows, schema=TYPE_EXPRS_SCHEMA)
         if ctx.type_expr_rows

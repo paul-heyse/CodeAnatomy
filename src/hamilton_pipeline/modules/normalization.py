@@ -7,6 +7,7 @@ import pyarrow.compute as pc
 from hamilton.function_modifiers import cache, extract_fields, tag
 
 from arrowdsl.ids import hash64_from_arrays
+from arrowdsl.iter import iter_array_values, iter_arrays
 from arrowdsl.kernels import explode_list_column
 from arrowdsl.runtime import ExecutionContext
 from normalize.bytecode_anchor import anchor_instructions
@@ -23,17 +24,15 @@ from normalize.spans import (
 )
 from normalize.types import normalize_type_exprs, normalize_types
 
-type ArrayLike = pa.Array | pa.ChunkedArray
 
-
-def _iter_array_values(array: ArrayLike) -> list[object | None]:
-    values: list[object | None] = []
-    for value in array:
-        if isinstance(value, pa.Scalar):
-            values.append(value.as_py())
-        else:
-            values.append(value)
-    return values
+def _qname_fields(value: object) -> tuple[str | None, str | None]:
+    if isinstance(value, dict):
+        name = value.get("name")
+        source = value.get("source")
+        return (str(name) if name else None, str(source) if source else None)
+    if isinstance(value, str):
+        return value, None
+    return None, None
 
 
 def _collect_string_lists(table: pa.Table | None, column: str) -> list[str]:
@@ -47,12 +46,15 @@ def _collect_string_lists(table: pa.Table | None, column: str) -> list[str]:
     if table is None or column not in table.column_names:
         return []
     out: list[str] = []
-    for items in _iter_array_values(table[column]):
+    for items in iter_array_values(table[column]):
         if not isinstance(items, list):
             continue
         if not items:
             continue
-        out.extend(str(item) for item in items if item)
+        for item in items:
+            name, _ = _qname_fields(item)
+            if name:
+                out.append(name)
     return out
 
 
@@ -158,7 +160,7 @@ def callsite_qname_candidates(
     if meta_cols:
         meta_table = cst_callsites.select(meta_cols)
         meta_arrays = [meta_table[col] for col in meta_cols]
-        for values in zip(*[_iter_array_values(array) for array in meta_arrays], strict=True):
+        for values in iter_arrays(meta_arrays):
             row = dict(zip(meta_cols, values, strict=True))
             cid = row.get("call_id")
             if cid:
@@ -167,18 +169,21 @@ def callsite_qname_candidates(
     rows: list[dict[str, object]] = []
     if "call_id" in exploded.column_names and "qname" in exploded.column_names:
         exploded_arrays = [exploded["call_id"], exploded["qname"]]
-        for cid, qn in zip(*[_iter_array_values(array) for array in exploded_arrays], strict=True):
+        for cid, qn in iter_arrays(exploded_arrays):
             if not cid or not qn:
+                continue
+            qname, qname_source = _qname_fields(qn)
+            if qname is None:
                 continue
             meta = call_meta.get(str(cid), {})
             rows.append(
                 {
                     "call_id": str(cid),
-                    "qname": str(qn),
+                    "qname": qname,
                     "path": meta.get("path"),
                     "call_bstart": meta.get("call_bstart"),
                     "call_bend": meta.get("call_bend"),
-                    "qname_source": meta.get("qname_source"),
+                    "qname_source": qname_source or meta.get("qname_source"),
                 }
             )
 

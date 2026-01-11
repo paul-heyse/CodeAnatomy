@@ -193,6 +193,14 @@ class EdgeKind(StrEnum):
     PY_WRITES_SYMBOL = "PY_WRITES_SYMBOL"
 
     # -------------------------
+    # SCIP symbol relationships
+    # -------------------------
+    SCIP_SYMBOL_REFERENCE = "SCIP_SYMBOL_REFERENCE"
+    SCIP_SYMBOL_IMPLEMENTATION = "SCIP_SYMBOL_IMPLEMENTATION"
+    SCIP_SYMBOL_TYPE_DEFINITION = "SCIP_SYMBOL_TYPE_DEFINITION"
+    SCIP_SYMBOL_DEFINITION = "SCIP_SYMBOL_DEFINITION"
+
+    # -------------------------
     # Calls (prefer SCIP, fallback to QNAME)
     # -------------------------
     PY_CALLS_SYMBOL = "PY_CALLS_SYMBOL"
@@ -1095,7 +1103,7 @@ NODE_KIND_CONTRACTS: dict[NodeKind, NodeKindContract] = {
             "message": p_str(),
             "diag_source": p_str(),
         },
-        optional_props={"code": p_str(), "details_json": p_json()},
+        optional_props={"code": p_str(), "details": p_json()},
         allowed_sources=(
             SourceKind.TREESITTER,
             SourceKind.SCIP,
@@ -1270,6 +1278,47 @@ EDGE_KIND_CONTRACTS: dict[EdgeKind, EdgeKindContract] = {
         optional_props={},
         allowed_sources=(SourceKind.SCIP, SourceKind.DERIVED),
         description="Occurrence writes SCIP symbol (role bit).",
+    ),
+    # ---- SCIP symbol relationships ----
+    EdgeKind.SCIP_SYMBOL_REFERENCE: EdgeKindContract(
+        requires_evidence_anchor=False,
+        required_props={
+            "origin": p_str(enum=["scip"]),
+            "resolution_method": p_str(),
+        },
+        optional_props={"score": p_float(), "rule_priority": p_int(), "rule_name": p_str()},
+        allowed_sources=(SourceKind.SCIP,),
+        description="SCIP symbol relationship: reference.",
+    ),
+    EdgeKind.SCIP_SYMBOL_IMPLEMENTATION: EdgeKindContract(
+        requires_evidence_anchor=False,
+        required_props={
+            "origin": p_str(enum=["scip"]),
+            "resolution_method": p_str(),
+        },
+        optional_props={"score": p_float(), "rule_priority": p_int(), "rule_name": p_str()},
+        allowed_sources=(SourceKind.SCIP,),
+        description="SCIP symbol relationship: implementation.",
+    ),
+    EdgeKind.SCIP_SYMBOL_TYPE_DEFINITION: EdgeKindContract(
+        requires_evidence_anchor=False,
+        required_props={
+            "origin": p_str(enum=["scip"]),
+            "resolution_method": p_str(),
+        },
+        optional_props={"score": p_float(), "rule_priority": p_int(), "rule_name": p_str()},
+        allowed_sources=(SourceKind.SCIP,),
+        description="SCIP symbol relationship: type definition.",
+    ),
+    EdgeKind.SCIP_SYMBOL_DEFINITION: EdgeKindContract(
+        requires_evidence_anchor=False,
+        required_props={
+            "origin": p_str(enum=["scip"]),
+            "resolution_method": p_str(),
+        },
+        optional_props={"score": p_float(), "rule_priority": p_int(), "rule_name": p_str()},
+        allowed_sources=(SourceKind.SCIP,),
+        description="SCIP symbol relationship: definition.",
     ),
     # ---- calls ----
     EdgeKind.PY_CALLS_SYMBOL: EdgeKindContract(

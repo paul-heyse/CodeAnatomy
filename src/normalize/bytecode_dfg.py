@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
-
 import pyarrow as pa
 import pyarrow.compute as pc
 
 from arrowdsl.columns import coalesce_string
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_arrays
+from arrowdsl.iter import iter_arrays
 
 SCHEMA_VERSION = 1
 
@@ -46,19 +45,6 @@ DEF_PREFIXES = ("STORE_", "DELETE_")
 DEF_OPS = {"IMPORT_NAME", "IMPORT_FROM"}
 
 type ArrayLike = pa.Array | pa.ChunkedArray
-
-
-def _iter_array_values(array: ArrayLike) -> Iterator[object | None]:
-    for value in array:
-        if isinstance(value, pa.Scalar):
-            yield value.as_py()
-        else:
-            yield value
-
-
-def _iter_arrays(arrays: Sequence[ArrayLike]) -> Iterator[tuple[object | None, ...]]:
-    iters = [_iter_array_values(array) for array in arrays]
-    yield from zip(*iters, strict=True)
 
 
 def _prefixed_hash64(prefix: str, arrays: list[ArrayLike]) -> ArrayLike:
@@ -205,7 +191,7 @@ def _group_def_use_events(
         _column_or_null(def_use_events, "path", pa.string()),
         _column_or_null(def_use_events, "file_id", pa.string()),
     ]
-    for kind, code_unit_id, symbol, event_id, path, file_id in _iter_arrays(arrays):
+    for kind, code_unit_id, symbol, event_id, path, file_id in iter_arrays(arrays):
         if not isinstance(code_unit_id, str) or not isinstance(symbol, str):
             continue
         key = (code_unit_id, symbol)

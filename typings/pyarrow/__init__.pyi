@@ -140,5 +140,15 @@ def __getattr__(name: str) -> object: ...
 class StructArray(Array):
     @staticmethod
     def from_arrays(
-        arrays: Sequence[Array | ChunkedArray], *, names: Sequence[str]
+        arrays: Sequence[Array | ChunkedArray],
+        *,
+        names: Sequence[str],
+        mask: Array | None = None,
     ) -> StructArray: ...
+
+class ListArray(Array):
+    @staticmethod
+    def from_arrays(
+        offsets: Array | ChunkedArray,
+        values: Array | ChunkedArray,
+    ) -> ListArray: ...

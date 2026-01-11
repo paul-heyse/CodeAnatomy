@@ -24,7 +24,7 @@ from extract.runtime_inspect_extract import (
     RuntimeInspectOptions,
     extract_runtime_tables,
 )
-from extract.scip_extract import extract_scip_tables, run_scip_python_index
+from extract.scip_extract import SCIPParseOptions, extract_scip_tables, run_scip_python_index
 from extract.scip_identity import resolve_scip_identity
 from extract.scip_indexer import build_scip_index_options, ensure_scip_build_dir
 from extract.symtable_extract import extract_symtables_table
@@ -138,6 +138,7 @@ def ast_bundle(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> d
 def scip_bundle(
     scip_index_path: str | None,
     repo_root: str,
+    scip_parse_options: SCIPParseOptions,
     ctx: ExecutionContext,
 ) -> dict[str, pa.Table]:
     """Build the SCIP extraction bundle.
@@ -153,6 +154,7 @@ def scip_bundle(
         scip_index_path=scip_index_path,
         repo_root=repo_root,
         ctx=ctx,
+        parse_opts=scip_parse_options,
     )
 
 

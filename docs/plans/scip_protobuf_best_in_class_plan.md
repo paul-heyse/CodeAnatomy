@@ -143,10 +143,10 @@ def resolve_scip_identity(
 **Implementation checklist**
 - [x] Implement GitHub CLI queries for repo slug and HEAD SHA.
 - [x] Raise on `gh` failures; bypass `gh` when both name/version overrides are provided.
-- [ ] Document the required `gh auth login` setup for CI or local use.
+- [x] Document the required `gh auth login` setup for CI or local use.
 - [x] Default `project_namespace` to `github.com/org` when not provided.
 - [x] Support explicit overrides via pipeline config.
-- [ ] Add unit tests for identity derivation and defaults.
+- [x] Add unit tests for identity derivation and defaults.
 
 ## Scope 3: Programmatic scip.proto discovery and `scip_pb2` regeneration
 
@@ -227,7 +227,7 @@ def load_scip_pb2_from_build(build_dir: Path) -> ModuleType:
 - [x] Add a dynamic import loader for `build/scip/scip_pb2.py`.
 - [x] Add a regen script that uses `protoc`.
 - [x] Default `parse_index_scip` to the build-path loader unless overridden.
-- [ ] Document how to regenerate and verify in README (plan is up to date).
+- [x] Document how to regenerate and verify in README.
 - [x] Update `.gitignore` to allowlist `build/scip/` for persisted bindings.
 
 ## Scope 4: Protobuf-first parsing with strict JSON fallback
@@ -246,6 +246,9 @@ class SCIPParseOptions:
     scip_pb2_import: str | None = None
     scip_cli_bin: str = "scip"
     build_dir: Path | None = None
+    health_check: bool = False
+    log_counts: bool = False
+    dictionary_encode_strings: bool = False
 ```
 
 ```python
@@ -308,7 +311,7 @@ if norm is None:
 - [x] Treat invalid ranges as `None` (do not emit zero coordinates).
 - [x] Preserve `enclosing_range` fields and compute separate byte spans for it.
 - [x] Span errors capture missing range data in `scip_span_errors`.
-- [ ] Optionally gate byte-span computation on `range_len > 0` (currently gated on missing coords).
+- [x] Gate byte-span computation on `range_len > 0`.
 
 ## Scope 6: Richer SCIP extraction tables
 
@@ -352,9 +355,9 @@ SCIP_SYMBOL_RELATIONSHIPS_SCHEMA = pa.schema(
 - [x] Add columns for `syntax_kind` and `override_documentation` to occurrences.
 - [x] Add a new relationships table extracted from `SymbolInformation.relationships`.
 - [x] Add a new table for `external_symbols` from `Index.external_symbols`.
-- [x] Store `signature_documentation` as structured JSON.
+- [x] Store `signature_documentation` as a struct with nested occurrences.
 - [x] Update CPG props to surface new symbol metadata.
-- [ ] Decide how to surface `scip_symbol_relationships` in CPG edges or relationships.
+- [x] Emit `scip_symbol_relationships` as CPG edges.
 
 ## Scope 7: Role and diagnostic completeness
 
@@ -395,7 +398,7 @@ def _scip_severity_value(value: int) -> str:
 - [x] Add missing role constants and export them.
 - [x] Preserve roles in edges and add props for Generated/Test/ForwardDefinition.
 - [x] Add Hint severity support and preserve diagnostic tags.
-- [ ] Add tests that verify role bitmask handling.
+- [x] Add tests that verify role bitmask handling.
 
 ## Scope 8: Quality gates and observability (protobuf-first)
 
@@ -424,9 +427,9 @@ scip print --json index.scip | jq '.documents | length'
 - `tests/`
 
 **Implementation checklist**
-- [ ] Add an optional health check step in the extraction pipeline.
-- [ ] Surface counts and error diagnostics in logs or metrics.
-- [ ] Keep JSON usage behind an explicit debug flag.
+- [x] Add an optional health check step in the extraction pipeline.
+- [x] Surface counts and error diagnostics in logs or metrics.
+- [x] Keep JSON usage behind an explicit debug flag.
 
 ## Scope 9: Documentation and developer workflows
 
@@ -453,7 +456,7 @@ override identity values when needed.
 - [x] Document identity override knobs and defaults in this plan.
 - [x] Document fallback behavior and how to opt in (JSON fallback).
 - [x] Document the `build/scip/` artifact location and git ignore exceptions.
-- [ ] Add README updates for tooling prerequisites (`gh auth login`, `scip`, `protoc`).
+- [x] Add README updates for tooling prerequisites (`gh auth login`, `scip`, `protoc`).
 
 ## Scope 10: Arrow/Acero alignment for SCIP outputs
 
@@ -499,11 +502,11 @@ aligned, info = align_to_schema(
 - `src/arrowdsl/schema.py`
 
 **Implementation checklist**
-- [ ] Replace `stable_id` loops with vectorized `hash64_from_columns` for SCIP tables.
-- [ ] Replace `_empty` helper in `scip_extract` with `arrowdsl.empty.empty_table`.
-- [ ] Align SCIP tables to schemas via `arrowdsl.schema.align_to_schema` where needed.
-- [ ] Ensure no canonical ordering is introduced pre-finalize for SCIP outputs.
-- [ ] Add tests that validate vectorized ID stability for SCIP tables.
+- [x] Replace `stable_id` loops with vectorized `hash64_from_arrays` for SCIP tables.
+- [x] Replace `_empty` helper in `scip_extract` with `arrowdsl.empty.empty_table`.
+- [x] Align SCIP tables to schemas via `arrowdsl.schema.align_to_schema` where needed.
+- [x] Ensure no canonical ordering is introduced pre-finalize for SCIP outputs.
+- [x] Add tests that validate vectorized ID stability for SCIP tables.
 
 ## Scope 11: Columnar enrichment upgrades (PyArrow-intensive)
 
@@ -523,7 +526,7 @@ scip_role_generated = pc.not_equal(
 ```
 
 ```python
-# Example: signature_documentation as list<struct>
+# Example: signature_documentation as struct with nested occurrences
 occ_struct = pa.StructArray.from_arrays(
     [symbols, roles, ranges],
     names=["symbol", "symbol_roles", "range"],
@@ -542,11 +545,12 @@ signature_doc = pa.StructArray.from_arrays(
 - `src/relspec/compiler.py` (if scip relationships are surfaced via relspec)
 
 **Implementation checklist**
-- [ ] Convert scip extraction row building to columnar array construction where practical.
-- [ ] Promote `signature_documentation` to `list<struct>` or a dedicated table for joins.
-- [ ] Apply dictionary encoding to repeated SCIP string columns for memory savings.
-- [ ] Replace role flag derivation in props with Arrow compute kernels.
-- [ ] Integrate `scip_symbol_relationships` into relspec or CPG edges.
+- [ ] Convert scip extraction row building to columnar array construction where practical (documents,
+      occurrences, and diagnostics now columnar; symbol/external/relationship rows still list-based).
+- [x] Promote `signature_documentation` to a struct with nested occurrences.
+- [x] Apply dictionary encoding to repeated SCIP string columns for memory savings.
+- [x] Replace role flag derivation in props with Arrow compute kernels.
+- [x] Integrate `scip_symbol_relationships` into CPG edges.
 
 ## Acceptance gates
 - `uv run ruff check --fix`

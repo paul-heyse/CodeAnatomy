@@ -631,6 +631,7 @@ def cst_build_inputs(
 def scip_build_inputs(
     scip_symbol_information: pa.Table,
     scip_occurrences_norm: pa.Table,
+    scip_symbol_relationships: pa.Table,
     scip_external_symbol_information: pa.Table,
 ) -> ScipBuildInputs:
     """Bundle SCIP inputs for CPG builds.
@@ -643,6 +644,7 @@ def scip_build_inputs(
     return ScipBuildInputs(
         scip_symbol_information=scip_symbol_information,
         scip_occurrences_norm=scip_occurrences_norm,
+        scip_symbol_relationships=scip_symbol_relationships,
         scip_external_symbol_information=scip_external_symbol_information,
     )
 
@@ -808,6 +810,7 @@ def cpg_edge_inputs(
     """
     return EdgeBuildInputs(
         relationship_outputs=relationship_output_tables.as_dict(),
+        scip_symbol_relationships=cpg_base_inputs.scip_build_inputs.scip_symbol_relationships,
         diagnostics_norm=cpg_extra_inputs.diagnostics_norm,
         repo_files=cpg_base_inputs.repo_files,
         type_exprs_norm=cpg_extra_inputs.type_exprs_norm,

@@ -117,6 +117,7 @@ class ScipBuildInputs:
 
     scip_symbol_information: pa.Table
     scip_occurrences_norm: pa.Table
+    scip_symbol_relationships: pa.Table
     scip_external_symbol_information: pa.Table
 
 

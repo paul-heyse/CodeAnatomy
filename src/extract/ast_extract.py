@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pyarrow as pa
+
+from arrowdsl.iter import iter_array_values, iter_table_rows
 
 SCHEMA_VERSION = 1
 
@@ -122,22 +123,6 @@ def _row_text(row: dict[str, object], *, has_text: bool, has_bytes: bool) -> str
         return bytes(raw).decode(encoding, errors="replace")
     except UnicodeError:
         return None
-
-
-def _iter_array_values(array: pa.Array | pa.ChunkedArray) -> Iterator[object | None]:
-    for value in array:
-        if isinstance(value, pa.Scalar):
-            yield value.as_py()
-        else:
-            yield value
-
-
-def _iter_table_rows(table: pa.Table) -> Iterator[dict[str, object]]:
-    columns = list(table.column_names)
-    arrays = [table[col] for col in columns]
-    iters = [_iter_array_values(array) for array in arrays]
-    for values in zip(*iters, strict=True):
-        yield dict(zip(columns, values, strict=True))
 
 
 def _syntax_error_row(
@@ -332,7 +317,7 @@ def extract_ast(repo_files: pa.Table, options: ASTExtractOptions | None = None) 
     has_text = "text" in repo_files.column_names
     has_bytes = "bytes" in repo_files.column_names
 
-    for row in _iter_table_rows(repo_files):
+    for row in iter_table_rows(repo_files):
         nodes, edges, errs = _extract_ast_for_row(
             row,
             has_text=has_text,
@@ -377,7 +362,7 @@ def extract_ast_tables(
         mask = pa.array(
             [
                 kind in {"FunctionDef", "AsyncFunctionDef", "ClassDef"}
-                for kind in _iter_array_values(result.py_ast_nodes["kind"])
+                for kind in iter_array_values(result.py_ast_nodes["kind"])
             ],
             type=pa.bool_(),
         )

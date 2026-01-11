@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from arrowdsl.ids import hash64_from_parts
+from arrowdsl.iter import iter_table_rows
 
 type RowValue = str | int | bool | None
 type Row = dict[str, RowValue]
@@ -21,22 +22,6 @@ def _hash_id(prefix: str, *parts: str) -> str:
     # Row-wise hash64 IDs are needed while building dependent rows.
     hashed = hash64_from_parts(*parts, prefix=prefix)
     return f"{prefix}:{hashed}"
-
-
-def _iter_array_values(array: pa.Array | pa.ChunkedArray) -> Iterator[object | None]:
-    for value in array:
-        if isinstance(value, pa.Scalar):
-            yield value.as_py()
-        else:
-            yield value
-
-
-def _iter_table_rows(table: pa.Table) -> Iterator[dict[str, object]]:
-    columns = list(table.column_names)
-    arrays = [table[col] for col in columns]
-    iters = [_iter_array_values(array) for array in arrays]
-    for values in zip(*iters, strict=True):
-        yield dict(zip(columns, values, strict=True))
 
 
 @dataclass(frozen=True)
@@ -702,7 +687,7 @@ def extract_bytecode(
         error_rows=[],
     )
 
-    for rf in _iter_table_rows(repo_files):
+    for rf in iter_table_rows(repo_files):
         ctx = _row_context(rf, options)
         if ctx is None:
             continue

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 
 import pyarrow as pa
@@ -10,6 +9,7 @@ import pyarrow.compute as pc
 
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_arrays
+from arrowdsl.iter import iter_array_values, iter_arrays
 
 SCHEMA_VERSION = 1
 
@@ -43,19 +43,6 @@ TYPE_NODES_SCHEMA = pa.schema(
 )
 
 type ArrayLike = pa.Array | pa.ChunkedArray
-
-
-def _iter_array_values(array: ArrayLike) -> Iterator[object | None]:
-    for value in array:
-        if isinstance(value, pa.Scalar):
-            yield value.as_py()
-        else:
-            yield value
-
-
-def _iter_arrays(arrays: Sequence[ArrayLike]) -> Iterator[tuple[object | None, ...]]:
-    iters = [_iter_array_values(array) for array in arrays]
-    yield from zip(*iters, strict=True)
 
 
 def _prefixed_hash64(
@@ -151,7 +138,7 @@ def normalize_type_exprs(cst_type_exprs: pa.Table) -> pa.Table:
         path,
         bstart,
         bend,
-    ) in _iter_arrays(arrays):
+    ) in iter_arrays(arrays):
         if not isinstance(expr_text, str):
             continue
         type_repr = expr_text.strip()
@@ -237,7 +224,7 @@ def _types_from_scip(scip_symbol_information: pa.Table | None) -> pa.Table | Non
         return None
     type_reprs: list[str] = []
     seen: set[str] = set()
-    for value in _iter_array_values(scip_symbol_information["type_repr"]):
+    for value in iter_array_values(scip_symbol_information["type_repr"]):
         if not isinstance(value, str):
             continue
         raw = value.strip()
@@ -266,14 +253,17 @@ def _types_from_scip(scip_symbol_information: pa.Table | None) -> pa.Table | Non
 def _types_from_type_exprs(type_exprs_norm: pa.Table) -> pa.Table:
     if type_exprs_norm.num_rows == 0:
         return empty_table(TYPE_NODES_SCHEMA)
-    if "type_id" not in type_exprs_norm.column_names or "type_repr" not in type_exprs_norm.column_names:
+    if (
+        "type_id" not in type_exprs_norm.column_names
+        or "type_repr" not in type_exprs_norm.column_names
+    ):
         return empty_table(TYPE_NODES_SCHEMA)
 
     type_ids: list[str] = []
     type_reprs: list[str] = []
     seen: set[str] = set()
     arrays = [type_exprs_norm["type_id"], type_exprs_norm["type_repr"]]
-    for type_id, type_repr in _iter_arrays(arrays):
+    for type_id, type_repr in iter_arrays(arrays):
         if not isinstance(type_id, str) or not isinstance(type_repr, str):
             continue
         if type_id in seen:

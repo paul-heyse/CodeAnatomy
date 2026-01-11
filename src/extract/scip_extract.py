@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import importlib
-import json
+import logging
 import os
 import subprocess
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
 
 import pyarrow as pa
+import pyarrow.compute as pc
 
 from arrowdsl.empty import empty_table
-from arrowdsl.ids import hash64_from_parts
+from arrowdsl.ids import hash64_from_arrays
+from arrowdsl.nested import build_list_array, build_struct_array
+from arrowdsl.schema import align_to_schema
 from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
 
@@ -22,13 +25,9 @@ SCHEMA_VERSION = 1
 RANGE_LEN_SHORT = 3
 RANGE_LEN_FULL = 4
 
+LOGGER = logging.getLogger(__name__)
+
 type Row = dict[str, object]
-
-
-def _hash_id(prefix: str, *parts: str) -> str:
-    # Row-wise hash64 IDs are needed while building dependent rows.
-    hashed = hash64_from_parts(*parts, prefix=prefix)
-    return f"{prefix}:{hashed}"
 
 
 @dataclass(frozen=True)
@@ -57,6 +56,9 @@ class SCIPParseOptions:
     scip_pb2_import: str | None = None
     scip_cli_bin: str = "scip"
     build_dir: Path | None = None
+    health_check: bool = False
+    log_counts: bool = False
+    dictionary_encode_strings: bool = False
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,22 @@ class SCIPExtractResult:
     scip_external_symbol_information: pa.Table
     scip_diagnostics: pa.Table
 
+
+SCIP_SIGNATURE_OCCURRENCE_TYPE = pa.struct(
+    [
+        ("symbol", pa.string()),
+        ("symbol_roles", pa.int32()),
+        ("range", pa.list_(pa.int32())),
+    ]
+)
+
+SCIP_SIGNATURE_DOCUMENTATION_TYPE = pa.struct(
+    [
+        ("text", pa.string()),
+        ("language", pa.string()),
+        ("occurrences", pa.list_(SCIP_SIGNATURE_OCCURRENCE_TYPE)),
+    ]
+)
 
 SCIP_METADATA_SCHEMA = pa.schema(
     [
@@ -125,7 +143,7 @@ SCIP_SYMBOL_INFO_SCHEMA = pa.schema(
         ("kind", pa.string()),
         ("enclosing_symbol", pa.string()),
         ("documentation", pa.list_(pa.string())),
-        ("signature_documentation", pa.string()),
+        ("signature_documentation", SCIP_SIGNATURE_DOCUMENTATION_TYPE),
     ]
 )
 
@@ -151,7 +169,7 @@ SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA = pa.schema(
         ("kind", pa.string()),
         ("enclosing_symbol", pa.string()),
         ("documentation", pa.list_(pa.string())),
-        ("signature_documentation", pa.string()),
+        ("signature_documentation", SCIP_SIGNATURE_DOCUMENTATION_TYPE),
     ]
 )
 
@@ -344,6 +362,164 @@ def parse_index_scip(index_path: Path, parse_opts: SCIPParseOptions | None = Non
     raise RuntimeError(msg)
 
 
+def _prefixed_hash(prefix: str, arrays: Sequence[pa.Array | pa.ChunkedArray]) -> pa.Array:
+    hashed = hash64_from_arrays(arrays, prefix=prefix)
+    return pc.binary_join_element_wise(pa.scalar(prefix), pc.cast(hashed, pa.string()), ":")
+
+
+def _set_column(
+    table: pa.Table,
+    name: str,
+    values: pa.Array | pa.ChunkedArray,
+) -> pa.Table:
+    if name in table.column_names:
+        idx = table.schema.get_field_index(name)
+        return table.set_column(idx, name, values)
+    return table.append_column(name, values)
+
+
+def _with_document_ids(table: pa.Table, *, path_col: str = "path") -> pa.Table:
+    if table.num_rows == 0 or path_col not in table.column_names:
+        return table
+    ids = _prefixed_hash("scip_doc", [table[path_col]])
+    return _set_column(table, "document_id", ids)
+
+
+def add_scip_document_ids(table: pa.Table, *, path_col: str = "path") -> pa.Table:
+    """Add document_id values derived from a path column.
+
+    Returns
+    -------
+    pa.Table
+        Updated table with a document_id column.
+    """
+    return _with_document_ids(table, path_col=path_col)
+
+
+def _with_occurrence_ids(table: pa.Table) -> pa.Table:
+    if table.num_rows == 0:
+        return table
+    occ_index = pa.array(range(table.num_rows), type=pa.int64())
+    ids = _prefixed_hash(
+        "scip_occ",
+        [
+            table["document_id"],
+            occ_index,
+            table["start_line"],
+            table["start_char"],
+            table["end_line"],
+            table["end_char"],
+        ],
+    )
+    return _set_column(table, "occurrence_id", ids)
+
+
+def add_scip_occurrence_ids(table: pa.Table) -> pa.Table:
+    """Add occurrence_id values derived from document/span columns.
+
+    Returns
+    -------
+    pa.Table
+        Updated table with an occurrence_id column.
+    """
+    return _with_occurrence_ids(table)
+
+
+def _with_diagnostic_ids(table: pa.Table) -> pa.Table:
+    if table.num_rows == 0:
+        return table
+    diag_index = pa.array(range(table.num_rows), type=pa.int64())
+    ids = _prefixed_hash(
+        "scip_diag",
+        [
+            table["document_id"],
+            diag_index,
+            table["start_line"],
+            table["start_char"],
+            table["end_line"],
+            table["end_char"],
+        ],
+    )
+    return _set_column(table, "diagnostic_id", ids)
+
+
+def _with_symbol_ids(table: pa.Table, *, prefix: str) -> pa.Table:
+    if table.num_rows == 0:
+        return table
+    ids = _prefixed_hash(prefix, [table["symbol"]])
+    return _set_column(table, "symbol_info_id", ids)
+
+
+def _with_relationship_ids(table: pa.Table) -> pa.Table:
+    if table.num_rows == 0:
+        return table
+    ids = _prefixed_hash(
+        "scip_rel",
+        [
+            table["symbol"],
+            table["related_symbol"],
+            table["is_reference"],
+            table["is_implementation"],
+            table["is_type_definition"],
+            table["is_definition"],
+        ],
+    )
+    return _set_column(table, "relationship_id", ids)
+
+
+def _align_table(table: pa.Table, *, schema: pa.Schema) -> pa.Table:
+    aligned, _ = align_to_schema(table, schema=schema, safe_cast=True, on_error="unsafe")
+    return aligned
+
+
+def _dictionary_encode(table: pa.Table, columns: Sequence[str]) -> pa.Table:
+    for col in columns:
+        if col not in table.column_names:
+            continue
+        idx = table.schema.get_field_index(col)
+        encoded = pc.call_function("dictionary_encode", [table[col]])
+        if isinstance(encoded, pa.Scalar):
+            msg = f"Dictionary encoding returned scalar for column '{col}'."
+            raise TypeError(msg)
+        table = table.set_column(idx, col, encoded)
+    return table
+
+
+def _index_counts(index: object) -> dict[str, int]:
+    docs = getattr(index, "documents", [])
+    occurrences = 0
+    diagnostics = 0
+    for doc in docs:
+        occs = getattr(doc, "occurrences", [])
+        occurrences += len(occs)
+        for occ in occs:
+            diagnostics += len(getattr(occ, "diagnostics", []))
+    return {
+        "documents": len(docs),
+        "occurrences": occurrences,
+        "diagnostics": diagnostics,
+        "symbol_information": len(getattr(index, "symbol_information", [])),
+        "external_symbols": len(getattr(index, "external_symbols", [])),
+    }
+
+
+def assert_scip_index_health(index: object) -> None:
+    """Raise when the SCIP index is missing core data.
+
+    Raises
+    ------
+    ValueError
+        Raised when the index has no documents or occurrences.
+    """
+    counts = _index_counts(index)
+    if counts["documents"] == 0:
+        msg = "SCIP index has no documents."
+        raise ValueError(msg)
+    if counts["occurrences"] == 0:
+        msg = "SCIP index has no occurrences."
+        raise ValueError(msg)
+
+
 def _metadata_rows(index: object) -> list[Row]:
     metadata = getattr(index, "metadata", None)
     tool_info = getattr(metadata, "tool_info", None)
@@ -366,58 +542,77 @@ def _metadata_rows(index: object) -> list[Row]:
     ]
 
 
-def _diagnostic_rows(
-    document_id: str,
-    rel_path: object,
-    occ_index: int,
-    diagnostics: Sequence[object],
-    default_range: tuple[int, int, int, int] | None,
-) -> list[Row]:
-    rows: list[Row] = []
-    if default_range is None:
-        sl = sc = el = ec = None
-    else:
-        sl, sc, el, ec = default_range
-    for j, diag in enumerate(diagnostics):
-        drng = list(getattr(diag, "range", []))
-        norm = _normalize_range(drng) if drng else None
-        if norm is None:
-            dsl, dsc, del_, dec_ = sl, sc, el, ec
-        else:
-            dsl, dsc, del_, dec_, _ = norm
-        rows.append(
-            {
-                "schema_version": SCHEMA_VERSION,
-                "diagnostic_id": _hash_id("scip_diag", document_id, str(occ_index), str(j)),
-                "document_id": document_id,
-                "path": rel_path,
-                "severity": str(getattr(diag, "severity", None))
-                if hasattr(diag, "severity")
-                else None,
-                "code": str(getattr(diag, "code", None)) if hasattr(diag, "code") else None,
-                "message": getattr(diag, "message", None),
-                "source": getattr(diag, "source", None),
-                "tags": [str(t) for t in getattr(diag, "tags", [])]
-                if hasattr(diag, "tags")
-                else [],
-                "start_line": dsl,
-                "start_char": dsc,
-                "end_line": del_,
-                "end_char": dec_,
-            }
+def _offsets_start() -> list[int]:
+    return [0]
+
+
+def _array(values: Sequence[object], data_type: pa.DataType) -> pa.Array:
+    return pa.array(values, type=data_type)
+
+
+@dataclass
+class _DocAccumulator:
+    schema_versions: list[int] = field(default_factory=list)
+    document_ids: list[str | None] = field(default_factory=list)
+    paths: list[str | None] = field(default_factory=list)
+    languages: list[str | None] = field(default_factory=list)
+    position_encodings: list[str | None] = field(default_factory=list)
+
+    def append(
+        self,
+        rel_path: str | None,
+        language: object,
+        position_encoding: object,
+    ) -> None:
+        self.schema_versions.append(SCHEMA_VERSION)
+        self.document_ids.append(None)
+        self.paths.append(rel_path)
+        self.languages.append(str(language) if language is not None else None)
+        self.position_encodings.append(
+            str(position_encoding) if position_encoding is not None else None
         )
-    return rows
+
+    def to_table(self) -> pa.Table:
+        return pa.Table.from_arrays(
+            [
+                _array(self.schema_versions, pa.int32()),
+                _array(self.document_ids, pa.string()),
+                _array(self.paths, pa.string()),
+                _array(self.languages, pa.string()),
+                _array(self.position_encodings, pa.string()),
+            ],
+            schema=SCIP_DOCUMENTS_SCHEMA,
+        )
 
 
-def _occurrence_rows(
-    document_id: str,
-    rel_path: object,
-    occurrences: Sequence[object],
-) -> tuple[list[Row], list[Row]]:
-    occ_rows: list[Row] = []
-    diag_rows: list[Row] = []
-    for i, occ in enumerate(occurrences):
-        norm = _normalize_range(list(getattr(occ, "range", [])))
+@dataclass
+class _OccurrenceAccumulator:
+    schema_versions: list[int] = field(default_factory=list)
+    occurrence_ids: list[str | None] = field(default_factory=list)
+    document_ids: list[str | None] = field(default_factory=list)
+    paths: list[str | None] = field(default_factory=list)
+    symbols: list[str | None] = field(default_factory=list)
+    symbol_roles: list[int] = field(default_factory=list)
+    syntax_kind: list[str | None] = field(default_factory=list)
+    override_doc_offsets: list[int] = field(default_factory=_offsets_start)
+    override_doc_values: list[str | None] = field(default_factory=list)
+    start_line: list[int | None] = field(default_factory=list)
+    start_char: list[int | None] = field(default_factory=list)
+    end_line: list[int | None] = field(default_factory=list)
+    end_char: list[int | None] = field(default_factory=list)
+    range_len: list[int] = field(default_factory=list)
+    enc_start_line: list[int | None] = field(default_factory=list)
+    enc_start_char: list[int | None] = field(default_factory=list)
+    enc_end_line: list[int | None] = field(default_factory=list)
+    enc_end_char: list[int | None] = field(default_factory=list)
+    enc_range_len: list[int | None] = field(default_factory=list)
+
+    def append_from_occurrence(
+        self,
+        occurrence: object,
+        rel_path: str | None,
+    ) -> tuple[int, int, int, int] | None:
+        norm = _normalize_range(list(getattr(occurrence, "range", [])))
         if norm is None:
             sl = sc = el = ec = None
             rlen = 0
@@ -426,211 +621,418 @@ def _occurrence_rows(
             sl, sc, el, ec, rlen = norm
             default_range = (sl, sc, el, ec)
 
-        enc_norm = _normalize_range(list(getattr(occ, "enclosing_range", [])))
+        enc_norm = _normalize_range(list(getattr(occurrence, "enclosing_range", [])))
         if enc_norm is None:
             esl = esc = eel = eec = None
             elen = None
         else:
             esl, esc, eel, eec, elen = enc_norm
 
-        occ_rows.append(
+        self.schema_versions.append(SCHEMA_VERSION)
+        self.occurrence_ids.append(None)
+        self.document_ids.append(None)
+        self.paths.append(rel_path)
+        self.symbols.append(getattr(occurrence, "symbol", None))
+        self.symbol_roles.append(int(getattr(occurrence, "symbol_roles", 0) or 0))
+        self.syntax_kind.append(
+            str(getattr(occurrence, "syntax_kind", None))
+            if hasattr(occurrence, "syntax_kind")
+            else None
+        )
+        override_docs = getattr(occurrence, "override_documentation", []) or []
+        for doc in override_docs:
+            if doc is None:
+                self.override_doc_values.append(None)
+            elif isinstance(doc, str):
+                self.override_doc_values.append(doc)
+            else:
+                self.override_doc_values.append(str(doc))
+        self.override_doc_offsets.append(len(self.override_doc_values))
+        self.start_line.append(sl)
+        self.start_char.append(sc)
+        self.end_line.append(el)
+        self.end_char.append(ec)
+        self.range_len.append(rlen)
+        self.enc_start_line.append(esl if elen else None)
+        self.enc_start_char.append(esc if elen else None)
+        self.enc_end_line.append(eel if elen else None)
+        self.enc_end_char.append(eec if elen else None)
+        self.enc_range_len.append(elen if elen else None)
+        return default_range
+
+    def to_table(self) -> pa.Table:
+        override_doc = build_list_array(
+            pa.array(self.override_doc_offsets, type=pa.int32()),
+            pa.array(self.override_doc_values, type=pa.string()),
+        )
+        return pa.Table.from_arrays(
+            [
+                _array(self.schema_versions, pa.int32()),
+                _array(self.occurrence_ids, pa.string()),
+                _array(self.document_ids, pa.string()),
+                _array(self.paths, pa.string()),
+                _array(self.symbols, pa.string()),
+                _array(self.symbol_roles, pa.int32()),
+                _array(self.syntax_kind, pa.string()),
+                override_doc,
+                _array(self.start_line, pa.int32()),
+                _array(self.start_char, pa.int32()),
+                _array(self.end_line, pa.int32()),
+                _array(self.end_char, pa.int32()),
+                _array(self.range_len, pa.int32()),
+                _array(self.enc_start_line, pa.int32()),
+                _array(self.enc_start_char, pa.int32()),
+                _array(self.enc_end_line, pa.int32()),
+                _array(self.enc_end_char, pa.int32()),
+                _array(self.enc_range_len, pa.int32()),
+            ],
+            schema=SCIP_OCCURRENCES_SCHEMA,
+        )
+
+
+@dataclass
+class _DiagnosticAccumulator:
+    schema_versions: list[int] = field(default_factory=list)
+    diagnostic_ids: list[str | None] = field(default_factory=list)
+    document_ids: list[str | None] = field(default_factory=list)
+    paths: list[str | None] = field(default_factory=list)
+    severity: list[str | None] = field(default_factory=list)
+    code: list[str | None] = field(default_factory=list)
+    message: list[str | None] = field(default_factory=list)
+    source: list[str | None] = field(default_factory=list)
+    tags_offsets: list[int] = field(default_factory=_offsets_start)
+    tags_values: list[str | None] = field(default_factory=list)
+    start_line: list[int | None] = field(default_factory=list)
+    start_char: list[int | None] = field(default_factory=list)
+    end_line: list[int | None] = field(default_factory=list)
+    end_char: list[int | None] = field(default_factory=list)
+
+    def append_from_diag(
+        self,
+        diag: object,
+        rel_path: str | None,
+        default_range: tuple[int, int, int, int] | None,
+    ) -> None:
+        drng = list(getattr(diag, "range", []))
+        norm = _normalize_range(drng) if drng else None
+        if norm is None:
+            if default_range is None:
+                dsl = dsc = del_ = dec_ = None
+            else:
+                dsl, dsc, del_, dec_ = default_range
+        else:
+            dsl, dsc, del_, dec_, _ = norm
+
+        self.schema_versions.append(SCHEMA_VERSION)
+        self.diagnostic_ids.append(None)
+        self.document_ids.append(None)
+        self.paths.append(rel_path)
+        self.severity.append(
+            str(getattr(diag, "severity", None)) if hasattr(diag, "severity") else None
+        )
+        self.code.append(str(getattr(diag, "code", None)) if hasattr(diag, "code") else None)
+        self.message.append(getattr(diag, "message", None))
+        self.source.append(getattr(diag, "source", None))
+        tags = getattr(diag, "tags", []) if hasattr(diag, "tags") else []
+        if tags is None:
+            tags = []
+        for tag in tags:
+            if tag is None:
+                self.tags_values.append(None)
+            elif isinstance(tag, str):
+                self.tags_values.append(tag)
+            else:
+                self.tags_values.append(str(tag))
+        self.tags_offsets.append(len(self.tags_values))
+        self.start_line.append(dsl)
+        self.start_char.append(dsc)
+        self.end_line.append(del_)
+        self.end_char.append(dec_)
+
+    def to_table(self) -> pa.Table:
+        tags = build_list_array(
+            pa.array(self.tags_offsets, type=pa.int32()),
+            pa.array(self.tags_values, type=pa.string()),
+        )
+        return pa.Table.from_arrays(
+            [
+                _array(self.schema_versions, pa.int32()),
+                _array(self.diagnostic_ids, pa.string()),
+                _array(self.document_ids, pa.string()),
+                _array(self.paths, pa.string()),
+                _array(self.severity, pa.string()),
+                _array(self.code, pa.string()),
+                _array(self.message, pa.string()),
+                _array(self.source, pa.string()),
+                tags,
+                _array(self.start_line, pa.int32()),
+                _array(self.start_char, pa.int32()),
+                _array(self.end_line, pa.int32()),
+                _array(self.end_char, pa.int32()),
+            ],
+            schema=SCIP_DIAGNOSTICS_SCHEMA,
+        )
+
+
+@dataclass
+class _SymbolInfoAccumulator:
+    schema_versions: list[int] = field(default_factory=list)
+    symbol_info_ids: list[str | None] = field(default_factory=list)
+    symbols: list[str | None] = field(default_factory=list)
+    display_names: list[str | None] = field(default_factory=list)
+    kinds: list[str | None] = field(default_factory=list)
+    enclosing_symbols: list[str | None] = field(default_factory=list)
+    documentation_offsets: list[int] = field(default_factory=_offsets_start)
+    documentation_values: list[str | None] = field(default_factory=list)
+    sig_doc_texts: list[str | None] = field(default_factory=list)
+    sig_doc_languages: list[str | None] = field(default_factory=list)
+    sig_doc_is_null: list[bool] = field(default_factory=list)
+    sig_doc_occurrence_offsets: list[int] = field(default_factory=_offsets_start)
+    sig_doc_occurrence_symbols: list[str | None] = field(default_factory=list)
+    sig_doc_occurrence_roles: list[int] = field(default_factory=list)
+    sig_doc_occurrence_range_offsets: list[int] = field(default_factory=_offsets_start)
+    sig_doc_occurrence_range_values: list[int] = field(default_factory=list)
+
+    def append(self, symbol_info: object) -> None:
+        self.schema_versions.append(SCHEMA_VERSION)
+        self.symbol_info_ids.append(None)
+        self.symbols.append(getattr(symbol_info, "symbol", None))
+        self.display_names.append(getattr(symbol_info, "display_name", None))
+        self.kinds.append(
+            str(getattr(symbol_info, "kind", None)) if hasattr(symbol_info, "kind") else None
+        )
+        self.enclosing_symbols.append(
+            getattr(symbol_info, "enclosing_symbol", None)
+            if hasattr(symbol_info, "enclosing_symbol")
+            else None
+        )
+        self._append_documentation(symbol_info)
+        sig_doc = getattr(symbol_info, "signature_documentation", None)
+        self._append_signature_documentation(sig_doc)
+
+    def _append_documentation(self, symbol_info: object) -> None:
+        docs = getattr(symbol_info, "documentation", None)
+        if not hasattr(symbol_info, "documentation") or docs is None:
+            docs = []
+        for doc in docs:
+            if doc is None:
+                self.documentation_values.append(None)
+            elif isinstance(doc, str):
+                self.documentation_values.append(doc)
+            else:
+                self.documentation_values.append(str(doc))
+        self.documentation_offsets.append(len(self.documentation_values))
+
+    def _append_signature_documentation(self, sig_doc: object | None) -> None:
+        if sig_doc is None:
+            self._append_empty_signature_documentation()
+            return
+        self._append_signature_doc_fields(sig_doc)
+        self._append_signature_doc_occurrences(sig_doc)
+
+    def _append_empty_signature_documentation(self) -> None:
+        self.sig_doc_texts.append(None)
+        self.sig_doc_languages.append(None)
+        self.sig_doc_is_null.append(True)
+        self.sig_doc_occurrence_offsets.append(len(self.sig_doc_occurrence_symbols))
+
+    def _append_signature_doc_fields(self, sig_doc: object) -> None:
+        text = getattr(sig_doc, "text", None)
+        if text is None or isinstance(text, str):
+            self.sig_doc_texts.append(text)
+        else:
+            self.sig_doc_texts.append(str(text))
+        language = getattr(sig_doc, "language", None)
+        self.sig_doc_languages.append(str(language) if language is not None else None)
+        self.sig_doc_is_null.append(False)
+
+    def _append_signature_doc_occurrences(self, sig_doc: object) -> None:
+        occurrences = getattr(sig_doc, "occurrences", None)
+        if occurrences is None:
+            occurrences = []
+        for occ in occurrences:
+            self._append_signature_doc_occurrence(occ)
+        self.sig_doc_occurrence_offsets.append(len(self.sig_doc_occurrence_symbols))
+
+    def _append_signature_doc_occurrence(self, occ: object) -> None:
+        self.sig_doc_occurrence_symbols.append(getattr(occ, "symbol", None))
+        self.sig_doc_occurrence_roles.append(int(getattr(occ, "symbol_roles", 0) or 0))
+        for value in getattr(occ, "range", []) or []:
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
+                self.sig_doc_occurrence_range_values.append(int(value))
+        self.sig_doc_occurrence_range_offsets.append(len(self.sig_doc_occurrence_range_values))
+
+    def to_table(self, *, schema: pa.Schema) -> pa.Table:
+        documentation = build_list_array(
+            pa.array(self.documentation_offsets, type=pa.int32()),
+            pa.array(self.documentation_values, type=pa.string()),
+        )
+
+        occ_range = build_list_array(
+            pa.array(self.sig_doc_occurrence_range_offsets, type=pa.int32()),
+            pa.array(self.sig_doc_occurrence_range_values, type=pa.int32()),
+        )
+        occurrences = build_list_array(
+            pa.array(self.sig_doc_occurrence_offsets, type=pa.int32()),
+            build_struct_array(
+                {
+                    "symbol": pa.array(self.sig_doc_occurrence_symbols, type=pa.string()),
+                    "symbol_roles": pa.array(self.sig_doc_occurrence_roles, type=pa.int32()),
+                    "range": occ_range,
+                }
+            ),
+        )
+        sig_doc = build_struct_array(
             {
-                "schema_version": SCHEMA_VERSION,
-                "occurrence_id": _hash_id(
-                    "scip_occ",
-                    document_id,
-                    str(i),
-                    str(sl),
-                    str(sc),
-                    str(el),
-                    str(ec),
-                ),
-                "document_id": document_id,
-                "path": rel_path,
-                "symbol": getattr(occ, "symbol", None),
-                "symbol_roles": int(getattr(occ, "symbol_roles", 0) or 0),
-                "syntax_kind": str(getattr(occ, "syntax_kind", None))
-                if hasattr(occ, "syntax_kind")
-                else None,
-                "override_documentation": list(getattr(occ, "override_documentation", []))
-                if hasattr(occ, "override_documentation")
-                else [],
-                "start_line": sl,
-                "start_char": sc,
-                "end_line": el,
-                "end_char": ec,
-                "range_len": rlen,
-                "enc_start_line": esl if elen else None,
-                "enc_start_char": esc if elen else None,
-                "enc_end_line": eel if elen else None,
-                "enc_end_char": eec if elen else None,
-                "enc_range_len": elen if elen else None,
-            }
+                "text": pa.array(self.sig_doc_texts, type=pa.string()),
+                "language": pa.array(self.sig_doc_languages, type=pa.string()),
+                "occurrences": occurrences,
+            },
+            mask=pa.array(self.sig_doc_is_null, type=pa.bool_()),
+        )
+        return pa.Table.from_arrays(
+            [
+                _array(self.schema_versions, pa.int32()),
+                _array(self.symbol_info_ids, pa.string()),
+                _array(self.symbols, pa.string()),
+                _array(self.display_names, pa.string()),
+                _array(self.kinds, pa.string()),
+                _array(self.enclosing_symbols, pa.string()),
+                documentation,
+                sig_doc,
+            ],
+            schema=schema,
         )
 
-        diag_rows.extend(
-            _diagnostic_rows(
-                document_id,
-                rel_path,
-                i,
-                getattr(occ, "diagnostics", []),
-                default_range,
-            )
+
+@dataclass
+class _RelationshipAccumulator:
+    schema_versions: list[int] = field(default_factory=list)
+    relationship_ids: list[str | None] = field(default_factory=list)
+    symbols: list[str | None] = field(default_factory=list)
+    related_symbols: list[str | None] = field(default_factory=list)
+    is_reference: list[bool] = field(default_factory=list)
+    is_implementation: list[bool] = field(default_factory=list)
+    is_type_definition: list[bool] = field(default_factory=list)
+    is_definition: list[bool] = field(default_factory=list)
+
+    def append(self, symbol: str | None, relationship: object) -> None:
+        related = getattr(relationship, "symbol", None)
+        if symbol is None or related is None:
+            return
+        self.schema_versions.append(SCHEMA_VERSION)
+        self.relationship_ids.append(None)
+        self.symbols.append(symbol)
+        self.related_symbols.append(related)
+        self.is_reference.append(bool(getattr(relationship, "is_reference", False)))
+        self.is_implementation.append(bool(getattr(relationship, "is_implementation", False)))
+        self.is_type_definition.append(bool(getattr(relationship, "is_type_definition", False)))
+        self.is_definition.append(bool(getattr(relationship, "is_definition", False)))
+
+    def to_table(self) -> pa.Table:
+        return pa.Table.from_arrays(
+            [
+                _array(self.schema_versions, pa.int32()),
+                _array(self.relationship_ids, pa.string()),
+                _array(self.symbols, pa.string()),
+                _array(self.related_symbols, pa.string()),
+                _array(self.is_reference, pa.bool_()),
+                _array(self.is_implementation, pa.bool_()),
+                _array(self.is_type_definition, pa.bool_()),
+                _array(self.is_definition, pa.bool_()),
+            ],
+            schema=SCIP_SYMBOL_RELATIONSHIPS_SCHEMA,
         )
-    return occ_rows, diag_rows
 
 
-def _document_rows(index: object) -> tuple[list[Row], list[Row], list[Row]]:
-    doc_rows: list[Row] = []
-    occ_rows: list[Row] = []
-    diag_rows: list[Row] = []
+def _document_tables(index: object) -> tuple[pa.Table, pa.Table, pa.Table]:
+    docs = _DocAccumulator()
+    occs = _OccurrenceAccumulator()
+    diags = _DiagnosticAccumulator()
 
     for doc in getattr(index, "documents", []):
         rel_path = getattr(doc, "relative_path", None)
-        language = getattr(doc, "language", None)
-        position_encoding = getattr(doc, "position_encoding", None)
-
-        document_id = _hash_id("scip_doc", rel_path or "")
-        doc_rows.append(
-            {
-                "schema_version": SCHEMA_VERSION,
-                "document_id": document_id,
-                "path": rel_path,
-                "language": str(language) if language is not None else None,
-                "position_encoding": str(position_encoding)
-                if position_encoding is not None
-                else None,
-            }
-        )
-
-        occs, diags = _occurrence_rows(
-            document_id,
+        docs.append(
             rel_path,
-            getattr(doc, "occurrences", []),
+            getattr(doc, "language", None),
+            getattr(doc, "position_encoding", None),
         )
-        occ_rows.extend(occs)
-        diag_rows.extend(diags)
 
-    return doc_rows, occ_rows, diag_rows
+        for occ in getattr(doc, "occurrences", []):
+            default_range = occs.append_from_occurrence(occ, rel_path)
+            for diag in getattr(occ, "diagnostics", []):
+                diags.append_from_diag(diag, rel_path, default_range)
 
-
-def _signature_doc_json(sig_doc: object | None) -> str | None:
-    if sig_doc is None:
-        return None
-    text = getattr(sig_doc, "text", None)
-    language = getattr(sig_doc, "language", None)
-    occs = [
-        {
-            "symbol": getattr(occ, "symbol", None),
-            "symbol_roles": int(getattr(occ, "symbol_roles", 0) or 0),
-            "range": list(getattr(occ, "range", [])),
-        }
-        for occ in getattr(sig_doc, "occurrences", [])
-    ]
-    payload = {
-        "text": text,
-        "language": str(language) if language is not None else None,
-        "occurrences": occs,
-    }
-    return json.dumps(payload, ensure_ascii=False)
+    return docs.to_table(), occs.to_table(), diags.to_table()
 
 
-def _symbol_rows(index: object) -> list[Row]:
-    sym_rows: list[Row] = []
+def _symbol_tables(index: object) -> tuple[pa.Table, pa.Table, pa.Table]:
+    sym = _SymbolInfoAccumulator()
+    ext = _SymbolInfoAccumulator()
+    rels = _RelationshipAccumulator()
     for si in getattr(index, "symbol_information", []):
+        sym.append(si)
         symbol = getattr(si, "symbol", None)
-        sig_doc = getattr(si, "signature_documentation", None)
-        sym_rows.append(
-            {
-                "schema_version": SCHEMA_VERSION,
-                "symbol_info_id": _hash_id("scip_sym", symbol or ""),
-                "symbol": symbol,
-                "display_name": getattr(si, "display_name", None),
-                "kind": str(getattr(si, "kind", None)) if hasattr(si, "kind") else None,
-                "enclosing_symbol": getattr(si, "enclosing_symbol", None)
-                if hasattr(si, "enclosing_symbol")
-                else None,
-                "documentation": list(getattr(si, "documentation", []))
-                if hasattr(si, "documentation")
-                else [],
-                "signature_documentation": _signature_doc_json(sig_doc),
-            }
-        )
-    return sym_rows
-
-
-def _symbol_relationship_rows(index: object) -> list[Row]:
-    rows: list[Row] = []
-    for si in getattr(index, "symbol_information", []):
-        symbol = getattr(si, "symbol", None)
-        if not symbol:
-            continue
         for rel in getattr(si, "relationships", []):
-            related = getattr(rel, "symbol", None)
-            if related is None:
-                continue
-            rel_id = _hash_id(
-                "scip_rel",
-                str(symbol),
-                str(related),
-                str(getattr(rel, "is_reference", False)),
-                str(getattr(rel, "is_implementation", False)),
-                str(getattr(rel, "is_type_definition", False)),
-                str(getattr(rel, "is_definition", False)),
-            )
-            rows.append(
-                {
-                    "schema_version": SCHEMA_VERSION,
-                    "relationship_id": rel_id,
-                    "symbol": symbol,
-                    "related_symbol": related,
-                    "is_reference": bool(getattr(rel, "is_reference", False)),
-                    "is_implementation": bool(getattr(rel, "is_implementation", False)),
-                    "is_type_definition": bool(getattr(rel, "is_type_definition", False)),
-                    "is_definition": bool(getattr(rel, "is_definition", False)),
-                }
-            )
-    return rows
-
-
-def _external_symbol_rows(index: object) -> list[Row]:
-    rows: list[Row] = []
+            rels.append(symbol, rel)
     for si in getattr(index, "external_symbols", []):
-        symbol = getattr(si, "symbol", None)
-        sig_doc = getattr(si, "signature_documentation", None)
-        rows.append(
-            {
-                "schema_version": SCHEMA_VERSION,
-                "symbol_info_id": _hash_id("scip_ext_sym", symbol or ""),
-                "symbol": symbol,
-                "display_name": getattr(si, "display_name", None),
-                "kind": str(getattr(si, "kind", None)) if hasattr(si, "kind") else None,
-                "enclosing_symbol": getattr(si, "enclosing_symbol", None)
-                if hasattr(si, "enclosing_symbol")
-                else None,
-                "documentation": list(getattr(si, "documentation", []))
-                if hasattr(si, "documentation")
-                else [],
-                "signature_documentation": _signature_doc_json(sig_doc),
-            }
-        )
-    return rows
+        ext.append(si)
+    return (
+        sym.to_table(schema=SCIP_SYMBOL_INFO_SCHEMA),
+        rels.to_table(),
+        ext.to_table(schema=SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA),
+    )
 
 
-def _extract_tables_from_index(index: object) -> SCIPExtractResult:
+def _extract_tables_from_index(index: object, *, parse_opts: SCIPParseOptions) -> SCIPExtractResult:
     meta_rows = _metadata_rows(index)
-    doc_rows, occ_rows, diag_rows = _document_rows(index)
-    sym_rows = _symbol_rows(index)
-    rel_rows = _symbol_relationship_rows(index)
-    ext_rows = _external_symbol_rows(index)
+    t_docs, t_occs, t_diags = _document_tables(index)
 
     t_meta = pa.Table.from_pylist(meta_rows, schema=SCIP_METADATA_SCHEMA)
-    t_docs = pa.Table.from_pylist(doc_rows, schema=SCIP_DOCUMENTS_SCHEMA)
-    t_occs = pa.Table.from_pylist(occ_rows, schema=SCIP_OCCURRENCES_SCHEMA)
-    t_syms = pa.Table.from_pylist(sym_rows, schema=SCIP_SYMBOL_INFO_SCHEMA)
-    t_rels = pa.Table.from_pylist(rel_rows, schema=SCIP_SYMBOL_RELATIONSHIPS_SCHEMA)
-    t_ext = pa.Table.from_pylist(ext_rows, schema=SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA)
-    t_diags = pa.Table.from_pylist(diag_rows, schema=SCIP_DIAGNOSTICS_SCHEMA)
+    t_syms, t_rels, t_ext = _symbol_tables(index)
+
+    t_docs = _with_document_ids(t_docs)
+    t_occs = _with_document_ids(t_occs)
+    t_occs = _with_occurrence_ids(t_occs)
+    t_diags = _with_document_ids(t_diags)
+    t_diags = _with_diagnostic_ids(t_diags)
+    t_syms = _with_symbol_ids(t_syms, prefix="scip_sym")
+    t_rels = _with_relationship_ids(t_rels)
+    t_ext = _with_symbol_ids(t_ext, prefix="scip_ext_sym")
+
+    t_meta = _align_table(t_meta, schema=SCIP_METADATA_SCHEMA)
+    t_docs = _align_table(t_docs, schema=SCIP_DOCUMENTS_SCHEMA)
+    t_occs = _align_table(t_occs, schema=SCIP_OCCURRENCES_SCHEMA)
+    t_syms = _align_table(t_syms, schema=SCIP_SYMBOL_INFO_SCHEMA)
+    t_rels = _align_table(t_rels, schema=SCIP_SYMBOL_RELATIONSHIPS_SCHEMA)
+    t_ext = _align_table(t_ext, schema=SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA)
+    t_diags = _align_table(t_diags, schema=SCIP_DIAGNOSTICS_SCHEMA)
+
+    if parse_opts.dictionary_encode_strings:
+        t_meta = _dictionary_encode(
+            t_meta,
+            [
+                "tool_name",
+                "tool_version",
+                "project_root",
+                "text_document_encoding",
+                "protocol_version",
+            ],
+        )
+        t_docs = _dictionary_encode(t_docs, ["path", "language", "position_encoding"])
+        t_occs = _dictionary_encode(t_occs, ["path", "symbol", "syntax_kind"])
+        t_syms = _dictionary_encode(
+            t_syms,
+            ["symbol", "display_name", "kind", "enclosing_symbol"],
+        )
+        t_rels = _dictionary_encode(t_rels, ["symbol", "related_symbol"])
+        t_ext = _dictionary_encode(
+            t_ext,
+            ["symbol", "display_name", "kind", "enclosing_symbol"],
+        )
+        t_diags = _dictionary_encode(t_diags, ["path", "severity", "code", "source"])
 
     return SCIPExtractResult(
         scip_metadata=t_meta,
@@ -669,6 +1071,7 @@ def extract_scip_tables(
         Extracted SCIP tables keyed by output name.
     """
     _ = ctx
+    parse_opts = parse_opts or SCIPParseOptions()
     if scip_index_path is None:
         empty_result = SCIPExtractResult(
             scip_metadata=empty_table(SCIP_METADATA_SCHEMA),
@@ -684,7 +1087,20 @@ def extract_scip_tables(
         if repo_root is not None and not index_path.is_absolute():
             index_path = Path(repo_root) / index_path
         index = parse_index_scip(index_path, parse_opts=parse_opts)
-        empty_result = _extract_tables_from_index(index)
+        if parse_opts.log_counts or parse_opts.health_check:
+            counts = _index_counts(index)
+            LOGGER.info(
+                "SCIP index stats: documents=%d occurrences=%d diagnostics=%d symbols=%d "
+                "external_symbols=%d",
+                counts["documents"],
+                counts["occurrences"],
+                counts["diagnostics"],
+                counts["symbol_information"],
+                counts["external_symbols"],
+            )
+        if parse_opts.health_check:
+            assert_scip_index_health(index)
+        empty_result = _extract_tables_from_index(index, parse_opts=parse_opts)
 
     return {
         "scip_metadata": empty_result.scip_metadata,

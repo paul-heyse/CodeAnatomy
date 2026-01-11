@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
 
 from arrowdsl.finalize import FinalizeResult, finalize
+from arrowdsl.iter import iter_array_values
 from arrowdsl.runtime import ExecutionContext
 from cpg.kinds import NodeKind
 from cpg.schemas import CPG_NODES_CONTRACT, CPG_NODES_SCHEMA, SCHEMA_VERSION, empty_nodes
@@ -26,14 +27,6 @@ def _pick_col(table: pa.Table, names: Sequence[str]) -> pa.ChunkedArray | None:
         if name in table.column_names:
             return table[name]
     return None
-
-
-def _iter_array_values(array: pa.Array | pa.ChunkedArray) -> Iterator[object | None]:
-    for value in array:
-        if isinstance(value, pa.Scalar):
-            yield value.as_py()
-        else:
-            yield value
 
 
 @dataclass(frozen=True)
@@ -241,7 +234,7 @@ def _file_span_arrays(
 ) -> tuple[pa.Array, pa.Array]:
     if use_size_bytes and size is not None:
         bends: list[int | None] = []
-        for value in _iter_array_values(size):
+        for value in iter_array_values(size):
             if isinstance(value, bool):
                 bends.append(None)
             elif isinstance(value, int):
@@ -388,7 +381,7 @@ def _qname_nodes(dim_qualified_names: pa.Table | None) -> pa.Table | None:
 def _collect_symbols(table: pa.Table | None) -> set[str]:
     if table is None or "symbol" not in table.column_names:
         return set()
-    return {str(sym) for sym in _iter_array_values(table["symbol"]) if sym}
+    return {str(sym) for sym in iter_array_values(table["symbol"]) if sym}
 
 
 def _symbol_nodes(

@@ -8,6 +8,7 @@ from hamilton.function_modifiers import tag
 
 from arrowdsl.runtime import ExecutionContext, RuntimeProfile
 from core_types import JsonDict
+from extract.scip_extract import SCIPParseOptions
 from hamilton_pipeline.pipeline_types import (
     OutputConfig,
     RelspecConfig,
@@ -141,6 +142,20 @@ def scip_index_config() -> ScipIndexConfig:
         Indexing configuration.
     """
     return ScipIndexConfig()
+
+
+@tag(layer="inputs", kind="scalar")
+def scip_parse_options() -> SCIPParseOptions:
+    """Return default parse options for SCIP extraction.
+
+    Override via execute(overrides={"scip_parse_options": SCIPParseOptions(...)}).
+
+    Returns
+    -------
+    SCIPParseOptions
+        Parsing options for SCIP index decoding.
+    """
+    return SCIPParseOptions()
 
 
 @tag(layer="inputs", kind="scalar")

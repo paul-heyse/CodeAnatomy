@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 import pyarrow as pa
@@ -274,6 +274,47 @@ def _symbol_role_edges(rel_name_symbol: pa.Table | None) -> list[pa.Table]:
     return parts
 
 
+def _scip_symbol_relationship_edges(scip_symbol_relationships: pa.Table | None) -> list[pa.Table]:
+    if scip_symbol_relationships is None or scip_symbol_relationships.num_rows == 0:
+        return []
+    if "symbol" not in scip_symbol_relationships.column_names:
+        return []
+    if "related_symbol" not in scip_symbol_relationships.column_names:
+        return []
+
+    parts: list[pa.Table] = []
+    for edge_kind, flag_col, resolution_method in (
+        (EdgeKind.SCIP_SYMBOL_REFERENCE, "is_reference", "SCIP_SYMBOL_REFERENCE"),
+        (EdgeKind.SCIP_SYMBOL_IMPLEMENTATION, "is_implementation", "SCIP_SYMBOL_IMPLEMENTATION"),
+        (EdgeKind.SCIP_SYMBOL_TYPE_DEFINITION, "is_type_definition", "SCIP_SYMBOL_TYPE_DEFINITION"),
+        (EdgeKind.SCIP_SYMBOL_DEFINITION, "is_definition", "SCIP_SYMBOL_DEFINITION"),
+    ):
+        if flag_col not in scip_symbol_relationships.column_names:
+            continue
+        mask = pc.fill_null(
+            pc.cast(scip_symbol_relationships[flag_col], pa.bool_()), replacement=False
+        )
+        rel = scip_symbol_relationships.filter(mask)
+        if rel.num_rows == 0:
+            continue
+        parts.append(
+            _emit_edges_from_relation(
+                rel,
+                spec=EdgeEmitSpec(
+                    edge_kind=edge_kind,
+                    src_col="symbol",
+                    dst_col="related_symbol",
+                    path_col="path",
+                    bstart_col="bstart",
+                    bend_col="bend",
+                    origin="scip",
+                    default_resolution_method=resolution_method,
+                ),
+            )
+        )
+    return parts
+
+
 def _import_symbol_edges(rel_import_symbol: pa.Table | None) -> list[pa.Table]:
     if rel_import_symbol is None or rel_import_symbol.num_rows == 0:
         return []
@@ -520,6 +561,7 @@ class EdgeBuildOptions:
     """Configure which edge families are emitted."""
 
     emit_symbol_role_edges: bool = True
+    emit_scip_symbol_relationship_edges: bool = True
     emit_import_edges: bool = True
     emit_call_edges: bool = True
     emit_qname_fallback_call_edges: bool = True
@@ -533,6 +575,7 @@ class EdgeBuildInputs:
     """Input tables for edge construction."""
 
     relationship_outputs: Mapping[str, pa.Table] | None = None
+    scip_symbol_relationships: pa.Table | None = None
     diagnostics_norm: pa.Table | None = None
     repo_files: pa.Table | None = None
     type_exprs_norm: pa.Table | None = None
@@ -543,6 +586,7 @@ class EdgeBuildInputs:
 
 def _edge_inputs_from_legacy(legacy: Mapping[str, object]) -> EdgeBuildInputs:
     relationship_outputs = legacy.get("relationship_outputs")
+    scip_symbol_relationships = legacy.get("scip_symbol_relationships")
     diagnostics_norm = legacy.get("diagnostics_norm")
     repo_files = legacy.get("repo_files")
     type_exprs_norm = legacy.get("type_exprs_norm")
@@ -553,6 +597,9 @@ def _edge_inputs_from_legacy(legacy: Mapping[str, object]) -> EdgeBuildInputs:
         relationship_outputs=relationship_outputs
         if isinstance(relationship_outputs, Mapping)
         else None,
+        scip_symbol_relationships=scip_symbol_relationships
+        if isinstance(scip_symbol_relationships, pa.Table)
+        else None,
         diagnostics_norm=diagnostics_norm if isinstance(diagnostics_norm, pa.Table) else None,
         repo_files=repo_files if isinstance(repo_files, pa.Table) else None,
         type_exprs_norm=type_exprs_norm if isinstance(type_exprs_norm, pa.Table) else None,
@@ -562,6 +609,57 @@ def _edge_inputs_from_legacy(legacy: Mapping[str, object]) -> EdgeBuildInputs:
         else None,
         rt_members=rt_members if isinstance(rt_members, pa.Table) else None,
     )
+
+
+def _collect_edge_parts(
+    *,
+    tables: EdgeBuildInputs,
+    options: EdgeBuildOptions,
+) -> list[pa.Table]:
+    outputs = tables.relationship_outputs or {}
+    rel_name_symbol = outputs.get("rel_name_symbol")
+    rel_import_symbol = outputs.get("rel_import_symbol")
+    rel_callsite_symbol = outputs.get("rel_callsite_symbol")
+    rel_callsite_qname = outputs.get("rel_callsite_qname")
+
+    def emit_type_edges() -> list[pa.Table]:
+        return [
+            *_type_annotation_edges(tables.type_exprs_norm),
+            *_inferred_type_edges(tables.type_exprs_norm),
+        ]
+
+    emitters: list[tuple[bool, Callable[[], list[pa.Table]]]] = [
+        (options.emit_symbol_role_edges, lambda: _symbol_role_edges(rel_name_symbol)),
+        (
+            options.emit_scip_symbol_relationship_edges,
+            lambda: _scip_symbol_relationship_edges(tables.scip_symbol_relationships),
+        ),
+        (options.emit_import_edges, lambda: _import_symbol_edges(rel_import_symbol)),
+        (options.emit_call_edges, lambda: _call_symbol_edges(rel_callsite_symbol)),
+        (
+            options.emit_qname_fallback_call_edges,
+            lambda: _qname_fallback_edges(rel_callsite_qname, rel_callsite_symbol),
+        ),
+        (
+            options.emit_diagnostic_edges,
+            lambda: _diagnostic_edges(tables.diagnostics_norm, tables.repo_files),
+        ),
+        (options.emit_type_edges, emit_type_edges),
+        (
+            options.emit_runtime_edges,
+            lambda: _runtime_edges(
+                tables.rt_signatures,
+                tables.rt_signature_params,
+                tables.rt_members,
+            ),
+        ),
+    ]
+
+    parts: list[pa.Table] = []
+    for enabled, emitter in emitters:
+        if enabled:
+            parts.extend(emitter())
+    return parts
 
 
 def build_cpg_edges_raw(
@@ -581,30 +679,7 @@ def build_cpg_edges_raw(
     if inputs is None and legacy:
         inputs = _edge_inputs_from_legacy(legacy)
     tables = inputs or EdgeBuildInputs()
-    outputs = tables.relationship_outputs or {}
-    rel_name_symbol = outputs.get("rel_name_symbol")
-    rel_import_symbol = outputs.get("rel_import_symbol")
-    rel_callsite_symbol = outputs.get("rel_callsite_symbol")
-    rel_callsite_qname = outputs.get("rel_callsite_qname")
-    parts: list[pa.Table] = []
-
-    if options.emit_symbol_role_edges:
-        parts.extend(_symbol_role_edges(rel_name_symbol))
-    if options.emit_import_edges:
-        parts.extend(_import_symbol_edges(rel_import_symbol))
-    if options.emit_call_edges:
-        parts.extend(_call_symbol_edges(rel_callsite_symbol))
-    if options.emit_qname_fallback_call_edges:
-        parts.extend(_qname_fallback_edges(rel_callsite_qname, rel_callsite_symbol))
-    if options.emit_diagnostic_edges:
-        parts.extend(_diagnostic_edges(tables.diagnostics_norm, tables.repo_files))
-    if options.emit_type_edges:
-        parts.extend(_type_annotation_edges(tables.type_exprs_norm))
-        parts.extend(_inferred_type_edges(tables.type_exprs_norm))
-    if options.emit_runtime_edges:
-        parts.extend(
-            _runtime_edges(tables.rt_signatures, tables.rt_signature_params, tables.rt_members)
-        )
+    parts = _collect_edge_parts(tables=tables, options=options)
 
     if not parts:
         return empty_edges()

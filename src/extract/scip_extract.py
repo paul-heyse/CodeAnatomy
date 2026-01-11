@@ -11,12 +11,19 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_arrays
 from arrowdsl.nested import build_list_array, build_struct_array
+from arrowdsl.pyarrow_protocols import (
+    ArrayLike,
+    ChunkedArrayLike,
+    DataTypeLike,
+    ScalarLike,
+    SchemaLike,
+    TableLike,
+)
 from arrowdsl.schema import align_to_schema
 from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
@@ -66,13 +73,13 @@ class SCIPParseOptions:
 class SCIPExtractResult:
     """Hold extracted SCIP tables for metadata, documents, and symbols."""
 
-    scip_metadata: pa.Table
-    scip_documents: pa.Table
-    scip_occurrences: pa.Table
-    scip_symbol_information: pa.Table
-    scip_symbol_relationships: pa.Table
-    scip_external_symbol_information: pa.Table
-    scip_diagnostics: pa.Table
+    scip_metadata: TableLike
+    scip_documents: TableLike
+    scip_occurrences: TableLike
+    scip_symbol_information: TableLike
+    scip_symbol_relationships: TableLike
+    scip_external_symbol_information: TableLike
+    scip_diagnostics: TableLike
 
 
 SCIP_SIGNATURE_OCCURRENCE_TYPE = pa.struct(
@@ -378,41 +385,41 @@ def parse_index_scip(index_path: Path, parse_opts: SCIPParseOptions | None = Non
     raise RuntimeError(msg)
 
 
-def _prefixed_hash(prefix: str, arrays: Sequence[pa.Array | pa.ChunkedArray]) -> pa.Array:
+def _prefixed_hash(prefix: str, arrays: Sequence[ArrayLike | ChunkedArrayLike]) -> ArrayLike:
     hashed = hash64_from_arrays(arrays, prefix=prefix)
     return pc.binary_join_element_wise(pa.scalar(prefix), pc.cast(hashed, pa.string()), ":")
 
 
 def _set_column(
-    table: pa.Table,
+    table: TableLike,
     name: str,
-    values: pa.Array | pa.ChunkedArray,
-) -> pa.Table:
+    values: ArrayLike | ChunkedArrayLike,
+) -> TableLike:
     if name in table.column_names:
         idx = table.schema.get_field_index(name)
         return table.set_column(idx, name, values)
     return table.append_column(name, values)
 
 
-def _with_document_ids(table: pa.Table, *, path_col: str = "path") -> pa.Table:
+def _with_document_ids(table: TableLike, *, path_col: str = "path") -> TableLike:
     if table.num_rows == 0 or path_col not in table.column_names:
         return table
     ids = _prefixed_hash("scip_doc", [table[path_col]])
     return _set_column(table, "document_id", ids)
 
 
-def add_scip_document_ids(table: pa.Table, *, path_col: str = "path") -> pa.Table:
+def add_scip_document_ids(table: TableLike, *, path_col: str = "path") -> TableLike:
     """Add document_id values derived from a path column.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Updated table with a document_id column.
     """
     return _with_document_ids(table, path_col=path_col)
 
 
-def _with_occurrence_ids(table: pa.Table) -> pa.Table:
+def _with_occurrence_ids(table: TableLike) -> TableLike:
     if table.num_rows == 0:
         return table
     occ_index = pa.array(range(table.num_rows), type=pa.int64())
@@ -430,18 +437,18 @@ def _with_occurrence_ids(table: pa.Table) -> pa.Table:
     return _set_column(table, "occurrence_id", ids)
 
 
-def add_scip_occurrence_ids(table: pa.Table) -> pa.Table:
+def add_scip_occurrence_ids(table: TableLike) -> TableLike:
     """Add occurrence_id values derived from document/span columns.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Updated table with an occurrence_id column.
     """
     return _with_occurrence_ids(table)
 
 
-def _with_diagnostic_ids(table: pa.Table) -> pa.Table:
+def _with_diagnostic_ids(table: TableLike) -> TableLike:
     if table.num_rows == 0:
         return table
     diag_index = pa.array(range(table.num_rows), type=pa.int64())
@@ -459,14 +466,14 @@ def _with_diagnostic_ids(table: pa.Table) -> pa.Table:
     return _set_column(table, "diagnostic_id", ids)
 
 
-def _with_symbol_ids(table: pa.Table, *, prefix: str) -> pa.Table:
+def _with_symbol_ids(table: TableLike, *, prefix: str) -> TableLike:
     if table.num_rows == 0:
         return table
     ids = _prefixed_hash(prefix, [table["symbol"]])
     return _set_column(table, "symbol_info_id", ids)
 
 
-def _with_relationship_ids(table: pa.Table) -> pa.Table:
+def _with_relationship_ids(table: TableLike) -> TableLike:
     if table.num_rows == 0:
         return table
     ids = _prefixed_hash(
@@ -483,18 +490,18 @@ def _with_relationship_ids(table: pa.Table) -> pa.Table:
     return _set_column(table, "relationship_id", ids)
 
 
-def _align_table(table: pa.Table, *, schema: pa.Schema) -> pa.Table:
+def _align_table(table: TableLike, *, schema: SchemaLike) -> TableLike:
     aligned, _ = align_to_schema(table, schema=schema, safe_cast=True, on_error="unsafe")
     return aligned
 
 
-def _dictionary_encode(table: pa.Table, columns: Sequence[str]) -> pa.Table:
+def _dictionary_encode(table: TableLike, columns: Sequence[str]) -> TableLike:
     for col in columns:
         if col not in table.column_names:
             continue
         idx = table.schema.get_field_index(col)
         encoded = pc.call_function("dictionary_encode", [table[col]])
-        if isinstance(encoded, pa.Scalar):
+        if isinstance(encoded, ScalarLike):
             msg = f"Dictionary encoding returned scalar for column '{col}'."
             raise TypeError(msg)
         table = table.set_column(idx, col, encoded)
@@ -562,7 +569,7 @@ def _offsets_start() -> list[int]:
     return [0]
 
 
-def _array(values: Sequence[object], data_type: pa.DataType) -> pa.Array:
+def _array(values: Sequence[object], data_type: DataTypeLike) -> ArrayLike:
     return pa.array(values, type=data_type)
 
 
@@ -588,7 +595,7 @@ class _DocAccumulator:
             str(position_encoding) if position_encoding is not None else None
         )
 
-    def to_table(self) -> pa.Table:
+    def to_table(self) -> TableLike:
         return pa.Table.from_arrays(
             [
                 _array(self.schema_versions, pa.int32()),
@@ -676,7 +683,7 @@ class _OccurrenceAccumulator:
         self.enc_range_len.append(elen if elen else None)
         return default_range
 
-    def to_table(self) -> pa.Table:
+    def to_table(self) -> TableLike:
         override_doc = build_list_array(
             pa.array(self.override_doc_offsets, type=pa.int32()),
             pa.array(self.override_doc_values, type=pa.string()),
@@ -765,7 +772,7 @@ class _DiagnosticAccumulator:
         self.end_line.append(del_)
         self.end_char.append(dec_)
 
-    def to_table(self) -> pa.Table:
+    def to_table(self) -> TableLike:
         tags = build_list_array(
             pa.array(self.tags_offsets, type=pa.int32()),
             pa.array(self.tags_values, type=pa.string()),
@@ -880,7 +887,7 @@ class _SymbolInfoAccumulator:
                 self.sig_doc_occurrence_range_values.append(int(value))
         self.sig_doc_occurrence_range_offsets.append(len(self.sig_doc_occurrence_range_values))
 
-    def to_table(self, *, schema: pa.Schema) -> pa.Table:
+    def to_table(self, *, schema: SchemaLike) -> TableLike:
         documentation = build_list_array(
             pa.array(self.documentation_offsets, type=pa.int32()),
             pa.array(self.documentation_values, type=pa.string()),
@@ -947,7 +954,7 @@ class _RelationshipAccumulator:
         self.is_type_definition.append(bool(getattr(relationship, "is_type_definition", False)))
         self.is_definition.append(bool(getattr(relationship, "is_definition", False)))
 
-    def to_table(self) -> pa.Table:
+    def to_table(self) -> TableLike:
         return pa.Table.from_arrays(
             [
                 _array(self.schema_versions, pa.int32()),
@@ -963,7 +970,7 @@ class _RelationshipAccumulator:
         )
 
 
-def _document_tables(index: object) -> tuple[pa.Table, pa.Table, pa.Table]:
+def _document_tables(index: object) -> tuple[TableLike, TableLike, TableLike]:
     docs = _DocAccumulator()
     occs = _OccurrenceAccumulator()
     diags = _DiagnosticAccumulator()
@@ -984,7 +991,7 @@ def _document_tables(index: object) -> tuple[pa.Table, pa.Table, pa.Table]:
     return docs.to_table(), occs.to_table(), diags.to_table()
 
 
-def _symbol_tables(index: object) -> tuple[pa.Table, pa.Table, pa.Table]:
+def _symbol_tables(index: object) -> tuple[TableLike, TableLike, TableLike]:
     sym = _SymbolInfoAccumulator()
     ext = _SymbolInfoAccumulator()
     rels = _RelationshipAccumulator()
@@ -1067,7 +1074,7 @@ def extract_scip_tables(
     repo_root: str | None,
     ctx: object | None = None,
     parse_opts: SCIPParseOptions | None = None,
-) -> dict[str, pa.Table]:
+) -> dict[str, TableLike]:
     """Extract SCIP tables as a name-keyed bundle.
 
     Parameters

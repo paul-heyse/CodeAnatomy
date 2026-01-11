@@ -6,11 +6,17 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
 from arrowdsl.ids import hash64_from_arrays
 from arrowdsl.iter import iter_arrays
+from arrowdsl.pyarrow_protocols import (
+    ArrayLike,
+    ChunkedArrayLike,
+    DataTypeLike,
+    SchemaLike,
+    TableLike,
+)
 from cpg.kinds import EntityKind
 from cpg.specs import (
     EdgeEmitSpec,
@@ -25,15 +31,15 @@ type PropValue = object | None
 type PropRow = dict[str, object]
 
 
-def _const_str(n: int, value: str) -> pa.Array:
+def _const_str(n: int, value: str) -> ArrayLike:
     return pa.array([value] * n, type=pa.string())
 
 
-def _const_i32(n: int, value: int) -> pa.Array:
+def _const_i32(n: int, value: int) -> ArrayLike:
     return pa.array([int(value)] * n, type=pa.int32())
 
 
-def _const_f32(n: int, value: float) -> pa.Array:
+def _const_f32(n: int, value: float) -> ArrayLike:
     return pa.array([float(value)] * n, type=pa.float32())
 
 
@@ -53,21 +59,21 @@ def _first_non_null(row: Mapping[str, object], cols: Sequence[str]) -> object | 
     return None
 
 
-def _pick_first(table: pa.Table, cols: Sequence[str], *, default_type: pa.DataType) -> pa.Array:
+def _pick_first(table: TableLike, cols: Sequence[str], *, default_type: DataTypeLike) -> ArrayLike:
     for col in cols:
         if col in table.column_names:
             return table[col]
     return pa.nulls(table.num_rows, type=default_type)
 
 
-def _resolve_string_col(rel: pa.Table, col: str, *, default_value: str) -> pa.Array:
+def _resolve_string_col(rel: TableLike, col: str, *, default_value: str) -> ArrayLike:
     arr = _pick_first(rel, [col], default_type=pa.string())
     if arr.null_count == rel.num_rows:
         return _const_str(rel.num_rows, default_value)
     return arr
 
 
-def _resolve_float_col(rel: pa.Table, col: str, *, default_value: float) -> pa.Array:
+def _resolve_float_col(rel: TableLike, col: str, *, default_value: float) -> ArrayLike:
     arr = _pick_first(rel, [col], default_type=pa.float32())
     if arr.null_count == rel.num_rows:
         return _const_f32(rel.num_rows, default_value)
@@ -78,18 +84,18 @@ def _resolve_float_col(rel: pa.Table, col: str, *, default_value: float) -> pa.A
 class EdgeIdArrays:
     """Column arrays required to compute edge IDs."""
 
-    src: pa.Array | pa.ChunkedArray
-    dst: pa.Array | pa.ChunkedArray
-    path: pa.Array | pa.ChunkedArray
-    bstart: pa.Array | pa.ChunkedArray
-    bend: pa.Array | pa.ChunkedArray
+    src: ArrayLike | ChunkedArrayLike
+    dst: ArrayLike | ChunkedArrayLike
+    path: ArrayLike | ChunkedArrayLike
+    bstart: ArrayLike | ChunkedArrayLike
+    bend: ArrayLike | ChunkedArrayLike
 
 
 def _edge_id_array(
     *,
     edge_kind: str,
     inputs: EdgeIdArrays,
-) -> pa.Array | pa.ChunkedArray:
+) -> ArrayLike | ChunkedArrayLike:
     n = len(inputs.src)
     kind_arr = _const_str(n, edge_kind)
     base_hash = hash64_from_arrays([kind_arr, inputs.src, inputs.dst], prefix="edge")
@@ -109,12 +115,12 @@ def _edge_id_array(
 
 
 def emit_edges_from_relation(
-    rel: pa.Table,
+    rel: TableLike,
     *,
     spec: EdgeEmitSpec,
     schema_version: int,
-    edge_schema: pa.Schema,
-) -> pa.Table:
+    edge_schema: SchemaLike,
+) -> TableLike:
     """Emit edge rows from a relation table.
 
     Parameters
@@ -130,7 +136,7 @@ def emit_edges_from_relation(
 
     Returns
     -------
-    pa.Table
+    TableLike
         Emitted edge table.
     """
     if rel.num_rows == 0:
@@ -190,7 +196,7 @@ class EdgeBuilder:
         *,
         emitters: Sequence[EdgePlanSpec],
         schema_version: int,
-        edge_schema: pa.Schema,
+        edge_schema: SchemaLike,
     ) -> None:
         self._emitters = tuple(emitters)
         self._schema_version = schema_version
@@ -199,14 +205,14 @@ class EdgeBuilder:
     def build(
         self,
         *,
-        tables: Mapping[str, pa.Table],
+        tables: Mapping[str, TableLike],
         options: object,
-    ) -> list[pa.Table]:
+    ) -> list[TableLike]:
         """Build edge tables from configured emitters.
 
         Returns
         -------
-        list[pa.Table]
+        list[TableLike]
             Edge table parts ready for concatenation.
 
         Raises
@@ -214,7 +220,7 @@ class EdgeBuilder:
         ValueError
             If the configured option flag is missing on the options object.
         """
-        parts: list[pa.Table] = []
+        parts: list[TableLike] = []
         for emitter in self._emitters:
             enabled = getattr(options, emitter.option_flag, None)
             if enabled is None:
@@ -243,17 +249,17 @@ class EdgeBuilder:
 
 
 def emit_nodes_from_table(
-    table: pa.Table,
+    table: TableLike,
     *,
     spec: NodeEmitSpec,
     schema_version: int,
-    node_schema: pa.Schema,
-) -> pa.Table:
+    node_schema: SchemaLike,
+) -> TableLike:
     """Emit node rows from a table.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Node table conforming to the configured schema.
     """
     if table.num_rows == 0:
@@ -291,7 +297,7 @@ class NodeBuilder:
         *,
         emitters: Sequence[NodePlanSpec],
         schema_version: int,
-        node_schema: pa.Schema,
+        node_schema: SchemaLike,
     ) -> None:
         self._emitters = tuple(emitters)
         self._schema_version = schema_version
@@ -300,14 +306,14 @@ class NodeBuilder:
     def build(
         self,
         *,
-        tables: Mapping[str, pa.Table],
+        tables: Mapping[str, TableLike],
         options: object,
-    ) -> list[pa.Table]:
+    ) -> list[TableLike]:
         """Build node tables from configured emitters.
 
         Returns
         -------
-        list[pa.Table]
+        list[TableLike]
             Node table parts ready for concatenation.
 
         Raises
@@ -315,7 +321,7 @@ class NodeBuilder:
         ValueError
             If the configured option flag is missing on the options object.
         """
-        parts: list[pa.Table] = []
+        parts: list[TableLike] = []
         for emitter in self._emitters:
             enabled = getattr(options, emitter.option_flag, None)
             if enabled is None:
@@ -392,7 +398,7 @@ class PropBuilder:
         *,
         table_specs: Sequence[PropTableSpec],
         schema_version: int,
-        prop_schema: pa.Schema,
+        prop_schema: SchemaLike,
     ) -> None:
         self._table_specs = tuple(table_specs)
         self._schema_version = schema_version
@@ -401,14 +407,14 @@ class PropBuilder:
     def build(
         self,
         *,
-        tables: Mapping[str, pa.Table],
+        tables: Mapping[str, TableLike],
         options: PropOptions,
-    ) -> pa.Table:
+    ) -> TableLike:
         """Build property table from configured specs.
 
         Returns
         -------
-        pa.Table
+        TableLike
             Property table.
         """
         rows: list[PropRow] = []
@@ -428,9 +434,9 @@ class PropBuilder:
     def _table_for_spec(
         spec: PropTableSpec,
         *,
-        tables: Mapping[str, pa.Table],
+        tables: Mapping[str, TableLike],
         options: PropOptions,
-    ) -> pa.Table | None:
+    ) -> TableLike | None:
         enabled = getattr(options, spec.option_flag, None)
         if enabled is None:
             msg = f"Unknown option flag: {spec.option_flag}"
@@ -449,7 +455,7 @@ class PropBuilder:
         rows: list[PropRow],
         *,
         spec: PropTableSpec,
-        table: pa.Table,
+        table: TableLike,
         options: PropOptions,
     ) -> None:
         cols = self._collect_columns(spec)

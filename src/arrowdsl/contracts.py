@@ -6,9 +6,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-import pyarrow as pa
+from arrowdsl.pyarrow_protocols import ArrayLike, SchemaLike, TableLike
 
-type InvariantFn = Callable[[pa.Table], tuple[pa.Array, str]]
+type InvariantFn = Callable[[TableLike], tuple[ArrayLike, str]]
 
 if TYPE_CHECKING:
     from schema_spec.core import TableSchemaSpec
@@ -62,7 +62,7 @@ class Contract:
     """Output contract: schema, invariants, and determinism policy."""
 
     name: str
-    schema: pa.Schema
+    schema: SchemaLike
     schema_spec: TableSchemaSpec | None = None
 
     key_fields: tuple[str, ...] = ()
@@ -77,7 +77,7 @@ class Contract:
     virtual_fields: tuple[str, ...] = ()
     virtual_field_docs: dict[str, str] | None = None
 
-    def with_versioned_schema(self) -> pa.Schema:
+    def with_versioned_schema(self) -> SchemaLike:
         """Return the schema with contract metadata attached.
 
         Returns

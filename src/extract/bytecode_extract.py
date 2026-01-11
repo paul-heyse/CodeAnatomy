@@ -7,10 +7,10 @@ import types as pytypes
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.ids import hash64_from_parts
 from arrowdsl.iter import iter_table_rows
+from arrowdsl.pyarrow_protocols import TableLike
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 type RowValue = str | int | bool | None
@@ -52,12 +52,12 @@ class BytecodeExtractOptions:
 class BytecodeExtractResult:
     """Extracted bytecode tables for code units, instructions, and edges."""
 
-    py_bc_code_units: pa.Table
-    py_bc_instructions: pa.Table
-    py_bc_exception_table: pa.Table
-    py_bc_blocks: pa.Table
-    py_bc_cfg_edges: pa.Table
-    py_bc_errors: pa.Table
+    py_bc_code_units: TableLike
+    py_bc_instructions: TableLike
+    py_bc_exception_table: TableLike
+    py_bc_blocks: TableLike
+    py_bc_cfg_edges: TableLike
+    py_bc_errors: TableLike
 
 
 @dataclass(frozen=True)
@@ -681,7 +681,7 @@ def _iter_code_objects(
 
 
 def extract_bytecode(
-    repo_files: pa.Table, options: BytecodeExtractOptions | None = None
+    repo_files: TableLike, options: BytecodeExtractOptions | None = None
 ) -> BytecodeExtractResult:
     """Extract bytecode tables from repository files.
 
@@ -730,9 +730,9 @@ def extract_bytecode(
 def extract_bytecode_table(
     *,
     repo_root: str | None,
-    repo_files: pa.Table,
+    repo_files: TableLike,
     ctx: object | None = None,
-) -> pa.Table:
+) -> TableLike:
     """Extract bytecode instruction facts as a single table.
 
     Parameters

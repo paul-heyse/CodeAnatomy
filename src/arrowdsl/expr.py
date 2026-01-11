@@ -5,13 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-import pyarrow as pa
-
 from arrowdsl.compute import pc
-from arrowdsl.pyarrow_protocols import ComputeExpression, ensure_expression
+from arrowdsl.pyarrow_protocols import ComputeExpression, ScalarLike, ensure_expression
 
 type ExpressionLike = str | ComputeExpression
-type ScalarValue = bool | int | float | str | bytes | pa.Scalar | None
+type ScalarValue = bool | int | float | str | bytes | ScalarLike | None
 
 
 @dataclass(frozen=True)

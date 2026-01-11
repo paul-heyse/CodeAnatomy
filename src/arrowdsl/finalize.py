@@ -6,13 +6,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
 from arrowdsl.contracts import Contract
 from arrowdsl.ids import hash64_from_columns
 from arrowdsl.iter import iter_array_values
 from arrowdsl.kernels import apply_dedupe, canonical_sort_if_canonical
+from arrowdsl.pyarrow_protocols import ArrayLike, DataTypeLike, SchemaLike, TableLike
 from arrowdsl.runtime import ExecutionContext
 from arrowdsl.schema import AlignmentInfo, align_to_schema
 from schema_spec.pandera_adapter import validate_arrow_table
@@ -34,13 +34,13 @@ class FinalizeResult:
         Schema alignment summary table.
     """
 
-    good: pa.Table
-    errors: pa.Table
-    stats: pa.Table
-    alignment: pa.Table
+    good: TableLike
+    errors: TableLike
+    stats: TableLike
+    alignment: TableLike
 
 
-def _list_str_array(values: list[list[str]]) -> pa.Array:
+def _list_str_array(values: list[list[str]]) -> ArrayLike:
     return pa.array(values, type=pa.list_(pa.string()))
 
 
@@ -48,7 +48,7 @@ def _list_str_array(values: list[list[str]]) -> pa.Array:
 class InvariantResult:
     """Invariant evaluation with metadata for error details."""
 
-    mask: pa.Array
+    mask: ArrayLike
     code: str
     message: str | None
     column: str | None
@@ -56,7 +56,7 @@ class InvariantResult:
     source: str
 
 
-ERROR_DETAIL_FIELDS: tuple[tuple[str, pa.DataType], ...] = (
+ERROR_DETAIL_FIELDS: tuple[tuple[str, DataTypeLike], ...] = (
     ("error_code", pa.string()),
     ("error_message", pa.string()),
     ("error_column", pa.string()),
@@ -68,7 +68,7 @@ ERROR_DETAIL_FIELDS: tuple[tuple[str, pa.DataType], ...] = (
 
 
 def _required_non_null_results(
-    table: pa.Table,
+    table: TableLike,
     cols: Sequence[str],
 ) -> list[InvariantResult]:
     """Return invariant results for required non-null checks.
@@ -102,7 +102,7 @@ def _required_non_null_results(
 
 
 def _collect_invariant_results(
-    table: pa.Table,
+    table: TableLike,
     contract: Contract,
 ) -> list[InvariantResult]:
     """Collect invariant results and error metadata.
@@ -136,7 +136,7 @@ def _collect_invariant_results(
     return results
 
 
-def _combine_masks(masks: Sequence[pa.Array], length: int) -> pa.Array:
+def _combine_masks(masks: Sequence[ArrayLike], length: int) -> ArrayLike:
     """Combine multiple masks into a single mask.
 
     Parameters
@@ -159,7 +159,7 @@ def _combine_masks(masks: Sequence[pa.Array], length: int) -> pa.Array:
     return pc.fill_null(combined, replacement=False)
 
 
-def _build_error_table(table: pa.Table, results: Sequence[InvariantResult]) -> pa.Table:
+def _build_error_table(table: TableLike, results: Sequence[InvariantResult]) -> TableLike:
     """Build the error table for failed invariants.
 
     Parameters
@@ -174,7 +174,7 @@ def _build_error_table(table: pa.Table, results: Sequence[InvariantResult]) -> p
     pyarrow.Table
         Error table with detail columns.
     """
-    error_parts: list[pa.Table] = []
+    error_parts: list[TableLike] = []
     for result in results:
         bad_rows = table.filter(result.mask)
         if bad_rows.num_rows == 0:
@@ -191,7 +191,7 @@ def _build_error_table(table: pa.Table, results: Sequence[InvariantResult]) -> p
     return pa.Table.from_arrays(empty_arrays, names=names)
 
 
-def _append_error_detail_columns(table: pa.Table, result: InvariantResult) -> pa.Table:
+def _append_error_detail_columns(table: TableLike, result: InvariantResult) -> TableLike:
     n = table.num_rows
     message = result.message or result.code
     error_values: dict[str, object] = {
@@ -209,7 +209,7 @@ def _append_error_detail_columns(table: pa.Table, result: InvariantResult) -> pa
     return table
 
 
-def _build_stats_table(errors: pa.Table) -> pa.Table:
+def _build_stats_table(errors: TableLike) -> TableLike:
     """Build the error statistics table.
 
     Parameters
@@ -236,11 +236,11 @@ def _build_stats_table(errors: pa.Table) -> pa.Table:
 
 
 def _maybe_validate_with_pandera(
-    table: pa.Table,
+    table: TableLike,
     *,
     contract: Contract,
     ctx: ExecutionContext,
-) -> pa.Table:
+) -> TableLike:
     policy = ctx.schema_validation
     if not policy.enabled:
         return table
@@ -256,11 +256,11 @@ def _maybe_validate_with_pandera(
 
 
 def _aggregate_error_details(
-    errors: pa.Table,
+    errors: TableLike,
     *,
     contract: Contract,
-    schema: pa.Schema,
-) -> pa.Table:
+    schema: SchemaLike,
+) -> TableLike:
     if errors.num_rows == 0:
         detail_struct = pa.struct(
             [
@@ -325,7 +325,7 @@ def _build_alignment_table(
     *,
     good_rows: int,
     error_rows: int,
-) -> pa.Table:
+) -> TableLike:
     """Build the schema alignment summary table.
 
     Parameters
@@ -357,7 +357,7 @@ def _build_alignment_table(
     )
 
 
-def finalize(table: pa.Table, *, contract: Contract, ctx: ExecutionContext) -> FinalizeResult:
+def finalize(table: TableLike, *, contract: Contract, ctx: ExecutionContext) -> FinalizeResult:
     """Finalize a table at the contract boundary.
 
     Parameters

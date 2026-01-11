@@ -1,7 +1,6 @@
 """Tests for finalize error_detail aggregation."""
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.contracts import Contract
 from arrowdsl.finalize import finalize
 from arrowdsl.runtime import ExecutionContext, RuntimeProfile

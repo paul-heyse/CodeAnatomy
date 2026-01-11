@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import pyarrow as pa
+import arrowdsl.pyarrow_core as pa
+from arrowdsl.pyarrow_protocols import ArrayLike, ListArrayLike, StructArrayLike
 
 
 def build_struct_array(
-    fields: dict[str, pa.Array],
+    fields: dict[str, ArrayLike],
     *,
-    mask: pa.Array | None = None,
-) -> pa.StructArray:
+    mask: ArrayLike | None = None,
+) -> StructArrayLike:
     """Build a struct array from named child arrays.
 
     Parameters
@@ -21,7 +22,7 @@ def build_struct_array(
 
     Returns
     -------
-    pa.StructArray
+    StructArrayLike
         Struct array with the provided fields.
     """
     names = list(fields.keys())
@@ -29,7 +30,7 @@ def build_struct_array(
     return pa.StructArray.from_arrays(arrays, names=names, mask=mask)
 
 
-def build_list_array(offsets: pa.Array, values: pa.Array) -> pa.ListArray:
+def build_list_array(offsets: ArrayLike, values: ArrayLike) -> ListArrayLike:
     """Build a list array from offsets and flat values.
 
     Parameters
@@ -41,16 +42,16 @@ def build_list_array(offsets: pa.Array, values: pa.Array) -> pa.ListArray:
 
     Returns
     -------
-    pa.ListArray
+    ListArrayLike
         List array built from offsets and values.
     """
     return pa.ListArray.from_arrays(offsets, values)
 
 
 def build_list_of_structs(
-    offsets: pa.Array,
-    struct_fields: dict[str, pa.Array],
-) -> pa.ListArray:
+    offsets: ArrayLike,
+    struct_fields: dict[str, ArrayLike],
+) -> ListArrayLike:
     """Build a list<struct<...>> array from offsets and child arrays.
 
     Parameters
@@ -62,7 +63,7 @@ def build_list_of_structs(
 
     Returns
     -------
-    pa.ListArray
+    ListArrayLike
         List array with struct elements.
     """
     struct_arr = build_struct_array(struct_fields)

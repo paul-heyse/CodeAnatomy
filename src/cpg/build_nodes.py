@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.finalize import FinalizeResult, finalize
 from arrowdsl.iter import iter_array_values
+from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, TableLike
 from arrowdsl.runtime import ExecutionContext
 from cpg.builders import NodeBuilder
 from cpg.kinds import NodeKind
@@ -17,10 +17,10 @@ from cpg.specs import NodeEmitSpec, NodePlanSpec, TableGetter
 
 
 def _set_or_append_column(
-    table: pa.Table,
+    table: TableLike,
     name: str,
-    values: pa.Array | pa.ChunkedArray,
-) -> pa.Table:
+    values: ArrayLike | ChunkedArrayLike,
+) -> TableLike:
     if name in table.column_names:
         idx = table.schema.get_field_index(name)
         return table.set_column(idx, name, values)
@@ -29,10 +29,10 @@ def _set_or_append_column(
 
 def _file_span_arrays(
     n: int,
-    size: pa.ChunkedArray | None,
+    size: ChunkedArrayLike | None,
     *,
     use_size_bytes: bool,
-) -> tuple[pa.Array, pa.Array]:
+) -> tuple[ArrayLike, ArrayLike]:
     if use_size_bytes and size is not None:
         bends: list[int | None] = []
         for value in iter_array_values(size):
@@ -51,10 +51,10 @@ def _file_span_arrays(
 
 
 def _file_nodes_table(
-    repo_files: pa.Table | None,
+    repo_files: TableLike | None,
     *,
     use_size_bytes: bool,
-) -> pa.Table | None:
+) -> TableLike | None:
     if repo_files is None or repo_files.num_rows == 0:
         return None
     if "file_id" not in repo_files.column_names or "path" not in repo_files.column_names:
@@ -66,16 +66,16 @@ def _file_nodes_table(
     return _set_or_append_column(table, "bend", bend)
 
 
-def _collect_symbols(table: pa.Table | None) -> set[str]:
+def _collect_symbols(table: TableLike | None) -> set[str]:
     if table is None or "symbol" not in table.column_names:
         return set()
     return {str(sym) for sym in iter_array_values(table["symbol"]) if sym}
 
 
 def _symbol_nodes_table(
-    scip_symbol_information: pa.Table | None,
-    scip_occurrences: pa.Table | None,
-) -> pa.Table | None:
+    scip_symbol_information: TableLike | None,
+    scip_occurrences: TableLike | None,
+) -> TableLike | None:
     symbols = _collect_symbols(scip_symbol_information)
     symbols.update(_collect_symbols(scip_occurrences))
     if not symbols:
@@ -85,7 +85,7 @@ def _symbol_nodes_table(
 
 
 def _table_getter(name: str) -> TableGetter:
-    def _get_table(tables: Mapping[str, pa.Table]) -> pa.Table | None:
+    def _get_table(tables: Mapping[str, TableLike]) -> TableLike | None:
         return tables.get(name)
 
     return _get_table
@@ -344,28 +344,28 @@ class NodeBuildOptions:
 class NodeInputTables:
     """Bundle of input tables for node construction."""
 
-    repo_files: pa.Table | None = None
-    cst_name_refs: pa.Table | None = None
-    cst_imports: pa.Table | None = None
-    cst_callsites: pa.Table | None = None
-    cst_defs: pa.Table | None = None
-    dim_qualified_names: pa.Table | None = None
-    scip_symbol_information: pa.Table | None = None
-    scip_occurrences: pa.Table | None = None
-    ts_nodes: pa.Table | None = None
-    ts_errors: pa.Table | None = None
-    ts_missing: pa.Table | None = None
-    type_exprs_norm: pa.Table | None = None
-    types_norm: pa.Table | None = None
-    diagnostics_norm: pa.Table | None = None
-    rt_objects: pa.Table | None = None
-    rt_signatures: pa.Table | None = None
-    rt_signature_params: pa.Table | None = None
-    rt_members: pa.Table | None = None
+    repo_files: TableLike | None = None
+    cst_name_refs: TableLike | None = None
+    cst_imports: TableLike | None = None
+    cst_callsites: TableLike | None = None
+    cst_defs: TableLike | None = None
+    dim_qualified_names: TableLike | None = None
+    scip_symbol_information: TableLike | None = None
+    scip_occurrences: TableLike | None = None
+    ts_nodes: TableLike | None = None
+    ts_errors: TableLike | None = None
+    ts_missing: TableLike | None = None
+    type_exprs_norm: TableLike | None = None
+    types_norm: TableLike | None = None
+    diagnostics_norm: TableLike | None = None
+    rt_objects: TableLike | None = None
+    rt_signatures: TableLike | None = None
+    rt_signature_params: TableLike | None = None
+    rt_members: TableLike | None = None
 
 
-def _node_tables(inputs: NodeInputTables, *, options: NodeBuildOptions) -> dict[str, pa.Table]:
-    tables: dict[str, pa.Table] = {}
+def _node_tables(inputs: NodeInputTables, *, options: NodeBuildOptions) -> dict[str, TableLike]:
+    tables: dict[str, TableLike] = {}
     repo_files = inputs.repo_files
     if repo_files is not None:
         tables["repo_files"] = repo_files
@@ -407,7 +407,7 @@ def build_cpg_nodes_raw(
     *,
     inputs: NodeInputTables | None = None,
     options: NodeBuildOptions | None = None,
-) -> pa.Table:
+) -> TableLike:
     """Build CPG nodes without finalization.
 
     Parameters

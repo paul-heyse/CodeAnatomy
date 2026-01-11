@@ -7,14 +7,18 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
 from arrowdsl.iter import iter_array_values
-from arrowdsl.pyarrow_protocols import UdfContext
+from arrowdsl.pyarrow_protocols import (
+    ArrayLike,
+    ChunkedArrayLike,
+    ScalarLike,
+    TableLike,
+    UdfContext,
+)
 
-type ArrayLike = pa.Array | pa.ChunkedArray
-type ArrayOrScalar = ArrayLike | pa.Scalar
+type ArrayOrScalar = ArrayLike | ScalarLike
 type MissingPolicy = Literal["raise", "null"]
 
 
@@ -42,10 +46,10 @@ def _hash64_int(value: str) -> int:
 
 def _hash64_udf(
     ctx: UdfContext,
-    array: pa.Array | pa.ChunkedArray | pa.Scalar,
-) -> pa.Array | pa.Scalar:
+    array: ArrayLike | ChunkedArrayLike | ScalarLike,
+) -> ArrayLike | ScalarLike:
     _ = ctx
-    if isinstance(array, pa.Scalar):
+    if isinstance(array, ScalarLike):
         value = array.as_py()
         if value is None:
             return pa.scalar(None, type=pa.int64())
@@ -75,12 +79,12 @@ def _ensure_hash64_udf() -> None:
 def _hash64(values: ArrayLike) -> ArrayLike:
     _ensure_hash64_udf()
     result = pc.call_function(_HASH64_FUNCTION, [values])
-    if isinstance(result, pa.Scalar):
+    if isinstance(result, ScalarLike):
         return pa.array([result.as_py()], type=pa.int64())
     return result
 
 
-def _stringify(array: ArrayLike, *, null_sentinel: str) -> pa.Array:
+def _stringify(array: ArrayLike, *, null_sentinel: str) -> ArrayLike:
     text = pc.cast(array, pa.string())
     return pc.fill_null(text, null_sentinel)
 
@@ -158,7 +162,7 @@ def hash64_from_arrays(
 
 
 def hash64_from_columns(
-    table: pa.Table,
+    table: TableLike,
     *,
     cols: Sequence[str],
     prefix: str | None = None,
@@ -208,7 +212,7 @@ def hash64_from_columns(
     return hash64_from_arrays(arrays, prefix=prefix, null_sentinel=null_sentinel)
 
 
-def add_hash64_column(table: pa.Table, *, spec: Hash64ColumnSpec) -> pa.Table:
+def add_hash64_column(table: TableLike, *, spec: Hash64ColumnSpec) -> TableLike:
     """Append a hash64-derived column to a table.
 
     Parameters

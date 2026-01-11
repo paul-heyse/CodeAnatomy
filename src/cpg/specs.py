@@ -5,13 +5,13 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Protocol
 
-import pyarrow as pa
 from pydantic import BaseModel, ConfigDict, Field
 
+from arrowdsl.pyarrow_protocols import ArrayLike, TableLike
 from cpg.kinds import EdgeKind, EntityKind, NodeKind
 
-type TableGetter = Callable[[Mapping[str, pa.Table]], pa.Table | None]
-type TableFilter = Callable[[pa.Table], pa.Array]
+type TableGetter = Callable[[Mapping[str, TableLike]], TableLike | None]
+type TableFilter = Callable[[TableLike], ArrayLike]
 
 
 class PropOptions(Protocol):
@@ -72,7 +72,7 @@ class NodePlanSpec(BaseModel):
     option_flag: str
     table_getter: TableGetter
     emit: NodeEmitSpec
-    preprocessor: Callable[[pa.Table], pa.Table] | None = None
+    preprocessor: Callable[[TableLike], TableLike] | None = None
 
 
 class PropFieldSpec(BaseModel):

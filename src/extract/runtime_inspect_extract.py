@@ -10,10 +10,10 @@ import textwrap
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_parts
+from arrowdsl.pyarrow_protocols import TableLike
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
@@ -49,10 +49,10 @@ class RuntimeInspectOptions:
 class RuntimeInspectResult:
     """Runtime inspection tables for objects, signatures, and members."""
 
-    rt_objects: pa.Table
-    rt_signatures: pa.Table
-    rt_signature_params: pa.Table
-    rt_members: pa.Table
+    rt_objects: TableLike
+    rt_signatures: TableLike
+    rt_signature_params: TableLike
+    rt_members: TableLike
 
 
 RT_OBJECTS_SPEC = TableSchemaSpec(
@@ -564,12 +564,12 @@ def extract_runtime_objects(
     *,
     module_allowlist: Sequence[str],
     timeout_s: int,
-) -> pa.Table:
+) -> TableLike:
     """Extract runtime objects via subprocess.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Runtime object table.
     """
     result = extract_runtime_tables(
@@ -584,12 +584,12 @@ def extract_runtime_signatures(
     *,
     module_allowlist: Sequence[str],
     timeout_s: int,
-) -> dict[str, pa.Table]:
+) -> dict[str, TableLike]:
     """Extract runtime signatures and parameters via subprocess.
 
     Returns
     -------
-    dict[str, pa.Table]
+    dict[str, TableLike]
         Signature bundle with ``rt_signatures`` and ``rt_signature_params``.
     """
     result = extract_runtime_tables(
@@ -607,12 +607,12 @@ def extract_runtime_members(
     *,
     module_allowlist: Sequence[str],
     timeout_s: int,
-) -> pa.Table:
+) -> TableLike:
     """Extract runtime members via subprocess.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Runtime member table.
     """
     result = extract_runtime_tables(

@@ -5,13 +5,14 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-import pyarrow as pa
 import tree_sitter_python
 from tree_sitter import Language, Parser
 
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_parts
 from arrowdsl.iter import iter_table_rows
+from arrowdsl.pyarrow_protocols import TableLike
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
@@ -38,9 +39,9 @@ class TreeSitterExtractOptions:
 class TreeSitterExtractResult:
     """Extracted tree-sitter tables for nodes and diagnostics."""
 
-    ts_nodes: pa.Table
-    ts_errors: pa.Table
-    ts_missing: pa.Table
+    ts_nodes: TableLike
+    ts_errors: TableLike
+    ts_missing: TableLike
 
 
 @dataclass
@@ -204,7 +205,7 @@ def _missing_row(node_row: Row) -> Row:
 
 
 def extract_ts(
-    repo_files: pa.Table,
+    repo_files: TableLike,
     *,
     options: TreeSitterExtractOptions | None = None,
 ) -> TreeSitterExtractResult:
@@ -305,9 +306,9 @@ def _extract_ts_for_row(
 def extract_ts_tables(
     *,
     repo_root: str | None,
-    repo_files: pa.Table,
+    repo_files: TableLike,
     ctx: object | None = None,
-) -> dict[str, pa.Table]:
+) -> dict[str, TableLike]:
     """Extract tree-sitter tables as a name-keyed bundle.
 
     Parameters

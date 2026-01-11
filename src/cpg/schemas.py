@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
+from arrowdsl.pyarrow_protocols import TableLike
 from schema_spec.contracts import ContractSpec, DedupeSpecSpec, SortKeySpec
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
@@ -146,7 +146,7 @@ CPG_EDGES_CONTRACT = CPG_EDGES_CONTRACT_SPEC.to_contract()
 CPG_PROPS_CONTRACT = CPG_PROPS_CONTRACT_SPEC.to_contract()
 
 
-def empty_nodes() -> pa.Table:
+def empty_nodes() -> TableLike:
     """Return an empty nodes table with the canonical schema.
 
     Returns
@@ -160,7 +160,7 @@ def empty_nodes() -> pa.Table:
     )
 
 
-def empty_edges() -> pa.Table:
+def empty_edges() -> TableLike:
     """Return an empty edges table with the canonical schema.
 
     Returns
@@ -174,7 +174,7 @@ def empty_edges() -> pa.Table:
     )
 
 
-def empty_props() -> pa.Table:
+def empty_props() -> TableLike:
     """Return an empty props table with the canonical schema.
 
     Returns

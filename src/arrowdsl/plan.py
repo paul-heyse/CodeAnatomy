@@ -5,14 +5,18 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
-import pyarrow as pa
-
 from arrowdsl.acero import acero
-from arrowdsl.pyarrow_protocols import ComputeExpression, DeclarationLike
+from arrowdsl.pyarrow_protocols import (
+    ComputeExpression,
+    DeclarationLike,
+    RecordBatchReaderLike,
+    SchemaLike,
+    TableLike,
+)
 from arrowdsl.runtime import ExecutionContext, Ordering, OrderingKey, OrderingLevel
 
-ReaderThunk = Callable[[], pa.RecordBatchReader]
-TableThunk = Callable[[], pa.Table]
+ReaderThunk = Callable[[], RecordBatchReaderLike]
+TableThunk = Callable[[], TableLike]
 
 
 @dataclass(frozen=True)
@@ -46,7 +50,7 @@ class Plan:
             msg = "Plan must have exactly one of: decl, reader_thunk, table_thunk."
             raise ValueError(msg)
 
-    def to_reader(self, *, ctx: ExecutionContext) -> pa.RecordBatchReader:
+    def to_reader(self, *, ctx: ExecutionContext) -> RecordBatchReaderLike:
         """Return a streaming reader for this plan.
 
         Parameters
@@ -73,7 +77,7 @@ class Plan:
         msg = "Plan has no execution source."
         raise ValueError(msg)
 
-    def to_table(self, *, ctx: ExecutionContext) -> pa.Table:
+    def to_table(self, *, ctx: ExecutionContext) -> TableLike:
         """Materialize the plan as a table.
 
         Parameters
@@ -100,7 +104,7 @@ class Plan:
         msg = "Plan has no execution source."
         raise ValueError(msg)
 
-    def schema(self, *, ctx: ExecutionContext) -> pa.Schema:
+    def schema(self, *, ctx: ExecutionContext) -> SchemaLike:
         """Return the output schema for this plan.
 
         Parameters
@@ -123,7 +127,7 @@ class Plan:
         return schema
 
     @staticmethod
-    def table_source(table: pa.Table, *, label: str = "") -> Plan:
+    def table_source(table: TableLike, *, label: str = "") -> Plan:
         """Create a Plan from an in-memory table using a table_source node.
 
         Parameters
@@ -142,7 +146,7 @@ class Plan:
         return Plan(decl=decl, label=label, ordering=Ordering.implicit())
 
     @staticmethod
-    def from_table(table: pa.Table, *, label: str = "") -> Plan:
+    def from_table(table: TableLike, *, label: str = "") -> Plan:
         """Create a Plan from an eager table.
 
         Parameters
@@ -160,7 +164,7 @@ class Plan:
         return Plan(table_thunk=lambda: table, label=label, ordering=Ordering.implicit())
 
     @staticmethod
-    def from_reader(reader: pa.RecordBatchReader, *, label: str = "") -> Plan:
+    def from_reader(reader: RecordBatchReaderLike, *, label: str = "") -> Plan:
         """Create a Plan from a reader.
 
         Parameters

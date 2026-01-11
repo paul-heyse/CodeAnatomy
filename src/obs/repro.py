@@ -15,9 +15,8 @@ from importlib import metadata as importlib_metadata
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 
-import pyarrow as pa
-
 from arrowdsl.contracts import Contract, DedupeSpec, SortKey
+from arrowdsl.pyarrow_protocols import DataTypeLike, SchemaLike, TableLike
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from relspec.compiler import CompiledOutput
 from relspec.model import RelationshipRule
@@ -117,9 +116,9 @@ def _ensure_dir(path: Path) -> None:
 
 def _json_default(obj: object) -> JsonValue:
     # Arrow types
-    if isinstance(obj, pa.Schema):
+    if isinstance(obj, SchemaLike):
         return arrow_schema_to_dict(obj)
-    if isinstance(obj, pa.DataType):
+    if isinstance(obj, DataTypeLike):
         return str(obj)
 
     # Common containers
@@ -151,7 +150,7 @@ def _write_json(path: PathLike, data: JsonValue, *, overwrite: bool = True) -> s
 # -----------------------
 
 
-def arrow_schema_to_dict(schema: pa.Schema) -> JsonDict:
+def arrow_schema_to_dict(schema: SchemaLike) -> JsonDict:
     """Serialize an Arrow schema to a plain dictionary.
 
     Returns
@@ -166,7 +165,7 @@ def arrow_schema_to_dict(schema: pa.Schema) -> JsonDict:
     }
 
 
-def schema_fingerprint(schema: pa.Schema) -> str:
+def schema_fingerprint(schema: SchemaLike) -> str:
     """Compute a stable schema fingerprint hash.
 
     Returns
@@ -362,9 +361,9 @@ class RunBundleContext:
     compiled_relationship_outputs: Mapping[str, CompiledOutput] | None = None
 
     relspec_input_locations: Mapping[str, DatasetLocation] | None = None
-    relspec_input_tables: Mapping[str, pa.Table] | None = None
-    relationship_output_tables: Mapping[str, pa.Table] | None = None
-    cpg_output_tables: Mapping[str, pa.Table] | None = None
+    relspec_input_tables: Mapping[str, TableLike] | None = None
+    relationship_output_tables: Mapping[str, TableLike] | None = None
+    cpg_output_tables: Mapping[str, TableLike] | None = None
 
     include_schemas: bool = True
     overwrite: bool = True
@@ -429,7 +428,7 @@ def _write_schema_snapshot(
     schemas_dir: Path,
     *,
     name: str,
-    table: pa.Table,
+    table: TableLike,
     files_written: list[str],
 ) -> None:
     doc: JsonDict = {
@@ -445,7 +444,7 @@ def _write_schema_group(
     schemas_dir: Path,
     *,
     prefix: str,
-    tables: Mapping[str, pa.Table] | None,
+    tables: Mapping[str, TableLike] | None,
     files_written: list[str],
 ) -> None:
     if not tables:

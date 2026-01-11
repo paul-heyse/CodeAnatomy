@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import cast
 
 import libcst as cst
-import pyarrow as pa
 from libcst import helpers
 from libcst.metadata import (
     BaseMetadataProvider,
@@ -19,10 +18,12 @@ from libcst.metadata import (
     QualifiedNameProvider,
 )
 
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_parts
 from arrowdsl.iter import iter_table_rows
 from arrowdsl.nested import build_list_array, build_list_of_structs
+from arrowdsl.pyarrow_protocols import TableLike
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
@@ -88,13 +89,13 @@ class CSTExtractOptions:
 class CSTExtractResult:
     """Hold extracted CST tables for manifests, errors, names, imports, and calls."""
 
-    py_cst_parse_manifest: pa.Table
-    py_cst_parse_errors: pa.Table
-    py_cst_name_refs: pa.Table
-    py_cst_imports: pa.Table
-    py_cst_callsites: pa.Table
-    py_cst_defs: pa.Table
-    py_cst_type_exprs: pa.Table
+    py_cst_parse_manifest: TableLike
+    py_cst_parse_errors: TableLike
+    py_cst_name_refs: TableLike
+    py_cst_imports: TableLike
+    py_cst_callsites: TableLike
+    py_cst_defs: TableLike
+    py_cst_type_exprs: TableLike
 
 
 QNAME_STRUCT = pa.struct([("name", pa.string()), ("source", pa.string())])
@@ -959,7 +960,9 @@ def _extract_cst_for_row(rf: dict[str, object], ctx: CSTExtractContext) -> None:
     _visit_with_collector(module, file_ctx=file_ctx, ctx=ctx)
 
 
-def extract_cst(repo_files: pa.Table, options: CSTExtractOptions | None = None) -> CSTExtractResult:
+def extract_cst(
+    repo_files: TableLike, options: CSTExtractOptions | None = None
+) -> CSTExtractResult:
     """Extract LibCST-derived structures from repo files.
 
     Returns
@@ -1054,9 +1057,9 @@ def _build_cst_result(ctx: CSTExtractContext) -> CSTExtractResult:
 def extract_cst_tables(
     *,
     repo_root: str | None,
-    repo_files: pa.Table,
+    repo_files: TableLike,
     ctx: object | None = None,
-) -> dict[str, pa.Table]:
+) -> dict[str, TableLike]:
     """Extract CST tables as a name-keyed bundle.
 
     Parameters

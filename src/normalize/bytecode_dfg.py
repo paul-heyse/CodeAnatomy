@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.columns import coalesce_string
 from arrowdsl.compute import pc
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_arrays
 from arrowdsl.iter import iter_arrays
+from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
@@ -50,8 +50,6 @@ USE_PREFIXES = ("LOAD_",)
 DEF_PREFIXES = ("STORE_", "DELETE_")
 DEF_OPS = {"IMPORT_NAME", "IMPORT_FROM"}
 
-type ArrayLike = pa.Array | pa.ChunkedArray
-
 
 def _prefixed_hash64(prefix: str, arrays: list[ArrayLike]) -> ArrayLike:
     hashed = hash64_from_arrays(arrays, prefix=prefix)
@@ -60,16 +58,16 @@ def _prefixed_hash64(prefix: str, arrays: list[ArrayLike]) -> ArrayLike:
 
 
 def _column_or_null(
-    table: pa.Table,
+    table: TableLike,
     col: str,
-    dtype: pa.DataType,
-) -> pa.Array | pa.ChunkedArray:
+    dtype: DataTypeLike,
+) -> ArrayLike | ChunkedArrayLike:
     if col in table.column_names:
         return table[col]
     return pa.nulls(table.num_rows, type=dtype)
 
 
-def build_def_use_events(py_bc_instructions: pa.Table) -> pa.Table:
+def build_def_use_events(py_bc_instructions: TableLike) -> TableLike:
     """Build def/use events from bytecode instruction rows.
 
     Parameters
@@ -79,7 +77,7 @@ def build_def_use_events(py_bc_instructions: pa.Table) -> pa.Table:
 
     Returns
     -------
-    pa.Table
+    TableLike
         Def/use events table.
     """
     if py_bc_instructions.num_rows == 0:
@@ -148,7 +146,7 @@ def build_def_use_events(py_bc_instructions: pa.Table) -> pa.Table:
     )
 
 
-def run_reaching_defs(def_use_events: pa.Table) -> pa.Table:
+def run_reaching_defs(def_use_events: TableLike) -> TableLike:
     """Compute a best-effort reaching-defs edge table.
 
     This is a conservative, symbol-matching approximation that joins definitions to uses
@@ -161,7 +159,7 @@ def run_reaching_defs(def_use_events: pa.Table) -> pa.Table:
 
     Returns
     -------
-    pa.Table
+    TableLike
         Reaching-def edges table.
     """
     if def_use_events.num_rows == 0:
@@ -183,7 +181,7 @@ def run_reaching_defs(def_use_events: pa.Table) -> pa.Table:
 
 
 def _group_def_use_events(
-    def_use_events: pa.Table,
+    def_use_events: TableLike,
 ) -> tuple[
     dict[tuple[str, str], list[dict[str, object]]], dict[tuple[str, str], list[dict[str, object]]]
 ]:

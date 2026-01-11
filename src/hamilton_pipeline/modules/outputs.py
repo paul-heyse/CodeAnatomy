@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 from hamilton.function_modifiers import tag
 
+from arrowdsl.pyarrow_protocols import TableLike
 from core_types import JsonDict
 from hamilton_pipeline.pipeline_types import (
     CpgOutputTables,
@@ -32,36 +32,36 @@ from storage.parquet import ParquetWriteOptions, write_named_datasets_parquet
 
 
 @tag(layer="outputs", artifact="cpg_nodes", kind="table")
-def cpg_nodes(cpg_nodes_final: pa.Table) -> pa.Table:
+def cpg_nodes(cpg_nodes_final: TableLike) -> TableLike:
     """Return the final CPG nodes table.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Final CPG nodes table.
     """
     return cpg_nodes_final
 
 
 @tag(layer="outputs", artifact="cpg_edges", kind="table")
-def cpg_edges(cpg_edges_final: pa.Table) -> pa.Table:
+def cpg_edges(cpg_edges_final: TableLike) -> TableLike:
     """Return the final CPG edges table.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Final CPG edges table.
     """
     return cpg_edges_final
 
 
 @tag(layer="outputs", artifact="cpg_props", kind="table")
-def cpg_props(cpg_props_final: pa.Table) -> pa.Table:
+def cpg_props(cpg_props_final: TableLike) -> TableLike:
     """Return the final CPG properties table.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Final CPG properties table.
     """
     return cpg_props_final
@@ -69,13 +69,13 @@ def cpg_props(cpg_props_final: pa.Table) -> pa.Table:
 
 @tag(layer="outputs", artifact="cpg_bundle", kind="bundle")
 def cpg_bundle(
-    cpg_nodes: pa.Table, cpg_edges: pa.Table, cpg_props: pa.Table
-) -> dict[str, pa.Table]:
+    cpg_nodes: TableLike, cpg_edges: TableLike, cpg_props: TableLike
+) -> dict[str, TableLike]:
     """Bundle CPG tables into a dictionary.
 
     Returns
     -------
-    dict[str, pa.Table]
+    dict[str, TableLike]
         Bundle of CPG nodes, edges, and properties.
     """
     return {"cpg_nodes": cpg_nodes, "cpg_edges": cpg_edges, "cpg_props": cpg_props}
@@ -130,7 +130,7 @@ class RunBundleInputs:
 
 @tag(layer="materialize", artifact="normalized_inputs_parquet", kind="side_effect")
 def write_normalized_inputs_parquet(
-    relspec_input_datasets: dict[str, pa.Table],
+    relspec_input_datasets: dict[str, TableLike],
     output_dir: str | None,
     work_dir: str | None,
 ) -> JsonDict | None:
@@ -178,7 +178,7 @@ def write_normalized_inputs_parquet(
 
 
 @tag(layer="materialize", artifact="cpg_nodes_parquet", kind="side_effect")
-def write_cpg_nodes_parquet(output_dir: str | None, cpg_nodes: pa.Table) -> JsonDict | None:
+def write_cpg_nodes_parquet(output_dir: str | None, cpg_nodes: TableLike) -> JsonDict | None:
     """Write CPG nodes to Parquet in the output directory.
 
     Returns
@@ -196,7 +196,7 @@ def write_cpg_nodes_parquet(output_dir: str | None, cpg_nodes: pa.Table) -> Json
 
 
 @tag(layer="materialize", artifact="cpg_edges_parquet", kind="side_effect")
-def write_cpg_edges_parquet(output_dir: str | None, cpg_edges: pa.Table) -> JsonDict | None:
+def write_cpg_edges_parquet(output_dir: str | None, cpg_edges: TableLike) -> JsonDict | None:
     """Write CPG edges to Parquet in the output directory.
 
     Returns
@@ -214,7 +214,7 @@ def write_cpg_edges_parquet(output_dir: str | None, cpg_edges: pa.Table) -> Json
 
 
 @tag(layer="materialize", artifact="cpg_props_parquet", kind="side_effect")
-def write_cpg_props_parquet(output_dir: str | None, cpg_props: pa.Table) -> JsonDict | None:
+def write_cpg_props_parquet(output_dir: str | None, cpg_props: TableLike) -> JsonDict | None:
     """Write CPG properties to Parquet in the output directory.
 
     Returns
@@ -237,24 +237,24 @@ def write_cpg_props_parquet(output_dir: str | None, cpg_props: pa.Table) -> Json
 
 
 @tag(layer="obs", artifact="relspec_input_dataset_stats", kind="table")
-def relspec_input_dataset_stats(relspec_input_datasets: dict[str, pa.Table]) -> pa.Table:
+def relspec_input_dataset_stats(relspec_input_datasets: dict[str, TableLike]) -> TableLike:
     """Build dataset-level stats for relationship inputs.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Dataset-level statistics table.
     """
     return dataset_stats_table(relspec_input_datasets)
 
 
 @tag(layer="obs", artifact="relspec_input_column_stats", kind="table")
-def relspec_input_column_stats(relspec_input_datasets: dict[str, pa.Table]) -> pa.Table:
+def relspec_input_column_stats(relspec_input_datasets: dict[str, TableLike]) -> TableLike:
     """Build column-level stats for relationship inputs.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Column-level statistics table.
     """
     return column_stats_table(relspec_input_datasets)
@@ -288,7 +288,7 @@ def manifest_context(
 
 @tag(layer="obs", artifact="relspec_inputs_bundle", kind="bundle")
 def relspec_inputs_bundle(
-    relspec_input_datasets: dict[str, pa.Table],
+    relspec_input_datasets: dict[str, TableLike],
     persist_relspec_input_datasets: dict[str, DatasetLocation],
 ) -> RelspecInputsBundle:
     """Bundle relationship input tables and locations.
@@ -306,9 +306,9 @@ def relspec_inputs_bundle(
 
 @tag(layer="obs", artifact="cpg_output_tables", kind="bundle")
 def cpg_output_tables(
-    cpg_nodes: pa.Table,
-    cpg_edges: pa.Table,
-    cpg_props: pa.Table,
+    cpg_nodes: TableLike,
+    cpg_edges: TableLike,
+    cpg_props: TableLike,
 ) -> CpgOutputTables:
     """Bundle CPG output tables.
 

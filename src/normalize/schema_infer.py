@@ -7,9 +7,10 @@ from dataclasses import dataclass
 
 import pandas as pd
 import pandera.pandas as pa_pd
-import pyarrow as pa
 import pyarrow.types as patypes
 
+import arrowdsl.pyarrow_core as pa
+from arrowdsl.pyarrow_protocols import DataTypeLike, FieldLike, SchemaLike, TableLike
 from arrowdsl.schema import align_to_schema
 
 
@@ -27,7 +28,7 @@ class SchemaInferOptions:
     use_pandera_infer: bool = True
 
 
-def _pandera_infer_schema(table: pa.Table) -> pa.Schema | None:
+def _pandera_infer_schema(table: TableLike) -> SchemaLike | None:
     if table.num_rows == 0:
         return None
     df = pd.DataFrame(table.to_pydict())
@@ -35,7 +36,7 @@ def _pandera_infer_schema(table: pa.Table) -> pa.Schema | None:
     return _pandera_pandas_schema_to_arrow(pandera_schema)
 
 
-def _pandas_dtype_to_arrow(dtype: object) -> pa.DataType:
+def _pandas_dtype_to_arrow(dtype: object) -> DataTypeLike:
     dtype_value = getattr(dtype, "type", None)
     if dtype_value is None:
         dtype_value = dtype
@@ -61,16 +62,16 @@ def _pandas_dtype_to_arrow(dtype: object) -> pa.DataType:
     return arrow_dtype
 
 
-def _pandera_pandas_schema_to_arrow(schema: pa_pd.DataFrameSchema) -> pa.Schema:
-    fields: list[pa.Field] = []
+def _pandera_pandas_schema_to_arrow(schema: pa_pd.DataFrameSchema) -> SchemaLike:
+    fields: list[FieldLike] = []
     for name, column in schema.columns.items():
         arrow_dtype = _pandas_dtype_to_arrow(column.dtype)
         fields.append(pa.field(name, arrow_dtype, nullable=column.nullable))
     return pa.schema(fields)
 
 
-def _prefer_arrow_nested(base: pa.Schema, merged: pa.Schema) -> pa.Schema:
-    fields: list[pa.Field] = []
+def _prefer_arrow_nested(base: SchemaLike, merged: SchemaLike) -> SchemaLike:
+    fields: list[FieldLike] = []
     base_map = {field.name: field for field in base}
     for field in merged:
         base_field = base_map.get(field.name)
@@ -82,8 +83,8 @@ def _prefer_arrow_nested(base: pa.Schema, merged: pa.Schema) -> pa.Schema:
 
 
 def unify_schemas(
-    schemas: Sequence[pa.Schema], opts: SchemaInferOptions | None = None
-) -> pa.Schema:
+    schemas: Sequence[SchemaLike], opts: SchemaInferOptions | None = None
+) -> SchemaLike:
     """Unify schemas across tables or fragments with permissive promotion.
 
     Notes
@@ -93,7 +94,7 @@ def unify_schemas(
 
     Returns
     -------
-    pa.Schema
+    SchemaLike
         Unified schema.
     """
     opts = opts or SchemaInferOptions()
@@ -108,13 +109,13 @@ def unify_schemas(
 
 
 def infer_schema_from_tables(
-    tables: Sequence[pa.Table], opts: SchemaInferOptions | None = None
-) -> pa.Schema:
+    tables: Sequence[TableLike], opts: SchemaInferOptions | None = None
+) -> SchemaLike:
     """Compute a unified schema for a set of tables.
 
     Returns
     -------
-    pa.Schema
+    SchemaLike
         Unified schema inferred from the input tables.
     """
     opts = opts or SchemaInferOptions()
@@ -138,11 +139,11 @@ def infer_schema_from_tables(
 
 
 def align_table_to_schema(
-    table: pa.Table,
-    schema: pa.Schema,
+    table: TableLike,
+    schema: SchemaLike,
     *,
     opts: SchemaInferOptions | None = None,
-) -> pa.Table:
+) -> TableLike:
     """Align a table to a target schema.
 
     Aligns the table by:
@@ -155,7 +156,7 @@ def align_table_to_schema(
 
     Returns
     -------
-    pa.Table
+    TableLike
         Table aligned to the provided schema.
     """
     opts = opts or SchemaInferOptions()
@@ -170,15 +171,15 @@ def align_table_to_schema(
 
 
 def align_tables_to_unified_schema(
-    tables: Sequence[pa.Table],
+    tables: Sequence[TableLike],
     *,
     opts: SchemaInferOptions | None = None,
-) -> tuple[pa.Schema, list[pa.Table]]:
+) -> tuple[SchemaLike, list[TableLike]]:
     """Infer a unified schema and align all tables to it.
 
     Returns
     -------
-    tuple[pa.Schema, list[pa.Table]]
+    tuple[SchemaLike, list[TableLike]]
         Unified schema and aligned tables.
     """
     opts = opts or SchemaInferOptions()

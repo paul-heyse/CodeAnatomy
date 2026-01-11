@@ -6,14 +6,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.iter import iter_arrays
+from arrowdsl.pyarrow_protocols import ArrayLike, DataTypeLike, TableLike
 from normalize.ids import add_span_id_column
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 type RowValue = object | None
-type ArrayLike = pa.Array | pa.ChunkedArray
 
 ENC_UTF8 = 1
 ENC_UTF16 = 2
@@ -134,7 +133,7 @@ SPAN_ERROR_SPEC = TableSchemaSpec(
 SPAN_ERROR_SCHEMA = SPAN_ERROR_SPEC.to_arrow_schema()
 
 
-def _column_or_null(table: pa.Table, col: str, dtype: pa.DataType) -> ArrayLike:
+def _column_or_null(table: TableLike, col: str, dtype: DataTypeLike) -> ArrayLike:
     if col in table.column_names:
         return table[col]
     return pa.nulls(table.num_rows, type=dtype)
@@ -195,7 +194,7 @@ def _build_line_index_utf8(text: str) -> tuple[list[str], list[int]]:
 
 
 def build_repo_text_index(
-    repo_files: pa.Table, *, repo_root: str | None = None, ctx: object | None = None
+    repo_files: TableLike, *, repo_root: str | None = None, ctx: object | None = None
 ) -> RepoTextIndex:
     """Build lookup structures from repo_files output.
 
@@ -432,7 +431,7 @@ class AstSpanInputs:
     end_cols: ArrayLike
 
 
-def _ast_span_inputs(py_ast_nodes: pa.Table, cols: AstSpanColumns) -> AstSpanInputs:
+def _ast_span_inputs(py_ast_nodes: TableLike, cols: AstSpanColumns) -> AstSpanInputs:
     end_linenos = _column_or_null(py_ast_nodes, cols.end_lineno, pa.int64())
     end_cols = _column_or_null(py_ast_nodes, cols.end_col, pa.int64())
     return AstSpanInputs(
@@ -488,17 +487,17 @@ def _compute_ast_spans(
 
 def add_ast_byte_spans(
     repo_index: RepoTextIndex,
-    py_ast_nodes: pa.Table,
+    py_ast_nodes: TableLike,
     *,
     columns: AstSpanColumns | None = None,
-) -> pa.Table:
+) -> TableLike:
     """Add (bstart, bend, span_ok) columns to AST nodes.
 
     This makes AST nodes joinable on byte spans (when applicable).
 
     Returns
     -------
-    pa.Table
+    TableLike
         Table with appended span columns.
     """
     cols = columns or AstSpanColumns()
@@ -528,7 +527,7 @@ def _span_error(document_id: str, path: str, reason: str) -> dict[str, str]:
 
 
 def _build_doc_posenc_map(
-    scip_documents: pa.Table,
+    scip_documents: TableLike,
     columns: ScipOccurrenceColumns,
 ) -> dict[str, int]:
     """Build document_id -> position encoding map.
@@ -551,7 +550,7 @@ def _build_doc_posenc_map(
 
 
 def _build_occurrence_rows(
-    scip_occurrences: pa.Table,
+    scip_occurrences: TableLike,
     columns: ScipOccurrenceColumns,
 ) -> list[OccurrenceRow]:
     """Materialize occurrence rows for span conversion.
@@ -683,16 +682,16 @@ def _compute_occurrence_span(
 
 
 def _append_span_column(
-    table: pa.Table,
+    table: TableLike,
     name: str,
     values: list[int | None] | list[bool],
-    data_type: pa.DataType,
-) -> pa.Table:
+    data_type: DataTypeLike,
+) -> TableLike:
     """Append a column if missing.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Updated table.
     """
     if name in table.column_names:
@@ -700,12 +699,12 @@ def _append_span_column(
     return table.append_column(name, pa.array(values, type=data_type))
 
 
-def _span_error_table(rows: list[dict[str, str]]) -> pa.Table:
+def _span_error_table(rows: list[dict[str, str]]) -> TableLike:
     """Build the span error table.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Span error table.
     """
     if rows:
@@ -722,12 +721,12 @@ def _span_error_table(rows: list[dict[str, str]]) -> pa.Table:
 
 def add_scip_occurrence_byte_spans(
     repo_text_index: RepoTextIndex,
-    scip_documents: pa.Table,
-    scip_occurrences: pa.Table,
+    scip_documents: TableLike,
+    scip_occurrences: TableLike,
     *,
     columns: ScipOccurrenceColumns | None = None,
     ctx: object | None = None,
-) -> tuple[pa.Table, pa.Table]:
+) -> tuple[TableLike, TableLike]:
     """Add byte spans to scip_occurrences using document position encodings.
 
     span_errors_table is intended for observability/debugging (invalid line/char, missing file text,
@@ -735,7 +734,7 @@ def add_scip_occurrence_byte_spans(
 
     Returns
     -------
-    tuple[pa.Table, pa.Table]
+    tuple[TableLike, TableLike]
         Occurrences with spans and a span errors table.
     """
     _ = ctx
@@ -774,12 +773,12 @@ def add_scip_occurrence_byte_spans(
 # -----------------------------
 
 
-def _append_alias_cols(table: pa.Table, aliases: dict[str, str]) -> pa.Table:
+def _append_alias_cols(table: TableLike, aliases: dict[str, str]) -> TableLike:
     """Append alias columns mapped to existing columns.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Table with alias columns appended.
     """
     out = table
@@ -794,10 +793,10 @@ def _append_alias_cols(table: pa.Table, aliases: dict[str, str]) -> pa.Table:
 
 
 def normalize_cst_callsites_spans(
-    py_cst_callsites: pa.Table,
+    py_cst_callsites: TableLike,
     *,
     primary: Literal["callee", "call"] = "callee",
-) -> pa.Table:
+) -> TableLike:
     """Ensure callsites have canonical (bstart, bend) columns for joins.
 
     primary="callee" means:
@@ -805,7 +804,7 @@ def normalize_cst_callsites_spans(
 
     Returns
     -------
-    pa.Table
+    TableLike
         Callsites table with canonical span aliases.
     """
     if primary == "call":
@@ -814,15 +813,15 @@ def normalize_cst_callsites_spans(
 
 
 def normalize_cst_imports_spans(
-    py_cst_imports: pa.Table,
+    py_cst_imports: TableLike,
     *,
     primary: Literal["alias", "stmt"] = "alias",
-) -> pa.Table:
+) -> TableLike:
     """Ensure imports have canonical (bstart, bend) columns.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Imports table with canonical span aliases.
     """
     if primary == "stmt":
@@ -831,17 +830,17 @@ def normalize_cst_imports_spans(
 
 
 def normalize_cst_defs_spans(
-    py_cst_defs: pa.Table,
+    py_cst_defs: TableLike,
     *,
     primary: Literal["name", "def"] = "name",
-) -> pa.Table:
+) -> TableLike:
     """Ensure defs have canonical (bstart, bend) columns.
 
     primary="name" makes bstart/bend match the identifier token span (recommended for SCIP definition joins).
 
     Returns
     -------
-    pa.Table
+    TableLike
         Definitions table with canonical span aliases.
     """
     if primary == "def":

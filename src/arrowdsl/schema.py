@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from typing import Literal, TypedDict
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
+from arrowdsl.pyarrow_protocols import ArrayLike, FieldLike, SchemaLike, TableLike
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
-type ArrayLike = pa.Array | pa.ChunkedArray
 
 
 class AlignmentInfo(TypedDict):
@@ -25,7 +24,7 @@ class AlignmentInfo(TypedDict):
 
 def _cast_column(
     col: ArrayLike,
-    field: pa.Field,
+    field: FieldLike,
     *,
     safe_cast: bool,
     on_error: CastErrorPolicy,
@@ -39,9 +38,9 @@ def _cast_column(
 
     Raises
     ------
-    pyarrow.ArrowInvalid
+    ArrowInvalid
         Raised when casting fails and ``on_error="raise"``.
-    pyarrow.ArrowTypeError
+    ArrowTypeError
         Raised when casting fails and ``on_error="raise"``.
     """
     if col.type == field.type:
@@ -57,13 +56,13 @@ def _cast_column(
 
 
 def align_to_schema(
-    table: pa.Table,
+    table: TableLike,
     *,
-    schema: pa.Schema,
+    schema: SchemaLike,
     safe_cast: bool,
     on_error: CastErrorPolicy = "unsafe",
     keep_extra_columns: bool = False,
-) -> tuple[pa.Table, AlignmentInfo]:
+) -> tuple[TableLike, AlignmentInfo]:
     """Align and cast a table to a target schema.
 
     Parameters

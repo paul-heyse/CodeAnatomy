@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
 
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
 from arrowdsl.ids import hash64_from_arrays
 from arrowdsl.iter import iter_array_values, iter_arrays
 from arrowdsl.kernels import explode_list_column
+from arrowdsl.pyarrow_protocols import TableLike
 from arrowdsl.runtime import ExecutionContext
 from normalize.bytecode_anchor import anchor_instructions
 from normalize.bytecode_cfg import build_cfg_blocks, build_cfg_edges
@@ -59,7 +60,7 @@ def _qname_fields(value: object) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _collect_string_lists(table: pa.Table | None, column: str) -> list[str]:
+def _collect_string_lists(table: TableLike | None, column: str) -> list[str]:
     """Flatten a list-valued column into a list of strings.
 
     Returns
@@ -85,10 +86,10 @@ def _collect_string_lists(table: pa.Table | None, column: str) -> list[str]:
 @cache()
 @tag(layer="normalize", artifact="dim_qualified_names", kind="table")
 def dim_qualified_names(
-    cst_callsites: pa.Table,
-    cst_defs: pa.Table,
+    cst_callsites: TableLike,
+    cst_defs: TableLike,
     ctx: ExecutionContext,
-) -> pa.Table:
+) -> TableLike:
     """Build a dimension table of qualified names from CST extraction.
 
     Expected output columns:
@@ -97,7 +98,7 @@ def dim_qualified_names(
 
     Returns
     -------
-    pa.Table
+    TableLike
         Qualified name dimension table.
     """
     _ = ctx
@@ -124,9 +125,9 @@ def dim_qualified_names(
 @cache()
 @tag(layer="normalize", artifact="callsite_qname_candidates", kind="table")
 def callsite_qname_candidates(
-    cst_callsites: pa.Table,
+    cst_callsites: TableLike,
     ctx: ExecutionContext,
-) -> pa.Table:
+) -> TableLike:
     """Explode callsite qualified names into a row-per-candidate table.
 
     Output columns (minimum):
@@ -139,7 +140,7 @@ def callsite_qname_candidates(
 
     Returns
     -------
-    pa.Table
+    TableLike
         Table of callsite qualified name candidates.
     """
     _ = ctx
@@ -204,14 +205,14 @@ def callsite_qname_candidates(
 @tag(layer="normalize", artifact="ast_nodes_norm", kind="table")
 def ast_nodes_norm(
     repo_text_index: RepoTextIndex,
-    ast_nodes: pa.Table,
+    ast_nodes: TableLike,
     ctx: ExecutionContext,
-) -> pa.Table:
+) -> TableLike:
     """Add byte-span columns to AST nodes for join-ready alignment.
 
     Returns
     -------
-    pa.Table
+    TableLike
         AST nodes with bstart/bend/span_ok columns appended.
     """
     _ = ctx
@@ -222,14 +223,14 @@ def ast_nodes_norm(
 @tag(layer="normalize", artifact="py_bc_instructions_norm", kind="table")
 def py_bc_instructions_norm(
     repo_text_index: RepoTextIndex,
-    py_bc_instructions: pa.Table,
+    py_bc_instructions: TableLike,
     ctx: ExecutionContext,
-) -> pa.Table:
+) -> TableLike:
     """Anchor bytecode instructions to source byte spans.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Bytecode instruction table with bstart/bend/span_ok columns.
     """
     _ = ctx
@@ -239,15 +240,15 @@ def py_bc_instructions_norm(
 @cache()
 @tag(layer="normalize", artifact="py_bc_blocks_norm", kind="table")
 def py_bc_blocks_norm(
-    py_bc_blocks: pa.Table,
-    py_bc_code_units: pa.Table,
+    py_bc_blocks: TableLike,
+    py_bc_code_units: TableLike,
     ctx: ExecutionContext,
-) -> pa.Table:
+) -> TableLike:
     """Normalize bytecode CFG blocks with file/path metadata.
 
     Returns
     -------
-    pa.Table
+    TableLike
         CFG block table aligned to the normalization schema.
     """
     return build_cfg_blocks(py_bc_blocks, py_bc_code_units, ctx=ctx)
@@ -256,15 +257,15 @@ def py_bc_blocks_norm(
 @cache()
 @tag(layer="normalize", artifact="py_bc_cfg_edges_norm", kind="table")
 def py_bc_cfg_edges_norm(
-    py_bc_code_units: pa.Table,
-    py_bc_cfg_edges: pa.Table,
+    py_bc_code_units: TableLike,
+    py_bc_cfg_edges: TableLike,
     ctx: ExecutionContext,
-) -> pa.Table:
+) -> TableLike:
     """Normalize bytecode CFG edges with file/path metadata.
 
     Returns
     -------
-    pa.Table
+    TableLike
         CFG edge table aligned to the normalization schema.
     """
     return build_cfg_edges(py_bc_code_units, py_bc_cfg_edges, ctx=ctx)
@@ -272,12 +273,12 @@ def py_bc_cfg_edges_norm(
 
 @cache()
 @tag(layer="normalize", artifact="py_bc_def_use_events", kind="table")
-def py_bc_def_use_events(py_bc_instructions: pa.Table, ctx: ExecutionContext) -> pa.Table:
+def py_bc_def_use_events(py_bc_instructions: TableLike, ctx: ExecutionContext) -> TableLike:
     """Derive def/use events from bytecode instructions.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Def/use events table.
     """
     _ = ctx
@@ -286,12 +287,12 @@ def py_bc_def_use_events(py_bc_instructions: pa.Table, ctx: ExecutionContext) ->
 
 @cache()
 @tag(layer="normalize", artifact="py_bc_reaching_defs", kind="table")
-def py_bc_reaching_defs(py_bc_def_use_events: pa.Table, ctx: ExecutionContext) -> pa.Table:
+def py_bc_reaching_defs(py_bc_def_use_events: TableLike, ctx: ExecutionContext) -> TableLike:
     """Compute reaching-def edges from def/use events.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Reaching-def edges table.
     """
     _ = ctx
@@ -300,12 +301,12 @@ def py_bc_reaching_defs(py_bc_def_use_events: pa.Table, ctx: ExecutionContext) -
 
 @cache()
 @tag(layer="normalize", artifact="type_exprs_norm", kind="table")
-def type_exprs_norm(cst_type_exprs: pa.Table, ctx: ExecutionContext) -> pa.Table:
+def type_exprs_norm(cst_type_exprs: TableLike, ctx: ExecutionContext) -> TableLike:
     """Normalize CST type expressions into join-ready tables.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Normalized type expressions table.
     """
     _ = ctx
@@ -315,15 +316,15 @@ def type_exprs_norm(cst_type_exprs: pa.Table, ctx: ExecutionContext) -> pa.Table
 @cache()
 @tag(layer="normalize", artifact="types_norm", kind="table")
 def types_norm(
-    type_exprs_norm: pa.Table,
-    scip_symbol_information: pa.Table,
+    type_exprs_norm: TableLike,
+    scip_symbol_information: TableLike,
     ctx: ExecutionContext,
-) -> pa.Table:
+) -> TableLike:
     """Normalize type expressions into type nodes.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Normalized type node table.
     """
     _ = ctx
@@ -333,11 +334,11 @@ def types_norm(
 @cache()
 @tag(layer="normalize", artifact="diagnostics_sources", kind="object")
 def diagnostics_sources(
-    cst_parse_errors: pa.Table,
-    ts_errors: pa.Table,
-    ts_missing: pa.Table,
-    scip_diagnostics: pa.Table,
-    scip_documents: pa.Table,
+    cst_parse_errors: TableLike,
+    ts_errors: TableLike,
+    ts_missing: TableLike,
+    scip_diagnostics: TableLike,
+    scip_documents: TableLike,
 ) -> DiagnosticsSources:
     """Bundle diagnostic source tables.
 
@@ -361,12 +362,12 @@ def diagnostics_norm(
     repo_text_index: RepoTextIndex,
     diagnostics_sources: DiagnosticsSources,
     ctx: ExecutionContext,
-) -> pa.Table:
+) -> TableLike:
     """Aggregate diagnostics into a normalized table.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Normalized diagnostics table.
     """
     _ = ctx
@@ -375,7 +376,7 @@ def diagnostics_norm(
 
 @cache()
 @tag(layer="normalize", artifact="repo_text_index", kind="object")
-def repo_text_index(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> RepoTextIndex:
+def repo_text_index(repo_root: str, repo_files: TableLike, ctx: ExecutionContext) -> RepoTextIndex:
     """Build a repo text index for line/column to byte offsets.
 
     Returns
@@ -389,22 +390,22 @@ def repo_text_index(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext)
 @cache()
 @extract_fields(
     {
-        "scip_occurrences_norm": pa.Table,
-        "scip_span_errors": pa.Table,
+        "scip_occurrences_norm": TableLike,
+        "scip_span_errors": TableLike,
     }
 )
 @tag(layer="normalize", artifact="scip_occurrences_norm_bundle", kind="bundle")
 def scip_occurrences_norm_bundle(
-    scip_documents: pa.Table,
-    scip_occurrences: pa.Table,
+    scip_documents: TableLike,
+    scip_occurrences: TableLike,
     repo_text_index: RepoTextIndex,
     ctx: ExecutionContext,
-) -> dict[str, pa.Table]:
+) -> dict[str, TableLike]:
     """Convert SCIP occurrences into byte offsets.
 
     Returns
     -------
-    dict[str, pa.Table]
+    dict[str, TableLike]
         Bundle with normalized occurrences and span errors.
     """
     occ, errs = add_scip_occurrence_byte_spans(
@@ -418,12 +419,12 @@ def scip_occurrences_norm_bundle(
 
 @cache()
 @tag(layer="normalize", artifact="cst_imports_norm", kind="table")
-def cst_imports_norm(cst_imports: pa.Table, ctx: ExecutionContext) -> pa.Table:
+def cst_imports_norm(cst_imports: TableLike, ctx: ExecutionContext) -> TableLike:
     """Normalize CST import spans into bstart/bend.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Normalized CST imports table.
     """
     _ = ctx
@@ -432,12 +433,12 @@ def cst_imports_norm(cst_imports: pa.Table, ctx: ExecutionContext) -> pa.Table:
 
 @cache()
 @tag(layer="normalize", artifact="cst_defs_norm", kind="table")
-def cst_defs_norm(cst_defs: pa.Table, ctx: ExecutionContext) -> pa.Table:
+def cst_defs_norm(cst_defs: TableLike, ctx: ExecutionContext) -> TableLike:
     """Normalize CST def spans into bstart/bend.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Normalized CST definitions table.
     """
     _ = ctx

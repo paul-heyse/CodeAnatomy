@@ -4,18 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
+from arrowdsl.pyarrow_protocols import DataTypeLike, TableLike
 
 
 def add_const_column(
-    table: pa.Table,
+    table: TableLike,
     name: str,
     value: object,
     *,
-    data_type: pa.DataType | None = None,
-) -> pa.Table:
+    data_type: DataTypeLike | None = None,
+) -> TableLike:
     """Append a constant-valued column if missing.
 
     Parameters
@@ -41,7 +41,7 @@ def add_const_column(
     return table.append_column(name, arr)
 
 
-def coalesce_string(table: pa.Table, cols: Sequence[str], *, out_col: str) -> pa.Table:
+def coalesce_string(table: TableLike, cols: Sequence[str], *, out_col: str) -> TableLike:
     """Coalesce multiple columns into a single string column.
 
     Parameters
@@ -66,7 +66,7 @@ def coalesce_string(table: pa.Table, cols: Sequence[str], *, out_col: str) -> pa
     return table.append_column(out_col, expr)
 
 
-def select_columns(table: pa.Table, cols: Sequence[str]) -> pa.Table:
+def select_columns(table: TableLike, cols: Sequence[str]) -> TableLike:
     """Select the subset of columns that exist.
 
     Parameters

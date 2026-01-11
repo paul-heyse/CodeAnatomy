@@ -10,10 +10,10 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
 from arrowdsl.ids import hash64_from_arrays, hash64_from_parts
+from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, TableLike
 from core_types import PathLike, ensure_path
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
@@ -194,7 +194,7 @@ def _build_repo_file_row(
     }
 
 
-def scan_repo(repo_root: PathLike, options: RepoScanOptions | None = None) -> pa.Table:
+def scan_repo(repo_root: PathLike, options: RepoScanOptions | None = None) -> TableLike:
     """Scan the repo for Python files and return a repo_files table.
 
     Parameters
@@ -228,7 +228,7 @@ def scan_repo(repo_root: PathLike, options: RepoScanOptions | None = None) -> pa
     table = pa.Table.from_pylist(rows, schema=REPO_FILES_SCHEMA)
     if table.num_rows == 0:
         return table
-    hash_arrays: list[pa.Array | pa.ChunkedArray] = []
+    hash_arrays: list[ArrayLike | ChunkedArrayLike] = []
     if options.repo_id:
         hash_arrays.append(pa.array([options.repo_id] * table.num_rows, type=pa.string()))
     hash_arrays.append(table["path"])

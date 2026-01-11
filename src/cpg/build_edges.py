@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
 from arrowdsl.finalize import FinalizeResult, finalize
+from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike
 from arrowdsl.runtime import ExecutionContext
 from cpg.builders import EdgeBuilder
 from cpg.kinds import (
@@ -22,25 +22,25 @@ from cpg.schemas import CPG_EDGES_CONTRACT, CPG_EDGES_SCHEMA, SCHEMA_VERSION, em
 from cpg.specs import EdgeEmitSpec, EdgePlanSpec, TableFilter, TableGetter
 
 
-def _const_str(n: int, value: str) -> pa.Array:
+def _const_str(n: int, value: str) -> ArrayLike:
     return pa.array([value] * n, type=pa.string())
 
 
-def _const_f32(n: int, value: float) -> pa.Array:
+def _const_f32(n: int, value: float) -> ArrayLike:
     return pa.array([float(value)] * n, type=pa.float32())
 
 
-def _get(table: pa.Table, col: str, *, default_type: pa.DataType) -> pa.Array:
+def _get(table: TableLike, col: str, *, default_type: DataTypeLike) -> ArrayLike:
     if col in table.column_names:
         return table[col]
     return pa.nulls(table.num_rows, type=default_type)
 
 
 def _set_or_append_column(
-    table: pa.Table,
+    table: TableLike,
     name: str,
-    values: pa.Array | pa.ChunkedArray,
-) -> pa.Table:
+    values: ArrayLike | ChunkedArrayLike,
+) -> TableLike:
     if name in table.column_names:
         idx = table.schema.get_field_index(name)
         return table.set_column(idx, name, values)
@@ -48,9 +48,9 @@ def _set_or_append_column(
 
 
 def _filter_unresolved_qname_calls(
-    rel_callsite_qname: pa.Table,
-    rel_callsite_symbol: pa.Table | None,
-) -> pa.Table:
+    rel_callsite_qname: TableLike,
+    rel_callsite_symbol: TableLike | None,
+) -> TableLike:
     if "call_id" not in rel_callsite_qname.column_names:
         return rel_callsite_qname
     if rel_callsite_symbol is None or "call_id" not in rel_callsite_symbol.column_names:
@@ -61,13 +61,13 @@ def _filter_unresolved_qname_calls(
     return rel_callsite_qname.filter(pc.invert(mask))
 
 
-def _ensure_ambiguity_group_id(table: pa.Table) -> pa.Table:
+def _ensure_ambiguity_group_id(table: TableLike) -> TableLike:
     if "ambiguity_group_id" not in table.column_names and "call_id" in table.column_names:
         return table.append_column("ambiguity_group_id", table["call_id"])
     return table
 
 
-def _with_repo_file_ids(diag_table: pa.Table, repo_files: pa.Table | None) -> pa.Table:
+def _with_repo_file_ids(diag_table: TableLike, repo_files: TableLike | None) -> TableLike:
     if (
         repo_files is None
         or repo_files.num_rows == 0
@@ -88,8 +88,8 @@ def _with_repo_file_ids(diag_table: pa.Table, repo_files: pa.Table | None) -> pa
 
 
 def _severity_score_array(
-    severity: pa.Array | pa.ChunkedArray,
-) -> pa.Array | pa.ChunkedArray:
+    severity: ArrayLike | ChunkedArrayLike,
+) -> ArrayLike | ChunkedArrayLike:
     severity_str = pc.cast(severity, pa.string())
     severity_str = pc.fill_null(severity_str, replacement="ERROR")
     is_error = pc.equal(severity_str, pa.scalar("ERROR"))
@@ -101,11 +101,11 @@ def _severity_score_array(
 
 
 def _role_mask(
-    symbol_roles: pa.Array | pa.ChunkedArray,
+    symbol_roles: ArrayLike | ChunkedArrayLike,
     mask: int,
     *,
     must_set: bool,
-) -> pa.Array | pa.ChunkedArray:
+) -> ArrayLike | ChunkedArrayLike:
     roles = pc.cast(symbol_roles, pa.int64())
     hit = pc.not_equal(pc.bit_wise_and(roles, pa.scalar(int(mask))), pa.scalar(0))
     hit = pc.fill_null(hit, replacement=False)
@@ -113,14 +113,14 @@ def _role_mask(
 
 
 def _table_getter(name: str) -> TableGetter:
-    def _get_table(tables: Mapping[str, pa.Table]) -> pa.Table | None:
+    def _get_table(tables: Mapping[str, TableLike]) -> TableLike | None:
         return tables.get(name)
 
     return _get_table
 
 
 def _symbol_role_filter(mask: int, *, must_set: bool) -> TableFilter:
-    def _filter(table: pa.Table) -> pa.Array:
+    def _filter(table: TableLike) -> ArrayLike:
         roles = _get(table, "symbol_roles", default_type=pa.int64())
         return _role_mask(roles, mask, must_set=must_set)
 
@@ -128,7 +128,7 @@ def _symbol_role_filter(mask: int, *, must_set: bool) -> TableFilter:
 
 
 def _flag_filter(flag_col: str) -> TableFilter:
-    def _filter(table: pa.Table) -> pa.Array:
+    def _filter(table: TableLike) -> ArrayLike:
         if flag_col not in table.column_names:
             return pa.array([False] * table.num_rows, type=pa.bool_())
         return pc.fill_null(pc.cast(table[flag_col], pa.bool_()), replacement=False)
@@ -136,7 +136,7 @@ def _flag_filter(flag_col: str) -> TableFilter:
     return _filter
 
 
-def _qname_fallback_relation(tables: Mapping[str, pa.Table]) -> pa.Table | None:
+def _qname_fallback_relation(tables: Mapping[str, TableLike]) -> TableLike | None:
     rel_callsite_qname = tables.get("rel_callsite_qname")
     if rel_callsite_qname is None or rel_callsite_qname.num_rows == 0:
         return None
@@ -147,7 +147,7 @@ def _qname_fallback_relation(tables: Mapping[str, pa.Table]) -> pa.Table | None:
     return _ensure_ambiguity_group_id(filtered)
 
 
-def _diagnostic_relation(tables: Mapping[str, pa.Table]) -> pa.Table | None:
+def _diagnostic_relation(tables: Mapping[str, TableLike]) -> TableLike | None:
     diagnostics_norm = tables.get("diagnostics_norm")
     if diagnostics_norm is None or diagnostics_norm.num_rows == 0:
         return None
@@ -165,7 +165,7 @@ def _diagnostic_relation(tables: Mapping[str, pa.Table]) -> pa.Table | None:
     return _set_or_append_column(diag, "resolution_method", _const_str(n, "DIAGNOSTIC"))
 
 
-def _type_annotation_relation(tables: Mapping[str, pa.Table]) -> pa.Table | None:
+def _type_annotation_relation(tables: Mapping[str, TableLike]) -> TableLike | None:
     type_exprs_norm = tables.get("type_exprs_norm")
     if type_exprs_norm is None or type_exprs_norm.num_rows == 0:
         return None
@@ -174,7 +174,7 @@ def _type_annotation_relation(tables: Mapping[str, pa.Table]) -> pa.Table | None
     return _set_or_append_column(rel, "score", _const_f32(n, 1.0))
 
 
-def _inferred_type_relation(tables: Mapping[str, pa.Table]) -> pa.Table | None:
+def _inferred_type_relation(tables: Mapping[str, TableLike]) -> TableLike | None:
     type_exprs_norm = tables.get("type_exprs_norm")
     if type_exprs_norm is None or type_exprs_norm.num_rows == 0:
         return None
@@ -194,11 +194,11 @@ def _inferred_type_relation(tables: Mapping[str, pa.Table]) -> pa.Table | None:
 
 
 def _runtime_relation(
-    table: pa.Table | None,
+    table: TableLike | None,
     *,
     src_col: str,
     dst_col: str,
-) -> pa.Table | None:
+) -> TableLike | None:
     if table is None or table.num_rows == 0:
         return None
     n = table.num_rows
@@ -217,7 +217,7 @@ def _runtime_relation(
 
 
 def _runtime_relation_getter(key: str, *, src_col: str, dst_col: str) -> TableGetter:
-    def _get_rel(tables: Mapping[str, pa.Table]) -> pa.Table | None:
+    def _get_rel(tables: Mapping[str, TableLike]) -> TableLike | None:
         table = tables.get(key)
         return _runtime_relation(table, src_col=src_col, dst_col=dst_col)
 
@@ -480,14 +480,14 @@ class EdgeBuildOptions:
 class EdgeBuildInputs:
     """Input tables for edge construction."""
 
-    relationship_outputs: Mapping[str, pa.Table] | None = None
-    scip_symbol_relationships: pa.Table | None = None
-    diagnostics_norm: pa.Table | None = None
-    repo_files: pa.Table | None = None
-    type_exprs_norm: pa.Table | None = None
-    rt_signatures: pa.Table | None = None
-    rt_signature_params: pa.Table | None = None
-    rt_members: pa.Table | None = None
+    relationship_outputs: Mapping[str, TableLike] | None = None
+    scip_symbol_relationships: TableLike | None = None
+    diagnostics_norm: TableLike | None = None
+    repo_files: TableLike | None = None
+    type_exprs_norm: TableLike | None = None
+    rt_signatures: TableLike | None = None
+    rt_signature_params: TableLike | None = None
+    rt_members: TableLike | None = None
 
 
 def _edge_inputs_from_legacy(legacy: Mapping[str, object]) -> EdgeBuildInputs:
@@ -504,27 +504,27 @@ def _edge_inputs_from_legacy(legacy: Mapping[str, object]) -> EdgeBuildInputs:
         if isinstance(relationship_outputs, Mapping)
         else None,
         scip_symbol_relationships=scip_symbol_relationships
-        if isinstance(scip_symbol_relationships, pa.Table)
+        if isinstance(scip_symbol_relationships, TableLike)
         else None,
-        diagnostics_norm=diagnostics_norm if isinstance(diagnostics_norm, pa.Table) else None,
-        repo_files=repo_files if isinstance(repo_files, pa.Table) else None,
-        type_exprs_norm=type_exprs_norm if isinstance(type_exprs_norm, pa.Table) else None,
-        rt_signatures=rt_signatures if isinstance(rt_signatures, pa.Table) else None,
+        diagnostics_norm=diagnostics_norm if isinstance(diagnostics_norm, TableLike) else None,
+        repo_files=repo_files if isinstance(repo_files, TableLike) else None,
+        type_exprs_norm=type_exprs_norm if isinstance(type_exprs_norm, TableLike) else None,
+        rt_signatures=rt_signatures if isinstance(rt_signatures, TableLike) else None,
         rt_signature_params=rt_signature_params
-        if isinstance(rt_signature_params, pa.Table)
+        if isinstance(rt_signature_params, TableLike)
         else None,
-        rt_members=rt_members if isinstance(rt_members, pa.Table) else None,
+        rt_members=rt_members if isinstance(rt_members, TableLike) else None,
     )
 
 
-def _edge_tables(inputs: EdgeBuildInputs) -> dict[str, pa.Table]:
-    tables: dict[str, pa.Table] = {}
+def _edge_tables(inputs: EdgeBuildInputs) -> dict[str, TableLike]:
+    tables: dict[str, TableLike] = {}
     if inputs.relationship_outputs:
         tables.update(
             {
                 name: table
                 for name, table in inputs.relationship_outputs.items()
-                if isinstance(table, pa.Table)
+                if isinstance(table, TableLike)
             }
         )
     tables.update(
@@ -550,7 +550,7 @@ def build_cpg_edges_raw(
     inputs: EdgeBuildInputs | None = None,
     options: EdgeBuildOptions | None = None,
     **legacy: object,
-) -> pa.Table:
+) -> TableLike:
     """Emit raw CPG edges without finalization.
 
     Returns

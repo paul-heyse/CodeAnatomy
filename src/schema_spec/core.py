@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-import pyarrow as pa
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+
+import arrowdsl.pyarrow_core as pa
+from arrowdsl.pyarrow_protocols import DataTypeLike, FieldLike, SchemaLike
 
 
 def _field_metadata(metadata: dict[str, str]) -> dict[bytes, bytes]:
@@ -23,11 +25,11 @@ class ArrowFieldSpec(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     name: str
-    dtype: pa.DataType
+    dtype: DataTypeLike
     nullable: bool = True
     metadata: dict[str, str] = Field(default_factory=dict)
 
-    def to_arrow_field(self) -> pa.Field:
+    def to_arrow_field(self) -> FieldLike:
         """Build a pyarrow.Field from the spec.
 
         Returns
@@ -78,7 +80,7 @@ class TableSchemaSpec(BaseModel):
             raise ValueError(msg)
         return values
 
-    def to_arrow_schema(self) -> pa.Schema:
+    def to_arrow_schema(self) -> SchemaLike:
         """Build a pyarrow.Schema from the spec.
 
         Returns

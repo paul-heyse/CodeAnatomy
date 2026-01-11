@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
 from arrowdsl.finalize import FinalizeResult, finalize
+from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, TableLike
 from arrowdsl.runtime import ExecutionContext
 from cpg.builders import PropBuilder
 from cpg.kinds import (
@@ -42,17 +42,17 @@ def _flag_to_bool(value: object | None) -> bool | None:
 
 
 def _set_or_append_column(
-    table: pa.Table,
+    table: TableLike,
     name: str,
-    values: pa.Array | pa.ChunkedArray,
-) -> pa.Table:
+    values: ArrayLike | ChunkedArrayLike,
+) -> TableLike:
     if name in table.column_names:
         idx = table.schema.get_field_index(name)
         return table.set_column(idx, name, values)
     return table.append_column(name, values)
 
 
-def _defs_table(table: pa.Table | None) -> pa.Table | None:
+def _defs_table(table: TableLike | None) -> TableLike | None:
     if table is None or table.num_rows == 0:
         return None
     if "def_kind" in table.column_names and "kind" in table.column_names:
@@ -66,7 +66,7 @@ def _defs_table(table: pa.Table | None) -> pa.Table | None:
     return _set_or_append_column(table, "def_kind_norm", def_kind)
 
 
-def _scip_role_flags_table(scip_occurrences: pa.Table | None) -> pa.Table | None:
+def _scip_role_flags_table(scip_occurrences: TableLike | None) -> TableLike | None:
     if (
         scip_occurrences is None
         or scip_occurrences.num_rows == 0
@@ -77,7 +77,7 @@ def _scip_role_flags_table(scip_occurrences: pa.Table | None) -> pa.Table | None
 
     symbols = pc.cast(scip_occurrences["symbol"], pa.string())
     roles = pc.cast(scip_occurrences["symbol_roles"], pa.int64())
-    flag_arrays: list[pa.Array | pa.ChunkedArray] = []
+    flag_arrays: list[ArrayLike | ChunkedArrayLike] = []
     flag_names: list[str] = []
     for name, mask, _ in _ROLE_FLAG_SPECS:
         flag = pc.not_equal(pc.bit_wise_and(roles, pa.scalar(mask)), pa.scalar(0))
@@ -91,7 +91,7 @@ def _scip_role_flags_table(scip_occurrences: pa.Table | None) -> pa.Table | None
 
 
 def _table_getter(name: str) -> TableGetter:
-    def _get_table(tables: Mapping[str, pa.Table]) -> pa.Table | None:
+    def _get_table(tables: Mapping[str, TableLike]) -> TableLike | None:
         return tables.get(name)
 
     return _get_table
@@ -440,29 +440,29 @@ class PropsBuildOptions:
 class PropsInputTables:
     """Bundle of input tables for property extraction."""
 
-    repo_files: pa.Table | None = None
-    cst_name_refs: pa.Table | None = None
-    cst_imports: pa.Table | None = None
-    cst_callsites: pa.Table | None = None
-    cst_defs: pa.Table | None = None
-    dim_qualified_names: pa.Table | None = None
-    scip_symbol_information: pa.Table | None = None
-    scip_occurrences: pa.Table | None = None
-    scip_external_symbol_information: pa.Table | None = None
-    ts_nodes: pa.Table | None = None
-    ts_errors: pa.Table | None = None
-    ts_missing: pa.Table | None = None
-    type_exprs_norm: pa.Table | None = None
-    types_norm: pa.Table | None = None
-    diagnostics_norm: pa.Table | None = None
-    rt_objects: pa.Table | None = None
-    rt_signatures: pa.Table | None = None
-    rt_signature_params: pa.Table | None = None
-    rt_members: pa.Table | None = None
-    cpg_edges: pa.Table | None = None
+    repo_files: TableLike | None = None
+    cst_name_refs: TableLike | None = None
+    cst_imports: TableLike | None = None
+    cst_callsites: TableLike | None = None
+    cst_defs: TableLike | None = None
+    dim_qualified_names: TableLike | None = None
+    scip_symbol_information: TableLike | None = None
+    scip_occurrences: TableLike | None = None
+    scip_external_symbol_information: TableLike | None = None
+    ts_nodes: TableLike | None = None
+    ts_errors: TableLike | None = None
+    ts_missing: TableLike | None = None
+    type_exprs_norm: TableLike | None = None
+    types_norm: TableLike | None = None
+    diagnostics_norm: TableLike | None = None
+    rt_objects: TableLike | None = None
+    rt_signatures: TableLike | None = None
+    rt_signature_params: TableLike | None = None
+    rt_members: TableLike | None = None
+    cpg_edges: TableLike | None = None
 
 
-def _prop_tables(inputs: PropsInputTables) -> dict[str, pa.Table]:
+def _prop_tables(inputs: PropsInputTables) -> dict[str, TableLike]:
     tables = {
         name: table
         for name, table in {
@@ -504,7 +504,7 @@ def build_cpg_props_raw(
     *,
     inputs: PropsInputTables | None = None,
     options: PropsBuildOptions | None = None,
-) -> pa.Table:
+) -> TableLike:
     """Build CPG properties without finalization.
 
     Returns

@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from cpg.builders import EdgeBuilder, NodeBuilder, PropBuilder
 from cpg.kinds import EdgeKind, EntityKind, NodeKind
 from cpg.schemas import CPG_EDGES_SCHEMA, CPG_NODES_SCHEMA, CPG_PROPS_SCHEMA, SCHEMA_VERSION

@@ -3,19 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 
 from arrowdsl.acero import acero
 from arrowdsl.compute import pc
-from arrowdsl.pyarrow_protocols import DeclarationLike
+from arrowdsl.pyarrow_protocols import DeclarationLike, SchemaLike, TableLike
 from arrowdsl.queryspec import QuerySpec
 from arrowdsl.runtime import ExecutionContext
-
-if TYPE_CHECKING:  # pragma: no cover
-    import pyarrow as pa
 
 type PathLike = str | Path
 
@@ -26,7 +22,7 @@ def open_dataset(
     dataset_format: str = "parquet",
     filesystem: pafs.FileSystem | None = None,
     partitioning: str | None = "hive",
-    schema: pa.Schema | None = None,
+    schema: SchemaLike | None = None,
 ) -> ds.Dataset:
     """Open a dataset for scanning.
 
@@ -82,7 +78,7 @@ def make_scanner(dataset: ds.Dataset, *, spec: QuerySpec, ctx: ExecutionContext)
     )
 
 
-def scan_to_table(dataset: ds.Dataset, *, spec: QuerySpec, ctx: ExecutionContext) -> pa.Table:
+def scan_to_table(dataset: ds.Dataset, *, spec: QuerySpec, ctx: ExecutionContext) -> TableLike:
     """Materialize a dataset scan into a table.
 
     Parameters

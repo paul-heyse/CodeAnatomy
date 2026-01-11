@@ -4,7 +4,7 @@ project-excludes = [
     "**/__pycache__/**",
     "**/tests/fixtures/heuristics/**",
 ]
-search-path = ["src", "typings", "."]
+search-path = ["src", "."]
 python-version = "3.14.2"
 
 # Type-check behavior

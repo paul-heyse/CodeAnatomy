@@ -7,8 +7,7 @@ from dataclasses import dataclass
 from functools import cmp_to_key
 from typing import Literal, Protocol
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.contracts import Contract, SortKey
 from arrowdsl.dataset_io import compile_to_acero_scan, open_dataset
 from arrowdsl.expr import E
@@ -16,7 +15,7 @@ from arrowdsl.finalize import FinalizeResult, finalize
 from arrowdsl.joins import JoinSpec, hash_join
 from arrowdsl.kernels import apply_dedupe, explode_list_column
 from arrowdsl.plan import Plan, union_all_plans
-from arrowdsl.pyarrow_protocols import ComputeExpression
+from arrowdsl.pyarrow_protocols import ComputeExpression, ScalarLike, TableLike
 from arrowdsl.queryspec import ProjectionSpec, QuerySpec
 from arrowdsl.runtime import DeterminismTier, ExecutionContext, Ordering
 from relspec.edge_contract_validator import (
@@ -39,7 +38,7 @@ from relspec.model import (
 )
 from relspec.registry import ContractCatalog, DatasetCatalog
 
-type KernelFn = Callable[[pa.Table, ExecutionContext], pa.Table]
+type KernelFn = Callable[[TableLike, ExecutionContext], TableLike]
 type RowValue = object | None
 type RowData = dict[str, RowValue]
 type Candidate = dict[str, RowValue]
@@ -127,7 +126,7 @@ class FilesystemPlanResolver:
 class InMemoryPlanResolver:
     """Resolve dataset names to in-memory tables or plans."""
 
-    def __init__(self, mapping: Mapping[str, pa.Table | Plan]) -> None:
+    def __init__(self, mapping: Mapping[str, TableLike | Plan]) -> None:
         self.mapping = dict(mapping)
 
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> Plan:
@@ -161,7 +160,7 @@ class InMemoryPlanResolver:
 
 
 def _build_rule_meta_kernel(rule: RelationshipRule) -> KernelFn:
-    def _add_rule_meta(table: pa.Table, _ctx: ExecutionContext) -> pa.Table:
+    def _add_rule_meta(table: TableLike, _ctx: ExecutionContext) -> TableLike:
         count = table.num_rows
         if rule.rule_name_col not in table.column_names:
             table = table.append_column(
@@ -179,7 +178,7 @@ def _build_rule_meta_kernel(rule: RelationshipRule) -> KernelFn:
 
 
 def _build_add_literal_kernel(spec: AddLiteralSpec) -> KernelFn:
-    def _fn(table: pa.Table, _ctx: ExecutionContext) -> pa.Table:
+    def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
         if spec.name in table.column_names:
             return table
         return table.append_column(
@@ -191,7 +190,7 @@ def _build_add_literal_kernel(spec: AddLiteralSpec) -> KernelFn:
 
 
 def _build_drop_columns_kernel(spec: DropColumnsSpec) -> KernelFn:
-    def _fn(table: pa.Table, _ctx: ExecutionContext) -> pa.Table:
+    def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
         cols = [col for col in spec.columns if col in table.column_names]
         return table.drop(cols) if cols else table
 
@@ -199,7 +198,7 @@ def _build_drop_columns_kernel(spec: DropColumnsSpec) -> KernelFn:
 
 
 def _build_rename_columns_kernel(spec: RenameColumnsSpec) -> KernelFn:
-    def _fn(table: pa.Table, _ctx: ExecutionContext) -> pa.Table:
+    def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
         if not spec.mapping:
             return table
         names = list(table.column_names)
@@ -210,7 +209,7 @@ def _build_rename_columns_kernel(spec: RenameColumnsSpec) -> KernelFn:
 
 
 def _build_explode_list_kernel(spec: ExplodeListSpec) -> KernelFn:
-    def _fn(table: pa.Table, _ctx: ExecutionContext) -> pa.Table:
+    def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
         return explode_list_column(
             table,
             parent_id_col=spec.parent_id_col,
@@ -223,7 +222,7 @@ def _build_explode_list_kernel(spec: ExplodeListSpec) -> KernelFn:
 
 
 def _build_dedupe_kernel(spec: DedupeKernelSpec) -> KernelFn:
-    def _fn(table: pa.Table, ctx: ExecutionContext) -> pa.Table:
+    def _fn(table: TableLike, ctx: ExecutionContext) -> TableLike:
         return apply_dedupe(table, spec=spec.spec, _ctx=ctx)
 
     return _fn
@@ -434,12 +433,12 @@ def _apply_rule_meta_to_plan(
     return plan.project(exprs, names, label=plan.label or rule.name)
 
 
-def _col_pylist(table: pa.Table, name: str) -> list[RowValue]:
+def _col_pylist(table: TableLike, name: str) -> list[RowValue]:
     if name not in table.column_names:
         return [None] * table.num_rows
     values: list[RowValue] = []
     for value in table[name]:
-        if isinstance(value, pa.Scalar):
+        if isinstance(value, ScalarLike):
             values.append(value.as_py())
         else:
             values.append(value)
@@ -539,7 +538,7 @@ def _build_right_index(paths: Sequence[RowValue]) -> dict[str, list[int]]:
     return idx
 
 
-def _collect_columns(table: pa.Table, select_cols: tuple[str, ...]) -> dict[str, list[RowValue]]:
+def _collect_columns(table: TableLike, select_cols: tuple[str, ...]) -> dict[str, list[RowValue]]:
     columns = select_cols or tuple(table.column_names)
     return {col: _col_pylist(table, col) for col in columns}
 
@@ -679,7 +678,7 @@ def _interval_align_row(
     return row
 
 
-def _interval_align(left: pa.Table, right: pa.Table, cfg: IntervalAlignConfig) -> pa.Table:
+def _interval_align(left: TableLike, right: TableLike, cfg: IntervalAlignConfig) -> TableLike:
     """Perform a kernel-lane span join.
 
     Parameters
@@ -733,11 +732,11 @@ class CompiledRule:
 
     rule: RelationshipRule
     plan: Plan | None
-    execute_fn: Callable[[ExecutionContext, PlanResolver], pa.Table] | None
+    execute_fn: Callable[[ExecutionContext, PlanResolver], TableLike] | None
     post_kernels: tuple[KernelFn, ...] = ()
     emit_rule_meta: bool = True
 
-    def execute(self, *, ctx: ExecutionContext, resolver: PlanResolver) -> pa.Table:
+    def execute(self, *, ctx: ExecutionContext, resolver: PlanResolver) -> TableLike:
         """Execute the compiled rule into a table.
 
         Parameters
@@ -816,7 +815,7 @@ class CompiledOutput:
             raise ValueError(msg)
 
         plan_parts: list[Plan] = []
-        table_parts: list[pa.Table] = []
+        table_parts: list[TableLike] = []
         for cr in self.contributors:
             if cr.execute_fn is not None:
                 table_parts.append(cr.execute(ctx=ctx_exec, resolver=resolver))
@@ -932,8 +931,8 @@ class RelationshipRuleCompiler:
         ctx: ExecutionContext,
         post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
-        def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> pa.Table:
-            parts: list[pa.Table] = []
+        def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> TableLike:
+            parts: list[TableLike] = []
             for inp in rule.inputs:
                 plan = resolver.resolve(inp, ctx=ctx2)
                 parts.append(plan.to_table(ctx=ctx2))
@@ -961,7 +960,7 @@ class RelationshipRuleCompiler:
             raise ValueError(msg)
         interval_cfg = cfg
 
-        def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> pa.Table:
+        def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> TableLike:
             left_ref, right_ref = rule.inputs
             lt = resolver.resolve(left_ref, ctx=ctx2).to_table(ctx=ctx2)
             rt = resolver.resolve(right_ref, ctx=ctx2).to_table(ctx=ctx2)

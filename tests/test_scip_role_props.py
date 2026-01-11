@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from cpg.build_props import PropsInputTables, build_cpg_props_raw
 from cpg.kinds import SCIP_ROLE_FORWARD_DEFINITION, SCIP_ROLE_GENERATED, SCIP_ROLE_TEST
 

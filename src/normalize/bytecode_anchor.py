@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.iter import iter_arrays
+from arrowdsl.pyarrow_protocols import ArrayLike, DataTypeLike, TableLike
 from normalize.spans import FileTextIndex, RepoTextIndex, ast_range_to_byte_span
-
-type ArrayLike = pa.Array | pa.ChunkedArray
 
 
 def _row_value_int(value: object | None) -> int | None:
@@ -24,7 +22,7 @@ def _row_value_int(value: object | None) -> int | None:
     return None
 
 
-def _column_or_null(table: pa.Table, col: str, dtype: pa.DataType) -> ArrayLike:
+def _column_or_null(table: TableLike, col: str, dtype: DataTypeLike) -> ArrayLike:
     if col in table.column_names:
         return table[col]
     return pa.nulls(table.num_rows, type=dtype)
@@ -55,10 +53,10 @@ def _file_index(repo_index: RepoTextIndex, file_id: object, path: object) -> Fil
 
 def anchor_instructions(
     repo_index: RepoTextIndex,
-    py_bc_instructions: pa.Table,
+    py_bc_instructions: TableLike,
     *,
     columns: BytecodeSpanColumns | None = None,
-) -> pa.Table:
+) -> TableLike:
     """Append byte-span columns to bytecode instruction rows.
 
     Parameters
@@ -72,7 +70,7 @@ def anchor_instructions(
 
     Returns
     -------
-    pa.Table
+    TableLike
         Instruction table with bstart/bend/span_ok columns appended.
     """
     cols = columns or BytecodeSpanColumns()

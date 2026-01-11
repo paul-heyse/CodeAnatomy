@@ -4,15 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
-import pyarrow as pa
-
 from arrowdsl.contracts import Contract
 from arrowdsl.finalize import FinalizeResult, finalize
 from arrowdsl.plan import Plan
+from arrowdsl.pyarrow_protocols import TableLike
 from arrowdsl.runtime import ExecutionContext
 from core_types import StrictnessMode
 
-KernelFn = Callable[[pa.Table, ExecutionContext], pa.Table]
+KernelFn = Callable[[TableLike, ExecutionContext], TableLike]
 
 
 def run_pipeline(

@@ -7,13 +7,14 @@ from typing import Literal, cast
 
 import pandera.polars as pa_pl
 import polars as pl
-import pyarrow as pa
 import pyarrow.types as patypes
 from polars.datatypes.classes import DataTypeClass
 
+import arrowdsl.pyarrow_core as pa
+from arrowdsl.pyarrow_protocols import DataTypeLike, FieldLike, SchemaLike, TableLike
 from schema_spec.core import TableSchemaSpec
 
-_ARROW_TO_POLARS: tuple[tuple[Callable[[pa.DataType], bool], DataTypeClass], ...] = (
+_ARROW_TO_POLARS: tuple[tuple[Callable[[DataTypeLike], bool], DataTypeClass], ...] = (
     (patypes.is_string, pl.Utf8),
     (patypes.is_boolean, pl.Boolean),
     (patypes.is_int8, pl.Int8),
@@ -29,7 +30,7 @@ _ARROW_TO_POLARS: tuple[tuple[Callable[[pa.DataType], bool], DataTypeClass], ...
     (patypes.is_binary, pl.Binary),
 )
 
-_POLARS_TO_ARROW: dict[DataTypeClass, pa.DataType] = {
+_POLARS_TO_ARROW: dict[DataTypeClass, DataTypeLike] = {
     pl.Utf8: pa.string(),
     pl.Boolean: pa.bool_(),
     pl.Int8: pa.int8(),
@@ -46,7 +47,7 @@ _POLARS_TO_ARROW: dict[DataTypeClass, pa.DataType] = {
 }
 
 
-def _arrow_to_polars_dtype(dtype: pa.DataType) -> DataTypeClass:
+def _arrow_to_polars_dtype(dtype: DataTypeLike) -> DataTypeClass:
     for predicate, polars_dtype in _ARROW_TO_POLARS:
         if predicate(dtype):
             return polars_dtype
@@ -61,7 +62,7 @@ def _polars_dtype_class(dtype: pl.DataType | DataTypeClass) -> DataTypeClass:
     return cast("DataTypeClass", type(dtype))
 
 
-def _polars_to_arrow_dtype(dtype: pl.DataType | DataTypeClass) -> pa.DataType:
+def _polars_to_arrow_dtype(dtype: pl.DataType | DataTypeClass) -> DataTypeLike:
     if isinstance(dtype, pl.List):
         inner = cast("pl.DataType", dtype.inner)
         return pa.list_(_polars_to_arrow_dtype(inner))
@@ -98,7 +99,7 @@ def table_spec_to_pandera(
     return pa_pl.DataFrameSchema(columns=columns, strict=strict, coerce=coerce)
 
 
-def pandera_schema_to_arrow(schema: pa_pl.DataFrameSchema) -> pa.Schema:
+def pandera_schema_to_arrow(schema: pa_pl.DataFrameSchema) -> SchemaLike:
     """Convert a Pandera schema into an Arrow schema.
 
     Returns
@@ -106,7 +107,7 @@ def pandera_schema_to_arrow(schema: pa_pl.DataFrameSchema) -> pa.Schema:
     pyarrow.Schema
         Arrow schema converted from Pandera.
     """
-    fields: list[pa.Field] = []
+    fields: list[FieldLike] = []
     for name, column in schema.columns.items():
         arrow_dtype = _polars_to_arrow_dtype(column.dtype)
         fields.append(pa.field(name, arrow_dtype, nullable=column.nullable))
@@ -114,13 +115,13 @@ def pandera_schema_to_arrow(schema: pa_pl.DataFrameSchema) -> pa.Schema:
 
 
 def validate_arrow_table(
-    table: pa.Table,
+    table: TableLike,
     *,
     spec: TableSchemaSpec,
     lazy: bool = True,
     strict: bool | Literal["filter"] = "filter",
     coerce: bool = False,
-) -> pa.Table:
+) -> TableLike:
     """Validate an Arrow table with Pandera.
 
     Returns

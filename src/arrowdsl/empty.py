@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import pyarrow as pa
+import arrowdsl.pyarrow_core as pa
+from arrowdsl.pyarrow_protocols import SchemaLike, TableLike
 
 
-def empty_table(schema: pa.Schema) -> pa.Table:
+def empty_table(schema: SchemaLike) -> TableLike:
     """Return an empty table with the provided schema.
 
     Parameters

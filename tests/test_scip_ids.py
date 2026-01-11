@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from extract.scip_extract import (
     SCIP_DOCUMENTS_SCHEMA,
     SCIP_OCCURRENCES_SCHEMA,

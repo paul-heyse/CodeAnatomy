@@ -7,10 +7,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import cast
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.ids import hash64_from_parts
 from arrowdsl.iter import iter_table_rows
+from arrowdsl.pyarrow_protocols import TableLike
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
@@ -33,11 +33,11 @@ class SymtableExtractOptions:
 class SymtableExtractResult:
     """Hold extracted symtable tables for scopes, symbols, and edges."""
 
-    py_sym_scopes: pa.Table
-    py_sym_symbols: pa.Table
-    py_sym_scope_edges: pa.Table
-    py_sym_namespace_edges: pa.Table
-    py_sym_function_partitions: pa.Table
+    py_sym_scopes: TableLike
+    py_sym_symbols: TableLike
+    py_sym_scope_edges: TableLike
+    py_sym_namespace_edges: TableLike
+    py_sym_function_partitions: TableLike
 
 
 @dataclass(frozen=True)
@@ -380,7 +380,7 @@ def _iter_namespaces(sym: symtable.Symbol) -> list[symtable.SymbolTable]:
 
 
 def extract_symtable(
-    repo_files: pa.Table, options: SymtableExtractOptions | None = None
+    repo_files: TableLike, options: SymtableExtractOptions | None = None
 ) -> SymtableExtractResult:
     """Extract symbol table artifacts from repository files.
 
@@ -423,9 +423,9 @@ def extract_symtable(
 def extract_symtables_table(
     *,
     repo_root: str | None,
-    repo_files: pa.Table,
+    repo_files: TableLike,
     ctx: object | None = None,
-) -> pa.Table:
+) -> TableLike:
     """Extract symtable data into a single table.
 
     Parameters

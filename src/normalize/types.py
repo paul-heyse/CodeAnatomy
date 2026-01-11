@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_arrays
 from arrowdsl.iter import iter_array_values, iter_arrays
+from arrowdsl.pyarrow_protocols import ArrayLike, TableLike
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
@@ -47,8 +47,6 @@ TYPE_NODES_SPEC = TableSchemaSpec(
 
 TYPE_EXPRS_NORM_SCHEMA = TYPE_EXPRS_NORM_SPEC.to_arrow_schema()
 TYPE_NODES_SCHEMA = TYPE_NODES_SPEC.to_arrow_schema()
-
-type ArrayLike = pa.Array | pa.ChunkedArray
 
 
 def _prefixed_hash64(
@@ -100,7 +98,7 @@ class _TypeExprRow:
     type_repr: str
 
 
-def normalize_type_exprs(cst_type_exprs: pa.Table) -> pa.Table:
+def normalize_type_exprs(cst_type_exprs: TableLike) -> TableLike:
     """Normalize type expression rows into join-ready tables.
 
     Parameters
@@ -110,7 +108,7 @@ def normalize_type_exprs(cst_type_exprs: pa.Table) -> pa.Table:
 
     Returns
     -------
-    pa.Table
+    TableLike
         Normalized type expressions table with type ids.
     """
     if cst_type_exprs.num_rows == 0:
@@ -200,9 +198,9 @@ def normalize_type_exprs(cst_type_exprs: pa.Table) -> pa.Table:
 
 
 def normalize_types(
-    type_exprs_norm: pa.Table,
-    scip_symbol_information: pa.Table | None = None,
-) -> pa.Table:
+    type_exprs_norm: TableLike,
+    scip_symbol_information: TableLike | None = None,
+) -> TableLike:
     """Build a type node table from normalized type expressions.
 
     Parameters
@@ -214,7 +212,7 @@ def normalize_types(
 
     Returns
     -------
-    pa.Table
+    TableLike
         Normalized type node table.
     """
     scip_table = _types_from_scip(scip_symbol_information)
@@ -223,7 +221,7 @@ def normalize_types(
     return _types_from_type_exprs(type_exprs_norm)
 
 
-def _types_from_scip(scip_symbol_information: pa.Table | None) -> pa.Table | None:
+def _types_from_scip(scip_symbol_information: TableLike | None) -> TableLike | None:
     if scip_symbol_information is None or scip_symbol_information.num_rows == 0:
         return None
     if "type_repr" not in scip_symbol_information.column_names:
@@ -256,7 +254,7 @@ def _types_from_scip(scip_symbol_information: pa.Table | None) -> pa.Table | Non
     )
 
 
-def _types_from_type_exprs(type_exprs_norm: pa.Table) -> pa.Table:
+def _types_from_type_exprs(type_exprs_norm: TableLike) -> TableLike:
     if type_exprs_norm.num_rows == 0:
         return empty_table(TYPE_NODES_SCHEMA)
     if (

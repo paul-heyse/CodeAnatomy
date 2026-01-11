@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
 from arrowdsl.ids import hash64_from_arrays, hash64_from_parts
+from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, TableLike
 
 
 def stable_id(prefix: str, *parts: str) -> str:
@@ -67,12 +67,12 @@ class SpanIdSpec:
     out_col: str = "span_id"
 
 
-def add_span_id_column(table: pa.Table, spec: SpanIdSpec | None = None) -> pa.Table:
+def add_span_id_column(table: TableLike, spec: SpanIdSpec | None = None) -> TableLike:
     """Add a span_id column computed with Arrow hash kernels.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Table with the span_id column appended.
     """
     spec = spec or SpanIdSpec()
@@ -84,7 +84,7 @@ def add_span_id_column(table: pa.Table, spec: SpanIdSpec | None = None) -> pa.Ta
 
     if out_col in table.column_names:
         return table
-    arrays: list[pa.Array | pa.ChunkedArray] = []
+    arrays: list[ArrayLike | ChunkedArrayLike] = []
     if kind is not None:
         arrays.append(pa.array([kind] * table.num_rows, type=pa.string()))
     if path_col in table.column_names:

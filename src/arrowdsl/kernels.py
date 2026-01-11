@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Literal
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
 from arrowdsl.contracts import DedupeSpec, SortKey
+from arrowdsl.pyarrow_protocols import TableLike
 from arrowdsl.runtime import DeterminismTier, ExecutionContext
 
 _PROVENANCE_COLS: tuple[str, ...] = (
@@ -19,7 +19,7 @@ _PROVENANCE_COLS: tuple[str, ...] = (
 )
 
 
-def _append_provenance_keys(table: pa.Table, sort_keys: Sequence[SortKey]) -> list[SortKey]:
+def _append_provenance_keys(table: TableLike, sort_keys: Sequence[SortKey]) -> list[SortKey]:
     existing = {sk.column for sk in sort_keys}
     extras = [
         SortKey(col, "ascending")
@@ -33,7 +33,7 @@ def _sort_key_tuples(sort_keys: Sequence[SortKey]) -> list[tuple[str, str]]:
     return [(sk.column, sk.order) for sk in sort_keys]
 
 
-def canonical_sort(table: pa.Table, *, sort_keys: Sequence[SortKey]) -> pa.Table:
+def canonical_sort(table: TableLike, *, sort_keys: Sequence[SortKey]) -> TableLike:
     """Return a canonically ordered table using stable sort indices.
 
     Parameters
@@ -55,11 +55,11 @@ def canonical_sort(table: pa.Table, *, sort_keys: Sequence[SortKey]) -> pa.Table
 
 
 def canonical_sort_if_canonical(
-    table: pa.Table,
+    table: TableLike,
     *,
     sort_keys: Sequence[SortKey],
     ctx: ExecutionContext,
-) -> pa.Table:
+) -> TableLike:
     """Sort only when determinism is canonical.
 
     Parameters
@@ -83,11 +83,11 @@ def canonical_sort_if_canonical(
 
 
 def dedupe_keep_first_after_sort(
-    table: pa.Table,
+    table: TableLike,
     *,
     keys: Sequence[str],
     tie_breakers: Sequence[SortKey],
-) -> pa.Table:
+) -> TableLike:
     """Select the first row per key after stable sorting.
 
     Parameters
@@ -124,7 +124,7 @@ def dedupe_keep_first_after_sort(
     return out.rename_columns(new_names)
 
 
-def dedupe_keep_arbitrary(table: pa.Table, *, keys: Sequence[str]) -> pa.Table:
+def dedupe_keep_arbitrary(table: TableLike, *, keys: Sequence[str]) -> TableLike:
     """Select an arbitrary row per key (fast, non-deterministic).
 
     Parameters
@@ -156,13 +156,13 @@ def dedupe_keep_arbitrary(table: pa.Table, *, keys: Sequence[str]) -> pa.Table:
 
 
 def dedupe_keep_best_by_score(
-    table: pa.Table,
+    table: TableLike,
     *,
     keys: Sequence[str],
     score_col: str,
     score_order: Literal["ascending", "descending"] = "descending",
     tie_breakers: Sequence[SortKey] = (),
-) -> pa.Table:
+) -> TableLike:
     """Select the best row per key based on a score column.
 
     Parameters
@@ -219,7 +219,7 @@ def dedupe_keep_best_by_score(
     )
 
 
-def dedupe_collapse_list(table: pa.Table, *, keys: Sequence[str]) -> pa.Table:
+def dedupe_collapse_list(table: TableLike, *, keys: Sequence[str]) -> TableLike:
     """Collapse duplicate rows into list-valued columns.
 
     Parameters
@@ -250,11 +250,11 @@ def dedupe_collapse_list(table: pa.Table, *, keys: Sequence[str]) -> pa.Table:
 
 
 def apply_dedupe(
-    table: pa.Table,
+    table: TableLike,
     *,
     spec: DedupeSpec,
     _ctx: ExecutionContext | None = None,
-) -> pa.Table:
+) -> TableLike:
     """Apply the configured dedupe strategy.
 
     Parameters
@@ -301,13 +301,13 @@ def apply_dedupe(
 
 
 def explode_list_column(
-    table: pa.Table,
+    table: TableLike,
     *,
     parent_id_col: str,
     list_col: str,
     out_parent_col: str = "src_id",
     out_value_col: str = "dst_id",
-) -> pa.Table:
+) -> TableLike:
     """Explode a list column into parent/value pairs.
 
     Parameters

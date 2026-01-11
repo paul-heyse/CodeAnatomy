@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
 
+import arrowdsl.pyarrow_core as pa
+from arrowdsl.pyarrow_protocols import TableLike
 from arrowdsl.runtime import ExecutionContext
 from cpg.build_edges import EdgeBuildInputs, build_cpg_edges
 from cpg.build_nodes import NodeInputTables, build_cpg_nodes
@@ -374,9 +375,9 @@ def relspec_input_dataset_dir(relspec_work_dir: str) -> str:
 
 @tag(layer="relspec", artifact="relspec_cst_inputs", kind="bundle")
 def relspec_cst_inputs(
-    cst_name_refs: pa.Table,
-    cst_imports_norm: pa.Table,
-    cst_callsites: pa.Table,
+    cst_name_refs: TableLike,
+    cst_imports_norm: TableLike,
+    cst_callsites: TableLike,
 ) -> CstRelspecInputs:
     """Bundle CST tables needed for relationship inputs.
 
@@ -393,7 +394,7 @@ def relspec_cst_inputs(
 
 
 @tag(layer="relspec", artifact="relspec_scip_inputs", kind="bundle")
-def relspec_scip_inputs(scip_occurrences_norm: pa.Table) -> ScipOccurrenceInputs:
+def relspec_scip_inputs(scip_occurrences_norm: TableLike) -> ScipOccurrenceInputs:
     """Bundle SCIP occurrences for relationship inputs.
 
     Returns
@@ -406,8 +407,8 @@ def relspec_scip_inputs(scip_occurrences_norm: pa.Table) -> ScipOccurrenceInputs
 
 @tag(layer="relspec", artifact="relspec_qname_inputs", kind="bundle")
 def relspec_qname_inputs(
-    callsite_qname_candidates: pa.Table,
-    dim_qualified_names: pa.Table,
+    callsite_qname_candidates: TableLike,
+    dim_qualified_names: TableLike,
 ) -> QnameInputs:
     """Bundle qualified-name inputs for relationship rules.
 
@@ -427,14 +428,14 @@ def relspec_input_datasets(
     relspec_cst_inputs: CstRelspecInputs,
     relspec_scip_inputs: ScipOccurrenceInputs,
     relspec_qname_inputs: QnameInputs,
-) -> dict[str, pa.Table]:
+) -> dict[str, TableLike]:
     """Build the canonical dataset-name to table mapping.
 
     Important: dataset keys must match the DatasetRef(...) names in relationship_registry().
 
     Returns
     -------
-    dict[str, pa.Table]
+    dict[str, TableLike]
         Mapping from dataset names to tables.
     """
     return {
@@ -451,7 +452,7 @@ def relspec_input_datasets(
 @tag(layer="relspec", artifact="persisted_relspec_inputs", kind="object")
 def persist_relspec_input_datasets(
     relspec_mode: str,
-    relspec_input_datasets: dict[str, pa.Table],
+    relspec_input_datasets: dict[str, TableLike],
     relspec_input_dataset_dir: str,
     *,
     overwrite_intermediate_datasets: bool,
@@ -492,7 +493,7 @@ def persist_relspec_input_datasets(
 @tag(layer="relspec", artifact="relspec_resolver", kind="runtime")
 def relspec_resolver(
     relspec_mode: str,
-    relspec_input_datasets: dict[str, pa.Table],
+    relspec_input_datasets: dict[str, TableLike],
     persist_relspec_input_datasets: dict[str, DatasetLocation],
 ) -> PlanResolver:
     """Select the relationship resolver implementation.
@@ -548,10 +549,10 @@ def compiled_relationship_outputs(
 @cache()
 @extract_fields(
     {
-        "rel_name_symbol": pa.Table,
-        "rel_import_symbol": pa.Table,
-        "rel_callsite_symbol": pa.Table,
-        "rel_callsite_qname": pa.Table,
+        "rel_name_symbol": TableLike,
+        "rel_import_symbol": TableLike,
+        "rel_callsite_symbol": TableLike,
+        "rel_callsite_qname": TableLike,
     }
 )
 @tag(layer="relspec", artifact="relationship_tables", kind="bundle")
@@ -560,15 +561,15 @@ def relationship_tables(
     relspec_resolver: PlanResolver,
     relationship_contracts: ContractCatalog,
     ctx: ExecutionContext,
-) -> dict[str, pa.Table]:
+) -> dict[str, TableLike]:
     """Execute compiled relationship outputs into tables.
 
     Returns
     -------
-    dict[str, pa.Table]
+    dict[str, TableLike]
         Relationship tables keyed by output dataset.
     """
-    out: dict[str, pa.Table] = {}
+    out: dict[str, TableLike] = {}
     for key, compiled in compiled_relationship_outputs.items():
         res = compiled.execute(ctx=ctx, resolver=relspec_resolver, contracts=relationship_contracts)
         out[key] = res.good
@@ -583,10 +584,10 @@ def relationship_tables(
 
 @tag(layer="relspec", artifact="relationship_output_tables", kind="bundle")
 def relationship_output_tables(
-    rel_name_symbol: pa.Table,
-    rel_import_symbol: pa.Table,
-    rel_callsite_symbol: pa.Table,
-    rel_callsite_qname: pa.Table,
+    rel_name_symbol: TableLike,
+    rel_import_symbol: TableLike,
+    rel_callsite_symbol: TableLike,
+    rel_callsite_qname: TableLike,
 ) -> RelationshipOutputTables:
     """Bundle relationship output tables for downstream consumers.
 
@@ -610,10 +611,10 @@ def relationship_output_tables(
 
 @tag(layer="cpg", artifact="cst_build_inputs", kind="bundle")
 def cst_build_inputs(
-    cst_name_refs: pa.Table,
-    cst_imports_norm: pa.Table,
-    cst_callsites: pa.Table,
-    cst_defs_norm: pa.Table,
+    cst_name_refs: TableLike,
+    cst_imports_norm: TableLike,
+    cst_callsites: TableLike,
+    cst_defs_norm: TableLike,
 ) -> CstBuildInputs:
     """Bundle CST inputs for CPG builds.
 
@@ -632,10 +633,10 @@ def cst_build_inputs(
 
 @tag(layer="cpg", artifact="scip_build_inputs", kind="bundle")
 def scip_build_inputs(
-    scip_symbol_information: pa.Table,
-    scip_occurrences_norm: pa.Table,
-    scip_symbol_relationships: pa.Table,
-    scip_external_symbol_information: pa.Table,
+    scip_symbol_information: TableLike,
+    scip_occurrences_norm: TableLike,
+    scip_symbol_relationships: TableLike,
+    scip_external_symbol_information: TableLike,
 ) -> ScipBuildInputs:
     """Bundle SCIP inputs for CPG builds.
 
@@ -654,8 +655,8 @@ def scip_build_inputs(
 
 @tag(layer="cpg", artifact="cpg_base_inputs", kind="bundle")
 def cpg_base_inputs(
-    repo_files: pa.Table,
-    dim_qualified_names: pa.Table,
+    repo_files: TableLike,
+    dim_qualified_names: TableLike,
     cst_build_inputs: CstBuildInputs,
     scip_build_inputs: ScipBuildInputs,
 ) -> CpgBaseInputs:
@@ -676,9 +677,9 @@ def cpg_base_inputs(
 
 @tag(layer="cpg", artifact="tree_sitter_inputs", kind="bundle")
 def tree_sitter_inputs(
-    ts_nodes: pa.Table,
-    ts_errors: pa.Table,
-    ts_missing: pa.Table,
+    ts_nodes: TableLike,
+    ts_errors: TableLike,
+    ts_missing: TableLike,
 ) -> TreeSitterInputs:
     """Bundle tree-sitter inputs for CPG construction.
 
@@ -691,7 +692,7 @@ def tree_sitter_inputs(
 
 
 @tag(layer="cpg", artifact="type_inputs", kind="bundle")
-def type_inputs(type_exprs_norm: pa.Table, types_norm: pa.Table) -> TypeInputs:
+def type_inputs(type_exprs_norm: TableLike, types_norm: TableLike) -> TypeInputs:
     """Bundle type inputs for CPG construction.
 
     Returns
@@ -703,7 +704,7 @@ def type_inputs(type_exprs_norm: pa.Table, types_norm: pa.Table) -> TypeInputs:
 
 
 @tag(layer="cpg", artifact="diagnostics_inputs", kind="bundle")
-def diagnostics_inputs(diagnostics_norm: pa.Table) -> DiagnosticsInputs:
+def diagnostics_inputs(diagnostics_norm: TableLike) -> DiagnosticsInputs:
     """Bundle diagnostics inputs for CPG construction.
 
     Returns
@@ -716,10 +717,10 @@ def diagnostics_inputs(diagnostics_norm: pa.Table) -> DiagnosticsInputs:
 
 @tag(layer="cpg", artifact="runtime_inputs", kind="bundle")
 def runtime_inputs(
-    rt_objects: pa.Table,
-    rt_signatures: pa.Table,
-    rt_signature_params: pa.Table,
-    rt_members: pa.Table,
+    rt_objects: TableLike,
+    rt_signatures: TableLike,
+    rt_signature_params: TableLike,
+    rt_members: TableLike,
 ) -> RuntimeInputs:
     """Bundle runtime inspection inputs for CPG construction.
 
@@ -827,7 +828,7 @@ def cpg_edge_inputs(
 def cpg_props_inputs(
     cpg_base_inputs: CpgBaseInputs,
     cpg_extra_inputs: CpgExtraInputs,
-    cpg_edges_final: pa.Table,
+    cpg_edges_final: TableLike,
 ) -> PropsInputTables:
     """Build property input tables from base and optional inputs.
 
@@ -867,12 +868,12 @@ def cpg_props_inputs(
 def cpg_nodes_final(
     ctx: ExecutionContext,
     cpg_node_inputs: NodeInputTables,
-) -> pa.Table:
+) -> TableLike:
     """Build the final CPG nodes table.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Final CPG nodes table.
     """
     res = build_cpg_nodes(ctx=ctx, inputs=cpg_node_inputs)
@@ -884,12 +885,12 @@ def cpg_nodes_final(
 def cpg_edges_final(
     ctx: ExecutionContext,
     cpg_edge_inputs: EdgeBuildInputs,
-) -> pa.Table:
+) -> TableLike:
     """Build the final CPG edges table.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Final CPG edges table.
     """
     res = build_cpg_edges(ctx=ctx, inputs=cpg_edge_inputs)
@@ -901,12 +902,12 @@ def cpg_edges_final(
 def cpg_props_final(
     ctx: ExecutionContext,
     cpg_props_inputs: PropsInputTables,
-) -> pa.Table:
+) -> TableLike:
     """Build the final CPG properties table.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Final CPG properties table.
     """
     res = build_cpg_props(ctx=ctx, inputs=cpg_props_inputs)

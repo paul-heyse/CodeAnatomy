@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.empty import empty_table
+from arrowdsl.pyarrow_protocols import TableLike
 from arrowdsl.runtime import ExecutionContext
 from normalize.schema_infer import align_table_to_schema
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
@@ -45,11 +45,11 @@ CFG_EDGES_NORM_SCHEMA = CFG_EDGES_NORM_SPEC.to_arrow_schema()
 
 
 def build_cfg_blocks(
-    py_bc_blocks: pa.Table,
-    py_bc_code_units: pa.Table,
+    py_bc_blocks: TableLike,
+    py_bc_code_units: TableLike,
     *,
     ctx: ExecutionContext | None = None,
-) -> pa.Table:
+) -> TableLike:
     """Normalize CFG block rows and enrich with file/path metadata.
 
     Parameters
@@ -63,7 +63,7 @@ def build_cfg_blocks(
 
     Returns
     -------
-    pa.Table
+    TableLike
         Normalized CFG block table.
     """
     if py_bc_blocks.num_rows == 0:
@@ -88,11 +88,11 @@ def build_cfg_blocks(
 
 
 def build_cfg_edges(
-    py_bc_code_units: pa.Table,
-    py_bc_cfg_edges: pa.Table,
+    py_bc_code_units: TableLike,
+    py_bc_cfg_edges: TableLike,
     *,
     ctx: ExecutionContext | None = None,
-) -> pa.Table:
+) -> TableLike:
     """Normalize CFG edges and enrich with file/path metadata.
 
     Parameters
@@ -106,7 +106,7 @@ def build_cfg_edges(
 
     Returns
     -------
-    pa.Table
+    TableLike
         Normalized CFG edge table.
     """
     if py_bc_cfg_edges.num_rows == 0:
@@ -131,16 +131,16 @@ def build_cfg_edges(
 
 
 def build_cfg(
-    py_bc_code_units: pa.Table,
-    py_bc_cfg_edges: pa.Table,
+    py_bc_code_units: TableLike,
+    py_bc_cfg_edges: TableLike,
     *,
     ctx: ExecutionContext | None = None,
-) -> pa.Table:
+) -> TableLike:
     """Compatibility wrapper for normalized CFG edges.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Normalized CFG edges table.
     """
     return build_cfg_edges(py_bc_code_units, py_bc_cfg_edges, ctx=ctx)

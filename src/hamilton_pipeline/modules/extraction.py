@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pyarrow as pa
 from hamilton.function_modifiers import cache, config, extract_fields, tag
 
+import arrowdsl.pyarrow_core as pa
+from arrowdsl.pyarrow_protocols import SchemaLike, TableLike
 from arrowdsl.runtime import ExecutionContext
 from extract.ast_extract import extract_ast_tables
 from extract.bytecode_extract import (
@@ -37,7 +38,7 @@ from extract.tree_sitter_extract import (
 from hamilton_pipeline.pipeline_types import RepoScanConfig, ScipIdentityOverrides, ScipIndexConfig
 
 
-def _empty_table(schema: pa.Schema) -> pa.Table:
+def _empty_table(schema: SchemaLike) -> TableLike:
     return pa.Table.from_arrays([pa.array([], type=field.type) for field in schema], schema=schema)
 
 
@@ -46,7 +47,7 @@ def _empty_table(schema: pa.Schema) -> pa.Table:
 def repo_files(
     repo_scan_config: RepoScanConfig,
     ctx: ExecutionContext,
-) -> pa.Table:
+) -> TableLike:
     """Scan the repo and produce the repo_files table.
 
     Expected columns (at minimum):
@@ -57,7 +58,7 @@ def repo_files(
 
     Returns
     -------
-    pa.Table
+    TableLike
         Repository file metadata table.
     """
     _ = ctx
@@ -72,17 +73,19 @@ def repo_files(
 @cache()
 @extract_fields(
     {
-        "cst_parse_manifest": pa.Table,
-        "cst_parse_errors": pa.Table,
-        "cst_name_refs": pa.Table,
-        "cst_imports": pa.Table,
-        "cst_callsites": pa.Table,
-        "cst_defs": pa.Table,
-        "cst_type_exprs": pa.Table,
+        "cst_parse_manifest": TableLike,
+        "cst_parse_errors": TableLike,
+        "cst_name_refs": TableLike,
+        "cst_imports": TableLike,
+        "cst_callsites": TableLike,
+        "cst_defs": TableLike,
+        "cst_type_exprs": TableLike,
     }
 )
 @tag(layer="extract", artifact="cst_bundle", kind="bundle")
-def cst_bundle(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> dict[str, pa.Table]:
+def cst_bundle(
+    repo_root: str, repo_files: TableLike, ctx: ExecutionContext
+) -> dict[str, TableLike]:
     """Build the LibCST extraction bundle.
 
     The extractor should return a dict with keys:
@@ -96,7 +99,7 @@ def cst_bundle(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> d
 
     Returns
     -------
-    dict[str, pa.Table]
+    dict[str, TableLike]
         Bundle tables for LibCST extraction.
     """
     return extract_cst_tables(repo_root=repo_root, repo_files=repo_files, ctx=ctx)
@@ -105,18 +108,20 @@ def cst_bundle(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> d
 @cache()
 @extract_fields(
     {
-        "ast_nodes": pa.Table,
-        "ast_edges": pa.Table,
-        "ast_defs": pa.Table,
+        "ast_nodes": TableLike,
+        "ast_edges": TableLike,
+        "ast_defs": TableLike,
     }
 )
 @tag(layer="extract", artifact="ast_bundle", kind="bundle")
-def ast_bundle(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> dict[str, pa.Table]:
+def ast_bundle(
+    repo_root: str, repo_files: TableLike, ctx: ExecutionContext
+) -> dict[str, TableLike]:
     """Build the Python AST extraction bundle.
 
     Returns
     -------
-    dict[str, pa.Table]
+    dict[str, TableLike]
         Bundle tables for AST extraction.
     """
     return extract_ast_tables(repo_root=repo_root, repo_files=repo_files, ctx=ctx)
@@ -125,13 +130,13 @@ def ast_bundle(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> d
 @cache()
 @extract_fields(
     {
-        "scip_metadata": pa.Table,
-        "scip_documents": pa.Table,
-        "scip_occurrences": pa.Table,
-        "scip_symbol_information": pa.Table,
-        "scip_symbol_relationships": pa.Table,
-        "scip_external_symbol_information": pa.Table,
-        "scip_diagnostics": pa.Table,
+        "scip_metadata": TableLike,
+        "scip_documents": TableLike,
+        "scip_occurrences": TableLike,
+        "scip_symbol_information": TableLike,
+        "scip_symbol_relationships": TableLike,
+        "scip_external_symbol_information": TableLike,
+        "scip_diagnostics": TableLike,
     }
 )
 @tag(layer="extract", artifact="scip_bundle", kind="bundle")
@@ -140,14 +145,14 @@ def scip_bundle(
     repo_root: str,
     scip_parse_options: SCIPParseOptions,
     ctx: ExecutionContext,
-) -> dict[str, pa.Table]:
+) -> dict[str, TableLike]:
     """Build the SCIP extraction bundle.
 
     If scip_index_path is None, returns empty tables (extractor should handle).
 
     Returns
     -------
-    dict[str, pa.Table]
+    dict[str, TableLike]
         Bundle tables for SCIP extraction.
     """
     return extract_scip_tables(
@@ -202,12 +207,12 @@ def scip_index_path(
 
 @cache()
 @tag(layer="extract", artifact="symtables", kind="table")
-def symtables(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> pa.Table:
+def symtables(repo_root: str, repo_files: TableLike, ctx: ExecutionContext) -> TableLike:
     """Extract symbol table data into a table.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Symbol table extraction table.
     """
     return extract_symtables_table(repo_root=repo_root, repo_files=repo_files, ctx=ctx)
@@ -215,12 +220,12 @@ def symtables(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> pa
 
 @cache()
 @tag(layer="extract", artifact="bytecode", kind="table")
-def bytecode(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> pa.Table:
+def bytecode(repo_root: str, repo_files: TableLike, ctx: ExecutionContext) -> TableLike:
     """Extract bytecode data into a table.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Bytecode extraction table.
     """
     return extract_bytecode_table(repo_root=repo_root, repo_files=repo_files, ctx=ctx)
@@ -229,25 +234,25 @@ def bytecode(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> pa.
 @cache()
 @extract_fields(
     {
-        "py_bc_code_units": pa.Table,
-        "py_bc_instructions": pa.Table,
-        "py_bc_exception_table": pa.Table,
-        "py_bc_blocks": pa.Table,
-        "py_bc_cfg_edges": pa.Table,
-        "py_bc_errors": pa.Table,
+        "py_bc_code_units": TableLike,
+        "py_bc_instructions": TableLike,
+        "py_bc_exception_table": TableLike,
+        "py_bc_blocks": TableLike,
+        "py_bc_cfg_edges": TableLike,
+        "py_bc_errors": TableLike,
     }
 )
 @tag(layer="extract", artifact="bytecode_bundle", kind="bundle")
 def bytecode_bundle(
     repo_root: str,
-    repo_files: pa.Table,
+    repo_files: TableLike,
     ctx: ExecutionContext,
-) -> dict[str, pa.Table]:
+) -> dict[str, TableLike]:
     """Extract bytecode tables as a bundle.
 
     Returns
     -------
-    dict[str, pa.Table]
+    dict[str, TableLike]
         Bytecode tables for code units, instructions, blocks, cfg, and errors.
     """
     _ = repo_root
@@ -267,22 +272,22 @@ def bytecode_bundle(
 @config.when(enable_tree_sitter=True)
 @extract_fields(
     {
-        "ts_nodes": pa.Table,
-        "ts_errors": pa.Table,
-        "ts_missing": pa.Table,
+        "ts_nodes": TableLike,
+        "ts_errors": TableLike,
+        "ts_missing": TableLike,
     }
 )
 @tag(layer="extract", artifact="tree_sitter_bundle", kind="bundle")
 def tree_sitter_bundle(
     repo_root: str,
-    repo_files: pa.Table,
+    repo_files: TableLike,
     ctx: ExecutionContext,
-) -> dict[str, pa.Table]:
+) -> dict[str, TableLike]:
     """Extract tree-sitter nodes and diagnostics.
 
     Returns
     -------
-    dict[str, pa.Table]
+    dict[str, TableLike]
         Tree-sitter tables for nodes and diagnostics.
     """
     return extract_ts_tables(repo_root=repo_root, repo_files=repo_files, ctx=ctx)
@@ -292,17 +297,17 @@ def tree_sitter_bundle(
 @config.when(enable_tree_sitter=False)
 @extract_fields(
     {
-        "ts_nodes": pa.Table,
-        "ts_errors": pa.Table,
-        "ts_missing": pa.Table,
+        "ts_nodes": TableLike,
+        "ts_errors": TableLike,
+        "ts_missing": TableLike,
     }
 )
 @tag(layer="extract", artifact="tree_sitter_bundle", kind="bundle")
 def tree_sitter_bundle_disabled(
     repo_root: str,
-    repo_files: pa.Table,
+    repo_files: TableLike,
     ctx: ExecutionContext,
-) -> dict[str, pa.Table]:
+) -> dict[str, TableLike]:
     """Return empty tree-sitter tables when extraction is disabled.
 
     Returns
@@ -324,10 +329,10 @@ def tree_sitter_bundle_disabled(
 @config.when(enable_runtime_inspect=True)
 @extract_fields(
     {
-        "rt_objects": pa.Table,
-        "rt_signatures": pa.Table,
-        "rt_signature_params": pa.Table,
-        "rt_members": pa.Table,
+        "rt_objects": TableLike,
+        "rt_signatures": TableLike,
+        "rt_signature_params": TableLike,
+        "rt_members": TableLike,
     }
 )
 @tag(layer="extract", artifact="runtime_inspect_bundle", kind="bundle")
@@ -336,7 +341,7 @@ def runtime_inspect_bundle(
     runtime_module_allowlist: list[str],
     runtime_timeout_s: int,
     ctx: ExecutionContext,
-) -> dict[str, pa.Table]:
+) -> dict[str, TableLike]:
     """Extract runtime inspection tables in a subprocess.
 
     Returns
@@ -364,10 +369,10 @@ def runtime_inspect_bundle(
 @config.when(enable_runtime_inspect=False)
 @extract_fields(
     {
-        "rt_objects": pa.Table,
-        "rt_signatures": pa.Table,
-        "rt_signature_params": pa.Table,
-        "rt_members": pa.Table,
+        "rt_objects": TableLike,
+        "rt_signatures": TableLike,
+        "rt_signature_params": TableLike,
+        "rt_members": TableLike,
     }
 )
 @tag(layer="extract", artifact="runtime_inspect_bundle", kind="bundle")
@@ -376,7 +381,7 @@ def runtime_inspect_bundle_disabled(
     runtime_module_allowlist: list[str],
     runtime_timeout_s: int,
     ctx: ExecutionContext,
-) -> dict[str, pa.Table]:
+) -> dict[str, TableLike]:
     """Return empty runtime inspection tables when extraction is disabled.
 
     Returns

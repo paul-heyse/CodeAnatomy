@@ -7,8 +7,8 @@ import json
 from collections.abc import Mapping
 from typing import TypedDict
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
+from arrowdsl.pyarrow_protocols import SchemaLike, TableLike
 from core_types import JsonDict
 
 type RowValue = str | int
@@ -24,7 +24,7 @@ class TableSummary(TypedDict):
     schema: list[JsonDict]
 
 
-def schema_fingerprint(schema: pa.Schema) -> str:
+def schema_fingerprint(schema: SchemaLike) -> str:
     """Compute a stable fingerprint for an Arrow schema.
 
     We fingerprint only:
@@ -44,7 +44,7 @@ def schema_fingerprint(schema: pa.Schema) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def table_summary(table: pa.Table) -> TableSummary:
+def table_summary(table: TableLike) -> TableSummary:
     """Return a compact summary for a table suitable for manifest recording.
 
     Returns
@@ -64,7 +64,7 @@ def table_summary(table: pa.Table) -> TableSummary:
     }
 
 
-def dataset_stats_table(tables: Mapping[str, pa.Table | None]) -> pa.Table:
+def dataset_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
     """Build a dataset-level stats table.
 
     Table columns:
@@ -72,7 +72,7 @@ def dataset_stats_table(tables: Mapping[str, pa.Table | None]) -> pa.Table:
 
     Returns
     -------
-    pa.Table
+    TableLike
         Dataset-level statistics table.
     """
     rows: list[Row] = []
@@ -101,7 +101,7 @@ def dataset_stats_table(tables: Mapping[str, pa.Table | None]) -> pa.Table:
     )
 
 
-def column_stats_table(tables: Mapping[str, pa.Table | None]) -> pa.Table:
+def column_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
     """Build a column-level stats table.
 
     Table columns:
@@ -109,7 +109,7 @@ def column_stats_table(tables: Mapping[str, pa.Table | None]) -> pa.Table:
 
     Returns
     -------
-    pa.Table
+    TableLike
         Column-level statistics table.
     """
     rows: list[Row] = []

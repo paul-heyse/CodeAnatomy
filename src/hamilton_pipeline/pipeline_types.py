@@ -5,8 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-import pyarrow as pa
-
+from arrowdsl.pyarrow_protocols import TableLike
 from relspec.compiler import CompiledOutput
 from relspec.registry import ContractCatalog, DatasetLocation, RelationshipRegistry
 
@@ -72,24 +71,24 @@ class RuntimeInspectConfig:
 class CstRelspecInputs:
     """CST inputs required for relationship-spec datasets."""
 
-    cst_name_refs: pa.Table
-    cst_imports_norm: pa.Table
-    cst_callsites: pa.Table
+    cst_name_refs: TableLike
+    cst_imports_norm: TableLike
+    cst_callsites: TableLike
 
 
 @dataclass(frozen=True)
 class QnameInputs:
     """Qualified-name inputs used by relationship rules."""
 
-    callsite_qname_candidates: pa.Table
-    dim_qualified_names: pa.Table
+    callsite_qname_candidates: TableLike
+    dim_qualified_names: TableLike
 
 
 @dataclass(frozen=True)
 class ScipOccurrenceInputs:
     """SCIP occurrence inputs for relationship rules."""
 
-    scip_occurrences_norm: pa.Table
+    scip_occurrences_norm: TableLike
 
 
 @dataclass(frozen=True)
@@ -105,28 +104,28 @@ class ScipIdentityOverrides:
 class CstBuildInputs:
     """CST inputs required for CPG node/property building."""
 
-    cst_name_refs: pa.Table
-    cst_imports_norm: pa.Table
-    cst_callsites: pa.Table
-    cst_defs_norm: pa.Table
+    cst_name_refs: TableLike
+    cst_imports_norm: TableLike
+    cst_callsites: TableLike
+    cst_defs_norm: TableLike
 
 
 @dataclass(frozen=True)
 class ScipBuildInputs:
     """SCIP inputs required for CPG node/property building."""
 
-    scip_symbol_information: pa.Table
-    scip_occurrences_norm: pa.Table
-    scip_symbol_relationships: pa.Table
-    scip_external_symbol_information: pa.Table
+    scip_symbol_information: TableLike
+    scip_occurrences_norm: TableLike
+    scip_symbol_relationships: TableLike
+    scip_external_symbol_information: TableLike
 
 
 @dataclass(frozen=True)
 class CpgBaseInputs:
     """Shared inputs for CPG nodes and properties."""
 
-    repo_files: pa.Table
-    dim_qualified_names: pa.Table
+    repo_files: TableLike
+    dim_qualified_names: TableLike
     cst_build_inputs: CstBuildInputs
     scip_build_inputs: ScipBuildInputs
 
@@ -135,67 +134,67 @@ class CpgBaseInputs:
 class TreeSitterInputs:
     """Tree-sitter tables used in CPG build steps."""
 
-    ts_nodes: pa.Table
-    ts_errors: pa.Table
-    ts_missing: pa.Table
+    ts_nodes: TableLike
+    ts_errors: TableLike
+    ts_missing: TableLike
 
 
 @dataclass(frozen=True)
 class TypeInputs:
     """Type tables used in CPG build steps."""
 
-    type_exprs_norm: pa.Table
-    types_norm: pa.Table
+    type_exprs_norm: TableLike
+    types_norm: TableLike
 
 
 @dataclass(frozen=True)
 class DiagnosticsInputs:
     """Diagnostics tables used in CPG build steps."""
 
-    diagnostics_norm: pa.Table
+    diagnostics_norm: TableLike
 
 
 @dataclass(frozen=True)
 class RuntimeInputs:
     """Runtime inspection tables used in CPG build steps."""
 
-    rt_objects: pa.Table
-    rt_signatures: pa.Table
-    rt_signature_params: pa.Table
-    rt_members: pa.Table
+    rt_objects: TableLike
+    rt_signatures: TableLike
+    rt_signature_params: TableLike
+    rt_members: TableLike
 
 
 @dataclass(frozen=True)
 class CpgExtraInputs:
     """Optional inputs for CPG nodes/props/edges."""
 
-    ts_nodes: pa.Table
-    ts_errors: pa.Table
-    ts_missing: pa.Table
-    type_exprs_norm: pa.Table
-    types_norm: pa.Table
-    diagnostics_norm: pa.Table
-    rt_objects: pa.Table
-    rt_signatures: pa.Table
-    rt_signature_params: pa.Table
-    rt_members: pa.Table
+    ts_nodes: TableLike
+    ts_errors: TableLike
+    ts_missing: TableLike
+    type_exprs_norm: TableLike
+    types_norm: TableLike
+    diagnostics_norm: TableLike
+    rt_objects: TableLike
+    rt_signatures: TableLike
+    rt_signature_params: TableLike
+    rt_members: TableLike
 
 
 @dataclass(frozen=True)
 class RelationshipOutputTables:
     """Relationship output tables used across pipeline stages."""
 
-    rel_name_symbol: pa.Table
-    rel_import_symbol: pa.Table
-    rel_callsite_symbol: pa.Table
-    rel_callsite_qname: pa.Table
+    rel_name_symbol: TableLike
+    rel_import_symbol: TableLike
+    rel_callsite_symbol: TableLike
+    rel_callsite_qname: TableLike
 
-    def as_dict(self) -> dict[str, pa.Table]:
+    def as_dict(self) -> dict[str, TableLike]:
         """Return the relationship outputs as a name->table mapping.
 
         Returns
         -------
-        dict[str, pa.Table]
+        dict[str, TableLike]
             Mapping of relationship output names to tables.
         """
         return {
@@ -210,16 +209,16 @@ class RelationshipOutputTables:
 class CpgOutputTables:
     """CPG output tables used across pipeline stages."""
 
-    cpg_nodes: pa.Table
-    cpg_edges: pa.Table
-    cpg_props: pa.Table
+    cpg_nodes: TableLike
+    cpg_edges: TableLike
+    cpg_props: TableLike
 
-    def as_dict(self) -> dict[str, pa.Table]:
+    def as_dict(self) -> dict[str, TableLike]:
         """Return the CPG outputs as a name->table mapping.
 
         Returns
         -------
-        dict[str, pa.Table]
+        dict[str, TableLike]
             Mapping of CPG output names to tables.
         """
         return {
@@ -233,7 +232,7 @@ class CpgOutputTables:
 class RelspecInputsBundle:
     """Bundle of relationship input tables and optional locations."""
 
-    tables: dict[str, pa.Table]
+    tables: dict[str, TableLike]
     locations: dict[str, DatasetLocation]
 
 

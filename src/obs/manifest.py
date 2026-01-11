@@ -9,8 +9,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import pyarrow as pa
-
+from arrowdsl.pyarrow_protocols import TableLike
 from core_types import JsonDict, PathLike, ensure_path
 from obs.repro import collect_repro_info
 from obs.stats import schema_fingerprint, table_summary
@@ -102,12 +101,12 @@ class ManifestContext:
 class ManifestData:
     """Optional inputs used to populate manifest records."""
 
-    relspec_input_tables: Mapping[str, pa.Table] | None = None
+    relspec_input_tables: Mapping[str, TableLike] | None = None
     relspec_input_locations: Mapping[str, DatasetLocation] | None = None
-    relationship_outputs: Mapping[str, pa.Table] | None = None
-    cpg_nodes: pa.Table | None = None
-    cpg_edges: pa.Table | None = None
-    cpg_props: pa.Table | None = None
+    relationship_outputs: Mapping[str, TableLike] | None = None
+    cpg_nodes: TableLike | None = None
+    cpg_edges: TableLike | None = None
+    cpg_props: TableLike | None = None
     relationship_rules: Sequence[RelationshipRule] | None = None
     produced_relationship_output_names: Sequence[str] | None = None
     notes: JsonDict | None = None
@@ -121,7 +120,7 @@ def _dataset_record_from_table(
     *,
     name: str,
     kind: str,
-    table: pa.Table | None,
+    table: TableLike | None,
     path: str | None = None,
     data_format: str | None = None,
 ) -> DatasetRecord:
@@ -141,7 +140,7 @@ def _dataset_record_from_table(
     )
 
 
-def _output_record_from_table(name: str, table: pa.Table | None) -> OutputRecord:
+def _output_record_from_table(name: str, table: TableLike | None) -> OutputRecord:
     if table is None:
         return OutputRecord(name=name)
     return OutputRecord(

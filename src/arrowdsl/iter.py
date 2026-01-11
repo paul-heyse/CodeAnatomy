@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 
-import pyarrow as pa
-
-type ArrayLike = pa.Array | pa.ChunkedArray
+from arrowdsl.pyarrow_protocols import ArrayLike, ScalarLike, TableLike
 
 
 def iter_array_values(array: ArrayLike) -> Iterator[object | None]:
@@ -23,7 +21,7 @@ def iter_array_values(array: ArrayLike) -> Iterator[object | None]:
         Native Python values for each element.
     """
     for value in array:
-        if isinstance(value, pa.Scalar):
+        if isinstance(value, ScalarLike):
             yield value.as_py()
         else:
             yield value
@@ -46,7 +44,7 @@ def iter_arrays(arrays: Sequence[ArrayLike]) -> Iterator[tuple[object | None, ..
     yield from zip(*iters, strict=True)
 
 
-def iter_table_rows(table: pa.Table) -> Iterator[dict[str, object]]:
+def iter_table_rows(table: TableLike) -> Iterator[dict[str, object]]:
     """Iterate rows as dicts without materializing a full list.
 
     Parameters

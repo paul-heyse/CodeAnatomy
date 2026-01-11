@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
 
-import pyarrow as pa
+import arrowdsl.pyarrow_core as pa
 
 type OrderingKey = tuple[str, str]
 

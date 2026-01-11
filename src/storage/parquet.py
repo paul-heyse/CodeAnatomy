@@ -7,10 +7,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
+from arrowdsl.pyarrow_protocols import TableLike
 from core_types import PathLike, ensure_path
 
 
@@ -44,7 +44,7 @@ def _rm_tree(path: Path) -> None:
 
 
 def write_table_parquet(
-    table: pa.Table,
+    table: TableLike,
     path: PathLike,
     *,
     opts: ParquetWriteOptions | None = None,
@@ -76,7 +76,7 @@ def write_table_parquet(
 
 
 def write_dataset_parquet(
-    table: pa.Table,
+    table: TableLike,
     base_dir: PathLike,
     *,
     opts: ParquetWriteOptions | None = None,
@@ -117,19 +117,19 @@ def write_dataset_parquet(
     return str(base_path)
 
 
-def read_table_parquet(path: PathLike) -> pa.Table:
+def read_table_parquet(path: PathLike) -> TableLike:
     """Read a single Parquet file into a table.
 
     Returns
     -------
-    pa.Table
+    TableLike
         Loaded table.
     """
     return pq.read_table(str(ensure_path(path)))
 
 
 def write_named_datasets_parquet(
-    datasets: Mapping[str, pa.Table],
+    datasets: Mapping[str, TableLike],
     base_dir: PathLike,
     *,
     opts: ParquetWriteOptions | None = None,

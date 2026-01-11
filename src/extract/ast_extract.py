@@ -5,9 +5,9 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.iter import iter_array_values, iter_table_rows
+from arrowdsl.pyarrow_protocols import TableLike
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
@@ -25,9 +25,9 @@ class ASTExtractOptions:
 class ASTExtractResult:
     """Hold extracted AST tables for nodes, edges, and errors."""
 
-    py_ast_nodes: pa.Table
-    py_ast_edges: pa.Table
-    py_ast_errors: pa.Table
+    py_ast_nodes: TableLike
+    py_ast_edges: TableLike
+    py_ast_errors: TableLike
 
 
 AST_NODES_SPEC = TableSchemaSpec(
@@ -308,7 +308,9 @@ def _extract_ast_for_row(
     return nodes_rows, edges_rows, []
 
 
-def extract_ast(repo_files: pa.Table, options: ASTExtractOptions | None = None) -> ASTExtractResult:
+def extract_ast(
+    repo_files: TableLike, options: ASTExtractOptions | None = None
+) -> ASTExtractResult:
     """Extract a minimal AST fact set per file.
 
     Returns
@@ -345,9 +347,9 @@ def extract_ast(repo_files: pa.Table, options: ASTExtractOptions | None = None) 
 def extract_ast_tables(
     *,
     repo_root: str | None,
-    repo_files: pa.Table,
+    repo_files: TableLike,
     ctx: object | None = None,
-) -> dict[str, pa.Table]:
+) -> dict[str, TableLike]:
     """Extract AST tables as a name-keyed bundle.
 
     Parameters

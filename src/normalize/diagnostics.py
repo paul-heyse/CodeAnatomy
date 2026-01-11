@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-import pyarrow as pa
-
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_arrays
 from arrowdsl.iter import iter_arrays
 from arrowdsl.nested import build_list_array, build_struct_array
+from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike
 from normalize.spans import (
     DEFAULT_POSITION_ENCODING,
     ENC_UTF8,
@@ -34,11 +34,11 @@ SCIP_SEVERITY_HINT = 4
 class DiagnosticsSources:
     """Source tables for diagnostics aggregation."""
 
-    cst_parse_errors: pa.Table | None
-    ts_errors: pa.Table | None
-    ts_missing: pa.Table | None
-    scip_diagnostics: pa.Table | None
-    scip_documents: pa.Table | None = None
+    cst_parse_errors: TableLike | None
+    ts_errors: TableLike | None
+    ts_missing: TableLike | None
+    scip_diagnostics: TableLike | None
+    scip_documents: TableLike | None = None
 
 
 @dataclass(frozen=True)
@@ -114,7 +114,7 @@ class _DiagBuffers:
         self.detail_tag_offsets.append(len(self.detail_tag_values))
         self.detail_offsets.append(len(self.detail_kinds))
 
-    def details_array(self) -> pa.Array:
+    def details_array(self) -> ArrayLike:
         tags = build_list_array(
             pa.array(self.detail_tag_offsets, type=pa.int32()),
             pa.array(self.detail_tag_values, type=pa.string()),
@@ -179,10 +179,10 @@ DIAG_SCHEMA = DIAG_SPEC.to_arrow_schema()
 
 
 def _column_or_null(
-    table: pa.Table,
+    table: TableLike,
     col: str,
-    dtype: pa.DataType,
-) -> pa.Array | pa.ChunkedArray:
+    dtype: DataTypeLike,
+) -> ArrayLike | ChunkedArrayLike:
     if col in table.column_names:
         return table[col]
     return pa.nulls(table.num_rows, type=dtype)
@@ -190,8 +190,8 @@ def _column_or_null(
 
 def _prefixed_hash64(
     prefix: str,
-    arrays: list[pa.Array | pa.ChunkedArray],
-) -> pa.Array | pa.ChunkedArray:
+    arrays: list[ArrayLike | ChunkedArrayLike],
+) -> ArrayLike | ChunkedArrayLike:
     hashed = hash64_from_arrays(arrays, prefix=prefix)
     hashed_str = pc.cast(hashed, pa.string())
     return pc.binary_join_element_wise(pa.scalar(prefix), hashed_str, ":")
@@ -203,7 +203,7 @@ def _detail_tags(value: object | None) -> list[str]:
     return []
 
 
-def _empty_details_list(num_rows: int) -> pa.Array:
+def _empty_details_list(num_rows: int) -> ArrayLike:
     offsets = pa.array([0] * (num_rows + 1), type=pa.int32())
     tags = build_list_array(
         pa.array([0], type=pa.int32()),
@@ -274,8 +274,8 @@ def _file_index(
 
 def _cst_parse_error_table(
     repo_text_index: RepoTextIndex,
-    cst_parse_errors: pa.Table,
-) -> pa.Table:
+    cst_parse_errors: TableLike,
+) -> TableLike:
     buffers = _DiagBuffers()
     arrays = [
         _column_or_null(cst_parse_errors, "path", pa.string()),
@@ -320,7 +320,7 @@ def _cst_parse_error_table(
     )
 
 
-def _ts_diag_table(ts_table: pa.Table, *, severity: str, message: str) -> pa.Table:
+def _ts_diag_table(ts_table: TableLike, *, severity: str, message: str) -> TableLike:
     n = ts_table.num_rows
     if n == 0:
         return empty_table(DIAG_SCHEMA)
@@ -385,9 +385,9 @@ def _scip_severity_value(value: int) -> str:
 
 def _scip_diag_table(
     repo_text_index: RepoTextIndex,
-    scip_diagnostics: pa.Table,
-    scip_documents: pa.Table | None,
-) -> pa.Table:
+    scip_diagnostics: TableLike,
+    scip_documents: TableLike | None,
+) -> TableLike:
     ctx = ScipDiagContext(
         repo_text_index=repo_text_index,
         doc_enc=_scip_doc_encodings(scip_documents),
@@ -443,7 +443,7 @@ def _scip_diag_table(
     )
 
 
-def _scip_doc_encodings(scip_documents: pa.Table | None) -> dict[str, int]:
+def _scip_doc_encodings(scip_documents: TableLike | None) -> dict[str, int]:
     doc_enc: dict[str, int] = {}
     if scip_documents is None or scip_documents.num_rows == 0:
         return doc_enc
@@ -497,7 +497,7 @@ def collect_diags(
     repo_text_index: RepoTextIndex,
     *,
     sources: DiagnosticsSources,
-) -> pa.Table:
+) -> TableLike:
     """Aggregate diagnostics into a single normalized table.
 
     Parameters
@@ -509,10 +509,10 @@ def collect_diags(
 
     Returns
     -------
-    pa.Table
+    TableLike
         Normalized diagnostics table.
     """
-    parts: list[pa.Table] = []
+    parts: list[TableLike] = []
     if sources.cst_parse_errors is not None and sources.cst_parse_errors.num_rows:
         table = _cst_parse_error_table(repo_text_index, sources.cst_parse_errors)
         if table.num_rows:

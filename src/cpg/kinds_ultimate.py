@@ -24,7 +24,8 @@ Note:
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import importlib
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
@@ -419,7 +420,7 @@ class DerivationSpec:
     Derivation spec for a node_kind or edge_kind.
 
     extractor:
-      A python import path string: "pkg.module:function" (or conceptual).
+      A python import path string: "pkg.module:function" (or callable attribute).
 
     provider_or_field:
       For LibCST: provider names used
@@ -471,6 +472,54 @@ class DerivationSpec:
             "status": self.status,
             "notes": self.notes,
         }
+
+
+@dataclass(frozen=True)
+class CallableRef:
+    """Reference a callable attribute via a module path."""
+
+    module: str
+    attr: str
+
+    def resolve(self) -> object:
+        """Import and resolve the referenced attribute.
+
+        Returns
+        -------
+        object
+            Resolved attribute.
+        """
+        mod = importlib.import_module(self.module)
+        return getattr(mod, self.attr)
+
+
+def parse_extractor(value: str) -> CallableRef:
+    """Parse an extractor string into a callable reference.
+
+    Parameters
+    ----------
+    value:
+        Extractor string in the form "module:attribute".
+
+    Returns
+    -------
+    CallableRef
+        Parsed callable reference.
+
+    Raises
+    ------
+    ValueError
+        Raised when the extractor string is invalid.
+    """
+    raw = value.strip()
+    if ":" not in raw:
+        msg = f"Extractor must be in module:attribute form, got {value!r}."
+        raise ValueError(msg)
+    module, attr = raw.split(":", 1)
+    if not module or not attr:
+        msg = f"Extractor must include module and attribute, got {value!r}."
+        raise ValueError(msg)
+    return CallableRef(module=module, attr=attr)
 
 
 # ----------------------------
@@ -1391,7 +1440,7 @@ EDGE_KIND_CONTRACTS: dict[EdgeKind, EdgeKindContract] = {
 NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     NodeKind.PY_REPO: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.repo_scan:scan_repo",
+            extractor="extract.repo_scan:scan_repo",
             provider_or_field="repo_root + optional git HEAD sniff",
             join_keys=(),
             id_recipe="repo_id = sha256(repo_root + git_commit?)[:16]",
@@ -1402,7 +1451,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.PY_FILE: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.repo_scan:scan_repo",
+            extractor="extract.repo_scan:scan_repo",
             provider_or_field="filesystem walk + include/exclude globs",
             join_keys=(),
             id_recipe="file_id = sha256('FILE:' + repo_rel_path)[:16]",
@@ -1413,7 +1462,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.PY_MODULE: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST FullRepoManager + FullyQualifiedNameProvider",
             join_keys=("path",),
             id_recipe="module_id = sha256('MOD:' + module_fqn)[:16] (or stable_id(path,0,0,'PY_MODULE'))",
@@ -1424,7 +1473,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.PY_PACKAGE: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.repo_scan:scan_repo",
+            extractor="extract.repo_scan:scan_repo",
             provider_or_field="derive from __init__.py presence + module_fqn mapping",
             join_keys=("path",),
             id_recipe="package_id = sha256('PKG:' + package_fqn)[:16]",
@@ -1436,7 +1485,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     # LibCST nodes (all use ByteSpanPositionProvider)
     NodeKind.CST_NODE: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST parse_module + MetadataWrapper(ByteSpanPositionProvider, PositionProvider, ParentNodeProvider)",
             join_keys=(),
             id_recipe="node_id = stable_id(path, bstart, bend, 'CST_NODE')",
@@ -1447,7 +1496,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_DEF: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST FunctionDef/ClassDef/Lambda nodes + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="def_id = stable_id(path, bstart, bend, 'CST_DEF')",
@@ -1458,7 +1507,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_CLASS_DEF: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST ClassDef + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="def_id = stable_id(path, bstart, bend, 'CST_CLASS_DEF')",
@@ -1469,7 +1518,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_FUNCTION_DEF: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST FunctionDef/AsyncFunctionDef + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="def_id = stable_id(path, bstart, bend, 'CST_FUNCTION_DEF')",
@@ -1480,7 +1529,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_LAMBDA: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST Lambda + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="lambda_id = stable_id(path, bstart, bend, 'CST_LAMBDA')",
@@ -1492,7 +1541,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_PARAM: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST Param + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="param_id = stable_id(path, bstart, bend, 'CST_PARAM')",
@@ -1503,7 +1552,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_DECORATOR: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST Decorator + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="decorator_id = stable_id(path, bstart, bend, 'CST_DECORATOR')",
@@ -1514,7 +1563,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_IMPORT: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST Import + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="import_id = stable_id(path, bstart, bend, 'CST_IMPORT')",
@@ -1525,7 +1574,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_IMPORT_FROM: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST ImportFrom + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="import_id = stable_id(path, bstart, bend, 'CST_IMPORT_FROM')",
@@ -1536,7 +1585,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_IMPORT_ALIAS: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST ImportAlias + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="import_alias_id = stable_id(path, bstart, bend, 'CST_IMPORT_ALIAS')",
@@ -1547,7 +1596,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_NAME_REF: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST Name nodes + ExpressionContextProvider + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="name_ref_id = stable_id(path, bstart, bend, 'CST_NAME_REF')",
@@ -1558,7 +1607,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_ATTRIBUTE_ACCESS: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST Attribute + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="attr_id = stable_id(path, bstart, bend, 'CST_ATTRIBUTE_ACCESS')",
@@ -1569,7 +1618,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_SUBSCRIPT: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST Subscript + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="sub_id = stable_id(path, bstart, bend, 'CST_SUBSCRIPT')",
@@ -1580,7 +1629,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_CALLSITE: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST Call + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="call_id = stable_id(path, bstart, bend, 'CST_CALLSITE')",
@@ -1591,7 +1640,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_ARG: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST Arg + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="arg_id = stable_id(path, bstart, bend, 'CST_ARG')",
@@ -1602,7 +1651,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_LITERAL: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST literal nodes (SimpleString, Integer, Float, etc.) + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="lit_id = stable_id(path, bstart, bend, 'CST_LITERAL')",
@@ -1613,7 +1662,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_DOCSTRING: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST docstring detection (first statement string literal in suite) + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="doc_id = stable_id(path, bstart, bend, 'CST_DOCSTRING')",
@@ -1624,7 +1673,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CST_COMMENT: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST Comment nodes + ByteSpanPositionProvider",
             join_keys=(),
             id_recipe="comment_id = stable_id(path, bstart, bend, 'CST_COMMENT')",
@@ -1636,7 +1685,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     # AST
     NodeKind.AST_NODE: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.ast_extract:extract_ast_tables",
+            extractor="extract.ast_extract:extract_ast_tables",
             provider_or_field="python ast.parse + node walk; (lineno,col)->bytes via normalize.spans",
             join_keys=("path",),
             id_recipe="ast_id = stable_id(path, bstart, bend, 'AST_NODE') when bytes available; else sha(ast_type+lineno+col+path)",
@@ -1647,7 +1696,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.AST_DEF: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.ast_extract:extract_ast_tables",
+            extractor="extract.ast_extract:extract_ast_tables",
             provider_or_field="ast.FunctionDef/AsyncFunctionDef/ClassDef/Lambda",
             join_keys=("path", "lineno", "col_offset"),
             id_recipe="ast_def_id = sha('AST_DEF:'+path+lineno+col)",
@@ -1658,7 +1707,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.AST_CALL: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.ast_extract:extract_ast_tables",
+            extractor="extract.ast_extract:extract_ast_tables",
             provider_or_field="ast.Call nodes",
             join_keys=("path", "lineno", "col_offset"),
             id_recipe="ast_call_id = sha('AST_CALL:'+path+lineno+col)",
@@ -1669,7 +1718,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.AST_NAME: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.ast_extract:extract_ast_tables",
+            extractor="extract.ast_extract:extract_ast_tables",
             provider_or_field="ast.Name nodes",
             join_keys=("path", "lineno", "col_offset"),
             id_recipe="ast_name_id = sha('AST_NAME:'+path+lineno+col)",
@@ -1680,7 +1729,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.AST_ATTRIBUTE: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.ast_extract:extract_ast_tables",
+            extractor="extract.ast_extract:extract_ast_tables",
             provider_or_field="ast.Attribute nodes",
             join_keys=("path", "lineno", "col_offset"),
             id_recipe="ast_attr_id = sha('AST_ATTRIBUTE:'+path+lineno+col)",
@@ -1692,41 +1741,41 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     # tree-sitter
     NodeKind.TS_NODE: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.tree_sitter_extract:extract_ts_tables",
+            extractor="extract.tree_sitter_extract:extract_ts_tables",
             provider_or_field="tree-sitter nodes (start_byte/end_byte, is_error/is_missing/has_error)",
             join_keys=(),
             id_recipe="ts_id = stable_id(path, start_byte, end_byte, 'TS_NODE')",
             confidence_policy="confidence=1.0",
             ambiguity_policy="n/a",
-            status="planned",
+            status="implemented",
         )
     ],
     NodeKind.TS_ERROR: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.tree_sitter_extract:extract_ts_tables",
+            extractor="extract.tree_sitter_extract:extract_ts_tables",
             provider_or_field="node.is_error == True",
             join_keys=(),
             id_recipe="ts_err_id = stable_id(path, start_byte, end_byte, 'TS_ERROR')",
             confidence_policy="confidence=1.0",
             ambiguity_policy="n/a",
-            status="planned",
+            status="implemented",
         )
     ],
     NodeKind.TS_MISSING: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.tree_sitter_extract:extract_ts_tables",
+            extractor="extract.tree_sitter_extract:extract_ts_tables",
             provider_or_field="node.is_missing == True",
             join_keys=(),
             id_recipe="ts_missing_id = stable_id(path, start_byte, end_byte, 'TS_MISSING')",
             confidence_policy="confidence=1.0",
             ambiguity_policy="n/a",
-            status="planned",
+            status="implemented",
         )
     ],
     # symtable/bindings
     NodeKind.SYM_SCOPE: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.symtable_extract:extract_symtables_table",
+            extractor="extract.symtable_extract:extract_symtables_table",
             provider_or_field="symtable.symtable(...); table.get_type().name; table.get_children()",
             join_keys=("path",),
             id_recipe="scope_id = f'{file_id}:SCOPE:{qualpath}:{lineno}:{scope_type}:{ordinal}'",
@@ -1737,7 +1786,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.SYM_SYMBOL: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.symtable_extract:extract_symtables_table",
+            extractor="extract.symtable_extract:extract_symtables_table",
             provider_or_field="table.lookup(name) and symbol flags: is_local/is_free/is_global/is_nonlocal/is_parameter...",
             join_keys=("scope_id", "name"),
             id_recipe="sym_symbol_id = sha('SYM_SYMBOL:'+scope_id+':'+name)[:16]",
@@ -1748,7 +1797,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.PY_SCOPE: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.schema_infer:build_scopes",
+            extractor="normalize.schema_infer:build_scopes",
             provider_or_field="normalize SYM_SCOPE (+ optional LibCST ScopeProvider ids) into a single scope namespace",
             join_keys=("scope_id",),
             id_recipe="py_scope_id = scope_id",
@@ -1759,7 +1808,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.PY_BINDING: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.schema_infer:build_bindings",
+            extractor="normalize.schema_infer:build_bindings",
             provider_or_field="derive from symtable symbol flags per (scope,name)",
             join_keys=("scope_id", "name"),
             id_recipe="binding_id = f'{scope_id}:BIND:{name}'",
@@ -1770,7 +1819,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.PY_DEF_SITE: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.schema_infer:build_def_use_sites",
+            extractor="normalize.schema_infer:build_def_use_sites",
             provider_or_field="LibCST Name spans + symtable binding classification (def sites)",
             join_keys=("path", "bstart", "bend", "name"),
             id_recipe="def_site_id = stable_id(path, bstart, bend, 'PY_DEF_SITE')",
@@ -1781,7 +1830,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.PY_USE_SITE: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.schema_infer:build_def_use_sites",
+            extractor="normalize.schema_infer:build_def_use_sites",
             provider_or_field="LibCST Name spans + expr_context + symtable binding resolution",
             join_keys=("path", "bstart", "bend", "name"),
             id_recipe="use_site_id = stable_id(path, bstart, bend, 'PY_USE_SITE')",
@@ -1793,7 +1842,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     # SCIP
     NodeKind.SCIP_INDEX: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.scip_extract:extract_scip_tables",
+            extractor="extract.scip_extract:extract_scip_tables",
             provider_or_field="protobuf decode of index.scip + Index metadata",
             join_keys=(),
             id_recipe="scip_index_id = sha('SCIP_INDEX:'+scip_index_path)[:16]",
@@ -1804,7 +1853,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.SCIP_DOCUMENT: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.scip_extract:extract_scip_tables",
+            extractor="extract.scip_extract:extract_scip_tables",
             provider_or_field="SCIP Document.relative_path",
             join_keys=("path",),
             id_recipe="doc_id = sha('SCIP_DOC:'+path)[:16]",
@@ -1815,7 +1864,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.SCIP_SYMBOL: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.scip_extract:extract_scip_tables",
+            extractor="extract.scip_extract:extract_scip_tables",
             provider_or_field="SCIP SymbolInformation.symbol + fields",
             join_keys=("symbol",),
             id_recipe="symbol_node_id = symbol (or sha('SCIP_SYMBOL:'+symbol)[:16])",
@@ -1826,7 +1875,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.SCIP_OCCURRENCE: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.scip_extract:extract_scip_tables + codeintel_cpg.normalize.spans:add_scip_occurrence_byte_spans",
+            extractor="normalize.spans:add_scip_occurrence_byte_spans",
             provider_or_field="Occurrence(symbol, symbol_roles, range) normalized to bytes",
             join_keys=("path", "range"),
             id_recipe="occ_id = stable_id(path, bstart, bend, 'SCIP_OCCURRENCE')",
@@ -1837,7 +1886,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.SCIP_DIAGNOSTIC: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.scip_extract:extract_scip_tables",
+            extractor="extract.scip_extract:extract_scip_tables",
             provider_or_field="Document.diagnostics (if present) normalized to bytes",
             join_keys=("path", "range"),
             id_recipe="diag_id = stable_id(path, bstart, bend, 'SCIP_DIAGNOSTIC')",
@@ -1849,7 +1898,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     # qualified names
     NodeKind.PY_QUALIFIED_NAME: [
         DerivationSpec(
-            extractor="codeintel_cpg.hamilton.modules.normalization:dim_qualified_names",
+            extractor="hamilton_pipeline.modules.normalization:dim_qualified_names",
             provider_or_field="LibCST QualifiedNameProvider/FullyQualifiedNameProvider candidate strings",
             join_keys=("qname",),
             id_recipe="qname_id = sha('QNAME:'+qname)[:16]",
@@ -1860,7 +1909,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.PY_MODULE_FQN: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="FullyQualifiedNameProvider on Module",
             join_keys=("module_fqn",),
             id_recipe="module_fqn_id = sha('MODFQN:'+module_fqn)[:16]",
@@ -1872,7 +1921,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     # bytecode / flow
     NodeKind.BC_CODE_UNIT: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.bytecode_extract:extract_bytecode_table",
+            extractor="extract.bytecode_extract:extract_bytecode_table",
             provider_or_field="compile + traverse code objects; record co_qualname/co_firstlineno; dis-compatible",
             join_keys=("path", "qualname", "co_firstlineno"),
             id_recipe="code_unit_id = sha('BC:'+path+':'+qualname+':'+firstlineno)[:16]",
@@ -1883,7 +1932,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.BC_INSTR: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.bytecode_extract:extract_bytecode_table",
+            extractor="extract.bytecode_extract:extract_bytecode_table",
             provider_or_field="dis.get_instructions(codeobj) + store baseopname",
             join_keys=("code_unit_id", "offset"),
             id_recipe="instr_id = sha(code_unit_id+':OFF:'+offset)[:16]",
@@ -1894,18 +1943,18 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.CFG_BLOCK: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.bytecode_cfg:build_cfg",
+            extractor="normalize.bytecode_cfg:build_cfg_blocks",
             provider_or_field="basic block formation + jump semantics + exception table edges",
             join_keys=("code_unit_id",),
             id_recipe="block_id = f'{code_unit_id}:B:{start_off}'",
             confidence_policy="confidence=0.95",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
     NodeKind.CFG_EXIT: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.bytecode_cfg:build_cfg",
+            extractor="normalize.bytecode_cfg:build_cfg",
             provider_or_field="synthetic per code_unit_id",
             join_keys=("code_unit_id",),
             id_recipe="exit_id = sha(code_unit_id+':EXIT')[:16]",
@@ -1916,52 +1965,52 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.DF_DEF: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.bytecode_dfg:build_def_use_events",
+            extractor="normalize.bytecode_dfg:build_def_use_events",
             provider_or_field="opcode classifier -> def events; stack/locals/globals model",
             join_keys=("code_unit_id", "instr_id", "binding_id"),
             id_recipe="df_id = sha('DEF:'+code_unit_id+':'+instr_id+':'+binding_id)[:16]",
             confidence_policy="confidence=0.8-0.95 depending on opcode coverage",
             ambiguity_policy="if binding ambiguous, emit multiple DF_DEF candidates with scores",
-            status="planned",
+            status="implemented",
         )
     ],
     NodeKind.DF_USE: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.bytecode_dfg:build_def_use_events",
+            extractor="normalize.bytecode_dfg:build_def_use_events",
             provider_or_field="opcode classifier -> use events",
             join_keys=("code_unit_id", "instr_id", "binding_id"),
             id_recipe="df_id = sha('USE:'+code_unit_id+':'+instr_id+':'+binding_id)[:16]",
             confidence_policy="confidence=0.8-0.95 depending on opcode coverage",
             ambiguity_policy="if binding ambiguous, emit multiple DF_USE candidates with scores",
-            status="planned",
+            status="implemented",
         )
     ],
     # types
     NodeKind.TYPE_EXPR: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST annotation nodes + ByteSpanPositionProvider (or AST AnnAssign/arg.annotation)",
             join_keys=(),
             id_recipe="type_expr_id = stable_id(path, bstart, bend, 'TYPE_EXPR')",
             confidence_policy="confidence=1.0 for syntax capture",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
     NodeKind.TYPE: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.types:normalize_types",
+            extractor="normalize.types:normalize_types",
             provider_or_field="normalize annotation strings + optional inference (Pyre/Watchman via LibCST TypeInferenceProvider)",
             join_keys=("type_repr",),
             id_recipe="type_id = sha('TYPE:'+type_repr)[:16]",
             confidence_policy="annotation-derived=1.0; inferred=0.7-0.9; runtime=0.6-0.9",
             ambiguity_policy="multi-valued types allowed (union/overload); store multiple TYPE nodes/edges",
-            status="planned",
+            status="implemented",
         )
     ],
     NodeKind.TYPE_PARAM: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.symtable_extract:extract_symtables_table",
+            extractor="extract.symtable_extract:extract_symtables_table",
             provider_or_field="symtable meta scopes TYPE_PARAMETERS/TYPE_VARIABLE",
             join_keys=("scope_id", "name"),
             id_recipe="type_param_id = sha('TP:'+scope_id+':'+name)[:16]",
@@ -1972,7 +2021,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     ],
     NodeKind.TYPE_ALIAS: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.symtable_extract:extract_symtables_table",
+            extractor="extract.symtable_extract:extract_symtables_table",
             provider_or_field="symtable TYPE_ALIAS scope + extracted assignments",
             join_keys=("scope_id", "name"),
             id_recipe="type_alias_id = sha('TA:'+scope_id+':'+name)[:16]",
@@ -1984,57 +2033,57 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
     # runtime overlay
     NodeKind.RT_OBJECT: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.runtime_inspect_extract:extract_runtime_objects",
+            extractor="extract.runtime_inspect_extract:extract_runtime_objects",
             provider_or_field="inspect.getmembers_static + inspect.unwrap + safe signature extraction",
             join_keys=("module", "qualname"),
             id_recipe="rt_id = sha('RT:'+module+':'+qualname)[:16]",
             confidence_policy="confidence=0.6-0.9 depending on ability to map back to source",
             ambiguity_policy="if multiple objects share qualname, include module+id() fingerprint in rt_id",
-            status="planned",
+            status="implemented",
         )
     ],
     NodeKind.RT_SIGNATURE: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.runtime_inspect_extract:extract_runtime_signatures",
+            extractor="extract.runtime_inspect_extract:extract_runtime_signatures",
             provider_or_field="inspect.signature(obj) (safe objects only)",
             join_keys=("rt_id",),
             id_recipe="sig_id = sha(rt_id+':SIG:'+signature_str)[:16]",
             confidence_policy="confidence=0.8-1.0 depending on callable type",
             ambiguity_policy="if signature fails, emit DIAG instead",
-            status="planned",
+            status="implemented",
         )
     ],
     NodeKind.RT_SIGNATURE_PARAM: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.runtime_inspect_extract:extract_runtime_signatures",
+            extractor="extract.runtime_inspect_extract:extract_runtime_signatures",
             provider_or_field="signature.parameters items",
             join_keys=("sig_id", "name"),
             id_recipe="param_id = sha(sig_id+':P:'+name)[:16]",
             confidence_policy="confidence=1.0",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
     NodeKind.RT_MEMBER: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.runtime_inspect_extract:extract_runtime_members",
+            extractor="extract.runtime_inspect_extract:extract_runtime_members",
             provider_or_field="inspect.getmembers_static(obj)",
             join_keys=("rt_id", "name"),
             id_recipe="member_id = sha(rt_id+':M:'+name)[:16]",
             confidence_policy="confidence=0.9",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
     NodeKind.DIAG: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.diagnostics:collect_diags",
+            extractor="normalize.diagnostics:collect_diags",
             provider_or_field="aggregate parse errors (tree-sitter), SCIP diagnostics, extraction failures",
             join_keys=("path", "bstart", "bend"),
             id_recipe="diag_id = stable_id(path, bstart, bend, 'DIAG')",
             confidence_policy="confidence=1.0 for source diag; 0.7 for derived diag",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
 }
@@ -2043,7 +2092,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
 EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     EdgeKind.REPO_CONTAINS: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.repo_scan:scan_repo",
+            extractor="extract.repo_scan:scan_repo",
             provider_or_field="repo_files list",
             join_keys=("repo_id -> file_id",),
             id_recipe="edge_id = sha('REPO_CONTAINS:'+repo_id+':'+file_id)[:16]",
@@ -2054,7 +2103,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     ],
     EdgeKind.FILE_DECLARES_MODULE: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="FullyQualifiedNameProvider on Module",
             join_keys=("file.path == module.path",),
             id_recipe="edge_id = sha('FILE_DECLARES_MODULE:'+file_id+':'+module_id)[:16]",
@@ -2065,7 +2114,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     ],
     EdgeKind.FILE_CONTAINS: [
         DerivationSpec(
-            extractor="codeintel_cpg.cpg.build_nodes:build_cpg_nodes_raw",
+            extractor="cpg.build_nodes:build_cpg_nodes_raw",
             provider_or_field="attach file_id on anchored nodes",
             join_keys=("node.file_id",),
             id_recipe="edge_id = sha('FILE_CONTAINS:'+file_id+':'+node_id+':'+role)[:16]",
@@ -2077,7 +2126,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     # structural
     EdgeKind.CST_PARENT_OF: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST ParentNodeProvider (parent pointers) + traversal order",
             join_keys=("parent_node_id -> child_node_id",),
             id_recipe="edge_id = sha('CST_PARENT_OF:'+parent_id+':'+child_id)[:16]",
@@ -2088,7 +2137,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     ],
     EdgeKind.AST_PARENT_OF: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.ast_extract:extract_ast_tables",
+            extractor="extract.ast_extract:extract_ast_tables",
             provider_or_field="AST walk (parent pointers via stack)",
             join_keys=("parent_ast_id -> child_ast_id",),
             id_recipe="edge_id = sha('AST_PARENT_OF:'+p+':'+c)[:16]",
@@ -2099,7 +2148,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     ],
     EdgeKind.TS_PARENT_OF: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.tree_sitter_extract:extract_ts_tables",
+            extractor="extract.tree_sitter_extract:extract_ts_tables",
             provider_or_field="tree-sitter node.children",
             join_keys=("parent_ts_id -> child_ts_id",),
             id_recipe="edge_id = sha('TS_PARENT_OF:'+p+':'+c)[:16]",
@@ -2111,7 +2160,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     # scopes/bindings
     EdgeKind.SCOPE_PARENT: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.symtable_extract:extract_symtables_table",
+            extractor="extract.symtable_extract:extract_symtables_table",
             provider_or_field="symtable table.get_children() recursion",
             join_keys=("child.scope_id -> parent.scope_id",),
             id_recipe="edge_id = sha('SCOPE_PARENT:'+child+':'+parent)[:16]",
@@ -2122,7 +2171,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     ],
     EdgeKind.SCOPE_BINDS: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.schema_infer:build_bindings",
+            extractor="normalize.schema_infer:build_bindings",
             provider_or_field="symtable symbols per scope -> PY_BINDING nodes",
             join_keys=("scope_id",),
             id_recipe="edge_id = sha('SCOPE_BINDS:'+scope_id+':'+binding_id)[:16]",
@@ -2133,7 +2182,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     ],
     EdgeKind.BINDING_RESOLVES_TO: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.schema_infer:resolve_bindings",
+            extractor="normalize.schema_infer:resolve_bindings",
             provider_or_field="symtable flags is_global/is_nonlocal/is_free + parent chain",
             join_keys=("binding_id",),
             id_recipe="edge_id = sha('BINDING_RESOLVES_TO:'+binding_id+':'+outer_binding_id)[:16]",
@@ -2144,7 +2193,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     ],
     EdgeKind.DEF_SITE_OF: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.schema_infer:build_def_use_sites",
+            extractor="normalize.schema_infer:build_def_use_sites",
             provider_or_field="LibCST def sites (Name spans) classified via symtable binding_kind",
             join_keys=("path", "bstart", "bend", "binding_id"),
             id_recipe="edge_id = sha('DEF_SITE_OF:'+def_site_id+':'+binding_id)[:16]",
@@ -2155,7 +2204,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     ],
     EdgeKind.USE_SITE_OF: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.schema_infer:build_def_use_sites",
+            extractor="normalize.schema_infer:build_def_use_sites",
             provider_or_field="LibCST use sites (Name spans) + expr_context + symtable resolution",
             join_keys=("path", "bstart", "bend", "binding_id"),
             id_recipe="edge_id = sha('USE_SITE_OF:'+use_site_id+':'+binding_id)[:16]",
@@ -2167,7 +2216,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     # qname candidate edges
     EdgeKind.NAME_REF_CANDIDATE_QNAME: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="LibCST QualifiedNameProvider/FullyQualifiedNameProvider mapping for Name nodes",
             join_keys=("name_ref_id", "qname"),
             id_recipe="edge_id = sha('NAME_REF_CAND_QNAME:'+name_ref_id+':'+qname_id)[:16]",
@@ -2178,7 +2227,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     ],
     EdgeKind.CALLSITE_CANDIDATE_QNAME: [
         DerivationSpec(
-            extractor="codeintel_cpg.hamilton.modules.normalization:callsite_qname_candidates",
+            extractor="hamilton_pipeline.modules.normalization:callsite_qname_candidates",
             provider_or_field="callee_qnames list explosion from LibCST callsites",
             join_keys=("call_id", "qname"),
             id_recipe="edge_id = sha('CALL_CAND_QNAME:'+call_id+':'+qname_id)[:16]",
@@ -2189,7 +2238,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     ],
     EdgeKind.ATTR_CANDIDATE_QNAME: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="extract.cst_extract:extract_cst_tables",
             provider_or_field="QualifiedNameProvider mapping for Attribute nodes",
             join_keys=("attr_id", "qname"),
             id_recipe="edge_id = sha('ATTR_CAND_QNAME:'+attr_id+':'+qname_id)[:16]",
@@ -2201,7 +2250,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     # SCIP semantic edges (span join)
     EdgeKind.PY_DEFINES_SYMBOL: [
         DerivationSpec(
-            extractor="codeintel_cpg.relspec.RelationshipRule(kind=INTERVAL_ALIGN) + compiler",
+            extractor="hamilton_pipeline.modules.cpg_build:relationship_registry",
             provider_or_field="SCIP Occurrence.symbol_roles bitmask & Definition",
             join_keys=(
                 "interval_align: left.path == right.path",
@@ -2215,7 +2264,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     ],
     EdgeKind.PY_REFERENCES_SYMBOL: [
         DerivationSpec(
-            extractor="codeintel_cpg.relspec.RelationshipRule(kind=INTERVAL_ALIGN) + compiler",
+            extractor="hamilton_pipeline.modules.cpg_build:relationship_registry",
             provider_or_field="SCIP Occurrence.symbol_roles without Definition bit",
             join_keys=(
                 "interval_align: left.path == right.path",
@@ -2229,7 +2278,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     ],
     EdgeKind.PY_IMPORTS_SYMBOL: [
         DerivationSpec(
-            extractor="codeintel_cpg.relspec.RelationshipRule(kind=INTERVAL_ALIGN) + compiler",
+            extractor="hamilton_pipeline.modules.cpg_build:relationship_registry",
             provider_or_field="SCIP Occurrence.symbol_roles bitmask & Import",
             join_keys=("interval_align: left import alias span contains occurrence span",),
             id_recipe="edge_id = sha('PY_IMPORTS_SYMBOL:'+src_id+':'+symbol+':'+path+':'+bstart+':'+bend)[:16]",
@@ -2240,7 +2289,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     ],
     EdgeKind.PY_READS_SYMBOL: [
         DerivationSpec(
-            extractor="codeintel_cpg.cpg.build_edges:build_cpg_edges_raw",
+            extractor="cpg.build_edges:build_cpg_edges_raw",
             provider_or_field="filter rel_name_symbol by symbol_roles & READ bit",
             join_keys=("name_ref_id", "symbol"),
             id_recipe="edge_id = sha('PY_READS_SYMBOL:'+name_ref_id+':'+symbol+':'+span)[:16]",
@@ -2251,7 +2300,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     ],
     EdgeKind.PY_WRITES_SYMBOL: [
         DerivationSpec(
-            extractor="codeintel_cpg.cpg.build_edges:build_cpg_edges_raw",
+            extractor="cpg.build_edges:build_cpg_edges_raw",
             provider_or_field="filter rel_name_symbol by symbol_roles & WRITE bit",
             join_keys=("name_ref_id", "symbol"),
             id_recipe="edge_id = sha('PY_WRITES_SYMBOL:'+name_ref_id+':'+symbol+':'+span)[:16]",
@@ -2263,7 +2312,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     # Calls
     EdgeKind.PY_CALLS_SYMBOL: [
         DerivationSpec(
-            extractor="codeintel_cpg.relspec.RelationshipRule(kind=INTERVAL_ALIGN) + compiler",
+            extractor="hamilton_pipeline.modules.cpg_build:relationship_registry",
             provider_or_field="SCIP occurrence aligned to callee span",
             join_keys=("interval_align: callsite.callee_span contains occurrence span",),
             id_recipe="edge_id = sha('PY_CALLS_SYMBOL:'+call_id+':'+symbol+':'+call_span)[:16]",
@@ -2274,7 +2323,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     ],
     EdgeKind.PY_CALLS_QNAME: [
         DerivationSpec(
-            extractor="codeintel_cpg.cpg.build_edges:build_cpg_edges_raw",
+            extractor="cpg.build_edges:build_cpg_edges_raw",
             provider_or_field="fallback: callsite_qname_candidates join dim_qualified_names (only when no callsite->symbol)",
             join_keys=("call_id", "qname"),
             id_recipe="edge_id = sha('PY_CALLS_QNAME:'+call_id+':'+qname_id)[:16]",
@@ -2286,29 +2335,29 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     # Types
     EdgeKind.HAS_ANNOTATION: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.cst_extract:extract_cst_tables",
+            extractor="cpg.build_edges:build_cpg_edges_raw",
             provider_or_field="LibCST annotation nodes (param.annotation / returns annotation)",
             join_keys=("def/param -> TYPE_EXPR span",),
             id_recipe="edge_id = sha('HAS_ANNOTATION:'+src_id+':'+type_expr_id)[:16]",
             confidence_policy="confidence=1.0",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
     EdgeKind.INFERRED_TYPE: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.types:infer_types",
+            extractor="cpg.build_edges:build_cpg_edges_raw",
             provider_or_field="LibCST TypeInferenceProvider (Pyre/Watchman) OR heuristic OR runtime",
             join_keys=("src_id",),
             id_recipe="edge_id = sha('INFERRED_TYPE:'+src_id+':'+type_id+':'+origin)[:16]",
             confidence_policy="pyre=0.8-0.9; runtime=0.6-0.9; heuristic=0.5-0.7",
             ambiguity_policy="multi-valued types allowed; dedupe by type_id with score",
-            status="planned",
+            status="implemented",
         )
     ],
     EdgeKind.TYPE_PARAM_OF: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.symtable_extract:extract_symtables_table",
+            extractor="extract.symtable_extract:extract_symtables_table",
             provider_or_field="symtable TYPE_PARAMETERS meta scopes -> attach to owning def/class",
             join_keys=("type_param.scope_id -> owner.scope_id",),
             id_recipe="edge_id = sha('TYPE_PARAM_OF:'+type_param_id+':'+owner_id)[:16]",
@@ -2320,151 +2369,151 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     # Bytecode/flow/dfg
     EdgeKind.BYTECODE_ANCHOR: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.bytecode_anchor:anchor_instructions",
+            extractor="normalize.bytecode_anchor:anchor_instructions",
             provider_or_field="instruction.starts_line / line table / heuristic span mapping",
             join_keys=("instr_id -> anchor span",),
             id_recipe="edge_id = sha('BYTECODE_ANCHOR:'+instr_id+':'+anchor_id)[:16]",
             confidence_policy="line_table=0.9, offset_span=0.8, heuristic=0.6",
             ambiguity_policy="if multiple anchors, keep all with scores; winner selection by score",
-            status="planned",
+            status="implemented",
         )
     ],
     EdgeKind.CFG_NEXT: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.bytecode_cfg:build_cfg",
+            extractor="normalize.bytecode_cfg:build_cfg_edges",
             provider_or_field="fallthrough edges between basic blocks",
             join_keys=("block_id",),
             id_recipe="edge_id = sha('CFG_NEXT:'+src_block+':'+dst_block)[:16]",
             confidence_policy="confidence=0.95",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
     EdgeKind.CFG_JUMP: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.bytecode_cfg:build_cfg",
+            extractor="normalize.bytecode_cfg:build_cfg_edges",
             provider_or_field="unconditional jump semantics",
             join_keys=("block_id",),
             id_recipe="edge_id = sha('CFG_JUMP:'+src_block+':'+dst_block)[:16]",
             confidence_policy="confidence=0.95",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
     EdgeKind.CFG_BRANCH_TRUE: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.bytecode_cfg:build_cfg",
+            extractor="normalize.bytecode_cfg:build_cfg_edges",
             provider_or_field="conditional jump true target",
             join_keys=("block_id",),
             id_recipe="edge_id = sha('CFG_BRANCH_TRUE:'+src_block+':'+dst_block)[:16]",
             confidence_policy="confidence=0.95",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
     EdgeKind.CFG_BRANCH_FALSE: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.bytecode_cfg:build_cfg",
+            extractor="normalize.bytecode_cfg:build_cfg_edges",
             provider_or_field="conditional jump false target (fallthrough)",
             join_keys=("block_id",),
             id_recipe="edge_id = sha('CFG_BRANCH_FALSE:'+src_block+':'+dst_block)[:16]",
             confidence_policy="confidence=0.95",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
     EdgeKind.CFG_BRANCH: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.bytecode_cfg:build_cfg",
+            extractor="normalize.bytecode_cfg:build_cfg_edges",
             provider_or_field="merged branch edges when polarity not tracked",
             join_keys=("block_id",),
             id_recipe="edge_id = sha('CFG_BRANCH:'+src_block+':'+dst_block)[:16]",
             confidence_policy="confidence=0.9",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
     EdgeKind.CFG_EXC: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.bytecode_cfg:build_cfg",
+            extractor="normalize.bytecode_cfg:build_cfg_edges",
             provider_or_field="exception table projection -> handler entry edges",
             join_keys=("block_id",),
             id_recipe="edge_id = sha('CFG_EXC:'+src_block+':'+handler_block+':'+exc_entry_index)[:16]",
             confidence_policy="confidence=0.9-0.95",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
     EdgeKind.STEP_DEF: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.bytecode_dfg:build_def_use_events",
+            extractor="normalize.bytecode_dfg:build_def_use_events",
             provider_or_field="opcode classifier -> def event",
             join_keys=("instr_id", "binding_id"),
             id_recipe="edge_id = sha('STEP_DEF:'+instr_id+':'+binding_id)[:16]",
             confidence_policy="confidence=0.8-0.95",
             ambiguity_policy="if binding ambiguous, keep multiple with scores",
-            status="planned",
+            status="implemented",
         )
     ],
     EdgeKind.STEP_USE: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.bytecode_dfg:build_def_use_events",
+            extractor="normalize.bytecode_dfg:build_def_use_events",
             provider_or_field="opcode classifier -> use event",
             join_keys=("instr_id", "binding_id"),
             id_recipe="edge_id = sha('STEP_USE:'+instr_id+':'+binding_id)[:16]",
             confidence_policy="confidence=0.8-0.95",
             ambiguity_policy="if binding ambiguous, keep multiple with scores",
-            status="planned",
+            status="implemented",
         )
     ],
     EdgeKind.REACHES: [
         DerivationSpec(
-            extractor="codeintel_cpg.normalize.bytecode_dfg:run_reaching_defs",
+            extractor="normalize.bytecode_dfg:run_reaching_defs",
             provider_or_field="reaching definitions analysis over CFG",
             join_keys=("code_unit_id",),
             id_recipe="edge_id = sha('REACHES:'+def_id+':'+use_id)[:16]",
             confidence_policy="confidence=0.8-0.95",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
     # Runtime overlay
     EdgeKind.RT_HAS_SIGNATURE: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.runtime_inspect_extract:extract_runtime_signatures",
+            extractor="cpg.build_edges:build_cpg_edges_raw",
             provider_or_field="inspect.signature(obj)",
             join_keys=("rt_id",),
             id_recipe="edge_id = sha('RT_HAS_SIGNATURE:'+rt_id+':'+sig_id)[:16]",
             confidence_policy="confidence=0.9",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
     EdgeKind.RT_HAS_PARAM: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.runtime_inspect_extract:extract_runtime_signatures",
+            extractor="cpg.build_edges:build_cpg_edges_raw",
             provider_or_field="signature.parameters iteration",
             join_keys=("sig_id",),
             id_recipe="edge_id = sha('RT_HAS_PARAM:'+sig_id+':'+param_id)[:16]",
             confidence_policy="confidence=1.0",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
     EdgeKind.RT_HAS_MEMBER: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.runtime_inspect_extract:extract_runtime_members",
+            extractor="cpg.build_edges:build_cpg_edges_raw",
             provider_or_field="inspect.getmembers_static(obj)",
             join_keys=("rt_id",),
             id_recipe="edge_id = sha('RT_HAS_MEMBER:'+rt_id+':'+member_id)[:16]",
             confidence_policy="confidence=0.9",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
     EdgeKind.RT_WRAPS: [
         DerivationSpec(
-            extractor="codeintel_cpg.extract.runtime_inspect_extract:extract_runtime_objects",
+            extractor="extract.runtime_inspect_extract:extract_runtime_objects",
             provider_or_field="inspect.unwrap chain",
             join_keys=("rt_id",),
             id_recipe="edge_id = sha('RT_WRAPS:'+wrapper_id+':'+wrapped_id)[:16]",
@@ -2476,13 +2525,13 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
     # Diagnostics
     EdgeKind.HAS_DIAGNOSTIC: [
         DerivationSpec(
-            extractor="codeintel_cpg.obs.manifest:build_manifest (or normalize.diagnostics)",
+            extractor="cpg.build_edges:build_cpg_edges_raw",
             provider_or_field="attach DIAG nodes to owning file/module",
             join_keys=("path",),
             id_recipe="edge_id = sha('HAS_DIAG:'+owner_id+':'+diag_id)[:16]",
             confidence_policy="confidence=1.0 if from source tool; else 0.7",
             ambiguity_policy="none",
-            status="planned",
+            status="implemented",
         )
     ],
 }
@@ -2593,6 +2642,42 @@ def validate_derivations_implemented_only(
                 "No acceptable implemented derivation for edge kinds: " + ", ".join(missing_edges)
             )
         raise ValueError("\n".join(msg))
+
+
+def _iter_derivation_specs(*, allow_planned: bool) -> Iterator[DerivationSpec]:
+    for derivations in NODE_DERIVATIONS.values():
+        for spec in derivations:
+            if allow_planned or spec.status == "implemented":
+                yield spec
+    for derivations in EDGE_DERIVATIONS.values():
+        for spec in derivations:
+            if allow_planned or spec.status == "implemented":
+                yield spec
+
+
+def validate_derivation_extractors(*, allow_planned: bool = False) -> None:
+    """Validate that derivation extractors resolve to real callables.
+
+    Parameters
+    ----------
+    allow_planned:
+        When ``True``, validate both planned and implemented derivations.
+
+    Raises
+    ------
+    ValueError
+        Raised when one or more extractors cannot be resolved.
+    """
+    errors: list[str] = []
+    for spec in _iter_derivation_specs(allow_planned=allow_planned):
+        try:
+            parse_extractor(spec.extractor).resolve()
+        except (ModuleNotFoundError, AttributeError, ValueError) as exc:
+            errors.append(f"{spec.extractor}: {exc}")
+
+    if errors:
+        msg = "Derivation extractor validation failed:\n- " + "\n- ".join(errors)
+        raise ValueError(msg)
 
 
 def registry_to_jsonable() -> dict[str, object]:

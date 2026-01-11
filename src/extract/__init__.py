@@ -24,6 +24,14 @@ from extract.bytecode_extract import (
 )
 from extract.cst_extract import CSTExtractOptions, CSTExtractResult, extract_cst, extract_cst_tables
 from extract.repo_scan import RepoScanOptions, scan_repo, stable_id
+from extract.runtime_inspect_extract import (
+    RuntimeInspectOptions,
+    RuntimeInspectResult,
+    extract_runtime_members,
+    extract_runtime_objects,
+    extract_runtime_signatures,
+    extract_runtime_tables,
+)
 from extract.scip_extract import (
     SCIPExtractResult,
     SCIPIndexOptions,
@@ -38,6 +46,12 @@ from extract.symtable_extract import (
     extract_symtable,
     extract_symtables_table,
 )
+from extract.tree_sitter_extract import (
+    TreeSitterExtractOptions,
+    TreeSitterExtractResult,
+    extract_ts,
+    extract_ts_tables,
+)
 
 __all__ = [
     "ASTExtractOptions",
@@ -47,20 +61,30 @@ __all__ = [
     "CSTExtractOptions",
     "CSTExtractResult",
     "RepoScanOptions",
+    "RuntimeInspectOptions",
+    "RuntimeInspectResult",
     "SCIPExtractResult",
     "SCIPIndexOptions",
     "SCIPParseOptions",
     "SymtableExtractOptions",
     "SymtableExtractResult",
+    "TreeSitterExtractOptions",
+    "TreeSitterExtractResult",
     "extract_ast",
     "extract_ast_tables",
     "extract_bytecode",
     "extract_bytecode_table",
     "extract_cst",
     "extract_cst_tables",
+    "extract_runtime_members",
+    "extract_runtime_objects",
+    "extract_runtime_signatures",
+    "extract_runtime_tables",
     "extract_scip_tables",
     "extract_symtable",
     "extract_symtables_table",
+    "extract_ts",
+    "extract_ts_tables",
     "parse_index_scip",
     "run_scip_python_index",
     "scan_repo",

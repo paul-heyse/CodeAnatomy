@@ -16,7 +16,7 @@ from arrowdsl.expr import E
 from arrowdsl.finalize import FinalizeResult, finalize
 from arrowdsl.joins import JoinSpec, hash_join
 from arrowdsl.kernels import apply_dedupe, canonical_sort, explode_list_column
-from arrowdsl.plan import Plan
+from arrowdsl.plan import Plan, union_all_plans
 from arrowdsl.queryspec import ProjectionSpec, QuerySpec
 from arrowdsl.runtime import ExecutionContext, Ordering
 from relspec.edge_contract_validator import (
@@ -265,11 +265,7 @@ def _compile_post_kernels(rule: RelationshipRule) -> list[KernelFn]:
     list[KernelFn]
         Post-kernel functions for the rule.
     """
-    fns: list[KernelFn] = []
-    if rule.emit_rule_meta:
-        fns.append(_build_rule_meta_kernel(rule))
-    fns.extend(_kernel_from_spec(spec) for spec in rule.post_kernels)
-    return fns
+    return [_kernel_from_spec(spec) for spec in rule.post_kernels]
 
 
 def _apply_project_to_plan(
@@ -311,6 +307,26 @@ def _apply_project_to_plan(
     if not exprs:
         return plan
 
+    return plan.project(exprs, names, label=plan.label or rule.name)
+
+
+def _apply_rule_meta_to_plan(
+    plan: Plan,
+    *,
+    rule: RelationshipRule,
+    ctx: ExecutionContext,
+) -> Plan:
+    if not rule.emit_rule_meta:
+        return plan
+    schema = plan.schema(ctx=ctx)
+    names = list(schema.names)
+    exprs = [E.field(name) for name in names]
+    if rule.rule_name_col not in names:
+        exprs.append(E.scalar(rule.name))
+        names.append(rule.rule_name_col)
+    if rule.rule_priority_col not in names:
+        exprs.append(E.scalar(int(rule.priority)))
+        names.append(rule.rule_priority_col)
     return plan.project(exprs, names, label=plan.label or rule.name)
 
 
@@ -609,6 +625,7 @@ class CompiledRule:
     plan: Plan | None
     execute_fn: Callable[[ExecutionContext, PlanResolver], pa.Table] | None
     post_kernels: tuple[KernelFn, ...] = ()
+    emit_rule_meta: bool = True
 
     def execute(self, *, ctx: ExecutionContext, resolver: PlanResolver) -> pa.Table:
         """Execute the compiled rule into a table.
@@ -632,6 +649,8 @@ class CompiledRule:
         """
         if self.execute_fn is not None:
             table = self.execute_fn(ctx, resolver)
+            if self.emit_rule_meta:
+                table = _build_rule_meta_kernel(self.rule)(table, ctx)
             for fn in self.post_kernels:
                 table = fn(table, ctx)
             return table
@@ -639,6 +658,8 @@ class CompiledRule:
             msg = "CompiledRule has neither plan nor execute_fn."
             raise RuntimeError(msg)
         table = self.plan.to_table(ctx=ctx)
+        if self.emit_rule_meta:
+            table = _build_rule_meta_kernel(self.rule)(table, ctx)
         for fn in self.post_kernels:
             table = fn(table, ctx)
         return table
@@ -680,8 +701,25 @@ class CompiledOutput:
             msg = f"CompiledOutput {self.output_dataset!r} has no contributors."
             raise ValueError(msg)
 
-        tables = [cr.execute(ctx=ctx, resolver=resolver) for cr in self.contributors]
-        unioned = pa.concat_tables(tables, promote=True)
+        plan_parts: list[Plan] = []
+        table_parts: list[pa.Table] = []
+        for cr in self.contributors:
+            if cr.execute_fn is not None:
+                table_parts.append(cr.execute(ctx=ctx, resolver=resolver))
+                continue
+            if cr.plan is None or cr.plan.decl is None:
+                table_parts.append(cr.execute(ctx=ctx, resolver=resolver))
+                continue
+            if cr.post_kernels:
+                table_parts.append(cr.execute(ctx=ctx, resolver=resolver))
+                continue
+            plan_parts.append(_apply_rule_meta_to_plan(cr.plan, rule=cr.rule, ctx=ctx))
+
+        if plan_parts:
+            union = union_all_plans(plan_parts, label=self.output_dataset)
+            table_parts.append(union.to_table(ctx=ctx))
+
+        unioned = pa.concat_tables(table_parts, promote=True)
 
         if self.contract_name is None:
             dummy = Contract(name=f"{self.output_dataset}_NO_CONTRACT", schema=unioned.schema)
@@ -707,7 +745,13 @@ class RelationshipRuleCompiler:
         src = rule.inputs[0]
         plan = self.resolver.resolve(src, ctx=ctx)
         plan = _apply_project_to_plan(plan, rule.project, rule=rule)
-        return CompiledRule(rule=rule, plan=plan, execute_fn=None, post_kernels=post_kernels)
+        return CompiledRule(
+            rule=rule,
+            plan=plan,
+            execute_fn=None,
+            post_kernels=post_kernels,
+            emit_rule_meta=rule.emit_rule_meta,
+        )
 
     def _compile_hash_join(
         self,
@@ -739,7 +783,13 @@ class RelationshipRuleCompiler:
             label=rule.name,
         )
         join_plan = _apply_project_to_plan(join_plan, rule.project, rule=rule)
-        return CompiledRule(rule=rule, plan=join_plan, execute_fn=None, post_kernels=post_kernels)
+        return CompiledRule(
+            rule=rule,
+            plan=join_plan,
+            execute_fn=None,
+            post_kernels=post_kernels,
+            emit_rule_meta=rule.emit_rule_meta,
+        )
 
     def _compile_passthrough(
         self,
@@ -750,7 +800,13 @@ class RelationshipRuleCompiler:
     ) -> CompiledRule:
         src = rule.inputs[0]
         plan = self.resolver.resolve(src, ctx=ctx)
-        return CompiledRule(rule=rule, plan=plan, execute_fn=None, post_kernels=post_kernels)
+        return CompiledRule(
+            rule=rule,
+            plan=plan,
+            execute_fn=None,
+            post_kernels=post_kernels,
+            emit_rule_meta=rule.emit_rule_meta,
+        )
 
     @staticmethod
     def _compile_union_all(
@@ -767,7 +823,13 @@ class RelationshipRuleCompiler:
             return pa.concat_tables(parts, promote=True)
 
         _ = ctx
-        return CompiledRule(rule=rule, plan=None, execute_fn=_exec, post_kernels=post_kernels)
+        return CompiledRule(
+            rule=rule,
+            plan=None,
+            execute_fn=_exec,
+            post_kernels=post_kernels,
+            emit_rule_meta=rule.emit_rule_meta,
+        )
 
     @staticmethod
     def _compile_interval_align(
@@ -789,7 +851,13 @@ class RelationshipRuleCompiler:
             return _interval_align(lt, rt, interval_cfg)
 
         _ = ctx
-        return CompiledRule(rule=rule, plan=None, execute_fn=_exec, post_kernels=post_kernels)
+        return CompiledRule(
+            rule=rule,
+            plan=None,
+            execute_fn=_exec,
+            post_kernels=post_kernels,
+            emit_rule_meta=rule.emit_rule_meta,
+        )
 
     def compile_rule(self, rule: RelationshipRule, *, ctx: ExecutionContext) -> CompiledRule:
         """Compile a single relationship rule into an executable unit.

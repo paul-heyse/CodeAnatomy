@@ -38,6 +38,7 @@ class CSTExtractOptions:
     include_imports: bool = True
     include_callsites: bool = True
     include_defs: bool = True
+    include_type_exprs: bool = True
     compute_expr_context: bool = True
     compute_qualified_names: bool = True
 
@@ -52,6 +53,7 @@ class CSTExtractResult:
     py_cst_imports: pa.Table
     py_cst_callsites: pa.Table
     py_cst_defs: pa.Table
+    py_cst_type_exprs: pa.Table
 
 
 QNAME_STRUCT = pa.struct([("name", pa.string()), ("source", pa.string())])
@@ -131,6 +133,9 @@ CALLSITES_SCHEMA = pa.schema(
         ("call_bend", pa.int64()),
         ("callee_bstart", pa.int64()),
         ("callee_bend", pa.int64()),
+        ("callee_shape", pa.string()),
+        ("callee_text", pa.string()),
+        ("arg_count", pa.int32()),
         ("callee_dotted", pa.string()),
         ("callee_qnames", QNAME_LIST),
     ]
@@ -151,6 +156,23 @@ DEFS_SCHEMA = pa.schema(
         ("name_bstart", pa.int64()),
         ("name_bend", pa.int64()),
         ("qnames", QNAME_LIST),
+    ]
+)
+
+TYPE_EXPRS_SCHEMA = pa.schema(
+    [
+        ("schema_version", pa.int32()),
+        ("type_expr_id", pa.string()),
+        ("owner_def_id", pa.string()),
+        ("param_name", pa.string()),
+        ("expr_kind", pa.string()),
+        ("expr_role", pa.string()),
+        ("file_id", pa.string()),
+        ("path", pa.string()),
+        ("file_sha256", pa.string()),
+        ("bstart", pa.int64()),
+        ("bend", pa.int64()),
+        ("expr_text", pa.string()),
     ]
 )
 
@@ -176,6 +198,58 @@ class CSTExtractContext:
     import_rows: list[Row]
     call_rows: list[Row]
     def_rows: list[Row]
+    type_expr_rows: list[Row]
+
+    @classmethod
+    def build(cls, options: CSTExtractOptions) -> CSTExtractContext:
+        """Create an empty extraction context.
+
+        Returns
+        -------
+        CSTExtractContext
+            New extraction context with empty buffers.
+        """
+        return cls(
+            options=options,
+            manifest_rows=[],
+            error_rows=[],
+            name_ref_rows=[],
+            import_rows=[],
+            call_rows=[],
+            def_rows=[],
+            type_expr_rows=[],
+        )
+
+
+@dataclass(frozen=True)
+class TypeExprOwner:
+    """Context for a collected type expression."""
+
+    owner_def_id: str
+    expr_role: str
+    param_name: str | None = None
+
+
+def _iter_params(params: cst.Parameters) -> list[cst.Param]:
+    items: list[cst.Param] = []
+    items.extend(params.posonly_params)
+    items.extend(params.params)
+    items.extend(params.kwonly_params)
+    if isinstance(params.star_arg, cst.Param):
+        items.append(params.star_arg)
+    if isinstance(params.star_kwarg, cst.Param):
+        items.append(params.star_kwarg)
+    return items
+
+
+def _callee_shape(node: cst.CSTNode) -> str:
+    if isinstance(node, cst.Name):
+        return "NAME"
+    if isinstance(node, cst.Attribute):
+        return "ATTRIBUTE"
+    if isinstance(node, cst.Subscript):
+        return "SUBSCRIPT"
+    return "OTHER"
 
 
 def _empty(schema: pa.Schema) -> pa.Table:
@@ -309,6 +383,24 @@ def _resolve_metadata_maps(
     )
 
 
+@dataclass(frozen=True)
+class CollectorContext:
+    """Context required to build a CST collector."""
+
+    module: cst.Module
+    file_ctx: CSTFileContext
+    extract_ctx: CSTExtractContext
+
+
+@dataclass(frozen=True)
+class CollectorMetadata:
+    """Metadata maps needed by the CST collector."""
+
+    span_map: Mapping[cst.CSTNode, object]
+    ctx_map: Mapping[cst.CSTNode, object]
+    qn_map: Mapping[cst.CSTNode, Collection[QualifiedName]]
+
+
 def _visit_with_collector(
     module: cst.Module,
     *,
@@ -318,11 +410,8 @@ def _visit_with_collector(
     wrapper = MetadataWrapper(module, unsafe_skip_copy=True)
     span_map, ctx_map, qn_map = _resolve_metadata_maps(wrapper, ctx.options)
     collector = CSTCollector(
-        file_ctx=file_ctx,
-        extract_ctx=ctx,
-        span_map=span_map,
-        ctx_map=ctx_map,
-        qn_map=qn_map,
+        ctx=CollectorContext(module=module, file_ctx=file_ctx, extract_ctx=ctx),
+        meta=CollectorMetadata(span_map=span_map, ctx_map=ctx_map, qn_map=qn_map),
     )
     wrapper.visit(collector)
 
@@ -333,21 +422,20 @@ class CSTCollector(cst.CSTVisitor):
     def __init__(
         self,
         *,
-        file_ctx: CSTFileContext,
-        extract_ctx: CSTExtractContext,
-        span_map: Mapping[cst.CSTNode, object],
-        ctx_map: Mapping[cst.CSTNode, object],
-        qn_map: Mapping[cst.CSTNode, Collection[QualifiedName]],
+        ctx: CollectorContext,
+        meta: CollectorMetadata,
     ) -> None:
-        self._file_ctx = file_ctx
-        self._options = extract_ctx.options
-        self._span_map = span_map
-        self._ctx_map = ctx_map
-        self._qn_map = qn_map
-        self._name_ref_rows = extract_ctx.name_ref_rows
-        self._import_rows = extract_ctx.import_rows
-        self._call_rows = extract_ctx.call_rows
-        self._def_rows = extract_ctx.def_rows
+        self._module = ctx.module
+        self._file_ctx = ctx.file_ctx
+        self._options = ctx.extract_ctx.options
+        self._span_map = meta.span_map
+        self._ctx_map = meta.ctx_map
+        self._qn_map = meta.qn_map
+        self._name_ref_rows = ctx.extract_ctx.name_ref_rows
+        self._import_rows = ctx.extract_ctx.import_rows
+        self._call_rows = ctx.extract_ctx.call_rows
+        self._def_rows = ctx.extract_ctx.def_rows
+        self._type_expr_rows = ctx.extract_ctx.type_expr_rows
         self._skip_name_nodes: set[cst.Name] = set()
         self._def_stack: list[str] = []
 
@@ -359,12 +447,54 @@ class CSTCollector(cst.CSTVisitor):
         length = int(getattr(sp, "length", 0))
         return start, start + length
 
+    def _code_for_node(self, node: cst.CSTNode) -> str | None:
+        try:
+            return self._module.code_for_node(node)
+        except (AttributeError, ValueError):
+            return None
+
     def _qnames(self, node: cst.CSTNode) -> list[Row]:
         qset = self._qn_map.get(node)
         if not qset:
             return []
         qualified = sorted(qset, key=lambda q: (q.name, str(q.source)))
         return [{"name": q.name, "source": str(q.source)} for q in qualified]
+
+    def _record_type_expr(
+        self,
+        annotation: cst.Annotation,
+        *,
+        owner: TypeExprOwner,
+    ) -> None:
+        if not self._options.include_type_exprs:
+            return
+        expr = annotation.annotation
+        bstart, bend = self._span(expr)
+        expr_text = self._code_for_node(expr)
+        if expr_text is None:
+            return
+        type_expr_id = stable_id(
+            "cst_type_expr",
+            self._file_ctx.path,
+            str(bstart),
+            str(bend),
+        )
+        self._type_expr_rows.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "type_expr_id": type_expr_id,
+                "owner_def_id": owner.owner_def_id,
+                "param_name": owner.param_name,
+                "expr_kind": "annotation",
+                "expr_role": owner.expr_role,
+                "file_id": self._file_ctx.file_id,
+                "path": self._file_ctx.path,
+                "file_sha256": self._file_ctx.file_sha256,
+                "bstart": bstart,
+                "bend": bend,
+                "expr_text": expr_text,
+            }
+        )
 
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool | None:
         """Collect function definition rows.
@@ -403,6 +533,22 @@ class CSTCollector(cst.CSTVisitor):
                 "qnames": self._qnames(node),
             }
         )
+        if node.returns is not None:
+            self._record_type_expr(
+                node.returns,
+                owner=TypeExprOwner(owner_def_id=def_id, expr_role="return"),
+            )
+        for param in _iter_params(node.params):
+            if param.annotation is None:
+                continue
+            self._record_type_expr(
+                param.annotation,
+                owner=TypeExprOwner(
+                    owner_def_id=def_id,
+                    expr_role="param",
+                    param_name=param.name.value,
+                ),
+            )
         self._def_stack.append(def_id)
         return True
 
@@ -642,6 +788,9 @@ class CSTCollector(cst.CSTVisitor):
         callee_bstart, callee_bend = self._span(node.func)
 
         callee_dotted = helpers.get_full_name_for_node(node.func)
+        callee_shape = _callee_shape(node.func)
+        callee_text = self._code_for_node(node.func)
+        arg_count = len(node.args)
 
         qnames = self._qnames(node.func)
         if not qnames:
@@ -660,6 +809,9 @@ class CSTCollector(cst.CSTVisitor):
                 "call_bend": call_bend,
                 "callee_bstart": callee_bstart,
                 "callee_bend": callee_bend,
+                "callee_shape": callee_shape,
+                "callee_text": callee_text,
+                "arg_count": int(arg_count),
                 "callee_dotted": callee_dotted,
                 "callee_qnames": qnames,
             }
@@ -716,53 +868,50 @@ def extract_cst(repo_files: pa.Table, options: CSTExtractOptions | None = None) 
         Tables derived from LibCST parsing and metadata providers.
     """
     options = options or CSTExtractOptions()
-
-    manifest_rows: list[Row] = []
-    error_rows: list[Row] = []
-    name_ref_rows: list[Row] = []
-    import_rows: list[Row] = []
-    call_rows: list[Row] = []
-    def_rows: list[Row] = []
-
-    ctx = CSTExtractContext(
-        options=options,
-        manifest_rows=manifest_rows,
-        error_rows=error_rows,
-        name_ref_rows=name_ref_rows,
-        import_rows=import_rows,
-        call_rows=call_rows,
-        def_rows=def_rows,
-    )
+    ctx = CSTExtractContext.build(options)
 
     for rf in repo_files.to_pylist():
         _extract_cst_for_row(rf, ctx)
 
+    return _build_cst_result(ctx)
+
+
+def _build_cst_result(ctx: CSTExtractContext) -> CSTExtractResult:
     t_manifest = (
-        pa.Table.from_pylist(manifest_rows, schema=PARSE_MANIFEST_SCHEMA)
-        if manifest_rows
+        pa.Table.from_pylist(ctx.manifest_rows, schema=PARSE_MANIFEST_SCHEMA)
+        if ctx.manifest_rows
         else _empty(PARSE_MANIFEST_SCHEMA)
     )
     t_errs = (
-        pa.Table.from_pylist(error_rows, schema=PARSE_ERRORS_SCHEMA)
-        if error_rows
+        pa.Table.from_pylist(ctx.error_rows, schema=PARSE_ERRORS_SCHEMA)
+        if ctx.error_rows
         else _empty(PARSE_ERRORS_SCHEMA)
     )
     t_names = (
-        pa.Table.from_pylist(name_ref_rows, schema=NAME_REFS_SCHEMA)
-        if name_ref_rows
+        pa.Table.from_pylist(ctx.name_ref_rows, schema=NAME_REFS_SCHEMA)
+        if ctx.name_ref_rows
         else _empty(NAME_REFS_SCHEMA)
     )
     t_imports = (
-        pa.Table.from_pylist(import_rows, schema=IMPORTS_SCHEMA)
-        if import_rows
+        pa.Table.from_pylist(ctx.import_rows, schema=IMPORTS_SCHEMA)
+        if ctx.import_rows
         else _empty(IMPORTS_SCHEMA)
     )
     t_calls = (
-        pa.Table.from_pylist(call_rows, schema=CALLSITES_SCHEMA)
-        if call_rows
+        pa.Table.from_pylist(ctx.call_rows, schema=CALLSITES_SCHEMA)
+        if ctx.call_rows
         else _empty(CALLSITES_SCHEMA)
     )
-    t_defs = pa.Table.from_pylist(def_rows, schema=DEFS_SCHEMA) if def_rows else _empty(DEFS_SCHEMA)
+    t_defs = (
+        pa.Table.from_pylist(ctx.def_rows, schema=DEFS_SCHEMA)
+        if ctx.def_rows
+        else _empty(DEFS_SCHEMA)
+    )
+    t_type_exprs = (
+        pa.Table.from_pylist(ctx.type_expr_rows, schema=TYPE_EXPRS_SCHEMA)
+        if ctx.type_expr_rows
+        else _empty(TYPE_EXPRS_SCHEMA)
+    )
 
     return CSTExtractResult(
         py_cst_parse_manifest=t_manifest,
@@ -771,6 +920,7 @@ def extract_cst(repo_files: pa.Table, options: CSTExtractOptions | None = None) 
         py_cst_imports=t_imports,
         py_cst_callsites=t_calls,
         py_cst_defs=t_defs,
+        py_cst_type_exprs=t_type_exprs,
     )
 
 
@@ -806,4 +956,5 @@ def extract_cst_tables(
         "cst_imports": result.py_cst_imports,
         "cst_callsites": result.py_cst_callsites,
         "cst_defs": result.py_cst_defs,
+        "cst_type_exprs": result.py_cst_type_exprs,
     }

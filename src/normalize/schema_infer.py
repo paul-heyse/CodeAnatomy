@@ -6,8 +6,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
-import pyarrow.compute as pc
-import pyarrow.types as patypes
+
+from arrowdsl.schema import align_to_schema
 
 
 @dataclass(frozen=True)
@@ -64,10 +64,6 @@ def infer_schema_from_tables(
     return unify_schemas(schemas, opts=opts)
 
 
-def _nulls(n: int, typ: pa.DataType) -> pa.Array:
-    return pa.nulls(n, type=typ)
-
-
 def align_table_to_schema(
     table: pa.Table,
     schema: pa.Schema,
@@ -90,46 +86,14 @@ def align_table_to_schema(
         Table aligned to the provided schema.
     """
     opts = opts or SchemaInferOptions()
-    n = table.num_rows
-    out_arrays: list[pa.Array] = []
-    out_names: list[str] = []
-
-    table_cols = set(table.column_names)
-
-    for field in schema:
-        name = field.name
-        typ = field.type
-        out_names.append(name)
-
-        if name not in table_cols:
-            out_arrays.append(_nulls(n, typ))
-            continue
-
-        col = table[name]
-        if patypes.is_null(col.type):
-            out_arrays.append(_nulls(n, typ))
-            continue
-
-        if col.type == typ:
-            out_arrays.append(col.combine_chunks() if hasattr(col, "combine_chunks") else col)
-            continue
-
-        # cast
-        try:
-            casted = pc.cast(col, typ, safe=opts.safe_cast)
-            out_arrays.append(casted)
-        except (pa.ArrowInvalid, pa.ArrowTypeError):
-            out_arrays.append(col)
-
-    out = pa.Table.from_arrays(out_arrays, names=out_names)
-
-    if opts.keep_extra_columns:
-        # append extra columns at the end
-        for name in table.column_names:
-            if name not in out.column_names:
-                out = out.append_column(name, table[name])
-
-    return out
+    aligned, _ = align_to_schema(
+        table,
+        schema=schema,
+        safe_cast=opts.safe_cast,
+        on_error="keep",
+        keep_extra_columns=opts.keep_extra_columns,
+    )
+    return aligned
 
 
 def align_tables_to_unified_schema(

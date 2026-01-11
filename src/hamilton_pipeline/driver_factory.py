@@ -14,6 +14,7 @@ from hamilton.execution import executors
 from hamilton.lifecycle import base as lifecycle_base
 
 from core_types import JsonValue
+from cpg.kinds import validate_derivation_extractors, validate_registry_completeness
 from hamilton_pipeline.modules import ALL_MODULES
 
 try:
@@ -37,7 +38,8 @@ def config_fingerprint(config: Mapping[str, JsonValue]) -> str:
     """Compute a stable config fingerprint for driver caching.
 
     Hamilton build-time config is immutable after build; if config changes, rebuild a new driver.
-    (The Hamilton docs recommend a small driver-factory that caches by config fingerprint.) :contentReference[oaicite:2]{index=2}
+    The Hamilton docs recommend a small driver-factory that caches by config fingerprint.
+    :contentReference[oaicite:2]{index=2}
 
     Returns
     -------
@@ -55,7 +57,8 @@ def _maybe_build_tracker_adapter(
 
     Docs show:
       tracker = adapters.HamiltonTracker(project_id=..., username=..., dag_name=..., tags=...)
-      Builder().with_modules(...).with_config(...).with_adapters(tracker).build() :contentReference[oaicite:3]{index=3}
+      Builder().with_modules(...).with_config(...).with_adapters(tracker).build()
+      :contentReference[oaicite:3]{index=3}
 
     Returns
     -------
@@ -135,6 +138,9 @@ def build_driver(
         Built Hamilton driver instance.
     """
     modules = list(modules) if modules is not None else default_modules()
+
+    validate_registry_completeness()
+    validate_derivation_extractors(allow_planned=False)
 
     b = driver.Builder().with_modules(*modules).with_config(dict(config))
 

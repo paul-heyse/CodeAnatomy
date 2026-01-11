@@ -1,18 +1,22 @@
 from collections.abc import Sequence
 
-import pyarrow as pa
-import pyarrow.compute as pc
+from pyarrow import RecordBatchReader, Table
 
 class Declaration:
     def __init__(
         self,
         factory_name: str,
-        options: object,
-        *,
+        options: object | None = None,
         inputs: Sequence[Declaration] | None = None,
     ) -> None: ...
-    def to_reader(self, *, use_threads: bool = True) -> pa.RecordBatchReader: ...
-    def to_table(self, *, use_threads: bool = True) -> pa.Table: ...
+
+    def to_table(self, *, use_threads: bool | None = None) -> Table: ...
+    def to_reader(self, *, use_threads: bool | None = None) -> RecordBatchReader: ...
+
+
+class TableSourceNodeOptions:
+    def __init__(self, table: Table) -> None: ...
+
 
 class ScanNodeOptions:
     def __init__(
@@ -20,20 +24,30 @@ class ScanNodeOptions:
         dataset: object,
         *,
         columns: object | None = None,
+        filter: object | None = None,
         **kwargs: object,
     ) -> None: ...
 
-class TableSourceNodeOptions:
-    def __init__(self, table: pa.Table) -> None: ...
 
 class FilterNodeOptions:
-    def __init__(self, predicate: pc.Expression) -> None: ...
+    def __init__(self, predicate: object) -> None: ...
+
 
 class ProjectNodeOptions:
-    def __init__(self, expressions: Sequence[pc.Expression], names: Sequence[str]) -> None: ...
+    def __init__(self, expressions: Sequence[object], names: Sequence[str]) -> None: ...
+
 
 class OrderByNodeOptions:
-    def __init__(self, *, sort_keys: Sequence[object]) -> None: ...
+    def __init__(self, *, sort_keys: Sequence[tuple[str, str]]) -> None: ...
+
+
+class AggregateNodeOptions:
+    def __init__(
+        self,
+        aggregates: Sequence[tuple[object, str, object | None, str]],
+        keys: Sequence[object] | None = None,
+    ) -> None: ...
+
 
 class HashJoinNodeOptions:
     def __init__(

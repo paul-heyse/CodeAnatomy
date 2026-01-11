@@ -9,17 +9,22 @@ from hamilton.function_modifiers import cache, extract_fields, tag
 
 from arrowdsl.contracts import Contract, DedupeSpec, SortKey
 from arrowdsl.runtime import ExecutionContext
-from cpg.build_edges import build_cpg_edges
+from cpg.build_edges import EdgeBuildInputs, build_cpg_edges
 from cpg.build_nodes import NodeInputTables, build_cpg_nodes
 from cpg.build_props import PropsInputTables, build_cpg_props
 from hamilton_pipeline.pipeline_types import (
     CpgBaseInputs,
+    CpgExtraInputs,
     CstBuildInputs,
     CstRelspecInputs,
+    DiagnosticsInputs,
     QnameInputs,
     RelationshipOutputTables,
+    RuntimeInputs,
     ScipBuildInputs,
     ScipOccurrenceInputs,
+    TreeSitterInputs,
+    TypeInputs,
 )
 from relspec.compiler import (
     CompiledOutput,
@@ -662,20 +667,109 @@ def cpg_base_inputs(
     )
 
 
-@cache()
-@tag(layer="cpg", artifact="cpg_nodes_final", kind="table")
-def cpg_nodes_final(
-    ctx: ExecutionContext,
-    cpg_base_inputs: CpgBaseInputs,
-) -> pa.Table:
-    """Build the final CPG nodes table.
+@tag(layer="cpg", artifact="tree_sitter_inputs", kind="bundle")
+def tree_sitter_inputs(
+    ts_nodes: pa.Table,
+    ts_errors: pa.Table,
+    ts_missing: pa.Table,
+) -> TreeSitterInputs:
+    """Bundle tree-sitter inputs for CPG construction.
 
     Returns
     -------
-    pa.Table
-        Final CPG nodes table.
+    TreeSitterInputs
+        Tree-sitter input bundle.
     """
-    inputs = NodeInputTables(
+    return TreeSitterInputs(ts_nodes=ts_nodes, ts_errors=ts_errors, ts_missing=ts_missing)
+
+
+@tag(layer="cpg", artifact="type_inputs", kind="bundle")
+def type_inputs(type_exprs_norm: pa.Table, types_norm: pa.Table) -> TypeInputs:
+    """Bundle type inputs for CPG construction.
+
+    Returns
+    -------
+    TypeInputs
+        Type input bundle.
+    """
+    return TypeInputs(type_exprs_norm=type_exprs_norm, types_norm=types_norm)
+
+
+@tag(layer="cpg", artifact="diagnostics_inputs", kind="bundle")
+def diagnostics_inputs(diagnostics_norm: pa.Table) -> DiagnosticsInputs:
+    """Bundle diagnostics inputs for CPG construction.
+
+    Returns
+    -------
+    DiagnosticsInputs
+        Diagnostics input bundle.
+    """
+    return DiagnosticsInputs(diagnostics_norm=diagnostics_norm)
+
+
+@tag(layer="cpg", artifact="runtime_inputs", kind="bundle")
+def runtime_inputs(
+    rt_objects: pa.Table,
+    rt_signatures: pa.Table,
+    rt_signature_params: pa.Table,
+    rt_members: pa.Table,
+) -> RuntimeInputs:
+    """Bundle runtime inspection inputs for CPG construction.
+
+    Returns
+    -------
+    RuntimeInputs
+        Runtime inspection input bundle.
+    """
+    return RuntimeInputs(
+        rt_objects=rt_objects,
+        rt_signatures=rt_signatures,
+        rt_signature_params=rt_signature_params,
+        rt_members=rt_members,
+    )
+
+
+@tag(layer="cpg", artifact="cpg_extra_inputs", kind="bundle")
+def cpg_extra_inputs(
+    tree_sitter_inputs: TreeSitterInputs,
+    type_inputs: TypeInputs,
+    diagnostics_inputs: DiagnosticsInputs,
+    runtime_inputs: RuntimeInputs,
+) -> CpgExtraInputs:
+    """Bundle optional CPG inputs.
+
+    Returns
+    -------
+    CpgExtraInputs
+        Optional CPG input bundle.
+    """
+    return CpgExtraInputs(
+        ts_nodes=tree_sitter_inputs.ts_nodes,
+        ts_errors=tree_sitter_inputs.ts_errors,
+        ts_missing=tree_sitter_inputs.ts_missing,
+        type_exprs_norm=type_inputs.type_exprs_norm,
+        types_norm=type_inputs.types_norm,
+        diagnostics_norm=diagnostics_inputs.diagnostics_norm,
+        rt_objects=runtime_inputs.rt_objects,
+        rt_signatures=runtime_inputs.rt_signatures,
+        rt_signature_params=runtime_inputs.rt_signature_params,
+        rt_members=runtime_inputs.rt_members,
+    )
+
+
+@tag(layer="cpg", artifact="cpg_node_inputs", kind="bundle")
+def cpg_node_inputs(
+    cpg_base_inputs: CpgBaseInputs,
+    cpg_extra_inputs: CpgExtraInputs,
+) -> NodeInputTables:
+    """Build node input tables from base and optional inputs.
+
+    Returns
+    -------
+    NodeInputTables
+        Node input table bundle.
+    """
+    return NodeInputTables(
         repo_files=cpg_base_inputs.repo_files,
         cst_name_refs=cpg_base_inputs.cst_build_inputs.cst_name_refs,
         cst_imports=cpg_base_inputs.cst_build_inputs.cst_imports_norm,
@@ -684,8 +778,92 @@ def cpg_nodes_final(
         dim_qualified_names=cpg_base_inputs.dim_qualified_names,
         scip_symbol_information=cpg_base_inputs.scip_build_inputs.scip_symbol_information,
         scip_occurrences=cpg_base_inputs.scip_build_inputs.scip_occurrences_norm,
+        ts_nodes=cpg_extra_inputs.ts_nodes,
+        ts_errors=cpg_extra_inputs.ts_errors,
+        ts_missing=cpg_extra_inputs.ts_missing,
+        type_exprs_norm=cpg_extra_inputs.type_exprs_norm,
+        types_norm=cpg_extra_inputs.types_norm,
+        diagnostics_norm=cpg_extra_inputs.diagnostics_norm,
+        rt_objects=cpg_extra_inputs.rt_objects,
+        rt_signatures=cpg_extra_inputs.rt_signatures,
+        rt_signature_params=cpg_extra_inputs.rt_signature_params,
+        rt_members=cpg_extra_inputs.rt_members,
     )
-    res = build_cpg_nodes(ctx=ctx, inputs=inputs)
+
+
+@tag(layer="cpg", artifact="cpg_edge_inputs", kind="bundle")
+def cpg_edge_inputs(
+    relationship_output_tables: RelationshipOutputTables,
+    cpg_base_inputs: CpgBaseInputs,
+    cpg_extra_inputs: CpgExtraInputs,
+) -> EdgeBuildInputs:
+    """Build edge input tables from base and optional inputs.
+
+    Returns
+    -------
+    EdgeBuildInputs
+        Edge input table bundle.
+    """
+    return EdgeBuildInputs(
+        relationship_outputs=relationship_output_tables.as_dict(),
+        diagnostics_norm=cpg_extra_inputs.diagnostics_norm,
+        repo_files=cpg_base_inputs.repo_files,
+        type_exprs_norm=cpg_extra_inputs.type_exprs_norm,
+        rt_signatures=cpg_extra_inputs.rt_signatures,
+        rt_signature_params=cpg_extra_inputs.rt_signature_params,
+        rt_members=cpg_extra_inputs.rt_members,
+    )
+
+
+@tag(layer="cpg", artifact="cpg_props_inputs", kind="bundle")
+def cpg_props_inputs(
+    cpg_base_inputs: CpgBaseInputs,
+    cpg_extra_inputs: CpgExtraInputs,
+    cpg_edges_final: pa.Table,
+) -> PropsInputTables:
+    """Build property input tables from base and optional inputs.
+
+    Returns
+    -------
+    PropsInputTables
+        Property input table bundle.
+    """
+    return PropsInputTables(
+        repo_files=cpg_base_inputs.repo_files,
+        cst_name_refs=cpg_base_inputs.cst_build_inputs.cst_name_refs,
+        cst_imports=cpg_base_inputs.cst_build_inputs.cst_imports_norm,
+        cst_callsites=cpg_base_inputs.cst_build_inputs.cst_callsites,
+        cst_defs=cpg_base_inputs.cst_build_inputs.cst_defs_norm,
+        dim_qualified_names=cpg_base_inputs.dim_qualified_names,
+        scip_symbol_information=cpg_base_inputs.scip_build_inputs.scip_symbol_information,
+        ts_nodes=cpg_extra_inputs.ts_nodes,
+        ts_errors=cpg_extra_inputs.ts_errors,
+        ts_missing=cpg_extra_inputs.ts_missing,
+        type_exprs_norm=cpg_extra_inputs.type_exprs_norm,
+        types_norm=cpg_extra_inputs.types_norm,
+        diagnostics_norm=cpg_extra_inputs.diagnostics_norm,
+        rt_objects=cpg_extra_inputs.rt_objects,
+        rt_signatures=cpg_extra_inputs.rt_signatures,
+        rt_signature_params=cpg_extra_inputs.rt_signature_params,
+        rt_members=cpg_extra_inputs.rt_members,
+        cpg_edges=cpg_edges_final,
+    )
+
+
+@cache()
+@tag(layer="cpg", artifact="cpg_nodes_final", kind="table")
+def cpg_nodes_final(
+    ctx: ExecutionContext,
+    cpg_node_inputs: NodeInputTables,
+) -> pa.Table:
+    """Build the final CPG nodes table.
+
+    Returns
+    -------
+    pa.Table
+        Final CPG nodes table.
+    """
+    res = build_cpg_nodes(ctx=ctx, inputs=cpg_node_inputs)
     return res.good
 
 
@@ -693,7 +871,7 @@ def cpg_nodes_final(
 @tag(layer="cpg", artifact="cpg_edges_final", kind="table")
 def cpg_edges_final(
     ctx: ExecutionContext,
-    relationship_output_tables: RelationshipOutputTables,
+    cpg_edge_inputs: EdgeBuildInputs,
 ) -> pa.Table:
     """Build the final CPG edges table.
 
@@ -702,10 +880,7 @@ def cpg_edges_final(
     pa.Table
         Final CPG edges table.
     """
-    res = build_cpg_edges(
-        ctx=ctx,
-        relationship_outputs=relationship_output_tables.as_dict(),
-    )
+    res = build_cpg_edges(ctx=ctx, inputs=cpg_edge_inputs)
     return res.good
 
 
@@ -713,8 +888,7 @@ def cpg_edges_final(
 @tag(layer="cpg", artifact="cpg_props_final", kind="table")
 def cpg_props_final(
     ctx: ExecutionContext,
-    cpg_base_inputs: CpgBaseInputs,
-    cpg_edges_final: pa.Table,
+    cpg_props_inputs: PropsInputTables,
 ) -> pa.Table:
     """Build the final CPG properties table.
 
@@ -723,15 +897,5 @@ def cpg_props_final(
     pa.Table
         Final CPG properties table.
     """
-    inputs = PropsInputTables(
-        repo_files=cpg_base_inputs.repo_files,
-        cst_name_refs=cpg_base_inputs.cst_build_inputs.cst_name_refs,
-        cst_imports=cpg_base_inputs.cst_build_inputs.cst_imports_norm,
-        cst_callsites=cpg_base_inputs.cst_build_inputs.cst_callsites,
-        cst_defs=cpg_base_inputs.cst_build_inputs.cst_defs_norm,
-        dim_qualified_names=cpg_base_inputs.dim_qualified_names,
-        scip_symbol_information=cpg_base_inputs.scip_build_inputs.scip_symbol_information,
-        cpg_edges=cpg_edges_final,
-    )
-    res = build_cpg_props(ctx=ctx, inputs=inputs)
+    res = build_cpg_props(ctx=ctx, inputs=cpg_props_inputs)
     return res.good

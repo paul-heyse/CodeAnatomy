@@ -11,7 +11,7 @@ from arrowdsl.kernels import (
     canonical_sort_if_canonical,
     explode_list_column,
 )
-from arrowdsl.plan import Plan
+from arrowdsl.plan import Plan, union_all_plans
 from arrowdsl.queryspec import ProjectionSpec, QuerySpec
 from arrowdsl.runner import run_pipeline
 from arrowdsl.runtime import (
@@ -50,4 +50,5 @@ __all__ = [
     "open_dataset",
     "run_pipeline",
     "scan_to_table",
+    "union_all_plans",
 ]

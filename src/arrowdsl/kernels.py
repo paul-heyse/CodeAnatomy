@@ -11,6 +11,23 @@ import pyarrow.compute as pc
 from arrowdsl.contracts import DedupeSpec, SortKey
 from arrowdsl.runtime import DeterminismTier, ExecutionContext
 
+_PROVENANCE_COLS: tuple[str, ...] = (
+    "prov_filename",
+    "prov_fragment_index",
+    "prov_batch_index",
+    "prov_last_in_fragment",
+)
+
+
+def _append_provenance_keys(table: pa.Table, sort_keys: Sequence[SortKey]) -> list[SortKey]:
+    existing = {sk.column for sk in sort_keys}
+    extras = [
+        SortKey(col, "ascending")
+        for col in _PROVENANCE_COLS
+        if col in table.column_names and col not in existing
+    ]
+    return [*sort_keys, *extras]
+
 
 def _sort_key_tuples(sort_keys: Sequence[SortKey]) -> list[tuple[str, str]]:
     return [(sk.column, sk.order) for sk in sort_keys]
@@ -60,7 +77,8 @@ def canonical_sort_if_canonical(
         Sorted table when canonical; otherwise unchanged.
     """
     if ctx.determinism == DeterminismTier.CANONICAL and sort_keys:
-        return canonical_sort(table, sort_keys=sort_keys)
+        keys = _append_provenance_keys(table, sort_keys)
+        return canonical_sort(table, sort_keys=keys)
     return table
 
 

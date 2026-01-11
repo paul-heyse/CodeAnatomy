@@ -100,6 +100,27 @@ class Plan:
         msg = "Plan has no execution source."
         raise ValueError(msg)
 
+    def schema(self, *, ctx: ExecutionContext) -> pa.Schema:
+        """Return the output schema for this plan.
+
+        Parameters
+        ----------
+        ctx:
+            Execution context controlling plan execution.
+
+        Returns
+        -------
+        pyarrow.Schema
+            Output schema for the plan.
+        """
+        if self.table_thunk is not None:
+            return self.table_thunk().schema
+        reader = self.to_reader(ctx=ctx)
+        schema = reader.schema
+        close = getattr(reader, "close", None)
+        if callable(close):
+            close()
+        return schema
     @staticmethod
     def table_source(table: pa.Table, *, label: str = "") -> Plan:
         """Create a Plan from an in-memory table using a table_source node.
@@ -247,6 +268,46 @@ class Plan:
             decl=decl, label=label or self.label, ordering=Ordering.explicit(tuple(sort_keys))
         )
 
+    def aggregate(
+        self,
+        group_keys: Sequence[str],
+        aggs: Sequence[tuple[str, str]],
+        *,
+        label: str = "",
+    ) -> Plan:
+        """Add an aggregate node to the plan.
+
+        Parameters
+        ----------
+        group_keys:
+            Key columns to group by.
+        aggs:
+            Aggregates as (column, function) pairs.
+        label:
+            Optional plan label.
+
+        Returns
+        -------
+        Plan
+            Aggregated plan (unordered output).
+
+        Raises
+        ------
+        TypeError
+            Raised when the plan is not Acero-backed.
+        """
+        if self.decl is None:
+            msg = "aggregate() requires an Acero-backed Plan (decl is None)."
+            raise TypeError(msg)
+        agg_specs = [(col, fn, None, f"{col}_{fn}") for col, fn in aggs]
+        keys = list(group_keys) if group_keys else None
+        decl = acero.Declaration(
+            "aggregate",
+            acero.AggregateNodeOptions(agg_specs, keys=keys),
+            inputs=[self.decl],
+        )
+        return Plan(decl=decl, label=label or self.label, ordering=Ordering.unordered())
+
     def mark_unordered(self, *, label: str = "") -> Plan:
         """Return a copy of the plan marked unordered.
 
@@ -291,3 +352,44 @@ class Plan:
             ``True`` when ordering is implicit or explicit.
         """
         return self.ordering.level in {OrderingLevel.IMPLICIT, OrderingLevel.EXPLICIT}
+
+
+def union_all_plans(plans: Sequence[Plan], *, label: str = "") -> Plan:
+    """Union multiple Acero-backed plans into a single plan.
+
+    Parameters
+    ----------
+    plans:
+        Plans to union.
+    label:
+        Optional plan label.
+
+    Returns
+    -------
+    Plan
+        Unioned plan (unordered output).
+
+    Raises
+    ------
+    ValueError
+        Raised when no plans are provided.
+    TypeError
+        Raised when any plan is not Acero-backed.
+    """
+    if not plans:
+        msg = "union_all_plans requires at least one plan."
+        raise ValueError(msg)
+    if len(plans) == 1:
+        plan = plans[0]
+        if plan.decl is None:
+            msg = "union_all_plans requires Acero-backed Plans (missing declarations)."
+            raise TypeError(msg)
+        return Plan(decl=plan.decl, label=label or plan.label, ordering=Ordering.unordered())
+    decls: list[acero.Declaration] = []
+    for plan in plans:
+        if plan.decl is None:
+            msg = "union_all_plans requires Acero-backed Plans (missing declarations)."
+            raise TypeError(msg)
+        decls.append(plan.decl)
+    decl = acero.Declaration("union", None, inputs=decls)
+    return Plan(decl=decl, label=label, ordering=Ordering.unordered())

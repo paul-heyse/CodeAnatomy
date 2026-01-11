@@ -11,7 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.compute as pc
 
+from arrowdsl.ids import hash64_from_arrays, hash64_from_parts
 from core_types import PathLike, ensure_path
 
 SCHEMA_VERSION = 1
@@ -32,11 +34,8 @@ def stable_id(prefix: str, *parts: str) -> str:
     str
         Stable identifier string.
     """
-    h = hashlib.sha1()
-    for part in parts:
-        h.update(part.encode("utf-8"))
-        h.update(b"\x1f")
-    return f"{prefix}:{h.hexdigest()}"
+    hashed = hash64_from_parts(*parts, prefix=prefix)
+    return f"{prefix}:{hashed}"
 
 
 @dataclass(frozen=True)
@@ -155,6 +154,42 @@ def iter_repo_files(repo_root: Path, options: RepoScanOptions) -> Iterator[Path]
                 yield rel
 
 
+def _build_repo_file_row(
+    *,
+    rel: Path,
+    repo_root: Path,
+    options: RepoScanOptions,
+) -> dict[str, object] | None:
+    abs_path = (repo_root / rel).resolve()
+    rel_posix = rel.as_posix()
+
+    try:
+        data = abs_path.read_bytes()
+    except OSError:
+        return None
+
+    if options.max_file_bytes is not None and len(data) > options.max_file_bytes:
+        return None
+
+    file_sha256 = _sha256_hex(data)
+    encoding = "utf-8"
+    text: str | None = None
+    if options.include_text:
+        encoding, text = _detect_encoding_and_decode(data)
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "file_id": None,
+        "path": rel_posix,
+        "abs_path": str(abs_path),
+        "size_bytes": len(data),
+        "file_sha256": file_sha256,
+        "encoding": encoding,
+        "text": text,
+        "bytes": data if options.include_bytes else None,
+    }
+
+
 def scan_repo(repo_root: PathLike, options: RepoScanOptions | None = None) -> pa.Table:
     """Scan the repo for Python files and return a repo_files table.
 
@@ -179,39 +214,22 @@ def scan_repo(repo_root: PathLike, options: RepoScanOptions | None = None) -> pa
 
     rows: list[dict[str, object]] = []
     for rel in sorted(iter_repo_files(repo_root_path, options), key=lambda p: p.as_posix()):
-        abs_path = (repo_root_path / rel).resolve()
-        rel_posix = rel.as_posix()
-
-        try:
-            data = abs_path.read_bytes()
-        except OSError:
+        row = _build_repo_file_row(rel=rel, repo_root=repo_root_path, options=options)
+        if row is None:
             continue
-
-        if options.max_file_bytes is not None and len(data) > options.max_file_bytes:
-            continue
-
-        file_sha256 = _sha256_hex(data)
-        file_id = stable_id("file", *(filter(None, [options.repo_id, rel_posix])))
-
-        encoding = "utf-8"
-        text: str | None = None
-        if options.include_text:
-            encoding, text = _detect_encoding_and_decode(data)
-
-        rows.append(
-            {
-                "schema_version": SCHEMA_VERSION,
-                "file_id": file_id,
-                "path": rel_posix,
-                "abs_path": str(abs_path),
-                "size_bytes": len(data),
-                "file_sha256": file_sha256,
-                "encoding": encoding,
-                "text": text,
-                "bytes": data if options.include_bytes else None,
-            }
-        )
+        rows.append(row)
         if max_files is not None and len(rows) >= max_files:
             break
 
-    return pa.Table.from_pylist(rows, schema=REPO_FILES_SCHEMA)
+    table = pa.Table.from_pylist(rows, schema=REPO_FILES_SCHEMA)
+    if table.num_rows == 0:
+        return table
+    hash_arrays: list[pa.Array | pa.ChunkedArray] = []
+    if options.repo_id:
+        hash_arrays.append(pa.array([options.repo_id] * table.num_rows, type=pa.string()))
+    hash_arrays.append(table["path"])
+    file_hash = hash64_from_arrays(hash_arrays, prefix="file")
+    file_hash_str = pc.cast(file_hash, pa.string())
+    file_id = pc.binary_join_element_wise(pa.scalar("file"), file_hash_str, ":")
+    idx = table.schema.get_field_index("file_id")
+    return table.set_column(idx, "file_id", file_id)

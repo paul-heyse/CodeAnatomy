@@ -4,25 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import Literal
 
 import pyarrow as pa
 import pyarrow.compute as pc
 
 from arrowdsl.contracts import Contract
+from arrowdsl.ids import hash64_from_columns
 from arrowdsl.kernels import apply_dedupe, canonical_sort_if_canonical
 from arrowdsl.runtime import ExecutionContext
-
-
-class AlignmentInfo(TypedDict):
-    """Alignment metadata for schema casting and column selection."""
-
-    input_cols: list[str]
-    input_rows: int
-    missing_cols: list[str]
-    dropped_cols: list[str]
-    casted_cols: list[str]
-    output_rows: int
+from arrowdsl.schema import AlignmentInfo, align_to_schema
 
 
 @dataclass(frozen=True)
@@ -34,7 +25,7 @@ class FinalizeResult:
     good:
         Finalized table that passed invariants.
     errors:
-        Error rows with an ``error_code`` column.
+        Error rows grouped by ``row_id`` with ``error_detail`` list<struct>.
     stats:
         Error statistics table.
     alignment:
@@ -51,71 +42,34 @@ def _list_str_array(values: list[list[str]]) -> pa.Array:
     return pa.array(values, type=pa.list_(pa.string()))
 
 
-def _align_to_schema(
-    table: pa.Table, *, schema: pa.Schema, safe_cast: bool
-) -> tuple[pa.Table, AlignmentInfo]:
-    """Align and cast a table to a target schema.
+@dataclass(frozen=True)
+class InvariantResult:
+    """Invariant evaluation with metadata for error details."""
 
-    Parameters
-    ----------
-    table:
-        Input table.
-    schema:
-        Target schema.
-    safe_cast:
-        When ``True``, allow safe casts only.
-
-    Returns
-    -------
-    tuple[pyarrow.Table, AlignmentInfo]
-        Aligned table and alignment metadata.
-
-    Raises
-    ------
-    pyarrow.ArrowInvalid
-        Raised when casting fails and safe_cast is disabled.
-    pyarrow.ArrowTypeError
-        Raised when casting fails and safe_cast is disabled.
-    """
-    info: AlignmentInfo = {
-        "input_cols": list(table.column_names),
-        "input_rows": int(table.num_rows),
-        "missing_cols": [],
-        "dropped_cols": [],
-        "casted_cols": [],
-        "output_rows": 0,
-    }
-
-    target_names = [field.name for field in schema]
-    missing = [name for name in target_names if name not in table.column_names]
-    extra = [name for name in table.column_names if name not in target_names]
-
-    arrays: list[pa.Array | pa.ChunkedArray] = []
-    for field in schema:
-        if field.name in table.column_names:
-            col = table[field.name]
-            if col.type != field.type:
-                try:
-                    col = pc.cast(col, field.type, safe=safe_cast)
-                except (pa.ArrowInvalid, pa.ArrowTypeError):
-                    if safe_cast:
-                        col = pc.cast(col, field.type, safe=False)
-                    else:
-                        raise
-                info["casted_cols"].append(field.name)
-            arrays.append(col)
-        else:
-            arrays.append(pa.nulls(table.num_rows, type=field.type))
-
-    aligned = pa.Table.from_arrays(arrays, schema=schema)
-    info["missing_cols"] = missing
-    info["dropped_cols"] = extra
-    info["output_rows"] = int(aligned.num_rows)
-    return aligned, info
+    mask: pa.Array
+    code: str
+    message: str | None
+    column: str | None
+    severity: Literal["ERROR", "WARNING", "INFO"]
+    source: str
 
 
-def _required_non_null_mask(table: pa.Table, cols: Sequence[str]) -> pa.Array | None:
-    """Return a mask for required non-null violations.
+ERROR_DETAIL_FIELDS: tuple[tuple[str, pa.DataType], ...] = (
+    ("error_code", pa.string()),
+    ("error_message", pa.string()),
+    ("error_column", pa.string()),
+    ("error_severity", pa.string()),
+    ("error_rule_name", pa.string()),
+    ("error_rule_priority", pa.int32()),
+    ("error_source", pa.string()),
+)
+
+
+def _required_non_null_results(
+    table: pa.Table,
+    cols: Sequence[str],
+) -> list[InvariantResult]:
+    """Return invariant results for required non-null checks.
 
     Parameters
     ----------
@@ -126,22 +80,30 @@ def _required_non_null_mask(table: pa.Table, cols: Sequence[str]) -> pa.Array | 
 
     Returns
     -------
-    pyarrow.Array | None
-        Boolean mask where ``True`` indicates a violation.
+    list[InvariantResult]
+        Invariant results for required non-null checks.
     """
-    if not cols:
-        return None
-    bad: pa.Array | None = None
+    results: list[InvariantResult] = []
     for col in cols:
-        mask = pc.is_null(table[col])
-        bad = mask if bad is None else pc.or_(bad, mask)
-    if bad is None:
-        return None
-    return pc.fill_null(bad, replacement=False)
+        mask = pc.fill_null(pc.is_null(table[col]), replacement=False)
+        results.append(
+            InvariantResult(
+                mask=mask,
+                code="REQUIRED_NON_NULL",
+                message=f"{col} is required.",
+                column=col,
+                severity="ERROR",
+                source="required_non_null",
+            )
+        )
+    return results
 
 
-def _collect_masks(table: pa.Table, contract: Contract) -> list[tuple[pa.Array, str]]:
-    """Collect invariant masks and error codes.
+def _collect_invariant_results(
+    table: pa.Table,
+    contract: Contract,
+) -> list[InvariantResult]:
+    """Collect invariant results and error metadata.
 
     Parameters
     ----------
@@ -152,17 +114,24 @@ def _collect_masks(table: pa.Table, contract: Contract) -> list[tuple[pa.Array, 
 
     Returns
     -------
-    list[tuple[pyarrow.Array, str]]
-        Mask/code pairs.
+    list[InvariantResult]
+        Invariant results.
     """
-    masks: list[tuple[pa.Array, str]] = []
-    nn_mask = _required_non_null_mask(table, contract.required_non_null)
-    if nn_mask is not None:
-        masks.append((nn_mask, "REQUIRED_NON_NULL"))
+    results: list[InvariantResult] = []
+    results.extend(_required_non_null_results(table, contract.required_non_null))
     for inv in contract.invariants:
         bad_mask, code = inv(table)
-        masks.append((pc.fill_null(bad_mask, replacement=False), code))
-    return masks
+        results.append(
+            InvariantResult(
+                mask=pc.fill_null(bad_mask, replacement=False),
+                code=code,
+                message=code,
+                column=None,
+                severity="ERROR",
+                source="invariant",
+            )
+        )
+    return results
 
 
 def _combine_masks(masks: Sequence[pa.Array], length: int) -> pa.Array:
@@ -188,38 +157,54 @@ def _combine_masks(masks: Sequence[pa.Array], length: int) -> pa.Array:
     return pc.fill_null(combined, replacement=False)
 
 
-def _build_error_table(table: pa.Table, masks: Sequence[tuple[pa.Array, str]]) -> pa.Table:
+def _build_error_table(table: pa.Table, results: Sequence[InvariantResult]) -> pa.Table:
     """Build the error table for failed invariants.
 
     Parameters
     ----------
     table:
         Input table.
-    masks:
-        Mask/code pairs.
+    results:
+        Invariant results with metadata.
 
     Returns
     -------
     pyarrow.Table
-        Error table with ``error_code`` column.
+        Error table with detail columns.
     """
     error_parts: list[pa.Table] = []
-    for mask, code in masks:
-        bad_rows = table.filter(mask)
+    for result in results:
+        bad_rows = table.filter(result.mask)
         if bad_rows.num_rows == 0:
             continue
-        bad_rows = bad_rows.append_column(
-            "error_code",
-            pa.array([code] * bad_rows.num_rows, type=pa.string()),
-        )
+        bad_rows = _append_error_detail_columns(bad_rows, result)
         error_parts.append(bad_rows)
 
     if error_parts:
         return pa.concat_tables(error_parts, promote=True)
 
     empty_arrays = [pa.array([], type=field.type) for field in table.schema]
-    empty_arrays.append(pa.array([], type=pa.string()))
-    return pa.Table.from_arrays(empty_arrays, names=[*list(table.schema.names), "error_code"])
+    empty_arrays.extend(pa.array([], type=field_type) for _, field_type in ERROR_DETAIL_FIELDS)
+    names = [*list(table.schema.names), *[name for name, _ in ERROR_DETAIL_FIELDS]]
+    return pa.Table.from_arrays(empty_arrays, names=names)
+
+
+def _append_error_detail_columns(table: pa.Table, result: InvariantResult) -> pa.Table:
+    n = table.num_rows
+    message = result.message or result.code
+    error_values: dict[str, object] = {
+        "error_code": result.code,
+        "error_message": message,
+        "error_column": result.column,
+        "error_severity": result.severity,
+        "error_rule_name": None,
+        "error_rule_priority": None,
+        "error_source": result.source,
+    }
+    for name, dtype in ERROR_DETAIL_FIELDS:
+        value = error_values.get(name)
+        table = table.append_column(name, pa.array([value] * n, type=dtype))
+    return table
 
 
 def _build_stats_table(errors: pa.Table) -> pa.Table:
@@ -246,6 +231,70 @@ def _build_stats_table(errors: pa.Table) -> pa.Table:
         [vc.field("values"), vc.field("counts")],
         names=["error_code", "count"],
     )
+
+
+def _aggregate_error_details(
+    errors: pa.Table,
+    *,
+    contract: Contract,
+    schema: pa.Schema,
+) -> pa.Table:
+    if errors.num_rows == 0:
+        detail_struct = pa.struct(
+            [
+                ("code", pa.string()),
+                ("message", pa.string()),
+                ("column", pa.string()),
+                ("severity", pa.string()),
+                ("rule_name", pa.string()),
+                ("rule_priority", pa.int32()),
+                ("source", pa.string()),
+            ]
+        )
+        fields = [("row_id", pa.int64())]
+        key_cols = list(contract.key_fields) if contract.key_fields else list(schema.names)
+        fields.extend((col, schema.field(col).type) for col in key_cols if col in schema.names)
+        fields.append(("error_detail", pa.list_(detail_struct)))
+        empty_schema = pa.schema(fields)
+        return pa.Table.from_arrays(
+            [pa.array([], type=field.type) for field in empty_schema],
+            schema=empty_schema,
+        )
+
+    key_cols = list(contract.key_fields) if contract.key_fields else list(schema.names)
+    if key_cols:
+        row_id = hash64_from_columns(
+            errors,
+            cols=key_cols,
+            prefix=f"{contract.name}:row",
+            missing="null",
+        )
+    else:
+        row_id = pa.array(range(errors.num_rows), type=pa.int64())
+    errors = errors.append_column("row_id", row_id)
+    detail = pa.StructArray.from_arrays(
+        [
+            errors["error_code"],
+            errors["error_message"],
+            errors["error_column"],
+            errors["error_severity"],
+            errors["error_rule_name"],
+            errors["error_rule_priority"],
+            errors["error_source"],
+        ],
+        names=["code", "message", "column", "severity", "rule_name", "rule_priority", "source"],
+    )
+    errors = errors.append_column("error_detail", detail)
+    group_cols = ["row_id"] + [col for col in key_cols if col in errors.column_names]
+    aggregated = errors.group_by(group_cols).aggregate([("error_detail", "list")])
+    if "error_detail_list" in aggregated.column_names:
+        aggregated = aggregated.rename_columns(
+            [
+                "error_detail" if name == "error_detail_list" else name
+                for name in aggregated.column_names
+            ]
+        )
+    return aggregated
 
 
 def _build_alignment_table(
@@ -309,18 +358,25 @@ def finalize(table: pa.Table, *, contract: Contract, ctx: ExecutionContext) -> F
         Raised when ``ctx.mode`` is ``"strict"`` and errors are present.
     """
     schema = contract.with_versioned_schema()
-    aligned, align_info = _align_to_schema(table, schema=schema, safe_cast=ctx.safe_cast)
+    on_error: Literal["unsafe", "raise"] = "unsafe" if ctx.safe_cast else "raise"
+    aligned, align_info = align_to_schema(
+        table,
+        schema=schema,
+        safe_cast=ctx.safe_cast,
+        on_error=on_error,
+    )
 
-    masks = _collect_masks(aligned, contract)
-    bad_any = _combine_masks([mask for mask, _ in masks], aligned.num_rows)
+    results = _collect_invariant_results(aligned, contract)
+    bad_any = _combine_masks([result.mask for result in results], aligned.num_rows)
 
     good_mask = pc.invert(bad_any)
     good = aligned.filter(good_mask)
 
-    errors = _build_error_table(aligned, masks)
+    raw_errors = _build_error_table(aligned, results)
+    errors = _aggregate_error_details(raw_errors, contract=contract, schema=schema)
 
-    if ctx.mode == "strict" and errors.num_rows > 0:
-        vc = pc.value_counts(errors["error_code"])
+    if ctx.mode == "strict" and raw_errors.num_rows > 0:
+        vc = pc.value_counts(raw_errors["error_code"])
         pairs = list(
             zip(vc.field("values").to_pylist(), vc.field("counts").to_pylist(), strict=True)
         )
@@ -335,7 +391,7 @@ def finalize(table: pa.Table, *, contract: Contract, ctx: ExecutionContext) -> F
     if good.column_names != schema.names:
         good = good.select(schema.names)
 
-    stats = _build_stats_table(errors)
+    stats = _build_stats_table(raw_errors)
     alignment = _build_alignment_table(
         contract, align_info, good_rows=good.num_rows, error_rows=errors.num_rows
     )

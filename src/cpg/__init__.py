@@ -3,7 +3,13 @@
 from cpg.build_edges import EdgeBuildOptions, build_cpg_edges, build_cpg_edges_raw
 from cpg.build_nodes import NodeBuildOptions, build_cpg_nodes, build_cpg_nodes_raw
 from cpg.build_props import PropsBuildOptions, build_cpg_props, build_cpg_props_raw
-from cpg.kinds import EdgeKind, EntityKind, NodeKind
+from cpg.kinds import (
+    EdgeKind,
+    EntityKind,
+    NodeKind,
+    validate_derivation_extractors,
+    validate_registry_completeness,
+)
 from cpg.schemas import (
     CPG_EDGES_CONTRACT,
     CPG_EDGES_SCHEMA,
@@ -40,4 +46,6 @@ __all__ = [
     "empty_edges",
     "empty_nodes",
     "empty_props",
+    "validate_derivation_extractors",
+    "validate_registry_completeness",
 ]

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 
 import pyarrow as pa
+import pyarrow.compute as pc
+
+from arrowdsl.ids import hash64_from_arrays, hash64_from_parts
 
 
 def stable_id(prefix: str, *parts: str) -> str:
@@ -18,11 +20,8 @@ def stable_id(prefix: str, *parts: str) -> str:
     str
         Stable identifier with the requested prefix.
     """
-    h = hashlib.sha1()
-    for p in parts:
-        h.update(p.encode("utf-8"))
-        h.update(b"\x1f")
-    return f"{prefix}:{h.hexdigest()}"
+    hashed = hash64_from_parts(*parts, prefix=prefix)
+    return f"{prefix}:{hashed}"
 
 
 def stable_int64(*parts: str) -> int:
@@ -35,25 +34,7 @@ def stable_int64(*parts: str) -> int:
     int
         Deterministic signed 64-bit integer.
     """
-    h = hashlib.sha1()
-    for p in parts:
-        h.update(p.encode("utf-8"))
-        h.update(b"\x1f")
-    # Use 63 bits to avoid negative sign complications in some engines
-    v = int.from_bytes(h.digest()[:8], "big", signed=False) & ((1 << 63) - 1)
-    return int(v)
-
-
-def _row_value_int(value: object | None) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    return None
+    return hash64_from_parts(*parts)
 
 
 def span_id(path: str, bstart: int, bend: int, kind: str | None = None) -> str:
@@ -87,10 +68,7 @@ class SpanIdSpec:
 
 
 def add_span_id_column(table: pa.Table, spec: SpanIdSpec | None = None) -> pa.Table:
-    """Add a span_id column computed row-by-row.
-
-    Note: this is Python-loop based; for very large tables you may want
-    to compute ids later or in batches.
+    """Add a span_id column computed with Arrow hash kernels.
 
     Returns
     -------
@@ -106,26 +84,23 @@ def add_span_id_column(table: pa.Table, spec: SpanIdSpec | None = None) -> pa.Ta
 
     if out_col in table.column_names:
         return table
+    arrays: list[pa.Array | pa.ChunkedArray] = []
+    if kind is not None:
+        arrays.append(pa.array([kind] * table.num_rows, type=pa.string()))
+    if path_col in table.column_names:
+        arrays.append(table[path_col])
+    else:
+        arrays.append(pa.nulls(table.num_rows, type=pa.string()))
+    if bstart_col in table.column_names:
+        arrays.append(table[bstart_col])
+    else:
+        arrays.append(pa.nulls(table.num_rows, type=pa.int64()))
+    if bend_col in table.column_names:
+        arrays.append(table[bend_col])
+    else:
+        arrays.append(pa.nulls(table.num_rows, type=pa.int64()))
 
-    path_arr = (
-        table[path_col].to_pylist() if path_col in table.column_names else [None] * table.num_rows
-    )
-    bs_arr = (
-        table[bstart_col].to_pylist()
-        if bstart_col in table.column_names
-        else [None] * table.num_rows
-    )
-    be_arr = (
-        table[bend_col].to_pylist() if bend_col in table.column_names else [None] * table.num_rows
-    )
-
-    out: list[str | None] = []
-    for p, bs, be in zip(path_arr, bs_arr, be_arr, strict=True):
-        bs_int = _row_value_int(bs)
-        be_int = _row_value_int(be)
-        if p is None or bs_int is None or be_int is None:
-            out.append(None)
-            continue
-        out.append(span_id(str(p), bs_int, be_int, kind=kind))
-
-    return table.append_column(out_col, pa.array(out, type=pa.string()))
+    hashed = hash64_from_arrays(arrays, prefix="span")
+    hashed_str = pc.cast(hashed, pa.string())
+    prefixed = pc.binary_join_element_wise(pa.scalar("span"), hashed_str, ":")
+    return table.append_column(out_col, prefixed)

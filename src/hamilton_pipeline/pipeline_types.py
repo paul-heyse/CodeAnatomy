@@ -39,6 +39,22 @@ class OutputConfig:
 
 
 @dataclass(frozen=True)
+class TreeSitterConfig:
+    """Configuration for tree-sitter extraction."""
+
+    enable_tree_sitter: bool
+
+
+@dataclass(frozen=True)
+class RuntimeInspectConfig:
+    """Configuration for runtime inspection extraction."""
+
+    enable_runtime_inspect: bool
+    module_allowlist: tuple[str, ...]
+    timeout_s: int
+
+
+@dataclass(frozen=True)
 class CstRelspecInputs:
     """CST inputs required for relationship-spec datasets."""
 
@@ -88,6 +104,56 @@ class CpgBaseInputs:
     dim_qualified_names: pa.Table
     cst_build_inputs: CstBuildInputs
     scip_build_inputs: ScipBuildInputs
+
+
+@dataclass(frozen=True)
+class TreeSitterInputs:
+    """Tree-sitter tables used in CPG build steps."""
+
+    ts_nodes: pa.Table
+    ts_errors: pa.Table
+    ts_missing: pa.Table
+
+
+@dataclass(frozen=True)
+class TypeInputs:
+    """Type tables used in CPG build steps."""
+
+    type_exprs_norm: pa.Table
+    types_norm: pa.Table
+
+
+@dataclass(frozen=True)
+class DiagnosticsInputs:
+    """Diagnostics tables used in CPG build steps."""
+
+    diagnostics_norm: pa.Table
+
+
+@dataclass(frozen=True)
+class RuntimeInputs:
+    """Runtime inspection tables used in CPG build steps."""
+
+    rt_objects: pa.Table
+    rt_signatures: pa.Table
+    rt_signature_params: pa.Table
+    rt_members: pa.Table
+
+
+@dataclass(frozen=True)
+class CpgExtraInputs:
+    """Optional inputs for CPG nodes/props/edges."""
+
+    ts_nodes: pa.Table
+    ts_errors: pa.Table
+    ts_missing: pa.Table
+    type_exprs_norm: pa.Table
+    types_norm: pa.Table
+    diagnostics_norm: pa.Table
+    rt_objects: pa.Table
+    rt_signatures: pa.Table
+    rt_signature_params: pa.Table
+    rt_members: pa.Table
 
 
 @dataclass(frozen=True)

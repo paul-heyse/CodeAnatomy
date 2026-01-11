@@ -1,48 +1,51 @@
+"""Configuration defaults for the CPG pipeline."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
-from .arrowdsl.runtime import DeterminismTier, RuntimeProfile, ScanProfile
+from arrowdsl.runtime import DeterminismTier, RuntimeProfile, ScanProfile
 
 
 @dataclass(frozen=True)
 class CodeIntelCPGConfig:
-    """Top-level configuration for building CPG artifacts.
-
-    Keep this intentionally small:
-      - runtime policy (threads, determinism, provenance)
-      - IO locations
-    Data semantics live in Contracts / QuerySpecs, not here.
-    """
+    """Define top-level configuration for building CPG artifacts."""
 
     repo_root: Path
     out_dir: Path
 
-    # Execution policy
     runtime_profile: str = "DEV_FAST"
-    determinism: DeterminismTier | None = None  # override profile if set
+    determinism: DeterminismTier | None = None
     provenance: bool = False
 
-    # Finalize behavior
-    mode: str = "tolerant"  # "strict" | "tolerant"
+    mode: Literal["strict", "tolerant"] = "tolerant"
 
     def resolved_runtime(self) -> RuntimeProfile:
+        """Resolve the runtime profile with overrides applied.
+
+        Returns
+        -------
+        RuntimeProfile
+            Resolved runtime profile.
+
+        Raises
+        ------
+        KeyError
+            Raised when the runtime_profile name is unknown.
+        """
         profile = DEFAULT_RUNTIME_PROFILES.get(self.runtime_profile)
         if profile is None:
-            raise KeyError(f"Unknown runtime_profile={self.runtime_profile!r}")
+            msg = f"Unknown runtime_profile={self.runtime_profile!r}."
+            raise KeyError(msg)
         if self.determinism is None:
             return profile
         return profile.with_determinism(self.determinism)
 
 
-# --------------------------
-# Default policy registry
-# --------------------------
-
 DEFAULT_SCAN_PROFILES: Mapping[str, ScanProfile] = {
-    # Fast local iteration, reasonable IO parallelism.
     "DEV_FAST": ScanProfile(
         name="DEV_FAST",
         batch_size=64_000,
@@ -52,7 +55,6 @@ DEFAULT_SCAN_PROFILES: Mapping[str, ScanProfile] = {
         require_sequenced_output=False,
         implicit_ordering=False,
     ),
-    # Debugging determinism: single-thread scanning, sequenced output.
     "DEV_DETERMINISTIC": ScanProfile(
         name="DEV_DETERMINISTIC",
         batch_size=32_000,
@@ -62,7 +64,6 @@ DEFAULT_SCAN_PROFILES: Mapping[str, ScanProfile] = {
         require_sequenced_output=True,
         implicit_ordering=True,
     ),
-    # CI: conservative, stable, reproducible.
     "CI_STABLE": ScanProfile(
         name="CI_STABLE",
         batch_size=32_000,
@@ -72,7 +73,6 @@ DEFAULT_SCAN_PROFILES: Mapping[str, ScanProfile] = {
         require_sequenced_output=True,
         implicit_ordering=True,
     ),
-    # Production: throughput.
     "PROD_THROUGHPUT": ScanProfile(
         name="PROD_THROUGHPUT",
         batch_size=131_072,

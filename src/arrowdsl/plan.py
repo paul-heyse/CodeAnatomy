@@ -1,128 +1,270 @@
+"""Plan wrapper around Acero declarations and eager sources."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, field
 
-from .runtime import ExecutionContext, Ordering, OrderingLevel
+import pyarrow as pa
+import pyarrow.compute as pc
+from pyarrow import acero
 
-if TYPE_CHECKING:  # pragma: no cover
-    import pyarrow as pa
-    import pyarrow.compute as pc
-    from pyarrow import acero
+from arrowdsl.runtime import ExecutionContext, Ordering, OrderingKey, OrderingLevel
 
-
-ReaderThunk = Callable[[], "pa.RecordBatchReader"]
-TableThunk = Callable[[], "pa.Table"]
+ReaderThunk = Callable[[], pa.RecordBatchReader]
+TableThunk = Callable[[], pa.Table]
 
 
 @dataclass(frozen=True)
 class Plan:
-    """A small wrapper around an Acero Declaration or an eager source."""
+    """Wrapper around an Acero Declaration or eager source.
+
+    Exactly one of ``decl``, ``reader_thunk``, or ``table_thunk`` must be provided.
+    """
 
     decl: acero.Declaration | None = None
     reader_thunk: ReaderThunk | None = None
     table_thunk: TableThunk | None = None
 
     label: str = ""
-    ordering: Ordering = Ordering.unordered()
+    ordering: Ordering = field(default_factory=Ordering.unordered)
 
     def __post_init__(self) -> None:
+        """Validate that exactly one execution source is set.
+
+        Raises
+        ------
+        ValueError
+            Raised when zero or multiple sources are provided.
+        """
         sources = [
             self.decl is not None,
             self.reader_thunk is not None,
             self.table_thunk is not None,
         ]
         if sum(sources) != 1:
-            raise ValueError("Plan must have exactly one of: decl, reader_thunk, table_thunk")
-
-    # ----------------------
-    # Execution surfaces
-    # ----------------------
+            msg = "Plan must have exactly one of: decl, reader_thunk, table_thunk."
+            raise ValueError(msg)
 
     def to_reader(self, *, ctx: ExecutionContext) -> pa.RecordBatchReader:
-        """Preferred for streaming consumption."""
-        import pyarrow as pa  # noqa: F401
+        """Return a streaming reader for this plan.
 
+        Parameters
+        ----------
+        ctx:
+            Execution context controlling threading.
+
+        Returns
+        -------
+        pyarrow.RecordBatchReader
+            Streaming reader.
+
+        Raises
+        ------
+        ValueError
+            Raised when the plan has no execution source.
+        """
         if self.reader_thunk is not None:
             return self.reader_thunk()
         if self.decl is not None:
             return self.decl.to_reader(use_threads=ctx.use_threads)
-        assert self.table_thunk is not None
-        return self.table_thunk().to_reader()  # type: ignore[no-any-return]
+        if self.table_thunk is not None:
+            return self.table_thunk().to_reader()
+        msg = "Plan has no execution source."
+        raise ValueError(msg)
 
     def to_table(self, *, ctx: ExecutionContext) -> pa.Table:
-        """Materialize (a deliberate boundary)."""
-        import pyarrow as pa  # noqa: F401
+        """Materialize the plan as a table.
 
+        Parameters
+        ----------
+        ctx:
+            Execution context controlling threading.
+
+        Returns
+        -------
+        pyarrow.Table
+            Materialized table.
+
+        Raises
+        ------
+        ValueError
+            Raised when the plan has no execution source.
+        """
         if self.table_thunk is not None:
             return self.table_thunk()
         if self.decl is not None:
             return self.decl.to_table(use_threads=ctx.use_threads)
-        assert self.reader_thunk is not None
-        return self.reader_thunk().read_all()
-
-    # ----------------------
-    # Constructors
-    # ----------------------
+        if self.reader_thunk is not None:
+            return self.reader_thunk().read_all()
+        msg = "Plan has no execution source."
+        raise ValueError(msg)
 
     @staticmethod
     def table_source(table: pa.Table, *, label: str = "") -> Plan:
-        from pyarrow import acero
+        """Create a Plan from an in-memory table using a table_source node.
 
+        Parameters
+        ----------
+        table:
+            Source table.
+        label:
+            Optional plan label.
+
+        Returns
+        -------
+        Plan
+            Plan backed by a table_source declaration.
+        """
         decl = acero.Declaration("table_source", acero.TableSourceNodeOptions(table))
         return Plan(decl=decl, label=label, ordering=Ordering.implicit())
 
     @staticmethod
     def from_table(table: pa.Table, *, label: str = "") -> Plan:
+        """Create a Plan from an eager table.
+
+        Parameters
+        ----------
+        table:
+            Source table.
+        label:
+            Optional plan label.
+
+        Returns
+        -------
+        Plan
+            Plan backed by a table thunk.
+        """
         return Plan(table_thunk=lambda: table, label=label, ordering=Ordering.implicit())
 
     @staticmethod
     def from_reader(reader: pa.RecordBatchReader, *, label: str = "") -> Plan:
+        """Create a Plan from a reader.
+
+        Parameters
+        ----------
+        reader:
+            Source reader.
+        label:
+            Optional plan label.
+
+        Returns
+        -------
+        Plan
+            Plan backed by a reader thunk.
+        """
         return Plan(reader_thunk=lambda: reader, label=label, ordering=Ordering.implicit())
 
-    # ----------------------
-    # Plan-lane operators
-    # ----------------------
-
     def filter(self, predicate: pc.Expression, *, label: str = "") -> Plan:
-        from pyarrow import acero
+        """Add a filter node to the plan.
 
+        Parameters
+        ----------
+        predicate:
+            Predicate expression to apply.
+        label:
+            Optional plan label.
+
+        Returns
+        -------
+        Plan
+            Filtered plan.
+
+        Raises
+        ------
+        TypeError
+            Raised when the plan is not Acero-backed.
+        """
         if self.decl is None:
-            raise TypeError("filter() requires an Acero-backed Plan (decl != None)")
+            msg = "filter() requires an Acero-backed Plan (decl is None)."
+            raise TypeError(msg)
         decl = acero.Declaration("filter", acero.FilterNodeOptions(predicate), inputs=[self.decl])
         return Plan(decl=decl, label=label or self.label, ordering=self.ordering)
 
     def project(
         self, expressions: Sequence[pc.Expression], names: Sequence[str], *, label: str = ""
     ) -> Plan:
-        from pyarrow import acero
+        """Add a project node to the plan.
 
+        Parameters
+        ----------
+        expressions:
+            Expressions to project.
+        names:
+            Output column names.
+        label:
+            Optional plan label.
+
+        Returns
+        -------
+        Plan
+            Projected plan.
+
+        Raises
+        ------
+        TypeError
+            Raised when the plan is not Acero-backed.
+        """
         if self.decl is None:
-            raise TypeError("project() requires an Acero-backed Plan (decl != None)")
+            msg = "project() requires an Acero-backed Plan (decl is None)."
+            raise TypeError(msg)
         decl = acero.Declaration(
-            "project", acero.ProjectNodeOptions(list(expressions), list(names)), inputs=[self.decl]
+            "project",
+            acero.ProjectNodeOptions(list(expressions), list(names)),
+            inputs=[self.decl],
         )
         return Plan(decl=decl, label=label or self.label, ordering=self.ordering)
 
-    def order_by(self, sort_keys: Sequence[tuple[str, str]], *, label: str = "") -> Plan:
-        """Establish explicit order.
+    def order_by(self, sort_keys: Sequence[OrderingKey], *, label: str = "") -> Plan:
+        """Add an order-by node to the plan.
 
-        sort_keys: list of (column, "ascending"|"descending")
+        Parameters
+        ----------
+        sort_keys:
+            Sort keys as (column, order) pairs.
+        label:
+            Optional plan label.
+
+        Returns
+        -------
+        Plan
+            Ordered plan.
+
+        Raises
+        ------
+        TypeError
+            Raised when the plan is not Acero-backed.
         """
-        from pyarrow import acero
-
         if self.decl is None:
-            raise TypeError("order_by() requires an Acero-backed Plan (decl != None)")
+            msg = "order_by() requires an Acero-backed Plan (decl is None)."
+            raise TypeError(msg)
         decl = acero.Declaration(
-            "order_by", acero.OrderByNodeOptions(sort_keys=list(sort_keys)), inputs=[self.decl]
+            "order_by",
+            acero.OrderByNodeOptions(sort_keys=list(sort_keys)),
+            inputs=[self.decl],
         )
         return Plan(
             decl=decl, label=label or self.label, ordering=Ordering.explicit(tuple(sort_keys))
         )
 
     def mark_unordered(self, *, label: str = "") -> Plan:
-        """Force ordering metadata to UNORDERED (e.g., after joins/aggs)."""
+        """Return a copy of the plan marked unordered.
+
+        Parameters
+        ----------
+        label:
+            Optional plan label.
+
+        Returns
+        -------
+        Plan
+            Plan marked unordered.
+
+        Raises
+        ------
+        ValueError
+            Raised when the plan has no execution source.
+        """
         if self.decl is not None:
             return Plan(decl=self.decl, label=label or self.label, ordering=Ordering.unordered())
         if self.table_thunk is not None:
@@ -131,14 +273,21 @@ class Plan:
                 label=label or self.label,
                 ordering=Ordering.unordered(),
             )
-        assert self.reader_thunk is not None
-        return Plan(
-            reader_thunk=self.reader_thunk, label=label or self.label, ordering=Ordering.unordered()
-        )
-
-    # ----------------------
-    # Ordering helpers
-    # ----------------------
+        if self.reader_thunk is not None:
+            return Plan(
+                reader_thunk=self.reader_thunk,
+                label=label or self.label,
+                ordering=Ordering.unordered(),
+            )
+        msg = "Plan has no execution source."
+        raise ValueError(msg)
 
     def is_ordered(self) -> bool:
-        return self.ordering.level in (OrderingLevel.IMPLICIT, OrderingLevel.EXPLICIT)
+        """Return whether this plan is ordered.
+
+        Returns
+        -------
+        bool
+            ``True`` when ordering is implicit or explicit.
+        """
+        return self.ordering.level in {OrderingLevel.IMPLICIT, OrderingLevel.EXPLICIT}

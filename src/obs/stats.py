@@ -1,16 +1,31 @@
+"""Dataset statistics helpers for manifests and debugging."""
+
 from __future__ import annotations
 
 import hashlib
 import json
 from collections.abc import Mapping
-from typing import Any
+from typing import TypedDict
 
 import pyarrow as pa
 
+from core_types import JsonDict
+
+type RowValue = str | int
+type Row = dict[str, RowValue]
+
+
+class TableSummary(TypedDict):
+    """Typed summary of a single table for manifest output."""
+
+    rows: int
+    columns: int
+    schema_fingerprint: str
+    schema: list[JsonDict]
+
 
 def schema_fingerprint(schema: pa.Schema) -> str:
-    """
-    Stable fingerprint for an Arrow schema.
+    """Compute a stable fingerprint for an Arrow schema.
 
     We fingerprint only:
       - field name
@@ -18,15 +33,24 @@ def schema_fingerprint(schema: pa.Schema) -> str:
       - nullable
 
     This avoids instability from metadata ordering and is good enough for “debug manifests”.
+
+    Returns
+    -------
+    str
+        SHA-256 fingerprint of the schema.
     """
     fields = [{"name": f.name, "type": str(f.type), "nullable": bool(f.nullable)} for f in schema]
     payload = json.dumps(fields, sort_keys=True).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 
-def table_summary(table: pa.Table) -> dict[str, Any]:
-    """
-    Returns a compact summary for a table suitable for manifest recording.
+def table_summary(table: pa.Table) -> TableSummary:
+    """Return a compact summary for a table suitable for manifest recording.
+
+    Returns
+    -------
+    TableSummary
+        Summary statistics for the table.
     """
     sch_fp = schema_fingerprint(table.schema)
     return {
@@ -40,12 +64,18 @@ def table_summary(table: pa.Table) -> dict[str, Any]:
     }
 
 
-def dataset_stats_table(tables: Mapping[str, pa.Table]) -> pa.Table:
-    """
-    Builds a dataset-level stats table:
+def dataset_stats_table(tables: Mapping[str, pa.Table | None]) -> pa.Table:
+    """Build a dataset-level stats table.
+
+    Table columns:
       dataset_name, rows, columns, schema_fingerprint
+
+    Returns
+    -------
+    pa.Table
+        Dataset-level statistics table.
     """
-    rows = []
+    rows: list[Row] = []
     for name, t in tables.items():
         if t is None:
             continue
@@ -71,12 +101,18 @@ def dataset_stats_table(tables: Mapping[str, pa.Table]) -> pa.Table:
     )
 
 
-def column_stats_table(tables: Mapping[str, pa.Table]) -> pa.Table:
-    """
-    Builds a column-level stats table:
+def column_stats_table(tables: Mapping[str, pa.Table | None]) -> pa.Table:
+    """Build a column-level stats table.
+
+    Table columns:
       dataset_name, column_name, type, null_count
+
+    Returns
+    -------
+    pa.Table
+        Column-level statistics table.
     """
-    rows = []
+    rows: list[Row] = []
     for dname, t in tables.items():
         if t is None:
             continue

@@ -1,30 +1,37 @@
+"""Relationship rule models and configuration dataclasses."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal, Union
+from enum import StrEnum
+from typing import Literal
 
-from ..arrowdsl.contracts import DedupeSpec, SortKey
+import pyarrow.compute as pc
 
-if TYPE_CHECKING:  # pragma: no cover
-    from ..arrowdsl.queryspec import QuerySpec
+from arrowdsl.contracts import DedupeSpec, SortKey
+from arrowdsl.expr import ScalarValue
+from arrowdsl.joins import JoinType
+from arrowdsl.queryspec import QuerySpec
 
+type Expression = pc.Expression
 
-Expression = Any  # pyarrow.compute.Expression (kept loose to avoid import-time pyarrow dependency)
+HASH_JOIN_INPUTS = 2
+SINGLE_INPUT = 1
 
 
 @dataclass(frozen=True)
 class DatasetRef:
-    """
-    Reference to a dataset by registry name.
+    """Reference a dataset by registry name.
 
+    Parameters
+    ----------
+    name:
+        Registry name for the dataset.
     query:
-      Optional QuerySpec. If omitted, the resolver decides how to scan (often "all columns").
-      For production, you typically provide a QuerySpec to force projection/pushdown.
-
+        Optional query specification.
     label:
-      Optional override for plan labeling/debug.
+        Optional plan label override.
     """
 
     name: str
@@ -32,20 +39,8 @@ class DatasetRef:
     label: str = ""
 
 
-class RuleKind(str, Enum):
-    """
-    Relationship rule kinds.
-
-    Plan-lane:
-      - FILTER_PROJECT
-      - HASH_JOIN
-
-    Kernel-lane / composite:
-      - UNION_ALL
-      - INTERVAL_ALIGN
-      - EXPLODE_LIST
-      - WINNER_SELECT (dedupe)
-    """
+class RuleKind(StrEnum):
+    """Relationship rule kinds for plan or kernel lanes."""
 
     FILTER_PROJECT = "filter_project"
     HASH_JOIN = "hash_join"
@@ -57,44 +52,38 @@ class RuleKind(str, Enum):
 
 @dataclass(frozen=True)
 class HashJoinConfig:
-    """
-    Acero HashJoin node configuration.
+    """Acero HashJoin node configuration.
 
-    join_type examples:
-      "inner", "left outer", "right outer", "full outer", "left semi", "left anti"
+    Parameters
+    ----------
+    join_type:
+        Join type string.
+    left_keys:
+        Left-side join keys.
+    right_keys:
+        Right-side join keys.
+    left_output:
+        Output columns from the left side.
+    right_output:
+        Output columns from the right side.
+    output_suffix_for_left:
+        Suffix for left output column collisions.
+    output_suffix_for_right:
+        Suffix for right output column collisions.
     """
 
-    join_type: str = "inner"
+    join_type: JoinType = "inner"
     left_keys: tuple[str, ...] = ()
     right_keys: tuple[str, ...] = ()
-
-    # Which columns are emitted from each side by the join node
     left_output: tuple[str, ...] = ()
     right_output: tuple[str, ...] = ()
-
-    # If collisions happen, specify suffixes
     output_suffix_for_left: str = ""
     output_suffix_for_right: str = ""
 
 
 @dataclass(frozen=True)
 class IntervalAlignConfig:
-    """
-    Kernel-lane interval alignment (span join).
-
-    This is intended for joins like:
-      CST name ref/callee token span  <->  SCIP occurrence range/enclosing_range
-      CST def name span              <->  SCIP definition occurrence
-
-    mode:
-      - EXACT: right span must match left span exactly
-      - CONTAINED_BEST: right span must be contained within left span; choose "best" candidate
-      - OVERLAP_BEST: allow overlaps; choose best overlap (more permissive)
-
-    "Best" defaults to:
-      1) minimal right span length (more specific is better)
-      2) tie_breakers (SortKey columns from right row)
-    """
+    """Kernel-lane interval alignment configuration."""
 
     mode: Literal["EXACT", "CONTAINED_BEST", "OVERLAP_BEST"] = "CONTAINED_BEST"
     how: Literal["inner", "left"] = "inner"
@@ -110,63 +99,57 @@ class IntervalAlignConfig:
     select_left: tuple[str, ...] = ()
     select_right: tuple[str, ...] = ()
 
-    # Tie-breaking columns from right rows (after span-length)
     tie_breakers: tuple[SortKey, ...] = ()
 
-    # Optional match metadata columns
     emit_match_meta: bool = True
     match_kind_col: str = "match_kind"
-    match_score_col: str = "match_score"  # numeric "better" score (higher is better)
+    match_score_col: str = "match_score"
 
 
 @dataclass(frozen=True)
 class ProjectConfig:
-    """
-    Projection performed after the primary operation.
-
-    select:
-      Output columns to keep (existing fields).
-      If empty, defaults to "keep everything produced by the operation".
-
-    exprs:
-      New computed columns as {name: Expression}.
-    """
+    """Projection performed after the primary operation."""
 
     select: tuple[str, ...] = ()
     exprs: Mapping[str, Expression] = field(default_factory=dict)
 
 
-# -------------------------
-# Post-kernel specs
-# -------------------------
-
-
 @dataclass(frozen=True)
 class KernelSpec:
+    """Base class for post-kernel specifications."""
+
     kind: str
 
 
 @dataclass(frozen=True)
 class AddLiteralSpec(KernelSpec):
+    """Post-kernel spec for adding a literal column."""
+
     kind: Literal["add_literal"] = "add_literal"
     name: str = ""
-    value: Any = None
+    value: ScalarValue | None = None
 
 
 @dataclass(frozen=True)
 class DropColumnsSpec(KernelSpec):
+    """Post-kernel spec for dropping columns."""
+
     kind: Literal["drop_columns"] = "drop_columns"
     columns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class RenameColumnsSpec(KernelSpec):
+    """Post-kernel spec for renaming columns."""
+
     kind: Literal["rename_columns"] = "rename_columns"
-    mapping: Mapping[str, str] = field(default_factory=dict)  # old -> new
+    mapping: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class ExplodeListSpec(KernelSpec):
+    """Post-kernel spec for exploding list columns."""
+
     kind: Literal["explode_list"] = "explode_list"
     parent_id_col: str = "src_id"
     list_col: str = "dst_ids"
@@ -176,40 +159,33 @@ class ExplodeListSpec(KernelSpec):
 
 @dataclass(frozen=True)
 class DedupeKernelSpec(KernelSpec):
+    """Post-kernel spec for applying deduplication."""
+
     kind: Literal["dedupe"] = "dedupe"
-    spec: DedupeSpec = DedupeSpec(keys=())
+    spec: DedupeSpec = field(default_factory=lambda: DedupeSpec(keys=()))
 
 
 @dataclass(frozen=True)
 class CanonicalSortKernelSpec(KernelSpec):
+    """Post-kernel spec for applying canonical sorting."""
+
     kind: Literal["canonical_sort"] = "canonical_sort"
     sort_keys: tuple[SortKey, ...] = ()
 
 
-KernelSpecT = Union[
-    AddLiteralSpec,
-    DropColumnsSpec,
-    RenameColumnsSpec,
-    ExplodeListSpec,
-    DedupeKernelSpec,
-    CanonicalSortKernelSpec,
-]
+type KernelSpecT = (
+    AddLiteralSpec
+    | DropColumnsSpec
+    | RenameColumnsSpec
+    | ExplodeListSpec
+    | DedupeKernelSpec
+    | CanonicalSortKernelSpec
+)
 
 
 @dataclass(frozen=True)
 class RelationshipRule:
-    """
-    A declarative relationship rule.
-
-    Output policy:
-      - output_dataset: dataset name this rule produces
-      - contract_name: which Contract to finalize against (often relationship-specific)
-
-    Determinism / winner selection:
-      - priority: smaller is "preferred" (e.g., exact match priority 0, fallback priority 10)
-      - if emit_rule_meta=True, compiler will add rule_name + rule_priority columns.
-        You should include these in contracts if you want them persisted.
-    """
+    """Declarative relationship rule configuration."""
 
     name: str
     kind: RuleKind
@@ -218,49 +194,69 @@ class RelationshipRule:
 
     inputs: tuple[DatasetRef, ...] = ()
 
-    # kind-specific configs
     hash_join: HashJoinConfig | None = None
     interval_align: IntervalAlignConfig | None = None
 
     project: ProjectConfig | None = None
     post_kernels: tuple[KernelSpecT, ...] = ()
 
-    # meta/winner selection
     priority: int = 100
     emit_rule_meta: bool = True
     rule_name_col: str = "rule_name"
     rule_priority_col: str = "rule_priority"
 
     def validate(self) -> None:
+        """Validate rule configuration invariants.
+
+        Raises
+        ------
+        ValueError
+            Raised when required rule configuration is missing or inconsistent.
+        """
         if not self.name:
-            raise ValueError("RelationshipRule.name must be non-empty")
+            msg = "RelationshipRule.name must be non-empty."
+            raise ValueError(msg)
         if not self.output_dataset:
-            raise ValueError("RelationshipRule.output_dataset must be non-empty")
+            msg = "RelationshipRule.output_dataset must be non-empty."
+            raise ValueError(msg)
 
         if self.kind == RuleKind.HASH_JOIN:
-            if len(self.inputs) != 2:
-                raise ValueError("HASH_JOIN rules require exactly 2 inputs")
-            if self.hash_join is None:
-                raise ValueError("HASH_JOIN rules require hash_join config")
-
+            self._validate_hash_join()
+            return
         if self.kind == RuleKind.FILTER_PROJECT:
-            if len(self.inputs) != 1:
-                raise ValueError("FILTER_PROJECT rules require exactly 1 input")
-
+            self._require_exact_inputs(SINGLE_INPUT)
+            return
         if self.kind == RuleKind.EXPLODE_LIST:
-            if len(self.inputs) != 1:
-                raise ValueError("EXPLODE_LIST rules require exactly 1 input")
-
+            self._require_exact_inputs(SINGLE_INPUT)
+            return
         if self.kind == RuleKind.WINNER_SELECT:
-            if len(self.inputs) != 1:
-                raise ValueError("WINNER_SELECT rules require exactly 1 input")
-
+            self._require_exact_inputs(SINGLE_INPUT)
+            return
         if self.kind == RuleKind.UNION_ALL:
-            if len(self.inputs) < 1:
-                raise ValueError("UNION_ALL rules require >= 1 input")
-
+            self._require_min_inputs(1)
+            return
         if self.kind == RuleKind.INTERVAL_ALIGN:
-            if len(self.inputs) != 2:
-                raise ValueError("INTERVAL_ALIGN rules require exactly 2 inputs")
-            if self.interval_align is None:
-                raise ValueError("INTERVAL_ALIGN rules require interval_align config")
+            self._validate_interval_align()
+            return
+
+    def _require_exact_inputs(self, count: int) -> None:
+        if len(self.inputs) != count:
+            msg = f"{self.kind.name} rules require exactly {count} inputs."
+            raise ValueError(msg)
+
+    def _require_min_inputs(self, count: int) -> None:
+        if len(self.inputs) < count:
+            msg = f"{self.kind.name} rules require at least {count} inputs."
+            raise ValueError(msg)
+
+    def _validate_hash_join(self) -> None:
+        self._require_exact_inputs(HASH_JOIN_INPUTS)
+        if self.hash_join is None:
+            msg = "HASH_JOIN rules require hash_join config."
+            raise ValueError(msg)
+
+    def _validate_interval_align(self) -> None:
+        self._require_exact_inputs(HASH_JOIN_INPUTS)
+        if self.interval_align is None:
+            msg = "INTERVAL_ALIGN rules require interval_align config."
+            raise ValueError(msg)

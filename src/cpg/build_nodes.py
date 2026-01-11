@@ -1,3 +1,5 @@
+"""Build CPG node tables from extraction outputs."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -5,10 +7,10 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from ..arrowdsl.finalize import FinalizeResult, finalize
-from ..arrowdsl.runtime import ExecutionContext
-from .kinds import NodeKind
-from .schemas import CPG_NODES_CONTRACT, CPG_NODES_SCHEMA, SCHEMA_VERSION, empty_nodes
+from arrowdsl.finalize import FinalizeResult, finalize
+from arrowdsl.runtime import ExecutionContext
+from cpg.kinds import NodeKind
+from cpg.schemas import CPG_NODES_CONTRACT, CPG_NODES_SCHEMA, SCHEMA_VERSION, empty_nodes
 
 
 def _const_str(n: int, value: str) -> pa.Array:
@@ -19,45 +21,60 @@ def _const_i32(n: int, value: int) -> pa.Array:
     return pa.array([int(value)] * n, type=pa.int32())
 
 
-def _pick_col(t: pa.Table, names: Sequence[str]) -> pa.ChunkedArray | None:
-    for n in names:
-        if n in t.column_names:
-            return t[n]
+def _pick_col(table: pa.Table, names: Sequence[str]) -> pa.ChunkedArray | None:
+    for name in names:
+        if name in table.column_names:
+            return table[name]
     return None
 
 
+@dataclass(frozen=True)
+class AnchoredNodeSpec:
+    """Specification for anchored node extraction."""
+
+    id_col: str
+    kind: NodeKind
+    path_col: str = "path"
+    bstart_col: str = "bstart"
+    bend_col: str = "bend"
+    file_id_col: str | None = "file_id"
+
+
 def _nodes_from_anchored(
-    t: pa.Table,
-    *,
-    id_col: str,
-    kind: NodeKind,
-    path_col: str = "path",
-    bstart_col: str = "bstart",
-    bend_col: str = "bend",
-    file_id_col: str | None = "file_id",
+    table: pa.Table,
+    spec: AnchoredNodeSpec,
 ) -> pa.Table:
-    n = t.num_rows
+    n = table.num_rows
     if n == 0:
         return empty_nodes()
 
-    node_id = t[id_col]
-    path = t[path_col] if path_col in t.column_names else pa.array([None] * n, type=pa.string())
-    bstart = (
-        t[bstart_col] if bstart_col in t.column_names else pa.array([None] * n, type=pa.int64())
+    node_id = table[spec.id_col]
+    path = (
+        table[spec.path_col]
+        if spec.path_col in table.column_names
+        else pa.array([None] * n, type=pa.string())
     )
-    bend = t[bend_col] if bend_col in t.column_names else pa.array([None] * n, type=pa.int64())
+    bstart = (
+        table[spec.bstart_col]
+        if spec.bstart_col in table.column_names
+        else pa.array([None] * n, type=pa.int64())
+    )
+    bend = (
+        table[spec.bend_col]
+        if spec.bend_col in table.column_names
+        else pa.array([None] * n, type=pa.int64())
+    )
 
-    file_id = None
-    if file_id_col is not None and file_id_col in t.column_names:
-        file_id = t[file_id_col]
+    if spec.file_id_col is not None and spec.file_id_col in table.column_names:
+        file_id = table[spec.file_id_col]
     else:
         file_id = pa.array([None] * n, type=pa.string())
 
-    out = pa.Table.from_arrays(
+    return pa.Table.from_arrays(
         [
             _const_i32(n, SCHEMA_VERSION),
             node_id,
-            _const_str(n, kind.value),
+            _const_str(n, spec.kind.value),
             path,
             bstart,
             bend,
@@ -65,11 +82,12 @@ def _nodes_from_anchored(
         ],
         schema=CPG_NODES_SCHEMA,
     )
-    return out
 
 
 @dataclass(frozen=True)
 class NodeBuildOptions:
+    """Configure which node families are emitted."""
+
     include_file_nodes: bool = True
     include_name_ref_nodes: bool = True
     include_import_alias_nodes: bool = True
@@ -77,177 +95,252 @@ class NodeBuildOptions:
     include_def_nodes: bool = True
     include_symbol_nodes: bool = True
     include_qname_nodes: bool = True
-
-    # For file nodes: anchor to full file byte span (0..size_bytes)
     file_span_from_size_bytes: bool = True
+
+
+@dataclass(frozen=True)
+class NodeInputTables:
+    """Bundle of input tables for node construction."""
+
+    repo_files: pa.Table | None = None
+    cst_name_refs: pa.Table | None = None
+    cst_imports: pa.Table | None = None
+    cst_callsites: pa.Table | None = None
+    cst_defs: pa.Table | None = None
+    dim_qualified_names: pa.Table | None = None
+    scip_symbol_information: pa.Table | None = None
+    scip_occurrences: pa.Table | None = None
+
+
+def _append_part(parts: list[pa.Table], table: pa.Table | None) -> None:
+    if table is not None and table.num_rows:
+        parts.append(table)
+
+
+def _file_span_arrays(
+    n: int,
+    size: pa.ChunkedArray | None,
+    *,
+    use_size_bytes: bool,
+) -> tuple[pa.Array, pa.Array]:
+    if use_size_bytes and size is not None:
+        raw_values = size.to_pylist()
+        bends: list[int | None] = []
+        for value in raw_values:
+            if isinstance(value, bool):
+                bends.append(None)
+            elif isinstance(value, int):
+                bends.append(value)
+            elif (isinstance(value, float) and value.is_integer()) or (
+                isinstance(value, str) and value.isdigit()
+            ):
+                bends.append(int(value))
+            else:
+                bends.append(None)
+        return pa.array([0] * n, type=pa.int64()), pa.array(bends, type=pa.int64())
+    return pa.array([None] * n, type=pa.int64()), pa.array([None] * n, type=pa.int64())
+
+
+def _file_nodes(repo_files: pa.Table | None, options: NodeBuildOptions) -> pa.Table | None:
+    if repo_files is None or repo_files.num_rows == 0:
+        return None
+    n = repo_files.num_rows
+    file_id = _pick_col(repo_files, ["file_id"])
+    path = _pick_col(repo_files, ["path"])
+    size = _pick_col(repo_files, ["size_bytes"])
+    if file_id is None or path is None:
+        return None
+
+    bstart, bend = _file_span_arrays(
+        n,
+        size,
+        use_size_bytes=options.file_span_from_size_bytes,
+    )
+    return pa.Table.from_arrays(
+        [
+            _const_i32(n, SCHEMA_VERSION),
+            file_id,
+            _const_str(n, NodeKind.PY_FILE.value),
+            path,
+            bstart,
+            bend,
+            file_id,
+        ],
+        schema=CPG_NODES_SCHEMA,
+    )
+
+
+def _name_ref_nodes(cst_name_refs: pa.Table | None) -> pa.Table | None:
+    if cst_name_refs is None or cst_name_refs.num_rows == 0:
+        return None
+    file_id_col = "file_id" if "file_id" in cst_name_refs.column_names else None
+    return _nodes_from_anchored(
+        cst_name_refs,
+        AnchoredNodeSpec(
+            id_col="name_ref_id",
+            kind=NodeKind.PY_NAME_REF,
+            path_col="path",
+            bstart_col="bstart",
+            bend_col="bend",
+            file_id_col=file_id_col,
+        ),
+    )
+
+
+def _import_alias_nodes(cst_imports: pa.Table | None) -> pa.Table | None:
+    if cst_imports is None or cst_imports.num_rows == 0:
+        return None
+    id_col = "import_alias_id" if "import_alias_id" in cst_imports.column_names else "import_id"
+    bstart_col = "bstart" if "bstart" in cst_imports.column_names else "alias_bstart"
+    bend_col = "bend" if "bend" in cst_imports.column_names else "alias_bend"
+    file_id_col = "file_id" if "file_id" in cst_imports.column_names else None
+    return _nodes_from_anchored(
+        cst_imports,
+        AnchoredNodeSpec(
+            id_col=id_col,
+            kind=NodeKind.PY_IMPORT_ALIAS,
+            path_col="path",
+            bstart_col=bstart_col,
+            bend_col=bend_col,
+            file_id_col=file_id_col,
+        ),
+    )
+
+
+def _callsite_span_columns(cst_callsites: pa.Table) -> tuple[str, str]:
+    bstart_col = "call_bstart" if "call_bstart" in cst_callsites.column_names else "bstart"
+    bend_col = "call_bend" if "call_bend" in cst_callsites.column_names else "bend"
+    return bstart_col, bend_col
+
+
+def _callsite_nodes(cst_callsites: pa.Table | None) -> pa.Table | None:
+    if cst_callsites is None or cst_callsites.num_rows == 0:
+        return None
+    bstart_col, bend_col = _callsite_span_columns(cst_callsites)
+    file_id_col = "file_id" if "file_id" in cst_callsites.column_names else None
+    return _nodes_from_anchored(
+        cst_callsites,
+        AnchoredNodeSpec(
+            id_col="call_id",
+            kind=NodeKind.PY_CALLSITE,
+            path_col="path",
+            bstart_col=bstart_col,
+            bend_col=bend_col,
+            file_id_col=file_id_col,
+        ),
+    )
+
+
+def _def_nodes(cst_defs: pa.Table | None) -> pa.Table | None:
+    if cst_defs is None or cst_defs.num_rows == 0:
+        return None
+    bstart_col = "bstart" if "bstart" in cst_defs.column_names else "name_bstart"
+    bend_col = "bend" if "bend" in cst_defs.column_names else "name_bend"
+    file_id_col = "file_id" if "file_id" in cst_defs.column_names else None
+    return _nodes_from_anchored(
+        cst_defs,
+        AnchoredNodeSpec(
+            id_col="def_id",
+            kind=NodeKind.PY_DEF,
+            path_col="path",
+            bstart_col=bstart_col,
+            bend_col=bend_col,
+            file_id_col=file_id_col,
+        ),
+    )
+
+
+def _qname_nodes(dim_qualified_names: pa.Table | None) -> pa.Table | None:
+    if (
+        dim_qualified_names is None
+        or dim_qualified_names.num_rows == 0
+        or "qname_id" not in dim_qualified_names.column_names
+    ):
+        return None
+    return _nodes_from_anchored(
+        dim_qualified_names,
+        AnchoredNodeSpec(
+            id_col="qname_id",
+            kind=NodeKind.PY_QUALIFIED_NAME,
+            path_col="path",
+            bstart_col="bstart",
+            bend_col="bend",
+            file_id_col=None,
+        ),
+    )
+
+
+def _collect_symbols(table: pa.Table | None) -> set[str]:
+    if table is None or "symbol" not in table.column_names:
+        return set()
+    return {str(sym) for sym in table["symbol"].to_pylist() if sym}
+
+
+def _symbol_nodes(
+    scip_symbol_information: pa.Table | None,
+    scip_occurrences: pa.Table | None,
+) -> pa.Table | None:
+    symbols = _collect_symbols(scip_symbol_information)
+    symbols.update(_collect_symbols(scip_occurrences))
+    if not symbols:
+        return None
+
+    uniq = sorted(symbols)
+    n = len(uniq)
+    return pa.Table.from_arrays(
+        [
+            _const_i32(n, SCHEMA_VERSION),
+            pa.array(uniq, type=pa.string()),
+            _const_str(n, NodeKind.PY_SYMBOL.value),
+            pa.array([None] * n, type=pa.string()),
+            pa.array([None] * n, type=pa.int64()),
+            pa.array([None] * n, type=pa.int64()),
+            pa.array([None] * n, type=pa.string()),
+        ],
+        schema=CPG_NODES_SCHEMA,
+    )
 
 
 def build_cpg_nodes_raw(
     *,
-    repo_files: pa.Table | None = None,
-    cst_name_refs: pa.Table | None = None,
-    cst_imports: pa.Table | None = None,
-    cst_callsites: pa.Table | None = None,
-    cst_defs: pa.Table | None = None,
-    dim_qualified_names: pa.Table | None = None,
-    scip_symbol_information: pa.Table | None = None,
-    scip_occurrences: pa.Table | None = None,
+    inputs: NodeInputTables | None = None,
     options: NodeBuildOptions | None = None,
 ) -> pa.Table:
-    """
-    Build cpg_nodes without finalization (schema alignment/dedupe/sort happens in build_cpg_nodes()).
+    """Build CPG nodes without finalization.
+
+    Parameters
+    ----------
+    inputs:
+        Bundle of input tables for node construction.
+    options:
+        Node build options.
+
+    Returns
+    -------
+    pyarrow.Table
+        Raw nodes table.
     """
     options = options or NodeBuildOptions()
+    tables = inputs or NodeInputTables()
     parts: list[pa.Table] = []
 
-    # PY_FILE nodes
-    if options.include_file_nodes and repo_files is not None and repo_files.num_rows:
-        # node_id = file_id, path = path, bstart=0, bend=size_bytes (if configured)
-        n = repo_files.num_rows
-        file_id = _pick_col(repo_files, ["file_id"])
-        path = _pick_col(repo_files, ["path"])
-        size = _pick_col(repo_files, ["size_bytes"])
-        if file_id is None or path is None:
-            pass
-        else:
-            if options.file_span_from_size_bytes and size is not None:
-                bstart = pa.array([0] * n, type=pa.int64())
-                bend = pa.array(
-                    [int(x) if x is not None else None for x in size.to_pylist()], type=pa.int64()
-                )
-            else:
-                bstart = pa.array([None] * n, type=pa.int64())
-                bend = pa.array([None] * n, type=pa.int64())
-
-            t = pa.Table.from_arrays(
-                [
-                    _const_i32(n, SCHEMA_VERSION),
-                    file_id,
-                    _const_str(n, NodeKind.PY_FILE.value),
-                    path,
-                    bstart,
-                    bend,
-                    file_id,  # file_id column self-ref
-                ],
-                schema=CPG_NODES_SCHEMA,
-            )
-            parts.append(t)
-
-    # PY_NAME_REF nodes
-    if options.include_name_ref_nodes and cst_name_refs is not None and cst_name_refs.num_rows:
-        parts.append(
-            _nodes_from_anchored(
-                cst_name_refs,
-                id_col="name_ref_id",
-                kind=NodeKind.PY_NAME_REF,
-                path_col="path",
-                bstart_col="bstart",
-                bend_col="bend",
-                file_id_col="file_id" if "file_id" in cst_name_refs.column_names else None,
-            )
-        )
-
-    # PY_IMPORT_ALIAS nodes (id column may be import_id or import_alias_id)
-    if options.include_import_alias_nodes and cst_imports is not None and cst_imports.num_rows:
-        id_col = "import_alias_id" if "import_alias_id" in cst_imports.column_names else "import_id"
-        # ensure (bstart,bend) exists; normalize layer usually adds it
-        parts.append(
-            _nodes_from_anchored(
-                cst_imports,
-                id_col=id_col,
-                kind=NodeKind.PY_IMPORT_ALIAS,
-                path_col="path",
-                bstart_col="bstart" if "bstart" in cst_imports.column_names else "alias_bstart",
-                bend_col="bend" if "bend" in cst_imports.column_names else "alias_bend",
-                file_id_col="file_id" if "file_id" in cst_imports.column_names else None,
-            )
-        )
-
-    # PY_CALLSITE nodes
-    if options.include_callsite_nodes and cst_callsites is not None and cst_callsites.num_rows:
-        # Anchor callsite to call span (not callee span)
-        bstart_col = "call_bstart" if "call_bstart" in cst_callsites.column_names else "bstart"
-        bend_col = "call_bend" if "call_bend" in cst_callsites.column_names else "bend"
-        parts.append(
-            _nodes_from_anchored(
-                cst_callsites,
-                id_col="call_id",
-                kind=NodeKind.PY_CALLSITE,
-                path_col="path",
-                bstart_col=bstart_col,
-                bend_col=bend_col,
-                file_id_col="file_id" if "file_id" in cst_callsites.column_names else None,
-            )
-        )
-
-    # PY_DEF nodes (functions/classes)
-    if options.include_def_nodes and cst_defs is not None and cst_defs.num_rows:
-        bstart_col = "bstart" if "bstart" in cst_defs.column_names else "name_bstart"
-        bend_col = "bend" if "bend" in cst_defs.column_names else "name_bend"
-        parts.append(
-            _nodes_from_anchored(
-                cst_defs,
-                id_col="def_id",
-                kind=NodeKind.PY_DEF,
-                path_col="path",
-                bstart_col=bstart_col,
-                bend_col=bend_col,
-                file_id_col="file_id" if "file_id" in cst_defs.column_names else None,
-            )
-        )
-
-    # PY_QUALIFIED_NAME nodes (dimension)
-    if (
-        options.include_qname_nodes
-        and dim_qualified_names is not None
-        and dim_qualified_names.num_rows
-    ):
-        # dim_qualified_names expected to contain qname_id and qname
-        if "qname_id" in dim_qualified_names.column_names:
-            parts.append(
-                _nodes_from_anchored(
-                    dim_qualified_names,
-                    id_col="qname_id",
-                    kind=NodeKind.PY_QUALIFIED_NAME,
-                    path_col="path",  # likely missing; will become null
-                    bstart_col="bstart",
-                    bend_col="bend",
-                    file_id_col=None,
-                )
-            )
-
-    # PY_SYMBOL nodes
+    if options.include_file_nodes:
+        _append_part(parts, _file_nodes(tables.repo_files, options))
+    if options.include_name_ref_nodes:
+        _append_part(parts, _name_ref_nodes(tables.cst_name_refs))
+    if options.include_import_alias_nodes:
+        _append_part(parts, _import_alias_nodes(tables.cst_imports))
+    if options.include_callsite_nodes:
+        _append_part(parts, _callsite_nodes(tables.cst_callsites))
+    if options.include_def_nodes:
+        _append_part(parts, _def_nodes(tables.cst_defs))
+    if options.include_qname_nodes:
+        _append_part(parts, _qname_nodes(tables.dim_qualified_names))
     if options.include_symbol_nodes:
-        sym_ids: list[str] = []
-        if scip_symbol_information is not None and "symbol" in scip_symbol_information.column_names:
-            sym_ids.extend([s for s in scip_symbol_information["symbol"].to_pylist() if s])
-        if scip_occurrences is not None and "symbol" in scip_occurrences.column_names:
-            sym_ids.extend([s for s in scip_occurrences["symbol"].to_pylist() if s])
-
-        if sym_ids:
-            # distinct, deterministic
-            seen = set()
-            uniq = []
-            for s in sym_ids:
-                if s not in seen:
-                    seen.add(s)
-                    uniq.append(s)
-            uniq.sort()
-
-            n = len(uniq)
-            t = pa.Table.from_arrays(
-                [
-                    _const_i32(n, SCHEMA_VERSION),
-                    pa.array(uniq, type=pa.string()),
-                    _const_str(n, NodeKind.PY_SYMBOL.value),
-                    pa.array([None] * n, type=pa.string()),
-                    pa.array([None] * n, type=pa.int64()),
-                    pa.array([None] * n, type=pa.int64()),
-                    pa.array([None] * n, type=pa.string()),
-                ],
-                schema=CPG_NODES_SCHEMA,
-            )
-            parts.append(t)
+        _append_part(
+            parts,
+            _symbol_nodes(tables.scip_symbol_information, tables.scip_occurrences),
+        )
 
     if not parts:
         return empty_nodes()
@@ -258,28 +351,18 @@ def build_cpg_nodes_raw(
 def build_cpg_nodes(
     *,
     ctx: ExecutionContext,
-    repo_files: pa.Table | None = None,
-    cst_name_refs: pa.Table | None = None,
-    cst_imports: pa.Table | None = None,
-    cst_callsites: pa.Table | None = None,
-    cst_defs: pa.Table | None = None,
-    dim_qualified_names: pa.Table | None = None,
-    scip_symbol_information: pa.Table | None = None,
-    scip_occurrences: pa.Table | None = None,
+    inputs: NodeInputTables | None = None,
     options: NodeBuildOptions | None = None,
 ) -> FinalizeResult:
-    """
-    Build + finalize cpg_nodes (schema alignment, dedupe, canonical sort, error table).
+    """Build and finalize CPG nodes.
+
+    Returns
+    -------
+    FinalizeResult
+        Finalized nodes tables and stats.
     """
     raw = build_cpg_nodes_raw(
-        repo_files=repo_files,
-        cst_name_refs=cst_name_refs,
-        cst_imports=cst_imports,
-        cst_callsites=cst_callsites,
-        cst_defs=cst_defs,
-        dim_qualified_names=dim_qualified_names,
-        scip_symbol_information=scip_symbol_information,
-        scip_occurrences=scip_occurrences,
+        inputs=inputs,
         options=options,
     )
     return finalize(raw, contract=CPG_NODES_CONTRACT, ctx=ctx)

@@ -1,19 +1,19 @@
-from __future__ import annotations
-
 """Shared type aliases and small typing helpers."""
+
+from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Literal, NewType, TypeAlias
+from typing import Literal, NewType
 
-PathLike: TypeAlias = str | Path
-StrictnessMode: TypeAlias = Literal["strict", "tolerant"]
+type PathLike = str | Path
+type StrictnessMode = Literal["strict", "tolerant"]
 
 RepoId = NewType("RepoId", int)
 
-JsonPrimitive: TypeAlias = str | int | float | bool | None
-JsonValue: TypeAlias = JsonPrimitive | Mapping[str, "JsonValue"] | Sequence["JsonValue"]
-JsonDict: TypeAlias = dict[str, JsonValue]
+type JsonPrimitive = str | int | float | bool | None
+type JsonValue = JsonPrimitive | Mapping[str, JsonValue] | Sequence[JsonValue]
+type JsonDict = dict[str, JsonValue]
 
 
 def ensure_path(p: PathLike) -> Path:

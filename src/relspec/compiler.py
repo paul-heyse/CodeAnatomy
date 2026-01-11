@@ -1,29 +1,29 @@
+"""Compile relationship rules into executable plans and kernels."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from functools import cmp_to_key
+from typing import Literal, Protocol
 
 import pyarrow as pa
+import pyarrow.compute as pc
 
-from ..arrowdsl.contracts import Contract, SortKey
-from ..arrowdsl.dataset_io import compile_to_acero_scan, open_dataset
-from ..arrowdsl.expr import E
-from ..arrowdsl.finalize import FinalizeResult, finalize
-from ..arrowdsl.joins import JoinSpec, hash_join
-from ..arrowdsl.kernels import (
-    apply_dedupe,
-    canonical_sort,
-    explode_list_column,
-)
-from ..arrowdsl.plan import Plan
-from ..arrowdsl.queryspec import ProjectionSpec, QuerySpec
-from ..arrowdsl.runtime import ExecutionContext
-from .edge_contract_validation import (
+from arrowdsl.contracts import Contract, SortKey
+from arrowdsl.dataset_io import compile_to_acero_scan, open_dataset
+from arrowdsl.expr import E
+from arrowdsl.finalize import FinalizeResult, finalize
+from arrowdsl.joins import JoinSpec, hash_join
+from arrowdsl.kernels import apply_dedupe, canonical_sort, explode_list_column
+from arrowdsl.plan import Plan
+from arrowdsl.queryspec import ProjectionSpec, QuerySpec
+from arrowdsl.runtime import ExecutionContext, Ordering
+from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
 )
-from .model import (
+from relspec.model import (
     AddLiteralSpec,
     CanonicalSortKernelSpec,
     DatasetRef,
@@ -36,206 +36,266 @@ from .model import (
     RenameColumnsSpec,
     RuleKind,
 )
-from .registry import ContractCatalog, DatasetCatalog
+from relspec.registry import ContractCatalog, DatasetCatalog
 
-KernelFn = Callable[[pa.Table, ExecutionContext], pa.Table]
+type KernelFn = Callable[[pa.Table, ExecutionContext], pa.Table]
+type RowValue = object | None
+type RowData = dict[str, RowValue]
+type Candidate = dict[str, RowValue]
 
 
 class PlanResolver(Protocol):
+    """Resolve a ``DatasetRef`` to an executable plan."""
+
+    def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> Plan:
+        """Resolve a dataset reference into a plan.
+
+        Parameters
+        ----------
+        ref:
+            Dataset reference to resolve.
+        ctx:
+            Execution context.
+
+        Returns
+        -------
+        Plan
+            Executable plan for the dataset reference.
+        """
+        ...
+
+
+def _scan_ordering_for_ctx(ctx: ExecutionContext) -> Ordering:
+    """Return ordering metadata for scan output based on context.
+
+    Parameters
+    ----------
+    ctx:
+        Execution context.
+
+    Returns
+    -------
+    Ordering
+        Ordering marker for scan output.
     """
-    Resolves a DatasetRef to an Acero-backed Plan.
-    """
-
-    def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> Plan: ...
-
-
-def _scan_ordering_for_ctx(ctx: ExecutionContext):
-    # If scan is configured to produce implicit ordering, mark as implicit; else unordered.
-    from ..arrowdsl.runtime import Ordering
-
-    if getattr(ctx.runtime.scan, "implicit_ordering", False) or getattr(
-        ctx.runtime.scan, "require_sequenced_output", False
-    ):
+    if ctx.runtime.scan.implicit_ordering or ctx.runtime.scan.require_sequenced_output:
         return Ordering.implicit()
     return Ordering.unordered()
 
 
 class FilesystemPlanResolver:
-    """
-    Default resolver: dataset names map to filesystem-backed Arrow datasets.
-
-    This uses:
-      - arrowdsl.dataset_io.open_dataset(...)
-      - arrowdsl.dataset_io.compile_to_acero_scan(...)
-    """
+    """Resolve dataset names to filesystem-backed Arrow datasets."""
 
     def __init__(self, catalog: DatasetCatalog) -> None:
         self.catalog = catalog
 
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> Plan:
+        """Resolve a dataset reference into a filesystem-backed plan.
+
+        Parameters
+        ----------
+        ref:
+            Dataset reference to resolve.
+        ctx:
+            Execution context.
+
+        Returns
+        -------
+        Plan
+            Executable plan for the dataset reference.
+        """
         loc = self.catalog.get(ref.name)
-        ds = open_dataset(
+        dataset = open_dataset(
             loc.path,
-            format=loc.format,
+            dataset_format=loc.format,
             filesystem=loc.filesystem,
             partitioning=loc.partitioning,
         )
 
         if ref.query is None:
-            # default: scan all columns
-            cols = tuple(ds.schema.names)
+            cols = tuple(dataset.schema.names)
             ref_query = QuerySpec(projection=ProjectionSpec(base=cols))
         else:
             ref_query = ref.query
 
-        decl = compile_to_acero_scan(ds, spec=ref_query, ctx=ctx)
+        decl = compile_to_acero_scan(dataset, spec=ref_query, ctx=ctx)
         label = ref.label or ref.name
         return Plan(decl=decl, label=label, ordering=_scan_ordering_for_ctx(ctx))
 
 
 class InMemoryPlanResolver:
-    """
-    Test/dev resolver: dataset names map to in-memory Tables or Plans.
-    """
+    """Resolve dataset names to in-memory tables or plans."""
 
     def __init__(self, mapping: Mapping[str, pa.Table | Plan]) -> None:
         self.mapping = dict(mapping)
 
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> Plan:
+        """Resolve a dataset reference into an in-memory plan.
+
+        Parameters
+        ----------
+        ref:
+            Dataset reference to resolve.
+        ctx:
+            Execution context (unused for in-memory resolution).
+
+        Returns
+        -------
+        Plan
+            Executable plan for the dataset reference.
+
+        Raises
+        ------
+        KeyError
+            Raised when the dataset reference is unknown.
+        """
+        _ = ctx
         obj = self.mapping.get(ref.name)
         if obj is None:
-            raise KeyError(f"InMemoryPlanResolver: unknown dataset {ref.name!r}")
+            msg = f"InMemoryPlanResolver: unknown dataset {ref.name!r}."
+            raise KeyError(msg)
         if isinstance(obj, Plan):
             return obj
         return Plan.table_source(obj, label=ref.label or ref.name)
 
 
-# -------------------------
-# Kernel compilation helpers
-# -------------------------
+def _build_rule_meta_kernel(rule: RelationshipRule) -> KernelFn:
+    def _add_rule_meta(table: pa.Table, _ctx: ExecutionContext) -> pa.Table:
+        count = table.num_rows
+        if rule.rule_name_col not in table.column_names:
+            table = table.append_column(
+                rule.rule_name_col,
+                pa.array([rule.name] * count, type=pa.string()),
+            )
+        if rule.rule_priority_col not in table.column_names:
+            table = table.append_column(
+                rule.rule_priority_col,
+                pa.array([int(rule.priority)] * count, type=pa.int32()),
+            )
+        return table
+
+    return _add_rule_meta
+
+
+def _build_add_literal_kernel(spec: AddLiteralSpec) -> KernelFn:
+    def _fn(table: pa.Table, _ctx: ExecutionContext) -> pa.Table:
+        if spec.name in table.column_names:
+            return table
+        return table.append_column(
+            spec.name,
+            pa.array([spec.value] * table.num_rows),
+        )
+
+    return _fn
+
+
+def _build_drop_columns_kernel(spec: DropColumnsSpec) -> KernelFn:
+    def _fn(table: pa.Table, _ctx: ExecutionContext) -> pa.Table:
+        cols = [col for col in spec.columns if col in table.column_names]
+        return table.drop(cols) if cols else table
+
+    return _fn
+
+
+def _build_rename_columns_kernel(spec: RenameColumnsSpec) -> KernelFn:
+    def _fn(table: pa.Table, _ctx: ExecutionContext) -> pa.Table:
+        if not spec.mapping:
+            return table
+        names = list(table.column_names)
+        new_names = [spec.mapping.get(name, name) for name in names]
+        return table.rename_columns(new_names)
+
+    return _fn
+
+
+def _build_explode_list_kernel(spec: ExplodeListSpec) -> KernelFn:
+    def _fn(table: pa.Table, _ctx: ExecutionContext) -> pa.Table:
+        return explode_list_column(
+            table,
+            parent_id_col=spec.parent_id_col,
+            list_col=spec.list_col,
+            out_parent_col=spec.out_parent_col,
+            out_value_col=spec.out_value_col,
+        )
+
+    return _fn
+
+
+def _build_dedupe_kernel(spec: DedupeKernelSpec) -> KernelFn:
+    def _fn(table: pa.Table, ctx: ExecutionContext) -> pa.Table:
+        return apply_dedupe(table, spec=spec.spec, _ctx=ctx)
+
+    return _fn
+
+
+def _build_canonical_sort_kernel(spec: CanonicalSortKernelSpec) -> KernelFn:
+    def _fn(table: pa.Table, _ctx: ExecutionContext) -> pa.Table:
+        return canonical_sort(table, sort_keys=spec.sort_keys)
+
+    return _fn
+
+
+def _kernel_from_spec(spec: object) -> KernelFn:
+    if isinstance(spec, AddLiteralSpec):
+        return _build_add_literal_kernel(spec)
+    if isinstance(spec, DropColumnsSpec):
+        return _build_drop_columns_kernel(spec)
+    if isinstance(spec, RenameColumnsSpec):
+        return _build_rename_columns_kernel(spec)
+    if isinstance(spec, ExplodeListSpec):
+        return _build_explode_list_kernel(spec)
+    if isinstance(spec, DedupeKernelSpec):
+        return _build_dedupe_kernel(spec)
+    if isinstance(spec, CanonicalSortKernelSpec):
+        return _build_canonical_sort_kernel(spec)
+    msg = f"Unknown KernelSpec type: {type(spec).__name__}."
+    raise ValueError(msg)
 
 
 def _compile_post_kernels(rule: RelationshipRule) -> list[KernelFn]:
-    """
-    Turn KernelSpecT into concrete post-processing functions.
+    """Compile post-kernel specifications into callables.
 
-    These run in the kernel lane (on pa.Table).
+    Parameters
+    ----------
+    rule:
+        Relationship rule containing post-kernel specs.
+
+    Returns
+    -------
+    list[KernelFn]
+        Post-kernel functions for the rule.
     """
     fns: list[KernelFn] = []
-
-    # Optional rule meta injection (useful for winner selection and observability)
     if rule.emit_rule_meta:
-
-        def _add_rule_meta(t: pa.Table, ctx: ExecutionContext) -> pa.Table:
-            n = t.num_rows
-            if rule.rule_name_col not in t.column_names:
-                t = t.append_column(rule.rule_name_col, pa.array([rule.name] * n, type=pa.string()))
-            if rule.rule_priority_col not in t.column_names:
-                t = t.append_column(
-                    rule.rule_priority_col, pa.array([int(rule.priority)] * n, type=pa.int32())
-                )
-            return t
-
-        fns.append(_add_rule_meta)
-
-    for ks in rule.post_kernels:
-        if isinstance(ks, AddLiteralSpec):
-
-            def _mk_add_literal(spec: AddLiteralSpec) -> KernelFn:
-                def _fn(t: pa.Table, ctx: ExecutionContext) -> pa.Table:
-                    if spec.name in t.column_names:
-                        return t
-                    return t.append_column(spec.name, pa.array([spec.value] * t.num_rows))
-
-                return _fn
-
-            fns.append(_mk_add_literal(ks))
-
-        elif isinstance(ks, DropColumnsSpec):
-
-            def _mk_drop(spec: DropColumnsSpec) -> KernelFn:
-                def _fn(t: pa.Table, ctx: ExecutionContext) -> pa.Table:
-                    cols = [c for c in spec.columns if c in t.column_names]
-                    return t.drop(cols) if cols else t
-
-                return _fn
-
-            fns.append(_mk_drop(ks))
-
-        elif isinstance(ks, RenameColumnsSpec):
-
-            def _mk_rename(spec: RenameColumnsSpec) -> KernelFn:
-                def _fn(t: pa.Table, ctx: ExecutionContext) -> pa.Table:
-                    if not spec.mapping:
-                        return t
-                    names = list(t.column_names)
-                    new_names = [spec.mapping.get(n, n) for n in names]
-                    return t.rename_columns(new_names)
-
-                return _fn
-
-            fns.append(_mk_rename(ks))
-
-        elif isinstance(ks, ExplodeListSpec):
-
-            def _mk_explode(spec: ExplodeListSpec) -> KernelFn:
-                def _fn(t: pa.Table, ctx: ExecutionContext) -> pa.Table:
-                    return explode_list_column(
-                        t,
-                        parent_id_col=spec.parent_id_col,
-                        list_col=spec.list_col,
-                        out_parent_col=spec.out_parent_col,
-                        out_value_col=spec.out_value_col,
-                    )
-
-                return _fn
-
-            fns.append(_mk_explode(ks))
-
-        elif isinstance(ks, DedupeKernelSpec):
-
-            def _mk_dedupe(spec: DedupeKernelSpec) -> KernelFn:
-                def _fn(t: pa.Table, ctx: ExecutionContext) -> pa.Table:
-                    return apply_dedupe(t, spec=spec.spec, ctx=ctx)
-
-                return _fn
-
-            fns.append(_mk_dedupe(ks))
-
-        elif isinstance(ks, CanonicalSortKernelSpec):
-
-            def _mk_sort(spec: CanonicalSortKernelSpec) -> KernelFn:
-                def _fn(t: pa.Table, ctx: ExecutionContext) -> pa.Table:
-                    return canonical_sort(t, sort_keys=spec.sort_keys)
-
-                return _fn
-
-            fns.append(_mk_sort(ks))
-
-        else:
-            raise ValueError(f"Unknown KernelSpec type: {type(ks).__name__}")
-
+        fns.append(_build_rule_meta_kernel(rule))
+    fns.extend(_kernel_from_spec(spec) for spec in rule.post_kernels)
     return fns
 
 
 def _apply_project_to_plan(
     plan: Plan, project: ProjectConfig | None, *, rule: RelationshipRule
 ) -> Plan:
-    """
-    Apply a projection in plan lane when possible.
+    """Apply a projection in the plan lane when configured.
 
-    If project is None, we still may inject rule meta in kernel lane (post kernels).
+    Parameters
+    ----------
+    plan:
+        Input plan.
+    project:
+        Optional projection configuration.
+    rule:
+        Rule providing a fallback label.
+
+    Returns
+    -------
+    Plan
+        Projected plan when projection is configured; otherwise the original plan.
     """
     if project is None:
         return plan
 
-    # ProjectConfig.select empty => don't project (keep all columns).
-    # But Acero ProjectNodeOptions requires explicit columns.
-    # So we only do plan-lane projection if select/exprs are explicitly provided.
     if not project.select and not project.exprs:
         return plan
-
-    import pyarrow.compute as pc
 
     exprs: list[pc.Expression] = []
     names: list[str] = []
@@ -254,199 +314,296 @@ def _apply_project_to_plan(
     return plan.project(exprs, names, label=plan.label or rule.name)
 
 
-# -------------------------
-# Interval alignment (kernel lane)
-# -------------------------
+def _col_pylist(table: pa.Table, name: str) -> list[RowValue]:
+    if name not in table.column_names:
+        return [None] * table.num_rows
+    return table[name].to_pylist()
 
 
-def _col_pylist(t: pa.Table, name: str) -> list[Any]:
-    if name not in t.column_names:
-        return [None] * t.num_rows
-    return t[name].to_pylist()
+def _row_value_number(value: RowValue) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
 
 
-def _cmp_values(a: Any, b: Any) -> int:
-    # None sorts last
+def _row_value_int(value: RowValue) -> int | None:
+    num = _row_value_number(value)
+    if num is None:
+        return None
+    return int(num)
+
+
+def _cmp_values(a: RowValue, b: RowValue) -> int:
     if a is None and b is None:
         return 0
     if a is None:
         return 1
     if b is None:
         return -1
-    if a < b:
-        return -1
-    if a > b:
-        return 1
-    return 0
+    result = 0
+    a_num = _row_value_number(a)
+    b_num = _row_value_number(b)
+    if a_num is not None and b_num is not None:
+        if a_num < b_num:
+            result = -1
+        elif a_num > b_num:
+            result = 1
+        return result
+    a_str = str(a)
+    b_str = str(b)
+    if a_str < b_str:
+        result = -1
+    elif a_str > b_str:
+        result = 1
+    return result
+
+
+def _match_ok(
+    mode: Literal["EXACT", "CONTAINED_BEST", "OVERLAP_BEST"],
+    *,
+    left_start: int,
+    left_end: int,
+    right_start: int,
+    right_end: int,
+) -> bool:
+    if mode == "EXACT":
+        return right_start == left_start and right_end == left_end
+    if mode == "CONTAINED_BEST":
+        return right_start >= left_start and right_end <= left_end
+    return not (right_end <= left_start or right_start >= left_end)
 
 
 def _pick_best_candidate(
-    candidates: list[dict],
+    candidates: list[Candidate],
     *,
     tie_breakers: tuple[SortKey, ...],
-) -> dict | None:
-    """
-    Candidates are dicts with at least:
-      - "_span_len" (int)
-      - plus any tie_breaker columns
-    Lower _span_len is better (more specific).
-    """
+) -> Candidate | None:
     if not candidates:
         return None
 
-    def cmp(x: dict, y: dict) -> int:
-        # 1) smallest span length wins
-        c = _cmp_values(x.get("_span_len"), y.get("_span_len"))
-        if c != 0:
-            return c
-
-        # 2) tie breakers
+    def _cmp(x: Candidate, y: Candidate) -> int:
+        cmp_val = _cmp_values(x.get("_span_len"), y.get("_span_len"))
+        if cmp_val != 0:
+            return cmp_val
         for sk in tie_breakers:
-            xv = x.get(sk.column)
-            yv = y.get(sk.column)
-            c2 = _cmp_values(xv, yv)
-            if c2 == 0:
+            cmp_val = _cmp_values(x.get(sk.column), y.get(sk.column))
+            if cmp_val == 0:
                 continue
             if sk.order == "descending":
-                c2 = -c2
-            return c2
+                cmp_val = -cmp_val
+            return cmp_val
         return 0
 
-    from functools import cmp_to_key
+    return sorted(candidates, key=cmp_to_key(_cmp))[0]
 
-    return sorted(candidates, key=cmp_to_key(cmp))[0]
+
+def _build_right_index(paths: Sequence[RowValue]) -> dict[str, list[int]]:
+    idx: dict[str, list[int]] = {}
+    for i, path in enumerate(paths):
+        if path is None:
+            continue
+        idx.setdefault(str(path), []).append(i)
+    return idx
+
+
+def _collect_columns(table: pa.Table, select_cols: tuple[str, ...]) -> dict[str, list[RowValue]]:
+    columns = select_cols or tuple(table.column_names)
+    return {col: _col_pylist(table, col) for col in columns}
+
+
+@dataclass(frozen=True)
+class IntervalAlignContext:
+    """Shared context for interval alignment."""
+
+    cfg: IntervalAlignConfig
+    left_cols: Mapping[str, list[RowValue]]
+    right_cols: Mapping[str, list[RowValue]]
+    right_starts: Sequence[RowValue]
+    right_ends: Sequence[RowValue]
+
+
+def _build_left_row(
+    ctx: IntervalAlignContext,
+    *,
+    left_idx: int,
+    match_kind: str,
+    match_score: float | None,
+) -> RowData:
+    row: RowData = {}
+    for col, values in ctx.left_cols.items():
+        row[col] = values[left_idx]
+    for col in ctx.right_cols:
+        row[col] = None
+    if ctx.cfg.emit_match_meta:
+        row[ctx.cfg.match_kind_col] = match_kind
+        row[ctx.cfg.match_score_col] = match_score
+    return row
+
+
+def _build_match_row(
+    ctx: IntervalAlignContext,
+    *,
+    left_idx: int,
+    right_idx: int,
+    match_kind: str,
+    match_score: float | None,
+) -> RowData:
+    row: RowData = {}
+    for col, values in ctx.left_cols.items():
+        row[col] = values[left_idx]
+    for col, values in ctx.right_cols.items():
+        row[col] = values[right_idx]
+    if ctx.cfg.emit_match_meta:
+        row[ctx.cfg.match_kind_col] = match_kind
+        row[ctx.cfg.match_score_col] = match_score
+    return row
+
+
+def _collect_candidates(
+    ctx: IntervalAlignContext,
+    *,
+    left_start: int,
+    left_end: int,
+    right_indices: Sequence[int],
+) -> list[Candidate]:
+    candidates: list[Candidate] = []
+    right_starts = ctx.right_starts
+    right_ends = ctx.right_ends
+    for idx in right_indices:
+        start_val = _row_value_int(right_starts[idx])
+        end_val = _row_value_int(right_ends[idx])
+        if start_val is None or end_val is None:
+            continue
+        right_start = start_val
+        right_end = end_val
+
+        if not _match_ok(
+            ctx.cfg.mode,
+            left_start=left_start,
+            left_end=left_end,
+            right_start=right_start,
+            right_end=right_end,
+        ):
+            continue
+
+        candidate: Candidate = {"_j": idx, "_span_len": max(0, right_end - right_start)}
+        for sk in ctx.cfg.tie_breakers:
+            candidate[sk.column] = ctx.right_cols.get(sk.column, [None] * len(right_starts))[idx]
+        candidates.append(candidate)
+    return candidates
+
+
+def _interval_align_row(
+    ctx: IntervalAlignContext,
+    *,
+    left_idx: int,
+    left_values: tuple[RowValue, RowValue, RowValue],
+    right_by_path: Mapping[str, list[int]],
+) -> RowData | None:
+    path, start_val, end_val = left_values
+    row: RowData | None = None
+    match_kind: str | None = None
+
+    if path is None or start_val is None or end_val is None:
+        match_kind = "NO_PATH_OR_SPAN"
+    else:
+        left_start = _row_value_int(start_val)
+        left_end = _row_value_int(end_val)
+        if left_start is None or left_end is None:
+            match_kind = "NO_PATH_OR_SPAN"
+        else:
+            candidates = _collect_candidates(
+                ctx,
+                left_start=left_start,
+                left_end=left_end,
+                right_indices=right_by_path.get(str(path), []),
+            )
+            best = _pick_best_candidate(candidates, tie_breakers=ctx.cfg.tie_breakers)
+            if best is None:
+                match_kind = "NO_MATCH"
+            else:
+                right_idx = _row_value_int(best.get("_j"))
+                span_len = _row_value_int(best.get("_span_len"))
+                if right_idx is None or span_len is None:
+                    match_kind = "NO_MATCH"
+                else:
+                    score = float(-span_len)
+                    row = _build_match_row(
+                        ctx,
+                        left_idx=left_idx,
+                        right_idx=right_idx,
+                        match_kind=ctx.cfg.mode,
+                        match_score=score,
+                    )
+
+    if row is None and match_kind is not None and ctx.cfg.how == "left":
+        row = _build_left_row(
+            ctx,
+            left_idx=left_idx,
+            match_kind=match_kind,
+            match_score=None,
+        )
+    return row
 
 
 def _interval_align(left: pa.Table, right: pa.Table, cfg: IntervalAlignConfig) -> pa.Table:
+    """Perform a kernel-lane span join.
+
+    Parameters
+    ----------
+    left:
+        Left-side table.
+    right:
+        Right-side table.
+    cfg:
+        Interval alignment configuration.
+
+    Returns
+    -------
+    pyarrow.Table
+        Interval-aligned table.
     """
-    Kernel-lane span join.
+    left_paths = _col_pylist(left, cfg.left_path_col)
+    left_starts = _col_pylist(left, cfg.left_start_col)
+    left_ends = _col_pylist(left, cfg.left_end_col)
 
-    Output columns are:
-      - cfg.select_left (from left)
-      - cfg.select_right (from right)
-      - optional match meta columns
-    """
-    lp = _col_pylist(left, cfg.left_path_col)
-    ls = _col_pylist(left, cfg.left_start_col)
-    le = _col_pylist(left, cfg.left_end_col)
+    right_paths = _col_pylist(right, cfg.right_path_col)
+    right_starts = _col_pylist(right, cfg.right_start_col)
+    right_ends = _col_pylist(right, cfg.right_end_col)
 
-    rp = _col_pylist(right, cfg.right_path_col)
-    rs = _col_pylist(right, cfg.right_start_col)
-    re = _col_pylist(right, cfg.right_end_col)
-
-    # Index right rows by path
-    right_by_path: dict[str, list[int]] = {}
-    for i, p in enumerate(rp):
-        if p is None:
-            continue
-        right_by_path.setdefault(str(p), []).append(i)
-
-    left_cols = (
-        {c: _col_pylist(left, c) for c in cfg.select_left}
-        if cfg.select_left
-        else {c: _col_pylist(left, c) for c in left.column_names}
+    ctx = IntervalAlignContext(
+        cfg=cfg,
+        left_cols=_collect_columns(left, cfg.select_left),
+        right_cols=_collect_columns(right, cfg.select_right),
+        right_starts=right_starts,
+        right_ends=right_ends,
     )
-    right_cols = (
-        {c: _col_pylist(right, c) for c in cfg.select_right}
-        if cfg.select_right
-        else {c: _col_pylist(right, c) for c in right.column_names}
-    )
+    right_by_path = _build_right_index(right_paths)
+    out_rows: list[RowData] = []
 
-    out_rows: list[dict] = []
+    for left_idx in range(left.num_rows):
+        row = _interval_align_row(
+            ctx,
+            left_idx=left_idx,
+            left_values=(left_paths[left_idx], left_starts[left_idx], left_ends[left_idx]),
+            right_by_path=right_by_path,
+        )
+        if row is not None:
+            out_rows.append(row)
 
-    for i in range(left.num_rows):
-        p = lp[i]
-        if p is None or ls[i] is None or le[i] is None:
-            if cfg.how == "left":
-                row = {}
-                for c, arr in left_cols.items():
-                    row[c] = arr[i]
-                for c in right_cols:
-                    row[c] = None
-                if cfg.emit_match_meta:
-                    row[cfg.match_kind_col] = "NO_PATH_OR_SPAN"
-                    row[cfg.match_score_col] = None
-                out_rows.append(row)
-            continue
-
-        p = str(p)
-        lstart = int(ls[i])
-        lend = int(le[i])
-
-        cand_idxs = right_by_path.get(p, [])
-        candidates: list[dict] = []
-
-        for j in cand_idxs:
-            if rs[j] is None or re[j] is None:
-                continue
-            rstart = int(rs[j])
-            rend = int(re[j])
-
-            if cfg.mode == "EXACT":
-                ok = rstart == lstart and rend == lend
-            elif cfg.mode == "CONTAINED_BEST":
-                ok = rstart >= lstart and rend <= lend
-            else:  # OVERLAP_BEST
-                ok = not (rend <= lstart or rstart >= lend)
-
-            if not ok:
-                continue
-
-            d = {"_j": j, "_span_len": max(0, rend - rstart)}
-            # include tie breaker columns
-            for sk in cfg.tie_breakers:
-                if sk.column in right_cols:
-                    d[sk.column] = right_cols[sk.column][j]
-                else:
-                    d[sk.column] = None
-            candidates.append(d)
-
-        best = _pick_best_candidate(candidates, tie_breakers=cfg.tie_breakers)
-
-        if best is None:
-            if cfg.how == "left":
-                row = {}
-                for c, arr in left_cols.items():
-                    row[c] = arr[i]
-                for c in right_cols:
-                    row[c] = None
-                if cfg.emit_match_meta:
-                    row[cfg.match_kind_col] = "NO_MATCH"
-                    row[cfg.match_score_col] = None
-                out_rows.append(row)
-            continue
-
-        j = int(best["_j"])
-        row = {}
-        for c, arr in left_cols.items():
-            row[c] = arr[i]
-        for c, arr in right_cols.items():
-            row[c] = arr[j]
-
-        if cfg.emit_match_meta:
-            row[cfg.match_kind_col] = cfg.mode
-            # higher score is better; we invert span length so "smaller span" => larger score
-            row[cfg.match_score_col] = float(-int(best["_span_len"]))
-
-        out_rows.append(row)
-
-    # Let Arrow infer schema; downstream finalize aligns to Contract anyway.
     return pa.Table.from_pylist(out_rows)
-
-
-# -------------------------
-# Compilation outputs
-# -------------------------
 
 
 @dataclass(frozen=True)
 class CompiledRule:
-    """
-    Executable compiled form of a rule.
-
-    - If plan is set: execute = plan.to_table(ctx) + post_kernels
-    - If execute_fn is set: execute_fn(ctx, resolver) returns a pa.Table (composite/kernel-lane)
-    """
+    """Executable compiled form of a rule."""
 
     rule: RelationshipRule
     plan: Plan | None
@@ -454,29 +611,42 @@ class CompiledRule:
     post_kernels: tuple[KernelFn, ...] = ()
 
     def execute(self, *, ctx: ExecutionContext, resolver: PlanResolver) -> pa.Table:
+        """Execute the compiled rule into a table.
+
+        Parameters
+        ----------
+        ctx:
+            Execution context.
+        resolver:
+            Plan resolver for dataset references.
+
+        Returns
+        -------
+        pyarrow.Table
+            Rule output table.
+
+        Raises
+        ------
+        RuntimeError
+            Raised when no execution path is available.
+        """
         if self.execute_fn is not None:
-            t = self.execute_fn(ctx, resolver)
+            table = self.execute_fn(ctx, resolver)
             for fn in self.post_kernels:
-                t = fn(t, ctx)
-            return t
+                table = fn(table, ctx)
+            return table
         if self.plan is None:
-            raise RuntimeError("CompiledRule has neither plan nor execute_fn")
-        t = self.plan.to_table(ctx=ctx)
+            msg = "CompiledRule has neither plan nor execute_fn."
+            raise RuntimeError(msg)
+        table = self.plan.to_table(ctx=ctx)
         for fn in self.post_kernels:
-            t = fn(t, ctx)
-        return t
+            table = fn(table, ctx)
+        return table
 
 
 @dataclass(frozen=True)
 class CompiledOutput:
-    """
-    One output dataset may be produced by one or multiple rules.
-
-    Execution strategy:
-      - execute each contributor to a Table
-      - concat_tables(promote=True)
-      - finalize against the output Contract
-    """
+    """Compiled output with contributing rules."""
 
     output_dataset: str
     contract_name: str | None
@@ -485,150 +655,233 @@ class CompiledOutput:
     def execute(
         self, *, ctx: ExecutionContext, resolver: PlanResolver, contracts: ContractCatalog
     ) -> FinalizeResult:
+        """Execute contributing rules and finalize against the output contract.
+
+        Parameters
+        ----------
+        ctx:
+            Execution context.
+        resolver:
+            Plan resolver for dataset references.
+        contracts:
+            Contract catalog for finalization.
+
+        Returns
+        -------
+        FinalizeResult
+            Finalized tables for the output dataset.
+
+        Raises
+        ------
+        ValueError
+            Raised when the output has no contributors.
+        """
         if not self.contributors:
-            raise ValueError(f"CompiledOutput {self.output_dataset!r} has no contributors")
+            msg = f"CompiledOutput {self.output_dataset!r} has no contributors."
+            raise ValueError(msg)
 
         tables = [cr.execute(ctx=ctx, resolver=resolver) for cr in self.contributors]
         unioned = pa.concat_tables(tables, promote=True)
 
         if self.contract_name is None:
-            # No contract: return a "Finalize-like" object with best-effort.
-            # For production you should always specify a contract.
-            dummy_schema = unioned.schema
-            dummy = Contract(name=f"{self.output_dataset}_NO_CONTRACT", schema=dummy_schema)
+            dummy = Contract(name=f"{self.output_dataset}_NO_CONTRACT", schema=unioned.schema)
             return finalize(unioned, contract=dummy, ctx=ctx)
 
         contract = contracts.get(self.contract_name)
         return finalize(unioned, contract=contract, ctx=ctx)
 
 
-# -------------------------
-# Compiler
-# -------------------------
-
-
 class RelationshipRuleCompiler:
-    """
-    Compiles RelationshipRules into executable units (Plans + kernel lane transforms).
-
-    Philosophy:
-      - express as much as possible in plan lane (Acero)
-      - do non-relational joins (interval spans) explicitly in kernel lane
-      - ensure rule meta exists to support deterministic winner selection
-    """
+    """Compile ``RelationshipRule`` instances into executable units."""
 
     def __init__(self, *, resolver: PlanResolver) -> None:
         self.resolver = resolver
 
+    def _compile_filter_project(
+        self,
+        rule: RelationshipRule,
+        *,
+        ctx: ExecutionContext,
+        post_kernels: tuple[KernelFn, ...],
+    ) -> CompiledRule:
+        src = rule.inputs[0]
+        plan = self.resolver.resolve(src, ctx=ctx)
+        plan = _apply_project_to_plan(plan, rule.project, rule=rule)
+        return CompiledRule(rule=rule, plan=plan, execute_fn=None, post_kernels=post_kernels)
+
+    def _compile_hash_join(
+        self,
+        rule: RelationshipRule,
+        *,
+        ctx: ExecutionContext,
+        post_kernels: tuple[KernelFn, ...],
+    ) -> CompiledRule:
+        if rule.hash_join is None:
+            msg = "HASH_JOIN rules require hash_join config."
+            raise ValueError(msg)
+        left_ref, right_ref = rule.inputs
+        left_plan = self.resolver.resolve(left_ref, ctx=ctx)
+        right_plan = self.resolver.resolve(right_ref, ctx=ctx)
+
+        jc = rule.hash_join
+        join_plan = hash_join(
+            left=left_plan,
+            right=right_plan,
+            spec=JoinSpec(
+                join_type=jc.join_type,
+                left_keys=jc.left_keys,
+                right_keys=jc.right_keys,
+                left_output=jc.left_output,
+                right_output=jc.right_output,
+                output_suffix_for_left=jc.output_suffix_for_left,
+                output_suffix_for_right=jc.output_suffix_for_right,
+            ),
+            label=rule.name,
+        )
+        join_plan = _apply_project_to_plan(join_plan, rule.project, rule=rule)
+        return CompiledRule(rule=rule, plan=join_plan, execute_fn=None, post_kernels=post_kernels)
+
+    def _compile_passthrough(
+        self,
+        rule: RelationshipRule,
+        *,
+        ctx: ExecutionContext,
+        post_kernels: tuple[KernelFn, ...],
+    ) -> CompiledRule:
+        src = rule.inputs[0]
+        plan = self.resolver.resolve(src, ctx=ctx)
+        return CompiledRule(rule=rule, plan=plan, execute_fn=None, post_kernels=post_kernels)
+
+    @staticmethod
+    def _compile_union_all(
+        rule: RelationshipRule,
+        *,
+        ctx: ExecutionContext,
+        post_kernels: tuple[KernelFn, ...],
+    ) -> CompiledRule:
+        def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> pa.Table:
+            parts: list[pa.Table] = []
+            for inp in rule.inputs:
+                plan = resolver.resolve(inp, ctx=ctx2)
+                parts.append(plan.to_table(ctx=ctx2))
+            return pa.concat_tables(parts, promote=True)
+
+        _ = ctx
+        return CompiledRule(rule=rule, plan=None, execute_fn=_exec, post_kernels=post_kernels)
+
+    @staticmethod
+    def _compile_interval_align(
+        rule: RelationshipRule,
+        *,
+        ctx: ExecutionContext,
+        post_kernels: tuple[KernelFn, ...],
+    ) -> CompiledRule:
+        cfg = rule.interval_align
+        if cfg is None:
+            msg = "INTERVAL_ALIGN rules require interval_align config."
+            raise ValueError(msg)
+        interval_cfg = cfg
+
+        def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> pa.Table:
+            left_ref, right_ref = rule.inputs
+            lt = resolver.resolve(left_ref, ctx=ctx2).to_table(ctx=ctx2)
+            rt = resolver.resolve(right_ref, ctx=ctx2).to_table(ctx=ctx2)
+            return _interval_align(lt, rt, interval_cfg)
+
+        _ = ctx
+        return CompiledRule(rule=rule, plan=None, execute_fn=_exec, post_kernels=post_kernels)
+
     def compile_rule(self, rule: RelationshipRule, *, ctx: ExecutionContext) -> CompiledRule:
+        """Compile a single relationship rule into an executable unit.
+
+        Parameters
+        ----------
+        rule:
+            Rule to compile.
+        ctx:
+            Execution context.
+
+        Returns
+        -------
+        CompiledRule
+            Compiled representation of the rule.
+
+        Raises
+        ------
+        ValueError
+            Raised when the rule kind is unknown.
+        """
         rule.validate()
         post = tuple(_compile_post_kernels(rule))
 
-        if rule.kind == RuleKind.FILTER_PROJECT:
-            src = rule.inputs[0]
-            plan = self.resolver.resolve(src, ctx=ctx)
-            plan = _apply_project_to_plan(plan, rule.project, rule=rule)
-            return CompiledRule(rule=rule, plan=plan, execute_fn=None, post_kernels=post)
-
-        if rule.kind == RuleKind.HASH_JOIN:
-            assert rule.hash_join is not None
-            left_ref, right_ref = rule.inputs
-            left_plan = self.resolver.resolve(left_ref, ctx=ctx)
-            right_plan = self.resolver.resolve(right_ref, ctx=ctx)
-
-            jc = rule.hash_join
-            join_plan = hash_join(
-                left=left_plan,
-                right=right_plan,
-                spec=JoinSpec(
-                    join_type=jc.join_type,
-                    left_keys=jc.left_keys,
-                    right_keys=jc.right_keys,
-                    left_output=jc.left_output,
-                    right_output=jc.right_output,
-                    output_suffix_for_left=jc.output_suffix_for_left,
-                    output_suffix_for_right=jc.output_suffix_for_right,
-                ),
-                label=rule.name,
-            )
-            join_plan = _apply_project_to_plan(join_plan, rule.project, rule=rule)
-            return CompiledRule(rule=rule, plan=join_plan, execute_fn=None, post_kernels=post)
-
-        if rule.kind == RuleKind.EXPLODE_LIST:
-            src = rule.inputs[0]
-            plan = self.resolver.resolve(src, ctx=ctx)
-            return CompiledRule(rule=rule, plan=plan, execute_fn=None, post_kernels=post)
-
-        if rule.kind == RuleKind.WINNER_SELECT:
-            src = rule.inputs[0]
-            plan = self.resolver.resolve(src, ctx=ctx)
-            return CompiledRule(rule=rule, plan=plan, execute_fn=None, post_kernels=post)
-
-        if rule.kind == RuleKind.UNION_ALL:
-
-            def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> pa.Table:
-                parts: list[pa.Table] = []
-                for inp in rule.inputs:
-                    p = resolver.resolve(inp, ctx=ctx2)
-                    parts.append(p.to_table(ctx=ctx2))
-                return pa.concat_tables(parts, promote=True)
-
-            return CompiledRule(rule=rule, plan=None, execute_fn=_exec, post_kernels=post)
-
-        if rule.kind == RuleKind.INTERVAL_ALIGN:
-            assert rule.interval_align is not None
-
-            def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> pa.Table:
-                left_ref, right_ref = rule.inputs
-                lt = resolver.resolve(left_ref, ctx=ctx2).to_table(ctx=ctx2)
-                rt = resolver.resolve(right_ref, ctx=ctx2).to_table(ctx=ctx2)
-                out = _interval_align(lt, rt, rule.interval_align)  # kernel-lane join
-                return out
-
-            return CompiledRule(rule=rule, plan=None, execute_fn=_exec, post_kernels=post)
-
-        raise ValueError(f"Unknown rule kind: {rule.kind}")
+        handlers: dict[RuleKind, Callable[..., CompiledRule]] = {
+            RuleKind.FILTER_PROJECT: self._compile_filter_project,
+            RuleKind.HASH_JOIN: self._compile_hash_join,
+            RuleKind.EXPLODE_LIST: self._compile_passthrough,
+            RuleKind.WINNER_SELECT: self._compile_passthrough,
+            RuleKind.UNION_ALL: self._compile_union_all,
+            RuleKind.INTERVAL_ALIGN: self._compile_interval_align,
+        }
+        handler = handlers.get(rule.kind)
+        if handler is None:
+            msg = f"Unknown rule kind: {rule.kind}."
+            raise ValueError(msg)
+        return handler(rule, ctx=ctx, post_kernels=post)
 
     def compile_registry(
         self,
         registry_rules: Sequence[RelationshipRule],
         *,
         ctx: ExecutionContext,
-        contracts: Any = None,
+        contract_catalog: ContractCatalog | None = None,
         edge_validation: EdgeContractValidationConfig | None = None,
     ) -> dict[str, CompiledOutput]:
-        """
-        Compile a set of relationship rules into executable outputs.
+        """Compile relationship rules into executable outputs.
 
-        New: if `contracts` is provided, validates that relationship output contracts
-        satisfy required edge props for the edge kinds those datasets feed.
+        Parameters
+        ----------
+        registry_rules:
+            Rules to compile.
+        ctx:
+            Execution context.
+        contract_catalog:
+            Optional contract catalog for validation and finalization.
+        edge_validation:
+            Optional edge contract validation config.
+
+        Returns
+        -------
+        dict[str, CompiledOutput]
+            Compiled outputs keyed by output dataset name.
+
+        Raises
+        ------
+        ValueError
+            Raised when output rules disagree on contract_name.
         """
-        # --- NEW VALIDATION HOOK ---
-        if contracts is not None:
+        if contract_catalog is not None:
             validate_relationship_output_contracts_for_edge_kinds(
-                rules=rules,
-                contract_catalog=contracts,
+                rules=registry_rules,
+                contract_catalog=contract_catalog,
                 config=edge_validation or EdgeContractValidationConfig(),
             )
 
         by_out: dict[str, list[RelationshipRule]] = {}
-        for r in registry_rules:
-            by_out.setdefault(r.output_dataset, []).append(r)
+        for rule in registry_rules:
+            by_out.setdefault(rule.output_dataset, []).append(rule)
 
         compiled: dict[str, CompiledOutput] = {}
         for out_name, rules in by_out.items():
             rules_sorted = sorted(rules, key=lambda rr: (rr.priority, rr.name))
-            # enforce contract consistency
-            contracts = {rr.contract_name for rr in rules_sorted}
-            if len(contracts) > 1:
-                raise ValueError(
-                    f"Output {out_name!r} has inconsistent contract_name across rules: {contracts}"
-                )
+            contract_names = {rr.contract_name for rr in rules_sorted}
+            if len(contract_names) > 1:
+                msg = f"Output {out_name!r} has inconsistent contract_name across rules: {contract_names}."
+                raise ValueError(msg)
 
-            contrib = tuple(self.compile_rule(r, ctx=ctx) for r in rules_sorted)
+            contributors = tuple(self.compile_rule(rule, ctx=ctx) for rule in rules_sorted)
             compiled[out_name] = CompiledOutput(
                 output_dataset=out_name,
                 contract_name=rules_sorted[0].contract_name,
-                contributors=contrib,
+                contributors=contributors,
             )
         return compiled

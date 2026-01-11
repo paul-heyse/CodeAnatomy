@@ -1,7 +1,4 @@
-from __future__ import annotations
-
-"""
-Ultimate Python CPG kind registry.
+"""Ultimate Python CPG kind registry.
 
 This module is intended to be the *single source of truth* for:
   - node_kind / edge_kind enumerations (Ultimate Python CPG)
@@ -25,9 +22,11 @@ Note:
     Validation helpers can be wired accordingly.
 """
 
+from __future__ import annotations
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 # ----------------------------
@@ -35,7 +34,9 @@ from typing import Literal
 # ----------------------------
 
 
-class SourceKind(str, Enum):
+class SourceKind(StrEnum):
+    """Sources that can emit nodes or edges."""
+
     LIBCST = "libcst"
     PY_AST = "py_ast"
     SYMTABLE = "symtable"
@@ -47,7 +48,9 @@ class SourceKind(str, Enum):
     PIPELINE = "pipeline"  # build steps that aggregate/merge/normalize
 
 
-class NodeKind(str, Enum):
+class NodeKind(StrEnum):
+    """Ultimate Python CPG node kinds."""
+
     # -------------------------
     # Repository / filesystem
     # -------------------------
@@ -129,9 +132,6 @@ class NodeKind(str, Enum):
     DF_DEF = "DF_DEF"
     DF_USE = "DF_USE"
 
-    # -------------------------
-    # Types (annotation + inferred)
-    # -------------------------
     TYPE_EXPR = "TYPE_EXPR"
     TYPE = "TYPE"
     TYPE_PARAM = "TYPE_PARAM"
@@ -151,7 +151,9 @@ class NodeKind(str, Enum):
     DIAG = "DIAG"
 
 
-class EdgeKind(str, Enum):
+class EdgeKind(StrEnum):
+    """Ultimate Python CPG edge kinds."""
+
     # -------------------------
     # Containment / structure
     # -------------------------
@@ -256,6 +258,13 @@ class PropSpec:
     enum_values: tuple[str, ...] | None = None
 
     def to_dict(self) -> dict[str, object]:
+        """Serialize the property spec to a dictionary.
+
+        Returns
+        -------
+        dict[str, object]
+            JSON-serializable property spec.
+        """
         return {
             "type": self.type,
             "description": self.description,
@@ -264,22 +273,57 @@ class PropSpec:
 
 
 def p_str(desc: str = "", enum: Sequence[str] | None = None) -> PropSpec:
+    """Create a string property spec.
+
+    Returns
+    -------
+    PropSpec
+        String property specification.
+    """
     return PropSpec("string", desc, tuple(enum) if enum else None)
 
 
 def p_int(desc: str = "") -> PropSpec:
+    """Create an integer property spec.
+
+    Returns
+    -------
+    PropSpec
+        Integer property specification.
+    """
     return PropSpec("int", desc)
 
 
 def p_float(desc: str = "") -> PropSpec:
+    """Create a float property spec.
+
+    Returns
+    -------
+    PropSpec
+        Float property specification.
+    """
     return PropSpec("float", desc)
 
 
 def p_bool(desc: str = "") -> PropSpec:
+    """Create a boolean property spec.
+
+    Returns
+    -------
+    PropSpec
+        Boolean property specification.
+    """
     return PropSpec("bool", desc)
 
 
 def p_json(desc: str = "") -> PropSpec:
+    """Create a JSON property spec.
+
+    Returns
+    -------
+    PropSpec
+        JSON property specification.
+    """
     return PropSpec("json", desc)
 
 
@@ -308,6 +352,13 @@ class NodeKindContract:
     description: str = ""
 
     def to_dict(self) -> dict[str, object]:
+        """Serialize the node kind contract to a dictionary.
+
+        Returns
+        -------
+        dict[str, object]
+            JSON-serializable node contract.
+        """
         return {
             "requires_anchor": self.requires_anchor,
             "required_props": {k: v.to_dict() for k, v in self.required_props.items()},
@@ -339,6 +390,13 @@ class EdgeKindContract:
     description: str = ""
 
     def to_dict(self) -> dict[str, object]:
+        """Serialize the edge kind contract to a dictionary.
+
+        Returns
+        -------
+        dict[str, object]
+            JSON-serializable edge contract.
+        """
         return {
             "requires_evidence_anchor": self.requires_evidence_anchor,
             "required_props": {k: v.to_dict() for k, v in self.required_props.items()},
@@ -396,6 +454,13 @@ class DerivationSpec:
     notes: str = ""
 
     def to_dict(self) -> dict[str, object]:
+        """Serialize the derivation spec to a dictionary.
+
+        Returns
+        -------
+        dict[str, object]
+            JSON-serializable derivation spec.
+        """
         return {
             "extractor": self.extractor,
             "provider_or_field": self.provider_or_field,
@@ -409,7 +474,7 @@ class DerivationSpec:
 
 
 # ----------------------------
-# Contracts (NODE_KIND_CONTRACTS / EDGE_KIND_CONTRACTS)
+# Contracts: node and edge kind contracts
 # ----------------------------
 
 NODE_KIND_CONTRACTS: dict[NodeKind, NodeKindContract] = {
@@ -1363,7 +1428,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
             provider_or_field="derive from __init__.py presence + module_fqn mapping",
             join_keys=("path",),
             id_recipe="package_id = sha256('PKG:' + package_fqn)[:16]",
-            confidence_policy="confidence=0.8–0.95 depending on packaging heuristics",
+            confidence_policy="confidence=0.8-0.95 depending on packaging heuristics",
             ambiguity_policy="store multiple candidates if package roots ambiguous",
             status="planned",
         )
@@ -1709,7 +1774,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
             provider_or_field="LibCST Name spans + symtable binding classification (def sites)",
             join_keys=("path", "bstart", "bend", "name"),
             id_recipe="def_site_id = stable_id(path, bstart, bend, 'PY_DEF_SITE')",
-            confidence_policy="confidence=0.85–0.95 depending on def-site classifier maturity",
+            confidence_policy="confidence=0.85-0.95 depending on def-site classifier maturity",
             ambiguity_policy="if multiple bindings match, emit multiple DEF_SITE_OF edges (ambiguity_group_id=def_site_id)",
             status="planned",
         )
@@ -1720,7 +1785,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
             provider_or_field="LibCST Name spans + expr_context + symtable binding resolution",
             join_keys=("path", "bstart", "bend", "name"),
             id_recipe="use_site_id = stable_id(path, bstart, bend, 'PY_USE_SITE')",
-            confidence_policy="confidence=0.85–0.95 depending on binding resolution maturity",
+            confidence_policy="confidence=0.85-0.95 depending on binding resolution maturity",
             ambiguity_policy="emit multiple USE_SITE_OF edges if needed; dedupe by winner policy",
             status="planned",
         )
@@ -1788,7 +1853,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
             provider_or_field="LibCST QualifiedNameProvider/FullyQualifiedNameProvider candidate strings",
             join_keys=("qname",),
             id_recipe="qname_id = sha('QNAME:'+qname)[:16]",
-            confidence_policy="confidence=0.6–0.9 depending on provider (FullyQualified > Qualified)",
+            confidence_policy="confidence=0.6-0.9 depending on provider (FullyQualified > Qualified)",
             ambiguity_policy="qname nodes are distinct; ambiguity lives on edges from ref->qname",
             status="implemented",
         )
@@ -1855,7 +1920,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
             provider_or_field="opcode classifier -> def events; stack/locals/globals model",
             join_keys=("code_unit_id", "instr_id", "binding_id"),
             id_recipe="df_id = sha('DEF:'+code_unit_id+':'+instr_id+':'+binding_id)[:16]",
-            confidence_policy="confidence=0.8–0.95 depending on opcode coverage",
+            confidence_policy="confidence=0.8-0.95 depending on opcode coverage",
             ambiguity_policy="if binding ambiguous, emit multiple DF_DEF candidates with scores",
             status="planned",
         )
@@ -1866,7 +1931,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
             provider_or_field="opcode classifier -> use events",
             join_keys=("code_unit_id", "instr_id", "binding_id"),
             id_recipe="df_id = sha('USE:'+code_unit_id+':'+instr_id+':'+binding_id)[:16]",
-            confidence_policy="confidence=0.8–0.95 depending on opcode coverage",
+            confidence_policy="confidence=0.8-0.95 depending on opcode coverage",
             ambiguity_policy="if binding ambiguous, emit multiple DF_USE candidates with scores",
             status="planned",
         )
@@ -1889,7 +1954,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
             provider_or_field="normalize annotation strings + optional inference (Pyre/Watchman via LibCST TypeInferenceProvider)",
             join_keys=("type_repr",),
             id_recipe="type_id = sha('TYPE:'+type_repr)[:16]",
-            confidence_policy="annotation-derived=1.0; inferred=0.7–0.9; runtime=0.6–0.9",
+            confidence_policy="annotation-derived=1.0; inferred=0.7-0.9; runtime=0.6-0.9",
             ambiguity_policy="multi-valued types allowed (union/overload); store multiple TYPE nodes/edges",
             status="planned",
         )
@@ -1911,7 +1976,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
             provider_or_field="symtable TYPE_ALIAS scope + extracted assignments",
             join_keys=("scope_id", "name"),
             id_recipe="type_alias_id = sha('TA:'+scope_id+':'+name)[:16]",
-            confidence_policy="confidence=0.7–0.9 (depends on alias extraction fidelity)",
+            confidence_policy="confidence=0.7-0.9 (depends on alias extraction fidelity)",
             ambiguity_policy="if alias target ambiguous, keep multiple targets with scores",
             status="planned",
         )
@@ -1923,7 +1988,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
             provider_or_field="inspect.getmembers_static + inspect.unwrap + safe signature extraction",
             join_keys=("module", "qualname"),
             id_recipe="rt_id = sha('RT:'+module+':'+qualname)[:16]",
-            confidence_policy="confidence=0.6–0.9 depending on ability to map back to source",
+            confidence_policy="confidence=0.6-0.9 depending on ability to map back to source",
             ambiguity_policy="if multiple objects share qualname, include module+id() fingerprint in rt_id",
             status="planned",
         )
@@ -1934,7 +1999,7 @@ NODE_DERIVATIONS: dict[NodeKind, list[DerivationSpec]] = {
             provider_or_field="inspect.signature(obj) (safe objects only)",
             join_keys=("rt_id",),
             id_recipe="sig_id = sha(rt_id+':SIG:'+signature_str)[:16]",
-            confidence_policy="confidence=0.8–1.0 depending on callable type",
+            confidence_policy="confidence=0.8-1.0 depending on callable type",
             ambiguity_policy="if signature fails, emit DIAG instead",
             status="planned",
         )
@@ -2083,7 +2148,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
             provider_or_field="LibCST def sites (Name spans) classified via symtable binding_kind",
             join_keys=("path", "bstart", "bend", "binding_id"),
             id_recipe="edge_id = sha('DEF_SITE_OF:'+def_site_id+':'+binding_id)[:16]",
-            confidence_policy="confidence=0.85–0.95",
+            confidence_policy="confidence=0.85-0.95",
             ambiguity_policy="multiple edges allowed, winner selection by score",
             status="planned",
         )
@@ -2094,7 +2159,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
             provider_or_field="LibCST use sites (Name spans) + expr_context + symtable resolution",
             join_keys=("path", "bstart", "bend", "binding_id"),
             id_recipe="edge_id = sha('USE_SITE_OF:'+use_site_id+':'+binding_id)[:16]",
-            confidence_policy="confidence=0.85–0.95",
+            confidence_policy="confidence=0.85-0.95",
             ambiguity_policy="multiple edges allowed, winner selection by score",
             status="planned",
         )
@@ -2128,7 +2193,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
             provider_or_field="QualifiedNameProvider mapping for Attribute nodes",
             join_keys=("attr_id", "qname"),
             id_recipe="edge_id = sha('ATTR_CAND_QNAME:'+attr_id+':'+qname_id)[:16]",
-            confidence_policy="confidence=0.6–0.8",
+            confidence_policy="confidence=0.6-0.8",
             ambiguity_policy="multi-valued; ambiguity_group_id=attr_id",
             status="planned",
         )
@@ -2213,7 +2278,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
             provider_or_field="fallback: callsite_qname_candidates join dim_qualified_names (only when no callsite->symbol)",
             join_keys=("call_id", "qname"),
             id_recipe="edge_id = sha('PY_CALLS_QNAME:'+call_id+':'+qname_id)[:16]",
-            confidence_policy="confidence=0.5–0.7; score from candidate ranking",
+            confidence_policy="confidence=0.5-0.7; score from candidate ranking",
             ambiguity_policy="multi-valued; ambiguity_group_id=call_id; may keep top-K",
             status="implemented",
         )
@@ -2236,7 +2301,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
             provider_or_field="LibCST TypeInferenceProvider (Pyre/Watchman) OR heuristic OR runtime",
             join_keys=("src_id",),
             id_recipe="edge_id = sha('INFERRED_TYPE:'+src_id+':'+type_id+':'+origin)[:16]",
-            confidence_policy="pyre=0.8–0.9; runtime=0.6–0.9; heuristic=0.5–0.7",
+            confidence_policy="pyre=0.8-0.9; runtime=0.6-0.9; heuristic=0.5-0.7",
             ambiguity_policy="multi-valued types allowed; dedupe by type_id with score",
             status="planned",
         )
@@ -2247,7 +2312,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
             provider_or_field="symtable TYPE_PARAMETERS meta scopes -> attach to owning def/class",
             join_keys=("type_param.scope_id -> owner.scope_id",),
             id_recipe="edge_id = sha('TYPE_PARAM_OF:'+type_param_id+':'+owner_id)[:16]",
-            confidence_policy="confidence=0.8–0.95",
+            confidence_policy="confidence=0.8-0.95",
             ambiguity_policy="none",
             status="planned",
         )
@@ -2325,7 +2390,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
             provider_or_field="exception table projection -> handler entry edges",
             join_keys=("block_id",),
             id_recipe="edge_id = sha('CFG_EXC:'+src_block+':'+handler_block+':'+exc_entry_index)[:16]",
-            confidence_policy="confidence=0.9–0.95",
+            confidence_policy="confidence=0.9-0.95",
             ambiguity_policy="none",
             status="planned",
         )
@@ -2336,7 +2401,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
             provider_or_field="opcode classifier -> def event",
             join_keys=("instr_id", "binding_id"),
             id_recipe="edge_id = sha('STEP_DEF:'+instr_id+':'+binding_id)[:16]",
-            confidence_policy="confidence=0.8–0.95",
+            confidence_policy="confidence=0.8-0.95",
             ambiguity_policy="if binding ambiguous, keep multiple with scores",
             status="planned",
         )
@@ -2347,7 +2412,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
             provider_or_field="opcode classifier -> use event",
             join_keys=("instr_id", "binding_id"),
             id_recipe="edge_id = sha('STEP_USE:'+instr_id+':'+binding_id)[:16]",
-            confidence_policy="confidence=0.8–0.95",
+            confidence_policy="confidence=0.8-0.95",
             ambiguity_policy="if binding ambiguous, keep multiple with scores",
             status="planned",
         )
@@ -2358,7 +2423,7 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
             provider_or_field="reaching definitions analysis over CFG",
             join_keys=("code_unit_id",),
             id_recipe="edge_id = sha('REACHES:'+def_id+':'+use_id)[:16]",
-            confidence_policy="confidence=0.8–0.95",
+            confidence_policy="confidence=0.8-0.95",
             ambiguity_policy="none",
             status="planned",
         )
@@ -2429,9 +2494,12 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
 
 
 def validate_registry_completeness() -> None:
-    """
-    Ensures every enum value has a contract and at least one derivation entry.
-    Raises ValueError if anything is missing.
+    """Ensure every enum value has a contract and derivation entry.
+
+    Raises
+    ------
+    ValueError
+        Raised when contracts or derivations are missing.
     """
     missing_node_contracts = [k for k in NodeKind if k not in NODE_KIND_CONTRACTS]
     missing_edge_contracts = [k for k in EdgeKind if k not in EDGE_KIND_CONTRACTS]
@@ -2456,52 +2524,63 @@ def validate_registry_completeness() -> None:
         raise ValueError("Ultimate kind registry incomplete:\n- " + "\n- ".join(errs))
 
 
+def _has_acceptable_derivation(
+    derivations: Sequence[DerivationSpec],
+    contract: NodeKindContract | EdgeKindContract,
+    *,
+    allowed_sources: set[SourceKind] | None,
+    allow_planned: bool,
+) -> bool:
+    if allow_planned:
+        return bool(derivations)
+    implemented = [d for d in derivations if d.status == "implemented"]
+    if not implemented:
+        return False
+    if allowed_sources is None:
+        return True
+    return any(src in allowed_sources for src in contract.allowed_sources) or not (
+        contract.allowed_sources
+    )
+
+
 def validate_derivations_implemented_only(
     *,
     allowed_sources: Sequence[SourceKind] | None = None,
     allow_planned: bool = False,
 ) -> None:
-    """
-    Compile-time “pipeline compatibility” check.
+    """Run compile-time pipeline compatibility checks.
 
     - If allow_planned=False: every kind must have at least one derivation with status="implemented"
     - If allowed_sources provided: that implemented derivation must be from an allowed source set
       (based on contract.allowed_sources; derivation itself is source-agnostic metadata).
+
+    Raises
+    ------
+    ValueError
+        Raised when no acceptable derivations are found.
     """
     allowed_sources_set = set(allowed_sources) if allowed_sources else None
 
-    def _has_acceptable_derivation_for_node(k: NodeKind) -> bool:
-        derivs = NODE_DERIVATIONS.get(k, [])
-        if allow_planned:
-            return bool(derivs)
-        derivs = [d for d in derivs if d.status == "implemented"]
-        if not derivs:
-            return False
-        if allowed_sources_set is None:
-            return True
-        contract = NODE_KIND_CONTRACTS[k]
-        return (
-            any(src in allowed_sources_set for src in contract.allowed_sources)
-            or not contract.allowed_sources
+    missing_nodes = [
+        k.value
+        for k in NodeKind
+        if not _has_acceptable_derivation(
+            NODE_DERIVATIONS.get(k, []),
+            NODE_KIND_CONTRACTS[k],
+            allowed_sources=allowed_sources_set,
+            allow_planned=allow_planned,
         )
-
-    def _has_acceptable_derivation_for_edge(k: EdgeKind) -> bool:
-        derivs = EDGE_DERIVATIONS.get(k, [])
-        if allow_planned:
-            return bool(derivs)
-        derivs = [d for d in derivs if d.status == "implemented"]
-        if not derivs:
-            return False
-        if allowed_sources_set is None:
-            return True
-        contract = EDGE_KIND_CONTRACTS[k]
-        return (
-            any(src in allowed_sources_set for src in contract.allowed_sources)
-            or not contract.allowed_sources
+    ]
+    missing_edges = [
+        k.value
+        for k in EdgeKind
+        if not _has_acceptable_derivation(
+            EDGE_DERIVATIONS.get(k, []),
+            EDGE_KIND_CONTRACTS[k],
+            allowed_sources=allowed_sources_set,
+            allow_planned=allow_planned,
         )
-
-    missing_nodes = [k.value for k in NodeKind if not _has_acceptable_derivation_for_node(k)]
-    missing_edges = [k.value for k in EdgeKind if not _has_acceptable_derivation_for_edge(k)]
+    ]
 
     if missing_nodes or missing_edges:
         msg = []
@@ -2517,9 +2596,14 @@ def validate_derivations_implemented_only(
 
 
 def registry_to_jsonable() -> dict[str, object]:
-    """
-    Returns a JSON-serializable view of the entire registry.
-    Useful for run bundles / manifests / validation reports.
+    """Return a JSON-serializable view of the registry.
+
+    Useful for run bundles, manifests, and validation reports.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-serializable registry data.
     """
     return {
         "node_kinds": [k.value for k in NodeKind],

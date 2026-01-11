@@ -1,54 +1,78 @@
-"""Dataset I/O helpers for Arrow-backed scans."""
+"""Dataset IO helpers for Arrow datasets and Acero plans."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING
 
-from .queryspec import QuerySpec
-from .runtime import ExecutionContext
+import pyarrow.compute as pc
+import pyarrow.dataset as ds
+import pyarrow.fs as pafs
+from pyarrow import acero
+
+from arrowdsl.queryspec import QuerySpec
+from arrowdsl.runtime import ExecutionContext
 
 if TYPE_CHECKING:  # pragma: no cover
     import pyarrow as pa
-    import pyarrow.dataset as ds
-    from pyarrow import acero
 
-
-PathLike = Union[str, Path]
+type PathLike = str | Path
 
 
 def open_dataset(
     path: PathLike,
     *,
-    format: str = "parquet",
-    filesystem: Any = None,
+    dataset_format: str = "parquet",
+    filesystem: pafs.FileSystem | None = None,
     partitioning: str | None = "hive",
     schema: pa.Schema | None = None,
 ) -> ds.Dataset:
     """Open a dataset for scanning.
 
+    Parameters
+    ----------
+    path:
+        Dataset base path.
+    dataset_format:
+        Dataset format name (e.g., "parquet").
+    filesystem:
+        Optional filesystem implementation.
+    partitioning:
+        Partitioning flavor or ``None``.
+    schema:
+        Optional dataset schema override.
+
     Returns
     -------
-    ds.Dataset
-        The Arrow dataset handle.
+    pyarrow.dataset.Dataset
+        Opened dataset instance.
     """
-    import pyarrow.dataset as ds
-
     return ds.dataset(
-        path, format=format, filesystem=filesystem, partitioning=partitioning, schema=schema
+        path,
+        format=dataset_format,
+        filesystem=filesystem,
+        partitioning=partitioning,
+        schema=schema,
     )
 
 
 def make_scanner(dataset: ds.Dataset, *, spec: QuerySpec, ctx: ExecutionContext) -> ds.Scanner:
     """Create a dataset scanner under centralized scan policy.
 
+    Parameters
+    ----------
+    dataset:
+        Dataset to scan.
+    spec:
+        Query specification for projection and predicates.
+    ctx:
+        Execution context with scan policy.
+
     Returns
     -------
-    ds.Scanner
-        Configured scanner over the dataset.
+    pyarrow.dataset.Scanner
+        Configured scanner instance.
     """
-    import pyarrow.dataset as ds
-
     return ds.Scanner.from_dataset(
         dataset,
         columns=spec.scan_columns(provenance=ctx.provenance),
@@ -58,12 +82,21 @@ def make_scanner(dataset: ds.Dataset, *, spec: QuerySpec, ctx: ExecutionContext)
 
 
 def scan_to_table(dataset: ds.Dataset, *, spec: QuerySpec, ctx: ExecutionContext) -> pa.Table:
-    """Eager scan materialization (primarily for debugging or non-Acero fallback).
+    """Materialize a dataset scan into a table.
+
+    Parameters
+    ----------
+    dataset:
+        Dataset to scan.
+    spec:
+        Query specification for projection and predicates.
+    ctx:
+        Execution context with scan policy.
 
     Returns
     -------
-    pa.Table
-        Materialized scan output.
+    pyarrow.Table
+        Materialized table.
     """
     scanner = make_scanner(dataset, spec=spec, ctx=ctx)
     return scanner.to_table(use_threads=ctx.scan_use_threads)
@@ -72,16 +105,22 @@ def scan_to_table(dataset: ds.Dataset, *, spec: QuerySpec, ctx: ExecutionContext
 def compile_to_acero_scan(
     dataset: ds.Dataset, *, spec: QuerySpec, ctx: ExecutionContext
 ) -> acero.Declaration:
-    """Compile an Acero scan with filter and projection.
+    """Compile a scan + filter + project pipeline into an Acero Declaration.
+
+    Parameters
+    ----------
+    dataset:
+        Dataset to scan.
+    spec:
+        Query specification for projection and predicates.
+    ctx:
+        Execution context with scan policy.
 
     Returns
     -------
-    acero.Declaration
-        The root declaration for the scan plan.
+    pyarrow.acero.Declaration
+        Declaration representing the scan pipeline.
     """
-    import pyarrow.compute as pc
-    from pyarrow import acero
-
     scan_opts = acero.ScanNodeOptions(
         dataset,
         columns=spec.scan_columns(provenance=ctx.provenance),
@@ -98,10 +137,9 @@ def compile_to_acero_scan(
         proj_exprs = list(cols.values())
         proj_names = list(cols.keys())
     else:
-        proj_exprs = [pc.field(c) for c in cols]
+        proj_exprs = [pc.field(col) for col in cols]
         proj_names = list(cols)
 
-    scan = acero.Declaration(
+    return acero.Declaration(
         "project", acero.ProjectNodeOptions(proj_exprs, proj_names), inputs=[scan]
     )
-    return scan

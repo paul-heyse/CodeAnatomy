@@ -1,6 +1,8 @@
+"""Observation utilities for manifests, stats, and reproducibility."""
+
 from __future__ import annotations
 
-from .manifest import (
+from obs.manifest import (
     DatasetRecord,
     Manifest,
     OutputRecord,
@@ -8,7 +10,7 @@ from .manifest import (
     build_manifest,
     write_manifest_json,
 )
-from .repro import (
+from obs.repro import (
     collect_repro_info,
     make_run_bundle_name,
     serialize_contract_catalog,
@@ -16,7 +18,7 @@ from .repro import (
     try_get_git_info,
     write_run_bundle,
 )
-from .stats import (
+from obs.stats import (
     column_stats_table,
     dataset_stats_table,
     schema_fingerprint,
@@ -24,23 +26,20 @@ from .stats import (
 )
 
 __all__ = [
-    # stats
-    "schema_fingerprint",
-    "table_summary",
-    "dataset_stats_table",
-    "column_stats_table",
-    # repro
-    "collect_repro_info",
-    "try_get_git_info",
-    "make_run_bundle_name",
-    "write_run_bundle",
-    "serialize_relationship_registry",
-    "serialize_contract_catalog",
-    # manifest
-    "Manifest",
     "DatasetRecord",
+    "Manifest",
     "OutputRecord",
     "RuleRecord",
     "build_manifest",
+    "collect_repro_info",
+    "column_stats_table",
+    "dataset_stats_table",
+    "make_run_bundle_name",
+    "schema_fingerprint",
+    "serialize_contract_catalog",
+    "serialize_relationship_registry",
+    "table_summary",
+    "try_get_git_info",
     "write_manifest_json",
+    "write_run_bundle",
 ]

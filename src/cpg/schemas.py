@@ -1,21 +1,22 @@
+"""CPG Arrow schemas and contracts."""
+
 from __future__ import annotations
 
 import pyarrow as pa
 
-from ..arrowdsl.contracts import Contract, DedupeSpec, SortKey
+from arrowdsl.contracts import Contract, DedupeSpec, SortKey
 
 SCHEMA_VERSION = 1
-
 
 CPG_NODES_SCHEMA = pa.schema(
     [
         ("schema_version", pa.int32()),
         ("node_id", pa.string()),
-        ("node_kind", pa.string()),  # NodeKind
-        ("path", pa.string()),  # nullable for non-anchored nodes
-        ("bstart", pa.int64()),  # nullable
-        ("bend", pa.int64()),  # nullable
-        ("file_id", pa.string()),  # nullable (for file-scoped nodes)
+        ("node_kind", pa.string()),
+        ("path", pa.string()),
+        ("bstart", pa.int64()),
+        ("bend", pa.int64()),
+        ("file_id", pa.string()),
     ]
 )
 
@@ -23,22 +24,19 @@ CPG_EDGES_SCHEMA = pa.schema(
     [
         ("schema_version", pa.int32()),
         ("edge_id", pa.string()),
-        ("edge_kind", pa.string()),  # EdgeKind
+        ("edge_kind", pa.string()),
         ("src_node_id", pa.string()),
         ("dst_node_id", pa.string()),
-        ("path", pa.string()),  # evidence location (nullable for non-anchored edges)
-        ("bstart", pa.int64()),  # evidence span start (nullable)
-        ("bend", pa.int64()),  # evidence span end (nullable)
-        # provenance / resolution metadata
-        ("origin", pa.string()),  # "scip" | "qnp" | ...
+        ("path", pa.string()),
+        ("bstart", pa.int64()),
+        ("bend", pa.int64()),
+        ("origin", pa.string()),
         ("resolution_method", pa.string()),
         ("confidence", pa.float32()),
         ("score", pa.float32()),
-        # optional but useful “payload columns”
         ("symbol_roles", pa.int32()),
         ("qname_source", pa.string()),
         ("ambiguity_group_id", pa.string()),
-        # rule meta (critical for deterministic winner selection across multiple producers)
         ("rule_name", pa.string()),
         ("rule_priority", pa.int32()),
     ]
@@ -47,39 +45,59 @@ CPG_EDGES_SCHEMA = pa.schema(
 CPG_PROPS_SCHEMA = pa.schema(
     [
         ("schema_version", pa.int32()),
-        ("entity_kind", pa.string()),  # EntityKind
+        ("entity_kind", pa.string()),
         ("entity_id", pa.string()),
         ("prop_key", pa.string()),
         ("value_str", pa.string()),
         ("value_int", pa.int64()),
         ("value_float", pa.float64()),
         ("value_bool", pa.bool_()),
-        ("value_json", pa.string()),  # for lists/structs/maps
+        ("value_json", pa.string()),
     ]
 )
 
 
 def empty_nodes() -> pa.Table:
+    """Return an empty nodes table with the canonical schema.
+
+    Returns
+    -------
+    pyarrow.Table
+        Empty nodes table.
+    """
     return pa.Table.from_arrays(
-        [pa.array([], type=f.type) for f in CPG_NODES_SCHEMA], schema=CPG_NODES_SCHEMA
+        [pa.array([], type=field.type) for field in CPG_NODES_SCHEMA],
+        schema=CPG_NODES_SCHEMA,
     )
 
 
 def empty_edges() -> pa.Table:
+    """Return an empty edges table with the canonical schema.
+
+    Returns
+    -------
+    pyarrow.Table
+        Empty edges table.
+    """
     return pa.Table.from_arrays(
-        [pa.array([], type=f.type) for f in CPG_EDGES_SCHEMA], schema=CPG_EDGES_SCHEMA
+        [pa.array([], type=field.type) for field in CPG_EDGES_SCHEMA],
+        schema=CPG_EDGES_SCHEMA,
     )
 
 
 def empty_props() -> pa.Table:
+    """Return an empty props table with the canonical schema.
+
+    Returns
+    -------
+    pyarrow.Table
+        Empty props table.
+    """
     return pa.Table.from_arrays(
-        [pa.array([], type=f.type) for f in CPG_PROPS_SCHEMA], schema=CPG_PROPS_SCHEMA
+        [pa.array([], type=field.type) for field in CPG_PROPS_SCHEMA],
+        schema=CPG_PROPS_SCHEMA,
     )
 
-
-# ----------------------
-# Contracts
-# ----------------------
 
 CPG_NODES_CONTRACT = Contract(
     name="cpg_nodes_v1",
@@ -132,7 +150,6 @@ CPG_EDGES_CONTRACT = Contract(
     version=SCHEMA_VERSION,
 )
 
-# cpg_props are “multi-valued” by design; we dedupe exact duplicates only
 CPG_PROPS_CONTRACT = Contract(
     name="cpg_props_v1",
     schema=CPG_PROPS_SCHEMA,

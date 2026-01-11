@@ -1,21 +1,24 @@
+"""Build CPG edge tables from relationship outputs."""
+
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import cast
 
 import pyarrow as pa
 
-from ..arrowdsl.finalize import FinalizeResult, finalize
-from ..arrowdsl.runtime import ExecutionContext
-from ..normalize.ids import stable_id
-from .kinds import (
+from arrowdsl.finalize import FinalizeResult, finalize
+from arrowdsl.runtime import ExecutionContext
+from cpg.kinds import (
     SCIP_ROLE_DEFINITION,
     SCIP_ROLE_IMPORT,
     SCIP_ROLE_READ,
     SCIP_ROLE_WRITE,
     EdgeKind,
 )
-from .schemas import CPG_EDGES_CONTRACT, CPG_EDGES_SCHEMA, SCHEMA_VERSION, empty_edges
+from cpg.schemas import CPG_EDGES_CONTRACT, CPG_EDGES_SCHEMA, SCHEMA_VERSION, empty_edges
+from normalize.ids import stable_id
 
 
 def _const_str(n: int, value: str) -> pa.Array:
@@ -30,39 +33,117 @@ def _const_f32(n: int, value: float) -> pa.Array:
     return pa.array([float(value)] * n, type=pa.float32())
 
 
-def _get(t: pa.Table, col: str, *, default_type: pa.DataType) -> pa.Array:
-    if col in t.column_names:
-        return t[col]
-    return pa.array([None] * t.num_rows, type=default_type)
+def _get(table: pa.Table, col: str, *, default_type: pa.DataType) -> pa.Array:
+    if col in table.column_names:
+        return table[col]
+    return pa.array([None] * table.num_rows, type=default_type)
+
+
+@dataclass(frozen=True)
+class EdgeIdInputs:
+    """Inputs required to compute edge IDs."""
+
+    src: Sequence[str | None]
+    dst: Sequence[str | None]
+    path: Sequence[str | None]
+    bstart: Sequence[int | None]
+    bend: Sequence[int | None]
+
+
+@dataclass(frozen=True)
+class EdgeEmitSpec:
+    """Specification for emitting edge rows from a relation table."""
+
+    edge_kind: EdgeKind
+    src_col: str
+    dst_col: str
+    path_col: str
+    bstart_col: str
+    bend_col: str
+    origin: str
+    default_resolution_method: str
+
+
+def _resolve_string_col(rel: pa.Table, col: str, *, default_value: str) -> pa.Array:
+    arr = _get(rel, col, default_type=pa.string())
+    if arr.null_count == rel.num_rows:
+        return _const_str(rel.num_rows, default_value)
+    return arr
+
+
+def _resolve_float_col(rel: pa.Table, col: str, *, default_value: float) -> pa.Array:
+    arr = _get(rel, col, default_type=pa.float32())
+    if arr.null_count == rel.num_rows:
+        return _const_f32(rel.num_rows, default_value)
+    return arr
+
+
+def _callsite_span_columns(table: pa.Table) -> tuple[str, str]:
+    bstart_col = "call_bstart" if "call_bstart" in table.column_names else "bstart"
+    bend_col = "call_bend" if "call_bend" in table.column_names else "bend"
+    return bstart_col, bend_col
+
+
+def _import_edge_columns(table: pa.Table) -> tuple[str, str, str]:
+    src_col = "import_alias_id" if "import_alias_id" in table.column_names else "import_id"
+    bstart_col = "bstart" if "bstart" in table.column_names else "alias_bstart"
+    bend_col = "bend" if "bend" in table.column_names else "alias_bend"
+    return src_col, bstart_col, bend_col
+
+
+def _resolved_call_ids(rel_callsite_symbol: pa.Table | None) -> set[str]:
+    if rel_callsite_symbol is None or "call_id" not in rel_callsite_symbol.column_names:
+        return set()
+    return {str(call_id) for call_id in rel_callsite_symbol["call_id"].to_pylist() if call_id}
+
+
+def _filter_unresolved_qname_calls(
+    rel_callsite_qname: pa.Table,
+    resolved: set[str],
+) -> pa.Table:
+    if "call_id" not in rel_callsite_qname.column_names:
+        return rel_callsite_qname
+    call_ids = rel_callsite_qname["call_id"].to_pylist()
+    mask = pa.array(
+        [cid is not None and str(cid) not in resolved for cid in call_ids],
+        type=pa.bool_(),
+    )
+    return rel_callsite_qname.filter(mask)
+
+
+def _ensure_ambiguity_group_id(table: pa.Table) -> pa.Table:
+    if "ambiguity_group_id" not in table.column_names and "call_id" in table.column_names:
+        return table.append_column("ambiguity_group_id", table["call_id"])
+    return table
 
 
 def _role_mask_filter(
-    symbol_roles: Sequence[int | None], mask: int, *, must_set: bool
+    symbol_roles: Sequence[int | None],
+    mask: int,
+    *,
+    must_set: bool,
 ) -> list[bool]:
     out: list[bool] = []
-    for r in symbol_roles:
-        if r is None:
-            out.append(False if must_set else True)
+    for role in symbol_roles:
+        if role is None:
+            out.append(not must_set)
             continue
-        hit = (int(r) & int(mask)) != 0
+        hit = (int(role) & int(mask)) != 0
         out.append(hit if must_set else (not hit))
     return out
 
 
 def _compute_edge_ids(
     edge_kind: str,
-    src: list,
-    dst: list,
-    path: list,
-    bstart: list,
-    bend: list,
+    inputs: EdgeIdInputs,
 ) -> list[str | None]:
     ids: list[str | None] = []
-    for s, d, p, bs, be in zip(src, dst, path, bstart, bend):
+    for s, d, p, bs, be in zip(
+        inputs.src, inputs.dst, inputs.path, inputs.bstart, inputs.bend, strict=True
+    ):
         if s is None or d is None:
             ids.append(None)
             continue
-        # path/span may be None (allowed) but included if present
         if p is None or bs is None or be is None:
             ids.append(stable_id("edge", edge_kind, str(s), str(d)))
         else:
@@ -73,89 +154,180 @@ def _compute_edge_ids(
 
 
 def _emit_edges_from_relation(
-    rel: pa.Table,
+    rel: pa.Table | None,
     *,
-    edge_kind: EdgeKind,
-    src_col: str,
-    dst_col: str,
-    path_col: str,
-    bstart_col: str,
-    bend_col: str,
-    origin: str,
-    default_resolution_method: str,
+    spec: EdgeEmitSpec,
 ) -> pa.Table:
     if rel is None or rel.num_rows == 0:
         return empty_edges()
 
     n = rel.num_rows
-    src = _get(rel, src_col, default_type=pa.string()).to_pylist()
-    dst = _get(rel, dst_col, default_type=pa.string()).to_pylist()
-    path = _get(rel, path_col, default_type=pa.string()).to_pylist()
-    bstart = _get(rel, bstart_col, default_type=pa.int64()).to_pylist()
-    bend = _get(rel, bend_col, default_type=pa.int64()).to_pylist()
+    src = cast("list[str | None]", _get(rel, spec.src_col, default_type=pa.string()).to_pylist())
+    dst = cast("list[str | None]", _get(rel, spec.dst_col, default_type=pa.string()).to_pylist())
+    path = cast("list[str | None]", _get(rel, spec.path_col, default_type=pa.string()).to_pylist())
+    bstart = cast(
+        "list[int | None]", _get(rel, spec.bstart_col, default_type=pa.int64()).to_pylist()
+    )
+    bend = cast("list[int | None]", _get(rel, spec.bend_col, default_type=pa.int64()).to_pylist())
 
-    edge_ids = _compute_edge_ids(edge_kind.value, src, dst, path, bstart, bend)
+    edge_ids = _compute_edge_ids(
+        spec.edge_kind.value,
+        EdgeIdInputs(src=src, dst=dst, path=path, bstart=bstart, bend=bend),
+    )
 
-    # Pull metadata fields if present, else fill defaults
-    origin_arr = _const_str(n, origin)
-    res_method = _get(rel, "resolution_method", default_type=pa.string())
-    if res_method.null_count == n:
-        res_method = _const_str(n, default_resolution_method)
-
-    confidence = _get(rel, "confidence", default_type=pa.float32())
-    if confidence.null_count == n:
-        confidence = _const_f32(n, 1.0 if origin == "scip" else 0.5)
-
-    score = _get(rel, "score", default_type=pa.float32())
-    if score.null_count == n:
-        score = _const_f32(n, 1.0 if origin == "scip" else 0.5)
-
-    symbol_roles = _get(rel, "symbol_roles", default_type=pa.int32())
-    qname_source = _get(rel, "qname_source", default_type=pa.string())
-    ambiguity_group_id = _get(rel, "ambiguity_group_id", default_type=pa.string())
-
-    rule_name = _get(rel, "rule_name", default_type=pa.string())
-    rule_priority = _get(rel, "rule_priority", default_type=pa.int32())
+    default_score = 1.0 if spec.origin == "scip" else 0.5
 
     out = pa.Table.from_arrays(
         [
             _const_i32(n, SCHEMA_VERSION),
             pa.array(edge_ids, type=pa.string()),
-            _const_str(n, edge_kind.value),
+            _const_str(n, spec.edge_kind.value),
             pa.array(src, type=pa.string()),
             pa.array(dst, type=pa.string()),
             pa.array(path, type=pa.string()),
             pa.array(bstart, type=pa.int64()),
             pa.array(bend, type=pa.int64()),
-            origin_arr,
-            res_method,
-            confidence,
-            score,
-            symbol_roles,
-            qname_source,
-            ambiguity_group_id,
-            rule_name,
-            rule_priority,
+            _const_str(n, spec.origin),
+            _resolve_string_col(
+                rel, "resolution_method", default_value=spec.default_resolution_method
+            ),
+            _resolve_float_col(rel, "confidence", default_value=default_score),
+            _resolve_float_col(rel, "score", default_value=default_score),
+            _get(rel, "symbol_roles", default_type=pa.int32()),
+            _get(rel, "qname_source", default_type=pa.string()),
+            _get(rel, "ambiguity_group_id", default_type=pa.string()),
+            _get(rel, "rule_name", default_type=pa.string()),
+            _get(rel, "rule_priority", default_type=pa.int32()),
         ],
         schema=CPG_EDGES_SCHEMA,
     )
-    # Drop rows with missing edge_id/src/dst (finalize will also catch these, but better here)
     mask = [
-        eid is not None and s is not None and d is not None for eid, s, d in zip(edge_ids, src, dst)
+        eid is not None and s is not None and d is not None
+        for eid, s, d in zip(edge_ids, src, dst, strict=True)
     ]
     if not any(mask):
         return empty_edges()
     return out.filter(pa.array(mask, type=pa.bool_()))
 
 
+def _symbol_role_edges(rel_name_symbol: pa.Table | None) -> list[pa.Table]:
+    if rel_name_symbol is None or rel_name_symbol.num_rows == 0:
+        return []
+
+    roles = cast(
+        "list[int | None]",
+        _get(rel_name_symbol, "symbol_roles", default_type=pa.int32()).to_pylist(),
+    )
+    parts: list[pa.Table] = []
+
+    for edge_kind, role_mask, must_set in (
+        (EdgeKind.PY_DEFINES_SYMBOL, SCIP_ROLE_DEFINITION, True),
+        (EdgeKind.PY_REFERENCES_SYMBOL, SCIP_ROLE_DEFINITION, False),
+        (EdgeKind.PY_READS_SYMBOL, SCIP_ROLE_READ, True),
+        (EdgeKind.PY_WRITES_SYMBOL, SCIP_ROLE_WRITE, True),
+    ):
+        mask = pa.array(_role_mask_filter(roles, role_mask, must_set=must_set), type=pa.bool_())
+        parts.append(
+            _emit_edges_from_relation(
+                rel_name_symbol.filter(mask),
+                spec=EdgeEmitSpec(
+                    edge_kind=edge_kind,
+                    src_col="name_ref_id",
+                    dst_col="symbol",
+                    path_col="path",
+                    bstart_col="bstart",
+                    bend_col="bend",
+                    origin="scip",
+                    default_resolution_method="SPAN_EXACT",
+                ),
+            )
+        )
+    return parts
+
+
+def _import_symbol_edges(rel_import_symbol: pa.Table | None) -> list[pa.Table]:
+    if rel_import_symbol is None or rel_import_symbol.num_rows == 0:
+        return []
+
+    roles = cast(
+        "list[int | None]",
+        _get(rel_import_symbol, "symbol_roles", default_type=pa.int32()).to_pylist(),
+    )
+    mask = pa.array(_role_mask_filter(roles, SCIP_ROLE_IMPORT, must_set=True), type=pa.bool_())
+    src_col, bstart_col, bend_col = _import_edge_columns(rel_import_symbol)
+    return [
+        _emit_edges_from_relation(
+            rel_import_symbol.filter(mask),
+            spec=EdgeEmitSpec(
+                edge_kind=EdgeKind.PY_IMPORTS_SYMBOL,
+                src_col=src_col,
+                dst_col="symbol",
+                path_col="path",
+                bstart_col=bstart_col,
+                bend_col=bend_col,
+                origin="scip",
+                default_resolution_method="SPAN_EXACT",
+            ),
+        )
+    ]
+
+
+def _call_symbol_edges(rel_callsite_symbol: pa.Table | None) -> list[pa.Table]:
+    if rel_callsite_symbol is None or rel_callsite_symbol.num_rows == 0:
+        return []
+
+    bstart_col, bend_col = _callsite_span_columns(rel_callsite_symbol)
+    return [
+        _emit_edges_from_relation(
+            rel_callsite_symbol,
+            spec=EdgeEmitSpec(
+                edge_kind=EdgeKind.PY_CALLS_SYMBOL,
+                src_col="call_id",
+                dst_col="symbol",
+                path_col="path",
+                bstart_col=bstart_col,
+                bend_col=bend_col,
+                origin="scip",
+                default_resolution_method="CALLEE_SPAN_EXACT",
+            ),
+        )
+    ]
+
+
+def _qname_fallback_edges(
+    rel_callsite_qname: pa.Table | None,
+    rel_callsite_symbol: pa.Table | None,
+) -> list[pa.Table]:
+    if rel_callsite_qname is None or rel_callsite_qname.num_rows == 0:
+        return []
+
+    resolved = _resolved_call_ids(rel_callsite_symbol)
+    qnp = _filter_unresolved_qname_calls(rel_callsite_qname, resolved)
+    if qnp.num_rows == 0:
+        return []
+
+    qnp = _ensure_ambiguity_group_id(qnp)
+    bstart_col, bend_col = _callsite_span_columns(qnp)
+    return [
+        _emit_edges_from_relation(
+            qnp,
+            spec=EdgeEmitSpec(
+                edge_kind=EdgeKind.PY_CALLS_QUALIFIED_NAME,
+                src_col="call_id",
+                dst_col="qname_id",
+                path_col="path",
+                bstart_col=bstart_col,
+                bend_col=bend_col,
+                origin="qnp",
+                default_resolution_method="QNP_CALLEE_FALLBACK",
+            ),
+        )
+    ]
+
+
 @dataclass(frozen=True)
 class EdgeBuildOptions:
-    """
-    Edge emission toggles.
-
-    This builder expects finalized relationship datasets (relspec outputs), but it is tolerant:
-    missing inputs => that edge family is skipped.
-    """
+    """Configure which edge families are emitted."""
 
     emit_symbol_role_edges: bool = True
     emit_import_edges: bool = True
@@ -165,186 +337,32 @@ class EdgeBuildOptions:
 
 def build_cpg_edges_raw(
     *,
-    rel_name_symbol: pa.Table | None = None,
-    rel_import_symbol: pa.Table | None = None,
-    rel_callsite_symbol: pa.Table | None = None,
-    rel_callsite_qname: pa.Table | None = None,
+    relationship_outputs: Mapping[str, pa.Table] | None = None,
     options: EdgeBuildOptions | None = None,
 ) -> pa.Table:
-    """
-    Emit CPG edges (raw, not finalized).
+    """Emit raw CPG edges without finalization.
+
+    Returns
+    -------
+    pyarrow.Table
+        Raw edges table.
     """
     options = options or EdgeBuildOptions()
+    outputs = relationship_outputs or {}
+    rel_name_symbol = outputs.get("rel_name_symbol")
+    rel_import_symbol = outputs.get("rel_import_symbol")
+    rel_callsite_symbol = outputs.get("rel_callsite_symbol")
+    rel_callsite_qname = outputs.get("rel_callsite_qname")
     parts: list[pa.Table] = []
 
-    # --- Role-driven name->symbol edges ---
-    if options.emit_symbol_role_edges and rel_name_symbol is not None and rel_name_symbol.num_rows:
-        roles = _get(rel_name_symbol, "symbol_roles", default_type=pa.int32()).to_pylist()
-
-        # defines: Definition bit set
-        mask_def = pa.array(
-            _role_mask_filter(roles, SCIP_ROLE_DEFINITION, must_set=True), type=pa.bool_()
-        )
-        parts.append(
-            _emit_edges_from_relation(
-                rel_name_symbol.filter(mask_def),
-                edge_kind=EdgeKind.PY_DEFINES_SYMBOL,
-                src_col="name_ref_id",
-                dst_col="symbol",
-                path_col="path",
-                bstart_col="bstart",
-                bend_col="bend",
-                origin="scip",
-                default_resolution_method="SPAN_EXACT",
-            )
-        )
-
-        # references: Definition bit NOT set
-        mask_ref = pa.array(
-            _role_mask_filter(roles, SCIP_ROLE_DEFINITION, must_set=False), type=pa.bool_()
-        )
-        parts.append(
-            _emit_edges_from_relation(
-                rel_name_symbol.filter(mask_ref),
-                edge_kind=EdgeKind.PY_REFERENCES_SYMBOL,
-                src_col="name_ref_id",
-                dst_col="symbol",
-                path_col="path",
-                bstart_col="bstart",
-                bend_col="bend",
-                origin="scip",
-                default_resolution_method="SPAN_EXACT",
-            )
-        )
-
-        # reads: ReadAccess bit set
-        mask_read = pa.array(
-            _role_mask_filter(roles, SCIP_ROLE_READ, must_set=True), type=pa.bool_()
-        )
-        parts.append(
-            _emit_edges_from_relation(
-                rel_name_symbol.filter(mask_read),
-                edge_kind=EdgeKind.PY_READS_SYMBOL,
-                src_col="name_ref_id",
-                dst_col="symbol",
-                path_col="path",
-                bstart_col="bstart",
-                bend_col="bend",
-                origin="scip",
-                default_resolution_method="SPAN_EXACT",
-            )
-        )
-
-        # writes: WriteAccess bit set
-        mask_write = pa.array(
-            _role_mask_filter(roles, SCIP_ROLE_WRITE, must_set=True), type=pa.bool_()
-        )
-        parts.append(
-            _emit_edges_from_relation(
-                rel_name_symbol.filter(mask_write),
-                edge_kind=EdgeKind.PY_WRITES_SYMBOL,
-                src_col="name_ref_id",
-                dst_col="symbol",
-                path_col="path",
-                bstart_col="bstart",
-                bend_col="bend",
-                origin="scip",
-                default_resolution_method="SPAN_EXACT",
-            )
-        )
-
-    # --- Import edges (import alias -> symbol) ---
-    if options.emit_import_edges and rel_import_symbol is not None and rel_import_symbol.num_rows:
-        roles = _get(rel_import_symbol, "symbol_roles", default_type=pa.int32()).to_pylist()
-        mask_imp = pa.array(
-            _role_mask_filter(roles, SCIP_ROLE_IMPORT, must_set=True), type=pa.bool_()
-        )
-
-        src_col = (
-            "import_alias_id"
-            if "import_alias_id" in rel_import_symbol.column_names
-            else "import_id"
-        )
-        # evidence: alias span is preferred; normalized imports should have bstart/bend
-        bstart_col = "bstart" if "bstart" in rel_import_symbol.column_names else "alias_bstart"
-        bend_col = "bend" if "bend" in rel_import_symbol.column_names else "alias_bend"
-
-        parts.append(
-            _emit_edges_from_relation(
-                rel_import_symbol.filter(mask_imp),
-                edge_kind=EdgeKind.PY_IMPORTS_SYMBOL,
-                src_col=src_col,
-                dst_col="symbol",
-                path_col="path",
-                bstart_col=bstart_col,
-                bend_col=bend_col,
-                origin="scip",
-                default_resolution_method="SPAN_EXACT",
-            )
-        )
-
-    # --- Call edges: preferred callsite -> symbol ---
-    if options.emit_call_edges and rel_callsite_symbol is not None and rel_callsite_symbol.num_rows:
-        parts.append(
-            _emit_edges_from_relation(
-                rel_callsite_symbol,
-                edge_kind=EdgeKind.PY_CALLS_SYMBOL,
-                src_col="call_id",
-                dst_col="symbol",
-                path_col="path",
-                bstart_col="call_bstart"
-                if "call_bstart" in rel_callsite_symbol.column_names
-                else "bstart",
-                bend_col="call_bend" if "call_bend" in rel_callsite_symbol.column_names else "bend",
-                origin="scip",
-                default_resolution_method="CALLEE_SPAN_EXACT",
-            )
-        )
-
-    # --- Call edges fallback: callsite -> qualified_name candidates (only if no SCIP callee symbol) ---
-    if (
-        options.emit_qname_fallback_call_edges
-        and rel_callsite_qname is not None
-        and rel_callsite_qname.num_rows
-    ):
-        # Determine which call_ids are already resolved by scip
-        resolved: set[str] = set()
-        if rel_callsite_symbol is not None and "call_id" in rel_callsite_symbol.column_names:
-            for cid in rel_callsite_symbol["call_id"].to_pylist():
-                if cid:
-                    resolved.add(str(cid))
-
-        # Filter rel_callsite_qname to unresolved call_ids
-        if "call_id" in rel_callsite_qname.column_names:
-            mask = pa.array(
-                [
-                    False if (cid is None or str(cid) in resolved) else True
-                    for cid in rel_callsite_qname["call_id"].to_pylist()
-                ],
-                type=pa.bool_(),
-            )
-            qnp = rel_callsite_qname.filter(mask)
-        else:
-            qnp = rel_callsite_qname
-
-        # Ensure ambiguity_group_id exists (call_id)
-        if qnp.num_rows:
-            if "ambiguity_group_id" not in qnp.column_names and "call_id" in qnp.column_names:
-                qnp = qnp.append_column("ambiguity_group_id", qnp["call_id"])
-
-            parts.append(
-                _emit_edges_from_relation(
-                    qnp,
-                    edge_kind=EdgeKind.PY_CALLS_QUALIFIED_NAME,
-                    src_col="call_id",
-                    dst_col="qname_id",
-                    path_col="path",
-                    bstart_col="call_bstart" if "call_bstart" in qnp.column_names else "bstart",
-                    bend_col="call_bend" if "call_bend" in qnp.column_names else "bend",
-                    origin="qnp",
-                    default_resolution_method="QNP_CALLEE_FALLBACK",
-                )
-            )
+    if options.emit_symbol_role_edges:
+        parts.extend(_symbol_role_edges(rel_name_symbol))
+    if options.emit_import_edges:
+        parts.extend(_import_symbol_edges(rel_import_symbol))
+    if options.emit_call_edges:
+        parts.extend(_call_symbol_edges(rel_callsite_symbol))
+    if options.emit_qname_fallback_call_edges:
+        parts.extend(_qname_fallback_edges(rel_callsite_qname, rel_callsite_symbol))
 
     if not parts:
         return empty_edges()
@@ -355,20 +373,18 @@ def build_cpg_edges_raw(
 def build_cpg_edges(
     *,
     ctx: ExecutionContext,
-    rel_name_symbol: pa.Table | None = None,
-    rel_import_symbol: pa.Table | None = None,
-    rel_callsite_symbol: pa.Table | None = None,
-    rel_callsite_qname: pa.Table | None = None,
+    relationship_outputs: Mapping[str, pa.Table] | None = None,
     options: EdgeBuildOptions | None = None,
 ) -> FinalizeResult:
-    """
-    Build + finalize cpg_edges (schema alignment, dedupe, canonical sort).
+    """Build and finalize CPG edges.
+
+    Returns
+    -------
+    FinalizeResult
+        Finalized edges tables and stats.
     """
     raw = build_cpg_edges_raw(
-        rel_name_symbol=rel_name_symbol,
-        rel_import_symbol=rel_import_symbol,
-        rel_callsite_symbol=rel_callsite_symbol,
-        rel_callsite_qname=rel_callsite_qname,
+        relationship_outputs=relationship_outputs,
         options=options,
     )
     return finalize(raw, contract=CPG_EDGES_CONTRACT, ctx=ctx)

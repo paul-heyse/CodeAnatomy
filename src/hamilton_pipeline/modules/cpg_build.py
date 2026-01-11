@@ -1,37 +1,48 @@
+"""Hamilton CPG build stage and relationship rule wiring."""
+
 from __future__ import annotations
 
-import os
-import pathlib
-from typing import Any
+from pathlib import Path
 
 import pyarrow as pa
-
 from hamilton.function_modifiers import cache, extract_fields, tag
 
-from ...arrowdsl.contracts import Contract, DedupeSpec, SortKey
-from ...arrowdsl.runtime import ExecutionContext
-from ...cpg.build_edges import build_cpg_edges
-from ...cpg.build_nodes import build_cpg_nodes
-from ...cpg.build_props import build_cpg_props
-from ...relspec.compiler import (
+from arrowdsl.contracts import Contract, DedupeSpec, SortKey
+from arrowdsl.runtime import ExecutionContext
+from cpg.build_edges import build_cpg_edges
+from cpg.build_nodes import NodeInputTables, build_cpg_nodes
+from cpg.build_props import PropsInputTables, build_cpg_props
+from hamilton_pipeline.pipeline_types import (
+    CpgBaseInputs,
+    CstBuildInputs,
+    CstRelspecInputs,
+    QnameInputs,
+    RelationshipOutputTables,
+    ScipBuildInputs,
+    ScipOccurrenceInputs,
+)
+from relspec.compiler import (
+    CompiledOutput,
     FilesystemPlanResolver,
     InMemoryPlanResolver,
+    PlanResolver,
     RelationshipRuleCompiler,
 )
-from ...relspec.model import (
+from relspec.edge_contract_validator import EdgeContractValidationConfig
+from relspec.model import (
     DatasetRef,
     HashJoinConfig,
     IntervalAlignConfig,
     RelationshipRule,
     RuleKind,
 )
-from ...relspec.registry import (
+from relspec.registry import (
     ContractCatalog,
     DatasetCatalog,
     DatasetLocation,
     RelationshipRegistry,
 )
-from ...storage.parquet import ParquetWriteOptions, write_named_datasets_parquet
+from storage.parquet import ParquetWriteOptions, write_named_datasets_parquet
 
 # -----------------------------
 # Relationship contracts
@@ -40,8 +51,12 @@ from ...storage.parquet import ParquetWriteOptions, write_named_datasets_parquet
 
 @tag(layer="relspec", artifact="relationship_contracts", kind="catalog")
 def relationship_contracts() -> ContractCatalog:
-    """
-    Output contracts for relationship datasets used by edge emission rules.
+    """Build output contracts for relationship datasets.
+
+    Returns
+    -------
+    ContractCatalog
+        Contract catalog for relationship outputs.
     """
     cc = ContractCatalog()
 
@@ -204,6 +219,13 @@ def relationship_contracts() -> ContractCatalog:
 
 @tag(layer="relspec", artifact="relationship_registry", kind="registry")
 def relationship_registry() -> RelationshipRegistry:
+    """Build the relationship rule registry.
+
+    Returns
+    -------
+    RelationshipRegistry
+        Registry containing relationship rules.
+    """
     reg = RelationshipRegistry()
 
     # 1) CST name refs ↔ SCIP occurrences (span align)
@@ -310,51 +332,110 @@ def relationship_registry() -> RelationshipRegistry:
 
 @tag(layer="relspec", artifact="relspec_work_dir", kind="scalar")
 def relspec_work_dir(work_dir: str | None, output_dir: str | None) -> str:
-    """
-    Choose a working directory for intermediate dataset materialization.
+    """Choose a working directory for intermediate dataset materialization.
 
     Precedence:
       1) explicit work_dir
       2) output_dir
       3) local fallback: ./.codeintel_cpg_work
+
+    Returns
+    -------
+    str
+        Working directory path.
     """
     base = work_dir or output_dir or ".codeintel_cpg_work"
-    pathlib.Path(base).mkdir(exist_ok=True, parents=True)
-    return base
+    base_path = Path(base)
+    base_path.mkdir(exist_ok=True, parents=True)
+    return str(base_path)
 
 
 @tag(layer="relspec", artifact="relspec_input_dataset_dir", kind="scalar")
 def relspec_input_dataset_dir(relspec_work_dir: str) -> str:
+    """Return the directory for relationship-input datasets.
+
+    Returns
+    -------
+    str
+        Filesystem path for relationship-input datasets.
     """
-    Where we write relationship-input datasets in filesystem resolver mode.
+    dataset_dir = Path(relspec_work_dir) / "relspec_inputs"
+    dataset_dir.mkdir(exist_ok=True, parents=True)
+    return str(dataset_dir)
+
+
+@tag(layer="relspec", artifact="relspec_cst_inputs", kind="bundle")
+def relspec_cst_inputs(
+    cst_name_refs: pa.Table,
+    cst_imports_norm: pa.Table,
+    cst_callsites: pa.Table,
+) -> CstRelspecInputs:
+    """Bundle CST tables needed for relationship inputs.
+
+    Returns
+    -------
+    CstRelspecInputs
+        CST relationship input bundle.
     """
-    p = os.path.join(relspec_work_dir, "relspec_inputs")
-    pathlib.Path(p).mkdir(exist_ok=True, parents=True)
-    return p
+    return CstRelspecInputs(
+        cst_name_refs=cst_name_refs,
+        cst_imports_norm=cst_imports_norm,
+        cst_callsites=cst_callsites,
+    )
+
+
+@tag(layer="relspec", artifact="relspec_scip_inputs", kind="bundle")
+def relspec_scip_inputs(scip_occurrences_norm: pa.Table) -> ScipOccurrenceInputs:
+    """Bundle SCIP occurrences for relationship inputs.
+
+    Returns
+    -------
+    ScipOccurrenceInputs
+        SCIP occurrence input bundle.
+    """
+    return ScipOccurrenceInputs(scip_occurrences_norm=scip_occurrences_norm)
+
+
+@tag(layer="relspec", artifact="relspec_qname_inputs", kind="bundle")
+def relspec_qname_inputs(
+    callsite_qname_candidates: pa.Table,
+    dim_qualified_names: pa.Table,
+) -> QnameInputs:
+    """Bundle qualified-name inputs for relationship rules.
+
+    Returns
+    -------
+    QnameInputs
+        Qualified-name input bundle.
+    """
+    return QnameInputs(
+        callsite_qname_candidates=callsite_qname_candidates,
+        dim_qualified_names=dim_qualified_names,
+    )
 
 
 @tag(layer="relspec", artifact="relspec_input_datasets", kind="bundle")
 def relspec_input_datasets(
-    # Use *normalized* variants where available
-    cst_name_refs: pa.Table,
-    cst_imports_norm: pa.Table,
-    cst_callsites: pa.Table,
-    scip_occurrences_norm: pa.Table,
-    callsite_qname_candidates: pa.Table,
-    dim_qualified_names: pa.Table,
+    relspec_cst_inputs: CstRelspecInputs,
+    relspec_scip_inputs: ScipOccurrenceInputs,
+    relspec_qname_inputs: QnameInputs,
 ) -> dict[str, pa.Table]:
-    """
-    Canonical mapping from dataset name -> table that relationship rules refer to.
+    """Build the canonical dataset-name to table mapping.
 
     Important: dataset keys must match the DatasetRef(...) names in relationship_registry().
+
+    Returns
+    -------
+    dict[str, pa.Table]
+        Mapping from dataset names to tables.
     """
     return {
-        "cst_name_refs": cst_name_refs,
-        "cst_imports": cst_imports_norm,
-        "cst_callsites": cst_callsites,
-        "scip_occurrences": scip_occurrences_norm,
-        "callsite_qname_candidates": callsite_qname_candidates,
-        "dim_qualified_names": dim_qualified_names,
+        "cst_name_refs": relspec_cst_inputs.cst_name_refs,
+        "cst_imports": relspec_cst_inputs.cst_imports_norm,
+        "cst_callsites": relspec_cst_inputs.cst_callsites,
+        "scip_occurrences": relspec_scip_inputs.scip_occurrences_norm,
+        "callsite_qname_candidates": relspec_qname_inputs.callsite_qname_candidates,
+        "dim_qualified_names": relspec_qname_inputs.dim_qualified_names,
     }
 
 
@@ -364,13 +445,18 @@ def persist_relspec_input_datasets(
     relspec_mode: str,
     relspec_input_datasets: dict[str, pa.Table],
     relspec_input_dataset_dir: str,
+    *,
     overwrite_intermediate_datasets: bool,
 ) -> dict[str, DatasetLocation]:
-    """
-    Writes relspec input datasets to disk in filesystem mode.
+    """Write relationship input datasets to disk in filesystem mode.
 
     Returns mapping: dataset_name -> DatasetLocation for FilesystemPlanResolver.
     In memory mode, returns {} and performs no I/O.
+
+    Returns
+    -------
+    dict[str, DatasetLocation]
+        Dataset locations for persisted inputs.
     """
     mode = (relspec_mode or "memory").lower().strip()
     if mode != "filesystem":
@@ -400,11 +486,17 @@ def relspec_resolver(
     relspec_mode: str,
     relspec_input_datasets: dict[str, pa.Table],
     persist_relspec_input_datasets: dict[str, DatasetLocation],
-) -> Any:
-    """
+) -> PlanResolver:
+    """Select the relationship resolver implementation.
+
     Resolver selection:
       - memory      => InMemoryPlanResolver (tables already in memory)
       - filesystem  => FilesystemPlanResolver (tables scanned from Parquet datasets)
+
+    Returns
+    -------
+    PlanResolver
+        Resolver instance for relationship rule compilation.
     """
     mode = (relspec_mode or "memory").lower().strip()
     if mode == "filesystem":
@@ -425,37 +517,53 @@ def relspec_resolver(
 @tag(layer="relspec", artifact="compiled_relationship_outputs", kind="object")
 def compiled_relationship_outputs(
     relationship_registry: RelationshipRegistry,
-    relspec_resolver: Any,
+    relspec_resolver: PlanResolver,
     relationship_contracts: ContractCatalog,  # add dep
     ctx: ExecutionContext,
-) -> dict[str, Any]:
+) -> dict[str, CompiledOutput]:
+    """Compile relationship rules into executable outputs.
+
+    Returns
+    -------
+    dict[str, CompiledOutput]
+        Compiled relationship outputs.
+    """
     compiler = RelationshipRuleCompiler(resolver=relspec_resolver)
     return compiler.compile_registry(
         relationship_registry.rules(),
         ctx=ctx,
-        contracts=relationship_contracts,
+        contract_catalog=relationship_contracts,
         edge_validation=EdgeContractValidationConfig(),  # optional override
     )
 
 
 @cache()
 @extract_fields(
-    rel_name_symbol=pa.Table,
-    rel_import_symbol=pa.Table,
-    rel_callsite_symbol=pa.Table,
-    rel_callsite_qname=pa.Table,
+    {
+        "rel_name_symbol": pa.Table,
+        "rel_import_symbol": pa.Table,
+        "rel_callsite_symbol": pa.Table,
+        "rel_callsite_qname": pa.Table,
+    }
 )
 @tag(layer="relspec", artifact="relationship_tables", kind="bundle")
 def relationship_tables(
-    compiled_relationship_outputs: dict[str, Any],
-    relspec_resolver: Any,
+    compiled_relationship_outputs: dict[str, CompiledOutput],
+    relspec_resolver: PlanResolver,
     relationship_contracts: ContractCatalog,
     ctx: ExecutionContext,
 ) -> dict[str, pa.Table]:
+    """Execute compiled relationship outputs into tables.
+
+    Returns
+    -------
+    dict[str, pa.Table]
+        Relationship tables keyed by output dataset.
+    """
     out: dict[str, pa.Table] = {}
     for key, compiled in compiled_relationship_outputs.items():
         res = compiled.execute(ctx=ctx, resolver=relspec_resolver, contracts=relationship_contracts)
-        out[key] = res.table
+        out[key] = res.good
 
     # Ensure expected keys exist for extract_fields
     out.setdefault("rel_name_symbol", pa.Table.from_pylist([]))
@@ -465,79 +573,165 @@ def relationship_tables(
     return out
 
 
+@tag(layer="relspec", artifact="relationship_output_tables", kind="bundle")
+def relationship_output_tables(
+    rel_name_symbol: pa.Table,
+    rel_import_symbol: pa.Table,
+    rel_callsite_symbol: pa.Table,
+    rel_callsite_qname: pa.Table,
+) -> RelationshipOutputTables:
+    """Bundle relationship output tables for downstream consumers.
+
+    Returns
+    -------
+    RelationshipOutputTables
+        Relationship output bundle.
+    """
+    return RelationshipOutputTables(
+        rel_name_symbol=rel_name_symbol,
+        rel_import_symbol=rel_import_symbol,
+        rel_callsite_symbol=rel_callsite_symbol,
+        rel_callsite_qname=rel_callsite_qname,
+    )
+
+
 # -----------------------------
 # CPG build
 # -----------------------------
+
+
+@tag(layer="cpg", artifact="cst_build_inputs", kind="bundle")
+def cst_build_inputs(
+    cst_name_refs: pa.Table,
+    cst_imports_norm: pa.Table,
+    cst_callsites: pa.Table,
+    cst_defs_norm: pa.Table,
+) -> CstBuildInputs:
+    """Bundle CST inputs for CPG builds.
+
+    Returns
+    -------
+    CstBuildInputs
+        CST build input bundle.
+    """
+    return CstBuildInputs(
+        cst_name_refs=cst_name_refs,
+        cst_imports_norm=cst_imports_norm,
+        cst_callsites=cst_callsites,
+        cst_defs_norm=cst_defs_norm,
+    )
+
+
+@tag(layer="cpg", artifact="scip_build_inputs", kind="bundle")
+def scip_build_inputs(
+    scip_symbol_information: pa.Table,
+    scip_occurrences_norm: pa.Table,
+) -> ScipBuildInputs:
+    """Bundle SCIP inputs for CPG builds.
+
+    Returns
+    -------
+    ScipBuildInputs
+        SCIP build input bundle.
+    """
+    return ScipBuildInputs(
+        scip_symbol_information=scip_symbol_information,
+        scip_occurrences_norm=scip_occurrences_norm,
+    )
+
+
+@tag(layer="cpg", artifact="cpg_base_inputs", kind="bundle")
+def cpg_base_inputs(
+    repo_files: pa.Table,
+    dim_qualified_names: pa.Table,
+    cst_build_inputs: CstBuildInputs,
+    scip_build_inputs: ScipBuildInputs,
+) -> CpgBaseInputs:
+    """Bundle shared inputs for CPG nodes and properties.
+
+    Returns
+    -------
+    CpgBaseInputs
+        Shared CPG input bundle.
+    """
+    return CpgBaseInputs(
+        repo_files=repo_files,
+        dim_qualified_names=dim_qualified_names,
+        cst_build_inputs=cst_build_inputs,
+        scip_build_inputs=scip_build_inputs,
+    )
 
 
 @cache()
 @tag(layer="cpg", artifact="cpg_nodes_final", kind="table")
 def cpg_nodes_final(
     ctx: ExecutionContext,
-    repo_files: pa.Table,
-    cst_name_refs: pa.Table,
-    cst_imports_norm: pa.Table,
-    cst_callsites: pa.Table,
-    cst_defs_norm: pa.Table,
-    dim_qualified_names: pa.Table,
-    scip_symbol_information: pa.Table,
-    scip_occurrences_norm: pa.Table,
+    cpg_base_inputs: CpgBaseInputs,
 ) -> pa.Table:
-    res = build_cpg_nodes(
-        ctx=ctx,
-        repo_files=repo_files,
-        cst_name_refs=cst_name_refs,
-        cst_imports=cst_imports_norm,
-        cst_callsites=cst_callsites,
-        cst_defs=cst_defs_norm,
-        dim_qualified_names=dim_qualified_names,
-        scip_symbol_information=scip_symbol_information,
-        scip_occurrences=scip_occurrences_norm,
+    """Build the final CPG nodes table.
+
+    Returns
+    -------
+    pa.Table
+        Final CPG nodes table.
+    """
+    inputs = NodeInputTables(
+        repo_files=cpg_base_inputs.repo_files,
+        cst_name_refs=cpg_base_inputs.cst_build_inputs.cst_name_refs,
+        cst_imports=cpg_base_inputs.cst_build_inputs.cst_imports_norm,
+        cst_callsites=cpg_base_inputs.cst_build_inputs.cst_callsites,
+        cst_defs=cpg_base_inputs.cst_build_inputs.cst_defs_norm,
+        dim_qualified_names=cpg_base_inputs.dim_qualified_names,
+        scip_symbol_information=cpg_base_inputs.scip_build_inputs.scip_symbol_information,
+        scip_occurrences=cpg_base_inputs.scip_build_inputs.scip_occurrences_norm,
     )
-    return res.table
+    res = build_cpg_nodes(ctx=ctx, inputs=inputs)
+    return res.good
 
 
 @cache()
 @tag(layer="cpg", artifact="cpg_edges_final", kind="table")
 def cpg_edges_final(
     ctx: ExecutionContext,
-    rel_name_symbol: pa.Table,
-    rel_import_symbol: pa.Table,
-    rel_callsite_symbol: pa.Table,
-    rel_callsite_qname: pa.Table,
+    relationship_output_tables: RelationshipOutputTables,
 ) -> pa.Table:
+    """Build the final CPG edges table.
+
+    Returns
+    -------
+    pa.Table
+        Final CPG edges table.
+    """
     res = build_cpg_edges(
         ctx=ctx,
-        rel_name_symbol=rel_name_symbol,
-        rel_import_symbol=rel_import_symbol,
-        rel_callsite_symbol=rel_callsite_symbol,
-        rel_callsite_qname=rel_callsite_qname,
+        relationship_outputs=relationship_output_tables.as_dict(),
     )
-    return res.table
+    return res.good
 
 
 @cache()
 @tag(layer="cpg", artifact="cpg_props_final", kind="table")
 def cpg_props_final(
     ctx: ExecutionContext,
-    repo_files: pa.Table,
-    cst_name_refs: pa.Table,
-    cst_imports_norm: pa.Table,
-    cst_callsites: pa.Table,
-    cst_defs_norm: pa.Table,
-    dim_qualified_names: pa.Table,
-    scip_symbol_information: pa.Table,
+    cpg_base_inputs: CpgBaseInputs,
     cpg_edges_final: pa.Table,
 ) -> pa.Table:
-    res = build_cpg_props(
-        ctx=ctx,
-        repo_files=repo_files,
-        cst_name_refs=cst_name_refs,
-        cst_imports=cst_imports_norm,
-        cst_callsites=cst_callsites,
-        cst_defs=cst_defs_norm,
-        dim_qualified_names=dim_qualified_names,
-        scip_symbol_information=scip_symbol_information,
+    """Build the final CPG properties table.
+
+    Returns
+    -------
+    pa.Table
+        Final CPG properties table.
+    """
+    inputs = PropsInputTables(
+        repo_files=cpg_base_inputs.repo_files,
+        cst_name_refs=cpg_base_inputs.cst_build_inputs.cst_name_refs,
+        cst_imports=cpg_base_inputs.cst_build_inputs.cst_imports_norm,
+        cst_callsites=cpg_base_inputs.cst_build_inputs.cst_callsites,
+        cst_defs=cpg_base_inputs.cst_build_inputs.cst_defs_norm,
+        dim_qualified_names=cpg_base_inputs.dim_qualified_names,
+        scip_symbol_information=cpg_base_inputs.scip_build_inputs.scip_symbol_information,
         cpg_edges=cpg_edges_final,
     )
-    return res.table
+    res = build_cpg_props(ctx=ctx, inputs=inputs)
+    return res.good

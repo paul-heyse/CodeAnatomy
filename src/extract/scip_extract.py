@@ -1,27 +1,27 @@
+"""Extract SCIP metadata and occurrences into Arrow tables."""
+
 from __future__ import annotations
 
+import importlib
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import pyarrow as pa
 
-from .repo_scan import stable_id
+from extract.repo_scan import stable_id
 
 SCHEMA_VERSION = 1
+RANGE_LEN_SHORT = 3
+RANGE_LEN_FULL = 4
+
+type Row = dict[str, object]
 
 
 @dataclass(frozen=True)
 class SCIPIndexOptions:
-    """
-    Options for running scip-python as an external tool.
-
-    Canonical invocation follows:
-      scip-python index . --project-name <name> [--environment <env.json>] [--output <path>]
-    :contentReference[oaicite:10]{index=10}:contentReference[oaicite:11]{index=11}
-    """
+    """Configure scip-python index invocation."""
 
     repo_root: Path
     project_name: str
@@ -32,21 +32,16 @@ class SCIPIndexOptions:
 
 @dataclass(frozen=True)
 class SCIPParseOptions:
-    """
-    Options for parsing an index.scip.
-
-    - prefer_protobuf=True: requires scip_pb2 generated from scip.proto and protobuf installed.
-      Uses Index.ParseFromString(data). :contentReference[oaicite:12]{index=12}
-    - If you want to avoid protobuf codegen, downstream can use `scip print --json` streaming,
-      but that is a different interface and generally higher overhead. :contentReference[oaicite:13]{index=13}
-    """
+    """Configure index.scip parsing."""
 
     prefer_protobuf: bool = True
-    scip_pb2_import: str | None = None  # e.g. "codeintel_cpg.extract.proto.scip_pb2"
+    scip_pb2_import: str | None = None
 
 
 @dataclass(frozen=True)
 class SCIPExtractResult:
+    """Hold extracted SCIP tables for metadata, documents, and symbols."""
+
     scip_metadata: pa.Table
     scip_documents: pa.Table
     scip_occurrences: pa.Table
@@ -69,7 +64,7 @@ SCIP_DOCUMENTS_SCHEMA = pa.schema(
     [
         ("schema_version", pa.int32()),
         ("document_id", pa.string()),
-        ("path", pa.string()),  # Document.relative_path
+        ("path", pa.string()),
         ("language", pa.string()),
         ("position_encoding", pa.string()),
     ]
@@ -83,13 +78,11 @@ SCIP_OCCURRENCES_SCHEMA = pa.schema(
         ("path", pa.string()),
         ("symbol", pa.string()),
         ("symbol_roles", pa.int32()),
-        # occurrence range (token span)
         ("start_line", pa.int32()),
         ("start_char", pa.int32()),
         ("end_line", pa.int32()),
         ("end_char", pa.int32()),
         ("range_len", pa.int32()),
-        # enclosing range (full syntactic span), when present
         ("enc_start_line", pa.int32()),
         ("enc_start_char", pa.int32()),
         ("enc_end_line", pa.int32()),
@@ -129,9 +122,29 @@ SCIP_DIAGNOSTICS_SCHEMA = pa.schema(
 )
 
 
+def _empty(schema: pa.Schema) -> pa.Table:
+    return pa.Table.from_arrays([pa.array([], type=field.type) for field in schema], schema=schema)
+
+
 def run_scip_python_index(opts: SCIPIndexOptions) -> Path:
-    """
-    Run scip-python to produce index.scip.
+    """Run scip-python to produce an index.scip file.
+
+    Parameters
+    ----------
+    opts:
+        Index invocation options.
+
+    Returns
+    -------
+    pathlib.Path
+        Path to the generated index.scip file.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when scip-python exits with a non-zero status.
+    FileNotFoundError
+        Raised when the output file is not found after execution.
     """
     repo_root = opts.repo_root.resolve()
     out = opts.output_path or (repo_root / "index.scip")
@@ -154,59 +167,79 @@ def run_scip_python_index(opts: SCIPIndexOptions) -> Path:
         cwd=str(repo_root),
         capture_output=True,
         text=True,
+        check=False,
     )
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"scip-python failed.\ncmd={cmd}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}\n"
-        )
+        msg = f"scip-python failed.\ncmd={cmd}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}\n"
+        raise RuntimeError(msg)
 
     if not out.exists():
-        raise FileNotFoundError(f"scip-python reported success but output not found: {out}")
+        msg = f"scip-python reported success but output not found: {out}"
+        raise FileNotFoundError(msg)
     return out
 
 
 def _normalize_range(rng: Sequence[int]) -> tuple[int, int, int, int, int]:
+    """Normalize SCIP occurrence ranges to a consistent 4-tuple.
+
+    Returns
+    -------
+    tuple[int, int, int, int, int]
+        Normalized start/end positions and a range length marker.
     """
-    Occurrence.range is either:
-      - [line, start_char, end_char]
-      - [start_line, start_char, end_line, end_char]
-    :contentReference[oaicite:14]{index=14}
-    """
-    if len(rng) == 3:
+    if len(rng) == RANGE_LEN_SHORT:
         line, start_c, end_c = rng
-        return int(line), int(start_c), int(line), int(end_c), 3
-    if len(rng) >= 4:
-        sl, sc, el, ec = rng[:4]
-        return int(sl), int(sc), int(el), int(ec), 4
+        return int(line), int(start_c), int(line), int(end_c), RANGE_LEN_SHORT
+    if len(rng) >= RANGE_LEN_FULL:
+        sl, sc, el, ec = rng[:RANGE_LEN_FULL]
+        return int(sl), int(sc), int(el), int(ec), RANGE_LEN_FULL
     return 0, 0, 0, 0, 0
 
 
-def parse_index_scip(index_path: Path, parse_opts: SCIPParseOptions | None = None) -> Any:
-    """
-    Parse index.scip into a protobuf Index object (preferred).
+def parse_index_scip(index_path: Path, parse_opts: SCIPParseOptions | None = None) -> object:
+    """Parse index.scip into a protobuf Index object.
+
+    Parameters
+    ----------
+    index_path:
+        Path to the index.scip file.
+    parse_opts:
+        Parsing options.
+
+    Returns
+    -------
+    object
+        Parsed protobuf Index instance.
+
+    Raises
+    ------
+    NotImplementedError
+        Raised when protobuf parsing is disabled.
+    RuntimeError
+        Raised when SCIP protobuf bindings cannot be imported.
     """
     parse_opts = parse_opts or SCIPParseOptions()
     if not parse_opts.prefer_protobuf:
-        raise NotImplementedError(
-            "JSON-stream parsing is available, but this code path expects protobuf."
-        )
+        msg = "JSON-stream parsing is available, but protobuf parsing is disabled."
+        raise NotImplementedError(msg)
 
-    # Import generated scip_pb2
-    scip_pb2 = None
     if parse_opts.scip_pb2_import:
-        scip_pb2 = __import__(parse_opts.scip_pb2_import, fromlist=["Index"])
+        try:
+            scip_pb2 = importlib.import_module(parse_opts.scip_pb2_import)
+        except ImportError:
+            scip_pb2 = None
     else:
         try:
-            import scip_pb2 as scip_pb2  # type: ignore
-        except Exception:
+            scip_pb2 = importlib.import_module("scip_pb2")
+        except ImportError:
             scip_pb2 = None
 
     if scip_pb2 is None or not hasattr(scip_pb2, "Index"):
-        raise RuntimeError(
+        msg = (
             "SCIP protobuf bindings not available.\n"
-            "You must generate scip_pb2.py from scip.proto using protoc, then make it importable.\n"
-            "See scip_python_overview.md for the canonical protoc invocation. :contentReference[oaicite:15]{index=15}"
+            "Generate scip_pb2.py from scip.proto and make it importable."
         )
+        raise RuntimeError(msg)
 
     data = index_path.read_bytes()
     index = scip_pb2.Index()
@@ -214,27 +247,15 @@ def parse_index_scip(index_path: Path, parse_opts: SCIPParseOptions | None = Non
     return index
 
 
-def extract_scip_tables(index: Any) -> SCIPExtractResult:
-    """
-    Convert protobuf Index message into Arrow tables:
-      - metadata
-      - documents
-      - occurrences
-      - symbol_information
-      - diagnostics (best-effort)
-    """
-    # Metadata
-    tool_name = getattr(getattr(getattr(index, "metadata", None), "tool_info", None), "name", None)
-    tool_version = getattr(
-        getattr(getattr(index, "metadata", None), "tool_info", None), "version", None
-    )
-    project_root = getattr(getattr(index, "metadata", None), "project_root", None)
-    protocol_version = getattr(getattr(index, "metadata", None), "protocol_version", None)
-    text_document_encoding = getattr(
-        getattr(index, "metadata", None), "text_document_encoding", None
-    )
-
-    meta_rows = [
+def _metadata_rows(index: object) -> list[Row]:
+    metadata = getattr(index, "metadata", None)
+    tool_info = getattr(metadata, "tool_info", None)
+    tool_name = getattr(tool_info, "name", None)
+    tool_version = getattr(tool_info, "version", None)
+    project_root = getattr(metadata, "project_root", None)
+    protocol_version = getattr(metadata, "protocol_version", None)
+    text_document_encoding = getattr(metadata, "text_document_encoding", None)
+    return [
         {
             "schema_version": SCHEMA_VERSION,
             "tool_name": tool_name,
@@ -247,12 +268,100 @@ def extract_scip_tables(index: Any) -> SCIPExtractResult:
         }
     ]
 
-    doc_rows: list[dict] = []
-    occ_rows: list[dict] = []
-    sym_rows: list[dict] = []
-    diag_rows: list[dict] = []
 
-    # Documents + occurrences
+def _diagnostic_rows(
+    document_id: str,
+    rel_path: object,
+    occ_index: int,
+    diagnostics: Sequence[object],
+    default_range: tuple[int, int, int, int],
+) -> list[Row]:
+    rows: list[Row] = []
+    sl, sc, el, ec = default_range
+    for j, diag in enumerate(diagnostics):
+        drng = list(getattr(diag, "range", []))
+        dsl, dsc, del_, dec_, _ = _normalize_range(drng) if drng else (sl, sc, el, ec, 0)
+        rows.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "diagnostic_id": stable_id("scip_diag", document_id, str(occ_index), str(j)),
+                "document_id": document_id,
+                "path": rel_path,
+                "severity": str(getattr(diag, "severity", None))
+                if hasattr(diag, "severity")
+                else None,
+                "code": str(getattr(diag, "code", None)) if hasattr(diag, "code") else None,
+                "message": getattr(diag, "message", None),
+                "source": getattr(diag, "source", None),
+                "tags": [str(t) for t in getattr(diag, "tags", [])]
+                if hasattr(diag, "tags")
+                else [],
+                "start_line": dsl,
+                "start_char": dsc,
+                "end_line": del_,
+                "end_char": dec_,
+            }
+        )
+    return rows
+
+
+def _occurrence_rows(
+    document_id: str,
+    rel_path: object,
+    occurrences: Sequence[object],
+) -> tuple[list[Row], list[Row]]:
+    occ_rows: list[Row] = []
+    diag_rows: list[Row] = []
+    for i, occ in enumerate(occurrences):
+        sl, sc, el, ec, rlen = _normalize_range(list(getattr(occ, "range", [])))
+        esl, esc, eel, eec, elen = _normalize_range(list(getattr(occ, "enclosing_range", [])))
+
+        occ_rows.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "occurrence_id": stable_id(
+                    "scip_occ",
+                    document_id,
+                    str(i),
+                    str(sl),
+                    str(sc),
+                    str(el),
+                    str(ec),
+                ),
+                "document_id": document_id,
+                "path": rel_path,
+                "symbol": getattr(occ, "symbol", None),
+                "symbol_roles": int(getattr(occ, "symbol_roles", 0) or 0),
+                "start_line": sl,
+                "start_char": sc,
+                "end_line": el,
+                "end_char": ec,
+                "range_len": rlen,
+                "enc_start_line": esl if elen else None,
+                "enc_start_char": esc if elen else None,
+                "enc_end_line": eel if elen else None,
+                "enc_end_char": eec if elen else None,
+                "enc_range_len": elen if elen else None,
+            }
+        )
+
+        diag_rows.extend(
+            _diagnostic_rows(
+                document_id,
+                rel_path,
+                i,
+                getattr(occ, "diagnostics", []),
+                (sl, sc, el, ec),
+            )
+        )
+    return occ_rows, diag_rows
+
+
+def _document_rows(index: object) -> tuple[list[Row], list[Row], list[Row]]:
+    doc_rows: list[Row] = []
+    occ_rows: list[Row] = []
+    diag_rows: list[Row] = []
+
     for doc in getattr(index, "documents", []):
         rel_path = getattr(doc, "relative_path", None)
         language = getattr(doc, "language", None)
@@ -271,67 +380,19 @@ def extract_scip_tables(index: Any) -> SCIPExtractResult:
             }
         )
 
-        for i, occ in enumerate(getattr(doc, "occurrences", [])):
-            rng = list(getattr(occ, "range", []))
-            sl, sc, el, ec, rlen = _normalize_range(rng)
+        occs, diags = _occurrence_rows(
+            document_id,
+            rel_path,
+            getattr(doc, "occurrences", []),
+        )
+        occ_rows.extend(occs)
+        diag_rows.extend(diags)
 
-            enc_rng = list(getattr(occ, "enclosing_range", []))
-            esl, esc, eel, eec, elen = _normalize_range(enc_rng) if enc_rng else (0, 0, 0, 0, 0)
+    return doc_rows, occ_rows, diag_rows
 
-            symbol = getattr(occ, "symbol", None)
-            roles = int(getattr(occ, "symbol_roles", 0) or 0)
 
-            occ_rows.append(
-                {
-                    "schema_version": SCHEMA_VERSION,
-                    "occurrence_id": stable_id(
-                        "scip_occ", document_id, str(i), str(sl), str(sc), str(el), str(ec)
-                    ),
-                    "document_id": document_id,
-                    "path": rel_path,
-                    "symbol": symbol,
-                    "symbol_roles": roles,
-                    "start_line": sl,
-                    "start_char": sc,
-                    "end_line": el,
-                    "end_char": ec,
-                    "range_len": rlen,
-                    "enc_start_line": esl if elen else None,
-                    "enc_start_char": esc if elen else None,
-                    "enc_end_line": eel if elen else None,
-                    "enc_end_char": eec if elen else None,
-                    "enc_range_len": elen if elen else None,
-                }
-            )
-
-            # Occurrence-attached diagnostics (optional)
-            for j, d in enumerate(getattr(occ, "diagnostics", [])):
-                drng = list(getattr(d, "range", []))
-                dsl, dsc, del_, dec_, _ = _normalize_range(drng) if drng else (sl, sc, el, ec, 0)
-
-                diag_rows.append(
-                    {
-                        "schema_version": SCHEMA_VERSION,
-                        "diagnostic_id": stable_id("scip_diag", document_id, str(i), str(j)),
-                        "document_id": document_id,
-                        "path": rel_path,
-                        "severity": str(getattr(d, "severity", None))
-                        if hasattr(d, "severity")
-                        else None,
-                        "code": str(getattr(d, "code", None)) if hasattr(d, "code") else None,
-                        "message": getattr(d, "message", None),
-                        "source": getattr(d, "source", None),
-                        "tags": [str(t) for t in getattr(d, "tags", [])]
-                        if hasattr(d, "tags")
-                        else [],
-                        "start_line": dsl,
-                        "start_char": dsc,
-                        "end_line": del_,
-                        "end_char": dec_,
-                    }
-                )
-
-    # SymbolInformation
+def _symbol_rows(index: object) -> list[Row]:
+    sym_rows: list[Row] = []
     for si in getattr(index, "symbol_information", []):
         symbol = getattr(si, "symbol", None)
         sym_rows.append(
@@ -349,6 +410,13 @@ def extract_scip_tables(index: Any) -> SCIPExtractResult:
                 else [],
             }
         )
+    return sym_rows
+
+
+def _extract_tables_from_index(index: object) -> SCIPExtractResult:
+    meta_rows = _metadata_rows(index)
+    doc_rows, occ_rows, diag_rows = _document_rows(index)
+    sym_rows = _symbol_rows(index)
 
     t_meta = pa.Table.from_pylist(meta_rows, schema=SCIP_METADATA_SCHEMA)
     t_docs = pa.Table.from_pylist(doc_rows, schema=SCIP_DOCUMENTS_SCHEMA)
@@ -363,3 +431,53 @@ def extract_scip_tables(index: Any) -> SCIPExtractResult:
         scip_symbol_information=t_syms,
         scip_diagnostics=t_diags,
     )
+
+
+def extract_scip_tables(
+    *,
+    scip_index_path: str | None,
+    repo_root: str | None,
+    ctx: object | None = None,
+    parse_opts: SCIPParseOptions | None = None,
+) -> dict[str, pa.Table]:
+    """Extract SCIP tables as a name-keyed bundle.
+
+    Parameters
+    ----------
+    scip_index_path:
+        Path to the index.scip file or ``None``.
+    repo_root:
+        Optional repository root used for resolving relative paths.
+    ctx:
+        Execution context (unused).
+    parse_opts:
+        Parsing options.
+
+    Returns
+    -------
+    dict[str, pyarrow.Table]
+        Extracted SCIP tables keyed by output name.
+    """
+    _ = ctx
+    if scip_index_path is None:
+        empty_result = SCIPExtractResult(
+            scip_metadata=_empty(SCIP_METADATA_SCHEMA),
+            scip_documents=_empty(SCIP_DOCUMENTS_SCHEMA),
+            scip_occurrences=_empty(SCIP_OCCURRENCES_SCHEMA),
+            scip_symbol_information=_empty(SCIP_SYMBOL_INFO_SCHEMA),
+            scip_diagnostics=_empty(SCIP_DIAGNOSTICS_SCHEMA),
+        )
+    else:
+        index_path = Path(scip_index_path)
+        if repo_root is not None and not index_path.is_absolute():
+            index_path = Path(repo_root) / index_path
+        index = parse_index_scip(index_path, parse_opts=parse_opts)
+        empty_result = _extract_tables_from_index(index)
+
+    return {
+        "scip_metadata": empty_result.scip_metadata,
+        "scip_documents": empty_result.scip_documents,
+        "scip_occurrences": empty_result.scip_occurrences,
+        "scip_symbol_information": empty_result.scip_symbol_information,
+        "scip_diagnostics": empty_result.scip_diagnostics,
+    }

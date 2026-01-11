@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import Literal
 
 import pyarrow as pa
 
-InvariantFn: TypeAlias = Callable[[pa.Table], tuple[pa.Array, str]]
+type InvariantFn = Callable[[pa.Table], tuple[pa.Array, str]]
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,7 @@ class SortKey:
     order: Literal["ascending", "descending"] = "ascending"
 
 
-DedupeStrategy: TypeAlias = Literal[
+type DedupeStrategy = Literal[
     "KEEP_FIRST_AFTER_SORT",
     "KEEP_BEST_BY_SCORE",
     "COLLAPSE_LIST",

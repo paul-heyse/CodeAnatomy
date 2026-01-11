@@ -1,18 +1,18 @@
+"""Pipeline runner for Plan execution and finalization."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING
 
-from .contracts import Contract
-from .finalize import FinalizeResult, finalize
-from .plan import Plan
-from .runtime import ExecutionContext
+import pyarrow as pa
 
-if TYPE_CHECKING:  # pragma: no cover
-    import pyarrow as pa
+from arrowdsl.contracts import Contract
+from arrowdsl.finalize import FinalizeResult, finalize
+from arrowdsl.plan import Plan
+from arrowdsl.runtime import ExecutionContext
+from core_types import StrictnessMode
 
-
-KernelFn = Callable[["pa.Table", ExecutionContext], "pa.Table"]
+KernelFn = Callable[[pa.Table, ExecutionContext], pa.Table]
 
 
 def run_pipeline(
@@ -20,15 +20,34 @@ def run_pipeline(
     plan: Plan,
     contract: Contract,
     ctx: ExecutionContext,
-    mode: str | None = None,
+    mode: StrictnessMode | None = None,
     post: Sequence[KernelFn] = (),
 ) -> FinalizeResult:
-    """Execute a Plan, optionally apply kernel-lane post transforms, then finalize."""
+    """Execute a plan, apply kernels, and finalize results.
+
+    Parameters
+    ----------
+    plan:
+        Plan to execute.
+    contract:
+        Output contract.
+    ctx:
+        Execution context.
+    mode:
+        Optional finalize mode override.
+    post:
+        Kernel-lane post-processing functions.
+
+    Returns
+    -------
+    FinalizeResult
+        Finalized output bundle.
+    """
     if mode is not None:
         ctx = ctx.with_mode(mode)
 
-    tbl = plan.to_table(ctx=ctx)
+    table = plan.to_table(ctx=ctx)
     for fn in post:
-        tbl = fn(tbl, ctx)
+        table = fn(table, ctx)
 
-    return finalize(tbl, contract=contract, ctx=ctx)
+    return finalize(table, contract=contract, ctx=ctx)

@@ -1,7 +1,4 @@
-from __future__ import annotations
-
-"""
-Extraction layer.
+"""Extraction layer.
 
 These modules are "bytes-first" and output PyArrow Tables ("fact tables") that downstream
 normalization + relationship rules can join without requiring full intermediate schema
@@ -16,11 +13,18 @@ Exports:
 - bytecode extraction -> code units/instructions/exception table (+ optional blocks/CFG)
 """
 
-from .ast_extract import ASTExtractOptions, ASTExtractResult, extract_ast
-from .bytecode_extract import BytecodeExtractOptions, BytecodeExtractResult, extract_bytecode
-from .cst_extract import CSTExtractOptions, CSTExtractResult, extract_cst
-from .repo_scan import RepoScanOptions, scan_repo, stable_id
-from .scip_extract import (
+from __future__ import annotations
+
+from extract.ast_extract import ASTExtractOptions, ASTExtractResult, extract_ast, extract_ast_tables
+from extract.bytecode_extract import (
+    BytecodeExtractOptions,
+    BytecodeExtractResult,
+    extract_bytecode,
+    extract_bytecode_table,
+)
+from extract.cst_extract import CSTExtractOptions, CSTExtractResult, extract_cst, extract_cst_tables
+from extract.repo_scan import RepoScanOptions, scan_repo, stable_id
+from extract.scip_extract import (
     SCIPExtractResult,
     SCIPIndexOptions,
     SCIPParseOptions,
@@ -28,7 +32,12 @@ from .scip_extract import (
     parse_index_scip,
     run_scip_python_index,
 )
-from .symtable_extract import SymtableExtractOptions, SymtableExtractResult, extract_symtable
+from extract.symtable_extract import (
+    SymtableExtractOptions,
+    SymtableExtractResult,
+    extract_symtable,
+    extract_symtables_table,
+)
 
 __all__ = [
     "ASTExtractOptions",
@@ -44,10 +53,14 @@ __all__ = [
     "SymtableExtractOptions",
     "SymtableExtractResult",
     "extract_ast",
+    "extract_ast_tables",
     "extract_bytecode",
+    "extract_bytecode_table",
     "extract_cst",
+    "extract_cst_tables",
     "extract_scip_tables",
     "extract_symtable",
+    "extract_symtables_table",
     "parse_index_scip",
     "run_scip_python_index",
     "scan_repo",

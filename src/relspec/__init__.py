@@ -1,6 +1,6 @@
-from __future__ import annotations
+"""Relationship spec models, registry, and compiler."""
 
-from .compiler import (
+from relspec.compiler import (
     CompiledOutput,
     CompiledRule,
     FilesystemPlanResolver,
@@ -8,7 +8,7 @@ from .compiler import (
     PlanResolver,
     RelationshipRuleCompiler,
 )
-from .model import (
+from relspec.model import (
     AddLiteralSpec,
     CanonicalSortKernelSpec,
     DatasetRef,
@@ -23,38 +23,30 @@ from .model import (
     RenameColumnsSpec,
     RuleKind,
 )
-from .registry import (
-    ContractCatalog,
-    DatasetCatalog,
-    DatasetLocation,
-    RelationshipRegistry,
-)
+from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation, RelationshipRegistry
 
 __all__ = [
-    # model
-    "DatasetRef",
-    "RuleKind",
-    "HashJoinConfig",
-    "IntervalAlignConfig",
-    "ProjectConfig",
-    "KernelSpec",
     "AddLiteralSpec",
-    "DropColumnsSpec",
-    "RenameColumnsSpec",
-    "ExplodeListSpec",
-    "DedupeKernelSpec",
     "CanonicalSortKernelSpec",
-    "RelationshipRule",
-    # registry
-    "DatasetLocation",
-    "DatasetCatalog",
-    "ContractCatalog",
-    "RelationshipRegistry",
-    # compiler
-    "PlanResolver",
-    "FilesystemPlanResolver",
-    "InMemoryPlanResolver",
-    "CompiledRule",
     "CompiledOutput",
+    "CompiledRule",
+    "ContractCatalog",
+    "DatasetCatalog",
+    "DatasetLocation",
+    "DatasetRef",
+    "DedupeKernelSpec",
+    "DropColumnsSpec",
+    "ExplodeListSpec",
+    "FilesystemPlanResolver",
+    "HashJoinConfig",
+    "InMemoryPlanResolver",
+    "IntervalAlignConfig",
+    "KernelSpec",
+    "PlanResolver",
+    "ProjectConfig",
+    "RelationshipRegistry",
+    "RelationshipRule",
     "RelationshipRuleCompiler",
+    "RenameColumnsSpec",
+    "RuleKind",
 ]

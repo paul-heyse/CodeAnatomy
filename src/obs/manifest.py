@@ -1,24 +1,28 @@
+"""Build and write run manifest records for observability."""
+
 from __future__ import annotations
 
 import json
-import os
-import pathlib
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from .repro import collect_repro_info
-from .stats import schema_fingerprint, table_summary
+from core_types import JsonDict, PathLike, ensure_path
+from obs.repro import collect_repro_info
+from obs.stats import schema_fingerprint, table_summary
+
+if TYPE_CHECKING:
+    from relspec.model import RelationshipRule
+    from relspec.registry import DatasetLocation
 
 
 @dataclass(frozen=True)
 class DatasetRecord:
-    """
-    Records one dataset artifact.
-    """
+    """Record a dataset artifact."""
 
     name: str
     kind: str  # "input" | "intermediate" | "relationship_output" | "cpg_output"
@@ -30,14 +34,12 @@ class DatasetRecord:
     schema_fingerprint: str | None = None
 
     # Optional: include a small schema description (safe for debugging)
-    schema: list[dict[str, Any]] | None = None
+    schema: list[JsonDict] | None = None
 
 
 @dataclass(frozen=True)
 class RuleRecord:
-    """
-    Records one relationship rule.
-    """
+    """Record a relationship rule."""
 
     name: str
     output_dataset: str
@@ -49,9 +51,7 @@ class RuleRecord:
 
 @dataclass(frozen=True)
 class OutputRecord:
-    """
-    Records a produced output (e.g., relationship outputs, cpg outputs).
-    """
+    """Record a produced output (e.g., relationship outputs, cpg outputs)."""
 
     name: str
     rows: int | None = None
@@ -60,9 +60,7 @@ class OutputRecord:
 
 @dataclass(frozen=True)
 class Manifest:
-    """
-    Top-level manifest record.
-    """
+    """Top-level manifest record."""
 
     manifest_version: int
     created_at_unix_s: int
@@ -76,15 +74,47 @@ class Manifest:
     rules: list[RuleRecord] = field(default_factory=list)
     outputs: list[OutputRecord] = field(default_factory=list)
 
-    repro: dict[str, Any] = field(default_factory=dict)
-    notes: dict[str, Any] = field(default_factory=dict)
+    repro: JsonDict = field(default_factory=dict)
+    notes: JsonDict = field(default_factory=dict)
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> JsonDict:
+        """Convert the manifest to a plain dictionary.
+
+        Returns
+        -------
+        JsonDict
+            Manifest data as a dictionary.
+        """
         return asdict(self)
 
 
-def _ensure_dir(path: str) -> None:
-    pathlib.Path(path).mkdir(exist_ok=True, parents=True)
+@dataclass(frozen=True)
+class ManifestContext:
+    """Core context fields for manifest construction."""
+
+    repo_root: str | None
+    relspec_mode: str
+    work_dir: str | None
+    output_dir: str | None
+
+
+@dataclass(frozen=True)
+class ManifestData:
+    """Optional inputs used to populate manifest records."""
+
+    relspec_input_tables: Mapping[str, pa.Table] | None = None
+    relspec_input_locations: Mapping[str, DatasetLocation] | None = None
+    relationship_outputs: Mapping[str, pa.Table] | None = None
+    cpg_nodes: pa.Table | None = None
+    cpg_edges: pa.Table | None = None
+    cpg_props: pa.Table | None = None
+    relationship_rules: Sequence[RelationshipRule] | None = None
+    produced_relationship_output_names: Sequence[str] | None = None
+    notes: JsonDict | None = None
+
+
+def _ensure_dir(path: Path) -> None:
+    path.mkdir(exist_ok=True, parents=True)
 
 
 def _dataset_record_from_table(
@@ -93,21 +123,21 @@ def _dataset_record_from_table(
     kind: str,
     table: pa.Table | None,
     path: str | None = None,
-    format: str | None = None,
+    data_format: str | None = None,
 ) -> DatasetRecord:
     if table is None:
-        return DatasetRecord(name=name, kind=kind, path=path, format=format)
+        return DatasetRecord(name=name, kind=kind, path=path, format=data_format)
 
     summ = table_summary(table)
     return DatasetRecord(
         name=name,
         kind=kind,
         path=path,
-        format=format,
-        rows=summ.get("rows"),
-        columns=summ.get("columns"),
-        schema_fingerprint=summ.get("schema_fingerprint"),
-        schema=summ.get("schema"),
+        format=data_format,
+        rows=summ["rows"],
+        columns=summ["columns"],
+        schema_fingerprint=summ["schema_fingerprint"],
+        schema=summ["schema"],
     )
 
 
@@ -121,136 +151,153 @@ def _output_record_from_table(name: str, table: pa.Table | None) -> OutputRecord
     )
 
 
-def build_manifest(
-    *,
-    repo_root: str | None,
-    relspec_mode: str,
-    work_dir: str | None,
-    output_dir: str | None,
-    # relationship inputs (tables) and (optional) persisted locations
-    relspec_input_tables: Mapping[str, pa.Table] | None = None,
-    relspec_input_locations: Mapping[str, Any] | None = None,  # DatasetLocation-like objects
-    # relationship outputs (tables)
-    relationship_outputs: Mapping[str, pa.Table] | None = None,
-    # final outputs
-    cpg_nodes: pa.Table | None = None,
-    cpg_edges: pa.Table | None = None,
-    cpg_props: pa.Table | None = None,
-    # rule metadata
-    relationship_rules: Sequence[Any] | None = None,  # RelationshipRule-like objects
-    produced_relationship_output_names: Sequence[str] | None = None,
-    # extra notes
-    notes: dict[str, Any] | None = None,
-) -> Manifest:
-    """
-    Construct a run manifest with the required fields:
+def _collect_relationship_inputs(data: ManifestData) -> list[DatasetRecord]:
+    if not data.relspec_input_tables:
+        return []
+
+    records: list[DatasetRecord] = []
+    for name, table in data.relspec_input_tables.items():
+        loc = data.relspec_input_locations.get(name) if data.relspec_input_locations else None
+        path = str(loc.path) if loc is not None else None
+        fmt = loc.format if loc is not None else None
+        records.append(
+            _dataset_record_from_table(
+                name=name,
+                kind="relationship_input",
+                table=table,
+                path=path,
+                data_format=fmt,
+            )
+        )
+    return records
+
+
+def _collect_relationship_outputs(
+    data: ManifestData,
+) -> tuple[list[DatasetRecord], list[OutputRecord]]:
+    if not data.relationship_outputs:
+        return [], []
+
+    datasets: list[DatasetRecord] = []
+    outputs: list[OutputRecord] = []
+    for name, table in data.relationship_outputs.items():
+        datasets.append(
+            _dataset_record_from_table(name=name, kind="relationship_output", table=table)
+        )
+        outputs.append(_output_record_from_table(name=name, table=table))
+    return datasets, outputs
+
+
+def _collect_cpg_outputs(data: ManifestData) -> tuple[list[DatasetRecord], list[OutputRecord]]:
+    datasets: list[DatasetRecord] = []
+    outputs: list[OutputRecord] = []
+
+    if data.cpg_nodes is not None:
+        datasets.append(
+            _dataset_record_from_table(name="cpg_nodes", kind="cpg_output", table=data.cpg_nodes)
+        )
+        outputs.append(_output_record_from_table("cpg_nodes", data.cpg_nodes))
+    if data.cpg_edges is not None:
+        datasets.append(
+            _dataset_record_from_table(name="cpg_edges", kind="cpg_output", table=data.cpg_edges)
+        )
+        outputs.append(_output_record_from_table("cpg_edges", data.cpg_edges))
+    if data.cpg_props is not None:
+        datasets.append(
+            _dataset_record_from_table(name="cpg_props", kind="cpg_output", table=data.cpg_props)
+        )
+        outputs.append(_output_record_from_table("cpg_props", data.cpg_props))
+    return datasets, outputs
+
+
+def _collect_rule_records(data: ManifestData) -> list[RuleRecord]:
+    if not data.relationship_rules:
+        return []
+
+    return [
+        RuleRecord(
+            name=str(rule.name),
+            output_dataset=str(rule.output_dataset),
+            kind=str(rule.kind),
+            contract_name=rule.contract_name,
+            priority=int(rule.priority),
+            inputs=[dref.name for dref in rule.inputs],
+        )
+        for rule in data.relationship_rules
+    ]
+
+
+def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
+    """Construct a run manifest with the required fields.
+
+    Includes:
       - dataset paths (when available)
       - schema fingerprints
       - row counts
       - rule outputs produced
+
+    Returns
+    -------
+    Manifest
+        Manifest record for the current run.
     """
     now = int(time.time())
 
-    datasets: list[DatasetRecord] = []
-    outputs: list[OutputRecord] = []
-    rules: list[RuleRecord] = []
+    datasets = _collect_relationship_inputs(data)
 
-    # Relationship inputs
-    if relspec_input_tables:
-        for name, t in relspec_input_tables.items():
-            loc = None
-            if relspec_input_locations and name in relspec_input_locations:
-                loc = relspec_input_locations[name]
-            path = getattr(loc, "path", None) if loc is not None else None
-            fmt = getattr(loc, "format", None) if loc is not None else None
-            datasets.append(
-                _dataset_record_from_table(
-                    name=name,
-                    kind="relationship_input",
-                    table=t,
-                    path=str(path) if path is not None else None,
-                    format=str(fmt) if fmt is not None else None,
-                )
-            )
+    rel_datasets, rel_outputs = _collect_relationship_outputs(data)
+    datasets.extend(rel_datasets)
+    outputs = list(rel_outputs)
 
-    # Relationship outputs
-    if relationship_outputs:
-        for name, t in relationship_outputs.items():
-            datasets.append(
-                _dataset_record_from_table(name=name, kind="relationship_output", table=t)
-            )
-            outputs.append(_output_record_from_table(name=name, table=t))
+    cpg_datasets, cpg_outputs = _collect_cpg_outputs(data)
+    datasets.extend(cpg_datasets)
+    outputs.extend(cpg_outputs)
 
-    # CPG outputs
-    if cpg_nodes is not None:
-        datasets.append(
-            _dataset_record_from_table(name="cpg_nodes", kind="cpg_output", table=cpg_nodes)
-        )
-        outputs.append(_output_record_from_table("cpg_nodes", cpg_nodes))
-    if cpg_edges is not None:
-        datasets.append(
-            _dataset_record_from_table(name="cpg_edges", kind="cpg_output", table=cpg_edges)
-        )
-        outputs.append(_output_record_from_table("cpg_edges", cpg_edges))
-    if cpg_props is not None:
-        datasets.append(
-            _dataset_record_from_table(name="cpg_props", kind="cpg_output", table=cpg_props)
-        )
-        outputs.append(_output_record_from_table("cpg_props", cpg_props))
+    rules = _collect_rule_records(data)
 
-    # Rule metadata
-    if relationship_rules:
-        for r in relationship_rules:
-            # RelationshipRule-like object
-            rules.append(
-                RuleRecord(
-                    name=str(getattr(r, "name", "")),
-                    output_dataset=str(getattr(r, "output_dataset", "")),
-                    kind=str(getattr(r, "kind", "")),
-                    contract_name=getattr(r, "contract_name", None),
-                    priority=int(getattr(r, "priority", 0)),
-                    inputs=[str(getattr(dref, "name", dref)) for dref in getattr(r, "inputs", [])],
-                )
-            )
-
-    # Record which outputs were produced (even if you didn't capture tables)
-    if produced_relationship_output_names:
+    if data.produced_relationship_output_names:
         outputs.append(
             OutputRecord(
                 name="produced_relationship_outputs",
-                rows=len(list(produced_relationship_output_names)),
+                rows=len(data.produced_relationship_output_names),
             )
         )
 
-    repro = collect_repro_info(repo_root)
+    repro = collect_repro_info(context.repo_root)
+    notes = dict(data.notes) if data.notes else {}
 
     return Manifest(
         manifest_version=1,
         created_at_unix_s=now,
-        repo_root=repo_root,
-        relspec_mode=relspec_mode,
-        work_dir=work_dir,
-        output_dir=output_dir,
+        repo_root=context.repo_root,
+        relspec_mode=context.relspec_mode,
+        work_dir=context.work_dir,
+        output_dir=context.output_dir,
         datasets=datasets,
         rules=sorted(rules, key=lambda rr: (rr.output_dataset, rr.priority, rr.name)),
         outputs=outputs,
         repro=repro,
-        notes=dict(notes or {}),
+        notes=notes,
     )
 
 
 def write_manifest_json(
-    manifest: Manifest | dict[str, Any], path: str, *, overwrite: bool = True
+    manifest: Manifest | JsonDict, path: PathLike, *, overwrite: bool = True
 ) -> str:
+    """Write manifest JSON to the provided path.
+
+    Returns
+    -------
+    str
+        Path to the written JSON file.
     """
-    Write manifest JSON to `path`.
-    """
-    _ensure_dir(os.path.dirname(path) or ".")
-    if overwrite and pathlib.Path(path).exists():
-        pathlib.Path(path).unlink()
+    target = ensure_path(path)
+    _ensure_dir(target.parent)
+    if overwrite and target.exists():
+        target.unlink()
 
     payload = manifest.to_dict() if isinstance(manifest, Manifest) else manifest
-    with pathlib.Path(path).open("w", encoding="utf-8") as f:
+    with target.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False, sort_keys=True)
 
-    return path
+    return str(target)

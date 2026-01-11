@@ -13,7 +13,6 @@
     ".ruff_cache",
     ".pytest_cache",
     "docs/**",
-    "tests/fixtures/heuristics/**"
   ],
   "extraPaths": [
     ".",

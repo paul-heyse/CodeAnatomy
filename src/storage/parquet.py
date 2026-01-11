@@ -1,14 +1,17 @@
+"""Parquet read/write helpers for Arrow tables."""
+
 from __future__ import annotations
 
-import os
-import pathlib
 import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
+
+from core_types import PathLike, ensure_path
 
 
 @dataclass(frozen=True)
@@ -31,102 +34,122 @@ class ParquetWriteOptions:
     allow_truncated_timestamps: bool = True
 
 
-def _ensure_dir(path: str) -> None:
-    pathlib.Path(path).mkdir(exist_ok=True, parents=True)
+def _ensure_dir(path: Path) -> None:
+    path.mkdir(exist_ok=True, parents=True)
 
 
-def _rm_tree(path: str) -> None:
-    if pathlib.Path(path).exists():
+def _rm_tree(path: Path) -> None:
+    if path.exists():
         shutil.rmtree(path)
 
 
 def write_table_parquet(
     table: pa.Table,
-    path: str,
+    path: PathLike,
     *,
-    opts: ParquetWriteOptions = ParquetWriteOptions(),
+    opts: ParquetWriteOptions | None = None,
     overwrite: bool = True,
 ) -> str:
+    """Write a single Parquet file to a path.
+
+    Returns
+    -------
+    str
+        Path to the written Parquet file.
     """
-    Write a single Parquet file to `path`.
-    """
-    _ensure_dir(os.path.dirname(path) or ".")
-    if overwrite and pathlib.Path(path).exists():
-        pathlib.Path(path).unlink()
+    options = opts or ParquetWriteOptions()
+    target = ensure_path(path)
+    _ensure_dir(target.parent)
+    if overwrite and target.exists():
+        target.unlink()
 
     pq.write_table(
         table,
-        path,
-        compression=opts.compression,
-        use_dictionary=opts.use_dictionary,
-        write_statistics=opts.write_statistics,
-        data_page_size=opts.data_page_size,
-        allow_truncated_timestamps=opts.allow_truncated_timestamps,
+        str(target),
+        compression=options.compression,
+        use_dictionary=options.use_dictionary,
+        write_statistics=options.write_statistics,
+        data_page_size=options.data_page_size,
+        allow_truncated_timestamps=options.allow_truncated_timestamps,
     )
-    return path
+    return str(target)
 
 
 def write_dataset_parquet(
     table: pa.Table,
-    base_dir: str,
+    base_dir: PathLike,
     *,
-    opts: ParquetWriteOptions = ParquetWriteOptions(),
+    opts: ParquetWriteOptions | None = None,
     overwrite: bool = True,
     basename_template: str = "part-{i}.parquet",
 ) -> str:
-    """
-    Write a Parquet *dataset directory* (multiple files) at `base_dir`.
+    """Write a Parquet dataset directory to base_dir.
 
     This is the preferred storage form when you intend to scan with:
       pyarrow.dataset.dataset(base_dir, format="parquet")
+
+    Returns
+    -------
+    str
+        Dataset directory path.
     """
+    options = opts or ParquetWriteOptions()
+    base_path = ensure_path(base_dir)
     if overwrite:
-        _rm_tree(base_dir)
-    _ensure_dir(base_dir)
+        _rm_tree(base_path)
+    _ensure_dir(base_path)
 
     # ds.write_dataset handles chunking into multiple files.
     ds.write_dataset(
         data=table,
-        base_dir=base_dir,
+        base_dir=str(base_path),
         format="parquet",
         basename_template=basename_template,
-        max_rows_per_file=opts.max_rows_per_file,
+        max_rows_per_file=options.max_rows_per_file,
         existing_data_behavior="overwrite_or_ignore" if not overwrite else "delete_matching",
         file_options=ds.ParquetFileFormat().make_write_options(
-            compression=opts.compression,
-            use_dictionary=opts.use_dictionary,
-            write_statistics=opts.write_statistics,
-            data_page_size=opts.data_page_size,
+            compression=options.compression,
+            use_dictionary=options.use_dictionary,
+            write_statistics=options.write_statistics,
+            data_page_size=options.data_page_size,
         ),
     )
-    return base_dir
+    return str(base_path)
 
 
-def read_table_parquet(path: str) -> pa.Table:
+def read_table_parquet(path: PathLike) -> pa.Table:
+    """Read a single Parquet file into a table.
+
+    Returns
+    -------
+    pa.Table
+        Loaded table.
     """
-    Read a single Parquet file to a Table.
-    """
-    return pq.read_table(path)
+    return pq.read_table(str(ensure_path(path)))
 
 
 def write_named_datasets_parquet(
     datasets: Mapping[str, pa.Table],
-    base_dir: str,
+    base_dir: PathLike,
     *,
-    opts: ParquetWriteOptions = ParquetWriteOptions(),
+    opts: ParquetWriteOptions | None = None,
     overwrite: bool = True,
 ) -> dict[str, str]:
-    """
-    Write a set of named tables to:
+    """Write named tables to per-dataset Parquet directories.
 
       base_dir/<dataset_name>/part-*.parquet
 
-    Returns {dataset_name: dataset_dir_path}.
+    Returns
+    -------
+    dict[str, str]
+        Mapping of dataset name to dataset directory path.
     """
-    _ensure_dir(base_dir)
+    options = opts or ParquetWriteOptions()
+    base_path = ensure_path(base_dir)
+    _ensure_dir(base_path)
     out: dict[str, str] = {}
     for name, table in datasets.items():
-        ds_dir = os.path.join(base_dir, name)
-        write_dataset_parquet(table, ds_dir, opts=opts, overwrite=overwrite)
-        out[name] = ds_dir
+        ds_dir = base_path / name
+        write_dataset_parquet(table, ds_dir, opts=options, overwrite=overwrite)
+        out[name] = str(ds_dir)
     return out

@@ -1,26 +1,25 @@
+"""Declarative query specs for dataset scans and projections."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Union
 
-if TYPE_CHECKING:  # pragma: no cover
-    import pyarrow.compute as pc
+import pyarrow.compute as pc
 
-
-ColumnsSpec = Union[Sequence[str], Mapping[str, "pc.Expression"]]
+type ColumnsSpec = Sequence[str] | Mapping[str, pc.Expression]
 
 
 @dataclass(frozen=True)
 class ProjectionSpec:
     """Defines the scan projection.
 
+    Parameters
+    ----------
     base:
-      Base dataset columns (read as-is).
-
+        Base dataset columns (read as-is).
     derived:
-      Derived columns computed at scan time (when supported) and repeated in the
-      plan-time Project node for semantic consistency.
+        Derived columns computed at scan time, when supported.
     """
 
     base: tuple[str, ...]
@@ -36,17 +35,22 @@ class QuerySpec:
     pushdown_predicate: pc.Expression | None = None
 
     def scan_columns(self, *, provenance: bool) -> ColumnsSpec:
-        """Return columns spec for ds.Scanner/ScanNodeOptions.
+        """Return the scan column spec for Arrow scanners.
 
-        If provenance or derived columns are requested, returns a dict mapping output
-        names to Expressions; otherwise returns a simple list of column names.
+        Parameters
+        ----------
+        provenance:
+            When ``True``, include provenance columns.
+
+        Returns
+        -------
+        ColumnsSpec
+            Column spec for scanners or scan nodes.
         """
-        import pyarrow.compute as pc
-
         if not provenance and not self.projection.derived:
             return list(self.projection.base)
 
-        cols: dict[str, pc.Expression] = {c: pc.field(c) for c in self.projection.base}
+        cols: dict[str, pc.Expression] = {col: pc.field(col) for col in self.projection.base}
         cols.update(dict(self.projection.derived))
 
         if provenance:
@@ -66,6 +70,22 @@ class QuerySpec:
         predicate: pc.Expression | None = None,
         pushdown_predicate: pc.Expression | None = None,
     ) -> QuerySpec:
+        """Build a simple QuerySpec from column names.
+
+        Parameters
+        ----------
+        *cols:
+            Base column names.
+        predicate:
+            Optional in-plan predicate.
+        pushdown_predicate:
+            Optional pushdown predicate for scanning.
+
+        Returns
+        -------
+        QuerySpec
+            Query specification instance.
+        """
         return QuerySpec(
             projection=ProjectionSpec(base=tuple(cols)),
             predicate=predicate,

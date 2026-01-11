@@ -1,39 +1,32 @@
+"""CPG node and edge kind enumerations."""
+
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 
-class EntityKind(str, Enum):
+class EntityKind(StrEnum):
+    """Define entity kinds for properties tables."""
+
     NODE = "node"
     EDGE = "edge"
 
 
-class NodeKind(str, Enum):
-    """
-    Minimal, CPG-focused Python node kinds.
-
-    Design principle:
-      - node_id is globally stable across runs
-      - spans (path,bstart,bend) exist for code-anchored nodes
-      - “semantic payload” lives in cpg_props, not in cpg_nodes
-    """
+class NodeKind(StrEnum):
+    """Define minimal Python node kinds for the CPG."""
 
     PY_FILE = "PY_FILE"
-    PY_MODULE = "PY_MODULE"  # optional (from manifest/module_fqn)
-    PY_SYMBOL = "PY_SYMBOL"  # SCIP symbol string
-    PY_QUALIFIED_NAME = "PY_QUALIFIED_NAME"  # QNP / dim_qualified_names
-    PY_NAME_REF = "PY_NAME_REF"  # LibCST Name token ref
-    PY_IMPORT_ALIAS = "PY_IMPORT_ALIAS"  # LibCST ImportAlias/ImportFrom alias
-    PY_CALLSITE = "PY_CALLSITE"  # LibCST Call expression
-    PY_DEF = "PY_DEF"  # LibCST FunctionDef/ClassDef
+    PY_MODULE = "PY_MODULE"
+    PY_SYMBOL = "PY_SYMBOL"
+    PY_QUALIFIED_NAME = "PY_QUALIFIED_NAME"
+    PY_NAME_REF = "PY_NAME_REF"
+    PY_IMPORT_ALIAS = "PY_IMPORT_ALIAS"
+    PY_CALLSITE = "PY_CALLSITE"
+    PY_DEF = "PY_DEF"
 
 
-class EdgeKind(str, Enum):
-    """
-    Edge kinds implementing the “final edge emission rules”.
-
-    These are intentionally small and composable.
-    """
+class EdgeKind(StrEnum):
+    """Define edge kinds for CPG relationships."""
 
     PY_DEFINES_SYMBOL = "PY_DEFINES_SYMBOL"
     PY_REFERENCES_SYMBOL = "PY_REFERENCES_SYMBOL"
@@ -41,12 +34,10 @@ class EdgeKind(str, Enum):
     PY_WRITES_SYMBOL = "PY_WRITES_SYMBOL"
     PY_IMPORTS_SYMBOL = "PY_IMPORTS_SYMBOL"
 
-    # Call graph
-    PY_CALLS_SYMBOL = "PY_CALLS_SYMBOL"  # preferred
-    PY_CALLS_QUALIFIED_NAME = "PY_CALLS_QUALIFIED_NAME"  # fallback (ambiguity-preserving)
+    PY_CALLS_SYMBOL = "PY_CALLS_SYMBOL"
+    PY_CALLS_QUALIFIED_NAME = "PY_CALLS_QUALIFIED_NAME"
 
 
-# SCIP symbol_roles bitmask constants (as used by scip-python)
 SCIP_ROLE_DEFINITION = 1
 SCIP_ROLE_IMPORT = 2
 SCIP_ROLE_WRITE = 4

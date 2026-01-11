@@ -59,10 +59,11 @@ dependencies = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py313"
+target-version = "py314"
 required-version = ">=0.14.8"
 output-format = "grouped"
 src = ["src"]
+extend-exclude = ["docs/**"]
 
 [tool.ruff.lint.per-file-ignores]
 

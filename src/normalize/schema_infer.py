@@ -1,3 +1,5 @@
+"""Infer and align Arrow schemas across extraction tables."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -5,17 +7,15 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 import pyarrow.compute as pc
+import pyarrow.types as patypes
 
 
 @dataclass(frozen=True)
 class SchemaInferOptions:
-    """
-    Schema inference & alignment policy.
+    """Schema inference and alignment policy.
 
-    promote_options="permissive" is the key setting that makes this system robust to:
-      - missing columns
-      - columns that change type across partitions/sources
-      - partial extraction results
+    promote_options="permissive" is the key setting that makes this system robust to
+    missing columns, type drift, and partial extraction results.
     """
 
     promote_options: str = "permissive"
@@ -26,13 +26,17 @@ class SchemaInferOptions:
 def unify_schemas(
     schemas: Sequence[pa.Schema], opts: SchemaInferOptions | None = None
 ) -> pa.Schema:
-    """
-    Unify schemas across tables/fragments with permissive promotion.
+    """Unify schemas across tables or fragments with permissive promotion.
 
     Notes
     -----
       - pa.unify_schemas supports promote_options in modern pyarrow.
       - we fall back if the runtime pyarrow is older.
+
+    Returns
+    -------
+    pa.Schema
+        Unified schema.
     """
     opts = opts or SchemaInferOptions()
     if not schemas:
@@ -48,8 +52,12 @@ def unify_schemas(
 def infer_schema_from_tables(
     tables: Sequence[pa.Table], opts: SchemaInferOptions | None = None
 ) -> pa.Schema:
-    """
-    Computes a unified schema for a set of tables.
+    """Compute a unified schema for a set of tables.
+
+    Returns
+    -------
+    pa.Schema
+        Unified schema inferred from the input tables.
     """
     opts = opts or SchemaInferOptions()
     schemas = [t.schema for t in tables if t is not None]
@@ -66,14 +74,20 @@ def align_table_to_schema(
     *,
     opts: SchemaInferOptions | None = None,
 ) -> pa.Table:
-    """
-    Align `table` to `schema` by:
+    """Align a table to a target schema.
+
+    Aligns the table by:
       - adding missing columns as nulls
       - casting existing columns to the target types (safe_cast configurable)
       - optionally dropping extra columns
       - ensuring the output column order matches schema
 
     This is a foundational building block for “inference-driven, schema-flexible” pipelines.
+
+    Returns
+    -------
+    pa.Table
+        Table aligned to the provided schema.
     """
     opts = opts or SchemaInferOptions()
     n = table.num_rows
@@ -92,7 +106,7 @@ def align_table_to_schema(
             continue
 
         col = table[name]
-        if pa.types.is_null(col.type):
+        if patypes.is_null(col.type):
             out_arrays.append(_nulls(n, typ))
             continue
 
@@ -104,9 +118,7 @@ def align_table_to_schema(
         try:
             casted = pc.cast(col, typ, safe=opts.safe_cast)
             out_arrays.append(casted)
-        except Exception:
-            # best-effort: if cast fails, keep original and let downstream handle it
-            # (or you can choose to null it out)
+        except (pa.ArrowInvalid, pa.ArrowTypeError):
             out_arrays.append(col)
 
     out = pa.Table.from_arrays(out_arrays, names=out_names)
@@ -125,8 +137,12 @@ def align_tables_to_unified_schema(
     *,
     opts: SchemaInferOptions | None = None,
 ) -> tuple[pa.Schema, list[pa.Table]]:
-    """
-    Convenience: infer unified schema and align all tables to it.
+    """Infer a unified schema and align all tables to it.
+
+    Returns
+    -------
+    tuple[pa.Schema, list[pa.Table]]
+        Unified schema and aligned tables.
     """
     opts = opts or SchemaInferOptions()
     schema = infer_schema_from_tables(list(tables), opts=opts)

@@ -1,38 +1,36 @@
-"""Arrow table kernels for sorting, deduplication, and list helpers."""
+"""Kernel-lane transforms for Arrow tables."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import Literal
 
-from .contracts import DedupeSpec, SortKey
-from .runtime import DeterminismTier, ExecutionContext
+import pyarrow as pa
+import pyarrow.compute as pc
 
-if TYPE_CHECKING:  # pragma: no cover
-    import pyarrow as pa
+from arrowdsl.contracts import DedupeSpec, SortKey
+from arrowdsl.runtime import DeterminismTier, ExecutionContext
 
 
 def _sort_key_tuples(sort_keys: Sequence[SortKey]) -> list[tuple[str, str]]:
-    """Build sort key tuples for Arrow sort_indices.
-
-    Returns
-    -------
-    list[tuple[str, str]]
-        Sort key tuples in (column, order) form.
-    """
     return [(sk.column, sk.order) for sk in sort_keys]
 
 
 def canonical_sort(table: pa.Table, *, sort_keys: Sequence[SortKey]) -> pa.Table:
-    """Return a stable canonical ordering using sort indices.
+    """Return a canonically ordered table using stable sort indices.
+
+    Parameters
+    ----------
+    table:
+        Input table to sort.
+    sort_keys:
+        Sort keys for canonical ordering.
 
     Returns
     -------
-    pa.Table
-        Sorted table when sort keys are provided.
+    pyarrow.Table
+        Sorted table.
     """
-    import pyarrow.compute as pc
-
     if not sort_keys:
         return table
     idx = pc.sort_indices(table, sort_keys=_sort_key_tuples(sort_keys))
@@ -40,14 +38,26 @@ def canonical_sort(table: pa.Table, *, sort_keys: Sequence[SortKey]) -> pa.Table
 
 
 def canonical_sort_if_canonical(
-    table: pa.Table, *, sort_keys: Sequence[SortKey], ctx: ExecutionContext
+    table: pa.Table,
+    *,
+    sort_keys: Sequence[SortKey],
+    ctx: ExecutionContext,
 ) -> pa.Table:
-    """Sort only when determinism tier requires canonical ordering.
+    """Sort only when determinism is canonical.
+
+    Parameters
+    ----------
+    table:
+        Input table to sort.
+    sort_keys:
+        Sort keys for canonical ordering.
+    ctx:
+        Execution context controlling determinism tier.
 
     Returns
     -------
-    pa.Table
-        Sorted table when canonical determinism is enabled.
+    pyarrow.Table
+        Sorted table when canonical; otherwise unchanged.
     """
     if ctx.determinism == DeterminismTier.CANONICAL and sort_keys:
         return canonical_sort(table, sort_keys=sort_keys)
@@ -55,23 +65,36 @@ def canonical_sort_if_canonical(
 
 
 def dedupe_keep_first_after_sort(
-    table: pa.Table, *, keys: Sequence[str], tie_breakers: Sequence[SortKey]
+    table: pa.Table,
+    *,
+    keys: Sequence[str],
+    tie_breakers: Sequence[SortKey],
 ) -> pa.Table:
-    """Select the first row per key after a stable sort.
+    """Select the first row per key after stable sorting.
+
+    Parameters
+    ----------
+    table:
+        Input table.
+    keys:
+        Key columns for dedupe groups.
+    tie_breakers:
+        Additional sort keys for deterministic ordering.
 
     Returns
     -------
-    pa.Table
-        Table with one row per key.
+    pyarrow.Table
+        Deduplicated table.
+
     """
     if not keys:
         return table
 
-    sort_keys = [SortKey(k, "ascending") for k in keys] + list(tie_breakers)
+    sort_keys = [SortKey(key, "ascending") for key in keys] + list(tie_breakers)
     t_sorted = canonical_sort(table, sort_keys=sort_keys)
 
-    non_keys = [c for c in t_sorted.column_names if c not in keys]
-    aggs = [(c, "first") for c in non_keys]
+    non_keys = [col for col in t_sorted.column_names if col not in keys]
+    aggs = [(col, "first") for col in non_keys]
     out = t_sorted.group_by(list(keys), use_threads=False).aggregate(aggs)
 
     new_names: list[str] = []
@@ -84,17 +107,25 @@ def dedupe_keep_first_after_sort(
 
 
 def dedupe_keep_arbitrary(table: pa.Table, *, keys: Sequence[str]) -> pa.Table:
-    """Select an arbitrary row per key.
+    """Select an arbitrary row per key (fast, non-deterministic).
+
+    Parameters
+    ----------
+    table:
+        Input table.
+    keys:
+        Key columns for dedupe groups.
 
     Returns
     -------
-    pa.Table
-        Table with one row per key.
+    pyarrow.Table
+        Deduplicated table.
+
     """
     if not keys:
         return table
-    non_keys = [c for c in table.column_names if c not in keys]
-    aggs = [(c, "first") for c in non_keys]
+    non_keys = [col for col in table.column_names if col not in keys]
+    aggs = [(col, "first") for col in non_keys]
     out = table.group_by(list(keys), use_threads=True).aggregate(aggs)
 
     new_names: list[str] = []
@@ -111,23 +142,34 @@ def dedupe_keep_best_by_score(
     *,
     keys: Sequence[str],
     score_col: str,
-    score_order: str = "descending",
+    score_order: Literal["ascending", "descending"] = "descending",
     tie_breakers: Sequence[SortKey] = (),
 ) -> pa.Table:
-    """Select best-by-score rows with deterministic tie-breaks.
+    """Select the best row per key based on a score column.
+
+    Parameters
+    ----------
+    table:
+        Input table.
+    keys:
+        Key columns for dedupe groups.
+    score_col:
+        Score column name.
+    score_order:
+        Sort order for the score ("ascending" or "descending").
+    tie_breakers:
+        Additional sort keys for deterministic ordering.
 
     Returns
     -------
-    pa.Table
-        Table with one row per key, prioritized by score.
+    pyarrow.Table
+        Deduplicated table.
 
     Raises
     ------
     KeyError
-        Raised when the aggregated score column cannot be found.
+        Raised when the aggregated score column cannot be located.
     """
-    import pyarrow.compute as pc
-
     if not keys:
         return table
 
@@ -136,17 +178,17 @@ def dedupe_keep_best_by_score(
 
     best_score_name = f"{score_col}_{agg_fn}"
     if best_score_name not in best.column_names:
-        candidates = [c for c in best.column_names if c.startswith(score_col) and c != score_col]
+        candidates = [
+            col for col in best.column_names if col.startswith(score_col) and col != score_col
+        ]
         if not candidates:
-            raise KeyError(
-                f"Could not find aggregated score column for {score_col!r} using {agg_fn!r}"
-            )
+            msg = f"Could not find aggregated score column for {score_col!r} using {agg_fn!r}."
+            raise KeyError(msg)
         best_score_name = candidates[0]
 
     joined = table.join(best, keys=list(keys), join_type="inner", use_threads=True)
-
     mask = pc.equal(joined[score_col], joined[best_score_name])
-    mask = pc.fill_null(mask, False)
+    mask = pc.fill_null(mask, replacement=False)
     filtered = joined.filter(mask).drop([best_score_name])
 
     if tie_breakers:
@@ -160,17 +202,24 @@ def dedupe_keep_best_by_score(
 
 
 def dedupe_collapse_list(table: pa.Table, *, keys: Sequence[str]) -> pa.Table:
-    """Collapse multiple rows per key into list-valued payload columns.
+    """Collapse duplicate rows into list-valued columns.
+
+    Parameters
+    ----------
+    table:
+        Input table.
+    keys:
+        Key columns for dedupe groups.
 
     Returns
     -------
-    pa.Table
-        Table with list-valued payloads per key.
+    pyarrow.Table
+        Deduplicated table with list-valued columns.
     """
     if not keys:
         return table
-    non_keys = [c for c in table.column_names if c not in keys]
-    aggs = [(c, "list") for c in non_keys]
+    non_keys = [col for col in table.column_names if col not in keys]
+    aggs = [(col, "list") for col in non_keys]
     out = table.group_by(list(keys), use_threads=False).aggregate(aggs)
 
     new_names: list[str] = []
@@ -183,19 +232,31 @@ def dedupe_collapse_list(table: pa.Table, *, keys: Sequence[str]) -> pa.Table:
 
 
 def apply_dedupe(
-    table: pa.Table, *, spec: DedupeSpec, ctx: ExecutionContext | None = None
+    table: pa.Table,
+    *,
+    spec: DedupeSpec,
+    _ctx: ExecutionContext | None = None,
 ) -> pa.Table:
-    """Apply the configured dedupe strategy to a table.
+    """Apply the configured dedupe strategy.
+
+    Parameters
+    ----------
+    table:
+        Input table.
+    spec:
+        Dedupe specification.
+    _ctx:
+        Optional execution context (reserved for future use).
 
     Returns
     -------
-    pa.Table
+    pyarrow.Table
         Deduplicated table.
 
     Raises
     ------
     ValueError
-        Raised when the strategy is unknown or misconfigured.
+        Raised when the dedupe strategy is unknown or misconfigured.
     """
     strategy = spec.strategy
     if strategy == "KEEP_FIRST_AFTER_SORT":
@@ -206,9 +267,8 @@ def apply_dedupe(
         return dedupe_collapse_list(table, keys=spec.keys)
     if strategy == "KEEP_BEST_BY_SCORE":
         if not spec.tie_breakers:
-            raise ValueError(
-                "KEEP_BEST_BY_SCORE requires tie_breakers with a score column as the first entry"
-            )
+            msg = "KEEP_BEST_BY_SCORE requires tie_breakers with a score column as the first entry."
+            raise ValueError(msg)
         score = spec.tie_breakers[0]
         rest = spec.tie_breakers[1:]
         return dedupe_keep_best_by_score(
@@ -218,12 +278,8 @@ def apply_dedupe(
             score_order=score.order,
             tie_breakers=rest,
         )
-    raise ValueError(f"Unknown dedupe strategy: {strategy!r}")
-
-
-# --------------------------
-# Nested/list helpers
-# --------------------------
+    msg = f"Unknown dedupe strategy: {strategy!r}."
+    raise ValueError(msg)
 
 
 def explode_list_column(
@@ -234,16 +290,26 @@ def explode_list_column(
     out_parent_col: str = "src_id",
     out_value_col: str = "dst_id",
 ) -> pa.Table:
-    """Explode a list column into parent/value rows.
+    """Explode a list column into parent/value pairs.
+
+    Parameters
+    ----------
+    table:
+        Input table.
+    parent_id_col:
+        Column containing parent IDs.
+    list_col:
+        Column containing list values.
+    out_parent_col:
+        Output parent column name.
+    out_value_col:
+        Output value column name.
 
     Returns
     -------
-    pa.Table
-        Table with repeated parent IDs and flattened values.
+    pyarrow.Table
+        Exploded table.
     """
-    import pyarrow as pa
-    import pyarrow.compute as pc
-
     parent_ids = table[parent_id_col]
     dst_lists = table[list_col]
     parent_idx = pc.list_parent_indices(dst_lists)

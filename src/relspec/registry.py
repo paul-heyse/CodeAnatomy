@@ -1,134 +1,283 @@
+"""Catalogs and registries for datasets, contracts, and rules."""
+
 from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Union
 
-from ..arrowdsl.contracts import Contract
-from .model import RelationshipRule
+import pyarrow.fs as pafs
 
-PathLike = Union[str, Path]
+from arrowdsl.contracts import Contract
+from relspec.model import RelationshipRule
+
+type PathLike = str | Path
 
 
 @dataclass(frozen=True)
 class DatasetLocation:
-    """
-    Where a dataset lives (filesystem-centric default).
-
-    This is intentionally light-weight; storage/format specifics can be extended later.
-    """
+    """Location metadata for a dataset."""
 
     path: PathLike
     format: str = "parquet"
     partitioning: str | None = "hive"
-    filesystem: object = None  # fsspec/pyarrow.fs filesystem, optional
+    filesystem: pafs.FileSystem | None = None
 
 
 class DatasetCatalog:
-    """
-    Maps dataset names to locations (for FilesystemPlanResolver).
-    """
+    """Map dataset names to locations for plan resolution."""
 
     def __init__(self) -> None:
         self._locs: dict[str, DatasetLocation] = {}
 
     def register(self, name: str, location: DatasetLocation) -> None:
+        """Register a dataset location.
+
+        Parameters
+        ----------
+        name:
+            Dataset name.
+        location:
+            Location metadata.
+
+        Raises
+        ------
+        ValueError
+            Raised when the dataset name is empty.
+        """
         if not name:
-            raise ValueError("DatasetCatalog.register: name must be non-empty")
+            msg = "DatasetCatalog.register: name must be non-empty."
+            raise ValueError(msg)
         self._locs[name] = location
 
     def get(self, name: str) -> DatasetLocation:
+        """Return a registered dataset location.
+
+        Parameters
+        ----------
+        name:
+            Dataset name.
+
+        Returns
+        -------
+        DatasetLocation
+            Location metadata for the dataset.
+
+        Raises
+        ------
+        KeyError
+            Raised when the dataset name is not registered.
+        """
         if name not in self._locs:
-            raise KeyError(f"DatasetCatalog: unknown dataset {name!r}")
+            msg = f"DatasetCatalog: unknown dataset {name!r}."
+            raise KeyError(msg)
         return self._locs[name]
 
     def has(self, name: str) -> bool:
+        """Return whether a dataset name is registered.
+
+        Parameters
+        ----------
+        name:
+            Dataset name.
+
+        Returns
+        -------
+        bool
+            ``True`` when the dataset is registered.
+        """
         return name in self._locs
 
     def names(self) -> list[str]:
-        return sorted(self._locs.keys())
+        """Return registered dataset names in sorted order.
+
+        Returns
+        -------
+        list[str]
+            Sorted dataset names.
+        """
+        return sorted(self._locs)
 
 
 class ContractCatalog:
-    """
-    Maps contract names to arrowdsl.Contract objects.
-    """
+    """Map contract names to ``Contract`` objects."""
 
     def __init__(self) -> None:
         self._contracts: dict[str, Contract] = {}
 
     def register(self, contract: Contract) -> None:
+        """Register a contract.
+
+        Parameters
+        ----------
+        contract:
+            Contract to register.
+        """
         self._contracts[contract.name] = contract
 
     def get(self, name: str) -> Contract:
+        """Return a registered contract by name.
+
+        Parameters
+        ----------
+        name:
+            Contract name.
+
+        Returns
+        -------
+        Contract
+            The requested contract.
+
+        Raises
+        ------
+        KeyError
+            Raised when the contract name is not registered.
+        """
         if name not in self._contracts:
-            raise KeyError(f"ContractCatalog: unknown contract {name!r}")
+            msg = f"ContractCatalog: unknown contract {name!r}."
+            raise KeyError(msg)
         return self._contracts[name]
 
     def has(self, name: str) -> bool:
+        """Return whether a contract name is registered.
+
+        Parameters
+        ----------
+        name:
+            Contract name.
+
+        Returns
+        -------
+        bool
+            ``True`` when the contract is registered.
+        """
         return name in self._contracts
 
     def names(self) -> list[str]:
-        return sorted(self._contracts.keys())
+        """Return registered contract names in sorted order.
+
+        Returns
+        -------
+        list[str]
+            Sorted contract names.
+        """
+        return sorted(self._contracts)
 
 
 class RelationshipRegistry:
-    """
-    Holds RelationshipRule objects and provides grouping utilities.
-
-    Note: it is valid for multiple rules to share the same output_dataset,
-    but if you do that you should rely on:
-      - output contract dedupe keys + tie-breakers (including rule_priority)
-      - OR introduce an explicit UNION_ALL rule.
-    """
+    """Hold relationship rules and provide grouping utilities."""
 
     def __init__(self) -> None:
         self._rules_by_name: dict[str, RelationshipRule] = {}
 
     def add(self, rule: RelationshipRule) -> None:
+        """Add a validated relationship rule.
+
+        Parameters
+        ----------
+        rule:
+            Relationship rule to add.
+
+        Raises
+        ------
+        ValueError
+            Raised when the rule name is duplicated.
+        """
         rule.validate()
         if rule.name in self._rules_by_name:
-            raise ValueError(f"Duplicate rule name: {rule.name!r}")
+            msg = f"Duplicate rule name: {rule.name!r}."
+            raise ValueError(msg)
         self._rules_by_name[rule.name] = rule
 
     def extend(self, rules: Iterable[RelationshipRule]) -> None:
-        for r in rules:
-            self.add(r)
+        """Add multiple relationship rules.
+
+        Parameters
+        ----------
+        rules:
+            Iterable of rules to add.
+        """
+        for rule in rules:
+            self.add(rule)
 
     def get(self, name: str) -> RelationshipRule:
+        """Return a rule by name.
+
+        Parameters
+        ----------
+        name:
+            Rule name.
+
+        Returns
+        -------
+        RelationshipRule
+            The requested rule.
+        """
         return self._rules_by_name[name]
 
     def rules(self) -> list[RelationshipRule]:
-        return [self._rules_by_name[n] for n in sorted(self._rules_by_name.keys())]
+        """Return all rules in sorted order.
+
+        Returns
+        -------
+        list[RelationshipRule]
+            Rules sorted by name.
+        """
+        return [self._rules_by_name[name] for name in sorted(self._rules_by_name)]
 
     def by_output(self) -> dict[str, list[RelationshipRule]]:
+        """Group rules by output dataset with deterministic ordering.
+
+        Returns
+        -------
+        dict[str, list[RelationshipRule]]
+            Mapping of output dataset to rules.
+        """
         out: dict[str, list[RelationshipRule]] = {}
-        for r in self._rules_by_name.values():
-            out.setdefault(r.output_dataset, []).append(r)
-        # deterministic ordering
-        for k in list(out.keys()):
-            out[k] = sorted(out[k], key=lambda rr: (rr.priority, rr.name))
+        for rule in self._rules_by_name.values():
+            out.setdefault(rule.output_dataset, []).append(rule)
+        for key in list(out.keys()):
+            out[key] = sorted(out[key], key=lambda rr: (rr.priority, rr.name))
         return out
 
     def outputs(self) -> list[str]:
-        return sorted({r.output_dataset for r in self._rules_by_name.values()})
+        """Return output dataset names referenced by rules.
+
+        Returns
+        -------
+        list[str]
+            Sorted output dataset names.
+        """
+        return sorted({rule.output_dataset for rule in self._rules_by_name.values()})
 
     def inputs(self) -> list[str]:
-        s = set()
-        for r in self._rules_by_name.values():
-            for dref in r.inputs:
-                s.add(dref.name)
-        return sorted(s)
+        """Return input dataset names referenced by rules.
+
+        Returns
+        -------
+        list[str]
+            Sorted input dataset names.
+        """
+        names: set[str] = set()
+        for rule in self._rules_by_name.values():
+            for dref in rule.inputs:
+                names.add(dref.name)
+        return sorted(names)
 
     def validate_contract_consistency(self) -> None:
+        """Enforce consistent contract names for shared outputs.
+
+        Raises
+        ------
+        ValueError
+            Raised when contract names differ across rules for an output dataset.
         """
-        Enforce that if multiple rules produce the same output_dataset, they declare the same contract_name.
-        """
-        by_out = self.by_output()
-        for out_name, rules in by_out.items():
-            contracts = {r.contract_name for r in rules}
+        for out_name, rules in self.by_output().items():
+            contracts = {rule.contract_name for rule in rules}
             if len(contracts) > 1:
-                raise ValueError(
-                    f"Output {out_name!r} has inconsistent contract_name across rules: {sorted(map(str, contracts))}"
+                msg = (
+                    "Output "
+                    f"{out_name!r} has inconsistent contract_name across rules: "
+                    f"{sorted(map(str, contracts))}."
                 )
+                raise ValueError(msg)

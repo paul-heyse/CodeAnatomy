@@ -1,24 +1,27 @@
+"""Runtime execution profiles and context settings."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
-from typing import Any
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Literal
+
+import pyarrow as pa
+
+type OrderingKey = tuple[str, str]
 
 
-class DeterminismTier(str, Enum):
-    """Determinism budgets for the pipeline.
-
-    CANONICAL: deterministic row order + winner selection (suitable for snapshots/caching).
-    STABLE_SET: stable set of rows, but ordering may differ unless a contract requires sorting.
-    BEST_EFFORT: prioritize throughput; only enforce ordering if explicitly requested by contract.
-    """
+class DeterminismTier(StrEnum):
+    """Determinism budgets for the pipeline."""
 
     CANONICAL = "canonical"
     STABLE_SET = "stable_set"
     BEST_EFFORT = "best_effort"
 
 
-class OrderingLevel(str, Enum):
+class OrderingLevel(StrEnum):
+    """Ordering metadata levels."""
+
     UNORDERED = "unordered"
     IMPLICIT = "implicit"
     EXPLICIT = "explicit"
@@ -26,30 +29,61 @@ class OrderingLevel(str, Enum):
 
 @dataclass(frozen=True)
 class Ordering:
-    """Lightweight ordering metadata propagated through Plan operations.
+    """Ordering metadata propagated through Plan operations.
 
-    keys is a tuple of (column_name, order) pairs.
+    Parameters
+    ----------
+    level:
+        Ordering level classification.
+    keys:
+        Tuple of (column, order) pairs.
     """
 
     level: OrderingLevel = OrderingLevel.UNORDERED
-    keys: tuple[tuple[str, str], ...] = ()
+    keys: tuple[OrderingKey, ...] = ()
 
     @staticmethod
     def unordered() -> Ordering:
+        """Return an unordered ordering marker.
+
+        Returns
+        -------
+        Ordering
+            Unordered marker.
+        """
         return Ordering(OrderingLevel.UNORDERED, ())
 
     @staticmethod
     def implicit() -> Ordering:
+        """Return an implicit ordering marker.
+
+        Returns
+        -------
+        Ordering
+            Implicit ordering marker.
+        """
         return Ordering(OrderingLevel.IMPLICIT, ())
 
     @staticmethod
-    def explicit(keys: tuple[tuple[str, str], ...]) -> Ordering:
+    def explicit(keys: tuple[OrderingKey, ...]) -> Ordering:
+        """Return an explicit ordering marker.
+
+        Parameters
+        ----------
+        keys:
+            Explicit ordering keys.
+
+        Returns
+        -------
+        Ordering
+            Explicit ordering marker.
+        """
         return Ordering(OrderingLevel.EXPLICIT, tuple(keys))
 
 
 @dataclass(frozen=True)
 class ScanProfile:
-    """Central policy for dataset scanning (Scanner/ScanNodeOptions surface)."""
+    """Dataset scan policy for Arrow scanners and Acero scans."""
 
     name: str
     batch_size: int | None = None
@@ -57,13 +91,18 @@ class ScanProfile:
     fragment_readahead: int | None = None
     use_threads: bool = True
 
-    # Determinism-oriented scan knobs (Acero scan node options)
     require_sequenced_output: bool = False
     implicit_ordering: bool = False
 
-    def scanner_kwargs(self) -> dict[str, Any]:
-        """Kwargs for ds.Scanner.from_dataset (excluding columns/filter)."""
-        kw: dict[str, Any] = {"use_threads": self.use_threads}
+    def scanner_kwargs(self) -> dict[str, object]:
+        """Return kwargs for ``ds.Scanner.from_dataset``.
+
+        Returns
+        -------
+        dict[str, object]
+            Scanner keyword arguments without columns or filters.
+        """
+        kw: dict[str, object] = {"use_threads": self.use_threads}
         if self.batch_size is not None:
             kw["batch_size"] = self.batch_size
         if self.batch_readahead is not None:
@@ -72,9 +111,15 @@ class ScanProfile:
             kw["fragment_readahead"] = self.fragment_readahead
         return kw
 
-    def scan_node_kwargs(self) -> dict[str, Any]:
-        """Kwargs for acero.ScanNodeOptions (excluding dataset/columns/filter)."""
-        kw: dict[str, Any] = {}
+    def scan_node_kwargs(self) -> dict[str, object]:
+        """Return kwargs for ``acero.ScanNodeOptions``.
+
+        Returns
+        -------
+        dict[str, object]
+            Scan node keyword arguments without dataset or filters.
+        """
+        kw: dict[str, object] = {}
         if self.require_sequenced_output:
             kw["require_sequenced_output"] = True
         if self.implicit_ordering:
@@ -84,32 +129,38 @@ class ScanProfile:
 
 @dataclass(frozen=True)
 class RuntimeProfile:
-    """Bundles global threading + scan policy + plan threading + determinism defaults."""
+    """Global runtime threading + scan policy + determinism defaults."""
 
     name: str
 
-    # Global Arrow thread pools (process scope). None => leave default.
     cpu_threads: int | None = None
     io_threads: int | None = None
 
-    scan: ScanProfile = ScanProfile(name="DEFAULT")
+    scan: ScanProfile = field(default_factory=lambda: ScanProfile(name="DEFAULT"))
     plan_use_threads: bool = True
 
     determinism: DeterminismTier = DeterminismTier.BEST_EFFORT
 
     def apply_global_thread_pools(self) -> None:
-        """Set Arrow CPU + IO pools (recommended once at process startup)."""
-        try:
-            import pyarrow as pa
-        except Exception:
-            return
-
+        """Set Arrow CPU + IO thread pools."""
         if self.cpu_threads is not None:
             pa.set_cpu_count(int(self.cpu_threads))
         if self.io_threads is not None:
             pa.set_io_thread_count(int(self.io_threads))
 
     def with_determinism(self, tier: DeterminismTier) -> RuntimeProfile:
+        """Return a copy with the specified determinism tier.
+
+        Parameters
+        ----------
+        tier:
+            Determinism tier to apply.
+
+        Returns
+        -------
+        RuntimeProfile
+            Updated profile.
+        """
         return RuntimeProfile(
             name=self.name,
             cpu_threads=self.cpu_threads,
@@ -125,34 +176,57 @@ class ExecutionContext:
     """Execution-time knobs passed through the DSL."""
 
     runtime: RuntimeProfile
-
-    # Finalize behavior
-    mode: str = "tolerant"  # "strict" | "tolerant"
-
-    # Include provenance fields in scans when possible
+    mode: Literal["strict", "tolerant"] = "tolerant"
     provenance: bool = False
-
-    # Schema alignment casting
     safe_cast: bool = True
-
-    # Debug toggles
     debug: bool = False
 
     @property
     def determinism(self) -> DeterminismTier:
+        """Return the active determinism tier.
+
+        Returns
+        -------
+        DeterminismTier
+            Determinism tier for this context.
+        """
         return self.runtime.determinism
 
     @property
     def use_threads(self) -> bool:
-        """Default plan execution threading (Declaration.to_table / to_reader)."""
+        """Return whether to enable plan execution threads.
+
+        Returns
+        -------
+        bool
+            ``True`` when plan execution should use threads.
+        """
         return self.runtime.plan_use_threads
 
     @property
     def scan_use_threads(self) -> bool:
-        """Dataset scanning threading (Scanner.from_dataset)."""
+        """Return whether dataset scanning should use threads.
+
+        Returns
+        -------
+        bool
+            ``True`` when dataset scanning should use threads.
+        """
         return self.runtime.scan.use_threads
 
-    def with_mode(self, mode: str) -> ExecutionContext:
+    def with_mode(self, mode: Literal["strict", "tolerant"]) -> ExecutionContext:
+        """Return a copy with a different finalize mode.
+
+        Parameters
+        ----------
+        mode:
+            New finalize mode.
+
+        Returns
+        -------
+        ExecutionContext
+            Updated execution context.
+        """
         return ExecutionContext(
             runtime=self.runtime,
             mode=mode,
@@ -161,7 +235,19 @@ class ExecutionContext:
             debug=self.debug,
         )
 
-    def with_provenance(self, provenance: bool) -> ExecutionContext:
+    def with_provenance(self, *, provenance: bool) -> ExecutionContext:
+        """Return a copy with provenance toggled.
+
+        Parameters
+        ----------
+        provenance:
+            When ``True``, include provenance columns in scans.
+
+        Returns
+        -------
+        ExecutionContext
+            Updated execution context.
+        """
         return ExecutionContext(
             runtime=self.runtime,
             mode=self.mode,

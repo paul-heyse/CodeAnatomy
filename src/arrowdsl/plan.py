@@ -121,6 +121,7 @@ class Plan:
         if callable(close):
             close()
         return schema
+
     @staticmethod
     def table_source(table: pa.Table, *, label: str = "") -> Plan:
         """Create a Plan from an in-memory table using a table_source node.

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import pyarrow as pa
+import pyarrow.compute as pc
 from hamilton.function_modifiers import cache, extract_fields, tag
 
+from arrowdsl.ids import hash64_from_arrays
 from arrowdsl.kernels import explode_list_column
 from arrowdsl.runtime import ExecutionContext
-from extract.repo_scan import stable_id
 from normalize.bytecode_anchor import anchor_instructions
 from normalize.bytecode_cfg import build_cfg_blocks, build_cfg_edges
 from normalize.bytecode_dfg import build_def_use_events, run_reaching_defs
@@ -22,6 +23,18 @@ from normalize.spans import (
 )
 from normalize.types import normalize_type_exprs, normalize_types
 
+type ArrayLike = pa.Array | pa.ChunkedArray
+
+
+def _iter_array_values(array: ArrayLike) -> list[object | None]:
+    values: list[object | None] = []
+    for value in array:
+        if isinstance(value, pa.Scalar):
+            values.append(value.as_py())
+        else:
+            values.append(value)
+    return values
+
 
 def _collect_string_lists(table: pa.Table | None, column: str) -> list[str]:
     """Flatten a list-valued column into a list of strings.
@@ -34,7 +47,7 @@ def _collect_string_lists(table: pa.Table | None, column: str) -> list[str]:
     if table is None or column not in table.column_names:
         return []
     out: list[str] = []
-    for items in table[column].to_pylist():
+    for items in _iter_array_values(table[column]):
         if not isinstance(items, list):
             continue
         if not items:
@@ -72,10 +85,14 @@ def dim_qualified_names(
 
     # distinct + deterministic
     uniq = sorted(set(qnames))
-    qname_ids = [stable_id("qname", s) for s in uniq]
+    qname_array = pa.array(uniq, type=pa.string())
+    qname_hash = hash64_from_arrays([qname_array], prefix="qname")
+    qname_ids = pc.binary_join_element_wise(
+        pa.scalar("qname"), pc.cast(qname_hash, pa.string()), ":"
+    )
 
     return pa.Table.from_arrays(
-        [pa.array(qname_ids, type=pa.string()), pa.array(uniq, type=pa.string())],
+        [qname_ids, qname_array],
         names=["qname_id", "qname"],
     )
 
@@ -133,34 +150,37 @@ def callsite_qname_candidates(
     # bring along evidence span columns by joining back on call_id (cheap)
     # For simplicity we do python-side index; for large scale convert to hash join later.
     call_meta: dict[str, dict[str, object]] = {}
-    for r in cst_callsites.select(
-        [
-            c
-            for c in ["call_id", "path", "call_bstart", "call_bend", "qname_source"]
-            if c in cst_callsites.column_names
-        ]
-    ).to_pylist():
-        cid = r.get("call_id")
-        if cid:
-            call_meta[str(cid)] = r
+    meta_cols = [
+        c
+        for c in ["call_id", "path", "call_bstart", "call_bend", "qname_source"]
+        if c in cst_callsites.column_names
+    ]
+    if meta_cols:
+        meta_table = cst_callsites.select(meta_cols)
+        meta_arrays = [meta_table[col] for col in meta_cols]
+        for values in zip(*[_iter_array_values(array) for array in meta_arrays], strict=True):
+            row = dict(zip(meta_cols, values, strict=True))
+            cid = row.get("call_id")
+            if cid:
+                call_meta[str(cid)] = row
 
     rows: list[dict[str, object]] = []
-    for r in exploded.to_pylist():
-        cid = r.get("call_id")
-        qn = r.get("qname")
-        if not cid or not qn:
-            continue
-        meta = call_meta.get(str(cid), {})
-        rows.append(
-            {
-                "call_id": str(cid),
-                "qname": str(qn),
-                "path": meta.get("path"),
-                "call_bstart": meta.get("call_bstart"),
-                "call_bend": meta.get("call_bend"),
-                "qname_source": meta.get("qname_source"),
-            }
-        )
+    if "call_id" in exploded.column_names and "qname" in exploded.column_names:
+        exploded_arrays = [exploded["call_id"], exploded["qname"]]
+        for cid, qn in zip(*[_iter_array_values(array) for array in exploded_arrays], strict=True):
+            if not cid or not qn:
+                continue
+            meta = call_meta.get(str(cid), {})
+            rows.append(
+                {
+                    "call_id": str(cid),
+                    "qname": str(qn),
+                    "path": meta.get("path"),
+                    "call_bstart": meta.get("call_bstart"),
+                    "call_bend": meta.get("call_bend"),
+                    "qname_source": meta.get("qname_source"),
+                }
+            )
 
     return pa.Table.from_pylist(rows)
 

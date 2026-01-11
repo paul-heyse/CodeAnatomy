@@ -10,11 +10,33 @@ import tree_sitter_python
 from tree_sitter import Language, Parser
 
 from arrowdsl.empty import empty_table
-from extract.repo_scan import stable_id
+from arrowdsl.ids import hash64_from_parts
 
 SCHEMA_VERSION = 1
 
 type Row = dict[str, object]
+
+
+def _hash_id(prefix: str, *parts: str) -> str:
+    # Row-wise hash64 IDs are needed while building dependent rows.
+    hashed = hash64_from_parts(*parts, prefix=prefix)
+    return f"{prefix}:{hashed}"
+
+
+def _iter_array_values(array: pa.Array | pa.ChunkedArray) -> Iterator[object | None]:
+    for value in array:
+        if isinstance(value, pa.Scalar):
+            yield value.as_py()
+        else:
+            yield value
+
+
+def _iter_table_rows(table: pa.Table) -> Iterator[Row]:
+    columns = list(table.column_names)
+    arrays = [table[col] for col in columns]
+    iters = [_iter_array_values(array) for array in arrays]
+    for values in zip(*iters, strict=True):
+        yield dict(zip(columns, values, strict=True))
 
 
 @dataclass(frozen=True)
@@ -130,7 +152,7 @@ def _node_row(
     start = int(getattr(node, "start_byte", 0))
     end = int(getattr(node, "end_byte", 0))
     ts_type = str(getattr(node, "type", ""))
-    ts_node_id = stable_id("ts_node", path, str(start), str(end), ts_type)
+    ts_node_id = _hash_id("ts_node", path, str(start), str(end), ts_type)
     return {
         "schema_version": SCHEMA_VERSION,
         "ts_node_id": ts_node_id,
@@ -151,7 +173,7 @@ def _node_row(
 def _error_row(node_row: Row) -> Row:
     return {
         "schema_version": SCHEMA_VERSION,
-        "ts_error_id": stable_id(
+        "ts_error_id": _hash_id(
             "ts_error",
             str(node_row.get("path", "")),
             str(node_row.get("start_byte", "")),
@@ -171,7 +193,7 @@ def _error_row(node_row: Row) -> Row:
 def _missing_row(node_row: Row) -> Row:
     return {
         "schema_version": SCHEMA_VERSION,
-        "ts_missing_id": stable_id(
+        "ts_missing_id": _hash_id(
             "ts_missing",
             str(node_row.get("path", "")),
             str(node_row.get("start_byte", "")),
@@ -219,7 +241,7 @@ def extract_ts(
         missing_rows=missing_rows,
     )
 
-    for rf in repo_files.to_pylist():
+    for rf in _iter_table_rows(repo_files):
         _extract_ts_for_row(
             rf,
             parser=parser,

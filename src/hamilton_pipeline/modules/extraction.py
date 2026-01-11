@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pyarrow as pa
 from hamilton.function_modifiers import cache, config, extract_fields, tag
 
@@ -22,7 +24,9 @@ from extract.runtime_inspect_extract import (
     RuntimeInspectOptions,
     extract_runtime_tables,
 )
-from extract.scip_extract import extract_scip_tables
+from extract.scip_extract import extract_scip_tables, run_scip_python_index
+from extract.scip_identity import resolve_scip_identity
+from extract.scip_indexer import build_scip_index_options, ensure_scip_build_dir
 from extract.symtable_extract import extract_symtables_table
 from extract.tree_sitter_extract import (
     TS_ERRORS_SCHEMA,
@@ -30,7 +34,7 @@ from extract.tree_sitter_extract import (
     TS_NODES_SCHEMA,
     extract_ts_tables,
 )
-from hamilton_pipeline.pipeline_types import RepoScanConfig
+from hamilton_pipeline.pipeline_types import RepoScanConfig, ScipIdentityOverrides, ScipIndexConfig
 
 
 def _empty_table(schema: pa.Schema) -> pa.Table:
@@ -125,6 +129,8 @@ def ast_bundle(repo_root: str, repo_files: pa.Table, ctx: ExecutionContext) -> d
         "scip_documents": pa.Table,
         "scip_occurrences": pa.Table,
         "scip_symbol_information": pa.Table,
+        "scip_symbol_relationships": pa.Table,
+        "scip_external_symbol_information": pa.Table,
         "scip_diagnostics": pa.Table,
     }
 )
@@ -148,6 +154,48 @@ def scip_bundle(
         repo_root=repo_root,
         ctx=ctx,
     )
+
+
+@cache()
+@tag(layer="extract", artifact="scip_index", kind="path")
+def scip_index_path(
+    repo_root: str,
+    scip_identity_overrides: ScipIdentityOverrides,
+    scip_index_config: ScipIndexConfig,
+    ctx: ExecutionContext,
+) -> str | None:
+    """Build or resolve index.scip under build/scip.
+
+    Returns
+    -------
+    str | None
+        Path to index.scip or None when indexing is disabled.
+    """
+    _ = ctx
+    repo_root_path = Path(repo_root).resolve()
+    build_dir = ensure_scip_build_dir(repo_root_path, scip_index_config.output_dir)
+    if scip_index_config.index_path_override:
+        override = Path(scip_index_config.index_path_override)
+        override_path = override if override.is_absolute() else repo_root_path / override
+        target = build_dir / "index.scip"
+        if override_path.resolve() != target.resolve():
+            target.write_bytes(override_path.read_bytes())
+        return str(target)
+    if not scip_index_config.enabled:
+        return None
+
+    identity = resolve_scip_identity(
+        repo_root_path,
+        project_name_override=scip_identity_overrides.project_name_override,
+        project_version_override=scip_identity_overrides.project_version_override,
+        project_namespace_override=scip_identity_overrides.project_namespace_override,
+    )
+    opts = build_scip_index_options(
+        repo_root=repo_root_path,
+        identity=identity,
+        config=scip_index_config,
+    )
+    return str(run_scip_python_index(opts))
 
 
 @cache()

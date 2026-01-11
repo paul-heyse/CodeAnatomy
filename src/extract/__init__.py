@@ -40,6 +40,8 @@ from extract.scip_extract import (
     parse_index_scip,
     run_scip_python_index,
 )
+from extract.scip_identity import ScipIdentity, resolve_scip_identity
+from extract.scip_indexer import ScipIndexPaths, build_scip_index_options, ensure_scip_build_dir
 from extract.symtable_extract import (
     SymtableExtractOptions,
     SymtableExtractResult,
@@ -66,10 +68,14 @@ __all__ = [
     "SCIPExtractResult",
     "SCIPIndexOptions",
     "SCIPParseOptions",
+    "ScipIdentity",
+    "ScipIndexPaths",
     "SymtableExtractOptions",
     "SymtableExtractResult",
     "TreeSitterExtractOptions",
     "TreeSitterExtractResult",
+    "build_scip_index_options",
+    "ensure_scip_build_dir",
     "extract_ast",
     "extract_ast_tables",
     "extract_bytecode",
@@ -86,6 +92,7 @@ __all__ = [
     "extract_ts",
     "extract_ts_tables",
     "parse_index_scip",
+    "resolve_scip_identity",
     "run_scip_python_index",
     "scan_repo",
     "stable_id",

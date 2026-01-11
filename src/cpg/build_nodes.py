@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
@@ -26,6 +26,14 @@ def _pick_col(table: pa.Table, names: Sequence[str]) -> pa.ChunkedArray | None:
         if name in table.column_names:
             return table[name]
     return None
+
+
+def _iter_array_values(array: pa.Array | pa.ChunkedArray) -> Iterator[object | None]:
+    for value in array:
+        if isinstance(value, pa.Scalar):
+            yield value.as_py()
+        else:
+            yield value
 
 
 @dataclass(frozen=True)
@@ -169,9 +177,7 @@ def _build_qname_nodes(tables: NodeInputTables, options: NodeBuildOptions) -> li
 
 def _build_symbol_nodes(tables: NodeInputTables, options: NodeBuildOptions) -> list[pa.Table]:
     _ = options
-    return _collect_parts(
-        [_symbol_nodes(tables.scip_symbol_information, tables.scip_occurrences)]
-    )
+    return _collect_parts([_symbol_nodes(tables.scip_symbol_information, tables.scip_occurrences)])
 
 
 def _build_tree_sitter_nodes(tables: NodeInputTables, options: NodeBuildOptions) -> list[pa.Table]:
@@ -187,7 +193,9 @@ def _build_tree_sitter_nodes(tables: NodeInputTables, options: NodeBuildOptions)
 
 def _build_type_nodes(tables: NodeInputTables, options: NodeBuildOptions) -> list[pa.Table]:
     _ = options
-    return _collect_parts([_type_expr_nodes(tables.type_exprs_norm), _type_nodes(tables.types_norm)])
+    return _collect_parts(
+        [_type_expr_nodes(tables.type_exprs_norm), _type_nodes(tables.types_norm)]
+    )
 
 
 def _build_diagnostic_nodes(tables: NodeInputTables, options: NodeBuildOptions) -> list[pa.Table]:
@@ -232,9 +240,8 @@ def _file_span_arrays(
     use_size_bytes: bool,
 ) -> tuple[pa.Array, pa.Array]:
     if use_size_bytes and size is not None:
-        raw_values = size.to_pylist()
         bends: list[int | None] = []
-        for value in raw_values:
+        for value in _iter_array_values(size):
             if isinstance(value, bool):
                 bends.append(None)
             elif isinstance(value, int):
@@ -381,7 +388,7 @@ def _qname_nodes(dim_qualified_names: pa.Table | None) -> pa.Table | None:
 def _collect_symbols(table: pa.Table | None) -> set[str]:
     if table is None or "symbol" not in table.column_names:
         return set()
-    return {str(sym) for sym in table["symbol"].to_pylist() if sym}
+    return {str(sym) for sym in _iter_array_values(table["symbol"]) if sym}
 
 
 def _symbol_nodes(

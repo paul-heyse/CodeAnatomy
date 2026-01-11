@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
 
 from normalize.spans import FileTextIndex, RepoTextIndex, ast_range_to_byte_span
+
+type ArrayLike = pa.Array | pa.ChunkedArray
 
 
 def _row_value_int(value: object | None) -> int | None:
@@ -19,6 +22,25 @@ def _row_value_int(value: object | None) -> int | None:
     if isinstance(value, str) and value.isdigit():
         return int(value)
     return None
+
+
+def _column_or_null(table: pa.Table, col: str, dtype: pa.DataType) -> ArrayLike:
+    if col in table.column_names:
+        return table[col]
+    return pa.nulls(table.num_rows, type=dtype)
+
+
+def _iter_array_values(array: ArrayLike) -> Iterator[object | None]:
+    for value in array:
+        if isinstance(value, pa.Scalar):
+            yield value.as_py()
+        else:
+            yield value
+
+
+def _iter_arrays(arrays: Sequence[ArrayLike]) -> Iterator[tuple[object | None, ...]]:
+    iters = [_iter_array_values(array) for array in arrays]
+    yield from zip(*iters, strict=True)
 
 
 @dataclass(frozen=True)
@@ -77,17 +99,25 @@ def anchor_instructions(
     bends: list[int | None] = []
     oks: list[bool] = []
 
-    for row in py_bc_instructions.to_pylist():
-        fidx = _file_index(repo_index, row.get(cols.file_id), row.get(cols.path))
+    arrays = [
+        _column_or_null(py_bc_instructions, cols.file_id, pa.string()),
+        _column_or_null(py_bc_instructions, cols.path, pa.string()),
+        _column_or_null(py_bc_instructions, cols.start_line, pa.int64()),
+        _column_or_null(py_bc_instructions, cols.start_col, pa.int64()),
+        _column_or_null(py_bc_instructions, cols.end_line, pa.int64()),
+        _column_or_null(py_bc_instructions, cols.end_col, pa.int64()),
+    ]
+    for file_id, path, start_line, start_col, end_line, end_col in _iter_arrays(arrays):
+        fidx = _file_index(repo_index, file_id, path)
         if fidx is None:
             bstarts.append(None)
             bends.append(None)
             oks.append(False)
             continue
-        ln_i = _row_value_int(row.get(cols.start_line))
-        col_i = _row_value_int(row.get(cols.start_col))
-        eln_i = _row_value_int(row.get(cols.end_line))
-        ecol_i = _row_value_int(row.get(cols.end_col))
+        ln_i = _row_value_int(start_line)
+        col_i = _row_value_int(start_col)
+        eln_i = _row_value_int(end_line)
+        ecol_i = _row_value_int(end_col)
         if ln_i is None or col_i is None or eln_i is None or ecol_i is None:
             bstarts.append(None)
             bends.append(None)

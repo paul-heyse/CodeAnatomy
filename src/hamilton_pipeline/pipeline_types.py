@@ -46,6 +46,20 @@ class TreeSitterConfig:
 
 
 @dataclass(frozen=True)
+class ScipIndexConfig:
+    """Configuration for scip-python indexing inside the pipeline."""
+
+    enabled: bool = True
+    index_path_override: str | None = None
+    output_dir: str = "build/scip"
+    env_json_path: str | None = None
+    scip_python_bin: str = "scip-python"
+    target_only: str | None = None
+    node_max_old_space_mb: int | None = 8192
+    timeout_s: int | None = None
+
+
+@dataclass(frozen=True)
 class RuntimeInspectConfig:
     """Configuration for runtime inspection extraction."""
 
@@ -79,6 +93,15 @@ class ScipOccurrenceInputs:
 
 
 @dataclass(frozen=True)
+class ScipIdentityOverrides:
+    """Optional overrides for SCIP project identity."""
+
+    project_name_override: str | None
+    project_version_override: str | None
+    project_namespace_override: str | None
+
+
+@dataclass(frozen=True)
 class CstBuildInputs:
     """CST inputs required for CPG node/property building."""
 
@@ -94,6 +117,7 @@ class ScipBuildInputs:
 
     scip_symbol_information: pa.Table
     scip_occurrences_norm: pa.Table
+    scip_external_symbol_information: pa.Table
 
 
 @dataclass(frozen=True)

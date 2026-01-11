@@ -9,12 +9,34 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from extract.repo_scan import stable_id
+from arrowdsl.ids import hash64_from_parts
 
 type RowValue = str | int | bool | None
 type Row = dict[str, RowValue]
 
 SCHEMA_VERSION = 1
+
+
+def _hash_id(prefix: str, *parts: str) -> str:
+    # Row-wise hash64 IDs are needed while building dependent rows.
+    hashed = hash64_from_parts(*parts, prefix=prefix)
+    return f"{prefix}:{hashed}"
+
+
+def _iter_array_values(array: pa.Array | pa.ChunkedArray) -> Iterator[object | None]:
+    for value in array:
+        if isinstance(value, pa.Scalar):
+            yield value.as_py()
+        else:
+            yield value
+
+
+def _iter_table_rows(table: pa.Table) -> Iterator[dict[str, object]]:
+    columns = list(table.column_names)
+    arrays = [table[col] for col in columns]
+    iters = [_iter_array_values(array) for array in arrays]
+    for values in zip(*iters, strict=True):
+        yield dict(zip(columns, values, strict=True))
 
 
 @dataclass(frozen=True)
@@ -280,7 +302,7 @@ def _assign_code_units(
         parent_id = co_to_id.get(id(parent)) if parent is not None else None
         parent_qual = co_to_qual.get(id(parent)) if parent is not None else None
         qual = _qual_for(co, parent_qual)
-        cu_id = stable_id("bc_code", ctx.file_id, qual, str(co.co_firstlineno), co.co_name)
+        cu_id = _hash_id("bc_code", ctx.file_id, qual, str(co.co_firstlineno), co.co_name)
         co_to_id[id(co)] = cu_id
         co_to_qual[id(co)] = qual
 
@@ -338,7 +360,7 @@ def _append_exception_rows(unit_ctx: CodeUnitContext, exc_rows: list[Row]) -> No
         exc_rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
-                "exc_entry_id": stable_id("bc_exc", unit_ctx.cu_id, str(k)),
+                "exc_entry_id": _hash_id("bc_exc", unit_ctx.cu_id, str(k)),
                 "code_unit_id": unit_ctx.cu_id,
                 "file_id": unit_ctx.file_ctx.file_id,
                 "path": unit_ctx.file_ctx.path,
@@ -366,7 +388,7 @@ def _append_instruction_rows(unit_ctx: CodeUnitContext, ins_rows: list[Row]) -> 
         ins_rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
-                "instr_id": stable_id("bc_insn", unit_ctx.cu_id, str(idx), str(ins.offset)),
+                "instr_id": _hash_id("bc_insn", unit_ctx.cu_id, str(idx), str(ins.offset)),
                 "code_unit_id": unit_ctx.cu_id,
                 "file_id": unit_ctx.file_ctx.file_id,
                 "path": unit_ctx.file_ctx.path,
@@ -452,7 +474,7 @@ def _append_block_rows(
 
     for start, end in blocks:
         kind = "entry" if start == 0 else ("handler" if start in target_offsets else "normal")
-        block_id = stable_id("bc_block", unit_ctx.cu_id, str(start), str(end))
+        block_id = _hash_id("bc_block", unit_ctx.cu_id, str(start), str(end))
         blk_rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -473,7 +495,7 @@ def _append_cfg_edge(unit_ctx: CodeUnitContext, spec: CfgEdgeSpec, edge_rows: li
     edge_rows.append(
         {
             "schema_version": SCHEMA_VERSION,
-            "edge_id": stable_id(
+            "edge_id": _hash_id(
                 "bc_cfg",
                 unit_ctx.cu_id,
                 spec.src_block_id,
@@ -513,7 +535,7 @@ def _append_normal_edges(
         last_index = index_by_offset.get(int(last.offset))
         if last_index is None:
             continue
-        last_id = stable_id("bc_insn", unit_ctx.cu_id, str(last_index), str(last.offset))
+        last_id = _hash_id("bc_insn", unit_ctx.cu_id, str(last_index), str(last.offset))
 
         jt = _jump_target(last)
         if jt is not None and jt in off_to_block:
@@ -680,7 +702,7 @@ def extract_bytecode(
         error_rows=[],
     )
 
-    for rf in repo_files.to_pylist():
+    for rf in _iter_table_rows(repo_files):
         ctx = _row_context(rf, options)
         if ctx is None:
             continue

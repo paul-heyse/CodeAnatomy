@@ -13,6 +13,8 @@ from hamilton_pipeline.pipeline_types import (
     RelspecConfig,
     RepoScanConfig,
     RuntimeInspectConfig,
+    ScipIdentityOverrides,
+    ScipIndexConfig,
     TreeSitterConfig,
 )
 
@@ -110,17 +112,35 @@ def work_dir() -> str | None:
 
 
 @tag(layer="inputs", kind="scalar")
-def scip_index_path() -> str | None:
-    """Return the default SCIP index path.
+def scip_identity_overrides() -> ScipIdentityOverrides:
+    """Return default overrides for SCIP identity.
 
-    Override to attach SCIP data.
+    Override via execute(overrides={"scip_identity_overrides": ScipIdentityOverrides(...)}).
 
     Returns
     -------
-    str | None
-        SCIP index path, or None when not provided.
+    ScipIdentityOverrides
+        Identity overrides for SCIP project metadata.
     """
-    return None
+    return ScipIdentityOverrides(
+        project_name_override=None,
+        project_version_override=None,
+        project_namespace_override=None,
+    )
+
+
+@tag(layer="inputs", kind="scalar")
+def scip_index_config() -> ScipIndexConfig:
+    """Return default config for scip-python indexing.
+
+    Override via execute(overrides={"scip_index_config": ScipIndexConfig(...)}).
+
+    Returns
+    -------
+    ScipIndexConfig
+        Indexing configuration.
+    """
+    return ScipIndexConfig()
 
 
 @tag(layer="inputs", kind="scalar")

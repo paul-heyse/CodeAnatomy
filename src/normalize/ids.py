@@ -88,19 +88,27 @@ def add_span_id_column(table: pa.Table, spec: SpanIdSpec | None = None) -> pa.Ta
     if kind is not None:
         arrays.append(pa.array([kind] * table.num_rows, type=pa.string()))
     if path_col in table.column_names:
-        arrays.append(table[path_col])
+        path_arr = table[path_col]
     else:
-        arrays.append(pa.nulls(table.num_rows, type=pa.string()))
+        path_arr = pa.nulls(table.num_rows, type=pa.string())
     if bstart_col in table.column_names:
-        arrays.append(table[bstart_col])
+        bstart_arr = table[bstart_col]
     else:
-        arrays.append(pa.nulls(table.num_rows, type=pa.int64()))
+        bstart_arr = pa.nulls(table.num_rows, type=pa.int64())
     if bend_col in table.column_names:
-        arrays.append(table[bend_col])
+        bend_arr = table[bend_col]
     else:
-        arrays.append(pa.nulls(table.num_rows, type=pa.int64()))
+        bend_arr = pa.nulls(table.num_rows, type=pa.int64())
+    arrays.append(path_arr)
+    arrays.append(bstart_arr)
+    arrays.append(bend_arr)
 
     hashed = hash64_from_arrays(arrays, prefix="span")
     hashed_str = pc.cast(hashed, pa.string())
     prefixed = pc.binary_join_element_wise(pa.scalar("span"), hashed_str, ":")
-    return table.append_column(out_col, prefixed)
+    valid = pc.and_(
+        pc.is_valid(path_arr),
+        pc.and_(pc.is_valid(bstart_arr), pc.is_valid(bend_arr)),
+    )
+    span_ids = pc.if_else(valid, prefixed, pa.scalar(None, type=pa.string()))
+    return table.append_column(out_col, span_ids)

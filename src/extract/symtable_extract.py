@@ -3,15 +3,37 @@
 from __future__ import annotations
 
 import symtable
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import cast
 
 import pyarrow as pa
 
-from extract.repo_scan import stable_id
+from arrowdsl.ids import hash64_from_parts
 
 SCHEMA_VERSION = 1
+
+
+def _hash_id(prefix: str, *parts: str) -> str:
+    # Row-wise hash64 IDs are needed while building dependent rows.
+    hashed = hash64_from_parts(*parts, prefix=prefix)
+    return f"{prefix}:{hashed}"
+
+
+def _iter_array_values(array: pa.Array | pa.ChunkedArray) -> Iterator[object | None]:
+    for value in array:
+        if isinstance(value, pa.Scalar):
+            yield value.as_py()
+        else:
+            yield value
+
+
+def _iter_table_rows(table: pa.Table) -> Iterator[dict[str, object]]:
+    columns = list(table.column_names)
+    arrays = [table[col] for col in columns]
+    iters = [_iter_array_values(array) for array in arrays]
+    for values in zip(*iters, strict=True):
+        yield dict(zip(columns, values, strict=True))
 
 
 @dataclass(frozen=True)
@@ -143,7 +165,7 @@ def _ensure_scope_id(
         st_str = _scope_type_str(tbl)
         name = tbl.get_name()
         lineno = int(tbl.get_lineno() or 0)
-        sid = stable_id("sym_scope", ctx.file_id, str(tid), st_str, name, str(lineno))
+        sid = _hash_id("sym_scope", ctx.file_id, str(tid), st_str, name, str(lineno))
         table_to_scope_id[tid] = sid
     return sid
 
@@ -170,7 +192,7 @@ def _scope_row(ctx: SymtableContext, sid: str, tbl: symtable.SymbolTable) -> dic
 def _scope_edge_row(ctx: SymtableContext, parent_sid: str, child_sid: str) -> dict[str, object]:
     return {
         "schema_version": SCHEMA_VERSION,
-        "edge_id": stable_id("sym_scope_edge", parent_sid, child_sid),
+        "edge_id": _hash_id("sym_scope_edge", parent_sid, child_sid),
         "file_id": ctx.file_id,
         "path": ctx.path,
         "file_sha256": ctx.file_sha256,
@@ -191,7 +213,7 @@ def _symbol_rows_for_scope(
 
     for sym in tbl.get_symbols():
         name = sym.get_name()
-        sym_row_id = stable_id("sym_symbol", scope_id, name)
+        sym_row_id = _hash_id("sym_symbol", scope_id, name)
         symbol_rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -221,7 +243,7 @@ def _symbol_rows_for_scope(
                 ns_edge_rows.append(
                     {
                         "schema_version": SCHEMA_VERSION,
-                        "edge_id": stable_id("sym_ns_edge", sym_row_id, child_sid),
+                        "edge_id": _hash_id("sym_ns_edge", sym_row_id, child_sid),
                         "file_id": ctx.file_id,
                         "path": ctx.path,
                         "file_sha256": ctx.file_sha256,
@@ -378,7 +400,7 @@ def extract_symtable(
     ns_edge_rows: list[dict[str, object]] = []
     func_parts_rows: list[dict[str, object]] = []
 
-    for rf in repo_files.to_pylist():
+    for rf in _iter_table_rows(repo_files):
         (
             file_scope_rows,
             file_symbol_rows,

@@ -6,5 +6,9 @@ dist/
 wheels/
 *.egg-info
 
+# Allowlist SCIP artifacts under build/scip
+!build/scip/
+!build/scip/**
+
 # Virtual environments
 .venv

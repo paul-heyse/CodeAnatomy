@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -19,11 +19,34 @@ from libcst.metadata import (
     QualifiedNameProvider,
 )
 
-from extract.repo_scan import stable_id
+from arrowdsl.empty import empty_table
+from arrowdsl.ids import hash64_from_parts
 
 SCHEMA_VERSION = 1
 
 type Row = dict[str, object]
+
+
+def _hash_id(prefix: str, *parts: str) -> str:
+    # Row-wise hash64 IDs are needed while building dependent rows.
+    hashed = hash64_from_parts(*parts, prefix=prefix)
+    return f"{prefix}:{hashed}"
+
+
+def _iter_array_values(array: pa.Array | pa.ChunkedArray) -> Iterator[object | None]:
+    for value in array:
+        if isinstance(value, pa.Scalar):
+            yield value.as_py()
+        else:
+            yield value
+
+
+def _iter_table_rows(table: pa.Table) -> Iterator[Row]:
+    columns = list(table.column_names)
+    arrays = [table[col] for col in columns]
+    iters = [_iter_array_values(array) for array in arrays]
+    for values in zip(*iters, strict=True):
+        yield dict(zip(columns, values, strict=True))
 
 
 @dataclass(frozen=True)
@@ -252,10 +275,6 @@ def _callee_shape(node: cst.CSTNode) -> str:
     return "OTHER"
 
 
-def _empty(schema: pa.Schema) -> pa.Table:
-    return pa.Table.from_arrays([pa.array([], type=field.type) for field in schema], schema=schema)
-
-
 def _calculate_module_and_package(repo_root: Path, abs_path: Path) -> tuple[str | None, str | None]:
     try:
         result = helpers.calculate_module_and_package(str(repo_root), str(abs_path))
@@ -473,7 +492,7 @@ class CSTCollector(cst.CSTVisitor):
         expr_text = self._code_for_node(expr)
         if expr_text is None:
             return
-        type_expr_id = stable_id(
+        type_expr_id = _hash_id(
             "cst_type_expr",
             self._file_ctx.path,
             str(bstart),
@@ -512,7 +531,7 @@ class CSTCollector(cst.CSTVisitor):
 
         container = self._def_stack[-1] if self._def_stack else None
         def_kind = "async_function" if node.asynchronous is not None else "function"
-        def_id = stable_id(
+        def_id = _hash_id(
             "cst_def", self._file_ctx.file_id, def_kind, str(def_bstart), str(def_bend)
         )
 
@@ -574,7 +593,7 @@ class CSTCollector(cst.CSTVisitor):
 
         container = self._def_stack[-1] if self._def_stack else None
         def_kind = "class"
-        def_id = stable_id(
+        def_id = _hash_id(
             "cst_def", self._file_ctx.file_id, def_kind, str(def_bstart), str(def_bend)
         )
 
@@ -625,7 +644,7 @@ class CSTCollector(cst.CSTVisitor):
         self._name_ref_rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
-                "name_ref_id": stable_id(
+                "name_ref_id": _hash_id(
                     "cst_name_ref", self._file_ctx.file_id, str(bstart), str(bend)
                 ),
                 "file_id": self._file_ctx.file_id,
@@ -663,7 +682,7 @@ class CSTCollector(cst.CSTVisitor):
             self._import_rows.append(
                 {
                     "schema_version": SCHEMA_VERSION,
-                    "import_id": stable_id(
+                    "import_id": _hash_id(
                         "cst_import",
                         self._file_ctx.file_id,
                         "import",
@@ -713,7 +732,7 @@ class CSTCollector(cst.CSTVisitor):
             self._import_rows.append(
                 {
                     "schema_version": SCHEMA_VERSION,
-                    "import_id": stable_id(
+                    "import_id": _hash_id(
                         "cst_import",
                         self._file_ctx.file_id,
                         "importfrom",
@@ -750,7 +769,7 @@ class CSTCollector(cst.CSTVisitor):
             self._import_rows.append(
                 {
                     "schema_version": SCHEMA_VERSION,
-                    "import_id": stable_id(
+                    "import_id": _hash_id(
                         "cst_import",
                         self._file_ctx.file_id,
                         "importfrom",
@@ -799,7 +818,7 @@ class CSTCollector(cst.CSTVisitor):
         self._call_rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
-                "call_id": stable_id(
+                "call_id": _hash_id(
                     "cst_call", self._file_ctx.file_id, str(call_bstart), str(call_bend)
                 ),
                 "file_id": self._file_ctx.file_id,
@@ -870,7 +889,7 @@ def extract_cst(repo_files: pa.Table, options: CSTExtractOptions | None = None) 
     options = options or CSTExtractOptions()
     ctx = CSTExtractContext.build(options)
 
-    for rf in repo_files.to_pylist():
+    for rf in _iter_table_rows(repo_files):
         _extract_cst_for_row(rf, ctx)
 
     return _build_cst_result(ctx)
@@ -880,37 +899,37 @@ def _build_cst_result(ctx: CSTExtractContext) -> CSTExtractResult:
     t_manifest = (
         pa.Table.from_pylist(ctx.manifest_rows, schema=PARSE_MANIFEST_SCHEMA)
         if ctx.manifest_rows
-        else _empty(PARSE_MANIFEST_SCHEMA)
+        else empty_table(PARSE_MANIFEST_SCHEMA)
     )
     t_errs = (
         pa.Table.from_pylist(ctx.error_rows, schema=PARSE_ERRORS_SCHEMA)
         if ctx.error_rows
-        else _empty(PARSE_ERRORS_SCHEMA)
+        else empty_table(PARSE_ERRORS_SCHEMA)
     )
     t_names = (
         pa.Table.from_pylist(ctx.name_ref_rows, schema=NAME_REFS_SCHEMA)
         if ctx.name_ref_rows
-        else _empty(NAME_REFS_SCHEMA)
+        else empty_table(NAME_REFS_SCHEMA)
     )
     t_imports = (
         pa.Table.from_pylist(ctx.import_rows, schema=IMPORTS_SCHEMA)
         if ctx.import_rows
-        else _empty(IMPORTS_SCHEMA)
+        else empty_table(IMPORTS_SCHEMA)
     )
     t_calls = (
         pa.Table.from_pylist(ctx.call_rows, schema=CALLSITES_SCHEMA)
         if ctx.call_rows
-        else _empty(CALLSITES_SCHEMA)
+        else empty_table(CALLSITES_SCHEMA)
     )
     t_defs = (
         pa.Table.from_pylist(ctx.def_rows, schema=DEFS_SCHEMA)
         if ctx.def_rows
-        else _empty(DEFS_SCHEMA)
+        else empty_table(DEFS_SCHEMA)
     )
     t_type_exprs = (
         pa.Table.from_pylist(ctx.type_expr_rows, schema=TYPE_EXPRS_SCHEMA)
         if ctx.type_expr_rows
-        else _empty(TYPE_EXPRS_SCHEMA)
+        else empty_table(TYPE_EXPRS_SCHEMA)
     )
 
     return CSTExtractResult(

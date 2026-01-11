@@ -4,7 +4,7 @@ This plan integrates the Arrow/Acero DSL guidance with the repo findings, target
 columnar, streaming-first pipeline and shared compute utilities. Decisions locked in:
 canonical ordering only at finalize, error context captured as list<struct> in a unioned
 errors dataset while good outputs drop bad rows, and vectorized IDs via Arrow hash64
-(stable per-version + repo). Note: PyArrow 21 does not expose a built-in hash64 scalar
+(stable per-version + repo). Note: PyArrow 22.x does not expose a built-in hash64 scalar
 kernel, so we use a deterministic hash64 UDF in `arrowdsl.ids`. Each scope item includes
 updated code patterns, target files, and an integration checklist with progress.
 
@@ -45,21 +45,32 @@ file_id = pc.binary_join_element_wise(pa.scalar("file"), pc.cast(file_hash, pa.s
 - `src/normalize/ids.py` (add vectorized ID helpers)
 - `src/extract/repo_scan.py` (replace `stable_id` file_id)
 - `src/cpg/build_edges.py` (edge_id generation for join-friendly keys)
-- `src/cpg/build_nodes.py` (node_id generation for anchored nodes)
+- `src/cpg/build_nodes.py` (consume id columns; no new work expected)
 - `src/normalize/spans.py` (optional vectorized span_id for joins)
 - `src/normalize/diagnostics.py` (diag_id)
 - `src/normalize/bytecode_dfg.py` (event_id)
+- `src/normalize/types.py` (type_expr_id/type_id)
+- `src/extract/ast_extract.py`, `src/extract/bytecode_extract.py`, `src/extract/cst_extract.py`
+- `src/extract/scip_extract.py`, `src/extract/symtable_extract.py`
+- `src/extract/tree_sitter_extract.py`, `src/extract/runtime_inspect_extract.py`
 
 ### Integration checklist
 ### Implementation status
 - [x] Introduced `arrowdsl/ids.py` hash64 UDF helpers and specs.
 - [x] Vectorized `file_id` in `src/extract/repo_scan.py`.
 - [x] Vectorized edge IDs in `src/cpg/build_edges.py`.
-- [x] Vectorized `span_id` generation in `src/normalize/ids.py`.
-- [x] Vectorized `diag_id` and `df_event` IDs in `src/normalize/diagnostics.py` and
-  `src/normalize/bytecode_dfg.py`.
-- [ ] Migrate remaining ID loops (e.g., `src/cpg/build_nodes.py`, `src/normalize/spans.py`).
-- [ ] Decide whether any outputs should switch to int64 IDs (vs prefixed strings).
+- [x] Vectorized `span_id` column in `src/normalize/spans.py`.
+- [x] Vectorized qname IDs in `src/hamilton_pipeline/modules/normalization.py`.
+- [x] Vectorized `df_event` IDs in `src/normalize/bytecode_dfg.py`.
+- [ ] Replace remaining `stable_id` usage in normalization (`src/normalize/diagnostics.py`,
+  `src/normalize/types.py`, `src/normalize/bytecode_dfg.py` reaching-def edges) or document
+  intentional exceptions.
+- [ ] Replace remaining `stable_id` usage in extraction layers
+  (`src/extract/ast_extract.py`, `src/extract/bytecode_extract.py`, `src/extract/cst_extract.py`,
+  `src/extract/scip_extract.py`, `src/extract/symtable_extract.py`,
+  `src/extract/tree_sitter_extract.py`, `src/extract/runtime_inspect_extract.py`) or document
+  intentional exceptions.
+- [x] Keep prefixed string IDs as output schema (int64 reserved for internal row_id).
 
 ---
 
@@ -101,8 +112,8 @@ out = union.to_table(ctx=ctx)
 - [x] Added `union_all_plans` and `Plan.aggregate` in `src/arrowdsl/plan.py`.
 - [x] Updated relspec compiler to union plan-lane rules and materialize once when no kernels.
 - [x] Preserved `rule_name`/`rule_priority` in plan-lane via projection.
-- [ ] Expand plan-lane handling for rules with lightweight post-kernels (where feasible).
-- [ ] Confirm ordering metadata after union/aggregate for any new plan-lane ops.
+- [x] Expand plan-lane handling for rules with lightweight post-kernels (where feasible).
+- [x] Confirm ordering metadata after union/aggregate for any new plan-lane ops.
 
 ---
 
@@ -126,7 +137,7 @@ good = canonical_sort_if_canonical(good, sort_keys=contract.canonical_sort, ctx=
 ### Implementation status
 - [x] Removed normalization canonical sort in `src/normalize/bytecode_cfg.py`.
 - [x] Finalize remains the only canonical ordering boundary.
-- [ ] Update any tests that assume row order in normalization outputs.
+- [x] Update any tests that assume row order in normalization outputs (no existing tests).
 
 ---
 
@@ -203,9 +214,16 @@ def coalesce_string(table: pa.Table, cols: list[str], out: str) -> pa.Table:
 - [x] Added shared helpers in `src/arrowdsl/columns.py`.
 - [x] Converted diagnostics/def-use to columnar compute (`src/normalize/diagnostics.py`,
   `src/normalize/bytecode_dfg.py`).
-- [ ] Continue replacing `to_pylist()` in `src/cpg/build_edges.py`, `src/cpg/build_props.py`,
-  and `src/normalize/bytecode_anchor.py` where practical.
-- [ ] Validate no behavior drift in output schemas.
+- [x] Replaced `to_pylist()` in `src/cpg/build_edges.py`, `src/cpg/build_props.py`, and
+  `src/normalize/bytecode_anchor.py`.
+- [ ] Replace remaining `to_pylist()` loops in `src/normalize/spans.py`,
+  `src/normalize/types.py`, `src/normalize/diagnostics.py`, `src/cpg/build_nodes.py`,
+  `src/relspec/compiler.py`, `src/hamilton_pipeline/modules/normalization.py`.
+- [ ] Review extraction layers using `to_pylist()` (`src/extract/ast_extract.py`,
+  `src/extract/bytecode_extract.py`, `src/extract/cst_extract.py`,
+  `src/extract/symtable_extract.py`, `src/extract/tree_sitter_extract.py`) and decide
+  which should remain Python loops vs. columnar compute.
+- [x] Validate no behavior drift in output schemas.
 
 ---
 
@@ -242,7 +260,7 @@ def aggregate(self, group_keys: list[str], aggs: list[tuple[str, str]], *, label
 ### Implementation status
 - [x] Added aggregate helper with ordering metadata in `src/arrowdsl/plan.py`.
 - [x] Union helper marks output unordered.
-- [ ] Update relspec compiler to use plan-lane aggregation where appropriate.
+- [x] Update relspec compiler to use plan-lane aggregation where appropriate.
 
 ---
 
@@ -272,7 +290,7 @@ def empty_table(schema: pa.Schema) -> pa.Table:
 ### Implementation status
 - [x] Added `empty_table` helper in `src/arrowdsl/empty.py`.
 - [x] Replaced local helpers in listed targets.
-- [ ] Review other `_empty` helpers (e.g., `src/extract/cst_extract.py`,
+- [x] Review other `_empty` helpers (e.g., `src/extract/cst_extract.py`,
   `src/extract/scip_extract.py`) for optional consolidation.
 
 ---
@@ -308,8 +326,9 @@ if provenance:
 ### Implementation status
 - [x] Provenance columns are emitted in `src/arrowdsl/queryspec.py`.
 - [x] `canonical_sort_if_canonical` appends provenance columns when present.
+- [x] Compiler enables provenance when determinism is canonical.
+- [x] Scan profiles set `implicit_ordering`/`require_sequenced_output` for canonical determinism.
 - [ ] Decide which outputs require provenance tie-breakers beyond the default append.
-- [ ] Verify scan profiles set `implicit_ordering` when required.
 
 ---
 
@@ -339,7 +358,7 @@ scan_opts = acero.ScanNodeOptions(
 ### Implementation status
 - [x] `compile_to_acero_scan` centralizes scan/project/filter.
 - [x] QuerySpec projection/predicate wiring is consistent.
-- [ ] Audit any ad hoc scans outside the DSL (if new ones are added).
+- [x] Audit any ad hoc scans outside the DSL (if new ones are added).
 
 ---
 
@@ -367,7 +386,7 @@ good = canonical_sort_if_canonical(good, sort_keys=contract.canonical_sort, ctx=
 ### Implementation status
 - [x] Finalize applies dedupe and canonical sort gates.
 - [x] Normalization canonical sorts removed where present.
-- [ ] Consider deprecating `CanonicalSortKernelSpec` usage in relspec configs (if any).
+- [ ] Audit relspec configs for `CanonicalSortKernelSpec` and migrate to finalize-only policy.
 
 ---
 
@@ -425,14 +444,14 @@ errors_detailed = errors.group_by(["row_id", *key_cols]).aggregate([("error_deta
 - [x] `row_id` computed via `hash64_from_columns` over contract key fields.
 - [x] `error_detail` aggregated to list<struct> per row in finalize.
 - [x] Good rows drop bad rows; errors emitted separately.
-- [ ] Add tests for `error_detail` schema and aggregation behavior.
+- [x] Add tests for `error_detail` schema and aggregation behavior.
 
 ---
 
 ## Scope 12: PyArrow Typing Stubs (Pyrefly/Pyright Support)
 
 ### Description
-Keep the local PyArrow type stubs aligned with the APIs used by Arrow 21 to prevent
+Keep the local PyArrow type stubs aligned with the APIs used by Arrow 22.x to prevent
 type-checker false positives (compute kernels, Acero declarations, Table APIs).
 
 ### Target files
@@ -443,7 +462,8 @@ type-checker false positives (compute kernels, Acero declarations, Table APIs).
 ### Implementation status
 - [x] Updated compute and core stubs for kernels used in Arrow DSL utilities.
 - [x] Added Acero stubs for plan helpers and declarations.
-- [ ] Revisit stubs if PyArrow APIs change.
+- [x] Aligned `Table.join` and iterator behaviors with PyArrow 22.x runtime signatures.
+- [x] Revisit stubs if PyArrow APIs change.
 
 ---
 

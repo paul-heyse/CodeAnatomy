@@ -13,11 +13,17 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from arrowdsl.empty import empty_table
-from extract.repo_scan import stable_id
+from arrowdsl.ids import hash64_from_parts
 
 SCHEMA_VERSION = 1
 
 type Row = dict[str, object]
+
+
+def _hash_id(prefix: str, *parts: str) -> str:
+    # Row-wise hash64 IDs are needed while building dependent rows.
+    hashed = hash64_from_parts(*parts, prefix=prefix)
+    return f"{prefix}:{hashed}"
 
 INVALID_PAYLOAD_TYPE = "Runtime inspect output is not a JSON object."
 
@@ -308,7 +314,7 @@ def _run_inspect_subprocess(
 
 
 def _object_id(module: str, qualname: str) -> str:
-    return stable_id("rt_obj", module, qualname)
+    return _hash_id("rt_obj", module, qualname)
 
 
 def _parse_runtime_objects(objects_raw: object) -> tuple[list[Row], dict[str, str]]:
@@ -368,7 +374,7 @@ def _parse_runtime_signatures(
         signature_str = sig.get("signature")
         if not isinstance(signature_str, str):
             continue
-        sig_id = stable_id("rt_sig", rt_id, signature_str)
+        sig_id = _hash_id("rt_sig", rt_id, signature_str)
         sig_rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -395,7 +401,7 @@ def _parse_runtime_params(params: list[object], sig_id: str) -> list[Row]:
         name = param.get("name")
         if not isinstance(name, str):
             continue
-        param_id = stable_id("rt_param", sig_id, name)
+        param_id = _hash_id("rt_param", sig_id, name)
         rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -436,7 +442,7 @@ def _parse_runtime_members(
         name = member.get("name")
         if not isinstance(name, str):
             continue
-        member_id = stable_id("rt_member", rt_id, name)
+        member_id = _hash_id("rt_member", rt_id, name)
         member_rows.append(
             {
                 "schema_version": SCHEMA_VERSION,

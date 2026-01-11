@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal
 
 import pyarrow as pa
 
+from normalize.ids import add_span_id_column
+
 type RowValue = object | None
+type ArrayLike = pa.Array | pa.ChunkedArray
 
 ENC_UTF8 = 1
 ENC_UTF16 = 2
@@ -122,18 +125,38 @@ SPAN_ERROR_SCHEMA = pa.schema(
 )
 
 
-def _decode_repo_row_text(rf: Mapping[str, RowValue]) -> str | None:
-    t = rf.get("text")
-    if isinstance(t, str) and t:
-        return t
-    b = rf.get("bytes")
-    if isinstance(b, (bytes, bytearray, memoryview)):
-        enc_value = rf.get("encoding")
-        enc = enc_value if isinstance(enc_value, str) else "utf-8"
+def _iter_array_values(array: ArrayLike) -> Iterator[RowValue]:
+    for value in array:
+        if isinstance(value, pa.Scalar):
+            yield value.as_py()
+        else:
+            yield value
+
+
+def _iter_arrays(arrays: Sequence[ArrayLike]) -> Iterator[tuple[RowValue, ...]]:
+    iters = [_iter_array_values(array) for array in arrays]
+    yield from zip(*iters, strict=True)
+
+
+def _column_or_null(table: pa.Table, col: str, dtype: pa.DataType) -> ArrayLike:
+    if col in table.column_names:
+        return table[col]
+    return pa.nulls(table.num_rows, type=dtype)
+
+
+def _decode_repo_row_text(
+    text_value: RowValue,
+    bytes_value: RowValue,
+    encoding_value: RowValue,
+) -> str | None:
+    if isinstance(text_value, str) and text_value:
+        return text_value
+    if isinstance(bytes_value, (bytes, bytearray, memoryview)):
+        enc = encoding_value if isinstance(encoding_value, str) else "utf-8"
         try:
-            return bytes(b).decode(enc, errors="replace")
+            return bytes(bytes_value).decode(enc, errors="replace")
         except (LookupError, UnicodeError):
-            return bytes(b).decode("utf-8", errors="replace")
+            return bytes(bytes_value).decode("utf-8", errors="replace")
     return None
 
 
@@ -163,10 +186,6 @@ def _normalized_range(
     if sl is None or sc is None or el is None or ec is None:
         return None
     return sl, sc, el, ec
-
-
-def _none_list(n: int) -> list[RowValue]:
-    return [None] * n
 
 
 def _build_line_index_utf8(text: str) -> tuple[list[str], list[int]]:
@@ -207,21 +226,25 @@ def build_repo_text_index(
     _ = repo_root
     _ = ctx
 
-    for rf in repo_files.to_pylist():
-        file_id_value = rf.get("file_id")
-        path_value = rf.get("path")
+    arrays = [
+        _column_or_null(repo_files, "file_id", pa.string()),
+        _column_or_null(repo_files, "path", pa.string()),
+        _column_or_null(repo_files, "file_sha256", pa.string()),
+        _column_or_null(repo_files, "encoding", pa.string()),
+        _column_or_null(repo_files, "text", pa.string()),
+        _column_or_null(repo_files, "bytes", pa.binary()),
+    ]
+    for file_id_value, path_value, file_sha256_value, encoding_value, text_value, bytes_value in _iter_arrays(
+        arrays
+    ):
         if not isinstance(file_id_value, str) or not isinstance(path_value, str):
             continue
 
         file_id = file_id_value
         path = path_value
-
-        file_sha256_value = rf.get("file_sha256")
         file_sha256 = str(file_sha256_value) if file_sha256_value is not None else None
-        encoding_value = rf.get("encoding")
         encoding = encoding_value if isinstance(encoding_value, str) else None
-
-        text = _decode_repo_row_text(rf)
+        text = _decode_repo_row_text(text_value, bytes_value, encoding_value)
         if text is None:
             continue
 
@@ -401,28 +424,20 @@ def ast_range_to_byte_span(
 class AstSpanInputs:
     """Column values required for AST span conversion."""
 
-    file_ids: list[RowValue]
-    linenos: list[RowValue]
-    col_offsets: list[RowValue]
-    end_linenos: list[RowValue]
-    end_cols: list[RowValue]
+    file_ids: ArrayLike
+    linenos: ArrayLike
+    col_offsets: ArrayLike
+    end_linenos: ArrayLike
+    end_cols: ArrayLike
 
 
 def _ast_span_inputs(py_ast_nodes: pa.Table, cols: AstSpanColumns) -> AstSpanInputs:
-    end_linenos = (
-        cast("list[RowValue]", py_ast_nodes[cols.end_lineno].to_pylist())
-        if cols.end_lineno in py_ast_nodes.column_names
-        else _none_list(py_ast_nodes.num_rows)
-    )
-    end_cols = (
-        cast("list[RowValue]", py_ast_nodes[cols.end_col].to_pylist())
-        if cols.end_col in py_ast_nodes.column_names
-        else _none_list(py_ast_nodes.num_rows)
-    )
+    end_linenos = _column_or_null(py_ast_nodes, cols.end_lineno, pa.int64())
+    end_cols = _column_or_null(py_ast_nodes, cols.end_col, pa.int64())
     return AstSpanInputs(
-        file_ids=py_ast_nodes[cols.file_id].to_pylist(),
-        linenos=py_ast_nodes[cols.lineno].to_pylist(),
-        col_offsets=py_ast_nodes[cols.col].to_pylist(),
+        file_ids=_column_or_null(py_ast_nodes, cols.file_id, pa.string()),
+        linenos=_column_or_null(py_ast_nodes, cols.lineno, pa.int64()),
+        col_offsets=_column_or_null(py_ast_nodes, cols.col, pa.int64()),
         end_linenos=end_linenos,
         end_cols=end_cols,
     )
@@ -434,13 +449,8 @@ def _compute_ast_spans(
     bstarts: list[int | None] = []
     bends: list[int | None] = []
     oks: list[bool] = []
-    for fid, ln, co, eln, eco in zip(
-        inputs.file_ids,
-        inputs.linenos,
-        inputs.col_offsets,
-        inputs.end_linenos,
-        inputs.end_cols,
-        strict=True,
+    for fid, ln, co, eln, eco in _iter_arrays(
+        [inputs.file_ids, inputs.linenos, inputs.col_offsets, inputs.end_linenos, inputs.end_cols]
     ):
         fid_key = str(fid) if fid is not None else None
         if fid_key is None:
@@ -497,11 +507,12 @@ def add_ast_byte_spans(
     inputs = _ast_span_inputs(py_ast_nodes, cols)
     bstarts, bends, oks = _compute_ast_spans(repo_index, inputs)
 
-    return (
+    out = (
         py_ast_nodes.append_column(cols.out_bstart, pa.array(bstarts, type=pa.int64()))
         .append_column(cols.out_bend, pa.array(bends, type=pa.int64()))
         .append_column(cols.out_ok, pa.array(oks, type=pa.bool_()))
     )
+    return add_span_id_column(out)
 
 
 def _span_error(document_id: str, path: str, reason: str) -> dict[str, str]:
@@ -527,11 +538,14 @@ def _build_doc_posenc_map(
         Mapping of document IDs to position encodings.
     """
     doc_posenc: dict[str, int] = {}
-    for row in scip_documents.to_pylist():
-        did = row.get(columns.document_id)
+    arrays = [
+        _column_or_null(scip_documents, columns.document_id, pa.string()),
+        _column_or_null(scip_documents, columns.doc_posenc, pa.string()),
+    ]
+    for did, posenc in _iter_arrays(arrays):
         if did is None:
             continue
-        doc_posenc[str(did)] = normalize_position_encoding(row.get(columns.doc_posenc))
+        doc_posenc[str(did)] = normalize_position_encoding(posenc)
     return doc_posenc
 
 
@@ -546,39 +560,20 @@ def _build_occurrence_rows(
     list[OccurrenceRow]
         Occurrence rows in order.
     """
-    dids = scip_occurrences[columns.document_id].to_pylist()
-    paths = scip_occurrences[columns.path].to_pylist()
-
-    sls = scip_occurrences[columns.start_line].to_pylist()
-    scs = scip_occurrences[columns.start_char].to_pylist()
-    els = scip_occurrences[columns.end_line].to_pylist()
-    ecs = scip_occurrences[columns.end_char].to_pylist()
-
-    has_enc = all(
-        c in scip_occurrences.column_names
-        for c in (
-            columns.enc_start_line,
-            columns.enc_start_char,
-            columns.enc_end_line,
-            columns.enc_end_char,
-        )
-    )
-    if has_enc:
-        esls = scip_occurrences[columns.enc_start_line].to_pylist()
-        escs = scip_occurrences[columns.enc_start_char].to_pylist()
-        eels = scip_occurrences[columns.enc_end_line].to_pylist()
-        eecs = scip_occurrences[columns.enc_end_char].to_pylist()
-    else:
-        none_list = [None] * scip_occurrences.num_rows
-        esls = list(none_list)
-        escs = list(none_list)
-        eels = list(none_list)
-        eecs = list(none_list)
-
+    base_arrays = [
+        _column_or_null(scip_occurrences, columns.document_id, pa.string()),
+        _column_or_null(scip_occurrences, columns.path, pa.string()),
+        _column_or_null(scip_occurrences, columns.start_line, pa.int64()),
+        _column_or_null(scip_occurrences, columns.start_char, pa.int64()),
+        _column_or_null(scip_occurrences, columns.end_line, pa.int64()),
+        _column_or_null(scip_occurrences, columns.end_char, pa.int64()),
+        _column_or_null(scip_occurrences, columns.enc_start_line, pa.int64()),
+        _column_or_null(scip_occurrences, columns.enc_start_char, pa.int64()),
+        _column_or_null(scip_occurrences, columns.enc_end_line, pa.int64()),
+        _column_or_null(scip_occurrences, columns.enc_end_char, pa.int64()),
+    ]
     rows: list[OccurrenceRow] = []
-    for did, path, sl, sc, el, ec, esl, esc, eel, eec in zip(
-        dids, paths, sls, scs, els, ecs, esls, escs, eels, eecs, strict=True
-    ):
+    for did, path, sl, sc, el, ec, esl, esc, eel, eec in _iter_arrays(base_arrays):
         rows.append(
             OccurrenceRow(
                 document_id=did,
@@ -623,9 +618,7 @@ def _compute_occurrence_span(
             error=_span_error(did, path_value, "missing_repo_text_for_path"),
         )
 
-    main_range = _normalized_range(
-        row.start_line, row.start_char, row.end_line, row.end_char
-    )
+    main_range = _normalized_range(row.start_line, row.start_char, row.end_line, row.end_char)
     if main_range is None:
         return OccurrenceSpanResult(
             bstart=None,
@@ -754,6 +747,7 @@ def add_scip_occurrence_byte_spans(
     out = _append_span_column(out, cols.out_enc_bstart, ebstarts, pa.int64())
     out = _append_span_column(out, cols.out_enc_bend, ebends, pa.int64())
     out = _append_span_column(out, cols.out_ok, oks, pa.bool_())
+    out = add_span_id_column(out)
     return out, _span_error_table(err_rows)
 
 

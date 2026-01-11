@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
+
 import pyarrow as pa
 import pyarrow.compute as pc
 
 from arrowdsl.columns import coalesce_string
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_arrays
-from normalize.ids import stable_id
 
 SCHEMA_VERSION = 1
 
@@ -43,6 +44,27 @@ REACHES_SCHEMA = pa.schema(
 USE_PREFIXES = ("LOAD_",)
 DEF_PREFIXES = ("STORE_", "DELETE_")
 DEF_OPS = {"IMPORT_NAME", "IMPORT_FROM"}
+
+type ArrayLike = pa.Array | pa.ChunkedArray
+
+
+def _iter_array_values(array: ArrayLike) -> Iterator[object | None]:
+    for value in array:
+        if isinstance(value, pa.Scalar):
+            yield value.as_py()
+        else:
+            yield value
+
+
+def _iter_arrays(arrays: Sequence[ArrayLike]) -> Iterator[tuple[object | None, ...]]:
+    iters = [_iter_array_values(array) for array in arrays]
+    yield from zip(*iters, strict=True)
+
+
+def _prefixed_hash64(prefix: str, arrays: list[ArrayLike]) -> ArrayLike:
+    hashed = hash64_from_arrays(arrays, prefix=prefix)
+    hashed_str = pc.cast(hashed, pa.string())
+    return pc.binary_join_element_wise(pa.scalar(prefix), hashed_str, ":")
 
 
 def _column_or_null(
@@ -103,9 +125,9 @@ def build_def_use_events(py_bc_instructions: pa.Table) -> pa.Table:
 
     mask = pc.and_(pc.is_valid(table["symbol"]), pc.is_valid(table["kind"]))
     mask = pc.fill_null(mask, replacement=False)
-    if not pc.any(mask).as_py():
-        return empty_table(DEF_USE_SCHEMA)
     table = table.filter(mask)
+    if table.num_rows == 0:
+        return empty_table(DEF_USE_SCHEMA)
 
     event_inputs = [
         _column_or_null(table, "code_unit_id", pa.string()),
@@ -158,25 +180,41 @@ def run_reaching_defs(def_use_events: pa.Table) -> pa.Table:
 
     if not out_rows:
         return empty_table(REACHES_SCHEMA)
-    return pa.Table.from_pylist(out_rows, schema=REACHES_SCHEMA)
+    table = pa.Table.from_pylist(out_rows, schema=REACHES_SCHEMA)
+    def_ids = _column_or_null(table, "def_event_id", pa.string())
+    use_ids = _column_or_null(table, "use_event_id", pa.string())
+    edge_prefixed = _prefixed_hash64("df_reach", [def_ids, use_ids])
+    valid = pc.and_(pc.is_valid(def_ids), pc.is_valid(use_ids))
+    edge_ids = pc.if_else(valid, edge_prefixed, pa.scalar(None, type=pa.string()))
+    idx = table.schema.get_field_index("edge_id")
+    return table.set_column(idx, "edge_id", edge_ids)
 
 
 def _group_def_use_events(
     def_use_events: pa.Table,
-) -> tuple[dict[tuple[str, str], list[dict[str, object]]], dict[tuple[str, str], list[dict[str, object]]]]:
+) -> tuple[
+    dict[tuple[str, str], list[dict[str, object]]], dict[tuple[str, str], list[dict[str, object]]]
+]:
     defs_by_key: dict[tuple[str, str], list[dict[str, object]]] = {}
     uses_by_key: dict[tuple[str, str], list[dict[str, object]]] = {}
-    for row in def_use_events.to_pylist():
-        kind = row.get("kind")
-        code_unit_id = row.get("code_unit_id")
-        symbol = row.get("symbol")
+    arrays = [
+        _column_or_null(def_use_events, "kind", pa.string()),
+        _column_or_null(def_use_events, "code_unit_id", pa.string()),
+        _column_or_null(def_use_events, "symbol", pa.string()),
+        _column_or_null(def_use_events, "event_id", pa.string()),
+        _column_or_null(def_use_events, "path", pa.string()),
+        _column_or_null(def_use_events, "file_id", pa.string()),
+    ]
+    for kind, code_unit_id, symbol, event_id, path, file_id in _iter_arrays(arrays):
         if not isinstance(code_unit_id, str) or not isinstance(symbol, str):
             continue
         key = (code_unit_id, symbol)
         if kind == "def":
-            defs_by_key.setdefault(key, []).append(row)
+            defs_by_key.setdefault(key, []).append({"event_id": event_id})
         elif kind == "use":
-            uses_by_key.setdefault(key, []).append(row)
+            uses_by_key.setdefault(key, []).append(
+                {"event_id": event_id, "path": path, "file_id": file_id}
+            )
     return defs_by_key, uses_by_key
 
 
@@ -213,7 +251,7 @@ def _reaching_rows_for_key(
             rows.append(
                 {
                     "schema_version": SCHEMA_VERSION,
-                    "edge_id": stable_id("df_reach", def_id, use_id),
+                    "edge_id": None,
                     "code_unit_id": code_unit_id,
                     "def_event_id": def_id,
                     "use_event_id": use_id,

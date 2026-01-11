@@ -631,6 +631,7 @@ def cst_build_inputs(
 def scip_build_inputs(
     scip_symbol_information: pa.Table,
     scip_occurrences_norm: pa.Table,
+    scip_external_symbol_information: pa.Table,
 ) -> ScipBuildInputs:
     """Bundle SCIP inputs for CPG builds.
 
@@ -642,6 +643,7 @@ def scip_build_inputs(
     return ScipBuildInputs(
         scip_symbol_information=scip_symbol_information,
         scip_occurrences_norm=scip_occurrences_norm,
+        scip_external_symbol_information=scip_external_symbol_information,
     )
 
 
@@ -836,6 +838,10 @@ def cpg_props_inputs(
         cst_defs=cpg_base_inputs.cst_build_inputs.cst_defs_norm,
         dim_qualified_names=cpg_base_inputs.dim_qualified_names,
         scip_symbol_information=cpg_base_inputs.scip_build_inputs.scip_symbol_information,
+        scip_occurrences=cpg_base_inputs.scip_build_inputs.scip_occurrences_norm,
+        scip_external_symbol_information=(
+            cpg_base_inputs.scip_build_inputs.scip_external_symbol_information
+        ),
         ts_nodes=cpg_extra_inputs.ts_nodes,
         ts_errors=cpg_extra_inputs.ts_errors,
         ts_missing=cpg_extra_inputs.ts_missing,

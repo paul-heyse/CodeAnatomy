@@ -161,11 +161,24 @@ class RuntimeProfile:
         RuntimeProfile
             Updated profile.
         """
+        scan = self.scan
+        if tier == DeterminismTier.CANONICAL and (
+            not scan.implicit_ordering or not scan.require_sequenced_output
+        ):
+            scan = ScanProfile(
+                name=scan.name,
+                batch_size=scan.batch_size,
+                batch_readahead=scan.batch_readahead,
+                fragment_readahead=scan.fragment_readahead,
+                use_threads=scan.use_threads,
+                require_sequenced_output=True,
+                implicit_ordering=True,
+            )
         return RuntimeProfile(
             name=self.name,
             cpu_threads=self.cpu_threads,
             io_threads=self.io_threads,
-            scan=self.scan,
+            scan=scan,
             plan_use_threads=self.plan_use_threads,
             determinism=tier,
         )

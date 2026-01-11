@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import importlib
+import json
+import os
 import subprocess
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from types import ModuleType
 
 import pyarrow as pa
 
-from extract.repo_scan import stable_id
+from arrowdsl.empty import empty_table
+from arrowdsl.ids import hash64_from_parts
+from extract.scip_parse_json import parse_index_json
+from extract.scip_proto_loader import load_scip_pb2_from_build
 
 SCHEMA_VERSION = 1
 RANGE_LEN_SHORT = 3
@@ -19,14 +25,26 @@ RANGE_LEN_FULL = 4
 type Row = dict[str, object]
 
 
+def _hash_id(prefix: str, *parts: str) -> str:
+    # Row-wise hash64 IDs are needed while building dependent rows.
+    hashed = hash64_from_parts(*parts, prefix=prefix)
+    return f"{prefix}:{hashed}"
+
+
 @dataclass(frozen=True)
 class SCIPIndexOptions:
     """Configure scip-python index invocation."""
 
     repo_root: Path
     project_name: str
+    project_version: str | None = None
+    project_namespace: str | None = None
     output_path: Path | None = None
     environment_json: Path | None = None
+    target_only: str | None = None
+    scip_python_bin: str = "scip-python"
+    node_max_old_space_mb: int | None = None
+    timeout_s: int | None = None
     extra_args: Sequence[str] = ()
 
 
@@ -35,7 +53,10 @@ class SCIPParseOptions:
     """Configure index.scip parsing."""
 
     prefer_protobuf: bool = True
+    allow_json_fallback: bool = False
     scip_pb2_import: str | None = None
+    scip_cli_bin: str = "scip"
+    build_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +67,8 @@ class SCIPExtractResult:
     scip_documents: pa.Table
     scip_occurrences: pa.Table
     scip_symbol_information: pa.Table
+    scip_symbol_relationships: pa.Table
+    scip_external_symbol_information: pa.Table
     scip_diagnostics: pa.Table
 
 
@@ -78,6 +101,8 @@ SCIP_OCCURRENCES_SCHEMA = pa.schema(
         ("path", pa.string()),
         ("symbol", pa.string()),
         ("symbol_roles", pa.int32()),
+        ("syntax_kind", pa.string()),
+        ("override_documentation", pa.list_(pa.string())),
         ("start_line", pa.int32()),
         ("start_char", pa.int32()),
         ("end_line", pa.int32()),
@@ -100,6 +125,33 @@ SCIP_SYMBOL_INFO_SCHEMA = pa.schema(
         ("kind", pa.string()),
         ("enclosing_symbol", pa.string()),
         ("documentation", pa.list_(pa.string())),
+        ("signature_documentation", pa.string()),
+    ]
+)
+
+SCIP_SYMBOL_RELATIONSHIPS_SCHEMA = pa.schema(
+    [
+        ("schema_version", pa.int32()),
+        ("relationship_id", pa.string()),
+        ("symbol", pa.string()),
+        ("related_symbol", pa.string()),
+        ("is_reference", pa.bool_()),
+        ("is_implementation", pa.bool_()),
+        ("is_type_definition", pa.bool_()),
+        ("is_definition", pa.bool_()),
+    ]
+)
+
+SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA = pa.schema(
+    [
+        ("schema_version", pa.int32()),
+        ("symbol_info_id", pa.string()),
+        ("symbol", pa.string()),
+        ("display_name", pa.string()),
+        ("kind", pa.string()),
+        ("enclosing_symbol", pa.string()),
+        ("documentation", pa.list_(pa.string())),
+        ("signature_documentation", pa.string()),
     ]
 )
 
@@ -122,8 +174,42 @@ SCIP_DIAGNOSTICS_SCHEMA = pa.schema(
 )
 
 
-def _empty(schema: pa.Schema) -> pa.Table:
-    return pa.Table.from_arrays([pa.array([], type=field.type) for field in schema], schema=schema)
+def _scip_index_command(
+    opts: SCIPIndexOptions,
+    *,
+    out: Path,
+    env_json: Path | None,
+) -> list[str]:
+    cmd: list[str] = [
+        opts.scip_python_bin,
+        "index",
+        ".",
+        "--project-name",
+        opts.project_name,
+        "--output",
+        str(out),
+    ]
+    if opts.project_version:
+        cmd.extend(["--project-version", opts.project_version])
+    if opts.project_namespace:
+        cmd.extend(["--project-namespace", opts.project_namespace])
+    if opts.target_only:
+        cmd.extend(["--target-only", opts.target_only])
+    if env_json is not None:
+        cmd.extend(["--environment", str(env_json)])
+    cmd.extend(list(opts.extra_args))
+    return cmd
+
+
+def _node_options_env(node_max_old_space_mb: int | None) -> dict[str, str] | None:
+    if node_max_old_space_mb is None:
+        return None
+    flag = f"--max-old-space-size={node_max_old_space_mb}"
+    env = os.environ.copy()
+    existing = env.get("NODE_OPTIONS", "")
+    if flag not in existing:
+        env["NODE_OPTIONS"] = f"{existing} {flag}".strip()
+    return env
 
 
 def run_scip_python_index(opts: SCIPIndexOptions) -> Path:
@@ -147,20 +233,17 @@ def run_scip_python_index(opts: SCIPIndexOptions) -> Path:
         Raised when the output file is not found after execution.
     """
     repo_root = opts.repo_root.resolve()
-    out = opts.output_path or (repo_root / "index.scip")
+    out = opts.output_path or (repo_root / "build" / "scip" / "index.scip")
+    if not out.is_absolute():
+        out = repo_root / out
+    out.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd: list[str] = [
-        "scip-python",
-        "index",
-        ".",
-        "--project-name",
-        opts.project_name,
-        "--output",
-        str(out),
-    ]
-    if opts.environment_json is not None:
-        cmd.extend(["--environment", str(opts.environment_json)])
-    cmd.extend(list(opts.extra_args))
+    env_json = opts.environment_json
+    if env_json is not None and not env_json.is_absolute():
+        env_json = repo_root / env_json
+
+    cmd = _scip_index_command(opts, out=out, env_json=env_json)
+    env = _node_options_env(opts.node_max_old_space_mb)
 
     proc = subprocess.run(
         cmd,
@@ -168,6 +251,8 @@ def run_scip_python_index(opts: SCIPIndexOptions) -> Path:
         capture_output=True,
         text=True,
         check=False,
+        env=env,
+        timeout=opts.timeout_s,
     )
     if proc.returncode != 0:
         msg = f"scip-python failed.\ncmd={cmd}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}\n"
@@ -179,7 +264,7 @@ def run_scip_python_index(opts: SCIPIndexOptions) -> Path:
     return out
 
 
-def _normalize_range(rng: Sequence[int]) -> tuple[int, int, int, int, int]:
+def _normalize_range(rng: Sequence[int]) -> tuple[int, int, int, int, int] | None:
     """Normalize SCIP occurrence ranges to a consistent 4-tuple.
 
     Returns
@@ -193,7 +278,33 @@ def _normalize_range(rng: Sequence[int]) -> tuple[int, int, int, int, int]:
     if len(rng) >= RANGE_LEN_FULL:
         sl, sc, el, ec = rng[:RANGE_LEN_FULL]
         return int(sl), int(sc), int(el), int(ec), RANGE_LEN_FULL
-    return 0, 0, 0, 0, 0
+    return None
+
+
+def _load_scip_pb2(parse_opts: SCIPParseOptions) -> ModuleType | None:
+    if parse_opts.scip_pb2_import:
+        try:
+            return importlib.import_module(parse_opts.scip_pb2_import)
+        except ImportError:
+            return None
+
+    build_dir = parse_opts.build_dir or Path("build") / "scip"
+    try:
+        return load_scip_pb2_from_build(build_dir)
+    except (FileNotFoundError, RuntimeError):
+        pass
+
+    try:
+        return importlib.import_module("scip_pb2")
+    except ImportError:
+        return None
+
+
+def _parse_index_protobuf(index_path: Path, scip_pb2: ModuleType) -> object:
+    data = index_path.read_bytes()
+    index = scip_pb2.Index()
+    index.ParseFromString(data)
+    return index
 
 
 def parse_index_scip(index_path: Path, parse_opts: SCIPParseOptions | None = None) -> object:
@@ -213,38 +324,24 @@ def parse_index_scip(index_path: Path, parse_opts: SCIPParseOptions | None = Non
 
     Raises
     ------
-    NotImplementedError
-        Raised when protobuf parsing is disabled.
     RuntimeError
         Raised when SCIP protobuf bindings cannot be imported.
     """
     parse_opts = parse_opts or SCIPParseOptions()
-    if not parse_opts.prefer_protobuf:
-        msg = "JSON-stream parsing is available, but protobuf parsing is disabled."
-        raise NotImplementedError(msg)
-
-    if parse_opts.scip_pb2_import:
-        try:
-            scip_pb2 = importlib.import_module(parse_opts.scip_pb2_import)
-        except ImportError:
-            scip_pb2 = None
-    else:
-        try:
-            scip_pb2 = importlib.import_module("scip_pb2")
-        except ImportError:
-            scip_pb2 = None
-
-    if scip_pb2 is None or not hasattr(scip_pb2, "Index"):
-        msg = (
-            "SCIP protobuf bindings not available.\n"
-            "Generate scip_pb2.py from scip.proto and make it importable."
-        )
-        raise RuntimeError(msg)
-
-    data = index_path.read_bytes()
-    index = scip_pb2.Index()
-    index.ParseFromString(data)
-    return index
+    if parse_opts.build_dir is None:
+        parse_opts = replace(parse_opts, build_dir=index_path.parent)
+    scip_pb2 = _load_scip_pb2(parse_opts)
+    if scip_pb2 is not None and hasattr(scip_pb2, "Index") and parse_opts.prefer_protobuf:
+        return _parse_index_protobuf(index_path, scip_pb2)
+    if parse_opts.allow_json_fallback:
+        return parse_index_json(index_path, parse_opts.scip_cli_bin)
+    if scip_pb2 is not None and hasattr(scip_pb2, "Index"):
+        return _parse_index_protobuf(index_path, scip_pb2)
+    msg = (
+        "SCIP protobuf bindings not available.\n"
+        "Run scripts/scip_proto_codegen.py to generate build/scip/scip_pb2.py."
+    )
+    raise RuntimeError(msg)
 
 
 def _metadata_rows(index: object) -> list[Row]:
@@ -274,17 +371,24 @@ def _diagnostic_rows(
     rel_path: object,
     occ_index: int,
     diagnostics: Sequence[object],
-    default_range: tuple[int, int, int, int],
+    default_range: tuple[int, int, int, int] | None,
 ) -> list[Row]:
     rows: list[Row] = []
-    sl, sc, el, ec = default_range
+    if default_range is None:
+        sl = sc = el = ec = None
+    else:
+        sl, sc, el, ec = default_range
     for j, diag in enumerate(diagnostics):
         drng = list(getattr(diag, "range", []))
-        dsl, dsc, del_, dec_, _ = _normalize_range(drng) if drng else (sl, sc, el, ec, 0)
+        norm = _normalize_range(drng) if drng else None
+        if norm is None:
+            dsl, dsc, del_, dec_ = sl, sc, el, ec
+        else:
+            dsl, dsc, del_, dec_, _ = norm
         rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
-                "diagnostic_id": stable_id("scip_diag", document_id, str(occ_index), str(j)),
+                "diagnostic_id": _hash_id("scip_diag", document_id, str(occ_index), str(j)),
                 "document_id": document_id,
                 "path": rel_path,
                 "severity": str(getattr(diag, "severity", None))
@@ -313,13 +417,26 @@ def _occurrence_rows(
     occ_rows: list[Row] = []
     diag_rows: list[Row] = []
     for i, occ in enumerate(occurrences):
-        sl, sc, el, ec, rlen = _normalize_range(list(getattr(occ, "range", [])))
-        esl, esc, eel, eec, elen = _normalize_range(list(getattr(occ, "enclosing_range", [])))
+        norm = _normalize_range(list(getattr(occ, "range", [])))
+        if norm is None:
+            sl = sc = el = ec = None
+            rlen = 0
+            default_range = None
+        else:
+            sl, sc, el, ec, rlen = norm
+            default_range = (sl, sc, el, ec)
+
+        enc_norm = _normalize_range(list(getattr(occ, "enclosing_range", [])))
+        if enc_norm is None:
+            esl = esc = eel = eec = None
+            elen = None
+        else:
+            esl, esc, eel, eec, elen = enc_norm
 
         occ_rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
-                "occurrence_id": stable_id(
+                "occurrence_id": _hash_id(
                     "scip_occ",
                     document_id,
                     str(i),
@@ -332,6 +449,12 @@ def _occurrence_rows(
                 "path": rel_path,
                 "symbol": getattr(occ, "symbol", None),
                 "symbol_roles": int(getattr(occ, "symbol_roles", 0) or 0),
+                "syntax_kind": str(getattr(occ, "syntax_kind", None))
+                if hasattr(occ, "syntax_kind")
+                else None,
+                "override_documentation": list(getattr(occ, "override_documentation", []))
+                if hasattr(occ, "override_documentation")
+                else [],
                 "start_line": sl,
                 "start_char": sc,
                 "end_line": el,
@@ -351,7 +474,7 @@ def _occurrence_rows(
                 rel_path,
                 i,
                 getattr(occ, "diagnostics", []),
-                (sl, sc, el, ec),
+                default_range,
             )
         )
     return occ_rows, diag_rows
@@ -367,7 +490,7 @@ def _document_rows(index: object) -> tuple[list[Row], list[Row], list[Row]]:
         language = getattr(doc, "language", None)
         position_encoding = getattr(doc, "position_encoding", None)
 
-        document_id = stable_id("scip_doc", rel_path or "")
+        document_id = _hash_id("scip_doc", rel_path or "")
         doc_rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -391,14 +514,36 @@ def _document_rows(index: object) -> tuple[list[Row], list[Row], list[Row]]:
     return doc_rows, occ_rows, diag_rows
 
 
+def _signature_doc_json(sig_doc: object | None) -> str | None:
+    if sig_doc is None:
+        return None
+    text = getattr(sig_doc, "text", None)
+    language = getattr(sig_doc, "language", None)
+    occs = [
+        {
+            "symbol": getattr(occ, "symbol", None),
+            "symbol_roles": int(getattr(occ, "symbol_roles", 0) or 0),
+            "range": list(getattr(occ, "range", [])),
+        }
+        for occ in getattr(sig_doc, "occurrences", [])
+    ]
+    payload = {
+        "text": text,
+        "language": str(language) if language is not None else None,
+        "occurrences": occs,
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def _symbol_rows(index: object) -> list[Row]:
     sym_rows: list[Row] = []
     for si in getattr(index, "symbol_information", []):
         symbol = getattr(si, "symbol", None)
+        sig_doc = getattr(si, "signature_documentation", None)
         sym_rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
-                "symbol_info_id": stable_id("scip_sym", symbol or ""),
+                "symbol_info_id": _hash_id("scip_sym", symbol or ""),
                 "symbol": symbol,
                 "display_name": getattr(si, "display_name", None),
                 "kind": str(getattr(si, "kind", None)) if hasattr(si, "kind") else None,
@@ -408,20 +553,83 @@ def _symbol_rows(index: object) -> list[Row]:
                 "documentation": list(getattr(si, "documentation", []))
                 if hasattr(si, "documentation")
                 else [],
+                "signature_documentation": _signature_doc_json(sig_doc),
             }
         )
     return sym_rows
+
+
+def _symbol_relationship_rows(index: object) -> list[Row]:
+    rows: list[Row] = []
+    for si in getattr(index, "symbol_information", []):
+        symbol = getattr(si, "symbol", None)
+        if not symbol:
+            continue
+        for rel in getattr(si, "relationships", []):
+            related = getattr(rel, "symbol", None)
+            if related is None:
+                continue
+            rel_id = _hash_id(
+                "scip_rel",
+                str(symbol),
+                str(related),
+                str(getattr(rel, "is_reference", False)),
+                str(getattr(rel, "is_implementation", False)),
+                str(getattr(rel, "is_type_definition", False)),
+                str(getattr(rel, "is_definition", False)),
+            )
+            rows.append(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "relationship_id": rel_id,
+                    "symbol": symbol,
+                    "related_symbol": related,
+                    "is_reference": bool(getattr(rel, "is_reference", False)),
+                    "is_implementation": bool(getattr(rel, "is_implementation", False)),
+                    "is_type_definition": bool(getattr(rel, "is_type_definition", False)),
+                    "is_definition": bool(getattr(rel, "is_definition", False)),
+                }
+            )
+    return rows
+
+
+def _external_symbol_rows(index: object) -> list[Row]:
+    rows: list[Row] = []
+    for si in getattr(index, "external_symbols", []):
+        symbol = getattr(si, "symbol", None)
+        sig_doc = getattr(si, "signature_documentation", None)
+        rows.append(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "symbol_info_id": _hash_id("scip_ext_sym", symbol or ""),
+                "symbol": symbol,
+                "display_name": getattr(si, "display_name", None),
+                "kind": str(getattr(si, "kind", None)) if hasattr(si, "kind") else None,
+                "enclosing_symbol": getattr(si, "enclosing_symbol", None)
+                if hasattr(si, "enclosing_symbol")
+                else None,
+                "documentation": list(getattr(si, "documentation", []))
+                if hasattr(si, "documentation")
+                else [],
+                "signature_documentation": _signature_doc_json(sig_doc),
+            }
+        )
+    return rows
 
 
 def _extract_tables_from_index(index: object) -> SCIPExtractResult:
     meta_rows = _metadata_rows(index)
     doc_rows, occ_rows, diag_rows = _document_rows(index)
     sym_rows = _symbol_rows(index)
+    rel_rows = _symbol_relationship_rows(index)
+    ext_rows = _external_symbol_rows(index)
 
     t_meta = pa.Table.from_pylist(meta_rows, schema=SCIP_METADATA_SCHEMA)
     t_docs = pa.Table.from_pylist(doc_rows, schema=SCIP_DOCUMENTS_SCHEMA)
     t_occs = pa.Table.from_pylist(occ_rows, schema=SCIP_OCCURRENCES_SCHEMA)
     t_syms = pa.Table.from_pylist(sym_rows, schema=SCIP_SYMBOL_INFO_SCHEMA)
+    t_rels = pa.Table.from_pylist(rel_rows, schema=SCIP_SYMBOL_RELATIONSHIPS_SCHEMA)
+    t_ext = pa.Table.from_pylist(ext_rows, schema=SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA)
     t_diags = pa.Table.from_pylist(diag_rows, schema=SCIP_DIAGNOSTICS_SCHEMA)
 
     return SCIPExtractResult(
@@ -429,6 +637,8 @@ def _extract_tables_from_index(index: object) -> SCIPExtractResult:
         scip_documents=t_docs,
         scip_occurrences=t_occs,
         scip_symbol_information=t_syms,
+        scip_symbol_relationships=t_rels,
+        scip_external_symbol_information=t_ext,
         scip_diagnostics=t_diags,
     )
 
@@ -461,11 +671,13 @@ def extract_scip_tables(
     _ = ctx
     if scip_index_path is None:
         empty_result = SCIPExtractResult(
-            scip_metadata=_empty(SCIP_METADATA_SCHEMA),
-            scip_documents=_empty(SCIP_DOCUMENTS_SCHEMA),
-            scip_occurrences=_empty(SCIP_OCCURRENCES_SCHEMA),
-            scip_symbol_information=_empty(SCIP_SYMBOL_INFO_SCHEMA),
-            scip_diagnostics=_empty(SCIP_DIAGNOSTICS_SCHEMA),
+            scip_metadata=empty_table(SCIP_METADATA_SCHEMA),
+            scip_documents=empty_table(SCIP_DOCUMENTS_SCHEMA),
+            scip_occurrences=empty_table(SCIP_OCCURRENCES_SCHEMA),
+            scip_symbol_information=empty_table(SCIP_SYMBOL_INFO_SCHEMA),
+            scip_symbol_relationships=empty_table(SCIP_SYMBOL_RELATIONSHIPS_SCHEMA),
+            scip_external_symbol_information=empty_table(SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA),
+            scip_diagnostics=empty_table(SCIP_DIAGNOSTICS_SCHEMA),
         )
     else:
         index_path = Path(scip_index_path)
@@ -479,5 +691,7 @@ def extract_scip_tables(
         "scip_documents": empty_result.scip_documents,
         "scip_occurrences": empty_result.scip_occurrences,
         "scip_symbol_information": empty_result.scip_symbol_information,
+        "scip_symbol_relationships": empty_result.scip_symbol_relationships,
+        "scip_external_symbol_information": empty_result.scip_external_symbol_information,
         "scip_diagnostics": empty_result.scip_diagnostics,
     }

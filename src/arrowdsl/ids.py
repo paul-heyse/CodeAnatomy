@@ -26,6 +26,7 @@ class Hash64ColumnSpec:
     null_sentinel: str = "None"
     missing: MissingPolicy = "raise"
 
+
 _HASH64_FUNCTION = "hash64_udf"
 _NULL_SEPARATOR = "\x1f"
 
@@ -145,9 +146,7 @@ def hash64_from_arrays(
     if not arrays:
         msg = "hash64_from_arrays requires at least one input array."
         raise ValueError(msg)
-    parts: list[ArrayOrScalar] = [
-        _stringify(arr, null_sentinel=null_sentinel) for arr in arrays
-    ]
+    parts: list[ArrayOrScalar] = [_stringify(arr, null_sentinel=null_sentinel) for arr in arrays]
     if prefix is not None:
         parts.insert(0, pa.scalar(prefix))
     joined = pc.binary_join_element_wise(*parts, _NULL_SEPARATOR)

@@ -15,10 +15,10 @@ from arrowdsl.dataset_io import compile_to_acero_scan, open_dataset
 from arrowdsl.expr import E
 from arrowdsl.finalize import FinalizeResult, finalize
 from arrowdsl.joins import JoinSpec, hash_join
-from arrowdsl.kernels import apply_dedupe, canonical_sort, explode_list_column
+from arrowdsl.kernels import apply_dedupe, explode_list_column
 from arrowdsl.plan import Plan, union_all_plans
 from arrowdsl.queryspec import ProjectionSpec, QuerySpec
-from arrowdsl.runtime import ExecutionContext, Ordering
+from arrowdsl.runtime import DeterminismTier, ExecutionContext, Ordering
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
@@ -31,6 +31,7 @@ from relspec.model import (
     DropColumnsSpec,
     ExplodeListSpec,
     IntervalAlignConfig,
+    KernelSpecT,
     ProjectConfig,
     RelationshipRule,
     RenameColumnsSpec,
@@ -228,13 +229,6 @@ def _build_dedupe_kernel(spec: DedupeKernelSpec) -> KernelFn:
     return _fn
 
 
-def _build_canonical_sort_kernel(spec: CanonicalSortKernelSpec) -> KernelFn:
-    def _fn(table: pa.Table, _ctx: ExecutionContext) -> pa.Table:
-        return canonical_sort(table, sort_keys=spec.sort_keys)
-
-    return _fn
-
-
 def _kernel_from_spec(spec: object) -> KernelFn:
     if isinstance(spec, AddLiteralSpec):
         return _build_add_literal_kernel(spec)
@@ -247,25 +241,135 @@ def _kernel_from_spec(spec: object) -> KernelFn:
     if isinstance(spec, DedupeKernelSpec):
         return _build_dedupe_kernel(spec)
     if isinstance(spec, CanonicalSortKernelSpec):
-        return _build_canonical_sort_kernel(spec)
+        msg = "CanonicalSortKernelSpec is deprecated; use contract canonical_sort in finalize."
+        raise TypeError(msg)
     msg = f"Unknown KernelSpec type: {type(spec).__name__}."
     raise ValueError(msg)
 
 
-def _compile_post_kernels(rule: RelationshipRule) -> list[KernelFn]:
+def _compile_post_kernels(specs: Sequence[KernelSpecT]) -> tuple[KernelFn, ...]:
     """Compile post-kernel specifications into callables.
 
     Parameters
     ----------
-    rule:
-        Relationship rule containing post-kernel specs.
+    specs:
+        Post-kernel specs to compile.
 
     Returns
     -------
-    list[KernelFn]
-        Post-kernel functions for the rule.
+    tuple[KernelFn, ...]
+        Post-kernel functions.
     """
-    return [_kernel_from_spec(spec) for spec in rule.post_kernels]
+    return tuple(_kernel_from_spec(spec) for spec in specs)
+
+
+def _apply_add_literal_to_plan(
+    plan: Plan,
+    spec: AddLiteralSpec,
+    *,
+    ctx: ExecutionContext,
+    rule: RelationshipRule,
+) -> Plan:
+    schema = plan.schema(ctx=ctx)
+    names = list(schema.names)
+    if spec.name in names:
+        return plan
+    exprs = [E.field(name) for name in names]
+    exprs.append(E.scalar(spec.value))
+    names.append(spec.name)
+    return plan.project(exprs, names, label=plan.label or rule.name)
+
+
+def _apply_drop_columns_to_plan(
+    plan: Plan,
+    spec: DropColumnsSpec,
+    *,
+    ctx: ExecutionContext,
+    rule: RelationshipRule,
+) -> Plan:
+    schema = plan.schema(ctx=ctx)
+    keep = [name for name in schema.names if name not in spec.columns]
+    if keep == list(schema.names):
+        return plan
+    exprs = [E.field(name) for name in keep]
+    return plan.project(exprs, keep, label=plan.label or rule.name)
+
+
+def _apply_rename_columns_to_plan(
+    plan: Plan,
+    spec: RenameColumnsSpec,
+    *,
+    ctx: ExecutionContext,
+    rule: RelationshipRule,
+) -> Plan:
+    if not spec.mapping:
+        return plan
+    schema = plan.schema(ctx=ctx)
+    names = list(schema.names)
+    renamed = [spec.mapping.get(name, name) for name in names]
+    if renamed == names:
+        return plan
+    exprs = [E.field(name) for name in names]
+    return plan.project(exprs, renamed, label=plan.label or rule.name)
+
+
+def _apply_dedupe_to_plan(
+    plan: Plan,
+    spec: DedupeKernelSpec,
+    *,
+    ctx: ExecutionContext,
+    rule: RelationshipRule,
+) -> tuple[Plan, bool]:
+    strategy = spec.spec.strategy
+    if strategy not in {"KEEP_ARBITRARY", "COLLAPSE_LIST"}:
+        return plan, False
+    if not spec.spec.keys:
+        return plan, True
+    schema = plan.schema(ctx=ctx)
+    names = list(schema.names)
+    if any(key not in names for key in spec.spec.keys):
+        return plan, False
+    non_keys = [name for name in names if name not in spec.spec.keys]
+    if not non_keys:
+        return plan, False
+    agg_fn = "first" if strategy == "KEEP_ARBITRARY" else "list"
+    plan = plan.aggregate(group_keys=list(spec.spec.keys), aggs=[(col, agg_fn) for col in non_keys])
+    agg_names = [f"{col}_{agg_fn}" for col in non_keys]
+    exprs = [E.field(name) for name in spec.spec.keys]
+    exprs.extend(E.field(name) for name in agg_names)
+    out_names = list(spec.spec.keys) + non_keys
+    return plan.project(exprs, out_names, label=plan.label or rule.name), True
+
+
+def _apply_plan_kernel_specs(
+    plan: Plan,
+    specs: Sequence[KernelSpecT],
+    *,
+    ctx: ExecutionContext,
+    rule: RelationshipRule,
+) -> tuple[Plan, tuple[KernelSpecT, ...]]:
+    if plan.decl is None or not specs:
+        return plan, tuple(specs)
+    remaining: list[KernelSpecT] = []
+    for idx, spec in enumerate(specs):
+        if isinstance(spec, AddLiteralSpec):
+            plan = _apply_add_literal_to_plan(plan, spec, ctx=ctx, rule=rule)
+            continue
+        if isinstance(spec, DropColumnsSpec):
+            plan = _apply_drop_columns_to_plan(plan, spec, ctx=ctx, rule=rule)
+            continue
+        if isinstance(spec, RenameColumnsSpec):
+            plan = _apply_rename_columns_to_plan(plan, spec, ctx=ctx, rule=rule)
+            continue
+        if isinstance(spec, DedupeKernelSpec):
+            plan, applied = _apply_dedupe_to_plan(plan, spec, ctx=ctx, rule=rule)
+            if applied:
+                continue
+        remaining = list(specs[idx:])
+        break
+    else:
+        remaining = []
+    return plan, tuple(remaining)
 
 
 def _apply_project_to_plan(
@@ -333,7 +437,13 @@ def _apply_rule_meta_to_plan(
 def _col_pylist(table: pa.Table, name: str) -> list[RowValue]:
     if name not in table.column_names:
         return [None] * table.num_rows
-    return table[name].to_pylist()
+    values: list[RowValue] = []
+    for value in table[name]:
+        if isinstance(value, pa.Scalar):
+            values.append(value.as_py())
+        else:
+            values.append(value)
+    return values
 
 
 def _row_value_number(value: RowValue) -> float | None:
@@ -697,6 +807,10 @@ class CompiledOutput:
         ValueError
             Raised when the output has no contributors.
         """
+        ctx_exec = ctx
+        if ctx.determinism == DeterminismTier.CANONICAL and not ctx.provenance:
+            ctx_exec = ctx.with_provenance(provenance=True)
+
         if not self.contributors:
             msg = f"CompiledOutput {self.output_dataset!r} has no contributors."
             raise ValueError(msg)
@@ -705,28 +819,28 @@ class CompiledOutput:
         table_parts: list[pa.Table] = []
         for cr in self.contributors:
             if cr.execute_fn is not None:
-                table_parts.append(cr.execute(ctx=ctx, resolver=resolver))
+                table_parts.append(cr.execute(ctx=ctx_exec, resolver=resolver))
                 continue
             if cr.plan is None or cr.plan.decl is None:
-                table_parts.append(cr.execute(ctx=ctx, resolver=resolver))
+                table_parts.append(cr.execute(ctx=ctx_exec, resolver=resolver))
                 continue
             if cr.post_kernels:
-                table_parts.append(cr.execute(ctx=ctx, resolver=resolver))
+                table_parts.append(cr.execute(ctx=ctx_exec, resolver=resolver))
                 continue
-            plan_parts.append(_apply_rule_meta_to_plan(cr.plan, rule=cr.rule, ctx=ctx))
+            plan_parts.append(_apply_rule_meta_to_plan(cr.plan, rule=cr.rule, ctx=ctx_exec))
 
         if plan_parts:
             union = union_all_plans(plan_parts, label=self.output_dataset)
-            table_parts.append(union.to_table(ctx=ctx))
+            table_parts.append(union.to_table(ctx=ctx_exec))
 
         unioned = pa.concat_tables(table_parts, promote=True)
 
         if self.contract_name is None:
             dummy = Contract(name=f"{self.output_dataset}_NO_CONTRACT", schema=unioned.schema)
-            return finalize(unioned, contract=dummy, ctx=ctx)
+            return finalize(unioned, contract=dummy, ctx=ctx_exec)
 
         contract = contracts.get(self.contract_name)
-        return finalize(unioned, contract=contract, ctx=ctx)
+        return finalize(unioned, contract=contract, ctx=ctx_exec)
 
 
 class RelationshipRuleCompiler:
@@ -740,16 +854,17 @@ class RelationshipRuleCompiler:
         rule: RelationshipRule,
         *,
         ctx: ExecutionContext,
-        post_kernels: tuple[KernelFn, ...],
+        post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
         src = rule.inputs[0]
         plan = self.resolver.resolve(src, ctx=ctx)
         plan = _apply_project_to_plan(plan, rule.project, rule=rule)
+        plan, remaining = _apply_plan_kernel_specs(plan, post_kernels, ctx=ctx, rule=rule)
         return CompiledRule(
             rule=rule,
             plan=plan,
             execute_fn=None,
-            post_kernels=post_kernels,
+            post_kernels=_compile_post_kernels(remaining),
             emit_rule_meta=rule.emit_rule_meta,
         )
 
@@ -758,7 +873,7 @@ class RelationshipRuleCompiler:
         rule: RelationshipRule,
         *,
         ctx: ExecutionContext,
-        post_kernels: tuple[KernelFn, ...],
+        post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
         if rule.hash_join is None:
             msg = "HASH_JOIN rules require hash_join config."
@@ -783,11 +898,12 @@ class RelationshipRuleCompiler:
             label=rule.name,
         )
         join_plan = _apply_project_to_plan(join_plan, rule.project, rule=rule)
+        join_plan, remaining = _apply_plan_kernel_specs(join_plan, post_kernels, ctx=ctx, rule=rule)
         return CompiledRule(
             rule=rule,
             plan=join_plan,
             execute_fn=None,
-            post_kernels=post_kernels,
+            post_kernels=_compile_post_kernels(remaining),
             emit_rule_meta=rule.emit_rule_meta,
         )
 
@@ -796,15 +912,16 @@ class RelationshipRuleCompiler:
         rule: RelationshipRule,
         *,
         ctx: ExecutionContext,
-        post_kernels: tuple[KernelFn, ...],
+        post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
         src = rule.inputs[0]
         plan = self.resolver.resolve(src, ctx=ctx)
+        plan, remaining = _apply_plan_kernel_specs(plan, post_kernels, ctx=ctx, rule=rule)
         return CompiledRule(
             rule=rule,
             plan=plan,
             execute_fn=None,
-            post_kernels=post_kernels,
+            post_kernels=_compile_post_kernels(remaining),
             emit_rule_meta=rule.emit_rule_meta,
         )
 
@@ -813,7 +930,7 @@ class RelationshipRuleCompiler:
         rule: RelationshipRule,
         *,
         ctx: ExecutionContext,
-        post_kernels: tuple[KernelFn, ...],
+        post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
         def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> pa.Table:
             parts: list[pa.Table] = []
@@ -827,7 +944,7 @@ class RelationshipRuleCompiler:
             rule=rule,
             plan=None,
             execute_fn=_exec,
-            post_kernels=post_kernels,
+            post_kernels=_compile_post_kernels(post_kernels),
             emit_rule_meta=rule.emit_rule_meta,
         )
 
@@ -836,7 +953,7 @@ class RelationshipRuleCompiler:
         rule: RelationshipRule,
         *,
         ctx: ExecutionContext,
-        post_kernels: tuple[KernelFn, ...],
+        post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
         cfg = rule.interval_align
         if cfg is None:
@@ -855,7 +972,7 @@ class RelationshipRuleCompiler:
             rule=rule,
             plan=None,
             execute_fn=_exec,
-            post_kernels=post_kernels,
+            post_kernels=_compile_post_kernels(post_kernels),
             emit_rule_meta=rule.emit_rule_meta,
         )
 
@@ -880,8 +997,6 @@ class RelationshipRuleCompiler:
             Raised when the rule kind is unknown.
         """
         rule.validate()
-        post = tuple(_compile_post_kernels(rule))
-
         handlers: dict[RuleKind, Callable[..., CompiledRule]] = {
             RuleKind.FILTER_PROJECT: self._compile_filter_project,
             RuleKind.HASH_JOIN: self._compile_hash_join,
@@ -894,7 +1009,7 @@ class RelationshipRuleCompiler:
         if handler is None:
             msg = f"Unknown rule kind: {rule.kind}."
             raise ValueError(msg)
-        return handler(rule, ctx=ctx, post_kernels=post)
+        return handler(rule, ctx=ctx, post_kernels=rule.post_kernels)
 
     def compile_registry(
         self,

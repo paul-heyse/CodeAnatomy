@@ -996,7 +996,6 @@ class RelationshipRuleCompiler:
         ValueError
             Raised when the rule kind is unknown.
         """
-        rule.validate()
         handlers: dict[RuleKind, Callable[..., CompiledRule]] = {
             RuleKind.FILTER_PROJECT: self._compile_filter_project,
             RuleKind.HASH_JOIN: self._compile_hash_join,

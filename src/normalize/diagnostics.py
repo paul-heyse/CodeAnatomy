@@ -20,6 +20,7 @@ from normalize.spans import (
     RepoTextIndex,
     line_char_to_byte_offset,
 )
+from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
 
@@ -157,21 +158,24 @@ DIAG_DETAIL_STRUCT = pa.struct(
     ]
 )
 
-DIAG_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("diag_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("bstart", pa.int64()),
-        ("bend", pa.int64()),
-        ("severity", pa.string()),
-        ("message", pa.string()),
-        ("diag_source", pa.string()),
-        ("code", pa.string()),
-        ("details", pa.list_(DIAG_DETAIL_STRUCT)),
-    ]
+DIAG_SPEC = TableSchemaSpec(
+    name="diagnostics_norm_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="diag_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="bstart", dtype=pa.int64()),
+        ArrowFieldSpec(name="bend", dtype=pa.int64()),
+        ArrowFieldSpec(name="severity", dtype=pa.string()),
+        ArrowFieldSpec(name="message", dtype=pa.string()),
+        ArrowFieldSpec(name="diag_source", dtype=pa.string()),
+        ArrowFieldSpec(name="code", dtype=pa.string()),
+        ArrowFieldSpec(name="details", dtype=pa.list_(DIAG_DETAIL_STRUCT)),
+    ],
 )
+
+DIAG_SCHEMA = DIAG_SPEC.to_arrow_schema()
 
 def _column_or_null(
     table: pa.Table,

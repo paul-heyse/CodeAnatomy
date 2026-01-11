@@ -7,35 +7,41 @@ import pyarrow as pa
 from arrowdsl.empty import empty_table
 from arrowdsl.runtime import ExecutionContext
 from normalize.schema_infer import align_table_to_schema
+from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
-CFG_BLOCKS_NORM_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("block_id", pa.string()),
-        ("code_unit_id", pa.string()),
-        ("start_offset", pa.int32()),
-        ("end_offset", pa.int32()),
-        ("kind", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-    ]
+CFG_BLOCKS_NORM_SPEC = TableSchemaSpec(
+    name="py_bc_blocks_norm_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="block_id", dtype=pa.string()),
+        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+        ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
+        ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
+        ArrowFieldSpec(name="kind", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+    ],
 )
 
 
-CFG_EDGES_NORM_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("edge_id", pa.string()),
-        ("code_unit_id", pa.string()),
-        ("src_block_id", pa.string()),
-        ("dst_block_id", pa.string()),
-        ("kind", pa.string()),
-        ("cond_instr_id", pa.string()),
-        ("exc_index", pa.int32()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-    ]
+CFG_EDGES_NORM_SPEC = TableSchemaSpec(
+    name="py_bc_cfg_edges_norm_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="edge_id", dtype=pa.string()),
+        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+        ArrowFieldSpec(name="src_block_id", dtype=pa.string()),
+        ArrowFieldSpec(name="dst_block_id", dtype=pa.string()),
+        ArrowFieldSpec(name="kind", dtype=pa.string()),
+        ArrowFieldSpec(name="cond_instr_id", dtype=pa.string()),
+        ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+    ],
 )
+
+CFG_BLOCKS_NORM_SCHEMA = CFG_BLOCKS_NORM_SPEC.to_arrow_schema()
+CFG_EDGES_NORM_SCHEMA = CFG_EDGES_NORM_SPEC.to_arrow_schema()
 
 
 def build_cfg_blocks(

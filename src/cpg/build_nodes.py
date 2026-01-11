@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import pyarrow as pa
@@ -10,79 +10,316 @@ import pyarrow as pa
 from arrowdsl.finalize import FinalizeResult, finalize
 from arrowdsl.iter import iter_array_values
 from arrowdsl.runtime import ExecutionContext
+from cpg.builders import NodeBuilder
 from cpg.kinds import NodeKind
 from cpg.schemas import CPG_NODES_CONTRACT, CPG_NODES_SCHEMA, SCHEMA_VERSION, empty_nodes
+from cpg.specs import NodeEmitSpec, NodePlanSpec, TableGetter
 
 
-def _const_str(n: int, value: str) -> pa.Array:
-    return pa.array([value] * n, type=pa.string())
-
-
-def _const_i32(n: int, value: int) -> pa.Array:
-    return pa.array([int(value)] * n, type=pa.int32())
-
-
-def _pick_col(table: pa.Table, names: Sequence[str]) -> pa.ChunkedArray | None:
-    for name in names:
-        if name in table.column_names:
-            return table[name]
-    return None
-
-
-@dataclass(frozen=True)
-class AnchoredNodeSpec:
-    """Specification for anchored node extraction."""
-
-    id_col: str
-    kind: NodeKind
-    path_col: str = "path"
-    bstart_col: str = "bstart"
-    bend_col: str = "bend"
-    file_id_col: str | None = "file_id"
-
-
-def _nodes_from_anchored(
+def _set_or_append_column(
     table: pa.Table,
-    spec: AnchoredNodeSpec,
+    name: str,
+    values: pa.Array | pa.ChunkedArray,
 ) -> pa.Table:
-    n = table.num_rows
-    if n == 0:
-        return empty_nodes()
+    if name in table.column_names:
+        idx = table.schema.get_field_index(name)
+        return table.set_column(idx, name, values)
+    return table.append_column(name, values)
 
-    node_id = table[spec.id_col]
-    path = (
-        table[spec.path_col]
-        if spec.path_col in table.column_names
-        else pa.array([None] * n, type=pa.string())
-    )
-    bstart = (
-        table[spec.bstart_col]
-        if spec.bstart_col in table.column_names
-        else pa.array([None] * n, type=pa.int64())
-    )
-    bend = (
-        table[spec.bend_col]
-        if spec.bend_col in table.column_names
-        else pa.array([None] * n, type=pa.int64())
-    )
 
-    if spec.file_id_col is not None and spec.file_id_col in table.column_names:
-        file_id = table[spec.file_id_col]
-    else:
-        file_id = pa.array([None] * n, type=pa.string())
+def _file_span_arrays(
+    n: int,
+    size: pa.ChunkedArray | None,
+    *,
+    use_size_bytes: bool,
+) -> tuple[pa.Array, pa.Array]:
+    if use_size_bytes and size is not None:
+        bends: list[int | None] = []
+        for value in iter_array_values(size):
+            if isinstance(value, bool):
+                bends.append(None)
+            elif isinstance(value, int):
+                bends.append(value)
+            elif (isinstance(value, float) and value.is_integer()) or (
+                isinstance(value, str) and value.isdigit()
+            ):
+                bends.append(int(value))
+            else:
+                bends.append(None)
+        return pa.array([0] * n, type=pa.int64()), pa.array(bends, type=pa.int64())
+    return pa.array([None] * n, type=pa.int64()), pa.array([None] * n, type=pa.int64())
 
-    return pa.Table.from_arrays(
-        [
-            _const_i32(n, SCHEMA_VERSION),
-            node_id,
-            _const_str(n, spec.kind.value),
-            path,
-            bstart,
-            bend,
-            file_id,
-        ],
-        schema=CPG_NODES_SCHEMA,
-    )
+
+def _file_nodes_table(
+    repo_files: pa.Table | None,
+    *,
+    use_size_bytes: bool,
+) -> pa.Table | None:
+    if repo_files is None or repo_files.num_rows == 0:
+        return None
+    if "file_id" not in repo_files.column_names or "path" not in repo_files.column_names:
+        return None
+    n = repo_files.num_rows
+    size = repo_files["size_bytes"] if "size_bytes" in repo_files.column_names else None
+    bstart, bend = _file_span_arrays(n, size, use_size_bytes=use_size_bytes)
+    table = _set_or_append_column(repo_files, "bstart", bstart)
+    return _set_or_append_column(table, "bend", bend)
+
+
+def _collect_symbols(table: pa.Table | None) -> set[str]:
+    if table is None or "symbol" not in table.column_names:
+        return set()
+    return {str(sym) for sym in iter_array_values(table["symbol"]) if sym}
+
+
+def _symbol_nodes_table(
+    scip_symbol_information: pa.Table | None,
+    scip_occurrences: pa.Table | None,
+) -> pa.Table | None:
+    symbols = _collect_symbols(scip_symbol_information)
+    symbols.update(_collect_symbols(scip_occurrences))
+    if not symbols:
+        return None
+    uniq = sorted(symbols)
+    return pa.Table.from_arrays([pa.array(uniq, type=pa.string())], names=["symbol"])
+
+
+def _table_getter(name: str) -> TableGetter:
+    def _get_table(tables: Mapping[str, pa.Table]) -> pa.Table | None:
+        return tables.get(name)
+
+    return _get_table
+
+
+NODE_PLAN_SPECS: tuple[NodePlanSpec, ...] = (
+    NodePlanSpec(
+        name="file_nodes",
+        option_flag="include_file_nodes",
+        table_getter=_table_getter("repo_files_nodes"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.PY_FILE,
+            id_cols=("file_id",),
+            path_cols=("path",),
+            bstart_cols=("bstart",),
+            bend_cols=("bend",),
+            file_id_cols=("file_id",),
+        ),
+    ),
+    NodePlanSpec(
+        name="name_ref_nodes",
+        option_flag="include_name_ref_nodes",
+        table_getter=_table_getter("cst_name_refs"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.CST_NAME_REF,
+            id_cols=("name_ref_id",),
+            path_cols=("path",),
+            bstart_cols=("bstart",),
+            bend_cols=("bend",),
+            file_id_cols=("file_id",),
+        ),
+    ),
+    NodePlanSpec(
+        name="import_alias_nodes",
+        option_flag="include_import_alias_nodes",
+        table_getter=_table_getter("cst_imports"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.CST_IMPORT_ALIAS,
+            id_cols=("import_alias_id", "import_id"),
+            path_cols=("path",),
+            bstart_cols=("bstart", "alias_bstart"),
+            bend_cols=("bend", "alias_bend"),
+            file_id_cols=("file_id",),
+        ),
+    ),
+    NodePlanSpec(
+        name="callsite_nodes",
+        option_flag="include_callsite_nodes",
+        table_getter=_table_getter("cst_callsites"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.CST_CALLSITE,
+            id_cols=("call_id",),
+            path_cols=("path",),
+            bstart_cols=("call_bstart", "bstart"),
+            bend_cols=("call_bend", "bend"),
+            file_id_cols=("file_id",),
+        ),
+    ),
+    NodePlanSpec(
+        name="def_nodes",
+        option_flag="include_def_nodes",
+        table_getter=_table_getter("cst_defs"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.CST_DEF,
+            id_cols=("def_id",),
+            path_cols=("path",),
+            bstart_cols=("bstart", "name_bstart"),
+            bend_cols=("bend", "name_bend"),
+            file_id_cols=("file_id",),
+        ),
+    ),
+    NodePlanSpec(
+        name="qname_nodes",
+        option_flag="include_qname_nodes",
+        table_getter=_table_getter("dim_qualified_names"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.PY_QUALIFIED_NAME,
+            id_cols=("qname_id",),
+            path_cols=("path",),
+            bstart_cols=("bstart",),
+            bend_cols=("bend",),
+            file_id_cols=(),
+        ),
+    ),
+    NodePlanSpec(
+        name="symbol_nodes",
+        option_flag="include_symbol_nodes",
+        table_getter=_table_getter("scip_symbols"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.SCIP_SYMBOL,
+            id_cols=("symbol",),
+            path_cols=(),
+            bstart_cols=(),
+            bend_cols=(),
+            file_id_cols=(),
+        ),
+    ),
+    NodePlanSpec(
+        name="tree_sitter_nodes",
+        option_flag="include_tree_sitter_nodes",
+        table_getter=_table_getter("ts_nodes"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.TS_NODE,
+            id_cols=("ts_node_id",),
+            path_cols=("path",),
+            bstart_cols=("start_byte",),
+            bend_cols=("end_byte",),
+            file_id_cols=("file_id",),
+        ),
+    ),
+    NodePlanSpec(
+        name="tree_sitter_error_nodes",
+        option_flag="include_tree_sitter_nodes",
+        table_getter=_table_getter("ts_errors"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.TS_ERROR,
+            id_cols=("ts_error_id",),
+            path_cols=("path",),
+            bstart_cols=("start_byte",),
+            bend_cols=("end_byte",),
+            file_id_cols=("file_id",),
+        ),
+    ),
+    NodePlanSpec(
+        name="tree_sitter_missing_nodes",
+        option_flag="include_tree_sitter_nodes",
+        table_getter=_table_getter("ts_missing"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.TS_MISSING,
+            id_cols=("ts_missing_id",),
+            path_cols=("path",),
+            bstart_cols=("start_byte",),
+            bend_cols=("end_byte",),
+            file_id_cols=("file_id",),
+        ),
+    ),
+    NodePlanSpec(
+        name="type_expr_nodes",
+        option_flag="include_type_nodes",
+        table_getter=_table_getter("type_exprs_norm"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.TYPE_EXPR,
+            id_cols=("type_expr_id",),
+            path_cols=("path",),
+            bstart_cols=("bstart",),
+            bend_cols=("bend",),
+            file_id_cols=("file_id",),
+        ),
+    ),
+    NodePlanSpec(
+        name="type_nodes",
+        option_flag="include_type_nodes",
+        table_getter=_table_getter("types_norm"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.TYPE,
+            id_cols=("type_id",),
+            path_cols=(),
+            bstart_cols=(),
+            bend_cols=(),
+            file_id_cols=(),
+        ),
+    ),
+    NodePlanSpec(
+        name="diagnostic_nodes",
+        option_flag="include_diagnostic_nodes",
+        table_getter=_table_getter("diagnostics_norm"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.DIAG,
+            id_cols=("diag_id",),
+            path_cols=("path",),
+            bstart_cols=("bstart",),
+            bend_cols=("bend",),
+            file_id_cols=("file_id",),
+        ),
+    ),
+    NodePlanSpec(
+        name="runtime_object_nodes",
+        option_flag="include_runtime_nodes",
+        table_getter=_table_getter("rt_objects"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.RT_OBJECT,
+            id_cols=("rt_id",),
+            path_cols=(),
+            bstart_cols=(),
+            bend_cols=(),
+            file_id_cols=(),
+        ),
+    ),
+    NodePlanSpec(
+        name="runtime_signature_nodes",
+        option_flag="include_runtime_nodes",
+        table_getter=_table_getter("rt_signatures"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.RT_SIGNATURE,
+            id_cols=("sig_id",),
+            path_cols=(),
+            bstart_cols=(),
+            bend_cols=(),
+            file_id_cols=(),
+        ),
+    ),
+    NodePlanSpec(
+        name="runtime_param_nodes",
+        option_flag="include_runtime_nodes",
+        table_getter=_table_getter("rt_signature_params"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.RT_SIGNATURE_PARAM,
+            id_cols=("param_id",),
+            path_cols=(),
+            bstart_cols=(),
+            bend_cols=(),
+            file_id_cols=(),
+        ),
+    ),
+    NodePlanSpec(
+        name="runtime_member_nodes",
+        option_flag="include_runtime_nodes",
+        table_getter=_table_getter("rt_members"),
+        emit=NodeEmitSpec(
+            node_kind=NodeKind.RT_MEMBER,
+            id_cols=("member_id",),
+            path_cols=(),
+            bstart_cols=(),
+            bend_cols=(),
+            file_id_cols=(),
+        ),
+    ),
+)
+
+NODE_BUILDER = NodeBuilder(
+    emitters=NODE_PLAN_SPECS,
+    schema_version=SCHEMA_VERSION,
+    node_schema=CPG_NODES_SCHEMA,
+)
 
 
 @dataclass(frozen=True)
@@ -127,419 +364,43 @@ class NodeInputTables:
     rt_members: pa.Table | None = None
 
 
-@dataclass(frozen=True)
-class NodePartSpec:
-    """Configure a node builder tied to a build option."""
+def _node_tables(inputs: NodeInputTables, *, options: NodeBuildOptions) -> dict[str, pa.Table]:
+    tables: dict[str, pa.Table] = {}
+    repo_files = inputs.repo_files
+    if repo_files is not None:
+        tables["repo_files"] = repo_files
+        file_nodes = _file_nodes_table(repo_files, use_size_bytes=options.file_span_from_size_bytes)
+        if file_nodes is not None:
+            tables["repo_files_nodes"] = file_nodes
 
-    flag: str
-    builder: Callable[[NodeInputTables, NodeBuildOptions], list[pa.Table]]
-
-
-def _collect_parts(parts: Sequence[pa.Table | None]) -> list[pa.Table]:
-    return [part for part in parts if part is not None]
-
-
-def _build_file_nodes(tables: NodeInputTables, options: NodeBuildOptions) -> list[pa.Table]:
-    return _collect_parts([_file_nodes(tables.repo_files, options)])
-
-
-def _build_name_ref_nodes(tables: NodeInputTables, options: NodeBuildOptions) -> list[pa.Table]:
-    _ = options
-    return _collect_parts([_name_ref_nodes(tables.cst_name_refs)])
-
-
-def _build_import_alias_nodes(tables: NodeInputTables, options: NodeBuildOptions) -> list[pa.Table]:
-    _ = options
-    return _collect_parts([_import_alias_nodes(tables.cst_imports)])
-
-
-def _build_callsite_nodes(tables: NodeInputTables, options: NodeBuildOptions) -> list[pa.Table]:
-    _ = options
-    return _collect_parts([_callsite_nodes(tables.cst_callsites)])
-
-
-def _build_def_nodes(tables: NodeInputTables, options: NodeBuildOptions) -> list[pa.Table]:
-    _ = options
-    return _collect_parts([_def_nodes(tables.cst_defs)])
-
-
-def _build_qname_nodes(tables: NodeInputTables, options: NodeBuildOptions) -> list[pa.Table]:
-    _ = options
-    return _collect_parts([_qname_nodes(tables.dim_qualified_names)])
-
-
-def _build_symbol_nodes(tables: NodeInputTables, options: NodeBuildOptions) -> list[pa.Table]:
-    _ = options
-    return _collect_parts([_symbol_nodes(tables.scip_symbol_information, tables.scip_occurrences)])
-
-
-def _build_tree_sitter_nodes(tables: NodeInputTables, options: NodeBuildOptions) -> list[pa.Table]:
-    _ = options
-    return _collect_parts(
-        [
-            _ts_nodes(tables.ts_nodes),
-            _ts_error_nodes(tables.ts_errors),
-            _ts_missing_nodes(tables.ts_missing),
-        ]
+    tables.update(
+        {
+            name: table
+            for name, table in {
+                "cst_name_refs": inputs.cst_name_refs,
+                "cst_imports": inputs.cst_imports,
+                "cst_callsites": inputs.cst_callsites,
+                "cst_defs": inputs.cst_defs,
+                "dim_qualified_names": inputs.dim_qualified_names,
+                "ts_nodes": inputs.ts_nodes,
+                "ts_errors": inputs.ts_errors,
+                "ts_missing": inputs.ts_missing,
+                "type_exprs_norm": inputs.type_exprs_norm,
+                "types_norm": inputs.types_norm,
+                "diagnostics_norm": inputs.diagnostics_norm,
+                "rt_objects": inputs.rt_objects,
+                "rt_signatures": inputs.rt_signatures,
+                "rt_signature_params": inputs.rt_signature_params,
+                "rt_members": inputs.rt_members,
+            }.items()
+            if table is not None
+        }
     )
 
-
-def _build_type_nodes(tables: NodeInputTables, options: NodeBuildOptions) -> list[pa.Table]:
-    _ = options
-    return _collect_parts(
-        [_type_expr_nodes(tables.type_exprs_norm), _type_nodes(tables.types_norm)]
-    )
-
-
-def _build_diagnostic_nodes(tables: NodeInputTables, options: NodeBuildOptions) -> list[pa.Table]:
-    _ = options
-    return _collect_parts([_diagnostic_nodes(tables.diagnostics_norm)])
-
-
-def _build_runtime_nodes(tables: NodeInputTables, options: NodeBuildOptions) -> list[pa.Table]:
-    _ = options
-    return _runtime_nodes(
-        tables.rt_objects,
-        tables.rt_signatures,
-        tables.rt_signature_params,
-        tables.rt_members,
-    )
-
-
-NODE_PART_SPECS: tuple[NodePartSpec, ...] = (
-    NodePartSpec(flag="include_file_nodes", builder=_build_file_nodes),
-    NodePartSpec(flag="include_name_ref_nodes", builder=_build_name_ref_nodes),
-    NodePartSpec(flag="include_import_alias_nodes", builder=_build_import_alias_nodes),
-    NodePartSpec(flag="include_callsite_nodes", builder=_build_callsite_nodes),
-    NodePartSpec(flag="include_def_nodes", builder=_build_def_nodes),
-    NodePartSpec(flag="include_qname_nodes", builder=_build_qname_nodes),
-    NodePartSpec(flag="include_symbol_nodes", builder=_build_symbol_nodes),
-    NodePartSpec(flag="include_tree_sitter_nodes", builder=_build_tree_sitter_nodes),
-    NodePartSpec(flag="include_type_nodes", builder=_build_type_nodes),
-    NodePartSpec(flag="include_diagnostic_nodes", builder=_build_diagnostic_nodes),
-    NodePartSpec(flag="include_runtime_nodes", builder=_build_runtime_nodes),
-)
-
-
-def _append_part(parts: list[pa.Table], table: pa.Table | None) -> None:
-    if table is not None and table.num_rows:
-        parts.append(table)
-
-
-def _file_span_arrays(
-    n: int,
-    size: pa.ChunkedArray | None,
-    *,
-    use_size_bytes: bool,
-) -> tuple[pa.Array, pa.Array]:
-    if use_size_bytes and size is not None:
-        bends: list[int | None] = []
-        for value in iter_array_values(size):
-            if isinstance(value, bool):
-                bends.append(None)
-            elif isinstance(value, int):
-                bends.append(value)
-            elif (isinstance(value, float) and value.is_integer()) or (
-                isinstance(value, str) and value.isdigit()
-            ):
-                bends.append(int(value))
-            else:
-                bends.append(None)
-        return pa.array([0] * n, type=pa.int64()), pa.array(bends, type=pa.int64())
-    return pa.array([None] * n, type=pa.int64()), pa.array([None] * n, type=pa.int64())
-
-
-def _file_nodes(repo_files: pa.Table | None, options: NodeBuildOptions) -> pa.Table | None:
-    if repo_files is None or repo_files.num_rows == 0:
-        return None
-    n = repo_files.num_rows
-    file_id = _pick_col(repo_files, ["file_id"])
-    path = _pick_col(repo_files, ["path"])
-    size = _pick_col(repo_files, ["size_bytes"])
-    if file_id is None or path is None:
-        return None
-
-    bstart, bend = _file_span_arrays(
-        n,
-        size,
-        use_size_bytes=options.file_span_from_size_bytes,
-    )
-    return pa.Table.from_arrays(
-        [
-            _const_i32(n, SCHEMA_VERSION),
-            file_id,
-            _const_str(n, NodeKind.PY_FILE.value),
-            path,
-            bstart,
-            bend,
-            file_id,
-        ],
-        schema=CPG_NODES_SCHEMA,
-    )
-
-
-def _name_ref_nodes(cst_name_refs: pa.Table | None) -> pa.Table | None:
-    if cst_name_refs is None or cst_name_refs.num_rows == 0:
-        return None
-    file_id_col = "file_id" if "file_id" in cst_name_refs.column_names else None
-    return _nodes_from_anchored(
-        cst_name_refs,
-        AnchoredNodeSpec(
-            id_col="name_ref_id",
-            kind=NodeKind.CST_NAME_REF,
-            path_col="path",
-            bstart_col="bstart",
-            bend_col="bend",
-            file_id_col=file_id_col,
-        ),
-    )
-
-
-def _import_alias_nodes(cst_imports: pa.Table | None) -> pa.Table | None:
-    if cst_imports is None or cst_imports.num_rows == 0:
-        return None
-    id_col = "import_alias_id" if "import_alias_id" in cst_imports.column_names else "import_id"
-    bstart_col = "bstart" if "bstart" in cst_imports.column_names else "alias_bstart"
-    bend_col = "bend" if "bend" in cst_imports.column_names else "alias_bend"
-    file_id_col = "file_id" if "file_id" in cst_imports.column_names else None
-    return _nodes_from_anchored(
-        cst_imports,
-        AnchoredNodeSpec(
-            id_col=id_col,
-            kind=NodeKind.CST_IMPORT_ALIAS,
-            path_col="path",
-            bstart_col=bstart_col,
-            bend_col=bend_col,
-            file_id_col=file_id_col,
-        ),
-    )
-
-
-def _callsite_span_columns(cst_callsites: pa.Table) -> tuple[str, str]:
-    bstart_col = "call_bstart" if "call_bstart" in cst_callsites.column_names else "bstart"
-    bend_col = "call_bend" if "call_bend" in cst_callsites.column_names else "bend"
-    return bstart_col, bend_col
-
-
-def _callsite_nodes(cst_callsites: pa.Table | None) -> pa.Table | None:
-    if cst_callsites is None or cst_callsites.num_rows == 0:
-        return None
-    bstart_col, bend_col = _callsite_span_columns(cst_callsites)
-    file_id_col = "file_id" if "file_id" in cst_callsites.column_names else None
-    return _nodes_from_anchored(
-        cst_callsites,
-        AnchoredNodeSpec(
-            id_col="call_id",
-            kind=NodeKind.CST_CALLSITE,
-            path_col="path",
-            bstart_col=bstart_col,
-            bend_col=bend_col,
-            file_id_col=file_id_col,
-        ),
-    )
-
-
-def _def_nodes(cst_defs: pa.Table | None) -> pa.Table | None:
-    if cst_defs is None or cst_defs.num_rows == 0:
-        return None
-    bstart_col = "bstart" if "bstart" in cst_defs.column_names else "name_bstart"
-    bend_col = "bend" if "bend" in cst_defs.column_names else "name_bend"
-    file_id_col = "file_id" if "file_id" in cst_defs.column_names else None
-    return _nodes_from_anchored(
-        cst_defs,
-        AnchoredNodeSpec(
-            id_col="def_id",
-            kind=NodeKind.CST_DEF,
-            path_col="path",
-            bstart_col=bstart_col,
-            bend_col=bend_col,
-            file_id_col=file_id_col,
-        ),
-    )
-
-
-def _qname_nodes(dim_qualified_names: pa.Table | None) -> pa.Table | None:
-    if (
-        dim_qualified_names is None
-        or dim_qualified_names.num_rows == 0
-        or "qname_id" not in dim_qualified_names.column_names
-    ):
-        return None
-    return _nodes_from_anchored(
-        dim_qualified_names,
-        AnchoredNodeSpec(
-            id_col="qname_id",
-            kind=NodeKind.PY_QUALIFIED_NAME,
-            path_col="path",
-            bstart_col="bstart",
-            bend_col="bend",
-            file_id_col=None,
-        ),
-    )
-
-
-def _collect_symbols(table: pa.Table | None) -> set[str]:
-    if table is None or "symbol" not in table.column_names:
-        return set()
-    return {str(sym) for sym in iter_array_values(table["symbol"]) if sym}
-
-
-def _symbol_nodes(
-    scip_symbol_information: pa.Table | None,
-    scip_occurrences: pa.Table | None,
-) -> pa.Table | None:
-    symbols = _collect_symbols(scip_symbol_information)
-    symbols.update(_collect_symbols(scip_occurrences))
-    if not symbols:
-        return None
-
-    uniq = sorted(symbols)
-    n = len(uniq)
-    return pa.Table.from_arrays(
-        [
-            _const_i32(n, SCHEMA_VERSION),
-            pa.array(uniq, type=pa.string()),
-            _const_str(n, NodeKind.SCIP_SYMBOL.value),
-            pa.array([None] * n, type=pa.string()),
-            pa.array([None] * n, type=pa.int64()),
-            pa.array([None] * n, type=pa.int64()),
-            pa.array([None] * n, type=pa.string()),
-        ],
-        schema=CPG_NODES_SCHEMA,
-    )
-
-
-def _nodes_from_unanchored(table: pa.Table, *, id_col: str, kind: NodeKind) -> pa.Table:
-    return _nodes_from_anchored(
-        table,
-        AnchoredNodeSpec(
-            id_col=id_col,
-            kind=kind,
-            path_col="path",
-            bstart_col="bstart",
-            bend_col="bend",
-            file_id_col=None,
-        ),
-    )
-
-
-def _ts_nodes(ts_nodes: pa.Table | None) -> pa.Table | None:
-    if ts_nodes is None or ts_nodes.num_rows == 0:
-        return None
-    file_id_col = "file_id" if "file_id" in ts_nodes.column_names else None
-    return _nodes_from_anchored(
-        ts_nodes,
-        AnchoredNodeSpec(
-            id_col="ts_node_id",
-            kind=NodeKind.TS_NODE,
-            path_col="path",
-            bstart_col="start_byte",
-            bend_col="end_byte",
-            file_id_col=file_id_col,
-        ),
-    )
-
-
-def _ts_error_nodes(ts_errors: pa.Table | None) -> pa.Table | None:
-    if ts_errors is None or ts_errors.num_rows == 0:
-        return None
-    file_id_col = "file_id" if "file_id" in ts_errors.column_names else None
-    return _nodes_from_anchored(
-        ts_errors,
-        AnchoredNodeSpec(
-            id_col="ts_error_id",
-            kind=NodeKind.TS_ERROR,
-            path_col="path",
-            bstart_col="start_byte",
-            bend_col="end_byte",
-            file_id_col=file_id_col,
-        ),
-    )
-
-
-def _ts_missing_nodes(ts_missing: pa.Table | None) -> pa.Table | None:
-    if ts_missing is None or ts_missing.num_rows == 0:
-        return None
-    file_id_col = "file_id" if "file_id" in ts_missing.column_names else None
-    return _nodes_from_anchored(
-        ts_missing,
-        AnchoredNodeSpec(
-            id_col="ts_missing_id",
-            kind=NodeKind.TS_MISSING,
-            path_col="path",
-            bstart_col="start_byte",
-            bend_col="end_byte",
-            file_id_col=file_id_col,
-        ),
-    )
-
-
-def _type_expr_nodes(type_exprs_norm: pa.Table | None) -> pa.Table | None:
-    if type_exprs_norm is None or type_exprs_norm.num_rows == 0:
-        return None
-    file_id_col = "file_id" if "file_id" in type_exprs_norm.column_names else None
-    return _nodes_from_anchored(
-        type_exprs_norm,
-        AnchoredNodeSpec(
-            id_col="type_expr_id",
-            kind=NodeKind.TYPE_EXPR,
-            path_col="path",
-            bstart_col="bstart",
-            bend_col="bend",
-            file_id_col=file_id_col,
-        ),
-    )
-
-
-def _type_nodes(types_norm: pa.Table | None) -> pa.Table | None:
-    if types_norm is None or types_norm.num_rows == 0:
-        return None
-    return _nodes_from_unanchored(types_norm, id_col="type_id", kind=NodeKind.TYPE)
-
-
-def _diagnostic_nodes(diagnostics_norm: pa.Table | None) -> pa.Table | None:
-    if diagnostics_norm is None or diagnostics_norm.num_rows == 0:
-        return None
-    file_id_col = "file_id" if "file_id" in diagnostics_norm.column_names else None
-    return _nodes_from_anchored(
-        diagnostics_norm,
-        AnchoredNodeSpec(
-            id_col="diag_id",
-            kind=NodeKind.DIAG,
-            path_col="path",
-            bstart_col="bstart",
-            bend_col="bend",
-            file_id_col=file_id_col,
-        ),
-    )
-
-
-def _runtime_nodes(
-    rt_objects: pa.Table | None,
-    rt_signatures: pa.Table | None,
-    rt_signature_params: pa.Table | None,
-    rt_members: pa.Table | None,
-) -> list[pa.Table]:
-    parts: list[pa.Table] = []
-    if rt_objects is not None and rt_objects.num_rows:
-        parts.append(_nodes_from_unanchored(rt_objects, id_col="rt_id", kind=NodeKind.RT_OBJECT))
-    if rt_signatures is not None and rt_signatures.num_rows:
-        parts.append(
-            _nodes_from_unanchored(rt_signatures, id_col="sig_id", kind=NodeKind.RT_SIGNATURE)
-        )
-    if rt_signature_params is not None and rt_signature_params.num_rows:
-        parts.append(
-            _nodes_from_unanchored(
-                rt_signature_params,
-                id_col="param_id",
-                kind=NodeKind.RT_SIGNATURE_PARAM,
-            )
-        )
-    if rt_members is not None and rt_members.num_rows:
-        parts.append(
-            _nodes_from_unanchored(rt_members, id_col="member_id", kind=NodeKind.RT_MEMBER)
-        )
-    return parts
+    symbol_nodes = _symbol_nodes_table(inputs.scip_symbol_information, inputs.scip_occurrences)
+    if symbol_nodes is not None:
+        tables["scip_symbols"] = symbol_nodes
+    return tables
 
 
 def build_cpg_nodes_raw(
@@ -562,14 +423,9 @@ def build_cpg_nodes_raw(
         Raw nodes table.
     """
     options = options or NodeBuildOptions()
-    tables = inputs or NodeInputTables()
-    parts: list[pa.Table] = []
-
-    for spec in NODE_PART_SPECS:
-        if not getattr(options, spec.flag):
-            continue
-        for part in spec.builder(tables, options):
-            _append_part(parts, part)
+    tables = _node_tables(inputs or NodeInputTables(), options=options)
+    parts = NODE_BUILDER.build(tables=tables, options=options)
+    parts = [part for part in parts if part.num_rows]
 
     if not parts:
         return empty_nodes()

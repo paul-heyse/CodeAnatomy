@@ -20,6 +20,7 @@ from arrowdsl.nested import build_list_array, build_struct_array
 from arrowdsl.schema import align_to_schema
 from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
+from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
 RANGE_LEN_SHORT = 3
@@ -90,106 +91,121 @@ SCIP_SIGNATURE_DOCUMENTATION_TYPE = pa.struct(
     ]
 )
 
-SCIP_METADATA_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("tool_name", pa.string()),
-        ("tool_version", pa.string()),
-        ("project_root", pa.string()),
-        ("text_document_encoding", pa.string()),
-        ("protocol_version", pa.string()),
-    ]
+SCIP_METADATA_SPEC = TableSchemaSpec(
+    name="scip_metadata_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="tool_name", dtype=pa.string()),
+        ArrowFieldSpec(name="tool_version", dtype=pa.string()),
+        ArrowFieldSpec(name="project_root", dtype=pa.string()),
+        ArrowFieldSpec(name="text_document_encoding", dtype=pa.string()),
+        ArrowFieldSpec(name="protocol_version", dtype=pa.string()),
+    ],
 )
 
-SCIP_DOCUMENTS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("document_id", pa.string()),
-        ("path", pa.string()),
-        ("language", pa.string()),
-        ("position_encoding", pa.string()),
-    ]
+SCIP_DOCUMENTS_SPEC = TableSchemaSpec(
+    name="scip_documents_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="document_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="language", dtype=pa.string()),
+        ArrowFieldSpec(name="position_encoding", dtype=pa.string()),
+    ],
 )
 
-SCIP_OCCURRENCES_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("occurrence_id", pa.string()),
-        ("document_id", pa.string()),
-        ("path", pa.string()),
-        ("symbol", pa.string()),
-        ("symbol_roles", pa.int32()),
-        ("syntax_kind", pa.string()),
-        ("override_documentation", pa.list_(pa.string())),
-        ("start_line", pa.int32()),
-        ("start_char", pa.int32()),
-        ("end_line", pa.int32()),
-        ("end_char", pa.int32()),
-        ("range_len", pa.int32()),
-        ("enc_start_line", pa.int32()),
-        ("enc_start_char", pa.int32()),
-        ("enc_end_line", pa.int32()),
-        ("enc_end_char", pa.int32()),
-        ("enc_range_len", pa.int32()),
-    ]
+SCIP_OCCURRENCES_SPEC = TableSchemaSpec(
+    name="scip_occurrences_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="occurrence_id", dtype=pa.string()),
+        ArrowFieldSpec(name="document_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="symbol", dtype=pa.string()),
+        ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
+        ArrowFieldSpec(name="syntax_kind", dtype=pa.string()),
+        ArrowFieldSpec(name="override_documentation", dtype=pa.list_(pa.string())),
+        ArrowFieldSpec(name="start_line", dtype=pa.int32()),
+        ArrowFieldSpec(name="start_char", dtype=pa.int32()),
+        ArrowFieldSpec(name="end_line", dtype=pa.int32()),
+        ArrowFieldSpec(name="end_char", dtype=pa.int32()),
+        ArrowFieldSpec(name="range_len", dtype=pa.int32()),
+        ArrowFieldSpec(name="enc_start_line", dtype=pa.int32()),
+        ArrowFieldSpec(name="enc_start_char", dtype=pa.int32()),
+        ArrowFieldSpec(name="enc_end_line", dtype=pa.int32()),
+        ArrowFieldSpec(name="enc_end_char", dtype=pa.int32()),
+        ArrowFieldSpec(name="enc_range_len", dtype=pa.int32()),
+    ],
 )
 
-SCIP_SYMBOL_INFO_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("symbol_info_id", pa.string()),
-        ("symbol", pa.string()),
-        ("display_name", pa.string()),
-        ("kind", pa.string()),
-        ("enclosing_symbol", pa.string()),
-        ("documentation", pa.list_(pa.string())),
-        ("signature_documentation", SCIP_SIGNATURE_DOCUMENTATION_TYPE),
-    ]
+SCIP_SYMBOL_INFO_SPEC = TableSchemaSpec(
+    name="scip_symbol_info_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="symbol_info_id", dtype=pa.string()),
+        ArrowFieldSpec(name="symbol", dtype=pa.string()),
+        ArrowFieldSpec(name="display_name", dtype=pa.string()),
+        ArrowFieldSpec(name="kind", dtype=pa.string()),
+        ArrowFieldSpec(name="enclosing_symbol", dtype=pa.string()),
+        ArrowFieldSpec(name="documentation", dtype=pa.list_(pa.string())),
+        ArrowFieldSpec(name="signature_documentation", dtype=SCIP_SIGNATURE_DOCUMENTATION_TYPE),
+    ],
 )
 
-SCIP_SYMBOL_RELATIONSHIPS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("relationship_id", pa.string()),
-        ("symbol", pa.string()),
-        ("related_symbol", pa.string()),
-        ("is_reference", pa.bool_()),
-        ("is_implementation", pa.bool_()),
-        ("is_type_definition", pa.bool_()),
-        ("is_definition", pa.bool_()),
-    ]
+SCIP_SYMBOL_RELATIONSHIPS_SPEC = TableSchemaSpec(
+    name="scip_symbol_relationships_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="relationship_id", dtype=pa.string()),
+        ArrowFieldSpec(name="symbol", dtype=pa.string()),
+        ArrowFieldSpec(name="related_symbol", dtype=pa.string()),
+        ArrowFieldSpec(name="is_reference", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_implementation", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_type_definition", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_definition", dtype=pa.bool_()),
+    ],
 )
 
-SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("symbol_info_id", pa.string()),
-        ("symbol", pa.string()),
-        ("display_name", pa.string()),
-        ("kind", pa.string()),
-        ("enclosing_symbol", pa.string()),
-        ("documentation", pa.list_(pa.string())),
-        ("signature_documentation", SCIP_SIGNATURE_DOCUMENTATION_TYPE),
-    ]
+SCIP_EXTERNAL_SYMBOL_INFO_SPEC = TableSchemaSpec(
+    name="scip_external_symbol_info_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="symbol_info_id", dtype=pa.string()),
+        ArrowFieldSpec(name="symbol", dtype=pa.string()),
+        ArrowFieldSpec(name="display_name", dtype=pa.string()),
+        ArrowFieldSpec(name="kind", dtype=pa.string()),
+        ArrowFieldSpec(name="enclosing_symbol", dtype=pa.string()),
+        ArrowFieldSpec(name="documentation", dtype=pa.list_(pa.string())),
+        ArrowFieldSpec(name="signature_documentation", dtype=SCIP_SIGNATURE_DOCUMENTATION_TYPE),
+    ],
 )
 
-SCIP_DIAGNOSTICS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("diagnostic_id", pa.string()),
-        ("document_id", pa.string()),
-        ("path", pa.string()),
-        ("severity", pa.string()),
-        ("code", pa.string()),
-        ("message", pa.string()),
-        ("source", pa.string()),
-        ("tags", pa.list_(pa.string())),
-        ("start_line", pa.int32()),
-        ("start_char", pa.int32()),
-        ("end_line", pa.int32()),
-        ("end_char", pa.int32()),
-    ]
+SCIP_DIAGNOSTICS_SPEC = TableSchemaSpec(
+    name="scip_diagnostics_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="diagnostic_id", dtype=pa.string()),
+        ArrowFieldSpec(name="document_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="severity", dtype=pa.string()),
+        ArrowFieldSpec(name="code", dtype=pa.string()),
+        ArrowFieldSpec(name="message", dtype=pa.string()),
+        ArrowFieldSpec(name="source", dtype=pa.string()),
+        ArrowFieldSpec(name="tags", dtype=pa.list_(pa.string())),
+        ArrowFieldSpec(name="start_line", dtype=pa.int32()),
+        ArrowFieldSpec(name="start_char", dtype=pa.int32()),
+        ArrowFieldSpec(name="end_line", dtype=pa.int32()),
+        ArrowFieldSpec(name="end_char", dtype=pa.int32()),
+    ],
 )
+
+SCIP_METADATA_SCHEMA = SCIP_METADATA_SPEC.to_arrow_schema()
+SCIP_DOCUMENTS_SCHEMA = SCIP_DOCUMENTS_SPEC.to_arrow_schema()
+SCIP_OCCURRENCES_SCHEMA = SCIP_OCCURRENCES_SPEC.to_arrow_schema()
+SCIP_SYMBOL_INFO_SCHEMA = SCIP_SYMBOL_INFO_SPEC.to_arrow_schema()
+SCIP_SYMBOL_RELATIONSHIPS_SCHEMA = SCIP_SYMBOL_RELATIONSHIPS_SPEC.to_arrow_schema()
+SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA = SCIP_EXTERNAL_SYMBOL_INFO_SPEC.to_arrow_schema()
+SCIP_DIAGNOSTICS_SCHEMA = SCIP_DIAGNOSTICS_SPEC.to_arrow_schema()
 
 
 def _scip_index_command(

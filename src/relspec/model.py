@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
 
 import pyarrow.compute as pc
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arrowdsl.contracts import DedupeSpec, SortKey
 from arrowdsl.expr import ScalarValue
@@ -20,8 +20,7 @@ HASH_JOIN_INPUTS = 2
 SINGLE_INPUT = 1
 
 
-@dataclass(frozen=True)
-class DatasetRef:
+class DatasetRef(BaseModel):
     """Reference a dataset by registry name.
 
     Parameters
@@ -33,6 +32,8 @@ class DatasetRef:
     label:
         Optional plan label override.
     """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     name: str
     query: QuerySpec | None = None
@@ -50,8 +51,7 @@ class RuleKind(StrEnum):
     WINNER_SELECT = "winner_select"
 
 
-@dataclass(frozen=True)
-class HashJoinConfig:
+class HashJoinConfig(BaseModel):
     """Acero HashJoin node configuration.
 
     Parameters
@@ -72,6 +72,8 @@ class HashJoinConfig:
         Suffix for right output column collisions.
     """
 
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
+
     join_type: JoinType = "inner"
     left_keys: tuple[str, ...] = ()
     right_keys: tuple[str, ...] = ()
@@ -81,9 +83,10 @@ class HashJoinConfig:
     output_suffix_for_right: str = ""
 
 
-@dataclass(frozen=True)
-class IntervalAlignConfig:
+class IntervalAlignConfig(BaseModel):
     """Kernel-lane interval alignment configuration."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     mode: Literal["EXACT", "CONTAINED_BEST", "OVERLAP_BEST"] = "CONTAINED_BEST"
     how: Literal["inner", "left"] = "inner"
@@ -106,22 +109,23 @@ class IntervalAlignConfig:
     match_score_col: str = "match_score"
 
 
-@dataclass(frozen=True)
-class ProjectConfig:
+class ProjectConfig(BaseModel):
     """Projection performed after the primary operation."""
 
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
+
     select: tuple[str, ...] = ()
-    exprs: Mapping[str, Expression] = field(default_factory=dict)
+    exprs: Mapping[str, Expression] = Field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class KernelSpec:
+class KernelSpec(BaseModel):
     """Base class for post-kernel specifications."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     kind: str
 
 
-@dataclass(frozen=True)
 class AddLiteralSpec(KernelSpec):
     """Post-kernel spec for adding a literal column."""
 
@@ -130,7 +134,6 @@ class AddLiteralSpec(KernelSpec):
     value: ScalarValue | None = None
 
 
-@dataclass(frozen=True)
 class DropColumnsSpec(KernelSpec):
     """Post-kernel spec for dropping columns."""
 
@@ -138,15 +141,13 @@ class DropColumnsSpec(KernelSpec):
     columns: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
 class RenameColumnsSpec(KernelSpec):
     """Post-kernel spec for renaming columns."""
 
     kind: Literal["rename_columns"] = "rename_columns"
-    mapping: Mapping[str, str] = field(default_factory=dict)
+    mapping: Mapping[str, str] = Field(default_factory=dict)
 
 
-@dataclass(frozen=True)
 class ExplodeListSpec(KernelSpec):
     """Post-kernel spec for exploding list columns."""
 
@@ -157,15 +158,13 @@ class ExplodeListSpec(KernelSpec):
     out_value_col: str = "dst_id"
 
 
-@dataclass(frozen=True)
 class DedupeKernelSpec(KernelSpec):
     """Post-kernel spec for applying deduplication."""
 
     kind: Literal["dedupe"] = "dedupe"
-    spec: DedupeSpec = field(default_factory=lambda: DedupeSpec(keys=()))
+    spec: DedupeSpec = Field(default_factory=lambda: DedupeSpec(keys=()))
 
 
-@dataclass(frozen=True)
 class CanonicalSortKernelSpec(KernelSpec):
     """Post-kernel spec for applying canonical sorting."""
 
@@ -183,9 +182,10 @@ type KernelSpecT = (
 )
 
 
-@dataclass(frozen=True)
-class RelationshipRule:
+class RelationshipRule(BaseModel):
     """Declarative relationship rule configuration."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     name: str
     kind: RuleKind
@@ -205,7 +205,12 @@ class RelationshipRule:
     rule_name_col: str = "rule_name"
     rule_priority_col: str = "rule_priority"
 
-    def validate(self) -> None:
+    @model_validator(mode="after")
+    def _validate_model(self) -> RelationshipRule:
+        self._validate_rule()
+        return self
+
+    def _validate_rule(self) -> None:
         """Validate rule configuration invariants.
 
         Raises

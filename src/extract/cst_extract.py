@@ -23,6 +23,7 @@ from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_parts
 from arrowdsl.iter import iter_table_rows
 from arrowdsl.nested import build_list_array, build_list_of_structs
+from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
 
@@ -99,122 +100,137 @@ class CSTExtractResult:
 QNAME_STRUCT = pa.struct([("name", pa.string()), ("source", pa.string())])
 QNAME_LIST = pa.list_(QNAME_STRUCT)
 
-PARSE_MANIFEST_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("encoding", pa.string()),
-        ("default_indent", pa.string()),
-        ("default_newline", pa.string()),
-        ("has_trailing_newline", pa.bool_()),
-        ("future_imports", pa.list_(pa.string())),
-        ("module_name", pa.string()),
-        ("package_name", pa.string()),
-    ]
+PARSE_MANIFEST_SPEC = TableSchemaSpec(
+    name="py_cst_parse_manifest_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="encoding", dtype=pa.string()),
+        ArrowFieldSpec(name="default_indent", dtype=pa.string()),
+        ArrowFieldSpec(name="default_newline", dtype=pa.string()),
+        ArrowFieldSpec(name="has_trailing_newline", dtype=pa.bool_()),
+        ArrowFieldSpec(name="future_imports", dtype=pa.list_(pa.string())),
+        ArrowFieldSpec(name="module_name", dtype=pa.string()),
+        ArrowFieldSpec(name="package_name", dtype=pa.string()),
+    ],
 )
 
-PARSE_ERRORS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("error_type", pa.string()),
-        ("message", pa.string()),
-        ("raw_line", pa.int32()),
-        ("raw_column", pa.int32()),
-    ]
+PARSE_ERRORS_SPEC = TableSchemaSpec(
+    name="py_cst_parse_errors_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="error_type", dtype=pa.string()),
+        ArrowFieldSpec(name="message", dtype=pa.string()),
+        ArrowFieldSpec(name="raw_line", dtype=pa.int32()),
+        ArrowFieldSpec(name="raw_column", dtype=pa.int32()),
+    ],
 )
 
-NAME_REFS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("name_ref_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("name", pa.string()),
-        ("expr_ctx", pa.string()),
-        ("bstart", pa.int64()),
-        ("bend", pa.int64()),
-    ]
+NAME_REFS_SPEC = TableSchemaSpec(
+    name="py_cst_name_refs_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="name_ref_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="name", dtype=pa.string()),
+        ArrowFieldSpec(name="expr_ctx", dtype=pa.string()),
+        ArrowFieldSpec(name="bstart", dtype=pa.int64()),
+        ArrowFieldSpec(name="bend", dtype=pa.int64()),
+    ],
 )
 
-IMPORTS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("import_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("kind", pa.string()),
-        ("module", pa.string()),
-        ("relative_level", pa.int32()),
-        ("name", pa.string()),
-        ("asname", pa.string()),
-        ("is_star", pa.bool_()),
-        ("stmt_bstart", pa.int64()),
-        ("stmt_bend", pa.int64()),
-        ("alias_bstart", pa.int64()),
-        ("alias_bend", pa.int64()),
-    ]
+IMPORTS_SPEC = TableSchemaSpec(
+    name="py_cst_imports_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="import_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="kind", dtype=pa.string()),
+        ArrowFieldSpec(name="module", dtype=pa.string()),
+        ArrowFieldSpec(name="relative_level", dtype=pa.int32()),
+        ArrowFieldSpec(name="name", dtype=pa.string()),
+        ArrowFieldSpec(name="asname", dtype=pa.string()),
+        ArrowFieldSpec(name="is_star", dtype=pa.bool_()),
+        ArrowFieldSpec(name="stmt_bstart", dtype=pa.int64()),
+        ArrowFieldSpec(name="stmt_bend", dtype=pa.int64()),
+        ArrowFieldSpec(name="alias_bstart", dtype=pa.int64()),
+        ArrowFieldSpec(name="alias_bend", dtype=pa.int64()),
+    ],
 )
 
-CALLSITES_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("call_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("call_bstart", pa.int64()),
-        ("call_bend", pa.int64()),
-        ("callee_bstart", pa.int64()),
-        ("callee_bend", pa.int64()),
-        ("callee_shape", pa.string()),
-        ("callee_text", pa.string()),
-        ("arg_count", pa.int32()),
-        ("callee_dotted", pa.string()),
-        ("callee_qnames", QNAME_LIST),
-    ]
+CALLSITES_SPEC = TableSchemaSpec(
+    name="py_cst_callsites_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="call_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="call_bstart", dtype=pa.int64()),
+        ArrowFieldSpec(name="call_bend", dtype=pa.int64()),
+        ArrowFieldSpec(name="callee_bstart", dtype=pa.int64()),
+        ArrowFieldSpec(name="callee_bend", dtype=pa.int64()),
+        ArrowFieldSpec(name="callee_shape", dtype=pa.string()),
+        ArrowFieldSpec(name="callee_text", dtype=pa.string()),
+        ArrowFieldSpec(name="arg_count", dtype=pa.int32()),
+        ArrowFieldSpec(name="callee_dotted", dtype=pa.string()),
+        ArrowFieldSpec(name="callee_qnames", dtype=QNAME_LIST),
+    ],
 )
 
-DEFS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("def_id", pa.string()),
-        ("container_def_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("kind", pa.string()),
-        ("name", pa.string()),
-        ("def_bstart", pa.int64()),
-        ("def_bend", pa.int64()),
-        ("name_bstart", pa.int64()),
-        ("name_bend", pa.int64()),
-        ("qnames", QNAME_LIST),
-    ]
+DEFS_SPEC = TableSchemaSpec(
+    name="py_cst_defs_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="def_id", dtype=pa.string()),
+        ArrowFieldSpec(name="container_def_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="kind", dtype=pa.string()),
+        ArrowFieldSpec(name="name", dtype=pa.string()),
+        ArrowFieldSpec(name="def_bstart", dtype=pa.int64()),
+        ArrowFieldSpec(name="def_bend", dtype=pa.int64()),
+        ArrowFieldSpec(name="name_bstart", dtype=pa.int64()),
+        ArrowFieldSpec(name="name_bend", dtype=pa.int64()),
+        ArrowFieldSpec(name="qnames", dtype=QNAME_LIST),
+    ],
 )
 
-TYPE_EXPRS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("type_expr_id", pa.string()),
-        ("owner_def_id", pa.string()),
-        ("param_name", pa.string()),
-        ("expr_kind", pa.string()),
-        ("expr_role", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("bstart", pa.int64()),
-        ("bend", pa.int64()),
-        ("expr_text", pa.string()),
-    ]
+TYPE_EXPRS_SPEC = TableSchemaSpec(
+    name="py_cst_type_exprs_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="type_expr_id", dtype=pa.string()),
+        ArrowFieldSpec(name="owner_def_id", dtype=pa.string()),
+        ArrowFieldSpec(name="param_name", dtype=pa.string()),
+        ArrowFieldSpec(name="expr_kind", dtype=pa.string()),
+        ArrowFieldSpec(name="expr_role", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="bstart", dtype=pa.int64()),
+        ArrowFieldSpec(name="bend", dtype=pa.int64()),
+        ArrowFieldSpec(name="expr_text", dtype=pa.string()),
+    ],
 )
+
+PARSE_MANIFEST_SCHEMA = PARSE_MANIFEST_SPEC.to_arrow_schema()
+PARSE_ERRORS_SCHEMA = PARSE_ERRORS_SPEC.to_arrow_schema()
+NAME_REFS_SCHEMA = NAME_REFS_SPEC.to_arrow_schema()
+IMPORTS_SCHEMA = IMPORTS_SPEC.to_arrow_schema()
+CALLSITES_SCHEMA = CALLSITES_SPEC.to_arrow_schema()
+DEFS_SCHEMA = DEFS_SPEC.to_arrow_schema()
+TYPE_EXPRS_SCHEMA = TYPE_EXPRS_SPEC.to_arrow_schema()
 
 
 @dataclass(frozen=True)

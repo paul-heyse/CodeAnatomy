@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
 
 type InvariantFn = Callable[[pa.Table], tuple[pa.Array, str]]
+
+if TYPE_CHECKING:
+    from schema_spec.core import TableSchemaSpec
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,7 @@ class Contract:
 
     name: str
     schema: pa.Schema
+    schema_spec: TableSchemaSpec | None = None
 
     key_fields: tuple[str, ...] = ()
     required_non_null: tuple[str, ...] = ()

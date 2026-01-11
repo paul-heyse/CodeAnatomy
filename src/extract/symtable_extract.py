@@ -11,6 +11,7 @@ import pyarrow as pa
 
 from arrowdsl.ids import hash64_from_parts
 from arrowdsl.iter import iter_table_rows
+from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
 
@@ -48,86 +49,97 @@ class SymtableContext:
     file_sha256: str | None
 
 
-SCOPES_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("scope_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("table_id", pa.int64()),
-        ("scope_type", pa.string()),
-        ("scope_name", pa.string()),
-        ("lineno", pa.int32()),
-        ("is_nested", pa.bool_()),
-        ("is_optimized", pa.bool_()),
-        ("has_children", pa.bool_()),
-        ("scope_role", pa.string()),
-    ]
+SCOPES_SPEC = TableSchemaSpec(
+    name="py_sym_scopes_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="scope_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="table_id", dtype=pa.int64()),
+        ArrowFieldSpec(name="scope_type", dtype=pa.string()),
+        ArrowFieldSpec(name="scope_name", dtype=pa.string()),
+        ArrowFieldSpec(name="lineno", dtype=pa.int32()),
+        ArrowFieldSpec(name="is_nested", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_optimized", dtype=pa.bool_()),
+        ArrowFieldSpec(name="has_children", dtype=pa.bool_()),
+        ArrowFieldSpec(name="scope_role", dtype=pa.string()),
+    ],
 )
 
-SYMBOLS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("symbol_row_id", pa.string()),
-        ("scope_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("name", pa.string()),
-        ("is_referenced", pa.bool_()),
-        ("is_assigned", pa.bool_()),
-        ("is_imported", pa.bool_()),
-        ("is_annotated", pa.bool_()),
-        ("is_parameter", pa.bool_()),
-        ("is_global", pa.bool_()),
-        ("is_declared_global", pa.bool_()),
-        ("is_nonlocal", pa.bool_()),
-        ("is_local", pa.bool_()),
-        ("is_free", pa.bool_()),
-        ("is_namespace", pa.bool_()),
-    ]
+SYMBOLS_SPEC = TableSchemaSpec(
+    name="py_sym_symbols_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="symbol_row_id", dtype=pa.string()),
+        ArrowFieldSpec(name="scope_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="name", dtype=pa.string()),
+        ArrowFieldSpec(name="is_referenced", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_assigned", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_imported", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_annotated", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_parameter", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_global", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_declared_global", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_nonlocal", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_local", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_free", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_namespace", dtype=pa.bool_()),
+    ],
 )
 
-SCOPE_EDGES_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("edge_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("parent_scope_id", pa.string()),
-        ("child_scope_id", pa.string()),
-    ]
+SCOPE_EDGES_SPEC = TableSchemaSpec(
+    name="py_sym_scope_edges_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="edge_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="parent_scope_id", dtype=pa.string()),
+        ArrowFieldSpec(name="child_scope_id", dtype=pa.string()),
+    ],
 )
 
-NAMESPACE_EDGES_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("edge_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("scope_id", pa.string()),
-        ("symbol_row_id", pa.string()),
-        ("child_scope_id", pa.string()),
-    ]
+NAMESPACE_EDGES_SPEC = TableSchemaSpec(
+    name="py_sym_namespace_edges_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="edge_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="scope_id", dtype=pa.string()),
+        ArrowFieldSpec(name="symbol_row_id", dtype=pa.string()),
+        ArrowFieldSpec(name="child_scope_id", dtype=pa.string()),
+    ],
 )
 
-FUNC_PARTS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("scope_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("parameters", pa.list_(pa.string())),
-        ("locals", pa.list_(pa.string())),
-        ("globals", pa.list_(pa.string())),
-        ("nonlocals", pa.list_(pa.string())),
-        ("frees", pa.list_(pa.string())),
-    ]
+FUNC_PARTS_SPEC = TableSchemaSpec(
+    name="py_sym_function_partitions_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="scope_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="parameters", dtype=pa.list_(pa.string())),
+        ArrowFieldSpec(name="locals", dtype=pa.list_(pa.string())),
+        ArrowFieldSpec(name="globals", dtype=pa.list_(pa.string())),
+        ArrowFieldSpec(name="nonlocals", dtype=pa.list_(pa.string())),
+        ArrowFieldSpec(name="frees", dtype=pa.list_(pa.string())),
+    ],
 )
+
+SCOPES_SCHEMA = SCOPES_SPEC.to_arrow_schema()
+SYMBOLS_SCHEMA = SYMBOLS_SPEC.to_arrow_schema()
+SCOPE_EDGES_SCHEMA = SCOPE_EDGES_SPEC.to_arrow_schema()
+NAMESPACE_EDGES_SCHEMA = NAMESPACE_EDGES_SPEC.to_arrow_schema()
+FUNC_PARTS_SCHEMA = FUNC_PARTS_SPEC.to_arrow_schema()
 
 
 def _scope_type_str(tbl: symtable.SymbolTable) -> str:

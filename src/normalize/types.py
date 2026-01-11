@@ -10,37 +10,43 @@ import pyarrow.compute as pc
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_arrays
 from arrowdsl.iter import iter_array_values, iter_arrays
+from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
 
 
-TYPE_EXPRS_NORM_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("type_expr_id", pa.string()),
-        ("owner_def_id", pa.string()),
-        ("param_name", pa.string()),
-        ("expr_kind", pa.string()),
-        ("expr_role", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("bstart", pa.int64()),
-        ("bend", pa.int64()),
-        ("expr_text", pa.string()),
-        ("type_repr", pa.string()),
-        ("type_id", pa.string()),
-    ]
+TYPE_EXPRS_NORM_SPEC = TableSchemaSpec(
+    name="type_exprs_norm_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="type_expr_id", dtype=pa.string()),
+        ArrowFieldSpec(name="owner_def_id", dtype=pa.string()),
+        ArrowFieldSpec(name="param_name", dtype=pa.string()),
+        ArrowFieldSpec(name="expr_kind", dtype=pa.string()),
+        ArrowFieldSpec(name="expr_role", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="bstart", dtype=pa.int64()),
+        ArrowFieldSpec(name="bend", dtype=pa.int64()),
+        ArrowFieldSpec(name="expr_text", dtype=pa.string()),
+        ArrowFieldSpec(name="type_repr", dtype=pa.string()),
+        ArrowFieldSpec(name="type_id", dtype=pa.string()),
+    ],
 )
 
-TYPE_NODES_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("type_id", pa.string()),
-        ("type_repr", pa.string()),
-        ("type_form", pa.string()),
-        ("origin", pa.string()),
-    ]
+TYPE_NODES_SPEC = TableSchemaSpec(
+    name="type_nodes_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="type_id", dtype=pa.string()),
+        ArrowFieldSpec(name="type_repr", dtype=pa.string()),
+        ArrowFieldSpec(name="type_form", dtype=pa.string()),
+        ArrowFieldSpec(name="origin", dtype=pa.string()),
+    ],
 )
+
+TYPE_EXPRS_NORM_SCHEMA = TYPE_EXPRS_NORM_SPEC.to_arrow_schema()
+TYPE_NODES_SCHEMA = TYPE_NODES_SPEC.to_arrow_schema()
 
 type ArrayLike = pa.Array | pa.ChunkedArray
 

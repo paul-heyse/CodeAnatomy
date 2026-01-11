@@ -10,6 +10,7 @@ import pyarrow.fs as pafs
 
 from arrowdsl.contracts import Contract
 from relspec.model import RelationshipRule
+from schema_spec.catalogs import ContractCatalogSpec
 
 type PathLike = str | Path
 
@@ -115,6 +116,25 @@ class ContractCatalog:
         """
         self._contracts[contract.name] = contract
 
+    @classmethod
+    def from_spec(cls, spec: ContractCatalogSpec) -> ContractCatalog:
+        """Build a catalog from a validated contract spec.
+
+        Parameters
+        ----------
+        spec:
+            Contract catalog spec with validated names.
+
+        Returns
+        -------
+        ContractCatalog
+            Catalog populated with spec-derived contracts.
+        """
+        catalog = cls()
+        for contract_spec in spec.contracts.values():
+            catalog.register(contract_spec.to_contract())
+        return catalog
+
     def get(self, name: str) -> Contract:
         """Return a registered contract by name.
 
@@ -183,7 +203,6 @@ class RelationshipRegistry:
         ValueError
             Raised when the rule name is duplicated.
         """
-        rule.validate()
         if rule.name in self._rules_by_name:
             msg = f"Duplicate rule name: {rule.name!r}."
             raise ValueError(msg)

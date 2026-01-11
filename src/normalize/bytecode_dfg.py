@@ -9,36 +9,42 @@ from arrowdsl.columns import coalesce_string
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_arrays
 from arrowdsl.iter import iter_arrays
+from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
 
-DEF_USE_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("event_id", pa.string()),
-        ("instr_id", pa.string()),
-        ("code_unit_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("kind", pa.string()),
-        ("symbol", pa.string()),
-        ("opname", pa.string()),
-        ("offset", pa.int32()),
-    ]
+DEF_USE_SPEC = TableSchemaSpec(
+    name="py_bc_def_use_events_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="event_id", dtype=pa.string()),
+        ArrowFieldSpec(name="instr_id", dtype=pa.string()),
+        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="kind", dtype=pa.string()),
+        ArrowFieldSpec(name="symbol", dtype=pa.string()),
+        ArrowFieldSpec(name="opname", dtype=pa.string()),
+        ArrowFieldSpec(name="offset", dtype=pa.int32()),
+    ],
 )
 
-REACHES_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("edge_id", pa.string()),
-        ("code_unit_id", pa.string()),
-        ("def_event_id", pa.string()),
-        ("use_event_id", pa.string()),
-        ("symbol", pa.string()),
-        ("path", pa.string()),
-        ("file_id", pa.string()),
-    ]
+REACHES_SPEC = TableSchemaSpec(
+    name="py_bc_reaches_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="edge_id", dtype=pa.string()),
+        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+        ArrowFieldSpec(name="def_event_id", dtype=pa.string()),
+        ArrowFieldSpec(name="use_event_id", dtype=pa.string()),
+        ArrowFieldSpec(name="symbol", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+    ],
 )
+
+DEF_USE_SCHEMA = DEF_USE_SPEC.to_arrow_schema()
+REACHES_SCHEMA = REACHES_SPEC.to_arrow_schema()
 
 USE_PREFIXES = ("LOAD_",)
 DEF_PREFIXES = ("STORE_", "DELETE_")

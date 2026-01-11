@@ -11,6 +11,7 @@ import pyarrow as pa
 
 from arrowdsl.ids import hash64_from_parts
 from arrowdsl.iter import iter_table_rows
+from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 type RowValue = str | int | bool | None
 type Row = dict[str, RowValue]
@@ -112,103 +113,116 @@ class BytecodeRowBuffers:
     error_rows: list[Row]
 
 
-CODE_UNITS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("code_unit_id", pa.string()),
-        ("parent_code_unit_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("qualpath", pa.string()),
-        ("co_name", pa.string()),
-        ("firstlineno", pa.int32()),
-        ("argcount", pa.int32()),
-        ("posonlyargcount", pa.int32()),
-        ("kwonlyargcount", pa.int32()),
-        ("nlocals", pa.int32()),
-        ("flags", pa.int32()),
-        ("stacksize", pa.int32()),
-        ("code_len", pa.int32()),
-    ]
+CODE_UNITS_SPEC = TableSchemaSpec(
+    name="py_bc_code_units_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+        ArrowFieldSpec(name="parent_code_unit_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="qualpath", dtype=pa.string()),
+        ArrowFieldSpec(name="co_name", dtype=pa.string()),
+        ArrowFieldSpec(name="firstlineno", dtype=pa.int32()),
+        ArrowFieldSpec(name="argcount", dtype=pa.int32()),
+        ArrowFieldSpec(name="posonlyargcount", dtype=pa.int32()),
+        ArrowFieldSpec(name="kwonlyargcount", dtype=pa.int32()),
+        ArrowFieldSpec(name="nlocals", dtype=pa.int32()),
+        ArrowFieldSpec(name="flags", dtype=pa.int32()),
+        ArrowFieldSpec(name="stacksize", dtype=pa.int32()),
+        ArrowFieldSpec(name="code_len", dtype=pa.int32()),
+    ],
 )
 
-INSTR_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("instr_id", pa.string()),
-        ("code_unit_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("instr_index", pa.int32()),
-        ("offset", pa.int32()),
-        ("opname", pa.string()),
-        ("opcode", pa.int32()),
-        ("arg", pa.int32()),
-        ("argval_str", pa.string()),
-        ("argrepr", pa.string()),
-        ("is_jump_target", pa.bool_()),
-        ("jump_target_offset", pa.int32()),
-        ("starts_line", pa.int32()),
-        ("pos_start_line", pa.int32()),
-        ("pos_end_line", pa.int32()),
-        ("pos_start_col", pa.int32()),
-        ("pos_end_col", pa.int32()),
-    ]
+INSTR_SPEC = TableSchemaSpec(
+    name="py_bc_instructions_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="instr_id", dtype=pa.string()),
+        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="instr_index", dtype=pa.int32()),
+        ArrowFieldSpec(name="offset", dtype=pa.int32()),
+        ArrowFieldSpec(name="opname", dtype=pa.string()),
+        ArrowFieldSpec(name="opcode", dtype=pa.int32()),
+        ArrowFieldSpec(name="arg", dtype=pa.int32()),
+        ArrowFieldSpec(name="argval_str", dtype=pa.string()),
+        ArrowFieldSpec(name="argrepr", dtype=pa.string()),
+        ArrowFieldSpec(name="is_jump_target", dtype=pa.bool_()),
+        ArrowFieldSpec(name="jump_target_offset", dtype=pa.int32()),
+        ArrowFieldSpec(name="starts_line", dtype=pa.int32()),
+        ArrowFieldSpec(name="pos_start_line", dtype=pa.int32()),
+        ArrowFieldSpec(name="pos_end_line", dtype=pa.int32()),
+        ArrowFieldSpec(name="pos_start_col", dtype=pa.int32()),
+        ArrowFieldSpec(name="pos_end_col", dtype=pa.int32()),
+    ],
 )
 
-EXC_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("exc_entry_id", pa.string()),
-        ("code_unit_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("exc_index", pa.int32()),
-        ("start_offset", pa.int32()),
-        ("end_offset", pa.int32()),
-        ("target_offset", pa.int32()),
-        ("depth", pa.int32()),
-        ("lasti", pa.bool_()),
-    ]
+EXC_SPEC = TableSchemaSpec(
+    name="py_bc_exception_table_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="exc_entry_id", dtype=pa.string()),
+        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
+        ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
+        ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
+        ArrowFieldSpec(name="target_offset", dtype=pa.int32()),
+        ArrowFieldSpec(name="depth", dtype=pa.int32()),
+        ArrowFieldSpec(name="lasti", dtype=pa.bool_()),
+    ],
 )
 
-BLOCKS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("block_id", pa.string()),
-        ("code_unit_id", pa.string()),
-        ("start_offset", pa.int32()),
-        ("end_offset", pa.int32()),
-        ("kind", pa.string()),
-    ]
+BLOCKS_SPEC = TableSchemaSpec(
+    name="py_bc_blocks_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="block_id", dtype=pa.string()),
+        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+        ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
+        ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
+        ArrowFieldSpec(name="kind", dtype=pa.string()),
+    ],
 )
 
-CFG_EDGES_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("edge_id", pa.string()),
-        ("code_unit_id", pa.string()),
-        ("src_block_id", pa.string()),
-        ("dst_block_id", pa.string()),
-        ("kind", pa.string()),  # next|jump|branch|exc
-        ("cond_instr_id", pa.string()),
-        ("exc_index", pa.int32()),
-    ]
+CFG_EDGES_SPEC = TableSchemaSpec(
+    name="py_bc_cfg_edges_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="edge_id", dtype=pa.string()),
+        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+        ArrowFieldSpec(name="src_block_id", dtype=pa.string()),
+        ArrowFieldSpec(name="dst_block_id", dtype=pa.string()),
+        ArrowFieldSpec(name="kind", dtype=pa.string()),
+        ArrowFieldSpec(name="cond_instr_id", dtype=pa.string()),
+        ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
+    ],
 )
 
-ERRORS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("error_type", pa.string()),
-        ("message", pa.string()),
-    ]
+ERRORS_SPEC = TableSchemaSpec(
+    name="py_bc_errors_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="error_type", dtype=pa.string()),
+        ArrowFieldSpec(name="message", dtype=pa.string()),
+    ],
 )
+
+CODE_UNITS_SCHEMA = CODE_UNITS_SPEC.to_arrow_schema()
+INSTR_SCHEMA = INSTR_SPEC.to_arrow_schema()
+EXC_SCHEMA = EXC_SPEC.to_arrow_schema()
+BLOCKS_SCHEMA = BLOCKS_SPEC.to_arrow_schema()
+CFG_EDGES_SCHEMA = CFG_EDGES_SPEC.to_arrow_schema()
+ERRORS_SCHEMA = ERRORS_SPEC.to_arrow_schema()
 
 
 def _row_context(

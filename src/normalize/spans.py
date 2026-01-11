@@ -10,6 +10,7 @@ import pyarrow as pa
 
 from arrowdsl.iter import iter_arrays
 from normalize.ids import add_span_id_column
+from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 type RowValue = object | None
 type ArrayLike = pa.Array | pa.ChunkedArray
@@ -121,13 +122,16 @@ class OccurrenceSpanResult:
     error: dict[str, str] | None
 
 
-SPAN_ERROR_SCHEMA = pa.schema(
-    [
-        ("document_id", pa.string()),
-        ("path", pa.string()),
-        ("reason", pa.string()),
-    ]
+SPAN_ERROR_SPEC = TableSchemaSpec(
+    name="span_errors_v1",
+    fields=[
+        ArrowFieldSpec(name="document_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="reason", dtype=pa.string()),
+    ],
 )
+
+SPAN_ERROR_SCHEMA = SPAN_ERROR_SPEC.to_arrow_schema()
 
 
 def _column_or_null(table: pa.Table, col: str, dtype: pa.DataType) -> ArrayLike:

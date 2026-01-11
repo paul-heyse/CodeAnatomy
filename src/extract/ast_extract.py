@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from arrowdsl.iter import iter_array_values, iter_table_rows
+from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
 
@@ -29,53 +30,60 @@ class ASTExtractResult:
     py_ast_errors: pa.Table
 
 
-AST_NODES_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("ast_idx", pa.int32()),
-        ("parent_ast_idx", pa.int32()),
-        ("field_name", pa.string()),
-        ("field_pos", pa.int32()),
-        ("kind", pa.string()),
-        ("name", pa.string()),
-        ("value_repr", pa.string()),
-        ("lineno", pa.int32()),
-        ("col_offset", pa.int32()),
-        ("end_lineno", pa.int32()),
-        ("end_col_offset", pa.int32()),
-    ]
+AST_NODES_SPEC = TableSchemaSpec(
+    name="py_ast_nodes_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="ast_idx", dtype=pa.int32()),
+        ArrowFieldSpec(name="parent_ast_idx", dtype=pa.int32()),
+        ArrowFieldSpec(name="field_name", dtype=pa.string()),
+        ArrowFieldSpec(name="field_pos", dtype=pa.int32()),
+        ArrowFieldSpec(name="kind", dtype=pa.string()),
+        ArrowFieldSpec(name="name", dtype=pa.string()),
+        ArrowFieldSpec(name="value_repr", dtype=pa.string()),
+        ArrowFieldSpec(name="lineno", dtype=pa.int32()),
+        ArrowFieldSpec(name="col_offset", dtype=pa.int32()),
+        ArrowFieldSpec(name="end_lineno", dtype=pa.int32()),
+        ArrowFieldSpec(name="end_col_offset", dtype=pa.int32()),
+    ],
 )
 
-AST_EDGES_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("parent_ast_idx", pa.int32()),
-        ("child_ast_idx", pa.int32()),
-        ("field_name", pa.string()),
-        ("field_pos", pa.int32()),
-    ]
+AST_EDGES_SPEC = TableSchemaSpec(
+    name="py_ast_edges_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="parent_ast_idx", dtype=pa.int32()),
+        ArrowFieldSpec(name="child_ast_idx", dtype=pa.int32()),
+        ArrowFieldSpec(name="field_name", dtype=pa.string()),
+        ArrowFieldSpec(name="field_pos", dtype=pa.int32()),
+    ],
 )
 
-AST_ERRORS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("error_type", pa.string()),
-        ("message", pa.string()),
-        ("lineno", pa.int32()),
-        ("offset", pa.int32()),
-        ("end_lineno", pa.int32()),
-        ("end_offset", pa.int32()),
-    ]
+AST_ERRORS_SPEC = TableSchemaSpec(
+    name="py_ast_errors_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="error_type", dtype=pa.string()),
+        ArrowFieldSpec(name="message", dtype=pa.string()),
+        ArrowFieldSpec(name="lineno", dtype=pa.int32()),
+        ArrowFieldSpec(name="offset", dtype=pa.int32()),
+        ArrowFieldSpec(name="end_lineno", dtype=pa.int32()),
+        ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
+    ],
 )
+
+AST_NODES_SCHEMA = AST_NODES_SPEC.to_arrow_schema()
+AST_EDGES_SCHEMA = AST_EDGES_SPEC.to_arrow_schema()
+AST_ERRORS_SCHEMA = AST_ERRORS_SPEC.to_arrow_schema()
 
 
 def _maybe_int(value: object | None) -> int | None:

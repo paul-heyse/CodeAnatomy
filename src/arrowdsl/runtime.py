@@ -185,6 +185,16 @@ class RuntimeProfile:
 
 
 @dataclass(frozen=True)
+class SchemaValidationPolicy:
+    """Schema validation settings for contract boundaries."""
+
+    enabled: bool = False
+    strict: bool | Literal["filter"] = "filter"
+    coerce: bool = False
+    lazy: bool = True
+
+
+@dataclass(frozen=True)
 class ExecutionContext:
     """Execution-time knobs passed through the DSL."""
 
@@ -193,6 +203,7 @@ class ExecutionContext:
     provenance: bool = False
     safe_cast: bool = True
     debug: bool = False
+    schema_validation: SchemaValidationPolicy = field(default_factory=SchemaValidationPolicy)
 
     @property
     def determinism(self) -> DeterminismTier:
@@ -246,6 +257,7 @@ class ExecutionContext:
             provenance=self.provenance,
             safe_cast=self.safe_cast,
             debug=self.debug,
+            schema_validation=self.schema_validation,
         )
 
     def with_provenance(self, *, provenance: bool) -> ExecutionContext:
@@ -267,4 +279,5 @@ class ExecutionContext:
             provenance=provenance,
             safe_cast=self.safe_cast,
             debug=self.debug,
+            schema_validation=self.schema_validation,
         )

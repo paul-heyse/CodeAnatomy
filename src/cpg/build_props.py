@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from arrowdsl.empty import empty_table
 from arrowdsl.finalize import FinalizeResult, finalize
-from arrowdsl.iter import iter_arrays
 from arrowdsl.runtime import ExecutionContext
+from cpg.builders import PropBuilder
 from cpg.kinds import (
     SCIP_ROLE_FORWARD_DEFINITION,
     SCIP_ROLE_GENERATED,
@@ -19,29 +18,8 @@ from cpg.kinds import (
     EntityKind,
     NodeKind,
 )
-from cpg.schemas import CPG_PROPS_CONTRACT, CPG_PROPS_SCHEMA, SCHEMA_VERSION
-
-type PropValue = object | None
-type PropRow = dict[str, object]
-type ArrayLike = pa.Array | pa.ChunkedArray
-QNAME_LIST_TYPE = pa.list_(pa.struct([("name", pa.string()), ("source", pa.string())]))
-DIAG_DETAIL_STRUCT = pa.struct(
-    [
-        ("detail_kind", pa.string()),
-        ("error_type", pa.string()),
-        ("source", pa.string()),
-        ("tags", pa.list_(pa.string())),
-    ]
-)
-DIAG_DETAILS_TYPE = pa.list_(DIAG_DETAIL_STRUCT)
-
-
-def _row_id(value: object | None) -> str | None:
-    if isinstance(value, str) and value:
-        return value
-    if isinstance(value, int) and not isinstance(value, bool) and value:
-        return str(value)
-    return None
+from cpg.schemas import CPG_PROPS_CONTRACT, CPG_PROPS_SCHEMA, SCHEMA_VERSION, empty_props
+from cpg.specs import PropFieldSpec, PropTableSpec, TableGetter
 
 
 def _expr_context_value(value: object) -> str | None:
@@ -55,50 +33,398 @@ def _expr_context_value(value: object) -> str | None:
     return raw.upper()
 
 
-def _column_or_null(table: pa.Table, col: str, dtype: pa.DataType) -> ArrayLike:
-    if col in table.column_names:
-        return table[col]
-    return pa.nulls(table.num_rows, type=dtype)
-
-
-def _add_prop(
-    rows: list[PropRow],
-    *,
-    entity_kind: EntityKind,
-    entity_id: str,
-    key: str,
-    value: PropValue,
-) -> None:
-    rec: PropRow = {
-        "schema_version": SCHEMA_VERSION,
-        "entity_kind": entity_kind.value,
-        "entity_id": str(entity_id),
-        "prop_key": str(key),
-        "value_str": None,
-        "value_int": None,
-        "value_float": None,
-        "value_bool": None,
-        "value_json": None,
-    }
-
-    if value is None:
-        rows.append(rec)
-        return
-
+def _flag_to_bool(value: object | None) -> bool | None:
     if isinstance(value, bool):
-        rec["value_bool"] = bool(value)
-    elif isinstance(value, int) and not isinstance(value, bool):
-        rec["value_int"] = int(value)
-    elif isinstance(value, float):
-        rec["value_float"] = float(value)
-    elif isinstance(value, str):
-        rec["value_str"] = value
+        return True if value else None
+    if isinstance(value, int):
+        return True if value == 1 else None
+    return None
+
+
+def _set_or_append_column(
+    table: pa.Table,
+    name: str,
+    values: pa.Array | pa.ChunkedArray,
+) -> pa.Table:
+    if name in table.column_names:
+        idx = table.schema.get_field_index(name)
+        return table.set_column(idx, name, values)
+    return table.append_column(name, values)
+
+
+def _defs_table(table: pa.Table | None) -> pa.Table | None:
+    if table is None or table.num_rows == 0:
+        return None
+    if "def_kind" in table.column_names and "kind" in table.column_names:
+        def_kind = pc.coalesce(table["def_kind"], table["kind"])
+    elif "def_kind" in table.column_names:
+        def_kind = table["def_kind"]
+    elif "kind" in table.column_names:
+        def_kind = table["kind"]
     else:
-        try:
-            rec["value_json"] = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
-        except (TypeError, ValueError):
-            rec["value_json"] = json.dumps(str(value), ensure_ascii=False)
-    rows.append(rec)
+        def_kind = pa.nulls(table.num_rows, type=pa.string())
+    return _set_or_append_column(table, "def_kind_norm", def_kind)
+
+
+def _scip_role_flags_table(scip_occurrences: pa.Table | None) -> pa.Table | None:
+    if (
+        scip_occurrences is None
+        or scip_occurrences.num_rows == 0
+        or "symbol" not in scip_occurrences.column_names
+        or "symbol_roles" not in scip_occurrences.column_names
+    ):
+        return None
+
+    symbols = pc.cast(scip_occurrences["symbol"], pa.string())
+    roles = pc.cast(scip_occurrences["symbol_roles"], pa.int64())
+    flag_arrays: list[pa.Array | pa.ChunkedArray] = []
+    flag_names: list[str] = []
+    for name, mask, _ in _ROLE_FLAG_SPECS:
+        flag = pc.not_equal(pc.bit_wise_and(roles, pa.scalar(mask)), pa.scalar(0))
+        flag_arrays.append(pc.cast(flag, pa.int32()))
+        flag_names.append(name)
+
+    flags_table = pa.Table.from_arrays([symbols, *flag_arrays], names=["symbol", *flag_names])
+    aggs = [(name, "max") for name in flag_names]
+    aggregated = flags_table.group_by(["symbol"], use_threads=True).aggregate(aggs)
+    return aggregated.rename_columns(["symbol", *flag_names])
+
+
+def _table_getter(name: str) -> TableGetter:
+    def _get_table(tables: Mapping[str, pa.Table]) -> pa.Table | None:
+        return tables.get(name)
+
+    return _get_table
+
+
+_ROLE_FLAG_SPECS: tuple[tuple[str, int, str], ...] = (
+    ("generated", SCIP_ROLE_GENERATED, "scip_role_generated"),
+    ("test", SCIP_ROLE_TEST, "scip_role_test"),
+    ("forward_definition", SCIP_ROLE_FORWARD_DEFINITION, "scip_role_forward_definition"),
+)
+
+
+PROP_TABLE_SPECS: tuple[PropTableSpec, ...] = (
+    PropTableSpec(
+        name="file_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("repo_files"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("file_id",),
+        node_kind=NodeKind.PY_FILE,
+        fields=(
+            PropFieldSpec(prop_key="path", source_col="path"),
+            PropFieldSpec(prop_key="size_bytes", source_col="size_bytes"),
+            PropFieldSpec(prop_key="file_sha256", source_col="file_sha256"),
+            PropFieldSpec(prop_key="encoding", source_col="encoding"),
+        ),
+    ),
+    PropTableSpec(
+        name="name_ref_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("cst_name_refs"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("name_ref_id",),
+        node_kind=NodeKind.CST_NAME_REF,
+        fields=(
+            PropFieldSpec(prop_key="name", source_col="name"),
+            PropFieldSpec(
+                prop_key="expr_context",
+                source_col="expr_ctx",
+                transform=_expr_context_value,
+            ),
+        ),
+    ),
+    PropTableSpec(
+        name="import_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("cst_imports"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("import_alias_id", "import_id"),
+        node_kind=NodeKind.CST_IMPORT_ALIAS,
+        fields=(
+            PropFieldSpec(prop_key="import_kind", source_col="kind"),
+            PropFieldSpec(prop_key="module", source_col="module"),
+            PropFieldSpec(prop_key="relative_level", source_col="relative_level"),
+            PropFieldSpec(prop_key="imported_name", source_col="name"),
+            PropFieldSpec(prop_key="name", source_col="name"),
+            PropFieldSpec(prop_key="asname", source_col="asname"),
+            PropFieldSpec(prop_key="is_star", source_col="is_star"),
+        ),
+    ),
+    PropTableSpec(
+        name="callsite_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("cst_callsites"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("call_id",),
+        node_kind=NodeKind.CST_CALLSITE,
+        fields=(
+            PropFieldSpec(prop_key="callee_shape", source_col="callee_shape"),
+            PropFieldSpec(prop_key="callee_text", source_col="callee_text"),
+            PropFieldSpec(prop_key="callee_dotted", source_col="callee_dotted"),
+            PropFieldSpec(prop_key="arg_count", source_col="arg_count"),
+            PropFieldSpec(
+                prop_key="callee_qnames",
+                source_col="callee_qnames",
+                include_if=lambda options: options.include_heavy_json_props,
+            ),
+        ),
+    ),
+    PropTableSpec(
+        name="def_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("cst_defs_norm"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("def_id",),
+        node_kind=NodeKind.CST_DEF,
+        fields=(
+            PropFieldSpec(prop_key="def_kind", source_col="def_kind_norm"),
+            PropFieldSpec(prop_key="name", source_col="name"),
+            PropFieldSpec(prop_key="container_def_id", source_col="container_def_id"),
+            PropFieldSpec(
+                prop_key="qnames",
+                source_col="qnames",
+                include_if=lambda options: options.include_heavy_json_props,
+            ),
+        ),
+    ),
+    PropTableSpec(
+        name="qname_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("dim_qualified_names"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("qname_id",),
+        node_kind=NodeKind.PY_QUALIFIED_NAME,
+        fields=(PropFieldSpec(prop_key="qname", source_col="qname"),),
+    ),
+    PropTableSpec(
+        name="scip_symbol_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("scip_symbol_information"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("symbol",),
+        node_kind=NodeKind.SCIP_SYMBOL,
+        fields=(
+            PropFieldSpec(prop_key="symbol", source_col="symbol"),
+            PropFieldSpec(prop_key="display_name", source_col="display_name"),
+            PropFieldSpec(prop_key="symbol_kind", source_col="kind"),
+            PropFieldSpec(prop_key="enclosing_symbol", source_col="enclosing_symbol"),
+            PropFieldSpec(
+                prop_key="documentation",
+                source_col="documentation",
+                include_if=lambda options: options.include_heavy_json_props,
+            ),
+            PropFieldSpec(
+                prop_key="signature_documentation",
+                source_col="signature_documentation",
+                include_if=lambda options: options.include_heavy_json_props,
+            ),
+        ),
+    ),
+    PropTableSpec(
+        name="scip_external_symbol_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("scip_external_symbol_information"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("symbol",),
+        node_kind=NodeKind.SCIP_SYMBOL,
+        fields=(
+            PropFieldSpec(prop_key="symbol", source_col="symbol"),
+            PropFieldSpec(prop_key="display_name", source_col="display_name"),
+            PropFieldSpec(prop_key="symbol_kind", source_col="kind"),
+            PropFieldSpec(prop_key="enclosing_symbol", source_col="enclosing_symbol"),
+            PropFieldSpec(
+                prop_key="documentation",
+                source_col="documentation",
+                include_if=lambda options: options.include_heavy_json_props,
+            ),
+            PropFieldSpec(
+                prop_key="signature_documentation",
+                source_col="signature_documentation",
+                include_if=lambda options: options.include_heavy_json_props,
+            ),
+        ),
+    ),
+    PropTableSpec(
+        name="scip_role_flags",
+        option_flag="include_node_props",
+        table_getter=_table_getter("scip_role_flags"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("symbol",),
+        fields=tuple(
+            PropFieldSpec(
+                prop_key=prop_key,
+                source_col=flag_name,
+                transform=_flag_to_bool,
+                skip_if_none=True,
+            )
+            for flag_name, _, prop_key in _ROLE_FLAG_SPECS
+        ),
+    ),
+    PropTableSpec(
+        name="ts_node_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("ts_nodes"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("ts_node_id",),
+        node_kind=NodeKind.TS_NODE,
+        fields=(
+            PropFieldSpec(prop_key="ts_type", source_col="ts_type"),
+            PropFieldSpec(prop_key="is_named", source_col="is_named"),
+            PropFieldSpec(prop_key="has_error", source_col="has_error"),
+        ),
+    ),
+    PropTableSpec(
+        name="ts_error_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("ts_errors"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("ts_error_id",),
+        node_kind=NodeKind.TS_ERROR,
+        fields=(
+            PropFieldSpec(prop_key="ts_type", source_col="ts_type"),
+            PropFieldSpec(prop_key="is_error", source_col="is_error"),
+        ),
+    ),
+    PropTableSpec(
+        name="ts_missing_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("ts_missing"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("ts_missing_id",),
+        node_kind=NodeKind.TS_MISSING,
+        fields=(
+            PropFieldSpec(prop_key="ts_type", source_col="ts_type"),
+            PropFieldSpec(prop_key="is_missing", source_col="is_missing"),
+        ),
+    ),
+    PropTableSpec(
+        name="type_expr_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("type_exprs_norm"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("type_expr_id",),
+        node_kind=NodeKind.TYPE_EXPR,
+        fields=(
+            PropFieldSpec(prop_key="expr_text", source_col="expr_text"),
+            PropFieldSpec(prop_key="expr_kind", source_col="expr_kind"),
+            PropFieldSpec(prop_key="expr_role", source_col="expr_role"),
+            PropFieldSpec(prop_key="param_name", source_col="param_name"),
+        ),
+    ),
+    PropTableSpec(
+        name="type_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("types_norm"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("type_id",),
+        node_kind=NodeKind.TYPE,
+        fields=(
+            PropFieldSpec(prop_key="type_repr", source_col="type_repr"),
+            PropFieldSpec(prop_key="type_form", source_col="type_form"),
+            PropFieldSpec(prop_key="origin", source_col="origin"),
+        ),
+    ),
+    PropTableSpec(
+        name="diagnostic_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("diagnostics_norm"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("diag_id",),
+        node_kind=NodeKind.DIAG,
+        fields=(
+            PropFieldSpec(prop_key="severity", source_col="severity"),
+            PropFieldSpec(prop_key="message", source_col="message"),
+            PropFieldSpec(prop_key="diag_source", source_col="diag_source"),
+            PropFieldSpec(prop_key="code", source_col="code"),
+            PropFieldSpec(prop_key="details", source_col="details"),
+        ),
+    ),
+    PropTableSpec(
+        name="runtime_object_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("rt_objects"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("rt_id",),
+        node_kind=NodeKind.RT_OBJECT,
+        fields=(
+            PropFieldSpec(prop_key="module", source_col="module"),
+            PropFieldSpec(prop_key="qualname", source_col="qualname"),
+            PropFieldSpec(prop_key="name", source_col="name"),
+            PropFieldSpec(prop_key="obj_type", source_col="obj_type"),
+            PropFieldSpec(prop_key="source_path", source_col="source_path"),
+            PropFieldSpec(prop_key="source_line", source_col="source_line"),
+        ),
+    ),
+    PropTableSpec(
+        name="runtime_signature_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("rt_signatures"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("sig_id",),
+        node_kind=NodeKind.RT_SIGNATURE,
+        fields=(
+            PropFieldSpec(prop_key="signature", source_col="signature"),
+            PropFieldSpec(prop_key="return_annotation", source_col="return_annotation"),
+        ),
+    ),
+    PropTableSpec(
+        name="runtime_param_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("rt_signature_params"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("param_id",),
+        node_kind=NodeKind.RT_SIGNATURE_PARAM,
+        fields=(
+            PropFieldSpec(prop_key="name", source_col="name"),
+            PropFieldSpec(prop_key="kind", source_col="kind"),
+            PropFieldSpec(prop_key="default_repr", source_col="default_repr"),
+            PropFieldSpec(prop_key="annotation_repr", source_col="annotation_repr"),
+            PropFieldSpec(prop_key="position", source_col="position"),
+        ),
+    ),
+    PropTableSpec(
+        name="runtime_member_props",
+        option_flag="include_node_props",
+        table_getter=_table_getter("rt_members"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("member_id",),
+        node_kind=NodeKind.RT_MEMBER,
+        fields=(
+            PropFieldSpec(prop_key="name", source_col="name"),
+            PropFieldSpec(prop_key="member_kind", source_col="member_kind"),
+            PropFieldSpec(prop_key="value_repr", source_col="value_repr"),
+            PropFieldSpec(prop_key="value_module", source_col="value_module"),
+            PropFieldSpec(prop_key="value_qualname", source_col="value_qualname"),
+        ),
+    ),
+    PropTableSpec(
+        name="edge_props",
+        option_flag="include_edge_props",
+        table_getter=_table_getter("cpg_edges"),
+        entity_kind=EntityKind.EDGE,
+        id_cols=("edge_id",),
+        fields=(
+            PropFieldSpec(prop_key="edge_kind", source_col="edge_kind"),
+            PropFieldSpec(prop_key="origin", source_col="origin"),
+            PropFieldSpec(prop_key="resolution_method", source_col="resolution_method"),
+            PropFieldSpec(prop_key="confidence", source_col="confidence"),
+            PropFieldSpec(prop_key="score", source_col="score"),
+            PropFieldSpec(prop_key="symbol_roles", source_col="symbol_roles"),
+            PropFieldSpec(prop_key="qname_source", source_col="qname_source"),
+            PropFieldSpec(prop_key="ambiguity_group_id", source_col="ambiguity_group_id"),
+            PropFieldSpec(prop_key="rule_name", source_col="rule_name"),
+            PropFieldSpec(prop_key="rule_priority", source_col="rule_priority"),
+        ),
+    ),
+)
+
+PROP_BUILDER = PropBuilder(
+    table_specs=PROP_TABLE_SPECS,
+    schema_version=SCHEMA_VERSION,
+    prop_schema=CPG_PROPS_SCHEMA,
+)
 
 
 @dataclass(frozen=True)
@@ -136,1112 +462,42 @@ class PropsInputTables:
     cpg_edges: pa.Table | None = None
 
 
-def _add_file_props(rows: list[PropRow], repo_files: pa.Table | None) -> None:
-    if repo_files is None or repo_files.num_rows == 0:
-        return
-    arrays = [
-        _column_or_null(repo_files, "file_id", pa.string()),
-        _column_or_null(repo_files, "path", pa.string()),
-        _column_or_null(repo_files, "size_bytes", pa.int64()),
-        _column_or_null(repo_files, "file_sha256", pa.string()),
-        _column_or_null(repo_files, "encoding", pa.string()),
-    ]
-    for file_id, path, size_bytes, file_sha256, encoding in iter_arrays(arrays):
-        file_id_value = _row_id(file_id)
-        if file_id_value is None:
-            continue
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=file_id_value,
-            key="node_kind",
-            value=NodeKind.PY_FILE.value,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=file_id_value,
-            key="path",
-            value=path,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=file_id_value,
-            key="size_bytes",
-            value=size_bytes,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=file_id_value,
-            key="file_sha256",
-            value=file_sha256,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=file_id_value,
-            key="encoding",
-            value=encoding,
-        )
+def _prop_tables(inputs: PropsInputTables) -> dict[str, pa.Table]:
+    tables = {
+        name: table
+        for name, table in {
+            "repo_files": inputs.repo_files,
+            "cst_name_refs": inputs.cst_name_refs,
+            "cst_imports": inputs.cst_imports,
+            "cst_callsites": inputs.cst_callsites,
+            "dim_qualified_names": inputs.dim_qualified_names,
+            "scip_symbol_information": inputs.scip_symbol_information,
+            "scip_external_symbol_information": inputs.scip_external_symbol_information,
+            "ts_nodes": inputs.ts_nodes,
+            "ts_errors": inputs.ts_errors,
+            "ts_missing": inputs.ts_missing,
+            "type_exprs_norm": inputs.type_exprs_norm,
+            "types_norm": inputs.types_norm,
+            "diagnostics_norm": inputs.diagnostics_norm,
+            "rt_objects": inputs.rt_objects,
+            "rt_signatures": inputs.rt_signatures,
+            "rt_signature_params": inputs.rt_signature_params,
+            "rt_members": inputs.rt_members,
+            "cpg_edges": inputs.cpg_edges,
+        }.items()
+        if table is not None
+    }
 
+    if inputs.cst_defs is not None:
+        tables["cst_defs"] = inputs.cst_defs
+        defs_norm = _defs_table(inputs.cst_defs)
+        if defs_norm is not None:
+            tables["cst_defs_norm"] = defs_norm
 
-def _add_name_ref_props(rows: list[PropRow], cst_name_refs: pa.Table | None) -> None:
-    if cst_name_refs is None or cst_name_refs.num_rows == 0:
-        return
-    arrays = [
-        _column_or_null(cst_name_refs, "name_ref_id", pa.string()),
-        _column_or_null(cst_name_refs, "name", pa.string()),
-        _column_or_null(cst_name_refs, "expr_ctx", pa.string()),
-    ]
-    for name_id, name, expr_ctx in iter_arrays(arrays):
-        name_id_value = _row_id(name_id)
-        if name_id_value is None:
-            continue
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=name_id_value,
-            key="node_kind",
-            value=NodeKind.CST_NAME_REF.value,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=name_id_value,
-            key="name",
-            value=name,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=name_id_value,
-            key="expr_context",
-            value=_expr_context_value(expr_ctx),
-        )
-
-
-def _add_import_props(rows: list[PropRow], cst_imports: pa.Table | None) -> None:
-    if cst_imports is None or cst_imports.num_rows == 0:
-        return
-    id_key = "import_alias_id" if "import_alias_id" in cst_imports.column_names else "import_id"
-    arrays = [
-        _column_or_null(cst_imports, id_key, pa.string()),
-        _column_or_null(cst_imports, "kind", pa.string()),
-        _column_or_null(cst_imports, "module", pa.string()),
-        _column_or_null(cst_imports, "relative_level", pa.int64()),
-        _column_or_null(cst_imports, "name", pa.string()),
-        _column_or_null(cst_imports, "asname", pa.string()),
-        _column_or_null(cst_imports, "is_star", pa.bool_()),
-    ]
-    for (
-        import_id,
-        kind,
-        module,
-        relative_level,
-        name,
-        asname,
-        is_star,
-    ) in iter_arrays(arrays):
-        import_id_value = _row_id(import_id)
-        if import_id_value is None:
-            continue
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=import_id_value,
-            key="node_kind",
-            value=NodeKind.CST_IMPORT_ALIAS.value,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=import_id_value,
-            key="import_kind",
-            value=kind,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=import_id_value,
-            key="module",
-            value=module,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=import_id_value,
-            key="relative_level",
-            value=relative_level,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=import_id_value,
-            key="imported_name",
-            value=name,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=import_id_value,
-            key="name",
-            value=name,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=import_id_value,
-            key="asname",
-            value=asname,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=import_id_value,
-            key="is_star",
-            value=is_star,
-        )
-
-
-def _add_callsite_props(
-    rows: list[PropRow],
-    cst_callsites: pa.Table | None,
-    *,
-    include_heavy_json: bool,
-) -> None:
-    if cst_callsites is None or cst_callsites.num_rows == 0:
-        return
-    arrays = [
-        _column_or_null(cst_callsites, "call_id", pa.string()),
-        _column_or_null(cst_callsites, "callee_shape", pa.string()),
-        _column_or_null(cst_callsites, "callee_text", pa.string()),
-        _column_or_null(cst_callsites, "callee_dotted", pa.string()),
-        _column_or_null(cst_callsites, "arg_count", pa.int64()),
-    ]
-    if include_heavy_json:
-        arrays.append(_column_or_null(cst_callsites, "callee_qnames", QNAME_LIST_TYPE))
-    for values in iter_arrays(arrays):
-        if include_heavy_json:
-            call_id, callee_shape, callee_text, callee_dotted, arg_count, callee_qnames = values
-        else:
-            call_id, callee_shape, callee_text, callee_dotted, arg_count = values
-            callee_qnames = None
-        call_id_value = _row_id(call_id)
-        if call_id_value is None:
-            continue
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=call_id_value,
-            key="node_kind",
-            value=NodeKind.CST_CALLSITE.value,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=call_id_value,
-            key="callee_shape",
-            value=callee_shape,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=call_id_value,
-            key="callee_text",
-            value=callee_text,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=call_id_value,
-            key="callee_dotted",
-            value=callee_dotted,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=call_id_value,
-            key="arg_count",
-            value=arg_count,
-        )
-        if include_heavy_json:
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=call_id_value,
-                key="callee_qnames",
-                value=callee_qnames,
-            )
-
-
-def _add_def_props(
-    rows: list[PropRow],
-    cst_defs: pa.Table | None,
-    *,
-    include_heavy_json: bool,
-) -> None:
-    if cst_defs is None or cst_defs.num_rows == 0:
-        return
-    arrays = [
-        _column_or_null(cst_defs, "def_id", pa.string()),
-        _column_or_null(cst_defs, "def_kind", pa.string()),
-        _column_or_null(cst_defs, "kind", pa.string()),
-        _column_or_null(cst_defs, "name", pa.string()),
-        _column_or_null(cst_defs, "container_def_id", pa.string()),
-    ]
-    if include_heavy_json:
-        arrays.append(_column_or_null(cst_defs, "qnames", QNAME_LIST_TYPE))
-    for values in iter_arrays(arrays):
-        if include_heavy_json:
-            def_id, def_kind, kind, name, container_def_id, qnames = values
-        else:
-            def_id, def_kind, kind, name, container_def_id = values
-            qnames = None
-        def_id_value = _row_id(def_id)
-        if def_id_value is None:
-            continue
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=def_id_value,
-            key="node_kind",
-            value=NodeKind.CST_DEF.value,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=def_id_value,
-            key="def_kind",
-            value=def_kind or kind,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=def_id_value,
-            key="name",
-            value=name,
-        )
-        if include_heavy_json:
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=def_id_value,
-                key="qnames",
-                value=qnames,
-            )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=def_id_value,
-            key="container_def_id",
-            value=container_def_id,
-        )
-
-
-def _add_qname_props(rows: list[PropRow], dim_qualified_names: pa.Table | None) -> None:
-    if (
-        dim_qualified_names is None
-        or dim_qualified_names.num_rows == 0
-        or "qname_id" not in dim_qualified_names.column_names
-    ):
-        return
-    arrays = [
-        _column_or_null(dim_qualified_names, "qname_id", pa.string()),
-        _column_or_null(dim_qualified_names, "qname", pa.string()),
-    ]
-    for qname_id, qname in iter_arrays(arrays):
-        qname_id_value = _row_id(qname_id)
-        if qname_id_value is None:
-            continue
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=qname_id_value,
-            key="node_kind",
-            value=NodeKind.PY_QUALIFIED_NAME.value,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=qname_id_value,
-            key="qname",
-            value=qname,
-        )
-
-
-def _add_symbol_props(
-    rows: list[PropRow],
-    scip_symbol_information: pa.Table | None,
-    *,
-    include_heavy_json: bool,
-) -> None:
-    if scip_symbol_information is None or scip_symbol_information.num_rows == 0:
-        return
-    arrays = [
-        _column_or_null(scip_symbol_information, "symbol", pa.string()),
-        _column_or_null(scip_symbol_information, "display_name", pa.string()),
-        _column_or_null(scip_symbol_information, "kind", pa.string()),
-        _column_or_null(scip_symbol_information, "enclosing_symbol", pa.string()),
-    ]
-    if include_heavy_json:
-        arrays.append(
-            _column_or_null(scip_symbol_information, "documentation", pa.list_(pa.string()))
-        )
-        arrays.append(
-            _column_or_null(scip_symbol_information, "signature_documentation", pa.string())
-        )
-    for values in iter_arrays(arrays):
-        if include_heavy_json:
-            (
-                symbol,
-                display_name,
-                kind,
-                enclosing_symbol,
-                documentation,
-                signature_documentation,
-            ) = values
-        else:
-            symbol, display_name, kind, enclosing_symbol = values
-            documentation = None
-            signature_documentation = None
-        symbol_id = _row_id(symbol)
-        if symbol_id is None:
-            continue
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=symbol_id,
-            key="node_kind",
-            value=NodeKind.SCIP_SYMBOL.value,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=symbol_id,
-            key="symbol",
-            value=symbol,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=symbol_id,
-            key="display_name",
-            value=display_name,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=symbol_id,
-            key="symbol_kind",
-            value=kind,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=symbol_id,
-            key="enclosing_symbol",
-            value=enclosing_symbol,
-        )
-        if include_heavy_json:
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=symbol_id,
-                key="documentation",
-                value=documentation,
-            )
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=symbol_id,
-                key="signature_documentation",
-                value=signature_documentation,
-            )
-
-
-def _add_scip_role_props(rows: list[PropRow], scip_occurrences: pa.Table | None) -> None:
-    """Add role-derived properties for SCIP symbols."""
-    if (
-        scip_occurrences is None
-        or scip_occurrences.num_rows == 0
-        or "symbol" not in scip_occurrences.column_names
-        or "symbol_roles" not in scip_occurrences.column_names
-    ):
-        return
-
-    symbols = pc.cast(_column_or_null(scip_occurrences, "symbol", pa.string()), pa.string())
-    roles = pc.cast(_column_or_null(scip_occurrences, "symbol_roles", pa.int64()), pa.int64())
-    flag_arrays: list[pa.Array | pa.ChunkedArray] = []
-    flag_names: list[str] = []
-    for name, mask, _ in _ROLE_FLAG_SPECS:
-        flag = pc.not_equal(pc.bit_wise_and(roles, pa.scalar(mask)), pa.scalar(0))
-        flag_arrays.append(pc.cast(flag, pa.int32()))
-        flag_names.append(name)
-
-    flags_table = pa.Table.from_arrays([symbols, *flag_arrays], names=["symbol", *flag_names])
-    aggs = [(name, "max") for name in flag_names]
-    aggregated = flags_table.group_by(["symbol"], use_threads=True).aggregate(aggs)
-    aggregated = aggregated.rename_columns(["symbol", *flag_names])
-    arrays = [aggregated["symbol"], *[aggregated[name] for name in flag_names]]
-    for values in iter_arrays(arrays):
-        symbol = values[0]
-        if not isinstance(symbol, str) or not symbol:
-            continue
-        flags: set[str] = set()
-        for name, raw in zip(flag_names, values[1:], strict=True):
-            if isinstance(raw, bool):
-                value = int(raw)
-            elif isinstance(raw, int):
-                value = raw
-            else:
-                value = 0
-            if value == 1:
-                flags.add(name)
-        if flags:
-            _emit_scip_role_props(rows, symbol, flags)
-
-
-_ROLE_FLAG_SPECS: tuple[tuple[str, int, str], ...] = (
-    ("generated", SCIP_ROLE_GENERATED, "scip_role_generated"),
-    ("test", SCIP_ROLE_TEST, "scip_role_test"),
-    ("forward_definition", SCIP_ROLE_FORWARD_DEFINITION, "scip_role_forward_definition"),
-)
-
-
-def _emit_scip_role_props(rows: list[PropRow], symbol: str, flags: set[str]) -> None:
-    for name, _, prop_key in _ROLE_FLAG_SPECS:
-        if name in flags:
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=symbol,
-                key=prop_key,
-                value=True,
-            )
-
-
-def _add_ts_props(
-    rows: list[PropRow],
-    ts_nodes: pa.Table | None,
-    ts_errors: pa.Table | None,
-    ts_missing: pa.Table | None,
-) -> None:
-    if ts_nodes is not None and ts_nodes.num_rows:
-        arrays = [
-            _column_or_null(ts_nodes, "ts_node_id", pa.string()),
-            _column_or_null(ts_nodes, "ts_type", pa.string()),
-            _column_or_null(ts_nodes, "is_named", pa.bool_()),
-            _column_or_null(ts_nodes, "has_error", pa.bool_()),
-        ]
-        for node_id, ts_type, is_named, has_error in iter_arrays(arrays):
-            node_id_value = _row_id(node_id)
-            if node_id_value is None:
-                continue
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=node_id_value,
-                key="node_kind",
-                value=NodeKind.TS_NODE.value,
-            )
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=node_id_value,
-                key="ts_type",
-                value=ts_type,
-            )
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=node_id_value,
-                key="is_named",
-                value=is_named,
-            )
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=node_id_value,
-                key="has_error",
-                value=has_error,
-            )
-
-    if ts_errors is not None and ts_errors.num_rows:
-        arrays = [
-            _column_or_null(ts_errors, "ts_error_id", pa.string()),
-            _column_or_null(ts_errors, "ts_type", pa.string()),
-            _column_or_null(ts_errors, "is_error", pa.bool_()),
-        ]
-        for node_id, ts_type, is_error in iter_arrays(arrays):
-            node_id_value = _row_id(node_id)
-            if node_id_value is None:
-                continue
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=node_id_value,
-                key="node_kind",
-                value=NodeKind.TS_ERROR.value,
-            )
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=node_id_value,
-                key="ts_type",
-                value=ts_type,
-            )
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=node_id_value,
-                key="is_error",
-                value=is_error,
-            )
-
-    if ts_missing is not None and ts_missing.num_rows:
-        arrays = [
-            _column_or_null(ts_missing, "ts_missing_id", pa.string()),
-            _column_or_null(ts_missing, "ts_type", pa.string()),
-            _column_or_null(ts_missing, "is_missing", pa.bool_()),
-        ]
-        for node_id, ts_type, is_missing in iter_arrays(arrays):
-            node_id_value = _row_id(node_id)
-            if node_id_value is None:
-                continue
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=node_id_value,
-                key="node_kind",
-                value=NodeKind.TS_MISSING.value,
-            )
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=node_id_value,
-                key="ts_type",
-                value=ts_type,
-            )
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=node_id_value,
-                key="is_missing",
-                value=is_missing,
-            )
-
-
-def _add_type_props(
-    rows: list[PropRow],
-    type_exprs_norm: pa.Table | None,
-    types_norm: pa.Table | None,
-) -> None:
-    if type_exprs_norm is not None and type_exprs_norm.num_rows:
-        arrays = [
-            _column_or_null(type_exprs_norm, "type_expr_id", pa.string()),
-            _column_or_null(type_exprs_norm, "expr_text", pa.string()),
-            _column_or_null(type_exprs_norm, "expr_kind", pa.string()),
-            _column_or_null(type_exprs_norm, "expr_role", pa.string()),
-            _column_or_null(type_exprs_norm, "param_name", pa.string()),
-        ]
-        for type_expr_id, expr_text, expr_kind, expr_role, param_name in iter_arrays(arrays):
-            type_expr_id_value = _row_id(type_expr_id)
-            if type_expr_id_value is None:
-                continue
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=type_expr_id_value,
-                key="node_kind",
-                value=NodeKind.TYPE_EXPR.value,
-            )
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=type_expr_id_value,
-                key="expr_text",
-                value=expr_text,
-            )
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=type_expr_id_value,
-                key="expr_kind",
-                value=expr_kind,
-            )
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=type_expr_id_value,
-                key="expr_role",
-                value=expr_role,
-            )
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=type_expr_id_value,
-                key="param_name",
-                value=param_name,
-            )
-
-    if types_norm is not None and types_norm.num_rows:
-        arrays = [
-            _column_or_null(types_norm, "type_id", pa.string()),
-            _column_or_null(types_norm, "type_repr", pa.string()),
-            _column_or_null(types_norm, "type_form", pa.string()),
-            _column_or_null(types_norm, "origin", pa.string()),
-        ]
-        for type_id, type_repr, type_form, origin in iter_arrays(arrays):
-            type_id_value = _row_id(type_id)
-            if type_id_value is None:
-                continue
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=type_id_value,
-                key="node_kind",
-                value=NodeKind.TYPE.value,
-            )
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=type_id_value,
-                key="type_repr",
-                value=type_repr,
-            )
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=type_id_value,
-                key="type_form",
-                value=type_form,
-            )
-            _add_prop(
-                rows,
-                entity_kind=EntityKind.NODE,
-                entity_id=type_id_value,
-                key="origin",
-                value=origin,
-            )
-
-
-def _add_diag_props(rows: list[PropRow], diagnostics_norm: pa.Table | None) -> None:
-    if diagnostics_norm is None or diagnostics_norm.num_rows == 0:
-        return
-    arrays = [
-        _column_or_null(diagnostics_norm, "diag_id", pa.string()),
-        _column_or_null(diagnostics_norm, "severity", pa.string()),
-        _column_or_null(diagnostics_norm, "message", pa.string()),
-        _column_or_null(diagnostics_norm, "diag_source", pa.string()),
-        _column_or_null(diagnostics_norm, "code", pa.string()),
-        _column_or_null(diagnostics_norm, "details", DIAG_DETAILS_TYPE),
-    ]
-    for diag_id, severity, message, diag_source, code, details in iter_arrays(arrays):
-        diag_id_value = _row_id(diag_id)
-        if diag_id_value is None:
-            continue
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=diag_id_value,
-            key="node_kind",
-            value=NodeKind.DIAG.value,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=diag_id_value,
-            key="severity",
-            value=severity,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=diag_id_value,
-            key="message",
-            value=message,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=diag_id_value,
-            key="diag_source",
-            value=diag_source,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=diag_id_value,
-            key="code",
-            value=code,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=diag_id_value,
-            key="details",
-            value=details,
-        )
-
-
-def _add_runtime_props(
-    rows: list[PropRow],
-    rt_objects: pa.Table | None,
-    rt_signatures: pa.Table | None,
-    rt_signature_params: pa.Table | None,
-    rt_members: pa.Table | None,
-) -> None:
-    if rt_objects is not None and rt_objects.num_rows:
-        _add_runtime_object_props(rows, rt_objects)
-
-    if rt_signatures is not None and rt_signatures.num_rows:
-        _add_runtime_signature_props(rows, rt_signatures)
-
-    if rt_signature_params is not None and rt_signature_params.num_rows:
-        _add_runtime_param_props(rows, rt_signature_params)
-
-    if rt_members is not None and rt_members.num_rows:
-        _add_runtime_member_props(rows, rt_members)
-
-
-def _add_runtime_object_props(rows: list[PropRow], rt_objects: pa.Table) -> None:
-    arrays = [
-        _column_or_null(rt_objects, "rt_id", pa.string()),
-        _column_or_null(rt_objects, "module", pa.string()),
-        _column_or_null(rt_objects, "qualname", pa.string()),
-        _column_or_null(rt_objects, "name", pa.string()),
-        _column_or_null(rt_objects, "obj_type", pa.string()),
-        _column_or_null(rt_objects, "source_path", pa.string()),
-        _column_or_null(rt_objects, "source_line", pa.int64()),
-    ]
-    for (
-        rt_id,
-        module,
-        qualname,
-        name,
-        obj_type,
-        source_path,
-        source_line,
-    ) in iter_arrays(arrays):
-        rt_id_value = _row_id(rt_id)
-        if rt_id_value is None:
-            continue
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=rt_id_value,
-            key="node_kind",
-            value=NodeKind.RT_OBJECT.value,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=rt_id_value,
-            key="module",
-            value=module,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=rt_id_value,
-            key="qualname",
-            value=qualname,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=rt_id_value,
-            key="name",
-            value=name,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=rt_id_value,
-            key="obj_type",
-            value=obj_type,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=rt_id_value,
-            key="source_path",
-            value=source_path,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=rt_id_value,
-            key="source_line",
-            value=source_line,
-        )
-
-
-def _add_runtime_signature_props(rows: list[PropRow], rt_signatures: pa.Table) -> None:
-    arrays = [
-        _column_or_null(rt_signatures, "sig_id", pa.string()),
-        _column_or_null(rt_signatures, "signature", pa.string()),
-        _column_or_null(rt_signatures, "return_annotation", pa.string()),
-    ]
-    for sig_id, signature, return_annotation in iter_arrays(arrays):
-        sig_id_value = _row_id(sig_id)
-        if sig_id_value is None:
-            continue
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=sig_id_value,
-            key="node_kind",
-            value=NodeKind.RT_SIGNATURE.value,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=sig_id_value,
-            key="signature",
-            value=signature,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=sig_id_value,
-            key="return_annotation",
-            value=return_annotation,
-        )
-
-
-def _add_runtime_param_props(rows: list[PropRow], rt_signature_params: pa.Table) -> None:
-    arrays = [
-        _column_or_null(rt_signature_params, "param_id", pa.string()),
-        _column_or_null(rt_signature_params, "name", pa.string()),
-        _column_or_null(rt_signature_params, "kind", pa.string()),
-        _column_or_null(rt_signature_params, "default_repr", pa.string()),
-        _column_or_null(rt_signature_params, "annotation_repr", pa.string()),
-        _column_or_null(rt_signature_params, "position", pa.int64()),
-    ]
-    for (
-        param_id,
-        name,
-        kind,
-        default_repr,
-        annotation_repr,
-        position,
-    ) in iter_arrays(arrays):
-        param_id_value = _row_id(param_id)
-        if param_id_value is None:
-            continue
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=param_id_value,
-            key="node_kind",
-            value=NodeKind.RT_SIGNATURE_PARAM.value,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=param_id_value,
-            key="name",
-            value=name,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=param_id_value,
-            key="kind",
-            value=kind,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=param_id_value,
-            key="default_repr",
-            value=default_repr,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=param_id_value,
-            key="annotation_repr",
-            value=annotation_repr,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=param_id_value,
-            key="position",
-            value=position,
-        )
-
-
-def _add_runtime_member_props(rows: list[PropRow], rt_members: pa.Table) -> None:
-    arrays = [
-        _column_or_null(rt_members, "member_id", pa.string()),
-        _column_or_null(rt_members, "name", pa.string()),
-        _column_or_null(rt_members, "member_kind", pa.string()),
-        _column_or_null(rt_members, "value_repr", pa.string()),
-        _column_or_null(rt_members, "value_module", pa.string()),
-        _column_or_null(rt_members, "value_qualname", pa.string()),
-    ]
-    for (
-        member_id,
-        name,
-        member_kind,
-        value_repr,
-        value_module,
-        value_qualname,
-    ) in iter_arrays(arrays):
-        member_id_value = _row_id(member_id)
-        if member_id_value is None:
-            continue
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=member_id_value,
-            key="node_kind",
-            value=NodeKind.RT_MEMBER.value,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=member_id_value,
-            key="name",
-            value=name,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=member_id_value,
-            key="member_kind",
-            value=member_kind,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=member_id_value,
-            key="value_repr",
-            value=value_repr,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=member_id_value,
-            key="value_module",
-            value=value_module,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.NODE,
-            entity_id=member_id_value,
-            key="value_qualname",
-            value=value_qualname,
-        )
-
-
-def _add_edge_props(rows: list[PropRow], cpg_edges: pa.Table | None) -> None:
-    if cpg_edges is None or cpg_edges.num_rows == 0:
-        return
-    arrays = [
-        _column_or_null(cpg_edges, "edge_id", pa.string()),
-        _column_or_null(cpg_edges, "edge_kind", pa.string()),
-        _column_or_null(cpg_edges, "origin", pa.string()),
-        _column_or_null(cpg_edges, "resolution_method", pa.string()),
-        _column_or_null(cpg_edges, "confidence", pa.float64()),
-        _column_or_null(cpg_edges, "score", pa.float64()),
-        _column_or_null(cpg_edges, "symbol_roles", pa.int64()),
-        _column_or_null(cpg_edges, "qname_source", pa.string()),
-        _column_or_null(cpg_edges, "ambiguity_group_id", pa.string()),
-        _column_or_null(cpg_edges, "rule_name", pa.string()),
-        _column_or_null(cpg_edges, "rule_priority", pa.int64()),
-    ]
-    for (
-        edge_id,
-        edge_kind,
-        origin,
-        resolution_method,
-        confidence,
-        score,
-        symbol_roles,
-        qname_source,
-        ambiguity_group_id,
-        rule_name,
-        rule_priority,
-    ) in iter_arrays(arrays):
-        edge_id_value = _row_id(edge_id)
-        if edge_id_value is None:
-            continue
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.EDGE,
-            entity_id=edge_id_value,
-            key="edge_kind",
-            value=edge_kind,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.EDGE,
-            entity_id=edge_id_value,
-            key="origin",
-            value=origin,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.EDGE,
-            entity_id=edge_id_value,
-            key="resolution_method",
-            value=resolution_method,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.EDGE,
-            entity_id=edge_id_value,
-            key="confidence",
-            value=confidence,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.EDGE,
-            entity_id=edge_id_value,
-            key="score",
-            value=score,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.EDGE,
-            entity_id=edge_id_value,
-            key="symbol_roles",
-            value=symbol_roles,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.EDGE,
-            entity_id=edge_id_value,
-            key="qname_source",
-            value=qname_source,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.EDGE,
-            entity_id=edge_id_value,
-            key="ambiguity_group_id",
-            value=ambiguity_group_id,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.EDGE,
-            entity_id=edge_id_value,
-            key="rule_name",
-            value=rule_name,
-        )
-        _add_prop(
-            rows,
-            entity_kind=EntityKind.EDGE,
-            entity_id=edge_id_value,
-            key="rule_priority",
-            value=rule_priority,
-        )
+    scip_role_flags = _scip_role_flags_table(inputs.scip_occurrences)
+    if scip_role_flags is not None:
+        tables["scip_role_flags"] = scip_role_flags
+    return tables
 
 
 def build_cpg_props_raw(
@@ -1257,47 +513,13 @@ def build_cpg_props_raw(
         Raw properties table.
     """
     options = options or PropsBuildOptions()
-    tables = inputs or PropsInputTables()
-    rows: list[PropRow] = []
+    tables = _prop_tables(inputs or PropsInputTables())
+    out = PROP_BUILDER.build(tables=tables, options=options)
 
-    if options.include_node_props:
-        _add_file_props(rows, tables.repo_files)
-        _add_name_ref_props(rows, tables.cst_name_refs)
-        _add_import_props(rows, tables.cst_imports)
-        _add_callsite_props(
-            rows, tables.cst_callsites, include_heavy_json=options.include_heavy_json_props
-        )
-        _add_def_props(rows, tables.cst_defs, include_heavy_json=options.include_heavy_json_props)
-        _add_qname_props(rows, tables.dim_qualified_names)
-        _add_symbol_props(
-            rows,
-            tables.scip_symbol_information,
-            include_heavy_json=options.include_heavy_json_props,
-        )
-        _add_symbol_props(
-            rows,
-            tables.scip_external_symbol_information,
-            include_heavy_json=options.include_heavy_json_props,
-        )
-        _add_scip_role_props(rows, tables.scip_occurrences)
-        _add_ts_props(rows, tables.ts_nodes, tables.ts_errors, tables.ts_missing)
-        _add_type_props(rows, tables.type_exprs_norm, tables.types_norm)
-        _add_diag_props(rows, tables.diagnostics_norm)
-        _add_runtime_props(
-            rows,
-            tables.rt_objects,
-            tables.rt_signatures,
-            tables.rt_signature_params,
-            tables.rt_members,
-        )
+    if out.num_rows == 0:
+        return empty_props()
 
-    if options.include_edge_props:
-        _add_edge_props(rows, tables.cpg_edges)
-
-    if not rows:
-        return empty_table(CPG_PROPS_SCHEMA)
-
-    return pa.Table.from_pylist(rows, schema=CPG_PROPS_SCHEMA)
+    return out
 
 
 def build_cpg_props(

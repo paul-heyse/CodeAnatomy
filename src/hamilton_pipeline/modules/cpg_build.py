@@ -7,7 +7,6 @@ from pathlib import Path
 import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
 
-from arrowdsl.contracts import Contract, DedupeSpec, SortKey
 from arrowdsl.runtime import ExecutionContext
 from cpg.build_edges import EdgeBuildInputs, build_cpg_edges
 from cpg.build_nodes import NodeInputTables, build_cpg_nodes
@@ -47,6 +46,9 @@ from relspec.registry import (
     DatasetLocation,
     RelationshipRegistry,
 )
+from schema_spec.catalogs import ContractCatalogSpec
+from schema_spec.contracts import ContractSpec, DedupeSpecSpec, SortKeySpec
+from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 from storage.parquet import ParquetWriteOptions, write_named_datasets_parquet
 
 # -----------------------------
@@ -63,158 +65,156 @@ def relationship_contracts() -> ContractCatalog:
     ContractCatalog
         Contract catalog for relationship outputs.
     """
-    cc = ContractCatalog()
-
-    rel_name_symbol_schema = pa.schema(
-        [
-            ("name_ref_id", pa.string()),
-            ("symbol", pa.string()),
-            ("symbol_roles", pa.int32()),
-            ("path", pa.string()),
-            ("bstart", pa.int64()),
-            ("bend", pa.int64()),
-            ("resolution_method", pa.string()),
-            ("confidence", pa.float32()),
-            ("score", pa.float32()),
-            ("rule_name", pa.string()),
-            ("rule_priority", pa.int32()),
-        ]
+    rel_name_symbol_spec = TableSchemaSpec(
+        name="rel_name_symbol_v1",
+        fields=[
+            ArrowFieldSpec(name="name_ref_id", dtype=pa.string()),
+            ArrowFieldSpec(name="symbol", dtype=pa.string()),
+            ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
+            ArrowFieldSpec(name="path", dtype=pa.string()),
+            ArrowFieldSpec(name="bstart", dtype=pa.int64()),
+            ArrowFieldSpec(name="bend", dtype=pa.int64()),
+            ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
+            ArrowFieldSpec(name="confidence", dtype=pa.float32()),
+            ArrowFieldSpec(name="score", dtype=pa.float32()),
+            ArrowFieldSpec(name="rule_name", dtype=pa.string()),
+            ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
+        ],
+        required_non_null=("name_ref_id", "symbol"),
     )
 
-    rel_import_symbol_schema = pa.schema(
-        [
-            ("import_alias_id", pa.string()),
-            ("symbol", pa.string()),
-            ("symbol_roles", pa.int32()),
-            ("path", pa.string()),
-            ("bstart", pa.int64()),
-            ("bend", pa.int64()),
-            ("resolution_method", pa.string()),
-            ("confidence", pa.float32()),
-            ("score", pa.float32()),
-            ("rule_name", pa.string()),
-            ("rule_priority", pa.int32()),
-        ]
+    rel_import_symbol_spec = TableSchemaSpec(
+        name="rel_import_symbol_v1",
+        fields=[
+            ArrowFieldSpec(name="import_alias_id", dtype=pa.string()),
+            ArrowFieldSpec(name="symbol", dtype=pa.string()),
+            ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
+            ArrowFieldSpec(name="path", dtype=pa.string()),
+            ArrowFieldSpec(name="bstart", dtype=pa.int64()),
+            ArrowFieldSpec(name="bend", dtype=pa.int64()),
+            ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
+            ArrowFieldSpec(name="confidence", dtype=pa.float32()),
+            ArrowFieldSpec(name="score", dtype=pa.float32()),
+            ArrowFieldSpec(name="rule_name", dtype=pa.string()),
+            ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
+        ],
+        required_non_null=("import_alias_id", "symbol"),
     )
 
-    rel_callsite_symbol_schema = pa.schema(
-        [
-            ("call_id", pa.string()),
-            ("symbol", pa.string()),
-            ("symbol_roles", pa.int32()),
-            ("path", pa.string()),
-            ("call_bstart", pa.int64()),
-            ("call_bend", pa.int64()),
-            ("resolution_method", pa.string()),
-            ("confidence", pa.float32()),
-            ("score", pa.float32()),
-            ("rule_name", pa.string()),
-            ("rule_priority", pa.int32()),
-        ]
+    rel_callsite_symbol_spec = TableSchemaSpec(
+        name="rel_callsite_symbol_v1",
+        fields=[
+            ArrowFieldSpec(name="call_id", dtype=pa.string()),
+            ArrowFieldSpec(name="symbol", dtype=pa.string()),
+            ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
+            ArrowFieldSpec(name="path", dtype=pa.string()),
+            ArrowFieldSpec(name="call_bstart", dtype=pa.int64()),
+            ArrowFieldSpec(name="call_bend", dtype=pa.int64()),
+            ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
+            ArrowFieldSpec(name="confidence", dtype=pa.float32()),
+            ArrowFieldSpec(name="score", dtype=pa.float32()),
+            ArrowFieldSpec(name="rule_name", dtype=pa.string()),
+            ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
+        ],
+        required_non_null=("call_id", "symbol"),
     )
 
-    rel_callsite_qname_schema = pa.schema(
-        [
-            ("call_id", pa.string()),
-            ("qname_id", pa.string()),
-            ("qname_source", pa.string()),
-            ("path", pa.string()),
-            ("call_bstart", pa.int64()),
-            ("call_bend", pa.int64()),
-            ("confidence", pa.float32()),
-            ("score", pa.float32()),
-            ("ambiguity_group_id", pa.string()),
-            ("rule_name", pa.string()),
-            ("rule_priority", pa.int32()),
-        ]
+    rel_callsite_qname_spec = TableSchemaSpec(
+        name="rel_callsite_qname_v1",
+        fields=[
+            ArrowFieldSpec(name="call_id", dtype=pa.string()),
+            ArrowFieldSpec(name="qname_id", dtype=pa.string()),
+            ArrowFieldSpec(name="qname_source", dtype=pa.string()),
+            ArrowFieldSpec(name="path", dtype=pa.string()),
+            ArrowFieldSpec(name="call_bstart", dtype=pa.int64()),
+            ArrowFieldSpec(name="call_bend", dtype=pa.int64()),
+            ArrowFieldSpec(name="confidence", dtype=pa.float32()),
+            ArrowFieldSpec(name="score", dtype=pa.float32()),
+            ArrowFieldSpec(name="ambiguity_group_id", dtype=pa.string()),
+            ArrowFieldSpec(name="rule_name", dtype=pa.string()),
+            ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
+        ],
+        required_non_null=("call_id", "qname_id"),
     )
 
-    cc.register(
-        Contract(
-            name="rel_name_symbol_v1",
-            schema=rel_name_symbol_schema,
-            required_non_null=("name_ref_id", "symbol"),
-            virtual_fields=("origin",),  # NEW: injected downstream by edge emitter
-            dedupe=DedupeSpec(
-                keys=("name_ref_id", "symbol", "path", "bstart", "bend"),
-                tie_breakers=(
-                    SortKey("score", "descending"),
-                    SortKey("confidence", "descending"),
-                    SortKey("rule_priority", "ascending"),
+    spec = ContractCatalogSpec(
+        contracts={
+            "rel_name_symbol_v1": ContractSpec(
+                name="rel_name_symbol_v1",
+                table_schema=rel_name_symbol_spec,
+                virtual_fields=("origin",),
+                dedupe=DedupeSpecSpec(
+                    keys=("name_ref_id", "symbol", "path", "bstart", "bend"),
+                    tie_breakers=(
+                        SortKeySpec(column="score", order="descending"),
+                        SortKeySpec(column="confidence", order="descending"),
+                        SortKeySpec(column="rule_priority", order="ascending"),
+                    ),
+                    strategy="KEEP_FIRST_AFTER_SORT",
                 ),
-                strategy="KEEP_FIRST_AFTER_SORT",
-            ),
-            canonical_sort=(
-                SortKey("path", "ascending"),
-                SortKey("bstart", "ascending"),
-                SortKey("name_ref_id", "ascending"),
-            ),
-        )
-    )
-
-    cc.register(
-        Contract(
-            name="rel_import_symbol_v1",
-            schema=rel_import_symbol_schema,
-            required_non_null=("import_alias_id", "symbol"),
-            virtual_fields=("origin",),  # NEW: injected downstream by edge emitter
-            dedupe=DedupeSpec(
-                keys=("import_alias_id", "symbol", "path", "bstart", "bend"),
-                tie_breakers=(
-                    SortKey("score", "descending"),
-                    SortKey("rule_priority", "ascending"),
+                canonical_sort=(
+                    SortKeySpec(column="path", order="ascending"),
+                    SortKeySpec(column="bstart", order="ascending"),
+                    SortKeySpec(column="name_ref_id", order="ascending"),
                 ),
-                strategy="KEEP_FIRST_AFTER_SORT",
             ),
-            canonical_sort=(
-                SortKey("path", "ascending"),
-                SortKey("bstart", "ascending"),
-                SortKey("import_alias_id", "ascending"),
-            ),
-        )
-    )
-
-    cc.register(
-        Contract(
-            name="rel_callsite_symbol_v1",
-            schema=rel_callsite_symbol_schema,
-            required_non_null=("call_id", "symbol"),
-            virtual_fields=("origin",),  # NEW: injected downstream by edge emitter
-            dedupe=DedupeSpec(
-                keys=("call_id", "symbol", "path", "call_bstart", "call_bend"),
-                tie_breakers=(
-                    SortKey("score", "descending"),
-                    SortKey("rule_priority", "ascending"),
+            "rel_import_symbol_v1": ContractSpec(
+                name="rel_import_symbol_v1",
+                table_schema=rel_import_symbol_spec,
+                virtual_fields=("origin",),
+                dedupe=DedupeSpecSpec(
+                    keys=("import_alias_id", "symbol", "path", "bstart", "bend"),
+                    tie_breakers=(
+                        SortKeySpec(column="score", order="descending"),
+                        SortKeySpec(column="rule_priority", order="ascending"),
+                    ),
+                    strategy="KEEP_FIRST_AFTER_SORT",
                 ),
-                strategy="KEEP_FIRST_AFTER_SORT",
-            ),
-            canonical_sort=(
-                SortKey("path", "ascending"),
-                SortKey("call_bstart", "ascending"),
-                SortKey("call_id", "ascending"),
-            ),
-        )
-    )
-
-    cc.register(
-        Contract(
-            name="rel_callsite_qname_v1",
-            schema=rel_callsite_qname_schema,
-            required_non_null=("call_id", "qname_id"),
-            virtual_fields=("origin",),  # NEW: injected downstream by edge emitter
-            dedupe=DedupeSpec(
-                keys=("call_id", "qname_id"),
-                tie_breakers=(
-                    SortKey("score", "descending"),
-                    SortKey("rule_priority", "ascending"),
+                canonical_sort=(
+                    SortKeySpec(column="path", order="ascending"),
+                    SortKeySpec(column="bstart", order="ascending"),
+                    SortKeySpec(column="import_alias_id", order="ascending"),
                 ),
-                strategy="KEEP_FIRST_AFTER_SORT",
             ),
-            canonical_sort=(SortKey("call_id", "ascending"), SortKey("qname_id", "ascending")),
-        )
+            "rel_callsite_symbol_v1": ContractSpec(
+                name="rel_callsite_symbol_v1",
+                table_schema=rel_callsite_symbol_spec,
+                virtual_fields=("origin",),
+                dedupe=DedupeSpecSpec(
+                    keys=("call_id", "symbol", "path", "call_bstart", "call_bend"),
+                    tie_breakers=(
+                        SortKeySpec(column="score", order="descending"),
+                        SortKeySpec(column="rule_priority", order="ascending"),
+                    ),
+                    strategy="KEEP_FIRST_AFTER_SORT",
+                ),
+                canonical_sort=(
+                    SortKeySpec(column="path", order="ascending"),
+                    SortKeySpec(column="call_bstart", order="ascending"),
+                    SortKeySpec(column="call_id", order="ascending"),
+                ),
+            ),
+            "rel_callsite_qname_v1": ContractSpec(
+                name="rel_callsite_qname_v1",
+                table_schema=rel_callsite_qname_spec,
+                virtual_fields=("origin",),
+                dedupe=DedupeSpecSpec(
+                    keys=("call_id", "qname_id"),
+                    tie_breakers=(
+                        SortKeySpec(column="score", order="descending"),
+                        SortKeySpec(column="rule_priority", order="ascending"),
+                    ),
+                    strategy="KEEP_FIRST_AFTER_SORT",
+                ),
+                canonical_sort=(
+                    SortKeySpec(column="call_id", order="ascending"),
+                    SortKeySpec(column="qname_id", order="ascending"),
+                ),
+            ),
+        }
     )
 
-    return cc
+    return ContractCatalog.from_spec(spec)
 
 
 # -----------------------------
@@ -240,7 +240,7 @@ def relationship_registry() -> RelationshipRegistry:
             kind=RuleKind.INTERVAL_ALIGN,
             output_dataset="rel_name_symbol",
             contract_name="rel_name_symbol_v1",
-            inputs=(DatasetRef("cst_name_refs"), DatasetRef("scip_occurrences")),
+            inputs=(DatasetRef(name="cst_name_refs"), DatasetRef(name="scip_occurrences")),
             interval_align=IntervalAlignConfig(
                 mode="CONTAINED_BEST",
                 how="inner",
@@ -265,7 +265,7 @@ def relationship_registry() -> RelationshipRegistry:
             kind=RuleKind.INTERVAL_ALIGN,
             output_dataset="rel_import_symbol",
             contract_name="rel_import_symbol_v1",
-            inputs=(DatasetRef("cst_imports"), DatasetRef("scip_occurrences")),
+            inputs=(DatasetRef(name="cst_imports"), DatasetRef(name="scip_occurrences")),
             interval_align=IntervalAlignConfig(
                 mode="CONTAINED_BEST",
                 how="inner",
@@ -290,7 +290,7 @@ def relationship_registry() -> RelationshipRegistry:
             kind=RuleKind.INTERVAL_ALIGN,
             output_dataset="rel_callsite_symbol",
             contract_name="rel_callsite_symbol_v1",
-            inputs=(DatasetRef("cst_callsites"), DatasetRef("scip_occurrences")),
+            inputs=(DatasetRef(name="cst_callsites"), DatasetRef(name="scip_occurrences")),
             interval_align=IntervalAlignConfig(
                 mode="CONTAINED_BEST",
                 how="inner",
@@ -315,7 +315,10 @@ def relationship_registry() -> RelationshipRegistry:
             kind=RuleKind.HASH_JOIN,
             output_dataset="rel_callsite_qname",
             contract_name="rel_callsite_qname_v1",
-            inputs=(DatasetRef("callsite_qname_candidates"), DatasetRef("dim_qualified_names")),
+            inputs=(
+                DatasetRef(name="callsite_qname_candidates"),
+                DatasetRef(name="dim_qualified_names"),
+            ),
             hash_join=HashJoinConfig(
                 join_type="inner",
                 left_keys=("qname",),

@@ -5,7 +5,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+import pandas as pd
+import pandera.pandas as pa_pd
 import pyarrow as pa
+import pyarrow.types as patypes
 
 from arrowdsl.schema import align_to_schema
 
@@ -21,6 +24,63 @@ class SchemaInferOptions:
     promote_options: str = "permissive"
     keep_extra_columns: bool = False
     safe_cast: bool = False  # False is usually what you want for “accept ambiguity” systems.
+    use_pandera_infer: bool = True
+
+
+def _pandera_infer_schema(table: pa.Table) -> pa.Schema | None:
+    if table.num_rows == 0:
+        return None
+    df = pd.DataFrame(table.to_pydict())
+    pandera_schema = pa_pd.infer_schema(df)
+    return _pandera_pandas_schema_to_arrow(pandera_schema)
+
+
+def _pandas_dtype_to_arrow(dtype: object) -> pa.DataType:
+    dtype_value = getattr(dtype, "type", None)
+    if dtype_value is None:
+        dtype_value = dtype
+    try:
+        pandas_dtype = pd.api.types.pandas_dtype(dtype_value)
+    except TypeError:
+        return pa.binary()
+    try:
+        arrow_dtype = pa.from_numpy_dtype(pandas_dtype)
+    except (TypeError, ValueError):
+        arrow_dtype = None
+    if arrow_dtype is None:
+        if pd.api.types.is_string_dtype(pandas_dtype):
+            arrow_dtype = pa.string()
+        elif pd.api.types.is_bool_dtype(pandas_dtype):
+            arrow_dtype = pa.bool_()
+        elif pd.api.types.is_integer_dtype(pandas_dtype):
+            arrow_dtype = pa.int64()
+        elif pd.api.types.is_float_dtype(pandas_dtype):
+            arrow_dtype = pa.float64()
+        else:
+            arrow_dtype = pa.binary()
+    return arrow_dtype
+
+
+def _pandera_pandas_schema_to_arrow(schema: pa_pd.DataFrameSchema) -> pa.Schema:
+    fields: list[pa.Field] = []
+    for name, column in schema.columns.items():
+        arrow_dtype = _pandas_dtype_to_arrow(column.dtype)
+        fields.append(pa.field(name, arrow_dtype, nullable=column.nullable))
+    return pa.schema(fields)
+
+
+def _prefer_arrow_nested(base: pa.Schema, merged: pa.Schema) -> pa.Schema:
+    fields: list[pa.Field] = []
+    base_map = {field.name: field for field in base}
+    for field in merged:
+        base_field = base_map.get(field.name)
+        if base_field and (
+            patypes.is_struct(base_field.type) or patypes.is_list(base_field.type)
+        ):
+            fields.append(base_field)
+        else:
+            fields.append(field)
+    return pa.schema(fields)
 
 
 def unify_schemas(
@@ -61,7 +121,22 @@ def infer_schema_from_tables(
     """
     opts = opts or SchemaInferOptions()
     schemas = [t.schema for t in tables if t is not None]
-    return unify_schemas(schemas, opts=opts)
+    arrow_schema = unify_schemas(schemas, opts=opts)
+    if not opts.use_pandera_infer:
+        return arrow_schema
+
+    sample = next((t for t in tables if t is not None and t.num_rows > 0), None)
+    if sample is None:
+        return arrow_schema
+
+    inferred = _pandera_infer_schema(sample)
+    if inferred is None:
+        return arrow_schema
+    try:
+        merged = pa.unify_schemas([arrow_schema, inferred], promote_options=opts.promote_options)
+    except TypeError:
+        merged = pa.unify_schemas([arrow_schema, inferred])
+    return _prefer_arrow_nested(arrow_schema, merged)
 
 
 def align_table_to_schema(

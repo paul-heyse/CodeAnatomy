@@ -23,6 +23,30 @@ from normalize.spans import (
     normalize_cst_imports_spans,
 )
 from normalize.types import normalize_type_exprs, normalize_types
+from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+
+QNAME_DIM_SPEC = TableSchemaSpec(
+    name="dim_qualified_names_v1",
+    fields=[
+        ArrowFieldSpec(name="qname_id", dtype=pa.string()),
+        ArrowFieldSpec(name="qname", dtype=pa.string()),
+    ],
+)
+
+CALLSITE_QNAME_CANDIDATES_SPEC = TableSchemaSpec(
+    name="callsite_qname_candidates_v1",
+    fields=[
+        ArrowFieldSpec(name="call_id", dtype=pa.string()),
+        ArrowFieldSpec(name="qname", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="call_bstart", dtype=pa.int64()),
+        ArrowFieldSpec(name="call_bend", dtype=pa.int64()),
+        ArrowFieldSpec(name="qname_source", dtype=pa.string()),
+    ],
+)
+
+QNAME_DIM_SCHEMA = QNAME_DIM_SPEC.to_arrow_schema()
+CALLSITE_QNAME_CANDIDATES_SCHEMA = CALLSITE_QNAME_CANDIDATES_SPEC.to_arrow_schema()
 
 
 def _qname_fields(value: object) -> tuple[str | None, str | None]:
@@ -81,9 +105,7 @@ def dim_qualified_names(
     qnames.extend(_collect_string_lists(cst_defs, "qnames"))
 
     if not qnames:
-        return pa.Table.from_pylist(
-            [], schema=pa.schema([("qname_id", pa.string()), ("qname", pa.string())])
-        )
+        return pa.Table.from_pylist([], schema=QNAME_DIM_SCHEMA)
 
     # distinct + deterministic
     uniq = sorted(set(qnames))
@@ -126,19 +148,7 @@ def callsite_qname_candidates(
         or cst_callsites.num_rows == 0
         or "callee_qnames" not in cst_callsites.column_names
     ):
-        return pa.Table.from_pylist(
-            [],
-            schema=pa.schema(
-                [
-                    ("call_id", pa.string()),
-                    ("qname", pa.string()),
-                    ("path", pa.string()),
-                    ("call_bstart", pa.int64()),
-                    ("call_bend", pa.int64()),
-                    ("qname_source", pa.string()),
-                ]
-            ),
-        )
+        return pa.Table.from_pylist([], schema=CALLSITE_QNAME_CANDIDATES_SCHEMA)
 
     # explode list column -> (call_id, qname)
     exploded = explode_list_column(

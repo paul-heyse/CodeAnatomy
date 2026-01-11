@@ -15,6 +15,7 @@ import pyarrow.compute as pc
 
 from arrowdsl.ids import hash64_from_arrays, hash64_from_parts
 from core_types import PathLike, ensure_path
+from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
 
@@ -63,19 +64,22 @@ class RepoScanOptions:
     max_files: int | None = None
 
 
-REPO_FILES_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("abs_path", pa.string()),
-        ("size_bytes", pa.int64()),
-        ("file_sha256", pa.string()),
-        ("encoding", pa.string()),
-        ("text", pa.string()),
-        ("bytes", pa.binary()),
-    ]
+REPO_FILES_SPEC = TableSchemaSpec(
+    name="repo_files_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="abs_path", dtype=pa.string()),
+        ArrowFieldSpec(name="size_bytes", dtype=pa.int64()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="encoding", dtype=pa.string()),
+        ArrowFieldSpec(name="text", dtype=pa.string()),
+        ArrowFieldSpec(name="bytes", dtype=pa.binary()),
+    ],
 )
+
+REPO_FILES_SCHEMA = REPO_FILES_SPEC.to_arrow_schema()
 
 
 def _is_excluded_dir(rel_path: Path, exclude_dirs: Sequence[str]) -> bool:

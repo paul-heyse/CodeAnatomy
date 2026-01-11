@@ -14,6 +14,7 @@ import pyarrow as pa
 
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_parts
+from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
 
@@ -54,54 +55,63 @@ class RuntimeInspectResult:
     rt_members: pa.Table
 
 
-RT_OBJECTS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("rt_id", pa.string()),
-        ("module", pa.string()),
-        ("qualname", pa.string()),
-        ("name", pa.string()),
-        ("obj_type", pa.string()),
-        ("source_path", pa.string()),
-        ("source_line", pa.int32()),
-    ]
+RT_OBJECTS_SPEC = TableSchemaSpec(
+    name="rt_objects_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="rt_id", dtype=pa.string()),
+        ArrowFieldSpec(name="module", dtype=pa.string()),
+        ArrowFieldSpec(name="qualname", dtype=pa.string()),
+        ArrowFieldSpec(name="name", dtype=pa.string()),
+        ArrowFieldSpec(name="obj_type", dtype=pa.string()),
+        ArrowFieldSpec(name="source_path", dtype=pa.string()),
+        ArrowFieldSpec(name="source_line", dtype=pa.int32()),
+    ],
 )
 
-RT_SIGNATURES_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("sig_id", pa.string()),
-        ("rt_id", pa.string()),
-        ("signature", pa.string()),
-        ("return_annotation", pa.string()),
-    ]
+RT_SIGNATURES_SPEC = TableSchemaSpec(
+    name="rt_signatures_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="sig_id", dtype=pa.string()),
+        ArrowFieldSpec(name="rt_id", dtype=pa.string()),
+        ArrowFieldSpec(name="signature", dtype=pa.string()),
+        ArrowFieldSpec(name="return_annotation", dtype=pa.string()),
+    ],
 )
 
-RT_SIGNATURE_PARAMS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("param_id", pa.string()),
-        ("sig_id", pa.string()),
-        ("name", pa.string()),
-        ("kind", pa.string()),
-        ("default_repr", pa.string()),
-        ("annotation_repr", pa.string()),
-        ("position", pa.int32()),
-    ]
+RT_SIGNATURE_PARAMS_SPEC = TableSchemaSpec(
+    name="rt_signature_params_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="param_id", dtype=pa.string()),
+        ArrowFieldSpec(name="sig_id", dtype=pa.string()),
+        ArrowFieldSpec(name="name", dtype=pa.string()),
+        ArrowFieldSpec(name="kind", dtype=pa.string()),
+        ArrowFieldSpec(name="default_repr", dtype=pa.string()),
+        ArrowFieldSpec(name="annotation_repr", dtype=pa.string()),
+        ArrowFieldSpec(name="position", dtype=pa.int32()),
+    ],
 )
 
-RT_MEMBERS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("member_id", pa.string()),
-        ("rt_id", pa.string()),
-        ("name", pa.string()),
-        ("member_kind", pa.string()),
-        ("value_repr", pa.string()),
-        ("value_module", pa.string()),
-        ("value_qualname", pa.string()),
-    ]
+RT_MEMBERS_SPEC = TableSchemaSpec(
+    name="rt_members_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="member_id", dtype=pa.string()),
+        ArrowFieldSpec(name="rt_id", dtype=pa.string()),
+        ArrowFieldSpec(name="name", dtype=pa.string()),
+        ArrowFieldSpec(name="member_kind", dtype=pa.string()),
+        ArrowFieldSpec(name="value_repr", dtype=pa.string()),
+        ArrowFieldSpec(name="value_module", dtype=pa.string()),
+        ArrowFieldSpec(name="value_qualname", dtype=pa.string()),
+    ],
 )
+
+RT_OBJECTS_SCHEMA = RT_OBJECTS_SPEC.to_arrow_schema()
+RT_SIGNATURES_SCHEMA = RT_SIGNATURES_SPEC.to_arrow_schema()
+RT_SIGNATURE_PARAMS_SCHEMA = RT_SIGNATURE_PARAMS_SPEC.to_arrow_schema()
+RT_MEMBERS_SCHEMA = RT_MEMBERS_SPEC.to_arrow_schema()
 
 
 def _inspect_script() -> str:

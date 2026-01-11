@@ -15,6 +15,7 @@ from arrowdsl.iter import iter_array_values
 from arrowdsl.kernels import apply_dedupe, canonical_sort_if_canonical
 from arrowdsl.runtime import ExecutionContext
 from arrowdsl.schema import AlignmentInfo, align_to_schema
+from schema_spec.pandera_adapter import validate_arrow_table
 
 
 @dataclass(frozen=True)
@@ -234,6 +235,26 @@ def _build_stats_table(errors: pa.Table) -> pa.Table:
     )
 
 
+def _maybe_validate_with_pandera(
+    table: pa.Table,
+    *,
+    contract: Contract,
+    ctx: ExecutionContext,
+) -> pa.Table:
+    policy = ctx.schema_validation
+    if not policy.enabled:
+        return table
+    if contract.schema_spec is None:
+        return table
+    return validate_arrow_table(
+        table,
+        spec=contract.schema_spec,
+        lazy=policy.lazy,
+        strict=policy.strict,
+        coerce=policy.coerce,
+    )
+
+
 def _aggregate_error_details(
     errors: pa.Table,
     *,
@@ -366,6 +387,7 @@ def finalize(table: pa.Table, *, contract: Contract, ctx: ExecutionContext) -> F
         safe_cast=ctx.safe_cast,
         on_error=on_error,
     )
+    aligned = _maybe_validate_with_pandera(aligned, contract=contract, ctx=ctx)
 
     results = _collect_invariant_results(aligned, contract)
     bad_any = _combine_masks([result.mask for result in results], aligned.num_rows)

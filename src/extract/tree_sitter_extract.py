@@ -12,6 +12,7 @@ from tree_sitter import Language, Parser
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_parts
 from arrowdsl.iter import iter_table_rows
+from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
 
@@ -51,53 +52,60 @@ class TreeSitterRowBuffers:
     missing_rows: list[Row]
 
 
-TS_NODES_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("ts_node_id", pa.string()),
-        ("parent_ts_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("ts_type", pa.string()),
-        ("start_byte", pa.int64()),
-        ("end_byte", pa.int64()),
-        ("is_named", pa.bool_()),
-        ("has_error", pa.bool_()),
-        ("is_error", pa.bool_()),
-        ("is_missing", pa.bool_()),
-    ]
+TS_NODES_SPEC = TableSchemaSpec(
+    name="ts_nodes_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
+        ArrowFieldSpec(name="parent_ts_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="ts_type", dtype=pa.string()),
+        ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
+        ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
+        ArrowFieldSpec(name="is_named", dtype=pa.bool_()),
+        ArrowFieldSpec(name="has_error", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_error", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_missing", dtype=pa.bool_()),
+    ],
 )
 
-TS_ERRORS_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("ts_error_id", pa.string()),
-        ("ts_node_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("ts_type", pa.string()),
-        ("start_byte", pa.int64()),
-        ("end_byte", pa.int64()),
-        ("is_error", pa.bool_()),
-    ]
+TS_ERRORS_SPEC = TableSchemaSpec(
+    name="ts_errors_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="ts_error_id", dtype=pa.string()),
+        ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="ts_type", dtype=pa.string()),
+        ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
+        ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
+        ArrowFieldSpec(name="is_error", dtype=pa.bool_()),
+    ],
 )
 
-TS_MISSING_SCHEMA = pa.schema(
-    [
-        ("schema_version", pa.int32()),
-        ("ts_missing_id", pa.string()),
-        ("ts_node_id", pa.string()),
-        ("file_id", pa.string()),
-        ("path", pa.string()),
-        ("file_sha256", pa.string()),
-        ("ts_type", pa.string()),
-        ("start_byte", pa.int64()),
-        ("end_byte", pa.int64()),
-        ("is_missing", pa.bool_()),
-    ]
+TS_MISSING_SPEC = TableSchemaSpec(
+    name="ts_missing_v1",
+    fields=[
+        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
+        ArrowFieldSpec(name="ts_missing_id", dtype=pa.string()),
+        ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
+        ArrowFieldSpec(name="ts_type", dtype=pa.string()),
+        ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
+        ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
+        ArrowFieldSpec(name="is_missing", dtype=pa.bool_()),
+    ],
 )
+
+TS_NODES_SCHEMA = TS_NODES_SPEC.to_arrow_schema()
+TS_ERRORS_SCHEMA = TS_ERRORS_SPEC.to_arrow_schema()
+TS_MISSING_SCHEMA = TS_MISSING_SPEC.to_arrow_schema()
 
 
 def _parser() -> Parser:

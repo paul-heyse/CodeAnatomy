@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import pyarrow as pa
-import pyarrow.compute as pc
 
 from arrowdsl.columns import coalesce_string
+from arrowdsl.compute import pc
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_arrays
 from arrowdsl.iter import iter_arrays

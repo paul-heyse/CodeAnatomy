@@ -6,9 +6,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
-import pyarrow.compute as pc
 
-type ExpressionLike = str | pc.Expression
+from arrowdsl.compute import pc
+from arrowdsl.pyarrow_protocols import ComputeExpression, ensure_expression
+
+type ExpressionLike = str | ComputeExpression
 type ScalarValue = bool | int | float | str | bytes | pa.Scalar | None
 
 
@@ -17,7 +19,7 @@ class E:
     """Expression macros for QuerySpec predicates and Acero filter/project nodes."""
 
     @staticmethod
-    def field(name: str) -> pc.Expression:
+    def field(name: str) -> ComputeExpression:
         """Return a field reference expression.
 
         Parameters
@@ -33,7 +35,7 @@ class E:
         return pc.field(name)
 
     @staticmethod
-    def scalar(value: ScalarValue) -> pc.Expression:
+    def scalar(value: ScalarValue) -> ComputeExpression:
         """Return a scalar expression.
 
         Parameters
@@ -49,7 +51,7 @@ class E:
         return pc.scalar(value)
 
     @staticmethod
-    def eq(col: str, value: ScalarValue) -> pc.Expression:
+    def eq(col: str, value: ScalarValue) -> ComputeExpression:
         """Return an equality predicate.
 
         Parameters
@@ -64,10 +66,10 @@ class E:
         pyarrow.compute.Expression
             Equality predicate expression.
         """
-        return E.field(col) == E.scalar(value)
+        return ensure_expression(pc.equal(E.field(col), E.scalar(value)))
 
     @staticmethod
-    def ne(col: str, value: ScalarValue) -> pc.Expression:
+    def ne(col: str, value: ScalarValue) -> ComputeExpression:
         """Return an inequality predicate.
 
         Parameters
@@ -82,10 +84,10 @@ class E:
         pyarrow.compute.Expression
             Inequality predicate expression.
         """
-        return E.field(col) != E.scalar(value)
+        return ensure_expression(pc.not_equal(E.field(col), E.scalar(value)))
 
     @staticmethod
-    def lt(col: str, value: ScalarValue) -> pc.Expression:
+    def lt(col: str, value: ScalarValue) -> ComputeExpression:
         """Return a less-than predicate.
 
         Parameters
@@ -100,10 +102,10 @@ class E:
         pyarrow.compute.Expression
             Less-than predicate expression.
         """
-        return E.field(col) < E.scalar(value)
+        return ensure_expression(pc.less(E.field(col), E.scalar(value)))
 
     @staticmethod
-    def le(col: str, value: ScalarValue) -> pc.Expression:
+    def le(col: str, value: ScalarValue) -> ComputeExpression:
         """Return a less-than-or-equal predicate.
 
         Parameters
@@ -118,10 +120,10 @@ class E:
         pyarrow.compute.Expression
             Less-than-or-equal predicate expression.
         """
-        return E.field(col) <= E.scalar(value)
+        return ensure_expression(pc.less_equal(E.field(col), E.scalar(value)))
 
     @staticmethod
-    def gt(col: str, value: ScalarValue) -> pc.Expression:
+    def gt(col: str, value: ScalarValue) -> ComputeExpression:
         """Return a greater-than predicate.
 
         Parameters
@@ -136,10 +138,10 @@ class E:
         pyarrow.compute.Expression
             Greater-than predicate expression.
         """
-        return E.field(col) > E.scalar(value)
+        return ensure_expression(pc.greater(E.field(col), E.scalar(value)))
 
     @staticmethod
-    def ge(col: str, value: ScalarValue) -> pc.Expression:
+    def ge(col: str, value: ScalarValue) -> ComputeExpression:
         """Return a greater-than-or-equal predicate.
 
         Parameters
@@ -154,10 +156,10 @@ class E:
         pyarrow.compute.Expression
             Greater-than-or-equal predicate expression.
         """
-        return E.field(col) >= E.scalar(value)
+        return ensure_expression(pc.greater_equal(E.field(col), E.scalar(value)))
 
     @staticmethod
-    def between(col: str, lo: ScalarValue, hi: ScalarValue) -> pc.Expression:
+    def between(col: str, lo: ScalarValue, hi: ScalarValue) -> ComputeExpression:
         """Return a closed-interval predicate.
 
         Parameters
@@ -174,10 +176,12 @@ class E:
         pyarrow.compute.Expression
             Range predicate expression.
         """
-        return (E.field(col) >= E.scalar(lo)) & (E.field(col) <= E.scalar(hi))
+        lower = pc.greater_equal(E.field(col), E.scalar(lo))
+        upper = pc.less_equal(E.field(col), E.scalar(hi))
+        return ensure_expression(pc.and_(lower, upper))
 
     @staticmethod
-    def in_(col: str, values: Sequence[ScalarValue]) -> pc.Expression:
+    def in_(col: str, values: Sequence[ScalarValue]) -> ComputeExpression:
         """Return an inclusion predicate.
 
         Parameters
@@ -195,7 +199,7 @@ class E:
         return E.field(col).isin(list(values))
 
     @staticmethod
-    def is_null(col: str) -> pc.Expression:
+    def is_null(col: str) -> ComputeExpression:
         """Return a null-check predicate.
 
         Parameters
@@ -211,7 +215,7 @@ class E:
         return E.field(col).is_null()
 
     @staticmethod
-    def is_valid(col: str) -> pc.Expression:
+    def is_valid(col: str) -> ComputeExpression:
         """Return a validity-check predicate.
 
         Parameters
@@ -227,7 +231,7 @@ class E:
         return E.field(col).is_valid()
 
     @staticmethod
-    def and_(*exprs: pc.Expression) -> pc.Expression:
+    def and_(*exprs: ComputeExpression) -> ComputeExpression:
         """Combine predicates with logical AND.
 
         Parameters
@@ -250,11 +254,11 @@ class E:
             raise ValueError(msg)
         out = exprs[0]
         for expr in exprs[1:]:
-            out &= expr
+            out = ensure_expression(pc.and_(out, expr))
         return out
 
     @staticmethod
-    def or_(*exprs: pc.Expression) -> pc.Expression:
+    def or_(*exprs: ComputeExpression) -> ComputeExpression:
         """Combine predicates with logical OR.
 
         Parameters
@@ -277,11 +281,11 @@ class E:
             raise ValueError(msg)
         out = exprs[0]
         for expr in exprs[1:]:
-            out |= expr
+            out = ensure_expression(pc.or_(out, expr))
         return out
 
     @staticmethod
-    def not_(expr: pc.Expression) -> pc.Expression:
+    def not_(expr: ComputeExpression) -> ComputeExpression:
         """Negate a predicate expression.
 
         Parameters
@@ -294,10 +298,10 @@ class E:
         pyarrow.compute.Expression
             Negated expression.
         """
-        return ~expr
+        return ensure_expression(pc.invert(expr))
 
     @staticmethod
-    def cast(expr: ExpressionLike, target_type: object, *, safe: bool = True) -> pc.Expression:
+    def cast(expr: ExpressionLike, target_type: object, *, safe: bool = True) -> ComputeExpression:
         """Cast an expression to a target type.
 
         Parameters
@@ -315,10 +319,10 @@ class E:
             Cast expression.
         """
         expression = E.field(expr) if isinstance(expr, str) else expr
-        return pc.cast(expression, target_type, safe=safe)
+        return ensure_expression(pc.cast(expression, target_type, safe=safe))
 
     @staticmethod
-    def coalesce(*exprs: ExpressionLike) -> pc.Expression:
+    def coalesce(*exprs: ExpressionLike) -> ComputeExpression:
         """Return the first non-null expression in order.
 
         Parameters
@@ -332,4 +336,4 @@ class E:
             Coalesced expression.
         """
         expressions = [E.field(expr) if isinstance(expr, str) else expr for expr in exprs]
-        return pc.coalesce(*expressions)
+        return ensure_expression(pc.coalesce(*expressions))

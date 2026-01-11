@@ -5,11 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import pyarrow.compute as pc
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
-from pyarrow import acero
 
+from arrowdsl.acero import acero
+from arrowdsl.compute import pc
+from arrowdsl.pyarrow_protocols import DeclarationLike
 from arrowdsl.queryspec import QuerySpec
 from arrowdsl.runtime import ExecutionContext
 
@@ -104,7 +105,7 @@ def scan_to_table(dataset: ds.Dataset, *, spec: QuerySpec, ctx: ExecutionContext
 
 def compile_to_acero_scan(
     dataset: ds.Dataset, *, spec: QuerySpec, ctx: ExecutionContext
-) -> acero.Declaration:
+) -> DeclarationLike:
     """Compile a scan + filter + project pipeline into an Acero Declaration.
 
     Parameters

@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import pyarrow as pa
-import pyarrow.compute as pc
 
+from arrowdsl.compute import pc
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_arrays
 from arrowdsl.iter import iter_arrays
@@ -176,6 +176,7 @@ DIAG_SPEC = TableSchemaSpec(
 )
 
 DIAG_SCHEMA = DIAG_SPEC.to_arrow_schema()
+
 
 def _column_or_null(
     table: pa.Table,

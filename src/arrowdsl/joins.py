@@ -5,8 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from pyarrow import acero
-
+from arrowdsl.acero import acero
 from arrowdsl.plan import Plan
 from arrowdsl.runtime import Ordering
 

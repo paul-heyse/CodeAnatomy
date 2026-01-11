@@ -6,8 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 import pyarrow as pa
-import pyarrow.compute as pc
 
+from arrowdsl.compute import pc
 from arrowdsl.finalize import FinalizeResult, finalize
 from arrowdsl.runtime import ExecutionContext
 from cpg.builders import PropBuilder

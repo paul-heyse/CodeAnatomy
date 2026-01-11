@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import pyarrow as pa
-import pyarrow.compute as pc
+
+from arrowdsl.compute import pc
 
 
 def add_const_column(

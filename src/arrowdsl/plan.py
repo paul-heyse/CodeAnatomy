@@ -6,9 +6,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 import pyarrow as pa
-import pyarrow.compute as pc
-from pyarrow import acero
 
+from arrowdsl.acero import acero
+from arrowdsl.pyarrow_protocols import ComputeExpression, DeclarationLike
 from arrowdsl.runtime import ExecutionContext, Ordering, OrderingKey, OrderingLevel
 
 ReaderThunk = Callable[[], pa.RecordBatchReader]
@@ -22,7 +22,7 @@ class Plan:
     Exactly one of ``decl``, ``reader_thunk``, or ``table_thunk`` must be provided.
     """
 
-    decl: acero.Declaration | None = None
+    decl: DeclarationLike | None = None
     reader_thunk: ReaderThunk | None = None
     table_thunk: TableThunk | None = None
 
@@ -177,7 +177,7 @@ class Plan:
         """
         return Plan(reader_thunk=lambda: reader, label=label, ordering=Ordering.implicit())
 
-    def filter(self, predicate: pc.Expression, *, label: str = "") -> Plan:
+    def filter(self, predicate: ComputeExpression, *, label: str = "") -> Plan:
         """Add a filter node to the plan.
 
         Parameters
@@ -204,7 +204,7 @@ class Plan:
         return Plan(decl=decl, label=label or self.label, ordering=self.ordering)
 
     def project(
-        self, expressions: Sequence[pc.Expression], names: Sequence[str], *, label: str = ""
+        self, expressions: Sequence[ComputeExpression], names: Sequence[str], *, label: str = ""
     ) -> Plan:
         """Add a project node to the plan.
 
@@ -386,7 +386,7 @@ def union_all_plans(plans: Sequence[Plan], *, label: str = "") -> Plan:
             msg = "union_all_plans requires Acero-backed Plans (missing declarations)."
             raise TypeError(msg)
         return Plan(decl=plan.decl, label=label or plan.label, ordering=Ordering.unordered())
-    decls: list[acero.Declaration] = []
+    decls: list[DeclarationLike] = []
     for plan in plans:
         if plan.decl is None:
             msg = "union_all_plans requires Acero-backed Plans (missing declarations)."

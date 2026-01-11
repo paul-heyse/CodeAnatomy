@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow as pa
-import pyarrow.compute as pc
 
+from arrowdsl.compute import pc
 from arrowdsl.ids import hash64_from_arrays, hash64_from_parts
 from core_types import PathLike, ensure_path
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec

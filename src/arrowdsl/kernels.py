@@ -6,8 +6,8 @@ from collections.abc import Sequence
 from typing import Literal
 
 import pyarrow as pa
-import pyarrow.compute as pc
 
+from arrowdsl.compute import pc
 from arrowdsl.contracts import DedupeSpec, SortKey
 from arrowdsl.runtime import DeterminismTier, ExecutionContext
 

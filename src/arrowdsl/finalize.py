@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 import pyarrow as pa
-import pyarrow.compute as pc
 
+from arrowdsl.compute import pc
 from arrowdsl.contracts import Contract
 from arrowdsl.ids import hash64_from_columns
 from arrowdsl.iter import iter_array_values

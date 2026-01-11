@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import pyarrow as pa
-import pyarrow.compute as pc
 from hamilton.function_modifiers import cache, extract_fields, tag
 
+from arrowdsl.compute import pc
 from arrowdsl.ids import hash64_from_arrays
 from arrowdsl.iter import iter_array_values, iter_arrays
 from arrowdsl.kernels import explode_list_column

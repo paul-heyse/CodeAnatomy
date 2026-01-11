@@ -12,8 +12,8 @@ from pathlib import Path
 from types import ModuleType
 
 import pyarrow as pa
-import pyarrow.compute as pc
 
+from arrowdsl.compute import pc
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import hash64_from_arrays
 from arrowdsl.nested import build_list_array, build_struct_array

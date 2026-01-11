@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-import pyarrow.compute as pc
+from arrowdsl.compute import pc
+from arrowdsl.pyarrow_protocols import ComputeExpression
 
-type ColumnsSpec = Sequence[str] | Mapping[str, pc.Expression]
+type ColumnsSpec = Sequence[str] | Mapping[str, ComputeExpression]
 
 
 @dataclass(frozen=True)
@@ -23,7 +24,7 @@ class ProjectionSpec:
     """
 
     base: tuple[str, ...]
-    derived: Mapping[str, pc.Expression] = field(default_factory=dict)
+    derived: Mapping[str, ComputeExpression] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -31,8 +32,8 @@ class QuerySpec:
     """Declarative scan spec for a dataset."""
 
     projection: ProjectionSpec
-    predicate: pc.Expression | None = None
-    pushdown_predicate: pc.Expression | None = None
+    predicate: ComputeExpression | None = None
+    pushdown_predicate: ComputeExpression | None = None
 
     def scan_columns(self, *, provenance: bool) -> ColumnsSpec:
         """Return the scan column spec for Arrow scanners.
@@ -50,7 +51,7 @@ class QuerySpec:
         if not provenance and not self.projection.derived:
             return list(self.projection.base)
 
-        cols: dict[str, pc.Expression] = {col: pc.field(col) for col in self.projection.base}
+        cols: dict[str, ComputeExpression] = {col: pc.field(col) for col in self.projection.base}
         cols.update(dict(self.projection.derived))
 
         if provenance:
@@ -67,8 +68,8 @@ class QuerySpec:
     @staticmethod
     def simple(
         *cols: str,
-        predicate: pc.Expression | None = None,
-        pushdown_predicate: pc.Expression | None = None,
+        predicate: ComputeExpression | None = None,
+        pushdown_predicate: ComputeExpression | None = None,
     ) -> QuerySpec:
         """Build a simple QuerySpec from column names.
 

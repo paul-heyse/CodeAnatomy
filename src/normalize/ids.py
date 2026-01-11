@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pyarrow as pa
-import pyarrow.compute as pc
 
+from arrowdsl.compute import pc
 from arrowdsl.ids import hash64_from_arrays, hash64_from_parts
 
 

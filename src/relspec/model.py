@@ -6,15 +6,15 @@ from collections.abc import Mapping
 from enum import StrEnum
 from typing import Literal
 
-import pyarrow.compute as pc
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arrowdsl.contracts import DedupeSpec, SortKey
 from arrowdsl.expr import ScalarValue
 from arrowdsl.joins import JoinType
+from arrowdsl.pyarrow_protocols import ComputeExpression
 from arrowdsl.queryspec import QuerySpec
 
-type Expression = pc.Expression
+type Expression = ComputeExpression
 
 HASH_JOIN_INPUTS = 2
 SINGLE_INPUT = 1

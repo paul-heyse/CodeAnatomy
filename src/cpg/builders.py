@@ -7,8 +7,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
-import pyarrow.compute as pc
 
+from arrowdsl.compute import pc
 from arrowdsl.ids import hash64_from_arrays
 from arrowdsl.iter import iter_arrays
 from cpg.kinds import EntityKind
@@ -165,7 +165,9 @@ def emit_edges_from_relation(
             bstart,
             bend,
             origin,
-            _resolve_string_col(rel, "resolution_method", default_value=spec.default_resolution_method),
+            _resolve_string_col(
+                rel, "resolution_method", default_value=spec.default_resolution_method
+            ),
             _resolve_float_col(rel, "confidence", default_value=default_score),
             _resolve_float_col(rel, "score", default_value=default_score),
             _pick_first(rel, ["symbol_roles"], default_type=pa.int32()),
@@ -452,8 +454,7 @@ class PropBuilder:
     ) -> None:
         cols = self._collect_columns(spec)
         arrays = [
-            table[col] if col in table.column_names else pa.nulls(table.num_rows)
-            for col in cols
+            table[col] if col in table.column_names else pa.nulls(table.num_rows) for col in cols
         ]
         for values in iter_arrays(arrays):
             row = dict(zip(cols, values, strict=True))

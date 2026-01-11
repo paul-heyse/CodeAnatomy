@@ -8,7 +8,6 @@ from functools import cmp_to_key
 from typing import Literal, Protocol
 
 import pyarrow as pa
-import pyarrow.compute as pc
 
 from arrowdsl.contracts import Contract, SortKey
 from arrowdsl.dataset_io import compile_to_acero_scan, open_dataset
@@ -17,6 +16,7 @@ from arrowdsl.finalize import FinalizeResult, finalize
 from arrowdsl.joins import JoinSpec, hash_join
 from arrowdsl.kernels import apply_dedupe, explode_list_column
 from arrowdsl.plan import Plan, union_all_plans
+from arrowdsl.pyarrow_protocols import ComputeExpression
 from arrowdsl.queryspec import ProjectionSpec, QuerySpec
 from arrowdsl.runtime import DeterminismTier, ExecutionContext, Ordering
 from relspec.edge_contract_validator import (
@@ -397,7 +397,7 @@ def _apply_project_to_plan(
     if not project.select and not project.exprs:
         return plan
 
-    exprs: list[pc.Expression] = []
+    exprs: list[ComputeExpression] = []
     names: list[str] = []
 
     for col in project.select:

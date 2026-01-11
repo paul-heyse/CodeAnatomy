@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Literal, TypedDict
 
 import pyarrow as pa
-import pyarrow.compute as pc
+
+from arrowdsl.compute import pc
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
 type ArrayLike = pa.Array | pa.ChunkedArray

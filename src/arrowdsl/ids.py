@@ -8,9 +8,10 @@ from dataclasses import dataclass
 from typing import Literal
 
 import pyarrow as pa
-import pyarrow.compute as pc
 
+from arrowdsl.compute import pc
 from arrowdsl.iter import iter_array_values
+from arrowdsl.pyarrow_protocols import UdfContext
 
 type ArrayLike = pa.Array | pa.ChunkedArray
 type ArrayOrScalar = ArrayLike | pa.Scalar
@@ -40,7 +41,7 @@ def _hash64_int(value: str) -> int:
 
 
 def _hash64_udf(
-    ctx: pc.UdfContext,
+    ctx: UdfContext,
     array: pa.Array | pa.ChunkedArray | pa.Scalar,
 ) -> pa.Array | pa.Scalar:
     _ = ctx

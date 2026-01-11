@@ -74,9 +74,7 @@ def _prefer_arrow_nested(base: pa.Schema, merged: pa.Schema) -> pa.Schema:
     base_map = {field.name: field for field in base}
     for field in merged:
         base_field = base_map.get(field.name)
-        if base_field and (
-            patypes.is_struct(base_field.type) or patypes.is_list(base_field.type)
-        ):
+        if base_field and (patypes.is_struct(base_field.type) or patypes.is_list(base_field.type)):
             fields.append(base_field)
         else:
             fields.append(field)

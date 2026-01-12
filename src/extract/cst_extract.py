@@ -20,12 +20,15 @@ from libcst.metadata import (
 )
 
 from arrowdsl.compute.expr_specs import MaskedHashExprSpec
+from arrowdsl.compute.transforms import normalize_string_items
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
+from arrowdsl.plan.rows import plan_from_rows
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
+from arrowdsl.schema.structs import flatten_struct_field
 from extract.common import bytes_from_file_ctx, file_identity_row, iter_contexts
 from extract.file_context import FileContext
 from extract.hash_specs import (
@@ -45,7 +48,7 @@ from extract.spec_helpers import (
     ordering_metadata_spec,
     register_dataset,
 )
-from extract.tables import align_plan, flatten_struct_field, plan_from_rows
+from extract.tables import align_plan
 from schema_spec.specs import (
     ArrowFieldSpec,
     call_span_bundle,
@@ -55,18 +58,6 @@ from schema_spec.specs import (
 SCHEMA_VERSION = 1
 
 type Row = dict[str, object]
-
-
-def _normalize_string_items(items: Sequence[object]) -> list[str | None]:
-    out: list[str | None] = []
-    for item in items:
-        if item is None:
-            out.append(None)
-        elif isinstance(item, str):
-            out.append(item)
-        else:
-            out.append(str(item))
-    return out
 
 
 @dataclass(frozen=True)
@@ -1054,7 +1045,7 @@ def _extract_cst_for_context(file_ctx: FileContext, ctx: CSTExtractContext) -> N
     cst_file_ctx = CSTFileContext(file_ctx=file_ctx, options=ctx.options)
     if ctx.options.include_parse_manifest:
         future_imports = getattr(module, "future_imports", []) or []
-        normalized_future_imports = _normalize_string_items(future_imports)
+        normalized_future_imports = normalize_string_items(future_imports)
         ctx.manifest_rows.append(
             _manifest_row(
                 cst_file_ctx,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, cast
 
@@ -268,6 +269,54 @@ def build_list_of_structs(
     return build_list(offsets, struct_arr)
 
 
+def list_view_array_from_lists(
+    values: Sequence[Sequence[object] | None],
+    *,
+    value_type: DataTypeLike,
+    large: bool = True,
+) -> ArrayLike:
+    """Build a list_view array from Python list values.
+
+    Returns
+    -------
+    ArrayLike
+        List view array with the requested element type.
+    """
+    list_type = pa.large_list_view(value_type) if large else pa.list_view(value_type)
+    return pa.array(values, type=list_type)
+
+
+def map_array_from_pairs(
+    values: Sequence[Sequence[tuple[object, object]] | None],
+    *,
+    key_type: DataTypeLike,
+    item_type: DataTypeLike,
+) -> ArrayLike:
+    """Build a map array from key/value pair sequences.
+
+    Returns
+    -------
+    ArrayLike
+        Map array with the provided key/value types.
+    """
+    return pa.array(values, type=pa.map_(key_type, item_type))
+
+
+def struct_array_from_dicts(
+    values: Sequence[Mapping[str, object] | None],
+    *,
+    struct_type: DataTypeLike | None = None,
+) -> ArrayLike:
+    """Build a struct array from mapping values.
+
+    Returns
+    -------
+    ArrayLike
+        Struct array with inferred or explicit type.
+    """
+    return pa.array(values, type=struct_type)
+
+
 __all__ = [
     "CoalesceExpr",
     "ColumnDefaultsSpec",
@@ -279,5 +328,8 @@ __all__ = [
     "build_list_view",
     "build_struct",
     "const_array",
+    "list_view_array_from_lists",
+    "map_array_from_pairs",
     "set_or_append_column",
+    "struct_array_from_dicts",
 ]

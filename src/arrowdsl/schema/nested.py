@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Generic, TypeVar
+from typing import TypeVar
 
 import pyarrow as pa
 
@@ -23,7 +23,7 @@ def _sizes_start() -> list[int]:
 
 
 @dataclass
-class ListAccumulator(Generic[T]):
+class ListAccumulator[T]:
     """Accumulate list offsets and values for list-typed columns."""
 
     offsets: list[int] = field(default_factory=_offsets_start)
@@ -57,7 +57,7 @@ class ListAccumulator(Generic[T]):
 
 
 @dataclass
-class LargeListAccumulator(Generic[T]):
+class LargeListAccumulator[T]:
     """Accumulate list offsets and values for large_list-typed columns."""
 
     offsets: list[int] = field(default_factory=_offsets_start)
@@ -90,7 +90,7 @@ class LargeListAccumulator(Generic[T]):
 
 
 @dataclass
-class ListViewAccumulator(Generic[T]):
+class ListViewAccumulator[T]:
     """Accumulate offsets/sizes for list_view columns with shared buffers."""
 
     offsets: list[int] = field(default_factory=_sizes_start)
@@ -129,7 +129,7 @@ class ListViewAccumulator(Generic[T]):
 
 
 @dataclass
-class LargeListViewAccumulator(Generic[T]):
+class LargeListViewAccumulator[T]:
     """Accumulate offsets/sizes for large_list_view columns."""
 
     offsets: list[int] = field(default_factory=_sizes_start)

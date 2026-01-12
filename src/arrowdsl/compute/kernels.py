@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 import pyarrow as pa
+import pyarrow.types as patypes
 
 from arrowdsl.core.context import DeterminismTier, ExecutionContext
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike, pc
 from arrowdsl.plan.ops import DedupeSpec, JoinSpec, SortKey
+from arrowdsl.schema.arrays import const_array, set_or_append_column
 from schema_spec.specs import PROVENANCE_COLS
 
 
@@ -35,6 +37,58 @@ class ChunkPolicy:
         if self.combine_chunks:
             out = out.combine_chunks()
         return out
+
+
+_NUMERIC_REGEX = r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$"
+
+
+@dataclass(frozen=True)
+class IntervalAlignOptions:
+    """Kernel-lane interval alignment configuration."""
+
+    mode: Literal["EXACT", "CONTAINED_BEST", "OVERLAP_BEST"] = "CONTAINED_BEST"
+    how: Literal["inner", "left"] = "inner"
+
+    left_path_col: str = "path"
+    left_start_col: str = "bstart"
+    left_end_col: str = "bend"
+
+    right_path_col: str = "path"
+    right_start_col: str = "bstart"
+    right_end_col: str = "bend"
+
+    select_left: tuple[str, ...] = ()
+    select_right: tuple[str, ...] = ()
+
+    tie_breakers: tuple[SortKey, ...] = ()
+
+    emit_match_meta: bool = True
+    match_kind_col: str = "match_kind"
+    match_score_col: str = "match_score"
+    right_suffix: str = "__r"
+
+
+@dataclass(frozen=True)
+class _IntervalAlignPrepared:
+    left: TableLike
+    right: TableLike
+    left_keep: list[str]
+    right_keep: list[str]
+    right_keep_set: set[str]
+    left_key_col: str
+    right_key_col: str
+    left_id_col: str
+    score_col: str
+    tie_breaker_cols: list[str]
+
+
+@dataclass(frozen=True)
+class _IntervalAlignOutputSpec:
+    output_names: Sequence[str]
+    output_schema: pa.Schema
+    right_keep: set[str]
+    cfg: IntervalAlignOptions
+    score_col: str
 
 
 def provenance_sort_keys() -> tuple[str, ...]:
@@ -489,6 +543,405 @@ def apply_dedupe(
         )
     msg = f"Unknown dedupe strategy: {strategy!r}."
     raise ValueError(msg)
+
+
+def _unique_columns(names: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for name in names:
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def _temp_name(base: str, existing: set[str]) -> str:
+    name = base
+    idx = 1
+    while name in existing:
+        name = f"{base}_{idx}"
+        idx += 1
+    existing.add(name)
+    return name
+
+
+def _ensure_column(
+    table: TableLike,
+    name: str,
+    *,
+    dtype: DataTypeLike | None = None,
+) -> TableLike:
+    if name in table.column_names:
+        return table
+    col_type = dtype if dtype is not None else pa.null()
+    return set_or_append_column(table, name, pa.nulls(table.num_rows, type=col_type))
+
+
+def _call_function(name: str, args: Sequence[object]) -> ArrayLike:
+    return cast("ArrayLike", pc.call_function(name, list(args)))
+
+
+def _normalize_span_values(
+    values: ArrayLike | ChunkedArrayLike,
+) -> ArrayLike | ChunkedArrayLike:
+    dtype = values.type
+    if patypes.is_null(dtype) or patypes.is_boolean(dtype):
+        return pa.nulls(len(values), type=pa.int64())
+    if patypes.is_dictionary(dtype):
+        decoded = _call_function("dictionary_decode", [values])
+        return _normalize_span_values(decoded)
+    if patypes.is_integer(dtype) or patypes.is_floating(dtype):
+        return pc.cast(values, pa.int64(), safe=False)
+    if patypes.is_string(dtype) or patypes.is_large_string(dtype):
+        text = _call_function("utf8_trim", [pc.cast(values, pa.string(), safe=False)])
+        mask = pc.match_substring_regex(text, _NUMERIC_REGEX)
+        mask = pc.fill_null(mask, fill_value=False)
+        sanitized = pc.if_else(mask, text, pa.scalar(None, type=pa.string()))
+        numeric = pc.cast(sanitized, pa.float64(), safe=False)
+        return pc.cast(numeric, pa.int64(), safe=False)
+    return pa.nulls(len(values), type=pa.int64())
+
+
+def _interval_match_mask(
+    cfg: IntervalAlignOptions,
+    *,
+    left_start: ArrayLike | ChunkedArrayLike,
+    left_end: ArrayLike | ChunkedArrayLike,
+    right_start: ArrayLike | ChunkedArrayLike,
+    right_end: ArrayLike | ChunkedArrayLike,
+) -> ArrayLike | ChunkedArrayLike:
+    if cfg.mode == "EXACT":
+        return pc.and_(
+            pc.equal(right_start, left_start),
+            pc.equal(right_end, left_end),
+        )
+    if cfg.mode == "CONTAINED_BEST":
+        return pc.and_(
+            pc.greater_equal(right_start, left_start),
+            pc.less_equal(right_end, left_end),
+        )
+    overlap_left = pc.less_equal(right_end, left_start)
+    overlap_right = pc.greater_equal(right_start, left_end)
+    return pc.invert(pc.or_(overlap_left, overlap_right))
+
+
+def _resolve_right_name(names: Sequence[str], name: str, suffix: str) -> str:
+    suffixed = f"{name}{suffix}"
+    return suffixed if suffixed in names else name
+
+
+def _column_type(table: TableLike, name: str) -> DataTypeLike | None:
+    if name in table.column_names:
+        return table.schema.field(name).type
+    return None
+
+
+def _build_output_names(
+    left_keep: Sequence[str],
+    right_keep: Sequence[str],
+    cfg: IntervalAlignOptions,
+) -> list[str]:
+    output = _unique_columns([*left_keep, *right_keep])
+    if cfg.emit_match_meta:
+        if cfg.match_kind_col not in output:
+            output.append(cfg.match_kind_col)
+        if cfg.match_score_col not in output:
+            output.append(cfg.match_score_col)
+    return output
+
+
+def _build_output_spec(
+    prepared: _IntervalAlignPrepared,
+    cfg: IntervalAlignOptions,
+) -> _IntervalAlignOutputSpec:
+    output_names = _build_output_names(prepared.left_keep, prepared.right_keep, cfg)
+    fields: list[pa.Field] = []
+    for name in output_names:
+        if cfg.emit_match_meta and name == cfg.match_kind_col:
+            dtype = pa.string()
+        elif cfg.emit_match_meta and name == cfg.match_score_col:
+            dtype = pa.float64()
+        elif name in prepared.right_keep_set:
+            dtype = _column_type(prepared.right, name)
+        else:
+            dtype = _column_type(prepared.left, name)
+        if dtype is None:
+            dtype = pa.null()
+        fields.append(pa.field(name, dtype))
+    return _IntervalAlignOutputSpec(
+        output_names=output_names,
+        output_schema=pa.schema(fields),
+        right_keep=prepared.right_keep_set,
+        cfg=cfg,
+        score_col=prepared.score_col,
+    )
+
+
+def _build_matched_output(
+    matched: TableLike,
+    spec: _IntervalAlignOutputSpec,
+) -> TableLike:
+    arrays: list[ArrayLike] = []
+    column_names = list(matched.column_names)
+    for name in spec.output_names:
+        field_type = spec.output_schema.field(name).type
+        if spec.cfg.emit_match_meta and name == spec.cfg.match_kind_col:
+            if name in matched.column_names:
+                arrays.append(matched[name])
+            else:
+                arrays.append(pa.nulls(matched.num_rows, type=field_type))
+            continue
+        if spec.cfg.emit_match_meta and name == spec.cfg.match_score_col:
+            if spec.score_col in matched.column_names:
+                arrays.append(matched[spec.score_col])
+            else:
+                arrays.append(pa.nulls(matched.num_rows, type=field_type))
+            continue
+        if name in spec.right_keep:
+            resolved = _resolve_right_name(column_names, name, spec.cfg.right_suffix)
+            if resolved in matched.column_names:
+                arrays.append(matched[resolved])
+            else:
+                arrays.append(pa.nulls(matched.num_rows, type=field_type))
+            continue
+        if name in matched.column_names:
+            arrays.append(matched[name])
+            continue
+        arrays.append(pa.nulls(matched.num_rows, type=field_type))
+    return pa.Table.from_arrays(arrays, schema=spec.output_schema)
+
+
+def _left_only_match_kind(left_only: TableLike, cfg: IntervalAlignOptions) -> ArrayLike:
+    left_path = left_only[cfg.left_path_col]
+    left_start = _normalize_span_values(left_only[cfg.left_start_col])
+    left_end = _normalize_span_values(left_only[cfg.left_end_col])
+    has_path = pc.invert(pc.is_null(left_path))
+    has_span = pc.and_(
+        pc.invert(pc.is_null(left_start)),
+        pc.invert(pc.is_null(left_end)),
+    )
+    valid = pc.and_(has_path, has_span)
+    return pc.if_else(
+        valid,
+        pa.scalar("NO_MATCH", type=pa.string()),
+        pa.scalar("NO_PATH_OR_SPAN", type=pa.string()),
+    )
+
+
+def _build_left_only_output(
+    left_only: TableLike,
+    spec: _IntervalAlignOutputSpec,
+    match_kind: ArrayLike | None,
+) -> TableLike:
+    arrays: list[ArrayLike] = []
+    for name in spec.output_names:
+        field_type = spec.output_schema.field(name).type
+        if spec.cfg.emit_match_meta and name == spec.cfg.match_kind_col:
+            arrays.append(match_kind or pa.nulls(left_only.num_rows, type=field_type))
+            continue
+        if spec.cfg.emit_match_meta and name == spec.cfg.match_score_col:
+            arrays.append(pa.nulls(left_only.num_rows, type=field_type))
+            continue
+        if name in spec.right_keep:
+            arrays.append(pa.nulls(left_only.num_rows, type=field_type))
+            continue
+        if name in left_only.column_names:
+            arrays.append(left_only[name])
+            continue
+        arrays.append(pa.nulls(left_only.num_rows, type=field_type))
+    return pa.Table.from_arrays(arrays, schema=spec.output_schema)
+
+
+def _prepare_interval_tables(
+    left: TableLike,
+    right: TableLike,
+    cfg: IntervalAlignOptions,
+) -> _IntervalAlignPrepared:
+    left_keep = list(cfg.select_left or left.column_names)
+    right_keep = list(cfg.select_right or right.column_names)
+    right_keep_set = set(right_keep)
+    tie_breaker_cols = [sk.column for sk in cfg.tie_breakers]
+
+    existing = set(left.column_names) | set(right.column_names)
+    left_key_col = _temp_name("__left_path_key", existing)
+    right_key_col = _temp_name("__right_path_key", existing)
+    left_id_col = _temp_name("__left_id", existing)
+    score_col = (
+        cfg.match_score_col if cfg.emit_match_meta else _temp_name("__match_score", existing)
+    )
+
+    left_required = set(left_keep) | {cfg.left_path_col, cfg.left_start_col, cfg.left_end_col}
+    right_required = set(right_keep) | {
+        cfg.right_path_col,
+        cfg.right_start_col,
+        cfg.right_end_col,
+        *tie_breaker_cols,
+    }
+
+    left_table = left
+    for name in left_required:
+        left_table = _ensure_column(left_table, name)
+    right_table = right
+    for name in right_required:
+        right_table = _ensure_column(right_table, name)
+
+    left_table = set_or_append_column(
+        left_table,
+        left_key_col,
+        pc.cast(left_table[cfg.left_path_col], pa.string(), safe=False),
+    )
+    right_table = set_or_append_column(
+        right_table,
+        right_key_col,
+        pc.cast(right_table[cfg.right_path_col], pa.string(), safe=False),
+    )
+    left_table = set_or_append_column(
+        left_table,
+        left_id_col,
+        pa.array(range(left_table.num_rows), type=pa.int64()),
+    )
+
+    return _IntervalAlignPrepared(
+        left=left_table,
+        right=right_table,
+        left_keep=left_keep,
+        right_keep=right_keep,
+        right_keep_set=right_keep_set,
+        left_key_col=left_key_col,
+        right_key_col=right_key_col,
+        left_id_col=left_id_col,
+        score_col=score_col,
+        tie_breaker_cols=tie_breaker_cols,
+    )
+
+
+def _join_interval_candidates(
+    prepared: _IntervalAlignPrepared,
+    cfg: IntervalAlignOptions,
+) -> TableLike:
+    left_join_cols = _unique_columns(
+        [
+            *prepared.left_keep,
+            cfg.left_start_col,
+            cfg.left_end_col,
+            prepared.left_id_col,
+        ]
+    )
+    right_join_cols = _unique_columns(
+        [
+            *prepared.right_keep,
+            cfg.right_start_col,
+            cfg.right_end_col,
+            *prepared.tie_breaker_cols,
+        ]
+    )
+    return apply_join(
+        prepared.left,
+        prepared.right,
+        spec=JoinSpec(
+            join_type="inner",
+            left_keys=(prepared.left_key_col,),
+            right_keys=(prepared.right_key_col,),
+            left_output=tuple(left_join_cols),
+            right_output=tuple(right_join_cols),
+            output_suffix_for_left="",
+            output_suffix_for_right=cfg.right_suffix,
+        ),
+        use_threads=True,
+    )
+
+
+def _select_best_interval_matches(
+    joined: TableLike,
+    prepared: _IntervalAlignPrepared,
+    cfg: IntervalAlignOptions,
+) -> TableLike:
+    right_start_name = _resolve_right_name(
+        joined.column_names, cfg.right_start_col, cfg.right_suffix
+    )
+    right_end_name = _resolve_right_name(joined.column_names, cfg.right_end_col, cfg.right_suffix)
+
+    match_mask = _interval_match_mask(
+        cfg,
+        left_start=_normalize_span_values(joined[cfg.left_start_col]),
+        left_end=_normalize_span_values(joined[cfg.left_end_col]),
+        right_start=_normalize_span_values(joined[right_start_name]),
+        right_end=_normalize_span_values(joined[right_end_name]),
+    )
+    matched = joined.filter(match_mask)
+
+    right_start = _normalize_span_values(matched[right_start_name])
+    right_end = _normalize_span_values(matched[right_end_name])
+    span_len = _call_function("subtract", [right_end, right_start])
+    span_len = _call_function("max_element_wise", [span_len, pa.scalar(0, type=pa.int64())])
+    match_score = _call_function(
+        "multiply",
+        [pc.cast(span_len, pa.float64()), pa.scalar(-1.0)],
+    )
+    matched = set_or_append_column(matched, prepared.score_col, match_score)
+    if cfg.emit_match_meta:
+        matched = set_or_append_column(
+            matched,
+            cfg.match_kind_col,
+            const_array(matched.num_rows, cfg.mode, dtype=pa.string()),
+        )
+
+    resolved_tie_breakers = tuple(
+        SortKey(_resolve_right_name(matched.column_names, sk.column, cfg.right_suffix), sk.order)
+        for sk in cfg.tie_breakers
+    )
+    return dedupe_keep_best_by_score(
+        matched,
+        keys=(prepared.left_id_col,),
+        score_col=prepared.score_col,
+        score_order="descending",
+        tie_breakers=resolved_tie_breakers,
+    )
+
+
+def _interval_unmatched_left(
+    prepared: _IntervalAlignPrepared,
+    best: TableLike,
+) -> TableLike:
+    if best.num_rows == 0:
+        return prepared.left
+    matched_ids = best[prepared.left_id_col]
+    matched_mask = pc.is_in(prepared.left[prepared.left_id_col], value_set=matched_ids)
+    matched_mask = pc.fill_null(matched_mask, fill_value=False)
+    return prepared.left.filter(pc.invert(matched_mask))
+
+
+def interval_align_table(
+    left: TableLike,
+    right: TableLike,
+    *,
+    cfg: IntervalAlignOptions,
+) -> TableLike:
+    """Return interval-aligned rows using Arrow compute + join primitives.
+
+    Returns
+    -------
+    TableLike
+        Interval-aligned table.
+    """
+    prepared = _prepare_interval_tables(left, right, cfg)
+    joined = _join_interval_candidates(prepared, cfg)
+    best = _select_best_interval_matches(joined, prepared, cfg)
+    output_spec = _build_output_spec(prepared, cfg)
+    matched_out = _build_matched_output(best, output_spec)
+
+    if cfg.how != "left":
+        return matched_out
+
+    unmatched = _interval_unmatched_left(prepared, best)
+    match_kind = _left_only_match_kind(unmatched, cfg) if cfg.emit_match_meta else None
+    left_only_out = _build_left_only_output(unmatched, output_spec, match_kind)
+    if matched_out.num_rows == 0:
+        return left_only_out
+    if left_only_out.num_rows == 0:
+        return matched_out
+    return pa.concat_tables([matched_out, left_only_out], promote=True)
 
 
 def explode_list_column(

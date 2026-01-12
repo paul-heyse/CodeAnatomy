@@ -13,6 +13,7 @@ from normalize.bytecode_anchor import anchor_instructions
 from normalize.bytecode_cfg import build_cfg_blocks, build_cfg_edges
 from normalize.bytecode_dfg import build_def_use_events, run_reaching_defs
 from normalize.diagnostics import DiagnosticsSources, collect_diags
+from normalize.schema_infer import align_table_to_schema, infer_schema_or_registry
 from normalize.spans import (
     RepoTextIndex,
     add_ast_byte_spans,
@@ -95,7 +96,7 @@ def _collect_string_lists(table: TableLike | None, column: str) -> list[str]:
     return out
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="normalize", artifact="dim_qualified_names", kind="table")
 def dim_qualified_names(
     cst_callsites: TableLike,
@@ -131,7 +132,7 @@ def dim_qualified_names(
     )
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="normalize", artifact="callsite_qname_candidates", kind="table")
 def callsite_qname_candidates(
     cst_callsites: TableLike,
@@ -207,10 +208,16 @@ def callsite_qname_candidates(
                 }
             )
 
-    return pa.Table.from_pylist(rows)
+    out = pa.Table.from_pylist(rows)
+    tables = [out] if out.num_rows > 0 else []
+    schema = infer_schema_or_registry(
+        CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name,
+        tables,
+    )
+    return align_table_to_schema(out, schema)
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="normalize", artifact="ast_nodes_norm", kind="table")
 def ast_nodes_norm(
     repo_text_index: RepoTextIndex,
@@ -228,7 +235,7 @@ def ast_nodes_norm(
     return add_ast_byte_spans(repo_text_index, ast_nodes)
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="normalize", artifact="py_bc_instructions_norm", kind="table")
 def py_bc_instructions_norm(
     repo_text_index: RepoTextIndex,
@@ -246,7 +253,7 @@ def py_bc_instructions_norm(
     return anchor_instructions(repo_text_index, py_bc_instructions)
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="normalize", artifact="py_bc_blocks_norm", kind="table")
 def py_bc_blocks_norm(
     py_bc_blocks: TableLike,
@@ -263,7 +270,7 @@ def py_bc_blocks_norm(
     return build_cfg_blocks(py_bc_blocks, py_bc_code_units, ctx=ctx)
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="normalize", artifact="py_bc_cfg_edges_norm", kind="table")
 def py_bc_cfg_edges_norm(
     py_bc_code_units: TableLike,
@@ -280,7 +287,7 @@ def py_bc_cfg_edges_norm(
     return build_cfg_edges(py_bc_code_units, py_bc_cfg_edges, ctx=ctx)
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="normalize", artifact="py_bc_def_use_events", kind="table")
 def py_bc_def_use_events(py_bc_instructions: TableLike, ctx: ExecutionContext) -> TableLike:
     """Derive def/use events from bytecode instructions.
@@ -294,7 +301,7 @@ def py_bc_def_use_events(py_bc_instructions: TableLike, ctx: ExecutionContext) -
     return build_def_use_events(py_bc_instructions)
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="normalize", artifact="py_bc_reaching_defs", kind="table")
 def py_bc_reaching_defs(py_bc_def_use_events: TableLike, ctx: ExecutionContext) -> TableLike:
     """Compute reaching-def edges from def/use events.
@@ -308,7 +315,7 @@ def py_bc_reaching_defs(py_bc_def_use_events: TableLike, ctx: ExecutionContext) 
     return run_reaching_defs(py_bc_def_use_events)
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="normalize", artifact="type_exprs_norm", kind="table")
 def type_exprs_norm(cst_type_exprs: TableLike, ctx: ExecutionContext) -> TableLike:
     """Normalize CST type expressions into join-ready tables.
@@ -322,7 +329,7 @@ def type_exprs_norm(cst_type_exprs: TableLike, ctx: ExecutionContext) -> TableLi
     return normalize_type_exprs(cst_type_exprs)
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="normalize", artifact="types_norm", kind="table")
 def types_norm(
     type_exprs_norm: TableLike,
@@ -365,7 +372,7 @@ def diagnostics_sources(
     )
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="normalize", artifact="diagnostics_norm", kind="table")
 def diagnostics_norm(
     repo_text_index: RepoTextIndex,
@@ -426,7 +433,7 @@ def scip_occurrences_norm_bundle(
     return {"scip_occurrences_norm": occ, "scip_span_errors": errs}
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="normalize", artifact="cst_imports_norm", kind="table")
 def cst_imports_norm(cst_imports: TableLike, ctx: ExecutionContext) -> TableLike:
     """Normalize CST import spans into bstart/bend.
@@ -440,7 +447,7 @@ def cst_imports_norm(cst_imports: TableLike, ctx: ExecutionContext) -> TableLike
     return normalize_cst_imports_spans(py_cst_imports=cst_imports)
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="normalize", artifact="cst_defs_norm", kind="table")
 def cst_defs_norm(cst_defs: TableLike, ctx: ExecutionContext) -> TableLike:
     """Normalize CST def spans into bstart/bend.

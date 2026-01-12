@@ -22,6 +22,7 @@ from relspec.model import (
     RelationshipRule,
     RenameColumnsSpec,
     RuleKind,
+    WinnerSelectConfig,
 )
 from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation, RelationshipRegistry
 
@@ -49,4 +50,5 @@ __all__ = [
     "RelationshipRuleCompiler",
     "RenameColumnsSpec",
     "RuleKind",
+    "WinnerSelectConfig",
 ]

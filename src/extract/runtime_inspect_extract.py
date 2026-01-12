@@ -18,6 +18,7 @@ from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, 
 from arrowdsl.plan.joins import JoinConfig, left_join
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
+from arrowdsl.plan.rows import record_batches_from_rows
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from arrowdsl.schema.unify import unify_tables
@@ -35,7 +36,7 @@ from extract.spec_helpers import (
     ordering_metadata_spec,
     register_dataset,
 )
-from extract.tables import align_plan, iter_record_batches, project_columns
+from extract.tables import align_plan, project_columns
 from schema_spec.specs import ArrowFieldSpec
 
 SCHEMA_VERSION = 1
@@ -672,7 +673,7 @@ def _plan_from_row_fragments(
         return Plan.table_source(empty_table(schema), label=label)
     tables = [
         pa.Table.from_batches([batch], schema=schema)
-        for batch in iter_record_batches(rows, schema=schema, batch_size=batch_size)
+        for batch in record_batches_from_rows(rows, schema=schema, batch_size=batch_size)
     ]
     table = unify_tables(tables)
     return Plan.table_source(table, label=label)

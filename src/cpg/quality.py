@@ -9,6 +9,7 @@ import pyarrow as pa
 import pyarrow.types as patypes
 
 from arrowdsl.compute.predicates import invalid_id_expr
+from arrowdsl.compute.scalars import null_expr, scalar_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import (
     ArrayLike,
@@ -20,6 +21,7 @@ from arrowdsl.core.interop import (
 from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.arrays import const_array
 from arrowdsl.schema.columns import table_from_schema
+from arrowdsl.schema.tables import table_from_arrays
 
 type ValuesLike = ArrayLike | ChunkedArrayLike
 
@@ -88,10 +90,13 @@ def _quality_table_from_ids(
         source_arr = pa.nulls(n, type=pa.string())
     else:
         source_arr = const_array(n, source_table, dtype=pa.string())
-    return pa.Table.from_arrays(
-        [kind_arr, ids, issue_arr, source_arr],
-        schema=QUALITY_SCHEMA,
-    )
+    columns = {
+        "entity_kind": kind_arr,
+        "entity_id": ids,
+        "issue": issue_arr,
+        "source_table": source_arr,
+    }
+    return table_from_arrays(QUALITY_SCHEMA, columns=columns, num_rows=n)
 
 
 def quality_from_ids(
@@ -160,18 +165,16 @@ def quality_plan_from_ids(
         id_expr = ensure_expression(pc.field(spec.id_col))
     else:
         dtype = pa.string()
-        id_expr = ensure_expression(pc.cast(pc.scalar(None), dtype, safe=False))
+        id_expr = null_expr(dtype)
 
     id_str = ensure_expression(pc.cast(id_expr, pa.string(), safe=False))
     invalid = invalid_id_expr(id_expr, dtype=dtype)
-    issue_expr = ensure_expression(pc.cast(pc.scalar(spec.issue), pa.string(), safe=False))
-    kind_expr = ensure_expression(pc.cast(pc.scalar(spec.entity_kind), pa.string(), safe=False))
+    issue_expr = scalar_expr(spec.issue, dtype=pa.string())
+    kind_expr = scalar_expr(spec.entity_kind, dtype=pa.string())
     if spec.source_table is None:
-        source_expr = ensure_expression(pc.cast(pc.scalar(None), pa.string(), safe=False))
+        source_expr = null_expr(pa.string())
     else:
-        source_expr = ensure_expression(
-            pc.cast(pc.scalar(spec.source_table), pa.string(), safe=False)
-        )
+        source_expr = scalar_expr(spec.source_table, dtype=pa.string())
     filtered = plan.filter(invalid, ctx=ctx)
     exprs = [kind_expr, id_str, issue_expr, source_expr]
     names = ["entity_kind", "entity_id", "issue", "source_table"]

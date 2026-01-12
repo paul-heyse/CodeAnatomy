@@ -98,10 +98,13 @@ def _interval_align(left: TableLike, right: TableLike, cfg: IntervalAlignConfig)
 - Update: `src/relspec/model.py` (if helper config/types are added)
 
 **Implementation checklist**
-- [ ] Add `interval_align_table(...)` to `arrowdsl.compute.kernels` using Arrow compute + join helpers.
-- [ ] Replace the Python-loop interval alignment in `relspec.compiler` with the new kernel.
-- [ ] Preserve `match_kind`/`match_score` semantics and tie-breaker behavior.
-- [ ] Ensure `how="left"` returns left-only rows with appropriate null-filled right columns.
+- [x] Add `interval_align_table(...)` to `arrowdsl.compute.kernels` using Arrow compute + join helpers.
+- [x] Replace the Python-loop interval alignment in `relspec.compiler` with the new kernel.
+- [x] Preserve `match_kind`/`match_score` semantics and tie-breaker behavior.
+- [x] Ensure `how="left"` returns left-only rows with appropriate null-filled right columns.
+
+**Status**
+Completed in `src/arrowdsl/compute/kernels.py` and `src/relspec/compiler.py`.
 
 ---
 
@@ -144,9 +147,12 @@ if rule.kind == RuleKind.WINNER_SELECT:
 - Update: `src/relspec/compiler.py`
 
 **Implementation checklist**
-- [ ] Add `WinnerSelectConfig` and wire it into `RelationshipRule`.
-- [ ] Compile WINNER_SELECT rules to a kernel-lane dedupe using `apply_dedupe`.
-- [ ] Preserve deterministic tie-breaker behavior with `SortKey` ordering.
+- [x] Add `WinnerSelectConfig` and wire it into `RelationshipRule`.
+- [x] Compile WINNER_SELECT rules to a kernel-lane dedupe using `apply_dedupe`.
+- [x] Preserve deterministic tie-breaker behavior with `SortKey` ordering.
+
+**Status**
+Completed in `src/relspec/model.py`, `src/relspec/compiler.py`, and `src/relspec/__init__.py`.
 
 ---
 
@@ -182,9 +188,12 @@ def _union_all_plans_aligned(plans: Sequence[Plan], *, ctx: ExecutionContext) ->
 - Update: `src/arrowdsl/schema/schema.py` (if new alignment helpers are centralized)
 
 **Implementation checklist**
-- [ ] Add plan-lane schema alignment helper using `projection_for_schema`.
-- [ ] Update UNION_ALL compilation to use aligned plan unions when all inputs are Acero plans.
-- [ ] Retain kernel-lane fallback when post-kernels require materialization.
+- [x] Add plan-lane schema alignment helper using `projection_for_schema`.
+- [x] Update UNION_ALL compilation to use aligned plan unions when all inputs are Acero plans.
+- [x] Retain kernel-lane fallback when post-kernels require materialization.
+
+**Status**
+Completed in `src/relspec/compiler.py`.
 
 ---
 
@@ -226,6 +235,9 @@ from arrowdsl.schema.schema import schema_fingerprint, schema_to_dict
 - Update: `src/obs/manifest.py` (to use shared helpers where needed)
 
 **Implementation checklist**
-- [ ] Add `schema_to_dict` and `schema_fingerprint` helpers in ArrowDSL.
-- [ ] Replace local schema serialization in `obs.stats` and `obs.repro`.
-- [ ] Ensure manifest output stays stable after refactor (same field ordering and values).
+- [x] Add `schema_to_dict` and `schema_fingerprint` helpers in ArrowDSL.
+- [x] Replace local schema serialization in `obs.stats` and `obs.repro`.
+- [x] Ensure manifest output stays stable after refactor (same field ordering and values).
+
+**Status**
+Completed in `src/arrowdsl/schema/schema.py`, `src/obs/stats.py`, and `src/obs/repro.py`.

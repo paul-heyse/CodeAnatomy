@@ -127,6 +127,17 @@ class IntervalAlignConfig(BaseModel):
     match_score_col: str = "match_score"
 
 
+class WinnerSelectConfig(BaseModel):
+    """Kernel-lane winner selection configuration."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
+
+    keys: tuple[str, ...] = ()
+    score_col: str = "score"
+    score_order: Literal["ascending", "descending"] = "descending"
+    tie_breakers: tuple[SortKey, ...] = ()
+
+
 class ProjectConfig(BaseModel):
     """Projection performed after the primary operation."""
 
@@ -214,6 +225,7 @@ class RelationshipRule(BaseModel):
 
     hash_join: HashJoinConfig | None = None
     interval_align: IntervalAlignConfig | None = None
+    winner_select: WinnerSelectConfig | None = None
 
     project: ProjectConfig | None = None
     post_kernels: tuple[KernelSpecT, ...] = ()
@@ -253,7 +265,7 @@ class RelationshipRule(BaseModel):
             self._require_exact_inputs(SINGLE_INPUT)
             return
         if self.kind == RuleKind.WINNER_SELECT:
-            self._require_exact_inputs(SINGLE_INPUT)
+            self._validate_winner_select()
             return
         if self.kind == RuleKind.UNION_ALL:
             self._require_min_inputs(1)
@@ -282,4 +294,10 @@ class RelationshipRule(BaseModel):
         self._require_exact_inputs(HASH_JOIN_INPUTS)
         if self.interval_align is None:
             msg = "INTERVAL_ALIGN rules require interval_align config."
+            raise ValueError(msg)
+
+    def _validate_winner_select(self) -> None:
+        self._require_exact_inputs(SINGLE_INPUT)
+        if self.winner_select is None:
+            msg = "WINNER_SELECT rules require winner_select config."
             raise ValueError(msg)

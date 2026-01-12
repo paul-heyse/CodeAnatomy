@@ -643,10 +643,22 @@ def relationship_tables(
         out[key] = res.good
 
     # Ensure expected keys exist for extract_fields
-    out.setdefault("rel_name_symbol", pa.Table.from_pylist([]))
-    out.setdefault("rel_import_symbol", pa.Table.from_pylist([]))
-    out.setdefault("rel_callsite_symbol", pa.Table.from_pylist([]))
-    out.setdefault("rel_callsite_qname", pa.Table.from_pylist([]))
+    out.setdefault(
+        "rel_name_symbol",
+        pa.Table.from_pylist([], schema=relationship_contracts.get("rel_name_symbol_v1").schema),
+    )
+    out.setdefault(
+        "rel_import_symbol",
+        pa.Table.from_pylist([], schema=relationship_contracts.get("rel_import_symbol_v1").schema),
+    )
+    out.setdefault(
+        "rel_callsite_symbol",
+        pa.Table.from_pylist([], schema=relationship_contracts.get("rel_callsite_symbol_v1").schema),
+    )
+    out.setdefault(
+        "rel_callsite_qname",
+        pa.Table.from_pylist([], schema=relationship_contracts.get("rel_callsite_qname_v1").schema),
+    )
     return out
 
 
@@ -931,7 +943,7 @@ def cpg_props_inputs(
     )
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="cpg", artifact="cpg_nodes_final", kind="table")
 def cpg_nodes_final(
     cpg_nodes_finalize: CpgBuildArtifacts,
@@ -962,7 +974,7 @@ def cpg_nodes_finalize(
     return build_cpg_nodes(ctx=ctx, inputs=cpg_node_inputs)
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="cpg", artifact="cpg_nodes_quality", kind="table")
 def cpg_nodes_quality(
     cpg_nodes_finalize: CpgBuildArtifacts,
@@ -977,7 +989,7 @@ def cpg_nodes_quality(
     return cpg_nodes_finalize.quality
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="cpg", artifact="cpg_edges_final", kind="table")
 def cpg_edges_final(
     cpg_edges_finalize: CpgBuildArtifacts,
@@ -1008,7 +1020,7 @@ def cpg_edges_finalize(
     return build_cpg_edges(ctx=ctx, inputs=cpg_edge_inputs)
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="cpg", artifact="cpg_edges_quality", kind="table")
 def cpg_edges_quality(
     cpg_edges_finalize: CpgBuildArtifacts,
@@ -1023,7 +1035,7 @@ def cpg_edges_quality(
     return cpg_edges_finalize.quality
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="cpg", artifact="cpg_props_final", kind="table")
 def cpg_props_final(
     cpg_props_finalize: CpgBuildArtifacts,
@@ -1054,7 +1066,7 @@ def cpg_props_finalize(
     return build_cpg_props(ctx=ctx, inputs=cpg_props_inputs)
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="cpg", artifact="cpg_props_quality", kind="table")
 def cpg_props_quality(
     cpg_props_finalize: CpgBuildArtifacts,

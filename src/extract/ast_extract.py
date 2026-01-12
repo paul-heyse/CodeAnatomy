@@ -13,6 +13,7 @@ from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfil
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
+from arrowdsl.plan.rows import plan_from_rows
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.derived_views import ast_def_nodes_plan
@@ -25,7 +26,7 @@ from extract.spec_helpers import (
     ordering_metadata_spec,
     register_dataset,
 )
-from extract.tables import align_plan, plan_from_rows
+from extract.tables import align_plan
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
 
 SCHEMA_VERSION = 1

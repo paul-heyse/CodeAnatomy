@@ -3,22 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol, cast
 
 import pyarrow as pa
 import pyarrow.types as patypes
 
 from arrowdsl.core.interop import FieldLike, SchemaLike, TableLike
-from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
-
-
-class _ListType(Protocol):
-    value_field: FieldLike
-
-
-class _MapType(Protocol):
-    key_field: FieldLike
-    item_field: FieldLike
+from arrowdsl.schema.metadata import metadata_spec_from_schema
+from arrowdsl.schema.schema import SchemaEvolutionSpec
 
 
 def _is_advanced_type(dtype: object) -> bool:
@@ -47,45 +38,6 @@ def _prefer_base_nested(base: SchemaLike, merged: SchemaLike) -> SchemaLike:
     return pa.schema(fields)
 
 
-def _metadata_spec_from_schema(schema: SchemaLike) -> SchemaMetadataSpec:
-    schema_meta = dict(schema.metadata or {})
-    field_meta: dict[str, dict[bytes, bytes]] = {}
-    for field in schema:
-        if field.metadata is not None:
-            field_meta[field.name] = dict(field.metadata)
-        _add_nested_metadata(field, field_meta)
-    return SchemaMetadataSpec(schema_metadata=schema_meta, field_metadata=field_meta)
-
-
-def _add_nested_metadata(field: FieldLike, field_meta: dict[str, dict[bytes, bytes]]) -> None:
-    if patypes.is_struct(field.type):
-        for child in field.flatten():
-            if child.metadata is not None:
-                field_meta[child.name] = dict(child.metadata)
-        return
-
-    if patypes.is_map(field.type):
-        map_type = cast("_MapType", field.type)
-        key_field = map_type.key_field
-        item_field = map_type.item_field
-        if key_field.metadata is not None:
-            field_meta[f"{field.name}.{key_field.name}"] = dict(key_field.metadata)
-        if item_field.metadata is not None:
-            field_meta[f"{field.name}.{item_field.name}"] = dict(item_field.metadata)
-        return
-
-    if (
-        patypes.is_list(field.type)
-        or patypes.is_large_list(field.type)
-        or patypes.is_list_view(field.type)
-        or patypes.is_large_list_view(field.type)
-    ):
-        list_type = cast("_ListType", field.type)
-        value_field = list_type.value_field
-        if value_field.metadata is not None:
-            field_meta[f"{field.name}.{value_field.name}"] = dict(value_field.metadata)
-
-
 def unify_schemas(
     schemas: Sequence[SchemaLike],
     *,
@@ -105,7 +57,7 @@ def unify_schemas(
     unified = evolution.unify_schema_from_schemas(schemas)
     if prefer_nested:
         unified = _prefer_base_nested(schemas[0], unified)
-    return _metadata_spec_from_schema(schemas[0]).apply(unified)
+    return metadata_spec_from_schema(schemas[0]).apply(unified)
 
 
 def unify_tables(

@@ -19,6 +19,7 @@ from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.plan.source import PlanSource, plan_from_source
 from arrowdsl.schema.schema import EncodingSpec, encode_columns, encode_expression
+from arrowdsl.schema.structs import flatten_struct_field
 
 
 def query_for_schema(schema: SchemaLike) -> QuerySpec:
@@ -147,15 +148,41 @@ def project_columns(
     return plan.project(expressions, names, ctx=ctx)
 
 
-def flatten_struct_field(field: pa.Field) -> list[pa.Field]:
-    """Flatten a struct field into child fields with parent-name prefixes.
+def project_to_schema(
+    plan: Plan,
+    *,
+    schema: SchemaLike,
+    ctx: ExecutionContext,
+    keep_extra_columns: bool = False,
+) -> Plan:
+    """Project a plan to the schema, filling missing columns with typed nulls.
 
     Returns
     -------
-    list[pyarrow.Field]
-        Flattened fields with parent-name prefixes.
+    Plan
+        Plan aligned to the schema.
     """
-    return list(field.flatten())
+    available = set(plan.schema(ctx=ctx).names)
+    names: list[str] = []
+    exprs: list[ComputeExpression] = []
+    for field in schema:
+        names.append(field.name)
+        exprs.append(
+            column_or_null_expr(
+                field.name,
+                field.type,
+                available=available,
+                cast=True,
+                safe=False,
+            )
+        )
+    if keep_extra_columns:
+        for name in plan.schema(ctx=ctx).names:
+            if name in names:
+                continue
+            names.append(name)
+            exprs.append(pc.field(name))
+    return plan.project(exprs, names, ctx=ctx)
 
 
 def plan_source(
@@ -212,5 +239,6 @@ __all__ = [
     "flatten_struct_field",
     "plan_source",
     "project_columns",
+    "project_to_schema",
     "query_for_schema",
 ]

@@ -12,7 +12,7 @@ from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.joins import join_plan
 from arrowdsl.plan.ops import JoinSpec
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan_helpers import column_or_null_expr
+from arrowdsl.plan_helpers import project_to_schema
 from arrowdsl.schema.schema import empty_table
 from normalize.contracts import DEF_USE_CONTRACT, REACHES_CONTRACT
 from normalize.plan_helpers import PlanSource, plan_source
@@ -40,6 +40,7 @@ _EVENT_INPUT_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
     ("argval_str", pa.string()),
     ("argrepr", pa.string()),
 )
+_EVENT_INPUT_SCHEMA = pa.schema([pa.field(name, dtype) for name, dtype in _EVENT_INPUT_COLUMNS])
 
 
 def _to_plan(
@@ -65,12 +66,7 @@ def def_use_events_plan(
     """
     base_names = [name for name, _ in _EVENT_INPUT_COLUMNS]
     plan = _to_plan(py_bc_instructions, ctx=ctx, columns=base_names)
-    available = set(plan.schema(ctx=ctx).names)
-    base_exprs = [
-        column_or_null_expr(name, dtype, available=available)
-        for name, dtype in _EVENT_INPUT_COLUMNS
-    ]
-    plan = plan.project(base_exprs, base_names, ctx=ctx)
+    plan = project_to_schema(plan, schema=_EVENT_INPUT_SCHEMA, ctx=ctx)
     plan = DEF_USE_QUERY.apply_to_plan(plan, ctx=ctx)
     valid = ensure_expression(
         pc.and_(pc.is_valid(pc.field("symbol")), pc.is_valid(pc.field("kind")))

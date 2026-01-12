@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
+from typing import cast
 
 from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract
@@ -119,7 +120,7 @@ def _ensure_dir(path: Path) -> None:
 def _json_default(obj: object) -> JsonValue:
     # Arrow types
     if isinstance(obj, SchemaLike):
-        return schema_to_dict(obj)
+        return cast("JsonValue", schema_to_dict(obj))
     if isinstance(obj, DataTypeLike):
         return str(obj)
 
@@ -181,7 +182,7 @@ def serialize_contract(contract: Contract) -> JsonDict:
         "required_non_null": list(contract.required_non_null),
         "key_fields": list(contract.key_fields),
         "schema_fingerprint": schema_fingerprint(contract.schema),
-        "schema": schema_to_dict(contract.schema),
+        "schema": cast("JsonValue", schema_to_dict(contract.schema)),
         "dedupe": dedupe_dict,
         "canonical_sort": _serialize_sort_keys(contract.canonical_sort),
     }
@@ -219,6 +220,9 @@ def serialize_relationship_rule(rule: RelationshipRule) -> JsonDict:
         "hash_join": _json_default(rule.hash_join) if rule.hash_join is not None else None,
         "interval_align": _json_default(rule.interval_align)
         if rule.interval_align is not None
+        else None,
+        "winner_select": _json_default(rule.winner_select)
+        if rule.winner_select is not None
         else None,
         "project": _json_default(rule.project) if rule.project is not None else None,
         "post_kernels": [_json_default(k) for k in rule.post_kernels],
@@ -410,7 +414,7 @@ def _write_schema_snapshot(
         "name": name,
         "rows": int(table.num_rows),
         "schema_fingerprint": schema_fingerprint(table.schema),
-        "schema": schema_to_dict(table.schema),
+        "schema": cast("JsonValue", schema_to_dict(table.schema)),
     }
     files_written.append(_write_json(schemas_dir / f"{name}.schema.json", doc, overwrite=True))
 

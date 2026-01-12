@@ -85,6 +85,42 @@ def max_files() -> int:
 
 
 @tag(layer="inputs", kind="scalar")
+def repo_include_text() -> bool:
+    """Return whether repo scan should include decoded text payloads.
+
+    Returns
+    -------
+    bool
+        True to include text payloads in repo scan output.
+    """
+    return True
+
+
+@tag(layer="inputs", kind="scalar")
+def repo_include_bytes() -> bool:
+    """Return whether repo scan should include raw bytes payloads.
+
+    Returns
+    -------
+    bool
+        True to include bytes payloads in repo scan output.
+    """
+    return True
+
+
+@tag(layer="inputs", kind="scalar")
+def cache_salt() -> str:
+    """Return a manual cache-busting salt for repo-dependent nodes.
+
+    Returns
+    -------
+    str
+        Cache salt string used to invalidate cached outputs when changed.
+    """
+    return ""
+
+
+@tag(layer="inputs", kind="scalar")
 def output_dir() -> str | None:
     """Return the default output directory for artifacts.
 

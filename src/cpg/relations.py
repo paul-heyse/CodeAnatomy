@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from arrowdsl.compute.predicates import bitmask_is_set_expr
+from arrowdsl.compute.scalars import null_expr, scalar_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
 from arrowdsl.plan.ops import JoinSpec
@@ -178,7 +179,7 @@ def _flag_filter(flag_col: str) -> PlanFilter:
         if flag_col in available:
             flag = pc.cast(pc.field(flag_col), pa.bool_(), safe=False)
         else:
-            flag = pc.cast(pc.scalar(0), pa.bool_(), safe=False)
+            flag = scalar_expr(0, dtype=pa.bool_())
         flag = pc.fill_null(flag, fill_value=False)
         return plan.filter(ensure_expression(flag), ctx=ctx)
 
@@ -224,7 +225,7 @@ def diagnostic_relation(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | N
     diag = set_or_append_column(diag, name="origin", expr=origin, ctx=ctx)
     diag = set_or_append_column(diag, name="confidence", expr=score, ctx=ctx)
     diag = set_or_append_column(diag, name="score", expr=score, ctx=ctx)
-    resolution = ensure_expression(pc.cast(pc.scalar("DIAGNOSTIC"), pa.string(), safe=False))
+    resolution = scalar_expr("DIAGNOSTIC", dtype=pa.string())
     return set_or_append_column(diag, name="resolution_method", expr=resolution, ctx=ctx)
 
 
@@ -232,7 +233,7 @@ def type_annotation_relation(catalog: PlanCatalog, ctx: ExecutionContext) -> Pla
     type_exprs_norm = catalog.resolve(PlanRef("type_exprs_norm"), ctx=ctx)
     if type_exprs_norm is None:
         return None
-    score = ensure_expression(pc.cast(pc.scalar(1.0), pa.float32(), safe=False))
+    score = scalar_expr(1.0, dtype=pa.float32())
     plan = set_or_append_column(type_exprs_norm, name="confidence", expr=score, ctx=ctx)
     return set_or_append_column(plan, name="score", expr=score, ctx=ctx)
 
@@ -257,11 +258,11 @@ def inferred_type_relation(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan 
             cast=True,
             safe=False,
         ),
-        ensure_expression(pc.cast(pc.scalar(None), pa.string(), safe=False)),
-        ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),
-        ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),
-        ensure_expression(pc.cast(pc.scalar(1.0), pa.float32(), safe=False)),
-        ensure_expression(pc.cast(pc.scalar(1.0), pa.float32(), safe=False)),
+        null_expr(pa.string()),
+        null_expr(pa.int64()),
+        null_expr(pa.int64()),
+        scalar_expr(1.0, dtype=pa.float32()),
+        scalar_expr(1.0, dtype=pa.float32()),
     ]
     names = ["owner_def_id", "type_id", "path", "bstart", "bend", "confidence", "score"]
     return type_exprs_norm.project(exprs, names, ctx=ctx)
@@ -294,11 +295,11 @@ def runtime_relation(
             cast=True,
             safe=False,
         ),
-        ensure_expression(pc.cast(pc.scalar(None), pa.string(), safe=False)),
-        ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),
-        ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),
-        ensure_expression(pc.cast(pc.scalar(1.0), pa.float32(), safe=False)),
-        ensure_expression(pc.cast(pc.scalar(1.0), pa.float32(), safe=False)),
+        null_expr(pa.string()),
+        null_expr(pa.int64()),
+        null_expr(pa.int64()),
+        scalar_expr(1.0, dtype=pa.float32()),
+        scalar_expr(1.0, dtype=pa.float32()),
     ]
     names = [src_col, dst_col, "path", "bstart", "bend", "confidence", "score"]
     return table.project(exprs, names, ctx=ctx)

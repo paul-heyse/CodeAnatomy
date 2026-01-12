@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
+from typing import Protocol, cast
+
+import pyarrow as pa
+import pyarrow.types as patypes
 
 from arrowdsl.core.context import OrderingKey, OrderingLevel
+from arrowdsl.core.interop import FieldLike, SchemaLike, TableLike
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from schema_spec import PROVENANCE_COLS
 
@@ -32,6 +37,15 @@ _POSITION_COLS: tuple[str, ...] = (
     "name",
     *PROVENANCE_COLS,
 )
+
+
+class _ListType(Protocol):
+    value_field: FieldLike
+
+
+class _MapType(Protocol):
+    key_field: FieldLike
+    item_field: FieldLike
 
 
 def _normalize_option_value(value: object) -> object:
@@ -178,11 +192,79 @@ def extractor_metadata_spec(
     return SchemaMetadataSpec(schema_metadata=meta)
 
 
+def metadata_spec_from_schema(schema: SchemaLike) -> SchemaMetadataSpec:
+    """Capture schema/field metadata for inheritance.
+
+    Returns
+    -------
+    SchemaMetadataSpec
+        Metadata specification derived from the schema.
+    """
+    schema_meta = dict(schema.metadata or {})
+    field_meta: dict[str, dict[bytes, bytes]] = {}
+    for field in schema:
+        if field.metadata is not None:
+            field_meta[field.name] = dict(field.metadata)
+        _add_nested_metadata(field, field_meta)
+    return SchemaMetadataSpec(schema_metadata=schema_meta, field_metadata=field_meta)
+
+
+def _add_nested_metadata(field: FieldLike, field_meta: dict[str, dict[bytes, bytes]]) -> None:
+    if patypes.is_struct(field.type):
+        for child in field.flatten():
+            if child.metadata is not None:
+                field_meta[child.name] = dict(child.metadata)
+        return
+
+    if patypes.is_map(field.type):
+        map_type = cast("_MapType", field.type)
+        key_field = map_type.key_field
+        item_field = map_type.item_field
+        if key_field.metadata is not None:
+            field_meta[f"{field.name}.{key_field.name}"] = dict(key_field.metadata)
+        if item_field.metadata is not None:
+            field_meta[f"{field.name}.{item_field.name}"] = dict(item_field.metadata)
+        return
+
+    if (
+        patypes.is_list(field.type)
+        or patypes.is_large_list(field.type)
+        or patypes.is_list_view(field.type)
+        or patypes.is_large_list_view(field.type)
+    ):
+        list_type = cast("_ListType", field.type)
+        value_field = list_type.value_field
+        if value_field.metadata is not None:
+            field_meta[f"{field.name}.{value_field.name}"] = dict(value_field.metadata)
+
+
+def update_field_metadata(
+    table: TableLike,
+    *,
+    updates: Mapping[str, Mapping[bytes, bytes]],
+) -> TableLike:
+    """Return a table with field metadata updates applied.
+
+    Returns
+    -------
+    TableLike
+        Table with updated field metadata.
+    """
+    fields = []
+    for field in table.schema:
+        meta = updates.get(field.name)
+        fields.append(field.with_metadata(meta) if meta is not None else field)
+    schema = pa.schema(fields, metadata=table.schema.metadata)
+    return table.cast(schema)
+
+
 __all__ = [
     "extractor_metadata_spec",
     "infer_ordering_keys",
     "merge_metadata_specs",
+    "metadata_spec_from_schema",
     "options_hash",
     "options_metadata_spec",
     "ordering_metadata_spec",
+    "update_field_metadata",
 ]

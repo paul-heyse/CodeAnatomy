@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
 
 import arrowdsl.core.interop as pa
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import DataTypeLike, FieldLike, SchemaLike, TableLike
+from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeContext
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec, ScanContext
@@ -144,21 +144,6 @@ def table_spec_to_pandera(
         for field in spec.fields
     }
     return pa_pl.DataFrameSchema(columns=columns, strict=strict, coerce=coerce)
-
-
-def pandera_schema_to_arrow(schema: pa_pl.DataFrameSchema) -> SchemaLike:
-    """Convert a Pandera schema into an Arrow schema.
-
-    Returns
-    -------
-    SchemaLike
-        Arrow schema derived from the Pandera schema.
-    """
-    fields: list[FieldLike] = []
-    for name, column in schema.columns.items():
-        arrow_dtype = _polars_to_arrow_dtype(column.dtype)
-        fields.append(pa.field(name, arrow_dtype, nullable=column.nullable))
-    return pa.schema(fields)
 
 
 def validate_arrow_table(
@@ -573,18 +558,6 @@ def make_dataset_spec(
     )
 
 
-def query_spec_for_table(table_spec: TableSchemaSpec) -> QuerySpec:
-    """Create a QuerySpec projecting the table spec columns.
-
-    Returns
-    -------
-    QuerySpec
-        Query spec for the table columns.
-    """
-    cols = tuple(field.name for field in table_spec.fields)
-    return QuerySpec(projection=ProjectionSpec(base=cols))
-
-
 def _sort_key_specs(keys: Iterable[SortKey]) -> tuple[SortKeySpec, ...]:
     """Convert SortKey objects into SortKeySpec values.
 
@@ -727,31 +700,6 @@ class SchemaRegistry:
         self.dataset_specs[spec.name] = spec
         return spec
 
-    def register_table(self, spec: TableSchemaSpec) -> TableSchemaSpec:
-        """Register a table spec (compat wrapper).
-
-        Returns
-        -------
-        TableSchemaSpec
-            Registered table spec.
-        """
-        dataset = DatasetSpec(table_spec=spec)
-        self.register_dataset(dataset)
-        return spec
-
-    def register_contract(self, spec: ContractSpec) -> ContractSpec:
-        """Register a contract spec (compat wrapper).
-
-        Returns
-        -------
-        ContractSpec
-            Registered contract spec.
-        """
-        dataset = DatasetSpec(table_spec=spec.table_schema, contract_spec=spec)
-        self.register_dataset(dataset)
-        return spec
-
-
 GLOBAL_SCHEMA_REGISTRY = SchemaRegistry()
 
 
@@ -814,8 +762,6 @@ __all__ = [
     "make_contract_spec",
     "make_dataset_spec",
     "make_table_spec",
-    "pandera_schema_to_arrow",
-    "query_spec_for_table",
     "table_spec_from_schema",
     "table_spec_to_pandera",
     "validate_arrow_table",

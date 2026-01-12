@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pyarrow as pa
-from hamilton.function_modifiers import cache, config, extract_fields, tag
+from hamilton.function_modifiers import cache, extract_fields, tag
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
@@ -44,10 +44,14 @@ def _empty_table(schema: SchemaLike) -> TableLike:
     return pa.Table.from_arrays([pa.array([], type=field.type) for field in schema], schema=schema)
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="extract", artifact="repo_files", kind="table")
 def repo_files(
     repo_scan_config: RepoScanConfig,
+    *,
+    repo_include_text: bool,
+    repo_include_bytes: bool,
+    cache_salt: str,
     ctx: ExecutionContext,
 ) -> TableLike:
     """Scan the repo and produce the repo_files table.
@@ -63,17 +67,24 @@ def repo_files(
     TableLike
         Repository file metadata table.
     """
+    _ = cache_salt
     options = RepoScanOptions(
         include_globs=repo_scan_config.include_globs,
         exclude_globs=repo_scan_config.exclude_globs,
         max_files=repo_scan_config.max_files,
+        include_text=bool(repo_include_text),
+        include_bytes=bool(repo_include_bytes),
     )
     return scan_repo(repo_root=repo_scan_config.repo_root, options=options, ctx=ctx)
 
 
 @cache()
 @tag(layer="extract", artifact="file_contexts", kind="object")
-def file_contexts(repo_files: TableLike, ctx: ExecutionContext) -> tuple[FileContext, ...]:
+def file_contexts(
+    repo_files: TableLike,
+    cache_salt: str,
+    ctx: ExecutionContext,
+) -> tuple[FileContext, ...]:
     """Build file contexts from the repo_files table.
 
     Returns
@@ -82,6 +93,7 @@ def file_contexts(repo_files: TableLike, ctx: ExecutionContext) -> tuple[FileCon
         File contexts for each repo file row.
     """
     _ = ctx
+    _ = cache_salt
     return tuple(iter_file_contexts(repo_files))
 
 
@@ -201,6 +213,7 @@ def scip_index_path(
     repo_root: str,
     scip_identity_overrides: ScipIdentityOverrides,
     scip_index_config: ScipIndexConfig,
+    cache_salt: str,
     ctx: ExecutionContext,
 ) -> str | None:
     """Build or resolve index.scip under build/scip.
@@ -211,6 +224,7 @@ def scip_index_path(
         Path to index.scip or None when indexing is disabled.
     """
     _ = ctx
+    _ = cache_salt
     repo_root_path = Path(repo_root).resolve()
     build_dir = ensure_scip_build_dir(repo_root_path, scip_index_config.output_dir)
     if scip_index_config.index_path_override:
@@ -237,7 +251,7 @@ def scip_index_path(
     return str(run_scip_python_index(opts))
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="extract", artifact="symtables", kind="table")
 def symtables(
     repo_root: str,
@@ -260,7 +274,7 @@ def symtables(
     )
 
 
-@cache()
+@cache(format="parquet")
 @tag(layer="extract", artifact="bytecode", kind="table")
 def bytecode(
     repo_root: str,
@@ -326,7 +340,6 @@ def bytecode_bundle(
 
 
 @cache()
-@config.when(enable_tree_sitter=True)
 @extract_fields(
     {
         "ts_nodes": TableLike,
@@ -336,12 +349,14 @@ def bytecode_bundle(
 )
 @tag(layer="extract", artifact="tree_sitter_bundle", kind="bundle")
 def tree_sitter_bundle(
+    *,
+    enable_tree_sitter: bool,
     repo_root: str,
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
     ctx: ExecutionContext,
 ) -> Mapping[str, TableLike]:
-    """Extract tree-sitter nodes and diagnostics.
+    """Extract tree-sitter nodes and diagnostics when enabled.
 
     Returns
     -------
@@ -349,6 +364,12 @@ def tree_sitter_bundle(
         Tree-sitter tables for nodes and diagnostics.
     """
     _ = repo_root
+    if not enable_tree_sitter:
+        return {
+            "ts_nodes": _empty_table(TS_NODES_SCHEMA),
+            "ts_errors": _empty_table(TS_ERRORS_SCHEMA),
+            "ts_missing": _empty_table(TS_MISSING_SCHEMA),
+        }
     return extract_ts_tables(
         repo_files=repo_files,
         file_contexts=file_contexts,
@@ -357,41 +378,6 @@ def tree_sitter_bundle(
 
 
 @cache()
-@config.when(enable_tree_sitter=False)
-@extract_fields(
-    {
-        "ts_nodes": TableLike,
-        "ts_errors": TableLike,
-        "ts_missing": TableLike,
-    }
-)
-@tag(layer="extract", artifact="tree_sitter_bundle", kind="bundle")
-def tree_sitter_bundle_disabled(
-    repo_root: str,
-    repo_files: TableLike,
-    file_contexts: Sequence[FileContext],
-    ctx: ExecutionContext,
-) -> Mapping[str, TableLike]:
-    """Return empty tree-sitter tables when extraction is disabled.
-
-    Returns
-    -------
-    dict[str, pyarrow.Table]
-        Empty tree-sitter tables bundle.
-    """
-    _ = repo_root
-    _ = repo_files
-    _ = file_contexts
-    _ = ctx
-    return {
-        "ts_nodes": _empty_table(TS_NODES_SCHEMA),
-        "ts_errors": _empty_table(TS_ERRORS_SCHEMA),
-        "ts_missing": _empty_table(TS_MISSING_SCHEMA),
-    }
-
-
-@cache()
-@config.when(enable_runtime_inspect=True)
 @extract_fields(
     {
         "rt_objects": TableLike,
@@ -402,12 +388,14 @@ def tree_sitter_bundle_disabled(
 )
 @tag(layer="extract", artifact="runtime_inspect_bundle", kind="bundle")
 def runtime_inspect_bundle(
+    *,
+    enable_runtime_inspect: bool,
     repo_root: str,
     runtime_module_allowlist: list[str],
     runtime_timeout_s: int,
     ctx: ExecutionContext,
 ) -> dict[str, TableLike]:
-    """Extract runtime inspection tables in a subprocess.
+    """Extract runtime inspection tables when enabled.
 
     Returns
     -------
@@ -415,6 +403,13 @@ def runtime_inspect_bundle(
         Runtime inspection tables bundle.
     """
     _ = ctx
+    if not enable_runtime_inspect:
+        return {
+            "rt_objects": _empty_table(RT_OBJECTS_SCHEMA),
+            "rt_signatures": _empty_table(RT_SIGNATURES_SCHEMA),
+            "rt_signature_params": _empty_table(RT_SIGNATURE_PARAMS_SCHEMA),
+            "rt_members": _empty_table(RT_MEMBERS_SCHEMA),
+        }
     result = extract_runtime_tables(
         repo_root,
         options=RuntimeInspectOptions(
@@ -428,40 +423,4 @@ def runtime_inspect_bundle(
         "rt_signatures": result.rt_signatures,
         "rt_signature_params": result.rt_signature_params,
         "rt_members": result.rt_members,
-    }
-
-
-@cache()
-@config.when(enable_runtime_inspect=False)
-@extract_fields(
-    {
-        "rt_objects": TableLike,
-        "rt_signatures": TableLike,
-        "rt_signature_params": TableLike,
-        "rt_members": TableLike,
-    }
-)
-@tag(layer="extract", artifact="runtime_inspect_bundle", kind="bundle")
-def runtime_inspect_bundle_disabled(
-    repo_root: str,
-    runtime_module_allowlist: list[str],
-    runtime_timeout_s: int,
-    ctx: ExecutionContext,
-) -> dict[str, TableLike]:
-    """Return empty runtime inspection tables when extraction is disabled.
-
-    Returns
-    -------
-    dict[str, pyarrow.Table]
-        Empty runtime inspection tables bundle.
-    """
-    _ = repo_root
-    _ = runtime_module_allowlist
-    _ = runtime_timeout_s
-    _ = ctx
-    return {
-        "rt_objects": _empty_table(RT_OBJECTS_SCHEMA),
-        "rt_signatures": _empty_table(RT_SIGNATURES_SCHEMA),
-        "rt_signature_params": _empty_table(RT_SIGNATURE_PARAMS_SCHEMA),
-        "rt_members": _empty_table(RT_MEMBERS_SCHEMA),
     }

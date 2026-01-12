@@ -13,6 +13,7 @@ from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan.source import DatasetSource
 from arrowdsl.schema.arrays import const_array, set_or_append_column
 from arrowdsl.schema.schema import EncodingSpec
+from arrowdsl.schema.tables import table_from_arrays
 from cpg.artifacts import CpgBuildArtifacts
 from cpg.catalog import PlanCatalog, PlanSource
 from cpg.emit_nodes import emit_node_plan
@@ -85,7 +86,9 @@ def _symbol_nodes_table(
     if not symbols:
         return None
     uniq = sorted(symbols)
-    return pa.Table.from_arrays([pa.array(uniq, type=pa.string())], names=["symbol"])
+    schema = pa.schema([pa.field("symbol", pa.string())])
+    columns = {"symbol": pa.array(uniq, type=pa.string())}
+    return table_from_arrays(schema, columns=columns, num_rows=len(uniq))
 
 
 NODE_PLAN_SPECS = node_plan_specs()

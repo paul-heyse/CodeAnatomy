@@ -15,9 +15,11 @@ from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, p
 from arrowdsl.plan.joins import JoinConfig, left_join
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
+from arrowdsl.plan.rows import plan_from_rows
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.schema.nested import LargeListViewAccumulator
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
+from arrowdsl.schema.tables import table_from_arrays
 from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.file_context import FileContext
 from extract.hash_specs import (
@@ -35,7 +37,7 @@ from extract.spec_helpers import (
     ordering_metadata_spec,
     register_dataset,
 )
-from extract.tables import align_plan, plan_from_rows, project_columns
+from extract.tables import align_plan, project_columns
 from schema_spec.specs import ArrowFieldSpec, NestedFieldSpec, file_identity_bundle
 
 SCHEMA_VERSION = 1
@@ -457,29 +459,21 @@ class _FuncPartsAccumulator:
         globals_ = FUNC_PARTS_GLOBALS_SPEC.builder(self)
         nonlocals = FUNC_PARTS_NONLOCALS_SPEC.builder(self)
         frees = FUNC_PARTS_FREES_SPEC.builder(self)
-        return pa.Table.from_arrays(
-            [
-                pa.array(self.file_ids, type=pa.string()),
-                pa.array(self.paths, type=pa.string()),
-                pa.array(self.file_sha256s, type=pa.string()),
-                pa.array(self.scope_table_ids, type=pa.int64()),
-                parameters,
-                locals_,
-                globals_,
-                nonlocals,
-                frees,
-            ],
-            names=[
-                "file_id",
-                "path",
-                "file_sha256",
-                "scope_table_id",
-                "parameters",
-                "locals",
-                "globals",
-                "nonlocals",
-                "frees",
-            ],
+        columns = {
+            "file_id": pa.array(self.file_ids, type=pa.string()),
+            "path": pa.array(self.paths, type=pa.string()),
+            "file_sha256": pa.array(self.file_sha256s, type=pa.string()),
+            "scope_table_id": pa.array(self.scope_table_ids, type=pa.int64()),
+            "parameters": parameters,
+            "locals": locals_,
+            "globals": globals_,
+            "nonlocals": nonlocals,
+            "frees": frees,
+        }
+        return table_from_arrays(
+            FUNC_PARTS_SCHEMA,
+            columns=columns,
+            num_rows=len(self.scope_table_ids),
         )
 
 

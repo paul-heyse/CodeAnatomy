@@ -15,6 +15,7 @@ from hamilton.lifecycle import base as lifecycle_base
 
 from core_types import JsonValue
 from cpg.kinds import validate_derivation_extractors, validate_registry_completeness
+from hamilton_pipeline.arrow_adapters import register_arrow_parquet_adapters
 from hamilton_pipeline.modules import ALL_MODULES
 
 try:
@@ -160,6 +161,7 @@ def build_driver(
 
     cache_path = config.get("cache_path")
     if isinstance(cache_path, str) and cache_path:
+        register_arrow_parquet_adapters()
         cache_opt_in = bool(config.get("cache_opt_in", True))
         if cache_opt_in:
             # cache only nodes annotated for caching

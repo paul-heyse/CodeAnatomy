@@ -4,20 +4,24 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import cmp_to_key
-from typing import Literal, Protocol
+from typing import Protocol
 
 import pyarrow as pa
 
-from arrowdsl.compute.kernels import apply_dedupe, explode_list_column
+from arrowdsl.compute.kernels import (
+    IntervalAlignOptions,
+    apply_dedupe,
+    explode_list_column,
+    interval_align_table,
+)
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, Ordering
-from arrowdsl.core.interop import ComputeExpression, ScalarLike, TableLike
+from arrowdsl.core.interop import ComputeExpression, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
-from arrowdsl.plan.ops import SortKey
+from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.plan.plan import Plan, hash_join, union_all_plans
 from arrowdsl.plan.query import open_dataset
 from arrowdsl.schema.arrays import ConstExpr, FieldExpr, const_array, set_or_append_column
-from arrowdsl.schema.schema import SchemaEvolutionSpec
+from arrowdsl.schema.schema import SchemaEvolutionSpec, projection_for_schema
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
@@ -29,7 +33,6 @@ from relspec.model import (
     DedupeKernelSpec,
     DropColumnsSpec,
     ExplodeListSpec,
-    IntervalAlignConfig,
     KernelSpecT,
     ProjectConfig,
     RelationshipRule,
@@ -45,9 +48,6 @@ from schema_spec.system import (
 )
 
 type KernelFn = Callable[[TableLike, ExecutionContext], TableLike]
-type RowValue = object | None
-type RowData = dict[str, RowValue]
-type Candidate = dict[str, RowValue]
 
 
 class PlanResolver(Protocol):
@@ -448,297 +448,21 @@ def _apply_rule_meta_to_plan(
     return plan.project(exprs, names, label=plan.label or rule.name)
 
 
-def _col_pylist(table: TableLike, name: str) -> list[RowValue]:
-    if name not in table.column_names:
-        return [None] * table.num_rows
-    values: list[RowValue] = []
-    for value in table[name]:
-        if isinstance(value, ScalarLike):
-            values.append(value.as_py())
-        else:
-            values.append(value)
-    return values
-
-
-def _row_value_number(value: RowValue) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _row_value_int(value: RowValue) -> int | None:
-    num = _row_value_number(value)
-    if num is None:
-        return None
-    return int(num)
-
-
-def _cmp_values(a: RowValue, b: RowValue) -> int:
-    if a is None and b is None:
-        return 0
-    if a is None:
-        return 1
-    if b is None:
-        return -1
-    result = 0
-    a_num = _row_value_number(a)
-    b_num = _row_value_number(b)
-    if a_num is not None and b_num is not None:
-        if a_num < b_num:
-            result = -1
-        elif a_num > b_num:
-            result = 1
-        return result
-    a_str = str(a)
-    b_str = str(b)
-    if a_str < b_str:
-        result = -1
-    elif a_str > b_str:
-        result = 1
-    return result
-
-
-def _match_ok(
-    mode: Literal["EXACT", "CONTAINED_BEST", "OVERLAP_BEST"],
-    *,
-    left_start: int,
-    left_end: int,
-    right_start: int,
-    right_end: int,
-) -> bool:
-    if mode == "EXACT":
-        return right_start == left_start and right_end == left_end
-    if mode == "CONTAINED_BEST":
-        return right_start >= left_start and right_end <= left_end
-    return not (right_end <= left_start or right_start >= left_end)
-
-
-def _pick_best_candidate(
-    candidates: list[Candidate],
-    *,
-    tie_breakers: tuple[SortKey, ...],
-) -> Candidate | None:
-    if not candidates:
-        return None
-
-    def _cmp(x: Candidate, y: Candidate) -> int:
-        cmp_val = _cmp_values(x.get("_span_len"), y.get("_span_len"))
-        if cmp_val != 0:
-            return cmp_val
-        for sk in tie_breakers:
-            cmp_val = _cmp_values(x.get(sk.column), y.get(sk.column))
-            if cmp_val == 0:
-                continue
-            if sk.order == "descending":
-                cmp_val = -cmp_val
-            return cmp_val
-        return 0
-
-    return sorted(candidates, key=cmp_to_key(_cmp))[0]
-
-
-def _build_right_index(paths: Sequence[RowValue]) -> dict[str, list[int]]:
-    idx: dict[str, list[int]] = {}
-    for i, path in enumerate(paths):
-        if path is None:
-            continue
-        idx.setdefault(str(path), []).append(i)
-    return idx
-
-
-def _collect_columns(table: TableLike, select_cols: tuple[str, ...]) -> dict[str, list[RowValue]]:
-    columns = select_cols or tuple(table.column_names)
-    return {col: _col_pylist(table, col) for col in columns}
-
-
-@dataclass(frozen=True)
-class IntervalAlignContext:
-    """Shared context for interval alignment."""
-
-    cfg: IntervalAlignConfig
-    left_cols: Mapping[str, list[RowValue]]
-    right_cols: Mapping[str, list[RowValue]]
-    right_starts: Sequence[RowValue]
-    right_ends: Sequence[RowValue]
-
-
-def _build_left_row(
-    ctx: IntervalAlignContext,
-    *,
-    left_idx: int,
-    match_kind: str,
-    match_score: float | None,
-) -> RowData:
-    row: RowData = {}
-    for col, values in ctx.left_cols.items():
-        row[col] = values[left_idx]
-    for col in ctx.right_cols:
-        row[col] = None
-    if ctx.cfg.emit_match_meta:
-        row[ctx.cfg.match_kind_col] = match_kind
-        row[ctx.cfg.match_score_col] = match_score
-    return row
-
-
-def _build_match_row(
-    ctx: IntervalAlignContext,
-    *,
-    left_idx: int,
-    right_idx: int,
-    match_kind: str,
-    match_score: float | None,
-) -> RowData:
-    row: RowData = {}
-    for col, values in ctx.left_cols.items():
-        row[col] = values[left_idx]
-    for col, values in ctx.right_cols.items():
-        row[col] = values[right_idx]
-    if ctx.cfg.emit_match_meta:
-        row[ctx.cfg.match_kind_col] = match_kind
-        row[ctx.cfg.match_score_col] = match_score
-    return row
-
-
-def _collect_candidates(
-    ctx: IntervalAlignContext,
-    *,
-    left_start: int,
-    left_end: int,
-    right_indices: Sequence[int],
-) -> list[Candidate]:
-    candidates: list[Candidate] = []
-    right_starts = ctx.right_starts
-    right_ends = ctx.right_ends
-    for idx in right_indices:
-        start_val = _row_value_int(right_starts[idx])
-        end_val = _row_value_int(right_ends[idx])
-        if start_val is None or end_val is None:
-            continue
-        right_start = start_val
-        right_end = end_val
-
-        if not _match_ok(
-            ctx.cfg.mode,
-            left_start=left_start,
-            left_end=left_end,
-            right_start=right_start,
-            right_end=right_end,
-        ):
-            continue
-
-        candidate: Candidate = {"_j": idx, "_span_len": max(0, right_end - right_start)}
-        for sk in ctx.cfg.tie_breakers:
-            candidate[sk.column] = ctx.right_cols.get(sk.column, [None] * len(right_starts))[idx]
-        candidates.append(candidate)
-    return candidates
-
-
-def _interval_align_row(
-    ctx: IntervalAlignContext,
-    *,
-    left_idx: int,
-    left_values: tuple[RowValue, RowValue, RowValue],
-    right_by_path: Mapping[str, list[int]],
-) -> RowData | None:
-    path, start_val, end_val = left_values
-    row: RowData | None = None
-    match_kind: str | None = None
-
-    if path is None or start_val is None or end_val is None:
-        match_kind = "NO_PATH_OR_SPAN"
-    else:
-        left_start = _row_value_int(start_val)
-        left_end = _row_value_int(end_val)
-        if left_start is None or left_end is None:
-            match_kind = "NO_PATH_OR_SPAN"
-        else:
-            candidates = _collect_candidates(
-                ctx,
-                left_start=left_start,
-                left_end=left_end,
-                right_indices=right_by_path.get(str(path), []),
-            )
-            best = _pick_best_candidate(candidates, tie_breakers=ctx.cfg.tie_breakers)
-            if best is None:
-                match_kind = "NO_MATCH"
-            else:
-                right_idx = _row_value_int(best.get("_j"))
-                span_len = _row_value_int(best.get("_span_len"))
-                if right_idx is None or span_len is None:
-                    match_kind = "NO_MATCH"
-                else:
-                    score = float(-span_len)
-                    row = _build_match_row(
-                        ctx,
-                        left_idx=left_idx,
-                        right_idx=right_idx,
-                        match_kind=ctx.cfg.mode,
-                        match_score=score,
-                    )
-
-    if row is None and match_kind is not None and ctx.cfg.how == "left":
-        row = _build_left_row(
-            ctx,
-            left_idx=left_idx,
-            match_kind=match_kind,
-            match_score=None,
-        )
-    return row
-
-
-def _interval_align(left: TableLike, right: TableLike, cfg: IntervalAlignConfig) -> TableLike:
-    """Perform a kernel-lane span join.
-
-    Parameters
-    ----------
-    left:
-        Left-side table.
-    right:
-        Right-side table.
-    cfg:
-        Interval alignment configuration.
-
-    Returns
-    -------
-    pyarrow.Table
-        Interval-aligned table.
-    """
-    left_paths = _col_pylist(left, cfg.left_path_col)
-    left_starts = _col_pylist(left, cfg.left_start_col)
-    left_ends = _col_pylist(left, cfg.left_end_col)
-
-    right_paths = _col_pylist(right, cfg.right_path_col)
-    right_starts = _col_pylist(right, cfg.right_start_col)
-    right_ends = _col_pylist(right, cfg.right_end_col)
-
-    ctx = IntervalAlignContext(
-        cfg=cfg,
-        left_cols=_collect_columns(left, cfg.select_left),
-        right_cols=_collect_columns(right, cfg.select_right),
-        right_starts=right_starts,
-        right_ends=right_ends,
+def _align_plan(plan: Plan, *, schema: pa.Schema, ctx: ExecutionContext) -> Plan:
+    exprs, names = projection_for_schema(
+        schema,
+        available=plan.schema(ctx=ctx).names,
+        safe_cast=ctx.safe_cast,
     )
-    right_by_path = _build_right_index(right_paths)
-    out_rows: list[RowData] = []
+    return plan.project(exprs, names, label=plan.label)
 
-    for left_idx in range(left.num_rows):
-        row = _interval_align_row(
-            ctx,
-            left_idx=left_idx,
-            left_values=(left_paths[left_idx], left_starts[left_idx], left_ends[left_idx]),
-            right_by_path=right_by_path,
-        )
-        if row is not None:
-            out_rows.append(row)
 
-    return pa.Table.from_pylist(out_rows)
+def _union_all_plans_aligned(plans: Sequence[Plan], *, ctx: ExecutionContext) -> Plan:
+    schema = SchemaEvolutionSpec().unify_schema_from_schemas(
+        [plan.schema(ctx=ctx) for plan in plans]
+    )
+    aligned = [_align_plan(plan, schema=schema, ctx=ctx) for plan in plans]
+    return union_all_plans(aligned, label="relspec_union")
 
 
 @dataclass(frozen=True)
@@ -939,13 +663,24 @@ class RelationshipRuleCompiler:
             emit_rule_meta=rule.emit_rule_meta,
         )
 
-    @staticmethod
     def _compile_union_all(
+        self,
         rule: RelationshipRule,
         *,
         ctx: ExecutionContext,
         post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
+        plans = [self.resolver.resolve(inp, ctx=ctx) for inp in rule.inputs]
+        if all(plan.decl is not None for plan in plans):
+            aligned = _union_all_plans_aligned(plans, ctx=ctx)
+            return CompiledRule(
+                rule=rule,
+                plan=aligned,
+                execute_fn=None,
+                post_kernels=_compile_post_kernels(post_kernels),
+                emit_rule_meta=rule.emit_rule_meta,
+            )
+
         def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> TableLike:
             parts: list[TableLike] = []
             for inp in rule.inputs:
@@ -961,7 +696,6 @@ class RelationshipRuleCompiler:
                 keep_extra_columns=ctx2.provenance,
             )
 
-        _ = ctx
         return CompiledRule(
             rule=rule,
             plan=None,
@@ -981,13 +715,63 @@ class RelationshipRuleCompiler:
         if cfg is None:
             msg = "INTERVAL_ALIGN rules require interval_align config."
             raise ValueError(msg)
-        interval_cfg = cfg
+        interval_cfg = IntervalAlignOptions(
+            mode=cfg.mode,
+            how=cfg.how,
+            left_path_col=cfg.left_path_col,
+            left_start_col=cfg.left_start_col,
+            left_end_col=cfg.left_end_col,
+            right_path_col=cfg.right_path_col,
+            right_start_col=cfg.right_start_col,
+            right_end_col=cfg.right_end_col,
+            select_left=cfg.select_left,
+            select_right=cfg.select_right,
+            tie_breakers=cfg.tie_breakers,
+            emit_match_meta=cfg.emit_match_meta,
+            match_kind_col=cfg.match_kind_col,
+            match_score_col=cfg.match_score_col,
+        )
 
         def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> TableLike:
             left_ref, right_ref = rule.inputs
             lt = resolver.resolve(left_ref, ctx=ctx2).to_table(ctx=ctx2)
             rt = resolver.resolve(right_ref, ctx=ctx2).to_table(ctx=ctx2)
-            return _interval_align(lt, rt, interval_cfg)
+            return interval_align_table(lt, rt, cfg=interval_cfg)
+
+        _ = ctx
+        return CompiledRule(
+            rule=rule,
+            plan=None,
+            execute_fn=_exec,
+            post_kernels=_compile_post_kernels(post_kernels),
+            emit_rule_meta=rule.emit_rule_meta,
+        )
+
+    @staticmethod
+    def _compile_winner_select(
+        rule: RelationshipRule,
+        *,
+        ctx: ExecutionContext,
+        post_kernels: tuple[KernelSpecT, ...],
+    ) -> CompiledRule:
+        cfg = rule.winner_select
+        if cfg is None:
+            msg = "WINNER_SELECT rules require winner_select config."
+            raise ValueError(msg)
+        winner_cfg = cfg
+
+        def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> TableLike:
+            src = rule.inputs[0]
+            table = resolver.resolve(src, ctx=ctx2).to_table(ctx=ctx2)
+            spec = DedupeSpec(
+                keys=winner_cfg.keys,
+                strategy="KEEP_BEST_BY_SCORE",
+                tie_breakers=(
+                    SortKey(winner_cfg.score_col, winner_cfg.score_order),
+                    *winner_cfg.tie_breakers,
+                ),
+            )
+            return apply_dedupe(table, spec=spec, _ctx=ctx2)
 
         _ = ctx
         return CompiledRule(
@@ -1022,7 +806,7 @@ class RelationshipRuleCompiler:
             RuleKind.FILTER_PROJECT: self._compile_filter_project,
             RuleKind.HASH_JOIN: self._compile_hash_join,
             RuleKind.EXPLODE_LIST: self._compile_passthrough,
-            RuleKind.WINNER_SELECT: self._compile_passthrough,
+            RuleKind.WINNER_SELECT: self._compile_winner_select,
             RuleKind.UNION_ALL: self._compile_union_all,
             RuleKind.INTERVAL_ALIGN: self._compile_interval_align,
         }

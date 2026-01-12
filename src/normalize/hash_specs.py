@@ -1,39 +1,34 @@
 """HashSpec registry for normalized identifiers."""
 
-from arrowdsl.core.ids import HashSpec
+from arrowdsl.core.ids_registry import hash_spec
 
-TYPE_EXPR_ID_SPEC = HashSpec(
+TYPE_EXPR_ID_SPEC = hash_spec(
     prefix="cst_type_expr",
     cols=("path", "bstart", "bend"),
-    as_string=True,
     null_sentinel="None",
 )
 
-TYPE_ID_SPEC = HashSpec(
+TYPE_ID_SPEC = hash_spec(
     prefix="type",
     cols=("type_repr",),
-    as_string=True,
     null_sentinel="None",
 )
 
-DEF_USE_EVENT_ID_SPEC = HashSpec(
+DEF_USE_EVENT_ID_SPEC = hash_spec(
     prefix="df_event",
     cols=("code_unit_id", "instr_id", "kind", "symbol"),
-    as_string=True,
     null_sentinel="None",
 )
 
-REACH_EDGE_ID_SPEC = HashSpec(
+REACH_EDGE_ID_SPEC = hash_spec(
     prefix="df_reach",
     cols=("def_event_id", "use_event_id"),
-    as_string=True,
     null_sentinel="None",
 )
 
-DIAG_ID_SPEC = HashSpec(
+DIAG_ID_SPEC = hash_spec(
     prefix="diag",
     cols=("path", "bstart", "bend", "diag_source", "message"),
-    as_string=True,
     null_sentinel="None",
 )
 

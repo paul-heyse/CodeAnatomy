@@ -13,7 +13,7 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, ensure_expre
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.runner import run_plan
-from arrowdsl.plan_helpers import column_or_null_expr
+from arrowdsl.plan_helpers import project_to_schema
 from arrowdsl.schema.schema import empty_table
 from normalize.hash_specs import TYPE_ID_SPEC
 from normalize.plan_helpers import PlanSource, plan_source, project_columns
@@ -44,6 +44,9 @@ _BASE_TYPE_EXPR_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
     ("expr_role", pa.string()),
     ("expr_text", pa.string()),
 )
+_BASE_TYPE_EXPR_SCHEMA = pa.schema(
+    [pa.field(name, dtype) for name, dtype in _BASE_TYPE_EXPR_COLUMNS]
+)
 
 
 def _to_plan(
@@ -69,12 +72,7 @@ def type_exprs_plan(
     """
     base_names = [name for name, _ in _BASE_TYPE_EXPR_COLUMNS]
     plan = _to_plan(cst_type_exprs, ctx=ctx, columns=base_names)
-    available = set(plan.schema(ctx=ctx).names)
-    base_exprs = [
-        column_or_null_expr(name, dtype, available=available)
-        for name, dtype in _BASE_TYPE_EXPR_COLUMNS
-    ]
-    plan = plan.project(base_exprs, base_names, ctx=ctx)
+    plan = project_to_schema(plan, schema=_BASE_TYPE_EXPR_SCHEMA, ctx=ctx)
 
     _, non_empty = trimmed_non_empty_expr("expr_text")
     plan = plan.filter(non_empty, ctx=ctx)
@@ -234,6 +232,22 @@ def type_nodes_plan_from_exprs(
     return TYPE_NODES_QUERY.apply_to_plan(plan, ctx=ctx)
 
 
+def type_nodes_plan(
+    type_exprs_norm: PlanSource,
+    scip_symbol_information: PlanSource | None = None,
+    *,
+    ctx: ExecutionContext,
+) -> Plan:
+    """Build a plan-lane type node table from normalized inputs.
+
+    Returns
+    -------
+    Plan
+        Plan producing normalized type node rows.
+    """
+    return _type_nodes_plan(type_exprs_norm, scip_symbol_information, ctx=ctx)
+
+
 def _type_nodes_plan(
     type_exprs_norm: PlanSource,
     scip_symbol_information: PlanSource | None,
@@ -377,6 +391,7 @@ __all__ = [
     "normalize_types_result",
     "normalize_types_streamable",
     "type_exprs_plan",
+    "type_nodes_plan",
     "type_nodes_plan_from_exprs",
     "type_nodes_plan_from_scip",
 ]

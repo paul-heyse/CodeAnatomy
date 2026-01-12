@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping, Sequence
-
-import pyarrow as pa
+from collections.abc import Sequence
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
+from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan_helpers import (
     flatten_struct_field,
@@ -16,22 +14,8 @@ from arrowdsl.plan_helpers import (
 )
 from arrowdsl.schema.schema import (
     SchemaTransform,
-    empty_table,
     projection_for_schema,
 )
-
-
-def rows_to_table(rows: Sequence[Mapping[str, object]], schema: SchemaLike) -> TableLike:
-    """Build a table from row mappings or return an empty table.
-
-    Returns
-    -------
-    TableLike
-        Table constructed from rows or an empty table.
-    """
-    if not rows:
-        return empty_table(schema)
-    return pa.Table.from_pylist(list(rows), schema=schema)
 
 
 def align_table(table: TableLike, *, schema: SchemaLike) -> TableLike:
@@ -43,64 +27,6 @@ def align_table(table: TableLike, *, schema: SchemaLike) -> TableLike:
         Aligned table.
     """
     return SchemaTransform(schema=schema).apply(table)
-
-
-def iter_record_batches(
-    rows: Iterable[Mapping[str, object]],
-    *,
-    schema: SchemaLike,
-    batch_size: int = 4096,
-) -> Iterator[pa.RecordBatch]:
-    """Yield RecordBatches from row mappings.
-
-    Yields
-    ------
-    pyarrow.RecordBatch
-        Record batches built from buffered rows.
-    """
-    buffer: list[Mapping[str, object]] = []
-    for row in rows:
-        buffer.append(row)
-        if len(buffer) >= batch_size:
-            yield pa.RecordBatch.from_pylist(buffer, schema=schema)
-            buffer.clear()
-    if buffer:
-        yield pa.RecordBatch.from_pylist(buffer, schema=schema)
-
-
-def reader_from_rows(
-    rows: Iterable[Mapping[str, object]],
-    *,
-    schema: SchemaLike,
-    batch_size: int = 4096,
-) -> RecordBatchReaderLike:
-    """Build a RecordBatchReader from row mappings.
-
-    Returns
-    -------
-    pyarrow.RecordBatchReader
-        Reader streaming record batches.
-    """
-    batches = iter_record_batches(rows, schema=schema, batch_size=batch_size)
-    return pa.RecordBatchReader.from_batches(schema, batches)
-
-
-def plan_from_rows(
-    rows: Iterable[Mapping[str, object]],
-    *,
-    schema: SchemaLike,
-    batch_size: int = 4096,
-    label: str = "",
-) -> Plan:
-    """Create a Plan from row mappings via a RecordBatchReader.
-
-    Returns
-    -------
-    Plan
-        Plan backed by a record batch reader.
-    """
-    reader = reader_from_rows(rows, schema=schema, batch_size=batch_size)
-    return Plan.from_reader(reader, label=label)
 
 
 def align_plan(
@@ -128,10 +54,6 @@ __all__ = [
     "align_plan",
     "align_table",
     "flatten_struct_field",
-    "iter_record_batches",
-    "plan_from_rows",
     "project_columns",
     "query_for_schema",
-    "reader_from_rows",
-    "rows_to_table",
 ]

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pyarrow as pa
 
 from arrowdsl.compute.udfs import ensure_expr_context_udf
@@ -72,9 +74,29 @@ def flag_to_bool_expr(expr: ComputeExpression) -> ComputeExpression:
     )
 
 
+def normalize_string_items(items: Sequence[object]) -> list[str | None]:
+    """Normalize a sequence of values into optional strings.
+
+    Returns
+    -------
+    list[str | None]
+        Normalized string values.
+    """
+    out: list[str | None] = []
+    for item in items:
+        if item is None:
+            out.append(None)
+        elif isinstance(item, str):
+            out.append(item)
+        else:
+            out.append(str(item))
+    return out
+
+
 __all__ = [
     "expr_context_expr",
     "expr_context_value",
     "flag_to_bool",
     "flag_to_bool_expr",
+    "normalize_string_items",
 ]

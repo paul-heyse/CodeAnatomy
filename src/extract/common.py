@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
+from pathlib import Path
 
 from arrowdsl.core.interop import TableLike
 from extract.file_context import FileContext, iter_file_contexts
@@ -33,11 +34,12 @@ def text_from_file_ctx(file_ctx: FileContext) -> str | None:
     """
     if file_ctx.text:
         return file_ctx.text
-    if file_ctx.data is None:
+    data = bytes_from_file_ctx(file_ctx)
+    if data is None:
         return None
     encoding = file_ctx.encoding or "utf-8"
     try:
-        return file_ctx.data.decode(encoding, errors="replace")
+        return data.decode(encoding, errors="replace")
     except UnicodeError:
         return None
 
@@ -52,10 +54,15 @@ def bytes_from_file_ctx(file_ctx: FileContext) -> bytes | None:
     """
     if file_ctx.data is not None:
         return file_ctx.data
-    if file_ctx.text is None:
-        return None
-    encoding = file_ctx.encoding or "utf-8"
-    return file_ctx.text.encode(encoding, errors="replace")
+    if file_ctx.text is not None:
+        encoding = file_ctx.encoding or "utf-8"
+        return file_ctx.text.encode(encoding, errors="replace")
+    if file_ctx.abs_path:
+        try:
+            return Path(file_ctx.abs_path).read_bytes()
+        except OSError:
+            return None
+    return None
 
 
 def iter_contexts(

@@ -53,9 +53,9 @@ def plan_from_rows(
 - `src/extract/tree_sitter_extract.py`
 
 ### Implementation checklist
-- [ ] Add canonical row/reader/plan helpers under ArrowDSL.
-- [ ] Replace `extract.tables` usages with ArrowDSL helpers.
-- [ ] Remove redundant row/reader helpers from `src/extract/tables.py`.
+- [x] Add canonical row/reader/plan helpers under ArrowDSL.
+- [x] Replace `extract.tables` usages with ArrowDSL helpers.
+- [x] Remove redundant row/reader helpers from `src/extract/tables.py`.
 
 ---
 
@@ -88,9 +88,9 @@ def scalar_expr(value: object, *, dtype: DataTypeLike) -> ComputeExpression:
 - `src/normalize/types.py`
 
 ### Implementation checklist
-- [ ] Add `null_expr`/`scalar_expr` helpers in ArrowDSL.
-- [ ] Replace repeated scalar cast blocks in CPG/normalize.
-- [ ] Remove duplicated inline scalar/null patterns where possible.
+- [x] Add `null_expr`/`scalar_expr` helpers in ArrowDSL.
+- [x] Replace repeated scalar cast blocks in CPG/normalize.
+- [x] Remove duplicated inline scalar/null patterns where possible.
 
 ---
 
@@ -122,9 +122,9 @@ def normalize_string_items(items: Sequence[object]) -> list[str | None]:
 - `src/extract/scip_extract.py`
 
 ### Implementation checklist
-- [ ] Add `normalize_string_items` to ArrowDSL transforms.
-- [ ] Replace `_normalize_string_items` in CST/SCIP extractors.
-- [ ] Remove local normalization helpers after migration.
+- [x] Add `normalize_string_items` to ArrowDSL transforms.
+- [x] Replace `_normalize_string_items` in CST/SCIP extractors.
+- [x] Remove local normalization helpers after migration.
 
 ---
 
@@ -162,9 +162,9 @@ def project_to_schema(
 - `src/cpg/catalog.py` (optional for derived plan normalization)
 
 ### Implementation checklist
-- [ ] Add `project_to_schema` helper to ArrowDSL plan helpers.
-- [ ] Replace local `_ensure_output_columns`/manual projections in normalize.
-- [ ] Remove redundant helpers after migration.
+- [x] Add `project_to_schema` helper to ArrowDSL plan helpers.
+- [x] Replace local `_ensure_output_columns`/manual projections in normalize.
+- [x] Remove redundant helpers after migration.
 
 ---
 
@@ -197,9 +197,9 @@ def table_from_arrays(
 - `src/cpg/builders.py`
 
 ### Implementation checklist
-- [ ] Add schema-aligned `table_from_arrays` helper to ArrowDSL.
-- [ ] Replace local `pa.Table.from_arrays` usage with the helper.
-- [ ] Remove ad-hoc empty table builders where redundant.
+- [x] Add schema-aligned `table_from_arrays` helper to ArrowDSL.
+- [x] Replace local `pa.Table.from_arrays` usage with the helper.
+- [x] Remove ad-hoc empty table builders where redundant.
 
 ---
 
@@ -248,9 +248,9 @@ def struct_array_from_dicts(
 - `src/extract/runtime_inspect_extract.py` (map field construction)
 
 ### Implementation checklist
-- [ ] Add list_view/map/struct array constructors to ArrowDSL.
-- [ ] Replace manual list_view/map handling in extractors.
-- [ ] Ensure dtype selection is centralized in ArrowDSL helpers.
+- [x] Add list_view/map/struct array constructors to ArrowDSL.
+- [x] Replace manual list_view/map handling in extractors.
+- [x] Ensure dtype selection is centralized in ArrowDSL helpers.
 
 ---
 
@@ -281,9 +281,9 @@ class PlanCatalog:
 - `src/normalize/*` (optional: normalize plans that derive from source catalogs)
 
 ### Implementation checklist
-- [ ] Introduce ArrowDSL plan/table catalog helpers.
-- [ ] Migrate `cpg.catalog` to reuse ArrowDSL catalog utilities.
-- [ ] Adopt in normalize where plan caching is needed.
+- [x] Introduce ArrowDSL plan/table catalog helpers.
+- [x] Migrate `cpg.catalog` to reuse ArrowDSL catalog utilities.
+- [x] Adopt in normalize where plan caching is needed.
 
 ---
 
@@ -320,9 +320,9 @@ def hash_spec(
 - `src/cpg/hash_specs.py`
 
 ### Implementation checklist
-- [ ] Add a HashSpec factory/registry in ArrowDSL.
-- [ ] Update hash spec modules to use the factory for consistency.
-- [ ] Remove duplicated HashSpec boilerplate.
+- [x] Add a HashSpec factory/registry in ArrowDSL.
+- [x] Update hash spec modules to use the factory for consistency.
+- [x] Remove duplicated HashSpec boilerplate.
 
 ---
 
@@ -355,9 +355,9 @@ def update_field_metadata(
 - `src/normalize/schema_infer.py` (optional for metadata repairs)
 
 ### Implementation checklist
-- [ ] Add metadata update helpers that follow Arrow immutability rules.
-- [ ] Use the helper where metadata updates are currently manual or ad-hoc.
-- [ ] Ensure schema equality checks include metadata where required.
+- [x] Add metadata update helpers that follow Arrow immutability rules.
+- [x] Use the helper where metadata updates are currently manual or ad-hoc.
+- [x] Ensure schema equality checks include metadata where required.
 
 ---
 
@@ -381,6 +381,6 @@ def flatten_struct_field(field: pa.Field) -> list[pa.Field]:
 - `src/extract/scip_extract.py`
 
 ### Implementation checklist
-- [ ] Add `flatten_struct_field` helper under ArrowDSL schema utilities.
-- [ ] Replace local flatten usages in extractors.
-- [ ] Remove redundant flatten helpers after migration.
+- [x] Add `flatten_struct_field` helper under ArrowDSL schema utilities.
+- [x] Replace local flatten usages in extractors.
+- [x] Remove redundant flatten helpers after migration.

@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import cast
 
 import pyarrow as pa
+import pyarrow.dataset as ds
 
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, OrderingLevel
 from arrowdsl.core.interop import (
@@ -17,7 +18,7 @@ from arrowdsl.core.interop import (
 from arrowdsl.finalize.finalize import Contract
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.runner import run_plan
-from arrowdsl.plan.source import DatasetSource, plan_from_dataset, plan_from_source
+from arrowdsl.plan.source import DatasetSource, PlanSource, plan_from_dataset, plan_from_source
 from arrowdsl.plan_helpers import encode_plan as plan_encode_plan
 from arrowdsl.plan_helpers import encoding_columns_from_metadata
 from arrowdsl.schema.schema import (
@@ -29,7 +30,7 @@ from arrowdsl.schema.unify import unify_schemas
 
 
 def ensure_plan(
-    source: Plan | TableLike | DatasetSource,
+    source: PlanSource,
     *,
     label: str = "",
     ctx: ExecutionContext | None = None,
@@ -48,12 +49,15 @@ def ensure_plan(
     """
     if isinstance(source, Plan):
         return source
-    if isinstance(source, DatasetSource):
-        if ctx is None:
+    if ctx is None:
+        if isinstance(source, (DatasetSource, ds.Dataset, ds.Scanner)):
             msg = "ensure_plan requires ctx when source is DatasetSource."
             raise ValueError(msg)
-        return plan_from_source(source, ctx=ctx, label=label)
-    return Plan.table_source(source, label=label)
+        if isinstance(source, pa.RecordBatchReader):
+            reader = cast("pa.RecordBatchReader", source)
+            return Plan.table_source(reader.read_all(), label=label)
+        return Plan.table_source(cast("TableLike", source), label=label)
+    return plan_from_source(source, ctx=ctx, label=label)
 
 
 def empty_plan(schema: SchemaLike, *, label: str = "") -> Plan:

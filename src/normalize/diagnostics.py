@@ -14,6 +14,7 @@ from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan_helpers import column_or_null_expr
 from arrowdsl.schema.columns import column_or_null
 from arrowdsl.schema.nested import StructLargeListViewAccumulator
+from arrowdsl.schema.tables import table_from_arrays
 from normalize.runner import (
     PostFn,
     ensure_canonical,
@@ -58,8 +59,8 @@ _DIAG_BASE_SCHEMA = pa.schema(
 
 
 def _empty_diag_base_table() -> TableLike:
-    arrays = [pa.array([], type=field.type) for field in _DIAG_BASE_SCHEMA]
-    return pa.Table.from_arrays(arrays, schema=_DIAG_BASE_SCHEMA)
+    columns = {field.name: pa.array([], type=field.type) for field in _DIAG_BASE_SCHEMA}
+    return table_from_arrays(_DIAG_BASE_SCHEMA, columns=columns, num_rows=0)
 
 
 @dataclass(frozen=True)
@@ -258,20 +259,18 @@ def _cst_parse_error_table(
     message_arr = pa.array(buffers.messages, type=pa.string())
     severity_arr = pa.array(buffers.severities, type=pa.string())
     details = buffers.details_array()
-    return pa.Table.from_arrays(
-        [
-            pa.array(buffers.file_ids, type=pa.string()),
-            path_arr,
-            bstart_arr,
-            bend_arr,
-            severity_arr,
-            message_arr,
-            source_arr,
-            pa.array(buffers.codes, type=pa.string()),
-            details,
-        ],
-        schema=_DIAG_BASE_SCHEMA,
-    )
+    columns = {
+        "file_id": pa.array(buffers.file_ids, type=pa.string()),
+        "path": path_arr,
+        "bstart": bstart_arr,
+        "bend": bend_arr,
+        "severity": severity_arr,
+        "message": message_arr,
+        "source": source_arr,
+        "code": pa.array(buffers.codes, type=pa.string()),
+        "details": details,
+    }
+    return table_from_arrays(_DIAG_BASE_SCHEMA, columns=columns, num_rows=len(buffers.paths))
 
 
 def _scip_severity(value: object | None) -> str:
@@ -337,20 +336,18 @@ def _scip_diag_table(
     message_arr = pa.array(buffers.messages, type=pa.string())
     severity_arr = pa.array(buffers.severities, type=pa.string())
     details = buffers.details_array()
-    return pa.Table.from_arrays(
-        [
-            pa.array(buffers.file_ids, type=pa.string()),
-            path_arr,
-            bstart_arr,
-            bend_arr,
-            severity_arr,
-            message_arr,
-            source_arr,
-            pa.array(buffers.codes, type=pa.string()),
-            details,
-        ],
-        schema=_DIAG_BASE_SCHEMA,
-    )
+    columns = {
+        "file_id": pa.array(buffers.file_ids, type=pa.string()),
+        "path": path_arr,
+        "bstart": bstart_arr,
+        "bend": bend_arr,
+        "severity": severity_arr,
+        "message": message_arr,
+        "source": source_arr,
+        "code": pa.array(buffers.codes, type=pa.string()),
+        "details": details,
+    }
+    return table_from_arrays(_DIAG_BASE_SCHEMA, columns=columns, num_rows=len(buffers.paths))
 
 
 def _scip_doc_encodings(scip_documents: TableLike | None) -> dict[str, int]:
@@ -470,6 +467,22 @@ def _diagnostics_plan(
 
     unioned = union_all_plans(plans, label="diagnostics")
     return DIAG_QUERY.apply_to_plan(unioned, ctx=ctx)
+
+
+def diagnostics_plan(
+    repo_text_index: RepoTextIndex,
+    *,
+    sources: DiagnosticsSources,
+    ctx: ExecutionContext,
+) -> Plan:
+    """Build a plan-lane normalized diagnostics table.
+
+    Returns
+    -------
+    Plan
+        Plan producing normalized diagnostics rows.
+    """
+    return _diagnostics_plan(repo_text_index, sources=sources, ctx=ctx)
 
 
 def diagnostics_post_step(

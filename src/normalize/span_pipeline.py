@@ -8,6 +8,7 @@ import pyarrow as pa
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.arrays import ColumnDefaultsSpec, ConstExpr, FieldExpr, set_or_append_column
+from arrowdsl.schema.tables import table_from_arrays
 from normalize.schemas import SPAN_ERROR_SCHEMA
 
 
@@ -76,14 +77,8 @@ def span_error_table(rows: list[dict[str, str]]) -> TableLike:
     """
     if rows:
         return pa.Table.from_pylist(rows, schema=SPAN_ERROR_SCHEMA)
-    return pa.Table.from_arrays(
-        [
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-        ],
-        names=SPAN_ERROR_SCHEMA.names,
-    )
+    columns = {field.name: pa.array([], type=field.type) for field in SPAN_ERROR_SCHEMA}
+    return table_from_arrays(SPAN_ERROR_SCHEMA, columns=columns, num_rows=0)
 
 
 __all__ = [

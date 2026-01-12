@@ -7,14 +7,14 @@ from collections.abc import Sequence
 import pyarrow as pa
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, pc
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.joins import join_plan
 from arrowdsl.plan.ops import JoinSpec
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan_helpers import column_or_null_expr
+from arrowdsl.plan_helpers import column_or_null_expr, project_to_schema
 from normalize.contracts import CFG_BLOCKS_CONTRACT, CFG_EDGES_CONTRACT
-from normalize.plan_helpers import PlanSource, plan_source, project_columns
+from normalize.plan_helpers import PlanSource, plan_source
 from normalize.runner import (
     ensure_canonical,
     ensure_execution_context,
@@ -44,15 +44,6 @@ def _to_plan(
     columns: Sequence[str] | None = None,
 ) -> Plan:
     return plan_source(source, ctx=ctx, columns=columns)
-
-
-def _ensure_output_columns(plan: Plan, *, schema: pa.Schema, ctx: ExecutionContext) -> Plan:
-    available = list(plan.schema(ctx=ctx).names)
-    missing = [name for name in schema.names if name not in available]
-    if not missing:
-        return plan
-    extras = [(pc.scalar(pa.scalar(None, type=schema.field(name).type)), name) for name in missing]
-    return project_columns(plan, base=available, extras=extras, ctx=ctx)
 
 
 def _code_unit_meta_plan(code_units: PlanSource, *, ctx: ExecutionContext) -> Plan:
@@ -100,7 +91,12 @@ def cfg_blocks_plan(
     else:
         joined = blocks
 
-    joined = _ensure_output_columns(joined, schema=CFG_BLOCKS_NORM_SCHEMA, ctx=ctx)
+    joined = project_to_schema(
+        joined,
+        schema=CFG_BLOCKS_NORM_SCHEMA,
+        ctx=ctx,
+        keep_extra_columns=True,
+    )
     return CFG_BLOCKS_QUERY.apply_to_plan(joined, ctx=ctx)
 
 
@@ -141,7 +137,12 @@ def cfg_edges_plan(
     else:
         joined = edges
 
-    joined = _ensure_output_columns(joined, schema=CFG_EDGES_NORM_SCHEMA, ctx=ctx)
+    joined = project_to_schema(
+        joined,
+        schema=CFG_EDGES_NORM_SCHEMA,
+        ctx=ctx,
+        keep_extra_columns=True,
+    )
     return CFG_EDGES_QUERY.apply_to_plan(joined, ctx=ctx)
 
 

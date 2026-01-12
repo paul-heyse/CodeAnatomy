@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
-from arrowdsl.core.ids import HashSpec
+from arrowdsl.core.ids_registry import hash_spec
 
-EDGE_ID_BASE = HashSpec(
+if TYPE_CHECKING:
+    from arrowdsl.core.ids import HashSpec
+
+EDGE_ID_BASE = hash_spec(
     prefix="edge",
     cols=("src", "dst"),
-    extra_literals=(),
-    as_string=True,
 )
-EDGE_ID_SPAN = HashSpec(
+EDGE_ID_SPAN = hash_spec(
     prefix="edge",
     cols=("src", "dst", "path", "bstart", "bend"),
-    extra_literals=(),
-    as_string=True,
 )
 
 

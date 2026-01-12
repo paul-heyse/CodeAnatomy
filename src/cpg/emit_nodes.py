@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pyarrow as pa
 
+from arrowdsl.compute.scalars import scalar_expr
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import ensure_expression, pc
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan_helpers import coalesce_expr
 from cpg.specs import NodeEmitSpec
@@ -61,7 +61,7 @@ def emit_node_plan(
         safe=False,
     )
 
-    node_kind = ensure_expression(pc.cast(pc.scalar(spec.node_kind.value), pa.string(), safe=False))
+    node_kind = scalar_expr(spec.node_kind.value, dtype=pa.string())
     exprs = [
         node_id,
         node_kind,

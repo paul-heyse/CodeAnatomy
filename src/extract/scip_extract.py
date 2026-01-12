@@ -14,6 +14,7 @@ from typing import Literal, overload
 
 import pyarrow as pa
 
+from arrowdsl.compute.transforms import normalize_string_items
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
 from arrowdsl.core.ids import prefixed_hash_id
 from arrowdsl.core.interop import (
@@ -26,11 +27,13 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
+from arrowdsl.plan.rows import plan_from_rows
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.plan_helpers import encoding_columns_from_metadata, encoding_projection
-from arrowdsl.schema.arrays import build_struct, set_or_append_column
-from arrowdsl.schema.nested import LargeListAccumulator, StructLargeListViewAccumulator
+from arrowdsl.schema.arrays import set_or_append_column, struct_array_from_dicts
+from arrowdsl.schema.nested import LargeListAccumulator
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
+from arrowdsl.schema.tables import table_from_arrays
 from arrowdsl.schema.unify import unify_tables
 from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
@@ -42,7 +45,7 @@ from extract.spec_helpers import (
     ordering_metadata_spec,
     register_dataset,
 )
-from extract.tables import align_plan, flatten_struct_field, plan_from_rows
+from extract.tables import align_plan
 from schema_spec.specs import ArrowFieldSpec, NestedFieldSpec, scip_range_bundle
 
 SCHEMA_VERSION = 1
@@ -114,10 +117,49 @@ SCIP_SIGNATURE_DOCUMENTATION_TYPE = pa.struct(
     ]
 )
 
-_SIG_DOC_OCCURRENCE_FIELDS = flatten_struct_field(
-    pa.field("occurrence", SCIP_SIGNATURE_OCCURRENCE_TYPE)
-)
-SIG_DOC_OCCURRENCE_KEYS = tuple(field.name.split(".", 1)[1] for field in _SIG_DOC_OCCURRENCE_FIELDS)
+SIG_DOC_OCCURRENCE_KEYS = ("symbol", "symbol_roles", "range")
+
+
+def _signature_doc_occurrence_rows(sig_doc: object) -> list[dict[str, object]]:
+    occurrences = getattr(sig_doc, "occurrences", None)
+    if occurrences is None:
+        occurrences = []
+    rows: list[dict[str, object]] = []
+    for occ in occurrences:
+        range_values: list[int] = []
+        for value in getattr(occ, "range", []) or []:
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
+                range_values.append(int(value))
+        rows.append(
+            dict(
+                zip(
+                    SIG_DOC_OCCURRENCE_KEYS,
+                    (
+                        getattr(occ, "symbol", None),
+                        int(getattr(occ, "symbol_roles", 0) or 0),
+                        range_values,
+                    ),
+                    strict=True,
+                )
+            )
+        )
+    return rows
+
+
+def _signature_doc_entry(sig_doc: object | None) -> dict[str, object] | None:
+    if sig_doc is None:
+        return None
+    text = getattr(sig_doc, "text", None)
+    if text is not None and not isinstance(text, str):
+        text = str(text)
+    language = getattr(sig_doc, "language", None)
+    return {
+        "text": text,
+        "language": str(language) if language is not None else None,
+        "occurrences": _signature_doc_occurrence_rows(sig_doc),
+    }
 
 ENCODING_META = {"encoding": "dictionary"}
 
@@ -467,18 +509,6 @@ def _normalize_range(rng: Sequence[int]) -> tuple[int, int, int, int, int] | Non
     return None
 
 
-def _normalize_string_items(items: Sequence[object]) -> list[str | None]:
-    out: list[str | None] = []
-    for item in items:
-        if item is None:
-            out.append(None)
-        elif isinstance(item, str):
-            out.append(item)
-        else:
-            out.append(str(item))
-    return out
-
-
 def _string_list_accumulator() -> LargeListAccumulator[str | None]:
     return LargeListAccumulator()
 
@@ -737,15 +767,13 @@ class _DocAccumulator:
         )
 
     def to_table(self) -> TableLike:
-        return pa.Table.from_arrays(
-            [
-                _array(self.document_ids, pa.string()),
-                _array(self.paths, pa.string()),
-                _array(self.languages, pa.string()),
-                _array(self.position_encodings, pa.string()),
-            ],
-            schema=SCIP_DOCUMENTS_SCHEMA,
-        )
+        columns = {
+            "document_id": _array(self.document_ids, pa.string()),
+            "path": _array(self.paths, pa.string()),
+            "language": _array(self.languages, pa.string()),
+            "position_encoding": _array(self.position_encodings, pa.string()),
+        }
+        return table_from_arrays(SCIP_DOCUMENTS_SCHEMA, columns=columns, num_rows=len(self.paths))
 
 
 @dataclass
@@ -756,7 +784,9 @@ class _OccurrenceAccumulator:
     symbols: list[str | None] = field(default_factory=list)
     symbol_roles: list[int] = field(default_factory=list)
     syntax_kind: list[str | None] = field(default_factory=list)
-    override_docs: LargeListAccumulator[str | None] = field(default_factory=_string_list_accumulator)
+    override_docs: LargeListAccumulator[str | None] = field(
+        default_factory=_string_list_accumulator
+    )
     start_line: list[int | None] = field(default_factory=list)
     start_char: list[int | None] = field(default_factory=list)
     end_line: list[int | None] = field(default_factory=list)
@@ -800,7 +830,7 @@ class _OccurrenceAccumulator:
             else None
         )
         override_docs = getattr(occurrence, "override_documentation", []) or []
-        self.override_docs.append(_normalize_string_items(override_docs))
+        self.override_docs.append(normalize_string_items(override_docs))
         self.start_line.append(sl)
         self.start_char.append(sc)
         self.end_line.append(el)
@@ -815,27 +845,29 @@ class _OccurrenceAccumulator:
 
     def to_table(self) -> TableLike:
         override_doc = OVERRIDE_DOC_SPEC.builder(self)
-        return pa.Table.from_arrays(
-            [
-                _array(self.occurrence_ids, pa.string()),
-                _array(self.document_ids, pa.string()),
-                _array(self.paths, pa.string()),
-                _array(self.symbols, pa.string()),
-                _array(self.symbol_roles, pa.int32()),
-                _array(self.syntax_kind, pa.string()),
-                override_doc,
-                _array(self.start_line, pa.int32()),
-                _array(self.start_char, pa.int32()),
-                _array(self.end_line, pa.int32()),
-                _array(self.end_char, pa.int32()),
-                _array(self.range_len, pa.int32()),
-                _array(self.enc_start_line, pa.int32()),
-                _array(self.enc_start_char, pa.int32()),
-                _array(self.enc_end_line, pa.int32()),
-                _array(self.enc_end_char, pa.int32()),
-                _array(self.enc_range_len, pa.int32()),
-            ],
-            schema=SCIP_OCCURRENCES_SCHEMA,
+        columns = {
+            "occurrence_id": _array(self.occurrence_ids, pa.string()),
+            "document_id": _array(self.document_ids, pa.string()),
+            "path": _array(self.paths, pa.string()),
+            "symbol": _array(self.symbols, pa.string()),
+            "symbol_roles": _array(self.symbol_roles, pa.int32()),
+            "syntax_kind": _array(self.syntax_kind, pa.string()),
+            "override_documentation": override_doc,
+            "start_line": _array(self.start_line, pa.int32()),
+            "start_char": _array(self.start_char, pa.int32()),
+            "end_line": _array(self.end_line, pa.int32()),
+            "end_char": _array(self.end_char, pa.int32()),
+            "range_len": _array(self.range_len, pa.int32()),
+            "enc_start_line": _array(self.enc_start_line, pa.int32()),
+            "enc_start_char": _array(self.enc_start_char, pa.int32()),
+            "enc_end_line": _array(self.enc_end_line, pa.int32()),
+            "enc_end_char": _array(self.enc_end_char, pa.int32()),
+            "enc_range_len": _array(self.enc_range_len, pa.int32()),
+        }
+        return table_from_arrays(
+            SCIP_OCCURRENCES_SCHEMA,
+            columns=columns,
+            num_rows=len(self.paths),
         )
 
 
@@ -893,7 +925,7 @@ class _DiagnosticAccumulator:
         tags = getattr(diag, "tags", []) if hasattr(diag, "tags") else []
         if tags is None:
             tags = []
-        self.tags.append(_normalize_string_items(tags))
+        self.tags.append(normalize_string_items(tags))
         self.start_line.append(dsl)
         self.start_char.append(dsc)
         self.end_line.append(del_)
@@ -901,22 +933,24 @@ class _DiagnosticAccumulator:
 
     def to_table(self) -> TableLike:
         tags = DIAG_TAGS_SPEC.builder(self)
-        return pa.Table.from_arrays(
-            [
-                _array(self.diagnostic_ids, pa.string()),
-                _array(self.document_ids, pa.string()),
-                _array(self.paths, pa.string()),
-                _array(self.severity, pa.string()),
-                _array(self.code, pa.string()),
-                _array(self.message, pa.string()),
-                _array(self.source, pa.string()),
-                tags,
-                _array(self.start_line, pa.int32()),
-                _array(self.start_char, pa.int32()),
-                _array(self.end_line, pa.int32()),
-                _array(self.end_char, pa.int32()),
-            ],
-            schema=SCIP_DIAGNOSTICS_SCHEMA,
+        columns = {
+            "diagnostic_id": _array(self.diagnostic_ids, pa.string()),
+            "document_id": _array(self.document_ids, pa.string()),
+            "path": _array(self.paths, pa.string()),
+            "severity": _array(self.severity, pa.string()),
+            "code": _array(self.code, pa.string()),
+            "message": _array(self.message, pa.string()),
+            "source": _array(self.source, pa.string()),
+            "tags": tags,
+            "start_line": _array(self.start_line, pa.int32()),
+            "start_char": _array(self.start_char, pa.int32()),
+            "end_line": _array(self.end_line, pa.int32()),
+            "end_char": _array(self.end_char, pa.int32()),
+        }
+        return table_from_arrays(
+            SCIP_DIAGNOSTICS_SCHEMA,
+            columns=columns,
+            num_rows=len(self.paths),
         )
 
 
@@ -931,10 +965,6 @@ DIAG_TAGS_SPEC = NestedFieldSpec(
 )
 
 
-def _sig_doc_occurrence_accumulator() -> StructLargeListViewAccumulator:
-    return StructLargeListViewAccumulator.with_fields(("symbol", "symbol_roles", "range"))
-
-
 @dataclass
 class _SymbolInfoAccumulator:
     symbol_info_ids: list[str | None] = field(default_factory=list)
@@ -942,13 +972,10 @@ class _SymbolInfoAccumulator:
     display_names: list[str | None] = field(default_factory=list)
     kinds: list[str | None] = field(default_factory=list)
     enclosing_symbols: list[str | None] = field(default_factory=list)
-    documentation: LargeListAccumulator[str | None] = field(default_factory=_string_list_accumulator)
-    sig_doc_texts: list[str | None] = field(default_factory=list)
-    sig_doc_languages: list[str | None] = field(default_factory=list)
-    sig_doc_is_null: list[bool] = field(default_factory=list)
-    sig_doc_occurrences: StructLargeListViewAccumulator = field(
-        default_factory=_sig_doc_occurrence_accumulator
+    documentation: LargeListAccumulator[str | None] = field(
+        default_factory=_string_list_accumulator
     )
+    sig_doc_entries: list[dict[str, object] | None] = field(default_factory=list)
 
     def append(self, symbol_info: object) -> None:
         self.symbol_info_ids.append(None)
@@ -964,103 +991,37 @@ class _SymbolInfoAccumulator:
         )
         self._append_documentation(symbol_info)
         sig_doc = getattr(symbol_info, "signature_documentation", None)
-        self._append_signature_documentation(sig_doc)
+        self.sig_doc_entries.append(_signature_doc_entry(sig_doc))
 
     def _append_documentation(self, symbol_info: object) -> None:
         docs = getattr(symbol_info, "documentation", None)
         if not hasattr(symbol_info, "documentation") or docs is None:
             docs = []
-        self.documentation.append(_normalize_string_items(docs))
-
-    def _append_signature_documentation(self, sig_doc: object | None) -> None:
-        if sig_doc is None:
-            self._append_empty_signature_documentation()
-            return
-        self._append_signature_doc_fields(sig_doc)
-        self._append_signature_doc_occurrences(sig_doc)
-
-    def _append_empty_signature_documentation(self) -> None:
-        self.sig_doc_texts.append(None)
-        self.sig_doc_languages.append(None)
-        self.sig_doc_is_null.append(True)
-        self.sig_doc_occurrences.append_rows([])
-
-    def _append_signature_doc_fields(self, sig_doc: object) -> None:
-        text = getattr(sig_doc, "text", None)
-        if text is None or isinstance(text, str):
-            self.sig_doc_texts.append(text)
-        else:
-            self.sig_doc_texts.append(str(text))
-        language = getattr(sig_doc, "language", None)
-        self.sig_doc_languages.append(str(language) if language is not None else None)
-        self.sig_doc_is_null.append(False)
-
-    def _append_signature_doc_occurrences(self, sig_doc: object) -> None:
-        occurrences = getattr(sig_doc, "occurrences", None)
-        if occurrences is None:
-            occurrences = []
-        rows: list[dict[str, object]] = []
-        for occ in occurrences:
-            range_values: list[int] = []
-            for value in getattr(occ, "range", []) or []:
-                if isinstance(value, bool):
-                    continue
-                if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
-                    range_values.append(int(value))
-            rows.append(
-                dict(
-                    zip(
-                        SIG_DOC_OCCURRENCE_KEYS,
-                        (
-                            getattr(occ, "symbol", None),
-                            int(getattr(occ, "symbol_roles", 0) or 0),
-                            range_values,
-                        ),
-                        strict=True,
-                    )
-                )
-            )
-        self.sig_doc_occurrences.append_rows(rows)
+        self.documentation.append(normalize_string_items(docs))
 
     def to_table(self, *, schema: SchemaLike) -> TableLike:
         documentation = SYMBOL_DOC_SPEC.builder(self)
         sig_doc = SIG_DOC_SPEC.builder(self)
-        return pa.Table.from_arrays(
-            [
-                _array(self.symbol_info_ids, pa.string()),
-                _array(self.symbols, pa.string()),
-                _array(self.display_names, pa.string()),
-                _array(self.kinds, pa.string()),
-                _array(self.enclosing_symbols, pa.string()),
-                documentation,
-                sig_doc,
-            ],
-            schema=schema,
-        )
+        columns = {
+            "symbol_info_id": _array(self.symbol_info_ids, pa.string()),
+            "symbol": _array(self.symbols, pa.string()),
+            "display_name": _array(self.display_names, pa.string()),
+            "kind": _array(self.kinds, pa.string()),
+            "enclosing_symbol": _array(self.enclosing_symbols, pa.string()),
+            "documentation": documentation,
+            "signature_documentation": sig_doc,
+        }
+        return table_from_arrays(schema, columns=columns, num_rows=len(self.symbols))
 
 
 def _build_symbol_docs(acc: _SymbolInfoAccumulator) -> ArrayLike:
     return acc.documentation.build(value_type=pa.string())
 
 
-def _build_sig_doc_occurrences(acc: _SymbolInfoAccumulator) -> ArrayLike:
-    return acc.sig_doc_occurrences.build(
-        field_types={
-            "symbol": pa.string(),
-            "symbol_roles": pa.int32(),
-            "range": pa.list_(pa.int32()),
-        }
-    )
-
-
 def _build_signature_doc(acc: _SymbolInfoAccumulator) -> ArrayLike:
-    return build_struct(
-        {
-            "text": pa.array(acc.sig_doc_texts, type=pa.string()),
-            "language": pa.array(acc.sig_doc_languages, type=pa.string()),
-            "occurrences": SIG_DOC_OCCURRENCES_SPEC.builder(acc),
-        },
-        mask=pa.array(acc.sig_doc_is_null, type=pa.bool_()),
+    return struct_array_from_dicts(
+        acc.sig_doc_entries,
+        struct_type=SCIP_SIGNATURE_DOCUMENTATION_TYPE,
     )
 
 
@@ -1068,12 +1029,6 @@ SYMBOL_DOC_SPEC = NestedFieldSpec(
     name="documentation",
     dtype=pa.large_list(pa.string()),
     builder=_build_symbol_docs,
-)
-
-SIG_DOC_OCCURRENCES_SPEC = NestedFieldSpec(
-    name="occurrences",
-    dtype=pa.large_list_view(SCIP_SIGNATURE_OCCURRENCE_TYPE),
-    builder=_build_sig_doc_occurrences,
 )
 
 SIG_DOC_SPEC = NestedFieldSpec(
@@ -1106,17 +1061,19 @@ class _RelationshipAccumulator:
         self.is_definition.append(bool(getattr(relationship, "is_definition", False)))
 
     def to_table(self) -> TableLike:
-        return pa.Table.from_arrays(
-            [
-                _array(self.relationship_ids, pa.string()),
-                _array(self.symbols, pa.string()),
-                _array(self.related_symbols, pa.string()),
-                _array(self.is_reference, pa.bool_()),
-                _array(self.is_implementation, pa.bool_()),
-                _array(self.is_type_definition, pa.bool_()),
-                _array(self.is_definition, pa.bool_()),
-            ],
-            schema=SCIP_SYMBOL_RELATIONSHIPS_SCHEMA,
+        columns = {
+            "relationship_id": _array(self.relationship_ids, pa.string()),
+            "symbol": _array(self.symbols, pa.string()),
+            "related_symbol": _array(self.related_symbols, pa.string()),
+            "is_reference": _array(self.is_reference, pa.bool_()),
+            "is_implementation": _array(self.is_implementation, pa.bool_()),
+            "is_type_definition": _array(self.is_type_definition, pa.bool_()),
+            "is_definition": _array(self.is_definition, pa.bool_()),
+        }
+        return table_from_arrays(
+            SCIP_SYMBOL_RELATIONSHIPS_SCHEMA,
+            columns=columns,
+            num_rows=len(self.symbols),
         )
 
 

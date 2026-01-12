@@ -11,6 +11,7 @@ import pyarrow as pa
 import pyarrow.types as patypes
 
 from arrowdsl.compute.predicates import null_if_empty_or_zero
+from arrowdsl.compute.scalars import null_expr, scalar_expr
 from arrowdsl.compute.transforms import (
     expr_context_expr,
     expr_context_value,
@@ -57,7 +58,7 @@ def _entity_id_expr(
         expr = null_if_empty_or_zero(expr)
         exprs.append(expr)
     if not exprs:
-        return ensure_expression(pc.cast(pc.scalar(None), pa.string(), safe=False))
+        return null_expr(pa.string())
     if len(exprs) == 1:
         return exprs[0]
     return ensure_expression(pc.coalesce(*exprs))
@@ -84,11 +85,11 @@ VALUE_STRUCT_FIELD = "value_struct"
 
 def _null_value_exprs() -> dict[str, ComputeExpression]:
     return {
-        "value_str": ensure_expression(pc.cast(pc.scalar(None), pa.string(), safe=False)),
-        "value_int": ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),
-        "value_float": ensure_expression(pc.cast(pc.scalar(None), pa.float64(), safe=False)),
-        "value_bool": ensure_expression(pc.cast(pc.scalar(None), pa.bool_(), safe=False)),
-        "value_json": ensure_expression(pc.cast(pc.scalar(None), pa.string(), safe=False)),
+        "value_str": null_expr(pa.string()),
+        "value_int": null_expr(pa.int64()),
+        "value_float": null_expr(pa.float64()),
+        "value_bool": null_expr(pa.bool_()),
+        "value_json": null_expr(pa.string()),
     }
 
 
@@ -97,7 +98,7 @@ def _json_literal_expr(value: object) -> ComputeExpression:
         encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
     except (TypeError, ValueError):
         encoded = json.dumps(str(value), ensure_ascii=False)
-    return ensure_expression(pc.cast(pc.scalar(encoded), pa.string(), safe=False))
+    return scalar_expr(encoded, dtype=pa.string())
 
 
 def _serialize_json_expr(
@@ -175,14 +176,12 @@ def _value_expr(
         if value_type == "json":
             expr = _json_literal_expr(field.literal)
         else:
-            expr = ensure_expression(
-                pc.cast(pc.scalar(field.literal), _value_dtype(value_type), safe=False)
-            )
+            expr = scalar_expr(field.literal, dtype=_value_dtype(value_type))
         return PropValueExpr(expr=expr, value_type=value_type)
 
     source_col = field.source_col
     if source_col is None or source_col not in available:
-        expr = ensure_expression(pc.cast(pc.scalar(None), _value_dtype(value_type), safe=False))
+        expr = null_expr(_value_dtype(value_type))
     else:
         expr = pc.field(source_col)
 
@@ -272,16 +271,14 @@ def prop_field_plan(
     value_struct = _value_struct_expr(value_exprs)
 
     exprs: list[ComputeExpression] = [
-        ensure_expression(pc.cast(pc.scalar(context.entity_kind), pa.string(), safe=False)),
+        scalar_expr(context.entity_kind, dtype=pa.string()),
         context.entity_id,
-        ensure_expression(pc.cast(pc.scalar(field.prop_key), pa.string(), safe=False)),
+        scalar_expr(field.prop_key, dtype=pa.string()),
         value_struct,
     ]
     names = ["entity_kind", "entity_id", "prop_key", VALUE_STRUCT_FIELD]
     if context.schema_version is not None:
-        exprs.append(
-            ensure_expression(pc.cast(pc.scalar(context.schema_version), pa.int32(), safe=False))
-        )
+        exprs.append(scalar_expr(context.schema_version, dtype=pa.int32()))
         names.append("schema_version")
     out = plan.project(exprs, names, ctx=context.ctx)
     if field.skip_if_none:

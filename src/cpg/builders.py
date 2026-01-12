@@ -24,6 +24,7 @@ from arrowdsl.core.interop import (
 from arrowdsl.plan.plan import PlanSpec
 from arrowdsl.schema.arrays import const_array
 from arrowdsl.schema.columns import table_from_schema
+from arrowdsl.schema.tables import table_from_arrays
 from cpg.catalog import PlanSource
 from cpg.defaults import fill_nulls_float, fill_nulls_string
 from cpg.kinds import EntityKind
@@ -206,10 +207,7 @@ def emit_edges_from_relation(
         Emitted edge table.
     """
     if rel.num_rows == 0:
-        return pa.Table.from_arrays(
-            [pa.array([], type=f.type) for f in edge_schema],
-            schema=edge_schema,
-        )
+        return table_from_arrays(edge_schema, columns={}, num_rows=0)
 
     n, columns = _edge_columns_from_relation(
         rel,
@@ -301,10 +299,7 @@ def emit_nodes_from_table(
         Node table conforming to the configured schema.
     """
     if table.num_rows == 0:
-        return pa.Table.from_arrays(
-            [pa.array([], type=f.type) for f in node_schema],
-            schema=node_schema,
-        )
+        return table_from_arrays(node_schema, columns={}, num_rows=0)
 
     n = table.num_rows
     node_id = _pick_first(table, spec.id_cols, default_type=pa.string())

@@ -42,9 +42,9 @@ REPO_FILE_ID_SPEC = HashSpec(prefix="repo_file", cols=("path",), as_string=True)
 - Update: `src/extract/repo_scan.py`
 
 **Integration checklist**
-- [ ] Add `HashSpec` constants for all extract ID columns.
-- [ ] Replace inline `HashSpec(...)` literals with registry imports.
-- [ ] Keep ID prefixes and column inputs unchanged.
+- [x] Add `HashSpec` constants for all extract ID columns.
+- [x] Replace inline `HashSpec(...)` literals with registry imports.
+- [x] Keep ID prefixes and column inputs unchanged.
 
 ---
 
@@ -96,9 +96,9 @@ class MaskedHashExprSpec:
 - Update: `src/extract/runtime_inspect_extract.py`
 
 **Integration checklist**
-- [ ] Add extract-local ExprSpec helpers for hash/masked hash/coalesce.
-- [ ] Use these helpers in `QuerySpec.derived` for ID columns.
-- [ ] Remove duplicate `apply_hash_projection` blocks where derived projections suffice.
+- [x] Add extract-local ExprSpec helpers for hash/masked hash/coalesce.
+- [x] Use these helpers in `QuerySpec.derived` for ID columns.
+- [x] Remove duplicate `apply_hash_projection` blocks where derived projections suffice.
 
 ---
 
@@ -135,9 +135,9 @@ def register_dataset(..., query_spec: QuerySpec | None = None,
 - Update: `src/extract/repo_scan.py`
 
 **Integration checklist**
-- [ ] Add optional `query_spec`/`contract_spec` params in `register_dataset`.
-- [ ] Define QuerySpec per dataset (use `query_for_schema` for simple cases).
-- [ ] Apply `apply_query_spec(...)` using dataset QuerySpec.
+- [x] Add optional `query_spec`/`contract_spec` params in `register_dataset`.
+- [x] Define QuerySpec per dataset (use `query_for_schema` for simple cases).
+- [x] Apply `apply_query_spec(...)` using dataset QuerySpec.
 
 ---
 
@@ -172,9 +172,9 @@ CALLSITES_QUERY = QuerySpec(
 - Update: `src/extract/repo_scan.py`
 
 **Integration checklist**
-- [ ] Add QuerySpec.derived entries for each ID column.
-- [ ] Remove manual `apply_hash_projection` calls after projection.
-- [ ] Keep masking semantics for nullable ID inputs.
+- [x] Add QuerySpec.derived entries for each ID column.
+- [x] Remove manual `apply_hash_projection` calls after projection.
+- [x] Keep masking semantics for nullable ID inputs.
 
 ---
 
@@ -207,9 +207,9 @@ plan = plan.project(exprs, names, ctx=ctx)
 - Update: `src/extract/spec_helpers.py` (ensure ArrowFieldSpec metadata is propagated)
 
 **Integration checklist**
-- [ ] Add field metadata for dictionary-encoded columns in SCIP specs.
-- [ ] Replace hard-coded encode lists with metadata-driven selection.
-- [ ] Preserve existing encoding behavior when metadata is absent.
+- [x] Add field metadata for dictionary-encoded columns in SCIP specs.
+- [x] Replace hard-coded encode lists with metadata-driven selection.
+- [x] Preserve existing encoding behavior when metadata is absent.
 
 ---
 
@@ -241,9 +241,9 @@ def apply_query_spec(plan: Plan, *, spec: QuerySpec, ctx: ExecutionContext) -> P
 - Update: `src/normalize/plan_helpers.py` (import shared helpers)
 
 **Integration checklist**
-- [ ] Move shared helper implementations to `arrowdsl`.
-- [ ] Keep extract/normalize wrappers as thin re-exports (if desired).
-- [ ] Remove duplicate helper implementations to avoid drift.
+- [x] Move shared helper implementations to `arrowdsl`.
+- [x] Keep extract/normalize wrappers as thin re-exports (if desired).
+- [x] Remove duplicate helper implementations to avoid drift.
 
 ---
 
@@ -270,9 +270,9 @@ arr = pa.LargeListArray.from_arrays(offsets, values)
 - Update: `src/extract/scip_extract.py`
 
 **Integration checklist**
-- [ ] Identify list columns with potential 32-bit overflow risk.
-- [ ] Update schema definitions to `pa.large_list(...)` where needed.
-- [ ] Extend list accumulators to build `LargeListArray` with int64 offsets.
+- [x] Identify list columns with potential 32-bit overflow risk.
+- [x] Update schema definitions to `pa.large_list(...)` where needed.
+- [x] Extend list accumulators to build `LargeListArray` with int64 offsets.
 
 ---
 
@@ -297,9 +297,9 @@ arr = pa.ListViewArray.from_arrays(offsets, sizes, values)
 - Update: `src/extract/symtable_extract.py`
 
 **Integration checklist**
-- [ ] Add list_view builders for cases with shared value buffers.
-- [ ] Prefer list_view when slicing is frequent or reuses shared buffers.
-- [ ] Keep list_ fallback for smaller, simple list columns.
+- [x] Add list_view builders for cases with shared value buffers.
+- [x] Prefer list_view when slicing is frequent or reuses shared buffers.
+- [x] Keep list_ fallback for smaller, simple list columns.
 
 ---
 
@@ -324,9 +324,9 @@ arr = pa.array(data, type=meta_type)
 - Update: `src/extract/cst_extract.py` (optional metadata fields)
 
 **Integration checklist**
-- [ ] Identify dynamic metadata that would otherwise become sparse columns.
-- [ ] Add `map_` fields to schemas where appropriate.
-- [ ] Build MapArray with explicit type (avoid implicit inference).
+- [x] Identify dynamic metadata that would otherwise become sparse columns.
+- [x] Add `map_` fields to schemas where appropriate.
+- [x] Build MapArray with explicit type (avoid implicit inference).
 
 ---
 
@@ -355,9 +355,9 @@ table = table.cast(schema)
 - Update: `src/extract/repo_scan.py`
 
 **Integration checklist**
-- [ ] Add metadata_spec support in dataset registration helpers.
+- [x] Add metadata_spec support in dataset registration helpers.
 - [ ] Populate schema metadata with extractor name/version and options hash.
-- [ ] Ensure metadata is preserved through materialization and finalize.
+- [x] Ensure metadata is preserved through materialization and finalize.
 
 ---
 
@@ -380,7 +380,7 @@ def unify_tables(tables: Sequence[TableLike]) -> TableLike:
 - Update: `src/extract/runtime_inspect_extract.py`
 
 **Integration checklist**
-- [ ] Add unify+cast helper that preserves first-schema metadata.
+- [x] Add unify+cast helper that preserves first-schema metadata.
 - [ ] Use helper when concatenating extract fragments.
 - [ ] Avoid manual per-column alignment when unify is sufficient.
 
@@ -403,7 +403,7 @@ def flatten_struct_field(field: pa.Field) -> list[pa.Field]:
 - Update: `src/extract/scip_extract.py` (occurrences list<struct>)
 
 **Integration checklist**
-- [ ] Add flatten helper for struct/list<struct> fields.
+- [x] Add flatten helper for struct/list<struct> fields.
 - [ ] Use flattened fields when building projections or joins on nested data.
 - [ ] Keep base nested columns intact for downstream use.
 
@@ -432,8 +432,8 @@ if ctx.determinism.is_canonical():
 
 **Integration checklist**
 - [ ] Mark plan ordering effects explicitly (unordered after joins/aggregates).
-- [ ] Add canonical sort enforcement at finalize when required.
-- [ ] Keep non-canonical paths streaming-friendly where possible.
+- [x] Add canonical sort enforcement at finalize when required.
+- [x] Keep non-canonical paths streaming-friendly where possible.
 
 ---
 
@@ -480,9 +480,9 @@ return spec.to_table(ctx=ctx)
 - Update: `src/extract/spec_helpers.py`
 
 **Integration checklist**
-- [ ] Gate `prefer_reader` on pipeline breakers + determinism tier.
-- [ ] Persist pipeline breaker metadata on outputs for observability.
-- [ ] Keep behavior backward compatible for existing callers.
+- [x] Gate `prefer_reader` on pipeline breakers + determinism tier.
+- [x] Persist pipeline breaker metadata on outputs for observability.
+- [x] Keep behavior backward compatible for existing callers.
 
 ---
 
@@ -531,7 +531,7 @@ metadata_spec = SchemaMetadataSpec(
 - Update: `src/extract/runtime_inspect_extract.py`
 
 **Integration checklist**
-- [ ] Add ordering metadata to dataset registration.
+- [x] Add ordering metadata to dataset registration.
 - [ ] Declare explicit ordering keys when available.
 - [ ] Keep ordering metadata aligned with plan ordering effects.
 
@@ -556,9 +556,9 @@ def run_extract_plan(plan: Plan, *, ctx: ExecutionContext, prefer_reader: bool) 
 - Update: `src/extract/*_extract.py` (use helper)
 
 **Integration checklist**
-- [ ] Add a single plan runner in `extract.tables`.
-- [ ] Route all extract table helpers through it.
-- [ ] Ensure ordering + determinism policies are centralized.
+- [x] Add a single plan runner in `extract.tables`.
+- [x] Route all extract table helpers through it.
+- [x] Ensure ordering + determinism policies are centralized.
 
 ---
 
@@ -571,11 +571,11 @@ def run_extract_plan(plan: Plan, *, ctx: ExecutionContext, prefer_reader: bool) 
 - High-cardinality list columns use large_list where needed.
 - list_view helpers exist for buffer reuse without copies.
 - Dynamic metadata can be captured via map_ fields.
-- Extract outputs attach schema metadata at source.
-- Extract merges use metadata-aware schema unify helpers.
-- Struct/list<struct> flatten helpers are available for joins/projections.
-- Extract ordering metadata is explicit and canonical ordering is enforced when required.
-- Scan provenance options are used where applicable.
+- Extract outputs attach schema metadata at source (extractor metadata done; runtime options hash pending).
+- Extract merges use metadata-aware schema unify helpers (helper ready; call sites pending).
+- Struct/list<struct> flatten helpers are available for joins/projections (helper ready; usage pending).
+- Extract ordering metadata is explicit and canonical ordering is enforced when required (explicit keys pending).
+- Scan provenance options are used where applicable (pending wiring to scan helpers/metadata).
 - Pipeline breakers are recorded and streaming is gated appropriately.
-- Extract avoids plan-lane order_by/aggregate when possible.
+- Extract avoids plan-lane order_by/aggregate when possible (audit pending).
 - All changes preserve existing output schemas and IDs.

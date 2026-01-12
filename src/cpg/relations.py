@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import ComputeExpression, DataTypeLike, ensure_expression, pc
+from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
 from arrowdsl.plan.ops import JoinSpec
 from arrowdsl.plan.plan import Plan, hash_join
 from cpg.catalog import PlanCatalog, PlanRef
@@ -19,6 +19,7 @@ from cpg.kinds import (
     SCIP_ROLE_WRITE,
     EdgeKind,
 )
+from cpg.plan_exprs import bitmask_is_set_expr, column_or_null_expr
 from cpg.plan_helpers import set_or_append_column
 from cpg.specs import EdgeEmitSpec
 
@@ -50,17 +51,6 @@ class EdgeRelationSpec:
         if self.filter_fn is not None:
             rel = self.filter_fn(rel, ctx)
         return rel
-
-
-def _field_expr(
-    name: str,
-    *,
-    available: set[str],
-    dtype: DataTypeLike,
-) -> ComputeExpression:
-    if name in available:
-        return ensure_expression(pc.cast(pc.field(name), dtype, safe=False))
-    return ensure_expression(pc.cast(pc.scalar(None), dtype, safe=False))
 
 
 def _plan_relation(name: str) -> RelationBuilder:
@@ -171,13 +161,11 @@ def _symbol_role_filter(mask: int, *, must_set: bool) -> PlanFilter:
     def _filter(plan: Plan, ctx: ExecutionContext) -> Plan:
         available = set(plan.schema(ctx=ctx).names)
         if "symbol_roles" in available:
-            roles = pc.cast(pc.field("symbol_roles"), pa.int64(), safe=False)
+            hit = bitmask_is_set_expr(pc.field("symbol_roles"), mask=mask)
         else:
-            roles = pc.cast(pc.scalar(0), pa.int64(), safe=False)
-        hit = pc.not_equal(pc.bit_wise_and(roles, pa.scalar(mask)), pa.scalar(0))
-        hit = pc.fill_null(hit, fill_value=False)
+            hit = bitmask_is_set_expr(pc.scalar(0), mask=mask)
         if not must_set:
-            hit = pc.invert(hit)
+            hit = ensure_expression(pc.invert(hit))
         return plan.filter(ensure_expression(hit), ctx=ctx)
 
     return _filter
@@ -215,9 +203,9 @@ def diagnostic_relation(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | N
     if "diag_id" not in available:
         return None
 
-    severity = _field_expr("severity", available=available, dtype=pa.string())
+    severity = column_or_null_expr("severity", available=available, dtype=pa.string())
     score = _severity_score_expr(severity)
-    origin = _field_expr("diag_source", available=available, dtype=pa.string())
+    origin = column_or_null_expr("diag_source", available=available, dtype=pa.string())
     origin = ensure_expression(pc.coalesce(origin, pc.scalar("diagnostic")))
 
     diag = set_or_append_column(diag, name="origin", expr=origin, ctx=ctx)
@@ -242,8 +230,8 @@ def inferred_type_relation(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan 
         return None
     available = set(type_exprs_norm.schema(ctx=ctx).names)
     exprs = [
-        _field_expr("owner_def_id", available=available, dtype=pa.string()),
-        _field_expr("type_id", available=available, dtype=pa.string()),
+        column_or_null_expr("owner_def_id", available=available, dtype=pa.string()),
+        column_or_null_expr("type_id", available=available, dtype=pa.string()),
         ensure_expression(pc.cast(pc.scalar(None), pa.string(), safe=False)),
         ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),
         ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),
@@ -267,8 +255,8 @@ def runtime_relation(
         return None
     available = set(table.schema(ctx=ctx).names)
     exprs = [
-        _field_expr(src_col, available=available, dtype=pa.string()),
-        _field_expr(dst_col, available=available, dtype=pa.string()),
+        column_or_null_expr(src_col, available=available, dtype=pa.string()),
+        column_or_null_expr(dst_col, available=available, dtype=pa.string()),
         ensure_expression(pc.cast(pc.scalar(None), pa.string(), safe=False)),
         ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),
         ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),

@@ -14,11 +14,7 @@ from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.schema.arrays import build_struct_array
 from normalize.arrow_utils import column_or_null
 from normalize.plan_exprs import column_or_null_expr
-from normalize.plan_helpers import (
-    apply_query_spec,
-    encoding_columns_from_metadata,
-    encoding_projection,
-)
+from normalize.plan_helpers import apply_query_spec
 from normalize.runner import PostFn, ensure_canonical, ensure_execution_context, run_normalize
 from normalize.schemas import (
     DIAG_CONTRACT,
@@ -492,13 +488,7 @@ def _diagnostics_plan(
         plans.append(Plan.table_source(_empty_diag_base_table()))
 
     unioned = union_all_plans(plans, label="diagnostics")
-    plan = apply_query_spec(unioned, spec=DIAG_QUERY, ctx=ctx)
-    encode_cols = encoding_columns_from_metadata(DIAG_SPEC.schema())
-    exprs, names = encoding_projection(
-        encode_cols,
-        available=plan.schema(ctx=ctx).names,
-    )
-    return plan.project(exprs, names, ctx=ctx)
+    return apply_query_spec(unioned, spec=DIAG_QUERY, ctx=ctx)
 
 
 def diagnostics_post_step(

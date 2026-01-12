@@ -13,20 +13,20 @@ from typing import Literal, overload
 
 import pyarrow as pa
 
-from arrowdsl.core.context import ExecutionContext, RuntimeProfile
-from arrowdsl.core.ids import HashSpec
+from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.schema.schema import empty_table
 from core_types import PathLike, ensure_path
-from extract.hashing import apply_hash_projection
-from extract.spec_helpers import register_dataset
+from extract.hash_specs import repo_file_id_spec
+from extract.plan_exprs import HashExprSpec
+from extract.spec_helpers import DatasetRegistration, ordering_metadata_spec, register_dataset
 from extract.tables import (
     align_plan,
     apply_query_spec,
     finalize_plan,
     plan_from_rows,
-    query_for_schema,
 )
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
 
@@ -58,22 +58,58 @@ class RepoScanOptions:
     max_files: int | None = None
 
 
+REPO_FILES_FIELDS = [
+    ArrowFieldSpec(name="abs_path", dtype=pa.string()),
+    ArrowFieldSpec(name="size_bytes", dtype=pa.int64()),
+    ArrowFieldSpec(name="encoding", dtype=pa.string()),
+    ArrowFieldSpec(name="text", dtype=pa.string()),
+    ArrowFieldSpec(name="bytes", dtype=pa.binary()),
+]
+
+REPO_FILES_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *REPO_FILES_FIELDS)
+)
+
+_REPO_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=(("path", "ascending"),),
+    extra={
+        b"extractor_name": b"repo_scan",
+        b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
+    },
+)
+
+
+def repo_files_query(repo_id: str | None) -> QuerySpec:
+    """Return the QuerySpec for repo file scanning.
+
+    Returns
+    -------
+    QuerySpec
+        QuerySpec for repo file projection.
+    """
+    return QuerySpec(
+        projection=ProjectionSpec(
+            base=REPO_FILES_BASE_COLUMNS,
+            derived={"file_id": HashExprSpec(spec=repo_file_id_spec(repo_id))},
+        )
+    )
+
+
+REPO_FILES_QUERY = repo_files_query(None)
+
 REPO_FILES_SPEC = register_dataset(
     name="repo_files_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="abs_path", dtype=pa.string()),
-        ArrowFieldSpec(name="size_bytes", dtype=pa.int64()),
-        ArrowFieldSpec(name="encoding", dtype=pa.string()),
-        ArrowFieldSpec(name="text", dtype=pa.string()),
-        ArrowFieldSpec(name="bytes", dtype=pa.binary()),
-    ],
+    fields=REPO_FILES_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=REPO_FILES_QUERY,
+        metadata_spec=_REPO_METADATA,
+    ),
 )
 
-REPO_FILES_SCHEMA = REPO_FILES_SPEC.table_spec.to_arrow_schema()
-
-REPO_FILES_QUERY = query_for_schema(REPO_FILES_SCHEMA)
+REPO_FILES_SCHEMA = REPO_FILES_SPEC.schema()
 
 
 def _is_excluded_dir(rel_path: Path, exclude_dirs: Sequence[str]) -> bool:
@@ -270,22 +306,7 @@ def scan_repo_plan(
                 break
 
     plan = plan_from_rows(iter_rows(), schema=REPO_FILES_SCHEMA, label="repo_files")
-    extra = (options.repo_id,) if options.repo_id else ()
-    spec = HashSpec(
-        prefix="file",
-        cols=("path",),
-        as_string=True,
-        extra_literals=extra,
-        out_col="file_id",
-    )
-    plan = apply_hash_projection(
-        plan,
-        specs=(spec,),
-        available=REPO_FILES_SCHEMA.names,
-        required={"file_id": ("path",)},
-        ctx=ctx,
-    )
-    plan = apply_query_spec(plan, spec=REPO_FILES_QUERY, ctx=ctx)
+    plan = apply_query_spec(plan, spec=repo_files_query(options.repo_id), ctx=ctx)
     return align_plan(
         plan,
         schema=REPO_FILES_SCHEMA,

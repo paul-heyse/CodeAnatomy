@@ -5,13 +5,19 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
+import pyarrow as pa
+
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.interop import ComputeExpression, TableLike, ensure_expression, pc
 from arrowdsl.plan.plan import Plan
+from cpg.plan_exprs import bitmask_is_set_expr, coalesce_expr
+from cpg.plan_helpers import plan_from_dataset, set_or_append_column
+from cpg.role_flags import ROLE_FLAG_SPECS
+from cpg.sources import DatasetSource
 
 type TableGetter = Callable[[Mapping[str, TableLike]], TableLike | None]
 type TableDeriver = Callable[[TableCatalog, ExecutionContext], TableLike | None]
-type PlanSource = Plan | TableLike
+type PlanSource = Plan | TableLike | DatasetSource
 type PlanGetter = Callable[[Mapping[str, PlanSource]], PlanSource | None]
 type PlanDeriver = Callable[[PlanCatalog, ExecutionContext], PlanSource | None]
 
@@ -97,9 +103,11 @@ class PlanRef:
             Getter that looks up the plan source by name.
         """
 
-        def _get(tables: Mapping[str, PlanSource]) -> Plan | None:
+        def _get(tables: Mapping[str, PlanSource]) -> PlanSource | None:
             value = tables.get(self.name)
             if isinstance(value, Plan):
+                return value
+            if isinstance(value, DatasetSource):
                 return value
             if value is None:
                 return None
@@ -135,6 +143,10 @@ class PlanCatalog:
             existing = self.tables[ref.name]
             if isinstance(existing, Plan):
                 return existing
+            if isinstance(existing, DatasetSource):
+                plan = plan_from_dataset(existing.dataset, spec=existing.spec, ctx=ctx)
+                self.tables[ref.name] = plan
+                return plan
             plan = Plan.table_source(existing, label=ref.name)
             self.tables[ref.name] = plan
             return plan
@@ -143,7 +155,12 @@ class PlanCatalog:
         derived = ref.derive(self, ctx)
         if derived is None:
             return None
-        plan = derived if isinstance(derived, Plan) else Plan.table_source(derived, label=ref.name)
+        if isinstance(derived, Plan):
+            plan = derived
+        elif isinstance(derived, DatasetSource):
+            plan = plan_from_dataset(derived.dataset, spec=derived.spec, ctx=ctx)
+        else:
+            plan = Plan.table_source(derived, label=ref.name)
         self.tables[ref.name] = plan
         return plan
 
@@ -158,6 +175,61 @@ class PlanCatalog:
         return dict(self.tables)
 
 
+def derive_cst_defs_norm(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
+    """Derive a normalized CST definitions plan when available.
+
+    Returns
+    -------
+    Plan | None
+        Derived plan or ``None`` when unavailable.
+    """
+    defs = catalog.resolve(PlanRef("cst_defs"), ctx=ctx)
+    if defs is None:
+        return None
+    available = set(defs.schema(ctx=ctx).names)
+    expr = coalesce_expr(("def_kind", "kind"), dtype=pa.string(), available=available)
+    return set_or_append_column(defs, name="def_kind_norm", expr=expr, ctx=ctx)
+
+
+def derive_scip_role_flags(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
+    """Derive SCIP role flag aggregates when available.
+
+    Returns
+    -------
+    Plan | None
+        Derived plan or ``None`` when unavailable.
+    """
+    occurrences = catalog.resolve(PlanRef("scip_occurrences"), ctx=ctx)
+    if occurrences is None:
+        return None
+    schema = occurrences.schema(ctx=ctx)
+    available = set(schema.names)
+    if "symbol" not in available or "symbol_roles" not in available:
+        return None
+
+    flag_exprs: list[ComputeExpression] = []
+    flag_names: list[str] = []
+    for name, mask, _ in ROLE_FLAG_SPECS:
+        hit = bitmask_is_set_expr(pc.field("symbol_roles"), mask=mask)
+        flag_exprs.append(ensure_expression(pc.cast(hit, pa.int32(), safe=False)))
+        flag_names.append(name)
+
+    project_exprs = [
+        ensure_expression(pc.cast(pc.field("symbol"), pa.string(), safe=False)),
+        *flag_exprs,
+    ]
+    project_names = ["symbol", *flag_names]
+    projected = occurrences.project(project_exprs, project_names, ctx=ctx)
+    aggregated = projected.aggregate(
+        group_keys=("symbol",),
+        aggs=[(name, "max") for name in flag_names],
+        ctx=ctx,
+    )
+    rename_exprs = [pc.field("symbol")] + [pc.field(f"{name}_max") for name in flag_names]
+    rename_names = ["symbol", *flag_names]
+    return aggregated.project(rename_exprs, rename_names, ctx=ctx)
+
+
 __all__ = [
     "PlanCatalog",
     "PlanDeriver",
@@ -168,4 +240,6 @@ __all__ = [
     "TableDeriver",
     "TableGetter",
     "TableRef",
+    "derive_cst_defs_norm",
+    "derive_scip_role_flags",
 ]

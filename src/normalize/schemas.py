@@ -7,6 +7,7 @@ import pyarrow as pa
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.schema.arrays import FieldExpr
 from arrowdsl.schema.schema import SchemaMetadataSpec
+from normalize.encoding import dict_field
 from normalize.hash_specs import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
@@ -22,7 +23,7 @@ from normalize.plan_exprs import (
     MaskedHashExprSpec,
     TrimExprSpec,
 )
-from schema_spec.specs import DICT_STRING, ArrowFieldSpec, file_identity_bundle, span_bundle
+from schema_spec.specs import ArrowFieldSpec, file_identity_bundle, span_bundle
 from schema_spec.system import (
     GLOBAL_SCHEMA_REGISTRY,
     DedupeSpecSpec,
@@ -33,9 +34,6 @@ from schema_spec.system import (
 )
 
 SCHEMA_VERSION = 1
-ENCODING_METADATA_KEY = "encoding"
-ENCODING_DICTIONARY = "dictionary"
-
 _DEF_USE_PREFIXES = ("STORE_", "DELETE_")
 _USE_PREFIXES = ("LOAD_",)
 _DEF_USE_OPS = ("IMPORT_NAME", "IMPORT_FROM")
@@ -70,8 +68,8 @@ TYPE_EXPRS_TABLE_SPEC = make_table_spec(
         ArrowFieldSpec(name="type_expr_id", dtype=pa.string()),
         ArrowFieldSpec(name="owner_def_id", dtype=pa.string()),
         ArrowFieldSpec(name="param_name", dtype=pa.string()),
-        ArrowFieldSpec(name="expr_kind", dtype=pa.string()),
-        ArrowFieldSpec(name="expr_role", dtype=pa.string()),
+        dict_field("expr_kind"),
+        dict_field("expr_role"),
         ArrowFieldSpec(name="expr_text", dtype=pa.string()),
         ArrowFieldSpec(name="type_repr", dtype=pa.string()),
         ArrowFieldSpec(name="type_id", dtype=pa.string()),
@@ -85,8 +83,8 @@ TYPE_NODES_TABLE_SPEC = make_table_spec(
     fields=[
         ArrowFieldSpec(name="type_id", dtype=pa.string()),
         ArrowFieldSpec(name="type_repr", dtype=pa.string()),
-        ArrowFieldSpec(name="type_form", dtype=pa.string()),
-        ArrowFieldSpec(name="origin", dtype=pa.string()),
+        dict_field("type_form"),
+        dict_field("origin"),
     ],
 )
 
@@ -99,7 +97,7 @@ CFG_BLOCKS_TABLE_SPEC = make_table_spec(
         ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
         ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
         ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
+        dict_field("kind"),
     ],
 )
 
@@ -112,7 +110,7 @@ CFG_EDGES_TABLE_SPEC = make_table_spec(
         ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
         ArrowFieldSpec(name="src_block_id", dtype=pa.string()),
         ArrowFieldSpec(name="dst_block_id", dtype=pa.string()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
+        dict_field("kind"),
         ArrowFieldSpec(name="cond_instr_id", dtype=pa.string()),
         ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
     ],
@@ -126,9 +124,9 @@ DEF_USE_TABLE_SPEC = make_table_spec(
         ArrowFieldSpec(name="event_id", dtype=pa.string()),
         ArrowFieldSpec(name="instr_id", dtype=pa.string()),
         ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
+        dict_field("kind"),
         ArrowFieldSpec(name="symbol", dtype=pa.string()),
-        ArrowFieldSpec(name="opname", dtype=pa.string()),
+        dict_field("opname"),
         ArrowFieldSpec(name="offset", dtype=pa.int32()),
     ],
 )
@@ -153,7 +151,7 @@ SPAN_ERROR_TABLE_SPEC = make_table_spec(
     fields=[
         ArrowFieldSpec(name="document_id", dtype=pa.string()),
         ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="reason", dtype=pa.string()),
+        dict_field("reason"),
     ],
 )
 
@@ -163,17 +161,9 @@ DIAG_TABLE_SPEC = make_table_spec(
     bundles=(file_identity_bundle(include_sha256=False), span_bundle()),
     fields=[
         ArrowFieldSpec(name="diag_id", dtype=pa.string()),
-        ArrowFieldSpec(
-            name="severity",
-            dtype=DICT_STRING,
-            metadata={ENCODING_METADATA_KEY: ENCODING_DICTIONARY},
-        ),
+        dict_field("severity"),
         ArrowFieldSpec(name="message", dtype=pa.string()),
-        ArrowFieldSpec(
-            name="diag_source",
-            dtype=DICT_STRING,
-            metadata={ENCODING_METADATA_KEY: ENCODING_DICTIONARY},
-        ),
+        dict_field("diag_source"),
         ArrowFieldSpec(name="code", dtype=pa.string()),
         ArrowFieldSpec(name="details", dtype=DIAG_DETAILS_TYPE),
     ],

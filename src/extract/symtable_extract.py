@@ -9,24 +9,31 @@ from typing import Literal, cast, overload
 
 import pyarrow as pa
 
-from arrowdsl.core.context import ExecutionContext, RuntimeProfile
-from arrowdsl.core.ids import HashSpec
+from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
 from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, pc
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.schema.schema import empty_table
 from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.file_context import FileContext
-from extract.hashing import apply_hash_projection
+from extract.hash_specs import (
+    SYM_NS_EDGE_ID_SPEC,
+    SYM_NS_SYMBOL_ROW_ID_SPEC,
+    SYM_SCOPE_EDGE_ID_SPEC,
+    SYM_SCOPE_ID_SPEC,
+    SYM_SYMBOL_ROW_ID_SPEC,
+)
 from extract.join_helpers import JoinConfig, left_join
-from extract.nested_lists import ListAccumulator
-from extract.spec_helpers import register_dataset
+from extract.nested_lists import LargeListViewAccumulator
+from extract.plan_exprs import MaskedHashExprSpec
+from extract.spec_helpers import DatasetRegistration, ordering_metadata_spec, register_dataset
 from extract.tables import (
     align_plan,
+    append_projection,
     apply_query_spec,
     finalize_plan_bundle,
     materialize_plan,
     plan_from_rows,
-    query_for_schema,
     rename_plan_columns,
 )
 from schema_spec.specs import ArrowFieldSpec, NestedFieldSpec, file_identity_bundle
@@ -102,87 +109,187 @@ class SymtableContext:
         return file_identity_row(self.file_ctx)
 
 
+_SCOPES_FIELDS = [
+    ArrowFieldSpec(name="scope_id", dtype=pa.string()),
+    ArrowFieldSpec(name="table_id", dtype=pa.int64()),
+    ArrowFieldSpec(name="scope_type", dtype=pa.string()),
+    ArrowFieldSpec(name="scope_name", dtype=pa.string()),
+    ArrowFieldSpec(name="lineno", dtype=pa.int32()),
+    ArrowFieldSpec(name="is_nested", dtype=pa.bool_()),
+    ArrowFieldSpec(name="is_optimized", dtype=pa.bool_()),
+    ArrowFieldSpec(name="has_children", dtype=pa.bool_()),
+    ArrowFieldSpec(name="scope_role", dtype=pa.string()),
+]
+
+_SYMBOLS_FIELDS = [
+    ArrowFieldSpec(name="symbol_row_id", dtype=pa.string()),
+    ArrowFieldSpec(name="scope_id", dtype=pa.string()),
+    ArrowFieldSpec(name="name", dtype=pa.string()),
+    ArrowFieldSpec(name="is_referenced", dtype=pa.bool_()),
+    ArrowFieldSpec(name="is_assigned", dtype=pa.bool_()),
+    ArrowFieldSpec(name="is_imported", dtype=pa.bool_()),
+    ArrowFieldSpec(name="is_annotated", dtype=pa.bool_()),
+    ArrowFieldSpec(name="is_parameter", dtype=pa.bool_()),
+    ArrowFieldSpec(name="is_global", dtype=pa.bool_()),
+    ArrowFieldSpec(name="is_declared_global", dtype=pa.bool_()),
+    ArrowFieldSpec(name="is_nonlocal", dtype=pa.bool_()),
+    ArrowFieldSpec(name="is_local", dtype=pa.bool_()),
+    ArrowFieldSpec(name="is_free", dtype=pa.bool_()),
+    ArrowFieldSpec(name="is_namespace", dtype=pa.bool_()),
+]
+
+_SCOPE_EDGES_FIELDS = [
+    ArrowFieldSpec(name="edge_id", dtype=pa.string()),
+    ArrowFieldSpec(name="parent_scope_id", dtype=pa.string()),
+    ArrowFieldSpec(name="child_scope_id", dtype=pa.string()),
+]
+
+_NAMESPACE_EDGES_FIELDS = [
+    ArrowFieldSpec(name="edge_id", dtype=pa.string()),
+    ArrowFieldSpec(name="scope_id", dtype=pa.string()),
+    ArrowFieldSpec(name="symbol_row_id", dtype=pa.string()),
+    ArrowFieldSpec(name="child_scope_id", dtype=pa.string()),
+]
+
+_FUNC_PARTS_FIELDS = [
+    ArrowFieldSpec(name="scope_id", dtype=pa.string()),
+    ArrowFieldSpec(name="parameters", dtype=pa.large_list_view(pa.string())),
+    ArrowFieldSpec(name="locals", dtype=pa.large_list_view(pa.string())),
+    ArrowFieldSpec(name="globals", dtype=pa.large_list_view(pa.string())),
+    ArrowFieldSpec(name="nonlocals", dtype=pa.large_list_view(pa.string())),
+    ArrowFieldSpec(name="frees", dtype=pa.large_list_view(pa.string())),
+]
+
+_SYM_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    extra={
+        b"extractor_name": b"symtable",
+        b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
+    },
+)
+
 SCOPES_SPEC = register_dataset(
     name="py_sym_scopes_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="scope_id", dtype=pa.string()),
-        ArrowFieldSpec(name="table_id", dtype=pa.int64()),
-        ArrowFieldSpec(name="scope_type", dtype=pa.string()),
-        ArrowFieldSpec(name="scope_name", dtype=pa.string()),
-        ArrowFieldSpec(name="lineno", dtype=pa.int32()),
-        ArrowFieldSpec(name="is_nested", dtype=pa.bool_()),
-        ArrowFieldSpec(name="is_optimized", dtype=pa.bool_()),
-        ArrowFieldSpec(name="has_children", dtype=pa.bool_()),
-        ArrowFieldSpec(name="scope_role", dtype=pa.string()),
-    ],
+    fields=_SCOPES_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=QuerySpec(
+            projection=ProjectionSpec(
+                base=tuple(
+                    field.name
+                    for field in (*file_identity_bundle().fields, *_SCOPES_FIELDS)
+                    if field.name != "scope_id"
+                ),
+                derived={
+                    "scope_id": MaskedHashExprSpec(
+                        spec=SYM_SCOPE_ID_SPEC,
+                        required=("file_id", "table_id", "scope_type", "scope_name", "lineno"),
+                    )
+                },
+            )
+        ),
+        metadata_spec=_SYM_METADATA,
+    ),
 )
 
 SYMBOLS_SPEC = register_dataset(
     name="py_sym_symbols_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="symbol_row_id", dtype=pa.string()),
-        ArrowFieldSpec(name="scope_id", dtype=pa.string()),
-        ArrowFieldSpec(name="name", dtype=pa.string()),
-        ArrowFieldSpec(name="is_referenced", dtype=pa.bool_()),
-        ArrowFieldSpec(name="is_assigned", dtype=pa.bool_()),
-        ArrowFieldSpec(name="is_imported", dtype=pa.bool_()),
-        ArrowFieldSpec(name="is_annotated", dtype=pa.bool_()),
-        ArrowFieldSpec(name="is_parameter", dtype=pa.bool_()),
-        ArrowFieldSpec(name="is_global", dtype=pa.bool_()),
-        ArrowFieldSpec(name="is_declared_global", dtype=pa.bool_()),
-        ArrowFieldSpec(name="is_nonlocal", dtype=pa.bool_()),
-        ArrowFieldSpec(name="is_local", dtype=pa.bool_()),
-        ArrowFieldSpec(name="is_free", dtype=pa.bool_()),
-        ArrowFieldSpec(name="is_namespace", dtype=pa.bool_()),
-    ],
+    fields=_SYMBOLS_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=QuerySpec(
+            projection=ProjectionSpec(
+                base=tuple(
+                    field.name
+                    for field in (*file_identity_bundle().fields, *_SYMBOLS_FIELDS)
+                    if field.name != "symbol_row_id"
+                ),
+                derived={
+                    "symbol_row_id": MaskedHashExprSpec(
+                        spec=SYM_SYMBOL_ROW_ID_SPEC,
+                        required=("scope_id", "name"),
+                    )
+                },
+            )
+        ),
+        metadata_spec=_SYM_METADATA,
+    ),
 )
 
 SCOPE_EDGES_SPEC = register_dataset(
     name="py_sym_scope_edges_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="edge_id", dtype=pa.string()),
-        ArrowFieldSpec(name="parent_scope_id", dtype=pa.string()),
-        ArrowFieldSpec(name="child_scope_id", dtype=pa.string()),
-    ],
+    fields=_SCOPE_EDGES_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=QuerySpec(
+            projection=ProjectionSpec(
+                base=tuple(
+                    field.name
+                    for field in (*file_identity_bundle().fields, *_SCOPE_EDGES_FIELDS)
+                    if field.name != "edge_id"
+                ),
+                derived={
+                    "edge_id": MaskedHashExprSpec(
+                        spec=SYM_SCOPE_EDGE_ID_SPEC,
+                        required=("parent_scope_id", "child_scope_id"),
+                    )
+                },
+            )
+        ),
+        metadata_spec=_SYM_METADATA,
+    ),
 )
 
 NAMESPACE_EDGES_SPEC = register_dataset(
     name="py_sym_namespace_edges_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="edge_id", dtype=pa.string()),
-        ArrowFieldSpec(name="scope_id", dtype=pa.string()),
-        ArrowFieldSpec(name="symbol_row_id", dtype=pa.string()),
-        ArrowFieldSpec(name="child_scope_id", dtype=pa.string()),
-    ],
+    fields=_NAMESPACE_EDGES_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=QuerySpec(
+            projection=ProjectionSpec(
+                base=tuple(
+                    field.name
+                    for field in (*file_identity_bundle().fields, *_NAMESPACE_EDGES_FIELDS)
+                    if field.name not in {"symbol_row_id", "edge_id"}
+                ),
+                derived={
+                    "symbol_row_id": MaskedHashExprSpec(
+                        spec=SYM_NS_SYMBOL_ROW_ID_SPEC,
+                        required=("scope_id", "symbol_name"),
+                    ),
+                    "edge_id": MaskedHashExprSpec(
+                        spec=SYM_NS_EDGE_ID_SPEC,
+                        required=("symbol_row_id", "child_scope_id"),
+                    ),
+                },
+            )
+        ),
+        metadata_spec=_SYM_METADATA,
+    ),
 )
 
 FUNC_PARTS_SPEC = register_dataset(
     name="py_sym_function_partitions_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="scope_id", dtype=pa.string()),
-        ArrowFieldSpec(name="parameters", dtype=pa.list_(pa.string())),
-        ArrowFieldSpec(name="locals", dtype=pa.list_(pa.string())),
-        ArrowFieldSpec(name="globals", dtype=pa.list_(pa.string())),
-        ArrowFieldSpec(name="nonlocals", dtype=pa.list_(pa.string())),
-        ArrowFieldSpec(name="frees", dtype=pa.list_(pa.string())),
-    ],
+    fields=_FUNC_PARTS_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=QuerySpec(
+            projection=ProjectionSpec(base=tuple(field.name for field in _FUNC_PARTS_FIELDS))
+        ),
+        metadata_spec=_SYM_METADATA,
+    ),
 )
 
-SCOPES_SCHEMA = SCOPES_SPEC.table_spec.to_arrow_schema()
-SYMBOLS_SCHEMA = SYMBOLS_SPEC.table_spec.to_arrow_schema()
-SCOPE_EDGES_SCHEMA = SCOPE_EDGES_SPEC.table_spec.to_arrow_schema()
-NAMESPACE_EDGES_SCHEMA = NAMESPACE_EDGES_SPEC.table_spec.to_arrow_schema()
-FUNC_PARTS_SCHEMA = FUNC_PARTS_SPEC.table_spec.to_arrow_schema()
+SCOPES_SCHEMA = SCOPES_SPEC.schema()
+SYMBOLS_SCHEMA = SYMBOLS_SPEC.schema()
+SCOPE_EDGES_SCHEMA = SCOPE_EDGES_SPEC.schema()
+NAMESPACE_EDGES_SCHEMA = NAMESPACE_EDGES_SPEC.schema()
+FUNC_PARTS_SCHEMA = FUNC_PARTS_SPEC.schema()
 
 SYMBOL_ROWS_SCHEMA = pa.schema(
     [
@@ -226,11 +333,11 @@ NAMESPACE_EDGE_ROWS_SCHEMA = pa.schema(
     ]
 )
 
-SCOPES_QUERY = query_for_schema(SCOPES_SCHEMA)
-SYMBOLS_QUERY = query_for_schema(SYMBOLS_SCHEMA)
-SCOPE_EDGES_QUERY = query_for_schema(SCOPE_EDGES_SCHEMA)
-NAMESPACE_EDGES_QUERY = query_for_schema(NAMESPACE_EDGES_SCHEMA)
-FUNC_PARTS_QUERY = query_for_schema(FUNC_PARTS_SCHEMA)
+SCOPES_QUERY = SCOPES_SPEC.query()
+SYMBOLS_QUERY = SYMBOLS_SPEC.query()
+SCOPE_EDGES_QUERY = SCOPE_EDGES_SPEC.query()
+NAMESPACE_EDGES_QUERY = NAMESPACE_EDGES_SPEC.query()
+FUNC_PARTS_QUERY = FUNC_PARTS_SPEC.query()
 
 
 def _scope_type_str(tbl: symtable.SymbolTable) -> str:
@@ -247,11 +354,15 @@ class _FuncPartsAccumulator:
     file_ids: list[str] = field(default_factory=list)
     paths: list[str] = field(default_factory=list)
     file_sha256s: list[str | None] = field(default_factory=list)
-    parameters_acc: ListAccumulator[str | None] = field(default_factory=ListAccumulator)
-    locals_acc: ListAccumulator[str | None] = field(default_factory=ListAccumulator)
-    globals_acc: ListAccumulator[str | None] = field(default_factory=ListAccumulator)
-    nonlocals_acc: ListAccumulator[str | None] = field(default_factory=ListAccumulator)
-    frees_acc: ListAccumulator[str | None] = field(default_factory=ListAccumulator)
+    parameters_acc: LargeListViewAccumulator[str | None] = field(
+        default_factory=LargeListViewAccumulator
+    )
+    locals_acc: LargeListViewAccumulator[str | None] = field(default_factory=LargeListViewAccumulator)
+    globals_acc: LargeListViewAccumulator[str | None] = field(default_factory=LargeListViewAccumulator)
+    nonlocals_acc: LargeListViewAccumulator[str | None] = field(
+        default_factory=LargeListViewAccumulator
+    )
+    frees_acc: LargeListViewAccumulator[str | None] = field(default_factory=LargeListViewAccumulator)
 
     def append(self, ctx: SymtableContext, scope_table_id: int, tbl: symtable.SymbolTable) -> None:
         if _scope_type_str(tbl) != "FUNCTION":
@@ -331,31 +442,31 @@ def _build_func_frees(acc: _FuncPartsAccumulator) -> ArrayLike:
 
 FUNC_PARTS_PARAMETERS_SPEC = NestedFieldSpec(
     name="parameters",
-    dtype=pa.list_(pa.string()),
+    dtype=pa.large_list_view(pa.string()),
     builder=_build_func_parameters,
 )
 
 FUNC_PARTS_LOCALS_SPEC = NestedFieldSpec(
     name="locals",
-    dtype=pa.list_(pa.string()),
+    dtype=pa.large_list_view(pa.string()),
     builder=_build_func_locals,
 )
 
 FUNC_PARTS_GLOBALS_SPEC = NestedFieldSpec(
     name="globals",
-    dtype=pa.list_(pa.string()),
+    dtype=pa.large_list_view(pa.string()),
     builder=_build_func_globals,
 )
 
 FUNC_PARTS_NONLOCALS_SPEC = NestedFieldSpec(
     name="nonlocals",
-    dtype=pa.list_(pa.string()),
+    dtype=pa.large_list_view(pa.string()),
     builder=_build_func_nonlocals,
 )
 
 FUNC_PARTS_FREES_SPEC = NestedFieldSpec(
     name="frees",
-    dtype=pa.list_(pa.string()),
+    dtype=pa.large_list_view(pa.string()),
     builder=_build_func_frees,
 )
 
@@ -642,17 +753,19 @@ def _build_scopes(
     ctx: ExecutionContext,
 ) -> tuple[Plan, Plan]:
     scopes_plan = plan_from_rows(scope_rows, schema=SCOPES_SCHEMA, label="sym_scopes")
-    scopes_plan = apply_hash_projection(
+    scopes_base = [name for name in SCOPES_SCHEMA.names if name != "scope_id"]
+    scopes_plan = append_projection(
         scopes_plan,
-        specs=(
-            HashSpec(
-                prefix="sym_scope",
-                cols=("file_id", "table_id", "scope_type", "scope_name", "lineno"),
-                out_col="scope_id",
-            ),
-        ),
-        available=SCOPES_SCHEMA.names,
-        required={"scope_id": ("file_id", "table_id", "scope_type", "scope_name", "lineno")},
+        base=scopes_base,
+        extras=[
+            (
+                MaskedHashExprSpec(
+                    spec=SYM_SCOPE_ID_SPEC,
+                    required=("file_id", "table_id", "scope_type", "scope_name", "lineno"),
+                ).to_expression(),
+                "scope_id",
+            )
+        ],
         ctx=ctx,
     )
     scope_key_plan = scopes_plan.project(
@@ -695,17 +808,19 @@ def _build_symbols(
             ctx=ctx,
         )
         symbols_cols = list(join_config.left_output) + list(join_config.right_output)
-    symbols_plan = apply_hash_projection(
+    symbols_base = [name for name in symbols_cols if name != "symbol_row_id"]
+    symbols_plan = append_projection(
         symbols_plan,
-        specs=(
-            HashSpec(
-                prefix="sym_symbol",
-                cols=("scope_id", "name"),
-                out_col="symbol_row_id",
-            ),
-        ),
-        available=symbols_cols,
-        required={"symbol_row_id": ("scope_id", "name")},
+        base=symbols_base,
+        extras=[
+            (
+                MaskedHashExprSpec(
+                    spec=SYM_SYMBOL_ROW_ID_SPEC,
+                    required=("scope_id", "name"),
+                ).to_expression(),
+                "symbol_row_id",
+            )
+        ],
         ctx=ctx,
     )
     symbols_plan = apply_query_spec(symbols_plan, spec=SYMBOLS_QUERY, ctx=ctx)
@@ -772,17 +887,19 @@ def _build_scope_edges(
         ctx=ctx,
     )
     rename_child_cols = ["child_scope_id" if name == "scope_id" else name for name in child_cols]
-    scope_edges_plan = apply_hash_projection(
+    scope_edges_base = [name for name in rename_child_cols if name != "edge_id"]
+    scope_edges_plan = append_projection(
         scope_edges_plan,
-        specs=(
-            HashSpec(
-                prefix="sym_scope_edge",
-                cols=("parent_scope_id", "child_scope_id"),
-                out_col="edge_id",
-            ),
-        ),
-        available=rename_child_cols,
-        required={"edge_id": ("parent_scope_id", "child_scope_id")},
+        base=scope_edges_base,
+        extras=[
+            (
+                MaskedHashExprSpec(
+                    spec=SYM_SCOPE_EDGE_ID_SPEC,
+                    required=("parent_scope_id", "child_scope_id"),
+                ).to_expression(),
+                "edge_id",
+            )
+        ],
         ctx=ctx,
     )
     scope_edges_plan = apply_query_spec(scope_edges_plan, spec=SCOPE_EDGES_QUERY, ctx=ctx)
@@ -847,25 +964,19 @@ def _build_namespace_edges(
     rename_child_cols = [
         "child_scope_id" if name == "scope_id_child" else name for name in child_cols
     ]
-    ns_edges_plan = apply_hash_projection(
+    ns_base = [name for name in rename_child_cols if name != "symbol_row_id"]
+    ns_edges_plan = append_projection(
         ns_edges_plan,
-        specs=(
-            HashSpec(
-                prefix="sym_symbol",
-                cols=("scope_id", "symbol_name"),
-                out_col="symbol_row_id",
-            ),
-            HashSpec(
-                prefix="sym_ns_edge",
-                cols=("symbol_row_id", "child_scope_id"),
-                out_col="edge_id",
-            ),
-        ),
-        available=rename_child_cols,
-        required={
-            "symbol_row_id": ("scope_id", "symbol_name"),
-            "edge_id": ("symbol_row_id", "child_scope_id"),
-        },
+        base=ns_base,
+        extras=[
+            (
+                MaskedHashExprSpec(
+                    spec=SYM_NS_SYMBOL_ROW_ID_SPEC,
+                    required=("scope_id", "symbol_name"),
+                ).to_expression(),
+                "symbol_row_id",
+            )
+        ],
         ctx=ctx,
     )
     ns_edges_plan = apply_query_spec(ns_edges_plan, spec=NAMESPACE_EDGES_QUERY, ctx=ctx)

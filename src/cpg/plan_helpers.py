@@ -3,9 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import cast
 
-from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import ComputeExpression, SchemaLike, TableLike, pc
+import pyarrow as pa
+import pyarrow.dataset as ds
+
+from arrowdsl.core.context import DeterminismTier, ExecutionContext, Ordering, OrderingLevel
+from arrowdsl.core.interop import (
+    ComputeExpression,
+    RecordBatchReaderLike,
+    SchemaLike,
+    TableLike,
+    pc,
+)
+from arrowdsl.finalize.finalize import Contract
 from arrowdsl.plan.plan import Plan, PlanSpec
 from arrowdsl.schema.schema import (
     EncodingSpec,
@@ -13,18 +24,35 @@ from arrowdsl.schema.schema import (
     encode_expression,
     projection_for_schema,
 )
+from cpg.sources import DatasetSource
+from schema_spec.system import DatasetSpec
 
 
-def ensure_plan(source: Plan | TableLike, *, label: str = "") -> Plan:
+def ensure_plan(
+    source: Plan | TableLike | DatasetSource,
+    *,
+    label: str = "",
+    ctx: ExecutionContext | None = None,
+) -> Plan:
     """Return a plan backed by an Acero table source.
 
     Returns
     -------
     Plan
         Plan for the source value.
+
+    Raises
+    ------
+    ValueError
+        Raised when a DatasetSource is provided without a context.
     """
     if isinstance(source, Plan):
         return source
+    if isinstance(source, DatasetSource):
+        if ctx is None:
+            msg = "ensure_plan requires ctx when source is DatasetSource."
+            raise ValueError(msg)
+        return plan_from_dataset(source.dataset, spec=source.spec, ctx=ctx)
     return Plan.table_source(source, label=label)
 
 
@@ -109,14 +137,171 @@ def finalize_plan(plan: Plan, *, ctx: ExecutionContext) -> TableLike:
     TableLike
         Materialized plan output.
     """
-    return PlanSpec.from_plan(plan).to_table(ctx=ctx)
+    table = PlanSpec.from_plan(plan).to_table(ctx=ctx)
+    return finalize_table(table)
+
+
+def plan_reader(plan: Plan, *, ctx: ExecutionContext) -> RecordBatchReaderLike:
+    """Return a reader for streaming plans without pipeline breakers.
+
+    Returns
+    -------
+    RecordBatchReaderLike
+        Streaming reader for the plan.
+    """
+    return PlanSpec.from_plan(plan).to_reader(ctx=ctx)
+
+
+def plan_from_dataset(
+    dataset: ds.Dataset,
+    *,
+    spec: DatasetSpec,
+    ctx: ExecutionContext,
+) -> Plan:
+    """Compile a dataset-backed scan plan with ordering metadata.
+
+    Returns
+    -------
+    Plan
+        Plan representing the dataset scan and projection.
+    """
+    scan_ctx = spec.scan_context(dataset, ctx)
+    ordering = (
+        Ordering.implicit()
+        if ctx.runtime.scan.implicit_ordering or ctx.runtime.scan.require_sequenced_output
+        else Ordering.unordered()
+    )
+    return Plan(
+        decl=scan_ctx.acero_decl(),
+        label=spec.name,
+        ordering=ordering,
+        pipeline_breakers=(),
+    )
+
+
+def finalize_table(table: TableLike, *, unify_dicts: bool = True) -> TableLike:
+    """Finalize a materialized table for downstream contracts.
+
+    Returns
+    -------
+    TableLike
+        Table with dictionary pools unified when requested.
+    """
+    if unify_dicts:
+        return table.unify_dictionaries()
+    return table
+
+
+def encoding_columns_from_metadata(schema: SchemaLike) -> list[str]:
+    """Return column names marked for dictionary encoding.
+
+    Returns
+    -------
+    list[str]
+        Column names annotated for dictionary encoding.
+    """
+    cols: list[str] = []
+    for field in schema:
+        meta = field.metadata or {}
+        if meta.get(b"encoding") == b"dictionary":
+            cols.append(field.name)
+    return cols
+
+
+def unify_schema_with_metadata(
+    schemas: Sequence[SchemaLike],
+    *,
+    promote_options: str = "permissive",
+) -> SchemaLike:
+    """Return a unified schema, preserving metadata from the first schema.
+
+    Returns
+    -------
+    SchemaLike
+        Unified schema with preserved metadata.
+    """
+    if not schemas:
+        return pa.schema([])
+    try:
+        unified = pa.unify_schemas(list(schemas), promote_options=promote_options)
+    except TypeError:
+        unified = pa.unify_schemas(list(schemas))
+
+    base = schemas[0]
+    field_meta = {field.name: field.metadata for field in base if field.metadata}
+    fields = []
+    for field in unified:
+        meta = field_meta.get(field.name)
+        if meta:
+            fields.append(field.with_metadata(meta))
+        else:
+            fields.append(field)
+    unified = pa.schema(fields)
+    if base.metadata:
+        return unified.with_metadata(dict(base.metadata))
+    return unified
+
+
+def align_table_to_schema(table: TableLike, *, schema: SchemaLike) -> TableLike:
+    """Cast a table to a target schema, preserving schema metadata.
+
+    Returns
+    -------
+    TableLike
+        Table cast to the provided schema.
+    """
+    return table.cast(schema)
+
+
+def finalize_context_for_plan(
+    plan: Plan,
+    *,
+    contract: Contract,
+    ctx: ExecutionContext,
+) -> ExecutionContext:
+    """Return the finalize context with canonical ordering disabled when redundant.
+
+    Returns
+    -------
+    ExecutionContext
+        Execution context configured for finalize ordering.
+    """
+    if ctx.determinism != DeterminismTier.CANONICAL:
+        return ctx
+    explicit_keys = tuple((sk.column, sk.order) for sk in contract.canonical_sort)
+    if plan.ordering.level == OrderingLevel.EXPLICIT and plan.ordering.keys == explicit_keys:
+        return ctx.with_determinism(DeterminismTier.STABLE_SET)
+    return ctx
+
+
+def assert_schema_metadata(table: TableLike, *, schema: SchemaLike) -> None:
+    """Raise when schema metadata does not match the target schema.
+
+    Raises
+    ------
+    ValueError
+        Raised when schema metadata does not match.
+    """
+    table_schema = cast("pa.Schema", table.schema)
+    expected_schema = cast("pa.Schema", schema)
+    if not table_schema.equals(expected_schema, check_metadata=True):
+        msg = "Schema metadata mismatch after finalize."
+        raise ValueError(msg)
 
 
 __all__ = [
     "align_plan",
+    "align_table_to_schema",
+    "assert_schema_metadata",
     "empty_plan",
     "encode_plan",
+    "encoding_columns_from_metadata",
     "ensure_plan",
+    "finalize_context_for_plan",
     "finalize_plan",
+    "finalize_table",
+    "plan_from_dataset",
+    "plan_reader",
     "set_or_append_column",
+    "unify_schema_with_metadata",
 ]

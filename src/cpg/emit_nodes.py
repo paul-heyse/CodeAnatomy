@@ -2,32 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import pyarrow as pa
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import ComputeExpression, DataTypeLike, ensure_expression, pc
+from arrowdsl.core.interop import ensure_expression, pc
 from arrowdsl.plan.plan import Plan
+from cpg.plan_exprs import coalesce_expr
 from cpg.specs import NodeEmitSpec
-
-
-def _coalesce_expr(
-    cols: Sequence[str],
-    *,
-    available: set[str],
-    dtype: DataTypeLike,
-) -> ComputeExpression:
-    exprs = [
-        ensure_expression(pc.cast(pc.field(col), dtype, safe=False))
-        for col in cols
-        if col in available
-    ]
-    if not exprs:
-        return ensure_expression(pc.cast(pc.scalar(None), dtype, safe=False))
-    if len(exprs) == 1:
-        return exprs[0]
-    return ensure_expression(pc.coalesce(*exprs))
 
 
 def emit_node_plan(
@@ -44,11 +25,11 @@ def emit_node_plan(
         Plan emitting node columns.
     """
     available = set(plan.schema(ctx=ctx).names)
-    node_id = _coalesce_expr(spec.id_cols, available=available, dtype=pa.string())
-    path = _coalesce_expr(spec.path_cols, available=available, dtype=pa.string())
-    bstart = _coalesce_expr(spec.bstart_cols, available=available, dtype=pa.int64())
-    bend = _coalesce_expr(spec.bend_cols, available=available, dtype=pa.int64())
-    file_id = _coalesce_expr(spec.file_id_cols, available=available, dtype=pa.string())
+    node_id = coalesce_expr(spec.id_cols, available=available, dtype=pa.string())
+    path = coalesce_expr(spec.path_cols, available=available, dtype=pa.string())
+    bstart = coalesce_expr(spec.bstart_cols, available=available, dtype=pa.int64())
+    bend = coalesce_expr(spec.bend_cols, available=available, dtype=pa.int64())
+    file_id = coalesce_expr(spec.file_id_cols, available=available, dtype=pa.string())
 
     node_kind = ensure_expression(pc.cast(pc.scalar(spec.node_kind.value), pa.string(), safe=False))
     exprs = [

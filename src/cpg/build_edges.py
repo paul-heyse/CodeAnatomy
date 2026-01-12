@@ -12,17 +12,22 @@ from arrowdsl.schema.schema import EncodingSpec
 from cpg.artifacts import CpgBuildArtifacts
 from cpg.catalog import PlanCatalog
 from cpg.emit_edges import emit_edges_plan
-from cpg.plan_helpers import align_plan, empty_plan, encode_plan, finalize_plan
+from cpg.plan_helpers import (
+    align_plan,
+    assert_schema_metadata,
+    empty_plan,
+    encode_plan,
+    encoding_columns_from_metadata,
+    finalize_context_for_plan,
+    finalize_plan,
+)
 from cpg.quality import QualityPlanSpec, quality_plan_from_ids
 from cpg.relations import EDGE_RELATION_SPECS
 from cpg.schemas import CPG_EDGES_SCHEMA, CPG_EDGES_SPEC
+from cpg.sources import DatasetSource
 
-EDGE_ENCODING_SPECS: tuple[EncodingSpec, ...] = (
-    EncodingSpec(column="edge_kind"),
-    EncodingSpec(column="origin"),
-    EncodingSpec(column="resolution_method"),
-    EncodingSpec(column="qname_source"),
-    EncodingSpec(column="rule_name"),
+EDGE_ENCODING_SPECS: tuple[EncodingSpec, ...] = tuple(
+    EncodingSpec(column=col) for col in encoding_columns_from_metadata(CPG_EDGES_SCHEMA)
 )
 
 
@@ -44,14 +49,14 @@ class EdgeBuildOptions:
 class EdgeBuildInputs:
     """Input tables for edge construction."""
 
-    relationship_outputs: Mapping[str, TableLike] | None = None
-    scip_symbol_relationships: TableLike | None = None
-    diagnostics_norm: TableLike | None = None
-    repo_files: TableLike | None = None
-    type_exprs_norm: TableLike | None = None
-    rt_signatures: TableLike | None = None
-    rt_signature_params: TableLike | None = None
-    rt_members: TableLike | None = None
+    relationship_outputs: Mapping[str, TableLike | DatasetSource] | None = None
+    scip_symbol_relationships: TableLike | DatasetSource | None = None
+    diagnostics_norm: TableLike | DatasetSource | None = None
+    repo_files: TableLike | DatasetSource | None = None
+    type_exprs_norm: TableLike | DatasetSource | None = None
+    rt_signatures: TableLike | DatasetSource | None = None
+    rt_signature_params: TableLike | DatasetSource | None = None
+    rt_members: TableLike | DatasetSource | None = None
 
 
 def _edge_inputs_from_legacy(legacy: Mapping[str, object]) -> EdgeBuildInputs:
@@ -177,5 +182,16 @@ def build_cpg_edges(
     )
     raw = finalize_plan(raw_plan, ctx=ctx)
     quality = finalize_plan(quality_plan, ctx=ctx)
-    finalize = CPG_EDGES_SPEC.finalize_context(ctx).run(raw, ctx=ctx)
-    return CpgBuildArtifacts(finalize=finalize, quality=quality)
+    finalize_ctx = finalize_context_for_plan(
+        raw_plan,
+        contract=CPG_EDGES_SPEC.contract(),
+        ctx=ctx,
+    )
+    finalize = CPG_EDGES_SPEC.finalize_context(ctx).run(raw, ctx=finalize_ctx)
+    if ctx.debug:
+        assert_schema_metadata(finalize.good, schema=CPG_EDGES_SPEC.schema())
+    return CpgBuildArtifacts(
+        finalize=finalize,
+        quality=quality,
+        pipeline_breakers=raw_plan.pipeline_breakers,
+    )

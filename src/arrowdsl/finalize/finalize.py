@@ -22,7 +22,12 @@ from arrowdsl.schema.arrays import (
     build_struct_array,
     const_array,
 )
-from arrowdsl.schema.schema import AlignmentInfo, SchemaMetadataSpec, SchemaTransform
+from arrowdsl.schema.schema import (
+    AlignmentInfo,
+    EncodingPolicy,
+    SchemaMetadataSpec,
+    SchemaTransform,
+)
 
 if TYPE_CHECKING:
     from schema_spec.specs import TableSchemaSpec
@@ -258,6 +263,7 @@ class FinalizeOptions:
     error_spec: ErrorArtifactSpec = ERROR_ARTIFACT_SPEC
     transform: SchemaTransform | None = None
     chunk_policy: ChunkPolicy | None = None
+    encoding_policy: EncodingPolicy | None = None
 
 
 def _required_non_null_results(
@@ -544,7 +550,10 @@ def finalize(
             on_error="unsafe" if ctx.safe_cast else "raise",
         )
     aligned, align_info = transform.apply_with_info(table)
-    aligned = (options.chunk_policy or ChunkPolicy()).apply(aligned)
+    if options.encoding_policy is not None:
+        aligned = options.encoding_policy.apply(aligned)
+    else:
+        aligned = (options.chunk_policy or ChunkPolicy()).apply(aligned)
     aligned = _maybe_validate_with_pandera(aligned, contract=contract, ctx=ctx)
     provenance_cols = _provenance_columns(aligned, schema) if ctx.provenance else []
 
@@ -591,6 +600,7 @@ class FinalizeContext:
     error_spec: ErrorArtifactSpec = ERROR_ARTIFACT_SPEC
     transform: SchemaTransform | None = None
     chunk_policy: ChunkPolicy = field(default_factory=ChunkPolicy)
+    encoding_policy: EncodingPolicy | None = None
 
     def run(self, table: TableLike, ctx: ExecutionContext) -> FinalizeResult:
         """Finalize a table using the stored contract and context.
@@ -604,6 +614,7 @@ class FinalizeContext:
             error_spec=self.error_spec,
             transform=self.transform,
             chunk_policy=self.chunk_policy,
+            encoding_policy=self.encoding_policy,
         )
         return finalize(
             table,

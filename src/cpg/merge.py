@@ -6,6 +6,7 @@ from collections.abc import Sequence
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
+from cpg.plan_helpers import align_table_to_schema, unify_schema_with_metadata
 from schema_spec.system import DatasetSpec
 
 
@@ -30,7 +31,13 @@ def unify_tables(
     if not tables:
         msg = "unify_tables requires at least one table."
         raise ValueError(msg)
-    return spec.unify_tables(tables, ctx=ctx)
+    unified = spec.unify_tables(tables, ctx=ctx)
+    promote_options = spec.evolution_spec.promote_options
+    schema = unify_schema_with_metadata(
+        [table.schema for table in tables],
+        promote_options=promote_options,
+    )
+    return align_table_to_schema(unified, schema=schema)
 
 
 __all__ = ["unify_tables"]

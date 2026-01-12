@@ -6,9 +6,10 @@ from collections.abc import Callable, Iterable
 
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, RuntimeProfile
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.finalize.finalize import FinalizeResult, finalize
+from arrowdsl.finalize.finalize import FinalizeOptions, FinalizeResult, finalize
 from arrowdsl.plan.plan import Plan, PlanSpec
 from arrowdsl.schema.schema import SchemaMetadataSpec
+from normalize.encoding import encoding_policy_from_schema
 from normalize.plan_helpers import finalize_plan
 from schema_spec.system import ContractSpec
 
@@ -65,7 +66,9 @@ def run_normalize(
     table = PlanSpec.from_plan(plan).to_table(ctx=ctx)
     for fn in post:
         table = fn(table, ctx)
-    result = finalize(table, contract=contract.to_contract(), ctx=ctx)
+    contract_obj = contract.to_contract()
+    options = FinalizeOptions(encoding_policy=encoding_policy_from_schema(contract_obj.schema))
+    result = finalize(table, contract=contract_obj, ctx=ctx, options=options)
     if metadata_spec is None:
         return result
     schema_meta = dict(metadata_spec.schema_metadata)

@@ -13,6 +13,7 @@ from arrowdsl.compute.kernels import ChunkPolicy
 from arrowdsl.core.interop import (
     ArrayLike,
     ComputeExpression,
+    DataTypeLike,
     FieldLike,
     SchemaLike,
     TableLike,
@@ -287,6 +288,7 @@ class EncodingSpec:
     """Specification for dictionary encoding a column."""
 
     column: str
+    dtype: DataTypeLike | None = None
 
 
 @dataclass(frozen=True)
@@ -320,7 +322,11 @@ def encode_dictionary(table: TableLike, spec: EncodingSpec) -> TableLike:
         return table
     column = table[spec.column]
     if patypes.is_dictionary(column.type):
-        return table
+        if spec.dtype is None or column.type == spec.dtype:
+            return table
+    if spec.dtype is not None:
+        encoded = pc.cast(column, spec.dtype, safe=False)
+        return set_or_append_column(table, spec.column, encoded)
     encoded = pc.dictionary_encode(column)
     return set_or_append_column(table, spec.column, encoded)
 

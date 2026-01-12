@@ -14,6 +14,7 @@ class CpgBuildArtifacts:
 
     finalize: FinalizeResult
     quality: TableLike
+    pipeline_breakers: tuple[str, ...] = ()
 
 
 __all__ = ["CpgBuildArtifacts"]

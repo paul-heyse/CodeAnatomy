@@ -13,11 +13,21 @@ from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.schema.arrays import const_array, set_or_append_column
 from arrowdsl.schema.schema import EncodingSpec
 from cpg.artifacts import CpgBuildArtifacts
-from cpg.catalog import PlanCatalog
+from cpg.catalog import PlanCatalog, PlanSource
 from cpg.emit_nodes import emit_node_plan
-from cpg.plan_helpers import align_plan, empty_plan, encode_plan, ensure_plan, finalize_plan
+from cpg.plan_helpers import (
+    align_plan,
+    assert_schema_metadata,
+    empty_plan,
+    encode_plan,
+    encoding_columns_from_metadata,
+    ensure_plan,
+    finalize_context_for_plan,
+    finalize_plan,
+)
 from cpg.quality import QualityPlanSpec, quality_plan_from_ids
 from cpg.schemas import CPG_NODES_SCHEMA, CPG_NODES_SPEC
+from cpg.sources import DatasetSource
 from cpg.spec_registry import node_plan_specs
 
 
@@ -80,7 +90,9 @@ def _symbol_nodes_table(
 
 NODE_PLAN_SPECS = node_plan_specs()
 
-NODE_ENCODING_SPECS: tuple[EncodingSpec, ...] = (EncodingSpec(column="node_kind"),)
+NODE_ENCODING_SPECS: tuple[EncodingSpec, ...] = tuple(
+    EncodingSpec(column=col) for col in encoding_columns_from_metadata(CPG_NODES_SCHEMA)
+)
 
 
 @dataclass(frozen=True)
@@ -105,35 +117,49 @@ class NodeBuildOptions:
 class NodeInputTables:
     """Bundle of input tables for node construction."""
 
-    repo_files: TableLike | None = None
-    cst_name_refs: TableLike | None = None
-    cst_imports: TableLike | None = None
-    cst_callsites: TableLike | None = None
-    cst_defs: TableLike | None = None
-    dim_qualified_names: TableLike | None = None
-    scip_symbol_information: TableLike | None = None
-    scip_occurrences: TableLike | None = None
-    ts_nodes: TableLike | None = None
-    ts_errors: TableLike | None = None
-    ts_missing: TableLike | None = None
-    type_exprs_norm: TableLike | None = None
-    types_norm: TableLike | None = None
-    diagnostics_norm: TableLike | None = None
-    rt_objects: TableLike | None = None
-    rt_signatures: TableLike | None = None
-    rt_signature_params: TableLike | None = None
-    rt_members: TableLike | None = None
+    repo_files: TableLike | DatasetSource | None = None
+    cst_name_refs: TableLike | DatasetSource | None = None
+    cst_imports: TableLike | DatasetSource | None = None
+    cst_callsites: TableLike | DatasetSource | None = None
+    cst_defs: TableLike | DatasetSource | None = None
+    dim_qualified_names: TableLike | DatasetSource | None = None
+    scip_symbol_information: TableLike | DatasetSource | None = None
+    scip_occurrences: TableLike | DatasetSource | None = None
+    ts_nodes: TableLike | DatasetSource | None = None
+    ts_errors: TableLike | DatasetSource | None = None
+    ts_missing: TableLike | DatasetSource | None = None
+    type_exprs_norm: TableLike | DatasetSource | None = None
+    types_norm: TableLike | DatasetSource | None = None
+    diagnostics_norm: TableLike | DatasetSource | None = None
+    rt_objects: TableLike | DatasetSource | None = None
+    rt_signatures: TableLike | DatasetSource | None = None
+    rt_signature_params: TableLike | DatasetSource | None = None
+    rt_members: TableLike | DatasetSource | None = None
+
+
+def _materialize_table(
+    source: TableLike | DatasetSource | None,
+    *,
+    ctx: ExecutionContext,
+) -> TableLike | None:
+    if source is None:
+        return None
+    if isinstance(source, DatasetSource):
+        plan = ensure_plan(source, label="dataset_source", ctx=ctx)
+        return finalize_plan(plan, ctx=ctx)
+    return source
 
 
 def _node_tables(
     inputs: NodeInputTables,
     *,
     options: NodeBuildOptions,
-) -> dict[str, TableLike | Plan]:
+    ctx: ExecutionContext,
+) -> dict[str, PlanSource]:
     catalog = PlanCatalog()
-    repo_files = inputs.repo_files
-    if repo_files is not None:
-        catalog.add("repo_files", repo_files)
+    repo_files = _materialize_table(inputs.repo_files, ctx=ctx)
+    if inputs.repo_files is not None:
+        catalog.add("repo_files", inputs.repo_files)
         file_nodes = _file_nodes_table(repo_files, use_size_bytes=options.file_span_from_size_bytes)
         catalog.add("repo_files_nodes", file_nodes)
 
@@ -161,7 +187,10 @@ def _node_tables(
         }
     )
 
-    symbol_nodes = _symbol_nodes_table(inputs.scip_symbol_information, inputs.scip_occurrences)
+    symbol_nodes = _symbol_nodes_table(
+        _materialize_table(inputs.scip_symbol_information, ctx=ctx),
+        _materialize_table(inputs.scip_occurrences, ctx=ctx),
+    )
     catalog.add("scip_symbols", symbol_nodes)
     return catalog.snapshot()
 
@@ -194,7 +223,7 @@ def build_cpg_nodes_raw(
         Raised when an option flag is missing.
     """
     options = options or NodeBuildOptions()
-    tables = _node_tables(inputs or NodeInputTables(), options=options)
+    tables = _node_tables(inputs or NodeInputTables(), options=options, ctx=ctx)
     parts: list[Plan] = []
     for spec in NODE_PLAN_SPECS:
         enabled = getattr(options, spec.option_flag, None)
@@ -206,7 +235,7 @@ def build_cpg_nodes_raw(
         plan_source = spec.table_getter(tables)
         if plan_source is None:
             continue
-        plan = ensure_plan(plan_source, label=spec.name)
+        plan = ensure_plan(plan_source, label=spec.name, ctx=ctx)
         if spec.preprocessor is not None:
             plan = spec.preprocessor(plan)
         parts.append(emit_node_plan(plan, spec=spec.emit, ctx=ctx))
@@ -245,5 +274,16 @@ def build_cpg_nodes(
     )
     raw = finalize_plan(raw_plan, ctx=ctx)
     quality = finalize_plan(quality_plan, ctx=ctx)
-    finalize = CPG_NODES_SPEC.finalize_context(ctx).run(raw, ctx=ctx)
-    return CpgBuildArtifacts(finalize=finalize, quality=quality)
+    finalize_ctx = finalize_context_for_plan(
+        raw_plan,
+        contract=CPG_NODES_SPEC.contract(),
+        ctx=ctx,
+    )
+    finalize = CPG_NODES_SPEC.finalize_context(ctx).run(raw, ctx=finalize_ctx)
+    if ctx.debug:
+        assert_schema_metadata(finalize.good, schema=CPG_NODES_SPEC.schema())
+    return CpgBuildArtifacts(
+        finalize=finalize,
+        quality=quality,
+        pipeline_breakers=raw_plan.pipeline_breakers,
+    )

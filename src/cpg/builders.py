@@ -21,10 +21,12 @@ from arrowdsl.core.interop import (
     TableLike,
     pc,
 )
-from arrowdsl.plan.plan import Plan, PlanSpec
+from arrowdsl.plan.plan import PlanSpec
 from arrowdsl.schema.arrays import const_array
+from cpg.catalog import PlanSource
 from cpg.defaults import fill_nulls_float, fill_nulls_string
 from cpg.kinds import EntityKind
+from cpg.plan_helpers import ensure_plan
 from cpg.specs import (
     EdgeEmitSpec,
     EdgePlanSpec,
@@ -38,10 +40,9 @@ type PropValue = object | None
 type PropRow = dict[str, object]
 
 
-def _materialize_source(source: TableLike | Plan, *, ctx: ExecutionContext) -> TableLike:
-    if isinstance(source, Plan):
-        return PlanSpec.from_plan(source).to_table(ctx=ctx)
-    return source
+def _materialize_source(source: PlanSource, *, ctx: ExecutionContext) -> TableLike:
+    plan = ensure_plan(source, ctx=ctx)
+    return PlanSpec.from_plan(plan).to_table(ctx=ctx)
 
 
 def _maybe_dictionary(
@@ -254,7 +255,7 @@ class EdgeBuilder:
     def build(
         self,
         *,
-        tables: Mapping[str, TableLike | Plan],
+        tables: Mapping[str, PlanSource],
         options: object,
         ctx: ExecutionContext,
     ) -> list[TableLike]:
@@ -281,11 +282,7 @@ class EdgeBuilder:
             source = emitter.relation_getter(tables)
             if source is None:
                 continue
-            plan = (
-                source
-                if isinstance(source, Plan)
-                else Plan.table_source(source, label=emitter.name)
-            )
+            plan = ensure_plan(source, label=emitter.name, ctx=ctx)
             rel = _materialize_source(plan, ctx=ctx)
             if rel.num_rows == 0:
                 continue
@@ -365,7 +362,7 @@ class NodeBuilder:
     def build(
         self,
         *,
-        tables: Mapping[str, TableLike | Plan],
+        tables: Mapping[str, PlanSource],
         options: object,
         ctx: ExecutionContext,
     ) -> list[TableLike]:
@@ -392,11 +389,7 @@ class NodeBuilder:
             source = emitter.table_getter(tables)
             if source is None:
                 continue
-            plan = (
-                source
-                if isinstance(source, Plan)
-                else Plan.table_source(source, label=emitter.name)
-            )
+            plan = ensure_plan(source, label=emitter.name, ctx=ctx)
             if emitter.preprocessor is not None:
                 plan = emitter.preprocessor(plan)
             table = _materialize_source(plan, ctx=ctx)
@@ -481,7 +474,7 @@ class PropBuilder:
     def build(
         self,
         *,
-        tables: Mapping[str, TableLike | Plan],
+        tables: Mapping[str, PlanSource],
         options: PropOptions,
         ctx: ExecutionContext,
     ) -> TableLike:
@@ -510,7 +503,7 @@ class PropBuilder:
     def _table_for_spec(
         spec: PropTableSpec,
         *,
-        tables: Mapping[str, TableLike | Plan],
+        tables: Mapping[str, PlanSource],
         options: PropOptions,
         ctx: ExecutionContext,
     ) -> TableLike | None:

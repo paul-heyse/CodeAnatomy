@@ -9,20 +9,20 @@ from typing import Literal, overload
 
 import pyarrow as pa
 
-from arrowdsl.core.context import ExecutionContext, RuntimeProfile
+from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.query import QuerySpec
 from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.derived_views import ast_def_nodes_plan
 from extract.file_context import FileContext
-from extract.spec_helpers import register_dataset
+from extract.spec_helpers import DatasetRegistration, ordering_metadata_spec, register_dataset
 from extract.tables import (
     align_plan,
     apply_query_spec,
     finalize_plan_bundle,
     materialize_plan,
     plan_from_rows,
-    query_for_schema,
 )
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
 
@@ -46,58 +46,94 @@ class ASTExtractResult:
     py_ast_errors: TableLike
 
 
+_AST_NODES_FIELDS = [
+    ArrowFieldSpec(name="ast_idx", dtype=pa.int32()),
+    ArrowFieldSpec(name="parent_ast_idx", dtype=pa.int32()),
+    ArrowFieldSpec(name="field_name", dtype=pa.string()),
+    ArrowFieldSpec(name="field_pos", dtype=pa.int32()),
+    ArrowFieldSpec(name="kind", dtype=pa.string()),
+    ArrowFieldSpec(name="name", dtype=pa.string()),
+    ArrowFieldSpec(name="value_repr", dtype=pa.string()),
+    ArrowFieldSpec(name="lineno", dtype=pa.int32()),
+    ArrowFieldSpec(name="col_offset", dtype=pa.int32()),
+    ArrowFieldSpec(name="end_lineno", dtype=pa.int32()),
+    ArrowFieldSpec(name="end_col_offset", dtype=pa.int32()),
+]
+
+_AST_EDGES_FIELDS = [
+    ArrowFieldSpec(name="parent_ast_idx", dtype=pa.int32()),
+    ArrowFieldSpec(name="child_ast_idx", dtype=pa.int32()),
+    ArrowFieldSpec(name="field_name", dtype=pa.string()),
+    ArrowFieldSpec(name="field_pos", dtype=pa.int32()),
+]
+
+_AST_ERRORS_FIELDS = [
+    ArrowFieldSpec(name="error_type", dtype=pa.string()),
+    ArrowFieldSpec(name="message", dtype=pa.string()),
+    ArrowFieldSpec(name="lineno", dtype=pa.int32()),
+    ArrowFieldSpec(name="offset", dtype=pa.int32()),
+    ArrowFieldSpec(name="end_lineno", dtype=pa.int32()),
+    ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
+]
+
+_AST_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_AST_NODES_FIELDS)
+)
+_AST_EDGES_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_AST_EDGES_FIELDS)
+)
+_AST_ERRORS_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_AST_ERRORS_FIELDS)
+)
+
+AST_NODES_QUERY = QuerySpec.simple(*_AST_BASE_COLUMNS)
+AST_EDGES_QUERY = QuerySpec.simple(*_AST_EDGES_BASE_COLUMNS)
+AST_ERRORS_QUERY = QuerySpec.simple(*_AST_ERRORS_BASE_COLUMNS)
+
+_AST_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    extra={
+        b"extractor_name": b"ast",
+        b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
+    },
+)
+
 AST_NODES_SPEC = register_dataset(
     name="py_ast_nodes_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="ast_idx", dtype=pa.int32()),
-        ArrowFieldSpec(name="parent_ast_idx", dtype=pa.int32()),
-        ArrowFieldSpec(name="field_name", dtype=pa.string()),
-        ArrowFieldSpec(name="field_pos", dtype=pa.int32()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
-        ArrowFieldSpec(name="name", dtype=pa.string()),
-        ArrowFieldSpec(name="value_repr", dtype=pa.string()),
-        ArrowFieldSpec(name="lineno", dtype=pa.int32()),
-        ArrowFieldSpec(name="col_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_lineno", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_col_offset", dtype=pa.int32()),
-    ],
+    fields=_AST_NODES_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=AST_NODES_QUERY,
+        metadata_spec=_AST_METADATA,
+    ),
 )
 
 AST_EDGES_SPEC = register_dataset(
     name="py_ast_edges_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="parent_ast_idx", dtype=pa.int32()),
-        ArrowFieldSpec(name="child_ast_idx", dtype=pa.int32()),
-        ArrowFieldSpec(name="field_name", dtype=pa.string()),
-        ArrowFieldSpec(name="field_pos", dtype=pa.int32()),
-    ],
+    fields=_AST_EDGES_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=AST_EDGES_QUERY,
+        metadata_spec=_AST_METADATA,
+    ),
 )
 
 AST_ERRORS_SPEC = register_dataset(
     name="py_ast_errors_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="error_type", dtype=pa.string()),
-        ArrowFieldSpec(name="message", dtype=pa.string()),
-        ArrowFieldSpec(name="lineno", dtype=pa.int32()),
-        ArrowFieldSpec(name="offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_lineno", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
-    ],
+    fields=_AST_ERRORS_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=AST_ERRORS_QUERY,
+        metadata_spec=_AST_METADATA,
+    ),
 )
 
-AST_NODES_SCHEMA = AST_NODES_SPEC.table_spec.to_arrow_schema()
-AST_EDGES_SCHEMA = AST_EDGES_SPEC.table_spec.to_arrow_schema()
-AST_ERRORS_SCHEMA = AST_ERRORS_SPEC.table_spec.to_arrow_schema()
-
-AST_NODES_QUERY = query_for_schema(AST_NODES_SCHEMA)
-AST_EDGES_QUERY = query_for_schema(AST_EDGES_SCHEMA)
-AST_ERRORS_QUERY = query_for_schema(AST_ERRORS_SCHEMA)
+AST_NODES_SCHEMA = AST_NODES_SPEC.schema()
+AST_EDGES_SCHEMA = AST_EDGES_SPEC.schema()
+AST_ERRORS_SCHEMA = AST_ERRORS_SPEC.schema()
 
 
 def _maybe_int(value: object | None) -> int | None:

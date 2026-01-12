@@ -10,21 +10,26 @@ import pyarrow as pa
 import tree_sitter_python
 from tree_sitter import Language, Parser
 
-from arrowdsl.core.context import ExecutionContext, RuntimeProfile
-from arrowdsl.core.ids import HashSpec
+from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from extract.common import bytes_from_file_ctx, file_identity_row, iter_contexts
 from extract.file_context import FileContext
-from extract.hashing import apply_hash_projection
-from extract.spec_helpers import register_dataset
+from extract.hash_specs import (
+    TS_ERROR_ID_SPEC,
+    TS_MISSING_ID_SPEC,
+    TS_NODE_ID_SPEC,
+    TS_PARENT_NODE_ID_SPEC,
+)
+from extract.plan_exprs import MaskedHashExprSpec
+from extract.spec_helpers import DatasetRegistration, ordering_metadata_spec, register_dataset
 from extract.tables import (
     align_plan,
     apply_query_spec,
     finalize_plan_bundle,
     materialize_plan,
     plan_from_rows,
-    query_for_schema,
 )
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
 
@@ -60,67 +65,180 @@ class TreeSitterRowBuffers:
     missing_rows: list[Row]
 
 
+_TS_NODES_FIELDS = [
+    ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
+    ArrowFieldSpec(name="parent_ts_id", dtype=pa.string()),
+    ArrowFieldSpec(name="ts_type", dtype=pa.string()),
+    ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
+    ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
+    ArrowFieldSpec(name="is_named", dtype=pa.bool_()),
+    ArrowFieldSpec(name="has_error", dtype=pa.bool_()),
+    ArrowFieldSpec(name="is_error", dtype=pa.bool_()),
+    ArrowFieldSpec(name="is_missing", dtype=pa.bool_()),
+]
+
+_TS_ERRORS_FIELDS = [
+    ArrowFieldSpec(name="ts_error_id", dtype=pa.string()),
+    ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
+    ArrowFieldSpec(name="ts_type", dtype=pa.string()),
+    ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
+    ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
+    ArrowFieldSpec(name="is_error", dtype=pa.bool_()),
+]
+
+_TS_MISSING_FIELDS = [
+    ArrowFieldSpec(name="ts_missing_id", dtype=pa.string()),
+    ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
+    ArrowFieldSpec(name="ts_type", dtype=pa.string()),
+    ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
+    ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
+    ArrowFieldSpec(name="is_missing", dtype=pa.bool_()),
+]
+
+_TS_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    extra={
+        b"extractor_name": b"tree_sitter",
+        b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
+    },
+)
+
 TS_NODES_SPEC = register_dataset(
     name="ts_nodes_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
-        ArrowFieldSpec(name="parent_ts_id", dtype=pa.string()),
-        ArrowFieldSpec(name="ts_type", dtype=pa.string()),
-        ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
-        ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
-        ArrowFieldSpec(name="is_named", dtype=pa.bool_()),
-        ArrowFieldSpec(name="has_error", dtype=pa.bool_()),
-        ArrowFieldSpec(name="is_error", dtype=pa.bool_()),
-        ArrowFieldSpec(name="is_missing", dtype=pa.bool_()),
-    ],
+    fields=_TS_NODES_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=QuerySpec(
+            projection=ProjectionSpec(
+                base=tuple(
+                    field.name
+                    for field in (*file_identity_bundle().fields, *_TS_NODES_FIELDS)
+                    if field.name not in {"ts_node_id", "parent_ts_id"}
+                ),
+                derived={
+                    "ts_node_id": MaskedHashExprSpec(
+                        spec=TS_NODE_ID_SPEC,
+                        required=("path", "start_byte", "end_byte", "ts_type"),
+                    ),
+                    "parent_ts_id": MaskedHashExprSpec(
+                        spec=TS_PARENT_NODE_ID_SPEC,
+                        required=("path", "parent_start_byte", "parent_end_byte", "parent_ts_type"),
+                    ),
+                },
+            )
+        ),
+        metadata_spec=_TS_METADATA,
+    ),
 )
 
 TS_ERRORS_SPEC = register_dataset(
     name="ts_errors_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="ts_error_id", dtype=pa.string()),
-        ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
-        ArrowFieldSpec(name="ts_type", dtype=pa.string()),
-        ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
-        ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
-        ArrowFieldSpec(name="is_error", dtype=pa.bool_()),
-    ],
+    fields=_TS_ERRORS_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=QuerySpec(
+            projection=ProjectionSpec(
+                base=tuple(
+                    field.name
+                    for field in (*file_identity_bundle().fields, *_TS_ERRORS_FIELDS)
+                    if field.name not in {"ts_error_id", "ts_node_id"}
+                ),
+                derived={
+                    "ts_node_id": MaskedHashExprSpec(
+                        spec=TS_NODE_ID_SPEC,
+                        required=("path", "start_byte", "end_byte", "ts_type"),
+                    ),
+                    "ts_error_id": MaskedHashExprSpec(
+                        spec=TS_ERROR_ID_SPEC,
+                        required=("path", "start_byte", "end_byte"),
+                    ),
+                },
+            )
+        ),
+        metadata_spec=_TS_METADATA,
+    ),
 )
 
 TS_MISSING_SPEC = register_dataset(
     name="ts_missing_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="ts_missing_id", dtype=pa.string()),
-        ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
-        ArrowFieldSpec(name="ts_type", dtype=pa.string()),
-        ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
-        ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
-        ArrowFieldSpec(name="is_missing", dtype=pa.bool_()),
-    ],
+    fields=_TS_MISSING_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=QuerySpec(
+            projection=ProjectionSpec(
+                base=tuple(
+                    field.name
+                    for field in (*file_identity_bundle().fields, *_TS_MISSING_FIELDS)
+                    if field.name not in {"ts_missing_id", "ts_node_id"}
+                ),
+                derived={
+                    "ts_node_id": MaskedHashExprSpec(
+                        spec=TS_NODE_ID_SPEC,
+                        required=("path", "start_byte", "end_byte", "ts_type"),
+                    ),
+                    "ts_missing_id": MaskedHashExprSpec(
+                        spec=TS_MISSING_ID_SPEC,
+                        required=("path", "start_byte", "end_byte"),
+                    ),
+                },
+            )
+        ),
+        metadata_spec=_TS_METADATA,
+    ),
 )
 
-TS_NODES_SCHEMA = TS_NODES_SPEC.table_spec.to_arrow_schema()
-TS_ERRORS_SCHEMA = TS_ERRORS_SPEC.table_spec.to_arrow_schema()
-TS_MISSING_SCHEMA = TS_MISSING_SPEC.table_spec.to_arrow_schema()
+TS_NODES_SCHEMA = TS_NODES_SPEC.schema()
+TS_ERRORS_SCHEMA = TS_ERRORS_SPEC.schema()
+TS_MISSING_SCHEMA = TS_MISSING_SPEC.schema()
 
 TS_NODE_ROWS_SCHEMA = pa.schema(
     [
-        *TS_NODES_SCHEMA,
+        pa.field("file_id", pa.string()),
+        pa.field("path", pa.string()),
+        pa.field("file_sha256", pa.string()),
+        pa.field("ts_type", pa.string()),
+        pa.field("start_byte", pa.int64()),
+        pa.field("end_byte", pa.int64()),
+        pa.field("is_named", pa.bool_()),
+        pa.field("has_error", pa.bool_()),
+        pa.field("is_error", pa.bool_()),
+        pa.field("is_missing", pa.bool_()),
         pa.field("parent_ts_type", pa.string()),
         pa.field("parent_start_byte", pa.int64()),
         pa.field("parent_end_byte", pa.int64()),
     ]
 )
 
-TS_NODES_QUERY = query_for_schema(TS_NODES_SCHEMA)
-TS_ERRORS_QUERY = query_for_schema(TS_ERRORS_SCHEMA)
-TS_MISSING_QUERY = query_for_schema(TS_MISSING_SCHEMA)
+TS_ERRORS_ROWS_SCHEMA = pa.schema(
+    [
+        pa.field("file_id", pa.string()),
+        pa.field("path", pa.string()),
+        pa.field("file_sha256", pa.string()),
+        pa.field("ts_type", pa.string()),
+        pa.field("start_byte", pa.int64()),
+        pa.field("end_byte", pa.int64()),
+        pa.field("is_error", pa.bool_()),
+    ]
+)
+
+TS_MISSING_ROWS_SCHEMA = pa.schema(
+    [
+        pa.field("file_id", pa.string()),
+        pa.field("path", pa.string()),
+        pa.field("file_sha256", pa.string()),
+        pa.field("ts_type", pa.string()),
+        pa.field("start_byte", pa.int64()),
+        pa.field("end_byte", pa.int64()),
+        pa.field("is_missing", pa.bool_()),
+    ]
+)
+
+TS_NODES_QUERY = TS_NODES_SPEC.query()
+TS_ERRORS_QUERY = TS_ERRORS_SPEC.query()
+TS_MISSING_QUERY = TS_MISSING_SPEC.query()
 
 
 def _parser() -> Parser:
@@ -266,92 +384,16 @@ def extract_ts_plans(
         )
 
     nodes_plan = plan_from_rows(node_rows, schema=TS_NODE_ROWS_SCHEMA, label="ts_nodes")
-    nodes_plan = apply_hash_projection(
-        nodes_plan,
-        specs=(
-            HashSpec(
-                prefix="ts_node",
-                cols=("path", "start_byte", "end_byte", "ts_type"),
-                out_col="ts_node_id",
-            ),
-            HashSpec(
-                prefix="ts_node",
-                cols=("path", "parent_start_byte", "parent_end_byte", "parent_ts_type"),
-                out_col="parent_ts_id",
-            ),
-        ),
-        available=TS_NODE_ROWS_SCHEMA.names,
-        required={
-            "ts_node_id": ("path", "start_byte", "end_byte", "ts_type"),
-            "parent_ts_id": ("path", "parent_start_byte", "parent_end_byte", "parent_ts_type"),
-        },
-        ctx=exec_ctx,
-    )
     nodes_plan = apply_query_spec(nodes_plan, spec=TS_NODES_QUERY, ctx=exec_ctx)
-    nodes_plan = align_plan(
-        nodes_plan,
-        schema=TS_NODES_SCHEMA,
-        available=TS_NODES_SCHEMA.names,
-        ctx=exec_ctx,
-    )
-    errors_plan = plan_from_rows(error_rows, schema=TS_ERRORS_SCHEMA, label="ts_errors")
-    errors_plan = apply_hash_projection(
-        errors_plan,
-        specs=(
-            HashSpec(
-                prefix="ts_node",
-                cols=("path", "start_byte", "end_byte", "ts_type"),
-                out_col="ts_node_id",
-            ),
-            HashSpec(
-                prefix="ts_error",
-                cols=("path", "start_byte", "end_byte"),
-                out_col="ts_error_id",
-            ),
-        ),
-        available=TS_ERRORS_SCHEMA.names,
-        required={
-            "ts_node_id": ("path", "start_byte", "end_byte", "ts_type"),
-            "ts_error_id": ("path", "start_byte", "end_byte"),
-        },
-        ctx=exec_ctx,
-    )
+    nodes_plan = align_plan(nodes_plan, schema=TS_NODES_SCHEMA, ctx=exec_ctx)
+
+    errors_plan = plan_from_rows(error_rows, schema=TS_ERRORS_ROWS_SCHEMA, label="ts_errors")
     errors_plan = apply_query_spec(errors_plan, spec=TS_ERRORS_QUERY, ctx=exec_ctx)
-    errors_plan = align_plan(
-        errors_plan,
-        schema=TS_ERRORS_SCHEMA,
-        available=TS_ERRORS_SCHEMA.names,
-        ctx=exec_ctx,
-    )
-    missing_plan = plan_from_rows(missing_rows, schema=TS_MISSING_SCHEMA, label="ts_missing")
-    missing_plan = apply_hash_projection(
-        missing_plan,
-        specs=(
-            HashSpec(
-                prefix="ts_node",
-                cols=("path", "start_byte", "end_byte", "ts_type"),
-                out_col="ts_node_id",
-            ),
-            HashSpec(
-                prefix="ts_missing",
-                cols=("path", "start_byte", "end_byte"),
-                out_col="ts_missing_id",
-            ),
-        ),
-        available=TS_MISSING_SCHEMA.names,
-        required={
-            "ts_node_id": ("path", "start_byte", "end_byte", "ts_type"),
-            "ts_missing_id": ("path", "start_byte", "end_byte"),
-        },
-        ctx=exec_ctx,
-    )
+    errors_plan = align_plan(errors_plan, schema=TS_ERRORS_SCHEMA, ctx=exec_ctx)
+
+    missing_plan = plan_from_rows(missing_rows, schema=TS_MISSING_ROWS_SCHEMA, label="ts_missing")
     missing_plan = apply_query_spec(missing_plan, spec=TS_MISSING_QUERY, ctx=exec_ctx)
-    missing_plan = align_plan(
-        missing_plan,
-        schema=TS_MISSING_SCHEMA,
-        available=TS_MISSING_SCHEMA.names,
-        ctx=exec_ctx,
-    )
+    missing_plan = align_plan(missing_plan, schema=TS_MISSING_SCHEMA, ctx=exec_ctx)
     return {
         "ts_nodes": nodes_plan,
         "ts_errors": errors_plan,

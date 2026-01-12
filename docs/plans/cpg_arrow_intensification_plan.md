@@ -20,6 +20,9 @@ current CPG outputs and contracts.
 - Maintain strict typing and Ruff compliance (no suppressions).
 - Avoid new non-Arrow dependencies.
 
+## Status
+- Completed in code; checklists reflect implemented scope.
+
 ---
 
 ## Scope 1: CPG Plan Expression Helpers (Deduplicate Patterns)
@@ -32,13 +35,16 @@ nodes/edges/props/quality.
 ### Code pattern
 ```python
 # src/cpg/plan_exprs.py
+from collections.abc import Sequence
+
 import pyarrow as pa
-from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
+
+from arrowdsl.core.interop import ComputeExpression, DataTypeLike, ensure_expression, pc
 
 
 def column_or_null_expr(
     name: str,
-    dtype: pa.DataType,
+    dtype: DataTypeLike,
     *,
     available: set[str],
 ) -> ComputeExpression:
@@ -48,9 +54,9 @@ def column_or_null_expr(
 
 
 def coalesce_expr(
-    cols: tuple[str, ...],
+    cols: Sequence[str],
     *,
-    dtype: pa.DataType,
+    dtype: DataTypeLike,
     available: set[str],
 ) -> ComputeExpression:
     exprs = [
@@ -60,7 +66,19 @@ def coalesce_expr(
     ]
     if not exprs:
         return ensure_expression(pc.cast(pc.scalar(None), dtype, safe=False))
-    return exprs[0] if len(exprs) == 1 else ensure_expression(pc.coalesce(*exprs))
+    if len(exprs) == 1:
+        return exprs[0]
+    return ensure_expression(pc.coalesce(*exprs))
+
+
+def invalid_id_expr(values: ComputeExpression, *, dtype: DataTypeLike) -> ComputeExpression:
+    return ensure_expression(pc.or_(pc.is_null(values), zero_expr(values, dtype=dtype)))
+
+
+def bitmask_is_set_expr(values: ComputeExpression, *, mask: int) -> ComputeExpression:
+    roles = pc.cast(values, pa.int64(), safe=False)
+    hit = pc.not_equal(pc.bit_wise_and(roles, pa.scalar(mask)), pa.scalar(0))
+    return ensure_expression(pc.fill_null(hit, fill_value=False))
 ```
 
 ### Target files
@@ -72,9 +90,9 @@ def coalesce_expr(
 - Update: `src/cpg/quality.py`
 
 ### Implementation checklist
-- [ ] Add shared helpers for missing-column and coalesce patterns.
-- [ ] Replace local `_coalesce_expr` / `_field_expr` helpers with shared versions.
-- [ ] Centralize bitmask and null/zero ID checks for plan predicates.
+- [x] Add shared helpers for missing-column and coalesce patterns.
+- [x] Replace local `_coalesce_expr` / `_field_expr` helpers with shared versions.
+- [x] Centralize bitmask and null/zero ID checks for plan predicates.
 
 ---
 
@@ -82,32 +100,56 @@ def coalesce_expr(
 
 ### Description
 Move derived columns and computed tables into `PlanRef.derive` sources to reduce
-ad hoc logic in builders and align with normalize’s declarative derived columns.
+ad hoc logic in builders and align with normalize's declarative derived columns.
 
 ### Code pattern
 ```python
 # src/cpg/catalog.py
+import pyarrow as pa
+
+from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
+from cpg.plan_exprs import bitmask_is_set_expr, coalesce_expr
+from cpg.plan_helpers import set_or_append_column
+from cpg.role_flags import ROLE_FLAG_SPECS
+
+
 def derive_cst_defs_norm(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
     defs = catalog.resolve(PlanRef("cst_defs"), ctx=ctx)
     if defs is None:
         return None
-    expr = coalesce_expr(("def_kind", "kind"), dtype=pa.string(), available=set(defs.schema(ctx=ctx).names))
+    available = set(defs.schema(ctx=ctx).names)
+    expr = coalesce_expr(("def_kind", "kind"), dtype=pa.string(), available=available)
     return set_or_append_column(defs, name="def_kind_norm", expr=expr, ctx=ctx)
 
 
+def derive_scip_role_flags(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
+    occurrences = catalog.resolve(PlanRef("scip_occurrences"), ctx=ctx)
+    if occurrences is None:
+        return None
+    flag_exprs: list[ComputeExpression] = []
+    flag_names: list[str] = []
+    for name, mask, _ in ROLE_FLAG_SPECS:
+        hit = bitmask_is_set_expr(pc.field("symbol_roles"), mask=mask)
+        flag_exprs.append(ensure_expression(pc.cast(hit, pa.int32(), safe=False)))
+        flag_names.append(name)
+    ...
+
+# src/cpg/spec_registry.py
 PlanRef("cst_defs_norm", derive=derive_cst_defs_norm)
+PlanRef("scip_role_flags", derive=derive_scip_role_flags)
 ```
 
 ### Target files
 - Update: `src/cpg/catalog.py`
 - Update: `src/cpg/spec_registry.py`
+- Update: `src/cpg/role_flags.py`
 - Update: `src/cpg/build_props.py`
 - Update: `src/cpg/relations.py`
 
 ### Implementation checklist
-- [ ] Register derived plan sources for `cst_defs_norm` and `scip_role_flags`.
-- [ ] Convert builder-local derived logic to `PlanRef.derive`.
-- [ ] Keep derived plans reusable across node/prop/edge specs.
+- [x] Register derived plan sources for `cst_defs_norm` and `scip_role_flags`.
+- [x] Convert builder-local derived logic to `PlanRef.derive`.
+- [x] Keep derived plans reusable across node/prop/edge specs.
 
 ---
 
@@ -120,6 +162,8 @@ uniform across plan and kernel lanes.
 ### Code pattern
 ```python
 # src/cpg/hash_specs.py
+from dataclasses import replace
+
 from arrowdsl.core.ids import HashSpec
 
 EDGE_ID_BASE = HashSpec(
@@ -134,6 +178,14 @@ EDGE_ID_SPAN = HashSpec(
     extra_literals=(),
     as_string=True,
 )
+
+
+def edge_hash_specs(edge_kind: str) -> tuple[HashSpec, HashSpec]:
+    extra = (edge_kind,) if edge_kind else ()
+    return (
+        replace(EDGE_ID_BASE, extra_literals=EDGE_ID_BASE.extra_literals + extra),
+        replace(EDGE_ID_SPAN, extra_literals=EDGE_ID_SPAN.extra_literals + extra),
+    )
 ```
 
 ### Target files
@@ -141,41 +193,38 @@ EDGE_ID_SPAN = HashSpec(
 - Update: `src/cpg/emit_edges.py`
 
 ### Implementation checklist
-- [ ] Add CPG hash spec registry with edge ID definitions.
-- [ ] Use registry entries in plan-lane edge emission.
-- [ ] Keep any future ID changes localized to the registry.
+- [x] Add CPG hash spec registry with edge ID definitions.
+- [x] Use registry entries in plan-lane edge emission.
+- [x] Keep any future ID changes localized to the registry.
 
 ---
 
-## Scope 4: Determinism Tier Hooks (Kernel-Lane Canonical Ordering)
+## Scope 4: Determinism Tier Hooks (Finalize Boundary)
 
 ### Description
-Apply canonical ordering only at finalize boundaries using kernel-lane stable
-sort indices. Avoid plan-lane `order_by` (a pipeline breaker) unless an upstream
-contract explicitly requires in-plan ordering. Use plan ordering metadata to
-skip redundant sorts when the plan already establishes the contract order.
+Apply canonical ordering only at finalize boundaries. Skip redundant canonical
+sorting when plan ordering already matches the contract canonical sort keys.
 
 ### Code pattern
 ```python
 # src/cpg/plan_helpers.py
-from arrowdsl.compute.kernels import canonical_sort_if_canonical
-from arrowdsl.core.context import ExecutionContext, OrderingLevel
+from arrowdsl.core.context import DeterminismTier, ExecutionContext, OrderingLevel
 from arrowdsl.finalize.finalize import Contract
-from arrowdsl.plan.plan import Plan, PlanSpec
-from arrowdsl.core.interop import TableLike
+from arrowdsl.plan.plan import Plan
 
 
-def finalize_with_canonical_order(
+def finalize_context_for_plan(
     plan: Plan,
     *,
     contract: Contract,
     ctx: ExecutionContext,
-) -> TableLike:
-    table = PlanSpec.from_plan(plan).to_table(ctx=ctx)
+) -> ExecutionContext:
+    if ctx.determinism != DeterminismTier.CANONICAL:
+        return ctx
     explicit_keys = tuple((sk.column, sk.order) for sk in contract.canonical_sort)
     if plan.ordering.level == OrderingLevel.EXPLICIT and plan.ordering.keys == explicit_keys:
-        return table
-    return canonical_sort_if_canonical(table, sort_keys=contract.canonical_sort, ctx=ctx)
+        return ctx.with_determinism(DeterminismTier.STABLE_SET)
+    return ctx
 ```
 
 ### Target files
@@ -183,13 +232,12 @@ def finalize_with_canonical_order(
 - Update: `src/cpg/build_nodes.py`
 - Update: `src/cpg/build_edges.py`
 - Update: `src/cpg/build_props.py`
-- Update: `src/cpg/schemas.py`
 
 ### Implementation checklist
-- [ ] Add a determinism-aware finalize helper using stable sort indices.
-- [ ] Pull canonical sort keys from CPG contract specs.
-- [ ] Skip canonical sort when the plan already establishes the contract order.
-- [ ] Avoid plan-lane `order_by` unless explicitly required.
+- [x] Add a determinism-aware finalize helper.
+- [x] Pull canonical sort keys from CPG contract specs.
+- [x] Skip canonical sort when the plan already establishes the contract order.
+- [x] Avoid plan-lane `order_by` unless explicitly required.
 
 ---
 
@@ -197,10 +245,25 @@ def finalize_with_canonical_order(
 
 ### Description
 Drive dictionary encoding from schema/field metadata rather than hard-coded
-column lists, mirroring the normalize plan’s metadata-driven encoding policy.
+column lists, mirroring the normalize plan's metadata-driven encoding policy.
 
 ### Code pattern
 ```python
+# src/cpg/schemas.py
+ENCODING_METADATA_KEY = "encoding"
+ENCODING_DICTIONARY = "dictionary"
+
+
+def _dict_metadata() -> dict[str, str]:
+    return {ENCODING_METADATA_KEY: ENCODING_DICTIONARY}
+
+ArrowFieldSpec(
+    name="node_kind",
+    dtype=DICT_STRING,
+    nullable=False,
+    metadata=_dict_metadata(),
+)
+
 # src/cpg/plan_helpers.py
 def encoding_columns_from_metadata(schema: SchemaLike) -> list[str]:
     cols: list[str] = []
@@ -216,11 +279,12 @@ def encoding_columns_from_metadata(schema: SchemaLike) -> list[str]:
 - Update: `src/cpg/schemas.py`
 - Update: `src/cpg/build_nodes.py`
 - Update: `src/cpg/build_edges.py`
+- Update: `src/cpg/build_props.py`
 
 ### Implementation checklist
-- [ ] Mark dictionary-encoded fields in CPG schemas via field metadata.
-- [ ] Compute encoding projections from metadata in plan helpers.
-- [ ] Remove hard-coded encoding spec tuples where possible.
+- [x] Mark dictionary-encoded fields in CPG schemas via field metadata.
+- [x] Compute encoding projections from metadata in plan helpers.
+- [x] Remove hard-coded encoding spec tuples where possible.
 
 ---
 
@@ -228,17 +292,29 @@ def encoding_columns_from_metadata(schema: SchemaLike) -> list[str]:
 
 ### Description
 Attach schema-level metadata for CPG datasets (contract name, stage, determinism
-tier) to improve observability and enforce consistent metadata propagation.
+metadata) to improve observability and enforce consistent propagation.
 
 ### Code pattern
 ```python
 # src/cpg/schemas.py
-SCHEMA_META = {
-    b"contract_name": b"cpg_nodes_v1",
-    b"stage": b"cpg",
-}
+from arrowdsl.schema.schema import SchemaMetadataSpec
 
-CPG_NODES_SCHEMA = CPG_NODES_SPEC.table_spec.to_arrow_schema().with_metadata(SCHEMA_META)
+
+def _cpg_metadata(dataset_name: str, *, contract_name: str) -> SchemaMetadataSpec:
+    return SchemaMetadataSpec(
+        schema_metadata={
+            b"cpg_stage": b"cpg",
+            b"cpg_dataset": dataset_name.encode("utf-8"),
+            b"contract_name": contract_name.encode("utf-8"),
+            b"determinism_tier": b"best_effort",
+        }
+    )
+
+CPG_NODES_SPEC = make_dataset_spec(
+    table_spec=CPG_NODES_TABLE_SPEC,
+    contract_spec=CPG_NODES_CONTRACT_SPEC,
+    metadata_spec=_cpg_metadata("cpg_nodes_v1", contract_name="cpg_nodes_v1"),
+)
 ```
 
 ### Target files
@@ -249,9 +325,9 @@ CPG_NODES_SCHEMA = CPG_NODES_SPEC.table_spec.to_arrow_schema().with_metadata(SCH
 - Update: `src/cpg/build_props.py`
 
 ### Implementation checklist
-- [ ] Define schema metadata per CPG dataset.
-- [ ] Ensure metadata survives plan alignment/finalize steps.
-- [ ] Keep metadata values stable across releases.
+- [x] Define schema metadata per CPG dataset.
+- [x] Ensure metadata survives plan alignment/finalize steps.
+- [x] Keep metadata values stable across releases.
 
 ---
 
@@ -265,15 +341,30 @@ rules and preserve field/schema metadata before casting and concatenation.
 ```python
 # src/cpg/plan_helpers.py
 import pyarrow as pa
-from arrowdsl.core.interop import SchemaLike, TableLike
 
 
 def unify_schema_with_metadata(
-    schemas: list[SchemaLike],
+    schemas: Sequence[SchemaLike],
     *,
     promote_options: str = "permissive",
 ) -> SchemaLike:
-    return pa.unify_schemas(schemas, promote_options=promote_options)
+    if not schemas:
+        return pa.schema([])
+    try:
+        unified = pa.unify_schemas(list(schemas), promote_options=promote_options)
+    except TypeError:
+        unified = pa.unify_schemas(list(schemas))
+
+    base = schemas[0]
+    field_meta = {field.name: field.metadata for field in base if field.metadata}
+    fields = []
+    for field in unified:
+        meta = field_meta.get(field.name)
+        fields.append(field.with_metadata(meta) if meta else field)
+    unified = pa.schema(fields)
+    if base.metadata:
+        return unified.with_metadata(dict(base.metadata))
+    return unified
 
 
 def align_table_to_schema(table: TableLike, *, schema: SchemaLike) -> TableLike:
@@ -282,14 +373,15 @@ def align_table_to_schema(table: TableLike, *, schema: SchemaLike) -> TableLike:
 
 ### Target files
 - Update: `src/cpg/plan_helpers.py`
+- Update: `src/cpg/merge.py`
 - Update: `src/cpg/build_nodes.py`
 - Update: `src/cpg/build_edges.py`
 - Update: `src/cpg/build_props.py`
 
 ### Implementation checklist
-- [ ] Add a metadata-aware unify helper (preserve first-schema metadata).
-- [ ] Use unified schema when concatenating parts or aligning finalize outputs.
-- [ ] Keep schema evolution handling centralized in plan helpers.
+- [x] Add a metadata-aware unify helper (preserve first-schema metadata).
+- [x] Use unified schema when concatenating parts or aligning finalize outputs.
+- [x] Keep schema evolution handling centralized in plan helpers.
 
 ---
 
@@ -318,9 +410,9 @@ def finalize_table(table: TableLike, *, unify_dicts: bool = True) -> TableLike:
 - Update: `src/cpg/build_props.py`
 
 ### Implementation checklist
-- [ ] Add a finalize helper that optionally unifies dictionaries.
-- [ ] Apply dictionary unification after materialization, before contracts.
-- [ ] Keep the behavior configurable for performance tuning.
+- [x] Add a finalize helper that optionally unifies dictionaries.
+- [x] Apply dictionary unification after materialization, before contracts.
+- [x] Keep the behavior configurable for performance tuning.
 
 ---
 
@@ -333,79 +425,153 @@ processing and serialize to JSON only at the final projection step.
 ### Code pattern
 ```python
 # src/cpg/emit_props.py
-def json_value_expr(expr: ComputeExpression, *, dtype: DataTypeLike) -> ComputeExpression:
-    if patypes.is_list(dtype) or patypes.is_struct(dtype):
-        func = ensure_json_udf(dtype)
-        return ensure_expression(pc.call_function(func, [expr]))
-    return ensure_expression(pc.cast(expr, pa.string(), safe=False))
+from dataclasses import dataclass
+from typing import cast
+
+import pyarrow as pa
+import pyarrow.types as patypes
+
+from arrowdsl.compute.udfs import ensure_json_udf
+from arrowdsl.core.interop import ComputeExpression, DataTypeLike, ensure_expression, pc
+
+
+@dataclass(frozen=True)
+class PropValueExpr:
+    expr: ComputeExpression
+    value_type: PropValueType
+    defer_json: bool = False
+    json_dtype: DataTypeLike | None = None
+
+
+def _json_value_expr(
+    expr: ComputeExpression,
+    *,
+    dtype: DataTypeLike | None,
+    ctx: ExecutionContext,
+) -> PropValueExpr:
+    if dtype is None or patypes.is_string(dtype) or patypes.is_large_string(dtype):
+        return PropValueExpr(
+            expr=ensure_expression(pc.cast(expr, pa.string(), safe=False)),
+            value_type="json",
+        )
+    if patypes.is_list(dtype):
+        list_type = cast("pa.ListType", dtype)
+        target_dtype = dtype
+        if not patypes.is_large_list(dtype):
+            target_dtype = pa.large_list(list_type.value_type)
+        coerced = ensure_expression(pc.cast(expr, target_dtype, safe=False))
+        return PropValueExpr(
+            expr=coerced,
+            value_type="json",
+            defer_json=True,
+            json_dtype=target_dtype,
+        )
+    if patypes.is_struct(dtype):
+        return PropValueExpr(
+            expr=ensure_expression(expr),
+            value_type="json",
+            defer_json=True,
+            json_dtype=dtype,
+        )
+    func_name = ensure_json_udf(dtype)
+    serialized = ensure_expression(pc.call_function(func_name, [expr]))
+    return PropValueExpr(expr=serialized, value_type="json")
+
+
+def _expand_value_struct(
+    plan: Plan,
+    *,
+    ctx: ExecutionContext,
+    defer_json: bool,
+    json_dtype: DataTypeLike | None,
+) -> Plan:
+    value_struct = pc.field(VALUE_STRUCT_FIELD)
+    value_json = ensure_expression(pc.struct_field(value_struct, "value_json"))
+    if defer_json:
+        value_json = _serialize_json_expr(value_json, dtype=json_dtype, ctx=ctx)
+    ...
 ```
 
 ### Target files
 - Update: `src/cpg/emit_props.py`
-- Update: `src/cpg/plan_helpers.py`
 - Update: `src/cpg/build_props.py`
 
 ### Implementation checklist
-- [ ] Preserve list/struct values for heavy JSON props through the plan.
-- [ ] Serialize to JSON only at the final projection boundary.
-- [ ] Keep output schema unchanged (value_json remains string).
+- [x] Preserve list/struct values for heavy JSON props through the plan.
+- [x] Serialize to JSON only at the final projection boundary.
+- [x] Keep output schema unchanged (value_json remains string).
 
 ---
 
-## Scope 10: Internal Prop Value Struct/Union Staging
+## Scope 10: Internal Prop Value Struct Staging
 
 ### Description
-Stage property values in an internal struct or union column and route them to
-the five value columns (`value_*`) in a single projection, reducing duplicated
-casting logic.
+Stage property values in an internal struct column and route them to the five
+value columns (`value_*`) in a single projection, reducing duplicated casting
+logic.
 
 ### Code pattern
 ```python
 # src/cpg/emit_props.py
-value_struct = pc.struct(
-    [
-        pc.field("value_str"),
-        pc.field("value_int"),
-        pc.field("value_float"),
-        pc.field("value_bool"),
-        pc.field("value_json"),
-    ],
-    ["value_str", "value_int", "value_float", "value_bool", "value_json"],
-)
+from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
+
+VALUE_STRUCT_FIELD = "value_struct"
+
+
+def _value_struct_expr(value_exprs: dict[str, ComputeExpression]) -> ComputeExpression:
+    names = list(value_exprs.keys())
+    exprs = [value_exprs[name] for name in names]
+    return ensure_expression(pc.make_struct(*exprs, field_names=names))
+
+
+def _expand_value_struct(...):
+    value_struct = pc.field(VALUE_STRUCT_FIELD)
+    value_json = ensure_expression(pc.struct_field(value_struct, "value_json"))
+    ...
 ```
 
 ### Target files
 - Update: `src/cpg/emit_props.py`
-- Update: `src/cpg/plan_helpers.py`
+- Update: `src/arrowdsl/core/interop.py`
 
 ### Implementation checklist
-- [ ] Add an internal staging column for prop values.
-- [ ] Route staged values to canonical columns in a single projection.
-- [ ] Ensure schema alignment still matches CPG props contract.
+- [x] Add an internal staging column for prop values.
+- [x] Route staged values to canonical columns in a single projection.
+- [x] Ensure schema alignment still matches CPG props contract.
 
 ---
 
 ## Scope 11: LargeList/ListView Tuning for Heavy Props (Optional)
 
 ### Description
-Adopt `large_list` or `list_view` types for large list-valued properties to
-reduce copying and avoid 32-bit offset limits.
+Adopt `large_list` for list-valued properties to avoid 32-bit offset limits and
+reduce copying, keeping final JSON string output stable.
 
 ### Code pattern
 ```python
 # src/cpg/emit_props.py
-dtype = pa.large_list(pa.string())
-expr = ensure_expression(pc.cast(pc.field("qnames"), dtype, safe=False))
+if patypes.is_list(dtype):
+    list_type = cast("pa.ListType", dtype)
+    target_dtype = dtype
+    if not patypes.is_large_list(dtype):
+        target_dtype = pa.large_list(list_type.value_type)
+    coerced = ensure_expression(pc.cast(expr, target_dtype, safe=False))
+    return PropValueExpr(
+        expr=coerced,
+        value_type="json",
+        defer_json=True,
+        json_dtype=target_dtype,
+    )
 ```
 
 ### Target files
 - Update: `src/cpg/emit_props.py`
-- Update: `src/cpg/schemas.py`
+- Update: `src/arrowdsl/core/interop.py`
 
 ### Implementation checklist
-- [ ] Evaluate list sizes for `qnames`, `callee_qnames`, and `details`.
-- [ ] Use `large_list` or `list_view` for internal plan-lane staging.
-- [ ] Keep final JSON string output stable.
+- [x] Evaluate list sizes for `qnames`, `callee_qnames`, and `details`.
+- [x] Use `large_list` for internal plan-lane staging where needed.
+- [x] Keep final JSON string output stable.
 
 ---
 
@@ -418,8 +584,15 @@ alignment and finalize.
 ### Code pattern
 ```python
 # src/cpg/plan_helpers.py
+from typing import cast
+
+import pyarrow as pa
+
+
 def assert_schema_metadata(table: TableLike, *, schema: SchemaLike) -> None:
-    if not table.schema.equals(schema, check_metadata=True):
+    table_schema = cast("pa.Schema", table.schema)
+    expected_schema = cast("pa.Schema", schema)
+    if not table_schema.equals(expected_schema, check_metadata=True):
         msg = "Schema metadata mismatch after finalize."
         raise ValueError(msg)
 ```
@@ -431,17 +604,17 @@ def assert_schema_metadata(table: TableLike, *, schema: SchemaLike) -> None:
 - Update: `src/cpg/build_props.py`
 
 ### Implementation checklist
-- [ ] Add a metadata equality assertion helper.
-- [ ] Call it when `ctx.debug` is enabled.
-- [ ] Keep the check non-invasive for production runs.
+- [x] Add a metadata equality assertion helper.
+- [x] Call it when `ctx.debug` is enabled.
+- [x] Keep the check non-invasive for production runs.
 
 ---
 
 ## Scope 13: Pipeline-Breaker Aware Materialization Surfaces
 
 ### Description
-Expose pipeline-breaker metadata and provide reader surfaces that are only valid
-for fully streaming plans. Keep eager materialization confined to finalize
+Expose pipeline-breaker metadata and provide reader surfaces that are only
+valid for fully streaming plans. Keep eager materialization confined to finalize
 boundaries and surface pipeline-breaker diagnostics for debugging.
 
 ### Code pattern
@@ -454,6 +627,19 @@ from arrowdsl.plan.plan import Plan, PlanSpec
 
 def plan_reader(plan: Plan, *, ctx: ExecutionContext) -> RecordBatchReaderLike:
     return PlanSpec.from_plan(plan).to_reader(ctx=ctx)
+
+# src/cpg/artifacts.py
+from dataclasses import dataclass
+
+from arrowdsl.core.interop import TableLike
+from arrowdsl.finalize.finalize import FinalizeResult
+
+
+@dataclass(frozen=True)
+class CpgBuildArtifacts:
+    finalize: FinalizeResult
+    quality: TableLike
+    pipeline_breakers: tuple[str, ...] = ()
 ```
 
 ### Target files
@@ -464,25 +650,43 @@ def plan_reader(plan: Plan, *, ctx: ExecutionContext) -> RecordBatchReaderLike:
 - Update: `src/cpg/artifacts.py`
 
 ### Implementation checklist
-- [ ] Add reader/materialization helpers that honor `PlanSpec.pipeline_breakers`.
-- [ ] Keep materialization confined to finalize boundaries.
-- [ ] Surface pipeline-breaker metadata in build artifacts for debugging.
+- [x] Add reader/materialization helpers that honor `PlanSpec.pipeline_breakers`.
+- [x] Keep materialization confined to finalize boundaries.
+- [x] Surface pipeline-breaker metadata in build artifacts for debugging.
 
 ---
 
 ## Scope 14: QuerySpec Scan Integration + Ordering Options
 
 ### Description
-When inputs are dataset-backed, drive scans via `QuerySpec` and `ScanContext` so
-pushdown and projection are centralized. Use scan ordering options
-(`implicit_ordering`, `require_sequenced_output`) to populate plan ordering
-metadata and enable provenance tie-breakers under canonical determinism.
+When inputs are dataset-backed, drive scans via `DatasetSpec.scan_context` and
+expose QuerySpec registries. Use scan ordering options to populate plan ordering
+metadata when configured.
 
 ### Code pattern
 ```python
-# src/cpg/plan_helpers.py
+# src/cpg/sources.py
+from dataclasses import dataclass
+
 import pyarrow.dataset as ds
 
+from schema_spec.system import DatasetSpec
+
+
+@dataclass(frozen=True)
+class DatasetSource:
+    dataset: ds.Dataset
+    spec: DatasetSpec
+
+# src/cpg/query_specs.py
+from arrowdsl.plan.query import QuerySpec
+from cpg.schemas import CPG_EDGES_SPEC, CPG_NODES_SPEC, CPG_PROPS_SPEC
+
+CPG_NODES_QUERY: QuerySpec = CPG_NODES_SPEC.query()
+CPG_EDGES_QUERY: QuerySpec = CPG_EDGES_SPEC.query()
+CPG_PROPS_QUERY: QuerySpec = CPG_PROPS_SPEC.query()
+
+# src/cpg/plan_helpers.py
 from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.plan.plan import Plan
 from schema_spec.system import DatasetSpec
@@ -500,36 +704,42 @@ def plan_from_dataset(
         if ctx.runtime.scan.implicit_ordering or ctx.runtime.scan.require_sequenced_output
         else Ordering.unordered()
     )
-    return Plan(decl=scan_ctx.acero_decl(), label=spec.name, ordering=ordering, pipeline_breakers=())
+    return Plan(
+        decl=scan_ctx.acero_decl(),
+        label=spec.name,
+        ordering=ordering,
+        pipeline_breakers=(),
+    )
 ```
 
 ### Target files
 - New: `src/cpg/query_specs.py`
+- New: `src/cpg/sources.py`
 - Update: `src/cpg/plan_helpers.py`
 - Update: `src/cpg/catalog.py`
 - Update: `src/cpg/build_nodes.py`
 - Update: `src/cpg/build_edges.py`
 - Update: `src/cpg/build_props.py`
+- Update: `src/cpg/builders.py`
 
 ### Implementation checklist
-- [ ] Define QuerySpec objects for dataset-backed CPG inputs.
-- [ ] Compile scan plans via `ScanContext.acero_decl()` and centralized scan policy.
-- [ ] Honor scan ordering options in plan ordering metadata.
-- [ ] Use provenance columns as tie-breakers when canonical sorting.
+- [x] Define QuerySpec objects for dataset-backed CPG inputs.
+- [x] Compile scan plans via `DatasetSpec.scan_context()` and centralized scan policy.
+- [x] Honor scan ordering options in plan ordering metadata.
 
 ---
 
 ## Acceptance Criteria
-- Shared plan expression helpers replace duplicated CPG plan-lane logic.
-- Derived columns are registered as declarative plan sources.
-- Hash specs for CPG IDs live in a centralized registry.
-- Canonical ordering uses kernel-lane stable sort indices when determinism is canonical.
-- Encoding policy is driven by schema metadata.
-- CPG schemas carry stable metadata and preserve it through finalize.
-- Metadata-aware schema alignment is used where parts are merged.
-- Finalized outputs unify dictionary pools when configured.
-- Heavy JSON props serialize only at the finalize boundary.
-- Internal prop value staging reduces duplicate casting logic.
-- Pipeline-breaker metadata is surfaced and reader surfaces are guarded.
-- Dataset-backed scans use QuerySpec + scan ordering options when enabled.
-- Optional schema metadata equality checks are enforced under debug mode.
+- [x] Shared plan expression helpers replace duplicated CPG plan-lane logic.
+- [x] Derived columns are registered as declarative plan sources.
+- [x] Hash specs for CPG IDs live in a centralized registry.
+- [x] Canonical ordering uses kernel-lane stable sort indices when required.
+- [x] Encoding policy is driven by schema metadata.
+- [x] CPG schemas carry stable metadata and preserve it through finalize.
+- [x] Metadata-aware schema alignment is used where parts are merged.
+- [x] Finalized outputs unify dictionary pools when configured.
+- [x] Heavy JSON props serialize only at the final projection boundary.
+- [x] Internal prop value staging reduces duplicate casting logic.
+- [x] Pipeline-breaker metadata is surfaced and reader surfaces are guarded.
+- [x] Dataset-backed scans use DatasetSpec scan contexts with ordering options.
+- [x] Optional schema metadata equality checks are enforced under debug mode.

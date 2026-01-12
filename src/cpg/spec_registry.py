@@ -5,16 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from cpg.catalog import PlanRef
+from cpg.catalog import PlanRef, derive_cst_defs_norm, derive_scip_role_flags
 from cpg.contract_map import PropFieldInput, prop_fields_from_contract
-from cpg.kinds import (
-    SCIP_ROLE_FORWARD_DEFINITION,
-    SCIP_ROLE_GENERATED,
-    SCIP_ROLE_TEST,
-    EntityKind,
-    NodeKind,
-)
+from cpg.kinds import EntityKind, NodeKind
 from cpg.prop_transforms import expr_context_value, flag_to_bool
+from cpg.role_flags import ROLE_FLAG_SPECS
 from cpg.specs import (
     NodeEmitSpec,
     NodePlanSpec,
@@ -213,7 +208,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 ),
             },
         ),
-        prop_table=PlanRef("cst_defs_norm"),
+        prop_table=PlanRef("cst_defs_norm", derive=derive_cst_defs_norm),
         path_cols=("path",),
         bstart_cols=("bstart", "name_bstart"),
         bend_cols=("bend", "name_bend"),
@@ -508,13 +503,6 @@ def prop_table_specs() -> tuple[PropTableSpec, ...]:
     return tuple(specs)
 
 
-ROLE_FLAG_SPECS: tuple[tuple[str, int, str], ...] = (
-    ("generated", SCIP_ROLE_GENERATED, "scip_role_generated"),
-    ("test", SCIP_ROLE_TEST, "scip_role_test"),
-    ("forward_definition", SCIP_ROLE_FORWARD_DEFINITION, "scip_role_forward_definition"),
-)
-
-
 def scip_role_flag_prop_spec() -> PropTableSpec:
     """Return prop spec for SCIP role flag properties.
 
@@ -526,7 +514,7 @@ def scip_role_flag_prop_spec() -> PropTableSpec:
     return PropTableSpec(
         name="scip_role_flags",
         option_flag="include_node_props",
-        table_getter=PlanRef("scip_role_flags").getter(),
+        table_getter=PlanRef("scip_role_flags", derive=derive_scip_role_flags).getter(),
         entity_kind=EntityKind.NODE,
         id_cols=("symbol",),
         fields=tuple(

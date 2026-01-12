@@ -364,6 +364,8 @@ class ComputeModule(Protocol):
     list_parent_indices: Callable[[ArrayLike | ChunkedArrayLike], ArrayLike]
     list_flatten: Callable[[ArrayLike | ChunkedArrayLike], ArrayLike]
     take: Callable[[ArrayLike | ChunkedArrayLike, ArrayLike], ArrayLike]
+    make_struct: Callable[..., ArrayLike]
+    struct_field: Callable[..., ArrayLike]
     binary_join_element_wise: Callable[..., ArrayLike]
     dictionary_encode: Callable[[ArrayLike | ChunkedArrayLike], ArrayLike]
     call_function: Callable[..., ArrayLike | ChunkedArrayLike | ScalarLike]
@@ -396,6 +398,7 @@ RecordBatchReader: type[RecordBatchReaderLike] = cast(
 NativeFile: type[NativeFileLike] = cast("type[NativeFileLike]", pa.NativeFile)
 Table: type[TableLike] = cast("type[TableLike]", pa.Table)
 ListArray: type[ListArrayLike] = cast("type[ListArrayLike]", pa.ListArray)
+LargeListArray: type[ListArrayLike] = cast("type[ListArrayLike]", pa.LargeListArray)
 StructArray: type[StructArrayLike] = cast("type[StructArrayLike]", pa.StructArray)
 
 ArrowInvalid: type[Exception] = cast("type[Exception]", pa.ArrowInvalid)
@@ -430,6 +433,8 @@ bool_: Callable[[], DataTypeLike] = pa.bool_
 binary: Callable[[], DataTypeLike] = pa.binary
 dictionary: Callable[[DataTypeLike, DataTypeLike], DataTypeLike] = pa.dictionary
 list_: Callable[..., DataTypeLike] = pa.list_
+list_view: Callable[..., DataTypeLike] = pa.list_view
+large_list_view: Callable[..., DataTypeLike] = pa.large_list_view
 struct: Callable[..., DataTypeLike] = pa.struct
 
 pc = cast("ComputeModule", _pc)
@@ -450,6 +455,7 @@ __all__ = [
     "DeclarationLike",
     "Field",
     "FieldLike",
+    "LargeListArray",
     "ListArray",
     "ListArrayLike",
     "NativeFile",
@@ -481,7 +487,9 @@ __all__ = [
     "int16",
     "int32",
     "int64",
+    "large_list_view",
     "list_",
+    "list_view",
     "memory_map",
     "nulls",
     "pc",

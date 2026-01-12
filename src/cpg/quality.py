@@ -12,14 +12,13 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
-    ComputeExpression,
-    DataTypeLike,
     TableLike,
     ensure_expression,
     pc,
 )
 from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.arrays import const_array
+from cpg.plan_exprs import invalid_id_expr
 
 type ValuesLike = ArrayLike | ChunkedArrayLike
 
@@ -143,20 +142,6 @@ def concat_quality_tables(tables: Sequence[TableLike]) -> TableLike:
     return pa.concat_tables(parts)
 
 
-def _zero_expr(values: ComputeExpression, *, dtype: DataTypeLike) -> ComputeExpression:
-    if patypes.is_dictionary(dtype):
-        values = ensure_expression(pc.cast(values, pa.string(), safe=False))
-        dtype = pa.string()
-    if patypes.is_string(dtype) or patypes.is_large_string(dtype):
-        return ensure_expression(pc.equal(values, pc.scalar("0")))
-    if patypes.is_integer(dtype):
-        return ensure_expression(pc.equal(values, pa.scalar(0, type=dtype)))
-    if patypes.is_floating(dtype):
-        return ensure_expression(pc.equal(values, pa.scalar(0.0, type=dtype)))
-    values = ensure_expression(pc.cast(values, pa.string(), safe=False))
-    return ensure_expression(pc.equal(values, pc.scalar("0")))
-
-
 def quality_plan_from_ids(
     plan: Plan,
     *,
@@ -180,7 +165,7 @@ def quality_plan_from_ids(
         id_expr = ensure_expression(pc.cast(pc.scalar(None), dtype, safe=False))
 
     id_str = ensure_expression(pc.cast(id_expr, pa.string(), safe=False))
-    invalid = ensure_expression(pc.or_(pc.is_null(id_expr), _zero_expr(id_expr, dtype=dtype)))
+    invalid = invalid_id_expr(id_expr, dtype=dtype)
     issue_expr = ensure_expression(pc.cast(pc.scalar(spec.issue), pa.string(), safe=False))
     kind_expr = ensure_expression(pc.cast(pc.scalar(spec.entity_kind), pa.string(), safe=False))
     if spec.source_table is None:

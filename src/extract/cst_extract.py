@@ -19,22 +19,30 @@ from libcst.metadata import (
     QualifiedNameProvider,
 )
 
-from arrowdsl.core.context import ExecutionContext, RuntimeProfile
-from arrowdsl.core.ids import HashSpec
+from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.schema.schema import empty_table
 from extract.common import bytes_from_file_ctx, file_identity_row, iter_contexts
 from extract.file_context import FileContext
-from extract.hashing import apply_hash_projection
-from extract.spec_helpers import register_dataset
+from extract.hash_specs import (
+    CST_CALL_ID_SPEC,
+    CST_CONTAINER_DEF_ID_SPEC,
+    CST_DEF_ID_SPEC,
+    CST_IMPORT_ID_SPEC,
+    CST_NAME_REF_ID_SPEC,
+    CST_OWNER_DEF_ID_SPEC,
+    CST_TYPE_EXPR_ID_SPEC,
+)
+from extract.plan_exprs import MaskedHashExprSpec
+from extract.spec_helpers import DatasetRegistration, ordering_metadata_spec, register_dataset
 from extract.tables import (
     align_plan,
     apply_query_spec,
     finalize_plan_bundle,
     materialize_plan,
     plan_from_rows,
-    query_for_schema,
 )
 from schema_spec.specs import (
     ArrowFieldSpec,
@@ -90,132 +98,266 @@ class CSTExtractResult:
 
 
 QNAME_STRUCT = pa.struct([("name", pa.string()), ("source", pa.string())])
-QNAME_LIST = pa.list_(QNAME_STRUCT)
+QNAME_LIST = pa.large_list_view(QNAME_STRUCT)
+
+_CST_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    extra={
+        b"extractor_name": b"cst",
+        b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
+    },
+)
+
+_PARSE_MANIFEST_FIELDS = [
+    ArrowFieldSpec(name="encoding", dtype=pa.string()),
+    ArrowFieldSpec(name="default_indent", dtype=pa.string()),
+    ArrowFieldSpec(name="default_newline", dtype=pa.string()),
+    ArrowFieldSpec(name="has_trailing_newline", dtype=pa.bool_()),
+    ArrowFieldSpec(name="future_imports", dtype=pa.large_list_view(pa.string())),
+    ArrowFieldSpec(name="module_name", dtype=pa.string()),
+    ArrowFieldSpec(name="package_name", dtype=pa.string()),
+]
+
+_PARSE_ERRORS_FIELDS = [
+    ArrowFieldSpec(name="error_type", dtype=pa.string()),
+    ArrowFieldSpec(name="message", dtype=pa.string()),
+    ArrowFieldSpec(name="raw_line", dtype=pa.int32()),
+    ArrowFieldSpec(name="raw_column", dtype=pa.int32()),
+    ArrowFieldSpec(name="meta", dtype=pa.map_(pa.string(), pa.string())),
+]
+
+_NAME_REFS_FIELDS = [
+    ArrowFieldSpec(name="name_ref_id", dtype=pa.string()),
+    ArrowFieldSpec(name="name", dtype=pa.string()),
+    ArrowFieldSpec(name="expr_ctx", dtype=pa.string()),
+    ArrowFieldSpec(name="bstart", dtype=pa.int64()),
+    ArrowFieldSpec(name="bend", dtype=pa.int64()),
+]
+
+_IMPORTS_FIELDS = [
+    ArrowFieldSpec(name="import_id", dtype=pa.string()),
+    ArrowFieldSpec(name="kind", dtype=pa.string()),
+    ArrowFieldSpec(name="module", dtype=pa.string()),
+    ArrowFieldSpec(name="relative_level", dtype=pa.int32()),
+    ArrowFieldSpec(name="name", dtype=pa.string()),
+    ArrowFieldSpec(name="asname", dtype=pa.string()),
+    ArrowFieldSpec(name="is_star", dtype=pa.bool_()),
+    ArrowFieldSpec(name="stmt_bstart", dtype=pa.int64()),
+    ArrowFieldSpec(name="stmt_bend", dtype=pa.int64()),
+    ArrowFieldSpec(name="alias_bstart", dtype=pa.int64()),
+    ArrowFieldSpec(name="alias_bend", dtype=pa.int64()),
+]
+
+_CALLSITES_FIELDS = [
+    ArrowFieldSpec(name="call_id", dtype=pa.string()),
+    *call_span_bundle().fields,
+    ArrowFieldSpec(name="callee_bstart", dtype=pa.int64()),
+    ArrowFieldSpec(name="callee_bend", dtype=pa.int64()),
+    ArrowFieldSpec(name="callee_shape", dtype=pa.string()),
+    ArrowFieldSpec(name="callee_text", dtype=pa.string()),
+    ArrowFieldSpec(name="arg_count", dtype=pa.int32()),
+    ArrowFieldSpec(name="callee_dotted", dtype=pa.string()),
+    ArrowFieldSpec(name="callee_qnames", dtype=QNAME_LIST),
+]
+
+_DEFS_FIELDS = [
+    ArrowFieldSpec(name="def_id", dtype=pa.string()),
+    ArrowFieldSpec(name="container_def_id", dtype=pa.string()),
+    ArrowFieldSpec(name="kind", dtype=pa.string()),
+    ArrowFieldSpec(name="name", dtype=pa.string()),
+    ArrowFieldSpec(name="def_bstart", dtype=pa.int64()),
+    ArrowFieldSpec(name="def_bend", dtype=pa.int64()),
+    ArrowFieldSpec(name="name_bstart", dtype=pa.int64()),
+    ArrowFieldSpec(name="name_bend", dtype=pa.int64()),
+    ArrowFieldSpec(name="qnames", dtype=QNAME_LIST),
+]
+
+_TYPE_EXPRS_FIELDS = [
+    ArrowFieldSpec(name="type_expr_id", dtype=pa.string()),
+    ArrowFieldSpec(name="owner_def_id", dtype=pa.string()),
+    ArrowFieldSpec(name="param_name", dtype=pa.string()),
+    ArrowFieldSpec(name="expr_kind", dtype=pa.string()),
+    ArrowFieldSpec(name="expr_role", dtype=pa.string()),
+    ArrowFieldSpec(name="bstart", dtype=pa.int64()),
+    ArrowFieldSpec(name="bend", dtype=pa.int64()),
+    ArrowFieldSpec(name="expr_text", dtype=pa.string()),
+]
+
+_PARSE_MANIFEST_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_PARSE_MANIFEST_FIELDS)
+)
+_PARSE_ERRORS_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_PARSE_ERRORS_FIELDS)
+)
+_NAME_REFS_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_NAME_REFS_FIELDS)
+)
+_IMPORTS_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_IMPORTS_FIELDS)
+)
+_CALLSITES_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_CALLSITES_FIELDS)
+)
+_DEFS_BASE_COLUMNS = tuple(field.name for field in (*file_identity_bundle().fields, *_DEFS_FIELDS))
+_TYPE_EXPRS_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_TYPE_EXPRS_FIELDS)
+)
+
+PARSE_MANIFEST_QUERY = QuerySpec.simple(*_PARSE_MANIFEST_BASE_COLUMNS)
+PARSE_ERRORS_QUERY = QuerySpec.simple(*_PARSE_ERRORS_BASE_COLUMNS)
+NAME_REFS_QUERY = QuerySpec(
+    projection=ProjectionSpec(
+        base=_NAME_REFS_BASE_COLUMNS,
+        derived={
+            "name_ref_id": MaskedHashExprSpec(
+                spec=CST_NAME_REF_ID_SPEC,
+                required=("file_id", "bstart", "bend"),
+            )
+        },
+    )
+)
+IMPORTS_QUERY = QuerySpec(
+    projection=ProjectionSpec(
+        base=_IMPORTS_BASE_COLUMNS,
+        derived={
+            "import_id": MaskedHashExprSpec(
+                spec=CST_IMPORT_ID_SPEC,
+                required=("file_id", "kind", "alias_bstart", "alias_bend"),
+            )
+        },
+    )
+)
+CALLSITES_QUERY = QuerySpec(
+    projection=ProjectionSpec(
+        base=_CALLSITES_BASE_COLUMNS,
+        derived={
+            "call_id": MaskedHashExprSpec(
+                spec=CST_CALL_ID_SPEC,
+                required=("file_id", "call_bstart", "call_bend"),
+            )
+        },
+    )
+)
+DEFS_QUERY = QuerySpec(
+    projection=ProjectionSpec(
+        base=_DEFS_BASE_COLUMNS,
+        derived={
+            "def_id": MaskedHashExprSpec(
+                spec=CST_DEF_ID_SPEC,
+                required=("file_id", "kind", "def_bstart", "def_bend"),
+            ),
+            "container_def_id": MaskedHashExprSpec(
+                spec=CST_CONTAINER_DEF_ID_SPEC,
+                required=(
+                    "file_id",
+                    "container_def_kind",
+                    "container_def_bstart",
+                    "container_def_bend",
+                ),
+            ),
+        },
+    )
+)
+TYPE_EXPRS_QUERY = QuerySpec(
+    projection=ProjectionSpec(
+        base=_TYPE_EXPRS_BASE_COLUMNS,
+        derived={
+            "type_expr_id": MaskedHashExprSpec(
+                spec=CST_TYPE_EXPR_ID_SPEC,
+                required=("path", "bstart", "bend"),
+            ),
+            "owner_def_id": MaskedHashExprSpec(
+                spec=CST_OWNER_DEF_ID_SPEC,
+                required=("file_id", "owner_def_kind", "owner_def_bstart", "owner_def_bend"),
+            ),
+        },
+    )
+)
 
 PARSE_MANIFEST_SPEC = register_dataset(
     name="py_cst_parse_manifest_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="encoding", dtype=pa.string()),
-        ArrowFieldSpec(name="default_indent", dtype=pa.string()),
-        ArrowFieldSpec(name="default_newline", dtype=pa.string()),
-        ArrowFieldSpec(name="has_trailing_newline", dtype=pa.bool_()),
-        ArrowFieldSpec(name="future_imports", dtype=pa.list_(pa.string())),
-        ArrowFieldSpec(name="module_name", dtype=pa.string()),
-        ArrowFieldSpec(name="package_name", dtype=pa.string()),
-    ],
+    fields=_PARSE_MANIFEST_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=PARSE_MANIFEST_QUERY,
+        metadata_spec=_CST_METADATA,
+    ),
 )
 
 PARSE_ERRORS_SPEC = register_dataset(
     name="py_cst_parse_errors_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="error_type", dtype=pa.string()),
-        ArrowFieldSpec(name="message", dtype=pa.string()),
-        ArrowFieldSpec(name="raw_line", dtype=pa.int32()),
-        ArrowFieldSpec(name="raw_column", dtype=pa.int32()),
-    ],
+    fields=_PARSE_ERRORS_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=PARSE_ERRORS_QUERY,
+        metadata_spec=_CST_METADATA,
+    ),
 )
 
 NAME_REFS_SPEC = register_dataset(
     name="py_cst_name_refs_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="name_ref_id", dtype=pa.string()),
-        ArrowFieldSpec(name="name", dtype=pa.string()),
-        ArrowFieldSpec(name="expr_ctx", dtype=pa.string()),
-        ArrowFieldSpec(name="bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="bend", dtype=pa.int64()),
-    ],
+    fields=_NAME_REFS_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=NAME_REFS_QUERY,
+        metadata_spec=_CST_METADATA,
+    ),
 )
 
 IMPORTS_SPEC = register_dataset(
     name="py_cst_imports_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="import_id", dtype=pa.string()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
-        ArrowFieldSpec(name="module", dtype=pa.string()),
-        ArrowFieldSpec(name="relative_level", dtype=pa.int32()),
-        ArrowFieldSpec(name="name", dtype=pa.string()),
-        ArrowFieldSpec(name="asname", dtype=pa.string()),
-        ArrowFieldSpec(name="is_star", dtype=pa.bool_()),
-        ArrowFieldSpec(name="stmt_bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="stmt_bend", dtype=pa.int64()),
-        ArrowFieldSpec(name="alias_bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="alias_bend", dtype=pa.int64()),
-    ],
+    fields=_IMPORTS_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=IMPORTS_QUERY,
+        metadata_spec=_CST_METADATA,
+    ),
 )
 
 CALLSITES_SPEC = register_dataset(
     name="py_cst_callsites_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="call_id", dtype=pa.string()),
-        *call_span_bundle().fields,
-        ArrowFieldSpec(name="callee_bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="callee_bend", dtype=pa.int64()),
-        ArrowFieldSpec(name="callee_shape", dtype=pa.string()),
-        ArrowFieldSpec(name="callee_text", dtype=pa.string()),
-        ArrowFieldSpec(name="arg_count", dtype=pa.int32()),
-        ArrowFieldSpec(name="callee_dotted", dtype=pa.string()),
-        ArrowFieldSpec(name="callee_qnames", dtype=QNAME_LIST),
-    ],
+    fields=_CALLSITES_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=CALLSITES_QUERY,
+        metadata_spec=_CST_METADATA,
+    ),
 )
 
 DEFS_SPEC = register_dataset(
     name="py_cst_defs_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="def_id", dtype=pa.string()),
-        ArrowFieldSpec(name="container_def_id", dtype=pa.string()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
-        ArrowFieldSpec(name="name", dtype=pa.string()),
-        ArrowFieldSpec(name="def_bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="def_bend", dtype=pa.int64()),
-        ArrowFieldSpec(name="name_bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="name_bend", dtype=pa.int64()),
-        ArrowFieldSpec(name="qnames", dtype=QNAME_LIST),
-    ],
+    fields=_DEFS_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=DEFS_QUERY,
+        metadata_spec=_CST_METADATA,
+    ),
 )
 
 TYPE_EXPRS_SPEC = register_dataset(
     name="py_cst_type_exprs_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="type_expr_id", dtype=pa.string()),
-        ArrowFieldSpec(name="owner_def_id", dtype=pa.string()),
-        ArrowFieldSpec(name="param_name", dtype=pa.string()),
-        ArrowFieldSpec(name="expr_kind", dtype=pa.string()),
-        ArrowFieldSpec(name="expr_role", dtype=pa.string()),
-        ArrowFieldSpec(name="bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="bend", dtype=pa.int64()),
-        ArrowFieldSpec(name="expr_text", dtype=pa.string()),
-    ],
+    fields=_TYPE_EXPRS_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=TYPE_EXPRS_QUERY,
+        metadata_spec=_CST_METADATA,
+    ),
 )
 
-PARSE_MANIFEST_SCHEMA = PARSE_MANIFEST_SPEC.table_spec.to_arrow_schema()
-PARSE_ERRORS_SCHEMA = PARSE_ERRORS_SPEC.table_spec.to_arrow_schema()
-NAME_REFS_SCHEMA = NAME_REFS_SPEC.table_spec.to_arrow_schema()
-IMPORTS_SCHEMA = IMPORTS_SPEC.table_spec.to_arrow_schema()
-CALLSITES_SCHEMA = CALLSITES_SPEC.table_spec.to_arrow_schema()
-DEFS_SCHEMA = DEFS_SPEC.table_spec.to_arrow_schema()
-TYPE_EXPRS_SCHEMA = TYPE_EXPRS_SPEC.table_spec.to_arrow_schema()
-
-PARSE_MANIFEST_QUERY = query_for_schema(PARSE_MANIFEST_SCHEMA)
-PARSE_ERRORS_QUERY = query_for_schema(PARSE_ERRORS_SCHEMA)
-NAME_REFS_QUERY = query_for_schema(NAME_REFS_SCHEMA)
-IMPORTS_QUERY = query_for_schema(IMPORTS_SCHEMA)
-CALLSITES_QUERY = query_for_schema(CALLSITES_SCHEMA)
-DEFS_QUERY = query_for_schema(DEFS_SCHEMA)
-TYPE_EXPRS_QUERY = query_for_schema(TYPE_EXPRS_SCHEMA)
+PARSE_MANIFEST_SCHEMA = PARSE_MANIFEST_SPEC.schema()
+PARSE_ERRORS_SCHEMA = PARSE_ERRORS_SPEC.schema()
+NAME_REFS_SCHEMA = NAME_REFS_SPEC.schema()
+IMPORTS_SCHEMA = IMPORTS_SPEC.schema()
+CALLSITES_SCHEMA = CALLSITES_SPEC.schema()
+DEFS_SCHEMA = DEFS_SPEC.schema()
+TYPE_EXPRS_SCHEMA = TYPE_EXPRS_SPEC.schema()
 
 
 @dataclass(frozen=True)
@@ -346,14 +488,20 @@ def _parse_module(
     try:
         return cst.parse_module(data), None
     except cst.ParserSyntaxError as exc:
+        raw_line = int(getattr(exc, "raw_line", 0) or 0)
+        raw_column = int(getattr(exc, "raw_column", 0) or 0)
         return (
             None,
             {
                 **file_identity_row(file_ctx),
                 "error_type": type(exc).__name__,
                 "message": str(exc),
-                "raw_line": int(getattr(exc, "raw_line", 0) or 0),
-                "raw_column": int(getattr(exc, "raw_column", 0) or 0),
+                "raw_line": raw_line,
+                "raw_column": raw_column,
+                "meta": {
+                    "raw_line": str(raw_line),
+                    "raw_column": str(raw_column),
+                },
             },
         )
 
@@ -959,19 +1107,6 @@ def _build_name_refs_plan(
     if not ctx.name_ref_rows:
         return Plan.table_source(empty_table(NAME_REFS_SCHEMA))
     plan = plan_from_rows(ctx.name_ref_rows, schema=NAME_REFS_SCHEMA, label="cst_name_refs")
-    plan = apply_hash_projection(
-        plan,
-        specs=(
-            HashSpec(
-                prefix="cst_name_ref",
-                cols=("file_id", "bstart", "bend"),
-                out_col="name_ref_id",
-            ),
-        ),
-        available=NAME_REFS_SCHEMA.names,
-        required={"name_ref_id": ("file_id", "bstart", "bend")},
-        ctx=exec_ctx,
-    )
     plan = apply_query_spec(plan, spec=NAME_REFS_QUERY, ctx=exec_ctx)
     return align_plan(
         plan,
@@ -995,19 +1130,6 @@ def _build_imports_plan(
     if not ctx.import_rows:
         return Plan.table_source(empty_table(IMPORTS_SCHEMA))
     plan = plan_from_rows(ctx.import_rows, schema=IMPORTS_SCHEMA, label="cst_imports")
-    plan = apply_hash_projection(
-        plan,
-        specs=(
-            HashSpec(
-                prefix="cst_import",
-                cols=("file_id", "kind", "alias_bstart", "alias_bend"),
-                out_col="import_id",
-            ),
-        ),
-        available=IMPORTS_SCHEMA.names,
-        required={"import_id": ("file_id", "kind", "alias_bstart", "alias_bend")},
-        ctx=exec_ctx,
-    )
     plan = apply_query_spec(plan, spec=IMPORTS_QUERY, ctx=exec_ctx)
     return align_plan(
         plan,
@@ -1031,19 +1153,6 @@ def _build_callsites_plan(
     if not ctx.call_rows:
         return Plan.table_source(empty_table(CALLSITES_SCHEMA))
     plan = plan_from_rows(ctx.call_rows, schema=CALLSITES_SCHEMA, label="cst_callsites")
-    plan = apply_hash_projection(
-        plan,
-        specs=(
-            HashSpec(
-                prefix="cst_call",
-                cols=("file_id", "call_bstart", "call_bend"),
-                out_col="call_id",
-            ),
-        ),
-        available=CALLSITES_SCHEMA.names,
-        required={"call_id": ("file_id", "call_bstart", "call_bend")},
-        ctx=exec_ctx,
-    )
     plan = apply_query_spec(plan, spec=CALLSITES_QUERY, ctx=exec_ctx)
     return align_plan(
         plan,
@@ -1067,37 +1176,6 @@ def _build_defs_plan(
     if not ctx.def_rows:
         return Plan.table_source(empty_table(DEFS_SCHEMA))
     plan = plan_from_rows(ctx.def_rows, schema=DEFS_SCHEMA, label="cst_defs")
-    plan = apply_hash_projection(
-        plan,
-        specs=(
-            HashSpec(
-                prefix="cst_def",
-                cols=("file_id", "kind", "def_bstart", "def_bend"),
-                out_col="def_id",
-            ),
-            HashSpec(
-                prefix="cst_def",
-                cols=(
-                    "file_id",
-                    "container_def_kind",
-                    "container_def_bstart",
-                    "container_def_bend",
-                ),
-                out_col="container_def_id",
-            ),
-        ),
-        available=DEFS_SCHEMA.names,
-        required={
-            "def_id": ("file_id", "kind", "def_bstart", "def_bend"),
-            "container_def_id": (
-                "file_id",
-                "container_def_kind",
-                "container_def_bstart",
-                "container_def_bend",
-            ),
-        },
-        ctx=exec_ctx,
-    )
     plan = apply_query_spec(plan, spec=DEFS_QUERY, ctx=exec_ctx)
     return align_plan(
         plan,
@@ -1121,27 +1199,6 @@ def _build_type_exprs_plan(
     if not ctx.type_expr_rows:
         return Plan.table_source(empty_table(TYPE_EXPRS_SCHEMA))
     plan = plan_from_rows(ctx.type_expr_rows, schema=TYPE_EXPRS_SCHEMA, label="cst_type_exprs")
-    plan = apply_hash_projection(
-        plan,
-        specs=(
-            HashSpec(
-                prefix="cst_type_expr",
-                cols=("path", "bstart", "bend"),
-                out_col="type_expr_id",
-            ),
-            HashSpec(
-                prefix="cst_def",
-                cols=("file_id", "owner_def_kind", "owner_def_bstart", "owner_def_bend"),
-                out_col="owner_def_id",
-            ),
-        ),
-        available=TYPE_EXPRS_SCHEMA.names,
-        required={
-            "type_expr_id": ("path", "bstart", "bend"),
-            "owner_def_id": ("file_id", "owner_def_kind", "owner_def_bstart", "owner_def_bend"),
-        },
-        ctx=exec_ctx,
-    )
     plan = apply_query_spec(plan, spec=TYPE_EXPRS_QUERY, ctx=exec_ctx)
     return align_plan(
         plan,

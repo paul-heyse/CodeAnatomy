@@ -10,22 +10,33 @@ from typing import Literal, cast, overload
 
 import pyarrow as pa
 
-from arrowdsl.core.context import ExecutionContext, RuntimeProfile
-from arrowdsl.core.ids import HashSpec
+from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.schema.schema import empty_table
 from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.file_context import FileContext
-from extract.hashing import apply_hash_projection
-from extract.spec_helpers import register_dataset
+from extract.hash_specs import (
+    BC_BLOCK_ID_SPEC,
+    BC_CODE_UNIT_ID_SPEC,
+    BC_COND_INSTR_ID_SPEC,
+    BC_DST_BLOCK_ID_SPEC,
+    BC_EDGE_ID_SPEC,
+    BC_EXC_ENTRY_ID_SPEC,
+    BC_INSTR_ID_SPEC,
+    BC_PARENT_CODE_UNIT_ID_SPEC,
+    BC_SRC_BLOCK_ID_SPEC,
+)
+from extract.plan_exprs import MaskedHashExprSpec
+from extract.spec_helpers import DatasetRegistration, ordering_metadata_spec, register_dataset
 from extract.tables import (
     align_plan,
+    append_projection,
     apply_query_spec,
     finalize_plan_bundle,
     materialize_plan,
     plan_from_rows,
-    query_for_schema,
 )
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
 
@@ -199,110 +210,285 @@ class BytecodeRowBuffers:
     error_rows: list[Row]
 
 
+_CODE_UNITS_FIELDS = [
+    ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+    ArrowFieldSpec(name="parent_code_unit_id", dtype=pa.string()),
+    ArrowFieldSpec(name="qualpath", dtype=pa.string()),
+    ArrowFieldSpec(name="co_name", dtype=pa.string()),
+    ArrowFieldSpec(name="firstlineno", dtype=pa.int32()),
+    ArrowFieldSpec(name="argcount", dtype=pa.int32()),
+    ArrowFieldSpec(name="posonlyargcount", dtype=pa.int32()),
+    ArrowFieldSpec(name="kwonlyargcount", dtype=pa.int32()),
+    ArrowFieldSpec(name="nlocals", dtype=pa.int32()),
+    ArrowFieldSpec(name="flags", dtype=pa.int32()),
+    ArrowFieldSpec(name="stacksize", dtype=pa.int32()),
+    ArrowFieldSpec(name="code_len", dtype=pa.int32()),
+]
+
+_INSTR_FIELDS = [
+    ArrowFieldSpec(name="instr_id", dtype=pa.string()),
+    ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+    ArrowFieldSpec(name="instr_index", dtype=pa.int32()),
+    ArrowFieldSpec(name="offset", dtype=pa.int32()),
+    ArrowFieldSpec(name="opname", dtype=pa.string()),
+    ArrowFieldSpec(name="opcode", dtype=pa.int32()),
+    ArrowFieldSpec(name="arg", dtype=pa.int32()),
+    ArrowFieldSpec(name="argval_str", dtype=pa.string()),
+    ArrowFieldSpec(name="argrepr", dtype=pa.string()),
+    ArrowFieldSpec(name="is_jump_target", dtype=pa.bool_()),
+    ArrowFieldSpec(name="jump_target_offset", dtype=pa.int32()),
+    ArrowFieldSpec(name="starts_line", dtype=pa.int32()),
+    ArrowFieldSpec(name="pos_start_line", dtype=pa.int32()),
+    ArrowFieldSpec(name="pos_end_line", dtype=pa.int32()),
+    ArrowFieldSpec(name="pos_start_col", dtype=pa.int32()),
+    ArrowFieldSpec(name="pos_end_col", dtype=pa.int32()),
+]
+
+_EXC_FIELDS = [
+    ArrowFieldSpec(name="exc_entry_id", dtype=pa.string()),
+    ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+    ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
+    ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
+    ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
+    ArrowFieldSpec(name="target_offset", dtype=pa.int32()),
+    ArrowFieldSpec(name="depth", dtype=pa.int32()),
+    ArrowFieldSpec(name="lasti", dtype=pa.bool_()),
+]
+
+_BLOCKS_FIELDS = [
+    ArrowFieldSpec(name="block_id", dtype=pa.string()),
+    ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+    ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
+    ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
+    ArrowFieldSpec(name="kind", dtype=pa.string()),
+]
+
+_CFG_EDGES_FIELDS = [
+    ArrowFieldSpec(name="edge_id", dtype=pa.string()),
+    ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+    ArrowFieldSpec(name="src_block_id", dtype=pa.string()),
+    ArrowFieldSpec(name="dst_block_id", dtype=pa.string()),
+    ArrowFieldSpec(name="kind", dtype=pa.string()),
+    ArrowFieldSpec(name="cond_instr_id", dtype=pa.string()),
+    ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
+]
+
+_ERRORS_FIELDS = [
+    ArrowFieldSpec(name="error_type", dtype=pa.string()),
+    ArrowFieldSpec(name="message", dtype=pa.string()),
+]
+
+_BC_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    extra={
+        b"extractor_name": b"bytecode",
+        b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
+    },
+)
+
 CODE_UNITS_SPEC = register_dataset(
     name="py_bc_code_units_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="parent_code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="qualpath", dtype=pa.string()),
-        ArrowFieldSpec(name="co_name", dtype=pa.string()),
-        ArrowFieldSpec(name="firstlineno", dtype=pa.int32()),
-        ArrowFieldSpec(name="argcount", dtype=pa.int32()),
-        ArrowFieldSpec(name="posonlyargcount", dtype=pa.int32()),
-        ArrowFieldSpec(name="kwonlyargcount", dtype=pa.int32()),
-        ArrowFieldSpec(name="nlocals", dtype=pa.int32()),
-        ArrowFieldSpec(name="flags", dtype=pa.int32()),
-        ArrowFieldSpec(name="stacksize", dtype=pa.int32()),
-        ArrowFieldSpec(name="code_len", dtype=pa.int32()),
-    ],
+    fields=_CODE_UNITS_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=QuerySpec(
+            projection=ProjectionSpec(
+                base=tuple(
+                    field.name
+                    for field in (*file_identity_bundle().fields, *_CODE_UNITS_FIELDS)
+                    if field.name not in {"code_unit_id", "parent_code_unit_id"}
+                ),
+                derived={
+                    "code_unit_id": MaskedHashExprSpec(
+                        spec=BC_CODE_UNIT_ID_SPEC,
+                        required=("file_id", "qualpath", "firstlineno", "co_name"),
+                    ),
+                    "parent_code_unit_id": MaskedHashExprSpec(
+                        spec=BC_PARENT_CODE_UNIT_ID_SPEC,
+                        required=(
+                            "file_id",
+                            "parent_qualpath",
+                            "parent_firstlineno",
+                            "parent_co_name",
+                        ),
+                    ),
+                },
+            )
+        ),
+        metadata_spec=_BC_METADATA,
+    ),
 )
 
 INSTR_SPEC = register_dataset(
     name="py_bc_instructions_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="instr_id", dtype=pa.string()),
-        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="instr_index", dtype=pa.int32()),
-        ArrowFieldSpec(name="offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="opname", dtype=pa.string()),
-        ArrowFieldSpec(name="opcode", dtype=pa.int32()),
-        ArrowFieldSpec(name="arg", dtype=pa.int32()),
-        ArrowFieldSpec(name="argval_str", dtype=pa.string()),
-        ArrowFieldSpec(name="argrepr", dtype=pa.string()),
-        ArrowFieldSpec(name="is_jump_target", dtype=pa.bool_()),
-        ArrowFieldSpec(name="jump_target_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="starts_line", dtype=pa.int32()),
-        ArrowFieldSpec(name="pos_start_line", dtype=pa.int32()),
-        ArrowFieldSpec(name="pos_end_line", dtype=pa.int32()),
-        ArrowFieldSpec(name="pos_start_col", dtype=pa.int32()),
-        ArrowFieldSpec(name="pos_end_col", dtype=pa.int32()),
-    ],
+    fields=_INSTR_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=QuerySpec(
+            projection=ProjectionSpec(
+                base=tuple(
+                    field.name
+                    for field in (*file_identity_bundle().fields, *_INSTR_FIELDS)
+                    if field.name not in {"instr_id", "code_unit_id"}
+                ),
+                derived={
+                    "code_unit_id": MaskedHashExprSpec(
+                        spec=BC_CODE_UNIT_ID_SPEC,
+                        required=("file_id", "qualpath", "firstlineno", "co_name"),
+                    ),
+                    "instr_id": MaskedHashExprSpec(
+                        spec=BC_INSTR_ID_SPEC,
+                        required=("code_unit_id", "instr_index", "offset"),
+                    ),
+                },
+            )
+        ),
+        metadata_spec=_BC_METADATA,
+    ),
 )
 
 EXC_SPEC = register_dataset(
     name="py_bc_exception_table_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="exc_entry_id", dtype=pa.string()),
-        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
-        ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="target_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="depth", dtype=pa.int32()),
-        ArrowFieldSpec(name="lasti", dtype=pa.bool_()),
-    ],
+    fields=_EXC_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=QuerySpec(
+            projection=ProjectionSpec(
+                base=tuple(
+                    field.name
+                    for field in (*file_identity_bundle().fields, *_EXC_FIELDS)
+                    if field.name not in {"exc_entry_id", "code_unit_id"}
+                ),
+                derived={
+                    "code_unit_id": MaskedHashExprSpec(
+                        spec=BC_CODE_UNIT_ID_SPEC,
+                        required=("file_id", "qualpath", "firstlineno", "co_name"),
+                    ),
+                    "exc_entry_id": MaskedHashExprSpec(
+                        spec=BC_EXC_ENTRY_ID_SPEC,
+                        required=(
+                            "code_unit_id",
+                            "exc_index",
+                            "start_offset",
+                            "end_offset",
+                            "target_offset",
+                        ),
+                    ),
+                },
+            )
+        ),
+        metadata_spec=_BC_METADATA,
+    ),
 )
 
 BLOCKS_SPEC = register_dataset(
     name="py_bc_blocks_v1",
     version=SCHEMA_VERSION,
     bundles=(),
-    fields=[
-        ArrowFieldSpec(name="block_id", dtype=pa.string()),
-        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
-    ],
+    fields=_BLOCKS_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=QuerySpec(
+            projection=ProjectionSpec(
+                base=tuple(
+                    field.name
+                    for field in _BLOCKS_FIELDS
+                    if field.name not in {"block_id", "code_unit_id"}
+                ),
+                derived={
+                    "code_unit_id": MaskedHashExprSpec(
+                        spec=BC_CODE_UNIT_ID_SPEC,
+                        required=("file_id", "qualpath", "firstlineno", "co_name"),
+                    ),
+                    "block_id": MaskedHashExprSpec(
+                        spec=BC_BLOCK_ID_SPEC,
+                        required=("code_unit_id", "start_offset", "end_offset"),
+                    ),
+                },
+            )
+        ),
+        metadata_spec=_BC_METADATA,
+    ),
 )
 
 CFG_EDGES_SPEC = register_dataset(
     name="py_bc_cfg_edges_v1",
     version=SCHEMA_VERSION,
     bundles=(),
-    fields=[
-        ArrowFieldSpec(name="edge_id", dtype=pa.string()),
-        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="src_block_id", dtype=pa.string()),
-        ArrowFieldSpec(name="dst_block_id", dtype=pa.string()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
-        ArrowFieldSpec(name="cond_instr_id", dtype=pa.string()),
-        ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
-    ],
+    fields=_CFG_EDGES_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=QuerySpec(
+            projection=ProjectionSpec(
+                base=tuple(
+                    field.name
+                    for field in _CFG_EDGES_FIELDS
+                    if field.name
+                    not in {
+                        "edge_id",
+                        "code_unit_id",
+                        "src_block_id",
+                        "dst_block_id",
+                        "cond_instr_id",
+                    }
+                ),
+                derived={
+                    "code_unit_id": MaskedHashExprSpec(
+                        spec=BC_CODE_UNIT_ID_SPEC,
+                        required=("file_id", "qualpath", "firstlineno", "co_name"),
+                    ),
+                    "src_block_id": MaskedHashExprSpec(
+                        spec=BC_SRC_BLOCK_ID_SPEC,
+                        required=("code_unit_id", "src_block_start", "src_block_end"),
+                    ),
+                    "dst_block_id": MaskedHashExprSpec(
+                        spec=BC_DST_BLOCK_ID_SPEC,
+                        required=("code_unit_id", "dst_block_start", "dst_block_end"),
+                    ),
+                    "cond_instr_id": MaskedHashExprSpec(
+                        spec=BC_COND_INSTR_ID_SPEC,
+                        required=("code_unit_id", "cond_instr_index", "cond_instr_offset"),
+                    ),
+                    "edge_id": MaskedHashExprSpec(
+                        spec=BC_EDGE_ID_SPEC,
+                        required=(
+                            "code_unit_id",
+                            "src_block_id",
+                            "dst_block_id",
+                            "kind",
+                            "edge_key",
+                            "exc_index",
+                        ),
+                    ),
+                },
+            )
+        ),
+        metadata_spec=_BC_METADATA,
+    ),
 )
 
 ERRORS_SPEC = register_dataset(
     name="py_bc_errors_v1",
     version=SCHEMA_VERSION,
     bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="error_type", dtype=pa.string()),
-        ArrowFieldSpec(name="message", dtype=pa.string()),
-    ],
+    fields=_ERRORS_FIELDS,
+    registration=DatasetRegistration(
+        query_spec=QuerySpec(
+            projection=ProjectionSpec(
+                base=tuple(field.name for field in (*file_identity_bundle().fields, *_ERRORS_FIELDS))
+            )
+        ),
+        metadata_spec=_BC_METADATA,
+    ),
 )
 
-CODE_UNITS_SCHEMA = CODE_UNITS_SPEC.table_spec.to_arrow_schema()
-INSTR_SCHEMA = INSTR_SPEC.table_spec.to_arrow_schema()
-EXC_SCHEMA = EXC_SPEC.table_spec.to_arrow_schema()
-BLOCKS_SCHEMA = BLOCKS_SPEC.table_spec.to_arrow_schema()
-CFG_EDGES_SCHEMA = CFG_EDGES_SPEC.table_spec.to_arrow_schema()
-ERRORS_SCHEMA = ERRORS_SPEC.table_spec.to_arrow_schema()
+CODE_UNITS_SCHEMA = CODE_UNITS_SPEC.schema()
+INSTR_SCHEMA = INSTR_SPEC.schema()
+EXC_SCHEMA = EXC_SPEC.schema()
+BLOCKS_SCHEMA = BLOCKS_SPEC.schema()
+CFG_EDGES_SCHEMA = CFG_EDGES_SPEC.schema()
+ERRORS_SCHEMA = ERRORS_SPEC.schema()
 
 CODE_UNITS_ROWS_SCHEMA = pa.schema(
     [
@@ -401,23 +587,12 @@ CFG_EDGES_ROWS_SCHEMA = pa.schema(
     ]
 )
 
-CODE_UNITS_QUERY = query_for_schema(CODE_UNITS_SCHEMA)
-INSTR_QUERY = query_for_schema(INSTR_SCHEMA)
-EXC_QUERY = query_for_schema(EXC_SCHEMA)
-BLOCKS_QUERY = query_for_schema(BLOCKS_SCHEMA)
-CFG_EDGES_QUERY = query_for_schema(CFG_EDGES_SCHEMA)
-ERRORS_QUERY = query_for_schema(ERRORS_SCHEMA)
-
-CODE_UNIT_ID_SPEC = HashSpec(
-    prefix="bc_code",
-    cols=("file_id", "qualpath", "firstlineno", "co_name"),
-    out_col="code_unit_id",
-)
-PARENT_CODE_UNIT_ID_SPEC = HashSpec(
-    prefix="bc_code",
-    cols=("file_id", "parent_qualpath", "parent_firstlineno", "parent_co_name"),
-    out_col="parent_code_unit_id",
-)
+CODE_UNITS_QUERY = CODE_UNITS_SPEC.query()
+INSTR_QUERY = INSTR_SPEC.query()
+EXC_QUERY = EXC_SPEC.query()
+BLOCKS_QUERY = BLOCKS_SPEC.query()
+CFG_EDGES_QUERY = CFG_EDGES_SPEC.query()
+ERRORS_QUERY = ERRORS_SPEC.query()
 
 
 def _context_from_file_ctx(
@@ -452,26 +627,36 @@ def _build_code_units_plan(
     if not rows:
         return Plan.table_source(empty_table(CODE_UNITS_SCHEMA))
     plan = plan_from_rows(rows, schema=CODE_UNITS_ROWS_SCHEMA, label="bc_code_units_raw")
-    plan = apply_hash_projection(
+    plan = append_projection(
         plan,
-        specs=(CODE_UNIT_ID_SPEC, PARENT_CODE_UNIT_ID_SPEC),
-        available=CODE_UNITS_ROWS_SCHEMA.names,
-        required={
-            "code_unit_id": ("file_id", "qualpath", "firstlineno", "co_name"),
-            "parent_code_unit_id": (
-                "file_id",
-                "parent_qualpath",
-                "parent_firstlineno",
-                "parent_co_name",
+        base=CODE_UNITS_ROWS_SCHEMA.names,
+        extras=[
+            (
+                MaskedHashExprSpec(
+                    spec=BC_CODE_UNIT_ID_SPEC,
+                    required=("file_id", "qualpath", "firstlineno", "co_name"),
+                ).to_expression(),
+                "code_unit_id",
             ),
-        },
+            (
+                MaskedHashExprSpec(
+                    spec=BC_PARENT_CODE_UNIT_ID_SPEC,
+                    required=(
+                        "file_id",
+                        "parent_qualpath",
+                        "parent_firstlineno",
+                        "parent_co_name",
+                    ),
+                ).to_expression(),
+                "parent_code_unit_id",
+            ),
+        ],
         ctx=exec_ctx,
     )
     plan = apply_query_spec(plan, spec=CODE_UNITS_QUERY, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=CODE_UNITS_SCHEMA,
-        available=CODE_UNITS_SCHEMA.names,
         ctx=exec_ctx,
     )
 
@@ -492,28 +677,24 @@ def _build_instructions_plan(
     if not rows:
         return Plan.table_source(empty_table(INSTR_SCHEMA))
     plan = plan_from_rows(rows, schema=INSTR_ROWS_SCHEMA, label="bc_instructions_raw")
-    plan = apply_hash_projection(
+    plan = append_projection(
         plan,
-        specs=(
-            CODE_UNIT_ID_SPEC,
-            HashSpec(
-                prefix="bc_instr",
-                cols=("code_unit_id", "instr_index", "offset"),
-                out_col="instr_id",
-            ),
-        ),
-        available=INSTR_ROWS_SCHEMA.names,
-        required={
-            "code_unit_id": ("file_id", "qualpath", "firstlineno", "co_name"),
-            "instr_id": ("code_unit_id", "instr_index", "offset"),
-        },
+        base=INSTR_ROWS_SCHEMA.names,
+        extras=[
+            (
+                MaskedHashExprSpec(
+                    spec=BC_CODE_UNIT_ID_SPEC,
+                    required=("file_id", "qualpath", "firstlineno", "co_name"),
+                ).to_expression(),
+                "code_unit_id",
+            )
+        ],
         ctx=exec_ctx,
     )
     plan = apply_query_spec(plan, spec=INSTR_QUERY, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=INSTR_SCHEMA,
-        available=INSTR_SCHEMA.names,
         ctx=exec_ctx,
     )
 
@@ -534,34 +715,24 @@ def _build_exceptions_plan(
     if not rows:
         return Plan.table_source(empty_table(EXC_SCHEMA))
     plan = plan_from_rows(rows, schema=EXC_ROWS_SCHEMA, label="bc_exceptions_raw")
-    plan = apply_hash_projection(
+    plan = append_projection(
         plan,
-        specs=(
-            CODE_UNIT_ID_SPEC,
-            HashSpec(
-                prefix="bc_exc",
-                cols=("code_unit_id", "exc_index", "start_offset", "end_offset", "target_offset"),
-                out_col="exc_entry_id",
-            ),
-        ),
-        available=EXC_ROWS_SCHEMA.names,
-        required={
-            "code_unit_id": ("file_id", "qualpath", "firstlineno", "co_name"),
-            "exc_entry_id": (
+        base=EXC_ROWS_SCHEMA.names,
+        extras=[
+            (
+                MaskedHashExprSpec(
+                    spec=BC_CODE_UNIT_ID_SPEC,
+                    required=("file_id", "qualpath", "firstlineno", "co_name"),
+                ).to_expression(),
                 "code_unit_id",
-                "exc_index",
-                "start_offset",
-                "end_offset",
-                "target_offset",
-            ),
-        },
+            )
+        ],
         ctx=exec_ctx,
     )
     plan = apply_query_spec(plan, spec=EXC_QUERY, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=EXC_SCHEMA,
-        available=EXC_SCHEMA.names,
         ctx=exec_ctx,
     )
 
@@ -582,28 +753,24 @@ def _build_blocks_plan(
     if not rows:
         return Plan.table_source(empty_table(BLOCKS_SCHEMA))
     plan = plan_from_rows(rows, schema=BLOCKS_ROWS_SCHEMA, label="bc_blocks_raw")
-    plan = apply_hash_projection(
+    plan = append_projection(
         plan,
-        specs=(
-            CODE_UNIT_ID_SPEC,
-            HashSpec(
-                prefix="bc_block",
-                cols=("code_unit_id", "start_offset", "end_offset"),
-                out_col="block_id",
-            ),
-        ),
-        available=BLOCKS_ROWS_SCHEMA.names,
-        required={
-            "code_unit_id": ("file_id", "qualpath", "firstlineno", "co_name"),
-            "block_id": ("code_unit_id", "start_offset", "end_offset"),
-        },
+        base=BLOCKS_ROWS_SCHEMA.names,
+        extras=[
+            (
+                MaskedHashExprSpec(
+                    spec=BC_CODE_UNIT_ID_SPEC,
+                    required=("file_id", "qualpath", "firstlineno", "co_name"),
+                ).to_expression(),
+                "code_unit_id",
+            )
+        ],
         ctx=exec_ctx,
     )
     plan = apply_query_spec(plan, spec=BLOCKS_QUERY, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=BLOCKS_SCHEMA,
-        available=BLOCKS_SCHEMA.names,
         ctx=exec_ctx,
     )
 
@@ -624,53 +791,38 @@ def _build_cfg_edges_plan(
     if not rows:
         return Plan.table_source(empty_table(CFG_EDGES_SCHEMA))
     plan = plan_from_rows(rows, schema=CFG_EDGES_ROWS_SCHEMA, label="bc_cfg_edges_raw")
-    plan = apply_hash_projection(
+    plan = append_projection(
         plan,
-        specs=(
-            CODE_UNIT_ID_SPEC,
-            HashSpec(
-                prefix="bc_block",
-                cols=("code_unit_id", "src_block_start", "src_block_end"),
-                out_col="src_block_id",
+        base=CFG_EDGES_ROWS_SCHEMA.names,
+        extras=[
+            (
+                MaskedHashExprSpec(
+                    spec=BC_CODE_UNIT_ID_SPEC,
+                    required=("file_id", "qualpath", "firstlineno", "co_name"),
+                ).to_expression(),
+                "code_unit_id",
             ),
-            HashSpec(
-                prefix="bc_block",
-                cols=("code_unit_id", "dst_block_start", "dst_block_end"),
-                out_col="dst_block_id",
+            (
+                MaskedHashExprSpec(
+                    spec=BC_SRC_BLOCK_ID_SPEC,
+                    required=("code_unit_id", "src_block_start", "src_block_end"),
+                ).to_expression(),
+                "src_block_id",
             ),
-            HashSpec(
-                prefix="bc_instr",
-                cols=("code_unit_id", "cond_instr_index", "cond_instr_offset"),
-                out_col="cond_instr_id",
+            (
+                MaskedHashExprSpec(
+                    spec=BC_DST_BLOCK_ID_SPEC,
+                    required=("code_unit_id", "dst_block_start", "dst_block_end"),
+                ).to_expression(),
+                "dst_block_id",
             ),
-            HashSpec(
-                prefix="bc_edge",
-                cols=(
-                    "code_unit_id",
-                    "src_block_id",
-                    "dst_block_id",
-                    "kind",
-                    "edge_key",
-                    "exc_index",
-                ),
-                out_col="edge_id",
-            ),
-        ),
-        available=CFG_EDGES_ROWS_SCHEMA.names,
-        required={
-            "code_unit_id": ("file_id", "qualpath", "firstlineno", "co_name"),
-            "src_block_id": ("code_unit_id", "src_block_start", "src_block_end"),
-            "dst_block_id": ("code_unit_id", "dst_block_start", "dst_block_end"),
-            "cond_instr_id": ("code_unit_id", "cond_instr_index", "cond_instr_offset"),
-            "edge_id": ("code_unit_id", "src_block_id", "dst_block_id", "kind", "edge_key"),
-        },
+        ],
         ctx=exec_ctx,
     )
     plan = apply_query_spec(plan, spec=CFG_EDGES_QUERY, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=CFG_EDGES_SCHEMA,
-        available=CFG_EDGES_SCHEMA.names,
         ctx=exec_ctx,
     )
 

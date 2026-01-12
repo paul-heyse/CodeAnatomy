@@ -2,45 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import pyarrow as pa
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.ids import HashSpec, hash_expression
-from arrowdsl.core.interop import ComputeExpression, DataTypeLike, ensure_expression, pc
+from arrowdsl.core.ids import hash_expression
+from arrowdsl.core.interop import ensure_expression, pc
 from arrowdsl.plan.plan import Plan
+from cpg.hash_specs import edge_hash_specs
+from cpg.plan_exprs import coalesce_expr, column_or_null_expr
 from cpg.specs import EdgeEmitSpec
-
-
-def _field_expr(
-    name: str,
-    *,
-    available: set[str],
-    dtype: DataTypeLike,
-) -> ComputeExpression:
-    if name in available:
-        return ensure_expression(pc.cast(pc.field(name), dtype, safe=False))
-    return ensure_expression(pc.cast(pc.scalar(None), dtype, safe=False))
-
-
-def _coalesce_expr(
-    cols: Sequence[str],
-    *,
-    available: set[str],
-    dtype: DataTypeLike,
-) -> ComputeExpression:
-    exprs = [
-        ensure_expression(pc.cast(pc.field(col), dtype, safe=False))
-        for col in cols
-        if col in available
-    ]
-    if not exprs:
-        return ensure_expression(pc.cast(pc.scalar(None), dtype, safe=False))
-    if len(exprs) == 1:
-        return exprs[0]
-    return ensure_expression(pc.coalesce(*exprs))
-
 
 EDGE_OUTPUT_NAMES: tuple[str, ...] = (
     "edge_id",
@@ -70,20 +40,20 @@ def _normalized_relation_plan(
 ) -> Plan:
     available = set(rel.schema(ctx=ctx).names)
     exprs = [
-        _coalesce_expr(spec.src_cols, available=available, dtype=pa.string()),
-        _coalesce_expr(spec.dst_cols, available=available, dtype=pa.string()),
-        _coalesce_expr(spec.path_cols, available=available, dtype=pa.string()),
-        _coalesce_expr(spec.bstart_cols, available=available, dtype=pa.int64()),
-        _coalesce_expr(spec.bend_cols, available=available, dtype=pa.int64()),
-        _field_expr("origin", available=available, dtype=pa.string()),
-        _field_expr("resolution_method", available=available, dtype=pa.string()),
-        _field_expr("confidence", available=available, dtype=pa.float32()),
-        _field_expr("score", available=available, dtype=pa.float32()),
-        _field_expr("symbol_roles", available=available, dtype=pa.int32()),
-        _field_expr("qname_source", available=available, dtype=pa.string()),
-        _field_expr("ambiguity_group_id", available=available, dtype=pa.string()),
-        _field_expr("rule_name", available=available, dtype=pa.string()),
-        _field_expr("rule_priority", available=available, dtype=pa.int32()),
+        coalesce_expr(spec.src_cols, available=available, dtype=pa.string()),
+        coalesce_expr(spec.dst_cols, available=available, dtype=pa.string()),
+        coalesce_expr(spec.path_cols, available=available, dtype=pa.string()),
+        coalesce_expr(spec.bstart_cols, available=available, dtype=pa.int64()),
+        coalesce_expr(spec.bend_cols, available=available, dtype=pa.int64()),
+        column_or_null_expr("origin", available=available, dtype=pa.string()),
+        column_or_null_expr("resolution_method", available=available, dtype=pa.string()),
+        column_or_null_expr("confidence", available=available, dtype=pa.float32()),
+        column_or_null_expr("score", available=available, dtype=pa.float32()),
+        column_or_null_expr("symbol_roles", available=available, dtype=pa.int32()),
+        column_or_null_expr("qname_source", available=available, dtype=pa.string()),
+        column_or_null_expr("ambiguity_group_id", available=available, dtype=pa.string()),
+        column_or_null_expr("rule_name", available=available, dtype=pa.string()),
+        column_or_null_expr("rule_priority", available=available, dtype=pa.int32()),
     ]
     names = [
         "src",
@@ -120,18 +90,7 @@ def emit_edges_plan(
     rel_norm = _normalized_relation_plan(rel, spec=spec, ctx=ctx)
     available = rel_norm.schema(ctx=ctx).names
 
-    base_spec = HashSpec(
-        prefix="edge",
-        cols=("src", "dst"),
-        extra_literals=(spec.edge_kind.value,),
-        as_string=True,
-    )
-    full_spec = HashSpec(
-        prefix="edge",
-        cols=("src", "dst", "path", "bstart", "bend"),
-        extra_literals=(spec.edge_kind.value,),
-        as_string=True,
-    )
+    base_spec, full_spec = edge_hash_specs(spec.edge_kind.value)
     base_id = hash_expression(base_spec, available=available)
     full_id = hash_expression(full_spec, available=available)
 

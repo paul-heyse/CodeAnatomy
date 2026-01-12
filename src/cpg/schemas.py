@@ -5,6 +5,7 @@ from __future__ import annotations
 import pyarrow as pa
 
 from arrowdsl.core.interop import TableLike
+from arrowdsl.schema.schema import SchemaMetadataSpec
 from schema_spec.specs import DICT_STRING, ArrowFieldSpec, file_identity_bundle, span_bundle
 from schema_spec.system import (
     GLOBAL_SCHEMA_REGISTRY,
@@ -18,6 +19,23 @@ from schema_spec.system import (
 )
 
 SCHEMA_VERSION = 1
+ENCODING_METADATA_KEY = "encoding"
+ENCODING_DICTIONARY = "dictionary"
+
+
+def _dict_metadata() -> dict[str, str]:
+    return {ENCODING_METADATA_KEY: ENCODING_DICTIONARY}
+
+
+def _cpg_metadata(dataset_name: str, *, contract_name: str) -> SchemaMetadataSpec:
+    return SchemaMetadataSpec(
+        schema_metadata={
+            b"cpg_stage": b"cpg",
+            b"cpg_dataset": dataset_name.encode("utf-8"),
+            b"contract_name": contract_name.encode("utf-8"),
+            b"determinism_tier": b"best_effort",
+        }
+    )
 
 CPG_NODES_TABLE_SPEC = make_table_spec(
     name="cpg_nodes_v1",
@@ -25,7 +43,12 @@ CPG_NODES_TABLE_SPEC = make_table_spec(
     bundles=(file_identity_bundle(include_sha256=False), span_bundle()),
     fields=[
         ArrowFieldSpec(name="node_id", dtype=pa.string(), nullable=False),
-        ArrowFieldSpec(name="node_kind", dtype=DICT_STRING, nullable=False),
+        ArrowFieldSpec(
+            name="node_kind",
+            dtype=DICT_STRING,
+            nullable=False,
+            metadata=_dict_metadata(),
+        ),
     ],
     constraints=TableSpecConstraints(
         required_non_null=("node_id", "node_kind"),
@@ -58,6 +81,7 @@ CPG_NODES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
     make_dataset_spec(
         table_spec=CPG_NODES_TABLE_SPEC,
         contract_spec=CPG_NODES_CONTRACT_SPEC,
+        metadata_spec=_cpg_metadata("cpg_nodes_v1", contract_name="cpg_nodes_v1"),
     )
 )
 
@@ -67,18 +91,27 @@ CPG_EDGES_TABLE_SPEC = make_table_spec(
     bundles=(span_bundle(),),
     fields=[
         ArrowFieldSpec(name="edge_id", dtype=pa.string(), nullable=False),
-        ArrowFieldSpec(name="edge_kind", dtype=DICT_STRING, nullable=False),
+        ArrowFieldSpec(
+            name="edge_kind",
+            dtype=DICT_STRING,
+            nullable=False,
+            metadata=_dict_metadata(),
+        ),
         ArrowFieldSpec(name="src_node_id", dtype=pa.string(), nullable=False),
         ArrowFieldSpec(name="dst_node_id", dtype=pa.string(), nullable=False),
         ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="origin", dtype=DICT_STRING),
-        ArrowFieldSpec(name="resolution_method", dtype=DICT_STRING),
+        ArrowFieldSpec(name="origin", dtype=DICT_STRING, metadata=_dict_metadata()),
+        ArrowFieldSpec(
+            name="resolution_method",
+            dtype=DICT_STRING,
+            metadata=_dict_metadata(),
+        ),
         ArrowFieldSpec(name="confidence", dtype=pa.float32()),
         ArrowFieldSpec(name="score", dtype=pa.float32()),
         ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
-        ArrowFieldSpec(name="qname_source", dtype=DICT_STRING),
+        ArrowFieldSpec(name="qname_source", dtype=DICT_STRING, metadata=_dict_metadata()),
         ArrowFieldSpec(name="ambiguity_group_id", dtype=pa.string()),
-        ArrowFieldSpec(name="rule_name", dtype=DICT_STRING),
+        ArrowFieldSpec(name="rule_name", dtype=DICT_STRING, metadata=_dict_metadata()),
         ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
     ],
     constraints=TableSpecConstraints(
@@ -115,6 +148,7 @@ CPG_EDGES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
     make_dataset_spec(
         table_spec=CPG_EDGES_TABLE_SPEC,
         contract_spec=CPG_EDGES_CONTRACT_SPEC,
+        metadata_spec=_cpg_metadata("cpg_edges_v1", contract_name="cpg_edges_v1"),
     )
 )
 
@@ -163,12 +197,13 @@ CPG_PROPS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
     make_dataset_spec(
         table_spec=CPG_PROPS_TABLE_SPEC,
         contract_spec=CPG_PROPS_CONTRACT_SPEC,
+        metadata_spec=_cpg_metadata("cpg_props_v1", contract_name="cpg_props_v1"),
     )
 )
 
-CPG_NODES_SCHEMA = CPG_NODES_SPEC.table_spec.to_arrow_schema()
-CPG_EDGES_SCHEMA = CPG_EDGES_SPEC.table_spec.to_arrow_schema()
-CPG_PROPS_SCHEMA = CPG_PROPS_SPEC.table_spec.to_arrow_schema()
+CPG_NODES_SCHEMA = CPG_NODES_SPEC.schema()
+CPG_EDGES_SCHEMA = CPG_EDGES_SPEC.schema()
+CPG_PROPS_SCHEMA = CPG_PROPS_SPEC.schema()
 
 CPG_NODES_CONTRACT = CPG_NODES_CONTRACT_SPEC.to_contract()
 CPG_EDGES_CONTRACT = CPG_EDGES_CONTRACT_SPEC.to_contract()

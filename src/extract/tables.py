@@ -3,19 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from typing import cast
 
 import pyarrow as pa
 
-from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import (
-    ComputeExpression,
-    RecordBatchReaderLike,
-    SchemaLike,
-    TableLike,
-    pc,
-)
+from arrowdsl.core.context import DeterminismTier, ExecutionContext, OrderingKey
+from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, pc
 from arrowdsl.plan.plan import Plan, PlanSpec
-from arrowdsl.plan.query import QuerySpec
+from arrowdsl.plan_helpers import (
+    append_projection,
+    apply_query_spec,
+    flatten_struct_field,
+    query_for_schema,
+    rename_plan_columns,
+)
 from arrowdsl.schema.schema import (
     SchemaEvolutionSpec,
     SchemaMetadataSpec,
@@ -128,85 +129,6 @@ def align_plan(
     return plan.project(exprs, names, ctx=ctx)
 
 
-def append_projection(
-    plan: Plan,
-    *,
-    base: Sequence[str],
-    extras: Sequence[tuple[ComputeExpression, str]],
-    ctx: ExecutionContext | None = None,
-) -> Plan:
-    """Append extra expressions to a projection of base columns.
-
-    Returns
-    -------
-    Plan
-        Plan with appended projection expressions.
-    """
-    expressions: list[ComputeExpression] = [pc.field(name) for name in base]
-    names = list(base)
-    for expr, name in extras:
-        expressions.append(expr)
-        names.append(name)
-    return plan.project(expressions, names, ctx=ctx)
-
-
-def rename_plan_columns(
-    plan: Plan,
-    *,
-    columns: Sequence[str],
-    rename: Mapping[str, str],
-    ctx: ExecutionContext | None = None,
-) -> Plan:
-    """Rename columns via a plan projection.
-
-    Returns
-    -------
-    Plan
-        Plan with renamed columns.
-    """
-    names = [rename.get(name, name) for name in columns]
-    expressions = [pc.field(name) for name in columns]
-    return plan.project(expressions, names, ctx=ctx)
-
-
-def query_for_schema(schema: SchemaLike) -> QuerySpec:
-    """Return a QuerySpec projecting the schema columns.
-
-    Returns
-    -------
-    QuerySpec
-        QuerySpec with base columns set to the schema names.
-    """
-    return QuerySpec.simple(*schema.names)
-
-
-def apply_query_spec(
-    plan: Plan,
-    *,
-    spec: QuerySpec,
-    ctx: ExecutionContext,
-    provenance: bool = False,
-) -> Plan:
-    """Apply QuerySpec filters and projections to a plan.
-
-    Returns
-    -------
-    Plan
-        Updated plan with filters/projections applied.
-    """
-    predicate = spec.predicate_expression()
-    if predicate is not None:
-        plan = plan.filter(predicate, ctx=ctx)
-    cols = spec.scan_columns(provenance=provenance)
-    if isinstance(cols, Mapping):
-        names = list(cols.keys())
-        expressions = list(cols.values())
-    else:
-        names = list(cols)
-        expressions = [pc.field(name) for name in cols]
-    return plan.project(expressions, names, ctx=ctx)
-
-
 def _metadata_spec_from_schema(schema: SchemaLike) -> SchemaMetadataSpec:
     schema_meta = dict(schema.metadata or {})
     field_meta = {
@@ -253,6 +175,84 @@ def unify_tables(
     return pa.concat_tables(aligned)
 
 
+def _parse_ordering_keys(schema: SchemaLike) -> list[OrderingKey]:
+    metadata = schema.metadata or {}
+    raw = metadata.get(b"ordering_keys")
+    if not raw:
+        return []
+    decoded = raw.decode("utf-8")
+    keys: list[OrderingKey] = []
+    for part in decoded.split(","):
+        text = part.strip()
+        if not text:
+            continue
+        if ":" in text:
+            col, order = text.split(":", maxsplit=1)
+        else:
+            col, order = text, "ascending"
+        keys.append((col.strip(), order.strip()))
+    return keys
+
+
+def _infer_ordering_keys(schema: SchemaLike) -> list[OrderingKey]:
+    names = list(schema.names)
+    id_cols = sorted(name for name in names if name.endswith("_id"))
+    position_cols = [
+        "ast_idx",
+        "parent_ast_idx",
+        "child_ast_idx",
+        "bstart",
+        "bend",
+        "start_byte",
+        "end_byte",
+        "lineno",
+        "col_offset",
+        "offset",
+        "instr_index",
+        "start_offset",
+        "end_offset",
+        "raw_line",
+        "raw_column",
+        "table_id",
+        "name",
+    ]
+    keys = [(name, "ascending") for name in id_cols]
+    keys.extend(
+        (name, "ascending") for name in position_cols if name in names and name not in id_cols
+    )
+    return keys
+
+
+def _ordering_keys(schema: SchemaLike) -> list[OrderingKey]:
+    keys = _parse_ordering_keys(schema)
+    if keys:
+        return keys
+    return _infer_ordering_keys(schema)
+
+
+def _apply_canonical_sort(table: TableLike, *, ctx: ExecutionContext) -> TableLike:
+    if ctx.determinism != DeterminismTier.CANONICAL:
+        return table
+    keys = _ordering_keys(table.schema)
+    if not keys:
+        return table
+    indices = pc.sort_indices(table, sort_keys=keys)
+    return table.take(indices)
+
+
+def _with_pipeline_breakers(
+    table: TableLike,
+    *,
+    pipeline_breakers: Sequence[str],
+) -> TableLike:
+    if not pipeline_breakers:
+        return table
+    metadata = dict(table.schema.metadata or {})
+    metadata[b"pipeline_breakers"] = ",".join(pipeline_breakers).encode("utf-8")
+    schema = table.schema.with_metadata(metadata)
+    return table.cast(schema)
+
+
 def materialize_plan(plan: Plan, *, ctx: ExecutionContext) -> TableLike:
     """Materialize a plan as a table.
 
@@ -260,8 +260,17 @@ def materialize_plan(plan: Plan, *, ctx: ExecutionContext) -> TableLike:
     -------
     TableLike
         Materialized table.
+
+    Raises
+    ------
+    TypeError
+        Raised when a non-table result is returned from finalize.
     """
-    return PlanSpec.from_plan(plan).to_table(ctx=ctx)
+    result = finalize_plan(plan, ctx=ctx, prefer_reader=False)
+    if isinstance(result, pa.RecordBatchReader):
+        msg = "Expected table result from finalize_plan."
+        raise TypeError(msg)
+    return cast("TableLike", result)
 
 
 def stream_plan(plan: Plan, *, ctx: ExecutionContext) -> RecordBatchReaderLike:
@@ -289,9 +298,15 @@ def finalize_plan(
         Reader when allowed, otherwise a table.
     """
     spec = PlanSpec.from_plan(plan)
-    if prefer_reader and not spec.pipeline_breakers:
+    if (
+        prefer_reader
+        and not spec.pipeline_breakers
+        and ctx.determinism != DeterminismTier.CANONICAL
+    ):
         return spec.to_reader(ctx=ctx)
-    return spec.to_table(ctx=ctx)
+    table = spec.to_table(ctx=ctx)
+    table = _apply_canonical_sort(table, ctx=ctx)
+    return _with_pipeline_breakers(table, pipeline_breakers=spec.pipeline_breakers)
 
 
 def finalize_plan_bundle(
@@ -311,17 +326,6 @@ def finalize_plan_bundle(
         name: finalize_plan(plan, ctx=ctx, prefer_reader=prefer_reader)
         for name, plan in plans.items()
     }
-
-
-def flatten_struct_field(field: pa.Field) -> list[pa.Field]:
-    """Flatten a struct field into child fields with parent-name prefixes.
-
-    Returns
-    -------
-    list[pyarrow.Field]
-        Flattened fields with parent-name prefixes.
-    """
-    return list(field.flatten())
 
 
 __all__ = [

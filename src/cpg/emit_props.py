@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.types as patypes
@@ -13,6 +14,7 @@ from arrowdsl.compute.udfs import ensure_json_udf
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, DataTypeLike, ensure_expression, pc
 from arrowdsl.plan.plan import Plan
+from cpg.plan_exprs import null_if_empty_or_zero
 from cpg.prop_transforms import (
     expr_context_expr,
     expr_context_value,
@@ -32,6 +34,16 @@ class PropFieldPlanContext:
     ctx: ExecutionContext
 
 
+@dataclass(frozen=True)
+class PropValueExpr:
+    """Resolved value expression metadata for property emission."""
+
+    expr: ComputeExpression
+    value_type: PropValueType
+    defer_json: bool = False
+    json_dtype: DataTypeLike | None = None
+
+
 def _entity_id_expr(
     cols: Sequence[str],
     *,
@@ -42,13 +54,7 @@ def _entity_id_expr(
         if col not in available:
             continue
         expr = ensure_expression(pc.cast(pc.field(col), pa.string(), safe=False))
-        expr = ensure_expression(
-            pc.if_else(
-                pc.or_(pc.equal(expr, pc.scalar("")), pc.equal(expr, pc.scalar("0"))),
-                pc.cast(pc.scalar(None), pa.string(), safe=False),
-                expr,
-            )
-        )
+        expr = null_if_empty_or_zero(expr)
         exprs.append(expr)
     if not exprs:
         return ensure_expression(pc.cast(pc.scalar(None), pa.string(), safe=False))
@@ -73,6 +79,9 @@ def _value_columns() -> tuple[str, ...]:
     return ("value_str", "value_int", "value_float", "value_bool", "value_json")
 
 
+VALUE_STRUCT_FIELD = "value_struct"
+
+
 def _null_value_exprs() -> dict[str, ComputeExpression]:
     return {
         "value_str": ensure_expression(pc.cast(pc.scalar(None), pa.string(), safe=False)),
@@ -91,7 +100,7 @@ def _json_literal_expr(value: object) -> ComputeExpression:
     return ensure_expression(pc.cast(pc.scalar(encoded), pa.string(), safe=False))
 
 
-def _json_expr(
+def _serialize_json_expr(
     expr: ComputeExpression,
     *,
     dtype: DataTypeLike | None,
@@ -102,6 +111,41 @@ def _json_expr(
         return ensure_expression(pc.cast(expr, pa.string(), safe=False))
     func_name = ensure_json_udf(dtype)
     return ensure_expression(pc.call_function(func_name, [expr]))
+
+
+def _json_value_expr(
+    expr: ComputeExpression,
+    *,
+    dtype: DataTypeLike | None,
+    ctx: ExecutionContext,
+) -> PropValueExpr:
+    if dtype is None or patypes.is_string(dtype) or patypes.is_large_string(dtype):
+        return PropValueExpr(
+            expr=ensure_expression(pc.cast(expr, pa.string(), safe=False)),
+            value_type="json",
+        )
+    if patypes.is_list(dtype):
+        list_type = cast("pa.ListType", dtype)
+        inner = list_type.value_type
+        target_dtype = dtype
+        if not patypes.is_large_list(dtype):
+            target_dtype = pa.large_list(inner)
+        coerced = ensure_expression(pc.cast(expr, target_dtype, safe=False))
+        return PropValueExpr(
+            expr=coerced,
+            value_type="json",
+            defer_json=True,
+            json_dtype=target_dtype,
+        )
+    if patypes.is_struct(dtype):
+        return PropValueExpr(
+            expr=ensure_expression(expr),
+            value_type="json",
+            defer_json=True,
+            json_dtype=dtype,
+        )
+    serialized = _serialize_json_expr(expr, dtype=dtype, ctx=ctx)
+    return PropValueExpr(expr=serialized, value_type="json")
 
 
 def _apply_transform(expr: ComputeExpression, field: PropFieldSpec) -> ComputeExpression:
@@ -121,7 +165,7 @@ def _value_expr(
     available: set[str],
     schema_types: dict[str, DataTypeLike],
     ctx: ExecutionContext,
-) -> tuple[ComputeExpression, PropValueType]:
+) -> PropValueExpr:
     value_type = field.value_type
     if value_type is None:
         msg = f"Missing value_type for prop field {field.prop_key!r}."
@@ -134,7 +178,7 @@ def _value_expr(
             expr = ensure_expression(
                 pc.cast(pc.scalar(field.literal), _value_dtype(value_type), safe=False)
             )
-        return expr, value_type
+        return PropValueExpr(expr=expr, value_type=value_type)
 
     source_col = field.source_col
     if source_col is None or source_col not in available:
@@ -145,10 +189,53 @@ def _value_expr(
     expr = _apply_transform(expr, field)
     if value_type == "json":
         dtype = schema_types.get(source_col) if source_col is not None else None
-        expr = _json_expr(expr, dtype=dtype, ctx=ctx)
-        return expr, value_type
+        return _json_value_expr(expr, dtype=dtype, ctx=ctx)
 
-    return ensure_expression(pc.cast(expr, _value_dtype(value_type), safe=False)), value_type
+    return PropValueExpr(
+        expr=ensure_expression(pc.cast(expr, _value_dtype(value_type), safe=False)),
+        value_type=value_type,
+    )
+
+
+def _value_struct_expr(value_exprs: dict[str, ComputeExpression]) -> ComputeExpression:
+    names = list(value_exprs.keys())
+    exprs = [value_exprs[name] for name in names]
+    return ensure_expression(pc.make_struct(*exprs, field_names=names))
+
+
+def _expand_value_struct(
+    plan: Plan,
+    *,
+    ctx: ExecutionContext,
+    defer_json: bool,
+    json_dtype: DataTypeLike | None,
+) -> Plan:
+    value_struct = pc.field(VALUE_STRUCT_FIELD)
+    value_str = ensure_expression(pc.struct_field(value_struct, "value_str"))
+    value_int = ensure_expression(pc.struct_field(value_struct, "value_int"))
+    value_float = ensure_expression(pc.struct_field(value_struct, "value_float"))
+    value_bool = ensure_expression(pc.struct_field(value_struct, "value_bool"))
+    value_json = ensure_expression(pc.struct_field(value_struct, "value_json"))
+    if defer_json:
+        value_json = _serialize_json_expr(value_json, dtype=json_dtype, ctx=ctx)
+    else:
+        value_json = ensure_expression(pc.cast(value_json, pa.string(), safe=False))
+
+    exprs: list[ComputeExpression] = [
+        pc.field("entity_kind"),
+        pc.field("entity_id"),
+        pc.field("prop_key"),
+        value_str,
+        value_int,
+        value_float,
+        value_bool,
+        value_json,
+    ]
+    names = ["entity_kind", "entity_id", "prop_key", *_value_columns()]
+    if "schema_version" in plan.schema(ctx=ctx).names:
+        exprs.append(pc.field("schema_version"))
+        names.append("schema_version")
+    return plan.project(exprs, names, ctx=ctx)
 
 
 def prop_field_plan(
@@ -167,7 +254,7 @@ def prop_field_plan(
     schema = plan.schema(ctx=context.ctx)
     available = set(schema.names)
     schema_types = {schema_field.name: schema_field.type for schema_field in schema}
-    value_expr, value_type = _value_expr(
+    value = _value_expr(
         field,
         available=available,
         schema_types=schema_types,
@@ -180,20 +267,17 @@ def prop_field_plan(
         "float": "value_float",
         "bool": "value_bool",
         "json": "value_json",
-    }[value_type]
-    value_exprs[target_col] = value_expr
+    }[value.value_type]
+    value_exprs[target_col] = value.expr
+    value_struct = _value_struct_expr(value_exprs)
 
     exprs: list[ComputeExpression] = [
         ensure_expression(pc.cast(pc.scalar(context.entity_kind), pa.string(), safe=False)),
         context.entity_id,
         ensure_expression(pc.cast(pc.scalar(field.prop_key), pa.string(), safe=False)),
-        value_exprs["value_str"],
-        value_exprs["value_int"],
-        value_exprs["value_float"],
-        value_exprs["value_bool"],
-        value_exprs["value_json"],
+        value_struct,
     ]
-    names = ["entity_kind", "entity_id", "prop_key", *_value_columns()]
+    names = ["entity_kind", "entity_id", "prop_key", VALUE_STRUCT_FIELD]
     if context.schema_version is not None:
         exprs.append(
             ensure_expression(pc.cast(pc.scalar(context.schema_version), pa.int32(), safe=False))
@@ -201,8 +285,16 @@ def prop_field_plan(
         names.append("schema_version")
     out = plan.project(exprs, names, ctx=context.ctx)
     if field.skip_if_none:
-        out = out.filter(pc.field(target_col).is_valid(), ctx=context.ctx)
-    return out
+        value_expr = ensure_expression(
+            pc.struct_field(pc.field(VALUE_STRUCT_FIELD), target_col)
+        )
+        out = out.filter(ensure_expression(pc.is_valid(value_expr)), ctx=context.ctx)
+    return _expand_value_struct(
+        out,
+        ctx=context.ctx,
+        defer_json=value.defer_json,
+        json_dtype=value.json_dtype,
+    )
 
 
 def emit_props_plans(

@@ -7,10 +7,11 @@ import json
 from collections.abc import Mapping
 from typing import TypedDict
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.encoding import EncodingSpec, encode_columns
-from arrowdsl.kernels import ChunkPolicy
-from arrowdsl.pyarrow_protocols import SchemaLike, TableLike
+import pyarrow as pa
+
+from arrowdsl.compute.kernels import ChunkPolicy
+from arrowdsl.core.interop import SchemaLike, TableLike
+from arrowdsl.schema.schema import EncodingSpec, encode_columns
 from core_types import JsonDict
 
 type RowValue = str | int

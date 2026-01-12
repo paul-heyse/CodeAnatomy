@@ -5,21 +5,17 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
+import pyarrow as pa
 import tree_sitter_python
 from tree_sitter import Language, Parser
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.column_ops import set_or_append_column
-from arrowdsl.compute import pc
-from arrowdsl.empty import empty_table
-from arrowdsl.id_specs import HashSpec
-from arrowdsl.ids import hash_column_values
-from arrowdsl.pyarrow_protocols import TableLike
+from arrowdsl.core.ids import HashSpec, hash_column_values
+from arrowdsl.core.interop import TableLike, pc
+from arrowdsl.schema.arrays import set_or_append_column
+from arrowdsl.schema.schema import empty_table
 from extract.file_context import FileContext, iter_file_contexts
-from schema_spec.core import ArrowFieldSpec
-from schema_spec.factories import make_table_spec
-from schema_spec.fields import file_identity_bundle
-from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
+from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
+from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
 
 SCHEMA_VERSION = 1
 
@@ -54,60 +50,66 @@ class TreeSitterRowBuffers:
     parent_indices: list[int | None]
 
 
-TS_NODES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="ts_nodes_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
-            ArrowFieldSpec(name="parent_ts_id", dtype=pa.string()),
-            ArrowFieldSpec(name="ts_type", dtype=pa.string()),
-            ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
-            ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
-            ArrowFieldSpec(name="is_named", dtype=pa.bool_()),
-            ArrowFieldSpec(name="has_error", dtype=pa.bool_()),
-            ArrowFieldSpec(name="is_error", dtype=pa.bool_()),
-            ArrowFieldSpec(name="is_missing", dtype=pa.bool_()),
-        ],
+TS_NODES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="ts_nodes_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
+                ArrowFieldSpec(name="parent_ts_id", dtype=pa.string()),
+                ArrowFieldSpec(name="ts_type", dtype=pa.string()),
+                ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
+                ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
+                ArrowFieldSpec(name="is_named", dtype=pa.bool_()),
+                ArrowFieldSpec(name="has_error", dtype=pa.bool_()),
+                ArrowFieldSpec(name="is_error", dtype=pa.bool_()),
+                ArrowFieldSpec(name="is_missing", dtype=pa.bool_()),
+            ],
+        )
     )
 )
 
-TS_ERRORS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="ts_errors_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="ts_error_id", dtype=pa.string()),
-            ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
-            ArrowFieldSpec(name="ts_type", dtype=pa.string()),
-            ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
-            ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
-            ArrowFieldSpec(name="is_error", dtype=pa.bool_()),
-        ],
+TS_ERRORS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="ts_errors_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="ts_error_id", dtype=pa.string()),
+                ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
+                ArrowFieldSpec(name="ts_type", dtype=pa.string()),
+                ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
+                ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
+                ArrowFieldSpec(name="is_error", dtype=pa.bool_()),
+            ],
+        )
     )
 )
 
-TS_MISSING_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="ts_missing_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="ts_missing_id", dtype=pa.string()),
-            ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
-            ArrowFieldSpec(name="ts_type", dtype=pa.string()),
-            ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
-            ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
-            ArrowFieldSpec(name="is_missing", dtype=pa.bool_()),
-        ],
+TS_MISSING_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="ts_missing_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="ts_missing_id", dtype=pa.string()),
+                ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
+                ArrowFieldSpec(name="ts_type", dtype=pa.string()),
+                ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
+                ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
+                ArrowFieldSpec(name="is_missing", dtype=pa.bool_()),
+            ],
+        )
     )
 )
 
-TS_NODES_SCHEMA = TS_NODES_SPEC.to_arrow_schema()
-TS_ERRORS_SCHEMA = TS_ERRORS_SPEC.to_arrow_schema()
-TS_MISSING_SCHEMA = TS_MISSING_SPEC.to_arrow_schema()
+TS_NODES_SCHEMA = TS_NODES_SPEC.table_spec.to_arrow_schema()
+TS_ERRORS_SCHEMA = TS_ERRORS_SPEC.table_spec.to_arrow_schema()
+TS_MISSING_SCHEMA = TS_MISSING_SPEC.table_spec.to_arrow_schema()
 
 
 def _parser() -> Parser:

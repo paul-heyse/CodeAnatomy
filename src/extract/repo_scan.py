@@ -10,16 +10,14 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.column_ops import set_or_append_column
-from arrowdsl.id_specs import HashSpec
-from arrowdsl.ids import hash_column_values
-from arrowdsl.pyarrow_protocols import TableLike
+import pyarrow as pa
+
+from arrowdsl.core.ids import HashSpec, hash_column_values
+from arrowdsl.core.interop import TableLike
+from arrowdsl.schema.arrays import set_or_append_column
 from core_types import PathLike, ensure_path
-from schema_spec.core import ArrowFieldSpec
-from schema_spec.factories import make_table_spec
-from schema_spec.fields import file_identity_bundle
-from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
+from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
+from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
 
 SCHEMA_VERSION = 1
 
@@ -49,22 +47,24 @@ class RepoScanOptions:
     max_files: int | None = None
 
 
-REPO_FILES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="repo_files_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="abs_path", dtype=pa.string()),
-            ArrowFieldSpec(name="size_bytes", dtype=pa.int64()),
-            ArrowFieldSpec(name="encoding", dtype=pa.string()),
-            ArrowFieldSpec(name="text", dtype=pa.string()),
-            ArrowFieldSpec(name="bytes", dtype=pa.binary()),
-        ],
+REPO_FILES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="repo_files_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="abs_path", dtype=pa.string()),
+                ArrowFieldSpec(name="size_bytes", dtype=pa.int64()),
+                ArrowFieldSpec(name="encoding", dtype=pa.string()),
+                ArrowFieldSpec(name="text", dtype=pa.string()),
+                ArrowFieldSpec(name="bytes", dtype=pa.binary()),
+            ],
+        )
     )
 )
 
-REPO_FILES_SCHEMA = REPO_FILES_SPEC.to_arrow_schema()
+REPO_FILES_SCHEMA = REPO_FILES_SPEC.table_spec.to_arrow_schema()
 
 
 def _is_excluded_dir(rel_path: Path, exclude_dirs: Sequence[str]) -> bool:

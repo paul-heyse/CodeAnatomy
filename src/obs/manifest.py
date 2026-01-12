@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from arrowdsl.pyarrow_protocols import TableLike
+from arrowdsl.core.interop import TableLike
 from core_types import JsonDict, PathLike, ensure_path
 from obs.repro import collect_repro_info
 from obs.stats import schema_fingerprint, table_summary

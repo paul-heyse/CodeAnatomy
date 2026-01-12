@@ -10,8 +10,8 @@ from pathlib import Path
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
-from arrowdsl.finalize import FinalizeResult
-from arrowdsl.pyarrow_protocols import TableLike
+from arrowdsl.core.interop import TableLike
+from arrowdsl.finalize.finalize import FinalizeResult
 from core_types import PathLike, ensure_path
 
 

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.ipc as pa_ipc
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.pyarrow_protocols import TableLike
+from arrowdsl.core.interop import TableLike
 from core_types import PathLike, ensure_path
 
 

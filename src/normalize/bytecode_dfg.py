@@ -2,56 +2,57 @@
 
 from __future__ import annotations
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.column_ops import set_or_append_column
-from arrowdsl.columns import coalesce_string
-from arrowdsl.empty import empty_table
-from arrowdsl.ids import prefixed_hash_id
-from arrowdsl.iter import iter_arrays
-from arrowdsl.kernels import def_use_kind_array, masked_values, valid_pair_mask
-from arrowdsl.predicates import And, FilterSpec, IsNull, Not
-from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike
-from schema_spec.core import ArrowFieldSpec
-from schema_spec.factories import make_table_spec
-from schema_spec.fields import file_identity_bundle
-from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
+import pyarrow as pa
+
+from arrowdsl.compute.kernels import def_use_kind_array, masked_values, valid_pair_mask
+from arrowdsl.compute.predicates import And, FilterSpec, IsNull, Not
+from arrowdsl.core.ids import iter_arrays, prefixed_hash_id
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike
+from arrowdsl.schema.arrays import coalesce_string, set_or_append_column
+from arrowdsl.schema.schema import empty_table
+from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
+from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
 
 SCHEMA_VERSION = 1
 
-DEF_USE_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="py_bc_def_use_events_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(include_sha256=False),),
-        fields=[
-            ArrowFieldSpec(name="event_id", dtype=pa.string()),
-            ArrowFieldSpec(name="instr_id", dtype=pa.string()),
-            ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-            ArrowFieldSpec(name="kind", dtype=pa.string()),
-            ArrowFieldSpec(name="symbol", dtype=pa.string()),
-            ArrowFieldSpec(name="opname", dtype=pa.string()),
-            ArrowFieldSpec(name="offset", dtype=pa.int32()),
-        ],
+DEF_USE_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="py_bc_def_use_events_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(include_sha256=False),),
+            fields=[
+                ArrowFieldSpec(name="event_id", dtype=pa.string()),
+                ArrowFieldSpec(name="instr_id", dtype=pa.string()),
+                ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+                ArrowFieldSpec(name="kind", dtype=pa.string()),
+                ArrowFieldSpec(name="symbol", dtype=pa.string()),
+                ArrowFieldSpec(name="opname", dtype=pa.string()),
+                ArrowFieldSpec(name="offset", dtype=pa.int32()),
+            ],
+        )
     )
 )
 
-REACHES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="py_bc_reaches_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(include_sha256=False),),
-        fields=[
-            ArrowFieldSpec(name="edge_id", dtype=pa.string()),
-            ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-            ArrowFieldSpec(name="def_event_id", dtype=pa.string()),
-            ArrowFieldSpec(name="use_event_id", dtype=pa.string()),
-            ArrowFieldSpec(name="symbol", dtype=pa.string()),
-        ],
+REACHES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="py_bc_reaches_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(include_sha256=False),),
+            fields=[
+                ArrowFieldSpec(name="edge_id", dtype=pa.string()),
+                ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+                ArrowFieldSpec(name="def_event_id", dtype=pa.string()),
+                ArrowFieldSpec(name="use_event_id", dtype=pa.string()),
+                ArrowFieldSpec(name="symbol", dtype=pa.string()),
+            ],
+        )
     )
 )
 
-DEF_USE_SCHEMA = DEF_USE_SPEC.to_arrow_schema()
-REACHES_SCHEMA = REACHES_SPEC.to_arrow_schema()
+DEF_USE_SCHEMA = DEF_USE_SPEC.table_spec.to_arrow_schema()
+REACHES_SCHEMA = REACHES_SPEC.table_spec.to_arrow_schema()
 
 USE_PREFIXES = ("LOAD_",)
 DEF_PREFIXES = ("STORE_", "DELETE_")

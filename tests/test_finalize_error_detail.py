@@ -1,9 +1,8 @@
 """Tests for finalize error_detail aggregation."""
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.contracts import Contract
-from arrowdsl.finalize import finalize
-from arrowdsl.runtime import ExecutionContext, RuntimeProfile
+import arrowdsl.core.interop as pa
+from arrowdsl.core.context import ExecutionContext, RuntimeProfile
+from arrowdsl.finalize.finalize import Contract, finalize
 
 
 def test_error_detail_schema_and_aggregation() -> None:

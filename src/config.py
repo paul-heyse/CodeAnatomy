@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from arrowdsl.runtime import DeterminismTier, RuntimeProfile, ScanProfile
+from arrowdsl.core.context import DeterminismTier, RuntimeProfile, ScanProfile
 
 
 @dataclass(frozen=True)

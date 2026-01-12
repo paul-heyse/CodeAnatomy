@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from arrowdsl.pyarrow_protocols import TableLike
+from arrowdsl.core.interop import TableLike
 from relspec.compiler import CompiledOutput
 from relspec.registry import ContractCatalog, DatasetLocation, RelationshipRegistry
 

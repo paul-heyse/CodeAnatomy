@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 import libcst as cst
+import pyarrow as pa
 from libcst import helpers
 from libcst.metadata import (
     BaseMetadataProvider,
@@ -18,20 +19,18 @@ from libcst.metadata import (
     QualifiedNameProvider,
 )
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.column_ops import set_or_append_column
-from arrowdsl.compute import pc
-from arrowdsl.empty import empty_table
-from arrowdsl.id_specs import HashSpec
-from arrowdsl.ids import hash_column_values
-from arrowdsl.nested import build_list_array, build_list_of_structs
-from arrowdsl.pyarrow_protocols import TableLike
-from arrowdsl.schema_ops import SchemaTransform
+from arrowdsl.core.ids import HashSpec, hash_column_values
+from arrowdsl.core.interop import ArrayLike, TableLike, pc
+from arrowdsl.schema.arrays import build_list_array, build_list_of_structs, set_or_append_column
+from arrowdsl.schema.schema import SchemaTransform, empty_table
 from extract.file_context import FileContext, iter_file_contexts
-from schema_spec.core import ArrowFieldSpec
-from schema_spec.factories import make_table_spec
-from schema_spec.fields import call_span_bundle, file_identity_bundle
-from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
+from schema_spec.specs import (
+    ArrowFieldSpec,
+    NestedFieldSpec,
+    call_span_bundle,
+    file_identity_bundle,
+)
+from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
 
 SCHEMA_VERSION = 1
 
@@ -40,6 +39,27 @@ type Row = dict[str, object]
 
 def _offsets_start() -> list[int]:
     return [0]
+
+
+def _build_string_list(offsets: Sequence[int], values: Sequence[str | None]) -> ArrayLike:
+    return build_list_array(
+        pa.array(offsets, type=pa.int32()),
+        pa.array(values, type=pa.string()),
+    )
+
+
+def _build_qname_list(
+    offsets: Sequence[int],
+    names: Sequence[str | None],
+    sources: Sequence[str | None],
+) -> ArrayLike:
+    return build_list_of_structs(
+        pa.array(offsets, type=pa.int32()),
+        {
+            "name": pa.array(names, type=pa.string()),
+            "source": pa.array(sources, type=pa.string()),
+        },
+    )
 
 
 def _valid_mask(table: TableLike, cols: Sequence[str]) -> object:
@@ -123,136 +143,150 @@ class CSTExtractResult:
 QNAME_STRUCT = pa.struct([("name", pa.string()), ("source", pa.string())])
 QNAME_LIST = pa.list_(QNAME_STRUCT)
 
-PARSE_MANIFEST_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="py_cst_parse_manifest_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="encoding", dtype=pa.string()),
-            ArrowFieldSpec(name="default_indent", dtype=pa.string()),
-            ArrowFieldSpec(name="default_newline", dtype=pa.string()),
-            ArrowFieldSpec(name="has_trailing_newline", dtype=pa.bool_()),
-            ArrowFieldSpec(name="future_imports", dtype=pa.list_(pa.string())),
-            ArrowFieldSpec(name="module_name", dtype=pa.string()),
-            ArrowFieldSpec(name="package_name", dtype=pa.string()),
-        ],
+PARSE_MANIFEST_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="py_cst_parse_manifest_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="encoding", dtype=pa.string()),
+                ArrowFieldSpec(name="default_indent", dtype=pa.string()),
+                ArrowFieldSpec(name="default_newline", dtype=pa.string()),
+                ArrowFieldSpec(name="has_trailing_newline", dtype=pa.bool_()),
+                ArrowFieldSpec(name="future_imports", dtype=pa.list_(pa.string())),
+                ArrowFieldSpec(name="module_name", dtype=pa.string()),
+                ArrowFieldSpec(name="package_name", dtype=pa.string()),
+            ],
+        )
     )
 )
 
-PARSE_ERRORS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="py_cst_parse_errors_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="error_type", dtype=pa.string()),
-            ArrowFieldSpec(name="message", dtype=pa.string()),
-            ArrowFieldSpec(name="raw_line", dtype=pa.int32()),
-            ArrowFieldSpec(name="raw_column", dtype=pa.int32()),
-        ],
+PARSE_ERRORS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="py_cst_parse_errors_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="error_type", dtype=pa.string()),
+                ArrowFieldSpec(name="message", dtype=pa.string()),
+                ArrowFieldSpec(name="raw_line", dtype=pa.int32()),
+                ArrowFieldSpec(name="raw_column", dtype=pa.int32()),
+            ],
+        )
     )
 )
 
-NAME_REFS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="py_cst_name_refs_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="name_ref_id", dtype=pa.string()),
-            ArrowFieldSpec(name="name", dtype=pa.string()),
-            ArrowFieldSpec(name="expr_ctx", dtype=pa.string()),
-            ArrowFieldSpec(name="bstart", dtype=pa.int64()),
-            ArrowFieldSpec(name="bend", dtype=pa.int64()),
-        ],
+NAME_REFS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="py_cst_name_refs_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="name_ref_id", dtype=pa.string()),
+                ArrowFieldSpec(name="name", dtype=pa.string()),
+                ArrowFieldSpec(name="expr_ctx", dtype=pa.string()),
+                ArrowFieldSpec(name="bstart", dtype=pa.int64()),
+                ArrowFieldSpec(name="bend", dtype=pa.int64()),
+            ],
+        )
     )
 )
 
-IMPORTS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="py_cst_imports_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="import_id", dtype=pa.string()),
-            ArrowFieldSpec(name="kind", dtype=pa.string()),
-            ArrowFieldSpec(name="module", dtype=pa.string()),
-            ArrowFieldSpec(name="relative_level", dtype=pa.int32()),
-            ArrowFieldSpec(name="name", dtype=pa.string()),
-            ArrowFieldSpec(name="asname", dtype=pa.string()),
-            ArrowFieldSpec(name="is_star", dtype=pa.bool_()),
-            ArrowFieldSpec(name="stmt_bstart", dtype=pa.int64()),
-            ArrowFieldSpec(name="stmt_bend", dtype=pa.int64()),
-            ArrowFieldSpec(name="alias_bstart", dtype=pa.int64()),
-            ArrowFieldSpec(name="alias_bend", dtype=pa.int64()),
-        ],
+IMPORTS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="py_cst_imports_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="import_id", dtype=pa.string()),
+                ArrowFieldSpec(name="kind", dtype=pa.string()),
+                ArrowFieldSpec(name="module", dtype=pa.string()),
+                ArrowFieldSpec(name="relative_level", dtype=pa.int32()),
+                ArrowFieldSpec(name="name", dtype=pa.string()),
+                ArrowFieldSpec(name="asname", dtype=pa.string()),
+                ArrowFieldSpec(name="is_star", dtype=pa.bool_()),
+                ArrowFieldSpec(name="stmt_bstart", dtype=pa.int64()),
+                ArrowFieldSpec(name="stmt_bend", dtype=pa.int64()),
+                ArrowFieldSpec(name="alias_bstart", dtype=pa.int64()),
+                ArrowFieldSpec(name="alias_bend", dtype=pa.int64()),
+            ],
+        )
     )
 )
 
-CALLSITES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="py_cst_callsites_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="call_id", dtype=pa.string()),
-            *call_span_bundle().fields,
-            ArrowFieldSpec(name="callee_bstart", dtype=pa.int64()),
-            ArrowFieldSpec(name="callee_bend", dtype=pa.int64()),
-            ArrowFieldSpec(name="callee_shape", dtype=pa.string()),
-            ArrowFieldSpec(name="callee_text", dtype=pa.string()),
-            ArrowFieldSpec(name="arg_count", dtype=pa.int32()),
-            ArrowFieldSpec(name="callee_dotted", dtype=pa.string()),
-            ArrowFieldSpec(name="callee_qnames", dtype=QNAME_LIST),
-        ],
+CALLSITES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="py_cst_callsites_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="call_id", dtype=pa.string()),
+                *call_span_bundle().fields,
+                ArrowFieldSpec(name="callee_bstart", dtype=pa.int64()),
+                ArrowFieldSpec(name="callee_bend", dtype=pa.int64()),
+                ArrowFieldSpec(name="callee_shape", dtype=pa.string()),
+                ArrowFieldSpec(name="callee_text", dtype=pa.string()),
+                ArrowFieldSpec(name="arg_count", dtype=pa.int32()),
+                ArrowFieldSpec(name="callee_dotted", dtype=pa.string()),
+                ArrowFieldSpec(name="callee_qnames", dtype=QNAME_LIST),
+            ],
+        )
     )
 )
 
-DEFS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="py_cst_defs_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="def_id", dtype=pa.string()),
-            ArrowFieldSpec(name="container_def_id", dtype=pa.string()),
-            ArrowFieldSpec(name="kind", dtype=pa.string()),
-            ArrowFieldSpec(name="name", dtype=pa.string()),
-            ArrowFieldSpec(name="def_bstart", dtype=pa.int64()),
-            ArrowFieldSpec(name="def_bend", dtype=pa.int64()),
-            ArrowFieldSpec(name="name_bstart", dtype=pa.int64()),
-            ArrowFieldSpec(name="name_bend", dtype=pa.int64()),
-            ArrowFieldSpec(name="qnames", dtype=QNAME_LIST),
-        ],
+DEFS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="py_cst_defs_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="def_id", dtype=pa.string()),
+                ArrowFieldSpec(name="container_def_id", dtype=pa.string()),
+                ArrowFieldSpec(name="kind", dtype=pa.string()),
+                ArrowFieldSpec(name="name", dtype=pa.string()),
+                ArrowFieldSpec(name="def_bstart", dtype=pa.int64()),
+                ArrowFieldSpec(name="def_bend", dtype=pa.int64()),
+                ArrowFieldSpec(name="name_bstart", dtype=pa.int64()),
+                ArrowFieldSpec(name="name_bend", dtype=pa.int64()),
+                ArrowFieldSpec(name="qnames", dtype=QNAME_LIST),
+            ],
+        )
     )
 )
 
-TYPE_EXPRS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="py_cst_type_exprs_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="type_expr_id", dtype=pa.string()),
-            ArrowFieldSpec(name="owner_def_id", dtype=pa.string()),
-            ArrowFieldSpec(name="param_name", dtype=pa.string()),
-            ArrowFieldSpec(name="expr_kind", dtype=pa.string()),
-            ArrowFieldSpec(name="expr_role", dtype=pa.string()),
-            ArrowFieldSpec(name="bstart", dtype=pa.int64()),
-            ArrowFieldSpec(name="bend", dtype=pa.int64()),
-            ArrowFieldSpec(name="expr_text", dtype=pa.string()),
-        ],
+TYPE_EXPRS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="py_cst_type_exprs_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="type_expr_id", dtype=pa.string()),
+                ArrowFieldSpec(name="owner_def_id", dtype=pa.string()),
+                ArrowFieldSpec(name="param_name", dtype=pa.string()),
+                ArrowFieldSpec(name="expr_kind", dtype=pa.string()),
+                ArrowFieldSpec(name="expr_role", dtype=pa.string()),
+                ArrowFieldSpec(name="bstart", dtype=pa.int64()),
+                ArrowFieldSpec(name="bend", dtype=pa.int64()),
+                ArrowFieldSpec(name="expr_text", dtype=pa.string()),
+            ],
+        )
     )
 )
 
-PARSE_MANIFEST_SCHEMA = PARSE_MANIFEST_SPEC.to_arrow_schema()
-PARSE_ERRORS_SCHEMA = PARSE_ERRORS_SPEC.to_arrow_schema()
-NAME_REFS_SCHEMA = NAME_REFS_SPEC.to_arrow_schema()
-IMPORTS_SCHEMA = IMPORTS_SPEC.to_arrow_schema()
-CALLSITES_SCHEMA = CALLSITES_SPEC.to_arrow_schema()
-DEFS_SCHEMA = DEFS_SPEC.to_arrow_schema()
-TYPE_EXPRS_SCHEMA = TYPE_EXPRS_SPEC.to_arrow_schema()
+PARSE_MANIFEST_SCHEMA = PARSE_MANIFEST_SPEC.table_spec.to_arrow_schema()
+PARSE_ERRORS_SCHEMA = PARSE_ERRORS_SPEC.table_spec.to_arrow_schema()
+NAME_REFS_SCHEMA = NAME_REFS_SPEC.table_spec.to_arrow_schema()
+IMPORTS_SCHEMA = IMPORTS_SPEC.table_spec.to_arrow_schema()
+CALLSITES_SCHEMA = CALLSITES_SPEC.table_spec.to_arrow_schema()
+DEFS_SCHEMA = DEFS_SPEC.table_spec.to_arrow_schema()
+TYPE_EXPRS_SCHEMA = TYPE_EXPRS_SPEC.table_spec.to_arrow_schema()
 
 
 @dataclass(frozen=True)
@@ -344,6 +378,48 @@ class CSTExtractContext:
             def_qname_sources=[],
             type_expr_rows=[],
         )
+
+
+def _build_manifest_future_imports(ctx: CSTExtractContext) -> ArrayLike:
+    return _build_string_list(
+        ctx.manifest_future_imports_offsets,
+        ctx.manifest_future_imports_values,
+    )
+
+
+def _build_call_qnames(ctx: CSTExtractContext) -> ArrayLike:
+    return _build_qname_list(
+        ctx.call_qname_offsets,
+        ctx.call_qname_names,
+        ctx.call_qname_sources,
+    )
+
+
+def _build_def_qnames(ctx: CSTExtractContext) -> ArrayLike:
+    return _build_qname_list(
+        ctx.def_qname_offsets,
+        ctx.def_qname_names,
+        ctx.def_qname_sources,
+    )
+
+
+FUTURE_IMPORTS_SPEC = NestedFieldSpec(
+    name="future_imports",
+    dtype=pa.list_(pa.string()),
+    builder=_build_manifest_future_imports,
+)
+
+CALL_QNAMES_SPEC = NestedFieldSpec(
+    name="callee_qnames",
+    dtype=QNAME_LIST,
+    builder=_build_call_qnames,
+)
+
+DEF_QNAMES_SPEC = NestedFieldSpec(
+    name="qnames",
+    dtype=QNAME_LIST,
+    builder=_build_def_qnames,
+)
 
 
 type DefKey = tuple[str, int, int]
@@ -1019,10 +1095,7 @@ def _build_manifest_table(ctx: CSTExtractContext) -> TableLike:
     )
     if not ctx.manifest_rows:
         return table
-    future_imports = build_list_array(
-        pa.array(ctx.manifest_future_imports_offsets, type=pa.int32()),
-        pa.array(ctx.manifest_future_imports_values, type=pa.string()),
-    )
+    future_imports = FUTURE_IMPORTS_SPEC.builder(ctx)
     idx = table.schema.get_field_index("future_imports")
     return table.set_column(idx, "future_imports", future_imports)
 
@@ -1071,13 +1144,7 @@ def _build_callsites_table(ctx: CSTExtractContext) -> TableLike:
     if not ctx.call_rows:
         return empty_table(CALLSITES_SCHEMA)
     table = pa.Table.from_pylist(ctx.call_rows)
-    call_qnames = build_list_of_structs(
-        pa.array(ctx.call_qname_offsets, type=pa.int32()),
-        {
-            "name": pa.array(ctx.call_qname_names, type=pa.string()),
-            "source": pa.array(ctx.call_qname_sources, type=pa.string()),
-        },
-    )
+    call_qnames = CALL_QNAMES_SPEC.builder(ctx)
     idx = table.schema.get_field_index("callee_qnames")
     table = table.set_column(idx, "callee_qnames", call_qnames)
     table = _apply_hash_column(
@@ -1096,13 +1163,7 @@ def _build_defs_table(ctx: CSTExtractContext) -> TableLike:
     if not ctx.def_rows:
         return empty_table(DEFS_SCHEMA)
     table = pa.Table.from_pylist(ctx.def_rows)
-    def_qnames = build_list_of_structs(
-        pa.array(ctx.def_qname_offsets, type=pa.int32()),
-        {
-            "name": pa.array(ctx.def_qname_names, type=pa.string()),
-            "source": pa.array(ctx.def_qname_sources, type=pa.string()),
-        },
-    )
+    def_qnames = DEF_QNAMES_SPEC.builder(ctx)
     idx = table.schema.get_field_index("qnames")
     table = table.set_column(idx, "qnames", def_qnames)
     table = _apply_hash_column(

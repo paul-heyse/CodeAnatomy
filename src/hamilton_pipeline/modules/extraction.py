@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
+import pyarrow as pa
 from hamilton.function_modifiers import cache, config, extract_fields, tag
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.pyarrow_protocols import SchemaLike, TableLike
-from arrowdsl.runtime import ExecutionContext
+from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.interop import SchemaLike, TableLike
 from extract.ast_extract import extract_ast_tables
 from extract.bytecode_extract import (
     BytecodeExtractOptions,

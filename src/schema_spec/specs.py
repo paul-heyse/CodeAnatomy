@@ -1,0 +1,283 @@
+"""Schema specification models and shared field bundles."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+
+import arrowdsl.core.interop as pa
+from arrowdsl.core.interop import DataTypeLike, FieldLike, SchemaLike
+from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTransform
+
+SCHEMA_META_NAME = b"schema_name"
+SCHEMA_META_VERSION = b"schema_version"
+
+DICT_STRING = pa.dictionary(pa.int32(), pa.string())
+
+PROVENANCE_COLS: tuple[str, ...] = (
+    "prov_filename",
+    "prov_fragment_index",
+    "prov_batch_index",
+    "prov_last_in_fragment",
+)
+
+PROVENANCE_SOURCE_FIELDS: dict[str, str] = {
+    "prov_filename": "__filename",
+    "prov_fragment_index": "__fragment_index",
+    "prov_batch_index": "__batch_index",
+    "prov_last_in_fragment": "__last_in_fragment",
+}
+
+
+def schema_metadata(name: str, version: int) -> dict[bytes, bytes]:
+    """Return schema metadata for name/version tagging.
+
+    Returns
+    -------
+    dict[bytes, bytes]
+        Encoded schema metadata mapping.
+    """
+    return {
+        SCHEMA_META_NAME: name.encode("utf-8"),
+        SCHEMA_META_VERSION: str(version).encode("utf-8"),
+    }
+
+
+def _field_metadata(metadata: dict[str, str]) -> dict[bytes, bytes]:
+    """Encode metadata keys/values for Arrow.
+
+    Returns
+    -------
+    dict[bytes, bytes]
+        Encoded metadata mapping.
+    """
+    return {str(k).encode("utf-8"): str(v).encode("utf-8") for k, v in metadata.items()}
+
+
+class ArrowFieldSpec(BaseModel):
+    """Specification for a single Arrow field."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
+
+    name: str
+    dtype: DataTypeLike
+    nullable: bool = True
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+    def to_arrow_field(self) -> FieldLike:
+        """Build a pyarrow.Field from the spec.
+
+        Returns
+        -------
+        pyarrow.Field
+            Arrow field instance.
+        """
+        metadata = _field_metadata(self.metadata)
+        return pa.field(self.name, self.dtype, nullable=self.nullable, metadata=metadata)
+
+
+class TableSchemaSpec(BaseModel):
+    """Specification for a table schema and associated constraints."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
+
+    name: str
+    version: int | None = None
+    fields: list[ArrowFieldSpec]
+    required_non_null: tuple[str, ...] = ()
+    key_fields: tuple[str, ...] = ()
+
+    @field_validator("fields")
+    @classmethod
+    def _unique_field_names(cls, fields: list[ArrowFieldSpec]) -> list[ArrowFieldSpec]:
+        seen: set[str] = set()
+        dupes: list[str] = []
+        for field in fields:
+            if field.name in seen:
+                dupes.append(field.name)
+            else:
+                seen.add(field.name)
+        if dupes:
+            msg = f"duplicate field names: {sorted(set(dupes))}"
+            raise ValueError(msg)
+        return fields
+
+    @field_validator("required_non_null", "key_fields")
+    @classmethod
+    def _validate_field_refs(
+        cls,
+        values: tuple[str, ...],
+        info: ValidationInfo,
+    ) -> tuple[str, ...]:
+        field_names = {field.name for field in info.data["fields"]}
+        missing = [name for name in values if name not in field_names]
+        if missing:
+            msg = f"unknown fields: {missing}"
+            raise ValueError(msg)
+        return values
+
+    def to_arrow_schema(self) -> SchemaLike:
+        """Build a pyarrow.Schema from the spec.
+
+        Returns
+        -------
+        pyarrow.Schema
+            Arrow schema instance.
+        """
+        schema = pa.schema([field.to_arrow_field() for field in self.fields])
+        if self.version is None:
+            return schema
+        meta = schema_metadata(self.name, self.version)
+        return SchemaMetadataSpec(schema_metadata=meta).apply(schema)
+
+    def to_transform(
+        self,
+        *,
+        safe_cast: bool = True,
+        keep_extra_columns: bool = False,
+        on_error: CastErrorPolicy = "unsafe",
+    ) -> SchemaTransform:
+        """Create a schema transform for aligning tables to this spec.
+
+        Returns
+        -------
+        SchemaTransform
+            Transform configured for this schema spec.
+        """
+        return SchemaTransform(
+            schema=self.to_arrow_schema(),
+            safe_cast=safe_cast,
+            keep_extra_columns=keep_extra_columns,
+            on_error=on_error,
+        )
+
+
+@dataclass(frozen=True)
+class FieldBundle:
+    """Bundle of fields plus required/key constraints."""
+
+    name: str
+    fields: tuple[ArrowFieldSpec, ...]
+    required_non_null: tuple[str, ...] = ()
+    key_fields: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class NestedFieldSpec:
+    """Nested field specification with a builder hook."""
+
+    name: str
+    dtype: DataTypeLike
+    builder: Callable[..., pa.ArrayLike]
+
+
+def file_identity_bundle(*, include_sha256: bool = True) -> FieldBundle:
+    """Return a bundle for file identity columns.
+
+    Returns
+    -------
+    FieldBundle
+        Bundle containing file identity fields.
+    """
+    fields = [
+        ArrowFieldSpec(name="file_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+    ]
+    if include_sha256:
+        fields.append(ArrowFieldSpec(name="file_sha256", dtype=pa.string()))
+    return FieldBundle(name="file_identity", fields=tuple(fields))
+
+
+def span_bundle() -> FieldBundle:
+    """Return a bundle for byte-span columns.
+
+    Returns
+    -------
+    FieldBundle
+        Bundle containing byte-span fields.
+    """
+    return FieldBundle(
+        name="span",
+        fields=(
+            ArrowFieldSpec(name="bstart", dtype=pa.int64()),
+            ArrowFieldSpec(name="bend", dtype=pa.int64()),
+        ),
+    )
+
+
+def call_span_bundle() -> FieldBundle:
+    """Return a bundle for callsite byte-span columns.
+
+    Returns
+    -------
+    FieldBundle
+        Bundle containing callsite byte-span fields.
+    """
+    return FieldBundle(
+        name="call_span",
+        fields=(
+            ArrowFieldSpec(name="call_bstart", dtype=pa.int64()),
+            ArrowFieldSpec(name="call_bend", dtype=pa.int64()),
+        ),
+    )
+
+
+def scip_range_bundle(*, prefix: str = "", include_len: bool = False) -> FieldBundle:
+    """Return a bundle for SCIP line/character range columns.
+
+    Returns
+    -------
+    FieldBundle
+        Bundle containing SCIP range fields.
+    """
+    normalized = f"{prefix}_" if prefix and not prefix.endswith("_") else prefix
+    fields = [
+        ArrowFieldSpec(name=f"{normalized}start_line", dtype=pa.int32()),
+        ArrowFieldSpec(name=f"{normalized}start_char", dtype=pa.int32()),
+        ArrowFieldSpec(name=f"{normalized}end_line", dtype=pa.int32()),
+        ArrowFieldSpec(name=f"{normalized}end_char", dtype=pa.int32()),
+    ]
+    if include_len:
+        fields.append(ArrowFieldSpec(name=f"{normalized}range_len", dtype=pa.int32()))
+    name = f"{normalized}scip_range" if normalized else "scip_range"
+    return FieldBundle(name=name, fields=tuple(fields))
+
+
+def provenance_bundle() -> FieldBundle:
+    """Return a bundle for dataset scan provenance columns.
+
+    Returns
+    -------
+    FieldBundle
+        Bundle containing provenance fields.
+    """
+    return FieldBundle(
+        name="provenance",
+        fields=(
+            ArrowFieldSpec(name=PROVENANCE_COLS[0], dtype=pa.string()),
+            ArrowFieldSpec(name=PROVENANCE_COLS[1], dtype=pa.int32()),
+            ArrowFieldSpec(name=PROVENANCE_COLS[2], dtype=pa.int32()),
+            ArrowFieldSpec(name=PROVENANCE_COLS[3], dtype=pa.bool_()),
+        ),
+    )
+
+
+__all__ = [
+    "DICT_STRING",
+    "PROVENANCE_COLS",
+    "PROVENANCE_SOURCE_FIELDS",
+    "SCHEMA_META_NAME",
+    "SCHEMA_META_VERSION",
+    "ArrowFieldSpec",
+    "FieldBundle",
+    "NestedFieldSpec",
+    "TableSchemaSpec",
+    "call_span_bundle",
+    "file_identity_bundle",
+    "provenance_bundle",
+    "schema_metadata",
+    "scip_range_bundle",
+    "span_bundle",
+]

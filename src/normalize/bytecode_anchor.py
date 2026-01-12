@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.column_ops import set_or_append_column
-from arrowdsl.iter import iter_arrays
-from arrowdsl.pyarrow_protocols import ArrayLike, DataTypeLike, TableLike
+import pyarrow as pa
+
+from arrowdsl.core.ids import iter_arrays
+from arrowdsl.core.interop import ArrayLike, DataTypeLike, TableLike
+from arrowdsl.schema.arrays import set_or_append_column
 from normalize.spans import FileTextIndex, RepoTextIndex, ast_range_to_byte_span
 
 

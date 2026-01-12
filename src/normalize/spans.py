@@ -6,20 +6,19 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.column_ops import (
+import pyarrow as pa
+
+from arrowdsl.core.ids import iter_arrays
+from arrowdsl.core.interop import ArrayLike, DataTypeLike, TableLike
+from arrowdsl.schema.arrays import (
     ColumnDefaultsSpec,
     ConstExpr,
     FieldExpr,
     set_or_append_column,
 )
-from arrowdsl.iter import iter_arrays
-from arrowdsl.pyarrow_protocols import ArrayLike, DataTypeLike, TableLike
 from normalize.ids import add_span_id_column
-from schema_spec.core import ArrowFieldSpec
-from schema_spec.factories import make_table_spec
-from schema_spec.fields import scip_range_bundle
-from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
+from schema_spec.specs import ArrowFieldSpec, scip_range_bundle
+from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
 
 type RowValue = object | None
 
@@ -136,20 +135,22 @@ class OccurrenceSpanResult:
     error: dict[str, str] | None
 
 
-SPAN_ERROR_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="span_errors_v1",
-        version=SCHEMA_VERSION,
-        bundles=(),
-        fields=[
-            ArrowFieldSpec(name="document_id", dtype=pa.string()),
-            ArrowFieldSpec(name="path", dtype=pa.string()),
-            ArrowFieldSpec(name="reason", dtype=pa.string()),
-        ],
+SPAN_ERROR_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="span_errors_v1",
+            version=SCHEMA_VERSION,
+            bundles=(),
+            fields=[
+                ArrowFieldSpec(name="document_id", dtype=pa.string()),
+                ArrowFieldSpec(name="path", dtype=pa.string()),
+                ArrowFieldSpec(name="reason", dtype=pa.string()),
+            ],
+        )
     )
 )
 
-SPAN_ERROR_SCHEMA = SPAN_ERROR_SPEC.to_arrow_schema()
+SPAN_ERROR_SCHEMA = SPAN_ERROR_SPEC.table_spec.to_arrow_schema()
 
 
 def _column_or_null(table: TableLike, col: str, dtype: DataTypeLike) -> ArrayLike:

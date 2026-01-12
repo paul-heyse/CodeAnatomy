@@ -5,22 +5,22 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.column_ops import (
+import pyarrow as pa
+
+from arrowdsl.compute.kernels import apply_join, coalesce_arrays, drop_nulls, severity_score_array
+from arrowdsl.compute.predicates import BitmaskMatch, BoolColumn, FilterSpec, InValues, Not
+from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.interop import ArrayLike, DataTypeLike, TableLike
+from arrowdsl.finalize.finalize import FinalizeResult
+from arrowdsl.plan.ops import JoinSpec
+from arrowdsl.schema.arrays import (
     ColumnDefaultsSpec,
     ConstExpr,
     FieldExpr,
     const_array,
     set_or_append_column,
 )
-from arrowdsl.encoding import EncodingSpec, encode_columns
-from arrowdsl.finalize import FinalizeResult
-from arrowdsl.finalize_context import FinalizeContext
-from arrowdsl.kernels import apply_join, coalesce_arrays, drop_nulls, severity_score_array
-from arrowdsl.predicates import BitmaskMatch, BoolColumn, FilterSpec, InValues, Not
-from arrowdsl.pyarrow_protocols import ArrayLike, DataTypeLike, TableLike
-from arrowdsl.runtime import ExecutionContext
-from arrowdsl.specs import JoinSpec
+from arrowdsl.schema.schema import EncodingSpec, encode_columns
 from cpg.builders import EdgeBuilder
 from cpg.kinds import (
     SCIP_ROLE_DEFINITION,
@@ -29,7 +29,7 @@ from cpg.kinds import (
     SCIP_ROLE_WRITE,
     EdgeKind,
 )
-from cpg.schemas import CPG_EDGES_CONTRACT, CPG_EDGES_SCHEMA, SCHEMA_VERSION, empty_edges
+from cpg.schemas import CPG_EDGES_SCHEMA, CPG_EDGES_SPEC, SCHEMA_VERSION, empty_edges
 from cpg.specs import EdgeEmitSpec, EdgePlanSpec, TableFilter, TableGetter
 
 
@@ -547,6 +547,7 @@ def build_cpg_edges_raw(
     *,
     inputs: EdgeBuildInputs | None = None,
     options: EdgeBuildOptions | None = None,
+    ctx: ExecutionContext | None = None,
     **legacy: object,
 ) -> TableLike:
     """Emit raw CPG edges without finalization.
@@ -566,7 +567,7 @@ def build_cpg_edges_raw(
     if not parts:
         return empty_edges()
 
-    combined = pa.concat_tables(parts, promote=True)
+    combined = CPG_EDGES_SPEC.unify_tables(parts, ctx=ctx)
     return encode_columns(combined, specs=EDGE_ENCODING_SPECS)
 
 
@@ -583,11 +584,5 @@ def build_cpg_edges(
     FinalizeResult
         Finalized edges tables and stats.
     """
-    raw = build_cpg_edges_raw(inputs=inputs, options=options)
-    transform = None
-    if CPG_EDGES_CONTRACT.schema_spec is not None:
-        transform = CPG_EDGES_CONTRACT.schema_spec.to_transform(
-            safe_cast=ctx.safe_cast,
-            on_error="unsafe" if ctx.safe_cast else "raise",
-        )
-    return FinalizeContext(contract=CPG_EDGES_CONTRACT, transform=transform).run(raw, ctx=ctx)
+    raw = build_cpg_edges_raw(inputs=inputs, options=options, ctx=ctx)
+    return CPG_EDGES_SPEC.finalize_context(ctx).run(raw, ctx=ctx)

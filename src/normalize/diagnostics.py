@@ -4,14 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.column_ops import const_array
-from arrowdsl.empty import empty_table
-from arrowdsl.encoding import EncodingSpec, encode_columns
-from arrowdsl.ids import prefixed_hash_id
-from arrowdsl.iter import iter_arrays
-from arrowdsl.nested import build_list_array, build_struct_array
-from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike
+import pyarrow as pa
+
+from arrowdsl.core.ids import iter_arrays, prefixed_hash_id
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike
+from arrowdsl.schema.arrays import build_list_array, build_struct_array, const_array
+from arrowdsl.schema.schema import EncodingSpec, empty_table, encode_columns
 from normalize.spans import (
     DEFAULT_POSITION_ENCODING,
     ENC_UTF8,
@@ -21,10 +19,14 @@ from normalize.spans import (
     RepoTextIndex,
     line_char_to_byte_offset,
 )
-from schema_spec.core import ArrowFieldSpec
-from schema_spec.factories import make_table_spec
-from schema_spec.fields import DICT_STRING, file_identity_bundle, span_bundle
-from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
+from schema_spec.specs import (
+    DICT_STRING,
+    ArrowFieldSpec,
+    NestedFieldSpec,
+    file_identity_bundle,
+    span_bundle,
+)
+from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
 
 SCHEMA_VERSION = 1
 
@@ -119,22 +121,7 @@ class _DiagBuffers:
         self.detail_offsets.append(len(self.detail_kinds))
 
     def details_array(self) -> ArrayLike:
-        tags = build_list_array(
-            pa.array(self.detail_tag_offsets, type=pa.int32()),
-            pa.array(self.detail_tag_values, type=pa.string()),
-        )
-        detail_struct = build_struct_array(
-            {
-                "detail_kind": pa.array(self.detail_kinds, type=pa.string()),
-                "error_type": pa.array(self.detail_error_types, type=pa.string()),
-                "source": pa.array(self.detail_sources, type=pa.string()),
-                "tags": tags,
-            }
-        )
-        return build_list_array(
-            pa.array(self.detail_offsets, type=pa.int32()),
-            detail_struct,
-        )
+        return DIAG_DETAIL_SPEC.builder(self)
 
 
 @dataclass(frozen=True)
@@ -162,19 +149,47 @@ DIAG_DETAIL_STRUCT = pa.struct(
     ]
 )
 
-DIAG_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="diagnostics_norm_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(include_sha256=False), span_bundle()),
-        fields=[
-            ArrowFieldSpec(name="diag_id", dtype=pa.string()),
-            ArrowFieldSpec(name="severity", dtype=DICT_STRING),
-            ArrowFieldSpec(name="message", dtype=pa.string()),
-            ArrowFieldSpec(name="diag_source", dtype=DICT_STRING),
-            ArrowFieldSpec(name="code", dtype=pa.string()),
-            ArrowFieldSpec(name="details", dtype=pa.list_(DIAG_DETAIL_STRUCT)),
-        ],
+
+def _build_diag_details(buffers: _DiagBuffers) -> ArrayLike:
+    tags = build_list_array(
+        pa.array(buffers.detail_tag_offsets, type=pa.int32()),
+        pa.array(buffers.detail_tag_values, type=pa.string()),
+    )
+    detail_struct = build_struct_array(
+        {
+            "detail_kind": pa.array(buffers.detail_kinds, type=pa.string()),
+            "error_type": pa.array(buffers.detail_error_types, type=pa.string()),
+            "source": pa.array(buffers.detail_sources, type=pa.string()),
+            "tags": tags,
+        }
+    )
+    return build_list_array(
+        pa.array(buffers.detail_offsets, type=pa.int32()),
+        detail_struct,
+    )
+
+
+DIAG_DETAIL_SPEC = NestedFieldSpec(
+    name="details",
+    dtype=pa.list_(DIAG_DETAIL_STRUCT),
+    builder=_build_diag_details,
+)
+
+DIAG_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="diagnostics_norm_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(include_sha256=False), span_bundle()),
+            fields=[
+                ArrowFieldSpec(name="diag_id", dtype=pa.string()),
+                ArrowFieldSpec(name="severity", dtype=DICT_STRING),
+                ArrowFieldSpec(name="message", dtype=pa.string()),
+                ArrowFieldSpec(name="diag_source", dtype=DICT_STRING),
+                ArrowFieldSpec(name="code", dtype=pa.string()),
+                ArrowFieldSpec(name="details", dtype=pa.list_(DIAG_DETAIL_STRUCT)),
+            ],
+        )
     )
 )
 
@@ -183,7 +198,7 @@ DIAG_ENCODING_SPECS: tuple[EncodingSpec, ...] = (
     EncodingSpec(column="diag_source"),
 )
 
-DIAG_SCHEMA = DIAG_SPEC.to_arrow_schema()
+DIAG_SCHEMA = DIAG_SPEC.table_spec.to_arrow_schema()
 
 
 def _column_or_null(
@@ -550,4 +565,4 @@ def collect_diags(
 
     if not parts:
         return empty_table(DIAG_SCHEMA)
-    return pa.concat_tables(parts, promote=True)
+    return DIAG_SPEC.unify_tables(parts)

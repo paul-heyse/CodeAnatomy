@@ -5,15 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import pyarrow as pa
 from hamilton.function_modifiers import tag
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.dataset_io import open_dataset
-from arrowdsl.finalize import FinalizeResult
-from arrowdsl.pyarrow_protocols import TableLike
-from arrowdsl.queryspec import ProjectionSpec, QuerySpec
-from arrowdsl.runtime import ExecutionContext
-from arrowdsl.scan_context import ScanContext
+from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.interop import TableLike
+from arrowdsl.finalize.finalize import FinalizeResult
+from arrowdsl.plan.query import open_dataset
 from core_types import JsonDict
 from hamilton_pipeline.pipeline_types import (
     CpgOutputTables,
@@ -29,7 +27,7 @@ from obs.repro import RunBundleContext, write_run_bundle
 from obs.stats import column_stats_table, dataset_stats_table
 from relspec.compiler import CompiledOutput
 from relspec.registry import ContractCatalog, DatasetLocation, RelationshipRegistry
-from schema_spec.factories import query_spec_for_table
+from schema_spec.system import dataset_spec_from_schema, make_dataset_spec
 from storage.parquet import (
     ParquetWriteOptions,
     write_finalize_result_parquet,
@@ -334,11 +332,10 @@ def relspec_scan_telemetry(
             partitioning=loc.partitioning,
         )
         if loc.table_spec is not None:
-            spec = query_spec_for_table(loc.table_spec)
+            dataset_spec = make_dataset_spec(table_spec=loc.table_spec)
         else:
-            cols = tuple(dataset.schema.names)
-            spec = QuerySpec(projection=ProjectionSpec(base=cols))
-        scan_ctx = ScanContext(dataset=dataset, spec=spec, ctx=ctx)
+            dataset_spec = dataset_spec_from_schema(name=name, schema=dataset.schema)
+        scan_ctx = dataset_spec.scan_context(dataset, ctx)
         telemetry = scan_ctx.telemetry()
         rows.append(
             {

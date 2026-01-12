@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from arrowdsl.kernels import provenance_sort_keys
-from schema_spec.fields import PROVENANCE_COLS
+from arrowdsl.compute.kernels import provenance_sort_keys
+from schema_spec import PROVENANCE_COLS
 
 
 def test_provenance_column_names_are_shared() -> None:

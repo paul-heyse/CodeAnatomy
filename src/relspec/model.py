@@ -8,12 +8,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from arrowdsl.contracts import DedupeSpec, SortKey
-from arrowdsl.expr import ScalarValue
-from arrowdsl.joins import JoinType
-from arrowdsl.pyarrow_protocols import ComputeExpression
-from arrowdsl.queryspec import QuerySpec
-from arrowdsl.specs import JoinSpec
+from arrowdsl.compute.expr import ScalarValue
+from arrowdsl.core.interop import ComputeExpression
+from arrowdsl.plan.ops import DedupeSpec, JoinSpec, JoinType, SortKey
+from arrowdsl.plan.query import QuerySpec
 
 type Expression = ComputeExpression
 

@@ -15,8 +15,9 @@ from importlib import metadata as importlib_metadata
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 
-from arrowdsl.contracts import Contract, DedupeSpec, SortKey
-from arrowdsl.pyarrow_protocols import DataTypeLike, SchemaLike, TableLike
+from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
+from arrowdsl.finalize.finalize import Contract
+from arrowdsl.plan.ops import DedupeSpec, SortKey
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from relspec.compiler import CompiledOutput
 from relspec.model import RelationshipRule

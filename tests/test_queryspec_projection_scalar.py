@@ -6,10 +6,9 @@ from dataclasses import dataclass
 
 import pytest
 
-from arrowdsl.column_ops import FieldExpr
-from arrowdsl.compute import pc
-from arrowdsl.pyarrow_protocols import ArrayLike, ComputeExpression, TableLike
-from arrowdsl.queryspec import ProjectionSpec, QuerySpec
+from arrowdsl.core.interop import ArrayLike, ComputeExpression, TableLike, pc
+from arrowdsl.plan.query import ProjectionSpec, QuerySpec
+from arrowdsl.schema.arrays import FieldExpr
 
 
 @dataclass(frozen=True)

@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pyarrow.fs as pafs
 
-from arrowdsl.contracts import Contract
+from arrowdsl.finalize.finalize import Contract
 from relspec.model import RelationshipRule
-from schema_spec.catalogs import ContractCatalogSpec
-from schema_spec.core import TableSchemaSpec
+from schema_spec.specs import TableSchemaSpec
+from schema_spec.system import ContractCatalogSpec, DatasetSpec
 
 type PathLike = str | Path
 
@@ -25,6 +25,7 @@ class DatasetLocation:
     partitioning: str | None = "hive"
     filesystem: pafs.FileSystem | None = None
     table_spec: TableSchemaSpec | None = None
+    dataset_spec: DatasetSpec | None = None
 
 
 class DatasetCatalog:

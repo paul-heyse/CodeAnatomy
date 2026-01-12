@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import arrowdsl.pyarrow_core as pa
+import arrowdsl.core.interop as pa
 from cpg.builders import EdgeBuilder, NodeBuilder, PropBuilder
 from cpg.kinds import EdgeKind, EntityKind, NodeKind
 from cpg.schemas import CPG_EDGES_SCHEMA, CPG_NODES_SCHEMA, CPG_PROPS_SCHEMA, SCHEMA_VERSION
@@ -16,9 +16,14 @@ from cpg.specs import (
     PropFieldSpec,
     PropTableSpec,
 )
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
-from schema_spec.metadata import SCHEMA_META_NAME, SCHEMA_META_VERSION
-from schema_spec.pandera_adapter import PanderaValidationOptions, validate_arrow_table
+from schema_spec import (
+    SCHEMA_META_NAME,
+    SCHEMA_META_VERSION,
+    ArrowFieldSpec,
+    PanderaValidationOptions,
+    TableSchemaSpec,
+    validate_arrow_table,
+)
 
 EXPECTED_ROWS = 2
 

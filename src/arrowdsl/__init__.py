@@ -1,21 +1,13 @@
 """Arrow-based DSL for building inference-driven datasets (Acero + compute + contracts)."""
 
-from arrowdsl.contracts import Contract
-from arrowdsl.dataset_io import compile_to_acero_scan, make_scanner, open_dataset, scan_to_table
-from arrowdsl.expr import E
-from arrowdsl.finalize import FinalizeResult, finalize
-from arrowdsl.finalize_context import FinalizeContext
-from arrowdsl.joins import JoinSpec, hash_join
-from arrowdsl.kernels import (
+from arrowdsl.compute.expr import E
+from arrowdsl.compute.kernels import (
     apply_dedupe,
     canonical_sort,
     canonical_sort_if_canonical,
     explode_list_column,
 )
-from arrowdsl.plan import Plan, union_all_plans
-from arrowdsl.queryspec import ProjectionSpec, QuerySpec
-from arrowdsl.runner import run_pipeline
-from arrowdsl.runtime import (
+from arrowdsl.core.context import (
     DeterminismTier,
     ExecutionContext,
     ExecutionProfile,
@@ -24,8 +16,19 @@ from arrowdsl.runtime import (
     RuntimeProfile,
     ScanProfile,
 )
-from arrowdsl.scan_context import ScanContext
-from arrowdsl.specs import DedupeSpec, SortKey
+from arrowdsl.finalize.finalize import Contract, FinalizeContext, FinalizeResult, finalize
+from arrowdsl.plan.ops import DedupeSpec, JoinSpec, SortKey
+from arrowdsl.plan.plan import Plan, hash_join, union_all_plans
+from arrowdsl.plan.query import (
+    ProjectionSpec,
+    QuerySpec,
+    ScanContext,
+    compile_to_acero_scan,
+    make_scanner,
+    open_dataset,
+    run_pipeline,
+    scan_to_table,
+)
 
 __all__ = [
     "Contract",

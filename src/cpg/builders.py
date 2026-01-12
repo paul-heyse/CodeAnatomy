@@ -6,22 +6,21 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+import pyarrow as pa
 import pyarrow.types as patypes
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.column_ops import const_array
-from arrowdsl.compute import pc
-from arrowdsl.ids import prefixed_hash_id
-from arrowdsl.iter import iter_arrays
-from arrowdsl.kernels import ChunkPolicy
-from arrowdsl.predicates import FilterSpec, IsNull, Not
-from arrowdsl.pyarrow_protocols import (
+from arrowdsl.compute.kernels import ChunkPolicy
+from arrowdsl.compute.predicates import FilterSpec, IsNull, Not
+from arrowdsl.core.ids import iter_arrays, prefixed_hash_id
+from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
     DataTypeLike,
     SchemaLike,
     TableLike,
+    pc,
 )
+from arrowdsl.schema.arrays import const_array
 from cpg.kinds import EntityKind
 from cpg.specs import (
     EdgeEmitSpec,

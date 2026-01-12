@@ -5,17 +5,17 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.column_ops import const_array, set_or_append_column
-from arrowdsl.encoding import EncodingSpec, encode_columns
-from arrowdsl.finalize import FinalizeResult
-from arrowdsl.finalize_context import FinalizeContext
-from arrowdsl.iter import iter_array_values
-from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, TableLike
-from arrowdsl.runtime import ExecutionContext
+import pyarrow as pa
+
+from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.ids import iter_array_values
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike
+from arrowdsl.finalize.finalize import FinalizeResult
+from arrowdsl.schema.arrays import const_array, set_or_append_column
+from arrowdsl.schema.schema import EncodingSpec, encode_columns
 from cpg.builders import NodeBuilder
 from cpg.kinds import NodeKind
-from cpg.schemas import CPG_NODES_CONTRACT, CPG_NODES_SCHEMA, SCHEMA_VERSION, empty_nodes
+from cpg.schemas import CPG_NODES_SCHEMA, CPG_NODES_SPEC, SCHEMA_VERSION, empty_nodes
 from cpg.specs import NodeEmitSpec, NodePlanSpec, TableGetter
 
 
@@ -401,6 +401,7 @@ def build_cpg_nodes_raw(
     *,
     inputs: NodeInputTables | None = None,
     options: NodeBuildOptions | None = None,
+    ctx: ExecutionContext | None = None,
 ) -> TableLike:
     """Build CPG nodes without finalization.
 
@@ -410,6 +411,8 @@ def build_cpg_nodes_raw(
         Bundle of input tables for node construction.
     options:
         Node build options.
+    ctx:
+        Optional execution context for schema evolution.
 
     Returns
     -------
@@ -424,7 +427,7 @@ def build_cpg_nodes_raw(
     if not parts:
         return empty_nodes()
 
-    combined = pa.concat_tables(parts, promote=True)
+    combined = CPG_NODES_SPEC.unify_tables(parts, ctx=ctx)
     return encode_columns(combined, specs=NODE_ENCODING_SPECS)
 
 
@@ -441,14 +444,5 @@ def build_cpg_nodes(
     FinalizeResult
         Finalized nodes tables and stats.
     """
-    raw = build_cpg_nodes_raw(
-        inputs=inputs,
-        options=options,
-    )
-    transform = None
-    if CPG_NODES_CONTRACT.schema_spec is not None:
-        transform = CPG_NODES_CONTRACT.schema_spec.to_transform(
-            safe_cast=ctx.safe_cast,
-            on_error="unsafe" if ctx.safe_cast else "raise",
-        )
-    return FinalizeContext(contract=CPG_NODES_CONTRACT, transform=transform).run(raw, ctx=ctx)
+    raw = build_cpg_nodes_raw(inputs=inputs, options=options, ctx=ctx)
+    return CPG_NODES_SPEC.finalize_context(ctx).run(raw, ctx=ctx)

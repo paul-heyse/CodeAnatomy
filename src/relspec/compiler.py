@@ -7,20 +7,18 @@ from dataclasses import dataclass
 from functools import cmp_to_key
 from typing import Literal, Protocol
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.column_ops import const_array, set_or_append_column
-from arrowdsl.contracts import Contract, SortKey
-from arrowdsl.dataset_io import open_dataset
-from arrowdsl.expr import E
-from arrowdsl.finalize import FinalizeResult
-from arrowdsl.finalize_context import FinalizeContext
-from arrowdsl.joins import hash_join
-from arrowdsl.kernels import apply_dedupe, explode_list_column
-from arrowdsl.plan import Plan, union_all_plans
-from arrowdsl.pyarrow_protocols import ComputeExpression, ScalarLike, TableLike
-from arrowdsl.queryspec import ProjectionSpec, QuerySpec
-from arrowdsl.runtime import DeterminismTier, ExecutionContext, Ordering
-from arrowdsl.scan_context import ScanContext
+import pyarrow as pa
+
+from arrowdsl.compute.expr import E
+from arrowdsl.compute.kernels import apply_dedupe, explode_list_column
+from arrowdsl.core.context import DeterminismTier, ExecutionContext, Ordering
+from arrowdsl.core.interop import ComputeExpression, ScalarLike, TableLike
+from arrowdsl.finalize.finalize import Contract, FinalizeResult
+from arrowdsl.plan.ops import SortKey
+from arrowdsl.plan.plan import Plan, hash_join, union_all_plans
+from arrowdsl.plan.query import open_dataset
+from arrowdsl.schema.arrays import const_array, set_or_append_column
+from arrowdsl.schema.schema import SchemaEvolutionSpec
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
@@ -40,7 +38,12 @@ from relspec.model import (
     RuleKind,
 )
 from relspec.registry import ContractCatalog, DatasetCatalog
-from schema_spec.factories import query_spec_for_table
+from schema_spec.system import (
+    GLOBAL_SCHEMA_REGISTRY,
+    dataset_spec_from_contract,
+    make_dataset_spec,
+    table_spec_from_schema,
+)
 
 type KernelFn = Callable[[TableLike, ExecutionContext], TableLike]
 type RowValue = object | None
@@ -116,17 +119,23 @@ class FilesystemPlanResolver:
             partitioning=loc.partitioning,
         )
 
-        if ref.query is None:
+        dataset_spec = loc.dataset_spec
+        if dataset_spec is None:
             if loc.table_spec is not None:
-                ref_query = query_spec_for_table(loc.table_spec)
+                table_spec = loc.table_spec
             else:
-                cols = tuple(dataset.schema.names)
-                ref_query = QuerySpec(projection=ProjectionSpec(base=cols))
-        else:
-            ref_query = ref.query
-
-        scan_ctx = ScanContext(dataset=dataset, spec=ref_query, ctx=ctx)
-        decl = scan_ctx.acero_decl()
+                table_spec = table_spec_from_schema(ref.name, dataset.schema)
+            dataset_spec = make_dataset_spec(table_spec=table_spec, query_spec=ref.query)
+        elif ref.query is not None:
+            dataset_spec = make_dataset_spec(
+                table_spec=dataset_spec.table_spec,
+                contract_spec=dataset_spec.contract_spec,
+                query_spec=ref.query,
+                evolution_spec=dataset_spec.evolution_spec,
+                metadata_spec=dataset_spec.metadata_spec,
+                validation=dataset_spec.validation,
+            )
+        decl = dataset_spec.scan_context(dataset, ctx).acero_decl()
         label = ref.label or ref.name
         return Plan(decl=decl, label=label, ordering=_scan_ordering_for_ctx(ctx))
 
@@ -839,20 +848,23 @@ class CompiledOutput:
             union = union_all_plans(plan_parts, label=self.output_dataset)
             table_parts.append(union.to_table(ctx=ctx_exec))
 
-        unioned = pa.concat_tables(table_parts, promote=True)
-
         if self.contract_name is None:
+            unioned = SchemaEvolutionSpec().unify_and_cast(
+                table_parts,
+                safe_cast=ctx_exec.safe_cast,
+                on_error="unsafe" if ctx_exec.safe_cast else "raise",
+                keep_extra_columns=ctx_exec.provenance,
+            )
             dummy = Contract(name=f"{self.output_dataset}_NO_CONTRACT", schema=unioned.schema)
-            return FinalizeContext(contract=dummy).run(unioned, ctx=ctx_exec)
+            finalize_ctx = dataset_spec_from_contract(dummy).finalize_context(ctx_exec)
+            return finalize_ctx.run(unioned, ctx=ctx_exec)
 
         contract = contracts.get(self.contract_name)
-        transform = None
-        if contract.schema_spec is not None:
-            transform = contract.schema_spec.to_transform(
-                safe_cast=ctx.safe_cast,
-                on_error="unsafe" if ctx.safe_cast else "raise",
-            )
-        return FinalizeContext(contract=contract, transform=transform).run(unioned, ctx=ctx_exec)
+        dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(contract.name)
+        if dataset_spec is None:
+            dataset_spec = dataset_spec_from_contract(contract)
+        unioned = dataset_spec.unify_tables(table_parts, ctx=ctx_exec)
+        return dataset_spec.finalize_context(ctx_exec).run(unioned, ctx=ctx_exec)
 
 
 class RelationshipRuleCompiler:
@@ -940,7 +952,15 @@ class RelationshipRuleCompiler:
             for inp in rule.inputs:
                 plan = resolver.resolve(inp, ctx=ctx2)
                 parts.append(plan.to_table(ctx=ctx2))
-            return pa.concat_tables(parts, promote=True)
+            dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(rule.output_dataset)
+            if dataset_spec is not None:
+                return dataset_spec.unify_tables(parts, ctx=ctx2)
+            return SchemaEvolutionSpec().unify_and_cast(
+                parts,
+                safe_cast=ctx2.safe_cast,
+                on_error="unsafe" if ctx2.safe_cast else "raise",
+                keep_extra_columns=ctx2.provenance,
+            )
 
         _ = ctx
         return CompiledRule(

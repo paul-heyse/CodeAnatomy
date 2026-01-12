@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from arrowdsl.contracts import Contract
+from arrowdsl.finalize.finalize import Contract
 from cpg.kinds_ultimate import EDGE_KIND_CONTRACTS
 from relspec.model import RelationshipRule
 from relspec.registry import ContractCatalog

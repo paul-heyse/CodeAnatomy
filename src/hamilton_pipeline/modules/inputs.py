@@ -6,7 +6,7 @@ from typing import Literal
 
 from hamilton.function_modifiers import tag
 
-from arrowdsl.runtime import ExecutionContext, RuntimeProfile
+from arrowdsl.core.context import ExecutionContext, RuntimeProfile
 from core_types import JsonDict
 from extract.scip_extract import SCIPParseOptions
 from hamilton_pipeline.pipeline_types import (

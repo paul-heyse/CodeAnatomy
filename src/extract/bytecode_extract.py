@@ -7,19 +7,15 @@ import types as pytypes
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.column_ops import set_or_append_column
-from arrowdsl.compute import pc
-from arrowdsl.empty import empty_table
-from arrowdsl.id_specs import HashSpec
-from arrowdsl.ids import hash_column_values
-from arrowdsl.pyarrow_protocols import TableLike
-from arrowdsl.schema_ops import SchemaTransform
+import pyarrow as pa
+
+from arrowdsl.core.ids import HashSpec, hash_column_values
+from arrowdsl.core.interop import TableLike, pc
+from arrowdsl.schema.arrays import set_or_append_column
+from arrowdsl.schema.schema import SchemaTransform, empty_table
 from extract.file_context import FileContext, iter_file_contexts
-from schema_spec.core import ArrowFieldSpec
-from schema_spec.factories import make_table_spec
-from schema_spec.fields import file_identity_bundle
-from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
+from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
+from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
 
 type RowValue = str | int | bool | None
 type Row = dict[str, RowValue]
@@ -181,122 +177,134 @@ class BytecodeRowBuffers:
     error_rows: list[Row]
 
 
-CODE_UNITS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="py_bc_code_units_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-            ArrowFieldSpec(name="parent_code_unit_id", dtype=pa.string()),
-            ArrowFieldSpec(name="qualpath", dtype=pa.string()),
-            ArrowFieldSpec(name="co_name", dtype=pa.string()),
-            ArrowFieldSpec(name="firstlineno", dtype=pa.int32()),
-            ArrowFieldSpec(name="argcount", dtype=pa.int32()),
-            ArrowFieldSpec(name="posonlyargcount", dtype=pa.int32()),
-            ArrowFieldSpec(name="kwonlyargcount", dtype=pa.int32()),
-            ArrowFieldSpec(name="nlocals", dtype=pa.int32()),
-            ArrowFieldSpec(name="flags", dtype=pa.int32()),
-            ArrowFieldSpec(name="stacksize", dtype=pa.int32()),
-            ArrowFieldSpec(name="code_len", dtype=pa.int32()),
-        ],
+CODE_UNITS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="py_bc_code_units_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+                ArrowFieldSpec(name="parent_code_unit_id", dtype=pa.string()),
+                ArrowFieldSpec(name="qualpath", dtype=pa.string()),
+                ArrowFieldSpec(name="co_name", dtype=pa.string()),
+                ArrowFieldSpec(name="firstlineno", dtype=pa.int32()),
+                ArrowFieldSpec(name="argcount", dtype=pa.int32()),
+                ArrowFieldSpec(name="posonlyargcount", dtype=pa.int32()),
+                ArrowFieldSpec(name="kwonlyargcount", dtype=pa.int32()),
+                ArrowFieldSpec(name="nlocals", dtype=pa.int32()),
+                ArrowFieldSpec(name="flags", dtype=pa.int32()),
+                ArrowFieldSpec(name="stacksize", dtype=pa.int32()),
+                ArrowFieldSpec(name="code_len", dtype=pa.int32()),
+            ],
+        )
     )
 )
 
-INSTR_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="py_bc_instructions_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="instr_id", dtype=pa.string()),
-            ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-            ArrowFieldSpec(name="instr_index", dtype=pa.int32()),
-            ArrowFieldSpec(name="offset", dtype=pa.int32()),
-            ArrowFieldSpec(name="opname", dtype=pa.string()),
-            ArrowFieldSpec(name="opcode", dtype=pa.int32()),
-            ArrowFieldSpec(name="arg", dtype=pa.int32()),
-            ArrowFieldSpec(name="argval_str", dtype=pa.string()),
-            ArrowFieldSpec(name="argrepr", dtype=pa.string()),
-            ArrowFieldSpec(name="is_jump_target", dtype=pa.bool_()),
-            ArrowFieldSpec(name="jump_target_offset", dtype=pa.int32()),
-            ArrowFieldSpec(name="starts_line", dtype=pa.int32()),
-            ArrowFieldSpec(name="pos_start_line", dtype=pa.int32()),
-            ArrowFieldSpec(name="pos_end_line", dtype=pa.int32()),
-            ArrowFieldSpec(name="pos_start_col", dtype=pa.int32()),
-            ArrowFieldSpec(name="pos_end_col", dtype=pa.int32()),
-        ],
+INSTR_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="py_bc_instructions_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="instr_id", dtype=pa.string()),
+                ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+                ArrowFieldSpec(name="instr_index", dtype=pa.int32()),
+                ArrowFieldSpec(name="offset", dtype=pa.int32()),
+                ArrowFieldSpec(name="opname", dtype=pa.string()),
+                ArrowFieldSpec(name="opcode", dtype=pa.int32()),
+                ArrowFieldSpec(name="arg", dtype=pa.int32()),
+                ArrowFieldSpec(name="argval_str", dtype=pa.string()),
+                ArrowFieldSpec(name="argrepr", dtype=pa.string()),
+                ArrowFieldSpec(name="is_jump_target", dtype=pa.bool_()),
+                ArrowFieldSpec(name="jump_target_offset", dtype=pa.int32()),
+                ArrowFieldSpec(name="starts_line", dtype=pa.int32()),
+                ArrowFieldSpec(name="pos_start_line", dtype=pa.int32()),
+                ArrowFieldSpec(name="pos_end_line", dtype=pa.int32()),
+                ArrowFieldSpec(name="pos_start_col", dtype=pa.int32()),
+                ArrowFieldSpec(name="pos_end_col", dtype=pa.int32()),
+            ],
+        )
     )
 )
 
-EXC_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="py_bc_exception_table_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="exc_entry_id", dtype=pa.string()),
-            ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-            ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
-            ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
-            ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
-            ArrowFieldSpec(name="target_offset", dtype=pa.int32()),
-            ArrowFieldSpec(name="depth", dtype=pa.int32()),
-            ArrowFieldSpec(name="lasti", dtype=pa.bool_()),
-        ],
+EXC_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="py_bc_exception_table_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="exc_entry_id", dtype=pa.string()),
+                ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+                ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
+                ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
+                ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
+                ArrowFieldSpec(name="target_offset", dtype=pa.int32()),
+                ArrowFieldSpec(name="depth", dtype=pa.int32()),
+                ArrowFieldSpec(name="lasti", dtype=pa.bool_()),
+            ],
+        )
     )
 )
 
-BLOCKS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="py_bc_blocks_v1",
-        version=SCHEMA_VERSION,
-        bundles=(),
-        fields=[
-            ArrowFieldSpec(name="block_id", dtype=pa.string()),
-            ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-            ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
-            ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
-            ArrowFieldSpec(name="kind", dtype=pa.string()),
-        ],
+BLOCKS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="py_bc_blocks_v1",
+            version=SCHEMA_VERSION,
+            bundles=(),
+            fields=[
+                ArrowFieldSpec(name="block_id", dtype=pa.string()),
+                ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+                ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
+                ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
+                ArrowFieldSpec(name="kind", dtype=pa.string()),
+            ],
+        )
     )
 )
 
-CFG_EDGES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="py_bc_cfg_edges_v1",
-        version=SCHEMA_VERSION,
-        bundles=(),
-        fields=[
-            ArrowFieldSpec(name="edge_id", dtype=pa.string()),
-            ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-            ArrowFieldSpec(name="src_block_id", dtype=pa.string()),
-            ArrowFieldSpec(name="dst_block_id", dtype=pa.string()),
-            ArrowFieldSpec(name="kind", dtype=pa.string()),
-            ArrowFieldSpec(name="cond_instr_id", dtype=pa.string()),
-            ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
-        ],
+CFG_EDGES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="py_bc_cfg_edges_v1",
+            version=SCHEMA_VERSION,
+            bundles=(),
+            fields=[
+                ArrowFieldSpec(name="edge_id", dtype=pa.string()),
+                ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+                ArrowFieldSpec(name="src_block_id", dtype=pa.string()),
+                ArrowFieldSpec(name="dst_block_id", dtype=pa.string()),
+                ArrowFieldSpec(name="kind", dtype=pa.string()),
+                ArrowFieldSpec(name="cond_instr_id", dtype=pa.string()),
+                ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
+            ],
+        )
     )
 )
 
-ERRORS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
-    make_table_spec(
-        name="py_bc_errors_v1",
-        version=SCHEMA_VERSION,
-        bundles=(file_identity_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="error_type", dtype=pa.string()),
-            ArrowFieldSpec(name="message", dtype=pa.string()),
-        ],
+ERRORS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+    make_dataset_spec(
+        table_spec=make_table_spec(
+            name="py_bc_errors_v1",
+            version=SCHEMA_VERSION,
+            bundles=(file_identity_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="error_type", dtype=pa.string()),
+                ArrowFieldSpec(name="message", dtype=pa.string()),
+            ],
+        )
     )
 )
 
-CODE_UNITS_SCHEMA = CODE_UNITS_SPEC.to_arrow_schema()
-INSTR_SCHEMA = INSTR_SPEC.to_arrow_schema()
-EXC_SCHEMA = EXC_SPEC.to_arrow_schema()
-BLOCKS_SCHEMA = BLOCKS_SPEC.to_arrow_schema()
-CFG_EDGES_SCHEMA = CFG_EDGES_SPEC.to_arrow_schema()
-ERRORS_SCHEMA = ERRORS_SPEC.to_arrow_schema()
+CODE_UNITS_SCHEMA = CODE_UNITS_SPEC.table_spec.to_arrow_schema()
+INSTR_SCHEMA = INSTR_SPEC.table_spec.to_arrow_schema()
+EXC_SCHEMA = EXC_SPEC.table_spec.to_arrow_schema()
+BLOCKS_SCHEMA = BLOCKS_SPEC.table_spec.to_arrow_schema()
+CFG_EDGES_SCHEMA = CFG_EDGES_SPEC.table_spec.to_arrow_schema()
+ERRORS_SCHEMA = ERRORS_SPEC.table_spec.to_arrow_schema()
 
 
 def _context_from_file_ctx(

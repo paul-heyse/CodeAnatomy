@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import arrowdsl.pyarrow_core as pa
+import arrowdsl.core.interop as pa
 from extract.scip_extract import (
     SCIP_DOCUMENTS_SCHEMA,
     SCIP_OCCURRENCES_SCHEMA,

@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 
-from arrowdsl.iter import iter_table_rows
-from arrowdsl.pyarrow_protocols import TableLike
+from arrowdsl.core.ids import iter_table_rows
+from arrowdsl.core.interop import TableLike
 
 
 @dataclass(frozen=True)

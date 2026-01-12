@@ -5,14 +5,19 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.column_ops import set_or_append_column
-from arrowdsl.finalize import FinalizeResult
-from arrowdsl.finalize_context import FinalizeContext
-from arrowdsl.kernels import apply_aggregate, bitmask_flag_array, cast_array, coalesce_arrays
-from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, TableLike
-from arrowdsl.runtime import ExecutionContext
-from arrowdsl.specs import AggregateSpec
+import pyarrow as pa
+
+from arrowdsl.compute.kernels import (
+    apply_aggregate,
+    bitmask_flag_array,
+    cast_array,
+    coalesce_arrays,
+)
+from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike
+from arrowdsl.finalize.finalize import FinalizeResult
+from arrowdsl.plan.ops import AggregateSpec
+from arrowdsl.schema.arrays import set_or_append_column
 from cpg.builders import PropBuilder
 from cpg.kinds import (
     SCIP_ROLE_FORWARD_DEFINITION,
@@ -21,7 +26,7 @@ from cpg.kinds import (
     EntityKind,
     NodeKind,
 )
-from cpg.schemas import CPG_PROPS_CONTRACT, CPG_PROPS_SCHEMA, SCHEMA_VERSION, empty_props
+from cpg.schemas import CPG_PROPS_SCHEMA, CPG_PROPS_SPEC, SCHEMA_VERSION, empty_props
 from cpg.specs import PropFieldSpec, PropTableSpec, TableGetter
 
 
@@ -528,14 +533,5 @@ def build_cpg_props(
     FinalizeResult
         Finalized properties tables and stats.
     """
-    raw = build_cpg_props_raw(
-        inputs=inputs,
-        options=options,
-    )
-    transform = None
-    if CPG_PROPS_CONTRACT.schema_spec is not None:
-        transform = CPG_PROPS_CONTRACT.schema_spec.to_transform(
-            safe_cast=ctx.safe_cast,
-            on_error="unsafe" if ctx.safe_cast else "raise",
-        )
-    return FinalizeContext(contract=CPG_PROPS_CONTRACT, transform=transform).run(raw, ctx=ctx)
+    raw = build_cpg_props_raw(inputs=inputs, options=options)
+    return CPG_PROPS_SPEC.finalize_context(ctx).run(raw, ctx=ctx)

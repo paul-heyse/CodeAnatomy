@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.compute import pc
-from arrowdsl.id_specs import HashSpec
-from arrowdsl.ids import hash64_from_parts, hash_column_values
-from arrowdsl.pyarrow_protocols import TableLike
+import pyarrow as pa
+
+from arrowdsl.core.ids import HashSpec, hash64_from_parts, hash_column_values
+from arrowdsl.core.interop import TableLike, pc
 
 
 def stable_id(prefix: str, *parts: str | None) -> str:

@@ -7,11 +7,11 @@ from dataclasses import dataclass
 
 import pandas as pd
 import pandera.pandas as pa_pd
+import pyarrow as pa
 import pyarrow.types as patypes
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.pyarrow_protocols import DataTypeLike, FieldLike, SchemaLike, TableLike
-from arrowdsl.schema_ops import SchemaTransform
+from arrowdsl.core.interop import DataTypeLike, FieldLike, SchemaLike, TableLike
+from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaTransform
 
 
 @dataclass(frozen=True)
@@ -98,13 +98,8 @@ def unify_schemas(
         Unified schema.
     """
     opts = opts or SchemaInferOptions()
-    if not schemas:
-        return pa.schema([])
-    try:
-        return pa.unify_schemas(list(schemas), promote_options=opts.promote_options)
-    except TypeError:
-        # Older pyarrow without promote_options
-        return pa.unify_schemas(list(schemas))
+    evolution = SchemaEvolutionSpec(promote_options=opts.promote_options)
+    return evolution.unify_schema_from_schemas(schemas)
 
 
 def infer_schema_from_tables(
@@ -118,8 +113,8 @@ def infer_schema_from_tables(
         Unified schema inferred from the input tables.
     """
     opts = opts or SchemaInferOptions()
-    schemas = [t.schema for t in tables if t is not None]
-    arrow_schema = unify_schemas(schemas, opts=opts)
+    evolution = SchemaEvolutionSpec(promote_options=opts.promote_options)
+    arrow_schema = evolution.unify_schema([t for t in tables if t is not None])
     if not opts.use_pandera_infer:
         return arrow_schema
 
@@ -181,7 +176,8 @@ def align_tables_to_unified_schema(
         Unified schema and aligned tables.
     """
     opts = opts or SchemaInferOptions()
-    schema = infer_schema_from_tables(list(tables), opts=opts)
+    evolution = SchemaEvolutionSpec(promote_options=opts.promote_options)
+    schema = evolution.unify_schema(list(tables))
     transform = SchemaTransform(
         schema=schema,
         safe_cast=opts.safe_cast,

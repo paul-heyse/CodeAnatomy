@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Literal
 
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
+from arrowdsl.id_specs import HashSpec, MissingPolicy
 from arrowdsl.iter import iter_array_values
 from arrowdsl.pyarrow_protocols import (
     ArrayLike,
@@ -18,20 +17,7 @@ from arrowdsl.pyarrow_protocols import (
     UdfContext,
 )
 
-type ArrayOrScalar = ArrayLike | ScalarLike
-type MissingPolicy = Literal["raise", "null"]
-
-
-@dataclass(frozen=True)
-class Hash64ColumnSpec:
-    """Specification for appending a hash64-derived column."""
-
-    cols: Sequence[str]
-    out_col: str
-    prefix: str | None = None
-    as_string: bool = False
-    null_sentinel: str = "None"
-    missing: MissingPolicy = "raise"
+type ArrayOrScalar = ArrayLike | ChunkedArrayLike | ScalarLike
 
 
 _HASH64_FUNCTION = "hash64_udf"
@@ -84,13 +70,13 @@ def _hash64(values: ArrayLike) -> ArrayLike:
     return result
 
 
-def _stringify(array: ArrayLike, *, null_sentinel: str) -> ArrayLike:
+def _stringify(array: ArrayLike | ChunkedArrayLike, *, null_sentinel: str) -> ArrayLike:
     text = pc.cast(array, pa.string())
     return pc.fill_null(text, null_sentinel)
 
 
 def hash64_from_parts(
-    *parts: str,
+    *parts: str | None,
     prefix: str | None = None,
     null_sentinel: str = "None",
 ) -> int:
@@ -99,7 +85,7 @@ def hash64_from_parts(
     Parameters
     ----------
     *parts:
-        String parts to hash.
+        String parts to hash. ``None`` values are replaced with ``null_sentinel``.
     prefix:
         Optional prefix included in the hash input.
     null_sentinel:
@@ -118,14 +104,39 @@ def hash64_from_parts(
     if not parts and prefix is None:
         msg = "hash64_from_parts requires at least one part or prefix."
         raise ValueError(msg)
-    values = [prefix] if prefix is not None else []
+    values: list[str | None] = [prefix] if prefix is not None else []
     values.extend(parts)
     joined = _NULL_SEPARATOR.join(value if value is not None else null_sentinel for value in values)
     return _hash64_int(joined)
 
 
+def prefixed_hash_id_from_parts(
+    prefix: str,
+    *parts: str | None,
+    null_sentinel: str = "None",
+) -> str:
+    """Build a prefixed string ID from literal parts.
+
+    Parameters
+    ----------
+    prefix:
+        Prefix for the resulting identifier.
+    *parts:
+        Parts to hash.
+    null_sentinel:
+        String used to represent null values.
+
+    Returns
+    -------
+    str
+        Prefixed identifier string.
+    """
+    hashed = hash64_from_parts(*parts, prefix=prefix, null_sentinel=null_sentinel)
+    return f"{prefix}:{hashed}"
+
+
 def hash64_from_arrays(
-    arrays: Sequence[ArrayLike],
+    arrays: Sequence[ArrayLike | ChunkedArrayLike],
     *,
     prefix: str | None = None,
     null_sentinel: str = "None",
@@ -159,6 +170,33 @@ def hash64_from_arrays(
         parts.insert(0, pa.scalar(prefix))
     joined = pc.binary_join_element_wise(*parts, _NULL_SEPARATOR)
     return _hash64(joined)
+
+
+def prefixed_hash_id(
+    arrays: Sequence[ArrayLike | ChunkedArrayLike],
+    *,
+    prefix: str,
+    null_sentinel: str = "None",
+) -> ArrayLike:
+    """Return a prefixed string ID from hashed array inputs.
+
+    Parameters
+    ----------
+    arrays:
+        Arrays to hash.
+    prefix:
+        Prefix for the resulting string IDs.
+    null_sentinel:
+        Sentinel value for nulls in the hash input.
+
+    Returns
+    -------
+    ArrayLike
+        String array with prefixed hash IDs.
+    """
+    hashed = hash64_from_arrays(arrays, prefix=prefix, null_sentinel=null_sentinel)
+    hashed_str = pc.cast(hashed, pa.string())
+    return pc.binary_join_element_wise(pa.scalar(prefix), hashed_str, ":")
 
 
 def hash64_from_columns(
@@ -212,8 +250,8 @@ def hash64_from_columns(
     return hash64_from_arrays(arrays, prefix=prefix, null_sentinel=null_sentinel)
 
 
-def add_hash64_column(table: TableLike, *, spec: Hash64ColumnSpec) -> TableLike:
-    """Append a hash64-derived column to a table.
+def hash_column_values(table: TableLike, *, spec: HashSpec) -> ArrayLike:
+    """Compute hash column values for a table without appending.
 
     Parameters
     ----------
@@ -224,18 +262,60 @@ def add_hash64_column(table: TableLike, *, spec: Hash64ColumnSpec) -> TableLike:
 
     Returns
     -------
-    pyarrow.Table
-        Table with the hash column appended.
+    ArrayLike
+        Hash values as an array (string or int64 depending on spec).
+
+    Raises
+    ------
+    KeyError
+        Raised when a required column is missing and ``spec.missing="raise"``.
     """
-    if spec.out_col in table.column_names:
-        return table
-    hashed = hash64_from_columns(
-        table,
-        cols=spec.cols,
-        prefix=spec.prefix,
-        null_sentinel=spec.null_sentinel,
-        missing=spec.missing,
-    )
+    if spec.extra_literals:
+        arrays: list[ArrayLike] = [
+            pa.array([literal] * table.num_rows, type=pa.string())
+            for literal in spec.extra_literals
+        ]
+        for col in spec.cols:
+            if col in table.column_names:
+                arrays.append(table[col])
+                continue
+            if spec.missing == "null":
+                arrays.append(pa.nulls(table.num_rows, type=pa.string()))
+                continue
+            msg = f"Missing column for hash64: {col!r}."
+            raise KeyError(msg)
+        hashed = hash64_from_arrays(arrays, prefix=spec.prefix, null_sentinel=spec.null_sentinel)
+    else:
+        hashed = hash64_from_columns(
+            table,
+            cols=spec.cols,
+            prefix=spec.prefix,
+            null_sentinel=spec.null_sentinel,
+            missing=spec.missing,
+        )
     if spec.as_string:
         hashed = pc.cast(hashed, pa.string())
-    return table.append_column(spec.out_col, hashed)
+        hashed = pc.binary_join_element_wise(pa.scalar(spec.prefix), hashed, ":")
+    return hashed
+
+
+def add_hash_column(table: TableLike, *, spec: HashSpec) -> TableLike:
+    """Append a hash-based column to a table.
+
+    Parameters
+    ----------
+    table:
+        Input table.
+    spec:
+        Hash column specification.
+
+    Returns
+    -------
+    TableLike
+        Table with the hash column appended.
+    """
+    out_col = spec.out_col or f"{spec.prefix}_id"
+    if out_col in table.column_names:
+        return table
+    hashed = hash_column_values(table, spec=spec)
+    return table.append_column(out_col, hashed)

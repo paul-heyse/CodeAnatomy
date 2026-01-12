@@ -7,8 +7,8 @@ from pathlib import Path
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 
-from arrowdsl.acero import acero
 from arrowdsl.compute import pc
+from arrowdsl.plan_ops import FilterOp, ProjectOp, ScanOp
 from arrowdsl.pyarrow_protocols import DeclarationLike, SchemaLike, TableLike
 from arrowdsl.queryspec import QuerySpec
 from arrowdsl.runtime import ExecutionContext
@@ -73,7 +73,7 @@ def make_scanner(dataset: ds.Dataset, *, spec: QuerySpec, ctx: ExecutionContext)
     return ds.Scanner.from_dataset(
         dataset,
         columns=spec.scan_columns(provenance=ctx.provenance),
-        filter=spec.pushdown_predicate,
+        filter=spec.pushdown_expression(),
         **ctx.runtime.scan.scanner_kwargs(),
     )
 
@@ -118,16 +118,16 @@ def compile_to_acero_scan(
     pyarrow.acero.Declaration
         Declaration representing the scan pipeline.
     """
-    scan_opts = acero.ScanNodeOptions(
-        dataset,
+    scan_op = ScanOp(
+        dataset=dataset,
         columns=spec.scan_columns(provenance=ctx.provenance),
-        filter=spec.pushdown_predicate,
-        **ctx.runtime.scan.scan_node_kwargs(),
+        predicate=spec.pushdown_expression(),
     )
-    scan = acero.Declaration("scan", scan_opts)
+    scan = scan_op.to_declaration([], ctx=ctx)
 
-    if spec.predicate is not None:
-        scan = acero.Declaration("filter", acero.FilterNodeOptions(spec.predicate), inputs=[scan])
+    filter_spec = spec.filter_spec()
+    if filter_spec is not None:
+        scan = FilterOp(predicate=filter_spec.to_expression()).to_declaration([scan], ctx=None)
 
     cols = spec.scan_columns(provenance=ctx.provenance)
     if isinstance(cols, dict):
@@ -137,6 +137,4 @@ def compile_to_acero_scan(
         proj_exprs = [pc.field(col) for col in cols]
         proj_names = list(cols)
 
-    return acero.Declaration(
-        "project", acero.ProjectNodeOptions(proj_exprs, proj_names), inputs=[scan]
-    )
+    return ProjectOp(expressions=proj_exprs, names=proj_names).to_declaration([scan], ctx=None)

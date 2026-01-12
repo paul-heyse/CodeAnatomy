@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import arrowdsl.pyarrow_core as pa
+from arrowdsl.column_ops import const_array, set_or_append_column
 from arrowdsl.columns import coalesce_string
 from arrowdsl.compute import pc
 from arrowdsl.empty import empty_table
-from arrowdsl.ids import hash64_from_arrays
+from arrowdsl.ids import prefixed_hash_id
 from arrowdsl.iter import iter_arrays
 from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
@@ -52,9 +53,7 @@ DEF_OPS = {"IMPORT_NAME", "IMPORT_FROM"}
 
 
 def _prefixed_hash64(prefix: str, arrays: list[ArrayLike]) -> ArrayLike:
-    hashed = hash64_from_arrays(arrays, prefix=prefix)
-    hashed_str = pc.cast(hashed, pa.string())
-    return pc.binary_join_element_wise(pa.scalar(prefix), hashed_str, ":")
+    return prefixed_hash_id(arrays, prefix=prefix)
 
 
 def _column_or_null(
@@ -107,14 +106,10 @@ def build_def_use_events(py_bc_instructions: TableLike) -> TableLike:
         pa.scalar("def"),
         pc.if_else(is_use, pa.scalar("use"), none_str),
     )
-    if "kind" in table.column_names:
-        idx = table.schema.get_field_index("kind")
-        table = table.set_column(idx, "kind", kind)
-    else:
-        table = table.append_column("kind", kind)
+    table = set_or_append_column(table, "kind", kind)
 
     mask = pc.and_(pc.is_valid(table["symbol"]), pc.is_valid(table["kind"]))
-    mask = pc.fill_null(mask, replacement=False)
+    mask = pc.fill_null(mask, fill_value=False)
     table = table.filter(mask)
     if table.num_rows == 0:
         return empty_table(DEF_USE_SCHEMA)
@@ -125,13 +120,11 @@ def build_def_use_events(py_bc_instructions: TableLike) -> TableLike:
         table["kind"],
         table["symbol"],
     ]
-    event_hash = hash64_from_arrays(event_inputs, prefix="df_event")
-    event_hash_str = pc.cast(event_hash, pa.string())
-    event_id = pc.binary_join_element_wise(pa.scalar("df_event"), event_hash_str, ":")
+    event_id = prefixed_hash_id(event_inputs, prefix="df_event")
 
     return pa.Table.from_arrays(
         [
-            pa.array([SCHEMA_VERSION] * table.num_rows, type=pa.int32()),
+            const_array(table.num_rows, SCHEMA_VERSION, dtype=pa.int32()),
             event_id,
             _column_or_null(table, "instr_id", pa.string()),
             _column_or_null(table, "code_unit_id", pa.string()),
@@ -176,8 +169,7 @@ def run_reaching_defs(def_use_events: TableLike) -> TableLike:
     edge_prefixed = _prefixed_hash64("df_reach", [def_ids, use_ids])
     valid = pc.and_(pc.is_valid(def_ids), pc.is_valid(use_ids))
     edge_ids = pc.if_else(valid, edge_prefixed, pa.scalar(None, type=pa.string()))
-    idx = table.schema.get_field_index("edge_id")
-    return table.set_column(idx, "edge_id", edge_ids)
+    return set_or_append_column(table, "edge_id", edge_ids)
 
 
 def _group_def_use_events(

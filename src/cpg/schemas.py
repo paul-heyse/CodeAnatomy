@@ -8,13 +8,14 @@ from schema_spec.contracts import ContractSpec, DedupeSpecSpec, SortKeySpec
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
+DICT_STRING = pa.dictionary(pa.int32(), pa.string())
 
 CPG_NODES_SPEC = TableSchemaSpec(
     name="cpg_nodes_v1",
     fields=[
         ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="node_id", dtype=pa.string(), nullable=False),
-        ArrowFieldSpec(name="node_kind", dtype=pa.string(), nullable=False),
+        ArrowFieldSpec(name="node_kind", dtype=DICT_STRING, nullable=False),
         ArrowFieldSpec(name="path", dtype=pa.string()),
         ArrowFieldSpec(name="bstart", dtype=pa.int64()),
         ArrowFieldSpec(name="bend", dtype=pa.int64()),
@@ -29,20 +30,20 @@ CPG_EDGES_SPEC = TableSchemaSpec(
     fields=[
         ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="edge_id", dtype=pa.string(), nullable=False),
-        ArrowFieldSpec(name="edge_kind", dtype=pa.string(), nullable=False),
+        ArrowFieldSpec(name="edge_kind", dtype=DICT_STRING, nullable=False),
         ArrowFieldSpec(name="src_node_id", dtype=pa.string(), nullable=False),
         ArrowFieldSpec(name="dst_node_id", dtype=pa.string(), nullable=False),
         ArrowFieldSpec(name="path", dtype=pa.string()),
         ArrowFieldSpec(name="bstart", dtype=pa.int64()),
         ArrowFieldSpec(name="bend", dtype=pa.int64()),
-        ArrowFieldSpec(name="origin", dtype=pa.string()),
-        ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
+        ArrowFieldSpec(name="origin", dtype=DICT_STRING),
+        ArrowFieldSpec(name="resolution_method", dtype=DICT_STRING),
         ArrowFieldSpec(name="confidence", dtype=pa.float32()),
         ArrowFieldSpec(name="score", dtype=pa.float32()),
         ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
-        ArrowFieldSpec(name="qname_source", dtype=pa.string()),
+        ArrowFieldSpec(name="qname_source", dtype=DICT_STRING),
         ArrowFieldSpec(name="ambiguity_group_id", dtype=pa.string()),
-        ArrowFieldSpec(name="rule_name", dtype=pa.string()),
+        ArrowFieldSpec(name="rule_name", dtype=DICT_STRING),
         ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
     ],
     required_non_null=("edge_id", "edge_kind", "src_node_id", "dst_node_id"),

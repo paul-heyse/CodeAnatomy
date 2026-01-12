@@ -6,12 +6,14 @@ from collections.abc import Callable, Sequence
 
 from arrowdsl.contracts import Contract
 from arrowdsl.finalize import FinalizeResult, finalize
+from arrowdsl.ops import KernelOp
 from arrowdsl.plan import Plan
 from arrowdsl.pyarrow_protocols import TableLike
 from arrowdsl.runtime import ExecutionContext
 from core_types import StrictnessMode
 
 KernelFn = Callable[[TableLike, ExecutionContext], TableLike]
+KernelStep = KernelOp | KernelFn
 
 
 def run_pipeline(
@@ -20,7 +22,7 @@ def run_pipeline(
     contract: Contract,
     ctx: ExecutionContext,
     mode: StrictnessMode | None = None,
-    post: Sequence[KernelFn] = (),
+    post: Sequence[KernelStep] = (),
 ) -> FinalizeResult:
     """Execute a plan, apply kernels, and finalize results.
 
@@ -46,7 +48,7 @@ def run_pipeline(
         ctx = ctx.with_mode(mode)
 
     table = plan.to_table(ctx=ctx)
-    for fn in post:
-        table = fn(table, ctx)
+    for step in post:
+        table = step.apply(table, ctx) if isinstance(step, KernelOp) else step(table, ctx)
 
     return finalize(table, contract=contract, ctx=ctx)

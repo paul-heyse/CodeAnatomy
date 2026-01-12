@@ -7,9 +7,9 @@ from typing import Literal
 
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
-from arrowdsl.contracts import DedupeSpec, SortKey
 from arrowdsl.pyarrow_protocols import TableLike
 from arrowdsl.runtime import DeterminismTier, ExecutionContext
+from arrowdsl.specs import AggregateSpec, DedupeSpec, JoinSpec, SortKey
 
 _PROVENANCE_COLS: tuple[str, ...] = (
     "prov_filename",
@@ -52,6 +52,103 @@ def canonical_sort(table: TableLike, *, sort_keys: Sequence[SortKey]) -> TableLi
         return table
     idx = pc.sort_indices(table, sort_keys=_sort_key_tuples(sort_keys))
     return table.take(idx)
+
+
+def apply_join(
+    left: TableLike,
+    right: TableLike,
+    *,
+    spec: JoinSpec,
+    use_threads: bool = True,
+) -> TableLike:
+    """Join two tables using a shared JoinSpec.
+
+    Parameters
+    ----------
+    left:
+        Left table.
+    right:
+        Right table.
+    spec:
+        Join specification.
+    use_threads:
+        Whether to use threaded join execution.
+
+    Returns
+    -------
+    pyarrow.Table
+        Joined table.
+
+    Raises
+    ------
+    ValueError
+        Raised when join keys are missing from the spec.
+    """
+    if not spec.left_keys:
+        msg = "JoinSpec.left_keys must be provided for table joins."
+        raise ValueError(msg)
+    right_keys = list(spec.right_keys) if spec.right_keys else list(spec.left_keys)
+    join_type = spec.join_type.replace("_", " ")
+    joined = left.join(
+        right,
+        keys=list(spec.left_keys),
+        right_keys=right_keys,
+        join_type=join_type,
+        left_suffix=spec.output_suffix_for_left,
+        right_suffix=spec.output_suffix_for_right,
+        use_threads=use_threads,
+    )
+    return _select_join_outputs(joined, spec=spec)
+
+
+def _select_join_outputs(joined: TableLike, *, spec: JoinSpec) -> TableLike:
+    if not spec.left_output and not spec.right_output:
+        return joined
+
+    left_names = set(spec.left_output) | set(spec.left_keys)
+    prefer_right_suffix = bool(spec.output_suffix_for_right) and any(
+        name in left_names for name in spec.right_output
+    )
+    left_cols = _resolve_join_outputs(
+        joined,
+        outputs=spec.left_output,
+        suffix=spec.output_suffix_for_left,
+        prefer_suffix=False,
+    )
+    right_cols = _resolve_join_outputs(
+        joined,
+        outputs=spec.right_output,
+        suffix=spec.output_suffix_for_right,
+        prefer_suffix=prefer_right_suffix,
+    )
+    keep = [*left_cols, *right_cols]
+    if keep:
+        return joined.select(keep)
+    return joined
+
+
+def _resolve_join_outputs(
+    joined: TableLike,
+    *,
+    outputs: Sequence[str],
+    suffix: str,
+    prefer_suffix: bool,
+) -> list[str]:
+    resolved: list[str] = []
+    for name in outputs:
+        if suffix and prefer_suffix:
+            suffixed = f"{name}{suffix}"
+            if suffixed in joined.column_names:
+                resolved.append(suffixed)
+                continue
+        if name in joined.column_names:
+            resolved.append(name)
+            continue
+        if suffix and not prefer_suffix:
+            suffixed = f"{name}{suffix}"
+            if suffixed in joined.column_names:
+                resolved.append(suffixed)
+    return resolved
 
 
 def canonical_sort_if_canonical(
@@ -121,6 +218,29 @@ def dedupe_keep_first_after_sort(
             new_names.append(name[: -len("_first")])
         else:
             new_names.append(name)
+    return out.rename_columns(new_names)
+
+
+def apply_aggregate(table: TableLike, *, spec: AggregateSpec) -> TableLike:
+    """Apply a group-by aggregation with shared naming policy.
+
+    Parameters
+    ----------
+    table:
+        Input table.
+    spec:
+        Aggregate specification.
+
+    Returns
+    -------
+    pyarrow.Table
+        Aggregated table.
+    """
+    out = table.group_by(list(spec.keys), use_threads=spec.use_threads).aggregate(list(spec.aggs))
+    if not spec.rename_aggregates:
+        return out
+    rename_map = {f"{col}_{agg}": col for col, agg in spec.aggs if col not in spec.keys}
+    new_names = [rename_map.get(name, name) for name in out.schema.names]
     return out.rename_columns(new_names)
 
 
@@ -204,9 +324,20 @@ def dedupe_keep_best_by_score(
             raise KeyError(msg)
         best_score_name = candidates[0]
 
-    joined = table.join(best, keys=list(keys), join_type="inner", use_threads=True)
+    joined = apply_join(
+        table,
+        best,
+        spec=JoinSpec(
+            join_type="inner",
+            left_keys=tuple(keys),
+            right_keys=tuple(keys),
+            left_output=tuple(table.column_names),
+            right_output=(best_score_name,),
+        ),
+        use_threads=True,
+    )
     mask = pc.equal(joined[score_col], joined[best_score_name])
-    mask = pc.fill_null(mask, replacement=False)
+    mask = pc.fill_null(mask, fill_value=False)
     filtered = joined.filter(mask).drop([best_score_name])
 
     if tie_breakers:

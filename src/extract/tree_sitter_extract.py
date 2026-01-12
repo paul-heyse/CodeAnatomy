@@ -10,7 +10,7 @@ from tree_sitter import Language, Parser
 
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.empty import empty_table
-from arrowdsl.ids import hash64_from_parts
+from arrowdsl.ids import prefixed_hash_id_from_parts
 from arrowdsl.iter import iter_table_rows
 from arrowdsl.pyarrow_protocols import TableLike
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
@@ -18,12 +18,6 @@ from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 SCHEMA_VERSION = 1
 
 type Row = dict[str, object]
-
-
-def _hash_id(prefix: str, *parts: str) -> str:
-    # Row-wise hash64 IDs are needed while building dependent rows.
-    hashed = hash64_from_parts(*parts, prefix=prefix)
-    return f"{prefix}:{hashed}"
 
 
 @dataclass(frozen=True)
@@ -146,7 +140,7 @@ def _node_row(
     start = int(getattr(node, "start_byte", 0))
     end = int(getattr(node, "end_byte", 0))
     ts_type = str(getattr(node, "type", ""))
-    ts_node_id = _hash_id("ts_node", path, str(start), str(end), ts_type)
+    ts_node_id = prefixed_hash_id_from_parts("ts_node", path, str(start), str(end), ts_type)
     return {
         "schema_version": SCHEMA_VERSION,
         "ts_node_id": ts_node_id,
@@ -167,7 +161,7 @@ def _node_row(
 def _error_row(node_row: Row) -> Row:
     return {
         "schema_version": SCHEMA_VERSION,
-        "ts_error_id": _hash_id(
+        "ts_error_id": prefixed_hash_id_from_parts(
             "ts_error",
             str(node_row.get("path", "")),
             str(node_row.get("start_byte", "")),
@@ -187,7 +181,7 @@ def _error_row(node_row: Row) -> Row:
 def _missing_row(node_row: Row) -> Row:
     return {
         "schema_version": SCHEMA_VERSION,
-        "ts_missing_id": _hash_id(
+        "ts_missing_id": prefixed_hash_id_from_parts(
             "ts_missing",
             str(node_row.get("path", "")),
             str(node_row.get("start_byte", "")),

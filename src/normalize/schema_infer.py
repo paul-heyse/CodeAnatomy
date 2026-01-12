@@ -11,7 +11,7 @@ import pyarrow.types as patypes
 
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.pyarrow_protocols import DataTypeLike, FieldLike, SchemaLike, TableLike
-from arrowdsl.schema import align_to_schema
+from arrowdsl.schema_ops import SchemaTransform
 
 
 @dataclass(frozen=True)
@@ -160,14 +160,13 @@ def align_table_to_schema(
         Table aligned to the provided schema.
     """
     opts = opts or SchemaInferOptions()
-    aligned, _ = align_to_schema(
-        table,
+    transform = SchemaTransform(
         schema=schema,
         safe_cast=opts.safe_cast,
-        on_error="keep",
         keep_extra_columns=opts.keep_extra_columns,
+        on_error="keep",
     )
-    return aligned
+    return transform.apply(table)
 
 
 def align_tables_to_unified_schema(

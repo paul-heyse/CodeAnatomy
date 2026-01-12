@@ -6,10 +6,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 import arrowdsl.pyarrow_core as pa
+from arrowdsl.column_ops import set_or_append_column
 from arrowdsl.compute import pc
 from arrowdsl.finalize import FinalizeResult, finalize
+from arrowdsl.kernels import apply_aggregate
 from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, TableLike
 from arrowdsl.runtime import ExecutionContext
+from arrowdsl.specs import AggregateSpec
 from cpg.builders import PropBuilder
 from cpg.kinds import (
     SCIP_ROLE_FORWARD_DEFINITION,
@@ -41,17 +44,6 @@ def _flag_to_bool(value: object | None) -> bool | None:
     return None
 
 
-def _set_or_append_column(
-    table: TableLike,
-    name: str,
-    values: ArrayLike | ChunkedArrayLike,
-) -> TableLike:
-    if name in table.column_names:
-        idx = table.schema.get_field_index(name)
-        return table.set_column(idx, name, values)
-    return table.append_column(name, values)
-
-
 def _defs_table(table: TableLike | None) -> TableLike | None:
     if table is None or table.num_rows == 0:
         return None
@@ -63,7 +55,7 @@ def _defs_table(table: TableLike | None) -> TableLike | None:
         def_kind = table["kind"]
     else:
         def_kind = pa.nulls(table.num_rows, type=pa.string())
-    return _set_or_append_column(table, "def_kind_norm", def_kind)
+    return set_or_append_column(table, "def_kind_norm", def_kind)
 
 
 def _scip_role_flags_table(scip_occurrences: TableLike | None) -> TableLike | None:
@@ -85,9 +77,13 @@ def _scip_role_flags_table(scip_occurrences: TableLike | None) -> TableLike | No
         flag_names.append(name)
 
     flags_table = pa.Table.from_arrays([symbols, *flag_arrays], names=["symbol", *flag_names])
-    aggs = [(name, "max") for name in flag_names]
-    aggregated = flags_table.group_by(["symbol"], use_threads=True).aggregate(aggs)
-    return aggregated.rename_columns(["symbol", *flag_names])
+    spec = AggregateSpec(
+        keys=("symbol",),
+        aggs=tuple((name, "max") for name in flag_names),
+        use_threads=True,
+        rename_aggregates=True,
+    )
+    return apply_aggregate(flags_table, spec=spec)
 
 
 def _table_getter(name: str) -> TableGetter:

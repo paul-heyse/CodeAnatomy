@@ -6,9 +6,12 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+import pyarrow.types as patypes
+
 import arrowdsl.pyarrow_core as pa
+from arrowdsl.column_ops import const_array
 from arrowdsl.compute import pc
-from arrowdsl.ids import hash64_from_arrays
+from arrowdsl.ids import prefixed_hash_id
 from arrowdsl.iter import iter_arrays
 from arrowdsl.pyarrow_protocols import (
     ArrayLike,
@@ -31,16 +34,15 @@ type PropValue = object | None
 type PropRow = dict[str, object]
 
 
-def _const_str(n: int, value: str) -> ArrayLike:
-    return pa.array([value] * n, type=pa.string())
-
-
-def _const_i32(n: int, value: int) -> ArrayLike:
-    return pa.array([int(value)] * n, type=pa.int32())
-
-
-def _const_f32(n: int, value: float) -> ArrayLike:
-    return pa.array([float(value)] * n, type=pa.float32())
+def _maybe_dictionary(
+    values: ArrayLike | ChunkedArrayLike,
+    dtype: DataTypeLike,
+) -> ArrayLike | ChunkedArrayLike:
+    if patypes.is_dictionary(values.type):
+        return values
+    if patypes.is_dictionary(dtype):
+        return pc.dictionary_encode(values)
+    return values
 
 
 def _row_id(value: object | None) -> str | None:
@@ -69,14 +71,14 @@ def _pick_first(table: TableLike, cols: Sequence[str], *, default_type: DataType
 def _resolve_string_col(rel: TableLike, col: str, *, default_value: str) -> ArrayLike:
     arr = _pick_first(rel, [col], default_type=pa.string())
     if arr.null_count == rel.num_rows:
-        return _const_str(rel.num_rows, default_value)
+        return const_array(rel.num_rows, default_value, dtype=pa.string())
     return arr
 
 
 def _resolve_float_col(rel: TableLike, col: str, *, default_value: float) -> ArrayLike:
     arr = _pick_first(rel, [col], default_type=pa.float32())
     if arr.null_count == rel.num_rows:
-        return _const_f32(rel.num_rows, default_value)
+        return const_array(rel.num_rows, default_value, dtype=pa.float32())
     return arr
 
 
@@ -97,9 +99,9 @@ def _edge_id_array(
     inputs: EdgeIdArrays,
 ) -> ArrayLike | ChunkedArrayLike:
     n = len(inputs.src)
-    kind_arr = _const_str(n, edge_kind)
-    base_hash = hash64_from_arrays([kind_arr, inputs.src, inputs.dst], prefix="edge")
-    full_hash = hash64_from_arrays(
+    kind_arr = const_array(n, edge_kind, dtype=pa.string())
+    base_id = prefixed_hash_id([kind_arr, inputs.src, inputs.dst], prefix="edge")
+    full_id = prefixed_hash_id(
         [kind_arr, inputs.src, inputs.dst, inputs.path, inputs.bstart, inputs.bend],
         prefix="edge",
     )
@@ -107,9 +109,7 @@ def _edge_id_array(
         pc.is_valid(inputs.path),
         pc.and_(pc.is_valid(inputs.bstart), pc.is_valid(inputs.bend)),
     )
-    chosen = pc.if_else(has_span, full_hash, base_hash)
-    chosen_str = pc.cast(chosen, pa.string())
-    edge_id = pc.binary_join_element_wise(pa.scalar("edge"), chosen_str, ":")
+    edge_id = pc.if_else(has_span, full_id, base_id)
     valid = pc.and_(pc.is_valid(inputs.src), pc.is_valid(inputs.dst))
     return pc.if_else(valid, edge_id, pa.scalar(None, type=pa.string()))
 
@@ -158,33 +158,45 @@ def emit_edges_from_relation(
 
     default_score = 1.0 if spec.origin == "scip" else 0.5
     origin = _resolve_string_col(rel, "origin", default_value=spec.origin)
-    origin = pc.fill_null(origin, replacement=spec.origin)
+    origin = pc.fill_null(origin, fill_value=spec.origin)
+    origin = _maybe_dictionary(origin, edge_schema.field("origin").type)
+
+    edge_kind = const_array(n, spec.edge_kind.value, dtype=pa.string())
+    edge_kind = _maybe_dictionary(edge_kind, edge_schema.field("edge_kind").type)
+    resolution = _resolve_string_col(
+        rel,
+        "resolution_method",
+        default_value=spec.default_resolution_method,
+    )
+    resolution = _maybe_dictionary(resolution, edge_schema.field("resolution_method").type)
+    qname_source = _pick_first(rel, ["qname_source"], default_type=pa.string())
+    qname_source = _maybe_dictionary(qname_source, edge_schema.field("qname_source").type)
+    rule_name = _pick_first(rel, ["rule_name"], default_type=pa.string())
+    rule_name = _maybe_dictionary(rule_name, edge_schema.field("rule_name").type)
 
     out = pa.Table.from_arrays(
         [
-            _const_i32(n, schema_version),
+            const_array(n, schema_version, dtype=pa.int32()),
             edge_ids,
-            _const_str(n, spec.edge_kind.value),
+            edge_kind,
             src,
             dst,
             path,
             bstart,
             bend,
             origin,
-            _resolve_string_col(
-                rel, "resolution_method", default_value=spec.default_resolution_method
-            ),
+            resolution,
             _resolve_float_col(rel, "confidence", default_value=default_score),
             _resolve_float_col(rel, "score", default_value=default_score),
             _pick_first(rel, ["symbol_roles"], default_type=pa.int32()),
-            _pick_first(rel, ["qname_source"], default_type=pa.string()),
+            qname_source,
             _pick_first(rel, ["ambiguity_group_id"], default_type=pa.string()),
-            _pick_first(rel, ["rule_name"], default_type=pa.string()),
+            rule_name,
             _pick_first(rel, ["rule_priority"], default_type=pa.int32()),
         ],
         schema=edge_schema,
     )
-    mask = pc.fill_null(pc.is_valid(edge_ids), replacement=False)
+    mask = pc.fill_null(pc.is_valid(edge_ids), fill_value=False)
     return out.filter(mask)
 
 
@@ -233,7 +245,7 @@ class EdgeBuilder:
                 continue
             if emitter.filter_fn is not None:
                 mask = emitter.filter_fn(rel)
-                mask = pc.fill_null(mask, replacement=False)
+                mask = pc.fill_null(mask, fill_value=False)
                 rel = rel.filter(mask)
                 if rel.num_rows == 0:
                     continue
@@ -275,11 +287,14 @@ def emit_nodes_from_table(
     bend = _pick_first(table, spec.bend_cols, default_type=pa.int64())
     file_id = _pick_first(table, spec.file_id_cols, default_type=pa.string())
 
+    node_kind = const_array(n, spec.node_kind.value, dtype=pa.string())
+    node_kind = _maybe_dictionary(node_kind, node_schema.field("node_kind").type)
+
     return pa.Table.from_arrays(
         [
-            _const_i32(n, schema_version),
+            const_array(n, schema_version, dtype=pa.int32()),
             node_id,
-            _const_str(n, spec.node_kind.value),
+            node_kind,
             path,
             bstart,
             bend,

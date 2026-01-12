@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import arrowdsl.pyarrow_core as pa
+from arrowdsl.column_ops import set_or_append_column
 from arrowdsl.iter import iter_arrays
 from arrowdsl.pyarrow_protocols import ArrayLike, DataTypeLike, TableLike
 from normalize.spans import FileTextIndex, RepoTextIndex, ast_range_to_byte_span
@@ -113,8 +114,8 @@ def anchor_instructions(
         bends.append(bend)
         oks.append(bstart is not None and bend is not None)
 
-    return (
-        py_bc_instructions.append_column(cols.out_bstart, pa.array(bstarts, type=pa.int64()))
-        .append_column(cols.out_bend, pa.array(bends, type=pa.int64()))
-        .append_column(cols.out_ok, pa.array(oks, type=pa.bool_()))
+    out = set_or_append_column(
+        py_bc_instructions, cols.out_bstart, pa.array(bstarts, type=pa.int64())
     )
+    out = set_or_append_column(out, cols.out_bend, pa.array(bends, type=pa.int64()))
+    return set_or_append_column(out, cols.out_ok, pa.array(oks, type=pa.bool_()))

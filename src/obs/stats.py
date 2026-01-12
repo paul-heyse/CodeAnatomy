@@ -8,11 +8,20 @@ from collections.abc import Mapping
 from typing import TypedDict
 
 import arrowdsl.pyarrow_core as pa
+from arrowdsl.encoding import EncodingSpec, encode_columns
 from arrowdsl.pyarrow_protocols import SchemaLike, TableLike
 from core_types import JsonDict
 
 type RowValue = str | int
 type Row = dict[str, RowValue]
+
+DATASET_STATS_ENCODING_SPECS: tuple[EncodingSpec, ...] = (EncodingSpec(column="dataset_name"),)
+
+COLUMN_STATS_ENCODING_SPECS: tuple[EncodingSpec, ...] = (
+    EncodingSpec(column="dataset_name"),
+    EncodingSpec(column="column_name"),
+    EncodingSpec(column="type"),
+)
 
 
 class TableSummary(TypedDict):
@@ -88,7 +97,7 @@ def dataset_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
                 "schema_fingerprint": sch_fp,
             }
         )
-    return pa.Table.from_pylist(
+    table = pa.Table.from_pylist(
         rows,
         schema=pa.schema(
             [
@@ -99,6 +108,7 @@ def dataset_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
             ]
         ),
     )
+    return encode_columns(table, specs=DATASET_STATS_ENCODING_SPECS)
 
 
 def column_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
@@ -126,7 +136,7 @@ def column_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
                     "null_count": int(col.null_count),
                 }
             )
-    return pa.Table.from_pylist(
+    table = pa.Table.from_pylist(
         rows,
         schema=pa.schema(
             [
@@ -137,3 +147,4 @@ def column_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
             ]
         ),
     )
+    return encode_columns(table, specs=COLUMN_STATS_ENCODING_SPECS)

@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.compute import pc
+from arrowdsl.column_ops import CoalesceExpr, ConstExpr, FieldExpr
 from arrowdsl.pyarrow_protocols import DataTypeLike, TableLike
 
 
@@ -36,9 +35,8 @@ def add_const_column(
     """
     if name in table.column_names:
         return table
-    scalar = pa.scalar(value) if data_type is None else pa.scalar(value, type=data_type)
-    arr = pa.array([value] * table.num_rows, type=scalar.type)
-    return table.append_column(name, arr)
+    expr = ConstExpr(value=value, dtype=data_type)
+    return table.append_column(name, expr.materialize(table))
 
 
 def coalesce_string(table: TableLike, cols: Sequence[str], *, out_col: str) -> TableLike:
@@ -60,9 +58,8 @@ def coalesce_string(table: TableLike, cols: Sequence[str], *, out_col: str) -> T
     """
     if out_col in table.column_names:
         return table
-    expr = pc.cast(table[cols[0]], pa.string())
-    for col in cols[1:]:
-        expr = pc.coalesce(expr, pc.cast(table[col], pa.string()))
+    exprs = tuple(FieldExpr(name=col) for col in cols)
+    expr = CoalesceExpr(exprs=exprs).materialize(table)
     return table.append_column(out_col, expr)
 
 

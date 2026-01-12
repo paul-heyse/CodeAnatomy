@@ -6,10 +6,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 import arrowdsl.pyarrow_core as pa
+from arrowdsl.column_ops import const_array, set_or_append_column
 from arrowdsl.compute import pc
+from arrowdsl.encoding import EncodingSpec, encode_columns
 from arrowdsl.finalize import FinalizeResult, finalize
+from arrowdsl.kernels import apply_join
 from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike
 from arrowdsl.runtime import ExecutionContext
+from arrowdsl.specs import JoinSpec
 from cpg.builders import EdgeBuilder
 from cpg.kinds import (
     SCIP_ROLE_DEFINITION,
@@ -22,29 +26,10 @@ from cpg.schemas import CPG_EDGES_CONTRACT, CPG_EDGES_SCHEMA, SCHEMA_VERSION, em
 from cpg.specs import EdgeEmitSpec, EdgePlanSpec, TableFilter, TableGetter
 
 
-def _const_str(n: int, value: str) -> ArrayLike:
-    return pa.array([value] * n, type=pa.string())
-
-
-def _const_f32(n: int, value: float) -> ArrayLike:
-    return pa.array([float(value)] * n, type=pa.float32())
-
-
 def _get(table: TableLike, col: str, *, default_type: DataTypeLike) -> ArrayLike:
     if col in table.column_names:
         return table[col]
     return pa.nulls(table.num_rows, type=default_type)
-
-
-def _set_or_append_column(
-    table: TableLike,
-    name: str,
-    values: ArrayLike | ChunkedArrayLike,
-) -> TableLike:
-    if name in table.column_names:
-        idx = table.schema.get_field_index(name)
-        return table.set_column(idx, name, values)
-    return table.append_column(name, values)
 
 
 def _filter_unresolved_qname_calls(
@@ -57,7 +42,7 @@ def _filter_unresolved_qname_calls(
         return rel_callsite_qname
     resolved = pc.drop_null(rel_callsite_symbol["call_id"])
     mask = pc.is_in(rel_callsite_qname["call_id"], value_set=resolved)
-    mask = pc.fill_null(mask, replacement=False)
+    mask = pc.fill_null(mask, fill_value=False)
     return rel_callsite_qname.filter(pc.invert(mask))
 
 
@@ -77,12 +62,22 @@ def _with_repo_file_ids(diag_table: TableLike, repo_files: TableLike | None) -> 
     ):
         return diag_table
     repo_subset = repo_files.select(["path", "file_id"])
-    joined = diag_table.join(
-        repo_subset, keys=["path"], join_type="left_outer", right_suffix="_repo"
+    joined = apply_join(
+        diag_table,
+        repo_subset,
+        spec=JoinSpec(
+            join_type="left outer",
+            left_keys=("path",),
+            right_keys=("path",),
+            left_output=tuple(diag_table.column_names),
+            right_output=("file_id",),
+            output_suffix_for_right="_repo",
+        ),
+        use_threads=True,
     )
     if "file_id_repo" in joined.column_names and "file_id" in joined.column_names:
         resolved = pc.coalesce(joined["file_id"], joined["file_id_repo"])
-        joined = _set_or_append_column(joined, "file_id", resolved)
+        joined = set_or_append_column(joined, "file_id", resolved)
         joined = joined.drop(["file_id_repo"])
     return joined
 
@@ -91,7 +86,7 @@ def _severity_score_array(
     severity: ArrayLike | ChunkedArrayLike,
 ) -> ArrayLike | ChunkedArrayLike:
     severity_str = pc.cast(severity, pa.string())
-    severity_str = pc.fill_null(severity_str, replacement="ERROR")
+    severity_str = pc.fill_null(severity_str, fill_value="ERROR")
     is_error = pc.equal(severity_str, pa.scalar("ERROR"))
     is_warning = pc.equal(severity_str, pa.scalar("WARNING"))
     score = pc.if_else(
@@ -108,7 +103,7 @@ def _role_mask(
 ) -> ArrayLike | ChunkedArrayLike:
     roles = pc.cast(symbol_roles, pa.int64())
     hit = pc.not_equal(pc.bit_wise_and(roles, pa.scalar(int(mask))), pa.scalar(0))
-    hit = pc.fill_null(hit, replacement=False)
+    hit = pc.fill_null(hit, fill_value=False)
     return hit if must_set else pc.invert(hit)
 
 
@@ -130,8 +125,8 @@ def _symbol_role_filter(mask: int, *, must_set: bool) -> TableFilter:
 def _flag_filter(flag_col: str) -> TableFilter:
     def _filter(table: TableLike) -> ArrayLike:
         if flag_col not in table.column_names:
-            return pa.array([False] * table.num_rows, type=pa.bool_())
-        return pc.fill_null(pc.cast(table[flag_col], pa.bool_()), replacement=False)
+            return const_array(table.num_rows, value=False, dtype=pa.bool_())
+        return pc.fill_null(pc.cast(table[flag_col], pa.bool_()), fill_value=False)
 
     return _filter
 
@@ -159,10 +154,12 @@ def _diagnostic_relation(tables: Mapping[str, TableLike]) -> TableLike | None:
     score = _severity_score_array(severity)
     origin = _get(diag, "diag_source", default_type=pa.string())
     origin = pc.coalesce(origin, pa.scalar("diagnostic"))
-    diag = _set_or_append_column(diag, "origin", origin)
-    diag = _set_or_append_column(diag, "confidence", score)
-    diag = _set_or_append_column(diag, "score", score)
-    return _set_or_append_column(diag, "resolution_method", _const_str(n, "DIAGNOSTIC"))
+    diag = set_or_append_column(diag, "origin", origin)
+    diag = set_or_append_column(diag, "confidence", score)
+    diag = set_or_append_column(diag, "score", score)
+    return set_or_append_column(
+        diag, "resolution_method", const_array(n, "DIAGNOSTIC", dtype=pa.string())
+    )
 
 
 def _type_annotation_relation(tables: Mapping[str, TableLike]) -> TableLike | None:
@@ -170,8 +167,10 @@ def _type_annotation_relation(tables: Mapping[str, TableLike]) -> TableLike | No
     if type_exprs_norm is None or type_exprs_norm.num_rows == 0:
         return None
     n = type_exprs_norm.num_rows
-    rel = _set_or_append_column(type_exprs_norm, "confidence", _const_f32(n, 1.0))
-    return _set_or_append_column(rel, "score", _const_f32(n, 1.0))
+    rel = set_or_append_column(
+        type_exprs_norm, "confidence", const_array(n, 1.0, dtype=pa.float32())
+    )
+    return set_or_append_column(rel, "score", const_array(n, 1.0, dtype=pa.float32()))
 
 
 def _inferred_type_relation(tables: Mapping[str, TableLike]) -> TableLike | None:
@@ -186,8 +185,8 @@ def _inferred_type_relation(tables: Mapping[str, TableLike]) -> TableLike | None
             pa.nulls(n, type=pa.string()),
             pa.nulls(n, type=pa.int64()),
             pa.nulls(n, type=pa.int64()),
-            _const_f32(n, 1.0),
-            _const_f32(n, 1.0),
+            const_array(n, 1.0, dtype=pa.float32()),
+            const_array(n, 1.0, dtype=pa.float32()),
         ],
         names=["owner_def_id", "type_id", "path", "bstart", "bend", "confidence", "score"],
     )
@@ -209,8 +208,8 @@ def _runtime_relation(
             pa.nulls(n, type=pa.string()),
             pa.nulls(n, type=pa.int64()),
             pa.nulls(n, type=pa.int64()),
-            _const_f32(n, 1.0),
-            _const_f32(n, 1.0),
+            const_array(n, 1.0, dtype=pa.float32()),
+            const_array(n, 1.0, dtype=pa.float32()),
         ],
         names=[src_col, dst_col, "path", "bstart", "bend", "confidence", "score"],
     )
@@ -455,6 +454,14 @@ EDGE_PLAN_SPECS: tuple[EdgePlanSpec, ...] = (
     ),
 )
 
+EDGE_ENCODING_SPECS: tuple[EncodingSpec, ...] = (
+    EncodingSpec(column="edge_kind"),
+    EncodingSpec(column="origin"),
+    EncodingSpec(column="resolution_method"),
+    EncodingSpec(column="qname_source"),
+    EncodingSpec(column="rule_name"),
+)
+
 EDGE_BUILDER = EdgeBuilder(
     emitters=EDGE_PLAN_SPECS,
     schema_version=SCHEMA_VERSION,
@@ -568,7 +575,8 @@ def build_cpg_edges_raw(
     if not parts:
         return empty_edges()
 
-    return pa.concat_tables(parts, promote=True)
+    combined = pa.concat_tables(parts, promote=True)
+    return encode_columns(combined, specs=EDGE_ENCODING_SPECS)
 
 
 def build_cpg_edges(

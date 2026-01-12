@@ -4,57 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from arrowdsl.pyarrow_protocols import ArrayLike, SchemaLike, TableLike
+from arrowdsl.specs import DedupeSpec, SortKey
 
 type InvariantFn = Callable[[TableLike], tuple[ArrayLike, str]]
 
 if TYPE_CHECKING:
     from schema_spec.core import TableSchemaSpec
-
-
-@dataclass(frozen=True)
-class SortKey:
-    """Sort key specification for deterministic ordering.
-
-    Parameters
-    ----------
-    column:
-        Column name to sort by.
-    order:
-        Sort order ("ascending" or "descending").
-    """
-
-    column: str
-    order: Literal["ascending", "descending"] = "ascending"
-
-
-type DedupeStrategy = Literal[
-    "KEEP_FIRST_AFTER_SORT",
-    "KEEP_BEST_BY_SCORE",
-    "COLLAPSE_LIST",
-    "KEEP_ARBITRARY",
-]
-
-
-@dataclass(frozen=True)
-class DedupeSpec:
-    """Dedupe semantics for a table.
-
-    Parameters
-    ----------
-    keys:
-        Key columns that define duplicates.
-    tie_breakers:
-        Additional sort keys used for deterministic winner selection.
-    strategy:
-        Dedupe strategy name.
-    """
-
-    keys: tuple[str, ...]
-    tie_breakers: tuple[SortKey, ...] = ()
-    strategy: DedupeStrategy = "KEEP_FIRST_AFTER_SORT"
 
 
 @dataclass(frozen=True)

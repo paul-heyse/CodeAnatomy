@@ -1,6 +1,6 @@
 """Arrow-based DSL for building inference-driven datasets (Acero + compute + contracts)."""
 
-from arrowdsl.contracts import Contract, DedupeSpec, SortKey
+from arrowdsl.contracts import Contract
 from arrowdsl.dataset_io import compile_to_acero_scan, make_scanner, open_dataset, scan_to_table
 from arrowdsl.expr import E
 from arrowdsl.finalize import FinalizeResult, finalize
@@ -17,11 +17,13 @@ from arrowdsl.runner import run_pipeline
 from arrowdsl.runtime import (
     DeterminismTier,
     ExecutionContext,
+    ExecutionProfile,
     Ordering,
     OrderingLevel,
     RuntimeProfile,
     ScanProfile,
 )
+from arrowdsl.specs import DedupeSpec, SortKey
 
 __all__ = [
     "Contract",
@@ -29,6 +31,7 @@ __all__ = [
     "DeterminismTier",
     "E",
     "ExecutionContext",
+    "ExecutionProfile",
     "FinalizeResult",
     "JoinSpec",
     "Ordering",

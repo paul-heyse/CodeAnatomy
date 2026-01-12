@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import arrowdsl.pyarrow_core as pa
-from arrowdsl.compute import pc
+from arrowdsl.column_ops import const_array
 from arrowdsl.empty import empty_table
-from arrowdsl.ids import hash64_from_arrays
+from arrowdsl.encoding import EncodingSpec, encode_columns
+from arrowdsl.ids import prefixed_hash_id
 from arrowdsl.iter import iter_arrays
 from arrowdsl.nested import build_list_array, build_struct_array
 from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike
@@ -28,6 +29,8 @@ SCIP_SEVERITY_ERROR = 1
 SCIP_SEVERITY_WARNING = 2
 SCIP_SEVERITY_INFO = 3
 SCIP_SEVERITY_HINT = 4
+
+DICT_STRING = pa.dictionary(pa.int32(), pa.string())
 
 
 @dataclass(frozen=True)
@@ -167,12 +170,17 @@ DIAG_SPEC = TableSchemaSpec(
         ArrowFieldSpec(name="path", dtype=pa.string()),
         ArrowFieldSpec(name="bstart", dtype=pa.int64()),
         ArrowFieldSpec(name="bend", dtype=pa.int64()),
-        ArrowFieldSpec(name="severity", dtype=pa.string()),
+        ArrowFieldSpec(name="severity", dtype=DICT_STRING),
         ArrowFieldSpec(name="message", dtype=pa.string()),
-        ArrowFieldSpec(name="diag_source", dtype=pa.string()),
+        ArrowFieldSpec(name="diag_source", dtype=DICT_STRING),
         ArrowFieldSpec(name="code", dtype=pa.string()),
         ArrowFieldSpec(name="details", dtype=pa.list_(DIAG_DETAIL_STRUCT)),
     ],
+)
+
+DIAG_ENCODING_SPECS: tuple[EncodingSpec, ...] = (
+    EncodingSpec(column="severity"),
+    EncodingSpec(column="diag_source"),
 )
 
 DIAG_SCHEMA = DIAG_SPEC.to_arrow_schema()
@@ -192,9 +200,7 @@ def _prefixed_hash64(
     prefix: str,
     arrays: list[ArrayLike | ChunkedArrayLike],
 ) -> ArrayLike | ChunkedArrayLike:
-    hashed = hash64_from_arrays(arrays, prefix=prefix)
-    hashed_str = pc.cast(hashed, pa.string())
-    return pc.binary_join_element_wise(pa.scalar(prefix), hashed_str, ":")
+    return prefixed_hash_id(arrays, prefix=prefix)
 
 
 def _detail_tags(value: object | None) -> list[str]:
@@ -204,9 +210,9 @@ def _detail_tags(value: object | None) -> list[str]:
 
 
 def _empty_details_list(num_rows: int) -> ArrayLike:
-    offsets = pa.array([0] * (num_rows + 1), type=pa.int32())
+    offsets = const_array(num_rows + 1, 0, dtype=pa.int32())
     tags = build_list_array(
-        pa.array([0], type=pa.int32()),
+        const_array(1, 0, dtype=pa.int32()),
         pa.array([], type=pa.string()),
     )
     detail_struct = build_struct_array(
@@ -299,25 +305,27 @@ def _cst_parse_error_table(
     bend_arr = pa.array(buffers.bends, type=pa.int64())
     source_arr = pa.array(buffers.sources, type=pa.string())
     message_arr = pa.array(buffers.messages, type=pa.string())
+    severity_arr = pa.array(buffers.severities, type=pa.string())
     diag_id = _prefixed_hash64("diag", [path_arr, bstart_arr, bend_arr, source_arr, message_arr])
     details = buffers.details_array()
-
-    return pa.Table.from_arrays(
+    table = pa.Table.from_arrays(
         [
-            pa.array([SCHEMA_VERSION] * len(buffers.paths), type=pa.int32()),
+            const_array(len(buffers.paths), SCHEMA_VERSION, dtype=pa.int32()),
             diag_id,
             pa.array(buffers.file_ids, type=pa.string()),
             path_arr,
             bstart_arr,
             bend_arr,
-            pa.array(buffers.severities, type=pa.string()),
+            severity_arr,
             message_arr,
             source_arr,
             pa.array(buffers.codes, type=pa.string()),
             details,
         ],
-        schema=DIAG_SCHEMA,
+        names=DIAG_SCHEMA.names,
     )
+    table = encode_columns(table, specs=DIAG_ENCODING_SPECS)
+    return table.cast(DIAG_SCHEMA)
 
 
 def _ts_diag_table(ts_table: TableLike, *, severity: str, message: str) -> TableLike:
@@ -327,26 +335,29 @@ def _ts_diag_table(ts_table: TableLike, *, severity: str, message: str) -> Table
     path = _column_or_null(ts_table, "path", pa.string())
     bstart = _column_or_null(ts_table, "start_byte", pa.int64())
     bend = _column_or_null(ts_table, "end_byte", pa.int64())
-    source_arr = pa.array(["treesitter"] * n, type=pa.string())
-    message_arr = pa.array([message] * n, type=pa.string())
+    source_arr = const_array(n, "treesitter", dtype=pa.string())
+    message_arr = const_array(n, message, dtype=pa.string())
     diag_id = _prefixed_hash64("diag", [path, bstart, bend, source_arr, message_arr])
     details = _empty_details_list(n)
-    return pa.Table.from_arrays(
+    severity_arr = const_array(n, severity, dtype=pa.string())
+    table = pa.Table.from_arrays(
         [
-            pa.array([SCHEMA_VERSION] * n, type=pa.int32()),
+            const_array(n, SCHEMA_VERSION, dtype=pa.int32()),
             diag_id,
             _column_or_null(ts_table, "file_id", pa.string()),
             path,
             bstart,
             bend,
-            pa.array([severity] * n, type=pa.string()),
+            severity_arr,
             message_arr,
             source_arr,
-            pa.array([None] * n, type=pa.string()),
+            const_array(n, None, dtype=pa.string()),
             details,
         ],
-        schema=DIAG_SCHEMA,
+        names=DIAG_SCHEMA.names,
     )
+    table = encode_columns(table, specs=DIAG_ENCODING_SPECS)
+    return table.cast(DIAG_SCHEMA)
 
 
 def _scip_encoding(value: object | None) -> int:
@@ -422,25 +433,27 @@ def _scip_diag_table(
     bend_arr = pa.array(buffers.bends, type=pa.int64())
     source_arr = pa.array(buffers.sources, type=pa.string())
     message_arr = pa.array(buffers.messages, type=pa.string())
+    severity_arr = pa.array(buffers.severities, type=pa.string())
     diag_id = _prefixed_hash64("diag", [path_arr, bstart_arr, bend_arr, source_arr, message_arr])
     details = buffers.details_array()
-
-    return pa.Table.from_arrays(
+    table = pa.Table.from_arrays(
         [
-            pa.array([SCHEMA_VERSION] * len(buffers.paths), type=pa.int32()),
+            const_array(len(buffers.paths), SCHEMA_VERSION, dtype=pa.int32()),
             diag_id,
             pa.array(buffers.file_ids, type=pa.string()),
             path_arr,
             bstart_arr,
             bend_arr,
-            pa.array(buffers.severities, type=pa.string()),
+            severity_arr,
             message_arr,
             source_arr,
             pa.array(buffers.codes, type=pa.string()),
             details,
         ],
-        schema=DIAG_SCHEMA,
+        names=DIAG_SCHEMA.names,
     )
+    table = encode_columns(table, specs=DIAG_ENCODING_SPECS)
+    return table.cast(DIAG_SCHEMA)
 
 
 def _scip_doc_encodings(scip_documents: TableLike | None) -> dict[str, int]:

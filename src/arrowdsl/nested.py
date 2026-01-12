@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.pyarrow_protocols import ArrayLike, ListArrayLike, StructArrayLike
+from arrowdsl.nested_ops import (
+    build_dense_union,
+    build_list,
+    build_list_view,
+    build_map,
+    build_sparse_union,
+    build_struct,
+)
+from arrowdsl.nested_ops import (
+    build_list_of_structs as _build_list_of_structs,
+)
+from arrowdsl.pyarrow_protocols import ArrayLike, DataTypeLike, ListArrayLike, StructArrayLike
 
 
 def build_struct_array(
@@ -25,9 +35,7 @@ def build_struct_array(
     StructArrayLike
         Struct array with the provided fields.
     """
-    names = list(fields.keys())
-    arrays = [fields[name] for name in names]
-    return pa.StructArray.from_arrays(arrays, names=names, mask=mask)
+    return build_struct(fields, mask=mask)
 
 
 def build_list_array(offsets: ArrayLike, values: ArrayLike) -> ListArrayLike:
@@ -45,7 +53,38 @@ def build_list_array(offsets: ArrayLike, values: ArrayLike) -> ListArrayLike:
     ListArrayLike
         List array built from offsets and values.
     """
-    return pa.ListArray.from_arrays(offsets, values)
+    return build_list(offsets, values)
+
+
+def build_list_view_array(
+    offsets: ArrayLike,
+    sizes: ArrayLike,
+    values: ArrayLike,
+    *,
+    list_type: DataTypeLike | None = None,
+    mask: ArrayLike | None = None,
+) -> ListArrayLike:
+    """Build a list_view array from offsets, sizes, and flat values.
+
+    Parameters
+    ----------
+    offsets
+        Offsets array describing list boundaries.
+    sizes
+        Sizes array describing list lengths.
+    values
+        Flat values array.
+    list_type
+        Optional list type override.
+    mask
+        Optional boolean mask where True indicates a null list row.
+
+    Returns
+    -------
+    ListArrayLike
+        List view array built from offsets and sizes.
+    """
+    return build_list_view(offsets, sizes, values, list_type=list_type, mask=mask)
 
 
 def build_list_of_structs(
@@ -66,5 +105,45 @@ def build_list_of_structs(
     ListArrayLike
         List array with struct elements.
     """
-    struct_arr = build_struct_array(struct_fields)
-    return build_list_array(offsets, struct_arr)
+    return _build_list_of_structs(offsets, struct_fields)
+
+
+def build_map_array(
+    offsets: ArrayLike,
+    keys: ArrayLike,
+    items: ArrayLike,
+) -> ArrayLike:
+    """Build a map array from offsets and flattened key/item arrays.
+
+    Returns
+    -------
+    ArrayLike
+        Map array with key/item pairs.
+    """
+    return build_map(offsets, keys, items)
+
+
+def build_sparse_union_array(type_ids: ArrayLike, children: list[ArrayLike]) -> ArrayLike:
+    """Build a sparse union array from type ids and child arrays.
+
+    Returns
+    -------
+    ArrayLike
+        Sparse union array.
+    """
+    return build_sparse_union(type_ids, children)
+
+
+def build_dense_union_array(
+    type_ids: ArrayLike,
+    offsets: ArrayLike,
+    children: list[ArrayLike],
+) -> ArrayLike:
+    """Build a dense union array from type ids, offsets, and child arrays.
+
+    Returns
+    -------
+    ArrayLike
+        Dense union array.
+    """
+    return build_dense_union(type_ids, offsets, children)

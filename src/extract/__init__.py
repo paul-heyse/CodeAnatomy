@@ -23,7 +23,7 @@ from extract.bytecode_extract import (
     extract_bytecode_table,
 )
 from extract.cst_extract import CSTExtractOptions, CSTExtractResult, extract_cst, extract_cst_tables
-from extract.repo_scan import RepoScanOptions, scan_repo, stable_id
+from extract.repo_scan import RepoScanOptions, scan_repo
 from extract.runtime_inspect_extract import (
     RuntimeInspectOptions,
     RuntimeInspectResult,
@@ -95,5 +95,4 @@ __all__ = [
     "resolve_scip_identity",
     "run_scip_python_index",
     "scan_repo",
-    "stable_id",
 ]

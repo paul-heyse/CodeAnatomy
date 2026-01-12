@@ -6,6 +6,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from arrowdsl.acero import acero
+from arrowdsl.ops import PlanOp
+from arrowdsl.plan_ops import AggregateOp, FilterOp, OrderByOp, ProjectOp, TableSourceOp
 from arrowdsl.pyarrow_protocols import (
     ComputeExpression,
     DeclarationLike,
@@ -104,6 +106,14 @@ class Plan:
         msg = "Plan has no execution source."
         raise ValueError(msg)
 
+    def _apply_plan_op(self, op: PlanOp, *, label: str = "") -> Plan:
+        if self.decl is None:
+            msg = "Plan operation requires an Acero-backed Plan (decl is None)."
+            raise TypeError(msg)
+        decl = op.to_declaration([self.decl], ctx=None)
+        ordering = op.apply_ordering(self.ordering)
+        return Plan(decl=decl, label=label or self.label, ordering=ordering)
+
     def schema(self, *, ctx: ExecutionContext) -> SchemaLike:
         """Return the output schema for this plan.
 
@@ -142,8 +152,10 @@ class Plan:
         Plan
             Plan backed by a table_source declaration.
         """
-        decl = acero.Declaration("table_source", acero.TableSourceNodeOptions(table))
-        return Plan(decl=decl, label=label, ordering=Ordering.implicit())
+        op = TableSourceOp(table=table)
+        decl = op.to_declaration([], ctx=None)
+        ordering = op.apply_ordering(Ordering.unordered())
+        return Plan(decl=decl, label=label, ordering=ordering)
 
     @staticmethod
     def from_table(table: TableLike, *, label: str = "") -> Plan:
@@ -195,17 +207,8 @@ class Plan:
         -------
         Plan
             Filtered plan.
-
-        Raises
-        ------
-        TypeError
-            Raised when the plan is not Acero-backed.
         """
-        if self.decl is None:
-            msg = "filter() requires an Acero-backed Plan (decl is None)."
-            raise TypeError(msg)
-        decl = acero.Declaration("filter", acero.FilterNodeOptions(predicate), inputs=[self.decl])
-        return Plan(decl=decl, label=label or self.label, ordering=self.ordering)
+        return self._apply_plan_op(FilterOp(predicate=predicate), label=label)
 
     def project(
         self, expressions: Sequence[ComputeExpression], names: Sequence[str], *, label: str = ""
@@ -225,21 +228,8 @@ class Plan:
         -------
         Plan
             Projected plan.
-
-        Raises
-        ------
-        TypeError
-            Raised when the plan is not Acero-backed.
         """
-        if self.decl is None:
-            msg = "project() requires an Acero-backed Plan (decl is None)."
-            raise TypeError(msg)
-        decl = acero.Declaration(
-            "project",
-            acero.ProjectNodeOptions(list(expressions), list(names)),
-            inputs=[self.decl],
-        )
-        return Plan(decl=decl, label=label or self.label, ordering=self.ordering)
+        return self._apply_plan_op(ProjectOp(expressions=expressions, names=names), label=label)
 
     def order_by(self, sort_keys: Sequence[OrderingKey], *, label: str = "") -> Plan:
         """Add an order-by node to the plan.
@@ -255,23 +245,9 @@ class Plan:
         -------
         Plan
             Ordered plan.
-
-        Raises
-        ------
-        TypeError
-            Raised when the plan is not Acero-backed.
         """
-        if self.decl is None:
-            msg = "order_by() requires an Acero-backed Plan (decl is None)."
-            raise TypeError(msg)
-        decl = acero.Declaration(
-            "order_by",
-            acero.OrderByNodeOptions(sort_keys=list(sort_keys)),
-            inputs=[self.decl],
-        )
-        return Plan(
-            decl=decl, label=label or self.label, ordering=Ordering.explicit(tuple(sort_keys))
-        )
+        op = OrderByOp(sort_keys=sort_keys)
+        return self._apply_plan_op(op, label=label)
 
     def aggregate(
         self,
@@ -295,23 +271,9 @@ class Plan:
         -------
         Plan
             Aggregated plan (unordered output).
-
-        Raises
-        ------
-        TypeError
-            Raised when the plan is not Acero-backed.
         """
-        if self.decl is None:
-            msg = "aggregate() requires an Acero-backed Plan (decl is None)."
-            raise TypeError(msg)
-        agg_specs = [(col, fn, None, f"{col}_{fn}") for col, fn in aggs]
-        keys = list(group_keys) if group_keys else None
-        decl = acero.Declaration(
-            "aggregate",
-            acero.AggregateNodeOptions(agg_specs, keys=keys),
-            inputs=[self.decl],
-        )
-        return Plan(decl=decl, label=label or self.label, ordering=Ordering.unordered())
+        op = AggregateOp(group_keys=group_keys, aggs=aggs)
+        return self._apply_plan_op(op, label=label)
 
     def mark_unordered(self, *, label: str = "") -> Plan:
         """Return a copy of the plan marked unordered.

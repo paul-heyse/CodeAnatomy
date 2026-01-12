@@ -8,18 +8,12 @@ from dataclasses import dataclass
 from typing import cast
 
 import arrowdsl.pyarrow_core as pa
-from arrowdsl.ids import hash64_from_parts
+from arrowdsl.ids import prefixed_hash_id_from_parts
 from arrowdsl.iter import iter_table_rows
 from arrowdsl.pyarrow_protocols import TableLike
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
-
-
-def _hash_id(prefix: str, *parts: str) -> str:
-    # Row-wise hash64 IDs are needed while building dependent rows.
-    hashed = hash64_from_parts(*parts, prefix=prefix)
-    return f"{prefix}:{hashed}"
 
 
 @dataclass(frozen=True)
@@ -162,7 +156,14 @@ def _ensure_scope_id(
         st_str = _scope_type_str(tbl)
         name = tbl.get_name()
         lineno = int(tbl.get_lineno() or 0)
-        sid = _hash_id("sym_scope", ctx.file_id, str(tid), st_str, name, str(lineno))
+        sid = prefixed_hash_id_from_parts(
+            "sym_scope",
+            ctx.file_id,
+            str(tid),
+            st_str,
+            name,
+            str(lineno),
+        )
         table_to_scope_id[tid] = sid
     return sid
 
@@ -189,7 +190,7 @@ def _scope_row(ctx: SymtableContext, sid: str, tbl: symtable.SymbolTable) -> dic
 def _scope_edge_row(ctx: SymtableContext, parent_sid: str, child_sid: str) -> dict[str, object]:
     return {
         "schema_version": SCHEMA_VERSION,
-        "edge_id": _hash_id("sym_scope_edge", parent_sid, child_sid),
+        "edge_id": prefixed_hash_id_from_parts("sym_scope_edge", parent_sid, child_sid),
         "file_id": ctx.file_id,
         "path": ctx.path,
         "file_sha256": ctx.file_sha256,
@@ -210,7 +211,7 @@ def _symbol_rows_for_scope(
 
     for sym in tbl.get_symbols():
         name = sym.get_name()
-        sym_row_id = _hash_id("sym_symbol", scope_id, name)
+        sym_row_id = prefixed_hash_id_from_parts("sym_symbol", scope_id, name)
         symbol_rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -240,7 +241,11 @@ def _symbol_rows_for_scope(
                 ns_edge_rows.append(
                     {
                         "schema_version": SCHEMA_VERSION,
-                        "edge_id": _hash_id("sym_ns_edge", sym_row_id, child_sid),
+                        "edge_id": prefixed_hash_id_from_parts(
+                            "sym_ns_edge",
+                            sym_row_id,
+                            child_sid,
+                        ),
                         "file_id": ctx.file_id,
                         "path": ctx.path,
                         "file_sha256": ctx.file_sha256,

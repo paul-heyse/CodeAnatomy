@@ -65,6 +65,7 @@ float32: Callable[[], DataTypeLike] = pa.float32
 float64: Callable[[], DataTypeLike] = pa.float64
 bool_: Callable[[], DataTypeLike] = pa.bool_
 binary: Callable[[], DataTypeLike] = pa.binary
+dictionary: Callable[[DataTypeLike, DataTypeLike], DataTypeLike] = pa.dictionary
 list_: Callable[..., DataTypeLike] = pa.list_
 struct: Callable[..., DataTypeLike] = pa.struct
 
@@ -87,6 +88,7 @@ __all__ = [
     "binary",
     "bool_",
     "concat_tables",
+    "dictionary",
     "field",
     "float32",
     "float64",

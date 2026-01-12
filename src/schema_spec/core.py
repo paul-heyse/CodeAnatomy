@@ -6,6 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validat
 
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.pyarrow_protocols import DataTypeLike, FieldLike, SchemaLike
+from arrowdsl.schema import CastErrorPolicy
+from arrowdsl.schema_ops import SchemaTransform
 
 
 def _field_metadata(metadata: dict[str, str]) -> dict[bytes, bytes]:
@@ -89,3 +91,33 @@ class TableSchemaSpec(BaseModel):
             Arrow schema instance.
         """
         return pa.schema([field.to_arrow_field() for field in self.fields])
+
+    def to_transform(
+        self,
+        *,
+        safe_cast: bool = True,
+        keep_extra_columns: bool = False,
+        on_error: CastErrorPolicy = "unsafe",
+    ) -> SchemaTransform:
+        """Create a schema transform for aligning tables to this spec.
+
+        Parameters
+        ----------
+        safe_cast:
+            When ``True``, allow safe casts only.
+        keep_extra_columns:
+            When ``True``, retain extra columns after alignment.
+        on_error:
+            Behavior when casting fails ("unsafe", "keep", "raise").
+
+        Returns
+        -------
+        SchemaTransform
+            Transform configured for this schema spec.
+        """
+        return SchemaTransform(
+            schema=self.to_arrow_schema(),
+            safe_cast=safe_cast,
+            keep_extra_columns=keep_extra_columns,
+            on_error=on_error,
+        )

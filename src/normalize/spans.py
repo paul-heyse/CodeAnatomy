@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import arrowdsl.pyarrow_core as pa
+from arrowdsl.column_ops import const_array, set_or_append_column
 from arrowdsl.iter import iter_arrays
 from arrowdsl.pyarrow_protocols import ArrayLike, DataTypeLike, TableLike
 from normalize.ids import add_span_id_column
@@ -507,11 +508,9 @@ def add_ast_byte_spans(
     inputs = _ast_span_inputs(py_ast_nodes, cols)
     bstarts, bends, oks = _compute_ast_spans(repo_index, inputs)
 
-    out = (
-        py_ast_nodes.append_column(cols.out_bstart, pa.array(bstarts, type=pa.int64()))
-        .append_column(cols.out_bend, pa.array(bends, type=pa.int64()))
-        .append_column(cols.out_ok, pa.array(oks, type=pa.bool_()))
-    )
+    out = set_or_append_column(py_ast_nodes, cols.out_bstart, pa.array(bstarts, type=pa.int64()))
+    out = set_or_append_column(out, cols.out_bend, pa.array(bends, type=pa.int64()))
+    out = set_or_append_column(out, cols.out_ok, pa.array(oks, type=pa.bool_()))
     return add_span_id_column(out)
 
 
@@ -681,24 +680,6 @@ def _compute_occurrence_span(
     )
 
 
-def _append_span_column(
-    table: TableLike,
-    name: str,
-    values: list[int | None] | list[bool],
-    data_type: DataTypeLike,
-) -> TableLike:
-    """Append a column if missing.
-
-    Returns
-    -------
-    TableLike
-        Updated table.
-    """
-    if name in table.column_names:
-        return table
-    return table.append_column(name, pa.array(values, type=data_type))
-
-
 def _span_error_table(rows: list[dict[str, str]]) -> TableLike:
     """Build the span error table.
 
@@ -759,11 +740,23 @@ def add_scip_occurrence_byte_spans(
         if res.error is not None:
             err_rows.append(res.error)
 
-    out = _append_span_column(scip_occurrences, cols.out_bstart, bstarts, pa.int64())
-    out = _append_span_column(out, cols.out_bend, bends, pa.int64())
-    out = _append_span_column(out, cols.out_enc_bstart, ebstarts, pa.int64())
-    out = _append_span_column(out, cols.out_enc_bend, ebends, pa.int64())
-    out = _append_span_column(out, cols.out_ok, oks, pa.bool_())
+    out = set_or_append_column(
+        scip_occurrences,
+        cols.out_bstart,
+        pa.array(bstarts, type=pa.int64()),
+    )
+    out = set_or_append_column(out, cols.out_bend, pa.array(bends, type=pa.int64()))
+    out = set_or_append_column(
+        out,
+        cols.out_enc_bstart,
+        pa.array(ebstarts, type=pa.int64()),
+    )
+    out = set_or_append_column(
+        out,
+        cols.out_enc_bend,
+        pa.array(ebends, type=pa.int64()),
+    )
+    out = set_or_append_column(out, cols.out_ok, pa.array(oks, type=pa.bool_()))
     out = add_span_id_column(out)
     return out, _span_error_table(err_rows)
 
@@ -786,9 +779,13 @@ def _append_alias_cols(table: TableLike, aliases: dict[str, str]) -> TableLike:
         if newc in out.column_names:
             continue
         if oldc not in out.column_names:
-            out = out.append_column(newc, pa.array([None] * out.num_rows, type=pa.int64()))
+            out = set_or_append_column(
+                out,
+                newc,
+                const_array(out.num_rows, None, dtype=pa.int64()),
+            )
             continue
-        out = out.append_column(newc, out[oldc])
+        out = set_or_append_column(out, newc, out[oldc])
     return out
 
 
@@ -836,7 +833,8 @@ def normalize_cst_defs_spans(
 ) -> TableLike:
     """Ensure defs have canonical (bstart, bend) columns.
 
-    primary="name" makes bstart/bend match the identifier token span (recommended for SCIP definition joins).
+    primary="name" makes bstart/bend match the identifier token span (recommended for SCIP
+    definition joins).
 
     Returns
     -------

@@ -17,7 +17,7 @@ from cpg.specs import (
     PropTableSpec,
 )
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
-from schema_spec.pandera_adapter import validate_arrow_table
+from schema_spec.pandera_adapter import PanderaValidationOptions, validate_arrow_table
 
 EXPECTED_ROWS = 2
 
@@ -56,7 +56,11 @@ def test_validate_arrow_table_filters_extra_columns() -> None:
         ],
         names=["id", "name", "extra"],
     )
-    validated = validate_arrow_table(table, spec=spec, lazy=False)
+    validated = validate_arrow_table(
+        table,
+        spec=spec,
+        options=PanderaValidationOptions(lazy=False),
+    )
     assert validated.schema.names == ["id", "name"]
     assert validated.num_rows == EXPECTED_ROWS
 

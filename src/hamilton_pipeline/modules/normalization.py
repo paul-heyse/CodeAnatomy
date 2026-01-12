@@ -5,8 +5,7 @@ from __future__ import annotations
 from hamilton.function_modifiers import cache, extract_fields, tag
 
 import arrowdsl.pyarrow_core as pa
-from arrowdsl.compute import pc
-from arrowdsl.ids import hash64_from_arrays
+from arrowdsl.ids import prefixed_hash_id
 from arrowdsl.iter import iter_array_values, iter_arrays
 from arrowdsl.kernels import explode_list_column
 from arrowdsl.pyarrow_protocols import TableLike
@@ -111,10 +110,7 @@ def dim_qualified_names(
     # distinct + deterministic
     uniq = sorted(set(qnames))
     qname_array = pa.array(uniq, type=pa.string())
-    qname_hash = hash64_from_arrays([qname_array], prefix="qname")
-    qname_ids = pc.binary_join_element_wise(
-        pa.scalar("qname"), pc.cast(qname_hash, pa.string()), ":"
-    )
+    qname_ids = prefixed_hash_id([qname_array], prefix="qname")
 
     return pa.Table.from_arrays(
         [qname_ids, qname_array],

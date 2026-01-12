@@ -8,6 +8,13 @@ patterns, targets, and a checklist.
 
 ---
 
+## Progress Summary
+- Scopes 1-9 completed in code.
+- Scope 10 pending: pytest still fails because `EDGE_DERIVATIONS` is missing for the SCIP symbol
+  relationship edges (see Scope 10).
+
+---
+
 ## Scope 1: Column Expression Protocol (Shared Column Ops)
 
 ### Description
@@ -18,14 +25,18 @@ and ad‑hoc column materialization across builders and normalization.
 ### Code patterns
 ```python
 # src/arrowdsl/column_ops.py
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Protocol
 
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
-from arrowdsl.pyarrow_protocols import ArrayLike, ComputeExpression, DataTypeLike, TableLike
+from arrowdsl.pyarrow_protocols import (
+    ArrayLike,
+    ComputeExpression,
+    DataTypeLike,
+    TableLike,
+    ensure_expression,
+)
 
 
 class ColumnExpr(Protocol):
@@ -39,10 +50,13 @@ class ConstExpr:
     dtype: DataTypeLike | None = None
 
     def to_expression(self) -> ComputeExpression:
-        return pc.scalar(self.value if self.dtype is None else pa.scalar(self.value, type=self.dtype))
+        scalar = self.value if self.dtype is None else pa.scalar(self.value, type=self.dtype)
+        return ensure_expression(pc.scalar(scalar))
 
     def materialize(self, table: TableLike) -> ArrayLike:
-        scalar = pa.scalar(self.value) if self.dtype is None else pa.scalar(self.value, type=self.dtype)
+        scalar = (
+            pa.scalar(self.value) if self.dtype is None else pa.scalar(self.value, type=self.dtype)
+        )
         return pa.array([self.value] * table.num_rows, type=scalar.type)
 
 
@@ -58,18 +72,35 @@ class FieldExpr:
 
 
 @dataclass(frozen=True)
+class CastExpr:
+    expr: ColumnExpr
+    dtype: DataTypeLike
+    safe: bool = True
+
+    def to_expression(self) -> ComputeExpression:
+        return ensure_expression(pc.cast(self.expr.to_expression(), self.dtype, safe=self.safe))
+
+    def materialize(self, table: TableLike) -> ArrayLike:
+        return pc.cast(self.expr.materialize(table), self.dtype, safe=self.safe)
+
+
+@dataclass(frozen=True)
 class CoalesceExpr:
     exprs: tuple[ColumnExpr, ...]
 
     def to_expression(self) -> ComputeExpression:
-        return pc.coalesce(*(expr.to_expression() for expr in self.exprs))
+        return ensure_expression(pc.coalesce(*(expr.to_expression() for expr in self.exprs)))
 
     def materialize(self, table: TableLike) -> ArrayLike:
-        arrays = [expr.materialize(table) for expr in self.exprs]
-        out = arrays[0]
-        for arr in arrays[1:]:
-            out = pc.coalesce(out, arr)
+        out = self.exprs[0].materialize(table)
+        for expr in self.exprs[1:]:
+            out = pc.coalesce(out, expr.materialize(table))
         return out
+
+
+def const_array(n: int, value: object, *, dtype: DataTypeLike | None = None) -> ArrayLike:
+    scalar = pa.scalar(value) if dtype is None else pa.scalar(value, type=dtype)
+    return pa.array([value] * n, type=scalar.type)
 
 
 def set_or_append_column(table: TableLike, name: str, values: ArrayLike) -> TableLike:
@@ -92,10 +123,10 @@ def set_or_append_column(table: TableLike, name: str, values: ArrayLike) -> Tabl
 - `src/relspec/compiler.py`
 
 ### Integration checklist
-- [ ] Add `ColumnExpr` + concrete expressions (const, field, coalesce, cast).
-- [ ] Replace `_set_or_append_column` helpers with `set_or_append_column`.
-- [ ] Standardize constant column creation and null fill.
-- [ ] Keep runtime behavior identical; remove redundant helpers.
+- [x] Add `ColumnExpr` + concrete expressions (const, field, coalesce, cast).
+- [x] Replace `_set_or_append_column` helpers with `set_or_append_column`.
+- [x] Standardize constant column creation and null fill.
+- [x] Keep runtime behavior identical; remove redundant helpers.
 
 ---
 
@@ -109,13 +140,11 @@ keeps pushdown explicit.
 ### Code patterns
 ```python
 # src/arrowdsl/predicates.py
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Protocol
 
 from arrowdsl.compute import pc
-from arrowdsl.pyarrow_protocols import ArrayLike, ComputeExpression, TableLike
+from arrowdsl.pyarrow_protocols import ArrayLike, ComputeExpression, TableLike, ensure_expression
 
 
 class PredicateSpec(Protocol):
@@ -129,10 +158,61 @@ class Equals:
     value: object
 
     def to_expression(self) -> ComputeExpression:
-        return pc.equal(pc.field(self.col), pc.scalar(self.value))
+        return ensure_expression(pc.equal(pc.field(self.col), pc.scalar(self.value)))
 
     def mask(self, table: TableLike) -> ArrayLike:
         return pc.equal(table[self.col], pc.scalar(self.value))
+
+
+@dataclass(frozen=True)
+class InSet:
+    col: str
+    values: tuple[object, ...]
+
+    def to_expression(self) -> ComputeExpression:
+        return ensure_expression(pc.is_in(pc.field(self.col), value_set=list(self.values)))
+
+    def mask(self, table: TableLike) -> ArrayLike:
+        return pc.is_in(table[self.col], value_set=list(self.values))
+
+
+@dataclass(frozen=True)
+class IsNull:
+    col: str
+
+    def to_expression(self) -> ComputeExpression:
+        return ensure_expression(pc.is_null(pc.field(self.col)))
+
+    def mask(self, table: TableLike) -> ArrayLike:
+        return pc.is_null(table[self.col])
+
+
+@dataclass(frozen=True)
+class And:
+    preds: tuple[PredicateSpec, ...]
+
+    def to_expression(self) -> ComputeExpression:
+        out = self.preds[0].to_expression()
+        for pred in self.preds[1:]:
+            out = ensure_expression(pc.and_(out, pred.to_expression()))
+        return out
+
+    def mask(self, table: TableLike) -> ArrayLike:
+        out = self.preds[0].mask(table)
+        for pred in self.preds[1:]:
+            out = pc.and_(out, pred.mask(table))
+        return out
+
+
+@dataclass(frozen=True)
+class Not:
+    pred: PredicateSpec
+
+    def to_expression(self) -> ComputeExpression:
+        return ensure_expression(pc.invert(self.pred.to_expression()))
+
+    def mask(self, table: TableLike) -> ArrayLike:
+        return pc.invert(self.pred.mask(table))
 ```
 
 ### Target files
@@ -142,9 +222,9 @@ class Equals:
 - `src/arrowdsl/dataset_io.py`
 
 ### Integration checklist
-- [ ] Introduce `PredicateSpec` and a small set of predicates (equals, in, is_null, and/or/not).
-- [ ] Update QuerySpec to accept predicate objects and expose both expression and mask.
-- [ ] Ensure plan-lane filters use `to_expression()` and kernel lane uses `mask()`.
+- [x] Introduce `PredicateSpec` and a small set of predicates (equals, in, is_null, and/or/not).
+- [x] Update QuerySpec to accept predicate objects and expose both expression and mask.
+- [x] Ensure plan-lane filters use `to_expression()` and kernel lane uses `mask()`.
 
 ---
 
@@ -158,24 +238,28 @@ table transforms with explicit ordering effects.
 ### Code patterns
 ```python
 # src/arrowdsl/ops.py
-from __future__ import annotations
-
-from dataclasses import dataclass
 from typing import Protocol
 
 from arrowdsl.pyarrow_protocols import DeclarationLike, TableLike
-from arrowdsl.runtime import ExecutionContext, OrderingEffect
+from arrowdsl.runtime import ExecutionContext, Ordering, OrderingEffect
 
 
 class PlanOp(Protocol):
-    ordering_effect: OrderingEffect
-    is_pipeline_breaker: bool
-    def to_declaration(self, inputs: list[DeclarationLike], ctx: ExecutionContext) -> DeclarationLike: ...
+    @property
+    def ordering_effect(self) -> OrderingEffect: ...
+    @property
+    def is_pipeline_breaker(self) -> bool: ...
+    def to_declaration(
+        self, inputs: list[DeclarationLike], ctx: ExecutionContext | None
+    ) -> DeclarationLike: ...
+    def apply_ordering(self, ordering: Ordering) -> Ordering: ...
 
 
 class KernelOp(Protocol):
-    ordering_effect: OrderingEffect
+    @property
+    def ordering_effect(self) -> OrderingEffect: ...
     def apply(self, table: TableLike, ctx: ExecutionContext) -> TableLike: ...
+    def apply_ordering(self, ordering: Ordering) -> Ordering: ...
 ```
 
 ### Target files
@@ -185,9 +269,9 @@ class KernelOp(Protocol):
 - `src/relspec/compiler.py` (mixed plan + kernel execution)
 
 ### Integration checklist
-- [ ] Define `PlanOp` and `KernelOp` protocols with ordering metadata.
-- [ ] Update plan assembly to carry ordering effects.
-- [ ] Annotate pipeline breakers (order_by, aggregate) and preserve in execution metadata.
+- [x] Define `PlanOp` and `KernelOp` protocols with ordering metadata.
+- [x] Update plan assembly to carry ordering effects.
+- [x] Annotate pipeline breakers (order_by, aggregate) and preserve in execution metadata.
 
 ---
 
@@ -203,7 +287,18 @@ specs can be used both in Acero plan lane and kernel lane.
 from dataclasses import dataclass
 from typing import Literal
 
-from arrowdsl.runtime import SortKey
+type DedupeStrategy = Literal[
+    "KEEP_FIRST_AFTER_SORT",
+    "KEEP_BEST_BY_SCORE",
+    "COLLAPSE_LIST",
+    "KEEP_ARBITRARY",
+]
+
+
+@dataclass(frozen=True)
+class SortKey:
+    column: str
+    order: Literal["ascending", "descending"] = "ascending"
 
 
 @dataclass(frozen=True)
@@ -213,6 +308,8 @@ class JoinSpec:
     right_keys: tuple[str, ...]
     left_output: tuple[str, ...]
     right_output: tuple[str, ...]
+    output_suffix_for_left: str = ""
+    output_suffix_for_right: str = ""
 
 
 @dataclass(frozen=True)
@@ -225,16 +322,12 @@ class AggregateSpec:
 @dataclass(frozen=True)
 class DedupeSpec:
     keys: tuple[str, ...]
-    tie_breakers: tuple[SortKey, ...]
-    strategy: Literal[
-        "KEEP_FIRST_AFTER_SORT",
-        "KEEP_BEST_BY_SCORE",
-        "COLLAPSE_LIST",
-        "KEEP_ARBITRARY",
-    ]
+    tie_breakers: tuple[SortKey, ...] = ()
+    strategy: DedupeStrategy = "KEEP_FIRST_AFTER_SORT"
 ```
 
 ### Target files
+- `src/arrowdsl/specs.py`
 - `src/arrowdsl/joins.py`
 - `src/arrowdsl/kernels.py`
 - `src/arrowdsl/finalize.py`
@@ -242,9 +335,9 @@ class DedupeSpec:
 - `src/cpg/build_edges.py`
 
 ### Integration checklist
-- [ ] Add shared specs for joins/aggregates/dedupe.
-- [ ] Route kernel lane dedupe through `DedupeSpec`.
-- [ ] Ensure canonical sort is enforced only at finalize (Tier A).
+- [x] Add shared specs for joins/aggregates/dedupe.
+- [x] Route kernel lane dedupe through `DedupeSpec`.
+- [x] Ensure canonical sort is enforced only at finalize (Tier A).
 
 ---
 
@@ -258,14 +351,18 @@ is consistent and vectorized, with a single config surface.
 ```python
 # src/arrowdsl/id_specs.py
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True)
 class HashSpec:
     prefix: str
     cols: tuple[str, ...]
+    extra_literals: tuple[str, ...] = ()
     as_string: bool = True
-    null_sentinel: str = "__NULL__"
+    null_sentinel: str = "None"
+    out_col: str | None = None
+    missing: Literal["raise", "null"] = "raise"
 ```
 
 ```python
@@ -273,27 +370,33 @@ class HashSpec:
 from arrowdsl.id_specs import HashSpec
 
 def add_hash_column(table: TableLike, *, spec: HashSpec) -> TableLike:
-    arrays = [table[col] for col in spec.cols]
-    hashed = hash64_from_arrays(arrays, prefix=spec.prefix, null_sentinel=spec.null_sentinel)
-    if spec.as_string:
-        hashed = pc.cast(hashed, pa.string())
-        hashed = pc.binary_join_element_wise(pa.scalar(spec.prefix), hashed, ":")
-    return table.append_column(f"{spec.prefix}_id", hashed)
+    out_col = spec.out_col or f"{spec.prefix}_id"
+    if out_col in table.column_names:
+        return table
+    hashed = hash_column_values(table, spec=spec)
+    return table.append_column(out_col, hashed)
 ```
 
 ### Target files
+- `src/arrowdsl/id_specs.py`
 - `src/arrowdsl/ids.py`
 - `src/normalize/ids.py`
 - `src/normalize/diagnostics.py`
 - `src/normalize/types.py`
 - `src/normalize/bytecode_dfg.py`
 - `src/extract/repo_scan.py`
+- `src/extract/ast_extract.py`
+- `src/extract/bytecode_extract.py`
+- `src/extract/cst_extract.py`
 - `src/extract/scip_extract.py`
+- `src/extract/symtable_extract.py`
+- `src/extract/tree_sitter_extract.py`
+- `src/extract/runtime_inspect_extract.py`
 - `src/cpg/builders.py`
 
 ### Integration checklist
-- [ ] Introduce `HashSpec` and a single `add_hash_column` API.
-- [ ] Replace all inline hash64 + prefix patterns with the shared API.
+- [x] Introduce `HashSpec` and a single `add_hash_column` API.
+- [x] Replace all inline hash64 + prefix patterns with the shared API.
 
 ---
 
@@ -306,31 +409,48 @@ constructors, enabling list<struct> and list_view semantics without ad‑hoc cod
 ### Code patterns
 ```python
 # src/arrowdsl/nested_ops.py
-from dataclasses import dataclass
+import pyarrow as pa
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.pyarrow_protocols import ArrayLike, ListArrayLike, StructArrayLike
+from arrowdsl.pyarrow_protocols import ArrayLike, DataTypeLike, ListArrayLike, StructArrayLike
 
 
 def build_struct(fields: dict[str, ArrayLike], *, mask: ArrayLike | None = None) -> StructArrayLike:
     names = list(fields.keys())
-    arrays = list(fields.values())
+    arrays = [fields[name] for name in names]
     return pa.StructArray.from_arrays(arrays, names=names, mask=mask)
 
 
 def build_list(offsets: ArrayLike, values: ArrayLike) -> ListArrayLike:
     return pa.ListArray.from_arrays(offsets, values)
+
+
+def build_list_view(
+    offsets: ArrayLike,
+    sizes: ArrayLike,
+    values: ArrayLike,
+    *,
+    list_type: DataTypeLike | None = None,
+    mask: ArrayLike | None = None,
+) -> ListArrayLike:
+    return pa.ListViewArray.from_arrays(
+        offsets,
+        sizes,
+        values,
+        type=list_type,
+        mask=mask,
+    )
 ```
 
 ### Target files
+- `src/arrowdsl/nested_ops.py`
 - `src/arrowdsl/nested.py` (migrate to nested_ops)
 - `src/arrowdsl/finalize.py`
 - `src/normalize/diagnostics.py`
 
 ### Integration checklist
-- [ ] Add shared nested builders.
-- [ ] Replace list<struct> construction in finalize and diagnostics.
-- [ ] Add list_view support when non‑monotonic offsets are required.
+- [x] Add shared nested builders.
+- [x] Replace list<struct> construction in finalize and diagnostics.
+- [x] Add list_view support when non‑monotonic offsets are required.
 
 ---
 
@@ -344,8 +464,9 @@ Field semantics from PyArrow advanced docs.
 ```python
 # src/arrowdsl/schema_ops.py
 from dataclasses import dataclass
+from typing import Literal
 
-from arrowdsl.schema import align_to_schema
+from arrowdsl.schema import AlignmentInfo, align_to_schema
 from arrowdsl.pyarrow_protocols import SchemaLike, TableLike
 
 
@@ -354,18 +475,31 @@ class SchemaTransform:
     schema: SchemaLike
     safe_cast: bool = True
     keep_extra_columns: bool = False
+    on_error: Literal["unsafe", "null", "drop"] = "unsafe"
 
     def apply(self, table: TableLike) -> TableLike:
         aligned, _ = align_to_schema(
             table,
             schema=self.schema,
             safe_cast=self.safe_cast,
+            on_error=self.on_error,
             keep_extra_columns=self.keep_extra_columns,
         )
         return aligned
+
+    def apply_with_info(self, table: TableLike) -> tuple[TableLike, AlignmentInfo]:
+        aligned, info = align_to_schema(
+            table,
+            schema=self.schema,
+            safe_cast=self.safe_cast,
+            on_error=self.on_error,
+            keep_extra_columns=self.keep_extra_columns,
+        )
+        return aligned, info
 ```
 
 ### Target files
+- `src/arrowdsl/schema_ops.py`
 - `src/arrowdsl/schema.py`
 - `src/normalize/schema_infer.py`
 - `src/arrowdsl/finalize.py`
@@ -373,9 +507,9 @@ class SchemaTransform:
 - `src/schema_spec/pandera_adapter.py`
 
 ### Integration checklist
-- [ ] Introduce `SchemaTransform` and route alignment through it.
-- [ ] Enforce immutable metadata update patterns (new schema + cast).
-- [ ] Reuse in finalize + schema inference paths.
+- [x] Introduce `SchemaTransform` and route alignment through it.
+- [x] Enforce immutable metadata update patterns (new schema + cast).
+- [x] Reuse in finalize + schema inference paths.
 
 ---
 
@@ -390,9 +524,11 @@ and stabilize joins/aggregations.
 # src/arrowdsl/encoding.py
 from dataclasses import dataclass
 
-import arrowdsl.pyarrow_core as pa
-from arrowdsl.pyarrow_protocols import TableLike
+import pyarrow.types as patypes
+
+from arrowdsl.column_ops import set_or_append_column
 from arrowdsl.compute import pc
+from arrowdsl.pyarrow_protocols import TableLike
 
 
 @dataclass(frozen=True)
@@ -401,20 +537,27 @@ class EncodingSpec:
 
 
 def encode_dictionary(table: TableLike, spec: EncodingSpec) -> TableLike:
-    encoded = pc.dictionary_encode(table[spec.column])
-    return table.append_column(spec.column, encoded)
+    if spec.column not in table.column_names:
+        return table
+    column = table[spec.column]
+    if patypes.is_dictionary(column.type):
+        return table
+    encoded = pc.dictionary_encode(column)
+    return set_or_append_column(table, spec.column, encoded)
 ```
 
 ### Target files
 - `src/arrowdsl/encoding.py` (new)
 - `src/normalize/diagnostics.py`
+- `src/cpg/builders.py`
 - `src/cpg/build_edges.py`
 - `src/cpg/build_nodes.py`
+- `src/cpg/schemas.py`
 - `src/obs/stats.py`
 
 ### Integration checklist
-- [ ] Add encoding helpers and use them for high‑cardinality string columns.
-- [ ] Ensure downstream operations handle dictionary types correctly.
+- [x] Add encoding helpers and use them for high‑cardinality string columns.
+- [x] Ensure downstream operations handle dictionary types correctly.
 
 ---
 
@@ -427,35 +570,58 @@ based on Acero guidance. Preserve ordering/implicit ordering settings through `E
 ### Code patterns
 ```python
 # src/arrowdsl/plan_ops.py
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+import pyarrow.dataset as ds
+
 from arrowdsl.acero import acero
-from arrowdsl.pyarrow_protocols import DeclarationLike
-from arrowdsl.runtime import ExecutionContext, OrderingEffect
+from arrowdsl.pyarrow_protocols import ComputeExpression, DeclarationLike
+from arrowdsl.runtime import ExecutionContext, Ordering, OrderingEffect
 
 
 @dataclass(frozen=True)
 class ScanOp:
-    ordering_effect: OrderingEffect
+    dataset: ds.Dataset
+    columns: Sequence[str] | Mapping[str, ComputeExpression]
+    predicate: ComputeExpression | None = None
+
+    ordering_effect: OrderingEffect = OrderingEffect.IMPLICIT
     is_pipeline_breaker: bool = False
 
-    def to_declaration(self, dataset, ctx: ExecutionContext) -> DeclarationLike:
+    def to_declaration(
+        self, inputs: list[DeclarationLike], ctx: ExecutionContext | None
+    ) -> DeclarationLike:
+        _ = inputs
+        if ctx is None:
+            msg = "ScanOp requires an execution context."
+            raise ValueError(msg)
         opts = acero.ScanNodeOptions(
-            dataset,
+            self.dataset,
+            columns=self.columns,
+            filter=self.predicate,
             **ctx.runtime.scan.scan_node_kwargs(),
         )
         return acero.Declaration("scan", opts)
+
+    def apply_ordering(self, ordering: Ordering) -> Ordering:
+        if self.ordering_effect == OrderingEffect.IMPLICIT:
+            if ordering.level == Ordering.unordered().level:
+                return Ordering.implicit()
+            return ordering
+        return ordering
 ```
 
 ### Target files
+- `src/arrowdsl/plan_ops.py`
 - `src/arrowdsl/dataset_io.py`
 - `src/arrowdsl/plan.py`
 - `src/arrowdsl/runtime.py`
 
 ### Integration checklist
-- [ ] Add plan‑lane ops (scan, filter, project, aggregate, order_by).
-- [ ] Annotate ordering effects and pipeline breakers.
-- [ ] Ensure `ExecutionContext` exposes Acero ordering knobs.
+- [x] Add plan‑lane ops (scan, filter, project, aggregate, order_by).
+- [x] Annotate ordering effects and pipeline breakers.
+- [x] Ensure `ExecutionContext` exposes Acero ordering knobs.
 
 ---
 
@@ -468,9 +634,11 @@ Ensure all migrations compile cleanly and remove any legacy helper duplication.
 - Entire repo
 
 ### Integration checklist
-- [ ] Remove obsolete helpers (`_set_or_append_column`, ad‑hoc coalesce/const logic).
-- [ ] Ensure no duplicated hash ID patterns remain.
-- [ ] `uv run ruff check --fix`
-- [ ] `uv run pyrefly check`
-- [ ] `uv run pyright --warnings --pythonversion=3.14`
-- [ ] `uv run pytest`
+- [x] Remove obsolete helpers (`_set_or_append_column`, ad‑hoc coalesce/const logic).
+- [x] Ensure no duplicated hash ID patterns remain.
+- [x] `uv run ruff check --fix`
+- [x] `uv run pyrefly check`
+- [x] `uv run pyright --warnings --pythonversion=3.14`
+- [ ] Fix registry completeness: add `EDGE_DERIVATIONS` entries for SCIP symbol relationship edges
+  in `src/cpg/kinds_ultimate.py`.
+- [ ] `uv run pytest` (blocked until registry completeness is resolved).

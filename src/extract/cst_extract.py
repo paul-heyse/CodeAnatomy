@@ -20,7 +20,7 @@ from libcst.metadata import (
 
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.empty import empty_table
-from arrowdsl.ids import hash64_from_parts
+from arrowdsl.ids import prefixed_hash_id_from_parts
 from arrowdsl.iter import iter_table_rows
 from arrowdsl.nested import build_list_array, build_list_of_structs
 from arrowdsl.pyarrow_protocols import TableLike
@@ -29,12 +29,6 @@ from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 SCHEMA_VERSION = 1
 
 type Row = dict[str, object]
-
-
-def _hash_id(prefix: str, *parts: str) -> str:
-    # Row-wise hash64 IDs are needed while building dependent rows.
-    hashed = hash64_from_parts(*parts, prefix=prefix)
-    return f"{prefix}:{hashed}"
 
 
 def _offsets_start() -> list[int]:
@@ -548,7 +542,7 @@ class CSTCollector(cst.CSTVisitor):
         expr_text = self._code_for_node(expr)
         if expr_text is None:
             return
-        type_expr_id = _hash_id(
+        type_expr_id = prefixed_hash_id_from_parts(
             "cst_type_expr",
             self._file_ctx.path,
             str(bstart),
@@ -587,8 +581,12 @@ class CSTCollector(cst.CSTVisitor):
 
         container = self._def_stack[-1] if self._def_stack else None
         def_kind = "async_function" if node.asynchronous is not None else "function"
-        def_id = _hash_id(
-            "cst_def", self._file_ctx.file_id, def_kind, str(def_bstart), str(def_bend)
+        def_id = prefixed_hash_id_from_parts(
+            "cst_def",
+            self._file_ctx.file_id,
+            def_kind,
+            str(def_bstart),
+            str(def_bend),
         )
         qnames = self._qnames(node)
         _append_qname_list(
@@ -656,8 +654,12 @@ class CSTCollector(cst.CSTVisitor):
 
         container = self._def_stack[-1] if self._def_stack else None
         def_kind = "class"
-        def_id = _hash_id(
-            "cst_def", self._file_ctx.file_id, def_kind, str(def_bstart), str(def_bend)
+        def_id = prefixed_hash_id_from_parts(
+            "cst_def",
+            self._file_ctx.file_id,
+            def_kind,
+            str(def_bstart),
+            str(def_bend),
         )
         qnames = self._qnames(node)
         _append_qname_list(
@@ -714,8 +716,11 @@ class CSTCollector(cst.CSTVisitor):
         self._name_ref_rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
-                "name_ref_id": _hash_id(
-                    "cst_name_ref", self._file_ctx.file_id, str(bstart), str(bend)
+                "name_ref_id": prefixed_hash_id_from_parts(
+                    "cst_name_ref",
+                    self._file_ctx.file_id,
+                    str(bstart),
+                    str(bend),
                 ),
                 "file_id": self._file_ctx.file_id,
                 "path": self._file_ctx.path,
@@ -752,7 +757,7 @@ class CSTCollector(cst.CSTVisitor):
             self._import_rows.append(
                 {
                     "schema_version": SCHEMA_VERSION,
-                    "import_id": _hash_id(
+                    "import_id": prefixed_hash_id_from_parts(
                         "cst_import",
                         self._file_ctx.file_id,
                         "import",
@@ -802,7 +807,7 @@ class CSTCollector(cst.CSTVisitor):
             self._import_rows.append(
                 {
                     "schema_version": SCHEMA_VERSION,
-                    "import_id": _hash_id(
+                    "import_id": prefixed_hash_id_from_parts(
                         "cst_import",
                         self._file_ctx.file_id,
                         "importfrom",
@@ -839,7 +844,7 @@ class CSTCollector(cst.CSTVisitor):
             self._import_rows.append(
                 {
                     "schema_version": SCHEMA_VERSION,
-                    "import_id": _hash_id(
+                    "import_id": prefixed_hash_id_from_parts(
                         "cst_import",
                         self._file_ctx.file_id,
                         "importfrom",
@@ -894,8 +899,11 @@ class CSTCollector(cst.CSTVisitor):
         self._call_rows.append(
             {
                 "schema_version": SCHEMA_VERSION,
-                "call_id": _hash_id(
-                    "cst_call", self._file_ctx.file_id, str(call_bstart), str(call_bend)
+                "call_id": prefixed_hash_id_from_parts(
+                    "cst_call",
+                    self._file_ctx.file_id,
+                    str(call_bstart),
+                    str(call_bend),
                 ),
                 "file_id": self._file_ctx.file_id,
                 "path": self._file_ctx.path,

@@ -6,11 +6,12 @@ from dataclasses import dataclass
 
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
-from arrowdsl.ids import hash64_from_arrays, hash64_from_parts
-from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, TableLike
+from arrowdsl.id_specs import HashSpec
+from arrowdsl.ids import hash64_from_parts, hash_column_values, prefixed_hash_id_from_parts
+from arrowdsl.pyarrow_protocols import TableLike
 
 
-def stable_id(prefix: str, *parts: str) -> str:
+def stable_id(prefix: str, *parts: str | None) -> str:
     """Build a deterministic string ID.
 
     Must remain stable across runs/machines and should be used for any persisted identifiers.
@@ -20,11 +21,10 @@ def stable_id(prefix: str, *parts: str) -> str:
     str
         Stable identifier with the requested prefix.
     """
-    hashed = hash64_from_parts(*parts, prefix=prefix)
-    return f"{prefix}:{hashed}"
+    return prefixed_hash_id_from_parts(prefix, *parts)
 
 
-def stable_int64(*parts: str) -> int:
+def stable_int64(*parts: str | None) -> int:
     """Build a deterministic signed int64 from parts.
 
     Useful as compact row ids for Arrow joins if you prefer numeric keys.
@@ -84,9 +84,6 @@ def add_span_id_column(table: TableLike, spec: SpanIdSpec | None = None) -> Tabl
 
     if out_col in table.column_names:
         return table
-    arrays: list[ArrayLike | ChunkedArrayLike] = []
-    if kind is not None:
-        arrays.append(pa.array([kind] * table.num_rows, type=pa.string()))
     if path_col in table.column_names:
         path_arr = table[path_col]
     else:
@@ -99,13 +96,17 @@ def add_span_id_column(table: TableLike, spec: SpanIdSpec | None = None) -> Tabl
         bend_arr = table[bend_col]
     else:
         bend_arr = pa.nulls(table.num_rows, type=pa.int64())
-    arrays.append(path_arr)
-    arrays.append(bstart_arr)
-    arrays.append(bend_arr)
 
-    hashed = hash64_from_arrays(arrays, prefix="span")
-    hashed_str = pc.cast(hashed, pa.string())
-    prefixed = pc.binary_join_element_wise(pa.scalar("span"), hashed_str, ":")
+    hash_cols = (path_col, bstart_col, bend_col)
+    extra = (kind,) if kind is not None else ()
+    hash_spec = HashSpec(
+        prefix="span",
+        cols=hash_cols,
+        as_string=True,
+        null_sentinel="None",
+        extra_literals=extra,
+    )
+    prefixed = hash_column_values(table, spec=hash_spec)
     valid = pc.and_(
         pc.is_valid(path_arr),
         pc.and_(pc.is_valid(bstart_arr), pc.is_valid(bend_arr)),

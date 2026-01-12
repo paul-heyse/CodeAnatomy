@@ -8,6 +8,7 @@ from functools import cmp_to_key
 from typing import Literal, Protocol
 
 import arrowdsl.pyarrow_core as pa
+from arrowdsl.column_ops import const_array, set_or_append_column
 from arrowdsl.contracts import Contract, SortKey
 from arrowdsl.dataset_io import compile_to_acero_scan, open_dataset
 from arrowdsl.expr import E
@@ -163,14 +164,16 @@ def _build_rule_meta_kernel(rule: RelationshipRule) -> KernelFn:
     def _add_rule_meta(table: TableLike, _ctx: ExecutionContext) -> TableLike:
         count = table.num_rows
         if rule.rule_name_col not in table.column_names:
-            table = table.append_column(
+            table = set_or_append_column(
+                table,
                 rule.rule_name_col,
-                pa.array([rule.name] * count, type=pa.string()),
+                const_array(count, rule.name, dtype=pa.string()),
             )
         if rule.rule_priority_col not in table.column_names:
-            table = table.append_column(
+            table = set_or_append_column(
+                table,
                 rule.rule_priority_col,
-                pa.array([int(rule.priority)] * count, type=pa.int32()),
+                const_array(count, int(rule.priority), dtype=pa.int32()),
             )
         return table
 
@@ -181,10 +184,7 @@ def _build_add_literal_kernel(spec: AddLiteralSpec) -> KernelFn:
     def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
         if spec.name in table.column_names:
             return table
-        return table.append_column(
-            spec.name,
-            pa.array([spec.value] * table.num_rows),
-        )
+        return set_or_append_column(table, spec.name, const_array(table.num_rows, spec.value))
 
     return _fn
 
@@ -1056,7 +1056,10 @@ class RelationshipRuleCompiler:
             rules_sorted = sorted(rules, key=lambda rr: (rr.priority, rr.name))
             contract_names = {rr.contract_name for rr in rules_sorted}
             if len(contract_names) > 1:
-                msg = f"Output {out_name!r} has inconsistent contract_name across rules: {contract_names}."
+                msg = (
+                    f"Output {out_name!r} has inconsistent contract_name across rules: "
+                    f"{contract_names}."
+                )
                 raise ValueError(msg)
 
             contributors = tuple(self.compile_rule(rule, ctx=ctx) for rule in rules_sorted)

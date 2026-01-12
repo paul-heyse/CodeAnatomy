@@ -11,32 +11,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import arrowdsl.pyarrow_core as pa
-from arrowdsl.compute import pc
-from arrowdsl.ids import hash64_from_arrays, hash64_from_parts
-from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, TableLike
+from arrowdsl.column_ops import set_or_append_column
+from arrowdsl.id_specs import HashSpec
+from arrowdsl.ids import hash_column_values
+from arrowdsl.pyarrow_protocols import TableLike
 from core_types import PathLike, ensure_path
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
 SCHEMA_VERSION = 1
-
-
-def stable_id(prefix: str, *parts: str) -> str:
-    """Build a deterministic string ID.
-
-    Parameters
-    ----------
-    prefix:
-        ID prefix to namespace the hash.
-    *parts:
-        String parts used for hashing.
-
-    Returns
-    -------
-    str
-        Stable identifier string.
-    """
-    hashed = hash64_from_parts(*parts, prefix=prefix)
-    return f"{prefix}:{hashed}"
 
 
 @dataclass(frozen=True)
@@ -228,12 +210,13 @@ def scan_repo(repo_root: PathLike, options: RepoScanOptions | None = None) -> Ta
     table = pa.Table.from_pylist(rows, schema=REPO_FILES_SCHEMA)
     if table.num_rows == 0:
         return table
-    hash_arrays: list[ArrayLike | ChunkedArrayLike] = []
-    if options.repo_id:
-        hash_arrays.append(pa.array([options.repo_id] * table.num_rows, type=pa.string()))
-    hash_arrays.append(table["path"])
-    file_hash = hash64_from_arrays(hash_arrays, prefix="file")
-    file_hash_str = pc.cast(file_hash, pa.string())
-    file_id = pc.binary_join_element_wise(pa.scalar("file"), file_hash_str, ":")
-    idx = table.schema.get_field_index("file_id")
-    return table.set_column(idx, "file_id", file_id)
+    extra = (options.repo_id,) if options.repo_id else ()
+    spec = HashSpec(
+        prefix="file",
+        cols=("path",),
+        as_string=True,
+        extra_literals=extra,
+        out_col="file_id",
+    )
+    file_id = hash_column_values(table, spec=spec)
+    return set_or_append_column(table, "file_id", file_id)

@@ -12,19 +12,19 @@ from pathlib import Path
 from types import ModuleType
 
 import arrowdsl.pyarrow_core as pa
-from arrowdsl.compute import pc
+from arrowdsl.column_ops import set_or_append_column
 from arrowdsl.empty import empty_table
-from arrowdsl.ids import hash64_from_arrays
+from arrowdsl.encoding import EncodingSpec, encode_columns
+from arrowdsl.ids import prefixed_hash_id
 from arrowdsl.nested import build_list_array, build_struct_array
 from arrowdsl.pyarrow_protocols import (
     ArrayLike,
     ChunkedArrayLike,
     DataTypeLike,
-    ScalarLike,
     SchemaLike,
     TableLike,
 )
-from arrowdsl.schema import align_to_schema
+from arrowdsl.schema_ops import SchemaTransform
 from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
@@ -386,8 +386,7 @@ def parse_index_scip(index_path: Path, parse_opts: SCIPParseOptions | None = Non
 
 
 def _prefixed_hash(prefix: str, arrays: Sequence[ArrayLike | ChunkedArrayLike]) -> ArrayLike:
-    hashed = hash64_from_arrays(arrays, prefix=prefix)
-    return pc.binary_join_element_wise(pa.scalar(prefix), pc.cast(hashed, pa.string()), ":")
+    return prefixed_hash_id(arrays, prefix=prefix)
 
 
 def _set_column(
@@ -395,10 +394,7 @@ def _set_column(
     name: str,
     values: ArrayLike | ChunkedArrayLike,
 ) -> TableLike:
-    if name in table.column_names:
-        idx = table.schema.get_field_index(name)
-        return table.set_column(idx, name, values)
-    return table.append_column(name, values)
+    return set_or_append_column(table, name, values)
 
 
 def _with_document_ids(table: TableLike, *, path_col: str = "path") -> TableLike:
@@ -491,21 +487,13 @@ def _with_relationship_ids(table: TableLike) -> TableLike:
 
 
 def _align_table(table: TableLike, *, schema: SchemaLike) -> TableLike:
-    aligned, _ = align_to_schema(table, schema=schema, safe_cast=True, on_error="unsafe")
-    return aligned
+    transform = SchemaTransform(schema=schema, safe_cast=True, on_error="unsafe")
+    return transform.apply(table)
 
 
 def _dictionary_encode(table: TableLike, columns: Sequence[str]) -> TableLike:
-    for col in columns:
-        if col not in table.column_names:
-            continue
-        idx = table.schema.get_field_index(col)
-        encoded = pc.call_function("dictionary_encode", [table[col]])
-        if isinstance(encoded, ScalarLike):
-            msg = f"Dictionary encoding returned scalar for column '{col}'."
-            raise TypeError(msg)
-        table = table.set_column(idx, col, encoded)
-    return table
+    specs = tuple(EncodingSpec(column=col) for col in columns)
+    return encode_columns(table, specs=specs)
 
 
 def _index_counts(index: object) -> dict[str, int]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Literal, cast
 
 import pandera.polars as pa_pl
@@ -12,7 +13,19 @@ from polars.datatypes.classes import DataTypeClass
 
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.pyarrow_protocols import DataTypeLike, FieldLike, SchemaLike, TableLike
+from arrowdsl.schema_ops import SchemaTransform
 from schema_spec.core import TableSchemaSpec
+
+
+@dataclass(frozen=True)
+class PanderaValidationOptions:
+    """Options for Arrow table validation via Pandera."""
+
+    lazy: bool = True
+    strict: bool | Literal["filter"] = "filter"
+    coerce: bool = False
+    transform: SchemaTransform | None = None
+
 
 _ARROW_TO_POLARS: tuple[tuple[Callable[[DataTypeLike], bool], DataTypeClass], ...] = (
     (patypes.is_string, pl.Utf8),
@@ -118,16 +131,15 @@ def validate_arrow_table(
     table: TableLike,
     *,
     spec: TableSchemaSpec,
-    lazy: bool = True,
-    strict: bool | Literal["filter"] = "filter",
-    coerce: bool = False,
+    options: PanderaValidationOptions | None = None,
 ) -> TableLike:
     """Validate an Arrow table with Pandera.
 
     Returns
     -------
     pyarrow.Table
-        Validated table in Arrow form.
+        Validated table in Arrow form. When ``options.transform`` is provided, the output
+        is aligned to the transform schema.
 
     Raises
     ------
@@ -138,11 +150,15 @@ def validate_arrow_table(
     if not isinstance(df, pl.DataFrame):
         msg = "Expected a polars DataFrame from Arrow input."
         raise TypeError(msg)
-    schema = table_spec_to_pandera(spec, strict=strict, coerce=coerce)
-    validated = schema.validate(df, lazy=lazy)
+    options = options or PanderaValidationOptions()
+    schema = table_spec_to_pandera(spec, strict=options.strict, coerce=options.coerce)
+    validated = schema.validate(df, lazy=options.lazy)
     if isinstance(validated, pl.LazyFrame):
         validated = validated.collect()
     if not isinstance(validated, pl.DataFrame):
         msg = "Expected a polars DataFrame after validation."
         raise TypeError(msg)
-    return validated.to_arrow()
+    out = validated.to_arrow()
+    if options.transform is not None:
+        return options.transform.apply(out)
+    return out

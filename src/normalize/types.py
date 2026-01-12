@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import arrowdsl.pyarrow_core as pa
+from arrowdsl.column_ops import const_array
 from arrowdsl.compute import pc
 from arrowdsl.empty import empty_table
-from arrowdsl.ids import hash64_from_arrays
+from arrowdsl.ids import prefixed_hash_id
 from arrowdsl.iter import iter_array_values, iter_arrays
 from arrowdsl.pyarrow_protocols import ArrayLike, TableLike
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
@@ -53,9 +54,7 @@ def _prefixed_hash64(
     prefix: str,
     arrays: list[ArrayLike],
 ) -> ArrayLike:
-    hashed = hash64_from_arrays(arrays, prefix=prefix)
-    hashed_str = pc.cast(hashed, pa.string())
-    return pc.binary_join_element_wise(pa.scalar(prefix), hashed_str, ":")
+    return prefixed_hash_id(arrays, prefix=prefix)
 
 
 @dataclass
@@ -179,7 +178,7 @@ def normalize_type_exprs(cst_type_exprs: TableLike) -> TableLike:
 
     return pa.Table.from_arrays(
         [
-            pa.array([SCHEMA_VERSION] * n, type=pa.int32()),
+            const_array(n, SCHEMA_VERSION, dtype=pa.int32()),
             type_expr_id,
             pa.array(buffers.owner_def_ids, type=pa.string()),
             pa.array(buffers.param_names, type=pa.string()),
@@ -244,11 +243,11 @@ def _types_from_scip(scip_symbol_information: TableLike | None) -> TableLike | N
     n = len(type_reprs)
     return pa.Table.from_arrays(
         [
-            pa.array([SCHEMA_VERSION] * n, type=pa.int32()),
+            const_array(n, SCHEMA_VERSION, dtype=pa.int32()),
             type_id,
             type_repr_arr,
-            pa.array(["scip"] * n, type=pa.string()),
-            pa.array(["inferred"] * n, type=pa.string()),
+            const_array(n, "scip", dtype=pa.string()),
+            const_array(n, "inferred", dtype=pa.string()),
         ],
         schema=TYPE_NODES_SCHEMA,
     )
@@ -282,11 +281,11 @@ def _types_from_type_exprs(type_exprs_norm: TableLike) -> TableLike:
     n = len(type_ids)
     return pa.Table.from_arrays(
         [
-            pa.array([SCHEMA_VERSION] * n, type=pa.int32()),
+            const_array(n, SCHEMA_VERSION, dtype=pa.int32()),
             pa.array(type_ids, type=pa.string()),
             pa.array(type_reprs, type=pa.string()),
-            pa.array(["annotation"] * n, type=pa.string()),
-            pa.array(["annotation"] * n, type=pa.string()),
+            const_array(n, "annotation", dtype=pa.string()),
+            const_array(n, "annotation", dtype=pa.string()),
         ],
         schema=TYPE_NODES_SCHEMA,
     )

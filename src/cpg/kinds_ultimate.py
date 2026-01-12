@@ -2296,6 +2296,51 @@ EDGE_DERIVATIONS: dict[EdgeKind, list[DerivationSpec]] = {
             status="planned",
         )
     ],
+    # SCIP symbol relationships
+    EdgeKind.SCIP_SYMBOL_REFERENCE: [
+        DerivationSpec(
+            extractor="cpg.build_edges:build_cpg_edges_raw",
+            provider_or_field="scip_symbol_relationships (is_reference)",
+            join_keys=("symbol", "related_symbol"),
+            id_recipe="edge_id = sha('SCIP_SYMBOL_REFERENCE:'+symbol+':'+related_symbol)[:16]",
+            confidence_policy="confidence=1.0",
+            ambiguity_policy="none",
+            status="implemented",
+        )
+    ],
+    EdgeKind.SCIP_SYMBOL_IMPLEMENTATION: [
+        DerivationSpec(
+            extractor="cpg.build_edges:build_cpg_edges_raw",
+            provider_or_field="scip_symbol_relationships (is_implementation)",
+            join_keys=("symbol", "related_symbol"),
+            id_recipe="edge_id = sha('SCIP_SYMBOL_IMPLEMENTATION:'+symbol+':'+related_symbol)[:16]",
+            confidence_policy="confidence=1.0",
+            ambiguity_policy="none",
+            status="implemented",
+        )
+    ],
+    EdgeKind.SCIP_SYMBOL_TYPE_DEFINITION: [
+        DerivationSpec(
+            extractor="cpg.build_edges:build_cpg_edges_raw",
+            provider_or_field="scip_symbol_relationships (is_type_definition)",
+            join_keys=("symbol", "related_symbol"),
+            id_recipe="edge_id = sha('SCIP_SYMBOL_TYPE_DEFINITION:'+symbol+':'+related_symbol)[:16]",
+            confidence_policy="confidence=1.0",
+            ambiguity_policy="none",
+            status="implemented",
+        )
+    ],
+    EdgeKind.SCIP_SYMBOL_DEFINITION: [
+        DerivationSpec(
+            extractor="cpg.build_edges:build_cpg_edges_raw",
+            provider_or_field="scip_symbol_relationships (is_definition)",
+            join_keys=("symbol", "related_symbol"),
+            id_recipe="edge_id = sha('SCIP_SYMBOL_DEFINITION:'+symbol+':'+related_symbol)[:16]",
+            confidence_policy="confidence=1.0",
+            ambiguity_policy="none",
+            status="implemented",
+        )
+    ],
     # SCIP semantic edges (span join)
     EdgeKind.PY_DEFINES_SYMBOL: [
         DerivationSpec(

@@ -197,6 +197,10 @@ class TableLike(Protocol):
         """Replace a column by index."""
         ...
 
+    def cast(self, target_schema: SchemaLike, *, safe: bool | None = None) -> TableLike:
+        """Cast the table to the target schema."""
+        ...
+
     def to_reader(self) -> RecordBatchReaderLike:
         """Return a batch reader over the table."""
         ...
@@ -338,6 +342,7 @@ class ComputeModule(Protocol):
     list_flatten: Callable[[ArrayLike | ChunkedArrayLike], ArrayLike]
     take: Callable[[ArrayLike | ChunkedArrayLike, ArrayLike], ArrayLike]
     binary_join_element_wise: Callable[..., ArrayLike]
+    dictionary_encode: Callable[[ArrayLike | ChunkedArrayLike], ArrayLike]
     call_function: Callable[..., ArrayLike | ChunkedArrayLike | ScalarLike]
     get_function: Callable[[str], object]
     register_scalar_function: Callable[..., None]

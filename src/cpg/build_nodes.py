@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 import arrowdsl.pyarrow_core as pa
+from arrowdsl.column_ops import const_array, set_or_append_column
+from arrowdsl.encoding import EncodingSpec, encode_columns
 from arrowdsl.finalize import FinalizeResult, finalize
 from arrowdsl.iter import iter_array_values
 from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, TableLike
@@ -14,17 +16,6 @@ from cpg.builders import NodeBuilder
 from cpg.kinds import NodeKind
 from cpg.schemas import CPG_NODES_CONTRACT, CPG_NODES_SCHEMA, SCHEMA_VERSION, empty_nodes
 from cpg.specs import NodeEmitSpec, NodePlanSpec, TableGetter
-
-
-def _set_or_append_column(
-    table: TableLike,
-    name: str,
-    values: ArrayLike | ChunkedArrayLike,
-) -> TableLike:
-    if name in table.column_names:
-        idx = table.schema.get_field_index(name)
-        return table.set_column(idx, name, values)
-    return table.append_column(name, values)
 
 
 def _file_span_arrays(
@@ -46,8 +37,8 @@ def _file_span_arrays(
                 bends.append(int(value))
             else:
                 bends.append(None)
-        return pa.array([0] * n, type=pa.int64()), pa.array(bends, type=pa.int64())
-    return pa.array([None] * n, type=pa.int64()), pa.array([None] * n, type=pa.int64())
+        return const_array(n, 0, dtype=pa.int64()), pa.array(bends, type=pa.int64())
+    return const_array(n, None, dtype=pa.int64()), const_array(n, None, dtype=pa.int64())
 
 
 def _file_nodes_table(
@@ -62,8 +53,8 @@ def _file_nodes_table(
     n = repo_files.num_rows
     size = repo_files["size_bytes"] if "size_bytes" in repo_files.column_names else None
     bstart, bend = _file_span_arrays(n, size, use_size_bytes=use_size_bytes)
-    table = _set_or_append_column(repo_files, "bstart", bstart)
-    return _set_or_append_column(table, "bend", bend)
+    table = set_or_append_column(repo_files, "bstart", bstart)
+    return set_or_append_column(table, "bend", bend)
 
 
 def _collect_symbols(table: TableLike | None) -> set[str]:
@@ -315,6 +306,8 @@ NODE_PLAN_SPECS: tuple[NodePlanSpec, ...] = (
     ),
 )
 
+NODE_ENCODING_SPECS: tuple[EncodingSpec, ...] = (EncodingSpec(column="node_kind"),)
+
 NODE_BUILDER = NodeBuilder(
     emitters=NODE_PLAN_SPECS,
     schema_version=SCHEMA_VERSION,
@@ -430,7 +423,8 @@ def build_cpg_nodes_raw(
     if not parts:
         return empty_nodes()
 
-    return pa.concat_tables(parts, promote=True)
+    combined = pa.concat_tables(parts, promote=True)
+    return encode_columns(combined, specs=NODE_ENCODING_SPECS)
 
 
 def build_cpg_nodes(

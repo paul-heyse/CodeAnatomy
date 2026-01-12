@@ -7,15 +7,19 @@ from dataclasses import dataclass
 from typing import Literal
 
 import arrowdsl.pyarrow_core as pa
+from arrowdsl.column_ops import ColumnDefaultsSpec, ConstExpr, const_array
 from arrowdsl.compute import pc
 from arrowdsl.contracts import Contract
-from arrowdsl.ids import hash64_from_columns
+from arrowdsl.id_specs import HashSpec
+from arrowdsl.ids import hash_column_values
 from arrowdsl.iter import iter_array_values
 from arrowdsl.kernels import apply_dedupe, canonical_sort_if_canonical
+from arrowdsl.nested import build_list_array, build_struct_array
 from arrowdsl.pyarrow_protocols import ArrayLike, DataTypeLike, SchemaLike, TableLike
 from arrowdsl.runtime import ExecutionContext
-from arrowdsl.schema import AlignmentInfo, align_to_schema
-from schema_spec.pandera_adapter import validate_arrow_table
+from arrowdsl.schema import AlignmentInfo
+from arrowdsl.schema_ops import SchemaTransform
+from schema_spec.pandera_adapter import PanderaValidationOptions, validate_arrow_table
 
 
 @dataclass(frozen=True)
@@ -41,6 +45,18 @@ class FinalizeResult:
 
 
 def _list_str_array(values: list[list[str]]) -> ArrayLike:
+    """Build a list<str> array from nested string lists.
+
+    Parameters
+    ----------
+    values:
+        Nested string values to convert.
+
+    Returns
+    -------
+    ArrayLike
+        Array of list<string> values.
+    """
     return pa.array(values, type=pa.list_(pa.string()))
 
 
@@ -67,6 +83,89 @@ ERROR_DETAIL_FIELDS: tuple[tuple[str, DataTypeLike], ...] = (
 )
 
 
+@dataclass(frozen=True)
+class ErrorArtifactSpec:
+    """Specification for error artifacts emitted by finalize."""
+
+    detail_fields: tuple[tuple[str, DataTypeLike], ...]
+
+    def append_detail_columns(self, table: TableLike, result: InvariantResult) -> TableLike:
+        """Append error detail columns for a single invariant result.
+
+        Returns
+        -------
+        TableLike
+            Table with error detail columns appended.
+        """
+        message = result.message or result.code
+        error_values: dict[str, object] = {
+            "error_code": result.code,
+            "error_message": message,
+            "error_column": result.column,
+            "error_severity": result.severity,
+            "error_rule_name": None,
+            "error_rule_priority": None,
+            "error_source": result.source,
+        }
+        defaults = tuple(
+            (name, ConstExpr(value=error_values.get(name), dtype=dtype))
+            for name, dtype in self.detail_fields
+        )
+        return ColumnDefaultsSpec(defaults=defaults).apply(table)
+
+    def build_error_table(
+        self,
+        table: TableLike,
+        results: Sequence[InvariantResult],
+    ) -> TableLike:
+        """Build the error table for failed invariants.
+
+        Returns
+        -------
+        TableLike
+            Error rows with detail columns.
+        """
+        error_parts: list[TableLike] = []
+        for result in results:
+            bad_rows = table.filter(result.mask)
+            if bad_rows.num_rows == 0:
+                continue
+            bad_rows = self.append_detail_columns(bad_rows, result)
+            error_parts.append(bad_rows)
+
+        if error_parts:
+            return pa.concat_tables(error_parts, promote=True)
+
+        empty_arrays = [pa.array([], type=field.type) for field in table.schema]
+        empty_arrays.extend(pa.array([], type=field_type) for _, field_type in self.detail_fields)
+        names = [*list(table.schema.names), *[name for name, _ in self.detail_fields]]
+        return pa.Table.from_arrays(empty_arrays, names=names)
+
+    @staticmethod
+    def build_stats_table(errors: TableLike) -> TableLike:
+        """Build the error statistics table.
+
+        Returns
+        -------
+        TableLike
+            Per-error-code counts.
+        """
+        if errors.num_rows == 0:
+            return pa.Table.from_arrays(
+                [pa.array([], type=pa.string()), pa.array([], type=pa.int64())],
+                names=["error_code", "count"],
+            )
+
+        vc = pc.value_counts(errors["error_code"])
+        return pa.Table.from_arrays(
+            [vc.field("values"), vc.field("counts")],
+            names=["error_code", "count"],
+        )
+
+
+ERROR_ARTIFACT_SPEC = ErrorArtifactSpec(detail_fields=ERROR_DETAIL_FIELDS)
+
+
 def _required_non_null_results(
     table: TableLike,
     cols: Sequence[str],
@@ -87,7 +186,7 @@ def _required_non_null_results(
     """
     results: list[InvariantResult] = []
     for col in cols:
-        mask = pc.fill_null(pc.is_null(table[col]), replacement=False)
+        mask = pc.fill_null(pc.is_null(table[col]), fill_value=False)
         results.append(
             InvariantResult(
                 mask=mask,
@@ -125,7 +224,7 @@ def _collect_invariant_results(
         bad_mask, code = inv(table)
         results.append(
             InvariantResult(
-                mask=pc.fill_null(bad_mask, replacement=False),
+                mask=pc.fill_null(bad_mask, fill_value=False),
                 code=code,
                 message=code,
                 column=None,
@@ -152,87 +251,33 @@ def _combine_masks(masks: Sequence[ArrayLike], length: int) -> ArrayLike:
         Combined boolean mask.
     """
     if not masks:
-        return pa.array([False] * length, type=pa.bool_())
+        return const_array(length, value=False, dtype=pa.bool_())
     combined = masks[0]
     for mask in masks[1:]:
         combined = pc.or_(combined, mask)
-    return pc.fill_null(combined, replacement=False)
+    return pc.fill_null(combined, fill_value=False)
 
 
 def _build_error_table(table: TableLike, results: Sequence[InvariantResult]) -> TableLike:
     """Build the error table for failed invariants.
 
-    Parameters
-    ----------
-    table:
-        Input table.
-    results:
-        Invariant results with metadata.
-
     Returns
     -------
-    pyarrow.Table
+    TableLike
         Error table with detail columns.
     """
-    error_parts: list[TableLike] = []
-    for result in results:
-        bad_rows = table.filter(result.mask)
-        if bad_rows.num_rows == 0:
-            continue
-        bad_rows = _append_error_detail_columns(bad_rows, result)
-        error_parts.append(bad_rows)
-
-    if error_parts:
-        return pa.concat_tables(error_parts, promote=True)
-
-    empty_arrays = [pa.array([], type=field.type) for field in table.schema]
-    empty_arrays.extend(pa.array([], type=field_type) for _, field_type in ERROR_DETAIL_FIELDS)
-    names = [*list(table.schema.names), *[name for name, _ in ERROR_DETAIL_FIELDS]]
-    return pa.Table.from_arrays(empty_arrays, names=names)
-
-
-def _append_error_detail_columns(table: TableLike, result: InvariantResult) -> TableLike:
-    n = table.num_rows
-    message = result.message or result.code
-    error_values: dict[str, object] = {
-        "error_code": result.code,
-        "error_message": message,
-        "error_column": result.column,
-        "error_severity": result.severity,
-        "error_rule_name": None,
-        "error_rule_priority": None,
-        "error_source": result.source,
-    }
-    for name, dtype in ERROR_DETAIL_FIELDS:
-        value = error_values.get(name)
-        table = table.append_column(name, pa.array([value] * n, type=dtype))
-    return table
+    return ERROR_ARTIFACT_SPEC.build_error_table(table, results)
 
 
 def _build_stats_table(errors: TableLike) -> TableLike:
     """Build the error statistics table.
 
-    Parameters
-    ----------
-    errors:
-        Error table containing ``error_code`` column.
-
     Returns
     -------
-    pyarrow.Table
+    TableLike
         Error statistics table.
     """
-    if errors.num_rows == 0:
-        return pa.Table.from_arrays(
-            [pa.array([], type=pa.string()), pa.array([], type=pa.int64())],
-            names=["error_code", "count"],
-        )
-
-    vc = pc.value_counts(errors["error_code"])
-    return pa.Table.from_arrays(
-        [vc.field("values"), vc.field("counts")],
-        names=["error_code", "count"],
-    )
+    return ERROR_ARTIFACT_SPEC.build_stats_table(errors)
 
 
 def _maybe_validate_with_pandera(
@@ -249,9 +294,11 @@ def _maybe_validate_with_pandera(
     return validate_arrow_table(
         table,
         spec=contract.schema_spec,
-        lazy=policy.lazy,
-        strict=policy.strict,
-        coerce=policy.coerce,
+        options=PanderaValidationOptions(
+            lazy=policy.lazy,
+            strict=policy.strict,
+            coerce=policy.coerce,
+        ),
     )
 
 
@@ -285,38 +332,39 @@ def _aggregate_error_details(
 
     key_cols = list(contract.key_fields) if contract.key_fields else list(schema.names)
     if key_cols:
-        row_id = hash64_from_columns(
-            errors,
-            cols=key_cols,
+        spec = HashSpec(
             prefix=f"{contract.name}:row",
+            cols=tuple(key_cols),
+            as_string=False,
             missing="null",
         )
+        row_id = hash_column_values(errors, spec=spec)
     else:
         row_id = pa.array(range(errors.num_rows), type=pa.int64())
     errors = errors.append_column("row_id", row_id)
-    detail = pa.StructArray.from_arrays(
-        [
-            errors["error_code"],
-            errors["error_message"],
-            errors["error_column"],
-            errors["error_severity"],
-            errors["error_rule_name"],
-            errors["error_rule_priority"],
-            errors["error_source"],
-        ],
-        names=["code", "message", "column", "severity", "rule_name", "rule_priority", "source"],
+    detail = build_struct_array(
+        {
+            "code": errors["error_code"],
+            "message": errors["error_message"],
+            "column": errors["error_column"],
+            "severity": errors["error_severity"],
+            "rule_name": errors["error_rule_name"],
+            "rule_priority": errors["error_rule_priority"],
+            "source": errors["error_source"],
+        }
     )
-    errors = errors.append_column("error_detail", detail)
+    offsets = pa.array(range(errors.num_rows + 1), type=pa.int32())
+    detail_list = build_list_array(offsets, detail)
+    errors = errors.append_column("error_detail_list", detail_list)
     group_cols = ["row_id"] + [col for col in key_cols if col in errors.column_names]
-    aggregated = errors.group_by(group_cols).aggregate([("error_detail", "list")])
-    if "error_detail_list" in aggregated.column_names:
-        aggregated = aggregated.rename_columns(
-            [
-                "error_detail" if name == "error_detail_list" else name
-                for name in aggregated.column_names
-            ]
-        )
-    return aggregated
+    aggregated = errors.group_by(group_cols, use_threads=True).aggregate(
+        [("error_detail_list", "list")]
+    )
+    list_col = "error_detail_list_list"
+    if list_col not in aggregated.column_names:
+        list_col = "error_detail_list"
+    flattened = pc.list_flatten(aggregated[list_col])
+    return aggregated.append_column("error_detail", flattened).drop([list_col])
 
 
 def _build_alignment_table(
@@ -380,13 +428,12 @@ def finalize(table: TableLike, *, contract: Contract, ctx: ExecutionContext) -> 
         Raised when ``ctx.mode`` is ``"strict"`` and errors are present.
     """
     schema = contract.with_versioned_schema()
-    on_error: Literal["unsafe", "raise"] = "unsafe" if ctx.safe_cast else "raise"
-    aligned, align_info = align_to_schema(
-        table,
+    transform = SchemaTransform(
         schema=schema,
         safe_cast=ctx.safe_cast,
-        on_error=on_error,
+        on_error="unsafe" if ctx.safe_cast else "raise",
     )
+    aligned, align_info = transform.apply_with_info(table)
     aligned = _maybe_validate_with_pandera(aligned, contract=contract, ctx=ctx)
 
     results = _collect_invariant_results(aligned, contract)

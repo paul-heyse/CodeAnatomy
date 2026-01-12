@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.empty import empty_table
+from arrowdsl.kernels import apply_join
 from arrowdsl.pyarrow_protocols import TableLike
 from arrowdsl.runtime import ExecutionContext
+from arrowdsl.specs import JoinSpec
 from normalize.schema_infer import align_table_to_schema
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 
@@ -81,7 +83,19 @@ def build_cfg_blocks(
         ]
         if meta_cols:
             meta = py_bc_code_units.select(meta_cols)
-            out = out.join(meta, keys=["code_unit_id"], join_type="left", use_threads=True)
+            right_cols = tuple(col for col in meta_cols if col != "code_unit_id")
+            out = apply_join(
+                out,
+                meta,
+                spec=JoinSpec(
+                    join_type="left outer",
+                    left_keys=("code_unit_id",),
+                    right_keys=("code_unit_id",),
+                    left_output=tuple(out.column_names),
+                    right_output=right_cols,
+                ),
+                use_threads=True,
+            )
 
     _ = ctx
     return align_table_to_schema(out, CFG_BLOCKS_NORM_SCHEMA)
@@ -124,7 +138,19 @@ def build_cfg_edges(
         ]
         if meta_cols:
             meta = py_bc_code_units.select(meta_cols)
-            out = out.join(meta, keys=["code_unit_id"], join_type="left", use_threads=True)
+            right_cols = tuple(col for col in meta_cols if col != "code_unit_id")
+            out = apply_join(
+                out,
+                meta,
+                spec=JoinSpec(
+                    join_type="left outer",
+                    left_keys=("code_unit_id",),
+                    right_keys=("code_unit_id",),
+                    left_output=tuple(out.column_names),
+                    right_output=right_cols,
+                ),
+                use_threads=True,
+            )
 
     _ = ctx
     return align_table_to_schema(out, CFG_EDGES_NORM_SCHEMA)

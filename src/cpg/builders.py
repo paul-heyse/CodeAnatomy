@@ -281,7 +281,11 @@ class EdgeBuilder:
             source = emitter.relation_getter(tables)
             if source is None:
                 continue
-            plan = source if isinstance(source, Plan) else Plan.table_source(source, label=emitter.name)
+            plan = (
+                source
+                if isinstance(source, Plan)
+                else Plan.table_source(source, label=emitter.name)
+            )
             rel = _materialize_source(plan, ctx=ctx)
             if rel.num_rows == 0:
                 continue
@@ -388,7 +392,11 @@ class NodeBuilder:
             source = emitter.table_getter(tables)
             if source is None:
                 continue
-            plan = source if isinstance(source, Plan) else Plan.table_source(source, label=emitter.name)
+            plan = (
+                source
+                if isinstance(source, Plan)
+                else Plan.table_source(source, label=emitter.name)
+            )
             if emitter.preprocessor is not None:
                 plan = emitter.preprocessor(plan)
             table = _materialize_source(plan, ctx=ctx)

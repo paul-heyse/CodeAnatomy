@@ -75,4 +75,4 @@ def test_json_transform_plan() -> None:
     )
     plans = emit_props_plans(plan, spec=spec, schema_version=None, ctx=ctx)
     out = PlanSpec.from_plan(union_all_plans(plans, label="json_props")).to_table(ctx=ctx)
-    assert out["value_json"].to_pylist()[0] == "[\"a\", \"b\"]"
+    assert out["value_json"].to_pylist()[0] == '["a", "b"]'

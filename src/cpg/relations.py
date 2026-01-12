@@ -144,9 +144,7 @@ def _with_repo_file_ids(
 
     available = set(joined_cols)
     if "file_id" in available:
-        file_id = ensure_expression(
-            pc.coalesce(pc.field("file_id"), pc.field("file_id_repo"))
-        )
+        file_id = ensure_expression(pc.coalesce(pc.field("file_id"), pc.field("file_id_repo")))
     else:
         file_id = pc.field("file_id_repo")
     joined = set_or_append_column(joined, name="file_id", expr=file_id, ctx=ctx)

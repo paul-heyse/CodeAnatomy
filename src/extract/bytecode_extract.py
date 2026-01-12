@@ -645,7 +645,14 @@ def _build_cfg_edges_plan(
             ),
             HashSpec(
                 prefix="bc_edge",
-                cols=("code_unit_id", "src_block_id", "dst_block_id", "kind", "edge_key", "exc_index"),
+                cols=(
+                    "code_unit_id",
+                    "src_block_id",
+                    "dst_block_id",
+                    "kind",
+                    "edge_key",
+                    "exc_index",
+                ),
                 out_col="edge_id",
             ),
         ),

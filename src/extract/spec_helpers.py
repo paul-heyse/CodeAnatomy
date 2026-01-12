@@ -10,8 +10,8 @@ from arrowdsl.plan.query import QuerySpec
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
 from schema_spec.specs import ArrowFieldSpec, FieldBundle
 from schema_spec.system import (
-    ContractSpec,
     GLOBAL_SCHEMA_REGISTRY,
+    ContractSpec,
     DatasetSpec,
     make_dataset_spec,
     make_table_spec,

@@ -459,6 +459,7 @@ def ast_span_post_step(
     PostFn
         Post step that emits AST nodes with byte spans.
     """
+
     def _apply(table: TableLike, ctx: ExecutionContext) -> TableLike:
         _ = ctx
         return add_ast_byte_spans(repo_index, table, columns=columns)

@@ -812,7 +812,9 @@ class _SymbolInfoAccumulator:
     sig_doc_texts: list[str | None] = field(default_factory=list)
     sig_doc_languages: list[str | None] = field(default_factory=list)
     sig_doc_is_null: list[bool] = field(default_factory=list)
-    sig_doc_occurrences: StructListAccumulator = field(default_factory=_sig_doc_occurrence_accumulator)
+    sig_doc_occurrences: StructListAccumulator = field(
+        default_factory=_sig_doc_occurrence_accumulator
+    )
 
     def append(self, symbol_info: object) -> None:
         self.symbol_info_ids.append(None)
@@ -1118,7 +1120,9 @@ def _extract_plan_bundle_from_index(
         if parse_opts.dictionary_encode_strings
         else []
     )
-    encode_docs = ["path", "language", "position_encoding"] if parse_opts.dictionary_encode_strings else []
+    encode_docs = (
+        ["path", "language", "position_encoding"] if parse_opts.dictionary_encode_strings else []
+    )
     encode_occs = ["path", "symbol", "syntax_kind"] if parse_opts.dictionary_encode_strings else []
     encode_syms = (
         ["symbol", "display_name", "kind", "enclosing_symbol"]
@@ -1131,7 +1135,9 @@ def _extract_plan_bundle_from_index(
         if parse_opts.dictionary_encode_strings
         else []
     )
-    encode_diags = ["path", "severity", "code", "source"] if parse_opts.dictionary_encode_strings else []
+    encode_diags = (
+        ["path", "severity", "code", "source"] if parse_opts.dictionary_encode_strings else []
+    )
 
     return {
         "scip_metadata": _finalize_plan(

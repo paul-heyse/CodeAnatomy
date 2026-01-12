@@ -41,10 +41,7 @@ def _ensure_output_columns(plan: Plan, *, schema: pa.Schema, ctx: ExecutionConte
     missing = [name for name in schema.names if name not in available]
     if not missing:
         return plan
-    extras = [
-        (pc.scalar(pa.scalar(None, type=schema.field(name).type)), name)
-        for name in missing
-    ]
+    extras = [(pc.scalar(pa.scalar(None, type=schema.field(name).type)), name) for name in missing]
     return append_projection(plan, base=available, extras=extras, ctx=ctx)
 
 
@@ -52,9 +49,7 @@ def _code_unit_meta_plan(code_units: TableLike | Plan, *, ctx: ExecutionContext)
     plan = _to_plan(code_units)
     available = set(plan.schema(ctx=ctx).names)
     names = [name for name, _ in _META_COLUMNS]
-    exprs = [
-        column_or_null_expr(name, dtype, available=available) for name, dtype in _META_COLUMNS
-    ]
+    exprs = [column_or_null_expr(name, dtype, available=available) for name, dtype in _META_COLUMNS]
     return plan.project(exprs, names, ctx=ctx)
 
 

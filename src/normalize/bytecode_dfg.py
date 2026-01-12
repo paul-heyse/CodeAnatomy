@@ -41,7 +41,6 @@ def _to_plan(table: TableLike | Plan) -> Plan:
     return Plan.table_source(table)
 
 
-
 def def_use_events_plan(
     py_bc_instructions: TableLike | Plan,
     *,

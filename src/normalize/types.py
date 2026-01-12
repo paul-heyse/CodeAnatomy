@@ -42,7 +42,6 @@ def _to_plan(table: TableLike | Plan) -> Plan:
     return Plan.table_source(table)
 
 
-
 def type_exprs_plan(
     cst_type_exprs: TableLike | Plan,
     *,

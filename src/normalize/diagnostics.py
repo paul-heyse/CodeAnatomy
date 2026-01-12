@@ -513,6 +513,7 @@ def diagnostics_post_step(
     PostFn
         Post step that emits a diagnostics table.
     """
+
     def _apply(table: TableLike, ctx: ExecutionContext) -> TableLike:
         _ = table
         plan = _diagnostics_plan(repo_text_index, sources=sources, ctx=ctx)

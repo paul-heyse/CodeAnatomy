@@ -325,13 +325,13 @@ def flatten_struct_field(field: pa.Field) -> list[pa.Field]:
 
 
 __all__ = [
-    "flatten_struct_field",
     "align_plan",
     "align_table",
     "append_projection",
     "apply_query_spec",
     "finalize_plan",
     "finalize_plan_bundle",
+    "flatten_struct_field",
     "iter_record_batches",
     "materialize_plan",
     "plan_from_rows",

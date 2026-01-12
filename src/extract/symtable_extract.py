@@ -750,9 +750,7 @@ def _build_scope_edges(
         rename={"scope_id": "parent_scope_id"},
         ctx=ctx,
     )
-    rename_parent_cols = [
-        "parent_scope_id" if name == "scope_id" else name for name in parent_cols
-    ]
+    rename_parent_cols = ["parent_scope_id" if name == "scope_id" else name for name in parent_cols]
     join_child = JoinConfig.from_sequences(
         left_keys=("file_id", "child_table_id"),
         right_keys=("file_id", "table_id"),
@@ -773,9 +771,7 @@ def _build_scope_edges(
         rename={"scope_id": "child_scope_id"},
         ctx=ctx,
     )
-    rename_child_cols = [
-        "child_scope_id" if name == "scope_id" else name for name in child_cols
-    ]
+    rename_child_cols = ["child_scope_id" if name == "scope_id" else name for name in child_cols]
     scope_edges_plan = apply_hash_projection(
         scope_edges_plan,
         specs=(

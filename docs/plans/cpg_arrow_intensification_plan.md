@@ -447,6 +447,7 @@ boundaries and surface pipeline-breaker diagnostics for debugging.
 ### Code pattern
 ```python
 # src/cpg/plan_helpers.py
+from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike
 from arrowdsl.plan.plan import Plan, PlanSpec
 
@@ -482,7 +483,7 @@ metadata and enable provenance tie-breakers under canonical determinism.
 # src/cpg/plan_helpers.py
 import pyarrow.dataset as ds
 
-from arrowdsl.core.context import Ordering
+from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.plan.plan import Plan
 from schema_spec.system import DatasetSpec
 
@@ -522,18 +523,13 @@ def plan_from_dataset(
 - Shared plan expression helpers replace duplicated CPG plan-lane logic.
 - Derived columns are registered as declarative plan sources.
 - Hash specs for CPG IDs live in a centralized registry.
-- Determinism tier hooks optionally apply canonical ordering.
+- Canonical ordering uses kernel-lane stable sort indices when determinism is canonical.
 - Encoding policy is driven by schema metadata.
-- Schema metadata is attached and preserved through finalize.
+- CPG schemas carry stable metadata and preserve it through finalize.
 - Metadata-aware schema alignment is used where parts are merged.
 - Finalized outputs unify dictionary pools when configured.
 - Heavy JSON props serialize only at the finalize boundary.
 - Internal prop value staging reduces duplicate casting logic.
-
-## Acceptance Criteria
-- Shared plan expression helpers replace duplicated CPG plan-lane logic.
-- Derived columns are registered as declarative plan sources.
-- Hash specs for CPG IDs live in a centralized registry.
-- Determinism tier hooks optionally apply canonical ordering.
-- Encoding policy is driven by schema metadata.
-- CPG schemas carry stable metadata and preserve it through finalize.
+- Pipeline-breaker metadata is surfaced and reader surfaces are guarded.
+- Dataset-backed scans use QuerySpec + scan ordering options when enabled.
+- Optional schema metadata equality checks are enforced under debug mode.

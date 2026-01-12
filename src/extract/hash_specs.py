@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from arrowdsl.core.ids import HashSpec
 
-
 CST_NAME_REF_ID_SPEC = HashSpec(
     prefix="cst_name_ref",
     cols=("file_id", "bstart", "bend"),

@@ -142,9 +142,7 @@ def emit_edges_plan(
         )
     )
     edge_id = ensure_expression(pc.if_else(has_span, full_id, base_id))
-    valid = ensure_expression(
-        pc.and_(pc.is_valid(pc.field("src")), pc.is_valid(pc.field("dst")))
-    )
+    valid = ensure_expression(pc.and_(pc.is_valid(pc.field("src")), pc.is_valid(pc.field("dst"))))
     edge_id = ensure_expression(
         pc.if_else(valid, edge_id, pc.cast(pc.scalar(None), pa.string(), safe=False))
     )

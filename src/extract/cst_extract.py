@@ -46,6 +46,7 @@ SCHEMA_VERSION = 1
 
 type Row = dict[str, object]
 
+
 def _normalize_string_items(items: Sequence[object]) -> list[str | None]:
     out: list[str | None] = []
     for item in items:
@@ -290,6 +291,7 @@ class CSTExtractContext:
             def_rows=[],
             type_expr_rows=[],
         )
+
 
 type DefKey = tuple[str, int, int]
 
@@ -1075,7 +1077,12 @@ def _build_defs_plan(
             ),
             HashSpec(
                 prefix="cst_def",
-                cols=("file_id", "container_def_kind", "container_def_bstart", "container_def_bend"),
+                cols=(
+                    "file_id",
+                    "container_def_kind",
+                    "container_def_bstart",
+                    "container_def_bend",
+                ),
                 out_col="container_def_id",
             ),
         ),

@@ -234,9 +234,7 @@ def emit_props_plans(
             literal=spec.node_kind.value,
             value_type="string",
         )
-        plans.append(
-            prop_field_plan(plan, field=node_field, context=context)
-        )
+        plans.append(prop_field_plan(plan, field=node_field, context=context))
 
     plans.extend([prop_field_plan(plan, field=field, context=context) for field in spec.fields])
     return plans

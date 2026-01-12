@@ -82,9 +82,7 @@ class TrimExprSpec:
         ComputeExpression
             Expression trimming UTF-8 whitespace.
         """
-        return ensure_expression(
-            pc.call_function("utf8_trim_whitespace", [pc.field(self.column)])
-        )
+        return ensure_expression(pc.call_function("utf8_trim_whitespace", [pc.field(self.column)]))
 
     def materialize(self, table: TableLike) -> ArrayLike:
         """Materialize the trim expression against a table.
@@ -377,7 +375,9 @@ class HashFromExprsSpec:
         exprs = []
         for part in self.parts:
             expr = part.to_expression()
-            expr = ensure_expression(pc.fill_null(pc.cast(expr, pa.string()), pc.scalar(self.null_sentinel)))
+            expr = ensure_expression(
+                pc.fill_null(pc.cast(expr, pa.string()), pc.scalar(self.null_sentinel))
+            )
             exprs.append(expr)
         if self.prefix:
             exprs.insert(0, pc.scalar(self.prefix))

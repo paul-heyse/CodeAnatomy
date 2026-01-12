@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validat
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.pyarrow_protocols import DataTypeLike, FieldLike, SchemaLike
 from arrowdsl.schema import CastErrorPolicy
-from arrowdsl.schema_ops import SchemaTransform
+from arrowdsl.schema_ops import SchemaMetadataSpec, SchemaTransform
 from schema_spec.metadata import schema_metadata
 
 
@@ -95,9 +95,8 @@ class TableSchemaSpec(BaseModel):
         schema = pa.schema([field.to_arrow_field() for field in self.fields])
         if self.version is None:
             return schema
-        meta = dict(schema.metadata or {})
-        meta.update(schema_metadata(self.name, self.version))
-        return schema.with_metadata(meta)
+        meta = schema_metadata(self.name, self.version)
+        return SchemaMetadataSpec(schema_metadata=meta).apply(schema)
 
     def to_transform(
         self,

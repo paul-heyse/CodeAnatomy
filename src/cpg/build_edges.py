@@ -13,13 +13,12 @@ from arrowdsl.column_ops import (
     const_array,
     set_or_append_column,
 )
-from arrowdsl.compute import pc
 from arrowdsl.encoding import EncodingSpec, encode_columns
 from arrowdsl.finalize import FinalizeResult
 from arrowdsl.finalize_context import FinalizeContext
-from arrowdsl.kernels import apply_join
+from arrowdsl.kernels import apply_join, coalesce_arrays, drop_nulls, severity_score_array
 from arrowdsl.predicates import BitmaskMatch, BoolColumn, FilterSpec, InValues, Not
-from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike
+from arrowdsl.pyarrow_protocols import ArrayLike, DataTypeLike, TableLike
 from arrowdsl.runtime import ExecutionContext
 from arrowdsl.specs import JoinSpec
 from cpg.builders import EdgeBuilder
@@ -48,7 +47,7 @@ def _filter_unresolved_qname_calls(
         return rel_callsite_qname
     if rel_callsite_symbol is None or "call_id" not in rel_callsite_symbol.column_names:
         return rel_callsite_qname
-    resolved = pc.drop_null(rel_callsite_symbol["call_id"])
+    resolved = drop_nulls(rel_callsite_symbol["call_id"])
     predicate = Not(InValues(col="call_id", values=resolved, fill_null=False))
     return FilterSpec(predicate).apply_kernel(rel_callsite_qname)
 
@@ -86,23 +85,10 @@ def _with_repo_file_ids(diag_table: TableLike, repo_files: TableLike | None) -> 
         use_threads=True,
     )
     if "file_id_repo" in joined.column_names and "file_id" in joined.column_names:
-        resolved = pc.coalesce(joined["file_id"], joined["file_id_repo"])
+        resolved = coalesce_arrays([joined["file_id"], joined["file_id_repo"]])
         joined = set_or_append_column(joined, "file_id", resolved)
         joined = joined.drop(["file_id_repo"])
     return joined
-
-
-def _severity_score_array(
-    severity: ArrayLike | ChunkedArrayLike,
-) -> ArrayLike | ChunkedArrayLike:
-    severity_str = pc.cast(severity, pa.string())
-    severity_str = pc.fill_null(severity_str, fill_value="ERROR")
-    is_error = pc.equal(severity_str, pa.scalar("ERROR"))
-    is_warning = pc.equal(severity_str, pa.scalar("WARNING"))
-    score = pc.if_else(
-        is_error, pa.scalar(1.0), pc.if_else(is_warning, pa.scalar(0.7), pa.scalar(0.5))
-    )
-    return pc.cast(score, pa.float32())
 
 
 def _table_getter(name: str) -> TableGetter:
@@ -156,9 +142,9 @@ def _diagnostic_relation(tables: Mapping[str, TableLike]) -> TableLike | None:
         return None
     n = diag.num_rows
     severity = _get(diag, "severity", default_type=pa.string())
-    score = _severity_score_array(severity)
+    score = severity_score_array(severity)
     origin = _get(diag, "diag_source", default_type=pa.string())
-    origin = pc.coalesce(origin, pa.scalar("diagnostic"))
+    origin = coalesce_arrays([origin, pa.scalar("diagnostic")])
     diag = set_or_append_column(diag, "origin", origin)
     diag = set_or_append_column(diag, "confidence", score)
     diag = set_or_append_column(diag, "score", score)

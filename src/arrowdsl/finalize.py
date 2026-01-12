@@ -13,12 +13,13 @@ from arrowdsl.contracts import Contract
 from arrowdsl.id_specs import HashSpec
 from arrowdsl.ids import hash_column_values
 from arrowdsl.iter import iter_array_values
-from arrowdsl.kernels import apply_dedupe, canonical_sort_if_canonical
+from arrowdsl.kernels import ChunkPolicy, apply_dedupe, canonical_sort_if_canonical
 from arrowdsl.nested import build_list_array, build_struct_array
 from arrowdsl.pyarrow_protocols import ArrayLike, DataTypeLike, SchemaLike, TableLike
 from arrowdsl.runtime import ExecutionContext
 from arrowdsl.schema import AlignmentInfo
 from arrowdsl.schema_ops import SchemaTransform
+from schema_spec.fields import PROVENANCE_COLS
 from schema_spec.pandera_adapter import PanderaValidationOptions, validate_arrow_table
 
 
@@ -58,6 +59,11 @@ def _list_str_array(values: list[list[str]]) -> ArrayLike:
         Array of list<string> values.
     """
     return pa.array(values, type=pa.list_(pa.string()))
+
+
+def _provenance_columns(table: TableLike, schema: SchemaLike) -> list[str]:
+    cols = [col for col in PROVENANCE_COLS if col in table.column_names]
+    return [col for col in cols if col not in schema.names]
 
 
 @dataclass(frozen=True)
@@ -164,6 +170,15 @@ class ErrorArtifactSpec:
 
 
 ERROR_ARTIFACT_SPEC = ErrorArtifactSpec(detail_fields=ERROR_DETAIL_FIELDS)
+
+
+@dataclass(frozen=True)
+class FinalizeOptions:
+    """Configuration overrides for finalize behavior."""
+
+    error_spec: ErrorArtifactSpec = ERROR_ARTIFACT_SPEC
+    transform: SchemaTransform | None = None
+    chunk_policy: ChunkPolicy | None = None
 
 
 def _required_non_null_results(
@@ -285,6 +300,27 @@ def _build_stats_table(errors: TableLike, *, error_spec: ErrorArtifactSpec) -> T
     return error_spec.build_stats_table(errors)
 
 
+def _raise_on_errors_if_strict(
+    errors: TableLike,
+    *,
+    ctx: ExecutionContext,
+    contract: Contract,
+) -> None:
+    if ctx.mode != "strict" or errors.num_rows == 0:
+        return
+    vc = pc.value_counts(errors["error_code"])
+    pairs = [
+        (value, count)
+        for value, count in zip(
+            iter_array_values(vc.field("values")),
+            iter_array_values(vc.field("counts")),
+            strict=True,
+        )
+    ]
+    msg = f"Finalize(strict) failed for contract={contract.name!r}: errors={pairs}"
+    raise ValueError(msg)
+
+
 def _maybe_validate_with_pandera(
     table: TableLike,
     *,
@@ -312,7 +348,9 @@ def _aggregate_error_details(
     *,
     contract: Contract,
     schema: SchemaLike,
+    provenance_cols: Sequence[str],
 ) -> TableLike:
+    provenance = [col for col in provenance_cols if col in errors.column_names]
     if errors.num_rows == 0:
         detail_struct = pa.struct(
             [
@@ -328,6 +366,7 @@ def _aggregate_error_details(
         fields = [("row_id", pa.int64())]
         key_cols = list(contract.key_fields) if contract.key_fields else list(schema.names)
         fields.extend((col, schema.field(col).type) for col in key_cols if col in schema.names)
+        fields.extend((col, errors.schema.field(col).type) for col in provenance)
         fields.append(("error_detail", pa.list_(detail_struct)))
         empty_schema = pa.schema(fields)
         return pa.Table.from_arrays(
@@ -361,7 +400,7 @@ def _aggregate_error_details(
     offsets = pa.array(range(errors.num_rows + 1), type=pa.int32())
     detail_list = build_list_array(offsets, detail)
     errors = errors.append_column("error_detail_list", detail_list)
-    group_cols = ["row_id"] + [col for col in key_cols if col in errors.column_names]
+    group_cols = ["row_id"] + [col for col in key_cols if col in errors.column_names] + provenance
     aggregated = errors.group_by(group_cols, use_threads=True).aggregate(
         [("error_detail_list", "list")]
     )
@@ -415,8 +454,7 @@ def finalize(
     *,
     contract: Contract,
     ctx: ExecutionContext,
-    error_spec: ErrorArtifactSpec = ERROR_ARTIFACT_SPEC,
-    transform: SchemaTransform | None = None,
+    options: FinalizeOptions | None = None,
 ) -> FinalizeResult:
     """Finalize a table at the contract boundary.
 
@@ -428,64 +466,63 @@ def finalize(
         Output contract.
     ctx:
         Execution context for finalize behavior.
-    error_spec:
-        Error artifact specification for detail tables.
-    transform:
-        Optional schema transform override.
+    options:
+        Optional finalize options for error specs, transforms, and chunk policies.
 
     Returns
     -------
     FinalizeResult
         Finalized table bundle.
-
-    Raises
-    ------
-    ValueError
-        Raised when ``ctx.mode`` is ``"strict"`` and errors are present.
     """
-    schema = transform.schema if transform is not None else contract.with_versioned_schema()
+    options = options or FinalizeOptions()
+    schema = (
+        options.transform.schema
+        if options.transform is not None
+        else contract.with_versioned_schema()
+    )
+    transform = options.transform
     if transform is None:
         transform = SchemaTransform(
             schema=schema,
             safe_cast=ctx.safe_cast,
+            keep_extra_columns=ctx.provenance,
             on_error="unsafe" if ctx.safe_cast else "raise",
         )
     aligned, align_info = transform.apply_with_info(table)
+    aligned = (options.chunk_policy or ChunkPolicy()).apply(aligned)
     aligned = _maybe_validate_with_pandera(aligned, contract=contract, ctx=ctx)
+    provenance_cols = _provenance_columns(aligned, schema) if ctx.provenance else []
 
     results = _collect_invariant_results(aligned, contract)
     bad_any = _combine_masks([result.mask for result in results], aligned.num_rows)
 
-    good_mask = pc.invert(bad_any)
-    good = aligned.filter(good_mask)
+    good = aligned.filter(pc.invert(bad_any))
 
-    raw_errors = _build_error_table(aligned, results, error_spec=error_spec)
-    errors = _aggregate_error_details(raw_errors, contract=contract, schema=schema)
+    raw_errors = _build_error_table(aligned, results, error_spec=options.error_spec)
+    errors = _aggregate_error_details(
+        raw_errors,
+        contract=contract,
+        schema=schema,
+        provenance_cols=provenance_cols,
+    )
 
-    if ctx.mode == "strict" and raw_errors.num_rows > 0:
-        vc = pc.value_counts(raw_errors["error_code"])
-        pairs = [
-            (value, count)
-            for value, count in zip(
-                iter_array_values(vc.field("values")),
-                iter_array_values(vc.field("counts")),
-                strict=True,
-            )
-        ]
-        msg = f"Finalize(strict) failed for contract={contract.name!r}: errors={pairs}"
-        raise ValueError(msg)
+    _raise_on_errors_if_strict(raw_errors, ctx=ctx, contract=contract)
 
     if contract.dedupe is not None:
         good = apply_dedupe(good, spec=contract.dedupe, _ctx=ctx)
 
     good = canonical_sort_if_canonical(good, sort_keys=contract.canonical_sort, ctx=ctx)
 
-    if good.column_names != schema.names:
+    if ctx.provenance and provenance_cols:
+        keep = list(schema.names) + [col for col in provenance_cols if col in good.column_names]
+        good = good.select(keep)
+    elif good.column_names != schema.names:
         good = good.select(schema.names)
-
-    stats = _build_stats_table(raw_errors, error_spec=error_spec)
-    alignment = _build_alignment_table(
-        contract, align_info, good_rows=good.num_rows, error_rows=errors.num_rows
+    return FinalizeResult(
+        good=good,
+        errors=errors,
+        stats=_build_stats_table(raw_errors, error_spec=options.error_spec),
+        alignment=_build_alignment_table(
+            contract, align_info, good_rows=good.num_rows, error_rows=errors.num_rows
+        ),
     )
-
-    return FinalizeResult(good=good, errors=errors, stats=stats, alignment=alignment)

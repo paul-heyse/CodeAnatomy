@@ -9,6 +9,7 @@ from typing import TypedDict
 
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.encoding import EncodingSpec, encode_columns
+from arrowdsl.kernels import ChunkPolicy
 from arrowdsl.pyarrow_protocols import SchemaLike, TableLike
 from core_types import JsonDict
 
@@ -108,7 +109,8 @@ def dataset_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
             ]
         ),
     )
-    return encode_columns(table, specs=DATASET_STATS_ENCODING_SPECS)
+    encoded = encode_columns(table, specs=DATASET_STATS_ENCODING_SPECS)
+    return ChunkPolicy().apply(encoded)
 
 
 def column_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
@@ -147,4 +149,5 @@ def column_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
             ]
         ),
     )
-    return encode_columns(table, specs=COLUMN_STATS_ENCODING_SPECS)
+    encoded = encode_columns(table, specs=COLUMN_STATS_ENCODING_SPECS)
+    return ChunkPolicy().apply(encoded)

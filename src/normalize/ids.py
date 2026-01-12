@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
 from arrowdsl.id_specs import HashSpec
-from arrowdsl.ids import hash64_from_parts, hash_column_values, prefixed_hash_id_from_parts
+from arrowdsl.ids import hash64_from_parts, hash_column_values
 from arrowdsl.pyarrow_protocols import TableLike
 
 
@@ -21,7 +21,8 @@ def stable_id(prefix: str, *parts: str | None) -> str:
     str
         Stable identifier with the requested prefix.
     """
-    return prefixed_hash_id_from_parts(prefix, *parts)
+    hashed = hash64_from_parts(*parts, prefix=prefix)
+    return f"{prefix}:{hashed}"
 
 
 def stable_int64(*parts: str | None) -> int:

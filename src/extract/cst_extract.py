@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -19,15 +19,19 @@ from libcst.metadata import (
 )
 
 import arrowdsl.pyarrow_core as pa
+from arrowdsl.column_ops import set_or_append_column
+from arrowdsl.compute import pc
 from arrowdsl.empty import empty_table
-from arrowdsl.ids import prefixed_hash_id_from_parts
-from arrowdsl.iter import iter_table_rows
+from arrowdsl.id_specs import HashSpec
+from arrowdsl.ids import hash_column_values
 from arrowdsl.nested import build_list_array, build_list_of_structs
 from arrowdsl.pyarrow_protocols import TableLike
-from extract.file_context import FileContext
+from arrowdsl.schema_ops import SchemaTransform
+from extract.file_context import FileContext, iter_file_contexts
 from schema_spec.core import ArrowFieldSpec
 from schema_spec.factories import make_table_spec
 from schema_spec.fields import call_span_bundle, file_identity_bundle
+from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
 
 SCHEMA_VERSION = 1
 
@@ -36,6 +40,27 @@ type Row = dict[str, object]
 
 def _offsets_start() -> list[int]:
     return [0]
+
+
+def _valid_mask(table: TableLike, cols: Sequence[str]) -> object:
+    mask = pc.is_valid(table[cols[0]])
+    for col in cols[1:]:
+        mask = pc.and_(mask, pc.is_valid(table[col]))
+    return mask
+
+
+def _apply_hash_column(
+    table: TableLike,
+    *,
+    spec: HashSpec,
+    required: Sequence[str] | None = None,
+) -> TableLike:
+    hashed = hash_column_values(table, spec=spec)
+    out_col = spec.out_col or f"{spec.prefix}_id"
+    if required:
+        mask = _valid_mask(table, required)
+        hashed = pc.if_else(mask, hashed, pa.scalar(None, type=hashed.type))
+    return set_or_append_column(table, out_col, hashed)
 
 
 def _append_string_list(
@@ -98,113 +123,127 @@ class CSTExtractResult:
 QNAME_STRUCT = pa.struct([("name", pa.string()), ("source", pa.string())])
 QNAME_LIST = pa.list_(QNAME_STRUCT)
 
-PARSE_MANIFEST_SPEC = make_table_spec(
-    name="py_cst_parse_manifest_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="encoding", dtype=pa.string()),
-        ArrowFieldSpec(name="default_indent", dtype=pa.string()),
-        ArrowFieldSpec(name="default_newline", dtype=pa.string()),
-        ArrowFieldSpec(name="has_trailing_newline", dtype=pa.bool_()),
-        ArrowFieldSpec(name="future_imports", dtype=pa.list_(pa.string())),
-        ArrowFieldSpec(name="module_name", dtype=pa.string()),
-        ArrowFieldSpec(name="package_name", dtype=pa.string()),
-    ],
+PARSE_MANIFEST_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_cst_parse_manifest_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(),),
+        fields=[
+            ArrowFieldSpec(name="encoding", dtype=pa.string()),
+            ArrowFieldSpec(name="default_indent", dtype=pa.string()),
+            ArrowFieldSpec(name="default_newline", dtype=pa.string()),
+            ArrowFieldSpec(name="has_trailing_newline", dtype=pa.bool_()),
+            ArrowFieldSpec(name="future_imports", dtype=pa.list_(pa.string())),
+            ArrowFieldSpec(name="module_name", dtype=pa.string()),
+            ArrowFieldSpec(name="package_name", dtype=pa.string()),
+        ],
+    )
 )
 
-PARSE_ERRORS_SPEC = make_table_spec(
-    name="py_cst_parse_errors_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="error_type", dtype=pa.string()),
-        ArrowFieldSpec(name="message", dtype=pa.string()),
-        ArrowFieldSpec(name="raw_line", dtype=pa.int32()),
-        ArrowFieldSpec(name="raw_column", dtype=pa.int32()),
-    ],
+PARSE_ERRORS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_cst_parse_errors_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(),),
+        fields=[
+            ArrowFieldSpec(name="error_type", dtype=pa.string()),
+            ArrowFieldSpec(name="message", dtype=pa.string()),
+            ArrowFieldSpec(name="raw_line", dtype=pa.int32()),
+            ArrowFieldSpec(name="raw_column", dtype=pa.int32()),
+        ],
+    )
 )
 
-NAME_REFS_SPEC = make_table_spec(
-    name="py_cst_name_refs_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="name_ref_id", dtype=pa.string()),
-        ArrowFieldSpec(name="name", dtype=pa.string()),
-        ArrowFieldSpec(name="expr_ctx", dtype=pa.string()),
-        ArrowFieldSpec(name="bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="bend", dtype=pa.int64()),
-    ],
+NAME_REFS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_cst_name_refs_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(),),
+        fields=[
+            ArrowFieldSpec(name="name_ref_id", dtype=pa.string()),
+            ArrowFieldSpec(name="name", dtype=pa.string()),
+            ArrowFieldSpec(name="expr_ctx", dtype=pa.string()),
+            ArrowFieldSpec(name="bstart", dtype=pa.int64()),
+            ArrowFieldSpec(name="bend", dtype=pa.int64()),
+        ],
+    )
 )
 
-IMPORTS_SPEC = make_table_spec(
-    name="py_cst_imports_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="import_id", dtype=pa.string()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
-        ArrowFieldSpec(name="module", dtype=pa.string()),
-        ArrowFieldSpec(name="relative_level", dtype=pa.int32()),
-        ArrowFieldSpec(name="name", dtype=pa.string()),
-        ArrowFieldSpec(name="asname", dtype=pa.string()),
-        ArrowFieldSpec(name="is_star", dtype=pa.bool_()),
-        ArrowFieldSpec(name="stmt_bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="stmt_bend", dtype=pa.int64()),
-        ArrowFieldSpec(name="alias_bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="alias_bend", dtype=pa.int64()),
-    ],
+IMPORTS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_cst_imports_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(),),
+        fields=[
+            ArrowFieldSpec(name="import_id", dtype=pa.string()),
+            ArrowFieldSpec(name="kind", dtype=pa.string()),
+            ArrowFieldSpec(name="module", dtype=pa.string()),
+            ArrowFieldSpec(name="relative_level", dtype=pa.int32()),
+            ArrowFieldSpec(name="name", dtype=pa.string()),
+            ArrowFieldSpec(name="asname", dtype=pa.string()),
+            ArrowFieldSpec(name="is_star", dtype=pa.bool_()),
+            ArrowFieldSpec(name="stmt_bstart", dtype=pa.int64()),
+            ArrowFieldSpec(name="stmt_bend", dtype=pa.int64()),
+            ArrowFieldSpec(name="alias_bstart", dtype=pa.int64()),
+            ArrowFieldSpec(name="alias_bend", dtype=pa.int64()),
+        ],
+    )
 )
 
-CALLSITES_SPEC = make_table_spec(
-    name="py_cst_callsites_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="call_id", dtype=pa.string()),
-        *call_span_bundle().fields,
-        ArrowFieldSpec(name="callee_bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="callee_bend", dtype=pa.int64()),
-        ArrowFieldSpec(name="callee_shape", dtype=pa.string()),
-        ArrowFieldSpec(name="callee_text", dtype=pa.string()),
-        ArrowFieldSpec(name="arg_count", dtype=pa.int32()),
-        ArrowFieldSpec(name="callee_dotted", dtype=pa.string()),
-        ArrowFieldSpec(name="callee_qnames", dtype=QNAME_LIST),
-    ],
+CALLSITES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_cst_callsites_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(),),
+        fields=[
+            ArrowFieldSpec(name="call_id", dtype=pa.string()),
+            *call_span_bundle().fields,
+            ArrowFieldSpec(name="callee_bstart", dtype=pa.int64()),
+            ArrowFieldSpec(name="callee_bend", dtype=pa.int64()),
+            ArrowFieldSpec(name="callee_shape", dtype=pa.string()),
+            ArrowFieldSpec(name="callee_text", dtype=pa.string()),
+            ArrowFieldSpec(name="arg_count", dtype=pa.int32()),
+            ArrowFieldSpec(name="callee_dotted", dtype=pa.string()),
+            ArrowFieldSpec(name="callee_qnames", dtype=QNAME_LIST),
+        ],
+    )
 )
 
-DEFS_SPEC = make_table_spec(
-    name="py_cst_defs_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="def_id", dtype=pa.string()),
-        ArrowFieldSpec(name="container_def_id", dtype=pa.string()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
-        ArrowFieldSpec(name="name", dtype=pa.string()),
-        ArrowFieldSpec(name="def_bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="def_bend", dtype=pa.int64()),
-        ArrowFieldSpec(name="name_bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="name_bend", dtype=pa.int64()),
-        ArrowFieldSpec(name="qnames", dtype=QNAME_LIST),
-    ],
+DEFS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_cst_defs_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(),),
+        fields=[
+            ArrowFieldSpec(name="def_id", dtype=pa.string()),
+            ArrowFieldSpec(name="container_def_id", dtype=pa.string()),
+            ArrowFieldSpec(name="kind", dtype=pa.string()),
+            ArrowFieldSpec(name="name", dtype=pa.string()),
+            ArrowFieldSpec(name="def_bstart", dtype=pa.int64()),
+            ArrowFieldSpec(name="def_bend", dtype=pa.int64()),
+            ArrowFieldSpec(name="name_bstart", dtype=pa.int64()),
+            ArrowFieldSpec(name="name_bend", dtype=pa.int64()),
+            ArrowFieldSpec(name="qnames", dtype=QNAME_LIST),
+        ],
+    )
 )
 
-TYPE_EXPRS_SPEC = make_table_spec(
-    name="py_cst_type_exprs_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="type_expr_id", dtype=pa.string()),
-        ArrowFieldSpec(name="owner_def_id", dtype=pa.string()),
-        ArrowFieldSpec(name="param_name", dtype=pa.string()),
-        ArrowFieldSpec(name="expr_kind", dtype=pa.string()),
-        ArrowFieldSpec(name="expr_role", dtype=pa.string()),
-        ArrowFieldSpec(name="bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="bend", dtype=pa.int64()),
-        ArrowFieldSpec(name="expr_text", dtype=pa.string()),
-    ],
+TYPE_EXPRS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_cst_type_exprs_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(),),
+        fields=[
+            ArrowFieldSpec(name="type_expr_id", dtype=pa.string()),
+            ArrowFieldSpec(name="owner_def_id", dtype=pa.string()),
+            ArrowFieldSpec(name="param_name", dtype=pa.string()),
+            ArrowFieldSpec(name="expr_kind", dtype=pa.string()),
+            ArrowFieldSpec(name="expr_role", dtype=pa.string()),
+            ArrowFieldSpec(name="bstart", dtype=pa.int64()),
+            ArrowFieldSpec(name="bend", dtype=pa.int64()),
+            ArrowFieldSpec(name="expr_text", dtype=pa.string()),
+        ],
+    )
 )
 
 PARSE_MANIFEST_SCHEMA = PARSE_MANIFEST_SPEC.to_arrow_schema()
@@ -307,11 +346,16 @@ class CSTExtractContext:
         )
 
 
+type DefKey = tuple[str, int, int]
+
+
 @dataclass(frozen=True)
 class TypeExprOwner:
     """Context for a collected type expression."""
 
-    owner_def_id: str
+    owner_def_kind: str
+    owner_def_bstart: int
+    owner_def_bend: int
     expr_role: str
     param_name: str | None = None
 
@@ -381,21 +425,20 @@ def _parse_module(
 
 
 def _module_package_names(
-    rf: dict[str, object],
     *,
+    abs_path: str | Path | None,
     options: CSTExtractOptions,
     path: str,
 ) -> tuple[str | None, str | None]:
     if options.repo_root is None:
         return None, None
-    abs_path_value = rf.get("abs_path")
-    if isinstance(abs_path_value, Path):
-        abs_path = abs_path_value
-    elif isinstance(abs_path_value, str):
-        abs_path = Path(abs_path_value)
+    if isinstance(abs_path, Path):
+        abs_path_value = abs_path
+    elif isinstance(abs_path, str):
+        abs_path_value = Path(abs_path)
     else:
-        abs_path = Path(path)
-    return _calculate_module_and_package(options.repo_root, abs_path)
+        abs_path_value = Path(path)
+    return _calculate_module_and_package(options.repo_root, abs_path_value)
 
 
 def _parse_or_record_error(
@@ -520,7 +563,7 @@ class CSTCollector(cst.CSTVisitor):
         self._def_qname_sources = ctx.extract_ctx.def_qname_sources
         self._type_expr_rows = ctx.extract_ctx.type_expr_rows
         self._skip_name_nodes: set[cst.Name] = set()
-        self._def_stack: list[str] = []
+        self._def_stack: list[DefKey] = []
 
     def _span(self, node: cst.CSTNode) -> tuple[int, int]:
         sp = self._span_map.get(node)
@@ -556,16 +599,11 @@ class CSTCollector(cst.CSTVisitor):
         expr_text = self._code_for_node(expr)
         if expr_text is None:
             return
-        type_expr_id = prefixed_hash_id_from_parts(
-            "cst_type_expr",
-            self._file_ctx.path,
-            str(bstart),
-            str(bend),
-        )
         self._type_expr_rows.append(
             {
-                "type_expr_id": type_expr_id,
-                "owner_def_id": owner.owner_def_id,
+                "owner_def_kind": owner.owner_def_kind,
+                "owner_def_bstart": owner.owner_def_bstart,
+                "owner_def_bend": owner.owner_def_bend,
                 "param_name": owner.param_name,
                 "expr_kind": "annotation",
                 "expr_role": owner.expr_role,
@@ -593,14 +631,13 @@ class CSTCollector(cst.CSTVisitor):
         self._skip_name_nodes.add(node.name)
 
         container = self._def_stack[-1] if self._def_stack else None
+        container_kind: str | None = None
+        container_bstart: int | None = None
+        container_bend: int | None = None
+        if container is not None:
+            container_kind, container_bstart, container_bend = container
         def_kind = "async_function" if node.asynchronous is not None else "function"
-        def_id = prefixed_hash_id_from_parts(
-            "cst_def",
-            self._file_ctx.file_id,
-            def_kind,
-            str(def_bstart),
-            str(def_bend),
-        )
+        def_key: DefKey = (def_kind, def_bstart, def_bend)
         qnames = self._qnames(node)
         _append_qname_list(
             self._def_qname_offsets,
@@ -611,8 +648,9 @@ class CSTCollector(cst.CSTVisitor):
 
         self._def_rows.append(
             {
-                "def_id": def_id,
-                "container_def_id": container,
+                "container_def_kind": container_kind,
+                "container_def_bstart": container_bstart,
+                "container_def_bend": container_bend,
                 "file_id": self._file_ctx.file_id,
                 "path": self._file_ctx.path,
                 "file_sha256": self._file_ctx.file_sha256,
@@ -628,7 +666,12 @@ class CSTCollector(cst.CSTVisitor):
         if node.returns is not None:
             self._record_type_expr(
                 node.returns,
-                owner=TypeExprOwner(owner_def_id=def_id, expr_role="return"),
+                owner=TypeExprOwner(
+                    owner_def_kind=def_kind,
+                    owner_def_bstart=def_bstart,
+                    owner_def_bend=def_bend,
+                    expr_role="return",
+                ),
             )
         for param in _iter_params(node.params):
             if param.annotation is None:
@@ -636,12 +679,14 @@ class CSTCollector(cst.CSTVisitor):
             self._record_type_expr(
                 param.annotation,
                 owner=TypeExprOwner(
-                    owner_def_id=def_id,
+                    owner_def_kind=def_kind,
+                    owner_def_bstart=def_bstart,
+                    owner_def_bend=def_bend,
                     expr_role="param",
                     param_name=param.name.value,
                 ),
             )
-        self._def_stack.append(def_id)
+        self._def_stack.append(def_key)
         return True
 
     def leave_FunctionDef(self, original_node: cst.FunctionDef) -> None:
@@ -665,14 +710,13 @@ class CSTCollector(cst.CSTVisitor):
         self._skip_name_nodes.add(node.name)
 
         container = self._def_stack[-1] if self._def_stack else None
+        container_kind: str | None = None
+        container_bstart: int | None = None
+        container_bend: int | None = None
+        if container is not None:
+            container_kind, container_bstart, container_bend = container
         def_kind = "class"
-        def_id = prefixed_hash_id_from_parts(
-            "cst_def",
-            self._file_ctx.file_id,
-            def_kind,
-            str(def_bstart),
-            str(def_bend),
-        )
+        def_key: DefKey = (def_kind, def_bstart, def_bend)
         qnames = self._qnames(node)
         _append_qname_list(
             self._def_qname_offsets,
@@ -683,8 +727,9 @@ class CSTCollector(cst.CSTVisitor):
 
         self._def_rows.append(
             {
-                "def_id": def_id,
-                "container_def_id": container,
+                "container_def_kind": container_kind,
+                "container_def_bstart": container_bstart,
+                "container_def_bend": container_bend,
                 "file_id": self._file_ctx.file_id,
                 "path": self._file_ctx.path,
                 "file_sha256": self._file_ctx.file_sha256,
@@ -697,7 +742,7 @@ class CSTCollector(cst.CSTVisitor):
                 "qnames": None,
             }
         )
-        self._def_stack.append(def_id)
+        self._def_stack.append(def_key)
         return True
 
     def leave_ClassDef(self, original_node: cst.ClassDef) -> None:
@@ -726,12 +771,6 @@ class CSTCollector(cst.CSTVisitor):
 
         self._name_ref_rows.append(
             {
-                "name_ref_id": prefixed_hash_id_from_parts(
-                    "cst_name_ref",
-                    self._file_ctx.file_id,
-                    str(bstart),
-                    str(bend),
-                ),
                 "file_id": self._file_ctx.file_id,
                 "path": self._file_ctx.path,
                 "file_sha256": self._file_ctx.file_sha256,
@@ -766,13 +805,6 @@ class CSTCollector(cst.CSTVisitor):
 
             self._import_rows.append(
                 {
-                    "import_id": prefixed_hash_id_from_parts(
-                        "cst_import",
-                        self._file_ctx.file_id,
-                        "import",
-                        str(alias_bstart),
-                        str(alias_bend),
-                    ),
                     "file_id": self._file_ctx.file_id,
                     "path": self._file_ctx.path,
                     "file_sha256": self._file_ctx.file_sha256,
@@ -815,13 +847,6 @@ class CSTCollector(cst.CSTVisitor):
             alias_bstart, alias_bend = self._span(node.names)
             self._import_rows.append(
                 {
-                    "import_id": prefixed_hash_id_from_parts(
-                        "cst_import",
-                        self._file_ctx.file_id,
-                        "importfrom",
-                        str(alias_bstart),
-                        str(alias_bend),
-                    ),
                     "file_id": self._file_ctx.file_id,
                     "path": self._file_ctx.path,
                     "file_sha256": self._file_ctx.file_sha256,
@@ -851,13 +876,6 @@ class CSTCollector(cst.CSTVisitor):
 
             self._import_rows.append(
                 {
-                    "import_id": prefixed_hash_id_from_parts(
-                        "cst_import",
-                        self._file_ctx.file_id,
-                        "importfrom",
-                        str(alias_bstart),
-                        str(alias_bend),
-                    ),
                     "file_id": self._file_ctx.file_id,
                     "path": self._file_ctx.path,
                     "file_sha256": self._file_ctx.file_sha256,
@@ -905,12 +923,6 @@ class CSTCollector(cst.CSTVisitor):
 
         self._call_rows.append(
             {
-                "call_id": prefixed_hash_id_from_parts(
-                    "cst_call",
-                    self._file_ctx.file_id,
-                    str(call_bstart),
-                    str(call_bend),
-                ),
                 "file_id": self._file_ctx.file_id,
                 "path": self._file_ctx.path,
                 "file_sha256": self._file_ctx.file_sha256,
@@ -928,8 +940,7 @@ class CSTCollector(cst.CSTVisitor):
         return True
 
 
-def _extract_cst_for_row(rf: dict[str, object], ctx: CSTExtractContext) -> None:
-    file_ctx = FileContext.from_repo_row(rf)
+def _extract_cst_for_context(file_ctx: FileContext, ctx: CSTExtractContext) -> None:
     if not file_ctx.file_id or not file_ctx.path:
         return
 
@@ -947,8 +958,12 @@ def _extract_cst_for_row(rf: dict[str, object], ctx: CSTExtractContext) -> None:
     if module is None:
         return
 
-    module_name, package_name = _module_package_names(rf, options=ctx.options, path=file_ctx.path)
-    file_ctx = CSTFileContext(file_ctx=file_ctx, options=ctx.options)
+    module_name, package_name = _module_package_names(
+        abs_path=file_ctx.abs_path,
+        options=ctx.options,
+        path=file_ctx.path,
+    )
+    cst_file_ctx = CSTFileContext(file_ctx=file_ctx, options=ctx.options)
     if ctx.options.include_parse_manifest:
         future_imports = getattr(module, "future_imports", []) or []
         _append_string_list(
@@ -957,14 +972,27 @@ def _extract_cst_for_row(rf: dict[str, object], ctx: CSTExtractContext) -> None:
             future_imports,
         )
         ctx.manifest_rows.append(
-            _manifest_row(file_ctx, module, module_name=module_name, package_name=package_name)
+            _manifest_row(
+                cst_file_ctx,
+                module,
+                module_name=module_name,
+                package_name=package_name,
+            )
         )
 
-    _visit_with_collector(module, file_ctx=file_ctx, ctx=ctx)
+    _visit_with_collector(module, file_ctx=cst_file_ctx, ctx=ctx)
+
+
+def _extract_cst_for_row(rf: dict[str, object], ctx: CSTExtractContext) -> None:
+    file_ctx = FileContext.from_repo_row(rf)
+    _extract_cst_for_context(file_ctx, ctx)
 
 
 def extract_cst(
-    repo_files: TableLike, options: CSTExtractOptions | None = None
+    repo_files: TableLike,
+    options: CSTExtractOptions | None = None,
+    *,
+    file_contexts: Iterable[FileContext] | None = None,
 ) -> CSTExtractResult:
     """Extract LibCST-derived structures from repo files.
 
@@ -976,84 +1004,162 @@ def extract_cst(
     options = options or CSTExtractOptions()
     ctx = CSTExtractContext.build(options)
 
-    for rf in iter_table_rows(repo_files):
-        _extract_cst_for_row(rf, ctx)
+    contexts = file_contexts if file_contexts is not None else iter_file_contexts(repo_files)
+    for file_ctx in contexts:
+        _extract_cst_for_context(file_ctx, ctx)
 
     return _build_cst_result(ctx)
 
 
-def _build_cst_result(ctx: CSTExtractContext) -> CSTExtractResult:
-    t_manifest = (
+def _build_manifest_table(ctx: CSTExtractContext) -> TableLike:
+    table = (
         pa.Table.from_pylist(ctx.manifest_rows, schema=PARSE_MANIFEST_SCHEMA)
         if ctx.manifest_rows
         else empty_table(PARSE_MANIFEST_SCHEMA)
     )
-    if ctx.manifest_rows:
-        future_imports = build_list_array(
-            pa.array(ctx.manifest_future_imports_offsets, type=pa.int32()),
-            pa.array(ctx.manifest_future_imports_values, type=pa.string()),
-        )
-        idx = t_manifest.schema.get_field_index("future_imports")
-        t_manifest = t_manifest.set_column(idx, "future_imports", future_imports)
-    t_errs = (
+    if not ctx.manifest_rows:
+        return table
+    future_imports = build_list_array(
+        pa.array(ctx.manifest_future_imports_offsets, type=pa.int32()),
+        pa.array(ctx.manifest_future_imports_values, type=pa.string()),
+    )
+    idx = table.schema.get_field_index("future_imports")
+    return table.set_column(idx, "future_imports", future_imports)
+
+
+def _build_errors_table(ctx: CSTExtractContext) -> TableLike:
+    return (
         pa.Table.from_pylist(ctx.error_rows, schema=PARSE_ERRORS_SCHEMA)
         if ctx.error_rows
         else empty_table(PARSE_ERRORS_SCHEMA)
     )
-    t_names = (
-        pa.Table.from_pylist(ctx.name_ref_rows, schema=NAME_REFS_SCHEMA)
-        if ctx.name_ref_rows
-        else empty_table(NAME_REFS_SCHEMA)
-    )
-    t_imports = (
-        pa.Table.from_pylist(ctx.import_rows, schema=IMPORTS_SCHEMA)
-        if ctx.import_rows
-        else empty_table(IMPORTS_SCHEMA)
-    )
-    t_calls = (
-        pa.Table.from_pylist(ctx.call_rows, schema=CALLSITES_SCHEMA)
-        if ctx.call_rows
-        else empty_table(CALLSITES_SCHEMA)
-    )
-    if ctx.call_rows:
-        call_qnames = build_list_of_structs(
-            pa.array(ctx.call_qname_offsets, type=pa.int32()),
-            {
-                "name": pa.array(ctx.call_qname_names, type=pa.string()),
-                "source": pa.array(ctx.call_qname_sources, type=pa.string()),
-            },
-        )
-        idx = t_calls.schema.get_field_index("callee_qnames")
-        t_calls = t_calls.set_column(idx, "callee_qnames", call_qnames)
-    t_defs = (
-        pa.Table.from_pylist(ctx.def_rows, schema=DEFS_SCHEMA)
-        if ctx.def_rows
-        else empty_table(DEFS_SCHEMA)
-    )
-    if ctx.def_rows:
-        def_qnames = build_list_of_structs(
-            pa.array(ctx.def_qname_offsets, type=pa.int32()),
-            {
-                "name": pa.array(ctx.def_qname_names, type=pa.string()),
-                "source": pa.array(ctx.def_qname_sources, type=pa.string()),
-            },
-        )
-        idx = t_defs.schema.get_field_index("qnames")
-        t_defs = t_defs.set_column(idx, "qnames", def_qnames)
-    t_type_exprs = (
-        pa.Table.from_pylist(ctx.type_expr_rows, schema=TYPE_EXPRS_SCHEMA)
-        if ctx.type_expr_rows
-        else empty_table(TYPE_EXPRS_SCHEMA)
-    )
 
+
+def _build_name_refs_table(ctx: CSTExtractContext) -> TableLike:
+    if not ctx.name_ref_rows:
+        return empty_table(NAME_REFS_SCHEMA)
+    table = pa.Table.from_pylist(ctx.name_ref_rows)
+    table = _apply_hash_column(
+        table,
+        spec=HashSpec(
+            prefix="cst_name_ref",
+            cols=("file_id", "bstart", "bend"),
+            out_col="name_ref_id",
+        ),
+        required=("file_id", "bstart", "bend"),
+    )
+    return SchemaTransform(schema=NAME_REFS_SCHEMA).apply(table)
+
+
+def _build_imports_table(ctx: CSTExtractContext) -> TableLike:
+    if not ctx.import_rows:
+        return empty_table(IMPORTS_SCHEMA)
+    table = pa.Table.from_pylist(ctx.import_rows)
+    table = _apply_hash_column(
+        table,
+        spec=HashSpec(
+            prefix="cst_import",
+            cols=("file_id", "kind", "alias_bstart", "alias_bend"),
+            out_col="import_id",
+        ),
+        required=("file_id", "kind", "alias_bstart", "alias_bend"),
+    )
+    return SchemaTransform(schema=IMPORTS_SCHEMA).apply(table)
+
+
+def _build_callsites_table(ctx: CSTExtractContext) -> TableLike:
+    if not ctx.call_rows:
+        return empty_table(CALLSITES_SCHEMA)
+    table = pa.Table.from_pylist(ctx.call_rows)
+    call_qnames = build_list_of_structs(
+        pa.array(ctx.call_qname_offsets, type=pa.int32()),
+        {
+            "name": pa.array(ctx.call_qname_names, type=pa.string()),
+            "source": pa.array(ctx.call_qname_sources, type=pa.string()),
+        },
+    )
+    idx = table.schema.get_field_index("callee_qnames")
+    table = table.set_column(idx, "callee_qnames", call_qnames)
+    table = _apply_hash_column(
+        table,
+        spec=HashSpec(
+            prefix="cst_call",
+            cols=("file_id", "call_bstart", "call_bend"),
+            out_col="call_id",
+        ),
+        required=("file_id", "call_bstart", "call_bend"),
+    )
+    return SchemaTransform(schema=CALLSITES_SCHEMA).apply(table)
+
+
+def _build_defs_table(ctx: CSTExtractContext) -> TableLike:
+    if not ctx.def_rows:
+        return empty_table(DEFS_SCHEMA)
+    table = pa.Table.from_pylist(ctx.def_rows)
+    def_qnames = build_list_of_structs(
+        pa.array(ctx.def_qname_offsets, type=pa.int32()),
+        {
+            "name": pa.array(ctx.def_qname_names, type=pa.string()),
+            "source": pa.array(ctx.def_qname_sources, type=pa.string()),
+        },
+    )
+    idx = table.schema.get_field_index("qnames")
+    table = table.set_column(idx, "qnames", def_qnames)
+    table = _apply_hash_column(
+        table,
+        spec=HashSpec(
+            prefix="cst_def",
+            cols=("file_id", "kind", "def_bstart", "def_bend"),
+            out_col="def_id",
+        ),
+        required=("file_id", "kind", "def_bstart", "def_bend"),
+    )
+    table = _apply_hash_column(
+        table,
+        spec=HashSpec(
+            prefix="cst_def",
+            cols=("file_id", "container_def_kind", "container_def_bstart", "container_def_bend"),
+            out_col="container_def_id",
+        ),
+        required=("file_id", "container_def_kind", "container_def_bstart", "container_def_bend"),
+    )
+    return SchemaTransform(schema=DEFS_SCHEMA).apply(table)
+
+
+def _build_type_exprs_table(ctx: CSTExtractContext) -> TableLike:
+    if not ctx.type_expr_rows:
+        return empty_table(TYPE_EXPRS_SCHEMA)
+    table = pa.Table.from_pylist(ctx.type_expr_rows)
+    table = _apply_hash_column(
+        table,
+        spec=HashSpec(
+            prefix="cst_type_expr",
+            cols=("path", "bstart", "bend"),
+            out_col="type_expr_id",
+        ),
+        required=("path", "bstart", "bend"),
+    )
+    table = _apply_hash_column(
+        table,
+        spec=HashSpec(
+            prefix="cst_def",
+            cols=("file_id", "owner_def_kind", "owner_def_bstart", "owner_def_bend"),
+            out_col="owner_def_id",
+        ),
+        required=("file_id", "owner_def_kind", "owner_def_bstart", "owner_def_bend"),
+    )
+    return SchemaTransform(schema=TYPE_EXPRS_SCHEMA).apply(table)
+
+
+def _build_cst_result(ctx: CSTExtractContext) -> CSTExtractResult:
     return CSTExtractResult(
-        py_cst_parse_manifest=t_manifest,
-        py_cst_parse_errors=t_errs,
-        py_cst_name_refs=t_names,
-        py_cst_imports=t_imports,
-        py_cst_callsites=t_calls,
-        py_cst_defs=t_defs,
-        py_cst_type_exprs=t_type_exprs,
+        py_cst_parse_manifest=_build_manifest_table(ctx),
+        py_cst_parse_errors=_build_errors_table(ctx),
+        py_cst_name_refs=_build_name_refs_table(ctx),
+        py_cst_imports=_build_imports_table(ctx),
+        py_cst_callsites=_build_callsites_table(ctx),
+        py_cst_defs=_build_defs_table(ctx),
+        py_cst_type_exprs=_build_type_exprs_table(ctx),
     )
 
 
@@ -1061,6 +1167,7 @@ def extract_cst_tables(
     *,
     repo_root: str | None,
     repo_files: TableLike,
+    file_contexts: Iterable[FileContext] | None = None,
     ctx: object | None = None,
 ) -> dict[str, TableLike]:
     """Extract CST tables as a name-keyed bundle.
@@ -1071,6 +1178,8 @@ def extract_cst_tables(
         Optional repository root for module/package derivation.
     repo_files:
         Repo files table.
+    file_contexts:
+        Optional pre-built file contexts for extraction.
     ctx:
         Execution context (unused).
 
@@ -1081,7 +1190,7 @@ def extract_cst_tables(
     """
     _ = ctx
     options = CSTExtractOptions(repo_root=Path(repo_root) if repo_root else None)
-    result = extract_cst(repo_files, options=options)
+    result = extract_cst(repo_files, options=options, file_contexts=file_contexts)
     return {
         "cst_parse_manifest": result.py_cst_parse_manifest,
         "cst_parse_errors": result.py_cst_parse_errors,

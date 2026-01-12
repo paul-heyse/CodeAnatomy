@@ -30,6 +30,7 @@ from extract.scip_proto_loader import load_scip_pb2_from_build
 from schema_spec.core import ArrowFieldSpec
 from schema_spec.factories import make_table_spec
 from schema_spec.fields import scip_range_bundle
+from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
 
 SCHEMA_VERSION = 1
 RANGE_LEN_SHORT = 3
@@ -100,108 +101,122 @@ SCIP_SIGNATURE_DOCUMENTATION_TYPE = pa.struct(
     ]
 )
 
-SCIP_METADATA_SPEC = make_table_spec(
-    name="scip_metadata_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=[
-        ArrowFieldSpec(name="tool_name", dtype=pa.string()),
-        ArrowFieldSpec(name="tool_version", dtype=pa.string()),
-        ArrowFieldSpec(name="project_root", dtype=pa.string()),
-        ArrowFieldSpec(name="text_document_encoding", dtype=pa.string()),
-        ArrowFieldSpec(name="protocol_version", dtype=pa.string()),
-    ],
+SCIP_METADATA_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="scip_metadata_v1",
+        version=SCHEMA_VERSION,
+        bundles=(),
+        fields=[
+            ArrowFieldSpec(name="tool_name", dtype=pa.string()),
+            ArrowFieldSpec(name="tool_version", dtype=pa.string()),
+            ArrowFieldSpec(name="project_root", dtype=pa.string()),
+            ArrowFieldSpec(name="text_document_encoding", dtype=pa.string()),
+            ArrowFieldSpec(name="protocol_version", dtype=pa.string()),
+        ],
+    )
 )
 
-SCIP_DOCUMENTS_SPEC = make_table_spec(
-    name="scip_documents_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=[
-        ArrowFieldSpec(name="document_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="language", dtype=pa.string()),
-        ArrowFieldSpec(name="position_encoding", dtype=pa.string()),
-    ],
+SCIP_DOCUMENTS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="scip_documents_v1",
+        version=SCHEMA_VERSION,
+        bundles=(),
+        fields=[
+            ArrowFieldSpec(name="document_id", dtype=pa.string()),
+            ArrowFieldSpec(name="path", dtype=pa.string()),
+            ArrowFieldSpec(name="language", dtype=pa.string()),
+            ArrowFieldSpec(name="position_encoding", dtype=pa.string()),
+        ],
+    )
 )
 
-SCIP_OCCURRENCES_SPEC = make_table_spec(
-    name="scip_occurrences_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=[
-        ArrowFieldSpec(name="occurrence_id", dtype=pa.string()),
-        ArrowFieldSpec(name="document_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="symbol", dtype=pa.string()),
-        ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
-        ArrowFieldSpec(name="syntax_kind", dtype=pa.string()),
-        ArrowFieldSpec(name="override_documentation", dtype=pa.list_(pa.string())),
-        *scip_range_bundle(include_len=True).fields,
-        *scip_range_bundle(prefix="enc_", include_len=True).fields,
-    ],
+SCIP_OCCURRENCES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="scip_occurrences_v1",
+        version=SCHEMA_VERSION,
+        bundles=(),
+        fields=[
+            ArrowFieldSpec(name="occurrence_id", dtype=pa.string()),
+            ArrowFieldSpec(name="document_id", dtype=pa.string()),
+            ArrowFieldSpec(name="path", dtype=pa.string()),
+            ArrowFieldSpec(name="symbol", dtype=pa.string()),
+            ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
+            ArrowFieldSpec(name="syntax_kind", dtype=pa.string()),
+            ArrowFieldSpec(name="override_documentation", dtype=pa.list_(pa.string())),
+            *scip_range_bundle(include_len=True).fields,
+            *scip_range_bundle(prefix="enc_", include_len=True).fields,
+        ],
+    )
 )
 
-SCIP_SYMBOL_INFO_SPEC = make_table_spec(
-    name="scip_symbol_info_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=[
-        ArrowFieldSpec(name="symbol_info_id", dtype=pa.string()),
-        ArrowFieldSpec(name="symbol", dtype=pa.string()),
-        ArrowFieldSpec(name="display_name", dtype=pa.string()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
-        ArrowFieldSpec(name="enclosing_symbol", dtype=pa.string()),
-        ArrowFieldSpec(name="documentation", dtype=pa.list_(pa.string())),
-        ArrowFieldSpec(name="signature_documentation", dtype=SCIP_SIGNATURE_DOCUMENTATION_TYPE),
-    ],
+SCIP_SYMBOL_INFO_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="scip_symbol_info_v1",
+        version=SCHEMA_VERSION,
+        bundles=(),
+        fields=[
+            ArrowFieldSpec(name="symbol_info_id", dtype=pa.string()),
+            ArrowFieldSpec(name="symbol", dtype=pa.string()),
+            ArrowFieldSpec(name="display_name", dtype=pa.string()),
+            ArrowFieldSpec(name="kind", dtype=pa.string()),
+            ArrowFieldSpec(name="enclosing_symbol", dtype=pa.string()),
+            ArrowFieldSpec(name="documentation", dtype=pa.list_(pa.string())),
+            ArrowFieldSpec(name="signature_documentation", dtype=SCIP_SIGNATURE_DOCUMENTATION_TYPE),
+        ],
+    )
 )
 
-SCIP_SYMBOL_RELATIONSHIPS_SPEC = make_table_spec(
-    name="scip_symbol_relationships_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=[
-        ArrowFieldSpec(name="relationship_id", dtype=pa.string()),
-        ArrowFieldSpec(name="symbol", dtype=pa.string()),
-        ArrowFieldSpec(name="related_symbol", dtype=pa.string()),
-        ArrowFieldSpec(name="is_reference", dtype=pa.bool_()),
-        ArrowFieldSpec(name="is_implementation", dtype=pa.bool_()),
-        ArrowFieldSpec(name="is_type_definition", dtype=pa.bool_()),
-        ArrowFieldSpec(name="is_definition", dtype=pa.bool_()),
-    ],
+SCIP_SYMBOL_RELATIONSHIPS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="scip_symbol_relationships_v1",
+        version=SCHEMA_VERSION,
+        bundles=(),
+        fields=[
+            ArrowFieldSpec(name="relationship_id", dtype=pa.string()),
+            ArrowFieldSpec(name="symbol", dtype=pa.string()),
+            ArrowFieldSpec(name="related_symbol", dtype=pa.string()),
+            ArrowFieldSpec(name="is_reference", dtype=pa.bool_()),
+            ArrowFieldSpec(name="is_implementation", dtype=pa.bool_()),
+            ArrowFieldSpec(name="is_type_definition", dtype=pa.bool_()),
+            ArrowFieldSpec(name="is_definition", dtype=pa.bool_()),
+        ],
+    )
 )
 
-SCIP_EXTERNAL_SYMBOL_INFO_SPEC = make_table_spec(
-    name="scip_external_symbol_info_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=[
-        ArrowFieldSpec(name="symbol_info_id", dtype=pa.string()),
-        ArrowFieldSpec(name="symbol", dtype=pa.string()),
-        ArrowFieldSpec(name="display_name", dtype=pa.string()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
-        ArrowFieldSpec(name="enclosing_symbol", dtype=pa.string()),
-        ArrowFieldSpec(name="documentation", dtype=pa.list_(pa.string())),
-        ArrowFieldSpec(name="signature_documentation", dtype=SCIP_SIGNATURE_DOCUMENTATION_TYPE),
-    ],
+SCIP_EXTERNAL_SYMBOL_INFO_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="scip_external_symbol_info_v1",
+        version=SCHEMA_VERSION,
+        bundles=(),
+        fields=[
+            ArrowFieldSpec(name="symbol_info_id", dtype=pa.string()),
+            ArrowFieldSpec(name="symbol", dtype=pa.string()),
+            ArrowFieldSpec(name="display_name", dtype=pa.string()),
+            ArrowFieldSpec(name="kind", dtype=pa.string()),
+            ArrowFieldSpec(name="enclosing_symbol", dtype=pa.string()),
+            ArrowFieldSpec(name="documentation", dtype=pa.list_(pa.string())),
+            ArrowFieldSpec(name="signature_documentation", dtype=SCIP_SIGNATURE_DOCUMENTATION_TYPE),
+        ],
+    )
 )
 
-SCIP_DIAGNOSTICS_SPEC = make_table_spec(
-    name="scip_diagnostics_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=[
-        ArrowFieldSpec(name="diagnostic_id", dtype=pa.string()),
-        ArrowFieldSpec(name="document_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="severity", dtype=pa.string()),
-        ArrowFieldSpec(name="code", dtype=pa.string()),
-        ArrowFieldSpec(name="message", dtype=pa.string()),
-        ArrowFieldSpec(name="source", dtype=pa.string()),
-        ArrowFieldSpec(name="tags", dtype=pa.list_(pa.string())),
-        *scip_range_bundle().fields,
-    ],
+SCIP_DIAGNOSTICS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="scip_diagnostics_v1",
+        version=SCHEMA_VERSION,
+        bundles=(),
+        fields=[
+            ArrowFieldSpec(name="diagnostic_id", dtype=pa.string()),
+            ArrowFieldSpec(name="document_id", dtype=pa.string()),
+            ArrowFieldSpec(name="path", dtype=pa.string()),
+            ArrowFieldSpec(name="severity", dtype=pa.string()),
+            ArrowFieldSpec(name="code", dtype=pa.string()),
+            ArrowFieldSpec(name="message", dtype=pa.string()),
+            ArrowFieldSpec(name="source", dtype=pa.string()),
+            ArrowFieldSpec(name="tags", dtype=pa.list_(pa.string())),
+            *scip_range_bundle().fields,
+        ],
+    )
 )
 
 SCIP_METADATA_SCHEMA = SCIP_METADATA_SPEC.to_arrow_schema()

@@ -106,11 +106,17 @@ class Plan:
         msg = "Plan has no execution source."
         raise ValueError(msg)
 
-    def _apply_plan_op(self, op: PlanOp, *, label: str = "") -> Plan:
+    def _apply_plan_op(
+        self,
+        op: PlanOp,
+        *,
+        ctx: ExecutionContext | None = None,
+        label: str = "",
+    ) -> Plan:
         if self.decl is None:
             msg = "Plan operation requires an Acero-backed Plan (decl is None)."
             raise TypeError(msg)
-        decl = op.to_declaration([self.decl], ctx=None)
+        decl = op.to_declaration([self.decl], ctx=ctx)
         ordering = op.apply_ordering(self.ordering)
         return Plan(decl=decl, label=label or self.label, ordering=ordering)
 
@@ -193,13 +199,21 @@ class Plan:
         """
         return Plan(reader_thunk=lambda: reader, label=label, ordering=Ordering.implicit())
 
-    def filter(self, predicate: ComputeExpression, *, label: str = "") -> Plan:
+    def filter(
+        self,
+        predicate: ComputeExpression,
+        *,
+        ctx: ExecutionContext | None = None,
+        label: str = "",
+    ) -> Plan:
         """Add a filter node to the plan.
 
         Parameters
         ----------
         predicate:
             Predicate expression to apply.
+        ctx:
+            Optional execution context for plan compilation.
         label:
             Optional plan label.
 
@@ -208,10 +222,15 @@ class Plan:
         Plan
             Filtered plan.
         """
-        return self._apply_plan_op(FilterOp(predicate=predicate), label=label)
+        return self._apply_plan_op(FilterOp(predicate=predicate), ctx=ctx, label=label)
 
     def project(
-        self, expressions: Sequence[ComputeExpression], names: Sequence[str], *, label: str = ""
+        self,
+        expressions: Sequence[ComputeExpression],
+        names: Sequence[str],
+        *,
+        ctx: ExecutionContext | None = None,
+        label: str = "",
     ) -> Plan:
         """Add a project node to the plan.
 
@@ -221,6 +240,8 @@ class Plan:
             Expressions to project.
         names:
             Output column names.
+        ctx:
+            Optional execution context for plan compilation.
         label:
             Optional plan label.
 
@@ -229,15 +250,27 @@ class Plan:
         Plan
             Projected plan.
         """
-        return self._apply_plan_op(ProjectOp(expressions=expressions, names=names), label=label)
+        return self._apply_plan_op(
+            ProjectOp(expressions=expressions, names=names),
+            ctx=ctx,
+            label=label,
+        )
 
-    def order_by(self, sort_keys: Sequence[OrderingKey], *, label: str = "") -> Plan:
+    def order_by(
+        self,
+        sort_keys: Sequence[OrderingKey],
+        *,
+        ctx: ExecutionContext | None = None,
+        label: str = "",
+    ) -> Plan:
         """Add an order-by node to the plan.
 
         Parameters
         ----------
         sort_keys:
             Sort keys as (column, order) pairs.
+        ctx:
+            Optional execution context for plan compilation.
         label:
             Optional plan label.
 
@@ -247,13 +280,14 @@ class Plan:
             Ordered plan.
         """
         op = OrderByOp(sort_keys=sort_keys)
-        return self._apply_plan_op(op, label=label)
+        return self._apply_plan_op(op, ctx=ctx, label=label)
 
     def aggregate(
         self,
         group_keys: Sequence[str],
         aggs: Sequence[tuple[str, str]],
         *,
+        ctx: ExecutionContext | None = None,
         label: str = "",
     ) -> Plan:
         """Add an aggregate node to the plan.
@@ -264,6 +298,8 @@ class Plan:
             Key columns to group by.
         aggs:
             Aggregates as (column, function) pairs.
+        ctx:
+            Optional execution context for plan compilation.
         label:
             Optional plan label.
 
@@ -273,7 +309,7 @@ class Plan:
             Aggregated plan (unordered output).
         """
         op = AggregateOp(group_keys=group_keys, aggs=aggs)
-        return self._apply_plan_op(op, label=label)
+        return self._apply_plan_op(op, ctx=ctx, label=label)
 
     def mark_unordered(self, *, label: str = "") -> Plan:
         """Return a copy of the plan marked unordered.

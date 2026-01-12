@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from arrowdsl.pyarrow_protocols import ArrayLike, SchemaLike, TableLike
+from arrowdsl.schema_ops import SchemaMetadataSpec
 from arrowdsl.specs import DedupeSpec, SortKey
 
 type InvariantFn = Callable[[TableLike], tuple[ArrayLike, str]]
@@ -43,11 +44,10 @@ class Contract:
         pyarrow.Schema
             Schema containing contract name/version metadata when available.
         """
-        meta = dict(self.schema.metadata or {})
-        meta[b"contract_name"] = str(self.name).encode("utf-8")
+        meta = {b"contract_name": str(self.name).encode("utf-8")}
         if self.version is not None:
             meta[b"contract_version"] = str(self.version).encode("utf-8")
-        return self.schema.with_metadata(meta)
+        return SchemaMetadataSpec(schema_metadata=meta).apply(self.schema)
 
     def available_fields(self) -> tuple[str, ...]:
         """Return all visible field names (columns + virtual fields).

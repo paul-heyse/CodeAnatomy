@@ -26,30 +26,35 @@ from normalize.types import normalize_type_exprs, normalize_types
 from schema_spec.core import ArrowFieldSpec
 from schema_spec.factories import make_table_spec
 from schema_spec.fields import call_span_bundle
+from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
 
 SCHEMA_VERSION = 1
 
-QNAME_DIM_SPEC = make_table_spec(
-    name="dim_qualified_names_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=[
-        ArrowFieldSpec(name="qname_id", dtype=pa.string()),
-        ArrowFieldSpec(name="qname", dtype=pa.string()),
-    ],
+QNAME_DIM_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="dim_qualified_names_v1",
+        version=SCHEMA_VERSION,
+        bundles=(),
+        fields=[
+            ArrowFieldSpec(name="qname_id", dtype=pa.string()),
+            ArrowFieldSpec(name="qname", dtype=pa.string()),
+        ],
+    )
 )
 
-CALLSITE_QNAME_CANDIDATES_SPEC = make_table_spec(
-    name="callsite_qname_candidates_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=[
-        ArrowFieldSpec(name="call_id", dtype=pa.string()),
-        ArrowFieldSpec(name="qname", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        *call_span_bundle().fields,
-        ArrowFieldSpec(name="qname_source", dtype=pa.string()),
-    ],
+CALLSITE_QNAME_CANDIDATES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="callsite_qname_candidates_v1",
+        version=SCHEMA_VERSION,
+        bundles=(),
+        fields=[
+            ArrowFieldSpec(name="call_id", dtype=pa.string()),
+            ArrowFieldSpec(name="qname", dtype=pa.string()),
+            ArrowFieldSpec(name="path", dtype=pa.string()),
+            *call_span_bundle().fields,
+            ArrowFieldSpec(name="qname_source", dtype=pa.string()),
+        ],
+    )
 )
 
 QNAME_DIM_SCHEMA = QNAME_DIM_SPEC.to_arrow_schema()

@@ -7,10 +7,9 @@ from dataclasses import dataclass
 
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.column_ops import set_or_append_column
-from arrowdsl.compute import pc
 from arrowdsl.finalize import FinalizeResult
 from arrowdsl.finalize_context import FinalizeContext
-from arrowdsl.kernels import apply_aggregate
+from arrowdsl.kernels import apply_aggregate, bitmask_flag_array, cast_array, coalesce_arrays
 from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, TableLike
 from arrowdsl.runtime import ExecutionContext
 from arrowdsl.specs import AggregateSpec
@@ -48,12 +47,10 @@ def _flag_to_bool(value: object | None) -> bool | None:
 def _defs_table(table: TableLike | None) -> TableLike | None:
     if table is None or table.num_rows == 0:
         return None
-    if "def_kind" in table.column_names and "kind" in table.column_names:
-        def_kind = pc.coalesce(table["def_kind"], table["kind"])
-    elif "def_kind" in table.column_names:
-        def_kind = table["def_kind"]
-    elif "kind" in table.column_names:
-        def_kind = table["kind"]
+    cols = [col for col in ("def_kind", "kind") if col in table.column_names]
+    if cols:
+        arrays = [table[col] for col in cols]
+        def_kind = coalesce_arrays(arrays)
     else:
         def_kind = pa.nulls(table.num_rows, type=pa.string())
     return set_or_append_column(table, "def_kind_norm", def_kind)
@@ -68,13 +65,12 @@ def _scip_role_flags_table(scip_occurrences: TableLike | None) -> TableLike | No
     ):
         return None
 
-    symbols = pc.cast(scip_occurrences["symbol"], pa.string())
-    roles = pc.cast(scip_occurrences["symbol_roles"], pa.int64())
+    symbols = cast_array(scip_occurrences["symbol"], pa.string())
+    roles = scip_occurrences["symbol_roles"]
     flag_arrays: list[ArrayLike | ChunkedArrayLike] = []
     flag_names: list[str] = []
     for name, mask, _ in _ROLE_FLAG_SPECS:
-        flag = pc.not_equal(pc.bit_wise_and(roles, pa.scalar(mask)), pa.scalar(0))
-        flag_arrays.append(pc.cast(flag, pa.int32()))
+        flag_arrays.append(bitmask_flag_array(roles, mask=mask))
         flag_names.append(name)
 
     flags_table = pa.Table.from_arrays([symbols, *flag_arrays], names=["symbol", *flag_names])

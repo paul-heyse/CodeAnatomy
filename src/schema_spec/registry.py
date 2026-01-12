@@ -42,3 +42,6 @@ class SchemaRegistry:
             return existing
         self.contract_specs[spec.name] = spec
         return spec
+
+
+GLOBAL_SCHEMA_REGISTRY = SchemaRegistry()

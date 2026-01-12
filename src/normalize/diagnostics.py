@@ -24,6 +24,7 @@ from normalize.spans import (
 from schema_spec.core import ArrowFieldSpec
 from schema_spec.factories import make_table_spec
 from schema_spec.fields import DICT_STRING, file_identity_bundle, span_bundle
+from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
 
 SCHEMA_VERSION = 1
 
@@ -161,18 +162,20 @@ DIAG_DETAIL_STRUCT = pa.struct(
     ]
 )
 
-DIAG_SPEC = make_table_spec(
-    name="diagnostics_norm_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(include_sha256=False), span_bundle()),
-    fields=[
-        ArrowFieldSpec(name="diag_id", dtype=pa.string()),
-        ArrowFieldSpec(name="severity", dtype=DICT_STRING),
-        ArrowFieldSpec(name="message", dtype=pa.string()),
-        ArrowFieldSpec(name="diag_source", dtype=DICT_STRING),
-        ArrowFieldSpec(name="code", dtype=pa.string()),
-        ArrowFieldSpec(name="details", dtype=pa.list_(DIAG_DETAIL_STRUCT)),
-    ],
+DIAG_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="diagnostics_norm_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(include_sha256=False), span_bundle()),
+        fields=[
+            ArrowFieldSpec(name="diag_id", dtype=pa.string()),
+            ArrowFieldSpec(name="severity", dtype=DICT_STRING),
+            ArrowFieldSpec(name="message", dtype=pa.string()),
+            ArrowFieldSpec(name="diag_source", dtype=DICT_STRING),
+            ArrowFieldSpec(name="code", dtype=pa.string()),
+            ArrowFieldSpec(name="details", dtype=pa.list_(DIAG_DETAIL_STRUCT)),
+        ],
+    )
 )
 
 DIAG_ENCODING_SPECS: tuple[EncodingSpec, ...] = (

@@ -17,7 +17,13 @@ This aligns plan behavior with the Acero ordering rules in the DSL guide.
 ```python
 # src/arrowdsl/plan.py
 
-def _apply_plan_op(self, op: PlanOp, *, ctx: ExecutionContext, label: str = "") -> Plan:
+def _apply_plan_op(
+    self,
+    op: PlanOp,
+    *,
+    ctx: ExecutionContext | None = None,
+    label: str = "",
+) -> Plan:
     if self.decl is None:
         msg = "Plan operation requires an Acero-backed Plan (decl is None)."
         raise TypeError(msg)
@@ -49,10 +55,10 @@ class OrderByOp:
 - `src/arrowdsl/joins.py`
 
 ### Integration checklist
-- [ ] Thread `ExecutionContext` through plan op compilation (Scan/Filter/Project).
-- [ ] Ensure every plan op declares ordering effect + pipeline breaker status.
-- [ ] Carry ordering metadata across Plan transformations.
-- [ ] Apply scan ordering knobs via `ExecutionProfile` in scan nodes.
+- [x] Thread `ExecutionContext` through plan op compilation (Scan/Filter/Project).
+- [x] Ensure every plan op declares ordering effect + pipeline breaker status.
+- [x] Carry ordering metadata across Plan transformations.
+- [x] Apply scan ordering knobs via `ExecutionProfile` in scan nodes.
 
 ---
 
@@ -120,12 +126,12 @@ def query_spec_for_table(
 - `src/cpg/build_edges.py`
 
 ### Integration checklist
-- [ ] Move expression building into `expr.py` macros.
-- [ ] Make QuerySpec drive scan columns and plan predicates.
-- [ ] Build QuerySpec from TableSchemaSpec via factory helpers.
-- [ ] Pass PredicateSpec/PredicateExpr directly for plan and pushdown predicates.
-- [ ] Eliminate duplicated predicate logic in nodes/modules.
-- [ ] Keep pushdown predicate and semantic predicate distinct.
+- [ ] Move expression building into `expr.py` macros (pc/predicate usage remains in build_edges/build_props/bytecode_dfg).
+- [x] Make QuerySpec drive scan columns and plan predicates.
+- [x] Build QuerySpec from TableSchemaSpec via factory helpers.
+- [x] Pass PredicateSpec/PredicateExpr directly for plan and pushdown predicates.
+- [ ] Eliminate duplicated predicate logic in nodes/modules (pending cleanup in CPG/normalize helpers).
+- [x] Keep pushdown predicate and semantic predicate distinct.
 
 ---
 
@@ -169,10 +175,10 @@ def apply_aggregate(table: TableLike, *, spec: AggregateSpec) -> TableLike:
 - `src/relspec/compiler.py`
 
 ### Integration checklist
-- [ ] Drive all plan lane joins through `JoinSpec`.
-- [ ] Drive kernel lane joins/aggregates through shared helpers.
-- [ ] Ensure join/aggregate outputs mark ordering as unordered.
-- [ ] Keep canonical sort + dedupe finalize-only.
+- [x] Drive all plan lane joins through `JoinSpec`.
+- [x] Drive kernel lane joins/aggregates through shared helpers.
+- [x] Ensure join/aggregate outputs mark ordering as unordered.
+- [x] Keep canonical sort + dedupe finalize-only.
 
 ---
 
@@ -196,7 +202,8 @@ class SchemaMetadataSpec:
         for field in schema:
             meta = self.field_metadata.get(field.name)
             fields.append(field.with_metadata(meta) if meta is not None else field)
-        return pa.schema(fields, metadata=self.schema_metadata or schema.metadata)
+        updated = pa.schema(fields)
+        return updated.with_metadata(self.schema_metadata) if self.schema_metadata else updated
 ```
 
 ```python
@@ -220,11 +227,11 @@ class SchemaEvolutionSpec:
 - `src/arrowdsl/finalize.py`
 
 ### Integration checklist
-- [ ] Add SchemaMetadataSpec to mutate schema/field metadata.
-- [ ] Route metadata edits through SchemaMetadataSpec + cast.
-- [ ] Add SchemaEvolutionSpec for unify/cast/concat.
-- [ ] Replace ad hoc metadata edits in schema specs.
-- [ ] Prefer metadata-based versioning over a schema_version column.
+- [x] Add SchemaMetadataSpec to mutate schema/field metadata.
+- [x] Route metadata edits through SchemaMetadataSpec + cast.
+- [x] Add SchemaEvolutionSpec for unify/cast/concat.
+- [ ] Replace ad hoc metadata edits in schema specs (TableSchemaSpec still uses schema_metadata helpers).
+- [x] Prefer metadata-based versioning over a schema_version column.
 
 ---
 
@@ -253,9 +260,9 @@ def build_sparse_union_array(type_ids: ArrayLike, children: list[ArrayLike]) -> 
 - `src/normalize/diagnostics.py`
 
 ### Integration checklist
-- [ ] Use shared list/struct builders for nested columns.
-- [ ] Use map/union builders where schemas declare those types.
-- [ ] Avoid ad hoc `pa.MapArray.from_arrays` outside DSL helpers.
+- [x] Use shared list/struct builders for nested columns.
+- [ ] Use map/union builders where schemas declare those types (no map/union fields wired yet).
+- [x] Avoid ad hoc `pa.MapArray.from_arrays` outside DSL helpers.
 
 ---
 
@@ -290,9 +297,9 @@ class ChunkPolicy:
 - `src/obs/stats.py`
 
 ### Integration checklist
-- [ ] Centralize dictionary encoding via EncodingSpec.
-- [ ] Add ChunkPolicy for unify/combine normalization.
-- [ ] Apply ChunkPolicy at join/sort/finalize boundaries.
+- [x] Centralize dictionary encoding via EncodingSpec.
+- [x] Add ChunkPolicy for unify/combine normalization.
+- [x] Apply ChunkPolicy at join/sort/finalize boundaries.
 
 ---
 
@@ -323,9 +330,9 @@ with_ids = add_hash_column(table, spec=spec)
 - `src/arrowdsl/ids.py`
 
 ### Integration checklist
-- [ ] Replace `prefixed_hash_id_from_parts` with HashSpec + add_hash_column.
-- [ ] Keep prefixes identical to preserve stable ID namespaces.
-- [ ] Ensure IDs are computed after all input columns exist.
+- [x] Replace `prefixed_hash_id_from_parts` with HashSpec + add_hash_column.
+- [x] Keep prefixes identical to preserve stable ID namespaces.
+- [x] Ensure IDs are computed after all input columns exist.
 
 ---
 
@@ -372,10 +379,10 @@ errors = ERROR_ARTIFACT_SPEC.build_error_table(table, results)
 - `tests/test_provenance_constants.py`
 
 ### Integration checklist
-- [ ] Standardize provenance columns across scans and plan outputs.
-- [ ] Include provenance in error tables when enabled.
-- [ ] Centralize stats + alignment artifacts via shared helpers.
-- [ ] Add guard tests to keep provenance constants aligned.
+- [ ] Standardize provenance columns across scans and plan outputs (scan columns include provenance, but contract schemas drop them).
+- [ ] Include provenance in error tables when enabled (blocked on provenance columns in schemas).
+- [x] Centralize stats + alignment artifacts via shared helpers.
+- [x] Add guard tests to keep provenance constants aligned.
 
 ---
 
@@ -427,9 +434,9 @@ class SchemaRegistry:
 - `src/extract/runtime_inspect_extract.py`
 
 ### Integration checklist
-- [ ] Define FieldBundle families for repeated column sets.
-- [ ] Register all TableSchemaSpec/ContractSpec in SchemaRegistry.
-- [ ] Replace module-level schema literals with bundle + registry lookups.
+- [x] Define FieldBundle families for repeated column sets.
+- [ ] Register all TableSchemaSpec/ContractSpec in SchemaRegistry (only CPG wired).
+- [ ] Replace module-level schema literals with bundle + registry lookups (extract/normalize still local).
 - [ ] Apply schema metadata from the registry when emitting Arrow schemas.
 
 ---
@@ -476,10 +483,10 @@ def query_spec_for_table(table_spec: TableSchemaSpec) -> QuerySpec:
 - `tests/test_schema_spec_builders.py`
 
 ### Integration checklist
-- [ ] Implement factory helpers for table specs, contracts, and query specs.
-- [ ] Replace manual TableSchemaSpec/ContractSpec construction with factories.
-- [ ] Ensure QuerySpec is built from the input TableSchemaSpec only.
-- [ ] Add guard tests for factory outputs and schema bundle usage.
+- [x] Implement factory helpers for table specs, contracts, and query specs.
+- [x] Replace manual TableSchemaSpec/ContractSpec construction with factories.
+- [x] Ensure QuerySpec is built from the input TableSchemaSpec only.
+- [x] Add guard tests for factory outputs and schema bundle usage.
 
 ---
 
@@ -528,10 +535,10 @@ class FinalizeContext:
 - `src/hamilton_pipeline/modules/normalization.py`
 
 ### Integration checklist
-- [ ] Adopt FileContext in all extractors.
-- [ ] Use ScanContext for dataset scans and plan compilation.
-- [ ] Use FinalizeContext for contract validation and error artifacts.
-- [ ] Update pipeline modules to construct contexts consistently.
+- [x] Adopt FileContext in all extractors.
+- [x] Use ScanContext for dataset scans and plan compilation.
+- [x] Use FinalizeContext for contract validation and error artifacts.
+- [ ] Update pipeline modules to construct contexts consistently (extraction/normalization still pass raw inputs).
 
 ---
 

@@ -13,6 +13,7 @@ from arrowdsl.column_ops import const_array
 from arrowdsl.compute import pc
 from arrowdsl.ids import prefixed_hash_id
 from arrowdsl.iter import iter_arrays
+from arrowdsl.kernels import ChunkPolicy
 from arrowdsl.predicates import FilterSpec, IsNull, Not
 from arrowdsl.pyarrow_protocols import (
     ArrayLike,
@@ -229,7 +230,8 @@ def emit_edges_from_relation(
     )
     out = _table_from_schema(edge_schema, columns=columns, num_rows=n)
     predicate = Not(IsNull("edge_id"))
-    return FilterSpec(predicate).apply_kernel(out)
+    filtered = FilterSpec(predicate).apply_kernel(out)
+    return ChunkPolicy().apply(filtered)
 
 
 class EdgeBuilder:
@@ -330,7 +332,8 @@ def emit_nodes_from_table(
     }
     if "schema_version" in node_schema.names:
         columns["schema_version"] = const_array(n, schema_version, dtype=pa.int32())
-    return _table_from_schema(node_schema, columns=columns, num_rows=n)
+    out = _table_from_schema(node_schema, columns=columns, num_rows=n)
+    return ChunkPolicy().apply(out)
 
 
 class NodeBuilder:
@@ -480,7 +483,8 @@ class PropBuilder:
                 table=table,
                 options=options,
             )
-        return pa.Table.from_pylist(rows, schema=self._prop_schema)
+        out = pa.Table.from_pylist(rows, schema=self._prop_schema)
+        return ChunkPolicy().apply(out)
 
     @staticmethod
     def _table_for_spec(

@@ -5,44 +5,49 @@ from __future__ import annotations
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.column_ops import set_or_append_column
 from arrowdsl.columns import coalesce_string
-from arrowdsl.compute import pc
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import prefixed_hash_id
 from arrowdsl.iter import iter_arrays
+from arrowdsl.kernels import def_use_kind_array, masked_values, valid_pair_mask
 from arrowdsl.predicates import And, FilterSpec, IsNull, Not
 from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike
 from schema_spec.core import ArrowFieldSpec
 from schema_spec.factories import make_table_spec
 from schema_spec.fields import file_identity_bundle
+from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
 
 SCHEMA_VERSION = 1
 
-DEF_USE_SPEC = make_table_spec(
-    name="py_bc_def_use_events_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(include_sha256=False),),
-    fields=[
-        ArrowFieldSpec(name="event_id", dtype=pa.string()),
-        ArrowFieldSpec(name="instr_id", dtype=pa.string()),
-        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
-        ArrowFieldSpec(name="symbol", dtype=pa.string()),
-        ArrowFieldSpec(name="opname", dtype=pa.string()),
-        ArrowFieldSpec(name="offset", dtype=pa.int32()),
-    ],
+DEF_USE_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_bc_def_use_events_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(include_sha256=False),),
+        fields=[
+            ArrowFieldSpec(name="event_id", dtype=pa.string()),
+            ArrowFieldSpec(name="instr_id", dtype=pa.string()),
+            ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+            ArrowFieldSpec(name="kind", dtype=pa.string()),
+            ArrowFieldSpec(name="symbol", dtype=pa.string()),
+            ArrowFieldSpec(name="opname", dtype=pa.string()),
+            ArrowFieldSpec(name="offset", dtype=pa.int32()),
+        ],
+    )
 )
 
-REACHES_SPEC = make_table_spec(
-    name="py_bc_reaches_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(include_sha256=False),),
-    fields=[
-        ArrowFieldSpec(name="edge_id", dtype=pa.string()),
-        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="def_event_id", dtype=pa.string()),
-        ArrowFieldSpec(name="use_event_id", dtype=pa.string()),
-        ArrowFieldSpec(name="symbol", dtype=pa.string()),
-    ],
+REACHES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_bc_reaches_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(include_sha256=False),),
+        fields=[
+            ArrowFieldSpec(name="edge_id", dtype=pa.string()),
+            ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+            ArrowFieldSpec(name="def_event_id", dtype=pa.string()),
+            ArrowFieldSpec(name="use_event_id", dtype=pa.string()),
+            ArrowFieldSpec(name="symbol", dtype=pa.string()),
+        ],
+    )
 )
 
 DEF_USE_SCHEMA = DEF_USE_SPEC.to_arrow_schema()
@@ -50,7 +55,7 @@ REACHES_SCHEMA = REACHES_SPEC.to_arrow_schema()
 
 USE_PREFIXES = ("LOAD_",)
 DEF_PREFIXES = ("STORE_", "DELETE_")
-DEF_OPS = {"IMPORT_NAME", "IMPORT_FROM"}
+DEF_OPS = ("IMPORT_NAME", "IMPORT_FROM")
 
 
 def _prefixed_hash64(prefix: str, arrays: list[ArrayLike]) -> ArrayLike:
@@ -91,21 +96,11 @@ def build_def_use_events(py_bc_instructions: TableLike) -> TableLike:
         return empty_table(DEF_USE_SCHEMA)
     table = coalesce_string(table, symbol_cols, out_col="symbol")
 
-    opname = pc.cast(table["opname"], pa.string())
-    def_ops = pa.array(sorted(DEF_OPS), type=pa.string())
-    is_def = pc.or_(
-        pc.is_in(opname, value_set=def_ops),
-        pc.or_(
-            pc.starts_with(opname, DEF_PREFIXES[0]),
-            pc.starts_with(opname, DEF_PREFIXES[1]),
-        ),
-    )
-    is_use = pc.starts_with(opname, USE_PREFIXES[0])
-    none_str = pa.scalar(None, type=pa.string())
-    kind = pc.if_else(
-        is_def,
-        pa.scalar("def"),
-        pc.if_else(is_use, pa.scalar("use"), none_str),
+    kind = def_use_kind_array(
+        table["opname"],
+        def_ops=DEF_OPS,
+        def_prefixes=DEF_PREFIXES,
+        use_prefixes=USE_PREFIXES,
     )
     table = set_or_append_column(table, "kind", kind)
 
@@ -166,8 +161,8 @@ def run_reaching_defs(def_use_events: TableLike) -> TableLike:
     def_ids = _column_or_null(table, "def_event_id", pa.string())
     use_ids = _column_or_null(table, "use_event_id", pa.string())
     edge_prefixed = _prefixed_hash64("df_reach", [def_ids, use_ids])
-    valid = pc.and_(pc.is_valid(def_ids), pc.is_valid(use_ids))
-    edge_ids = pc.if_else(valid, edge_prefixed, pa.scalar(None, type=pa.string()))
+    valid = valid_pair_mask(def_ids, use_ids)
+    edge_ids = masked_values(edge_prefixed, mask=valid, dtype=pa.string())
     return set_or_append_column(table, "edge_id", edge_ids)
 
 

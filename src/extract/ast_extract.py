@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import arrowdsl.pyarrow_core as pa
-from arrowdsl.iter import iter_table_rows
 from arrowdsl.predicates import FilterSpec, InSet
 from arrowdsl.pyarrow_protocols import TableLike
-from extract.file_context import FileContext
+from extract.file_context import FileContext, iter_file_contexts
 from schema_spec.core import ArrowFieldSpec
 from schema_spec.factories import make_table_spec
 from schema_spec.fields import file_identity_bundle
+from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
 
 SCHEMA_VERSION = 1
 
@@ -34,49 +35,55 @@ class ASTExtractResult:
     py_ast_errors: TableLike
 
 
-AST_NODES_SPEC = make_table_spec(
-    name="py_ast_nodes_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="ast_idx", dtype=pa.int32()),
-        ArrowFieldSpec(name="parent_ast_idx", dtype=pa.int32()),
-        ArrowFieldSpec(name="field_name", dtype=pa.string()),
-        ArrowFieldSpec(name="field_pos", dtype=pa.int32()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
-        ArrowFieldSpec(name="name", dtype=pa.string()),
-        ArrowFieldSpec(name="value_repr", dtype=pa.string()),
-        ArrowFieldSpec(name="lineno", dtype=pa.int32()),
-        ArrowFieldSpec(name="col_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_lineno", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_col_offset", dtype=pa.int32()),
-    ],
+AST_NODES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_ast_nodes_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(),),
+        fields=[
+            ArrowFieldSpec(name="ast_idx", dtype=pa.int32()),
+            ArrowFieldSpec(name="parent_ast_idx", dtype=pa.int32()),
+            ArrowFieldSpec(name="field_name", dtype=pa.string()),
+            ArrowFieldSpec(name="field_pos", dtype=pa.int32()),
+            ArrowFieldSpec(name="kind", dtype=pa.string()),
+            ArrowFieldSpec(name="name", dtype=pa.string()),
+            ArrowFieldSpec(name="value_repr", dtype=pa.string()),
+            ArrowFieldSpec(name="lineno", dtype=pa.int32()),
+            ArrowFieldSpec(name="col_offset", dtype=pa.int32()),
+            ArrowFieldSpec(name="end_lineno", dtype=pa.int32()),
+            ArrowFieldSpec(name="end_col_offset", dtype=pa.int32()),
+        ],
+    )
 )
 
-AST_EDGES_SPEC = make_table_spec(
-    name="py_ast_edges_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="parent_ast_idx", dtype=pa.int32()),
-        ArrowFieldSpec(name="child_ast_idx", dtype=pa.int32()),
-        ArrowFieldSpec(name="field_name", dtype=pa.string()),
-        ArrowFieldSpec(name="field_pos", dtype=pa.int32()),
-    ],
+AST_EDGES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_ast_edges_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(),),
+        fields=[
+            ArrowFieldSpec(name="parent_ast_idx", dtype=pa.int32()),
+            ArrowFieldSpec(name="child_ast_idx", dtype=pa.int32()),
+            ArrowFieldSpec(name="field_name", dtype=pa.string()),
+            ArrowFieldSpec(name="field_pos", dtype=pa.int32()),
+        ],
+    )
 )
 
-AST_ERRORS_SPEC = make_table_spec(
-    name="py_ast_errors_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="error_type", dtype=pa.string()),
-        ArrowFieldSpec(name="message", dtype=pa.string()),
-        ArrowFieldSpec(name="lineno", dtype=pa.int32()),
-        ArrowFieldSpec(name="offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_lineno", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
-    ],
+AST_ERRORS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_ast_errors_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(),),
+        fields=[
+            ArrowFieldSpec(name="error_type", dtype=pa.string()),
+            ArrowFieldSpec(name="message", dtype=pa.string()),
+            ArrowFieldSpec(name="lineno", dtype=pa.int32()),
+            ArrowFieldSpec(name="offset", dtype=pa.int32()),
+            ArrowFieldSpec(name="end_lineno", dtype=pa.int32()),
+            ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
+        ],
+    )
 )
 
 AST_NODES_SCHEMA = AST_NODES_SPEC.to_arrow_schema()
@@ -262,12 +269,11 @@ def _walk_ast(
     return nodes_rows, edges_rows
 
 
-def _extract_ast_for_row(
-    row: dict[str, object],
+def _extract_ast_for_context(
+    file_ctx: FileContext,
     *,
     options: ASTExtractOptions,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
-    file_ctx = FileContext.from_repo_row(row)
     if not file_ctx.file_id or not file_ctx.path:
         return [], [], []
     text = _row_text(file_ctx)
@@ -294,9 +300,20 @@ def _extract_ast_for_row(
     )
     return nodes_rows, edges_rows, []
 
+def _extract_ast_for_row(
+    row: dict[str, object],
+    *,
+    options: ASTExtractOptions,
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+    file_ctx = FileContext.from_repo_row(row)
+    return _extract_ast_for_context(file_ctx, options=options)
+
 
 def extract_ast(
-    repo_files: TableLike, options: ASTExtractOptions | None = None
+    repo_files: TableLike,
+    options: ASTExtractOptions | None = None,
+    *,
+    file_contexts: Iterable[FileContext] | None = None,
 ) -> ASTExtractResult:
     """Extract a minimal AST fact set per file.
 
@@ -311,11 +328,9 @@ def extract_ast(
     edges_rows: list[dict[str, object]] = []
     err_rows: list[dict[str, object]] = []
 
-    for row in iter_table_rows(repo_files):
-        nodes, edges, errs = _extract_ast_for_row(
-            row,
-            options=options,
-        )
+    contexts = file_contexts if file_contexts is not None else iter_file_contexts(repo_files)
+    for file_ctx in contexts:
+        nodes, edges, errs = _extract_ast_for_context(file_ctx, options=options)
         nodes_rows.extend(nodes)
         edges_rows.extend(edges)
         err_rows.extend(errs)
@@ -330,6 +345,7 @@ def extract_ast_tables(
     *,
     repo_root: str | None,
     repo_files: TableLike,
+    file_contexts: Iterable[FileContext] | None = None,
     ctx: object | None = None,
 ) -> dict[str, TableLike]:
     """Extract AST tables as a name-keyed bundle.
@@ -340,6 +356,8 @@ def extract_ast_tables(
         Optional repository root (unused).
     repo_files:
         Repo files table.
+    file_contexts:
+        Optional pre-built file contexts for extraction.
     ctx:
         Execution context (unused).
 
@@ -349,7 +367,7 @@ def extract_ast_tables(
         Extracted AST tables keyed by output name.
     """
     _ = (repo_root, ctx)
-    result = extract_ast(repo_files)
+    result = extract_ast(repo_files, file_contexts=file_contexts)
     if result.py_ast_nodes.num_rows:
         predicate = InSet(
             col="kind",

@@ -19,6 +19,7 @@ from core_types import PathLike, ensure_path
 from schema_spec.core import ArrowFieldSpec
 from schema_spec.factories import make_table_spec
 from schema_spec.fields import file_identity_bundle
+from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
 
 SCHEMA_VERSION = 1
 
@@ -48,17 +49,19 @@ class RepoScanOptions:
     max_files: int | None = None
 
 
-REPO_FILES_SPEC = make_table_spec(
-    name="repo_files_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="abs_path", dtype=pa.string()),
-        ArrowFieldSpec(name="size_bytes", dtype=pa.int64()),
-        ArrowFieldSpec(name="encoding", dtype=pa.string()),
-        ArrowFieldSpec(name="text", dtype=pa.string()),
-        ArrowFieldSpec(name="bytes", dtype=pa.binary()),
-    ],
+REPO_FILES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="repo_files_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(),),
+        fields=[
+            ArrowFieldSpec(name="abs_path", dtype=pa.string()),
+            ArrowFieldSpec(name="size_bytes", dtype=pa.int64()),
+            ArrowFieldSpec(name="encoding", dtype=pa.string()),
+            ArrowFieldSpec(name="text", dtype=pa.string()),
+            ArrowFieldSpec(name="bytes", dtype=pa.binary()),
+        ],
+    )
 )
 
 REPO_FILES_SCHEMA = REPO_FILES_SPEC.to_arrow_schema()

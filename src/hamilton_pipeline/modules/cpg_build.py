@@ -60,7 +60,7 @@ from schema_spec.factories import (
     table_spec_from_schema,
 )
 from schema_spec.fields import call_span_bundle, span_bundle
-from schema_spec.registry import SchemaRegistry
+from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY, SchemaRegistry
 from storage.parquet import ParquetWriteOptions, write_named_datasets_parquet
 
 # -----------------------------
@@ -79,78 +79,86 @@ def relationship_contract_spec() -> ContractCatalogSpec:
     ContractCatalogSpec
         Contract catalog specification for relationship outputs.
     """
-    rel_name_symbol_spec = make_table_spec(
-        name="rel_name_symbol_v1",
-        version=SCHEMA_VERSION,
-        bundles=(span_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="name_ref_id", dtype=pa.string()),
-            ArrowFieldSpec(name="symbol", dtype=pa.string()),
-            ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
-            ArrowFieldSpec(name="path", dtype=pa.string()),
-            ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
-            ArrowFieldSpec(name="confidence", dtype=pa.float32()),
-            ArrowFieldSpec(name="score", dtype=pa.float32()),
-            ArrowFieldSpec(name="rule_name", dtype=pa.string()),
-            ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
-        ],
-        constraints=TableSpecConstraints(required_non_null=("name_ref_id", "symbol")),
+    rel_name_symbol_spec = GLOBAL_SCHEMA_REGISTRY.register_table(
+        make_table_spec(
+            name="rel_name_symbol_v1",
+            version=SCHEMA_VERSION,
+            bundles=(span_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="name_ref_id", dtype=pa.string()),
+                ArrowFieldSpec(name="symbol", dtype=pa.string()),
+                ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
+                ArrowFieldSpec(name="path", dtype=pa.string()),
+                ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
+                ArrowFieldSpec(name="confidence", dtype=pa.float32()),
+                ArrowFieldSpec(name="score", dtype=pa.float32()),
+                ArrowFieldSpec(name="rule_name", dtype=pa.string()),
+                ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
+            ],
+            constraints=TableSpecConstraints(required_non_null=("name_ref_id", "symbol")),
+        )
     )
 
-    rel_import_symbol_spec = make_table_spec(
-        name="rel_import_symbol_v1",
-        version=SCHEMA_VERSION,
-        bundles=(span_bundle(),),
-        fields=[
-            ArrowFieldSpec(name="import_alias_id", dtype=pa.string()),
-            ArrowFieldSpec(name="symbol", dtype=pa.string()),
-            ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
-            ArrowFieldSpec(name="path", dtype=pa.string()),
-            ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
-            ArrowFieldSpec(name="confidence", dtype=pa.float32()),
-            ArrowFieldSpec(name="score", dtype=pa.float32()),
-            ArrowFieldSpec(name="rule_name", dtype=pa.string()),
-            ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
-        ],
-        constraints=TableSpecConstraints(required_non_null=("import_alias_id", "symbol")),
+    rel_import_symbol_spec = GLOBAL_SCHEMA_REGISTRY.register_table(
+        make_table_spec(
+            name="rel_import_symbol_v1",
+            version=SCHEMA_VERSION,
+            bundles=(span_bundle(),),
+            fields=[
+                ArrowFieldSpec(name="import_alias_id", dtype=pa.string()),
+                ArrowFieldSpec(name="symbol", dtype=pa.string()),
+                ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
+                ArrowFieldSpec(name="path", dtype=pa.string()),
+                ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
+                ArrowFieldSpec(name="confidence", dtype=pa.float32()),
+                ArrowFieldSpec(name="score", dtype=pa.float32()),
+                ArrowFieldSpec(name="rule_name", dtype=pa.string()),
+                ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
+            ],
+            constraints=TableSpecConstraints(required_non_null=("import_alias_id", "symbol")),
+        )
     )
 
-    rel_callsite_symbol_spec = make_table_spec(
-        name="rel_callsite_symbol_v1",
-        version=SCHEMA_VERSION,
-        bundles=(),
-        fields=[
-            ArrowFieldSpec(name="call_id", dtype=pa.string()),
-            ArrowFieldSpec(name="symbol", dtype=pa.string()),
-            ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
-            ArrowFieldSpec(name="path", dtype=pa.string()),
-            *call_span_bundle().fields,
-            ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
-            ArrowFieldSpec(name="confidence", dtype=pa.float32()),
-            ArrowFieldSpec(name="score", dtype=pa.float32()),
-            ArrowFieldSpec(name="rule_name", dtype=pa.string()),
-            ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
-        ],
-        constraints=TableSpecConstraints(required_non_null=("call_id", "symbol")),
+    rel_callsite_symbol_spec = GLOBAL_SCHEMA_REGISTRY.register_table(
+        make_table_spec(
+            name="rel_callsite_symbol_v1",
+            version=SCHEMA_VERSION,
+            bundles=(),
+            fields=[
+                ArrowFieldSpec(name="call_id", dtype=pa.string()),
+                ArrowFieldSpec(name="symbol", dtype=pa.string()),
+                ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
+                ArrowFieldSpec(name="path", dtype=pa.string()),
+                *call_span_bundle().fields,
+                ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
+                ArrowFieldSpec(name="confidence", dtype=pa.float32()),
+                ArrowFieldSpec(name="score", dtype=pa.float32()),
+                ArrowFieldSpec(name="rule_name", dtype=pa.string()),
+                ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
+            ],
+            constraints=TableSpecConstraints(required_non_null=("call_id", "symbol")),
+        )
     )
 
-    rel_callsite_qname_spec = make_table_spec(
-        name="rel_callsite_qname_v1",
-        version=SCHEMA_VERSION,
-        bundles=(),
-        fields=[
-            ArrowFieldSpec(name="call_id", dtype=pa.string()),
-            ArrowFieldSpec(name="qname_id", dtype=pa.string()),
-            ArrowFieldSpec(name="qname_source", dtype=pa.string()),
-            ArrowFieldSpec(name="path", dtype=pa.string()),
-            *call_span_bundle().fields,
-            ArrowFieldSpec(name="confidence", dtype=pa.float32()),
-            ArrowFieldSpec(name="score", dtype=pa.float32()),
-            ArrowFieldSpec(name="ambiguity_group_id", dtype=pa.string()),
-            ArrowFieldSpec(name="rule_name", dtype=pa.string()),
-            ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
-        ],
-        constraints=TableSpecConstraints(required_non_null=("call_id", "qname_id")),
+    rel_callsite_qname_spec = GLOBAL_SCHEMA_REGISTRY.register_table(
+        make_table_spec(
+            name="rel_callsite_qname_v1",
+            version=SCHEMA_VERSION,
+            bundles=(),
+            fields=[
+                ArrowFieldSpec(name="call_id", dtype=pa.string()),
+                ArrowFieldSpec(name="qname_id", dtype=pa.string()),
+                ArrowFieldSpec(name="qname_source", dtype=pa.string()),
+                ArrowFieldSpec(name="path", dtype=pa.string()),
+                *call_span_bundle().fields,
+                ArrowFieldSpec(name="confidence", dtype=pa.float32()),
+                ArrowFieldSpec(name="score", dtype=pa.float32()),
+                ArrowFieldSpec(name="ambiguity_group_id", dtype=pa.string()),
+                ArrowFieldSpec(name="rule_name", dtype=pa.string()),
+                ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
+            ],
+            constraints=TableSpecConstraints(required_non_null=("call_id", "qname_id")),
+        )
     )
 
     return ContractCatalogSpec(
@@ -256,7 +264,7 @@ def schema_registry(
     SchemaRegistry
         Registry containing table and contract specs.
     """
-    registry = SchemaRegistry()
+    registry = GLOBAL_SCHEMA_REGISTRY
     register_cpg_specs(registry)
     return relationship_contract_spec.register_into(registry)
 

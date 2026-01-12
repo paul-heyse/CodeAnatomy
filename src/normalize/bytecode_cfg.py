@@ -12,36 +12,41 @@ from normalize.schema_infer import align_table_to_schema
 from schema_spec.core import ArrowFieldSpec
 from schema_spec.factories import make_table_spec
 from schema_spec.fields import file_identity_bundle
+from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
 
 SCHEMA_VERSION = 1
 
-CFG_BLOCKS_NORM_SPEC = make_table_spec(
-    name="py_bc_blocks_norm_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(include_sha256=False),),
-    fields=[
-        ArrowFieldSpec(name="block_id", dtype=pa.string()),
-        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
-    ],
+CFG_BLOCKS_NORM_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_bc_blocks_norm_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(include_sha256=False),),
+        fields=[
+            ArrowFieldSpec(name="block_id", dtype=pa.string()),
+            ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+            ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
+            ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
+            ArrowFieldSpec(name="kind", dtype=pa.string()),
+        ],
+    )
 )
 
 
-CFG_EDGES_NORM_SPEC = make_table_spec(
-    name="py_bc_cfg_edges_norm_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(include_sha256=False),),
-    fields=[
-        ArrowFieldSpec(name="edge_id", dtype=pa.string()),
-        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="src_block_id", dtype=pa.string()),
-        ArrowFieldSpec(name="dst_block_id", dtype=pa.string()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
-        ArrowFieldSpec(name="cond_instr_id", dtype=pa.string()),
-        ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
-    ],
+CFG_EDGES_NORM_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_bc_cfg_edges_norm_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(include_sha256=False),),
+        fields=[
+            ArrowFieldSpec(name="edge_id", dtype=pa.string()),
+            ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+            ArrowFieldSpec(name="src_block_id", dtype=pa.string()),
+            ArrowFieldSpec(name="dst_block_id", dtype=pa.string()),
+            ArrowFieldSpec(name="kind", dtype=pa.string()),
+            ArrowFieldSpec(name="cond_instr_id", dtype=pa.string()),
+            ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
+        ],
+    )
 )
 
 CFG_BLOCKS_NORM_SCHEMA = CFG_BLOCKS_NORM_SPEC.to_arrow_schema()

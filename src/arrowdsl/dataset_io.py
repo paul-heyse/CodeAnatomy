@@ -127,7 +127,7 @@ def compile_to_acero_scan(
 
     filter_spec = spec.filter_spec()
     if filter_spec is not None:
-        scan = FilterOp(predicate=filter_spec.to_expression()).to_declaration([scan], ctx=None)
+        scan = FilterOp(predicate=filter_spec.to_expression()).to_declaration([scan], ctx=ctx)
 
     cols = spec.scan_columns(provenance=ctx.provenance)
     if isinstance(cols, dict):
@@ -137,4 +137,4 @@ def compile_to_acero_scan(
         proj_exprs = [pc.field(col) for col in cols]
         proj_names = list(cols)
 
-    return ProjectOp(expressions=proj_exprs, names=proj_names).to_declaration([scan], ctx=None)
+    return ProjectOp(expressions=proj_exprs, names=proj_names).to_declaration([scan], ctx=ctx)

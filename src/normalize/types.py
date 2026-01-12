@@ -14,36 +14,41 @@ from arrowdsl.pyarrow_protocols import ArrayLike, TableLike
 from schema_spec.core import ArrowFieldSpec
 from schema_spec.factories import make_table_spec
 from schema_spec.fields import file_identity_bundle, span_bundle
+from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
 
 SCHEMA_VERSION = 1
 
 
-TYPE_EXPRS_NORM_SPEC = make_table_spec(
-    name="type_exprs_norm_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(include_sha256=False), span_bundle()),
-    fields=[
-        ArrowFieldSpec(name="type_expr_id", dtype=pa.string()),
-        ArrowFieldSpec(name="owner_def_id", dtype=pa.string()),
-        ArrowFieldSpec(name="param_name", dtype=pa.string()),
-        ArrowFieldSpec(name="expr_kind", dtype=pa.string()),
-        ArrowFieldSpec(name="expr_role", dtype=pa.string()),
-        ArrowFieldSpec(name="expr_text", dtype=pa.string()),
-        ArrowFieldSpec(name="type_repr", dtype=pa.string()),
-        ArrowFieldSpec(name="type_id", dtype=pa.string()),
-    ],
+TYPE_EXPRS_NORM_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="type_exprs_norm_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(include_sha256=False), span_bundle()),
+        fields=[
+            ArrowFieldSpec(name="type_expr_id", dtype=pa.string()),
+            ArrowFieldSpec(name="owner_def_id", dtype=pa.string()),
+            ArrowFieldSpec(name="param_name", dtype=pa.string()),
+            ArrowFieldSpec(name="expr_kind", dtype=pa.string()),
+            ArrowFieldSpec(name="expr_role", dtype=pa.string()),
+            ArrowFieldSpec(name="expr_text", dtype=pa.string()),
+            ArrowFieldSpec(name="type_repr", dtype=pa.string()),
+            ArrowFieldSpec(name="type_id", dtype=pa.string()),
+        ],
+    )
 )
 
-TYPE_NODES_SPEC = make_table_spec(
-    name="type_nodes_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=[
-        ArrowFieldSpec(name="type_id", dtype=pa.string()),
-        ArrowFieldSpec(name="type_repr", dtype=pa.string()),
-        ArrowFieldSpec(name="type_form", dtype=pa.string()),
-        ArrowFieldSpec(name="origin", dtype=pa.string()),
-    ],
+TYPE_NODES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="type_nodes_v1",
+        version=SCHEMA_VERSION,
+        bundles=(),
+        fields=[
+            ArrowFieldSpec(name="type_id", dtype=pa.string()),
+            ArrowFieldSpec(name="type_repr", dtype=pa.string()),
+            ArrowFieldSpec(name="type_form", dtype=pa.string()),
+            ArrowFieldSpec(name="origin", dtype=pa.string()),
+        ],
+    )
 )
 
 TYPE_EXPRS_NORM_SCHEMA = TYPE_EXPRS_NORM_SPEC.to_arrow_schema()

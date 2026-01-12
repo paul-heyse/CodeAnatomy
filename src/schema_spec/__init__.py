@@ -9,7 +9,7 @@ from schema_spec.catalogs import ContractCatalogSpec
 from schema_spec.contracts import ContractSpec, DedupeSpecSpec, SortKeySpec
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
 from schema_spec.fields import DICT_STRING, PROVENANCE_COLS, FieldBundle
-from schema_spec.registry import SchemaRegistry
+from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY, SchemaRegistry
 
 if TYPE_CHECKING:
     from schema_spec.factories import (
@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DICT_STRING",
+    "GLOBAL_SCHEMA_REGISTRY",
     "PROVENANCE_COLS",
     "ArrowFieldSpec",
     "ContractCatalogSpec",

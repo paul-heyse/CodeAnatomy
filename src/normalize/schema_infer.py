@@ -100,7 +100,6 @@ def unify_schemas(
     opts = opts or SchemaInferOptions()
     if not schemas:
         return pa.schema([])
-
     try:
         return pa.unify_schemas(list(schemas), promote_options=opts.promote_options)
     except TypeError:
@@ -183,5 +182,11 @@ def align_tables_to_unified_schema(
     """
     opts = opts or SchemaInferOptions()
     schema = infer_schema_from_tables(list(tables), opts=opts)
-    aligned = [align_table_to_schema(t, schema, opts=opts) for t in tables]
+    transform = SchemaTransform(
+        schema=schema,
+        safe_cast=opts.safe_cast,
+        keep_extra_columns=opts.keep_extra_columns,
+        on_error="keep",
+    )
+    aligned = [transform.apply(t) for t in tables]
     return schema, aligned

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from hamilton.function_modifiers import cache, config, extract_fields, tag
@@ -16,6 +17,7 @@ from extract.bytecode_extract import (
     extract_bytecode_table,
 )
 from extract.cst_extract import extract_cst_tables
+from extract.file_context import FileContext, iter_file_contexts
 from extract.repo_scan import RepoScanOptions, scan_repo
 from extract.runtime_inspect_extract import (
     RT_MEMBERS_SCHEMA,
@@ -71,6 +73,20 @@ def repo_files(
 
 
 @cache()
+@tag(layer="extract", artifact="file_contexts", kind="object")
+def file_contexts(repo_files: TableLike, ctx: ExecutionContext) -> tuple[FileContext, ...]:
+    """Build file contexts from the repo_files table.
+
+    Returns
+    -------
+    tuple[FileContext, ...]
+        File contexts for each repo file row.
+    """
+    _ = ctx
+    return tuple(iter_file_contexts(repo_files))
+
+
+@cache()
 @extract_fields(
     {
         "cst_parse_manifest": TableLike,
@@ -84,7 +100,10 @@ def repo_files(
 )
 @tag(layer="extract", artifact="cst_bundle", kind="bundle")
 def cst_bundle(
-    repo_root: str, repo_files: TableLike, ctx: ExecutionContext
+    repo_root: str,
+    repo_files: TableLike,
+    file_contexts: Sequence[FileContext],
+    ctx: ExecutionContext,
 ) -> dict[str, TableLike]:
     """Build the LibCST extraction bundle.
 
@@ -102,7 +121,12 @@ def cst_bundle(
     dict[str, TableLike]
         Bundle tables for LibCST extraction.
     """
-    return extract_cst_tables(repo_root=repo_root, repo_files=repo_files, ctx=ctx)
+    return extract_cst_tables(
+        repo_root=repo_root,
+        repo_files=repo_files,
+        file_contexts=file_contexts,
+        ctx=ctx,
+    )
 
 
 @cache()
@@ -115,7 +139,10 @@ def cst_bundle(
 )
 @tag(layer="extract", artifact="ast_bundle", kind="bundle")
 def ast_bundle(
-    repo_root: str, repo_files: TableLike, ctx: ExecutionContext
+    repo_root: str,
+    repo_files: TableLike,
+    file_contexts: Sequence[FileContext],
+    ctx: ExecutionContext,
 ) -> dict[str, TableLike]:
     """Build the Python AST extraction bundle.
 
@@ -124,7 +151,12 @@ def ast_bundle(
     dict[str, TableLike]
         Bundle tables for AST extraction.
     """
-    return extract_ast_tables(repo_root=repo_root, repo_files=repo_files, ctx=ctx)
+    return extract_ast_tables(
+        repo_root=repo_root,
+        repo_files=repo_files,
+        file_contexts=file_contexts,
+        ctx=ctx,
+    )
 
 
 @cache()
@@ -207,7 +239,12 @@ def scip_index_path(
 
 @cache()
 @tag(layer="extract", artifact="symtables", kind="table")
-def symtables(repo_root: str, repo_files: TableLike, ctx: ExecutionContext) -> TableLike:
+def symtables(
+    repo_root: str,
+    repo_files: TableLike,
+    file_contexts: Sequence[FileContext],
+    ctx: ExecutionContext,
+) -> TableLike:
     """Extract symbol table data into a table.
 
     Returns
@@ -215,12 +252,22 @@ def symtables(repo_root: str, repo_files: TableLike, ctx: ExecutionContext) -> T
     TableLike
         Symbol table extraction table.
     """
-    return extract_symtables_table(repo_root=repo_root, repo_files=repo_files, ctx=ctx)
+    return extract_symtables_table(
+        repo_root=repo_root,
+        repo_files=repo_files,
+        file_contexts=file_contexts,
+        ctx=ctx,
+    )
 
 
 @cache()
 @tag(layer="extract", artifact="bytecode", kind="table")
-def bytecode(repo_root: str, repo_files: TableLike, ctx: ExecutionContext) -> TableLike:
+def bytecode(
+    repo_root: str,
+    repo_files: TableLike,
+    file_contexts: Sequence[FileContext],
+    ctx: ExecutionContext,
+) -> TableLike:
     """Extract bytecode data into a table.
 
     Returns
@@ -228,7 +275,12 @@ def bytecode(repo_root: str, repo_files: TableLike, ctx: ExecutionContext) -> Ta
     TableLike
         Bytecode extraction table.
     """
-    return extract_bytecode_table(repo_root=repo_root, repo_files=repo_files, ctx=ctx)
+    return extract_bytecode_table(
+        repo_root=repo_root,
+        repo_files=repo_files,
+        file_contexts=file_contexts,
+        ctx=ctx,
+    )
 
 
 @cache()
@@ -246,6 +298,7 @@ def bytecode(repo_root: str, repo_files: TableLike, ctx: ExecutionContext) -> Ta
 def bytecode_bundle(
     repo_root: str,
     repo_files: TableLike,
+    file_contexts: Sequence[FileContext],
     ctx: ExecutionContext,
 ) -> dict[str, TableLike]:
     """Extract bytecode tables as a bundle.
@@ -257,7 +310,11 @@ def bytecode_bundle(
     """
     _ = repo_root
     _ = ctx
-    result = extract_bytecode(repo_files, options=BytecodeExtractOptions())
+    result = extract_bytecode(
+        repo_files,
+        options=BytecodeExtractOptions(),
+        file_contexts=file_contexts,
+    )
     return {
         "py_bc_code_units": result.py_bc_code_units,
         "py_bc_instructions": result.py_bc_instructions,
@@ -281,6 +338,7 @@ def bytecode_bundle(
 def tree_sitter_bundle(
     repo_root: str,
     repo_files: TableLike,
+    file_contexts: Sequence[FileContext],
     ctx: ExecutionContext,
 ) -> dict[str, TableLike]:
     """Extract tree-sitter nodes and diagnostics.
@@ -290,7 +348,12 @@ def tree_sitter_bundle(
     dict[str, TableLike]
         Tree-sitter tables for nodes and diagnostics.
     """
-    return extract_ts_tables(repo_root=repo_root, repo_files=repo_files, ctx=ctx)
+    return extract_ts_tables(
+        repo_root=repo_root,
+        repo_files=repo_files,
+        file_contexts=file_contexts,
+        ctx=ctx,
+    )
 
 
 @cache()
@@ -306,6 +369,7 @@ def tree_sitter_bundle(
 def tree_sitter_bundle_disabled(
     repo_root: str,
     repo_files: TableLike,
+    file_contexts: Sequence[FileContext],
     ctx: ExecutionContext,
 ) -> dict[str, TableLike]:
     """Return empty tree-sitter tables when extraction is disabled.
@@ -317,6 +381,7 @@ def tree_sitter_bundle_disabled(
     """
     _ = repo_root
     _ = repo_files
+    _ = file_contexts
     _ = ctx
     return {
         "ts_nodes": _empty_table(TS_NODES_SCHEMA),

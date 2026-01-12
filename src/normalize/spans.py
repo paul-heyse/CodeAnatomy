@@ -19,6 +19,7 @@ from normalize.ids import add_span_id_column
 from schema_spec.core import ArrowFieldSpec
 from schema_spec.factories import make_table_spec
 from schema_spec.fields import scip_range_bundle
+from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
 
 type RowValue = object | None
 
@@ -135,15 +136,17 @@ class OccurrenceSpanResult:
     error: dict[str, str] | None
 
 
-SPAN_ERROR_SPEC = make_table_spec(
-    name="span_errors_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=[
-        ArrowFieldSpec(name="document_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="reason", dtype=pa.string()),
-    ],
+SPAN_ERROR_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="span_errors_v1",
+        version=SCHEMA_VERSION,
+        bundles=(),
+        fields=[
+            ArrowFieldSpec(name="document_id", dtype=pa.string()),
+            ArrowFieldSpec(name="path", dtype=pa.string()),
+            ArrowFieldSpec(name="reason", dtype=pa.string()),
+        ],
+    )
 )
 
 SPAN_ERROR_SCHEMA = SPAN_ERROR_SPEC.to_arrow_schema()

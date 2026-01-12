@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Literal
 
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
-from arrowdsl.pyarrow_protocols import TableLike
+from arrowdsl.pyarrow_protocols import (
+    ArrayLike,
+    ChunkedArrayLike,
+    DataTypeLike,
+    ScalarLike,
+    TableLike,
+)
 from arrowdsl.runtime import DeterminismTier, ExecutionContext
 from arrowdsl.specs import AggregateSpec, DedupeSpec, JoinSpec, SortKey
 from schema_spec.fields import PROVENANCE_COLS
@@ -22,6 +29,176 @@ def provenance_sort_keys() -> tuple[str, ...]:
         Provenance column names for tie-breaking sorts.
     """
     return PROVENANCE_COLS
+
+
+@dataclass(frozen=True)
+class ChunkPolicy:
+    """Normalization policy for dictionary encoding and chunking."""
+
+    unify_dictionaries: bool = True
+    combine_chunks: bool = True
+
+    def apply(self, table: TableLike) -> TableLike:
+        """Apply dictionary unification and chunk combination.
+
+        Returns
+        -------
+        TableLike
+            Normalized table with unified dictionaries and combined chunks.
+        """
+        out = table
+        if self.unify_dictionaries:
+            out = out.unify_dictionaries()
+        if self.combine_chunks:
+            out = out.combine_chunks()
+        return out
+
+
+def cast_array(
+    values: ArrayLike | ChunkedArrayLike,
+    dtype: DataTypeLike,
+    *,
+    safe: bool = True,
+) -> ArrayLike | ChunkedArrayLike:
+    """Cast an array or chunked array to the requested type.
+
+    Returns
+    -------
+    ArrayLike | ChunkedArrayLike
+        Casted values.
+    """
+    return pc.cast(values, dtype, safe=safe)
+
+
+def coalesce_arrays(
+    arrays: Sequence[ArrayLike | ChunkedArrayLike | ScalarLike],
+) -> ArrayLike | ChunkedArrayLike:
+    """Coalesce multiple arrays, taking the first non-null value per row.
+
+    Returns
+    -------
+    ArrayLike | ChunkedArrayLike
+        Coalesced array.
+
+    Raises
+    ------
+    ValueError
+        Raised when no arrays are provided.
+    """
+    if not arrays:
+        msg = "coalesce_arrays requires at least one array."
+        raise ValueError(msg)
+    return pc.coalesce(*arrays)
+
+
+def drop_nulls(values: ArrayLike | ChunkedArrayLike) -> ArrayLike:
+    """Drop null values from an array.
+
+    Returns
+    -------
+    ArrayLike
+        Array with nulls removed.
+    """
+    return pc.drop_null(values)
+
+
+def severity_score_array(
+    severity: ArrayLike | ChunkedArrayLike,
+) -> ArrayLike | ChunkedArrayLike:
+    """Map severity labels to float scores.
+
+    Returns
+    -------
+    ArrayLike | ChunkedArrayLike
+        Float32 score array.
+    """
+    severity_str = cast_array(severity, pa.string())
+    severity_str = pc.fill_null(severity_str, fill_value="ERROR")
+    is_error = pc.equal(severity_str, pa.scalar("ERROR"))
+    is_warning = pc.equal(severity_str, pa.scalar("WARNING"))
+    score = pc.if_else(
+        is_error, pa.scalar(1.0), pc.if_else(is_warning, pa.scalar(0.7), pa.scalar(0.5))
+    )
+    return cast_array(score, pa.float32())
+
+
+def bitmask_flag_array(
+    values: ArrayLike | ChunkedArrayLike,
+    *,
+    mask: int,
+) -> ArrayLike | ChunkedArrayLike:
+    """Return an int32 flag where the bitmask is set.
+
+    Returns
+    -------
+    ArrayLike | ChunkedArrayLike
+        Int32 array with 1 where the bit is set, else 0.
+    """
+    roles = cast_array(values, pa.int64())
+    flag = pc.not_equal(pc.bit_wise_and(roles, pa.scalar(mask)), pa.scalar(0))
+    return cast_array(flag, pa.int32())
+
+
+def def_use_kind_array(
+    opname: ArrayLike | ChunkedArrayLike,
+    *,
+    def_ops: Sequence[str],
+    def_prefixes: Sequence[str],
+    use_prefixes: Sequence[str],
+) -> ArrayLike:
+    """Classify opnames into def/use kinds.
+
+    Returns
+    -------
+    ArrayLike
+        String array with "def", "use", or null.
+    """
+    opname_str = cast_array(opname, pa.string())
+    def_ops_arr = pa.array(sorted(def_ops), type=pa.string())
+    is_def = pc.or_(
+        pc.is_in(opname_str, value_set=def_ops_arr),
+        pc.or_(
+            pc.starts_with(opname_str, def_prefixes[0]),
+            pc.starts_with(opname_str, def_prefixes[1]),
+        ),
+    )
+    is_use = pc.starts_with(opname_str, use_prefixes[0])
+    none_str = pa.scalar(None, type=pa.string())
+    return pc.if_else(
+        is_def,
+        pa.scalar("def"),
+        pc.if_else(is_use, pa.scalar("use"), none_str),
+    )
+
+
+def valid_pair_mask(
+    left: ArrayLike | ChunkedArrayLike,
+    right: ArrayLike | ChunkedArrayLike,
+) -> ArrayLike | ChunkedArrayLike:
+    """Return a mask where both inputs are valid.
+
+    Returns
+    -------
+    ArrayLike | ChunkedArrayLike
+        Boolean mask.
+    """
+    return pc.and_(pc.is_valid(left), pc.is_valid(right))
+
+
+def masked_values(
+    values: ArrayLike | ChunkedArrayLike,
+    *,
+    mask: ArrayLike | ChunkedArrayLike,
+    dtype: DataTypeLike,
+) -> ArrayLike | ChunkedArrayLike:
+    """Return values where mask is true; null elsewhere.
+
+    Returns
+    -------
+    ArrayLike | ChunkedArrayLike
+        Masked values.
+    """
+    return pc.if_else(mask, values, pa.scalar(None, type=dtype))
 
 
 def _append_provenance_keys(table: TableLike, sort_keys: Sequence[SortKey]) -> list[SortKey]:
@@ -65,6 +242,7 @@ def apply_join(
     *,
     spec: JoinSpec,
     use_threads: bool = True,
+    chunk_policy: ChunkPolicy | None = None,
 ) -> TableLike:
     """Join two tables using a shared JoinSpec.
 
@@ -78,6 +256,8 @@ def apply_join(
         Join specification.
     use_threads:
         Whether to use threaded join execution.
+    chunk_policy:
+        Optional chunk normalization policy applied to inputs.
 
     Returns
     -------
@@ -92,6 +272,9 @@ def apply_join(
     if not spec.left_keys:
         msg = "JoinSpec.left_keys must be provided for table joins."
         raise ValueError(msg)
+    policy = chunk_policy or ChunkPolicy()
+    left = policy.apply(left)
+    right = policy.apply(right)
     right_keys = list(spec.right_keys) if spec.right_keys else list(spec.left_keys)
     join_type = spec.join_type.replace("_", " ")
     joined = left.join(

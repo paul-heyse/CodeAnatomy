@@ -4,17 +4,22 @@ from __future__ import annotations
 
 import dis
 import types as pytypes
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
 import arrowdsl.pyarrow_core as pa
-from arrowdsl.ids import prefixed_hash_id_from_parts
-from arrowdsl.iter import iter_table_rows
+from arrowdsl.column_ops import set_or_append_column
+from arrowdsl.compute import pc
+from arrowdsl.empty import empty_table
+from arrowdsl.id_specs import HashSpec
+from arrowdsl.ids import hash_column_values
 from arrowdsl.pyarrow_protocols import TableLike
-from extract.file_context import FileContext
+from arrowdsl.schema_ops import SchemaTransform
+from extract.file_context import FileContext, iter_file_contexts
 from schema_spec.core import ArrowFieldSpec
 from schema_spec.factories import make_table_spec
 from schema_spec.fields import file_identity_bundle
+from schema_spec.registry import GLOBAL_SCHEMA_REGISTRY
 
 type RowValue = str | int | bool | None
 type Row = dict[str, RowValue]
@@ -107,10 +112,19 @@ class InstructionData:
 
 
 @dataclass(frozen=True)
+class CodeUnitKey:
+    """Key fields identifying a code unit."""
+
+    qualpath: str
+    co_name: str
+    firstlineno: int
+
+
+@dataclass(frozen=True)
 class CodeUnitContext:
     """Per-code-unit extraction context."""
 
-    cu_id: str
+    code_unit_key: CodeUnitKey
     file_ctx: BytecodeFileContext
     instruction_data: InstructionData
     exc_entries: Sequence[object]
@@ -121,12 +135,38 @@ class CodeUnitContext:
 class CfgEdgeSpec:
     """CFG edge descriptor."""
 
-    src_block_id: str
-    dst_block_id: str
+    src_block_start: int
+    src_block_end: int
+    dst_block_start: int
+    dst_block_end: int
     kind: str
     edge_key: str
-    cond_instr_id: str | None
+    cond_instr_index: int | None
+    cond_instr_offset: int | None
     exc_index: int | None
+
+
+@dataclass(frozen=True)
+class _CfgEdgeContext:
+    """Context data for CFG edge derivation."""
+
+    unit_ctx: CodeUnitContext
+    instructions: Sequence[dis.Instruction]
+    index_by_offset: Mapping[int, int]
+    terminators: Sequence[str]
+    off_to_block: Mapping[int, tuple[int, int]]
+    edge_rows: list[Row]
+
+
+@dataclass(frozen=True)
+class _BlockEdgeContext:
+    """Per-block inputs for CFG edge derivation."""
+
+    src_start: int
+    src_end: int
+    end: int
+    last: dis.Instruction
+    last_index: int
 
 
 @dataclass
@@ -141,102 +181,114 @@ class BytecodeRowBuffers:
     error_rows: list[Row]
 
 
-CODE_UNITS_SPEC = make_table_spec(
-    name="py_bc_code_units_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="parent_code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="qualpath", dtype=pa.string()),
-        ArrowFieldSpec(name="co_name", dtype=pa.string()),
-        ArrowFieldSpec(name="firstlineno", dtype=pa.int32()),
-        ArrowFieldSpec(name="argcount", dtype=pa.int32()),
-        ArrowFieldSpec(name="posonlyargcount", dtype=pa.int32()),
-        ArrowFieldSpec(name="kwonlyargcount", dtype=pa.int32()),
-        ArrowFieldSpec(name="nlocals", dtype=pa.int32()),
-        ArrowFieldSpec(name="flags", dtype=pa.int32()),
-        ArrowFieldSpec(name="stacksize", dtype=pa.int32()),
-        ArrowFieldSpec(name="code_len", dtype=pa.int32()),
-    ],
+CODE_UNITS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_bc_code_units_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(),),
+        fields=[
+            ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+            ArrowFieldSpec(name="parent_code_unit_id", dtype=pa.string()),
+            ArrowFieldSpec(name="qualpath", dtype=pa.string()),
+            ArrowFieldSpec(name="co_name", dtype=pa.string()),
+            ArrowFieldSpec(name="firstlineno", dtype=pa.int32()),
+            ArrowFieldSpec(name="argcount", dtype=pa.int32()),
+            ArrowFieldSpec(name="posonlyargcount", dtype=pa.int32()),
+            ArrowFieldSpec(name="kwonlyargcount", dtype=pa.int32()),
+            ArrowFieldSpec(name="nlocals", dtype=pa.int32()),
+            ArrowFieldSpec(name="flags", dtype=pa.int32()),
+            ArrowFieldSpec(name="stacksize", dtype=pa.int32()),
+            ArrowFieldSpec(name="code_len", dtype=pa.int32()),
+        ],
+    )
 )
 
-INSTR_SPEC = make_table_spec(
-    name="py_bc_instructions_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="instr_id", dtype=pa.string()),
-        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="instr_index", dtype=pa.int32()),
-        ArrowFieldSpec(name="offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="opname", dtype=pa.string()),
-        ArrowFieldSpec(name="opcode", dtype=pa.int32()),
-        ArrowFieldSpec(name="arg", dtype=pa.int32()),
-        ArrowFieldSpec(name="argval_str", dtype=pa.string()),
-        ArrowFieldSpec(name="argrepr", dtype=pa.string()),
-        ArrowFieldSpec(name="is_jump_target", dtype=pa.bool_()),
-        ArrowFieldSpec(name="jump_target_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="starts_line", dtype=pa.int32()),
-        ArrowFieldSpec(name="pos_start_line", dtype=pa.int32()),
-        ArrowFieldSpec(name="pos_end_line", dtype=pa.int32()),
-        ArrowFieldSpec(name="pos_start_col", dtype=pa.int32()),
-        ArrowFieldSpec(name="pos_end_col", dtype=pa.int32()),
-    ],
+INSTR_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_bc_instructions_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(),),
+        fields=[
+            ArrowFieldSpec(name="instr_id", dtype=pa.string()),
+            ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+            ArrowFieldSpec(name="instr_index", dtype=pa.int32()),
+            ArrowFieldSpec(name="offset", dtype=pa.int32()),
+            ArrowFieldSpec(name="opname", dtype=pa.string()),
+            ArrowFieldSpec(name="opcode", dtype=pa.int32()),
+            ArrowFieldSpec(name="arg", dtype=pa.int32()),
+            ArrowFieldSpec(name="argval_str", dtype=pa.string()),
+            ArrowFieldSpec(name="argrepr", dtype=pa.string()),
+            ArrowFieldSpec(name="is_jump_target", dtype=pa.bool_()),
+            ArrowFieldSpec(name="jump_target_offset", dtype=pa.int32()),
+            ArrowFieldSpec(name="starts_line", dtype=pa.int32()),
+            ArrowFieldSpec(name="pos_start_line", dtype=pa.int32()),
+            ArrowFieldSpec(name="pos_end_line", dtype=pa.int32()),
+            ArrowFieldSpec(name="pos_start_col", dtype=pa.int32()),
+            ArrowFieldSpec(name="pos_end_col", dtype=pa.int32()),
+        ],
+    )
 )
 
-EXC_SPEC = make_table_spec(
-    name="py_bc_exception_table_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="exc_entry_id", dtype=pa.string()),
-        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
-        ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="target_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="depth", dtype=pa.int32()),
-        ArrowFieldSpec(name="lasti", dtype=pa.bool_()),
-    ],
+EXC_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_bc_exception_table_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(),),
+        fields=[
+            ArrowFieldSpec(name="exc_entry_id", dtype=pa.string()),
+            ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+            ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
+            ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
+            ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
+            ArrowFieldSpec(name="target_offset", dtype=pa.int32()),
+            ArrowFieldSpec(name="depth", dtype=pa.int32()),
+            ArrowFieldSpec(name="lasti", dtype=pa.bool_()),
+        ],
+    )
 )
 
-BLOCKS_SPEC = make_table_spec(
-    name="py_bc_blocks_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=[
-        ArrowFieldSpec(name="block_id", dtype=pa.string()),
-        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
-    ],
+BLOCKS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_bc_blocks_v1",
+        version=SCHEMA_VERSION,
+        bundles=(),
+        fields=[
+            ArrowFieldSpec(name="block_id", dtype=pa.string()),
+            ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+            ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
+            ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
+            ArrowFieldSpec(name="kind", dtype=pa.string()),
+        ],
+    )
 )
 
-CFG_EDGES_SPEC = make_table_spec(
-    name="py_bc_cfg_edges_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=[
-        ArrowFieldSpec(name="edge_id", dtype=pa.string()),
-        ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="src_block_id", dtype=pa.string()),
-        ArrowFieldSpec(name="dst_block_id", dtype=pa.string()),
-        ArrowFieldSpec(name="kind", dtype=pa.string()),
-        ArrowFieldSpec(name="cond_instr_id", dtype=pa.string()),
-        ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
-    ],
+CFG_EDGES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_bc_cfg_edges_v1",
+        version=SCHEMA_VERSION,
+        bundles=(),
+        fields=[
+            ArrowFieldSpec(name="edge_id", dtype=pa.string()),
+            ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
+            ArrowFieldSpec(name="src_block_id", dtype=pa.string()),
+            ArrowFieldSpec(name="dst_block_id", dtype=pa.string()),
+            ArrowFieldSpec(name="kind", dtype=pa.string()),
+            ArrowFieldSpec(name="cond_instr_id", dtype=pa.string()),
+            ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
+        ],
+    )
 )
 
-ERRORS_SPEC = make_table_spec(
-    name="py_bc_errors_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=[
-        ArrowFieldSpec(name="error_type", dtype=pa.string()),
-        ArrowFieldSpec(name="message", dtype=pa.string()),
-    ],
+ERRORS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_table(
+    make_table_spec(
+        name="py_bc_errors_v1",
+        version=SCHEMA_VERSION,
+        bundles=(file_identity_bundle(),),
+        fields=[
+            ArrowFieldSpec(name="error_type", dtype=pa.string()),
+            ArrowFieldSpec(name="message", dtype=pa.string()),
+        ],
+    )
 )
 
 CODE_UNITS_SCHEMA = CODE_UNITS_SPEC.to_arrow_schema()
@@ -247,13 +299,20 @@ CFG_EDGES_SCHEMA = CFG_EDGES_SPEC.to_arrow_schema()
 ERRORS_SCHEMA = ERRORS_SPEC.to_arrow_schema()
 
 
+def _context_from_file_ctx(
+    file_ctx: FileContext,
+    options: BytecodeExtractOptions,
+) -> BytecodeFileContext | None:
+    if not file_ctx.file_id or not file_ctx.path:
+        return None
+    return BytecodeFileContext(file_ctx=file_ctx, options=options)
+
+
 def _row_context(
     rf: dict[str, object], options: BytecodeExtractOptions
 ) -> BytecodeFileContext | None:
     file_ctx = FileContext.from_repo_row(rf)
-    if not file_ctx.file_id or not file_ctx.path:
-        return None
-    return BytecodeFileContext(file_ctx=file_ctx, options=options)
+    return _context_from_file_ctx(file_ctx, options)
 
 
 def _row_text(file_ctx: FileContext) -> str | None:
@@ -266,6 +325,155 @@ def _row_text(file_ctx: FileContext) -> str | None:
         return file_ctx.data.decode(encoding, errors="replace")
     except (LookupError, UnicodeError):
         return None
+
+
+def _valid_mask(table: TableLike, cols: Sequence[str]) -> object:
+    mask = pc.is_valid(table[cols[0]])
+    for col in cols[1:]:
+        mask = pc.and_(mask, pc.is_valid(table[col]))
+    return mask
+
+
+def _apply_hash_column(
+    table: TableLike,
+    *,
+    spec: HashSpec,
+    required: Sequence[str] | None = None,
+) -> TableLike:
+    hashed = hash_column_values(table, spec=spec)
+    out_col = spec.out_col or f"{spec.prefix}_id"
+    if required:
+        mask = _valid_mask(table, required)
+        hashed = pc.if_else(mask, hashed, pa.scalar(None, type=hashed.type))
+    return set_or_append_column(table, out_col, hashed)
+
+
+def _apply_code_unit_id(table: TableLike) -> TableLike:
+    return _apply_hash_column(
+        table,
+        spec=HashSpec(
+            prefix="bc_code",
+            cols=("file_id", "qualpath", "firstlineno", "co_name"),
+            out_col="code_unit_id",
+        ),
+        required=("file_id", "qualpath", "firstlineno", "co_name"),
+    )
+
+
+def _apply_parent_code_unit_id(table: TableLike) -> TableLike:
+    return _apply_hash_column(
+        table,
+        spec=HashSpec(
+            prefix="bc_code",
+            cols=("file_id", "parent_qualpath", "parent_firstlineno", "parent_co_name"),
+            out_col="parent_code_unit_id",
+        ),
+        required=("file_id", "parent_qualpath", "parent_firstlineno", "parent_co_name"),
+    )
+
+
+def _build_code_units_table(rows: list[Row]) -> TableLike:
+    if not rows:
+        return empty_table(CODE_UNITS_SCHEMA)
+    table = pa.Table.from_pylist(rows)
+    table = _apply_code_unit_id(table)
+    table = _apply_parent_code_unit_id(table)
+    return SchemaTransform(CODE_UNITS_SCHEMA).apply(table)
+
+
+def _build_instructions_table(rows: list[Row]) -> TableLike:
+    if not rows:
+        return empty_table(INSTR_SCHEMA)
+    table = pa.Table.from_pylist(rows)
+    table = _apply_code_unit_id(table)
+    table = _apply_hash_column(
+        table,
+        spec=HashSpec(
+            prefix="bc_instr",
+            cols=("code_unit_id", "instr_index", "offset"),
+            out_col="instr_id",
+        ),
+        required=("code_unit_id", "instr_index", "offset"),
+    )
+    return SchemaTransform(INSTR_SCHEMA).apply(table)
+
+
+def _build_exceptions_table(rows: list[Row]) -> TableLike:
+    if not rows:
+        return empty_table(EXC_SCHEMA)
+    table = pa.Table.from_pylist(rows)
+    table = _apply_code_unit_id(table)
+    table = _apply_hash_column(
+        table,
+        spec=HashSpec(
+            prefix="bc_exc",
+            cols=("code_unit_id", "exc_index", "start_offset", "end_offset", "target_offset"),
+            out_col="exc_entry_id",
+        ),
+        required=("code_unit_id", "exc_index", "start_offset", "end_offset", "target_offset"),
+    )
+    return SchemaTransform(EXC_SCHEMA).apply(table)
+
+
+def _build_blocks_table(rows: list[Row]) -> TableLike:
+    if not rows:
+        return empty_table(BLOCKS_SCHEMA)
+    table = pa.Table.from_pylist(rows)
+    table = _apply_code_unit_id(table)
+    table = _apply_hash_column(
+        table,
+        spec=HashSpec(
+            prefix="bc_block",
+            cols=("code_unit_id", "start_offset", "end_offset"),
+            out_col="block_id",
+        ),
+        required=("code_unit_id", "start_offset", "end_offset"),
+    )
+    return SchemaTransform(BLOCKS_SCHEMA).apply(table)
+
+
+def _build_cfg_edges_table(rows: list[Row]) -> TableLike:
+    if not rows:
+        return empty_table(CFG_EDGES_SCHEMA)
+    table = pa.Table.from_pylist(rows)
+    table = _apply_code_unit_id(table)
+    table = _apply_hash_column(
+        table,
+        spec=HashSpec(
+            prefix="bc_block",
+            cols=("code_unit_id", "src_block_start", "src_block_end"),
+            out_col="src_block_id",
+        ),
+        required=("code_unit_id", "src_block_start", "src_block_end"),
+    )
+    table = _apply_hash_column(
+        table,
+        spec=HashSpec(
+            prefix="bc_block",
+            cols=("code_unit_id", "dst_block_start", "dst_block_end"),
+            out_col="dst_block_id",
+        ),
+        required=("code_unit_id", "dst_block_start", "dst_block_end"),
+    )
+    table = _apply_hash_column(
+        table,
+        spec=HashSpec(
+            prefix="bc_instr",
+            cols=("code_unit_id", "cond_instr_index", "cond_instr_offset"),
+            out_col="cond_instr_id",
+        ),
+        required=("code_unit_id", "cond_instr_index", "cond_instr_offset"),
+    )
+    table = _apply_hash_column(
+        table,
+        spec=HashSpec(
+            prefix="bc_edge",
+            cols=("code_unit_id", "src_block_id", "dst_block_id", "kind", "edge_key", "exc_index"),
+            out_col="edge_id",
+        ),
+        required=("code_unit_id", "src_block_id", "dst_block_id", "kind", "edge_key"),
+    )
+    return SchemaTransform(CFG_EDGES_SCHEMA).apply(table)
 
 
 def _compile_text(
@@ -303,34 +511,33 @@ def _assign_code_units(
     top: pytypes.CodeType,
     ctx: BytecodeFileContext,
     cu_rows: list[Row],
-) -> dict[int, str]:
-    co_to_id: dict[int, str] = {}
+) -> dict[int, CodeUnitKey]:
+    co_to_key: dict[int, CodeUnitKey] = {}
     co_to_qual: dict[int, str] = {}
 
     for co, parent in _iter_code_objects(top):
-        parent_id = co_to_id.get(id(parent)) if parent is not None else None
+        parent_key = co_to_key.get(id(parent)) if parent is not None else None
         parent_qual = co_to_qual.get(id(parent)) if parent is not None else None
         qual = _qual_for(co, parent_qual)
-        cu_id = prefixed_hash_id_from_parts(
-            "bc_code",
-            ctx.file_id,
-            qual,
-            str(co.co_firstlineno),
-            co.co_name,
+        key = CodeUnitKey(
+            qualpath=qual,
+            co_name=co.co_name,
+            firstlineno=int(co.co_firstlineno or 0),
         )
-        co_to_id[id(co)] = cu_id
+        co_to_key[id(co)] = key
         co_to_qual[id(co)] = qual
 
         cu_rows.append(
             {
-                "code_unit_id": cu_id,
-                "parent_code_unit_id": parent_id,
                 "file_id": ctx.file_id,
                 "path": ctx.path,
                 "file_sha256": ctx.file_sha256,
                 "qualpath": qual,
                 "co_name": co.co_name,
                 "firstlineno": int(co.co_firstlineno or 0),
+                "parent_qualpath": parent_key.qualpath if parent_key is not None else None,
+                "parent_co_name": parent_key.co_name if parent_key is not None else None,
+                "parent_firstlineno": parent_key.firstlineno if parent_key is not None else None,
                 "argcount": int(getattr(co, "co_argcount", 0)),
                 "posonlyargcount": int(getattr(co, "co_posonlyargcount", 0)),
                 "kwonlyargcount": int(getattr(co, "co_kwonlyargcount", 0)),
@@ -341,7 +548,7 @@ def _assign_code_units(
             }
         )
 
-    return co_to_id
+    return co_to_key
 
 
 def _instruction_data(co: pytypes.CodeType, options: BytecodeExtractOptions) -> InstructionData:
@@ -358,10 +565,10 @@ def _exception_entries(co: pytypes.CodeType) -> Sequence[object]:
 def _build_code_unit_context(
     co: pytypes.CodeType,
     ctx: BytecodeFileContext,
-    cu_id: str,
+    code_unit_key: CodeUnitKey,
 ) -> CodeUnitContext:
     return CodeUnitContext(
-        cu_id=cu_id,
+        code_unit_key=code_unit_key,
         file_ctx=ctx,
         instruction_data=_instruction_data(co, ctx.options),
         exc_entries=_exception_entries(co),
@@ -369,15 +576,23 @@ def _build_code_unit_context(
     )
 
 
+def _code_unit_key_columns(unit_ctx: CodeUnitContext) -> dict[str, RowValue]:
+    key = unit_ctx.code_unit_key
+    return {
+        "qualpath": key.qualpath,
+        "co_name": key.co_name,
+        "firstlineno": key.firstlineno,
+    }
+
+
 def _append_exception_rows(unit_ctx: CodeUnitContext, exc_rows: list[Row]) -> None:
     for k, ex in enumerate(unit_ctx.exc_entries):
         exc_rows.append(
             {
-                "exc_entry_id": prefixed_hash_id_from_parts("bc_exc", unit_ctx.cu_id, str(k)),
-                "code_unit_id": unit_ctx.cu_id,
                 "file_id": unit_ctx.file_ctx.file_id,
                 "path": unit_ctx.file_ctx.path,
                 "file_sha256": unit_ctx.file_ctx.file_sha256,
+                **_code_unit_key_columns(unit_ctx),
                 "exc_index": int(k),
                 "start_offset": int(getattr(ex, "start", 0)),
                 "end_offset": int(getattr(ex, "end", 0)),
@@ -400,16 +615,10 @@ def _append_instruction_rows(unit_ctx: CodeUnitContext, ins_rows: list[Row]) -> 
 
         ins_rows.append(
             {
-                "instr_id": prefixed_hash_id_from_parts(
-                    "bc_insn",
-                    unit_ctx.cu_id,
-                    str(idx),
-                    str(ins.offset),
-                ),
-                "code_unit_id": unit_ctx.cu_id,
                 "file_id": unit_ctx.file_ctx.file_id,
                 "path": unit_ctx.file_ctx.path,
                 "file_sha256": unit_ctx.file_ctx.file_sha256,
+                **_code_unit_key_columns(unit_ctx),
                 "instr_index": int(idx),
                 "offset": int(ins.offset),
                 "opname": ins.opname,
@@ -485,29 +694,25 @@ def _append_block_rows(
     blocks: Sequence[tuple[int, int]],
     ins_offsets: set[int],
     blk_rows: list[Row],
-) -> dict[int, str]:
+) -> dict[int, tuple[int, int]]:
     target_offsets = {int(getattr(ex, "target", 0)) for ex in unit_ctx.exc_entries}
-    off_to_block: dict[int, str] = {}
+    off_to_block: dict[int, tuple[int, int]] = {}
 
     for start, end in blocks:
         kind = "entry" if start == 0 else ("handler" if start in target_offsets else "normal")
-        block_id = prefixed_hash_id_from_parts(
-            "bc_block",
-            unit_ctx.cu_id,
-            str(start),
-            str(end),
-        )
         blk_rows.append(
             {
-                "block_id": block_id,
-                "code_unit_id": unit_ctx.cu_id,
+                "file_id": unit_ctx.file_ctx.file_id,
+                "path": unit_ctx.file_ctx.path,
+                "file_sha256": unit_ctx.file_ctx.file_sha256,
+                **_code_unit_key_columns(unit_ctx),
                 "start_offset": int(start),
                 "end_offset": int(end),
                 "kind": kind,
             }
         )
         for offset in sorted(offset for offset in ins_offsets if start <= offset < end):
-            off_to_block[offset] = block_id
+            off_to_block[offset] = (start, end)
 
     return off_to_block
 
@@ -515,132 +720,171 @@ def _append_block_rows(
 def _append_cfg_edge(unit_ctx: CodeUnitContext, spec: CfgEdgeSpec, edge_rows: list[Row]) -> None:
     edge_rows.append(
         {
-            "edge_id": prefixed_hash_id_from_parts(
-                "bc_cfg",
-                unit_ctx.cu_id,
-                spec.src_block_id,
-                spec.dst_block_id,
-                spec.kind,
-                spec.edge_key,
-            ),
-            "code_unit_id": unit_ctx.cu_id,
-            "src_block_id": spec.src_block_id,
-            "dst_block_id": spec.dst_block_id,
+            "file_id": unit_ctx.file_ctx.file_id,
+            "path": unit_ctx.file_ctx.path,
+            "file_sha256": unit_ctx.file_ctx.file_sha256,
+            **_code_unit_key_columns(unit_ctx),
+            "src_block_start": spec.src_block_start,
+            "src_block_end": spec.src_block_end,
+            "dst_block_start": spec.dst_block_start,
+            "dst_block_end": spec.dst_block_end,
             "kind": spec.kind,
-            "cond_instr_id": spec.cond_instr_id,
+            "edge_key": spec.edge_key,
+            "cond_instr_index": spec.cond_instr_index,
+            "cond_instr_offset": spec.cond_instr_offset,
             "exc_index": spec.exc_index,
         }
     )
 
 
+def _append_jump_edges(ctx: _CfgEdgeContext, block: _BlockEdgeContext) -> bool:
+    jt = _jump_target(block.last)
+    if jt is None:
+        return False
+    dst_block = ctx.off_to_block.get(int(jt))
+    if dst_block is None:
+        return False
+    dst_start, dst_end = dst_block
+    kind = "jump" if _is_unconditional_jump(block.last.opname) else "branch"
+    _append_cfg_edge(
+        ctx.unit_ctx,
+        CfgEdgeSpec(
+            src_block_start=block.src_start,
+            src_block_end=block.src_end,
+            dst_block_start=dst_start,
+            dst_block_end=dst_end,
+            kind=kind,
+            edge_key=str(block.last.offset),
+            cond_instr_index=block.last_index if kind == "branch" else None,
+            cond_instr_offset=int(block.last.offset) if kind == "branch" else None,
+            exc_index=None,
+        ),
+        ctx.edge_rows,
+    )
+    if kind != "branch":
+        return True
+    next_block = ctx.off_to_block.get(block.end)
+    if next_block is None:
+        return True
+    next_start, next_end = next_block
+    _append_cfg_edge(
+        ctx.unit_ctx,
+        CfgEdgeSpec(
+            src_block_start=block.src_start,
+            src_block_end=block.src_end,
+            dst_block_start=next_start,
+            dst_block_end=next_end,
+            kind="next",
+            edge_key=str(block.end),
+            cond_instr_index=block.last_index,
+            cond_instr_offset=int(block.last.offset),
+            exc_index=None,
+        ),
+        ctx.edge_rows,
+    )
+    return True
+
+
+def _append_fallthrough_edge(ctx: _CfgEdgeContext, block: _BlockEdgeContext) -> None:
+    next_block = ctx.off_to_block.get(block.end)
+    if next_block is None:
+        return
+    next_start, next_end = next_block
+    _append_cfg_edge(
+        ctx.unit_ctx,
+        CfgEdgeSpec(
+            src_block_start=block.src_start,
+            src_block_end=block.src_end,
+            dst_block_start=next_start,
+            dst_block_end=next_end,
+            kind="next",
+            edge_key=str(block.end),
+            cond_instr_index=None,
+            cond_instr_offset=None,
+            exc_index=None,
+        ),
+        ctx.edge_rows,
+    )
+
+
+def _append_edges_for_block(ctx: _CfgEdgeContext, start: int, end: int) -> None:
+    ins_in_block = [ins for ins in ctx.instructions if start <= int(ins.offset) < end]
+    if not ins_in_block:
+        return
+    first_offset = int(ins_in_block[0].offset)
+    src_block = ctx.off_to_block.get(first_offset)
+    if src_block is None:
+        return
+    src_start, src_end = src_block
+    last = ins_in_block[-1]
+    last_index = ctx.index_by_offset.get(int(last.offset))
+    if last_index is None:
+        return
+    block = _BlockEdgeContext(
+        src_start=src_start,
+        src_end=src_end,
+        end=end,
+        last=last,
+        last_index=int(last_index),
+    )
+    if _append_jump_edges(ctx, block):
+        return
+    if last.opname in ctx.terminators:
+        return
+    _append_fallthrough_edge(ctx, block)
+
+
 def _append_normal_edges(
     unit_ctx: CodeUnitContext,
     blocks: Sequence[tuple[int, int]],
-    off_to_block: Mapping[int, str],
+    off_to_block: Mapping[int, tuple[int, int]],
     edge_rows: list[Row],
 ) -> None:
-    instructions = unit_ctx.instruction_data.instructions
-    index_by_offset = unit_ctx.instruction_data.index_by_offset
-    terminators = unit_ctx.file_ctx.options.terminator_opnames
+    ctx = _CfgEdgeContext(
+        unit_ctx=unit_ctx,
+        instructions=unit_ctx.instruction_data.instructions,
+        index_by_offset=unit_ctx.instruction_data.index_by_offset,
+        terminators=unit_ctx.file_ctx.options.terminator_opnames,
+        off_to_block=off_to_block,
+        edge_rows=edge_rows,
+    )
 
     for start, end in blocks:
-        ins_in_block = [ins for ins in instructions if start <= int(ins.offset) < end]
-        if not ins_in_block:
-            continue
-        first_offset = int(ins_in_block[0].offset)
-        src = off_to_block.get(first_offset)
-        if src is None:
-            continue
-        last = ins_in_block[-1]
-        last_index = index_by_offset.get(int(last.offset))
-        if last_index is None:
-            continue
-        last_id = prefixed_hash_id_from_parts(
-            "bc_insn",
-            unit_ctx.cu_id,
-            str(last_index),
-            str(last.offset),
-        )
-
-        jt = _jump_target(last)
-        if jt is not None and jt in off_to_block:
-            dst = off_to_block[int(jt)]
-            kind = "jump" if _is_unconditional_jump(last.opname) else "branch"
-            _append_cfg_edge(
-                unit_ctx,
-                CfgEdgeSpec(
-                    src_block_id=src,
-                    dst_block_id=dst,
-                    kind=kind,
-                    edge_key=str(last.offset),
-                    cond_instr_id=last_id if kind == "branch" else None,
-                    exc_index=None,
-                ),
-                edge_rows,
-            )
-            if kind == "branch":
-                next_block = off_to_block.get(end)
-                if next_block is not None:
-                    _append_cfg_edge(
-                        unit_ctx,
-                        CfgEdgeSpec(
-                            src_block_id=src,
-                            dst_block_id=next_block,
-                            kind="next",
-                            edge_key=str(end),
-                            cond_instr_id=last_id,
-                            exc_index=None,
-                        ),
-                        edge_rows,
-                    )
-            continue
-
-        if last.opname in terminators:
-            continue
-
-        next_block = off_to_block.get(end)
-        if next_block is not None:
-            _append_cfg_edge(
-                unit_ctx,
-                CfgEdgeSpec(
-                    src_block_id=src,
-                    dst_block_id=next_block,
-                    kind="next",
-                    edge_key=str(end),
-                    cond_instr_id=None,
-                    exc_index=None,
-                ),
-                edge_rows,
-            )
+        _append_edges_for_block(ctx, start, end)
 
 
 def _append_exception_edges(
     unit_ctx: CodeUnitContext,
     blocks: Sequence[tuple[int, int]],
-    off_to_block: Mapping[int, str],
+    off_to_block: Mapping[int, tuple[int, int]],
     edge_rows: list[Row],
 ) -> None:
     for k, ex in enumerate(unit_ctx.exc_entries):
         start = int(getattr(ex, "start", 0))
         end = int(getattr(ex, "end", 0))
         target = int(getattr(ex, "target", 0))
-        handler = off_to_block.get(target)
-        if handler is None:
+        handler_block = off_to_block.get(target)
+        if handler_block is None:
             continue
+        handler_start, handler_end = handler_block
         for block_start, block_end in blocks:
             if block_end <= start or block_start >= end:
                 continue
-            src = off_to_block.get(block_start)
-            if src is None:
+            src_block = off_to_block.get(block_start)
+            if src_block is None:
                 continue
+            src_start, src_end = src_block
             _append_cfg_edge(
                 unit_ctx,
                 CfgEdgeSpec(
-                    src_block_id=src,
-                    dst_block_id=handler,
+                    src_block_start=src_start,
+                    src_block_end=src_end,
+                    dst_block_start=handler_start,
+                    dst_block_end=handler_end,
                     kind="exc",
                     edge_key=str(k),
-                    cond_instr_id=None,
+                    cond_instr_index=None,
+                    cond_instr_offset=None,
                     exc_index=int(k),
                 ),
                 edge_rows,
@@ -664,18 +908,39 @@ def _append_cfg_rows(unit_ctx: CodeUnitContext, blk_rows: list[Row], edge_rows: 
 def _extract_code_unit_rows(
     top: pytypes.CodeType,
     ctx: BytecodeFileContext,
-    code_unit_ids: Mapping[int, str],
+    code_unit_keys: Mapping[int, CodeUnitKey],
     buffers: BytecodeRowBuffers,
 ) -> None:
     for co, _parent in _iter_code_objects(top):
-        cu_id = code_unit_ids.get(id(co))
-        if cu_id is None:
+        key = code_unit_keys.get(id(co))
+        if key is None:
             continue
-        unit_ctx = _build_code_unit_context(co, ctx, cu_id)
+        unit_ctx = _build_code_unit_context(co, ctx, key)
         _append_exception_rows(unit_ctx, buffers.exception_rows)
         _append_instruction_rows(unit_ctx, buffers.instruction_rows)
         if ctx.options.include_cfg_derivations:
             _append_cfg_rows(unit_ctx, buffers.block_rows, buffers.edge_rows)
+
+
+def _build_bytecode_result(buffers: BytecodeRowBuffers) -> BytecodeExtractResult:
+    code_units = _build_code_units_table(buffers.code_unit_rows)
+    instructions = _build_instructions_table(buffers.instruction_rows)
+    exceptions = _build_exceptions_table(buffers.exception_rows)
+    blocks = _build_blocks_table(buffers.block_rows)
+    edges = _build_cfg_edges_table(buffers.edge_rows)
+    errors = (
+        pa.Table.from_pylist(buffers.error_rows, schema=ERRORS_SCHEMA)
+        if buffers.error_rows
+        else empty_table(ERRORS_SCHEMA)
+    )
+    return BytecodeExtractResult(
+        py_bc_code_units=code_units,
+        py_bc_instructions=instructions,
+        py_bc_exception_table=exceptions,
+        py_bc_blocks=blocks,
+        py_bc_cfg_edges=edges,
+        py_bc_errors=errors,
+    )
 
 
 def _jump_target(ins: dis.Instruction) -> int | None:
@@ -707,7 +972,10 @@ def _iter_code_objects(
 
 
 def extract_bytecode(
-    repo_files: TableLike, options: BytecodeExtractOptions | None = None
+    repo_files: TableLike,
+    options: BytecodeExtractOptions | None = None,
+    *,
+    file_contexts: Iterable[FileContext] | None = None,
 ) -> BytecodeExtractResult:
     """Extract bytecode tables from repository files.
 
@@ -727,8 +995,9 @@ def extract_bytecode(
         error_rows=[],
     )
 
-    for rf in iter_table_rows(repo_files):
-        ctx = _row_context(rf, options)
+    contexts = file_contexts if file_contexts is not None else iter_file_contexts(repo_files)
+    for file_ctx in contexts:
+        ctx = _context_from_file_ctx(file_ctx, options)
         if ctx is None:
             continue
         text = _row_text(ctx.file_ctx)
@@ -740,23 +1009,17 @@ def extract_bytecode(
             continue
         if top is None:
             continue
-        code_unit_ids = _assign_code_units(top, ctx, buffers.code_unit_rows)
-        _extract_code_unit_rows(top, ctx, code_unit_ids, buffers)
+        code_unit_keys = _assign_code_units(top, ctx, buffers.code_unit_rows)
+        _extract_code_unit_rows(top, ctx, code_unit_keys, buffers)
 
-    return BytecodeExtractResult(
-        py_bc_code_units=pa.Table.from_pylist(buffers.code_unit_rows, schema=CODE_UNITS_SCHEMA),
-        py_bc_instructions=pa.Table.from_pylist(buffers.instruction_rows, schema=INSTR_SCHEMA),
-        py_bc_exception_table=pa.Table.from_pylist(buffers.exception_rows, schema=EXC_SCHEMA),
-        py_bc_blocks=pa.Table.from_pylist(buffers.block_rows, schema=BLOCKS_SCHEMA),
-        py_bc_cfg_edges=pa.Table.from_pylist(buffers.edge_rows, schema=CFG_EDGES_SCHEMA),
-        py_bc_errors=pa.Table.from_pylist(buffers.error_rows, schema=ERRORS_SCHEMA),
-    )
+    return _build_bytecode_result(buffers)
 
 
 def extract_bytecode_table(
     *,
     repo_root: str | None,
     repo_files: TableLike,
+    file_contexts: Iterable[FileContext] | None = None,
     ctx: object | None = None,
 ) -> TableLike:
     """Extract bytecode instruction facts as a single table.
@@ -767,6 +1030,8 @@ def extract_bytecode_table(
         Optional repository root (unused).
     repo_files:
         Repo files table.
+    file_contexts:
+        Optional pre-built file contexts for extraction.
     ctx:
         Execution context (unused).
 
@@ -777,5 +1042,9 @@ def extract_bytecode_table(
     """
     _ = repo_root
     _ = ctx
-    result = extract_bytecode(repo_files, options=BytecodeExtractOptions())
+    result = extract_bytecode(
+        repo_files,
+        options=BytecodeExtractOptions(),
+        file_contexts=file_contexts,
+    )
     return result.py_bc_instructions

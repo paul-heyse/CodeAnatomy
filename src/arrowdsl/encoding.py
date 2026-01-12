@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pyarrow.types as patypes
 
 from arrowdsl.column_ops import set_or_append_column
 from arrowdsl.compute import pc
+from arrowdsl.kernels import ChunkPolicy
 from arrowdsl.pyarrow_protocols import TableLike
 
 
@@ -16,6 +17,25 @@ class EncodingSpec:
     """Specification for dictionary encoding a column."""
 
     column: str
+
+
+@dataclass(frozen=True)
+class EncodingPolicy:
+    """Encoding policy bundling dictionary encodes and chunk normalization."""
+
+    specs: tuple[EncodingSpec, ...] = ()
+    chunk_policy: ChunkPolicy = field(default_factory=ChunkPolicy)
+
+    def apply(self, table: TableLike) -> TableLike:
+        """Apply encoding specs and chunk policy.
+
+        Returns
+        -------
+        TableLike
+            Table with encoding and chunk normalization applied.
+        """
+        out = encode_columns(table, specs=self.specs)
+        return self.chunk_policy.apply(out)
 
 
 def encode_dictionary(table: TableLike, spec: EncodingSpec) -> TableLike:

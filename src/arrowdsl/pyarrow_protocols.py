@@ -21,6 +21,10 @@ class FieldLike(Protocol):
     metadata: Mapping[bytes, bytes] | None
     nullable: bool
 
+    def with_metadata(self, metadata: Mapping[bytes, bytes]) -> FieldLike:
+        """Return a field with updated metadata."""
+        ...
+
 
 @runtime_checkable
 class ArrayLike(Protocol):
@@ -199,6 +203,14 @@ class TableLike(Protocol):
 
     def cast(self, target_schema: SchemaLike, *, safe: bool | None = None) -> TableLike:
         """Cast the table to the target schema."""
+        ...
+
+    def unify_dictionaries(self) -> TableLike:
+        """Unify dictionary-encoded columns."""
+        ...
+
+    def combine_chunks(self) -> TableLike:
+        """Combine chunked columns into contiguous chunks."""
         ...
 
     def to_reader(self) -> RecordBatchReaderLike:

@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from arrowdsl.core.ids import HashSpec, hash64_from_parts, hash_column_values
-from arrowdsl.core.interop import TableLike, pc
+from arrowdsl.core.ids import HashSpec, hash64_from_parts, hash_column_values, prefixed_hash_id
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
 
 
 def stable_id(prefix: str, *parts: str | None) -> str:
@@ -54,6 +54,40 @@ def span_id(path: str, bstart: int, bend: int, kind: str | None = None) -> str:
     if kind:
         return stable_id("span", kind, path, str(bstart), str(bend))
     return stable_id("span", path, str(bstart), str(bend))
+
+
+def prefixed_hash64(
+    prefix: str,
+    arrays: list[ArrayLike | ChunkedArrayLike],
+) -> ArrayLike | ChunkedArrayLike:
+    """Return prefixed hash IDs for the provided arrays.
+
+    Returns
+    -------
+    ArrayLike | ChunkedArrayLike
+        Prefixed hash identifiers.
+    """
+    return prefixed_hash_id(arrays, prefix=prefix)
+
+
+def masked_prefixed_hash(
+    prefix: str,
+    arrays: list[ArrayLike | ChunkedArrayLike],
+    *,
+    required: list[ArrayLike | ChunkedArrayLike],
+) -> ArrayLike | ChunkedArrayLike:
+    """Return prefixed hash IDs masked by required validity.
+
+    Returns
+    -------
+    ArrayLike | ChunkedArrayLike
+        Prefixed hash identifiers masked by required validity.
+    """
+    hashed = prefixed_hash_id(arrays, prefix=prefix)
+    mask = pc.is_valid(required[0])
+    for arr in required[1:]:
+        mask = pc.and_(mask, pc.is_valid(arr))
+    return pc.if_else(mask, hashed, pa.scalar(None, type=pa.string()))
 
 
 @dataclass(frozen=True)

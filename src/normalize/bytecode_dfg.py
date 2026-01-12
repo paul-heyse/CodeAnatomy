@@ -4,73 +4,22 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrowdsl.compute.kernels import def_use_kind_array, masked_values, valid_pair_mask
+from arrowdsl.compute.kernels import apply_join, def_use_kind_array
 from arrowdsl.compute.predicates import And, FilterSpec, IsNull, Not
-from arrowdsl.core.ids import iter_arrays, prefixed_hash_id
-from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike
+from arrowdsl.core.ids import prefixed_hash_id
+from arrowdsl.core.interop import TableLike, pc
+from arrowdsl.plan.ops import JoinSpec
 from arrowdsl.schema.arrays import coalesce_string, set_or_append_column
 from arrowdsl.schema.schema import empty_table
-from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
-
-SCHEMA_VERSION = 1
-
-DEF_USE_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="py_bc_def_use_events_v1",
-            version=SCHEMA_VERSION,
-            bundles=(file_identity_bundle(include_sha256=False),),
-            fields=[
-                ArrowFieldSpec(name="event_id", dtype=pa.string()),
-                ArrowFieldSpec(name="instr_id", dtype=pa.string()),
-                ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-                ArrowFieldSpec(name="kind", dtype=pa.string()),
-                ArrowFieldSpec(name="symbol", dtype=pa.string()),
-                ArrowFieldSpec(name="opname", dtype=pa.string()),
-                ArrowFieldSpec(name="offset", dtype=pa.int32()),
-            ],
-        )
-    )
-)
-
-REACHES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="py_bc_reaches_v1",
-            version=SCHEMA_VERSION,
-            bundles=(file_identity_bundle(include_sha256=False),),
-            fields=[
-                ArrowFieldSpec(name="edge_id", dtype=pa.string()),
-                ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-                ArrowFieldSpec(name="def_event_id", dtype=pa.string()),
-                ArrowFieldSpec(name="use_event_id", dtype=pa.string()),
-                ArrowFieldSpec(name="symbol", dtype=pa.string()),
-            ],
-        )
-    )
-)
-
-DEF_USE_SCHEMA = DEF_USE_SPEC.table_spec.to_arrow_schema()
-REACHES_SCHEMA = REACHES_SPEC.table_spec.to_arrow_schema()
+from normalize.arrow_utils import column_or_null, compute_array
+from normalize.ids import prefixed_hash64
+from normalize.pipeline import canonical_sort
+from normalize.schema_infer import align_table_to_schema
+from normalize.schemas import DEF_USE_SCHEMA, REACHES_SCHEMA
 
 USE_PREFIXES = ("LOAD_",)
 DEF_PREFIXES = ("STORE_", "DELETE_")
 DEF_OPS = ("IMPORT_NAME", "IMPORT_FROM")
-
-
-def _prefixed_hash64(prefix: str, arrays: list[ArrayLike]) -> ArrayLike:
-    return prefixed_hash_id(arrays, prefix=prefix)
-
-
-def _column_or_null(
-    table: TableLike,
-    col: str,
-    dtype: DataTypeLike,
-) -> ArrayLike | ChunkedArrayLike:
-    if col in table.column_names:
-        return table[col]
-    return pa.nulls(table.num_rows, type=dtype)
 
 
 def build_def_use_events(py_bc_instructions: TableLike) -> TableLike:
@@ -111,8 +60,8 @@ def build_def_use_events(py_bc_instructions: TableLike) -> TableLike:
         return empty_table(DEF_USE_SCHEMA)
 
     event_inputs = [
-        _column_or_null(table, "code_unit_id", pa.string()),
-        _column_or_null(table, "instr_id", pa.string()),
+        column_or_null(table, "code_unit_id", pa.string()),
+        column_or_null(table, "instr_id", pa.string()),
         table["kind"],
         table["symbol"],
     ]
@@ -120,15 +69,15 @@ def build_def_use_events(py_bc_instructions: TableLike) -> TableLike:
 
     return pa.Table.from_arrays(
         [
-            _column_or_null(table, "file_id", pa.string()),
-            _column_or_null(table, "path", pa.string()),
+            column_or_null(table, "file_id", pa.string()),
+            column_or_null(table, "path", pa.string()),
             event_id,
-            _column_or_null(table, "instr_id", pa.string()),
-            _column_or_null(table, "code_unit_id", pa.string()),
+            column_or_null(table, "instr_id", pa.string()),
+            column_or_null(table, "code_unit_id", pa.string()),
             table["kind"],
             table["symbol"],
-            _column_or_null(table, "opname", pa.string()),
-            _column_or_null(table, "offset", pa.int32()),
+            column_or_null(table, "opname", pa.string()),
+            column_or_null(table, "offset", pa.int32()),
         ],
         schema=DEF_USE_SCHEMA,
     )
@@ -153,87 +102,86 @@ def run_reaching_defs(def_use_events: TableLike) -> TableLike:
     if def_use_events.num_rows == 0:
         return empty_table(REACHES_SCHEMA)
 
-    defs_by_key, uses_by_key = _group_def_use_events(def_use_events)
-    out_rows = _build_reaching_rows(defs_by_key, uses_by_key)
-
-    if not out_rows:
+    defs = _build_def_use_table(def_use_events, kind="def", event_col="def_event_id")
+    if defs.num_rows == 0:
         return empty_table(REACHES_SCHEMA)
-    table = pa.Table.from_pylist(out_rows, schema=REACHES_SCHEMA)
-    def_ids = _column_or_null(table, "def_event_id", pa.string())
-    use_ids = _column_or_null(table, "use_event_id", pa.string())
-    edge_prefixed = _prefixed_hash64("df_reach", [def_ids, use_ids])
-    valid = valid_pair_mask(def_ids, use_ids)
-    edge_ids = masked_values(edge_prefixed, mask=valid, dtype=pa.string())
-    return set_or_append_column(table, "edge_id", edge_ids)
+    uses = _build_def_use_table(
+        def_use_events,
+        kind="use",
+        event_col="use_event_id",
+        include_meta=True,
+    )
+    if uses.num_rows == 0:
+        return empty_table(REACHES_SCHEMA)
+
+    joined = apply_join(
+        defs,
+        uses,
+        spec=JoinSpec(
+            join_type="inner",
+            left_keys=("code_unit_id", "symbol"),
+            right_keys=("code_unit_id", "symbol"),
+            left_output=("code_unit_id", "symbol", "def_event_id"),
+            right_output=("use_event_id", "path", "file_id"),
+        ),
+        use_threads=True,
+    )
+    if joined.num_rows == 0:
+        return empty_table(REACHES_SCHEMA)
+
+    edge_ids = prefixed_hash64(
+        "df_reach",
+        [joined["def_event_id"], joined["use_event_id"]],
+    )
+    out = set_or_append_column(joined, "edge_id", edge_ids)
+    out = align_table_to_schema(out, REACHES_SCHEMA)
+    return canonical_sort(
+        out,
+        sort_keys=[
+            ("code_unit_id", "ascending"),
+            ("symbol", "ascending"),
+            ("def_event_id", "ascending"),
+            ("use_event_id", "ascending"),
+        ],
+    )
 
 
-def _group_def_use_events(
+def _build_def_use_table(
     def_use_events: TableLike,
-) -> tuple[
-    dict[tuple[str, str], list[dict[str, object]]], dict[tuple[str, str], list[dict[str, object]]]
-]:
-    defs_by_key: dict[tuple[str, str], list[dict[str, object]]] = {}
-    uses_by_key: dict[tuple[str, str], list[dict[str, object]]] = {}
+    *,
+    kind: str,
+    event_col: str,
+    include_meta: bool = False,
+) -> TableLike:
+    kind_arr = column_or_null(def_use_events, "kind", pa.string())
+    mask = pc.equal(kind_arr, pa.scalar(kind))
+    table = def_use_events.filter(mask)
+    if table.num_rows == 0:
+        names = ["code_unit_id", "symbol", event_col]
+        if include_meta:
+            names.extend(["path", "file_id"])
+        return pa.Table.from_arrays(
+            [pa.array([], type=pa.string()) for _ in names],
+            names=names,
+        )
+
+    code_unit = column_or_null(table, "code_unit_id", pa.string())
+    symbol = column_or_null(table, "symbol", pa.string())
+    event_id = column_or_null(table, "event_id", pa.string())
+    valid = pc.and_(pc.is_valid(code_unit), pc.and_(pc.is_valid(symbol), pc.is_valid(event_id)))
+
     arrays = [
-        _column_or_null(def_use_events, "kind", pa.string()),
-        _column_or_null(def_use_events, "code_unit_id", pa.string()),
-        _column_or_null(def_use_events, "symbol", pa.string()),
-        _column_or_null(def_use_events, "event_id", pa.string()),
-        _column_or_null(def_use_events, "path", pa.string()),
-        _column_or_null(def_use_events, "file_id", pa.string()),
+        compute_array("filter", [code_unit, valid]),
+        compute_array("filter", [symbol, valid]),
+        compute_array("filter", [event_id, valid]),
     ]
-    for kind, code_unit_id, symbol, event_id, path, file_id in iter_arrays(arrays):
-        if not isinstance(code_unit_id, str) or not isinstance(symbol, str):
-            continue
-        key = (code_unit_id, symbol)
-        if kind == "def":
-            defs_by_key.setdefault(key, []).append({"event_id": event_id})
-        elif kind == "use":
-            uses_by_key.setdefault(key, []).append(
-                {"event_id": event_id, "path": path, "file_id": file_id}
-            )
-    return defs_by_key, uses_by_key
-
-
-def _build_reaching_rows(
-    defs_by_key: dict[tuple[str, str], list[dict[str, object]]],
-    uses_by_key: dict[tuple[str, str], list[dict[str, object]]],
-) -> list[dict[str, object]]:
-    out_rows: list[dict[str, object]] = []
-    for key in sorted(defs_by_key):
-        defs = defs_by_key.get(key, [])
-        uses = uses_by_key.get(key, [])
-        if not defs or not uses:
-            continue
-        code_unit_id, symbol = key
-        out_rows.extend(_reaching_rows_for_key(code_unit_id, symbol, defs, uses))
-    return out_rows
-
-
-def _reaching_rows_for_key(
-    code_unit_id: str,
-    symbol: str,
-    defs: list[dict[str, object]],
-    uses: list[dict[str, object]],
-) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    for d in defs:
-        def_id = d.get("event_id")
-        if not isinstance(def_id, str):
-            continue
-        for u in uses:
-            use_id = u.get("event_id")
-            if not isinstance(use_id, str):
-                continue
-            rows.append(
-                {
-                    "edge_id": None,
-                    "code_unit_id": code_unit_id,
-                    "def_event_id": def_id,
-                    "use_event_id": use_id,
-                    "symbol": symbol,
-                    "path": u.get("path"),
-                    "file_id": u.get("file_id"),
-                }
-            )
-    return rows
+    names = ["code_unit_id", "symbol", event_col]
+    if include_meta:
+        arrays.extend(
+            [
+                compute_array("filter", [column_or_null(table, "path", pa.string()), valid]),
+                compute_array("filter", [column_or_null(table, "file_id", pa.string()), valid]),
+            ]
+        )
+        names.extend(["path", "file_id"])
+    return pa.Table.from_arrays(arrays, names=names)

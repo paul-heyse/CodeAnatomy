@@ -1,4 +1,4 @@
-"""Extract SCIP metadata and occurrences into Arrow tables."""
+"""Extract SCIP metadata and occurrences into Arrow tables using shared helpers."""
 
 from __future__ import annotations
 
@@ -21,9 +21,9 @@ from arrowdsl.core.interop import (
     SchemaLike,
     TableLike,
 )
-from arrowdsl.schema.arrays import build_list_array, build_struct_array, set_or_append_column
+from arrowdsl.schema.arrays import build_struct_array, set_or_append_column
 from arrowdsl.schema.schema import empty_table
-from extract.nested_lists import ListAccumulator
+from extract.nested_lists import ListAccumulator, StructListAccumulator
 from extract.postprocess import apply_encoding
 from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
@@ -777,6 +777,10 @@ DIAG_TAGS_SPEC = NestedFieldSpec(
 )
 
 
+def _sig_doc_occurrence_accumulator() -> StructListAccumulator:
+    return StructListAccumulator.with_fields(("symbol", "symbol_roles", "range"))
+
+
 @dataclass
 class _SymbolInfoAccumulator:
     symbol_info_ids: list[str | None] = field(default_factory=list)
@@ -788,10 +792,7 @@ class _SymbolInfoAccumulator:
     sig_doc_texts: list[str | None] = field(default_factory=list)
     sig_doc_languages: list[str | None] = field(default_factory=list)
     sig_doc_is_null: list[bool] = field(default_factory=list)
-    sig_doc_occurrence_offsets: list[int] = field(default_factory=lambda: [0])
-    sig_doc_occurrence_symbols: list[str | None] = field(default_factory=list)
-    sig_doc_occurrence_roles: list[int] = field(default_factory=list)
-    sig_doc_occurrence_ranges: ListAccumulator[int] = field(default_factory=ListAccumulator)
+    sig_doc_occurrences: StructListAccumulator = field(default_factory=_sig_doc_occurrence_accumulator)
 
     def append(self, symbol_info: object) -> None:
         self.symbol_info_ids.append(None)
@@ -826,7 +827,7 @@ class _SymbolInfoAccumulator:
         self.sig_doc_texts.append(None)
         self.sig_doc_languages.append(None)
         self.sig_doc_is_null.append(True)
-        self.sig_doc_occurrence_offsets.append(len(self.sig_doc_occurrence_symbols))
+        self.sig_doc_occurrences.append_rows([])
 
     def _append_signature_doc_fields(self, sig_doc: object) -> None:
         text = getattr(sig_doc, "text", None)
@@ -842,20 +843,22 @@ class _SymbolInfoAccumulator:
         occurrences = getattr(sig_doc, "occurrences", None)
         if occurrences is None:
             occurrences = []
+        rows: list[dict[str, object]] = []
         for occ in occurrences:
-            self._append_signature_doc_occurrence(occ)
-        self.sig_doc_occurrence_offsets.append(len(self.sig_doc_occurrence_symbols))
-
-    def _append_signature_doc_occurrence(self, occ: object) -> None:
-        self.sig_doc_occurrence_symbols.append(getattr(occ, "symbol", None))
-        self.sig_doc_occurrence_roles.append(int(getattr(occ, "symbol_roles", 0) or 0))
-        range_values: list[int] = []
-        for value in getattr(occ, "range", []) or []:
-            if isinstance(value, bool):
-                continue
-            if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
-                range_values.append(int(value))
-        self.sig_doc_occurrence_ranges.append(range_values)
+            range_values: list[int] = []
+            for value in getattr(occ, "range", []) or []:
+                if isinstance(value, bool):
+                    continue
+                if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
+                    range_values.append(int(value))
+            rows.append(
+                {
+                    "symbol": getattr(occ, "symbol", None),
+                    "symbol_roles": int(getattr(occ, "symbol_roles", 0) or 0),
+                    "range": range_values,
+                }
+            )
+        self.sig_doc_occurrences.append_rows(rows)
 
     def to_table(self, *, schema: SchemaLike) -> TableLike:
         documentation = SYMBOL_DOC_SPEC.builder(self)
@@ -878,20 +881,13 @@ def _build_symbol_docs(acc: _SymbolInfoAccumulator) -> ArrayLike:
     return acc.documentation.build(value_type=pa.string())
 
 
-def _build_sig_doc_occ_ranges(acc: _SymbolInfoAccumulator) -> ArrayLike:
-    return acc.sig_doc_occurrence_ranges.build(value_type=pa.int32())
-
-
 def _build_sig_doc_occurrences(acc: _SymbolInfoAccumulator) -> ArrayLike:
-    return build_list_array(
-        pa.array(acc.sig_doc_occurrence_offsets, type=pa.int32()),
-        build_struct_array(
-            {
-                "symbol": pa.array(acc.sig_doc_occurrence_symbols, type=pa.string()),
-                "symbol_roles": pa.array(acc.sig_doc_occurrence_roles, type=pa.int32()),
-                "range": SIG_DOC_OCC_RANGE_SPEC.builder(acc),
-            }
-        ),
+    return acc.sig_doc_occurrences.build(
+        field_types={
+            "symbol": pa.string(),
+            "symbol_roles": pa.int32(),
+            "range": pa.list_(pa.int32()),
+        }
     )
 
 
@@ -910,12 +906,6 @@ SYMBOL_DOC_SPEC = NestedFieldSpec(
     name="documentation",
     dtype=pa.list_(pa.string()),
     builder=_build_symbol_docs,
-)
-
-SIG_DOC_OCC_RANGE_SPEC = NestedFieldSpec(
-    name="range",
-    dtype=pa.list_(pa.int32()),
-    builder=_build_sig_doc_occ_ranges,
 )
 
 SIG_DOC_OCCURRENCES_SPEC = NestedFieldSpec(

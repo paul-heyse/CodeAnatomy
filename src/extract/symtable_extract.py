@@ -1,4 +1,4 @@
-"""Extract Python symtable data into Arrow tables."""
+"""Extract Python symtable data into Arrow tables using shared helpers."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import pyarrow as pa
 from arrowdsl.core.ids import HashSpec
 from arrowdsl.core.interop import ArrayLike, TableLike
 from arrowdsl.schema.schema import empty_table
-from extract.common import iter_contexts, text_from_file_ctx
+from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.file_context import FileContext
 from extract.hashing import apply_hash_column
 from extract.join_helpers import JoinConfig, left_join
@@ -86,14 +86,10 @@ class SymtableContext:
 
         Returns
         -------
-        dict[str, object]
+        dict[str, str | None]
             File identity columns for row construction.
         """
-        return {
-            "file_id": self.file_id,
-            "path": self.path,
-            "file_sha256": self.file_sha256,
-        }
+        return file_identity_row(self.file_ctx)
 
 
 SCOPES_SPEC = register_dataset(

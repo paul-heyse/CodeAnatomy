@@ -7,27 +7,11 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from arrowdsl.core.ids import iter_arrays
-from arrowdsl.core.interop import ArrayLike, DataTypeLike, TableLike
+from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.arrays import set_or_append_column
-from normalize.spans import FileTextIndex, RepoTextIndex, ast_range_to_byte_span
-
-
-def _row_value_int(value: object | None) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    return None
-
-
-def _column_or_null(table: TableLike, col: str, dtype: DataTypeLike) -> ArrayLike:
-    if col in table.column_names:
-        return table[col]
-    return pa.nulls(table.num_rows, type=dtype)
+from normalize.arrow_utils import column_or_null
+from normalize.spans import ast_range_to_byte_span
+from normalize.text_index import RepoTextIndex, file_index, row_value_int
 
 
 @dataclass(frozen=True)
@@ -43,14 +27,6 @@ class BytecodeSpanColumns:
     out_bstart: str = "bstart"
     out_bend: str = "bend"
     out_ok: str = "span_ok"
-
-
-def _file_index(repo_index: RepoTextIndex, file_id: object, path: object) -> FileTextIndex | None:
-    if isinstance(file_id, str) and file_id in repo_index.by_file_id:
-        return repo_index.by_file_id[file_id]
-    if isinstance(path, str) and path in repo_index.by_path:
-        return repo_index.by_path[path]
-    return None
 
 
 def anchor_instructions(
@@ -87,24 +63,24 @@ def anchor_instructions(
     oks: list[bool] = []
 
     arrays = [
-        _column_or_null(py_bc_instructions, cols.file_id, pa.string()),
-        _column_or_null(py_bc_instructions, cols.path, pa.string()),
-        _column_or_null(py_bc_instructions, cols.start_line, pa.int64()),
-        _column_or_null(py_bc_instructions, cols.start_col, pa.int64()),
-        _column_or_null(py_bc_instructions, cols.end_line, pa.int64()),
-        _column_or_null(py_bc_instructions, cols.end_col, pa.int64()),
+        column_or_null(py_bc_instructions, cols.file_id, pa.string()),
+        column_or_null(py_bc_instructions, cols.path, pa.string()),
+        column_or_null(py_bc_instructions, cols.start_line, pa.int64()),
+        column_or_null(py_bc_instructions, cols.start_col, pa.int64()),
+        column_or_null(py_bc_instructions, cols.end_line, pa.int64()),
+        column_or_null(py_bc_instructions, cols.end_col, pa.int64()),
     ]
     for file_id, path, start_line, start_col, end_line, end_col in iter_arrays(arrays):
-        fidx = _file_index(repo_index, file_id, path)
+        fidx = file_index(repo_index, file_id=file_id, path=path)
         if fidx is None:
             bstarts.append(None)
             bends.append(None)
             oks.append(False)
             continue
-        ln_i = _row_value_int(start_line)
-        col_i = _row_value_int(start_col)
-        eln_i = _row_value_int(end_line)
-        ecol_i = _row_value_int(end_col)
+        ln_i = row_value_int(start_line)
+        col_i = row_value_int(start_col)
+        eln_i = row_value_int(end_line)
+        ecol_i = row_value_int(end_col)
         if ln_i is None or col_i is None or eln_i is None or ecol_i is None:
             bstarts.append(None)
             bends.append(None)

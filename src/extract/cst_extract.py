@@ -1,4 +1,4 @@
-"""Extract LibCST-derived structures into Arrow tables."""
+"""Extract LibCST-derived structures into Arrow tables using shared helpers."""
 
 from __future__ import annotations
 

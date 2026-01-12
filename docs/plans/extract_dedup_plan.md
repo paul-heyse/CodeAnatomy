@@ -10,6 +10,9 @@
 ### Scope 1: Shared file payload + context helpers
 **Description**
 Centralize file bytes/text decoding and standardized file identity mapping so every extractor uses the same logic.
+**Status**
+Completed with a small exception: typed context identity rows remain inline in
+`src/extract/symtable_extract.py` and `src/extract/bytecode_extract.py`.
 
 **Code pattern**
 ```python
@@ -52,15 +55,18 @@ def bytes_from_file_ctx(file_ctx: FileContext) -> bytes | None:
 - Update: `src/extract/tree_sitter_extract.py`
 
 **Integration checklist**
-- [ ] Replace `_row_text` / `_row_bytes` with `text_from_file_ctx` / `bytes_from_file_ctx`.
-- [ ] Replace per-file identity dict literals with `file_identity_row`.
-- [ ] Keep extractor-specific fields layered on top of the shared identity.
+- [x] Replace `_row_text` / `_row_bytes` with `text_from_file_ctx` / `bytes_from_file_ctx`.
+- [ ] Replace per-file identity dict literals with `file_identity_row` (still inline for typed context
+  rows in `src/extract/symtable_extract.py` and `src/extract/bytecode_extract.py`).
+- [x] Keep extractor-specific fields layered on top of the shared identity.
 
 ---
 
 ### Scope 2: Shared hash column + validity helpers
 **Description**
 Deduplicate `_valid_mask` + `_apply_hash_column` patterns in CST/symtable/bytecode/tree-sitter (and any future extractors).
+**Status**
+Completed.
 
 **Code pattern**
 ```python
@@ -99,15 +105,17 @@ def apply_hash_column(
 - Update: `src/extract/tree_sitter_extract.py`
 
 **Integration checklist**
-- [ ] Delete local `_valid_mask`/`_apply_hash_column` variants.
-- [ ] Route hash ID generation through `apply_hash_column`.
-- [ ] Add `required` fields when existing logic masked invalids.
+- [x] Delete local `_valid_mask`/`_apply_hash_column` variants.
+- [x] Route hash ID generation through `apply_hash_column`.
+- [x] Add `required` fields when existing logic masked invalids.
 
 ---
 
 ### Scope 3: Rows → table + schema alignment helper
 **Description**
 Standardize table creation (row list to Arrow table), empty-table fallbacks, and schema alignment into a shared utility.
+**Status**
+Completed with explicit `rows_to_table` + `align_table` usage; `build_and_align` remains available but unused.
 
 **Code pattern**
 ```python
@@ -143,15 +151,18 @@ def build_and_align(
 - Update: `src/extract/scip_extract.py` (alignment helpers)
 
 **Integration checklist**
-- [ ] Replace per-module “if rows else empty_table” blocks with `rows_to_table`.
-- [ ] Replace ad-hoc `SchemaTransform(...).apply` with `align_table`.
-- [ ] Keep extractor-specific nested-array construction but route final tables through `build_and_align`.
+- [x] Replace per-module “if rows else empty_table” blocks with `rows_to_table`.
+- [x] Replace ad-hoc `SchemaTransform(...).apply` with `align_table`.
+- [ ] Adopt `build_and_align` as the single helper (current usage keeps `rows_to_table` +
+  `align_table` explicit for clarity).
 
 ---
 
 ### Scope 4: Nested list/struct accumulators
 **Description**
 Unify offsets/value accumulation for list columns and list-of-struct columns across CST, SCIP, and symtable.
+**Status**
+Mostly complete: list columns and CST QNames use shared accumulators; SCIP signature occurrences still build list<struct> manually.
 
 **Code pattern**
 ```python
@@ -189,15 +200,18 @@ class ListAccumulator:
 - Update: `src/extract/symtable_extract.py`
 
 **Integration checklist**
-- [ ] Replace `_offsets_start`, `_append_string_list`, `_extend_offsets`.
-- [ ] Replace per-module list builders with `ListAccumulator.build`.
-- [ ] Provide `StructListAccumulator` for CST QNames and SCIP signature lists.
+- [x] Replace `_offsets_start`, `_append_string_list`, `_extend_offsets`.
+- [x] Replace per-module list builders with `ListAccumulator.build`.
+- [ ] Convert SCIP signature occurrence list<struct> to `StructListAccumulator` (still manual in
+  `src/extract/scip_extract.py`).
 
 ---
 
 ### Scope 5: Dataset spec registration helper
 **Description**
 Reduce boilerplate for `GLOBAL_SCHEMA_REGISTRY.register_dataset(make_dataset_spec(make_table_spec(...)))`.
+**Status**
+Completed.
 
 **Code pattern**
 ```python
@@ -236,14 +250,16 @@ def register_dataset(
 - Update: `src/extract/scip_extract.py`
 
 **Integration checklist**
-- [ ] Replace repeated registry boilerplate with `register_dataset`.
-- [ ] Keep bundles explicit where needed (file identity, span bundles).
+- [x] Replace repeated registry boilerplate with `register_dataset`.
+- [x] Keep bundles explicit where needed (file identity, span bundles).
 
 ---
 
 ### Scope 6: Shared derived-view helpers (filters/projections)
 **Description**
 Normalize "derived view" logic (e.g., AST defs) using ArrowDSL FilterSpec and predicate helpers.
+**Status**
+Completed.
 
 **Code pattern**
 ```python
@@ -263,14 +279,16 @@ def ast_def_nodes(nodes: TableLike) -> TableLike:
 - Update: `src/extract/ast_extract.py` (replace in-function defs filter)
 
 **Integration checklist**
-- [ ] Move derived-table logic into shared helpers.
-- [ ] Keep extractor API returning derived tables where expected.
+- [x] Move derived-table logic into shared helpers.
+- [x] Keep extractor API returning derived tables where expected.
 
 ---
 
 ### Scope 7: Shared join helper for kernel lane
 **Description**
 Wrap `apply_join` + `JoinSpec` boilerplate for repeated use (symtable/runtime inspect).
+**Status**
+Completed.
 
 **Code pattern**
 ```python
@@ -307,14 +325,16 @@ def left_join(
 - Update: `src/extract/runtime_inspect_extract.py`
 
 **Integration checklist**
-- [ ] Replace repeated `apply_join + JoinSpec` blocks with `left_join`.
-- [ ] Keep outputs explicit to preserve schema evolution.
+- [x] Replace repeated `apply_join + JoinSpec` blocks with `left_join`.
+- [x] Keep outputs explicit to preserve schema evolution.
 
 ---
 
 ### Scope 8: Post-processing pipeline helpers (hash → align → encode)
 **Description**
 Create a shared “postprocess” helper for extractors that consistently apply hash IDs, schema alignment, and optional dictionary encoding.
+**Status**
+Completed for SCIP; other extractors do not currently apply dictionary encoding.
 
 **Code pattern**
 ```python
@@ -330,20 +350,20 @@ def apply_encoding(table: TableLike, columns: Sequence[str]) -> TableLike:
 **Target files**
 - New: `src/extract/postprocess.py`
 - Update: `src/extract/scip_extract.py`
-- Update: `src/extract/cst_extract.py`
-- Update: `src/extract/bytecode_extract.py`
-- Update: `src/extract/symtable_extract.py`
-- Update: `src/extract/tree_sitter_extract.py`
+- Note: no dictionary encoding calls in other extractors at this time.
 
 **Integration checklist**
-- [ ] Centralize dictionary-encoding usage via `apply_encoding`.
-- [ ] Keep hash/align order consistent (hash first, align second, encode last).
+- [x] Centralize dictionary-encoding usage via `apply_encoding` (currently used in
+  `src/extract/scip_extract.py`).
+- [x] Keep hash/align order consistent (hash first, align second, encode last).
 
 ---
 
 ### Scope 9: Extractor refactors to use helpers
 **Description**
 Apply the helper modules consistently to eliminate duplicated code paths and keep each extractor distinctive.
+**Status**
+Completed.
 
 **Target files**
 - `src/extract/ast_extract.py`
@@ -356,22 +376,24 @@ Apply the helper modules consistently to eliminate duplicated code paths and kee
 - `src/extract/repo_scan.py`
 
 **Integration checklist**
-- [ ] Replace local row/text/bytes helpers with shared functions.
-- [ ] Replace nested list builders with `nested_lists` accumulators.
-- [ ] Replace hash column helpers with `extract/hashing.py`.
-- [ ] Replace schema transforms with `extract/tables.py`.
-- [ ] Keep extractor-specific row collection unchanged except for shared helpers.
+- [x] Replace local row/text/bytes helpers with shared functions.
+- [x] Replace nested list builders with `nested_lists` accumulators.
+- [x] Replace hash column helpers with `extract/hashing.py`.
+- [x] Replace schema transforms with `extract/tables.py`.
+- [x] Keep extractor-specific row collection unchanged except for shared helpers.
 
 ---
 
 ### Scope 10: Documentation and naming cleanup
 **Description**
 Update docstrings and module comments to reflect shared utilities and remove stale per-module descriptions.
+**Status**
+Not started (docstring refresh still outstanding).
 
 **Target files**
 - All touched extractor modules above.
 
 **Integration checklist**
 - [ ] Update module docstrings to reference shared helpers.
-- [ ] Ensure helper modules have NumPy-style docstrings.
+- [x] Ensure helper modules have NumPy-style docstrings.
 - [ ] Keep helper names and location aligned with extractor usage.

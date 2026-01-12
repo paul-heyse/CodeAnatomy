@@ -1,4 +1,4 @@
-"""Scan a repository for source files and capture file metadata."""
+"""Scan a repository for source files and capture file metadata using shared helpers."""
 
 from __future__ import annotations
 

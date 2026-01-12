@@ -1,4 +1,4 @@
-"""Extract Python AST facts into Arrow tables."""
+"""Extract Python AST facts into Arrow tables using shared helpers."""
 
 from __future__ import annotations
 

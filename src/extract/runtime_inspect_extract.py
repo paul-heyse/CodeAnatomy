@@ -1,4 +1,4 @@
-"""Extract runtime inspection tables in a sandboxed subprocess."""
+"""Extract runtime inspection tables in a sandboxed subprocess using shared helpers."""
 
 from __future__ import annotations
 

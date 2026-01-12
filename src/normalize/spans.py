@@ -9,62 +9,34 @@ from typing import Literal
 import pyarrow as pa
 
 from arrowdsl.core.ids import iter_arrays
-from arrowdsl.core.interop import ArrayLike, DataTypeLike, TableLike
-from arrowdsl.schema.arrays import (
-    ColumnDefaultsSpec,
-    ConstExpr,
-    FieldExpr,
-    set_or_append_column,
-)
+from arrowdsl.core.interop import ArrayLike, TableLike
+from arrowdsl.schema.arrays import set_or_append_column
+from normalize.arrow_utils import column_or_null
 from normalize.ids import add_span_id_column
-from schema_spec.specs import ArrowFieldSpec, scip_range_bundle
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
+from normalize.span_pipeline import (
+    SpanOutputColumns,
+    append_alias_cols,
+    append_span_columns,
+    span_error_table,
+)
+from normalize.text_index import (
+    DEFAULT_POSITION_ENCODING,
+    ENC_UTF8,
+    ENC_UTF16,
+    ENC_UTF32,
+    FileTextIndex,
+    RepoTextIndex,
+    normalize_position_encoding,
+    row_value_int,
+)
+from schema_spec.specs import scip_range_bundle
 
 type RowValue = object | None
-
-ENC_UTF8 = 1
-ENC_UTF16 = 2
-ENC_UTF32 = 3
-DEFAULT_POSITION_ENCODING = ENC_UTF32
-VALID_POSITION_ENCODINGS = {ENC_UTF8, ENC_UTF16, ENC_UTF32}
-SCHEMA_VERSION = 1
 
 SCIP_RANGE_FIELDS = tuple(field.name for field in scip_range_bundle(include_len=True).fields)
 SCIP_ENC_RANGE_FIELDS = tuple(
     field.name for field in scip_range_bundle(prefix="enc_", include_len=True).fields
 )
-
-
-@dataclass(frozen=True)
-class FileTextIndex:
-    """
-    Per-file text index for byte-span conversion.
-
-    Used to convert:
-      - (line, char) -> byte offsets (bstart/bend)
-      - AST lineno/col -> byte offsets
-
-    All byte offsets are in UTF-8 bytes of the decoded document text (canonical coordinate system).
-
-    Important: lines are split with keepends=True so that cumulative byte lengths reproduce
-    file-length coordinates (including newlines).
-    """
-
-    file_id: str
-    path: str
-    file_sha256: str | None
-    encoding: str | None
-    text: str
-    lines: list[str]  # splitlines(keepends=True)
-    line_start_utf8: list[int]  # length = len(lines)+1; line_start_utf8[i] = byte start of line i
-
-
-@dataclass(frozen=True)
-class RepoTextIndex:
-    """Repo-wide indices for fast lookup."""
-
-    by_file_id: dict[str, FileTextIndex]
-    by_path: dict[str, FileTextIndex]
 
 
 @dataclass(frozen=True)
@@ -135,30 +107,6 @@ class OccurrenceSpanResult:
     error: dict[str, str] | None
 
 
-SPAN_ERROR_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="span_errors_v1",
-            version=SCHEMA_VERSION,
-            bundles=(),
-            fields=[
-                ArrowFieldSpec(name="document_id", dtype=pa.string()),
-                ArrowFieldSpec(name="path", dtype=pa.string()),
-                ArrowFieldSpec(name="reason", dtype=pa.string()),
-            ],
-        )
-    )
-)
-
-SPAN_ERROR_SCHEMA = SPAN_ERROR_SPEC.table_spec.to_arrow_schema()
-
-
-def _column_or_null(table: TableLike, col: str, dtype: DataTypeLike) -> ArrayLike:
-    if col in table.column_names:
-        return table[col]
-    return pa.nulls(table.num_rows, type=dtype)
-
-
 def _decode_repo_row_text(
     text_value: RowValue,
     bytes_value: RowValue,
@@ -175,29 +123,16 @@ def _decode_repo_row_text(
     return None
 
 
-def _row_value_int(value: RowValue) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value) if value.is_integer() else None
-    if isinstance(value, str):
-        stripped = value.strip()
-        return int(stripped) if stripped.isdigit() else None
-    return None
-
-
 def _normalized_range(
     start_line: RowValue,
     start_char: RowValue,
     end_line: RowValue,
     end_char: RowValue,
 ) -> tuple[int, int, int, int] | None:
-    sl = _row_value_int(start_line)
-    sc = _row_value_int(start_char)
-    el = _row_value_int(end_line)
-    ec = _row_value_int(end_char)
+    sl = row_value_int(start_line)
+    sc = row_value_int(start_char)
+    el = row_value_int(end_line)
+    ec = row_value_int(end_char)
     if sl is None or sc is None or el is None or ec is None:
         return None
     return sl, sc, el, ec
@@ -242,12 +177,12 @@ def build_repo_text_index(
     _ = ctx
 
     arrays = [
-        _column_or_null(repo_files, "file_id", pa.string()),
-        _column_or_null(repo_files, "path", pa.string()),
-        _column_or_null(repo_files, "file_sha256", pa.string()),
-        _column_or_null(repo_files, "encoding", pa.string()),
-        _column_or_null(repo_files, "text", pa.string()),
-        _column_or_null(repo_files, "bytes", pa.binary()),
+        column_or_null(repo_files, "file_id", pa.string()),
+        column_or_null(repo_files, "path", pa.string()),
+        column_or_null(repo_files, "file_sha256", pa.string()),
+        column_or_null(repo_files, "encoding", pa.string()),
+        column_or_null(repo_files, "text", pa.string()),
+        column_or_null(repo_files, "bytes", pa.binary()),
     ]
     for (
         file_id_value,
@@ -287,37 +222,6 @@ def build_repo_text_index(
 # -----------------------------
 # SCIP position encoding helpers
 # -----------------------------
-
-
-def normalize_position_encoding(value: RowValue) -> int:
-    """Normalize position encoding values to SCIP enum integers.
-
-    Accepts:
-      - int enums (1 UTF8 bytes, 2 UTF16 code units, 3 UTF32 codepoints)
-      - strings like "POSITION_ENCODING_UTF16", "UTF16", "2", etc.
-
-    Returns
-    -------
-    int
-        Normalized encoding enum (defaults to 3 for Python/scip-python).
-    """
-    encoding = DEFAULT_POSITION_ENCODING
-    if value is None:
-        return encoding
-    if isinstance(value, int):
-        return value if value in VALID_POSITION_ENCODINGS else encoding
-    if isinstance(value, str):
-        s = value.strip().upper()
-        if s.isdigit():
-            v = int(s)
-            return v if v in VALID_POSITION_ENCODINGS else encoding
-        if "UTF8" in s:
-            encoding = ENC_UTF8
-        elif "UTF16" in s:
-            encoding = ENC_UTF16
-        elif "UTF32" in s:
-            encoding = ENC_UTF32
-    return encoding
 
 
 def code_unit_offset_to_py_index(line: str, offset: int, position_encoding: int) -> int:
@@ -452,12 +356,12 @@ class AstSpanInputs:
 
 
 def _ast_span_inputs(py_ast_nodes: TableLike, cols: AstSpanColumns) -> AstSpanInputs:
-    end_linenos = _column_or_null(py_ast_nodes, cols.end_lineno, pa.int64())
-    end_cols = _column_or_null(py_ast_nodes, cols.end_col, pa.int64())
+    end_linenos = column_or_null(py_ast_nodes, cols.end_lineno, pa.int64())
+    end_cols = column_or_null(py_ast_nodes, cols.end_col, pa.int64())
     return AstSpanInputs(
-        file_ids=_column_or_null(py_ast_nodes, cols.file_id, pa.string()),
-        linenos=_column_or_null(py_ast_nodes, cols.lineno, pa.int64()),
-        col_offsets=_column_or_null(py_ast_nodes, cols.col, pa.int64()),
+        file_ids=column_or_null(py_ast_nodes, cols.file_id, pa.string()),
+        linenos=column_or_null(py_ast_nodes, cols.lineno, pa.int64()),
+        col_offsets=column_or_null(py_ast_nodes, cols.col, pa.int64()),
         end_linenos=end_linenos,
         end_cols=end_cols,
     )
@@ -484,10 +388,10 @@ def _compute_ast_spans(
             bends.append(None)
             oks.append(False)
             continue
-        ln_int = _row_value_int(ln)
-        co_int = _row_value_int(co)
-        eln_int = _row_value_int(eln)
-        eco_int = _row_value_int(eco)
+        ln_int = row_value_int(ln)
+        co_int = row_value_int(co)
+        eln_int = row_value_int(eln)
+        eco_int = row_value_int(eco)
         if ln_int is None or co_int is None or eln_int is None or eco_int is None:
             bstarts.append(None)
             bends.append(None)
@@ -527,9 +431,17 @@ def add_ast_byte_spans(
     inputs = _ast_span_inputs(py_ast_nodes, cols)
     bstarts, bends, oks = _compute_ast_spans(repo_index, inputs)
 
-    out = set_or_append_column(py_ast_nodes, cols.out_bstart, pa.array(bstarts, type=pa.int64()))
-    out = set_or_append_column(out, cols.out_bend, pa.array(bends, type=pa.int64()))
-    out = set_or_append_column(out, cols.out_ok, pa.array(oks, type=pa.bool_()))
+    out = append_span_columns(
+        py_ast_nodes,
+        bstarts=bstarts,
+        bends=bends,
+        oks=oks,
+        columns=SpanOutputColumns(
+            bstart=cols.out_bstart,
+            bend=cols.out_bend,
+            ok=cols.out_ok,
+        ),
+    )
     return add_span_id_column(out)
 
 
@@ -557,8 +469,8 @@ def _build_doc_posenc_map(
     """
     doc_posenc: dict[str, int] = {}
     arrays = [
-        _column_or_null(scip_documents, columns.document_id, pa.string()),
-        _column_or_null(scip_documents, columns.doc_posenc, pa.string()),
+        column_or_null(scip_documents, columns.document_id, pa.string()),
+        column_or_null(scip_documents, columns.doc_posenc, pa.string()),
     ]
     for did, posenc in iter_arrays(arrays):
         if did is None:
@@ -579,18 +491,18 @@ def _build_occurrence_rows(
         Occurrence rows in order.
     """
     base_arrays = [
-        _column_or_null(scip_occurrences, columns.document_id, pa.string()),
-        _column_or_null(scip_occurrences, columns.path, pa.string()),
-        _column_or_null(scip_occurrences, columns.start_line, pa.int64()),
-        _column_or_null(scip_occurrences, columns.start_char, pa.int64()),
-        _column_or_null(scip_occurrences, columns.end_line, pa.int64()),
-        _column_or_null(scip_occurrences, columns.end_char, pa.int64()),
-        _column_or_null(scip_occurrences, columns.range_len, pa.int64()),
-        _column_or_null(scip_occurrences, columns.enc_start_line, pa.int64()),
-        _column_or_null(scip_occurrences, columns.enc_start_char, pa.int64()),
-        _column_or_null(scip_occurrences, columns.enc_end_line, pa.int64()),
-        _column_or_null(scip_occurrences, columns.enc_end_char, pa.int64()),
-        _column_or_null(scip_occurrences, columns.enc_range_len, pa.int64()),
+        column_or_null(scip_occurrences, columns.document_id, pa.string()),
+        column_or_null(scip_occurrences, columns.path, pa.string()),
+        column_or_null(scip_occurrences, columns.start_line, pa.int64()),
+        column_or_null(scip_occurrences, columns.start_char, pa.int64()),
+        column_or_null(scip_occurrences, columns.end_line, pa.int64()),
+        column_or_null(scip_occurrences, columns.end_char, pa.int64()),
+        column_or_null(scip_occurrences, columns.range_len, pa.int64()),
+        column_or_null(scip_occurrences, columns.enc_start_line, pa.int64()),
+        column_or_null(scip_occurrences, columns.enc_start_char, pa.int64()),
+        column_or_null(scip_occurrences, columns.enc_end_line, pa.int64()),
+        column_or_null(scip_occurrences, columns.enc_end_char, pa.int64()),
+        column_or_null(scip_occurrences, columns.enc_range_len, pa.int64()),
     ]
     rows: list[OccurrenceRow] = []
     for did, path, sl, sc, el, ec, rl, esl, esc, eel, eec, erl in iter_arrays(base_arrays):
@@ -640,7 +552,7 @@ def _compute_occurrence_span(
             error=_span_error(did, path_value, "missing_repo_text_for_path"),
         )
 
-    range_len = _row_value_int(row.range_len)
+    range_len = row_value_int(row.range_len)
     if range_len is None or range_len <= 0:
         return OccurrenceSpanResult(
             bstart=None,
@@ -670,7 +582,7 @@ def _compute_occurrence_span(
     )
     enc_bstart: int | None = None
     enc_bend: int | None = None
-    enc_range_len = _row_value_int(row.enc_range_len)
+    enc_range_len = row_value_int(row.enc_range_len)
     if enc_range_len is not None and enc_range_len > 0:
         enc_range = _normalized_range(
             row.enc_start_line,
@@ -696,26 +608,6 @@ def _compute_occurrence_span(
         enc_bend=enc_bend,
         ok=ok,
         error=error,
-    )
-
-
-def _span_error_table(rows: list[dict[str, str]]) -> TableLike:
-    """Build the span error table.
-
-    Returns
-    -------
-    TableLike
-        Span error table.
-    """
-    if rows:
-        return pa.Table.from_pylist(rows, schema=SPAN_ERROR_SCHEMA)
-    return pa.Table.from_arrays(
-        [
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-            pa.array([], type=pa.string()),
-        ],
-        names=["document_id", "path", "reason"],
     )
 
 
@@ -759,55 +651,26 @@ def add_scip_occurrence_byte_spans(
         if res.error is not None:
             err_rows.append(res.error)
 
-    out = set_or_append_column(
+    out = append_span_columns(
         scip_occurrences,
-        cols.out_bstart,
-        pa.array(bstarts, type=pa.int64()),
+        bstarts=bstarts,
+        bends=bends,
+        oks=oks,
+        columns=SpanOutputColumns(
+            bstart=cols.out_bstart,
+            bend=cols.out_bend,
+            ok=cols.out_ok,
+        ),
     )
-    out = set_or_append_column(out, cols.out_bend, pa.array(bends, type=pa.int64()))
-    out = set_or_append_column(
-        out,
-        cols.out_enc_bstart,
-        pa.array(ebstarts, type=pa.int64()),
-    )
-    out = set_or_append_column(
-        out,
-        cols.out_enc_bend,
-        pa.array(ebends, type=pa.int64()),
-    )
-    out = set_or_append_column(out, cols.out_ok, pa.array(oks, type=pa.bool_()))
+    out = set_or_append_column(out, cols.out_enc_bstart, pa.array(ebstarts, type=pa.int64()))
+    out = set_or_append_column(out, cols.out_enc_bend, pa.array(ebends, type=pa.int64()))
     out = add_span_id_column(out)
-    return out, _span_error_table(err_rows)
+    return out, span_error_table(err_rows)
 
 
 # -----------------------------
 # CST span canonicalization
 # -----------------------------
-
-
-def _append_alias_cols(table: TableLike, aliases: dict[str, str]) -> TableLike:
-    """Append alias columns mapped to existing columns.
-
-    Returns
-    -------
-    TableLike
-        Table with alias columns appended.
-    """
-    out = table
-    for newc, oldc in aliases.items():
-        if newc in out.column_names:
-            continue
-        if oldc not in out.column_names:
-            defaults = ColumnDefaultsSpec(
-                defaults=((newc, ConstExpr(None, dtype=pa.int64())),),
-            )
-            out = defaults.apply(out)
-            continue
-        defaults = ColumnDefaultsSpec(
-            defaults=((newc, FieldExpr(oldc)),),
-        )
-        out = defaults.apply(out)
-    return out
 
 
 def normalize_cst_callsites_spans(
@@ -826,8 +689,8 @@ def normalize_cst_callsites_spans(
         Callsites table with canonical span aliases.
     """
     if primary == "call":
-        return _append_alias_cols(py_cst_callsites, {"bstart": "call_bstart", "bend": "call_bend"})
-    return _append_alias_cols(py_cst_callsites, {"bstart": "callee_bstart", "bend": "callee_bend"})
+        return append_alias_cols(py_cst_callsites, {"bstart": "call_bstart", "bend": "call_bend"})
+    return append_alias_cols(py_cst_callsites, {"bstart": "callee_bstart", "bend": "callee_bend"})
 
 
 def normalize_cst_imports_spans(
@@ -843,8 +706,8 @@ def normalize_cst_imports_spans(
         Imports table with canonical span aliases.
     """
     if primary == "stmt":
-        return _append_alias_cols(py_cst_imports, {"bstart": "stmt_bstart", "bend": "stmt_bend"})
-    return _append_alias_cols(py_cst_imports, {"bstart": "alias_bstart", "bend": "alias_bend"})
+        return append_alias_cols(py_cst_imports, {"bstart": "stmt_bstart", "bend": "stmt_bend"})
+    return append_alias_cols(py_cst_imports, {"bstart": "alias_bstart", "bend": "alias_bend"})
 
 
 def normalize_cst_defs_spans(
@@ -863,5 +726,5 @@ def normalize_cst_defs_spans(
         Definitions table with canonical span aliases.
     """
     if primary == "def":
-        return _append_alias_cols(py_cst_defs, {"bstart": "def_bstart", "bend": "def_bend"})
-    return _append_alias_cols(py_cst_defs, {"bstart": "name_bstart", "bend": "name_bend"})
+        return append_alias_cols(py_cst_defs, {"bstart": "def_bstart", "bend": "def_bend"})
+    return append_alias_cols(py_cst_defs, {"bstart": "name_bstart", "bend": "name_bend"})

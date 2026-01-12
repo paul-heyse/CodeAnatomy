@@ -1,4 +1,4 @@
-"""Extract Python bytecode artifacts into Arrow tables."""
+"""Extract Python bytecode artifacts into Arrow tables using shared helpers."""
 
 from __future__ import annotations
 
@@ -6,13 +6,14 @@ import dis
 import types as pytypes
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from typing import cast
 
 import pyarrow as pa
 
 from arrowdsl.core.ids import HashSpec
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.schema import empty_table
-from extract.common import iter_contexts, text_from_file_ctx
+from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.file_context import FileContext
 from extract.hashing import apply_hash_column
 from extract.spec_helpers import register_dataset
@@ -100,7 +101,7 @@ class BytecodeFileContext:
         """
         return self.file_ctx.file_sha256
 
-    def identity_row(self) -> dict[str, RowValue]:
+    def identity_row(self) -> Row:
         """Return the identity row for this context.
 
         Returns
@@ -108,11 +109,7 @@ class BytecodeFileContext:
         dict[str, object]
             File identity columns for row construction.
         """
-        return {
-            "file_id": self.file_id,
-            "path": self.path,
-            "file_sha256": self.file_sha256,
-        }
+        return cast("Row", file_identity_row(self.file_ctx))
 
 
 @dataclass(frozen=True)

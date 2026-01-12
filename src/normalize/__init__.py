@@ -13,8 +13,6 @@ from normalize.schema_infer import (
     unify_schemas,
 )
 from normalize.spans import (
-    FileTextIndex,
-    RepoTextIndex,
     add_ast_byte_spans,
     add_scip_occurrence_byte_spans,
     build_repo_text_index,
@@ -22,6 +20,7 @@ from normalize.spans import (
     normalize_cst_defs_spans,
     normalize_cst_imports_spans,
 )
+from normalize.text_index import FileTextIndex, RepoTextIndex
 from normalize.types import normalize_type_exprs, normalize_types
 
 __all__ = [

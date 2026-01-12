@@ -1,4 +1,4 @@
-"""Extract tree-sitter nodes and diagnostics into Arrow tables."""
+"""Extract tree-sitter nodes and diagnostics into Arrow tables using shared helpers."""
 
 from __future__ import annotations
 

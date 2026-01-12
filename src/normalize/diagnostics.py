@@ -6,29 +6,21 @@ from dataclasses import dataclass, field
 
 import pyarrow as pa
 
-from arrowdsl.core.ids import iter_arrays, prefixed_hash_id
-from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike
+from arrowdsl.core.ids import iter_arrays
+from arrowdsl.core.interop import ArrayLike, TableLike
 from arrowdsl.schema.arrays import build_list_array, build_struct_array, const_array
-from arrowdsl.schema.schema import EncodingSpec, empty_table, encode_columns
-from normalize.spans import (
+from arrowdsl.schema.schema import empty_table, encode_columns
+from normalize.arrow_utils import column_or_null
+from normalize.ids import prefixed_hash64
+from normalize.schemas import DIAG_DETAIL_STRUCT, DIAG_ENCODING_SPECS, DIAG_SCHEMA, DIAG_SPEC
+from normalize.spans import line_char_to_byte_offset
+from normalize.text_index import (
     DEFAULT_POSITION_ENCODING,
-    ENC_UTF8,
-    ENC_UTF16,
-    ENC_UTF32,
-    FileTextIndex,
     RepoTextIndex,
-    line_char_to_byte_offset,
+    file_index,
+    normalize_position_encoding,
 )
-from schema_spec.specs import (
-    DICT_STRING,
-    ArrowFieldSpec,
-    NestedFieldSpec,
-    file_identity_bundle,
-    span_bundle,
-)
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
-
-SCHEMA_VERSION = 1
+from schema_spec.specs import NestedFieldSpec
 
 SCIP_SEVERITY_ERROR = 1
 SCIP_SEVERITY_WARNING = 2
@@ -140,16 +132,6 @@ class _ScipDiagInput:
     tags: object | None
 
 
-DIAG_DETAIL_STRUCT = pa.struct(
-    [
-        ("detail_kind", pa.string()),
-        ("error_type", pa.string()),
-        ("source", pa.string()),
-        ("tags", pa.list_(pa.string())),
-    ]
-)
-
-
 def _build_diag_details(buffers: _DiagBuffers) -> ArrayLike:
     tags = build_list_array(
         pa.array(buffers.detail_tag_offsets, type=pa.int32()),
@@ -174,48 +156,6 @@ DIAG_DETAIL_SPEC = NestedFieldSpec(
     dtype=pa.list_(DIAG_DETAIL_STRUCT),
     builder=_build_diag_details,
 )
-
-DIAG_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="diagnostics_norm_v1",
-            version=SCHEMA_VERSION,
-            bundles=(file_identity_bundle(include_sha256=False), span_bundle()),
-            fields=[
-                ArrowFieldSpec(name="diag_id", dtype=pa.string()),
-                ArrowFieldSpec(name="severity", dtype=DICT_STRING),
-                ArrowFieldSpec(name="message", dtype=pa.string()),
-                ArrowFieldSpec(name="diag_source", dtype=DICT_STRING),
-                ArrowFieldSpec(name="code", dtype=pa.string()),
-                ArrowFieldSpec(name="details", dtype=pa.list_(DIAG_DETAIL_STRUCT)),
-            ],
-        )
-    )
-)
-
-DIAG_ENCODING_SPECS: tuple[EncodingSpec, ...] = (
-    EncodingSpec(column="severity"),
-    EncodingSpec(column="diag_source"),
-)
-
-DIAG_SCHEMA = DIAG_SPEC.table_spec.to_arrow_schema()
-
-
-def _column_or_null(
-    table: TableLike,
-    col: str,
-    dtype: DataTypeLike,
-) -> ArrayLike | ChunkedArrayLike:
-    if col in table.column_names:
-        return table[col]
-    return pa.nulls(table.num_rows, type=dtype)
-
-
-def _prefixed_hash64(
-    prefix: str,
-    arrays: list[ArrayLike | ChunkedArrayLike],
-) -> ArrayLike | ChunkedArrayLike:
-    return prefixed_hash_id(arrays, prefix=prefix)
 
 
 def _detail_tags(value: object | None) -> list[str]:
@@ -246,7 +186,7 @@ def _cst_parse_error_row(
     values: tuple[object | None, ...],
 ) -> _DiagRow | None:
     path, file_id, raw_line, raw_column, message, error_type = values
-    fidx = _file_index(repo_text_index, file_id=file_id, path=path)
+    fidx = file_index(repo_text_index, file_id=file_id, path=path)
     if fidx is None:
         return None
     line_int = raw_line if isinstance(raw_line, int) else None
@@ -280,31 +220,18 @@ def _cst_parse_error_row(
     )
 
 
-def _file_index(
-    repo_text_index: RepoTextIndex,
-    *,
-    file_id: object | None,
-    path: object | None,
-) -> FileTextIndex | None:
-    if isinstance(file_id, str):
-        return repo_text_index.by_file_id.get(file_id)
-    if isinstance(path, str):
-        return repo_text_index.by_path.get(path)
-    return None
-
-
 def _cst_parse_error_table(
     repo_text_index: RepoTextIndex,
     cst_parse_errors: TableLike,
 ) -> TableLike:
     buffers = _DiagBuffers()
     arrays = [
-        _column_or_null(cst_parse_errors, "path", pa.string()),
-        _column_or_null(cst_parse_errors, "file_id", pa.string()),
-        _column_or_null(cst_parse_errors, "raw_line", pa.int64()),
-        _column_or_null(cst_parse_errors, "raw_column", pa.int64()),
-        _column_or_null(cst_parse_errors, "message", pa.string()),
-        _column_or_null(cst_parse_errors, "error_type", pa.string()),
+        column_or_null(cst_parse_errors, "path", pa.string()),
+        column_or_null(cst_parse_errors, "file_id", pa.string()),
+        column_or_null(cst_parse_errors, "raw_line", pa.int64()),
+        column_or_null(cst_parse_errors, "raw_column", pa.int64()),
+        column_or_null(cst_parse_errors, "message", pa.string()),
+        column_or_null(cst_parse_errors, "error_type", pa.string()),
     ]
     for values in iter_arrays(arrays):
         row = _cst_parse_error_row(repo_text_index, values)
@@ -321,7 +248,7 @@ def _cst_parse_error_table(
     source_arr = pa.array(buffers.sources, type=pa.string())
     message_arr = pa.array(buffers.messages, type=pa.string())
     severity_arr = pa.array(buffers.severities, type=pa.string())
-    diag_id = _prefixed_hash64("diag", [path_arr, bstart_arr, bend_arr, source_arr, message_arr])
+    diag_id = prefixed_hash64("diag", [path_arr, bstart_arr, bend_arr, source_arr, message_arr])
     details = buffers.details_array()
     table = pa.Table.from_arrays(
         [
@@ -346,17 +273,17 @@ def _ts_diag_table(ts_table: TableLike, *, severity: str, message: str) -> Table
     n = ts_table.num_rows
     if n == 0:
         return empty_table(DIAG_SCHEMA)
-    path = _column_or_null(ts_table, "path", pa.string())
-    bstart = _column_or_null(ts_table, "start_byte", pa.int64())
-    bend = _column_or_null(ts_table, "end_byte", pa.int64())
+    path = column_or_null(ts_table, "path", pa.string())
+    bstart = column_or_null(ts_table, "start_byte", pa.int64())
+    bend = column_or_null(ts_table, "end_byte", pa.int64())
     source_arr = const_array(n, "treesitter", dtype=pa.string())
     message_arr = const_array(n, message, dtype=pa.string())
-    diag_id = _prefixed_hash64("diag", [path, bstart, bend, source_arr, message_arr])
+    diag_id = prefixed_hash64("diag", [path, bstart, bend, source_arr, message_arr])
     details = _empty_details_list(n)
     severity_arr = const_array(n, severity, dtype=pa.string())
     table = pa.Table.from_arrays(
         [
-            _column_or_null(ts_table, "file_id", pa.string()),
+            column_or_null(ts_table, "file_id", pa.string()),
             path,
             bstart,
             bend,
@@ -371,18 +298,6 @@ def _ts_diag_table(ts_table: TableLike, *, severity: str, message: str) -> Table
     )
     table = encode_columns(table, specs=DIAG_ENCODING_SPECS)
     return table.cast(DIAG_SCHEMA)
-
-
-def _scip_encoding(value: object | None) -> int:
-    if isinstance(value, str):
-        raw = value.strip().upper()
-        if raw == "UTF8":
-            return ENC_UTF8
-        if raw == "UTF16":
-            return ENC_UTF16
-        if raw == "UTF32":
-            return ENC_UTF32
-    return DEFAULT_POSITION_ENCODING
 
 
 def _scip_severity(value: object | None) -> str:
@@ -419,18 +334,18 @@ def _scip_diag_table(
 
     buffers = _DiagBuffers()
     arrays = [
-        _column_or_null(scip_diagnostics, "document_id", pa.string()),
-        _column_or_null(scip_diagnostics, "path", pa.string()),
-        _column_or_null(scip_diagnostics, "file_id", pa.string()),
-        _column_or_null(scip_diagnostics, "start_line", pa.int64()),
-        _column_or_null(scip_diagnostics, "start_char", pa.int64()),
-        _column_or_null(scip_diagnostics, "end_line", pa.int64()),
-        _column_or_null(scip_diagnostics, "end_char", pa.int64()),
-        _column_or_null(scip_diagnostics, "message", pa.string()),
-        _column_or_null(scip_diagnostics, "severity", pa.string()),
-        _column_or_null(scip_diagnostics, "code", pa.string()),
-        _column_or_null(scip_diagnostics, "source", pa.string()),
-        _column_or_null(scip_diagnostics, "tags", pa.list_(pa.string())),
+        column_or_null(scip_diagnostics, "document_id", pa.string()),
+        column_or_null(scip_diagnostics, "path", pa.string()),
+        column_or_null(scip_diagnostics, "file_id", pa.string()),
+        column_or_null(scip_diagnostics, "start_line", pa.int64()),
+        column_or_null(scip_diagnostics, "start_char", pa.int64()),
+        column_or_null(scip_diagnostics, "end_line", pa.int64()),
+        column_or_null(scip_diagnostics, "end_char", pa.int64()),
+        column_or_null(scip_diagnostics, "message", pa.string()),
+        column_or_null(scip_diagnostics, "severity", pa.string()),
+        column_or_null(scip_diagnostics, "code", pa.string()),
+        column_or_null(scip_diagnostics, "source", pa.string()),
+        column_or_null(scip_diagnostics, "tags", pa.list_(pa.string())),
     ]
     for values in iter_arrays(arrays):
         diag_row = _scip_diag_row(ctx, _ScipDiagInput(*values))
@@ -447,7 +362,7 @@ def _scip_diag_table(
     source_arr = pa.array(buffers.sources, type=pa.string())
     message_arr = pa.array(buffers.messages, type=pa.string())
     severity_arr = pa.array(buffers.severities, type=pa.string())
-    diag_id = _prefixed_hash64("diag", [path_arr, bstart_arr, bend_arr, source_arr, message_arr])
+    diag_id = prefixed_hash64("diag", [path_arr, bstart_arr, bend_arr, source_arr, message_arr])
     details = buffers.details_array()
     table = pa.Table.from_arrays(
         [
@@ -473,17 +388,17 @@ def _scip_doc_encodings(scip_documents: TableLike | None) -> dict[str, int]:
     if scip_documents is None or scip_documents.num_rows == 0:
         return doc_enc
     arrays = [
-        _column_or_null(scip_documents, "document_id", pa.string()),
-        _column_or_null(scip_documents, "position_encoding", pa.string()),
+        column_or_null(scip_documents, "document_id", pa.string()),
+        column_or_null(scip_documents, "position_encoding", pa.string()),
     ]
     for doc_id, enc in iter_arrays(arrays):
         if isinstance(doc_id, str):
-            doc_enc[doc_id] = _scip_encoding(enc)
+            doc_enc[doc_id] = normalize_position_encoding(enc)
     return doc_enc
 
 
 def _scip_diag_row(ctx: ScipDiagContext, values: _ScipDiagInput) -> _DiagRow | None:
-    fidx = _file_index(ctx.repo_text_index, file_id=values.file_id, path=values.path)
+    fidx = file_index(ctx.repo_text_index, file_id=values.file_id, path=values.path)
     if fidx is None:
         return None
     if not isinstance(values.start_line, int) or not isinstance(values.start_char, int):

@@ -31,15 +31,3 @@ def align_table(table: TableLike, *, schema: SchemaLike) -> TableLike:
         Aligned table.
     """
     return SchemaTransform(schema=schema).apply(table)
-
-
-def build_and_align(rows: Sequence[Mapping[str, object]], *, schema: SchemaLike) -> TableLike:
-    """Build a table from rows and align it to the schema.
-
-    Returns
-    -------
-    TableLike
-        Aligned table.
-    """
-    table = rows_to_table(rows, schema)
-    return align_table(table, schema=schema)

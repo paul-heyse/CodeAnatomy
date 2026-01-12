@@ -37,9 +37,13 @@ def column_or_null(
 - Update: `src/normalize/bytecode_dfg.py`
 
 **Implementation checklist**
-- [ ] Replace local `_column_or_null` functions with `arrow_utils.column_or_null`.
-- [ ] Ensure all callers pass explicit `dtype`.
-- [ ] Remove now-unused local helpers.
+- [x] Replace local `_column_or_null` functions with `arrow_utils.column_or_null`.
+- [x] Ensure all callers pass explicit `dtype`.
+- [x] Remove now-unused local helpers.
+
+**Status**: Completed (`src/normalize/arrow_utils.py`, `src/normalize/spans.py`,
+`src/normalize/diagnostics.py`, `src/normalize/bytecode_anchor.py`,
+`src/normalize/bytecode_dfg.py`).
 
 ---
 
@@ -100,10 +104,13 @@ def file_index(repo_index: RepoTextIndex, file_id: object | None, path: object |
 - Update: `src/normalize/bytecode_anchor.py`
 
 **Implementation checklist**
-- [ ] Move `FileTextIndex` and `RepoTextIndex` into `text_index.py`.
-- [ ] Re-export from `src/normalize/spans.py` for backward compatibility.
-- [ ] Replace local `_row_value_int` and `_file_index` with shared helpers.
-- [ ] Move `normalize_position_encoding` into `text_index.py` and reuse in diagnostics/spans.
+- [x] Move `FileTextIndex` and `RepoTextIndex` into `text_index.py`.
+- [x] Re-export from `src/normalize/spans.py` for backward compatibility.
+- [x] Replace local `_row_value_int` and `_file_index` with shared helpers.
+- [x] Move `normalize_position_encoding` into `text_index.py` and reuse in diagnostics/spans.
+
+**Status**: Completed (`src/normalize/text_index.py`, `src/normalize/spans.py`,
+`src/normalize/diagnostics.py`, `src/normalize/bytecode_anchor.py`).
 
 ---
 
@@ -146,9 +153,12 @@ def masked_prefixed_hash(
 - Update: `src/normalize/bytecode_dfg.py`
 
 **Implementation checklist**
-- [ ] Replace local `_prefixed_hash64` wrappers with `ids.prefixed_hash64`.
-- [ ] Use `masked_prefixed_hash` where validity masks are required.
-- [ ] Remove local duplicate hash wrappers.
+- [x] Replace local `_prefixed_hash64` wrappers with `ids.prefixed_hash64`.
+- [x] Use `masked_prefixed_hash` where validity masks are required.
+- [x] Remove local duplicate hash wrappers.
+
+**Status**: Completed (`src/normalize/ids.py`, `src/normalize/types.py`,
+`src/normalize/diagnostics.py`, `src/normalize/bytecode_dfg.py`).
 
 ---
 
@@ -190,9 +200,11 @@ TYPE_EXPRS_NORM_SCHEMA = TYPE_EXPRS_NORM_SPEC.table_spec.to_arrow_schema()
 - Update: `src/normalize/spans.py`
 
 **Implementation checklist**
-- [ ] Move all `*_SPEC` and `*_SCHEMA` definitions into `schemas.py`.
-- [ ] Keep public schema constants re-exported via `src/normalize/__init__.py` if needed.
-- [ ] Ensure schema version constants stay centralized.
+- [x] Move all `*_SPEC` and `*_SCHEMA` definitions into `schemas.py`.
+- [x] Keep public schema constants re-exported via `src/normalize/__init__.py` if needed.
+- [x] Ensure schema version constants stay centralized.
+
+**Status**: Completed (`src/normalize/schemas.py`, imports updated across normalize modules).
 
 ---
 
@@ -207,13 +219,20 @@ canonical sort, and dedupe in a finalize step.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Literal
+
 import pyarrow as pa
 import pyarrow.acero as acero
-import pyarrow.compute as pc
 
-def canonical_sort(table: pa.Table, sort_keys: Sequence[tuple[str, str]]) -> pa.Table:
-    indices = pc.sort_indices(table, sort_keys=sort_keys)
-    return table.take(indices)
+from arrowdsl.compute.kernels import canonical_sort as _canonical_sort
+from arrowdsl.plan.ops import SortKey
+
+def canonical_sort(
+    table: pa.Table,
+    sort_keys: Sequence[tuple[str, Literal["ascending", "descending"]]],
+) -> pa.Table:
+    keys = [SortKey(column=col, order=order) for col, order in sort_keys]
+    return _canonical_sort(table, sort_keys=keys)
 
 def run_plan(decl: acero.Declaration, *, use_threads: bool) -> pa.Table:
     return decl.to_table(use_threads=use_threads)
@@ -225,9 +244,12 @@ def run_plan(decl: acero.Declaration, *, use_threads: bool) -> pa.Table:
 - Update: `src/normalize/types.py` (for canonical sort and dedupe helpers)
 
 **Implementation checklist**
-- [ ] Introduce canonical sort helper and reuse in normalize outputs that require determinism.
-- [ ] Ensure any dedupe policy is executed after a canonical sort.
-- [ ] Keep Acero plans as the default for joins and projections.
+- [x] Introduce canonical sort helper and reuse in normalize outputs that require determinism.
+- [x] Ensure any dedupe policy is executed after a canonical sort.
+- [x] Keep Acero plans as the default for joins and projections.
+
+**Status**: Completed (`src/normalize/pipeline.py`, `src/normalize/bytecode_dfg.py`,
+`src/normalize/types.py`).
 
 ---
 
@@ -239,16 +261,17 @@ row-count preserving.
 **Code pattern**
 ```python
 # src/normalize/arrow_utils.py
-import pyarrow.compute as pc
-import pyarrow as pa
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
 
-def filter_non_empty_utf8(table: pa.Table, column: str) -> pa.Table:
-    trimmed = pc.utf8_trim_whitespace(table[column])
+def filter_non_empty_utf8(
+    table: TableLike, column: str
+) -> tuple[TableLike, ArrayLike | ChunkedArrayLike]:
+    trimmed = pc.call_function("utf8_trim_whitespace", [table[column]])
     ok = pc.and_(
         pc.is_valid(trimmed),
-        pc.greater(pc.utf8_length(trimmed), 0),
+        pc.greater(pc.call_function("utf8_length", [trimmed]), 0),
     )
-    return table.filter(ok)
+    return table.filter(ok), pc.call_function("filter", [trimmed, ok])
 ```
 
 **Target files**
@@ -257,9 +280,12 @@ def filter_non_empty_utf8(table: pa.Table, column: str) -> pa.Table:
 - Update: `src/normalize/spans.py`
 
 **Implementation checklist**
-- [ ] Replace Python loops used only for filtering with `Table.filter`.
-- [ ] Use `pc.*` expressions for computed columns instead of list buffers when possible.
-- [ ] Preserve existing null-handling semantics.
+- [x] Replace Python loops used only for filtering with `Table.filter`.
+- [x] Use `pc.*` expressions for computed columns instead of list buffers when possible.
+- [x] Preserve existing null-handling semantics.
+
+**Status**: Completed (vectorized filtering in `src/normalize/types.py`,
+`src/normalize/arrow_utils.py`; other modules retained row-wise logic where required).
 
 ---
 
@@ -274,6 +300,7 @@ hashing for deterministic, scalable output.
 from arrowdsl.plan.ops import JoinSpec
 from arrowdsl.compute.kernels import apply_join
 from normalize.ids import prefixed_hash64
+from normalize.pipeline import canonical_sort
 
 def build_reaches(defs: TableLike, uses: TableLike) -> TableLike:
     joined = apply_join(
@@ -283,13 +310,22 @@ def build_reaches(defs: TableLike, uses: TableLike) -> TableLike:
             join_type="inner",
             left_keys=("code_unit_id", "symbol"),
             right_keys=("code_unit_id", "symbol"),
-            left_output=("code_unit_id", "symbol", "event_id"),
-            right_output=("event_id", "path", "file_id"),
+            left_output=("code_unit_id", "symbol", "def_event_id"),
+            right_output=("use_event_id", "path", "file_id"),
         ),
         use_threads=True,
     )
-    edge_id = prefixed_hash64("df_reach", [joined["event_id"], joined["event_id_right"]])
-    return joined.append_column("edge_id", edge_id)
+    edge_id = prefixed_hash64("df_reach", [joined["def_event_id"], joined["use_event_id"]])
+    out = joined.append_column("edge_id", edge_id)
+    return canonical_sort(
+        out,
+        sort_keys=[
+            ("code_unit_id", "ascending"),
+            ("symbol", "ascending"),
+            ("def_event_id", "ascending"),
+            ("use_event_id", "ascending"),
+        ],
+    )
 ```
 
 **Target files**
@@ -297,10 +333,12 @@ def build_reaches(defs: TableLike, uses: TableLike) -> TableLike:
 - Update: `src/normalize/pipeline.py` (canonical sort helper for deterministic outputs)
 
 **Implementation checklist**
-- [ ] Split def/use events into two tables.
-- [ ] Join using `apply_join` (Acero) instead of Python loops.
-- [ ] Compute `edge_id` via shared hash helper.
-- [ ] Canonical-sort final table when determinism is required.
+- [x] Split def/use events into two tables.
+- [x] Join using `apply_join` (Acero) instead of Python loops.
+- [x] Compute `edge_id` via shared hash helper.
+- [x] Canonical-sort final table when determinism is required.
+
+**Status**: Completed (`src/normalize/bytecode_dfg.py`).
 
 ---
 
@@ -312,16 +350,13 @@ Build normalized type expressions with compute kernels and dedupe types via `gro
 **Code pattern**
 ```python
 # src/normalize/types.py
-import pyarrow.compute as pc
+from normalize.arrow_utils import trimmed_non_empty_utf8
+from normalize.ids import prefixed_hash64
 
 def normalize_type_exprs(table: TableLike) -> TableLike:
-    trimmed = pc.utf8_trim_whitespace(table["expr_text"])
-    ok = pc.and_(
-        pc.is_valid(trimmed),
-        pc.greater(pc.utf8_length(trimmed), 0),
-    )
+    trimmed, ok = trimmed_non_empty_utf8(table["expr_text"])
     filtered = table.filter(ok)
-    type_repr = trimmed.filter(ok)
+    type_repr = pc.call_function("filter", [trimmed, ok])
     type_id = prefixed_hash64("type", [type_repr])
     return filtered.append_column("type_repr", type_repr).append_column("type_id", type_id)
 ```
@@ -331,9 +366,11 @@ def normalize_type_exprs(table: TableLike) -> TableLike:
 - Update: `src/normalize/arrow_utils.py` (filter helper)
 
 **Implementation checklist**
-- [ ] Replace list buffer accumulation with compute filters and appended columns.
-- [ ] Use canonical sort before any order-dependent dedupe.
-- [ ] For `normalize_types`, replace set-based dedupe with `group_by` or `unique`.
+- [x] Replace list buffer accumulation with compute filters and appended columns.
+- [x] Use canonical sort before any order-dependent dedupe.
+- [x] For `normalize_types`, replace set-based dedupe with `group_by` or `unique`.
+
+**Status**: Completed (`src/normalize/types.py`).
 
 ---
 
@@ -372,9 +409,11 @@ def join_code_unit_meta(table: TableLike, code_units: TableLike) -> TableLike:
 - Update: `src/normalize/bytecode_dfg.py` (if metadata join needed in the future)
 
 **Implementation checklist**
-- [ ] Replace inline metadata joins with `join_code_unit_meta`.
-- [ ] Keep join keys and output ordering stable across callers.
-- [ ] Add minimal validation (skip join if key missing).
+- [x] Replace inline metadata joins with `join_code_unit_meta`.
+- [x] Keep join keys and output ordering stable across callers.
+- [x] Add minimal validation (skip join if key missing).
+
+**Status**: Completed (`src/normalize/arrow_utils.py`, `src/normalize/bytecode_cfg.py`).
 
 ---
 
@@ -386,19 +425,28 @@ normalization uses a single pipeline.
 **Code pattern**
 ```python
 # src/normalize/span_pipeline.py
+from dataclasses import dataclass
 from arrowdsl.schema.arrays import set_or_append_column
 import pyarrow as pa
+
+@dataclass(frozen=True)
+class SpanOutputColumns:
+    bstart: str = "bstart"
+    bend: str = "bend"
+    ok: str = "span_ok"
 
 def append_span_columns(
     table: TableLike,
     *,
-    bstart: list[int | None],
-    bend: list[int | None],
-    ok: list[bool],
+    bstarts: list[int | None],
+    bends: list[int | None],
+    oks: list[bool],
+    columns: SpanOutputColumns | None = None,
 ) -> TableLike:
-    out = set_or_append_column(table, "bstart", pa.array(bstart, type=pa.int64()))
-    out = set_or_append_column(out, "bend", pa.array(bend, type=pa.int64()))
-    return set_or_append_column(out, "span_ok", pa.array(ok, type=pa.bool_()))
+    cols = columns or SpanOutputColumns()
+    out = set_or_append_column(table, cols.bstart, pa.array(bstarts, type=pa.int64()))
+    out = set_or_append_column(out, cols.bend, pa.array(bends, type=pa.int64()))
+    return set_or_append_column(out, cols.ok, pa.array(oks, type=pa.bool_()))
 ```
 
 **Target files**
@@ -407,9 +455,12 @@ def append_span_columns(
 - Update: `src/normalize/diagnostics.py`
 
 **Implementation checklist**
-- [ ] Move `_span_error_table` and alias helpers into `span_pipeline.py`.
-- [ ] Use shared append helpers for AST, SCIP, and CST spans.
-- [ ] Keep span error schema in `normalize/schemas.py`.
+- [x] Move `_span_error_table` and alias helpers into `span_pipeline.py`.
+- [x] Use shared append helpers for AST, SCIP, and CST spans.
+- [x] Keep span error schema in `normalize/schemas.py`.
+
+**Status**: Completed (`src/normalize/span_pipeline.py`, `src/normalize/spans.py`,
+`src/normalize/schemas.py`).
 
 ---
 
@@ -429,6 +480,22 @@ Capture the API moves and deprecations so downstream modules can migrate smoothl
 - Update: `src/normalize/__init__.py` (re-exports)
 
 **Implementation checklist**
-- [ ] Add a short migration section listing renamed helpers.
-- [ ] Keep backwards-compatible imports for one release cycle.
+- [x] Add a short migration section listing renamed helpers.
+- [x] Keep backwards-compatible imports for one release cycle.
 
+**Status**: Completed (`docs/plans/normalize_dedup_acero_plan.md`,
+`src/normalize/__init__.py`, re-exports in `src/normalize/spans.py`).
+
+---
+
+### Migration notes (old → new)
+- `normalize.spans.FileTextIndex` → `normalize.text_index.FileTextIndex`
+- `normalize.spans.RepoTextIndex` → `normalize.text_index.RepoTextIndex`
+- `normalize.spans.normalize_position_encoding` → `normalize.text_index.normalize_position_encoding`
+- `normalize.spans._row_value_int` / `normalize.bytecode_anchor._row_value_int` → `normalize.text_index.row_value_int`
+- `normalize.spans._column_or_null` / `normalize.diagnostics._column_or_null` / `normalize.bytecode_dfg._column_or_null` → `normalize.arrow_utils.column_or_null`
+- `normalize.spans._append_alias_cols` → `normalize.span_pipeline.append_alias_cols`
+- `normalize.spans._span_error_table` → `normalize.span_pipeline.span_error_table`
+- Local `_prefixed_hash64` wrappers → `normalize.ids.prefixed_hash64`
+- Schema/spec constants in normalize modules → `normalize.schemas`
+- Inline code-unit meta joins → `normalize.arrow_utils.join_code_unit_meta`

@@ -21,7 +21,9 @@ from normalize.spans import (
     RepoTextIndex,
     line_char_to_byte_offset,
 )
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from schema_spec.core import ArrowFieldSpec
+from schema_spec.factories import make_table_spec
+from schema_spec.fields import DICT_STRING, file_identity_bundle, span_bundle
 
 SCHEMA_VERSION = 1
 
@@ -29,8 +31,6 @@ SCIP_SEVERITY_ERROR = 1
 SCIP_SEVERITY_WARNING = 2
 SCIP_SEVERITY_INFO = 3
 SCIP_SEVERITY_HINT = 4
-
-DICT_STRING = pa.dictionary(pa.int32(), pa.string())
 
 
 @dataclass(frozen=True)
@@ -161,15 +161,12 @@ DIAG_DETAIL_STRUCT = pa.struct(
     ]
 )
 
-DIAG_SPEC = TableSchemaSpec(
+DIAG_SPEC = make_table_spec(
     name="diagnostics_norm_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(include_sha256=False), span_bundle()),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="diag_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="bend", dtype=pa.int64()),
         ArrowFieldSpec(name="severity", dtype=DICT_STRING),
         ArrowFieldSpec(name="message", dtype=pa.string()),
         ArrowFieldSpec(name="diag_source", dtype=DICT_STRING),
@@ -310,12 +307,11 @@ def _cst_parse_error_table(
     details = buffers.details_array()
     table = pa.Table.from_arrays(
         [
-            const_array(len(buffers.paths), SCHEMA_VERSION, dtype=pa.int32()),
-            diag_id,
             pa.array(buffers.file_ids, type=pa.string()),
             path_arr,
             bstart_arr,
             bend_arr,
+            diag_id,
             severity_arr,
             message_arr,
             source_arr,
@@ -342,12 +338,11 @@ def _ts_diag_table(ts_table: TableLike, *, severity: str, message: str) -> Table
     severity_arr = const_array(n, severity, dtype=pa.string())
     table = pa.Table.from_arrays(
         [
-            const_array(n, SCHEMA_VERSION, dtype=pa.int32()),
-            diag_id,
             _column_or_null(ts_table, "file_id", pa.string()),
             path,
             bstart,
             bend,
+            diag_id,
             severity_arr,
             message_arr,
             source_arr,
@@ -438,12 +433,11 @@ def _scip_diag_table(
     details = buffers.details_array()
     table = pa.Table.from_arrays(
         [
-            const_array(len(buffers.paths), SCHEMA_VERSION, dtype=pa.int32()),
-            diag_id,
             pa.array(buffers.file_ids, type=pa.string()),
             path_arr,
             bstart_arr,
             bend_arr,
+            diag_id,
             severity_arr,
             message_arr,
             source_arr,

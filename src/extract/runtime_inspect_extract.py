@@ -14,7 +14,8 @@ import arrowdsl.pyarrow_core as pa
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import prefixed_hash_id_from_parts
 from arrowdsl.pyarrow_protocols import TableLike
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from schema_spec.core import ArrowFieldSpec
+from schema_spec.factories import make_table_spec
 
 SCHEMA_VERSION = 1
 
@@ -49,10 +50,11 @@ class RuntimeInspectResult:
     rt_members: TableLike
 
 
-RT_OBJECTS_SPEC = TableSchemaSpec(
+RT_OBJECTS_SPEC = make_table_spec(
     name="rt_objects_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="rt_id", dtype=pa.string()),
         ArrowFieldSpec(name="module", dtype=pa.string()),
         ArrowFieldSpec(name="qualname", dtype=pa.string()),
@@ -63,10 +65,11 @@ RT_OBJECTS_SPEC = TableSchemaSpec(
     ],
 )
 
-RT_SIGNATURES_SPEC = TableSchemaSpec(
+RT_SIGNATURES_SPEC = make_table_spec(
     name="rt_signatures_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="sig_id", dtype=pa.string()),
         ArrowFieldSpec(name="rt_id", dtype=pa.string()),
         ArrowFieldSpec(name="signature", dtype=pa.string()),
@@ -74,10 +77,11 @@ RT_SIGNATURES_SPEC = TableSchemaSpec(
     ],
 )
 
-RT_SIGNATURE_PARAMS_SPEC = TableSchemaSpec(
+RT_SIGNATURE_PARAMS_SPEC = make_table_spec(
     name="rt_signature_params_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="param_id", dtype=pa.string()),
         ArrowFieldSpec(name="sig_id", dtype=pa.string()),
         ArrowFieldSpec(name="name", dtype=pa.string()),
@@ -88,10 +92,11 @@ RT_SIGNATURE_PARAMS_SPEC = TableSchemaSpec(
     ],
 )
 
-RT_MEMBERS_SPEC = TableSchemaSpec(
+RT_MEMBERS_SPEC = make_table_spec(
     name="rt_members_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="member_id", dtype=pa.string()),
         ArrowFieldSpec(name="rt_id", dtype=pa.string()),
         ArrowFieldSpec(name="name", dtype=pa.string()),
@@ -342,7 +347,6 @@ def _parse_runtime_objects(objects_raw: object) -> tuple[list[Row], dict[str, st
             object_id_by_key[key] = obj_id
         obj_rows.append(
             {
-                "schema_version": SCHEMA_VERSION,
                 "rt_id": obj_id,
                 "module": module,
                 "qualname": qualname,
@@ -382,7 +386,6 @@ def _parse_runtime_signatures(
         sig_id = prefixed_hash_id_from_parts("rt_sig", rt_id, signature_str)
         sig_rows.append(
             {
-                "schema_version": SCHEMA_VERSION,
                 "sig_id": sig_id,
                 "rt_id": rt_id,
                 "signature": signature_str,
@@ -409,7 +412,6 @@ def _parse_runtime_params(params: list[object], sig_id: str) -> list[Row]:
         param_id = prefixed_hash_id_from_parts("rt_param", sig_id, name)
         rows.append(
             {
-                "schema_version": SCHEMA_VERSION,
                 "param_id": param_id,
                 "sig_id": sig_id,
                 "name": name,
@@ -450,7 +452,6 @@ def _parse_runtime_members(
         member_id = prefixed_hash_id_from_parts("rt_member", rt_id, name)
         member_rows.append(
             {
-                "schema_version": SCHEMA_VERSION,
                 "member_id": member_id,
                 "rt_id": rt_id,
                 "name": name,

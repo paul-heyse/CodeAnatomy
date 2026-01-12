@@ -13,7 +13,10 @@ from arrowdsl.empty import empty_table
 from arrowdsl.ids import prefixed_hash_id_from_parts
 from arrowdsl.iter import iter_table_rows
 from arrowdsl.pyarrow_protocols import TableLike
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from extract.file_context import FileContext
+from schema_spec.core import ArrowFieldSpec
+from schema_spec.factories import make_table_spec
+from schema_spec.fields import file_identity_bundle
 
 SCHEMA_VERSION = 1
 
@@ -47,15 +50,13 @@ class TreeSitterRowBuffers:
     missing_rows: list[Row]
 
 
-TS_NODES_SPEC = TableSchemaSpec(
+TS_NODES_SPEC = make_table_spec(
     name="ts_nodes_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
         ArrowFieldSpec(name="parent_ts_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="ts_type", dtype=pa.string()),
         ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
         ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
@@ -66,15 +67,13 @@ TS_NODES_SPEC = TableSchemaSpec(
     ],
 )
 
-TS_ERRORS_SPEC = TableSchemaSpec(
+TS_ERRORS_SPEC = make_table_spec(
     name="ts_errors_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="ts_error_id", dtype=pa.string()),
         ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="ts_type", dtype=pa.string()),
         ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
         ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
@@ -82,15 +81,13 @@ TS_ERRORS_SPEC = TableSchemaSpec(
     ],
 )
 
-TS_MISSING_SPEC = TableSchemaSpec(
+TS_MISSING_SPEC = make_table_spec(
     name="ts_missing_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="ts_missing_id", dtype=pa.string()),
         ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="ts_type", dtype=pa.string()),
         ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
         ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
@@ -108,16 +105,13 @@ def _parser() -> Parser:
     return Parser(language)
 
 
-def _row_bytes(rf: Row) -> bytes | None:
-    data = rf.get("bytes")
-    if isinstance(data, (bytes, bytearray, memoryview)):
-        return bytes(data)
-    text = rf.get("text")
-    if not isinstance(text, str):
+def _row_bytes(file_ctx: FileContext) -> bytes | None:
+    if file_ctx.data is not None:
+        return file_ctx.data
+    if file_ctx.text is None:
         return None
-    encoding = rf.get("encoding")
-    enc = encoding if isinstance(encoding, str) else "utf-8"
-    return text.encode(enc, errors="replace")
+    encoding = file_ctx.encoding or "utf-8"
+    return file_ctx.text.encode(encoding, errors="replace")
 
 
 def _iter_nodes(root: object) -> Iterator[tuple[object, object | None]]:
@@ -142,7 +136,6 @@ def _node_row(
     ts_type = str(getattr(node, "type", ""))
     ts_node_id = prefixed_hash_id_from_parts("ts_node", path, str(start), str(end), ts_type)
     return {
-        "schema_version": SCHEMA_VERSION,
         "ts_node_id": ts_node_id,
         "parent_ts_id": parent_id,
         "file_id": file_id,
@@ -160,7 +153,6 @@ def _node_row(
 
 def _error_row(node_row: Row) -> Row:
     return {
-        "schema_version": SCHEMA_VERSION,
         "ts_error_id": prefixed_hash_id_from_parts(
             "ts_error",
             str(node_row.get("path", "")),
@@ -180,7 +172,6 @@ def _error_row(node_row: Row) -> Row:
 
 def _missing_row(node_row: Row) -> Row:
     return {
-        "schema_version": SCHEMA_VERSION,
         "ts_missing_id": prefixed_hash_id_from_parts(
             "ts_missing",
             str(node_row.get("path", "")),
@@ -230,8 +221,9 @@ def extract_ts(
     )
 
     for rf in iter_table_rows(repo_files):
+        file_ctx = FileContext.from_repo_row(rf)
         _extract_ts_for_row(
-            rf,
+            file_ctx,
             parser=parser,
             options=options,
             buffers=buffers,
@@ -261,31 +253,28 @@ def extract_ts(
 
 
 def _extract_ts_for_row(
-    rf: Row,
+    file_ctx: FileContext,
     *,
     parser: Parser,
     options: TreeSitterExtractOptions,
     buffers: TreeSitterRowBuffers,
 ) -> None:
-    file_id_val = rf.get("file_id")
-    path_val = rf.get("path")
-    if not isinstance(file_id_val, str) or not isinstance(path_val, str):
+    if not file_ctx.file_id or not file_ctx.path:
         return
-    data = _row_bytes(rf)
+    data = _row_bytes(file_ctx)
     if data is None:
         return
     tree = parser.parse(data)
     root = tree.root_node
     row_by_node_id: dict[object, str] = {}
-    file_sha256 = rf.get("file_sha256")
-    file_sha = file_sha256 if isinstance(file_sha256, str) else None
+    file_sha = file_ctx.file_sha256
     for node, parent in _iter_nodes(root):
         parent_id = row_by_node_id.get(parent) if parent is not None else None
         row = _node_row(
             node,
             parent_id=parent_id,
-            file_id=file_id_val,
-            path=path_val,
+            file_id=file_ctx.file_id,
+            path=file_ctx.path,
             file_sha256=file_sha,
         )
         row_by_node_id[node] = str(row["ts_node_id"])

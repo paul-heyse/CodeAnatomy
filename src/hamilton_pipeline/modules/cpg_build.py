@@ -7,11 +7,13 @@ from pathlib import Path
 from hamilton.function_modifiers import cache, extract_fields, tag
 
 import arrowdsl.pyarrow_core as pa
+from arrowdsl.finalize import FinalizeResult
 from arrowdsl.pyarrow_protocols import TableLike
 from arrowdsl.runtime import ExecutionContext
 from cpg.build_edges import EdgeBuildInputs, build_cpg_edges
 from cpg.build_nodes import NodeInputTables, build_cpg_nodes
 from cpg.build_props import PropsInputTables, build_cpg_props
+from cpg.schemas import register_cpg_specs
 from hamilton_pipeline.pipeline_types import (
     CpgBaseInputs,
     CpgExtraInputs,
@@ -48,102 +50,114 @@ from relspec.registry import (
     RelationshipRegistry,
 )
 from schema_spec.catalogs import ContractCatalogSpec
-from schema_spec.contracts import ContractSpec, DedupeSpecSpec, SortKeySpec
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from schema_spec.contracts import DedupeSpecSpec, SortKeySpec
+from schema_spec.core import ArrowFieldSpec
+from schema_spec.factories import (
+    TableSpecConstraints,
+    VirtualFieldSpec,
+    make_contract_spec,
+    make_table_spec,
+    table_spec_from_schema,
+)
+from schema_spec.fields import call_span_bundle, span_bundle
+from schema_spec.registry import SchemaRegistry
 from storage.parquet import ParquetWriteOptions, write_named_datasets_parquet
 
 # -----------------------------
 # Relationship contracts
 # -----------------------------
 
+SCHEMA_VERSION = 1
 
-@tag(layer="relspec", artifact="relationship_contracts", kind="catalog")
-def relationship_contracts() -> ContractCatalog:
-    """Build output contracts for relationship datasets.
+
+@tag(layer="relspec", artifact="relationship_contract_spec", kind="spec")
+def relationship_contract_spec() -> ContractCatalogSpec:
+    """Build the contract spec catalog for relationship datasets.
 
     Returns
     -------
-    ContractCatalog
-        Contract catalog for relationship outputs.
+    ContractCatalogSpec
+        Contract catalog specification for relationship outputs.
     """
-    rel_name_symbol_spec = TableSchemaSpec(
+    rel_name_symbol_spec = make_table_spec(
         name="rel_name_symbol_v1",
+        version=SCHEMA_VERSION,
+        bundles=(span_bundle(),),
         fields=[
             ArrowFieldSpec(name="name_ref_id", dtype=pa.string()),
             ArrowFieldSpec(name="symbol", dtype=pa.string()),
             ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
             ArrowFieldSpec(name="path", dtype=pa.string()),
-            ArrowFieldSpec(name="bstart", dtype=pa.int64()),
-            ArrowFieldSpec(name="bend", dtype=pa.int64()),
             ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
             ArrowFieldSpec(name="confidence", dtype=pa.float32()),
             ArrowFieldSpec(name="score", dtype=pa.float32()),
             ArrowFieldSpec(name="rule_name", dtype=pa.string()),
             ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
         ],
-        required_non_null=("name_ref_id", "symbol"),
+        constraints=TableSpecConstraints(required_non_null=("name_ref_id", "symbol")),
     )
 
-    rel_import_symbol_spec = TableSchemaSpec(
+    rel_import_symbol_spec = make_table_spec(
         name="rel_import_symbol_v1",
+        version=SCHEMA_VERSION,
+        bundles=(span_bundle(),),
         fields=[
             ArrowFieldSpec(name="import_alias_id", dtype=pa.string()),
             ArrowFieldSpec(name="symbol", dtype=pa.string()),
             ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
             ArrowFieldSpec(name="path", dtype=pa.string()),
-            ArrowFieldSpec(name="bstart", dtype=pa.int64()),
-            ArrowFieldSpec(name="bend", dtype=pa.int64()),
             ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
             ArrowFieldSpec(name="confidence", dtype=pa.float32()),
             ArrowFieldSpec(name="score", dtype=pa.float32()),
             ArrowFieldSpec(name="rule_name", dtype=pa.string()),
             ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
         ],
-        required_non_null=("import_alias_id", "symbol"),
+        constraints=TableSpecConstraints(required_non_null=("import_alias_id", "symbol")),
     )
 
-    rel_callsite_symbol_spec = TableSchemaSpec(
+    rel_callsite_symbol_spec = make_table_spec(
         name="rel_callsite_symbol_v1",
+        version=SCHEMA_VERSION,
+        bundles=(),
         fields=[
             ArrowFieldSpec(name="call_id", dtype=pa.string()),
             ArrowFieldSpec(name="symbol", dtype=pa.string()),
             ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
             ArrowFieldSpec(name="path", dtype=pa.string()),
-            ArrowFieldSpec(name="call_bstart", dtype=pa.int64()),
-            ArrowFieldSpec(name="call_bend", dtype=pa.int64()),
+            *call_span_bundle().fields,
             ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
             ArrowFieldSpec(name="confidence", dtype=pa.float32()),
             ArrowFieldSpec(name="score", dtype=pa.float32()),
             ArrowFieldSpec(name="rule_name", dtype=pa.string()),
             ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
         ],
-        required_non_null=("call_id", "symbol"),
+        constraints=TableSpecConstraints(required_non_null=("call_id", "symbol")),
     )
 
-    rel_callsite_qname_spec = TableSchemaSpec(
+    rel_callsite_qname_spec = make_table_spec(
         name="rel_callsite_qname_v1",
+        version=SCHEMA_VERSION,
+        bundles=(),
         fields=[
             ArrowFieldSpec(name="call_id", dtype=pa.string()),
             ArrowFieldSpec(name="qname_id", dtype=pa.string()),
             ArrowFieldSpec(name="qname_source", dtype=pa.string()),
             ArrowFieldSpec(name="path", dtype=pa.string()),
-            ArrowFieldSpec(name="call_bstart", dtype=pa.int64()),
-            ArrowFieldSpec(name="call_bend", dtype=pa.int64()),
+            *call_span_bundle().fields,
             ArrowFieldSpec(name="confidence", dtype=pa.float32()),
             ArrowFieldSpec(name="score", dtype=pa.float32()),
             ArrowFieldSpec(name="ambiguity_group_id", dtype=pa.string()),
             ArrowFieldSpec(name="rule_name", dtype=pa.string()),
             ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
         ],
-        required_non_null=("call_id", "qname_id"),
+        constraints=TableSpecConstraints(required_non_null=("call_id", "qname_id")),
     )
 
-    spec = ContractCatalogSpec(
+    return ContractCatalogSpec(
         contracts={
-            "rel_name_symbol_v1": ContractSpec(
-                name="rel_name_symbol_v1",
-                table_schema=rel_name_symbol_spec,
-                virtual_fields=("origin",),
+            "rel_name_symbol_v1": make_contract_spec(
+                table_spec=rel_name_symbol_spec,
+                virtual=VirtualFieldSpec(fields=("origin",)),
                 dedupe=DedupeSpecSpec(
                     keys=("name_ref_id", "symbol", "path", "bstart", "bend"),
                     tie_breakers=(
@@ -158,11 +172,11 @@ def relationship_contracts() -> ContractCatalog:
                     SortKeySpec(column="bstart", order="ascending"),
                     SortKeySpec(column="name_ref_id", order="ascending"),
                 ),
+                version=SCHEMA_VERSION,
             ),
-            "rel_import_symbol_v1": ContractSpec(
-                name="rel_import_symbol_v1",
-                table_schema=rel_import_symbol_spec,
-                virtual_fields=("origin",),
+            "rel_import_symbol_v1": make_contract_spec(
+                table_spec=rel_import_symbol_spec,
+                virtual=VirtualFieldSpec(fields=("origin",)),
                 dedupe=DedupeSpecSpec(
                     keys=("import_alias_id", "symbol", "path", "bstart", "bend"),
                     tie_breakers=(
@@ -176,11 +190,11 @@ def relationship_contracts() -> ContractCatalog:
                     SortKeySpec(column="bstart", order="ascending"),
                     SortKeySpec(column="import_alias_id", order="ascending"),
                 ),
+                version=SCHEMA_VERSION,
             ),
-            "rel_callsite_symbol_v1": ContractSpec(
-                name="rel_callsite_symbol_v1",
-                table_schema=rel_callsite_symbol_spec,
-                virtual_fields=("origin",),
+            "rel_callsite_symbol_v1": make_contract_spec(
+                table_spec=rel_callsite_symbol_spec,
+                virtual=VirtualFieldSpec(fields=("origin",)),
                 dedupe=DedupeSpecSpec(
                     keys=("call_id", "symbol", "path", "call_bstart", "call_bend"),
                     tie_breakers=(
@@ -194,11 +208,11 @@ def relationship_contracts() -> ContractCatalog:
                     SortKeySpec(column="call_bstart", order="ascending"),
                     SortKeySpec(column="call_id", order="ascending"),
                 ),
+                version=SCHEMA_VERSION,
             ),
-            "rel_callsite_qname_v1": ContractSpec(
-                name="rel_callsite_qname_v1",
-                table_schema=rel_callsite_qname_spec,
-                virtual_fields=("origin",),
+            "rel_callsite_qname_v1": make_contract_spec(
+                table_spec=rel_callsite_qname_spec,
+                virtual=VirtualFieldSpec(fields=("origin",)),
                 dedupe=DedupeSpecSpec(
                     keys=("call_id", "qname_id"),
                     tie_breakers=(
@@ -211,11 +225,40 @@ def relationship_contracts() -> ContractCatalog:
                     SortKeySpec(column="call_id", order="ascending"),
                     SortKeySpec(column="qname_id", order="ascending"),
                 ),
+                version=SCHEMA_VERSION,
             ),
         }
     )
 
-    return ContractCatalog.from_spec(spec)
+
+@tag(layer="relspec", artifact="relationship_contracts", kind="catalog")
+def relationship_contracts(
+    relationship_contract_spec: ContractCatalogSpec,
+) -> ContractCatalog:
+    """Build output contracts for relationship datasets.
+
+    Returns
+    -------
+    ContractCatalog
+        Contract catalog for relationship outputs.
+    """
+    return ContractCatalog.from_spec(relationship_contract_spec)
+
+
+@tag(layer="relspec", artifact="schema_registry", kind="registry")
+def schema_registry(
+    relationship_contract_spec: ContractCatalogSpec,
+) -> SchemaRegistry:
+    """Build a schema registry with CPG and relationship specs.
+
+    Returns
+    -------
+    SchemaRegistry
+        Registry containing table and contract specs.
+    """
+    registry = SchemaRegistry()
+    register_cpg_specs(registry)
+    return relationship_contract_spec.register_into(registry)
 
 
 # -----------------------------
@@ -481,11 +524,14 @@ def persist_relspec_input_datasets(
 
     out: dict[str, DatasetLocation] = {}
     for name, path in paths.items():
+        table = relspec_input_datasets.get(name)
+        table_spec = table_spec_from_schema(name, table.schema) if table is not None else None
         out[name] = DatasetLocation(
             path=path,
             format="parquet",
             partitioning="hive",
             filesystem=None,
+            table_spec=table_spec,
         )
     return out
 
@@ -866,8 +912,7 @@ def cpg_props_inputs(
 @cache()
 @tag(layer="cpg", artifact="cpg_nodes_final", kind="table")
 def cpg_nodes_final(
-    ctx: ExecutionContext,
-    cpg_node_inputs: NodeInputTables,
+    cpg_nodes_finalize: FinalizeResult,
 ) -> TableLike:
     """Build the final CPG nodes table.
 
@@ -876,15 +921,29 @@ def cpg_nodes_final(
     TableLike
         Final CPG nodes table.
     """
-    res = build_cpg_nodes(ctx=ctx, inputs=cpg_node_inputs)
-    return res.good
+    return cpg_nodes_finalize.good
+
+
+@cache()
+@tag(layer="cpg", artifact="cpg_nodes_finalize", kind="object")
+def cpg_nodes_finalize(
+    ctx: ExecutionContext,
+    cpg_node_inputs: NodeInputTables,
+) -> FinalizeResult:
+    """Build finalized CPG nodes with error artifacts.
+
+    Returns
+    -------
+    FinalizeResult
+        Finalized CPG nodes bundle.
+    """
+    return build_cpg_nodes(ctx=ctx, inputs=cpg_node_inputs)
 
 
 @cache()
 @tag(layer="cpg", artifact="cpg_edges_final", kind="table")
 def cpg_edges_final(
-    ctx: ExecutionContext,
-    cpg_edge_inputs: EdgeBuildInputs,
+    cpg_edges_finalize: FinalizeResult,
 ) -> TableLike:
     """Build the final CPG edges table.
 
@@ -893,15 +952,29 @@ def cpg_edges_final(
     TableLike
         Final CPG edges table.
     """
-    res = build_cpg_edges(ctx=ctx, inputs=cpg_edge_inputs)
-    return res.good
+    return cpg_edges_finalize.good
+
+
+@cache()
+@tag(layer="cpg", artifact="cpg_edges_finalize", kind="object")
+def cpg_edges_finalize(
+    ctx: ExecutionContext,
+    cpg_edge_inputs: EdgeBuildInputs,
+) -> FinalizeResult:
+    """Build finalized CPG edges with error artifacts.
+
+    Returns
+    -------
+    FinalizeResult
+        Finalized CPG edges bundle.
+    """
+    return build_cpg_edges(ctx=ctx, inputs=cpg_edge_inputs)
 
 
 @cache()
 @tag(layer="cpg", artifact="cpg_props_final", kind="table")
 def cpg_props_final(
-    ctx: ExecutionContext,
-    cpg_props_inputs: PropsInputTables,
+    cpg_props_finalize: FinalizeResult,
 ) -> TableLike:
     """Build the final CPG properties table.
 
@@ -910,5 +983,20 @@ def cpg_props_final(
     TableLike
         Final CPG properties table.
     """
-    res = build_cpg_props(ctx=ctx, inputs=cpg_props_inputs)
-    return res.good
+    return cpg_props_finalize.good
+
+
+@cache()
+@tag(layer="cpg", artifact="cpg_props_finalize", kind="object")
+def cpg_props_finalize(
+    ctx: ExecutionContext,
+    cpg_props_inputs: PropsInputTables,
+) -> FinalizeResult:
+    """Build finalized CPG properties with error artifacts.
+
+    Returns
+    -------
+    FinalizeResult
+        Finalized CPG properties bundle.
+    """
+    return build_cpg_props(ctx=ctx, inputs=cpg_props_inputs)

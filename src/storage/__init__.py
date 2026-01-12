@@ -11,6 +11,7 @@ from storage.parquet import (
     ParquetWriteOptions,
     read_table_parquet,
     write_dataset_parquet,
+    write_finalize_result_parquet,
     write_named_datasets_parquet,
     write_table_parquet,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "read_table_ipc_file",
     "read_table_parquet",
     "write_dataset_parquet",
+    "write_finalize_result_parquet",
     "write_named_datasets_parquet",
     "write_table_ipc_file",
     "write_table_ipc_stream",

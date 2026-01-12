@@ -27,6 +27,10 @@ class ColumnExpr(Protocol):
         """Materialize the expression against a table in kernel lane."""
         ...
 
+    def is_scalar(self) -> bool:
+        """Return whether this expression is scalar-safe for scan projection."""
+        ...
+
 
 @dataclass(frozen=True)
 class ConstExpr:
@@ -64,6 +68,16 @@ class ConstExpr:
         )
         return pa.array([self.value] * table.num_rows, type=scalar.type)
 
+    def is_scalar(self) -> bool:
+        """Return whether this expression is scalar-safe.
+
+        Returns
+        -------
+        bool
+            ``True`` for constant expressions.
+        """
+        return self is not None
+
 
 @dataclass(frozen=True)
 class FieldExpr:
@@ -95,6 +109,16 @@ class FieldExpr:
             Column values from the table.
         """
         return table[self.name]
+
+    def is_scalar(self) -> bool:
+        """Return whether this expression is scalar-safe.
+
+        Returns
+        -------
+        bool
+            ``True`` for field references.
+        """
+        return self is not None
 
 
 @dataclass(frozen=True)
@@ -129,6 +153,16 @@ class CastExpr:
             Casted array values.
         """
         return pc.cast(self.expr.materialize(table), self.dtype, safe=self.safe)
+
+    def is_scalar(self) -> bool:
+        """Return whether this expression is scalar-safe.
+
+        Returns
+        -------
+        bool
+            ``True`` when the child expression is scalar-safe.
+        """
+        return self.expr.is_scalar()
 
 
 @dataclass(frozen=True)
@@ -174,6 +208,16 @@ class NullFillExpr:
         )
         return pc.fill_null(self.expr.materialize(table), fill_value=fill)
 
+    def is_scalar(self) -> bool:
+        """Return whether this expression is scalar-safe.
+
+        Returns
+        -------
+        bool
+            ``True`` when the child expression is scalar-safe.
+        """
+        return self.expr.is_scalar()
+
 
 @dataclass(frozen=True)
 class CoalesceExpr:
@@ -210,6 +254,16 @@ class CoalesceExpr:
         for arr in arrays[1:]:
             out = pc.coalesce(out, arr)
         return out
+
+    def is_scalar(self) -> bool:
+        """Return whether this expression is scalar-safe.
+
+        Returns
+        -------
+        bool
+            ``True`` when all child expressions are scalar-safe.
+        """
+        return all(expr.is_scalar() for expr in self.exprs)
 
 
 def const_array(n: int, value: object, *, dtype: DataTypeLike | None = None) -> ArrayLike:

@@ -27,7 +27,9 @@ from arrowdsl.pyarrow_protocols import (
 from arrowdsl.schema_ops import SchemaTransform
 from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from schema_spec.core import ArrowFieldSpec
+from schema_spec.factories import make_table_spec
+from schema_spec.fields import scip_range_bundle
 
 SCHEMA_VERSION = 1
 RANGE_LEN_SHORT = 3
@@ -98,10 +100,11 @@ SCIP_SIGNATURE_DOCUMENTATION_TYPE = pa.struct(
     ]
 )
 
-SCIP_METADATA_SPEC = TableSchemaSpec(
+SCIP_METADATA_SPEC = make_table_spec(
     name="scip_metadata_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="tool_name", dtype=pa.string()),
         ArrowFieldSpec(name="tool_version", dtype=pa.string()),
         ArrowFieldSpec(name="project_root", dtype=pa.string()),
@@ -110,10 +113,11 @@ SCIP_METADATA_SPEC = TableSchemaSpec(
     ],
 )
 
-SCIP_DOCUMENTS_SPEC = TableSchemaSpec(
+SCIP_DOCUMENTS_SPEC = make_table_spec(
     name="scip_documents_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="document_id", dtype=pa.string()),
         ArrowFieldSpec(name="path", dtype=pa.string()),
         ArrowFieldSpec(name="language", dtype=pa.string()),
@@ -121,10 +125,11 @@ SCIP_DOCUMENTS_SPEC = TableSchemaSpec(
     ],
 )
 
-SCIP_OCCURRENCES_SPEC = TableSchemaSpec(
+SCIP_OCCURRENCES_SPEC = make_table_spec(
     name="scip_occurrences_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="occurrence_id", dtype=pa.string()),
         ArrowFieldSpec(name="document_id", dtype=pa.string()),
         ArrowFieldSpec(name="path", dtype=pa.string()),
@@ -132,23 +137,16 @@ SCIP_OCCURRENCES_SPEC = TableSchemaSpec(
         ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
         ArrowFieldSpec(name="syntax_kind", dtype=pa.string()),
         ArrowFieldSpec(name="override_documentation", dtype=pa.list_(pa.string())),
-        ArrowFieldSpec(name="start_line", dtype=pa.int32()),
-        ArrowFieldSpec(name="start_char", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_line", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_char", dtype=pa.int32()),
-        ArrowFieldSpec(name="range_len", dtype=pa.int32()),
-        ArrowFieldSpec(name="enc_start_line", dtype=pa.int32()),
-        ArrowFieldSpec(name="enc_start_char", dtype=pa.int32()),
-        ArrowFieldSpec(name="enc_end_line", dtype=pa.int32()),
-        ArrowFieldSpec(name="enc_end_char", dtype=pa.int32()),
-        ArrowFieldSpec(name="enc_range_len", dtype=pa.int32()),
+        *scip_range_bundle(include_len=True).fields,
+        *scip_range_bundle(prefix="enc_", include_len=True).fields,
     ],
 )
 
-SCIP_SYMBOL_INFO_SPEC = TableSchemaSpec(
+SCIP_SYMBOL_INFO_SPEC = make_table_spec(
     name="scip_symbol_info_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="symbol_info_id", dtype=pa.string()),
         ArrowFieldSpec(name="symbol", dtype=pa.string()),
         ArrowFieldSpec(name="display_name", dtype=pa.string()),
@@ -159,10 +157,11 @@ SCIP_SYMBOL_INFO_SPEC = TableSchemaSpec(
     ],
 )
 
-SCIP_SYMBOL_RELATIONSHIPS_SPEC = TableSchemaSpec(
+SCIP_SYMBOL_RELATIONSHIPS_SPEC = make_table_spec(
     name="scip_symbol_relationships_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="relationship_id", dtype=pa.string()),
         ArrowFieldSpec(name="symbol", dtype=pa.string()),
         ArrowFieldSpec(name="related_symbol", dtype=pa.string()),
@@ -173,10 +172,11 @@ SCIP_SYMBOL_RELATIONSHIPS_SPEC = TableSchemaSpec(
     ],
 )
 
-SCIP_EXTERNAL_SYMBOL_INFO_SPEC = TableSchemaSpec(
+SCIP_EXTERNAL_SYMBOL_INFO_SPEC = make_table_spec(
     name="scip_external_symbol_info_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="symbol_info_id", dtype=pa.string()),
         ArrowFieldSpec(name="symbol", dtype=pa.string()),
         ArrowFieldSpec(name="display_name", dtype=pa.string()),
@@ -187,10 +187,11 @@ SCIP_EXTERNAL_SYMBOL_INFO_SPEC = TableSchemaSpec(
     ],
 )
 
-SCIP_DIAGNOSTICS_SPEC = TableSchemaSpec(
+SCIP_DIAGNOSTICS_SPEC = make_table_spec(
     name="scip_diagnostics_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="diagnostic_id", dtype=pa.string()),
         ArrowFieldSpec(name="document_id", dtype=pa.string()),
         ArrowFieldSpec(name="path", dtype=pa.string()),
@@ -199,10 +200,7 @@ SCIP_DIAGNOSTICS_SPEC = TableSchemaSpec(
         ArrowFieldSpec(name="message", dtype=pa.string()),
         ArrowFieldSpec(name="source", dtype=pa.string()),
         ArrowFieldSpec(name="tags", dtype=pa.list_(pa.string())),
-        ArrowFieldSpec(name="start_line", dtype=pa.int32()),
-        ArrowFieldSpec(name="start_char", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_line", dtype=pa.int32()),
-        ArrowFieldSpec(name="end_char", dtype=pa.int32()),
+        *scip_range_bundle().fields,
     ],
 )
 
@@ -541,7 +539,6 @@ def _metadata_rows(index: object) -> list[Row]:
     text_document_encoding = getattr(metadata, "text_document_encoding", None)
     return [
         {
-            "schema_version": SCHEMA_VERSION,
             "tool_name": tool_name,
             "tool_version": tool_version,
             "project_root": project_root,
@@ -563,7 +560,6 @@ def _array(values: Sequence[object], data_type: DataTypeLike) -> ArrayLike:
 
 @dataclass
 class _DocAccumulator:
-    schema_versions: list[int] = field(default_factory=list)
     document_ids: list[str | None] = field(default_factory=list)
     paths: list[str | None] = field(default_factory=list)
     languages: list[str | None] = field(default_factory=list)
@@ -575,7 +571,6 @@ class _DocAccumulator:
         language: object,
         position_encoding: object,
     ) -> None:
-        self.schema_versions.append(SCHEMA_VERSION)
         self.document_ids.append(None)
         self.paths.append(rel_path)
         self.languages.append(str(language) if language is not None else None)
@@ -586,7 +581,6 @@ class _DocAccumulator:
     def to_table(self) -> TableLike:
         return pa.Table.from_arrays(
             [
-                _array(self.schema_versions, pa.int32()),
                 _array(self.document_ids, pa.string()),
                 _array(self.paths, pa.string()),
                 _array(self.languages, pa.string()),
@@ -598,7 +592,6 @@ class _DocAccumulator:
 
 @dataclass
 class _OccurrenceAccumulator:
-    schema_versions: list[int] = field(default_factory=list)
     occurrence_ids: list[str | None] = field(default_factory=list)
     document_ids: list[str | None] = field(default_factory=list)
     paths: list[str | None] = field(default_factory=list)
@@ -639,7 +632,6 @@ class _OccurrenceAccumulator:
         else:
             esl, esc, eel, eec, elen = enc_norm
 
-        self.schema_versions.append(SCHEMA_VERSION)
         self.occurrence_ids.append(None)
         self.document_ids.append(None)
         self.paths.append(rel_path)
@@ -678,7 +670,6 @@ class _OccurrenceAccumulator:
         )
         return pa.Table.from_arrays(
             [
-                _array(self.schema_versions, pa.int32()),
                 _array(self.occurrence_ids, pa.string()),
                 _array(self.document_ids, pa.string()),
                 _array(self.paths, pa.string()),
@@ -703,7 +694,6 @@ class _OccurrenceAccumulator:
 
 @dataclass
 class _DiagnosticAccumulator:
-    schema_versions: list[int] = field(default_factory=list)
     diagnostic_ids: list[str | None] = field(default_factory=list)
     document_ids: list[str | None] = field(default_factory=list)
     paths: list[str | None] = field(default_factory=list)
@@ -734,7 +724,6 @@ class _DiagnosticAccumulator:
         else:
             dsl, dsc, del_, dec_, _ = norm
 
-        self.schema_versions.append(SCHEMA_VERSION)
         self.diagnostic_ids.append(None)
         self.document_ids.append(None)
         self.paths.append(rel_path)
@@ -767,7 +756,6 @@ class _DiagnosticAccumulator:
         )
         return pa.Table.from_arrays(
             [
-                _array(self.schema_versions, pa.int32()),
                 _array(self.diagnostic_ids, pa.string()),
                 _array(self.document_ids, pa.string()),
                 _array(self.paths, pa.string()),
@@ -787,7 +775,6 @@ class _DiagnosticAccumulator:
 
 @dataclass
 class _SymbolInfoAccumulator:
-    schema_versions: list[int] = field(default_factory=list)
     symbol_info_ids: list[str | None] = field(default_factory=list)
     symbols: list[str | None] = field(default_factory=list)
     display_names: list[str | None] = field(default_factory=list)
@@ -805,7 +792,6 @@ class _SymbolInfoAccumulator:
     sig_doc_occurrence_range_values: list[int] = field(default_factory=list)
 
     def append(self, symbol_info: object) -> None:
-        self.schema_versions.append(SCHEMA_VERSION)
         self.symbol_info_ids.append(None)
         self.symbols.append(getattr(symbol_info, "symbol", None))
         self.display_names.append(getattr(symbol_info, "display_name", None))
@@ -905,7 +891,6 @@ class _SymbolInfoAccumulator:
         )
         return pa.Table.from_arrays(
             [
-                _array(self.schema_versions, pa.int32()),
                 _array(self.symbol_info_ids, pa.string()),
                 _array(self.symbols, pa.string()),
                 _array(self.display_names, pa.string()),
@@ -920,7 +905,6 @@ class _SymbolInfoAccumulator:
 
 @dataclass
 class _RelationshipAccumulator:
-    schema_versions: list[int] = field(default_factory=list)
     relationship_ids: list[str | None] = field(default_factory=list)
     symbols: list[str | None] = field(default_factory=list)
     related_symbols: list[str | None] = field(default_factory=list)
@@ -933,7 +917,6 @@ class _RelationshipAccumulator:
         related = getattr(relationship, "symbol", None)
         if symbol is None or related is None:
             return
-        self.schema_versions.append(SCHEMA_VERSION)
         self.relationship_ids.append(None)
         self.symbols.append(symbol)
         self.related_symbols.append(related)
@@ -945,7 +928,6 @@ class _RelationshipAccumulator:
     def to_table(self) -> TableLike:
         return pa.Table.from_arrays(
             [
-                _array(self.schema_versions, pa.int32()),
                 _array(self.relationship_ids, pa.string()),
                 _array(self.symbols, pa.string()),
                 _array(self.related_symbols, pa.string()),

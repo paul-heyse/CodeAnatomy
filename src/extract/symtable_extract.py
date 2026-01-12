@@ -11,7 +11,10 @@ import arrowdsl.pyarrow_core as pa
 from arrowdsl.ids import prefixed_hash_id_from_parts
 from arrowdsl.iter import iter_table_rows
 from arrowdsl.pyarrow_protocols import TableLike
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from extract.file_context import FileContext
+from schema_spec.core import ArrowFieldSpec
+from schema_spec.factories import make_table_spec
+from schema_spec.fields import file_identity_bundle
 
 SCHEMA_VERSION = 1
 
@@ -38,19 +41,48 @@ class SymtableExtractResult:
 class SymtableContext:
     """Context values shared across symtable rows."""
 
-    file_id: str
-    path: str
-    file_sha256: str | None
+    file_ctx: FileContext
+
+    @property
+    def file_id(self) -> str:
+        """Return the file id for this extraction context.
+
+        Returns
+        -------
+        str
+            File id from the file context.
+        """
+        return self.file_ctx.file_id
+
+    @property
+    def path(self) -> str:
+        """Return the file path for this extraction context.
+
+        Returns
+        -------
+        str
+            File path from the file context.
+        """
+        return self.file_ctx.path
+
+    @property
+    def file_sha256(self) -> str | None:
+        """Return the file sha256 for this extraction context.
+
+        Returns
+        -------
+        str | None
+            File hash from the file context.
+        """
+        return self.file_ctx.file_sha256
 
 
-SCOPES_SPEC = TableSchemaSpec(
+SCOPES_SPEC = make_table_spec(
     name="py_sym_scopes_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="scope_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="table_id", dtype=pa.int64()),
         ArrowFieldSpec(name="scope_type", dtype=pa.string()),
         ArrowFieldSpec(name="scope_name", dtype=pa.string()),
@@ -62,15 +94,13 @@ SCOPES_SPEC = TableSchemaSpec(
     ],
 )
 
-SYMBOLS_SPEC = TableSchemaSpec(
+SYMBOLS_SPEC = make_table_spec(
     name="py_sym_symbols_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="symbol_row_id", dtype=pa.string()),
         ArrowFieldSpec(name="scope_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="name", dtype=pa.string()),
         ArrowFieldSpec(name="is_referenced", dtype=pa.bool_()),
         ArrowFieldSpec(name="is_assigned", dtype=pa.bool_()),
@@ -86,41 +116,35 @@ SYMBOLS_SPEC = TableSchemaSpec(
     ],
 )
 
-SCOPE_EDGES_SPEC = TableSchemaSpec(
+SCOPE_EDGES_SPEC = make_table_spec(
     name="py_sym_scope_edges_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="edge_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="parent_scope_id", dtype=pa.string()),
         ArrowFieldSpec(name="child_scope_id", dtype=pa.string()),
     ],
 )
 
-NAMESPACE_EDGES_SPEC = TableSchemaSpec(
+NAMESPACE_EDGES_SPEC = make_table_spec(
     name="py_sym_namespace_edges_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="edge_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="scope_id", dtype=pa.string()),
         ArrowFieldSpec(name="symbol_row_id", dtype=pa.string()),
         ArrowFieldSpec(name="child_scope_id", dtype=pa.string()),
     ],
 )
 
-FUNC_PARTS_SPEC = TableSchemaSpec(
+FUNC_PARTS_SPEC = make_table_spec(
     name="py_sym_function_partitions_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="scope_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="parameters", dtype=pa.list_(pa.string())),
         ArrowFieldSpec(name="locals", dtype=pa.list_(pa.string())),
         ArrowFieldSpec(name="globals", dtype=pa.list_(pa.string())),
@@ -171,7 +195,6 @@ def _ensure_scope_id(
 def _scope_row(ctx: SymtableContext, sid: str, tbl: symtable.SymbolTable) -> dict[str, object]:
     st_str = _scope_type_str(tbl)
     return {
-        "schema_version": SCHEMA_VERSION,
         "scope_id": sid,
         "file_id": ctx.file_id,
         "path": ctx.path,
@@ -189,7 +212,6 @@ def _scope_row(ctx: SymtableContext, sid: str, tbl: symtable.SymbolTable) -> dic
 
 def _scope_edge_row(ctx: SymtableContext, parent_sid: str, child_sid: str) -> dict[str, object]:
     return {
-        "schema_version": SCHEMA_VERSION,
         "edge_id": prefixed_hash_id_from_parts("sym_scope_edge", parent_sid, child_sid),
         "file_id": ctx.file_id,
         "path": ctx.path,
@@ -214,7 +236,6 @@ def _symbol_rows_for_scope(
         sym_row_id = prefixed_hash_id_from_parts("sym_symbol", scope_id, name)
         symbol_rows.append(
             {
-                "schema_version": SCHEMA_VERSION,
                 "symbol_row_id": sym_row_id,
                 "scope_id": scope_id,
                 "file_id": ctx.file_id,
@@ -240,7 +261,6 @@ def _symbol_rows_for_scope(
                 child_sid = _ensure_scope_id(nt, ctx=ctx, table_to_scope_id=table_to_scope_id)
                 ns_edge_rows.append(
                     {
-                        "schema_version": SCHEMA_VERSION,
                         "edge_id": prefixed_hash_id_from_parts(
                             "sym_ns_edge",
                             sym_row_id,
@@ -264,7 +284,6 @@ def _func_parts_row(
     if _scope_type_str(tbl) != "FUNCTION":
         return None
     return {
-        "schema_version": SCHEMA_VERSION,
         "scope_id": scope_id,
         "file_id": ctx.file_id,
         "path": ctx.path,
@@ -277,19 +296,16 @@ def _func_parts_row(
     }
 
 
-def _repo_text(row: dict[str, object]) -> str | None:
-    text = row.get("text")
-    if isinstance(text, str) and text:
-        return text
-    raw = row.get("bytes")
-    if isinstance(raw, (bytes, bytearray)):
-        encoding_value = row.get("encoding")
-        encoding = encoding_value if isinstance(encoding_value, str) else "utf-8"
-        try:
-            return bytes(raw).decode(encoding, errors="replace")
-        except UnicodeError:
-            return None
-    return None
+def _repo_text(file_ctx: FileContext) -> str | None:
+    if file_ctx.text:
+        return file_ctx.text
+    if file_ctx.data is None:
+        return None
+    encoding = file_ctx.encoding or "utf-8"
+    try:
+        return file_ctx.data.decode(encoding, errors="replace")
+    except UnicodeError:
+        return None
 
 
 def _extract_symtable_for_row(
@@ -303,23 +319,20 @@ def _extract_symtable_for_row(
     list[dict[str, object]],
     list[dict[str, object]],
 ]:
-    file_id = row.get("file_id")
-    path = row.get("path")
-    if file_id is None or path is None:
+    file_ctx = FileContext.from_repo_row(row)
+    if not file_ctx.file_id or not file_ctx.path:
         return [], [], [], [], []
-    file_sha256_value = row.get("file_sha256")
-    file_sha256 = file_sha256_value if isinstance(file_sha256_value, str) else None
 
-    text = _repo_text(row)
+    text = _repo_text(file_ctx)
     if not text:
         return [], [], [], [], []
 
     try:
-        top = symtable.symtable(text, str(path), compile_type)
+        top = symtable.symtable(text, file_ctx.path, compile_type)
     except (SyntaxError, TypeError, ValueError):
         return [], [], [], [], []
 
-    ctx = SymtableContext(file_id=str(file_id), path=str(path), file_sha256=file_sha256)
+    ctx = SymtableContext(file_ctx=file_ctx)
     return _walk_symtable(top, ctx)
 
 

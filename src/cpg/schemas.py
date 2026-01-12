@@ -4,38 +4,38 @@ from __future__ import annotations
 
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.pyarrow_protocols import TableLike
-from schema_spec.contracts import ContractSpec, DedupeSpecSpec, SortKeySpec
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from schema_spec.contracts import DedupeSpecSpec, SortKeySpec
+from schema_spec.core import ArrowFieldSpec
+from schema_spec.factories import TableSpecConstraints, make_contract_spec, make_table_spec
+from schema_spec.fields import DICT_STRING, file_identity_bundle, span_bundle
+from schema_spec.registry import SchemaRegistry
 
 SCHEMA_VERSION = 1
-DICT_STRING = pa.dictionary(pa.int32(), pa.string())
 
-CPG_NODES_SPEC = TableSchemaSpec(
+CPG_NODES_SPEC = make_table_spec(
     name="cpg_nodes_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(include_sha256=False), span_bundle()),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="node_id", dtype=pa.string(), nullable=False),
         ArrowFieldSpec(name="node_kind", dtype=DICT_STRING, nullable=False),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="bend", dtype=pa.int64()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
     ],
-    required_non_null=("node_id", "node_kind"),
-    key_fields=("node_id", "node_kind"),
+    constraints=TableSpecConstraints(
+        required_non_null=("node_id", "node_kind"),
+        key_fields=("node_id", "node_kind"),
+    ),
 )
 
-CPG_EDGES_SPEC = TableSchemaSpec(
+CPG_EDGES_SPEC = make_table_spec(
     name="cpg_edges_v1",
+    version=SCHEMA_VERSION,
+    bundles=(span_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="edge_id", dtype=pa.string(), nullable=False),
         ArrowFieldSpec(name="edge_kind", dtype=DICT_STRING, nullable=False),
         ArrowFieldSpec(name="src_node_id", dtype=pa.string(), nullable=False),
         ArrowFieldSpec(name="dst_node_id", dtype=pa.string(), nullable=False),
         ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="bend", dtype=pa.int64()),
         ArrowFieldSpec(name="origin", dtype=DICT_STRING),
         ArrowFieldSpec(name="resolution_method", dtype=DICT_STRING),
         ArrowFieldSpec(name="confidence", dtype=pa.float32()),
@@ -46,14 +46,17 @@ CPG_EDGES_SPEC = TableSchemaSpec(
         ArrowFieldSpec(name="rule_name", dtype=DICT_STRING),
         ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
     ],
-    required_non_null=("edge_id", "edge_kind", "src_node_id", "dst_node_id"),
-    key_fields=("edge_kind", "src_node_id", "dst_node_id", "path", "bstart", "bend"),
+    constraints=TableSpecConstraints(
+        required_non_null=("edge_id", "edge_kind", "src_node_id", "dst_node_id"),
+        key_fields=("edge_kind", "src_node_id", "dst_node_id", "path", "bstart", "bend"),
+    ),
 )
 
-CPG_PROPS_SPEC = TableSchemaSpec(
+CPG_PROPS_SPEC = make_table_spec(
     name="cpg_props_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="entity_kind", dtype=pa.string(), nullable=False),
         ArrowFieldSpec(name="entity_id", dtype=pa.string(), nullable=False),
         ArrowFieldSpec(name="prop_key", dtype=pa.string(), nullable=False),
@@ -63,12 +66,11 @@ CPG_PROPS_SPEC = TableSchemaSpec(
         ArrowFieldSpec(name="value_bool", dtype=pa.bool_()),
         ArrowFieldSpec(name="value_json", dtype=pa.string()),
     ],
-    required_non_null=("entity_kind", "entity_id", "prop_key"),
+    constraints=TableSpecConstraints(required_non_null=("entity_kind", "entity_id", "prop_key")),
 )
 
-CPG_NODES_CONTRACT_SPEC = ContractSpec(
-    name="cpg_nodes_v1",
-    table_schema=CPG_NODES_SPEC,
+CPG_NODES_CONTRACT_SPEC = make_contract_spec(
+    table_spec=CPG_NODES_SPEC,
     dedupe=DedupeSpecSpec(
         keys=("node_kind", "node_id"),
         tie_breakers=(
@@ -88,9 +90,8 @@ CPG_NODES_CONTRACT_SPEC = ContractSpec(
     version=SCHEMA_VERSION,
 )
 
-CPG_EDGES_CONTRACT_SPEC = ContractSpec(
-    name="cpg_edges_v1",
-    table_schema=CPG_EDGES_SPEC,
+CPG_EDGES_CONTRACT_SPEC = make_contract_spec(
+    table_spec=CPG_EDGES_SPEC,
     dedupe=DedupeSpecSpec(
         keys=("edge_kind", "src_node_id", "dst_node_id", "path", "bstart", "bend"),
         tie_breakers=(
@@ -113,9 +114,8 @@ CPG_EDGES_CONTRACT_SPEC = ContractSpec(
     version=SCHEMA_VERSION,
 )
 
-CPG_PROPS_CONTRACT_SPEC = ContractSpec(
-    name="cpg_props_v1",
-    table_schema=CPG_PROPS_SPEC,
+CPG_PROPS_CONTRACT_SPEC = make_contract_spec(
+    table_spec=CPG_PROPS_SPEC,
     dedupe=DedupeSpecSpec(
         keys=(
             "entity_kind",
@@ -145,6 +145,26 @@ CPG_PROPS_SCHEMA = CPG_PROPS_SPEC.to_arrow_schema()
 CPG_NODES_CONTRACT = CPG_NODES_CONTRACT_SPEC.to_contract()
 CPG_EDGES_CONTRACT = CPG_EDGES_CONTRACT_SPEC.to_contract()
 CPG_PROPS_CONTRACT = CPG_PROPS_CONTRACT_SPEC.to_contract()
+
+
+def register_cpg_specs(registry: SchemaRegistry) -> SchemaRegistry:
+    """Register CPG table and contract specs into the registry.
+
+    Returns
+    -------
+    SchemaRegistry
+        Registry with CPG specs added.
+    """
+    registry.register_table(CPG_NODES_SPEC)
+    registry.register_table(CPG_EDGES_SPEC)
+    registry.register_table(CPG_PROPS_SPEC)
+    registry.register_contract(CPG_NODES_CONTRACT_SPEC)
+    registry.register_contract(CPG_EDGES_CONTRACT_SPEC)
+    registry.register_contract(CPG_PROPS_CONTRACT_SPEC)
+    return registry
+
+
+CPG_SCHEMA_REGISTRY = register_cpg_specs(SchemaRegistry())
 
 
 def empty_nodes() -> TableLike:

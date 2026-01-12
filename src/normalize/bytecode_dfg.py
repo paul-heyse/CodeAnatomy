@@ -3,26 +3,28 @@
 from __future__ import annotations
 
 import arrowdsl.pyarrow_core as pa
-from arrowdsl.column_ops import const_array, set_or_append_column
+from arrowdsl.column_ops import set_or_append_column
 from arrowdsl.columns import coalesce_string
 from arrowdsl.compute import pc
 from arrowdsl.empty import empty_table
 from arrowdsl.ids import prefixed_hash_id
 from arrowdsl.iter import iter_arrays
+from arrowdsl.predicates import And, FilterSpec, IsNull, Not
 from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from schema_spec.core import ArrowFieldSpec
+from schema_spec.factories import make_table_spec
+from schema_spec.fields import file_identity_bundle
 
 SCHEMA_VERSION = 1
 
-DEF_USE_SPEC = TableSchemaSpec(
+DEF_USE_SPEC = make_table_spec(
     name="py_bc_def_use_events_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(include_sha256=False),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="event_id", dtype=pa.string()),
         ArrowFieldSpec(name="instr_id", dtype=pa.string()),
         ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
         ArrowFieldSpec(name="kind", dtype=pa.string()),
         ArrowFieldSpec(name="symbol", dtype=pa.string()),
         ArrowFieldSpec(name="opname", dtype=pa.string()),
@@ -30,17 +32,16 @@ DEF_USE_SPEC = TableSchemaSpec(
     ],
 )
 
-REACHES_SPEC = TableSchemaSpec(
+REACHES_SPEC = make_table_spec(
     name="py_bc_reaches_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(include_sha256=False),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="edge_id", dtype=pa.string()),
         ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
         ArrowFieldSpec(name="def_event_id", dtype=pa.string()),
         ArrowFieldSpec(name="use_event_id", dtype=pa.string()),
         ArrowFieldSpec(name="symbol", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
     ],
 )
 
@@ -108,9 +109,8 @@ def build_def_use_events(py_bc_instructions: TableLike) -> TableLike:
     )
     table = set_or_append_column(table, "kind", kind)
 
-    mask = pc.and_(pc.is_valid(table["symbol"]), pc.is_valid(table["kind"]))
-    mask = pc.fill_null(mask, fill_value=False)
-    table = table.filter(mask)
+    predicate = And(preds=(Not(IsNull("symbol")), Not(IsNull("kind"))))
+    table = FilterSpec(predicate).apply_kernel(table)
     if table.num_rows == 0:
         return empty_table(DEF_USE_SCHEMA)
 
@@ -124,12 +124,11 @@ def build_def_use_events(py_bc_instructions: TableLike) -> TableLike:
 
     return pa.Table.from_arrays(
         [
-            const_array(table.num_rows, SCHEMA_VERSION, dtype=pa.int32()),
+            _column_or_null(table, "file_id", pa.string()),
+            _column_or_null(table, "path", pa.string()),
             event_id,
             _column_or_null(table, "instr_id", pa.string()),
             _column_or_null(table, "code_unit_id", pa.string()),
-            _column_or_null(table, "file_id", pa.string()),
-            _column_or_null(table, "path", pa.string()),
             table["kind"],
             table["symbol"],
             _column_or_null(table, "opname", pa.string()),
@@ -232,7 +231,6 @@ def _reaching_rows_for_key(
                 continue
             rows.append(
                 {
-                    "schema_version": SCHEMA_VERSION,
                     "edge_id": None,
                     "code_unit_id": code_unit_id,
                     "def_event_id": def_id,

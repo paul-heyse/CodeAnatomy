@@ -10,15 +10,17 @@ from typing import Literal, Protocol
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.column_ops import const_array, set_or_append_column
 from arrowdsl.contracts import Contract, SortKey
-from arrowdsl.dataset_io import compile_to_acero_scan, open_dataset
+from arrowdsl.dataset_io import open_dataset
 from arrowdsl.expr import E
-from arrowdsl.finalize import FinalizeResult, finalize
-from arrowdsl.joins import JoinSpec, hash_join
+from arrowdsl.finalize import FinalizeResult
+from arrowdsl.finalize_context import FinalizeContext
+from arrowdsl.joins import hash_join
 from arrowdsl.kernels import apply_dedupe, explode_list_column
 from arrowdsl.plan import Plan, union_all_plans
 from arrowdsl.pyarrow_protocols import ComputeExpression, ScalarLike, TableLike
 from arrowdsl.queryspec import ProjectionSpec, QuerySpec
 from arrowdsl.runtime import DeterminismTier, ExecutionContext, Ordering
+from arrowdsl.scan_context import ScanContext
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
@@ -38,6 +40,7 @@ from relspec.model import (
     RuleKind,
 )
 from relspec.registry import ContractCatalog, DatasetCatalog
+from schema_spec.factories import query_spec_for_table
 
 type KernelFn = Callable[[TableLike, ExecutionContext], TableLike]
 type RowValue = object | None
@@ -114,12 +117,16 @@ class FilesystemPlanResolver:
         )
 
         if ref.query is None:
-            cols = tuple(dataset.schema.names)
-            ref_query = QuerySpec(projection=ProjectionSpec(base=cols))
+            if loc.table_spec is not None:
+                ref_query = query_spec_for_table(loc.table_spec)
+            else:
+                cols = tuple(dataset.schema.names)
+                ref_query = QuerySpec(projection=ProjectionSpec(base=cols))
         else:
             ref_query = ref.query
 
-        decl = compile_to_acero_scan(dataset, spec=ref_query, ctx=ctx)
+        scan_ctx = ScanContext(dataset=dataset, spec=ref_query, ctx=ctx)
+        decl = scan_ctx.acero_decl()
         label = ref.label or ref.name
         return Plan(decl=decl, label=label, ordering=_scan_ordering_for_ctx(ctx))
 
@@ -836,10 +843,16 @@ class CompiledOutput:
 
         if self.contract_name is None:
             dummy = Contract(name=f"{self.output_dataset}_NO_CONTRACT", schema=unioned.schema)
-            return finalize(unioned, contract=dummy, ctx=ctx_exec)
+            return FinalizeContext(contract=dummy).run(unioned, ctx=ctx_exec)
 
         contract = contracts.get(self.contract_name)
-        return finalize(unioned, contract=contract, ctx=ctx_exec)
+        transform = None
+        if contract.schema_spec is not None:
+            transform = contract.schema_spec.to_transform(
+                safe_cast=ctx.safe_cast,
+                on_error="unsafe" if ctx.safe_cast else "raise",
+            )
+        return FinalizeContext(contract=contract, transform=transform).run(unioned, ctx=ctx_exec)
 
 
 class RelationshipRuleCompiler:
@@ -881,19 +894,10 @@ class RelationshipRuleCompiler:
         left_plan = self.resolver.resolve(left_ref, ctx=ctx)
         right_plan = self.resolver.resolve(right_ref, ctx=ctx)
 
-        jc = rule.hash_join
         join_plan = hash_join(
             left=left_plan,
             right=right_plan,
-            spec=JoinSpec(
-                join_type=jc.join_type,
-                left_keys=jc.left_keys,
-                right_keys=jc.right_keys,
-                left_output=jc.left_output,
-                right_output=jc.right_output,
-                output_suffix_for_left=jc.output_suffix_for_left,
-                output_suffix_for_right=jc.output_suffix_for_right,
-            ),
+            spec=rule.hash_join.to_join_spec(),
             label=rule.name,
         )
         join_plan = _apply_project_to_plan(join_plan, rule.project, rule=rule)

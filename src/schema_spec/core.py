@@ -8,6 +8,7 @@ import arrowdsl.pyarrow_core as pa
 from arrowdsl.pyarrow_protocols import DataTypeLike, FieldLike, SchemaLike
 from arrowdsl.schema import CastErrorPolicy
 from arrowdsl.schema_ops import SchemaTransform
+from schema_spec.metadata import schema_metadata
 
 
 def _field_metadata(metadata: dict[str, str]) -> dict[bytes, bytes]:
@@ -49,6 +50,7 @@ class TableSchemaSpec(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     name: str
+    version: int | None = None
     fields: list[ArrowFieldSpec]
     required_non_null: tuple[str, ...] = ()
     key_fields: tuple[str, ...] = ()
@@ -90,7 +92,12 @@ class TableSchemaSpec(BaseModel):
         pyarrow.Schema
             Arrow schema instance.
         """
-        return pa.schema([field.to_arrow_field() for field in self.fields])
+        schema = pa.schema([field.to_arrow_field() for field in self.fields])
+        if self.version is None:
+            return schema
+        meta = dict(schema.metadata or {})
+        meta.update(schema_metadata(self.name, self.version))
+        return schema.with_metadata(meta)
 
     def to_transform(
         self,

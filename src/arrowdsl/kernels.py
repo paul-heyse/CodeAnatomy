@@ -10,20 +10,25 @@ from arrowdsl.compute import pc
 from arrowdsl.pyarrow_protocols import TableLike
 from arrowdsl.runtime import DeterminismTier, ExecutionContext
 from arrowdsl.specs import AggregateSpec, DedupeSpec, JoinSpec, SortKey
+from schema_spec.fields import PROVENANCE_COLS
 
-_PROVENANCE_COLS: tuple[str, ...] = (
-    "prov_filename",
-    "prov_fragment_index",
-    "prov_batch_index",
-    "prov_last_in_fragment",
-)
+
+def provenance_sort_keys() -> tuple[str, ...]:
+    """Return provenance columns used as canonical sort tie-breakers.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Provenance column names for tie-breaking sorts.
+    """
+    return PROVENANCE_COLS
 
 
 def _append_provenance_keys(table: TableLike, sort_keys: Sequence[SortKey]) -> list[SortKey]:
     existing = {sk.column for sk in sort_keys}
     extras = [
         SortKey(col, "ascending")
-        for col in _PROVENANCE_COLS
+        for col in PROVENANCE_COLS
         if col in table.column_names and col not in existing
     ]
     return [*sort_keys, *extras]

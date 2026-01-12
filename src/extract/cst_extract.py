@@ -24,7 +24,10 @@ from arrowdsl.ids import prefixed_hash_id_from_parts
 from arrowdsl.iter import iter_table_rows
 from arrowdsl.nested import build_list_array, build_list_of_structs
 from arrowdsl.pyarrow_protocols import TableLike
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from extract.file_context import FileContext
+from schema_spec.core import ArrowFieldSpec
+from schema_spec.factories import make_table_spec
+from schema_spec.fields import call_span_bundle, file_identity_bundle
 
 SCHEMA_VERSION = 1
 
@@ -95,13 +98,11 @@ class CSTExtractResult:
 QNAME_STRUCT = pa.struct([("name", pa.string()), ("source", pa.string())])
 QNAME_LIST = pa.list_(QNAME_STRUCT)
 
-PARSE_MANIFEST_SPEC = TableSchemaSpec(
+PARSE_MANIFEST_SPEC = make_table_spec(
     name="py_cst_parse_manifest_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="encoding", dtype=pa.string()),
         ArrowFieldSpec(name="default_indent", dtype=pa.string()),
         ArrowFieldSpec(name="default_newline", dtype=pa.string()),
@@ -112,13 +113,11 @@ PARSE_MANIFEST_SPEC = TableSchemaSpec(
     ],
 )
 
-PARSE_ERRORS_SPEC = TableSchemaSpec(
+PARSE_ERRORS_SPEC = make_table_spec(
     name="py_cst_parse_errors_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="error_type", dtype=pa.string()),
         ArrowFieldSpec(name="message", dtype=pa.string()),
         ArrowFieldSpec(name="raw_line", dtype=pa.int32()),
@@ -126,14 +125,12 @@ PARSE_ERRORS_SPEC = TableSchemaSpec(
     ],
 )
 
-NAME_REFS_SPEC = TableSchemaSpec(
+NAME_REFS_SPEC = make_table_spec(
     name="py_cst_name_refs_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="name_ref_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="name", dtype=pa.string()),
         ArrowFieldSpec(name="expr_ctx", dtype=pa.string()),
         ArrowFieldSpec(name="bstart", dtype=pa.int64()),
@@ -141,14 +138,12 @@ NAME_REFS_SPEC = TableSchemaSpec(
     ],
 )
 
-IMPORTS_SPEC = TableSchemaSpec(
+IMPORTS_SPEC = make_table_spec(
     name="py_cst_imports_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="import_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="kind", dtype=pa.string()),
         ArrowFieldSpec(name="module", dtype=pa.string()),
         ArrowFieldSpec(name="relative_level", dtype=pa.int32()),
@@ -162,16 +157,13 @@ IMPORTS_SPEC = TableSchemaSpec(
     ],
 )
 
-CALLSITES_SPEC = TableSchemaSpec(
+CALLSITES_SPEC = make_table_spec(
     name="py_cst_callsites_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="call_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
-        ArrowFieldSpec(name="call_bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="call_bend", dtype=pa.int64()),
+        *call_span_bundle().fields,
         ArrowFieldSpec(name="callee_bstart", dtype=pa.int64()),
         ArrowFieldSpec(name="callee_bend", dtype=pa.int64()),
         ArrowFieldSpec(name="callee_shape", dtype=pa.string()),
@@ -182,15 +174,13 @@ CALLSITES_SPEC = TableSchemaSpec(
     ],
 )
 
-DEFS_SPEC = TableSchemaSpec(
+DEFS_SPEC = make_table_spec(
     name="py_cst_defs_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="def_id", dtype=pa.string()),
         ArrowFieldSpec(name="container_def_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="kind", dtype=pa.string()),
         ArrowFieldSpec(name="name", dtype=pa.string()),
         ArrowFieldSpec(name="def_bstart", dtype=pa.int64()),
@@ -201,18 +191,16 @@ DEFS_SPEC = TableSchemaSpec(
     ],
 )
 
-TYPE_EXPRS_SPEC = TableSchemaSpec(
+TYPE_EXPRS_SPEC = make_table_spec(
     name="py_cst_type_exprs_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="type_expr_id", dtype=pa.string()),
         ArrowFieldSpec(name="owner_def_id", dtype=pa.string()),
         ArrowFieldSpec(name="param_name", dtype=pa.string()),
         ArrowFieldSpec(name="expr_kind", dtype=pa.string()),
         ArrowFieldSpec(name="expr_role", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="bstart", dtype=pa.int64()),
         ArrowFieldSpec(name="bend", dtype=pa.int64()),
         ArrowFieldSpec(name="expr_text", dtype=pa.string()),
@@ -232,10 +220,41 @@ TYPE_EXPRS_SCHEMA = TYPE_EXPRS_SPEC.to_arrow_schema()
 class CSTFileContext:
     """Per-file context for CST extraction."""
 
-    file_id: str
-    path: str
-    file_sha256: str | None
+    file_ctx: FileContext
     options: CSTExtractOptions
+
+    @property
+    def file_id(self) -> str:
+        """Return the file id for this extraction context.
+
+        Returns
+        -------
+        str
+            File id from the file context.
+        """
+        return self.file_ctx.file_id
+
+    @property
+    def path(self) -> str:
+        """Return the file path for this extraction context.
+
+        Returns
+        -------
+        str
+            File path from the file context.
+        """
+        return self.file_ctx.path
+
+    @property
+    def file_sha256(self) -> str | None:
+        """Return the file sha256 for this extraction context.
+
+        Returns
+        -------
+        str | None
+            File hash from the file context.
+        """
+        return self.file_ctx.file_sha256
 
 
 @dataclass
@@ -328,16 +347,13 @@ def _calculate_module_and_package(repo_root: Path, abs_path: Path) -> tuple[str 
         return result.name, result.package
 
 
-def _row_bytes(rf: dict[str, object]) -> bytes | None:
-    data = rf.get("bytes")
-    if isinstance(data, (bytes, bytearray)):
-        return bytes(data)
-    text = rf.get("text")
-    if not isinstance(text, str) or not text:
+def _row_bytes(file_ctx: FileContext) -> bytes | None:
+    if file_ctx.data is not None:
+        return file_ctx.data
+    if not file_ctx.text:
         return None
-    encoding_value = rf.get("encoding")
-    encoding = encoding_value if isinstance(encoding_value, str) else "utf-8"
-    return text.encode(encoding, errors="replace")
+    encoding = file_ctx.encoding or "utf-8"
+    return file_ctx.text.encode(encoding, errors="replace")
 
 
 def _parse_module(
@@ -353,7 +369,6 @@ def _parse_module(
         return (
             None,
             {
-                "schema_version": SCHEMA_VERSION,
                 "file_id": file_id,
                 "path": path,
                 "file_sha256": file_sha256,
@@ -407,7 +422,6 @@ def _manifest_row(
     package_name: str | None,
 ) -> Row:
     return {
-        "schema_version": SCHEMA_VERSION,
         "file_id": ctx.file_id,
         "path": ctx.path,
         "file_sha256": ctx.file_sha256,
@@ -550,7 +564,6 @@ class CSTCollector(cst.CSTVisitor):
         )
         self._type_expr_rows.append(
             {
-                "schema_version": SCHEMA_VERSION,
                 "type_expr_id": type_expr_id,
                 "owner_def_id": owner.owner_def_id,
                 "param_name": owner.param_name,
@@ -598,7 +611,6 @@ class CSTCollector(cst.CSTVisitor):
 
         self._def_rows.append(
             {
-                "schema_version": SCHEMA_VERSION,
                 "def_id": def_id,
                 "container_def_id": container,
                 "file_id": self._file_ctx.file_id,
@@ -671,7 +683,6 @@ class CSTCollector(cst.CSTVisitor):
 
         self._def_rows.append(
             {
-                "schema_version": SCHEMA_VERSION,
                 "def_id": def_id,
                 "container_def_id": container,
                 "file_id": self._file_ctx.file_id,
@@ -715,7 +726,6 @@ class CSTCollector(cst.CSTVisitor):
 
         self._name_ref_rows.append(
             {
-                "schema_version": SCHEMA_VERSION,
                 "name_ref_id": prefixed_hash_id_from_parts(
                     "cst_name_ref",
                     self._file_ctx.file_id,
@@ -756,7 +766,6 @@ class CSTCollector(cst.CSTVisitor):
 
             self._import_rows.append(
                 {
-                    "schema_version": SCHEMA_VERSION,
                     "import_id": prefixed_hash_id_from_parts(
                         "cst_import",
                         self._file_ctx.file_id,
@@ -806,7 +815,6 @@ class CSTCollector(cst.CSTVisitor):
             alias_bstart, alias_bend = self._span(node.names)
             self._import_rows.append(
                 {
-                    "schema_version": SCHEMA_VERSION,
                     "import_id": prefixed_hash_id_from_parts(
                         "cst_import",
                         self._file_ctx.file_id,
@@ -843,7 +851,6 @@ class CSTCollector(cst.CSTVisitor):
 
             self._import_rows.append(
                 {
-                    "schema_version": SCHEMA_VERSION,
                     "import_id": prefixed_hash_id_from_parts(
                         "cst_import",
                         self._file_ctx.file_id,
@@ -898,7 +905,6 @@ class CSTCollector(cst.CSTVisitor):
 
         self._call_rows.append(
             {
-                "schema_version": SCHEMA_VERSION,
                 "call_id": prefixed_hash_id_from_parts(
                     "cst_call",
                     self._file_ctx.file_id,
@@ -923,37 +929,26 @@ class CSTCollector(cst.CSTVisitor):
 
 
 def _extract_cst_for_row(rf: dict[str, object], ctx: CSTExtractContext) -> None:
-    file_id_val = rf.get("file_id")
-    path_val = rf.get("path")
-    if file_id_val is None or path_val is None:
+    file_ctx = FileContext.from_repo_row(rf)
+    if not file_ctx.file_id or not file_ctx.path:
         return
-    file_id = str(file_id_val)
-    path = str(path_val)
-    file_sha256 = rf.get("file_sha256")
-    if not isinstance(file_sha256, str):
-        file_sha256 = None
 
-    data = _row_bytes(rf)
+    data = _row_bytes(file_ctx)
     if data is None:
         return
 
     module = _parse_or_record_error(
         data,
-        file_id=file_id,
-        path=path,
-        file_sha256=file_sha256,
+        file_id=file_ctx.file_id,
+        path=file_ctx.path,
+        file_sha256=file_ctx.file_sha256,
         ctx=ctx,
     )
     if module is None:
         return
 
-    module_name, package_name = _module_package_names(rf, options=ctx.options, path=path)
-    file_ctx = CSTFileContext(
-        file_id=file_id,
-        path=path,
-        file_sha256=file_sha256,
-        options=ctx.options,
-    )
+    module_name, package_name = _module_package_names(rf, options=ctx.options, path=file_ctx.path)
+    file_ctx = CSTFileContext(file_ctx=file_ctx, options=ctx.options)
     if ctx.options.include_parse_manifest:
         future_imports = getattr(module, "future_imports", []) or []
         _append_string_list(

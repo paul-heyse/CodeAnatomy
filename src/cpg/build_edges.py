@@ -6,11 +6,19 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 import arrowdsl.pyarrow_core as pa
-from arrowdsl.column_ops import const_array, set_or_append_column
+from arrowdsl.column_ops import (
+    ColumnDefaultsSpec,
+    ConstExpr,
+    FieldExpr,
+    const_array,
+    set_or_append_column,
+)
 from arrowdsl.compute import pc
 from arrowdsl.encoding import EncodingSpec, encode_columns
-from arrowdsl.finalize import FinalizeResult, finalize
+from arrowdsl.finalize import FinalizeResult
+from arrowdsl.finalize_context import FinalizeContext
 from arrowdsl.kernels import apply_join
+from arrowdsl.predicates import BitmaskMatch, BoolColumn, FilterSpec, InValues, Not
 from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike
 from arrowdsl.runtime import ExecutionContext
 from arrowdsl.specs import JoinSpec
@@ -41,15 +49,17 @@ def _filter_unresolved_qname_calls(
     if rel_callsite_symbol is None or "call_id" not in rel_callsite_symbol.column_names:
         return rel_callsite_qname
     resolved = pc.drop_null(rel_callsite_symbol["call_id"])
-    mask = pc.is_in(rel_callsite_qname["call_id"], value_set=resolved)
-    mask = pc.fill_null(mask, fill_value=False)
-    return rel_callsite_qname.filter(pc.invert(mask))
+    predicate = Not(InValues(col="call_id", values=resolved, fill_null=False))
+    return FilterSpec(predicate).apply_kernel(rel_callsite_qname)
 
 
 def _ensure_ambiguity_group_id(table: TableLike) -> TableLike:
-    if "ambiguity_group_id" not in table.column_names and "call_id" in table.column_names:
-        return table.append_column("ambiguity_group_id", table["call_id"])
-    return table
+    if "call_id" not in table.column_names:
+        return table
+    defaults = ColumnDefaultsSpec(
+        defaults=(("ambiguity_group_id", FieldExpr("call_id")),),
+    )
+    return defaults.apply(table)
 
 
 def _with_repo_file_ids(diag_table: TableLike, repo_files: TableLike | None) -> TableLike:
@@ -95,18 +105,6 @@ def _severity_score_array(
     return pc.cast(score, pa.float32())
 
 
-def _role_mask(
-    symbol_roles: ArrayLike | ChunkedArrayLike,
-    mask: int,
-    *,
-    must_set: bool,
-) -> ArrayLike | ChunkedArrayLike:
-    roles = pc.cast(symbol_roles, pa.int64())
-    hit = pc.not_equal(pc.bit_wise_and(roles, pa.scalar(int(mask))), pa.scalar(0))
-    hit = pc.fill_null(hit, fill_value=False)
-    return hit if must_set else pc.invert(hit)
-
-
 def _table_getter(name: str) -> TableGetter:
     def _get_table(tables: Mapping[str, TableLike]) -> TableLike | None:
         return tables.get(name)
@@ -115,18 +113,25 @@ def _table_getter(name: str) -> TableGetter:
 
 
 def _symbol_role_filter(mask: int, *, must_set: bool) -> TableFilter:
-    def _filter(table: TableLike) -> ArrayLike:
-        roles = _get(table, "symbol_roles", default_type=pa.int64())
-        return _role_mask(roles, mask, must_set=must_set)
+    def _filter(table: TableLike) -> TableLike:
+        defaults = ColumnDefaultsSpec(
+            defaults=(("symbol_roles", ConstExpr(0, dtype=pa.int64())),),
+        )
+        table = defaults.apply(table)
+        predicate = BitmaskMatch(col="symbol_roles", bitmask=mask, must_set=must_set)
+        return FilterSpec(predicate).apply_kernel(table)
 
     return _filter
 
 
 def _flag_filter(flag_col: str) -> TableFilter:
-    def _filter(table: TableLike) -> ArrayLike:
-        if flag_col not in table.column_names:
-            return const_array(table.num_rows, value=False, dtype=pa.bool_())
-        return pc.fill_null(pc.cast(table[flag_col], pa.bool_()), fill_value=False)
+    def _filter(table: TableLike) -> TableLike:
+        defaults = ColumnDefaultsSpec(
+            defaults=((flag_col, ConstExpr(value=False, dtype=pa.bool_())),),
+        )
+        table = defaults.apply(table)
+        predicate = BoolColumn(col=flag_col, fill_null=False)
+        return FilterSpec(predicate).apply_kernel(table)
 
     return _filter
 
@@ -593,4 +598,10 @@ def build_cpg_edges(
         Finalized edges tables and stats.
     """
     raw = build_cpg_edges_raw(inputs=inputs, options=options)
-    return finalize(raw, contract=CPG_EDGES_CONTRACT, ctx=ctx)
+    transform = None
+    if CPG_EDGES_CONTRACT.schema_spec is not None:
+        transform = CPG_EDGES_CONTRACT.schema_spec.to_transform(
+            safe_cast=ctx.safe_cast,
+            on_error="unsafe" if ctx.safe_cast else "raise",
+        )
+    return FinalizeContext(contract=CPG_EDGES_CONTRACT, transform=transform).run(raw, ctx=ctx)

@@ -8,7 +8,8 @@ from dataclasses import dataclass
 import arrowdsl.pyarrow_core as pa
 from arrowdsl.column_ops import set_or_append_column
 from arrowdsl.compute import pc
-from arrowdsl.finalize import FinalizeResult, finalize
+from arrowdsl.finalize import FinalizeResult
+from arrowdsl.finalize_context import FinalizeContext
 from arrowdsl.kernels import apply_aggregate
 from arrowdsl.pyarrow_protocols import ArrayLike, ChunkedArrayLike, TableLike
 from arrowdsl.runtime import ExecutionContext
@@ -535,4 +536,10 @@ def build_cpg_props(
         inputs=inputs,
         options=options,
     )
-    return finalize(raw, contract=CPG_PROPS_CONTRACT, ctx=ctx)
+    transform = None
+    if CPG_PROPS_CONTRACT.schema_spec is not None:
+        transform = CPG_PROPS_CONTRACT.schema_spec.to_transform(
+            safe_cast=ctx.safe_cast,
+            on_error="unsafe" if ctx.safe_cast else "raise",
+        )
+    return FinalizeContext(contract=CPG_PROPS_CONTRACT, transform=transform).run(raw, ctx=ctx)

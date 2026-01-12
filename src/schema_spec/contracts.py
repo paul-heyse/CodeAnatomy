@@ -97,6 +97,7 @@ class ContractSpec(BaseModel):
         Contract
             Contract constructed from the spec.
         """
+        version = self.version if self.version is not None else self.table_schema.version
         return Contract(
             name=self.name,
             schema=self.table_schema.to_arrow_schema(),
@@ -105,7 +106,7 @@ class ContractSpec(BaseModel):
             required_non_null=self.table_schema.required_non_null,
             dedupe=self.dedupe.to_dedupe_spec() if self.dedupe is not None else None,
             canonical_sort=tuple(sk.to_sort_key() for sk in self.canonical_sort),
-            version=self.version,
+            version=version,
             virtual_fields=self.virtual_fields,
             virtual_field_docs=self.virtual_field_docs,
         )

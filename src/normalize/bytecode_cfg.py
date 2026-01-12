@@ -9,27 +9,31 @@ from arrowdsl.pyarrow_protocols import TableLike
 from arrowdsl.runtime import ExecutionContext
 from arrowdsl.specs import JoinSpec
 from normalize.schema_infer import align_table_to_schema
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from schema_spec.core import ArrowFieldSpec
+from schema_spec.factories import make_table_spec
+from schema_spec.fields import file_identity_bundle
 
-CFG_BLOCKS_NORM_SPEC = TableSchemaSpec(
+SCHEMA_VERSION = 1
+
+CFG_BLOCKS_NORM_SPEC = make_table_spec(
     name="py_bc_blocks_norm_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(include_sha256=False),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="block_id", dtype=pa.string()),
         ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
         ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
         ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
         ArrowFieldSpec(name="kind", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
     ],
 )
 
 
-CFG_EDGES_NORM_SPEC = TableSchemaSpec(
+CFG_EDGES_NORM_SPEC = make_table_spec(
     name="py_bc_cfg_edges_norm_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(include_sha256=False),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="edge_id", dtype=pa.string()),
         ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
         ArrowFieldSpec(name="src_block_id", dtype=pa.string()),
@@ -37,8 +41,6 @@ CFG_EDGES_NORM_SPEC = TableSchemaSpec(
         ArrowFieldSpec(name="kind", dtype=pa.string()),
         ArrowFieldSpec(name="cond_instr_id", dtype=pa.string()),
         ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
     ],
 )
 

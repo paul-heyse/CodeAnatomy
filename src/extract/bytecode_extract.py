@@ -11,7 +11,10 @@ import arrowdsl.pyarrow_core as pa
 from arrowdsl.ids import prefixed_hash_id_from_parts
 from arrowdsl.iter import iter_table_rows
 from arrowdsl.pyarrow_protocols import TableLike
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from extract.file_context import FileContext
+from schema_spec.core import ArrowFieldSpec
+from schema_spec.factories import make_table_spec
+from schema_spec.fields import file_identity_bundle
 
 type RowValue = str | int | bool | None
 type Row = dict[str, RowValue]
@@ -58,10 +61,41 @@ class BytecodeExtractResult:
 class BytecodeFileContext:
     """Per-file context for bytecode extraction."""
 
-    file_id: str
-    path: str
-    file_sha256: str | None
+    file_ctx: FileContext
     options: BytecodeExtractOptions
+
+    @property
+    def file_id(self) -> str:
+        """Return the file id for this extraction context.
+
+        Returns
+        -------
+        str
+            File id from the file context.
+        """
+        return self.file_ctx.file_id
+
+    @property
+    def path(self) -> str:
+        """Return the file path for this extraction context.
+
+        Returns
+        -------
+        str
+            File path from the file context.
+        """
+        return self.file_ctx.path
+
+    @property
+    def file_sha256(self) -> str | None:
+        """Return the file sha256 for this extraction context.
+
+        Returns
+        -------
+        str | None
+            File hash from the file context.
+        """
+        return self.file_ctx.file_sha256
 
 
 @dataclass(frozen=True)
@@ -107,15 +141,13 @@ class BytecodeRowBuffers:
     error_rows: list[Row]
 
 
-CODE_UNITS_SPEC = TableSchemaSpec(
+CODE_UNITS_SPEC = make_table_spec(
     name="py_bc_code_units_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
         ArrowFieldSpec(name="parent_code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="qualpath", dtype=pa.string()),
         ArrowFieldSpec(name="co_name", dtype=pa.string()),
         ArrowFieldSpec(name="firstlineno", dtype=pa.int32()),
@@ -129,15 +161,13 @@ CODE_UNITS_SPEC = TableSchemaSpec(
     ],
 )
 
-INSTR_SPEC = TableSchemaSpec(
+INSTR_SPEC = make_table_spec(
     name="py_bc_instructions_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="instr_id", dtype=pa.string()),
         ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="instr_index", dtype=pa.int32()),
         ArrowFieldSpec(name="offset", dtype=pa.int32()),
         ArrowFieldSpec(name="opname", dtype=pa.string()),
@@ -155,15 +185,13 @@ INSTR_SPEC = TableSchemaSpec(
     ],
 )
 
-EXC_SPEC = TableSchemaSpec(
+EXC_SPEC = make_table_spec(
     name="py_bc_exception_table_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="exc_entry_id", dtype=pa.string()),
         ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="exc_index", dtype=pa.int32()),
         ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
         ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
@@ -173,10 +201,11 @@ EXC_SPEC = TableSchemaSpec(
     ],
 )
 
-BLOCKS_SPEC = TableSchemaSpec(
+BLOCKS_SPEC = make_table_spec(
     name="py_bc_blocks_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="block_id", dtype=pa.string()),
         ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
         ArrowFieldSpec(name="start_offset", dtype=pa.int32()),
@@ -185,10 +214,11 @@ BLOCKS_SPEC = TableSchemaSpec(
     ],
 )
 
-CFG_EDGES_SPEC = TableSchemaSpec(
+CFG_EDGES_SPEC = make_table_spec(
     name="py_bc_cfg_edges_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="edge_id", dtype=pa.string()),
         ArrowFieldSpec(name="code_unit_id", dtype=pa.string()),
         ArrowFieldSpec(name="src_block_id", dtype=pa.string()),
@@ -199,13 +229,11 @@ CFG_EDGES_SPEC = TableSchemaSpec(
     ],
 )
 
-ERRORS_SPEC = TableSchemaSpec(
+ERRORS_SPEC = make_table_spec(
     name="py_bc_errors_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="error_type", dtype=pa.string()),
         ArrowFieldSpec(name="message", dtype=pa.string()),
     ],
@@ -222,32 +250,21 @@ ERRORS_SCHEMA = ERRORS_SPEC.to_arrow_schema()
 def _row_context(
     rf: dict[str, object], options: BytecodeExtractOptions
 ) -> BytecodeFileContext | None:
-    file_id_value = rf.get("file_id")
-    path_value = rf.get("path")
-    if file_id_value is None or path_value is None:
+    file_ctx = FileContext.from_repo_row(rf)
+    if not file_ctx.file_id or not file_ctx.path:
         return None
-    file_sha256_value = rf.get("file_sha256")
-    file_sha256 = file_sha256_value if isinstance(file_sha256_value, str) else None
-    return BytecodeFileContext(
-        file_id=str(file_id_value),
-        path=str(path_value),
-        file_sha256=file_sha256,
-        options=options,
-    )
+    return BytecodeFileContext(file_ctx=file_ctx, options=options)
 
 
-def _row_text(rf: dict[str, object]) -> str | None:
-    text = rf.get("text")
-    if isinstance(text, str) and text:
-        return text
-    raw_bytes = rf.get("bytes")
-    if not isinstance(raw_bytes, (bytes, bytearray, memoryview)):
+def _row_text(file_ctx: FileContext) -> str | None:
+    if file_ctx.text:
+        return file_ctx.text
+    if file_ctx.data is None:
         return None
-    encoding_value = rf.get("encoding")
-    encoding = encoding_value if isinstance(encoding_value, str) else "utf-8"
+    encoding = file_ctx.encoding or "utf-8"
     try:
-        return bytes(raw_bytes).decode(encoding, errors="replace")
-    except LookupError:
+        return file_ctx.data.decode(encoding, errors="replace")
+    except (LookupError, UnicodeError):
         return None
 
 
@@ -266,7 +283,6 @@ def _compile_text(
         return (
             None,
             {
-                "schema_version": SCHEMA_VERSION,
                 "file_id": ctx.file_id,
                 "path": ctx.path,
                 "file_sha256": ctx.file_sha256,
@@ -307,7 +323,6 @@ def _assign_code_units(
 
         cu_rows.append(
             {
-                "schema_version": SCHEMA_VERSION,
                 "code_unit_id": cu_id,
                 "parent_code_unit_id": parent_id,
                 "file_id": ctx.file_id,
@@ -358,7 +373,6 @@ def _append_exception_rows(unit_ctx: CodeUnitContext, exc_rows: list[Row]) -> No
     for k, ex in enumerate(unit_ctx.exc_entries):
         exc_rows.append(
             {
-                "schema_version": SCHEMA_VERSION,
                 "exc_entry_id": prefixed_hash_id_from_parts("bc_exc", unit_ctx.cu_id, str(k)),
                 "code_unit_id": unit_ctx.cu_id,
                 "file_id": unit_ctx.file_ctx.file_id,
@@ -386,7 +400,6 @@ def _append_instruction_rows(unit_ctx: CodeUnitContext, ins_rows: list[Row]) -> 
 
         ins_rows.append(
             {
-                "schema_version": SCHEMA_VERSION,
                 "instr_id": prefixed_hash_id_from_parts(
                     "bc_insn",
                     unit_ctx.cu_id,
@@ -486,7 +499,6 @@ def _append_block_rows(
         )
         blk_rows.append(
             {
-                "schema_version": SCHEMA_VERSION,
                 "block_id": block_id,
                 "code_unit_id": unit_ctx.cu_id,
                 "start_offset": int(start),
@@ -503,7 +515,6 @@ def _append_block_rows(
 def _append_cfg_edge(unit_ctx: CodeUnitContext, spec: CfgEdgeSpec, edge_rows: list[Row]) -> None:
     edge_rows.append(
         {
-            "schema_version": SCHEMA_VERSION,
             "edge_id": prefixed_hash_id_from_parts(
                 "bc_cfg",
                 unit_ctx.cu_id,
@@ -720,7 +731,7 @@ def extract_bytecode(
         ctx = _row_context(rf, options)
         if ctx is None:
             continue
-        text = _row_text(rf)
+        text = _row_text(ctx.file_ctx)
         if text is None:
             continue
         top, err = _compile_text(text, ctx)

@@ -7,11 +7,18 @@ from dataclasses import dataclass
 from typing import Literal
 
 import arrowdsl.pyarrow_core as pa
-from arrowdsl.column_ops import const_array, set_or_append_column
+from arrowdsl.column_ops import (
+    ColumnDefaultsSpec,
+    ConstExpr,
+    FieldExpr,
+    set_or_append_column,
+)
 from arrowdsl.iter import iter_arrays
 from arrowdsl.pyarrow_protocols import ArrayLike, DataTypeLike, TableLike
 from normalize.ids import add_span_id_column
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from schema_spec.core import ArrowFieldSpec
+from schema_spec.factories import make_table_spec
+from schema_spec.fields import scip_range_bundle
 
 type RowValue = object | None
 
@@ -20,6 +27,12 @@ ENC_UTF16 = 2
 ENC_UTF32 = 3
 DEFAULT_POSITION_ENCODING = ENC_UTF32
 VALID_POSITION_ENCODINGS = {ENC_UTF8, ENC_UTF16, ENC_UTF32}
+SCHEMA_VERSION = 1
+
+SCIP_RANGE_FIELDS = tuple(field.name for field in scip_range_bundle(include_len=True).fields)
+SCIP_ENC_RANGE_FIELDS = tuple(
+    field.name for field in scip_range_bundle(prefix="enc_", include_len=True).fields
+)
 
 
 @dataclass(frozen=True)
@@ -75,16 +88,16 @@ class ScipOccurrenceColumns:
     document_id: str = "document_id"
     doc_posenc: str = "position_encoding"
     path: str = "path"
-    start_line: str = "start_line"
-    start_char: str = "start_char"
-    end_line: str = "end_line"
-    end_char: str = "end_char"
-    range_len: str = "range_len"
-    enc_start_line: str = "enc_start_line"
-    enc_start_char: str = "enc_start_char"
-    enc_end_line: str = "enc_end_line"
-    enc_end_char: str = "enc_end_char"
-    enc_range_len: str = "enc_range_len"
+    start_line: str = SCIP_RANGE_FIELDS[0]
+    start_char: str = SCIP_RANGE_FIELDS[1]
+    end_line: str = SCIP_RANGE_FIELDS[2]
+    end_char: str = SCIP_RANGE_FIELDS[3]
+    range_len: str = SCIP_RANGE_FIELDS[4]
+    enc_start_line: str = SCIP_ENC_RANGE_FIELDS[0]
+    enc_start_char: str = SCIP_ENC_RANGE_FIELDS[1]
+    enc_end_line: str = SCIP_ENC_RANGE_FIELDS[2]
+    enc_end_char: str = SCIP_ENC_RANGE_FIELDS[3]
+    enc_range_len: str = SCIP_ENC_RANGE_FIELDS[4]
     out_bstart: str = "bstart"
     out_bend: str = "bend"
     out_enc_bstart: str = "enc_bstart"
@@ -122,8 +135,10 @@ class OccurrenceSpanResult:
     error: dict[str, str] | None
 
 
-SPAN_ERROR_SPEC = TableSchemaSpec(
+SPAN_ERROR_SPEC = make_table_spec(
     name="span_errors_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
         ArrowFieldSpec(name="document_id", dtype=pa.string()),
         ArrowFieldSpec(name="path", dtype=pa.string()),
@@ -779,13 +794,15 @@ def _append_alias_cols(table: TableLike, aliases: dict[str, str]) -> TableLike:
         if newc in out.column_names:
             continue
         if oldc not in out.column_names:
-            out = set_or_append_column(
-                out,
-                newc,
-                const_array(out.num_rows, None, dtype=pa.int64()),
+            defaults = ColumnDefaultsSpec(
+                defaults=((newc, ConstExpr(None, dtype=pa.int64())),),
             )
+            out = defaults.apply(out)
             continue
-        out = set_or_append_column(out, newc, out[oldc])
+        defaults = ColumnDefaultsSpec(
+            defaults=((newc, FieldExpr(oldc)),),
+        )
+        out = defaults.apply(out)
     return out
 
 

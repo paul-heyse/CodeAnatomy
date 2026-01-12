@@ -13,6 +13,7 @@ from arrowdsl.expr import ScalarValue
 from arrowdsl.joins import JoinType
 from arrowdsl.pyarrow_protocols import ComputeExpression
 from arrowdsl.queryspec import QuerySpec
+from arrowdsl.specs import JoinSpec
 
 type Expression = ComputeExpression
 
@@ -81,6 +82,25 @@ class HashJoinConfig(BaseModel):
     right_output: tuple[str, ...] = ()
     output_suffix_for_left: str = ""
     output_suffix_for_right: str = ""
+
+    def to_join_spec(self) -> JoinSpec:
+        """Convert the config into a JoinSpec.
+
+        Returns
+        -------
+        JoinSpec
+            Join specification for hash joins.
+        """
+        right_keys = self.right_keys or self.left_keys
+        return JoinSpec(
+            join_type=self.join_type,
+            left_keys=self.left_keys,
+            right_keys=right_keys,
+            left_output=self.left_output,
+            right_output=self.right_output,
+            output_suffix_for_left=self.output_suffix_for_left,
+            output_suffix_for_right=self.output_suffix_for_right,
+        )
 
 
 class IntervalAlignConfig(BaseModel):

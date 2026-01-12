@@ -4,6 +4,7 @@ from arrowdsl.contracts import Contract
 from arrowdsl.dataset_io import compile_to_acero_scan, make_scanner, open_dataset, scan_to_table
 from arrowdsl.expr import E
 from arrowdsl.finalize import FinalizeResult, finalize
+from arrowdsl.finalize_context import FinalizeContext
 from arrowdsl.joins import JoinSpec, hash_join
 from arrowdsl.kernels import (
     apply_dedupe,
@@ -23,6 +24,7 @@ from arrowdsl.runtime import (
     RuntimeProfile,
     ScanProfile,
 )
+from arrowdsl.scan_context import ScanContext
 from arrowdsl.specs import DedupeSpec, SortKey
 
 __all__ = [
@@ -32,6 +34,7 @@ __all__ = [
     "E",
     "ExecutionContext",
     "ExecutionProfile",
+    "FinalizeContext",
     "FinalizeResult",
     "JoinSpec",
     "Ordering",
@@ -40,6 +43,7 @@ __all__ = [
     "ProjectionSpec",
     "QuerySpec",
     "RuntimeProfile",
+    "ScanContext",
     "ScanProfile",
     "SortKey",
     "apply_dedupe",

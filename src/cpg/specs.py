@@ -7,11 +7,11 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from arrowdsl.pyarrow_protocols import ArrayLike, TableLike
+from arrowdsl.pyarrow_protocols import TableLike
 from cpg.kinds import EdgeKind, EntityKind, NodeKind
 
 type TableGetter = Callable[[Mapping[str, TableLike]], TableLike | None]
-type TableFilter = Callable[[TableLike], ArrayLike]
+type TableFilter = Callable[[TableLike], TableLike]
 
 
 class PropOptions(Protocol):

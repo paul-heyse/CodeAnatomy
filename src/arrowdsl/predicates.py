@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
+import arrowdsl.pyarrow_core as pa
 from arrowdsl.compute import pc
-from arrowdsl.pyarrow_protocols import ArrayLike, ComputeExpression, TableLike, ensure_expression
+from arrowdsl.pyarrow_protocols import (
+    ArrayLike,
+    ChunkedArrayLike,
+    ComputeExpression,
+    TableLike,
+    ensure_expression,
+)
 
 if TYPE_CHECKING:
     from arrowdsl.plan import Plan
@@ -22,6 +30,34 @@ class PredicateSpec(Protocol):
     def mask(self, table: TableLike) -> ArrayLike:
         """Return a boolean mask for kernel-lane filtering."""
         ...
+
+
+@dataclass(frozen=True)
+class PredicateExpr:
+    """Predicate expression that renders to plan and kernel lanes."""
+
+    expr: ComputeExpression
+    mask_fn: Callable[[TableLike], ArrayLike]
+
+    def to_expression(self) -> ComputeExpression:
+        """Return the compute expression for plan-lane filters.
+
+        Returns
+        -------
+        ComputeExpression
+            Expression for plan-lane filtering.
+        """
+        return self.expr
+
+    def mask(self, table: TableLike) -> ArrayLike:
+        """Return the kernel-lane mask for this predicate.
+
+        Returns
+        -------
+        ArrayLike
+            Boolean mask for kernel-lane filtering.
+        """
+        return self.mask_fn(table)
 
 
 @dataclass(frozen=True)
@@ -125,6 +161,118 @@ class InSet:
             Boolean mask for the predicate.
         """
         return pc.is_in(table[self.col], value_set=list(self.values))
+
+
+@dataclass(frozen=True)
+class InValues:
+    """Predicate testing membership in a dynamic value set."""
+
+    col: str
+    values: ArrayLike | ChunkedArrayLike | Sequence[object]
+    fill_null: bool | None = None
+
+    def to_expression(self) -> ComputeExpression:
+        """Return the membership predicate expression.
+
+        Returns
+        -------
+        ComputeExpression
+            Expression representing the membership predicate.
+        """
+        expr = pc.is_in(pc.field(self.col), value_set=self.values)
+        if self.fill_null is not None:
+            expr = pc.fill_null(expr, fill_value=self.fill_null)
+        return ensure_expression(expr)
+
+    def mask(self, table: TableLike) -> ArrayLike:
+        """Return a boolean mask for the membership predicate.
+
+        Returns
+        -------
+        ArrayLike
+            Boolean mask for the predicate.
+        """
+        out = pc.is_in(table[self.col], value_set=self.values)
+        if self.fill_null is not None:
+            out = pc.fill_null(out, fill_value=self.fill_null)
+        return out
+
+
+@dataclass(frozen=True)
+class BitmaskMatch:
+    """Predicate testing whether a bitmask is set or unset."""
+
+    col: str
+    bitmask: int
+    must_set: bool = True
+    fill_null: bool = False
+
+    def to_expression(self) -> ComputeExpression:
+        """Return the bitmask predicate expression.
+
+        Returns
+        -------
+        ComputeExpression
+            Expression representing the bitmask predicate.
+        """
+        roles = pc.cast(pc.field(self.col), pa.int64())
+        hit = pc.not_equal(
+            pc.bit_wise_and(roles, pa.scalar(int(self.bitmask))),
+            pa.scalar(0),
+        )
+        hit = pc.fill_null(hit, fill_value=self.fill_null)
+        if not self.must_set:
+            hit = pc.invert(hit)
+        return ensure_expression(hit)
+
+    def mask(self, table: TableLike) -> ArrayLike:
+        """Return a boolean mask for the bitmask predicate.
+
+        Returns
+        -------
+        ArrayLike
+            Boolean mask for the predicate.
+        """
+        roles = pc.cast(table[self.col], pa.int64())
+        hit = pc.not_equal(
+            pc.bit_wise_and(roles, pa.scalar(int(self.bitmask))),
+            pa.scalar(0),
+        )
+        hit = pc.fill_null(hit, fill_value=self.fill_null)
+        if not self.must_set:
+            hit = pc.invert(hit)
+        return hit
+
+
+@dataclass(frozen=True)
+class BoolColumn:
+    """Predicate using a boolean column with null fill."""
+
+    col: str
+    fill_null: bool = False
+
+    def to_expression(self) -> ComputeExpression:
+        """Return the boolean predicate expression.
+
+        Returns
+        -------
+        ComputeExpression
+            Expression representing the boolean predicate.
+        """
+        expr = pc.cast(pc.field(self.col), pa.bool_())
+        expr = pc.fill_null(expr, fill_value=self.fill_null)
+        return ensure_expression(expr)
+
+    def mask(self, table: TableLike) -> ArrayLike:
+        """Return a boolean mask for the predicate.
+
+        Returns
+        -------
+        ArrayLike
+            Boolean mask for the predicate.
+        """
+        out = pc.cast(table[self.col], pa.bool_())
+        return pc.fill_null(out, fill_value=self.fill_null)
 
 
 @dataclass(frozen=True)

@@ -258,7 +258,12 @@ def _combine_masks(masks: Sequence[ArrayLike], length: int) -> ArrayLike:
     return pc.fill_null(combined, fill_value=False)
 
 
-def _build_error_table(table: TableLike, results: Sequence[InvariantResult]) -> TableLike:
+def _build_error_table(
+    table: TableLike,
+    results: Sequence[InvariantResult],
+    *,
+    error_spec: ErrorArtifactSpec,
+) -> TableLike:
     """Build the error table for failed invariants.
 
     Returns
@@ -266,10 +271,10 @@ def _build_error_table(table: TableLike, results: Sequence[InvariantResult]) -> 
     TableLike
         Error table with detail columns.
     """
-    return ERROR_ARTIFACT_SPEC.build_error_table(table, results)
+    return error_spec.build_error_table(table, results)
 
 
-def _build_stats_table(errors: TableLike) -> TableLike:
+def _build_stats_table(errors: TableLike, *, error_spec: ErrorArtifactSpec) -> TableLike:
     """Build the error statistics table.
 
     Returns
@@ -277,7 +282,7 @@ def _build_stats_table(errors: TableLike) -> TableLike:
     TableLike
         Error statistics table.
     """
-    return ERROR_ARTIFACT_SPEC.build_stats_table(errors)
+    return error_spec.build_stats_table(errors)
 
 
 def _maybe_validate_with_pandera(
@@ -405,7 +410,14 @@ def _build_alignment_table(
     )
 
 
-def finalize(table: TableLike, *, contract: Contract, ctx: ExecutionContext) -> FinalizeResult:
+def finalize(
+    table: TableLike,
+    *,
+    contract: Contract,
+    ctx: ExecutionContext,
+    error_spec: ErrorArtifactSpec = ERROR_ARTIFACT_SPEC,
+    transform: SchemaTransform | None = None,
+) -> FinalizeResult:
     """Finalize a table at the contract boundary.
 
     Parameters
@@ -416,6 +428,10 @@ def finalize(table: TableLike, *, contract: Contract, ctx: ExecutionContext) -> 
         Output contract.
     ctx:
         Execution context for finalize behavior.
+    error_spec:
+        Error artifact specification for detail tables.
+    transform:
+        Optional schema transform override.
 
     Returns
     -------
@@ -427,12 +443,13 @@ def finalize(table: TableLike, *, contract: Contract, ctx: ExecutionContext) -> 
     ValueError
         Raised when ``ctx.mode`` is ``"strict"`` and errors are present.
     """
-    schema = contract.with_versioned_schema()
-    transform = SchemaTransform(
-        schema=schema,
-        safe_cast=ctx.safe_cast,
-        on_error="unsafe" if ctx.safe_cast else "raise",
-    )
+    schema = transform.schema if transform is not None else contract.with_versioned_schema()
+    if transform is None:
+        transform = SchemaTransform(
+            schema=schema,
+            safe_cast=ctx.safe_cast,
+            on_error="unsafe" if ctx.safe_cast else "raise",
+        )
     aligned, align_info = transform.apply_with_info(table)
     aligned = _maybe_validate_with_pandera(aligned, contract=contract, ctx=ctx)
 
@@ -442,7 +459,7 @@ def finalize(table: TableLike, *, contract: Contract, ctx: ExecutionContext) -> 
     good_mask = pc.invert(bad_any)
     good = aligned.filter(good_mask)
 
-    raw_errors = _build_error_table(aligned, results)
+    raw_errors = _build_error_table(aligned, results, error_spec=error_spec)
     errors = _aggregate_error_details(raw_errors, contract=contract, schema=schema)
 
     if ctx.mode == "strict" and raw_errors.num_rows > 0:
@@ -466,7 +483,7 @@ def finalize(table: TableLike, *, contract: Contract, ctx: ExecutionContext) -> 
     if good.column_names != schema.names:
         good = good.select(schema.names)
 
-    stats = _build_stats_table(raw_errors)
+    stats = _build_stats_table(raw_errors, error_spec=error_spec)
     alignment = _build_alignment_table(
         contract, align_info, good_rows=good.num_rows, error_rows=errors.num_rows
     )

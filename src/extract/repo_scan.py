@@ -16,7 +16,9 @@ from arrowdsl.id_specs import HashSpec
 from arrowdsl.ids import hash_column_values
 from arrowdsl.pyarrow_protocols import TableLike
 from core_types import PathLike, ensure_path
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from schema_spec.core import ArrowFieldSpec
+from schema_spec.factories import make_table_spec
+from schema_spec.fields import file_identity_bundle
 
 SCHEMA_VERSION = 1
 
@@ -46,15 +48,13 @@ class RepoScanOptions:
     max_files: int | None = None
 
 
-REPO_FILES_SPEC = TableSchemaSpec(
+REPO_FILES_SPEC = make_table_spec(
     name="repo_files_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
         ArrowFieldSpec(name="abs_path", dtype=pa.string()),
         ArrowFieldSpec(name="size_bytes", dtype=pa.int64()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="encoding", dtype=pa.string()),
         ArrowFieldSpec(name="text", dtype=pa.string()),
         ArrowFieldSpec(name="bytes", dtype=pa.binary()),
@@ -164,7 +164,6 @@ def _build_repo_file_row(
         encoding, text = _detect_encoding_and_decode(data)
 
     return {
-        "schema_version": SCHEMA_VERSION,
         "file_id": None,
         "path": rel_posix,
         "abs_path": str(abs_path),

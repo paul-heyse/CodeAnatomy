@@ -5,10 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-import pyarrow.parquet as pq
 from hamilton.function_modifiers import tag
 
+import arrowdsl.pyarrow_core as pa
+from arrowdsl.dataset_io import open_dataset
+from arrowdsl.finalize import FinalizeResult
 from arrowdsl.pyarrow_protocols import TableLike
+from arrowdsl.queryspec import ProjectionSpec, QuerySpec
+from arrowdsl.runtime import ExecutionContext
+from arrowdsl.scan_context import ScanContext
 from core_types import JsonDict
 from hamilton_pipeline.pipeline_types import (
     CpgOutputTables,
@@ -24,7 +29,12 @@ from obs.repro import RunBundleContext, write_run_bundle
 from obs.stats import column_stats_table, dataset_stats_table
 from relspec.compiler import CompiledOutput
 from relspec.registry import ContractCatalog, DatasetLocation, RelationshipRegistry
-from storage.parquet import ParquetWriteOptions, write_named_datasets_parquet
+from schema_spec.factories import query_spec_for_table
+from storage.parquet import (
+    ParquetWriteOptions,
+    write_finalize_result_parquet,
+    write_named_datasets_parquet,
+)
 
 # -----------------------
 # Public CPG outputs
@@ -178,57 +188,90 @@ def write_normalized_inputs_parquet(
 
 
 @tag(layer="materialize", artifact="cpg_nodes_parquet", kind="side_effect")
-def write_cpg_nodes_parquet(output_dir: str | None, cpg_nodes: TableLike) -> JsonDict | None:
-    """Write CPG nodes to Parquet in the output directory.
+def write_cpg_nodes_parquet(
+    output_dir: str | None,
+    cpg_nodes_finalize: FinalizeResult,
+) -> JsonDict | None:
+    """Write CPG nodes and error artifacts to Parquet.
 
     Returns
     -------
     JsonDict | None
-        Report of the written file, or None when output is disabled.
+        Report of the written files, or None when output is disabled.
     """
     if not output_dir:
         return None
     output_path = Path(output_dir)
     _ensure_dir(output_path)
-    path = output_path / "cpg_nodes.parquet"
-    pq.write_table(cpg_nodes, str(path))
-    return {"path": str(path), "rows": int(cpg_nodes.num_rows)}
+    paths = write_finalize_result_parquet(
+        cpg_nodes_finalize,
+        output_path / "cpg_nodes.parquet",
+        opts=ParquetWriteOptions(),
+        overwrite=True,
+    )
+    return {
+        "paths": paths,
+        "rows": int(cpg_nodes_finalize.good.num_rows),
+        "error_rows": int(cpg_nodes_finalize.errors.num_rows),
+    }
 
 
 @tag(layer="materialize", artifact="cpg_edges_parquet", kind="side_effect")
-def write_cpg_edges_parquet(output_dir: str | None, cpg_edges: TableLike) -> JsonDict | None:
-    """Write CPG edges to Parquet in the output directory.
+def write_cpg_edges_parquet(
+    output_dir: str | None,
+    cpg_edges_finalize: FinalizeResult,
+) -> JsonDict | None:
+    """Write CPG edges and error artifacts to Parquet.
 
     Returns
     -------
     JsonDict | None
-        Report of the written file, or None when output is disabled.
+        Report of the written files, or None when output is disabled.
     """
     if not output_dir:
         return None
     output_path = Path(output_dir)
     _ensure_dir(output_path)
-    path = output_path / "cpg_edges.parquet"
-    pq.write_table(cpg_edges, str(path))
-    return {"path": str(path), "rows": int(cpg_edges.num_rows)}
+    paths = write_finalize_result_parquet(
+        cpg_edges_finalize,
+        output_path / "cpg_edges.parquet",
+        opts=ParquetWriteOptions(),
+        overwrite=True,
+    )
+    return {
+        "paths": paths,
+        "rows": int(cpg_edges_finalize.good.num_rows),
+        "error_rows": int(cpg_edges_finalize.errors.num_rows),
+    }
 
 
 @tag(layer="materialize", artifact="cpg_props_parquet", kind="side_effect")
-def write_cpg_props_parquet(output_dir: str | None, cpg_props: TableLike) -> JsonDict | None:
-    """Write CPG properties to Parquet in the output directory.
+def write_cpg_props_parquet(
+    output_dir: str | None,
+    cpg_props_finalize: FinalizeResult,
+) -> JsonDict | None:
+    """Write CPG properties and error artifacts to Parquet.
 
     Returns
     -------
     JsonDict | None
-        Report of the written file, or None when output is disabled.
+        Report of the written files, or None when output is disabled.
     """
     if not output_dir:
         return None
     output_path = Path(output_dir)
     _ensure_dir(output_path)
-    path = output_path / "cpg_props.parquet"
-    pq.write_table(cpg_props, str(path))
-    return {"path": str(path), "rows": int(cpg_props.num_rows)}
+    paths = write_finalize_result_parquet(
+        cpg_props_finalize,
+        output_path / "cpg_props.parquet",
+        opts=ParquetWriteOptions(),
+        overwrite=True,
+    )
+    return {
+        "paths": paths,
+        "rows": int(cpg_props_finalize.good.num_rows),
+        "error_rows": int(cpg_props_finalize.errors.num_rows),
+    }
 
 
 # -----------------------
@@ -258,6 +301,53 @@ def relspec_input_column_stats(relspec_input_datasets: dict[str, TableLike]) -> 
         Column-level statistics table.
     """
     return column_stats_table(relspec_input_datasets)
+
+
+@tag(layer="obs", artifact="relspec_scan_telemetry", kind="table")
+def relspec_scan_telemetry(
+    persist_relspec_input_datasets: dict[str, DatasetLocation],
+    ctx: ExecutionContext,
+) -> TableLike:
+    """Collect scan telemetry for filesystem-backed relationship inputs.
+
+    Returns
+    -------
+    TableLike
+        Telemetry table with fragment counts and estimated rows.
+    """
+    if not persist_relspec_input_datasets:
+        return pa.Table.from_arrays(
+            [
+                pa.array([], type=pa.string()),
+                pa.array([], type=pa.int64()),
+                pa.array([], type=pa.int64()),
+            ],
+            names=["dataset", "fragment_count", "estimated_rows"],
+        )
+
+    rows: list[dict[str, object]] = []
+    for name, loc in persist_relspec_input_datasets.items():
+        dataset = open_dataset(
+            loc.path,
+            dataset_format=loc.format,
+            filesystem=loc.filesystem,
+            partitioning=loc.partitioning,
+        )
+        if loc.table_spec is not None:
+            spec = query_spec_for_table(loc.table_spec)
+        else:
+            cols = tuple(dataset.schema.names)
+            spec = QuerySpec(projection=ProjectionSpec(base=cols))
+        scan_ctx = ScanContext(dataset=dataset, spec=spec, ctx=ctx)
+        telemetry = scan_ctx.telemetry()
+        rows.append(
+            {
+                "dataset": name,
+                "fragment_count": int(telemetry.fragment_count),
+                "estimated_rows": telemetry.estimated_rows,
+            }
+        )
+    return pa.Table.from_pylist(rows)
 
 
 # -----------------------

@@ -6,9 +6,13 @@ import ast
 from dataclasses import dataclass
 
 import arrowdsl.pyarrow_core as pa
-from arrowdsl.iter import iter_array_values, iter_table_rows
+from arrowdsl.iter import iter_table_rows
+from arrowdsl.predicates import FilterSpec, InSet
 from arrowdsl.pyarrow_protocols import TableLike
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from extract.file_context import FileContext
+from schema_spec.core import ArrowFieldSpec
+from schema_spec.factories import make_table_spec
+from schema_spec.fields import file_identity_bundle
 
 SCHEMA_VERSION = 1
 
@@ -30,13 +34,11 @@ class ASTExtractResult:
     py_ast_errors: TableLike
 
 
-AST_NODES_SPEC = TableSchemaSpec(
+AST_NODES_SPEC = make_table_spec(
     name="py_ast_nodes_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="ast_idx", dtype=pa.int32()),
         ArrowFieldSpec(name="parent_ast_idx", dtype=pa.int32()),
         ArrowFieldSpec(name="field_name", dtype=pa.string()),
@@ -51,13 +53,11 @@ AST_NODES_SPEC = TableSchemaSpec(
     ],
 )
 
-AST_EDGES_SPEC = TableSchemaSpec(
+AST_EDGES_SPEC = make_table_spec(
     name="py_ast_edges_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="parent_ast_idx", dtype=pa.int32()),
         ArrowFieldSpec(name="child_ast_idx", dtype=pa.int32()),
         ArrowFieldSpec(name="field_name", dtype=pa.string()),
@@ -65,13 +65,11 @@ AST_EDGES_SPEC = TableSchemaSpec(
     ],
 )
 
-AST_ERRORS_SPEC = TableSchemaSpec(
+AST_ERRORS_SPEC = make_table_spec(
     name="py_ast_errors_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="file_sha256", dtype=pa.string()),
         ArrowFieldSpec(name="error_type", dtype=pa.string()),
         ArrowFieldSpec(name="message", dtype=pa.string()),
         ArrowFieldSpec(name="lineno", dtype=pa.int32()),
@@ -115,20 +113,15 @@ def _node_value_repr(node: ast.AST) -> str | None:
     return None
 
 
-def _row_text(row: dict[str, object], *, has_text: bool, has_bytes: bool) -> str | None:
-    text = row.get("text") if has_text else None
+def _row_text(file_ctx: FileContext) -> str | None:
+    text = file_ctx.text
     if text is not None:
-        return text if isinstance(text, str) else None
-    if not has_bytes:
+        return text
+    if file_ctx.data is None:
         return None
-    raw = row.get("bytes")
-    if not isinstance(raw, (bytes, bytearray, memoryview)):
-        return None
-    encoding = row.get("encoding") or "utf-8"
-    if not isinstance(encoding, str):
-        encoding = "utf-8"
+    encoding = file_ctx.encoding or "utf-8"
     try:
-        return bytes(raw).decode(encoding, errors="replace")
+        return file_ctx.data.decode(encoding, errors="replace")
     except UnicodeError:
         return None
 
@@ -140,7 +133,6 @@ def _syntax_error_row(
     exc: SyntaxError,
 ) -> dict[str, object]:
     return {
-        "schema_version": SCHEMA_VERSION,
         "file_id": file_id,
         "path": path,
         "file_sha256": file_sha256,
@@ -160,7 +152,6 @@ def _exception_error_row(
     exc: Exception,
 ) -> dict[str, object]:
     return {
-        "schema_version": SCHEMA_VERSION,
         "file_id": file_id,
         "path": path,
         "file_sha256": file_sha256,
@@ -232,7 +223,6 @@ def _walk_ast(
 
         nodes_rows.append(
             {
-                "schema_version": SCHEMA_VERSION,
                 "file_id": file_id,
                 "path": path,
                 "file_sha256": file_sha256,
@@ -258,7 +248,6 @@ def _walk_ast(
                 idx_map[child_id] = child_idx
             edges_rows.append(
                 {
-                    "schema_version": SCHEMA_VERSION,
                     "file_id": file_id,
                     "path": path,
                     "file_sha256": file_sha256,
@@ -276,22 +265,20 @@ def _walk_ast(
 def _extract_ast_for_row(
     row: dict[str, object],
     *,
-    has_text: bool,
-    has_bytes: bool,
     options: ASTExtractOptions,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
-    file_id = row.get("file_id")
-    path = row.get("path")
-    file_sha256 = row.get("file_sha256")
-    text = _row_text(row, has_text=has_text, has_bytes=has_bytes)
+    file_ctx = FileContext.from_repo_row(row)
+    if not file_ctx.file_id or not file_ctx.path:
+        return [], [], []
+    text = _row_text(file_ctx)
     if not text:
         return [], [], []
 
     root, err = _parse_ast_text(
         text,
-        path=path,
-        file_id=file_id,
-        file_sha256=file_sha256,
+        path=file_ctx.path,
+        file_id=file_ctx.file_id,
+        file_sha256=file_ctx.file_sha256,
         options=options,
     )
     if err is not None:
@@ -301,9 +288,9 @@ def _extract_ast_for_row(
 
     nodes_rows, edges_rows = _walk_ast(
         root,
-        file_id=file_id,
-        path=path,
-        file_sha256=file_sha256,
+        file_id=file_ctx.file_id,
+        path=file_ctx.path,
+        file_sha256=file_ctx.file_sha256,
     )
     return nodes_rows, edges_rows, []
 
@@ -324,14 +311,9 @@ def extract_ast(
     edges_rows: list[dict[str, object]] = []
     err_rows: list[dict[str, object]] = []
 
-    has_text = "text" in repo_files.column_names
-    has_bytes = "bytes" in repo_files.column_names
-
     for row in iter_table_rows(repo_files):
         nodes, edges, errs = _extract_ast_for_row(
             row,
-            has_text=has_text,
-            has_bytes=has_bytes,
             options=options,
         )
         nodes_rows.extend(nodes)
@@ -369,14 +351,11 @@ def extract_ast_tables(
     _ = (repo_root, ctx)
     result = extract_ast(repo_files)
     if result.py_ast_nodes.num_rows:
-        mask = pa.array(
-            [
-                kind in {"FunctionDef", "AsyncFunctionDef", "ClassDef"}
-                for kind in iter_array_values(result.py_ast_nodes["kind"])
-            ],
-            type=pa.bool_(),
+        predicate = InSet(
+            col="kind",
+            values=("FunctionDef", "AsyncFunctionDef", "ClassDef"),
         )
-        defs_table = result.py_ast_nodes.filter(mask)
+        defs_table = FilterSpec(predicate).apply_kernel(result.py_ast_nodes)
     else:
         defs_table = result.py_ast_nodes
 

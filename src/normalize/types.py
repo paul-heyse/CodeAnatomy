@@ -11,34 +11,34 @@ from arrowdsl.empty import empty_table
 from arrowdsl.ids import prefixed_hash_id
 from arrowdsl.iter import iter_array_values, iter_arrays
 from arrowdsl.pyarrow_protocols import ArrayLike, TableLike
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from schema_spec.core import ArrowFieldSpec
+from schema_spec.factories import make_table_spec
+from schema_spec.fields import file_identity_bundle, span_bundle
 
 SCHEMA_VERSION = 1
 
 
-TYPE_EXPRS_NORM_SPEC = TableSchemaSpec(
+TYPE_EXPRS_NORM_SPEC = make_table_spec(
     name="type_exprs_norm_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(include_sha256=False), span_bundle()),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="type_expr_id", dtype=pa.string()),
         ArrowFieldSpec(name="owner_def_id", dtype=pa.string()),
         ArrowFieldSpec(name="param_name", dtype=pa.string()),
         ArrowFieldSpec(name="expr_kind", dtype=pa.string()),
         ArrowFieldSpec(name="expr_role", dtype=pa.string()),
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="bend", dtype=pa.int64()),
         ArrowFieldSpec(name="expr_text", dtype=pa.string()),
         ArrowFieldSpec(name="type_repr", dtype=pa.string()),
         ArrowFieldSpec(name="type_id", dtype=pa.string()),
     ],
 )
 
-TYPE_NODES_SPEC = TableSchemaSpec(
+TYPE_NODES_SPEC = make_table_spec(
     name="type_nodes_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
-        ArrowFieldSpec(name="schema_version", dtype=pa.int32(), nullable=False),
         ArrowFieldSpec(name="type_id", dtype=pa.string()),
         ArrowFieldSpec(name="type_repr", dtype=pa.string()),
         ArrowFieldSpec(name="type_form", dtype=pa.string()),
@@ -165,7 +165,6 @@ def normalize_type_exprs(cst_type_exprs: TableLike) -> TableLike:
     if not buffers.type_reprs:
         return empty_table(TYPE_EXPRS_NORM_SCHEMA)
 
-    n = len(buffers.type_reprs)
     path_arr = pa.array(buffers.paths, type=pa.string())
     bstart_arr = pa.array(buffers.bstarts, type=pa.int64())
     bend_arr = pa.array(buffers.bends, type=pa.int64())
@@ -178,16 +177,15 @@ def normalize_type_exprs(cst_type_exprs: TableLike) -> TableLike:
 
     return pa.Table.from_arrays(
         [
-            const_array(n, SCHEMA_VERSION, dtype=pa.int32()),
+            pa.array(buffers.file_ids, type=pa.string()),
+            path_arr,
+            bstart_arr,
+            bend_arr,
             type_expr_id,
             pa.array(buffers.owner_def_ids, type=pa.string()),
             pa.array(buffers.param_names, type=pa.string()),
             pa.array(buffers.expr_kinds, type=pa.string()),
             pa.array(buffers.expr_roles, type=pa.string()),
-            pa.array(buffers.file_ids, type=pa.string()),
-            path_arr,
-            bstart_arr,
-            bend_arr,
             pa.array(buffers.expr_texts, type=pa.string()),
             type_repr_arr,
             type_id,
@@ -243,7 +241,6 @@ def _types_from_scip(scip_symbol_information: TableLike | None) -> TableLike | N
     n = len(type_reprs)
     return pa.Table.from_arrays(
         [
-            const_array(n, SCHEMA_VERSION, dtype=pa.int32()),
             type_id,
             type_repr_arr,
             const_array(n, "scip", dtype=pa.string()),
@@ -281,7 +278,6 @@ def _types_from_type_exprs(type_exprs_norm: TableLike) -> TableLike:
     n = len(type_ids)
     return pa.Table.from_arrays(
         [
-            const_array(n, SCHEMA_VERSION, dtype=pa.int32()),
             pa.array(type_ids, type=pa.string()),
             pa.array(type_reprs, type=pa.string()),
             const_array(n, "annotation", dtype=pa.string()),

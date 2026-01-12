@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 
 from arrowdsl.contracts import Contract
-from arrowdsl.finalize import FinalizeResult, finalize
+from arrowdsl.finalize import FinalizeResult
+from arrowdsl.finalize_context import FinalizeContext
 from arrowdsl.ops import KernelOp
 from arrowdsl.plan import Plan
 from arrowdsl.pyarrow_protocols import TableLike
@@ -51,4 +52,10 @@ def run_pipeline(
     for step in post:
         table = step.apply(table, ctx) if isinstance(step, KernelOp) else step(table, ctx)
 
-    return finalize(table, contract=contract, ctx=ctx)
+    transform = None
+    if contract.schema_spec is not None:
+        transform = contract.schema_spec.to_transform(
+            safe_cast=ctx.safe_cast,
+            on_error="unsafe" if ctx.safe_cast else "raise",
+        )
+    return FinalizeContext(contract=contract, transform=transform).run(table, ctx=ctx)

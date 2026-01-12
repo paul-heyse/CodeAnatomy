@@ -17,6 +17,7 @@ from cpg.specs import (
     PropTableSpec,
 )
 from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from schema_spec.metadata import SCHEMA_META_NAME, SCHEMA_META_VERSION
 from schema_spec.pandera_adapter import PanderaValidationOptions, validate_arrow_table
 
 EXPECTED_ROWS = 2
@@ -36,6 +37,20 @@ def test_table_schema_spec_to_arrow() -> None:
     schema = spec.to_arrow_schema()
     assert schema.names == ["id", "name"]
     assert schema.field("id").type == pa.int64()
+
+
+def test_table_schema_spec_attaches_metadata() -> None:
+    """Attach schema name/version metadata when version is set."""
+    spec = TableSchemaSpec(
+        name="meta_spec",
+        version=2,
+        fields=[ArrowFieldSpec(name="id", dtype=pa.int64(), nullable=False)],
+        required_non_null=("id",),
+    )
+    schema = spec.to_arrow_schema()
+    assert schema.metadata is not None
+    assert schema.metadata[SCHEMA_META_NAME] == b"meta_spec"
+    assert schema.metadata[SCHEMA_META_VERSION] == b"2"
 
 
 def test_validate_arrow_table_filters_extra_columns() -> None:

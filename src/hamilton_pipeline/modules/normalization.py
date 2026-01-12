@@ -23,24 +23,31 @@ from normalize.spans import (
     normalize_cst_imports_spans,
 )
 from normalize.types import normalize_type_exprs, normalize_types
-from schema_spec.core import ArrowFieldSpec, TableSchemaSpec
+from schema_spec.core import ArrowFieldSpec
+from schema_spec.factories import make_table_spec
+from schema_spec.fields import call_span_bundle
 
-QNAME_DIM_SPEC = TableSchemaSpec(
+SCHEMA_VERSION = 1
+
+QNAME_DIM_SPEC = make_table_spec(
     name="dim_qualified_names_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
         ArrowFieldSpec(name="qname_id", dtype=pa.string()),
         ArrowFieldSpec(name="qname", dtype=pa.string()),
     ],
 )
 
-CALLSITE_QNAME_CANDIDATES_SPEC = TableSchemaSpec(
+CALLSITE_QNAME_CANDIDATES_SPEC = make_table_spec(
     name="callsite_qname_candidates_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
     fields=[
         ArrowFieldSpec(name="call_id", dtype=pa.string()),
         ArrowFieldSpec(name="qname", dtype=pa.string()),
         ArrowFieldSpec(name="path", dtype=pa.string()),
-        ArrowFieldSpec(name="call_bstart", dtype=pa.int64()),
-        ArrowFieldSpec(name="call_bend", dtype=pa.int64()),
+        *call_span_bundle().fields,
         ArrowFieldSpec(name="qname_source", dtype=pa.string()),
     ],
 )

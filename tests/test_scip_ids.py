@@ -15,7 +15,6 @@ def test_scip_occurrence_ids_stable() -> None:
     """Occurrence IDs are deterministic and consistent across tables."""
     occ_rows = [
         {
-            "schema_version": 1,
             "occurrence_id": None,
             "document_id": None,
             "path": "a.py",
@@ -35,7 +34,6 @@ def test_scip_occurrence_ids_stable() -> None:
             "enc_range_len": None,
         },
         {
-            "schema_version": 1,
             "occurrence_id": None,
             "document_id": None,
             "path": "a.py",
@@ -68,7 +66,6 @@ def test_scip_occurrence_ids_stable() -> None:
 
     doc_rows = [
         {
-            "schema_version": 1,
             "document_id": None,
             "path": "a.py",
             "language": None,

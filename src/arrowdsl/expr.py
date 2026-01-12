@@ -6,7 +6,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from arrowdsl.compute import pc
-from arrowdsl.pyarrow_protocols import ComputeExpression, ScalarLike, ensure_expression
+from arrowdsl.predicates import PredicateExpr, PredicateSpec
+from arrowdsl.pyarrow_protocols import (
+    ArrayLike,
+    ComputeExpression,
+    ScalarLike,
+    TableLike,
+    ensure_expression,
+)
 
 type ExpressionLike = str | ComputeExpression
 type ScalarValue = bool | int | float | str | bytes | ScalarLike | None
@@ -49,7 +56,7 @@ class E:
         return pc.scalar(value)
 
     @staticmethod
-    def eq(col: str, value: ScalarValue) -> ComputeExpression:
+    def eq(col: str, value: ScalarValue) -> PredicateExpr:
         """Return an equality predicate.
 
         Parameters
@@ -64,10 +71,13 @@ class E:
         pyarrow.compute.Expression
             Equality predicate expression.
         """
-        return ensure_expression(pc.equal(E.field(col), E.scalar(value)))
+        expr = ensure_expression(pc.equal(E.field(col), E.scalar(value)))
+        return PredicateExpr(
+            expr=expr, mask_fn=lambda table: pc.equal(table[col], pc.scalar(value))
+        )
 
     @staticmethod
-    def ne(col: str, value: ScalarValue) -> ComputeExpression:
+    def ne(col: str, value: ScalarValue) -> PredicateExpr:
         """Return an inequality predicate.
 
         Parameters
@@ -82,10 +92,14 @@ class E:
         pyarrow.compute.Expression
             Inequality predicate expression.
         """
-        return ensure_expression(pc.not_equal(E.field(col), E.scalar(value)))
+        expr = ensure_expression(pc.not_equal(E.field(col), E.scalar(value)))
+        return PredicateExpr(
+            expr=expr,
+            mask_fn=lambda table: pc.not_equal(table[col], pc.scalar(value)),
+        )
 
     @staticmethod
-    def lt(col: str, value: ScalarValue) -> ComputeExpression:
+    def lt(col: str, value: ScalarValue) -> PredicateExpr:
         """Return a less-than predicate.
 
         Parameters
@@ -100,10 +114,11 @@ class E:
         pyarrow.compute.Expression
             Less-than predicate expression.
         """
-        return ensure_expression(pc.less(E.field(col), E.scalar(value)))
+        expr = ensure_expression(pc.less(E.field(col), E.scalar(value)))
+        return PredicateExpr(expr=expr, mask_fn=lambda table: pc.less(table[col], pc.scalar(value)))
 
     @staticmethod
-    def le(col: str, value: ScalarValue) -> ComputeExpression:
+    def le(col: str, value: ScalarValue) -> PredicateExpr:
         """Return a less-than-or-equal predicate.
 
         Parameters
@@ -118,10 +133,14 @@ class E:
         pyarrow.compute.Expression
             Less-than-or-equal predicate expression.
         """
-        return ensure_expression(pc.less_equal(E.field(col), E.scalar(value)))
+        expr = ensure_expression(pc.less_equal(E.field(col), E.scalar(value)))
+        return PredicateExpr(
+            expr=expr,
+            mask_fn=lambda table: pc.less_equal(table[col], pc.scalar(value)),
+        )
 
     @staticmethod
-    def gt(col: str, value: ScalarValue) -> ComputeExpression:
+    def gt(col: str, value: ScalarValue) -> PredicateExpr:
         """Return a greater-than predicate.
 
         Parameters
@@ -136,10 +155,14 @@ class E:
         pyarrow.compute.Expression
             Greater-than predicate expression.
         """
-        return ensure_expression(pc.greater(E.field(col), E.scalar(value)))
+        expr = ensure_expression(pc.greater(E.field(col), E.scalar(value)))
+        return PredicateExpr(
+            expr=expr,
+            mask_fn=lambda table: pc.greater(table[col], pc.scalar(value)),
+        )
 
     @staticmethod
-    def ge(col: str, value: ScalarValue) -> ComputeExpression:
+    def ge(col: str, value: ScalarValue) -> PredicateExpr:
         """Return a greater-than-or-equal predicate.
 
         Parameters
@@ -154,10 +177,14 @@ class E:
         pyarrow.compute.Expression
             Greater-than-or-equal predicate expression.
         """
-        return ensure_expression(pc.greater_equal(E.field(col), E.scalar(value)))
+        expr = ensure_expression(pc.greater_equal(E.field(col), E.scalar(value)))
+        return PredicateExpr(
+            expr=expr,
+            mask_fn=lambda table: pc.greater_equal(table[col], pc.scalar(value)),
+        )
 
     @staticmethod
-    def between(col: str, lo: ScalarValue, hi: ScalarValue) -> ComputeExpression:
+    def between(col: str, lo: ScalarValue, hi: ScalarValue) -> PredicateExpr:
         """Return a closed-interval predicate.
 
         Parameters
@@ -174,12 +201,10 @@ class E:
         pyarrow.compute.Expression
             Range predicate expression.
         """
-        lower = pc.greater_equal(E.field(col), E.scalar(lo))
-        upper = pc.less_equal(E.field(col), E.scalar(hi))
-        return ensure_expression(pc.and_(lower, upper))
+        return E.and_(E.ge(col, lo), E.le(col, hi))
 
     @staticmethod
-    def in_(col: str, values: Sequence[ScalarValue]) -> ComputeExpression:
+    def in_(col: str, values: Sequence[ScalarValue]) -> PredicateExpr:
         """Return an inclusion predicate.
 
         Parameters
@@ -194,10 +219,14 @@ class E:
         pyarrow.compute.Expression
             Inclusion predicate expression.
         """
-        return E.field(col).isin(list(values))
+        value_set = list(values)
+        expr = ensure_expression(pc.is_in(E.field(col), value_set=value_set))
+        return PredicateExpr(
+            expr=expr, mask_fn=lambda table: pc.is_in(table[col], value_set=value_set)
+        )
 
     @staticmethod
-    def is_null(col: str) -> ComputeExpression:
+    def is_null(col: str) -> PredicateExpr:
         """Return a null-check predicate.
 
         Parameters
@@ -210,10 +239,11 @@ class E:
         pyarrow.compute.Expression
             Null-check predicate expression.
         """
-        return E.field(col).is_null()
+        expr = ensure_expression(pc.is_null(E.field(col)))
+        return PredicateExpr(expr=expr, mask_fn=lambda table: pc.is_null(table[col]))
 
     @staticmethod
-    def is_valid(col: str) -> ComputeExpression:
+    def is_valid(col: str) -> PredicateExpr:
         """Return a validity-check predicate.
 
         Parameters
@@ -226,77 +256,93 @@ class E:
         pyarrow.compute.Expression
             Validity predicate expression.
         """
-        return E.field(col).is_valid()
+        expr = ensure_expression(pc.is_valid(E.field(col)))
+        return PredicateExpr(expr=expr, mask_fn=lambda table: pc.is_valid(table[col]))
 
     @staticmethod
-    def and_(*exprs: ComputeExpression) -> ComputeExpression:
+    def and_(*preds: PredicateSpec) -> PredicateExpr:
         """Combine predicates with logical AND.
 
         Parameters
         ----------
-        *exprs:
-            Expressions to combine.
+        *preds:
+            Predicate specs to combine.
 
         Returns
         -------
-        pyarrow.compute.Expression
-            Combined predicate.
+        PredicateExpr
+            Combined predicate expression.
 
         Raises
         ------
         ValueError
-            Raised when no expressions are provided.
+            Raised when no predicates are provided.
         """
-        if not exprs:
-            msg = "and_ requires at least one expression."
+        if not preds:
+            msg = "and_ requires at least one predicate."
             raise ValueError(msg)
-        out = exprs[0]
-        for expr in exprs[1:]:
-            out = ensure_expression(pc.and_(out, expr))
-        return out
+        expr_out = preds[0].to_expression()
+        for pred in preds[1:]:
+            expr_out = ensure_expression(pc.and_(expr_out, pred.to_expression()))
+
+        def mask_fn(table: TableLike) -> ArrayLike:
+            out = preds[0].mask(table)
+            for pred in preds[1:]:
+                out = pc.and_(out, pred.mask(table))
+            return out
+
+        return PredicateExpr(expr=expr_out, mask_fn=mask_fn)
 
     @staticmethod
-    def or_(*exprs: ComputeExpression) -> ComputeExpression:
+    def or_(*preds: PredicateSpec) -> PredicateExpr:
         """Combine predicates with logical OR.
 
         Parameters
         ----------
-        *exprs:
-            Expressions to combine.
+        *preds:
+            Predicate specs to combine.
 
         Returns
         -------
-        pyarrow.compute.Expression
-            Combined predicate.
+        PredicateExpr
+            Combined predicate expression.
 
         Raises
         ------
         ValueError
-            Raised when no expressions are provided.
+            Raised when no predicates are provided.
         """
-        if not exprs:
-            msg = "or_ requires at least one expression."
+        if not preds:
+            msg = "or_ requires at least one predicate."
             raise ValueError(msg)
-        out = exprs[0]
-        for expr in exprs[1:]:
-            out = ensure_expression(pc.or_(out, expr))
-        return out
+        expr_out = preds[0].to_expression()
+        for pred in preds[1:]:
+            expr_out = ensure_expression(pc.or_(expr_out, pred.to_expression()))
+
+        def mask_fn(table: TableLike) -> ArrayLike:
+            out = preds[0].mask(table)
+            for pred in preds[1:]:
+                out = pc.or_(out, pred.mask(table))
+            return out
+
+        return PredicateExpr(expr=expr_out, mask_fn=mask_fn)
 
     @staticmethod
-    def not_(expr: ComputeExpression) -> ComputeExpression:
+    def not_(pred: PredicateSpec) -> PredicateExpr:
         """Negate a predicate expression.
 
         Parameters
         ----------
-        expr:
-            Expression to negate.
+        pred:
+            Predicate to negate.
 
         Returns
         -------
-        pyarrow.compute.Expression
-            Negated expression.
+        PredicateExpr
+            Negated predicate expression.
         """
-        return ensure_expression(pc.invert(expr))
+        expr = ensure_expression(pc.invert(pred.to_expression()))
+        return PredicateExpr(expr=expr, mask_fn=lambda table: pc.invert(pred.mask(table)))
 
     @staticmethod
     def cast(expr: ExpressionLike, target_type: object, *, safe: bool = True) -> ComputeExpression:

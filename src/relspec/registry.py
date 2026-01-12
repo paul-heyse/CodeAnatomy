@@ -11,6 +11,7 @@ import pyarrow.fs as pafs
 from arrowdsl.contracts import Contract
 from relspec.model import RelationshipRule
 from schema_spec.catalogs import ContractCatalogSpec
+from schema_spec.core import TableSchemaSpec
 
 type PathLike = str | Path
 
@@ -23,6 +24,7 @@ class DatasetLocation:
     format: str = "parquet"
     partitioning: str | None = "hive"
     filesystem: pafs.FileSystem | None = None
+    table_spec: TableSchemaSpec | None = None
 
 
 class DatasetCatalog:

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from arrowdsl.column_ops import ColumnExpr, FieldExpr
 from arrowdsl.predicates import FilterSpec, PredicateSpec
 from arrowdsl.pyarrow_protocols import ComputeExpression
+from schema_spec.fields import PROVENANCE_COLS, PROVENANCE_SOURCE_FIELDS
 
 type ColumnsSpec = Sequence[str] | Mapping[str, ComputeExpression]
 
@@ -48,7 +49,17 @@ class QuerySpec:
         -------
         ColumnsSpec
             Column spec for scanners or scan nodes.
+
+        Raises
+        ------
+        ValueError
+            Raised when derived expressions are not scalar-safe.
         """
+        if self.projection.derived:
+            for name, expr in self.projection.derived.items():
+                if not expr.is_scalar():
+                    msg = f"QuerySpec.scan_columns: derived column {name!r} is not scalar-safe."
+                    raise ValueError(msg)
         if not provenance and not self.projection.derived:
             return list(self.projection.base)
 
@@ -60,10 +71,8 @@ class QuerySpec:
         if provenance:
             cols.update(
                 {
-                    "prov_filename": FieldExpr("__filename").to_expression(),
-                    "prov_fragment_index": FieldExpr("__fragment_index").to_expression(),
-                    "prov_batch_index": FieldExpr("__batch_index").to_expression(),
-                    "prov_last_in_fragment": FieldExpr("__last_in_fragment").to_expression(),
+                    name: FieldExpr(PROVENANCE_SOURCE_FIELDS[name]).to_expression()
+                    for name in PROVENANCE_COLS
                 }
             )
         return cols

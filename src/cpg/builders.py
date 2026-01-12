@@ -13,6 +13,7 @@ from arrowdsl.column_ops import const_array
 from arrowdsl.compute import pc
 from arrowdsl.ids import prefixed_hash_id
 from arrowdsl.iter import iter_arrays
+from arrowdsl.predicates import FilterSpec, IsNull, Not
 from arrowdsl.pyarrow_protocols import (
     ArrayLike,
     ChunkedArrayLike,
@@ -93,6 +94,22 @@ class EdgeIdArrays:
     bend: ArrayLike | ChunkedArrayLike
 
 
+def _table_from_schema(
+    schema: SchemaLike,
+    *,
+    columns: Mapping[str, ArrayLike | ChunkedArrayLike],
+    num_rows: int,
+) -> TableLike:
+    arrays: list[ArrayLike | ChunkedArrayLike] = []
+    for field in schema:
+        value = columns.get(field.name)
+        if value is None:
+            arrays.append(pa.nulls(num_rows, type=field.type))
+        else:
+            arrays.append(value)
+    return pa.Table.from_arrays(arrays, schema=schema)
+
+
 def _edge_id_array(
     *,
     edge_kind: str,
@@ -112,6 +129,65 @@ def _edge_id_array(
     edge_id = pc.if_else(has_span, full_id, base_id)
     valid = pc.and_(pc.is_valid(inputs.src), pc.is_valid(inputs.dst))
     return pc.if_else(valid, edge_id, pa.scalar(None, type=pa.string()))
+
+
+def _edge_columns_from_relation(
+    rel: TableLike,
+    *,
+    spec: EdgeEmitSpec,
+    schema_version: int,
+    edge_schema: SchemaLike,
+) -> tuple[int, dict[str, ArrayLike | ChunkedArrayLike]]:
+    n = rel.num_rows
+    src = _pick_first(rel, spec.src_cols, default_type=pa.string())
+    dst = _pick_first(rel, spec.dst_cols, default_type=pa.string())
+    path = _pick_first(rel, spec.path_cols, default_type=pa.string())
+    bstart = _pick_first(rel, spec.bstart_cols, default_type=pa.int64())
+    bend = _pick_first(rel, spec.bend_cols, default_type=pa.int64())
+    edge_ids = _edge_id_array(
+        edge_kind=spec.edge_kind.value,
+        inputs=EdgeIdArrays(src=src, dst=dst, path=path, bstart=bstart, bend=bend),
+    )
+
+    default_score = 1.0 if spec.origin == "scip" else 0.5
+    origin = _resolve_string_col(rel, "origin", default_value=spec.origin)
+    origin = pc.fill_null(origin, fill_value=spec.origin)
+    origin = _maybe_dictionary(origin, edge_schema.field("origin").type)
+
+    edge_kind = const_array(n, spec.edge_kind.value, dtype=pa.string())
+    edge_kind = _maybe_dictionary(edge_kind, edge_schema.field("edge_kind").type)
+    resolution = _resolve_string_col(
+        rel,
+        "resolution_method",
+        default_value=spec.default_resolution_method,
+    )
+    resolution = _maybe_dictionary(resolution, edge_schema.field("resolution_method").type)
+    qname_source = _pick_first(rel, ["qname_source"], default_type=pa.string())
+    qname_source = _maybe_dictionary(qname_source, edge_schema.field("qname_source").type)
+    rule_name = _pick_first(rel, ["rule_name"], default_type=pa.string())
+    rule_name = _maybe_dictionary(rule_name, edge_schema.field("rule_name").type)
+
+    columns: dict[str, ArrayLike | ChunkedArrayLike] = {
+        "edge_id": edge_ids,
+        "edge_kind": edge_kind,
+        "src_node_id": src,
+        "dst_node_id": dst,
+        "path": path,
+        "bstart": bstart,
+        "bend": bend,
+        "origin": origin,
+        "resolution_method": resolution,
+        "confidence": _resolve_float_col(rel, "confidence", default_value=default_score),
+        "score": _resolve_float_col(rel, "score", default_value=default_score),
+        "symbol_roles": _pick_first(rel, ["symbol_roles"], default_type=pa.int32()),
+        "qname_source": qname_source,
+        "ambiguity_group_id": _pick_first(rel, ["ambiguity_group_id"], default_type=pa.string()),
+        "rule_name": rule_name,
+        "rule_priority": _pick_first(rel, ["rule_priority"], default_type=pa.int32()),
+    }
+    if "schema_version" in edge_schema.names:
+        columns["schema_version"] = const_array(n, schema_version, dtype=pa.int32())
+    return n, columns
 
 
 def emit_edges_from_relation(
@@ -145,59 +221,15 @@ def emit_edges_from_relation(
             schema=edge_schema,
         )
 
-    n = rel.num_rows
-    src = _pick_first(rel, spec.src_cols, default_type=pa.string())
-    dst = _pick_first(rel, spec.dst_cols, default_type=pa.string())
-    path = _pick_first(rel, spec.path_cols, default_type=pa.string())
-    bstart = _pick_first(rel, spec.bstart_cols, default_type=pa.int64())
-    bend = _pick_first(rel, spec.bend_cols, default_type=pa.int64())
-    edge_ids = _edge_id_array(
-        edge_kind=spec.edge_kind.value,
-        inputs=EdgeIdArrays(src=src, dst=dst, path=path, bstart=bstart, bend=bend),
-    )
-
-    default_score = 1.0 if spec.origin == "scip" else 0.5
-    origin = _resolve_string_col(rel, "origin", default_value=spec.origin)
-    origin = pc.fill_null(origin, fill_value=spec.origin)
-    origin = _maybe_dictionary(origin, edge_schema.field("origin").type)
-
-    edge_kind = const_array(n, spec.edge_kind.value, dtype=pa.string())
-    edge_kind = _maybe_dictionary(edge_kind, edge_schema.field("edge_kind").type)
-    resolution = _resolve_string_col(
+    n, columns = _edge_columns_from_relation(
         rel,
-        "resolution_method",
-        default_value=spec.default_resolution_method,
+        spec=spec,
+        schema_version=schema_version,
+        edge_schema=edge_schema,
     )
-    resolution = _maybe_dictionary(resolution, edge_schema.field("resolution_method").type)
-    qname_source = _pick_first(rel, ["qname_source"], default_type=pa.string())
-    qname_source = _maybe_dictionary(qname_source, edge_schema.field("qname_source").type)
-    rule_name = _pick_first(rel, ["rule_name"], default_type=pa.string())
-    rule_name = _maybe_dictionary(rule_name, edge_schema.field("rule_name").type)
-
-    out = pa.Table.from_arrays(
-        [
-            const_array(n, schema_version, dtype=pa.int32()),
-            edge_ids,
-            edge_kind,
-            src,
-            dst,
-            path,
-            bstart,
-            bend,
-            origin,
-            resolution,
-            _resolve_float_col(rel, "confidence", default_value=default_score),
-            _resolve_float_col(rel, "score", default_value=default_score),
-            _pick_first(rel, ["symbol_roles"], default_type=pa.int32()),
-            qname_source,
-            _pick_first(rel, ["ambiguity_group_id"], default_type=pa.string()),
-            rule_name,
-            _pick_first(rel, ["rule_priority"], default_type=pa.int32()),
-        ],
-        schema=edge_schema,
-    )
-    mask = pc.fill_null(pc.is_valid(edge_ids), fill_value=False)
-    return out.filter(mask)
+    out = _table_from_schema(edge_schema, columns=columns, num_rows=n)
+    predicate = Not(IsNull("edge_id"))
+    return FilterSpec(predicate).apply_kernel(out)
 
 
 class EdgeBuilder:
@@ -244,9 +276,7 @@ class EdgeBuilder:
             if rel is None or rel.num_rows == 0:
                 continue
             if emitter.filter_fn is not None:
-                mask = emitter.filter_fn(rel)
-                mask = pc.fill_null(mask, fill_value=False)
-                rel = rel.filter(mask)
+                rel = emitter.filter_fn(rel)
                 if rel.num_rows == 0:
                     continue
             parts.append(
@@ -290,18 +320,17 @@ def emit_nodes_from_table(
     node_kind = const_array(n, spec.node_kind.value, dtype=pa.string())
     node_kind = _maybe_dictionary(node_kind, node_schema.field("node_kind").type)
 
-    return pa.Table.from_arrays(
-        [
-            const_array(n, schema_version, dtype=pa.int32()),
-            node_id,
-            node_kind,
-            path,
-            bstart,
-            bend,
-            file_id,
-        ],
-        schema=node_schema,
-    )
+    columns: dict[str, ArrayLike | ChunkedArrayLike] = {
+        "node_id": node_id,
+        "node_kind": node_kind,
+        "path": path,
+        "bstart": bstart,
+        "bend": bend,
+        "file_id": file_id,
+    }
+    if "schema_version" in node_schema.names:
+        columns["schema_version"] = const_array(n, schema_version, dtype=pa.int32())
+    return _table_from_schema(node_schema, columns=columns, num_rows=n)
 
 
 class NodeBuilder:
@@ -372,9 +401,13 @@ class PropPayload:
     value: PropValue
 
 
-def _prop_row(schema_version: int, payload: PropPayload) -> PropRow:
+def _prop_row(
+    *,
+    schema_version: int,
+    include_schema_version: bool,
+    payload: PropPayload,
+) -> PropRow:
     rec: PropRow = {
-        "schema_version": schema_version,
         "entity_kind": payload.entity_kind.value,
         "entity_id": str(payload.entity_id),
         "prop_key": str(payload.key),
@@ -384,6 +417,9 @@ def _prop_row(schema_version: int, payload: PropPayload) -> PropRow:
         "value_bool": None,
         "value_json": None,
     }
+
+    if include_schema_version:
+        rec["schema_version"] = schema_version
 
     value = payload.value
     if value is None:
@@ -418,6 +454,7 @@ class PropBuilder:
         self._table_specs = tuple(table_specs)
         self._schema_version = schema_version
         self._prop_schema = prop_schema
+        self._include_schema_version = "schema_version" in prop_schema.names
 
     def build(
         self,
@@ -503,8 +540,9 @@ class PropBuilder:
         if spec.node_kind is not None:
             rows.append(
                 _prop_row(
-                    self._schema_version,
-                    PropPayload(
+                    schema_version=self._schema_version,
+                    include_schema_version=self._include_schema_version,
+                    payload=PropPayload(
                         entity_kind=spec.entity_kind,
                         entity_id=entity_id,
                         key="node_kind",
@@ -520,8 +558,9 @@ class PropBuilder:
                 continue
             rows.append(
                 _prop_row(
-                    self._schema_version,
-                    PropPayload(
+                    schema_version=self._schema_version,
+                    include_schema_version=self._include_schema_version,
+                    payload=PropPayload(
                         entity_kind=spec.entity_kind,
                         entity_id=entity_id,
                         key=field.prop_key,

@@ -10,6 +10,7 @@ from pathlib import Path
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
+from arrowdsl.finalize import FinalizeResult
 from arrowdsl.pyarrow_protocols import TableLike
 from core_types import PathLike, ensure_path
 
@@ -73,6 +74,52 @@ def write_table_parquet(
         allow_truncated_timestamps=options.allow_truncated_timestamps,
     )
     return str(target)
+
+
+def _artifact_path(base: Path, suffix: str) -> Path:
+    return base.with_name(f"{base.stem}_{suffix}{base.suffix}")
+
+
+def write_finalize_result_parquet(
+    result: FinalizeResult,
+    path: PathLike,
+    *,
+    opts: ParquetWriteOptions | None = None,
+    overwrite: bool = True,
+) -> dict[str, str]:
+    """Write a finalized table plus error artifacts to Parquet.
+
+    Returns
+    -------
+    dict[str, str]
+        Paths for data, errors, stats, and alignment outputs.
+    """
+    base = ensure_path(path)
+    data_path = write_table_parquet(result.good, base, opts=opts, overwrite=overwrite)
+    errors_path = write_table_parquet(
+        result.errors,
+        _artifact_path(base, "errors"),
+        opts=opts,
+        overwrite=overwrite,
+    )
+    stats_path = write_table_parquet(
+        result.stats,
+        _artifact_path(base, "error_stats"),
+        opts=opts,
+        overwrite=overwrite,
+    )
+    alignment_path = write_table_parquet(
+        result.alignment,
+        _artifact_path(base, "alignment"),
+        opts=opts,
+        overwrite=overwrite,
+    )
+    return {
+        "data": data_path,
+        "errors": errors_path,
+        "stats": stats_path,
+        "alignment": alignment_path,
+    }
 
 
 def write_dataset_parquet(

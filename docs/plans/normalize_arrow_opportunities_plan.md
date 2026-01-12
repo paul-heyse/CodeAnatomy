@@ -28,15 +28,17 @@ import pyarrow as pa
 from arrowdsl.compute.kernels import ChunkPolicy
 from arrowdsl.schema.schema import EncodingPolicy, EncodingSpec
 from arrowdsl.core.interop import SchemaLike
-from normalize.plan_helpers import encoding_columns_from_metadata
 
+ENCODING_META = "encoding"
+ENCODING_DICTIONARY = "dictionary"
 DICT_INDEX_META = "dictionary_index_type"
 DICT_ORDERED_META = "dictionary_ordered"
 
 
 def encoding_policy_from_schema(schema: SchemaLike) -> EncodingPolicy:
-    cols = encoding_columns_from_metadata(schema)
-    specs = tuple(EncodingSpec(column=col) for col in cols)
+    specs = tuple(
+        spec for field in schema if (spec := _encoding_spec_from_field(field)) is not None
+    )
     return EncodingPolicy(specs=specs, chunk_policy=ChunkPolicy())
 
 
@@ -46,7 +48,7 @@ ENCODING_META = "encoding"
 def dict_field(name: str, *, ordered: bool = False) -> ArrowFieldSpec:
     return ArrowFieldSpec(
         name=name,
-        dtype=pa.string(),
+        dtype=pa.dictionary(pa.int32(), pa.string(), ordered=ordered),
         metadata={
             ENCODING_META: "dictionary",
             DICT_INDEX_META: "int32",
@@ -57,16 +59,18 @@ def dict_field(name: str, *, ordered: bool = False) -> ArrowFieldSpec:
 
 **Target files**
 - New: `src/normalize/encoding.py`
+- Update: `src/arrowdsl/finalize/finalize.py`
+- Update: `src/arrowdsl/schema/schema.py`
 - Update: `src/normalize/schemas.py`
 - Update: `src/normalize/runner.py`
 - Update: `src/normalize/plan_helpers.py`
 - Update: `src/normalize/diagnostics.py`
 
 **Implementation checklist**
-- [ ] Add encoding metadata helpers and a normalize-local EncodingPolicy factory.
-- [ ] Mark high-cardinality string columns with dictionary encoding metadata.
-- [ ] Apply EncodingPolicy during finalize (after query spec projection).
-- [ ] Unify dictionaries and combine chunks using ChunkPolicy.
+- [x] Add encoding metadata helpers and a normalize-local EncodingPolicy factory.
+- [x] Mark high-cardinality string columns with dictionary encoding metadata.
+- [x] Apply EncodingPolicy during finalize (after query spec projection).
+- [x] Unify dictionaries and combine chunks using ChunkPolicy.
 
 ---
 
@@ -80,8 +84,8 @@ when key/value semantics are more appropriate.
 **Code pattern**
 ```python
 # src/normalize/schemas.py
-DIAG_TAGS_TYPE = pa.large_list_view(pa.string())
-DIAG_DETAILS_TYPE = pa.large_list_view(DIAG_DETAIL_STRUCT)
+DIAG_TAGS_TYPE = list_view_type(pa.string(), large=True)
+DIAG_DETAILS_TYPE = list_view_type(DIAG_DETAIL_STRUCT, large=True)
 
 # src/normalize/diagnostics.py
 def _build_diag_details(buffers: _DiagBuffers) -> ArrayLike:
@@ -98,10 +102,10 @@ def _build_diag_details(buffers: _DiagBuffers) -> ArrayLike:
 - Update: `src/schema_spec/specs.py`
 
 **Implementation checklist**
-- [ ] Add list view types for nested list columns that are frequently projected.
-- [ ] Extend diagnostic detail builder to emit ListView arrays.
-- [ ] Add metadata hints for list view types (if needed for inference or tooling).
-- [ ] Preserve list view types during schema unification.
+- [x] Add list view types for nested list columns that are frequently projected.
+- [x] Extend diagnostic detail builder to emit ListView arrays.
+- [x] Add metadata hints for list view types (not required once inference preserves them).
+- [x] Preserve list view types during schema unification.
 
 ---
 
@@ -116,14 +120,7 @@ streamable end-to-end without forcing table materialization.
 # src/normalize/runner.py
 from pyarrow.dataset import Dataset, Scanner
 from arrowdsl.plan.plan import Plan
-
-def plan_source(source: TableLike | RecordBatchReaderLike | Dataset | Scanner) -> Plan:
-    if isinstance(source, Plan):
-        return source
-    if isinstance(source, (Dataset, Scanner)):
-        return Plan.dataset_scan(source)
-    return Plan.table_source(source)
-
+from arrowdsl.plan_helpers import PlanSource, plan_source
 
 def run_normalize_streamable(...):
     plan = plan_source(source)
@@ -132,14 +129,18 @@ def run_normalize_streamable(...):
 ```
 
 **Target files**
+- New: `src/arrowdsl/plan_helpers.py`
 - Update: `src/normalize/runner.py`
 - Update: `src/normalize/plan_helpers.py`
 - Update: `src/normalize/__init__.py`
 - Update: `src/normalize/pipeline.py`
+- Update: `src/normalize/types.py`
+- Update: `src/normalize/bytecode_cfg.py`
+- Update: `src/normalize/bytecode_dfg.py`
 
 **Implementation checklist**
-- [ ] Add a unified source-to-plan adapter that accepts Dataset/Scanner/Reader.
-- [ ] Keep streamable paths returning RecordBatchReader when no pipeline breakers exist.
+- [x] Add a unified source-to-plan adapter that accepts Dataset/Scanner/Reader.
+- [x] Keep streamable paths returning RecordBatchReader when no pipeline breakers exist.
 - [ ] Extend finalize helpers to surface reader vs table in results metadata.
 - [ ] Ensure safe casting and schema alignment work on streaming sources.
 
@@ -173,9 +174,9 @@ def finalize_with_contract(plan: Plan, *, contract: Contract, ctx: ExecutionCont
 - Update: `src/arrowdsl/finalize/finalize.py`
 
 **Implementation checklist**
-- [ ] Compare plan ordering metadata to contract canonical sort keys.
-- [ ] Skip canonical sort when ordering already matches contract requirements.
-- [ ] Avoid inserting `order_by` in plan-lane unless explicitly required.
+- [x] Compare plan ordering metadata to contract canonical sort keys.
+- [x] Skip canonical sort when ordering already matches contract requirements.
+- [x] Avoid inserting `order_by` in plan-lane unless explicitly required.
 
 ---
 
@@ -186,7 +187,7 @@ masked hash, coalesce) into `arrowdsl` so normalize, extract, and cpg share iden
 
 **Code pattern**
 ```python
-# src/arrowdsl/plan/helpers.py
+# src/arrowdsl/plan_helpers.py
 from arrowdsl.core.interop import ComputeExpression, SchemaLike, pc
 from arrowdsl.schema.schema import encode_expression
 
@@ -204,15 +205,17 @@ def encoding_projection(columns: Sequence[str], *, available: Sequence[str]) -> 
 ```
 
 **Target files**
-- New: `src/arrowdsl/plan/helpers.py`
+- New: `src/arrowdsl/plan_helpers.py`
 - Update: `src/normalize/plan_helpers.py`
 - Update: `src/extract/postprocess.py`
 - Update: `src/cpg/plan_helpers.py`
+- Update: `src/normalize/plan_exprs.py`
+- Update: `src/cpg/plan_exprs.py`
 
 **Implementation checklist**
-- [ ] Move shared helpers into arrowdsl and re-export in normalize.
-- [ ] Replace local copies in normalize/extract/cpg with the shared helpers.
-- [ ] Keep helper APIs stable (or update call sites in one batch).
+- [x] Move shared helpers into arrowdsl and re-export in normalize.
+- [x] Replace local copies in normalize/extract/cpg with the shared helpers.
+- [x] Keep helper APIs stable (or update call sites in one batch).
 
 ---
 
@@ -225,7 +228,7 @@ to nested children for list and map types.
 **Code pattern**
 ```python
 # src/normalize/schema_infer.py
-def _prefer_advanced_types(base: SchemaLike, merged: SchemaLike) -> SchemaLike:
+def _prefer_arrow_nested(base: SchemaLike, merged: SchemaLike) -> SchemaLike:
     fields: list[FieldLike] = []
     base_map = {field.name: field for field in base}
     for field in merged:
@@ -246,8 +249,9 @@ def _prefer_advanced_types(base: SchemaLike, merged: SchemaLike) -> SchemaLike:
 **Target files**
 - Update: `src/normalize/schema_infer.py`
 - Update: `src/normalize/schemas.py`
+- Update: `src/arrowdsl/schema/schema.py`
 
 **Implementation checklist**
-- [ ] Prefer list_view/map/dictionary types when the base schema includes them.
-- [ ] Extend metadata inheritance to nested list/map children.
-- [ ] Align schema inference with list view usage in diagnostics and other lists.
+- [x] Prefer list_view/map/dictionary types when the base schema includes them.
+- [x] Extend metadata inheritance to nested list/map children.
+- [x] Align schema inference with list view usage in diagnostics and other lists.

@@ -196,31 +196,6 @@ def hash64_from_parts(
     return _hash64_int(joined)
 
 
-def prefixed_hash_id_from_parts(
-    prefix: str,
-    *parts: str | None,
-    null_sentinel: str = "None",
-) -> str:
-    """Build a prefixed string ID from literal parts.
-
-    Parameters
-    ----------
-    prefix:
-        Prefix for the resulting identifier.
-    *parts:
-        Parts to hash.
-    null_sentinel:
-        String used to represent null values.
-
-    Returns
-    -------
-    str
-        Prefixed identifier string.
-    """
-    hashed = hash64_from_parts(*parts, prefix=prefix, null_sentinel=null_sentinel)
-    return f"{prefix}:{hashed}"
-
-
 def hash64_from_arrays(
     arrays: Sequence[pa.ArrayLike | pa.ChunkedArrayLike],
     *,
@@ -436,32 +411,9 @@ def hash_expression(
     return ensure_expression(hashed)
 
 
-def add_hash_column(table: pa.TableLike, *, spec: HashSpec) -> pa.TableLike:
-    """Append a hash-based column to a table.
-
-    Parameters
-    ----------
-    table:
-        Input table.
-    spec:
-        Hash column specification.
-
-    Returns
-    -------
-    TableLike
-        Table with the hash column appended.
-    """
-    out_col = spec.out_col or f"{spec.prefix}_id"
-    if out_col in table.column_names:
-        return table
-    hashed = hash_column_values(table, spec=spec)
-    return table.append_column(out_col, hashed)
-
-
 __all__ = [
     "HashSpec",
     "MissingPolicy",
-    "add_hash_column",
     "hash64_from_arrays",
     "hash64_from_columns",
     "hash64_from_parts",
@@ -471,5 +423,4 @@ __all__ = [
     "iter_arrays",
     "iter_table_rows",
     "prefixed_hash_id",
-    "prefixed_hash_id_from_parts",
 ]

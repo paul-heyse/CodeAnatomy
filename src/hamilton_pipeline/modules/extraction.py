@@ -16,7 +16,7 @@ from extract.bytecode_extract import (
     extract_bytecode,
     extract_bytecode_table,
 )
-from extract.cst_extract import extract_cst_tables
+from extract.cst_extract import CSTExtractOptions, extract_cst_tables
 from extract.file_context import FileContext, iter_file_contexts
 from extract.repo_scan import RepoScanOptions, scan_repo
 from extract.runtime_inspect_extract import (
@@ -120,9 +120,10 @@ def cst_bundle(
     dict[str, TableLike]
         Bundle tables for LibCST extraction.
     """
+    options = CSTExtractOptions(repo_root=Path(repo_root))
     return extract_cst_tables(
-        repo_root=repo_root,
         repo_files=repo_files,
+        options=options,
         file_contexts=file_contexts,
         ctx=ctx,
     )
@@ -150,8 +151,8 @@ def ast_bundle(
     dict[str, TableLike]
         Bundle tables for AST extraction.
     """
+    _ = repo_root
     return extract_ast_tables(
-        repo_root=repo_root,
         repo_files=repo_files,
         file_contexts=file_contexts,
         ctx=ctx,
@@ -251,8 +252,8 @@ def symtables(
     TableLike
         Symbol table extraction table.
     """
+    _ = repo_root
     return extract_symtables_table(
-        repo_root=repo_root,
         repo_files=repo_files,
         file_contexts=file_contexts,
         ctx=ctx,
@@ -274,8 +275,8 @@ def bytecode(
     TableLike
         Bytecode extraction table.
     """
+    _ = repo_root
     return extract_bytecode_table(
-        repo_root=repo_root,
         repo_files=repo_files,
         file_contexts=file_contexts,
         ctx=ctx,
@@ -347,8 +348,8 @@ def tree_sitter_bundle(
     dict[str, TableLike]
         Tree-sitter tables for nodes and diagnostics.
     """
+    _ = repo_root
     return extract_ts_tables(
-        repo_root=repo_root,
         repo_files=repo_files,
         file_contexts=file_contexts,
         ctx=ctx,

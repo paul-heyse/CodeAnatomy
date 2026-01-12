@@ -9,7 +9,6 @@ from typing import Literal, Protocol
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr import E
 from arrowdsl.compute.kernels import apply_dedupe, explode_list_column
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, Ordering
 from arrowdsl.core.interop import ComputeExpression, ScalarLike, TableLike
@@ -17,7 +16,7 @@ from arrowdsl.finalize.finalize import Contract, FinalizeResult
 from arrowdsl.plan.ops import SortKey
 from arrowdsl.plan.plan import Plan, hash_join, union_all_plans
 from arrowdsl.plan.query import open_dataset
-from arrowdsl.schema.arrays import const_array, set_or_append_column
+from arrowdsl.schema.arrays import ConstExpr, FieldExpr, const_array, set_or_append_column
 from arrowdsl.schema.schema import SchemaEvolutionSpec
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
@@ -289,8 +288,8 @@ def _apply_add_literal_to_plan(
     names = list(schema.names)
     if spec.name in names:
         return plan
-    exprs = [E.field(name) for name in names]
-    exprs.append(E.scalar(spec.value))
+    exprs = [FieldExpr(name=name).to_expression() for name in names]
+    exprs.append(ConstExpr(value=spec.value).to_expression())
     names.append(spec.name)
     return plan.project(exprs, names, label=plan.label or rule.name)
 
@@ -306,7 +305,7 @@ def _apply_drop_columns_to_plan(
     keep = [name for name in schema.names if name not in spec.columns]
     if keep == list(schema.names):
         return plan
-    exprs = [E.field(name) for name in keep]
+    exprs = [FieldExpr(name=name).to_expression() for name in keep]
     return plan.project(exprs, keep, label=plan.label or rule.name)
 
 
@@ -324,7 +323,7 @@ def _apply_rename_columns_to_plan(
     renamed = [spec.mapping.get(name, name) for name in names]
     if renamed == names:
         return plan
-    exprs = [E.field(name) for name in names]
+    exprs = [FieldExpr(name=name).to_expression() for name in names]
     return plan.project(exprs, renamed, label=plan.label or rule.name)
 
 
@@ -350,8 +349,8 @@ def _apply_dedupe_to_plan(
     agg_fn = "first" if strategy == "KEEP_ARBITRARY" else "list"
     plan = plan.aggregate(group_keys=list(spec.spec.keys), aggs=[(col, agg_fn) for col in non_keys])
     agg_names = [f"{col}_{agg_fn}" for col in non_keys]
-    exprs = [E.field(name) for name in spec.spec.keys]
-    exprs.extend(E.field(name) for name in agg_names)
+    exprs = [FieldExpr(name=name).to_expression() for name in spec.spec.keys]
+    exprs.extend(FieldExpr(name=name).to_expression() for name in agg_names)
     out_names = list(spec.spec.keys) + non_keys
     return plan.project(exprs, out_names, label=plan.label or rule.name), True
 
@@ -416,7 +415,7 @@ def _apply_project_to_plan(
     names: list[str] = []
 
     for col in project.select:
-        exprs.append(E.field(col))
+        exprs.append(FieldExpr(name=col).to_expression())
         names.append(col)
 
     for name, expr in project.exprs.items():
@@ -439,12 +438,12 @@ def _apply_rule_meta_to_plan(
         return plan
     schema = plan.schema(ctx=ctx)
     names = list(schema.names)
-    exprs = [E.field(name) for name in names]
+    exprs = [FieldExpr(name=name).to_expression() for name in names]
     if rule.rule_name_col not in names:
-        exprs.append(E.scalar(rule.name))
+        exprs.append(ConstExpr(value=rule.name).to_expression())
         names.append(rule.rule_name_col)
     if rule.rule_priority_col not in names:
-        exprs.append(E.scalar(int(rule.priority)))
+        exprs.append(ConstExpr(value=int(rule.priority)).to_expression())
         names.append(rule.rule_priority_col)
     return plan.project(exprs, names, label=plan.label or rule.name)
 

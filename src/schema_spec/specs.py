@@ -45,6 +45,17 @@ def schema_metadata(name: str, version: int) -> dict[bytes, bytes]:
     }
 
 
+def list_view_type(value_type: DataTypeLike, *, large: bool = False) -> DataTypeLike:
+    """Return a list_view type (large_list_view when requested).
+
+    Returns
+    -------
+    DataTypeLike
+        List view data type.
+    """
+    return pa.large_list_view(value_type) if large else pa.list_view(value_type)
+
+
 def _field_metadata(metadata: dict[str, str]) -> dict[bytes, bytes]:
     """Encode metadata keys/values for Arrow.
 
@@ -276,6 +287,7 @@ __all__ = [
     "TableSchemaSpec",
     "call_span_bundle",
     "file_identity_bundle",
+    "list_view_type",
     "provenance_bundle",
     "schema_metadata",
     "scip_range_bundle",

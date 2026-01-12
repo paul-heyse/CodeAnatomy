@@ -137,7 +137,7 @@ def register_dataset(..., query_spec: QuerySpec | None = None,
 **Integration checklist**
 - [x] Add optional `query_spec`/`contract_spec` params in `register_dataset`.
 - [x] Define QuerySpec per dataset (use `query_for_schema` for simple cases).
-- [x] Apply `apply_query_spec(...)` using dataset QuerySpec.
+- [x] Apply dataset QuerySpec via `QuerySpec.apply_to_plan(...)`.
 
 ---
 
@@ -215,23 +215,36 @@ plan = plan.project(exprs, names, ctx=ctx)
 
 ### Scope 6: Unify extract/normalize plan helpers (shared module)
 **Description**
-Consolidate shared plan helper logic (apply_query_spec, append_projection, finalize_plan)
+Consolidate shared plan helper logic (QuerySpec.apply_to_plan, `project_columns`, finalize helpers)
 into a single shared module under `src/arrowdsl` to eliminate drift.
 
 **Code pattern**
 ```python
-# src/arrowdsl/plan_helpers.py
-from arrowdsl.plan.plan import Plan, PlanSpec
-from arrowdsl.plan.query import QuerySpec
-from arrowdsl.core.interop import ComputeExpression, TableLike, pc
-
-def apply_query_spec(plan: Plan, *, spec: QuerySpec, ctx: ExecutionContext) -> Plan:
-    predicate = spec.predicate_expression()
+# src/arrowdsl/plan/query.py
+def apply_to_plan(self, plan: Plan, *, ctx: ExecutionContext) -> Plan:
+    predicate = self.predicate_expression()
     if predicate is not None:
         plan = plan.filter(predicate, ctx=ctx)
-    cols = spec.scan_columns()
+    cols = self.scan_columns(provenance=ctx.provenance)
     names = list(cols) if not isinstance(cols, dict) else list(cols.keys())
     exprs = [pc.field(n) for n in cols] if not isinstance(cols, dict) else list(cols.values())
+    return plan.project(exprs, names, ctx=ctx)
+
+# src/arrowdsl/plan_helpers.py
+def project_columns(
+    plan: Plan,
+    *,
+    base: Sequence[str],
+    rename: Mapping[str, str] | None = None,
+    extras: Sequence[tuple[ComputeExpression, str]] = (),
+    ctx: ExecutionContext | None = None,
+) -> Plan:
+    rename = rename or {}
+    names = [rename.get(name, name) for name in base]
+    exprs = [pc.field(name) for name in base]
+    for expr, name in extras:
+        exprs.append(expr)
+        names.append(name)
     return plan.project(exprs, names, ctx=ctx)
 ```
 
@@ -356,7 +369,7 @@ table = table.cast(schema)
 
 **Integration checklist**
 - [x] Add metadata_spec support in dataset registration helpers.
-- [ ] Populate schema metadata with extractor name/version and options hash.
+- [x] Populate schema metadata with extractor name/version and options hash.
 - [x] Ensure metadata is preserved through materialization and finalize.
 
 ---
@@ -381,8 +394,8 @@ def unify_tables(tables: Sequence[TableLike]) -> TableLike:
 
 **Integration checklist**
 - [x] Add unify+cast helper that preserves first-schema metadata.
-- [ ] Use helper when concatenating extract fragments.
-- [ ] Avoid manual per-column alignment when unify is sufficient.
+- [x] Use helper when concatenating extract fragments.
+- [x] Avoid manual per-column alignment when unify is sufficient.
 
 ---
 
@@ -404,8 +417,8 @@ def flatten_struct_field(field: pa.Field) -> list[pa.Field]:
 
 **Integration checklist**
 - [x] Add flatten helper for struct/list<struct> fields.
-- [ ] Use flattened fields when building projections or joins on nested data.
-- [ ] Keep base nested columns intact for downstream use.
+- [x] Use flattened fields when building projections or joins on nested data.
+- [x] Keep base nested columns intact for downstream use.
 
 ---
 
@@ -431,7 +444,7 @@ if ctx.determinism.is_canonical():
 - Update: `src/extract/runtime_inspect_extract.py`
 
 **Integration checklist**
-- [ ] Mark plan ordering effects explicitly (unordered after joins/aggregates).
+- [x] Mark plan ordering effects explicitly (unordered after joins/aggregates).
 - [x] Add canonical sort enforcement at finalize when required.
 - [x] Keep non-canonical paths streaming-friendly where possible.
 
@@ -456,8 +469,8 @@ scan_opts = scan_opts.with_options(
 - Update: `src/extract/tables.py` (scan helper)
 
 **Integration checklist**
-- [ ] Extend scan helpers to pass implicit ordering flags.
-- [ ] Expose provenance columns as tie-breakers when available.
+- [x] Extend scan helpers to pass implicit ordering flags.
+- [x] Expose provenance columns as tie-breakers when available.
 - [ ] Document ordering implications in extract specs.
 
 ---
@@ -503,8 +516,8 @@ table = table.take(idx)
 - Update: `src/extract/*_extract.py` (where ordering is enforced)
 
 **Integration checklist**
-- [ ] Remove/avoid plan-lane order_by in extract pipelines.
-- [ ] Centralize ordering in finalize helpers.
+- [x] Remove/avoid plan-lane order_by in extract pipelines.
+- [x] Centralize ordering in finalize helpers.
 - [ ] Document any exceptions where full sort is required.
 
 ---
@@ -532,8 +545,8 @@ metadata_spec = SchemaMetadataSpec(
 
 **Integration checklist**
 - [x] Add ordering metadata to dataset registration.
-- [ ] Declare explicit ordering keys when available.
-- [ ] Keep ordering metadata aligned with plan ordering effects.
+- [x] Declare explicit ordering keys when available.
+- [x] Keep ordering metadata aligned with plan ordering effects.
 
 ---
 

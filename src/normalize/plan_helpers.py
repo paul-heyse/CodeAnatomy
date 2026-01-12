@@ -2,63 +2,31 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Literal
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import (
-    ComputeExpression,
-    RecordBatchReaderLike,
-    SchemaLike,
-    TableLike,
-    pc,
-)
+from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, pc
 from arrowdsl.plan.plan import Plan, PlanSpec
 from arrowdsl.plan_helpers import (
-    append_projection,
-    apply_query_spec,
+    PlanSource,
+    encoding_columns_from_metadata,
+    encoding_projection,
     flatten_struct_field,
+    plan_source,
+    project_columns,
     query_for_schema,
-    rename_plan_columns,
 )
-from arrowdsl.schema.schema import encode_expression
+from arrowdsl.schema.schema import SchemaTransform, projection_for_schema
 
 
-def encoding_projection(
-    columns: Sequence[str],
-    *,
-    available: Sequence[str],
-) -> tuple[list[ComputeExpression], list[str]]:
-    """Return projection expressions to apply dictionary encoding.
+@dataclass(frozen=True)
+class PlanOutput:
+    """Plan output bundled with materialization metadata."""
 
-    Returns
-    -------
-    tuple[list[ComputeExpression], list[str]]
-        Expressions and column names for encoding projection.
-    """
-    encode_set = set(columns)
-    expressions: list[ComputeExpression] = []
-    names: list[str] = []
-    for name in available:
-        expr = encode_expression(name) if name in encode_set else pc.field(name)
-        expressions.append(expr)
-        names.append(name)
-    return expressions, names
-
-
-def encoding_columns_from_metadata(schema: SchemaLike) -> list[str]:
-    """Return columns marked for dictionary encoding via field metadata.
-
-    Returns
-    -------
-    list[str]
-        Column names marked for dictionary encoding.
-    """
-    encoding_columns: list[str] = []
-    for field in schema:
-        meta = field.metadata or {}
-        if meta.get(b"encoding") == b"dictionary":
-            encoding_columns.append(field.name)
-    return encoding_columns
+    value: TableLike | RecordBatchReaderLike
+    kind: Literal["reader", "table"]
 
 
 def materialize_plan(plan: Plan, *, ctx: ExecutionContext) -> TableLike:
@@ -83,11 +51,93 @@ def stream_plan(plan: Plan, *, ctx: ExecutionContext) -> RecordBatchReaderLike:
     return PlanSpec.from_plan(plan).to_reader(ctx=ctx)
 
 
+def align_plan_to_schema(
+    plan: Plan,
+    *,
+    schema: SchemaLike,
+    ctx: ExecutionContext,
+    keep_extra_columns: bool = False,
+) -> Plan:
+    """Align a plan to a target schema via projection.
+
+    Returns
+    -------
+    Plan
+        Plan projecting/casting to match the schema.
+    """
+    available = plan.schema(ctx=ctx).names
+    exprs, names = projection_for_schema(schema, available=available, safe_cast=ctx.safe_cast)
+    if keep_extra_columns:
+        seen = set(names)
+        for name in available:
+            if name in seen:
+                continue
+            exprs.append(pc.field(name))
+            names.append(name)
+    return plan.project(exprs, names, ctx=ctx)
+
+
+def _align_table_to_schema(
+    table: TableLike,
+    *,
+    schema: SchemaLike,
+    ctx: ExecutionContext,
+    keep_extra_columns: bool,
+) -> TableLike:
+    transform = SchemaTransform(
+        schema=schema,
+        safe_cast=ctx.safe_cast,
+        keep_extra_columns=keep_extra_columns,
+        on_error="unsafe" if ctx.safe_cast else "raise",
+    )
+    aligned, _ = transform.apply_with_info(table)
+    return aligned
+
+
+def finalize_plan_result(
+    plan: Plan,
+    *,
+    ctx: ExecutionContext,
+    prefer_reader: bool = False,
+    schema: SchemaLike | None = None,
+    keep_extra_columns: bool = False,
+) -> PlanOutput:
+    """Return a reader or table plus materialization metadata.
+
+    Returns
+    -------
+    PlanOutput
+        Plan output and the materialization kind.
+    """
+    if schema is not None:
+        if plan.decl is None:
+            aligned = _align_table_to_schema(
+                PlanSpec.from_plan(plan).to_table(ctx=ctx),
+                schema=schema,
+                ctx=ctx,
+                keep_extra_columns=keep_extra_columns,
+            )
+            return PlanOutput(value=aligned, kind="table")
+        plan = align_plan_to_schema(
+            plan,
+            schema=schema,
+            ctx=ctx,
+            keep_extra_columns=keep_extra_columns,
+        )
+
+    spec = PlanSpec.from_plan(plan)
+    if prefer_reader and not spec.pipeline_breakers:
+        return PlanOutput(value=spec.to_reader(ctx=ctx), kind="reader")
+    return PlanOutput(value=spec.to_table(ctx=ctx), kind="table")
+
+
 def finalize_plan(
     plan: Plan,
     *,
     ctx: ExecutionContext,
     prefer_reader: bool = False,
+    schema: SchemaLike | None = None,
+    keep_extra_columns: bool = False,
 ) -> TableLike | RecordBatchReaderLike:
     """Return a reader when possible, otherwise materialize the plan.
 
@@ -96,10 +146,13 @@ def finalize_plan(
     TableLike | RecordBatchReaderLike
         Reader when allowed, otherwise a table.
     """
-    spec = PlanSpec.from_plan(plan)
-    if prefer_reader and not spec.pipeline_breakers:
-        return spec.to_reader(ctx=ctx)
-    return spec.to_table(ctx=ctx)
+    return finalize_plan_result(
+        plan,
+        ctx=ctx,
+        prefer_reader=prefer_reader,
+        schema=schema,
+        keep_extra_columns=keep_extra_columns,
+    ).value
 
 
 def finalize_plan_bundle(
@@ -122,15 +175,18 @@ def finalize_plan_bundle(
 
 
 __all__ = [
-    "append_projection",
-    "apply_query_spec",
+    "PlanOutput",
+    "PlanSource",
+    "align_plan_to_schema",
     "encoding_columns_from_metadata",
     "encoding_projection",
     "finalize_plan",
     "finalize_plan_bundle",
+    "finalize_plan_result",
     "flatten_struct_field",
     "materialize_plan",
+    "plan_source",
+    "project_columns",
     "query_for_schema",
-    "rename_plan_columns",
     "stream_plan",
 ]

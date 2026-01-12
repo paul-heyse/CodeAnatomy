@@ -37,6 +37,7 @@ def _cpg_metadata(dataset_name: str, *, contract_name: str) -> SchemaMetadataSpe
         }
     )
 
+
 CPG_NODES_TABLE_SPEC = make_table_spec(
     name="cpg_nodes_v1",
     version=SCHEMA_VERSION,

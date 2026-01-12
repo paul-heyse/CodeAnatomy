@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pyarrow as pa
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import TableLike, ensure_expression, pc
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, ensure_expression, pc
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.schema import empty_table
 from normalize.hash_specs import TYPE_ID_SPEC
 from normalize.plan_exprs import HashExprSpec, column_or_null_expr, trimmed_non_empty_expr
-from normalize.plan_helpers import append_projection, apply_query_spec
-from normalize.runner import ensure_canonical, ensure_execution_context, run_normalize
+from normalize.plan_helpers import PlanSource, materialize_plan, plan_source, project_columns
+from normalize.runner import (
+    ensure_canonical,
+    ensure_execution_context,
+    run_normalize,
+    run_normalize_streamable_contract,
+)
 from normalize.schemas import (
     TYPE_EXPRS_CONTRACT,
     TYPE_EXPRS_NORM_SPEC,
@@ -36,14 +43,17 @@ _BASE_TYPE_EXPR_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
 )
 
 
-def _to_plan(table: TableLike | Plan) -> Plan:
-    if isinstance(table, Plan):
-        return table
-    return Plan.table_source(table)
+def _to_plan(
+    source: PlanSource,
+    *,
+    ctx: ExecutionContext,
+    columns: Sequence[str] | None = None,
+) -> Plan:
+    return plan_source(source, ctx=ctx, columns=columns)
 
 
 def type_exprs_plan(
-    cst_type_exprs: TableLike | Plan,
+    cst_type_exprs: PlanSource,
     *,
     ctx: ExecutionContext,
 ) -> Plan:
@@ -54,10 +64,9 @@ def type_exprs_plan(
     Plan
         Plan producing normalized type expression rows.
     """
-    plan = _to_plan(cst_type_exprs)
-    available = set(plan.schema(ctx=ctx).names)
-
     base_names = [name for name, _ in _BASE_TYPE_EXPR_COLUMNS]
+    plan = _to_plan(cst_type_exprs, ctx=ctx, columns=base_names)
+    available = set(plan.schema(ctx=ctx).names)
     base_exprs = [
         column_or_null_expr(name, dtype, available=available)
         for name, dtype in _BASE_TYPE_EXPR_COLUMNS
@@ -66,11 +75,11 @@ def type_exprs_plan(
 
     _, non_empty = trimmed_non_empty_expr("expr_text")
     plan = plan.filter(non_empty, ctx=ctx)
-    return apply_query_spec(plan, spec=TYPE_EXPRS_QUERY, ctx=ctx)
+    return TYPE_EXPRS_QUERY.apply_to_plan(plan, ctx=ctx)
 
 
 def normalize_type_exprs_result(
-    cst_type_exprs: TableLike,
+    cst_type_exprs: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
 ) -> FinalizeResult:
@@ -100,7 +109,7 @@ def normalize_type_exprs_result(
 
 
 def normalize_type_exprs(
-    cst_type_exprs: TableLike,
+    cst_type_exprs: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
 ) -> TableLike:
@@ -122,7 +131,7 @@ def normalize_type_exprs(
 
 
 def normalize_type_exprs_canonical(
-    cst_type_exprs: TableLike,
+    cst_type_exprs: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
 ) -> TableLike:
@@ -137,8 +146,25 @@ def normalize_type_exprs_canonical(
     return normalize_type_exprs_result(cst_type_exprs, ctx=exec_ctx).good
 
 
+def normalize_type_exprs_streamable(
+    cst_type_exprs: PlanSource,
+    *,
+    ctx: ExecutionContext | None = None,
+) -> TableLike | RecordBatchReaderLike:
+    """Normalize type expressions with a streamable output.
+
+    Returns
+    -------
+    TableLike | RecordBatchReaderLike
+        Reader when streamable, otherwise a materialized table.
+    """
+    exec_ctx = ensure_execution_context(ctx)
+    plan = type_exprs_plan(cst_type_exprs, ctx=exec_ctx)
+    return run_normalize_streamable_contract(plan, contract=TYPE_EXPRS_CONTRACT, ctx=exec_ctx)
+
+
 def type_nodes_plan_from_scip(
-    scip_symbol_information: TableLike | Plan,
+    scip_symbol_information: PlanSource,
     *,
     ctx: ExecutionContext,
 ) -> Plan:
@@ -149,7 +175,7 @@ def type_nodes_plan_from_scip(
     Plan
         Plan producing normalized type node rows.
     """
-    plan = _to_plan(scip_symbol_information)
+    plan = _to_plan(scip_symbol_information, ctx=ctx, columns=["type_repr"])
     available = set(plan.schema(ctx=ctx).names)
     if "type_repr" not in available:
         return Plan.table_source(empty_table(TYPE_NODES_SCHEMA))
@@ -159,7 +185,7 @@ def type_nodes_plan_from_scip(
     plan = plan.project([trimmed], ["type_repr"], ctx=ctx)
 
     type_hash = HashExprSpec(spec=TYPE_ID_SPEC).to_expression()
-    plan = append_projection(
+    plan = project_columns(
         plan,
         base=["type_repr"],
         extras=[
@@ -169,11 +195,11 @@ def type_nodes_plan_from_scip(
         ],
         ctx=ctx,
     )
-    return apply_query_spec(plan, spec=TYPE_NODES_QUERY, ctx=ctx)
+    return TYPE_NODES_QUERY.apply_to_plan(plan, ctx=ctx)
 
 
 def type_nodes_plan_from_exprs(
-    type_exprs_norm: TableLike | Plan,
+    type_exprs_norm: PlanSource,
     *,
     ctx: ExecutionContext,
 ) -> Plan:
@@ -184,7 +210,7 @@ def type_nodes_plan_from_exprs(
     Plan
         Plan producing normalized type node rows.
     """
-    plan = _to_plan(type_exprs_norm)
+    plan = _to_plan(type_exprs_norm, ctx=ctx, columns=["type_id", "type_repr"])
     available = set(plan.schema(ctx=ctx).names)
     if "type_repr" not in available or "type_id" not in available:
         return Plan.table_source(empty_table(TYPE_NODES_SCHEMA))
@@ -193,7 +219,7 @@ def type_nodes_plan_from_exprs(
     valid = ensure_expression(pc.and_(non_empty, pc.is_valid(pc.field("type_id"))))
     plan = plan.filter(valid, ctx=ctx)
     plan = plan.project([pc.field("type_id"), trimmed], ["type_id", "type_repr"], ctx=ctx)
-    plan = append_projection(
+    plan = project_columns(
         plan,
         base=["type_id", "type_repr"],
         extras=[
@@ -202,12 +228,31 @@ def type_nodes_plan_from_exprs(
         ],
         ctx=ctx,
     )
-    return apply_query_spec(plan, spec=TYPE_NODES_QUERY, ctx=ctx)
+    return TYPE_NODES_QUERY.apply_to_plan(plan, ctx=ctx)
+
+
+def _type_nodes_plan(
+    type_exprs_norm: PlanSource,
+    scip_symbol_information: PlanSource | None,
+    *,
+    ctx: ExecutionContext,
+) -> Plan:
+    scip_table: TableLike | None = None
+    if scip_symbol_information is not None:
+        scip_plan = _to_plan(scip_symbol_information, ctx=ctx, columns=["type_repr"])
+        scip_table = materialize_plan(scip_plan, ctx=ctx)
+    if (
+        scip_table is not None
+        and scip_table.num_rows > 0
+        and "type_repr" in scip_table.column_names
+    ):
+        return type_nodes_plan_from_scip(scip_table, ctx=ctx)
+    return type_nodes_plan_from_exprs(type_exprs_norm, ctx=ctx)
 
 
 def normalize_types_result(
-    type_exprs_norm: TableLike,
-    scip_symbol_information: TableLike | None = None,
+    type_exprs_norm: PlanSource,
+    scip_symbol_information: PlanSource | None = None,
     *,
     ctx: ExecutionContext | None = None,
 ) -> FinalizeResult:
@@ -228,15 +273,11 @@ def normalize_types_result(
         Finalize bundle with normalized type nodes.
     """
     exec_ctx = ensure_execution_context(ctx)
-    plan: Plan
-    if (
-        scip_symbol_information is not None
-        and scip_symbol_information.num_rows > 0
-        and "type_repr" in scip_symbol_information.column_names
-    ):
-        plan = type_nodes_plan_from_scip(scip_symbol_information, ctx=exec_ctx)
-    else:
-        plan = type_nodes_plan_from_exprs(type_exprs_norm, ctx=exec_ctx)
+    plan = _type_nodes_plan(
+        type_exprs_norm,
+        scip_symbol_information,
+        ctx=exec_ctx,
+    )
 
     return run_normalize(
         plan=plan,
@@ -248,8 +289,8 @@ def normalize_types_result(
 
 
 def normalize_types(
-    type_exprs_norm: TableLike,
-    scip_symbol_information: TableLike | None = None,
+    type_exprs_norm: PlanSource,
+    scip_symbol_information: PlanSource | None = None,
     *,
     ctx: ExecutionContext | None = None,
 ) -> TableLike:
@@ -277,8 +318,8 @@ def normalize_types(
 
 
 def normalize_types_canonical(
-    type_exprs_norm: TableLike,
-    scip_symbol_information: TableLike | None = None,
+    type_exprs_norm: PlanSource,
+    scip_symbol_information: PlanSource | None = None,
     *,
     ctx: ExecutionContext | None = None,
 ) -> TableLike:
@@ -297,13 +338,37 @@ def normalize_types_canonical(
     ).good
 
 
+def normalize_types_streamable(
+    type_exprs_norm: PlanSource,
+    scip_symbol_information: PlanSource | None = None,
+    *,
+    ctx: ExecutionContext | None = None,
+) -> TableLike | RecordBatchReaderLike:
+    """Normalize type nodes with a streamable output.
+
+    Returns
+    -------
+    TableLike | RecordBatchReaderLike
+        Reader when streamable, otherwise a materialized table.
+    """
+    exec_ctx = ensure_execution_context(ctx)
+    plan = _type_nodes_plan(
+        type_exprs_norm,
+        scip_symbol_information,
+        ctx=exec_ctx,
+    )
+    return run_normalize_streamable_contract(plan, contract=TYPE_NODES_CONTRACT, ctx=exec_ctx)
+
+
 __all__ = [
     "normalize_type_exprs",
     "normalize_type_exprs_canonical",
     "normalize_type_exprs_result",
+    "normalize_type_exprs_streamable",
     "normalize_types",
     "normalize_types_canonical",
     "normalize_types_result",
+    "normalize_types_streamable",
     "type_exprs_plan",
     "type_nodes_plan_from_exprs",
     "type_nodes_plan_from_scip",

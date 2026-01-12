@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Literal, overload
+from typing import Literal, Required, TypedDict, Unpack, overload
 
 import pyarrow as pa
 import tree_sitter_python
@@ -14,6 +14,7 @@ from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfil
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
+from arrowdsl.schema.schema import SchemaMetadataSpec
 from extract.common import bytes_from_file_ctx, file_identity_row, iter_contexts
 from extract.file_context import FileContext
 from extract.hash_specs import (
@@ -23,10 +24,16 @@ from extract.hash_specs import (
     TS_PARENT_NODE_ID_SPEC,
 )
 from extract.plan_exprs import MaskedHashExprSpec
-from extract.spec_helpers import DatasetRegistration, ordering_metadata_spec, register_dataset
+from extract.spec_helpers import (
+    DatasetRegistration,
+    infer_ordering_keys,
+    merge_metadata_specs,
+    options_metadata_spec,
+    ordering_metadata_spec,
+    register_dataset,
+)
 from extract.tables import (
     align_plan,
-    apply_query_spec,
     finalize_plan_bundle,
     materialize_plan,
     plan_from_rows,
@@ -95,12 +102,35 @@ _TS_MISSING_FIELDS = [
     ArrowFieldSpec(name="is_missing", dtype=pa.bool_()),
 ]
 
-_TS_METADATA = ordering_metadata_spec(
+_TS_NODES_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_TS_NODES_FIELDS)
+)
+_TS_ERRORS_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_TS_ERRORS_FIELDS)
+)
+_TS_MISSING_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_TS_MISSING_FIELDS)
+)
+
+_TS_METADATA_EXTRA = {
+    b"extractor_name": b"tree_sitter",
+    b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
+}
+
+_TS_NODES_METADATA = ordering_metadata_spec(
     OrderingLevel.IMPLICIT,
-    extra={
-        b"extractor_name": b"tree_sitter",
-        b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
-    },
+    keys=infer_ordering_keys(_TS_NODES_BASE_COLUMNS),
+    extra=_TS_METADATA_EXTRA,
+)
+_TS_ERRORS_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_TS_ERRORS_BASE_COLUMNS),
+    extra=_TS_METADATA_EXTRA,
+)
+_TS_MISSING_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_TS_MISSING_BASE_COLUMNS),
+    extra=_TS_METADATA_EXTRA,
 )
 
 TS_NODES_SPEC = register_dataset(
@@ -128,7 +158,7 @@ TS_NODES_SPEC = register_dataset(
                 },
             )
         ),
-        metadata_spec=_TS_METADATA,
+        metadata_spec=_TS_NODES_METADATA,
     ),
 )
 
@@ -157,7 +187,7 @@ TS_ERRORS_SPEC = register_dataset(
                 },
             )
         ),
-        metadata_spec=_TS_METADATA,
+        metadata_spec=_TS_ERRORS_METADATA,
     ),
 )
 
@@ -186,13 +216,25 @@ TS_MISSING_SPEC = register_dataset(
                 },
             )
         ),
-        metadata_spec=_TS_METADATA,
+        metadata_spec=_TS_MISSING_METADATA,
     ),
 )
 
 TS_NODES_SCHEMA = TS_NODES_SPEC.schema()
 TS_ERRORS_SCHEMA = TS_ERRORS_SPEC.schema()
 TS_MISSING_SCHEMA = TS_MISSING_SPEC.schema()
+
+
+def _ts_metadata_specs(
+    options: TreeSitterExtractOptions,
+) -> dict[str, SchemaMetadataSpec]:
+    run_meta = options_metadata_spec(options=options)
+    return {
+        "ts_nodes": merge_metadata_specs(_TS_NODES_METADATA, run_meta),
+        "ts_errors": merge_metadata_specs(_TS_ERRORS_METADATA, run_meta),
+        "ts_missing": merge_metadata_specs(_TS_MISSING_METADATA, run_meta),
+    }
+
 
 TS_NODE_ROWS_SCHEMA = pa.schema(
     [
@@ -341,10 +383,23 @@ def extract_ts(
         file_contexts=file_contexts,
         ctx=exec_ctx,
     )
+    metadata_specs = _ts_metadata_specs(options)
     return TreeSitterExtractResult(
-        ts_nodes=materialize_plan(plans["ts_nodes"], ctx=exec_ctx),
-        ts_errors=materialize_plan(plans["ts_errors"], ctx=exec_ctx),
-        ts_missing=materialize_plan(plans["ts_missing"], ctx=exec_ctx),
+        ts_nodes=materialize_plan(
+            plans["ts_nodes"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["ts_nodes"],
+        ),
+        ts_errors=materialize_plan(
+            plans["ts_errors"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["ts_errors"],
+        ),
+        ts_missing=materialize_plan(
+            plans["ts_missing"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["ts_missing"],
+        ),
     )
 
 
@@ -384,15 +439,15 @@ def extract_ts_plans(
         )
 
     nodes_plan = plan_from_rows(node_rows, schema=TS_NODE_ROWS_SCHEMA, label="ts_nodes")
-    nodes_plan = apply_query_spec(nodes_plan, spec=TS_NODES_QUERY, ctx=exec_ctx)
+    nodes_plan = TS_NODES_QUERY.apply_to_plan(nodes_plan, ctx=exec_ctx)
     nodes_plan = align_plan(nodes_plan, schema=TS_NODES_SCHEMA, ctx=exec_ctx)
 
     errors_plan = plan_from_rows(error_rows, schema=TS_ERRORS_ROWS_SCHEMA, label="ts_errors")
-    errors_plan = apply_query_spec(errors_plan, spec=TS_ERRORS_QUERY, ctx=exec_ctx)
+    errors_plan = TS_ERRORS_QUERY.apply_to_plan(errors_plan, ctx=exec_ctx)
     errors_plan = align_plan(errors_plan, schema=TS_ERRORS_SCHEMA, ctx=exec_ctx)
 
     missing_plan = plan_from_rows(missing_rows, schema=TS_MISSING_ROWS_SCHEMA, label="ts_missing")
-    missing_plan = apply_query_spec(missing_plan, spec=TS_MISSING_QUERY, ctx=exec_ctx)
+    missing_plan = TS_MISSING_QUERY.apply_to_plan(missing_plan, ctx=exec_ctx)
     missing_plan = align_plan(missing_plan, schema=TS_MISSING_SCHEMA, ctx=exec_ctx)
     return {
         "ts_nodes": nodes_plan,
@@ -429,63 +484,72 @@ def _extract_ts_for_row(
             buffers.missing_rows.append(_missing_row(row))
 
 
+class _TreeSitterTablesKwargs(TypedDict, total=False):
+    repo_files: Required[TableLike]
+    options: TreeSitterExtractOptions | None
+    file_contexts: Iterable[FileContext] | None
+    ctx: ExecutionContext | None
+    prefer_reader: bool
+
+
+class _TreeSitterTablesKwargsTable(TypedDict, total=False):
+    repo_files: Required[TableLike]
+    options: TreeSitterExtractOptions | None
+    file_contexts: Iterable[FileContext] | None
+    ctx: ExecutionContext | None
+    prefer_reader: Literal[False]
+
+
+class _TreeSitterTablesKwargsReader(TypedDict, total=False):
+    repo_files: Required[TableLike]
+    options: TreeSitterExtractOptions | None
+    file_contexts: Iterable[FileContext] | None
+    ctx: ExecutionContext | None
+    prefer_reader: Required[Literal[True]]
+
+
 @overload
 def extract_ts_tables(
-    *,
-    repo_root: str | None,
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-    ctx: ExecutionContext | None = None,
-    prefer_reader: Literal[False] = False,
+    **kwargs: Unpack[_TreeSitterTablesKwargsTable],
 ) -> Mapping[str, TableLike]: ...
 
 
 @overload
 def extract_ts_tables(
-    *,
-    repo_root: str | None,
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-    ctx: ExecutionContext | None = None,
-    prefer_reader: Literal[True],
+    **kwargs: Unpack[_TreeSitterTablesKwargsReader],
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]: ...
 
 
 def extract_ts_tables(
-    *,
-    repo_root: str | None,
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-    ctx: ExecutionContext | None = None,
-    prefer_reader: bool = False,
+    **kwargs: Unpack[_TreeSitterTablesKwargs],
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]:
     """Extract tree-sitter tables as a name-keyed bundle.
 
     Parameters
     ----------
-    repo_root:
-        Optional repository root (unused).
-    repo_files:
-        Repo files table.
-    file_contexts:
-        Optional pre-built file contexts for extraction.
-    ctx:
-        Execution context for plan execution.
-
-    prefer_reader:
-        When True, return streaming readers when possible.
+    kwargs:
+        Keyword-only arguments for extraction (repo_files, options, file_contexts, ctx,
+        prefer_reader).
 
     Returns
     -------
     dict[str, TableLike | RecordBatchReaderLike]
         Extracted tree-sitter outputs keyed by output name.
     """
-    _ = repo_root
-    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    repo_files = kwargs["repo_files"]
+    options = kwargs.get("options") or TreeSitterExtractOptions()
+    file_contexts = kwargs.get("file_contexts")
+    exec_ctx = kwargs.get("ctx") or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    prefer_reader = kwargs.get("prefer_reader", False)
     plans = extract_ts_plans(
         repo_files,
-        options=TreeSitterExtractOptions(),
+        options=options,
         file_contexts=file_contexts,
         ctx=exec_ctx,
     )
-    return finalize_plan_bundle(plans, ctx=exec_ctx, prefer_reader=prefer_reader)
+    return finalize_plan_bundle(
+        plans,
+        ctx=exec_ctx,
+        prefer_reader=prefer_reader,
+        metadata_specs=_ts_metadata_specs(options),
+    )

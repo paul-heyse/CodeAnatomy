@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import Literal, TypedDict, cast
+from typing import Literal, Protocol, TypedDict, cast
 
+import pyarrow as pa
 import pyarrow.types as patypes
 
-import arrowdsl.core.interop as pa
 from arrowdsl.compute.kernels import ChunkPolicy
 from arrowdsl.core.interop import (
     ArrayLike,
@@ -23,6 +23,20 @@ from arrowdsl.core.interop import (
 from arrowdsl.schema.arrays import FieldExpr, set_or_append_column
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
+
+
+class _StructType(Protocol):
+    def __iter__(self) -> Iterator[FieldLike]: ...
+
+
+class _ListType(Protocol):
+    value_field: FieldLike
+
+
+class _MapType(Protocol):
+    key_field: FieldLike
+    item_field: FieldLike
+    keys_sorted: bool
 
 
 class AlignmentInfo(TypedDict):
@@ -176,6 +190,143 @@ class SchemaMetadataSpec:
     schema_metadata: dict[bytes, bytes] = field(default_factory=dict)
     field_metadata: dict[str, dict[bytes, bytes]] = field(default_factory=dict)
 
+    @staticmethod
+    def _split_metadata(
+        metadata: dict[str, dict[bytes, bytes]],
+    ) -> tuple[dict[str, dict[bytes, bytes]], dict[str, dict[bytes, bytes]]]:
+        top_level: dict[str, dict[bytes, bytes]] = {}
+        nested: dict[str, dict[bytes, bytes]] = {}
+        for name, meta in metadata.items():
+            if "." in name:
+                nested[name] = meta
+            else:
+                top_level[name] = meta
+        return top_level, nested
+
+    @staticmethod
+    def _apply_struct_metadata(
+        field: FieldLike,
+        nested: dict[str, dict[bytes, bytes]],
+        prefix: str,
+    ) -> FieldLike:
+        children: list[FieldLike] = []
+        struct_type = cast("_StructType", field.type)
+        for child in struct_type:
+            child_prefix = f"{prefix}.{child.name}"
+            updated_child = SchemaMetadataSpec._apply_nested_metadata(
+                child,
+                nested,
+                child_prefix,
+            )
+            child_meta = nested.get(child_prefix)
+            if child_meta:
+                merged = dict(updated_child.metadata or {})
+                merged.update(child_meta)
+                updated_child = updated_child.with_metadata(merged)
+            children.append(updated_child)
+        return pa.field(
+            field.name,
+            pa.struct(children),
+            nullable=field.nullable,
+            metadata=field.metadata,
+        )
+
+    @staticmethod
+    def _apply_list_metadata(
+        field: FieldLike,
+        nested: dict[str, dict[bytes, bytes]],
+        prefix: str,
+        list_factory: Callable[[FieldLike], DataTypeLike],
+    ) -> FieldLike:
+        list_type = cast("_ListType", field.type)
+        value_field = list_type.value_field
+        child_prefix = f"{prefix}.{value_field.name}"
+        updated_child = SchemaMetadataSpec._apply_nested_metadata(
+            value_field,
+            nested,
+            child_prefix,
+        )
+        child_meta = nested.get(child_prefix)
+        if child_meta:
+            merged = dict(updated_child.metadata or {})
+            merged.update(child_meta)
+            updated_child = updated_child.with_metadata(merged)
+        new_type = list_factory(updated_child)
+        return pa.field(field.name, new_type, nullable=field.nullable, metadata=field.metadata)
+
+    @staticmethod
+    def _apply_map_metadata(
+        field: FieldLike,
+        nested: dict[str, dict[bytes, bytes]],
+        prefix: str,
+    ) -> FieldLike:
+        map_type = cast("_MapType", field.type)
+        key_field = map_type.key_field
+        item_field = map_type.item_field
+
+        key_prefix = f"{prefix}.{key_field.name}"
+        updated_key = SchemaMetadataSpec._apply_nested_metadata(
+            key_field,
+            nested,
+            key_prefix,
+        )
+        key_meta = nested.get(key_prefix)
+        if key_meta:
+            merged = dict(updated_key.metadata or {})
+            merged.update(key_meta)
+            updated_key = updated_key.with_metadata(merged)
+        if updated_key.nullable:
+            updated_key = pa.field(
+                updated_key.name,
+                updated_key.type,
+                nullable=False,
+                metadata=updated_key.metadata,
+            )
+
+        item_prefix = f"{prefix}.{item_field.name}"
+        updated_item = SchemaMetadataSpec._apply_nested_metadata(
+            item_field,
+            nested,
+            item_prefix,
+        )
+        item_meta = nested.get(item_prefix)
+        if item_meta:
+            merged = dict(updated_item.metadata or {})
+            merged.update(item_meta)
+            updated_item = updated_item.with_metadata(merged)
+
+        new_type = pa.map_(updated_key, updated_item, keys_sorted=map_type.keys_sorted)
+        return pa.field(field.name, new_type, nullable=field.nullable, metadata=field.metadata)
+
+    @staticmethod
+    def _apply_nested_metadata(
+        field: FieldLike,
+        nested: dict[str, dict[bytes, bytes]],
+        prefix: str,
+    ) -> FieldLike:
+        if not nested:
+            return field
+
+        if patypes.is_struct(field.type):
+            return SchemaMetadataSpec._apply_struct_metadata(field, nested, prefix)
+
+        list_factories: list[
+            tuple[Callable[[DataTypeLike], bool], Callable[[FieldLike], DataTypeLike]]
+        ] = [
+            (patypes.is_list, pa.list_),
+            (patypes.is_large_list, pa.large_list),
+            (patypes.is_list_view, pa.list_view),
+            (patypes.is_large_list_view, pa.large_list_view),
+        ]
+        for predicate, factory in list_factories:
+            if predicate(field.type):
+                return SchemaMetadataSpec._apply_list_metadata(field, nested, prefix, factory)
+
+        if patypes.is_map(field.type):
+            return SchemaMetadataSpec._apply_map_metadata(field, nested, prefix)
+
+        return field
+
     def apply(self, schema: SchemaLike) -> SchemaLike:
         """Return a schema with metadata updates applied.
 
@@ -184,15 +335,18 @@ class SchemaMetadataSpec:
         SchemaLike
             Updated schema with metadata applied.
         """
+        top_level, nested = self._split_metadata(self.field_metadata)
         fields: list[FieldLike] = []
         for schema_field in schema:
-            meta = self.field_metadata.get(schema_field.name)
+            meta = top_level.get(schema_field.name)
             if meta is None:
-                fields.append(schema_field)
-                continue
-            merged = dict(schema_field.metadata or {})
-            merged.update(meta)
-            fields.append(schema_field.with_metadata(merged))
+                updated = schema_field
+            else:
+                merged = dict(schema_field.metadata or {})
+                merged.update(meta)
+                updated = schema_field.with_metadata(merged)
+            updated = self._apply_nested_metadata(updated, nested, updated.name)
+            fields.append(updated)
 
         updated = pa.schema(fields)
         if self.schema_metadata:
@@ -321,9 +475,8 @@ def encode_dictionary(table: TableLike, spec: EncodingSpec) -> TableLike:
     if spec.column not in table.column_names:
         return table
     column = table[spec.column]
-    if patypes.is_dictionary(column.type):
-        if spec.dtype is None or column.type == spec.dtype:
-            return table
+    if patypes.is_dictionary(column.type) and (spec.dtype is None or column.type == spec.dtype):
+        return table
     if spec.dtype is not None:
         encoded = pc.cast(column, spec.dtype, safe=False)
         return set_or_append_column(table, spec.column, encoded)

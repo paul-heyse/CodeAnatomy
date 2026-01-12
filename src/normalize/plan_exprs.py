@@ -24,6 +24,7 @@ from arrowdsl.core.interop import (
     ensure_expression,
     pc,
 )
+from arrowdsl.plan_helpers import column_or_null_expr as plan_column_or_null_expr
 from arrowdsl.schema.arrays import CoalesceExpr, FieldExpr
 from normalize.ids import masked_hash_expression
 
@@ -319,9 +320,7 @@ def column_or_null_expr(name: str, dtype: pa.DataType, *, available: set[str]) -
     ComputeExpression
         Field expression or typed null expression.
     """
-    if name in available:
-        return pc.field(name)
-    return pc.scalar(pa.scalar(None, type=dtype))
+    return plan_column_or_null_expr(name, dtype=dtype, available=available)
 
 
 def trimmed_non_empty_expr(col: str) -> tuple[ComputeExpression, ComputeExpression]:

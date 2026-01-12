@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, cast
 
@@ -52,10 +51,7 @@ class ConstExpr:
         ArrayLike
             Array filled with the constant value.
         """
-        scalar = (
-            pa.scalar(self.value) if self.dtype is None else pa.scalar(self.value, type=self.dtype)
-        )
-        return pa.array([self.value] * table.num_rows, type=scalar.type)
+        return const_array(table.num_rows, self.value, dtype=self.dtype)
 
     def is_scalar(self) -> bool:
         """Return whether this expression is scalar-safe.
@@ -103,94 +99,6 @@ class FieldExpr:
             ``True`` for field references.
         """
         return self is not None
-
-
-@dataclass(frozen=True)
-class CastExpr:
-    """Column expression casting another expression to a target type."""
-
-    expr: ColumnExpr
-    dtype: DataTypeLike
-    safe: bool = True
-
-    def to_expression(self) -> ComputeExpression:
-        """Return the compute expression for the cast.
-
-        Returns
-        -------
-        ComputeExpression
-            Expression casting the input expression.
-        """
-        return ensure_expression(pc.cast(self.expr.to_expression(), self.dtype, safe=self.safe))
-
-    def materialize(self, table: TableLike) -> ArrayLike:
-        """Materialize the cast result from the table.
-
-        Returns
-        -------
-        ArrayLike
-            Casted array values.
-        """
-        return pc.cast(self.expr.materialize(table), self.dtype, safe=self.safe)
-
-    def is_scalar(self) -> bool:
-        """Return whether this expression is scalar-safe.
-
-        Returns
-        -------
-        bool
-            ``True`` when the inner expression is scalar-safe.
-        """
-        return self.expr.is_scalar()
-
-
-@dataclass(frozen=True)
-class NullFillExpr:
-    """Column expression that fills nulls with a constant value."""
-
-    expr: ColumnExpr
-    fill_value: object
-    dtype: DataTypeLike | None = None
-
-    def to_expression(self) -> ComputeExpression:
-        """Return the compute expression for the fill-null operation.
-
-        Returns
-        -------
-        ComputeExpression
-            Expression filling nulls.
-        """
-        fill = (
-            pa.scalar(self.fill_value)
-            if self.dtype is None
-            else pa.scalar(self.fill_value, type=self.dtype)
-        )
-        return ensure_expression(pc.fill_null(self.expr.to_expression(), fill_value=fill))
-
-    def materialize(self, table: TableLike) -> ArrayLike:
-        """Materialize the fill-null result from the table.
-
-        Returns
-        -------
-        ArrayLike
-            Array with nulls filled.
-        """
-        fill = (
-            pa.scalar(self.fill_value)
-            if self.dtype is None
-            else pa.scalar(self.fill_value, type=self.dtype)
-        )
-        return pc.fill_null(self.expr.materialize(table), fill_value=fill)
-
-    def is_scalar(self) -> bool:
-        """Return whether this expression is scalar-safe.
-
-        Returns
-        -------
-        bool
-            ``True`` when the inner expression is scalar-safe.
-        """
-        return self.expr.is_scalar()
 
 
 @dataclass(frozen=True)
@@ -285,53 +193,6 @@ class ColumnDefaultsSpec:
         return out
 
 
-def add_const_column(
-    table: TableLike,
-    name: str,
-    value: object,
-    *,
-    data_type: DataTypeLike | None = None,
-) -> TableLike:
-    """Append a constant-valued column if missing.
-
-    Returns
-    -------
-    TableLike
-        Table with the column appended if missing.
-    """
-    if name in table.column_names:
-        return table
-    expr = ConstExpr(value=value, dtype=data_type)
-    return table.append_column(name, expr.materialize(table))
-
-
-def coalesce_string(table: TableLike, cols: Sequence[str], *, out_col: str) -> TableLike:
-    """Coalesce multiple columns into a single string column.
-
-    Returns
-    -------
-    TableLike
-        Table with the coalesced column.
-    """
-    if out_col in table.column_names:
-        return table
-    exprs = tuple(FieldExpr(name=col) for col in cols)
-    expr = CoalesceExpr(exprs=exprs).materialize(table)
-    return table.append_column(out_col, expr)
-
-
-def select_columns(table: TableLike, cols: Sequence[str]) -> TableLike:
-    """Select the subset of columns that exist.
-
-    Returns
-    -------
-    TableLike
-        Table with selected columns.
-    """
-    keep = [col for col in cols if col in table.column_names]
-    return table.select(keep) if keep else table
-
-
 def build_struct(fields: dict[str, ArrayLike], *, mask: ArrayLike | None = None) -> StructArrayLike:
     """Build a struct array from named child arrays.
 
@@ -392,50 +253,6 @@ def build_list_view(
     )
 
 
-def build_map(
-    offsets: ArrayLike,
-    keys: ArrayLike,
-    items: ArrayLike,
-) -> ArrayLike:
-    """Build a map array from offsets and flattened keys/items.
-
-    Returns
-    -------
-    ArrayLike
-        Map array built from offsets and flattened key/item arrays.
-    """
-    return pa.MapArray.from_arrays(offsets, keys, items)
-
-
-def build_sparse_union(
-    type_ids: ArrayLike,
-    children: list[ArrayLike],
-) -> ArrayLike:
-    """Build a sparse union array from type ids and child arrays.
-
-    Returns
-    -------
-    ArrayLike
-        Sparse union array.
-    """
-    return pa.UnionArray.from_sparse(type_ids, children)
-
-
-def build_dense_union(
-    type_ids: ArrayLike,
-    offsets: ArrayLike,
-    children: list[ArrayLike],
-) -> ArrayLike:
-    """Build a dense union array from type ids, offsets, and child arrays.
-
-    Returns
-    -------
-    ArrayLike
-        Dense union array.
-    """
-    return pa.UnionArray.from_dense(type_ids, offsets, children)
-
-
 def build_list_of_structs(
     offsets: ArrayLike,
     struct_fields: dict[str, ArrayLike],
@@ -451,115 +268,16 @@ def build_list_of_structs(
     return build_list(offsets, struct_arr)
 
 
-def build_struct_array(
-    fields: dict[str, ArrayLike],
-    *,
-    mask: ArrayLike | None = None,
-) -> StructArrayLike:
-    """Build a struct array from named child arrays.
-
-    Returns
-    -------
-    StructArrayLike
-        Struct array built from child arrays.
-    """
-    return build_struct(fields, mask=mask)
-
-
-def build_list_array(offsets: ArrayLike, values: ArrayLike) -> ListArrayLike:
-    """Build a list array from offsets and flat values.
-
-    Returns
-    -------
-    ListArrayLike
-        List array built from offsets and values.
-    """
-    return build_list(offsets, values)
-
-
-def build_list_view_array(
-    offsets: ArrayLike,
-    sizes: ArrayLike,
-    values: ArrayLike,
-    *,
-    list_type: DataTypeLike | None = None,
-    mask: ArrayLike | None = None,
-) -> ListArrayLike:
-    """Build a list_view array from offsets, sizes, and flat values.
-
-    Returns
-    -------
-    ListArrayLike
-        List view array built from offsets and sizes.
-    """
-    return build_list_view(offsets, sizes, values, list_type=list_type, mask=mask)
-
-
-def build_map_array(
-    offsets: ArrayLike,
-    keys: ArrayLike,
-    items: ArrayLike,
-) -> ArrayLike:
-    """Build a map array from offsets and flattened key/item arrays.
-
-    Returns
-    -------
-    ArrayLike
-        Map array built from offsets and flattened key/item arrays.
-    """
-    return build_map(offsets, keys, items)
-
-
-def build_sparse_union_array(type_ids: ArrayLike, children: list[ArrayLike]) -> ArrayLike:
-    """Build a sparse union array from type ids and child arrays.
-
-    Returns
-    -------
-    ArrayLike
-        Sparse union array.
-    """
-    return build_sparse_union(type_ids, children)
-
-
-def build_dense_union_array(
-    type_ids: ArrayLike,
-    offsets: ArrayLike,
-    children: list[ArrayLike],
-) -> ArrayLike:
-    """Build a dense union array from type ids, offsets, and child arrays.
-
-    Returns
-    -------
-    ArrayLike
-        Dense union array.
-    """
-    return build_dense_union(type_ids, offsets, children)
-
-
 __all__ = [
-    "CastExpr",
     "CoalesceExpr",
     "ColumnDefaultsSpec",
     "ColumnExpr",
     "ConstExpr",
     "FieldExpr",
-    "NullFillExpr",
-    "add_const_column",
-    "build_dense_union",
-    "build_dense_union_array",
     "build_list",
-    "build_list_array",
     "build_list_of_structs",
     "build_list_view",
-    "build_list_view_array",
-    "build_map",
-    "build_map_array",
-    "build_sparse_union",
-    "build_sparse_union_array",
     "build_struct",
-    "build_struct_array",
-    "coalesce_string",
     "const_array",
-    "select_columns",
     "set_or_append_column",
 ]

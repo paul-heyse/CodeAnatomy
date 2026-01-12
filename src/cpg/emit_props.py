@@ -285,9 +285,7 @@ def prop_field_plan(
         names.append("schema_version")
     out = plan.project(exprs, names, ctx=context.ctx)
     if field.skip_if_none:
-        value_expr = ensure_expression(
-            pc.struct_field(pc.field(VALUE_STRUCT_FIELD), target_col)
-        )
+        value_expr = ensure_expression(pc.struct_field(pc.field(VALUE_STRUCT_FIELD), target_col))
         out = out.filter(ensure_expression(pc.is_valid(value_expr)), ctx=context.ctx)
     return _expand_value_struct(
         out,

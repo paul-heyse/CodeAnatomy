@@ -7,29 +7,11 @@ from dataclasses import dataclass
 from typing import Literal
 
 import pyarrow as pa
-from schema_spec.specs import PROVENANCE_COLS
 
 from arrowdsl.core.context import DeterminismTier, ExecutionContext
-from arrowdsl.core.interop import (
-    ArrayLike,
-    ChunkedArrayLike,
-    DataTypeLike,
-    ScalarLike,
-    TableLike,
-    pc,
-)
-from arrowdsl.plan.ops import AggregateSpec, DedupeSpec, JoinSpec, SortKey
-
-
-def provenance_sort_keys() -> tuple[str, ...]:
-    """Return provenance columns used as canonical sort tie-breakers.
-
-    Returns
-    -------
-    tuple[str, ...]
-        Provenance column names for tie-breaking sorts.
-    """
-    return PROVENANCE_COLS
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike, pc
+from arrowdsl.plan.ops import DedupeSpec, JoinSpec, SortKey
+from schema_spec.specs import PROVENANCE_COLS
 
 
 @dataclass(frozen=True)
@@ -55,6 +37,17 @@ class ChunkPolicy:
         return out
 
 
+def provenance_sort_keys() -> tuple[str, ...]:
+    """Return provenance columns used for ordering tie-breakers.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Provenance column names.
+    """
+    return tuple(PROVENANCE_COLS)
+
+
 def cast_array(
     values: ArrayLike | ChunkedArrayLike,
     dtype: DataTypeLike,
@@ -69,75 +62,6 @@ def cast_array(
         Casted values.
     """
     return pc.cast(values, dtype, safe=safe)
-
-
-def coalesce_arrays(
-    arrays: Sequence[ArrayLike | ChunkedArrayLike | ScalarLike],
-) -> ArrayLike | ChunkedArrayLike:
-    """Coalesce multiple arrays, taking the first non-null value per row.
-
-    Returns
-    -------
-    ArrayLike | ChunkedArrayLike
-        Coalesced array.
-
-    Raises
-    ------
-    ValueError
-        Raised when no arrays are provided.
-    """
-    if not arrays:
-        msg = "coalesce_arrays requires at least one array."
-        raise ValueError(msg)
-    return pc.coalesce(*arrays)
-
-
-def drop_nulls(values: ArrayLike | ChunkedArrayLike) -> ArrayLike:
-    """Drop null values from an array.
-
-    Returns
-    -------
-    ArrayLike
-        Array with nulls removed.
-    """
-    return pc.drop_null(values)
-
-
-def severity_score_array(
-    severity: ArrayLike | ChunkedArrayLike,
-) -> ArrayLike | ChunkedArrayLike:
-    """Map severity labels to float scores.
-
-    Returns
-    -------
-    ArrayLike | ChunkedArrayLike
-        Float32 score array.
-    """
-    severity_str = cast_array(severity, pa.string())
-    severity_str = pc.fill_null(severity_str, fill_value="ERROR")
-    is_error = pc.equal(severity_str, pa.scalar("ERROR"))
-    is_warning = pc.equal(severity_str, pa.scalar("WARNING"))
-    score = pc.if_else(
-        is_error, pa.scalar(1.0), pc.if_else(is_warning, pa.scalar(0.7), pa.scalar(0.5))
-    )
-    return cast_array(score, pa.float32())
-
-
-def bitmask_flag_array(
-    values: ArrayLike | ChunkedArrayLike,
-    *,
-    mask: int,
-) -> ArrayLike | ChunkedArrayLike:
-    """Return an int32 flag where the bitmask is set.
-
-    Returns
-    -------
-    ArrayLike | ChunkedArrayLike
-        Int32 array with 1 where the bit is set, else 0.
-    """
-    roles = cast_array(values, pa.int64())
-    flag = pc.not_equal(pc.bit_wise_and(roles, pa.scalar(mask)), pa.scalar(0))
-    return cast_array(flag, pa.int32())
 
 
 def def_use_kind_array(
@@ -170,36 +94,6 @@ def def_use_kind_array(
         pa.scalar("def"),
         pc.if_else(is_use, pa.scalar("use"), none_str),
     )
-
-
-def valid_pair_mask(
-    left: ArrayLike | ChunkedArrayLike,
-    right: ArrayLike | ChunkedArrayLike,
-) -> ArrayLike | ChunkedArrayLike:
-    """Return a mask where both inputs are valid.
-
-    Returns
-    -------
-    ArrayLike | ChunkedArrayLike
-        Boolean mask.
-    """
-    return pc.and_(pc.is_valid(left), pc.is_valid(right))
-
-
-def masked_values(
-    values: ArrayLike | ChunkedArrayLike,
-    *,
-    mask: ArrayLike | ChunkedArrayLike,
-    dtype: DataTypeLike,
-) -> ArrayLike | ChunkedArrayLike:
-    """Return values where mask is true; null elsewhere.
-
-    Returns
-    -------
-    ArrayLike | ChunkedArrayLike
-        Masked values.
-    """
-    return pc.if_else(mask, values, pa.scalar(None, type=dtype))
 
 
 def _append_provenance_keys(table: TableLike, sort_keys: Sequence[SortKey]) -> list[SortKey]:
@@ -407,29 +301,6 @@ def dedupe_keep_first_after_sort(
             new_names.append(name[: -len("_first")])
         else:
             new_names.append(name)
-    return out.rename_columns(new_names)
-
-
-def apply_aggregate(table: TableLike, *, spec: AggregateSpec) -> TableLike:
-    """Apply a group-by aggregation with shared naming policy.
-
-    Parameters
-    ----------
-    table:
-        Input table.
-    spec:
-        Aggregate specification.
-
-    Returns
-    -------
-    pyarrow.Table
-        Aggregated table.
-    """
-    out = table.group_by(list(spec.keys), use_threads=spec.use_threads).aggregate(list(spec.aggs))
-    if not spec.rename_aggregates:
-        return out
-    rename_map = {f"{col}_{agg}": col for col, agg in spec.aggs if col not in spec.keys}
-    new_names = [rename_map.get(name, name) for name in out.schema.names]
     return out.rename_columns(new_names)
 
 

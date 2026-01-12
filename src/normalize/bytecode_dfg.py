@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pyarrow as pa
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import TableLike, ensure_expression, pc
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, ensure_expression, pc
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.ops import JoinSpec
 from arrowdsl.plan.plan import Plan
@@ -13,8 +15,13 @@ from arrowdsl.schema.schema import empty_table
 from normalize.contracts import DEF_USE_CONTRACT, REACHES_CONTRACT
 from normalize.join_helpers import join_plan
 from normalize.plan_exprs import column_or_null_expr
-from normalize.plan_helpers import apply_query_spec
-from normalize.runner import ensure_canonical, ensure_execution_context, run_normalize
+from normalize.plan_helpers import PlanSource, plan_source
+from normalize.runner import (
+    ensure_canonical,
+    ensure_execution_context,
+    run_normalize,
+    run_normalize_streamable_contract,
+)
 from normalize.schemas import (
     DEF_USE_QUERY,
     DEF_USE_SPEC,
@@ -35,14 +42,17 @@ _EVENT_INPUT_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
 )
 
 
-def _to_plan(table: TableLike | Plan) -> Plan:
-    if isinstance(table, Plan):
-        return table
-    return Plan.table_source(table)
+def _to_plan(
+    source: PlanSource,
+    *,
+    ctx: ExecutionContext,
+    columns: Sequence[str] | None = None,
+) -> Plan:
+    return plan_source(source, ctx=ctx, columns=columns)
 
 
 def def_use_events_plan(
-    py_bc_instructions: TableLike | Plan,
+    py_bc_instructions: PlanSource,
     *,
     ctx: ExecutionContext,
 ) -> Plan:
@@ -53,15 +63,15 @@ def def_use_events_plan(
     Plan
         Plan producing def/use event rows.
     """
-    plan = _to_plan(py_bc_instructions)
-    available = set(plan.schema(ctx=ctx).names)
     base_names = [name for name, _ in _EVENT_INPUT_COLUMNS]
+    plan = _to_plan(py_bc_instructions, ctx=ctx, columns=base_names)
+    available = set(plan.schema(ctx=ctx).names)
     base_exprs = [
         column_or_null_expr(name, dtype, available=available)
         for name, dtype in _EVENT_INPUT_COLUMNS
     ]
     plan = plan.project(base_exprs, base_names, ctx=ctx)
-    plan = apply_query_spec(plan, spec=DEF_USE_QUERY, ctx=ctx)
+    plan = DEF_USE_QUERY.apply_to_plan(plan, ctx=ctx)
     valid = ensure_expression(
         pc.and_(pc.is_valid(pc.field("symbol")), pc.is_valid(pc.field("kind")))
     )
@@ -69,7 +79,7 @@ def def_use_events_plan(
 
 
 def build_def_use_events_result(
-    py_bc_instructions: TableLike,
+    py_bc_instructions: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
 ) -> FinalizeResult:
@@ -99,7 +109,7 @@ def build_def_use_events_result(
 
 
 def build_def_use_events(
-    py_bc_instructions: TableLike,
+    py_bc_instructions: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
 ) -> TableLike:
@@ -136,6 +146,23 @@ def build_def_use_events_canonical(
     return build_def_use_events_result(py_bc_instructions, ctx=exec_ctx).good
 
 
+def build_def_use_events_streamable(
+    py_bc_instructions: PlanSource,
+    *,
+    ctx: ExecutionContext | None = None,
+) -> TableLike | RecordBatchReaderLike:
+    """Build def/use events with a streamable output.
+
+    Returns
+    -------
+    TableLike | RecordBatchReaderLike
+        Reader when streamable, otherwise a materialized table.
+    """
+    exec_ctx = ensure_execution_context(ctx)
+    plan = def_use_events_plan(py_bc_instructions, ctx=exec_ctx)
+    return run_normalize_streamable_contract(plan, contract=DEF_USE_CONTRACT, ctx=exec_ctx)
+
+
 def _def_use_subset_plan(
     plan: Plan,
     *,
@@ -156,7 +183,7 @@ def _def_use_subset_plan(
 
 
 def reaching_defs_plan(
-    def_use_events: TableLike | Plan,
+    def_use_events: PlanSource,
     *,
     ctx: ExecutionContext,
 ) -> Plan:
@@ -167,7 +194,7 @@ def reaching_defs_plan(
     Plan
         Plan producing reaching-def edges.
     """
-    plan = _to_plan(def_use_events)
+    plan = _to_plan(def_use_events, ctx=ctx, columns=["code_unit_id", "event_id", "kind", "symbol"])
     available = set(plan.schema(ctx=ctx).names)
     required = {"kind", "code_unit_id", "symbol", "event_id"}
     if not required.issubset(available):
@@ -203,11 +230,11 @@ def reaching_defs_plan(
 
     if not isinstance(joined, Plan):
         joined = Plan.table_source(joined)
-    return apply_query_spec(joined, spec=REACHES_QUERY, ctx=ctx)
+    return REACHES_QUERY.apply_to_plan(joined, ctx=ctx)
 
 
 def run_reaching_defs_result(
-    def_use_events: TableLike,
+    def_use_events: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
 ) -> FinalizeResult:
@@ -240,7 +267,7 @@ def run_reaching_defs_result(
 
 
 def run_reaching_defs(
-    def_use_events: TableLike,
+    def_use_events: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
 ) -> TableLike:
@@ -265,7 +292,7 @@ def run_reaching_defs(
 
 
 def run_reaching_defs_canonical(
-    def_use_events: TableLike,
+    def_use_events: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
 ) -> TableLike:
@@ -280,13 +307,32 @@ def run_reaching_defs_canonical(
     return run_reaching_defs_result(def_use_events, ctx=exec_ctx).good
 
 
+def run_reaching_defs_streamable(
+    def_use_events: PlanSource,
+    *,
+    ctx: ExecutionContext | None = None,
+) -> TableLike | RecordBatchReaderLike:
+    """Compute reaching-def edges with a streamable output.
+
+    Returns
+    -------
+    TableLike | RecordBatchReaderLike
+        Reader when streamable, otherwise a materialized table.
+    """
+    exec_ctx = ensure_execution_context(ctx)
+    plan = reaching_defs_plan(def_use_events, ctx=exec_ctx)
+    return run_normalize_streamable_contract(plan, contract=REACHES_CONTRACT, ctx=exec_ctx)
+
+
 __all__ = [
     "build_def_use_events",
     "build_def_use_events_canonical",
     "build_def_use_events_result",
+    "build_def_use_events_streamable",
     "def_use_events_plan",
     "reaching_defs_plan",
     "run_reaching_defs",
     "run_reaching_defs_canonical",
     "run_reaching_defs_result",
+    "run_reaching_defs_streamable",
 ]

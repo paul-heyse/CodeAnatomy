@@ -6,7 +6,7 @@ import dis
 import types as pytypes
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, cast, overload
+from typing import Literal, Required, TypedDict, Unpack, cast, overload
 
 import pyarrow as pa
 
@@ -14,7 +14,7 @@ from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfil
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
-from arrowdsl.schema.schema import empty_table
+from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.file_context import FileContext
 from extract.hash_specs import (
@@ -29,14 +29,20 @@ from extract.hash_specs import (
     BC_SRC_BLOCK_ID_SPEC,
 )
 from extract.plan_exprs import MaskedHashExprSpec
-from extract.spec_helpers import DatasetRegistration, ordering_metadata_spec, register_dataset
+from extract.spec_helpers import (
+    DatasetRegistration,
+    infer_ordering_keys,
+    merge_metadata_specs,
+    options_metadata_spec,
+    ordering_metadata_spec,
+    register_dataset,
+)
 from extract.tables import (
     align_plan,
-    append_projection,
-    apply_query_spec,
     finalize_plan_bundle,
     materialize_plan,
     plan_from_rows,
+    project_columns,
 )
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
 
@@ -278,12 +284,57 @@ _ERRORS_FIELDS = [
     ArrowFieldSpec(name="message", dtype=pa.string()),
 ]
 
-_BC_METADATA = ordering_metadata_spec(
+_BC_METADATA_EXTRA = {
+    b"extractor_name": b"bytecode",
+    b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
+}
+
+_CODE_UNITS_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_CODE_UNITS_FIELDS)
+)
+_INSTR_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_INSTR_FIELDS)
+)
+_EXC_BASE_COLUMNS = tuple(field.name for field in (*file_identity_bundle().fields, *_EXC_FIELDS))
+_BLOCKS_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_BLOCKS_FIELDS)
+)
+_CFG_EDGES_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_CFG_EDGES_FIELDS)
+)
+_ERRORS_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_ERRORS_FIELDS)
+)
+
+_CODE_UNITS_METADATA = ordering_metadata_spec(
     OrderingLevel.IMPLICIT,
-    extra={
-        b"extractor_name": b"bytecode",
-        b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
-    },
+    keys=infer_ordering_keys(_CODE_UNITS_BASE_COLUMNS),
+    extra=_BC_METADATA_EXTRA,
+)
+_INSTR_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_INSTR_BASE_COLUMNS),
+    extra=_BC_METADATA_EXTRA,
+)
+_EXC_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_EXC_BASE_COLUMNS),
+    extra=_BC_METADATA_EXTRA,
+)
+_BLOCKS_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_BLOCKS_BASE_COLUMNS),
+    extra=_BC_METADATA_EXTRA,
+)
+_CFG_EDGES_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_CFG_EDGES_BASE_COLUMNS),
+    extra=_BC_METADATA_EXTRA,
+)
+_ERRORS_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_ERRORS_BASE_COLUMNS),
+    extra=_BC_METADATA_EXTRA,
 )
 
 CODE_UNITS_SPEC = register_dataset(
@@ -316,7 +367,7 @@ CODE_UNITS_SPEC = register_dataset(
                 },
             )
         ),
-        metadata_spec=_BC_METADATA,
+        metadata_spec=_CODE_UNITS_METADATA,
     ),
 )
 
@@ -345,7 +396,7 @@ INSTR_SPEC = register_dataset(
                 },
             )
         ),
-        metadata_spec=_BC_METADATA,
+        metadata_spec=_INSTR_METADATA,
     ),
 )
 
@@ -380,7 +431,7 @@ EXC_SPEC = register_dataset(
                 },
             )
         ),
-        metadata_spec=_BC_METADATA,
+        metadata_spec=_EXC_METADATA,
     ),
 )
 
@@ -409,7 +460,7 @@ BLOCKS_SPEC = register_dataset(
                 },
             )
         ),
-        metadata_spec=_BC_METADATA,
+        metadata_spec=_BLOCKS_METADATA,
     ),
 )
 
@@ -464,7 +515,7 @@ CFG_EDGES_SPEC = register_dataset(
                 },
             )
         ),
-        metadata_spec=_BC_METADATA,
+        metadata_spec=_CFG_EDGES_METADATA,
     ),
 )
 
@@ -476,10 +527,12 @@ ERRORS_SPEC = register_dataset(
     registration=DatasetRegistration(
         query_spec=QuerySpec(
             projection=ProjectionSpec(
-                base=tuple(field.name for field in (*file_identity_bundle().fields, *_ERRORS_FIELDS))
+                base=tuple(
+                    field.name for field in (*file_identity_bundle().fields, *_ERRORS_FIELDS)
+                )
             )
         ),
-        metadata_spec=_BC_METADATA,
+        metadata_spec=_ERRORS_METADATA,
     ),
 )
 
@@ -489,6 +542,21 @@ EXC_SCHEMA = EXC_SPEC.schema()
 BLOCKS_SCHEMA = BLOCKS_SPEC.schema()
 CFG_EDGES_SCHEMA = CFG_EDGES_SPEC.schema()
 ERRORS_SCHEMA = ERRORS_SPEC.schema()
+
+
+def _bytecode_metadata_specs(
+    options: BytecodeExtractOptions,
+) -> dict[str, SchemaMetadataSpec]:
+    run_meta = options_metadata_spec(options=options)
+    return {
+        "py_bc_code_units": merge_metadata_specs(_CODE_UNITS_METADATA, run_meta),
+        "py_bc_instructions": merge_metadata_specs(_INSTR_METADATA, run_meta),
+        "py_bc_exception_table": merge_metadata_specs(_EXC_METADATA, run_meta),
+        "py_bc_blocks": merge_metadata_specs(_BLOCKS_METADATA, run_meta),
+        "py_bc_cfg_edges": merge_metadata_specs(_CFG_EDGES_METADATA, run_meta),
+        "py_bc_errors": merge_metadata_specs(_ERRORS_METADATA, run_meta),
+    }
+
 
 CODE_UNITS_ROWS_SCHEMA = pa.schema(
     [
@@ -627,7 +695,7 @@ def _build_code_units_plan(
     if not rows:
         return Plan.table_source(empty_table(CODE_UNITS_SCHEMA))
     plan = plan_from_rows(rows, schema=CODE_UNITS_ROWS_SCHEMA, label="bc_code_units_raw")
-    plan = append_projection(
+    plan = project_columns(
         plan,
         base=CODE_UNITS_ROWS_SCHEMA.names,
         extras=[
@@ -653,7 +721,7 @@ def _build_code_units_plan(
         ],
         ctx=exec_ctx,
     )
-    plan = apply_query_spec(plan, spec=CODE_UNITS_QUERY, ctx=exec_ctx)
+    plan = CODE_UNITS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=CODE_UNITS_SCHEMA,
@@ -677,7 +745,7 @@ def _build_instructions_plan(
     if not rows:
         return Plan.table_source(empty_table(INSTR_SCHEMA))
     plan = plan_from_rows(rows, schema=INSTR_ROWS_SCHEMA, label="bc_instructions_raw")
-    plan = append_projection(
+    plan = project_columns(
         plan,
         base=INSTR_ROWS_SCHEMA.names,
         extras=[
@@ -691,7 +759,7 @@ def _build_instructions_plan(
         ],
         ctx=exec_ctx,
     )
-    plan = apply_query_spec(plan, spec=INSTR_QUERY, ctx=exec_ctx)
+    plan = INSTR_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=INSTR_SCHEMA,
@@ -715,7 +783,7 @@ def _build_exceptions_plan(
     if not rows:
         return Plan.table_source(empty_table(EXC_SCHEMA))
     plan = plan_from_rows(rows, schema=EXC_ROWS_SCHEMA, label="bc_exceptions_raw")
-    plan = append_projection(
+    plan = project_columns(
         plan,
         base=EXC_ROWS_SCHEMA.names,
         extras=[
@@ -729,7 +797,7 @@ def _build_exceptions_plan(
         ],
         ctx=exec_ctx,
     )
-    plan = apply_query_spec(plan, spec=EXC_QUERY, ctx=exec_ctx)
+    plan = EXC_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=EXC_SCHEMA,
@@ -753,7 +821,7 @@ def _build_blocks_plan(
     if not rows:
         return Plan.table_source(empty_table(BLOCKS_SCHEMA))
     plan = plan_from_rows(rows, schema=BLOCKS_ROWS_SCHEMA, label="bc_blocks_raw")
-    plan = append_projection(
+    plan = project_columns(
         plan,
         base=BLOCKS_ROWS_SCHEMA.names,
         extras=[
@@ -767,7 +835,7 @@ def _build_blocks_plan(
         ],
         ctx=exec_ctx,
     )
-    plan = apply_query_spec(plan, spec=BLOCKS_QUERY, ctx=exec_ctx)
+    plan = BLOCKS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=BLOCKS_SCHEMA,
@@ -791,7 +859,7 @@ def _build_cfg_edges_plan(
     if not rows:
         return Plan.table_source(empty_table(CFG_EDGES_SCHEMA))
     plan = plan_from_rows(rows, schema=CFG_EDGES_ROWS_SCHEMA, label="bc_cfg_edges_raw")
-    plan = append_projection(
+    plan = project_columns(
         plan,
         base=CFG_EDGES_ROWS_SCHEMA.names,
         extras=[
@@ -819,7 +887,7 @@ def _build_cfg_edges_plan(
         ],
         ctx=exec_ctx,
     )
-    plan = apply_query_spec(plan, spec=CFG_EDGES_QUERY, ctx=exec_ctx)
+    plan = CFG_EDGES_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=CFG_EDGES_SCHEMA,
@@ -1291,7 +1359,7 @@ def _build_bytecode_plans(
     blocks = _build_blocks_plan(buffers.block_rows, exec_ctx=exec_ctx)
     edges = _build_cfg_edges_plan(buffers.edge_rows, exec_ctx=exec_ctx)
     errors_plan = plan_from_rows(buffers.error_rows, schema=ERRORS_SCHEMA, label="bc_errors")
-    errors_plan = apply_query_spec(errors_plan, spec=ERRORS_QUERY, ctx=exec_ctx)
+    errors_plan = ERRORS_QUERY.apply_to_plan(errors_plan, ctx=exec_ctx)
     errors_plan = align_plan(
         errors_plan,
         schema=ERRORS_SCHEMA,
@@ -1358,13 +1426,38 @@ def extract_bytecode(
         file_contexts=file_contexts,
         ctx=exec_ctx,
     )
+    metadata_specs = _bytecode_metadata_specs(options)
     return BytecodeExtractResult(
-        py_bc_code_units=materialize_plan(plans["py_bc_code_units"], ctx=exec_ctx),
-        py_bc_instructions=materialize_plan(plans["py_bc_instructions"], ctx=exec_ctx),
-        py_bc_exception_table=materialize_plan(plans["py_bc_exception_table"], ctx=exec_ctx),
-        py_bc_blocks=materialize_plan(plans["py_bc_blocks"], ctx=exec_ctx),
-        py_bc_cfg_edges=materialize_plan(plans["py_bc_cfg_edges"], ctx=exec_ctx),
-        py_bc_errors=materialize_plan(plans["py_bc_errors"], ctx=exec_ctx),
+        py_bc_code_units=materialize_plan(
+            plans["py_bc_code_units"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["py_bc_code_units"],
+        ),
+        py_bc_instructions=materialize_plan(
+            plans["py_bc_instructions"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["py_bc_instructions"],
+        ),
+        py_bc_exception_table=materialize_plan(
+            plans["py_bc_exception_table"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["py_bc_exception_table"],
+        ),
+        py_bc_blocks=materialize_plan(
+            plans["py_bc_blocks"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["py_bc_blocks"],
+        ),
+        py_bc_cfg_edges=materialize_plan(
+            plans["py_bc_cfg_edges"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["py_bc_cfg_edges"],
+        ),
+        py_bc_errors=materialize_plan(
+            plans["py_bc_errors"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["py_bc_errors"],
+        ),
     )
 
 
@@ -1413,67 +1506,73 @@ def extract_bytecode_plans(
     return _build_bytecode_plans(buffers, exec_ctx=exec_ctx)
 
 
+class _BytecodeTableKwargs(TypedDict, total=False):
+    repo_files: Required[TableLike]
+    options: BytecodeExtractOptions | None
+    file_contexts: Iterable[FileContext] | None
+    ctx: ExecutionContext | None
+    prefer_reader: bool
+
+
+class _BytecodeTableKwargsTable(TypedDict, total=False):
+    repo_files: Required[TableLike]
+    options: BytecodeExtractOptions | None
+    file_contexts: Iterable[FileContext] | None
+    ctx: ExecutionContext | None
+    prefer_reader: Literal[False]
+
+
+class _BytecodeTableKwargsReader(TypedDict, total=False):
+    repo_files: Required[TableLike]
+    options: BytecodeExtractOptions | None
+    file_contexts: Iterable[FileContext] | None
+    ctx: ExecutionContext | None
+    prefer_reader: Required[Literal[True]]
+
+
 @overload
 def extract_bytecode_table(
-    *,
-    repo_root: str | None,
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-    ctx: ExecutionContext | None = None,
-    prefer_reader: Literal[False] = False,
+    **kwargs: Unpack[_BytecodeTableKwargsTable],
 ) -> TableLike: ...
 
 
 @overload
 def extract_bytecode_table(
-    *,
-    repo_root: str | None,
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-    ctx: ExecutionContext | None = None,
-    prefer_reader: Literal[True],
+    **kwargs: Unpack[_BytecodeTableKwargsReader],
 ) -> TableLike | RecordBatchReaderLike: ...
 
 
 def extract_bytecode_table(
-    *,
-    repo_root: str | None,
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-    ctx: ExecutionContext | None = None,
-    prefer_reader: bool = False,
+    **kwargs: Unpack[_BytecodeTableKwargs],
 ) -> TableLike | RecordBatchReaderLike:
     """Extract bytecode instruction facts as a single table.
 
     Parameters
     ----------
-    repo_root:
-        Optional repository root (unused).
-    repo_files:
-        Repo files table.
-    file_contexts:
-        Optional pre-built file contexts for extraction.
-    ctx:
-        Execution context for plan execution.
-
-    prefer_reader:
-        When True, return a streaming reader when possible.
+    kwargs:
+        Keyword-only arguments for extraction (repo_files, options, file_contexts, ctx,
+        prefer_reader).
 
     Returns
     -------
     TableLike | RecordBatchReaderLike
         Bytecode instruction output.
     """
-    _ = repo_root
-    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    repo_files = kwargs["repo_files"]
+    options = kwargs.get("options") or BytecodeExtractOptions()
+    file_contexts = kwargs.get("file_contexts")
+    exec_ctx = kwargs.get("ctx") or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    prefer_reader = kwargs.get("prefer_reader", False)
     plans = extract_bytecode_plans(
         repo_files,
-        options=BytecodeExtractOptions(),
+        options=options,
         file_contexts=file_contexts,
         ctx=exec_ctx,
     )
+    metadata_specs = _bytecode_metadata_specs(options)
     return finalize_plan_bundle(
         {"py_bc_instructions": plans["py_bc_instructions"]},
         ctx=exec_ctx,
         prefer_reader=prefer_reader,
+        metadata_specs={"py_bc_instructions": metadata_specs["py_bc_instructions"]},
     )["py_bc_instructions"]

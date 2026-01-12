@@ -4,13 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
-from arrowdsl.core.context import DeterminismTier, ExecutionContext, RuntimeProfile
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.finalize.finalize import FinalizeOptions, FinalizeResult, finalize
+from arrowdsl.core.context import DeterminismTier, ExecutionContext, OrderingLevel, RuntimeProfile
+from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
+from arrowdsl.finalize.finalize import Contract, FinalizeOptions, FinalizeResult, finalize
 from arrowdsl.plan.plan import Plan, PlanSpec
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from normalize.encoding import encoding_policy_from_schema
-from normalize.plan_helpers import finalize_plan
+from normalize.plan_helpers import (
+    PlanOutput,
+    PlanSource,
+    finalize_plan,
+    finalize_plan_result,
+    plan_source,
+)
+from schema_spec.specs import PROVENANCE_COLS
 from schema_spec.system import ContractSpec
 
 PostFn = Callable[[TableLike, ExecutionContext], TableLike]
@@ -48,6 +55,27 @@ def ensure_canonical(ctx: ExecutionContext) -> ExecutionContext:
     )
 
 
+def _should_skip_canonical_sort(
+    plan: Plan,
+    *,
+    contract: Contract,
+    ctx: ExecutionContext,
+) -> bool:
+    if ctx.determinism != DeterminismTier.CANONICAL:
+        return False
+    if not contract.canonical_sort:
+        return False
+    if plan.ordering.level != OrderingLevel.EXPLICIT:
+        return False
+    expected = tuple((key.column, key.order) for key in contract.canonical_sort)
+    if ctx.provenance:
+        schema = plan.schema(ctx=ctx)
+        for col in PROVENANCE_COLS:
+            if col in schema.names:
+                expected = (*expected, (col, "ascending"))
+    return plan.ordering.keys == expected
+
+
 def run_normalize(
     *,
     plan: Plan,
@@ -67,7 +95,10 @@ def run_normalize(
     for fn in post:
         table = fn(table, ctx)
     contract_obj = contract.to_contract()
-    options = FinalizeOptions(encoding_policy=encoding_policy_from_schema(contract_obj.schema))
+    options = FinalizeOptions(
+        encoding_policy=encoding_policy_from_schema(contract_obj.schema),
+        skip_canonical_sort=_should_skip_canonical_sort(plan, contract=contract_obj, ctx=ctx),
+    )
     result = finalize(table, contract=contract_obj, ctx=ctx, options=options)
     if metadata_spec is None:
         return result
@@ -87,7 +118,7 @@ def run_normalize(
     )
 
 
-def run_normalize_reader(plan: Plan, *, ctx: ExecutionContext) -> RecordBatchReaderLike:
+def run_normalize_reader(plan: PlanSource, *, ctx: ExecutionContext) -> RecordBatchReaderLike:
     """Return a streaming reader for a normalize plan.
 
     Returns
@@ -95,25 +126,78 @@ def run_normalize_reader(plan: Plan, *, ctx: ExecutionContext) -> RecordBatchRea
     RecordBatchReaderLike
         Streaming reader for the plan.
     """
-    return PlanSpec.from_plan(plan).to_reader(ctx=ctx)
+    resolved = plan_source(plan, ctx=ctx)
+    return PlanSpec.from_plan(resolved).to_reader(ctx=ctx)
 
 
 def run_normalize_streamable(
-    plan: Plan, *, ctx: ExecutionContext
+    plan: PlanSource,
+    *,
+    ctx: ExecutionContext,
+    schema: SchemaLike | None = None,
 ) -> RecordBatchReaderLike | TableLike:
     """Return a reader when no pipeline breakers exist, otherwise a table.
 
     Notes
     -----
     This path does not apply finalize contracts (alignment, dedupe, or canonical sort).
-    Use ``run_normalize`` when contract enforcement is required.
+    Use ``run_normalize`` when contract enforcement is required. When ``schema`` is
+    provided, the plan is projected to the schema before materialization.
 
     Returns
     -------
     RecordBatchReaderLike | TableLike
         Reader when streamable, otherwise a materialized table.
     """
-    return finalize_plan(plan, ctx=ctx, prefer_reader=True)
+    resolved = plan_source(plan, ctx=ctx)
+    return finalize_plan(
+        resolved,
+        ctx=ctx,
+        prefer_reader=True,
+        schema=schema,
+        keep_extra_columns=ctx.provenance,
+    )
+
+
+def run_normalize_streamable_contract(
+    plan: PlanSource,
+    *,
+    contract: ContractSpec,
+    ctx: ExecutionContext | None = None,
+) -> RecordBatchReaderLike | TableLike:
+    """Return a streamable output aligned to the contract schema.
+
+    Returns
+    -------
+    RecordBatchReaderLike | TableLike
+        Reader when streamable, otherwise a materialized table.
+    """
+    exec_ctx = ensure_execution_context(ctx)
+    schema = contract.to_contract().schema
+    return run_normalize_streamable(plan, ctx=exec_ctx, schema=schema)
+
+
+def run_normalize_streamable_result(
+    plan: PlanSource,
+    *,
+    ctx: ExecutionContext,
+    schema: SchemaLike | None = None,
+) -> PlanOutput:
+    """Return a reader/table plus materialization metadata.
+
+    Returns
+    -------
+    PlanOutput
+        Plan output with materialization kind metadata.
+    """
+    resolved = plan_source(plan, ctx=ctx)
+    return finalize_plan_result(
+        resolved,
+        ctx=ctx,
+        prefer_reader=True,
+        schema=schema,
+        keep_extra_columns=ctx.provenance,
+    )
 
 
 __all__ = [
@@ -123,4 +207,6 @@ __all__ = [
     "run_normalize",
     "run_normalize_reader",
     "run_normalize_streamable",
+    "run_normalize_streamable_contract",
+    "run_normalize_streamable_result",
 ]

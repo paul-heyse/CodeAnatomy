@@ -7,8 +7,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
-from schema_spec.specs import PROVENANCE_COLS, NestedFieldSpec
-from schema_spec.system import PanderaValidationOptions, validate_arrow_table
 
 from arrowdsl.compute.kernels import ChunkPolicy, apply_dedupe, canonical_sort_if_canonical
 from arrowdsl.core.context import ExecutionContext
@@ -18,8 +16,8 @@ from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.arrays import (
     ColumnDefaultsSpec,
     ConstExpr,
-    build_list_array,
-    build_struct_array,
+    build_list,
+    build_struct,
     const_array,
 )
 from arrowdsl.schema.schema import (
@@ -28,6 +26,8 @@ from arrowdsl.schema.schema import (
     SchemaMetadataSpec,
     SchemaTransform,
 )
+from schema_spec.specs import PROVENANCE_COLS, NestedFieldSpec
+from schema_spec.system import PanderaValidationOptions, validate_arrow_table
 
 if TYPE_CHECKING:
     from schema_spec.specs import TableSchemaSpec
@@ -151,7 +151,7 @@ ERROR_DETAIL_STRUCT = pa.struct([(name, dtype) for name, dtype in ERROR_DETAIL_F
 
 
 def _build_error_detail_list(errors: TableLike) -> ArrayLike:
-    detail = build_struct_array(
+    detail = build_struct(
         {
             "code": errors["error_code"],
             "message": errors["error_message"],
@@ -163,7 +163,7 @@ def _build_error_detail_list(errors: TableLike) -> ArrayLike:
         }
     )
     offsets = pa.array(range(errors.num_rows + 1), type=pa.int32())
-    return build_list_array(offsets, detail)
+    return build_list(offsets, detail)
 
 
 ERROR_DETAIL_SPEC = NestedFieldSpec(
@@ -264,6 +264,7 @@ class FinalizeOptions:
     transform: SchemaTransform | None = None
     chunk_policy: ChunkPolicy | None = None
     encoding_policy: EncodingPolicy | None = None
+    skip_canonical_sort: bool = False
 
 
 def _required_non_null_results(
@@ -575,7 +576,8 @@ def finalize(
     if contract.dedupe is not None:
         good = apply_dedupe(good, spec=contract.dedupe, _ctx=ctx)
 
-    good = canonical_sort_if_canonical(good, sort_keys=contract.canonical_sort, ctx=ctx)
+    if not options.skip_canonical_sort:
+        good = canonical_sort_if_canonical(good, sort_keys=contract.canonical_sort, ctx=ctx)
 
     if ctx.provenance and provenance_cols:
         keep = list(schema.names) + [col for col in provenance_cols if col in good.column_names]
@@ -601,6 +603,7 @@ class FinalizeContext:
     transform: SchemaTransform | None = None
     chunk_policy: ChunkPolicy = field(default_factory=ChunkPolicy)
     encoding_policy: EncodingPolicy | None = None
+    skip_canonical_sort: bool = False
 
     def run(self, table: TableLike, ctx: ExecutionContext) -> FinalizeResult:
         """Finalize a table using the stored contract and context.
@@ -615,6 +618,7 @@ class FinalizeContext:
             transform=self.transform,
             chunk_policy=self.chunk_policy,
             encoding_policy=self.encoding_policy,
+            skip_canonical_sort=self.skip_canonical_sort,
         )
         return finalize(
             table,

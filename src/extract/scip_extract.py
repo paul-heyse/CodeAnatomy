@@ -26,8 +26,8 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
-from arrowdsl.schema.arrays import build_struct_array, set_or_append_column
-from arrowdsl.schema.schema import empty_table
+from arrowdsl.schema.arrays import build_struct, set_or_append_column
+from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.nested_lists import (
     LargeListAccumulator,
     StructLargeListViewAccumulator,
@@ -35,13 +35,21 @@ from extract.nested_lists import (
 from extract.postprocess import encoding_columns_from_metadata, encoding_projection
 from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
-from extract.spec_helpers import DatasetRegistration, ordering_metadata_spec, register_dataset
+from extract.spec_helpers import (
+    DatasetRegistration,
+    infer_ordering_keys,
+    merge_metadata_specs,
+    options_metadata_spec,
+    ordering_metadata_spec,
+    register_dataset,
+)
 from extract.tables import (
     align_plan,
-    apply_query_spec,
     finalize_plan_bundle,
+    flatten_struct_field,
     materialize_plan,
     plan_from_rows,
+    unify_tables,
 )
 from schema_spec.specs import ArrowFieldSpec, NestedFieldSpec, scip_range_bundle
 
@@ -114,15 +122,14 @@ SCIP_SIGNATURE_DOCUMENTATION_TYPE = pa.struct(
     ]
 )
 
-ENCODING_META = {"encoding": "dictionary"}
-
-_SCIP_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    extra={
-        b"extractor_name": b"scip",
-        b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
-    },
+_SIG_DOC_OCCURRENCE_FIELDS = flatten_struct_field(
+    pa.field("occurrence", SCIP_SIGNATURE_OCCURRENCE_TYPE)
 )
+SIG_DOC_OCCURRENCE_KEYS = tuple(
+    field.name.split(".", 1)[1] for field in _SIG_DOC_OCCURRENCE_FIELDS
+)
+
+ENCODING_META = {"encoding": "dictionary"}
 
 _SCIP_METADATA_FIELDS = [
     ArrowFieldSpec(name="tool_name", dtype=pa.string(), metadata=ENCODING_META),
@@ -200,6 +207,57 @@ _SCIP_DIAGNOSTIC_FIELDS = [
     *scip_range_bundle().fields,
 ]
 
+_SCIP_METADATA_COLUMNS = tuple(field.name for field in _SCIP_METADATA_FIELDS)
+_SCIP_DOCUMENT_COLUMNS = tuple(field.name for field in _SCIP_DOCUMENT_FIELDS)
+_SCIP_OCCURRENCE_COLUMNS = tuple(field.name for field in _SCIP_OCCURRENCE_FIELDS)
+_SCIP_SYMBOL_INFO_COLUMNS = tuple(field.name for field in _SCIP_SYMBOL_INFO_FIELDS)
+_SCIP_SYMBOL_REL_COLUMNS = tuple(field.name for field in _SCIP_SYMBOL_REL_FIELDS)
+_SCIP_EXTERNAL_SYMBOL_INFO_COLUMNS = tuple(
+    field.name for field in _SCIP_EXTERNAL_SYMBOL_INFO_FIELDS
+)
+_SCIP_DIAGNOSTIC_COLUMNS = tuple(field.name for field in _SCIP_DIAGNOSTIC_FIELDS)
+
+_SCIP_METADATA_EXTRA = {
+    b"extractor_name": b"scip",
+    b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
+}
+
+_SCIP_METADATA_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_SCIP_METADATA_COLUMNS),
+    extra=_SCIP_METADATA_EXTRA,
+)
+_SCIP_DOCUMENTS_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_SCIP_DOCUMENT_COLUMNS),
+    extra=_SCIP_METADATA_EXTRA,
+)
+_SCIP_OCCURRENCES_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_SCIP_OCCURRENCE_COLUMNS),
+    extra=_SCIP_METADATA_EXTRA,
+)
+_SCIP_SYMBOL_INFO_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_SCIP_SYMBOL_INFO_COLUMNS),
+    extra=_SCIP_METADATA_EXTRA,
+)
+_SCIP_SYMBOL_REL_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_SCIP_SYMBOL_REL_COLUMNS),
+    extra=_SCIP_METADATA_EXTRA,
+)
+_SCIP_EXTERNAL_SYMBOL_INFO_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_SCIP_EXTERNAL_SYMBOL_INFO_COLUMNS),
+    extra=_SCIP_METADATA_EXTRA,
+)
+_SCIP_DIAGNOSTICS_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_SCIP_DIAGNOSTIC_COLUMNS),
+    extra=_SCIP_METADATA_EXTRA,
+)
+
 SCIP_METADATA_SPEC = register_dataset(
     name="scip_metadata_v1",
     version=SCHEMA_VERSION,
@@ -207,7 +265,7 @@ SCIP_METADATA_SPEC = register_dataset(
     fields=_SCIP_METADATA_FIELDS,
     registration=DatasetRegistration(
         query_spec=QuerySpec.simple(*[field.name for field in _SCIP_METADATA_FIELDS]),
-        metadata_spec=_SCIP_METADATA,
+        metadata_spec=_SCIP_METADATA_METADATA,
     ),
 )
 
@@ -218,7 +276,7 @@ SCIP_DOCUMENTS_SPEC = register_dataset(
     fields=_SCIP_DOCUMENT_FIELDS,
     registration=DatasetRegistration(
         query_spec=QuerySpec.simple(*[field.name for field in _SCIP_DOCUMENT_FIELDS]),
-        metadata_spec=_SCIP_METADATA,
+        metadata_spec=_SCIP_DOCUMENTS_METADATA,
     ),
 )
 
@@ -229,7 +287,7 @@ SCIP_OCCURRENCES_SPEC = register_dataset(
     fields=_SCIP_OCCURRENCE_FIELDS,
     registration=DatasetRegistration(
         query_spec=QuerySpec.simple(*[field.name for field in _SCIP_OCCURRENCE_FIELDS]),
-        metadata_spec=_SCIP_METADATA,
+        metadata_spec=_SCIP_OCCURRENCES_METADATA,
     ),
 )
 
@@ -240,7 +298,7 @@ SCIP_SYMBOL_INFO_SPEC = register_dataset(
     fields=_SCIP_SYMBOL_INFO_FIELDS,
     registration=DatasetRegistration(
         query_spec=QuerySpec.simple(*[field.name for field in _SCIP_SYMBOL_INFO_FIELDS]),
-        metadata_spec=_SCIP_METADATA,
+        metadata_spec=_SCIP_SYMBOL_INFO_METADATA,
     ),
 )
 
@@ -251,7 +309,7 @@ SCIP_SYMBOL_RELATIONSHIPS_SPEC = register_dataset(
     fields=_SCIP_SYMBOL_REL_FIELDS,
     registration=DatasetRegistration(
         query_spec=QuerySpec.simple(*[field.name for field in _SCIP_SYMBOL_REL_FIELDS]),
-        metadata_spec=_SCIP_METADATA,
+        metadata_spec=_SCIP_SYMBOL_REL_METADATA,
     ),
 )
 
@@ -262,7 +320,7 @@ SCIP_EXTERNAL_SYMBOL_INFO_SPEC = register_dataset(
     fields=_SCIP_EXTERNAL_SYMBOL_INFO_FIELDS,
     registration=DatasetRegistration(
         query_spec=QuerySpec.simple(*[field.name for field in _SCIP_EXTERNAL_SYMBOL_INFO_FIELDS]),
-        metadata_spec=_SCIP_METADATA,
+        metadata_spec=_SCIP_EXTERNAL_SYMBOL_INFO_METADATA,
     ),
 )
 
@@ -273,7 +331,7 @@ SCIP_DIAGNOSTICS_SPEC = register_dataset(
     fields=_SCIP_DIAGNOSTIC_FIELDS,
     registration=DatasetRegistration(
         query_spec=QuerySpec.simple(*[field.name for field in _SCIP_DIAGNOSTIC_FIELDS]),
-        metadata_spec=_SCIP_METADATA,
+        metadata_spec=_SCIP_DIAGNOSTICS_METADATA,
     ),
 )
 
@@ -284,6 +342,24 @@ SCIP_SYMBOL_INFO_SCHEMA = SCIP_SYMBOL_INFO_SPEC.schema()
 SCIP_SYMBOL_RELATIONSHIPS_SCHEMA = SCIP_SYMBOL_RELATIONSHIPS_SPEC.schema()
 SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA = SCIP_EXTERNAL_SYMBOL_INFO_SPEC.schema()
 SCIP_DIAGNOSTICS_SCHEMA = SCIP_DIAGNOSTICS_SPEC.schema()
+
+
+def _scip_metadata_specs(
+    parse_opts: SCIPParseOptions,
+) -> dict[str, SchemaMetadataSpec]:
+    run_meta = options_metadata_spec(options=parse_opts)
+    return {
+        "scip_metadata": merge_metadata_specs(_SCIP_METADATA_METADATA, run_meta),
+        "scip_documents": merge_metadata_specs(_SCIP_DOCUMENTS_METADATA, run_meta),
+        "scip_occurrences": merge_metadata_specs(_SCIP_OCCURRENCES_METADATA, run_meta),
+        "scip_symbol_information": merge_metadata_specs(_SCIP_SYMBOL_INFO_METADATA, run_meta),
+        "scip_symbol_relationships": merge_metadata_specs(_SCIP_SYMBOL_REL_METADATA, run_meta),
+        "scip_external_symbol_information": merge_metadata_specs(
+            _SCIP_EXTERNAL_SYMBOL_INFO_METADATA, run_meta
+        ),
+        "scip_diagnostics": merge_metadata_specs(_SCIP_DIAGNOSTICS_METADATA, run_meta),
+    }
+
 
 SCIP_METADATA_QUERY = SCIP_METADATA_SPEC.query()
 SCIP_DOCUMENTS_QUERY = SCIP_DOCUMENTS_SPEC.query()
@@ -938,11 +1014,17 @@ class _SymbolInfoAccumulator:
                 if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
                     range_values.append(int(value))
             rows.append(
-                {
-                    "symbol": getattr(occ, "symbol", None),
-                    "symbol_roles": int(getattr(occ, "symbol_roles", 0) or 0),
-                    "range": range_values,
-                }
+                dict(
+                    zip(
+                        SIG_DOC_OCCURRENCE_KEYS,
+                        (
+                            getattr(occ, "symbol", None),
+                            int(getattr(occ, "symbol_roles", 0) or 0),
+                            range_values,
+                        ),
+                        strict=True,
+                    )
+                )
             )
         self.sig_doc_occurrences.append_rows(rows)
 
@@ -978,7 +1060,7 @@ def _build_sig_doc_occurrences(acc: _SymbolInfoAccumulator) -> ArrayLike:
 
 
 def _build_signature_doc(acc: _SymbolInfoAccumulator) -> ArrayLike:
-    return build_struct_array(
+    return build_struct(
         {
             "text": pa.array(acc.sig_doc_texts, type=pa.string()),
             "language": pa.array(acc.sig_doc_languages, type=pa.string()),
@@ -1045,11 +1127,15 @@ class _RelationshipAccumulator:
 
 
 def _document_tables(index: object) -> tuple[TableLike, TableLike, TableLike]:
-    docs = _DocAccumulator()
-    occs = _OccurrenceAccumulator()
-    diags = _DiagnosticAccumulator()
+    doc_tables: list[TableLike] = []
+    occ_tables: list[TableLike] = []
+    diag_tables: list[TableLike] = []
 
     for doc in getattr(index, "documents", []):
+        docs = _DocAccumulator()
+        occs = _OccurrenceAccumulator()
+        diags = _DiagnosticAccumulator()
+
         rel_path = getattr(doc, "relative_path", None)
         docs.append(
             rel_path,
@@ -1062,7 +1148,21 @@ def _document_tables(index: object) -> tuple[TableLike, TableLike, TableLike]:
             for diag in getattr(occ, "diagnostics", []):
                 diags.append_from_diag(diag, rel_path, default_range)
 
-    return docs.to_table(), occs.to_table(), diags.to_table()
+        doc_tables.append(docs.to_table())
+        occ_tables.append(occs.to_table())
+        diag_tables.append(diags.to_table())
+
+    if not doc_tables:
+        return (
+            empty_table(SCIP_DOCUMENTS_SCHEMA),
+            empty_table(SCIP_OCCURRENCES_SCHEMA),
+            empty_table(SCIP_DIAGNOSTICS_SCHEMA),
+        )
+    return (
+        unify_tables(doc_tables),
+        unify_tables(occ_tables),
+        unify_tables(diag_tables),
+    )
 
 
 def _symbol_tables(index: object) -> tuple[TableLike, TableLike, TableLike]:
@@ -1091,7 +1191,7 @@ def _finalize_plan(
     exec_ctx: ExecutionContext,
     encode_columns: Sequence[str] = (),
 ) -> Plan:
-    plan = apply_query_spec(plan, spec=query, ctx=exec_ctx)
+    plan = query.apply_to_plan(plan, ctx=exec_ctx)
     plan = align_plan(
         plan,
         schema=schema,
@@ -1132,23 +1232,43 @@ def _extract_tables_from_index(
         parse_opts=parse_opts,
         exec_ctx=exec_ctx,
     )
+    metadata_specs = _scip_metadata_specs(parse_opts)
     return SCIPExtractResult(
-        scip_metadata=materialize_plan(plans["scip_metadata"], ctx=exec_ctx),
-        scip_documents=materialize_plan(plans["scip_documents"], ctx=exec_ctx),
-        scip_occurrences=materialize_plan(plans["scip_occurrences"], ctx=exec_ctx),
+        scip_metadata=materialize_plan(
+            plans["scip_metadata"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["scip_metadata"],
+        ),
+        scip_documents=materialize_plan(
+            plans["scip_documents"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["scip_documents"],
+        ),
+        scip_occurrences=materialize_plan(
+            plans["scip_occurrences"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["scip_occurrences"],
+        ),
         scip_symbol_information=materialize_plan(
             plans["scip_symbol_information"],
             ctx=exec_ctx,
+            metadata_spec=metadata_specs["scip_symbol_information"],
         ),
         scip_symbol_relationships=materialize_plan(
             plans["scip_symbol_relationships"],
             ctx=exec_ctx,
+            metadata_spec=metadata_specs["scip_symbol_relationships"],
         ),
         scip_external_symbol_information=materialize_plan(
             plans["scip_external_symbol_information"],
             ctx=exec_ctx,
+            metadata_spec=metadata_specs["scip_external_symbol_information"],
         ),
-        scip_diagnostics=materialize_plan(plans["scip_diagnostics"], ctx=exec_ctx),
+        scip_diagnostics=materialize_plan(
+            plans["scip_diagnostics"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["scip_diagnostics"],
+        ),
     )
 
 
@@ -1314,6 +1434,7 @@ def extract_scip_tables(
     """
     parse_opts = parse_opts or SCIPParseOptions()
     exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    metadata_specs = _scip_metadata_specs(parse_opts)
     if scip_index_path is None:
         plans = {
             "scip_metadata": Plan.table_source(empty_table(SCIP_METADATA_SCHEMA)),
@@ -1352,4 +1473,9 @@ def extract_scip_tables(
             exec_ctx=exec_ctx,
         )
 
-    return finalize_plan_bundle(plans, ctx=exec_ctx, prefer_reader=prefer_reader)
+    return finalize_plan_bundle(
+        plans,
+        ctx=exec_ctx,
+        prefer_reader=prefer_reader,
+        metadata_specs=metadata_specs,
+    )

@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Literal, overload
+from typing import Literal, Required, TypedDict, Unpack, overload
 
 import pyarrow as pa
 
@@ -16,10 +16,16 @@ from arrowdsl.plan.query import QuerySpec
 from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.derived_views import ast_def_nodes_plan
 from extract.file_context import FileContext
-from extract.spec_helpers import DatasetRegistration, ordering_metadata_spec, register_dataset
+from extract.spec_helpers import (
+    DatasetRegistration,
+    infer_ordering_keys,
+    merge_metadata_specs,
+    options_metadata_spec,
+    ordering_metadata_spec,
+    register_dataset,
+)
 from extract.tables import (
     align_plan,
-    apply_query_spec,
     finalize_plan_bundle,
     materialize_plan,
     plan_from_rows,
@@ -90,12 +96,25 @@ AST_NODES_QUERY = QuerySpec.simple(*_AST_BASE_COLUMNS)
 AST_EDGES_QUERY = QuerySpec.simple(*_AST_EDGES_BASE_COLUMNS)
 AST_ERRORS_QUERY = QuerySpec.simple(*_AST_ERRORS_BASE_COLUMNS)
 
-_AST_METADATA = ordering_metadata_spec(
+_AST_METADATA_EXTRA = {
+    b"extractor_name": b"ast",
+    b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
+}
+
+_AST_NODES_METADATA = ordering_metadata_spec(
     OrderingLevel.IMPLICIT,
-    extra={
-        b"extractor_name": b"ast",
-        b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
-    },
+    keys=infer_ordering_keys(_AST_BASE_COLUMNS),
+    extra=_AST_METADATA_EXTRA,
+)
+_AST_EDGES_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_AST_EDGES_BASE_COLUMNS),
+    extra=_AST_METADATA_EXTRA,
+)
+_AST_ERRORS_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_AST_ERRORS_BASE_COLUMNS),
+    extra=_AST_METADATA_EXTRA,
 )
 
 AST_NODES_SPEC = register_dataset(
@@ -105,7 +124,7 @@ AST_NODES_SPEC = register_dataset(
     fields=_AST_NODES_FIELDS,
     registration=DatasetRegistration(
         query_spec=AST_NODES_QUERY,
-        metadata_spec=_AST_METADATA,
+        metadata_spec=_AST_NODES_METADATA,
     ),
 )
 
@@ -116,7 +135,7 @@ AST_EDGES_SPEC = register_dataset(
     fields=_AST_EDGES_FIELDS,
     registration=DatasetRegistration(
         query_spec=AST_EDGES_QUERY,
-        metadata_spec=_AST_METADATA,
+        metadata_spec=_AST_EDGES_METADATA,
     ),
 )
 
@@ -127,7 +146,7 @@ AST_ERRORS_SPEC = register_dataset(
     fields=_AST_ERRORS_FIELDS,
     registration=DatasetRegistration(
         query_spec=AST_ERRORS_QUERY,
-        metadata_spec=_AST_METADATA,
+        metadata_spec=_AST_ERRORS_METADATA,
     ),
 )
 
@@ -357,10 +376,23 @@ def extract_ast(
         file_contexts=file_contexts,
         ctx=ctx,
     )
+    run_meta = options_metadata_spec(options=options)
     return ASTExtractResult(
-        py_ast_nodes=materialize_plan(plans["ast_nodes"], ctx=ctx),
-        py_ast_edges=materialize_plan(plans["ast_edges"], ctx=ctx),
-        py_ast_errors=materialize_plan(plans["ast_errors"], ctx=ctx),
+        py_ast_nodes=materialize_plan(
+            plans["ast_nodes"],
+            ctx=ctx,
+            metadata_spec=merge_metadata_specs(_AST_NODES_METADATA, run_meta),
+        ),
+        py_ast_edges=materialize_plan(
+            plans["ast_edges"],
+            ctx=ctx,
+            metadata_spec=merge_metadata_specs(_AST_EDGES_METADATA, run_meta),
+        ),
+        py_ast_errors=materialize_plan(
+            plans["ast_errors"],
+            ctx=ctx,
+            metadata_spec=merge_metadata_specs(_AST_ERRORS_METADATA, run_meta),
+        ),
     )
 
 
@@ -392,7 +424,7 @@ def extract_ast_plans(
         err_rows.extend(errs)
 
     nodes_plan = plan_from_rows(nodes_rows, schema=AST_NODES_SCHEMA, label="ast_nodes")
-    nodes_plan = apply_query_spec(nodes_plan, spec=AST_NODES_QUERY, ctx=ctx)
+    nodes_plan = AST_NODES_QUERY.apply_to_plan(nodes_plan, ctx=ctx)
     nodes_plan = align_plan(
         nodes_plan,
         schema=AST_NODES_SCHEMA,
@@ -401,7 +433,7 @@ def extract_ast_plans(
     )
 
     edges_plan = plan_from_rows(edges_rows, schema=AST_EDGES_SCHEMA, label="ast_edges")
-    edges_plan = apply_query_spec(edges_plan, spec=AST_EDGES_QUERY, ctx=ctx)
+    edges_plan = AST_EDGES_QUERY.apply_to_plan(edges_plan, ctx=ctx)
     edges_plan = align_plan(
         edges_plan,
         schema=AST_EDGES_SCHEMA,
@@ -410,7 +442,7 @@ def extract_ast_plans(
     )
 
     errs_plan = plan_from_rows(err_rows, schema=AST_ERRORS_SCHEMA, label="ast_errors")
-    errs_plan = apply_query_spec(errs_plan, spec=AST_ERRORS_QUERY, ctx=ctx)
+    errs_plan = AST_ERRORS_QUERY.apply_to_plan(errs_plan, ctx=ctx)
     errs_plan = align_plan(
         errs_plan,
         schema=AST_ERRORS_SCHEMA,
@@ -425,61 +457,71 @@ def extract_ast_plans(
     }
 
 
+class _AstTablesKwargs(TypedDict, total=False):
+    repo_files: Required[TableLike]
+    options: ASTExtractOptions | None
+    file_contexts: Iterable[FileContext] | None
+    ctx: ExecutionContext | None
+    prefer_reader: bool
+
+
+class _AstTablesKwargsTable(TypedDict, total=False):
+    repo_files: Required[TableLike]
+    options: ASTExtractOptions | None
+    file_contexts: Iterable[FileContext] | None
+    ctx: ExecutionContext | None
+    prefer_reader: Literal[False]
+
+
+class _AstTablesKwargsReader(TypedDict, total=False):
+    repo_files: Required[TableLike]
+    options: ASTExtractOptions | None
+    file_contexts: Iterable[FileContext] | None
+    ctx: ExecutionContext | None
+    prefer_reader: Required[Literal[True]]
+
+
 @overload
 def extract_ast_tables(
-    *,
-    repo_root: str | None,
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-    ctx: ExecutionContext | None = None,
-    prefer_reader: Literal[False] = False,
+    **kwargs: Unpack[_AstTablesKwargsTable],
 ) -> Mapping[str, TableLike]: ...
 
 
 @overload
 def extract_ast_tables(
-    *,
-    repo_root: str | None,
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-    ctx: ExecutionContext | None = None,
-    prefer_reader: Literal[True],
+    **kwargs: Unpack[_AstTablesKwargsReader],
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]: ...
 
 
 def extract_ast_tables(
-    *,
-    repo_root: str | None,
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-    ctx: ExecutionContext | None = None,
-    prefer_reader: bool = False,
+    **kwargs: Unpack[_AstTablesKwargs],
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]:
     """Extract AST tables as a name-keyed bundle.
 
     Parameters
     ----------
-    repo_root:
-        Optional repository root (unused).
-    repo_files:
-        Repo files table.
-    file_contexts:
-        Optional pre-built file contexts for extraction.
-    ctx:
-        Execution context for plan execution.
-
-    prefer_reader:
-        When True, return streaming readers when possible.
+    kwargs:
+        Keyword-only arguments for extraction (repo_files, options, file_contexts, ctx,
+        prefer_reader).
 
     Returns
     -------
     dict[str, TableLike | RecordBatchReaderLike]
         Extracted AST outputs keyed by name.
     """
-    _ = repo_root
-    ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
-    plans = extract_ast_plans(repo_files, file_contexts=file_contexts, ctx=ctx)
+    repo_files = kwargs["repo_files"]
+    options = kwargs.get("options") or ASTExtractOptions()
+    file_contexts = kwargs.get("file_contexts")
+    ctx = kwargs.get("ctx") or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    prefer_reader = kwargs.get("prefer_reader", False)
+    plans = extract_ast_plans(
+        repo_files,
+        options=options,
+        file_contexts=file_contexts,
+        ctx=ctx,
+    )
     defs_plan = ast_def_nodes_plan(plan=plans["ast_nodes"])
+    run_meta = options_metadata_spec(options=options)
 
     return finalize_plan_bundle(
         {
@@ -489,4 +531,9 @@ def extract_ast_tables(
         },
         ctx=ctx,
         prefer_reader=prefer_reader,
+        metadata_specs={
+            "ast_nodes": merge_metadata_specs(_AST_NODES_METADATA, run_meta),
+            "ast_edges": merge_metadata_specs(_AST_EDGES_METADATA, run_meta),
+            "ast_defs": merge_metadata_specs(_AST_NODES_METADATA, run_meta),
+        },
     )

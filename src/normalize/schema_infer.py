@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Protocol, cast
 
 import pandas as pd
 import pandera.pandas as pa_pd
@@ -13,6 +14,15 @@ import pyarrow.types as patypes
 from arrowdsl.core.interop import DataTypeLike, FieldLike, SchemaLike, TableLike
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec, SchemaTransform
 from normalize.plan_helpers import flatten_struct_field
+
+
+class _ListType(Protocol):
+    value_field: FieldLike
+
+
+class _MapType(Protocol):
+    key_field: FieldLike
+    item_field: FieldLike
 
 
 @dataclass(frozen=True)
@@ -76,11 +86,25 @@ def _prefer_arrow_nested(base: SchemaLike, merged: SchemaLike) -> SchemaLike:
     base_map = {field.name: field for field in base}
     for field in merged:
         base_field = base_map.get(field.name)
-        if base_field and (patypes.is_struct(base_field.type) or patypes.is_list(base_field.type)):
+        if base_field and _is_advanced_type(base_field.type):
             fields.append(base_field)
         else:
             fields.append(field)
     return pa.schema(fields)
+
+
+def _is_advanced_type(dtype: DataTypeLike) -> bool:
+    return any(
+        (
+            patypes.is_struct(dtype),
+            patypes.is_list(dtype),
+            patypes.is_large_list(dtype),
+            patypes.is_list_view(dtype),
+            patypes.is_large_list_view(dtype),
+            patypes.is_map(dtype),
+            patypes.is_dictionary(dtype),
+        )
+    )
 
 
 def _metadata_spec_from_schema(schema: SchemaLike) -> SchemaMetadataSpec:
@@ -101,11 +125,37 @@ def _metadata_spec_from_schema(schema: SchemaLike) -> SchemaMetadataSpec:
     for field in schema:
         if field.metadata is not None:
             field_meta[field.name] = dict(field.metadata)
-        if patypes.is_struct(field.type):
-            for child in flatten_struct_field(field):
-                if child.metadata is not None:
-                    field_meta[child.name] = dict(child.metadata)
+        _add_nested_metadata(field, field_meta)
     return SchemaMetadataSpec(schema_metadata=schema_meta, field_metadata=field_meta)
+
+
+def _add_nested_metadata(field: FieldLike, field_meta: dict[str, dict[bytes, bytes]]) -> None:
+    if patypes.is_struct(field.type):
+        for child in flatten_struct_field(field):
+            if child.metadata is not None:
+                field_meta[child.name] = dict(child.metadata)
+        return
+
+    if patypes.is_map(field.type):
+        map_type = cast("_MapType", field.type)
+        key_field = map_type.key_field
+        item_field = map_type.item_field
+        if key_field.metadata is not None:
+            field_meta[f"{field.name}.{key_field.name}"] = dict(key_field.metadata)
+        if item_field.metadata is not None:
+            field_meta[f"{field.name}.{item_field.name}"] = dict(item_field.metadata)
+        return
+
+    if (
+        patypes.is_list(field.type)
+        or patypes.is_large_list(field.type)
+        or patypes.is_list_view(field.type)
+        or patypes.is_large_list_view(field.type)
+    ):
+        list_type = cast("_ListType", field.type)
+        value_field = list_type.value_field
+        if value_field.metadata is not None:
+            field_meta[f"{field.name}.{value_field.name}"] = dict(value_field.metadata)
 
 
 def unify_schemas(
@@ -129,7 +179,8 @@ def unify_schemas(
         return pa.schema([])
     evolution = SchemaEvolutionSpec(promote_options=opts.promote_options)
     unified = evolution.unify_schema_from_schemas(schemas)
-    return _metadata_spec_from_schema(schemas[0]).apply(unified)
+    preferred = _prefer_arrow_nested(schemas[0], unified)
+    return _metadata_spec_from_schema(schemas[0]).apply(preferred)
 
 
 def infer_schema_from_tables(

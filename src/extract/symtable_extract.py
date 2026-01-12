@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import symtable
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal, cast, overload
+from typing import Literal, Required, TypedDict, Unpack, cast, overload
 
 import pyarrow as pa
 
@@ -13,7 +13,7 @@ from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfil
 from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, pc
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
-from arrowdsl.schema.schema import empty_table
+from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.file_context import FileContext
 from extract.hash_specs import (
@@ -26,15 +26,20 @@ from extract.hash_specs import (
 from extract.join_helpers import JoinConfig, left_join
 from extract.nested_lists import LargeListViewAccumulator
 from extract.plan_exprs import MaskedHashExprSpec
-from extract.spec_helpers import DatasetRegistration, ordering_metadata_spec, register_dataset
+from extract.spec_helpers import (
+    DatasetRegistration,
+    infer_ordering_keys,
+    merge_metadata_specs,
+    options_metadata_spec,
+    ordering_metadata_spec,
+    register_dataset,
+)
 from extract.tables import (
     align_plan,
-    append_projection,
-    apply_query_spec,
     finalize_plan_bundle,
     materialize_plan,
     plan_from_rows,
-    rename_plan_columns,
+    project_columns,
 )
 from schema_spec.specs import ArrowFieldSpec, NestedFieldSpec, file_identity_bundle
 
@@ -160,12 +165,51 @@ _FUNC_PARTS_FIELDS = [
     ArrowFieldSpec(name="frees", dtype=pa.large_list_view(pa.string())),
 ]
 
-_SYM_METADATA = ordering_metadata_spec(
+_SCOPES_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_SCOPES_FIELDS)
+)
+_SYMBOLS_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_SYMBOLS_FIELDS)
+)
+_SCOPE_EDGES_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_SCOPE_EDGES_FIELDS)
+)
+_NAMESPACE_EDGES_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_NAMESPACE_EDGES_FIELDS)
+)
+_FUNC_PARTS_BASE_COLUMNS = tuple(
+    field.name for field in (*file_identity_bundle().fields, *_FUNC_PARTS_FIELDS)
+)
+
+_SYM_METADATA_EXTRA = {
+    b"extractor_name": b"symtable",
+    b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
+}
+
+_SCOPES_METADATA = ordering_metadata_spec(
     OrderingLevel.IMPLICIT,
-    extra={
-        b"extractor_name": b"symtable",
-        b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
-    },
+    keys=infer_ordering_keys(_SCOPES_BASE_COLUMNS),
+    extra=_SYM_METADATA_EXTRA,
+)
+_SYMBOLS_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_SYMBOLS_BASE_COLUMNS),
+    extra=_SYM_METADATA_EXTRA,
+)
+_SCOPE_EDGES_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_SCOPE_EDGES_BASE_COLUMNS),
+    extra=_SYM_METADATA_EXTRA,
+)
+_NAMESPACE_EDGES_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_NAMESPACE_EDGES_BASE_COLUMNS),
+    extra=_SYM_METADATA_EXTRA,
+)
+_FUNC_PARTS_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_FUNC_PARTS_BASE_COLUMNS),
+    extra=_SYM_METADATA_EXTRA,
 )
 
 SCOPES_SPEC = register_dataset(
@@ -189,7 +233,7 @@ SCOPES_SPEC = register_dataset(
                 },
             )
         ),
-        metadata_spec=_SYM_METADATA,
+        metadata_spec=_SCOPES_METADATA,
     ),
 )
 
@@ -214,7 +258,7 @@ SYMBOLS_SPEC = register_dataset(
                 },
             )
         ),
-        metadata_spec=_SYM_METADATA,
+        metadata_spec=_SYMBOLS_METADATA,
     ),
 )
 
@@ -239,7 +283,7 @@ SCOPE_EDGES_SPEC = register_dataset(
                 },
             )
         ),
-        metadata_spec=_SYM_METADATA,
+        metadata_spec=_SCOPE_EDGES_METADATA,
     ),
 )
 
@@ -268,7 +312,7 @@ NAMESPACE_EDGES_SPEC = register_dataset(
                 },
             )
         ),
-        metadata_spec=_SYM_METADATA,
+        metadata_spec=_NAMESPACE_EDGES_METADATA,
     ),
 )
 
@@ -281,7 +325,7 @@ FUNC_PARTS_SPEC = register_dataset(
         query_spec=QuerySpec(
             projection=ProjectionSpec(base=tuple(field.name for field in _FUNC_PARTS_FIELDS))
         ),
-        metadata_spec=_SYM_METADATA,
+        metadata_spec=_FUNC_PARTS_METADATA,
     ),
 )
 
@@ -290,6 +334,20 @@ SYMBOLS_SCHEMA = SYMBOLS_SPEC.schema()
 SCOPE_EDGES_SCHEMA = SCOPE_EDGES_SPEC.schema()
 NAMESPACE_EDGES_SCHEMA = NAMESPACE_EDGES_SPEC.schema()
 FUNC_PARTS_SCHEMA = FUNC_PARTS_SPEC.schema()
+
+
+def _symtable_metadata_specs(
+    options: SymtableExtractOptions,
+) -> dict[str, SchemaMetadataSpec]:
+    run_meta = options_metadata_spec(options=options)
+    return {
+        "py_sym_scopes": merge_metadata_specs(_SCOPES_METADATA, run_meta),
+        "py_sym_symbols": merge_metadata_specs(_SYMBOLS_METADATA, run_meta),
+        "py_sym_scope_edges": merge_metadata_specs(_SCOPE_EDGES_METADATA, run_meta),
+        "py_sym_namespace_edges": merge_metadata_specs(_NAMESPACE_EDGES_METADATA, run_meta),
+        "py_sym_function_partitions": merge_metadata_specs(_FUNC_PARTS_METADATA, run_meta),
+    }
+
 
 SYMBOL_ROWS_SCHEMA = pa.schema(
     [
@@ -357,12 +415,18 @@ class _FuncPartsAccumulator:
     parameters_acc: LargeListViewAccumulator[str | None] = field(
         default_factory=LargeListViewAccumulator
     )
-    locals_acc: LargeListViewAccumulator[str | None] = field(default_factory=LargeListViewAccumulator)
-    globals_acc: LargeListViewAccumulator[str | None] = field(default_factory=LargeListViewAccumulator)
+    locals_acc: LargeListViewAccumulator[str | None] = field(
+        default_factory=LargeListViewAccumulator
+    )
+    globals_acc: LargeListViewAccumulator[str | None] = field(
+        default_factory=LargeListViewAccumulator
+    )
     nonlocals_acc: LargeListViewAccumulator[str | None] = field(
         default_factory=LargeListViewAccumulator
     )
-    frees_acc: LargeListViewAccumulator[str | None] = field(default_factory=LargeListViewAccumulator)
+    frees_acc: LargeListViewAccumulator[str | None] = field(
+        default_factory=LargeListViewAccumulator
+    )
 
     def append(self, ctx: SymtableContext, scope_table_id: int, tbl: symtable.SymbolTable) -> None:
         if _scope_type_str(tbl) != "FUNCTION":
@@ -666,6 +730,7 @@ def extract_symtable(
     """
     options = options or SymtableExtractOptions()
     ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    metadata_specs = _symtable_metadata_specs(options)
 
     scope_rows: list[dict[str, object]] = []
     symbol_rows: list[dict[str, object]] = []
@@ -697,6 +762,7 @@ def extract_symtable(
     return _build_symtable_result(
         rows,
         ctx=ctx,
+        metadata_specs=metadata_specs,
     )
 
 
@@ -754,7 +820,7 @@ def _build_scopes(
 ) -> tuple[Plan, Plan]:
     scopes_plan = plan_from_rows(scope_rows, schema=SCOPES_SCHEMA, label="sym_scopes")
     scopes_base = [name for name in SCOPES_SCHEMA.names if name != "scope_id"]
-    scopes_plan = append_projection(
+    scopes_plan = project_columns(
         scopes_plan,
         base=scopes_base,
         extras=[
@@ -773,7 +839,7 @@ def _build_scopes(
         ["file_id", "table_id", "scope_id"],
         ctx=ctx,
     )
-    scopes_plan = apply_query_spec(scopes_plan, spec=SCOPES_QUERY, ctx=ctx)
+    scopes_plan = SCOPES_QUERY.apply_to_plan(scopes_plan, ctx=ctx)
     scopes_plan = align_plan(
         scopes_plan,
         schema=SCOPES_SCHEMA,
@@ -809,7 +875,7 @@ def _build_symbols(
         )
         symbols_cols = list(join_config.left_output) + list(join_config.right_output)
     symbols_base = [name for name in symbols_cols if name != "symbol_row_id"]
-    symbols_plan = append_projection(
+    symbols_plan = project_columns(
         symbols_plan,
         base=symbols_base,
         extras=[
@@ -823,7 +889,7 @@ def _build_symbols(
         ],
         ctx=ctx,
     )
-    symbols_plan = apply_query_spec(symbols_plan, spec=SYMBOLS_QUERY, ctx=ctx)
+    symbols_plan = SYMBOLS_QUERY.apply_to_plan(symbols_plan, ctx=ctx)
     return align_plan(
         symbols_plan,
         schema=SYMBOLS_SCHEMA,
@@ -859,9 +925,9 @@ def _build_scope_edges(
         ctx=ctx,
     )
     parent_cols = list(join_parent.left_output) + list(join_parent.right_output)
-    scope_edges_plan = rename_plan_columns(
+    scope_edges_plan = project_columns(
         scope_edges_plan,
-        columns=parent_cols,
+        base=parent_cols,
         rename={"scope_id": "parent_scope_id"},
         ctx=ctx,
     )
@@ -880,15 +946,15 @@ def _build_scope_edges(
         ctx=ctx,
     )
     child_cols = list(join_child.left_output) + list(join_child.right_output)
-    scope_edges_plan = rename_plan_columns(
+    scope_edges_plan = project_columns(
         scope_edges_plan,
-        columns=child_cols,
+        base=child_cols,
         rename={"scope_id": "child_scope_id"},
         ctx=ctx,
     )
     rename_child_cols = ["child_scope_id" if name == "scope_id" else name for name in child_cols]
     scope_edges_base = [name for name in rename_child_cols if name != "edge_id"]
-    scope_edges_plan = append_projection(
+    scope_edges_plan = project_columns(
         scope_edges_plan,
         base=scope_edges_base,
         extras=[
@@ -902,7 +968,7 @@ def _build_scope_edges(
         ],
         ctx=ctx,
     )
-    scope_edges_plan = apply_query_spec(scope_edges_plan, spec=SCOPE_EDGES_QUERY, ctx=ctx)
+    scope_edges_plan = SCOPE_EDGES_QUERY.apply_to_plan(scope_edges_plan, ctx=ctx)
     return align_plan(
         scope_edges_plan,
         schema=SCOPE_EDGES_SCHEMA,
@@ -955,9 +1021,9 @@ def _build_namespace_edges(
     child_cols = list(join_child.left_output) + [
         f"{name}{join_child.output_suffix_for_right}" for name in join_child.right_output
     ]
-    ns_edges_plan = rename_plan_columns(
+    ns_edges_plan = project_columns(
         ns_edges_plan,
-        columns=child_cols,
+        base=child_cols,
         rename={"scope_id_child": "child_scope_id"},
         ctx=ctx,
     )
@@ -965,7 +1031,7 @@ def _build_namespace_edges(
         "child_scope_id" if name == "scope_id_child" else name for name in child_cols
     ]
     ns_base = [name for name in rename_child_cols if name != "symbol_row_id"]
-    ns_edges_plan = append_projection(
+    ns_edges_plan = project_columns(
         ns_edges_plan,
         base=ns_base,
         extras=[
@@ -979,7 +1045,7 @@ def _build_namespace_edges(
         ],
         ctx=ctx,
     )
-    ns_edges_plan = apply_query_spec(ns_edges_plan, spec=NAMESPACE_EDGES_QUERY, ctx=ctx)
+    ns_edges_plan = NAMESPACE_EDGES_QUERY.apply_to_plan(ns_edges_plan, ctx=ctx)
     return align_plan(
         ns_edges_plan,
         schema=NAMESPACE_EDGES_SCHEMA,
@@ -1013,7 +1079,7 @@ def _build_func_parts(
         use_threads=ctx.use_threads,
         ctx=ctx,
     )
-    func_parts_plan = apply_query_spec(func_parts_plan, spec=FUNC_PARTS_QUERY, ctx=ctx)
+    func_parts_plan = FUNC_PARTS_QUERY.apply_to_plan(func_parts_plan, ctx=ctx)
     return align_plan(
         func_parts_plan,
         schema=FUNC_PARTS_SCHEMA,
@@ -1026,14 +1092,35 @@ def _build_symtable_result(
     rows: _SymtableRows,
     *,
     ctx: ExecutionContext,
+    metadata_specs: Mapping[str, SchemaMetadataSpec],
 ) -> SymtableExtractResult:
     plans = _build_symtable_plans(rows, ctx=ctx)
     return SymtableExtractResult(
-        py_sym_scopes=materialize_plan(plans["py_sym_scopes"], ctx=ctx),
-        py_sym_symbols=materialize_plan(plans["py_sym_symbols"], ctx=ctx),
-        py_sym_scope_edges=materialize_plan(plans["py_sym_scope_edges"], ctx=ctx),
-        py_sym_namespace_edges=materialize_plan(plans["py_sym_namespace_edges"], ctx=ctx),
-        py_sym_function_partitions=materialize_plan(plans["py_sym_function_partitions"], ctx=ctx),
+        py_sym_scopes=materialize_plan(
+            plans["py_sym_scopes"],
+            ctx=ctx,
+            metadata_spec=metadata_specs["py_sym_scopes"],
+        ),
+        py_sym_symbols=materialize_plan(
+            plans["py_sym_symbols"],
+            ctx=ctx,
+            metadata_spec=metadata_specs["py_sym_symbols"],
+        ),
+        py_sym_scope_edges=materialize_plan(
+            plans["py_sym_scope_edges"],
+            ctx=ctx,
+            metadata_spec=metadata_specs["py_sym_scope_edges"],
+        ),
+        py_sym_namespace_edges=materialize_plan(
+            plans["py_sym_namespace_edges"],
+            ctx=ctx,
+            metadata_spec=metadata_specs["py_sym_namespace_edges"],
+        ),
+        py_sym_function_partitions=materialize_plan(
+            plans["py_sym_function_partitions"],
+            ctx=ctx,
+            metadata_spec=metadata_specs["py_sym_function_partitions"],
+        ),
     )
 
 
@@ -1078,62 +1165,73 @@ def _build_symtable_plans(
     }
 
 
+class _SymtableTableKwargs(TypedDict, total=False):
+    repo_files: Required[TableLike]
+    options: SymtableExtractOptions | None
+    file_contexts: Iterable[FileContext] | None
+    ctx: ExecutionContext | None
+    prefer_reader: bool
+
+
+class _SymtableTableKwargsTable(TypedDict, total=False):
+    repo_files: Required[TableLike]
+    options: SymtableExtractOptions | None
+    file_contexts: Iterable[FileContext] | None
+    ctx: ExecutionContext | None
+    prefer_reader: Literal[False]
+
+
+class _SymtableTableKwargsReader(TypedDict, total=False):
+    repo_files: Required[TableLike]
+    options: SymtableExtractOptions | None
+    file_contexts: Iterable[FileContext] | None
+    ctx: ExecutionContext | None
+    prefer_reader: Required[Literal[True]]
+
+
 @overload
 def extract_symtables_table(
-    *,
-    repo_root: str | None,
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-    ctx: ExecutionContext | None = None,
-    prefer_reader: Literal[False] = False,
+    **kwargs: Unpack[_SymtableTableKwargsTable],
 ) -> TableLike: ...
 
 
 @overload
 def extract_symtables_table(
-    *,
-    repo_root: str | None,
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-    ctx: ExecutionContext | None = None,
-    prefer_reader: Literal[True],
+    **kwargs: Unpack[_SymtableTableKwargsReader],
 ) -> TableLike | RecordBatchReaderLike: ...
 
 
 def extract_symtables_table(
-    *,
-    repo_root: str | None,
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-    ctx: ExecutionContext | None = None,
-    prefer_reader: bool = False,
+    **kwargs: Unpack[_SymtableTableKwargs],
 ) -> TableLike | RecordBatchReaderLike:
     """Extract symtable data into a single table.
 
     Parameters
     ----------
-    repo_root:
-        Optional repository root (unused).
-    repo_files:
-        Repo files table.
-    file_contexts:
-        Optional pre-built file contexts for extraction.
-    ctx:
-        Execution context for plan execution.
-
-    prefer_reader:
-        When True, return a streaming reader when possible.
+    kwargs:
+        Keyword-only arguments for extraction (repo_files, options, file_contexts, ctx,
+        prefer_reader).
 
     Returns
     -------
     TableLike | RecordBatchReaderLike
         Symtable extraction output.
     """
-    _ = repo_root
-    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
-    plans = extract_symtable_plans(repo_files, file_contexts=file_contexts, ctx=exec_ctx)
+    repo_files = kwargs["repo_files"]
+    options = kwargs.get("options") or SymtableExtractOptions()
+    file_contexts = kwargs.get("file_contexts")
+    exec_ctx = kwargs.get("ctx") or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    prefer_reader = kwargs.get("prefer_reader", False)
+    plans = extract_symtable_plans(
+        repo_files,
+        options=options,
+        file_contexts=file_contexts,
+        ctx=exec_ctx,
+    )
+    metadata_specs = _symtable_metadata_specs(options)
     return finalize_plan_bundle(
         {"py_sym_scopes": plans["py_sym_scopes"]},
         ctx=exec_ctx,
         prefer_reader=prefer_reader,
+        metadata_specs={"py_sym_scopes": metadata_specs["py_sym_scopes"]},
     )["py_sym_scopes"]

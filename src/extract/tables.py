@@ -7,15 +7,19 @@ from typing import cast
 
 import pyarrow as pa
 
-from arrowdsl.core.context import DeterminismTier, ExecutionContext, OrderingKey
+from arrowdsl.core.context import (
+    DeterminismTier,
+    ExecutionContext,
+    Ordering,
+    OrderingKey,
+    OrderingLevel,
+)
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, pc
 from arrowdsl.plan.plan import Plan, PlanSpec
 from arrowdsl.plan_helpers import (
-    append_projection,
-    apply_query_spec,
     flatten_struct_field,
+    project_columns,
     query_for_schema,
-    rename_plan_columns,
 )
 from arrowdsl.schema.schema import (
     SchemaEvolutionSpec,
@@ -24,6 +28,7 @@ from arrowdsl.schema.schema import (
     empty_table,
     projection_for_schema,
 )
+from extract.spec_helpers import infer_ordering_keys, merge_metadata_specs
 
 
 def rows_to_table(rows: Sequence[Mapping[str, object]], schema: SchemaLike) -> TableLike:
@@ -194,66 +199,79 @@ def _parse_ordering_keys(schema: SchemaLike) -> list[OrderingKey]:
     return keys
 
 
-def _infer_ordering_keys(schema: SchemaLike) -> list[OrderingKey]:
-    names = list(schema.names)
-    id_cols = sorted(name for name in names if name.endswith("_id"))
-    position_cols = [
-        "ast_idx",
-        "parent_ast_idx",
-        "child_ast_idx",
-        "bstart",
-        "bend",
-        "start_byte",
-        "end_byte",
-        "lineno",
-        "col_offset",
-        "offset",
-        "instr_index",
-        "start_offset",
-        "end_offset",
-        "raw_line",
-        "raw_column",
-        "table_id",
-        "name",
-    ]
-    keys = [(name, "ascending") for name in id_cols]
-    keys.extend(
-        (name, "ascending") for name in position_cols if name in names and name not in id_cols
-    )
-    return keys
-
-
 def _ordering_keys(schema: SchemaLike) -> list[OrderingKey]:
     keys = _parse_ordering_keys(schema)
     if keys:
         return keys
-    return _infer_ordering_keys(schema)
+    return list(infer_ordering_keys(schema.names))
 
 
-def _apply_canonical_sort(table: TableLike, *, ctx: ExecutionContext) -> TableLike:
-    if ctx.determinism != DeterminismTier.CANONICAL:
-        return table
-    keys = _ordering_keys(table.schema)
-    if not keys:
-        return table
-    indices = pc.sort_indices(table, sort_keys=keys)
-    return table.take(indices)
-
-
-def _with_pipeline_breakers(
+def _apply_canonical_sort(
     table: TableLike,
     *,
-    pipeline_breakers: Sequence[str],
-) -> TableLike:
+    ctx: ExecutionContext,
+) -> tuple[TableLike, list[OrderingKey]]:
+    if ctx.determinism != DeterminismTier.CANONICAL:
+        return table, []
+    keys = _ordering_keys(table.schema)
+    if not keys:
+        return table, []
+    indices = pc.sort_indices(table, sort_keys=keys)
+    return table.take(indices), keys
+
+
+def _ordering_metadata_spec(
+    ordering: Ordering,
+    *,
+    schema: SchemaLike,
+    canonical_keys: Sequence[OrderingKey] | None = None,
+) -> SchemaMetadataSpec:
+    level = ordering.level
+    keys: Sequence[OrderingKey] = ()
+    if canonical_keys:
+        level = OrderingLevel.EXPLICIT
+        keys = canonical_keys
+    elif ordering.level == OrderingLevel.EXPLICIT and ordering.keys:
+        keys = ordering.keys
+    elif ordering.level == OrderingLevel.IMPLICIT:
+        keys = _ordering_keys(schema)
+    meta = {b"ordering_level": level.value.encode("utf-8")}
+    if keys:
+        key_text = ",".join(f"{col}:{order}" for col, order in keys)
+        meta[b"ordering_keys"] = key_text.encode("utf-8")
+    return SchemaMetadataSpec(schema_metadata=meta)
+
+
+def _pipeline_breaker_spec(pipeline_breakers: Sequence[str]) -> SchemaMetadataSpec:
     if not pipeline_breakers:
-        return table
-    metadata = dict(table.schema.metadata or {})
-    metadata[b"pipeline_breakers"] = ",".join(pipeline_breakers).encode("utf-8")
-    schema = table.schema.with_metadata(metadata)
+        return SchemaMetadataSpec()
+    return SchemaMetadataSpec(
+        schema_metadata={b"pipeline_breakers": ",".join(pipeline_breakers).encode("utf-8")}
+    )
+
+
+def _apply_metadata_spec(
+    result: TableLike | RecordBatchReaderLike,
+    *,
+    metadata_spec: SchemaMetadataSpec | None,
+) -> TableLike | RecordBatchReaderLike:
+    if metadata_spec is None:
+        return result
+    if not metadata_spec.schema_metadata and not metadata_spec.field_metadata:
+        return result
+    schema = metadata_spec.apply(result.schema)
+    if isinstance(result, pa.RecordBatchReader):
+        return pa.RecordBatchReader.from_batches(schema, result)
+    table = cast("TableLike", result)
     return table.cast(schema)
 
 
-def materialize_plan(plan: Plan, *, ctx: ExecutionContext) -> TableLike:
+def materialize_plan(
+    plan: Plan,
+    *,
+    ctx: ExecutionContext,
+    metadata_spec: SchemaMetadataSpec | None = None,
+) -> TableLike:
     """Materialize a plan as a table.
 
     Returns
@@ -266,7 +284,12 @@ def materialize_plan(plan: Plan, *, ctx: ExecutionContext) -> TableLike:
     TypeError
         Raised when a non-table result is returned from finalize.
     """
-    result = finalize_plan(plan, ctx=ctx, prefer_reader=False)
+    result = finalize_plan(
+        plan,
+        ctx=ctx,
+        prefer_reader=False,
+        metadata_spec=metadata_spec,
+    )
     if isinstance(result, pa.RecordBatchReader):
         msg = "Expected table result from finalize_plan."
         raise TypeError(msg)
@@ -289,6 +312,7 @@ def finalize_plan(
     *,
     ctx: ExecutionContext,
     prefer_reader: bool = False,
+    metadata_spec: SchemaMetadataSpec | None = None,
 ) -> TableLike | RecordBatchReaderLike:
     """Return a reader when possible, otherwise materialize the plan.
 
@@ -303,10 +327,32 @@ def finalize_plan(
         and not spec.pipeline_breakers
         and ctx.determinism != DeterminismTier.CANONICAL
     ):
-        return spec.to_reader(ctx=ctx)
+        reader = spec.to_reader(ctx=ctx)
+        schema_for_ordering = (
+            metadata_spec.apply(reader.schema) if metadata_spec is not None else reader.schema
+        )
+        ordering_spec = _ordering_metadata_spec(
+            spec.plan.ordering,
+            schema=schema_for_ordering,
+        )
+        combined = merge_metadata_specs(metadata_spec, ordering_spec)
+        return _apply_metadata_spec(reader, metadata_spec=combined)
     table = spec.to_table(ctx=ctx)
-    table = _apply_canonical_sort(table, ctx=ctx)
-    return _with_pipeline_breakers(table, pipeline_breakers=spec.pipeline_breakers)
+    table, canonical_keys = _apply_canonical_sort(table, ctx=ctx)
+    schema_for_ordering = (
+        metadata_spec.apply(table.schema) if metadata_spec is not None else table.schema
+    )
+    ordering_spec = _ordering_metadata_spec(
+        spec.plan.ordering,
+        schema=schema_for_ordering,
+        canonical_keys=canonical_keys,
+    )
+    combined = merge_metadata_specs(
+        metadata_spec,
+        ordering_spec,
+        _pipeline_breaker_spec(spec.pipeline_breakers),
+    )
+    return cast("TableLike", _apply_metadata_spec(table, metadata_spec=combined))
 
 
 def finalize_plan_bundle(
@@ -314,6 +360,7 @@ def finalize_plan_bundle(
     *,
     ctx: ExecutionContext,
     prefer_reader: bool = False,
+    metadata_specs: Mapping[str, SchemaMetadataSpec] | None = None,
 ) -> dict[str, TableLike | RecordBatchReaderLike]:
     """Finalize a bundle of plans into tables or readers.
 
@@ -322,26 +369,30 @@ def finalize_plan_bundle(
     dict[str, TableLike | RecordBatchReaderLike]
         Finalized plan outputs keyed by name.
     """
-    return {
-        name: finalize_plan(plan, ctx=ctx, prefer_reader=prefer_reader)
-        for name, plan in plans.items()
-    }
+    outputs: dict[str, TableLike | RecordBatchReaderLike] = {}
+    for name, plan in plans.items():
+        spec = metadata_specs.get(name) if metadata_specs is not None else None
+        outputs[name] = finalize_plan(
+            plan,
+            ctx=ctx,
+            prefer_reader=prefer_reader,
+            metadata_spec=spec,
+        )
+    return outputs
 
 
 __all__ = [
     "align_plan",
     "align_table",
-    "append_projection",
-    "apply_query_spec",
     "finalize_plan",
     "finalize_plan_bundle",
     "flatten_struct_field",
     "iter_record_batches",
     "materialize_plan",
     "plan_from_rows",
+    "project_columns",
     "query_for_schema",
     "reader_from_rows",
-    "rename_plan_columns",
     "rows_to_table",
     "stream_plan",
     "unify_schemas",

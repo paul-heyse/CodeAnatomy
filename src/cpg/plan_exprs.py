@@ -8,6 +8,12 @@ import pyarrow as pa
 import pyarrow.types as patypes
 
 from arrowdsl.core.interop import ComputeExpression, DataTypeLike, ensure_expression, pc
+from arrowdsl.plan_helpers import (
+    coalesce_expr as plan_coalesce_expr,
+)
+from arrowdsl.plan_helpers import (
+    column_or_null_expr as plan_column_or_null_expr,
+)
 
 
 def column_or_null_expr(
@@ -23,9 +29,7 @@ def column_or_null_expr(
     ComputeExpression
         Expression for the column or a typed null literal.
     """
-    if name in available:
-        return ensure_expression(pc.cast(pc.field(name), dtype, safe=False))
-    return ensure_expression(pc.cast(pc.scalar(None), dtype, safe=False))
+    return plan_column_or_null_expr(name, dtype=dtype, available=available, cast=True, safe=False)
 
 
 def coalesce_expr(
@@ -41,16 +45,7 @@ def coalesce_expr(
     ComputeExpression
         Coalesced expression or typed null when none are available.
     """
-    exprs = [
-        ensure_expression(pc.cast(pc.field(col), dtype, safe=False))
-        for col in cols
-        if col in available
-    ]
-    if not exprs:
-        return ensure_expression(pc.cast(pc.scalar(None), dtype, safe=False))
-    if len(exprs) == 1:
-        return exprs[0]
-    return ensure_expression(pc.coalesce(*exprs))
+    return plan_coalesce_expr(cols, dtype=dtype, available=available, cast=True, safe=False)
 
 
 def null_if_empty_or_zero(expr: ComputeExpression) -> ComputeExpression:

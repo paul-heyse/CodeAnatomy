@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 import arrowdsl.core.interop as pa
 from arrowdsl.core.interop import ArrayLike, DataTypeLike
-from arrowdsl.schema.arrays import build_list_array, build_list_of_structs, build_list_view_array
+from arrowdsl.schema.arrays import build_list, build_list_of_structs, build_list_view
 
 
 def _offsets_start() -> list[int]:
@@ -46,7 +46,7 @@ class ListAccumulator[T]:
         ArrayLike
             List array from offsets and values.
         """
-        return build_list_array(
+        return build_list(
             pa.array(self.offsets, type=pa.int32()),
             pa.array(self.values, type=value_type),
         )
@@ -121,7 +121,7 @@ class ListViewAccumulator[T]:
         sizes = pa.array(self.sizes, type=pa.int32())
         values = pa.array(self.values, type=value_type)
         list_type = pa.list_view(value_type)
-        return build_list_view_array(offsets, sizes, values, list_type=list_type)
+        return build_list_view(offsets, sizes, values, list_type=list_type)
 
 
 @dataclass
@@ -160,7 +160,7 @@ class LargeListViewAccumulator[T]:
         sizes = pa.array(self.sizes, type=pa.int64())
         values = pa.array(self.values, type=value_type)
         list_type = pa.large_list_view(value_type)
-        return build_list_view_array(offsets, sizes, values, list_type=list_type)
+        return build_list_view(offsets, sizes, values, list_type=list_type)
 
 
 @dataclass
@@ -426,7 +426,7 @@ class StructLargeListViewAccumulator:
         offsets = pa.array(self.offsets, type=pa.int64())
         sizes = pa.array(self.sizes, type=pa.int64())
         list_type = pa.large_list_view(struct_values.type)
-        return build_list_view_array(offsets, sizes, struct_values, list_type=list_type)
+        return build_list_view(offsets, sizes, struct_values, list_type=list_type)
 
 
 __all__ = [

@@ -7,16 +7,16 @@ import os
 import subprocess
 import sys
 import textwrap
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
 
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, pc
+from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, pc
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
-from arrowdsl.schema.schema import empty_table
+from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.hash_specs import (
     RT_MEMBER_ID_SPEC,
     RT_OBJECT_ID_SPEC,
@@ -25,14 +25,21 @@ from extract.hash_specs import (
 )
 from extract.join_helpers import JoinConfig, left_join
 from extract.plan_exprs import MaskedHashExprSpec
-from extract.spec_helpers import DatasetRegistration, ordering_metadata_spec, register_dataset
+from extract.spec_helpers import (
+    DatasetRegistration,
+    infer_ordering_keys,
+    merge_metadata_specs,
+    options_metadata_spec,
+    ordering_metadata_spec,
+    register_dataset,
+)
 from extract.tables import (
     align_plan,
-    append_projection,
-    apply_query_spec,
     finalize_plan_bundle,
+    iter_record_batches,
     materialize_plan,
-    plan_from_rows,
+    project_columns,
+    unify_tables,
 )
 from schema_spec.specs import ArrowFieldSpec
 
@@ -67,6 +74,16 @@ class RuntimeInspectResult:
     rt_signatures: TableLike
     rt_signature_params: TableLike
     rt_members: TableLike
+
+
+@dataclass(frozen=True)
+class RuntimeRows:
+    """Row buffers for runtime inspection extraction."""
+
+    obj_rows: list[Row]
+    sig_rows: list[Row]
+    param_rows: list[Row]
+    member_rows: list[Row]
 
 
 _RT_OBJECTS_FIELDS = [
@@ -107,12 +124,35 @@ _RT_MEMBERS_FIELDS = [
     ArrowFieldSpec(name="value_qualname", dtype=pa.string()),
 ]
 
-_RT_METADATA = ordering_metadata_spec(
+_RT_OBJECTS_BASE_COLUMNS = tuple(field.name for field in _RT_OBJECTS_FIELDS)
+_RT_SIGNATURES_BASE_COLUMNS = tuple(field.name for field in _RT_SIGNATURES_FIELDS)
+_RT_SIGNATURE_PARAMS_BASE_COLUMNS = tuple(field.name for field in _RT_SIGNATURE_PARAMS_FIELDS)
+_RT_MEMBERS_BASE_COLUMNS = tuple(field.name for field in _RT_MEMBERS_FIELDS)
+
+_RT_METADATA_EXTRA = {
+    b"extractor_name": b"runtime_inspect",
+    b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
+}
+
+_RT_OBJECTS_METADATA = ordering_metadata_spec(
     OrderingLevel.IMPLICIT,
-    extra={
-        b"extractor_name": b"runtime_inspect",
-        b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
-    },
+    keys=infer_ordering_keys(_RT_OBJECTS_BASE_COLUMNS),
+    extra=_RT_METADATA_EXTRA,
+)
+_RT_SIGNATURES_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_RT_SIGNATURES_BASE_COLUMNS),
+    extra=_RT_METADATA_EXTRA,
+)
+_RT_SIGNATURE_PARAMS_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_RT_SIGNATURE_PARAMS_BASE_COLUMNS),
+    extra=_RT_METADATA_EXTRA,
+)
+_RT_MEMBERS_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_RT_MEMBERS_BASE_COLUMNS),
+    extra=_RT_METADATA_EXTRA,
 )
 
 RT_OBJECTS_SPEC = register_dataset(
@@ -123,9 +163,7 @@ RT_OBJECTS_SPEC = register_dataset(
     registration=DatasetRegistration(
         query_spec=QuerySpec(
             projection=ProjectionSpec(
-                base=tuple(
-                    field.name for field in _RT_OBJECTS_FIELDS if field.name != "rt_id"
-                ),
+                base=tuple(field.name for field in _RT_OBJECTS_FIELDS if field.name != "rt_id"),
                 derived={
                     "rt_id": MaskedHashExprSpec(
                         spec=RT_OBJECT_ID_SPEC,
@@ -134,7 +172,7 @@ RT_OBJECTS_SPEC = register_dataset(
                 },
             )
         ),
-        metadata_spec=_RT_METADATA,
+        metadata_spec=_RT_OBJECTS_METADATA,
     ),
 )
 
@@ -146,9 +184,7 @@ RT_SIGNATURES_SPEC = register_dataset(
     registration=DatasetRegistration(
         query_spec=QuerySpec(
             projection=ProjectionSpec(
-                base=tuple(
-                    field.name for field in _RT_SIGNATURES_FIELDS if field.name != "sig_id"
-                ),
+                base=tuple(field.name for field in _RT_SIGNATURES_FIELDS if field.name != "sig_id"),
                 derived={
                     "sig_id": MaskedHashExprSpec(
                         spec=RT_SIGNATURE_ID_SPEC,
@@ -157,7 +193,7 @@ RT_SIGNATURES_SPEC = register_dataset(
                 },
             )
         ),
-        metadata_spec=_RT_METADATA,
+        metadata_spec=_RT_SIGNATURES_METADATA,
     ),
 )
 
@@ -170,9 +206,7 @@ RT_SIGNATURE_PARAMS_SPEC = register_dataset(
         query_spec=QuerySpec(
             projection=ProjectionSpec(
                 base=tuple(
-                    field.name
-                    for field in _RT_SIGNATURE_PARAMS_FIELDS
-                    if field.name != "param_id"
+                    field.name for field in _RT_SIGNATURE_PARAMS_FIELDS if field.name != "param_id"
                 ),
                 derived={
                     "param_id": MaskedHashExprSpec(
@@ -182,7 +216,7 @@ RT_SIGNATURE_PARAMS_SPEC = register_dataset(
                 },
             )
         ),
-        metadata_spec=_RT_METADATA,
+        metadata_spec=_RT_SIGNATURE_PARAMS_METADATA,
     ),
 )
 
@@ -194,9 +228,7 @@ RT_MEMBERS_SPEC = register_dataset(
     registration=DatasetRegistration(
         query_spec=QuerySpec(
             projection=ProjectionSpec(
-                base=tuple(
-                    field.name for field in _RT_MEMBERS_FIELDS if field.name != "member_id"
-                ),
+                base=tuple(field.name for field in _RT_MEMBERS_FIELDS if field.name != "member_id"),
                 derived={
                     "member_id": MaskedHashExprSpec(
                         spec=RT_MEMBER_ID_SPEC,
@@ -205,7 +237,7 @@ RT_MEMBERS_SPEC = register_dataset(
                 },
             )
         ),
-        metadata_spec=_RT_METADATA,
+        metadata_spec=_RT_MEMBERS_METADATA,
     ),
 )
 
@@ -213,6 +245,19 @@ RT_OBJECTS_SCHEMA = RT_OBJECTS_SPEC.schema()
 RT_SIGNATURES_SCHEMA = RT_SIGNATURES_SPEC.schema()
 RT_SIGNATURE_PARAMS_SCHEMA = RT_SIGNATURE_PARAMS_SPEC.schema()
 RT_MEMBERS_SCHEMA = RT_MEMBERS_SPEC.schema()
+
+
+def _runtime_metadata_specs(
+    options: RuntimeInspectOptions,
+) -> dict[str, SchemaMetadataSpec]:
+    run_meta = options_metadata_spec(options=options)
+    return {
+        "rt_objects": merge_metadata_specs(_RT_OBJECTS_METADATA, run_meta),
+        "rt_signatures": merge_metadata_specs(_RT_SIGNATURES_METADATA, run_meta),
+        "rt_signature_params": merge_metadata_specs(_RT_SIGNATURE_PARAMS_METADATA, run_meta),
+        "rt_members": merge_metadata_specs(_RT_MEMBERS_METADATA, run_meta),
+    }
+
 
 RT_OBJECT_ROWS_SCHEMA = pa.schema(
     [
@@ -605,13 +650,37 @@ def _parse_runtime_members(members_raw: object) -> list[Row]:
     return member_rows
 
 
-def _empty_runtime_result() -> RuntimeInspectResult:
+def _empty_runtime_result(
+    metadata_specs: Mapping[str, SchemaMetadataSpec] | None = None,
+) -> RuntimeInspectResult:
+    def _empty(schema: SchemaLike, key: str) -> TableLike:
+        if metadata_specs is None:
+            return empty_table(schema)
+        return empty_table(metadata_specs[key].apply(schema))
+
     return RuntimeInspectResult(
-        rt_objects=empty_table(RT_OBJECTS_SCHEMA),
-        rt_signatures=empty_table(RT_SIGNATURES_SCHEMA),
-        rt_signature_params=empty_table(RT_SIGNATURE_PARAMS_SCHEMA),
-        rt_members=empty_table(RT_MEMBERS_SCHEMA),
+        rt_objects=_empty(RT_OBJECTS_SCHEMA, "rt_objects"),
+        rt_signatures=_empty(RT_SIGNATURES_SCHEMA, "rt_signatures"),
+        rt_signature_params=_empty(RT_SIGNATURE_PARAMS_SCHEMA, "rt_signature_params"),
+        rt_members=_empty(RT_MEMBERS_SCHEMA, "rt_members"),
     )
+
+
+def _plan_from_row_fragments(
+    rows: Sequence[Row],
+    *,
+    schema: SchemaLike,
+    label: str,
+    batch_size: int = 4096,
+) -> Plan:
+    if not rows:
+        return Plan.table_source(empty_table(schema), label=label)
+    tables = [
+        pa.Table.from_batches([batch], schema=schema)
+        for batch in iter_record_batches(rows, schema=schema, batch_size=batch_size)
+    ]
+    table = unify_tables(tables)
+    return Plan.table_source(table, label=label)
 
 
 def _build_rt_objects(
@@ -619,12 +688,12 @@ def _build_rt_objects(
     *,
     exec_ctx: ExecutionContext,
 ) -> tuple[Plan, Plan]:
-    rt_objects_plan = plan_from_rows(
+    rt_objects_plan = _plan_from_row_fragments(
         obj_rows,
         schema=RT_OBJECT_ROWS_SCHEMA,
         label="rt_objects_raw",
     )
-    rt_objects_plan = append_projection(
+    rt_objects_plan = project_columns(
         rt_objects_plan,
         base=RT_OBJECT_ROWS_SCHEMA.names,
         extras=[
@@ -643,7 +712,7 @@ def _build_rt_objects(
         ["object_key", "rt_id"],
         ctx=exec_ctx,
     )
-    rt_objects_plan = apply_query_spec(rt_objects_plan, spec=RT_OBJECTS_QUERY, ctx=exec_ctx)
+    rt_objects_plan = RT_OBJECTS_QUERY.apply_to_plan(rt_objects_plan, ctx=exec_ctx)
     rt_objects_plan = align_plan(
         rt_objects_plan,
         schema=RT_OBJECTS_SCHEMA,
@@ -662,7 +731,11 @@ def _build_rt_signatures(
     if not sig_rows:
         empty_plan = Plan.table_source(empty_table(RT_SIGNATURES_SCHEMA))
         return empty_plan, None
-    sig_plan = plan_from_rows(sig_rows, schema=RT_SIGNATURE_ROWS_SCHEMA, label="rt_signatures_raw")
+    sig_plan = _plan_from_row_fragments(
+        sig_rows,
+        schema=RT_SIGNATURE_ROWS_SCHEMA,
+        label="rt_signatures_raw",
+    )
     sig_cols = list(RT_SIGNATURE_ROWS_SCHEMA.names)
     if "object_key" in sig_cols:
         join_config = JoinConfig.from_sequences(
@@ -679,7 +752,7 @@ def _build_rt_signatures(
             ctx=exec_ctx,
         )
         sig_cols = list(join_config.left_output) + list(join_config.right_output)
-    sig_plan = append_projection(
+    sig_plan = project_columns(
         sig_plan,
         base=sig_cols,
         extras=[
@@ -700,7 +773,7 @@ def _build_rt_signatures(
             ["object_key", "signature", "sig_id"],
             ctx=exec_ctx,
         )
-    sig_plan = apply_query_spec(sig_plan, spec=RT_SIGNATURES_QUERY, ctx=exec_ctx)
+    sig_plan = RT_SIGNATURES_QUERY.apply_to_plan(sig_plan, ctx=exec_ctx)
     sig_plan = align_plan(
         sig_plan,
         schema=RT_SIGNATURES_SCHEMA,
@@ -718,7 +791,11 @@ def _build_rt_params(
 ) -> Plan:
     if not param_rows or sig_meta_plan is None:
         return Plan.table_source(empty_table(RT_SIGNATURE_PARAMS_SCHEMA))
-    param_plan = plan_from_rows(param_rows, schema=RT_PARAM_ROWS_SCHEMA, label="rt_params_raw")
+    param_plan = _plan_from_row_fragments(
+        param_rows,
+        schema=RT_PARAM_ROWS_SCHEMA,
+        label="rt_params_raw",
+    )
     param_cols = list(RT_PARAM_ROWS_SCHEMA.names)
     if {"object_key", "signature"} <= set(param_cols):
         join_config = JoinConfig.from_sequences(
@@ -735,7 +812,7 @@ def _build_rt_params(
             ctx=exec_ctx,
         )
         param_cols = list(join_config.left_output) + list(join_config.right_output)
-    param_plan = append_projection(
+    param_plan = project_columns(
         param_plan,
         base=param_cols,
         extras=[
@@ -749,7 +826,7 @@ def _build_rt_params(
         ],
         ctx=exec_ctx,
     )
-    param_plan = apply_query_spec(param_plan, spec=RT_SIGNATURE_PARAMS_QUERY, ctx=exec_ctx)
+    param_plan = RT_SIGNATURE_PARAMS_QUERY.apply_to_plan(param_plan, ctx=exec_ctx)
     return align_plan(
         param_plan,
         schema=RT_SIGNATURE_PARAMS_SCHEMA,
@@ -766,7 +843,11 @@ def _build_rt_members(
 ) -> Plan:
     if not member_rows:
         return Plan.table_source(empty_table(RT_MEMBERS_SCHEMA))
-    member_plan = plan_from_rows(member_rows, schema=RT_MEMBER_ROWS_SCHEMA, label="rt_members_raw")
+    member_plan = _plan_from_row_fragments(
+        member_rows,
+        schema=RT_MEMBER_ROWS_SCHEMA,
+        label="rt_members_raw",
+    )
     member_cols = list(RT_MEMBER_ROWS_SCHEMA.names)
     if "object_key" in member_cols:
         join_config = JoinConfig.from_sequences(
@@ -783,7 +864,7 @@ def _build_rt_members(
             ctx=exec_ctx,
         )
         member_cols = list(join_config.left_output) + list(join_config.right_output)
-    member_plan = append_projection(
+    member_plan = project_columns(
         member_plan,
         base=member_cols,
         extras=[
@@ -797,7 +878,7 @@ def _build_rt_members(
         ],
         ctx=exec_ctx,
     )
-    member_plan = apply_query_spec(member_plan, spec=RT_MEMBERS_QUERY, ctx=exec_ctx)
+    member_plan = RT_MEMBERS_QUERY.apply_to_plan(member_plan, ctx=exec_ctx)
     return align_plan(
         member_plan,
         schema=RT_MEMBERS_SCHEMA,
@@ -808,49 +889,60 @@ def _build_rt_members(
 
 def _runtime_tables_from_rows(
     *,
-    obj_rows: list[Row],
-    sig_rows: list[Row],
-    param_rows: list[Row],
-    member_rows: list[Row],
+    rows: RuntimeRows,
     exec_ctx: ExecutionContext,
+    metadata_specs: Mapping[str, SchemaMetadataSpec],
 ) -> RuntimeInspectResult:
-    if not obj_rows:
-        return _empty_runtime_result()
+    if not rows.obj_rows:
+        return _empty_runtime_result(metadata_specs)
 
-    rt_objects_plan, rt_objects_key_plan = _build_rt_objects(obj_rows, exec_ctx=exec_ctx)
+    rt_objects_plan, rt_objects_key_plan = _build_rt_objects(rows.obj_rows, exec_ctx=exec_ctx)
     rt_signatures_plan, sig_meta_plan = _build_rt_signatures(
-        sig_rows,
+        rows.sig_rows,
         rt_objects_key_plan=rt_objects_key_plan,
         exec_ctx=exec_ctx,
     )
     rt_params_plan = _build_rt_params(
-        param_rows,
+        rows.param_rows,
         sig_meta_plan=sig_meta_plan,
         exec_ctx=exec_ctx,
     )
     rt_members_plan = _build_rt_members(
-        member_rows,
+        rows.member_rows,
         rt_objects_key_plan=rt_objects_key_plan,
         exec_ctx=exec_ctx,
     )
 
     return RuntimeInspectResult(
-        rt_objects=materialize_plan(rt_objects_plan, ctx=exec_ctx),
-        rt_signatures=materialize_plan(rt_signatures_plan, ctx=exec_ctx),
-        rt_signature_params=materialize_plan(rt_params_plan, ctx=exec_ctx),
-        rt_members=materialize_plan(rt_members_plan, ctx=exec_ctx),
+        rt_objects=materialize_plan(
+            rt_objects_plan,
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["rt_objects"],
+        ),
+        rt_signatures=materialize_plan(
+            rt_signatures_plan,
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["rt_signatures"],
+        ),
+        rt_signature_params=materialize_plan(
+            rt_params_plan,
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["rt_signature_params"],
+        ),
+        rt_members=materialize_plan(
+            rt_members_plan,
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["rt_members"],
+        ),
     )
 
 
 def _runtime_plans_from_rows(
     *,
-    obj_rows: list[Row],
-    sig_rows: list[Row],
-    param_rows: list[Row],
-    member_rows: list[Row],
+    rows: RuntimeRows,
     exec_ctx: ExecutionContext,
 ) -> dict[str, Plan]:
-    if not obj_rows:
+    if not rows.obj_rows:
         empty = Plan.table_source(empty_table(RT_OBJECTS_SCHEMA))
         return {
             "rt_objects": empty,
@@ -858,15 +950,15 @@ def _runtime_plans_from_rows(
             "rt_signature_params": Plan.table_source(empty_table(RT_SIGNATURE_PARAMS_SCHEMA)),
             "rt_members": Plan.table_source(empty_table(RT_MEMBERS_SCHEMA)),
         }
-    rt_objects_plan, rt_objects_key_plan = _build_rt_objects(obj_rows, exec_ctx=exec_ctx)
+    rt_objects_plan, rt_objects_key_plan = _build_rt_objects(rows.obj_rows, exec_ctx=exec_ctx)
     rt_signatures_plan, sig_meta_plan = _build_rt_signatures(
-        sig_rows,
+        rows.sig_rows,
         rt_objects_key_plan=rt_objects_key_plan,
         exec_ctx=exec_ctx,
     )
-    rt_params_plan = _build_rt_params(param_rows, sig_meta_plan=sig_meta_plan, exec_ctx=exec_ctx)
+    rt_params_plan = _build_rt_params(rows.param_rows, sig_meta_plan=sig_meta_plan, exec_ctx=exec_ctx)
     rt_members_plan = _build_rt_members(
-        member_rows,
+        rows.member_rows,
         rt_objects_key_plan=rt_objects_key_plan,
         exec_ctx=exec_ctx,
     )
@@ -902,7 +994,8 @@ def extract_runtime_tables(
     """
     exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
     if not options.module_allowlist:
-        return _empty_runtime_result()
+        return _empty_runtime_result(_runtime_metadata_specs(options))
+    metadata_specs = _runtime_metadata_specs(options)
 
     payload = _run_inspect_subprocess(
         repo_root,
@@ -913,12 +1006,16 @@ def extract_runtime_tables(
     obj_rows = _parse_runtime_objects(payload.get("objects"))
     sig_rows, param_rows = _parse_runtime_signatures(payload.get("signatures"))
     member_rows = _parse_runtime_members(payload.get("members"))
-    return _runtime_tables_from_rows(
+    rows = RuntimeRows(
         obj_rows=obj_rows,
         sig_rows=sig_rows,
         param_rows=param_rows,
         member_rows=member_rows,
+    )
+    return _runtime_tables_from_rows(
+        rows=rows,
         exec_ctx=exec_ctx,
+        metadata_specs=metadata_specs,
     )
 
 
@@ -953,11 +1050,14 @@ def extract_runtime_plans(
     obj_rows = _parse_runtime_objects(payload.get("objects"))
     sig_rows, param_rows = _parse_runtime_signatures(payload.get("signatures"))
     member_rows = _parse_runtime_members(payload.get("members"))
-    return _runtime_plans_from_rows(
+    rows = RuntimeRows(
         obj_rows=obj_rows,
         sig_rows=sig_rows,
         param_rows=param_rows,
         member_rows=member_rows,
+    )
+    return _runtime_plans_from_rows(
+        rows=rows,
         exec_ctx=exec_ctx,
     )
 
@@ -979,14 +1079,17 @@ def extract_runtime_objects(
     TableLike | RecordBatchReaderLike
         Runtime object output.
     """
+    options = RuntimeInspectOptions(module_allowlist=module_allowlist, timeout_s=timeout_s)
     plans = extract_runtime_plans(
         repo_root,
-        options=RuntimeInspectOptions(module_allowlist=module_allowlist, timeout_s=timeout_s),
+        options=options,
     )
+    metadata_specs = _runtime_metadata_specs(options)
     return finalize_plan_bundle(
         {"rt_objects": plans["rt_objects"]},
         ctx=ExecutionContext(runtime=RuntimeProfile(name="DEFAULT")),
         prefer_reader=prefer_reader,
+        metadata_specs={"rt_objects": metadata_specs["rt_objects"]},
     )["rt_objects"]
 
 
@@ -1007,10 +1110,12 @@ def extract_runtime_signatures(
     dict[str, TableLike | RecordBatchReaderLike]
         Signature bundle with ``rt_signatures`` and ``rt_signature_params``.
     """
+    options = RuntimeInspectOptions(module_allowlist=module_allowlist, timeout_s=timeout_s)
     plans = extract_runtime_plans(
         repo_root,
-        options=RuntimeInspectOptions(module_allowlist=module_allowlist, timeout_s=timeout_s),
+        options=options,
     )
+    metadata_specs = _runtime_metadata_specs(options)
     return finalize_plan_bundle(
         {
             "rt_signatures": plans["rt_signatures"],
@@ -1018,6 +1123,10 @@ def extract_runtime_signatures(
         },
         ctx=ExecutionContext(runtime=RuntimeProfile(name="DEFAULT")),
         prefer_reader=prefer_reader,
+        metadata_specs={
+            "rt_signatures": metadata_specs["rt_signatures"],
+            "rt_signature_params": metadata_specs["rt_signature_params"],
+        },
     )
 
 
@@ -1038,12 +1147,15 @@ def extract_runtime_members(
     TableLike | RecordBatchReaderLike
         Runtime member output.
     """
+    options = RuntimeInspectOptions(module_allowlist=module_allowlist, timeout_s=timeout_s)
     plans = extract_runtime_plans(
         repo_root,
-        options=RuntimeInspectOptions(module_allowlist=module_allowlist, timeout_s=timeout_s),
+        options=options,
     )
+    metadata_specs = _runtime_metadata_specs(options)
     return finalize_plan_bundle(
         {"rt_members": plans["rt_members"]},
         ctx=ExecutionContext(runtime=RuntimeProfile(name="DEFAULT")),
         prefer_reader=prefer_reader,
+        metadata_specs={"rt_members": metadata_specs["rt_members"]},
     )["rt_members"]

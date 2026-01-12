@@ -194,42 +194,6 @@ class RuntimeProfile:
 
 
 @dataclass(frozen=True)
-class ExecutionProfile:
-    """Execution-time ordering and threading overrides."""
-
-    use_threads: bool = True
-    scan_implicit_ordering: bool = False
-    scan_require_sequenced_output: bool = False
-
-    def apply(self, runtime: RuntimeProfile) -> RuntimeProfile:
-        """Return a runtime profile with this execution profile applied.
-
-        Returns
-        -------
-        RuntimeProfile
-            Updated runtime profile.
-        """
-        scan = runtime.scan
-        scan = ScanProfile(
-            name=scan.name,
-            batch_size=scan.batch_size,
-            batch_readahead=scan.batch_readahead,
-            fragment_readahead=scan.fragment_readahead,
-            use_threads=scan.use_threads,
-            require_sequenced_output=self.scan_require_sequenced_output,
-            implicit_ordering=self.scan_implicit_ordering,
-        )
-        return RuntimeProfile(
-            name=runtime.name,
-            cpu_threads=runtime.cpu_threads,
-            io_threads=runtime.io_threads,
-            scan=scan,
-            plan_use_threads=self.use_threads,
-            determinism=runtime.determinism,
-        )
-
-
-@dataclass(frozen=True)
 class SchemaValidationPolicy:
     """Schema validation settings for contract boundaries."""
 
@@ -322,24 +286,6 @@ class ExecutionContext:
             runtime=self.runtime,
             mode=self.mode,
             provenance=provenance,
-            safe_cast=self.safe_cast,
-            debug=self.debug,
-            schema_validation=self.schema_validation,
-        )
-
-    def with_execution_profile(self, profile: ExecutionProfile) -> ExecutionContext:
-        """Return a copy with an execution profile override applied.
-
-        Returns
-        -------
-        ExecutionContext
-            Updated execution context.
-        """
-        runtime = profile.apply(self.runtime)
-        return ExecutionContext(
-            runtime=runtime,
-            mode=self.mode,
-            provenance=self.provenance,
             safe_cast=self.safe_cast,
             debug=self.debug,
             schema_validation=self.schema_validation,

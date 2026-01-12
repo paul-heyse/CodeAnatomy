@@ -21,10 +21,15 @@ from arrowdsl.schema.schema import empty_table
 from core_types import PathLike, ensure_path
 from extract.hash_specs import repo_file_id_spec
 from extract.plan_exprs import HashExprSpec
-from extract.spec_helpers import DatasetRegistration, ordering_metadata_spec, register_dataset
+from extract.spec_helpers import (
+    DatasetRegistration,
+    merge_metadata_specs,
+    options_metadata_spec,
+    ordering_metadata_spec,
+    register_dataset,
+)
 from extract.tables import (
     align_plan,
-    apply_query_spec,
     finalize_plan,
     plan_from_rows,
 )
@@ -270,13 +275,27 @@ def scan_repo(
     """
     options = options or RepoScanOptions()
     ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    metadata_spec = merge_metadata_specs(
+        _REPO_METADATA,
+        options_metadata_spec(options=options, repo_id=options.repo_id),
+    )
     max_files = options.max_files
     if max_files is not None and max_files <= 0:
         empty_plan = Plan.table_source(empty_table(REPO_FILES_SCHEMA))
-        return finalize_plan(empty_plan, ctx=ctx, prefer_reader=prefer_reader)
+        return finalize_plan(
+            empty_plan,
+            ctx=ctx,
+            prefer_reader=prefer_reader,
+            metadata_spec=metadata_spec,
+        )
 
     plan = scan_repo_plan(repo_root, options=options, ctx=ctx)
-    return finalize_plan(plan, ctx=ctx, prefer_reader=prefer_reader)
+    return finalize_plan(
+        plan,
+        ctx=ctx,
+        prefer_reader=prefer_reader,
+        metadata_spec=metadata_spec,
+    )
 
 
 def scan_repo_plan(
@@ -306,7 +325,7 @@ def scan_repo_plan(
                 break
 
     plan = plan_from_rows(iter_rows(), schema=REPO_FILES_SCHEMA, label="repo_files")
-    plan = apply_query_spec(plan, spec=repo_files_query(options.repo_id), ctx=ctx)
+    plan = repo_files_query(options.repo_id).apply_to_plan(plan, ctx=ctx)
     return align_plan(
         plan,
         schema=REPO_FILES_SCHEMA,

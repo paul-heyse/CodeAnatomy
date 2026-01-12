@@ -3,19 +3,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from itertools import pairwise
 
 import pyarrow as pa
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_arrays
-from arrowdsl.core.interop import ArrayLike, TableLike, pc
+from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, pc
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.plan import Plan, union_all_plans
-from arrowdsl.schema.arrays import build_struct_array
+from arrowdsl.schema.arrays import build_struct
 from normalize.arrow_utils import column_or_null
 from normalize.plan_exprs import column_or_null_expr
-from normalize.plan_helpers import apply_query_spec
-from normalize.runner import PostFn, ensure_canonical, ensure_execution_context, run_normalize
+from normalize.runner import (
+    PostFn,
+    ensure_canonical,
+    ensure_execution_context,
+    run_normalize,
+    run_normalize_streamable_contract,
+)
 from normalize.schemas import (
     DIAG_CONTRACT,
     DIAG_DETAILS_TYPE,
@@ -100,6 +106,14 @@ def _offsets_start() -> list[int]:
     return [0]
 
 
+def _list_view_offsets(offsets: list[int]) -> tuple[list[int], list[int]]:
+    if len(offsets) <= 1:
+        return [], []
+    starts = offsets[:-1]
+    sizes = [end - start for start, end in pairwise(offsets)]
+    return starts, sizes
+
+
 @dataclass
 class _DiagBuffers:
     paths: list[object | None] = field(default_factory=list)
@@ -161,11 +175,13 @@ class _ScipDiagInput:
 
 
 def _build_diag_details(buffers: _DiagBuffers) -> ArrayLike:
-    tags = pa.LargeListArray.from_arrays(
-        pa.array(buffers.detail_tag_offsets, type=pa.int64()),
+    tag_starts, tag_sizes = _list_view_offsets(buffers.detail_tag_offsets)
+    tags = pa.LargeListViewArray.from_arrays(
+        pa.array(tag_starts, type=pa.int64()),
+        pa.array(tag_sizes, type=pa.int64()),
         pa.array(buffers.detail_tag_values, type=pa.string()),
     )
-    detail_struct = build_struct_array(
+    detail_struct = build_struct(
         {
             "detail_kind": pa.array(buffers.detail_kinds, type=pa.string()),
             "error_type": pa.array(buffers.detail_error_types, type=pa.string()),
@@ -173,8 +189,10 @@ def _build_diag_details(buffers: _DiagBuffers) -> ArrayLike:
             "tags": tags,
         }
     )
-    return pa.LargeListArray.from_arrays(
-        pa.array(buffers.detail_offsets, type=pa.int64()),
+    detail_starts, detail_sizes = _list_view_offsets(buffers.detail_offsets)
+    return pa.LargeListViewArray.from_arrays(
+        pa.array(detail_starts, type=pa.int64()),
+        pa.array(detail_sizes, type=pa.int64()),
         detail_struct,
     )
 
@@ -193,12 +211,14 @@ def _detail_tags(value: object | None) -> list[str]:
 
 
 def _empty_details_list(num_rows: int) -> ArrayLike:
-    offsets = pa.array([0] * (num_rows + 1), type=pa.int64())
-    tags = pa.LargeListArray.from_arrays(
-        pa.array([0], type=pa.int64()),
+    offsets = pa.array([0] * num_rows, type=pa.int64())
+    sizes = pa.array([0] * num_rows, type=pa.int64())
+    tags = pa.LargeListViewArray.from_arrays(
+        pa.array([], type=pa.int64()),
+        pa.array([], type=pa.int64()),
         pa.array([], type=pa.string()),
     )
-    detail_struct = build_struct_array(
+    detail_struct = build_struct(
         {
             "detail_kind": pa.array([], type=pa.string()),
             "error_type": pa.array([], type=pa.string()),
@@ -206,7 +226,7 @@ def _empty_details_list(num_rows: int) -> ArrayLike:
             "tags": tags,
         }
     )
-    return pa.LargeListArray.from_arrays(offsets, detail_struct)
+    return pa.LargeListViewArray.from_arrays(offsets, sizes, detail_struct)
 
 
 def _cst_parse_error_row(
@@ -488,7 +508,7 @@ def _diagnostics_plan(
         plans.append(Plan.table_source(_empty_diag_base_table()))
 
     unioned = union_all_plans(plans, label="diagnostics")
-    return apply_query_spec(unioned, spec=DIAG_QUERY, ctx=ctx)
+    return DIAG_QUERY.apply_to_plan(unioned, ctx=ctx)
 
 
 def diagnostics_post_step(
@@ -585,3 +605,21 @@ def collect_diags_canonical(
     """
     exec_ctx = ensure_canonical(ensure_execution_context(ctx))
     return collect_diags_result(repo_text_index, sources=sources, ctx=exec_ctx).good
+
+
+def collect_diags_streamable(
+    repo_text_index: RepoTextIndex,
+    *,
+    sources: DiagnosticsSources,
+    ctx: ExecutionContext | None = None,
+) -> TableLike | RecordBatchReaderLike:
+    """Aggregate diagnostics and return a streamable output.
+
+    Returns
+    -------
+    TableLike | RecordBatchReaderLike
+        Reader when streamable, otherwise a materialized table.
+    """
+    exec_ctx = ensure_execution_context(ctx)
+    plan = _diagnostics_plan(repo_text_index, sources=sources, ctx=exec_ctx)
+    return run_normalize_streamable_contract(plan, contract=DIAG_CONTRACT, ctx=exec_ctx)

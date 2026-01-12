@@ -23,7 +23,7 @@ from normalize.plan_exprs import (
     MaskedHashExprSpec,
     TrimExprSpec,
 )
-from schema_spec.specs import ArrowFieldSpec, file_identity_bundle, span_bundle
+from schema_spec.specs import ArrowFieldSpec, file_identity_bundle, list_view_type, span_bundle
 from schema_spec.system import (
     GLOBAL_SCHEMA_REGISTRY,
     DedupeSpecSpec,
@@ -39,7 +39,7 @@ _USE_PREFIXES = ("LOAD_",)
 _DEF_USE_OPS = ("IMPORT_NAME", "IMPORT_FROM")
 
 
-DIAG_TAGS_TYPE = pa.large_list(pa.string())
+DIAG_TAGS_TYPE = list_view_type(pa.string(), large=True)
 DIAG_DETAIL_STRUCT = pa.struct(
     [
         ("detail_kind", pa.string()),
@@ -48,7 +48,7 @@ DIAG_DETAIL_STRUCT = pa.struct(
         ("tags", DIAG_TAGS_TYPE),
     ]
 )
-DIAG_DETAILS_TYPE = pa.large_list(DIAG_DETAIL_STRUCT)
+DIAG_DETAILS_TYPE = list_view_type(DIAG_DETAIL_STRUCT, large=True)
 
 
 def _normalize_metadata(dataset_name: str) -> SchemaMetadataSpec:

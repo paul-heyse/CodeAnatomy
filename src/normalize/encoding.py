@@ -55,14 +55,19 @@ def _ordered_from_meta(meta: Mapping[bytes, bytes] | None) -> bool:
 def dict_field(
     name: str,
     *,
-    value_type: pa.DataType | None = None,
     index_type: pa.DataType | None = None,
     ordered: bool = False,
     nullable: bool = True,
     metadata: dict[str, str] | None = None,
 ) -> ArrowFieldSpec:
-    """Return an ArrowFieldSpec configured for dictionary encoding."""
-    val_type = value_type or pa.string()
+    """Return an ArrowFieldSpec configured for dictionary encoding.
+
+    Returns
+    -------
+    ArrowFieldSpec
+        Field spec configured with dictionary encoding metadata.
+    """
+    val_type = pa.string()
     idx_type = index_type or pa.int32()
     meta = {
         ENCODING_META: ENCODING_DICTIONARY,
@@ -92,11 +97,15 @@ def _encoding_spec_from_field(field: FieldLike) -> EncodingSpec | None:
 
 
 def encoding_policy_from_schema(schema: SchemaLike) -> EncodingPolicy:
-    """Return an encoding policy derived from schema field metadata."""
+    """Return an encoding policy derived from schema field metadata.
+
+    Returns
+    -------
+    EncodingPolicy
+        Encoding policy for dictionary-encoded columns.
+    """
     specs = tuple(
-        spec
-        for field in schema
-        if (spec := _encoding_spec_from_field(field)) is not None
+        spec for field in schema if (spec := _encoding_spec_from_field(field)) is not None
     )
     return EncodingPolicy(specs=specs, chunk_policy=ChunkPolicy())
 

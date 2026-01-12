@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, cast, overload
+from typing import Literal, Required, TypedDict, Unpack, cast, overload
 
 import libcst as cst
 import pyarrow as pa
@@ -23,7 +23,7 @@ from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfil
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
-from arrowdsl.schema.schema import empty_table
+from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.common import bytes_from_file_ctx, file_identity_row, iter_contexts
 from extract.file_context import FileContext
 from extract.hash_specs import (
@@ -36,11 +36,18 @@ from extract.hash_specs import (
     CST_TYPE_EXPR_ID_SPEC,
 )
 from extract.plan_exprs import MaskedHashExprSpec
-from extract.spec_helpers import DatasetRegistration, ordering_metadata_spec, register_dataset
+from extract.spec_helpers import (
+    DatasetRegistration,
+    infer_ordering_keys,
+    merge_metadata_specs,
+    options_metadata_spec,
+    ordering_metadata_spec,
+    register_dataset,
+)
 from extract.tables import (
     align_plan,
-    apply_query_spec,
     finalize_plan_bundle,
+    flatten_struct_field,
     materialize_plan,
     plan_from_rows,
 )
@@ -99,14 +106,13 @@ class CSTExtractResult:
 
 QNAME_STRUCT = pa.struct([("name", pa.string()), ("source", pa.string())])
 QNAME_LIST = pa.large_list_view(QNAME_STRUCT)
+_QNAME_FLAT_FIELDS = flatten_struct_field(pa.field("qname", QNAME_STRUCT))
+QNAME_KEYS = tuple(field.name.split(".", 1)[1] for field in _QNAME_FLAT_FIELDS)
 
-_CST_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    extra={
-        b"extractor_name": b"cst",
-        b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
-    },
-)
+_CST_METADATA_EXTRA = {
+    b"extractor_name": b"cst",
+    b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
+}
 
 _PARSE_MANIFEST_FIELDS = [
     ArrowFieldSpec(name="encoding", dtype=pa.string()),
@@ -203,6 +209,42 @@ _TYPE_EXPRS_BASE_COLUMNS = tuple(
     field.name for field in (*file_identity_bundle().fields, *_TYPE_EXPRS_FIELDS)
 )
 
+_PARSE_MANIFEST_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_PARSE_MANIFEST_BASE_COLUMNS),
+    extra=_CST_METADATA_EXTRA,
+)
+_PARSE_ERRORS_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_PARSE_ERRORS_BASE_COLUMNS),
+    extra=_CST_METADATA_EXTRA,
+)
+_NAME_REFS_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_NAME_REFS_BASE_COLUMNS),
+    extra=_CST_METADATA_EXTRA,
+)
+_IMPORTS_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_IMPORTS_BASE_COLUMNS),
+    extra=_CST_METADATA_EXTRA,
+)
+_CALLSITES_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_CALLSITES_BASE_COLUMNS),
+    extra=_CST_METADATA_EXTRA,
+)
+_DEFS_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_DEFS_BASE_COLUMNS),
+    extra=_CST_METADATA_EXTRA,
+)
+_TYPE_EXPRS_METADATA = ordering_metadata_spec(
+    OrderingLevel.IMPLICIT,
+    keys=infer_ordering_keys(_TYPE_EXPRS_BASE_COLUMNS),
+    extra=_CST_METADATA_EXTRA,
+)
+
 PARSE_MANIFEST_QUERY = QuerySpec.simple(*_PARSE_MANIFEST_BASE_COLUMNS)
 PARSE_ERRORS_QUERY = QuerySpec.simple(*_PARSE_ERRORS_BASE_COLUMNS)
 NAME_REFS_QUERY = QuerySpec(
@@ -281,7 +323,7 @@ PARSE_MANIFEST_SPEC = register_dataset(
     fields=_PARSE_MANIFEST_FIELDS,
     registration=DatasetRegistration(
         query_spec=PARSE_MANIFEST_QUERY,
-        metadata_spec=_CST_METADATA,
+        metadata_spec=_PARSE_MANIFEST_METADATA,
     ),
 )
 
@@ -292,7 +334,7 @@ PARSE_ERRORS_SPEC = register_dataset(
     fields=_PARSE_ERRORS_FIELDS,
     registration=DatasetRegistration(
         query_spec=PARSE_ERRORS_QUERY,
-        metadata_spec=_CST_METADATA,
+        metadata_spec=_PARSE_ERRORS_METADATA,
     ),
 )
 
@@ -303,7 +345,7 @@ NAME_REFS_SPEC = register_dataset(
     fields=_NAME_REFS_FIELDS,
     registration=DatasetRegistration(
         query_spec=NAME_REFS_QUERY,
-        metadata_spec=_CST_METADATA,
+        metadata_spec=_NAME_REFS_METADATA,
     ),
 )
 
@@ -314,7 +356,7 @@ IMPORTS_SPEC = register_dataset(
     fields=_IMPORTS_FIELDS,
     registration=DatasetRegistration(
         query_spec=IMPORTS_QUERY,
-        metadata_spec=_CST_METADATA,
+        metadata_spec=_IMPORTS_METADATA,
     ),
 )
 
@@ -325,7 +367,7 @@ CALLSITES_SPEC = register_dataset(
     fields=_CALLSITES_FIELDS,
     registration=DatasetRegistration(
         query_spec=CALLSITES_QUERY,
-        metadata_spec=_CST_METADATA,
+        metadata_spec=_CALLSITES_METADATA,
     ),
 )
 
@@ -336,7 +378,7 @@ DEFS_SPEC = register_dataset(
     fields=_DEFS_FIELDS,
     registration=DatasetRegistration(
         query_spec=DEFS_QUERY,
-        metadata_spec=_CST_METADATA,
+        metadata_spec=_DEFS_METADATA,
     ),
 )
 
@@ -347,7 +389,7 @@ TYPE_EXPRS_SPEC = register_dataset(
     fields=_TYPE_EXPRS_FIELDS,
     registration=DatasetRegistration(
         query_spec=TYPE_EXPRS_QUERY,
-        metadata_spec=_CST_METADATA,
+        metadata_spec=_TYPE_EXPRS_METADATA,
     ),
 )
 
@@ -358,6 +400,19 @@ IMPORTS_SCHEMA = IMPORTS_SPEC.schema()
 CALLSITES_SCHEMA = CALLSITES_SPEC.schema()
 DEFS_SCHEMA = DEFS_SPEC.schema()
 TYPE_EXPRS_SCHEMA = TYPE_EXPRS_SPEC.schema()
+
+
+def _cst_metadata_specs(options: CSTExtractOptions) -> dict[str, SchemaMetadataSpec]:
+    run_meta = options_metadata_spec(options=options, repo_id=options.repo_id)
+    return {
+        "cst_parse_manifest": merge_metadata_specs(_PARSE_MANIFEST_METADATA, run_meta),
+        "cst_parse_errors": merge_metadata_specs(_PARSE_ERRORS_METADATA, run_meta),
+        "cst_name_refs": merge_metadata_specs(_NAME_REFS_METADATA, run_meta),
+        "cst_imports": merge_metadata_specs(_IMPORTS_METADATA, run_meta),
+        "cst_callsites": merge_metadata_specs(_CALLSITES_METADATA, run_meta),
+        "cst_defs": merge_metadata_specs(_DEFS_METADATA, run_meta),
+        "cst_type_exprs": merge_metadata_specs(_TYPE_EXPRS_METADATA, run_meta),
+    }
 
 
 @dataclass(frozen=True)
@@ -658,7 +713,7 @@ class CSTCollector(cst.CSTVisitor):
         if not qset:
             return []
         qualified = sorted(qset, key=lambda q: (q.name, str(q.source)))
-        return [{"name": q.name, "source": str(q.source)} for q in qualified]
+        return [dict(zip(QNAME_KEYS, (q.name, str(q.source)), strict=True)) for q in qualified]
 
     def _record_type_expr(
         self,
@@ -1040,11 +1095,12 @@ def extract_cst(
     options = options or CSTExtractOptions()
     exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
     extract_ctx = CSTExtractContext.build(options)
+    metadata_specs = _cst_metadata_specs(options)
 
     for file_ctx in iter_contexts(repo_files, file_contexts):
         _extract_cst_for_context(file_ctx, extract_ctx)
 
-    return _build_cst_result(extract_ctx, exec_ctx)
+    return _build_cst_result(extract_ctx, exec_ctx, metadata_specs)
 
 
 def _build_manifest_table(
@@ -1061,7 +1117,7 @@ def _build_manifest_plan(
     if not ctx.manifest_rows:
         return Plan.table_source(empty_table(PARSE_MANIFEST_SCHEMA))
     plan = plan_from_rows(ctx.manifest_rows, schema=PARSE_MANIFEST_SCHEMA, label="cst_manifest")
-    plan = apply_query_spec(plan, spec=PARSE_MANIFEST_QUERY, ctx=exec_ctx)
+    plan = PARSE_MANIFEST_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=PARSE_MANIFEST_SCHEMA,
@@ -1084,7 +1140,7 @@ def _build_errors_plan(
     if not ctx.error_rows:
         return Plan.table_source(empty_table(PARSE_ERRORS_SCHEMA))
     plan = plan_from_rows(ctx.error_rows, schema=PARSE_ERRORS_SCHEMA, label="cst_parse_errors")
-    plan = apply_query_spec(plan, spec=PARSE_ERRORS_QUERY, ctx=exec_ctx)
+    plan = PARSE_ERRORS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=PARSE_ERRORS_SCHEMA,
@@ -1107,7 +1163,7 @@ def _build_name_refs_plan(
     if not ctx.name_ref_rows:
         return Plan.table_source(empty_table(NAME_REFS_SCHEMA))
     plan = plan_from_rows(ctx.name_ref_rows, schema=NAME_REFS_SCHEMA, label="cst_name_refs")
-    plan = apply_query_spec(plan, spec=NAME_REFS_QUERY, ctx=exec_ctx)
+    plan = NAME_REFS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=NAME_REFS_SCHEMA,
@@ -1130,7 +1186,7 @@ def _build_imports_plan(
     if not ctx.import_rows:
         return Plan.table_source(empty_table(IMPORTS_SCHEMA))
     plan = plan_from_rows(ctx.import_rows, schema=IMPORTS_SCHEMA, label="cst_imports")
-    plan = apply_query_spec(plan, spec=IMPORTS_QUERY, ctx=exec_ctx)
+    plan = IMPORTS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=IMPORTS_SCHEMA,
@@ -1153,7 +1209,7 @@ def _build_callsites_plan(
     if not ctx.call_rows:
         return Plan.table_source(empty_table(CALLSITES_SCHEMA))
     plan = plan_from_rows(ctx.call_rows, schema=CALLSITES_SCHEMA, label="cst_callsites")
-    plan = apply_query_spec(plan, spec=CALLSITES_QUERY, ctx=exec_ctx)
+    plan = CALLSITES_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=CALLSITES_SCHEMA,
@@ -1176,7 +1232,7 @@ def _build_defs_plan(
     if not ctx.def_rows:
         return Plan.table_source(empty_table(DEFS_SCHEMA))
     plan = plan_from_rows(ctx.def_rows, schema=DEFS_SCHEMA, label="cst_defs")
-    plan = apply_query_spec(plan, spec=DEFS_QUERY, ctx=exec_ctx)
+    plan = DEFS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=DEFS_SCHEMA,
@@ -1199,7 +1255,7 @@ def _build_type_exprs_plan(
     if not ctx.type_expr_rows:
         return Plan.table_source(empty_table(TYPE_EXPRS_SCHEMA))
     plan = plan_from_rows(ctx.type_expr_rows, schema=TYPE_EXPRS_SCHEMA, label="cst_type_exprs")
-    plan = apply_query_spec(plan, spec=TYPE_EXPRS_QUERY, ctx=exec_ctx)
+    plan = TYPE_EXPRS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
         schema=TYPE_EXPRS_SCHEMA,
@@ -1211,16 +1267,45 @@ def _build_type_exprs_plan(
 def _build_cst_result(
     ctx: CSTExtractContext,
     exec_ctx: ExecutionContext,
+    metadata_specs: Mapping[str, SchemaMetadataSpec],
 ) -> CSTExtractResult:
     plans = _build_cst_plans(ctx, exec_ctx)
     return CSTExtractResult(
-        py_cst_parse_manifest=materialize_plan(plans["cst_parse_manifest"], ctx=exec_ctx),
-        py_cst_parse_errors=materialize_plan(plans["cst_parse_errors"], ctx=exec_ctx),
-        py_cst_name_refs=materialize_plan(plans["cst_name_refs"], ctx=exec_ctx),
-        py_cst_imports=materialize_plan(plans["cst_imports"], ctx=exec_ctx),
-        py_cst_callsites=materialize_plan(plans["cst_callsites"], ctx=exec_ctx),
-        py_cst_defs=materialize_plan(plans["cst_defs"], ctx=exec_ctx),
-        py_cst_type_exprs=materialize_plan(plans["cst_type_exprs"], ctx=exec_ctx),
+        py_cst_parse_manifest=materialize_plan(
+            plans["cst_parse_manifest"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["cst_parse_manifest"],
+        ),
+        py_cst_parse_errors=materialize_plan(
+            plans["cst_parse_errors"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["cst_parse_errors"],
+        ),
+        py_cst_name_refs=materialize_plan(
+            plans["cst_name_refs"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["cst_name_refs"],
+        ),
+        py_cst_imports=materialize_plan(
+            plans["cst_imports"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["cst_imports"],
+        ),
+        py_cst_callsites=materialize_plan(
+            plans["cst_callsites"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["cst_callsites"],
+        ),
+        py_cst_defs=materialize_plan(
+            plans["cst_defs"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["cst_defs"],
+        ),
+        py_cst_type_exprs=materialize_plan(
+            plans["cst_type_exprs"],
+            ctx=exec_ctx,
+            metadata_spec=metadata_specs["cst_type_exprs"],
+        ),
     )
 
 
@@ -1239,64 +1324,70 @@ def _build_cst_plans(
     }
 
 
+class _CstTablesKwargs(TypedDict, total=False):
+    repo_files: Required[TableLike]
+    options: CSTExtractOptions | None
+    file_contexts: Iterable[FileContext] | None
+    ctx: ExecutionContext | None
+    prefer_reader: bool
+
+
+class _CstTablesKwargsTable(TypedDict, total=False):
+    repo_files: Required[TableLike]
+    options: CSTExtractOptions | None
+    file_contexts: Iterable[FileContext] | None
+    ctx: ExecutionContext | None
+    prefer_reader: Literal[False]
+
+
+class _CstTablesKwargsReader(TypedDict, total=False):
+    repo_files: Required[TableLike]
+    options: CSTExtractOptions | None
+    file_contexts: Iterable[FileContext] | None
+    ctx: ExecutionContext | None
+    prefer_reader: Required[Literal[True]]
+
+
 @overload
 def extract_cst_tables(
-    *,
-    repo_root: str | None,
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-    ctx: ExecutionContext | None = None,
-    prefer_reader: Literal[False] = False,
+    **kwargs: Unpack[_CstTablesKwargsTable],
 ) -> Mapping[str, TableLike]: ...
 
 
 @overload
 def extract_cst_tables(
-    *,
-    repo_root: str | None,
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-    ctx: ExecutionContext | None = None,
-    prefer_reader: Literal[True],
+    **kwargs: Unpack[_CstTablesKwargsReader],
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]: ...
 
 
 def extract_cst_tables(
-    *,
-    repo_root: str | None,
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-    ctx: ExecutionContext | None = None,
-    prefer_reader: bool = False,
+    **kwargs: Unpack[_CstTablesKwargs],
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]:
     """Extract CST tables as a name-keyed bundle.
 
     Parameters
     ----------
-    repo_root:
-        Optional repository root for module/package derivation.
-    repo_files:
-        Repo files table.
-    file_contexts:
-        Optional pre-built file contexts for extraction.
-    ctx:
-        Execution context for plan execution.
-
-    prefer_reader:
-        When True, return streaming readers when possible.
+    kwargs:
+        Keyword-only arguments for extraction (repo_files, options, file_contexts, ctx,
+        prefer_reader).
 
     Returns
     -------
     dict[str, TableLike | RecordBatchReaderLike]
         Extracted CST outputs keyed by output name.
     """
-    options = CSTExtractOptions(repo_root=Path(repo_root) if repo_root else None)
-    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    repo_files = kwargs["repo_files"]
+    options = kwargs.get("options") or CSTExtractOptions()
+    file_contexts = kwargs.get("file_contexts")
+    exec_ctx = kwargs.get("ctx") or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    prefer_reader = kwargs.get("prefer_reader", False)
     extract_ctx = CSTExtractContext.build(options)
+    metadata_specs = _cst_metadata_specs(options)
     for file_ctx in iter_contexts(repo_files, file_contexts):
         _extract_cst_for_context(file_ctx, extract_ctx)
     return finalize_plan_bundle(
         _build_cst_plans(extract_ctx, exec_ctx),
         ctx=exec_ctx,
         prefer_reader=prefer_reader,
+        metadata_specs=metadata_specs,
     )

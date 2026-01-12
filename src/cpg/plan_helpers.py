@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import cast
 
 import pyarrow as pa
 import pyarrow.dataset as ds
@@ -18,6 +17,7 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.finalize.finalize import Contract
 from arrowdsl.plan.plan import Plan, PlanSpec
+from arrowdsl.plan_helpers import encoding_columns_from_metadata
 from arrowdsl.schema.schema import (
     EncodingSpec,
     empty_table,
@@ -192,22 +192,6 @@ def finalize_table(table: TableLike, *, unify_dicts: bool = True) -> TableLike:
     return table
 
 
-def encoding_columns_from_metadata(schema: SchemaLike) -> list[str]:
-    """Return column names marked for dictionary encoding.
-
-    Returns
-    -------
-    list[str]
-        Column names annotated for dictionary encoding.
-    """
-    cols: list[str] = []
-    for field in schema:
-        meta = field.metadata or {}
-        if meta.get(b"encoding") == b"dictionary":
-            cols.append(field.name)
-    return cols
-
-
 def unify_schema_with_metadata(
     schemas: Sequence[SchemaLike],
     *,
@@ -282,8 +266,8 @@ def assert_schema_metadata(table: TableLike, *, schema: SchemaLike) -> None:
     ValueError
         Raised when schema metadata does not match.
     """
-    table_schema = cast("pa.Schema", table.schema)
-    expected_schema = cast("pa.Schema", schema)
+    table_schema = pa.schema(table.schema)
+    expected_schema = pa.schema(schema)
     if not table_schema.equals(expected_schema, check_metadata=True):
         msg = "Schema metadata mismatch after finalize."
         raise ValueError(msg)

@@ -402,19 +402,8 @@ class JoinOp:
         return Ordering.unordered()
 
 
-@dataclass(frozen=True)
-class AggregateSpec:
-    """Aggregate specification for group-by operations."""
-
-    keys: tuple[str, ...]
-    aggs: tuple[tuple[str, str], ...]
-    use_threads: bool = True
-    rename_aggregates: bool = False
-
-
 __all__ = [
     "AggregateOp",
-    "AggregateSpec",
     "DedupeSpec",
     "DedupeStrategy",
     "FilterOp",

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import arrowdsl.core.interop as pa
+from arrowdsl.compute.transforms import expr_context_value
 from arrowdsl.core.context import ExecutionContext, RuntimeProfile
 from arrowdsl.plan.plan import Plan, PlanSpec, union_all_plans
 from cpg.emit_props import emit_props_plans
 from cpg.kinds import EntityKind, NodeKind
-from cpg.prop_transforms import expr_context_value
 from cpg.specs import PropFieldSpec, PropTableSpec
 
 

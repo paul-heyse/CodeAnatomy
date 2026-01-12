@@ -19,10 +19,12 @@ from libcst.metadata import (
     QualifiedNameProvider,
 )
 
+from arrowdsl.compute.expr_specs import MaskedHashExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
+from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.common import bytes_from_file_ctx, file_identity_row, iter_contexts
 from extract.file_context import FileContext
@@ -35,7 +37,6 @@ from extract.hash_specs import (
     CST_OWNER_DEF_ID_SPEC,
     CST_TYPE_EXPR_ID_SPEC,
 )
-from extract.plan_exprs import MaskedHashExprSpec
 from extract.spec_helpers import (
     DatasetRegistration,
     infer_ordering_keys,
@@ -44,13 +45,7 @@ from extract.spec_helpers import (
     ordering_metadata_spec,
     register_dataset,
 )
-from extract.tables import (
-    align_plan,
-    finalize_plan_bundle,
-    flatten_struct_field,
-    materialize_plan,
-    plan_from_rows,
-)
+from extract.tables import align_plan, flatten_struct_field, plan_from_rows
 from schema_spec.specs import (
     ArrowFieldSpec,
     call_span_bundle,
@@ -1107,7 +1102,11 @@ def _build_manifest_table(
     ctx: CSTExtractContext,
     exec_ctx: ExecutionContext,
 ) -> TableLike:
-    return materialize_plan(_build_manifest_plan(ctx, exec_ctx), ctx=exec_ctx)
+    return materialize_plan(
+        _build_manifest_plan(ctx, exec_ctx),
+        ctx=exec_ctx,
+        attach_ordering_metadata=True,
+    )
 
 
 def _build_manifest_plan(
@@ -1130,7 +1129,11 @@ def _build_errors_table(
     ctx: CSTExtractContext,
     exec_ctx: ExecutionContext,
 ) -> TableLike:
-    return materialize_plan(_build_errors_plan(ctx, exec_ctx), ctx=exec_ctx)
+    return materialize_plan(
+        _build_errors_plan(ctx, exec_ctx),
+        ctx=exec_ctx,
+        attach_ordering_metadata=True,
+    )
 
 
 def _build_errors_plan(
@@ -1153,7 +1156,11 @@ def _build_name_refs_table(
     ctx: CSTExtractContext,
     exec_ctx: ExecutionContext,
 ) -> TableLike:
-    return materialize_plan(_build_name_refs_plan(ctx, exec_ctx), ctx=exec_ctx)
+    return materialize_plan(
+        _build_name_refs_plan(ctx, exec_ctx),
+        ctx=exec_ctx,
+        attach_ordering_metadata=True,
+    )
 
 
 def _build_name_refs_plan(
@@ -1176,7 +1183,11 @@ def _build_imports_table(
     ctx: CSTExtractContext,
     exec_ctx: ExecutionContext,
 ) -> TableLike:
-    return materialize_plan(_build_imports_plan(ctx, exec_ctx), ctx=exec_ctx)
+    return materialize_plan(
+        _build_imports_plan(ctx, exec_ctx),
+        ctx=exec_ctx,
+        attach_ordering_metadata=True,
+    )
 
 
 def _build_imports_plan(
@@ -1199,7 +1210,11 @@ def _build_callsites_table(
     ctx: CSTExtractContext,
     exec_ctx: ExecutionContext,
 ) -> TableLike:
-    return materialize_plan(_build_callsites_plan(ctx, exec_ctx), ctx=exec_ctx)
+    return materialize_plan(
+        _build_callsites_plan(ctx, exec_ctx),
+        ctx=exec_ctx,
+        attach_ordering_metadata=True,
+    )
 
 
 def _build_callsites_plan(
@@ -1222,7 +1237,11 @@ def _build_defs_table(
     ctx: CSTExtractContext,
     exec_ctx: ExecutionContext,
 ) -> TableLike:
-    return materialize_plan(_build_defs_plan(ctx, exec_ctx), ctx=exec_ctx)
+    return materialize_plan(
+        _build_defs_plan(ctx, exec_ctx),
+        ctx=exec_ctx,
+        attach_ordering_metadata=True,
+    )
 
 
 def _build_defs_plan(
@@ -1245,7 +1264,11 @@ def _build_type_exprs_table(
     ctx: CSTExtractContext,
     exec_ctx: ExecutionContext,
 ) -> TableLike:
-    return materialize_plan(_build_type_exprs_plan(ctx, exec_ctx), ctx=exec_ctx)
+    return materialize_plan(
+        _build_type_exprs_plan(ctx, exec_ctx),
+        ctx=exec_ctx,
+        attach_ordering_metadata=True,
+    )
 
 
 def _build_type_exprs_plan(
@@ -1275,36 +1298,43 @@ def _build_cst_result(
             plans["cst_parse_manifest"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["cst_parse_manifest"],
+            attach_ordering_metadata=True,
         ),
         py_cst_parse_errors=materialize_plan(
             plans["cst_parse_errors"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["cst_parse_errors"],
+            attach_ordering_metadata=True,
         ),
         py_cst_name_refs=materialize_plan(
             plans["cst_name_refs"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["cst_name_refs"],
+            attach_ordering_metadata=True,
         ),
         py_cst_imports=materialize_plan(
             plans["cst_imports"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["cst_imports"],
+            attach_ordering_metadata=True,
         ),
         py_cst_callsites=materialize_plan(
             plans["cst_callsites"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["cst_callsites"],
+            attach_ordering_metadata=True,
         ),
         py_cst_defs=materialize_plan(
             plans["cst_defs"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["cst_defs"],
+            attach_ordering_metadata=True,
         ),
         py_cst_type_exprs=materialize_plan(
             plans["cst_type_exprs"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["cst_type_exprs"],
+            attach_ordering_metadata=True,
         ),
     )
 
@@ -1385,9 +1415,10 @@ def extract_cst_tables(
     metadata_specs = _cst_metadata_specs(options)
     for file_ctx in iter_contexts(repo_files, file_contexts):
         _extract_cst_for_context(file_ctx, extract_ctx)
-    return finalize_plan_bundle(
+    return run_plan_bundle(
         _build_cst_plans(extract_ctx, exec_ctx),
         ctx=exec_ctx,
         prefer_reader=prefer_reader,
         metadata_specs=metadata_specs,
+        attach_ordering_metadata=True,
     )

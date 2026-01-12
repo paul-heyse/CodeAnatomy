@@ -3,25 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import cast
 
 import pyarrow as pa
-import pyarrow.dataset as ds
 
-from arrowdsl.core.context import ExecutionContext, Ordering, OrderingEffect
+from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import (
     ComputeExpression,
     DataTypeLike,
-    RecordBatchReaderLike,
     SchemaLike,
     TableLike,
     ensure_expression,
     pc,
 )
-from arrowdsl.plan.ops import ScanOp
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
-from arrowdsl.schema.schema import encode_expression
+from arrowdsl.plan.source import PlanSource, plan_from_source
+from arrowdsl.schema.schema import EncodingSpec, encode_columns, encode_expression
 
 
 def query_for_schema(schema: SchemaLike) -> QuerySpec:
@@ -161,9 +158,6 @@ def flatten_struct_field(field: pa.Field) -> list[pa.Field]:
     return list(field.flatten())
 
 
-PlanSource = TableLike | RecordBatchReaderLike | ds.Dataset | ds.Scanner | Plan
-
-
 def plan_source(
     source: PlanSource,
     *,
@@ -178,38 +172,41 @@ def plan_source(
     Plan
         Acero-backed plan for dataset/table sources.
     """
-    if isinstance(source, Plan):
-        return source
-    if isinstance(source, ds.Dataset):
-        available = set(source.schema.names)
-        scan_cols = list(columns) if columns is not None else list(source.schema.names)
-        scan_cols = [name for name in scan_cols if name in available]
-        scan_ordering = (
-            OrderingEffect.IMPLICIT
-            if ctx.runtime.scan.implicit_ordering or ctx.runtime.scan.require_sequenced_output
-            else OrderingEffect.UNORDERED
-        )
-        scan_op = ScanOp(
-            dataset=source,
-            columns=scan_cols,
-            predicate=None,
-            ordering_effect=scan_ordering,
-        )
-        decl = scan_op.to_declaration([], ctx=ctx)
-        ordering = scan_op.apply_ordering(Ordering.unordered())
-        return Plan(decl=decl, label=label, ordering=ordering, pipeline_breakers=())
-    if isinstance(source, ds.Scanner):
-        scanner = cast("ds.Scanner", source)
-        return Plan.table_source(scanner.to_table(), label=label)
-    if isinstance(source, RecordBatchReaderLike):
-        return Plan.table_source(source.read_all(), label=label)
-    return Plan.table_source(source, label=label)
+    return plan_from_source(source, ctx=ctx, columns=columns, label=label)
+
+
+def encode_plan(plan: Plan, *, columns: Sequence[str], ctx: ExecutionContext) -> Plan:
+    """Return a plan with dictionary encoding applied.
+
+    Returns
+    -------
+    Plan
+        Plan with dictionary-encoded columns.
+    """
+    exprs, names = encoding_projection(columns, available=plan.schema(ctx=ctx).names)
+    return plan.project(exprs, names, ctx=ctx)
+
+
+def encode_table(table: TableLike, *, columns: Sequence[str]) -> TableLike:
+    """Dictionary-encode specified string columns.
+
+    Returns
+    -------
+    TableLike
+        Table with encoded columns.
+    """
+    if not columns:
+        return table
+    specs = tuple(EncodingSpec(column=col) for col in columns)
+    return encode_columns(table, specs=specs)
 
 
 __all__ = [
     "PlanSource",
     "coalesce_expr",
     "column_or_null_expr",
+    "encode_plan",
+    "encode_table",
     "encoding_columns_from_metadata",
     "encoding_projection",
     "flatten_struct_field",

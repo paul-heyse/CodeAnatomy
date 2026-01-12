@@ -5,9 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import pyarrow as pa
-import pyarrow.dataset as ds
 
-from arrowdsl.core.context import DeterminismTier, ExecutionContext, Ordering, OrderingLevel
+from arrowdsl.core.context import DeterminismTier, ExecutionContext, OrderingLevel
 from arrowdsl.core.interop import (
     ComputeExpression,
     RecordBatchReaderLike,
@@ -16,16 +15,17 @@ from arrowdsl.core.interop import (
     pc,
 )
 from arrowdsl.finalize.finalize import Contract
-from arrowdsl.plan.plan import Plan, PlanSpec
+from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.runner import materialize_plan, stream_plan
+from arrowdsl.plan.source import DatasetSource, plan_from_dataset, plan_from_source
+from arrowdsl.plan_helpers import encode_plan as plan_encode_plan
 from arrowdsl.plan_helpers import encoding_columns_from_metadata
 from arrowdsl.schema.schema import (
     EncodingSpec,
     empty_table,
-    encode_expression,
     projection_for_schema,
 )
-from cpg.sources import DatasetSource
-from schema_spec.system import DatasetSpec
+from arrowdsl.schema.unify import unify_schemas
 
 
 def ensure_plan(
@@ -52,7 +52,7 @@ def ensure_plan(
         if ctx is None:
             msg = "ensure_plan requires ctx when source is DatasetSource."
             raise ValueError(msg)
-        return plan_from_dataset(source.dataset, spec=source.spec, ctx=ctx)
+        return plan_from_source(source, ctx=ctx, label=label)
     return Plan.table_source(source, label=label)
 
 
@@ -93,15 +93,8 @@ def encode_plan(
     Plan
         Plan with dictionary-encoded columns.
     """
-    encode_cols = {spec.column for spec in specs}
-    names = plan.schema(ctx=ctx).names
-    exprs: list[ComputeExpression] = []
-    for name in names:
-        if name in encode_cols:
-            exprs.append(encode_expression(name))
-        else:
-            exprs.append(pc.field(name))
-    return plan.project(exprs, names, ctx=ctx)
+    encode_cols = tuple(spec.column for spec in specs)
+    return plan_encode_plan(plan, columns=encode_cols, ctx=ctx)
 
 
 def set_or_append_column(
@@ -137,8 +130,7 @@ def finalize_plan(plan: Plan, *, ctx: ExecutionContext) -> TableLike:
     TableLike
         Materialized plan output.
     """
-    table = PlanSpec.from_plan(plan).to_table(ctx=ctx)
-    return finalize_table(table)
+    return finalize_table(materialize_plan(plan, ctx=ctx))
 
 
 def plan_reader(plan: Plan, *, ctx: ExecutionContext) -> RecordBatchReaderLike:
@@ -149,34 +141,7 @@ def plan_reader(plan: Plan, *, ctx: ExecutionContext) -> RecordBatchReaderLike:
     RecordBatchReaderLike
         Streaming reader for the plan.
     """
-    return PlanSpec.from_plan(plan).to_reader(ctx=ctx)
-
-
-def plan_from_dataset(
-    dataset: ds.Dataset,
-    *,
-    spec: DatasetSpec,
-    ctx: ExecutionContext,
-) -> Plan:
-    """Compile a dataset-backed scan plan with ordering metadata.
-
-    Returns
-    -------
-    Plan
-        Plan representing the dataset scan and projection.
-    """
-    scan_ctx = spec.scan_context(dataset, ctx)
-    ordering = (
-        Ordering.implicit()
-        if ctx.runtime.scan.implicit_ordering or ctx.runtime.scan.require_sequenced_output
-        else Ordering.unordered()
-    )
-    return Plan(
-        decl=scan_ctx.acero_decl(),
-        label=spec.name,
-        ordering=ordering,
-        pipeline_breakers=(),
-    )
+    return stream_plan(plan, ctx=ctx)
 
 
 def finalize_table(table: TableLike, *, unify_dicts: bool = True) -> TableLike:
@@ -204,26 +169,7 @@ def unify_schema_with_metadata(
     SchemaLike
         Unified schema with preserved metadata.
     """
-    if not schemas:
-        return pa.schema([])
-    try:
-        unified = pa.unify_schemas(list(schemas), promote_options=promote_options)
-    except TypeError:
-        unified = pa.unify_schemas(list(schemas))
-
-    base = schemas[0]
-    field_meta = {field.name: field.metadata for field in base if field.metadata}
-    fields = []
-    for field in unified:
-        meta = field_meta.get(field.name)
-        if meta:
-            fields.append(field.with_metadata(meta))
-        else:
-            fields.append(field)
-    unified = pa.schema(fields)
-    if base.metadata:
-        return unified.with_metadata(dict(base.metadata))
-    return unified
+    return unify_schemas(schemas, promote_options=promote_options)
 
 
 def align_table_to_schema(table: TableLike, *, schema: SchemaLike) -> TableLike:

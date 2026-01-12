@@ -8,8 +8,8 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import hash_expression
 from arrowdsl.core.interop import ensure_expression, pc
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan_helpers import coalesce_expr, column_or_null_expr
 from cpg.hash_specs import edge_hash_specs
-from cpg.plan_exprs import coalesce_expr, column_or_null_expr
 from cpg.specs import EdgeEmitSpec
 
 EDGE_OUTPUT_NAMES: tuple[str, ...] = (
@@ -40,20 +40,104 @@ def _normalized_relation_plan(
 ) -> Plan:
     available = set(rel.schema(ctx=ctx).names)
     exprs = [
-        coalesce_expr(spec.src_cols, available=available, dtype=pa.string()),
-        coalesce_expr(spec.dst_cols, available=available, dtype=pa.string()),
-        coalesce_expr(spec.path_cols, available=available, dtype=pa.string()),
-        coalesce_expr(spec.bstart_cols, available=available, dtype=pa.int64()),
-        coalesce_expr(spec.bend_cols, available=available, dtype=pa.int64()),
-        column_or_null_expr("origin", available=available, dtype=pa.string()),
-        column_or_null_expr("resolution_method", available=available, dtype=pa.string()),
-        column_or_null_expr("confidence", available=available, dtype=pa.float32()),
-        column_or_null_expr("score", available=available, dtype=pa.float32()),
-        column_or_null_expr("symbol_roles", available=available, dtype=pa.int32()),
-        column_or_null_expr("qname_source", available=available, dtype=pa.string()),
-        column_or_null_expr("ambiguity_group_id", available=available, dtype=pa.string()),
-        column_or_null_expr("rule_name", available=available, dtype=pa.string()),
-        column_or_null_expr("rule_priority", available=available, dtype=pa.int32()),
+        coalesce_expr(
+            spec.src_cols,
+            available=available,
+            dtype=pa.string(),
+            cast=True,
+            safe=False,
+        ),
+        coalesce_expr(
+            spec.dst_cols,
+            available=available,
+            dtype=pa.string(),
+            cast=True,
+            safe=False,
+        ),
+        coalesce_expr(
+            spec.path_cols,
+            available=available,
+            dtype=pa.string(),
+            cast=True,
+            safe=False,
+        ),
+        coalesce_expr(
+            spec.bstart_cols,
+            available=available,
+            dtype=pa.int64(),
+            cast=True,
+            safe=False,
+        ),
+        coalesce_expr(
+            spec.bend_cols,
+            available=available,
+            dtype=pa.int64(),
+            cast=True,
+            safe=False,
+        ),
+        column_or_null_expr(
+            "origin",
+            available=available,
+            dtype=pa.string(),
+            cast=True,
+            safe=False,
+        ),
+        column_or_null_expr(
+            "resolution_method",
+            available=available,
+            dtype=pa.string(),
+            cast=True,
+            safe=False,
+        ),
+        column_or_null_expr(
+            "confidence",
+            available=available,
+            dtype=pa.float32(),
+            cast=True,
+            safe=False,
+        ),
+        column_or_null_expr(
+            "score",
+            available=available,
+            dtype=pa.float32(),
+            cast=True,
+            safe=False,
+        ),
+        column_or_null_expr(
+            "symbol_roles",
+            available=available,
+            dtype=pa.int32(),
+            cast=True,
+            safe=False,
+        ),
+        column_or_null_expr(
+            "qname_source",
+            available=available,
+            dtype=pa.string(),
+            cast=True,
+            safe=False,
+        ),
+        column_or_null_expr(
+            "ambiguity_group_id",
+            available=available,
+            dtype=pa.string(),
+            cast=True,
+            safe=False,
+        ),
+        column_or_null_expr(
+            "rule_name",
+            available=available,
+            dtype=pa.string(),
+            cast=True,
+            safe=False,
+        ),
+        column_or_null_expr(
+            "rule_priority",
+            available=available,
+            dtype=pa.int32(),
+            cast=True,
+            safe=False,
+        ),
     ]
     names = [
         "src",

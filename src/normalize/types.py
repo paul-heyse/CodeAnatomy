@@ -6,13 +6,14 @@ from collections.abc import Sequence
 
 import pyarrow as pa
 
+from arrowdsl.compute.expr_specs import HashExprSpec, trimmed_non_empty_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, ensure_expression, pc
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan_helpers import column_or_null_expr
 from arrowdsl.schema.schema import empty_table
 from normalize.hash_specs import TYPE_ID_SPEC
-from normalize.plan_exprs import HashExprSpec, column_or_null_expr, trimmed_non_empty_expr
 from normalize.plan_helpers import PlanSource, materialize_plan, plan_source, project_columns
 from normalize.runner import (
     ensure_canonical,

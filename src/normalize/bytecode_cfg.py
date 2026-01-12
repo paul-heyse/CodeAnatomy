@@ -9,11 +9,11 @@ import pyarrow as pa
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, pc
 from arrowdsl.finalize.finalize import FinalizeResult
+from arrowdsl.plan.joins import join_plan
 from arrowdsl.plan.ops import JoinSpec
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan_helpers import column_or_null_expr
 from normalize.contracts import CFG_BLOCKS_CONTRACT, CFG_EDGES_CONTRACT
-from normalize.join_helpers import join_plan
-from normalize.plan_exprs import column_or_null_expr
 from normalize.plan_helpers import PlanSource, plan_source, project_columns
 from normalize.runner import (
     ensure_canonical,

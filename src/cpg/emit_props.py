@@ -10,17 +10,17 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.compute.udfs import ensure_json_udf
-from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import ComputeExpression, DataTypeLike, ensure_expression, pc
-from arrowdsl.plan.plan import Plan
-from cpg.plan_exprs import null_if_empty_or_zero
-from cpg.prop_transforms import (
+from arrowdsl.compute.predicates import null_if_empty_or_zero
+from arrowdsl.compute.transforms import (
     expr_context_expr,
     expr_context_value,
     flag_to_bool,
     flag_to_bool_expr,
 )
+from arrowdsl.compute.udfs import ensure_json_udf
+from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.interop import ComputeExpression, DataTypeLike, ensure_expression, pc
+from arrowdsl.plan.plan import Plan
 from cpg.specs import PropFieldSpec, PropOptions, PropTableSpec, PropValueType
 
 

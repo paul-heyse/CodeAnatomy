@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from arrowdsl.compute.transforms import expr_context_value, flag_to_bool
 from cpg.catalog import PlanRef, derive_cst_defs_norm, derive_scip_role_flags
 from cpg.contract_map import PropFieldInput, prop_fields_from_contract
 from cpg.kinds import EntityKind, NodeKind
-from cpg.prop_transforms import expr_context_value, flag_to_bool
 from cpg.role_flags import ROLE_FLAG_SPECS
 from cpg.specs import (
     NodeEmitSpec,

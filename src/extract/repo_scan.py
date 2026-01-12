@@ -13,14 +13,15 @@ from typing import Literal, overload
 
 import pyarrow as pa
 
+from arrowdsl.compute.expr_specs import HashExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
+from arrowdsl.plan.runner import run_plan
 from arrowdsl.schema.schema import empty_table
 from core_types import PathLike, ensure_path
 from extract.hash_specs import repo_file_id_spec
-from extract.plan_exprs import HashExprSpec
 from extract.spec_helpers import (
     DatasetRegistration,
     merge_metadata_specs,
@@ -28,11 +29,7 @@ from extract.spec_helpers import (
     ordering_metadata_spec,
     register_dataset,
 )
-from extract.tables import (
-    align_plan,
-    finalize_plan,
-    plan_from_rows,
-)
+from extract.tables import align_plan, plan_from_rows
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
 
 SCHEMA_VERSION = 1
@@ -282,20 +279,22 @@ def scan_repo(
     max_files = options.max_files
     if max_files is not None and max_files <= 0:
         empty_plan = Plan.table_source(empty_table(REPO_FILES_SCHEMA))
-        return finalize_plan(
+        return run_plan(
             empty_plan,
             ctx=ctx,
             prefer_reader=prefer_reader,
             metadata_spec=metadata_spec,
-        )
+            attach_ordering_metadata=True,
+        ).value
 
     plan = scan_repo_plan(repo_root, options=options, ctx=ctx)
-    return finalize_plan(
+    return run_plan(
         plan,
         ctx=ctx,
         prefer_reader=prefer_reader,
         metadata_spec=metadata_spec,
-    )
+        attach_ordering_metadata=True,
+    ).value
 
 
 def scan_repo_plan(

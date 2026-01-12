@@ -13,6 +13,7 @@ import pyarrow.types as patypes
 
 from arrowdsl.core.interop import DataTypeLike, FieldLike, SchemaLike, TableLike
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec, SchemaTransform
+from arrowdsl.schema.unify import unify_schemas as arrowdsl_unify_schemas
 from normalize.plan_helpers import flatten_struct_field
 
 
@@ -175,12 +176,11 @@ def unify_schemas(
         Unified schema.
     """
     opts = opts or SchemaInferOptions()
-    if not schemas:
-        return pa.schema([])
-    evolution = SchemaEvolutionSpec(promote_options=opts.promote_options)
-    unified = evolution.unify_schema_from_schemas(schemas)
-    preferred = _prefer_arrow_nested(schemas[0], unified)
-    return _metadata_spec_from_schema(schemas[0]).apply(preferred)
+    return arrowdsl_unify_schemas(
+        schemas,
+        promote_options=opts.promote_options,
+        prefer_nested=True,
+    )
 
 
 def infer_schema_from_tables(

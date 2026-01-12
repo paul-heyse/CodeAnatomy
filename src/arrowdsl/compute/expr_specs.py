@@ -1,4 +1,4 @@
-"""Shared plan-lane expression helpers for normalize pipelines."""
+"""Canonical ExprSpec implementations for plan and kernel lanes."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from arrowdsl.core.ids import (
     hash64_from_arrays,
     hash_column_values,
     hash_expression,
+    masked_hash_expression,
     prefixed_hash_id,
 )
 from arrowdsl.core.interop import (
@@ -24,9 +25,7 @@ from arrowdsl.core.interop import (
     ensure_expression,
     pc,
 )
-from arrowdsl.plan_helpers import column_or_null_expr as plan_column_or_null_expr
 from arrowdsl.schema.arrays import CoalesceExpr, FieldExpr
-from normalize.ids import masked_hash_expression
 
 _NULL_SEPARATOR = "\x1f"
 
@@ -312,17 +311,6 @@ class CoalesceStringExprSpec:
         return self is not None
 
 
-def column_or_null_expr(name: str, dtype: pa.DataType, *, available: set[str]) -> ComputeExpression:
-    """Return a field expression or typed null expression when missing.
-
-    Returns
-    -------
-    ComputeExpression
-        Field expression or typed null expression.
-    """
-    return plan_column_or_null_expr(name, dtype=dtype, available=available)
-
-
 def trimmed_non_empty_expr(col: str) -> tuple[ComputeExpression, ComputeExpression]:
     """Return trimmed expression and non-empty predicate for a UTF-8 column.
 
@@ -370,7 +358,7 @@ class HashFromExprsSpec:
         ComputeExpression
             Hash expression for the parts.
         """
-        _ = hash_expression(HashSpec(prefix="_normalize_seed", cols=("__seed__",), missing="null"))
+        _ = hash_expression(HashSpec(prefix="_arrowdsl_seed", cols=("__seed__",), missing="null"))
         exprs = []
         for part in self.parts:
             expr = part.to_expression()
@@ -420,6 +408,5 @@ __all__ = [
     "MaskedHashExprSpec",
     "TrimExprSpec",
     "coalesce_string_expr",
-    "column_or_null_expr",
     "trimmed_non_empty_expr",
 ]

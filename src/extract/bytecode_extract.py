@@ -10,10 +10,12 @@ from typing import Literal, Required, TypedDict, Unpack, cast, overload
 
 import pyarrow as pa
 
+from arrowdsl.compute.expr_specs import MaskedHashExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
+from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.file_context import FileContext
@@ -28,7 +30,6 @@ from extract.hash_specs import (
     BC_PARENT_CODE_UNIT_ID_SPEC,
     BC_SRC_BLOCK_ID_SPEC,
 )
-from extract.plan_exprs import MaskedHashExprSpec
 from extract.spec_helpers import (
     DatasetRegistration,
     infer_ordering_keys,
@@ -37,13 +38,7 @@ from extract.spec_helpers import (
     ordering_metadata_spec,
     register_dataset,
 )
-from extract.tables import (
-    align_plan,
-    finalize_plan_bundle,
-    materialize_plan,
-    plan_from_rows,
-    project_columns,
-)
+from extract.tables import align_plan, plan_from_rows, project_columns
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
 
 type RowValue = str | int | bool | None
@@ -684,7 +679,11 @@ def _build_code_units_table(
     *,
     exec_ctx: ExecutionContext,
 ) -> TableLike:
-    return materialize_plan(_build_code_units_plan(rows, exec_ctx=exec_ctx), ctx=exec_ctx)
+    return materialize_plan(
+        _build_code_units_plan(rows, exec_ctx=exec_ctx),
+        ctx=exec_ctx,
+        attach_ordering_metadata=True,
+    )
 
 
 def _build_code_units_plan(
@@ -734,7 +733,11 @@ def _build_instructions_table(
     *,
     exec_ctx: ExecutionContext,
 ) -> TableLike:
-    return materialize_plan(_build_instructions_plan(rows, exec_ctx=exec_ctx), ctx=exec_ctx)
+    return materialize_plan(
+        _build_instructions_plan(rows, exec_ctx=exec_ctx),
+        ctx=exec_ctx,
+        attach_ordering_metadata=True,
+    )
 
 
 def _build_instructions_plan(
@@ -772,7 +775,11 @@ def _build_exceptions_table(
     *,
     exec_ctx: ExecutionContext,
 ) -> TableLike:
-    return materialize_plan(_build_exceptions_plan(rows, exec_ctx=exec_ctx), ctx=exec_ctx)
+    return materialize_plan(
+        _build_exceptions_plan(rows, exec_ctx=exec_ctx),
+        ctx=exec_ctx,
+        attach_ordering_metadata=True,
+    )
 
 
 def _build_exceptions_plan(
@@ -810,7 +817,11 @@ def _build_blocks_table(
     *,
     exec_ctx: ExecutionContext,
 ) -> TableLike:
-    return materialize_plan(_build_blocks_plan(rows, exec_ctx=exec_ctx), ctx=exec_ctx)
+    return materialize_plan(
+        _build_blocks_plan(rows, exec_ctx=exec_ctx),
+        ctx=exec_ctx,
+        attach_ordering_metadata=True,
+    )
 
 
 def _build_blocks_plan(
@@ -848,7 +859,11 @@ def _build_cfg_edges_table(
     *,
     exec_ctx: ExecutionContext,
 ) -> TableLike:
-    return materialize_plan(_build_cfg_edges_plan(rows, exec_ctx=exec_ctx), ctx=exec_ctx)
+    return materialize_plan(
+        _build_cfg_edges_plan(rows, exec_ctx=exec_ctx),
+        ctx=exec_ctx,
+        attach_ordering_metadata=True,
+    )
 
 
 def _build_cfg_edges_plan(
@@ -1339,12 +1354,36 @@ def _build_bytecode_result(
 ) -> BytecodeExtractResult:
     plans = _build_bytecode_plans(buffers, exec_ctx=exec_ctx)
     return BytecodeExtractResult(
-        py_bc_code_units=materialize_plan(plans["py_bc_code_units"], ctx=exec_ctx),
-        py_bc_instructions=materialize_plan(plans["py_bc_instructions"], ctx=exec_ctx),
-        py_bc_exception_table=materialize_plan(plans["py_bc_exception_table"], ctx=exec_ctx),
-        py_bc_blocks=materialize_plan(plans["py_bc_blocks"], ctx=exec_ctx),
-        py_bc_cfg_edges=materialize_plan(plans["py_bc_cfg_edges"], ctx=exec_ctx),
-        py_bc_errors=materialize_plan(plans["py_bc_errors"], ctx=exec_ctx),
+        py_bc_code_units=materialize_plan(
+            plans["py_bc_code_units"],
+            ctx=exec_ctx,
+            attach_ordering_metadata=True,
+        ),
+        py_bc_instructions=materialize_plan(
+            plans["py_bc_instructions"],
+            ctx=exec_ctx,
+            attach_ordering_metadata=True,
+        ),
+        py_bc_exception_table=materialize_plan(
+            plans["py_bc_exception_table"],
+            ctx=exec_ctx,
+            attach_ordering_metadata=True,
+        ),
+        py_bc_blocks=materialize_plan(
+            plans["py_bc_blocks"],
+            ctx=exec_ctx,
+            attach_ordering_metadata=True,
+        ),
+        py_bc_cfg_edges=materialize_plan(
+            plans["py_bc_cfg_edges"],
+            ctx=exec_ctx,
+            attach_ordering_metadata=True,
+        ),
+        py_bc_errors=materialize_plan(
+            plans["py_bc_errors"],
+            ctx=exec_ctx,
+            attach_ordering_metadata=True,
+        ),
     )
 
 
@@ -1432,31 +1471,37 @@ def extract_bytecode(
             plans["py_bc_code_units"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["py_bc_code_units"],
+            attach_ordering_metadata=True,
         ),
         py_bc_instructions=materialize_plan(
             plans["py_bc_instructions"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["py_bc_instructions"],
+            attach_ordering_metadata=True,
         ),
         py_bc_exception_table=materialize_plan(
             plans["py_bc_exception_table"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["py_bc_exception_table"],
+            attach_ordering_metadata=True,
         ),
         py_bc_blocks=materialize_plan(
             plans["py_bc_blocks"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["py_bc_blocks"],
+            attach_ordering_metadata=True,
         ),
         py_bc_cfg_edges=materialize_plan(
             plans["py_bc_cfg_edges"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["py_bc_cfg_edges"],
+            attach_ordering_metadata=True,
         ),
         py_bc_errors=materialize_plan(
             plans["py_bc_errors"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["py_bc_errors"],
+            attach_ordering_metadata=True,
         ),
     )
 
@@ -1570,9 +1615,10 @@ def extract_bytecode_table(
         ctx=exec_ctx,
     )
     metadata_specs = _bytecode_metadata_specs(options)
-    return finalize_plan_bundle(
+    return run_plan_bundle(
         {"py_bc_instructions": plans["py_bc_instructions"]},
         ctx=exec_ctx,
         prefer_reader=prefer_reader,
         metadata_specs={"py_bc_instructions": metadata_specs["py_bc_instructions"]},
+        attach_ordering_metadata=True,
     )["py_bc_instructions"]

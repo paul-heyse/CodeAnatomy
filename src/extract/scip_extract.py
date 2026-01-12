@@ -26,12 +26,11 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
+from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.schema.arrays import build_struct, set_or_append_column
+from arrowdsl.schema.nested import LargeListAccumulator, StructLargeListViewAccumulator
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
-from extract.nested_lists import (
-    LargeListAccumulator,
-    StructLargeListViewAccumulator,
-)
+from arrowdsl.schema.unify import unify_tables
 from extract.postprocess import encoding_columns_from_metadata, encoding_projection
 from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
@@ -43,14 +42,7 @@ from extract.spec_helpers import (
     ordering_metadata_spec,
     register_dataset,
 )
-from extract.tables import (
-    align_plan,
-    finalize_plan_bundle,
-    flatten_struct_field,
-    materialize_plan,
-    plan_from_rows,
-    unify_tables,
-)
+from extract.tables import align_plan, flatten_struct_field, plan_from_rows
 from schema_spec.specs import ArrowFieldSpec, NestedFieldSpec, scip_range_bundle
 
 SCHEMA_VERSION = 1
@@ -125,9 +117,7 @@ SCIP_SIGNATURE_DOCUMENTATION_TYPE = pa.struct(
 _SIG_DOC_OCCURRENCE_FIELDS = flatten_struct_field(
     pa.field("occurrence", SCIP_SIGNATURE_OCCURRENCE_TYPE)
 )
-SIG_DOC_OCCURRENCE_KEYS = tuple(
-    field.name.split(".", 1)[1] for field in _SIG_DOC_OCCURRENCE_FIELDS
-)
+SIG_DOC_OCCURRENCE_KEYS = tuple(field.name.split(".", 1)[1] for field in _SIG_DOC_OCCURRENCE_FIELDS)
 
 ENCODING_META = {"encoding": "dictionary"}
 
@@ -489,6 +479,10 @@ def _normalize_string_items(items: Sequence[object]) -> list[str | None]:
     return out
 
 
+def _string_list_accumulator() -> LargeListAccumulator[str | None]:
+    return LargeListAccumulator()
+
+
 def _load_scip_pb2(parse_opts: SCIPParseOptions) -> ModuleType | None:
     if parse_opts.scip_pb2_import:
         try:
@@ -762,7 +756,7 @@ class _OccurrenceAccumulator:
     symbols: list[str | None] = field(default_factory=list)
     symbol_roles: list[int] = field(default_factory=list)
     syntax_kind: list[str | None] = field(default_factory=list)
-    override_docs: LargeListAccumulator[str | None] = field(default_factory=LargeListAccumulator)
+    override_docs: LargeListAccumulator[str | None] = field(default_factory=_string_list_accumulator)
     start_line: list[int | None] = field(default_factory=list)
     start_char: list[int | None] = field(default_factory=list)
     end_line: list[int | None] = field(default_factory=list)
@@ -865,7 +859,7 @@ class _DiagnosticAccumulator:
     code: list[str | None] = field(default_factory=list)
     message: list[str | None] = field(default_factory=list)
     source: list[str | None] = field(default_factory=list)
-    tags: LargeListAccumulator[str | None] = field(default_factory=LargeListAccumulator)
+    tags: LargeListAccumulator[str | None] = field(default_factory=_string_list_accumulator)
     start_line: list[int | None] = field(default_factory=list)
     start_char: list[int | None] = field(default_factory=list)
     end_line: list[int | None] = field(default_factory=list)
@@ -948,7 +942,7 @@ class _SymbolInfoAccumulator:
     display_names: list[str | None] = field(default_factory=list)
     kinds: list[str | None] = field(default_factory=list)
     enclosing_symbols: list[str | None] = field(default_factory=list)
-    documentation: LargeListAccumulator[str | None] = field(default_factory=LargeListAccumulator)
+    documentation: LargeListAccumulator[str | None] = field(default_factory=_string_list_accumulator)
     sig_doc_texts: list[str | None] = field(default_factory=list)
     sig_doc_languages: list[str | None] = field(default_factory=list)
     sig_doc_is_null: list[bool] = field(default_factory=list)
@@ -1238,36 +1232,43 @@ def _extract_tables_from_index(
             plans["scip_metadata"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["scip_metadata"],
+            attach_ordering_metadata=True,
         ),
         scip_documents=materialize_plan(
             plans["scip_documents"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["scip_documents"],
+            attach_ordering_metadata=True,
         ),
         scip_occurrences=materialize_plan(
             plans["scip_occurrences"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["scip_occurrences"],
+            attach_ordering_metadata=True,
         ),
         scip_symbol_information=materialize_plan(
             plans["scip_symbol_information"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["scip_symbol_information"],
+            attach_ordering_metadata=True,
         ),
         scip_symbol_relationships=materialize_plan(
             plans["scip_symbol_relationships"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["scip_symbol_relationships"],
+            attach_ordering_metadata=True,
         ),
         scip_external_symbol_information=materialize_plan(
             plans["scip_external_symbol_information"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["scip_external_symbol_information"],
+            attach_ordering_metadata=True,
         ),
         scip_diagnostics=materialize_plan(
             plans["scip_diagnostics"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["scip_diagnostics"],
+            attach_ordering_metadata=True,
         ),
     )
 
@@ -1473,9 +1474,10 @@ def extract_scip_tables(
             exec_ctx=exec_ctx,
         )
 
-    return finalize_plan_bundle(
+    return run_plan_bundle(
         plans,
         ctx=exec_ctx,
         prefer_reader=prefer_reader,
         metadata_specs=metadata_specs,
+        attach_ordering_metadata=True,
     )

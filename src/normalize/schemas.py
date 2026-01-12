@@ -4,6 +4,14 @@ from __future__ import annotations
 
 import pyarrow as pa
 
+from arrowdsl.compute.expr_specs import (
+    CoalesceStringExprSpec,
+    DefUseKindExprSpec,
+    HashExprSpec,
+    HashFromExprsSpec,
+    MaskedHashExprSpec,
+    TrimExprSpec,
+)
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.schema.arrays import FieldExpr
 from arrowdsl.schema.schema import SchemaMetadataSpec
@@ -14,14 +22,6 @@ from normalize.hash_specs import (
     REACH_EDGE_ID_SPEC,
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
-)
-from normalize.plan_exprs import (
-    CoalesceStringExprSpec,
-    DefUseKindExprSpec,
-    HashExprSpec,
-    HashFromExprsSpec,
-    MaskedHashExprSpec,
-    TrimExprSpec,
 )
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle, list_view_type, span_bundle
 from schema_spec.system import (

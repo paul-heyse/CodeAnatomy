@@ -9,10 +9,14 @@ from typing import Literal, Required, TypedDict, Unpack, cast, overload
 
 import pyarrow as pa
 
+from arrowdsl.compute.expr_specs import MaskedHashExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
 from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, pc
+from arrowdsl.plan.joins import JoinConfig, left_join
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
+from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
+from arrowdsl.schema.nested import LargeListViewAccumulator
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.file_context import FileContext
@@ -23,9 +27,6 @@ from extract.hash_specs import (
     SYM_SCOPE_ID_SPEC,
     SYM_SYMBOL_ROW_ID_SPEC,
 )
-from extract.join_helpers import JoinConfig, left_join
-from extract.nested_lists import LargeListViewAccumulator
-from extract.plan_exprs import MaskedHashExprSpec
 from extract.spec_helpers import (
     DatasetRegistration,
     infer_ordering_keys,
@@ -34,13 +35,7 @@ from extract.spec_helpers import (
     ordering_metadata_spec,
     register_dataset,
 )
-from extract.tables import (
-    align_plan,
-    finalize_plan_bundle,
-    materialize_plan,
-    plan_from_rows,
-    project_columns,
-)
+from extract.tables import align_plan, plan_from_rows, project_columns
 from schema_spec.specs import ArrowFieldSpec, NestedFieldSpec, file_identity_bundle
 
 SCHEMA_VERSION = 1
@@ -406,6 +401,10 @@ def _scope_role(scope_type_str: str) -> str:
     return "runtime" if scope_type_str in {"MODULE", "FUNCTION", "CLASS"} else "type_meta"
 
 
+def _string_list_view_accumulator() -> LargeListViewAccumulator[str | None]:
+    return LargeListViewAccumulator()
+
+
 @dataclass
 class _FuncPartsAccumulator:
     scope_table_ids: list[int] = field(default_factory=list)
@@ -413,19 +412,19 @@ class _FuncPartsAccumulator:
     paths: list[str] = field(default_factory=list)
     file_sha256s: list[str | None] = field(default_factory=list)
     parameters_acc: LargeListViewAccumulator[str | None] = field(
-        default_factory=LargeListViewAccumulator
+        default_factory=_string_list_view_accumulator
     )
     locals_acc: LargeListViewAccumulator[str | None] = field(
-        default_factory=LargeListViewAccumulator
+        default_factory=_string_list_view_accumulator
     )
     globals_acc: LargeListViewAccumulator[str | None] = field(
-        default_factory=LargeListViewAccumulator
+        default_factory=_string_list_view_accumulator
     )
     nonlocals_acc: LargeListViewAccumulator[str | None] = field(
-        default_factory=LargeListViewAccumulator
+        default_factory=_string_list_view_accumulator
     )
     frees_acc: LargeListViewAccumulator[str | None] = field(
-        default_factory=LargeListViewAccumulator
+        default_factory=_string_list_view_accumulator
     )
 
     def append(self, ctx: SymtableContext, scope_table_id: int, tbl: symtable.SymbolTable) -> None:
@@ -1100,26 +1099,31 @@ def _build_symtable_result(
             plans["py_sym_scopes"],
             ctx=ctx,
             metadata_spec=metadata_specs["py_sym_scopes"],
+            attach_ordering_metadata=True,
         ),
         py_sym_symbols=materialize_plan(
             plans["py_sym_symbols"],
             ctx=ctx,
             metadata_spec=metadata_specs["py_sym_symbols"],
+            attach_ordering_metadata=True,
         ),
         py_sym_scope_edges=materialize_plan(
             plans["py_sym_scope_edges"],
             ctx=ctx,
             metadata_spec=metadata_specs["py_sym_scope_edges"],
+            attach_ordering_metadata=True,
         ),
         py_sym_namespace_edges=materialize_plan(
             plans["py_sym_namespace_edges"],
             ctx=ctx,
             metadata_spec=metadata_specs["py_sym_namespace_edges"],
+            attach_ordering_metadata=True,
         ),
         py_sym_function_partitions=materialize_plan(
             plans["py_sym_function_partitions"],
             ctx=ctx,
             metadata_spec=metadata_specs["py_sym_function_partitions"],
+            attach_ordering_metadata=True,
         ),
     )
 
@@ -1229,9 +1233,10 @@ def extract_symtables_table(
         ctx=exec_ctx,
     )
     metadata_specs = _symtable_metadata_specs(options)
-    return finalize_plan_bundle(
+    return run_plan_bundle(
         {"py_sym_scopes": plans["py_sym_scopes"]},
         ctx=exec_ctx,
         prefer_reader=prefer_reader,
         metadata_specs={"py_sym_scopes": metadata_specs["py_sym_scopes"]},
+        attach_ordering_metadata=True,
     )["py_sym_scopes"]

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 import pyarrow.types as patypes
 
+from arrowdsl.compute.predicates import invalid_id_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import (
     ArrayLike,
@@ -18,7 +19,7 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.arrays import const_array
-from cpg.plan_exprs import invalid_id_expr
+from arrowdsl.schema.columns import table_from_schema
 
 type ValuesLike = ArrayLike | ChunkedArrayLike
 
@@ -40,10 +41,7 @@ def empty_quality_table() -> TableLike:
     TableLike
         Empty quality table with the canonical schema.
     """
-    return pa.Table.from_arrays(
-        [pa.array([], type=field.type) for field in QUALITY_SCHEMA],
-        schema=QUALITY_SCHEMA,
-    )
+    return table_from_schema(QUALITY_SCHEMA, columns={}, num_rows=0)
 
 
 @dataclass(frozen=True)

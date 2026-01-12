@@ -1,13 +1,17 @@
-"""Shared nested list/struct accumulator helpers for extractors."""
+"""Nested list/struct accumulator helpers."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Generic, TypeVar
 
-import arrowdsl.core.interop as pa
+import pyarrow as pa
+
 from arrowdsl.core.interop import ArrayLike, DataTypeLike
 from arrowdsl.schema.arrays import build_list, build_list_of_structs, build_list_view
+
+T = TypeVar("T")
 
 
 def _offsets_start() -> list[int]:
@@ -19,7 +23,7 @@ def _sizes_start() -> list[int]:
 
 
 @dataclass
-class ListAccumulator[T]:
+class ListAccumulator(Generic[T]):
     """Accumulate list offsets and values for list-typed columns."""
 
     offsets: list[int] = field(default_factory=_offsets_start)
@@ -53,7 +57,7 @@ class ListAccumulator[T]:
 
 
 @dataclass
-class LargeListAccumulator[T]:
+class LargeListAccumulator(Generic[T]):
     """Accumulate list offsets and values for large_list-typed columns."""
 
     offsets: list[int] = field(default_factory=_offsets_start)
@@ -86,7 +90,7 @@ class LargeListAccumulator[T]:
 
 
 @dataclass
-class ListViewAccumulator[T]:
+class ListViewAccumulator(Generic[T]):
     """Accumulate offsets/sizes for list_view columns with shared buffers."""
 
     offsets: list[int] = field(default_factory=_sizes_start)
@@ -125,7 +129,7 @@ class ListViewAccumulator[T]:
 
 
 @dataclass
-class LargeListViewAccumulator[T]:
+class LargeListViewAccumulator(Generic[T]):
     """Accumulate offsets/sizes for large_list_view columns."""
 
     offsets: list[int] = field(default_factory=_sizes_start)

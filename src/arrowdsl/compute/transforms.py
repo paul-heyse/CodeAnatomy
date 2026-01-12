@@ -1,4 +1,4 @@
-"""Property transform helpers for CPG specs."""
+"""Compute transforms used across plan and kernel lanes."""
 
 from __future__ import annotations
 

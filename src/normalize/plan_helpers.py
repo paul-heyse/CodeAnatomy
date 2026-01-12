@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import Literal
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, pc
-from arrowdsl.plan.plan import Plan, PlanSpec
+from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.runner import (
+    PlanRunResult,
+    materialize_plan,
+    run_plan,
+    run_plan_bundle,
+    stream_plan,
+)
 from arrowdsl.plan_helpers import (
     PlanSource,
     encoding_columns_from_metadata,
@@ -19,36 +24,6 @@ from arrowdsl.plan_helpers import (
     query_for_schema,
 )
 from arrowdsl.schema.schema import SchemaTransform, projection_for_schema
-
-
-@dataclass(frozen=True)
-class PlanOutput:
-    """Plan output bundled with materialization metadata."""
-
-    value: TableLike | RecordBatchReaderLike
-    kind: Literal["reader", "table"]
-
-
-def materialize_plan(plan: Plan, *, ctx: ExecutionContext) -> TableLike:
-    """Materialize a plan as a table.
-
-    Returns
-    -------
-    TableLike
-        Materialized table.
-    """
-    return PlanSpec.from_plan(plan).to_table(ctx=ctx)
-
-
-def stream_plan(plan: Plan, *, ctx: ExecutionContext) -> RecordBatchReaderLike:
-    """Return a streaming reader for a plan.
-
-    Returns
-    -------
-    RecordBatchReaderLike
-        Streaming reader for the plan.
-    """
-    return PlanSpec.from_plan(plan).to_reader(ctx=ctx)
 
 
 def align_plan_to_schema(
@@ -101,23 +76,23 @@ def finalize_plan_result(
     prefer_reader: bool = False,
     schema: SchemaLike | None = None,
     keep_extra_columns: bool = False,
-) -> PlanOutput:
+) -> PlanRunResult:
     """Return a reader or table plus materialization metadata.
 
     Returns
     -------
-    PlanOutput
+    PlanRunResult
         Plan output and the materialization kind.
     """
     if schema is not None:
         if plan.decl is None:
             aligned = _align_table_to_schema(
-                PlanSpec.from_plan(plan).to_table(ctx=ctx),
+                materialize_plan(plan, ctx=ctx),
                 schema=schema,
                 ctx=ctx,
                 keep_extra_columns=keep_extra_columns,
             )
-            return PlanOutput(value=aligned, kind="table")
+            return PlanRunResult(value=aligned, kind="table")
         plan = align_plan_to_schema(
             plan,
             schema=schema,
@@ -125,10 +100,7 @@ def finalize_plan_result(
             keep_extra_columns=keep_extra_columns,
         )
 
-    spec = PlanSpec.from_plan(plan)
-    if prefer_reader and not spec.pipeline_breakers:
-        return PlanOutput(value=spec.to_reader(ctx=ctx), kind="reader")
-    return PlanOutput(value=spec.to_table(ctx=ctx), kind="table")
+    return run_plan(plan, ctx=ctx, prefer_reader=prefer_reader)
 
 
 def finalize_plan(
@@ -168,14 +140,10 @@ def finalize_plan_bundle(
     dict[str, TableLike | RecordBatchReaderLike]
         Finalized plan outputs keyed by name.
     """
-    return {
-        name: finalize_plan(plan, ctx=ctx, prefer_reader=prefer_reader)
-        for name, plan in plans.items()
-    }
+    return run_plan_bundle(plans, ctx=ctx, prefer_reader=prefer_reader)
 
 
 __all__ = [
-    "PlanOutput",
     "PlanSource",
     "align_plan_to_schema",
     "encoding_columns_from_metadata",

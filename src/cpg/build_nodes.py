@@ -10,6 +10,7 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_array_values
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike
 from arrowdsl.plan.plan import Plan, union_all_plans
+from arrowdsl.plan.source import DatasetSource
 from arrowdsl.schema.arrays import const_array, set_or_append_column
 from arrowdsl.schema.schema import EncodingSpec
 from cpg.artifacts import CpgBuildArtifacts
@@ -27,7 +28,6 @@ from cpg.plan_helpers import (
 )
 from cpg.quality import QualityPlanSpec, quality_plan_from_ids
 from cpg.schemas import CPG_NODES_SCHEMA, CPG_NODES_SPEC
-from cpg.sources import DatasetSource
 from cpg.spec_registry import node_plan_specs
 
 

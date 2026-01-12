@@ -29,6 +29,10 @@ class FieldLike(Protocol):
         """Return a field with updated metadata."""
         ...
 
+    def flatten(self) -> list[FieldLike]:
+        """Return flattened child fields for struct types."""
+        ...
+
 
 @runtime_checkable
 class ArrayLike(Protocol):

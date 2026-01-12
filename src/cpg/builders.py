@@ -23,6 +23,7 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.plan.plan import PlanSpec
 from arrowdsl.schema.arrays import const_array
+from arrowdsl.schema.columns import table_from_schema
 from cpg.catalog import PlanSource
 from cpg.defaults import fill_nulls_float, fill_nulls_string
 from cpg.kinds import EntityKind
@@ -98,22 +99,6 @@ class EdgeIdArrays:
     path: ArrayLike | ChunkedArrayLike
     bstart: ArrayLike | ChunkedArrayLike
     bend: ArrayLike | ChunkedArrayLike
-
-
-def _table_from_schema(
-    schema: SchemaLike,
-    *,
-    columns: Mapping[str, ArrayLike | ChunkedArrayLike],
-    num_rows: int,
-) -> TableLike:
-    arrays: list[ArrayLike | ChunkedArrayLike] = []
-    for field in schema:
-        value = columns.get(field.name)
-        if value is None:
-            arrays.append(pa.nulls(num_rows, type=field.type))
-        else:
-            arrays.append(value)
-    return pa.Table.from_arrays(arrays, schema=schema)
 
 
 def _edge_id_array(
@@ -232,7 +217,7 @@ def emit_edges_from_relation(
         schema_version=schema_version,
         edge_schema=edge_schema,
     )
-    out = _table_from_schema(edge_schema, columns=columns, num_rows=n)
+    out = table_from_schema(edge_schema, columns=columns, num_rows=n)
     predicate = Not(IsNull("edge_id"))
     filtered = FilterSpec(predicate).apply_kernel(out)
     return ChunkPolicy().apply(filtered)
@@ -341,7 +326,7 @@ def emit_nodes_from_table(
     }
     if "schema_version" in node_schema.names:
         columns["schema_version"] = const_array(n, schema_version, dtype=pa.int32())
-    out = _table_from_schema(node_schema, columns=columns, num_rows=n)
+    out = table_from_schema(node_schema, columns=columns, num_rows=n)
     return ChunkPolicy().apply(out)
 
 

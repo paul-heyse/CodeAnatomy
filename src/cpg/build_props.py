@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.plan.plan import Plan, union_all_plans
+from arrowdsl.plan.source import DatasetSource
 from arrowdsl.schema.schema import EncodingSpec
 from cpg.artifacts import CpgBuildArtifacts
 from cpg.catalog import PlanCatalog, PlanSource
@@ -22,7 +23,6 @@ from cpg.plan_helpers import (
 )
 from cpg.quality import QualityPlanSpec, quality_plan_from_ids
 from cpg.schemas import CPG_PROPS_SCHEMA, CPG_PROPS_SPEC, SCHEMA_VERSION
-from cpg.sources import DatasetSource
 from cpg.spec_registry import edge_prop_spec, prop_table_specs, scip_role_flag_prop_spec
 from cpg.specs import PropTableSpec
 

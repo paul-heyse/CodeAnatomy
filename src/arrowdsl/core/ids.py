@@ -411,6 +411,29 @@ def hash_expression(
     return ensure_expression(hashed)
 
 
+def masked_hash_expression(
+    *,
+    spec: HashSpec,
+    required: Sequence[str],
+    available: Sequence[str] | None = None,
+) -> ComputeExpression:
+    """Return a hash expression masked by required column validity.
+
+    Returns
+    -------
+    ComputeExpression
+        Masked compute expression for hash IDs.
+    """
+    expr = hash_expression(spec, available=available)
+    if not required:
+        return expr
+    mask = pc.is_valid(pc.field(required[0]))
+    for name in required[1:]:
+        mask = pc.and_(mask, pc.is_valid(pc.field(name)))
+    null_value = pa.scalar(None, type=pa.string() if spec.as_string else pa.int64())
+    return ensure_expression(pc.if_else(mask, expr, null_value))
+
+
 __all__ = [
     "HashSpec",
     "MissingPolicy",
@@ -422,5 +445,6 @@ __all__ = [
     "iter_array_values",
     "iter_arrays",
     "iter_table_rows",
+    "masked_hash_expression",
     "prefixed_hash_id",
 ]

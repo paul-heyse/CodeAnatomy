@@ -7,10 +7,12 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
+from arrowdsl.compute.predicates import bitmask_is_set_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
 from arrowdsl.plan.ops import JoinSpec
 from arrowdsl.plan.plan import Plan, hash_join
+from arrowdsl.plan_helpers import column_or_null_expr
 from cpg.catalog import PlanCatalog, PlanRef
 from cpg.kinds import (
     SCIP_ROLE_DEFINITION,
@@ -19,7 +21,6 @@ from cpg.kinds import (
     SCIP_ROLE_WRITE,
     EdgeKind,
 )
-from cpg.plan_exprs import bitmask_is_set_expr, column_or_null_expr
 from cpg.plan_helpers import set_or_append_column
 from cpg.specs import EdgeEmitSpec
 
@@ -203,9 +204,21 @@ def diagnostic_relation(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | N
     if "diag_id" not in available:
         return None
 
-    severity = column_or_null_expr("severity", available=available, dtype=pa.string())
+    severity = column_or_null_expr(
+        "severity",
+        available=available,
+        dtype=pa.string(),
+        cast=True,
+        safe=False,
+    )
     score = _severity_score_expr(severity)
-    origin = column_or_null_expr("diag_source", available=available, dtype=pa.string())
+    origin = column_or_null_expr(
+        "diag_source",
+        available=available,
+        dtype=pa.string(),
+        cast=True,
+        safe=False,
+    )
     origin = ensure_expression(pc.coalesce(origin, pc.scalar("diagnostic")))
 
     diag = set_or_append_column(diag, name="origin", expr=origin, ctx=ctx)
@@ -230,8 +243,20 @@ def inferred_type_relation(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan 
         return None
     available = set(type_exprs_norm.schema(ctx=ctx).names)
     exprs = [
-        column_or_null_expr("owner_def_id", available=available, dtype=pa.string()),
-        column_or_null_expr("type_id", available=available, dtype=pa.string()),
+        column_or_null_expr(
+            "owner_def_id",
+            available=available,
+            dtype=pa.string(),
+            cast=True,
+            safe=False,
+        ),
+        column_or_null_expr(
+            "type_id",
+            available=available,
+            dtype=pa.string(),
+            cast=True,
+            safe=False,
+        ),
         ensure_expression(pc.cast(pc.scalar(None), pa.string(), safe=False)),
         ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),
         ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),
@@ -255,8 +280,20 @@ def runtime_relation(
         return None
     available = set(table.schema(ctx=ctx).names)
     exprs = [
-        column_or_null_expr(src_col, available=available, dtype=pa.string()),
-        column_or_null_expr(dst_col, available=available, dtype=pa.string()),
+        column_or_null_expr(
+            src_col,
+            available=available,
+            dtype=pa.string(),
+            cast=True,
+            safe=False,
+        ),
+        column_or_null_expr(
+            dst_col,
+            available=available,
+            dtype=pa.string(),
+            cast=True,
+            safe=False,
+        ),
         ensure_expression(pc.cast(pc.scalar(None), pa.string(), safe=False)),
         ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),
         ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),

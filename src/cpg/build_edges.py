@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import Table, TableLike
 from arrowdsl.plan.plan import Plan, union_all_plans
+from arrowdsl.plan.source import DatasetSource
 from arrowdsl.schema.schema import EncodingSpec
 from cpg.artifacts import CpgBuildArtifacts
 from cpg.catalog import PlanCatalog
@@ -24,7 +25,6 @@ from cpg.plan_helpers import (
 from cpg.quality import QualityPlanSpec, quality_plan_from_ids
 from cpg.relations import EDGE_RELATION_SPECS
 from cpg.schemas import CPG_EDGES_SCHEMA, CPG_EDGES_SPEC
-from cpg.sources import DatasetSource
 
 EDGE_ENCODING_SPECS: tuple[EncodingSpec, ...] = tuple(
     EncodingSpec(column=col) for col in encoding_columns_from_metadata(CPG_EDGES_SCHEMA)

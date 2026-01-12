@@ -7,7 +7,7 @@ import pyarrow as pa
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ensure_expression, pc
 from arrowdsl.plan.plan import Plan
-from cpg.plan_exprs import coalesce_expr
+from arrowdsl.plan_helpers import coalesce_expr
 from cpg.specs import NodeEmitSpec
 
 
@@ -25,11 +25,41 @@ def emit_node_plan(
         Plan emitting node columns.
     """
     available = set(plan.schema(ctx=ctx).names)
-    node_id = coalesce_expr(spec.id_cols, available=available, dtype=pa.string())
-    path = coalesce_expr(spec.path_cols, available=available, dtype=pa.string())
-    bstart = coalesce_expr(spec.bstart_cols, available=available, dtype=pa.int64())
-    bend = coalesce_expr(spec.bend_cols, available=available, dtype=pa.int64())
-    file_id = coalesce_expr(spec.file_id_cols, available=available, dtype=pa.string())
+    node_id = coalesce_expr(
+        spec.id_cols,
+        available=available,
+        dtype=pa.string(),
+        cast=True,
+        safe=False,
+    )
+    path = coalesce_expr(
+        spec.path_cols,
+        available=available,
+        dtype=pa.string(),
+        cast=True,
+        safe=False,
+    )
+    bstart = coalesce_expr(
+        spec.bstart_cols,
+        available=available,
+        dtype=pa.int64(),
+        cast=True,
+        safe=False,
+    )
+    bend = coalesce_expr(
+        spec.bend_cols,
+        available=available,
+        dtype=pa.int64(),
+        cast=True,
+        safe=False,
+    )
+    file_id = coalesce_expr(
+        spec.file_id_cols,
+        available=available,
+        dtype=pa.string(),
+        cast=True,
+        safe=False,
+    )
 
     node_kind = ensure_expression(pc.cast(pc.scalar(spec.node_kind.value), pa.string(), safe=False))
     exprs = [

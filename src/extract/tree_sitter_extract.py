@@ -10,10 +10,12 @@ import pyarrow as pa
 import tree_sitter_python
 from tree_sitter import Language, Parser
 
+from arrowdsl.compute.expr_specs import MaskedHashExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
+from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from extract.common import bytes_from_file_ctx, file_identity_row, iter_contexts
 from extract.file_context import FileContext
@@ -23,7 +25,6 @@ from extract.hash_specs import (
     TS_NODE_ID_SPEC,
     TS_PARENT_NODE_ID_SPEC,
 )
-from extract.plan_exprs import MaskedHashExprSpec
 from extract.spec_helpers import (
     DatasetRegistration,
     infer_ordering_keys,
@@ -32,12 +33,7 @@ from extract.spec_helpers import (
     ordering_metadata_spec,
     register_dataset,
 )
-from extract.tables import (
-    align_plan,
-    finalize_plan_bundle,
-    materialize_plan,
-    plan_from_rows,
-)
+from extract.tables import align_plan, plan_from_rows
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
 
 SCHEMA_VERSION = 1
@@ -389,16 +385,19 @@ def extract_ts(
             plans["ts_nodes"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["ts_nodes"],
+            attach_ordering_metadata=True,
         ),
         ts_errors=materialize_plan(
             plans["ts_errors"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["ts_errors"],
+            attach_ordering_metadata=True,
         ),
         ts_missing=materialize_plan(
             plans["ts_missing"],
             ctx=exec_ctx,
             metadata_spec=metadata_specs["ts_missing"],
+            attach_ordering_metadata=True,
         ),
     )
 
@@ -547,9 +546,10 @@ def extract_ts_tables(
         file_contexts=file_contexts,
         ctx=exec_ctx,
     )
-    return finalize_plan_bundle(
+    return run_plan_bundle(
         plans,
         ctx=exec_ctx,
         prefer_reader=prefer_reader,
         metadata_specs=_ts_metadata_specs(options),
+        attach_ordering_metadata=True,
     )

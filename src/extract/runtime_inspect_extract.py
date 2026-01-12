@@ -12,19 +12,21 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
+from arrowdsl.compute.expr_specs import MaskedHashExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, pc
+from arrowdsl.plan.joins import JoinConfig, left_join
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
+from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
+from arrowdsl.schema.unify import unify_tables
 from extract.hash_specs import (
     RT_MEMBER_ID_SPEC,
     RT_OBJECT_ID_SPEC,
     RT_PARAM_ID_SPEC,
     RT_SIGNATURE_ID_SPEC,
 )
-from extract.join_helpers import JoinConfig, left_join
-from extract.plan_exprs import MaskedHashExprSpec
 from extract.spec_helpers import (
     DatasetRegistration,
     infer_ordering_keys,
@@ -33,14 +35,7 @@ from extract.spec_helpers import (
     ordering_metadata_spec,
     register_dataset,
 )
-from extract.tables import (
-    align_plan,
-    finalize_plan_bundle,
-    iter_record_batches,
-    materialize_plan,
-    project_columns,
-    unify_tables,
-)
+from extract.tables import align_plan, iter_record_batches, project_columns
 from schema_spec.specs import ArrowFieldSpec
 
 SCHEMA_VERSION = 1
@@ -918,21 +913,25 @@ def _runtime_tables_from_rows(
             rt_objects_plan,
             ctx=exec_ctx,
             metadata_spec=metadata_specs["rt_objects"],
+            attach_ordering_metadata=True,
         ),
         rt_signatures=materialize_plan(
             rt_signatures_plan,
             ctx=exec_ctx,
             metadata_spec=metadata_specs["rt_signatures"],
+            attach_ordering_metadata=True,
         ),
         rt_signature_params=materialize_plan(
             rt_params_plan,
             ctx=exec_ctx,
             metadata_spec=metadata_specs["rt_signature_params"],
+            attach_ordering_metadata=True,
         ),
         rt_members=materialize_plan(
             rt_members_plan,
             ctx=exec_ctx,
             metadata_spec=metadata_specs["rt_members"],
+            attach_ordering_metadata=True,
         ),
     )
 
@@ -956,7 +955,9 @@ def _runtime_plans_from_rows(
         rt_objects_key_plan=rt_objects_key_plan,
         exec_ctx=exec_ctx,
     )
-    rt_params_plan = _build_rt_params(rows.param_rows, sig_meta_plan=sig_meta_plan, exec_ctx=exec_ctx)
+    rt_params_plan = _build_rt_params(
+        rows.param_rows, sig_meta_plan=sig_meta_plan, exec_ctx=exec_ctx
+    )
     rt_members_plan = _build_rt_members(
         rows.member_rows,
         rt_objects_key_plan=rt_objects_key_plan,
@@ -1085,11 +1086,12 @@ def extract_runtime_objects(
         options=options,
     )
     metadata_specs = _runtime_metadata_specs(options)
-    return finalize_plan_bundle(
+    return run_plan_bundle(
         {"rt_objects": plans["rt_objects"]},
         ctx=ExecutionContext(runtime=RuntimeProfile(name="DEFAULT")),
         prefer_reader=prefer_reader,
         metadata_specs={"rt_objects": metadata_specs["rt_objects"]},
+        attach_ordering_metadata=True,
     )["rt_objects"]
 
 
@@ -1116,7 +1118,7 @@ def extract_runtime_signatures(
         options=options,
     )
     metadata_specs = _runtime_metadata_specs(options)
-    return finalize_plan_bundle(
+    return run_plan_bundle(
         {
             "rt_signatures": plans["rt_signatures"],
             "rt_signature_params": plans["rt_signature_params"],
@@ -1127,6 +1129,7 @@ def extract_runtime_signatures(
             "rt_signatures": metadata_specs["rt_signatures"],
             "rt_signature_params": metadata_specs["rt_signature_params"],
         },
+        attach_ordering_metadata=True,
     )
 
 
@@ -1153,9 +1156,10 @@ def extract_runtime_members(
         options=options,
     )
     metadata_specs = _runtime_metadata_specs(options)
-    return finalize_plan_bundle(
+    return run_plan_bundle(
         {"rt_members": plans["rt_members"]},
         ctx=ExecutionContext(runtime=RuntimeProfile(name="DEFAULT")),
         prefer_reader=prefer_reader,
         metadata_specs={"rt_members": metadata_specs["rt_members"]},
+        attach_ordering_metadata=True,
     )["rt_members"]

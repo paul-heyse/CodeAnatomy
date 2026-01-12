@@ -12,9 +12,9 @@ from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, pc
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.plan import Plan, union_all_plans
+from arrowdsl.plan_helpers import column_or_null_expr
 from arrowdsl.schema.arrays import build_struct
-from normalize.arrow_utils import column_or_null
-from normalize.plan_exprs import column_or_null_expr
+from arrowdsl.schema.columns import column_or_null
 from normalize.runner import (
     PostFn,
     ensure_canonical,

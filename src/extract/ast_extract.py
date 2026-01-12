@@ -13,6 +13,7 @@ from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfil
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
+from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.derived_views import ast_def_nodes_plan
 from extract.file_context import FileContext
@@ -24,12 +25,7 @@ from extract.spec_helpers import (
     ordering_metadata_spec,
     register_dataset,
 )
-from extract.tables import (
-    align_plan,
-    finalize_plan_bundle,
-    materialize_plan,
-    plan_from_rows,
-)
+from extract.tables import align_plan, plan_from_rows
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
 
 SCHEMA_VERSION = 1
@@ -382,16 +378,19 @@ def extract_ast(
             plans["ast_nodes"],
             ctx=ctx,
             metadata_spec=merge_metadata_specs(_AST_NODES_METADATA, run_meta),
+            attach_ordering_metadata=True,
         ),
         py_ast_edges=materialize_plan(
             plans["ast_edges"],
             ctx=ctx,
             metadata_spec=merge_metadata_specs(_AST_EDGES_METADATA, run_meta),
+            attach_ordering_metadata=True,
         ),
         py_ast_errors=materialize_plan(
             plans["ast_errors"],
             ctx=ctx,
             metadata_spec=merge_metadata_specs(_AST_ERRORS_METADATA, run_meta),
+            attach_ordering_metadata=True,
         ),
     )
 
@@ -523,7 +522,7 @@ def extract_ast_tables(
     defs_plan = ast_def_nodes_plan(plan=plans["ast_nodes"])
     run_meta = options_metadata_spec(options=options)
 
-    return finalize_plan_bundle(
+    return run_plan_bundle(
         {
             "ast_nodes": plans["ast_nodes"],
             "ast_edges": plans["ast_edges"],
@@ -536,4 +535,5 @@ def extract_ast_tables(
             "ast_edges": merge_metadata_specs(_AST_EDGES_METADATA, run_meta),
             "ast_defs": merge_metadata_specs(_AST_NODES_METADATA, run_meta),
         },
+        attach_ordering_metadata=True,
     )

@@ -7,13 +7,14 @@ from dataclasses import dataclass, field
 
 import pyarrow as pa
 
+from arrowdsl.compute.predicates import bitmask_is_set_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, TableLike, ensure_expression, pc
 from arrowdsl.plan.plan import Plan
-from cpg.plan_exprs import bitmask_is_set_expr, coalesce_expr
+from arrowdsl.plan.source import DatasetSource
+from arrowdsl.plan_helpers import coalesce_expr
 from cpg.plan_helpers import plan_from_dataset, set_or_append_column
 from cpg.role_flags import ROLE_FLAG_SPECS
-from cpg.sources import DatasetSource
 
 type TableGetter = Callable[[Mapping[str, TableLike]], TableLike | None]
 type TableDeriver = Callable[[TableCatalog, ExecutionContext], TableLike | None]
@@ -187,7 +188,13 @@ def derive_cst_defs_norm(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | 
     if defs is None:
         return None
     available = set(defs.schema(ctx=ctx).names)
-    expr = coalesce_expr(("def_kind", "kind"), dtype=pa.string(), available=available)
+    expr = coalesce_expr(
+        ("def_kind", "kind"),
+        dtype=pa.string(),
+        available=available,
+        cast=True,
+        safe=False,
+    )
     return set_or_append_column(defs, name="def_kind_norm", expr=expr, ctx=ctx)
 
 

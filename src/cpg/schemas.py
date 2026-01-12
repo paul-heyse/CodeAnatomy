@@ -5,6 +5,7 @@ from __future__ import annotations
 import pyarrow as pa
 
 from arrowdsl.core.interop import TableLike
+from arrowdsl.schema.columns import table_from_schema
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from schema_spec.specs import DICT_STRING, ArrowFieldSpec, file_identity_bundle, span_bundle
 from schema_spec.system import (
@@ -236,10 +237,7 @@ def empty_nodes() -> TableLike:
     pyarrow.Table
         Empty nodes table.
     """
-    return pa.Table.from_arrays(
-        [pa.array([], type=field.type) for field in CPG_NODES_SCHEMA],
-        schema=CPG_NODES_SCHEMA,
-    )
+    return table_from_schema(CPG_NODES_SCHEMA, columns={}, num_rows=0)
 
 
 def empty_edges() -> TableLike:
@@ -250,10 +248,7 @@ def empty_edges() -> TableLike:
     pyarrow.Table
         Empty edges table.
     """
-    return pa.Table.from_arrays(
-        [pa.array([], type=field.type) for field in CPG_EDGES_SCHEMA],
-        schema=CPG_EDGES_SCHEMA,
-    )
+    return table_from_schema(CPG_EDGES_SCHEMA, columns={}, num_rows=0)
 
 
 def empty_props() -> TableLike:
@@ -264,7 +259,4 @@ def empty_props() -> TableLike:
     pyarrow.Table
         Empty props table.
     """
-    return pa.Table.from_arrays(
-        [pa.array([], type=field.type) for field in CPG_PROPS_SCHEMA],
-        schema=CPG_PROPS_SCHEMA,
-    )
+    return table_from_schema(CPG_PROPS_SCHEMA, columns={}, num_rows=0)

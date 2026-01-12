@@ -8,10 +8,10 @@ from arrowdsl.core.context import DeterminismTier, ExecutionContext, OrderingLev
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeOptions, FinalizeResult, finalize
 from arrowdsl.plan.plan import Plan, PlanSpec
+from arrowdsl.plan.runner import PlanRunResult
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from normalize.encoding import encoding_policy_from_schema
 from normalize.plan_helpers import (
-    PlanOutput,
     PlanSource,
     finalize_plan,
     finalize_plan_result,
@@ -182,12 +182,12 @@ def run_normalize_streamable_result(
     *,
     ctx: ExecutionContext,
     schema: SchemaLike | None = None,
-) -> PlanOutput:
+) -> PlanRunResult:
     """Return a reader/table plus materialization metadata.
 
     Returns
     -------
-    PlanOutput
+    PlanRunResult
         Plan output with materialization kind metadata.
     """
     resolved = plan_source(plan, ctx=ctx)

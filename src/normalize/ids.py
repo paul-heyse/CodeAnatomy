@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
@@ -11,15 +10,12 @@ from arrowdsl.core.ids import (
     HashSpec,
     hash64_from_parts,
     hash_column_values,
-    hash_expression,
     prefixed_hash_id,
 )
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
-    ComputeExpression,
     TableLike,
-    ensure_expression,
     pc,
 )
 
@@ -102,29 +98,6 @@ def masked_prefixed_hash(
     for arr in required[1:]:
         mask = pc.and_(mask, pc.is_valid(arr))
     return pc.if_else(mask, hashed, pa.scalar(None, type=pa.string()))
-
-
-def masked_hash_expression(
-    *,
-    spec: HashSpec,
-    required: Sequence[str],
-    available: Sequence[str] | None = None,
-) -> ComputeExpression:
-    """Return a hash expression masked by required column validity.
-
-    Returns
-    -------
-    ComputeExpression
-        Masked compute expression for hash IDs.
-    """
-    expr = hash_expression(spec, available=available)
-    if not required:
-        return expr
-    mask = pc.is_valid(pc.field(required[0]))
-    for name in required[1:]:
-        mask = pc.and_(mask, pc.is_valid(pc.field(name)))
-    null_value = pa.scalar(None, type=pa.string() if spec.as_string else pa.int64())
-    return ensure_expression(pc.if_else(mask, expr, null_value))
 
 
 @dataclass(frozen=True)

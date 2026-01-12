@@ -4,28 +4,8 @@ from __future__ import annotations
 
 from typing import cast
 
-import pyarrow as pa
-
-from arrowdsl.compute.kernels import apply_join
-from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike, pc
-from arrowdsl.plan.ops import JoinSpec
-
-
-def column_or_null(
-    table: TableLike,
-    col: str,
-    dtype: DataTypeLike,
-) -> ArrayLike | ChunkedArrayLike:
-    """Return a column array or a typed null array when missing.
-
-    Returns
-    -------
-    ArrayLike | ChunkedArrayLike
-        Column array or a typed null array.
-    """
-    if col in table.column_names:
-        return table[col]
-    return pa.nulls(table.num_rows, type=dtype)
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
+from arrowdsl.plan.joins import JoinConfig, left_join
 
 
 def trimmed_non_empty_utf8(
@@ -77,11 +57,10 @@ def join_code_unit_meta(table: TableLike, code_units: TableLike) -> TableLike:
         return table
     meta = code_units.select(meta_cols)
     right_cols = tuple(col for col in meta_cols if col != "code_unit_id")
-    return apply_join(
+    return left_join(
         table,
         meta,
-        spec=JoinSpec(
-            join_type="left outer",
+        config=JoinConfig.from_sequences(
             left_keys=("code_unit_id",),
             right_keys=("code_unit_id",),
             left_output=tuple(table.column_names),
@@ -106,7 +85,6 @@ def compute_array(
 
 
 __all__ = [
-    "column_or_null",
     "compute_array",
     "filter_non_empty_utf8",
     "join_code_unit_meta",

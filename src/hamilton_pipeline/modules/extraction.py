@@ -63,13 +63,12 @@ def repo_files(
     TableLike
         Repository file metadata table.
     """
-    _ = ctx
     options = RepoScanOptions(
         include_globs=repo_scan_config.include_globs,
         exclude_globs=repo_scan_config.exclude_globs,
         max_files=repo_scan_config.max_files,
     )
-    return scan_repo(repo_root=repo_scan_config.repo_root, options=options)
+    return scan_repo(repo_root=repo_scan_config.repo_root, options=options, ctx=ctx)
 
 
 @cache()
@@ -309,11 +308,11 @@ def bytecode_bundle(
         Bytecode tables for code units, instructions, blocks, cfg, and errors.
     """
     _ = repo_root
-    _ = ctx
     result = extract_bytecode(
         repo_files,
         options=BytecodeExtractOptions(),
         file_contexts=file_contexts,
+        ctx=ctx,
     )
     return {
         "py_bc_code_units": result.py_bc_code_units,
@@ -421,6 +420,7 @@ def runtime_inspect_bundle(
             module_allowlist=runtime_module_allowlist,
             timeout_s=int(runtime_timeout_s),
         ),
+        ctx=ctx,
     )
     return {
         "rt_objects": result.rt_objects,

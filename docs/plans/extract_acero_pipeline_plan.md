@@ -47,10 +47,12 @@ class JoinOp:
 - Update: `src/extract/runtime_inspect_extract.py`
 
 **Integration checklist**
-- [ ] Add `JoinOp` and `Plan.join(...)`.
-- [ ] Extend `left_join(...)` to accept `Plan` inputs and produce a `Plan`.
-- [ ] Keep kernel‑lane join fallback for non‑plan tables.
-- [ ] Mark output ordering as unordered post‑join.
+**Status:** Completed
+
+- [x] Add `JoinOp` and `Plan.join(...)`.
+- [x] Extend `left_join(...)` to accept `Plan` inputs and produce a `Plan`.
+- [x] Keep kernel‑lane join fallback for non‑plan tables.
+- [x] Mark output ordering as unordered post‑join.
 
 ---
 
@@ -84,9 +86,11 @@ def hash_expression(spec: HashSpec) -> ComputeExpression:
 - Update: `src/extract/scip_extract.py`
 
 **Integration checklist**
-- [ ] Add a `hash_expression(...)` adapter.
-- [ ] Use `Plan.project(...)` to materialize hash IDs instead of kernel‑lane append.
-- [ ] Keep `apply_hash_column(...)` for non‑plan tables or as a fallback.
+**Status:** Completed
+
+- [x] Add a `hash_expression(...)` adapter.
+- [x] Use `Plan.project(...)` to materialize hash IDs instead of kernel‑lane append.
+- [x] Keep `apply_hash_column(...)` for non‑plan tables or as a fallback.
 
 ---
 
@@ -120,9 +124,11 @@ def projection_for_schema(schema: SchemaLike) -> tuple[list[ComputeExpression], 
 - Update: `src/extract/runtime_inspect_extract.py`
 
 **Integration checklist**
-- [ ] Add a projection builder for schema alignment.
-- [ ] Replace `align_table(...)` with `Plan.project(...)` where a plan is used.
-- [ ] Keep `align_table(...)` for kernel‑lane fallback.
+**Status:** Completed
+
+- [x] Add a projection builder for schema alignment.
+- [x] Replace `align_table(...)` with `Plan.project(...)` where a plan is used.
+- [x] Keep `align_table(...)` for kernel‑lane fallback.
 
 ---
 
@@ -143,9 +149,11 @@ def encode_expression(col: str) -> ComputeExpression:
 - Update: `src/extract/scip_extract.py`
 
 **Integration checklist**
-- [ ] Add `encode_expression(...)`.
-- [ ] Use `Plan.project(...)` to apply encoding where configured.
-- [ ] Keep `apply_encoding(...)` for table‑only fallbacks.
+**Status:** Completed
+
+- [x] Add `encode_expression(...)`.
+- [x] Use `Plan.project(...)` to apply encoding where configured.
+- [x] Keep `apply_encoding(...)` for table‑only fallbacks.
 
 ---
 
@@ -184,10 +192,16 @@ def iter_record_batches(
 - Update: `src/extract/repo_scan.py`
 
 **Integration checklist**
-- [ ] Add `iter_record_batches(...)` helper.
-- [ ] Convert extractor row builders to yield batches (or iterables of rows).
-- [ ] Build `RecordBatchReader` via `pa.RecordBatchReader.from_batches(...)`.
-- [ ] Use `Plan.from_reader(...)` as the plan source.
+**Status:** Partially completed
+
+- [x] Add `iter_record_batches(...)` helper.
+- [ ] Convert extractor row builders to yield batches (or iterables of rows) end‑to‑end.
+- [x] Build `RecordBatchReader` via `pa.RecordBatchReader.from_batches(...)`.
+- [x] Use `Plan.from_reader(...)` as the plan source.
+
+**Remaining notes**
+- `src/extract/cst_extract.py` still materializes tables to append `qnames`/`callee_qnames`.
+- `src/extract/scip_extract.py` still materializes the metadata table from row lists.
 
 ---
 
@@ -214,9 +228,15 @@ table_or_reader = plan.to_reader(ctx=ctx)  # streaming surface
 - `src/extract/repo_scan.py` (hash IDs in plan‑lane)
 
 **Integration checklist**
-- [ ] Introduce `ExecutionContext` usage in extractors where missing.
+**Status:** Partially completed
+
+- [x] Introduce `ExecutionContext` usage in extractors where missing.
 - [ ] Prefer `Plan.to_reader()` unless a pipeline breaker is declared.
 - [ ] Use `PlanSpec` to record pipeline breaker metadata (order_by/aggregate).
+
+**Remaining notes**
+- Extractors still finalize via `Plan.to_table(...)` rather than exposing readers.
+- `PlanSpec` metadata wiring is not yet present.
 
 ---
 
@@ -247,9 +267,14 @@ AST_QUERY = QuerySpec(
 - Update: `src/arrowdsl/plan/query.py` (if additional helpers are required)
 
 **Integration checklist**
-- [ ] Define `QuerySpec` for each dataset table.
-- [ ] Use `QuerySpec.scan_columns(...)` for plan‑lane projections.
-- [ ] Keep schema specs as the source of truth for output fields.
+**Status:** Completed (QuerySpec coverage)
+
+- [x] Define `QuerySpec` for each dataset table.
+- [x] Use `QuerySpec.scan_columns(...)` for plan‑lane projections.
+- [x] Keep schema specs as the source of truth for output fields.
+
+**Remaining notes**
+- `ProjectionSpec` is not yet introduced for derived columns (still built manually in a few places).
 
 ---
 
@@ -265,8 +290,9 @@ AST_QUERY = QuerySpec(
 ---
 
 ### Acceptance criteria
-- All extractors can return a `RecordBatchReader` without full materialization.
-- Plan‑lane filters/projects/joins replace bespoke kernel‑lane steps where possible.
+**Status summary**
+- RecordBatchReader surfaces are not yet exposed end‑to‑end (see Scope 5/6 remaining).
+- Plan‑lane filters/projects/joins are implemented where feasible.
 - Hash IDs and dictionary encoding are expressed as plan projections.
-- Ordering metadata is preserved via `ExecutionContext` and `PlanSpec`.
-- Extractor outputs match existing schemas and tests.
+- Ordering metadata is only partially represented (PlanSpec not yet wired).
+- Extractor outputs continue to align with schemas.

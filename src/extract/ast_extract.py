@@ -5,15 +5,25 @@ from __future__ import annotations
 import ast
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Literal, overload
 
 import pyarrow as pa
 
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.context import ExecutionContext, RuntimeProfile
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.plan.plan import Plan
 from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
-from extract.derived_views import ast_def_nodes
+from extract.derived_views import ast_def_nodes_plan
 from extract.file_context import FileContext
 from extract.spec_helpers import register_dataset
-from extract.tables import rows_to_table
+from extract.tables import (
+    align_plan,
+    apply_query_spec,
+    finalize_plan_bundle,
+    materialize_plan,
+    plan_from_rows,
+    query_for_schema,
+)
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
 
 SCHEMA_VERSION = 1
@@ -84,6 +94,10 @@ AST_ERRORS_SPEC = register_dataset(
 AST_NODES_SCHEMA = AST_NODES_SPEC.table_spec.to_arrow_schema()
 AST_EDGES_SCHEMA = AST_EDGES_SPEC.table_spec.to_arrow_schema()
 AST_ERRORS_SCHEMA = AST_ERRORS_SPEC.table_spec.to_arrow_schema()
+
+AST_NODES_QUERY = query_for_schema(AST_NODES_SCHEMA)
+AST_EDGES_QUERY = query_for_schema(AST_EDGES_SCHEMA)
+AST_ERRORS_QUERY = query_for_schema(AST_ERRORS_SCHEMA)
 
 
 def _maybe_int(value: object | None) -> int | None:
@@ -290,6 +304,7 @@ def extract_ast(
     options: ASTExtractOptions | None = None,
     *,
     file_contexts: Iterable[FileContext] | None = None,
+    ctx: ExecutionContext | None = None,
 ) -> ASTExtractResult:
     """Extract a minimal AST fact set per file.
 
@@ -299,6 +314,36 @@ def extract_ast(
         Tables of AST nodes, edges, and errors.
     """
     options = options or ASTExtractOptions()
+    ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    plans = extract_ast_plans(
+        repo_files,
+        options=options,
+        file_contexts=file_contexts,
+        ctx=ctx,
+    )
+    return ASTExtractResult(
+        py_ast_nodes=materialize_plan(plans["ast_nodes"], ctx=ctx),
+        py_ast_edges=materialize_plan(plans["ast_edges"], ctx=ctx),
+        py_ast_errors=materialize_plan(plans["ast_errors"], ctx=ctx),
+    )
+
+
+def extract_ast_plans(
+    repo_files: TableLike,
+    options: ASTExtractOptions | None = None,
+    *,
+    file_contexts: Iterable[FileContext] | None = None,
+    ctx: ExecutionContext | None = None,
+) -> dict[str, Plan]:
+    """Extract AST plans for nodes, edges, and errors.
+
+    Returns
+    -------
+    dict[str, Plan]
+        Plan bundle keyed by ``ast_nodes``, ``ast_edges``, and ``ast_errors``.
+    """
+    options = options or ASTExtractOptions()
+    ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
 
     nodes_rows: list[dict[str, object]] = []
     edges_rows: list[dict[str, object]] = []
@@ -310,10 +355,60 @@ def extract_ast(
         edges_rows.extend(edges)
         err_rows.extend(errs)
 
-    t_nodes = rows_to_table(nodes_rows, AST_NODES_SCHEMA)
-    t_edges = rows_to_table(edges_rows, AST_EDGES_SCHEMA)
-    t_errs = rows_to_table(err_rows, AST_ERRORS_SCHEMA)
-    return ASTExtractResult(py_ast_nodes=t_nodes, py_ast_edges=t_edges, py_ast_errors=t_errs)
+    nodes_plan = plan_from_rows(nodes_rows, schema=AST_NODES_SCHEMA, label="ast_nodes")
+    nodes_plan = apply_query_spec(nodes_plan, spec=AST_NODES_QUERY, ctx=ctx)
+    nodes_plan = align_plan(
+        nodes_plan,
+        schema=AST_NODES_SCHEMA,
+        available=AST_NODES_SCHEMA.names,
+        ctx=ctx,
+    )
+
+    edges_plan = plan_from_rows(edges_rows, schema=AST_EDGES_SCHEMA, label="ast_edges")
+    edges_plan = apply_query_spec(edges_plan, spec=AST_EDGES_QUERY, ctx=ctx)
+    edges_plan = align_plan(
+        edges_plan,
+        schema=AST_EDGES_SCHEMA,
+        available=AST_EDGES_SCHEMA.names,
+        ctx=ctx,
+    )
+
+    errs_plan = plan_from_rows(err_rows, schema=AST_ERRORS_SCHEMA, label="ast_errors")
+    errs_plan = apply_query_spec(errs_plan, spec=AST_ERRORS_QUERY, ctx=ctx)
+    errs_plan = align_plan(
+        errs_plan,
+        schema=AST_ERRORS_SCHEMA,
+        available=AST_ERRORS_SCHEMA.names,
+        ctx=ctx,
+    )
+
+    return {
+        "ast_nodes": nodes_plan,
+        "ast_edges": edges_plan,
+        "ast_errors": errs_plan,
+    }
+
+
+@overload
+def extract_ast_tables(
+    *,
+    repo_root: str | None,
+    repo_files: TableLike,
+    file_contexts: Iterable[FileContext] | None = None,
+    ctx: ExecutionContext | None = None,
+    prefer_reader: Literal[False] = False,
+) -> dict[str, TableLike]: ...
+
+
+@overload
+def extract_ast_tables(
+    *,
+    repo_root: str | None,
+    repo_files: TableLike,
+    file_contexts: Iterable[FileContext] | None = None,
+    ctx: ExecutionContext | None = None,
+    prefer_reader: Literal[True],
+) -> dict[str, TableLike | RecordBatchReaderLike]: ...
 
 
 def extract_ast_tables(
@@ -321,8 +416,9 @@ def extract_ast_tables(
     repo_root: str | None,
     repo_files: TableLike,
     file_contexts: Iterable[FileContext] | None = None,
-    ctx: object | None = None,
-) -> dict[str, TableLike]:
+    ctx: ExecutionContext | None = None,
+    prefer_reader: bool = False,
+) -> dict[str, TableLike | RecordBatchReaderLike]:
     """Extract AST tables as a name-keyed bundle.
 
     Parameters
@@ -334,19 +430,27 @@ def extract_ast_tables(
     file_contexts:
         Optional pre-built file contexts for extraction.
     ctx:
-        Execution context (unused).
+        Execution context for plan execution.
+
+    prefer_reader:
+        When True, return streaming readers when possible.
 
     Returns
     -------
-    dict[str, pyarrow.Table]
-        Extracted AST tables keyed by output name.
+    dict[str, TableLike | RecordBatchReaderLike]
+        Extracted AST outputs keyed by name.
     """
-    _ = (repo_root, ctx)
-    result = extract_ast(repo_files, file_contexts=file_contexts)
-    defs_table = ast_def_nodes(result.py_ast_nodes)
+    _ = repo_root
+    ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    plans = extract_ast_plans(repo_files, file_contexts=file_contexts, ctx=ctx)
+    defs_plan = ast_def_nodes_plan(plan=plans["ast_nodes"])
 
-    return {
-        "ast_nodes": result.py_ast_nodes,
-        "ast_edges": result.py_ast_edges,
-        "ast_defs": defs_table,
-    }
+    return finalize_plan_bundle(
+        {
+            "ast_nodes": plans["ast_nodes"],
+            "ast_edges": plans["ast_edges"],
+            "ast_defs": defs_plan,
+        },
+        ctx=ctx,
+        prefer_reader=prefer_reader,
+    )

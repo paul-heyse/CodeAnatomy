@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast, overload
 
 import libcst as cst
 import pyarrow as pa
@@ -19,19 +19,25 @@ from libcst.metadata import (
     QualifiedNameProvider,
 )
 
+from arrowdsl.core.context import ExecutionContext, RuntimeProfile
 from arrowdsl.core.ids import HashSpec
-from arrowdsl.core.interop import ArrayLike, TableLike
-from arrowdsl.schema.arrays import set_or_append_column
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.schema import empty_table
 from extract.common import bytes_from_file_ctx, file_identity_row, iter_contexts
 from extract.file_context import FileContext
-from extract.hashing import apply_hash_column
-from extract.nested_lists import ListAccumulator, StructListAccumulator
+from extract.hashing import apply_hash_projection
 from extract.spec_helpers import register_dataset
-from extract.tables import align_table, rows_to_table
+from extract.tables import (
+    align_plan,
+    apply_query_spec,
+    finalize_plan_bundle,
+    materialize_plan,
+    plan_from_rows,
+    query_for_schema,
+)
 from schema_spec.specs import (
     ArrowFieldSpec,
-    NestedFieldSpec,
     call_span_bundle,
     file_identity_bundle,
 )
@@ -202,6 +208,14 @@ CALLSITES_SCHEMA = CALLSITES_SPEC.table_spec.to_arrow_schema()
 DEFS_SCHEMA = DEFS_SPEC.table_spec.to_arrow_schema()
 TYPE_EXPRS_SCHEMA = TYPE_EXPRS_SPEC.table_spec.to_arrow_schema()
 
+PARSE_MANIFEST_QUERY = query_for_schema(PARSE_MANIFEST_SCHEMA)
+PARSE_ERRORS_QUERY = query_for_schema(PARSE_ERRORS_SCHEMA)
+NAME_REFS_QUERY = query_for_schema(NAME_REFS_SCHEMA)
+IMPORTS_QUERY = query_for_schema(IMPORTS_SCHEMA)
+CALLSITES_QUERY = query_for_schema(CALLSITES_SCHEMA)
+DEFS_QUERY = query_for_schema(DEFS_SCHEMA)
+TYPE_EXPRS_QUERY = query_for_schema(TYPE_EXPRS_SCHEMA)
+
 
 @dataclass(frozen=True)
 class CSTFileContext:
@@ -250,14 +264,11 @@ class CSTExtractContext:
 
     options: CSTExtractOptions
     manifest_rows: list[Row]
-    manifest_future_imports: ListAccumulator[str | None]
     error_rows: list[Row]
     name_ref_rows: list[Row]
     import_rows: list[Row]
     call_rows: list[Row]
-    call_qnames: StructListAccumulator
     def_rows: list[Row]
-    def_qnames: StructListAccumulator
     type_expr_rows: list[Row]
 
     @classmethod
@@ -272,48 +283,13 @@ class CSTExtractContext:
         return cls(
             options=options,
             manifest_rows=[],
-            manifest_future_imports=ListAccumulator(),
             error_rows=[],
             name_ref_rows=[],
             import_rows=[],
             call_rows=[],
-            call_qnames=StructListAccumulator.with_fields(("name", "source")),
             def_rows=[],
-            def_qnames=StructListAccumulator.with_fields(("name", "source")),
             type_expr_rows=[],
         )
-
-
-def _build_manifest_future_imports(ctx: CSTExtractContext) -> ArrayLike:
-    return ctx.manifest_future_imports.build(value_type=pa.string())
-
-
-def _build_call_qnames(ctx: CSTExtractContext) -> ArrayLike:
-    return ctx.call_qnames.build(field_types={"name": pa.string(), "source": pa.string()})
-
-
-def _build_def_qnames(ctx: CSTExtractContext) -> ArrayLike:
-    return ctx.def_qnames.build(field_types={"name": pa.string(), "source": pa.string()})
-
-
-FUTURE_IMPORTS_SPEC = NestedFieldSpec(
-    name="future_imports",
-    dtype=pa.list_(pa.string()),
-    builder=_build_manifest_future_imports,
-)
-
-CALL_QNAMES_SPEC = NestedFieldSpec(
-    name="callee_qnames",
-    dtype=QNAME_LIST,
-    builder=_build_call_qnames,
-)
-
-DEF_QNAMES_SPEC = NestedFieldSpec(
-    name="qnames",
-    dtype=QNAME_LIST,
-    builder=_build_def_qnames,
-)
-
 
 type DefKey = tuple[str, int, int]
 
@@ -417,6 +393,7 @@ def _manifest_row(
     *,
     module_name: str | None,
     package_name: str | None,
+    future_imports: Sequence[str | None],
 ) -> Row:
     return {
         **file_identity_row(ctx.file_ctx),
@@ -424,7 +401,7 @@ def _manifest_row(
         "default_indent": getattr(module, "default_indent", None),
         "default_newline": getattr(module, "default_newline", None),
         "has_trailing_newline": bool(getattr(module, "has_trailing_newline", False)),
-        "future_imports": None,
+        "future_imports": list(future_imports),
         "module_name": module_name,
         "package_name": package_name,
     }
@@ -507,9 +484,7 @@ class CSTCollector(cst.CSTVisitor):
         self._name_ref_rows = ctx.extract_ctx.name_ref_rows
         self._import_rows = ctx.extract_ctx.import_rows
         self._call_rows = ctx.extract_ctx.call_rows
-        self._call_qnames = ctx.extract_ctx.call_qnames
         self._def_rows = ctx.extract_ctx.def_rows
-        self._def_qnames = ctx.extract_ctx.def_qnames
         self._type_expr_rows = ctx.extract_ctx.type_expr_rows
         self._skip_name_nodes: set[cst.Name] = set()
         self._def_stack: list[DefKey] = []
@@ -528,12 +503,12 @@ class CSTCollector(cst.CSTVisitor):
         except (AttributeError, ValueError):
             return None
 
-    def _qnames(self, node: cst.CSTNode) -> list[tuple[str, str]]:
+    def _qnames(self, node: cst.CSTNode) -> list[dict[str, str]]:
         qset = self._qn_map.get(node)
         if not qset:
             return []
         qualified = sorted(qset, key=lambda q: (q.name, str(q.source)))
-        return [(q.name, str(q.source)) for q in qualified]
+        return [{"name": q.name, "source": str(q.source)} for q in qualified]
 
     def _record_type_expr(
         self,
@@ -586,7 +561,6 @@ class CSTCollector(cst.CSTVisitor):
         def_kind = "async_function" if node.asynchronous is not None else "function"
         def_key: DefKey = (def_kind, def_bstart, def_bend)
         qnames = self._qnames(node)
-        self._def_qnames.append_tuples(qnames)
 
         self._def_rows.append(
             {
@@ -600,7 +574,7 @@ class CSTCollector(cst.CSTVisitor):
                 "def_bend": def_bend,
                 "name_bstart": name_bstart,
                 "name_bend": name_bend,
-                "qnames": None,
+                "qnames": qnames,
             }
         )
         if node.returns is not None:
@@ -658,7 +632,6 @@ class CSTCollector(cst.CSTVisitor):
         def_kind = "class"
         def_key: DefKey = (def_kind, def_bstart, def_bend)
         qnames = self._qnames(node)
-        self._def_qnames.append_tuples(qnames)
 
         self._def_rows.append(
             {
@@ -672,7 +645,7 @@ class CSTCollector(cst.CSTVisitor):
                 "def_bend": def_bend,
                 "name_bstart": name_bstart,
                 "name_bend": name_bend,
-                "qnames": None,
+                "qnames": qnames,
             }
         )
         self._def_stack.append(def_key)
@@ -839,7 +812,6 @@ class CSTCollector(cst.CSTVisitor):
         qnames = self._qnames(node.func)
         if not qnames:
             qnames = self._qnames(node)
-        self._call_qnames.append_tuples(qnames)
 
         self._call_rows.append(
             {
@@ -852,7 +824,7 @@ class CSTCollector(cst.CSTVisitor):
                 "callee_text": callee_text,
                 "arg_count": int(arg_count),
                 "callee_dotted": callee_dotted,
-                "callee_qnames": None,
+                "callee_qnames": qnames,
             }
         )
         return True
@@ -882,13 +854,14 @@ def _extract_cst_for_context(file_ctx: FileContext, ctx: CSTExtractContext) -> N
     cst_file_ctx = CSTFileContext(file_ctx=file_ctx, options=ctx.options)
     if ctx.options.include_parse_manifest:
         future_imports = getattr(module, "future_imports", []) or []
-        ctx.manifest_future_imports.append(_normalize_string_items(future_imports))
+        normalized_future_imports = _normalize_string_items(future_imports)
         ctx.manifest_rows.append(
             _manifest_row(
                 cst_file_ctx,
                 module,
                 module_name=module_name,
                 package_name=package_name,
+                future_imports=normalized_future_imports,
             )
         )
 
@@ -905,6 +878,7 @@ def extract_cst(
     options: CSTExtractOptions | None = None,
     *,
     file_contexts: Iterable[FileContext] | None = None,
+    ctx: ExecutionContext | None = None,
 ) -> CSTExtractResult:
     """Extract LibCST-derived structures from repo files.
 
@@ -914,139 +888,315 @@ def extract_cst(
         Tables derived from LibCST parsing and metadata providers.
     """
     options = options or CSTExtractOptions()
-    ctx = CSTExtractContext.build(options)
+    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    extract_ctx = CSTExtractContext.build(options)
 
     for file_ctx in iter_contexts(repo_files, file_contexts):
-        _extract_cst_for_context(file_ctx, ctx)
+        _extract_cst_for_context(file_ctx, extract_ctx)
 
-    return _build_cst_result(ctx)
+    return _build_cst_result(extract_ctx, exec_ctx)
 
 
-def _build_manifest_table(ctx: CSTExtractContext) -> TableLike:
-    table = rows_to_table(ctx.manifest_rows, PARSE_MANIFEST_SCHEMA)
+def _build_manifest_table(
+    ctx: CSTExtractContext,
+    exec_ctx: ExecutionContext,
+) -> TableLike:
+    return materialize_plan(_build_manifest_plan(ctx, exec_ctx), ctx=exec_ctx)
+
+
+def _build_manifest_plan(
+    ctx: CSTExtractContext,
+    exec_ctx: ExecutionContext,
+) -> Plan:
     if not ctx.manifest_rows:
-        return table
-    future_imports = FUTURE_IMPORTS_SPEC.builder(ctx)
-    idx = table.schema.get_field_index("future_imports")
-    return table.set_column(idx, "future_imports", future_imports)
+        return Plan.table_source(empty_table(PARSE_MANIFEST_SCHEMA))
+    plan = plan_from_rows(ctx.manifest_rows, schema=PARSE_MANIFEST_SCHEMA, label="cst_manifest")
+    plan = apply_query_spec(plan, spec=PARSE_MANIFEST_QUERY, ctx=exec_ctx)
+    return align_plan(
+        plan,
+        schema=PARSE_MANIFEST_SCHEMA,
+        available=PARSE_MANIFEST_SCHEMA.names,
+        ctx=exec_ctx,
+    )
 
 
-def _build_errors_table(ctx: CSTExtractContext) -> TableLike:
-    return rows_to_table(ctx.error_rows, PARSE_ERRORS_SCHEMA)
+def _build_errors_table(
+    ctx: CSTExtractContext,
+    exec_ctx: ExecutionContext,
+) -> TableLike:
+    return materialize_plan(_build_errors_plan(ctx, exec_ctx), ctx=exec_ctx)
 
 
-def _build_name_refs_table(ctx: CSTExtractContext) -> TableLike:
+def _build_errors_plan(
+    ctx: CSTExtractContext,
+    exec_ctx: ExecutionContext,
+) -> Plan:
+    if not ctx.error_rows:
+        return Plan.table_source(empty_table(PARSE_ERRORS_SCHEMA))
+    plan = plan_from_rows(ctx.error_rows, schema=PARSE_ERRORS_SCHEMA, label="cst_parse_errors")
+    plan = apply_query_spec(plan, spec=PARSE_ERRORS_QUERY, ctx=exec_ctx)
+    return align_plan(
+        plan,
+        schema=PARSE_ERRORS_SCHEMA,
+        available=PARSE_ERRORS_SCHEMA.names,
+        ctx=exec_ctx,
+    )
+
+
+def _build_name_refs_table(
+    ctx: CSTExtractContext,
+    exec_ctx: ExecutionContext,
+) -> TableLike:
+    return materialize_plan(_build_name_refs_plan(ctx, exec_ctx), ctx=exec_ctx)
+
+
+def _build_name_refs_plan(
+    ctx: CSTExtractContext,
+    exec_ctx: ExecutionContext,
+) -> Plan:
     if not ctx.name_ref_rows:
-        return empty_table(NAME_REFS_SCHEMA)
-    table = pa.Table.from_pylist(ctx.name_ref_rows)
-    table = apply_hash_column(
-        table,
-        spec=HashSpec(
-            prefix="cst_name_ref",
-            cols=("file_id", "bstart", "bend"),
-            out_col="name_ref_id",
+        return Plan.table_source(empty_table(NAME_REFS_SCHEMA))
+    plan = plan_from_rows(ctx.name_ref_rows, schema=NAME_REFS_SCHEMA, label="cst_name_refs")
+    plan = apply_hash_projection(
+        plan,
+        specs=(
+            HashSpec(
+                prefix="cst_name_ref",
+                cols=("file_id", "bstart", "bend"),
+                out_col="name_ref_id",
+            ),
         ),
-        required=("file_id", "bstart", "bend"),
+        available=NAME_REFS_SCHEMA.names,
+        required={"name_ref_id": ("file_id", "bstart", "bend")},
+        ctx=exec_ctx,
     )
-    return align_table(table, schema=NAME_REFS_SCHEMA)
+    plan = apply_query_spec(plan, spec=NAME_REFS_QUERY, ctx=exec_ctx)
+    return align_plan(
+        plan,
+        schema=NAME_REFS_SCHEMA,
+        available=NAME_REFS_SCHEMA.names,
+        ctx=exec_ctx,
+    )
 
 
-def _build_imports_table(ctx: CSTExtractContext) -> TableLike:
+def _build_imports_table(
+    ctx: CSTExtractContext,
+    exec_ctx: ExecutionContext,
+) -> TableLike:
+    return materialize_plan(_build_imports_plan(ctx, exec_ctx), ctx=exec_ctx)
+
+
+def _build_imports_plan(
+    ctx: CSTExtractContext,
+    exec_ctx: ExecutionContext,
+) -> Plan:
     if not ctx.import_rows:
-        return empty_table(IMPORTS_SCHEMA)
-    table = pa.Table.from_pylist(ctx.import_rows)
-    table = apply_hash_column(
-        table,
-        spec=HashSpec(
-            prefix="cst_import",
-            cols=("file_id", "kind", "alias_bstart", "alias_bend"),
-            out_col="import_id",
+        return Plan.table_source(empty_table(IMPORTS_SCHEMA))
+    plan = plan_from_rows(ctx.import_rows, schema=IMPORTS_SCHEMA, label="cst_imports")
+    plan = apply_hash_projection(
+        plan,
+        specs=(
+            HashSpec(
+                prefix="cst_import",
+                cols=("file_id", "kind", "alias_bstart", "alias_bend"),
+                out_col="import_id",
+            ),
         ),
-        required=("file_id", "kind", "alias_bstart", "alias_bend"),
+        available=IMPORTS_SCHEMA.names,
+        required={"import_id": ("file_id", "kind", "alias_bstart", "alias_bend")},
+        ctx=exec_ctx,
     )
-    return align_table(table, schema=IMPORTS_SCHEMA)
+    plan = apply_query_spec(plan, spec=IMPORTS_QUERY, ctx=exec_ctx)
+    return align_plan(
+        plan,
+        schema=IMPORTS_SCHEMA,
+        available=IMPORTS_SCHEMA.names,
+        ctx=exec_ctx,
+    )
 
 
-def _build_callsites_table(ctx: CSTExtractContext) -> TableLike:
+def _build_callsites_table(
+    ctx: CSTExtractContext,
+    exec_ctx: ExecutionContext,
+) -> TableLike:
+    return materialize_plan(_build_callsites_plan(ctx, exec_ctx), ctx=exec_ctx)
+
+
+def _build_callsites_plan(
+    ctx: CSTExtractContext,
+    exec_ctx: ExecutionContext,
+) -> Plan:
     if not ctx.call_rows:
-        return empty_table(CALLSITES_SCHEMA)
-    table = pa.Table.from_pylist(ctx.call_rows)
-    call_qnames = CALL_QNAMES_SPEC.builder(ctx)
-    table = set_or_append_column(table, "callee_qnames", call_qnames)
-    table = apply_hash_column(
-        table,
-        spec=HashSpec(
-            prefix="cst_call",
-            cols=("file_id", "call_bstart", "call_bend"),
-            out_col="call_id",
+        return Plan.table_source(empty_table(CALLSITES_SCHEMA))
+    plan = plan_from_rows(ctx.call_rows, schema=CALLSITES_SCHEMA, label="cst_callsites")
+    plan = apply_hash_projection(
+        plan,
+        specs=(
+            HashSpec(
+                prefix="cst_call",
+                cols=("file_id", "call_bstart", "call_bend"),
+                out_col="call_id",
+            ),
         ),
-        required=("file_id", "call_bstart", "call_bend"),
+        available=CALLSITES_SCHEMA.names,
+        required={"call_id": ("file_id", "call_bstart", "call_bend")},
+        ctx=exec_ctx,
     )
-    return align_table(table, schema=CALLSITES_SCHEMA)
+    plan = apply_query_spec(plan, spec=CALLSITES_QUERY, ctx=exec_ctx)
+    return align_plan(
+        plan,
+        schema=CALLSITES_SCHEMA,
+        available=CALLSITES_SCHEMA.names,
+        ctx=exec_ctx,
+    )
 
 
-def _build_defs_table(ctx: CSTExtractContext) -> TableLike:
+def _build_defs_table(
+    ctx: CSTExtractContext,
+    exec_ctx: ExecutionContext,
+) -> TableLike:
+    return materialize_plan(_build_defs_plan(ctx, exec_ctx), ctx=exec_ctx)
+
+
+def _build_defs_plan(
+    ctx: CSTExtractContext,
+    exec_ctx: ExecutionContext,
+) -> Plan:
     if not ctx.def_rows:
-        return empty_table(DEFS_SCHEMA)
-    table = pa.Table.from_pylist(ctx.def_rows)
-    def_qnames = DEF_QNAMES_SPEC.builder(ctx)
-    table = set_or_append_column(table, "qnames", def_qnames)
-    table = apply_hash_column(
-        table,
-        spec=HashSpec(
-            prefix="cst_def",
-            cols=("file_id", "kind", "def_bstart", "def_bend"),
-            out_col="def_id",
+        return Plan.table_source(empty_table(DEFS_SCHEMA))
+    plan = plan_from_rows(ctx.def_rows, schema=DEFS_SCHEMA, label="cst_defs")
+    plan = apply_hash_projection(
+        plan,
+        specs=(
+            HashSpec(
+                prefix="cst_def",
+                cols=("file_id", "kind", "def_bstart", "def_bend"),
+                out_col="def_id",
+            ),
+            HashSpec(
+                prefix="cst_def",
+                cols=("file_id", "container_def_kind", "container_def_bstart", "container_def_bend"),
+                out_col="container_def_id",
+            ),
         ),
-        required=("file_id", "kind", "def_bstart", "def_bend"),
+        available=DEFS_SCHEMA.names,
+        required={
+            "def_id": ("file_id", "kind", "def_bstart", "def_bend"),
+            "container_def_id": (
+                "file_id",
+                "container_def_kind",
+                "container_def_bstart",
+                "container_def_bend",
+            ),
+        },
+        ctx=exec_ctx,
     )
-    table = apply_hash_column(
-        table,
-        spec=HashSpec(
-            prefix="cst_def",
-            cols=("file_id", "container_def_kind", "container_def_bstart", "container_def_bend"),
-            out_col="container_def_id",
-        ),
-        required=("file_id", "container_def_kind", "container_def_bstart", "container_def_bend"),
+    plan = apply_query_spec(plan, spec=DEFS_QUERY, ctx=exec_ctx)
+    return align_plan(
+        plan,
+        schema=DEFS_SCHEMA,
+        available=DEFS_SCHEMA.names,
+        ctx=exec_ctx,
     )
-    return align_table(table, schema=DEFS_SCHEMA)
 
 
-def _build_type_exprs_table(ctx: CSTExtractContext) -> TableLike:
+def _build_type_exprs_table(
+    ctx: CSTExtractContext,
+    exec_ctx: ExecutionContext,
+) -> TableLike:
+    return materialize_plan(_build_type_exprs_plan(ctx, exec_ctx), ctx=exec_ctx)
+
+
+def _build_type_exprs_plan(
+    ctx: CSTExtractContext,
+    exec_ctx: ExecutionContext,
+) -> Plan:
     if not ctx.type_expr_rows:
-        return empty_table(TYPE_EXPRS_SCHEMA)
-    table = pa.Table.from_pylist(ctx.type_expr_rows)
-    table = apply_hash_column(
-        table,
-        spec=HashSpec(
-            prefix="cst_type_expr",
-            cols=("path", "bstart", "bend"),
-            out_col="type_expr_id",
+        return Plan.table_source(empty_table(TYPE_EXPRS_SCHEMA))
+    plan = plan_from_rows(ctx.type_expr_rows, schema=TYPE_EXPRS_SCHEMA, label="cst_type_exprs")
+    plan = apply_hash_projection(
+        plan,
+        specs=(
+            HashSpec(
+                prefix="cst_type_expr",
+                cols=("path", "bstart", "bend"),
+                out_col="type_expr_id",
+            ),
+            HashSpec(
+                prefix="cst_def",
+                cols=("file_id", "owner_def_kind", "owner_def_bstart", "owner_def_bend"),
+                out_col="owner_def_id",
+            ),
         ),
-        required=("path", "bstart", "bend"),
+        available=TYPE_EXPRS_SCHEMA.names,
+        required={
+            "type_expr_id": ("path", "bstart", "bend"),
+            "owner_def_id": ("file_id", "owner_def_kind", "owner_def_bstart", "owner_def_bend"),
+        },
+        ctx=exec_ctx,
     )
-    table = apply_hash_column(
-        table,
-        spec=HashSpec(
-            prefix="cst_def",
-            cols=("file_id", "owner_def_kind", "owner_def_bstart", "owner_def_bend"),
-            out_col="owner_def_id",
-        ),
-        required=("file_id", "owner_def_kind", "owner_def_bstart", "owner_def_bend"),
+    plan = apply_query_spec(plan, spec=TYPE_EXPRS_QUERY, ctx=exec_ctx)
+    return align_plan(
+        plan,
+        schema=TYPE_EXPRS_SCHEMA,
+        available=TYPE_EXPRS_SCHEMA.names,
+        ctx=exec_ctx,
     )
-    return align_table(table, schema=TYPE_EXPRS_SCHEMA)
 
 
-def _build_cst_result(ctx: CSTExtractContext) -> CSTExtractResult:
+def _build_cst_result(
+    ctx: CSTExtractContext,
+    exec_ctx: ExecutionContext,
+) -> CSTExtractResult:
+    plans = _build_cst_plans(ctx, exec_ctx)
     return CSTExtractResult(
-        py_cst_parse_manifest=_build_manifest_table(ctx),
-        py_cst_parse_errors=_build_errors_table(ctx),
-        py_cst_name_refs=_build_name_refs_table(ctx),
-        py_cst_imports=_build_imports_table(ctx),
-        py_cst_callsites=_build_callsites_table(ctx),
-        py_cst_defs=_build_defs_table(ctx),
-        py_cst_type_exprs=_build_type_exprs_table(ctx),
+        py_cst_parse_manifest=materialize_plan(plans["cst_parse_manifest"], ctx=exec_ctx),
+        py_cst_parse_errors=materialize_plan(plans["cst_parse_errors"], ctx=exec_ctx),
+        py_cst_name_refs=materialize_plan(plans["cst_name_refs"], ctx=exec_ctx),
+        py_cst_imports=materialize_plan(plans["cst_imports"], ctx=exec_ctx),
+        py_cst_callsites=materialize_plan(plans["cst_callsites"], ctx=exec_ctx),
+        py_cst_defs=materialize_plan(plans["cst_defs"], ctx=exec_ctx),
+        py_cst_type_exprs=materialize_plan(plans["cst_type_exprs"], ctx=exec_ctx),
     )
+
+
+def _build_cst_plans(
+    ctx: CSTExtractContext,
+    exec_ctx: ExecutionContext,
+) -> dict[str, Plan]:
+    return {
+        "cst_parse_manifest": _build_manifest_plan(ctx, exec_ctx),
+        "cst_parse_errors": _build_errors_plan(ctx, exec_ctx),
+        "cst_name_refs": _build_name_refs_plan(ctx, exec_ctx),
+        "cst_imports": _build_imports_plan(ctx, exec_ctx),
+        "cst_callsites": _build_callsites_plan(ctx, exec_ctx),
+        "cst_defs": _build_defs_plan(ctx, exec_ctx),
+        "cst_type_exprs": _build_type_exprs_plan(ctx, exec_ctx),
+    }
+
+
+@overload
+def extract_cst_tables(
+    *,
+    repo_root: str | None,
+    repo_files: TableLike,
+    file_contexts: Iterable[FileContext] | None = None,
+    options: CSTExtractOptions | None = None,
+    ctx: ExecutionContext | None = None,
+    prefer_reader: Literal[False] = False,
+) -> dict[str, TableLike]: ...
+
+
+@overload
+def extract_cst_tables(
+    *,
+    repo_root: str | None,
+    repo_files: TableLike,
+    file_contexts: Iterable[FileContext] | None = None,
+    options: CSTExtractOptions | None = None,
+    ctx: ExecutionContext | None = None,
+    prefer_reader: Literal[True],
+) -> dict[str, TableLike | RecordBatchReaderLike]: ...
 
 
 def extract_cst_tables(
@@ -1054,8 +1204,9 @@ def extract_cst_tables(
     repo_root: str | None,
     repo_files: TableLike,
     file_contexts: Iterable[FileContext] | None = None,
-    ctx: object | None = None,
-) -> dict[str, TableLike]:
+    ctx: ExecutionContext | None = None,
+    prefer_reader: bool = False,
+) -> dict[str, TableLike | RecordBatchReaderLike]:
     """Extract CST tables as a name-keyed bundle.
 
     Parameters
@@ -1067,22 +1218,23 @@ def extract_cst_tables(
     file_contexts:
         Optional pre-built file contexts for extraction.
     ctx:
-        Execution context (unused).
+        Execution context for plan execution.
+
+    prefer_reader:
+        When True, return streaming readers when possible.
 
     Returns
     -------
-    dict[str, pyarrow.Table]
-        Extracted CST tables keyed by output name.
+    dict[str, TableLike | RecordBatchReaderLike]
+        Extracted CST outputs keyed by output name.
     """
-    _ = ctx
     options = CSTExtractOptions(repo_root=Path(repo_root) if repo_root else None)
-    result = extract_cst(repo_files, options=options, file_contexts=file_contexts)
-    return {
-        "cst_parse_manifest": result.py_cst_parse_manifest,
-        "cst_parse_errors": result.py_cst_parse_errors,
-        "cst_name_refs": result.py_cst_name_refs,
-        "cst_imports": result.py_cst_imports,
-        "cst_callsites": result.py_cst_callsites,
-        "cst_defs": result.py_cst_defs,
-        "cst_type_exprs": result.py_cst_type_exprs,
-    }
+    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    extract_ctx = CSTExtractContext.build(options)
+    for file_ctx in iter_contexts(repo_files, file_contexts):
+        _extract_cst_for_context(file_ctx, extract_ctx)
+    return finalize_plan_bundle(
+        _build_cst_plans(extract_ctx, exec_ctx),
+        ctx=exec_ctx,
+        prefer_reader=prefer_reader,
+    )

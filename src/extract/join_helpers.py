@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import overload
 
 from arrowdsl.compute.kernels import apply_join
+from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.plan.ops import JoinSpec
+from arrowdsl.plan.plan import Plan
+
+JoinInput = TableLike | Plan
+JoinOutput = TableLike | Plan
 
 
 @dataclass(frozen=True)
@@ -46,13 +52,58 @@ class JoinConfig:
         )
 
 
+@overload
+def left_join(
+    left: Plan,
+    right: Plan,
+    *,
+    config: JoinConfig,
+    use_threads: bool = True,
+    ctx: ExecutionContext | None = None,
+) -> Plan: ...
+
+
+@overload
+def left_join(
+    left: Plan,
+    right: TableLike,
+    *,
+    config: JoinConfig,
+    use_threads: bool = True,
+    ctx: ExecutionContext | None = None,
+) -> Plan: ...
+
+
+@overload
+def left_join(
+    left: TableLike,
+    right: Plan,
+    *,
+    config: JoinConfig,
+    use_threads: bool = True,
+    ctx: ExecutionContext | None = None,
+) -> Plan: ...
+
+
+@overload
 def left_join(
     left: TableLike,
     right: TableLike,
     *,
     config: JoinConfig,
     use_threads: bool = True,
-) -> TableLike:
+    ctx: ExecutionContext | None = None,
+) -> TableLike: ...
+
+
+def left_join(
+    left: JoinInput,
+    right: JoinInput,
+    *,
+    config: JoinConfig,
+    use_threads: bool = True,
+    ctx: ExecutionContext | None = None,
+) -> JoinOutput:
     """Perform a left outer join in the kernel lane.
 
     Returns
@@ -68,6 +119,10 @@ def left_join(
         right_output=config.right_output,
         output_suffix_for_right=config.output_suffix_for_right,
     )
+    if isinstance(left, Plan) or isinstance(right, Plan):
+        left_plan = left if isinstance(left, Plan) else Plan.table_source(left)
+        right_plan = right if isinstance(right, Plan) else Plan.table_source(right)
+        return left_plan.join(right_plan, spec=spec, ctx=ctx)
     return apply_join(left, right, spec=spec, use_threads=use_threads)
 
 

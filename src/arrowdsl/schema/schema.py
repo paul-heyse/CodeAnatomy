@@ -4,14 +4,22 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, cast
 
 import pyarrow.types as patypes
 
 import arrowdsl.core.interop as pa
 from arrowdsl.compute.kernels import ChunkPolicy
-from arrowdsl.core.interop import ArrayLike, FieldLike, SchemaLike, TableLike, pc
-from arrowdsl.schema.arrays import set_or_append_column
+from arrowdsl.core.interop import (
+    ArrayLike,
+    ComputeExpression,
+    FieldLike,
+    SchemaLike,
+    TableLike,
+    ensure_expression,
+    pc,
+)
+from arrowdsl.schema.arrays import FieldExpr, set_or_append_column
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
 
@@ -331,6 +339,45 @@ def encode_columns(table: TableLike, specs: tuple[EncodingSpec, ...]) -> TableLi
     return out
 
 
+def encode_expression(column: str) -> ComputeExpression:
+    """Return a compute expression for dictionary encoding a column.
+
+    Returns
+    -------
+    ComputeExpression
+        Expression applying dictionary encoding.
+    """
+    expr = FieldExpr(column).to_expression()
+    encoded = pc.dictionary_encode(cast("ArrayLike", expr))
+    return ensure_expression(encoded)
+
+
+def projection_for_schema(
+    schema: SchemaLike,
+    *,
+    available: Sequence[str] | None = None,
+    safe_cast: bool = True,
+) -> tuple[list[ComputeExpression], list[str]]:
+    """Return projection expressions to align with a schema.
+
+    Returns
+    -------
+    tuple[list[ComputeExpression], list[str]]
+        Expressions and names aligned to the schema.
+    """
+    available_set = set(available or schema.names)
+    expressions: list[ComputeExpression] = []
+    names: list[str] = []
+    for schema_field in schema:
+        if schema_field.name in available_set:
+            expr = pc.cast(pc.field(schema_field.name), schema_field.type, safe=safe_cast)
+        else:
+            expr = pc.cast(pc.scalar(None), schema_field.type, safe=safe_cast)
+        expressions.append(ensure_expression(expr))
+        names.append(schema_field.name)
+    return expressions, names
+
+
 __all__ = [
     "AlignmentInfo",
     "CastErrorPolicy",
@@ -343,4 +390,6 @@ __all__ = [
     "empty_table",
     "encode_columns",
     "encode_dictionary",
+    "encode_expression",
+    "projection_for_schema",
 ]

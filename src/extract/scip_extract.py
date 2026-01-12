@@ -10,25 +10,37 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
+from typing import Literal, overload
 
 import pyarrow as pa
 
+from arrowdsl.core.context import ExecutionContext, RuntimeProfile
 from arrowdsl.core.ids import prefixed_hash_id
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
     DataTypeLike,
+    RecordBatchReaderLike,
     SchemaLike,
     TableLike,
 )
+from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.query import QuerySpec
 from arrowdsl.schema.arrays import build_struct_array, set_or_append_column
 from arrowdsl.schema.schema import empty_table
 from extract.nested_lists import ListAccumulator, StructListAccumulator
-from extract.postprocess import apply_encoding
+from extract.postprocess import encoding_projection
 from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
 from extract.spec_helpers import register_dataset
-from extract.tables import align_table
+from extract.tables import (
+    align_plan,
+    apply_query_spec,
+    finalize_plan_bundle,
+    materialize_plan,
+    plan_from_rows,
+    query_for_schema,
+)
 from schema_spec.specs import ArrowFieldSpec, NestedFieldSpec, scip_range_bundle
 
 SCHEMA_VERSION = 1
@@ -217,6 +229,14 @@ SCIP_SYMBOL_INFO_SCHEMA = SCIP_SYMBOL_INFO_SPEC.table_spec.to_arrow_schema()
 SCIP_SYMBOL_RELATIONSHIPS_SCHEMA = SCIP_SYMBOL_RELATIONSHIPS_SPEC.table_spec.to_arrow_schema()
 SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA = SCIP_EXTERNAL_SYMBOL_INFO_SPEC.table_spec.to_arrow_schema()
 SCIP_DIAGNOSTICS_SCHEMA = SCIP_DIAGNOSTICS_SPEC.table_spec.to_arrow_schema()
+
+SCIP_METADATA_QUERY = query_for_schema(SCIP_METADATA_SCHEMA)
+SCIP_DOCUMENTS_QUERY = query_for_schema(SCIP_DOCUMENTS_SCHEMA)
+SCIP_OCCURRENCES_QUERY = query_for_schema(SCIP_OCCURRENCES_SCHEMA)
+SCIP_SYMBOL_INFO_QUERY = query_for_schema(SCIP_SYMBOL_INFO_SCHEMA)
+SCIP_SYMBOL_RELATIONSHIPS_QUERY = query_for_schema(SCIP_SYMBOL_RELATIONSHIPS_SCHEMA)
+SCIP_EXTERNAL_SYMBOL_INFO_QUERY = query_for_schema(SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA)
+SCIP_DIAGNOSTICS_QUERY = query_for_schema(SCIP_DIAGNOSTICS_SCHEMA)
 
 
 def _scip_index_command(
@@ -997,11 +1017,85 @@ def _symbol_tables(index: object) -> tuple[TableLike, TableLike, TableLike]:
     )
 
 
-def _extract_tables_from_index(index: object, *, parse_opts: SCIPParseOptions) -> SCIPExtractResult:
+def _finalize_plan(
+    plan: Plan,
+    *,
+    schema: SchemaLike,
+    query: QuerySpec,
+    exec_ctx: ExecutionContext,
+    encode_columns: Sequence[str] = (),
+) -> Plan:
+    plan = apply_query_spec(plan, spec=query, ctx=exec_ctx)
+    plan = align_plan(
+        plan,
+        schema=schema,
+        ctx=exec_ctx,
+    )
+    if encode_columns:
+        exprs, names = encoding_projection(encode_columns, available=schema.names)
+        plan = plan.project(exprs, names, ctx=exec_ctx)
+    return plan
+
+
+def _finalize_table(
+    table: TableLike,
+    *,
+    schema: SchemaLike,
+    query: QuerySpec,
+    exec_ctx: ExecutionContext,
+    encode_columns: Sequence[str] = (),
+) -> TableLike:
+    plan = _finalize_plan(
+        Plan.table_source(table),
+        schema=schema,
+        query=query,
+        exec_ctx=exec_ctx,
+        encode_columns=encode_columns,
+    )
+    return plan.to_table(ctx=exec_ctx)
+
+
+def _extract_tables_from_index(
+    index: object,
+    *,
+    parse_opts: SCIPParseOptions,
+    exec_ctx: ExecutionContext,
+) -> SCIPExtractResult:
+    plans = _extract_plan_bundle_from_index(
+        index,
+        parse_opts=parse_opts,
+        exec_ctx=exec_ctx,
+    )
+    return SCIPExtractResult(
+        scip_metadata=materialize_plan(plans["scip_metadata"], ctx=exec_ctx),
+        scip_documents=materialize_plan(plans["scip_documents"], ctx=exec_ctx),
+        scip_occurrences=materialize_plan(plans["scip_occurrences"], ctx=exec_ctx),
+        scip_symbol_information=materialize_plan(
+            plans["scip_symbol_information"],
+            ctx=exec_ctx,
+        ),
+        scip_symbol_relationships=materialize_plan(
+            plans["scip_symbol_relationships"],
+            ctx=exec_ctx,
+        ),
+        scip_external_symbol_information=materialize_plan(
+            plans["scip_external_symbol_information"],
+            ctx=exec_ctx,
+        ),
+        scip_diagnostics=materialize_plan(plans["scip_diagnostics"], ctx=exec_ctx),
+    )
+
+
+def _extract_plan_bundle_from_index(
+    index: object,
+    *,
+    parse_opts: SCIPParseOptions,
+    exec_ctx: ExecutionContext,
+) -> dict[str, Plan]:
     meta_rows = _metadata_rows(index)
     t_docs, t_occs, t_diags = _document_tables(index)
 
-    t_meta = pa.Table.from_pylist(meta_rows, schema=SCIP_METADATA_SCHEMA)
+    t_meta_plan = plan_from_rows(meta_rows, schema=SCIP_METADATA_SCHEMA, label="scip_metadata")
     t_syms, t_rels, t_ext = _symbol_tables(index)
 
     t_docs = _with_document_ids(t_docs)
@@ -1013,56 +1107,115 @@ def _extract_tables_from_index(index: object, *, parse_opts: SCIPParseOptions) -
     t_rels = _with_relationship_ids(t_rels)
     t_ext = _with_symbol_ids(t_ext, prefix="scip_ext_sym")
 
-    t_meta = align_table(t_meta, schema=SCIP_METADATA_SCHEMA)
-    t_docs = align_table(t_docs, schema=SCIP_DOCUMENTS_SCHEMA)
-    t_occs = align_table(t_occs, schema=SCIP_OCCURRENCES_SCHEMA)
-    t_syms = align_table(t_syms, schema=SCIP_SYMBOL_INFO_SCHEMA)
-    t_rels = align_table(t_rels, schema=SCIP_SYMBOL_RELATIONSHIPS_SCHEMA)
-    t_ext = align_table(t_ext, schema=SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA)
-    t_diags = align_table(t_diags, schema=SCIP_DIAGNOSTICS_SCHEMA)
-
-    if parse_opts.dictionary_encode_strings:
-        t_meta = apply_encoding(
-            t_meta,
-            columns=[
-                "tool_name",
-                "tool_version",
-                "project_root",
-                "text_document_encoding",
-                "protocol_version",
-            ],
-        )
-        t_docs = apply_encoding(t_docs, columns=["path", "language", "position_encoding"])
-        t_occs = apply_encoding(t_occs, columns=["path", "symbol", "syntax_kind"])
-        t_syms = apply_encoding(
-            t_syms,
-            columns=["symbol", "display_name", "kind", "enclosing_symbol"],
-        )
-        t_rels = apply_encoding(t_rels, columns=["symbol", "related_symbol"])
-        t_ext = apply_encoding(
-            t_ext,
-            columns=["symbol", "display_name", "kind", "enclosing_symbol"],
-        )
-        t_diags = apply_encoding(t_diags, columns=["path", "severity", "code", "source"])
-
-    return SCIPExtractResult(
-        scip_metadata=t_meta,
-        scip_documents=t_docs,
-        scip_occurrences=t_occs,
-        scip_symbol_information=t_syms,
-        scip_symbol_relationships=t_rels,
-        scip_external_symbol_information=t_ext,
-        scip_diagnostics=t_diags,
+    encode_meta = (
+        [
+            "tool_name",
+            "tool_version",
+            "project_root",
+            "text_document_encoding",
+            "protocol_version",
+        ]
+        if parse_opts.dictionary_encode_strings
+        else []
     )
+    encode_docs = ["path", "language", "position_encoding"] if parse_opts.dictionary_encode_strings else []
+    encode_occs = ["path", "symbol", "syntax_kind"] if parse_opts.dictionary_encode_strings else []
+    encode_syms = (
+        ["symbol", "display_name", "kind", "enclosing_symbol"]
+        if parse_opts.dictionary_encode_strings
+        else []
+    )
+    encode_rels = ["symbol", "related_symbol"] if parse_opts.dictionary_encode_strings else []
+    encode_ext = (
+        ["symbol", "display_name", "kind", "enclosing_symbol"]
+        if parse_opts.dictionary_encode_strings
+        else []
+    )
+    encode_diags = ["path", "severity", "code", "source"] if parse_opts.dictionary_encode_strings else []
+
+    return {
+        "scip_metadata": _finalize_plan(
+            t_meta_plan,
+            schema=SCIP_METADATA_SCHEMA,
+            query=SCIP_METADATA_QUERY,
+            exec_ctx=exec_ctx,
+            encode_columns=encode_meta,
+        ),
+        "scip_documents": _finalize_plan(
+            Plan.table_source(t_docs),
+            schema=SCIP_DOCUMENTS_SCHEMA,
+            query=SCIP_DOCUMENTS_QUERY,
+            exec_ctx=exec_ctx,
+            encode_columns=encode_docs,
+        ),
+        "scip_occurrences": _finalize_plan(
+            Plan.table_source(t_occs),
+            schema=SCIP_OCCURRENCES_SCHEMA,
+            query=SCIP_OCCURRENCES_QUERY,
+            exec_ctx=exec_ctx,
+            encode_columns=encode_occs,
+        ),
+        "scip_symbol_information": _finalize_plan(
+            Plan.table_source(t_syms),
+            schema=SCIP_SYMBOL_INFO_SCHEMA,
+            query=SCIP_SYMBOL_INFO_QUERY,
+            exec_ctx=exec_ctx,
+            encode_columns=encode_syms,
+        ),
+        "scip_symbol_relationships": _finalize_plan(
+            Plan.table_source(t_rels),
+            schema=SCIP_SYMBOL_RELATIONSHIPS_SCHEMA,
+            query=SCIP_SYMBOL_RELATIONSHIPS_QUERY,
+            exec_ctx=exec_ctx,
+            encode_columns=encode_rels,
+        ),
+        "scip_external_symbol_information": _finalize_plan(
+            Plan.table_source(t_ext),
+            schema=SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA,
+            query=SCIP_EXTERNAL_SYMBOL_INFO_QUERY,
+            exec_ctx=exec_ctx,
+            encode_columns=encode_ext,
+        ),
+        "scip_diagnostics": _finalize_plan(
+            Plan.table_source(t_diags),
+            schema=SCIP_DIAGNOSTICS_SCHEMA,
+            query=SCIP_DIAGNOSTICS_QUERY,
+            exec_ctx=exec_ctx,
+            encode_columns=encode_diags,
+        ),
+    }
+
+
+@overload
+def extract_scip_tables(
+    *,
+    scip_index_path: str | None,
+    repo_root: str | None,
+    ctx: ExecutionContext | None = None,
+    parse_opts: SCIPParseOptions | None = None,
+    prefer_reader: Literal[False] = False,
+) -> dict[str, TableLike]: ...
+
+
+@overload
+def extract_scip_tables(
+    *,
+    scip_index_path: str | None,
+    repo_root: str | None,
+    ctx: ExecutionContext | None = None,
+    parse_opts: SCIPParseOptions | None = None,
+    prefer_reader: Literal[True],
+) -> dict[str, TableLike | RecordBatchReaderLike]: ...
 
 
 def extract_scip_tables(
     *,
     scip_index_path: str | None,
     repo_root: str | None,
-    ctx: object | None = None,
+    ctx: ExecutionContext | None = None,
     parse_opts: SCIPParseOptions | None = None,
-) -> dict[str, TableLike]:
+    prefer_reader: bool = False,
+) -> dict[str, TableLike | RecordBatchReaderLike]:
     """Extract SCIP tables as a name-keyed bundle.
 
     Parameters
@@ -1072,27 +1225,33 @@ def extract_scip_tables(
     repo_root:
         Optional repository root used for resolving relative paths.
     ctx:
-        Execution context (unused).
+        Execution context for plan execution.
     parse_opts:
         Parsing options.
+    prefer_reader:
+        When True, return streaming readers when possible.
 
     Returns
     -------
-    dict[str, pyarrow.Table]
-        Extracted SCIP tables keyed by output name.
+    dict[str, TableLike | RecordBatchReaderLike]
+        Extracted SCIP outputs keyed by output name.
     """
-    _ = ctx
     parse_opts = parse_opts or SCIPParseOptions()
+    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
     if scip_index_path is None:
-        empty_result = SCIPExtractResult(
-            scip_metadata=empty_table(SCIP_METADATA_SCHEMA),
-            scip_documents=empty_table(SCIP_DOCUMENTS_SCHEMA),
-            scip_occurrences=empty_table(SCIP_OCCURRENCES_SCHEMA),
-            scip_symbol_information=empty_table(SCIP_SYMBOL_INFO_SCHEMA),
-            scip_symbol_relationships=empty_table(SCIP_SYMBOL_RELATIONSHIPS_SCHEMA),
-            scip_external_symbol_information=empty_table(SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA),
-            scip_diagnostics=empty_table(SCIP_DIAGNOSTICS_SCHEMA),
-        )
+        plans = {
+            "scip_metadata": Plan.table_source(empty_table(SCIP_METADATA_SCHEMA)),
+            "scip_documents": Plan.table_source(empty_table(SCIP_DOCUMENTS_SCHEMA)),
+            "scip_occurrences": Plan.table_source(empty_table(SCIP_OCCURRENCES_SCHEMA)),
+            "scip_symbol_information": Plan.table_source(empty_table(SCIP_SYMBOL_INFO_SCHEMA)),
+            "scip_symbol_relationships": Plan.table_source(
+                empty_table(SCIP_SYMBOL_RELATIONSHIPS_SCHEMA)
+            ),
+            "scip_external_symbol_information": Plan.table_source(
+                empty_table(SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA)
+            ),
+            "scip_diagnostics": Plan.table_source(empty_table(SCIP_DIAGNOSTICS_SCHEMA)),
+        }
     else:
         index_path = Path(scip_index_path)
         if repo_root is not None and not index_path.is_absolute():
@@ -1111,14 +1270,10 @@ def extract_scip_tables(
             )
         if parse_opts.health_check:
             assert_scip_index_health(index)
-        empty_result = _extract_tables_from_index(index, parse_opts=parse_opts)
+        plans = _extract_plan_bundle_from_index(
+            index,
+            parse_opts=parse_opts,
+            exec_ctx=exec_ctx,
+        )
 
-    return {
-        "scip_metadata": empty_result.scip_metadata,
-        "scip_documents": empty_result.scip_documents,
-        "scip_occurrences": empty_result.scip_occurrences,
-        "scip_symbol_information": empty_result.scip_symbol_information,
-        "scip_symbol_relationships": empty_result.scip_symbol_relationships,
-        "scip_external_symbol_information": empty_result.scip_external_symbol_information,
-        "scip_diagnostics": empty_result.scip_diagnostics,
-    }
+    return finalize_plan_bundle(plans, ctx=exec_ctx, prefer_reader=prefer_reader)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 
 import pyarrow as pa
@@ -10,13 +9,15 @@ import pyarrow as pa
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_array_values
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike
-from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.schema.arrays import const_array, set_or_append_column
 from arrowdsl.schema.schema import EncodingSpec, encode_columns
+from cpg.artifacts import CpgBuildArtifacts
 from cpg.builders import NodeBuilder
-from cpg.kinds import NodeKind
+from cpg.catalog import TableCatalog
+from cpg.merge import unify_tables
+from cpg.quality import quality_from_ids
 from cpg.schemas import CPG_NODES_SCHEMA, CPG_NODES_SPEC, SCHEMA_VERSION, empty_nodes
-from cpg.specs import NodeEmitSpec, NodePlanSpec, TableGetter
+from cpg.spec_registry import node_plan_specs
 
 
 def _file_span_arrays(
@@ -76,236 +77,7 @@ def _symbol_nodes_table(
     return pa.Table.from_arrays([pa.array(uniq, type=pa.string())], names=["symbol"])
 
 
-def _table_getter(name: str) -> TableGetter:
-    def _get_table(tables: Mapping[str, TableLike]) -> TableLike | None:
-        return tables.get(name)
-
-    return _get_table
-
-
-NODE_PLAN_SPECS: tuple[NodePlanSpec, ...] = (
-    NodePlanSpec(
-        name="file_nodes",
-        option_flag="include_file_nodes",
-        table_getter=_table_getter("repo_files_nodes"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.PY_FILE,
-            id_cols=("file_id",),
-            path_cols=("path",),
-            bstart_cols=("bstart",),
-            bend_cols=("bend",),
-            file_id_cols=("file_id",),
-        ),
-    ),
-    NodePlanSpec(
-        name="name_ref_nodes",
-        option_flag="include_name_ref_nodes",
-        table_getter=_table_getter("cst_name_refs"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.CST_NAME_REF,
-            id_cols=("name_ref_id",),
-            path_cols=("path",),
-            bstart_cols=("bstart",),
-            bend_cols=("bend",),
-            file_id_cols=("file_id",),
-        ),
-    ),
-    NodePlanSpec(
-        name="import_alias_nodes",
-        option_flag="include_import_alias_nodes",
-        table_getter=_table_getter("cst_imports"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.CST_IMPORT_ALIAS,
-            id_cols=("import_alias_id", "import_id"),
-            path_cols=("path",),
-            bstart_cols=("bstart", "alias_bstart"),
-            bend_cols=("bend", "alias_bend"),
-            file_id_cols=("file_id",),
-        ),
-    ),
-    NodePlanSpec(
-        name="callsite_nodes",
-        option_flag="include_callsite_nodes",
-        table_getter=_table_getter("cst_callsites"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.CST_CALLSITE,
-            id_cols=("call_id",),
-            path_cols=("path",),
-            bstart_cols=("call_bstart", "bstart"),
-            bend_cols=("call_bend", "bend"),
-            file_id_cols=("file_id",),
-        ),
-    ),
-    NodePlanSpec(
-        name="def_nodes",
-        option_flag="include_def_nodes",
-        table_getter=_table_getter("cst_defs"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.CST_DEF,
-            id_cols=("def_id",),
-            path_cols=("path",),
-            bstart_cols=("bstart", "name_bstart"),
-            bend_cols=("bend", "name_bend"),
-            file_id_cols=("file_id",),
-        ),
-    ),
-    NodePlanSpec(
-        name="qname_nodes",
-        option_flag="include_qname_nodes",
-        table_getter=_table_getter("dim_qualified_names"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.PY_QUALIFIED_NAME,
-            id_cols=("qname_id",),
-            path_cols=("path",),
-            bstart_cols=("bstart",),
-            bend_cols=("bend",),
-            file_id_cols=(),
-        ),
-    ),
-    NodePlanSpec(
-        name="symbol_nodes",
-        option_flag="include_symbol_nodes",
-        table_getter=_table_getter("scip_symbols"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.SCIP_SYMBOL,
-            id_cols=("symbol",),
-            path_cols=(),
-            bstart_cols=(),
-            bend_cols=(),
-            file_id_cols=(),
-        ),
-    ),
-    NodePlanSpec(
-        name="tree_sitter_nodes",
-        option_flag="include_tree_sitter_nodes",
-        table_getter=_table_getter("ts_nodes"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.TS_NODE,
-            id_cols=("ts_node_id",),
-            path_cols=("path",),
-            bstart_cols=("start_byte",),
-            bend_cols=("end_byte",),
-            file_id_cols=("file_id",),
-        ),
-    ),
-    NodePlanSpec(
-        name="tree_sitter_error_nodes",
-        option_flag="include_tree_sitter_nodes",
-        table_getter=_table_getter("ts_errors"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.TS_ERROR,
-            id_cols=("ts_error_id",),
-            path_cols=("path",),
-            bstart_cols=("start_byte",),
-            bend_cols=("end_byte",),
-            file_id_cols=("file_id",),
-        ),
-    ),
-    NodePlanSpec(
-        name="tree_sitter_missing_nodes",
-        option_flag="include_tree_sitter_nodes",
-        table_getter=_table_getter("ts_missing"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.TS_MISSING,
-            id_cols=("ts_missing_id",),
-            path_cols=("path",),
-            bstart_cols=("start_byte",),
-            bend_cols=("end_byte",),
-            file_id_cols=("file_id",),
-        ),
-    ),
-    NodePlanSpec(
-        name="type_expr_nodes",
-        option_flag="include_type_nodes",
-        table_getter=_table_getter("type_exprs_norm"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.TYPE_EXPR,
-            id_cols=("type_expr_id",),
-            path_cols=("path",),
-            bstart_cols=("bstart",),
-            bend_cols=("bend",),
-            file_id_cols=("file_id",),
-        ),
-    ),
-    NodePlanSpec(
-        name="type_nodes",
-        option_flag="include_type_nodes",
-        table_getter=_table_getter("types_norm"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.TYPE,
-            id_cols=("type_id",),
-            path_cols=(),
-            bstart_cols=(),
-            bend_cols=(),
-            file_id_cols=(),
-        ),
-    ),
-    NodePlanSpec(
-        name="diagnostic_nodes",
-        option_flag="include_diagnostic_nodes",
-        table_getter=_table_getter("diagnostics_norm"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.DIAG,
-            id_cols=("diag_id",),
-            path_cols=("path",),
-            bstart_cols=("bstart",),
-            bend_cols=("bend",),
-            file_id_cols=("file_id",),
-        ),
-    ),
-    NodePlanSpec(
-        name="runtime_object_nodes",
-        option_flag="include_runtime_nodes",
-        table_getter=_table_getter("rt_objects"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.RT_OBJECT,
-            id_cols=("rt_id",),
-            path_cols=(),
-            bstart_cols=(),
-            bend_cols=(),
-            file_id_cols=(),
-        ),
-    ),
-    NodePlanSpec(
-        name="runtime_signature_nodes",
-        option_flag="include_runtime_nodes",
-        table_getter=_table_getter("rt_signatures"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.RT_SIGNATURE,
-            id_cols=("sig_id",),
-            path_cols=(),
-            bstart_cols=(),
-            bend_cols=(),
-            file_id_cols=(),
-        ),
-    ),
-    NodePlanSpec(
-        name="runtime_param_nodes",
-        option_flag="include_runtime_nodes",
-        table_getter=_table_getter("rt_signature_params"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.RT_SIGNATURE_PARAM,
-            id_cols=("param_id",),
-            path_cols=(),
-            bstart_cols=(),
-            bend_cols=(),
-            file_id_cols=(),
-        ),
-    ),
-    NodePlanSpec(
-        name="runtime_member_nodes",
-        option_flag="include_runtime_nodes",
-        table_getter=_table_getter("rt_members"),
-        emit=NodeEmitSpec(
-            node_kind=NodeKind.RT_MEMBER,
-            id_cols=("member_id",),
-            path_cols=(),
-            bstart_cols=(),
-            bend_cols=(),
-            file_id_cols=(),
-        ),
-    ),
-)
+NODE_PLAN_SPECS = node_plan_specs()
 
 NODE_ENCODING_SPECS: tuple[EncodingSpec, ...] = (EncodingSpec(column="node_kind"),)
 
@@ -359,15 +131,14 @@ class NodeInputTables:
 
 
 def _node_tables(inputs: NodeInputTables, *, options: NodeBuildOptions) -> dict[str, TableLike]:
-    tables: dict[str, TableLike] = {}
+    catalog = TableCatalog()
     repo_files = inputs.repo_files
     if repo_files is not None:
-        tables["repo_files"] = repo_files
+        catalog.add("repo_files", repo_files)
         file_nodes = _file_nodes_table(repo_files, use_size_bytes=options.file_span_from_size_bytes)
-        if file_nodes is not None:
-            tables["repo_files_nodes"] = file_nodes
+        catalog.add("repo_files_nodes", file_nodes)
 
-    tables.update(
+    catalog.extend(
         {
             name: table
             for name, table in {
@@ -392,9 +163,8 @@ def _node_tables(inputs: NodeInputTables, *, options: NodeBuildOptions) -> dict[
     )
 
     symbol_nodes = _symbol_nodes_table(inputs.scip_symbol_information, inputs.scip_occurrences)
-    if symbol_nodes is not None:
-        tables["scip_symbols"] = symbol_nodes
-    return tables
+    catalog.add("scip_symbols", symbol_nodes)
+    return catalog.snapshot()
 
 
 def build_cpg_nodes_raw(
@@ -427,7 +197,7 @@ def build_cpg_nodes_raw(
     if not parts:
         return empty_nodes()
 
-    combined = CPG_NODES_SPEC.unify_tables(parts, ctx=ctx)
+    combined = unify_tables(spec=CPG_NODES_SPEC, tables=parts, ctx=ctx)
     return encode_columns(combined, specs=NODE_ENCODING_SPECS)
 
 
@@ -436,13 +206,21 @@ def build_cpg_nodes(
     ctx: ExecutionContext,
     inputs: NodeInputTables | None = None,
     options: NodeBuildOptions | None = None,
-) -> FinalizeResult:
-    """Build and finalize CPG nodes.
+) -> CpgBuildArtifacts:
+    """Build and finalize CPG nodes with quality artifacts.
 
     Returns
     -------
-    FinalizeResult
-        Finalized nodes tables and stats.
+    CpgBuildArtifacts
+        Finalize result plus quality table.
     """
     raw = build_cpg_nodes_raw(inputs=inputs, options=options, ctx=ctx)
-    return CPG_NODES_SPEC.finalize_context(ctx).run(raw, ctx=ctx)
+    quality = quality_from_ids(
+        raw,
+        id_col="node_id",
+        entity_kind="node",
+        issue="invalid_node_id",
+        source_table="cpg_nodes_raw",
+    )
+    finalize = CPG_NODES_SPEC.finalize_context(ctx).run(raw, ctx=ctx)
+    return CpgBuildArtifacts(finalize=finalize, quality=quality)

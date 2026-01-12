@@ -8,9 +8,9 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from arrowdsl.core.interop import TableLike
+from cpg.catalog import TableGetter
 from cpg.kinds import EdgeKind, EntityKind, NodeKind
 
-type TableGetter = Callable[[Mapping[str, TableLike]], TableLike | None]
 type TableFilter = Callable[[TableLike], TableLike]
 
 

@@ -21,6 +21,7 @@ from arrowdsl.core.interop import (
     pc,
 )
 from arrowdsl.schema.arrays import const_array
+from cpg.defaults import fill_nulls_float, fill_nulls_string
 from cpg.kinds import EntityKind
 from cpg.specs import (
     EdgeEmitSpec,
@@ -71,16 +72,12 @@ def _pick_first(table: TableLike, cols: Sequence[str], *, default_type: DataType
 
 def _resolve_string_col(rel: TableLike, col: str, *, default_value: str) -> ArrayLike:
     arr = _pick_first(rel, [col], default_type=pa.string())
-    if arr.null_count == rel.num_rows:
-        return const_array(rel.num_rows, default_value, dtype=pa.string())
-    return arr
+    return fill_nulls_string(arr, default=default_value)
 
 
 def _resolve_float_col(rel: TableLike, col: str, *, default_value: float) -> ArrayLike:
     arr = _pick_first(rel, [col], default_type=pa.float32())
-    if arr.null_count == rel.num_rows:
-        return const_array(rel.num_rows, default_value, dtype=pa.float32())
-    return arr
+    return fill_nulls_float(arr, default=default_value)
 
 
 @dataclass(frozen=True)
@@ -151,7 +148,6 @@ def _edge_columns_from_relation(
 
     default_score = 1.0 if spec.origin == "scip" else 0.5
     origin = _resolve_string_col(rel, "origin", default_value=spec.origin)
-    origin = pc.fill_null(origin, fill_value=spec.origin)
     origin = _maybe_dictionary(origin, edge_schema.field("origin").type)
 
     edge_kind = const_array(n, spec.edge_kind.value, dtype=pa.string())

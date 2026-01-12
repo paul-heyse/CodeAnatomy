@@ -9,7 +9,7 @@ from hamilton.function_modifiers import cache, extract_fields, tag
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
-from arrowdsl.finalize.finalize import FinalizeResult
+from cpg.artifacts import CpgBuildArtifacts
 from cpg.build_edges import EdgeBuildInputs, build_cpg_edges
 from cpg.build_nodes import NodeInputTables, build_cpg_nodes
 from cpg.build_props import PropsInputTables, build_cpg_props
@@ -934,7 +934,7 @@ def cpg_props_inputs(
 @cache()
 @tag(layer="cpg", artifact="cpg_nodes_final", kind="table")
 def cpg_nodes_final(
-    cpg_nodes_finalize: FinalizeResult,
+    cpg_nodes_finalize: CpgBuildArtifacts,
 ) -> TableLike:
     """Build the final CPG nodes table.
 
@@ -943,7 +943,7 @@ def cpg_nodes_final(
     TableLike
         Final CPG nodes table.
     """
-    return cpg_nodes_finalize.good
+    return cpg_nodes_finalize.finalize.good
 
 
 @cache()
@@ -951,21 +951,36 @@ def cpg_nodes_final(
 def cpg_nodes_finalize(
     ctx: ExecutionContext,
     cpg_node_inputs: NodeInputTables,
-) -> FinalizeResult:
-    """Build finalized CPG nodes with error artifacts.
+) -> CpgBuildArtifacts:
+    """Build finalized CPG nodes with quality artifacts.
 
     Returns
     -------
-    FinalizeResult
-        Finalized CPG nodes bundle.
+    CpgBuildArtifacts
+        Finalized nodes bundle plus quality table.
     """
     return build_cpg_nodes(ctx=ctx, inputs=cpg_node_inputs)
 
 
 @cache()
+@tag(layer="cpg", artifact="cpg_nodes_quality", kind="table")
+def cpg_nodes_quality(
+    cpg_nodes_finalize: CpgBuildArtifacts,
+) -> TableLike:
+    """Return quality artifacts for CPG nodes.
+
+    Returns
+    -------
+    TableLike
+        Quality table.
+    """
+    return cpg_nodes_finalize.quality
+
+
+@cache()
 @tag(layer="cpg", artifact="cpg_edges_final", kind="table")
 def cpg_edges_final(
-    cpg_edges_finalize: FinalizeResult,
+    cpg_edges_finalize: CpgBuildArtifacts,
 ) -> TableLike:
     """Build the final CPG edges table.
 
@@ -974,7 +989,7 @@ def cpg_edges_final(
     TableLike
         Final CPG edges table.
     """
-    return cpg_edges_finalize.good
+    return cpg_edges_finalize.finalize.good
 
 
 @cache()
@@ -982,21 +997,36 @@ def cpg_edges_final(
 def cpg_edges_finalize(
     ctx: ExecutionContext,
     cpg_edge_inputs: EdgeBuildInputs,
-) -> FinalizeResult:
-    """Build finalized CPG edges with error artifacts.
+) -> CpgBuildArtifacts:
+    """Build finalized CPG edges with quality artifacts.
 
     Returns
     -------
-    FinalizeResult
-        Finalized CPG edges bundle.
+    CpgBuildArtifacts
+        Finalized edges bundle plus quality table.
     """
     return build_cpg_edges(ctx=ctx, inputs=cpg_edge_inputs)
 
 
 @cache()
+@tag(layer="cpg", artifact="cpg_edges_quality", kind="table")
+def cpg_edges_quality(
+    cpg_edges_finalize: CpgBuildArtifacts,
+) -> TableLike:
+    """Return quality artifacts for CPG edges.
+
+    Returns
+    -------
+    TableLike
+        Quality table.
+    """
+    return cpg_edges_finalize.quality
+
+
+@cache()
 @tag(layer="cpg", artifact="cpg_props_final", kind="table")
 def cpg_props_final(
-    cpg_props_finalize: FinalizeResult,
+    cpg_props_finalize: CpgBuildArtifacts,
 ) -> TableLike:
     """Build the final CPG properties table.
 
@@ -1005,7 +1035,7 @@ def cpg_props_final(
     TableLike
         Final CPG properties table.
     """
-    return cpg_props_finalize.good
+    return cpg_props_finalize.finalize.good
 
 
 @cache()
@@ -1013,12 +1043,27 @@ def cpg_props_final(
 def cpg_props_finalize(
     ctx: ExecutionContext,
     cpg_props_inputs: PropsInputTables,
-) -> FinalizeResult:
-    """Build finalized CPG properties with error artifacts.
+) -> CpgBuildArtifacts:
+    """Build finalized CPG properties with quality artifacts.
 
     Returns
     -------
-    FinalizeResult
-        Finalized CPG properties bundle.
+    CpgBuildArtifacts
+        Finalized properties bundle plus quality table.
     """
     return build_cpg_props(ctx=ctx, inputs=cpg_props_inputs)
+
+
+@cache()
+@tag(layer="cpg", artifact="cpg_props_quality", kind="table")
+def cpg_props_quality(
+    cpg_props_finalize: CpgBuildArtifacts,
+) -> TableLike:
+    """Return quality artifacts for CPG properties.
+
+    Returns
+    -------
+    TableLike
+        Quality table.
+    """
+    return cpg_props_finalize.quality

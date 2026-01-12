@@ -359,6 +359,50 @@ class JoinSpec:
 
 
 @dataclass(frozen=True)
+class JoinOp:
+    """Hash-join operation producing unordered output."""
+
+    spec: JoinSpec
+
+    ordering_effect: OrderingEffect = OrderingEffect.UNORDERED
+    is_pipeline_breaker: bool = False
+
+    def to_declaration(
+        self, inputs: list[DeclarationLike], ctx: ExecutionContext | None
+    ) -> DeclarationLike:
+        """Build the Acero hash-join declaration.
+
+        Returns
+        -------
+        DeclarationLike
+            Acero hash-join declaration.
+        """
+        _ = ctx
+        opts = acero.HashJoinNodeOptions(
+            self.spec.join_type,
+            list(self.spec.left_keys),
+            list(self.spec.right_keys),
+            left_output=list(self.spec.left_output),
+            right_output=list(self.spec.right_output),
+            output_suffix_for_left=self.spec.output_suffix_for_left,
+            output_suffix_for_right=self.spec.output_suffix_for_right,
+        )
+        return acero.Declaration("hashjoin", opts, inputs=inputs)
+
+    @staticmethod
+    def apply_ordering(ordering: Ordering) -> Ordering:
+        """Return unordered output after a hash join.
+
+        Returns
+        -------
+        Ordering
+            Unordered ordering after the join.
+        """
+        _ = ordering
+        return Ordering.unordered()
+
+
+@dataclass(frozen=True)
 class AggregateSpec:
     """Aggregate specification for group-by operations."""
 
@@ -374,6 +418,7 @@ __all__ = [
     "DedupeSpec",
     "DedupeStrategy",
     "FilterOp",
+    "JoinOp",
     "JoinSpec",
     "JoinType",
     "KernelOp",

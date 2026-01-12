@@ -17,6 +17,7 @@ from arrowdsl.core.interop import (
 from arrowdsl.plan.ops import (
     AggregateOp,
     FilterOp,
+    JoinOp,
     JoinSpec,
     OrderByOp,
     PlanOp,
@@ -189,6 +190,51 @@ class Plan:
         pipeline_breakers = self.pipeline_breakers
         if op.is_pipeline_breaker:
             pipeline_breakers = (*pipeline_breakers, op.__class__.__name__)
+        return Plan(
+            decl=decl,
+            label=label or self.label,
+            ordering=ordering,
+            pipeline_breakers=pipeline_breakers,
+        )
+
+    def join(
+        self,
+        right: Plan,
+        *,
+        spec: JoinSpec,
+        ctx: ExecutionContext | None = None,
+        label: str = "",
+    ) -> Plan:
+        """Join this plan with another plan using a hash join.
+
+        Parameters
+        ----------
+        right:
+            Right-hand plan to join against.
+        spec:
+            Join specification for keys and outputs.
+        ctx:
+            Optional execution context for plan compilation.
+        label:
+            Optional plan label.
+
+        Returns
+        -------
+        Plan
+            Joined plan with unordered output.
+
+        Raises
+        ------
+        TypeError
+            Raised when either plan lacks an Acero declaration.
+        """
+        if self.decl is None or right.decl is None:
+            msg = "Plan.join requires Acero-backed plans (decl is None)."
+            raise TypeError(msg)
+        op = JoinOp(spec=spec)
+        decl = op.to_declaration([self.decl, right.decl], ctx=ctx)
+        ordering = op.apply_ordering(self.ordering)
+        pipeline_breakers = (*self.pipeline_breakers, *right.pipeline_breakers)
         return Plan(
             decl=decl,
             label=label or self.label,

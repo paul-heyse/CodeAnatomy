@@ -9,14 +9,22 @@ import pyarrow as pa
 import tree_sitter_python
 from tree_sitter import Language, Parser
 
+from arrowdsl.core.context import ExecutionContext, RuntimeProfile
 from arrowdsl.core.ids import HashSpec
-from arrowdsl.core.interop import TableLike, pc
-from arrowdsl.schema.arrays import set_or_append_column
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.plan.plan import Plan
 from extract.common import bytes_from_file_ctx, file_identity_row, iter_contexts
 from extract.file_context import FileContext
-from extract.hashing import apply_hash_column
+from extract.hashing import apply_hash_projection
 from extract.spec_helpers import register_dataset
-from extract.tables import rows_to_table
+from extract.tables import (
+    align_plan,
+    apply_query_spec,
+    finalize_plan_bundle,
+    materialize_plan,
+    plan_from_rows,
+    query_for_schema,
+)
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
 
 SCHEMA_VERSION = 1
@@ -49,7 +57,6 @@ class TreeSitterRowBuffers:
     node_rows: list[Row]
     error_rows: list[Row]
     missing_rows: list[Row]
-    parent_indices: list[int | None]
 
 
 TS_NODES_SPEC = register_dataset(
@@ -101,6 +108,19 @@ TS_NODES_SCHEMA = TS_NODES_SPEC.table_spec.to_arrow_schema()
 TS_ERRORS_SCHEMA = TS_ERRORS_SPEC.table_spec.to_arrow_schema()
 TS_MISSING_SCHEMA = TS_MISSING_SPEC.table_spec.to_arrow_schema()
 
+TS_NODE_ROWS_SCHEMA = pa.schema(
+    [
+        *TS_NODES_SCHEMA,
+        pa.field("parent_ts_type", pa.string()),
+        pa.field("parent_start_byte", pa.int64()),
+        pa.field("parent_end_byte", pa.int64()),
+    ]
+)
+
+TS_NODES_QUERY = query_for_schema(TS_NODES_SCHEMA)
+TS_ERRORS_QUERY = query_for_schema(TS_ERRORS_SCHEMA)
+TS_MISSING_QUERY = query_for_schema(TS_MISSING_SCHEMA)
+
 
 def _parser() -> Parser:
     language = Language(tree_sitter_python.language())
@@ -120,15 +140,22 @@ def _node_row(
     node: object,
     *,
     file_ctx: FileContext,
+    parent: object | None,
 ) -> Row:
     start = int(getattr(node, "start_byte", 0))
     end = int(getattr(node, "end_byte", 0))
     ts_type = str(getattr(node, "type", ""))
+    parent_type = str(getattr(parent, "type", "")) if parent is not None else None
+    parent_start = int(getattr(parent, "start_byte", 0)) if parent is not None else None
+    parent_end = int(getattr(parent, "end_byte", 0)) if parent is not None else None
     return {
         **file_identity_row(file_ctx),
         "ts_type": ts_type,
         "start_byte": start,
         "end_byte": end,
+        "parent_ts_type": parent_type,
+        "parent_start_byte": parent_start,
+        "parent_end_byte": parent_end,
         "is_named": bool(getattr(node, "is_named", False)),
         "has_error": bool(getattr(node, "has_error", False)),
         "is_error": bool(getattr(node, "is_error", False)),
@@ -165,6 +192,7 @@ def extract_ts(
     *,
     options: TreeSitterExtractOptions | None = None,
     file_contexts: Iterable[FileContext] | None = None,
+    ctx: ExecutionContext | None = None,
 ) -> TreeSitterExtractResult:
     """Extract tree-sitter nodes and diagnostics from repo files.
 
@@ -176,6 +204,8 @@ def extract_ts(
         Extraction options.
     file_contexts:
         Optional pre-built file contexts for extraction.
+    ctx:
+        Execution context for plan execution.
 
     Returns
     -------
@@ -183,6 +213,36 @@ def extract_ts(
         Extracted node and diagnostic tables.
     """
     options = options or TreeSitterExtractOptions()
+    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    plans = extract_ts_plans(
+        repo_files,
+        options=options,
+        file_contexts=file_contexts,
+        ctx=exec_ctx,
+    )
+    return TreeSitterExtractResult(
+        ts_nodes=materialize_plan(plans["ts_nodes"], ctx=exec_ctx),
+        ts_errors=materialize_plan(plans["ts_errors"], ctx=exec_ctx),
+        ts_missing=materialize_plan(plans["ts_missing"], ctx=exec_ctx),
+    )
+
+
+def extract_ts_plans(
+    repo_files: TableLike,
+    *,
+    options: TreeSitterExtractOptions | None = None,
+    file_contexts: Iterable[FileContext] | None = None,
+    ctx: ExecutionContext | None = None,
+) -> dict[str, Plan]:
+    """Extract tree-sitter plans for nodes and diagnostics.
+
+    Returns
+    -------
+    dict[str, Plan]
+        Plan bundle keyed by ``ts_nodes``, ``ts_errors``, and ``ts_missing``.
+    """
+    options = options or TreeSitterExtractOptions()
+    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
     parser = _parser()
 
     node_rows: list[Row] = []
@@ -192,7 +252,6 @@ def extract_ts(
         node_rows=node_rows,
         error_rows=error_rows,
         missing_rows=missing_rows,
-        parent_indices=[],
     )
 
     for file_ctx in iter_contexts(repo_files, file_contexts):
@@ -203,63 +262,98 @@ def extract_ts(
             buffers=buffers,
         )
 
-    ts_nodes = rows_to_table(node_rows, TS_NODES_SCHEMA)
-    if ts_nodes.num_rows > 0:
-        ts_nodes = apply_hash_column(
-            ts_nodes,
-            spec=HashSpec(
+    nodes_plan = plan_from_rows(node_rows, schema=TS_NODE_ROWS_SCHEMA, label="ts_nodes")
+    nodes_plan = apply_hash_projection(
+        nodes_plan,
+        specs=(
+            HashSpec(
                 prefix="ts_node",
                 cols=("path", "start_byte", "end_byte", "ts_type"),
                 out_col="ts_node_id",
             ),
-        )
-        parent_indices = pa.array(buffers.parent_indices, type=pa.int64())
-        parent_ids = pc.take(ts_nodes["ts_node_id"], parent_indices)
-        ts_nodes = set_or_append_column(ts_nodes, "parent_ts_id", parent_ids)
-
-    ts_errors = rows_to_table(error_rows, TS_ERRORS_SCHEMA)
-    if ts_errors.num_rows > 0:
-        ts_errors = apply_hash_column(
-            ts_errors,
-            spec=HashSpec(
+            HashSpec(
+                prefix="ts_node",
+                cols=("path", "parent_start_byte", "parent_end_byte", "parent_ts_type"),
+                out_col="parent_ts_id",
+            ),
+        ),
+        available=TS_NODE_ROWS_SCHEMA.names,
+        required={
+            "ts_node_id": ("path", "start_byte", "end_byte", "ts_type"),
+            "parent_ts_id": ("path", "parent_start_byte", "parent_end_byte", "parent_ts_type"),
+        },
+        ctx=exec_ctx,
+    )
+    nodes_plan = apply_query_spec(nodes_plan, spec=TS_NODES_QUERY, ctx=exec_ctx)
+    nodes_plan = align_plan(
+        nodes_plan,
+        schema=TS_NODES_SCHEMA,
+        available=TS_NODES_SCHEMA.names,
+        ctx=exec_ctx,
+    )
+    errors_plan = plan_from_rows(error_rows, schema=TS_ERRORS_SCHEMA, label="ts_errors")
+    errors_plan = apply_hash_projection(
+        errors_plan,
+        specs=(
+            HashSpec(
                 prefix="ts_node",
                 cols=("path", "start_byte", "end_byte", "ts_type"),
                 out_col="ts_node_id",
             ),
-        )
-        ts_errors = apply_hash_column(
-            ts_errors,
-            spec=HashSpec(
+            HashSpec(
                 prefix="ts_error",
                 cols=("path", "start_byte", "end_byte"),
                 out_col="ts_error_id",
             ),
-        )
-
-    ts_missing = rows_to_table(missing_rows, TS_MISSING_SCHEMA)
-    if ts_missing.num_rows > 0:
-        ts_missing = apply_hash_column(
-            ts_missing,
-            spec=HashSpec(
+        ),
+        available=TS_ERRORS_SCHEMA.names,
+        required={
+            "ts_node_id": ("path", "start_byte", "end_byte", "ts_type"),
+            "ts_error_id": ("path", "start_byte", "end_byte"),
+        },
+        ctx=exec_ctx,
+    )
+    errors_plan = apply_query_spec(errors_plan, spec=TS_ERRORS_QUERY, ctx=exec_ctx)
+    errors_plan = align_plan(
+        errors_plan,
+        schema=TS_ERRORS_SCHEMA,
+        available=TS_ERRORS_SCHEMA.names,
+        ctx=exec_ctx,
+    )
+    missing_plan = plan_from_rows(missing_rows, schema=TS_MISSING_SCHEMA, label="ts_missing")
+    missing_plan = apply_hash_projection(
+        missing_plan,
+        specs=(
+            HashSpec(
                 prefix="ts_node",
                 cols=("path", "start_byte", "end_byte", "ts_type"),
                 out_col="ts_node_id",
             ),
-        )
-        ts_missing = apply_hash_column(
-            ts_missing,
-            spec=HashSpec(
+            HashSpec(
                 prefix="ts_missing",
                 cols=("path", "start_byte", "end_byte"),
                 out_col="ts_missing_id",
             ),
-        )
-
-    return TreeSitterExtractResult(
-        ts_nodes=ts_nodes,
-        ts_errors=ts_errors,
-        ts_missing=ts_missing,
+        ),
+        available=TS_MISSING_SCHEMA.names,
+        required={
+            "ts_node_id": ("path", "start_byte", "end_byte", "ts_type"),
+            "ts_missing_id": ("path", "start_byte", "end_byte"),
+        },
+        ctx=exec_ctx,
     )
+    missing_plan = apply_query_spec(missing_plan, spec=TS_MISSING_QUERY, ctx=exec_ctx)
+    missing_plan = align_plan(
+        missing_plan,
+        schema=TS_MISSING_SCHEMA,
+        available=TS_MISSING_SCHEMA.names,
+        ctx=exec_ctx,
+    )
+    return {
+        "ts_nodes": nodes_plan,
+        "ts_errors": errors_plan,
+        "ts_missing": missing_plan,
+    }
 
 
 def _extract_ts_for_row(
@@ -276,18 +370,14 @@ def _extract_ts_for_row(
         return
     tree = parser.parse(data)
     root = tree.root_node
-    row_by_node_index: dict[object, int] = {}
     for node, parent in _iter_nodes(root):
-        parent_index = row_by_node_index.get(parent) if parent is not None else None
         row = _node_row(
             node,
             file_ctx=file_ctx,
+            parent=parent,
         )
         if options.include_nodes:
-            index = len(buffers.node_rows)
             buffers.node_rows.append(row)
-            buffers.parent_indices.append(parent_index)
-            row_by_node_index[node] = index
         if options.include_errors and bool(row.get("is_error")):
             buffers.error_rows.append(_error_row(row))
         if options.include_missing and bool(row.get("is_missing")):
@@ -299,8 +389,9 @@ def extract_ts_tables(
     repo_root: str | None,
     repo_files: TableLike,
     file_contexts: Iterable[FileContext] | None = None,
-    ctx: object | None = None,
-) -> dict[str, TableLike]:
+    ctx: ExecutionContext | None = None,
+    prefer_reader: bool = False,
+) -> dict[str, TableLike | RecordBatchReaderLike]:
     """Extract tree-sitter tables as a name-keyed bundle.
 
     Parameters
@@ -312,22 +403,22 @@ def extract_ts_tables(
     file_contexts:
         Optional pre-built file contexts for extraction.
     ctx:
-        Execution context (unused).
+        Execution context for plan execution.
+
+    prefer_reader:
+        When True, return streaming readers when possible.
 
     Returns
     -------
-    dict[str, pyarrow.Table]
-        Extracted tree-sitter tables keyed by output name.
+    dict[str, TableLike | RecordBatchReaderLike]
+        Extracted tree-sitter outputs keyed by output name.
     """
     _ = repo_root
-    _ = ctx
-    result = extract_ts(
+    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    plans = extract_ts_plans(
         repo_files,
         options=TreeSitterExtractOptions(),
         file_contexts=file_contexts,
+        ctx=exec_ctx,
     )
-    return {
-        "ts_nodes": result.ts_nodes,
-        "ts_errors": result.ts_errors,
-        "ts_missing": result.ts_missing,
-    }
+    return finalize_plan_bundle(plans, ctx=exec_ctx, prefer_reader=prefer_reader)

@@ -5,20 +5,30 @@ from __future__ import annotations
 import symtable
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import cast
+from typing import Literal, cast, overload
 
 import pyarrow as pa
 
+from arrowdsl.core.context import ExecutionContext, RuntimeProfile
 from arrowdsl.core.ids import HashSpec
-from arrowdsl.core.interop import ArrayLike, TableLike
+from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, pc
+from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.schema import empty_table
 from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.file_context import FileContext
-from extract.hashing import apply_hash_column
+from extract.hashing import apply_hash_projection
 from extract.join_helpers import JoinConfig, left_join
 from extract.nested_lists import ListAccumulator
 from extract.spec_helpers import register_dataset
-from extract.tables import align_table
+from extract.tables import (
+    align_plan,
+    apply_query_spec,
+    finalize_plan_bundle,
+    materialize_plan,
+    plan_from_rows,
+    query_for_schema,
+    rename_plan_columns,
+)
 from schema_spec.specs import ArrowFieldSpec, NestedFieldSpec, file_identity_bundle
 
 SCHEMA_VERSION = 1
@@ -174,6 +184,54 @@ SCOPE_EDGES_SCHEMA = SCOPE_EDGES_SPEC.table_spec.to_arrow_schema()
 NAMESPACE_EDGES_SCHEMA = NAMESPACE_EDGES_SPEC.table_spec.to_arrow_schema()
 FUNC_PARTS_SCHEMA = FUNC_PARTS_SPEC.table_spec.to_arrow_schema()
 
+SYMBOL_ROWS_SCHEMA = pa.schema(
+    [
+        pa.field("file_id", pa.string()),
+        pa.field("path", pa.string()),
+        pa.field("file_sha256", pa.string()),
+        pa.field("scope_table_id", pa.int64()),
+        pa.field("name", pa.string()),
+        pa.field("is_referenced", pa.bool_()),
+        pa.field("is_assigned", pa.bool_()),
+        pa.field("is_imported", pa.bool_()),
+        pa.field("is_annotated", pa.bool_()),
+        pa.field("is_parameter", pa.bool_()),
+        pa.field("is_global", pa.bool_()),
+        pa.field("is_declared_global", pa.bool_()),
+        pa.field("is_nonlocal", pa.bool_()),
+        pa.field("is_local", pa.bool_()),
+        pa.field("is_free", pa.bool_()),
+        pa.field("is_namespace", pa.bool_()),
+    ]
+)
+
+SCOPE_EDGE_ROWS_SCHEMA = pa.schema(
+    [
+        pa.field("file_id", pa.string()),
+        pa.field("path", pa.string()),
+        pa.field("file_sha256", pa.string()),
+        pa.field("parent_table_id", pa.int64()),
+        pa.field("child_table_id", pa.int64()),
+    ]
+)
+
+NAMESPACE_EDGE_ROWS_SCHEMA = pa.schema(
+    [
+        pa.field("file_id", pa.string()),
+        pa.field("path", pa.string()),
+        pa.field("file_sha256", pa.string()),
+        pa.field("scope_table_id", pa.int64()),
+        pa.field("symbol_name", pa.string()),
+        pa.field("child_table_id", pa.int64()),
+    ]
+)
+
+SCOPES_QUERY = query_for_schema(SCOPES_SCHEMA)
+SYMBOLS_QUERY = query_for_schema(SYMBOLS_SCHEMA)
+SCOPE_EDGES_QUERY = query_for_schema(SCOPE_EDGES_SCHEMA)
+NAMESPACE_EDGES_QUERY = query_for_schema(NAMESPACE_EDGES_SCHEMA)
+FUNC_PARTS_QUERY = query_for_schema(FUNC_PARTS_SCHEMA)
+
 
 def _scope_type_str(tbl: symtable.SymbolTable) -> str:
     return str(tbl.get_type()).split(".")[-1]
@@ -300,11 +358,6 @@ FUNC_PARTS_FREES_SPEC = NestedFieldSpec(
     dtype=pa.list_(pa.string()),
     builder=_build_func_frees,
 )
-
-
-def _rename_column(table: TableLike, old: str, new: str) -> TableLike:
-    names = [new if name == old else name for name in table.column_names]
-    return table.rename_columns(names)
 
 
 def _scope_row(ctx: SymtableContext, table_id: int, tbl: symtable.SymbolTable) -> dict[str, object]:
@@ -477,11 +530,21 @@ def _iter_namespaces(sym: symtable.Symbol) -> list[symtable.SymbolTable]:
     return list(sym.get_namespaces())
 
 
+@dataclass(frozen=True)
+class _SymtableRows:
+    scope_rows: list[dict[str, object]]
+    symbol_rows: list[dict[str, object]]
+    scope_edge_rows: list[dict[str, object]]
+    ns_edge_rows: list[dict[str, object]]
+    func_parts_acc: _FuncPartsAccumulator
+
+
 def extract_symtable(
     repo_files: TableLike,
     options: SymtableExtractOptions | None = None,
     *,
     file_contexts: Iterable[FileContext] | None = None,
+    ctx: ExecutionContext | None = None,
 ) -> SymtableExtractResult:
     """Extract symbol table artifacts from repository files.
 
@@ -491,6 +554,7 @@ def extract_symtable(
         Tables for scopes, symbols, and namespace edges.
     """
     options = options or SymtableExtractOptions()
+    ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
 
     scope_rows: list[dict[str, object]] = []
     symbol_rows: list[dict[str, object]] = []
@@ -512,182 +576,423 @@ def extract_symtable(
         ns_edge_rows.extend(file_ns_edge_rows)
         func_parts_acc.extend(file_func_parts_acc)
 
-    return _build_symtable_result(
+    rows = _SymtableRows(
         scope_rows=scope_rows,
         symbol_rows=symbol_rows,
         scope_edge_rows=scope_edge_rows,
         ns_edge_rows=ns_edge_rows,
         func_parts_acc=func_parts_acc,
     )
-
-
-def _build_symtable_result(
-    *,
-    scope_rows: list[dict[str, object]],
-    symbol_rows: list[dict[str, object]],
-    scope_edge_rows: list[dict[str, object]],
-    ns_edge_rows: list[dict[str, object]],
-    func_parts_acc: _FuncPartsAccumulator,
-) -> SymtableExtractResult:
-    if not scope_rows:
-        return SymtableExtractResult(
-            py_sym_scopes=empty_table(SCOPES_SCHEMA),
-            py_sym_symbols=empty_table(SYMBOLS_SCHEMA),
-            py_sym_scope_edges=empty_table(SCOPE_EDGES_SCHEMA),
-            py_sym_namespace_edges=empty_table(NAMESPACE_EDGES_SCHEMA),
-            py_sym_function_partitions=empty_table(FUNC_PARTS_SCHEMA),
-        )
-
-    scopes_raw = pa.Table.from_pylist(scope_rows)
-    scopes_raw = apply_hash_column(
-        scopes_raw,
-        spec=HashSpec(
-            prefix="sym_scope",
-            cols=("file_id", "table_id", "scope_type", "scope_name", "lineno"),
-            out_col="scope_id",
-        ),
-        required=("file_id", "table_id", "scope_type", "scope_name", "lineno"),
+    return _build_symtable_result(
+        rows,
+        ctx=ctx,
     )
-    scopes = align_table(scopes_raw, schema=SCOPES_SCHEMA)
-    scope_key = scopes.select(["file_id", "table_id", "scope_id"])
 
-    symbols_raw = pa.Table.from_pylist(symbol_rows) if symbol_rows else empty_table(SYMBOLS_SCHEMA)
-    if symbols_raw.num_rows > 0 and {"file_id", "scope_table_id"} <= set(symbols_raw.column_names):
-        symbols_raw = left_join(
-            symbols_raw,
-            scope_key,
-            config=JoinConfig.from_sequences(
-                left_keys=("file_id", "scope_table_id"),
-                right_keys=("file_id", "table_id"),
-                left_output=tuple(symbols_raw.column_names),
-                right_output=("scope_id",),
+
+def extract_symtable_plans(
+    repo_files: TableLike,
+    options: SymtableExtractOptions | None = None,
+    *,
+    file_contexts: Iterable[FileContext] | None = None,
+    ctx: ExecutionContext | None = None,
+) -> dict[str, Plan]:
+    """Extract symbol table plans from repository files.
+
+    Returns
+    -------
+    dict[str, Plan]
+        Plan bundle keyed by symtable outputs.
+    """
+    options = options or SymtableExtractOptions()
+    ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+
+    scope_rows: list[dict[str, object]] = []
+    symbol_rows: list[dict[str, object]] = []
+    scope_edge_rows: list[dict[str, object]] = []
+    ns_edge_rows: list[dict[str, object]] = []
+    func_parts_acc = _FuncPartsAccumulator()
+
+    for file_ctx in iter_contexts(repo_files, file_contexts):
+        (
+            file_scope_rows,
+            file_symbol_rows,
+            file_scope_edge_rows,
+            file_ns_edge_rows,
+            file_func_parts_acc,
+        ) = _extract_symtable_for_context(file_ctx, compile_type=options.compile_type)
+        scope_rows.extend(file_scope_rows)
+        symbol_rows.extend(file_symbol_rows)
+        scope_edge_rows.extend(file_scope_edge_rows)
+        ns_edge_rows.extend(file_ns_edge_rows)
+        func_parts_acc.extend(file_func_parts_acc)
+
+    rows = _SymtableRows(
+        scope_rows=scope_rows,
+        symbol_rows=symbol_rows,
+        scope_edge_rows=scope_edge_rows,
+        ns_edge_rows=ns_edge_rows,
+        func_parts_acc=func_parts_acc,
+    )
+    return _build_symtable_plans(rows, ctx=ctx)
+
+
+def _build_scopes(
+    scope_rows: list[dict[str, object]],
+    *,
+    ctx: ExecutionContext,
+) -> tuple[Plan, Plan]:
+    scopes_plan = plan_from_rows(scope_rows, schema=SCOPES_SCHEMA, label="sym_scopes")
+    scopes_plan = apply_hash_projection(
+        scopes_plan,
+        specs=(
+            HashSpec(
+                prefix="sym_scope",
+                cols=("file_id", "table_id", "scope_type", "scope_name", "lineno"),
+                out_col="scope_id",
             ),
-            use_threads=True,
+        ),
+        available=SCOPES_SCHEMA.names,
+        required={"scope_id": ("file_id", "table_id", "scope_type", "scope_name", "lineno")},
+        ctx=ctx,
+    )
+    scope_key_plan = scopes_plan.project(
+        [pc.field("file_id"), pc.field("table_id"), pc.field("scope_id")],
+        ["file_id", "table_id", "scope_id"],
+        ctx=ctx,
+    )
+    scopes_plan = apply_query_spec(scopes_plan, spec=SCOPES_QUERY, ctx=ctx)
+    scopes_plan = align_plan(
+        scopes_plan,
+        schema=SCOPES_SCHEMA,
+        available=SCOPES_SCHEMA.names,
+        ctx=ctx,
+    )
+    return scopes_plan, scope_key_plan
+
+
+def _build_symbols(
+    symbol_rows: list[dict[str, object]],
+    *,
+    scope_key_plan: Plan,
+    ctx: ExecutionContext,
+) -> Plan:
+    if not symbol_rows:
+        return Plan.table_source(empty_table(SYMBOLS_SCHEMA))
+    symbols_plan = plan_from_rows(symbol_rows, schema=SYMBOL_ROWS_SCHEMA, label="sym_symbols_raw")
+    symbols_cols = list(SYMBOL_ROWS_SCHEMA.names)
+    if {"file_id", "scope_table_id"} <= set(symbols_cols):
+        join_config = JoinConfig.from_sequences(
+            left_keys=("file_id", "scope_table_id"),
+            right_keys=("file_id", "table_id"),
+            left_output=tuple(SYMBOL_ROWS_SCHEMA.names),
+            right_output=("scope_id",),
         )
-        symbols_raw = apply_hash_column(
-            symbols_raw,
-            spec=HashSpec(
+        symbols_plan = left_join(
+            symbols_plan,
+            scope_key_plan,
+            config=join_config,
+            use_threads=ctx.use_threads,
+            ctx=ctx,
+        )
+        symbols_cols = list(join_config.left_output) + list(join_config.right_output)
+    symbols_plan = apply_hash_projection(
+        symbols_plan,
+        specs=(
+            HashSpec(
                 prefix="sym_symbol",
                 cols=("scope_id", "name"),
                 out_col="symbol_row_id",
             ),
-            required=("scope_id", "name"),
-        )
-    symbols = align_table(symbols_raw, schema=SYMBOLS_SCHEMA)
-
-    scope_edges_raw = (
-        pa.Table.from_pylist(scope_edge_rows)
-        if scope_edge_rows
-        else empty_table(SCOPE_EDGES_SCHEMA)
+        ),
+        available=symbols_cols,
+        required={"symbol_row_id": ("scope_id", "name")},
+        ctx=ctx,
     )
-    if scope_edges_raw.num_rows > 0:
-        scope_edges_raw = left_join(
-            scope_edges_raw,
-            scope_key,
-            config=JoinConfig.from_sequences(
-                left_keys=("file_id", "parent_table_id"),
-                right_keys=("file_id", "table_id"),
-                left_output=tuple(scope_edges_raw.column_names),
-                right_output=("scope_id",),
-            ),
-            use_threads=True,
-        )
-        scope_edges_raw = _rename_column(scope_edges_raw, "scope_id", "parent_scope_id")
-        scope_edges_raw = left_join(
-            scope_edges_raw,
-            scope_key,
-            config=JoinConfig.from_sequences(
-                left_keys=("file_id", "child_table_id"),
-                right_keys=("file_id", "table_id"),
-                left_output=tuple(scope_edges_raw.column_names),
-                right_output=("scope_id",),
-            ),
-            use_threads=True,
-        )
-        scope_edges_raw = _rename_column(scope_edges_raw, "scope_id", "child_scope_id")
-        scope_edges_raw = apply_hash_column(
-            scope_edges_raw,
-            spec=HashSpec(
+    symbols_plan = apply_query_spec(symbols_plan, spec=SYMBOLS_QUERY, ctx=ctx)
+    return align_plan(
+        symbols_plan,
+        schema=SYMBOLS_SCHEMA,
+        available=SYMBOLS_SCHEMA.names,
+        ctx=ctx,
+    )
+
+
+def _build_scope_edges(
+    scope_edge_rows: list[dict[str, object]],
+    *,
+    scope_key_plan: Plan,
+    ctx: ExecutionContext,
+) -> Plan:
+    if not scope_edge_rows:
+        return Plan.table_source(empty_table(SCOPE_EDGES_SCHEMA))
+    scope_edges_plan = plan_from_rows(
+        scope_edge_rows,
+        schema=SCOPE_EDGE_ROWS_SCHEMA,
+        label="sym_scope_edges_raw",
+    )
+    join_parent = JoinConfig.from_sequences(
+        left_keys=("file_id", "parent_table_id"),
+        right_keys=("file_id", "table_id"),
+        left_output=tuple(SCOPE_EDGE_ROWS_SCHEMA.names),
+        right_output=("scope_id",),
+    )
+    scope_edges_plan = left_join(
+        scope_edges_plan,
+        scope_key_plan,
+        config=join_parent,
+        use_threads=ctx.use_threads,
+        ctx=ctx,
+    )
+    parent_cols = list(join_parent.left_output) + list(join_parent.right_output)
+    scope_edges_plan = rename_plan_columns(
+        scope_edges_plan,
+        columns=parent_cols,
+        rename={"scope_id": "parent_scope_id"},
+        ctx=ctx,
+    )
+    rename_parent_cols = [
+        "parent_scope_id" if name == "scope_id" else name for name in parent_cols
+    ]
+    join_child = JoinConfig.from_sequences(
+        left_keys=("file_id", "child_table_id"),
+        right_keys=("file_id", "table_id"),
+        left_output=tuple(rename_parent_cols),
+        right_output=("scope_id",),
+    )
+    scope_edges_plan = left_join(
+        scope_edges_plan,
+        scope_key_plan,
+        config=join_child,
+        use_threads=ctx.use_threads,
+        ctx=ctx,
+    )
+    child_cols = list(join_child.left_output) + list(join_child.right_output)
+    scope_edges_plan = rename_plan_columns(
+        scope_edges_plan,
+        columns=child_cols,
+        rename={"scope_id": "child_scope_id"},
+        ctx=ctx,
+    )
+    rename_child_cols = [
+        "child_scope_id" if name == "scope_id" else name for name in child_cols
+    ]
+    scope_edges_plan = apply_hash_projection(
+        scope_edges_plan,
+        specs=(
+            HashSpec(
                 prefix="sym_scope_edge",
                 cols=("parent_scope_id", "child_scope_id"),
                 out_col="edge_id",
             ),
-            required=("parent_scope_id", "child_scope_id"),
-        )
-    scope_edges = align_table(scope_edges_raw, schema=SCOPE_EDGES_SCHEMA)
-
-    ns_edges_raw = (
-        pa.Table.from_pylist(ns_edge_rows) if ns_edge_rows else empty_table(NAMESPACE_EDGES_SCHEMA)
+        ),
+        available=rename_child_cols,
+        required={"edge_id": ("parent_scope_id", "child_scope_id")},
+        ctx=ctx,
     )
-    if ns_edges_raw.num_rows > 0:
-        ns_edges_raw = left_join(
-            ns_edges_raw,
-            scope_key,
-            config=JoinConfig.from_sequences(
-                left_keys=("file_id", "scope_table_id"),
-                right_keys=("file_id", "table_id"),
-                left_output=tuple(ns_edges_raw.column_names),
-                right_output=("scope_id",),
-            ),
-            use_threads=True,
-        )
-        ns_edges_raw = left_join(
-            ns_edges_raw,
-            scope_key,
-            config=JoinConfig.from_sequences(
-                left_keys=("file_id", "child_table_id"),
-                right_keys=("file_id", "table_id"),
-                left_output=tuple(ns_edges_raw.column_names),
-                right_output=("scope_id",),
-                output_suffix_for_right="_child",
-            ),
-            use_threads=True,
-        )
-        ns_edges_raw = _rename_column(ns_edges_raw, "scope_id_child", "child_scope_id")
-        ns_edges_raw = apply_hash_column(
-            ns_edges_raw,
-            spec=HashSpec(
+    scope_edges_plan = apply_query_spec(scope_edges_plan, spec=SCOPE_EDGES_QUERY, ctx=ctx)
+    return align_plan(
+        scope_edges_plan,
+        schema=SCOPE_EDGES_SCHEMA,
+        available=SCOPE_EDGES_SCHEMA.names,
+        ctx=ctx,
+    )
+
+
+def _build_namespace_edges(
+    ns_edge_rows: list[dict[str, object]],
+    *,
+    scope_key_plan: Plan,
+    ctx: ExecutionContext,
+) -> Plan:
+    if not ns_edge_rows:
+        return Plan.table_source(empty_table(NAMESPACE_EDGES_SCHEMA))
+    ns_edges_plan = plan_from_rows(
+        ns_edge_rows,
+        schema=NAMESPACE_EDGE_ROWS_SCHEMA,
+        label="sym_namespace_edges_raw",
+    )
+    join_scope = JoinConfig.from_sequences(
+        left_keys=("file_id", "scope_table_id"),
+        right_keys=("file_id", "table_id"),
+        left_output=tuple(NAMESPACE_EDGE_ROWS_SCHEMA.names),
+        right_output=("scope_id",),
+    )
+    ns_edges_plan = left_join(
+        ns_edges_plan,
+        scope_key_plan,
+        config=join_scope,
+        use_threads=ctx.use_threads,
+        ctx=ctx,
+    )
+    scope_cols = list(join_scope.left_output) + list(join_scope.right_output)
+    join_child = JoinConfig.from_sequences(
+        left_keys=("file_id", "child_table_id"),
+        right_keys=("file_id", "table_id"),
+        left_output=tuple(scope_cols),
+        right_output=("scope_id",),
+        output_suffix_for_right="_child",
+    )
+    ns_edges_plan = left_join(
+        ns_edges_plan,
+        scope_key_plan,
+        config=join_child,
+        use_threads=ctx.use_threads,
+        ctx=ctx,
+    )
+    child_cols = list(join_child.left_output) + [
+        f"{name}{join_child.output_suffix_for_right}" for name in join_child.right_output
+    ]
+    ns_edges_plan = rename_plan_columns(
+        ns_edges_plan,
+        columns=child_cols,
+        rename={"scope_id_child": "child_scope_id"},
+        ctx=ctx,
+    )
+    rename_child_cols = [
+        "child_scope_id" if name == "scope_id_child" else name for name in child_cols
+    ]
+    ns_edges_plan = apply_hash_projection(
+        ns_edges_plan,
+        specs=(
+            HashSpec(
                 prefix="sym_symbol",
                 cols=("scope_id", "symbol_name"),
                 out_col="symbol_row_id",
             ),
-            required=("scope_id", "symbol_name"),
-        )
-        ns_edges_raw = apply_hash_column(
-            ns_edges_raw,
-            spec=HashSpec(
+            HashSpec(
                 prefix="sym_ns_edge",
                 cols=("symbol_row_id", "child_scope_id"),
                 out_col="edge_id",
             ),
-            required=("symbol_row_id", "child_scope_id"),
-        )
-    ns_edges = align_table(ns_edges_raw, schema=NAMESPACE_EDGES_SCHEMA)
-
-    func_parts_raw = func_parts_acc.to_table()
-    if func_parts_raw.num_rows > 0 and {"file_id", "scope_table_id"} <= set(
-        func_parts_raw.column_names
-    ):
-        func_parts_raw = left_join(
-            func_parts_raw,
-            scope_key,
-            config=JoinConfig.from_sequences(
-                left_keys=("file_id", "scope_table_id"),
-                right_keys=("file_id", "table_id"),
-                left_output=tuple(func_parts_raw.column_names),
-                right_output=("scope_id",),
-            ),
-            use_threads=True,
-        )
-    func_parts = align_table(func_parts_raw, schema=FUNC_PARTS_SCHEMA)
-
-    return SymtableExtractResult(
-        py_sym_scopes=scopes,
-        py_sym_symbols=symbols,
-        py_sym_scope_edges=scope_edges,
-        py_sym_namespace_edges=ns_edges,
-        py_sym_function_partitions=func_parts,
+        ),
+        available=rename_child_cols,
+        required={
+            "symbol_row_id": ("scope_id", "symbol_name"),
+            "edge_id": ("symbol_row_id", "child_scope_id"),
+        },
+        ctx=ctx,
     )
+    ns_edges_plan = apply_query_spec(ns_edges_plan, spec=NAMESPACE_EDGES_QUERY, ctx=ctx)
+    return align_plan(
+        ns_edges_plan,
+        schema=NAMESPACE_EDGES_SCHEMA,
+        available=NAMESPACE_EDGES_SCHEMA.names,
+        ctx=ctx,
+    )
+
+
+def _build_func_parts(
+    func_parts_acc: _FuncPartsAccumulator,
+    *,
+    scope_key_plan: Plan,
+    ctx: ExecutionContext,
+) -> Plan:
+    func_parts_table = func_parts_acc.to_table()
+    if func_parts_table.num_rows == 0:
+        return Plan.table_source(empty_table(FUNC_PARTS_SCHEMA))
+    if not {"file_id", "scope_table_id"} <= set(func_parts_table.column_names):
+        return Plan.table_source(empty_table(FUNC_PARTS_SCHEMA))
+    func_parts_plan = Plan.table_source(func_parts_table)
+    join_config = JoinConfig.from_sequences(
+        left_keys=("file_id", "scope_table_id"),
+        right_keys=("file_id", "table_id"),
+        left_output=tuple(func_parts_table.column_names),
+        right_output=("scope_id",),
+    )
+    func_parts_plan = left_join(
+        func_parts_plan,
+        scope_key_plan,
+        config=join_config,
+        use_threads=ctx.use_threads,
+        ctx=ctx,
+    )
+    func_parts_plan = apply_query_spec(func_parts_plan, spec=FUNC_PARTS_QUERY, ctx=ctx)
+    return align_plan(
+        func_parts_plan,
+        schema=FUNC_PARTS_SCHEMA,
+        available=FUNC_PARTS_SCHEMA.names,
+        ctx=ctx,
+    )
+
+
+def _build_symtable_result(
+    rows: _SymtableRows,
+    *,
+    ctx: ExecutionContext,
+) -> SymtableExtractResult:
+    plans = _build_symtable_plans(rows, ctx=ctx)
+    return SymtableExtractResult(
+        py_sym_scopes=materialize_plan(plans["py_sym_scopes"], ctx=ctx),
+        py_sym_symbols=materialize_plan(plans["py_sym_symbols"], ctx=ctx),
+        py_sym_scope_edges=materialize_plan(plans["py_sym_scope_edges"], ctx=ctx),
+        py_sym_namespace_edges=materialize_plan(plans["py_sym_namespace_edges"], ctx=ctx),
+        py_sym_function_partitions=materialize_plan(plans["py_sym_function_partitions"], ctx=ctx),
+    )
+
+
+def _build_symtable_plans(
+    rows: _SymtableRows,
+    *,
+    ctx: ExecutionContext,
+) -> dict[str, Plan]:
+    if not rows.scope_rows:
+        return {
+            "py_sym_scopes": Plan.table_source(empty_table(SCOPES_SCHEMA)),
+            "py_sym_symbols": Plan.table_source(empty_table(SYMBOLS_SCHEMA)),
+            "py_sym_scope_edges": Plan.table_source(empty_table(SCOPE_EDGES_SCHEMA)),
+            "py_sym_namespace_edges": Plan.table_source(empty_table(NAMESPACE_EDGES_SCHEMA)),
+            "py_sym_function_partitions": Plan.table_source(empty_table(FUNC_PARTS_SCHEMA)),
+        }
+
+    scopes_plan, scope_key_plan = _build_scopes(rows.scope_rows, ctx=ctx)
+    symbols_plan = _build_symbols(rows.symbol_rows, scope_key_plan=scope_key_plan, ctx=ctx)
+    scope_edges_plan = _build_scope_edges(
+        rows.scope_edge_rows,
+        scope_key_plan=scope_key_plan,
+        ctx=ctx,
+    )
+    ns_edges_plan = _build_namespace_edges(
+        rows.ns_edge_rows,
+        scope_key_plan=scope_key_plan,
+        ctx=ctx,
+    )
+    func_parts_plan = _build_func_parts(
+        rows.func_parts_acc,
+        scope_key_plan=scope_key_plan,
+        ctx=ctx,
+    )
+
+    return {
+        "py_sym_scopes": scopes_plan,
+        "py_sym_symbols": symbols_plan,
+        "py_sym_scope_edges": scope_edges_plan,
+        "py_sym_namespace_edges": ns_edges_plan,
+        "py_sym_function_partitions": func_parts_plan,
+    }
+
+
+@overload
+def extract_symtables_table(
+    *,
+    repo_root: str | None,
+    repo_files: TableLike,
+    file_contexts: Iterable[FileContext] | None = None,
+    options: SymtableExtractOptions | None = None,
+    ctx: ExecutionContext | None = None,
+    prefer_reader: Literal[False] = False,
+) -> TableLike: ...
+
+
+@overload
+def extract_symtables_table(
+    *,
+    repo_root: str | None,
+    repo_files: TableLike,
+    file_contexts: Iterable[FileContext] | None = None,
+    options: SymtableExtractOptions | None = None,
+    ctx: ExecutionContext | None = None,
+    prefer_reader: Literal[True],
+) -> TableLike | RecordBatchReaderLike: ...
 
 
 def extract_symtables_table(
@@ -695,8 +1000,9 @@ def extract_symtables_table(
     repo_root: str | None,
     repo_files: TableLike,
     file_contexts: Iterable[FileContext] | None = None,
-    ctx: object | None = None,
-) -> TableLike:
+    ctx: ExecutionContext | None = None,
+    prefer_reader: bool = False,
+) -> TableLike | RecordBatchReaderLike:
     """Extract symtable data into a single table.
 
     Parameters
@@ -708,13 +1014,21 @@ def extract_symtables_table(
     file_contexts:
         Optional pre-built file contexts for extraction.
     ctx:
-        Execution context (unused).
+        Execution context for plan execution.
+
+    prefer_reader:
+        When True, return a streaming reader when possible.
 
     Returns
     -------
-    pyarrow.Table
-        Symtable extraction table.
+    TableLike | RecordBatchReaderLike
+        Symtable extraction output.
     """
-    _ = (repo_root, ctx)
-    result = extract_symtable(repo_files, file_contexts=file_contexts)
-    return result.py_sym_scopes
+    _ = repo_root
+    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    plans = extract_symtable_plans(repo_files, file_contexts=file_contexts, ctx=exec_ctx)
+    return finalize_plan_bundle(
+        {"py_sym_scopes": plans["py_sym_scopes"]},
+        ctx=exec_ctx,
+        prefer_reader=prefer_reader,
+    )["py_sym_scopes"]

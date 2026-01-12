@@ -9,15 +9,25 @@ import tokenize
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, overload
 
 import pyarrow as pa
 
+from arrowdsl.core.context import ExecutionContext, RuntimeProfile
 from arrowdsl.core.ids import HashSpec
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.plan.plan import Plan
+from arrowdsl.schema.schema import empty_table
 from core_types import PathLike, ensure_path
-from extract.hashing import apply_hash_column
+from extract.hashing import apply_hash_projection
 from extract.spec_helpers import register_dataset
-from extract.tables import rows_to_table
+from extract.tables import (
+    align_plan,
+    apply_query_spec,
+    finalize_plan,
+    plan_from_rows,
+    query_for_schema,
+)
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
 
 SCHEMA_VERSION = 1
@@ -62,6 +72,8 @@ REPO_FILES_SPEC = register_dataset(
 )
 
 REPO_FILES_SCHEMA = REPO_FILES_SPEC.table_spec.to_arrow_schema()
+
+REPO_FILES_QUERY = query_for_schema(REPO_FILES_SCHEMA)
 
 
 def _is_excluded_dir(rel_path: Path, exclude_dirs: Sequence[str]) -> bool:
@@ -175,7 +187,33 @@ def _build_repo_file_row(
     }
 
 
-def scan_repo(repo_root: PathLike, options: RepoScanOptions | None = None) -> TableLike:
+@overload
+def scan_repo(
+    repo_root: PathLike,
+    options: RepoScanOptions | None = None,
+    ctx: ExecutionContext | None = None,
+    *,
+    prefer_reader: Literal[False] = False,
+) -> TableLike: ...
+
+
+@overload
+def scan_repo(
+    repo_root: PathLike,
+    options: RepoScanOptions | None = None,
+    ctx: ExecutionContext | None = None,
+    *,
+    prefer_reader: Literal[True],
+) -> TableLike | RecordBatchReaderLike: ...
+
+
+def scan_repo(
+    repo_root: PathLike,
+    options: RepoScanOptions | None = None,
+    ctx: ExecutionContext | None = None,
+    *,
+    prefer_reader: bool = False,
+) -> TableLike | RecordBatchReaderLike:
     """Scan the repo for Python files and return a repo_files table.
 
     Parameters
@@ -184,31 +222,54 @@ def scan_repo(repo_root: PathLike, options: RepoScanOptions | None = None) -> Ta
         Repository root path.
     options:
         Scan options.
+    ctx:
+        Execution context for plan execution.
+    prefer_reader:
+        When True, return a streaming reader when possible.
 
     Returns
     -------
-    pyarrow.Table
-        Table of repo file metadata.
+    TableLike | RecordBatchReaderLike
+        Repo file metadata output.
     """
     options = options or RepoScanOptions()
-    repo_root_path = ensure_path(repo_root).resolve()
-
+    ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
     max_files = options.max_files
     if max_files is not None and max_files <= 0:
-        return pa.Table.from_pylist([], schema=REPO_FILES_SCHEMA)
+        empty_plan = Plan.table_source(empty_table(REPO_FILES_SCHEMA))
+        return finalize_plan(empty_plan, ctx=ctx, prefer_reader=prefer_reader)
 
-    rows: list[dict[str, object]] = []
-    for rel in sorted(iter_repo_files(repo_root_path, options), key=lambda p: p.as_posix()):
-        row = _build_repo_file_row(rel=rel, repo_root=repo_root_path, options=options)
-        if row is None:
-            continue
-        rows.append(row)
-        if max_files is not None and len(rows) >= max_files:
-            break
+    plan = scan_repo_plan(repo_root, options=options, ctx=ctx)
+    return finalize_plan(plan, ctx=ctx, prefer_reader=prefer_reader)
 
-    table = rows_to_table(rows, REPO_FILES_SCHEMA)
-    if table.num_rows == 0:
-        return table
+
+def scan_repo_plan(
+    repo_root: PathLike,
+    *,
+    options: RepoScanOptions,
+    ctx: ExecutionContext,
+) -> Plan:
+    """Build the plan for repository scanning.
+
+    Returns
+    -------
+    Plan
+        Plan emitting repo file metadata.
+    """
+    repo_root_path = ensure_path(repo_root).resolve()
+
+    def iter_rows() -> Iterator[dict[str, object]]:
+        count = 0
+        for rel in sorted(iter_repo_files(repo_root_path, options), key=lambda p: p.as_posix()):
+            row = _build_repo_file_row(rel=rel, repo_root=repo_root_path, options=options)
+            if row is None:
+                continue
+            yield row
+            count += 1
+            if options.max_files is not None and count >= options.max_files:
+                break
+
+    plan = plan_from_rows(iter_rows(), schema=REPO_FILES_SCHEMA, label="repo_files")
     extra = (options.repo_id,) if options.repo_id else ()
     spec = HashSpec(
         prefix="file",
@@ -217,4 +278,17 @@ def scan_repo(repo_root: PathLike, options: RepoScanOptions | None = None) -> Ta
         extra_literals=extra,
         out_col="file_id",
     )
-    return apply_hash_column(table, spec=spec, required=("path",))
+    plan = apply_hash_projection(
+        plan,
+        specs=(spec,),
+        available=REPO_FILES_SCHEMA.names,
+        required={"file_id": ("path",)},
+        ctx=ctx,
+    )
+    plan = apply_query_spec(plan, spec=REPO_FILES_QUERY, ctx=ctx)
+    return align_plan(
+        plan,
+        schema=REPO_FILES_SCHEMA,
+        available=REPO_FILES_SCHEMA.names,
+        ctx=ctx,
+    )

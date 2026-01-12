@@ -10,14 +10,23 @@ from typing import cast
 
 import pyarrow as pa
 
+from arrowdsl.core.context import ExecutionContext, RuntimeProfile
 from arrowdsl.core.ids import HashSpec
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.schema import empty_table
 from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.file_context import FileContext
-from extract.hashing import apply_hash_column
+from extract.hashing import apply_hash_projection
 from extract.spec_helpers import register_dataset
-from extract.tables import align_table, rows_to_table
+from extract.tables import (
+    align_plan,
+    apply_query_spec,
+    finalize_plan_bundle,
+    materialize_plan,
+    plan_from_rows,
+    query_for_schema,
+)
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
 
 type RowValue = str | int | bool | None
@@ -295,6 +304,121 @@ BLOCKS_SCHEMA = BLOCKS_SPEC.table_spec.to_arrow_schema()
 CFG_EDGES_SCHEMA = CFG_EDGES_SPEC.table_spec.to_arrow_schema()
 ERRORS_SCHEMA = ERRORS_SPEC.table_spec.to_arrow_schema()
 
+CODE_UNITS_ROWS_SCHEMA = pa.schema(
+    [
+        pa.field("file_id", pa.string()),
+        pa.field("path", pa.string()),
+        pa.field("file_sha256", pa.string()),
+        pa.field("qualpath", pa.string()),
+        pa.field("co_name", pa.string()),
+        pa.field("firstlineno", pa.int32()),
+        pa.field("parent_qualpath", pa.string()),
+        pa.field("parent_co_name", pa.string()),
+        pa.field("parent_firstlineno", pa.int32()),
+        pa.field("argcount", pa.int32()),
+        pa.field("posonlyargcount", pa.int32()),
+        pa.field("kwonlyargcount", pa.int32()),
+        pa.field("nlocals", pa.int32()),
+        pa.field("flags", pa.int32()),
+        pa.field("stacksize", pa.int32()),
+        pa.field("code_len", pa.int32()),
+    ]
+)
+
+INSTR_ROWS_SCHEMA = pa.schema(
+    [
+        pa.field("file_id", pa.string()),
+        pa.field("path", pa.string()),
+        pa.field("file_sha256", pa.string()),
+        pa.field("qualpath", pa.string()),
+        pa.field("co_name", pa.string()),
+        pa.field("firstlineno", pa.int32()),
+        pa.field("instr_index", pa.int32()),
+        pa.field("offset", pa.int32()),
+        pa.field("opname", pa.string()),
+        pa.field("opcode", pa.int32()),
+        pa.field("arg", pa.int32()),
+        pa.field("argval_str", pa.string()),
+        pa.field("argrepr", pa.string()),
+        pa.field("is_jump_target", pa.bool_()),
+        pa.field("jump_target_offset", pa.int32()),
+        pa.field("starts_line", pa.int32()),
+        pa.field("pos_start_line", pa.int32()),
+        pa.field("pos_end_line", pa.int32()),
+        pa.field("pos_start_col", pa.int32()),
+        pa.field("pos_end_col", pa.int32()),
+    ]
+)
+
+EXC_ROWS_SCHEMA = pa.schema(
+    [
+        pa.field("file_id", pa.string()),
+        pa.field("path", pa.string()),
+        pa.field("file_sha256", pa.string()),
+        pa.field("qualpath", pa.string()),
+        pa.field("co_name", pa.string()),
+        pa.field("firstlineno", pa.int32()),
+        pa.field("exc_index", pa.int32()),
+        pa.field("start_offset", pa.int32()),
+        pa.field("end_offset", pa.int32()),
+        pa.field("target_offset", pa.int32()),
+        pa.field("depth", pa.int32()),
+        pa.field("lasti", pa.bool_()),
+    ]
+)
+
+BLOCKS_ROWS_SCHEMA = pa.schema(
+    [
+        pa.field("file_id", pa.string()),
+        pa.field("path", pa.string()),
+        pa.field("file_sha256", pa.string()),
+        pa.field("qualpath", pa.string()),
+        pa.field("co_name", pa.string()),
+        pa.field("firstlineno", pa.int32()),
+        pa.field("start_offset", pa.int32()),
+        pa.field("end_offset", pa.int32()),
+        pa.field("kind", pa.string()),
+    ]
+)
+
+CFG_EDGES_ROWS_SCHEMA = pa.schema(
+    [
+        pa.field("file_id", pa.string()),
+        pa.field("path", pa.string()),
+        pa.field("file_sha256", pa.string()),
+        pa.field("qualpath", pa.string()),
+        pa.field("co_name", pa.string()),
+        pa.field("firstlineno", pa.int32()),
+        pa.field("src_block_start", pa.int32()),
+        pa.field("src_block_end", pa.int32()),
+        pa.field("dst_block_start", pa.int32()),
+        pa.field("dst_block_end", pa.int32()),
+        pa.field("kind", pa.string()),
+        pa.field("edge_key", pa.string()),
+        pa.field("cond_instr_index", pa.int32()),
+        pa.field("cond_instr_offset", pa.int32()),
+        pa.field("exc_index", pa.int32()),
+    ]
+)
+
+CODE_UNITS_QUERY = query_for_schema(CODE_UNITS_SCHEMA)
+INSTR_QUERY = query_for_schema(INSTR_SCHEMA)
+EXC_QUERY = query_for_schema(EXC_SCHEMA)
+BLOCKS_QUERY = query_for_schema(BLOCKS_SCHEMA)
+CFG_EDGES_QUERY = query_for_schema(CFG_EDGES_SCHEMA)
+ERRORS_QUERY = query_for_schema(ERRORS_SCHEMA)
+
+CODE_UNIT_ID_SPEC = HashSpec(
+    prefix="bc_code",
+    cols=("file_id", "qualpath", "firstlineno", "co_name"),
+    out_col="code_unit_id",
+)
+PARENT_CODE_UNIT_ID_SPEC = HashSpec(
+    prefix="bc_code",
+    cols=("file_id", "parent_qualpath", "parent_firstlineno", "parent_co_name"),
+    out_col="parent_code_unit_id",
+)
+
 
 def _context_from_file_ctx(
     file_ctx: FileContext,
@@ -312,132 +436,236 @@ def _row_context(
     return _context_from_file_ctx(file_ctx, options)
 
 
-def _apply_code_unit_id(table: TableLike) -> TableLike:
-    return apply_hash_column(
-        table,
-        spec=HashSpec(
-            prefix="bc_code",
-            cols=("file_id", "qualpath", "firstlineno", "co_name"),
-            out_col="code_unit_id",
-        ),
-        required=("file_id", "qualpath", "firstlineno", "co_name"),
-    )
+def _build_code_units_table(
+    rows: list[Row],
+    *,
+    exec_ctx: ExecutionContext,
+) -> TableLike:
+    return materialize_plan(_build_code_units_plan(rows, exec_ctx=exec_ctx), ctx=exec_ctx)
 
 
-def _apply_parent_code_unit_id(table: TableLike) -> TableLike:
-    return apply_hash_column(
-        table,
-        spec=HashSpec(
-            prefix="bc_code",
-            cols=("file_id", "parent_qualpath", "parent_firstlineno", "parent_co_name"),
-            out_col="parent_code_unit_id",
-        ),
-        required=("file_id", "parent_qualpath", "parent_firstlineno", "parent_co_name"),
-    )
-
-
-def _build_code_units_table(rows: list[Row]) -> TableLike:
+def _build_code_units_plan(
+    rows: list[Row],
+    *,
+    exec_ctx: ExecutionContext,
+) -> Plan:
     if not rows:
-        return empty_table(CODE_UNITS_SCHEMA)
-    table = pa.Table.from_pylist(rows)
-    table = _apply_code_unit_id(table)
-    table = _apply_parent_code_unit_id(table)
-    return align_table(table, schema=CODE_UNITS_SCHEMA)
+        return Plan.table_source(empty_table(CODE_UNITS_SCHEMA))
+    plan = plan_from_rows(rows, schema=CODE_UNITS_ROWS_SCHEMA, label="bc_code_units_raw")
+    plan = apply_hash_projection(
+        plan,
+        specs=(CODE_UNIT_ID_SPEC, PARENT_CODE_UNIT_ID_SPEC),
+        available=CODE_UNITS_ROWS_SCHEMA.names,
+        required={
+            "code_unit_id": ("file_id", "qualpath", "firstlineno", "co_name"),
+            "parent_code_unit_id": (
+                "file_id",
+                "parent_qualpath",
+                "parent_firstlineno",
+                "parent_co_name",
+            ),
+        },
+        ctx=exec_ctx,
+    )
+    plan = apply_query_spec(plan, spec=CODE_UNITS_QUERY, ctx=exec_ctx)
+    return align_plan(
+        plan,
+        schema=CODE_UNITS_SCHEMA,
+        available=CODE_UNITS_SCHEMA.names,
+        ctx=exec_ctx,
+    )
 
 
-def _build_instructions_table(rows: list[Row]) -> TableLike:
+def _build_instructions_table(
+    rows: list[Row],
+    *,
+    exec_ctx: ExecutionContext,
+) -> TableLike:
+    return materialize_plan(_build_instructions_plan(rows, exec_ctx=exec_ctx), ctx=exec_ctx)
+
+
+def _build_instructions_plan(
+    rows: list[Row],
+    *,
+    exec_ctx: ExecutionContext,
+) -> Plan:
     if not rows:
-        return empty_table(INSTR_SCHEMA)
-    table = pa.Table.from_pylist(rows)
-    table = _apply_code_unit_id(table)
-    table = apply_hash_column(
-        table,
-        spec=HashSpec(
-            prefix="bc_instr",
-            cols=("code_unit_id", "instr_index", "offset"),
-            out_col="instr_id",
+        return Plan.table_source(empty_table(INSTR_SCHEMA))
+    plan = plan_from_rows(rows, schema=INSTR_ROWS_SCHEMA, label="bc_instructions_raw")
+    plan = apply_hash_projection(
+        plan,
+        specs=(
+            CODE_UNIT_ID_SPEC,
+            HashSpec(
+                prefix="bc_instr",
+                cols=("code_unit_id", "instr_index", "offset"),
+                out_col="instr_id",
+            ),
         ),
-        required=("code_unit_id", "instr_index", "offset"),
+        available=INSTR_ROWS_SCHEMA.names,
+        required={
+            "code_unit_id": ("file_id", "qualpath", "firstlineno", "co_name"),
+            "instr_id": ("code_unit_id", "instr_index", "offset"),
+        },
+        ctx=exec_ctx,
     )
-    return align_table(table, schema=INSTR_SCHEMA)
+    plan = apply_query_spec(plan, spec=INSTR_QUERY, ctx=exec_ctx)
+    return align_plan(
+        plan,
+        schema=INSTR_SCHEMA,
+        available=INSTR_SCHEMA.names,
+        ctx=exec_ctx,
+    )
 
 
-def _build_exceptions_table(rows: list[Row]) -> TableLike:
+def _build_exceptions_table(
+    rows: list[Row],
+    *,
+    exec_ctx: ExecutionContext,
+) -> TableLike:
+    return materialize_plan(_build_exceptions_plan(rows, exec_ctx=exec_ctx), ctx=exec_ctx)
+
+
+def _build_exceptions_plan(
+    rows: list[Row],
+    *,
+    exec_ctx: ExecutionContext,
+) -> Plan:
     if not rows:
-        return empty_table(EXC_SCHEMA)
-    table = pa.Table.from_pylist(rows)
-    table = _apply_code_unit_id(table)
-    table = apply_hash_column(
-        table,
-        spec=HashSpec(
-            prefix="bc_exc",
-            cols=("code_unit_id", "exc_index", "start_offset", "end_offset", "target_offset"),
-            out_col="exc_entry_id",
+        return Plan.table_source(empty_table(EXC_SCHEMA))
+    plan = plan_from_rows(rows, schema=EXC_ROWS_SCHEMA, label="bc_exceptions_raw")
+    plan = apply_hash_projection(
+        plan,
+        specs=(
+            CODE_UNIT_ID_SPEC,
+            HashSpec(
+                prefix="bc_exc",
+                cols=("code_unit_id", "exc_index", "start_offset", "end_offset", "target_offset"),
+                out_col="exc_entry_id",
+            ),
         ),
-        required=("code_unit_id", "exc_index", "start_offset", "end_offset", "target_offset"),
+        available=EXC_ROWS_SCHEMA.names,
+        required={
+            "code_unit_id": ("file_id", "qualpath", "firstlineno", "co_name"),
+            "exc_entry_id": (
+                "code_unit_id",
+                "exc_index",
+                "start_offset",
+                "end_offset",
+                "target_offset",
+            ),
+        },
+        ctx=exec_ctx,
     )
-    return align_table(table, schema=EXC_SCHEMA)
+    plan = apply_query_spec(plan, spec=EXC_QUERY, ctx=exec_ctx)
+    return align_plan(
+        plan,
+        schema=EXC_SCHEMA,
+        available=EXC_SCHEMA.names,
+        ctx=exec_ctx,
+    )
 
 
-def _build_blocks_table(rows: list[Row]) -> TableLike:
+def _build_blocks_table(
+    rows: list[Row],
+    *,
+    exec_ctx: ExecutionContext,
+) -> TableLike:
+    return materialize_plan(_build_blocks_plan(rows, exec_ctx=exec_ctx), ctx=exec_ctx)
+
+
+def _build_blocks_plan(
+    rows: list[Row],
+    *,
+    exec_ctx: ExecutionContext,
+) -> Plan:
     if not rows:
-        return empty_table(BLOCKS_SCHEMA)
-    table = pa.Table.from_pylist(rows)
-    table = _apply_code_unit_id(table)
-    table = apply_hash_column(
-        table,
-        spec=HashSpec(
-            prefix="bc_block",
-            cols=("code_unit_id", "start_offset", "end_offset"),
-            out_col="block_id",
+        return Plan.table_source(empty_table(BLOCKS_SCHEMA))
+    plan = plan_from_rows(rows, schema=BLOCKS_ROWS_SCHEMA, label="bc_blocks_raw")
+    plan = apply_hash_projection(
+        plan,
+        specs=(
+            CODE_UNIT_ID_SPEC,
+            HashSpec(
+                prefix="bc_block",
+                cols=("code_unit_id", "start_offset", "end_offset"),
+                out_col="block_id",
+            ),
         ),
-        required=("code_unit_id", "start_offset", "end_offset"),
+        available=BLOCKS_ROWS_SCHEMA.names,
+        required={
+            "code_unit_id": ("file_id", "qualpath", "firstlineno", "co_name"),
+            "block_id": ("code_unit_id", "start_offset", "end_offset"),
+        },
+        ctx=exec_ctx,
     )
-    return align_table(table, schema=BLOCKS_SCHEMA)
+    plan = apply_query_spec(plan, spec=BLOCKS_QUERY, ctx=exec_ctx)
+    return align_plan(
+        plan,
+        schema=BLOCKS_SCHEMA,
+        available=BLOCKS_SCHEMA.names,
+        ctx=exec_ctx,
+    )
 
 
-def _build_cfg_edges_table(rows: list[Row]) -> TableLike:
+def _build_cfg_edges_table(
+    rows: list[Row],
+    *,
+    exec_ctx: ExecutionContext,
+) -> TableLike:
+    return materialize_plan(_build_cfg_edges_plan(rows, exec_ctx=exec_ctx), ctx=exec_ctx)
+
+
+def _build_cfg_edges_plan(
+    rows: list[Row],
+    *,
+    exec_ctx: ExecutionContext,
+) -> Plan:
     if not rows:
-        return empty_table(CFG_EDGES_SCHEMA)
-    table = pa.Table.from_pylist(rows)
-    table = _apply_code_unit_id(table)
-    table = apply_hash_column(
-        table,
-        spec=HashSpec(
-            prefix="bc_block",
-            cols=("code_unit_id", "src_block_start", "src_block_end"),
-            out_col="src_block_id",
+        return Plan.table_source(empty_table(CFG_EDGES_SCHEMA))
+    plan = plan_from_rows(rows, schema=CFG_EDGES_ROWS_SCHEMA, label="bc_cfg_edges_raw")
+    plan = apply_hash_projection(
+        plan,
+        specs=(
+            CODE_UNIT_ID_SPEC,
+            HashSpec(
+                prefix="bc_block",
+                cols=("code_unit_id", "src_block_start", "src_block_end"),
+                out_col="src_block_id",
+            ),
+            HashSpec(
+                prefix="bc_block",
+                cols=("code_unit_id", "dst_block_start", "dst_block_end"),
+                out_col="dst_block_id",
+            ),
+            HashSpec(
+                prefix="bc_instr",
+                cols=("code_unit_id", "cond_instr_index", "cond_instr_offset"),
+                out_col="cond_instr_id",
+            ),
+            HashSpec(
+                prefix="bc_edge",
+                cols=("code_unit_id", "src_block_id", "dst_block_id", "kind", "edge_key", "exc_index"),
+                out_col="edge_id",
+            ),
         ),
-        required=("code_unit_id", "src_block_start", "src_block_end"),
+        available=CFG_EDGES_ROWS_SCHEMA.names,
+        required={
+            "code_unit_id": ("file_id", "qualpath", "firstlineno", "co_name"),
+            "src_block_id": ("code_unit_id", "src_block_start", "src_block_end"),
+            "dst_block_id": ("code_unit_id", "dst_block_start", "dst_block_end"),
+            "cond_instr_id": ("code_unit_id", "cond_instr_index", "cond_instr_offset"),
+            "edge_id": ("code_unit_id", "src_block_id", "dst_block_id", "kind", "edge_key"),
+        },
+        ctx=exec_ctx,
     )
-    table = apply_hash_column(
-        table,
-        spec=HashSpec(
-            prefix="bc_block",
-            cols=("code_unit_id", "dst_block_start", "dst_block_end"),
-            out_col="dst_block_id",
-        ),
-        required=("code_unit_id", "dst_block_start", "dst_block_end"),
+    plan = apply_query_spec(plan, spec=CFG_EDGES_QUERY, ctx=exec_ctx)
+    return align_plan(
+        plan,
+        schema=CFG_EDGES_SCHEMA,
+        available=CFG_EDGES_SCHEMA.names,
+        ctx=exec_ctx,
     )
-    table = apply_hash_column(
-        table,
-        spec=HashSpec(
-            prefix="bc_instr",
-            cols=("code_unit_id", "cond_instr_index", "cond_instr_offset"),
-            out_col="cond_instr_id",
-        ),
-        required=("code_unit_id", "cond_instr_index", "cond_instr_offset"),
-    )
-    table = apply_hash_column(
-        table,
-        spec=HashSpec(
-            prefix="bc_edge",
-            cols=("code_unit_id", "src_block_id", "dst_block_id", "kind", "edge_key", "exc_index"),
-            out_col="edge_id",
-        ),
-        required=("code_unit_id", "src_block_id", "dst_block_id", "kind", "edge_key"),
-    )
-    return align_table(table, schema=CFG_EDGES_SCHEMA)
 
 
 def _compile_text(
@@ -877,21 +1105,48 @@ def _extract_code_unit_rows(
             _append_cfg_rows(unit_ctx, buffers.block_rows, buffers.edge_rows)
 
 
-def _build_bytecode_result(buffers: BytecodeRowBuffers) -> BytecodeExtractResult:
-    code_units = _build_code_units_table(buffers.code_unit_rows)
-    instructions = _build_instructions_table(buffers.instruction_rows)
-    exceptions = _build_exceptions_table(buffers.exception_rows)
-    blocks = _build_blocks_table(buffers.block_rows)
-    edges = _build_cfg_edges_table(buffers.edge_rows)
-    errors = rows_to_table(buffers.error_rows, ERRORS_SCHEMA)
+def _build_bytecode_result(
+    buffers: BytecodeRowBuffers,
+    *,
+    exec_ctx: ExecutionContext,
+) -> BytecodeExtractResult:
+    plans = _build_bytecode_plans(buffers, exec_ctx=exec_ctx)
     return BytecodeExtractResult(
-        py_bc_code_units=code_units,
-        py_bc_instructions=instructions,
-        py_bc_exception_table=exceptions,
-        py_bc_blocks=blocks,
-        py_bc_cfg_edges=edges,
-        py_bc_errors=errors,
+        py_bc_code_units=materialize_plan(plans["py_bc_code_units"], ctx=exec_ctx),
+        py_bc_instructions=materialize_plan(plans["py_bc_instructions"], ctx=exec_ctx),
+        py_bc_exception_table=materialize_plan(plans["py_bc_exception_table"], ctx=exec_ctx),
+        py_bc_blocks=materialize_plan(plans["py_bc_blocks"], ctx=exec_ctx),
+        py_bc_cfg_edges=materialize_plan(plans["py_bc_cfg_edges"], ctx=exec_ctx),
+        py_bc_errors=materialize_plan(plans["py_bc_errors"], ctx=exec_ctx),
     )
+
+
+def _build_bytecode_plans(
+    buffers: BytecodeRowBuffers,
+    *,
+    exec_ctx: ExecutionContext,
+) -> dict[str, Plan]:
+    code_units = _build_code_units_plan(buffers.code_unit_rows, exec_ctx=exec_ctx)
+    instructions = _build_instructions_plan(buffers.instruction_rows, exec_ctx=exec_ctx)
+    exceptions = _build_exceptions_plan(buffers.exception_rows, exec_ctx=exec_ctx)
+    blocks = _build_blocks_plan(buffers.block_rows, exec_ctx=exec_ctx)
+    edges = _build_cfg_edges_plan(buffers.edge_rows, exec_ctx=exec_ctx)
+    errors_plan = plan_from_rows(buffers.error_rows, schema=ERRORS_SCHEMA, label="bc_errors")
+    errors_plan = apply_query_spec(errors_plan, spec=ERRORS_QUERY, ctx=exec_ctx)
+    errors_plan = align_plan(
+        errors_plan,
+        schema=ERRORS_SCHEMA,
+        available=ERRORS_SCHEMA.names,
+        ctx=exec_ctx,
+    )
+    return {
+        "py_bc_code_units": code_units,
+        "py_bc_instructions": instructions,
+        "py_bc_exception_table": exceptions,
+        "py_bc_blocks": blocks,
+        "py_bc_cfg_edges": edges,
+        "py_bc_errors": errors_plan,
+    }
 
 
 def _jump_target(ins: dis.Instruction) -> int | None:
@@ -927,6 +1182,7 @@ def extract_bytecode(
     options: BytecodeExtractOptions | None = None,
     *,
     file_contexts: Iterable[FileContext] | None = None,
+    ctx: ExecutionContext | None = None,
 ) -> BytecodeExtractResult:
     """Extract bytecode tables from repository files.
 
@@ -936,6 +1192,39 @@ def extract_bytecode(
         Tables for bytecode code units, instructions, exception data, and edges.
     """
     options = options or BytecodeExtractOptions()
+    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    plans = extract_bytecode_plans(
+        repo_files,
+        options=options,
+        file_contexts=file_contexts,
+        ctx=exec_ctx,
+    )
+    return BytecodeExtractResult(
+        py_bc_code_units=materialize_plan(plans["py_bc_code_units"], ctx=exec_ctx),
+        py_bc_instructions=materialize_plan(plans["py_bc_instructions"], ctx=exec_ctx),
+        py_bc_exception_table=materialize_plan(plans["py_bc_exception_table"], ctx=exec_ctx),
+        py_bc_blocks=materialize_plan(plans["py_bc_blocks"], ctx=exec_ctx),
+        py_bc_cfg_edges=materialize_plan(plans["py_bc_cfg_edges"], ctx=exec_ctx),
+        py_bc_errors=materialize_plan(plans["py_bc_errors"], ctx=exec_ctx),
+    )
+
+
+def extract_bytecode_plans(
+    repo_files: TableLike,
+    options: BytecodeExtractOptions | None = None,
+    *,
+    file_contexts: Iterable[FileContext] | None = None,
+    ctx: ExecutionContext | None = None,
+) -> dict[str, Plan]:
+    """Extract bytecode plans from repository files.
+
+    Returns
+    -------
+    dict[str, Plan]
+        Plan bundle keyed by bytecode output name.
+    """
+    options = options or BytecodeExtractOptions()
+    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
 
     buffers = BytecodeRowBuffers(
         code_unit_rows=[],
@@ -947,22 +1236,22 @@ def extract_bytecode(
     )
 
     for file_ctx in iter_contexts(repo_files, file_contexts):
-        ctx = _context_from_file_ctx(file_ctx, options)
-        if ctx is None:
+        bc_ctx = _context_from_file_ctx(file_ctx, options)
+        if bc_ctx is None:
             continue
-        text = text_from_file_ctx(ctx.file_ctx)
+        text = text_from_file_ctx(bc_ctx.file_ctx)
         if text is None:
             continue
-        top, err = _compile_text(text, ctx)
+        top, err = _compile_text(text, bc_ctx)
         if err is not None:
             buffers.error_rows.append(err)
             continue
         if top is None:
             continue
-        code_unit_keys = _assign_code_units(top, ctx, buffers.code_unit_rows)
-        _extract_code_unit_rows(top, ctx, code_unit_keys, buffers)
+        code_unit_keys = _assign_code_units(top, bc_ctx, buffers.code_unit_rows)
+        _extract_code_unit_rows(top, bc_ctx, code_unit_keys, buffers)
 
-    return _build_bytecode_result(buffers)
+    return _build_bytecode_plans(buffers, exec_ctx=exec_ctx)
 
 
 def extract_bytecode_table(
@@ -970,8 +1259,9 @@ def extract_bytecode_table(
     repo_root: str | None,
     repo_files: TableLike,
     file_contexts: Iterable[FileContext] | None = None,
-    ctx: object | None = None,
-) -> TableLike:
+    ctx: ExecutionContext | None = None,
+    prefer_reader: bool = False,
+) -> TableLike | RecordBatchReaderLike:
     """Extract bytecode instruction facts as a single table.
 
     Parameters
@@ -983,18 +1273,26 @@ def extract_bytecode_table(
     file_contexts:
         Optional pre-built file contexts for extraction.
     ctx:
-        Execution context (unused).
+        Execution context for plan execution.
+
+    prefer_reader:
+        When True, return a streaming reader when possible.
 
     Returns
     -------
-    pyarrow.Table
-        Bytecode instruction table.
+    TableLike | RecordBatchReaderLike
+        Bytecode instruction output.
     """
     _ = repo_root
-    _ = ctx
-    result = extract_bytecode(
+    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    plans = extract_bytecode_plans(
         repo_files,
         options=BytecodeExtractOptions(),
         file_contexts=file_contexts,
+        ctx=exec_ctx,
     )
-    return result.py_bc_instructions
+    return finalize_plan_bundle(
+        {"py_bc_instructions": plans["py_bc_instructions"]},
+        ctx=exec_ctx,
+        prefer_reader=prefer_reader,
+    )["py_bc_instructions"]

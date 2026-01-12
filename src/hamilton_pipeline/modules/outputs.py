@@ -10,9 +10,9 @@ from hamilton.function_modifiers import tag
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
-from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.query import open_dataset
 from core_types import JsonDict
+from cpg.artifacts import CpgBuildArtifacts
 from hamilton_pipeline.pipeline_types import (
     CpgOutputTables,
     OutputConfig,
@@ -188,7 +188,7 @@ def write_normalized_inputs_parquet(
 @tag(layer="materialize", artifact="cpg_nodes_parquet", kind="side_effect")
 def write_cpg_nodes_parquet(
     output_dir: str | None,
-    cpg_nodes_finalize: FinalizeResult,
+    cpg_nodes_finalize: CpgBuildArtifacts,
 ) -> JsonDict | None:
     """Write CPG nodes and error artifacts to Parquet.
 
@@ -202,22 +202,22 @@ def write_cpg_nodes_parquet(
     output_path = Path(output_dir)
     _ensure_dir(output_path)
     paths = write_finalize_result_parquet(
-        cpg_nodes_finalize,
+        cpg_nodes_finalize.finalize,
         output_path / "cpg_nodes.parquet",
         opts=ParquetWriteOptions(),
         overwrite=True,
     )
     return {
         "paths": paths,
-        "rows": int(cpg_nodes_finalize.good.num_rows),
-        "error_rows": int(cpg_nodes_finalize.errors.num_rows),
+        "rows": int(cpg_nodes_finalize.finalize.good.num_rows),
+        "error_rows": int(cpg_nodes_finalize.finalize.errors.num_rows),
     }
 
 
 @tag(layer="materialize", artifact="cpg_edges_parquet", kind="side_effect")
 def write_cpg_edges_parquet(
     output_dir: str | None,
-    cpg_edges_finalize: FinalizeResult,
+    cpg_edges_finalize: CpgBuildArtifacts,
 ) -> JsonDict | None:
     """Write CPG edges and error artifacts to Parquet.
 
@@ -231,22 +231,22 @@ def write_cpg_edges_parquet(
     output_path = Path(output_dir)
     _ensure_dir(output_path)
     paths = write_finalize_result_parquet(
-        cpg_edges_finalize,
+        cpg_edges_finalize.finalize,
         output_path / "cpg_edges.parquet",
         opts=ParquetWriteOptions(),
         overwrite=True,
     )
     return {
         "paths": paths,
-        "rows": int(cpg_edges_finalize.good.num_rows),
-        "error_rows": int(cpg_edges_finalize.errors.num_rows),
+        "rows": int(cpg_edges_finalize.finalize.good.num_rows),
+        "error_rows": int(cpg_edges_finalize.finalize.errors.num_rows),
     }
 
 
 @tag(layer="materialize", artifact="cpg_props_parquet", kind="side_effect")
 def write_cpg_props_parquet(
     output_dir: str | None,
-    cpg_props_finalize: FinalizeResult,
+    cpg_props_finalize: CpgBuildArtifacts,
 ) -> JsonDict | None:
     """Write CPG properties and error artifacts to Parquet.
 
@@ -260,15 +260,15 @@ def write_cpg_props_parquet(
     output_path = Path(output_dir)
     _ensure_dir(output_path)
     paths = write_finalize_result_parquet(
-        cpg_props_finalize,
+        cpg_props_finalize.finalize,
         output_path / "cpg_props.parquet",
         opts=ParquetWriteOptions(),
         overwrite=True,
     )
     return {
         "paths": paths,
-        "rows": int(cpg_props_finalize.good.num_rows),
-        "error_rows": int(cpg_props_finalize.errors.num_rows),
+        "rows": int(cpg_props_finalize.finalize.good.num_rows),
+        "error_rows": int(cpg_props_finalize.finalize.errors.num_rows),
     }
 
 

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import arrowdsl.core.interop as pa
+from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
 
 type MissingPolicy = Literal["raise", "null"]
 
@@ -384,6 +385,57 @@ def hash_column_values(table: pa.TableLike, *, spec: HashSpec) -> pa.ArrayLike:
     return hashed
 
 
+def hash_expression(
+    spec: HashSpec,
+    *,
+    available: Sequence[str] | None = None,
+) -> ComputeExpression:
+    """Build a compute expression for a hash-based ID column.
+
+    Parameters
+    ----------
+    spec:
+        Hash column specification.
+    available:
+        Optional column names present in the input plan.
+
+    Returns
+    -------
+    ComputeExpression
+        Compute expression producing the hash column values.
+
+    Raises
+    ------
+    KeyError
+        Raised when a required column is missing and ``spec.missing="raise"``.
+    """
+    _ensure_hash64_udf()
+    parts: list[ComputeExpression] = []
+    if spec.extra_literals:
+        parts.extend(pc.scalar(literal) for literal in spec.extra_literals)
+    for col in spec.cols:
+        if available is not None and col not in available:
+            if spec.missing == "null":
+                expr = pc.scalar(None)
+            else:
+                msg = f"Missing column for hash64: {col!r}."
+                raise KeyError(msg)
+        else:
+            expr = pc.field(col)
+        expr = ensure_expression(
+            pc.fill_null(pc.cast(expr, pa.string()), pc.scalar(spec.null_sentinel))
+        )
+        parts.append(expr)
+    if spec.prefix:
+        parts.insert(0, pc.scalar(spec.prefix))
+    joined = pc.binary_join_element_wise(*parts, _NULL_SEPARATOR)
+    hashed = pc.call_function(_HASH64_FUNCTION, [joined])
+    if spec.as_string:
+        hashed = pc.cast(hashed, pa.string())
+        hashed = pc.binary_join_element_wise(pc.scalar(spec.prefix), hashed, ":")
+    return ensure_expression(hashed)
+
+
 def add_hash_column(table: pa.TableLike, *, spec: HashSpec) -> pa.TableLike:
     """Append a hash-based column to a table.
 
@@ -414,6 +466,7 @@ __all__ = [
     "hash64_from_columns",
     "hash64_from_parts",
     "hash_column_values",
+    "hash_expression",
     "iter_array_values",
     "iter_arrays",
     "iter_table_rows",

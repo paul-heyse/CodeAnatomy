@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 import pyarrow.types as patypes
@@ -11,6 +11,7 @@ import pyarrow.types as patypes
 from arrowdsl.compute.expr import ExprSpec
 from arrowdsl.core.interop import (
     ArrayLike,
+    ChunkedArrayLike,
     ComputeExpression,
     DataTypeLike,
     TableLike,
@@ -245,13 +246,52 @@ def bitmask_is_set_expr(values: ComputeExpression, *, mask: int) -> ComputeExpre
     return ensure_expression(pc.fill_null(hit, fill_value=False))
 
 
+def _compute_array(function_name: str, args: list[object]) -> ArrayLike | ChunkedArrayLike:
+    return cast("ArrayLike | ChunkedArrayLike", pc.call_function(function_name, args))
+
+
+def trimmed_non_empty_utf8(
+    values: ArrayLike,
+) -> tuple[ArrayLike | ChunkedArrayLike, ArrayLike | ChunkedArrayLike]:
+    """Return (trimmed, non-empty) mask for UTF-8 string arrays.
+
+    Returns
+    -------
+    tuple[ArrayLike | ChunkedArrayLike, ArrayLike | ChunkedArrayLike]
+        Trimmed values and non-empty mask.
+    """
+    trimmed = _compute_array("utf8_trim_whitespace", [values])
+    mask = pc.and_(
+        pc.is_valid(trimmed),
+        pc.greater(_compute_array("utf8_length", [trimmed]), 0),
+    )
+    return trimmed, mask
+
+
+def filter_non_empty_utf8(
+    table: TableLike,
+    column: str,
+) -> tuple[TableLike, ArrayLike | ChunkedArrayLike]:
+    """Filter a table to rows with non-empty UTF-8 strings in column.
+
+    Returns
+    -------
+    tuple[TableLike, ArrayLike | ChunkedArrayLike]
+        Filtered table and trimmed values.
+    """
+    trimmed, mask = trimmed_non_empty_utf8(table[column])
+    return table.filter(mask), _compute_array("filter", [trimmed, mask])
+
+
 __all__ = [
     "FilterSpec",
     "InSet",
     "IsNull",
     "Not",
     "bitmask_is_set_expr",
+    "filter_non_empty_utf8",
     "invalid_id_expr",
     "null_if_empty_or_zero",
+    "trimmed_non_empty_utf8",
     "zero_expr",
 ]

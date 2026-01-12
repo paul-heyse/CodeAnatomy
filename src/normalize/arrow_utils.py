@@ -2,42 +2,8 @@
 
 from __future__ import annotations
 
-from typing import cast
-
-from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
+from arrowdsl.core.interop import TableLike
 from arrowdsl.plan.joins import JoinConfig, left_join
-
-
-def trimmed_non_empty_utf8(
-    values: ArrayLike,
-) -> tuple[ArrayLike | ChunkedArrayLike, ArrayLike | ChunkedArrayLike]:
-    """Return (trimmed, non-empty) mask for UTF-8 string arrays.
-
-    Returns
-    -------
-    tuple[ArrayLike, ArrayLike]
-        Trimmed values and non-empty mask.
-    """
-    trimmed = compute_array("utf8_trim_whitespace", [values])
-    mask = pc.and_(
-        pc.is_valid(trimmed),
-        pc.greater(compute_array("utf8_length", [trimmed]), 0),
-    )
-    return trimmed, mask
-
-
-def filter_non_empty_utf8(
-    table: TableLike, column: str
-) -> tuple[TableLike, ArrayLike | ChunkedArrayLike]:
-    """Filter a table to rows with non-empty UTF-8 strings in column.
-
-    Returns
-    -------
-    tuple[TableLike, ArrayLike]
-        Filtered table and trimmed values.
-    """
-    trimmed, mask = trimmed_non_empty_utf8(table[column])
-    return table.filter(mask), compute_array("filter", [trimmed, mask])
 
 
 def join_code_unit_meta(table: TableLike, code_units: TableLike) -> TableLike:
@@ -70,23 +36,6 @@ def join_code_unit_meta(table: TableLike, code_units: TableLike) -> TableLike:
     )
 
 
-def compute_array(
-    function_name: str,
-    args: list[object],
-) -> ArrayLike | ChunkedArrayLike:
-    """Call a compute function and return an array-like result.
-
-    Returns
-    -------
-    ArrayLike | ChunkedArrayLike
-        Array-like compute result.
-    """
-    return cast("ArrayLike | ChunkedArrayLike", pc.call_function(function_name, args))
-
-
 __all__ = [
-    "compute_array",
-    "filter_non_empty_utf8",
     "join_code_unit_meta",
-    "trimmed_non_empty_utf8",
 ]

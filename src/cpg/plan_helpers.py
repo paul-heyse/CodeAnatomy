@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import cast
 
 import pyarrow as pa
 
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, OrderingLevel
 from arrowdsl.core.interop import (
     ComputeExpression,
-    RecordBatchReaderLike,
     SchemaLike,
     TableLike,
     pc,
 )
 from arrowdsl.finalize.finalize import Contract
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.runner import materialize_plan, stream_plan
+from arrowdsl.plan.runner import run_plan
 from arrowdsl.plan.source import DatasetSource, plan_from_dataset, plan_from_source
 from arrowdsl.plan_helpers import encode_plan as plan_encode_plan
 from arrowdsl.plan_helpers import encoding_columns_from_metadata
@@ -129,32 +129,18 @@ def finalize_plan(plan: Plan, *, ctx: ExecutionContext) -> TableLike:
     -------
     TableLike
         Materialized plan output.
+
+    Raises
+    ------
+    TypeError
+        Raised when run_plan returns a reader instead of a table.
     """
-    return finalize_table(materialize_plan(plan, ctx=ctx))
-
-
-def plan_reader(plan: Plan, *, ctx: ExecutionContext) -> RecordBatchReaderLike:
-    """Return a reader for streaming plans without pipeline breakers.
-
-    Returns
-    -------
-    RecordBatchReaderLike
-        Streaming reader for the plan.
-    """
-    return stream_plan(plan, ctx=ctx)
-
-
-def finalize_table(table: TableLike, *, unify_dicts: bool = True) -> TableLike:
-    """Finalize a materialized table for downstream contracts.
-
-    Returns
-    -------
-    TableLike
-        Table with dictionary pools unified when requested.
-    """
-    if unify_dicts:
-        return table.unify_dictionaries()
-    return table
+    result = run_plan(plan, ctx=ctx, prefer_reader=False)
+    if isinstance(result.value, pa.RecordBatchReader):
+        msg = "Expected table result from run_plan."
+        raise TypeError(msg)
+    table = cast("TableLike", result.value)
+    return table.unify_dictionaries()
 
 
 def unify_schema_with_metadata(
@@ -229,9 +215,7 @@ __all__ = [
     "ensure_plan",
     "finalize_context_for_plan",
     "finalize_plan",
-    "finalize_table",
     "plan_from_dataset",
-    "plan_reader",
     "set_or_append_column",
     "unify_schema_with_metadata",
 ]

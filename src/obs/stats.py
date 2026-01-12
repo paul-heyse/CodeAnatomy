@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Mapping
-from typing import TypedDict
+from typing import TypedDict, cast
 
 import pyarrow as pa
 
 from arrowdsl.compute.kernels import ChunkPolicy
-from arrowdsl.core.interop import SchemaLike, TableLike
-from arrowdsl.schema.schema import EncodingSpec, encode_columns
+from arrowdsl.core.interop import TableLike
+from arrowdsl.schema.schema import EncodingSpec, encode_columns, schema_fingerprint, schema_to_dict
 from core_types import JsonDict
 
 type RowValue = str | int
@@ -35,26 +33,6 @@ class TableSummary(TypedDict):
     schema: list[JsonDict]
 
 
-def schema_fingerprint(schema: SchemaLike) -> str:
-    """Compute a stable fingerprint for an Arrow schema.
-
-    We fingerprint only:
-      - field name
-      - field type (string form)
-      - nullable
-
-    This avoids instability from metadata ordering and is good enough for “debug manifests”.
-
-    Returns
-    -------
-    str
-        SHA-256 fingerprint of the schema.
-    """
-    fields = [{"name": f.name, "type": str(f.type), "nullable": bool(f.nullable)} for f in schema]
-    payload = json.dumps(fields, sort_keys=True).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
 def table_summary(table: TableLike) -> TableSummary:
     """Return a compact summary for a table suitable for manifest recording.
 
@@ -64,14 +42,12 @@ def table_summary(table: TableLike) -> TableSummary:
         Summary statistics for the table.
     """
     sch_fp = schema_fingerprint(table.schema)
+    schema_fields = cast("list[JsonDict]", schema_to_dict(table.schema).get("fields", []))
     return {
         "rows": int(table.num_rows),
         "columns": len(table.column_names),
         "schema_fingerprint": sch_fp,
-        "schema": [
-            {"name": f.name, "type": str(f.type), "nullable": bool(f.nullable)}
-            for f in table.schema
-        ],
+        "schema": schema_fields,
     }
 
 

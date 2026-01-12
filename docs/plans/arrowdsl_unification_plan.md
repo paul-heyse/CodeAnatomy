@@ -41,8 +41,8 @@ def run_plan(
 
 ### Implementation checklist
 - [x] Introduce `PlanRunResult` and `run_plan` with metadata-aware finalize logic.
-- [ ] Migrate `finalize_plan`/`materialize_plan`/`stream_plan` calls to `run_plan`.
-- [ ] Remove duplicated finalize helpers from extract/normalize/cpg once migrated.
+- [x] Migrate `finalize_plan`/`materialize_plan`/`stream_plan` calls to `run_plan`.
+- [x] Remove duplicated finalize helpers from extract/normalize/cpg once migrated.
 
 ---
 
@@ -164,8 +164,8 @@ def bitmask_is_set_expr(values: ComputeExpression, *, mask: int) -> ComputeExpre
 
 ### Implementation checklist
 - [x] Add predicate helpers to ArrowDSL compute predicates.
-- [ ] Replace local implementations in CPG/normalize with ArrowDSL helpers.
-- [ ] Remove duplicated predicate helpers after migration.
+- [x] Replace local implementations in CPG/normalize with ArrowDSL helpers.
+- [x] Remove duplicated predicate helpers after migration.
 
 ---
 
@@ -313,7 +313,7 @@ class LargeListViewAccumulator[T]:
 
 ### Implementation checklist
 - [x] Move list/list_view accumulators to ArrowDSL schema utilities.
-- [ ] Update extract/normalize consumers to import from ArrowDSL.
+- [x] Update extract/normalize consumers to import from ArrowDSL.
 - [x] Remove `extract/nested_lists.py` once fully migrated.
 
 ---
@@ -345,8 +345,8 @@ def encode_table(table: TableLike, *, columns: Sequence[str]) -> TableLike:
 
 ### Implementation checklist
 - [x] Add `encode_plan` and `encode_table` helpers to ArrowDSL.
-- [ ] Replace encoding helpers in extract/cpg with ArrowDSL versions.
-- [ ] Remove encoding-only wrappers in extract once migrated.
+- [x] Replace encoding helpers in extract/cpg with ArrowDSL versions.
+- [x] Remove encoding-only wrappers in extract once migrated.
 
 ---
 
@@ -448,6 +448,6 @@ from arrowdsl.schema.metadata import ordering_metadata_spec, options_metadata_sp
 - `src/arrowdsl/schema/schema.py`
 
 ### Implementation checklist
-- [ ] Export canonical helpers from ArrowDSL top-level.
-- [ ] Remove exports for deprecated helpers once migration is complete.
-- [ ] Audit imports in extract/normalize/cpg to ensure consistent ArrowDSL usage.
+- [x] Export canonical helpers from ArrowDSL top-level.
+- [x] Remove exports for deprecated helpers once migration is complete.
+- [x] Audit imports in extract/normalize/cpg to ensure consistent ArrowDSL usage.

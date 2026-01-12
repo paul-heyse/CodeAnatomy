@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import cast
 
 import pyarrow as pa
 
@@ -11,10 +12,11 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, ensure_expression, pc
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.runner import run_plan
 from arrowdsl.plan_helpers import column_or_null_expr
 from arrowdsl.schema.schema import empty_table
 from normalize.hash_specs import TYPE_ID_SPEC
-from normalize.plan_helpers import PlanSource, materialize_plan, plan_source, project_columns
+from normalize.plan_helpers import PlanSource, plan_source, project_columns
 from normalize.runner import (
     ensure_canonical,
     ensure_execution_context,
@@ -241,7 +243,11 @@ def _type_nodes_plan(
     scip_table: TableLike | None = None
     if scip_symbol_information is not None:
         scip_plan = _to_plan(scip_symbol_information, ctx=ctx, columns=["type_repr"])
-        scip_table = materialize_plan(scip_plan, ctx=ctx)
+        scip_result = run_plan(scip_plan, ctx=ctx, prefer_reader=False)
+        if isinstance(scip_result.value, pa.RecordBatchReader):
+            msg = "Expected table result from run_plan."
+            raise TypeError(msg)
+        scip_table = cast("TableLike", scip_result.value)
     if (
         scip_table is not None
         and scip_table.num_rows > 0

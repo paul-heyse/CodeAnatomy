@@ -27,11 +27,11 @@ from arrowdsl.core.interop import (
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
+from arrowdsl.plan_helpers import encoding_columns_from_metadata, encoding_projection
 from arrowdsl.schema.arrays import build_struct, set_or_append_column
 from arrowdsl.schema.nested import LargeListAccumulator, StructLargeListViewAccumulator
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from arrowdsl.schema.unify import unify_tables
-from extract.postprocess import encoding_columns_from_metadata, encoding_projection
 from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
 from extract.spec_helpers import (

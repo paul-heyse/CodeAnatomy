@@ -18,6 +18,7 @@ from pathlib import Path
 from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract
 from arrowdsl.plan.ops import DedupeSpec, SortKey
+from arrowdsl.schema.schema import schema_fingerprint, schema_to_dict
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from relspec.compiler import CompiledOutput
 from relspec.model import RelationshipRule
@@ -118,7 +119,7 @@ def _ensure_dir(path: Path) -> None:
 def _json_default(obj: object) -> JsonValue:
     # Arrow types
     if isinstance(obj, SchemaLike):
-        return arrow_schema_to_dict(obj)
+        return schema_to_dict(obj)
     if isinstance(obj, DataTypeLike):
         return str(obj)
 
@@ -151,33 +152,6 @@ def _write_json(path: PathLike, data: JsonValue, *, overwrite: bool = True) -> s
 # -----------------------
 
 
-def arrow_schema_to_dict(schema: SchemaLike) -> JsonDict:
-    """Serialize an Arrow schema to a plain dictionary.
-
-    Returns
-    -------
-    JsonDict
-        JSON-serializable schema representation.
-    """
-    return {
-        "fields": [
-            {"name": f.name, "type": str(f.type), "nullable": bool(f.nullable)} for f in schema
-        ]
-    }
-
-
-def schema_fingerprint(schema: SchemaLike) -> str:
-    """Compute a stable schema fingerprint hash.
-
-    Returns
-    -------
-    str
-        SHA-256 fingerprint of the schema.
-    """
-    payload = json.dumps(arrow_schema_to_dict(schema), sort_keys=True).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
 def serialize_contract(contract: Contract) -> JsonDict:
     """Serialize a ``Contract`` into JSON-friendly metadata.
 
@@ -207,7 +181,7 @@ def serialize_contract(contract: Contract) -> JsonDict:
         "required_non_null": list(contract.required_non_null),
         "key_fields": list(contract.key_fields),
         "schema_fingerprint": schema_fingerprint(contract.schema),
-        "schema": arrow_schema_to_dict(contract.schema),
+        "schema": schema_to_dict(contract.schema),
         "dedupe": dedupe_dict,
         "canonical_sort": _serialize_sort_keys(contract.canonical_sort),
     }
@@ -436,7 +410,7 @@ def _write_schema_snapshot(
         "name": name,
         "rows": int(table.num_rows),
         "schema_fingerprint": schema_fingerprint(table.schema),
-        "schema": arrow_schema_to_dict(table.schema),
+        "schema": schema_to_dict(table.schema),
     }
     files_written.append(_write_json(schemas_dir / f"{name}.schema.json", doc, overwrite=True))
 

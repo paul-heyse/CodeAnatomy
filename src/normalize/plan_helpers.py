@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import cast
+
+import pyarrow as pa
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, pc
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.runner import (
     PlanRunResult,
-    materialize_plan,
     run_plan,
     run_plan_bundle,
-    stream_plan,
 )
 from arrowdsl.plan_helpers import (
     PlanSource,
@@ -83,11 +84,20 @@ def finalize_plan_result(
     -------
     PlanRunResult
         Plan output and the materialization kind.
+
+    Raises
+    ------
+    TypeError
+        Raised when run_plan returns a reader instead of a table.
     """
     if schema is not None:
         if plan.decl is None:
+            result = run_plan(plan, ctx=ctx, prefer_reader=False)
+            if isinstance(result.value, pa.RecordBatchReader):
+                msg = "Expected table result from run_plan."
+                raise TypeError(msg)
             aligned = _align_table_to_schema(
-                materialize_plan(plan, ctx=ctx),
+                cast("TableLike", result.value),
                 schema=schema,
                 ctx=ctx,
                 keep_extra_columns=keep_extra_columns,
@@ -152,9 +162,7 @@ __all__ = [
     "finalize_plan_bundle",
     "finalize_plan_result",
     "flatten_struct_field",
-    "materialize_plan",
     "plan_source",
     "project_columns",
     "query_for_schema",
-    "stream_plan",
 ]

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from itertools import pairwise
 
 import pyarrow as pa
 
@@ -13,8 +12,8 @@ from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, p
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan_helpers import column_or_null_expr
-from arrowdsl.schema.arrays import build_struct
 from arrowdsl.schema.columns import column_or_null
+from arrowdsl.schema.nested import StructLargeListViewAccumulator
 from normalize.runner import (
     PostFn,
     ensure_canonical,
@@ -28,6 +27,7 @@ from normalize.schemas import (
     DIAG_QUERY,
     DIAG_SCHEMA,
     DIAG_SPEC,
+    DIAG_TAGS_TYPE,
 )
 from normalize.spans import line_char_to_byte_offset
 from normalize.text_index import (
@@ -102,16 +102,11 @@ class _DiagDetail:
     tags: list[str]
 
 
-def _offsets_start() -> list[int]:
-    return [0]
+_DETAIL_FIELDS = ("detail_kind", "error_type", "source", "tags")
 
 
-def _list_view_offsets(offsets: list[int]) -> tuple[list[int], list[int]]:
-    if len(offsets) <= 1:
-        return [], []
-    starts = offsets[:-1]
-    sizes = [end - start for start, end in pairwise(offsets)]
-    return starts, sizes
+def _detail_accumulator() -> StructLargeListViewAccumulator:
+    return StructLargeListViewAccumulator.with_fields(_DETAIL_FIELDS)
 
 
 @dataclass
@@ -124,12 +119,7 @@ class _DiagBuffers:
     messages: list[str] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
     codes: list[object | None] = field(default_factory=list)
-    detail_offsets: list[int] = field(default_factory=_offsets_start)
-    detail_kinds: list[str] = field(default_factory=list)
-    detail_error_types: list[str | None] = field(default_factory=list)
-    detail_sources: list[str | None] = field(default_factory=list)
-    detail_tag_offsets: list[int] = field(default_factory=_offsets_start)
-    detail_tag_values: list[str | None] = field(default_factory=list)
+    details_acc: StructLargeListViewAccumulator = field(default_factory=_detail_accumulator)
 
     def append(self, row: _DiagRow) -> None:
         self.paths.append(row.path)
@@ -144,15 +134,18 @@ class _DiagBuffers:
 
     def _append_detail(self, detail: _DiagDetail | None) -> None:
         if detail is None:
-            self.detail_offsets.append(len(self.detail_kinds))
+            self.details_acc.append_rows([])
             return
-        self.detail_kinds.append(detail.kind)
-        self.detail_error_types.append(detail.error_type)
-        self.detail_sources.append(detail.source)
-        for tag in detail.tags:
-            self.detail_tag_values.append(tag)
-        self.detail_tag_offsets.append(len(self.detail_tag_values))
-        self.detail_offsets.append(len(self.detail_kinds))
+        self.details_acc.append_rows(
+            [
+                {
+                    "detail_kind": detail.kind,
+                    "error_type": detail.error_type,
+                    "source": detail.source,
+                    "tags": detail.tags,
+                }
+            ]
+        )
 
     def details_array(self) -> ArrayLike:
         return DIAG_DETAIL_SPEC.builder(self)
@@ -175,26 +168,13 @@ class _ScipDiagInput:
 
 
 def _build_diag_details(buffers: _DiagBuffers) -> ArrayLike:
-    tag_starts, tag_sizes = _list_view_offsets(buffers.detail_tag_offsets)
-    tags = pa.LargeListViewArray.from_arrays(
-        pa.array(tag_starts, type=pa.int64()),
-        pa.array(tag_sizes, type=pa.int64()),
-        pa.array(buffers.detail_tag_values, type=pa.string()),
-    )
-    detail_struct = build_struct(
-        {
-            "detail_kind": pa.array(buffers.detail_kinds, type=pa.string()),
-            "error_type": pa.array(buffers.detail_error_types, type=pa.string()),
-            "source": pa.array(buffers.detail_sources, type=pa.string()),
-            "tags": tags,
-        }
-    )
-    detail_starts, detail_sizes = _list_view_offsets(buffers.detail_offsets)
-    return pa.LargeListViewArray.from_arrays(
-        pa.array(detail_starts, type=pa.int64()),
-        pa.array(detail_sizes, type=pa.int64()),
-        detail_struct,
-    )
+    field_types = {
+        "detail_kind": pa.string(),
+        "error_type": pa.string(),
+        "source": pa.string(),
+        "tags": DIAG_TAGS_TYPE,
+    }
+    return buffers.details_acc.build(field_types=field_types)
 
 
 DIAG_DETAIL_SPEC = NestedFieldSpec(
@@ -208,25 +188,6 @@ def _detail_tags(value: object | None) -> list[str]:
     if isinstance(value, list):
         return [str(tag) for tag in value if tag]
     return []
-
-
-def _empty_details_list(num_rows: int) -> ArrayLike:
-    offsets = pa.array([0] * num_rows, type=pa.int64())
-    sizes = pa.array([0] * num_rows, type=pa.int64())
-    tags = pa.LargeListViewArray.from_arrays(
-        pa.array([], type=pa.int64()),
-        pa.array([], type=pa.int64()),
-        pa.array([], type=pa.string()),
-    )
-    detail_struct = build_struct(
-        {
-            "detail_kind": pa.array([], type=pa.string()),
-            "error_type": pa.array([], type=pa.string()),
-            "source": pa.array([], type=pa.string()),
-            "tags": tags,
-        }
-    )
-    return pa.LargeListViewArray.from_arrays(offsets, sizes, detail_struct)
 
 
 def _cst_parse_error_row(

@@ -12,7 +12,7 @@ from cpg.kinds_ultimate import (
     NodeKind,
     NodeKindContract,
 )
-from cpg.specs import PropFieldSpec
+from cpg.specs import PropFieldSpec, PropValueType
 
 type PropFieldInput = PropFieldSpec | str
 type Contract = NodeKindContract | EdgeKindContract
@@ -59,17 +59,37 @@ def _missing_required(
     return set(contract.required_props.keys()) - set(source_map.keys())
 
 
-def _coerce_prop_field(key: str, source: PropFieldInput) -> PropFieldSpec:
+def _value_type(contract: Contract, key: str) -> PropValueType | None:
+    spec = contract.required_props.get(key) or contract.optional_props.get(key)
+    if spec is None:
+        return None
+    return spec.type
+
+
+def _coerce_prop_field(
+    contract: Contract,
+    key: str,
+    source: PropFieldInput,
+) -> PropFieldSpec:
     if isinstance(source, PropFieldSpec):
         if source.prop_key != key:
             msg = f"PropFieldSpec key mismatch: {source.prop_key!r} != {key!r}"
             raise ValueError(msg)
+        if source.value_type is None:
+            value_type = _value_type(contract, key)
+            if value_type is not None:
+                return source.model_copy(update={"value_type": value_type})
         return source
-    return PropFieldSpec(prop_key=key, source_col=source)
+    return PropFieldSpec(
+        prop_key=key,
+        source_col=source,
+        value_type=_value_type(contract, key),
+    )
 
 
 def _fields_from_source_map(
     *,
+    contract: Contract,
     source_map: Mapping[str, PropFieldInput],
     allowed: set[str],
 ) -> tuple[PropFieldSpec, ...]:
@@ -78,7 +98,7 @@ def _fields_from_source_map(
         if key not in allowed:
             msg = f"Prop key {key!r} not defined in contract."
             raise ValueError(msg)
-        fields.append(_coerce_prop_field(key, source))
+        fields.append(_coerce_prop_field(contract, key, source))
     return tuple(fields)
 
 
@@ -116,7 +136,11 @@ def prop_fields_from_contract(
     if missing_required:
         msg = f"Missing required props for {contract}: {sorted(missing_required)}"
         raise ValueError(msg)
-    return _fields_from_source_map(source_map=source_map, allowed=allowed)
+    return _fields_from_source_map(
+        contract=contract,
+        source_map=source_map,
+        allowed=allowed,
+    )
 
 
 __all__ = ["PropFieldInput", "prop_fields_from_contract"]

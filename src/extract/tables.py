@@ -16,7 +16,13 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.plan.plan import Plan, PlanSpec
 from arrowdsl.plan.query import QuerySpec
-from arrowdsl.schema.schema import SchemaTransform, empty_table, projection_for_schema
+from arrowdsl.schema.schema import (
+    SchemaEvolutionSpec,
+    SchemaMetadataSpec,
+    SchemaTransform,
+    empty_table,
+    projection_for_schema,
+)
 
 
 def rows_to_table(rows: Sequence[Mapping[str, object]], schema: SchemaLike) -> TableLike:
@@ -201,6 +207,52 @@ def apply_query_spec(
     return plan.project(expressions, names, ctx=ctx)
 
 
+def _metadata_spec_from_schema(schema: SchemaLike) -> SchemaMetadataSpec:
+    schema_meta = dict(schema.metadata or {})
+    field_meta = {
+        field.name: dict(field.metadata or {}) for field in schema if field.metadata is not None
+    }
+    return SchemaMetadataSpec(schema_metadata=schema_meta, field_metadata=field_meta)
+
+
+def unify_schemas(
+    schemas: Sequence[SchemaLike],
+    *,
+    promote_options: str = "permissive",
+) -> SchemaLike:
+    """Unify schemas while preserving metadata from the first schema.
+
+    Returns
+    -------
+    SchemaLike
+        Unified schema with metadata preserved.
+    """
+    if not schemas:
+        return pa.schema([])
+    evolution = SchemaEvolutionSpec(promote_options=promote_options)
+    unified = evolution.unify_schema_from_schemas(schemas)
+    return _metadata_spec_from_schema(schemas[0]).apply(unified)
+
+
+def unify_tables(
+    tables: Sequence[TableLike],
+    *,
+    promote_options: str = "permissive",
+) -> TableLike:
+    """Unify and concatenate tables with metadata-aware schema alignment.
+
+    Returns
+    -------
+    TableLike
+        Concatenated table aligned to the unified schema.
+    """
+    if not tables:
+        return empty_table(pa.schema([]))
+    schema = unify_schemas([table.schema for table in tables], promote_options=promote_options)
+    aligned = [table.cast(schema) for table in tables]
+    return pa.concat_tables(aligned)
+
+
 def materialize_plan(plan: Plan, *, ctx: ExecutionContext) -> TableLike:
     """Materialize a plan as a table.
 
@@ -259,3 +311,35 @@ def finalize_plan_bundle(
         name: finalize_plan(plan, ctx=ctx, prefer_reader=prefer_reader)
         for name, plan in plans.items()
     }
+
+
+def flatten_struct_field(field: pa.Field) -> list[pa.Field]:
+    """Flatten a struct field into child fields with parent-name prefixes.
+
+    Returns
+    -------
+    list[pyarrow.Field]
+        Flattened fields with parent-name prefixes.
+    """
+    return list(field.flatten())
+
+
+__all__ = [
+    "flatten_struct_field",
+    "align_plan",
+    "align_table",
+    "append_projection",
+    "apply_query_spec",
+    "finalize_plan",
+    "finalize_plan_bundle",
+    "iter_record_batches",
+    "materialize_plan",
+    "plan_from_rows",
+    "query_for_schema",
+    "reader_from_rows",
+    "rename_plan_columns",
+    "rows_to_table",
+    "stream_plan",
+    "unify_schemas",
+    "unify_tables",
+]

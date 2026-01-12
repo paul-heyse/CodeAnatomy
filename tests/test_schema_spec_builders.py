@@ -5,17 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import arrowdsl.core.interop as pa
-from cpg.builders import EdgeBuilder, NodeBuilder, PropBuilder
+from arrowdsl.core.context import ExecutionContext, RuntimeProfile
+from arrowdsl.plan.plan import Plan, PlanSpec, union_all_plans
+from cpg.emit_edges import emit_edges_plan
+from cpg.emit_nodes import emit_node_plan
+from cpg.emit_props import emit_props_plans, filter_fields
 from cpg.kinds import EdgeKind, EntityKind, NodeKind
-from cpg.schemas import CPG_EDGES_SCHEMA, CPG_NODES_SCHEMA, CPG_PROPS_SCHEMA, SCHEMA_VERSION
-from cpg.specs import (
-    EdgeEmitSpec,
-    EdgePlanSpec,
-    NodeEmitSpec,
-    NodePlanSpec,
-    PropFieldSpec,
-    PropTableSpec,
-)
+from cpg.specs import EdgeEmitSpec, NodeEmitSpec, PropFieldSpec, PropTableSpec
 from schema_spec import (
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
@@ -91,7 +87,7 @@ class _EdgeOptions:
 
 
 def test_edge_builder_emits_edges() -> None:
-    """Emit edge rows from a relation table."""
+    """Emit edge rows from a relation plan."""
     rel = pa.Table.from_arrays(
         [
             pa.array(["src"], type=pa.string()),
@@ -102,28 +98,22 @@ def test_edge_builder_emits_edges() -> None:
         ],
         names=["src", "dst", "path", "bstart", "bend"],
     )
-    builder = EdgeBuilder(
-        emitters=(
-            EdgePlanSpec(
-                name="basic",
-                option_flag="emit_edges",
-                relation_getter=lambda tables: tables.get("rel"),
-                emit=EdgeEmitSpec(
-                    edge_kind=EdgeKind.PY_DEFINES_SYMBOL,
-                    src_cols=("src",),
-                    dst_cols=("dst",),
-                    origin="scip",
-                    default_resolution_method="SPAN_EXACT",
-                ),
-            ),
+    ctx = ExecutionContext(runtime=RuntimeProfile(name="TEST"))
+    plan = Plan.table_source(rel, label="rel")
+    out_plan = emit_edges_plan(
+        plan,
+        spec=EdgeEmitSpec(
+            edge_kind=EdgeKind.PY_DEFINES_SYMBOL,
+            src_cols=("src",),
+            dst_cols=("dst",),
+            origin="scip",
+            default_resolution_method="SPAN_EXACT",
         ),
-        schema_version=SCHEMA_VERSION,
-        edge_schema=CPG_EDGES_SCHEMA,
+        ctx=ctx,
     )
-    parts = builder.build(tables={"rel": rel}, options=_EdgeOptions())
-    assert len(parts) == 1
-    assert parts[0].num_rows == 1
-    assert parts[0]["edge_kind"].to_pylist()[0] == EdgeKind.PY_DEFINES_SYMBOL.value
+    out = PlanSpec.from_plan(out_plan).to_table(ctx=ctx)
+    assert out.num_rows == 1
+    assert out["edge_kind"].to_pylist()[0] == EdgeKind.PY_DEFINES_SYMBOL.value
 
 
 @dataclass(frozen=True)
@@ -132,7 +122,7 @@ class _NodeOptions:
 
 
 def test_node_builder_emits_nodes() -> None:
-    """Emit node rows from a source table."""
+    """Emit node rows from a source plan."""
     table = pa.Table.from_arrays(
         [
             pa.array(["node"], type=pa.string()),
@@ -142,29 +132,23 @@ def test_node_builder_emits_nodes() -> None:
         ],
         names=["node_id", "path", "bstart", "bend"],
     )
-    builder = NodeBuilder(
-        emitters=(
-            NodePlanSpec(
-                name="basic",
-                option_flag="include_nodes",
-                table_getter=lambda tables: tables.get("nodes"),
-                emit=NodeEmitSpec(
-                    node_kind=NodeKind.CST_DEF,
-                    id_cols=("node_id",),
-                    path_cols=("path",),
-                    bstart_cols=("bstart",),
-                    bend_cols=("bend",),
-                    file_id_cols=(),
-                ),
-            ),
+    ctx = ExecutionContext(runtime=RuntimeProfile(name="TEST"))
+    plan = Plan.table_source(table, label="nodes")
+    out_plan = emit_node_plan(
+        plan,
+        spec=NodeEmitSpec(
+            node_kind=NodeKind.CST_DEF,
+            id_cols=("node_id",),
+            path_cols=("path",),
+            bstart_cols=("bstart",),
+            bend_cols=("bend",),
+            file_id_cols=(),
         ),
-        schema_version=SCHEMA_VERSION,
-        node_schema=CPG_NODES_SCHEMA,
+        ctx=ctx,
     )
-    parts = builder.build(tables={"nodes": table}, options=_NodeOptions())
-    assert len(parts) == 1
-    assert parts[0].num_rows == 1
-    assert parts[0]["node_kind"].to_pylist()[0] == NodeKind.CST_DEF.value
+    out = PlanSpec.from_plan(out_plan).to_table(ctx=ctx)
+    assert out.num_rows == 1
+    assert out["node_kind"].to_pylist()[0] == NodeKind.CST_DEF.value
 
 
 @dataclass(frozen=True)
@@ -183,29 +167,31 @@ def test_prop_builder_emits_props() -> None:
         ],
         names=["node_id", "name", "heavy"],
     )
-    builder = PropBuilder(
-        table_specs=(
-            PropTableSpec(
-                name="basic",
-                option_flag="include_props",
-                table_getter=lambda tables: tables.get("props"),
-                entity_kind=EntityKind.NODE,
-                id_cols=("node_id",),
-                node_kind=NodeKind.CST_NAME_REF,
-                fields=(
-                    PropFieldSpec(prop_key="name", source_col="name"),
-                    PropFieldSpec(
-                        prop_key="heavy",
-                        source_col="heavy",
-                        include_if=lambda options: options.include_heavy_json_props,
-                    ),
-                ),
+    ctx = ExecutionContext(runtime=RuntimeProfile(name="TEST"))
+    plan = Plan.table_source(table, label="props")
+    spec = PropTableSpec(
+        name="basic",
+        option_flag="include_props",
+        table_getter=lambda tables: tables.get("props"),
+        entity_kind=EntityKind.NODE,
+        id_cols=("node_id",),
+        node_kind=NodeKind.CST_NAME_REF,
+        fields=(
+            PropFieldSpec(prop_key="name", source_col="name", value_type="string"),
+            PropFieldSpec(
+                prop_key="heavy",
+                source_col="heavy",
+                include_if=lambda options: options.include_heavy_json_props,
+                value_type="string",
             ),
         ),
-        schema_version=SCHEMA_VERSION,
-        prop_schema=CPG_PROPS_SCHEMA,
     )
-    out = builder.build(tables={"props": table}, options=_PropOptions())
+    options = _PropOptions()
+    filtered_fields = filter_fields(spec.fields, options=options)
+    spec = spec.model_copy(update={"fields": tuple(filtered_fields)})
+    plans = emit_props_plans(plan, spec=spec, schema_version=None, ctx=ctx)
+    out_plan = union_all_plans(plans, label="props")
+    out = PlanSpec.from_plan(out_plan).to_table(ctx=ctx)
     prop_keys = out["prop_key"].to_pylist()
     assert "name" in prop_keys
     assert "heavy" not in prop_keys

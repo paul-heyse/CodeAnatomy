@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
+from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.interop import (
+    ArrayLike,
+    ChunkedArrayLike,
+    ComputeExpression,
+    DataTypeLike,
+    TableLike,
+    ensure_expression,
+    pc,
+)
+from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.arrays import const_array
 
 type ValuesLike = ArrayLike | ChunkedArrayLike
@@ -34,6 +45,16 @@ def empty_quality_table() -> TableLike:
         [pa.array([], type=field.type) for field in QUALITY_SCHEMA],
         schema=QUALITY_SCHEMA,
     )
+
+
+@dataclass(frozen=True)
+class QualityPlanSpec:
+    """Specification for building quality plans from IDs."""
+
+    id_col: str
+    entity_kind: str
+    issue: str
+    source_table: str | None = None
 
 
 def _is_zero(values: ValuesLike) -> ValuesLike:
@@ -122,9 +143,62 @@ def concat_quality_tables(tables: Sequence[TableLike]) -> TableLike:
     return pa.concat_tables(parts)
 
 
+def _zero_expr(values: ComputeExpression, *, dtype: DataTypeLike) -> ComputeExpression:
+    if patypes.is_dictionary(dtype):
+        values = ensure_expression(pc.cast(values, pa.string(), safe=False))
+        dtype = pa.string()
+    if patypes.is_string(dtype) or patypes.is_large_string(dtype):
+        return ensure_expression(pc.equal(values, pc.scalar("0")))
+    if patypes.is_integer(dtype):
+        return ensure_expression(pc.equal(values, pa.scalar(0, type=dtype)))
+    if patypes.is_floating(dtype):
+        return ensure_expression(pc.equal(values, pa.scalar(0.0, type=dtype)))
+    values = ensure_expression(pc.cast(values, pa.string(), safe=False))
+    return ensure_expression(pc.equal(values, pc.scalar("0")))
+
+
+def quality_plan_from_ids(
+    plan: Plan,
+    *,
+    spec: QualityPlanSpec,
+    ctx: ExecutionContext,
+) -> Plan:
+    """Return a plan producing quality rows for invalid IDs.
+
+    Returns
+    -------
+    Plan
+        Plan emitting quality rows for invalid identifiers.
+    """
+    schema = plan.schema(ctx=ctx)
+    available = set(schema.names)
+    if spec.id_col in available:
+        dtype = schema.field(spec.id_col).type
+        id_expr = ensure_expression(pc.field(spec.id_col))
+    else:
+        dtype = pa.string()
+        id_expr = ensure_expression(pc.cast(pc.scalar(None), dtype, safe=False))
+
+    id_str = ensure_expression(pc.cast(id_expr, pa.string(), safe=False))
+    invalid = ensure_expression(pc.or_(pc.is_null(id_expr), _zero_expr(id_expr, dtype=dtype)))
+    issue_expr = ensure_expression(pc.cast(pc.scalar(spec.issue), pa.string(), safe=False))
+    kind_expr = ensure_expression(pc.cast(pc.scalar(spec.entity_kind), pa.string(), safe=False))
+    if spec.source_table is None:
+        source_expr = ensure_expression(pc.cast(pc.scalar(None), pa.string(), safe=False))
+    else:
+        source_expr = ensure_expression(
+            pc.cast(pc.scalar(spec.source_table), pa.string(), safe=False)
+        )
+    filtered = plan.filter(invalid, ctx=ctx)
+    exprs = [kind_expr, id_str, issue_expr, source_expr]
+    names = ["entity_kind", "entity_id", "issue", "source_table"]
+    return filtered.project(exprs, names, ctx=ctx)
+
+
 __all__ = [
     "QUALITY_SCHEMA",
     "concat_quality_tables",
     "empty_quality_table",
     "quality_from_ids",
+    "quality_plan_from_ids",
 ]

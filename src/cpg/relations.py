@@ -7,20 +7,11 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from arrowdsl.compute.kernels import coalesce_arrays, drop_nulls, severity_score_array
-from arrowdsl.compute.predicates import BitmaskMatch, BoolColumn, FilterSpec, InValues, Not
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import ArrayLike, DataTypeLike, TableLike
+from arrowdsl.core.interop import ComputeExpression, DataTypeLike, ensure_expression, pc
 from arrowdsl.plan.ops import JoinSpec
 from arrowdsl.plan.plan import Plan, hash_join
-from arrowdsl.schema.arrays import (
-    ColumnDefaultsSpec,
-    ConstExpr,
-    FieldExpr,
-    const_array,
-    set_or_append_column,
-)
-from cpg.catalog import TableCatalog
+from cpg.catalog import PlanCatalog, PlanRef
 from cpg.kinds import (
     SCIP_ROLE_DEFINITION,
     SCIP_ROLE_IMPORT,
@@ -28,226 +19,273 @@ from cpg.kinds import (
     SCIP_ROLE_WRITE,
     EdgeKind,
 )
-from cpg.specs import EdgeEmitSpec, TableFilter
+from cpg.plan_helpers import set_or_append_column
+from cpg.specs import EdgeEmitSpec
 
-type RelationBuilder = Callable[[TableCatalog, ExecutionContext], TableLike | None]
+type RelationBuilder = Callable[[PlanCatalog, ExecutionContext], Plan | None]
+type PlanFilter = Callable[[Plan, ExecutionContext], Plan]
 
 
 @dataclass(frozen=True)
 class EdgeRelationSpec:
-    """Spec for building an edge relation table."""
+    """Spec for building an edge relation plan."""
 
     name: str
     option_flag: str
     emit: EdgeEmitSpec
     relation_builder: RelationBuilder
-    filter_fn: TableFilter | None = None
+    filter_fn: PlanFilter | None = None
 
-    def build(self, catalog: TableCatalog, *, ctx: ExecutionContext) -> TableLike | None:
-        """Return the relation table for this spec, after filtering.
+    def build(self, catalog: PlanCatalog, *, ctx: ExecutionContext) -> Plan | None:
+        """Return the relation plan for this spec, after filtering.
 
         Returns
         -------
-        TableLike | None
-            Relation table or ``None`` when empty.
+        Plan | None
+            Relation plan or ``None`` when unavailable.
         """
         rel = self.relation_builder(catalog, ctx)
-        if rel is None or rel.num_rows == 0:
+        if rel is None:
             return None
         if self.filter_fn is not None:
-            rel = self.filter_fn(rel)
-            if rel.num_rows == 0:
-                return None
+            rel = self.filter_fn(rel, ctx)
         return rel
 
 
-def _get(table: TableLike, col: str, *, default_type: DataTypeLike) -> ArrayLike:
-    if col in table.column_names:
-        return table[col]
-    return pa.nulls(table.num_rows, type=default_type)
+def _field_expr(
+    name: str,
+    *,
+    available: set[str],
+    dtype: DataTypeLike,
+) -> ComputeExpression:
+    if name in available:
+        return ensure_expression(pc.cast(pc.field(name), dtype, safe=False))
+    return ensure_expression(pc.cast(pc.scalar(None), dtype, safe=False))
 
 
-def _table_relation(name: str) -> RelationBuilder:
-    def _build(catalog: TableCatalog, _ctx: ExecutionContext) -> TableLike | None:
-        return catalog.tables.get(name)
+def _plan_relation(name: str) -> RelationBuilder:
+    ref = PlanRef(name)
+
+    def _build(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
+        return catalog.resolve(ref, ctx=ctx)
 
     return _build
 
 
 def _filter_unresolved_qname_calls(
-    rel_callsite_qname: TableLike,
-    rel_callsite_symbol: TableLike | None,
-) -> TableLike:
-    if "call_id" not in rel_callsite_qname.column_names:
+    rel_callsite_qname: Plan,
+    rel_callsite_symbol: Plan | None,
+    *,
+    ctx: ExecutionContext,
+) -> Plan:
+    if rel_callsite_symbol is None:
         return rel_callsite_qname
-    if rel_callsite_symbol is None or "call_id" not in rel_callsite_symbol.column_names:
+    left_cols = rel_callsite_qname.schema(ctx=ctx).names
+    if "call_id" not in left_cols:
         return rel_callsite_qname
-    resolved = drop_nulls(rel_callsite_symbol["call_id"])
-    predicate = Not(InValues(col="call_id", values=resolved, fill_null=False))
-    return FilterSpec(predicate).apply_kernel(rel_callsite_qname)
-
-
-def _ensure_ambiguity_group_id(table: TableLike) -> TableLike:
-    if "call_id" not in table.column_names:
-        return table
-    defaults = ColumnDefaultsSpec(
-        defaults=(("ambiguity_group_id", FieldExpr("call_id")),),
+    right_cols = rel_callsite_symbol.schema(ctx=ctx).names
+    if "call_id" not in right_cols:
+        return rel_callsite_qname
+    return hash_join(
+        left=rel_callsite_qname,
+        right=rel_callsite_symbol,
+        spec=JoinSpec(
+            join_type="left anti",
+            left_keys=("call_id",),
+            right_keys=("call_id",),
+            left_output=tuple(left_cols),
+            right_output=(),
+        ),
     )
-    return defaults.apply(table)
+
+
+def _ensure_ambiguity_group_id(plan: Plan, *, ctx: ExecutionContext) -> Plan:
+    available = set(plan.schema(ctx=ctx).names)
+    if "call_id" not in available:
+        return plan
+    return set_or_append_column(plan, name="ambiguity_group_id", expr=pc.field("call_id"), ctx=ctx)
 
 
 def _with_repo_file_ids(
-    diag_table: TableLike,
-    repo_files: TableLike | None,
+    diag_plan: Plan,
+    repo_files: Plan | None,
     *,
     ctx: ExecutionContext,
-) -> TableLike:
-    if (
-        repo_files is None
-        or repo_files.num_rows == 0
-        or "path" not in diag_table.column_names
-        or "path" not in repo_files.column_names
-        or "file_id" not in repo_files.column_names
-    ):
-        return diag_table
-    repo_subset = repo_files.select(["path", "file_id"])
-    left = Plan.table_source(diag_table, label="diagnostic")
-    right = Plan.table_source(repo_subset, label="repo_files")
+) -> Plan:
+    if repo_files is None:
+        return diag_plan
+    diag_cols = diag_plan.schema(ctx=ctx).names
+    if "path" not in diag_cols:
+        return diag_plan
+    repo_cols = repo_files.schema(ctx=ctx).names
+    if "path" not in repo_cols or "file_id" not in repo_cols:
+        return diag_plan
+
+    repo_proj = repo_files.project(
+        [pc.field("path"), pc.field("file_id")],
+        ["path", "file_id"],
+        ctx=ctx,
+    )
     joined = hash_join(
-        left=left,
-        right=right,
+        left=diag_plan,
+        right=repo_proj,
         spec=JoinSpec(
             join_type="left outer",
             left_keys=("path",),
             right_keys=("path",),
-            left_output=tuple(diag_table.column_names),
+            left_output=tuple(diag_cols),
             right_output=("file_id",),
             output_suffix_for_right="_repo",
         ),
-    ).to_table(ctx=ctx)
-    if "file_id_repo" in joined.column_names and "file_id" in joined.column_names:
-        resolved = coalesce_arrays([joined["file_id"], joined["file_id_repo"]])
-        joined = set_or_append_column(joined, "file_id", resolved)
-        joined = joined.drop(["file_id_repo"])
-    return joined
+    )
+    joined_cols = joined.schema(ctx=ctx).names
+    if "file_id_repo" not in joined_cols:
+        return joined
 
-
-def _symbol_role_filter(mask: int, *, must_set: bool) -> TableFilter:
-    def _filter(table: TableLike) -> TableLike:
-        defaults = ColumnDefaultsSpec(
-            defaults=(("symbol_roles", ConstExpr(0, dtype=pa.int64())),),
+    available = set(joined_cols)
+    if "file_id" in available:
+        file_id = ensure_expression(
+            pc.coalesce(pc.field("file_id"), pc.field("file_id_repo"))
         )
-        table = defaults.apply(table)
-        predicate = BitmaskMatch(col="symbol_roles", bitmask=mask, must_set=must_set)
-        return FilterSpec(predicate).apply_kernel(table)
+    else:
+        file_id = pc.field("file_id_repo")
+    joined = set_or_append_column(joined, name="file_id", expr=file_id, ctx=ctx)
+    keep = [col for col in joined.schema(ctx=ctx).names if col != "file_id_repo"]
+    return joined.project([pc.field(col) for col in keep], keep, ctx=ctx)
+
+
+def _severity_score_expr(expr: ComputeExpression) -> ComputeExpression:
+    severity = ensure_expression(pc.cast(expr, pa.string(), safe=False))
+    severity = ensure_expression(pc.fill_null(severity, pc.scalar("ERROR")))
+    is_error = ensure_expression(pc.equal(severity, pc.scalar("ERROR")))
+    is_warning = ensure_expression(pc.equal(severity, pc.scalar("WARNING")))
+    score = ensure_expression(
+        pc.if_else(
+            is_error,
+            pc.scalar(1.0),
+            pc.if_else(is_warning, pc.scalar(0.7), pc.scalar(0.5)),
+        )
+    )
+    return ensure_expression(pc.cast(score, pa.float32(), safe=False))
+
+
+def _symbol_role_filter(mask: int, *, must_set: bool) -> PlanFilter:
+    def _filter(plan: Plan, ctx: ExecutionContext) -> Plan:
+        available = set(plan.schema(ctx=ctx).names)
+        if "symbol_roles" in available:
+            roles = pc.cast(pc.field("symbol_roles"), pa.int64(), safe=False)
+        else:
+            roles = pc.cast(pc.scalar(0), pa.int64(), safe=False)
+        hit = pc.not_equal(pc.bit_wise_and(roles, pa.scalar(mask)), pa.scalar(0))
+        hit = pc.fill_null(hit, fill_value=False)
+        if not must_set:
+            hit = pc.invert(hit)
+        return plan.filter(ensure_expression(hit), ctx=ctx)
 
     return _filter
 
 
-def _flag_filter(flag_col: str) -> TableFilter:
-    def _filter(table: TableLike) -> TableLike:
-        defaults = ColumnDefaultsSpec(
-            defaults=((flag_col, ConstExpr(value=False, dtype=pa.bool_())),),
-        )
-        table = defaults.apply(table)
-        predicate = BoolColumn(col=flag_col, fill_null=False)
-        return FilterSpec(predicate).apply_kernel(table)
+def _flag_filter(flag_col: str) -> PlanFilter:
+    def _filter(plan: Plan, ctx: ExecutionContext) -> Plan:
+        available = set(plan.schema(ctx=ctx).names)
+        if flag_col in available:
+            flag = pc.cast(pc.field(flag_col), pa.bool_(), safe=False)
+        else:
+            flag = pc.cast(pc.scalar(0), pa.bool_(), safe=False)
+        flag = pc.fill_null(flag, fill_value=False)
+        return plan.filter(ensure_expression(flag), ctx=ctx)
 
     return _filter
 
 
-def qname_fallback_relation(catalog: TableCatalog, _ctx: ExecutionContext) -> TableLike | None:
-    rel_callsite_qname = catalog.tables.get("rel_callsite_qname")
-    if rel_callsite_qname is None or rel_callsite_qname.num_rows == 0:
+def qname_fallback_relation(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
+    rel_callsite_qname = catalog.resolve(PlanRef("rel_callsite_qname"), ctx=ctx)
+    if rel_callsite_qname is None:
         return None
-    rel_callsite_symbol = catalog.tables.get("rel_callsite_symbol")
-    filtered = _filter_unresolved_qname_calls(rel_callsite_qname, rel_callsite_symbol)
-    if filtered.num_rows == 0:
-        return None
-    return _ensure_ambiguity_group_id(filtered)
+    rel_callsite_symbol = catalog.resolve(PlanRef("rel_callsite_symbol"), ctx=ctx)
+    filtered = _filter_unresolved_qname_calls(rel_callsite_qname, rel_callsite_symbol, ctx=ctx)
+    return _ensure_ambiguity_group_id(filtered, ctx=ctx)
 
 
-def diagnostic_relation(catalog: TableCatalog, ctx: ExecutionContext) -> TableLike | None:
-    diagnostics_norm = catalog.tables.get("diagnostics_norm")
-    if diagnostics_norm is None or diagnostics_norm.num_rows == 0:
+def diagnostic_relation(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
+    diagnostics_norm = catalog.resolve(PlanRef("diagnostics_norm"), ctx=ctx)
+    if diagnostics_norm is None:
         return None
-    diag = _with_repo_file_ids(diagnostics_norm, catalog.tables.get("repo_files"), ctx=ctx)
-    if "diag_id" not in diag.column_names:
+    repo_files = catalog.resolve(PlanRef("repo_files"), ctx=ctx)
+    diag = _with_repo_file_ids(diagnostics_norm, repo_files, ctx=ctx)
+    available = set(diag.schema(ctx=ctx).names)
+    if "diag_id" not in available:
         return None
-    n = diag.num_rows
-    severity = _get(diag, "severity", default_type=pa.string())
-    score = severity_score_array(severity)
-    origin = _get(diag, "diag_source", default_type=pa.string())
-    origin = coalesce_arrays([origin, pa.scalar("diagnostic")])
-    diag = set_or_append_column(diag, "origin", origin)
-    diag = set_or_append_column(diag, "confidence", score)
-    diag = set_or_append_column(diag, "score", score)
-    return set_or_append_column(
-        diag, "resolution_method", const_array(n, "DIAGNOSTIC", dtype=pa.string())
-    )
+
+    severity = _field_expr("severity", available=available, dtype=pa.string())
+    score = _severity_score_expr(severity)
+    origin = _field_expr("diag_source", available=available, dtype=pa.string())
+    origin = ensure_expression(pc.coalesce(origin, pc.scalar("diagnostic")))
+
+    diag = set_or_append_column(diag, name="origin", expr=origin, ctx=ctx)
+    diag = set_or_append_column(diag, name="confidence", expr=score, ctx=ctx)
+    diag = set_or_append_column(diag, name="score", expr=score, ctx=ctx)
+    resolution = ensure_expression(pc.cast(pc.scalar("DIAGNOSTIC"), pa.string(), safe=False))
+    return set_or_append_column(diag, name="resolution_method", expr=resolution, ctx=ctx)
 
 
-def type_annotation_relation(catalog: TableCatalog, _ctx: ExecutionContext) -> TableLike | None:
-    type_exprs_norm = catalog.tables.get("type_exprs_norm")
-    if type_exprs_norm is None or type_exprs_norm.num_rows == 0:
+def type_annotation_relation(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
+    type_exprs_norm = catalog.resolve(PlanRef("type_exprs_norm"), ctx=ctx)
+    if type_exprs_norm is None:
         return None
-    n = type_exprs_norm.num_rows
-    rel = set_or_append_column(
-        type_exprs_norm, "confidence", const_array(n, 1.0, dtype=pa.float32())
-    )
-    return set_or_append_column(rel, "score", const_array(n, 1.0, dtype=pa.float32()))
+    score = ensure_expression(pc.cast(pc.scalar(1.0), pa.float32(), safe=False))
+    plan = set_or_append_column(type_exprs_norm, name="confidence", expr=score, ctx=ctx)
+    return set_or_append_column(plan, name="score", expr=score, ctx=ctx)
 
 
-def inferred_type_relation(catalog: TableCatalog, _ctx: ExecutionContext) -> TableLike | None:
-    type_exprs_norm = catalog.tables.get("type_exprs_norm")
-    if type_exprs_norm is None or type_exprs_norm.num_rows == 0:
+def inferred_type_relation(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
+    type_exprs_norm = catalog.resolve(PlanRef("type_exprs_norm"), ctx=ctx)
+    if type_exprs_norm is None:
         return None
-    n = type_exprs_norm.num_rows
-    return pa.Table.from_arrays(
-        [
-            _get(type_exprs_norm, "owner_def_id", default_type=pa.string()),
-            _get(type_exprs_norm, "type_id", default_type=pa.string()),
-            pa.nulls(n, type=pa.string()),
-            pa.nulls(n, type=pa.int64()),
-            pa.nulls(n, type=pa.int64()),
-            const_array(n, 1.0, dtype=pa.float32()),
-            const_array(n, 1.0, dtype=pa.float32()),
-        ],
-        names=["owner_def_id", "type_id", "path", "bstart", "bend", "confidence", "score"],
-    )
+    available = set(type_exprs_norm.schema(ctx=ctx).names)
+    exprs = [
+        _field_expr("owner_def_id", available=available, dtype=pa.string()),
+        _field_expr("type_id", available=available, dtype=pa.string()),
+        ensure_expression(pc.cast(pc.scalar(None), pa.string(), safe=False)),
+        ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),
+        ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),
+        ensure_expression(pc.cast(pc.scalar(1.0), pa.float32(), safe=False)),
+        ensure_expression(pc.cast(pc.scalar(1.0), pa.float32(), safe=False)),
+    ]
+    names = ["owner_def_id", "type_id", "path", "bstart", "bend", "confidence", "score"]
+    return type_exprs_norm.project(exprs, names, ctx=ctx)
 
 
 def runtime_relation(
-    catalog: TableCatalog,
-    _ctx: ExecutionContext,
+    catalog: PlanCatalog,
+    ctx: ExecutionContext,
     *,
     key: str,
     src_col: str,
     dst_col: str,
-) -> TableLike | None:
-    table = catalog.tables.get(key)
-    if table is None or table.num_rows == 0:
+) -> Plan | None:
+    table = catalog.resolve(PlanRef(key), ctx=ctx)
+    if table is None:
         return None
-    n = table.num_rows
-    return pa.Table.from_arrays(
-        [
-            _get(table, src_col, default_type=pa.string()),
-            _get(table, dst_col, default_type=pa.string()),
-            pa.nulls(n, type=pa.string()),
-            pa.nulls(n, type=pa.int64()),
-            pa.nulls(n, type=pa.int64()),
-            const_array(n, 1.0, dtype=pa.float32()),
-            const_array(n, 1.0, dtype=pa.float32()),
-        ],
-        names=[src_col, dst_col, "path", "bstart", "bend", "confidence", "score"],
-    )
+    available = set(table.schema(ctx=ctx).names)
+    exprs = [
+        _field_expr(src_col, available=available, dtype=pa.string()),
+        _field_expr(dst_col, available=available, dtype=pa.string()),
+        ensure_expression(pc.cast(pc.scalar(None), pa.string(), safe=False)),
+        ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),
+        ensure_expression(pc.cast(pc.scalar(None), pa.int64(), safe=False)),
+        ensure_expression(pc.cast(pc.scalar(1.0), pa.float32(), safe=False)),
+        ensure_expression(pc.cast(pc.scalar(1.0), pa.float32(), safe=False)),
+    ]
+    names = [src_col, dst_col, "path", "bstart", "bend", "confidence", "score"]
+    return table.project(exprs, names, ctx=ctx)
 
 
 EDGE_RELATION_SPECS: tuple[EdgeRelationSpec, ...] = (
     EdgeRelationSpec(
         name="symbol_role_defines",
         option_flag="emit_symbol_role_edges",
-        relation_builder=_table_relation("rel_name_symbol"),
+        relation_builder=_plan_relation("rel_name_symbol"),
         emit=EdgeEmitSpec(
             edge_kind=EdgeKind.PY_DEFINES_SYMBOL,
             src_cols=("name_ref_id",),
@@ -260,7 +298,7 @@ EDGE_RELATION_SPECS: tuple[EdgeRelationSpec, ...] = (
     EdgeRelationSpec(
         name="symbol_role_references",
         option_flag="emit_symbol_role_edges",
-        relation_builder=_table_relation("rel_name_symbol"),
+        relation_builder=_plan_relation("rel_name_symbol"),
         emit=EdgeEmitSpec(
             edge_kind=EdgeKind.PY_REFERENCES_SYMBOL,
             src_cols=("name_ref_id",),
@@ -273,7 +311,7 @@ EDGE_RELATION_SPECS: tuple[EdgeRelationSpec, ...] = (
     EdgeRelationSpec(
         name="symbol_role_reads",
         option_flag="emit_symbol_role_edges",
-        relation_builder=_table_relation("rel_name_symbol"),
+        relation_builder=_plan_relation("rel_name_symbol"),
         emit=EdgeEmitSpec(
             edge_kind=EdgeKind.PY_READS_SYMBOL,
             src_cols=("name_ref_id",),
@@ -286,7 +324,7 @@ EDGE_RELATION_SPECS: tuple[EdgeRelationSpec, ...] = (
     EdgeRelationSpec(
         name="symbol_role_writes",
         option_flag="emit_symbol_role_edges",
-        relation_builder=_table_relation("rel_name_symbol"),
+        relation_builder=_plan_relation("rel_name_symbol"),
         emit=EdgeEmitSpec(
             edge_kind=EdgeKind.PY_WRITES_SYMBOL,
             src_cols=("name_ref_id",),
@@ -299,7 +337,7 @@ EDGE_RELATION_SPECS: tuple[EdgeRelationSpec, ...] = (
     EdgeRelationSpec(
         name="scip_symbol_reference",
         option_flag="emit_scip_symbol_relationship_edges",
-        relation_builder=_table_relation("scip_symbol_relationships"),
+        relation_builder=_plan_relation("scip_symbol_relationships"),
         emit=EdgeEmitSpec(
             edge_kind=EdgeKind.SCIP_SYMBOL_REFERENCE,
             src_cols=("symbol",),
@@ -312,7 +350,7 @@ EDGE_RELATION_SPECS: tuple[EdgeRelationSpec, ...] = (
     EdgeRelationSpec(
         name="scip_symbol_implementation",
         option_flag="emit_scip_symbol_relationship_edges",
-        relation_builder=_table_relation("scip_symbol_relationships"),
+        relation_builder=_plan_relation("scip_symbol_relationships"),
         emit=EdgeEmitSpec(
             edge_kind=EdgeKind.SCIP_SYMBOL_IMPLEMENTATION,
             src_cols=("symbol",),
@@ -325,7 +363,7 @@ EDGE_RELATION_SPECS: tuple[EdgeRelationSpec, ...] = (
     EdgeRelationSpec(
         name="scip_symbol_type_definition",
         option_flag="emit_scip_symbol_relationship_edges",
-        relation_builder=_table_relation("scip_symbol_relationships"),
+        relation_builder=_plan_relation("scip_symbol_relationships"),
         emit=EdgeEmitSpec(
             edge_kind=EdgeKind.SCIP_SYMBOL_TYPE_DEFINITION,
             src_cols=("symbol",),
@@ -338,7 +376,7 @@ EDGE_RELATION_SPECS: tuple[EdgeRelationSpec, ...] = (
     EdgeRelationSpec(
         name="scip_symbol_definition",
         option_flag="emit_scip_symbol_relationship_edges",
-        relation_builder=_table_relation("scip_symbol_relationships"),
+        relation_builder=_plan_relation("scip_symbol_relationships"),
         emit=EdgeEmitSpec(
             edge_kind=EdgeKind.SCIP_SYMBOL_DEFINITION,
             src_cols=("symbol",),
@@ -351,7 +389,7 @@ EDGE_RELATION_SPECS: tuple[EdgeRelationSpec, ...] = (
     EdgeRelationSpec(
         name="import_edges",
         option_flag="emit_import_edges",
-        relation_builder=_table_relation("rel_import_symbol"),
+        relation_builder=_plan_relation("rel_import_symbol"),
         emit=EdgeEmitSpec(
             edge_kind=EdgeKind.PY_IMPORTS_SYMBOL,
             src_cols=("import_alias_id", "import_id"),
@@ -367,7 +405,7 @@ EDGE_RELATION_SPECS: tuple[EdgeRelationSpec, ...] = (
     EdgeRelationSpec(
         name="call_edges",
         option_flag="emit_call_edges",
-        relation_builder=_table_relation("rel_callsite_symbol"),
+        relation_builder=_plan_relation("rel_callsite_symbol"),
         emit=EdgeEmitSpec(
             edge_kind=EdgeKind.PY_CALLS_SYMBOL,
             src_cols=("call_id",),

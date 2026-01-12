@@ -6,7 +6,7 @@ import importlib
 import logging
 import os
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
@@ -1194,7 +1194,7 @@ def extract_scip_tables(
     ctx: ExecutionContext | None = None,
     parse_opts: SCIPParseOptions | None = None,
     prefer_reader: Literal[False] = False,
-) -> dict[str, TableLike]: ...
+) -> Mapping[str, TableLike]: ...
 
 
 @overload
@@ -1205,7 +1205,7 @@ def extract_scip_tables(
     ctx: ExecutionContext | None = None,
     parse_opts: SCIPParseOptions | None = None,
     prefer_reader: Literal[True],
-) -> dict[str, TableLike | RecordBatchReaderLike]: ...
+) -> Mapping[str, TableLike | RecordBatchReaderLike]: ...
 
 
 def extract_scip_tables(
@@ -1215,7 +1215,7 @@ def extract_scip_tables(
     ctx: ExecutionContext | None = None,
     parse_opts: SCIPParseOptions | None = None,
     prefer_reader: bool = False,
-) -> dict[str, TableLike | RecordBatchReaderLike]:
+) -> Mapping[str, TableLike | RecordBatchReaderLike]:
     """Extract SCIP tables as a name-keyed bundle.
 
     Parameters

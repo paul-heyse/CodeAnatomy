@@ -1181,10 +1181,9 @@ def extract_cst_tables(
     repo_root: str | None,
     repo_files: TableLike,
     file_contexts: Iterable[FileContext] | None = None,
-    options: CSTExtractOptions | None = None,
     ctx: ExecutionContext | None = None,
     prefer_reader: Literal[False] = False,
-) -> dict[str, TableLike]: ...
+) -> Mapping[str, TableLike]: ...
 
 
 @overload
@@ -1193,10 +1192,9 @@ def extract_cst_tables(
     repo_root: str | None,
     repo_files: TableLike,
     file_contexts: Iterable[FileContext] | None = None,
-    options: CSTExtractOptions | None = None,
     ctx: ExecutionContext | None = None,
     prefer_reader: Literal[True],
-) -> dict[str, TableLike | RecordBatchReaderLike]: ...
+) -> Mapping[str, TableLike | RecordBatchReaderLike]: ...
 
 
 def extract_cst_tables(
@@ -1206,7 +1204,7 @@ def extract_cst_tables(
     file_contexts: Iterable[FileContext] | None = None,
     ctx: ExecutionContext | None = None,
     prefer_reader: bool = False,
-) -> dict[str, TableLike | RecordBatchReaderLike]:
+) -> Mapping[str, TableLike | RecordBatchReaderLike]:
     """Extract CST tables as a name-keyed bundle.
 
     Parameters

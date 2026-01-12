@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from arrowdsl.core.interop import ComputeExpression, TableLike, ensure_expression, pc
+from arrowdsl.core.interop import ComputeExpression, SchemaLike, TableLike, ensure_expression, pc
 from arrowdsl.schema.schema import EncodingSpec, encode_columns, encode_expression
 
 
@@ -42,3 +42,26 @@ def encoding_projection(
         expressions.append(ensure_expression(expr))
         names.append(name)
     return expressions, names
+
+
+def encoding_columns_from_metadata(schema: SchemaLike) -> list[str]:
+    """Return columns marked for dictionary encoding via field metadata.
+
+    Returns
+    -------
+    list[str]
+        Column names marked for dictionary encoding.
+    """
+    encoding_columns: list[str] = []
+    for field in schema:
+        meta = field.metadata or {}
+        if meta.get(b"encoding") == b"dictionary":
+            encoding_columns.append(field.name)
+    return encoding_columns
+
+
+__all__ = [
+    "apply_encoding",
+    "encoding_columns_from_metadata",
+    "encoding_projection",
+]

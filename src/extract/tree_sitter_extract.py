@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from typing import Literal, overload
 
 import pyarrow as pa
 import tree_sitter_python
@@ -204,6 +205,8 @@ def extract_ts(
         Extraction options.
     file_contexts:
         Optional pre-built file contexts for extraction.
+    options:
+        Tree-sitter extraction options.
     ctx:
         Execution context for plan execution.
 
@@ -384,6 +387,28 @@ def _extract_ts_for_row(
             buffers.missing_rows.append(_missing_row(row))
 
 
+@overload
+def extract_ts_tables(
+    *,
+    repo_root: str | None,
+    repo_files: TableLike,
+    file_contexts: Iterable[FileContext] | None = None,
+    ctx: ExecutionContext | None = None,
+    prefer_reader: Literal[False] = False,
+) -> Mapping[str, TableLike]: ...
+
+
+@overload
+def extract_ts_tables(
+    *,
+    repo_root: str | None,
+    repo_files: TableLike,
+    file_contexts: Iterable[FileContext] | None = None,
+    ctx: ExecutionContext | None = None,
+    prefer_reader: Literal[True],
+) -> Mapping[str, TableLike | RecordBatchReaderLike]: ...
+
+
 def extract_ts_tables(
     *,
     repo_root: str | None,
@@ -391,7 +416,7 @@ def extract_ts_tables(
     file_contexts: Iterable[FileContext] | None = None,
     ctx: ExecutionContext | None = None,
     prefer_reader: bool = False,
-) -> dict[str, TableLike | RecordBatchReaderLike]:
+) -> Mapping[str, TableLike | RecordBatchReaderLike]:
     """Extract tree-sitter tables as a name-keyed bundle.
 
     Parameters

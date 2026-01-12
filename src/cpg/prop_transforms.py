@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import pyarrow as pa
+
+from arrowdsl.compute.udfs import ensure_expr_context_udf
+from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
+
 
 def expr_context_value(value: object) -> str | None:
     """Normalize expression context strings.
@@ -36,4 +41,40 @@ def flag_to_bool(value: object | None) -> bool | None:
     return None
 
 
-__all__ = ["expr_context_value", "flag_to_bool"]
+def expr_context_expr(expr: ComputeExpression) -> ComputeExpression:
+    """Return a compute expression for expr-context normalization.
+
+    Returns
+    -------
+    ComputeExpression
+        Expression normalizing expr-context values.
+    """
+    func_name = ensure_expr_context_udf()
+    return ensure_expression(pc.call_function(func_name, [expr]))
+
+
+def flag_to_bool_expr(expr: ComputeExpression) -> ComputeExpression:
+    """Return a compute expression for optional boolean flags.
+
+    Returns
+    -------
+    ComputeExpression
+        Expression normalizing optional boolean flags.
+    """
+    casted = pc.cast(expr, pa.int64(), safe=False)
+    hit = pc.equal(casted, pa.scalar(1))
+    return ensure_expression(
+        pc.if_else(
+            hit,
+            pc.cast(pc.scalar(1), pa.bool_(), safe=False),
+            pc.cast(pc.scalar(None), pa.bool_(), safe=False),
+        )
+    )
+
+
+__all__ = [
+    "expr_context_expr",
+    "expr_context_value",
+    "flag_to_bool",
+    "flag_to_bool_expr",
+]

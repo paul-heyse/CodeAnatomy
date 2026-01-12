@@ -1,10 +1,49 @@
 """Normalization helpers for extracted tables."""
 
 from normalize.bytecode_anchor import BytecodeSpanColumns, anchor_instructions
-from normalize.bytecode_cfg import build_cfg, build_cfg_blocks, build_cfg_edges
-from normalize.bytecode_dfg import build_def_use_events, run_reaching_defs
-from normalize.diagnostics import collect_diags
+from normalize.bytecode_cfg import (
+    build_cfg,
+    build_cfg_blocks,
+    build_cfg_blocks_canonical,
+    build_cfg_blocks_result,
+    build_cfg_edges,
+    build_cfg_edges_canonical,
+    build_cfg_edges_result,
+    cfg_blocks_plan,
+    cfg_edges_plan,
+)
+from normalize.bytecode_dfg import (
+    build_def_use_events,
+    build_def_use_events_canonical,
+    build_def_use_events_result,
+    def_use_events_plan,
+    reaching_defs_plan,
+    run_reaching_defs,
+    run_reaching_defs_canonical,
+    run_reaching_defs_result,
+)
+from normalize.diagnostics import (
+    collect_diags,
+    collect_diags_canonical,
+    collect_diags_result,
+    diagnostics_post_step,
+)
 from normalize.ids import add_span_id_column, span_id, stable_id, stable_int64
+from normalize.query_specs import (
+    CFG_BLOCKS_QUERY,
+    CFG_EDGES_QUERY,
+    DEF_USE_QUERY,
+    DIAG_QUERY,
+    REACHES_QUERY,
+    TYPE_EXPRS_QUERY,
+    TYPE_NODES_QUERY,
+)
+from normalize.runner import (
+    ensure_canonical,
+    run_normalize,
+    run_normalize_reader,
+    run_normalize_streamable,
+)
 from normalize.schema_infer import (
     SchemaInferOptions,
     align_table_to_schema,
@@ -15,15 +54,33 @@ from normalize.schema_infer import (
 from normalize.spans import (
     add_ast_byte_spans,
     add_scip_occurrence_byte_spans,
+    ast_span_post_step,
     build_repo_text_index,
     normalize_cst_callsites_spans,
     normalize_cst_defs_spans,
     normalize_cst_imports_spans,
 )
 from normalize.text_index import FileTextIndex, RepoTextIndex
-from normalize.types import normalize_type_exprs, normalize_types
+from normalize.types import (
+    normalize_type_exprs,
+    normalize_type_exprs_canonical,
+    normalize_type_exprs_result,
+    normalize_types,
+    normalize_types_canonical,
+    normalize_types_result,
+    type_exprs_plan,
+    type_nodes_plan_from_exprs,
+    type_nodes_plan_from_scip,
+)
 
 __all__ = [
+    "CFG_BLOCKS_QUERY",
+    "CFG_EDGES_QUERY",
+    "DEF_USE_QUERY",
+    "DIAG_QUERY",
+    "REACHES_QUERY",
+    "TYPE_EXPRS_QUERY",
+    "TYPE_NODES_QUERY",
     "BytecodeSpanColumns",
     "FileTextIndex",
     "RepoTextIndex",
@@ -34,21 +91,48 @@ __all__ = [
     "align_table_to_schema",
     "align_tables_to_unified_schema",
     "anchor_instructions",
+    "ast_span_post_step",
     "build_cfg",
     "build_cfg_blocks",
+    "build_cfg_blocks_canonical",
+    "build_cfg_blocks_result",
     "build_cfg_edges",
+    "build_cfg_edges_canonical",
+    "build_cfg_edges_result",
     "build_def_use_events",
+    "build_def_use_events_canonical",
+    "build_def_use_events_result",
     "build_repo_text_index",
+    "cfg_blocks_plan",
+    "cfg_edges_plan",
     "collect_diags",
+    "collect_diags_canonical",
+    "collect_diags_result",
+    "def_use_events_plan",
+    "diagnostics_post_step",
+    "ensure_canonical",
     "infer_schema_from_tables",
     "normalize_cst_callsites_spans",
     "normalize_cst_defs_spans",
     "normalize_cst_imports_spans",
     "normalize_type_exprs",
+    "normalize_type_exprs_canonical",
+    "normalize_type_exprs_result",
     "normalize_types",
+    "normalize_types_canonical",
+    "normalize_types_result",
+    "reaching_defs_plan",
+    "run_normalize",
+    "run_normalize_reader",
+    "run_normalize_streamable",
     "run_reaching_defs",
+    "run_reaching_defs_canonical",
+    "run_reaching_defs_result",
     "span_id",
     "stable_id",
     "stable_int64",
+    "type_exprs_plan",
+    "type_nodes_plan_from_exprs",
+    "type_nodes_plan_from_scip",
     "unify_schemas",
 ]

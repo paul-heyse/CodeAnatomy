@@ -9,14 +9,15 @@ import pyarrow as pa
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_array_values
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike
+from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.schema.arrays import const_array, set_or_append_column
-from arrowdsl.schema.schema import EncodingSpec, encode_columns
+from arrowdsl.schema.schema import EncodingSpec
 from cpg.artifacts import CpgBuildArtifacts
-from cpg.builders import NodeBuilder
-from cpg.catalog import TableCatalog
-from cpg.merge import unify_tables
-from cpg.quality import quality_from_ids
-from cpg.schemas import CPG_NODES_SCHEMA, CPG_NODES_SPEC, SCHEMA_VERSION, empty_nodes
+from cpg.catalog import PlanCatalog
+from cpg.emit_nodes import emit_node_plan
+from cpg.plan_helpers import align_plan, empty_plan, encode_plan, ensure_plan, finalize_plan
+from cpg.quality import QualityPlanSpec, quality_plan_from_ids
+from cpg.schemas import CPG_NODES_SCHEMA, CPG_NODES_SPEC
 from cpg.spec_registry import node_plan_specs
 
 
@@ -81,12 +82,6 @@ NODE_PLAN_SPECS = node_plan_specs()
 
 NODE_ENCODING_SPECS: tuple[EncodingSpec, ...] = (EncodingSpec(column="node_kind"),)
 
-NODE_BUILDER = NodeBuilder(
-    emitters=NODE_PLAN_SPECS,
-    schema_version=SCHEMA_VERSION,
-    node_schema=CPG_NODES_SCHEMA,
-)
-
 
 @dataclass(frozen=True)
 class NodeBuildOptions:
@@ -130,8 +125,12 @@ class NodeInputTables:
     rt_members: TableLike | None = None
 
 
-def _node_tables(inputs: NodeInputTables, *, options: NodeBuildOptions) -> dict[str, TableLike]:
-    catalog = TableCatalog()
+def _node_tables(
+    inputs: NodeInputTables,
+    *,
+    options: NodeBuildOptions,
+) -> dict[str, TableLike | Plan]:
+    catalog = PlanCatalog()
     repo_files = inputs.repo_files
     if repo_files is not None:
         catalog.add("repo_files", repo_files)
@@ -169,36 +168,55 @@ def _node_tables(inputs: NodeInputTables, *, options: NodeBuildOptions) -> dict[
 
 def build_cpg_nodes_raw(
     *,
+    ctx: ExecutionContext,
     inputs: NodeInputTables | None = None,
     options: NodeBuildOptions | None = None,
-    ctx: ExecutionContext | None = None,
-) -> TableLike:
-    """Build CPG nodes without finalization.
+) -> Plan:
+    """Build CPG nodes as a plan without finalization.
 
     Parameters
     ----------
+    ctx:
+        Execution context for plan evaluation.
     inputs:
         Bundle of input tables for node construction.
     options:
         Node build options.
-    ctx:
-        Optional execution context for schema evolution.
 
     Returns
     -------
-    pyarrow.Table
-        Raw nodes table.
+    Plan
+        Plan producing the raw nodes table.
+
+    Raises
+    ------
+    ValueError
+        Raised when an option flag is missing.
     """
     options = options or NodeBuildOptions()
     tables = _node_tables(inputs or NodeInputTables(), options=options)
-    parts = NODE_BUILDER.build(tables=tables, options=options)
-    parts = [part for part in parts if part.num_rows]
+    parts: list[Plan] = []
+    for spec in NODE_PLAN_SPECS:
+        enabled = getattr(options, spec.option_flag, None)
+        if enabled is None:
+            msg = f"Unknown option flag: {spec.option_flag}"
+            raise ValueError(msg)
+        if not enabled:
+            continue
+        plan_source = spec.table_getter(tables)
+        if plan_source is None:
+            continue
+        plan = ensure_plan(plan_source, label=spec.name)
+        if spec.preprocessor is not None:
+            plan = spec.preprocessor(plan)
+        parts.append(emit_node_plan(plan, spec=spec.emit, ctx=ctx))
 
     if not parts:
-        return empty_nodes()
+        return empty_plan(CPG_NODES_SCHEMA, label="cpg_nodes_raw")
 
-    combined = unify_tables(spec=CPG_NODES_SPEC, tables=parts, ctx=ctx)
-    return encode_columns(combined, specs=NODE_ENCODING_SPECS)
+    combined = union_all_plans(parts, label="cpg_nodes_raw")
+    combined = encode_plan(combined, specs=NODE_ENCODING_SPECS, ctx=ctx)
+    return align_plan(combined, schema=CPG_NODES_SCHEMA, ctx=ctx)
 
 
 def build_cpg_nodes(
@@ -214,13 +232,18 @@ def build_cpg_nodes(
     CpgBuildArtifacts
         Finalize result plus quality table.
     """
-    raw = build_cpg_nodes_raw(inputs=inputs, options=options, ctx=ctx)
-    quality = quality_from_ids(
-        raw,
-        id_col="node_id",
-        entity_kind="node",
-        issue="invalid_node_id",
-        source_table="cpg_nodes_raw",
+    raw_plan = build_cpg_nodes_raw(ctx=ctx, inputs=inputs, options=options)
+    quality_plan = quality_plan_from_ids(
+        raw_plan,
+        spec=QualityPlanSpec(
+            id_col="node_id",
+            entity_kind="node",
+            issue="invalid_node_id",
+            source_table="cpg_nodes_raw",
+        ),
+        ctx=ctx,
     )
+    raw = finalize_plan(raw_plan, ctx=ctx)
+    quality = finalize_plan(quality_plan, ctx=ctx)
     finalize = CPG_NODES_SPEC.finalize_context(ctx).run(raw, ctx=ctx)
     return CpgBuildArtifacts(finalize=finalize, quality=quality)

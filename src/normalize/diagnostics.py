@@ -6,13 +6,27 @@ from dataclasses import dataclass, field
 
 import pyarrow as pa
 
+from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_arrays
-from arrowdsl.core.interop import ArrayLike, TableLike
-from arrowdsl.schema.arrays import build_list_array, build_struct_array, const_array
-from arrowdsl.schema.schema import empty_table, encode_columns
+from arrowdsl.core.interop import ArrayLike, TableLike, pc
+from arrowdsl.finalize.finalize import FinalizeResult
+from arrowdsl.plan.plan import Plan, union_all_plans
+from arrowdsl.schema.arrays import build_struct_array
 from normalize.arrow_utils import column_or_null
-from normalize.ids import prefixed_hash64
-from normalize.schemas import DIAG_DETAIL_STRUCT, DIAG_ENCODING_SPECS, DIAG_SCHEMA, DIAG_SPEC
+from normalize.plan_exprs import column_or_null_expr
+from normalize.plan_helpers import (
+    apply_query_spec,
+    encoding_columns_from_metadata,
+    encoding_projection,
+)
+from normalize.runner import PostFn, ensure_canonical, ensure_execution_context, run_normalize
+from normalize.schemas import (
+    DIAG_CONTRACT,
+    DIAG_DETAILS_TYPE,
+    DIAG_QUERY,
+    DIAG_SCHEMA,
+    DIAG_SPEC,
+)
 from normalize.spans import line_char_to_byte_offset
 from normalize.text_index import (
     DEFAULT_POSITION_ENCODING,
@@ -26,6 +40,24 @@ SCIP_SEVERITY_ERROR = 1
 SCIP_SEVERITY_WARNING = 2
 SCIP_SEVERITY_INFO = 3
 SCIP_SEVERITY_HINT = 4
+
+_DIAG_BASE_COLUMNS: tuple[str, ...] = DIAG_QUERY.projection.base
+
+
+def _diag_base_field(field: pa.Field) -> pa.Field:
+    if pa.types.is_dictionary(field.type):
+        return pa.field(field.name, field.type.value_type, nullable=field.nullable)
+    return pa.field(field.name, field.type, nullable=field.nullable)
+
+
+_DIAG_BASE_SCHEMA = pa.schema(
+    [_diag_base_field(DIAG_SCHEMA.field(name)) for name in _DIAG_BASE_COLUMNS]
+)
+
+
+def _empty_diag_base_table() -> TableLike:
+    arrays = [pa.array([], type=field.type) for field in _DIAG_BASE_SCHEMA]
+    return pa.Table.from_arrays(arrays, schema=_DIAG_BASE_SCHEMA)
 
 
 @dataclass(frozen=True)
@@ -133,8 +165,8 @@ class _ScipDiagInput:
 
 
 def _build_diag_details(buffers: _DiagBuffers) -> ArrayLike:
-    tags = build_list_array(
-        pa.array(buffers.detail_tag_offsets, type=pa.int32()),
+    tags = pa.LargeListArray.from_arrays(
+        pa.array(buffers.detail_tag_offsets, type=pa.int64()),
         pa.array(buffers.detail_tag_values, type=pa.string()),
     )
     detail_struct = build_struct_array(
@@ -145,15 +177,15 @@ def _build_diag_details(buffers: _DiagBuffers) -> ArrayLike:
             "tags": tags,
         }
     )
-    return build_list_array(
-        pa.array(buffers.detail_offsets, type=pa.int32()),
+    return pa.LargeListArray.from_arrays(
+        pa.array(buffers.detail_offsets, type=pa.int64()),
         detail_struct,
     )
 
 
 DIAG_DETAIL_SPEC = NestedFieldSpec(
     name="details",
-    dtype=pa.list_(DIAG_DETAIL_STRUCT),
+    dtype=DIAG_DETAILS_TYPE,
     builder=_build_diag_details,
 )
 
@@ -165,9 +197,9 @@ def _detail_tags(value: object | None) -> list[str]:
 
 
 def _empty_details_list(num_rows: int) -> ArrayLike:
-    offsets = const_array(num_rows + 1, 0, dtype=pa.int32())
-    tags = build_list_array(
-        const_array(1, 0, dtype=pa.int32()),
+    offsets = pa.array([0] * (num_rows + 1), type=pa.int64())
+    tags = pa.LargeListArray.from_arrays(
+        pa.array([0], type=pa.int64()),
         pa.array([], type=pa.string()),
     )
     detail_struct = build_struct_array(
@@ -178,7 +210,7 @@ def _empty_details_list(num_rows: int) -> ArrayLike:
             "tags": tags,
         }
     )
-    return build_list_array(offsets, detail_struct)
+    return pa.LargeListArray.from_arrays(offsets, detail_struct)
 
 
 def _cst_parse_error_row(
@@ -240,7 +272,7 @@ def _cst_parse_error_table(
         buffers.append(row)
 
     if not buffers.paths:
-        return empty_table(DIAG_SCHEMA)
+        return _empty_diag_base_table()
 
     path_arr = pa.array(buffers.paths, type=pa.string())
     bstart_arr = pa.array(buffers.bstarts, type=pa.int64())
@@ -248,56 +280,21 @@ def _cst_parse_error_table(
     source_arr = pa.array(buffers.sources, type=pa.string())
     message_arr = pa.array(buffers.messages, type=pa.string())
     severity_arr = pa.array(buffers.severities, type=pa.string())
-    diag_id = prefixed_hash64("diag", [path_arr, bstart_arr, bend_arr, source_arr, message_arr])
     details = buffers.details_array()
-    table = pa.Table.from_arrays(
+    return pa.Table.from_arrays(
         [
             pa.array(buffers.file_ids, type=pa.string()),
             path_arr,
             bstart_arr,
             bend_arr,
-            diag_id,
             severity_arr,
             message_arr,
             source_arr,
             pa.array(buffers.codes, type=pa.string()),
             details,
         ],
-        names=DIAG_SCHEMA.names,
+        schema=_DIAG_BASE_SCHEMA,
     )
-    table = encode_columns(table, specs=DIAG_ENCODING_SPECS)
-    return table.cast(DIAG_SCHEMA)
-
-
-def _ts_diag_table(ts_table: TableLike, *, severity: str, message: str) -> TableLike:
-    n = ts_table.num_rows
-    if n == 0:
-        return empty_table(DIAG_SCHEMA)
-    path = column_or_null(ts_table, "path", pa.string())
-    bstart = column_or_null(ts_table, "start_byte", pa.int64())
-    bend = column_or_null(ts_table, "end_byte", pa.int64())
-    source_arr = const_array(n, "treesitter", dtype=pa.string())
-    message_arr = const_array(n, message, dtype=pa.string())
-    diag_id = prefixed_hash64("diag", [path, bstart, bend, source_arr, message_arr])
-    details = _empty_details_list(n)
-    severity_arr = const_array(n, severity, dtype=pa.string())
-    table = pa.Table.from_arrays(
-        [
-            column_or_null(ts_table, "file_id", pa.string()),
-            path,
-            bstart,
-            bend,
-            diag_id,
-            severity_arr,
-            message_arr,
-            source_arr,
-            const_array(n, None, dtype=pa.string()),
-            details,
-        ],
-        names=DIAG_SCHEMA.names,
-    )
-    table = encode_columns(table, specs=DIAG_ENCODING_SPECS)
-    return table.cast(DIAG_SCHEMA)
 
 
 def _scip_severity(value: object | None) -> str:
@@ -354,7 +351,7 @@ def _scip_diag_table(
         buffers.append(diag_row)
 
     if not buffers.paths:
-        return empty_table(DIAG_SCHEMA)
+        return _empty_diag_base_table()
 
     path_arr = pa.array(buffers.paths, type=pa.string())
     bstart_arr = pa.array(buffers.bstarts, type=pa.int64())
@@ -362,25 +359,21 @@ def _scip_diag_table(
     source_arr = pa.array(buffers.sources, type=pa.string())
     message_arr = pa.array(buffers.messages, type=pa.string())
     severity_arr = pa.array(buffers.severities, type=pa.string())
-    diag_id = prefixed_hash64("diag", [path_arr, bstart_arr, bend_arr, source_arr, message_arr])
     details = buffers.details_array()
-    table = pa.Table.from_arrays(
+    return pa.Table.from_arrays(
         [
             pa.array(buffers.file_ids, type=pa.string()),
             path_arr,
             bstart_arr,
             bend_arr,
-            diag_id,
             severity_arr,
             message_arr,
             source_arr,
             pa.array(buffers.codes, type=pa.string()),
             details,
         ],
-        names=DIAG_SCHEMA.names,
+        schema=_DIAG_BASE_SCHEMA,
     )
-    table = encode_columns(table, specs=DIAG_ENCODING_SPECS)
-    return table.cast(DIAG_SCHEMA)
 
 
 def _scip_doc_encodings(scip_documents: TableLike | None) -> dict[str, int]:
@@ -433,10 +426,139 @@ def _scip_diag_row(ctx: ScipDiagContext, values: _ScipDiagInput) -> _DiagRow | N
     )
 
 
+def _ts_diag_plan(
+    ts_table: TableLike,
+    *,
+    severity: str,
+    message: str,
+    ctx: ExecutionContext,
+) -> Plan:
+    plan = Plan.table_source(ts_table)
+    available = set(plan.schema(ctx=ctx).names)
+    details_scalar = pa.scalar([], type=DIAG_DETAILS_TYPE)
+    exprs = [
+        column_or_null_expr("file_id", pa.string(), available=available),
+        column_or_null_expr("path", pa.string(), available=available),
+        column_or_null_expr("start_byte", pa.int64(), available=available),
+        column_or_null_expr("end_byte", pa.int64(), available=available),
+        pc.scalar(severity),
+        pc.scalar(message),
+        pc.scalar("treesitter"),
+        pc.scalar(pa.scalar(None, type=pa.string())),
+        pc.scalar(details_scalar),
+    ]
+    return plan.project(exprs, list(_DIAG_BASE_COLUMNS), ctx=ctx)
+
+
+def _diagnostics_plan(
+    repo_text_index: RepoTextIndex,
+    *,
+    sources: DiagnosticsSources,
+    ctx: ExecutionContext,
+) -> Plan:
+    plans: list[Plan] = []
+    if sources.cst_parse_errors is not None and sources.cst_parse_errors.num_rows:
+        table = _cst_parse_error_table(repo_text_index, sources.cst_parse_errors)
+        if table.num_rows:
+            plans.append(Plan.table_source(table))
+    if sources.ts_errors is not None and sources.ts_errors.num_rows:
+        plans.append(
+            _ts_diag_plan(
+                sources.ts_errors,
+                severity="ERROR",
+                message="tree-sitter error node",
+                ctx=ctx,
+            )
+        )
+    if sources.ts_missing is not None and sources.ts_missing.num_rows:
+        plans.append(
+            _ts_diag_plan(
+                sources.ts_missing,
+                severity="WARNING",
+                message="tree-sitter missing node",
+                ctx=ctx,
+            )
+        )
+    if sources.scip_diagnostics is not None and sources.scip_diagnostics.num_rows:
+        table = _scip_diag_table(
+            repo_text_index,
+            sources.scip_diagnostics,
+            sources.scip_documents,
+        )
+        if table.num_rows:
+            plans.append(Plan.table_source(table))
+
+    if not plans:
+        plans.append(Plan.table_source(_empty_diag_base_table()))
+
+    unioned = union_all_plans(plans, label="diagnostics")
+    plan = apply_query_spec(unioned, spec=DIAG_QUERY, ctx=ctx)
+    encode_cols = encoding_columns_from_metadata(DIAG_SPEC.schema())
+    exprs, names = encoding_projection(
+        encode_cols,
+        available=plan.schema(ctx=ctx).names,
+    )
+    return plan.project(exprs, names, ctx=ctx)
+
+
+def diagnostics_post_step(
+    repo_text_index: RepoTextIndex,
+    *,
+    sources: DiagnosticsSources,
+) -> PostFn:
+    """Return a post step that builds diagnostics in the plan lane.
+
+    Returns
+    -------
+    PostFn
+        Post step that emits a diagnostics table.
+    """
+    def _apply(table: TableLike, ctx: ExecutionContext) -> TableLike:
+        _ = table
+        plan = _diagnostics_plan(repo_text_index, sources=sources, ctx=ctx)
+        return plan.to_table(ctx=ctx)
+
+    return _apply
+
+
+def collect_diags_result(
+    repo_text_index: RepoTextIndex,
+    *,
+    sources: DiagnosticsSources,
+    ctx: ExecutionContext | None = None,
+) -> FinalizeResult:
+    """Aggregate diagnostics into a single normalized table.
+
+    Parameters
+    ----------
+    repo_text_index:
+        Repo text index for line/column to byte offsets.
+    sources:
+        Diagnostics source tables.
+    ctx:
+        Optional execution context for plan compilation and finalize.
+
+    Returns
+    -------
+    FinalizeResult
+        Finalize bundle with normalized diagnostics.
+    """
+    exec_ctx = ensure_execution_context(ctx)
+    plan = _diagnostics_plan(repo_text_index, sources=sources, ctx=exec_ctx)
+    return run_normalize(
+        plan=plan,
+        post=(),
+        contract=DIAG_CONTRACT,
+        ctx=exec_ctx,
+        metadata_spec=DIAG_SPEC.metadata_spec,
+    )
+
+
 def collect_diags(
     repo_text_index: RepoTextIndex,
     *,
     sources: DiagnosticsSources,
+    ctx: ExecutionContext | None = None,
 ) -> TableLike:
     """Aggregate diagnostics into a single normalized table.
 
@@ -446,38 +568,29 @@ def collect_diags(
         Repo text index for line/column to byte offsets.
     sources:
         Diagnostics source tables.
+    ctx:
+        Optional execution context for plan compilation and finalize.
 
     Returns
     -------
     TableLike
         Normalized diagnostics table.
     """
-    parts: list[TableLike] = []
-    if sources.cst_parse_errors is not None and sources.cst_parse_errors.num_rows:
-        table = _cst_parse_error_table(repo_text_index, sources.cst_parse_errors)
-        if table.num_rows:
-            parts.append(table)
-    if sources.ts_errors is not None and sources.ts_errors.num_rows:
-        parts.append(
-            _ts_diag_table(
-                sources.ts_errors,
-                severity="ERROR",
-                message="tree-sitter error node",
-            )
-        )
-    if sources.ts_missing is not None and sources.ts_missing.num_rows:
-        parts.append(
-            _ts_diag_table(
-                sources.ts_missing,
-                severity="WARNING",
-                message="tree-sitter missing node",
-            )
-        )
-    if sources.scip_diagnostics is not None and sources.scip_diagnostics.num_rows:
-        table = _scip_diag_table(repo_text_index, sources.scip_diagnostics, sources.scip_documents)
-        if table.num_rows:
-            parts.append(table)
+    return collect_diags_result(repo_text_index, sources=sources, ctx=ctx).good
 
-    if not parts:
-        return empty_table(DIAG_SCHEMA)
-    return DIAG_SPEC.unify_tables(parts)
+
+def collect_diags_canonical(
+    repo_text_index: RepoTextIndex,
+    *,
+    sources: DiagnosticsSources,
+    ctx: ExecutionContext | None = None,
+) -> TableLike:
+    """Aggregate diagnostics under canonical determinism.
+
+    Returns
+    -------
+    TableLike
+        Canonicalized diagnostics table.
+    """
+    exec_ctx = ensure_canonical(ensure_execution_context(ctx))
+    return collect_diags_result(repo_text_index, sources=sources, ctx=exec_ctx).good

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pyarrow as pa
@@ -103,7 +103,7 @@ def cst_bundle(
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
     ctx: ExecutionContext,
-) -> dict[str, TableLike]:
+) -> Mapping[str, TableLike]:
     """Build the LibCST extraction bundle.
 
     The extractor should return a dict with keys:
@@ -142,7 +142,7 @@ def ast_bundle(
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
     ctx: ExecutionContext,
-) -> dict[str, TableLike]:
+) -> Mapping[str, TableLike]:
     """Build the Python AST extraction bundle.
 
     Returns
@@ -176,7 +176,7 @@ def scip_bundle(
     repo_root: str,
     scip_parse_options: SCIPParseOptions,
     ctx: ExecutionContext,
-) -> dict[str, TableLike]:
+) -> Mapping[str, TableLike]:
     """Build the SCIP extraction bundle.
 
     If scip_index_path is None, returns empty tables (extractor should handle).
@@ -339,7 +339,7 @@ def tree_sitter_bundle(
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
     ctx: ExecutionContext,
-) -> dict[str, TableLike]:
+) -> Mapping[str, TableLike]:
     """Extract tree-sitter nodes and diagnostics.
 
     Returns
@@ -370,7 +370,7 @@ def tree_sitter_bundle_disabled(
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
     ctx: ExecutionContext,
-) -> dict[str, TableLike]:
+) -> Mapping[str, TableLike]:
     """Return empty tree-sitter tables when extraction is disabled.
 
     Returns

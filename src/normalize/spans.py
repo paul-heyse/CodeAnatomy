@@ -8,11 +8,13 @@ from typing import Literal
 
 import pyarrow as pa
 
+from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import ArrayLike, TableLike
 from arrowdsl.schema.arrays import set_or_append_column
 from normalize.arrow_utils import column_or_null
 from normalize.ids import add_span_id_column
+from normalize.runner import PostFn
 from normalize.span_pipeline import (
     SpanOutputColumns,
     append_alias_cols,
@@ -443,6 +445,25 @@ def add_ast_byte_spans(
         ),
     )
     return add_span_id_column(out)
+
+
+def ast_span_post_step(
+    repo_index: RepoTextIndex,
+    *,
+    columns: AstSpanColumns | None = None,
+) -> PostFn:
+    """Return a post step that adds AST byte spans in the kernel lane.
+
+    Returns
+    -------
+    PostFn
+        Post step that emits AST nodes with byte spans.
+    """
+    def _apply(table: TableLike, ctx: ExecutionContext) -> TableLike:
+        _ = ctx
+        return add_ast_byte_spans(repo_index, table, columns=columns)
+
+    return _apply
 
 
 def _span_error(document_id: str, path: str, reason: str) -> dict[str, str]:

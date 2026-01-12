@@ -4,117 +4,192 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrowdsl.compute.kernels import apply_join, def_use_kind_array
-from arrowdsl.compute.predicates import And, FilterSpec, IsNull, Not
-from arrowdsl.core.ids import prefixed_hash_id
-from arrowdsl.core.interop import TableLike, pc
+from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.interop import TableLike, ensure_expression, pc
+from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.ops import JoinSpec
-from arrowdsl.schema.arrays import coalesce_string, set_or_append_column
+from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.schema import empty_table
-from normalize.arrow_utils import column_or_null, compute_array
-from normalize.ids import prefixed_hash64
-from normalize.pipeline import canonical_sort
-from normalize.schema_infer import align_table_to_schema
-from normalize.schemas import DEF_USE_SCHEMA, REACHES_SCHEMA
+from normalize.contracts import DEF_USE_CONTRACT, REACHES_CONTRACT
+from normalize.join_helpers import join_plan
+from normalize.plan_exprs import column_or_null_expr
+from normalize.plan_helpers import apply_query_spec
+from normalize.runner import ensure_canonical, ensure_execution_context, run_normalize
+from normalize.schemas import (
+    DEF_USE_QUERY,
+    DEF_USE_SPEC,
+    REACHES_QUERY,
+    REACHES_SCHEMA,
+    REACHES_SPEC,
+)
 
-USE_PREFIXES = ("LOAD_",)
-DEF_PREFIXES = ("STORE_", "DELETE_")
-DEF_OPS = ("IMPORT_NAME", "IMPORT_FROM")
+_EVENT_INPUT_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
+    ("file_id", pa.string()),
+    ("path", pa.string()),
+    ("instr_id", pa.string()),
+    ("code_unit_id", pa.string()),
+    ("opname", pa.string()),
+    ("offset", pa.int32()),
+    ("argval_str", pa.string()),
+    ("argrepr", pa.string()),
+)
 
 
-def build_def_use_events(py_bc_instructions: TableLike) -> TableLike:
+def _to_plan(table: TableLike | Plan) -> Plan:
+    if isinstance(table, Plan):
+        return table
+    return Plan.table_source(table)
+
+
+
+def def_use_events_plan(
+    py_bc_instructions: TableLike | Plan,
+    *,
+    ctx: ExecutionContext,
+) -> Plan:
+    """Build a plan-lane def/use event table.
+
+    Returns
+    -------
+    Plan
+        Plan producing def/use event rows.
+    """
+    plan = _to_plan(py_bc_instructions)
+    available = set(plan.schema(ctx=ctx).names)
+    base_names = [name for name, _ in _EVENT_INPUT_COLUMNS]
+    base_exprs = [
+        column_or_null_expr(name, dtype, available=available)
+        for name, dtype in _EVENT_INPUT_COLUMNS
+    ]
+    plan = plan.project(base_exprs, base_names, ctx=ctx)
+    plan = apply_query_spec(plan, spec=DEF_USE_QUERY, ctx=ctx)
+    valid = ensure_expression(
+        pc.and_(pc.is_valid(pc.field("symbol")), pc.is_valid(pc.field("kind")))
+    )
+    return plan.filter(valid, ctx=ctx)
+
+
+def build_def_use_events_result(
+    py_bc_instructions: TableLike,
+    *,
+    ctx: ExecutionContext | None = None,
+) -> FinalizeResult:
     """Build def/use events from bytecode instruction rows.
 
     Parameters
     ----------
     py_bc_instructions:
         Bytecode instruction table with opname and argval data.
+    ctx:
+        Optional execution context for plan compilation and finalize.
 
     Returns
     -------
-    TableLike
-        Def/use events table.
+    FinalizeResult
+        Finalize bundle with def/use events.
     """
-    if py_bc_instructions.num_rows == 0:
-        return empty_table(DEF_USE_SCHEMA)
-    if "opname" not in py_bc_instructions.column_names:
-        return empty_table(DEF_USE_SCHEMA)
-
-    table = py_bc_instructions
-    symbol_cols = [col for col in ("argval_str", "argrepr") if col in table.column_names]
-    if not symbol_cols:
-        return empty_table(DEF_USE_SCHEMA)
-    table = coalesce_string(table, symbol_cols, out_col="symbol")
-
-    kind = def_use_kind_array(
-        table["opname"],
-        def_ops=DEF_OPS,
-        def_prefixes=DEF_PREFIXES,
-        use_prefixes=USE_PREFIXES,
-    )
-    table = set_or_append_column(table, "kind", kind)
-
-    predicate = And(preds=(Not(IsNull("symbol")), Not(IsNull("kind"))))
-    table = FilterSpec(predicate).apply_kernel(table)
-    if table.num_rows == 0:
-        return empty_table(DEF_USE_SCHEMA)
-
-    event_inputs = [
-        column_or_null(table, "code_unit_id", pa.string()),
-        column_or_null(table, "instr_id", pa.string()),
-        table["kind"],
-        table["symbol"],
-    ]
-    event_id = prefixed_hash_id(event_inputs, prefix="df_event")
-
-    return pa.Table.from_arrays(
-        [
-            column_or_null(table, "file_id", pa.string()),
-            column_or_null(table, "path", pa.string()),
-            event_id,
-            column_or_null(table, "instr_id", pa.string()),
-            column_or_null(table, "code_unit_id", pa.string()),
-            table["kind"],
-            table["symbol"],
-            column_or_null(table, "opname", pa.string()),
-            column_or_null(table, "offset", pa.int32()),
-        ],
-        schema=DEF_USE_SCHEMA,
+    exec_ctx = ensure_execution_context(ctx)
+    plan = def_use_events_plan(py_bc_instructions, ctx=exec_ctx)
+    return run_normalize(
+        plan=plan,
+        post=(),
+        contract=DEF_USE_CONTRACT,
+        ctx=exec_ctx,
+        metadata_spec=DEF_USE_SPEC.metadata_spec,
     )
 
 
-def run_reaching_defs(def_use_events: TableLike) -> TableLike:
-    """Compute a best-effort reaching-defs edge table.
-
-    This is a conservative, symbol-matching approximation that joins definitions to uses
-    within the same code unit. It is deterministic and safe for early-stage analysis.
+def build_def_use_events(
+    py_bc_instructions: TableLike,
+    *,
+    ctx: ExecutionContext | None = None,
+) -> TableLike:
+    """Build def/use events from bytecode instruction rows.
 
     Parameters
     ----------
-    def_use_events:
-        Def/use events table.
+    py_bc_instructions:
+        Bytecode instruction table with opname and argval data.
+    ctx:
+        Optional execution context for plan compilation and finalize.
 
     Returns
     -------
     TableLike
-        Reaching-def edges table.
+        Def/use events table.
     """
-    if def_use_events.num_rows == 0:
-        return empty_table(REACHES_SCHEMA)
+    return build_def_use_events_result(py_bc_instructions, ctx=ctx).good
 
-    defs = _build_def_use_table(def_use_events, kind="def", event_col="def_event_id")
-    if defs.num_rows == 0:
-        return empty_table(REACHES_SCHEMA)
-    uses = _build_def_use_table(
-        def_use_events,
+
+def build_def_use_events_canonical(
+    py_bc_instructions: TableLike,
+    *,
+    ctx: ExecutionContext | None = None,
+) -> TableLike:
+    """Build def/use events under canonical determinism.
+
+    Returns
+    -------
+    TableLike
+        Canonicalized def/use events table.
+    """
+    exec_ctx = ensure_canonical(ensure_execution_context(ctx))
+    return build_def_use_events_result(py_bc_instructions, ctx=exec_ctx).good
+
+
+def _def_use_subset_plan(
+    plan: Plan,
+    *,
+    kind: str,
+    event_col: str,
+    include_meta: bool,
+    ctx: ExecutionContext,
+) -> Plan:
+    predicate = ensure_expression(pc.equal(pc.field("kind"), pc.scalar(kind)))
+    plan = plan.filter(predicate, ctx=ctx)
+
+    names = ["code_unit_id", "symbol", event_col]
+    exprs = [pc.field("code_unit_id"), pc.field("symbol"), pc.field("event_id")]
+    if include_meta:
+        names.extend(["path", "file_id"])
+        exprs.extend([pc.field("path"), pc.field("file_id")])
+    return plan.project(exprs, names, ctx=ctx)
+
+
+def reaching_defs_plan(
+    def_use_events: TableLike | Plan,
+    *,
+    ctx: ExecutionContext,
+) -> Plan:
+    """Build a plan-lane reaching-defs edge table.
+
+    Returns
+    -------
+    Plan
+        Plan producing reaching-def edges.
+    """
+    plan = _to_plan(def_use_events)
+    available = set(plan.schema(ctx=ctx).names)
+    required = {"kind", "code_unit_id", "symbol", "event_id"}
+    if not required.issubset(available):
+        return Plan.table_source(empty_table(REACHES_SCHEMA))
+
+    defs = _def_use_subset_plan(
+        plan,
+        kind="def",
+        event_col="def_event_id",
+        include_meta=False,
+        ctx=ctx,
+    )
+    uses = _def_use_subset_plan(
+        plan,
         kind="use",
         event_col="use_event_id",
         include_meta=True,
+        ctx=ctx,
     )
-    if uses.num_rows == 0:
-        return empty_table(REACHES_SCHEMA)
 
-    joined = apply_join(
+    joined = join_plan(
         defs,
         uses,
         spec=JoinSpec(
@@ -124,64 +199,95 @@ def run_reaching_defs(def_use_events: TableLike) -> TableLike:
             left_output=("code_unit_id", "symbol", "def_event_id"),
             right_output=("use_event_id", "path", "file_id"),
         ),
-        use_threads=True,
-    )
-    if joined.num_rows == 0:
-        return empty_table(REACHES_SCHEMA)
-
-    edge_ids = prefixed_hash64(
-        "df_reach",
-        [joined["def_event_id"], joined["use_event_id"]],
-    )
-    out = set_or_append_column(joined, "edge_id", edge_ids)
-    out = align_table_to_schema(out, REACHES_SCHEMA)
-    return canonical_sort(
-        out,
-        sort_keys=[
-            ("code_unit_id", "ascending"),
-            ("symbol", "ascending"),
-            ("def_event_id", "ascending"),
-            ("use_event_id", "ascending"),
-        ],
+        ctx=ctx,
     )
 
+    if not isinstance(joined, Plan):
+        joined = Plan.table_source(joined)
+    return apply_query_spec(joined, spec=REACHES_QUERY, ctx=ctx)
 
-def _build_def_use_table(
+
+def run_reaching_defs_result(
     def_use_events: TableLike,
     *,
-    kind: str,
-    event_col: str,
-    include_meta: bool = False,
+    ctx: ExecutionContext | None = None,
+) -> FinalizeResult:
+    """Compute a best-effort reaching-defs edge table.
+
+    This is a conservative, symbol-matching approximation that joins definitions to uses
+    within the same code unit. It is deterministic and safe for early-stage analysis.
+
+    Parameters
+    ----------
+    def_use_events:
+        Def/use events table.
+    ctx:
+        Optional execution context for plan compilation and finalize.
+
+    Returns
+    -------
+    FinalizeResult
+        Finalize bundle with reaching-def edges.
+    """
+    exec_ctx = ensure_execution_context(ctx)
+    plan = reaching_defs_plan(def_use_events, ctx=exec_ctx)
+    return run_normalize(
+        plan=plan,
+        post=(),
+        contract=REACHES_CONTRACT,
+        ctx=exec_ctx,
+        metadata_spec=REACHES_SPEC.metadata_spec,
+    )
+
+
+def run_reaching_defs(
+    def_use_events: TableLike,
+    *,
+    ctx: ExecutionContext | None = None,
 ) -> TableLike:
-    kind_arr = column_or_null(def_use_events, "kind", pa.string())
-    mask = pc.equal(kind_arr, pa.scalar(kind))
-    table = def_use_events.filter(mask)
-    if table.num_rows == 0:
-        names = ["code_unit_id", "symbol", event_col]
-        if include_meta:
-            names.extend(["path", "file_id"])
-        return pa.Table.from_arrays(
-            [pa.array([], type=pa.string()) for _ in names],
-            names=names,
-        )
+    """Compute a best-effort reaching-defs edge table.
 
-    code_unit = column_or_null(table, "code_unit_id", pa.string())
-    symbol = column_or_null(table, "symbol", pa.string())
-    event_id = column_or_null(table, "event_id", pa.string())
-    valid = pc.and_(pc.is_valid(code_unit), pc.and_(pc.is_valid(symbol), pc.is_valid(event_id)))
+    This is a conservative, symbol-matching approximation that joins definitions to uses
+    within the same code unit. It is deterministic and safe for early-stage analysis.
 
-    arrays = [
-        compute_array("filter", [code_unit, valid]),
-        compute_array("filter", [symbol, valid]),
-        compute_array("filter", [event_id, valid]),
-    ]
-    names = ["code_unit_id", "symbol", event_col]
-    if include_meta:
-        arrays.extend(
-            [
-                compute_array("filter", [column_or_null(table, "path", pa.string()), valid]),
-                compute_array("filter", [column_or_null(table, "file_id", pa.string()), valid]),
-            ]
-        )
-        names.extend(["path", "file_id"])
-    return pa.Table.from_arrays(arrays, names=names)
+    Parameters
+    ----------
+    def_use_events:
+        Def/use events table.
+    ctx:
+        Optional execution context for plan compilation and finalize.
+
+    Returns
+    -------
+    TableLike
+        Reaching-def edges table.
+    """
+    return run_reaching_defs_result(def_use_events, ctx=ctx).good
+
+
+def run_reaching_defs_canonical(
+    def_use_events: TableLike,
+    *,
+    ctx: ExecutionContext | None = None,
+) -> TableLike:
+    """Compute reaching-def edges under canonical determinism.
+
+    Returns
+    -------
+    TableLike
+        Canonicalized reaching-def edges.
+    """
+    exec_ctx = ensure_canonical(ensure_execution_context(ctx))
+    return run_reaching_defs_result(def_use_events, ctx=exec_ctx).good
+
+
+__all__ = [
+    "build_def_use_events",
+    "build_def_use_events_canonical",
+    "build_def_use_events_result",
+    "def_use_events_plan",
+    "reaching_defs_plan",
+    "run_reaching_defs",
+    "run_reaching_defs_canonical",
+    "run_reaching_defs_result",
+]

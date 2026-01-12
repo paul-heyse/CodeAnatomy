@@ -7,9 +7,13 @@ from dataclasses import dataclass, field
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
+from arrowdsl.plan.plan import Plan
 
 type TableGetter = Callable[[Mapping[str, TableLike]], TableLike | None]
 type TableDeriver = Callable[[TableCatalog, ExecutionContext], TableLike | None]
+type PlanSource = Plan | TableLike
+type PlanGetter = Callable[[Mapping[str, PlanSource]], PlanSource | None]
+type PlanDeriver = Callable[[PlanCatalog, ExecutionContext], PlanSource | None]
 
 
 @dataclass(frozen=True)
@@ -77,4 +81,91 @@ class TableCatalog:
         return dict(self.tables)
 
 
-__all__ = ["TableCatalog", "TableGetter", "TableRef"]
+@dataclass(frozen=True)
+class PlanRef:
+    """Reference to a plan source, optionally derived on demand."""
+
+    name: str
+    derive: PlanDeriver | None = None
+
+    def getter(self) -> PlanGetter:
+        """Return a PlanGetter for use in plan spec objects.
+
+        Returns
+        -------
+        PlanGetter
+            Getter that looks up the plan source by name.
+        """
+
+        def _get(tables: Mapping[str, PlanSource]) -> Plan | None:
+            value = tables.get(self.name)
+            if isinstance(value, Plan):
+                return value
+            if value is None:
+                return None
+            return Plan.table_source(value, label=self.name)
+
+        return _get
+
+
+@dataclass
+class PlanCatalog:
+    """Mutable plan registry for build steps and derived sources."""
+
+    tables: dict[str, PlanSource] = field(default_factory=dict)
+
+    def add(self, name: str, table: PlanSource | None) -> None:
+        """Add a plan source when present."""
+        if table is not None:
+            self.tables[name] = table
+
+    def extend(self, tables: Mapping[str, PlanSource]) -> None:
+        """Add multiple plan sources to the catalog."""
+        self.tables.update(tables)
+
+    def resolve(self, ref: PlanRef, *, ctx: ExecutionContext) -> Plan | None:
+        """Resolve a plan source, deriving it if needed.
+
+        Returns
+        -------
+        Plan | None
+            Resolved plan or ``None`` when unavailable.
+        """
+        if ref.name in self.tables:
+            existing = self.tables[ref.name]
+            if isinstance(existing, Plan):
+                return existing
+            plan = Plan.table_source(existing, label=ref.name)
+            self.tables[ref.name] = plan
+            return plan
+        if ref.derive is None:
+            return None
+        derived = ref.derive(self, ctx)
+        if derived is None:
+            return None
+        plan = derived if isinstance(derived, Plan) else Plan.table_source(derived, label=ref.name)
+        self.tables[ref.name] = plan
+        return plan
+
+    def snapshot(self) -> dict[str, PlanSource]:
+        """Return a shallow copy of the catalog sources.
+
+        Returns
+        -------
+        dict[str, PlanSource]
+            Shallow copy of catalog sources.
+        """
+        return dict(self.tables)
+
+
+__all__ = [
+    "PlanCatalog",
+    "PlanDeriver",
+    "PlanGetter",
+    "PlanRef",
+    "PlanSource",
+    "TableCatalog",
+    "TableDeriver",
+    "TableGetter",
+    "TableRef",
+]

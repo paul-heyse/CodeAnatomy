@@ -977,7 +977,6 @@ def extract_symtables_table(
     repo_root: str | None,
     repo_files: TableLike,
     file_contexts: Iterable[FileContext] | None = None,
-    options: SymtableExtractOptions | None = None,
     ctx: ExecutionContext | None = None,
     prefer_reader: Literal[False] = False,
 ) -> TableLike: ...
@@ -989,7 +988,6 @@ def extract_symtables_table(
     repo_root: str | None,
     repo_files: TableLike,
     file_contexts: Iterable[FileContext] | None = None,
-    options: SymtableExtractOptions | None = None,
     ctx: ExecutionContext | None = None,
     prefer_reader: Literal[True],
 ) -> TableLike | RecordBatchReaderLike: ...

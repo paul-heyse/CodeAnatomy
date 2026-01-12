@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from arrowdsl.core.interop import TableLike
-from cpg.catalog import TableGetter
+from arrowdsl.plan.plan import Plan
+from cpg.catalog import PlanGetter
 from cpg.kinds import EdgeKind, EntityKind, NodeKind
 
 type TableFilter = Callable[[TableLike], TableLike]
+type PropValueType = Literal["string", "int", "float", "bool", "json"]
 
 
 class PropOptions(Protocol):
@@ -45,7 +47,7 @@ class EdgePlanSpec(BaseModel):
 
     name: str
     option_flag: str
-    relation_getter: TableGetter
+    relation_getter: PlanGetter
     emit: EdgeEmitSpec
     filter_fn: TableFilter | None = None
 
@@ -70,9 +72,9 @@ class NodePlanSpec(BaseModel):
 
     name: str
     option_flag: str
-    table_getter: TableGetter
+    table_getter: PlanGetter
     emit: NodeEmitSpec
-    preprocessor: Callable[[TableLike], TableLike] | None = None
+    preprocessor: Callable[[Plan], Plan] | None = None
 
 
 class PropFieldSpec(BaseModel):
@@ -86,6 +88,7 @@ class PropFieldSpec(BaseModel):
     transform: Callable[[object | None], object | None] | None = None
     include_if: Callable[[PropOptions], bool] | None = None
     skip_if_none: bool = False
+    value_type: PropValueType | None = None
 
     def value_from(self, row: Mapping[str, object]) -> object | None:
         """Return the value to emit for this field.
@@ -118,7 +121,7 @@ class PropTableSpec(BaseModel):
 
     name: str
     option_flag: str
-    table_getter: TableGetter
+    table_getter: PlanGetter
     entity_kind: EntityKind
     id_cols: tuple[str, ...]
     node_kind: NodeKind | None = None

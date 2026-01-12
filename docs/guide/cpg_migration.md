@@ -5,15 +5,18 @@ architecture introduced in `cpg_dedup_acero_plan.md`.
 
 ## Key changes
 
+- **Plan-first pipeline:** node/edge/prop builders emit Acero-backed plans and
+  materialize only at the finalize boundary.
 - **Unified family specs:** node/prop specs are generated from a single
   `EntityFamilySpec` registry to prevent drift.
-- **Table catalog:** CPG builders now assemble input tables via a shared
-  `TableCatalog`, including derived tables.
-- **Relation registry:** edge relations are built from `EDGE_RELATION_SPECS`
-  instead of per-file ad hoc helpers.
-- **Defaults + schema unification:** edge defaults are filled per-row and schema
-  unification is centralized.
-- **Quality artifacts:** invalid IDs are captured in dedicated quality tables.
+- **Plan catalog:** CPG builders assemble inputs via `PlanCatalog` and `PlanRef`,
+  including derived plan sources (file nodes, symbol nodes, qname fallback).
+- **Vectorized emission:** nodes, edges, and props are projected with plan-lane
+  expressions (`pc.coalesce`, `hash_expression`, `projection_for_schema`).
+- **UDF-backed transforms:** `expr_context` normalization and JSON serialization
+  run through Arrow compute UDFs instead of row-level loops.
+- **Quality artifacts:** invalid IDs are captured in plan-lane quality tables and
+  materialized alongside finalized outputs.
 
 ## API changes
 
@@ -24,6 +27,12 @@ The `build_cpg_*` functions now return `CpgBuildArtifacts`, which contains:
 
 Downstream consumers should access the final tables via
 `result.finalize.good`.
+
+Plan-returning surfaces now require an execution context:
+
+- `build_cpg_nodes_raw(ctx=..., ...) -> Plan`
+- `build_cpg_edges_raw(ctx=..., ...) -> Plan`
+- `build_cpg_props_raw(ctx=..., ...) -> Plan`
 
 ## Hamilton artifacts
 

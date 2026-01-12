@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import arrowdsl.core.interop as pa
+from arrowdsl.core.context import ExecutionContext, RuntimeProfile
+from arrowdsl.plan.plan import PlanSpec
 from cpg.build_props import PropsInputTables, build_cpg_props_raw
 from cpg.kinds import SCIP_ROLE_FORWARD_DEFINITION, SCIP_ROLE_GENERATED, SCIP_ROLE_TEST
 
@@ -15,7 +17,9 @@ def test_scip_role_props() -> None:
         {"symbol": "sym2", "symbol_roles": SCIP_ROLE_FORWARD_DEFINITION},
     ]
     scip_occurrences = pa.Table.from_pylist(rows)
-    props = build_cpg_props_raw(inputs=PropsInputTables(scip_occurrences=scip_occurrences))
+    ctx = ExecutionContext(runtime=RuntimeProfile(name="TEST"))
+    plan = build_cpg_props_raw(ctx=ctx, inputs=PropsInputTables(scip_occurrences=scip_occurrences))
+    props = PlanSpec.from_plan(plan).to_table(ctx=ctx)
     prop_keys = {(row["entity_id"], row["prop_key"]) for row in props.to_pylist()}
     assert ("sym1", "scip_role_generated") in prop_keys
     assert ("sym1", "scip_role_test") in prop_keys

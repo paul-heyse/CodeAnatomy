@@ -6,21 +6,22 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from arrowdsl.compute.kernels import (
-    apply_aggregate,
-    bitmask_flag_array,
-    cast_array,
-    coalesce_arrays,
-)
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike
-from arrowdsl.plan.ops import AggregateSpec
-from arrowdsl.schema.arrays import set_or_append_column
+from arrowdsl.core.interop import ComputeExpression, TableLike, ensure_expression, pc
+from arrowdsl.plan.plan import Plan, union_all_plans
+from arrowdsl.schema.schema import EncodingSpec
 from cpg.artifacts import CpgBuildArtifacts
-from cpg.builders import PropBuilder
-from cpg.catalog import TableCatalog
-from cpg.quality import quality_from_ids
-from cpg.schemas import CPG_PROPS_SCHEMA, CPG_PROPS_SPEC, SCHEMA_VERSION, empty_props
+from cpg.catalog import PlanCatalog
+from cpg.emit_props import emit_props_plans, filter_fields
+from cpg.plan_helpers import (
+    align_plan,
+    empty_plan,
+    ensure_plan,
+    finalize_plan,
+    set_or_append_column,
+)
+from cpg.quality import QualityPlanSpec, quality_plan_from_ids
+from cpg.schemas import CPG_PROPS_SCHEMA, CPG_PROPS_SPEC, SCHEMA_VERSION
 from cpg.spec_registry import (
     ROLE_FLAG_SPECS,
     edge_prop_spec,
@@ -30,43 +31,49 @@ from cpg.spec_registry import (
 from cpg.specs import PropTableSpec
 
 
-def _defs_table(table: TableLike | None) -> TableLike | None:
-    if table is None or table.num_rows == 0:
-        return None
-    cols = [col for col in ("def_kind", "kind") if col in table.column_names]
-    if cols:
-        arrays = [table[col] for col in cols]
-        def_kind = coalesce_arrays(arrays)
+def _defs_plan(plan: Plan, *, ctx: ExecutionContext) -> Plan:
+    schema = plan.schema(ctx=ctx)
+    available = set(schema.names)
+    exprs = [
+        ensure_expression(pc.cast(pc.field(col), pa.string(), safe=False))
+        for col in ("def_kind", "kind")
+        if col in available
+    ]
+    if not exprs:
+        expr = ensure_expression(pc.cast(pc.scalar(None), pa.string(), safe=False))
+    elif len(exprs) == 1:
+        expr = exprs[0]
     else:
-        def_kind = pa.nulls(table.num_rows, type=pa.string())
-    return set_or_append_column(table, "def_kind_norm", def_kind)
+        expr = ensure_expression(pc.coalesce(*exprs))
+    return set_or_append_column(plan, name="def_kind_norm", expr=expr, ctx=ctx)
 
 
-def _scip_role_flags_table(scip_occurrences: TableLike | None) -> TableLike | None:
-    if (
-        scip_occurrences is None
-        or scip_occurrences.num_rows == 0
-        or "symbol" not in scip_occurrences.column_names
-        or "symbol_roles" not in scip_occurrences.column_names
-    ):
+def _scip_role_flags_plan(scip_occurrences: Plan, *, ctx: ExecutionContext) -> Plan | None:
+    schema = scip_occurrences.schema(ctx=ctx)
+    available = set(schema.names)
+    if "symbol" not in available or "symbol_roles" not in available:
         return None
-
-    symbols = cast_array(scip_occurrences["symbol"], pa.string())
-    roles = scip_occurrences["symbol_roles"]
-    flag_arrays: list[ArrayLike | ChunkedArrayLike] = []
+    role_expr = pc.cast(pc.field("symbol_roles"), pa.int64(), safe=False)
+    flag_exprs: list[ComputeExpression] = []
     flag_names: list[str] = []
     for name, mask, _ in ROLE_FLAG_SPECS:
-        flag_arrays.append(bitmask_flag_array(roles, mask=mask))
+        hit = pc.not_equal(pc.bit_wise_and(role_expr, pa.scalar(mask)), pa.scalar(0))
+        flag_exprs.append(ensure_expression(pc.cast(hit, pa.int32(), safe=False)))
         flag_names.append(name)
-
-    flags_table = pa.Table.from_arrays([symbols, *flag_arrays], names=["symbol", *flag_names])
-    spec = AggregateSpec(
-        keys=("symbol",),
-        aggs=tuple((name, "max") for name in flag_names),
-        use_threads=True,
-        rename_aggregates=True,
+    project_exprs = [
+        ensure_expression(pc.cast(pc.field("symbol"), pa.string(), safe=False)),
+        *flag_exprs,
+    ]
+    project_names = ["symbol", *flag_names]
+    projected = scip_occurrences.project(project_exprs, project_names, ctx=ctx)
+    aggregated = projected.aggregate(
+        group_keys=("symbol",),
+        aggs=[(name, "max") for name in flag_names],
+        ctx=ctx,
     )
-    return apply_aggregate(flags_table, spec=spec)
+    rename_exprs = [pc.field("symbol")] + [pc.field(f"{name}_max") for name in flag_names]
+    rename_names = ["symbol", *flag_names]
+    return aggregated.project(rename_exprs, rename_names, ctx=ctx)
 
 
 PROP_TABLE_SPECS: tuple[PropTableSpec, ...] = (
@@ -75,11 +82,7 @@ PROP_TABLE_SPECS: tuple[PropTableSpec, ...] = (
     edge_prop_spec(),
 )
 
-PROP_BUILDER = PropBuilder(
-    table_specs=PROP_TABLE_SPECS,
-    schema_version=SCHEMA_VERSION,
-    prop_schema=CPG_PROPS_SCHEMA,
-)
+PROP_ENCODING_SPECS: tuple[EncodingSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -117,8 +120,12 @@ class PropsInputTables:
     cpg_edges: TableLike | None = None
 
 
-def _prop_tables(inputs: PropsInputTables) -> dict[str, TableLike]:
-    catalog = TableCatalog()
+def _prop_tables(
+    inputs: PropsInputTables,
+    *,
+    ctx: ExecutionContext,
+) -> dict[str, TableLike | Plan]:
+    catalog = PlanCatalog()
     catalog.extend(
         {
             name: table
@@ -147,35 +154,79 @@ def _prop_tables(inputs: PropsInputTables) -> dict[str, TableLike]:
     )
 
     if inputs.cst_defs is not None:
-        catalog.add("cst_defs", inputs.cst_defs)
-        defs_norm = _defs_table(inputs.cst_defs)
+        defs_plan = Plan.table_source(inputs.cst_defs, label="cst_defs")
+        defs_norm = _defs_plan(defs_plan, ctx=ctx)
+        catalog.add("cst_defs", defs_plan)
         catalog.add("cst_defs_norm", defs_norm)
 
-    scip_role_flags = _scip_role_flags_table(inputs.scip_occurrences)
-    catalog.add("scip_role_flags", scip_role_flags)
+    if inputs.scip_occurrences is not None:
+        occ_plan = Plan.table_source(inputs.scip_occurrences, label="scip_occurrences")
+        scip_role_flags = _scip_role_flags_plan(occ_plan, ctx=ctx)
+        if scip_role_flags is not None:
+            catalog.add("scip_role_flags", scip_role_flags)
     return catalog.snapshot()
 
 
 def build_cpg_props_raw(
     *,
+    ctx: ExecutionContext,
     inputs: PropsInputTables | None = None,
     options: PropsBuildOptions | None = None,
-) -> TableLike:
-    """Build CPG properties without finalization.
+) -> Plan:
+    """Build CPG properties as a plan without finalization.
 
     Returns
     -------
-    pyarrow.Table
-        Raw properties table.
+    Plan
+        Plan producing the raw properties table.
+
+    Raises
+    ------
+    ValueError
+        Raised when an option flag is missing.
     """
     options = options or PropsBuildOptions()
-    tables = _prop_tables(inputs or PropsInputTables())
-    out = PROP_BUILDER.build(tables=tables, options=options)
+    tables = _prop_tables(inputs or PropsInputTables(), ctx=ctx)
+    plans: list[Plan] = []
+    include_schema_version = "schema_version" in CPG_PROPS_SCHEMA.names
+    schema_version = SCHEMA_VERSION if include_schema_version else None
+    for spec in PROP_TABLE_SPECS:
+        enabled = getattr(options, spec.option_flag, None)
+        if enabled is None:
+            msg = f"Unknown option flag: {spec.option_flag}"
+            raise ValueError(msg)
+        if not enabled:
+            continue
+        if spec.include_if is not None and not spec.include_if(options):
+            continue
+        plan_source = spec.table_getter(tables)
+        if plan_source is None:
+            continue
+        plan = ensure_plan(plan_source, label=spec.name)
+        filtered_fields = filter_fields(spec.fields, options=options)
+        if not filtered_fields and spec.node_kind is None:
+            continue
+        if filtered_fields != list(spec.fields):
+            updated_spec = spec.model_copy(update={"fields": tuple(filtered_fields)})
+        else:
+            updated_spec = spec
+        plans.extend(
+            emit_props_plans(
+                plan,
+                spec=updated_spec,
+                schema_version=schema_version,
+                ctx=ctx,
+            )
+        )
 
-    if out.num_rows == 0:
-        return empty_props()
+    if not plans:
+        return empty_plan(CPG_PROPS_SCHEMA, label="cpg_props_raw")
 
-    return out
+    return align_plan(
+        union_all_plans(plans, label="cpg_props_raw"),
+        schema=CPG_PROPS_SCHEMA,
+        ctx=ctx,
+    )
 
 
 def build_cpg_props(
@@ -191,13 +242,18 @@ def build_cpg_props(
     CpgBuildArtifacts
         Finalize result plus quality table.
     """
-    raw = build_cpg_props_raw(inputs=inputs, options=options)
-    quality = quality_from_ids(
-        raw,
-        id_col="entity_id",
-        entity_kind="prop",
-        issue="invalid_entity_id",
-        source_table="cpg_props_raw",
+    raw_plan = build_cpg_props_raw(ctx=ctx, inputs=inputs, options=options)
+    quality_plan = quality_plan_from_ids(
+        raw_plan,
+        spec=QualityPlanSpec(
+            id_col="entity_id",
+            entity_kind="prop",
+            issue="invalid_entity_id",
+            source_table="cpg_props_raw",
+        ),
+        ctx=ctx,
     )
+    raw = finalize_plan(raw_plan, ctx=ctx)
+    quality = finalize_plan(quality_plan, ctx=ctx)
     finalize = CPG_PROPS_SPEC.finalize_context(ctx).run(raw, ctx=ctx)
     return CpgBuildArtifacts(finalize=finalize, quality=quality)

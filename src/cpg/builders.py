@@ -11,6 +11,7 @@ import pyarrow.types as patypes
 
 from arrowdsl.compute.kernels import ChunkPolicy
 from arrowdsl.compute.predicates import FilterSpec, IsNull, Not
+from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_arrays, prefixed_hash_id
 from arrowdsl.core.interop import (
     ArrayLike,
@@ -20,6 +21,7 @@ from arrowdsl.core.interop import (
     TableLike,
     pc,
 )
+from arrowdsl.plan.plan import Plan, PlanSpec
 from arrowdsl.schema.arrays import const_array
 from cpg.defaults import fill_nulls_float, fill_nulls_string
 from cpg.kinds import EntityKind
@@ -34,6 +36,12 @@ from cpg.specs import (
 
 type PropValue = object | None
 type PropRow = dict[str, object]
+
+
+def _materialize_source(source: TableLike | Plan, *, ctx: ExecutionContext) -> TableLike:
+    if isinstance(source, Plan):
+        return PlanSpec.from_plan(source).to_table(ctx=ctx)
+    return source
 
 
 def _maybe_dictionary(
@@ -246,8 +254,9 @@ class EdgeBuilder:
     def build(
         self,
         *,
-        tables: Mapping[str, TableLike],
+        tables: Mapping[str, TableLike | Plan],
         options: object,
+        ctx: ExecutionContext,
     ) -> list[TableLike]:
         """Build edge tables from configured emitters.
 
@@ -269,8 +278,12 @@ class EdgeBuilder:
                 raise ValueError(msg)
             if not enabled:
                 continue
-            rel = emitter.relation_getter(tables)
-            if rel is None or rel.num_rows == 0:
+            source = emitter.relation_getter(tables)
+            if source is None:
+                continue
+            plan = source if isinstance(source, Plan) else Plan.table_source(source, label=emitter.name)
+            rel = _materialize_source(plan, ctx=ctx)
+            if rel.num_rows == 0:
                 continue
             if emitter.filter_fn is not None:
                 rel = emitter.filter_fn(rel)
@@ -348,8 +361,9 @@ class NodeBuilder:
     def build(
         self,
         *,
-        tables: Mapping[str, TableLike],
+        tables: Mapping[str, TableLike | Plan],
         options: object,
+        ctx: ExecutionContext,
     ) -> list[TableLike]:
         """Build node tables from configured emitters.
 
@@ -371,13 +385,15 @@ class NodeBuilder:
                 raise ValueError(msg)
             if not enabled:
                 continue
-            table = emitter.table_getter(tables)
-            if table is None or table.num_rows == 0:
+            source = emitter.table_getter(tables)
+            if source is None:
                 continue
+            plan = source if isinstance(source, Plan) else Plan.table_source(source, label=emitter.name)
             if emitter.preprocessor is not None:
-                table = emitter.preprocessor(table)
-                if table.num_rows == 0:
-                    continue
+                plan = emitter.preprocessor(plan)
+            table = _materialize_source(plan, ctx=ctx)
+            if table.num_rows == 0:
+                continue
             parts.append(
                 emit_nodes_from_table(
                     table,
@@ -457,8 +473,9 @@ class PropBuilder:
     def build(
         self,
         *,
-        tables: Mapping[str, TableLike],
+        tables: Mapping[str, TableLike | Plan],
         options: PropOptions,
+        ctx: ExecutionContext,
     ) -> TableLike:
         """Build property table from configured specs.
 
@@ -469,7 +486,7 @@ class PropBuilder:
         """
         rows: list[PropRow] = []
         for spec in self._table_specs:
-            table = self._table_for_spec(spec, tables=tables, options=options)
+            table = self._table_for_spec(spec, tables=tables, options=options, ctx=ctx)
             if table is None:
                 continue
             self._emit_props_for_table(
@@ -485,8 +502,9 @@ class PropBuilder:
     def _table_for_spec(
         spec: PropTableSpec,
         *,
-        tables: Mapping[str, TableLike],
+        tables: Mapping[str, TableLike | Plan],
         options: PropOptions,
+        ctx: ExecutionContext,
     ) -> TableLike | None:
         enabled = getattr(options, spec.option_flag, None)
         if enabled is None:
@@ -496,8 +514,11 @@ class PropBuilder:
             return None
         if spec.include_if is not None and not spec.include_if(options):
             return None
-        table = spec.table_getter(tables)
-        if table is None or table.num_rows == 0:
+        source = spec.table_getter(tables)
+        if source is None:
+            return None
+        table = _materialize_source(source, ctx=ctx)
+        if table.num_rows == 0:
             return None
         return table
 

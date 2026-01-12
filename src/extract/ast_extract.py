@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal, overload
 
@@ -397,7 +397,7 @@ def extract_ast_tables(
     file_contexts: Iterable[FileContext] | None = None,
     ctx: ExecutionContext | None = None,
     prefer_reader: Literal[False] = False,
-) -> dict[str, TableLike]: ...
+) -> Mapping[str, TableLike]: ...
 
 
 @overload
@@ -408,7 +408,7 @@ def extract_ast_tables(
     file_contexts: Iterable[FileContext] | None = None,
     ctx: ExecutionContext | None = None,
     prefer_reader: Literal[True],
-) -> dict[str, TableLike | RecordBatchReaderLike]: ...
+) -> Mapping[str, TableLike | RecordBatchReaderLike]: ...
 
 
 def extract_ast_tables(
@@ -418,7 +418,7 @@ def extract_ast_tables(
     file_contexts: Iterable[FileContext] | None = None,
     ctx: ExecutionContext | None = None,
     prefer_reader: bool = False,
-) -> dict[str, TableLike | RecordBatchReaderLike]:
+) -> Mapping[str, TableLike | RecordBatchReaderLike]:
     """Extract AST tables as a name-keyed bundle.
 
     Parameters

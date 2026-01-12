@@ -11,7 +11,8 @@ import pyarrow as pa
 import pyarrow.types as patypes
 
 from arrowdsl.core.interop import DataTypeLike, FieldLike, SchemaLike, TableLike
-from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaTransform
+from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec, SchemaTransform
+from normalize.plan_helpers import flatten_struct_field
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,31 @@ def _prefer_arrow_nested(base: SchemaLike, merged: SchemaLike) -> SchemaLike:
     return pa.schema(fields)
 
 
+def _metadata_spec_from_schema(schema: SchemaLike) -> SchemaMetadataSpec:
+    """Capture schema/field metadata for inheritance during schema unification.
+
+    Notes
+    -----
+    Metadata is inherited from the first schema supplied to ``unify_schemas``. Struct child
+    metadata is propagated by flattening struct fields into child entries.
+
+    Returns
+    -------
+    SchemaMetadataSpec
+        Metadata specification derived from the schema.
+    """
+    schema_meta = dict(schema.metadata or {})
+    field_meta: dict[str, dict[bytes, bytes]] = {}
+    for field in schema:
+        if field.metadata is not None:
+            field_meta[field.name] = dict(field.metadata)
+        if patypes.is_struct(field.type):
+            for child in flatten_struct_field(field):
+                if child.metadata is not None:
+                    field_meta[child.name] = dict(child.metadata)
+    return SchemaMetadataSpec(schema_metadata=schema_meta, field_metadata=field_meta)
+
+
 def unify_schemas(
     schemas: Sequence[SchemaLike], opts: SchemaInferOptions | None = None
 ) -> SchemaLike:
@@ -91,6 +117,7 @@ def unify_schemas(
     -----
       - pa.unify_schemas supports promote_options in modern pyarrow.
       - we fall back if the runtime pyarrow is older.
+      - metadata is inherited from the first schema in the list.
 
     Returns
     -------
@@ -98,8 +125,11 @@ def unify_schemas(
         Unified schema.
     """
     opts = opts or SchemaInferOptions()
+    if not schemas:
+        return pa.schema([])
     evolution = SchemaEvolutionSpec(promote_options=opts.promote_options)
-    return evolution.unify_schema_from_schemas(schemas)
+    unified = evolution.unify_schema_from_schemas(schemas)
+    return _metadata_spec_from_schema(schemas[0]).apply(unified)
 
 
 def infer_schema_from_tables(
@@ -113,23 +143,29 @@ def infer_schema_from_tables(
         Unified schema inferred from the input tables.
     """
     opts = opts or SchemaInferOptions()
+    present = [t for t in tables if t is not None]
     evolution = SchemaEvolutionSpec(promote_options=opts.promote_options)
-    arrow_schema = evolution.unify_schema([t for t in tables if t is not None])
+    arrow_schema = evolution.unify_schema(present)
     if not opts.use_pandera_infer:
-        return arrow_schema
+        if not present:
+            return arrow_schema
+        return _metadata_spec_from_schema(present[0].schema).apply(arrow_schema)
 
-    sample = next((t for t in tables if t is not None and t.num_rows > 0), None)
+    sample = next((t for t in present if t.num_rows > 0), None)
     if sample is None:
-        return arrow_schema
+        if not present:
+            return arrow_schema
+        return _metadata_spec_from_schema(present[0].schema).apply(arrow_schema)
 
     inferred = _pandera_infer_schema(sample)
     if inferred is None:
-        return arrow_schema
+        return _metadata_spec_from_schema(sample.schema).apply(arrow_schema)
     try:
         merged = pa.unify_schemas([arrow_schema, inferred], promote_options=opts.promote_options)
     except TypeError:
         merged = pa.unify_schemas([arrow_schema, inferred])
-    return _prefer_arrow_nested(arrow_schema, merged)
+    combined = _prefer_arrow_nested(arrow_schema, merged)
+    return _metadata_spec_from_schema(sample.schema).apply(combined)
 
 
 def align_table_to_schema(
@@ -176,8 +212,7 @@ def align_tables_to_unified_schema(
         Unified schema and aligned tables.
     """
     opts = opts or SchemaInferOptions()
-    evolution = SchemaEvolutionSpec(promote_options=opts.promote_options)
-    schema = evolution.unify_schema(list(tables))
+    schema = unify_schemas([table.schema for table in tables], opts=opts)
     transform = SchemaTransform(
         schema=schema,
         safe_cast=opts.safe_cast,

@@ -6,15 +6,16 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import TableLike
-from arrowdsl.schema.schema import EncodingSpec, encode_columns
+from arrowdsl.core.interop import Table, TableLike
+from arrowdsl.plan.plan import Plan, union_all_plans
+from arrowdsl.schema.schema import EncodingSpec
 from cpg.artifacts import CpgBuildArtifacts
-from cpg.builders import emit_edges_from_relation
-from cpg.catalog import TableCatalog
-from cpg.merge import unify_tables
-from cpg.quality import quality_from_ids
+from cpg.catalog import PlanCatalog
+from cpg.emit_edges import emit_edges_plan
+from cpg.plan_helpers import align_plan, empty_plan, encode_plan, finalize_plan
+from cpg.quality import QualityPlanSpec, quality_plan_from_ids
 from cpg.relations import EDGE_RELATION_SPECS
-from cpg.schemas import CPG_EDGES_SCHEMA, CPG_EDGES_SPEC, SCHEMA_VERSION, empty_edges
+from cpg.schemas import CPG_EDGES_SCHEMA, CPG_EDGES_SPEC
 
 EDGE_ENCODING_SPECS: tuple[EncodingSpec, ...] = (
     EncodingSpec(column="edge_kind"),
@@ -54,6 +55,11 @@ class EdgeBuildInputs:
 
 
 def _edge_inputs_from_legacy(legacy: Mapping[str, object]) -> EdgeBuildInputs:
+    def _maybe_table(value: object) -> TableLike | None:
+        if isinstance(value, Table):
+            return value
+        return None
+
     relationship_outputs = legacy.get("relationship_outputs")
     scip_symbol_relationships = legacy.get("scip_symbol_relationships")
     diagnostics_norm = legacy.get("diagnostics_norm")
@@ -66,25 +72,21 @@ def _edge_inputs_from_legacy(legacy: Mapping[str, object]) -> EdgeBuildInputs:
         relationship_outputs=relationship_outputs
         if isinstance(relationship_outputs, Mapping)
         else None,
-        scip_symbol_relationships=scip_symbol_relationships
-        if isinstance(scip_symbol_relationships, TableLike)
-        else None,
-        diagnostics_norm=diagnostics_norm if isinstance(diagnostics_norm, TableLike) else None,
-        repo_files=repo_files if isinstance(repo_files, TableLike) else None,
-        type_exprs_norm=type_exprs_norm if isinstance(type_exprs_norm, TableLike) else None,
-        rt_signatures=rt_signatures if isinstance(rt_signatures, TableLike) else None,
-        rt_signature_params=rt_signature_params
-        if isinstance(rt_signature_params, TableLike)
-        else None,
-        rt_members=rt_members if isinstance(rt_members, TableLike) else None,
+        scip_symbol_relationships=_maybe_table(scip_symbol_relationships),
+        diagnostics_norm=_maybe_table(diagnostics_norm),
+        repo_files=_maybe_table(repo_files),
+        type_exprs_norm=_maybe_table(type_exprs_norm),
+        rt_signatures=_maybe_table(rt_signatures),
+        rt_signature_params=_maybe_table(rt_signature_params),
+        rt_members=_maybe_table(rt_members),
     )
 
 
-def _edge_catalog(inputs: EdgeBuildInputs) -> TableCatalog:
-    catalog = TableCatalog()
+def _edge_catalog(inputs: EdgeBuildInputs) -> PlanCatalog:
+    catalog = PlanCatalog()
     if inputs.relationship_outputs:
         for name, table in inputs.relationship_outputs.items():
-            if isinstance(table, TableLike):
+            if table is not None:
                 catalog.add(name, table)
     catalog.extend(
         {
@@ -106,32 +108,29 @@ def _edge_catalog(inputs: EdgeBuildInputs) -> TableCatalog:
 
 def build_cpg_edges_raw(
     *,
+    ctx: ExecutionContext,
     inputs: EdgeBuildInputs | None = None,
     options: EdgeBuildOptions | None = None,
-    ctx: ExecutionContext | None = None,
     **legacy: object,
-) -> TableLike:
-    """Emit raw CPG edges without finalization.
+) -> Plan:
+    """Emit raw CPG edges as a plan without finalization.
 
     Returns
     -------
-    pyarrow.Table
-        Raw edges table.
+    Plan
+        Plan producing the raw edges table.
 
     Raises
     ------
     ValueError
-        Raised when no execution context is provided.
+        Raised when an option flag is missing.
     """
-    if ctx is None:
-        msg = "build_cpg_edges_raw requires an execution context."
-        raise ValueError(msg)
     options = options or EdgeBuildOptions()
     if inputs is None and legacy:
         inputs = _edge_inputs_from_legacy(legacy)
     catalog = _edge_catalog(inputs or EdgeBuildInputs())
 
-    parts: list[TableLike] = []
+    parts: list[Plan] = []
     for spec in EDGE_RELATION_SPECS:
         enabled = getattr(options, spec.option_flag, None)
         if enabled is None:
@@ -142,21 +141,14 @@ def build_cpg_edges_raw(
         rel = spec.build(catalog, ctx=ctx)
         if rel is None:
             continue
-        parts.append(
-            emit_edges_from_relation(
-                rel,
-                spec=spec.emit,
-                schema_version=SCHEMA_VERSION,
-                edge_schema=CPG_EDGES_SCHEMA,
-            )
-        )
+        parts.append(emit_edges_plan(rel, spec=spec.emit, ctx=ctx))
 
-    parts = [part for part in parts if part.num_rows]
     if not parts:
-        return empty_edges()
+        return empty_plan(CPG_EDGES_SCHEMA, label="cpg_edges_raw")
 
-    combined = unify_tables(spec=CPG_EDGES_SPEC, tables=parts, ctx=ctx)
-    return encode_columns(combined, specs=EDGE_ENCODING_SPECS)
+    combined = union_all_plans(parts, label="cpg_edges_raw")
+    combined = encode_plan(combined, specs=EDGE_ENCODING_SPECS, ctx=ctx)
+    return align_plan(combined, schema=CPG_EDGES_SCHEMA, ctx=ctx)
 
 
 def build_cpg_edges(
@@ -172,13 +164,18 @@ def build_cpg_edges(
     CpgBuildArtifacts
         Finalize result plus quality table.
     """
-    raw = build_cpg_edges_raw(inputs=inputs, options=options, ctx=ctx)
-    quality = quality_from_ids(
-        raw,
-        id_col="edge_id",
-        entity_kind="edge",
-        issue="invalid_edge_id",
-        source_table="cpg_edges_raw",
+    raw_plan = build_cpg_edges_raw(ctx=ctx, inputs=inputs, options=options)
+    quality_plan = quality_plan_from_ids(
+        raw_plan,
+        spec=QualityPlanSpec(
+            id_col="edge_id",
+            entity_kind="edge",
+            issue="invalid_edge_id",
+            source_table="cpg_edges_raw",
+        ),
+        ctx=ctx,
     )
+    raw = finalize_plan(raw_plan, ctx=ctx)
+    quality = finalize_plan(quality_plan, ctx=ctx)
     finalize = CPG_EDGES_SPEC.finalize_context(ctx).run(raw, ctx=ctx)
     return CpgBuildArtifacts(finalize=finalize, quality=quality)

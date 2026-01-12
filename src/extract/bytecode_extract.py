@@ -6,7 +6,7 @@ import dis
 import types as pytypes
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import Literal, cast, overload
 
 import pyarrow as pa
 
@@ -1252,6 +1252,28 @@ def extract_bytecode_plans(
         _extract_code_unit_rows(top, bc_ctx, code_unit_keys, buffers)
 
     return _build_bytecode_plans(buffers, exec_ctx=exec_ctx)
+
+
+@overload
+def extract_bytecode_table(
+    *,
+    repo_root: str | None,
+    repo_files: TableLike,
+    file_contexts: Iterable[FileContext] | None = None,
+    ctx: ExecutionContext | None = None,
+    prefer_reader: Literal[False] = False,
+) -> TableLike: ...
+
+
+@overload
+def extract_bytecode_table(
+    *,
+    repo_root: str | None,
+    repo_files: TableLike,
+    file_contexts: Iterable[FileContext] | None = None,
+    ctx: ExecutionContext | None = None,
+    prefer_reader: Literal[True],
+) -> TableLike | RecordBatchReaderLike: ...
 
 
 def extract_bytecode_table(

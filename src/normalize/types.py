@@ -4,130 +4,255 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrowdsl.core.interop import ArrayLike, TableLike, pc
-from arrowdsl.schema.arrays import const_array
+from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.interop import TableLike, ensure_expression, pc
+from arrowdsl.finalize.finalize import FinalizeResult
+from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.schema import empty_table
-from normalize.arrow_utils import column_or_null, compute_array, trimmed_non_empty_utf8
-from normalize.ids import masked_prefixed_hash, prefixed_hash64
-from normalize.pipeline import canonical_sort
-from normalize.schemas import TYPE_EXPRS_NORM_SCHEMA, TYPE_NODES_SCHEMA
+from normalize.hash_specs import TYPE_ID_SPEC
+from normalize.plan_exprs import HashExprSpec, column_or_null_expr, trimmed_non_empty_expr
+from normalize.plan_helpers import append_projection, apply_query_spec
+from normalize.runner import ensure_canonical, ensure_execution_context, run_normalize
+from normalize.schemas import (
+    TYPE_EXPRS_CONTRACT,
+    TYPE_EXPRS_NORM_SPEC,
+    TYPE_EXPRS_QUERY,
+    TYPE_NODES_CONTRACT,
+    TYPE_NODES_QUERY,
+    TYPE_NODES_SCHEMA,
+    TYPE_NODES_SPEC,
+)
+
+_BASE_TYPE_EXPR_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
+    ("file_id", pa.string()),
+    ("path", pa.string()),
+    ("bstart", pa.int64()),
+    ("bend", pa.int64()),
+    ("owner_def_id", pa.string()),
+    ("param_name", pa.string()),
+    ("expr_kind", pa.string()),
+    ("expr_role", pa.string()),
+    ("expr_text", pa.string()),
+)
 
 
-def _base_type_exprs_table(cst_type_exprs: TableLike) -> TableLike:
-    return pa.Table.from_arrays(
-        [
-            column_or_null(cst_type_exprs, "file_id", pa.string()),
-            column_or_null(cst_type_exprs, "path", pa.string()),
-            column_or_null(cst_type_exprs, "bstart", pa.int64()),
-            column_or_null(cst_type_exprs, "bend", pa.int64()),
-            column_or_null(cst_type_exprs, "owner_def_id", pa.string()),
-            column_or_null(cst_type_exprs, "param_name", pa.string()),
-            column_or_null(cst_type_exprs, "expr_kind", pa.string()),
-            column_or_null(cst_type_exprs, "expr_role", pa.string()),
-            column_or_null(cst_type_exprs, "expr_text", pa.string()),
-        ],
-        names=[
-            "file_id",
-            "path",
-            "bstart",
-            "bend",
-            "owner_def_id",
-            "param_name",
-            "expr_kind",
-            "expr_role",
-            "expr_text",
-        ],
-    )
+def _to_plan(table: TableLike | Plan) -> Plan:
+    if isinstance(table, Plan):
+        return table
+    return Plan.table_source(table)
 
 
-def _dedupe_type_nodes(table: TableLike) -> TableLike:
-    if table.num_rows == 0:
-        return empty_table(TYPE_NODES_SCHEMA)
-    non_keys = [col for col in table.column_names if col != "type_id"]
-    aggs = [(col, "first") for col in non_keys]
-    out = table.group_by(["type_id"], use_threads=False).aggregate(aggs)
-    rename_map = {f"{col}_first": col for col in non_keys}
-    new_names = [rename_map.get(name, name) for name in out.schema.names]
-    out = out.rename_columns(new_names)
-    return canonical_sort(out, sort_keys=[("type_id", "ascending")])
 
-
-def _build_type_nodes(
-    type_id: ArrayLike,
-    type_repr: ArrayLike,
+def type_exprs_plan(
+    cst_type_exprs: TableLike | Plan,
     *,
-    type_form: str,
-    origin: str,
-) -> TableLike:
-    n = len(type_id)
-    if n == 0:
-        return empty_table(TYPE_NODES_SCHEMA)
-    return pa.Table.from_arrays(
-        [
-            type_id,
-            type_repr,
-            const_array(n, type_form, dtype=pa.string()),
-            const_array(n, origin, dtype=pa.string()),
-        ],
-        schema=TYPE_NODES_SCHEMA,
-    )
+    ctx: ExecutionContext,
+) -> Plan:
+    """Build a plan-lane normalized type expression table.
+
+    Returns
+    -------
+    Plan
+        Plan producing normalized type expression rows.
+    """
+    plan = _to_plan(cst_type_exprs)
+    available = set(plan.schema(ctx=ctx).names)
+
+    base_names = [name for name, _ in _BASE_TYPE_EXPR_COLUMNS]
+    base_exprs = [
+        column_or_null_expr(name, dtype, available=available)
+        for name, dtype in _BASE_TYPE_EXPR_COLUMNS
+    ]
+    plan = plan.project(base_exprs, base_names, ctx=ctx)
+
+    _, non_empty = trimmed_non_empty_expr("expr_text")
+    plan = plan.filter(non_empty, ctx=ctx)
+    return apply_query_spec(plan, spec=TYPE_EXPRS_QUERY, ctx=ctx)
 
 
-def normalize_type_exprs(cst_type_exprs: TableLike) -> TableLike:
+def normalize_type_exprs_result(
+    cst_type_exprs: TableLike,
+    *,
+    ctx: ExecutionContext | None = None,
+) -> FinalizeResult:
     """Normalize type expression rows into join-ready tables.
 
     Parameters
     ----------
     cst_type_exprs:
         CST type expression rows captured during extraction.
+    ctx:
+        Optional execution context for plan compilation and finalize.
+
+    Returns
+    -------
+    FinalizeResult
+        Finalize bundle with normalized type expressions.
+    """
+    exec_ctx = ensure_execution_context(ctx)
+    plan = type_exprs_plan(cst_type_exprs, ctx=exec_ctx)
+    return run_normalize(
+        plan=plan,
+        post=(),
+        contract=TYPE_EXPRS_CONTRACT,
+        ctx=exec_ctx,
+        metadata_spec=TYPE_EXPRS_NORM_SPEC.metadata_spec,
+    )
+
+
+def normalize_type_exprs(
+    cst_type_exprs: TableLike,
+    *,
+    ctx: ExecutionContext | None = None,
+) -> TableLike:
+    """Normalize type expression rows into join-ready tables.
+
+    Parameters
+    ----------
+    cst_type_exprs:
+        CST type expression rows captured during extraction.
+    ctx:
+        Optional execution context for plan compilation and finalize.
 
     Returns
     -------
     TableLike
         Normalized type expressions table with type ids.
     """
-    if cst_type_exprs.num_rows == 0:
-        return empty_table(TYPE_EXPRS_NORM_SCHEMA)
+    return normalize_type_exprs_result(cst_type_exprs, ctx=ctx).good
 
-    base = _base_type_exprs_table(cst_type_exprs)
-    trimmed, mask = trimmed_non_empty_utf8(base["expr_text"])
-    filtered = base.filter(mask)
-    if filtered.num_rows == 0:
-        return empty_table(TYPE_EXPRS_NORM_SCHEMA)
 
-    type_repr = compute_array("filter", [trimmed, mask])
-    path_arr = filtered["path"]
-    bstart_arr = filtered["bstart"]
-    bend_arr = filtered["bend"]
-    type_expr_id = masked_prefixed_hash(
-        "cst_type_expr",
-        [path_arr, bstart_arr, bend_arr],
-        required=[path_arr, bstart_arr, bend_arr],
-    )
-    type_id = prefixed_hash64("type", [type_repr])
+def normalize_type_exprs_canonical(
+    cst_type_exprs: TableLike,
+    *,
+    ctx: ExecutionContext | None = None,
+) -> TableLike:
+    """Normalize type expressions under canonical determinism.
 
-    return pa.Table.from_arrays(
-        [
-            filtered["file_id"],
-            path_arr,
-            bstart_arr,
-            bend_arr,
-            type_expr_id,
-            filtered["owner_def_id"],
-            filtered["param_name"],
-            filtered["expr_kind"],
-            filtered["expr_role"],
-            filtered["expr_text"],
-            type_repr,
-            type_id,
+    Returns
+    -------
+    TableLike
+        Canonicalized type expressions table.
+    """
+    exec_ctx = ensure_canonical(ensure_execution_context(ctx))
+    return normalize_type_exprs_result(cst_type_exprs, ctx=exec_ctx).good
+
+
+def type_nodes_plan_from_scip(
+    scip_symbol_information: TableLike | Plan,
+    *,
+    ctx: ExecutionContext,
+) -> Plan:
+    """Build a plan-lane type node table from SCIP symbol information.
+
+    Returns
+    -------
+    Plan
+        Plan producing normalized type node rows.
+    """
+    plan = _to_plan(scip_symbol_information)
+    available = set(plan.schema(ctx=ctx).names)
+    if "type_repr" not in available:
+        return Plan.table_source(empty_table(TYPE_NODES_SCHEMA))
+
+    trimmed, non_empty = trimmed_non_empty_expr("type_repr")
+    plan = plan.filter(non_empty, ctx=ctx)
+    plan = plan.project([trimmed], ["type_repr"], ctx=ctx)
+
+    type_hash = HashExprSpec(spec=TYPE_ID_SPEC).to_expression()
+    plan = append_projection(
+        plan,
+        base=["type_repr"],
+        extras=[
+            (type_hash, "type_id"),
+            (pc.scalar("scip"), "type_form"),
+            (pc.scalar("inferred"), "origin"),
         ],
-        schema=TYPE_EXPRS_NORM_SCHEMA,
+        ctx=ctx,
+    )
+    return apply_query_spec(plan, spec=TYPE_NODES_QUERY, ctx=ctx)
+
+
+def type_nodes_plan_from_exprs(
+    type_exprs_norm: TableLike | Plan,
+    *,
+    ctx: ExecutionContext,
+) -> Plan:
+    """Build a plan-lane type node table from type expressions.
+
+    Returns
+    -------
+    Plan
+        Plan producing normalized type node rows.
+    """
+    plan = _to_plan(type_exprs_norm)
+    available = set(plan.schema(ctx=ctx).names)
+    if "type_repr" not in available or "type_id" not in available:
+        return Plan.table_source(empty_table(TYPE_NODES_SCHEMA))
+
+    trimmed, non_empty = trimmed_non_empty_expr("type_repr")
+    valid = ensure_expression(pc.and_(non_empty, pc.is_valid(pc.field("type_id"))))
+    plan = plan.filter(valid, ctx=ctx)
+    plan = plan.project([pc.field("type_id"), trimmed], ["type_id", "type_repr"], ctx=ctx)
+    plan = append_projection(
+        plan,
+        base=["type_id", "type_repr"],
+        extras=[
+            (pc.scalar("annotation"), "type_form"),
+            (pc.scalar("annotation"), "origin"),
+        ],
+        ctx=ctx,
+    )
+    return apply_query_spec(plan, spec=TYPE_NODES_QUERY, ctx=ctx)
+
+
+def normalize_types_result(
+    type_exprs_norm: TableLike,
+    scip_symbol_information: TableLike | None = None,
+    *,
+    ctx: ExecutionContext | None = None,
+) -> FinalizeResult:
+    """Build a type node table from normalized type expressions.
+
+    Parameters
+    ----------
+    type_exprs_norm:
+        Normalized type expression table.
+    scip_symbol_information:
+        Optional SCIP symbol information table with type details.
+    ctx:
+        Optional execution context for plan compilation and finalize.
+
+    Returns
+    -------
+    FinalizeResult
+        Finalize bundle with normalized type nodes.
+    """
+    exec_ctx = ensure_execution_context(ctx)
+    plan: Plan
+    if (
+        scip_symbol_information is not None
+        and scip_symbol_information.num_rows > 0
+        and "type_repr" in scip_symbol_information.column_names
+    ):
+        plan = type_nodes_plan_from_scip(scip_symbol_information, ctx=exec_ctx)
+    else:
+        plan = type_nodes_plan_from_exprs(type_exprs_norm, ctx=exec_ctx)
+
+    return run_normalize(
+        plan=plan,
+        post=(),
+        contract=TYPE_NODES_CONTRACT,
+        ctx=exec_ctx,
+        metadata_spec=TYPE_NODES_SPEC.metadata_spec,
     )
 
 
 def normalize_types(
     type_exprs_norm: TableLike,
     scip_symbol_information: TableLike | None = None,
+    *,
+    ctx: ExecutionContext | None = None,
 ) -> TableLike:
     """Build a type node table from normalized type expressions.
 
@@ -137,52 +262,50 @@ def normalize_types(
         Normalized type expression table.
     scip_symbol_information:
         Optional SCIP symbol information table with type details.
+    ctx:
+        Optional execution context for plan compilation and finalize.
 
     Returns
     -------
     TableLike
         Normalized type node table.
     """
-    scip_table = _types_from_scip(scip_symbol_information)
-    if scip_table is not None:
-        return scip_table
-    return _types_from_type_exprs(type_exprs_norm)
+    return normalize_types_result(
+        type_exprs_norm,
+        scip_symbol_information=scip_symbol_information,
+        ctx=ctx,
+    ).good
 
 
-def _types_from_scip(scip_symbol_information: TableLike | None) -> TableLike | None:
-    if scip_symbol_information is None or scip_symbol_information.num_rows == 0:
-        return None
-    if "type_repr" not in scip_symbol_information.column_names:
-        return None
+def normalize_types_canonical(
+    type_exprs_norm: TableLike,
+    scip_symbol_information: TableLike | None = None,
+    *,
+    ctx: ExecutionContext | None = None,
+) -> TableLike:
+    """Normalize type nodes under canonical determinism.
 
-    type_repr_raw = column_or_null(scip_symbol_information, "type_repr", pa.string())
-    trimmed, mask = trimmed_non_empty_utf8(type_repr_raw)
-    type_repr = compute_array("filter", [trimmed, mask])
-    if len(type_repr) == 0:
-        return None
+    Returns
+    -------
+    TableLike
+        Canonicalized type node table.
+    """
+    exec_ctx = ensure_canonical(ensure_execution_context(ctx))
+    return normalize_types_result(
+        type_exprs_norm,
+        scip_symbol_information=scip_symbol_information,
+        ctx=exec_ctx,
+    ).good
 
-    type_id = prefixed_hash64("type", [type_repr])
-    table = _build_type_nodes(type_id, type_repr, type_form="scip", origin="inferred")
-    return _dedupe_type_nodes(table)
 
-
-def _types_from_type_exprs(type_exprs_norm: TableLike) -> TableLike:
-    if type_exprs_norm.num_rows == 0:
-        return empty_table(TYPE_NODES_SCHEMA)
-    if (
-        "type_id" not in type_exprs_norm.column_names
-        or "type_repr" not in type_exprs_norm.column_names
-    ):
-        return empty_table(TYPE_NODES_SCHEMA)
-
-    type_id_raw = column_or_null(type_exprs_norm, "type_id", pa.string())
-    type_repr_raw = column_or_null(type_exprs_norm, "type_repr", pa.string())
-    trimmed, mask = trimmed_non_empty_utf8(type_repr_raw)
-    mask = pc.and_(mask, pc.is_valid(type_id_raw))
-    type_id = compute_array("filter", [type_id_raw, mask])
-    type_repr = compute_array("filter", [trimmed, mask])
-    if len(type_id) == 0:
-        return empty_table(TYPE_NODES_SCHEMA)
-
-    table = _build_type_nodes(type_id, type_repr, type_form="annotation", origin="annotation")
-    return _dedupe_type_nodes(table)
+__all__ = [
+    "normalize_type_exprs",
+    "normalize_type_exprs_canonical",
+    "normalize_type_exprs_result",
+    "normalize_types",
+    "normalize_types_canonical",
+    "normalize_types_result",
+    "type_exprs_plan",
+    "type_nodes_plan_from_exprs",
+    "type_nodes_plan_from_scip",
+]

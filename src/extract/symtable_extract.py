@@ -9,15 +9,17 @@ from typing import cast
 
 import pyarrow as pa
 
-from arrowdsl.compute.kernels import apply_join
-from arrowdsl.core.ids import HashSpec, hash_column_values
-from arrowdsl.core.interop import ArrayLike, TableLike, pc
-from arrowdsl.plan.ops import JoinSpec
-from arrowdsl.schema.arrays import build_list_array, set_or_append_column
-from arrowdsl.schema.schema import SchemaTransform, empty_table
-from extract.file_context import FileContext, iter_file_contexts
+from arrowdsl.core.ids import HashSpec
+from arrowdsl.core.interop import ArrayLike, TableLike
+from arrowdsl.schema.schema import empty_table
+from extract.common import iter_contexts, text_from_file_ctx
+from extract.file_context import FileContext
+from extract.hashing import apply_hash_column
+from extract.join_helpers import JoinConfig, left_join
+from extract.nested_lists import ListAccumulator
+from extract.spec_helpers import register_dataset
+from extract.tables import align_table
 from schema_spec.specs import ArrowFieldSpec, NestedFieldSpec, file_identity_bundle
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
 
 SCHEMA_VERSION = 1
 
@@ -79,101 +81,95 @@ class SymtableContext:
         """
         return self.file_ctx.file_sha256
 
+    def identity_row(self) -> dict[str, str | None]:
+        """Return the identity row for this context.
 
-SCOPES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="py_sym_scopes_v1",
-            version=SCHEMA_VERSION,
-            bundles=(file_identity_bundle(),),
-            fields=[
-                ArrowFieldSpec(name="scope_id", dtype=pa.string()),
-                ArrowFieldSpec(name="table_id", dtype=pa.int64()),
-                ArrowFieldSpec(name="scope_type", dtype=pa.string()),
-                ArrowFieldSpec(name="scope_name", dtype=pa.string()),
-                ArrowFieldSpec(name="lineno", dtype=pa.int32()),
-                ArrowFieldSpec(name="is_nested", dtype=pa.bool_()),
-                ArrowFieldSpec(name="is_optimized", dtype=pa.bool_()),
-                ArrowFieldSpec(name="has_children", dtype=pa.bool_()),
-                ArrowFieldSpec(name="scope_role", dtype=pa.string()),
-            ],
-        )
-    )
+        Returns
+        -------
+        dict[str, object]
+            File identity columns for row construction.
+        """
+        return {
+            "file_id": self.file_id,
+            "path": self.path,
+            "file_sha256": self.file_sha256,
+        }
+
+
+SCOPES_SPEC = register_dataset(
+    name="py_sym_scopes_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
+    fields=[
+        ArrowFieldSpec(name="scope_id", dtype=pa.string()),
+        ArrowFieldSpec(name="table_id", dtype=pa.int64()),
+        ArrowFieldSpec(name="scope_type", dtype=pa.string()),
+        ArrowFieldSpec(name="scope_name", dtype=pa.string()),
+        ArrowFieldSpec(name="lineno", dtype=pa.int32()),
+        ArrowFieldSpec(name="is_nested", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_optimized", dtype=pa.bool_()),
+        ArrowFieldSpec(name="has_children", dtype=pa.bool_()),
+        ArrowFieldSpec(name="scope_role", dtype=pa.string()),
+    ],
 )
 
-SYMBOLS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="py_sym_symbols_v1",
-            version=SCHEMA_VERSION,
-            bundles=(file_identity_bundle(),),
-            fields=[
-                ArrowFieldSpec(name="symbol_row_id", dtype=pa.string()),
-                ArrowFieldSpec(name="scope_id", dtype=pa.string()),
-                ArrowFieldSpec(name="name", dtype=pa.string()),
-                ArrowFieldSpec(name="is_referenced", dtype=pa.bool_()),
-                ArrowFieldSpec(name="is_assigned", dtype=pa.bool_()),
-                ArrowFieldSpec(name="is_imported", dtype=pa.bool_()),
-                ArrowFieldSpec(name="is_annotated", dtype=pa.bool_()),
-                ArrowFieldSpec(name="is_parameter", dtype=pa.bool_()),
-                ArrowFieldSpec(name="is_global", dtype=pa.bool_()),
-                ArrowFieldSpec(name="is_declared_global", dtype=pa.bool_()),
-                ArrowFieldSpec(name="is_nonlocal", dtype=pa.bool_()),
-                ArrowFieldSpec(name="is_local", dtype=pa.bool_()),
-                ArrowFieldSpec(name="is_free", dtype=pa.bool_()),
-                ArrowFieldSpec(name="is_namespace", dtype=pa.bool_()),
-            ],
-        )
-    )
+SYMBOLS_SPEC = register_dataset(
+    name="py_sym_symbols_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
+    fields=[
+        ArrowFieldSpec(name="symbol_row_id", dtype=pa.string()),
+        ArrowFieldSpec(name="scope_id", dtype=pa.string()),
+        ArrowFieldSpec(name="name", dtype=pa.string()),
+        ArrowFieldSpec(name="is_referenced", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_assigned", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_imported", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_annotated", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_parameter", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_global", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_declared_global", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_nonlocal", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_local", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_free", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_namespace", dtype=pa.bool_()),
+    ],
 )
 
-SCOPE_EDGES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="py_sym_scope_edges_v1",
-            version=SCHEMA_VERSION,
-            bundles=(file_identity_bundle(),),
-            fields=[
-                ArrowFieldSpec(name="edge_id", dtype=pa.string()),
-                ArrowFieldSpec(name="parent_scope_id", dtype=pa.string()),
-                ArrowFieldSpec(name="child_scope_id", dtype=pa.string()),
-            ],
-        )
-    )
+SCOPE_EDGES_SPEC = register_dataset(
+    name="py_sym_scope_edges_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
+    fields=[
+        ArrowFieldSpec(name="edge_id", dtype=pa.string()),
+        ArrowFieldSpec(name="parent_scope_id", dtype=pa.string()),
+        ArrowFieldSpec(name="child_scope_id", dtype=pa.string()),
+    ],
 )
 
-NAMESPACE_EDGES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="py_sym_namespace_edges_v1",
-            version=SCHEMA_VERSION,
-            bundles=(file_identity_bundle(),),
-            fields=[
-                ArrowFieldSpec(name="edge_id", dtype=pa.string()),
-                ArrowFieldSpec(name="scope_id", dtype=pa.string()),
-                ArrowFieldSpec(name="symbol_row_id", dtype=pa.string()),
-                ArrowFieldSpec(name="child_scope_id", dtype=pa.string()),
-            ],
-        )
-    )
+NAMESPACE_EDGES_SPEC = register_dataset(
+    name="py_sym_namespace_edges_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
+    fields=[
+        ArrowFieldSpec(name="edge_id", dtype=pa.string()),
+        ArrowFieldSpec(name="scope_id", dtype=pa.string()),
+        ArrowFieldSpec(name="symbol_row_id", dtype=pa.string()),
+        ArrowFieldSpec(name="child_scope_id", dtype=pa.string()),
+    ],
 )
 
-FUNC_PARTS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="py_sym_function_partitions_v1",
-            version=SCHEMA_VERSION,
-            bundles=(file_identity_bundle(),),
-            fields=[
-                ArrowFieldSpec(name="scope_id", dtype=pa.string()),
-                ArrowFieldSpec(name="parameters", dtype=pa.list_(pa.string())),
-                ArrowFieldSpec(name="locals", dtype=pa.list_(pa.string())),
-                ArrowFieldSpec(name="globals", dtype=pa.list_(pa.string())),
-                ArrowFieldSpec(name="nonlocals", dtype=pa.list_(pa.string())),
-                ArrowFieldSpec(name="frees", dtype=pa.list_(pa.string())),
-            ],
-        )
-    )
+FUNC_PARTS_SPEC = register_dataset(
+    name="py_sym_function_partitions_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
+    fields=[
+        ArrowFieldSpec(name="scope_id", dtype=pa.string()),
+        ArrowFieldSpec(name="parameters", dtype=pa.list_(pa.string())),
+        ArrowFieldSpec(name="locals", dtype=pa.list_(pa.string())),
+        ArrowFieldSpec(name="globals", dtype=pa.list_(pa.string())),
+        ArrowFieldSpec(name="nonlocals", dtype=pa.list_(pa.string())),
+        ArrowFieldSpec(name="frees", dtype=pa.list_(pa.string())),
+    ],
 )
 
 SCOPES_SCHEMA = SCOPES_SPEC.table_spec.to_arrow_schema()
@@ -181,39 +177,6 @@ SYMBOLS_SCHEMA = SYMBOLS_SPEC.table_spec.to_arrow_schema()
 SCOPE_EDGES_SCHEMA = SCOPE_EDGES_SPEC.table_spec.to_arrow_schema()
 NAMESPACE_EDGES_SCHEMA = NAMESPACE_EDGES_SPEC.table_spec.to_arrow_schema()
 FUNC_PARTS_SCHEMA = FUNC_PARTS_SPEC.table_spec.to_arrow_schema()
-
-
-def _offsets_start() -> list[int]:
-    return [0]
-
-
-def _append_string_list(
-    offsets: list[int],
-    values: list[str | None],
-    items: Sequence[str],
-) -> None:
-    values.extend(items)
-    offsets.append(len(values))
-
-
-def _extend_offsets(
-    offsets: list[int],
-    values: list[str | None],
-    new_offsets: Sequence[int],
-    new_values: Sequence[str | None],
-) -> None:
-    if len(new_offsets) <= 1:
-        return
-    base = offsets[-1]
-    offsets.extend(base + offset for offset in new_offsets[1:])
-    values.extend(new_values)
-
-
-def _build_string_list(offsets: Sequence[int], values: Sequence[str | None]) -> ArrayLike:
-    return build_list_array(
-        pa.array(offsets, type=pa.int32()),
-        pa.array(values, type=pa.string()),
-    )
 
 
 def _scope_type_str(tbl: symtable.SymbolTable) -> str:
@@ -230,16 +193,11 @@ class _FuncPartsAccumulator:
     file_ids: list[str] = field(default_factory=list)
     paths: list[str] = field(default_factory=list)
     file_sha256s: list[str | None] = field(default_factory=list)
-    parameters_offsets: list[int] = field(default_factory=_offsets_start)
-    parameters_values: list[str | None] = field(default_factory=list)
-    locals_offsets: list[int] = field(default_factory=_offsets_start)
-    locals_values: list[str | None] = field(default_factory=list)
-    globals_offsets: list[int] = field(default_factory=_offsets_start)
-    globals_values: list[str | None] = field(default_factory=list)
-    nonlocals_offsets: list[int] = field(default_factory=_offsets_start)
-    nonlocals_values: list[str | None] = field(default_factory=list)
-    frees_offsets: list[int] = field(default_factory=_offsets_start)
-    frees_values: list[str | None] = field(default_factory=list)
+    parameters_acc: ListAccumulator[str | None] = field(default_factory=ListAccumulator)
+    locals_acc: ListAccumulator[str | None] = field(default_factory=ListAccumulator)
+    globals_acc: ListAccumulator[str | None] = field(default_factory=ListAccumulator)
+    nonlocals_acc: ListAccumulator[str | None] = field(default_factory=ListAccumulator)
+    frees_acc: ListAccumulator[str | None] = field(default_factory=ListAccumulator)
 
     def append(self, ctx: SymtableContext, scope_table_id: int, tbl: symtable.SymbolTable) -> None:
         if _scope_type_str(tbl) != "FUNCTION":
@@ -248,61 +206,22 @@ class _FuncPartsAccumulator:
         self.file_ids.append(ctx.file_id)
         self.paths.append(ctx.path)
         self.file_sha256s.append(ctx.file_sha256)
-        _append_string_list(
-            self.parameters_offsets,
-            self.parameters_values,
-            _symbol_list(tbl, "get_parameters"),
-        )
-        _append_string_list(
-            self.locals_offsets, self.locals_values, _symbol_list(tbl, "get_locals")
-        )
-        _append_string_list(
-            self.globals_offsets,
-            self.globals_values,
-            _symbol_list(tbl, "get_globals"),
-        )
-        _append_string_list(
-            self.nonlocals_offsets,
-            self.nonlocals_values,
-            _symbol_list(tbl, "get_nonlocals"),
-        )
-        _append_string_list(self.frees_offsets, self.frees_values, _symbol_list(tbl, "get_frees"))
+        self.parameters_acc.append(_symbol_list(tbl, "get_parameters"))
+        self.locals_acc.append(_symbol_list(tbl, "get_locals"))
+        self.globals_acc.append(_symbol_list(tbl, "get_globals"))
+        self.nonlocals_acc.append(_symbol_list(tbl, "get_nonlocals"))
+        self.frees_acc.append(_symbol_list(tbl, "get_frees"))
 
     def extend(self, other: _FuncPartsAccumulator) -> None:
         self.scope_table_ids.extend(other.scope_table_ids)
         self.file_ids.extend(other.file_ids)
         self.paths.extend(other.paths)
         self.file_sha256s.extend(other.file_sha256s)
-        _extend_offsets(
-            self.parameters_offsets,
-            self.parameters_values,
-            other.parameters_offsets,
-            other.parameters_values,
-        )
-        _extend_offsets(
-            self.locals_offsets,
-            self.locals_values,
-            other.locals_offsets,
-            other.locals_values,
-        )
-        _extend_offsets(
-            self.globals_offsets,
-            self.globals_values,
-            other.globals_offsets,
-            other.globals_values,
-        )
-        _extend_offsets(
-            self.nonlocals_offsets,
-            self.nonlocals_values,
-            other.nonlocals_offsets,
-            other.nonlocals_values,
-        )
-        _extend_offsets(
-            self.frees_offsets,
-            self.frees_values,
-            other.frees_offsets,
-            other.frees_values,
-        )
+        self.parameters_acc.extend_from(other.parameters_acc)
+        self.locals_acc.extend_from(other.locals_acc)
+        self.globals_acc.extend_from(other.globals_acc)
+        self.nonlocals_acc.extend_from(other.nonlocals_acc)
+        self.frees_acc.extend_from(other.frees_acc)
 
     def to_table(self) -> TableLike:
         parameters = FUNC_PARTS_PARAMETERS_SPEC.builder(self)
@@ -337,23 +256,23 @@ class _FuncPartsAccumulator:
 
 
 def _build_func_parameters(acc: _FuncPartsAccumulator) -> ArrayLike:
-    return _build_string_list(acc.parameters_offsets, acc.parameters_values)
+    return acc.parameters_acc.build(value_type=pa.string())
 
 
 def _build_func_locals(acc: _FuncPartsAccumulator) -> ArrayLike:
-    return _build_string_list(acc.locals_offsets, acc.locals_values)
+    return acc.locals_acc.build(value_type=pa.string())
 
 
 def _build_func_globals(acc: _FuncPartsAccumulator) -> ArrayLike:
-    return _build_string_list(acc.globals_offsets, acc.globals_values)
+    return acc.globals_acc.build(value_type=pa.string())
 
 
 def _build_func_nonlocals(acc: _FuncPartsAccumulator) -> ArrayLike:
-    return _build_string_list(acc.nonlocals_offsets, acc.nonlocals_values)
+    return acc.nonlocals_acc.build(value_type=pa.string())
 
 
 def _build_func_frees(acc: _FuncPartsAccumulator) -> ArrayLike:
-    return _build_string_list(acc.frees_offsets, acc.frees_values)
+    return acc.frees_acc.build(value_type=pa.string())
 
 
 FUNC_PARTS_PARAMETERS_SPEC = NestedFieldSpec(
@@ -387,27 +306,6 @@ FUNC_PARTS_FREES_SPEC = NestedFieldSpec(
 )
 
 
-def _valid_mask(table: TableLike, cols: Sequence[str]) -> object:
-    mask = pc.is_valid(table[cols[0]])
-    for col in cols[1:]:
-        mask = pc.and_(mask, pc.is_valid(table[col]))
-    return mask
-
-
-def _apply_hash_column(
-    table: TableLike,
-    *,
-    spec: HashSpec,
-    required: Sequence[str] | None = None,
-) -> TableLike:
-    hashed = hash_column_values(table, spec=spec)
-    out_col = spec.out_col or f"{spec.prefix}_id"
-    if required:
-        mask = _valid_mask(table, required)
-        hashed = pc.if_else(mask, hashed, pa.scalar(None, type=hashed.type))
-    return set_or_append_column(table, out_col, hashed)
-
-
 def _rename_column(table: TableLike, old: str, new: str) -> TableLike:
     names = [new if name == old else name for name in table.column_names]
     return table.rename_columns(names)
@@ -416,9 +314,7 @@ def _rename_column(table: TableLike, old: str, new: str) -> TableLike:
 def _scope_row(ctx: SymtableContext, table_id: int, tbl: symtable.SymbolTable) -> dict[str, object]:
     st_str = _scope_type_str(tbl)
     return {
-        "file_id": ctx.file_id,
-        "path": ctx.path,
-        "file_sha256": ctx.file_sha256,
+        **ctx.identity_row(),
         "table_id": table_id,
         "scope_type": st_str,
         "scope_name": tbl.get_name(),
@@ -434,9 +330,7 @@ def _scope_edge_row(
     ctx: SymtableContext, parent_table_id: int, child_table_id: int
 ) -> dict[str, object]:
     return {
-        "file_id": ctx.file_id,
-        "path": ctx.path,
-        "file_sha256": ctx.file_sha256,
+        **ctx.identity_row(),
         "parent_table_id": parent_table_id,
         "child_table_id": child_table_id,
     }
@@ -450,15 +344,14 @@ def _symbol_rows_for_scope(
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     symbol_rows: list[dict[str, object]] = []
     ns_edge_rows: list[dict[str, object]] = []
+    identity = ctx.identity_row()
 
     for sym in tbl.get_symbols():
         name = sym.get_name()
         symbol_rows.append(
             {
                 "scope_table_id": scope_table_id,
-                "file_id": ctx.file_id,
-                "path": ctx.path,
-                "file_sha256": ctx.file_sha256,
+                **identity,
                 "name": name,
                 "is_referenced": bool(sym.is_referenced()),
                 "is_assigned": bool(sym.is_assigned()),
@@ -479,9 +372,7 @@ def _symbol_rows_for_scope(
                 child_table_id = int(nt.get_id())
                 ns_edge_rows.append(
                     {
-                        "file_id": ctx.file_id,
-                        "path": ctx.path,
-                        "file_sha256": ctx.file_sha256,
+                        **identity,
                         "scope_table_id": scope_table_id,
                         "symbol_name": name,
                         "child_table_id": child_table_id,
@@ -489,18 +380,6 @@ def _symbol_rows_for_scope(
                 )
 
     return symbol_rows, ns_edge_rows
-
-
-def _repo_text(file_ctx: FileContext) -> str | None:
-    if file_ctx.text:
-        return file_ctx.text
-    if file_ctx.data is None:
-        return None
-    encoding = file_ctx.encoding or "utf-8"
-    try:
-        return file_ctx.data.decode(encoding, errors="replace")
-    except UnicodeError:
-        return None
 
 
 def _extract_symtable_for_context(
@@ -517,7 +396,7 @@ def _extract_symtable_for_context(
     if not file_ctx.file_id or not file_ctx.path:
         return [], [], [], [], _FuncPartsAccumulator()
 
-    text = _repo_text(file_ctx)
+    text = text_from_file_ctx(file_ctx)
     if not text:
         return [], [], [], [], _FuncPartsAccumulator()
 
@@ -623,8 +502,7 @@ def extract_symtable(
     ns_edge_rows: list[dict[str, object]] = []
     func_parts_acc = _FuncPartsAccumulator()
 
-    contexts = file_contexts if file_contexts is not None else iter_file_contexts(repo_files)
-    for file_ctx in contexts:
+    for file_ctx in iter_contexts(repo_files, file_contexts):
         (
             file_scope_rows,
             file_symbol_rows,
@@ -665,7 +543,7 @@ def _build_symtable_result(
         )
 
     scopes_raw = pa.Table.from_pylist(scope_rows)
-    scopes_raw = _apply_hash_column(
+    scopes_raw = apply_hash_column(
         scopes_raw,
         spec=HashSpec(
             prefix="sym_scope",
@@ -674,16 +552,15 @@ def _build_symtable_result(
         ),
         required=("file_id", "table_id", "scope_type", "scope_name", "lineno"),
     )
-    scopes = SchemaTransform(schema=SCOPES_SCHEMA).apply(scopes_raw)
+    scopes = align_table(scopes_raw, schema=SCOPES_SCHEMA)
     scope_key = scopes.select(["file_id", "table_id", "scope_id"])
 
     symbols_raw = pa.Table.from_pylist(symbol_rows) if symbol_rows else empty_table(SYMBOLS_SCHEMA)
     if symbols_raw.num_rows > 0 and {"file_id", "scope_table_id"} <= set(symbols_raw.column_names):
-        symbols_raw = apply_join(
+        symbols_raw = left_join(
             symbols_raw,
             scope_key,
-            spec=JoinSpec(
-                join_type="left outer",
+            config=JoinConfig.from_sequences(
                 left_keys=("file_id", "scope_table_id"),
                 right_keys=("file_id", "table_id"),
                 left_output=tuple(symbols_raw.column_names),
@@ -691,7 +568,7 @@ def _build_symtable_result(
             ),
             use_threads=True,
         )
-        symbols_raw = _apply_hash_column(
+        symbols_raw = apply_hash_column(
             symbols_raw,
             spec=HashSpec(
                 prefix="sym_symbol",
@@ -700,7 +577,7 @@ def _build_symtable_result(
             ),
             required=("scope_id", "name"),
         )
-    symbols = SchemaTransform(schema=SYMBOLS_SCHEMA).apply(symbols_raw)
+    symbols = align_table(symbols_raw, schema=SYMBOLS_SCHEMA)
 
     scope_edges_raw = (
         pa.Table.from_pylist(scope_edge_rows)
@@ -708,11 +585,10 @@ def _build_symtable_result(
         else empty_table(SCOPE_EDGES_SCHEMA)
     )
     if scope_edges_raw.num_rows > 0:
-        scope_edges_raw = apply_join(
+        scope_edges_raw = left_join(
             scope_edges_raw,
             scope_key,
-            spec=JoinSpec(
-                join_type="left outer",
+            config=JoinConfig.from_sequences(
                 left_keys=("file_id", "parent_table_id"),
                 right_keys=("file_id", "table_id"),
                 left_output=tuple(scope_edges_raw.column_names),
@@ -721,11 +597,10 @@ def _build_symtable_result(
             use_threads=True,
         )
         scope_edges_raw = _rename_column(scope_edges_raw, "scope_id", "parent_scope_id")
-        scope_edges_raw = apply_join(
+        scope_edges_raw = left_join(
             scope_edges_raw,
             scope_key,
-            spec=JoinSpec(
-                join_type="left outer",
+            config=JoinConfig.from_sequences(
                 left_keys=("file_id", "child_table_id"),
                 right_keys=("file_id", "table_id"),
                 left_output=tuple(scope_edges_raw.column_names),
@@ -734,7 +609,7 @@ def _build_symtable_result(
             use_threads=True,
         )
         scope_edges_raw = _rename_column(scope_edges_raw, "scope_id", "child_scope_id")
-        scope_edges_raw = _apply_hash_column(
+        scope_edges_raw = apply_hash_column(
             scope_edges_raw,
             spec=HashSpec(
                 prefix="sym_scope_edge",
@@ -743,17 +618,16 @@ def _build_symtable_result(
             ),
             required=("parent_scope_id", "child_scope_id"),
         )
-    scope_edges = SchemaTransform(schema=SCOPE_EDGES_SCHEMA).apply(scope_edges_raw)
+    scope_edges = align_table(scope_edges_raw, schema=SCOPE_EDGES_SCHEMA)
 
     ns_edges_raw = (
         pa.Table.from_pylist(ns_edge_rows) if ns_edge_rows else empty_table(NAMESPACE_EDGES_SCHEMA)
     )
     if ns_edges_raw.num_rows > 0:
-        ns_edges_raw = apply_join(
+        ns_edges_raw = left_join(
             ns_edges_raw,
             scope_key,
-            spec=JoinSpec(
-                join_type="left outer",
+            config=JoinConfig.from_sequences(
                 left_keys=("file_id", "scope_table_id"),
                 right_keys=("file_id", "table_id"),
                 left_output=tuple(ns_edges_raw.column_names),
@@ -761,11 +635,10 @@ def _build_symtable_result(
             ),
             use_threads=True,
         )
-        ns_edges_raw = apply_join(
+        ns_edges_raw = left_join(
             ns_edges_raw,
             scope_key,
-            spec=JoinSpec(
-                join_type="left outer",
+            config=JoinConfig.from_sequences(
                 left_keys=("file_id", "child_table_id"),
                 right_keys=("file_id", "table_id"),
                 left_output=tuple(ns_edges_raw.column_names),
@@ -775,7 +648,7 @@ def _build_symtable_result(
             use_threads=True,
         )
         ns_edges_raw = _rename_column(ns_edges_raw, "scope_id_child", "child_scope_id")
-        ns_edges_raw = _apply_hash_column(
+        ns_edges_raw = apply_hash_column(
             ns_edges_raw,
             spec=HashSpec(
                 prefix="sym_symbol",
@@ -784,7 +657,7 @@ def _build_symtable_result(
             ),
             required=("scope_id", "symbol_name"),
         )
-        ns_edges_raw = _apply_hash_column(
+        ns_edges_raw = apply_hash_column(
             ns_edges_raw,
             spec=HashSpec(
                 prefix="sym_ns_edge",
@@ -793,17 +666,16 @@ def _build_symtable_result(
             ),
             required=("symbol_row_id", "child_scope_id"),
         )
-    ns_edges = SchemaTransform(schema=NAMESPACE_EDGES_SCHEMA).apply(ns_edges_raw)
+    ns_edges = align_table(ns_edges_raw, schema=NAMESPACE_EDGES_SCHEMA)
 
     func_parts_raw = func_parts_acc.to_table()
     if func_parts_raw.num_rows > 0 and {"file_id", "scope_table_id"} <= set(
         func_parts_raw.column_names
     ):
-        func_parts_raw = apply_join(
+        func_parts_raw = left_join(
             func_parts_raw,
             scope_key,
-            spec=JoinSpec(
-                join_type="left outer",
+            config=JoinConfig.from_sequences(
                 left_keys=("file_id", "scope_table_id"),
                 right_keys=("file_id", "table_id"),
                 left_output=tuple(func_parts_raw.column_names),
@@ -811,7 +683,7 @@ def _build_symtable_result(
             ),
             use_threads=True,
         )
-    func_parts = SchemaTransform(schema=FUNC_PARTS_SCHEMA).apply(func_parts_raw)
+    func_parts = align_table(func_parts_raw, schema=FUNC_PARTS_SCHEMA)
 
     return SymtableExtractResult(
         py_sym_scopes=scopes,

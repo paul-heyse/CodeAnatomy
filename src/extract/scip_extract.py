@@ -22,11 +22,14 @@ from arrowdsl.core.interop import (
     TableLike,
 )
 from arrowdsl.schema.arrays import build_list_array, build_struct_array, set_or_append_column
-from arrowdsl.schema.schema import EncodingSpec, SchemaTransform, empty_table, encode_columns
+from arrowdsl.schema.schema import empty_table
+from extract.nested_lists import ListAccumulator
+from extract.postprocess import apply_encoding
 from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
+from extract.spec_helpers import register_dataset
+from extract.tables import align_table
 from schema_spec.specs import ArrowFieldSpec, NestedFieldSpec, scip_range_bundle
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
 
 SCHEMA_VERSION = 1
 RANGE_LEN_SHORT = 3
@@ -97,142 +100,114 @@ SCIP_SIGNATURE_DOCUMENTATION_TYPE = pa.struct(
     ]
 )
 
-SCIP_METADATA_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="scip_metadata_v1",
-            version=SCHEMA_VERSION,
-            bundles=(),
-            fields=[
-                ArrowFieldSpec(name="tool_name", dtype=pa.string()),
-                ArrowFieldSpec(name="tool_version", dtype=pa.string()),
-                ArrowFieldSpec(name="project_root", dtype=pa.string()),
-                ArrowFieldSpec(name="text_document_encoding", dtype=pa.string()),
-                ArrowFieldSpec(name="protocol_version", dtype=pa.string()),
-            ],
-        )
-    )
+SCIP_METADATA_SPEC = register_dataset(
+    name="scip_metadata_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
+    fields=[
+        ArrowFieldSpec(name="tool_name", dtype=pa.string()),
+        ArrowFieldSpec(name="tool_version", dtype=pa.string()),
+        ArrowFieldSpec(name="project_root", dtype=pa.string()),
+        ArrowFieldSpec(name="text_document_encoding", dtype=pa.string()),
+        ArrowFieldSpec(name="protocol_version", dtype=pa.string()),
+    ],
 )
 
-SCIP_DOCUMENTS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="scip_documents_v1",
-            version=SCHEMA_VERSION,
-            bundles=(),
-            fields=[
-                ArrowFieldSpec(name="document_id", dtype=pa.string()),
-                ArrowFieldSpec(name="path", dtype=pa.string()),
-                ArrowFieldSpec(name="language", dtype=pa.string()),
-                ArrowFieldSpec(name="position_encoding", dtype=pa.string()),
-            ],
-        )
-    )
+SCIP_DOCUMENTS_SPEC = register_dataset(
+    name="scip_documents_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
+    fields=[
+        ArrowFieldSpec(name="document_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="language", dtype=pa.string()),
+        ArrowFieldSpec(name="position_encoding", dtype=pa.string()),
+    ],
 )
 
-SCIP_OCCURRENCES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="scip_occurrences_v1",
-            version=SCHEMA_VERSION,
-            bundles=(),
-            fields=[
-                ArrowFieldSpec(name="occurrence_id", dtype=pa.string()),
-                ArrowFieldSpec(name="document_id", dtype=pa.string()),
-                ArrowFieldSpec(name="path", dtype=pa.string()),
-                ArrowFieldSpec(name="symbol", dtype=pa.string()),
-                ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
-                ArrowFieldSpec(name="syntax_kind", dtype=pa.string()),
-                ArrowFieldSpec(name="override_documentation", dtype=pa.list_(pa.string())),
-                *scip_range_bundle(include_len=True).fields,
-                *scip_range_bundle(prefix="enc_", include_len=True).fields,
-            ],
-        )
-    )
+SCIP_OCCURRENCES_SPEC = register_dataset(
+    name="scip_occurrences_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
+    fields=[
+        ArrowFieldSpec(name="occurrence_id", dtype=pa.string()),
+        ArrowFieldSpec(name="document_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="symbol", dtype=pa.string()),
+        ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
+        ArrowFieldSpec(name="syntax_kind", dtype=pa.string()),
+        ArrowFieldSpec(name="override_documentation", dtype=pa.list_(pa.string())),
+        *scip_range_bundle(include_len=True).fields,
+        *scip_range_bundle(prefix="enc_", include_len=True).fields,
+    ],
 )
 
-SCIP_SYMBOL_INFO_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="scip_symbol_info_v1",
-            version=SCHEMA_VERSION,
-            bundles=(),
-            fields=[
-                ArrowFieldSpec(name="symbol_info_id", dtype=pa.string()),
-                ArrowFieldSpec(name="symbol", dtype=pa.string()),
-                ArrowFieldSpec(name="display_name", dtype=pa.string()),
-                ArrowFieldSpec(name="kind", dtype=pa.string()),
-                ArrowFieldSpec(name="enclosing_symbol", dtype=pa.string()),
-                ArrowFieldSpec(name="documentation", dtype=pa.list_(pa.string())),
-                ArrowFieldSpec(
-                    name="signature_documentation",
-                    dtype=SCIP_SIGNATURE_DOCUMENTATION_TYPE,
-                ),
-            ],
-        )
-    )
+SCIP_SYMBOL_INFO_SPEC = register_dataset(
+    name="scip_symbol_info_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
+    fields=[
+        ArrowFieldSpec(name="symbol_info_id", dtype=pa.string()),
+        ArrowFieldSpec(name="symbol", dtype=pa.string()),
+        ArrowFieldSpec(name="display_name", dtype=pa.string()),
+        ArrowFieldSpec(name="kind", dtype=pa.string()),
+        ArrowFieldSpec(name="enclosing_symbol", dtype=pa.string()),
+        ArrowFieldSpec(name="documentation", dtype=pa.list_(pa.string())),
+        ArrowFieldSpec(
+            name="signature_documentation",
+            dtype=SCIP_SIGNATURE_DOCUMENTATION_TYPE,
+        ),
+    ],
 )
 
-SCIP_SYMBOL_RELATIONSHIPS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="scip_symbol_relationships_v1",
-            version=SCHEMA_VERSION,
-            bundles=(),
-            fields=[
-                ArrowFieldSpec(name="relationship_id", dtype=pa.string()),
-                ArrowFieldSpec(name="symbol", dtype=pa.string()),
-                ArrowFieldSpec(name="related_symbol", dtype=pa.string()),
-                ArrowFieldSpec(name="is_reference", dtype=pa.bool_()),
-                ArrowFieldSpec(name="is_implementation", dtype=pa.bool_()),
-                ArrowFieldSpec(name="is_type_definition", dtype=pa.bool_()),
-                ArrowFieldSpec(name="is_definition", dtype=pa.bool_()),
-            ],
-        )
-    )
+SCIP_SYMBOL_RELATIONSHIPS_SPEC = register_dataset(
+    name="scip_symbol_relationships_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
+    fields=[
+        ArrowFieldSpec(name="relationship_id", dtype=pa.string()),
+        ArrowFieldSpec(name="symbol", dtype=pa.string()),
+        ArrowFieldSpec(name="related_symbol", dtype=pa.string()),
+        ArrowFieldSpec(name="is_reference", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_implementation", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_type_definition", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_definition", dtype=pa.bool_()),
+    ],
 )
 
-SCIP_EXTERNAL_SYMBOL_INFO_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="scip_external_symbol_info_v1",
-            version=SCHEMA_VERSION,
-            bundles=(),
-            fields=[
-                ArrowFieldSpec(name="symbol_info_id", dtype=pa.string()),
-                ArrowFieldSpec(name="symbol", dtype=pa.string()),
-                ArrowFieldSpec(name="display_name", dtype=pa.string()),
-                ArrowFieldSpec(name="kind", dtype=pa.string()),
-                ArrowFieldSpec(name="enclosing_symbol", dtype=pa.string()),
-                ArrowFieldSpec(name="documentation", dtype=pa.list_(pa.string())),
-                ArrowFieldSpec(
-                    name="signature_documentation",
-                    dtype=SCIP_SIGNATURE_DOCUMENTATION_TYPE,
-                ),
-            ],
-        )
-    )
+SCIP_EXTERNAL_SYMBOL_INFO_SPEC = register_dataset(
+    name="scip_external_symbol_info_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
+    fields=[
+        ArrowFieldSpec(name="symbol_info_id", dtype=pa.string()),
+        ArrowFieldSpec(name="symbol", dtype=pa.string()),
+        ArrowFieldSpec(name="display_name", dtype=pa.string()),
+        ArrowFieldSpec(name="kind", dtype=pa.string()),
+        ArrowFieldSpec(name="enclosing_symbol", dtype=pa.string()),
+        ArrowFieldSpec(name="documentation", dtype=pa.list_(pa.string())),
+        ArrowFieldSpec(
+            name="signature_documentation",
+            dtype=SCIP_SIGNATURE_DOCUMENTATION_TYPE,
+        ),
+    ],
 )
 
-SCIP_DIAGNOSTICS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="scip_diagnostics_v1",
-            version=SCHEMA_VERSION,
-            bundles=(),
-            fields=[
-                ArrowFieldSpec(name="diagnostic_id", dtype=pa.string()),
-                ArrowFieldSpec(name="document_id", dtype=pa.string()),
-                ArrowFieldSpec(name="path", dtype=pa.string()),
-                ArrowFieldSpec(name="severity", dtype=pa.string()),
-                ArrowFieldSpec(name="code", dtype=pa.string()),
-                ArrowFieldSpec(name="message", dtype=pa.string()),
-                ArrowFieldSpec(name="source", dtype=pa.string()),
-                ArrowFieldSpec(name="tags", dtype=pa.list_(pa.string())),
-                *scip_range_bundle().fields,
-            ],
-        )
-    )
+SCIP_DIAGNOSTICS_SPEC = register_dataset(
+    name="scip_diagnostics_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
+    fields=[
+        ArrowFieldSpec(name="diagnostic_id", dtype=pa.string()),
+        ArrowFieldSpec(name="document_id", dtype=pa.string()),
+        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="severity", dtype=pa.string()),
+        ArrowFieldSpec(name="code", dtype=pa.string()),
+        ArrowFieldSpec(name="message", dtype=pa.string()),
+        ArrowFieldSpec(name="source", dtype=pa.string()),
+        ArrowFieldSpec(name="tags", dtype=pa.list_(pa.string())),
+        *scip_range_bundle().fields,
+    ],
 )
 
 SCIP_METADATA_SCHEMA = SCIP_METADATA_SPEC.table_spec.to_arrow_schema()
@@ -349,6 +324,18 @@ def _normalize_range(rng: Sequence[int]) -> tuple[int, int, int, int, int] | Non
         sl, sc, el, ec = rng[:RANGE_LEN_FULL]
         return int(sl), int(sc), int(el), int(ec), RANGE_LEN_FULL
     return None
+
+
+def _normalize_string_items(items: Sequence[object]) -> list[str | None]:
+    out: list[str | None] = []
+    for item in items:
+        if item is None:
+            out.append(None)
+        elif isinstance(item, str):
+            out.append(item)
+        else:
+            out.append(str(item))
+    return out
 
 
 def _load_scip_pb2(parse_opts: SCIPParseOptions) -> ModuleType | None:
@@ -515,16 +502,6 @@ def _with_relationship_ids(table: TableLike) -> TableLike:
     return _set_column(table, "relationship_id", ids)
 
 
-def _align_table(table: TableLike, *, schema: SchemaLike) -> TableLike:
-    transform = SchemaTransform(schema=schema, safe_cast=True, on_error="unsafe")
-    return transform.apply(table)
-
-
-def _dictionary_encode(table: TableLike, columns: Sequence[str]) -> TableLike:
-    specs = tuple(EncodingSpec(column=col) for col in columns)
-    return encode_columns(table, specs=specs)
-
-
 def _index_counts(index: object) -> dict[str, int]:
     docs = getattr(index, "documents", [])
     occurrences = 0
@@ -581,26 +558,8 @@ def _metadata_rows(index: object) -> list[Row]:
     ]
 
 
-def _offsets_start() -> list[int]:
-    return [0]
-
-
 def _array(values: Sequence[object], data_type: DataTypeLike) -> ArrayLike:
     return pa.array(values, type=data_type)
-
-
-def _build_string_list(offsets: Sequence[int], values: Sequence[str | None]) -> ArrayLike:
-    return build_list_array(
-        pa.array(offsets, type=pa.int32()),
-        pa.array(values, type=pa.string()),
-    )
-
-
-def _build_int_list(offsets: Sequence[int], values: Sequence[int]) -> ArrayLike:
-    return build_list_array(
-        pa.array(offsets, type=pa.int32()),
-        pa.array(values, type=pa.int32()),
-    )
 
 
 @dataclass
@@ -643,8 +602,7 @@ class _OccurrenceAccumulator:
     symbols: list[str | None] = field(default_factory=list)
     symbol_roles: list[int] = field(default_factory=list)
     syntax_kind: list[str | None] = field(default_factory=list)
-    override_doc_offsets: list[int] = field(default_factory=_offsets_start)
-    override_doc_values: list[str | None] = field(default_factory=list)
+    override_docs: ListAccumulator[str | None] = field(default_factory=ListAccumulator)
     start_line: list[int | None] = field(default_factory=list)
     start_char: list[int | None] = field(default_factory=list)
     end_line: list[int | None] = field(default_factory=list)
@@ -688,14 +646,7 @@ class _OccurrenceAccumulator:
             else None
         )
         override_docs = getattr(occurrence, "override_documentation", []) or []
-        for doc in override_docs:
-            if doc is None:
-                self.override_doc_values.append(None)
-            elif isinstance(doc, str):
-                self.override_doc_values.append(doc)
-            else:
-                self.override_doc_values.append(str(doc))
-        self.override_doc_offsets.append(len(self.override_doc_values))
+        self.override_docs.append(_normalize_string_items(override_docs))
         self.start_line.append(sl)
         self.start_char.append(sc)
         self.end_line.append(el)
@@ -735,7 +686,7 @@ class _OccurrenceAccumulator:
 
 
 def _build_override_docs(acc: _OccurrenceAccumulator) -> ArrayLike:
-    return _build_string_list(acc.override_doc_offsets, acc.override_doc_values)
+    return acc.override_docs.build(value_type=pa.string())
 
 
 OVERRIDE_DOC_SPEC = NestedFieldSpec(
@@ -754,8 +705,7 @@ class _DiagnosticAccumulator:
     code: list[str | None] = field(default_factory=list)
     message: list[str | None] = field(default_factory=list)
     source: list[str | None] = field(default_factory=list)
-    tags_offsets: list[int] = field(default_factory=_offsets_start)
-    tags_values: list[str | None] = field(default_factory=list)
+    tags: ListAccumulator[str | None] = field(default_factory=ListAccumulator)
     start_line: list[int | None] = field(default_factory=list)
     start_char: list[int | None] = field(default_factory=list)
     end_line: list[int | None] = field(default_factory=list)
@@ -789,14 +739,7 @@ class _DiagnosticAccumulator:
         tags = getattr(diag, "tags", []) if hasattr(diag, "tags") else []
         if tags is None:
             tags = []
-        for tag in tags:
-            if tag is None:
-                self.tags_values.append(None)
-            elif isinstance(tag, str):
-                self.tags_values.append(tag)
-            else:
-                self.tags_values.append(str(tag))
-        self.tags_offsets.append(len(self.tags_values))
+        self.tags.append(_normalize_string_items(tags))
         self.start_line.append(dsl)
         self.start_char.append(dsc)
         self.end_line.append(del_)
@@ -824,7 +767,7 @@ class _DiagnosticAccumulator:
 
 
 def _build_diag_tags(acc: _DiagnosticAccumulator) -> ArrayLike:
-    return _build_string_list(acc.tags_offsets, acc.tags_values)
+    return acc.tags.build(value_type=pa.string())
 
 
 DIAG_TAGS_SPEC = NestedFieldSpec(
@@ -841,16 +784,14 @@ class _SymbolInfoAccumulator:
     display_names: list[str | None] = field(default_factory=list)
     kinds: list[str | None] = field(default_factory=list)
     enclosing_symbols: list[str | None] = field(default_factory=list)
-    documentation_offsets: list[int] = field(default_factory=_offsets_start)
-    documentation_values: list[str | None] = field(default_factory=list)
+    documentation: ListAccumulator[str | None] = field(default_factory=ListAccumulator)
     sig_doc_texts: list[str | None] = field(default_factory=list)
     sig_doc_languages: list[str | None] = field(default_factory=list)
     sig_doc_is_null: list[bool] = field(default_factory=list)
-    sig_doc_occurrence_offsets: list[int] = field(default_factory=_offsets_start)
+    sig_doc_occurrence_offsets: list[int] = field(default_factory=lambda: [0])
     sig_doc_occurrence_symbols: list[str | None] = field(default_factory=list)
     sig_doc_occurrence_roles: list[int] = field(default_factory=list)
-    sig_doc_occurrence_range_offsets: list[int] = field(default_factory=_offsets_start)
-    sig_doc_occurrence_range_values: list[int] = field(default_factory=list)
+    sig_doc_occurrence_ranges: ListAccumulator[int] = field(default_factory=ListAccumulator)
 
     def append(self, symbol_info: object) -> None:
         self.symbol_info_ids.append(None)
@@ -872,14 +813,7 @@ class _SymbolInfoAccumulator:
         docs = getattr(symbol_info, "documentation", None)
         if not hasattr(symbol_info, "documentation") or docs is None:
             docs = []
-        for doc in docs:
-            if doc is None:
-                self.documentation_values.append(None)
-            elif isinstance(doc, str):
-                self.documentation_values.append(doc)
-            else:
-                self.documentation_values.append(str(doc))
-        self.documentation_offsets.append(len(self.documentation_values))
+        self.documentation.append(_normalize_string_items(docs))
 
     def _append_signature_documentation(self, sig_doc: object | None) -> None:
         if sig_doc is None:
@@ -915,12 +849,13 @@ class _SymbolInfoAccumulator:
     def _append_signature_doc_occurrence(self, occ: object) -> None:
         self.sig_doc_occurrence_symbols.append(getattr(occ, "symbol", None))
         self.sig_doc_occurrence_roles.append(int(getattr(occ, "symbol_roles", 0) or 0))
+        range_values: list[int] = []
         for value in getattr(occ, "range", []) or []:
             if isinstance(value, bool):
                 continue
             if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
-                self.sig_doc_occurrence_range_values.append(int(value))
-        self.sig_doc_occurrence_range_offsets.append(len(self.sig_doc_occurrence_range_values))
+                range_values.append(int(value))
+        self.sig_doc_occurrence_ranges.append(range_values)
 
     def to_table(self, *, schema: SchemaLike) -> TableLike:
         documentation = SYMBOL_DOC_SPEC.builder(self)
@@ -940,14 +875,11 @@ class _SymbolInfoAccumulator:
 
 
 def _build_symbol_docs(acc: _SymbolInfoAccumulator) -> ArrayLike:
-    return _build_string_list(acc.documentation_offsets, acc.documentation_values)
+    return acc.documentation.build(value_type=pa.string())
 
 
 def _build_sig_doc_occ_ranges(acc: _SymbolInfoAccumulator) -> ArrayLike:
-    return _build_int_list(
-        acc.sig_doc_occurrence_range_offsets,
-        acc.sig_doc_occurrence_range_values,
-    )
+    return acc.sig_doc_occurrence_ranges.build(value_type=pa.int32())
 
 
 def _build_sig_doc_occurrences(acc: _SymbolInfoAccumulator) -> ArrayLike:
@@ -1091,18 +1023,18 @@ def _extract_tables_from_index(index: object, *, parse_opts: SCIPParseOptions) -
     t_rels = _with_relationship_ids(t_rels)
     t_ext = _with_symbol_ids(t_ext, prefix="scip_ext_sym")
 
-    t_meta = _align_table(t_meta, schema=SCIP_METADATA_SCHEMA)
-    t_docs = _align_table(t_docs, schema=SCIP_DOCUMENTS_SCHEMA)
-    t_occs = _align_table(t_occs, schema=SCIP_OCCURRENCES_SCHEMA)
-    t_syms = _align_table(t_syms, schema=SCIP_SYMBOL_INFO_SCHEMA)
-    t_rels = _align_table(t_rels, schema=SCIP_SYMBOL_RELATIONSHIPS_SCHEMA)
-    t_ext = _align_table(t_ext, schema=SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA)
-    t_diags = _align_table(t_diags, schema=SCIP_DIAGNOSTICS_SCHEMA)
+    t_meta = align_table(t_meta, schema=SCIP_METADATA_SCHEMA)
+    t_docs = align_table(t_docs, schema=SCIP_DOCUMENTS_SCHEMA)
+    t_occs = align_table(t_occs, schema=SCIP_OCCURRENCES_SCHEMA)
+    t_syms = align_table(t_syms, schema=SCIP_SYMBOL_INFO_SCHEMA)
+    t_rels = align_table(t_rels, schema=SCIP_SYMBOL_RELATIONSHIPS_SCHEMA)
+    t_ext = align_table(t_ext, schema=SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA)
+    t_diags = align_table(t_diags, schema=SCIP_DIAGNOSTICS_SCHEMA)
 
     if parse_opts.dictionary_encode_strings:
-        t_meta = _dictionary_encode(
+        t_meta = apply_encoding(
             t_meta,
-            [
+            columns=[
                 "tool_name",
                 "tool_version",
                 "project_root",
@@ -1110,18 +1042,18 @@ def _extract_tables_from_index(index: object, *, parse_opts: SCIPParseOptions) -
                 "protocol_version",
             ],
         )
-        t_docs = _dictionary_encode(t_docs, ["path", "language", "position_encoding"])
-        t_occs = _dictionary_encode(t_occs, ["path", "symbol", "syntax_kind"])
-        t_syms = _dictionary_encode(
+        t_docs = apply_encoding(t_docs, columns=["path", "language", "position_encoding"])
+        t_occs = apply_encoding(t_occs, columns=["path", "symbol", "syntax_kind"])
+        t_syms = apply_encoding(
             t_syms,
-            ["symbol", "display_name", "kind", "enclosing_symbol"],
+            columns=["symbol", "display_name", "kind", "enclosing_symbol"],
         )
-        t_rels = _dictionary_encode(t_rels, ["symbol", "related_symbol"])
-        t_ext = _dictionary_encode(
+        t_rels = apply_encoding(t_rels, columns=["symbol", "related_symbol"])
+        t_ext = apply_encoding(
             t_ext,
-            ["symbol", "display_name", "kind", "enclosing_symbol"],
+            columns=["symbol", "display_name", "kind", "enclosing_symbol"],
         )
-        t_diags = _dictionary_encode(t_diags, ["path", "severity", "code", "source"])
+        t_diags = apply_encoding(t_diags, columns=["path", "severity", "code", "source"])
 
     return SCIPExtractResult(
         scip_metadata=t_meta,

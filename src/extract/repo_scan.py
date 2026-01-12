@@ -12,12 +12,13 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from arrowdsl.core.ids import HashSpec, hash_column_values
+from arrowdsl.core.ids import HashSpec
 from arrowdsl.core.interop import TableLike
-from arrowdsl.schema.arrays import set_or_append_column
 from core_types import PathLike, ensure_path
+from extract.hashing import apply_hash_column
+from extract.spec_helpers import register_dataset
+from extract.tables import rows_to_table
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
 
 SCHEMA_VERSION = 1
 
@@ -47,21 +48,17 @@ class RepoScanOptions:
     max_files: int | None = None
 
 
-REPO_FILES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="repo_files_v1",
-            version=SCHEMA_VERSION,
-            bundles=(file_identity_bundle(),),
-            fields=[
-                ArrowFieldSpec(name="abs_path", dtype=pa.string()),
-                ArrowFieldSpec(name="size_bytes", dtype=pa.int64()),
-                ArrowFieldSpec(name="encoding", dtype=pa.string()),
-                ArrowFieldSpec(name="text", dtype=pa.string()),
-                ArrowFieldSpec(name="bytes", dtype=pa.binary()),
-            ],
-        )
-    )
+REPO_FILES_SPEC = register_dataset(
+    name="repo_files_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
+    fields=[
+        ArrowFieldSpec(name="abs_path", dtype=pa.string()),
+        ArrowFieldSpec(name="size_bytes", dtype=pa.int64()),
+        ArrowFieldSpec(name="encoding", dtype=pa.string()),
+        ArrowFieldSpec(name="text", dtype=pa.string()),
+        ArrowFieldSpec(name="bytes", dtype=pa.binary()),
+    ],
 )
 
 REPO_FILES_SCHEMA = REPO_FILES_SPEC.table_spec.to_arrow_schema()
@@ -209,7 +206,7 @@ def scan_repo(repo_root: PathLike, options: RepoScanOptions | None = None) -> Ta
         if max_files is not None and len(rows) >= max_files:
             break
 
-    table = pa.Table.from_pylist(rows, schema=REPO_FILES_SCHEMA)
+    table = rows_to_table(rows, REPO_FILES_SCHEMA)
     if table.num_rows == 0:
         return table
     extra = (options.repo_id,) if options.repo_id else ()
@@ -220,5 +217,4 @@ def scan_repo(repo_root: PathLike, options: RepoScanOptions | None = None) -> Ta
         extra_literals=extra,
         out_col="file_id",
     )
-    file_id = hash_column_values(table, spec=spec)
-    return set_or_append_column(table, "file_id", file_id)
+    return apply_hash_column(table, spec=spec, required=("path",))

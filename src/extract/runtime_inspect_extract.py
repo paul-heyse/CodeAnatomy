@@ -12,14 +12,14 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from arrowdsl.compute.kernels import apply_join
-from arrowdsl.core.ids import HashSpec, hash_column_values
-from arrowdsl.core.interop import TableLike, pc
-from arrowdsl.plan.ops import JoinSpec
-from arrowdsl.schema.arrays import set_or_append_column
-from arrowdsl.schema.schema import SchemaTransform, empty_table
+from arrowdsl.core.ids import HashSpec
+from arrowdsl.core.interop import TableLike
+from arrowdsl.schema.schema import empty_table
+from extract.hashing import apply_hash_column
+from extract.join_helpers import JoinConfig, left_join
+from extract.spec_helpers import register_dataset
+from extract.tables import align_table
 from schema_spec.specs import ArrowFieldSpec
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
 
 SCHEMA_VERSION = 1
 
@@ -54,77 +54,61 @@ class RuntimeInspectResult:
     rt_members: TableLike
 
 
-RT_OBJECTS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="rt_objects_v1",
-            version=SCHEMA_VERSION,
-            bundles=(),
-            fields=[
-                ArrowFieldSpec(name="rt_id", dtype=pa.string()),
-                ArrowFieldSpec(name="module", dtype=pa.string()),
-                ArrowFieldSpec(name="qualname", dtype=pa.string()),
-                ArrowFieldSpec(name="name", dtype=pa.string()),
-                ArrowFieldSpec(name="obj_type", dtype=pa.string()),
-                ArrowFieldSpec(name="source_path", dtype=pa.string()),
-                ArrowFieldSpec(name="source_line", dtype=pa.int32()),
-            ],
-        )
-    )
+RT_OBJECTS_SPEC = register_dataset(
+    name="rt_objects_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
+    fields=[
+        ArrowFieldSpec(name="rt_id", dtype=pa.string()),
+        ArrowFieldSpec(name="module", dtype=pa.string()),
+        ArrowFieldSpec(name="qualname", dtype=pa.string()),
+        ArrowFieldSpec(name="name", dtype=pa.string()),
+        ArrowFieldSpec(name="obj_type", dtype=pa.string()),
+        ArrowFieldSpec(name="source_path", dtype=pa.string()),
+        ArrowFieldSpec(name="source_line", dtype=pa.int32()),
+    ],
 )
 
-RT_SIGNATURES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="rt_signatures_v1",
-            version=SCHEMA_VERSION,
-            bundles=(),
-            fields=[
-                ArrowFieldSpec(name="sig_id", dtype=pa.string()),
-                ArrowFieldSpec(name="rt_id", dtype=pa.string()),
-                ArrowFieldSpec(name="signature", dtype=pa.string()),
-                ArrowFieldSpec(name="return_annotation", dtype=pa.string()),
-            ],
-        )
-    )
+RT_SIGNATURES_SPEC = register_dataset(
+    name="rt_signatures_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
+    fields=[
+        ArrowFieldSpec(name="sig_id", dtype=pa.string()),
+        ArrowFieldSpec(name="rt_id", dtype=pa.string()),
+        ArrowFieldSpec(name="signature", dtype=pa.string()),
+        ArrowFieldSpec(name="return_annotation", dtype=pa.string()),
+    ],
 )
 
-RT_SIGNATURE_PARAMS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="rt_signature_params_v1",
-            version=SCHEMA_VERSION,
-            bundles=(),
-            fields=[
-                ArrowFieldSpec(name="param_id", dtype=pa.string()),
-                ArrowFieldSpec(name="sig_id", dtype=pa.string()),
-                ArrowFieldSpec(name="name", dtype=pa.string()),
-                ArrowFieldSpec(name="kind", dtype=pa.string()),
-                ArrowFieldSpec(name="default_repr", dtype=pa.string()),
-                ArrowFieldSpec(name="annotation_repr", dtype=pa.string()),
-                ArrowFieldSpec(name="position", dtype=pa.int32()),
-            ],
-        )
-    )
+RT_SIGNATURE_PARAMS_SPEC = register_dataset(
+    name="rt_signature_params_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
+    fields=[
+        ArrowFieldSpec(name="param_id", dtype=pa.string()),
+        ArrowFieldSpec(name="sig_id", dtype=pa.string()),
+        ArrowFieldSpec(name="name", dtype=pa.string()),
+        ArrowFieldSpec(name="kind", dtype=pa.string()),
+        ArrowFieldSpec(name="default_repr", dtype=pa.string()),
+        ArrowFieldSpec(name="annotation_repr", dtype=pa.string()),
+        ArrowFieldSpec(name="position", dtype=pa.int32()),
+    ],
 )
 
-RT_MEMBERS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="rt_members_v1",
-            version=SCHEMA_VERSION,
-            bundles=(),
-            fields=[
-                ArrowFieldSpec(name="member_id", dtype=pa.string()),
-                ArrowFieldSpec(name="rt_id", dtype=pa.string()),
-                ArrowFieldSpec(name="name", dtype=pa.string()),
-                ArrowFieldSpec(name="member_kind", dtype=pa.string()),
-                ArrowFieldSpec(name="value_repr", dtype=pa.string()),
-                ArrowFieldSpec(name="value_module", dtype=pa.string()),
-                ArrowFieldSpec(name="value_qualname", dtype=pa.string()),
-            ],
-        )
-    )
+RT_MEMBERS_SPEC = register_dataset(
+    name="rt_members_v1",
+    version=SCHEMA_VERSION,
+    bundles=(),
+    fields=[
+        ArrowFieldSpec(name="member_id", dtype=pa.string()),
+        ArrowFieldSpec(name="rt_id", dtype=pa.string()),
+        ArrowFieldSpec(name="name", dtype=pa.string()),
+        ArrowFieldSpec(name="member_kind", dtype=pa.string()),
+        ArrowFieldSpec(name="value_repr", dtype=pa.string()),
+        ArrowFieldSpec(name="value_module", dtype=pa.string()),
+        ArrowFieldSpec(name="value_qualname", dtype=pa.string()),
+    ],
 )
 
 RT_OBJECTS_SCHEMA = RT_OBJECTS_SPEC.table_spec.to_arrow_schema()
@@ -472,27 +456,6 @@ def _parse_runtime_members(members_raw: object) -> list[Row]:
     return member_rows
 
 
-def _valid_mask(table: TableLike, cols: Sequence[str]) -> object:
-    mask = pc.is_valid(table[cols[0]])
-    for col in cols[1:]:
-        mask = pc.and_(mask, pc.is_valid(table[col]))
-    return mask
-
-
-def _apply_hash_column(
-    table: TableLike,
-    *,
-    spec: HashSpec,
-    required: Sequence[str] | None = None,
-) -> TableLike:
-    hashed = hash_column_values(table, spec=spec)
-    out_col = spec.out_col or f"{spec.prefix}_id"
-    if required:
-        mask = _valid_mask(table, required)
-        hashed = pc.if_else(mask, hashed, pa.scalar(None, type=hashed.type))
-    return set_or_append_column(table, out_col, hashed)
-
-
 def _runtime_tables_from_rows(
     *,
     obj_rows: list[Row],
@@ -509,7 +472,7 @@ def _runtime_tables_from_rows(
         )
 
     rt_objects_raw = pa.Table.from_pylist(obj_rows)
-    rt_objects_raw = _apply_hash_column(
+    rt_objects_raw = apply_hash_column(
         rt_objects_raw,
         spec=HashSpec(prefix="rt_obj", cols=("module", "qualname"), out_col="rt_id"),
         required=("module", "qualname"),
@@ -518,11 +481,10 @@ def _runtime_tables_from_rows(
     sig_table = pa.Table.from_pylist(sig_rows) if sig_rows else empty_table(RT_SIGNATURES_SCHEMA)
     if sig_table.num_rows > 0 and "object_key" in sig_table.column_names:
         sig_meta = rt_objects_raw.select(["object_key", "rt_id"])
-        sig_table = apply_join(
+        sig_table = left_join(
             sig_table,
             sig_meta,
-            spec=JoinSpec(
-                join_type="left outer",
+            config=JoinConfig.from_sequences(
                 left_keys=("object_key",),
                 right_keys=("object_key",),
                 left_output=tuple(sig_table.column_names),
@@ -531,7 +493,7 @@ def _runtime_tables_from_rows(
             use_threads=True,
         )
     if sig_table.num_rows > 0:
-        sig_table = _apply_hash_column(
+        sig_table = apply_hash_column(
             sig_table,
             spec=HashSpec(prefix="rt_sig", cols=("rt_id", "signature"), out_col="sig_id"),
             required=("rt_id", "signature"),
@@ -542,11 +504,10 @@ def _runtime_tables_from_rows(
     )
     if param_table.num_rows > 0 and {"object_key", "signature"} <= set(param_table.column_names):
         sig_meta = sig_table.select(["object_key", "signature", "sig_id"])
-        param_table = apply_join(
+        param_table = left_join(
             param_table,
             sig_meta,
-            spec=JoinSpec(
-                join_type="left outer",
+            config=JoinConfig.from_sequences(
                 left_keys=("object_key", "signature"),
                 right_keys=("object_key", "signature"),
                 left_output=tuple(param_table.column_names),
@@ -555,7 +516,7 @@ def _runtime_tables_from_rows(
             use_threads=True,
         )
     if param_table.num_rows > 0:
-        param_table = _apply_hash_column(
+        param_table = apply_hash_column(
             param_table,
             spec=HashSpec(prefix="rt_param", cols=("sig_id", "name"), out_col="param_id"),
             required=("sig_id", "name"),
@@ -566,11 +527,10 @@ def _runtime_tables_from_rows(
     )
     if member_table.num_rows > 0 and "object_key" in member_table.column_names:
         member_meta = rt_objects_raw.select(["object_key", "rt_id"])
-        member_table = apply_join(
+        member_table = left_join(
             member_table,
             member_meta,
-            spec=JoinSpec(
-                join_type="left outer",
+            config=JoinConfig.from_sequences(
                 left_keys=("object_key",),
                 right_keys=("object_key",),
                 left_output=tuple(member_table.column_names),
@@ -579,16 +539,16 @@ def _runtime_tables_from_rows(
             use_threads=True,
         )
     if member_table.num_rows > 0:
-        member_table = _apply_hash_column(
+        member_table = apply_hash_column(
             member_table,
             spec=HashSpec(prefix="rt_member", cols=("rt_id", "name"), out_col="member_id"),
             required=("rt_id", "name"),
         )
 
-    rt_objects = SchemaTransform(schema=RT_OBJECTS_SCHEMA).apply(rt_objects_raw)
-    rt_signatures = SchemaTransform(schema=RT_SIGNATURES_SCHEMA).apply(sig_table)
-    rt_params = SchemaTransform(schema=RT_SIGNATURE_PARAMS_SCHEMA).apply(param_table)
-    rt_members = SchemaTransform(schema=RT_MEMBERS_SCHEMA).apply(member_table)
+    rt_objects = align_table(rt_objects_raw, schema=RT_OBJECTS_SCHEMA)
+    rt_signatures = align_table(sig_table, schema=RT_SIGNATURES_SCHEMA)
+    rt_params = align_table(param_table, schema=RT_SIGNATURE_PARAMS_SCHEMA)
+    rt_members = align_table(member_table, schema=RT_MEMBERS_SCHEMA)
     return RuntimeInspectResult(
         rt_objects=rt_objects,
         rt_signatures=rt_signatures,

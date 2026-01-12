@@ -9,13 +9,15 @@ import pyarrow as pa
 import tree_sitter_python
 from tree_sitter import Language, Parser
 
-from arrowdsl.core.ids import HashSpec, hash_column_values
+from arrowdsl.core.ids import HashSpec
 from arrowdsl.core.interop import TableLike, pc
 from arrowdsl.schema.arrays import set_or_append_column
-from arrowdsl.schema.schema import empty_table
-from extract.file_context import FileContext, iter_file_contexts
+from extract.common import bytes_from_file_ctx, file_identity_row, iter_contexts
+from extract.file_context import FileContext
+from extract.hashing import apply_hash_column
+from extract.spec_helpers import register_dataset
+from extract.tables import rows_to_table
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
 
 SCHEMA_VERSION = 1
 
@@ -50,61 +52,49 @@ class TreeSitterRowBuffers:
     parent_indices: list[int | None]
 
 
-TS_NODES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="ts_nodes_v1",
-            version=SCHEMA_VERSION,
-            bundles=(file_identity_bundle(),),
-            fields=[
-                ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
-                ArrowFieldSpec(name="parent_ts_id", dtype=pa.string()),
-                ArrowFieldSpec(name="ts_type", dtype=pa.string()),
-                ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
-                ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
-                ArrowFieldSpec(name="is_named", dtype=pa.bool_()),
-                ArrowFieldSpec(name="has_error", dtype=pa.bool_()),
-                ArrowFieldSpec(name="is_error", dtype=pa.bool_()),
-                ArrowFieldSpec(name="is_missing", dtype=pa.bool_()),
-            ],
-        )
-    )
+TS_NODES_SPEC = register_dataset(
+    name="ts_nodes_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
+    fields=[
+        ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
+        ArrowFieldSpec(name="parent_ts_id", dtype=pa.string()),
+        ArrowFieldSpec(name="ts_type", dtype=pa.string()),
+        ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
+        ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
+        ArrowFieldSpec(name="is_named", dtype=pa.bool_()),
+        ArrowFieldSpec(name="has_error", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_error", dtype=pa.bool_()),
+        ArrowFieldSpec(name="is_missing", dtype=pa.bool_()),
+    ],
 )
 
-TS_ERRORS_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="ts_errors_v1",
-            version=SCHEMA_VERSION,
-            bundles=(file_identity_bundle(),),
-            fields=[
-                ArrowFieldSpec(name="ts_error_id", dtype=pa.string()),
-                ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
-                ArrowFieldSpec(name="ts_type", dtype=pa.string()),
-                ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
-                ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
-                ArrowFieldSpec(name="is_error", dtype=pa.bool_()),
-            ],
-        )
-    )
+TS_ERRORS_SPEC = register_dataset(
+    name="ts_errors_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
+    fields=[
+        ArrowFieldSpec(name="ts_error_id", dtype=pa.string()),
+        ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
+        ArrowFieldSpec(name="ts_type", dtype=pa.string()),
+        ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
+        ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
+        ArrowFieldSpec(name="is_error", dtype=pa.bool_()),
+    ],
 )
 
-TS_MISSING_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="ts_missing_v1",
-            version=SCHEMA_VERSION,
-            bundles=(file_identity_bundle(),),
-            fields=[
-                ArrowFieldSpec(name="ts_missing_id", dtype=pa.string()),
-                ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
-                ArrowFieldSpec(name="ts_type", dtype=pa.string()),
-                ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
-                ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
-                ArrowFieldSpec(name="is_missing", dtype=pa.bool_()),
-            ],
-        )
-    )
+TS_MISSING_SPEC = register_dataset(
+    name="ts_missing_v1",
+    version=SCHEMA_VERSION,
+    bundles=(file_identity_bundle(),),
+    fields=[
+        ArrowFieldSpec(name="ts_missing_id", dtype=pa.string()),
+        ArrowFieldSpec(name="ts_node_id", dtype=pa.string()),
+        ArrowFieldSpec(name="ts_type", dtype=pa.string()),
+        ArrowFieldSpec(name="start_byte", dtype=pa.int64()),
+        ArrowFieldSpec(name="end_byte", dtype=pa.int64()),
+        ArrowFieldSpec(name="is_missing", dtype=pa.bool_()),
+    ],
 )
 
 TS_NODES_SCHEMA = TS_NODES_SPEC.table_spec.to_arrow_schema()
@@ -117,15 +107,6 @@ def _parser() -> Parser:
     return Parser(language)
 
 
-def _row_bytes(file_ctx: FileContext) -> bytes | None:
-    if file_ctx.data is not None:
-        return file_ctx.data
-    if file_ctx.text is None:
-        return None
-    encoding = file_ctx.encoding or "utf-8"
-    return file_ctx.text.encode(encoding, errors="replace")
-
-
 def _iter_nodes(root: object) -> Iterator[tuple[object, object | None]]:
     stack: list[tuple[object, object | None]] = [(root, None)]
     while stack:
@@ -135,26 +116,16 @@ def _iter_nodes(root: object) -> Iterator[tuple[object, object | None]]:
         stack.extend((child, node) for child in reversed(children))
 
 
-def _apply_hash_column(table: TableLike, *, spec: HashSpec) -> TableLike:
-    hashed = hash_column_values(table, spec=spec)
-    out_col = spec.out_col or f"{spec.prefix}_id"
-    return set_or_append_column(table, out_col, hashed)
-
-
 def _node_row(
     node: object,
     *,
-    file_id: str,
-    path: str,
-    file_sha256: str | None,
+    file_ctx: FileContext,
 ) -> Row:
     start = int(getattr(node, "start_byte", 0))
     end = int(getattr(node, "end_byte", 0))
     ts_type = str(getattr(node, "type", ""))
     return {
-        "file_id": file_id,
-        "path": path,
-        "file_sha256": file_sha256,
+        **file_identity_row(file_ctx),
         "ts_type": ts_type,
         "start_byte": start,
         "end_byte": end,
@@ -224,8 +195,7 @@ def extract_ts(
         parent_indices=[],
     )
 
-    contexts = file_contexts if file_contexts is not None else iter_file_contexts(repo_files)
-    for file_ctx in contexts:
+    for file_ctx in iter_contexts(repo_files, file_contexts):
         _extract_ts_for_row(
             file_ctx,
             parser=parser,
@@ -233,13 +203,9 @@ def extract_ts(
             buffers=buffers,
         )
 
-    ts_nodes = (
-        pa.Table.from_pylist(node_rows, schema=TS_NODES_SCHEMA)
-        if node_rows
-        else empty_table(TS_NODES_SCHEMA)
-    )
+    ts_nodes = rows_to_table(node_rows, TS_NODES_SCHEMA)
     if ts_nodes.num_rows > 0:
-        ts_nodes = _apply_hash_column(
+        ts_nodes = apply_hash_column(
             ts_nodes,
             spec=HashSpec(
                 prefix="ts_node",
@@ -251,13 +217,9 @@ def extract_ts(
         parent_ids = pc.take(ts_nodes["ts_node_id"], parent_indices)
         ts_nodes = set_or_append_column(ts_nodes, "parent_ts_id", parent_ids)
 
-    ts_errors = (
-        pa.Table.from_pylist(error_rows, schema=TS_ERRORS_SCHEMA)
-        if error_rows
-        else empty_table(TS_ERRORS_SCHEMA)
-    )
+    ts_errors = rows_to_table(error_rows, TS_ERRORS_SCHEMA)
     if ts_errors.num_rows > 0:
-        ts_errors = _apply_hash_column(
+        ts_errors = apply_hash_column(
             ts_errors,
             spec=HashSpec(
                 prefix="ts_node",
@@ -265,7 +227,7 @@ def extract_ts(
                 out_col="ts_node_id",
             ),
         )
-        ts_errors = _apply_hash_column(
+        ts_errors = apply_hash_column(
             ts_errors,
             spec=HashSpec(
                 prefix="ts_error",
@@ -274,13 +236,9 @@ def extract_ts(
             ),
         )
 
-    ts_missing = (
-        pa.Table.from_pylist(missing_rows, schema=TS_MISSING_SCHEMA)
-        if missing_rows
-        else empty_table(TS_MISSING_SCHEMA)
-    )
+    ts_missing = rows_to_table(missing_rows, TS_MISSING_SCHEMA)
     if ts_missing.num_rows > 0:
-        ts_missing = _apply_hash_column(
+        ts_missing = apply_hash_column(
             ts_missing,
             spec=HashSpec(
                 prefix="ts_node",
@@ -288,7 +246,7 @@ def extract_ts(
                 out_col="ts_node_id",
             ),
         )
-        ts_missing = _apply_hash_column(
+        ts_missing = apply_hash_column(
             ts_missing,
             spec=HashSpec(
                 prefix="ts_missing",
@@ -313,20 +271,17 @@ def _extract_ts_for_row(
 ) -> None:
     if not file_ctx.file_id or not file_ctx.path:
         return
-    data = _row_bytes(file_ctx)
+    data = bytes_from_file_ctx(file_ctx)
     if data is None:
         return
     tree = parser.parse(data)
     root = tree.root_node
     row_by_node_index: dict[object, int] = {}
-    file_sha = file_ctx.file_sha256
     for node, parent in _iter_nodes(root):
         parent_index = row_by_node_index.get(parent) if parent is not None else None
         row = _node_row(
             node,
-            file_id=file_ctx.file_id,
-            path=file_ctx.path,
-            file_sha256=file_sha,
+            file_ctx=file_ctx,
         )
         if options.include_nodes:
             index = len(buffers.node_rows)

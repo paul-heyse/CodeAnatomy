@@ -10,9 +10,12 @@ from pathlib import Path
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
+from arrowdsl.schema.schema import EncodingPolicy, SchemaTransform
 from core_types import PathLike, ensure_path
+
+type DatasetWriteInput = TableLike | RecordBatchReaderLike
 
 
 @dataclass(frozen=True)
@@ -33,6 +36,28 @@ class ParquetWriteOptions:
     data_page_size: int | None = None
     max_rows_per_file: int = 1_000_000  # used for dataset writes
     allow_truncated_timestamps: bool = True
+
+
+@dataclass(frozen=True)
+class DatasetWriteConfig:
+    """Dataset write configuration with schema/encoding alignment."""
+
+    opts: ParquetWriteOptions | None = None
+    overwrite: bool = True
+    basename_template: str = "part-{i}.parquet"
+    schema: SchemaLike | None = None
+    encoding_policy: EncodingPolicy | None = None
+
+
+@dataclass(frozen=True)
+class NamedDatasetWriteConfig:
+    """Named dataset write configuration with per-dataset schemas."""
+
+    opts: ParquetWriteOptions | None = None
+    overwrite: bool = True
+    basename_template: str = "part-{i}.parquet"
+    schemas: Mapping[str, SchemaLike] | None = None
+    encoding_policies: Mapping[str, EncodingPolicy] | None = None
 
 
 def _ensure_dir(path: Path) -> None:
@@ -80,6 +105,28 @@ def _artifact_path(base: Path, suffix: str) -> Path:
     return base.with_name(f"{base.stem}_{suffix}{base.suffix}")
 
 
+def _apply_schema_and_encoding(
+    data: DatasetWriteInput,
+    *,
+    schema: SchemaLike | None,
+    encoding_policy: EncodingPolicy | None,
+) -> DatasetWriteInput:
+    if schema is None and encoding_policy is None:
+        return data
+    table = data.read_all() if isinstance(data, RecordBatchReaderLike) else data
+    if schema is not None:
+        transform = SchemaTransform(
+            schema=schema,
+            safe_cast=True,
+            keep_extra_columns=False,
+            on_error="unsafe",
+        )
+        table = transform.apply(table)
+    if encoding_policy is not None:
+        table = encoding_policy.apply(table)
+    return table
+
+
 def write_finalize_result_parquet(
     result: FinalizeResult,
     path: PathLike,
@@ -123,14 +170,15 @@ def write_finalize_result_parquet(
 
 
 def write_dataset_parquet(
-    table: TableLike,
+    table: DatasetWriteInput,
     base_dir: PathLike,
     *,
-    opts: ParquetWriteOptions | None = None,
-    overwrite: bool = True,
-    basename_template: str = "part-{i}.parquet",
+    config: DatasetWriteConfig | None = None,
 ) -> str:
     """Write a Parquet dataset directory to base_dir.
+
+    Accepts tables or RecordBatchReader inputs; readers are streamed when no schema or
+    encoding policy is provided.
 
     This is the preferred storage form when you intend to scan with:
       pyarrow.dataset.dataset(base_dir, format="parquet")
@@ -140,20 +188,29 @@ def write_dataset_parquet(
     str
         Dataset directory path.
     """
-    options = opts or ParquetWriteOptions()
+    config = config or DatasetWriteConfig()
+    options = config.opts or ParquetWriteOptions()
     base_path = ensure_path(base_dir)
-    if overwrite:
+    if config.overwrite:
         _rm_tree(base_path)
     _ensure_dir(base_path)
 
+    data = _apply_schema_and_encoding(
+        table,
+        schema=config.schema,
+        encoding_policy=config.encoding_policy,
+    )
+
     # ds.write_dataset handles chunking into multiple files.
     ds.write_dataset(
-        data=table,
+        data=data,
         base_dir=str(base_path),
         format="parquet",
-        basename_template=basename_template,
+        basename_template=config.basename_template,
         max_rows_per_file=options.max_rows_per_file,
-        existing_data_behavior="overwrite_or_ignore" if not overwrite else "delete_matching",
+        existing_data_behavior=(
+            "overwrite_or_ignore" if not config.overwrite else "delete_matching"
+        ),
         file_options=ds.ParquetFileFormat().make_write_options(
             compression=options.compression,
             use_dictionary=options.use_dictionary,
@@ -176,13 +233,12 @@ def read_table_parquet(path: PathLike) -> TableLike:
 
 
 def write_named_datasets_parquet(
-    datasets: Mapping[str, TableLike],
+    datasets: Mapping[str, DatasetWriteInput],
     base_dir: PathLike,
     *,
-    opts: ParquetWriteOptions | None = None,
-    overwrite: bool = True,
+    config: NamedDatasetWriteConfig | None = None,
 ) -> dict[str, str]:
-    """Write named tables to per-dataset Parquet directories.
+    """Write named tables or readers to per-dataset Parquet directories.
 
       base_dir/<dataset_name>/part-*.parquet
 
@@ -191,12 +247,27 @@ def write_named_datasets_parquet(
     dict[str, str]
         Mapping of dataset name to dataset directory path.
     """
-    options = opts or ParquetWriteOptions()
+    config = config or NamedDatasetWriteConfig()
+    options = config.opts or ParquetWriteOptions()
     base_path = ensure_path(base_dir)
     _ensure_dir(base_path)
     out: dict[str, str] = {}
     for name, table in datasets.items():
         ds_dir = base_path / name
-        write_dataset_parquet(table, ds_dir, opts=options, overwrite=overwrite)
+        schema = config.schemas.get(name) if config.schemas is not None else None
+        encoding_policy = (
+            config.encoding_policies.get(name) if config.encoding_policies is not None else None
+        )
+        write_dataset_parquet(
+            table,
+            ds_dir,
+            config=DatasetWriteConfig(
+                opts=options,
+                overwrite=config.overwrite,
+                basename_template=config.basename_template,
+                schema=schema,
+                encoding_policy=encoding_policy,
+            ),
+        )
         out[name] = str(ds_dir)
     return out

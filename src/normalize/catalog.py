@@ -166,9 +166,7 @@ def normalize_plan_catalog(inputs: NormalizeCatalogInputs) -> NormalizePlanCatal
     NormalizePlanCatalog
         Catalog with base sources wired for derived plans.
     """
-    tables = {
-        name: value for name, value in _input_entries(inputs).items() if value is not None
-    }
+    tables = {name: value for name, value in _input_entries(inputs).items() if value is not None}
     return NormalizePlanCatalog(tables=tables, repo_text_index=inputs.repo_text_index)
 
 

@@ -6,10 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.dataset as ds
 from hamilton.function_modifiers import tag
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.query import open_dataset
 from core_types import JsonDict
 from cpg.artifacts import CpgBuildArtifacts
@@ -22,6 +23,7 @@ from hamilton_pipeline.pipeline_types import (
     RelspecSnapshots,
     RepoScanConfig,
 )
+from normalize.encoding import encoding_policy_from_schema
 from obs.manifest import ManifestContext, ManifestData, build_manifest, write_manifest_json
 from obs.repro import RunBundleContext, write_run_bundle
 from obs.stats import column_stats_table, dataset_stats_table
@@ -29,6 +31,7 @@ from relspec.compiler import CompiledOutput
 from relspec.registry import ContractCatalog, DatasetLocation, RelationshipRegistry
 from schema_spec.system import dataset_spec_from_schema, make_dataset_spec
 from storage.parquet import (
+    NamedDatasetWriteConfig,
     ParquetWriteOptions,
     write_finalize_result_parquet,
     write_named_datasets_parquet,
@@ -138,7 +141,7 @@ class RunBundleInputs:
 
 @tag(layer="materialize", artifact="normalized_inputs_parquet", kind="side_effect")
 def write_normalized_inputs_parquet(
-    relspec_input_datasets: dict[str, TableLike],
+    relspec_input_datasets: dict[str, TableLike | RecordBatchReaderLike],
     output_dir: str | None,
     work_dir: str | None,
 ) -> JsonDict | None:
@@ -161,21 +164,42 @@ def write_normalized_inputs_parquet(
     out_dir = base / "normalized_inputs"
     _ensure_dir(out_dir)
 
+    schemas = {
+        name: table.schema
+        for name, table in relspec_input_datasets.items()
+        if not isinstance(table, RecordBatchReaderLike)
+    }
+    encoding_policies = {
+        name: encoding_policy_from_schema(table.schema)
+        for name, table in relspec_input_datasets.items()
+        if not isinstance(table, RecordBatchReaderLike)
+    }
     paths = write_named_datasets_parquet(
         relspec_input_datasets,
         str(out_dir),
-        opts=ParquetWriteOptions(),
-        overwrite=True,
+        config=NamedDatasetWriteConfig(
+            opts=ParquetWriteOptions(),
+            overwrite=True,
+            schemas=schemas,
+            encoding_policies=encoding_policies,
+        ),
     )
 
     # Provide lightweight report
     datasets: dict[str, JsonDict] = {}
     report: JsonDict = {"base_dir": str(out_dir), "datasets": datasets}
     for name, t in relspec_input_datasets.items():
+        path = paths.get(name)
+        if isinstance(t, RecordBatchReaderLike):
+            rows = int(ds.dataset(path, format="parquet").count_rows()) if path else None
+            columns = len(t.schema.names)
+        else:
+            rows = int(t.num_rows)
+            columns = len(t.column_names)
         datasets[name] = {
-            "path": paths.get(name),
-            "rows": int(t.num_rows),
-            "columns": len(t.column_names),
+            "path": path,
+            "rows": rows,
+            "columns": columns,
         }
     return report
 

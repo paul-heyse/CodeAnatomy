@@ -118,6 +118,36 @@ def cast_array(
     return pc.cast(values, dtype, safe=safe)
 
 
+def distinct_sorted(values: ArrayLike | ChunkedArrayLike) -> ArrayLike:
+    """Return distinct values sorted ascending.
+
+    Returns
+    -------
+    ArrayLike
+        Sorted unique values.
+    """
+    unique = pc.unique(values)
+    indices = pc.sort_indices(unique)
+    return pc.take(unique, indices)
+
+
+def flatten_list_struct_field(
+    table: TableLike,
+    *,
+    list_col: str,
+    field: str,
+) -> ArrayLike:
+    """Flatten a list<struct> column and return a field array.
+
+    Returns
+    -------
+    ArrayLike
+        Flattened field values.
+    """
+    flattened = pc.list_flatten(table[list_col])
+    return pc.struct_field(flattened, field)
+
+
 def def_use_kind_array(
     opname: ArrayLike | ChunkedArrayLike,
     *,

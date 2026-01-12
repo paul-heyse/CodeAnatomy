@@ -1,20 +1,15 @@
-"""Schema system registry, factories, and Pandera integration."""
+"""Schema system registry, factories, and Arrow validation integration."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, TypedDict, Unpack, cast
+from typing import TYPE_CHECKING, Literal, TypedDict, Unpack
 
-import pandera.polars as pa_pl
-import polars as pl
-import pyarrow.types as patypes
-from polars.datatypes.classes import DataTypeClass
 from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
 
-import arrowdsl.core.interop as pa
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
+from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeContext
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec, ScanContext
@@ -24,135 +19,20 @@ from arrowdsl.schema.schema import (
     SchemaMetadataSpec,
     SchemaTransform,
 )
+from arrowdsl.schema.validation import ArrowValidationOptions, validate_table
 from schema_spec.specs import ArrowFieldSpec, FieldBundle, TableSchemaSpec
 
 if TYPE_CHECKING:
     import pyarrow.dataset as ds
 
 
-@dataclass(frozen=True)
-class PanderaValidationOptions:
-    """Options for Arrow table validation via Pandera."""
-
-    lazy: bool = True
-    strict: bool | Literal["filter"] = "filter"
-    coerce: bool = False
-    transform: SchemaTransform | None = None
-
-
-_ARROW_TO_POLARS: tuple[tuple[Callable[[DataTypeLike], bool], DataTypeClass], ...] = (
-    (patypes.is_string, pl.Utf8),
-    (patypes.is_boolean, pl.Boolean),
-    (patypes.is_int8, pl.Int8),
-    (patypes.is_int16, pl.Int16),
-    (patypes.is_int32, pl.Int32),
-    (patypes.is_int64, pl.Int64),
-    (patypes.is_uint8, pl.UInt8),
-    (patypes.is_uint16, pl.UInt16),
-    (patypes.is_uint32, pl.UInt32),
-    (patypes.is_uint64, pl.UInt64),
-    (patypes.is_float32, pl.Float32),
-    (patypes.is_float64, pl.Float64),
-    (patypes.is_binary, pl.Binary),
-)
-
-_POLARS_TO_ARROW: dict[DataTypeClass, DataTypeLike] = {
-    pl.Utf8: pa.string(),
-    pl.Boolean: pa.bool_(),
-    pl.Int8: pa.int8(),
-    pl.Int16: pa.int16(),
-    pl.Int32: pa.int32(),
-    pl.Int64: pa.int64(),
-    pl.UInt8: pa.uint8(),
-    pl.UInt16: pa.uint16(),
-    pl.UInt32: pa.uint32(),
-    pl.UInt64: pa.uint64(),
-    pl.Float32: pa.float32(),
-    pl.Float64: pa.float64(),
-    pl.Binary: pa.binary(),
-}
-
-
-def _arrow_to_polars_dtype(dtype: DataTypeLike) -> DataTypeClass:
-    """Map an Arrow dtype to a Polars dtype class.
-
-    Returns
-    -------
-    DataTypeClass
-        Polars dtype class.
-    """
-    for predicate, polars_dtype in _ARROW_TO_POLARS:
-        if predicate(dtype):
-            return polars_dtype
-    if patypes.is_list(dtype):
-        return pl.List
-    return pl.Object
-
-
-def _polars_dtype_class(dtype: pl.DataType | DataTypeClass) -> DataTypeClass:
-    """Return the Polars dtype class for a dtype instance.
-
-    Returns
-    -------
-    DataTypeClass
-        Polars dtype class.
-    """
-    if isinstance(dtype, type):
-        return cast("DataTypeClass", dtype)
-    return cast("DataTypeClass", type(dtype))
-
-
-def _polars_to_arrow_dtype(dtype: pl.DataType | DataTypeClass) -> DataTypeLike:
-    """Map a Polars dtype to an Arrow dtype.
-
-    Returns
-    -------
-    DataTypeLike
-        Arrow dtype for the Polars dtype.
-    """
-    if isinstance(dtype, pl.List):
-        inner = cast("pl.DataType", dtype.inner)
-        return pa.list_(_polars_to_arrow_dtype(inner))
-    dtype_cls = _polars_dtype_class(dtype)
-    mapped = _POLARS_TO_ARROW.get(dtype_cls)
-    if mapped is not None:
-        return mapped
-    if dtype_cls is pl.List:
-        return pa.list_(pa.binary())
-    return pa.binary()
-
-
-def table_spec_to_pandera(
-    spec: TableSchemaSpec,
-    *,
-    strict: bool | Literal["filter"] = "filter",
-    coerce: bool = False,
-) -> pa_pl.DataFrameSchema:
-    """Convert a TableSchemaSpec into a Pandera schema.
-
-    Returns
-    -------
-    pa_pl.DataFrameSchema
-        Pandera schema for the table spec.
-    """
-    columns = {
-        field.name: pa_pl.Column(
-            dtype=_arrow_to_polars_dtype(field.dtype),
-            nullable=field.nullable,
-            required=True,
-        )
-        for field in spec.fields
-    }
-    return pa_pl.DataFrameSchema(columns=columns, strict=strict, coerce=coerce)
-
-
 def validate_arrow_table(
     table: TableLike,
     *,
     spec: TableSchemaSpec,
-    options: PanderaValidationOptions | None = None,
+    options: ArrowValidationOptions | None = None,
 ) -> TableLike:
-    """Validate an Arrow table with Pandera.
+    """Validate an Arrow table with Arrow-native validation.
 
     Returns
     -------
@@ -161,25 +41,15 @@ def validate_arrow_table(
 
     Raises
     ------
-    TypeError
-        Raised when Pandera validation does not yield a DataFrame.
+    ValueError
+        Raised when strict validation fails.
     """
-    df = pl.from_arrow(table)
-    if not isinstance(df, pl.DataFrame):
-        msg = "Expected a polars DataFrame from Arrow input."
-        raise TypeError(msg)
-    options = options or PanderaValidationOptions()
-    schema = table_spec_to_pandera(spec, strict=options.strict, coerce=options.coerce)
-    validated = schema.validate(df, lazy=options.lazy)
-    if isinstance(validated, pl.LazyFrame):
-        validated = validated.collect()
-    if not isinstance(validated, pl.DataFrame):
-        msg = "Expected a polars DataFrame after validation."
-        raise TypeError(msg)
-    out = validated.to_arrow()
-    if options.transform is not None:
-        return options.transform.apply(out)
-    return out
+    options = options or ArrowValidationOptions()
+    report = validate_table(table, spec=spec, options=options)
+    if options.strict is True and not report.valid:
+        msg = f"Arrow validation failed for {spec.name!r}."
+        raise ValueError(msg)
+    return report.validated
 
 
 class SortKeySpec(BaseModel):
@@ -244,7 +114,7 @@ class ContractSpec(BaseModel):
 
     virtual_fields: tuple[str, ...] = ()
     virtual_field_docs: dict[str, str] | None = None
-    validation: PanderaValidationOptions | None = None
+    validation: ArrowValidationOptions | None = None
 
     @field_validator("virtual_field_docs")
     @classmethod
@@ -293,7 +163,7 @@ class DatasetSpec:
     query_spec: QuerySpec | None = None
     evolution_spec: SchemaEvolutionSpec = field(default_factory=SchemaEvolutionSpec)
     metadata_spec: SchemaMetadataSpec = field(default_factory=SchemaMetadataSpec)
-    validation: PanderaValidationOptions | None = None
+    validation: ArrowValidationOptions | None = None
 
     @property
     def name(self) -> str:
@@ -434,7 +304,7 @@ class ContractSpecKwargs(TypedDict, total=False):
     canonical_sort: Iterable[SortKeySpec]
     virtual: VirtualFieldSpec | None
     version: int | None
-    validation: PanderaValidationOptions | None
+    validation: ArrowValidationOptions | None
 
 
 class DatasetSpecKwargs(TypedDict, total=False):
@@ -444,7 +314,7 @@ class DatasetSpecKwargs(TypedDict, total=False):
     query_spec: QuerySpec | None
     evolution_spec: SchemaEvolutionSpec | None
     metadata_spec: SchemaMetadataSpec | None
-    validation: PanderaValidationOptions | None
+    validation: ArrowValidationOptions | None
 
 
 def _merge_names(*parts: Iterable[str]) -> tuple[str, ...]:
@@ -700,6 +570,7 @@ class SchemaRegistry:
         self.dataset_specs[spec.name] = spec
         return spec
 
+
 GLOBAL_SCHEMA_REGISTRY = SchemaRegistry()
 
 
@@ -746,13 +617,13 @@ class ContractCatalogSpec(BaseModel):
 
 __all__ = [
     "GLOBAL_SCHEMA_REGISTRY",
+    "ArrowValidationOptions",
     "ContractCatalogSpec",
     "ContractSpec",
     "ContractSpecKwargs",
     "DatasetSpec",
     "DatasetSpecKwargs",
     "DedupeSpecSpec",
-    "PanderaValidationOptions",
     "SchemaRegistry",
     "SortKeySpec",
     "TableSpecConstraints",
@@ -763,6 +634,5 @@ __all__ = [
     "make_dataset_spec",
     "make_table_spec",
     "table_spec_from_schema",
-    "table_spec_to_pandera",
     "validate_arrow_table",
 ]

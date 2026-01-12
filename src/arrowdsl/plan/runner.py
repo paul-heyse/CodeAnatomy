@@ -174,6 +174,29 @@ def run_plan(
     )
 
 
+def run_plan_streamable(
+    plan: Plan,
+    *,
+    ctx: ExecutionContext,
+    metadata_spec: SchemaMetadataSpec | None = None,
+    attach_ordering_metadata: bool = False,
+) -> TableLike | RecordBatchReaderLike:
+    """Return a reader when streamable, otherwise materialize the plan.
+
+    Returns
+    -------
+    TableLike | RecordBatchReaderLike
+        Reader when no pipeline breakers exist, otherwise a materialized table.
+    """
+    return run_plan(
+        plan,
+        ctx=ctx,
+        prefer_reader=True,
+        metadata_spec=metadata_spec,
+        attach_ordering_metadata=attach_ordering_metadata,
+    ).value
+
+
 def run_plan_bundle(
     plans: Mapping[str, Plan],
     *,
@@ -246,4 +269,11 @@ def stream_plan(plan: Plan, *, ctx: ExecutionContext) -> RecordBatchReaderLike:
     return PlanSpec.from_plan(plan).to_reader(ctx=ctx)
 
 
-__all__ = ["PlanRunResult", "materialize_plan", "run_plan", "run_plan_bundle", "stream_plan"]
+__all__ = [
+    "PlanRunResult",
+    "materialize_plan",
+    "run_plan",
+    "run_plan_bundle",
+    "run_plan_streamable",
+    "stream_plan",
+]

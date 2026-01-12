@@ -15,11 +15,11 @@ from schema_spec.specs import (
 )
 from schema_spec.system import (
     GLOBAL_SCHEMA_REGISTRY,
+    ArrowValidationOptions,
     ContractCatalogSpec,
     ContractSpec,
     DatasetSpec,
     DedupeSpecSpec,
-    PanderaValidationOptions,
     SchemaRegistry,
     SortKeySpec,
     TableSpecConstraints,
@@ -30,7 +30,6 @@ from schema_spec.system import (
     make_dataset_spec,
     make_table_spec,
     table_spec_from_schema,
-    table_spec_to_pandera,
     validate_arrow_table,
 )
 
@@ -42,13 +41,13 @@ __all__ = [
     "SCHEMA_META_NAME",
     "SCHEMA_META_VERSION",
     "ArrowFieldSpec",
+    "ArrowValidationOptions",
     "ContractCatalogSpec",
     "ContractSpec",
     "DatasetSpec",
     "DedupeSpecSpec",
     "FieldBundle",
     "NestedFieldSpec",
-    "PanderaValidationOptions",
     "SchemaRegistry",
     "SortKeySpec",
     "TableSchemaSpec",
@@ -60,6 +59,5 @@ __all__ = [
     "make_dataset_spec",
     "make_table_spec",
     "table_spec_from_schema",
-    "table_spec_to_pandera",
     "validate_arrow_table",
 ]

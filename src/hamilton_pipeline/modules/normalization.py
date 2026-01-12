@@ -5,10 +5,16 @@ from __future__ import annotations
 import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
 
-from arrowdsl.compute.kernels import explode_list_column
+from arrowdsl.compute.kernels import (
+    distinct_sorted,
+    explode_list_column,
+    flatten_list_struct_field,
+)
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.ids import iter_array_values, iter_arrays, prefixed_hash_id
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.ids import prefixed_hash_id
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
+from arrowdsl.plan.joins import JoinConfig, left_join
+from arrowdsl.schema.arrays import set_or_append_column
 from normalize.bytecode_anchor import anchor_instructions
 from normalize.bytecode_cfg import build_cfg_blocks, build_cfg_edges
 from normalize.bytecode_dfg import build_def_use_events, run_reaching_defs
@@ -59,41 +65,61 @@ CALLSITE_QNAME_CANDIDATES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
     )
 )
 
-QNAME_DIM_SCHEMA = QNAME_DIM_SPEC.table_spec.to_arrow_schema()
-CALLSITE_QNAME_CANDIDATES_SCHEMA = CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.to_arrow_schema()
+
+def _string_or_null(values: ArrayLike | ChunkedArrayLike) -> ArrayLike:
+    casted = pc.cast(values, pa.string())
+    empty = pc.equal(casted, pa.scalar(""))
+    return pc.if_else(empty, pa.scalar(None, type=pa.string()), casted)
 
 
-def _qname_fields(value: object) -> tuple[str | None, str | None]:
-    if isinstance(value, dict):
-        name = value.get("name")
-        source = value.get("source")
-        return (str(name) if name else None, str(source) if source else None)
-    if isinstance(value, str):
-        return value, None
-    return None, None
-
-
-def _collect_string_lists(table: TableLike | None, column: str) -> list[str]:
-    """Flatten a list-valued column into a list of strings.
-
-    Returns
-    -------
-    list[str]
-        Flattened string values.
-    """
+def _flatten_qname_names(table: TableLike | None, column: str) -> ArrayLike:
     if table is None or column not in table.column_names:
-        return []
-    out: list[str] = []
-    for items in iter_array_values(table[column]):
-        if not isinstance(items, list):
-            continue
-        if not items:
-            continue
-        for item in items:
-            name, _ = _qname_fields(item)
-            if name:
-                out.append(name)
-    return out
+        return pa.array([], type=pa.string())
+    flattened = flatten_list_struct_field(table, list_col=column, field="name")
+    return pc.drop_null(_string_or_null(flattened))
+
+
+def _callsite_qname_base_table(exploded: TableLike) -> TableLike:
+    call_ids = _string_or_null(exploded["call_id"])
+    qname_struct = exploded["qname_struct"]
+    qname_vals = _string_or_null(pc.struct_field(qname_struct, "name"))
+    qname_sources = _string_or_null(pc.struct_field(qname_struct, "source"))
+    base = pa.Table.from_arrays(
+        [call_ids, qname_vals, qname_sources],
+        names=["call_id", "qname", "qname_source"],
+    )
+    mask = pc.and_(pc.is_valid(base["call_id"]), pc.is_valid(base["qname"]))
+    mask = pc.fill_null(mask, fill_value=False)
+    return base.filter(mask)
+
+
+def _join_callsite_qname_meta(base: TableLike, cst_callsites: TableLike) -> TableLike:
+    meta_cols = [
+        col
+        for col in ("call_id", "path", "call_bstart", "call_bend", "qname_source")
+        if col in cst_callsites.column_names
+    ]
+    if len(meta_cols) <= 1:
+        return base
+    meta_table = cst_callsites.select(meta_cols)
+    right_cols = [col for col in meta_cols if col != "call_id"]
+    joined = left_join(
+        base,
+        meta_table,
+        config=JoinConfig.on_keys(
+            keys=("call_id",),
+            left_output=("call_id", "qname", "qname_source"),
+            right_output=right_cols,
+            output_suffix_for_right="__meta",
+        ),
+    )
+    if "qname_source__meta" not in joined.column_names:
+        return joined
+    primary = _string_or_null(joined["qname_source"])
+    meta_source = _string_or_null(joined["qname_source__meta"])
+    merged = pc.coalesce(primary, meta_source)
+    joined = set_or_append_column(joined, "qname_source", merged)
+    return joined.drop(["qname_source__meta"])
 
 
 @cache(format="parquet")
@@ -115,21 +141,19 @@ def dim_qualified_names(
         Qualified name dimension table.
     """
     _ = ctx
-    qnames = _collect_string_lists(cst_callsites, "callee_qnames")
-    qnames.extend(_collect_string_lists(cst_defs, "qnames"))
+    callsite_qnames = _flatten_qname_names(cst_callsites, "callee_qnames")
+    def_qnames = _flatten_qname_names(cst_defs, "qnames")
+    combined = pa.chunked_array([callsite_qnames, def_qnames])
+    if len(combined) == 0:
+        schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name, [])
+        return align_table_to_schema(pa.Table.from_pylist([]), schema)
 
-    if not qnames:
-        return pa.Table.from_pylist([], schema=QNAME_DIM_SCHEMA)
-
-    # distinct + deterministic
-    uniq = sorted(set(qnames))
-    qname_array = pa.array(uniq, type=pa.string())
+    qname_array = distinct_sorted(combined)
     qname_ids = prefixed_hash_id([qname_array], prefix="qname")
-
-    return pa.Table.from_arrays(
-        [qname_ids, qname_array],
-        names=["qname_id", "qname"],
-    )
+    out = pa.Table.from_arrays([qname_ids, qname_array], names=["qname_id", "qname"])
+    tables = [out] if out.num_rows > 0 else []
+    schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name, tables)
+    return align_table_to_schema(out, schema)
 
 
 @cache(format="parquet")
@@ -159,62 +183,25 @@ def callsite_qname_candidates(
         or cst_callsites.num_rows == 0
         or "callee_qnames" not in cst_callsites.column_names
     ):
-        return pa.Table.from_pylist([], schema=CALLSITE_QNAME_CANDIDATES_SCHEMA)
+        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
+        return align_table_to_schema(pa.Table.from_pylist([]), schema)
 
-    # explode list column -> (call_id, qname)
     exploded = explode_list_column(
         cst_callsites,
         parent_id_col="call_id",
         list_col="callee_qnames",
         out_parent_col="call_id",
-        out_value_col="qname",
+        out_value_col="qname_struct",
     )
+    base = _callsite_qname_base_table(exploded)
+    joined = _join_callsite_qname_meta(base, cst_callsites)
 
-    # bring along evidence span columns by joining back on call_id (cheap)
-    # For simplicity we do python-side index; for large scale convert to hash join later.
-    call_meta: dict[str, dict[str, object]] = {}
-    meta_cols = [
-        c
-        for c in ["call_id", "path", "call_bstart", "call_bend", "qname_source"]
-        if c in cst_callsites.column_names
-    ]
-    if meta_cols:
-        meta_table = cst_callsites.select(meta_cols)
-        meta_arrays = [meta_table[col] for col in meta_cols]
-        for values in iter_arrays(meta_arrays):
-            row = dict(zip(meta_cols, values, strict=True))
-            cid = row.get("call_id")
-            if cid:
-                call_meta[str(cid)] = row
-
-    rows: list[dict[str, object]] = []
-    if "call_id" in exploded.column_names and "qname" in exploded.column_names:
-        exploded_arrays = [exploded["call_id"], exploded["qname"]]
-        for cid, qn in iter_arrays(exploded_arrays):
-            if not cid or not qn:
-                continue
-            qname, qname_source = _qname_fields(qn)
-            if qname is None:
-                continue
-            meta = call_meta.get(str(cid), {})
-            rows.append(
-                {
-                    "call_id": str(cid),
-                    "qname": qname,
-                    "path": meta.get("path"),
-                    "call_bstart": meta.get("call_bstart"),
-                    "call_bend": meta.get("call_bend"),
-                    "qname_source": qname_source or meta.get("qname_source"),
-                }
-            )
-
-    out = pa.Table.from_pylist(rows)
-    tables = [out] if out.num_rows > 0 else []
+    tables = [joined] if joined.num_rows > 0 else []
     schema = infer_schema_or_registry(
         CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name,
         tables,
     )
-    return align_table_to_schema(out, schema)
+    return align_table_to_schema(joined, schema)
 
 
 @cache(format="parquet")

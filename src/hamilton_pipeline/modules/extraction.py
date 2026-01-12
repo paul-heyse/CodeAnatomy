@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import SchemaLike, TableLike
+from arrowdsl.core.interop import TableLike
+from arrowdsl.schema.schema import empty_table
 from extract.ast_extract import extract_ast_tables
 from extract.bytecode_extract import (
     BytecodeExtractOptions,
@@ -38,10 +38,6 @@ from extract.tree_sitter_extract import (
     extract_ts_tables,
 )
 from hamilton_pipeline.pipeline_types import RepoScanConfig, ScipIdentityOverrides, ScipIndexConfig
-
-
-def _empty_table(schema: SchemaLike) -> TableLike:
-    return pa.Table.from_arrays([pa.array([], type=field.type) for field in schema], schema=schema)
 
 
 @cache(format="parquet")
@@ -366,9 +362,9 @@ def tree_sitter_bundle(
     _ = repo_root
     if not enable_tree_sitter:
         return {
-            "ts_nodes": _empty_table(TS_NODES_SCHEMA),
-            "ts_errors": _empty_table(TS_ERRORS_SCHEMA),
-            "ts_missing": _empty_table(TS_MISSING_SCHEMA),
+            "ts_nodes": empty_table(TS_NODES_SCHEMA),
+            "ts_errors": empty_table(TS_ERRORS_SCHEMA),
+            "ts_missing": empty_table(TS_MISSING_SCHEMA),
         }
     return extract_ts_tables(
         repo_files=repo_files,
@@ -405,10 +401,10 @@ def runtime_inspect_bundle(
     _ = ctx
     if not enable_runtime_inspect:
         return {
-            "rt_objects": _empty_table(RT_OBJECTS_SCHEMA),
-            "rt_signatures": _empty_table(RT_SIGNATURES_SCHEMA),
-            "rt_signature_params": _empty_table(RT_SIGNATURE_PARAMS_SCHEMA),
-            "rt_members": _empty_table(RT_MEMBERS_SCHEMA),
+            "rt_objects": empty_table(RT_OBJECTS_SCHEMA),
+            "rt_signatures": empty_table(RT_SIGNATURES_SCHEMA),
+            "rt_signature_params": empty_table(RT_SIGNATURE_PARAMS_SCHEMA),
+            "rt_members": empty_table(RT_MEMBERS_SCHEMA),
         }
     result = extract_runtime_tables(
         repo_root,

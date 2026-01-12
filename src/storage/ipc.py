@@ -8,6 +8,7 @@ import pyarrow as pa
 import pyarrow.ipc as pa_ipc
 
 from arrowdsl.core.interop import TableLike
+from arrowdsl.schema.schema import SchemaMetadataSpec
 from core_types import PathLike, ensure_path
 
 
@@ -15,7 +16,13 @@ def _ensure_dir(path: Path) -> None:
     path.mkdir(exist_ok=True, parents=True)
 
 
-def write_table_ipc_file(table: TableLike, path: PathLike, *, overwrite: bool = True) -> str:
+def write_table_ipc_file(
+    table: TableLike,
+    path: PathLike,
+    *,
+    overwrite: bool = True,
+    schema_metadata: dict[bytes, bytes] | None = None,
+) -> str:
     """Write an Arrow IPC file (random-access) to a path.
 
     Returns
@@ -28,12 +35,23 @@ def write_table_ipc_file(table: TableLike, path: PathLike, *, overwrite: bool = 
     if overwrite and target.exists():
         target.unlink()
 
-    with pa.OSFile(str(target), "wb") as sink, pa_ipc.new_file(sink, table.schema) as writer:
+    schema = table.schema
+    if schema_metadata:
+        schema = SchemaMetadataSpec(schema_metadata=schema_metadata).apply(schema)
+        table = table.cast(schema, safe=False)
+
+    with pa.OSFile(str(target), "wb") as sink, pa_ipc.new_file(sink, schema) as writer:
         writer.write_table(table)
     return str(target)
 
 
-def write_table_ipc_stream(table: TableLike, path: PathLike, *, overwrite: bool = True) -> str:
+def write_table_ipc_stream(
+    table: TableLike,
+    path: PathLike,
+    *,
+    overwrite: bool = True,
+    schema_metadata: dict[bytes, bytes] | None = None,
+) -> str:
     """Write an Arrow IPC stream (sequential) to a path.
 
     Returns
@@ -46,7 +64,12 @@ def write_table_ipc_stream(table: TableLike, path: PathLike, *, overwrite: bool 
     if overwrite and target.exists():
         target.unlink()
 
-    with pa.OSFile(str(target), "wb") as sink, pa_ipc.new_stream(sink, table.schema) as writer:
+    schema = table.schema
+    if schema_metadata:
+        schema = SchemaMetadataSpec(schema_metadata=schema_metadata).apply(schema)
+        table = table.cast(schema, safe=False)
+
+    with pa.OSFile(str(target), "wb") as sink, pa_ipc.new_stream(sink, schema) as writer:
         writer.write_table(table)
     return str(target)
 

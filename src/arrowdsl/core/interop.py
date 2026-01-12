@@ -372,6 +372,7 @@ class ComputeModule(Protocol):
     struct_field: Callable[..., ArrayLike]
     binary_join_element_wise: Callable[..., ArrayLike]
     dictionary_encode: Callable[[ArrayLike | ChunkedArrayLike], ArrayLike]
+    unique: Callable[[ArrayLike | ChunkedArrayLike], ArrayLike]
     call_function: Callable[..., ArrayLike | ChunkedArrayLike | ScalarLike]
     get_function: Callable[[str], object]
     register_scalar_function: Callable[..., None]

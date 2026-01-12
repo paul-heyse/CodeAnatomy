@@ -161,6 +161,7 @@ def _signature_doc_entry(sig_doc: object | None) -> dict[str, object] | None:
         "occurrences": _signature_doc_occurrence_rows(sig_doc),
     }
 
+
 ENCODING_META = {"encoding": "dictionary"}
 
 _SCIP_METADATA_FIELDS = [

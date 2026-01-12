@@ -26,8 +26,9 @@ from arrowdsl.schema.schema import (
     SchemaMetadataSpec,
     SchemaTransform,
 )
+from arrowdsl.schema.validation import ArrowValidationOptions
 from schema_spec.specs import PROVENANCE_COLS, NestedFieldSpec
-from schema_spec.system import PanderaValidationOptions, validate_arrow_table
+from schema_spec.system import validate_arrow_table
 
 if TYPE_CHECKING:
     from schema_spec.specs import TableSchemaSpec
@@ -55,7 +56,7 @@ class Contract:
 
     virtual_fields: tuple[str, ...] = ()
     virtual_field_docs: dict[str, str] | None = None
-    validation: PanderaValidationOptions | None = None
+    validation: ArrowValidationOptions | None = None
 
     def with_versioned_schema(self) -> SchemaLike:
         """Return the schema with contract metadata attached.
@@ -407,7 +408,7 @@ def _raise_on_errors_if_strict(
     raise ValueError(msg)
 
 
-def _maybe_validate_with_pandera(
+def _maybe_validate_with_arrow(
     table: TableLike,
     *,
     contract: Contract,
@@ -419,12 +420,7 @@ def _maybe_validate_with_pandera(
         return table
     options = contract.validation
     if options is None:
-        policy = ctx.schema_validation
-        options = PanderaValidationOptions(
-            lazy=policy.lazy,
-            strict=policy.strict,
-            coerce=policy.coerce,
-        )
+        options = ArrowValidationOptions.from_policy(ctx.schema_validation)
     return validate_arrow_table(table, spec=contract.schema_spec, options=options)
 
 
@@ -555,7 +551,7 @@ def finalize(
         aligned = options.encoding_policy.apply(aligned)
     else:
         aligned = (options.chunk_policy or ChunkPolicy()).apply(aligned)
-    aligned = _maybe_validate_with_pandera(aligned, contract=contract, ctx=ctx)
+    aligned = _maybe_validate_with_arrow(aligned, contract=contract, ctx=ctx)
     provenance_cols = _provenance_columns(aligned, schema) if ctx.provenance else []
 
     results = _collect_invariant_results(aligned, contract)

@@ -25,7 +25,12 @@ from arrowdsl.plan.query import (
     compile_to_acero_scan,
     open_dataset,
 )
-from arrowdsl.plan.runner import PlanRunResult, run_plan, run_plan_bundle
+from arrowdsl.plan.runner import (
+    PlanRunResult,
+    run_plan,
+    run_plan_bundle,
+    run_plan_streamable,
+)
 from arrowdsl.plan.source import DatasetSource, PlanSource, plan_from_source
 from arrowdsl.schema.metadata import options_metadata_spec, ordering_metadata_spec
 
@@ -65,5 +70,6 @@ __all__ = [
     "plan_from_source",
     "run_plan",
     "run_plan_bundle",
+    "run_plan_streamable",
     "union_all_plans",
 ]

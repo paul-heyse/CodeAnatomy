@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
+from arrowdsl.schema.schema import empty_table
 from cpg.artifacts import CpgBuildArtifacts
 from cpg.build_edges import EdgeBuildInputs, build_cpg_edges
 from cpg.build_nodes import NodeInputTables, build_cpg_nodes
@@ -28,6 +30,7 @@ from hamilton_pipeline.pipeline_types import (
     TreeSitterInputs,
     TypeInputs,
 )
+from normalize.encoding import encoding_policy_from_schema
 from relspec.compiler import (
     CompiledOutput,
     FilesystemPlanResolver,
@@ -63,7 +66,14 @@ from schema_spec.system import (
     make_table_spec,
     table_spec_from_schema,
 )
-from storage.parquet import ParquetWriteOptions, write_named_datasets_parquet
+from storage.parquet import (
+    NamedDatasetWriteConfig,
+    ParquetWriteOptions,
+    write_named_datasets_parquet,
+)
+
+if TYPE_CHECKING:
+    from arrowdsl.plan.source import DatasetSource
 
 # -----------------------------
 # Relationship contracts
@@ -533,11 +543,20 @@ def persist_relspec_input_datasets(
         return {}
 
     # Write as Parquet dataset dirs so Acero scans can project/filter cheaply.
+    schemas = {name: table.schema for name, table in relspec_input_datasets.items()}
+    encoding_policies = {
+        name: encoding_policy_from_schema(table.schema)
+        for name, table in relspec_input_datasets.items()
+    }
     paths = write_named_datasets_parquet(
         relspec_input_datasets,
         relspec_input_dataset_dir,
-        opts=ParquetWriteOptions(),
-        overwrite=bool(overwrite_intermediate_datasets),
+        config=NamedDatasetWriteConfig(
+            opts=ParquetWriteOptions(),
+            overwrite=bool(overwrite_intermediate_datasets),
+            schemas=schemas,
+            encoding_policies=encoding_policies,
+        ),
     )
 
     out: dict[str, DatasetLocation] = {}
@@ -645,19 +664,19 @@ def relationship_tables(
     # Ensure expected keys exist for extract_fields
     out.setdefault(
         "rel_name_symbol",
-        pa.Table.from_pylist([], schema=relationship_contracts.get("rel_name_symbol_v1").schema),
+        empty_table(relationship_contracts.get("rel_name_symbol_v1").schema),
     )
     out.setdefault(
         "rel_import_symbol",
-        pa.Table.from_pylist([], schema=relationship_contracts.get("rel_import_symbol_v1").schema),
+        empty_table(relationship_contracts.get("rel_import_symbol_v1").schema),
     )
     out.setdefault(
         "rel_callsite_symbol",
-        pa.Table.from_pylist([], schema=relationship_contracts.get("rel_callsite_symbol_v1").schema),
+        empty_table(relationship_contracts.get("rel_callsite_symbol_v1").schema),
     )
     out.setdefault(
         "rel_callsite_qname",
-        pa.Table.from_pylist([], schema=relationship_contracts.get("rel_callsite_qname_v1").schema),
+        empty_table(relationship_contracts.get("rel_callsite_qname_v1").schema),
     )
     return out
 
@@ -691,10 +710,10 @@ def relationship_output_tables(
 
 @tag(layer="cpg", artifact="cst_build_inputs", kind="bundle")
 def cst_build_inputs(
-    cst_name_refs: TableLike,
-    cst_imports_norm: TableLike,
-    cst_callsites: TableLike,
-    cst_defs_norm: TableLike,
+    cst_name_refs: TableLike | DatasetSource,
+    cst_imports_norm: TableLike | DatasetSource,
+    cst_callsites: TableLike | DatasetSource,
+    cst_defs_norm: TableLike | DatasetSource,
 ) -> CstBuildInputs:
     """Bundle CST inputs for CPG builds.
 
@@ -713,10 +732,10 @@ def cst_build_inputs(
 
 @tag(layer="cpg", artifact="scip_build_inputs", kind="bundle")
 def scip_build_inputs(
-    scip_symbol_information: TableLike,
-    scip_occurrences_norm: TableLike,
-    scip_symbol_relationships: TableLike,
-    scip_external_symbol_information: TableLike,
+    scip_symbol_information: TableLike | DatasetSource,
+    scip_occurrences_norm: TableLike | DatasetSource,
+    scip_symbol_relationships: TableLike | DatasetSource,
+    scip_external_symbol_information: TableLike | DatasetSource,
 ) -> ScipBuildInputs:
     """Bundle SCIP inputs for CPG builds.
 
@@ -735,8 +754,8 @@ def scip_build_inputs(
 
 @tag(layer="cpg", artifact="cpg_base_inputs", kind="bundle")
 def cpg_base_inputs(
-    repo_files: TableLike,
-    dim_qualified_names: TableLike,
+    repo_files: TableLike | DatasetSource,
+    dim_qualified_names: TableLike | DatasetSource,
     cst_build_inputs: CstBuildInputs,
     scip_build_inputs: ScipBuildInputs,
 ) -> CpgBaseInputs:
@@ -757,9 +776,9 @@ def cpg_base_inputs(
 
 @tag(layer="cpg", artifact="tree_sitter_inputs", kind="bundle")
 def tree_sitter_inputs(
-    ts_nodes: TableLike,
-    ts_errors: TableLike,
-    ts_missing: TableLike,
+    ts_nodes: TableLike | DatasetSource,
+    ts_errors: TableLike | DatasetSource,
+    ts_missing: TableLike | DatasetSource,
 ) -> TreeSitterInputs:
     """Bundle tree-sitter inputs for CPG construction.
 
@@ -772,7 +791,10 @@ def tree_sitter_inputs(
 
 
 @tag(layer="cpg", artifact="type_inputs", kind="bundle")
-def type_inputs(type_exprs_norm: TableLike, types_norm: TableLike) -> TypeInputs:
+def type_inputs(
+    type_exprs_norm: TableLike | DatasetSource,
+    types_norm: TableLike | DatasetSource,
+) -> TypeInputs:
     """Bundle type inputs for CPG construction.
 
     Returns
@@ -784,7 +806,9 @@ def type_inputs(type_exprs_norm: TableLike, types_norm: TableLike) -> TypeInputs
 
 
 @tag(layer="cpg", artifact="diagnostics_inputs", kind="bundle")
-def diagnostics_inputs(diagnostics_norm: TableLike) -> DiagnosticsInputs:
+def diagnostics_inputs(
+    diagnostics_norm: TableLike | DatasetSource,
+) -> DiagnosticsInputs:
     """Bundle diagnostics inputs for CPG construction.
 
     Returns
@@ -797,10 +821,10 @@ def diagnostics_inputs(diagnostics_norm: TableLike) -> DiagnosticsInputs:
 
 @tag(layer="cpg", artifact="runtime_inputs", kind="bundle")
 def runtime_inputs(
-    rt_objects: TableLike,
-    rt_signatures: TableLike,
-    rt_signature_params: TableLike,
-    rt_members: TableLike,
+    rt_objects: TableLike | DatasetSource,
+    rt_signatures: TableLike | DatasetSource,
+    rt_signature_params: TableLike | DatasetSource,
+    rt_members: TableLike | DatasetSource,
 ) -> RuntimeInputs:
     """Bundle runtime inspection inputs for CPG construction.
 

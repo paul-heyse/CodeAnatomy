@@ -51,6 +51,30 @@ class JoinConfig:
             output_suffix_for_right=output_suffix_for_right or "",
         )
 
+    @classmethod
+    def on_keys(
+        cls,
+        *,
+        keys: Sequence[str],
+        left_output: Sequence[str],
+        right_output: Sequence[str],
+        output_suffix_for_right: str | None = None,
+    ) -> JoinConfig:
+        """Build a JoinConfig using identical left/right keys.
+
+        Returns
+        -------
+        JoinConfig
+            Join configuration for symmetric key joins.
+        """
+        return cls.from_sequences(
+            left_keys=keys,
+            right_keys=keys,
+            left_output=left_output,
+            right_output=right_output,
+            output_suffix_for_right=output_suffix_for_right,
+        )
+
 
 @overload
 def left_join(

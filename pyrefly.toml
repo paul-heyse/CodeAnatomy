@@ -6,6 +6,7 @@ project-excludes = [
 ]
 search-path = ["src", "."]
 python-version = "3.14.2"
+python-interpreter-path = ".venv/bin/python"
 
 # Type-check behavior
 infer-with-first-use = true

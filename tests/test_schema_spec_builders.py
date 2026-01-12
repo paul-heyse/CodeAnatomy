@@ -16,7 +16,7 @@ from schema_spec import (
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
     ArrowFieldSpec,
-    PanderaValidationOptions,
+    ArrowValidationOptions,
     TableSchemaSpec,
     validate_arrow_table,
 )
@@ -55,7 +55,7 @@ def test_table_schema_spec_attaches_metadata() -> None:
 
 
 def test_validate_arrow_table_filters_extra_columns() -> None:
-    """Validate Arrow tables with Pandera and filter extra columns."""
+    """Validate Arrow tables with Arrow validation and filter extra columns."""
     spec = TableSchemaSpec(
         name="test_table",
         fields=[
@@ -75,7 +75,7 @@ def test_validate_arrow_table_filters_extra_columns() -> None:
     validated = validate_arrow_table(
         table,
         spec=spec,
-        options=PanderaValidationOptions(lazy=False),
+        options=ArrowValidationOptions(strict="filter"),
     )
     assert validated.schema.names == ["id", "name"]
     assert validated.num_rows == EXPECTED_ROWS

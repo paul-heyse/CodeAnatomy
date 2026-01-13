@@ -23,6 +23,8 @@ from normalize.bytecode_anchor import anchor_instructions
 from normalize.catalog import (
     NormalizeCatalogInputs,
     NormalizePlanCatalog,
+)
+from normalize.catalog import (
     normalize_plan_catalog as build_normalize_plan_catalog,
 )
 from normalize.diagnostics import DiagnosticsSources

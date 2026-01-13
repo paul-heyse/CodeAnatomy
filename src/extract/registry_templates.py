@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from arrowdsl.core.context import OrderingLevel
+from extract.registry_template_specs import DatasetTemplateSpec
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,20 @@ class ExtractorConfigSpec:
     extractor_name: str
     feature_flags: tuple[str, ...] = ()
     defaults: dict[str, object] = field(default_factory=dict)
+
+
+def _param_int(spec: DatasetTemplateSpec, key: str, *, default: int) -> int:
+    value = spec.params.get(key, default)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, (str, bytes, bytearray)):
+        try:
+            return int(value)
+        except ValueError as exc:
+            msg = f"DatasetTemplateSpec {spec.name!r} param {key!r} must be an int."
+            raise TypeError(msg) from exc
+    msg = f"DatasetTemplateSpec {spec.name!r} param {key!r} must be an int."
+    raise TypeError(msg)
 
 
 TEMPLATES: dict[str, ExtractorTemplate] = {
@@ -245,6 +261,240 @@ _FLAG_DEFAULTS: dict[str, bool] = {
 }
 
 
+DatasetRowRecord = Mapping[str, object]
+
+
+def _derived_specs(
+    *specs: tuple[str, str, str | None, Sequence[str] | None],
+) -> list[Mapping[str, object]]:
+    rows: list[Mapping[str, object]] = []
+    for name, spec, kind, required in specs:
+        rows.append(
+            {
+                "name": name,
+                "spec": spec,
+                "kind": kind or "masked_hash",
+                "required": list(required) if required else None,
+            }
+        )
+    return rows
+
+
+def _tree_sitter_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
+    version = _param_int(spec, "version", default=1)
+    base = {
+        "version": version,
+        "bundles": ["file_identity"],
+        "template": spec.template,
+        "enabled_when": "feature_flag",
+    }
+    return (
+        {
+            **base,
+            "name": "ts_nodes_v1",
+            "fields": [
+                "ts_node_id",
+                "parent_ts_id",
+                "span_id",
+                "ts_type",
+                "start_byte",
+                "end_byte",
+                "is_named",
+                "has_error",
+                "is_error",
+                "is_missing",
+            ],
+            "derived": _derived_specs(
+                ("ts_node_id", "ts_node_id", None, None),
+                ("parent_ts_id", "ts_parent_node_id", None, None),
+                ("span_id", "ts_span_id", None, None),
+            ),
+            "row_fields": [
+                "ts_node_id",
+                "parent_ts_id",
+                "ts_type",
+                "start_byte",
+                "end_byte",
+                "is_named",
+                "has_error",
+                "is_error",
+                "is_missing",
+                "parent_ts_type",
+                "parent_start_byte",
+                "parent_end_byte",
+            ],
+            "join_keys": ["file_id", "start_byte", "end_byte", "ts_type"],
+            "feature_flag": "include_nodes",
+        },
+        {
+            **base,
+            "name": "ts_errors_v1",
+            "fields": [
+                "ts_error_id",
+                "ts_node_id",
+                "span_id",
+                "ts_type",
+                "start_byte",
+                "end_byte",
+                "is_error",
+            ],
+            "derived": _derived_specs(
+                ("ts_node_id", "ts_node_id", None, None),
+                ("ts_error_id", "ts_error_id", None, None),
+                ("span_id", "ts_span_id", None, None),
+            ),
+            "join_keys": ["file_id", "start_byte", "end_byte"],
+            "feature_flag": "include_errors",
+        },
+        {
+            **base,
+            "name": "ts_missing_v1",
+            "fields": [
+                "ts_missing_id",
+                "ts_node_id",
+                "span_id",
+                "ts_type",
+                "start_byte",
+                "end_byte",
+                "is_missing",
+            ],
+            "derived": _derived_specs(
+                ("ts_node_id", "ts_node_id", None, None),
+                ("ts_missing_id", "ts_missing_id", None, None),
+                ("span_id", "ts_span_id", None, None),
+            ),
+            "join_keys": ["file_id", "start_byte", "end_byte"],
+            "feature_flag": "include_missing",
+        },
+    )
+
+
+def _runtime_inspect_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
+    version = _param_int(spec, "version", default=1)
+    base = {
+        "version": version,
+        "bundles": None,
+        "template": spec.template,
+        "enabled_when": "allowlist",
+    }
+    return (
+        {
+            **base,
+            "name": "rt_objects_v1",
+            "fields": [
+                "rt_id",
+                "module",
+                "qualname",
+                "name",
+                "obj_type",
+                "source_path",
+                "source_line",
+                "meta",
+            ],
+            "derived": _derived_specs(("rt_id", "rt_object_id", None, None)),
+            "row_fields": [
+                "object_key",
+                "module",
+                "qualname",
+                "name",
+                "obj_type",
+                "source_path",
+                "source_line",
+                "meta",
+            ],
+            "join_keys": ["module", "qualname"],
+        },
+        {
+            **base,
+            "name": "rt_signatures_v1",
+            "fields": ["sig_id", "rt_id", "signature", "return_annotation"],
+            "derived": _derived_specs(("sig_id", "rt_signature_id", None, None)),
+            "row_fields": ["object_key", "signature", "return_annotation"],
+            "join_keys": ["rt_id", "signature"],
+        },
+        {
+            **base,
+            "name": "rt_signature_params_v1",
+            "fields": [
+                "param_id",
+                "sig_id",
+                "name",
+                "kind",
+                "default_repr",
+                "annotation_repr",
+                "position",
+            ],
+            "derived": _derived_specs(("param_id", "rt_param_id", None, None)),
+            "row_fields": [
+                "object_key",
+                "signature",
+                "name",
+                "kind",
+                "default_repr",
+                "annotation_repr",
+                "position",
+            ],
+            "join_keys": ["sig_id", "name", "position"],
+        },
+        {
+            **base,
+            "name": "rt_members_v1",
+            "fields": [
+                "member_id",
+                "rt_id",
+                "name",
+                "member_kind",
+                "value_repr",
+                "value_module",
+                "value_qualname",
+            ],
+            "derived": _derived_specs(("member_id", "rt_member_id", None, None)),
+            "row_fields": [
+                "object_key",
+                "name",
+                "member_kind",
+                "value_repr",
+                "value_module",
+                "value_qualname",
+            ],
+            "join_keys": ["rt_id", "name"],
+        },
+    )
+
+
+_DATASET_TEMPLATE_REGISTRY: Mapping[
+    str, Callable[[DatasetTemplateSpec], tuple[DatasetRowRecord, ...]]
+] = {
+    "tree_sitter": _tree_sitter_records,
+    "runtime_inspect": _runtime_inspect_records,
+}
+
+
+def expand_dataset_templates(
+    specs: Sequence[DatasetTemplateSpec],
+) -> tuple[DatasetRowRecord, ...]:
+    """Expand dataset template specs into row record mappings.
+
+    Returns
+    -------
+    tuple[Mapping[str, object], ...]
+        Expanded dataset row records.
+
+    Raises
+    ------
+    KeyError
+        Raised when a template name is unknown.
+    """
+    records: list[DatasetRowRecord] = []
+    for spec in specs:
+        handler = _DATASET_TEMPLATE_REGISTRY.get(spec.template)
+        if handler is None:
+            msg = f"Unknown dataset template: {spec.template!r}."
+            raise KeyError(msg)
+        records.extend(handler(spec))
+    return tuple(records)
+
+
 def template(name: str) -> ExtractorTemplate:
     """Return the extractor template by name.
 
@@ -282,6 +532,7 @@ __all__ = [
     "ExtractorConfigSpec",
     "ExtractorTemplate",
     "config",
+    "expand_dataset_templates",
     "flag_default",
     "template",
 ]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -148,7 +149,15 @@ class ManifestInputs:
     relationship_output_tables: RelationshipOutputTables
     cpg_output_tables: CpgOutputTables
     relspec_snapshots: RelspecSnapshots
+    extract_inputs: ExtractManifestInputs | None = None
+
+
+@dataclass(frozen=True)
+class ExtractManifestInputs:
+    """Extract-specific inputs for manifest data."""
+
     evidence_plan: EvidencePlan | None = None
+    extract_error_counts: Mapping[str, int] | None = None
 
 
 # -----------------------
@@ -470,7 +479,7 @@ def manifest_inputs(
     relationship_output_tables: RelationshipOutputTables,
     cpg_output_tables: CpgOutputTables,
     relspec_snapshots: RelspecSnapshots,
-    evidence_plan: EvidencePlan | None = None,
+    extract_manifest_inputs: ExtractManifestInputs | None = None,
 ) -> ManifestInputs:
     """Bundle manifest inputs from pipeline outputs.
 
@@ -484,7 +493,25 @@ def manifest_inputs(
         relationship_output_tables=relationship_output_tables,
         cpg_output_tables=cpg_output_tables,
         relspec_snapshots=relspec_snapshots,
+        extract_inputs=extract_manifest_inputs,
+    )
+
+
+@tag(layer="obs", artifact="extract_manifest_inputs", kind="object")
+def extract_manifest_inputs(
+    evidence_plan: EvidencePlan | None = None,
+    extract_error_counts: Mapping[str, int] | None = None,
+) -> ExtractManifestInputs:
+    """Bundle extract-specific inputs for manifest data.
+
+    Returns
+    -------
+    ExtractManifestInputs
+        Extract-specific manifest inputs.
+    """
+    return ExtractManifestInputs(
         evidence_plan=evidence_plan,
+        extract_error_counts=extract_error_counts,
     )
 
 
@@ -515,6 +542,7 @@ def manifest_data(
     notes: JsonDict = {"relationship_output_keys": produced_outputs}
     if normalize_lineage:
         notes["normalize_output_keys"] = sorted(normalize_lineage)
+    extract_inputs = manifest_inputs.extract_inputs
     return ManifestData(
         relspec_input_tables=manifest_inputs.relspec_inputs_bundle.tables,
         relspec_input_locations=manifest_inputs.relspec_inputs_bundle.locations,
@@ -522,7 +550,8 @@ def manifest_data(
         cpg_nodes=manifest_inputs.cpg_output_tables.cpg_nodes,
         cpg_edges=manifest_inputs.cpg_output_tables.cpg_edges,
         cpg_props=manifest_inputs.cpg_output_tables.cpg_props,
-        extract_evidence_plan=manifest_inputs.evidence_plan,
+        extract_evidence_plan=extract_inputs.evidence_plan if extract_inputs else None,
+        extract_error_counts=extract_inputs.extract_error_counts if extract_inputs else None,
         relationship_rules=relspec_snapshots.registry.rules(),
         normalize_rules=normalize_rules,
         produced_relationship_output_names=produced_outputs,

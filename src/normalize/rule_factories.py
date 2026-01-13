@@ -13,6 +13,7 @@ from normalize.rule_specs import NormalizeRuleFamilySpec
 if TYPE_CHECKING:
     from normalize.rule_model import EvidenceOutput, ExecutionMode
 
+
 @dataclass(frozen=True)
 class RuleConfig:
     """Configuration overrides for normalize rule factories."""

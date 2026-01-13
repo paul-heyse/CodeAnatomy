@@ -6,7 +6,7 @@ import dis
 import types as pytypes
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, Required, TypedDict, Unpack, cast, overload
+from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 from arrowdsl.compute.expr_core import MaskedHashExprSpec
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
@@ -31,6 +31,9 @@ from extract.registry_specs import (
     normalize_options,
 )
 from extract.schema_ops import metadata_spec_for_dataset
+
+if TYPE_CHECKING:
+    from extract.evidence_plan import EvidencePlan
 
 type RowValue = str | int | bool | None
 type Row = dict[str, RowValue]
@@ -288,6 +291,7 @@ def _build_code_units_plan(
     rows: list[Row],
     *,
     exec_ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> Plan:
     if not rows:
         return Plan.table_source(empty_table(CODE_UNITS_SCHEMA))
@@ -322,6 +326,7 @@ def _build_code_units_plan(
         "py_bc_code_units_v1",
         plan,
         ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
 
 
@@ -341,6 +346,7 @@ def _build_instructions_plan(
     rows: list[Row],
     *,
     exec_ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> Plan:
     if not rows:
         return Plan.table_source(empty_table(INSTR_SCHEMA))
@@ -363,6 +369,7 @@ def _build_instructions_plan(
         "py_bc_instructions_v1",
         plan,
         ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
 
 
@@ -382,6 +389,7 @@ def _build_exceptions_plan(
     rows: list[Row],
     *,
     exec_ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> Plan:
     if not rows:
         return Plan.table_source(empty_table(EXC_SCHEMA))
@@ -404,6 +412,7 @@ def _build_exceptions_plan(
         "py_bc_exception_table_v1",
         plan,
         ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
 
 
@@ -423,6 +432,7 @@ def _build_blocks_plan(
     rows: list[Row],
     *,
     exec_ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> Plan:
     if not rows:
         return Plan.table_source(empty_table(BLOCKS_SCHEMA))
@@ -445,6 +455,7 @@ def _build_blocks_plan(
         "py_bc_blocks_v1",
         plan,
         ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
 
 
@@ -464,6 +475,7 @@ def _build_cfg_edges_plan(
     rows: list[Row],
     *,
     exec_ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> Plan:
     if not rows:
         return Plan.table_source(empty_table(CFG_EDGES_SCHEMA))
@@ -500,6 +512,7 @@ def _build_cfg_edges_plan(
         "py_bc_cfg_edges_v1",
         plan,
         ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
 
 
@@ -945,8 +958,13 @@ def _build_bytecode_result(
     buffers: BytecodeRowBuffers,
     *,
     exec_ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> BytecodeExtractResult:
-    plans = _build_bytecode_plans(buffers, exec_ctx=exec_ctx)
+    plans = _build_bytecode_plans(
+        buffers,
+        exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
+    )
     return BytecodeExtractResult(
         py_bc_code_units=materialize_plan(
             plans["py_bc_code_units"],
@@ -985,17 +1003,39 @@ def _build_bytecode_plans(
     buffers: BytecodeRowBuffers,
     *,
     exec_ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> dict[str, Plan]:
-    code_units = _build_code_units_plan(buffers.code_unit_rows, exec_ctx=exec_ctx)
-    instructions = _build_instructions_plan(buffers.instruction_rows, exec_ctx=exec_ctx)
-    exceptions = _build_exceptions_plan(buffers.exception_rows, exec_ctx=exec_ctx)
-    blocks = _build_blocks_plan(buffers.block_rows, exec_ctx=exec_ctx)
-    edges = _build_cfg_edges_plan(buffers.edge_rows, exec_ctx=exec_ctx)
+    code_units = _build_code_units_plan(
+        buffers.code_unit_rows,
+        exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
+    )
+    instructions = _build_instructions_plan(
+        buffers.instruction_rows,
+        exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
+    )
+    exceptions = _build_exceptions_plan(
+        buffers.exception_rows,
+        exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
+    )
+    blocks = _build_blocks_plan(
+        buffers.block_rows,
+        exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
+    )
+    edges = _build_cfg_edges_plan(
+        buffers.edge_rows,
+        exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
+    )
     errors_plan = plan_from_rows(buffers.error_rows, schema=ERRORS_ROW_SCHEMA, label="bc_errors")
     errors_plan = apply_query_and_normalize(
         "py_bc_errors_v1",
         errors_plan,
         ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
     return {
         "py_bc_code_units": code_units,
@@ -1040,6 +1080,7 @@ def extract_bytecode(
     options: BytecodeExtractOptions | None = None,
     *,
     file_contexts: Iterable[FileContext] | None = None,
+    evidence_plan: EvidencePlan | None = None,
     ctx: ExecutionContext | None = None,
 ) -> BytecodeExtractResult:
     """Extract bytecode tables from repository files.
@@ -1055,6 +1096,7 @@ def extract_bytecode(
         repo_files,
         options=normalized_options,
         file_contexts=file_contexts,
+        evidence_plan=evidence_plan,
         ctx=exec_ctx,
     )
     metadata_specs = _bytecode_metadata_specs(normalized_options)
@@ -1103,6 +1145,7 @@ def extract_bytecode_plans(
     options: BytecodeExtractOptions | None = None,
     *,
     file_contexts: Iterable[FileContext] | None = None,
+    evidence_plan: EvidencePlan | None = None,
     ctx: ExecutionContext | None = None,
 ) -> dict[str, Plan]:
     """Extract bytecode plans from repository files.
@@ -1140,13 +1183,18 @@ def extract_bytecode_plans(
         code_unit_keys = _assign_code_units(top, bc_ctx, buffers.code_unit_rows)
         _extract_code_unit_rows(top, bc_ctx, code_unit_keys, buffers)
 
-    return _build_bytecode_plans(buffers, exec_ctx=exec_ctx)
+    return _build_bytecode_plans(
+        buffers,
+        exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
+    )
 
 
 class _BytecodeTableKwargs(TypedDict, total=False):
     repo_files: Required[TableLike]
     options: BytecodeExtractOptions | None
     file_contexts: Iterable[FileContext] | None
+    evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
     prefer_reader: bool
 
@@ -1155,6 +1203,7 @@ class _BytecodeTableKwargsTable(TypedDict, total=False):
     repo_files: Required[TableLike]
     options: BytecodeExtractOptions | None
     file_contexts: Iterable[FileContext] | None
+    evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
     prefer_reader: Literal[False]
 
@@ -1163,6 +1212,7 @@ class _BytecodeTableKwargsReader(TypedDict, total=False):
     repo_files: Required[TableLike]
     options: BytecodeExtractOptions | None
     file_contexts: Iterable[FileContext] | None
+    evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
     prefer_reader: Required[Literal[True]]
 
@@ -1202,12 +1252,14 @@ def extract_bytecode_table(
         BytecodeExtractOptions,
     )
     file_contexts = kwargs.get("file_contexts")
+    evidence_plan = kwargs.get("evidence_plan")
     exec_ctx = kwargs.get("ctx") or execution_context_factory("default")
     prefer_reader = kwargs.get("prefer_reader", False)
     plans = extract_bytecode_plans(
         repo_files,
         options=normalized_options,
         file_contexts=file_contexts,
+        evidence_plan=evidence_plan,
         ctx=exec_ctx,
     )
     metadata_specs = _bytecode_metadata_specs(normalized_options)

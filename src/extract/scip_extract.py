@@ -31,6 +31,7 @@ from arrowdsl.schema.build import struct_array_from_dicts, table_from_arrays
 from arrowdsl.schema.nested_builders import LargeListAccumulator
 from arrowdsl.schema.ops import unify_tables
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
+from extract.plan_helpers import apply_evidence_projection
 from extract.registry_fields import (
     SCIP_SIGNATURE_DOCUMENTATION_TYPE,
 )
@@ -46,6 +47,7 @@ from extract.schema_ops import metadata_spec_for_dataset, normalize_plan_with_po
 
 if TYPE_CHECKING:
     from arrowdsl.schema.policy import SchemaPolicy
+    from extract.evidence_plan import EvidencePlan
 from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
 from schema_spec.specs import NestedFieldSpec
@@ -172,9 +174,7 @@ def _scip_metadata_specs(
     return {
         "scip_metadata": metadata_spec_for_dataset("scip_metadata_v1", options=parse_opts),
         "scip_documents": metadata_spec_for_dataset("scip_documents_v1", options=parse_opts),
-        "scip_occurrences": metadata_spec_for_dataset(
-            "scip_occurrences_v1", options=parse_opts
-        ),
+        "scip_occurrences": metadata_spec_for_dataset("scip_occurrences_v1", options=parse_opts),
         "scip_symbol_information": metadata_spec_for_dataset(
             "scip_symbol_info_v1", options=parse_opts
         ),
@@ -184,9 +184,7 @@ def _scip_metadata_specs(
         "scip_external_symbol_information": metadata_spec_for_dataset(
             "scip_external_symbol_info_v1", options=parse_opts
         ),
-        "scip_diagnostics": metadata_spec_for_dataset(
-            "scip_diagnostics_v1", options=parse_opts
-        ),
+        "scip_diagnostics": metadata_spec_for_dataset("scip_diagnostics_v1", options=parse_opts),
     }
 
 
@@ -824,26 +822,38 @@ def _symbol_tables(index: object) -> tuple[TableLike, TableLike, TableLike]:
 def _finalize_plan(
     plan: Plan,
     *,
+    dataset_name: str,
     policy: SchemaPolicy,
     query: QuerySpec,
     exec_ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> Plan:
     plan = query.apply_to_plan(plan, ctx=exec_ctx)
+    plan = apply_evidence_projection(
+        dataset_name,
+        plan,
+        ctx=exec_ctx,
+        evidence_plan=evidence_plan,
+    )
     return normalize_plan_with_policy(plan, policy=policy, ctx=exec_ctx)
 
 
 def _finalize_table(
     table: TableLike,
     *,
+    dataset_name: str,
     policy: SchemaPolicy,
     query: QuerySpec,
     exec_ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     plan = _finalize_plan(
         Plan.table_source(table),
+        dataset_name=dataset_name,
         policy=policy,
         query=query,
         exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
     return materialize_plan(plan, ctx=exec_ctx)
 
@@ -853,11 +863,13 @@ def _extract_tables_from_index(
     *,
     parse_opts: SCIPParseOptions,
     exec_ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> SCIPExtractResult:
     plans = _extract_plan_bundle_from_index(
         index,
         parse_opts=parse_opts,
         exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
     metadata_specs = _scip_metadata_specs(parse_opts)
     return SCIPExtractResult(
@@ -962,6 +974,7 @@ def _extract_plan_bundle_from_index(
     *,
     parse_opts: SCIPParseOptions,
     exec_ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> dict[str, Plan]:
     meta_rows = _metadata_rows(index, parse_opts=parse_opts)
     t_docs, t_occs, t_diags = _document_tables(index)
@@ -984,45 +997,59 @@ def _extract_plan_bundle_from_index(
     return {
         "scip_metadata": _finalize_plan(
             t_meta_plan,
+            dataset_name="scip_metadata_v1",
             policy=policies["scip_metadata_v1"],
             query=SCIP_METADATA_QUERY,
             exec_ctx=exec_ctx,
+            evidence_plan=evidence_plan,
         ),
         "scip_documents": _finalize_plan(
             Plan.table_source(t_docs),
+            dataset_name="scip_documents_v1",
             policy=policies["scip_documents_v1"],
             query=SCIP_DOCUMENTS_QUERY,
             exec_ctx=exec_ctx,
+            evidence_plan=evidence_plan,
         ),
         "scip_occurrences": _finalize_plan(
             Plan.table_source(t_occs),
+            dataset_name="scip_occurrences_v1",
             policy=policies["scip_occurrences_v1"],
             query=SCIP_OCCURRENCES_QUERY,
             exec_ctx=exec_ctx,
+            evidence_plan=evidence_plan,
         ),
         "scip_symbol_information": _finalize_plan(
             Plan.table_source(t_syms),
+            dataset_name="scip_symbol_info_v1",
             policy=policies["scip_symbol_info_v1"],
             query=SCIP_SYMBOL_INFO_QUERY,
             exec_ctx=exec_ctx,
+            evidence_plan=evidence_plan,
         ),
         "scip_symbol_relationships": _finalize_plan(
             Plan.table_source(t_rels),
+            dataset_name="scip_symbol_relationships_v1",
             policy=policies["scip_symbol_relationships_v1"],
             query=SCIP_SYMBOL_RELATIONSHIPS_QUERY,
             exec_ctx=exec_ctx,
+            evidence_plan=evidence_plan,
         ),
         "scip_external_symbol_information": _finalize_plan(
             Plan.table_source(t_ext),
+            dataset_name="scip_external_symbol_info_v1",
             policy=policies["scip_external_symbol_info_v1"],
             query=SCIP_EXTERNAL_SYMBOL_INFO_QUERY,
             exec_ctx=exec_ctx,
+            evidence_plan=evidence_plan,
         ),
         "scip_diagnostics": _finalize_plan(
             Plan.table_source(t_diags),
+            dataset_name="scip_diagnostics_v1",
             policy=policies["scip_diagnostics_v1"],
             query=SCIP_DIAGNOSTICS_QUERY,
             exec_ctx=exec_ctx,
+            evidence_plan=evidence_plan,
         ),
     }
 
@@ -1034,6 +1061,7 @@ def extract_scip_tables(
     repo_root: str | None,
     ctx: ExecutionContext | None = None,
     parse_opts: SCIPParseOptions | None = None,
+    evidence_plan: EvidencePlan | None = None,
     prefer_reader: Literal[False] = False,
 ) -> Mapping[str, TableLike]: ...
 
@@ -1045,6 +1073,7 @@ def extract_scip_tables(
     repo_root: str | None,
     ctx: ExecutionContext | None = None,
     parse_opts: SCIPParseOptions | None = None,
+    evidence_plan: EvidencePlan | None = None,
     prefer_reader: Literal[True],
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]: ...
 
@@ -1055,6 +1084,7 @@ def extract_scip_tables(
     repo_root: str | None,
     ctx: ExecutionContext | None = None,
     parse_opts: SCIPParseOptions | None = None,
+    evidence_plan: EvidencePlan | None = None,
     prefer_reader: bool = False,
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]:
     """Extract SCIP tables as a name-keyed bundle.
@@ -1116,6 +1146,7 @@ def extract_scip_tables(
             index,
             parse_opts=normalized_opts,
             exec_ctx=exec_ctx,
+            evidence_plan=evidence_plan,
         )
 
     return run_plan_bundle(

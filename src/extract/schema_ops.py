@@ -7,15 +7,17 @@ from dataclasses import dataclass
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
+from arrowdsl.finalize.finalize import FinalizeContext, FinalizeResult
 from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.ops import align_plan as align_plan_to_schema
 from arrowdsl.schema.ops import encode_plan
 from arrowdsl.schema.policy import SchemaPolicy
 from arrowdsl.schema.schema import SchemaMetadataSpec
+from extract.registry_pipelines import pipeline_spec
 from extract.registry_specs import (
     dataset_metadata_with_options,
     dataset_schema_policy,
-    postprocess_table,
+    dataset_spec,
 )
 
 
@@ -82,8 +84,7 @@ def metadata_specs_for_datasets(
         Metadata spec map keyed by dataset name.
     """
     return {
-        name: metadata_spec_for_dataset(name, options=options, repo_id=repo_id)
-        for name in names
+        name: metadata_spec_for_dataset(name, options=options, repo_id=repo_id) for name in names
     }
 
 
@@ -165,7 +166,7 @@ def normalize_extract_output(
         Normalized table aligned to the dataset schema policy.
     """
     normalize = normalize or ExtractNormalizeOptions()
-    processed = postprocess_table(name, table)
+    processed = apply_pipeline_kernels(name, table)
     policy = schema_policy_for_dataset(
         name,
         ctx=ctx,
@@ -176,12 +177,74 @@ def normalize_extract_output(
     return policy.apply(processed)
 
 
+def apply_pipeline_kernels(name: str, table: TableLike) -> TableLike:
+    """Apply postprocess kernels for a dataset name.
+
+    Returns
+    -------
+    TableLike
+        Table with pipeline kernels applied.
+    """
+    processed = table
+    for kernel in pipeline_spec(name).post_kernels:
+        processed = kernel(processed)
+    return processed
+
+
+def finalize_context_for_dataset(
+    name: str,
+    *,
+    ctx: ExecutionContext,
+    normalize: ExtractNormalizeOptions | None = None,
+) -> FinalizeContext:
+    """Return a finalize context for the dataset name.
+
+    Returns
+    -------
+    FinalizeContext
+        Finalize context configured with schema policy and contract.
+    """
+    normalize = normalize or ExtractNormalizeOptions()
+    policy = schema_policy_for_dataset(
+        name,
+        ctx=ctx,
+        options=normalize.options,
+        repo_id=normalize.repo_id,
+        enable_encoding=normalize.enable_encoding,
+    )
+    contract = dataset_spec(name).contract()
+    return FinalizeContext(contract=contract, schema_policy=policy)
+
+
+def validate_extract_output(
+    name: str,
+    table: TableLike,
+    *,
+    ctx: ExecutionContext,
+    normalize: ExtractNormalizeOptions | None = None,
+) -> FinalizeResult:
+    """Validate an extract output, returning good/errors/stats tables.
+
+    Returns
+    -------
+    FinalizeResult
+        Finalize result with good, errors, stats, and alignment outputs.
+    """
+    normalize = normalize or ExtractNormalizeOptions()
+    processed = apply_pipeline_kernels(name, table)
+    finalize_ctx = finalize_context_for_dataset(name, ctx=ctx, normalize=normalize)
+    return finalize_ctx.run(processed, ctx=ctx)
+
+
 __all__ = [
     "ExtractNormalizeOptions",
+    "apply_pipeline_kernels",
+    "finalize_context_for_dataset",
     "metadata_spec_for_dataset",
     "metadata_specs_for_datasets",
     "normalize_extract_output",
     "normalize_extract_plan",
     "normalize_plan_with_policy",
     "schema_policy_for_dataset",
+    "validate_extract_output",
 ]

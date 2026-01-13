@@ -14,6 +14,7 @@ import pyarrow.types as patypes
 
 from arrowdsl.core.context import OrderingKey, OrderingLevel
 from arrowdsl.core.interop import ArrayLike, DataTypeLike, FieldLike, SchemaLike, TableLike
+from arrowdsl.json_factory import JsonPolicy, dumps_bytes, loads
 from arrowdsl.schema.nested_builders import (
     dictionary_array_from_indices as _dictionary_from_indices,
 )
@@ -82,6 +83,7 @@ ENCODING_META = "encoding"
 ENCODING_DICTIONARY = "dictionary"
 DICT_INDEX_META = "dictionary_index_type"
 DICT_ORDERED_META = "dictionary_ordered"
+EXTRACTOR_DEFAULTS_META = b"extractor_option_defaults"
 
 _ORDERED_TRUE = {"1", "true", "yes", "y", "t"}
 _INDEX_TYPES: Mapping[str, pa.DataType] = {
@@ -149,6 +151,48 @@ def options_metadata_spec(
     if extra:
         meta.update(extra)
     return SchemaMetadataSpec(schema_metadata=meta)
+
+
+def extractor_option_defaults_spec(
+    defaults: Mapping[str, object],
+) -> SchemaMetadataSpec:
+    """Return schema metadata for extractor option defaults.
+
+    Returns
+    -------
+    SchemaMetadataSpec
+        Metadata spec storing JSON-encoded option defaults.
+    """
+    if not defaults:
+        return SchemaMetadataSpec()
+    payload = dumps_bytes(defaults, policy=JsonPolicy.canonical_ascii())
+    return SchemaMetadataSpec(schema_metadata={EXTRACTOR_DEFAULTS_META: payload})
+
+
+def extractor_option_defaults_from_metadata(
+    source: Mapping[bytes, bytes] | SchemaLike,
+) -> dict[str, object]:
+    """Return extractor option defaults from schema metadata.
+
+    Returns
+    -------
+    dict[str, object]
+        Decoded option defaults, or an empty dict when missing.
+
+    Raises
+    ------
+    TypeError
+        Raised when metadata is not a JSON object.
+    """
+    metadata = source if isinstance(source, Mapping) else (source.metadata or {})
+    payload = metadata.get(EXTRACTOR_DEFAULTS_META)
+    if not payload:
+        return {}
+    parsed = loads(payload)
+    if isinstance(parsed, Mapping):
+        return {str(key): value for key, value in parsed.items()}
+    msg = "extractor_option_defaults metadata must be a JSON object."
+    raise TypeError(msg)
 
 
 def merge_metadata_specs(*specs: SchemaMetadataSpec | None) -> SchemaMetadataSpec:
@@ -561,6 +605,7 @@ __all__ = [
     "DICT_ORDERED_META",
     "ENCODING_DICTIONARY",
     "ENCODING_META",
+    "EXTRACTOR_DEFAULTS_META",
     "KEY_FIELDS_META",
     "REQUIRED_NON_NULL_META",
     "SCHEMA_META_NAME",
@@ -575,6 +620,8 @@ __all__ = [
     "encoding_policy_from_spec",
     "evidence_metadata_spec",
     "extractor_metadata_spec",
+    "extractor_option_defaults_from_metadata",
+    "extractor_option_defaults_spec",
     "infer_ordering_keys",
     "merge_metadata_specs",
     "metadata_spec_from_schema",

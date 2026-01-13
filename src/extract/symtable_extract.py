@@ -5,7 +5,7 @@ from __future__ import annotations
 import symtable
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal, Required, TypedDict, Unpack, cast, overload
+from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 import pyarrow as pa
 
@@ -36,6 +36,9 @@ from extract.registry_specs import (
 )
 from extract.schema_ops import metadata_spec_for_dataset
 from schema_spec.specs import NestedFieldSpec
+
+if TYPE_CHECKING:
+    from extract.evidence_plan import EvidencePlan
 
 
 @dataclass(frozen=True)
@@ -131,9 +134,7 @@ def _symtable_metadata_specs(
     return {
         "py_sym_scopes": metadata_spec_for_dataset("py_sym_scopes_v1", options=options),
         "py_sym_symbols": metadata_spec_for_dataset("py_sym_symbols_v1", options=options),
-        "py_sym_scope_edges": metadata_spec_for_dataset(
-            "py_sym_scope_edges_v1", options=options
-        ),
+        "py_sym_scope_edges": metadata_spec_for_dataset("py_sym_scope_edges_v1", options=options),
         "py_sym_namespace_edges": metadata_spec_for_dataset(
             "py_sym_namespace_edges_v1", options=options
         ),
@@ -461,6 +462,7 @@ def extract_symtable(
     options: SymtableExtractOptions | None = None,
     *,
     file_contexts: Iterable[FileContext] | None = None,
+    evidence_plan: EvidencePlan | None = None,
     ctx: ExecutionContext | None = None,
 ) -> SymtableExtractResult:
     """Extract symbol table artifacts from repository files.
@@ -508,6 +510,7 @@ def extract_symtable(
         rows,
         ctx=ctx,
         metadata_specs=metadata_specs,
+        evidence_plan=evidence_plan,
     )
 
 
@@ -516,6 +519,7 @@ def extract_symtable_plans(
     options: SymtableExtractOptions | None = None,
     *,
     file_contexts: Iterable[FileContext] | None = None,
+    evidence_plan: EvidencePlan | None = None,
     ctx: ExecutionContext | None = None,
 ) -> dict[str, Plan]:
     """Extract symbol table plans from repository files.
@@ -558,13 +562,14 @@ def extract_symtable_plans(
         ns_edge_rows=ns_edge_rows,
         func_parts_acc=func_parts_acc,
     )
-    return _build_symtable_plans(rows, ctx=ctx)
+    return _build_symtable_plans(rows, ctx=ctx, evidence_plan=evidence_plan)
 
 
 def _build_scopes(
     scope_rows: list[dict[str, object]],
     *,
     ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> tuple[Plan, Plan]:
     scopes_plan = plan_from_rows(scope_rows, schema=SCOPES_ROW_SCHEMA, label="sym_scopes")
     scopes_base = [name for name in SCOPES_ROW_SCHEMA.names if name != "scope_id"]
@@ -591,6 +596,7 @@ def _build_scopes(
         "py_sym_scopes_v1",
         scopes_plan,
         ctx=ctx,
+        evidence_plan=evidence_plan,
     )
     return scopes_plan, scope_key_plan
 
@@ -600,6 +606,7 @@ def _build_symbols(
     *,
     scope_key_plan: Plan,
     ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> Plan:
     if not symbol_rows:
         return Plan.table_source(empty_table(SYMBOLS_SCHEMA))
@@ -639,6 +646,7 @@ def _build_symbols(
         "py_sym_symbols_v1",
         symbols_plan,
         ctx=ctx,
+        evidence_plan=evidence_plan,
     )
 
 
@@ -647,6 +655,7 @@ def _build_scope_edges(
     *,
     scope_key_plan: Plan,
     ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> Plan:
     if not scope_edge_rows:
         return Plan.table_source(empty_table(SCOPE_EDGES_SCHEMA))
@@ -722,6 +731,7 @@ def _build_scope_edges(
         "py_sym_scope_edges_v1",
         scope_edges_plan,
         ctx=ctx,
+        evidence_plan=evidence_plan,
     )
 
 
@@ -730,6 +740,7 @@ def _build_namespace_edges(
     *,
     scope_key_plan: Plan,
     ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> Plan:
     if not ns_edge_rows:
         return Plan.table_source(empty_table(NAMESPACE_EDGES_SCHEMA))
@@ -803,6 +814,7 @@ def _build_namespace_edges(
         "py_sym_namespace_edges_v1",
         ns_edges_plan,
         ctx=ctx,
+        evidence_plan=evidence_plan,
     )
 
 
@@ -811,6 +823,7 @@ def _build_func_parts(
     *,
     scope_key_plan: Plan,
     ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> Plan:
     func_parts_table = func_parts_acc.to_table()
     if func_parts_table.num_rows == 0:
@@ -838,6 +851,7 @@ def _build_func_parts(
         "py_sym_function_partitions_v1",
         func_parts_plan,
         ctx=ctx,
+        evidence_plan=evidence_plan,
     )
 
 
@@ -846,8 +860,9 @@ def _build_symtable_result(
     *,
     ctx: ExecutionContext,
     metadata_specs: Mapping[str, SchemaMetadataSpec],
+    evidence_plan: EvidencePlan | None = None,
 ) -> SymtableExtractResult:
-    plans = _build_symtable_plans(rows, ctx=ctx)
+    plans = _build_symtable_plans(rows, ctx=ctx, evidence_plan=evidence_plan)
     return SymtableExtractResult(
         py_sym_scopes=materialize_plan(
             plans["py_sym_scopes"],
@@ -886,6 +901,7 @@ def _build_symtable_plans(
     rows: _SymtableRows,
     *,
     ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> dict[str, Plan]:
     if not rows.scope_rows:
         return {
@@ -896,22 +912,34 @@ def _build_symtable_plans(
             "py_sym_function_partitions": Plan.table_source(empty_table(FUNC_PARTS_SCHEMA)),
         }
 
-    scopes_plan, scope_key_plan = _build_scopes(rows.scope_rows, ctx=ctx)
-    symbols_plan = _build_symbols(rows.symbol_rows, scope_key_plan=scope_key_plan, ctx=ctx)
+    scopes_plan, scope_key_plan = _build_scopes(
+        rows.scope_rows,
+        ctx=ctx,
+        evidence_plan=evidence_plan,
+    )
+    symbols_plan = _build_symbols(
+        rows.symbol_rows,
+        scope_key_plan=scope_key_plan,
+        ctx=ctx,
+        evidence_plan=evidence_plan,
+    )
     scope_edges_plan = _build_scope_edges(
         rows.scope_edge_rows,
         scope_key_plan=scope_key_plan,
         ctx=ctx,
+        evidence_plan=evidence_plan,
     )
     ns_edges_plan = _build_namespace_edges(
         rows.ns_edge_rows,
         scope_key_plan=scope_key_plan,
         ctx=ctx,
+        evidence_plan=evidence_plan,
     )
     func_parts_plan = _build_func_parts(
         rows.func_parts_acc,
         scope_key_plan=scope_key_plan,
         ctx=ctx,
+        evidence_plan=evidence_plan,
     )
 
     return {
@@ -927,6 +955,7 @@ class _SymtableTableKwargs(TypedDict, total=False):
     repo_files: Required[TableLike]
     options: SymtableExtractOptions | None
     file_contexts: Iterable[FileContext] | None
+    evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
     prefer_reader: bool
 
@@ -935,6 +964,7 @@ class _SymtableTableKwargsTable(TypedDict, total=False):
     repo_files: Required[TableLike]
     options: SymtableExtractOptions | None
     file_contexts: Iterable[FileContext] | None
+    evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
     prefer_reader: Literal[False]
 
@@ -943,6 +973,7 @@ class _SymtableTableKwargsReader(TypedDict, total=False):
     repo_files: Required[TableLike]
     options: SymtableExtractOptions | None
     file_contexts: Iterable[FileContext] | None
+    evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
     prefer_reader: Required[Literal[True]]
 
@@ -982,12 +1013,14 @@ def extract_symtables_table(
         SymtableExtractOptions,
     )
     file_contexts = kwargs.get("file_contexts")
+    evidence_plan = kwargs.get("evidence_plan")
     exec_ctx = kwargs.get("ctx") or execution_context_factory("default")
     prefer_reader = kwargs.get("prefer_reader", False)
     plans = extract_symtable_plans(
         repo_files,
         options=normalized_options,
         file_contexts=file_contexts,
+        evidence_plan=evidence_plan,
         ctx=exec_ctx,
     )
     metadata_specs = _symtable_metadata_specs(normalized_options)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Required, TypedDict, Unpack, cast, overload
+from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 import libcst as cst
 import pyarrow as pa
@@ -42,6 +42,9 @@ from extract.registry_specs import (
     normalize_options,
 )
 from extract.schema_ops import ExtractNormalizeOptions, metadata_spec_for_dataset
+
+if TYPE_CHECKING:
+    from extract.evidence_plan import EvidencePlan
 
 type Row = dict[str, object]
 
@@ -190,9 +193,15 @@ class CSTExtractContext:
     call_rows: list[Row]
     def_rows: list[Row]
     type_expr_rows: list[Row]
+    evidence_plan: EvidencePlan | None = None
 
     @classmethod
-    def build(cls, options: CSTExtractOptions) -> CSTExtractContext:
+    def build(
+        cls,
+        options: CSTExtractOptions,
+        *,
+        evidence_plan: EvidencePlan | None = None,
+    ) -> CSTExtractContext:
         """Create an empty extraction context.
 
         Returns
@@ -209,6 +218,7 @@ class CSTExtractContext:
             call_rows=[],
             def_rows=[],
             type_expr_rows=[],
+            evidence_plan=evidence_plan,
         )
 
 
@@ -807,6 +817,7 @@ def extract_cst(
     options: CSTExtractOptions | None = None,
     *,
     file_contexts: Iterable[FileContext] | None = None,
+    evidence_plan: EvidencePlan | None = None,
     ctx: ExecutionContext | None = None,
 ) -> CSTExtractResult:
     """Extract LibCST-derived structures from repo files.
@@ -818,7 +829,7 @@ def extract_cst(
     """
     normalized_options = normalize_options("cst", options, CSTExtractOptions)
     exec_ctx = ctx or execution_context_factory("default")
-    extract_ctx = CSTExtractContext.build(normalized_options)
+    extract_ctx = CSTExtractContext.build(normalized_options, evidence_plan=evidence_plan)
     metadata_specs = _cst_metadata_specs(normalized_options)
 
     for file_ctx in iter_contexts(repo_files, file_contexts):
@@ -853,6 +864,7 @@ def _build_manifest_plan(
             options=ctx.options,
             repo_id=ctx.options.repo_id,
         ),
+        evidence_plan=ctx.evidence_plan,
     )
 
 
@@ -882,6 +894,7 @@ def _build_errors_plan(
             options=ctx.options,
             repo_id=ctx.options.repo_id,
         ),
+        evidence_plan=ctx.evidence_plan,
     )
 
 
@@ -911,6 +924,7 @@ def _build_name_refs_plan(
             options=ctx.options,
             repo_id=ctx.options.repo_id,
         ),
+        evidence_plan=ctx.evidence_plan,
     )
 
 
@@ -940,6 +954,7 @@ def _build_imports_plan(
             options=ctx.options,
             repo_id=ctx.options.repo_id,
         ),
+        evidence_plan=ctx.evidence_plan,
     )
 
 
@@ -969,6 +984,7 @@ def _build_callsites_plan(
             options=ctx.options,
             repo_id=ctx.options.repo_id,
         ),
+        evidence_plan=ctx.evidence_plan,
     )
 
 
@@ -998,6 +1014,7 @@ def _build_defs_plan(
             options=ctx.options,
             repo_id=ctx.options.repo_id,
         ),
+        evidence_plan=ctx.evidence_plan,
     )
 
 
@@ -1027,6 +1044,7 @@ def _build_type_exprs_plan(
             options=ctx.options,
             repo_id=ctx.options.repo_id,
         ),
+        evidence_plan=ctx.evidence_plan,
     )
 
 
@@ -1101,6 +1119,7 @@ class _CstTablesKwargs(TypedDict, total=False):
     repo_files: Required[TableLike]
     options: CSTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
+    evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
     prefer_reader: bool
 
@@ -1109,6 +1128,7 @@ class _CstTablesKwargsTable(TypedDict, total=False):
     repo_files: Required[TableLike]
     options: CSTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
+    evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
     prefer_reader: Literal[False]
 
@@ -1117,6 +1137,7 @@ class _CstTablesKwargsReader(TypedDict, total=False):
     repo_files: Required[TableLike]
     options: CSTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
+    evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
     prefer_reader: Required[Literal[True]]
 
@@ -1152,9 +1173,10 @@ def extract_cst_tables(
     repo_files = kwargs["repo_files"]
     normalized_options = normalize_options("cst", kwargs.get("options"), CSTExtractOptions)
     file_contexts = kwargs.get("file_contexts")
+    evidence_plan = kwargs.get("evidence_plan")
     exec_ctx = kwargs.get("ctx") or execution_context_factory("default")
     prefer_reader = kwargs.get("prefer_reader", False)
-    extract_ctx = CSTExtractContext.build(normalized_options)
+    extract_ctx = CSTExtractContext.build(normalized_options, evidence_plan=evidence_plan)
     metadata_specs = _cst_metadata_specs(normalized_options)
     for file_ctx in iter_contexts(repo_files, file_contexts):
         _extract_cst_for_context(file_ctx, extract_ctx)

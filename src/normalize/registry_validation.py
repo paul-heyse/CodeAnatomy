@@ -27,7 +27,9 @@ def validate_rule_specs(rules: Sequence[NormalizeRule]) -> None:
 
 
 def _validate_evidence_output(rule: NormalizeRule, schema: SchemaLike) -> None:
-    evidence_output = _merge_evidence_output(rule.evidence_output, evidence_output_from_schema(schema))
+    evidence_output = _merge_evidence_output(
+        rule.evidence_output, evidence_output_from_schema(schema)
+    )
     if evidence_output is None:
         return
     evidence_schema = normalize_evidence_schema()
@@ -42,8 +44,12 @@ def _validate_evidence_output(rule: NormalizeRule, schema: SchemaLike) -> None:
             f"for rule {rule.name!r}: {missing_targets}"
         )
         raise ValueError(msg)
-    missing_keys = sorted(name for name in evidence_output.column_map if name not in evidence_columns)
-    missing_literals = sorted(name for name in evidence_output.literals if name not in evidence_columns)
+    missing_keys = sorted(
+        name for name in evidence_output.column_map if name not in evidence_columns
+    )
+    missing_literals = sorted(
+        name for name in evidence_output.literals if name not in evidence_columns
+    )
     if missing_keys or missing_literals:
         msg = (
             "Normalize rule evidence output uses unknown evidence columns "
@@ -103,9 +109,7 @@ def _validate_required_types(
             f"for rule {rule.name!r} source {source!r}: {missing}"
         )
         raise ValueError(msg)
-    mismatched = sorted(
-        name for name, dtype in required.items() if types.get(name) != dtype
-    )
+    mismatched = sorted(name for name, dtype in required.items() if types.get(name) != dtype)
     if mismatched:
         msg = (
             "Normalize rule evidence requirements include mismatched types "
@@ -131,9 +135,7 @@ def _validate_required_metadata(
         )
         raise ValueError(msg)
     mismatched = [
-        key.decode("utf-8")
-        for key, value in required.items()
-        if metadata.get(key) != value
+        key.decode("utf-8") for key, value in required.items() if metadata.get(key) != value
     ]
     if mismatched:
         msg = (

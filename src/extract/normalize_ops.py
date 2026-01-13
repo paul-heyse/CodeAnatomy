@@ -95,9 +95,7 @@ _EXTRA_OPS_BY_NAME: dict[str, NormalizeOp] = {op.name: op for op in _EXTRA_OPS}
 _NORMALIZE_OPS: tuple[NormalizeOp, ...] = tuple(
     op
     for name in _ORDERED_OP_NAMES
-    for op in (
-        _RULE_OPS_BY_NAME.get(name) or _EXTRA_OPS_BY_NAME.get(name),
-    )
+    for op in (_RULE_OPS_BY_NAME.get(name) or _EXTRA_OPS_BY_NAME.get(name),)
     if op is not None
 ) + tuple(op for name, op in _RULE_OPS_BY_NAME.items() if name not in _ORDERED_OP_NAMES)
 

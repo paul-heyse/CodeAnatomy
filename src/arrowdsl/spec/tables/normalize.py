@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -14,7 +14,7 @@ from arrowdsl.spec.codec import (
     encode_scalar_union,
     parse_string_tuple,
 )
-from arrowdsl.spec.expr_ir import expr_spec_from_json
+from arrowdsl.spec.expr_ir import ExprSpec, expr_spec_from_json
 from arrowdsl.spec.infra import SCALAR_UNION_TYPE
 from arrowdsl.spec.io import table_from_rows
 from normalize.rule_definitions import NormalizeRuleDefinition
@@ -136,9 +136,9 @@ def _query_ops_row(spec: QuerySpec | None) -> list[dict[str, object]] | None:
 @dataclass
 class _QueryOpState:
     base: tuple[str, ...] = ()
-    derived: dict[str, object] = field(default_factory=dict)
-    predicate: object | None = None
-    pushdown: object | None = None
+    derived: dict[str, ExprSpec] = field(default_factory=dict)
+    predicate: ExprSpec | None = None
+    pushdown: ExprSpec | None = None
 
 
 def _handle_project(row: Mapping[str, Any], state: _QueryOpState) -> None:
@@ -170,7 +170,7 @@ def _handle_pushdown_filter(row: Mapping[str, Any], state: _QueryOpState) -> Non
     state.pushdown = expr_spec_from_json(str(expr_json))
 
 
-_QUERY_OP_HANDLERS: dict[str, callable[[Mapping[str, Any], _QueryOpState], None]] = {
+_QUERY_OP_HANDLERS: dict[str, Callable[[Mapping[str, Any], _QueryOpState], None]] = {
     "project": _handle_project,
     "derive": _handle_derive,
     "filter": _handle_filter,
@@ -218,7 +218,9 @@ def _evidence_from_row(payload: Mapping[str, Any] | None) -> EvidenceSpec | None
     metadata_map = dict(required_metadata) if isinstance(required_metadata, Mapping) else {}
     return EvidenceSpec(
         sources=parse_string_tuple(payload.get("sources"), label="sources"),
-        required_columns=parse_string_tuple(payload.get("required_columns"), label="required_columns"),
+        required_columns=parse_string_tuple(
+            payload.get("required_columns"), label="required_columns"
+        ),
         required_types={str(key): str(value) for key, value in required_types_map.items()},
         required_metadata={
             _ensure_metadata_bytes(key): _ensure_metadata_bytes(value)

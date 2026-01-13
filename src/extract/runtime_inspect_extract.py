@@ -9,6 +9,7 @@ import sys
 import textwrap
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
@@ -30,6 +31,9 @@ from extract.registry_specs import (
     normalize_options,
 )
 from extract.schema_ops import metadata_spec_for_dataset
+
+if TYPE_CHECKING:
+    from extract.evidence_plan import EvidencePlan
 
 type Row = dict[str, object]
 
@@ -94,9 +98,7 @@ def _runtime_metadata_specs(
     return {
         "rt_objects": metadata_spec_for_dataset("rt_objects_v1", options=options),
         "rt_signatures": metadata_spec_for_dataset("rt_signatures_v1", options=options),
-        "rt_signature_params": metadata_spec_for_dataset(
-            "rt_signature_params_v1", options=options
-        ),
+        "rt_signature_params": metadata_spec_for_dataset("rt_signature_params_v1", options=options),
         "rt_members": metadata_spec_for_dataset("rt_members_v1", options=options),
     }
 
@@ -479,6 +481,7 @@ def _build_rt_objects(
     obj_rows: list[Row],
     *,
     exec_ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> tuple[Plan, Plan]:
     rt_objects_plan = _plan_from_row_fragments(
         obj_rows,
@@ -508,6 +511,7 @@ def _build_rt_objects(
         "rt_objects_v1",
         rt_objects_plan,
         ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
     return rt_objects_plan, rt_objects_key_plan
 
@@ -517,6 +521,7 @@ def _build_rt_signatures(
     *,
     rt_objects_key_plan: Plan,
     exec_ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> tuple[Plan, Plan | None]:
     if not sig_rows:
         empty_plan = Plan.table_source(empty_table(RT_SIGNATURES_SCHEMA))
@@ -567,6 +572,7 @@ def _build_rt_signatures(
         "rt_signatures_v1",
         sig_plan,
         ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
     return sig_plan, sig_meta_plan
 
@@ -576,6 +582,7 @@ def _build_rt_params(
     *,
     sig_meta_plan: Plan | None,
     exec_ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> Plan:
     if not param_rows or sig_meta_plan is None:
         return Plan.table_source(empty_table(RT_SIGNATURE_PARAMS_SCHEMA))
@@ -618,6 +625,7 @@ def _build_rt_params(
         "rt_signature_params_v1",
         param_plan,
         ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
 
 
@@ -626,6 +634,7 @@ def _build_rt_members(
     *,
     rt_objects_key_plan: Plan,
     exec_ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> Plan:
     if not member_rows:
         return Plan.table_source(empty_table(RT_MEMBERS_SCHEMA))
@@ -668,6 +677,7 @@ def _build_rt_members(
         "rt_members_v1",
         member_plan,
         ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
 
 
@@ -676,25 +686,33 @@ def _runtime_tables_from_rows(
     rows: RuntimeRows,
     exec_ctx: ExecutionContext,
     metadata_specs: Mapping[str, SchemaMetadataSpec],
+    evidence_plan: EvidencePlan | None = None,
 ) -> RuntimeInspectResult:
     if not rows.obj_rows:
         return _empty_runtime_result(metadata_specs)
 
-    rt_objects_plan, rt_objects_key_plan = _build_rt_objects(rows.obj_rows, exec_ctx=exec_ctx)
+    rt_objects_plan, rt_objects_key_plan = _build_rt_objects(
+        rows.obj_rows,
+        exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
+    )
     rt_signatures_plan, sig_meta_plan = _build_rt_signatures(
         rows.sig_rows,
         rt_objects_key_plan=rt_objects_key_plan,
         exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
     rt_params_plan = _build_rt_params(
         rows.param_rows,
         sig_meta_plan=sig_meta_plan,
         exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
     rt_members_plan = _build_rt_members(
         rows.member_rows,
         rt_objects_key_plan=rt_objects_key_plan,
         exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
 
     return RuntimeInspectResult(
@@ -729,6 +747,7 @@ def _runtime_plans_from_rows(
     *,
     rows: RuntimeRows,
     exec_ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> dict[str, Plan]:
     if not rows.obj_rows:
         empty = Plan.table_source(empty_table(RT_OBJECTS_SCHEMA))
@@ -738,19 +757,28 @@ def _runtime_plans_from_rows(
             "rt_signature_params": Plan.table_source(empty_table(RT_SIGNATURE_PARAMS_SCHEMA)),
             "rt_members": Plan.table_source(empty_table(RT_MEMBERS_SCHEMA)),
         }
-    rt_objects_plan, rt_objects_key_plan = _build_rt_objects(rows.obj_rows, exec_ctx=exec_ctx)
+    rt_objects_plan, rt_objects_key_plan = _build_rt_objects(
+        rows.obj_rows,
+        exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
+    )
     rt_signatures_plan, sig_meta_plan = _build_rt_signatures(
         rows.sig_rows,
         rt_objects_key_plan=rt_objects_key_plan,
         exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
     rt_params_plan = _build_rt_params(
-        rows.param_rows, sig_meta_plan=sig_meta_plan, exec_ctx=exec_ctx
+        rows.param_rows,
+        sig_meta_plan=sig_meta_plan,
+        exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
     rt_members_plan = _build_rt_members(
         rows.member_rows,
         rt_objects_key_plan=rt_objects_key_plan,
         exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
     return {
         "rt_objects": rt_objects_plan,
@@ -764,6 +792,7 @@ def extract_runtime_tables(
     repo_root: str,
     *,
     options: RuntimeInspectOptions,
+    evidence_plan: EvidencePlan | None = None,
     ctx: ExecutionContext | None = None,
 ) -> RuntimeInspectResult:
     """Extract runtime inspection tables via subprocess.
@@ -807,6 +836,7 @@ def extract_runtime_tables(
         rows=rows,
         exec_ctx=exec_ctx,
         metadata_specs=metadata_specs,
+        evidence_plan=evidence_plan,
     )
 
 
@@ -814,6 +844,7 @@ def extract_runtime_plans(
     repo_root: str,
     *,
     options: RuntimeInspectOptions,
+    evidence_plan: EvidencePlan | None = None,
     ctx: ExecutionContext | None = None,
 ) -> dict[str, Plan]:
     """Extract runtime inspection plans via subprocess.
@@ -851,6 +882,7 @@ def extract_runtime_plans(
     return _runtime_plans_from_rows(
         rows=rows,
         exec_ctx=exec_ctx,
+        evidence_plan=evidence_plan,
     )
 
 

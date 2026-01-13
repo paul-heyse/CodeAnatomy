@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Literal, Required, TypedDict, Unpack, overload
+from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, overload
 
 import tree_sitter_python
 from tree_sitter import Language, Parser
@@ -20,7 +20,7 @@ from extract.helpers import (
     file_identity_row,
     iter_contexts,
 )
-from extract.plan_helpers import plan_from_rows_for_dataset
+from extract.plan_helpers import ExtractPlanBuildOptions, plan_from_rows_for_dataset
 from extract.registry_specs import (
     dataset_enabled,
     dataset_row_schema,
@@ -28,6 +28,9 @@ from extract.registry_specs import (
     normalize_options,
 )
 from extract.schema_ops import ExtractNormalizeOptions, metadata_spec_for_dataset
+
+if TYPE_CHECKING:
+    from extract.evidence_plan import EvidencePlan
 
 type Row = dict[str, object]
 
@@ -148,6 +151,7 @@ def extract_ts(
     *,
     options: TreeSitterExtractOptions | None = None,
     file_contexts: Iterable[FileContext] | None = None,
+    evidence_plan: EvidencePlan | None = None,
     ctx: ExecutionContext | None = None,
 ) -> TreeSitterExtractResult:
     """Extract tree-sitter nodes and diagnostics from repo files.
@@ -160,8 +164,8 @@ def extract_ts(
         Extraction options.
     file_contexts:
         Optional pre-built file contexts for extraction.
-    options:
-        Tree-sitter extraction options.
+    evidence_plan:
+        Evidence plan used for early column projection.
     ctx:
         Execution context for plan execution.
 
@@ -176,6 +180,7 @@ def extract_ts(
         repo_files,
         options=normalized_options,
         file_contexts=file_contexts,
+        evidence_plan=evidence_plan,
         ctx=exec_ctx,
     )
     metadata_specs = _ts_metadata_specs(normalized_options)
@@ -206,6 +211,7 @@ def extract_ts_plans(
     *,
     options: TreeSitterExtractOptions | None = None,
     file_contexts: Iterable[FileContext] | None = None,
+    evidence_plan: EvidencePlan | None = None,
     ctx: ExecutionContext | None = None,
 ) -> dict[str, Plan]:
     """Extract tree-sitter plans for nodes and diagnostics.
@@ -241,7 +247,10 @@ def extract_ts_plans(
         node_rows,
         row_schema=TS_NODES_ROW_SCHEMA,
         ctx=exec_ctx,
-        normalize=ExtractNormalizeOptions(options=normalized_options),
+        options=ExtractPlanBuildOptions(
+            normalize=ExtractNormalizeOptions(options=normalized_options),
+            evidence_plan=evidence_plan,
+        ),
     )
 
     errors_plan = plan_from_rows_for_dataset(
@@ -249,7 +258,10 @@ def extract_ts_plans(
         error_rows,
         row_schema=TS_ERRORS_ROW_SCHEMA,
         ctx=exec_ctx,
-        normalize=ExtractNormalizeOptions(options=normalized_options),
+        options=ExtractPlanBuildOptions(
+            normalize=ExtractNormalizeOptions(options=normalized_options),
+            evidence_plan=evidence_plan,
+        ),
     )
 
     missing_plan = plan_from_rows_for_dataset(
@@ -257,7 +269,10 @@ def extract_ts_plans(
         missing_rows,
         row_schema=TS_MISSING_ROW_SCHEMA,
         ctx=exec_ctx,
-        normalize=ExtractNormalizeOptions(options=normalized_options),
+        options=ExtractPlanBuildOptions(
+            normalize=ExtractNormalizeOptions(options=normalized_options),
+            evidence_plan=evidence_plan,
+        ),
     )
     return {
         "ts_nodes": nodes_plan,
@@ -301,6 +316,7 @@ class _TreeSitterTablesKwargs(TypedDict, total=False):
     repo_files: Required[TableLike]
     options: TreeSitterExtractOptions | None
     file_contexts: Iterable[FileContext] | None
+    evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
     prefer_reader: bool
 
@@ -309,6 +325,7 @@ class _TreeSitterTablesKwargsTable(TypedDict, total=False):
     repo_files: Required[TableLike]
     options: TreeSitterExtractOptions | None
     file_contexts: Iterable[FileContext] | None
+    evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
     prefer_reader: Literal[False]
 
@@ -317,6 +334,7 @@ class _TreeSitterTablesKwargsReader(TypedDict, total=False):
     repo_files: Required[TableLike]
     options: TreeSitterExtractOptions | None
     file_contexts: Iterable[FileContext] | None
+    evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
     prefer_reader: Required[Literal[True]]
 
@@ -356,12 +374,14 @@ def extract_ts_tables(
         TreeSitterExtractOptions,
     )
     file_contexts = kwargs.get("file_contexts")
+    evidence_plan = kwargs.get("evidence_plan")
     exec_ctx = kwargs.get("ctx") or execution_context_factory("default")
     prefer_reader = kwargs.get("prefer_reader", False)
     plans = extract_ts_plans(
         repo_files,
         options=normalized_options,
         file_contexts=file_contexts,
+        evidence_plan=evidence_plan,
         ctx=exec_ctx,
     )
     return run_plan_bundle(

@@ -73,9 +73,7 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
             b"coordinate_system": b"bytes",
             b"ambiguity_policy": b"preserve",
             b"superior_rank": b"2",
-            EVIDENCE_OUTPUT_MAP_META: _json_bytes(
-                {"role": "severity", "source": "diag_source"}
-            ),
+            EVIDENCE_OUTPUT_MAP_META: _json_bytes({"role": "severity", "source": "diag_source"}),
         },
     ),
     "normalize_span": RegistryTemplate(

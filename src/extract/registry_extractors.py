@@ -72,9 +72,7 @@ for _template, _rows in _rows_by_template().items():
     )
 
 _OUTPUT_TO_TEMPLATE: dict[str, str] = {
-    row.output_name(): row.template
-    for row in DATASET_ROWS
-    if row.template is not None
+    row.output_name(): row.template for row in DATASET_ROWS if row.template is not None
 }
 
 

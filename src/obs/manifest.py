@@ -87,6 +87,7 @@ class ExtractRecord:
     required_columns: list[str] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
     schema_fingerprint: str | None = None
+    error_rows: int | None = None
 
 
 @dataclass(frozen=True)
@@ -142,6 +143,7 @@ class ManifestData:
     cpg_edges: TableLike | None = None
     cpg_props: TableLike | None = None
     extract_evidence_plan: EvidencePlan | None = None
+    extract_error_counts: Mapping[str, int] | None = None
     relationship_rules: Sequence[RelationshipRule] | None = None
     normalize_rules: Sequence[NormalizeRule] | None = None
     produced_relationship_output_names: Sequence[str] | None = None
@@ -309,6 +311,7 @@ def _extract_record_from_spec(
     spec: EvidenceSpec,
     *,
     required_columns: Sequence[str] | None = None,
+    error_rows: int | None = None,
 ) -> ExtractRecord:
     sources: list[str] = []
     if spec.template is not None:
@@ -328,6 +331,7 @@ def _extract_record_from_spec(
         required_columns=list(required_columns or spec.required_columns),
         sources=sources,
         schema_fingerprint=schema_fingerprint(schema),
+        error_rows=error_rows,
     )
 
 
@@ -335,8 +339,17 @@ def _collect_extract_records(data: ManifestData) -> list[ExtractRecord]:
     plan = data.extract_evidence_plan
     records: list[ExtractRecord] = []
     seen: set[str] = set()
+    error_counts = data.extract_error_counts or {}
     if plan is None:
-        records.extend([_extract_record_from_spec(spec) for spec in evidence_specs()])
+        records.extend(
+            [
+                _extract_record_from_spec(
+                    spec,
+                    error_rows=error_counts.get(spec.name),
+                )
+                for spec in evidence_specs()
+            ]
+        )
         return records
 
     for req in plan.requirements:
@@ -351,6 +364,7 @@ def _collect_extract_records(data: ManifestData) -> list[ExtractRecord]:
             _extract_record_from_spec(
                 spec,
                 required_columns=req.required_columns or spec.required_columns,
+                error_rows=error_counts.get(spec.name),
             )
         )
     return records

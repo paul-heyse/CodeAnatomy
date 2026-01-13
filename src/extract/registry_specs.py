@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
 from functools import cache
 from typing import TYPE_CHECKING
 
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.plan.query import QuerySpec
-from arrowdsl.schema.metadata import merge_metadata_specs, options_metadata_spec
+from arrowdsl.schema.metadata import (
+    extractor_option_defaults_from_metadata,
+    extractor_option_defaults_spec,
+    merge_metadata_specs,
+    options_metadata_spec,
+)
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import EncodingPolicy, SchemaMetadataSpec
 from extract.evidence_specs import evidence_metadata_spec as extract_evidence_metadata_spec
@@ -19,13 +23,7 @@ from extract.registry_builders import (
     build_query_spec,
     build_row_schema,
 )
-from extract.registry_ids import (
-    add_scip_diagnostic_ids,
-    add_scip_document_ids,
-    add_scip_occurrence_ids,
-    add_scip_relationship_ids,
-    add_scip_symbol_ids,
-)
+from extract.registry_pipelines import pipeline_spec
 from extract.registry_policies import policy_row, template_policy_row
 from extract.registry_rows import DATASET_ROWS, DatasetRow
 from extract.registry_templates import config as extractor_config
@@ -182,7 +180,11 @@ def extractor_defaults(name: str) -> dict[str, object]:
     dict[str, object]
         Default options for the extractor.
     """
-    return dict(extractor_config(name).defaults)
+    defaults = extractor_config(name).defaults
+    spec = extractor_option_defaults_spec(defaults)
+    if spec.schema_metadata:
+        return extractor_option_defaults_from_metadata(spec.schema_metadata)
+    return dict(defaults)
 
 
 def _options_dict(options: object) -> dict[str, object]:
@@ -247,20 +249,6 @@ def dataset_schema_policy(
     return schema_policy_factory(spec, ctx=ctx, options=policy_options)
 
 
-_POSTPROCESSORS: dict[str, Callable[[TableLike], TableLike]] = {
-    "scip_documents": lambda table: add_scip_document_ids(table, path_col="path"),
-    "scip_occurrences": lambda table: add_scip_occurrence_ids(
-        add_scip_document_ids(table, path_col="path")
-    ),
-    "scip_diagnostics": lambda table: add_scip_diagnostic_ids(
-        add_scip_document_ids(table, path_col="path")
-    ),
-    "scip_symbol_info": lambda table: add_scip_symbol_ids(table, prefix="scip_sym"),
-    "scip_external_symbol_info": lambda table: add_scip_symbol_ids(table, prefix="scip_ext_sym"),
-    "scip_symbol_relationships": add_scip_relationship_ids,
-}
-
-
 def postprocess_table(name: str, table: TableLike) -> TableLike:
     """Apply any postprocess hook for a dataset name.
 
@@ -269,11 +257,11 @@ def postprocess_table(name: str, table: TableLike) -> TableLike:
     TableLike
         Postprocessed table when a hook exists.
     """
-    row = dataset_row(name)
-    if row.postprocess is None:
-        return table
-    handler = _POSTPROCESSORS[row.postprocess]
-    return handler(table)
+    kernels = pipeline_spec(name).post_kernels
+    processed = table
+    for kernel in kernels:
+        processed = kernel(processed)
+    return processed
 
 
 def validate_registry(*, repo_id: str | None = None) -> None:

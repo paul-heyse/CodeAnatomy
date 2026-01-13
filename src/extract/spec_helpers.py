@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from functools import cache
 
+from arrowdsl.schema.metadata import extractor_option_defaults_from_metadata
 from extract.evidence_plan import EvidencePlan
 from extract.registry_rows import DATASET_ROWS, DatasetRow
-from extract.registry_specs import extractor_defaults
+from extract.registry_specs import dataset_schema, extractor_defaults
 
 
 def _rows_for_template(template_name: str) -> tuple[DatasetRow, ...]:
@@ -22,6 +23,15 @@ def _feature_flag_rows(template_name: str) -> Mapping[str, tuple[DatasetRow, ...
             continue
         flags.setdefault(row.feature_flag, []).append(row)
     return {flag: tuple(rows) for flag, rows in flags.items()}
+
+
+@cache
+def _metadata_defaults(template_name: str) -> dict[str, object]:
+    rows = _rows_for_template(template_name)
+    if not rows:
+        return {}
+    schema = dataset_schema(rows[0].name)
+    return extractor_option_defaults_from_metadata(schema)
 
 
 def _plan_requires_row(plan: EvidencePlan, row: DatasetRow) -> bool:
@@ -93,6 +103,7 @@ def extractor_option_values(
         Extractor option values derived from registry defaults and plan flags.
     """
     values = extractor_defaults(template_name)
+    values.update(_metadata_defaults(template_name))
     values.update(plan_feature_flags(template_name, plan))
     override_values: dict[str, object] = dict(overrides or {})
     if override_values:

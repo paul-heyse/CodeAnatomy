@@ -767,9 +767,7 @@ def _relationship_rules_from_definition_table(table: pa.Table) -> tuple[Relation
 
 def _relationship_rule_from_definition_row(row: Mapping[str, Any]) -> RelationshipRule:
     inputs = parse_string_tuple(row.get("inputs"), label="inputs")
-    predicate = (
-        _decode_expr(str(row["predicate_expr"])) if row.get("predicate_expr") else None
-    )
+    predicate = _decode_expr(str(row["predicate_expr"])) if row.get("predicate_expr") else None
     base_project = _project_from_payload(row.get("project"))
     kind = RuleKind(str(row["kind"]))
     confidence_policy = (

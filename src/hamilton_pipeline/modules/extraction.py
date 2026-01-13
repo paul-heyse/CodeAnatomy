@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from hamilton.function_modifiers import cache, extract_fields, tag
@@ -24,10 +25,11 @@ from extract.helpers import (
     iter_file_contexts,
     template_outputs,
 )
-from extract.registry_bundles import output_bundle_outputs
+from extract.registry_bundles import dataset_name_for_output, output_bundle_outputs
 from extract.registry_specs import dataset_schema
 from extract.repo_scan import RepoScanOptions, scan_repo
 from extract.runtime_inspect_extract import RuntimeInspectOptions, extract_runtime_tables
+from extract.schema_ops import validate_extract_output
 from extract.scip_extract import SCIPParseOptions, extract_scip_tables, run_scip_python_index
 from extract.scip_identity import resolve_scip_identity
 from extract.scip_indexer import build_scip_index_options, ensure_scip_build_dir
@@ -49,6 +51,16 @@ SCIP_BUNDLE_OUTPUTS = output_bundle_outputs("scip_bundle")
 BYTECODE_BUNDLE_OUTPUTS = output_bundle_outputs("bytecode_bundle")
 TREE_SITTER_BUNDLE_OUTPUTS = output_bundle_outputs("tree_sitter_bundle")
 RUNTIME_INSPECT_BUNDLE_OUTPUTS = output_bundle_outputs("runtime_inspect_bundle")
+
+
+@dataclass(frozen=True)
+class ExtractErrorArtifacts:
+    """Error artifacts emitted by extract validation."""
+
+    errors: Mapping[str, TableLike]
+    stats: Mapping[str, TableLike]
+    alignment: Mapping[str, TableLike]
+    error_counts: Mapping[str, int]
 
 
 @cache(format="parquet")
@@ -111,6 +123,45 @@ def _empty_registry_table(name: str) -> TableLike:
 
 def _empty_bundle(names: Sequence[str]) -> dict[str, TableLike]:
     return {name: _empty_registry_table(name) for name in names}
+
+
+def _merge_bundles(
+    bundles: Sequence[Mapping[str, TableLike]],
+) -> dict[str, TableLike]:
+    merged: dict[str, TableLike] = {}
+    for bundle in bundles:
+        for name, table in bundle.items():
+            if name in merged:
+                msg = f"Duplicate extract output: {name!r}."
+                raise ValueError(msg)
+            merged[name] = table
+    return merged
+
+
+def _validate_extract_tables(
+    tables: Mapping[str, TableLike],
+    *,
+    ctx: ExecutionContext,
+) -> ExtractErrorArtifacts:
+    errors: dict[str, TableLike] = {}
+    stats: dict[str, TableLike] = {}
+    alignment: dict[str, TableLike] = {}
+    counts: dict[str, int] = {}
+    for output, table in tables.items():
+        dataset_name = dataset_name_for_output(output)
+        if dataset_name is None:
+            continue
+        result = validate_extract_output(dataset_name, table, ctx=ctx)
+        errors[output] = result.errors
+        stats[output] = result.stats
+        alignment[output] = result.alignment
+        counts[dataset_name] = counts.get(dataset_name, 0) + int(result.errors.num_rows)
+    return ExtractErrorArtifacts(
+        errors=errors,
+        stats=stats,
+        alignment=alignment,
+        error_counts=counts,
+    )
 
 
 def _options_for_template[T](
@@ -185,6 +236,7 @@ def cst_bundle(
         repo_files=repo_files,
         options=options,
         file_contexts=file_contexts,
+        evidence_plan=evidence_plan,
         ctx=ctx,
     )
 
@@ -214,6 +266,7 @@ def ast_bundle(
     return extract_ast_tables(
         repo_files=repo_files,
         file_contexts=file_contexts,
+        evidence_plan=evidence_plan,
         ctx=ctx,
     )
 
@@ -244,6 +297,7 @@ def scip_bundle(
         repo_root=repo_root,
         ctx=ctx,
         parse_opts=scip_parse_options,
+        evidence_plan=evidence_plan,
     )
 
 
@@ -343,6 +397,7 @@ def symtables(
         repo_files=repo_files,
         file_contexts=file_contexts,
         options=options,
+        evidence_plan=evidence_plan,
         ctx=ctx,
     )
 
@@ -374,6 +429,7 @@ def bytecode(
             plan=evidence_plan,
             factory=BytecodeExtractOptions,
         ),
+        evidence_plan=evidence_plan,
         ctx=ctx,
     )
 
@@ -407,6 +463,7 @@ def bytecode_bundle(
         repo_files,
         options=options,
         file_contexts=file_contexts,
+        evidence_plan=evidence_plan,
         ctx=ctx,
     )
     return {
@@ -447,6 +504,7 @@ def tree_sitter_bundle(
             plan=evidence_plan,
             factory=TreeSitterExtractOptions,
         ),
+        evidence_plan=evidence_plan,
         ctx=ctx,
     )
 
@@ -484,6 +542,7 @@ def runtime_inspect_bundle(
     result = extract_runtime_tables(
         repo_root,
         options=options,
+        evidence_plan=evidence_plan,
         ctx=ctx,
     )
     return {
@@ -492,3 +551,72 @@ def runtime_inspect_bundle(
         "rt_signature_params": result.rt_signature_params,
         "rt_members": result.rt_members,
     }
+
+
+@cache()
+@tag(layer="extract", artifact="extract_bundle_group_a", kind="object")
+def extract_bundle_group_a(
+    repo_files: TableLike,
+    ast_bundle: Mapping[str, TableLike],
+    cst_bundle: Mapping[str, TableLike],
+    scip_bundle: Mapping[str, TableLike],
+) -> Mapping[str, TableLike]:
+    """Return merged extract bundles for repo/AST/CST/SCIP outputs.
+
+    Returns
+    -------
+    Mapping[str, TableLike]
+        Merged bundle tables.
+    """
+    repo_bundle = {"repo_files": repo_files}
+    return _merge_bundles((repo_bundle, ast_bundle, cst_bundle, scip_bundle))
+
+
+@cache()
+@tag(layer="extract", artifact="extract_bundle_group_b", kind="object")
+def extract_bundle_group_b(
+    bytecode_bundle: Mapping[str, TableLike],
+    tree_sitter_bundle: Mapping[str, TableLike],
+    runtime_inspect_bundle: Mapping[str, TableLike],
+) -> Mapping[str, TableLike]:
+    """Return merged extract bundles for bytecode/tree-sitter/runtime outputs.
+
+    Returns
+    -------
+    Mapping[str, TableLike]
+        Merged bundle tables.
+    """
+    return _merge_bundles((bytecode_bundle, tree_sitter_bundle, runtime_inspect_bundle))
+
+
+@cache()
+@tag(layer="extract", artifact="extract_error_artifacts", kind="object")
+def extract_error_artifacts(
+    extract_bundle_group_a: Mapping[str, TableLike],
+    extract_bundle_group_b: Mapping[str, TableLike],
+    ctx: ExecutionContext,
+) -> ExtractErrorArtifacts:
+    """Validate extract outputs and emit error artifacts.
+
+    Returns
+    -------
+    ExtractErrorArtifacts
+        Error artifacts for extract outputs.
+    """
+    tables = _merge_bundles((extract_bundle_group_a, extract_bundle_group_b))
+    return _validate_extract_tables(tables, ctx=ctx)
+
+
+@cache()
+@tag(layer="extract", artifact="extract_error_counts", kind="object")
+def extract_error_counts(
+    extract_error_artifacts: ExtractErrorArtifacts,
+) -> Mapping[str, int]:
+    """Return extract error row counts by dataset name.
+
+    Returns
+    -------
+    Mapping[str, int]
+        Error row counts keyed by dataset name.
+    """
+    return extract_error_artifacts.error_counts

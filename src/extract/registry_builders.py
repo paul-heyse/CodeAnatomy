@@ -13,6 +13,7 @@ from arrowdsl.core.interop import SchemaLike
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.schema.metadata import (
     extractor_metadata_spec,
+    extractor_option_defaults_spec,
     infer_ordering_keys,
     merge_metadata_specs,
     ordering_metadata_spec,
@@ -23,6 +24,7 @@ from extract.registry_bundles import bundle
 from extract.registry_fields import field, field_name, fields
 from extract.registry_ids import hash_spec
 from extract.registry_rows import DatasetRow, DerivedIdSpec
+from extract.registry_templates import config as extractor_config
 from extract.registry_templates import template
 from schema_spec.system import DatasetSpec, make_table_spec
 
@@ -142,6 +144,14 @@ def build_metadata_spec(row: DatasetRow, *, base_columns: Sequence[str]) -> Sche
         merged_extra = dict(extractor_extra or {})
         merged_extra.update(row.metadata_extra)
         extractor_extra = merged_extra
+    if row.template is not None:
+        defaults_meta = extractor_option_defaults_spec(
+            extractor_config(row.template).defaults
+        ).schema_metadata
+        if defaults_meta:
+            merged_extra = dict(extractor_extra or {})
+            merged_extra.update(defaults_meta)
+            extractor_extra = merged_extra
     if row.ordering_keys:
         ordering_keys = row.ordering_keys
     elif row.join_keys:

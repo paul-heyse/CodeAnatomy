@@ -68,12 +68,12 @@ def normalize_rules_from_table(table: pa.Table) -> tuple[NormalizeRule, ...]:
 - Update: `src/normalize/rule_factories.py`
 
 **Implementation checklist**
-- [ ] Add normalize rule definition schema + row encoders/decoders.
-- [ ] Compile rule rows into NormalizeRule instances (minimal Python logic).
-- [ ] Replace family factories with table-driven rule construction.
+- [x] Add normalize rule definition schema + row encoders/decoders.
+- [x] Compile rule rows into NormalizeRule instances (minimal Python logic).
+- [x] Replace family factories with table-driven rule construction.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -114,12 +114,12 @@ def expand_rule_templates(specs: Sequence[RuleTemplateSpec]) -> tuple[NormalizeR
 - Update: `src/normalize/rule_registry.py`
 
 **Implementation checklist**
-- [ ] Define template spec dataclass + template registry.
-- [ ] Expand templates into rule-family specs at registry build time.
-- [ ] Replace repeated rule families with templates.
+- [x] Define template spec dataclass + template registry.
+- [x] Expand templates into rule-family specs at registry build time.
+- [x] Replace repeated rule families with templates.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -155,12 +155,12 @@ def evidence_output_from_schema(schema: SchemaLike) -> EvidenceOutput | None:
 - Update: `src/normalize/runner.py`
 
 **Implementation checklist**
-- [ ] Add metadata keys for evidence requirements and evidence output mappings.
-- [ ] Decode defaults from schema metadata when rule rows omit them.
-- [ ] Apply defaults during rule compilation.
+- [x] Add metadata keys for evidence requirements and evidence output mappings.
+- [x] Decode defaults from schema metadata when rule rows omit them.
+- [x] Apply defaults during rule compilation.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -191,12 +191,12 @@ def normalize_ops() -> tuple[NormalizeOp, ...]:
 - Update: `src/extract/normalize_ops.py`
 
 **Implementation checklist**
-- [ ] Export normalize rule spec rows from normalize registry tables.
-- [ ] Generate normalize ops from spec rows (input -> output).
-- [ ] Remove static normalize-op lists once parity is reached.
+- [x] Export normalize rule spec rows from normalize registry tables.
+- [x] Generate normalize ops from spec rows (input -> output).
+- [x] Remove static normalize-op lists once parity is reached.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -226,12 +226,12 @@ def rename_columns(self, mapping: Mapping[str, str], *, ctx: ExecutionContext) -
 - Update: `src/normalize/bytecode_anchor.py`
 
 **Implementation checklist**
-- [ ] Identify kernel-only steps still used by normalize plans.
-- [ ] Add plan-lane ops + Plan helpers for those kernels.
-- [ ] Enforce plan-only execution where coverage is complete.
+- [x] Identify kernel-only steps still used by normalize plans.
+- [x] Add plan-lane ops + Plan helpers for those kernels.
+- [x] Enforce plan-only execution where coverage is complete.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -261,12 +261,12 @@ def compile_graph_plan(compilation: NormalizeRuleCompilation, *, ctx: ExecutionC
 - Update: `src/normalize/runner.py`
 
 **Implementation checklist**
-- [ ] Add graph-level plan container with per-output subplans.
-- [ ] Support execution of full graph plan or single-output plans.
-- [ ] Keep evidence gating and ordering intact.
+- [x] Add graph-level plan container with per-output subplans.
+- [x] Support execution of full graph plan or single-output plans.
+- [x] Keep evidence gating and ordering intact.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -291,12 +291,12 @@ def validate_rule_specs(rules: Sequence[NormalizeRule]) -> None:
 - Update: `src/normalize/rule_registry.py`
 
 **Implementation checklist**
-- [ ] Validate rule outputs against dataset registry.
-- [ ] Validate evidence requirements against schema metadata.
-- [ ] Validate ambiguity policy keys against evidence schema.
+- [x] Validate rule outputs against dataset registry.
+- [x] Validate evidence requirements against schema metadata.
+- [x] Validate ambiguity policy keys against evidence schema.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -325,9 +325,9 @@ def _required_rule_outputs(plan: EvidencePlan | None) -> tuple[str, ...] | None:
 - Update: `src/hamilton_pipeline/modules/normalization.py`
 
 **Implementation checklist**
-- [ ] Add dataset alias helpers to the normalize registry.
-- [ ] Resolve pipeline output names via registry aliases.
-- [ ] Remove static alias maps once registry resolution is complete.
+- [x] Add dataset alias helpers to the normalize registry.
+- [x] Resolve pipeline output names via registry aliases.
+- [x] Remove static alias maps once registry resolution is complete.
 
 **Status**
-Planned.
+Completed.

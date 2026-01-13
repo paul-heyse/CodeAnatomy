@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Literal, Required, TypedDict, Unpack, overload
+from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, overload
 
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
@@ -18,9 +18,12 @@ from extract.helpers import (
     iter_contexts,
     text_from_file_ctx,
 )
-from extract.plan_helpers import plan_from_rows_for_dataset
+from extract.plan_helpers import ExtractPlanBuildOptions, plan_from_rows_for_dataset
 from extract.registry_specs import dataset_row_schema, normalize_options
 from extract.schema_ops import ExtractNormalizeOptions, metadata_spec_for_dataset
+
+if TYPE_CHECKING:
+    from extract.evidence_plan import EvidencePlan
 
 
 @dataclass(frozen=True)
@@ -249,6 +252,7 @@ def extract_ast(
     options: ASTExtractOptions | None = None,
     *,
     file_contexts: Iterable[FileContext] | None = None,
+    evidence_plan: EvidencePlan | None = None,
     ctx: ExecutionContext | None = None,
 ) -> ASTExtractResult:
     """Extract a minimal AST fact set per file.
@@ -264,6 +268,7 @@ def extract_ast(
         repo_files,
         options=normalized_options,
         file_contexts=file_contexts,
+        evidence_plan=evidence_plan,
         ctx=ctx,
     )
     nodes_meta = metadata_spec_for_dataset("py_ast_nodes_v1", options=normalized_options)
@@ -296,6 +301,7 @@ def extract_ast_plans(
     options: ASTExtractOptions | None = None,
     *,
     file_contexts: Iterable[FileContext] | None = None,
+    evidence_plan: EvidencePlan | None = None,
     ctx: ExecutionContext | None = None,
 ) -> dict[str, Plan]:
     """Extract AST plans for nodes, edges, and errors.
@@ -323,7 +329,10 @@ def extract_ast_plans(
         nodes_rows,
         row_schema=AST_NODES_ROW_SCHEMA,
         ctx=ctx,
-        normalize=ExtractNormalizeOptions(options=normalized_options),
+        options=ExtractPlanBuildOptions(
+            normalize=ExtractNormalizeOptions(options=normalized_options),
+            evidence_plan=evidence_plan,
+        ),
     )
 
     edges_plan = plan_from_rows_for_dataset(
@@ -331,7 +340,10 @@ def extract_ast_plans(
         edges_rows,
         row_schema=AST_EDGES_ROW_SCHEMA,
         ctx=ctx,
-        normalize=ExtractNormalizeOptions(options=normalized_options),
+        options=ExtractPlanBuildOptions(
+            normalize=ExtractNormalizeOptions(options=normalized_options),
+            evidence_plan=evidence_plan,
+        ),
     )
 
     errs_plan = plan_from_rows_for_dataset(
@@ -339,7 +351,10 @@ def extract_ast_plans(
         err_rows,
         row_schema=AST_ERRORS_ROW_SCHEMA,
         ctx=ctx,
-        normalize=ExtractNormalizeOptions(options=normalized_options),
+        options=ExtractPlanBuildOptions(
+            normalize=ExtractNormalizeOptions(options=normalized_options),
+            evidence_plan=evidence_plan,
+        ),
     )
 
     return {
@@ -353,6 +368,7 @@ class _AstTablesKwargs(TypedDict, total=False):
     repo_files: Required[TableLike]
     options: ASTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
+    evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
     prefer_reader: bool
 
@@ -361,6 +377,7 @@ class _AstTablesKwargsTable(TypedDict, total=False):
     repo_files: Required[TableLike]
     options: ASTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
+    evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
     prefer_reader: Literal[False]
 
@@ -369,6 +386,7 @@ class _AstTablesKwargsReader(TypedDict, total=False):
     repo_files: Required[TableLike]
     options: ASTExtractOptions | None
     file_contexts: Iterable[FileContext] | None
+    evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
     prefer_reader: Required[Literal[True]]
 
@@ -404,12 +422,14 @@ def extract_ast_tables(
     repo_files = kwargs["repo_files"]
     normalized_options = normalize_options("ast", kwargs.get("options"), ASTExtractOptions)
     file_contexts = kwargs.get("file_contexts")
+    evidence_plan = kwargs.get("evidence_plan")
     ctx = kwargs.get("ctx") or execution_context_factory("default")
     prefer_reader = kwargs.get("prefer_reader", False)
     plans = extract_ast_plans(
         repo_files,
         options=normalized_options,
         file_contexts=file_contexts,
+        evidence_plan=evidence_plan,
         ctx=ctx,
     )
     defs_plan = ast_def_nodes_plan(plan=plans["ast_nodes"])

@@ -30,7 +30,12 @@ from extract.registry_specs import dataset_schema
 from extract.repo_scan import RepoScanOptions, scan_repo
 from extract.runtime_inspect_extract import RuntimeInspectOptions, extract_runtime_tables
 from extract.schema_ops import validate_extract_output
-from extract.scip_extract import SCIPParseOptions, extract_scip_tables, run_scip_python_index
+from extract.scip_extract import (
+    ScipExtractOptions,
+    SCIPParseOptions,
+    extract_scip_tables,
+    run_scip_python_index,
+)
 from extract.scip_identity import resolve_scip_identity
 from extract.scip_indexer import build_scip_index_options, ensure_scip_build_dir
 from extract.spec_helpers import extractor_option_values
@@ -296,8 +301,10 @@ def scip_bundle(
         scip_index_path=scip_index_path,
         repo_root=repo_root,
         ctx=ctx,
-        parse_opts=scip_parse_options,
-        evidence_plan=evidence_plan,
+        options=ScipExtractOptions(
+            parse_opts=scip_parse_options,
+            evidence_plan=evidence_plan,
+        ),
     )
 
 

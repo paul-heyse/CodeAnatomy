@@ -18,6 +18,12 @@ class DatasetTemplateSpec:
 DATASET_TEMPLATE_SPECS: tuple[DatasetTemplateSpec, ...] = (
     DatasetTemplateSpec(name="tree_sitter_core", template="tree_sitter"),
     DatasetTemplateSpec(name="runtime_inspect_core", template="runtime_inspect"),
+    DatasetTemplateSpec(name="repo_scan_core", template="repo_scan"),
+    DatasetTemplateSpec(name="ast_core", template="ast"),
+    DatasetTemplateSpec(name="cst_core", template="cst"),
+    DatasetTemplateSpec(name="bytecode_core", template="bytecode"),
+    DatasetTemplateSpec(name="symtable_core", template="symtable"),
+    DatasetTemplateSpec(name="scip_core", template="scip"),
 )
 
 

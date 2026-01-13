@@ -819,39 +819,40 @@ def _symbol_tables(index: object) -> tuple[TableLike, TableLike, TableLike]:
     )
 
 
+@dataclass(frozen=True)
+class _ScipFinalizeSpec:
+    dataset_name: str
+    policy: SchemaPolicy
+    query: QuerySpec
+
+
 def _finalize_plan(
     plan: Plan,
     *,
-    dataset_name: str,
-    policy: SchemaPolicy,
-    query: QuerySpec,
+    spec: _ScipFinalizeSpec,
     exec_ctx: ExecutionContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> Plan:
-    plan = query.apply_to_plan(plan, ctx=exec_ctx)
+    plan = spec.query.apply_to_plan(plan, ctx=exec_ctx)
     plan = apply_evidence_projection(
-        dataset_name,
+        spec.dataset_name,
         plan,
         ctx=exec_ctx,
         evidence_plan=evidence_plan,
     )
-    return normalize_plan_with_policy(plan, policy=policy, ctx=exec_ctx)
+    return normalize_plan_with_policy(plan, policy=spec.policy, ctx=exec_ctx)
 
 
 def _finalize_table(
     table: TableLike,
     *,
-    dataset_name: str,
-    policy: SchemaPolicy,
-    query: QuerySpec,
+    spec: _ScipFinalizeSpec,
     exec_ctx: ExecutionContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     plan = _finalize_plan(
         Plan.table_source(table),
-        dataset_name=dataset_name,
-        policy=policy,
-        query=query,
+        spec=spec,
         exec_ctx=exec_ctx,
         evidence_plan=evidence_plan,
     )
@@ -994,64 +995,65 @@ def _extract_plan_bundle_from_index(
     t_ext = postprocess_table("scip_external_symbol_info_v1", t_ext)
     policies = _scip_policies(parse_opts, exec_ctx=exec_ctx)
 
+    def _spec(name: str, query: QuerySpec) -> _ScipFinalizeSpec:
+        return _ScipFinalizeSpec(
+            dataset_name=name,
+            policy=policies[name],
+            query=query,
+        )
+
     return {
         "scip_metadata": _finalize_plan(
             t_meta_plan,
-            dataset_name="scip_metadata_v1",
-            policy=policies["scip_metadata_v1"],
-            query=SCIP_METADATA_QUERY,
+            spec=_spec("scip_metadata_v1", SCIP_METADATA_QUERY),
             exec_ctx=exec_ctx,
             evidence_plan=evidence_plan,
         ),
         "scip_documents": _finalize_plan(
             Plan.table_source(t_docs),
-            dataset_name="scip_documents_v1",
-            policy=policies["scip_documents_v1"],
-            query=SCIP_DOCUMENTS_QUERY,
+            spec=_spec("scip_documents_v1", SCIP_DOCUMENTS_QUERY),
             exec_ctx=exec_ctx,
             evidence_plan=evidence_plan,
         ),
         "scip_occurrences": _finalize_plan(
             Plan.table_source(t_occs),
-            dataset_name="scip_occurrences_v1",
-            policy=policies["scip_occurrences_v1"],
-            query=SCIP_OCCURRENCES_QUERY,
+            spec=_spec("scip_occurrences_v1", SCIP_OCCURRENCES_QUERY),
             exec_ctx=exec_ctx,
             evidence_plan=evidence_plan,
         ),
         "scip_symbol_information": _finalize_plan(
             Plan.table_source(t_syms),
-            dataset_name="scip_symbol_info_v1",
-            policy=policies["scip_symbol_info_v1"],
-            query=SCIP_SYMBOL_INFO_QUERY,
+            spec=_spec("scip_symbol_info_v1", SCIP_SYMBOL_INFO_QUERY),
             exec_ctx=exec_ctx,
             evidence_plan=evidence_plan,
         ),
         "scip_symbol_relationships": _finalize_plan(
             Plan.table_source(t_rels),
-            dataset_name="scip_symbol_relationships_v1",
-            policy=policies["scip_symbol_relationships_v1"],
-            query=SCIP_SYMBOL_RELATIONSHIPS_QUERY,
+            spec=_spec("scip_symbol_relationships_v1", SCIP_SYMBOL_RELATIONSHIPS_QUERY),
             exec_ctx=exec_ctx,
             evidence_plan=evidence_plan,
         ),
         "scip_external_symbol_information": _finalize_plan(
             Plan.table_source(t_ext),
-            dataset_name="scip_external_symbol_info_v1",
-            policy=policies["scip_external_symbol_info_v1"],
-            query=SCIP_EXTERNAL_SYMBOL_INFO_QUERY,
+            spec=_spec("scip_external_symbol_info_v1", SCIP_EXTERNAL_SYMBOL_INFO_QUERY),
             exec_ctx=exec_ctx,
             evidence_plan=evidence_plan,
         ),
         "scip_diagnostics": _finalize_plan(
             Plan.table_source(t_diags),
-            dataset_name="scip_diagnostics_v1",
-            policy=policies["scip_diagnostics_v1"],
-            query=SCIP_DIAGNOSTICS_QUERY,
+            spec=_spec("scip_diagnostics_v1", SCIP_DIAGNOSTICS_QUERY),
             exec_ctx=exec_ctx,
             evidence_plan=evidence_plan,
         ),
     }
+
+
+@dataclass(frozen=True)
+class ScipExtractOptions:
+    """Options for SCIP extraction table materialization."""
+
+    parse_opts: SCIPParseOptions | None = None
+    evidence_plan: EvidencePlan | None = None
 
 
 @overload
@@ -1060,8 +1062,7 @@ def extract_scip_tables(
     scip_index_path: str | None,
     repo_root: str | None,
     ctx: ExecutionContext | None = None,
-    parse_opts: SCIPParseOptions | None = None,
-    evidence_plan: EvidencePlan | None = None,
+    options: ScipExtractOptions | None = None,
     prefer_reader: Literal[False] = False,
 ) -> Mapping[str, TableLike]: ...
 
@@ -1072,8 +1073,7 @@ def extract_scip_tables(
     scip_index_path: str | None,
     repo_root: str | None,
     ctx: ExecutionContext | None = None,
-    parse_opts: SCIPParseOptions | None = None,
-    evidence_plan: EvidencePlan | None = None,
+    options: ScipExtractOptions | None = None,
     prefer_reader: Literal[True],
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]: ...
 
@@ -1083,8 +1083,7 @@ def extract_scip_tables(
     scip_index_path: str | None,
     repo_root: str | None,
     ctx: ExecutionContext | None = None,
-    parse_opts: SCIPParseOptions | None = None,
-    evidence_plan: EvidencePlan | None = None,
+    options: ScipExtractOptions | None = None,
     prefer_reader: bool = False,
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]:
     """Extract SCIP tables as a name-keyed bundle.
@@ -1097,8 +1096,8 @@ def extract_scip_tables(
         Optional repository root used for resolving relative paths.
     ctx:
         Execution context for plan execution.
-    parse_opts:
-        Parsing options.
+    options:
+        Extraction options including parsing and evidence settings.
     prefer_reader:
         When True, return streaming readers when possible.
 
@@ -1107,7 +1106,9 @@ def extract_scip_tables(
     dict[str, TableLike | RecordBatchReaderLike]
         Extracted SCIP outputs keyed by output name.
     """
-    normalized_opts = normalize_options("scip", parse_opts, SCIPParseOptions)
+    options = options or ScipExtractOptions()
+    normalized_opts = normalize_options("scip", options.parse_opts, SCIPParseOptions)
+    evidence_plan = options.evidence_plan
     exec_ctx = ctx or execution_context_factory("default")
     metadata_specs = _scip_metadata_specs(normalized_opts)
     if scip_index_path is None:

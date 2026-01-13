@@ -803,6 +803,8 @@ def extract_runtime_tables(
         Repository root path for module imports.
     options:
         Runtime inspect options.
+    evidence_plan:
+        Evidence plan used for early column projection.
     ctx:
         Execution context for plan execution.
 

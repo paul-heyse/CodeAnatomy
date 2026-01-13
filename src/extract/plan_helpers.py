@@ -183,6 +183,13 @@ def apply_evidence_projection(
     ctx: ExecutionContext,
     evidence_plan: EvidencePlan | None,
 ) -> Plan:
+    """Apply evidence-minimized projection for a dataset plan.
+
+    Returns
+    -------
+    Plan
+        Plan projected to evidence-required columns when applicable.
+    """
     columns = _projection_columns(name, evidence_plan=evidence_plan)
     if not columns:
         return plan

@@ -37,6 +37,12 @@ from arrowdsl.schema.ops import align_plan as align_plan_to_schema
 from arrowdsl.schema.schema import SchemaTransform, projection_for_schema
 from arrowdsl.spec.infra import DatasetRegistration, register_dataset
 from extract.evidence_plan import EvidencePlan
+from extract.registry_extractors import (
+    ExtractorSpec,
+    extractor_specs,
+    outputs_for_template,
+    select_extractors_for_outputs,
+)
 
 
 @dataclass(frozen=True)
@@ -266,6 +272,34 @@ def requires_evidence_template(plan: EvidencePlan | None, template: str) -> bool
     return plan.requires_template(template)
 
 
+def required_extractors(plan: EvidencePlan | None) -> tuple[ExtractorSpec, ...]:
+    """Return extractor specs required by an evidence plan.
+
+    Returns
+    -------
+    tuple[ExtractorSpec, ...]
+        Extractor specs needed for the plan.
+    """
+    if plan is None:
+        return extractor_specs()
+    return select_extractors_for_outputs(plan.sources)
+
+
+def template_outputs(plan: EvidencePlan | None, template: str) -> tuple[str, ...]:
+    """Return output aliases for a template given an evidence plan.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Output aliases for the template, or empty when not required.
+    """
+    if plan is None:
+        return outputs_for_template(template)
+    if not plan.requires_template(template):
+        return ()
+    return outputs_for_template(template)
+
+
 def ast_def_nodes_plan(plan: Plan) -> Plan:
     """Return a plan filtered to AST definition nodes.
 
@@ -311,5 +345,9 @@ __all__ = [
     "project_columns",
     "query_for_schema",
     "register_dataset",
+    "required_extractors",
+    "requires_evidence",
+    "requires_evidence_template",
+    "template_outputs",
     "text_from_file_ctx",
 ]

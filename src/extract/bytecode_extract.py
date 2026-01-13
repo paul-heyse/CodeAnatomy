@@ -17,7 +17,6 @@ from arrowdsl.plan.scan_io import plan_from_rows
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.helpers import (
     FileContext,
-    align_plan,
     file_identity_row,
     iter_contexts,
     project_columns,
@@ -26,12 +25,12 @@ from extract.helpers import (
 from extract.registry_ids import hash_spec
 from extract.registry_specs import (
     dataset_enabled,
-    dataset_metadata_with_options,
     dataset_query,
     dataset_row_schema,
     dataset_schema,
     normalize_options,
 )
+from extract.schema_ops import metadata_spec_for_dataset, normalize_extract_plan
 
 type RowValue = str | int | bool | None
 type Row = dict[str, RowValue]
@@ -237,27 +236,27 @@ def _bytecode_metadata_specs(
     options: BytecodeExtractOptions,
 ) -> dict[str, SchemaMetadataSpec]:
     return {
-        "py_bc_code_units": dataset_metadata_with_options(
+        "py_bc_code_units": metadata_spec_for_dataset(
             "py_bc_code_units_v1",
             options=options,
         ),
-        "py_bc_instructions": dataset_metadata_with_options(
+        "py_bc_instructions": metadata_spec_for_dataset(
             "py_bc_instructions_v1",
             options=options,
         ),
-        "py_bc_exception_table": dataset_metadata_with_options(
+        "py_bc_exception_table": metadata_spec_for_dataset(
             "py_bc_exception_table_v1",
             options=options,
         ),
-        "py_bc_blocks": dataset_metadata_with_options(
+        "py_bc_blocks": metadata_spec_for_dataset(
             "py_bc_blocks_v1",
             options=options,
         ),
-        "py_bc_cfg_edges": dataset_metadata_with_options(
+        "py_bc_cfg_edges": metadata_spec_for_dataset(
             "py_bc_cfg_edges_v1",
             options=options,
         ),
-        "py_bc_errors": dataset_metadata_with_options(
+        "py_bc_errors": metadata_spec_for_dataset(
             "py_bc_errors_v1",
             options=options,
         ),
@@ -327,9 +326,9 @@ def _build_code_units_plan(
         ctx=exec_ctx,
     )
     plan = CODE_UNITS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "py_bc_code_units_v1",
         plan,
-        schema=CODE_UNITS_SCHEMA,
         ctx=exec_ctx,
     )
 
@@ -369,9 +368,9 @@ def _build_instructions_plan(
         ctx=exec_ctx,
     )
     plan = INSTR_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "py_bc_instructions_v1",
         plan,
-        schema=INSTR_SCHEMA,
         ctx=exec_ctx,
     )
 
@@ -411,9 +410,9 @@ def _build_exceptions_plan(
         ctx=exec_ctx,
     )
     plan = EXC_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "py_bc_exception_table_v1",
         plan,
-        schema=EXC_SCHEMA,
         ctx=exec_ctx,
     )
 
@@ -453,9 +452,9 @@ def _build_blocks_plan(
         ctx=exec_ctx,
     )
     plan = BLOCKS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "py_bc_blocks_v1",
         plan,
-        schema=BLOCKS_SCHEMA,
         ctx=exec_ctx,
     )
 
@@ -509,9 +508,9 @@ def _build_cfg_edges_plan(
         ctx=exec_ctx,
     )
     plan = CFG_EDGES_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "py_bc_cfg_edges_v1",
         plan,
-        schema=CFG_EDGES_SCHEMA,
         ctx=exec_ctx,
     )
 
@@ -1006,10 +1005,9 @@ def _build_bytecode_plans(
     edges = _build_cfg_edges_plan(buffers.edge_rows, exec_ctx=exec_ctx)
     errors_plan = plan_from_rows(buffers.error_rows, schema=ERRORS_ROW_SCHEMA, label="bc_errors")
     errors_plan = ERRORS_QUERY.apply_to_plan(errors_plan, ctx=exec_ctx)
-    errors_plan = align_plan(
+    errors_plan = normalize_extract_plan(
+        "py_bc_errors_v1",
         errors_plan,
-        schema=ERRORS_SCHEMA,
-        available=ERRORS_SCHEMA.names,
         ctx=exec_ctx,
     )
     return {

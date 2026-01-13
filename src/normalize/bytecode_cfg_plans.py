@@ -39,10 +39,7 @@ def _code_unit_meta_plan(code_units: PlanSource, *, ctx: ExecutionContext) -> Pl
     names = [name for name, _ in _META_COLUMNS]
     plan = _to_plan(code_units, ctx=ctx, columns=names)
     available = set(plan.schema(ctx=ctx).names)
-    exprs = [
-        column_or_null_expr(name, dtype, available=available)
-        for name, dtype in _META_COLUMNS
-    ]
+    exprs = [column_or_null_expr(name, dtype, available=available) for name, dtype in _META_COLUMNS]
     return plan.project(exprs, names, ctx=ctx)
 
 

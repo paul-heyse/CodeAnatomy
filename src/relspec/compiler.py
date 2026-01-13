@@ -42,6 +42,7 @@ from relspec.policies import (
     ambiguity_policy_from_schema,
     confidence_policy_from_schema,
     default_tie_breakers,
+    evidence_spec_from_schema,
 )
 from relspec.registry import ContractCatalog, DatasetCatalog
 from schema_spec.system import (
@@ -336,6 +337,36 @@ def _compile_post_kernels(specs: Sequence[KernelSpecT]) -> tuple[KernelFn, ...]:
     return tuple(_kernel_from_spec(spec) for spec in specs)
 
 
+def _materialize_plan_with_kernels(
+    plan: Plan,
+    specs: Sequence[KernelSpecT],
+    *,
+    ctx: ExecutionContext,
+    label: str,
+) -> Plan:
+    kernels = _compile_post_kernels(specs)
+
+    def _thunk() -> TableLike:
+        result = run_plan(
+            plan,
+            ctx=ctx,
+            prefer_reader=False,
+            attach_ordering_metadata=True,
+        )
+        table = cast("TableLike", result.value)
+        for kernel in kernels:
+            table = kernel(table, ctx)
+        return table
+
+    pipeline_breakers = (*plan.pipeline_breakers, "kernel_pipeline")
+    return Plan(
+        table_thunk=_thunk,
+        label=label,
+        ordering=Ordering.unordered(),
+        pipeline_breakers=pipeline_breakers,
+    )
+
+
 def _apply_add_literal_to_plan(
     plan: Plan,
     spec: AddLiteralSpec,
@@ -459,6 +490,15 @@ def _apply_plan_kernel_specs(
         if isinstance(spec, RenameColumnsSpec):
             plan = _apply_rename_columns_to_plan(plan, spec, ctx=ctx, rule=rule)
             continue
+        if isinstance(spec, ExplodeListSpec):
+            plan = _materialize_plan_with_kernels(
+                plan,
+                specs[idx:],
+                ctx=ctx,
+                label=plan.label or rule.name,
+            )
+            remaining = []
+            break
         if isinstance(spec, DedupeKernelSpec):
             plan, applied = _apply_dedupe_to_plan(plan, spec, ctx=ctx, rule=rule)
             if applied:
@@ -1118,6 +1158,10 @@ class RelationshipRuleCompiler:
             resolved_rule = rule
             if schema is not None:
                 resolved_rule = apply_policy_defaults(rule, schema)
+                if resolved_rule.evidence is None:
+                    inferred = evidence_spec_from_schema(schema)
+                    if inferred is not None:
+                        resolved_rule = replace(resolved_rule, evidence=inferred)
                 validate_policy_requirements(resolved_rule, schema)
             resolved_rules.append(resolved_rule)
 

@@ -10,7 +10,7 @@ from arrowdsl.core.interop import SchemaLike
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.metadata import infer_ordering_keys
 from arrowdsl.spec.expr_ir import ExprIR
-from relspec.model import AmbiguityPolicy, ConfidencePolicy, DedupeKernelSpec
+from relspec.model import AmbiguityPolicy, ConfidencePolicy, DedupeKernelSpec, EvidenceSpec
 from relspec.policy_registry import resolve_ambiguity_policy, resolve_confidence_policy
 
 CONFIDENCE_POLICY_META = b"confidence_policy"
@@ -18,6 +18,9 @@ CONFIDENCE_BASE_META = b"confidence_base"
 CONFIDENCE_PENALTY_META = b"confidence_penalty"
 CONFIDENCE_SOURCE_WEIGHT_META = b"confidence_source_weight"
 AMBIGUITY_POLICY_META = b"ambiguity_policy"
+EVIDENCE_REQUIRED_COLS_META = b"evidence_required_columns"
+EVIDENCE_REQUIRED_TYPES_META = b"evidence_required_types"
+EVIDENCE_RANK_META = b"evidence_rank"
 
 
 def confidence_expr(policy: ConfidencePolicy, *, source_field: str | None = None) -> ExprIR:
@@ -95,6 +98,30 @@ def ambiguity_kernels(policy: AmbiguityPolicy | None) -> tuple[DedupeKernelSpec,
     return (DedupeKernelSpec(spec=spec),)
 
 
+def evidence_spec_from_schema(schema: SchemaLike) -> EvidenceSpec | None:
+    """Derive an evidence spec from schema metadata.
+
+    Parameters
+    ----------
+    schema:
+        Schema carrying evidence metadata.
+
+    Returns
+    -------
+    EvidenceSpec | None
+        Evidence requirements parsed from metadata, if present.
+    """
+    meta = schema.metadata or {}
+    required_columns = _meta_list(meta, EVIDENCE_REQUIRED_COLS_META)
+    required_types = _meta_json_map_str(meta, EVIDENCE_REQUIRED_TYPES_META)
+    if not required_columns and not required_types:
+        return None
+    return EvidenceSpec(
+        required_columns=required_columns,
+        required_types=required_types,
+    )
+
+
 def default_tie_breakers(schema: SchemaLike) -> tuple[SortKey, ...]:
     """Return deterministic tie breakers derived from schema names.
 
@@ -126,7 +153,10 @@ def _confidence_policy_from_metadata(meta: Mapping[bytes, bytes]) -> ConfidenceP
     penalty = _meta_float(meta, CONFIDENCE_PENALTY_META)
     weights = _meta_json_map(meta, CONFIDENCE_SOURCE_WEIGHT_META)
     if base is None and penalty is None and not weights:
-        return None
+        rank = _meta_int(meta, EVIDENCE_RANK_META)
+        if rank is None:
+            return None
+        return ConfidencePolicy(base=_rank_confidence(rank))
     return ConfidencePolicy(
         base=base if base is not None else 0.5,
         source_weight=weights,
@@ -155,6 +185,19 @@ def _meta_float(meta: Mapping[bytes, bytes], key: bytes) -> float | None:
     return float(raw.decode("utf-8"))
 
 
+def _meta_int(meta: Mapping[bytes, bytes], key: bytes) -> int | None:
+    raw = meta.get(key)
+    if raw is None:
+        return None
+    return int(raw.decode("utf-8"))
+
+
+def _rank_confidence(rank: int) -> float:
+    clamped = max(1, min(rank, 10))
+    score = 1.0 - 0.1 * (clamped - 1)
+    return max(0.1, min(1.0, score))
+
+
 def _meta_json_map(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, float]:
     raw = meta.get(key)
     if raw is None:
@@ -164,6 +207,27 @@ def _meta_json_map(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, float]:
         msg = f"Expected mapping for metadata {key!r}."
         raise TypeError(msg)
     return {str(k): float(v) for k, v in payload.items()}
+
+
+def _meta_json_map_str(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, str]:
+    raw = meta.get(key)
+    if raw is None:
+        return {}
+    payload = json.loads(raw.decode("utf-8"))
+    if not isinstance(payload, Mapping):
+        msg = f"Expected mapping for metadata {key!r}."
+        raise TypeError(msg)
+    return {str(k): str(v) for k, v in payload.items()}
+
+
+def _meta_list(meta: Mapping[bytes, bytes], key: bytes) -> tuple[str, ...]:
+    raw = meta.get(key)
+    if raw is None:
+        return ()
+    text = raw.decode("utf-8").strip()
+    if not text:
+        return ()
+    return tuple(item.strip() for item in text.split(",") if item.strip())
 
 
 def _source_weight_expr(source_expr: ExprIR, weights: Mapping[str, float]) -> ExprIR:
@@ -186,9 +250,12 @@ __all__ = [
     "CONFIDENCE_PENALTY_META",
     "CONFIDENCE_POLICY_META",
     "CONFIDENCE_SOURCE_WEIGHT_META",
+    "EVIDENCE_REQUIRED_COLS_META",
+    "EVIDENCE_REQUIRED_TYPES_META",
     "ambiguity_kernels",
     "ambiguity_policy_from_schema",
     "confidence_expr",
     "confidence_policy_from_schema",
     "default_tie_breakers",
+    "evidence_spec_from_schema",
 ]

@@ -7,9 +7,11 @@ from dataclasses import dataclass, field
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan.scan_io import DatasetSource
+from arrowdsl.schema.build import ConstExpr, FieldExpr
 from cpg.catalog import PlanCatalog
+from relspec.compiler import RelationshipRuleCompiler
 from relspec.contracts import RELATION_OUTPUT_NAME, relation_output_schema
 from relspec.model import EvidenceSpec, RelationshipRule
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
@@ -89,9 +91,7 @@ class EvidenceCatalog:
     def _sources_available(self, sources: Sequence[str]) -> bool:
         return set(sources).issubset(self.sources)
 
-    def _columns_available(
-        self, sources: Sequence[str], required_columns: Sequence[str]
-    ) -> bool:
+    def _columns_available(self, sources: Sequence[str], required_columns: Sequence[str]) -> bool:
         required = set(required_columns)
         for source in sources:
             columns = self.columns_by_dataset.get(source)
@@ -99,9 +99,7 @@ class EvidenceCatalog:
                 return False
         return True
 
-    def _types_available(
-        self, sources: Sequence[str], required_types: Mapping[str, str]
-    ) -> bool:
+    def _types_available(self, sources: Sequence[str], required_types: Mapping[str, str]) -> bool:
         for source in sources:
             types = self.types_by_dataset.get(source)
             if types is None:
@@ -119,6 +117,69 @@ class RuleNode:
     name: str
     rule: RelationshipRule
     requires: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class GraphPlan:
+    """Compiled plan graph for relationship rules."""
+
+    plan: Plan
+    outputs: dict[str, Plan]
+
+
+def compile_graph_plan(
+    rules: Sequence[RelationshipRule],
+    *,
+    ctx: ExecutionContext,
+    compiler: RelationshipRuleCompiler,
+    evidence: EvidenceCatalog,
+) -> GraphPlan:
+    """Compile relationship rules into a graph-level plan.
+
+    Parameters
+    ----------
+    rules:
+        Relationship rules to compile.
+    ctx:
+        Execution context for plan compilation.
+    compiler:
+        Rule compiler with plan resolver.
+    evidence:
+        Evidence catalog used to order rules.
+
+    Returns
+    -------
+    GraphPlan
+        Graph-level plan and per-output subplans.
+    """
+    work = evidence.clone()
+    outputs: dict[str, Plan] = {}
+    for rule in order_rules(rules, evidence=work):
+        compiled = compiler.compile_rule(rule, ctx=ctx)
+        if compiled.plan is not None and not compiled.post_kernels:
+            plan = _apply_rule_meta(compiled.plan, rule=rule, ctx=ctx)
+        else:
+            table = compiled.execute(ctx=ctx, resolver=compiler.resolver)
+            plan = Plan.table_source(table, label=rule.name)
+        outputs[rule.output_dataset] = plan
+        work.register(rule.output_dataset, plan.schema(ctx=ctx))
+    union = union_all_plans(list(outputs.values()), label="relspec_graph")
+    return GraphPlan(plan=union, outputs=outputs)
+
+
+def _apply_rule_meta(plan: Plan, *, rule: RelationshipRule, ctx: ExecutionContext) -> Plan:
+    if not rule.emit_rule_meta:
+        return plan
+    schema = plan.schema(ctx=ctx)
+    names = list(schema.names)
+    exprs = [FieldExpr(name=name).to_expression() for name in names]
+    if rule.rule_name_col not in names:
+        exprs.append(ConstExpr(value=rule.name).to_expression())
+        names.append(rule.rule_name_col)
+    if rule.rule_priority_col not in names:
+        exprs.append(ConstExpr(value=int(rule.priority)).to_expression())
+        names.append(rule.rule_priority_col)
+    return plan.project(exprs, names, label=plan.label or rule.name)
 
 
 def order_rules(
@@ -201,4 +262,4 @@ def _virtual_output_schema(rule: RelationshipRule) -> SchemaLike | None:
     return relation_output_schema()
 
 
-__all__ = ["EvidenceCatalog", "RuleNode", "order_rules"]
+__all__ = ["EvidenceCatalog", "GraphPlan", "RuleNode", "compile_graph_plan", "order_rules"]

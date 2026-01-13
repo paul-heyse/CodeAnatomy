@@ -74,7 +74,13 @@ from normalize.registry_specs import (
     dataset_specs,
     dataset_table_spec,
 )
-from normalize.rule_model import AmbiguityPolicy, ConfidencePolicy, EvidenceSpec, NormalizeRule
+from normalize.rule_model import (
+    AmbiguityPolicy,
+    ConfidencePolicy,
+    EvidenceSpec,
+    ExecutionMode,
+    NormalizeRule,
+)
 from normalize.rule_registry import (
     normalize_rule,
     normalize_rule_names,
@@ -167,6 +173,7 @@ __all__ = [
     "BytecodeSpanColumns",
     "ConfidencePolicy",
     "EvidenceSpec",
+    "ExecutionMode",
     "FileTextIndex",
     "NormalizeRule",
     "NormalizeRuleCompilation",

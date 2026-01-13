@@ -25,22 +25,13 @@ required columns, coordinate system, evidence rank, and ambiguity policy.
 @dataclass(frozen=True)
 class EvidenceSpec:
     name: str
-    template: str
-    coordinate_system: str
-    evidence_rank: int
+    alias: str
+    template: str | None
+    evidence_family: str | None
+    coordinate_system: str | None
+    evidence_rank: int | None
     required_columns: tuple[str, ...]
     ambiguity_policy: str | None = None
-
-EVIDENCE_SPECS: dict[str, EvidenceSpec] = {
-    "py_cst_name_refs_v1": EvidenceSpec(
-        name="py_cst_name_refs_v1",
-        template="cst",
-        coordinate_system="bytes",
-        evidence_rank=3,
-        required_columns=("file_id", "bstart", "bend", "name"),
-        ambiguity_policy="preserve",
-    ),
-}
 ```
 
 **Target files**
@@ -49,12 +40,12 @@ EVIDENCE_SPECS: dict[str, EvidenceSpec] = {
 - Update: `src/extract/registry_rows.py`
 
 **Implementation checklist**
-- [ ] Create EvidenceSpec dataclass and registry mapping.
-- [ ] Map each extract dataset to evidence semantics and required columns.
-- [ ] Ensure evidence metadata is merged into dataset metadata specs.
+- [x] Create EvidenceSpec dataclass and registry mapping.
+- [x] Map each extract dataset to evidence semantics and required columns.
+- [x] Ensure evidence metadata is merged into dataset metadata specs.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -68,15 +59,10 @@ must run before relationship compilation.
 ```python
 # src/extract/evidence_plan.py
 @dataclass(frozen=True)
-class EvidenceRequirement:
-    tables: tuple[str, ...]
-    required_columns: tuple[str, ...]
-
-
-def compile_evidence_plan(rules: Sequence[RelationshipRule]) -> EvidenceRequirement:
-    tables = tuple(sorted({t for r in rules for t in r.evidence_sources}))
-    cols = tuple(sorted({c for r in rules for c in r.required_columns}))
-    return EvidenceRequirement(tables=tables, required_columns=cols)
+class EvidencePlan:
+    sources: tuple[str, ...]
+    normalize_ops: tuple[str, ...]
+    requirements: tuple[EvidenceRequirement, ...]
 ```
 
 **Target files**
@@ -86,12 +72,13 @@ def compile_evidence_plan(rules: Sequence[RelationshipRule]) -> EvidenceRequirem
 - Update: `src/hamilton_pipeline/modules/extraction.py`
 
 **Implementation checklist**
-- [ ] Encode evidence requirements on relationship rules.
-- [ ] Compile a minimal evidence plan from the active rule DAG.
-- [ ] Drive extract execution from the evidence plan (not ad-hoc toggles).
+- [x] Encode evidence sources on relationship rules (or fall back to inputs).
+- [ ] Extend rule specs to supply required_columns/required_types where needed.
+- [x] Compile a minimal evidence plan from the active rule DAG.
+- [x] Drive extract execution from the evidence plan (not ad-hoc toggles).
 
 **Status**
-Planned.
+Mostly complete (missing rule-level required_columns/required_types coverage).
 
 ---
 
@@ -108,14 +95,6 @@ class NormalizeOp:
     name: str
     inputs: tuple[str, ...]
     outputs: tuple[str, ...]
-
-NORMALIZE_OPS: dict[str, NormalizeOp] = {
-    "byte_span_normalize": NormalizeOp(
-        name="byte_span_normalize",
-        inputs=("py_cst_name_refs_v1",),
-        outputs=("py_cst_name_refs_v1",),
-    ),
-}
 ```
 
 **Target files**
@@ -124,12 +103,12 @@ NORMALIZE_OPS: dict[str, NormalizeOp] = {
 - Update: `src/normalize/runner.py`
 
 **Implementation checklist**
-- [ ] Define NormalizeOp registry for all required operators.
-- [ ] Reference normalization operators from relationship rule specs.
-- [ ] Run only required operators from the evidence plan.
+- [x] Define NormalizeOp registry for required operators.
+- [x] Expand normalization requirements from required outputs in evidence plans.
+- [ ] Wire evidence-plan normalize_ops (or required outputs) into normalize execution.
 
 **Status**
-Planned.
+Partially complete (normalize execution still runs full rule set by default).
 
 ---
 
@@ -160,12 +139,12 @@ def select_rules(rules: Sequence[RelationshipRule], catalog: EvidenceCatalog) ->
 - Update: `src/cpg/build_edges.py`
 
 **Implementation checklist**
-- [ ] Build evidence availability catalog from extraction outputs.
-- [ ] Gate rules by evidence availability.
-- [ ] Define deterministic fallbacks when superior evidence is missing.
+- [x] Build evidence availability catalog from extraction outputs.
+- [x] Gate rules by evidence availability.
+- [x] Define deterministic fallbacks via rule ordering/priority.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -179,7 +158,7 @@ metadata instead of ad-hoc logic.
 ```python
 # src/extract/registry_specs.py
 meta = dataset_metadata_spec(name)
-meta = merge_metadata_specs(meta, evidence_metadata_spec(name))
+meta = merge_metadata_specs(meta, extract_evidence_metadata_spec(name))
 ```
 
 **Target files**
@@ -188,9 +167,9 @@ meta = merge_metadata_specs(meta, evidence_metadata_spec(name))
 - Update: `src/cpg/emit_edges.py`
 
 **Implementation checklist**
-- [ ] Add evidence metadata to schemas for all evidence tables.
-- [ ] Use evidence metadata in relationship compilation policies.
-- [ ] Ensure edge emission honors evidence rank + ambiguity policy.
+- [x] Add evidence metadata to schemas for all evidence tables.
+- [ ] Use evidence metadata in relationship compilation defaults beyond ambiguity_policy.
+- [ ] Incorporate evidence_rank into edge scoring/tie-breakers when present.
 
 **Status**
-Planned.
+Partially complete (ambiguity_policy metadata is honored; evidence_rank unused).

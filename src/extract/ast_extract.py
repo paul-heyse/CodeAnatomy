@@ -14,19 +14,17 @@ from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.plan.scan_io import plan_from_rows
 from extract.helpers import (
     FileContext,
-    align_plan,
     ast_def_nodes_plan,
     file_identity_row,
     iter_contexts,
     text_from_file_ctx,
 )
 from extract.registry_specs import (
-    dataset_metadata_with_options,
     dataset_query,
     dataset_row_schema,
-    dataset_schema,
     normalize_options,
 )
+from extract.schema_ops import metadata_spec_for_dataset, normalize_extract_plan
 
 
 @dataclass(frozen=True)
@@ -49,10 +47,6 @@ class ASTExtractResult:
 AST_NODES_QUERY = dataset_query("py_ast_nodes_v1")
 AST_EDGES_QUERY = dataset_query("py_ast_edges_v1")
 AST_ERRORS_QUERY = dataset_query("py_ast_errors_v1")
-
-AST_NODES_SCHEMA = dataset_schema("py_ast_nodes_v1")
-AST_EDGES_SCHEMA = dataset_schema("py_ast_edges_v1")
-AST_ERRORS_SCHEMA = dataset_schema("py_ast_errors_v1")
 
 AST_NODES_ROW_SCHEMA = dataset_row_schema("py_ast_nodes_v1")
 AST_EDGES_ROW_SCHEMA = dataset_row_schema("py_ast_edges_v1")
@@ -280,9 +274,9 @@ def extract_ast(
         file_contexts=file_contexts,
         ctx=ctx,
     )
-    nodes_meta = dataset_metadata_with_options("py_ast_nodes_v1", options=normalized_options)
-    edges_meta = dataset_metadata_with_options("py_ast_edges_v1", options=normalized_options)
-    errors_meta = dataset_metadata_with_options("py_ast_errors_v1", options=normalized_options)
+    nodes_meta = metadata_spec_for_dataset("py_ast_nodes_v1", options=normalized_options)
+    edges_meta = metadata_spec_for_dataset("py_ast_edges_v1", options=normalized_options)
+    errors_meta = metadata_spec_for_dataset("py_ast_errors_v1", options=normalized_options)
     return ASTExtractResult(
         py_ast_nodes=materialize_plan(
             plans["ast_nodes"],
@@ -334,29 +328,29 @@ def extract_ast_plans(
 
     nodes_plan = plan_from_rows(nodes_rows, schema=AST_NODES_ROW_SCHEMA, label="ast_nodes")
     nodes_plan = AST_NODES_QUERY.apply_to_plan(nodes_plan, ctx=ctx)
-    nodes_plan = align_plan(
+    nodes_plan = normalize_extract_plan(
+        "py_ast_nodes_v1",
         nodes_plan,
-        schema=AST_NODES_SCHEMA,
-        available=AST_NODES_SCHEMA.names,
         ctx=ctx,
+        options=normalized_options,
     )
 
     edges_plan = plan_from_rows(edges_rows, schema=AST_EDGES_ROW_SCHEMA, label="ast_edges")
     edges_plan = AST_EDGES_QUERY.apply_to_plan(edges_plan, ctx=ctx)
-    edges_plan = align_plan(
+    edges_plan = normalize_extract_plan(
+        "py_ast_edges_v1",
         edges_plan,
-        schema=AST_EDGES_SCHEMA,
-        available=AST_EDGES_SCHEMA.names,
         ctx=ctx,
+        options=normalized_options,
     )
 
     errs_plan = plan_from_rows(err_rows, schema=AST_ERRORS_ROW_SCHEMA, label="ast_errors")
     errs_plan = AST_ERRORS_QUERY.apply_to_plan(errs_plan, ctx=ctx)
-    errs_plan = align_plan(
+    errs_plan = normalize_extract_plan(
+        "py_ast_errors_v1",
         errs_plan,
-        schema=AST_ERRORS_SCHEMA,
-        available=AST_ERRORS_SCHEMA.names,
         ctx=ctx,
+        options=normalized_options,
     )
 
     return {
@@ -430,14 +424,8 @@ def extract_ast_tables(
         ctx=ctx,
     )
     defs_plan = ast_def_nodes_plan(plan=plans["ast_nodes"])
-    nodes_meta = dataset_metadata_with_options(
-        "py_ast_nodes_v1",
-        options=normalized_options,
-    )
-    edges_meta = dataset_metadata_with_options(
-        "py_ast_edges_v1",
-        options=normalized_options,
-    )
+    nodes_meta = metadata_spec_for_dataset("py_ast_nodes_v1", options=normalized_options)
+    edges_meta = metadata_spec_for_dataset("py_ast_edges_v1", options=normalized_options)
 
     return run_plan_bundle(
         {

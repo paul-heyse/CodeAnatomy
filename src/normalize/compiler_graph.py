@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from arrowdsl.core.interop import SchemaLike
 from normalize.evidence_catalog import EvidenceCatalog
+from normalize.registry_specs import dataset_schema
 from normalize.rule_model import NormalizeRule
 
 
@@ -36,32 +38,49 @@ def order_rules(
     ValueError
         Raised when the rule dependency graph contains cycles.
     """
-    eligible = [rule for rule in rules if evidence.satisfies(rule.evidence, inputs=rule.inputs)]
-    if allow_fallback:
-        eligible = _select_by_output(eligible)
-
-    output_names = {rule.output for rule in eligible}
-    nodes: list[RuleNode] = []
-    for rule in eligible:
-        deps = sorted({name for name in rule.inputs if name in output_names})
-        nodes.append(RuleNode(name=rule.name, rule=rule, requires=tuple(deps)))
-
-    remaining = {node.name: node for node in nodes}
+    work = evidence.clone()
+    pending = list(rules)
+    chosen_outputs: set[str] = set()
     resolved: list[NormalizeRule] = []
-    while remaining:
+    while pending:
         ready = [
-            node
-            for node in remaining.values()
-            if all(dep not in remaining for dep in node.requires)
+            rule
+            for rule in pending
+            if rule.output not in chosen_outputs
+            and work.satisfies(rule.evidence, inputs=rule.inputs)
         ]
+        if allow_fallback:
+            ready = _select_by_output(ready)
         if not ready:
-            msg = f"Normalize rule graph contains cycles: {sorted(remaining)}"
+            missing = sorted(rule.name for rule in pending)
+            msg = f"Normalize rule graph cannot resolve evidence for: {missing}"
             raise ValueError(msg)
-        ready_sorted = sorted(ready, key=lambda node: (node.rule.priority, node.rule.name))
-        for node in ready_sorted:
-            resolved.append(node.rule)
-            remaining.pop(node.name, None)
+        ready_sorted = sorted(ready, key=lambda rule: (rule.priority, rule.name))
+        for rule in ready_sorted:
+            resolved.append(rule)
+            chosen_outputs.add(rule.output)
+            _register_rule_output(work, rule)
+        pending = [
+            rule
+            for rule in pending
+            if rule not in ready_sorted and rule.output not in chosen_outputs
+        ]
     return resolved
+
+
+def _register_rule_output(evidence: EvidenceCatalog, rule: NormalizeRule) -> None:
+    output_schema = _virtual_output_schema(rule)
+    if output_schema is None:
+        evidence.sources.add(rule.output)
+        return
+    evidence.register(rule.output, output_schema)
+
+
+def _virtual_output_schema(rule: NormalizeRule) -> SchemaLike | None:
+    try:
+        return dataset_schema(rule.output)
+    except KeyError:
+        return None
 
 
 def _select_by_output(rules: Sequence[NormalizeRule]) -> list[NormalizeRule]:

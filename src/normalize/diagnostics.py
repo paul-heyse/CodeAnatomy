@@ -186,7 +186,7 @@ def _plan_for_output(
         tables=_diagnostics_catalog_entries(sources),
         repo_text_index=repo_text_index,
     )
-    compilation = compile_normalize_rules(catalog, ctx=ctx)
+    compilation = compile_normalize_rules(catalog, ctx=ctx, required_outputs=(DIAG_NAME,))
     plan = compilation.plans.get(DIAG_NAME)
     if plan is None:
         msg = f"Normalize rule output {DIAG_NAME!r} is not available."

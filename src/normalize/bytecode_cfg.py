@@ -298,7 +298,7 @@ def _plan_for_output(
     ctx: ExecutionContext,
 ) -> Plan:
     catalog = PlanCatalog(tables=dict(inputs))
-    compilation = compile_normalize_rules(catalog, ctx=ctx)
+    compilation = compile_normalize_rules(catalog, ctx=ctx, required_outputs=(output_name,))
     plan = compilation.plans.get(output_name)
     if plan is None:
         msg = f"Normalize rule output {output_name!r} is not available."

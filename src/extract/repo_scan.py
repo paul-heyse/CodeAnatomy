@@ -19,14 +19,13 @@ from arrowdsl.plan.runner import run_plan
 from arrowdsl.plan.scan_io import plan_from_rows
 from arrowdsl.schema.schema import empty_table
 from core_types import PathLike, ensure_path
-from extract.helpers import align_plan
 from extract.registry_specs import (
-    dataset_metadata_with_options,
     dataset_query,
     dataset_row_schema,
     dataset_schema,
     normalize_options,
 )
+from extract.schema_ops import metadata_spec_for_dataset, normalize_extract_plan
 
 SCHEMA_VERSION = 1
 
@@ -229,7 +228,7 @@ def scan_repo(
     """
     normalized_options = normalize_options("repo_scan", options, RepoScanOptions)
     ctx = ctx or execution_context_factory("default")
-    metadata_spec = dataset_metadata_with_options(
+    metadata_spec = metadata_spec_for_dataset(
         "repo_files_v1",
         options=normalized_options,
         repo_id=normalized_options.repo_id,

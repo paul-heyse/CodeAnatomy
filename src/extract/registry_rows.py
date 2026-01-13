@@ -55,6 +55,7 @@ class DatasetRow:
     ordering_keys: tuple[OrderingKey, ...] = ()
     join_keys: tuple[str, ...] = ()
     enabled_when: Callable[[object | None], bool] | None = None
+    feature_flag: str | None = None
     postprocess: str | None = None
     metadata_extra: dict[bytes, bytes] = field(default_factory=dict)
     evidence_required_columns: tuple[str, ...] = ()
@@ -137,6 +138,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="cst",
         join_keys=("file_id",),
         enabled_when=_flag_enabled("include_parse_manifest"),
+        feature_flag="include_parse_manifest",
     ),
     DatasetRow(
         name="py_cst_parse_errors_v1",
@@ -146,6 +148,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="cst",
         join_keys=("file_id", "raw_line", "raw_column"),
         enabled_when=_flag_enabled("include_parse_errors"),
+        feature_flag="include_parse_errors",
     ),
     DatasetRow(
         name="py_cst_name_refs_v1",
@@ -159,6 +162,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="cst",
         join_keys=("file_id", "bstart", "bend"),
         enabled_when=_flag_enabled("include_name_refs"),
+        feature_flag="include_name_refs",
     ),
     DatasetRow(
         name="py_cst_imports_v1",
@@ -185,6 +189,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="cst",
         join_keys=("file_id", "alias_bstart", "alias_bend"),
         enabled_when=_flag_enabled("include_imports"),
+        feature_flag="include_imports",
     ),
     DatasetRow(
         name="py_cst_callsites_v1",
@@ -208,6 +213,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="cst",
         join_keys=("file_id", "call_bstart", "call_bend"),
         enabled_when=_flag_enabled("include_callsites"),
+        feature_flag="include_callsites",
     ),
     DatasetRow(
         name="py_cst_defs_v1",
@@ -247,6 +253,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="cst",
         join_keys=("file_id", "def_bstart", "def_bend"),
         enabled_when=_flag_enabled("include_defs"),
+        feature_flag="include_defs",
     ),
     DatasetRow(
         name="py_cst_type_exprs_v1",
@@ -284,6 +291,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="cst",
         join_keys=("file_id", "bstart", "bend"),
         enabled_when=_flag_enabled("include_type_exprs"),
+        feature_flag="include_type_exprs",
     ),
     DatasetRow(
         name="ts_nodes_v1",
@@ -323,6 +331,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="tree_sitter",
         join_keys=("file_id", "start_byte", "end_byte", "ts_type"),
         enabled_when=_flag_enabled("include_nodes"),
+        feature_flag="include_nodes",
     ),
     DatasetRow(
         name="ts_errors_v1",
@@ -345,6 +354,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="tree_sitter",
         join_keys=("file_id", "start_byte", "end_byte"),
         enabled_when=_flag_enabled("include_errors"),
+        feature_flag="include_errors",
     ),
     DatasetRow(
         name="ts_missing_v1",
@@ -367,6 +377,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="tree_sitter",
         join_keys=("file_id", "start_byte", "end_byte"),
         enabled_when=_flag_enabled("include_missing"),
+        feature_flag="include_missing",
     ),
     DatasetRow(
         name="py_bc_code_units_v1",
@@ -508,6 +519,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="bytecode",
         join_keys=("code_unit_id", "start_offset", "end_offset"),
         enabled_when=_flag_enabled("include_cfg_derivations"),
+        feature_flag="include_cfg_derivations",
     ),
     DatasetRow(
         name="py_bc_cfg_edges_v1",
@@ -546,6 +558,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="bytecode",
         join_keys=("code_unit_id", "src_block_id", "dst_block_id", "kind", "edge_key", "exc_index"),
         enabled_when=_flag_enabled("include_cfg_derivations"),
+        feature_flag="include_cfg_derivations",
     ),
     DatasetRow(
         name="py_bc_errors_v1",

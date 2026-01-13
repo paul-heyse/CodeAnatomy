@@ -34,6 +34,7 @@ from hamilton_pipeline.pipeline_types import (
     RelspecSnapshots,
     RepoScanConfig,
 )
+from normalize.runner import NormalizeRuleCompilation
 from normalize.utils import encoding_policy_from_schema
 from obs.manifest import ManifestContext, ManifestData, build_manifest, write_manifest_json
 from obs.repro import RunBundleContext, write_run_bundle
@@ -457,6 +458,7 @@ def manifest_data(
     relationship_output_tables: RelationshipOutputTables,
     cpg_output_tables: CpgOutputTables,
     relspec_snapshots: RelspecSnapshots,
+    normalize_rule_compilation: NormalizeRuleCompilation | None = None,
 ) -> ManifestData:
     """Assemble manifest data inputs from pipeline outputs.
 
@@ -470,6 +472,15 @@ def manifest_data(
         name: [cr.rule.name for cr in compiled.contributors]
         for name, compiled in relspec_snapshots.compiled_outputs.items()
     }
+    normalize_rules = normalize_rule_compilation.rules if normalize_rule_compilation else None
+    normalize_lineage: dict[str, list[str]] | None = None
+    if normalize_rule_compilation:
+        normalize_lineage = {}
+        for rule in normalize_rule_compilation.rules:
+            normalize_lineage.setdefault(rule.output, []).append(rule.name)
+    notes: JsonDict = {"relationship_output_keys": produced_outputs}
+    if normalize_lineage:
+        notes["normalize_output_keys"] = sorted(normalize_lineage)
     return ManifestData(
         relspec_input_tables=relspec_inputs_bundle.tables,
         relspec_input_locations=relspec_inputs_bundle.locations,
@@ -478,9 +489,11 @@ def manifest_data(
         cpg_edges=cpg_output_tables.cpg_edges,
         cpg_props=cpg_output_tables.cpg_props,
         relationship_rules=relspec_snapshots.registry.rules(),
+        normalize_rules=normalize_rules,
         produced_relationship_output_names=produced_outputs,
         relationship_output_lineage=lineage,
-        notes={"relationship_output_keys": produced_outputs},
+        normalize_output_lineage=normalize_lineage,
+        notes=notes,
     )
 
 

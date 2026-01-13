@@ -124,6 +124,7 @@ class ManifestData:
     normalize_rules: Sequence[NormalizeRule] | None = None
     produced_relationship_output_names: Sequence[str] | None = None
     relationship_output_lineage: Mapping[str, Sequence[str]] | None = None
+    normalize_output_lineage: Mapping[str, Sequence[str]] | None = None
     notes: JsonDict | None = None
 
 
@@ -270,12 +271,15 @@ def _collect_rule_records(data: ManifestData) -> list[RuleRecord]:
 
 
 def _collect_lineage_records(data: ManifestData) -> list[OutputLineageRecord]:
-    if not data.relationship_output_lineage:
-        return []
     records: list[OutputLineageRecord] = []
-    for name in sorted(data.relationship_output_lineage):
-        rules = data.relationship_output_lineage[name]
-        records.append(OutputLineageRecord(output_dataset=name, rules=list(rules)))
+    if data.relationship_output_lineage:
+        for name in sorted(data.relationship_output_lineage):
+            rules = data.relationship_output_lineage[name]
+            records.append(OutputLineageRecord(output_dataset=name, rules=list(rules)))
+    if data.normalize_output_lineage:
+        for name in sorted(data.normalize_output_lineage):
+            rules = data.normalize_output_lineage[name]
+            records.append(OutputLineageRecord(output_dataset=name, rules=list(rules)))
     return records
 
 

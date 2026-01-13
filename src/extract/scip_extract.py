@@ -29,14 +29,12 @@ from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.plan.scan_io import plan_from_rows
 from arrowdsl.schema.build import struct_array_from_dicts, table_from_arrays
 from arrowdsl.schema.nested_builders import LargeListAccumulator
-from arrowdsl.schema.ops import encode_plan, unify_tables
+from arrowdsl.schema.ops import unify_tables
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
-from extract.helpers import align_plan
 from extract.registry_fields import (
     SCIP_SIGNATURE_DOCUMENTATION_TYPE,
 )
 from extract.registry_specs import (
-    dataset_metadata_with_options,
     dataset_query,
     dataset_row_schema,
     dataset_schema,
@@ -44,6 +42,7 @@ from extract.registry_specs import (
     normalize_options,
     postprocess_table,
 )
+from extract.schema_ops import metadata_spec_for_dataset, normalize_plan_with_policy
 
 if TYPE_CHECKING:
     from arrowdsl.schema.policy import SchemaPolicy
@@ -171,21 +170,21 @@ def _scip_metadata_specs(
     parse_opts: SCIPParseOptions,
 ) -> dict[str, SchemaMetadataSpec]:
     return {
-        "scip_metadata": dataset_metadata_with_options("scip_metadata_v1", options=parse_opts),
-        "scip_documents": dataset_metadata_with_options("scip_documents_v1", options=parse_opts),
-        "scip_occurrences": dataset_metadata_with_options(
+        "scip_metadata": metadata_spec_for_dataset("scip_metadata_v1", options=parse_opts),
+        "scip_documents": metadata_spec_for_dataset("scip_documents_v1", options=parse_opts),
+        "scip_occurrences": metadata_spec_for_dataset(
             "scip_occurrences_v1", options=parse_opts
         ),
-        "scip_symbol_information": dataset_metadata_with_options(
+        "scip_symbol_information": metadata_spec_for_dataset(
             "scip_symbol_info_v1", options=parse_opts
         ),
-        "scip_symbol_relationships": dataset_metadata_with_options(
+        "scip_symbol_relationships": metadata_spec_for_dataset(
             "scip_symbol_relationships_v1", options=parse_opts
         ),
-        "scip_external_symbol_information": dataset_metadata_with_options(
+        "scip_external_symbol_information": metadata_spec_for_dataset(
             "scip_external_symbol_info_v1", options=parse_opts
         ),
-        "scip_diagnostics": dataset_metadata_with_options(
+        "scip_diagnostics": metadata_spec_for_dataset(
             "scip_diagnostics_v1", options=parse_opts
         ),
     }
@@ -830,16 +829,7 @@ def _finalize_plan(
     exec_ctx: ExecutionContext,
 ) -> Plan:
     plan = query.apply_to_plan(plan, ctx=exec_ctx)
-    schema = policy.resolved_schema()
-    plan = align_plan(
-        plan,
-        schema=schema,
-        ctx=exec_ctx,
-    )
-    if policy.encoding is not None:
-        columns = tuple(spec.column for spec in policy.encoding.specs)
-        plan = encode_plan(plan, columns=columns, ctx=exec_ctx)
-    return plan
+    return normalize_plan_with_policy(plan, policy=policy, ctx=exec_ctx)
 
 
 def _finalize_table(

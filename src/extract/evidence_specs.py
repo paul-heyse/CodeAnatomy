@@ -108,14 +108,19 @@ def evidence_metadata_spec(name: str) -> SchemaMetadataSpec:
         Metadata spec capturing evidence semantics.
     """
     spec = evidence_spec(name)
+    labels: dict[str, str] = {"evidence_name": spec.name}
+    if spec.evidence_family is not None:
+        labels["evidence_family"] = spec.evidence_family
+    if spec.coordinate_system is not None:
+        labels["coordinate_system"] = spec.coordinate_system
+    if spec.ambiguity_policy is not None:
+        labels["ambiguity_policy"] = spec.ambiguity_policy
+    if spec.template is not None:
+        labels["evidence_template"] = spec.template
     metadata = EvidenceMetadata(
-        evidence_family=spec.evidence_family,
-        coordinate_system=spec.coordinate_system,
-        ambiguity_policy=spec.ambiguity_policy,
-        evidence_rank=spec.evidence_rank,
+        labels=labels,
         required_columns=spec.required_columns,
-        evidence_name=spec.name,
-        template=spec.template,
+        evidence_rank=spec.evidence_rank,
     )
     return _evidence_metadata_spec(metadata)
 

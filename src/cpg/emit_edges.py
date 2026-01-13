@@ -53,7 +53,25 @@ def _metadata_value(
         return None
 
 
-def _edge_id_expr(rel_norm: Plan, *, spec: EdgeEmitSpec, ctx: ExecutionContext) -> ComputeExpression:
+def _rank_score(rank: int) -> float:
+    clamped = max(1, min(rank, 10))
+    score = 1.0 - 0.1 * (clamped - 1)
+    return max(0.1, min(1.0, score))
+
+
+def _rank_score_from_meta(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        rank = int(value)
+    except ValueError:
+        return None
+    return _rank_score(rank)
+
+
+def _edge_id_expr(
+    rel_norm: Plan, *, spec: EdgeEmitSpec, ctx: ExecutionContext
+) -> ComputeExpression:
     available = rel_norm.schema(ctx=ctx).names
     base_spec, full_spec = edge_hash_specs(spec.edge_kind.value)
     base_id = hash_expression(base_spec, available=available)
@@ -70,8 +88,10 @@ def _edge_scoring_exprs(
     spec: EdgeEmitSpec,
     ctx: ExecutionContext,
 ) -> tuple[ComputeExpression, ComputeExpression, ComputeExpression, ComputeExpression]:
-    default_score = 1.0 if spec.origin == "scip" else 0.5
     metadata_resolution = _metadata_value(rel, ctx=ctx, key=b"ambiguity_policy")
+    metadata_rank = _metadata_value(rel, ctx=ctx, key=b"evidence_rank")
+    rank_score = _rank_score_from_meta(metadata_rank)
+    default_score = (1.0 if spec.origin == "scip" else 0.5) if rank_score is None else rank_score
     default_resolution = metadata_resolution or spec.default_resolution_method
     origin = ensure_expression(
         pc.cast(

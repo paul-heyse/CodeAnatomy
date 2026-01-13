@@ -22,7 +22,6 @@ from arrowdsl.schema.nested_builders import LargeListViewAccumulator
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.helpers import (
     FileContext,
-    align_plan,
     file_identity_row,
     iter_contexts,
     project_columns,
@@ -30,12 +29,12 @@ from extract.helpers import (
 )
 from extract.registry_ids import hash_spec
 from extract.registry_specs import (
-    dataset_metadata_with_options,
     dataset_query,
     dataset_row_schema,
     dataset_schema,
     normalize_options,
 )
+from extract.schema_ops import metadata_spec_for_dataset, normalize_extract_plan
 from schema_spec.specs import NestedFieldSpec
 
 
@@ -136,15 +135,15 @@ def _symtable_metadata_specs(
     options: SymtableExtractOptions,
 ) -> dict[str, SchemaMetadataSpec]:
     return {
-        "py_sym_scopes": dataset_metadata_with_options("py_sym_scopes_v1", options=options),
-        "py_sym_symbols": dataset_metadata_with_options("py_sym_symbols_v1", options=options),
-        "py_sym_scope_edges": dataset_metadata_with_options(
+        "py_sym_scopes": metadata_spec_for_dataset("py_sym_scopes_v1", options=options),
+        "py_sym_symbols": metadata_spec_for_dataset("py_sym_symbols_v1", options=options),
+        "py_sym_scope_edges": metadata_spec_for_dataset(
             "py_sym_scope_edges_v1", options=options
         ),
-        "py_sym_namespace_edges": dataset_metadata_with_options(
+        "py_sym_namespace_edges": metadata_spec_for_dataset(
             "py_sym_namespace_edges_v1", options=options
         ),
-        "py_sym_function_partitions": dataset_metadata_with_options(
+        "py_sym_function_partitions": metadata_spec_for_dataset(
             "py_sym_function_partitions_v1", options=options
         ),
     }
@@ -595,10 +594,9 @@ def _build_scopes(
         ctx=ctx,
     )
     scopes_plan = SCOPES_QUERY.apply_to_plan(scopes_plan, ctx=ctx)
-    scopes_plan = align_plan(
+    scopes_plan = normalize_extract_plan(
+        "py_sym_scopes_v1",
         scopes_plan,
-        schema=SCOPES_SCHEMA,
-        available=SCOPES_SCHEMA.names,
         ctx=ctx,
     )
     return scopes_plan, scope_key_plan
@@ -645,10 +643,9 @@ def _build_symbols(
         ctx=ctx,
     )
     symbols_plan = SYMBOLS_QUERY.apply_to_plan(symbols_plan, ctx=ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "py_sym_symbols_v1",
         symbols_plan,
-        schema=SYMBOLS_SCHEMA,
-        available=SYMBOLS_SCHEMA.names,
         ctx=ctx,
     )
 
@@ -730,10 +727,9 @@ def _build_scope_edges(
         ctx=ctx,
     )
     scope_edges_plan = SCOPE_EDGES_QUERY.apply_to_plan(scope_edges_plan, ctx=ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "py_sym_scope_edges_v1",
         scope_edges_plan,
-        schema=SCOPE_EDGES_SCHEMA,
-        available=SCOPE_EDGES_SCHEMA.names,
         ctx=ctx,
     )
 
@@ -813,10 +809,9 @@ def _build_namespace_edges(
         ctx=ctx,
     )
     ns_edges_plan = NAMESPACE_EDGES_QUERY.apply_to_plan(ns_edges_plan, ctx=ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "py_sym_namespace_edges_v1",
         ns_edges_plan,
-        schema=NAMESPACE_EDGES_SCHEMA,
-        available=NAMESPACE_EDGES_SCHEMA.names,
         ctx=ctx,
     )
 
@@ -850,10 +845,9 @@ def _build_func_parts(
         ctx=ctx,
     )
     func_parts_plan = FUNC_PARTS_QUERY.apply_to_plan(func_parts_plan, ctx=ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "py_sym_function_partitions_v1",
         func_parts_plan,
-        schema=FUNC_PARTS_SCHEMA,
-        available=FUNC_PARTS_SCHEMA.names,
         ctx=ctx,
     )
 

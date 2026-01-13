@@ -2,25 +2,32 @@
 
 from __future__ import annotations
 
-from normalize.rule_factories import (
-    bytecode_rules,
-    diagnostics_rules,
-    span_error_rules,
-    type_rules,
+from functools import cache
+
+import pyarrow as pa
+
+from arrowdsl.spec.tables.normalize import (
+    normalize_rule_family_specs_from_table,
+    normalize_rule_family_table,
 )
+from normalize.rule_factories import build_rules_from_specs
 from normalize.rule_model import NormalizeRule
-
-NORMALIZE_RULES: tuple[NormalizeRule, ...] = (
-    *type_rules(),
-    *bytecode_rules(),
-    *diagnostics_rules(),
-    *span_error_rules(),
-)
-
-_RULES_BY_NAME: dict[str, NormalizeRule] = {rule.name: rule for rule in NORMALIZE_RULES}
-_RULES_BY_OUTPUT: dict[str, NormalizeRule] = {rule.output: rule for rule in NORMALIZE_RULES}
+from normalize.rule_registry_specs import rule_family_specs
 
 
+@cache
+def rule_family_spec_table_cached() -> pa.Table:
+    """Return the normalize rule family spec table.
+
+    Returns
+    -------
+    pa.Table
+        Arrow table of normalize rule family specs.
+    """
+    return normalize_rule_family_table(rule_family_specs())
+
+
+@cache
 def normalize_rules() -> tuple[NormalizeRule, ...]:
     """Return the normalize rules in registry order.
 
@@ -29,7 +36,18 @@ def normalize_rules() -> tuple[NormalizeRule, ...]:
     tuple[NormalizeRule, ...]
         Normalize rule registry.
     """
-    return NORMALIZE_RULES
+    specs = normalize_rule_family_specs_from_table(rule_family_spec_table_cached())
+    return build_rules_from_specs(specs)
+
+
+@cache
+def _rules_by_name() -> dict[str, NormalizeRule]:
+    return {rule.name: rule for rule in normalize_rules()}
+
+
+@cache
+def _rules_by_output() -> dict[str, NormalizeRule]:
+    return {rule.output: rule for rule in normalize_rules()}
 
 
 def normalize_rule(name: str) -> NormalizeRule:
@@ -40,7 +58,7 @@ def normalize_rule(name: str) -> NormalizeRule:
     NormalizeRule
         Normalize rule.
     """
-    return _RULES_BY_NAME[name]
+    return _rules_by_name()[name]
 
 
 def rule_for_output(output: str) -> NormalizeRule:
@@ -51,7 +69,7 @@ def rule_for_output(output: str) -> NormalizeRule:
     NormalizeRule
         Normalize rule.
     """
-    return _RULES_BY_OUTPUT[output]
+    return _rules_by_output()[output]
 
 
 def normalize_rule_names() -> tuple[str, ...]:
@@ -62,7 +80,7 @@ def normalize_rule_names() -> tuple[str, ...]:
     tuple[str, ...]
         Normalize rule names.
     """
-    return tuple(rule.name for rule in NORMALIZE_RULES)
+    return tuple(rule.name for rule in normalize_rules())
 
 
 def normalize_rule_outputs() -> tuple[str, ...]:
@@ -73,7 +91,7 @@ def normalize_rule_outputs() -> tuple[str, ...]:
     tuple[str, ...]
         Normalize rule outputs.
     """
-    return tuple(rule.output for rule in NORMALIZE_RULES)
+    return tuple(rule.output for rule in normalize_rules())
 
 
 __all__ = [
@@ -81,5 +99,6 @@ __all__ = [
     "normalize_rule_names",
     "normalize_rule_outputs",
     "normalize_rules",
+    "rule_family_spec_table_cached",
     "rule_for_output",
 ]

@@ -27,6 +27,7 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
         stage="normalize",
         determinism_tier=DeterminismTier.BEST_EFFORT,
         metadata_extra={
+            b"confidence_policy": b"cst",
             b"evidence_family": b"cst",
             b"coordinate_system": b"bytes",
             b"ambiguity_policy": b"preserve",
@@ -37,6 +38,7 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
         stage="normalize",
         determinism_tier=DeterminismTier.BEST_EFFORT,
         metadata_extra={
+            b"confidence_policy": b"scip",
             b"evidence_family": b"scip",
             b"coordinate_system": b"bytes",
             b"ambiguity_policy": b"preserve",
@@ -47,6 +49,7 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
         stage="normalize",
         determinism_tier=DeterminismTier.BEST_EFFORT,
         metadata_extra={
+            b"confidence_policy": b"bytecode",
             b"evidence_family": b"bytecode",
             b"coordinate_system": b"offsets",
             b"ambiguity_policy": b"preserve",
@@ -57,6 +60,7 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
         stage="normalize",
         determinism_tier=DeterminismTier.BEST_EFFORT,
         metadata_extra={
+            b"confidence_policy": b"diagnostic",
             b"evidence_family": b"diagnostic",
             b"coordinate_system": b"bytes",
             b"ambiguity_policy": b"preserve",
@@ -67,6 +71,7 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
         stage="normalize",
         determinism_tier=DeterminismTier.BEST_EFFORT,
         metadata_extra={
+            b"confidence_policy": b"span",
             b"evidence_family": b"span",
             b"coordinate_system": b"bytes",
             b"ambiguity_policy": b"preserve",
@@ -77,6 +82,7 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
         stage="normalize",
         determinism_tier=DeterminismTier.BEST_EFFORT,
         metadata_extra={
+            b"confidence_policy": b"type",
             b"evidence_family": b"type",
             b"coordinate_system": b"none",
             b"ambiguity_policy": b"preserve",
@@ -87,6 +93,7 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
         stage="normalize",
         determinism_tier=DeterminismTier.BEST_EFFORT,
         metadata_extra={
+            b"confidence_policy": b"evidence",
             b"evidence_family": b"normalize_evidence",
             b"coordinate_system": b"bytes",
             b"ambiguity_policy": b"preserve",

@@ -22,7 +22,7 @@ class PlanRow:
 
 def _derive_output(output: str) -> PlanDeriver:
     def _derive(catalog: PlanCatalog, ctx: ExecutionContext) -> PlanSource | None:
-        plans = compile_normalize_plans(catalog, ctx=ctx)
+        plans = compile_normalize_plans(catalog, ctx=ctx, required_outputs=(output,))
         return plans.get(output)
 
     return _derive

@@ -40,6 +40,29 @@ class NormalizeCatalogInputs:
     span_errors: PlanSource | None = None
     repo_text_index: RepoTextIndex | None = None
 
+    def as_tables(self) -> Mapping[str, PlanSource | None]:
+        """Return catalog tables keyed by dataset name.
+
+        Returns
+        -------
+        Mapping[str, PlanSource | None]
+            Catalog tables keyed by dataset name.
+        """
+        return {
+            "cst_type_exprs": self.cst_type_exprs,
+            "scip_symbol_information": self.scip_symbol_information,
+            "cst_parse_errors": self.cst_parse_errors,
+            "ts_errors": self.ts_errors,
+            "ts_missing": self.ts_missing,
+            "scip_diagnostics": self.scip_diagnostics,
+            "scip_documents": self.scip_documents,
+            "py_bc_blocks": self.py_bc_blocks,
+            "py_bc_cfg_edges": self.py_bc_cfg_edges,
+            "py_bc_code_units": self.py_bc_code_units,
+            "py_bc_instructions": self.py_bc_instructions,
+            "span_errors_v1": self.span_errors,
+        }
+
 
 @dataclass
 class NormalizePlanCatalog(plan_catalog.PlanCatalog):
@@ -84,25 +107,8 @@ def normalize_plan_catalog(inputs: NormalizeCatalogInputs) -> NormalizePlanCatal
     NormalizePlanCatalog
         Catalog with base sources wired for derived plans.
     """
-    tables = {name: value for name, value in _input_entries(inputs).items() if value is not None}
+    tables = {name: value for name, value in inputs.as_tables().items() if value is not None}
     return NormalizePlanCatalog(tables=tables, repo_text_index=inputs.repo_text_index)
-
-
-def _input_entries(inputs: NormalizeCatalogInputs) -> Mapping[str, PlanSource | None]:
-    return {
-        "cst_type_exprs": inputs.cst_type_exprs,
-        "scip_symbol_information": inputs.scip_symbol_information,
-        "cst_parse_errors": inputs.cst_parse_errors,
-        "ts_errors": inputs.ts_errors,
-        "ts_missing": inputs.ts_missing,
-        "scip_diagnostics": inputs.scip_diagnostics,
-        "scip_documents": inputs.scip_documents,
-        "py_bc_blocks": inputs.py_bc_blocks,
-        "py_bc_cfg_edges": inputs.py_bc_cfg_edges,
-        "py_bc_code_units": inputs.py_bc_code_units,
-        "py_bc_instructions": inputs.py_bc_instructions,
-        "span_errors_v1": inputs.span_errors,
-    }
 
 
 __all__ = [

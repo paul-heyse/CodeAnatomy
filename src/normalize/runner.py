@@ -9,7 +9,6 @@ from typing import cast
 import pyarrow as pa
 
 from arrowdsl.compute.ids import masked_hash_expr
-from arrowdsl.compute.kernels import apply_dedupe
 from arrowdsl.compute.macros import ColumnOrNullExpr
 from arrowdsl.core.context import (
     DeterminismTier,
@@ -34,12 +33,19 @@ from arrowdsl.schema.metadata import merge_metadata_specs
 from arrowdsl.schema.ops import align_table
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
+from normalize.catalog import NormalizePlanCatalog
 from normalize.compiler_graph import order_rules
 from normalize.contracts import NORMALIZE_EVIDENCE_NAME, normalize_evidence_schema
 from normalize.evidence_catalog import EvidenceCatalog
-from normalize.policies import ambiguity_kernels, confidence_expr
-from normalize.registry_specs import dataset_metadata_spec, dataset_spec
-from normalize.rule_model import EvidenceOutput, NormalizeRule
+from normalize.policies import (
+    ambiguity_kernels,
+    ambiguity_policy_from_schema,
+    confidence_expr,
+    confidence_policy_from_schema,
+    default_tie_breakers,
+)
+from normalize.registry_specs import dataset_metadata_spec, dataset_schema, dataset_spec
+from normalize.rule_model import AmbiguityPolicy, EvidenceOutput, NormalizeRule
 from normalize.rule_registry import normalize_rules
 from normalize.utils import (
     PlanSource,
@@ -281,6 +287,66 @@ def _expand_required_outputs(
     return required
 
 
+def _apply_policy_defaults(rule: NormalizeRule) -> NormalizeRule:
+    schema = dataset_schema(rule.output)
+    confidence = rule.confidence_policy or confidence_policy_from_schema(schema)
+    ambiguity = rule.ambiguity_policy or ambiguity_policy_from_schema(schema)
+    if ambiguity is not None:
+        ambiguity = _apply_default_tie_breakers(ambiguity, schema=schema)
+    if confidence == rule.confidence_policy and ambiguity == rule.ambiguity_policy:
+        return rule
+    return replace(
+        rule,
+        confidence_policy=confidence,
+        ambiguity_policy=ambiguity,
+    )
+
+
+def apply_policy_defaults(rules: Sequence[NormalizeRule]) -> tuple[NormalizeRule, ...]:
+    """Return rules with contract-derived policy defaults applied.
+
+    Returns
+    -------
+    tuple[NormalizeRule, ...]
+        Rules with confidence and ambiguity policies filled from metadata.
+    """
+    return tuple(_apply_policy_defaults(rule) for rule in rules)
+
+
+def _validate_rule_policies(rule: NormalizeRule) -> None:
+    policy = rule.ambiguity_policy
+    if policy is None or policy.winner_select is None:
+        return
+    schema = normalize_evidence_schema()
+    available = set(schema.names)
+    required: set[str] = set(policy.winner_select.keys)
+    required.add(policy.winner_select.score_col)
+    required.update(key.column for key in policy.winner_select.tie_breakers)
+    required.update(key.column for key in policy.tie_breakers)
+    missing = sorted(required - available)
+    if missing:
+        msg = (
+            "Normalize ambiguity policy references missing evidence columns "
+            f"for rule {rule.name!r}: {missing}"
+        )
+        raise ValueError(msg)
+
+
+def _apply_default_tie_breakers(
+    policy: AmbiguityPolicy,
+    *,
+    schema: SchemaLike,
+) -> AmbiguityPolicy:
+    if policy.winner_select is None:
+        return policy
+    if policy.tie_breakers or policy.winner_select.tie_breakers:
+        return policy
+    defaults = default_tie_breakers(schema)
+    if not defaults:
+        return policy
+    return replace(policy, tie_breakers=defaults)
+
+
 def compile_normalize_rules(
     catalog: PlanCatalog,
     *,
@@ -294,11 +360,19 @@ def compile_normalize_rules(
     -------
     NormalizeRuleCompilation
         Compiled rule set with derived plans.
+
+    Raises
+    ------
+    ValueError
+        Raised when a rule requires plan execution but no plan can be built.
     """
     rule_set = tuple(normalize_rules()) if rules is None else tuple(rules)
     if required_outputs:
         required_set = _expand_required_outputs(rule_set, required_outputs)
         rule_set = tuple(rule for rule in rule_set if rule.output in required_set)
+    rule_set = apply_policy_defaults(rule_set)
+    for rule in rule_set:
+        _validate_rule_policies(rule)
     work_catalog = _clone_catalog(catalog)
     evidence = EvidenceCatalog.from_plan_catalog(work_catalog, ctx=ctx)
     ordered = order_rules(rule_set, evidence=evidence)
@@ -308,6 +382,9 @@ def compile_normalize_rules(
     for rule in ordered:
         plan = _resolve_rule_plan(rule, work_catalog, ctx=ctx)
         if plan is None:
+            if rule.execution_mode == "plan":
+                msg = f"Normalize rule {rule.name!r} requires plan execution."
+                raise ValueError(msg)
             continue
         compiled_rules.append(rule)
         plans[rule.output] = plan
@@ -396,11 +473,9 @@ def normalize_evidence_table(
 
 def _clone_catalog(catalog: PlanCatalog) -> PlanCatalog:
     tables = catalog.snapshot()
-    cloned = PlanCatalog(tables=tables)
-    repo_text_index = getattr(catalog, "repo_text_index", None)
-    if repo_text_index is not None:
-        cloned.repo_text_index = repo_text_index
-    return cloned
+    if isinstance(catalog, NormalizePlanCatalog):
+        return NormalizePlanCatalog(tables=tables, repo_text_index=catalog.repo_text_index)
+    return PlanCatalog(tables=tables)
 
 
 def _resolve_rule_plan(
@@ -431,6 +506,7 @@ def _materialize_evidence_output(
     ctx: ExecutionContext,
 ) -> TableLike:
     evidence_plan = _build_evidence_plan(plan, rule, ctx=ctx)
+    evidence_plan = _apply_ambiguity_plan_ops(evidence_plan, rule, ctx=ctx)
     result = run_plan(
         evidence_plan,
         ctx=ctx,
@@ -438,8 +514,6 @@ def _materialize_evidence_output(
         attach_ordering_metadata=True,
     )
     table = cast("TableLike", result.value)
-    for spec in ambiguity_kernels(rule.ambiguity_policy):
-        table = apply_dedupe(table, spec=spec, _ctx=ctx)
     return align_table(table, schema=normalize_evidence_schema(), ctx=ctx)
 
 
@@ -490,6 +564,25 @@ def _build_evidence_plan(
         exprs.append(expr)
         names.append(name)
     return plan.project(exprs, names, ctx=ctx)
+
+
+def _apply_ambiguity_plan_ops(
+    plan: Plan,
+    rule: NormalizeRule,
+    *,
+    ctx: ExecutionContext,
+) -> Plan:
+    current = plan
+    for spec in ambiguity_kernels(rule.ambiguity_policy):
+        schema = current.schema(ctx=ctx)
+        columns = [name for name in schema.names if name not in spec.keys]
+        current = current.winner_select(
+            spec,
+            columns=columns,
+            ctx=ctx,
+            label=f"{rule.name}_winner_select",
+        )
+    return current
 
 
 def _set_metadata_literal(
@@ -598,6 +691,7 @@ __all__ = [
     "NormalizeFinalizeSpec",
     "NormalizeRuleCompilation",
     "PostFn",
+    "apply_policy_defaults",
     "compile_normalize_plans",
     "compile_normalize_rules",
     "ensure_canonical",

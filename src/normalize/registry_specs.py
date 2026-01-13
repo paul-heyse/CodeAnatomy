@@ -105,6 +105,17 @@ def dataset_contract(name: str) -> ContractSpec:
     return contract
 
 
+def dataset_contract_schema(name: str) -> SchemaLike:
+    """Return the contract schema for a dataset.
+
+    Returns
+    -------
+    SchemaLike
+        Arrow schema defined by the dataset contract.
+    """
+    return dataset_contract(name).to_contract().schema
+
+
 def dataset_query(name: str) -> QuerySpec:
     """Return the QuerySpec for a dataset.
 
@@ -173,6 +184,7 @@ def dataset_schema_policy(name: str, *, ctx: ExecutionContext) -> SchemaPolicy:
     options = SchemaPolicyOptions(
         schema=contract.with_versioned_schema(),
         encoding=spec.encoding_policy(),
+        metadata=dataset_metadata_spec(name),
         validation=contract.validation,
     )
     return schema_policy_factory(spec.table_spec, ctx=ctx, options=options)
@@ -180,6 +192,7 @@ def dataset_schema_policy(name: str, *, ctx: ExecutionContext) -> SchemaPolicy:
 
 __all__ = [
     "dataset_contract",
+    "dataset_contract_schema",
     "dataset_input_columns",
     "dataset_input_schema",
     "dataset_metadata_spec",

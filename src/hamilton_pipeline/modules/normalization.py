@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
+
 import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
 
@@ -15,11 +18,30 @@ from arrowdsl.core.ids import prefixed_hash_id
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
 from arrowdsl.plan.joins import JoinConfig, left_join
 from arrowdsl.schema.build import empty_table, set_or_append_column, table_from_arrays
+from extract.evidence_plan import EvidencePlan
 from normalize.bytecode_anchor import anchor_instructions
-from normalize.bytecode_cfg import build_cfg_blocks, build_cfg_edges
-from normalize.bytecode_dfg import build_def_use_events, run_reaching_defs
-from normalize.diagnostics import DiagnosticsSources, collect_diags
+from normalize.catalog import (
+    NormalizeCatalogInputs,
+    NormalizePlanCatalog,
+)
+from normalize.catalog import (
+    normalize_plan_catalog as build_normalize_plan_catalog,
+)
+from normalize.diagnostics import DiagnosticsSources
+from normalize.registry_specs import (
+    dataset_contract,
+    dataset_schema,
+    dataset_schema_policy,
+    dataset_spec,
+)
+from normalize.runner import (
+    NormalizeFinalizeSpec,
+    NormalizeRuleCompilation,
+    compile_normalize_rules,
+    run_normalize,
+)
 from normalize.schema_infer import align_table_to_schema, infer_schema_or_registry
+from normalize.span_pipeline import span_error_table
 from normalize.spans import (
     RepoTextIndex,
     add_ast_byte_spans,
@@ -28,7 +50,6 @@ from normalize.spans import (
     normalize_cst_defs_spans,
     normalize_cst_imports_spans,
 )
-from normalize.types import normalize_type_exprs, normalize_types
 from schema_spec.specs import ArrowFieldSpec, call_span_bundle
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
 
@@ -70,6 +91,233 @@ def _string_or_null(values: ArrayLike | ChunkedArrayLike) -> ArrayLike:
     casted = pc.cast(values, pa.string())
     empty = pc.equal(casted, pa.scalar(""))
     return pc.if_else(empty, pa.scalar(None, type=pa.string()), casted)
+
+
+def _requires_output(plan: EvidencePlan | None, name: str) -> bool:
+    if plan is None:
+        return True
+    return plan.requires_dataset(name)
+
+
+def _requires_any(plan: EvidencePlan | None, names: Sequence[str]) -> bool:
+    return any(_requires_output(plan, name) for name in names)
+
+
+_RULE_OUTPUT_DATASETS: dict[str, str] = {
+    "diagnostics_norm": "diagnostics_norm_v1",
+    "py_bc_blocks_norm": "py_bc_blocks_norm_v1",
+    "py_bc_cfg_edges_norm": "py_bc_cfg_edges_norm_v1",
+    "py_bc_def_use_events": "py_bc_def_use_events_v1",
+    "py_bc_reaching_defs": "py_bc_reaches_v1",
+    "type_exprs_norm": "type_exprs_norm_v1",
+    "types_norm": "type_nodes_v1",
+}
+
+
+@dataclass(frozen=True)
+class NormalizeTypeSources:
+    """Normalize sources for type rules."""
+
+    cst_type_exprs: TableLike | None = None
+    scip_symbol_information: TableLike | None = None
+
+
+@dataclass(frozen=True)
+class NormalizeBytecodeSources:
+    """Normalize sources for bytecode rules."""
+
+    py_bc_blocks: TableLike | None = None
+    py_bc_cfg_edges: TableLike | None = None
+    py_bc_code_units: TableLike | None = None
+    py_bc_instructions: TableLike | None = None
+
+
+@dataclass(frozen=True)
+class NormalizeSpanSources:
+    """Normalize sources for span/diagnostic rules."""
+
+    repo_text_index: RepoTextIndex | None = None
+    span_errors: TableLike | None = None
+
+
+@cache()
+@tag(layer="normalize", artifact="normalize_type_sources", kind="object")
+def normalize_type_sources(
+    cst_type_exprs: TableLike | None = None,
+    scip_symbol_information: TableLike | None = None,
+) -> NormalizeTypeSources:
+    """Bundle type-related normalize inputs.
+
+    Returns
+    -------
+    NormalizeTypeSources
+        Type-related inputs for normalize rule compilation.
+    """
+    return NormalizeTypeSources(
+        cst_type_exprs=cst_type_exprs,
+        scip_symbol_information=scip_symbol_information,
+    )
+
+
+@cache()
+@tag(layer="normalize", artifact="normalize_bytecode_sources", kind="object")
+def normalize_bytecode_sources(
+    py_bc_blocks: TableLike | None = None,
+    py_bc_cfg_edges: TableLike | None = None,
+    py_bc_code_units: TableLike | None = None,
+    py_bc_instructions: TableLike | None = None,
+) -> NormalizeBytecodeSources:
+    """Bundle bytecode normalize inputs.
+
+    Returns
+    -------
+    NormalizeBytecodeSources
+        Bytecode inputs for normalize rule compilation.
+    """
+    return NormalizeBytecodeSources(
+        py_bc_blocks=py_bc_blocks,
+        py_bc_cfg_edges=py_bc_cfg_edges,
+        py_bc_code_units=py_bc_code_units,
+        py_bc_instructions=py_bc_instructions,
+    )
+
+
+@cache()
+@tag(layer="normalize", artifact="normalize_span_sources", kind="object")
+def normalize_span_sources(
+    repo_text_index: RepoTextIndex | None = None,
+    span_errors: TableLike | None = None,
+) -> NormalizeSpanSources:
+    """Bundle span-related normalize inputs.
+
+    Returns
+    -------
+    NormalizeSpanSources
+        Span-related inputs for normalize rule compilation.
+    """
+    return NormalizeSpanSources(repo_text_index=repo_text_index, span_errors=span_errors)
+
+
+@cache()
+@tag(layer="normalize", artifact="normalize_catalog_inputs", kind="object")
+def normalize_catalog_inputs(
+    normalize_type_sources: NormalizeTypeSources | None = None,
+    diagnostics_sources: DiagnosticsSources | None = None,
+    normalize_bytecode_sources: NormalizeBytecodeSources | None = None,
+    normalize_span_sources: NormalizeSpanSources | None = None,
+) -> NormalizeCatalogInputs:
+    """Bundle plan sources for normalize rule compilation.
+
+    Returns
+    -------
+    NormalizeCatalogInputs
+        Bundle of normalize inputs for plan compilation.
+    """
+    type_sources = normalize_type_sources or NormalizeTypeSources()
+    diag_sources = diagnostics_sources or DiagnosticsSources(
+        cst_parse_errors=None,
+        ts_errors=None,
+        ts_missing=None,
+        scip_diagnostics=None,
+        scip_documents=None,
+    )
+    bytecode_sources = normalize_bytecode_sources or NormalizeBytecodeSources()
+    span_sources = normalize_span_sources or NormalizeSpanSources()
+    return NormalizeCatalogInputs(
+        cst_type_exprs=type_sources.cst_type_exprs,
+        scip_symbol_information=type_sources.scip_symbol_information,
+        cst_parse_errors=diag_sources.cst_parse_errors,
+        ts_errors=diag_sources.ts_errors,
+        ts_missing=diag_sources.ts_missing,
+        scip_diagnostics=diag_sources.scip_diagnostics,
+        scip_documents=diag_sources.scip_documents,
+        py_bc_blocks=bytecode_sources.py_bc_blocks,
+        py_bc_cfg_edges=bytecode_sources.py_bc_cfg_edges,
+        py_bc_code_units=bytecode_sources.py_bc_code_units,
+        py_bc_instructions=bytecode_sources.py_bc_instructions,
+        span_errors=span_sources.span_errors,
+        repo_text_index=span_sources.repo_text_index,
+    )
+
+
+@cache()
+@tag(layer="normalize", artifact="normalize_plan_catalog", kind="object")
+def normalize_plan_catalog(
+    normalize_catalog_inputs: NormalizeCatalogInputs,
+) -> NormalizePlanCatalog:
+    """Build a normalize plan catalog from pipeline inputs.
+
+    Returns
+    -------
+    NormalizePlanCatalog
+        Plan catalog seeded with normalize inputs.
+    """
+    return build_normalize_plan_catalog(normalize_catalog_inputs)
+
+
+@cache()
+@tag(layer="normalize", artifact="normalize_rule_compilation", kind="object")
+def normalize_rule_compilation(
+    normalize_plan_catalog: NormalizePlanCatalog,
+    ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
+) -> NormalizeRuleCompilation:
+    """Compile normalize rules into plan outputs.
+
+    Returns
+    -------
+    NormalizeRuleCompilation
+        Compiled rules, plans, and catalog updates.
+    """
+    required_outputs = _required_rule_outputs(evidence_plan)
+    if required_outputs is not None and not required_outputs:
+        return NormalizeRuleCompilation(rules=(), plans={}, catalog=normalize_plan_catalog)
+    return compile_normalize_rules(
+        normalize_plan_catalog,
+        ctx=ctx,
+        required_outputs=required_outputs,
+    )
+
+
+def _required_rule_outputs(plan: EvidencePlan | None) -> tuple[str, ...] | None:
+    if plan is None:
+        return None
+    outputs = [
+        dataset for name, dataset in _RULE_OUTPUT_DATASETS.items() if plan.requires_dataset(name)
+    ]
+    return tuple(outputs)
+
+
+def _normalize_rule_output(
+    compilation: NormalizeRuleCompilation,
+    output: str,
+    *,
+    ctx: ExecutionContext,
+) -> TableLike:
+    plan = compilation.plans.get(output)
+    if plan is None:
+        return empty_table(dataset_schema(output))
+    finalize_spec = NormalizeFinalizeSpec(
+        metadata_spec=dataset_spec(output).metadata_spec,
+        schema_policy=dataset_schema_policy(output, ctx=ctx),
+    )
+    return run_normalize(
+        plan=plan,
+        post=(),
+        contract=dataset_contract(output),
+        ctx=ctx,
+        finalize_spec=finalize_spec,
+    ).good
+
+
+def _empty_scip_occurrences_norm(scip_occurrences: TableLike) -> TableLike:
+    table = empty_table(scip_occurrences.schema)
+    table = set_or_append_column(table, "bstart", pa.array([], type=pa.int64()))
+    table = set_or_append_column(table, "bend", pa.array([], type=pa.int64()))
+    table = set_or_append_column(table, "span_ok", pa.array([], type=pa.bool_()))
+    table = set_or_append_column(table, "enc_bstart", pa.array([], type=pa.int64()))
+    table = set_or_append_column(table, "enc_bend", pa.array([], type=pa.int64()))
+    return set_or_append_column(table, "span_id", pa.array([], type=pa.string()))
 
 
 def _flatten_qname_names(table: TableLike | None, column: str) -> ArrayLike:
@@ -136,6 +384,7 @@ def dim_qualified_names(
     cst_callsites: TableLike,
     cst_defs: TableLike,
     ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Build a dimension table of qualified names from CST extraction.
 
@@ -149,6 +398,9 @@ def dim_qualified_names(
         Qualified name dimension table.
     """
     _ = ctx
+    if not _requires_output(evidence_plan, "dim_qualified_names"):
+        schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name, [])
+        return empty_table(schema)
     callsite_qnames = _flatten_qname_names(cst_callsites, "callee_qnames")
     def_qnames = _flatten_qname_names(cst_defs, "qnames")
     combined = pa.chunked_array([callsite_qnames, def_qnames])
@@ -174,6 +426,7 @@ def dim_qualified_names(
 def callsite_qname_candidates(
     cst_callsites: TableLike,
     ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Explode callsite qualified names into a row-per-candidate table.
 
@@ -191,6 +444,9 @@ def callsite_qname_candidates(
         Table of callsite qualified name candidates.
     """
     _ = ctx
+    if not _requires_output(evidence_plan, "callsite_qname_candidates"):
+        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
+        return empty_table(schema)
     if (
         cst_callsites is None
         or cst_callsites.num_rows == 0
@@ -223,6 +479,7 @@ def ast_nodes_norm(
     repo_text_index: RepoTextIndex,
     ast_nodes: TableLike,
     ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Add byte-span columns to AST nodes for join-ready alignment.
 
@@ -232,6 +489,8 @@ def ast_nodes_norm(
         AST nodes with bstart/bend/span_ok columns appended.
     """
     _ = ctx
+    if not _requires_output(evidence_plan, "ast_nodes_norm"):
+        return empty_table(ast_nodes.schema)
     return add_ast_byte_spans(repo_text_index, ast_nodes)
 
 
@@ -241,6 +500,7 @@ def py_bc_instructions_norm(
     repo_text_index: RepoTextIndex,
     py_bc_instructions: TableLike,
     ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Anchor bytecode instructions to source byte spans.
 
@@ -250,15 +510,17 @@ def py_bc_instructions_norm(
         Bytecode instruction table with bstart/bend/span_ok columns.
     """
     _ = ctx
+    if not _requires_output(evidence_plan, "py_bc_instructions_norm"):
+        return empty_table(py_bc_instructions.schema)
     return anchor_instructions(repo_text_index, py_bc_instructions)
 
 
 @cache(format="parquet")
 @tag(layer="normalize", artifact="py_bc_blocks_norm", kind="table")
 def py_bc_blocks_norm(
-    py_bc_blocks: TableLike,
-    py_bc_code_units: TableLike,
+    normalize_rule_compilation: NormalizeRuleCompilation,
     ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Normalize bytecode CFG blocks with file/path metadata.
 
@@ -267,15 +529,21 @@ def py_bc_blocks_norm(
     TableLike
         CFG block table aligned to the normalization schema.
     """
-    return build_cfg_blocks(py_bc_blocks, py_bc_code_units, ctx=ctx)
+    if not _requires_output(evidence_plan, "py_bc_blocks_norm"):
+        return empty_table(dataset_schema(_RULE_OUTPUT_DATASETS["py_bc_blocks_norm"]))
+    return _normalize_rule_output(
+        normalize_rule_compilation,
+        _RULE_OUTPUT_DATASETS["py_bc_blocks_norm"],
+        ctx=ctx,
+    )
 
 
 @cache(format="parquet")
 @tag(layer="normalize", artifact="py_bc_cfg_edges_norm", kind="table")
 def py_bc_cfg_edges_norm(
-    py_bc_code_units: TableLike,
-    py_bc_cfg_edges: TableLike,
+    normalize_rule_compilation: NormalizeRuleCompilation,
     ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Normalize bytecode CFG edges with file/path metadata.
 
@@ -284,12 +552,22 @@ def py_bc_cfg_edges_norm(
     TableLike
         CFG edge table aligned to the normalization schema.
     """
-    return build_cfg_edges(py_bc_code_units, py_bc_cfg_edges, ctx=ctx)
+    if not _requires_output(evidence_plan, "py_bc_cfg_edges_norm"):
+        return empty_table(dataset_schema(_RULE_OUTPUT_DATASETS["py_bc_cfg_edges_norm"]))
+    return _normalize_rule_output(
+        normalize_rule_compilation,
+        _RULE_OUTPUT_DATASETS["py_bc_cfg_edges_norm"],
+        ctx=ctx,
+    )
 
 
 @cache(format="parquet")
 @tag(layer="normalize", artifact="py_bc_def_use_events", kind="table")
-def py_bc_def_use_events(py_bc_instructions: TableLike, ctx: ExecutionContext) -> TableLike:
+def py_bc_def_use_events(
+    normalize_rule_compilation: NormalizeRuleCompilation,
+    ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
+) -> TableLike:
     """Derive def/use events from bytecode instructions.
 
     Returns
@@ -297,13 +575,22 @@ def py_bc_def_use_events(py_bc_instructions: TableLike, ctx: ExecutionContext) -
     TableLike
         Def/use events table.
     """
-    _ = ctx
-    return build_def_use_events(py_bc_instructions)
+    if not _requires_output(evidence_plan, "py_bc_def_use_events"):
+        return empty_table(dataset_schema(_RULE_OUTPUT_DATASETS["py_bc_def_use_events"]))
+    return _normalize_rule_output(
+        normalize_rule_compilation,
+        _RULE_OUTPUT_DATASETS["py_bc_def_use_events"],
+        ctx=ctx,
+    )
 
 
 @cache(format="parquet")
 @tag(layer="normalize", artifact="py_bc_reaching_defs", kind="table")
-def py_bc_reaching_defs(py_bc_def_use_events: TableLike, ctx: ExecutionContext) -> TableLike:
+def py_bc_reaching_defs(
+    normalize_rule_compilation: NormalizeRuleCompilation,
+    ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
+) -> TableLike:
     """Compute reaching-def edges from def/use events.
 
     Returns
@@ -311,13 +598,22 @@ def py_bc_reaching_defs(py_bc_def_use_events: TableLike, ctx: ExecutionContext) 
     TableLike
         Reaching-def edges table.
     """
-    _ = ctx
-    return run_reaching_defs(py_bc_def_use_events)
+    if not _requires_output(evidence_plan, "py_bc_reaching_defs"):
+        return empty_table(dataset_schema(_RULE_OUTPUT_DATASETS["py_bc_reaching_defs"]))
+    return _normalize_rule_output(
+        normalize_rule_compilation,
+        _RULE_OUTPUT_DATASETS["py_bc_reaching_defs"],
+        ctx=ctx,
+    )
 
 
 @cache(format="parquet")
 @tag(layer="normalize", artifact="type_exprs_norm", kind="table")
-def type_exprs_norm(cst_type_exprs: TableLike, ctx: ExecutionContext) -> TableLike:
+def type_exprs_norm(
+    normalize_rule_compilation: NormalizeRuleCompilation,
+    ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
+) -> TableLike:
     """Normalize CST type expressions into join-ready tables.
 
     Returns
@@ -325,16 +621,21 @@ def type_exprs_norm(cst_type_exprs: TableLike, ctx: ExecutionContext) -> TableLi
     TableLike
         Normalized type expressions table.
     """
-    _ = ctx
-    return normalize_type_exprs(cst_type_exprs)
+    if not _requires_output(evidence_plan, "type_exprs_norm"):
+        return empty_table(dataset_schema(_RULE_OUTPUT_DATASETS["type_exprs_norm"]))
+    return _normalize_rule_output(
+        normalize_rule_compilation,
+        _RULE_OUTPUT_DATASETS["type_exprs_norm"],
+        ctx=ctx,
+    )
 
 
 @cache(format="parquet")
 @tag(layer="normalize", artifact="types_norm", kind="table")
 def types_norm(
-    type_exprs_norm: TableLike,
-    scip_symbol_information: TableLike,
+    normalize_rule_compilation: NormalizeRuleCompilation,
     ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Normalize type expressions into type nodes.
 
@@ -343,8 +644,13 @@ def types_norm(
     TableLike
         Normalized type node table.
     """
-    _ = ctx
-    return normalize_types(type_exprs_norm, scip_symbol_information)
+    if not _requires_output(evidence_plan, "types_norm"):
+        return empty_table(dataset_schema(_RULE_OUTPUT_DATASETS["types_norm"]))
+    return _normalize_rule_output(
+        normalize_rule_compilation,
+        _RULE_OUTPUT_DATASETS["types_norm"],
+        ctx=ctx,
+    )
 
 
 @cache()
@@ -375,9 +681,9 @@ def diagnostics_sources(
 @cache(format="parquet")
 @tag(layer="normalize", artifact="diagnostics_norm", kind="table")
 def diagnostics_norm(
-    repo_text_index: RepoTextIndex,
-    diagnostics_sources: DiagnosticsSources,
+    normalize_rule_compilation: NormalizeRuleCompilation,
     ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Aggregate diagnostics into a normalized table.
 
@@ -386,13 +692,23 @@ def diagnostics_norm(
     TableLike
         Normalized diagnostics table.
     """
-    _ = ctx
-    return collect_diags(repo_text_index, sources=diagnostics_sources)
+    if not _requires_output(evidence_plan, "diagnostics_norm"):
+        return empty_table(dataset_schema(_RULE_OUTPUT_DATASETS["diagnostics_norm"]))
+    return _normalize_rule_output(
+        normalize_rule_compilation,
+        _RULE_OUTPUT_DATASETS["diagnostics_norm"],
+        ctx=ctx,
+    )
 
 
 @cache()
 @tag(layer="normalize", artifact="repo_text_index", kind="object")
-def repo_text_index(repo_root: str, repo_files: TableLike, ctx: ExecutionContext) -> RepoTextIndex:
+def repo_text_index(
+    repo_root: str,
+    repo_files: TableLike,
+    ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
+) -> RepoTextIndex:
     """Build a repo text index for line/column to byte offsets.
 
     Returns
@@ -400,6 +716,8 @@ def repo_text_index(repo_root: str, repo_files: TableLike, ctx: ExecutionContext
     RepoTextIndex
         Repository text index for span conversion.
     """
+    if not _requires_output(evidence_plan, "repo_text_index"):
+        return RepoTextIndex(by_file_id={}, by_path={})
     return build_repo_text_index(repo_root=repo_root, repo_files=repo_files, ctx=ctx)
 
 
@@ -416,6 +734,7 @@ def scip_occurrences_norm_bundle(
     scip_occurrences: TableLike,
     repo_text_index: RepoTextIndex,
     ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
 ) -> dict[str, TableLike]:
     """Convert SCIP occurrences into byte offsets.
 
@@ -424,6 +743,11 @@ def scip_occurrences_norm_bundle(
     dict[str, TableLike]
         Bundle with normalized occurrences and span errors.
     """
+    if not _requires_any(evidence_plan, ("scip_occurrences_norm", "scip_span_errors")):
+        return {
+            "scip_occurrences_norm": _empty_scip_occurrences_norm(scip_occurrences),
+            "scip_span_errors": span_error_table([]),
+        }
     occ, errs = add_scip_occurrence_byte_spans(
         scip_documents=scip_documents,
         scip_occurrences=scip_occurrences,
@@ -435,7 +759,11 @@ def scip_occurrences_norm_bundle(
 
 @cache(format="parquet")
 @tag(layer="normalize", artifact="cst_imports_norm", kind="table")
-def cst_imports_norm(cst_imports: TableLike, ctx: ExecutionContext) -> TableLike:
+def cst_imports_norm(
+    cst_imports: TableLike,
+    ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
+) -> TableLike:
     """Normalize CST import spans into bstart/bend.
 
     Returns
@@ -444,12 +772,18 @@ def cst_imports_norm(cst_imports: TableLike, ctx: ExecutionContext) -> TableLike
         Normalized CST imports table.
     """
     _ = ctx
+    if not _requires_output(evidence_plan, "cst_imports_norm"):
+        return empty_table(cst_imports.schema)
     return normalize_cst_imports_spans(py_cst_imports=cst_imports)
 
 
 @cache(format="parquet")
 @tag(layer="normalize", artifact="cst_defs_norm", kind="table")
-def cst_defs_norm(cst_defs: TableLike, ctx: ExecutionContext) -> TableLike:
+def cst_defs_norm(
+    cst_defs: TableLike,
+    ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
+) -> TableLike:
     """Normalize CST def spans into bstart/bend.
 
     Returns
@@ -458,4 +792,6 @@ def cst_defs_norm(cst_defs: TableLike, ctx: ExecutionContext) -> TableLike:
         Normalized CST definitions table.
     """
     _ = ctx
+    if not _requires_output(evidence_plan, "cst_defs_norm"):
+        return empty_table(cst_defs.schema)
     return normalize_cst_defs_spans(py_cst_defs=cst_defs)

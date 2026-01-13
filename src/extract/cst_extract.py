@@ -29,7 +29,6 @@ from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from arrowdsl.schema.structs import flatten_struct_field
 from extract.helpers import (
     FileContext,
-    align_plan,
     bytes_from_file_ctx,
     file_identity_row,
     iter_contexts,
@@ -37,12 +36,12 @@ from extract.helpers import (
 from extract.registry_fields import QNAME_STRUCT
 from extract.registry_specs import (
     dataset_enabled,
-    dataset_metadata_with_options,
     dataset_query,
     dataset_row_schema,
     dataset_schema,
     normalize_options,
 )
+from extract.schema_ops import metadata_spec_for_dataset, normalize_extract_plan
 
 type Row = dict[str, object]
 
@@ -108,37 +107,37 @@ TYPE_EXPRS_ROW_SCHEMA = dataset_row_schema("py_cst_type_exprs_v1")
 def _cst_metadata_specs(options: CSTExtractOptions) -> dict[str, SchemaMetadataSpec]:
     repo_id = options.repo_id
     return {
-        "cst_parse_manifest": dataset_metadata_with_options(
+        "cst_parse_manifest": metadata_spec_for_dataset(
             "py_cst_parse_manifest_v1",
             options=options,
             repo_id=repo_id,
         ),
-        "cst_parse_errors": dataset_metadata_with_options(
+        "cst_parse_errors": metadata_spec_for_dataset(
             "py_cst_parse_errors_v1",
             options=options,
             repo_id=repo_id,
         ),
-        "cst_name_refs": dataset_metadata_with_options(
+        "cst_name_refs": metadata_spec_for_dataset(
             "py_cst_name_refs_v1",
             options=options,
             repo_id=repo_id,
         ),
-        "cst_imports": dataset_metadata_with_options(
+        "cst_imports": metadata_spec_for_dataset(
             "py_cst_imports_v1",
             options=options,
             repo_id=repo_id,
         ),
-        "cst_callsites": dataset_metadata_with_options(
+        "cst_callsites": metadata_spec_for_dataset(
             "py_cst_callsites_v1",
             options=options,
             repo_id=repo_id,
         ),
-        "cst_defs": dataset_metadata_with_options(
+        "cst_defs": metadata_spec_for_dataset(
             "py_cst_defs_v1",
             options=options,
             repo_id=repo_id,
         ),
-        "cst_type_exprs": dataset_metadata_with_options(
+        "cst_type_exprs": metadata_spec_for_dataset(
             "py_cst_type_exprs_v1",
             options=options,
             repo_id=repo_id,
@@ -855,11 +854,12 @@ def _build_manifest_plan(
         return Plan.table_source(empty_table(PARSE_MANIFEST_SCHEMA))
     plan = plan_from_rows(ctx.manifest_rows, schema=PARSE_MANIFEST_ROW_SCHEMA, label="cst_manifest")
     plan = PARSE_MANIFEST_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "py_cst_parse_manifest_v1",
         plan,
-        schema=PARSE_MANIFEST_SCHEMA,
-        available=PARSE_MANIFEST_SCHEMA.names,
         ctx=exec_ctx,
+        options=ctx.options,
+        repo_id=ctx.options.repo_id,
     )
 
 
@@ -882,11 +882,12 @@ def _build_errors_plan(
         return Plan.table_source(empty_table(PARSE_ERRORS_SCHEMA))
     plan = plan_from_rows(ctx.error_rows, schema=PARSE_ERRORS_ROW_SCHEMA, label="cst_parse_errors")
     plan = PARSE_ERRORS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "py_cst_parse_errors_v1",
         plan,
-        schema=PARSE_ERRORS_SCHEMA,
-        available=PARSE_ERRORS_SCHEMA.names,
         ctx=exec_ctx,
+        options=ctx.options,
+        repo_id=ctx.options.repo_id,
     )
 
 
@@ -909,11 +910,12 @@ def _build_name_refs_plan(
         return Plan.table_source(empty_table(NAME_REFS_SCHEMA))
     plan = plan_from_rows(ctx.name_ref_rows, schema=NAME_REFS_ROW_SCHEMA, label="cst_name_refs")
     plan = NAME_REFS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "py_cst_name_refs_v1",
         plan,
-        schema=NAME_REFS_SCHEMA,
-        available=NAME_REFS_SCHEMA.names,
         ctx=exec_ctx,
+        options=ctx.options,
+        repo_id=ctx.options.repo_id,
     )
 
 
@@ -936,11 +938,12 @@ def _build_imports_plan(
         return Plan.table_source(empty_table(IMPORTS_SCHEMA))
     plan = plan_from_rows(ctx.import_rows, schema=IMPORTS_ROW_SCHEMA, label="cst_imports")
     plan = IMPORTS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "py_cst_imports_v1",
         plan,
-        schema=IMPORTS_SCHEMA,
-        available=IMPORTS_SCHEMA.names,
         ctx=exec_ctx,
+        options=ctx.options,
+        repo_id=ctx.options.repo_id,
     )
 
 
@@ -963,11 +966,12 @@ def _build_callsites_plan(
         return Plan.table_source(empty_table(CALLSITES_SCHEMA))
     plan = plan_from_rows(ctx.call_rows, schema=CALLSITES_ROW_SCHEMA, label="cst_callsites")
     plan = CALLSITES_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "py_cst_callsites_v1",
         plan,
-        schema=CALLSITES_SCHEMA,
-        available=CALLSITES_SCHEMA.names,
         ctx=exec_ctx,
+        options=ctx.options,
+        repo_id=ctx.options.repo_id,
     )
 
 
@@ -990,11 +994,12 @@ def _build_defs_plan(
         return Plan.table_source(empty_table(DEFS_SCHEMA))
     plan = plan_from_rows(ctx.def_rows, schema=DEFS_ROW_SCHEMA, label="cst_defs")
     plan = DEFS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "py_cst_defs_v1",
         plan,
-        schema=DEFS_SCHEMA,
-        available=DEFS_SCHEMA.names,
         ctx=exec_ctx,
+        options=ctx.options,
+        repo_id=ctx.options.repo_id,
     )
 
 
@@ -1017,11 +1022,12 @@ def _build_type_exprs_plan(
         return Plan.table_source(empty_table(TYPE_EXPRS_SCHEMA))
     plan = plan_from_rows(ctx.type_expr_rows, schema=TYPE_EXPRS_ROW_SCHEMA, label="cst_type_exprs")
     plan = TYPE_EXPRS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "py_cst_type_exprs_v1",
         plan,
-        schema=TYPE_EXPRS_SCHEMA,
-        available=TYPE_EXPRS_SCHEMA.names,
         ctx=exec_ctx,
+        options=ctx.options,
+        repo_id=ctx.options.repo_id,
     )
 
 

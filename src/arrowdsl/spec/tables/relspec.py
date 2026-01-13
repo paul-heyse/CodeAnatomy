@@ -50,6 +50,7 @@ from relspec.model import (
     RuleKind,
     WinnerSelectConfig,
 )
+from relspec.policies import confidence_expr
 
 HASH_JOIN_STRUCT = pa.struct(
     [
@@ -152,6 +153,31 @@ KERNEL_SPEC_STRUCT = pa.struct(
         pa.field("dedupe", DEDUPE_STRUCT),
         pa.field("canonical_sort", pa.struct([("sort_keys", pa.list_(SORT_KEY_STRUCT))])),
     ]
+)
+
+RULE_DEFINITION_SCHEMA = pa.schema(
+    [
+        pa.field("name", pa.string(), nullable=False),
+        pa.field("kind", pa.string(), nullable=False),
+        pa.field("output_dataset", pa.string(), nullable=True),
+        pa.field("contract_name", pa.string(), nullable=True),
+        pa.field("inputs", pa.list_(pa.string()), nullable=True),
+        pa.field("hash_join", HASH_JOIN_STRUCT, nullable=True),
+        pa.field("interval_align", INTERVAL_ALIGN_STRUCT, nullable=True),
+        pa.field("winner_select", WINNER_SELECT_STRUCT, nullable=True),
+        pa.field("predicate_expr", pa.string(), nullable=True),
+        pa.field("project", PROJECT_STRUCT, nullable=True),
+        pa.field("post_kernels", pa.list_(KERNEL_SPEC_STRUCT), nullable=True),
+        pa.field("evidence", EVIDENCE_STRUCT, nullable=True),
+        pa.field("confidence_policy", pa.string(), nullable=True),
+        pa.field("ambiguity_policy", pa.string(), nullable=True),
+        pa.field("priority", pa.int32(), nullable=False),
+        pa.field("emit_rule_meta", pa.bool_(), nullable=False),
+        pa.field("rule_name_col", pa.string(), nullable=False),
+        pa.field("rule_priority_col", pa.string(), nullable=False),
+        pa.field("execution_mode", pa.string(), nullable=False),
+    ],
+    metadata={b"spec_kind": b"relationship_rule_definitions"},
 )
 
 RULES_SCHEMA = pa.schema(
@@ -491,6 +517,139 @@ def _kernel_from_row(payload: Mapping[str, Any]) -> KernelSpecT:
     return result
 
 
+def hash_join_row(config: HashJoinConfig | None) -> dict[str, object] | None:
+    """Return a row mapping for a hash join config."""
+    return _hash_join_row(config)
+
+
+def interval_align_row(config: IntervalAlignConfig | None) -> dict[str, object] | None:
+    """Return a row mapping for an interval align config."""
+    return _interval_align_row(config)
+
+
+def winner_select_row(config: WinnerSelectConfig | None) -> dict[str, object] | None:
+    """Return a row mapping for a winner select config."""
+    return _winner_select_row(config)
+
+
+def project_row(config: ProjectConfig | None) -> dict[str, object] | None:
+    """Return a row mapping for a projection config."""
+    return _project_row(config)
+
+
+def evidence_row(spec: EvidenceSpec | None) -> dict[str, object] | None:
+    """Return a row mapping for evidence metadata."""
+    return _evidence_row(spec)
+
+
+def kernel_spec_row(spec: KernelSpecT) -> dict[str, object]:
+    """Return a row mapping for a kernel spec."""
+    return _kernel_row(spec)
+
+
+def _project_from_payload(payload: Mapping[str, Any] | None) -> ProjectConfig | None:
+    if payload is None:
+        return None
+    exprs = {
+        str(item["name"]): _decode_expr(str(item["expr_json"]))
+        for item in payload.get("exprs") or ()
+    }
+    return ProjectConfig(
+        select=tuple(payload.get("select") or ()),
+        exprs=exprs,
+    )
+
+
+def _project_required_columns(project: ProjectConfig | None) -> set[str]:
+    if project is None:
+        return set()
+    required = set(project.select)
+    for expr in project.exprs.values():
+        required.update(_expr_fields(expr))
+    return required
+
+
+def _expr_fields(expr: ExprIR | None) -> set[str]:
+    if expr is None:
+        return set()
+    if expr.op == "field":
+        return {expr.name} if expr.name else set()
+    fields: set[str] = set()
+    for arg in expr.args:
+        fields.update(_expr_fields(arg))
+    return fields
+
+
+def _derived_required_columns(
+    *,
+    kind: RuleKind,
+    inputs: Sequence[str],
+    project: ProjectConfig | None,
+    predicate: ExprIR | None,
+) -> set[str]:
+    if kind != RuleKind.FILTER_PROJECT or len(inputs) != 1:
+        return set()
+    required = _project_required_columns(project)
+    required.update(_expr_fields(predicate))
+    return required
+
+
+def _with_confidence(
+    project: ProjectConfig,
+    policy: ConfidencePolicy | None,
+    *,
+    score_expr: ExprIR | None = None,
+    source_field: str | None = None,
+) -> ProjectConfig:
+    if policy is None and score_expr is None:
+        return project
+    expr = score_expr or confidence_expr(policy or ConfidencePolicy(), source_field=source_field)
+    exprs = dict(project.exprs)
+    exprs.setdefault("confidence", expr)
+    exprs.setdefault("score", expr)
+    return ProjectConfig(select=project.select, exprs=exprs)
+
+
+def _resolve_evidence_spec(
+    payload: Mapping[str, Any] | None,
+    *,
+    kind: RuleKind,
+    inputs: Sequence[str],
+    project: ProjectConfig | None,
+    predicate: ExprIR | None,
+) -> EvidenceSpec | None:
+    evidence = _evidence_from_row(payload)
+    sources = evidence.sources if evidence is not None else tuple(inputs)
+    required_columns = evidence.required_columns if evidence is not None else ()
+    required_types = dict(evidence.required_types) if evidence is not None else {}
+    derived = _derived_required_columns(
+        kind=kind,
+        inputs=inputs,
+        project=project,
+        predicate=predicate,
+    )
+    if derived:
+        required_columns = tuple(sorted(set(required_columns).union(derived)))
+    if not sources and not required_columns and not required_types:
+        return None
+    return EvidenceSpec(
+        sources=tuple(sources),
+        required_columns=tuple(sorted(set(required_columns))),
+        required_types=required_types,
+    )
+
+
+def relationship_rule_definition_table(rows: Sequence[Mapping[str, Any]]) -> pa.Table:
+    """Build a relationship rule definition table.
+
+    Returns
+    -------
+    pa.Table
+        Arrow table with rule definition rows.
+    """
+    return table_from_rows(RULE_DEFINITION_SCHEMA, rows)
+
+
 def relationship_rule_table(rules: Sequence[RelationshipRule]) -> pa.Table:
     """Build a relationship rule table.
 
@@ -525,28 +684,18 @@ def relationship_rule_table(rules: Sequence[RelationshipRule]) -> pa.Table:
     return table_from_rows(RULES_SCHEMA, rows)
 
 
-def relationship_rules_from_table(table: pa.Table) -> tuple[RelationshipRule, ...]:
-    """Compile RelationshipRule objects from a spec table.
+def _relationship_rules_from_rule_table(table: pa.Table) -> tuple[RelationshipRule, ...]:
+    """Compile RelationshipRule objects from a rule spec table.
 
     Returns
     -------
     tuple[RelationshipRule, ...]
-        Relationship rules parsed from the table.
+        Relationship rules parsed from the rules table.
     """
     rules: list[RelationshipRule] = []
     for row in table.to_pylist():
         inputs = tuple(_dataset_ref_from_row(item) for item in row.get("inputs") or ())
-        project = row.get("project")
-        project_spec = None
-        if project is not None:
-            exprs = {
-                str(item["name"]): _decode_expr(str(item["expr_json"]))
-                for item in project.get("exprs") or ()
-            }
-            project_spec = ProjectConfig(
-                select=tuple(project.get("select") or ()),
-                exprs=exprs,
-            )
+        project_spec = _project_from_payload(row.get("project"))
         post_kernels = tuple(_kernel_from_row(item) for item in row.get("post_kernels") or ())
         execution_mode = _parse_execution_mode(row.get("execution_mode", "auto"))
         rules.append(
@@ -572,6 +721,77 @@ def relationship_rules_from_table(table: pa.Table) -> tuple[RelationshipRule, ..
             )
         )
     return tuple(rules)
+
+
+def _relationship_rules_from_definition_table(table: pa.Table) -> tuple[RelationshipRule, ...]:
+    rules: list[RelationshipRule] = []
+    for row in table.to_pylist():
+        inputs = parse_string_tuple(row.get("inputs"), label="inputs")
+        predicate_json = row.get("predicate_expr")
+        predicate = _decode_expr(str(predicate_json)) if predicate_json else None
+        base_project = _project_from_payload(row.get("project"))
+        kind = RuleKind(str(row["kind"]))
+        confidence_name = row.get("confidence_policy")
+        ambiguity_name = row.get("ambiguity_policy")
+        confidence_policy = resolve_confidence_policy(str(confidence_name)) if confidence_name else None
+        ambiguity_policy = resolve_ambiguity_policy(str(ambiguity_name)) if ambiguity_name else None
+        project = base_project
+        if project is None and confidence_policy is not None:
+            project = ProjectConfig()
+        if project is not None:
+            project = _with_confidence(project, confidence_policy)
+        post_kernels = tuple(_kernel_from_row(item) for item in row.get("post_kernels") or ())
+        if predicate is not None:
+            post_kernels = (FilterKernelSpec(predicate=predicate), *post_kernels)
+        post_kernels = (*post_kernels, *ambiguity_kernels(ambiguity_policy))
+        evidence = _resolve_evidence_spec(
+            row.get("evidence"),
+            kind=kind,
+            inputs=inputs,
+            project=base_project,
+            predicate=predicate,
+        )
+        execution_mode = _parse_execution_mode(row.get("execution_mode", "auto"))
+        output_dataset = row.get("output_dataset") or str(row["name"])
+        contract_name = row.get("contract_name") or RELATION_OUTPUT_NAME
+        rules.append(
+            RelationshipRule(
+                name=str(row["name"]),
+                kind=kind,
+                output_dataset=str(output_dataset),
+                contract_name=str(contract_name),
+                inputs=tuple(DatasetRef(name=name) for name in inputs),
+                hash_join=_hash_join_from_row(row.get("hash_join")),
+                interval_align=_interval_align_from_row(row.get("interval_align")),
+                winner_select=_winner_select_from_row(row.get("winner_select")),
+                project=project,
+                post_kernels=post_kernels,
+                evidence=evidence,
+                confidence_policy=confidence_policy,
+                ambiguity_policy=ambiguity_policy,
+                priority=int(row.get("priority", 100)),
+                emit_rule_meta=bool(row.get("emit_rule_meta", True)),
+                rule_name_col=str(row.get("rule_name_col", "rule_name")),
+                rule_priority_col=str(row.get("rule_priority_col", "rule_priority")),
+                execution_mode=execution_mode,
+            )
+        )
+    return tuple(rules)
+
+
+def relationship_rules_from_table(table: pa.Table) -> tuple[RelationshipRule, ...]:
+    """Compile RelationshipRule objects from a spec table.
+
+    Returns
+    -------
+    tuple[RelationshipRule, ...]
+        Relationship rules parsed from the table.
+    """
+    meta = table.schema.metadata or {}
+    spec_kind = meta.get(b"spec_kind", b"").decode("utf-8")
+    if spec_kind == "relationship_rule_definitions":
+        return _relationship_rules_from_definition_table(table)
+    return _relationship_rules_from_rule_table(table)
 
 
 def rule_family_spec_table(specs: Sequence[RuleFamilySpec]) -> pa.Table:
@@ -717,12 +937,20 @@ __all__ = [
     "INTERVAL_ALIGN_STRUCT",
     "PROJECT_EXPR_STRUCT",
     "PROJECT_STRUCT",
+    "RULE_DEFINITION_SCHEMA",
     "RULES_SCHEMA",
     "RULE_FAMILY_SCHEMA",
     "SORT_KEY_STRUCT",
     "WINNER_SELECT_STRUCT",
+    "evidence_row",
+    "hash_join_row",
+    "interval_align_row",
+    "kernel_spec_row",
+    "project_row",
     "relationship_rule_table",
+    "relationship_rule_definition_table",
     "relationship_rules_from_table",
     "rule_family_spec_table",
     "rule_family_specs_from_table",
+    "winner_select_row",
 ]

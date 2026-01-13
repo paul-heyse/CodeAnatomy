@@ -18,6 +18,8 @@ class EvidenceSpec:
 
     sources: tuple[str, ...] = ()
     required_columns: tuple[str, ...] = ()
+    required_types: Mapping[str, str] = field(default_factory=dict)
+    required_metadata: Mapping[bytes, bytes] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,7 @@ class NormalizeRule:
     metadata_extra: Mapping[bytes, bytes] | None = None
     priority: int = 100
     emit_rule_meta: bool = True
+    execution_mode: ExecutionMode = "auto"
 
     def __post_init__(self) -> None:
         """Validate rule invariants.
@@ -89,6 +92,9 @@ class NormalizeRule:
         if len(set(self.inputs)) != len(self.inputs):
             msg = f"NormalizeRule.inputs contains duplicates for rule {self.name!r}."
             raise ValueError(msg)
+        if self.execution_mode not in {"auto", "plan", "table"}:
+            msg = f"NormalizeRule.execution_mode is invalid: {self.execution_mode!r}."
+            raise ValueError(msg)
 
 
 __all__ = [
@@ -96,6 +102,8 @@ __all__ = [
     "ConfidencePolicy",
     "EvidenceOutput",
     "EvidenceSpec",
+    "ExecutionMode",
     "NormalizeRule",
     "WinnerSelectConfig",
 ]
+ExecutionMode = Literal["auto", "plan", "table"]

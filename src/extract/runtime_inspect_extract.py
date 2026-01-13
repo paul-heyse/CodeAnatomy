@@ -21,18 +21,15 @@ from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.plan.scan_io import record_batches_from_rows
 from arrowdsl.schema.ops import unify_tables
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
-from extract.helpers import (
-    align_plan,
-    project_columns,
-)
+from extract.helpers import project_columns
 from extract.registry_ids import hash_spec
 from extract.registry_specs import (
-    dataset_metadata_with_options,
     dataset_query,
     dataset_row_schema,
     dataset_schema,
     normalize_options,
 )
+from extract.schema_ops import metadata_spec_for_dataset, normalize_extract_plan
 
 type Row = dict[str, object]
 
@@ -100,12 +97,12 @@ def _runtime_metadata_specs(
     options: RuntimeInspectOptions,
 ) -> dict[str, SchemaMetadataSpec]:
     return {
-        "rt_objects": dataset_metadata_with_options("rt_objects_v1", options=options),
-        "rt_signatures": dataset_metadata_with_options("rt_signatures_v1", options=options),
-        "rt_signature_params": dataset_metadata_with_options(
+        "rt_objects": metadata_spec_for_dataset("rt_objects_v1", options=options),
+        "rt_signatures": metadata_spec_for_dataset("rt_signatures_v1", options=options),
+        "rt_signature_params": metadata_spec_for_dataset(
             "rt_signature_params_v1", options=options
         ),
-        "rt_members": dataset_metadata_with_options("rt_members_v1", options=options),
+        "rt_members": metadata_spec_for_dataset("rt_members_v1", options=options),
     }
 
 
@@ -513,10 +510,9 @@ def _build_rt_objects(
         ctx=exec_ctx,
     )
     rt_objects_plan = RT_OBJECTS_QUERY.apply_to_plan(rt_objects_plan, ctx=exec_ctx)
-    rt_objects_plan = align_plan(
+    rt_objects_plan = normalize_extract_plan(
+        "rt_objects_v1",
         rt_objects_plan,
-        schema=RT_OBJECTS_SCHEMA,
-        available=RT_OBJECTS_SCHEMA.names,
         ctx=exec_ctx,
     )
     return rt_objects_plan, rt_objects_key_plan
@@ -574,10 +570,9 @@ def _build_rt_signatures(
             ctx=exec_ctx,
         )
     sig_plan = RT_SIGNATURES_QUERY.apply_to_plan(sig_plan, ctx=exec_ctx)
-    sig_plan = align_plan(
+    sig_plan = normalize_extract_plan(
+        "rt_signatures_v1",
         sig_plan,
-        schema=RT_SIGNATURES_SCHEMA,
-        available=RT_SIGNATURES_SCHEMA.names,
         ctx=exec_ctx,
     )
     return sig_plan, sig_meta_plan
@@ -627,10 +622,9 @@ def _build_rt_params(
         ctx=exec_ctx,
     )
     param_plan = RT_SIGNATURE_PARAMS_QUERY.apply_to_plan(param_plan, ctx=exec_ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "rt_signature_params_v1",
         param_plan,
-        schema=RT_SIGNATURE_PARAMS_SCHEMA,
-        available=RT_SIGNATURE_PARAMS_SCHEMA.names,
         ctx=exec_ctx,
     )
 
@@ -679,10 +673,9 @@ def _build_rt_members(
         ctx=exec_ctx,
     )
     member_plan = RT_MEMBERS_QUERY.apply_to_plan(member_plan, ctx=exec_ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "rt_members_v1",
         member_plan,
-        schema=RT_MEMBERS_SCHEMA,
-        available=RT_MEMBERS_SCHEMA.names,
         ctx=exec_ctx,
     )
 

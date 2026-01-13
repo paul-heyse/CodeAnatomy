@@ -113,9 +113,7 @@ def type_nodes_plan_from_exprs(
         return Plan.table_source(empty_table(dataset_schema(TYPE_NODES_NAME)))
 
     trimmed, non_empty = trimmed_non_empty_expr("type_repr")
-    valid = ensure_expression(
-        pc.and_(non_empty, pc.is_valid(pc.field("type_id")))
-    )
+    valid = ensure_expression(pc.and_(non_empty, pc.is_valid(pc.field("type_id"))))
     plan = plan.filter(valid, ctx=ctx)
     plan = plan.project([pc.field("type_id"), trimmed], ["type_id", "type_repr"], ctx=ctx)
     plan = project_columns(

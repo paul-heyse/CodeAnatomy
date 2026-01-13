@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -240,13 +240,10 @@ def extractor_metadata_spec(
 class EvidenceMetadata:
     """Evidence semantics payload for schema metadata."""
 
-    evidence_family: str | None = None
-    coordinate_system: str | None = None
-    ambiguity_policy: str | None = None
-    evidence_rank: int | None = None
+    labels: Mapping[str, str] = field(default_factory=dict)
     required_columns: Sequence[str] = ()
-    evidence_name: str | None = None
-    template: str | None = None
+    required_types: Mapping[str, str] = field(default_factory=dict)
+    evidence_rank: int | None = None
 
 
 def evidence_metadata_spec(metadata: EvidenceMetadata) -> SchemaMetadataSpec:
@@ -258,20 +255,16 @@ def evidence_metadata_spec(metadata: EvidenceMetadata) -> SchemaMetadataSpec:
         Metadata spec describing evidence semantics.
     """
     meta: dict[bytes, bytes] = {}
-    if metadata.evidence_family is not None:
-        meta[b"evidence_family"] = metadata.evidence_family.encode("utf-8")
-    if metadata.coordinate_system is not None:
-        meta[b"coordinate_system"] = metadata.coordinate_system.encode("utf-8")
-    if metadata.ambiguity_policy is not None:
-        meta[b"ambiguity_policy"] = metadata.ambiguity_policy.encode("utf-8")
+    for key, value in metadata.labels.items():
+        if value:
+            meta[key.encode("utf-8")] = value.encode("utf-8")
     if metadata.evidence_rank is not None:
         meta[b"evidence_rank"] = str(metadata.evidence_rank).encode("utf-8")
     if metadata.required_columns:
         meta[b"evidence_required_columns"] = ",".join(metadata.required_columns).encode("utf-8")
-    if metadata.evidence_name is not None:
-        meta[b"evidence_name"] = metadata.evidence_name.encode("utf-8")
-    if metadata.template is not None:
-        meta[b"evidence_template"] = metadata.template.encode("utf-8")
+    if metadata.required_types:
+        payload = json.dumps(metadata.required_types, sort_keys=True, separators=(",", ":"))
+        meta[b"evidence_required_types"] = payload.encode("utf-8")
     return SchemaMetadataSpec(schema_metadata=meta)
 
 
@@ -285,10 +278,10 @@ def metadata_spec_from_schema(schema: SchemaLike) -> SchemaMetadataSpec:
     """
     schema_meta = dict(schema.metadata or {})
     field_meta: dict[str, dict[bytes, bytes]] = {}
-    for field in schema:
-        if field.metadata is not None:
-            field_meta[field.name] = dict(field.metadata)
-        _add_nested_metadata(field, field_meta)
+    for schema_field in schema:
+        if schema_field.metadata is not None:
+            field_meta[schema_field.name] = dict(schema_field.metadata)
+        _add_nested_metadata(schema_field, field_meta)
     return SchemaMetadataSpec(schema_metadata=schema_meta, field_metadata=field_meta)
 
 
@@ -334,9 +327,9 @@ def update_field_metadata(
         Table with updated field metadata.
     """
     fields = []
-    for field in table.schema:
-        meta = updates.get(field.name)
-        fields.append(field.with_metadata(meta) if meta is not None else field)
+    for schema_field in table.schema:
+        meta = updates.get(schema_field.name)
+        fields.append(schema_field.with_metadata(meta) if meta is not None else schema_field)
     schema = pa.schema(fields, metadata=table.schema.metadata)
     return table.cast(schema)
 

@@ -29,6 +29,17 @@ VALIDATION_STRUCT = pa.struct(
     ]
 )
 
+SCALAR_UNION_FIELDS = (
+    pa.field("null", pa.null()),
+    pa.field("bool", pa.bool_()),
+    pa.field("int", pa.int64()),
+    pa.field("float", pa.float64()),
+    pa.field("string", pa.string()),
+    pa.field("binary", pa.binary()),
+)
+
+SCALAR_UNION_TYPE = pa.union(list(SCALAR_UNION_FIELDS), mode="dense")
+
 DATASET_REF_STRUCT = pa.struct(
     [
         pa.field("name", pa.string(), nullable=False),
@@ -40,6 +51,8 @@ DATASET_REF_STRUCT = pa.struct(
 __all__ = [
     "DATASET_REF_STRUCT",
     "DEDUPE_STRUCT",
+    "SCALAR_UNION_FIELDS",
+    "SCALAR_UNION_TYPE",
     "SORT_KEY_STRUCT",
     "VALIDATION_STRUCT",
 ]

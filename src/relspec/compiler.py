@@ -16,8 +16,9 @@ from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions, SortKey
 from arrowdsl.plan.plan import Plan, hash_join, union_all_plans
 from arrowdsl.plan.query import open_dataset
 from arrowdsl.plan.runner import run_plan
+from arrowdsl.schema.alignment import align_plan
 from arrowdsl.schema.arrays import ConstExpr, FieldExpr, const_array, set_or_append_column
-from arrowdsl.schema.schema import SchemaEvolutionSpec, projection_for_schema
+from arrowdsl.schema.schema import SchemaEvolutionSpec
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
@@ -445,12 +446,7 @@ def _apply_rule_meta_to_plan(
 
 
 def _align_plan(plan: Plan, *, schema: pa.Schema, ctx: ExecutionContext) -> Plan:
-    exprs, names = projection_for_schema(
-        schema,
-        available=plan.schema(ctx=ctx).names,
-        safe_cast=ctx.safe_cast,
-    )
-    return plan.project(exprs, names, label=plan.label)
+    return align_plan(plan, schema=schema, ctx=ctx)
 
 
 def _union_all_plans_aligned(plans: Sequence[Plan], *, ctx: ExecutionContext) -> Plan:

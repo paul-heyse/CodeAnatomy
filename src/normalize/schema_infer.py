@@ -9,7 +9,6 @@ import pyarrow as pa
 
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.schema.infer import infer_schema_from_tables as arrowdsl_infer_tables
-from arrowdsl.schema.metadata import metadata_spec_from_schema
 from arrowdsl.schema.schema import SchemaTransform
 from arrowdsl.schema.unify import unify_schemas as arrowdsl_unify_schemas
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
@@ -64,11 +63,11 @@ def infer_schema_from_tables(
     """
     opts = opts or SchemaInferOptions()
     present = [t for t in tables if t is not None]
-    arrow_schema = arrowdsl_infer_tables(present, promote_options=opts.promote_options)
-    if not present:
-        return arrow_schema
-    sample = next((t for t in present if t.num_rows > 0), None) or present[0]
-    return metadata_spec_from_schema(sample.schema).apply(arrow_schema)
+    return arrowdsl_infer_tables(
+        present,
+        promote_options=opts.promote_options,
+        prefer_nested=True,
+    )
 
 
 def infer_schema_or_registry(

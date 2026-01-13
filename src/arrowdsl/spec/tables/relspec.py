@@ -13,15 +13,21 @@ from arrowdsl.json_factory import JsonPolicy, dumps_text
 from arrowdsl.plan.ops import DedupeSpec, JoinType, SortKey
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.spec.codec import (
-    decode_scalar_json,
-    encode_scalar_json,
+    decode_scalar_union,
+    encode_scalar_union,
     parse_dedupe_strategy,
     parse_mapping_sequence,
     parse_sort_order,
     parse_string_tuple,
 )
 from arrowdsl.spec.expr_ir import ExprIR
-from arrowdsl.spec.structs import DATASET_REF_STRUCT, DEDUPE_STRUCT, SORT_KEY_STRUCT
+from arrowdsl.spec.io import table_from_rows
+from arrowdsl.spec.structs import (
+    DATASET_REF_STRUCT,
+    DEDUPE_STRUCT,
+    SCALAR_UNION_TYPE,
+    SORT_KEY_STRUCT,
+)
 from relspec.model import (
     AddLiteralSpec,
     CanonicalSortKernelSpec,
@@ -96,7 +102,10 @@ PROJECT_STRUCT = pa.struct(
 KERNEL_SPEC_STRUCT = pa.struct(
     [
         pa.field("kind", pa.string(), nullable=False),
-        pa.field("add_literal", pa.struct([("name", pa.string()), ("value_json", pa.string())])),
+        pa.field(
+            "add_literal",
+            pa.struct([("name", pa.string()), ("value_union", SCALAR_UNION_TYPE)]),
+        ),
         pa.field("drop_columns", pa.struct([("columns", pa.list_(pa.string()))])),
         pa.field("rename_columns", pa.struct([("mapping", pa.map_(pa.string(), pa.string()))])),
         pa.field(
@@ -237,12 +246,12 @@ def _parse_score_order(value: object) -> Literal["ascending", "descending"]:
     return parse_sort_order(value)
 
 
-def _encode_literal(value: object | None) -> str | None:
-    return encode_scalar_json(cast("ScalarValue | None", value))
+def _encode_literal(value: object | None) -> ScalarValue | None:
+    return encode_scalar_union(cast("ScalarValue | None", value))
 
 
-def _decode_literal(payload: str | None) -> ScalarValue | None:
-    return decode_scalar_json(payload)
+def _decode_literal(payload: object | None) -> ScalarValue | None:
+    return decode_scalar_union(payload)
 
 
 def _dataset_ref_row(ref: DatasetRef) -> dict[str, object]:
@@ -321,7 +330,7 @@ def _project_row(config: ProjectConfig | None) -> dict[str, object] | None:
 def _kernel_row(spec: KernelSpecT) -> dict[str, object]:
     base: dict[str, object] = {"kind": spec.kind}
     if isinstance(spec, AddLiteralSpec):
-        base["add_literal"] = {"name": spec.name, "value_json": _encode_literal(spec.value)}
+        base["add_literal"] = {"name": spec.name, "value_union": _encode_literal(spec.value)}
         return base
     if isinstance(spec, DropColumnsSpec):
         base["drop_columns"] = {"columns": list(spec.columns) or None}
@@ -357,7 +366,7 @@ def _kernel_from_row(payload: Mapping[str, Any]) -> KernelSpecT:
         spec = payload.get("add_literal") or {}
         return AddLiteralSpec(
             name=str(spec.get("name", "")),
-            value=_decode_literal(spec.get("value_json")),
+            value=_decode_literal(spec.get("value_union")),
         )
     if kind == "drop_columns":
         spec = payload.get("drop_columns") or {}
@@ -418,7 +427,7 @@ def relationship_rule_table(rules: Sequence[RelationshipRule]) -> pa.Table:
         }
         for rule in rules
     ]
-    return pa.Table.from_pylist(rows, schema=RULES_SCHEMA)
+    return table_from_rows(RULES_SCHEMA, rows)
 
 
 def relationship_rules_from_table(table: pa.Table) -> tuple[RelationshipRule, ...]:

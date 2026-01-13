@@ -47,6 +47,7 @@ SCAN_TELEMETRY_SCHEMA = pa.schema(
         ("dataset", pa.string()),
         ("fragment_count", pa.int64()),
         ("row_group_count", pa.int64()),
+        ("count_rows", pa.int64()),
         ("estimated_rows", pa.int64()),
         ("file_hints", pa.list_(pa.string())),
     ]

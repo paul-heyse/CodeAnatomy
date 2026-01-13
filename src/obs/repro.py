@@ -15,9 +15,9 @@ from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from typing import cast
 
-from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
+from arrowdsl.core.interop import TableLike
 from arrowdsl.finalize.finalize import Contract
-from arrowdsl.json_factory import JsonPolicy, dump_path, dumps_bytes
+from arrowdsl.json_factory import JsonPolicy, dump_path, dumps_bytes, json_default
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.schema import schema_fingerprint, schema_to_dict
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
@@ -117,27 +117,6 @@ def _ensure_dir(path: Path) -> None:
     path.mkdir(exist_ok=True, parents=True)
 
 
-def _json_default(obj: object) -> JsonValue:
-    # Arrow types
-    if isinstance(obj, SchemaLike):
-        return cast("JsonValue", schema_to_dict(obj))
-    if isinstance(obj, DataTypeLike):
-        return str(obj)
-
-    # Common containers
-    if isinstance(obj, set):
-        return sorted((_json_default(v) for v in obj), key=str)
-    if isinstance(obj, tuple):
-        return [_json_default(v) for v in obj]
-
-    # Dataclasses / objects
-    obj_dict = getattr(obj, "__dict__", None)
-    if isinstance(obj_dict, Mapping):
-        return {str(k): _json_default(v) for k, v in obj_dict.items()}
-
-    return str(obj)
-
-
 def _write_json(path: PathLike, data: JsonValue, *, overwrite: bool = True) -> str:
     target = ensure_path(path)
     policy = JsonPolicy(pretty=True, sort_keys=True)
@@ -213,15 +192,19 @@ def serialize_relationship_rule(rule: RelationshipRule) -> JsonDict:
         "priority": int(rule.priority),
         "emit_rule_meta": bool(rule.emit_rule_meta),
         "inputs": inputs,
-        "hash_join": _json_default(rule.hash_join) if rule.hash_join is not None else None,
-        "interval_align": _json_default(rule.interval_align)
+        "hash_join": cast("JsonValue", json_default(rule.hash_join))
+        if rule.hash_join is not None
+        else None,
+        "interval_align": cast("JsonValue", json_default(rule.interval_align))
         if rule.interval_align is not None
         else None,
-        "winner_select": _json_default(rule.winner_select)
+        "winner_select": cast("JsonValue", json_default(rule.winner_select))
         if rule.winner_select is not None
         else None,
-        "project": _json_default(rule.project) if rule.project is not None else None,
-        "post_kernels": [_json_default(k) for k in rule.post_kernels],
+        "project": cast("JsonValue", json_default(rule.project))
+        if rule.project is not None
+        else None,
+        "post_kernels": [cast("JsonValue", json_default(k)) for k in rule.post_kernels],
     }
 
 

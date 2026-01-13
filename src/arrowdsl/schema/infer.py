@@ -7,7 +7,7 @@ from typing import cast
 
 import arrowdsl.core.interop as pa
 from arrowdsl.core.interop import ArrayLike, DataTypeLike, ScalarLike, SchemaLike, TableLike, pc
-from arrowdsl.schema.schema import SchemaEvolutionSpec
+from arrowdsl.schema.unify import unify_schemas
 
 
 def best_fit_type(array: ArrayLike, candidates: Sequence[DataTypeLike]) -> DataTypeLike:
@@ -36,6 +36,7 @@ def infer_schema_from_tables(
     tables: Sequence[TableLike],
     *,
     promote_options: str = "permissive",
+    prefer_nested: bool = True,
 ) -> SchemaLike:
     """Infer a unified schema from tables using Arrow evolution rules.
 
@@ -44,8 +45,12 @@ def infer_schema_from_tables(
     SchemaLike
         Unified schema for the input tables.
     """
-    evolution = SchemaEvolutionSpec(promote_options=promote_options)
-    return evolution.unify_schema([table for table in tables if table is not None])
+    schemas = [table.schema for table in tables if table is not None]
+    return unify_schemas(
+        schemas,
+        promote_options=promote_options,
+        prefer_nested=prefer_nested,
+    )
 
 
 __all__ = [

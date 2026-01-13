@@ -1,6 +1,6 @@
 """HashSpec registry for normalized identifiers."""
 
-from arrowdsl.core.ids_registry import hash_spec_factory
+from arrowdsl.compute.ids import hash_spec_factory
 
 TYPE_EXPR_ID_SPEC = hash_spec_factory(
     prefix="cst_type_expr",

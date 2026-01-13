@@ -111,6 +111,17 @@ def _json_default(obj: object) -> object:
     return str(obj)
 
 
+def json_default(value: object) -> object:
+    """Return a JSON-serializable representation of ``value``.
+
+    Returns
+    -------
+    object
+        JSON-ready value using ArrowDSL default conversion.
+    """
+    return _json_default(value)
+
+
 def _orjson_option(policy: JsonPolicy) -> int:
     option = 0
     if policy.pretty:
@@ -201,4 +212,4 @@ def loads(payload: bytes | bytearray | memoryview | str) -> object:
     return orjson.loads(payload)
 
 
-__all__ = ["JsonPolicy", "dump_path", "dumps_bytes", "dumps_text", "loads"]
+__all__ = ["JsonPolicy", "dump_path", "dumps_bytes", "dumps_text", "json_default", "loads"]

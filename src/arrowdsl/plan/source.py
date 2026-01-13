@@ -116,6 +116,9 @@ def _plan_from_scan_source(
         available = set(dataset.schema.names)
         scan_cols = list(columns) if columns is not None else list(dataset.schema.names)
         scan_cols = [name for name in scan_cols if name in available]
+        for name in ctx.runtime.scan.scan_provenance_columns:
+            if name not in scan_cols:
+                scan_cols.append(name)
         factory = PlanFactory(ctx=ctx)
         return factory.scan(dataset, columns=scan_cols, label=label)
     if isinstance(source, ds.Scanner):

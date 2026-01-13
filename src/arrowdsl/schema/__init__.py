@@ -6,7 +6,11 @@ from arrowdsl.schema.constraints import (
     required_field_names,
     required_non_null_mask,
 )
-from arrowdsl.schema.encoding import encoding_policy_from_fields, encoding_policy_from_spec
+from arrowdsl.schema.encoding import (
+    encoding_policy_from_fields,
+    encoding_policy_from_schema,
+    encoding_policy_from_spec,
+)
 from arrowdsl.schema.factories import (
     empty_table,
     rows_to_table,
@@ -34,6 +38,7 @@ __all__ = [
     "duplicate_key_rows_plan",
     "empty_table",
     "encoding_policy_from_fields",
+    "encoding_policy_from_schema",
     "encoding_policy_from_spec",
     "infer_schema_from_tables",
     "invalid_rows_plan",

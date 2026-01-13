@@ -89,7 +89,12 @@ class ScanSpec:
             Plan representing the scan/filter/project pipeline.
         """
         dataset = self.open_dataset(schema=schema)
-        return self.query.to_plan(dataset=dataset, ctx=ctx, label=label)
+        return self.query.to_plan(
+            dataset=dataset,
+            ctx=ctx,
+            label=label,
+            scan_provenance=ctx.runtime.scan.scan_provenance_columns,
+        )
 
 
 __all__ = ["DatasetFactorySpec", "ScanSpec"]

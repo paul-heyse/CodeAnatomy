@@ -277,6 +277,28 @@ def decode_scalar_payload(payload: object | None) -> ScalarValue | None:
     return parse_scalar_value(decoded)
 
 
+def encode_scalar_union(value: ScalarValue | None) -> ScalarValue | None:
+    """Encode a scalar payload for union-typed storage.
+
+    Returns
+    -------
+    ScalarValue | None
+        Validated scalar payload.
+    """
+    return parse_scalar_value(value)
+
+
+def decode_scalar_union(payload: object | None) -> ScalarValue | None:
+    """Decode a scalar payload from union-typed storage.
+
+    Returns
+    -------
+    ScalarValue | None
+        Decoded scalar payload.
+    """
+    return parse_scalar_value(payload)
+
+
 def encode_scalar_json(value: ScalarValue | None) -> str | None:
     """Encode a scalar payload as JSON text.
 
@@ -307,11 +329,13 @@ __all__ = [
     "decode_json_text",
     "decode_scalar_json",
     "decode_scalar_payload",
+    "decode_scalar_union",
     "decode_strict",
     "encode_json_payload",
     "encode_json_text",
     "encode_scalar_json",
     "encode_scalar_payload",
+    "encode_scalar_union",
     "encode_strict",
     "parse_dedupe_strategy",
     "parse_mapping_sequence",

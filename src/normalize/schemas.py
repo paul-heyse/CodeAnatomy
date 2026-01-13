@@ -13,9 +13,9 @@ from arrowdsl.compute.expr_specs import (
     TrimExprSpec,
 )
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
-from arrowdsl.schema.arrays import FieldExpr
+from arrowdsl.schema.arrays import FieldExpr, struct_type
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from normalize.encoding import dict_field
+from arrowdsl.spec.factories import DatasetRegistration, register_dataset
 from normalize.hash_specs import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
@@ -23,13 +23,17 @@ from normalize.hash_specs import (
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
 )
-from schema_spec.specs import ArrowFieldSpec, file_identity_bundle, list_view_type, span_bundle
+from schema_spec.specs import (
+    ArrowFieldSpec,
+    dict_field,
+    file_identity_bundle,
+    list_view_type,
+    span_bundle,
+)
 from schema_spec.system import (
-    GLOBAL_SCHEMA_REGISTRY,
     DedupeSpecSpec,
     SortKeySpec,
     make_contract_spec,
-    make_dataset_spec,
     make_table_spec,
 )
 
@@ -40,13 +44,13 @@ _DEF_USE_OPS = ("IMPORT_NAME", "IMPORT_FROM")
 
 
 DIAG_TAGS_TYPE = list_view_type(pa.string(), large=True)
-DIAG_DETAIL_STRUCT = pa.struct(
-    [
-        ("detail_kind", pa.string()),
-        ("error_type", pa.string()),
-        ("source", pa.string()),
-        ("tags", DIAG_TAGS_TYPE),
-    ]
+DIAG_DETAIL_STRUCT = struct_type(
+    {
+        "detail_kind": pa.string(),
+        "error_type": pa.string(),
+        "source": pa.string(),
+        "tags": DIAG_TAGS_TYPE,
+    }
 )
 DIAG_DETAILS_TYPE = list_view_type(DIAG_DETAIL_STRUCT, large=True)
 
@@ -334,74 +338,72 @@ DIAG_CONTRACT = make_contract_spec(
     canonical_sort=(SortKeySpec(column="diag_id", order="ascending"),),
 )
 
-TYPE_EXPRS_NORM_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=TYPE_EXPRS_TABLE_SPEC,
+TYPE_EXPRS_NORM_SPEC = register_dataset(
+    table_spec=TYPE_EXPRS_TABLE_SPEC,
+    registration=DatasetRegistration(
         query_spec=TYPE_EXPRS_QUERY,
         contract_spec=TYPE_EXPRS_CONTRACT,
         metadata_spec=_normalize_metadata("type_exprs_norm"),
-    )
+    ),
 )
 
-TYPE_NODES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=TYPE_NODES_TABLE_SPEC,
+TYPE_NODES_SPEC = register_dataset(
+    table_spec=TYPE_NODES_TABLE_SPEC,
+    registration=DatasetRegistration(
         query_spec=TYPE_NODES_QUERY,
         contract_spec=TYPE_NODES_CONTRACT,
         metadata_spec=_normalize_metadata("type_nodes"),
-    )
+    ),
 )
 
-CFG_BLOCKS_NORM_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=CFG_BLOCKS_TABLE_SPEC,
+CFG_BLOCKS_NORM_SPEC = register_dataset(
+    table_spec=CFG_BLOCKS_TABLE_SPEC,
+    registration=DatasetRegistration(
         query_spec=CFG_BLOCKS_QUERY,
         contract_spec=CFG_BLOCKS_CONTRACT,
         metadata_spec=_normalize_metadata("cfg_blocks"),
-    )
+    ),
 )
 
-CFG_EDGES_NORM_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=CFG_EDGES_TABLE_SPEC,
+CFG_EDGES_NORM_SPEC = register_dataset(
+    table_spec=CFG_EDGES_TABLE_SPEC,
+    registration=DatasetRegistration(
         query_spec=CFG_EDGES_QUERY,
         contract_spec=CFG_EDGES_CONTRACT,
         metadata_spec=_normalize_metadata("cfg_edges"),
-    )
+    ),
 )
 
-DEF_USE_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=DEF_USE_TABLE_SPEC,
+DEF_USE_SPEC = register_dataset(
+    table_spec=DEF_USE_TABLE_SPEC,
+    registration=DatasetRegistration(
         query_spec=DEF_USE_QUERY,
         contract_spec=DEF_USE_CONTRACT,
         metadata_spec=_normalize_metadata("def_use_events"),
-    )
+    ),
 )
 
-REACHES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=REACHES_TABLE_SPEC,
+REACHES_SPEC = register_dataset(
+    table_spec=REACHES_TABLE_SPEC,
+    registration=DatasetRegistration(
         query_spec=REACHES_QUERY,
         contract_spec=REACHES_CONTRACT,
         metadata_spec=_normalize_metadata("reaches"),
-    )
+    ),
 )
 
-SPAN_ERROR_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=SPAN_ERROR_TABLE_SPEC,
-        metadata_spec=_normalize_metadata("span_errors"),
-    )
+SPAN_ERROR_SPEC = register_dataset(
+    table_spec=SPAN_ERROR_TABLE_SPEC,
+    registration=DatasetRegistration(metadata_spec=_normalize_metadata("span_errors")),
 )
 
-DIAG_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=DIAG_TABLE_SPEC,
+DIAG_SPEC = register_dataset(
+    table_spec=DIAG_TABLE_SPEC,
+    registration=DatasetRegistration(
         query_spec=DIAG_QUERY,
         contract_spec=DIAG_CONTRACT,
         metadata_spec=_normalize_metadata("diagnostics"),
-    )
+    ),
 )
 
 TYPE_EXPRS_NORM_SCHEMA = TYPE_EXPRS_NORM_SPEC.schema()

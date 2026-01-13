@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import cast
+from typing import Literal, cast, overload
 
 import pyarrow as pa
 import pyarrow.dataset as ds
 
+from arrowdsl.compute.ids import HashSpec, hash_projection
 from arrowdsl.compute.macros import ColumnOrNullExpr
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, OrderingLevel
 from arrowdsl.core.interop import (
     ComputeExpression,
     DataTypeLike,
+    RecordBatchReaderLike,
     SchemaLike,
     TableLike,
     ensure_expression,
@@ -22,7 +24,7 @@ from arrowdsl.finalize.finalize import Contract
 from arrowdsl.plan.joins import code_unit_meta_config, left_join, path_meta_config
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
-from arrowdsl.plan.runner import run_plan
+from arrowdsl.plan.runner import PlanRunResult, run_plan
 from arrowdsl.plan.source import DatasetSource, PlanSource, plan_from_source
 from arrowdsl.schema.alignment import (
     align_plan,
@@ -31,7 +33,7 @@ from arrowdsl.schema.alignment import (
     encoding_columns_from_metadata,
     encoding_projection,
 )
-from arrowdsl.schema.schema import empty_table
+from arrowdsl.schema.schema import CastErrorPolicy, align_to_schema, empty_table
 from arrowdsl.schema.structs import flatten_struct_field
 
 
@@ -124,6 +126,44 @@ def project_columns(
     for expr, name in extras:
         expressions.append(expr)
         names.append(name)
+    return plan.project(expressions, names, ctx=ctx)
+
+
+def apply_hash_projection(
+    plan: Plan,
+    *,
+    specs: Sequence[HashSpec],
+    available: Sequence[str] | None = None,
+    required: Mapping[str, Sequence[str]] | None = None,
+    ctx: ExecutionContext | None = None,
+) -> Plan:
+    """Apply hash projections to a plan, appending hash ID columns.
+
+    Returns
+    -------
+    Plan
+        Plan with appended hash columns.
+
+    Raises
+    ------
+    ValueError
+        Raised when no available columns are provided and no context is supplied.
+    """
+    if available is None:
+        if ctx is None:
+            msg = "apply_hash_projection requires available or ctx."
+            raise ValueError(msg)
+        available = plan.schema(ctx=ctx).names
+    names = list(available)
+    expr_map: dict[str, ComputeExpression] = {name: pc.field(name) for name in names}
+    for spec in specs:
+        out_col = spec.out_col or f"{spec.prefix}_id"
+        req = required.get(out_col) if required else None
+        expr, out_name = hash_projection(spec, available=names, required=req)
+        expr_map[out_name] = expr
+        if out_name not in names:
+            names.append(out_name)
+    expressions = [expr_map[name] for name in names]
     return plan.project(expressions, names, ctx=ctx)
 
 
@@ -315,36 +355,123 @@ def set_or_append_column(
     return plan.project(exprs, names, ctx=ctx)
 
 
-def finalize_plan(plan: Plan, *, ctx: ExecutionContext) -> TableLike:
-    """Materialize a plan as a table.
+def finalize_plan_result(
+    plan: Plan,
+    *,
+    ctx: ExecutionContext,
+    prefer_reader: bool = False,
+    schema: SchemaLike | None = None,
+    keep_extra_columns: bool = False,
+) -> PlanRunResult:
+    """Return a reader or table plus materialization metadata.
 
     Returns
     -------
-    TableLike
-        Materialized plan output.
+    PlanRunResult
+        Plan output and the materialization kind.
 
     Raises
     ------
     TypeError
         Raised when run_plan returns a reader instead of a table.
     """
-    result = run_plan(plan, ctx=ctx, prefer_reader=False)
-    if isinstance(result.value, pa.RecordBatchReader):
-        msg = "Expected table result from run_plan."
-        raise TypeError(msg)
-    table = cast("TableLike", result.value)
+    if schema is not None:
+        if plan.decl is None:
+            result = run_plan(plan, ctx=ctx, prefer_reader=False)
+            if isinstance(result.value, pa.RecordBatchReader):
+                msg = "Expected table result from run_plan."
+                raise TypeError(msg)
+            aligned = align_table_to_schema(
+                cast("TableLike", result.value),
+                schema=schema,
+                safe_cast=ctx.safe_cast,
+                keep_extra_columns=keep_extra_columns,
+                on_error="unsafe" if ctx.safe_cast else "raise",
+            )
+            return PlanRunResult(value=aligned, kind="table")
+        plan = align_plan(
+            plan,
+            schema=schema,
+            ctx=ctx,
+            keep_extra_columns=keep_extra_columns,
+        )
+    return run_plan(plan, ctx=ctx, prefer_reader=prefer_reader)
+
+
+@overload
+def finalize_plan(
+    plan: Plan,
+    *,
+    ctx: ExecutionContext,
+    prefer_reader: Literal[False] = False,
+    schema: SchemaLike | None = None,
+    keep_extra_columns: bool = False,
+) -> TableLike: ...
+
+
+@overload
+def finalize_plan(
+    plan: Plan,
+    *,
+    ctx: ExecutionContext,
+    prefer_reader: Literal[True],
+    schema: SchemaLike | None = None,
+    keep_extra_columns: bool = False,
+) -> TableLike | RecordBatchReaderLike: ...
+
+
+def finalize_plan(
+    plan: Plan,
+    *,
+    ctx: ExecutionContext,
+    prefer_reader: bool = False,
+    schema: SchemaLike | None = None,
+    keep_extra_columns: bool = False,
+) -> TableLike | RecordBatchReaderLike:
+    """Return a reader when possible, otherwise materialize the plan.
+
+    Returns
+    -------
+    TableLike | RecordBatchReaderLike
+        Reader when allowed, otherwise a table.
+    """
+    result = finalize_plan_result(
+        plan,
+        ctx=ctx,
+        prefer_reader=prefer_reader,
+        schema=schema,
+        keep_extra_columns=keep_extra_columns,
+    )
+    value = result.value
+    if isinstance(value, pa.RecordBatchReader):
+        return value
+    table = cast("TableLike", value)
     return table.unify_dictionaries()
 
 
-def align_table_to_schema(table: TableLike, *, schema: SchemaLike) -> TableLike:
-    """Cast a table to a target schema, preserving schema metadata.
+def align_table_to_schema(
+    table: TableLike,
+    *,
+    schema: SchemaLike,
+    safe_cast: bool = True,
+    keep_extra_columns: bool = False,
+    on_error: CastErrorPolicy = "unsafe",
+) -> TableLike:
+    """Align a table to a target schema with configurable casting behavior.
 
     Returns
     -------
     TableLike
-        Table cast to the provided schema.
+        Table aligned to the provided schema.
     """
-    return table.cast(schema)
+    aligned, _ = align_to_schema(
+        table,
+        schema=schema,
+        safe_cast=safe_cast,
+        keep_extra_columns=keep_extra_columns,
+        on_error=on_error,
+    )
+    return aligned
 
 
 def finalize_context_for_plan(
@@ -387,6 +514,7 @@ __all__ = [
     "PlanSource",
     "align_plan",
     "align_table_to_schema",
+    "apply_hash_projection",
     "assert_schema_metadata",
     "coalesce_expr",
     "code_unit_meta_join",
@@ -399,6 +527,7 @@ __all__ = [
     "ensure_plan",
     "finalize_context_for_plan",
     "finalize_plan",
+    "finalize_plan_result",
     "flatten_struct_field",
     "path_meta_join",
     "plan_source",

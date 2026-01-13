@@ -22,12 +22,14 @@ from arrowdsl.core.interop import (
     pc,
 )
 from arrowdsl.json_factory import JsonPolicy, dumps_text
+from arrowdsl.schema.arrays import dictionary_array_from_indices, union_array_from_values
 from arrowdsl.spec.codec import (
-    decode_scalar_json,
     decode_scalar_payload,
-    encode_scalar_json,
+    decode_scalar_union,
     encode_scalar_payload,
+    encode_scalar_union,
 )
+from arrowdsl.spec.structs import SCALAR_UNION_TYPE
 
 
 @dataclass(frozen=True)
@@ -51,12 +53,16 @@ class ExprRegistry:
         return self.compute_registry.ensure(spec)
 
 
+EXPR_OP_VALUES: tuple[str, ...] = ("field", "literal", "call")
+EXPR_OP_INDEX = {value: idx for idx, value in enumerate(EXPR_OP_VALUES)}
+EXPR_OP_TYPE = pa.dictionary(pa.int8(), pa.string())
+
 EXPR_NODE_SCHEMA = pa.schema(
     [
         pa.field("expr_id", pa.int64(), nullable=False),
-        pa.field("op", pa.string(), nullable=False),
+        pa.field("op", EXPR_OP_TYPE, nullable=False),
         pa.field("name", pa.string(), nullable=True),
-        pa.field("value_json", pa.string(), nullable=True),
+        pa.field("value_union", SCALAR_UNION_TYPE, nullable=True),
         pa.field("args", pa.list_(pa.int64()), nullable=True),
     ],
     metadata={b"spec_kind": b"expr_ir_nodes"},
@@ -231,6 +237,17 @@ class ExprIRTable:
     root_ids: tuple[int, ...]
 
 
+def _expr_op_indices(values: Sequence[str]) -> list[int]:
+    indices: list[int] = []
+    for value in values:
+        idx = EXPR_OP_INDEX.get(value)
+        if idx is None:
+            msg = f"Unsupported ExprIR op: {value!r}."
+            raise ValueError(msg)
+        indices.append(idx)
+    return indices
+
+
 def expr_ir_table(exprs: Sequence[ExprIR]) -> ExprIRTable:
     """Build a table representation for expression IR entries.
 
@@ -254,17 +271,28 @@ def expr_ir_table(exprs: Sequence[ExprIR]) -> ExprIRTable:
         return expr_id
 
     root_ids = tuple(_ensure_id(expr) for expr in exprs)
-    rows = [
-        {
-            "expr_id": expr_id,
-            "op": expr.op,
-            "name": expr.name,
-            "value_json": encode_scalar_json(expr.value),
-            "args": [id_map[id(arg)] for arg in expr.args] or None,
-        }
-        for expr_id, expr in enumerate(nodes)
-    ]
-    table = pa.Table.from_pylist(rows, schema=EXPR_NODE_SCHEMA)
+    expr_ids = list(range(len(nodes)))
+    op_values = [expr.op for expr in nodes]
+    op_indices = _expr_op_indices(op_values)
+    op_array = dictionary_array_from_indices(
+        op_indices,
+        EXPR_OP_VALUES,
+        index_type=pa.int8(),
+    )
+    names = [expr.name for expr in nodes]
+    values = [encode_scalar_union(expr.value) for expr in nodes]
+    args = [[id_map[id(arg)] for arg in expr.args] or None for expr in nodes]
+    table = pa.Table.from_arrays(
+        [
+            pa.array(expr_ids, type=pa.int64()),
+            op_array,
+            pa.array(names, type=pa.string()),
+            union_array_from_values(values, union_type=SCALAR_UNION_TYPE),
+            pa.array(args, type=pa.list_(pa.int64())),
+        ],
+        schema=EXPR_NODE_SCHEMA,
+    )
+    table = table.unify_dictionaries()
     return ExprIRTable(table=table, root_ids=root_ids)
 
 
@@ -315,8 +343,7 @@ def expr_ir_from_table(
         args = tuple(_build(int(arg)) for arg in row.get("args") or ())
         name = row.get("name")
         name_value = str(name) if name is not None else None
-        value_json = row.get("value_json")
-        value = decode_scalar_json(str(value_json)) if value_json is not None else None
+        value = decode_scalar_union(row.get("value_union"))
         expr = ExprIR(
             op=str(row.get("op", "")),
             name=name_value,

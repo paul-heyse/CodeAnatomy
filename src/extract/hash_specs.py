@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from arrowdsl.core.ids_registry import hash_spec_factory
+from arrowdsl.compute.ids import hash_spec_factory
 
 if TYPE_CHECKING:
     from arrowdsl.core.ids import HashSpec

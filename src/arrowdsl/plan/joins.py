@@ -142,6 +142,43 @@ def path_meta_config(
     )
 
 
+def join_config_for_output(
+    *,
+    left_columns: Sequence[str],
+    right_columns: Sequence[str],
+    key_pairs: Sequence[tuple[str, str]],
+    right_output: Sequence[str],
+    output_suffix_for_right: str = "",
+) -> JoinConfig | None:
+    """Return a JoinConfig for left joins with explicit right output.
+
+    Returns
+    -------
+    JoinConfig | None
+        Join configuration or ``None`` when inputs are insufficient.
+    """
+    if not key_pairs:
+        return None
+    left_cols = tuple(left_columns)
+    right_cols = tuple(right_columns)
+    left_key_seq = tuple(pair[0] for pair in key_pairs)
+    right_key_seq = tuple(pair[1] for pair in key_pairs)
+    if not set(left_key_seq).issubset(left_cols):
+        return None
+    if not set(right_key_seq).issubset(right_cols):
+        return None
+    right_out = tuple(col for col in right_output if col in right_cols)
+    if not right_out:
+        return None
+    return JoinConfig.from_sequences(
+        left_keys=left_key_seq,
+        right_keys=right_key_seq,
+        left_output=left_cols,
+        right_output=right_out,
+        output_suffix_for_right=output_suffix_for_right,
+    )
+
+
 @dataclass(frozen=True)
 class JoinConfig:
     """Join configuration for kernel-lane helpers."""
@@ -336,6 +373,7 @@ __all__ = [
     "JoinOutputSpec",
     "code_unit_meta_config",
     "interval_join_candidates",
+    "join_config_for_output",
     "join_plan",
     "join_spec",
     "join_spec_for_keys",

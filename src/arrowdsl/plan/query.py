@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,7 +20,7 @@ from arrowdsl.plan.fragments import (
     row_group_count,
     scan_task_count,
 )
-from arrowdsl.plan.ops import FilterOp, ProjectOp, ScanOp, scan_ordering_effect
+from arrowdsl.plan.ops import FilterOp, ScanOp, scan_ordering_effect
 from arrowdsl.plan.plan import Plan, PlanFactory
 from arrowdsl.plan.scan_specs import DatasetFactorySpec, ScanSpec
 from schema_spec import PROVENANCE_COLS, PROVENANCE_SOURCE_FIELDS
@@ -46,7 +46,12 @@ class QuerySpec:
     predicate: ExprSpec | None = None
     pushdown_predicate: ExprSpec | None = None
 
-    def scan_columns(self, *, provenance: bool) -> ColumnsSpec:
+    def scan_columns(
+        self,
+        *,
+        provenance: bool,
+        scan_provenance: Sequence[str] = (),
+    ) -> ColumnsSpec:
         """Return the scan column spec for Arrow scanners.
 
         Returns
@@ -64,13 +69,15 @@ class QuerySpec:
                 if not expr.is_scalar():
                     msg = f"QuerySpec.scan_columns: derived column {name!r} is not scalar-safe."
                     raise ValueError(msg)
-        if not provenance and not self.projection.derived:
+        if not provenance and not self.projection.derived and not scan_provenance:
             return list(self.projection.base)
 
         cols: dict[str, ComputeExpression] = {
             col: FieldExpr(col).to_expression() for col in self.projection.base
         }
         cols.update({name: expr.to_expression() for name, expr in self.projection.derived.items()})
+        for name in scan_provenance:
+            cols.setdefault(name, FieldExpr(name).to_expression())
 
         if provenance:
             cols.update(
@@ -131,7 +138,13 @@ class QuerySpec:
             return None
         return FilterSpec(self.pushdown_predicate)
 
-    def apply_to_plan(self, plan: Plan, *, ctx: ExecutionContext) -> Plan:
+    def apply_to_plan(
+        self,
+        plan: Plan,
+        *,
+        ctx: ExecutionContext,
+        scan_provenance: Sequence[str] = (),
+    ) -> Plan:
         """Apply filters and projections to a plan.
 
         Returns
@@ -142,7 +155,7 @@ class QuerySpec:
         predicate = self.predicate_expression()
         if predicate is not None:
             plan = plan.filter(predicate, ctx=ctx)
-        cols = self.scan_columns(provenance=ctx.provenance)
+        cols = self.scan_columns(provenance=ctx.provenance, scan_provenance=scan_provenance)
         if isinstance(cols, Mapping):
             names = list(cols.keys())
             expressions = list(cols.values())
@@ -157,6 +170,7 @@ class QuerySpec:
         dataset: ds.Dataset,
         ctx: ExecutionContext,
         label: str = "",
+        scan_provenance: Sequence[str] = (),
     ) -> Plan:
         """Compile the query spec into an Acero-backed Plan.
 
@@ -166,7 +180,10 @@ class QuerySpec:
             Plan representing the scan/filter/project pipeline.
         """
         factory = PlanFactory(ctx=ctx)
-        columns = self.scan_columns(provenance=ctx.provenance)
+        columns = self.scan_columns(
+            provenance=ctx.provenance,
+            scan_provenance=scan_provenance,
+        )
         plan = factory.scan(
             dataset,
             columns=columns,
@@ -176,13 +193,7 @@ class QuerySpec:
         predicate = self.predicate_expression()
         if predicate is not None:
             plan = factory.filter(plan, predicate)
-        if isinstance(columns, Mapping):
-            names = list(columns.keys())
-            expressions = list(columns.values())
-        else:
-            names = list(columns)
-            expressions = [pc.field(name) for name in columns]
-        return factory.project(plan, expressions=expressions, names=names)
+        return plan
 
     @staticmethod
     def simple(
@@ -233,7 +244,11 @@ def open_dataset(
 
 
 def compile_to_acero_scan(
-    dataset: ds.Dataset, *, spec: QuerySpec, ctx: ExecutionContext
+    dataset: ds.Dataset,
+    *,
+    spec: QuerySpec,
+    ctx: ExecutionContext,
+    scan_provenance: Sequence[str] = (),
 ) -> DeclarationLike:
     """Compile a scan + filter + project pipeline into an Acero Declaration.
 
@@ -245,7 +260,10 @@ def compile_to_acero_scan(
     scan_ordering = scan_ordering_effect(ctx)
     scan_op = ScanOp(
         dataset=dataset,
-        columns=spec.scan_columns(provenance=ctx.provenance),
+        columns=spec.scan_columns(
+            provenance=ctx.provenance,
+            scan_provenance=scan_provenance,
+        ),
         predicate=spec.pushdown_expression(),
         ordering_effect=scan_ordering,
     )
@@ -254,16 +272,7 @@ def compile_to_acero_scan(
     filter_spec = spec.filter_spec()
     if filter_spec is not None:
         scan = FilterOp(predicate=filter_spec.to_expression()).to_declaration([scan], ctx=ctx)
-
-    cols = spec.scan_columns(provenance=ctx.provenance)
-    if isinstance(cols, dict):
-        proj_exprs = list(cols.values())
-        proj_names = list(cols.keys())
-    else:
-        proj_exprs = [pc.field(col) for col in cols]
-        proj_names = list(cols)
-
-    return ProjectOp(expressions=proj_exprs, names=proj_names).to_declaration([scan], ctx=ctx)
+    return scan
 
 
 @dataclass(frozen=True)
@@ -272,6 +281,7 @@ class ScanTelemetry:
 
     fragment_count: int
     row_group_count: int
+    count_rows: int | None
     estimated_rows: int | None
     file_hints: tuple[str, ...] = ()
 
@@ -283,6 +293,16 @@ class ScanContext:
     dataset: ds.Dataset
     spec: QuerySpec
     ctx: ExecutionContext
+
+    def scan_provenance_columns(self) -> tuple[str, ...]:
+        """Return scan provenance columns configured by the runtime profile.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Scan provenance column names.
+        """
+        return tuple(self.ctx.runtime.scan.scan_provenance_columns)
 
     def telemetry(self) -> ScanTelemetry:
         """Return lightweight telemetry for the dataset scan.
@@ -303,10 +323,23 @@ class ScanContext:
         ds.Scanner
             Scanner configured with runtime scan options.
         """
-        columns = self.spec.scan_columns(provenance=self.ctx.provenance)
+        columns = self.spec.scan_columns(
+            provenance=self.ctx.provenance,
+            scan_provenance=self.scan_provenance_columns(),
+        )
         predicate = self.spec.pushdown_expression()
         kwargs = self.ctx.runtime.scan.scanner_kwargs()
         return self.dataset.scanner(columns=columns, filter=predicate, **kwargs)
+
+    def scan_batches(self) -> Iterable[ds.TaggedRecordBatch]:
+        """Return tagged record batches for fragment-aware debugging.
+
+        Returns
+        -------
+        Iterable[ds.TaggedRecordBatch]
+            Tagged record batch iterator.
+        """
+        return self.scanner().scan_batches()
 
     def acero_decl(self) -> DeclarationLike:
         """Compile the scan to an Acero declaration.
@@ -316,7 +349,12 @@ class ScanContext:
         DeclarationLike
             Acero declaration representing the scan.
         """
-        return compile_to_acero_scan(self.dataset, spec=self.spec, ctx=self.ctx)
+        return compile_to_acero_scan(
+            self.dataset,
+            spec=self.spec,
+            ctx=self.ctx,
+            scan_provenance=self.scan_provenance_columns(),
+        )
 
     def to_plan(self, *, label: str = "") -> Plan:
         """Compile the scan context into an Acero-backed Plan.
@@ -326,7 +364,12 @@ class ScanContext:
         Plan
             Plan representing the scan/filter/project pipeline.
         """
-        return self.spec.to_plan(dataset=self.dataset, ctx=self.ctx, label=label)
+        return self.spec.to_plan(
+            dataset=self.dataset,
+            ctx=self.ctx,
+            label=label,
+            scan_provenance=self.scan_provenance_columns(),
+        )
 
 
 def scan_context_factory(
@@ -361,6 +404,10 @@ def fragment_telemetry(
         Fragment counts and estimated row totals (when available).
     """
     fragments = list_fragments(dataset, predicate=predicate)
+    try:
+        count_rows = dataset.count_rows(filter=predicate)
+    except (AttributeError, NotImplementedError, TypeError, ValueError):
+        count_rows = None
     total_rows = 0
     estimated_rows: int | None = 0
     for fragment in fragments:
@@ -380,6 +427,7 @@ def fragment_telemetry(
     return ScanTelemetry(
         fragment_count=len(fragments),
         row_group_count=task_count,
+        count_rows=int(count_rows) if count_rows is not None else None,
         estimated_rows=estimated_rows,
         file_hints=fragment_file_hints(fragments, limit=hint_limit),
     )

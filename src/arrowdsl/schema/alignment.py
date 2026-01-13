@@ -83,6 +83,7 @@ def align_plan(
     schema: SchemaLike,
     ctx: ExecutionContext,
     keep_extra_columns: bool = False,
+    available: Sequence[str] | None = None,
 ) -> Plan:
     """Align a plan to a target schema via projection.
 
@@ -91,7 +92,7 @@ def align_plan(
     Plan
         Plan projecting/casting to the schema.
     """
-    available = plan.schema(ctx=ctx).names
+    available = plan.schema(ctx=ctx).names if available is None else available
     exprs, names = projection_for_schema(schema, available=available, safe_cast=ctx.safe_cast)
     if keep_extra_columns:
         extras = [name for name in available if name not in names]

@@ -15,7 +15,7 @@ import pyarrow as pa
 from arrowdsl.compute.expr_specs import MaskedHashExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, pc
-from arrowdsl.plan.joins import JoinConfig, left_join
+from arrowdsl.plan.joins import join_config_for_output, left_join
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.plan.rows import record_batches_from_rows
@@ -733,13 +733,13 @@ def _build_rt_signatures(
         label="rt_signatures_raw",
     )
     sig_cols = list(RT_SIGNATURE_ROWS_SCHEMA.names)
-    if "object_key" in sig_cols:
-        join_config = JoinConfig.from_sequences(
-            left_keys=("object_key",),
-            right_keys=("object_key",),
-            left_output=tuple(RT_SIGNATURE_ROWS_SCHEMA.names),
-            right_output=("rt_id",),
-        )
+    join_config = join_config_for_output(
+        left_columns=RT_SIGNATURE_ROWS_SCHEMA.names,
+        right_columns=rt_objects_key_plan.schema(ctx=exec_ctx).names,
+        key_pairs=(("object_key", "object_key"),),
+        right_output=("rt_id",),
+    )
+    if join_config is not None:
         sig_plan = left_join(
             sig_plan,
             rt_objects_key_plan,
@@ -793,13 +793,13 @@ def _build_rt_params(
         label="rt_params_raw",
     )
     param_cols = list(RT_PARAM_ROWS_SCHEMA.names)
-    if {"object_key", "signature"} <= set(param_cols):
-        join_config = JoinConfig.from_sequences(
-            left_keys=("object_key", "signature"),
-            right_keys=("object_key", "signature"),
-            left_output=tuple(RT_PARAM_ROWS_SCHEMA.names),
-            right_output=("sig_id",),
-        )
+    join_config = join_config_for_output(
+        left_columns=RT_PARAM_ROWS_SCHEMA.names,
+        right_columns=sig_meta_plan.schema(ctx=exec_ctx).names,
+        key_pairs=(("object_key", "object_key"), ("signature", "signature")),
+        right_output=("sig_id",),
+    )
+    if join_config is not None:
         param_plan = left_join(
             param_plan,
             sig_meta_plan,
@@ -845,13 +845,13 @@ def _build_rt_members(
         label="rt_members_raw",
     )
     member_cols = list(RT_MEMBER_ROWS_SCHEMA.names)
-    if "object_key" in member_cols:
-        join_config = JoinConfig.from_sequences(
-            left_keys=("object_key",),
-            right_keys=("object_key",),
-            left_output=tuple(RT_MEMBER_ROWS_SCHEMA.names),
-            right_output=("rt_id",),
-        )
+    join_config = join_config_for_output(
+        left_columns=RT_MEMBER_ROWS_SCHEMA.names,
+        right_columns=rt_objects_key_plan.schema(ctx=exec_ctx).names,
+        key_pairs=(("object_key", "object_key"),),
+        right_output=("rt_id",),
+    )
+    if join_config is not None:
         member_plan = left_join(
             member_plan,
             rt_objects_key_plan,

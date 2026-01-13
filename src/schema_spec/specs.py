@@ -4,21 +4,23 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
-from typing import Literal
+from typing import Literal, cast
 
 import arrowdsl.core.interop as pa
 from arrowdsl.compute.expr import ExprSpec
 from arrowdsl.core.interop import DataTypeLike, FieldLike, SchemaLike
 from arrowdsl.schema.arrays import list_view_type
+from arrowdsl.schema.encoding import (
+    ENCODING_DICTIONARY,
+    ENCODING_META,
+    dict_field_metadata,
+)
 from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTransform
 
 SCHEMA_META_NAME = b"schema_name"
 SCHEMA_META_VERSION = b"schema_version"
 REQUIRED_NON_NULL_META = b"required_non_null"
 KEY_FIELDS_META = b"key_fields"
-ENCODING_META = "encoding"
-ENCODING_DICTIONARY = "dictionary"
-
 DICT_STRING = pa.dictionary(pa.int32(), pa.string())
 
 PROVENANCE_COLS: tuple[str, ...] = (
@@ -100,6 +102,33 @@ class ArrowFieldSpec:
             metadata[ENCODING_META] = self.encoding
         metadata = _field_metadata(metadata)
         return pa.field(self.name, self.dtype, nullable=self.nullable, metadata=metadata)
+
+
+def dict_field(
+    name: str,
+    *,
+    index_type: DataTypeLike | None = None,
+    ordered: bool = False,
+    nullable: bool = True,
+    metadata: dict[str, str] | None = None,
+) -> ArrowFieldSpec:
+    """Return an ArrowFieldSpec configured for dictionary encoding.
+
+    Returns
+    -------
+    ArrowFieldSpec
+        Field spec configured with dictionary encoding metadata.
+    """
+    idx_type = index_type or pa.int32()
+    meta = dict_field_metadata(index_type=idx_type, ordered=ordered, metadata=metadata)
+    dict_factory = cast("Callable[..., object]", pa.dictionary)
+    dtype = cast("DataTypeLike", dict_factory(idx_type, pa.string(), ordered=ordered))
+    return ArrowFieldSpec(
+        name=name,
+        dtype=dtype,
+        nullable=nullable,
+        metadata=meta,
+    )
 
 
 @dataclass(frozen=True)
@@ -327,6 +356,7 @@ __all__ = [
     "NestedFieldSpec",
     "TableSchemaSpec",
     "call_span_bundle",
+    "dict_field",
     "file_identity_bundle",
     "list_view_type",
     "provenance_bundle",

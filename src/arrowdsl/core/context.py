@@ -99,10 +99,12 @@ class ScanProfile:
     batch_size: int | None = None
     batch_readahead: int | None = None
     fragment_readahead: int | None = None
+    fragment_scan_options: object | None = None
     use_threads: bool = True
 
     require_sequenced_output: bool = False
     implicit_ordering: bool = False
+    scan_provenance_columns: tuple[str, ...] = ()
 
     def scanner_kwargs(self) -> dict[str, object]:
         """Return kwargs for ``ds.Scanner.from_dataset``.
@@ -119,6 +121,8 @@ class ScanProfile:
             kw["batch_readahead"] = self.batch_readahead
         if self.fragment_readahead is not None:
             kw["fragment_readahead"] = self.fragment_readahead
+        if self.fragment_scan_options is not None:
+            kw["fragment_scan_options"] = self.fragment_scan_options
         return kw
 
     def scan_node_kwargs(self) -> dict[str, object]:
@@ -180,9 +184,11 @@ class RuntimeProfile:
                 batch_size=scan.batch_size,
                 batch_readahead=scan.batch_readahead,
                 fragment_readahead=scan.fragment_readahead,
+                fragment_scan_options=scan.fragment_scan_options,
                 use_threads=scan.use_threads,
                 require_sequenced_output=True,
                 implicit_ordering=True,
+                scan_provenance_columns=scan.scan_provenance_columns,
             )
         return RuntimeProfile(
             name=self.name,

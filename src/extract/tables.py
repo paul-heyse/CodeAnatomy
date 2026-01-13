@@ -12,10 +12,8 @@ from arrowdsl.plan_helpers import (
     project_columns,
     query_for_schema,
 )
-from arrowdsl.schema.schema import (
-    SchemaTransform,
-    projection_for_schema,
-)
+from arrowdsl.schema.alignment import align_plan as align_plan_to_schema
+from arrowdsl.schema.schema import SchemaTransform, projection_for_schema
 
 
 def align_table(table: TableLike, *, schema: SchemaLike) -> TableLike:
@@ -43,11 +41,17 @@ def align_plan(
     Plan
         Plan projecting/casting columns to the schema.
     """
-    if available is None:
-        available = schema.names if ctx is None else plan.schema(ctx=ctx).names
-    safe_cast = True if ctx is None else ctx.safe_cast
-    exprs, names = projection_for_schema(schema, available=available, safe_cast=safe_cast)
-    return plan.project(exprs, names, ctx=ctx)
+    if ctx is None:
+        if available is None:
+            available = schema.names
+        exprs, names = projection_for_schema(schema, available=available, safe_cast=True)
+        return plan.project(exprs, names)
+    return align_plan_to_schema(
+        plan,
+        schema=schema,
+        ctx=ctx,
+        available=available,
+    )
 
 
 __all__ = [

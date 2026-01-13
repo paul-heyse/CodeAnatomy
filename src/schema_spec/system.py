@@ -892,6 +892,22 @@ class SchemaRegistry:
 GLOBAL_SCHEMA_REGISTRY = SchemaRegistry()
 
 
+def register_dataset_spec(
+    spec: DatasetSpec,
+    *,
+    registry: SchemaRegistry | None = None,
+) -> DatasetSpec:
+    """Register a dataset spec into the provided registry.
+
+    Returns
+    -------
+    DatasetSpec
+        Registered dataset specification.
+    """
+    target = registry or GLOBAL_SCHEMA_REGISTRY
+    return target.register_dataset(spec)
+
+
 @dataclass(frozen=True)
 class ContractCatalogSpec:
     """Collection of contract specifications keyed by name."""
@@ -959,6 +975,7 @@ __all__ = [
     "make_contract_spec",
     "make_dataset_spec",
     "make_table_spec",
+    "register_dataset_spec",
     "table_spec_from_schema",
     "validate_arrow_table",
 ]

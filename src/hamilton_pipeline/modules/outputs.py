@@ -359,6 +359,7 @@ def relspec_scan_telemetry(
                 "dataset": name,
                 "fragment_count": int(telemetry.fragment_count),
                 "row_group_count": int(telemetry.row_group_count),
+                "count_rows": telemetry.count_rows,
                 "estimated_rows": telemetry.estimated_rows,
                 "file_hints": list(telemetry.file_hints),
             }

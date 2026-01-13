@@ -12,7 +12,7 @@ import pyarrow as pa
 from arrowdsl.compute.expr_specs import MaskedHashExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
 from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, pc
-from arrowdsl.plan.joins import JoinConfig, left_join
+from arrowdsl.plan.joins import join_config_for_output, left_join
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.plan.rows import plan_from_rows
@@ -854,13 +854,13 @@ def _build_symbols(
         return Plan.table_source(empty_table(SYMBOLS_SCHEMA))
     symbols_plan = plan_from_rows(symbol_rows, schema=SYMBOL_ROWS_SCHEMA, label="sym_symbols_raw")
     symbols_cols = list(SYMBOL_ROWS_SCHEMA.names)
-    if {"file_id", "scope_table_id"} <= set(symbols_cols):
-        join_config = JoinConfig.from_sequences(
-            left_keys=("file_id", "scope_table_id"),
-            right_keys=("file_id", "table_id"),
-            left_output=tuple(SYMBOL_ROWS_SCHEMA.names),
-            right_output=("scope_id",),
-        )
+    join_config = join_config_for_output(
+        left_columns=SYMBOL_ROWS_SCHEMA.names,
+        right_columns=scope_key_plan.schema(ctx=ctx).names,
+        key_pairs=(("file_id", "file_id"), ("scope_table_id", "table_id")),
+        right_output=("scope_id",),
+    )
+    if join_config is not None:
         symbols_plan = left_join(
             symbols_plan,
             scope_key_plan,
@@ -906,12 +906,15 @@ def _build_scope_edges(
         schema=SCOPE_EDGE_ROWS_SCHEMA,
         label="sym_scope_edges_raw",
     )
-    join_parent = JoinConfig.from_sequences(
-        left_keys=("file_id", "parent_table_id"),
-        right_keys=("file_id", "table_id"),
-        left_output=tuple(SCOPE_EDGE_ROWS_SCHEMA.names),
+    join_parent = join_config_for_output(
+        left_columns=SCOPE_EDGE_ROWS_SCHEMA.names,
+        right_columns=scope_key_plan.schema(ctx=ctx).names,
+        key_pairs=(("file_id", "file_id"), ("parent_table_id", "table_id")),
         right_output=("scope_id",),
     )
+    if join_parent is None:
+        msg = "Scope edge rows missing required join keys."
+        raise ValueError(msg)
     scope_edges_plan = left_join(
         scope_edges_plan,
         scope_key_plan,
@@ -927,12 +930,15 @@ def _build_scope_edges(
         ctx=ctx,
     )
     rename_parent_cols = ["parent_scope_id" if name == "scope_id" else name for name in parent_cols]
-    join_child = JoinConfig.from_sequences(
-        left_keys=("file_id", "child_table_id"),
-        right_keys=("file_id", "table_id"),
-        left_output=tuple(rename_parent_cols),
+    join_child = join_config_for_output(
+        left_columns=rename_parent_cols,
+        right_columns=scope_key_plan.schema(ctx=ctx).names,
+        key_pairs=(("file_id", "file_id"), ("child_table_id", "table_id")),
         right_output=("scope_id",),
     )
+    if join_child is None:
+        msg = "Scope edge rows missing required child join keys."
+        raise ValueError(msg)
     scope_edges_plan = left_join(
         scope_edges_plan,
         scope_key_plan,
@@ -985,12 +991,15 @@ def _build_namespace_edges(
         schema=NAMESPACE_EDGE_ROWS_SCHEMA,
         label="sym_namespace_edges_raw",
     )
-    join_scope = JoinConfig.from_sequences(
-        left_keys=("file_id", "scope_table_id"),
-        right_keys=("file_id", "table_id"),
-        left_output=tuple(NAMESPACE_EDGE_ROWS_SCHEMA.names),
+    join_scope = join_config_for_output(
+        left_columns=NAMESPACE_EDGE_ROWS_SCHEMA.names,
+        right_columns=scope_key_plan.schema(ctx=ctx).names,
+        key_pairs=(("file_id", "file_id"), ("scope_table_id", "table_id")),
         right_output=("scope_id",),
     )
+    if join_scope is None:
+        msg = "Namespace edge rows missing required scope join keys."
+        raise ValueError(msg)
     ns_edges_plan = left_join(
         ns_edges_plan,
         scope_key_plan,
@@ -999,13 +1008,16 @@ def _build_namespace_edges(
         ctx=ctx,
     )
     scope_cols = list(join_scope.left_output) + list(join_scope.right_output)
-    join_child = JoinConfig.from_sequences(
-        left_keys=("file_id", "child_table_id"),
-        right_keys=("file_id", "table_id"),
-        left_output=tuple(scope_cols),
+    join_child = join_config_for_output(
+        left_columns=scope_cols,
+        right_columns=scope_key_plan.schema(ctx=ctx).names,
+        key_pairs=(("file_id", "file_id"), ("child_table_id", "table_id")),
         right_output=("scope_id",),
         output_suffix_for_right="_child",
     )
+    if join_child is None:
+        msg = "Namespace edge rows missing required child join keys."
+        raise ValueError(msg)
     ns_edges_plan = left_join(
         ns_edges_plan,
         scope_key_plan,
@@ -1061,12 +1073,15 @@ def _build_func_parts(
     if not {"file_id", "scope_table_id"} <= set(func_parts_table.column_names):
         return Plan.table_source(empty_table(FUNC_PARTS_SCHEMA))
     func_parts_plan = Plan.table_source(func_parts_table)
-    join_config = JoinConfig.from_sequences(
-        left_keys=("file_id", "scope_table_id"),
-        right_keys=("file_id", "table_id"),
-        left_output=tuple(func_parts_table.column_names),
+    join_config = join_config_for_output(
+        left_columns=func_parts_table.column_names,
+        right_columns=scope_key_plan.schema(ctx=ctx).names,
+        key_pairs=(("file_id", "file_id"), ("scope_table_id", "table_id")),
         right_output=("scope_id",),
     )
+    if join_config is None:
+        msg = "Func parts rows missing required join keys."
+        raise ValueError(msg)
     func_parts_plan = left_join(
         func_parts_plan,
         scope_key_plan,

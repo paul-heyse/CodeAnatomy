@@ -17,7 +17,7 @@ from extract.bytecode_extract import (
     extract_bytecode_table,
 )
 from extract.cst_extract import CSTExtractOptions, extract_cst_tables
-from extract.file_context import FileContext, iter_file_contexts
+from extract.helpers import FileContext, iter_file_contexts
 from extract.repo_scan import RepoScanOptions, scan_repo
 from extract.runtime_inspect_extract import (
     RT_MEMBERS_SCHEMA,

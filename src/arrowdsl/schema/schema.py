@@ -23,8 +23,7 @@ from arrowdsl.core.interop import (
     ensure_expression,
     pc,
 )
-from arrowdsl.schema.arrays import set_or_append_column
-from arrowdsl.schema.builders import empty_table
+from arrowdsl.schema.build import empty_table, set_or_append_column
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
 

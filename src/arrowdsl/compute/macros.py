@@ -9,10 +9,9 @@ from typing import Protocol, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.compute.expr import ExprSpec, PredicateKind
+from arrowdsl.compute.expr_core import ExprSpec, PredicateKind, cast_expr
+from arrowdsl.compute.filters import ensure_expr_context_udf, ensure_position_encoding_udf
 from arrowdsl.compute.kernels import def_use_kind_array
-from arrowdsl.compute.options import cast_expr
-from arrowdsl.compute.udfs import ensure_expr_context_udf, ensure_position_encoding_udf
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,

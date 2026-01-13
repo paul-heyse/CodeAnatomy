@@ -1,18 +1,16 @@
-"""Plan source helpers for tables, readers, and datasets."""
+"""Plan scan and row ingestion helpers."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
+import pyarrow as pa
 import pyarrow.dataset as ds
+from pyarrow import fs
 
-from arrowdsl.core.context import (
-    ExecutionContext,
-    Ordering,
-    execution_context_factory,
-)
+from arrowdsl.core.context import ExecutionContext, Ordering, execution_context_factory
 from arrowdsl.core.interop import (
     ComputeExpression,
     RecordBatchReaderLike,
@@ -21,9 +19,172 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.plan.plan import Plan, PlanFactory
 from arrowdsl.plan.query import scan_context_factory
-from arrowdsl.plan.rows import plan_from_rows
-from arrowdsl.plan.scan_specs import DatasetFactorySpec, ScanSpec
+from arrowdsl.schema.build import rows_to_table as rows_to_table_factory
+from arrowdsl.schema.nested_builders import nested_array_factory
 from schema_spec.system import DatasetSpec
+
+if TYPE_CHECKING:
+    from arrowdsl.plan.query import QuerySpec
+
+
+def _record_batch_from_rows(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    schema: SchemaLike,
+) -> pa.RecordBatch:
+    arrays = [
+        nested_array_factory(field, [row.get(field.name) for row in rows]) for field in schema
+    ]
+    return pa.RecordBatch.from_arrays(arrays, schema=schema)
+
+
+def rows_to_table(rows: Sequence[Mapping[str, object]], schema: SchemaLike) -> TableLike:
+    """Build a table from row mappings or return an empty table.
+
+    Returns
+    -------
+    TableLike
+        Table constructed from rows or an empty table.
+    """
+    return rows_to_table_factory(rows, schema)
+
+
+def record_batches_from_rows(
+    rows: Iterable[Mapping[str, object]],
+    *,
+    schema: SchemaLike,
+    batch_size: int = 4096,
+) -> Iterator[pa.RecordBatch]:
+    """Yield RecordBatches from row mappings.
+
+    Yields
+    ------
+    pyarrow.RecordBatch
+        Record batches built from buffered rows.
+    """
+    buffer: list[Mapping[str, object]] = []
+    for row in rows:
+        buffer.append(row)
+        if len(buffer) >= batch_size:
+            yield _record_batch_from_rows(buffer, schema=schema)
+            buffer.clear()
+    if buffer:
+        yield _record_batch_from_rows(buffer, schema=schema)
+
+
+def reader_from_rows(
+    rows: Iterable[Mapping[str, object]],
+    *,
+    schema: SchemaLike,
+    batch_size: int = 4096,
+) -> RecordBatchReaderLike:
+    """Build a RecordBatchReader from row mappings.
+
+    Returns
+    -------
+    pyarrow.RecordBatchReader
+        Reader streaming record batches.
+    """
+    batches = record_batches_from_rows(rows, schema=schema, batch_size=batch_size)
+    return pa.RecordBatchReader.from_batches(schema, batches)
+
+
+def plan_from_rows(
+    rows: Iterable[Mapping[str, object]],
+    *,
+    schema: SchemaLike,
+    batch_size: int = 4096,
+    label: str = "",
+) -> Plan:
+    """Create a Plan from row mappings via a RecordBatchReader.
+
+    Returns
+    -------
+    Plan
+        Plan backed by a record batch reader.
+    """
+    reader = reader_from_rows(rows, schema=schema, batch_size=batch_size)
+    return Plan.from_reader(reader, label=label)
+
+
+@dataclass(frozen=True)
+class DatasetFactorySpec:
+    """Specification for deterministic dataset discovery."""
+
+    root: str
+    format: ds.FileFormat
+    filesystem: fs.FileSystem | None = None
+    partition_base_dir: str | None = None
+    exclude_invalid_files: bool = False
+    selector_ignore_prefixes: Sequence[str] | None = None
+    promote_options: str = "permissive"
+    recursive: bool = True
+
+    def build(self, *, schema: SchemaLike | None = None) -> ds.Dataset:
+        """Build a dataset using a factory-driven discovery path.
+
+        Returns
+        -------
+        ds.Dataset
+            Dataset instance discovered by the factory.
+        """
+        filesystem = self.filesystem or fs.LocalFileSystem()
+        selector = fs.FileSelector(self.root, recursive=self.recursive)
+        options = ds.FileSystemFactoryOptions(
+            partition_base_dir=self.partition_base_dir,
+            exclude_invalid_files=self.exclude_invalid_files,
+            selector_ignore_prefixes=list(self.selector_ignore_prefixes or [".", "_"]),
+        )
+        factory = ds.FileSystemDatasetFactory(
+            filesystem=filesystem,
+            paths_or_selector=selector,
+            format=self.format,
+            options=options,
+        )
+        inspected = factory.inspect(promote_options=self.promote_options)
+        return factory.finish(schema=schema or inspected)
+
+
+@dataclass(frozen=True)
+class ScanSpec:
+    """Bundle a dataset source with a query spec."""
+
+    dataset: ds.Dataset | DatasetFactorySpec
+    query: QuerySpec
+
+    def open_dataset(self, *, schema: SchemaLike | None = None) -> ds.Dataset:
+        """Return a dataset for scanning.
+
+        Returns
+        -------
+        ds.Dataset
+            Dataset instance for scanning.
+        """
+        if isinstance(self.dataset, DatasetFactorySpec):
+            return self.dataset.build(schema=schema)
+        return self.dataset
+
+    def to_plan(
+        self,
+        *,
+        ctx: ExecutionContext,
+        schema: SchemaLike | None = None,
+        label: str = "",
+    ) -> Plan:
+        """Compile the scan spec into an Acero-backed Plan.
+
+        Returns
+        -------
+        Plan
+            Plan representing the scan/filter/project pipeline.
+        """
+        dataset = self.open_dataset(schema=schema)
+        return self.query.to_plan(
+            dataset=dataset,
+            ctx=ctx,
+            label=label,
+            scan_provenance=ctx.runtime.scan.scan_provenance_columns,
+        )
 
 
 @dataclass(frozen=True)
@@ -210,12 +371,18 @@ def plan_from_scan_columns(
 
 
 __all__ = [
+    "DatasetFactorySpec",
     "DatasetSource",
     "InMemoryDatasetSource",
     "PlanSource",
     "RowSource",
+    "ScanSpec",
     "plan_from_dataset",
+    "plan_from_rows",
     "plan_from_scan_columns",
     "plan_from_source",
     "plan_from_source_profile",
+    "reader_from_rows",
+    "record_batches_from_rows",
+    "rows_to_table",
 ]

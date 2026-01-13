@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_specs import (
+from arrowdsl.compute.expr_core import (
     CoalesceStringExprSpec,
     DefUseKindExprSpec,
     HashExprSpec,
@@ -13,10 +13,10 @@ from arrowdsl.compute.expr_specs import (
     TrimExprSpec,
 )
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
-from arrowdsl.schema.arrays import FieldExpr, struct_type
+from arrowdsl.schema.build import FieldExpr, struct_type
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from arrowdsl.spec.factories import DatasetRegistration, register_dataset
-from normalize.hash_specs import (
+from arrowdsl.spec.infra import DatasetRegistration, register_dataset
+from normalize.utils import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
     REACH_EDGE_ID_SPEC,

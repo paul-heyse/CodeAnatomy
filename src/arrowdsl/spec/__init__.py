@@ -19,7 +19,6 @@ from arrowdsl.spec.codec import (
     parse_sort_order,
     parse_string_tuple,
 )
-from arrowdsl.spec.core import SpecTableSpec
 from arrowdsl.spec.expr_ir import (
     EXPR_NODE_SCHEMA,
     ExprIR,
@@ -28,6 +27,17 @@ from arrowdsl.spec.expr_ir import (
     expr_ir_from_table,
     expr_ir_table,
     expr_spec_from_json,
+)
+from arrowdsl.spec.infra import (
+    DATASET_REF_STRUCT,
+    DEDUPE_STRUCT,
+    SCALAR_UNION_FIELDS,
+    SCALAR_UNION_TYPE,
+    SORT_KEY_STRUCT,
+    VALIDATION_STRUCT,
+    SpecTableSpec,
+    SpecValidationRule,
+    SpecValidationSuite,
 )
 from arrowdsl.spec.io import (
     read_spec_table,
@@ -38,16 +48,7 @@ from arrowdsl.spec.io import (
     write_spec_table,
     write_spec_values,
 )
-from arrowdsl.spec.structs import (
-    DATASET_REF_STRUCT,
-    DEDUPE_STRUCT,
-    SCALAR_UNION_FIELDS,
-    SCALAR_UNION_TYPE,
-    SORT_KEY_STRUCT,
-    VALIDATION_STRUCT,
-)
 from arrowdsl.spec.tables.base import SpecTableCodec
-from arrowdsl.spec.validators import SpecValidationRule, SpecValidationSuite
 
 __all__ = [
     "DATASET_REF_STRUCT",

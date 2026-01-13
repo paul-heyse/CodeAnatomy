@@ -7,14 +7,10 @@ from dataclasses import dataclass, field, replace
 from typing import Literal, cast
 
 import arrowdsl.core.interop as pa
-from arrowdsl.compute.expr import ExprSpec
+from arrowdsl.compute.expr_core import ExprSpec
 from arrowdsl.core.interop import DataTypeLike, FieldLike, SchemaLike
-from arrowdsl.schema.arrays import list_view_type
-from arrowdsl.schema.encoding import (
-    ENCODING_DICTIONARY,
-    ENCODING_META,
-    dict_field_metadata,
-)
+from arrowdsl.schema.build import list_view_type
+from arrowdsl.schema.metadata import ENCODING_DICTIONARY, ENCODING_META, dict_field_metadata
 from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTransform
 
 SCHEMA_META_NAME = b"schema_name"

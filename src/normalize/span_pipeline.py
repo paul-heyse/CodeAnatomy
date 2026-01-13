@@ -7,9 +7,15 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.schema.arrays import ColumnDefaultsSpec, ConstExpr, FieldExpr, set_or_append_column
-from arrowdsl.schema.encoding import normalize_dictionaries
-from arrowdsl.schema.factories import empty_table, rows_to_table
+from arrowdsl.schema.build import (
+    ColumnDefaultsSpec,
+    ConstExpr,
+    FieldExpr,
+    empty_table,
+    rows_to_table,
+    set_or_append_column,
+)
+from arrowdsl.schema.metadata import normalize_dictionaries
 from normalize.schemas import SPAN_ERROR_SCHEMA
 
 

@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
+from arrowdsl.compute.filters import bitmask_is_set_expr
 from arrowdsl.compute.macros import null_expr, scalar_expr
-from arrowdsl.compute.predicates import bitmask_is_set_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
 from arrowdsl.plan.joins import JoinOutputSpec, join_spec
@@ -22,7 +22,7 @@ from cpg.kinds_ultimate import (
     SCIP_ROLE_WRITE,
     EdgeKind,
 )
-from cpg.plan_helpers import set_or_append_column
+from cpg.plan_specs import set_or_append_column
 from cpg.specs import EdgeEmitSpec
 
 type RelationBuilder = Callable[[PlanCatalog, ExecutionContext], Plan | None]

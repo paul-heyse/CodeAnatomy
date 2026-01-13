@@ -34,7 +34,6 @@ from normalize.diagnostics import (
     collect_diags_streamable,
     diagnostics_post_step,
 )
-from normalize.ids import add_span_id_column, span_id, stable_id, stable_int64
 from normalize.runner import (
     ensure_canonical,
     run_normalize,
@@ -82,6 +81,7 @@ from normalize.types import (
     type_nodes_plan_from_exprs,
     type_nodes_plan_from_scip,
 )
+from normalize.utils import add_span_id_column, span_id, stable_id, stable_int64
 
 __all__ = [
     "CFG_BLOCKS_QUERY",

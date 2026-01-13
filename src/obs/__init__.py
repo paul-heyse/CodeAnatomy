@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from arrowdsl.plan.metrics import column_stats_table, dataset_stats_table, table_summary
+from arrowdsl.schema.schema import schema_fingerprint
 from obs.manifest import (
     DatasetRecord,
     Manifest,
@@ -17,12 +19,6 @@ from obs.repro import (
     serialize_relationship_registry,
     try_get_git_info,
     write_run_bundle,
-)
-from obs.stats import (
-    column_stats_table,
-    dataset_stats_table,
-    schema_fingerprint,
-    table_summary,
 )
 
 __all__ = [

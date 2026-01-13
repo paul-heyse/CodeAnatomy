@@ -20,7 +20,7 @@ from arrowdsl.spec.codec import (
     parse_sort_order,
     parse_string_tuple,
 )
-from arrowdsl.spec.structs import DEDUPE_STRUCT, SORT_KEY_STRUCT, VALIDATION_STRUCT
+from arrowdsl.spec.infra import DEDUPE_STRUCT, SORT_KEY_STRUCT, VALIDATION_STRUCT
 from schema_spec.specs import (
     DICT_STRING,
     ArrowFieldSpec,

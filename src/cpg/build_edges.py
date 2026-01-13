@@ -8,12 +8,12 @@ from dataclasses import dataclass
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import Table, TableLike
 from arrowdsl.plan.plan import Plan, union_all_plans
-from arrowdsl.plan.source import DatasetSource
+from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.schema import EncodingSpec
-from cpg.artifacts import CpgBuildArtifacts
 from cpg.catalog import PlanCatalog
+from cpg.constants import CpgBuildArtifacts, QualityPlanSpec, quality_plan_from_ids
 from cpg.emit_edges import emit_edges_plan
-from cpg.plan_helpers import (
+from cpg.plan_specs import (
     align_plan,
     assert_schema_metadata,
     empty_plan,
@@ -22,7 +22,6 @@ from cpg.plan_helpers import (
     finalize_context_for_plan,
     finalize_plan,
 )
-from cpg.quality import QualityPlanSpec, quality_plan_from_ids
 from cpg.relations import EDGE_RELATION_SPECS
 from cpg.schemas import CPG_EDGES_SCHEMA, CPG_EDGES_SPEC
 

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
 
-from arrowdsl.compute.expr import ScalarValue
+from arrowdsl.compute.expr_core import ScalarValue
 from arrowdsl.plan.joins import JoinOutputSpec, join_spec
 from arrowdsl.plan.ops import DedupeSpec, JoinSpec, JoinType, SortKey
 from arrowdsl.plan.query import QuerySpec

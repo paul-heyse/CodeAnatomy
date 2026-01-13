@@ -19,18 +19,16 @@ from libcst.metadata import (
     QualifiedNameProvider,
 )
 
-from arrowdsl.compute.expr_specs import MaskedHashExprSpec
+from arrowdsl.compute.expr_core import MaskedHashExprSpec
 from arrowdsl.compute.macros import normalize_string_items
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
-from arrowdsl.plan.rows import plan_from_rows
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
+from arrowdsl.plan.scan_io import plan_from_rows
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from arrowdsl.schema.structs import flatten_struct_field
-from extract.common import bytes_from_file_ctx, file_identity_row, iter_contexts
-from extract.file_context import FileContext
 from extract.hash_specs import (
     CST_CALL_ID_SPEC,
     CST_CONTAINER_DEF_ID_SPEC,
@@ -40,15 +38,19 @@ from extract.hash_specs import (
     CST_OWNER_DEF_ID_SPEC,
     CST_TYPE_EXPR_ID_SPEC,
 )
-from extract.spec_helpers import (
+from extract.helpers import (
     DatasetRegistration,
+    FileContext,
+    align_plan,
+    bytes_from_file_ctx,
+    file_identity_row,
     infer_ordering_keys,
+    iter_contexts,
     merge_metadata_specs,
     options_metadata_spec,
     ordering_metadata_spec,
     register_dataset,
 )
-from extract.tables import align_plan
 from schema_spec.specs import (
     ArrowFieldSpec,
     call_span_bundle,

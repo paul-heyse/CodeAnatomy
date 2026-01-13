@@ -10,7 +10,7 @@ from relspec.compiler import CompiledOutput
 from relspec.registry import ContractCatalog, DatasetLocation, RelationshipRegistry
 
 if TYPE_CHECKING:
-    from arrowdsl.plan.source import DatasetSource
+    from arrowdsl.plan.scan_io import DatasetSource
 
 
 @dataclass(frozen=True)

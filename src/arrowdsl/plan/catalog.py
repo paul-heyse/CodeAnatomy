@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.source import PlanSource, plan_from_source
+from arrowdsl.plan.scan_io import PlanSource, plan_from_source
 
 TableGetter = Callable[[Mapping[str, TableLike]], TableLike | None]
 TableDeriver = Callable[["TableCatalog", ExecutionContext], TableLike | None]

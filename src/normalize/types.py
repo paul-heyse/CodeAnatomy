@@ -7,7 +7,7 @@ from typing import cast
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_specs import HashExprSpec, trimmed_non_empty_expr
+from arrowdsl.compute.expr_core import HashExprSpec, trimmed_non_empty_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, ensure_expression, pc
 from arrowdsl.finalize.finalize import FinalizeResult
@@ -15,8 +15,6 @@ from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.runner import run_plan
 from arrowdsl.plan_helpers import project_to_schema
 from arrowdsl.schema.schema import empty_table
-from normalize.hash_specs import TYPE_ID_SPEC
-from normalize.plan_helpers import PlanSource, plan_source, project_columns
 from normalize.runner import (
     ensure_canonical,
     ensure_execution_context,
@@ -32,6 +30,7 @@ from normalize.schemas import (
     TYPE_NODES_SCHEMA,
     TYPE_NODES_SPEC,
 )
+from normalize.utils import TYPE_ID_SPEC, PlanSource, plan_source, project_columns
 
 _BASE_TYPE_EXPR_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
     ("file_id", pa.string()),

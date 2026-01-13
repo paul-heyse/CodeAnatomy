@@ -10,16 +10,15 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_array_values
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike
 from arrowdsl.plan.plan import Plan, union_all_plans
-from arrowdsl.plan.source import DatasetSource
-from arrowdsl.schema.arrays import const_array, set_or_append_column
-from arrowdsl.schema.builders import table_from_arrays
-from arrowdsl.schema.encoding import normalize_dictionaries
+from arrowdsl.plan.scan_io import DatasetSource
+from arrowdsl.schema.build import const_array, set_or_append_column, table_from_arrays
+from arrowdsl.schema.metadata import normalize_dictionaries
 from arrowdsl.schema.schema import EncodingSpec
 from arrowdsl.spec.tables.cpg import node_plan_specs_from_table
-from cpg.artifacts import CpgBuildArtifacts
 from cpg.catalog import PlanCatalog, resolve_plan_source
+from cpg.constants import CpgBuildArtifacts, QualityPlanSpec, quality_plan_from_ids
 from cpg.emit_nodes import emit_node_plan
-from cpg.plan_helpers import (
+from cpg.plan_specs import (
     align_plan,
     assert_schema_metadata,
     empty_plan,
@@ -29,7 +28,6 @@ from cpg.plan_helpers import (
     finalize_context_for_plan,
     finalize_plan,
 )
-from cpg.quality import QualityPlanSpec, quality_plan_from_ids
 from cpg.schemas import CPG_NODES_SCHEMA, CPG_NODES_SPEC
 from cpg.spec_registry import node_plan_specs
 from cpg.specs import NodePlanSpec, resolve_preprocessor

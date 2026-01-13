@@ -26,7 +26,7 @@ from arrowdsl.spec.io import (
 )
 
 if TYPE_CHECKING:
-    from arrowdsl.spec.core import SpecTableSpec
+    from arrowdsl.spec.infra import SpecTableSpec
 
 
 @dataclass(frozen=True)

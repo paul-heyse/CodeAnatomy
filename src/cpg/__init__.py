@@ -1,9 +1,9 @@
 """CPG builders, schemas, and kind enums."""
 
-from cpg.artifacts import CpgBuildArtifacts
 from cpg.build_edges import EdgeBuildOptions, build_cpg_edges, build_cpg_edges_raw
 from cpg.build_nodes import NodeBuildOptions, build_cpg_nodes, build_cpg_nodes_raw
 from cpg.build_props import PropsBuildOptions, build_cpg_props, build_cpg_props_raw
+from cpg.constants import CpgBuildArtifacts
 from cpg.kinds_ultimate import (
     EdgeKind,
     EntityKind,

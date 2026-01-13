@@ -16,10 +16,15 @@ from arrowdsl.io.parquet import (
     write_finalize_result_parquet,
     write_named_datasets_parquet,
 )
+from arrowdsl.plan.metrics import (
+    column_stats_table,
+    dataset_stats_table,
+    empty_scan_telemetry_table,
+    scan_telemetry_table,
+)
 from arrowdsl.plan.query import open_dataset
-from arrowdsl.plan.stats import empty_scan_telemetry_table, scan_telemetry_table
 from core_types import JsonDict
-from cpg.artifacts import CpgBuildArtifacts
+from cpg.constants import CpgBuildArtifacts
 from hamilton_pipeline.pipeline_types import (
     CpgOutputTables,
     OutputConfig,
@@ -29,10 +34,9 @@ from hamilton_pipeline.pipeline_types import (
     RelspecSnapshots,
     RepoScanConfig,
 )
-from normalize.encoding import encoding_policy_from_schema
+from normalize.utils import encoding_policy_from_schema
 from obs.manifest import ManifestContext, ManifestData, build_manifest, write_manifest_json
 from obs.repro import RunBundleContext, write_run_bundle
-from obs.stats import column_stats_table, dataset_stats_table
 from relspec.compiler import CompiledOutput
 from relspec.registry import ContractCatalog, DatasetLocation, RelationshipRegistry
 from schema_spec.system import dataset_spec_from_schema, make_dataset_spec

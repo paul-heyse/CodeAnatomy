@@ -13,7 +13,7 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import HashSpec, hash_column_values, iter_array_values
 from arrowdsl.core.interop import ArrayLike, DataTypeLike, SchemaLike, TableLike, pc
 from arrowdsl.plan.ops import DedupeSpec, SortKey
-from arrowdsl.schema.arrays import (
+from arrowdsl.schema.build import (
     ColumnDefaultsSpec,
     ConstExpr,
     build_list,

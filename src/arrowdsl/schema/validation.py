@@ -20,7 +20,7 @@ from arrowdsl.core.interop import (
     pc,
 )
 from arrowdsl.plan.plan import Plan
-from arrowdsl.schema.constraints import (
+from arrowdsl.schema.ops import (
     missing_key_fields,
     required_field_names,
     required_non_null_mask,

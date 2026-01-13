@@ -9,9 +9,10 @@ from typing import TYPE_CHECKING
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.json_factory import JsonPolicy, dump_path
+from arrowdsl.plan.metrics import table_summary
+from arrowdsl.schema.schema import schema_fingerprint
 from core_types import JsonDict, PathLike, ensure_path
 from obs.repro import collect_repro_info
-from obs.stats import schema_fingerprint, table_summary
 
 if TYPE_CHECKING:
     from relspec.model import RelationshipRule

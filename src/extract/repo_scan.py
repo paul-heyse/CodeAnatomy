@@ -13,24 +13,24 @@ from typing import Literal, overload
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_specs import HashExprSpec
+from arrowdsl.compute.expr_core import HashExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
-from arrowdsl.plan.rows import plan_from_rows
 from arrowdsl.plan.runner import run_plan
+from arrowdsl.plan.scan_io import plan_from_rows
 from arrowdsl.schema.schema import empty_table
 from core_types import PathLike, ensure_path
 from extract.hash_specs import repo_file_id_spec
-from extract.spec_helpers import (
+from extract.helpers import (
     DatasetRegistration,
+    align_plan,
     merge_metadata_specs,
     options_metadata_spec,
     ordering_metadata_spec,
     register_dataset,
 )
-from extract.tables import align_plan
 from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
 
 SCHEMA_VERSION = 1

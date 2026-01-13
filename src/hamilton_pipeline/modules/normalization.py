@@ -14,8 +14,7 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import prefixed_hash_id
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
 from arrowdsl.plan.joins import JoinConfig, left_join
-from arrowdsl.schema.arrays import set_or_append_column
-from arrowdsl.schema.factories import empty_table, table_from_arrays
+from arrowdsl.schema.build import empty_table, set_or_append_column, table_from_arrays
 from normalize.bytecode_anchor import anchor_instructions
 from normalize.bytecode_cfg import build_cfg_blocks, build_cfg_edges
 from normalize.bytecode_dfg import build_def_use_events, run_reaching_defs

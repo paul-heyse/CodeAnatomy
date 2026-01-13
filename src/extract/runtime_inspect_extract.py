@@ -12,31 +12,32 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_specs import MaskedHashExprSpec
+from arrowdsl.compute.expr_core import MaskedHashExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, pc
 from arrowdsl.plan.joins import join_config_for_output, left_join
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
-from arrowdsl.plan.rows import record_batches_from_rows
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
+from arrowdsl.plan.scan_io import record_batches_from_rows
+from arrowdsl.schema.ops import unify_tables
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
-from arrowdsl.schema.unify import unify_tables
 from extract.hash_specs import (
     RT_MEMBER_ID_SPEC,
     RT_OBJECT_ID_SPEC,
     RT_PARAM_ID_SPEC,
     RT_SIGNATURE_ID_SPEC,
 )
-from extract.spec_helpers import (
+from extract.helpers import (
     DatasetRegistration,
+    align_plan,
     infer_ordering_keys,
     merge_metadata_specs,
     options_metadata_spec,
     ordering_metadata_spec,
+    project_columns,
     register_dataset,
 )
-from extract.tables import align_plan, project_columns
 from schema_spec.specs import ArrowFieldSpec
 
 SCHEMA_VERSION = 1

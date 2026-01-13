@@ -13,7 +13,6 @@ from arrowdsl.plan.joins import JoinOutputSpec, join_plan, join_spec
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan_helpers import project_to_schema
 from arrowdsl.schema.schema import empty_table
-from normalize.plan_helpers import PlanSource, plan_source
 from normalize.runner import (
     ensure_canonical,
     ensure_execution_context,
@@ -29,6 +28,7 @@ from normalize.schemas import (
     REACHES_SCHEMA,
     REACHES_SPEC,
 )
+from normalize.utils import PlanSource, plan_source
 
 _EVENT_INPUT_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
     ("file_id", pa.string()),

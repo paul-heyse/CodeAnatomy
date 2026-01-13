@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from arrowdsl.compute.masks import valid_mask_array, valid_mask_expr, valid_mask_for_columns
+from arrowdsl.compute.filters import valid_mask_array, valid_mask_expr, valid_mask_for_columns
 from arrowdsl.core.ids import (
     HashSpec,
     hash64_from_arrays,
@@ -26,7 +26,7 @@ from arrowdsl.core.interop import (
     ensure_expression,
     pc,
 )
-from arrowdsl.schema.arrays import set_or_append_column
+from arrowdsl.schema.build import set_or_append_column
 
 
 def masked_hash_expr(

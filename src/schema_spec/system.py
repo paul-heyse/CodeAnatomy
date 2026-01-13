@@ -11,7 +11,7 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 import pyarrow.types as patypes
 
-from arrowdsl.compute.expr import ExprSpec
+from arrowdsl.compute.expr_core import ExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel
 from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeContext
@@ -19,12 +19,14 @@ from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import PathLike, ProjectionSpec, QuerySpec, ScanContext, open_dataset
 from arrowdsl.plan.runner import run_plan
-from arrowdsl.plan.source import DatasetSource, PlanSource, plan_from_dataset, plan_from_source
-from arrowdsl.schema.encoding import encoding_policy_from_spec
+from arrowdsl.plan.scan_io import DatasetSource, PlanSource, plan_from_dataset, plan_from_source
 from arrowdsl.schema.metadata import (
+    encoding_policy_from_spec,
     merge_metadata_specs,
     metadata_spec_from_schema,
     ordering_metadata_spec,
+    schema_constraints_from_metadata,
+    schema_identity_from_metadata,
 )
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import (
@@ -32,10 +34,6 @@ from arrowdsl.schema.schema import (
     EncodingPolicy,
     SchemaEvolutionSpec,
     SchemaMetadataSpec,
-)
-from arrowdsl.schema.spec_roundtrip import (
-    schema_constraints_from_metadata,
-    schema_identity_from_metadata,
 )
 from arrowdsl.schema.validation import (
     ArrowValidationOptions,

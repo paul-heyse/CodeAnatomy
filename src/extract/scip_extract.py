@@ -27,25 +27,24 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
-from arrowdsl.plan.rows import plan_from_rows
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
+from arrowdsl.plan.scan_io import plan_from_rows
 from arrowdsl.plan_helpers import encoding_columns_from_metadata, encoding_projection
-from arrowdsl.schema.arrays import set_or_append_column, struct_array_from_dicts
-from arrowdsl.schema.builders import table_from_arrays
+from arrowdsl.schema.build import set_or_append_column, struct_array_from_dicts, table_from_arrays
 from arrowdsl.schema.nested_builders import LargeListAccumulator
+from arrowdsl.schema.ops import unify_tables
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
-from arrowdsl.schema.unify import unify_tables
-from extract.scip_parse_json import parse_index_json
-from extract.scip_proto_loader import load_scip_pb2_from_build
-from extract.spec_helpers import (
+from extract.helpers import (
     DatasetRegistration,
+    align_plan,
     infer_ordering_keys,
     merge_metadata_specs,
     options_metadata_spec,
     ordering_metadata_spec,
     register_dataset,
 )
-from extract.tables import align_plan
+from extract.scip_parse_json import parse_index_json
+from extract.scip_proto_loader import load_scip_pb2_from_build
 from schema_spec.specs import ArrowFieldSpec, NestedFieldSpec, scip_range_bundle
 
 SCHEMA_VERSION = 1

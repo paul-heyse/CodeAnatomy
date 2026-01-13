@@ -9,13 +9,13 @@ import pyarrow as pa
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.plan.plan import Plan, union_all_plans
-from arrowdsl.plan.source import DatasetSource
+from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.schema import EncodingSpec
 from arrowdsl.spec.tables.cpg import prop_table_specs_from_table
-from cpg.artifacts import CpgBuildArtifacts
 from cpg.catalog import PlanCatalog, resolve_plan_source
+from cpg.constants import CpgBuildArtifacts, QualityPlanSpec, quality_plan_from_ids
 from cpg.emit_props import emit_props_plans, filter_fields
-from cpg.plan_helpers import (
+from cpg.plan_specs import (
     align_plan,
     assert_schema_metadata,
     empty_plan,
@@ -24,7 +24,6 @@ from cpg.plan_helpers import (
     finalize_context_for_plan,
     finalize_plan,
 )
-from cpg.quality import QualityPlanSpec, quality_plan_from_ids
 from cpg.schemas import CPG_PROPS_SCHEMA, CPG_PROPS_SPEC, SCHEMA_VERSION
 from cpg.spec_registry import edge_prop_spec, prop_table_specs, scip_role_flag_prop_spec
 from cpg.specs import PropTableSpec, resolve_prop_include

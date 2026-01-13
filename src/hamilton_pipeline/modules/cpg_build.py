@@ -16,10 +16,10 @@ from arrowdsl.io.parquet import (
     write_named_datasets_parquet,
 )
 from arrowdsl.schema.schema import empty_table
-from cpg.artifacts import CpgBuildArtifacts
 from cpg.build_edges import EdgeBuildInputs, build_cpg_edges
 from cpg.build_nodes import NodeInputTables, build_cpg_nodes
 from cpg.build_props import PropsInputTables, build_cpg_props
+from cpg.constants import CpgBuildArtifacts
 from cpg.schemas import register_cpg_specs
 from hamilton_pipeline.pipeline_types import (
     CpgBaseInputs,
@@ -35,7 +35,7 @@ from hamilton_pipeline.pipeline_types import (
     TreeSitterInputs,
     TypeInputs,
 )
-from normalize.encoding import encoding_policy_from_schema
+from normalize.utils import encoding_policy_from_schema
 from relspec.compiler import (
     CompiledOutput,
     FilesystemPlanResolver,
@@ -73,7 +73,7 @@ from schema_spec.system import (
 )
 
 if TYPE_CHECKING:
-    from arrowdsl.plan.source import DatasetSource
+    from arrowdsl.plan.scan_io import DatasetSource
 
 # -----------------------------
 # Relationship contracts

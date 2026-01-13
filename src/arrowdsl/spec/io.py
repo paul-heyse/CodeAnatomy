@@ -12,7 +12,7 @@ import pyarrow as pa
 from pyarrow import ipc
 
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.schema.builders import table_from_rows as build_table_from_rows
+from arrowdsl.schema.build import table_from_rows as build_table_from_rows
 
 if TYPE_CHECKING:
     from arrowdsl.spec.tables.base import SpecTableCodec

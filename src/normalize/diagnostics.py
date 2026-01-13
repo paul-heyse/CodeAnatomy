@@ -7,7 +7,7 @@ from typing import cast
 
 import pyarrow as pa
 
-from arrowdsl.compute.udfs import position_encoding_array
+from arrowdsl.compute.filters import position_encoding_array
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, pc
@@ -15,9 +15,8 @@ from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan.runner import run_plan
 from arrowdsl.plan_helpers import column_or_null_expr
-from arrowdsl.schema.builders import column_or_null, table_from_arrays
-from arrowdsl.schema.encoding import normalize_dictionaries
-from arrowdsl.schema.factories import empty_table
+from arrowdsl.schema.build import column_or_null, empty_table, table_from_arrays
+from arrowdsl.schema.metadata import normalize_dictionaries
 from arrowdsl.schema.nested_builders import StructLargeListViewAccumulator
 from normalize.runner import (
     PostFn,

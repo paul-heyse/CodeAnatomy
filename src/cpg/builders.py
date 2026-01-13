@@ -8,10 +8,9 @@ from typing import cast
 
 import pyarrow as pa
 
+from arrowdsl.compute.filters import FilterSpec, predicate_spec, valid_mask_array
 from arrowdsl.compute.ids import prefixed_hash_id
 from arrowdsl.compute.kernels import ChunkPolicy
-from arrowdsl.compute.masks import valid_mask_array
-from arrowdsl.compute.predicates import FilterSpec, predicate_spec
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import (
@@ -23,19 +22,19 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.json_factory import JsonPolicy, dumps_text
 from arrowdsl.plan.runner import run_plan
-from arrowdsl.schema.arrays import const_array
-from arrowdsl.schema.builders import (
+from arrowdsl.schema.build import (
+    const_array,
     maybe_dictionary,
     pick_first,
     resolve_float_col,
     resolve_string_col,
+    rows_to_table,
     table_from_arrays,
     table_from_schema,
 )
-from arrowdsl.schema.factories import rows_to_table
 from cpg.catalog import PlanCatalog, PlanSource, resolve_plan_source
 from cpg.kinds_ultimate import EntityKind
-from cpg.plan_helpers import ensure_plan
+from cpg.plan_specs import ensure_plan
 from cpg.specs import (
     EdgeEmitSpec,
     EdgePlanSpec,

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrowdsl.compute.predicates import bitmask_is_set_expr
+from arrowdsl.compute.filters import bitmask_is_set_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
 from arrowdsl.plan import catalog as plan_catalog
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan_helpers import coalesce_expr
-from cpg.plan_helpers import set_or_append_column
-from cpg.role_flags import ROLE_FLAG_SPECS
+from cpg.constants import ROLE_FLAG_SPECS
+from cpg.plan_specs import set_or_append_column
 
 PlanCatalog = plan_catalog.PlanCatalog
 PlanDeriver = plan_catalog.PlanDeriver

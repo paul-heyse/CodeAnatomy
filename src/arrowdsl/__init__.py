@@ -1,6 +1,6 @@
 """Arrow-based DSL for building inference-driven datasets (Acero + compute + contracts)."""
 
-from arrowdsl.compute.expr_specs import HashExprSpec, MaskedHashExprSpec, TrimExprSpec
+from arrowdsl.compute.expr_core import HashExprSpec, MaskedHashExprSpec, TrimExprSpec
 from arrowdsl.compute.kernels import (
     apply_dedupe,
     canonical_sort,
@@ -34,7 +34,7 @@ from arrowdsl.plan.runner import (
     run_plan_bundle,
     run_plan_streamable,
 )
-from arrowdsl.plan.source import DatasetSource, PlanSource, plan_from_source
+from arrowdsl.plan.scan_io import DatasetSource, PlanSource, plan_from_source
 from arrowdsl.schema.metadata import options_metadata_spec, ordering_metadata_spec
 
 __all__ = [

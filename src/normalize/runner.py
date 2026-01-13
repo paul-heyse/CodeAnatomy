@@ -17,9 +17,9 @@ from arrowdsl.plan.plan import Plan, PlanSpec
 from arrowdsl.plan.runner import PlanRunResult, run_plan
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from normalize.encoding import encoding_policy_from_schema
-from normalize.plan_helpers import (
+from normalize.utils import (
     PlanSource,
+    encoding_policy_from_schema,
     finalize_plan,
     finalize_plan_result,
     plan_source,

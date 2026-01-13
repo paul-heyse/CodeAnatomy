@@ -9,12 +9,12 @@ from pathlib import Path
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 
-from arrowdsl.compute.expr import ExprSpec
+from arrowdsl.compute.expr_core import ExprSpec
+from arrowdsl.compute.filters import FilterSpec
 from arrowdsl.compute.macros import FieldExpr
-from arrowdsl.compute.predicates import FilterSpec
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, DeclarationLike, SchemaLike, pc
-from arrowdsl.plan.fragments import (
+from arrowdsl.plan.metrics import (
     fragment_file_hints,
     list_fragments,
     row_group_count,
@@ -22,7 +22,7 @@ from arrowdsl.plan.fragments import (
 )
 from arrowdsl.plan.ops import FilterOp, ScanOp, scan_ordering_effect
 from arrowdsl.plan.plan import Plan, PlanFactory
-from arrowdsl.plan.scan_specs import DatasetFactorySpec, ScanSpec
+from arrowdsl.plan.scan_io import DatasetFactorySpec, ScanSpec
 from schema_spec import PROVENANCE_COLS, PROVENANCE_SOURCE_FIELDS
 
 type PathLike = str | Path

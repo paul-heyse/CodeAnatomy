@@ -5,9 +5,9 @@ from __future__ import annotations
 import arrowdsl.core.interop as pa
 from arrowdsl.core.context import ExecutionContext, RuntimeProfile
 from arrowdsl.core.interop import TableLike
-from normalize.plan_helpers import encoding_columns_from_metadata
 from normalize.schemas import DIAG_SCHEMA
 from normalize.types import normalize_type_exprs_result
+from normalize.utils import encoding_columns_from_metadata
 
 
 def _ctx() -> ExecutionContext:

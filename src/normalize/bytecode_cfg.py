@@ -11,7 +11,6 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan_helpers import code_unit_meta_join, column_or_null_expr, project_to_schema
-from normalize.plan_helpers import PlanSource, plan_source
 from normalize.runner import (
     ensure_canonical,
     ensure_execution_context,
@@ -28,6 +27,7 @@ from normalize.schemas import (
     CFG_EDGES_NORM_SPEC,
     CFG_EDGES_QUERY,
 )
+from normalize.utils import PlanSource, plan_source
 
 _META_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
     ("code_unit_id", pa.string()),

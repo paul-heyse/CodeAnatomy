@@ -8,9 +8,9 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from arrowdsl.core.interop import SchemaLike, TableLike
-from arrowdsl.schema.infer import infer_schema_from_tables as arrowdsl_infer_tables
+from arrowdsl.schema.ops import infer_schema_from_tables as arrowdsl_infer_tables
+from arrowdsl.schema.ops import unify_schemas as arrowdsl_unify_schemas
 from arrowdsl.schema.schema import SchemaTransform
-from arrowdsl.schema.unify import unify_schemas as arrowdsl_unify_schemas
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
 
 

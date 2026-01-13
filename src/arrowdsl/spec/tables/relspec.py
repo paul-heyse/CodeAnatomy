@@ -8,7 +8,7 @@ from typing import Any, Literal, cast
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr import ScalarValue
+from arrowdsl.compute.expr_core import ScalarValue
 from arrowdsl.json_factory import JsonPolicy, dumps_text
 from arrowdsl.plan.ops import DedupeSpec, JoinType, SortKey
 from arrowdsl.plan.query import QuerySpec
@@ -21,13 +21,13 @@ from arrowdsl.spec.codec import (
     parse_string_tuple,
 )
 from arrowdsl.spec.expr_ir import ExprIR
-from arrowdsl.spec.io import table_from_rows
-from arrowdsl.spec.structs import (
+from arrowdsl.spec.infra import (
     DATASET_REF_STRUCT,
     DEDUPE_STRUCT,
     SCALAR_UNION_TYPE,
     SORT_KEY_STRUCT,
 )
+from arrowdsl.spec.io import table_from_rows
 from relspec.model import (
     AddLiteralSpec,
     CanonicalSortKernelSpec,

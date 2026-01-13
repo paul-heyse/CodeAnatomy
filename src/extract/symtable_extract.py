@@ -9,20 +9,18 @@ from typing import Literal, Required, TypedDict, Unpack, cast, overload
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_specs import MaskedHashExprSpec
+from arrowdsl.compute.expr_core import MaskedHashExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
 from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, pc
 from arrowdsl.plan.joins import join_config_for_output, left_join
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
-from arrowdsl.plan.rows import plan_from_rows
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
-from arrowdsl.schema.builders import table_from_arrays
-from arrowdsl.schema.encoding import normalize_dictionaries
+from arrowdsl.plan.scan_io import plan_from_rows
+from arrowdsl.schema.build import table_from_arrays
+from arrowdsl.schema.metadata import normalize_dictionaries
 from arrowdsl.schema.nested_builders import LargeListViewAccumulator
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
-from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
-from extract.file_context import FileContext
 from extract.hash_specs import (
     SYM_NS_EDGE_ID_SPEC,
     SYM_NS_SYMBOL_ROW_ID_SPEC,
@@ -30,15 +28,20 @@ from extract.hash_specs import (
     SYM_SCOPE_ID_SPEC,
     SYM_SYMBOL_ROW_ID_SPEC,
 )
-from extract.spec_helpers import (
+from extract.helpers import (
     DatasetRegistration,
+    FileContext,
+    align_plan,
+    file_identity_row,
     infer_ordering_keys,
+    iter_contexts,
     merge_metadata_specs,
     options_metadata_spec,
     ordering_metadata_spec,
+    project_columns,
     register_dataset,
+    text_from_file_ctx,
 )
-from extract.tables import align_plan, project_columns
 from schema_spec.specs import ArrowFieldSpec, NestedFieldSpec, file_identity_bundle
 
 SCHEMA_VERSION = 1

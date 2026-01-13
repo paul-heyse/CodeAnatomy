@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pyarrow as pa
 
+from arrowdsl.compute.filters import valid_mask_expr
 from arrowdsl.compute.macros import null_expr, scalar_expr
-from arrowdsl.compute.masks import valid_mask_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import hash_expression
 from arrowdsl.core.interop import ensure_expression, pc
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan_helpers import coalesce_expr, column_or_null_expr
-from cpg.hash_specs import edge_hash_specs
+from cpg.constants import edge_hash_specs
 from cpg.specs import EdgeEmitSpec
 
 EDGE_OUTPUT_NAMES: tuple[str, ...] = (

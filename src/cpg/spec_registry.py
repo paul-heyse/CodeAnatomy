@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from cpg.constants import ROLE_FLAG_SPECS
 from cpg.contract_map import PropFieldInput, prop_fields_from_contract
 from cpg.kinds_ultimate import EntityKind, NodeKind
-from cpg.role_flags import ROLE_FLAG_SPECS
 from cpg.specs import (
     INCLUDE_HEAVY_JSON,
     TRANSFORM_EXPR_CONTEXT,

@@ -25,8 +25,8 @@ from arrowdsl.plan.joins import code_unit_meta_config, left_join, path_meta_conf
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.plan.runner import PlanRunResult, run_plan
-from arrowdsl.plan.source import DatasetSource, PlanSource, plan_from_source
-from arrowdsl.schema.alignment import (
+from arrowdsl.plan.scan_io import DatasetSource, PlanSource, plan_from_source
+from arrowdsl.schema.ops import (
     align_plan,
     encode_plan,
     encode_table,
@@ -270,9 +270,7 @@ def path_meta_join(
     out = joined if isinstance(joined, Plan) else Plan.table_source(joined)
     file_id_key = "file_id"
     right_col = (
-        f"{file_id_key}{output_suffix_for_right}"
-        if output_suffix_for_right
-        else file_id_key
+        f"{file_id_key}{output_suffix_for_right}" if output_suffix_for_right else file_id_key
     )
     available = set(out.schema(ctx=ctx).names)
     if right_col not in available:

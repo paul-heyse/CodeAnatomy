@@ -5,7 +5,7 @@ from __future__ import annotations
 import pyarrow as pa
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.schema.builders import table_from_schema
+from arrowdsl.schema.build import table_from_schema
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from schema_spec.specs import DICT_STRING, ArrowFieldSpec, file_identity_bundle, span_bundle
 from schema_spec.system import (

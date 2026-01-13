@@ -16,8 +16,8 @@ from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions, SortKey
 from arrowdsl.plan.plan import Plan, hash_join, union_all_plans
 from arrowdsl.plan.query import open_dataset
 from arrowdsl.plan.runner import run_plan
-from arrowdsl.schema.alignment import align_plan
-from arrowdsl.schema.arrays import ConstExpr, FieldExpr, const_array, set_or_append_column
+from arrowdsl.schema.build import ConstExpr, FieldExpr, const_array, set_or_append_column
+from arrowdsl.schema.ops import align_plan
 from arrowdsl.schema.schema import SchemaEvolutionSpec
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,

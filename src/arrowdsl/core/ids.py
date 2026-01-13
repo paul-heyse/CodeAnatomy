@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import arrowdsl.core.interop as pa
-from arrowdsl.compute.registry import UdfSpec, ensure_udf, resolve_kernel
+from arrowdsl.compute.filters import UdfSpec, ensure_udf, resolve_kernel
 from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
 
 type MissingPolicy = Literal["raise", "null"]

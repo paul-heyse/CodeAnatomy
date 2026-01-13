@@ -8,13 +8,11 @@ from typing import Literal
 
 import pyarrow as pa
 
-from arrowdsl.compute.udfs import position_encoding_array
+from arrowdsl.compute.filters import position_encoding_array
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import ArrayLike, TableLike
-from arrowdsl.schema.arrays import set_or_append_column
-from arrowdsl.schema.builders import column_or_null
-from normalize.ids import add_span_id_column
+from arrowdsl.schema.build import column_or_null, set_or_append_column
 from normalize.runner import PostFn
 from normalize.span_pipeline import (
     SpanOutputColumns,
@@ -31,6 +29,7 @@ from normalize.text_index import (
     RepoTextIndex,
     row_value_int,
 )
+from normalize.utils import add_span_id_column
 from schema_spec.specs import scip_range_bundle
 
 type RowValue = object | None

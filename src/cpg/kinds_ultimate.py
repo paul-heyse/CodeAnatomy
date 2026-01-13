@@ -65,8 +65,6 @@ SCIP_ROLE_TEST = 32
 SCIP_ROLE_FORWARD_DEFINITION = 64
 
 
-
-
 class NodeKind(StrEnum):
     """Ultimate Python CPG node kinds."""
 

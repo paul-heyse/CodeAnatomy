@@ -8,7 +8,7 @@ import pytest
 
 from arrowdsl.core.interop import ArrayLike, ComputeExpression, TableLike, pc
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
-from arrowdsl.schema.arrays import FieldExpr
+from arrowdsl.schema.build import FieldExpr
 
 
 @dataclass(frozen=True)

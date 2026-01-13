@@ -9,10 +9,9 @@ from typing import Any
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr import ExprSpec, ScalarValue
-from arrowdsl.compute.expr_specs import ComputeExprSpec
+from arrowdsl.compute.expr_core import ComputeExprSpec, ExprSpec, ScalarValue
+from arrowdsl.compute.filters import ComputeRegistry, UdfSpec, default_registry
 from arrowdsl.compute.macros import ConstExpr, FieldExpr
-from arrowdsl.compute.registry import ComputeRegistry, UdfSpec, default_registry
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
@@ -22,14 +21,14 @@ from arrowdsl.core.interop import (
     pc,
 )
 from arrowdsl.json_factory import JsonPolicy, dumps_text
-from arrowdsl.schema.arrays import dictionary_array_from_indices, union_array_from_values
+from arrowdsl.schema.build import dictionary_array_from_indices, union_array_from_values
 from arrowdsl.spec.codec import (
     decode_scalar_payload,
     decode_scalar_union,
     encode_scalar_payload,
     encode_scalar_union,
 )
-from arrowdsl.spec.structs import SCALAR_UNION_TYPE
+from arrowdsl.spec.infra import SCALAR_UNION_TYPE
 
 
 @dataclass(frozen=True)

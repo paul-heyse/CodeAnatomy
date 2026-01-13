@@ -12,7 +12,7 @@ import pyarrow.parquet as pq
 
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
-from arrowdsl.plan.fragments import ParquetMetadataSpec, parquet_metadata_factory
+from arrowdsl.plan.metrics import ParquetMetadataSpec, parquet_metadata_factory
 from arrowdsl.schema.schema import EncodingPolicy, SchemaTransform
 from core_types import PathLike, ensure_path
 

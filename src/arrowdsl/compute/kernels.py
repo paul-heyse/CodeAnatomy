@@ -13,7 +13,7 @@ from arrowdsl.core.context import DeterminismTier, ExecutionContext
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike, pc
 from arrowdsl.plan.joins import JoinConfig, JoinOutputSpec, interval_join_candidates, join_spec
 from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions, JoinSpec, SortKey
-from arrowdsl.schema.arrays import const_array, set_or_append_column
+from arrowdsl.schema.build import const_array, set_or_append_column
 from schema_spec.specs import PROVENANCE_COLS
 
 

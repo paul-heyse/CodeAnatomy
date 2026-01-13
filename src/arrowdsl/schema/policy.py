@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
-from arrowdsl.schema.encoding import encoding_policy_from_spec
+from arrowdsl.schema.metadata import encoding_policy_from_spec
 from arrowdsl.schema.schema import (
     AlignmentInfo,
     CastErrorPolicy,

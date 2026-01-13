@@ -11,7 +11,7 @@ from arrowdsl.core.interop import TableLike
 from arrowdsl.plan import catalog as plan_catalog
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.runner import run_plan
-from arrowdsl.plan.source import PlanSource, plan_from_source
+from arrowdsl.plan.scan_io import PlanSource, plan_from_source
 from normalize.bytecode_cfg import cfg_blocks_plan, cfg_edges_plan
 from normalize.bytecode_dfg import def_use_events_plan, reaching_defs_plan
 from normalize.diagnostics import DiagnosticsSources, diagnostics_plan

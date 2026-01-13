@@ -7,7 +7,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
-import pyarrow.types as patypes
 
 from arrowdsl.compute.kernels import ChunkPolicy
 from arrowdsl.compute.predicates import FilterSpec, IsNull, Not
@@ -16,17 +15,21 @@ from arrowdsl.core.ids import iter_arrays, prefixed_hash_id
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
-    DataTypeLike,
     SchemaLike,
     TableLike,
     pc,
 )
 from arrowdsl.plan.plan import PlanSpec
 from arrowdsl.schema.arrays import const_array
-from arrowdsl.schema.columns import table_from_schema
+from arrowdsl.schema.builders import (
+    maybe_dictionary,
+    pick_first,
+    resolve_float_col,
+    resolve_string_col,
+    table_from_schema,
+)
 from arrowdsl.schema.tables import table_from_arrays
 from cpg.catalog import PlanCatalog, PlanSource, resolve_plan_source
-from cpg.defaults import fill_nulls_float, fill_nulls_string
 from cpg.kinds import EntityKind
 from cpg.plan_helpers import ensure_plan
 from cpg.specs import (
@@ -50,17 +53,6 @@ def _materialize_source(source: PlanSource, *, ctx: ExecutionContext) -> TableLi
     return PlanSpec.from_plan(plan).to_table(ctx=ctx)
 
 
-def _maybe_dictionary(
-    values: ArrayLike | ChunkedArrayLike,
-    dtype: DataTypeLike,
-) -> ArrayLike | ChunkedArrayLike:
-    if patypes.is_dictionary(values.type):
-        return values
-    if patypes.is_dictionary(dtype):
-        return pc.dictionary_encode(values)
-    return values
-
-
 def _row_id(value: object | None) -> str | None:
     if isinstance(value, str) and value:
         return value
@@ -75,23 +67,6 @@ def _first_non_null(row: Mapping[str, object], cols: Sequence[str]) -> object | 
         if value is not None:
             return value
     return None
-
-
-def _pick_first(table: TableLike, cols: Sequence[str], *, default_type: DataTypeLike) -> ArrayLike:
-    for col in cols:
-        if col in table.column_names:
-            return table[col]
-    return pa.nulls(table.num_rows, type=default_type)
-
-
-def _resolve_string_col(rel: TableLike, col: str, *, default_value: str) -> ArrayLike:
-    arr = _pick_first(rel, [col], default_type=pa.string())
-    return fill_nulls_string(arr, default=default_value)
-
-
-def _resolve_float_col(rel: TableLike, col: str, *, default_value: float) -> ArrayLike:
-    arr = _pick_first(rel, [col], default_type=pa.float32())
-    return fill_nulls_float(arr, default=default_value)
 
 
 @dataclass(frozen=True)
@@ -134,32 +109,32 @@ def _edge_columns_from_relation(
     edge_schema: SchemaLike,
 ) -> tuple[int, dict[str, ArrayLike | ChunkedArrayLike]]:
     n = rel.num_rows
-    src = _pick_first(rel, spec.src_cols, default_type=pa.string())
-    dst = _pick_first(rel, spec.dst_cols, default_type=pa.string())
-    path = _pick_first(rel, spec.path_cols, default_type=pa.string())
-    bstart = _pick_first(rel, spec.bstart_cols, default_type=pa.int64())
-    bend = _pick_first(rel, spec.bend_cols, default_type=pa.int64())
+    src = pick_first(rel, spec.src_cols, default_type=pa.string())
+    dst = pick_first(rel, spec.dst_cols, default_type=pa.string())
+    path = pick_first(rel, spec.path_cols, default_type=pa.string())
+    bstart = pick_first(rel, spec.bstart_cols, default_type=pa.int64())
+    bend = pick_first(rel, spec.bend_cols, default_type=pa.int64())
     edge_ids = _edge_id_array(
         edge_kind=spec.edge_kind.value,
         inputs=EdgeIdArrays(src=src, dst=dst, path=path, bstart=bstart, bend=bend),
     )
 
     default_score = 1.0 if spec.origin == "scip" else 0.5
-    origin = _resolve_string_col(rel, "origin", default_value=spec.origin)
-    origin = _maybe_dictionary(origin, edge_schema.field("origin").type)
+    origin = resolve_string_col(rel, "origin", default_value=spec.origin)
+    origin = maybe_dictionary(origin, edge_schema.field("origin").type)
 
     edge_kind = const_array(n, spec.edge_kind.value, dtype=pa.string())
-    edge_kind = _maybe_dictionary(edge_kind, edge_schema.field("edge_kind").type)
-    resolution = _resolve_string_col(
+    edge_kind = maybe_dictionary(edge_kind, edge_schema.field("edge_kind").type)
+    resolution = resolve_string_col(
         rel,
         "resolution_method",
         default_value=spec.default_resolution_method,
     )
-    resolution = _maybe_dictionary(resolution, edge_schema.field("resolution_method").type)
-    qname_source = _pick_first(rel, ["qname_source"], default_type=pa.string())
-    qname_source = _maybe_dictionary(qname_source, edge_schema.field("qname_source").type)
-    rule_name = _pick_first(rel, ["rule_name"], default_type=pa.string())
-    rule_name = _maybe_dictionary(rule_name, edge_schema.field("rule_name").type)
+    resolution = maybe_dictionary(resolution, edge_schema.field("resolution_method").type)
+    qname_source = pick_first(rel, ["qname_source"], default_type=pa.string())
+    qname_source = maybe_dictionary(qname_source, edge_schema.field("qname_source").type)
+    rule_name = pick_first(rel, ["rule_name"], default_type=pa.string())
+    rule_name = maybe_dictionary(rule_name, edge_schema.field("rule_name").type)
 
     columns: dict[str, ArrayLike | ChunkedArrayLike] = {
         "edge_id": edge_ids,
@@ -171,13 +146,13 @@ def _edge_columns_from_relation(
         "bend": bend,
         "origin": origin,
         "resolution_method": resolution,
-        "confidence": _resolve_float_col(rel, "confidence", default_value=default_score),
-        "score": _resolve_float_col(rel, "score", default_value=default_score),
-        "symbol_roles": _pick_first(rel, ["symbol_roles"], default_type=pa.int32()),
+        "confidence": resolve_float_col(rel, "confidence", default_value=default_score),
+        "score": resolve_float_col(rel, "score", default_value=default_score),
+        "symbol_roles": pick_first(rel, ["symbol_roles"], default_type=pa.int32()),
         "qname_source": qname_source,
-        "ambiguity_group_id": _pick_first(rel, ["ambiguity_group_id"], default_type=pa.string()),
+        "ambiguity_group_id": pick_first(rel, ["ambiguity_group_id"], default_type=pa.string()),
         "rule_name": rule_name,
-        "rule_priority": _pick_first(rel, ["rule_priority"], default_type=pa.int32()),
+        "rule_priority": pick_first(rel, ["rule_priority"], default_type=pa.int32()),
     }
     if "schema_version" in edge_schema.names:
         columns["schema_version"] = const_array(n, schema_version, dtype=pa.int32())
@@ -308,14 +283,14 @@ def emit_nodes_from_table(
         return table_from_arrays(node_schema, columns={}, num_rows=0)
 
     n = table.num_rows
-    node_id = _pick_first(table, spec.id_cols, default_type=pa.string())
-    path = _pick_first(table, spec.path_cols, default_type=pa.string())
-    bstart = _pick_first(table, spec.bstart_cols, default_type=pa.int64())
-    bend = _pick_first(table, spec.bend_cols, default_type=pa.int64())
-    file_id = _pick_first(table, spec.file_id_cols, default_type=pa.string())
+    node_id = pick_first(table, spec.id_cols, default_type=pa.string())
+    path = pick_first(table, spec.path_cols, default_type=pa.string())
+    bstart = pick_first(table, spec.bstart_cols, default_type=pa.int64())
+    bend = pick_first(table, spec.bend_cols, default_type=pa.int64())
+    file_id = pick_first(table, spec.file_id_cols, default_type=pa.string())
 
     node_kind = const_array(n, spec.node_kind.value, dtype=pa.string())
-    node_kind = _maybe_dictionary(node_kind, node_schema.field("node_kind").type)
+    node_kind = maybe_dictionary(node_kind, node_schema.field("node_kind").type)
 
     columns: dict[str, ArrayLike | ChunkedArrayLike] = {
         "node_id": node_id,

@@ -43,7 +43,7 @@ from arrowdsl.schema.validation import (
     validate_table,
 )
 from arrowdsl.spec.io import read_spec_table
-from schema_spec.spec_tables import (
+from arrowdsl.spec.tables.schema import (
     SchemaSpecTables,
     contract_specs_from_table,
     dataset_specs_from_tables,

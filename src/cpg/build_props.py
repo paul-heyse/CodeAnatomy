@@ -11,6 +11,7 @@ from arrowdsl.core.interop import TableLike
 from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan.source import DatasetSource
 from arrowdsl.schema.schema import EncodingSpec
+from arrowdsl.spec.tables.cpg import prop_table_specs_from_table
 from cpg.artifacts import CpgBuildArtifacts
 from cpg.catalog import PlanCatalog, resolve_plan_source
 from cpg.emit_props import emit_props_plans, filter_fields
@@ -26,7 +27,6 @@ from cpg.plan_helpers import (
 from cpg.quality import QualityPlanSpec, quality_plan_from_ids
 from cpg.schemas import CPG_PROPS_SCHEMA, CPG_PROPS_SPEC, SCHEMA_VERSION
 from cpg.spec_registry import edge_prop_spec, prop_table_specs, scip_role_flag_prop_spec
-from cpg.spec_tables import prop_table_specs_from_table
 from cpg.specs import PropTableSpec, resolve_prop_include
 
 PROP_TABLE_SPECS: tuple[PropTableSpec, ...] = (

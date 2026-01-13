@@ -5,10 +5,15 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 from pyarrow import ipc
+
+from arrowdsl.core.interop import SchemaLike
+
+if TYPE_CHECKING:
+    from arrowdsl.spec.tables.base import SpecTableCodec
 
 
 def write_spec_table(path: str | Path, table: pa.Table) -> None:
@@ -31,8 +36,31 @@ def read_spec_table(path: str | Path) -> pa.Table:
         return reader.read_all()
 
 
+def write_spec_values[SpecT](
+    codec: SpecTableCodec[SpecT],
+    path: str | Path,
+    values: Sequence[SpecT],
+) -> None:
+    """Write spec values to an IPC file."""
+    write_spec_table(path, codec.to_table(values))
+
+
+def read_spec_values[SpecT](
+    codec: SpecTableCodec[SpecT],
+    path: str | Path,
+) -> tuple[SpecT, ...]:
+    """Read spec values from an IPC file.
+
+    Returns
+    -------
+    tuple[SpecT, ...]
+        Spec values decoded from the table.
+    """
+    return codec.from_table(read_spec_table(path))
+
+
 def table_from_json(
-    schema: pa.Schema,
+    schema: SchemaLike,
     payload: list[dict[str, Any]],
 ) -> pa.Table:
     """Build a spec table from JSON records.
@@ -45,7 +73,7 @@ def table_from_json(
     return pa.Table.from_pylist(payload, schema=schema)
 
 
-def table_from_json_file(schema: pa.Schema, path: str | Path) -> pa.Table:
+def table_from_json_file(schema: SchemaLike, path: str | Path) -> pa.Table:
     """Build a spec table from a JSON file.
 
     Returns
@@ -91,8 +119,10 @@ def sort_spec_table(table: pa.Table, *, keys: Sequence[str]) -> pa.Table:
 
 __all__ = [
     "read_spec_table",
+    "read_spec_values",
     "sort_spec_table",
     "table_from_json",
     "table_from_json_file",
     "write_spec_table",
+    "write_spec_values",
 ]

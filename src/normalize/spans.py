@@ -12,7 +12,7 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import ArrayLike, TableLike
 from arrowdsl.schema.arrays import set_or_append_column
-from arrowdsl.schema.columns import column_or_null
+from arrowdsl.schema.builders import column_or_null
 from normalize.ids import add_span_id_column
 from normalize.runner import PostFn
 from normalize.span_pipeline import (

@@ -1,5 +1,22 @@
 """ArrowDSL spec-table helpers."""
 
+from arrowdsl.spec.codec import (
+    decode_json_payload,
+    decode_json_text,
+    decode_scalar_json,
+    decode_scalar_payload,
+    decode_strict,
+    encode_json_payload,
+    encode_json_text,
+    encode_scalar_json,
+    encode_scalar_payload,
+    encode_strict,
+    parse_dedupe_strategy,
+    parse_mapping_sequence,
+    parse_scalar_value,
+    parse_sort_order,
+    parse_string_tuple,
+)
 from arrowdsl.spec.core import SpecTableSpec
 from arrowdsl.spec.expr_ir import (
     EXPR_NODE_SCHEMA,
@@ -12,27 +29,58 @@ from arrowdsl.spec.expr_ir import (
 )
 from arrowdsl.spec.io import (
     read_spec_table,
+    read_spec_values,
     sort_spec_table,
     table_from_json,
     table_from_json_file,
     write_spec_table,
+    write_spec_values,
 )
+from arrowdsl.spec.structs import (
+    DATASET_REF_STRUCT,
+    DEDUPE_STRUCT,
+    SORT_KEY_STRUCT,
+    VALIDATION_STRUCT,
+)
+from arrowdsl.spec.tables.base import SpecTableCodec
 from arrowdsl.spec.validators import SpecValidationRule, SpecValidationSuite
 
 __all__ = [
+    "DATASET_REF_STRUCT",
+    "DEDUPE_STRUCT",
     "EXPR_NODE_SCHEMA",
+    "SORT_KEY_STRUCT",
+    "VALIDATION_STRUCT",
     "ExprIR",
     "ExprIRTable",
     "ExprRegistry",
+    "SpecTableCodec",
     "SpecTableSpec",
     "SpecValidationRule",
     "SpecValidationSuite",
+    "decode_json_payload",
+    "decode_json_text",
+    "decode_scalar_json",
+    "decode_scalar_payload",
+    "decode_strict",
+    "encode_json_payload",
+    "encode_json_text",
+    "encode_scalar_json",
+    "encode_scalar_payload",
+    "encode_strict",
     "expr_ir_from_table",
     "expr_ir_table",
     "expr_spec_from_json",
+    "parse_dedupe_strategy",
+    "parse_mapping_sequence",
+    "parse_scalar_value",
+    "parse_sort_order",
+    "parse_string_tuple",
     "read_spec_table",
+    "read_spec_values",
     "sort_spec_table",
     "table_from_json",
     "table_from_json_file",
     "write_spec_table",
+    "write_spec_values",
 ]

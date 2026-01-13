@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, TypedDict, cast
+from typing import TypedDict
 
 import pyarrow as pa
 from pyarrow import ipc
@@ -12,6 +12,15 @@ from pyarrow import ipc
 import schema_spec.system as schema_system
 from arrowdsl.core.interop import DataTypeLike
 from arrowdsl.schema.validation import ArrowValidationOptions
+from arrowdsl.spec.codec import (
+    decode_strict,
+    encode_strict,
+    parse_dedupe_strategy,
+    parse_mapping_sequence,
+    parse_sort_order,
+    parse_string_tuple,
+)
+from arrowdsl.spec.structs import DEDUPE_STRUCT, SORT_KEY_STRUCT, VALIDATION_STRUCT
 from schema_spec.specs import (
     DICT_STRING,
     ArrowFieldSpec,
@@ -39,31 +48,6 @@ TABLE_CONSTRAINTS_SCHEMA = pa.schema(
         pa.field("key_fields", pa.list_(pa.string()), nullable=True),
     ],
     metadata={b"spec_kind": b"schema_constraints"},
-)
-
-SORT_KEY_STRUCT = pa.struct(
-    [
-        pa.field("column", pa.string(), nullable=False),
-        pa.field("order", pa.string(), nullable=False),
-    ]
-)
-
-DEDUPE_STRUCT = pa.struct(
-    [
-        pa.field("keys", pa.list_(pa.string()), nullable=False),
-        pa.field("tie_breakers", pa.list_(SORT_KEY_STRUCT), nullable=True),
-        pa.field("strategy", pa.string(), nullable=False),
-    ]
-)
-
-VALIDATION_STRUCT = pa.struct(
-    [
-        pa.field("strict", pa.string(), nullable=False),
-        pa.field("coerce", pa.bool_(), nullable=False),
-        pa.field("max_errors", pa.int64(), nullable=True),
-        pa.field("emit_invalid_rows", pa.bool_(), nullable=False),
-        pa.field("emit_error_table", pa.bool_(), nullable=False),
-    ]
 )
 
 CONTRACT_SPEC_SCHEMA = pa.schema(
@@ -99,26 +83,6 @@ def _decode_dtype(payload: bytes) -> pa.DataType:
     reader = pa.BufferReader(payload)
     schema = ipc.read_schema(reader)
     return schema.field(0).type
-
-
-def _encode_strict(*, strict: bool | Literal["filter"]) -> str:
-    if strict is True:
-        return "true"
-    if strict is False:
-        return "false"
-    return "filter"
-
-
-def _decode_strict(value: str) -> bool | Literal["filter"]:
-    normalized = value.lower()
-    if normalized == "true":
-        return True
-    if normalized == "false":
-        return False
-    if normalized == "filter":
-        return "filter"
-    msg = f"Unsupported strict value: {value!r}"
-    raise ValueError(msg)
 
 
 class ContractRow(TypedDict, total=False):
@@ -199,7 +163,7 @@ def _validation_row(options: ArrowValidationOptions | None) -> dict[str, object]
     if options is None:
         return None
     return {
-        "strict": _encode_strict(strict=options.strict),
+        "strict": encode_strict(strict=options.strict),
         "coerce": options.coerce,
         "max_errors": options.max_errors,
         "emit_invalid_rows": options.emit_invalid_rows,
@@ -285,74 +249,8 @@ def table_specs_from_tables(
 def _sort_key_from_row(payload: Mapping[str, object]) -> schema_system.SortKeySpec:
     return schema_system.SortKeySpec(
         column=str(payload["column"]),
-        order=_parse_sort_order(payload.get("order")),
+        order=parse_sort_order(payload.get("order")),
     )
-
-
-def _parse_sort_order(value: object) -> Literal["ascending", "descending"]:
-    if value is None:
-        return "ascending"
-    normalized = str(value).lower()
-    orders: dict[str, Literal["ascending", "descending"]] = {
-        "ascending": "ascending",
-        "descending": "descending",
-    }
-    mapped = orders.get(normalized)
-    if mapped is not None:
-        return mapped
-    msg = f"Unsupported sort order: {value!r}"
-    raise ValueError(msg)
-
-
-def _string_tuple(value: object, *, label: str) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if isinstance(value, (list, tuple)):
-        return tuple(str(item) for item in value)
-    msg = f"{label} must be a list of strings."
-    raise TypeError(msg)
-
-
-def _mapping_sequence(value: object, *, label: str) -> tuple[Mapping[str, object], ...]:
-    if value is None:
-        return ()
-    if isinstance(value, (list, tuple)):
-        items: list[Mapping[str, object]] = []
-        for item in value:
-            if isinstance(item, Mapping):
-                items.append(item)
-            else:
-                msg = f"{label} entries must be mappings."
-                raise TypeError(msg)
-        return tuple(items)
-    msg = f"{label} must be a list of mappings."
-    raise TypeError(msg)
-
-
-def _parse_dedupe_strategy(
-    value: object,
-) -> Literal[
-    "KEEP_FIRST_AFTER_SORT",
-    "KEEP_BEST_BY_SCORE",
-    "COLLAPSE_LIST",
-    "KEEP_ARBITRARY",
-]:
-    if value is None:
-        return "KEEP_FIRST_AFTER_SORT"
-    normalized = str(value)
-    allowed = {
-        "KEEP_FIRST_AFTER_SORT",
-        "KEEP_BEST_BY_SCORE",
-        "COLLAPSE_LIST",
-        "KEEP_ARBITRARY",
-    }
-    if normalized in allowed:
-        return cast(
-            "Literal['KEEP_FIRST_AFTER_SORT', 'KEEP_BEST_BY_SCORE', 'COLLAPSE_LIST', 'KEEP_ARBITRARY']",
-            normalized,
-        )
-    msg = f"Unsupported dedupe strategy: {value!r}"
-    raise ValueError(msg)
 
 
 def _dedupe_from_row(
@@ -360,12 +258,13 @@ def _dedupe_from_row(
 ) -> schema_system.DedupeSpecSpec | None:
     if payload is None:
         return None
-    tie_breakers_payload = _mapping_sequence(payload.get("tie_breakers"), label="tie_breakers")
+    tie_breakers_payload = parse_mapping_sequence(payload.get("tie_breakers"), label="tie_breakers")
     tie_breakers = tuple(_sort_key_from_row(item) for item in tie_breakers_payload)
+
     return schema_system.DedupeSpecSpec(
-        keys=_string_tuple(payload.get("keys"), label="keys"),
+        keys=parse_string_tuple(payload.get("keys"), label="keys"),
         tie_breakers=tie_breakers,
-        strategy=_parse_dedupe_strategy(payload.get("strategy")),
+        strategy=parse_dedupe_strategy(payload.get("strategy")),
     )
 
 
@@ -373,7 +272,7 @@ def _validation_from_row(payload: Mapping[str, object] | None) -> ArrowValidatio
     if payload is None:
         return None
     strict_value = payload.get("strict")
-    strict = _decode_strict("filter" if strict_value is None else str(strict_value))
+    strict = decode_strict("filter" if strict_value is None else str(strict_value))
     return ArrowValidationOptions(
         strict=strict,
         coerce=bool(payload.get("coerce", False)),

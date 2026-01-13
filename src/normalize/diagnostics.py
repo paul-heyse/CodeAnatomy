@@ -12,7 +12,7 @@ from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, p
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan_helpers import column_or_null_expr
-from arrowdsl.schema.columns import column_or_null
+from arrowdsl.schema.builders import column_or_null
 from arrowdsl.schema.nested import StructLargeListViewAccumulator
 from arrowdsl.schema.tables import table_from_arrays
 from normalize.runner import (

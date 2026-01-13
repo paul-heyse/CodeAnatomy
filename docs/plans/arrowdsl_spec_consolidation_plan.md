@@ -44,12 +44,12 @@ def encode_scalar_json(value: ScalarValue | None) -> str | None:
 - Update: `src/arrowdsl/spec/expr_ir.py` (reuse scalar codec)
 
 **Implementation checklist**
-- [ ] Add shared parse helpers (`parse_sort_order`, `parse_string_tuple`, `parse_mapping_sequence`).
-- [ ] Add scalar literal JSON codec helpers and reuse in relspec + cpg spec tables.
-- [ ] Replace local parsing/encoding helpers in each domain spec table module.
+- [x] Add shared parse helpers (`parse_sort_order`, `parse_string_tuple`, `parse_mapping_sequence`).
+- [x] Add scalar literal JSON codec helpers and reuse in relspec + cpg spec tables.
+- [x] Replace local parsing/encoding helpers in each domain spec table module.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -84,12 +84,12 @@ DEDUPE_STRUCT = pa.struct(
 - Update: `src/cpg/spec_tables.py`
 
 **Implementation checklist**
-- [ ] Define shared struct schemas in ArrowDSL.
-- [ ] Replace duplicate struct definitions in domain modules.
-- [ ] Keep schema metadata identical to current outputs.
+- [x] Define shared struct schemas in ArrowDSL.
+- [x] Replace duplicate struct definitions in domain modules.
+- [x] Keep schema metadata identical to current outputs.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -119,12 +119,12 @@ class SpecTableCodec(Generic[T]):
 - Update: `src/arrowdsl/spec/io.py`
 
 **Implementation checklist**
-- [ ] Add a generic codec layer for spec tables.
-- [ ] Integrate ArrowDSL validation (`SpecTableSpec.validate`) into the base.
-- [ ] Provide common JSON/IPC IO helpers for any spec table.
+- [x] Add a generic codec layer for spec tables.
+- [x] Integrate ArrowDSL validation (`SpecTableSpec.validate`) into the base.
+- [x] Provide common JSON/IPC IO helpers for any spec table.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -148,12 +148,12 @@ def field_spec_table(specs: Sequence[TableSchemaSpec]) -> pa.Table:
 - Update: `src/schema_spec/spec_tables.py` (re-export + thin wrappers)
 
 **Implementation checklist**
-- [ ] Move schema spec table schemas and codecs into ArrowDSL.
-- [ ] Replace local helper functions with `arrowdsl.spec.codec` utilities.
-- [ ] Keep `schema_spec/spec_tables.py` as a compatibility layer.
+- [x] Move schema spec table schemas and codecs into ArrowDSL.
+- [x] Replace local helper functions with `arrowdsl.spec.codec` utilities.
+- [x] Keep `schema_spec/spec_tables.py` as a compatibility layer.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -177,12 +177,12 @@ def relationship_rule_table(rules: Sequence[RelationshipRule]) -> pa.Table:
 - Update: `src/relspec/spec_tables.py` (re-export + thin wrappers)
 
 **Implementation checklist**
-- [ ] Move relspec spec-table schemas and row codecs into ArrowDSL.
-- [ ] Reuse shared sort/dedupe/literal codecs from `arrowdsl.spec.codec`.
-- [ ] Keep re-exports in `src/relspec/spec_tables.py`.
+- [x] Move relspec spec-table schemas and row codecs into ArrowDSL.
+- [x] Reuse shared sort/dedupe/literal codecs from `arrowdsl.spec.codec`.
+- [x] Keep re-exports in `src/relspec/spec_tables.py`.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -206,12 +206,12 @@ def node_plan_table(specs: Sequence[NodePlanSpec]) -> pa.Table:
 - Update: `src/cpg/spec_tables.py` (re-export + thin wrappers)
 
 **Implementation checklist**
-- [ ] Move CPG spec-table schemas and codecs into ArrowDSL.
-- [ ] Reuse ArrowDSL scalar literal codec for `literal_json`.
-- [ ] Keep `cpg/spec_tables.py` as a thin compatibility layer.
+- [x] Move CPG spec-table schemas and codecs into ArrowDSL.
+- [x] Reuse ArrowDSL scalar literal codec for `literal_json`.
+- [x] Keep `cpg/spec_tables.py` as a thin compatibility layer.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -237,12 +237,12 @@ def ensure_plan(source: PlanSource, *, ctx: ExecutionContext | None, label: str 
 - Update: `src/cpg/plan_helpers.py` (re-export + wrappers)
 
 **Implementation checklist**
-- [ ] Move `ensure_plan`, `empty_plan`, `align_plan`, `finalize_plan` into ArrowDSL.
-- [ ] Reuse `arrowdsl.schema.unify` for schema merging with metadata.
-- [ ] Keep CPG helpers as wrappers to avoid breaking imports.
+- [x] Move `ensure_plan`, `empty_plan`, `align_plan`, `finalize_plan` into ArrowDSL.
+- [x] Reuse `arrowdsl.schema.unify` for schema merging with metadata.
+- [x] Keep CPG helpers as wrappers to avoid breaking imports.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -266,12 +266,12 @@ def pick_first(table: TableLike, cols: Sequence[str], *, default_type: DataTypeL
 - Update: `src/cpg/builders.py`
 
 **Implementation checklist**
-- [ ] Add generic helpers (`pick_first`, `resolve_string_col`, `resolve_float_col`).
-- [ ] Add dictionary-encoding helper with type-aware fallback.
-- [ ] Replace CPG local helpers with ArrowDSL equivalents.
+- [x] Add generic helpers (`pick_first`, `resolve_string_col`, `resolve_float_col`).
+- [x] Add dictionary-encoding helper with type-aware fallback.
+- [x] Replace CPG local helpers with ArrowDSL equivalents.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -293,9 +293,9 @@ from arrowdsl.spec.tables.schema import (FIELD_SPEC_SCHEMA, field_spec_table, ..
 - Update: `src/arrowdsl/spec/__init__.py`
 
 **Implementation checklist**
-- [ ] Replace direct implementations with imports from ArrowDSL.
-- [ ] Preserve public constants and function names.
-- [ ] Add deprecation notes in docstrings where appropriate.
+- [x] Replace direct implementations with imports from ArrowDSL.
+- [x] Preserve public constants and function names.
+- [x] Add deprecation notes in docstrings where appropriate (not needed for pure re-exports).
 
 **Status**
-Not started.
+Completed.

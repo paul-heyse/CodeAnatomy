@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.schema.schema import SchemaMetadataSpec, SchemaTransform
 from arrowdsl.schema.validation import ArrowValidationOptions, ValidationReport, validate_table
+from arrowdsl.spec.tables.base import SpecTableCodec
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import table_spec_from_schema
 
@@ -61,6 +63,28 @@ class SpecTableSpec:
             on_error="unsafe",
         )
         return transform.apply(table)
+
+    def codec[SpecT](
+        self,
+        *,
+        encode_row: Callable[[SpecT], dict[str, object]],
+        decode_row: Callable[[Mapping[str, object]], SpecT],
+        sort_keys: tuple[str, ...] = (),
+    ) -> SpecTableCodec[SpecT]:
+        """Return a SpecTableCodec for the schema.
+
+        Returns
+        -------
+        SpecTableCodec[SpecT]
+            Codec for encoding/decoding spec tables.
+        """
+        return SpecTableCodec(
+            schema=self.schema_with_metadata(),
+            spec=self,
+            encode_row=encode_row,
+            decode_row=decode_row,
+            sort_keys=sort_keys,
+        )
 
     def validate(
         self,

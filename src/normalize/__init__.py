@@ -35,15 +35,6 @@ from normalize.diagnostics import (
     diagnostics_post_step,
 )
 from normalize.ids import add_span_id_column, span_id, stable_id, stable_int64
-from normalize.query_specs import (
-    CFG_BLOCKS_QUERY,
-    CFG_EDGES_QUERY,
-    DEF_USE_QUERY,
-    DIAG_QUERY,
-    REACHES_QUERY,
-    TYPE_EXPRS_QUERY,
-    TYPE_NODES_QUERY,
-)
 from normalize.runner import (
     ensure_canonical,
     run_normalize,
@@ -58,6 +49,15 @@ from normalize.schema_infer import (
     align_tables_to_unified_schema,
     infer_schema_from_tables,
     unify_schemas,
+)
+from normalize.schemas import (
+    CFG_BLOCKS_QUERY,
+    CFG_EDGES_QUERY,
+    DEF_USE_QUERY,
+    DIAG_QUERY,
+    REACHES_QUERY,
+    TYPE_EXPRS_QUERY,
+    TYPE_NODES_QUERY,
 )
 from normalize.spans import (
     add_ast_byte_spans,

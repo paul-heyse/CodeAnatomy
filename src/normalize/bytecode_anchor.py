@@ -9,7 +9,7 @@ import pyarrow as pa
 from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.arrays import set_or_append_column
-from arrowdsl.schema.columns import column_or_null
+from arrowdsl.schema.builders import column_or_null
 from normalize.spans import ast_range_to_byte_span
 from normalize.text_index import RepoTextIndex, file_index, row_value_int
 

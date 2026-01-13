@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import base64
-import json
 from collections.abc import Sequence
 from typing import Any
 
 import pyarrow as pa
 
-from arrowdsl.core.interop import ScalarLike
+from arrowdsl.spec.codec import decode_json_text, encode_json_text
 from cpg.kinds import EdgeKind, EntityKind, NodeKind
 from cpg.specs import (
     EdgeEmitSpec,
@@ -94,30 +92,11 @@ PROP_TABLE_SCHEMA = pa.schema(
 
 
 def _encode_literal(value: object | None) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, ScalarLike):
-        value = value.as_py()
-    if isinstance(value, bytes):
-        payload = {"type": "bytes", "value": base64.b64encode(value).decode("ascii")}
-        return json.dumps(payload, ensure_ascii=True)
-    payload = {"type": "json", "value": value}
-    return json.dumps(payload, ensure_ascii=True)
+    return encode_json_text(value)
 
 
 def _decode_literal(payload: str | None) -> object | None:
-    if payload is None:
-        return None
-    data = json.loads(payload)
-    if isinstance(data, dict) and data.get("type") == "bytes":
-        value = data.get("value", "")
-        if not isinstance(value, str):
-            msg = "Encoded bytes literal must contain a base64 string."
-            raise ValueError(msg)
-        return base64.b64decode(value.encode("ascii"))
-    if isinstance(data, dict) and "value" in data:
-        return data["value"]
-    return data
+    return decode_json_text(payload)
 
 
 def _node_emit_row(spec: NodeEmitSpec) -> dict[str, object]:

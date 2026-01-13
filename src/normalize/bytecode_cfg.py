@@ -13,7 +13,6 @@ from arrowdsl.plan.join_specs import join_spec_for_keys
 from arrowdsl.plan.joins import join_plan
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan_helpers import column_or_null_expr, project_to_schema
-from normalize.contracts import CFG_BLOCKS_CONTRACT, CFG_EDGES_CONTRACT
 from normalize.plan_helpers import PlanSource, plan_source
 from normalize.runner import (
     ensure_canonical,
@@ -22,9 +21,11 @@ from normalize.runner import (
     run_normalize_streamable_contract,
 )
 from normalize.schemas import (
+    CFG_BLOCKS_CONTRACT,
     CFG_BLOCKS_NORM_SCHEMA,
     CFG_BLOCKS_NORM_SPEC,
     CFG_BLOCKS_QUERY,
+    CFG_EDGES_CONTRACT,
     CFG_EDGES_NORM_SCHEMA,
     CFG_EDGES_NORM_SPEC,
     CFG_EDGES_QUERY,

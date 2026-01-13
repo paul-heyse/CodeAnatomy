@@ -20,7 +20,7 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.arrays import const_array
-from arrowdsl.schema.columns import table_from_schema
+from arrowdsl.schema.builders import table_from_schema
 from arrowdsl.schema.tables import table_from_arrays
 
 type ValuesLike = ArrayLike | ChunkedArrayLike

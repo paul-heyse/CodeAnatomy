@@ -1,5 +1,17 @@
 """Relationship spec models, registry, and compiler."""
 
+from arrowdsl.spec.tables.relspec import (
+    DATASET_REF_STRUCT,
+    HASH_JOIN_STRUCT,
+    INTERVAL_ALIGN_STRUCT,
+    PROJECT_EXPR_STRUCT,
+    PROJECT_STRUCT,
+    RULES_SCHEMA,
+    SORT_KEY_STRUCT,
+    WINNER_SELECT_STRUCT,
+    relationship_rule_table,
+    relationship_rules_from_table,
+)
 from relspec.compiler import (
     CompiledOutput,
     CompiledRule,
@@ -25,18 +37,6 @@ from relspec.model import (
     WinnerSelectConfig,
 )
 from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation, RelationshipRegistry
-from relspec.spec_tables import (
-    DATASET_REF_STRUCT,
-    HASH_JOIN_STRUCT,
-    INTERVAL_ALIGN_STRUCT,
-    PROJECT_EXPR_STRUCT,
-    PROJECT_STRUCT,
-    RULES_SCHEMA,
-    SORT_KEY_STRUCT,
-    WINNER_SELECT_STRUCT,
-    relationship_rule_table,
-    relationship_rules_from_table,
-)
 
 __all__ = [
     "DATASET_REF_STRUCT",

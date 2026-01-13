@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -18,10 +17,15 @@ from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
     ComputeExpression,
-    ScalarLike,
     TableLike,
     ensure_expression,
     pc,
+)
+from arrowdsl.spec.codec import (
+    decode_scalar_json,
+    decode_scalar_payload,
+    encode_scalar_json,
+    encode_scalar_payload,
 )
 
 
@@ -44,61 +48,6 @@ class ExprRegistry:
         if spec is None:
             return name
         return self.compute_registry.ensure(spec)
-
-
-def _encode_scalar_payload(value: ScalarValue | None) -> object | None:
-    if value is None:
-        return None
-    py_value = value.as_py() if isinstance(value, ScalarLike) else value
-    parsed = _parse_scalar_value(py_value)
-    if parsed is None:
-        return None
-    if isinstance(parsed, bytes):
-        return {
-            "type": "bytes",
-            "value": base64.b64encode(parsed).decode("ascii"),
-        }
-    return {"type": "json", "value": parsed}
-
-
-def _decode_scalar_payload(payload: object | None) -> ScalarValue | None:
-    if payload is None:
-        return None
-    if isinstance(payload, dict):
-        kind = payload.get("type")
-        if kind == "bytes":
-            value = payload.get("value", "")
-            if not isinstance(value, str):
-                msg = "Encoded bytes payload must contain a base64 string."
-                raise ValueError(msg)
-            return base64.b64decode(value.encode("ascii"))
-        if "value" in payload:
-            return _parse_scalar_value(payload["value"])
-    return _parse_scalar_value(payload)
-
-
-def _encode_scalar_json(value: ScalarValue | None) -> str | None:
-    if value is None:
-        return None
-    payload = _encode_scalar_payload(value)
-    return json.dumps(payload, ensure_ascii=True)
-
-
-def _decode_scalar_json(payload: str | None) -> ScalarValue | None:
-    if payload is None:
-        return None
-    return _decode_scalar_payload(json.loads(payload))
-
-
-def _parse_scalar_value(value: object) -> ScalarValue | None:
-    if value is None:
-        return None
-    if isinstance(value, (bool, int, float, str, bytes)):
-        return value
-    if isinstance(value, ScalarLike):
-        return value
-    msg = "Scalar literal must be a supported scalar type."
-    raise TypeError(msg)
 
 
 EXPR_NODE_SCHEMA = pa.schema(
@@ -216,7 +165,7 @@ class ExprIR:
         return {
             "op": self.op,
             "name": self.name,
-            "value": _encode_scalar_payload(self.value),
+            "value": encode_scalar_payload(self.value),
             "args": [arg.to_dict() for arg in self.args],
         }
 
@@ -247,7 +196,7 @@ class ExprIR:
         return ExprIR(
             op=str(payload.get("op", "")),
             name=name_value,
-            value=_decode_scalar_payload(payload.get("value")),
+            value=decode_scalar_payload(payload.get("value")),
             args=args,
         )
 
@@ -308,7 +257,7 @@ def expr_ir_table(exprs: Sequence[ExprIR]) -> ExprIRTable:
             "expr_id": expr_id,
             "op": expr.op,
             "name": expr.name,
-            "value_json": _encode_scalar_json(expr.value),
+            "value_json": encode_scalar_json(expr.value),
             "args": [id_map[id(arg)] for arg in expr.args] or None,
         }
         for expr_id, expr in enumerate(nodes)
@@ -365,7 +314,7 @@ def expr_ir_from_table(
         name = row.get("name")
         name_value = str(name) if name is not None else None
         value_json = row.get("value_json")
-        value = _decode_scalar_json(str(value_json)) if value_json is not None else None
+        value = decode_scalar_json(str(value_json)) if value_json is not None else None
         expr = ExprIR(
             op=str(row.get("op", "")),
             name=name_value,

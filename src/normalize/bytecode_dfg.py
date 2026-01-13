@@ -14,7 +14,6 @@ from arrowdsl.plan.joins import join_plan
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan_helpers import project_to_schema
 from arrowdsl.schema.schema import empty_table
-from normalize.contracts import DEF_USE_CONTRACT, REACHES_CONTRACT
 from normalize.plan_helpers import PlanSource, plan_source
 from normalize.runner import (
     ensure_canonical,
@@ -23,8 +22,10 @@ from normalize.runner import (
     run_normalize_streamable_contract,
 )
 from normalize.schemas import (
+    DEF_USE_CONTRACT,
     DEF_USE_QUERY,
     DEF_USE_SPEC,
+    REACHES_CONTRACT,
     REACHES_QUERY,
     REACHES_SCHEMA,
     REACHES_SPEC,

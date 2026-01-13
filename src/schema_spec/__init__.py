@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from schema_spec.spec_tables import (
+from arrowdsl.spec.tables.schema import (
     CONTRACT_SPEC_SCHEMA,
     FIELD_SPEC_SCHEMA,
     TABLE_CONSTRAINTS_SCHEMA,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, cast
@@ -10,10 +9,18 @@ from typing import Any, Literal, cast
 import pyarrow as pa
 
 from arrowdsl.compute.expr import ScalarValue
-from arrowdsl.core.interop import ScalarLike
-from arrowdsl.plan.ops import DedupeSpec, DedupeStrategy, JoinType, SortKey
+from arrowdsl.plan.ops import DedupeSpec, JoinType, SortKey
 from arrowdsl.plan.query import QuerySpec
+from arrowdsl.spec.codec import (
+    decode_scalar_json,
+    encode_scalar_json,
+    parse_dedupe_strategy,
+    parse_mapping_sequence,
+    parse_sort_order,
+    parse_string_tuple,
+)
 from arrowdsl.spec.expr_ir import ExprIR
+from arrowdsl.spec.structs import DATASET_REF_STRUCT, DEDUPE_STRUCT, SORT_KEY_STRUCT
 from relspec.model import (
     AddLiteralSpec,
     CanonicalSortKernelSpec,
@@ -29,21 +36,6 @@ from relspec.model import (
     RenameColumnsSpec,
     RuleKind,
     WinnerSelectConfig,
-)
-
-DATASET_REF_STRUCT = pa.struct(
-    [
-        pa.field("name", pa.string(), nullable=False),
-        pa.field("label", pa.string(), nullable=False),
-        pa.field("query_json", pa.string(), nullable=True),
-    ]
-)
-
-SORT_KEY_STRUCT = pa.struct(
-    [
-        pa.field("column", pa.string(), nullable=False),
-        pa.field("order", pa.string(), nullable=False),
-    ]
 )
 
 HASH_JOIN_STRUCT = pa.struct(
@@ -97,14 +89,6 @@ PROJECT_STRUCT = pa.struct(
     [
         pa.field("select", pa.list_(pa.string()), nullable=True),
         pa.field("exprs", pa.list_(PROJECT_EXPR_STRUCT), nullable=True),
-    ]
-)
-
-DEDUPE_STRUCT = pa.struct(
-    [
-        pa.field("keys", pa.list_(pa.string()), nullable=False),
-        pa.field("tie_breakers", pa.list_(SORT_KEY_STRUCT), nullable=True),
-        pa.field("strategy", pa.string(), nullable=False),
     ]
 )
 
@@ -199,49 +183,9 @@ def _decode_sort_keys(payload: Sequence[Mapping[str, Any]] | None) -> tuple[Sort
     if not payload:
         return ()
     return tuple(
-        SortKey(column=str(row["column"]), order=_parse_sort_order(row.get("order")))
+        SortKey(column=str(row["column"]), order=parse_sort_order(row.get("order")))
         for row in payload
     )
-
-
-def _parse_sort_order(value: object) -> Literal["ascending", "descending"]:
-    if value is None:
-        return "ascending"
-    normalized = str(value).lower()
-    orders: dict[str, Literal["ascending", "descending"]] = {
-        "ascending": "ascending",
-        "descending": "descending",
-    }
-    mapped = orders.get(normalized)
-    if mapped is not None:
-        return mapped
-    msg = f"Unsupported sort order: {value!r}"
-    raise ValueError(msg)
-
-
-def _string_tuple(value: object, *, label: str) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if isinstance(value, (list, tuple)):
-        return tuple(str(item) for item in value)
-    msg = f"{label} must be a list of strings."
-    raise TypeError(msg)
-
-
-def _mapping_sequence(value: object, *, label: str) -> tuple[Mapping[str, Any], ...]:
-    if value is None:
-        return ()
-    if isinstance(value, (list, tuple)):
-        items: list[Mapping[str, Any]] = []
-        for item in value:
-            if isinstance(item, Mapping):
-                items.append(item)
-            else:
-                msg = f"{label} entries must be mappings."
-                raise TypeError(msg)
-        return tuple(items)
-    msg = f"{label} must be a list of mappings."
-    raise TypeError(msg)
 
 
 def _parse_join_type(value: object) -> JoinType:
@@ -288,61 +232,15 @@ def _parse_interval_how(value: object) -> Literal["inner", "left"]:
 
 
 def _parse_score_order(value: object) -> Literal["ascending", "descending"]:
-    return _parse_sort_order(value)
-
-
-def _parse_dedupe_strategy(value: object) -> DedupeStrategy:
-    if value is None:
-        return "KEEP_FIRST_AFTER_SORT"
-    normalized = str(value)
-    allowed: set[DedupeStrategy] = {
-        "KEEP_FIRST_AFTER_SORT",
-        "KEEP_BEST_BY_SCORE",
-        "COLLAPSE_LIST",
-        "KEEP_ARBITRARY",
-    }
-    if normalized in allowed:
-        return cast("DedupeStrategy", normalized)
-    msg = f"Unsupported dedupe strategy: {value!r}"
-    raise ValueError(msg)
+    return parse_sort_order(value)
 
 
 def _encode_literal(value: object | None) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, ScalarLike):
-        value = value.as_py()
-    if isinstance(value, bytes):
-        payload = {"type": "bytes", "value": base64.b64encode(value).decode("ascii")}
-        return json.dumps(payload, ensure_ascii=True)
-    payload = {"type": "json", "value": value}
-    return json.dumps(payload, ensure_ascii=True)
+    return encode_scalar_json(cast("ScalarValue | None", value))
 
 
 def _decode_literal(payload: str | None) -> ScalarValue | None:
-    if payload is None:
-        return None
-    data = json.loads(payload)
-    if isinstance(data, dict) and data.get("type") == "bytes":
-        value = data.get("value", "")
-        if not isinstance(value, str):
-            msg = "Encoded bytes literal must contain a base64 string."
-            raise ValueError(msg)
-        return base64.b64decode(value.encode("ascii"))
-    if isinstance(data, dict) and "value" in data:
-        return _parse_scalar_value(data["value"])
-    return _parse_scalar_value(data)
-
-
-def _parse_scalar_value(value: object) -> ScalarValue | None:
-    if value is None:
-        return None
-    if isinstance(value, (bool, int, float, str, bytes)):
-        return value
-    if isinstance(value, ScalarLike):
-        return value
-    msg = "Literal value must be a scalar type."
-    raise TypeError(msg)
+    return decode_scalar_json(payload)
 
 
 def _dataset_ref_row(ref: DatasetRef) -> dict[str, object]:
@@ -461,7 +359,7 @@ def _kernel_from_row(payload: Mapping[str, Any]) -> KernelSpecT:
         )
     if kind == "drop_columns":
         spec = payload.get("drop_columns") or {}
-        return DropColumnsSpec(columns=_string_tuple(spec.get("columns"), label="columns"))
+        return DropColumnsSpec(columns=parse_string_tuple(spec.get("columns"), label="columns"))
     if kind == "rename_columns":
         spec = payload.get("rename_columns") or {}
         mapping = spec.get("mapping") or {}
@@ -479,9 +377,9 @@ def _kernel_from_row(payload: Mapping[str, Any]) -> KernelSpecT:
         tie_breakers = _decode_sort_keys(spec.get("tie_breakers"))
         return DedupeKernelSpec(
             spec=DedupeSpec(
-                keys=_string_tuple(spec.get("keys"), label="keys"),
+                keys=parse_string_tuple(spec.get("keys"), label="keys"),
                 tie_breakers=tie_breakers,
-                strategy=_parse_dedupe_strategy(spec.get("strategy")),
+                strategy=parse_dedupe_strategy(spec.get("strategy")),
             )
         )
     if kind == "canonical_sort":
@@ -570,10 +468,10 @@ def _hash_join_from_row(payload: Mapping[str, Any] | None) -> HashJoinConfig | N
         return None
     return HashJoinConfig(
         join_type=_parse_join_type(payload.get("join_type")),
-        left_keys=_string_tuple(payload.get("left_keys"), label="left_keys"),
-        right_keys=_string_tuple(payload.get("right_keys"), label="right_keys"),
-        left_output=_string_tuple(payload.get("left_output"), label="left_output"),
-        right_output=_string_tuple(payload.get("right_output"), label="right_output"),
+        left_keys=parse_string_tuple(payload.get("left_keys"), label="left_keys"),
+        right_keys=parse_string_tuple(payload.get("right_keys"), label="right_keys"),
+        left_output=parse_string_tuple(payload.get("left_output"), label="left_output"),
+        right_output=parse_string_tuple(payload.get("right_output"), label="right_output"),
         output_suffix_for_left=str(payload.get("output_suffix_for_left", "")),
         output_suffix_for_right=str(payload.get("output_suffix_for_right", "")),
     )
@@ -582,7 +480,7 @@ def _hash_join_from_row(payload: Mapping[str, Any] | None) -> HashJoinConfig | N
 def _interval_align_from_row(payload: Mapping[str, Any] | None) -> IntervalAlignConfig | None:
     if payload is None:
         return None
-    tie_breakers_payload = _mapping_sequence(payload.get("tie_breakers"), label="tie_breakers")
+    tie_breakers_payload = parse_mapping_sequence(payload.get("tie_breakers"), label="tie_breakers")
     return IntervalAlignConfig(
         mode=_parse_interval_mode(payload.get("mode")),
         how=_parse_interval_how(payload.get("how")),
@@ -592,10 +490,10 @@ def _interval_align_from_row(payload: Mapping[str, Any] | None) -> IntervalAlign
         right_path_col=str(payload.get("right_path_col", "path")),
         right_start_col=str(payload.get("right_start_col", "bstart")),
         right_end_col=str(payload.get("right_end_col", "bend")),
-        select_left=_string_tuple(payload.get("select_left"), label="select_left"),
-        select_right=_string_tuple(payload.get("select_right"), label="select_right"),
+        select_left=parse_string_tuple(payload.get("select_left"), label="select_left"),
+        select_right=parse_string_tuple(payload.get("select_right"), label="select_right"),
         tie_breakers=tuple(
-            SortKey(column=str(row["column"]), order=_parse_sort_order(row.get("order")))
+            SortKey(column=str(row["column"]), order=parse_sort_order(row.get("order")))
             for row in tie_breakers_payload
         ),
         emit_match_meta=bool(payload.get("emit_match_meta", True)),
@@ -607,13 +505,13 @@ def _interval_align_from_row(payload: Mapping[str, Any] | None) -> IntervalAlign
 def _winner_select_from_row(payload: Mapping[str, Any] | None) -> WinnerSelectConfig | None:
     if payload is None:
         return None
-    tie_breakers_payload = _mapping_sequence(payload.get("tie_breakers"), label="tie_breakers")
+    tie_breakers_payload = parse_mapping_sequence(payload.get("tie_breakers"), label="tie_breakers")
     return WinnerSelectConfig(
-        keys=_string_tuple(payload.get("keys"), label="keys"),
+        keys=parse_string_tuple(payload.get("keys"), label="keys"),
         score_col=str(payload.get("score_col", "score")),
         score_order=_parse_score_order(payload.get("score_order")),
         tie_breakers=tuple(
-            SortKey(column=str(row["column"]), order=_parse_sort_order(row.get("order")))
+            SortKey(column=str(row["column"]), order=parse_sort_order(row.get("order")))
             for row in tie_breakers_payload
         ),
     )

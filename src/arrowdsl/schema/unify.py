@@ -60,6 +60,21 @@ def unify_schemas(
     return metadata_spec_from_schema(schemas[0]).apply(unified)
 
 
+def unify_schema_with_metadata(
+    schemas: Sequence[SchemaLike],
+    *,
+    promote_options: str = "permissive",
+) -> SchemaLike:
+    """Unify schemas while preserving metadata from the first schema.
+
+    Returns
+    -------
+    SchemaLike
+        Unified schema with metadata preserved.
+    """
+    return unify_schemas(schemas, promote_options=promote_options)
+
+
 def unify_tables(
     tables: Sequence[TableLike],
     *,
@@ -79,4 +94,4 @@ def unify_tables(
     return pa.concat_tables(aligned)
 
 
-__all__ = ["unify_schemas", "unify_tables"]
+__all__ = ["unify_schema_with_metadata", "unify_schemas", "unify_tables"]

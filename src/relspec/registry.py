@@ -11,9 +11,9 @@ import pyarrow.fs as pafs
 
 from arrowdsl.finalize.finalize import Contract
 from arrowdsl.spec.io import read_spec_table
+from arrowdsl.spec.tables.relspec import relationship_rules_from_table
+from arrowdsl.spec.tables.schema import contract_specs_from_table, table_specs_from_tables
 from relspec.model import RelationshipRule
-from relspec.spec_tables import relationship_rules_from_table
-from schema_spec.spec_tables import contract_specs_from_table, table_specs_from_tables
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import ContractCatalogSpec, DatasetSpec
 

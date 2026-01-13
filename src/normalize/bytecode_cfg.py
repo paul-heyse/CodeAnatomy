@@ -11,23 +11,23 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan_helpers import code_unit_meta_join, column_or_null_expr, project_to_schema
+from normalize.registry_specs import (
+    dataset_contract,
+    dataset_input_columns,
+    dataset_query,
+    dataset_schema,
+    dataset_spec,
+)
 from normalize.runner import (
     ensure_canonical,
     ensure_execution_context,
     run_normalize,
     run_normalize_streamable_contract,
 )
-from normalize.schemas import (
-    CFG_BLOCKS_CONTRACT,
-    CFG_BLOCKS_NORM_SCHEMA,
-    CFG_BLOCKS_NORM_SPEC,
-    CFG_BLOCKS_QUERY,
-    CFG_EDGES_CONTRACT,
-    CFG_EDGES_NORM_SCHEMA,
-    CFG_EDGES_NORM_SPEC,
-    CFG_EDGES_QUERY,
-)
 from normalize.utils import PlanSource, plan_source
+
+CFG_BLOCKS_NAME = "py_bc_blocks_norm_v1"
+CFG_EDGES_NAME = "py_bc_cfg_edges_norm_v1"
 
 _META_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
     ("code_unit_id", pa.string()),
@@ -66,7 +66,7 @@ def cfg_blocks_plan(
     Plan
         Plan producing normalized CFG block rows.
     """
-    blocks = _to_plan(py_bc_blocks, ctx=ctx, columns=CFG_BLOCKS_QUERY.projection.base)
+    blocks = _to_plan(py_bc_blocks, ctx=ctx, columns=dataset_input_columns(CFG_BLOCKS_NAME))
     blocks_available = set(blocks.schema(ctx=ctx).names)
     code_units = _to_plan(py_bc_code_units, ctx=ctx, columns=[name for name, _ in _META_COLUMNS])
     code_available = set(code_units.schema(ctx=ctx).names)
@@ -79,11 +79,11 @@ def cfg_blocks_plan(
 
     joined = project_to_schema(
         joined,
-        schema=CFG_BLOCKS_NORM_SCHEMA,
+        schema=dataset_schema(CFG_BLOCKS_NAME),
         ctx=ctx,
         keep_extra_columns=True,
     )
-    return CFG_BLOCKS_QUERY.apply_to_plan(joined, ctx=ctx)
+    return dataset_query(CFG_BLOCKS_NAME).apply_to_plan(joined, ctx=ctx)
 
 
 def cfg_edges_plan(
@@ -99,7 +99,7 @@ def cfg_edges_plan(
     Plan
         Plan producing normalized CFG edge rows.
     """
-    edges = _to_plan(py_bc_cfg_edges, ctx=ctx, columns=CFG_EDGES_QUERY.projection.base)
+    edges = _to_plan(py_bc_cfg_edges, ctx=ctx, columns=dataset_input_columns(CFG_EDGES_NAME))
     edges_available = set(edges.schema(ctx=ctx).names)
     code_units = _to_plan(py_bc_code_units, ctx=ctx, columns=[name for name, _ in _META_COLUMNS])
     code_available = set(code_units.schema(ctx=ctx).names)
@@ -112,11 +112,11 @@ def cfg_edges_plan(
 
     joined = project_to_schema(
         joined,
-        schema=CFG_EDGES_NORM_SCHEMA,
+        schema=dataset_schema(CFG_EDGES_NAME),
         ctx=ctx,
         keep_extra_columns=True,
     )
-    return CFG_EDGES_QUERY.apply_to_plan(joined, ctx=ctx)
+    return dataset_query(CFG_EDGES_NAME).apply_to_plan(joined, ctx=ctx)
 
 
 def build_cfg_blocks_result(
@@ -146,9 +146,9 @@ def build_cfg_blocks_result(
     return run_normalize(
         plan=plan,
         post=(),
-        contract=CFG_BLOCKS_CONTRACT,
+        contract=dataset_contract(CFG_BLOCKS_NAME),
         ctx=exec_ctx,
-        metadata_spec=CFG_BLOCKS_NORM_SPEC.metadata_spec,
+        metadata_spec=dataset_spec(CFG_BLOCKS_NAME).metadata_spec,
     )
 
 
@@ -179,9 +179,9 @@ def build_cfg_edges_result(
     return run_normalize(
         plan=plan,
         post=(),
-        contract=CFG_EDGES_CONTRACT,
+        contract=dataset_contract(CFG_EDGES_NAME),
         ctx=exec_ctx,
-        metadata_spec=CFG_EDGES_NORM_SPEC.metadata_spec,
+        metadata_spec=dataset_spec(CFG_EDGES_NAME).metadata_spec,
     )
 
 
@@ -284,7 +284,11 @@ def build_cfg_blocks_streamable(
     """
     exec_ctx = ensure_execution_context(ctx)
     plan = cfg_blocks_plan(py_bc_blocks, py_bc_code_units, ctx=exec_ctx)
-    return run_normalize_streamable_contract(plan, contract=CFG_BLOCKS_CONTRACT, ctx=exec_ctx)
+    return run_normalize_streamable_contract(
+        plan,
+        contract=dataset_contract(CFG_BLOCKS_NAME),
+        ctx=exec_ctx,
+    )
 
 
 def build_cfg_edges_streamable(
@@ -302,7 +306,11 @@ def build_cfg_edges_streamable(
     """
     exec_ctx = ensure_execution_context(ctx)
     plan = cfg_edges_plan(py_bc_code_units, py_bc_cfg_edges, ctx=exec_ctx)
-    return run_normalize_streamable_contract(plan, contract=CFG_EDGES_CONTRACT, ctx=exec_ctx)
+    return run_normalize_streamable_contract(
+        plan,
+        contract=dataset_contract(CFG_EDGES_NAME),
+        ctx=exec_ctx,
+    )
 
 
 def build_cfg_streamable(

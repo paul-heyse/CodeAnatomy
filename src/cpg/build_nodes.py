@@ -8,7 +8,7 @@ import pyarrow as pa
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_array_values
-from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, SchemaLike, TableLike
 from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.build import const_array, set_or_append_column, table_from_arrays
@@ -28,8 +28,7 @@ from cpg.plan_specs import (
     finalize_context_for_plan,
     finalize_plan,
 )
-from cpg.schemas import CPG_NODES_SCHEMA, CPG_NODES_SPEC
-from cpg.spec_registry import node_plan_specs
+from cpg.registry import CpgRegistry, default_cpg_registry
 from cpg.specs import NodePlanSpec, resolve_preprocessor
 
 
@@ -93,17 +92,17 @@ def _symbol_nodes_table(
     return normalize_dictionaries(table)
 
 
-NODE_PLAN_SPECS = node_plan_specs()
-
-NODE_ENCODING_SPECS: tuple[EncodingSpec, ...] = tuple(
-    EncodingSpec(column=col) for col in encoding_columns_from_metadata(CPG_NODES_SCHEMA)
-)
+def _encoding_specs(schema: SchemaLike) -> tuple[EncodingSpec, ...]:
+    return tuple(EncodingSpec(column=col) for col in encoding_columns_from_metadata(schema))
 
 
-def _node_plan_specs(node_spec_table: pa.Table | None) -> tuple[NodePlanSpec, ...]:
-    if node_spec_table is None:
-        return NODE_PLAN_SPECS
-    return node_plan_specs_from_table(node_spec_table)
+def _node_plan_specs(
+    node_spec_table: pa.Table | None,
+    *,
+    registry: CpgRegistry,
+) -> tuple[NodePlanSpec, ...]:
+    table = node_spec_table or registry.node_plan_spec_table
+    return node_plan_specs_from_table(table)
 
 
 @dataclass(frozen=True)
@@ -212,6 +211,7 @@ def build_cpg_nodes_raw(
     inputs: NodeInputTables | None = None,
     options: NodeBuildOptions | None = None,
     node_spec_table: pa.Table | None = None,
+    registry: CpgRegistry | None = None,
 ) -> Plan:
     """Build CPG nodes as a plan without finalization.
 
@@ -225,6 +225,8 @@ def build_cpg_nodes_raw(
         Node build options.
     node_spec_table:
         Optional spec table overriding the default node plan specs.
+    registry:
+        Optional CPG registry overriding spec tables and dataset specs.
 
     Returns
     -------
@@ -236,10 +238,13 @@ def build_cpg_nodes_raw(
     ValueError
         Raised when an option flag is missing.
     """
+    registry = registry or default_cpg_registry()
+    nodes_spec = registry.nodes_spec()
+    nodes_schema = nodes_spec.schema()
     options = options or NodeBuildOptions()
     catalog = _node_tables(inputs or NodeInputTables(), options=options, ctx=ctx)
     parts: list[Plan] = []
-    for spec in _node_plan_specs(node_spec_table):
+    for spec in _node_plan_specs(node_spec_table, registry=registry):
         enabled = getattr(options, spec.option_flag, None)
         if enabled is None:
             msg = f"Unknown option flag: {spec.option_flag}"
@@ -256,11 +261,11 @@ def build_cpg_nodes_raw(
         parts.append(emit_node_plan(plan, spec=spec.emit, ctx=ctx))
 
     if not parts:
-        return empty_plan(CPG_NODES_SCHEMA, label="cpg_nodes_raw")
+        return empty_plan(nodes_schema, label="cpg_nodes_raw")
 
     combined = union_all_plans(parts, label="cpg_nodes_raw")
-    combined = encode_plan(combined, specs=NODE_ENCODING_SPECS, ctx=ctx)
-    return align_plan(combined, schema=CPG_NODES_SCHEMA, ctx=ctx)
+    combined = encode_plan(combined, specs=_encoding_specs(nodes_schema), ctx=ctx)
+    return align_plan(combined, schema=nodes_schema, ctx=ctx)
 
 
 def build_cpg_nodes(
@@ -269,6 +274,7 @@ def build_cpg_nodes(
     inputs: NodeInputTables | None = None,
     options: NodeBuildOptions | None = None,
     node_spec_table: pa.Table | None = None,
+    registry: CpgRegistry | None = None,
 ) -> CpgBuildArtifacts:
     """Build and finalize CPG nodes with quality artifacts.
 
@@ -277,11 +283,14 @@ def build_cpg_nodes(
     CpgBuildArtifacts
         Finalize result plus quality table.
     """
+    registry = registry or default_cpg_registry()
+    nodes_spec = registry.nodes_spec()
     raw_plan = build_cpg_nodes_raw(
         ctx=ctx,
         inputs=inputs,
         options=options,
         node_spec_table=node_spec_table,
+        registry=registry,
     )
     quality_plan = quality_plan_from_ids(
         raw_plan,
@@ -297,12 +306,12 @@ def build_cpg_nodes(
     quality = finalize_plan(quality_plan, ctx=ctx)
     finalize_ctx = finalize_context_for_plan(
         raw_plan,
-        contract=CPG_NODES_SPEC.contract(),
+        contract=nodes_spec.contract(),
         ctx=ctx,
     )
-    finalize = CPG_NODES_SPEC.finalize_context(ctx).run(raw, ctx=finalize_ctx)
+    finalize = nodes_spec.finalize_context(ctx).run(raw, ctx=finalize_ctx)
     if ctx.debug:
-        assert_schema_metadata(finalize.good, schema=CPG_NODES_SPEC.schema())
+        assert_schema_metadata(finalize.good, schema=nodes_spec.schema())
     return CpgBuildArtifacts(
         finalize=finalize,
         quality=quality,

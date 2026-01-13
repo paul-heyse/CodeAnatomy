@@ -10,16 +10,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
-from typing import Literal, overload
+from typing import TYPE_CHECKING, Literal, overload
 
 import pyarrow as pa
 
-from arrowdsl.compute.ids import prefixed_hash_id
 from arrowdsl.compute.macros import normalize_string_items
-from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
+from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import (
     ArrayLike,
-    ChunkedArrayLike,
     DataTypeLike,
     RecordBatchReaderLike,
     SchemaLike,
@@ -29,25 +27,29 @@ from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.plan.scan_io import plan_from_rows
-from arrowdsl.plan_helpers import encoding_columns_from_metadata, encoding_projection
-from arrowdsl.schema.build import set_or_append_column, struct_array_from_dicts, table_from_arrays
+from arrowdsl.schema.build import struct_array_from_dicts, table_from_arrays
 from arrowdsl.schema.nested_builders import LargeListAccumulator
-from arrowdsl.schema.ops import unify_tables
+from arrowdsl.schema.ops import encode_plan, unify_tables
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
-from extract.helpers import (
-    DatasetRegistration,
-    align_plan,
-    infer_ordering_keys,
-    merge_metadata_specs,
-    options_metadata_spec,
-    ordering_metadata_spec,
-    register_dataset,
+from extract.helpers import align_plan
+from extract.registry_fields import (
+    SCIP_SIGNATURE_DOCUMENTATION_TYPE,
 )
+from extract.registry_specs import (
+    dataset_metadata_with_options,
+    dataset_query,
+    dataset_row_schema,
+    dataset_schema,
+    dataset_schema_policy,
+    postprocess_table,
+)
+
+if TYPE_CHECKING:
+    from arrowdsl.schema.policy import SchemaPolicy
 from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
-from schema_spec.specs import ArrowFieldSpec, NestedFieldSpec, scip_range_bundle
+from schema_spec.specs import NestedFieldSpec
 
-SCHEMA_VERSION = 1
 RANGE_LEN_SHORT = 3
 RANGE_LEN_FULL = 4
 
@@ -100,22 +102,6 @@ class SCIPExtractResult:
     scip_diagnostics: TableLike
 
 
-SCIP_SIGNATURE_OCCURRENCE_TYPE = pa.struct(
-    [
-        ("symbol", pa.string()),
-        ("symbol_roles", pa.int32()),
-        ("range", pa.list_(pa.int32())),
-    ]
-)
-
-SCIP_SIGNATURE_DOCUMENTATION_TYPE = pa.struct(
-    [
-        ("text", pa.string()),
-        ("language", pa.string()),
-        ("occurrences", pa.large_list_view(SCIP_SIGNATURE_OCCURRENCE_TYPE)),
-    ]
-)
-
 SIG_DOC_OCCURRENCE_KEYS = ("symbol", "symbol_roles", "range")
 
 
@@ -161,245 +147,47 @@ def _signature_doc_entry(sig_doc: object | None) -> dict[str, object] | None:
     }
 
 
-ENCODING_META = {"encoding": "dictionary"}
+SCIP_METADATA_QUERY = dataset_query("scip_metadata_v1")
+SCIP_DOCUMENTS_QUERY = dataset_query("scip_documents_v1")
+SCIP_OCCURRENCES_QUERY = dataset_query("scip_occurrences_v1")
+SCIP_SYMBOL_INFO_QUERY = dataset_query("scip_symbol_info_v1")
+SCIP_SYMBOL_RELATIONSHIPS_QUERY = dataset_query("scip_symbol_relationships_v1")
+SCIP_EXTERNAL_SYMBOL_INFO_QUERY = dataset_query("scip_external_symbol_info_v1")
+SCIP_DIAGNOSTICS_QUERY = dataset_query("scip_diagnostics_v1")
 
-_SCIP_METADATA_FIELDS = [
-    ArrowFieldSpec(name="tool_name", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="tool_version", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="project_root", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="text_document_encoding", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="protocol_version", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="meta", dtype=pa.map_(pa.string(), pa.string())),
-]
+SCIP_METADATA_SCHEMA = dataset_schema("scip_metadata_v1")
+SCIP_DOCUMENTS_SCHEMA = dataset_schema("scip_documents_v1")
+SCIP_OCCURRENCES_SCHEMA = dataset_schema("scip_occurrences_v1")
+SCIP_SYMBOL_INFO_SCHEMA = dataset_schema("scip_symbol_info_v1")
+SCIP_SYMBOL_RELATIONSHIPS_SCHEMA = dataset_schema("scip_symbol_relationships_v1")
+SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA = dataset_schema("scip_external_symbol_info_v1")
+SCIP_DIAGNOSTICS_SCHEMA = dataset_schema("scip_diagnostics_v1")
 
-_SCIP_DOCUMENT_FIELDS = [
-    ArrowFieldSpec(name="document_id", dtype=pa.string()),
-    ArrowFieldSpec(name="path", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="language", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="position_encoding", dtype=pa.string(), metadata=ENCODING_META),
-]
-
-_SCIP_OCCURRENCE_FIELDS = [
-    ArrowFieldSpec(name="occurrence_id", dtype=pa.string()),
-    ArrowFieldSpec(name="document_id", dtype=pa.string()),
-    ArrowFieldSpec(name="path", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="symbol", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
-    ArrowFieldSpec(name="syntax_kind", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="override_documentation", dtype=pa.large_list(pa.string())),
-    *scip_range_bundle(include_len=True).fields,
-    *scip_range_bundle(prefix="enc_", include_len=True).fields,
-]
-
-_SCIP_SYMBOL_INFO_FIELDS = [
-    ArrowFieldSpec(name="symbol_info_id", dtype=pa.string()),
-    ArrowFieldSpec(name="symbol", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="display_name", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="kind", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="enclosing_symbol", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="documentation", dtype=pa.large_list(pa.string())),
-    ArrowFieldSpec(
-        name="signature_documentation",
-        dtype=SCIP_SIGNATURE_DOCUMENTATION_TYPE,
-    ),
-]
-
-_SCIP_SYMBOL_REL_FIELDS = [
-    ArrowFieldSpec(name="relationship_id", dtype=pa.string()),
-    ArrowFieldSpec(name="symbol", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="related_symbol", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="is_reference", dtype=pa.bool_()),
-    ArrowFieldSpec(name="is_implementation", dtype=pa.bool_()),
-    ArrowFieldSpec(name="is_type_definition", dtype=pa.bool_()),
-    ArrowFieldSpec(name="is_definition", dtype=pa.bool_()),
-]
-
-_SCIP_EXTERNAL_SYMBOL_INFO_FIELDS = [
-    ArrowFieldSpec(name="symbol_info_id", dtype=pa.string()),
-    ArrowFieldSpec(name="symbol", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="display_name", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="kind", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="enclosing_symbol", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="documentation", dtype=pa.large_list(pa.string())),
-    ArrowFieldSpec(
-        name="signature_documentation",
-        dtype=SCIP_SIGNATURE_DOCUMENTATION_TYPE,
-    ),
-]
-
-_SCIP_DIAGNOSTIC_FIELDS = [
-    ArrowFieldSpec(name="diagnostic_id", dtype=pa.string()),
-    ArrowFieldSpec(name="document_id", dtype=pa.string()),
-    ArrowFieldSpec(name="path", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="severity", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="code", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="message", dtype=pa.string()),
-    ArrowFieldSpec(name="source", dtype=pa.string(), metadata=ENCODING_META),
-    ArrowFieldSpec(name="tags", dtype=pa.large_list(pa.string())),
-    *scip_range_bundle().fields,
-]
-
-_SCIP_METADATA_COLUMNS = tuple(field.name for field in _SCIP_METADATA_FIELDS)
-_SCIP_DOCUMENT_COLUMNS = tuple(field.name for field in _SCIP_DOCUMENT_FIELDS)
-_SCIP_OCCURRENCE_COLUMNS = tuple(field.name for field in _SCIP_OCCURRENCE_FIELDS)
-_SCIP_SYMBOL_INFO_COLUMNS = tuple(field.name for field in _SCIP_SYMBOL_INFO_FIELDS)
-_SCIP_SYMBOL_REL_COLUMNS = tuple(field.name for field in _SCIP_SYMBOL_REL_FIELDS)
-_SCIP_EXTERNAL_SYMBOL_INFO_COLUMNS = tuple(
-    field.name for field in _SCIP_EXTERNAL_SYMBOL_INFO_FIELDS
-)
-_SCIP_DIAGNOSTIC_COLUMNS = tuple(field.name for field in _SCIP_DIAGNOSTIC_FIELDS)
-
-_SCIP_METADATA_EXTRA = {
-    b"extractor_name": b"scip",
-    b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
-}
-
-_SCIP_METADATA_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_SCIP_METADATA_COLUMNS),
-    extra=_SCIP_METADATA_EXTRA,
-)
-_SCIP_DOCUMENTS_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_SCIP_DOCUMENT_COLUMNS),
-    extra=_SCIP_METADATA_EXTRA,
-)
-_SCIP_OCCURRENCES_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_SCIP_OCCURRENCE_COLUMNS),
-    extra=_SCIP_METADATA_EXTRA,
-)
-_SCIP_SYMBOL_INFO_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_SCIP_SYMBOL_INFO_COLUMNS),
-    extra=_SCIP_METADATA_EXTRA,
-)
-_SCIP_SYMBOL_REL_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_SCIP_SYMBOL_REL_COLUMNS),
-    extra=_SCIP_METADATA_EXTRA,
-)
-_SCIP_EXTERNAL_SYMBOL_INFO_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_SCIP_EXTERNAL_SYMBOL_INFO_COLUMNS),
-    extra=_SCIP_METADATA_EXTRA,
-)
-_SCIP_DIAGNOSTICS_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_SCIP_DIAGNOSTIC_COLUMNS),
-    extra=_SCIP_METADATA_EXTRA,
-)
-
-SCIP_METADATA_SPEC = register_dataset(
-    name="scip_metadata_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=_SCIP_METADATA_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=QuerySpec.simple(*[field.name for field in _SCIP_METADATA_FIELDS]),
-        metadata_spec=_SCIP_METADATA_METADATA,
-    ),
-)
-
-SCIP_DOCUMENTS_SPEC = register_dataset(
-    name="scip_documents_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=_SCIP_DOCUMENT_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=QuerySpec.simple(*[field.name for field in _SCIP_DOCUMENT_FIELDS]),
-        metadata_spec=_SCIP_DOCUMENTS_METADATA,
-    ),
-)
-
-SCIP_OCCURRENCES_SPEC = register_dataset(
-    name="scip_occurrences_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=_SCIP_OCCURRENCE_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=QuerySpec.simple(*[field.name for field in _SCIP_OCCURRENCE_FIELDS]),
-        metadata_spec=_SCIP_OCCURRENCES_METADATA,
-    ),
-)
-
-SCIP_SYMBOL_INFO_SPEC = register_dataset(
-    name="scip_symbol_info_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=_SCIP_SYMBOL_INFO_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=QuerySpec.simple(*[field.name for field in _SCIP_SYMBOL_INFO_FIELDS]),
-        metadata_spec=_SCIP_SYMBOL_INFO_METADATA,
-    ),
-)
-
-SCIP_SYMBOL_RELATIONSHIPS_SPEC = register_dataset(
-    name="scip_symbol_relationships_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=_SCIP_SYMBOL_REL_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=QuerySpec.simple(*[field.name for field in _SCIP_SYMBOL_REL_FIELDS]),
-        metadata_spec=_SCIP_SYMBOL_REL_METADATA,
-    ),
-)
-
-SCIP_EXTERNAL_SYMBOL_INFO_SPEC = register_dataset(
-    name="scip_external_symbol_info_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=_SCIP_EXTERNAL_SYMBOL_INFO_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=QuerySpec.simple(*[field.name for field in _SCIP_EXTERNAL_SYMBOL_INFO_FIELDS]),
-        metadata_spec=_SCIP_EXTERNAL_SYMBOL_INFO_METADATA,
-    ),
-)
-
-SCIP_DIAGNOSTICS_SPEC = register_dataset(
-    name="scip_diagnostics_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=_SCIP_DIAGNOSTIC_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=QuerySpec.simple(*[field.name for field in _SCIP_DIAGNOSTIC_FIELDS]),
-        metadata_spec=_SCIP_DIAGNOSTICS_METADATA,
-    ),
-)
-
-SCIP_METADATA_SCHEMA = SCIP_METADATA_SPEC.schema()
-SCIP_DOCUMENTS_SCHEMA = SCIP_DOCUMENTS_SPEC.schema()
-SCIP_OCCURRENCES_SCHEMA = SCIP_OCCURRENCES_SPEC.schema()
-SCIP_SYMBOL_INFO_SCHEMA = SCIP_SYMBOL_INFO_SPEC.schema()
-SCIP_SYMBOL_RELATIONSHIPS_SCHEMA = SCIP_SYMBOL_RELATIONSHIPS_SPEC.schema()
-SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA = SCIP_EXTERNAL_SYMBOL_INFO_SPEC.schema()
-SCIP_DIAGNOSTICS_SCHEMA = SCIP_DIAGNOSTICS_SPEC.schema()
+SCIP_METADATA_ROW_SCHEMA = dataset_row_schema("scip_metadata_v1")
 
 
 def _scip_metadata_specs(
     parse_opts: SCIPParseOptions,
 ) -> dict[str, SchemaMetadataSpec]:
-    run_meta = options_metadata_spec(options=parse_opts)
     return {
-        "scip_metadata": merge_metadata_specs(_SCIP_METADATA_METADATA, run_meta),
-        "scip_documents": merge_metadata_specs(_SCIP_DOCUMENTS_METADATA, run_meta),
-        "scip_occurrences": merge_metadata_specs(_SCIP_OCCURRENCES_METADATA, run_meta),
-        "scip_symbol_information": merge_metadata_specs(_SCIP_SYMBOL_INFO_METADATA, run_meta),
-        "scip_symbol_relationships": merge_metadata_specs(_SCIP_SYMBOL_REL_METADATA, run_meta),
-        "scip_external_symbol_information": merge_metadata_specs(
-            _SCIP_EXTERNAL_SYMBOL_INFO_METADATA, run_meta
+        "scip_metadata": dataset_metadata_with_options("scip_metadata_v1", options=parse_opts),
+        "scip_documents": dataset_metadata_with_options("scip_documents_v1", options=parse_opts),
+        "scip_occurrences": dataset_metadata_with_options(
+            "scip_occurrences_v1", options=parse_opts
         ),
-        "scip_diagnostics": merge_metadata_specs(_SCIP_DIAGNOSTICS_METADATA, run_meta),
+        "scip_symbol_information": dataset_metadata_with_options(
+            "scip_symbol_info_v1", options=parse_opts
+        ),
+        "scip_symbol_relationships": dataset_metadata_with_options(
+            "scip_symbol_relationships_v1", options=parse_opts
+        ),
+        "scip_external_symbol_information": dataset_metadata_with_options(
+            "scip_external_symbol_info_v1", options=parse_opts
+        ),
+        "scip_diagnostics": dataset_metadata_with_options(
+            "scip_diagnostics_v1", options=parse_opts
+        ),
     }
-
-
-SCIP_METADATA_QUERY = SCIP_METADATA_SPEC.query()
-SCIP_DOCUMENTS_QUERY = SCIP_DOCUMENTS_SPEC.query()
-SCIP_OCCURRENCES_QUERY = SCIP_OCCURRENCES_SPEC.query()
-SCIP_SYMBOL_INFO_QUERY = SCIP_SYMBOL_INFO_SPEC.query()
-SCIP_SYMBOL_RELATIONSHIPS_QUERY = SCIP_SYMBOL_RELATIONSHIPS_SPEC.query()
-SCIP_EXTERNAL_SYMBOL_INFO_QUERY = SCIP_EXTERNAL_SYMBOL_INFO_SPEC.query()
-SCIP_DIAGNOSTICS_QUERY = SCIP_DIAGNOSTICS_SPEC.query()
 
 
 def _scip_index_command(
@@ -574,107 +362,6 @@ def parse_index_scip(index_path: Path, parse_opts: SCIPParseOptions | None = Non
         "Run scripts/scip_proto_codegen.py to generate build/scip/scip_pb2.py."
     )
     raise RuntimeError(msg)
-
-
-def _prefixed_hash(prefix: str, arrays: Sequence[ArrayLike | ChunkedArrayLike]) -> ArrayLike:
-    return prefixed_hash_id(arrays, prefix=prefix)
-
-
-def _set_column(
-    table: TableLike,
-    name: str,
-    values: ArrayLike | ChunkedArrayLike,
-) -> TableLike:
-    return set_or_append_column(table, name, values)
-
-
-def _with_document_ids(table: TableLike, *, path_col: str = "path") -> TableLike:
-    if table.num_rows == 0 or path_col not in table.column_names:
-        return table
-    ids = _prefixed_hash("scip_doc", [table[path_col]])
-    return _set_column(table, "document_id", ids)
-
-
-def add_scip_document_ids(table: TableLike, *, path_col: str = "path") -> TableLike:
-    """Add document_id values derived from a path column.
-
-    Returns
-    -------
-    TableLike
-        Updated table with a document_id column.
-    """
-    return _with_document_ids(table, path_col=path_col)
-
-
-def _with_occurrence_ids(table: TableLike) -> TableLike:
-    if table.num_rows == 0:
-        return table
-    occ_index = pa.array(range(table.num_rows), type=pa.int64())
-    ids = _prefixed_hash(
-        "scip_occ",
-        [
-            table["document_id"],
-            occ_index,
-            table["start_line"],
-            table["start_char"],
-            table["end_line"],
-            table["end_char"],
-        ],
-    )
-    return _set_column(table, "occurrence_id", ids)
-
-
-def add_scip_occurrence_ids(table: TableLike) -> TableLike:
-    """Add occurrence_id values derived from document/span columns.
-
-    Returns
-    -------
-    TableLike
-        Updated table with an occurrence_id column.
-    """
-    return _with_occurrence_ids(table)
-
-
-def _with_diagnostic_ids(table: TableLike) -> TableLike:
-    if table.num_rows == 0:
-        return table
-    diag_index = pa.array(range(table.num_rows), type=pa.int64())
-    ids = _prefixed_hash(
-        "scip_diag",
-        [
-            table["document_id"],
-            diag_index,
-            table["start_line"],
-            table["start_char"],
-            table["end_line"],
-            table["end_char"],
-        ],
-    )
-    return _set_column(table, "diagnostic_id", ids)
-
-
-def _with_symbol_ids(table: TableLike, *, prefix: str) -> TableLike:
-    if table.num_rows == 0:
-        return table
-    ids = _prefixed_hash(prefix, [table["symbol"]])
-    return _set_column(table, "symbol_info_id", ids)
-
-
-def _with_relationship_ids(table: TableLike) -> TableLike:
-    if table.num_rows == 0:
-        return table
-    ids = _prefixed_hash(
-        "scip_rel",
-        [
-            table["symbol"],
-            table["related_symbol"],
-            table["is_reference"],
-            table["is_implementation"],
-            table["is_type_definition"],
-            table["is_definition"],
-        ],
-    )
-    return _set_column(table, "relationship_id", ids)
 
 
 def _index_counts(index: object) -> dict[str, int]:
@@ -1137,37 +824,35 @@ def _symbol_tables(index: object) -> tuple[TableLike, TableLike, TableLike]:
 def _finalize_plan(
     plan: Plan,
     *,
-    schema: SchemaLike,
+    policy: SchemaPolicy,
     query: QuerySpec,
     exec_ctx: ExecutionContext,
-    encode_columns: Sequence[str] = (),
 ) -> Plan:
     plan = query.apply_to_plan(plan, ctx=exec_ctx)
+    schema = policy.resolved_schema()
     plan = align_plan(
         plan,
         schema=schema,
         ctx=exec_ctx,
     )
-    if encode_columns:
-        exprs, names = encoding_projection(encode_columns, available=schema.names)
-        plan = plan.project(exprs, names, ctx=exec_ctx)
+    if policy.encoding is not None:
+        columns = tuple(spec.column for spec in policy.encoding.specs)
+        plan = encode_plan(plan, columns=columns, ctx=exec_ctx)
     return plan
 
 
 def _finalize_table(
     table: TableLike,
     *,
-    schema: SchemaLike,
+    policy: SchemaPolicy,
     query: QuerySpec,
     exec_ctx: ExecutionContext,
-    encode_columns: Sequence[str] = (),
 ) -> TableLike:
     plan = _finalize_plan(
         Plan.table_source(table),
-        schema=schema,
+        policy=policy,
         query=query,
         exec_ctx=exec_ctx,
-        encode_columns=encode_columns,
     )
     return materialize_plan(plan, ctx=exec_ctx)
 
@@ -1230,6 +915,57 @@ def _extract_tables_from_index(
     )
 
 
+def _scip_policies(
+    parse_opts: SCIPParseOptions,
+    exec_ctx: ExecutionContext,
+) -> dict[str, SchemaPolicy]:
+    encode = parse_opts.dictionary_encode_strings
+    return {
+        "scip_metadata_v1": dataset_schema_policy(
+            "scip_metadata_v1",
+            ctx=exec_ctx,
+            options=parse_opts,
+            enable_encoding=encode,
+        ),
+        "scip_documents_v1": dataset_schema_policy(
+            "scip_documents_v1",
+            ctx=exec_ctx,
+            options=parse_opts,
+            enable_encoding=encode,
+        ),
+        "scip_occurrences_v1": dataset_schema_policy(
+            "scip_occurrences_v1",
+            ctx=exec_ctx,
+            options=parse_opts,
+            enable_encoding=encode,
+        ),
+        "scip_symbol_info_v1": dataset_schema_policy(
+            "scip_symbol_info_v1",
+            ctx=exec_ctx,
+            options=parse_opts,
+            enable_encoding=encode,
+        ),
+        "scip_symbol_relationships_v1": dataset_schema_policy(
+            "scip_symbol_relationships_v1",
+            ctx=exec_ctx,
+            options=parse_opts,
+            enable_encoding=encode,
+        ),
+        "scip_external_symbol_info_v1": dataset_schema_policy(
+            "scip_external_symbol_info_v1",
+            ctx=exec_ctx,
+            options=parse_opts,
+            enable_encoding=encode,
+        ),
+        "scip_diagnostics_v1": dataset_schema_policy(
+            "scip_diagnostics_v1",
+            ctx=exec_ctx,
+            options=parse_opts,
+            enable_encoding=encode,
+        ),
+    }
+
+
 def _extract_plan_bundle_from_index(
     index: object,
     *,
@@ -1239,103 +975,63 @@ def _extract_plan_bundle_from_index(
     meta_rows = _metadata_rows(index, parse_opts=parse_opts)
     t_docs, t_occs, t_diags = _document_tables(index)
 
-    t_meta_plan = plan_from_rows(meta_rows, schema=SCIP_METADATA_SCHEMA, label="scip_metadata")
+    t_meta_plan = plan_from_rows(
+        meta_rows,
+        schema=SCIP_METADATA_ROW_SCHEMA,
+        label="scip_metadata",
+    )
     t_syms, t_rels, t_ext = _symbol_tables(index)
 
-    t_docs = _with_document_ids(t_docs)
-    t_occs = _with_document_ids(t_occs)
-    t_occs = _with_occurrence_ids(t_occs)
-    t_diags = _with_document_ids(t_diags)
-    t_diags = _with_diagnostic_ids(t_diags)
-    t_syms = _with_symbol_ids(t_syms, prefix="scip_sym")
-    t_rels = _with_relationship_ids(t_rels)
-    t_ext = _with_symbol_ids(t_ext, prefix="scip_ext_sym")
-
-    encode_meta = (
-        encoding_columns_from_metadata(SCIP_METADATA_SCHEMA)
-        if parse_opts.dictionary_encode_strings
-        else []
-    )
-    encode_docs = (
-        encoding_columns_from_metadata(SCIP_DOCUMENTS_SCHEMA)
-        if parse_opts.dictionary_encode_strings
-        else []
-    )
-    encode_occs = (
-        encoding_columns_from_metadata(SCIP_OCCURRENCES_SCHEMA)
-        if parse_opts.dictionary_encode_strings
-        else []
-    )
-    encode_syms = (
-        encoding_columns_from_metadata(SCIP_SYMBOL_INFO_SCHEMA)
-        if parse_opts.dictionary_encode_strings
-        else []
-    )
-    encode_rels = (
-        encoding_columns_from_metadata(SCIP_SYMBOL_RELATIONSHIPS_SCHEMA)
-        if parse_opts.dictionary_encode_strings
-        else []
-    )
-    encode_ext = (
-        encoding_columns_from_metadata(SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA)
-        if parse_opts.dictionary_encode_strings
-        else []
-    )
-    encode_diags = (
-        encoding_columns_from_metadata(SCIP_DIAGNOSTICS_SCHEMA)
-        if parse_opts.dictionary_encode_strings
-        else []
-    )
+    t_docs = postprocess_table("scip_documents_v1", t_docs)
+    t_occs = postprocess_table("scip_occurrences_v1", t_occs)
+    t_diags = postprocess_table("scip_diagnostics_v1", t_diags)
+    t_syms = postprocess_table("scip_symbol_info_v1", t_syms)
+    t_rels = postprocess_table("scip_symbol_relationships_v1", t_rels)
+    t_ext = postprocess_table("scip_external_symbol_info_v1", t_ext)
+    policies = _scip_policies(parse_opts, exec_ctx=exec_ctx)
 
     return {
         "scip_metadata": _finalize_plan(
             t_meta_plan,
-            schema=SCIP_METADATA_SCHEMA,
+            policy=policies["scip_metadata_v1"],
             query=SCIP_METADATA_QUERY,
             exec_ctx=exec_ctx,
-            encode_columns=encode_meta,
         ),
         "scip_documents": _finalize_plan(
             Plan.table_source(t_docs),
-            schema=SCIP_DOCUMENTS_SCHEMA,
+            policy=policies["scip_documents_v1"],
             query=SCIP_DOCUMENTS_QUERY,
             exec_ctx=exec_ctx,
-            encode_columns=encode_docs,
         ),
         "scip_occurrences": _finalize_plan(
             Plan.table_source(t_occs),
-            schema=SCIP_OCCURRENCES_SCHEMA,
+            policy=policies["scip_occurrences_v1"],
             query=SCIP_OCCURRENCES_QUERY,
             exec_ctx=exec_ctx,
-            encode_columns=encode_occs,
         ),
         "scip_symbol_information": _finalize_plan(
             Plan.table_source(t_syms),
-            schema=SCIP_SYMBOL_INFO_SCHEMA,
+            policy=policies["scip_symbol_info_v1"],
             query=SCIP_SYMBOL_INFO_QUERY,
             exec_ctx=exec_ctx,
-            encode_columns=encode_syms,
         ),
         "scip_symbol_relationships": _finalize_plan(
             Plan.table_source(t_rels),
-            schema=SCIP_SYMBOL_RELATIONSHIPS_SCHEMA,
+            policy=policies["scip_symbol_relationships_v1"],
             query=SCIP_SYMBOL_RELATIONSHIPS_QUERY,
             exec_ctx=exec_ctx,
-            encode_columns=encode_rels,
         ),
         "scip_external_symbol_information": _finalize_plan(
             Plan.table_source(t_ext),
-            schema=SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA,
+            policy=policies["scip_external_symbol_info_v1"],
             query=SCIP_EXTERNAL_SYMBOL_INFO_QUERY,
             exec_ctx=exec_ctx,
-            encode_columns=encode_ext,
         ),
         "scip_diagnostics": _finalize_plan(
             Plan.table_source(t_diags),
-            schema=SCIP_DIAGNOSTICS_SCHEMA,
+            policy=policies["scip_diagnostics_v1"],
             query=SCIP_DIAGNOSTICS_QUERY,
             exec_ctx=exec_ctx,
-            encode_columns=encode_diags,
         ),
     }
 

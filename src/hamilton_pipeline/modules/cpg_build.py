@@ -16,7 +16,7 @@ from arrowdsl.io.parquet import (
     write_named_datasets_parquet,
 )
 from arrowdsl.schema.schema import empty_table
-from cpg.build_edges import EdgeBuildInputs, build_cpg_edges
+from cpg.build_edges import EdgeBuildConfig, EdgeBuildInputs, build_cpg_edges
 from cpg.build_nodes import NodeInputTables, build_cpg_nodes
 from cpg.build_props import PropsInputTables, build_cpg_props
 from cpg.constants import CpgBuildArtifacts
@@ -1045,7 +1045,7 @@ def cpg_edges_finalize(
     CpgBuildArtifacts
         Finalized edges bundle plus quality table.
     """
-    return build_cpg_edges(ctx=ctx, inputs=cpg_edge_inputs)
+    return build_cpg_edges(ctx=ctx, config=EdgeBuildConfig(inputs=cpg_edge_inputs))
 
 
 @cache(format="parquet")

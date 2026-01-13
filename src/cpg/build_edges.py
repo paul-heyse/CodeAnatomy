@@ -5,11 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+import pyarrow as pa
+
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import Table, TableLike
+from arrowdsl.core.interop import SchemaLike, Table, TableLike
 from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.schema import EncodingSpec
+from arrowdsl.spec.tables.cpg import edge_plan_specs_from_table
 from cpg.catalog import PlanCatalog
 from cpg.constants import CpgBuildArtifacts, QualityPlanSpec, quality_plan_from_ids
 from cpg.emit_edges import emit_edges_plan
@@ -22,12 +25,22 @@ from cpg.plan_specs import (
     finalize_context_for_plan,
     finalize_plan,
 )
-from cpg.relations import EDGE_RELATION_SPECS
-from cpg.schemas import CPG_EDGES_SCHEMA, CPG_EDGES_SPEC
+from cpg.registry import CpgRegistry, default_cpg_registry
+from cpg.relation_registry import compile_relation_plans
+from cpg.specs import EdgePlanSpec
 
-EDGE_ENCODING_SPECS: tuple[EncodingSpec, ...] = tuple(
-    EncodingSpec(column=col) for col in encoding_columns_from_metadata(CPG_EDGES_SCHEMA)
-)
+
+def _encoding_specs(schema: SchemaLike) -> tuple[EncodingSpec, ...]:
+    return tuple(EncodingSpec(column=col) for col in encoding_columns_from_metadata(schema))
+
+
+def _edge_plan_specs(
+    edge_spec_table: pa.Table | None,
+    *,
+    registry: CpgRegistry,
+) -> tuple[EdgePlanSpec, ...]:
+    table = edge_spec_table or registry.edge_plan_spec_table
+    return edge_plan_specs_from_table(table)
 
 
 @dataclass(frozen=True)
@@ -56,6 +69,38 @@ class EdgeBuildInputs:
     rt_signatures: TableLike | DatasetSource | None = None
     rt_signature_params: TableLike | DatasetSource | None = None
     rt_members: TableLike | DatasetSource | None = None
+
+
+@dataclass(frozen=True)
+class EdgeSpecOverrides:
+    """Optional spec table overrides for edge construction."""
+
+    edge_spec_table: pa.Table | None = None
+    relation_rule_table: pa.Table | None = None
+
+
+@dataclass(frozen=True)
+class EdgeBuildConfig:
+    """Configuration bundle for edge construction."""
+
+    inputs: EdgeBuildInputs | None = None
+    options: EdgeBuildOptions | None = None
+    spec_tables: EdgeSpecOverrides | None = None
+    registry: CpgRegistry | None = None
+    legacy: Mapping[str, object] | None = None
+
+
+def _resolve_edge_config(config: EdgeBuildConfig | None) -> EdgeBuildConfig:
+    resolved = config or EdgeBuildConfig()
+    if resolved.registry is not None:
+        return resolved
+    return EdgeBuildConfig(
+        inputs=resolved.inputs,
+        options=resolved.options,
+        spec_tables=resolved.spec_tables,
+        registry=default_cpg_registry(),
+        legacy=resolved.legacy,
+    )
 
 
 def _edge_inputs_from_legacy(legacy: Mapping[str, object]) -> EdgeBuildInputs:
@@ -113,9 +158,7 @@ def _edge_catalog(inputs: EdgeBuildInputs) -> PlanCatalog:
 def build_cpg_edges_raw(
     *,
     ctx: ExecutionContext,
-    inputs: EdgeBuildInputs | None = None,
-    options: EdgeBuildOptions | None = None,
-    **legacy: object,
+    config: EdgeBuildConfig | None = None,
 ) -> Plan:
     """Emit raw CPG edges as a plan without finalization.
 
@@ -129,37 +172,44 @@ def build_cpg_edges_raw(
     ValueError
         Raised when an option flag is missing.
     """
-    options = options or EdgeBuildOptions()
-    if inputs is None and legacy:
-        inputs = _edge_inputs_from_legacy(legacy)
+    config = _resolve_edge_config(config)
+    registry = config.registry or default_cpg_registry()
+    edges_spec = registry.edges_spec()
+    edges_schema = edges_spec.schema()
+    options = config.options or EdgeBuildOptions()
+    inputs = config.inputs
+    if inputs is None and config.legacy:
+        inputs = _edge_inputs_from_legacy(config.legacy)
     catalog = _edge_catalog(inputs or EdgeBuildInputs())
+    spec_tables = config.spec_tables or EdgeSpecOverrides()
+    relation_rule_table = spec_tables.relation_rule_table or registry.relation_rule_table
+    relation_plans = compile_relation_plans(catalog, ctx=ctx, rule_table=relation_rule_table)
 
     parts: list[Plan] = []
-    for spec in EDGE_RELATION_SPECS:
+    for spec in _edge_plan_specs(spec_tables.edge_spec_table, registry=registry):
         enabled = getattr(options, spec.option_flag, None)
         if enabled is None:
             msg = f"Unknown option flag: {spec.option_flag}"
             raise ValueError(msg)
         if not enabled:
             continue
-        rel = spec.build(catalog, ctx=ctx)
+        rel = relation_plans.get(spec.relation_ref)
         if rel is None:
             continue
         parts.append(emit_edges_plan(rel, spec=spec.emit, ctx=ctx))
 
     if not parts:
-        return empty_plan(CPG_EDGES_SCHEMA, label="cpg_edges_raw")
+        return empty_plan(edges_schema, label="cpg_edges_raw")
 
     combined = union_all_plans(parts, label="cpg_edges_raw")
-    combined = encode_plan(combined, specs=EDGE_ENCODING_SPECS, ctx=ctx)
-    return align_plan(combined, schema=CPG_EDGES_SCHEMA, ctx=ctx)
+    combined = encode_plan(combined, specs=_encoding_specs(edges_schema), ctx=ctx)
+    return align_plan(combined, schema=edges_schema, ctx=ctx)
 
 
 def build_cpg_edges(
     *,
     ctx: ExecutionContext,
-    inputs: EdgeBuildInputs | None = None,
-    options: EdgeBuildOptions | None = None,
+    config: EdgeBuildConfig | None = None,
 ) -> CpgBuildArtifacts:
     """Build and finalize CPG edges with quality artifacts.
 
@@ -168,7 +218,13 @@ def build_cpg_edges(
     CpgBuildArtifacts
         Finalize result plus quality table.
     """
-    raw_plan = build_cpg_edges_raw(ctx=ctx, inputs=inputs, options=options)
+    config = _resolve_edge_config(config)
+    registry = config.registry or default_cpg_registry()
+    edges_spec = registry.edges_spec()
+    raw_plan = build_cpg_edges_raw(
+        ctx=ctx,
+        config=config,
+    )
     quality_plan = quality_plan_from_ids(
         raw_plan,
         spec=QualityPlanSpec(
@@ -183,12 +239,12 @@ def build_cpg_edges(
     quality = finalize_plan(quality_plan, ctx=ctx)
     finalize_ctx = finalize_context_for_plan(
         raw_plan,
-        contract=CPG_EDGES_SPEC.contract(),
+        contract=edges_spec.contract(),
         ctx=ctx,
     )
-    finalize = CPG_EDGES_SPEC.finalize_context(ctx).run(raw, ctx=finalize_ctx)
+    finalize = edges_spec.finalize_context(ctx).run(raw, ctx=finalize_ctx)
     if ctx.debug:
-        assert_schema_metadata(finalize.good, schema=CPG_EDGES_SPEC.schema())
+        assert_schema_metadata(finalize.good, schema=edges_spec.schema())
     return CpgBuildArtifacts(
         finalize=finalize,
         quality=quality,

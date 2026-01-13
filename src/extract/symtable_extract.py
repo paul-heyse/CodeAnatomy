@@ -10,41 +10,32 @@ from typing import Literal, Required, TypedDict, Unpack, cast, overload
 import pyarrow as pa
 
 from arrowdsl.compute.expr_core import MaskedHashExprSpec
-from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
+from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, pc
 from arrowdsl.plan.joins import join_config_for_output, left_join
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.plan.scan_io import plan_from_rows
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.metadata import normalize_dictionaries
 from arrowdsl.schema.nested_builders import LargeListViewAccumulator
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
-from extract.hash_specs import (
-    SYM_NS_EDGE_ID_SPEC,
-    SYM_NS_SYMBOL_ROW_ID_SPEC,
-    SYM_SCOPE_EDGE_ID_SPEC,
-    SYM_SCOPE_ID_SPEC,
-    SYM_SYMBOL_ROW_ID_SPEC,
-)
 from extract.helpers import (
-    DatasetRegistration,
     FileContext,
     align_plan,
     file_identity_row,
-    infer_ordering_keys,
     iter_contexts,
-    merge_metadata_specs,
-    options_metadata_spec,
-    ordering_metadata_spec,
     project_columns,
-    register_dataset,
     text_from_file_ctx,
 )
-from schema_spec.specs import ArrowFieldSpec, NestedFieldSpec, file_identity_bundle
-
-SCHEMA_VERSION = 1
+from extract.registry_ids import hash_spec
+from extract.registry_specs import (
+    dataset_metadata_with_options,
+    dataset_query,
+    dataset_row_schema,
+    dataset_schema,
+)
+from schema_spec.specs import NestedFieldSpec
 
 
 @dataclass(frozen=True)
@@ -115,288 +106,47 @@ class SymtableContext:
         return file_identity_row(self.file_ctx)
 
 
-_SCOPES_FIELDS = [
-    ArrowFieldSpec(name="scope_id", dtype=pa.string()),
-    ArrowFieldSpec(name="table_id", dtype=pa.int64()),
-    ArrowFieldSpec(name="scope_type", dtype=pa.string()),
-    ArrowFieldSpec(name="scope_name", dtype=pa.string()),
-    ArrowFieldSpec(name="lineno", dtype=pa.int32()),
-    ArrowFieldSpec(name="is_nested", dtype=pa.bool_()),
-    ArrowFieldSpec(name="is_optimized", dtype=pa.bool_()),
-    ArrowFieldSpec(name="has_children", dtype=pa.bool_()),
-    ArrowFieldSpec(name="scope_role", dtype=pa.string()),
-]
+SYM_SCOPE_ID_SPEC = hash_spec("sym_scope_id")
+SYM_SYMBOL_ROW_ID_SPEC = hash_spec("sym_symbol_row_id")
+SYM_SCOPE_EDGE_ID_SPEC = hash_spec("sym_scope_edge_id")
+SYM_NS_SYMBOL_ROW_ID_SPEC = hash_spec("sym_ns_symbol_row_id")
+SYM_NS_EDGE_ID_SPEC = hash_spec("sym_ns_edge_id")
 
-_SYMBOLS_FIELDS = [
-    ArrowFieldSpec(name="symbol_row_id", dtype=pa.string()),
-    ArrowFieldSpec(name="scope_id", dtype=pa.string()),
-    ArrowFieldSpec(name="name", dtype=pa.string()),
-    ArrowFieldSpec(name="is_referenced", dtype=pa.bool_()),
-    ArrowFieldSpec(name="is_assigned", dtype=pa.bool_()),
-    ArrowFieldSpec(name="is_imported", dtype=pa.bool_()),
-    ArrowFieldSpec(name="is_annotated", dtype=pa.bool_()),
-    ArrowFieldSpec(name="is_parameter", dtype=pa.bool_()),
-    ArrowFieldSpec(name="is_global", dtype=pa.bool_()),
-    ArrowFieldSpec(name="is_declared_global", dtype=pa.bool_()),
-    ArrowFieldSpec(name="is_nonlocal", dtype=pa.bool_()),
-    ArrowFieldSpec(name="is_local", dtype=pa.bool_()),
-    ArrowFieldSpec(name="is_free", dtype=pa.bool_()),
-    ArrowFieldSpec(name="is_namespace", dtype=pa.bool_()),
-]
+SCOPES_QUERY = dataset_query("py_sym_scopes_v1")
+SYMBOLS_QUERY = dataset_query("py_sym_symbols_v1")
+SCOPE_EDGES_QUERY = dataset_query("py_sym_scope_edges_v1")
+NAMESPACE_EDGES_QUERY = dataset_query("py_sym_namespace_edges_v1")
+FUNC_PARTS_QUERY = dataset_query("py_sym_function_partitions_v1")
 
-_SCOPE_EDGES_FIELDS = [
-    ArrowFieldSpec(name="edge_id", dtype=pa.string()),
-    ArrowFieldSpec(name="parent_scope_id", dtype=pa.string()),
-    ArrowFieldSpec(name="child_scope_id", dtype=pa.string()),
-]
+SCOPES_SCHEMA = dataset_schema("py_sym_scopes_v1")
+SYMBOLS_SCHEMA = dataset_schema("py_sym_symbols_v1")
+SCOPE_EDGES_SCHEMA = dataset_schema("py_sym_scope_edges_v1")
+NAMESPACE_EDGES_SCHEMA = dataset_schema("py_sym_namespace_edges_v1")
+FUNC_PARTS_SCHEMA = dataset_schema("py_sym_function_partitions_v1")
 
-_NAMESPACE_EDGES_FIELDS = [
-    ArrowFieldSpec(name="edge_id", dtype=pa.string()),
-    ArrowFieldSpec(name="scope_id", dtype=pa.string()),
-    ArrowFieldSpec(name="symbol_row_id", dtype=pa.string()),
-    ArrowFieldSpec(name="child_scope_id", dtype=pa.string()),
-]
-
-_FUNC_PARTS_FIELDS = [
-    ArrowFieldSpec(name="scope_id", dtype=pa.string()),
-    ArrowFieldSpec(name="parameters", dtype=pa.large_list_view(pa.string())),
-    ArrowFieldSpec(name="locals", dtype=pa.large_list_view(pa.string())),
-    ArrowFieldSpec(name="globals", dtype=pa.large_list_view(pa.string())),
-    ArrowFieldSpec(name="nonlocals", dtype=pa.large_list_view(pa.string())),
-    ArrowFieldSpec(name="frees", dtype=pa.large_list_view(pa.string())),
-]
-
-_SCOPES_BASE_COLUMNS = tuple(
-    field.name for field in (*file_identity_bundle().fields, *_SCOPES_FIELDS)
-)
-_SYMBOLS_BASE_COLUMNS = tuple(
-    field.name for field in (*file_identity_bundle().fields, *_SYMBOLS_FIELDS)
-)
-_SCOPE_EDGES_BASE_COLUMNS = tuple(
-    field.name for field in (*file_identity_bundle().fields, *_SCOPE_EDGES_FIELDS)
-)
-_NAMESPACE_EDGES_BASE_COLUMNS = tuple(
-    field.name for field in (*file_identity_bundle().fields, *_NAMESPACE_EDGES_FIELDS)
-)
-_FUNC_PARTS_BASE_COLUMNS = tuple(
-    field.name for field in (*file_identity_bundle().fields, *_FUNC_PARTS_FIELDS)
-)
-
-_SYM_METADATA_EXTRA = {
-    b"extractor_name": b"symtable",
-    b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
-}
-
-_SCOPES_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_SCOPES_BASE_COLUMNS),
-    extra=_SYM_METADATA_EXTRA,
-)
-_SYMBOLS_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_SYMBOLS_BASE_COLUMNS),
-    extra=_SYM_METADATA_EXTRA,
-)
-_SCOPE_EDGES_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_SCOPE_EDGES_BASE_COLUMNS),
-    extra=_SYM_METADATA_EXTRA,
-)
-_NAMESPACE_EDGES_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_NAMESPACE_EDGES_BASE_COLUMNS),
-    extra=_SYM_METADATA_EXTRA,
-)
-_FUNC_PARTS_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_FUNC_PARTS_BASE_COLUMNS),
-    extra=_SYM_METADATA_EXTRA,
-)
-
-SCOPES_SPEC = register_dataset(
-    name="py_sym_scopes_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=_SCOPES_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=QuerySpec(
-            projection=ProjectionSpec(
-                base=tuple(
-                    field.name
-                    for field in (*file_identity_bundle().fields, *_SCOPES_FIELDS)
-                    if field.name != "scope_id"
-                ),
-                derived={
-                    "scope_id": MaskedHashExprSpec(
-                        spec=SYM_SCOPE_ID_SPEC,
-                        required=("file_id", "table_id", "scope_type", "scope_name", "lineno"),
-                    )
-                },
-            )
-        ),
-        metadata_spec=_SCOPES_METADATA,
-    ),
-)
-
-SYMBOLS_SPEC = register_dataset(
-    name="py_sym_symbols_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=_SYMBOLS_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=QuerySpec(
-            projection=ProjectionSpec(
-                base=tuple(
-                    field.name
-                    for field in (*file_identity_bundle().fields, *_SYMBOLS_FIELDS)
-                    if field.name != "symbol_row_id"
-                ),
-                derived={
-                    "symbol_row_id": MaskedHashExprSpec(
-                        spec=SYM_SYMBOL_ROW_ID_SPEC,
-                        required=("scope_id", "name"),
-                    )
-                },
-            )
-        ),
-        metadata_spec=_SYMBOLS_METADATA,
-    ),
-)
-
-SCOPE_EDGES_SPEC = register_dataset(
-    name="py_sym_scope_edges_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=_SCOPE_EDGES_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=QuerySpec(
-            projection=ProjectionSpec(
-                base=tuple(
-                    field.name
-                    for field in (*file_identity_bundle().fields, *_SCOPE_EDGES_FIELDS)
-                    if field.name != "edge_id"
-                ),
-                derived={
-                    "edge_id": MaskedHashExprSpec(
-                        spec=SYM_SCOPE_EDGE_ID_SPEC,
-                        required=("parent_scope_id", "child_scope_id"),
-                    )
-                },
-            )
-        ),
-        metadata_spec=_SCOPE_EDGES_METADATA,
-    ),
-)
-
-NAMESPACE_EDGES_SPEC = register_dataset(
-    name="py_sym_namespace_edges_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=_NAMESPACE_EDGES_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=QuerySpec(
-            projection=ProjectionSpec(
-                base=tuple(
-                    field.name
-                    for field in (*file_identity_bundle().fields, *_NAMESPACE_EDGES_FIELDS)
-                    if field.name not in {"symbol_row_id", "edge_id"}
-                ),
-                derived={
-                    "symbol_row_id": MaskedHashExprSpec(
-                        spec=SYM_NS_SYMBOL_ROW_ID_SPEC,
-                        required=("scope_id", "symbol_name"),
-                    ),
-                    "edge_id": MaskedHashExprSpec(
-                        spec=SYM_NS_EDGE_ID_SPEC,
-                        required=("symbol_row_id", "child_scope_id"),
-                    ),
-                },
-            )
-        ),
-        metadata_spec=_NAMESPACE_EDGES_METADATA,
-    ),
-)
-
-FUNC_PARTS_SPEC = register_dataset(
-    name="py_sym_function_partitions_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=_FUNC_PARTS_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=QuerySpec(
-            projection=ProjectionSpec(base=tuple(field.name for field in _FUNC_PARTS_FIELDS))
-        ),
-        metadata_spec=_FUNC_PARTS_METADATA,
-    ),
-)
-
-SCOPES_SCHEMA = SCOPES_SPEC.schema()
-SYMBOLS_SCHEMA = SYMBOLS_SPEC.schema()
-SCOPE_EDGES_SCHEMA = SCOPE_EDGES_SPEC.schema()
-NAMESPACE_EDGES_SCHEMA = NAMESPACE_EDGES_SPEC.schema()
-FUNC_PARTS_SCHEMA = FUNC_PARTS_SPEC.schema()
+SCOPES_ROW_SCHEMA = dataset_row_schema("py_sym_scopes_v1")
+SYMBOLS_ROW_SCHEMA = dataset_row_schema("py_sym_symbols_v1")
+SCOPE_EDGES_ROW_SCHEMA = dataset_row_schema("py_sym_scope_edges_v1")
+NAMESPACE_EDGES_ROW_SCHEMA = dataset_row_schema("py_sym_namespace_edges_v1")
+FUNC_PARTS_ROW_SCHEMA = dataset_row_schema("py_sym_function_partitions_v1")
 
 
 def _symtable_metadata_specs(
     options: SymtableExtractOptions,
 ) -> dict[str, SchemaMetadataSpec]:
-    run_meta = options_metadata_spec(options=options)
     return {
-        "py_sym_scopes": merge_metadata_specs(_SCOPES_METADATA, run_meta),
-        "py_sym_symbols": merge_metadata_specs(_SYMBOLS_METADATA, run_meta),
-        "py_sym_scope_edges": merge_metadata_specs(_SCOPE_EDGES_METADATA, run_meta),
-        "py_sym_namespace_edges": merge_metadata_specs(_NAMESPACE_EDGES_METADATA, run_meta),
-        "py_sym_function_partitions": merge_metadata_specs(_FUNC_PARTS_METADATA, run_meta),
+        "py_sym_scopes": dataset_metadata_with_options("py_sym_scopes_v1", options=options),
+        "py_sym_symbols": dataset_metadata_with_options("py_sym_symbols_v1", options=options),
+        "py_sym_scope_edges": dataset_metadata_with_options(
+            "py_sym_scope_edges_v1", options=options
+        ),
+        "py_sym_namespace_edges": dataset_metadata_with_options(
+            "py_sym_namespace_edges_v1", options=options
+        ),
+        "py_sym_function_partitions": dataset_metadata_with_options(
+            "py_sym_function_partitions_v1", options=options
+        ),
     }
-
-
-SYMBOL_ROWS_SCHEMA = pa.schema(
-    [
-        pa.field("file_id", pa.string()),
-        pa.field("path", pa.string()),
-        pa.field("file_sha256", pa.string()),
-        pa.field("scope_table_id", pa.int64()),
-        pa.field("name", pa.string()),
-        pa.field("is_referenced", pa.bool_()),
-        pa.field("is_assigned", pa.bool_()),
-        pa.field("is_imported", pa.bool_()),
-        pa.field("is_annotated", pa.bool_()),
-        pa.field("is_parameter", pa.bool_()),
-        pa.field("is_global", pa.bool_()),
-        pa.field("is_declared_global", pa.bool_()),
-        pa.field("is_nonlocal", pa.bool_()),
-        pa.field("is_local", pa.bool_()),
-        pa.field("is_free", pa.bool_()),
-        pa.field("is_namespace", pa.bool_()),
-    ]
-)
-
-SCOPE_EDGE_ROWS_SCHEMA = pa.schema(
-    [
-        pa.field("file_id", pa.string()),
-        pa.field("path", pa.string()),
-        pa.field("file_sha256", pa.string()),
-        pa.field("parent_table_id", pa.int64()),
-        pa.field("child_table_id", pa.int64()),
-    ]
-)
-
-NAMESPACE_EDGE_ROWS_SCHEMA = pa.schema(
-    [
-        pa.field("file_id", pa.string()),
-        pa.field("path", pa.string()),
-        pa.field("file_sha256", pa.string()),
-        pa.field("scope_table_id", pa.int64()),
-        pa.field("symbol_name", pa.string()),
-        pa.field("child_table_id", pa.int64()),
-    ]
-)
-
-SCOPES_QUERY = SCOPES_SPEC.query()
-SYMBOLS_QUERY = SYMBOLS_SPEC.query()
-SCOPE_EDGES_QUERY = SCOPE_EDGES_SPEC.query()
-NAMESPACE_EDGES_QUERY = NAMESPACE_EDGES_SPEC.query()
-FUNC_PARTS_QUERY = FUNC_PARTS_SPEC.query()
 
 
 def _scope_type_str(tbl: symtable.SymbolTable) -> str:
@@ -475,7 +225,7 @@ class _FuncPartsAccumulator:
             "frees": frees,
         }
         table = table_from_arrays(
-            FUNC_PARTS_SCHEMA,
+            FUNC_PARTS_ROW_SCHEMA,
             columns=columns,
             num_rows=len(self.scope_table_ids),
         )
@@ -816,8 +566,8 @@ def _build_scopes(
     *,
     ctx: ExecutionContext,
 ) -> tuple[Plan, Plan]:
-    scopes_plan = plan_from_rows(scope_rows, schema=SCOPES_SCHEMA, label="sym_scopes")
-    scopes_base = [name for name in SCOPES_SCHEMA.names if name != "scope_id"]
+    scopes_plan = plan_from_rows(scope_rows, schema=SCOPES_ROW_SCHEMA, label="sym_scopes")
+    scopes_base = [name for name in SCOPES_ROW_SCHEMA.names if name != "scope_id"]
     scopes_plan = project_columns(
         scopes_plan,
         base=scopes_base,
@@ -855,10 +605,10 @@ def _build_symbols(
 ) -> Plan:
     if not symbol_rows:
         return Plan.table_source(empty_table(SYMBOLS_SCHEMA))
-    symbols_plan = plan_from_rows(symbol_rows, schema=SYMBOL_ROWS_SCHEMA, label="sym_symbols_raw")
-    symbols_cols = list(SYMBOL_ROWS_SCHEMA.names)
+    symbols_plan = plan_from_rows(symbol_rows, schema=SYMBOLS_ROW_SCHEMA, label="sym_symbols_raw")
+    symbols_cols = list(SYMBOLS_ROW_SCHEMA.names)
     join_config = join_config_for_output(
-        left_columns=SYMBOL_ROWS_SCHEMA.names,
+        left_columns=SYMBOLS_ROW_SCHEMA.names,
         right_columns=scope_key_plan.schema(ctx=ctx).names,
         key_pairs=(("file_id", "file_id"), ("scope_table_id", "table_id")),
         right_output=("scope_id",),
@@ -906,11 +656,11 @@ def _build_scope_edges(
         return Plan.table_source(empty_table(SCOPE_EDGES_SCHEMA))
     scope_edges_plan = plan_from_rows(
         scope_edge_rows,
-        schema=SCOPE_EDGE_ROWS_SCHEMA,
+        schema=SCOPE_EDGES_ROW_SCHEMA,
         label="sym_scope_edges_raw",
     )
     join_parent = join_config_for_output(
-        left_columns=SCOPE_EDGE_ROWS_SCHEMA.names,
+        left_columns=SCOPE_EDGES_ROW_SCHEMA.names,
         right_columns=scope_key_plan.schema(ctx=ctx).names,
         key_pairs=(("file_id", "file_id"), ("parent_table_id", "table_id")),
         right_output=("scope_id",),
@@ -991,11 +741,11 @@ def _build_namespace_edges(
         return Plan.table_source(empty_table(NAMESPACE_EDGES_SCHEMA))
     ns_edges_plan = plan_from_rows(
         ns_edge_rows,
-        schema=NAMESPACE_EDGE_ROWS_SCHEMA,
+        schema=NAMESPACE_EDGES_ROW_SCHEMA,
         label="sym_namespace_edges_raw",
     )
     join_scope = join_config_for_output(
-        left_columns=NAMESPACE_EDGE_ROWS_SCHEMA.names,
+        left_columns=NAMESPACE_EDGES_ROW_SCHEMA.names,
         right_columns=scope_key_plan.schema(ctx=ctx).names,
         key_pairs=(("file_id", "file_id"), ("scope_table_id", "table_id")),
         right_output=("scope_id",),

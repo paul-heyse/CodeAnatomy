@@ -5,14 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import replace
 
-from cpg.kinds_ultimate import (
-    EDGE_KIND_CONTRACTS,
-    NODE_KIND_CONTRACTS,
-    EdgeKind,
-    EdgeKindContract,
-    NodeKind,
-    NodeKindContract,
-)
+from cpg.contract_registry import edge_kind_contracts, node_kind_contracts
+from cpg.kinds_registry_models import EdgeKindContract, NodeKindContract
+from cpg.kinds_ultimate import EdgeKind, NodeKind
 from cpg.specs import PropFieldSpec, PropValueType
 
 type PropFieldInput = PropFieldSpec | str
@@ -28,11 +23,11 @@ def _resolve_contract(
         if edge_kind is None:
             msg = "Provide exactly one of node_kind or edge_kind."
             raise ValueError(msg)
-        return EDGE_KIND_CONTRACTS[edge_kind]
+        return edge_kind_contracts()[edge_kind]
     if edge_kind is not None:
         msg = "Provide exactly one of node_kind or edge_kind."
         raise ValueError(msg)
-    return NODE_KIND_CONTRACTS[node_kind]
+    return node_kind_contracts()[node_kind]
 
 
 def _allowed_keys(

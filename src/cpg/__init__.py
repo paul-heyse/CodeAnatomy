@@ -11,6 +11,7 @@ from cpg.kinds_ultimate import (
     validate_derivation_extractors,
     validate_registry_completeness,
 )
+from cpg.registry import CpgRegistry, default_cpg_registry
 from cpg.schemas import (
     CPG_EDGES_CONTRACT,
     CPG_EDGES_SCHEMA,
@@ -33,6 +34,7 @@ __all__ = [
     "CPG_PROPS_SCHEMA",
     "SCHEMA_VERSION",
     "CpgBuildArtifacts",
+    "CpgRegistry",
     "EdgeBuildOptions",
     "EdgeKind",
     "EntityKind",
@@ -45,6 +47,7 @@ __all__ = [
     "build_cpg_nodes_raw",
     "build_cpg_props",
     "build_cpg_props_raw",
+    "default_cpg_registry",
     "empty_edges",
     "empty_nodes",
     "empty_props",

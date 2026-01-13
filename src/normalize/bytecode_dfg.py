@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import pyarrow as pa
-
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, ensure_expression, pc
 from arrowdsl.finalize.finalize import FinalizeResult
@@ -13,34 +11,24 @@ from arrowdsl.plan.joins import JoinOutputSpec, join_plan, join_spec
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan_helpers import project_to_schema
 from arrowdsl.schema.schema import empty_table
+from normalize.registry_specs import (
+    dataset_contract,
+    dataset_input_columns,
+    dataset_input_schema,
+    dataset_query,
+    dataset_schema,
+    dataset_spec,
+)
 from normalize.runner import (
     ensure_canonical,
     ensure_execution_context,
     run_normalize,
     run_normalize_streamable_contract,
 )
-from normalize.schemas import (
-    DEF_USE_CONTRACT,
-    DEF_USE_QUERY,
-    DEF_USE_SPEC,
-    REACHES_CONTRACT,
-    REACHES_QUERY,
-    REACHES_SCHEMA,
-    REACHES_SPEC,
-)
 from normalize.utils import PlanSource, plan_source
 
-_EVENT_INPUT_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
-    ("file_id", pa.string()),
-    ("path", pa.string()),
-    ("instr_id", pa.string()),
-    ("code_unit_id", pa.string()),
-    ("opname", pa.string()),
-    ("offset", pa.int32()),
-    ("argval_str", pa.string()),
-    ("argrepr", pa.string()),
-)
-_EVENT_INPUT_SCHEMA = pa.schema([pa.field(name, dtype) for name, dtype in _EVENT_INPUT_COLUMNS])
+DEF_USE_NAME = "py_bc_def_use_events_v1"
+REACHES_NAME = "py_bc_reaches_v1"
 
 
 def _to_plan(
@@ -64,10 +52,10 @@ def def_use_events_plan(
     Plan
         Plan producing def/use event rows.
     """
-    base_names = [name for name, _ in _EVENT_INPUT_COLUMNS]
+    base_names = dataset_input_columns(DEF_USE_NAME)
     plan = _to_plan(py_bc_instructions, ctx=ctx, columns=base_names)
-    plan = project_to_schema(plan, schema=_EVENT_INPUT_SCHEMA, ctx=ctx)
-    plan = DEF_USE_QUERY.apply_to_plan(plan, ctx=ctx)
+    plan = project_to_schema(plan, schema=dataset_input_schema(DEF_USE_NAME), ctx=ctx)
+    plan = dataset_query(DEF_USE_NAME).apply_to_plan(plan, ctx=ctx)
     valid = ensure_expression(
         pc.and_(pc.is_valid(pc.field("symbol")), pc.is_valid(pc.field("kind")))
     )
@@ -98,9 +86,9 @@ def build_def_use_events_result(
     return run_normalize(
         plan=plan,
         post=(),
-        contract=DEF_USE_CONTRACT,
+        contract=dataset_contract(DEF_USE_NAME),
         ctx=exec_ctx,
-        metadata_spec=DEF_USE_SPEC.metadata_spec,
+        metadata_spec=dataset_spec(DEF_USE_NAME).metadata_spec,
     )
 
 
@@ -156,7 +144,7 @@ def build_def_use_events_streamable(
     """
     exec_ctx = ensure_execution_context(ctx)
     plan = def_use_events_plan(py_bc_instructions, ctx=exec_ctx)
-    return run_normalize_streamable_contract(plan, contract=DEF_USE_CONTRACT, ctx=exec_ctx)
+    return run_normalize_streamable_contract(plan, contract=dataset_contract(DEF_USE_NAME), ctx=exec_ctx)
 
 
 def _def_use_subset_plan(
@@ -194,7 +182,7 @@ def reaching_defs_plan(
     available = set(plan.schema(ctx=ctx).names)
     required = {"kind", "code_unit_id", "symbol", "event_id"}
     if not required.issubset(available):
-        return Plan.table_source(empty_table(REACHES_SCHEMA))
+        return Plan.table_source(empty_table(dataset_schema(REACHES_NAME)))
 
     defs = _def_use_subset_plan(
         plan,
@@ -228,7 +216,7 @@ def reaching_defs_plan(
 
     if not isinstance(joined, Plan):
         joined = Plan.table_source(joined)
-    return REACHES_QUERY.apply_to_plan(joined, ctx=ctx)
+    return dataset_query(REACHES_NAME).apply_to_plan(joined, ctx=ctx)
 
 
 def run_reaching_defs_result(
@@ -258,9 +246,9 @@ def run_reaching_defs_result(
     return run_normalize(
         plan=plan,
         post=(),
-        contract=REACHES_CONTRACT,
+        contract=dataset_contract(REACHES_NAME),
         ctx=exec_ctx,
-        metadata_spec=REACHES_SPEC.metadata_spec,
+        metadata_spec=dataset_spec(REACHES_NAME).metadata_spec,
     )
 
 
@@ -319,7 +307,11 @@ def run_reaching_defs_streamable(
     """
     exec_ctx = ensure_execution_context(ctx)
     plan = reaching_defs_plan(def_use_events, ctx=exec_ctx)
-    return run_normalize_streamable_contract(plan, contract=REACHES_CONTRACT, ctx=exec_ctx)
+    return run_normalize_streamable_contract(
+        plan,
+        contract=dataset_contract(REACHES_NAME),
+        ctx=exec_ctx,
+    )
 
 
 __all__ = [

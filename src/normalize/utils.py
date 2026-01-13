@@ -9,7 +9,6 @@ from arrowdsl.compute.ids import (
     SpanIdSpec,
     add_span_id_column,
     hash_column_values,
-    hash_spec_factory,
     masked_prefixed_hash,
     prefixed_hash64,
     prefixed_hash_id,
@@ -41,37 +40,14 @@ from arrowdsl.schema.metadata import (
     encoding_policy_from_schema,
 )
 from arrowdsl.schema.ops import align_plan as align_plan_to_schema_helper
+from normalize.registry_ids import (
+    DEF_USE_EVENT_ID_SPEC,
+    DIAG_ID_SPEC,
+    REACH_EDGE_ID_SPEC,
+    TYPE_EXPR_ID_SPEC,
+    TYPE_ID_SPEC,
+)
 from schema_spec.specs import dict_field
-
-TYPE_EXPR_ID_SPEC = hash_spec_factory(
-    prefix="cst_type_expr",
-    cols=("path", "bstart", "bend"),
-    null_sentinel="None",
-)
-
-TYPE_ID_SPEC = hash_spec_factory(
-    prefix="type",
-    cols=("type_repr",),
-    null_sentinel="None",
-)
-
-DEF_USE_EVENT_ID_SPEC = hash_spec_factory(
-    prefix="df_event",
-    cols=("code_unit_id", "instr_id", "kind", "symbol"),
-    null_sentinel="None",
-)
-
-REACH_EDGE_ID_SPEC = hash_spec_factory(
-    prefix="df_reach",
-    cols=("def_event_id", "use_event_id"),
-    null_sentinel="None",
-)
-
-DIAG_ID_SPEC = hash_spec_factory(
-    prefix="diag",
-    cols=("path", "bstart", "bend", "diag_source", "message"),
-    null_sentinel="None",
-)
 
 
 def join_code_unit_meta(table: TableLike, code_units: TableLike) -> TableLike:

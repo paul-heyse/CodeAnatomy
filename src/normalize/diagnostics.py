@@ -18,20 +18,14 @@ from arrowdsl.plan_helpers import column_or_null_expr
 from arrowdsl.schema.build import column_or_null, empty_table, table_from_arrays
 from arrowdsl.schema.metadata import normalize_dictionaries
 from arrowdsl.schema.nested_builders import StructLargeListViewAccumulator
+from normalize.registry_fields import DIAG_DETAILS_TYPE, DIAG_TAGS_TYPE
+from normalize.registry_specs import dataset_contract, dataset_query, dataset_schema, dataset_spec
 from normalize.runner import (
     PostFn,
     ensure_canonical,
     ensure_execution_context,
     run_normalize,
     run_normalize_streamable_contract,
-)
-from normalize.schemas import (
-    DIAG_CONTRACT,
-    DIAG_DETAILS_TYPE,
-    DIAG_QUERY,
-    DIAG_SCHEMA,
-    DIAG_SPEC,
-    DIAG_TAGS_TYPE,
 )
 from normalize.spans import line_char_to_byte_offset
 from normalize.text_index import (
@@ -45,6 +39,12 @@ SCIP_SEVERITY_ERROR = 1
 SCIP_SEVERITY_WARNING = 2
 SCIP_SEVERITY_INFO = 3
 SCIP_SEVERITY_HINT = 4
+
+DIAG_NAME = "diagnostics_norm_v1"
+DIAG_QUERY = dataset_query(DIAG_NAME)
+DIAG_SCHEMA = dataset_schema(DIAG_NAME)
+DIAG_SPEC = dataset_spec(DIAG_NAME)
+DIAG_CONTRACT = dataset_contract(DIAG_NAME)
 
 _DIAG_BASE_COLUMNS: tuple[str, ...] = DIAG_QUERY.projection.base
 

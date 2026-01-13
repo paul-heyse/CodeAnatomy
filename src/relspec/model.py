@@ -168,6 +168,14 @@ class DropColumnsSpec(KernelSpec):
 
 
 @dataclass(frozen=True)
+class FilterKernelSpec(KernelSpec):
+    """Post-kernel spec for filtering rows."""
+
+    predicate: Expression = field(default_factory=lambda: ExprIR(op="literal", value=True))
+    kind: Literal["filter"] = "filter"
+
+
+@dataclass(frozen=True)
 class RenameColumnsSpec(KernelSpec):
     """Post-kernel spec for renaming columns."""
 
@@ -205,6 +213,7 @@ class CanonicalSortKernelSpec(KernelSpec):
 type KernelSpecT = (
     AddLiteralSpec
     | DropColumnsSpec
+    | FilterKernelSpec
     | RenameColumnsSpec
     | ExplodeListSpec
     | DedupeKernelSpec

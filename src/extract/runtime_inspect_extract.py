@@ -13,34 +13,25 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from arrowdsl.compute.expr_core import MaskedHashExprSpec
-from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
+from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, pc
 from arrowdsl.plan.joins import join_config_for_output, left_join
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.plan.scan_io import record_batches_from_rows
 from arrowdsl.schema.ops import unify_tables
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
-from extract.hash_specs import (
-    RT_MEMBER_ID_SPEC,
-    RT_OBJECT_ID_SPEC,
-    RT_PARAM_ID_SPEC,
-    RT_SIGNATURE_ID_SPEC,
-)
 from extract.helpers import (
-    DatasetRegistration,
     align_plan,
-    infer_ordering_keys,
-    merge_metadata_specs,
-    options_metadata_spec,
-    ordering_metadata_spec,
     project_columns,
-    register_dataset,
 )
-from schema_spec.specs import ArrowFieldSpec
-
-SCHEMA_VERSION = 1
+from extract.registry_ids import hash_spec
+from extract.registry_specs import (
+    dataset_metadata_with_options,
+    dataset_query,
+    dataset_row_schema,
+    dataset_schema,
+)
 
 type Row = dict[str, object]
 
@@ -83,227 +74,38 @@ class RuntimeRows:
     member_rows: list[Row]
 
 
-_RT_OBJECTS_FIELDS = [
-    ArrowFieldSpec(name="rt_id", dtype=pa.string()),
-    ArrowFieldSpec(name="module", dtype=pa.string()),
-    ArrowFieldSpec(name="qualname", dtype=pa.string()),
-    ArrowFieldSpec(name="name", dtype=pa.string()),
-    ArrowFieldSpec(name="obj_type", dtype=pa.string()),
-    ArrowFieldSpec(name="source_path", dtype=pa.string()),
-    ArrowFieldSpec(name="source_line", dtype=pa.int32()),
-    ArrowFieldSpec(name="meta", dtype=pa.map_(pa.string(), pa.string())),
-]
+RT_OBJECT_ID_SPEC = hash_spec("rt_object_id")
+RT_SIGNATURE_ID_SPEC = hash_spec("rt_signature_id")
+RT_PARAM_ID_SPEC = hash_spec("rt_param_id")
+RT_MEMBER_ID_SPEC = hash_spec("rt_member_id")
 
-_RT_SIGNATURES_FIELDS = [
-    ArrowFieldSpec(name="sig_id", dtype=pa.string()),
-    ArrowFieldSpec(name="rt_id", dtype=pa.string()),
-    ArrowFieldSpec(name="signature", dtype=pa.string()),
-    ArrowFieldSpec(name="return_annotation", dtype=pa.string()),
-]
+RT_OBJECTS_QUERY = dataset_query("rt_objects_v1")
+RT_SIGNATURES_QUERY = dataset_query("rt_signatures_v1")
+RT_SIGNATURE_PARAMS_QUERY = dataset_query("rt_signature_params_v1")
+RT_MEMBERS_QUERY = dataset_query("rt_members_v1")
 
-_RT_SIGNATURE_PARAMS_FIELDS = [
-    ArrowFieldSpec(name="param_id", dtype=pa.string()),
-    ArrowFieldSpec(name="sig_id", dtype=pa.string()),
-    ArrowFieldSpec(name="name", dtype=pa.string()),
-    ArrowFieldSpec(name="kind", dtype=pa.string()),
-    ArrowFieldSpec(name="default_repr", dtype=pa.string()),
-    ArrowFieldSpec(name="annotation_repr", dtype=pa.string()),
-    ArrowFieldSpec(name="position", dtype=pa.int32()),
-]
+RT_OBJECTS_SCHEMA = dataset_schema("rt_objects_v1")
+RT_SIGNATURES_SCHEMA = dataset_schema("rt_signatures_v1")
+RT_SIGNATURE_PARAMS_SCHEMA = dataset_schema("rt_signature_params_v1")
+RT_MEMBERS_SCHEMA = dataset_schema("rt_members_v1")
 
-_RT_MEMBERS_FIELDS = [
-    ArrowFieldSpec(name="member_id", dtype=pa.string()),
-    ArrowFieldSpec(name="rt_id", dtype=pa.string()),
-    ArrowFieldSpec(name="name", dtype=pa.string()),
-    ArrowFieldSpec(name="member_kind", dtype=pa.string()),
-    ArrowFieldSpec(name="value_repr", dtype=pa.string()),
-    ArrowFieldSpec(name="value_module", dtype=pa.string()),
-    ArrowFieldSpec(name="value_qualname", dtype=pa.string()),
-]
-
-_RT_OBJECTS_BASE_COLUMNS = tuple(field.name for field in _RT_OBJECTS_FIELDS)
-_RT_SIGNATURES_BASE_COLUMNS = tuple(field.name for field in _RT_SIGNATURES_FIELDS)
-_RT_SIGNATURE_PARAMS_BASE_COLUMNS = tuple(field.name for field in _RT_SIGNATURE_PARAMS_FIELDS)
-_RT_MEMBERS_BASE_COLUMNS = tuple(field.name for field in _RT_MEMBERS_FIELDS)
-
-_RT_METADATA_EXTRA = {
-    b"extractor_name": b"runtime_inspect",
-    b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
-}
-
-_RT_OBJECTS_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_RT_OBJECTS_BASE_COLUMNS),
-    extra=_RT_METADATA_EXTRA,
-)
-_RT_SIGNATURES_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_RT_SIGNATURES_BASE_COLUMNS),
-    extra=_RT_METADATA_EXTRA,
-)
-_RT_SIGNATURE_PARAMS_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_RT_SIGNATURE_PARAMS_BASE_COLUMNS),
-    extra=_RT_METADATA_EXTRA,
-)
-_RT_MEMBERS_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_RT_MEMBERS_BASE_COLUMNS),
-    extra=_RT_METADATA_EXTRA,
-)
-
-RT_OBJECTS_SPEC = register_dataset(
-    name="rt_objects_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=_RT_OBJECTS_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=QuerySpec(
-            projection=ProjectionSpec(
-                base=tuple(field.name for field in _RT_OBJECTS_FIELDS if field.name != "rt_id"),
-                derived={
-                    "rt_id": MaskedHashExprSpec(
-                        spec=RT_OBJECT_ID_SPEC,
-                        required=("module", "qualname"),
-                    )
-                },
-            )
-        ),
-        metadata_spec=_RT_OBJECTS_METADATA,
-    ),
-)
-
-RT_SIGNATURES_SPEC = register_dataset(
-    name="rt_signatures_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=_RT_SIGNATURES_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=QuerySpec(
-            projection=ProjectionSpec(
-                base=tuple(field.name for field in _RT_SIGNATURES_FIELDS if field.name != "sig_id"),
-                derived={
-                    "sig_id": MaskedHashExprSpec(
-                        spec=RT_SIGNATURE_ID_SPEC,
-                        required=("rt_id", "signature"),
-                    )
-                },
-            )
-        ),
-        metadata_spec=_RT_SIGNATURES_METADATA,
-    ),
-)
-
-RT_SIGNATURE_PARAMS_SPEC = register_dataset(
-    name="rt_signature_params_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=_RT_SIGNATURE_PARAMS_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=QuerySpec(
-            projection=ProjectionSpec(
-                base=tuple(
-                    field.name for field in _RT_SIGNATURE_PARAMS_FIELDS if field.name != "param_id"
-                ),
-                derived={
-                    "param_id": MaskedHashExprSpec(
-                        spec=RT_PARAM_ID_SPEC,
-                        required=("sig_id", "name"),
-                    )
-                },
-            )
-        ),
-        metadata_spec=_RT_SIGNATURE_PARAMS_METADATA,
-    ),
-)
-
-RT_MEMBERS_SPEC = register_dataset(
-    name="rt_members_v1",
-    version=SCHEMA_VERSION,
-    bundles=(),
-    fields=_RT_MEMBERS_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=QuerySpec(
-            projection=ProjectionSpec(
-                base=tuple(field.name for field in _RT_MEMBERS_FIELDS if field.name != "member_id"),
-                derived={
-                    "member_id": MaskedHashExprSpec(
-                        spec=RT_MEMBER_ID_SPEC,
-                        required=("rt_id", "name"),
-                    )
-                },
-            )
-        ),
-        metadata_spec=_RT_MEMBERS_METADATA,
-    ),
-)
-
-RT_OBJECTS_SCHEMA = RT_OBJECTS_SPEC.schema()
-RT_SIGNATURES_SCHEMA = RT_SIGNATURES_SPEC.schema()
-RT_SIGNATURE_PARAMS_SCHEMA = RT_SIGNATURE_PARAMS_SPEC.schema()
-RT_MEMBERS_SCHEMA = RT_MEMBERS_SPEC.schema()
+RT_OBJECTS_ROW_SCHEMA = dataset_row_schema("rt_objects_v1")
+RT_SIGNATURES_ROW_SCHEMA = dataset_row_schema("rt_signatures_v1")
+RT_PARAMS_ROW_SCHEMA = dataset_row_schema("rt_signature_params_v1")
+RT_MEMBERS_ROW_SCHEMA = dataset_row_schema("rt_members_v1")
 
 
 def _runtime_metadata_specs(
     options: RuntimeInspectOptions,
 ) -> dict[str, SchemaMetadataSpec]:
-    run_meta = options_metadata_spec(options=options)
     return {
-        "rt_objects": merge_metadata_specs(_RT_OBJECTS_METADATA, run_meta),
-        "rt_signatures": merge_metadata_specs(_RT_SIGNATURES_METADATA, run_meta),
-        "rt_signature_params": merge_metadata_specs(_RT_SIGNATURE_PARAMS_METADATA, run_meta),
-        "rt_members": merge_metadata_specs(_RT_MEMBERS_METADATA, run_meta),
+        "rt_objects": dataset_metadata_with_options("rt_objects_v1", options=options),
+        "rt_signatures": dataset_metadata_with_options("rt_signatures_v1", options=options),
+        "rt_signature_params": dataset_metadata_with_options(
+            "rt_signature_params_v1", options=options
+        ),
+        "rt_members": dataset_metadata_with_options("rt_members_v1", options=options),
     }
-
-
-RT_OBJECT_ROWS_SCHEMA = pa.schema(
-    [
-        pa.field("object_key", pa.string()),
-        pa.field("module", pa.string()),
-        pa.field("qualname", pa.string()),
-        pa.field("name", pa.string()),
-        pa.field("obj_type", pa.string()),
-        pa.field("source_path", pa.string()),
-        pa.field("source_line", pa.int32()),
-        pa.field("meta", pa.map_(pa.string(), pa.string())),
-    ]
-)
-
-RT_SIGNATURE_ROWS_SCHEMA = pa.schema(
-    [
-        pa.field("object_key", pa.string()),
-        pa.field("signature", pa.string()),
-        pa.field("return_annotation", pa.string()),
-    ]
-)
-
-RT_PARAM_ROWS_SCHEMA = pa.schema(
-    [
-        pa.field("object_key", pa.string()),
-        pa.field("signature", pa.string()),
-        pa.field("name", pa.string()),
-        pa.field("kind", pa.string()),
-        pa.field("default_repr", pa.string()),
-        pa.field("annotation_repr", pa.string()),
-        pa.field("position", pa.int32()),
-    ]
-)
-
-RT_MEMBER_ROWS_SCHEMA = pa.schema(
-    [
-        pa.field("object_key", pa.string()),
-        pa.field("name", pa.string()),
-        pa.field("member_kind", pa.string()),
-        pa.field("value_repr", pa.string()),
-        pa.field("value_module", pa.string()),
-        pa.field("value_qualname", pa.string()),
-    ]
-)
-
-RT_OBJECTS_QUERY = RT_OBJECTS_SPEC.query()
-RT_SIGNATURES_QUERY = RT_SIGNATURES_SPEC.query()
-RT_SIGNATURE_PARAMS_QUERY = RT_SIGNATURE_PARAMS_SPEC.query()
-RT_MEMBERS_QUERY = RT_MEMBERS_SPEC.query()
 
 
 def _inspect_script() -> str:
@@ -687,12 +489,12 @@ def _build_rt_objects(
 ) -> tuple[Plan, Plan]:
     rt_objects_plan = _plan_from_row_fragments(
         obj_rows,
-        schema=RT_OBJECT_ROWS_SCHEMA,
+        schema=RT_OBJECTS_ROW_SCHEMA,
         label="rt_objects_raw",
     )
     rt_objects_plan = project_columns(
         rt_objects_plan,
-        base=RT_OBJECT_ROWS_SCHEMA.names,
+        base=RT_OBJECTS_ROW_SCHEMA.names,
         extras=[
             (
                 MaskedHashExprSpec(
@@ -730,12 +532,12 @@ def _build_rt_signatures(
         return empty_plan, None
     sig_plan = _plan_from_row_fragments(
         sig_rows,
-        schema=RT_SIGNATURE_ROWS_SCHEMA,
+        schema=RT_SIGNATURES_ROW_SCHEMA,
         label="rt_signatures_raw",
     )
-    sig_cols = list(RT_SIGNATURE_ROWS_SCHEMA.names)
+    sig_cols = list(RT_SIGNATURES_ROW_SCHEMA.names)
     join_config = join_config_for_output(
-        left_columns=RT_SIGNATURE_ROWS_SCHEMA.names,
+        left_columns=RT_SIGNATURES_ROW_SCHEMA.names,
         right_columns=rt_objects_key_plan.schema(ctx=exec_ctx).names,
         key_pairs=(("object_key", "object_key"),),
         right_output=("rt_id",),
@@ -790,12 +592,12 @@ def _build_rt_params(
         return Plan.table_source(empty_table(RT_SIGNATURE_PARAMS_SCHEMA))
     param_plan = _plan_from_row_fragments(
         param_rows,
-        schema=RT_PARAM_ROWS_SCHEMA,
+        schema=RT_PARAMS_ROW_SCHEMA,
         label="rt_params_raw",
     )
-    param_cols = list(RT_PARAM_ROWS_SCHEMA.names)
+    param_cols = list(RT_PARAMS_ROW_SCHEMA.names)
     join_config = join_config_for_output(
-        left_columns=RT_PARAM_ROWS_SCHEMA.names,
+        left_columns=RT_PARAMS_ROW_SCHEMA.names,
         right_columns=sig_meta_plan.schema(ctx=exec_ctx).names,
         key_pairs=(("object_key", "object_key"), ("signature", "signature")),
         right_output=("sig_id",),
@@ -842,12 +644,12 @@ def _build_rt_members(
         return Plan.table_source(empty_table(RT_MEMBERS_SCHEMA))
     member_plan = _plan_from_row_fragments(
         member_rows,
-        schema=RT_MEMBER_ROWS_SCHEMA,
+        schema=RT_MEMBERS_ROW_SCHEMA,
         label="rt_members_raw",
     )
-    member_cols = list(RT_MEMBER_ROWS_SCHEMA.names)
+    member_cols = list(RT_MEMBERS_ROW_SCHEMA.names)
     join_config = join_config_for_output(
-        left_columns=RT_MEMBER_ROWS_SCHEMA.names,
+        left_columns=RT_MEMBERS_ROW_SCHEMA.names,
         right_columns=rt_objects_key_plan.schema(ctx=exec_ctx).names,
         key_pairs=(("object_key", "object_key"),),
         right_output=("rt_id",),

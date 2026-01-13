@@ -15,37 +15,24 @@ from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.runner import run_plan
 from arrowdsl.plan_helpers import project_to_schema
 from arrowdsl.schema.schema import empty_table
+from normalize.registry_specs import (
+    dataset_contract,
+    dataset_input_columns,
+    dataset_input_schema,
+    dataset_query,
+    dataset_schema,
+    dataset_spec,
+)
 from normalize.runner import (
     ensure_canonical,
     ensure_execution_context,
     run_normalize,
     run_normalize_streamable_contract,
 )
-from normalize.schemas import (
-    TYPE_EXPRS_CONTRACT,
-    TYPE_EXPRS_NORM_SPEC,
-    TYPE_EXPRS_QUERY,
-    TYPE_NODES_CONTRACT,
-    TYPE_NODES_QUERY,
-    TYPE_NODES_SCHEMA,
-    TYPE_NODES_SPEC,
-)
 from normalize.utils import TYPE_ID_SPEC, PlanSource, plan_source, project_columns
 
-_BASE_TYPE_EXPR_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
-    ("file_id", pa.string()),
-    ("path", pa.string()),
-    ("bstart", pa.int64()),
-    ("bend", pa.int64()),
-    ("owner_def_id", pa.string()),
-    ("param_name", pa.string()),
-    ("expr_kind", pa.string()),
-    ("expr_role", pa.string()),
-    ("expr_text", pa.string()),
-)
-_BASE_TYPE_EXPR_SCHEMA = pa.schema(
-    [pa.field(name, dtype) for name, dtype in _BASE_TYPE_EXPR_COLUMNS]
-)
+TYPE_EXPRS_NAME = "type_exprs_norm_v1"
+TYPE_NODES_NAME = "type_nodes_v1"
 
 
 def _to_plan(
@@ -69,13 +56,13 @@ def type_exprs_plan(
     Plan
         Plan producing normalized type expression rows.
     """
-    base_names = [name for name, _ in _BASE_TYPE_EXPR_COLUMNS]
+    base_names = dataset_input_columns(TYPE_EXPRS_NAME)
     plan = _to_plan(cst_type_exprs, ctx=ctx, columns=base_names)
-    plan = project_to_schema(plan, schema=_BASE_TYPE_EXPR_SCHEMA, ctx=ctx)
+    plan = project_to_schema(plan, schema=dataset_input_schema(TYPE_EXPRS_NAME), ctx=ctx)
 
     _, non_empty = trimmed_non_empty_expr("expr_text")
     plan = plan.filter(non_empty, ctx=ctx)
-    return TYPE_EXPRS_QUERY.apply_to_plan(plan, ctx=ctx)
+    return dataset_query(TYPE_EXPRS_NAME).apply_to_plan(plan, ctx=ctx)
 
 
 def normalize_type_exprs_result(
@@ -102,9 +89,9 @@ def normalize_type_exprs_result(
     return run_normalize(
         plan=plan,
         post=(),
-        contract=TYPE_EXPRS_CONTRACT,
+        contract=dataset_contract(TYPE_EXPRS_NAME),
         ctx=exec_ctx,
-        metadata_spec=TYPE_EXPRS_NORM_SPEC.metadata_spec,
+        metadata_spec=dataset_spec(TYPE_EXPRS_NAME).metadata_spec,
     )
 
 
@@ -160,7 +147,7 @@ def normalize_type_exprs_streamable(
     """
     exec_ctx = ensure_execution_context(ctx)
     plan = type_exprs_plan(cst_type_exprs, ctx=exec_ctx)
-    return run_normalize_streamable_contract(plan, contract=TYPE_EXPRS_CONTRACT, ctx=exec_ctx)
+    return run_normalize_streamable_contract(plan, contract=dataset_contract(TYPE_EXPRS_NAME), ctx=exec_ctx)
 
 
 def type_nodes_plan_from_scip(
@@ -178,7 +165,7 @@ def type_nodes_plan_from_scip(
     plan = _to_plan(scip_symbol_information, ctx=ctx, columns=["type_repr"])
     available = set(plan.schema(ctx=ctx).names)
     if "type_repr" not in available:
-        return Plan.table_source(empty_table(TYPE_NODES_SCHEMA))
+        return Plan.table_source(empty_table(dataset_schema(TYPE_NODES_NAME)))
 
     trimmed, non_empty = trimmed_non_empty_expr("type_repr")
     plan = plan.filter(non_empty, ctx=ctx)
@@ -195,7 +182,7 @@ def type_nodes_plan_from_scip(
         ],
         ctx=ctx,
     )
-    return TYPE_NODES_QUERY.apply_to_plan(plan, ctx=ctx)
+    return dataset_query(TYPE_NODES_NAME).apply_to_plan(plan, ctx=ctx)
 
 
 def type_nodes_plan_from_exprs(
@@ -213,7 +200,7 @@ def type_nodes_plan_from_exprs(
     plan = _to_plan(type_exprs_norm, ctx=ctx, columns=["type_id", "type_repr"])
     available = set(plan.schema(ctx=ctx).names)
     if "type_repr" not in available or "type_id" not in available:
-        return Plan.table_source(empty_table(TYPE_NODES_SCHEMA))
+        return Plan.table_source(empty_table(dataset_schema(TYPE_NODES_NAME)))
 
     trimmed, non_empty = trimmed_non_empty_expr("type_repr")
     valid = ensure_expression(pc.and_(non_empty, pc.is_valid(pc.field("type_id"))))
@@ -228,7 +215,7 @@ def type_nodes_plan_from_exprs(
         ],
         ctx=ctx,
     )
-    return TYPE_NODES_QUERY.apply_to_plan(plan, ctx=ctx)
+    return dataset_query(TYPE_NODES_NAME).apply_to_plan(plan, ctx=ctx)
 
 
 def type_nodes_plan(
@@ -302,9 +289,9 @@ def normalize_types_result(
     return run_normalize(
         plan=plan,
         post=(),
-        contract=TYPE_NODES_CONTRACT,
+        contract=dataset_contract(TYPE_NODES_NAME),
         ctx=exec_ctx,
-        metadata_spec=TYPE_NODES_SPEC.metadata_spec,
+        metadata_spec=dataset_spec(TYPE_NODES_NAME).metadata_spec,
     )
 
 
@@ -377,7 +364,7 @@ def normalize_types_streamable(
         scip_symbol_information,
         ctx=exec_ctx,
     )
-    return run_normalize_streamable_contract(plan, contract=TYPE_NODES_CONTRACT, ctx=exec_ctx)
+    return run_normalize_streamable_contract(plan, contract=dataset_contract(TYPE_NODES_NAME), ctx=exec_ctx)
 
 
 __all__ = [

@@ -8,6 +8,7 @@ from typing import Protocol, cast
 
 import pyarrow as pa
 
+from arrowdsl.compute.filters import FilterSpec
 from arrowdsl.compute.kernels import apply_dedupe, explode_list_column, interval_align_table
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, Ordering
 from arrowdsl.core.interop import ComputeExpression, TableLike
@@ -30,6 +31,7 @@ from relspec.model import (
     DedupeKernelSpec,
     DropColumnsSpec,
     ExplodeListSpec,
+    FilterKernelSpec,
     KernelSpecT,
     ProjectConfig,
     RelationshipRule,
@@ -209,6 +211,14 @@ def _build_drop_columns_kernel(spec: DropColumnsSpec) -> KernelFn:
     return _fn
 
 
+def _build_filter_kernel(spec: FilterKernelSpec) -> KernelFn:
+    def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
+        predicate = FilterSpec(spec.predicate.to_expr_spec()).mask(table)
+        return table.filter(predicate)
+
+    return _fn
+
+
 def _build_rename_columns_kernel(spec: RenameColumnsSpec) -> KernelFn:
     def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
         if not spec.mapping:
@@ -245,6 +255,8 @@ def _kernel_from_spec(spec: object) -> KernelFn:
         return _build_add_literal_kernel(spec)
     if isinstance(spec, DropColumnsSpec):
         return _build_drop_columns_kernel(spec)
+    if isinstance(spec, FilterKernelSpec):
+        return _build_filter_kernel(spec)
     if isinstance(spec, RenameColumnsSpec):
         return _build_rename_columns_kernel(spec)
     if isinstance(spec, ExplodeListSpec):
@@ -304,6 +316,17 @@ def _apply_drop_columns_to_plan(
         return plan
     exprs = [FieldExpr(name=name).to_expression() for name in keep]
     return plan.project(exprs, keep, label=plan.label or rule.name)
+
+
+def _apply_filter_to_plan(
+    plan: Plan,
+    spec: FilterKernelSpec,
+    *,
+    ctx: ExecutionContext,
+    rule: RelationshipRule,
+) -> Plan:
+    predicate = FilterSpec(spec.predicate.to_expr_spec()).to_expression()
+    return plan.filter(predicate, label=plan.label or rule.name, ctx=ctx)
 
 
 def _apply_rename_columns_to_plan(
@@ -368,6 +391,9 @@ def _apply_plan_kernel_specs(
             continue
         if isinstance(spec, DropColumnsSpec):
             plan = _apply_drop_columns_to_plan(plan, spec, ctx=ctx, rule=rule)
+            continue
+        if isinstance(spec, FilterKernelSpec):
+            plan = _apply_filter_to_plan(plan, spec, ctx=ctx, rule=rule)
             continue
         if isinstance(spec, RenameColumnsSpec):
             plan = _apply_rename_columns_to_plan(plan, spec, ctx=ctx, rule=rule)

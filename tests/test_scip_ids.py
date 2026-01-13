@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import arrowdsl.core.interop as pa
-from extract.scip_extract import (
-    SCIP_DOCUMENTS_SCHEMA,
-    SCIP_OCCURRENCES_SCHEMA,
-    add_scip_document_ids,
-    add_scip_occurrence_ids,
-)
+from extract.registry_ids import add_scip_document_ids, add_scip_occurrence_ids
+from extract.scip_extract import SCIP_DOCUMENTS_SCHEMA, SCIP_OCCURRENCES_SCHEMA
 
 
 def test_scip_occurrence_ids_stable() -> None:

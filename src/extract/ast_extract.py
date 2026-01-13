@@ -7,31 +7,25 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal, Required, TypedDict, Unpack, overload
 
-import pyarrow as pa
-
-from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
+from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.query import QuerySpec
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.plan.scan_io import plan_from_rows
 from extract.helpers import (
-    DatasetRegistration,
     FileContext,
     align_plan,
     ast_def_nodes_plan,
     file_identity_row,
-    infer_ordering_keys,
     iter_contexts,
-    merge_metadata_specs,
-    options_metadata_spec,
-    ordering_metadata_spec,
-    register_dataset,
     text_from_file_ctx,
 )
-from schema_spec.specs import ArrowFieldSpec, file_identity_bundle
-
-SCHEMA_VERSION = 1
+from extract.registry_specs import (
+    dataset_metadata_with_options,
+    dataset_query,
+    dataset_row_schema,
+    dataset_schema,
+)
 
 
 @dataclass(frozen=True)
@@ -51,107 +45,17 @@ class ASTExtractResult:
     py_ast_errors: TableLike
 
 
-_AST_NODES_FIELDS = [
-    ArrowFieldSpec(name="ast_idx", dtype=pa.int32()),
-    ArrowFieldSpec(name="parent_ast_idx", dtype=pa.int32()),
-    ArrowFieldSpec(name="field_name", dtype=pa.string()),
-    ArrowFieldSpec(name="field_pos", dtype=pa.int32()),
-    ArrowFieldSpec(name="kind", dtype=pa.string()),
-    ArrowFieldSpec(name="name", dtype=pa.string()),
-    ArrowFieldSpec(name="value_repr", dtype=pa.string()),
-    ArrowFieldSpec(name="lineno", dtype=pa.int32()),
-    ArrowFieldSpec(name="col_offset", dtype=pa.int32()),
-    ArrowFieldSpec(name="end_lineno", dtype=pa.int32()),
-    ArrowFieldSpec(name="end_col_offset", dtype=pa.int32()),
-]
+AST_NODES_QUERY = dataset_query("py_ast_nodes_v1")
+AST_EDGES_QUERY = dataset_query("py_ast_edges_v1")
+AST_ERRORS_QUERY = dataset_query("py_ast_errors_v1")
 
-_AST_EDGES_FIELDS = [
-    ArrowFieldSpec(name="parent_ast_idx", dtype=pa.int32()),
-    ArrowFieldSpec(name="child_ast_idx", dtype=pa.int32()),
-    ArrowFieldSpec(name="field_name", dtype=pa.string()),
-    ArrowFieldSpec(name="field_pos", dtype=pa.int32()),
-]
+AST_NODES_SCHEMA = dataset_schema("py_ast_nodes_v1")
+AST_EDGES_SCHEMA = dataset_schema("py_ast_edges_v1")
+AST_ERRORS_SCHEMA = dataset_schema("py_ast_errors_v1")
 
-_AST_ERRORS_FIELDS = [
-    ArrowFieldSpec(name="error_type", dtype=pa.string()),
-    ArrowFieldSpec(name="message", dtype=pa.string()),
-    ArrowFieldSpec(name="lineno", dtype=pa.int32()),
-    ArrowFieldSpec(name="offset", dtype=pa.int32()),
-    ArrowFieldSpec(name="end_lineno", dtype=pa.int32()),
-    ArrowFieldSpec(name="end_offset", dtype=pa.int32()),
-]
-
-_AST_BASE_COLUMNS = tuple(
-    field.name for field in (*file_identity_bundle().fields, *_AST_NODES_FIELDS)
-)
-_AST_EDGES_BASE_COLUMNS = tuple(
-    field.name for field in (*file_identity_bundle().fields, *_AST_EDGES_FIELDS)
-)
-_AST_ERRORS_BASE_COLUMNS = tuple(
-    field.name for field in (*file_identity_bundle().fields, *_AST_ERRORS_FIELDS)
-)
-
-AST_NODES_QUERY = QuerySpec.simple(*_AST_BASE_COLUMNS)
-AST_EDGES_QUERY = QuerySpec.simple(*_AST_EDGES_BASE_COLUMNS)
-AST_ERRORS_QUERY = QuerySpec.simple(*_AST_ERRORS_BASE_COLUMNS)
-
-_AST_METADATA_EXTRA = {
-    b"extractor_name": b"ast",
-    b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
-}
-
-_AST_NODES_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_AST_BASE_COLUMNS),
-    extra=_AST_METADATA_EXTRA,
-)
-_AST_EDGES_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_AST_EDGES_BASE_COLUMNS),
-    extra=_AST_METADATA_EXTRA,
-)
-_AST_ERRORS_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_AST_ERRORS_BASE_COLUMNS),
-    extra=_AST_METADATA_EXTRA,
-)
-
-AST_NODES_SPEC = register_dataset(
-    name="py_ast_nodes_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=_AST_NODES_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=AST_NODES_QUERY,
-        metadata_spec=_AST_NODES_METADATA,
-    ),
-)
-
-AST_EDGES_SPEC = register_dataset(
-    name="py_ast_edges_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=_AST_EDGES_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=AST_EDGES_QUERY,
-        metadata_spec=_AST_EDGES_METADATA,
-    ),
-)
-
-AST_ERRORS_SPEC = register_dataset(
-    name="py_ast_errors_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=_AST_ERRORS_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=AST_ERRORS_QUERY,
-        metadata_spec=_AST_ERRORS_METADATA,
-    ),
-)
-
-AST_NODES_SCHEMA = AST_NODES_SPEC.schema()
-AST_EDGES_SCHEMA = AST_EDGES_SPEC.schema()
-AST_ERRORS_SCHEMA = AST_ERRORS_SPEC.schema()
+AST_NODES_ROW_SCHEMA = dataset_row_schema("py_ast_nodes_v1")
+AST_EDGES_ROW_SCHEMA = dataset_row_schema("py_ast_edges_v1")
+AST_ERRORS_ROW_SCHEMA = dataset_row_schema("py_ast_errors_v1")
 
 
 def _maybe_int(value: object | None) -> int | None:
@@ -375,24 +279,26 @@ def extract_ast(
         file_contexts=file_contexts,
         ctx=ctx,
     )
-    run_meta = options_metadata_spec(options=options)
+    nodes_meta = dataset_metadata_with_options("py_ast_nodes_v1", options=options)
+    edges_meta = dataset_metadata_with_options("py_ast_edges_v1", options=options)
+    errors_meta = dataset_metadata_with_options("py_ast_errors_v1", options=options)
     return ASTExtractResult(
         py_ast_nodes=materialize_plan(
             plans["ast_nodes"],
             ctx=ctx,
-            metadata_spec=merge_metadata_specs(_AST_NODES_METADATA, run_meta),
+            metadata_spec=nodes_meta,
             attach_ordering_metadata=True,
         ),
         py_ast_edges=materialize_plan(
             plans["ast_edges"],
             ctx=ctx,
-            metadata_spec=merge_metadata_specs(_AST_EDGES_METADATA, run_meta),
+            metadata_spec=edges_meta,
             attach_ordering_metadata=True,
         ),
         py_ast_errors=materialize_plan(
             plans["ast_errors"],
             ctx=ctx,
-            metadata_spec=merge_metadata_specs(_AST_ERRORS_METADATA, run_meta),
+            metadata_spec=errors_meta,
             attach_ordering_metadata=True,
         ),
     )
@@ -425,7 +331,7 @@ def extract_ast_plans(
         edges_rows.extend(edges)
         err_rows.extend(errs)
 
-    nodes_plan = plan_from_rows(nodes_rows, schema=AST_NODES_SCHEMA, label="ast_nodes")
+    nodes_plan = plan_from_rows(nodes_rows, schema=AST_NODES_ROW_SCHEMA, label="ast_nodes")
     nodes_plan = AST_NODES_QUERY.apply_to_plan(nodes_plan, ctx=ctx)
     nodes_plan = align_plan(
         nodes_plan,
@@ -434,7 +340,7 @@ def extract_ast_plans(
         ctx=ctx,
     )
 
-    edges_plan = plan_from_rows(edges_rows, schema=AST_EDGES_SCHEMA, label="ast_edges")
+    edges_plan = plan_from_rows(edges_rows, schema=AST_EDGES_ROW_SCHEMA, label="ast_edges")
     edges_plan = AST_EDGES_QUERY.apply_to_plan(edges_plan, ctx=ctx)
     edges_plan = align_plan(
         edges_plan,
@@ -443,7 +349,7 @@ def extract_ast_plans(
         ctx=ctx,
     )
 
-    errs_plan = plan_from_rows(err_rows, schema=AST_ERRORS_SCHEMA, label="ast_errors")
+    errs_plan = plan_from_rows(err_rows, schema=AST_ERRORS_ROW_SCHEMA, label="ast_errors")
     errs_plan = AST_ERRORS_QUERY.apply_to_plan(errs_plan, ctx=ctx)
     errs_plan = align_plan(
         errs_plan,
@@ -523,7 +429,8 @@ def extract_ast_tables(
         ctx=ctx,
     )
     defs_plan = ast_def_nodes_plan(plan=plans["ast_nodes"])
-    run_meta = options_metadata_spec(options=options)
+    nodes_meta = dataset_metadata_with_options("py_ast_nodes_v1", options=options)
+    edges_meta = dataset_metadata_with_options("py_ast_edges_v1", options=options)
 
     return run_plan_bundle(
         {
@@ -534,9 +441,9 @@ def extract_ast_tables(
         ctx=ctx,
         prefer_reader=prefer_reader,
         metadata_specs={
-            "ast_nodes": merge_metadata_specs(_AST_NODES_METADATA, run_meta),
-            "ast_edges": merge_metadata_specs(_AST_EDGES_METADATA, run_meta),
-            "ast_defs": merge_metadata_specs(_AST_NODES_METADATA, run_meta),
+            "ast_nodes": nodes_meta,
+            "ast_edges": edges_meta,
+            "ast_defs": nodes_meta,
         },
         attach_ordering_metadata=True,
     )

@@ -10,7 +10,6 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan.scan_io import DatasetSource
-from arrowdsl.schema.schema import EncodingSpec
 from arrowdsl.spec.tables.cpg import prop_table_specs_from_table
 from cpg.catalog import PlanCatalog, resolve_plan_source
 from cpg.constants import CpgBuildArtifacts, QualityPlanSpec, quality_plan_from_ids
@@ -19,30 +18,21 @@ from cpg.plan_specs import (
     align_plan,
     assert_schema_metadata,
     empty_plan,
-    encoding_columns_from_metadata,
     ensure_plan,
     finalize_context_for_plan,
     finalize_plan,
 )
-from cpg.schemas import CPG_PROPS_SCHEMA, CPG_PROPS_SPEC, SCHEMA_VERSION
-from cpg.spec_registry import edge_prop_spec, prop_table_specs, scip_role_flag_prop_spec
+from cpg.registry import CpgRegistry, default_cpg_registry
 from cpg.specs import PropTableSpec, resolve_prop_include
 
-PROP_TABLE_SPECS: tuple[PropTableSpec, ...] = (
-    *prop_table_specs(),
-    scip_role_flag_prop_spec(),
-    edge_prop_spec(),
-)
 
-PROP_ENCODING_SPECS: tuple[EncodingSpec, ...] = tuple(
-    EncodingSpec(column=col) for col in encoding_columns_from_metadata(CPG_PROPS_SCHEMA)
-)
-
-
-def _prop_table_specs(prop_spec_table: pa.Table | None) -> tuple[PropTableSpec, ...]:
-    if prop_spec_table is None:
-        return PROP_TABLE_SPECS
-    return prop_table_specs_from_table(prop_spec_table)
+def _prop_table_specs(
+    prop_spec_table: pa.Table | None,
+    *,
+    registry: CpgRegistry,
+) -> tuple[PropTableSpec, ...]:
+    table = prop_spec_table or registry.prop_table_spec_table
+    return prop_table_specs_from_table(table)
 
 
 @dataclass(frozen=True)
@@ -125,6 +115,7 @@ def build_cpg_props_raw(
     inputs: PropsInputTables | None = None,
     options: PropsBuildOptions | None = None,
     prop_spec_table: pa.Table | None = None,
+    registry: CpgRegistry | None = None,
 ) -> Plan:
     """Build CPG properties as a plan without finalization.
 
@@ -138,12 +129,15 @@ def build_cpg_props_raw(
     ValueError
         Raised when an option flag is missing.
     """
+    registry = registry or default_cpg_registry()
+    props_spec = registry.props_spec()
+    props_schema = props_spec.schema()
     options = options or PropsBuildOptions()
     catalog = _prop_tables(inputs or PropsInputTables())
     plans: list[Plan] = []
-    include_schema_version = "schema_version" in CPG_PROPS_SCHEMA.names
-    schema_version = SCHEMA_VERSION if include_schema_version else None
-    for spec in _prop_table_specs(prop_spec_table):
+    include_schema_version = "schema_version" in props_schema.names
+    schema_version = props_spec.table_spec.version if include_schema_version else None
+    for spec in _prop_table_specs(prop_spec_table, registry=registry):
         enabled = getattr(options, spec.option_flag, None)
         if enabled is None:
             msg = f"Unknown option flag: {spec.option_flag}"
@@ -174,11 +168,11 @@ def build_cpg_props_raw(
         )
 
     if not plans:
-        return empty_plan(CPG_PROPS_SCHEMA, label="cpg_props_raw")
+        return empty_plan(props_schema, label="cpg_props_raw")
 
     return align_plan(
         union_all_plans(plans, label="cpg_props_raw"),
-        schema=CPG_PROPS_SCHEMA,
+        schema=props_schema,
         ctx=ctx,
     )
 
@@ -189,6 +183,7 @@ def build_cpg_props(
     inputs: PropsInputTables | None = None,
     options: PropsBuildOptions | None = None,
     prop_spec_table: pa.Table | None = None,
+    registry: CpgRegistry | None = None,
 ) -> CpgBuildArtifacts:
     """Build and finalize CPG properties with quality artifacts.
 
@@ -197,11 +192,14 @@ def build_cpg_props(
     CpgBuildArtifacts
         Finalize result plus quality table.
     """
+    registry = registry or default_cpg_registry()
+    props_spec = registry.props_spec()
     raw_plan = build_cpg_props_raw(
         ctx=ctx,
         inputs=inputs,
         options=options,
         prop_spec_table=prop_spec_table,
+        registry=registry,
     )
     quality_plan = quality_plan_from_ids(
         raw_plan,
@@ -217,12 +215,12 @@ def build_cpg_props(
     quality = finalize_plan(quality_plan, ctx=ctx)
     finalize_ctx = finalize_context_for_plan(
         raw_plan,
-        contract=CPG_PROPS_SPEC.contract(),
+        contract=props_spec.contract(),
         ctx=ctx,
     )
-    finalize = CPG_PROPS_SPEC.finalize_context(ctx).run(raw, ctx=finalize_ctx)
+    finalize = props_spec.finalize_context(ctx).run(raw, ctx=finalize_ctx)
     if ctx.debug:
-        assert_schema_metadata(finalize.good, schema=CPG_PROPS_SPEC.schema())
+        assert_schema_metadata(finalize.good, schema=props_spec.schema())
     return CpgBuildArtifacts(
         finalize=finalize,
         quality=quality,

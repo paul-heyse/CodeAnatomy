@@ -19,45 +19,29 @@ from libcst.metadata import (
     QualifiedNameProvider,
 )
 
-from arrowdsl.compute.expr_core import MaskedHashExprSpec
 from arrowdsl.compute.macros import normalize_string_items
-from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
+from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.plan.scan_io import plan_from_rows
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from arrowdsl.schema.structs import flatten_struct_field
-from extract.hash_specs import (
-    CST_CALL_ID_SPEC,
-    CST_CONTAINER_DEF_ID_SPEC,
-    CST_DEF_ID_SPEC,
-    CST_IMPORT_ID_SPEC,
-    CST_NAME_REF_ID_SPEC,
-    CST_OWNER_DEF_ID_SPEC,
-    CST_TYPE_EXPR_ID_SPEC,
-)
 from extract.helpers import (
-    DatasetRegistration,
     FileContext,
     align_plan,
     bytes_from_file_ctx,
     file_identity_row,
-    infer_ordering_keys,
     iter_contexts,
-    merge_metadata_specs,
-    options_metadata_spec,
-    ordering_metadata_spec,
-    register_dataset,
 )
-from schema_spec.specs import (
-    ArrowFieldSpec,
-    call_span_bundle,
-    file_identity_bundle,
+from extract.registry_fields import QNAME_STRUCT
+from extract.registry_specs import (
+    dataset_enabled,
+    dataset_metadata_with_options,
+    dataset_query,
+    dataset_row_schema,
+    dataset_schema,
 )
-
-SCHEMA_VERSION = 1
 
 type Row = dict[str, object]
 
@@ -92,314 +76,72 @@ class CSTExtractResult:
     py_cst_type_exprs: TableLike
 
 
-QNAME_STRUCT = pa.struct([("name", pa.string()), ("source", pa.string())])
-QNAME_LIST = pa.large_list_view(QNAME_STRUCT)
 _QNAME_FLAT_FIELDS = flatten_struct_field(pa.field("qname", QNAME_STRUCT))
 QNAME_KEYS = tuple(field.name.split(".", 1)[1] for field in _QNAME_FLAT_FIELDS)
 
-_CST_METADATA_EXTRA = {
-    b"extractor_name": b"cst",
-    b"extractor_version": str(SCHEMA_VERSION).encode("utf-8"),
-}
+PARSE_MANIFEST_QUERY = dataset_query("py_cst_parse_manifest_v1")
+PARSE_ERRORS_QUERY = dataset_query("py_cst_parse_errors_v1")
+NAME_REFS_QUERY = dataset_query("py_cst_name_refs_v1")
+IMPORTS_QUERY = dataset_query("py_cst_imports_v1")
+CALLSITES_QUERY = dataset_query("py_cst_callsites_v1")
+DEFS_QUERY = dataset_query("py_cst_defs_v1")
+TYPE_EXPRS_QUERY = dataset_query("py_cst_type_exprs_v1")
 
-_PARSE_MANIFEST_FIELDS = [
-    ArrowFieldSpec(name="encoding", dtype=pa.string()),
-    ArrowFieldSpec(name="default_indent", dtype=pa.string()),
-    ArrowFieldSpec(name="default_newline", dtype=pa.string()),
-    ArrowFieldSpec(name="has_trailing_newline", dtype=pa.bool_()),
-    ArrowFieldSpec(name="future_imports", dtype=pa.large_list_view(pa.string())),
-    ArrowFieldSpec(name="module_name", dtype=pa.string()),
-    ArrowFieldSpec(name="package_name", dtype=pa.string()),
-]
+PARSE_MANIFEST_SCHEMA = dataset_schema("py_cst_parse_manifest_v1")
+PARSE_ERRORS_SCHEMA = dataset_schema("py_cst_parse_errors_v1")
+NAME_REFS_SCHEMA = dataset_schema("py_cst_name_refs_v1")
+IMPORTS_SCHEMA = dataset_schema("py_cst_imports_v1")
+CALLSITES_SCHEMA = dataset_schema("py_cst_callsites_v1")
+DEFS_SCHEMA = dataset_schema("py_cst_defs_v1")
+TYPE_EXPRS_SCHEMA = dataset_schema("py_cst_type_exprs_v1")
 
-_PARSE_ERRORS_FIELDS = [
-    ArrowFieldSpec(name="error_type", dtype=pa.string()),
-    ArrowFieldSpec(name="message", dtype=pa.string()),
-    ArrowFieldSpec(name="raw_line", dtype=pa.int32()),
-    ArrowFieldSpec(name="raw_column", dtype=pa.int32()),
-    ArrowFieldSpec(name="meta", dtype=pa.map_(pa.string(), pa.string())),
-]
-
-_NAME_REFS_FIELDS = [
-    ArrowFieldSpec(name="name_ref_id", dtype=pa.string()),
-    ArrowFieldSpec(name="name", dtype=pa.string()),
-    ArrowFieldSpec(name="expr_ctx", dtype=pa.string()),
-    ArrowFieldSpec(name="bstart", dtype=pa.int64()),
-    ArrowFieldSpec(name="bend", dtype=pa.int64()),
-]
-
-_IMPORTS_FIELDS = [
-    ArrowFieldSpec(name="import_id", dtype=pa.string()),
-    ArrowFieldSpec(name="kind", dtype=pa.string()),
-    ArrowFieldSpec(name="module", dtype=pa.string()),
-    ArrowFieldSpec(name="relative_level", dtype=pa.int32()),
-    ArrowFieldSpec(name="name", dtype=pa.string()),
-    ArrowFieldSpec(name="asname", dtype=pa.string()),
-    ArrowFieldSpec(name="is_star", dtype=pa.bool_()),
-    ArrowFieldSpec(name="stmt_bstart", dtype=pa.int64()),
-    ArrowFieldSpec(name="stmt_bend", dtype=pa.int64()),
-    ArrowFieldSpec(name="alias_bstart", dtype=pa.int64()),
-    ArrowFieldSpec(name="alias_bend", dtype=pa.int64()),
-]
-
-_CALLSITES_FIELDS = [
-    ArrowFieldSpec(name="call_id", dtype=pa.string()),
-    *call_span_bundle().fields,
-    ArrowFieldSpec(name="callee_bstart", dtype=pa.int64()),
-    ArrowFieldSpec(name="callee_bend", dtype=pa.int64()),
-    ArrowFieldSpec(name="callee_shape", dtype=pa.string()),
-    ArrowFieldSpec(name="callee_text", dtype=pa.string()),
-    ArrowFieldSpec(name="arg_count", dtype=pa.int32()),
-    ArrowFieldSpec(name="callee_dotted", dtype=pa.string()),
-    ArrowFieldSpec(name="callee_qnames", dtype=QNAME_LIST),
-]
-
-_DEFS_FIELDS = [
-    ArrowFieldSpec(name="def_id", dtype=pa.string()),
-    ArrowFieldSpec(name="container_def_id", dtype=pa.string()),
-    ArrowFieldSpec(name="kind", dtype=pa.string()),
-    ArrowFieldSpec(name="name", dtype=pa.string()),
-    ArrowFieldSpec(name="def_bstart", dtype=pa.int64()),
-    ArrowFieldSpec(name="def_bend", dtype=pa.int64()),
-    ArrowFieldSpec(name="name_bstart", dtype=pa.int64()),
-    ArrowFieldSpec(name="name_bend", dtype=pa.int64()),
-    ArrowFieldSpec(name="qnames", dtype=QNAME_LIST),
-]
-
-_TYPE_EXPRS_FIELDS = [
-    ArrowFieldSpec(name="type_expr_id", dtype=pa.string()),
-    ArrowFieldSpec(name="owner_def_id", dtype=pa.string()),
-    ArrowFieldSpec(name="param_name", dtype=pa.string()),
-    ArrowFieldSpec(name="expr_kind", dtype=pa.string()),
-    ArrowFieldSpec(name="expr_role", dtype=pa.string()),
-    ArrowFieldSpec(name="bstart", dtype=pa.int64()),
-    ArrowFieldSpec(name="bend", dtype=pa.int64()),
-    ArrowFieldSpec(name="expr_text", dtype=pa.string()),
-]
-
-_PARSE_MANIFEST_BASE_COLUMNS = tuple(
-    field.name for field in (*file_identity_bundle().fields, *_PARSE_MANIFEST_FIELDS)
-)
-_PARSE_ERRORS_BASE_COLUMNS = tuple(
-    field.name for field in (*file_identity_bundle().fields, *_PARSE_ERRORS_FIELDS)
-)
-_NAME_REFS_BASE_COLUMNS = tuple(
-    field.name for field in (*file_identity_bundle().fields, *_NAME_REFS_FIELDS)
-)
-_IMPORTS_BASE_COLUMNS = tuple(
-    field.name for field in (*file_identity_bundle().fields, *_IMPORTS_FIELDS)
-)
-_CALLSITES_BASE_COLUMNS = tuple(
-    field.name for field in (*file_identity_bundle().fields, *_CALLSITES_FIELDS)
-)
-_DEFS_BASE_COLUMNS = tuple(field.name for field in (*file_identity_bundle().fields, *_DEFS_FIELDS))
-_TYPE_EXPRS_BASE_COLUMNS = tuple(
-    field.name for field in (*file_identity_bundle().fields, *_TYPE_EXPRS_FIELDS)
-)
-
-_PARSE_MANIFEST_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_PARSE_MANIFEST_BASE_COLUMNS),
-    extra=_CST_METADATA_EXTRA,
-)
-_PARSE_ERRORS_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_PARSE_ERRORS_BASE_COLUMNS),
-    extra=_CST_METADATA_EXTRA,
-)
-_NAME_REFS_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_NAME_REFS_BASE_COLUMNS),
-    extra=_CST_METADATA_EXTRA,
-)
-_IMPORTS_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_IMPORTS_BASE_COLUMNS),
-    extra=_CST_METADATA_EXTRA,
-)
-_CALLSITES_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_CALLSITES_BASE_COLUMNS),
-    extra=_CST_METADATA_EXTRA,
-)
-_DEFS_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_DEFS_BASE_COLUMNS),
-    extra=_CST_METADATA_EXTRA,
-)
-_TYPE_EXPRS_METADATA = ordering_metadata_spec(
-    OrderingLevel.IMPLICIT,
-    keys=infer_ordering_keys(_TYPE_EXPRS_BASE_COLUMNS),
-    extra=_CST_METADATA_EXTRA,
-)
-
-PARSE_MANIFEST_QUERY = QuerySpec.simple(*_PARSE_MANIFEST_BASE_COLUMNS)
-PARSE_ERRORS_QUERY = QuerySpec.simple(*_PARSE_ERRORS_BASE_COLUMNS)
-NAME_REFS_QUERY = QuerySpec(
-    projection=ProjectionSpec(
-        base=_NAME_REFS_BASE_COLUMNS,
-        derived={
-            "name_ref_id": MaskedHashExprSpec(
-                spec=CST_NAME_REF_ID_SPEC,
-                required=("file_id", "bstart", "bend"),
-            )
-        },
-    )
-)
-IMPORTS_QUERY = QuerySpec(
-    projection=ProjectionSpec(
-        base=_IMPORTS_BASE_COLUMNS,
-        derived={
-            "import_id": MaskedHashExprSpec(
-                spec=CST_IMPORT_ID_SPEC,
-                required=("file_id", "kind", "alias_bstart", "alias_bend"),
-            )
-        },
-    )
-)
-CALLSITES_QUERY = QuerySpec(
-    projection=ProjectionSpec(
-        base=_CALLSITES_BASE_COLUMNS,
-        derived={
-            "call_id": MaskedHashExprSpec(
-                spec=CST_CALL_ID_SPEC,
-                required=("file_id", "call_bstart", "call_bend"),
-            )
-        },
-    )
-)
-DEFS_QUERY = QuerySpec(
-    projection=ProjectionSpec(
-        base=_DEFS_BASE_COLUMNS,
-        derived={
-            "def_id": MaskedHashExprSpec(
-                spec=CST_DEF_ID_SPEC,
-                required=("file_id", "kind", "def_bstart", "def_bend"),
-            ),
-            "container_def_id": MaskedHashExprSpec(
-                spec=CST_CONTAINER_DEF_ID_SPEC,
-                required=(
-                    "file_id",
-                    "container_def_kind",
-                    "container_def_bstart",
-                    "container_def_bend",
-                ),
-            ),
-        },
-    )
-)
-TYPE_EXPRS_QUERY = QuerySpec(
-    projection=ProjectionSpec(
-        base=_TYPE_EXPRS_BASE_COLUMNS,
-        derived={
-            "type_expr_id": MaskedHashExprSpec(
-                spec=CST_TYPE_EXPR_ID_SPEC,
-                required=("path", "bstart", "bend"),
-            ),
-            "owner_def_id": MaskedHashExprSpec(
-                spec=CST_OWNER_DEF_ID_SPEC,
-                required=("file_id", "owner_def_kind", "owner_def_bstart", "owner_def_bend"),
-            ),
-        },
-    )
-)
-
-PARSE_MANIFEST_SPEC = register_dataset(
-    name="py_cst_parse_manifest_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=_PARSE_MANIFEST_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=PARSE_MANIFEST_QUERY,
-        metadata_spec=_PARSE_MANIFEST_METADATA,
-    ),
-)
-
-PARSE_ERRORS_SPEC = register_dataset(
-    name="py_cst_parse_errors_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=_PARSE_ERRORS_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=PARSE_ERRORS_QUERY,
-        metadata_spec=_PARSE_ERRORS_METADATA,
-    ),
-)
-
-NAME_REFS_SPEC = register_dataset(
-    name="py_cst_name_refs_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=_NAME_REFS_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=NAME_REFS_QUERY,
-        metadata_spec=_NAME_REFS_METADATA,
-    ),
-)
-
-IMPORTS_SPEC = register_dataset(
-    name="py_cst_imports_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=_IMPORTS_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=IMPORTS_QUERY,
-        metadata_spec=_IMPORTS_METADATA,
-    ),
-)
-
-CALLSITES_SPEC = register_dataset(
-    name="py_cst_callsites_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=_CALLSITES_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=CALLSITES_QUERY,
-        metadata_spec=_CALLSITES_METADATA,
-    ),
-)
-
-DEFS_SPEC = register_dataset(
-    name="py_cst_defs_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=_DEFS_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=DEFS_QUERY,
-        metadata_spec=_DEFS_METADATA,
-    ),
-)
-
-TYPE_EXPRS_SPEC = register_dataset(
-    name="py_cst_type_exprs_v1",
-    version=SCHEMA_VERSION,
-    bundles=(file_identity_bundle(),),
-    fields=_TYPE_EXPRS_FIELDS,
-    registration=DatasetRegistration(
-        query_spec=TYPE_EXPRS_QUERY,
-        metadata_spec=_TYPE_EXPRS_METADATA,
-    ),
-)
-
-PARSE_MANIFEST_SCHEMA = PARSE_MANIFEST_SPEC.schema()
-PARSE_ERRORS_SCHEMA = PARSE_ERRORS_SPEC.schema()
-NAME_REFS_SCHEMA = NAME_REFS_SPEC.schema()
-IMPORTS_SCHEMA = IMPORTS_SPEC.schema()
-CALLSITES_SCHEMA = CALLSITES_SPEC.schema()
-DEFS_SCHEMA = DEFS_SPEC.schema()
-TYPE_EXPRS_SCHEMA = TYPE_EXPRS_SPEC.schema()
+PARSE_MANIFEST_ROW_SCHEMA = dataset_row_schema("py_cst_parse_manifest_v1")
+PARSE_ERRORS_ROW_SCHEMA = dataset_row_schema("py_cst_parse_errors_v1")
+NAME_REFS_ROW_SCHEMA = dataset_row_schema("py_cst_name_refs_v1")
+IMPORTS_ROW_SCHEMA = dataset_row_schema("py_cst_imports_v1")
+CALLSITES_ROW_SCHEMA = dataset_row_schema("py_cst_callsites_v1")
+DEFS_ROW_SCHEMA = dataset_row_schema("py_cst_defs_v1")
+TYPE_EXPRS_ROW_SCHEMA = dataset_row_schema("py_cst_type_exprs_v1")
 
 
 def _cst_metadata_specs(options: CSTExtractOptions) -> dict[str, SchemaMetadataSpec]:
-    run_meta = options_metadata_spec(options=options, repo_id=options.repo_id)
+    repo_id = options.repo_id
     return {
-        "cst_parse_manifest": merge_metadata_specs(_PARSE_MANIFEST_METADATA, run_meta),
-        "cst_parse_errors": merge_metadata_specs(_PARSE_ERRORS_METADATA, run_meta),
-        "cst_name_refs": merge_metadata_specs(_NAME_REFS_METADATA, run_meta),
-        "cst_imports": merge_metadata_specs(_IMPORTS_METADATA, run_meta),
-        "cst_callsites": merge_metadata_specs(_CALLSITES_METADATA, run_meta),
-        "cst_defs": merge_metadata_specs(_DEFS_METADATA, run_meta),
-        "cst_type_exprs": merge_metadata_specs(_TYPE_EXPRS_METADATA, run_meta),
+        "cst_parse_manifest": dataset_metadata_with_options(
+            "py_cst_parse_manifest_v1",
+            options=options,
+            repo_id=repo_id,
+        ),
+        "cst_parse_errors": dataset_metadata_with_options(
+            "py_cst_parse_errors_v1",
+            options=options,
+            repo_id=repo_id,
+        ),
+        "cst_name_refs": dataset_metadata_with_options(
+            "py_cst_name_refs_v1",
+            options=options,
+            repo_id=repo_id,
+        ),
+        "cst_imports": dataset_metadata_with_options(
+            "py_cst_imports_v1",
+            options=options,
+            repo_id=repo_id,
+        ),
+        "cst_callsites": dataset_metadata_with_options(
+            "py_cst_callsites_v1",
+            options=options,
+            repo_id=repo_id,
+        ),
+        "cst_defs": dataset_metadata_with_options(
+            "py_cst_defs_v1",
+            options=options,
+            repo_id=repo_id,
+        ),
+        "cst_type_exprs": dataset_metadata_with_options(
+            "py_cst_type_exprs_v1",
+            options=options,
+            repo_id=repo_id,
+        ),
     }
 
 
@@ -574,7 +316,7 @@ def _parse_or_record_error(
 ) -> cst.Module | None:
     module, err = _parse_module(data, file_ctx=file_ctx)
     if module is None:
-        if err is not None and ctx.options.include_parse_errors:
+        if err is not None and dataset_enabled("py_cst_parse_errors_v1", ctx.options):
             ctx.error_rows.append(err)
         return None
     return module
@@ -609,9 +351,11 @@ def _resolve_metadata_maps(
     Mapping[cst.CSTNode, Collection[QualifiedName]],
 ]:
     providers: set[type[BaseMetadataProvider[object]]] = {ByteSpanPositionProvider}
-    if options.compute_expr_context and options.include_name_refs:
+    if options.compute_expr_context and dataset_enabled("py_cst_name_refs_v1", options):
         providers.add(ExpressionContextProvider)
-    if options.compute_qualified_names and (options.include_callsites or options.include_defs):
+    include_callsites = dataset_enabled("py_cst_callsites_v1", options)
+    include_defs = dataset_enabled("py_cst_defs_v1", options)
+    if options.compute_qualified_names and (include_callsites or include_defs):
         providers.add(QualifiedNameProvider)
 
     resolved = wrapper.resolve_many(providers)
@@ -709,7 +453,7 @@ class CSTCollector(cst.CSTVisitor):
         *,
         owner: TypeExprOwner,
     ) -> None:
-        if not self._options.include_type_exprs:
+        if not dataset_enabled("py_cst_type_exprs_v1", self._options):
             return
         expr = annotation.annotation
         bstart, bend = self._span(expr)
@@ -739,7 +483,7 @@ class CSTCollector(cst.CSTVisitor):
         bool | None
             True to continue CST traversal.
         """
-        if not self._options.include_defs:
+        if not dataset_enabled("py_cst_defs_v1", self._options):
             return True
         def_bstart, def_bend = self._span(node)
         name_bstart, name_bend = self._span(node.name)
@@ -799,7 +543,7 @@ class CSTCollector(cst.CSTVisitor):
     def leave_FunctionDef(self, original_node: cst.FunctionDef) -> None:
         """Finalize function definition collection."""
         _ = original_node
-        if self._options.include_defs and self._def_stack:
+        if dataset_enabled("py_cst_defs_v1", self._options) and self._def_stack:
             self._def_stack.pop()
 
     def visit_ClassDef(self, node: cst.ClassDef) -> bool | None:
@@ -810,7 +554,7 @@ class CSTCollector(cst.CSTVisitor):
         bool | None
             True to continue CST traversal.
         """
-        if not self._options.include_defs:
+        if not dataset_enabled("py_cst_defs_v1", self._options):
             return True
         def_bstart, def_bend = self._span(node)
         name_bstart, name_bend = self._span(node.name)
@@ -847,7 +591,7 @@ class CSTCollector(cst.CSTVisitor):
     def leave_ClassDef(self, original_node: cst.ClassDef) -> None:
         """Finalize class definition collection."""
         _ = original_node
-        if self._options.include_defs and self._def_stack:
+        if dataset_enabled("py_cst_defs_v1", self._options) and self._def_stack:
             self._def_stack.pop()
 
     def visit_Name(self, node: cst.Name) -> bool | None:
@@ -858,7 +602,7 @@ class CSTCollector(cst.CSTVisitor):
         bool | None
             True to continue CST traversal.
         """
-        if not self._options.include_name_refs:
+        if not dataset_enabled("py_cst_name_refs_v1", self._options):
             return True
         if node in self._skip_name_nodes:
             return True
@@ -887,7 +631,7 @@ class CSTCollector(cst.CSTVisitor):
         bool | None
             True to continue CST traversal.
         """
-        if not self._options.include_imports:
+        if not dataset_enabled("py_cst_imports_v1", self._options):
             return True
         stmt_bstart, stmt_bend = self._span(node)
         for alias in node.names:
@@ -925,7 +669,7 @@ class CSTCollector(cst.CSTVisitor):
         bool | None
             True to continue CST traversal.
         """
-        if not self._options.include_imports:
+        if not dataset_enabled("py_cst_imports_v1", self._options):
             return True
         stmt_bstart, stmt_bend = self._span(node)
 
@@ -992,7 +736,7 @@ class CSTCollector(cst.CSTVisitor):
         bool | None
             True to continue CST traversal.
         """
-        if not self._options.include_callsites:
+        if not dataset_enabled("py_cst_callsites_v1", self._options):
             return True
         call_bstart, call_bend = self._span(node)
         callee_bstart, callee_bend = self._span(node.func)
@@ -1045,7 +789,7 @@ def _extract_cst_for_context(file_ctx: FileContext, ctx: CSTExtractContext) -> N
         path=file_ctx.path,
     )
     cst_file_ctx = CSTFileContext(file_ctx=file_ctx, options=ctx.options)
-    if ctx.options.include_parse_manifest:
+    if dataset_enabled("py_cst_parse_manifest_v1", ctx.options):
         future_imports = getattr(module, "future_imports", []) or []
         normalized_future_imports = normalize_string_items(future_imports)
         ctx.manifest_rows.append(
@@ -1108,7 +852,7 @@ def _build_manifest_plan(
 ) -> Plan:
     if not ctx.manifest_rows:
         return Plan.table_source(empty_table(PARSE_MANIFEST_SCHEMA))
-    plan = plan_from_rows(ctx.manifest_rows, schema=PARSE_MANIFEST_SCHEMA, label="cst_manifest")
+    plan = plan_from_rows(ctx.manifest_rows, schema=PARSE_MANIFEST_ROW_SCHEMA, label="cst_manifest")
     plan = PARSE_MANIFEST_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
@@ -1135,7 +879,7 @@ def _build_errors_plan(
 ) -> Plan:
     if not ctx.error_rows:
         return Plan.table_source(empty_table(PARSE_ERRORS_SCHEMA))
-    plan = plan_from_rows(ctx.error_rows, schema=PARSE_ERRORS_SCHEMA, label="cst_parse_errors")
+    plan = plan_from_rows(ctx.error_rows, schema=PARSE_ERRORS_ROW_SCHEMA, label="cst_parse_errors")
     plan = PARSE_ERRORS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
@@ -1162,7 +906,7 @@ def _build_name_refs_plan(
 ) -> Plan:
     if not ctx.name_ref_rows:
         return Plan.table_source(empty_table(NAME_REFS_SCHEMA))
-    plan = plan_from_rows(ctx.name_ref_rows, schema=NAME_REFS_SCHEMA, label="cst_name_refs")
+    plan = plan_from_rows(ctx.name_ref_rows, schema=NAME_REFS_ROW_SCHEMA, label="cst_name_refs")
     plan = NAME_REFS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
@@ -1189,7 +933,7 @@ def _build_imports_plan(
 ) -> Plan:
     if not ctx.import_rows:
         return Plan.table_source(empty_table(IMPORTS_SCHEMA))
-    plan = plan_from_rows(ctx.import_rows, schema=IMPORTS_SCHEMA, label="cst_imports")
+    plan = plan_from_rows(ctx.import_rows, schema=IMPORTS_ROW_SCHEMA, label="cst_imports")
     plan = IMPORTS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
@@ -1216,7 +960,7 @@ def _build_callsites_plan(
 ) -> Plan:
     if not ctx.call_rows:
         return Plan.table_source(empty_table(CALLSITES_SCHEMA))
-    plan = plan_from_rows(ctx.call_rows, schema=CALLSITES_SCHEMA, label="cst_callsites")
+    plan = plan_from_rows(ctx.call_rows, schema=CALLSITES_ROW_SCHEMA, label="cst_callsites")
     plan = CALLSITES_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
@@ -1243,7 +987,7 @@ def _build_defs_plan(
 ) -> Plan:
     if not ctx.def_rows:
         return Plan.table_source(empty_table(DEFS_SCHEMA))
-    plan = plan_from_rows(ctx.def_rows, schema=DEFS_SCHEMA, label="cst_defs")
+    plan = plan_from_rows(ctx.def_rows, schema=DEFS_ROW_SCHEMA, label="cst_defs")
     plan = DEFS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,
@@ -1270,7 +1014,7 @@ def _build_type_exprs_plan(
 ) -> Plan:
     if not ctx.type_expr_rows:
         return Plan.table_source(empty_table(TYPE_EXPRS_SCHEMA))
-    plan = plan_from_rows(ctx.type_expr_rows, schema=TYPE_EXPRS_SCHEMA, label="cst_type_exprs")
+    plan = plan_from_rows(ctx.type_expr_rows, schema=TYPE_EXPRS_ROW_SCHEMA, label="cst_type_exprs")
     plan = TYPE_EXPRS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
     return align_plan(
         plan,

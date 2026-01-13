@@ -4,19 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import TableLike
 from arrowdsl.plan import catalog as plan_catalog
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.runner import run_plan
 from arrowdsl.plan.scan_io import PlanSource, plan_from_source
-from normalize.bytecode_cfg import cfg_blocks_plan, cfg_edges_plan
-from normalize.bytecode_dfg import def_use_events_plan, reaching_defs_plan
-from normalize.diagnostics import DiagnosticsSources, diagnostics_plan
+from normalize.registry_plans import plan_ref
 from normalize.text_index import RepoTextIndex
-from normalize.types import type_exprs_plan, type_nodes_plan
 
 PlanCatalog = plan_catalog.PlanCatalog
 PlanDeriver = plan_catalog.PlanDeriver
@@ -71,105 +65,13 @@ class NormalizePlanCatalog(plan_catalog.PlanCatalog):
         return plan_from_source(derived, ctx=ctx, label=ref.name)
 
 
-def _table_from_source(source: PlanSource | None, *, ctx: ExecutionContext) -> TableLike | None:
-    if source is None:
-        return None
-    if isinstance(source, TableLike):
-        return source
-    if isinstance(source, Plan):
-        result = run_plan(
-            source,
-            ctx=ctx,
-            prefer_reader=False,
-            attach_ordering_metadata=True,
-        )
-        return cast("TableLike", result.value)
-    plan = plan_from_source(source, ctx=ctx, label="normalize_catalog")
-    result = run_plan(
-        plan,
-        ctx=ctx,
-        prefer_reader=False,
-        attach_ordering_metadata=True,
-    )
-    return cast("TableLike", result.value)
-
-
-def derive_type_exprs_norm(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
-    source = catalog.tables.get("cst_type_exprs")
-    if source is None:
-        return None
-    return type_exprs_plan(source, ctx=ctx)
-
-
-def derive_types_norm(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
-    type_exprs_norm = catalog.resolve(TYPE_EXPRS_NORM_REF, ctx=ctx)
-    if type_exprs_norm is None:
-        return None
-    scip_info = catalog.tables.get("scip_symbol_information")
-    return type_nodes_plan(type_exprs_norm, scip_info, ctx=ctx)
-
-
-def derive_cfg_blocks_norm(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
-    blocks = catalog.tables.get("py_bc_blocks")
-    code_units = catalog.tables.get("py_bc_code_units")
-    if blocks is None or code_units is None:
-        return None
-    return cfg_blocks_plan(blocks, code_units, ctx=ctx)
-
-
-def derive_cfg_edges_norm(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
-    edges = catalog.tables.get("py_bc_cfg_edges")
-    code_units = catalog.tables.get("py_bc_code_units")
-    if edges is None or code_units is None:
-        return None
-    return cfg_edges_plan(code_units, edges, ctx=ctx)
-
-
-def derive_def_use_events(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
-    instructions = catalog.tables.get("py_bc_instructions")
-    if instructions is None:
-        return None
-    return def_use_events_plan(instructions, ctx=ctx)
-
-
-def derive_reaches(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
-    def_use = catalog.resolve(DEF_USE_EVENTS_REF, ctx=ctx)
-    if def_use is None:
-        return None
-    return reaching_defs_plan(def_use, ctx=ctx)
-
-
-def derive_diagnostics_norm(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
-    normalize_catalog = cast("NormalizePlanCatalog", catalog)
-    repo_text_index = normalize_catalog.repo_text_index
-    if repo_text_index is None:
-        return None
-    sources = DiagnosticsSources(
-        cst_parse_errors=_table_from_source(
-            normalize_catalog.tables.get("cst_parse_errors"),
-            ctx=ctx,
-        ),
-        ts_errors=_table_from_source(normalize_catalog.tables.get("ts_errors"), ctx=ctx),
-        ts_missing=_table_from_source(normalize_catalog.tables.get("ts_missing"), ctx=ctx),
-        scip_diagnostics=_table_from_source(
-            normalize_catalog.tables.get("scip_diagnostics"),
-            ctx=ctx,
-        ),
-        scip_documents=_table_from_source(
-            normalize_catalog.tables.get("scip_documents"),
-            ctx=ctx,
-        ),
-    )
-    return diagnostics_plan(repo_text_index, sources=sources, ctx=ctx)
-
-
-TYPE_EXPRS_NORM_REF = PlanRef("type_exprs_norm", derive=derive_type_exprs_norm)
-TYPES_NORM_REF = PlanRef("types_norm", derive=derive_types_norm)
-CFG_BLOCKS_NORM_REF = PlanRef("cfg_blocks_norm", derive=derive_cfg_blocks_norm)
-CFG_EDGES_NORM_REF = PlanRef("cfg_edges_norm", derive=derive_cfg_edges_norm)
-DEF_USE_EVENTS_REF = PlanRef("def_use_events", derive=derive_def_use_events)
-REACHES_REF = PlanRef("reaches", derive=derive_reaches)
-DIAGNOSTICS_NORM_REF = PlanRef("diagnostics_norm", derive=derive_diagnostics_norm)
+TYPE_EXPRS_NORM_REF = plan_ref("type_exprs_norm")
+TYPES_NORM_REF = plan_ref("types_norm")
+CFG_BLOCKS_NORM_REF = plan_ref("cfg_blocks_norm")
+CFG_EDGES_NORM_REF = plan_ref("cfg_edges_norm")
+DEF_USE_EVENTS_REF = plan_ref("def_use_events")
+REACHES_REF = plan_ref("reaches")
+DIAGNOSTICS_NORM_REF = plan_ref("diagnostics_norm")
 
 
 def normalize_plan_catalog(inputs: NormalizeCatalogInputs) -> NormalizePlanCatalog:

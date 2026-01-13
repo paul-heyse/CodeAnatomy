@@ -35,6 +35,7 @@ from relspec.model import (
     DedupeKernelSpec,
     DropColumnsSpec,
     ExplodeListSpec,
+    FilterKernelSpec,
     HashJoinConfig,
     IntervalAlignConfig,
     KernelSpecT,
@@ -106,6 +107,7 @@ KERNEL_SPEC_STRUCT = pa.struct(
             "add_literal",
             pa.struct([("name", pa.string()), ("value_union", SCALAR_UNION_TYPE)]),
         ),
+        pa.field("filter", pa.struct([("expr_json", pa.string())])),
         pa.field("drop_columns", pa.struct([("columns", pa.list_(pa.string()))])),
         pa.field("rename_columns", pa.struct([("mapping", pa.map_(pa.string(), pa.string()))])),
         pa.field(
@@ -331,73 +333,77 @@ def _kernel_row(spec: KernelSpecT) -> dict[str, object]:
     base: dict[str, object] = {"kind": spec.kind}
     if isinstance(spec, AddLiteralSpec):
         base["add_literal"] = {"name": spec.name, "value_union": _encode_literal(spec.value)}
-        return base
-    if isinstance(spec, DropColumnsSpec):
+    elif isinstance(spec, FilterKernelSpec):
+        base["filter"] = {"expr_json": _encode_expr(spec.predicate)}
+    elif isinstance(spec, DropColumnsSpec):
         base["drop_columns"] = {"columns": list(spec.columns) or None}
-        return base
-    if isinstance(spec, RenameColumnsSpec):
+    elif isinstance(spec, RenameColumnsSpec):
         base["rename_columns"] = {"mapping": dict(spec.mapping) or None}
-        return base
-    if isinstance(spec, ExplodeListSpec):
+    elif isinstance(spec, ExplodeListSpec):
         base["explode_list"] = {
             "parent_id_col": spec.parent_id_col,
             "list_col": spec.list_col,
             "out_parent_col": spec.out_parent_col,
             "out_value_col": spec.out_value_col,
         }
-        return base
-    if isinstance(spec, DedupeKernelSpec):
+    elif isinstance(spec, DedupeKernelSpec):
         base["dedupe"] = {
             "keys": list(spec.spec.keys),
             "tie_breakers": _encode_sort_keys(spec.spec.tie_breakers) or None,
             "strategy": spec.spec.strategy,
         }
-        return base
-    if isinstance(spec, CanonicalSortKernelSpec):
+    elif isinstance(spec, CanonicalSortKernelSpec):
         base["canonical_sort"] = {"sort_keys": _encode_sort_keys(spec.sort_keys) or None}
-        return base
-    msg = f"Unsupported KernelSpec type: {type(spec).__name__}."
-    raise ValueError(msg)
+    else:
+        msg = f"Unsupported KernelSpec type: {type(spec).__name__}."
+        raise TypeError(msg)
+    return base
 
 
 def _kernel_from_row(payload: Mapping[str, Any]) -> KernelSpecT:
     kind = str(payload["kind"])
     if kind == "add_literal":
         spec = payload.get("add_literal") or {}
-        return AddLiteralSpec(
+        result: KernelSpecT = AddLiteralSpec(
             name=str(spec.get("name", "")),
             value=_decode_literal(spec.get("value_union")),
         )
-    if kind == "drop_columns":
+    elif kind == "filter":
+        spec = payload.get("filter") or {}
+        expr_json = str(spec.get("expr_json", ""))
+        result = FilterKernelSpec(predicate=_decode_expr(expr_json))
+    elif kind == "drop_columns":
         spec = payload.get("drop_columns") or {}
-        return DropColumnsSpec(columns=parse_string_tuple(spec.get("columns"), label="columns"))
-    if kind == "rename_columns":
+        result = DropColumnsSpec(columns=parse_string_tuple(spec.get("columns"), label="columns"))
+    elif kind == "rename_columns":
         spec = payload.get("rename_columns") or {}
         mapping = spec.get("mapping") or {}
-        return RenameColumnsSpec(mapping=dict(mapping))
-    if kind == "explode_list":
+        result = RenameColumnsSpec(mapping=dict(mapping))
+    elif kind == "explode_list":
         spec = payload.get("explode_list") or {}
-        return ExplodeListSpec(
+        result = ExplodeListSpec(
             parent_id_col=str(spec.get("parent_id_col", "src_id")),
             list_col=str(spec.get("list_col", "dst_ids")),
             out_parent_col=str(spec.get("out_parent_col", "src_id")),
             out_value_col=str(spec.get("out_value_col", "dst_id")),
         )
-    if kind == "dedupe":
+    elif kind == "dedupe":
         spec = payload.get("dedupe") or {}
         tie_breakers = _decode_sort_keys(spec.get("tie_breakers"))
-        return DedupeKernelSpec(
+        result = DedupeKernelSpec(
             spec=DedupeSpec(
                 keys=parse_string_tuple(spec.get("keys"), label="keys"),
                 tie_breakers=tie_breakers,
                 strategy=parse_dedupe_strategy(spec.get("strategy")),
             )
         )
-    if kind == "canonical_sort":
+    elif kind == "canonical_sort":
         spec = payload.get("canonical_sort") or {}
-        return CanonicalSortKernelSpec(sort_keys=_decode_sort_keys(spec.get("sort_keys")))
-    msg = f"Unsupported kernel kind: {kind!r}"
-    raise ValueError(msg)
+        result = CanonicalSortKernelSpec(sort_keys=_decode_sort_keys(spec.get("sort_keys")))
+    else:
+        msg = f"Unsupported kernel kind: {kind!r}"
+        raise ValueError(msg)
+    return result
 
 
 def relationship_rule_table(rules: Sequence[RelationshipRule]) -> pa.Table:

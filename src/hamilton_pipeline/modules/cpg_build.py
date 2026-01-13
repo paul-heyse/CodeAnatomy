@@ -544,10 +544,14 @@ def persist_relspec_input_datasets(
 
     # Write as Parquet dataset dirs so Acero scans can project/filter cheaply.
     schemas = {name: table.schema for name, table in relspec_input_datasets.items()}
-    encoding_policies = {
-        name: encoding_policy_from_schema(table.schema)
-        for name, table in relspec_input_datasets.items()
+    dataset_specs = {
+        name: GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(name) for name in relspec_input_datasets
     }
+    encoding_policies = {}
+    for name, table in relspec_input_datasets.items():
+        spec = dataset_specs.get(name)
+        policy = spec.encoding_policy() if spec is not None else None
+        encoding_policies[name] = policy or encoding_policy_from_schema(table.schema)
     paths = write_named_datasets_parquet(
         relspec_input_datasets,
         relspec_input_dataset_dir,

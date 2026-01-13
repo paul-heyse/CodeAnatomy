@@ -16,6 +16,8 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.plan.ops import ScanOp
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.query import scan_context_from_spec
+from arrowdsl.plan.scan_specs import DatasetFactorySpec, ScanSpec
 from schema_spec.system import DatasetSpec
 
 
@@ -27,7 +29,25 @@ class DatasetSource:
     spec: DatasetSpec
 
 
-PlanSource = TableLike | RecordBatchReaderLike | ds.Dataset | ds.Scanner | DatasetSource | Plan
+@dataclass(frozen=True)
+class InMemoryDatasetSource:
+    """RecordBatchReader source with one-shot semantics."""
+
+    reader: RecordBatchReaderLike
+    one_shot: bool = True
+
+
+PlanSource = (
+    TableLike
+    | RecordBatchReaderLike
+    | ds.Dataset
+    | ds.Scanner
+    | DatasetSource
+    | DatasetFactorySpec
+    | ScanSpec
+    | InMemoryDatasetSource
+    | Plan
+)
 
 
 def plan_from_dataset(
@@ -71,13 +91,35 @@ def plan_from_source(
     Plan
         Acero-backed plan for dataset/table sources.
     """
+    plan: Plan
     if isinstance(source, Plan):
-        return source
-    if isinstance(source, DatasetSource):
-        return plan_from_dataset(source.dataset, spec=source.spec, ctx=ctx)
-    if isinstance(source, ds.Dataset):
-        available = set(source.schema.names)
-        scan_cols = list(columns) if columns is not None else list(source.schema.names)
+        plan = source
+    elif isinstance(source, DatasetSource):
+        plan = plan_from_dataset(source.dataset, spec=source.spec, ctx=ctx)
+    elif isinstance(source, ScanSpec):
+        scan_ctx = scan_context_from_spec(source, ctx=ctx)
+        ordering = (
+            Ordering.implicit()
+            if ctx.runtime.scan.implicit_ordering or ctx.runtime.scan.require_sequenced_output
+            else Ordering.unordered()
+        )
+        plan = Plan(
+            decl=scan_ctx.acero_decl(),
+            label=label,
+            ordering=ordering,
+            pipeline_breakers=(),
+        )
+    elif isinstance(source, DatasetFactorySpec):
+        plan = plan_from_source(
+            source.build(),
+            ctx=ctx,
+            columns=columns,
+            label=label,
+        )
+    elif isinstance(source, ds.Dataset):
+        dataset = cast("ds.Dataset", source)
+        available = set(dataset.schema.names)
+        scan_cols = list(columns) if columns is not None else list(dataset.schema.names)
         scan_cols = [name for name in scan_cols if name in available]
         scan_ordering = (
             OrderingEffect.IMPLICIT
@@ -85,20 +127,27 @@ def plan_from_source(
             else OrderingEffect.UNORDERED
         )
         scan_op = ScanOp(
-            dataset=source,
+            dataset=dataset,
             columns=scan_cols,
             predicate=None,
             ordering_effect=scan_ordering,
         )
         decl = scan_op.to_declaration([], ctx=ctx)
         ordering = scan_op.apply_ordering(Ordering.unordered())
-        return Plan(decl=decl, label=label, ordering=ordering, pipeline_breakers=())
-    if isinstance(source, ds.Scanner):
+        plan = Plan(decl=decl, label=label, ordering=ordering, pipeline_breakers=())
+    elif isinstance(source, ds.Scanner):
         scanner = cast("ds.Scanner", source)
-        return Plan.table_source(scanner.to_table(), label=label)
-    if isinstance(source, RecordBatchReaderLike):
-        return Plan.table_source(source.read_all(), label=label)
-    return Plan.table_source(source, label=label)
+        plan = Plan.table_source(scanner.to_table(), label=label)
+    elif isinstance(source, InMemoryDatasetSource):
+        if source.one_shot:
+            plan = Plan.table_source(source.reader.read_all(), label=label)
+        else:
+            plan = Plan.from_reader(source.reader, label=label)
+    elif isinstance(source, RecordBatchReaderLike):
+        plan = Plan.table_source(source.read_all(), label=label)
+    else:
+        plan = Plan.table_source(source, label=label)
+    return plan
 
 
 def plan_from_scan_columns(
@@ -123,6 +172,7 @@ def plan_from_scan_columns(
 
 __all__ = [
     "DatasetSource",
+    "InMemoryDatasetSource",
     "PlanSource",
     "plan_from_dataset",
     "plan_from_scan_columns",

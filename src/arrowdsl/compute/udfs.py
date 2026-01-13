@@ -8,8 +8,9 @@ import json
 import pyarrow as pa
 import pyarrow.compute as pac
 
+from arrowdsl.compute.registry import UdfSpec, default_registry
 from arrowdsl.core.ids import iter_array_values
-from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, DataTypeLike, ScalarLike, pc
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, DataTypeLike, ScalarLike
 
 type ValuesLike = ArrayLike | ChunkedArrayLike | ScalarLike
 
@@ -63,17 +64,15 @@ def ensure_expr_context_udf() -> str:
     str
         Registered function name.
     """
-    try:
-        pc.get_function(_EXPR_CTX_FUNCTION)
-    except KeyError:
-        pc.register_scalar_function(
-            _expr_ctx_udf,
-            _EXPR_CTX_FUNCTION,
-            {"summary": "Normalize expr context", "description": "Normalize expr context values."},
-            {"value": pa.string()},
-            pa.string(),
-        )
-    return _EXPR_CTX_FUNCTION
+    spec = UdfSpec(
+        name=_EXPR_CTX_FUNCTION,
+        inputs={"value": pa.string()},
+        output=pa.string(),
+        fn=_expr_ctx_udf,
+        summary="Normalize expr context",
+        description="Normalize expr context values.",
+    )
+    return default_registry().ensure(spec)
 
 
 def _json_udf_name(dtype: DataTypeLike) -> str:
@@ -93,19 +92,15 @@ def ensure_json_udf(dtype: DataTypeLike) -> str:
     cached = _JSON_CACHE.get(str(dtype))
     if cached == name:
         return name
-    try:
-        pc.get_function(name)
-    except KeyError:
-        pc.register_scalar_function(
-            _json_udf,
-            name,
-            {
-                "summary": "JSON stringify",
-                "description": f"Serialize values to JSON for {dtype}.",
-            },
-            {"value": dtype},
-            pa.string(),
-        )
+    spec = UdfSpec(
+        name=name,
+        inputs={"value": dtype},
+        output=pa.string(),
+        fn=_json_udf,
+        summary="JSON stringify",
+        description=f"Serialize values to JSON for {dtype}.",
+    )
+    default_registry().ensure(spec)
     _JSON_CACHE[str(dtype)] = name
     return name
 

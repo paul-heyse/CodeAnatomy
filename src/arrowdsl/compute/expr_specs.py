@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from arrowdsl.compute.expr import ExprSpec
+from arrowdsl.compute.exprs import CoalesceExpr, FieldExpr
 from arrowdsl.compute.kernels import def_use_kind_array
 from arrowdsl.core.ids import (
     HashSpec,
@@ -25,7 +26,6 @@ from arrowdsl.core.interop import (
     ensure_expression,
     pc,
 )
-from arrowdsl.schema.arrays import CoalesceExpr, FieldExpr
 
 _NULL_SEPARATOR = "\x1f"
 

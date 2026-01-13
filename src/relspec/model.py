@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arrowdsl.compute.expr import ScalarValue
 from arrowdsl.core.interop import ComputeExpression
+from arrowdsl.plan.join_specs import JoinOutputSpec, join_spec
 from arrowdsl.plan.ops import DedupeSpec, JoinSpec, JoinType, SortKey
 from arrowdsl.plan.query import QuerySpec
 
@@ -89,15 +90,16 @@ class HashJoinConfig(BaseModel):
         JoinSpec
             Join specification for hash joins.
         """
-        right_keys = self.right_keys or self.left_keys
-        return JoinSpec(
+        return join_spec(
             join_type=self.join_type,
             left_keys=self.left_keys,
-            right_keys=right_keys,
-            left_output=self.left_output,
-            right_output=self.right_output,
-            output_suffix_for_left=self.output_suffix_for_left,
-            output_suffix_for_right=self.output_suffix_for_right,
+            right_keys=self.right_keys or self.left_keys,
+            output=JoinOutputSpec(
+                left_output=self.left_output,
+                right_output=self.right_output,
+                output_suffix_for_left=self.output_suffix_for_left,
+                output_suffix_for_right=self.output_suffix_for_right,
+            ),
         )
 
 

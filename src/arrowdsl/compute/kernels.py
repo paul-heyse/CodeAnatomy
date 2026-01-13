@@ -11,6 +11,7 @@ import pyarrow.types as patypes
 
 from arrowdsl.core.context import DeterminismTier, ExecutionContext
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike, pc
+from arrowdsl.plan.join_specs import JoinOutputSpec, join_spec
 from arrowdsl.plan.ops import DedupeSpec, JoinSpec, SortKey
 from arrowdsl.schema.arrays import const_array, set_or_append_column
 from schema_spec.specs import PROVENANCE_COLS
@@ -471,12 +472,14 @@ def dedupe_keep_best_by_score(
     joined = apply_join(
         table,
         best,
-        spec=JoinSpec(
+        spec=join_spec(
             join_type="inner",
-            left_keys=tuple(keys),
-            right_keys=tuple(keys),
-            left_output=tuple(table.column_names),
-            right_output=(best_score_name,),
+            left_keys=keys,
+            right_keys=keys,
+            output=JoinOutputSpec(
+                left_output=table.column_names,
+                right_output=(best_score_name,),
+            ),
         ),
         use_threads=True,
     )
@@ -869,14 +872,15 @@ def _join_interval_candidates(
     return apply_join(
         prepared.left,
         prepared.right,
-        spec=JoinSpec(
+        spec=join_spec(
             join_type="inner",
             left_keys=(prepared.left_key_col,),
             right_keys=(prepared.right_key_col,),
-            left_output=tuple(left_join_cols),
-            right_output=tuple(right_join_cols),
-            output_suffix_for_left="",
-            output_suffix_for_right=cfg.right_suffix,
+            output=JoinOutputSpec(
+                left_output=left_join_cols,
+                right_output=right_join_cols,
+                output_suffix_for_right=cfg.right_suffix,
+            ),
         ),
         use_threads=True,
     )

@@ -20,12 +20,8 @@ from arrowdsl.schema.arrays import (
     build_struct,
     const_array,
 )
-from arrowdsl.schema.schema import (
-    AlignmentInfo,
-    EncodingPolicy,
-    SchemaMetadataSpec,
-    SchemaTransform,
-)
+from arrowdsl.schema.policy import SchemaPolicy
+from arrowdsl.schema.schema import AlignmentInfo, SchemaMetadataSpec
 from arrowdsl.schema.validation import ArrowValidationOptions
 from schema_spec.specs import PROVENANCE_COLS, NestedFieldSpec
 from schema_spec.system import validate_arrow_table
@@ -262,9 +258,8 @@ class FinalizeOptions:
     """Configuration overrides for finalize behavior."""
 
     error_spec: ErrorArtifactSpec = ERROR_ARTIFACT_SPEC
-    transform: SchemaTransform | None = None
+    schema_policy: SchemaPolicy | None = None
     chunk_policy: ChunkPolicy | None = None
-    encoding_policy: EncodingPolicy | None = None
     skip_canonical_sort: bool = False
 
 
@@ -413,12 +408,17 @@ def _maybe_validate_with_arrow(
     *,
     contract: Contract,
     ctx: ExecutionContext,
+    schema_policy: SchemaPolicy | None = None,
 ) -> TableLike:
     if not ctx.schema_validation.enabled:
         return table
     if contract.schema_spec is None:
         return table
-    options = contract.validation
+    options = None
+    if schema_policy is not None and schema_policy.validation is not None:
+        options = schema_policy.validation
+    if options is None:
+        options = contract.validation
     if options is None:
         options = ArrowValidationOptions.from_policy(ctx.schema_validation)
     return validate_arrow_table(table, spec=contract.schema_spec, options=options)
@@ -533,25 +533,24 @@ def finalize(
         Finalized table bundle.
     """
     options = options or FinalizeOptions()
-    schema = (
-        options.transform.schema
-        if options.transform is not None
-        else contract.with_versioned_schema()
-    )
-    transform = options.transform
-    if transform is None:
-        transform = SchemaTransform(
-            schema=schema,
+    schema_policy = options.schema_policy
+    if schema_policy is None:
+        schema_policy = SchemaPolicy(
+            schema=contract.with_versioned_schema(),
             safe_cast=ctx.safe_cast,
             keep_extra_columns=ctx.provenance,
             on_error="unsafe" if ctx.safe_cast else "raise",
         )
-    aligned, align_info = transform.apply_with_info(table)
-    if options.encoding_policy is not None:
-        aligned = options.encoding_policy.apply(aligned)
-    else:
+    schema = schema_policy.resolved_schema()
+    aligned, align_info = schema_policy.apply_with_info(table)
+    if schema_policy.encoding is None:
         aligned = (options.chunk_policy or ChunkPolicy()).apply(aligned)
-    aligned = _maybe_validate_with_arrow(aligned, contract=contract, ctx=ctx)
+    aligned = _maybe_validate_with_arrow(
+        aligned,
+        contract=contract,
+        ctx=ctx,
+        schema_policy=schema_policy,
+    )
     provenance_cols = _provenance_columns(aligned, schema) if ctx.provenance else []
 
     results = _collect_invariant_results(aligned, contract)
@@ -596,9 +595,8 @@ class FinalizeContext:
 
     contract: Contract
     error_spec: ErrorArtifactSpec = ERROR_ARTIFACT_SPEC
-    transform: SchemaTransform | None = None
+    schema_policy: SchemaPolicy | None = None
     chunk_policy: ChunkPolicy = field(default_factory=ChunkPolicy)
-    encoding_policy: EncodingPolicy | None = None
     skip_canonical_sort: bool = False
 
     def run(self, table: TableLike, ctx: ExecutionContext) -> FinalizeResult:
@@ -611,9 +609,8 @@ class FinalizeContext:
         """
         options = FinalizeOptions(
             error_spec=self.error_spec,
-            transform=self.transform,
+            schema_policy=self.schema_policy,
             chunk_policy=self.chunk_policy,
-            encoding_policy=self.encoding_policy,
             skip_canonical_sort=self.skip_canonical_sort,
         )
         return finalize(

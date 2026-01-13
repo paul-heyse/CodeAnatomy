@@ -9,7 +9,8 @@ from typing import overload
 from arrowdsl.compute.kernels import apply_join
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
-from arrowdsl.plan.ops import JoinSpec
+from arrowdsl.plan.join_specs import JoinOutputSpec, join_spec
+from arrowdsl.plan.ops import JoinSpec, JoinType
 from arrowdsl.plan.plan import Plan
 
 JoinInput = TableLike | Plan
@@ -75,6 +76,25 @@ class JoinConfig:
             output_suffix_for_right=output_suffix_for_right,
         )
 
+    def to_spec(self, *, join_type: JoinType = "left outer") -> JoinSpec:
+        """Return a JoinSpec for the stored configuration.
+
+        Returns
+        -------
+        JoinSpec
+            Join spec with normalized outputs and suffixes.
+        """
+        return join_spec(
+            join_type=join_type,
+            left_keys=self.left_keys,
+            right_keys=self.right_keys,
+            output=JoinOutputSpec(
+                left_output=self.left_output,
+                right_output=self.right_output,
+                output_suffix_for_right=self.output_suffix_for_right or "",
+            ),
+        )
+
 
 @overload
 def left_join(
@@ -135,14 +155,7 @@ def left_join(
     TableLike
         Joined table.
     """
-    spec = JoinSpec(
-        join_type="left outer",
-        left_keys=config.left_keys,
-        right_keys=config.right_keys,
-        left_output=config.left_output,
-        right_output=config.right_output,
-        output_suffix_for_right=config.output_suffix_for_right,
-    )
+    spec = config.to_spec(join_type="left outer")
     if isinstance(left, Plan) or isinstance(right, Plan):
         left_plan = left if isinstance(left, Plan) else Plan.table_source(left)
         right_plan = right if isinstance(right, Plan) else Plan.table_source(right)

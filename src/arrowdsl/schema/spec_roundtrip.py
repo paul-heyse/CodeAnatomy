@@ -2,22 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from schema_spec.specs import (
+    KEY_FIELDS_META,
+    REQUIRED_NON_NULL_META,
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
     TableSchemaSpec,
-    schema_metadata,
+    schema_metadata_for_spec,
 )
-
-REQUIRED_NON_NULL_META = b"required_non_null"
-KEY_FIELDS_META = b"key_fields"
-
-
-def _join_names(names: Sequence[str]) -> bytes:
-    return ",".join(names).encode("utf-8")
 
 
 def _split_names(raw: bytes | None) -> tuple[str, ...]:
@@ -27,25 +22,27 @@ def _split_names(raw: bytes | None) -> tuple[str, ...]:
     return tuple(name for name in text.split(",") if name)
 
 
-def schema_metadata_for_spec(spec: TableSchemaSpec) -> dict[bytes, bytes]:
-    """Return schema metadata encoding name/version and constraints."""
-    meta = schema_metadata(spec.name, spec.version)
-    if spec.required_non_null:
-        meta[REQUIRED_NON_NULL_META] = _join_names(spec.required_non_null)
-    if spec.key_fields:
-        meta[KEY_FIELDS_META] = _join_names(spec.key_fields)
-    return meta
-
-
 def apply_spec_metadata(spec: TableSchemaSpec) -> SchemaMetadataSpec:
-    """Return a metadata spec for the provided schema spec."""
+    """Return a metadata spec for the provided schema spec.
+
+    Returns
+    -------
+    SchemaMetadataSpec
+        Metadata spec for the schema.
+    """
     return SchemaMetadataSpec(schema_metadata=schema_metadata_for_spec(spec))
 
 
 def schema_identity_from_metadata(
     metadata: Mapping[bytes, bytes] | None,
 ) -> tuple[str | None, int | None]:
-    """Return schema name/version derived from metadata."""
+    """Return schema name/version derived from metadata.
+
+    Returns
+    -------
+    tuple[str | None, int | None]
+        Schema name and version, when available.
+    """
     if not metadata:
         return None, None
     name = metadata.get(SCHEMA_META_NAME)
@@ -63,7 +60,13 @@ def schema_identity_from_metadata(
 def schema_constraints_from_metadata(
     metadata: Mapping[bytes, bytes] | None,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Return required non-null and key fields parsed from metadata."""
+    """Return required non-null and key fields parsed from metadata.
+
+    Returns
+    -------
+    tuple[tuple[str, ...], tuple[str, ...]]
+        Required non-null and key field names.
+    """
     if not metadata:
         return (), ()
     required = _split_names(metadata.get(REQUIRED_NON_NULL_META))

@@ -4,15 +4,22 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 import arrowdsl.core.interop as pa
+from arrowdsl.compute.expr import ExprSpec
 from arrowdsl.core.interop import DataTypeLike, FieldLike, SchemaLike
+from arrowdsl.schema.arrays import list_view_type
 from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTransform
 
 SCHEMA_META_NAME = b"schema_name"
 SCHEMA_META_VERSION = b"schema_version"
+REQUIRED_NON_NULL_META = b"required_non_null"
+KEY_FIELDS_META = b"key_fields"
+ENCODING_META = "encoding"
+ENCODING_DICTIONARY = "dictionary"
 
 DICT_STRING = pa.dictionary(pa.int32(), pa.string())
 
@@ -31,7 +38,7 @@ PROVENANCE_SOURCE_FIELDS: dict[str, str] = {
 }
 
 
-def schema_metadata(name: str, version: int) -> dict[bytes, bytes]:
+def schema_metadata(name: str, version: int | None) -> dict[bytes, bytes]:
     """Return schema metadata for name/version tagging.
 
     Returns
@@ -39,21 +46,26 @@ def schema_metadata(name: str, version: int) -> dict[bytes, bytes]:
     dict[bytes, bytes]
         Encoded schema metadata mapping.
     """
-    return {
-        SCHEMA_META_NAME: name.encode("utf-8"),
-        SCHEMA_META_VERSION: str(version).encode("utf-8"),
-    }
+    meta = {SCHEMA_META_NAME: name.encode("utf-8")}
+    if version is not None:
+        meta[SCHEMA_META_VERSION] = str(version).encode("utf-8")
+    return meta
 
 
-def list_view_type(value_type: DataTypeLike, *, large: bool = False) -> DataTypeLike:
-    """Return a list_view type (large_list_view when requested).
+def schema_metadata_for_spec(spec: TableSchemaSpec) -> dict[bytes, bytes]:
+    """Return schema metadata encoding name/version and constraints.
 
     Returns
     -------
-    DataTypeLike
-        List view data type.
+    dict[bytes, bytes]
+        Encoded schema metadata mapping.
     """
-    return pa.large_list_view(value_type) if large else pa.list_view(value_type)
+    meta = schema_metadata(spec.name, spec.version)
+    if spec.required_non_null:
+        meta[REQUIRED_NON_NULL_META] = ",".join(spec.required_non_null).encode("utf-8")
+    if spec.key_fields:
+        meta[KEY_FIELDS_META] = ",".join(spec.key_fields).encode("utf-8")
+    return meta
 
 
 def _field_metadata(metadata: dict[str, str]) -> dict[bytes, bytes]:
@@ -76,6 +88,7 @@ class ArrowFieldSpec(BaseModel):
     dtype: DataTypeLike
     nullable: bool = True
     metadata: dict[str, str] = Field(default_factory=dict)
+    encoding: Literal["dictionary"] | None = None
 
     def to_arrow_field(self) -> FieldLike:
         """Build a pyarrow.Field from the spec.
@@ -85,8 +98,20 @@ class ArrowFieldSpec(BaseModel):
         pyarrow.Field
             Arrow field instance.
         """
-        metadata = _field_metadata(self.metadata)
+        metadata = dict(self.metadata)
+        if self.encoding is not None:
+            metadata[ENCODING_META] = self.encoding
+        metadata = _field_metadata(metadata)
         return pa.field(self.name, self.dtype, nullable=self.nullable, metadata=metadata)
+
+
+class DerivedFieldSpec(BaseModel):
+    """Specification for a derived column."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
+
+    name: str
+    expr: ExprSpec
 
 
 class TableSchemaSpec(BaseModel):
@@ -138,9 +163,7 @@ class TableSchemaSpec(BaseModel):
             Arrow schema instance.
         """
         schema = pa.schema([field.to_arrow_field() for field in self.fields])
-        if self.version is None:
-            return schema
-        meta = schema_metadata(self.name, self.version)
+        meta = schema_metadata_for_spec(self)
         return SchemaMetadataSpec(schema_metadata=meta).apply(schema)
 
     def to_transform(
@@ -277,11 +300,16 @@ def provenance_bundle() -> FieldBundle:
 
 __all__ = [
     "DICT_STRING",
+    "ENCODING_DICTIONARY",
+    "ENCODING_META",
+    "KEY_FIELDS_META",
     "PROVENANCE_COLS",
     "PROVENANCE_SOURCE_FIELDS",
+    "REQUIRED_NON_NULL_META",
     "SCHEMA_META_NAME",
     "SCHEMA_META_VERSION",
     "ArrowFieldSpec",
+    "DerivedFieldSpec",
     "FieldBundle",
     "NestedFieldSpec",
     "TableSchemaSpec",
@@ -290,6 +318,7 @@ __all__ = [
     "list_view_type",
     "provenance_bundle",
     "schema_metadata",
+    "schema_metadata_for_spec",
     "scip_range_bundle",
     "span_bundle",
 ]

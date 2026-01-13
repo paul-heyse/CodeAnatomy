@@ -11,6 +11,7 @@ from typing import Literal, Protocol, TypedDict, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
+from arrowdsl.compute.exprs import FieldExpr
 from arrowdsl.compute.kernels import ChunkPolicy
 from arrowdsl.core.interop import (
     ArrayLike,
@@ -22,7 +23,8 @@ from arrowdsl.core.interop import (
     ensure_expression,
     pc,
 )
-from arrowdsl.schema.arrays import FieldExpr, set_or_append_column
+from arrowdsl.schema.arrays import set_or_append_column
+from arrowdsl.schema.builders import empty_table
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
 
@@ -426,17 +428,6 @@ class SchemaEvolutionSpec:
             )
             aligned.append(aligned_table)
         return pa.concat_tables(aligned, promote=True)
-
-
-def empty_table(schema: SchemaLike) -> TableLike:
-    """Return an empty table with the provided schema.
-
-    Returns
-    -------
-    TableLike
-        Empty table with the schema.
-    """
-    return pa.Table.from_arrays([pa.array([], type=field.type) for field in schema], schema=schema)
 
 
 @dataclass(frozen=True)

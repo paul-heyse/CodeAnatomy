@@ -84,11 +84,13 @@ class ScanOp:
         if ctx is None:
             msg = "ScanOp requires an execution context."
             raise ValueError(msg)
+        scan_kwargs = ctx.runtime.scan.scanner_kwargs()
+        scan_kwargs.update(ctx.runtime.scan.scan_node_kwargs())
         opts = acero.ScanNodeOptions(
             self.dataset,
             columns=self.columns,
             filter=self.predicate,
-            **ctx.runtime.scan.scan_node_kwargs(),
+            **scan_kwargs,
         )
         return acero.Declaration("scan", opts)
 

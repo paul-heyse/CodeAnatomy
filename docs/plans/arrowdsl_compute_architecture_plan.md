@@ -43,13 +43,13 @@ def table_from_schema(
 - Update: `src/arrowdsl/schema/columns.py`
 
 **Implementation checklist**
-- [ ] Move or re-export `empty_table`, `table_from_schema`, `table_from_arrays`,
+- [x] Move or re-export `empty_table`, `table_from_schema`, `table_from_arrays`,
       and `column_or_null` into `schema/builders.py`.
-- [ ] Update imports in ArrowDSL to reference the canonical builders.
-- [ ] Leave compatibility re-exports in old modules to avoid downstream churn.
+- [x] Update imports in ArrowDSL to reference the canonical builders.
+- [x] Leave compatibility re-exports in old modules to avoid downstream churn.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -77,12 +77,12 @@ class FieldExpr(ExprSpec):
 - Update: `src/arrowdsl/compute/__init__.py`
 
 **Implementation checklist**
-- [ ] Move `ConstExpr`, `FieldExpr`, `CoalesceExpr` to the canonical module.
-- [ ] Re-export from `schema/arrays.py` for compatibility.
-- [ ] Update downstream imports to use the canonical expression module.
+- [x] Move `ConstExpr`, `FieldExpr`, `CoalesceExpr` to the canonical module.
+- [x] Re-export from `schema/arrays.py` for compatibility.
+- [x] Update downstream imports to use the canonical expression module.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -117,12 +117,12 @@ class ComputeRegistry:
 - Update: `src/arrowdsl/compute/transforms.py`
 
 **Implementation checklist**
-- [ ] Implement `ComputeRegistry` with UDF registration + caching.
-- [ ] Refactor `ensure_expr_context_udf` and `ensure_json_udf` to use the registry.
-- [ ] Expose transform helpers that build expressions from registry-backed UDFs.
+- [x] Implement `ComputeRegistry` with UDF registration + caching.
+- [x] Refactor `ensure_expr_context_udf` and `ensure_json_udf` to use the registry.
+- [x] Expose transform helpers that build expressions from registry-backed UDFs.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -164,12 +164,12 @@ class DatasetFactorySpec:
 - Update: `src/arrowdsl/core/context.py`
 
 **Implementation checklist**
-- [ ] Introduce `DatasetFactorySpec` and `ScanSpec` to build datasets and scans.
-- [ ] Allow `open_dataset` to accept factory specs and inspected schemas.
-- [ ] Thread `ScanProfile.scanner_kwargs()` into scan creation paths.
+- [x] Introduce `DatasetFactorySpec` and `ScanSpec` to build datasets and scans.
+- [x] Allow `open_dataset` to accept factory specs and inspected schemas.
+- [x] Thread `ScanProfile.scanner_kwargs()` into scan creation paths.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -181,10 +181,22 @@ row-group split/subset to maximize pushdown in large Parquet datasets.
 **Code patterns**
 ```python
 # src/arrowdsl/plan/query.py
-def fragment_telemetry(dataset: ds.Dataset, *, predicate: ComputeExpression | None) -> ScanTelemetry:
+def fragment_telemetry(
+    dataset: ds.Dataset,
+    *,
+    predicate: ComputeExpression | None,
+) -> ScanTelemetry:
     fragments = list(dataset.get_fragments(filter=predicate))
-    row_groups = sum(len(list(f.split_by_row_group())) for f in fragments if hasattr(f, "split_by_row_group"))
-    return ScanTelemetry(fragment_count=len(fragments), row_group_count=row_groups, estimated_rows=None)
+    row_groups = sum(
+        len(list(f.split_by_row_group()))
+        for f in fragments
+        if hasattr(f, "split_by_row_group")
+    )
+    return ScanTelemetry(
+        fragment_count=len(fragments),
+        row_group_count=row_groups,
+        estimated_rows=None,
+    )
 ```
 
 **Target files**
@@ -192,12 +204,12 @@ def fragment_telemetry(dataset: ds.Dataset, *, predicate: ComputeExpression | No
 - Add: `src/arrowdsl/plan/fragments.py`
 
 **Implementation checklist**
-- [ ] Add fragment enumeration helpers with optional filter predicate.
-- [ ] Add row-group split/subset helpers for Parquet fragments.
-- [ ] Expand `ScanTelemetry` to include row-group counts and file hints.
+- [x] Add fragment enumeration helpers with optional filter predicate.
+- [x] Add row-group split/subset helpers for Parquet fragments.
+- [x] Expand `ScanTelemetry` to include row-group counts and file hints.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -230,12 +242,12 @@ def join_spec_for_keys(
 - Update: `src/arrowdsl/compute/kernels.py`
 
 **Implementation checklist**
-- [ ] Introduce a join spec factory for common join patterns.
-- [ ] Update `left_join` and `apply_join` to accept the factory output.
-- [ ] Normalize output selection and suffix rules in one place.
+- [x] Introduce a join spec factory for common join patterns.
+- [x] Update `left_join` and `apply_join` to accept the factory output.
+- [x] Normalize output selection and suffix rules in one place.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -265,12 +277,12 @@ class SchemaPolicy:
 - Update: `src/arrowdsl/finalize/finalize.py`
 
 **Implementation checklist**
-- [ ] Introduce `SchemaPolicy` with alignment + encoding + metadata.
-- [ ] Add optional validation hooks for strict/filter modes.
-- [ ] Replace duplicated policy wiring in finalize and validation helpers.
+- [x] Introduce `SchemaPolicy` with alignment + encoding + metadata.
+- [x] Add optional validation hooks for strict/filter modes.
+- [x] Replace duplicated policy wiring in finalize and validation helpers.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -282,8 +294,16 @@ dictionary types. This standardizes row-based ingestion and nested value handlin
 **Code patterns**
 ```python
 # src/arrowdsl/schema/nested_builders.py
-def map_array(values: Sequence[object | None], *, key_type: DataTypeLike, item_type: DataTypeLike) -> ArrayLike:
-    pairs = [[tuple(item) for item in row] if row is not None else None for row in values]
+def map_array(
+    values: Sequence[object | None],
+    *,
+    key_type: DataTypeLike,
+    item_type: DataTypeLike,
+) -> ArrayLike:
+    pairs = [
+        [tuple(item) for item in row] if row is not None else None
+        for row in values
+    ]
     return pa.array(pairs, type=pa.map_(key_type, item_type))
 ```
 
@@ -293,12 +313,12 @@ def map_array(values: Sequence[object | None], *, key_type: DataTypeLike, item_t
 - Update: `src/arrowdsl/schema/arrays.py`
 
 **Implementation checklist**
-- [ ] Add builders for list_view, map, struct, union, and dictionary arrays.
-- [ ] Use builders in row ingestion to avoid ad hoc casting logic.
-- [ ] Provide type-aware fallbacks for missing or malformed values.
+- [x] Add builders for list_view, map, struct, union, and dictionary arrays.
+- [x] Use builders in row ingestion to avoid ad hoc casting logic.
+- [x] Provide type-aware fallbacks for missing or malformed values.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -321,9 +341,9 @@ class InMemoryDatasetSource:
 - Update: `src/arrowdsl/plan/catalog.py`
 
 **Implementation checklist**
-- [ ] Add a dataset source wrapper that encodes one-shot semantics.
-- [ ] Guard repeated scans or force materialization when `one_shot` is true.
-- [ ] Document the behavior in plan source helpers.
+- [x] Add a dataset source wrapper that encodes one-shot semantics.
+- [x] Guard repeated scans or force materialization when `one_shot` is true.
+- [x] Document the behavior in plan source helpers.
 
 **Status**
-Not started.
+Completed.

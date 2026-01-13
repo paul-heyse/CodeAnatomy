@@ -10,14 +10,19 @@ import arrowdsl.core.interop as pa
 from arrowdsl.core.context import ExecutionContext, RuntimeProfile, SchemaValidationPolicy
 from arrowdsl.core.interop import (
     ArrayLike,
-    ComputeExpression,
     ScalarLike,
     TableLike,
     ensure_expression,
     pc,
 )
 from arrowdsl.plan.plan import Plan
-from arrowdsl.schema.schema import AlignmentInfo, SchemaTransform
+from arrowdsl.schema.constraints import (
+    missing_key_fields,
+    required_field_names,
+    required_non_null_mask,
+)
+from arrowdsl.schema.policy import SchemaPolicy
+from arrowdsl.schema.schema import AlignmentInfo
 from schema_spec.specs import TableSchemaSpec
 
 
@@ -71,13 +76,6 @@ def _ensure_execution_context(ctx: ExecutionContext | None) -> ExecutionContext:
     return ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
 
 
-def _required_fields(spec: TableSchemaSpec) -> tuple[str, ...]:
-    required = set(spec.required_non_null)
-    return tuple(
-        field.name for field in spec.fields if field.name in required or not field.nullable
-    )
-
-
 def _align_for_validation(
     table: TableLike,
     *,
@@ -87,13 +85,13 @@ def _align_for_validation(
     keep_extra = options.strict is False
     safe_cast = not options.coerce
     on_error = "unsafe" if options.coerce else "keep"
-    transform = SchemaTransform(
+    policy = SchemaPolicy(
         schema=spec.to_arrow_schema(),
         safe_cast=safe_cast,
         keep_extra_columns=keep_extra,
         on_error=on_error,
     )
-    return transform.apply_with_info(table)
+    return policy.apply_with_info(table)
 
 
 def _combine_masks(masks: Sequence[ArrayLike]) -> ArrayLike | None:
@@ -217,7 +215,7 @@ def _key_field_errors(
 ) -> list[_ValidationErrorEntry]:
     if not key_fields:
         return []
-    missing_keys = [key for key in key_fields if key in missing_cols]
+    missing_keys = missing_key_fields(key_fields, missing_cols=missing_cols)
     entries = [_ValidationErrorEntry("missing_key_field", key, row_count) for key in missing_keys]
     if not missing_keys:
         dup_count = _duplicate_row_count(aligned, key_fields)
@@ -267,29 +265,8 @@ def _empty_error_table() -> TableLike:
     )
 
 
-def required_non_null_mask(
-    spec: TableSchemaSpec,
-    *,
-    available: set[str] | None = None,
-) -> ComputeExpression:
-    """Return a plan-lane mask for required non-null violations.
-
-    Returns
-    -------
-    ComputeExpression
-        Boolean expression for invalid rows.
-    """
-    required = _required_fields(spec)
-    if available is not None:
-        required = tuple(name for name in required if name in available)
-    exprs = [ensure_expression(pc.invert(pc.is_valid(pc.field(name)))) for name in required]
-    if not exprs:
-        return ensure_expression(pc.scalar(pa.scalar(value=False)))
-    return ensure_expression(pc.or_(*exprs))
-
-
 def invalid_rows_plan(
-    table: TableLike,
+    source: TableLike | Plan,
     *,
     spec: TableSchemaSpec,
     ctx: ExecutionContext,
@@ -301,9 +278,45 @@ def invalid_rows_plan(
     Plan
         Plan yielding invalid rows.
     """
-    available = set(table.column_names)
-    mask = required_non_null_mask(spec, available=available)
-    return Plan.table_source(table, label=f"{spec.name}_validate").filter(mask, ctx=ctx)
+    required = required_field_names(spec)
+    if isinstance(source, Plan):
+        available = set(source.schema(ctx=ctx).names)
+        mask = required_non_null_mask(required, available=available)
+        return source.filter(mask, ctx=ctx)
+    available = set(source.column_names)
+    mask = required_non_null_mask(required, available=available)
+    return Plan.table_source(source, label=f"{spec.name}_validate").filter(mask, ctx=ctx)
+
+
+def duplicate_key_rows_plan(
+    source: Plan,
+    *,
+    keys: Sequence[str],
+    ctx: ExecutionContext,
+) -> Plan:
+    """Return a plan for rows grouped by keys with duplicate counts.
+
+    Returns
+    -------
+    Plan
+        Plan yielding duplicate key rows.
+    """
+    if not keys:
+        return Plan.table_source(pa.table({}), label="validate_keys_empty")
+    available = set(source.schema(ctx=ctx).names)
+    missing = missing_key_fields(keys, missing_cols=[key for key in keys if key not in available])
+    if missing:
+        return Plan.table_source(pa.table({}), label="validate_keys_missing")
+    count_col = f"{keys[0]}_count"
+    plan = source.aggregate(
+        group_keys=keys,
+        aggs=[(keys[0], "count")],
+        ctx=ctx,
+    )
+    return plan.filter(
+        ensure_expression(pc.greater(pc.field(count_col), pc.scalar(1))),
+        ctx=ctx,
+    )
 
 
 def duplicate_key_rows(
@@ -319,22 +332,8 @@ def duplicate_key_rows(
     TableLike
         Table containing duplicate key counts.
     """
-    if not keys:
-        return pa.table({})
-    missing = [key for key in keys if key not in table.column_names]
-    if missing:
-        return pa.table({})
-    count_col = f"{keys[0]}_count"
-    plan = Plan.table_source(table, label="validate_keys").aggregate(
-        group_keys=keys,
-        aggs=[(keys[0], "count")],
-        ctx=ctx,
-    )
-    dupes = plan.filter(
-        ensure_expression(pc.greater(pc.field(count_col), pc.scalar(1))),
-        ctx=ctx,
-    )
-    return dupes.to_table(ctx=ctx)
+    plan = Plan.table_source(table, label="validate_keys")
+    return duplicate_key_rows_plan(plan, keys=keys, ctx=ctx).to_table(ctx=ctx)
 
 
 def _build_validation_report(
@@ -396,7 +395,7 @@ def validate_table(
 
     null_entries, masks = _null_violation_results(
         aligned,
-        required_fields=_required_fields(spec),
+        required_fields=required_field_names(spec),
         missing_cols=info["missing_cols"],
     )
     error_entries.extend(null_entries)
@@ -430,6 +429,7 @@ __all__ = [
     "ArrowValidationOptions",
     "ValidationReport",
     "duplicate_key_rows",
+    "duplicate_key_rows_plan",
     "invalid_rows_plan",
     "required_non_null_mask",
     "validate_table",

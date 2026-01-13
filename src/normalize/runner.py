@@ -9,6 +9,7 @@ from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeOptions, FinalizeResult, finalize
 from arrowdsl.plan.plan import Plan, PlanSpec
 from arrowdsl.plan.runner import PlanRunResult
+from arrowdsl.schema.policy import SchemaPolicy
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from normalize.encoding import encoding_policy_from_schema
 from normalize.plan_helpers import (
@@ -95,27 +96,28 @@ def run_normalize(
     for fn in post:
         table = fn(table, ctx)
     contract_obj = contract.to_contract()
+    metadata = None
+    if metadata_spec is not None:
+        schema_meta = dict(metadata_spec.schema_metadata)
+        schema_meta[b"determinism_tier"] = ctx.determinism.value.encode("utf-8")
+        metadata = SchemaMetadataSpec(
+            schema_metadata=schema_meta,
+            field_metadata=metadata_spec.field_metadata,
+        )
+    schema_policy = SchemaPolicy(
+        schema=contract_obj.with_versioned_schema(),
+        encoding=encoding_policy_from_schema(contract_obj.schema),
+        metadata=metadata,
+        validation=contract_obj.validation,
+        safe_cast=ctx.safe_cast,
+        keep_extra_columns=ctx.provenance,
+        on_error="unsafe" if ctx.safe_cast else "raise",
+    )
     options = FinalizeOptions(
-        encoding_policy=encoding_policy_from_schema(contract_obj.schema),
+        schema_policy=schema_policy,
         skip_canonical_sort=_should_skip_canonical_sort(plan, contract=contract_obj, ctx=ctx),
     )
-    result = finalize(table, contract=contract_obj, ctx=ctx, options=options)
-    if metadata_spec is None:
-        return result
-    schema_meta = dict(metadata_spec.schema_metadata)
-    schema_meta[b"determinism_tier"] = ctx.determinism.value.encode("utf-8")
-    merged_spec = SchemaMetadataSpec(
-        schema_metadata=schema_meta,
-        field_metadata=metadata_spec.field_metadata,
-    )
-    schema = merged_spec.apply(result.good.schema)
-    good = result.good.cast(schema)
-    return FinalizeResult(
-        good=good,
-        errors=result.errors,
-        stats=result.stats,
-        alignment=result.alignment,
-    )
+    return finalize(table, contract=contract_obj, ctx=ctx, options=options)
 
 
 def run_normalize_reader(plan: PlanSource, *, ctx: ExecutionContext) -> RecordBatchReaderLike:

@@ -11,7 +11,7 @@ from arrowdsl.compute.predicates import bitmask_is_set_expr
 from arrowdsl.compute.scalars import null_expr, scalar_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
-from arrowdsl.plan.ops import JoinSpec
+from arrowdsl.plan.join_specs import JoinOutputSpec, join_spec
 from arrowdsl.plan.plan import Plan, hash_join
 from arrowdsl.plan_helpers import column_or_null_expr
 from cpg.catalog import PlanCatalog, PlanRef
@@ -81,12 +81,14 @@ def _filter_unresolved_qname_calls(
     return hash_join(
         left=rel_callsite_qname,
         right=rel_callsite_symbol,
-        spec=JoinSpec(
+        spec=join_spec(
             join_type="left anti",
             left_keys=("call_id",),
             right_keys=("call_id",),
-            left_output=tuple(left_cols),
-            right_output=(),
+            output=JoinOutputSpec(
+                left_output=tuple(left_cols),
+                right_output=(),
+            ),
         ),
     )
 
@@ -121,13 +123,15 @@ def _with_repo_file_ids(
     joined = hash_join(
         left=diag_plan,
         right=repo_proj,
-        spec=JoinSpec(
+        spec=join_spec(
             join_type="left outer",
             left_keys=("path",),
             right_keys=("path",),
-            left_output=tuple(diag_cols),
-            right_output=("file_id",),
-            output_suffix_for_right="_repo",
+            output=JoinOutputSpec(
+                left_output=tuple(diag_cols),
+                right_output=("file_id",),
+                output_suffix_for_right="_repo",
+            ),
         ),
     )
     joined_cols = joined.schema(ctx=ctx).names

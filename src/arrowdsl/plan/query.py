@@ -11,14 +11,17 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 
 from arrowdsl.compute.expr import ExprSpec
+from arrowdsl.compute.exprs import FieldExpr
 from arrowdsl.compute.predicates import FilterSpec
 from arrowdsl.core.context import ExecutionContext, OrderingEffect
 from arrowdsl.core.interop import ComputeExpression, DeclarationLike, SchemaLike, pc
+from arrowdsl.plan.fragments import fragment_file_hints, list_fragments, row_group_count
 from arrowdsl.plan.ops import FilterOp, ProjectOp, ScanOp
-from arrowdsl.schema.arrays import FieldExpr
+from arrowdsl.plan.scan_specs import DatasetFactorySpec, ScanSpec
 from schema_spec import PROVENANCE_COLS, PROVENANCE_SOURCE_FIELDS
 
 type PathLike = str | Path
+type DatasetSourceLike = PathLike | ds.Dataset | DatasetFactorySpec
 type ColumnsSpec = Sequence[str] | Mapping[str, ComputeExpression]
 
 if TYPE_CHECKING:
@@ -167,7 +170,7 @@ class QuerySpec:
 
 
 def open_dataset(
-    path: PathLike,
+    source: DatasetSourceLike,
     *,
     dataset_format: str = "parquet",
     filesystem: pafs.FileSystem | None = None,
@@ -181,8 +184,12 @@ def open_dataset(
     ds.Dataset
         Dataset instance for scanning.
     """
+    if isinstance(source, ds.Dataset):
+        return source
+    if isinstance(source, DatasetFactorySpec):
+        return source.build(schema=schema)
     return ds.dataset(
-        path,
+        source,
         format=dataset_format,
         filesystem=filesystem,
         partitioning=partitioning,
@@ -233,7 +240,9 @@ class ScanTelemetry:
     """Scan telemetry for dataset fragments."""
 
     fragment_count: int
+    row_group_count: int
     estimated_rows: int | None
+    file_hints: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -252,21 +261,21 @@ class ScanContext:
         ScanTelemetry
             Fragment counts and estimated row totals (when available).
         """
-        fragments = list(self.dataset.get_fragments())
-        total_rows = 0
-        estimated_rows: int | None = 0
-        for fragment in fragments:
-            metadata = fragment.metadata
-            if metadata is None or metadata.num_rows is None or metadata.num_rows < 0:
-                estimated_rows = None
-                break
-            total_rows += int(metadata.num_rows)
-        if estimated_rows is not None:
-            estimated_rows = total_rows
-        return ScanTelemetry(
-            fragment_count=len(fragments),
-            estimated_rows=estimated_rows,
-        )
+        predicate = self.spec.pushdown_expression()
+        return fragment_telemetry(self.dataset, predicate=predicate)
+
+    def scanner(self) -> ds.Scanner:
+        """Return a dataset scanner for the scan spec.
+
+        Returns
+        -------
+        ds.Scanner
+            Scanner configured with runtime scan options.
+        """
+        columns = self.spec.scan_columns(provenance=self.ctx.provenance)
+        predicate = self.spec.pushdown_expression()
+        kwargs = self.ctx.runtime.scan.scanner_kwargs()
+        return self.dataset.scanner(columns=columns, filter=predicate, **kwargs)
 
     def acero_decl(self) -> DeclarationLike:
         """Compile the scan to an Acero declaration.
@@ -279,13 +288,65 @@ class ScanContext:
         return compile_to_acero_scan(self.dataset, spec=self.spec, ctx=self.ctx)
 
 
+def scan_context_from_spec(
+    spec: ScanSpec,
+    *,
+    ctx: ExecutionContext,
+    schema: SchemaLike | None = None,
+) -> ScanContext:
+    """Return a ScanContext from a ScanSpec.
+
+    Returns
+    -------
+    ScanContext
+        Scan context configured for the spec and execution context.
+    """
+    dataset = spec.open_dataset(schema=schema)
+    return ScanContext(dataset=dataset, spec=spec.query, ctx=ctx)
+
+
+def fragment_telemetry(
+    dataset: ds.Dataset,
+    *,
+    predicate: ComputeExpression | None = None,
+    hint_limit: int | None = 5,
+) -> ScanTelemetry:
+    """Return telemetry for dataset fragments.
+
+    Returns
+    -------
+    ScanTelemetry
+        Fragment counts and estimated row totals (when available).
+    """
+    fragments = list_fragments(dataset, predicate=predicate)
+    total_rows = 0
+    estimated_rows: int | None = 0
+    for fragment in fragments:
+        metadata = fragment.metadata
+        if metadata is None or metadata.num_rows is None or metadata.num_rows < 0:
+            estimated_rows = None
+            break
+        total_rows += int(metadata.num_rows)
+    if estimated_rows is not None:
+        estimated_rows = total_rows
+    return ScanTelemetry(
+        fragment_count=len(fragments),
+        row_group_count=row_group_count(fragments),
+        estimated_rows=estimated_rows,
+        file_hints=fragment_file_hints(fragments, limit=hint_limit),
+    )
+
+
 __all__ = [
     "ColumnsSpec",
+    "DatasetSourceLike",
     "PathLike",
     "ProjectionSpec",
     "QuerySpec",
     "ScanContext",
     "ScanTelemetry",
     "compile_to_acero_scan",
+    "fragment_telemetry",
     "open_dataset",
+    "scan_context_from_spec",
 ]

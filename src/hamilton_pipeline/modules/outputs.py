@@ -343,8 +343,16 @@ def relspec_scan_telemetry(
                 pa.array([], type=pa.string()),
                 pa.array([], type=pa.int64()),
                 pa.array([], type=pa.int64()),
+                pa.array([], type=pa.int64()),
+                pa.array([], type=pa.list_(pa.string())),
             ],
-            names=["dataset", "fragment_count", "estimated_rows"],
+            names=[
+                "dataset",
+                "fragment_count",
+                "row_group_count",
+                "estimated_rows",
+                "file_hints",
+            ],
         )
 
     rows: list[dict[str, object]] = []
@@ -365,7 +373,9 @@ def relspec_scan_telemetry(
             {
                 "dataset": name,
                 "fragment_count": int(telemetry.fragment_count),
+                "row_group_count": int(telemetry.row_group_count),
                 "estimated_rows": telemetry.estimated_rows,
+                "file_hints": list(telemetry.file_hints),
             }
         )
     return pa.Table.from_pylist(rows)

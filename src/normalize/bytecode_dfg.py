@@ -9,8 +9,8 @@ import pyarrow as pa
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, ensure_expression, pc
 from arrowdsl.finalize.finalize import FinalizeResult
+from arrowdsl.plan.join_specs import JoinOutputSpec, join_spec
 from arrowdsl.plan.joins import join_plan
-from arrowdsl.plan.ops import JoinSpec
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan_helpers import project_to_schema
 from arrowdsl.schema.schema import empty_table
@@ -214,12 +214,14 @@ def reaching_defs_plan(
     joined = join_plan(
         defs,
         uses,
-        spec=JoinSpec(
+        spec=join_spec(
             join_type="inner",
             left_keys=("code_unit_id", "symbol"),
             right_keys=("code_unit_id", "symbol"),
-            left_output=("code_unit_id", "symbol", "def_event_id"),
-            right_output=("use_event_id", "path", "file_id"),
+            output=JoinOutputSpec(
+                left_output=("code_unit_id", "symbol", "def_event_id"),
+                right_output=("use_event_id", "path", "file_id"),
+            ),
         ),
         ctx=ctx,
     )

@@ -11,50 +11,44 @@ import pyarrow.types as patypes
 from arrowdsl.core.interop import ArrayLike, FieldLike, RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.arrays import (
+    dictionary_array_from_values,
     list_view_array_from_lists,
     map_array_from_pairs,
     struct_array_from_dicts,
+    union_array_from_values,
 )
 from arrowdsl.schema.schema import empty_table
-
-
-def _map_pairs(values: Sequence[object | None]) -> list[Sequence[tuple[object, object]] | None]:
-    pairs: list[Sequence[tuple[object, object]] | None] = []
-    for value in values:
-        if value is None:
-            pairs.append(None)
-        elif isinstance(value, Mapping):
-            pairs.append(list(value.items()))
-        elif isinstance(value, (list, tuple)):
-            pairs.append(value)
-        else:
-            pairs.append(None)
-    return pairs
 
 
 def _array_from_values(values: Sequence[object | None], field: FieldLike) -> ArrayLike:
     dtype = field.type
     if patypes.is_struct(dtype):
         return struct_array_from_dicts(
-            cast("Sequence[Mapping[str, object] | None]", values),
+            values,
             struct_type=cast("pa.StructType", dtype),
         )
     if patypes.is_map(dtype):
         map_type = cast("pa.MapType", dtype)
         key_type = getattr(map_type, "key_type", map_type.key_field.type)
         item_type = getattr(map_type, "item_type", map_type.item_field.type)
+        keys_sorted = getattr(map_type, "keys_sorted", None)
         return map_array_from_pairs(
-            _map_pairs(values),
+            values,
             key_type=key_type,
             item_type=item_type,
+            keys_sorted=keys_sorted,
         )
     if patypes.is_large_list_view(dtype) or patypes.is_list_view(dtype):
         list_type = cast("pa.ListViewType", dtype)
         return list_view_array_from_lists(
-            cast("Sequence[Sequence[object] | None]", values),
+            values,
             value_type=list_type.value_type,
             large=patypes.is_large_list_view(dtype),
         )
+    if patypes.is_dictionary(dtype):
+        return dictionary_array_from_values(values, dictionary_type=dtype)
+    if patypes.is_union(dtype):
+        return union_array_from_values(values, union_type=dtype)
     return pa.array(values, type=dtype)
 
 

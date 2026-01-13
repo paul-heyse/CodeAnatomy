@@ -9,8 +9,8 @@ import pyarrow as pa
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
+from arrowdsl.plan.join_specs import join_spec_for_keys
 from arrowdsl.plan.joins import join_plan
-from arrowdsl.plan.ops import JoinSpec
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan_helpers import column_or_null_expr, project_to_schema
 from normalize.contracts import CFG_BLOCKS_CONTRACT, CFG_EDGES_CONTRACT
@@ -77,12 +77,10 @@ def cfg_blocks_plan(
         joined = join_plan(
             blocks,
             meta,
-            spec=JoinSpec(
-                join_type="left outer",
-                left_keys=("code_unit_id",),
-                right_keys=("code_unit_id",),
-                left_output=tuple(blocks.schema(ctx=ctx).names),
-                right_output=("file_id", "path"),
+            spec=join_spec_for_keys(
+                keys=("code_unit_id",),
+                left_out=tuple(blocks.schema(ctx=ctx).names),
+                right_out=("file_id", "path"),
             ),
             ctx=ctx,
         )
@@ -123,12 +121,10 @@ def cfg_edges_plan(
         joined = join_plan(
             edges,
             meta,
-            spec=JoinSpec(
-                join_type="left outer",
-                left_keys=("code_unit_id",),
-                right_keys=("code_unit_id",),
-                left_output=tuple(edges.schema(ctx=ctx).names),
-                right_output=("file_id", "path"),
+            spec=join_spec_for_keys(
+                keys=("code_unit_id",),
+                left_out=tuple(edges.schema(ctx=ctx).names),
+                right_out=("file_id", "path"),
             ),
             ctx=ctx,
         )

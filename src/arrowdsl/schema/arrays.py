@@ -4,144 +4,27 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol, cast
+from typing import cast
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr import ExprSpec
+from arrowdsl.compute.exprs import CoalesceExpr, ColumnExpr, ConstExpr, FieldExpr
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
-    ComputeExpression,
     DataTypeLike,
+    FieldLike,
     ListArrayLike,
     StructArrayLike,
     TableLike,
-    ensure_expression,
-    pc,
 )
-
-
-class ColumnExpr(ExprSpec, Protocol):
-    """Alias for ExprSpec retained for compatibility."""
-
-
-@dataclass(frozen=True)
-class ConstExpr:
-    """Column expression representing a constant literal."""
-
-    value: object
-    dtype: DataTypeLike | None = None
-
-    def to_expression(self) -> ComputeExpression:
-        """Return the compute expression for the constant value.
-
-        Returns
-        -------
-        ComputeExpression
-            Expression representing the constant value.
-        """
-        scalar = self.value if self.dtype is None else pa.scalar(self.value, type=self.dtype)
-        return ensure_expression(pc.scalar(scalar))
-
-    def materialize(self, table: TableLike) -> ArrayLike:
-        """Materialize the constant as a full-length array.
-
-        Returns
-        -------
-        ArrayLike
-            Array filled with the constant value.
-        """
-        return const_array(table.num_rows, self.value, dtype=self.dtype)
-
-    def is_scalar(self) -> bool:
-        """Return whether this expression is scalar-safe.
-
-        Returns
-        -------
-        bool
-            ``True`` for constant expressions.
-        """
-        return self is not None
-
-
-@dataclass(frozen=True)
-class FieldExpr:
-    """Column expression referencing an existing column."""
-
-    name: str
-
-    def to_expression(self) -> ComputeExpression:
-        """Return the compute expression for the column reference.
-
-        Returns
-        -------
-        ComputeExpression
-            Expression referencing the column.
-        """
-        return pc.field(self.name)
-
-    def materialize(self, table: TableLike) -> ArrayLike:
-        """Materialize the column values from the table.
-
-        Returns
-        -------
-        ArrayLike
-            Column values from the table.
-        """
-        return table[self.name]
-
-    def is_scalar(self) -> bool:
-        """Return whether this expression is scalar-safe.
-
-        Returns
-        -------
-        bool
-            ``True`` for field references.
-        """
-        return self is not None
-
-
-@dataclass(frozen=True)
-class CoalesceExpr:
-    """Column expression that coalesces multiple expressions."""
-
-    exprs: tuple[ColumnExpr, ...]
-
-    def to_expression(self) -> ComputeExpression:
-        """Return the compute expression for the coalesce operation.
-
-        Returns
-        -------
-        ComputeExpression
-            Expression coalescing the inputs.
-        """
-        exprs = [expr.to_expression() for expr in self.exprs]
-        return ensure_expression(pc.coalesce(*exprs))
-
-    def materialize(self, table: TableLike) -> ArrayLike:
-        """Materialize the coalesced values from the table.
-
-        Returns
-        -------
-        ArrayLike
-            Coalesced array values.
-        """
-        arrays = [expr.materialize(table) for expr in self.exprs]
-        out = arrays[0]
-        for arr in arrays[1:]:
-            out = pc.coalesce(out, arr)
-        return out
-
-    def is_scalar(self) -> bool:
-        """Return whether this expression is scalar-safe.
-
-        Returns
-        -------
-        bool
-            ``True`` when all expressions are scalar-safe.
-        """
-        return all(expr.is_scalar() for expr in self.exprs)
+from arrowdsl.schema.nested_builders import (
+    dictionary_array_from_values,
+    list_view_array_from_lists,
+    map_array_from_pairs,
+    struct_array_from_dicts,
+    union_array_from_values,
+)
 
 
 def const_array(n: int, value: object, *, dtype: DataTypeLike | None = None) -> ArrayLike:
@@ -230,6 +113,48 @@ def build_list(offsets: ArrayLike, values: ArrayLike) -> ListArrayLike:
     return pa.ListArray.from_arrays(offsets, values)
 
 
+def list_view_type(value_type: DataTypeLike, *, large: bool = False) -> DataTypeLike:
+    """Return a list_view type (large_list_view when requested).
+
+    Returns
+    -------
+    DataTypeLike
+        List view data type.
+    """
+    return pa.large_list_view(value_type) if large else pa.list_view(value_type)
+
+
+def map_type(
+    key_type: DataTypeLike,
+    item_type: DataTypeLike,
+    *,
+    keys_sorted: bool | None = None,
+) -> DataTypeLike:
+    """Return a map type for the provided key/value types.
+
+    Returns
+    -------
+    DataTypeLike
+        Map data type.
+    """
+    if keys_sorted is None:
+        return pa.map_(key_type, item_type)
+    return pa.map_(key_type, item_type, keys_sorted=keys_sorted)
+
+
+def struct_type(fields: Sequence[FieldLike] | Mapping[str, DataTypeLike]) -> DataTypeLike:
+    """Return a struct type built from fields or name/type mappings.
+
+    Returns
+    -------
+    DataTypeLike
+        Struct data type.
+    """
+    if isinstance(fields, Mapping):
+        return pa.struct(fields)
+    return pa.struct(list(fields))
+
+
 def build_list_view(
     offsets: ArrayLike,
     sizes: ArrayLike,
@@ -269,54 +194,6 @@ def build_list_of_structs(
     return build_list(offsets, struct_arr)
 
 
-def list_view_array_from_lists(
-    values: Sequence[Sequence[object] | None],
-    *,
-    value_type: DataTypeLike,
-    large: bool = True,
-) -> ArrayLike:
-    """Build a list_view array from Python list values.
-
-    Returns
-    -------
-    ArrayLike
-        List view array with the requested element type.
-    """
-    list_type = pa.large_list_view(value_type) if large else pa.list_view(value_type)
-    return pa.array(values, type=list_type)
-
-
-def map_array_from_pairs(
-    values: Sequence[Sequence[tuple[object, object]] | None],
-    *,
-    key_type: DataTypeLike,
-    item_type: DataTypeLike,
-) -> ArrayLike:
-    """Build a map array from key/value pair sequences.
-
-    Returns
-    -------
-    ArrayLike
-        Map array with the provided key/value types.
-    """
-    return pa.array(values, type=pa.map_(key_type, item_type))
-
-
-def struct_array_from_dicts(
-    values: Sequence[Mapping[str, object] | None],
-    *,
-    struct_type: DataTypeLike | None = None,
-) -> ArrayLike:
-    """Build a struct array from mapping values.
-
-    Returns
-    -------
-    ArrayLike
-        Struct array with inferred or explicit type.
-    """
-    return pa.array(values, type=struct_type)
-
-
 __all__ = [
     "CoalesceExpr",
     "ColumnDefaultsSpec",
@@ -328,8 +205,13 @@ __all__ = [
     "build_list_view",
     "build_struct",
     "const_array",
+    "dictionary_array_from_values",
     "list_view_array_from_lists",
+    "list_view_type",
     "map_array_from_pairs",
+    "map_type",
     "set_or_append_column",
     "struct_array_from_dicts",
+    "struct_type",
+    "union_array_from_values",
 ]

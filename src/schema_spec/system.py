@@ -4,26 +4,52 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, TypedDict, Unpack
+from typing import Literal, TypedDict, Unpack
 
+import pyarrow.dataset as ds
+import pyarrow.fs as pafs
+import pyarrow.types as patypes
 from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
 
-from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import SchemaLike, TableLike
+from arrowdsl.compute.expr import ExprSpec
+from arrowdsl.core.context import ExecutionContext, OrderingLevel
+from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeContext
 from arrowdsl.plan.ops import DedupeSpec, SortKey
-from arrowdsl.plan.query import ProjectionSpec, QuerySpec, ScanContext
+from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.query import PathLike, ProjectionSpec, QuerySpec, ScanContext, open_dataset
+from arrowdsl.plan.source import DatasetSource, PlanSource, plan_from_dataset, plan_from_source
+from arrowdsl.schema.encoding import encoding_policy_from_spec
+from arrowdsl.schema.metadata import (
+    merge_metadata_specs,
+    metadata_spec_from_schema,
+    ordering_metadata_spec,
+)
+from arrowdsl.schema.policy import SchemaPolicy
 from arrowdsl.schema.schema import (
     CastErrorPolicy,
+    EncodingPolicy,
     SchemaEvolutionSpec,
     SchemaMetadataSpec,
-    SchemaTransform,
 )
-from arrowdsl.schema.validation import ArrowValidationOptions, validate_table
-from schema_spec.specs import ArrowFieldSpec, FieldBundle, TableSchemaSpec
-
-if TYPE_CHECKING:
-    import pyarrow.dataset as ds
+from arrowdsl.schema.spec_roundtrip import (
+    schema_constraints_from_metadata,
+    schema_identity_from_metadata,
+)
+from arrowdsl.schema.validation import (
+    ArrowValidationOptions,
+    duplicate_key_rows_plan,
+    invalid_rows_plan,
+    validate_table,
+)
+from schema_spec.specs import (
+    ENCODING_DICTIONARY,
+    ENCODING_META,
+    ArrowFieldSpec,
+    DerivedFieldSpec,
+    FieldBundle,
+    TableSchemaSpec,
+)
 
 
 def validate_arrow_table(
@@ -100,6 +126,19 @@ class DedupeSpecSpec(BaseModel):
         )
 
 
+def _ordering_metadata_spec(
+    contract_spec: ContractSpec | None,
+    table_spec: TableSchemaSpec,
+) -> SchemaMetadataSpec | None:
+    if contract_spec is not None and contract_spec.canonical_sort:
+        keys = tuple((key.column, key.order) for key in contract_spec.canonical_sort)
+        return ordering_metadata_spec(OrderingLevel.EXPLICIT, keys=keys)
+    if table_spec.key_fields:
+        keys = tuple((name, "ascending") for name in table_spec.key_fields)
+        return ordering_metadata_spec(OrderingLevel.IMPLICIT, keys=keys)
+    return None
+
+
 class ContractSpec(BaseModel):
     """Output contract specification."""
 
@@ -161,6 +200,9 @@ class DatasetSpec:
     table_spec: TableSchemaSpec
     contract_spec: ContractSpec | None = None
     query_spec: QuerySpec | None = None
+    derived_fields: tuple[DerivedFieldSpec, ...] = ()
+    predicate: ExprSpec | None = None
+    pushdown_predicate: ExprSpec | None = None
     evolution_spec: SchemaEvolutionSpec = field(default_factory=SchemaEvolutionSpec)
     metadata_spec: SchemaMetadataSpec = field(default_factory=SchemaMetadataSpec)
     validation: ArrowValidationOptions | None = None
@@ -184,7 +226,9 @@ class DatasetSpec:
         SchemaLike
             Arrow schema with metadata.
         """
-        return self.metadata_spec.apply(self.table_spec.to_arrow_schema())
+        ordering = _ordering_metadata_spec(self.contract_spec, self.table_spec)
+        merged = merge_metadata_specs(self.metadata_spec, ordering)
+        return merged.apply(self.table_spec.to_arrow_schema())
 
     def query(self) -> QuerySpec:
         """Return the query spec, deriving it from the table spec if needed.
@@ -197,7 +241,12 @@ class DatasetSpec:
         if self.query_spec is not None:
             return self.query_spec
         cols = tuple(field.name for field in self.table_spec.fields)
-        return QuerySpec(projection=ProjectionSpec(base=cols))
+        derived = {spec.name: spec.expr for spec in self.derived_fields}
+        return QuerySpec(
+            projection=ProjectionSpec(base=cols, derived=derived),
+            predicate=self.predicate,
+            pushdown_predicate=self.pushdown_predicate,
+        )
 
     def contract_spec_or_default(self) -> ContractSpec:
         """Return the contract spec, deriving a default when missing.
@@ -238,6 +287,26 @@ class DatasetSpec:
         """
         return ScanContext(dataset=dataset, spec=self.query(), ctx=ctx)
 
+    def _plan_for_validation(self, source: PlanSource, *, ctx: ExecutionContext) -> Plan:
+        if isinstance(source, ds.Dataset):
+            return plan_from_dataset(source, spec=self, ctx=ctx)
+        if isinstance(source, DatasetSource):
+            return plan_from_dataset(source.dataset, spec=self, ctx=ctx)
+        return plan_from_source(source, ctx=ctx, label=f"{self.name}_validate")
+
+    def validation_plans(self, source: PlanSource, *, ctx: ExecutionContext) -> ValidationPlans:
+        """Return plan-lane validation pipelines for invalid rows and duplicate keys.
+
+        Returns
+        -------
+        ValidationPlans
+            Plans for invalid rows and duplicate keys.
+        """
+        plan = self._plan_for_validation(source, ctx=ctx)
+        invalid = invalid_rows_plan(plan, spec=self.table_spec, ctx=ctx)
+        dupes = duplicate_key_rows_plan(plan, keys=self.table_spec.key_fields, ctx=ctx)
+        return ValidationPlans(invalid_rows=invalid, duplicate_keys=dupes)
+
     def finalize_context(self, ctx: ExecutionContext) -> FinalizeContext:
         """Return a FinalizeContext for this dataset spec.
 
@@ -246,13 +315,19 @@ class DatasetSpec:
         FinalizeContext
             Finalize context configured for this dataset.
         """
-        transform = SchemaTransform(
-            schema=self.schema(),
+        contract = self.contract()
+        ordering = _ordering_metadata_spec(self.contract_spec, self.table_spec)
+        metadata = merge_metadata_specs(self.metadata_spec, ordering)
+        policy = SchemaPolicy(
+            schema=contract.with_versioned_schema(),
+            encoding=self.encoding_policy(),
+            metadata=metadata,
+            validation=contract.validation,
             safe_cast=ctx.safe_cast,
             keep_extra_columns=ctx.provenance,
             on_error="unsafe" if ctx.safe_cast else "raise",
         )
-        return FinalizeContext(contract=self.contract(), transform=transform)
+        return FinalizeContext(contract=contract, schema_policy=policy)
 
     def unify_tables(
         self,
@@ -278,6 +353,63 @@ class DatasetSpec:
             safe_cast=safe_cast,
             on_error=on_error,
             keep_extra_columns=keep_extra_columns,
+        )
+
+    def encoding_policy(self) -> EncodingPolicy | None:
+        """Return an encoding policy derived from the schema spec.
+
+        Returns
+        -------
+        EncodingPolicy | None
+            Encoding policy when encoding hints are present.
+        """
+        policy = encoding_policy_from_spec(self.table_spec)
+        if not policy.specs:
+            return None
+        return policy
+
+
+@dataclass(frozen=True)
+class ValidationPlans:
+    """Plan-lane validation outputs for a dataset."""
+
+    invalid_rows: Plan
+    duplicate_keys: Plan
+
+    def to_tables(self, *, ctx: ExecutionContext) -> tuple[TableLike, TableLike]:
+        """Materialize validation plans into Arrow tables.
+
+        Returns
+        -------
+        tuple[TableLike, TableLike]
+            Invalid rows and duplicate key tables.
+        """
+        return self.invalid_rows.to_table(ctx=ctx), self.duplicate_keys.to_table(ctx=ctx)
+
+
+@dataclass(frozen=True)
+class DatasetOpenSpec:
+    """Dataset open parameters for schema discovery."""
+
+    dataset_format: str = "parquet"
+    filesystem: pafs.FileSystem | None = None
+    partitioning: str | None = "hive"
+    schema: SchemaLike | None = None
+
+    def open(self, path: PathLike) -> ds.Dataset:
+        """Open a dataset using the stored options.
+
+        Returns
+        -------
+        ds.Dataset
+            Opened dataset instance.
+        """
+        return open_dataset(
+            path,
+            dataset_format=self.dataset_format,
+            filesystem=self.filesystem,
+            partitioning=self.partitioning,
+            schema=self.schema,
         )
 
 
@@ -312,6 +444,9 @@ class DatasetSpecKwargs(TypedDict, total=False):
 
     contract_spec: ContractSpec | None
     query_spec: QuerySpec | None
+    derived_fields: Sequence[DerivedFieldSpec]
+    predicate: ExprSpec | None
+    pushdown_predicate: ExprSpec | None
     evolution_spec: SchemaEvolutionSpec | None
     metadata_spec: SchemaMetadataSpec | None
     validation: ArrowValidationOptions | None
@@ -413,6 +548,9 @@ def make_dataset_spec(
     """
     contract_spec = kwargs.get("contract_spec")
     query_spec = kwargs.get("query_spec")
+    derived_fields = tuple(kwargs["derived_fields"]) if "derived_fields" in kwargs else ()
+    predicate = kwargs.get("predicate")
+    pushdown_predicate = kwargs.get("pushdown_predicate")
     evolution_spec = kwargs.get("evolution_spec")
     metadata_spec = kwargs.get("metadata_spec")
     validation = kwargs.get("validation")
@@ -422,6 +560,9 @@ def make_dataset_spec(
         table_spec=table_spec,
         contract_spec=contract_spec,
         query_spec=query_spec,
+        derived_fields=derived_fields,
+        predicate=predicate,
+        pushdown_predicate=pushdown_predicate,
         evolution_spec=evolution,
         metadata_spec=metadata,
         validation=validation,
@@ -508,6 +649,19 @@ def _decode_metadata(metadata: Mapping[bytes, bytes] | None) -> dict[str, str]:
     }
 
 
+def _encoding_hint_from_field(
+    field_meta: Mapping[str, str],
+    *,
+    dtype: DataTypeLike,
+) -> Literal["dictionary"] | None:
+    hint = field_meta.get(ENCODING_META)
+    if hint == ENCODING_DICTIONARY:
+        return ENCODING_DICTIONARY
+    if patypes.is_dictionary(dtype):
+        return ENCODING_DICTIONARY
+    return None
+
+
 def table_spec_from_schema(
     name: str,
     schema: SchemaLike,
@@ -521,16 +675,30 @@ def table_spec_from_schema(
     TableSchemaSpec
         Table schema specification.
     """
-    fields = [
-        ArrowFieldSpec(
-            name=field.name,
-            dtype=field.type,
-            nullable=field.nullable,
-            metadata=_decode_metadata(field.metadata),
+    fields = []
+    for schema_field in schema:
+        meta = _decode_metadata(schema_field.metadata)
+        encoding = _encoding_hint_from_field(meta, dtype=schema_field.type)
+        fields.append(
+            ArrowFieldSpec(
+                name=schema_field.name,
+                dtype=schema_field.type,
+                nullable=schema_field.nullable,
+                metadata=meta,
+                encoding=encoding,
+            )
         )
-        for field in schema
-    ]
-    return TableSchemaSpec(name=name, version=version, fields=fields)
+    meta_name, meta_version = schema_identity_from_metadata(schema.metadata)
+    required_non_null, key_fields = schema_constraints_from_metadata(schema.metadata)
+    resolved_name = meta_name or name
+    resolved_version = version if version is not None else meta_version
+    return TableSchemaSpec(
+        name=resolved_name,
+        version=resolved_version,
+        fields=fields,
+        required_non_null=required_non_null,
+        key_fields=key_fields,
+    )
 
 
 def dataset_spec_from_schema(
@@ -547,7 +715,43 @@ def dataset_spec_from_schema(
         Dataset spec derived from the schema.
     """
     table_spec = table_spec_from_schema(name, schema, version=version)
-    return make_dataset_spec(table_spec=table_spec)
+    metadata_spec = metadata_spec_from_schema(schema)
+    return make_dataset_spec(table_spec=table_spec, metadata_spec=metadata_spec)
+
+
+def dataset_spec_from_dataset(
+    name: str,
+    dataset: ds.Dataset,
+    *,
+    version: int | None = None,
+) -> DatasetSpec:
+    """Create a DatasetSpec from a dataset schema.
+
+    Returns
+    -------
+    DatasetSpec
+        Dataset spec derived from the dataset schema.
+    """
+    return dataset_spec_from_schema(name, dataset.schema, version=version)
+
+
+def dataset_spec_from_path(
+    name: str,
+    path: PathLike,
+    *,
+    options: DatasetOpenSpec | None = None,
+    version: int | None = None,
+) -> DatasetSpec:
+    """Create a DatasetSpec from a dataset path.
+
+    Returns
+    -------
+    DatasetSpec
+        Dataset spec derived from the dataset path.
+    """
+    options = options or DatasetOpenSpec()
+    dataset = options.open(path)
+    return dataset_spec_from_dataset(name, dataset, version=version)
 
 
 @dataclass(frozen=True)
@@ -569,6 +773,41 @@ class SchemaRegistry:
             return existing
         self.dataset_specs[spec.name] = spec
         return spec
+
+    def register_dataset_from_dataset(
+        self,
+        name: str,
+        dataset: ds.Dataset,
+        *,
+        version: int | None = None,
+    ) -> DatasetSpec:
+        """Register a dataset spec derived from a dataset schema.
+
+        Returns
+        -------
+        DatasetSpec
+            Registered dataset spec.
+        """
+        return self.register_dataset(dataset_spec_from_dataset(name, dataset, version=version))
+
+    def register_dataset_from_path(
+        self,
+        name: str,
+        path: PathLike,
+        *,
+        options: DatasetOpenSpec | None = None,
+        version: int | None = None,
+    ) -> DatasetSpec:
+        """Register a dataset spec derived from a dataset path.
+
+        Returns
+        -------
+        DatasetSpec
+            Registered dataset spec.
+        """
+        options = options or DatasetOpenSpec()
+        dataset = options.open(path)
+        return self.register_dataset(dataset_spec_from_dataset(name, dataset, version=version))
 
 
 GLOBAL_SCHEMA_REGISTRY = SchemaRegistry()
@@ -621,14 +860,18 @@ __all__ = [
     "ContractCatalogSpec",
     "ContractSpec",
     "ContractSpecKwargs",
+    "DatasetOpenSpec",
     "DatasetSpec",
     "DatasetSpecKwargs",
     "DedupeSpecSpec",
     "SchemaRegistry",
     "SortKeySpec",
     "TableSpecConstraints",
+    "ValidationPlans",
     "VirtualFieldSpec",
     "dataset_spec_from_contract",
+    "dataset_spec_from_dataset",
+    "dataset_spec_from_path",
     "dataset_spec_from_schema",
     "make_contract_spec",
     "make_dataset_spec",

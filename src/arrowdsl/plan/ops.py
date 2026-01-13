@@ -232,6 +232,47 @@ class ProjectOp:
 
 
 @dataclass(frozen=True)
+class RenameColumnsOp:
+    """Rename columns while preserving ordering."""
+
+    mapping: Mapping[str, str]
+    columns: Sequence[str]
+
+    ordering_effect: OrderingEffect = OrderingEffect.PRESERVE
+    is_pipeline_breaker: bool = False
+
+    def to_declaration(
+        self, inputs: list[DeclarationLike], ctx: ExecutionContext | None
+    ) -> DeclarationLike:
+        """Build the Acero project declaration with renamed columns.
+
+        Returns
+        -------
+        DeclarationLike
+            Acero project declaration.
+        """
+        _ = ctx
+        expressions = [pc.field(name) for name in self.columns]
+        names = [self.mapping.get(name, name) for name in self.columns]
+        return acero.Declaration(
+            "project",
+            acero.ProjectNodeOptions(expressions, names),
+            inputs=inputs,
+        )
+
+    @staticmethod
+    def apply_ordering(ordering: Ordering) -> Ordering:
+        """Apply the ordering effect of the rename.
+
+        Returns
+        -------
+        Ordering
+            Unchanged ordering for renames.
+        """
+        return ordering
+
+
+@dataclass(frozen=True)
 class OrderByOp:
     """Order-by operation establishing explicit ordering."""
 
@@ -524,6 +565,7 @@ __all__ = [
     "OrderByOp",
     "PlanOp",
     "ProjectOp",
+    "RenameColumnsOp",
     "ScanOp",
     "SortKey",
     "TableSourceOp",

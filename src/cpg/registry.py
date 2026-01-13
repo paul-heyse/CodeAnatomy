@@ -10,16 +10,12 @@ from typing import ClassVar
 import pyarrow as pa
 
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.spec.tables.cpg import (
-    edge_plan_specs_from_table,
-    node_plan_specs_from_table,
-    prop_table_specs_from_table,
-)
+from arrowdsl.spec.tables.cpg import node_plan_specs_from_table, prop_table_specs_from_table
 from arrowdsl.spec.tables.relspec import relationship_rules_from_table
 from cpg.registry_builders import build_dataset_spec
 from cpg.registry_rows import DATASET_ROWS
-from cpg.relation_registry import relation_rule_table_cached
-from cpg.spec_tables import edge_plan_spec_table, node_plan_spec_table, prop_table_spec_table
+from cpg.relation_registry import edge_plan_specs_from_table, relation_rule_table_cached
+from cpg.spec_tables import node_plan_spec_table, prop_table_spec_table
 from cpg.specs import EdgePlanSpec, NodePlanSpec, PropTableSpec
 from relspec.model import RelationshipRule
 from schema_spec.system import ContractSpec, DatasetSpec
@@ -35,7 +31,6 @@ class CpgRegistry:
 
     dataset_specs: Mapping[str, DatasetSpec]
     node_plan_spec_table: pa.Table
-    edge_plan_spec_table: pa.Table
     prop_table_spec_table: pa.Table
     relation_rule_table: pa.Table
 
@@ -117,7 +112,7 @@ class CpgRegistry:
         tuple[EdgePlanSpec, ...]
             Edge plan specs decoded from the registry table.
         """
-        return edge_plan_specs_from_table(self.edge_plan_spec_table)
+        return edge_plan_specs_from_table(self.relation_rule_table)
 
     def prop_table_specs(self) -> tuple[PropTableSpec, ...]:
         """Return prop table specs decoded from the registry table.
@@ -153,7 +148,6 @@ def default_cpg_registry() -> CpgRegistry:
     return CpgRegistry(
         dataset_specs=dataset_specs,
         node_plan_spec_table=node_plan_spec_table(),
-        edge_plan_spec_table=edge_plan_spec_table(),
         prop_table_spec_table=prop_table_spec_table(),
         relation_rule_table=relation_rule_table_cached(),
     )

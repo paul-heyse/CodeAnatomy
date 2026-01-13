@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
@@ -42,6 +43,15 @@ def schema_policy_for_dataset(
     )
 
 
+@dataclass(frozen=True)
+class ExtractNormalizeOptions:
+    """Normalization options for extract outputs."""
+
+    options: object | None = None
+    repo_id: str | None = None
+    enable_encoding: bool = True
+
+
 def metadata_spec_for_dataset(
     name: str,
     *,
@@ -71,7 +81,10 @@ def metadata_specs_for_datasets(
     Mapping[str, SchemaMetadataSpec]
         Metadata spec map keyed by dataset name.
     """
-    return {name: metadata_spec_for_dataset(name, options=options, repo_id=repo_id) for name in names}
+    return {
+        name: metadata_spec_for_dataset(name, options=options, repo_id=repo_id)
+        for name in names
+    }
 
 
 def normalize_extract_plan(
@@ -79,9 +92,7 @@ def normalize_extract_plan(
     plan: Plan,
     *,
     ctx: ExecutionContext,
-    options: object | None = None,
-    repo_id: str | None = None,
-    enable_encoding: bool = True,
+    normalize: ExtractNormalizeOptions | None = None,
 ) -> Plan:
     """Align and encode a plan using the dataset schema policy.
 
@@ -90,12 +101,13 @@ def normalize_extract_plan(
     Plan
         Normalized plan aligned to the dataset schema policy.
     """
+    normalize = normalize or ExtractNormalizeOptions()
     policy = schema_policy_for_dataset(
         name,
         ctx=ctx,
-        options=options,
-        repo_id=repo_id,
-        enable_encoding=enable_encoding,
+        options=normalize.options,
+        repo_id=normalize.repo_id,
+        enable_encoding=normalize.enable_encoding,
     )
     plan = align_plan_to_schema(
         plan,
@@ -143,9 +155,7 @@ def normalize_extract_output(
     table: TableLike,
     *,
     ctx: ExecutionContext,
-    options: object | None = None,
-    repo_id: str | None = None,
-    enable_encoding: bool = True,
+    normalize: ExtractNormalizeOptions | None = None,
 ) -> TableLike:
     """Align, encode, and postprocess a table using registry policy.
 
@@ -154,18 +164,20 @@ def normalize_extract_output(
     TableLike
         Normalized table aligned to the dataset schema policy.
     """
+    normalize = normalize or ExtractNormalizeOptions()
     processed = postprocess_table(name, table)
     policy = schema_policy_for_dataset(
         name,
         ctx=ctx,
-        options=options,
-        repo_id=repo_id,
-        enable_encoding=enable_encoding,
+        options=normalize.options,
+        repo_id=normalize.repo_id,
+        enable_encoding=normalize.enable_encoding,
     )
     return policy.apply(processed)
 
 
 __all__ = [
+    "ExtractNormalizeOptions",
     "metadata_spec_for_dataset",
     "metadata_specs_for_datasets",
     "normalize_extract_output",

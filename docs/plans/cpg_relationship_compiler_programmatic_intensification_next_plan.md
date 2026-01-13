@@ -64,15 +64,14 @@ def relationship_rules_from_table(table: pa.Table) -> tuple[RelationshipRule, ..
 - Update: `src/cpg/relation_registry_specs.py`
 
 **Implementation checklist**
-- [ ] Extend the rule spec table schema with predicate/projection columns.
-- [ ] Implement row-to-rule compilation for predicates and projections.
+- [x] Extend the rule spec table schema with predicate/projection columns.
+- [x] Implement row-to-rule compilation for predicates and projections.
 - [x] Remove bespoke predicate logic from Python factories where possible.
-- [ ] Ensure evidence and post-kernel definitions are fully table-driven.
+- [x] Ensure evidence and post-kernel definitions are fully table-driven.
 
 **Status**
-Partially complete. Rule definition specs + templates now drive rule compilation and
-predicate handling, but predicate/project encoding in the rule spec table and
-row-to-rule decoding are still outstanding.
+Completed. Rule definition tables now encode predicates, projections, and kernel
+pipelines, and rules are compiled directly from the table representation.
 
 ---
 
@@ -197,12 +196,11 @@ def edge_plan_specs_from_rules(rules: Sequence[RelationshipRule]) -> tuple[EdgeP
 **Implementation checklist**
 - [x] Define a combined rule+edge spec table.
 - [x] Compile EdgePlanSpec entries from the unified spec table.
-- [ ] Remove standalone edge-plan spec tables once parity is reached.
+- [x] Remove standalone edge-plan spec tables once parity is reached.
 
 **Status**
-Partially complete. Rule tables now carry edge emit metadata and edge plan specs
-are derived from the unified table, but the standalone edge-plan spec table is
-still present as a derived view.
+Completed. Edge plan specs are derived from the unified rule table and the
+standalone edge spec table has been removed from the core registry flow.
 
 ---
 
@@ -229,12 +227,12 @@ if isinstance(spec, RenameColumnsSpec):
 
 **Implementation checklist**
 - [x] Identify kernel specs still table-only.
-- [ ] Add plan-lane equivalents (ops + Plan methods).
-- [ ] Enforce plan-only execution where coverage is complete.
+- [x] Add plan-lane equivalents (ops + Plan methods).
+- [x] Enforce plan-only execution where coverage is complete.
 
 **Status**
-Partially complete. Explode-list kernels now materialize plan outputs, but no
-new plan-lane ops were added yet.
+Completed. Canonical sort and explode-list now have plan-aware handling, with
+plan-only execution preserved when supported kernels are covered.
 
 ---
 

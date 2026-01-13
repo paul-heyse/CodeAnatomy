@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 from functools import cache
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
 from arrowdsl.spec.tables.normalize import (
+    normalize_rule_definition_table,
+    normalize_rule_definitions_from_table,
     normalize_rule_family_specs_from_table,
     normalize_rule_family_table,
 )
-from normalize.rule_factories import build_rules_from_specs
-from normalize.rule_model import NormalizeRule
+from normalize.registry_validation import validate_rule_specs
+from normalize.rule_definitions import build_rules_from_definitions
+from normalize.rule_factories import build_rule_definitions_from_specs
 from normalize.rule_registry_specs import rule_family_specs
+
+if TYPE_CHECKING:
+    from normalize.rule_definitions import NormalizeRuleDefinition
+    from normalize.rule_model import NormalizeRule
 
 
 @cache
@@ -28,6 +36,32 @@ def rule_family_spec_table_cached() -> pa.Table:
 
 
 @cache
+def rule_definition_table_cached() -> pa.Table:
+    """Return the normalize rule definition spec table.
+
+    Returns
+    -------
+    pa.Table
+        Arrow table of normalize rule definitions.
+    """
+    family_specs = normalize_rule_family_specs_from_table(rule_family_spec_table_cached())
+    definitions = build_rule_definitions_from_specs(family_specs)
+    return normalize_rule_definition_table(definitions)
+
+
+@cache
+def normalize_rule_definitions() -> tuple[NormalizeRuleDefinition, ...]:
+    """Return normalize rule definition specs in registry order.
+
+    Returns
+    -------
+    tuple[NormalizeRuleDefinition, ...]
+        Normalize rule definitions.
+    """
+    return normalize_rule_definitions_from_table(rule_definition_table_cached())
+
+
+@cache
 def normalize_rules() -> tuple[NormalizeRule, ...]:
     """Return the normalize rules in registry order.
 
@@ -36,8 +70,9 @@ def normalize_rules() -> tuple[NormalizeRule, ...]:
     tuple[NormalizeRule, ...]
         Normalize rule registry.
     """
-    specs = normalize_rule_family_specs_from_table(rule_family_spec_table_cached())
-    return build_rules_from_specs(specs)
+    rules = build_rules_from_definitions(normalize_rule_definitions())
+    validate_rule_specs(rules)
+    return rules
 
 
 @cache
@@ -96,9 +131,11 @@ def normalize_rule_outputs() -> tuple[str, ...]:
 
 __all__ = [
     "normalize_rule",
+    "normalize_rule_definitions",
     "normalize_rule_names",
     "normalize_rule_outputs",
     "normalize_rules",
+    "rule_definition_table_cached",
     "rule_family_spec_table_cached",
     "rule_for_output",
 ]

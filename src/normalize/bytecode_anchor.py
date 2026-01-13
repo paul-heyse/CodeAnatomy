@@ -6,11 +6,14 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
+from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import TableLike
+from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.build import column_or_null, set_or_append_column
 from normalize.spans import ast_range_to_byte_span
 from normalize.text_index import RepoTextIndex, file_index, row_value_int
+from normalize.utils import PlanSource, plan_source
 
 
 @dataclass(frozen=True)
@@ -95,3 +98,27 @@ def anchor_instructions(
     )
     out = set_or_append_column(out, cols.out_bend, pa.array(bends, type=pa.int64()))
     return set_or_append_column(out, cols.out_ok, pa.array(oks, type=pa.bool_()))
+
+
+def anchor_instructions_plan(
+    repo_index: RepoTextIndex,
+    py_bc_instructions: PlanSource,
+    *,
+    ctx: ExecutionContext,
+    columns: BytecodeSpanColumns | None = None,
+) -> Plan:
+    """Return a plan wrapping anchored bytecode instruction rows.
+
+    Notes
+    -----
+    This operation materializes the input to compute span offsets and returns a
+    table-backed plan.
+
+    Returns
+    -------
+    Plan
+        Plan yielding anchored bytecode instruction rows.
+    """
+    plan = plan_source(py_bc_instructions, ctx=ctx)
+    anchored = anchor_instructions(repo_index, plan.to_table(ctx=ctx), columns=columns)
+    return Plan.table_source(anchored, label="py_bc_instructions_norm")

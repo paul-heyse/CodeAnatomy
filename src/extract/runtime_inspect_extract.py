@@ -22,14 +22,14 @@ from arrowdsl.plan.scan_io import record_batches_from_rows
 from arrowdsl.schema.ops import unify_tables
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.helpers import project_columns
+from extract.plan_helpers import apply_query_and_normalize
 from extract.registry_ids import hash_spec
 from extract.registry_specs import (
-    dataset_query,
     dataset_row_schema,
     dataset_schema,
     normalize_options,
 )
-from extract.schema_ops import metadata_spec_for_dataset, normalize_extract_plan
+from extract.schema_ops import metadata_spec_for_dataset
 
 type Row = dict[str, object]
 
@@ -76,11 +76,6 @@ RT_OBJECT_ID_SPEC = hash_spec("rt_object_id")
 RT_SIGNATURE_ID_SPEC = hash_spec("rt_signature_id")
 RT_PARAM_ID_SPEC = hash_spec("rt_param_id")
 RT_MEMBER_ID_SPEC = hash_spec("rt_member_id")
-
-RT_OBJECTS_QUERY = dataset_query("rt_objects_v1")
-RT_SIGNATURES_QUERY = dataset_query("rt_signatures_v1")
-RT_SIGNATURE_PARAMS_QUERY = dataset_query("rt_signature_params_v1")
-RT_MEMBERS_QUERY = dataset_query("rt_members_v1")
 
 RT_OBJECTS_SCHEMA = dataset_schema("rt_objects_v1")
 RT_SIGNATURES_SCHEMA = dataset_schema("rt_signatures_v1")
@@ -509,8 +504,7 @@ def _build_rt_objects(
         ["object_key", "rt_id"],
         ctx=exec_ctx,
     )
-    rt_objects_plan = RT_OBJECTS_QUERY.apply_to_plan(rt_objects_plan, ctx=exec_ctx)
-    rt_objects_plan = normalize_extract_plan(
+    rt_objects_plan = apply_query_and_normalize(
         "rt_objects_v1",
         rt_objects_plan,
         ctx=exec_ctx,
@@ -569,8 +563,7 @@ def _build_rt_signatures(
             ["object_key", "signature", "sig_id"],
             ctx=exec_ctx,
         )
-    sig_plan = RT_SIGNATURES_QUERY.apply_to_plan(sig_plan, ctx=exec_ctx)
-    sig_plan = normalize_extract_plan(
+    sig_plan = apply_query_and_normalize(
         "rt_signatures_v1",
         sig_plan,
         ctx=exec_ctx,
@@ -621,8 +614,7 @@ def _build_rt_params(
         ],
         ctx=exec_ctx,
     )
-    param_plan = RT_SIGNATURE_PARAMS_QUERY.apply_to_plan(param_plan, ctx=exec_ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "rt_signature_params_v1",
         param_plan,
         ctx=exec_ctx,
@@ -672,8 +664,7 @@ def _build_rt_members(
         ],
         ctx=exec_ctx,
     )
-    member_plan = RT_MEMBERS_QUERY.apply_to_plan(member_plan, ctx=exec_ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "rt_members_v1",
         member_plan,
         ctx=exec_ctx,

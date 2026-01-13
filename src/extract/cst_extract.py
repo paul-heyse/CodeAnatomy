@@ -33,15 +33,15 @@ from extract.helpers import (
     file_identity_row,
     iter_contexts,
 )
+from extract.plan_helpers import apply_query_and_normalize
 from extract.registry_fields import QNAME_STRUCT
 from extract.registry_specs import (
     dataset_enabled,
-    dataset_query,
     dataset_row_schema,
     dataset_schema,
     normalize_options,
 )
-from extract.schema_ops import metadata_spec_for_dataset, normalize_extract_plan
+from extract.schema_ops import ExtractNormalizeOptions, metadata_spec_for_dataset
 
 type Row = dict[str, object]
 
@@ -78,14 +78,6 @@ class CSTExtractResult:
 
 _QNAME_FLAT_FIELDS = flatten_struct_field(pa.field("qname", QNAME_STRUCT))
 QNAME_KEYS = tuple(field.name.split(".", 1)[1] for field in _QNAME_FLAT_FIELDS)
-
-PARSE_MANIFEST_QUERY = dataset_query("py_cst_parse_manifest_v1")
-PARSE_ERRORS_QUERY = dataset_query("py_cst_parse_errors_v1")
-NAME_REFS_QUERY = dataset_query("py_cst_name_refs_v1")
-IMPORTS_QUERY = dataset_query("py_cst_imports_v1")
-CALLSITES_QUERY = dataset_query("py_cst_callsites_v1")
-DEFS_QUERY = dataset_query("py_cst_defs_v1")
-TYPE_EXPRS_QUERY = dataset_query("py_cst_type_exprs_v1")
 
 PARSE_MANIFEST_SCHEMA = dataset_schema("py_cst_parse_manifest_v1")
 PARSE_ERRORS_SCHEMA = dataset_schema("py_cst_parse_errors_v1")
@@ -853,13 +845,14 @@ def _build_manifest_plan(
     if not ctx.manifest_rows:
         return Plan.table_source(empty_table(PARSE_MANIFEST_SCHEMA))
     plan = plan_from_rows(ctx.manifest_rows, schema=PARSE_MANIFEST_ROW_SCHEMA, label="cst_manifest")
-    plan = PARSE_MANIFEST_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "py_cst_parse_manifest_v1",
         plan,
         ctx=exec_ctx,
-        options=ctx.options,
-        repo_id=ctx.options.repo_id,
+        normalize=ExtractNormalizeOptions(
+            options=ctx.options,
+            repo_id=ctx.options.repo_id,
+        ),
     )
 
 
@@ -881,13 +874,14 @@ def _build_errors_plan(
     if not ctx.error_rows:
         return Plan.table_source(empty_table(PARSE_ERRORS_SCHEMA))
     plan = plan_from_rows(ctx.error_rows, schema=PARSE_ERRORS_ROW_SCHEMA, label="cst_parse_errors")
-    plan = PARSE_ERRORS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "py_cst_parse_errors_v1",
         plan,
         ctx=exec_ctx,
-        options=ctx.options,
-        repo_id=ctx.options.repo_id,
+        normalize=ExtractNormalizeOptions(
+            options=ctx.options,
+            repo_id=ctx.options.repo_id,
+        ),
     )
 
 
@@ -909,13 +903,14 @@ def _build_name_refs_plan(
     if not ctx.name_ref_rows:
         return Plan.table_source(empty_table(NAME_REFS_SCHEMA))
     plan = plan_from_rows(ctx.name_ref_rows, schema=NAME_REFS_ROW_SCHEMA, label="cst_name_refs")
-    plan = NAME_REFS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "py_cst_name_refs_v1",
         plan,
         ctx=exec_ctx,
-        options=ctx.options,
-        repo_id=ctx.options.repo_id,
+        normalize=ExtractNormalizeOptions(
+            options=ctx.options,
+            repo_id=ctx.options.repo_id,
+        ),
     )
 
 
@@ -937,13 +932,14 @@ def _build_imports_plan(
     if not ctx.import_rows:
         return Plan.table_source(empty_table(IMPORTS_SCHEMA))
     plan = plan_from_rows(ctx.import_rows, schema=IMPORTS_ROW_SCHEMA, label="cst_imports")
-    plan = IMPORTS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "py_cst_imports_v1",
         plan,
         ctx=exec_ctx,
-        options=ctx.options,
-        repo_id=ctx.options.repo_id,
+        normalize=ExtractNormalizeOptions(
+            options=ctx.options,
+            repo_id=ctx.options.repo_id,
+        ),
     )
 
 
@@ -965,13 +961,14 @@ def _build_callsites_plan(
     if not ctx.call_rows:
         return Plan.table_source(empty_table(CALLSITES_SCHEMA))
     plan = plan_from_rows(ctx.call_rows, schema=CALLSITES_ROW_SCHEMA, label="cst_callsites")
-    plan = CALLSITES_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "py_cst_callsites_v1",
         plan,
         ctx=exec_ctx,
-        options=ctx.options,
-        repo_id=ctx.options.repo_id,
+        normalize=ExtractNormalizeOptions(
+            options=ctx.options,
+            repo_id=ctx.options.repo_id,
+        ),
     )
 
 
@@ -993,13 +990,14 @@ def _build_defs_plan(
     if not ctx.def_rows:
         return Plan.table_source(empty_table(DEFS_SCHEMA))
     plan = plan_from_rows(ctx.def_rows, schema=DEFS_ROW_SCHEMA, label="cst_defs")
-    plan = DEFS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "py_cst_defs_v1",
         plan,
         ctx=exec_ctx,
-        options=ctx.options,
-        repo_id=ctx.options.repo_id,
+        normalize=ExtractNormalizeOptions(
+            options=ctx.options,
+            repo_id=ctx.options.repo_id,
+        ),
     )
 
 
@@ -1021,13 +1019,14 @@ def _build_type_exprs_plan(
     if not ctx.type_expr_rows:
         return Plan.table_source(empty_table(TYPE_EXPRS_SCHEMA))
     plan = plan_from_rows(ctx.type_expr_rows, schema=TYPE_EXPRS_ROW_SCHEMA, label="cst_type_exprs")
-    plan = TYPE_EXPRS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "py_cst_type_exprs_v1",
         plan,
         ctx=exec_ctx,
-        options=ctx.options,
-        repo_id=ctx.options.repo_id,
+        normalize=ExtractNormalizeOptions(
+            options=ctx.options,
+            repo_id=ctx.options.repo_id,
+        ),
     )
 
 

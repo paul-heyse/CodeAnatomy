@@ -12,7 +12,6 @@ from arrowdsl.core.interop import SchemaLike, Table, TableLike
 from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.schema import EncodingSpec
-from arrowdsl.spec.tables.cpg import edge_plan_specs_from_table
 from cpg.catalog import PlanCatalog
 from cpg.constants import CpgBuildArtifacts, QualityPlanSpec, quality_plan_from_ids
 from cpg.emit_edges import emit_edges_plan
@@ -26,7 +25,7 @@ from cpg.plan_specs import (
     finalize_plan,
 )
 from cpg.registry import CpgRegistry, default_cpg_registry
-from cpg.relation_registry import compile_relation_plans
+from cpg.relation_registry import compile_relation_plans, edge_plan_specs_from_table
 from cpg.specs import EdgePlanSpec
 
 
@@ -35,11 +34,11 @@ def _encoding_specs(schema: SchemaLike) -> tuple[EncodingSpec, ...]:
 
 
 def _edge_plan_specs(
-    edge_spec_table: pa.Table | None,
+    relation_rule_table: pa.Table | None,
     *,
     registry: CpgRegistry,
 ) -> tuple[EdgePlanSpec, ...]:
-    table = edge_spec_table or registry.edge_plan_spec_table
+    table = relation_rule_table or registry.relation_rule_table
     return edge_plan_specs_from_table(table)
 
 
@@ -75,7 +74,6 @@ class EdgeBuildInputs:
 class EdgeSpecOverrides:
     """Optional spec table overrides for edge construction."""
 
-    edge_spec_table: pa.Table | None = None
     relation_rule_table: pa.Table | None = None
 
 
@@ -196,7 +194,7 @@ def build_cpg_edges_raw(
     )
 
     parts: list[Plan] = []
-    for spec in _edge_plan_specs(spec_tables.edge_spec_table, registry=registry):
+    for spec in _edge_plan_specs(relation_rule_table, registry=registry):
         enabled = getattr(options, spec.option_flag, None)
         if enabled is None:
             msg = f"Unknown option flag: {spec.option_flag}"

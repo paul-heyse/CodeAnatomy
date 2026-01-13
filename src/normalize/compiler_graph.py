@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from arrowdsl.core.interop import SchemaLike
+from arrowdsl.plan.plan import Plan, union_all_plans
 from normalize.evidence_catalog import EvidenceCatalog
 from normalize.registry_specs import dataset_schema
 from normalize.rule_model import NormalizeRule
@@ -18,6 +19,32 @@ class RuleNode:
     name: str
     rule: NormalizeRule
     requires: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class NormalizeGraphPlan:
+    """Compiled normalize plan graph."""
+
+    plan: Plan
+    outputs: dict[str, Plan]
+
+
+def compile_graph_plan(
+    rules: Sequence[NormalizeRule],
+    *,
+    plans: dict[str, Plan],
+) -> NormalizeGraphPlan:
+    """Compile a graph-level plan from rule outputs.
+
+    Returns
+    -------
+    NormalizeGraphPlan
+        Graph-level plan and per-output subplans.
+    """
+    ordered_outputs = [rule.output for rule in rules if rule.output in plans]
+    outputs = {name: plans[name] for name in ordered_outputs}
+    union = union_all_plans(tuple(outputs.values()), label="normalize_graph")
+    return NormalizeGraphPlan(plan=union, outputs=outputs)
 
 
 def order_rules(
@@ -95,4 +122,4 @@ def _select_by_output(rules: Sequence[NormalizeRule]) -> list[NormalizeRule]:
     return list(selected.values())
 
 
-__all__ = ["RuleNode", "order_rules"]
+__all__ = ["NormalizeGraphPlan", "RuleNode", "compile_graph_plan", "order_rules"]

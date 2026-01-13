@@ -27,14 +27,14 @@ from extract.helpers import (
     project_columns,
     text_from_file_ctx,
 )
+from extract.plan_helpers import apply_query_and_normalize
 from extract.registry_ids import hash_spec
 from extract.registry_specs import (
-    dataset_query,
     dataset_row_schema,
     dataset_schema,
     normalize_options,
 )
-from extract.schema_ops import metadata_spec_for_dataset, normalize_extract_plan
+from extract.schema_ops import metadata_spec_for_dataset
 from schema_spec.specs import NestedFieldSpec
 
 
@@ -111,12 +111,6 @@ SYM_SYMBOL_ROW_ID_SPEC = hash_spec("sym_symbol_row_id")
 SYM_SCOPE_EDGE_ID_SPEC = hash_spec("sym_scope_edge_id")
 SYM_NS_SYMBOL_ROW_ID_SPEC = hash_spec("sym_ns_symbol_row_id")
 SYM_NS_EDGE_ID_SPEC = hash_spec("sym_ns_edge_id")
-
-SCOPES_QUERY = dataset_query("py_sym_scopes_v1")
-SYMBOLS_QUERY = dataset_query("py_sym_symbols_v1")
-SCOPE_EDGES_QUERY = dataset_query("py_sym_scope_edges_v1")
-NAMESPACE_EDGES_QUERY = dataset_query("py_sym_namespace_edges_v1")
-FUNC_PARTS_QUERY = dataset_query("py_sym_function_partitions_v1")
 
 SCOPES_SCHEMA = dataset_schema("py_sym_scopes_v1")
 SYMBOLS_SCHEMA = dataset_schema("py_sym_symbols_v1")
@@ -593,8 +587,7 @@ def _build_scopes(
         ["file_id", "table_id", "scope_id"],
         ctx=ctx,
     )
-    scopes_plan = SCOPES_QUERY.apply_to_plan(scopes_plan, ctx=ctx)
-    scopes_plan = normalize_extract_plan(
+    scopes_plan = apply_query_and_normalize(
         "py_sym_scopes_v1",
         scopes_plan,
         ctx=ctx,
@@ -642,8 +635,7 @@ def _build_symbols(
         ],
         ctx=ctx,
     )
-    symbols_plan = SYMBOLS_QUERY.apply_to_plan(symbols_plan, ctx=ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "py_sym_symbols_v1",
         symbols_plan,
         ctx=ctx,
@@ -726,8 +718,7 @@ def _build_scope_edges(
         ],
         ctx=ctx,
     )
-    scope_edges_plan = SCOPE_EDGES_QUERY.apply_to_plan(scope_edges_plan, ctx=ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "py_sym_scope_edges_v1",
         scope_edges_plan,
         ctx=ctx,
@@ -808,8 +799,7 @@ def _build_namespace_edges(
         ],
         ctx=ctx,
     )
-    ns_edges_plan = NAMESPACE_EDGES_QUERY.apply_to_plan(ns_edges_plan, ctx=ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "py_sym_namespace_edges_v1",
         ns_edges_plan,
         ctx=ctx,
@@ -844,8 +834,7 @@ def _build_func_parts(
         use_threads=ctx.use_threads,
         ctx=ctx,
     )
-    func_parts_plan = FUNC_PARTS_QUERY.apply_to_plan(func_parts_plan, ctx=ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "py_sym_function_partitions_v1",
         func_parts_plan,
         ctx=ctx,

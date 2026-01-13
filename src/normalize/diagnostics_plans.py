@@ -406,13 +406,14 @@ def _ts_diag_plan(
     ctx: ExecutionContext,
 ) -> Plan:
     plan = Plan.table_source(ts_table)
+    plan = _alias_ts_span_columns(plan, ctx=ctx)
     available = set(plan.schema(ctx=ctx).names)
     details_scalar = pa.scalar([], type=DIAG_DETAILS_TYPE)
     exprs = [
         column_or_null_expr("file_id", pa.string(), available=available),
         column_or_null_expr("path", pa.string(), available=available),
-        column_or_null_expr("start_byte", pa.int64(), available=available),
-        column_or_null_expr("end_byte", pa.int64(), available=available),
+        column_or_null_expr("bstart", pa.int64(), available=available),
+        column_or_null_expr("bend", pa.int64(), available=available),
         pc.scalar(severity),
         pc.scalar(message),
         pc.scalar("treesitter"),
@@ -420,6 +421,18 @@ def _ts_diag_plan(
         pc.scalar(details_scalar),
     ]
     return plan.project(exprs, list(_DIAG_BASE_COLUMNS), ctx=ctx)
+
+
+def _alias_ts_span_columns(plan: Plan, *, ctx: ExecutionContext) -> Plan:
+    available = set(plan.schema(ctx=ctx).names)
+    mapping: dict[str, str] = {}
+    if "bstart" not in available and "start_byte" in available:
+        mapping["start_byte"] = "bstart"
+    if "bend" not in available and "end_byte" in available:
+        mapping["end_byte"] = "bend"
+    if not mapping:
+        return plan
+    return plan.rename_columns(mapping, ctx=ctx)
 
 
 def _diagnostics_plan(

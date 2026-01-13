@@ -25,6 +25,7 @@ from arrowdsl.plan.metrics import (
 from arrowdsl.plan.query import open_dataset
 from core_types import JsonDict
 from cpg.constants import CpgBuildArtifacts
+from extract.evidence_plan import EvidencePlan
 from hamilton_pipeline.pipeline_types import (
     CpgOutputTables,
     OutputConfig,
@@ -137,6 +138,17 @@ class RunBundleInputs:
     run_config: JsonDict
     relspec_snapshots: RelspecSnapshots
     tables: RunBundleTables
+
+
+@dataclass(frozen=True)
+class ManifestInputs:
+    """Inputs required to build manifest data."""
+
+    relspec_inputs_bundle: RelspecInputsBundle
+    relationship_output_tables: RelationshipOutputTables
+    cpg_output_tables: CpgOutputTables
+    relspec_snapshots: RelspecSnapshots
+    evidence_plan: EvidencePlan | None = None
 
 
 # -----------------------
@@ -452,12 +464,33 @@ def relspec_snapshots(
     )
 
 
-@tag(layer="obs", artifact="manifest_data", kind="object")
-def manifest_data(
+@tag(layer="obs", artifact="manifest_inputs", kind="object")
+def manifest_inputs(
     relspec_inputs_bundle: RelspecInputsBundle,
     relationship_output_tables: RelationshipOutputTables,
     cpg_output_tables: CpgOutputTables,
     relspec_snapshots: RelspecSnapshots,
+    evidence_plan: EvidencePlan | None = None,
+) -> ManifestInputs:
+    """Bundle manifest inputs from pipeline outputs.
+
+    Returns
+    -------
+    ManifestInputs
+        Manifest input bundle.
+    """
+    return ManifestInputs(
+        relspec_inputs_bundle=relspec_inputs_bundle,
+        relationship_output_tables=relationship_output_tables,
+        cpg_output_tables=cpg_output_tables,
+        relspec_snapshots=relspec_snapshots,
+        evidence_plan=evidence_plan,
+    )
+
+
+@tag(layer="obs", artifact="manifest_data", kind="object")
+def manifest_data(
+    manifest_inputs: ManifestInputs,
     normalize_rule_compilation: NormalizeRuleCompilation | None = None,
 ) -> ManifestData:
     """Assemble manifest data inputs from pipeline outputs.
@@ -467,6 +500,7 @@ def manifest_data(
     ManifestData
         Manifest input bundle.
     """
+    relspec_snapshots = manifest_inputs.relspec_snapshots
     produced_outputs = sorted(relspec_snapshots.compiled_outputs.keys())
     lineage = {
         name: [cr.rule.name for cr in compiled.contributors]
@@ -482,12 +516,13 @@ def manifest_data(
     if normalize_lineage:
         notes["normalize_output_keys"] = sorted(normalize_lineage)
     return ManifestData(
-        relspec_input_tables=relspec_inputs_bundle.tables,
-        relspec_input_locations=relspec_inputs_bundle.locations,
-        relationship_outputs=relationship_output_tables.as_dict(),
-        cpg_nodes=cpg_output_tables.cpg_nodes,
-        cpg_edges=cpg_output_tables.cpg_edges,
-        cpg_props=cpg_output_tables.cpg_props,
+        relspec_input_tables=manifest_inputs.relspec_inputs_bundle.tables,
+        relspec_input_locations=manifest_inputs.relspec_inputs_bundle.locations,
+        relationship_outputs=manifest_inputs.relationship_output_tables.as_dict(),
+        cpg_nodes=manifest_inputs.cpg_output_tables.cpg_nodes,
+        cpg_edges=manifest_inputs.cpg_output_tables.cpg_edges,
+        cpg_props=manifest_inputs.cpg_output_tables.cpg_props,
+        extract_evidence_plan=manifest_inputs.evidence_plan,
         relationship_rules=relspec_snapshots.registry.rules(),
         normalize_rules=normalize_rules,
         produced_relationship_output_names=produced_outputs,

@@ -11,7 +11,6 @@ from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
-from arrowdsl.plan.scan_io import plan_from_rows
 from extract.helpers import (
     FileContext,
     ast_def_nodes_plan,
@@ -19,12 +18,9 @@ from extract.helpers import (
     iter_contexts,
     text_from_file_ctx,
 )
-from extract.registry_specs import (
-    dataset_query,
-    dataset_row_schema,
-    normalize_options,
-)
-from extract.schema_ops import metadata_spec_for_dataset, normalize_extract_plan
+from extract.plan_helpers import plan_from_rows_for_dataset
+from extract.registry_specs import dataset_row_schema, normalize_options
+from extract.schema_ops import ExtractNormalizeOptions, metadata_spec_for_dataset
 
 
 @dataclass(frozen=True)
@@ -43,10 +39,6 @@ class ASTExtractResult:
     py_ast_edges: TableLike
     py_ast_errors: TableLike
 
-
-AST_NODES_QUERY = dataset_query("py_ast_nodes_v1")
-AST_EDGES_QUERY = dataset_query("py_ast_edges_v1")
-AST_ERRORS_QUERY = dataset_query("py_ast_errors_v1")
 
 AST_NODES_ROW_SCHEMA = dataset_row_schema("py_ast_nodes_v1")
 AST_EDGES_ROW_SCHEMA = dataset_row_schema("py_ast_edges_v1")
@@ -326,31 +318,28 @@ def extract_ast_plans(
         edges_rows.extend(edges)
         err_rows.extend(errs)
 
-    nodes_plan = plan_from_rows(nodes_rows, schema=AST_NODES_ROW_SCHEMA, label="ast_nodes")
-    nodes_plan = AST_NODES_QUERY.apply_to_plan(nodes_plan, ctx=ctx)
-    nodes_plan = normalize_extract_plan(
+    nodes_plan = plan_from_rows_for_dataset(
         "py_ast_nodes_v1",
-        nodes_plan,
+        nodes_rows,
+        row_schema=AST_NODES_ROW_SCHEMA,
         ctx=ctx,
-        options=normalized_options,
+        normalize=ExtractNormalizeOptions(options=normalized_options),
     )
 
-    edges_plan = plan_from_rows(edges_rows, schema=AST_EDGES_ROW_SCHEMA, label="ast_edges")
-    edges_plan = AST_EDGES_QUERY.apply_to_plan(edges_plan, ctx=ctx)
-    edges_plan = normalize_extract_plan(
+    edges_plan = plan_from_rows_for_dataset(
         "py_ast_edges_v1",
-        edges_plan,
+        edges_rows,
+        row_schema=AST_EDGES_ROW_SCHEMA,
         ctx=ctx,
-        options=normalized_options,
+        normalize=ExtractNormalizeOptions(options=normalized_options),
     )
 
-    errs_plan = plan_from_rows(err_rows, schema=AST_ERRORS_ROW_SCHEMA, label="ast_errors")
-    errs_plan = AST_ERRORS_QUERY.apply_to_plan(errs_plan, ctx=ctx)
-    errs_plan = normalize_extract_plan(
+    errs_plan = plan_from_rows_for_dataset(
         "py_ast_errors_v1",
-        errs_plan,
+        err_rows,
+        row_schema=AST_ERRORS_ROW_SCHEMA,
         ctx=ctx,
-        options=normalized_options,
+        normalize=ExtractNormalizeOptions(options=normalized_options),
     )
 
     return {

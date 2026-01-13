@@ -14,9 +14,31 @@ from normalize.registry_rows import DATASET_ROWS, DatasetRow
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import ContractSpec, DatasetSpec
 
+
+def _strip_version(name: str) -> str:
+    base, sep, suffix = name.rpartition("_v")
+    if sep and suffix.isdigit():
+        return base
+    return name
+
+
 _DATASET_ROWS: dict[str, DatasetRow] = {row.name: row for row in DATASET_ROWS}
 _DATASET_SPECS: dict[str, DatasetSpec] = {row.name: build_dataset_spec(row) for row in DATASET_ROWS}
 _INPUT_SCHEMAS: dict[str, SchemaLike] = {row.name: build_input_schema(row) for row in DATASET_ROWS}
+_ALIAS_OVERRIDES: dict[str, str] = {
+    "py_bc_reaches_v1": "py_bc_reaching_defs",
+    "type_nodes_v1": "types_norm",
+}
+_DATASET_ALIASES: dict[str, str] = {}
+_ALIASES_TO_NAME: dict[str, str] = {}
+for _row in DATASET_ROWS:
+    _alias = _ALIAS_OVERRIDES.get(_row.name, _strip_version(_row.name))
+    _DATASET_ALIASES[_row.name] = _alias
+    existing = _ALIASES_TO_NAME.get(_alias)
+    if existing is not None and existing != _row.name:
+        msg = f"Duplicate normalize dataset alias: {_alias!r}."
+        raise ValueError(msg)
+    _ALIASES_TO_NAME[_alias] = _row.name
 
 
 def dataset_row(name: str) -> DatasetRow:
@@ -50,6 +72,50 @@ def dataset_names() -> tuple[str, ...]:
         Dataset names.
     """
     return tuple(row.name for row in DATASET_ROWS)
+
+
+def dataset_alias(name: str) -> str:
+    """Return the canonical alias for a dataset name or alias.
+
+    Returns
+    -------
+    str
+        Dataset alias used in pipeline wiring.
+
+    Raises
+    ------
+    KeyError
+        Raised when the dataset name or alias is unknown.
+    """
+    alias = _DATASET_ALIASES.get(name)
+    if alias is not None:
+        return alias
+    if name in _ALIASES_TO_NAME:
+        return name
+    msg = f"Unknown normalize dataset: {name!r}."
+    raise KeyError(msg)
+
+
+def dataset_name_from_alias(alias: str) -> str:
+    """Return the dataset name for a canonical alias.
+
+    Returns
+    -------
+    str
+        Versioned dataset name.
+
+    Raises
+    ------
+    KeyError
+        Raised when the dataset alias is unknown.
+    """
+    name = _ALIASES_TO_NAME.get(alias)
+    if name is not None:
+        return name
+    if alias in _DATASET_ALIASES:
+        return alias
+    msg = f"Unknown normalize dataset alias: {alias!r}."
+    raise KeyError(msg)
 
 
 def dataset_spec(name: str) -> DatasetSpec:
@@ -191,11 +257,13 @@ def dataset_schema_policy(name: str, *, ctx: ExecutionContext) -> SchemaPolicy:
 
 
 __all__ = [
+    "dataset_alias",
     "dataset_contract",
     "dataset_contract_schema",
     "dataset_input_columns",
     "dataset_input_schema",
     "dataset_metadata_spec",
+    "dataset_name_from_alias",
     "dataset_names",
     "dataset_query",
     "dataset_row",

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 import pyarrow.dataset as ds
 
+from arrowdsl.compute.kernels import explode_list_column
 from arrowdsl.core.context import (
     ExecutionContext,
     Ordering,
@@ -31,6 +32,7 @@ from arrowdsl.plan.ops import (
     OrderByOp,
     PlanOp,
     ProjectOp,
+    RenameColumnsOp,
     ScanOp,
     TableSourceOp,
     WinnerSelectOp,
@@ -39,6 +41,8 @@ from arrowdsl.plan.ops import (
 
 ReaderThunk = Callable[[], RecordBatchReaderLike]
 TableThunk = Callable[[], TableLike]
+
+EXPLODE_OUT_COLS_LEN = 2
 
 
 @dataclass(frozen=True)
@@ -402,6 +406,43 @@ class Plan:
             label=label,
         )
 
+    def rename_columns(
+        self,
+        mapping: Mapping[str, str],
+        *,
+        ctx: ExecutionContext | None = None,
+        label: str = "",
+    ) -> Plan:
+        """Rename columns using a plan-lane projection.
+
+        Parameters
+        ----------
+        mapping:
+            Mapping of existing column names to new names.
+        ctx:
+            Optional execution context for plan compilation.
+        label:
+            Optional plan label.
+
+        Returns
+        -------
+        Plan
+            Plan with renamed columns.
+
+        Raises
+        ------
+        ValueError
+            Raised when no execution context is provided.
+        """
+        if not mapping:
+            return self
+        if ctx is None:
+            msg = "rename_columns requires an execution context."
+            raise ValueError(msg)
+        columns = list(self.schema(ctx=ctx).names)
+        op = RenameColumnsOp(mapping=mapping, columns=columns)
+        return self._apply_plan_op(op, ctx=ctx, label=label)
+
     def order_by(
         self,
         sort_keys: Sequence[OrderingKey],
@@ -427,6 +468,63 @@ class Plan:
         """
         op = OrderByOp(sort_keys=sort_keys)
         return self._apply_plan_op(op, ctx=ctx, label=label)
+
+    def explode_list(
+        self,
+        *,
+        parent_id_col: str,
+        list_col: str,
+        out_cols: tuple[str, str] = ("src_id", "dst_id"),
+        ctx: ExecutionContext,
+        label: str = "",
+    ) -> Plan:
+        """Explode a list column into parent/value pairs.
+
+        Parameters
+        ----------
+        parent_id_col:
+            Column containing parent IDs.
+        list_col:
+            Column containing list values.
+        out_cols:
+            Output (parent, value) column names.
+        ctx:
+            Execution context for plan materialization.
+        label:
+            Optional plan label.
+
+        Returns
+        -------
+        Plan
+            Plan that materializes and explodes the list column.
+
+        Raises
+        ------
+        ValueError
+            Raised when out_cols does not contain exactly two names.
+        """
+        if len(out_cols) != EXPLODE_OUT_COLS_LEN:
+            msg = "explode_list out_cols must contain exactly two names."
+            raise ValueError(msg)
+        out_parent_col, out_value_col = out_cols
+
+        def _thunk() -> TableLike:
+            table = self.to_table(ctx=ctx)
+            return explode_list_column(
+                table,
+                parent_id_col=parent_id_col,
+                list_col=list_col,
+                out_parent_col=out_parent_col,
+                out_value_col=out_value_col,
+            )
+
+        pipeline_breakers = (*self.pipeline_breakers, "explode_list")
+        return Plan(
+            table_thunk=_thunk,
+            label=label or self.label,
+            ordering=Ordering.unordered(),
+            pipeline_breakers=pipeline_breakers,
+        )
 
     def aggregate(
         self,

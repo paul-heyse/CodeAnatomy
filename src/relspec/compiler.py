@@ -428,6 +428,23 @@ def _apply_rename_columns_to_plan(
     return plan.project(exprs, renamed, label=plan.label or rule.name)
 
 
+def _apply_canonical_sort_to_plan(
+    plan: Plan,
+    spec: CanonicalSortKernelSpec,
+    *,
+    ctx: ExecutionContext,
+    rule: RelationshipRule,
+) -> tuple[Plan, bool]:
+    if not spec.sort_keys:
+        return plan, True
+    schema = plan.schema(ctx=ctx)
+    names = set(schema.names)
+    if any(key.column not in names for key in spec.sort_keys):
+        return plan, False
+    sort_keys = [(key.column, key.order) for key in spec.sort_keys]
+    return plan.order_by(sort_keys, ctx=ctx, label=plan.label or rule.name), True
+
+
 def _apply_dedupe_to_plan(
     plan: Plan,
     spec: DedupeKernelSpec,
@@ -467,6 +484,24 @@ def _apply_dedupe_to_plan(
     return plan, True
 
 
+def _apply_simple_kernel_spec(
+    plan: Plan,
+    spec: KernelSpecT,
+    *,
+    ctx: ExecutionContext,
+    rule: RelationshipRule,
+) -> Plan | None:
+    if isinstance(spec, AddLiteralSpec):
+        return _apply_add_literal_to_plan(plan, spec, ctx=ctx, rule=rule)
+    if isinstance(spec, DropColumnsSpec):
+        return _apply_drop_columns_to_plan(plan, spec, ctx=ctx, rule=rule)
+    if isinstance(spec, FilterKernelSpec):
+        return _apply_filter_to_plan(plan, spec, ctx=ctx, rule=rule)
+    if isinstance(spec, RenameColumnsSpec):
+        return _apply_rename_columns_to_plan(plan, spec, ctx=ctx, rule=rule)
+    return None
+
+
 def _apply_plan_kernel_specs(
     plan: Plan,
     specs: Sequence[KernelSpecT],
@@ -478,25 +513,30 @@ def _apply_plan_kernel_specs(
         return plan, tuple(specs)
     remaining: list[KernelSpecT] = []
     for idx, spec in enumerate(specs):
-        if isinstance(spec, AddLiteralSpec):
-            plan = _apply_add_literal_to_plan(plan, spec, ctx=ctx, rule=rule)
+        applied = _apply_simple_kernel_spec(plan, spec, ctx=ctx, rule=rule)
+        if applied is not None:
+            plan = applied
             continue
-        if isinstance(spec, DropColumnsSpec):
-            plan = _apply_drop_columns_to_plan(plan, spec, ctx=ctx, rule=rule)
-            continue
-        if isinstance(spec, FilterKernelSpec):
-            plan = _apply_filter_to_plan(plan, spec, ctx=ctx, rule=rule)
-            continue
-        if isinstance(spec, RenameColumnsSpec):
-            plan = _apply_rename_columns_to_plan(plan, spec, ctx=ctx, rule=rule)
-            continue
+        if isinstance(spec, CanonicalSortKernelSpec):
+            plan, applied = _apply_canonical_sort_to_plan(plan, spec, ctx=ctx, rule=rule)
+            if applied:
+                continue
         if isinstance(spec, ExplodeListSpec):
-            plan = _materialize_plan_with_kernels(
-                plan,
-                specs[idx:],
+            plan = plan.explode_list(
+                parent_id_col=spec.parent_id_col,
+                list_col=spec.list_col,
+                out_cols=(spec.out_parent_col, spec.out_value_col),
                 ctx=ctx,
                 label=plan.label or rule.name,
             )
+            remaining_specs = list(specs[idx + 1 :])
+            if remaining_specs:
+                plan = _materialize_plan_with_kernels(
+                    plan,
+                    remaining_specs,
+                    ctx=ctx,
+                    label=plan.label or rule.name,
+                )
             remaining = []
             break
         if isinstance(spec, DedupeKernelSpec):

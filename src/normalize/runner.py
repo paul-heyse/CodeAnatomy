@@ -34,9 +34,10 @@ from arrowdsl.schema.ops import align_table
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from normalize.catalog import NormalizePlanCatalog
-from normalize.compiler_graph import order_rules
+from normalize.compiler_graph import NormalizeGraphPlan, compile_graph_plan, order_rules
 from normalize.contracts import NORMALIZE_EVIDENCE_NAME, normalize_evidence_schema
 from normalize.evidence_catalog import EvidenceCatalog
+from normalize.evidence_specs import evidence_output_from_schema, evidence_spec_from_schema
 from normalize.policies import (
     ambiguity_kernels,
     ambiguity_policy_from_schema,
@@ -45,7 +46,7 @@ from normalize.policies import (
     default_tie_breakers,
 )
 from normalize.registry_specs import dataset_metadata_spec, dataset_schema, dataset_spec
-from normalize.rule_model import AmbiguityPolicy, EvidenceOutput, NormalizeRule
+from normalize.rule_model import AmbiguityPolicy, EvidenceOutput, EvidenceSpec, NormalizeRule
 from normalize.rule_registry import normalize_rules
 from normalize.utils import (
     PlanSource,
@@ -302,6 +303,58 @@ def _apply_policy_defaults(rule: NormalizeRule) -> NormalizeRule:
     )
 
 
+def _merge_evidence(
+    base: EvidenceSpec | None,
+    defaults: EvidenceSpec | None,
+) -> EvidenceSpec | None:
+    if base is None:
+        return defaults
+    if defaults is None:
+        return base
+    sources = base.sources or defaults.sources
+    required_columns = tuple(sorted(set(base.required_columns).union(defaults.required_columns)))
+    required_types = dict(defaults.required_types)
+    required_types.update(base.required_types)
+    required_metadata = dict(defaults.required_metadata)
+    required_metadata.update(base.required_metadata)
+    if not sources and not required_columns and not required_types and not required_metadata:
+        return None
+    return EvidenceSpec(
+        sources=sources,
+        required_columns=required_columns,
+        required_types=required_types,
+        required_metadata=required_metadata,
+    )
+
+
+def _merge_evidence_output(
+    base: EvidenceOutput | None,
+    defaults: EvidenceOutput | None,
+) -> EvidenceOutput | None:
+    if base is None:
+        return defaults
+    if defaults is None:
+        return base
+    column_map = dict(defaults.column_map)
+    column_map.update(base.column_map)
+    literals = dict(defaults.literals)
+    literals.update(base.literals)
+    if not column_map and not literals:
+        return None
+    return EvidenceOutput(column_map=column_map, literals=literals)
+
+
+def _apply_evidence_defaults(rule: NormalizeRule) -> NormalizeRule:
+    schema = dataset_schema(rule.output)
+    evidence_defaults = evidence_spec_from_schema(schema)
+    output_defaults = evidence_output_from_schema(schema)
+    evidence = _merge_evidence(rule.evidence, evidence_defaults)
+    evidence_output = _merge_evidence_output(rule.evidence_output, output_defaults)
+    if evidence == rule.evidence and evidence_output == rule.evidence_output:
+        return rule
+    return replace(rule, evidence=evidence, evidence_output=evidence_output)
+
+
 def apply_policy_defaults(rules: Sequence[NormalizeRule]) -> tuple[NormalizeRule, ...]:
     """Return rules with contract-derived policy defaults applied.
 
@@ -311,6 +364,17 @@ def apply_policy_defaults(rules: Sequence[NormalizeRule]) -> tuple[NormalizeRule
         Rules with confidence and ambiguity policies filled from metadata.
     """
     return tuple(_apply_policy_defaults(rule) for rule in rules)
+
+
+def apply_evidence_defaults(rules: Sequence[NormalizeRule]) -> tuple[NormalizeRule, ...]:
+    """Return rules with evidence defaults applied.
+
+    Returns
+    -------
+    tuple[NormalizeRule, ...]
+        Rules with evidence defaults filled from metadata.
+    """
+    return tuple(_apply_evidence_defaults(rule) for rule in rules)
 
 
 def _validate_rule_policies(rule: NormalizeRule) -> None:
@@ -370,7 +434,7 @@ def compile_normalize_rules(
     if required_outputs:
         required_set = _expand_required_outputs(rule_set, required_outputs)
         rule_set = tuple(rule for rule in rule_set if rule.output in required_set)
-    rule_set = apply_policy_defaults(rule_set)
+    rule_set = apply_evidence_defaults(apply_policy_defaults(rule_set))
     for rule in rule_set:
         _validate_rule_policies(rule)
     work_catalog = _clone_catalog(catalog)
@@ -419,6 +483,32 @@ def compile_normalize_plans(
         required_outputs=required_outputs,
     )
     return dict(compilation.plans)
+
+
+def compile_normalize_graph_plan(
+    catalog: PlanCatalog,
+    *,
+    ctx: ExecutionContext,
+    rules: Sequence[NormalizeRule] | None = None,
+    required_outputs: Sequence[str] | None = None,
+) -> NormalizeGraphPlan:
+    """Compile normalize rules into a unified graph plan.
+
+    Returns
+    -------
+    NormalizeGraphPlan
+        Graph-level plan with per-output subplans.
+    """
+    compilation = compile_normalize_rules(
+        catalog,
+        ctx=ctx,
+        rules=rules,
+        required_outputs=required_outputs,
+    )
+    if not compilation.plans:
+        empty = Plan.table_source(empty_table(pa.schema([])), label="normalize_graph_empty")
+        return NormalizeGraphPlan(plan=empty, outputs={})
+    return compile_graph_plan(compilation.rules, plans=dict(compilation.plans))
 
 
 def materialize_normalize_evidence(
@@ -691,7 +781,9 @@ __all__ = [
     "NormalizeFinalizeSpec",
     "NormalizeRuleCompilation",
     "PostFn",
+    "apply_evidence_defaults",
     "apply_policy_defaults",
+    "compile_normalize_graph_plan",
     "compile_normalize_plans",
     "compile_normalize_rules",
     "ensure_canonical",

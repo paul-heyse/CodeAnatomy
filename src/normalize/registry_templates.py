@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 from arrowdsl.core.context import DeterminismTier, OrderingLevel
+from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
 
 
 @dataclass(frozen=True)
@@ -16,6 +18,10 @@ class RegistryTemplate:
     ordering_level: OrderingLevel = OrderingLevel.IMPLICIT
     metadata_extra: Mapping[bytes, bytes] | None = None
     determinism_tier: DeterminismTier | None = None
+
+
+def _json_bytes(payload: object) -> bytes:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 _TEMPLATES: dict[str, RegistryTemplate] = {
@@ -32,6 +38,8 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
             b"coordinate_system": b"bytes",
             b"ambiguity_policy": b"preserve",
             b"superior_rank": b"3",
+            EVIDENCE_OUTPUT_MAP_META: _json_bytes({"role": "expr_role"}),
+            EVIDENCE_OUTPUT_LITERALS_META: _json_bytes({"source": "cst_type_exprs"}),
         },
     ),
     "normalize_scip": RegistryTemplate(
@@ -65,6 +73,9 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
             b"coordinate_system": b"bytes",
             b"ambiguity_policy": b"preserve",
             b"superior_rank": b"2",
+            EVIDENCE_OUTPUT_MAP_META: _json_bytes(
+                {"role": "severity", "source": "diag_source"}
+            ),
         },
     ),
     "normalize_span": RegistryTemplate(
@@ -76,6 +87,8 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
             b"coordinate_system": b"bytes",
             b"ambiguity_policy": b"preserve",
             b"superior_rank": b"4",
+            EVIDENCE_OUTPUT_MAP_META: _json_bytes({"role": "reason"}),
+            EVIDENCE_OUTPUT_LITERALS_META: _json_bytes({"source": "span_errors"}),
         },
     ),
     "normalize_type": RegistryTemplate(
@@ -87,6 +100,8 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
             b"coordinate_system": b"none",
             b"ambiguity_policy": b"preserve",
             b"superior_rank": b"2",
+            EVIDENCE_OUTPUT_MAP_META: _json_bytes({"role": "type_form"}),
+            EVIDENCE_OUTPUT_LITERALS_META: _json_bytes({"source": "type_nodes"}),
         },
     ),
     "normalize_evidence": RegistryTemplate(

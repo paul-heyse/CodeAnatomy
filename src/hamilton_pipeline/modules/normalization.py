@@ -23,17 +23,18 @@ from normalize.bytecode_anchor import anchor_instructions
 from normalize.catalog import (
     NormalizeCatalogInputs,
     NormalizePlanCatalog,
-)
-from normalize.catalog import (
     normalize_plan_catalog as build_normalize_plan_catalog,
 )
 from normalize.diagnostics import DiagnosticsSources
 from normalize.registry_specs import (
+    dataset_alias,
     dataset_contract,
+    dataset_name_from_alias,
     dataset_schema,
     dataset_schema_policy,
     dataset_spec,
 )
+from normalize.rule_registry import normalize_rule_outputs
 from normalize.runner import (
     NormalizeFinalizeSpec,
     NormalizeRuleCompilation,
@@ -101,17 +102,6 @@ def _requires_output(plan: EvidencePlan | None, name: str) -> bool:
 
 def _requires_any(plan: EvidencePlan | None, names: Sequence[str]) -> bool:
     return any(_requires_output(plan, name) for name in names)
-
-
-_RULE_OUTPUT_DATASETS: dict[str, str] = {
-    "diagnostics_norm": "diagnostics_norm_v1",
-    "py_bc_blocks_norm": "py_bc_blocks_norm_v1",
-    "py_bc_cfg_edges_norm": "py_bc_cfg_edges_norm_v1",
-    "py_bc_def_use_events": "py_bc_def_use_events_v1",
-    "py_bc_reaching_defs": "py_bc_reaches_v1",
-    "type_exprs_norm": "type_exprs_norm_v1",
-    "types_norm": "type_nodes_v1",
-}
 
 
 @dataclass(frozen=True)
@@ -283,7 +273,9 @@ def _required_rule_outputs(plan: EvidencePlan | None) -> tuple[str, ...] | None:
     if plan is None:
         return None
     outputs = [
-        dataset for name, dataset in _RULE_OUTPUT_DATASETS.items() if plan.requires_dataset(name)
+        output
+        for output in normalize_rule_outputs()
+        if plan.requires_dataset(dataset_alias(output))
     ]
     return tuple(outputs)
 
@@ -530,10 +522,10 @@ def py_bc_blocks_norm(
         CFG block table aligned to the normalization schema.
     """
     if not _requires_output(evidence_plan, "py_bc_blocks_norm"):
-        return empty_table(dataset_schema(_RULE_OUTPUT_DATASETS["py_bc_blocks_norm"]))
+        return empty_table(dataset_schema(dataset_name_from_alias("py_bc_blocks_norm")))
     return _normalize_rule_output(
         normalize_rule_compilation,
-        _RULE_OUTPUT_DATASETS["py_bc_blocks_norm"],
+        dataset_name_from_alias("py_bc_blocks_norm"),
         ctx=ctx,
     )
 
@@ -553,10 +545,10 @@ def py_bc_cfg_edges_norm(
         CFG edge table aligned to the normalization schema.
     """
     if not _requires_output(evidence_plan, "py_bc_cfg_edges_norm"):
-        return empty_table(dataset_schema(_RULE_OUTPUT_DATASETS["py_bc_cfg_edges_norm"]))
+        return empty_table(dataset_schema(dataset_name_from_alias("py_bc_cfg_edges_norm")))
     return _normalize_rule_output(
         normalize_rule_compilation,
-        _RULE_OUTPUT_DATASETS["py_bc_cfg_edges_norm"],
+        dataset_name_from_alias("py_bc_cfg_edges_norm"),
         ctx=ctx,
     )
 
@@ -576,10 +568,10 @@ def py_bc_def_use_events(
         Def/use events table.
     """
     if not _requires_output(evidence_plan, "py_bc_def_use_events"):
-        return empty_table(dataset_schema(_RULE_OUTPUT_DATASETS["py_bc_def_use_events"]))
+        return empty_table(dataset_schema(dataset_name_from_alias("py_bc_def_use_events")))
     return _normalize_rule_output(
         normalize_rule_compilation,
-        _RULE_OUTPUT_DATASETS["py_bc_def_use_events"],
+        dataset_name_from_alias("py_bc_def_use_events"),
         ctx=ctx,
     )
 
@@ -599,10 +591,10 @@ def py_bc_reaching_defs(
         Reaching-def edges table.
     """
     if not _requires_output(evidence_plan, "py_bc_reaching_defs"):
-        return empty_table(dataset_schema(_RULE_OUTPUT_DATASETS["py_bc_reaching_defs"]))
+        return empty_table(dataset_schema(dataset_name_from_alias("py_bc_reaching_defs")))
     return _normalize_rule_output(
         normalize_rule_compilation,
-        _RULE_OUTPUT_DATASETS["py_bc_reaching_defs"],
+        dataset_name_from_alias("py_bc_reaching_defs"),
         ctx=ctx,
     )
 
@@ -622,10 +614,10 @@ def type_exprs_norm(
         Normalized type expressions table.
     """
     if not _requires_output(evidence_plan, "type_exprs_norm"):
-        return empty_table(dataset_schema(_RULE_OUTPUT_DATASETS["type_exprs_norm"]))
+        return empty_table(dataset_schema(dataset_name_from_alias("type_exprs_norm")))
     return _normalize_rule_output(
         normalize_rule_compilation,
-        _RULE_OUTPUT_DATASETS["type_exprs_norm"],
+        dataset_name_from_alias("type_exprs_norm"),
         ctx=ctx,
     )
 
@@ -645,10 +637,10 @@ def types_norm(
         Normalized type node table.
     """
     if not _requires_output(evidence_plan, "types_norm"):
-        return empty_table(dataset_schema(_RULE_OUTPUT_DATASETS["types_norm"]))
+        return empty_table(dataset_schema(dataset_name_from_alias("types_norm")))
     return _normalize_rule_output(
         normalize_rule_compilation,
-        _RULE_OUTPUT_DATASETS["types_norm"],
+        dataset_name_from_alias("types_norm"),
         ctx=ctx,
     )
 
@@ -693,10 +685,10 @@ def diagnostics_norm(
         Normalized diagnostics table.
     """
     if not _requires_output(evidence_plan, "diagnostics_norm"):
-        return empty_table(dataset_schema(_RULE_OUTPUT_DATASETS["diagnostics_norm"]))
+        return empty_table(dataset_schema(dataset_name_from_alias("diagnostics_norm")))
     return _normalize_rule_output(
         normalize_rule_compilation,
-        _RULE_OUTPUT_DATASETS["diagnostics_norm"],
+        dataset_name_from_alias("diagnostics_norm"),
         ctx=ctx,
     )
 

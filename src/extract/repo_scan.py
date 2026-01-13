@@ -25,7 +25,11 @@ from extract.registry_specs import (
     dataset_schema,
     normalize_options,
 )
-from extract.schema_ops import metadata_spec_for_dataset, normalize_extract_plan
+from extract.schema_ops import (
+    ExtractNormalizeOptions,
+    metadata_spec_for_dataset,
+    normalize_extract_plan,
+)
 
 SCHEMA_VERSION = 1
 
@@ -282,9 +286,12 @@ def scan_repo_plan(
 
     plan = plan_from_rows(iter_rows(), schema=REPO_FILES_ROW_SCHEMA, label="repo_files")
     plan = repo_files_query(options.repo_id).apply_to_plan(plan, ctx=ctx)
-    return align_plan(
+    return normalize_extract_plan(
+        "repo_files_v1",
         plan,
-        schema=REPO_FILES_SCHEMA,
-        available=REPO_FILES_SCHEMA.names,
         ctx=ctx,
+        normalize=ExtractNormalizeOptions(
+            options=options,
+            repo_id=options.repo_id,
+        ),
     )

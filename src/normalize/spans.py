@@ -718,6 +718,33 @@ def normalize_cst_callsites_spans(
     return append_alias_cols(py_cst_callsites, {"bstart": "callee_bstart", "bend": "callee_bend"})
 
 
+def normalize_cst_callsites_spans_plan(
+    py_cst_callsites: PlanSource,
+    *,
+    ctx: ExecutionContext,
+    primary: Literal["callee", "call"] = "callee",
+) -> Plan:
+    """Plan-lane span canonicalization for callsites.
+
+    Returns
+    -------
+    Plan
+        Plan with canonical bstart/bend columns.
+    """
+    plan = plan_source(py_cst_callsites, ctx=ctx)
+    if primary == "call":
+        return _rename_span_columns(
+            plan,
+            {"call_bstart": "bstart", "call_bend": "bend"},
+            ctx=ctx,
+        )
+    return _rename_span_columns(
+        plan,
+        {"callee_bstart": "bstart", "callee_bend": "bend"},
+        ctx=ctx,
+    )
+
+
 def normalize_cst_imports_spans(
     py_cst_imports: TableLike,
     *,
@@ -733,6 +760,33 @@ def normalize_cst_imports_spans(
     if primary == "stmt":
         return append_alias_cols(py_cst_imports, {"bstart": "stmt_bstart", "bend": "stmt_bend"})
     return append_alias_cols(py_cst_imports, {"bstart": "alias_bstart", "bend": "alias_bend"})
+
+
+def normalize_cst_imports_spans_plan(
+    py_cst_imports: PlanSource,
+    *,
+    ctx: ExecutionContext,
+    primary: Literal["alias", "stmt"] = "alias",
+) -> Plan:
+    """Plan-lane span canonicalization for imports.
+
+    Returns
+    -------
+    Plan
+        Plan with canonical bstart/bend columns.
+    """
+    plan = plan_source(py_cst_imports, ctx=ctx)
+    if primary == "stmt":
+        return _rename_span_columns(
+            plan,
+            {"stmt_bstart": "bstart", "stmt_bend": "bend"},
+            ctx=ctx,
+        )
+    return _rename_span_columns(
+        plan,
+        {"alias_bstart": "bstart", "alias_bend": "bend"},
+        ctx=ctx,
+    )
 
 
 def span_errors_plan(span_errors: PlanSource, *, ctx: ExecutionContext) -> Plan:
@@ -765,3 +819,48 @@ def normalize_cst_defs_spans(
     if primary == "def":
         return append_alias_cols(py_cst_defs, {"bstart": "def_bstart", "bend": "def_bend"})
     return append_alias_cols(py_cst_defs, {"bstart": "name_bstart", "bend": "name_bend"})
+
+
+def normalize_cst_defs_spans_plan(
+    py_cst_defs: PlanSource,
+    *,
+    ctx: ExecutionContext,
+    primary: Literal["name", "def"] = "name",
+) -> Plan:
+    """Plan-lane span canonicalization for definitions.
+
+    Returns
+    -------
+    Plan
+        Plan with canonical bstart/bend columns.
+    """
+    plan = plan_source(py_cst_defs, ctx=ctx)
+    if primary == "def":
+        return _rename_span_columns(
+            plan,
+            {"def_bstart": "bstart", "def_bend": "bend"},
+            ctx=ctx,
+        )
+    return _rename_span_columns(
+        plan,
+        {"name_bstart": "bstart", "name_bend": "bend"},
+        ctx=ctx,
+    )
+
+
+def _rename_span_columns(
+    plan: Plan,
+    mapping: Mapping[str, str],
+    *,
+    ctx: ExecutionContext,
+) -> Plan:
+    available = set(plan.schema(ctx=ctx).names)
+    rename: dict[str, str] = {}
+    for source, target in mapping.items():
+        if target in available:
+            continue
+        if source in available:
+            rename[source] = target
+    if not rename:
+        return plan
+    return plan.rename_columns(rename, ctx=ctx)

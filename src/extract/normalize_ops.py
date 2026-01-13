@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from normalize.registry_specs import dataset_alias, dataset_names
+from normalize.spec_tables import normalize_rule_spec_rows
+
 
 @dataclass(frozen=True)
 class NormalizeOp:
@@ -14,7 +17,41 @@ class NormalizeOp:
     outputs: tuple[str, ...]
 
 
-_NORMALIZE_OPS: tuple[NormalizeOp, ...] = (
+_NORMALIZE_DATASETS: frozenset[str] = frozenset(dataset_names())
+_ORDERED_OP_NAMES: tuple[str, ...] = (
+    "cst_imports_norm",
+    "cst_defs_norm",
+    "scip_occurrences_norm",
+    "diagnostics_norm",
+    "type_exprs_norm",
+    "types_norm",
+    "dim_qualified_names",
+    "callsite_qname_candidates",
+    "ast_nodes_norm",
+    "py_bc_instructions_norm",
+    "py_bc_blocks_norm",
+    "py_bc_cfg_edges_norm",
+    "py_bc_def_use_events",
+    "py_bc_reaching_defs",
+)
+
+
+def _maybe_alias(name: str) -> str:
+    if name in _NORMALIZE_DATASETS:
+        return dataset_alias(name)
+    return name
+
+
+def _normalize_rule_ops() -> tuple[NormalizeOp, ...]:
+    ops: list[NormalizeOp] = []
+    for row in normalize_rule_spec_rows():
+        output = dataset_alias(row.output)
+        inputs = tuple(_maybe_alias(name) for name in row.inputs)
+        ops.append(NormalizeOp(name=output, inputs=inputs, outputs=(output,)))
+    return tuple(ops)
+
+
+_EXTRA_OPS: tuple[NormalizeOp, ...] = (
     NormalizeOp(
         name="cst_imports_norm",
         inputs=("cst_imports",),
@@ -29,28 +66,6 @@ _NORMALIZE_OPS: tuple[NormalizeOp, ...] = (
         name="scip_occurrences_norm",
         inputs=("scip_documents", "scip_occurrences", "repo_text_index"),
         outputs=("scip_occurrences_norm", "scip_occurrences", "scip_span_errors"),
-    ),
-    NormalizeOp(
-        name="diagnostics_norm",
-        inputs=(
-            "cst_parse_errors",
-            "ts_errors",
-            "ts_missing",
-            "scip_diagnostics",
-            "scip_documents",
-            "repo_text_index",
-        ),
-        outputs=("diagnostics_norm",),
-    ),
-    NormalizeOp(
-        name="type_exprs_norm",
-        inputs=("cst_type_exprs",),
-        outputs=("type_exprs_norm",),
-    ),
-    NormalizeOp(
-        name="types_norm",
-        inputs=("type_exprs_norm", "scip_symbol_information"),
-        outputs=("types_norm",),
     ),
     NormalizeOp(
         name="dim_qualified_names",
@@ -72,27 +87,19 @@ _NORMALIZE_OPS: tuple[NormalizeOp, ...] = (
         inputs=("py_bc_instructions", "repo_text_index"),
         outputs=("py_bc_instructions_norm",),
     ),
-    NormalizeOp(
-        name="py_bc_blocks_norm",
-        inputs=("py_bc_blocks", "py_bc_code_units"),
-        outputs=("py_bc_blocks_norm",),
-    ),
-    NormalizeOp(
-        name="py_bc_cfg_edges_norm",
-        inputs=("py_bc_cfg_edges", "py_bc_code_units"),
-        outputs=("py_bc_cfg_edges_norm",),
-    ),
-    NormalizeOp(
-        name="py_bc_def_use_events",
-        inputs=("py_bc_instructions",),
-        outputs=("py_bc_def_use_events",),
-    ),
-    NormalizeOp(
-        name="py_bc_reaching_defs",
-        inputs=("py_bc_def_use_events",),
-        outputs=("py_bc_reaching_defs",),
-    ),
 )
+
+_RULE_OPS_BY_NAME: dict[str, NormalizeOp] = {op.name: op for op in _normalize_rule_ops()}
+_EXTRA_OPS_BY_NAME: dict[str, NormalizeOp] = {op.name: op for op in _EXTRA_OPS}
+
+_NORMALIZE_OPS: tuple[NormalizeOp, ...] = tuple(
+    op
+    for name in _ORDERED_OP_NAMES
+    for op in (
+        _RULE_OPS_BY_NAME.get(name) or _EXTRA_OPS_BY_NAME.get(name),
+    )
+    if op is not None
+) + tuple(op for name, op in _RULE_OPS_BY_NAME.items() if name not in _ORDERED_OP_NAMES)
 
 _OPS_BY_NAME: dict[str, NormalizeOp] = {op.name: op for op in _NORMALIZE_OPS}
 _OPS_BY_OUTPUT: dict[str, tuple[NormalizeOp, ...]] = {}

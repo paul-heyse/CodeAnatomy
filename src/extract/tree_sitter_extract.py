@@ -13,7 +13,6 @@ from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
-from arrowdsl.plan.scan_io import plan_from_rows
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from extract.helpers import (
     FileContext,
@@ -21,14 +20,14 @@ from extract.helpers import (
     file_identity_row,
     iter_contexts,
 )
+from extract.plan_helpers import plan_from_rows_for_dataset
 from extract.registry_specs import (
     dataset_enabled,
-    dataset_query,
     dataset_row_schema,
     dataset_schema,
     normalize_options,
 )
-from extract.schema_ops import metadata_spec_for_dataset, normalize_extract_plan
+from extract.schema_ops import ExtractNormalizeOptions, metadata_spec_for_dataset
 
 type Row = dict[str, object]
 
@@ -59,10 +58,6 @@ class TreeSitterRowBuffers:
     error_rows: list[Row]
     missing_rows: list[Row]
 
-
-TS_NODES_QUERY = dataset_query("ts_nodes_v1")
-TS_ERRORS_QUERY = dataset_query("ts_errors_v1")
-TS_MISSING_QUERY = dataset_query("ts_missing_v1")
 
 TS_NODES_SCHEMA = dataset_schema("ts_nodes_v1")
 TS_ERRORS_SCHEMA = dataset_schema("ts_errors_v1")
@@ -241,31 +236,28 @@ def extract_ts_plans(
             buffers=buffers,
         )
 
-    nodes_plan = plan_from_rows(node_rows, schema=TS_NODES_ROW_SCHEMA, label="ts_nodes")
-    nodes_plan = TS_NODES_QUERY.apply_to_plan(nodes_plan, ctx=exec_ctx)
-    nodes_plan = normalize_extract_plan(
+    nodes_plan = plan_from_rows_for_dataset(
         "ts_nodes_v1",
-        nodes_plan,
+        node_rows,
+        row_schema=TS_NODES_ROW_SCHEMA,
         ctx=exec_ctx,
-        options=normalized_options,
+        normalize=ExtractNormalizeOptions(options=normalized_options),
     )
 
-    errors_plan = plan_from_rows(error_rows, schema=TS_ERRORS_ROW_SCHEMA, label="ts_errors")
-    errors_plan = TS_ERRORS_QUERY.apply_to_plan(errors_plan, ctx=exec_ctx)
-    errors_plan = normalize_extract_plan(
+    errors_plan = plan_from_rows_for_dataset(
         "ts_errors_v1",
-        errors_plan,
+        error_rows,
+        row_schema=TS_ERRORS_ROW_SCHEMA,
         ctx=exec_ctx,
-        options=normalized_options,
+        normalize=ExtractNormalizeOptions(options=normalized_options),
     )
 
-    missing_plan = plan_from_rows(missing_rows, schema=TS_MISSING_ROW_SCHEMA, label="ts_missing")
-    missing_plan = TS_MISSING_QUERY.apply_to_plan(missing_plan, ctx=exec_ctx)
-    missing_plan = normalize_extract_plan(
+    missing_plan = plan_from_rows_for_dataset(
         "ts_missing_v1",
-        missing_plan,
+        missing_rows,
+        row_schema=TS_MISSING_ROW_SCHEMA,
         ctx=exec_ctx,
-        options=normalized_options,
+        normalize=ExtractNormalizeOptions(options=normalized_options),
     )
     return {
         "ts_nodes": nodes_plan,

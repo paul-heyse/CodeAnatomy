@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 from arrowdsl.compute.expr_core import (
@@ -14,6 +15,7 @@ from arrowdsl.compute.expr_core import (
 )
 from arrowdsl.schema.build import FieldExpr
 from arrowdsl.schema.validation import ArrowValidationOptions
+from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
 from normalize.registry_ids import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
@@ -28,6 +30,10 @@ SCHEMA_VERSION = 1
 _DEF_USE_PREFIXES = ("STORE_", "DELETE_")
 _USE_PREFIXES = ("LOAD_",)
 _DEF_USE_OPS = ("IMPORT_NAME", "IMPORT_FROM")
+
+
+def _json_bytes(payload: object) -> bytes:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 @dataclass(frozen=True)
@@ -162,6 +168,12 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             ),
         ),
         template="normalize_bytecode",
+        metadata_extra={
+            EVIDENCE_OUTPUT_MAP_META: _json_bytes(
+                {"bstart": "start_offset", "bend": "end_offset", "role": "kind"}
+            ),
+            EVIDENCE_OUTPUT_LITERALS_META: _json_bytes({"source": "py_bc_blocks"}),
+        },
     ),
     DatasetRow(
         name="py_bc_cfg_edges_norm_v1",
@@ -184,6 +196,10 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             ),
         ),
         template="normalize_bytecode",
+        metadata_extra={
+            EVIDENCE_OUTPUT_MAP_META: _json_bytes({"role": "kind"}),
+            EVIDENCE_OUTPUT_LITERALS_META: _json_bytes({"source": "py_bc_cfg_edges"}),
+        },
     ),
     DatasetRow(
         name="py_bc_def_use_events_v1",
@@ -220,6 +236,12 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             ),
         ),
         template="normalize_bytecode",
+        metadata_extra={
+            EVIDENCE_OUTPUT_MAP_META: _json_bytes(
+                {"bstart": "offset", "bend": "offset", "role": "kind"}
+            ),
+            EVIDENCE_OUTPUT_LITERALS_META: _json_bytes({"source": "py_bc_instructions"}),
+        },
     ),
     DatasetRow(
         name="py_bc_reaches_v1",
@@ -237,6 +259,9 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             ),
         ),
         template="normalize_bytecode",
+        metadata_extra={
+            EVIDENCE_OUTPUT_LITERALS_META: _json_bytes({"source": "py_bc_reaches"}),
+        },
     ),
     DatasetRow(
         name="span_errors_v1",

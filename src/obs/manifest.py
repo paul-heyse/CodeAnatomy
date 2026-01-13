@@ -12,9 +12,13 @@ from arrowdsl.json_factory import JsonPolicy, dump_path
 from arrowdsl.plan.metrics import table_summary
 from arrowdsl.schema.schema import schema_fingerprint
 from core_types import JsonDict, PathLike, ensure_path
+from extract.evidence_specs import EvidenceSpec, evidence_spec, evidence_specs
+from extract.registry_extractors import extractor_spec
+from extract.registry_specs import dataset_schema
 from obs.repro import collect_repro_info
 
 if TYPE_CHECKING:
+    from extract.evidence_plan import EvidencePlan
     from normalize.rule_model import NormalizeRule
     from relspec.model import RelationshipRule
     from relspec.registry import DatasetLocation
@@ -70,6 +74,22 @@ class OutputLineageRecord:
 
 
 @dataclass(frozen=True)
+class ExtractRecord:
+    """Record extract output lineage and metadata."""
+
+    name: str
+    alias: str
+    template: str | None
+    evidence_family: str | None
+    coordinate_system: str | None
+    evidence_rank: int | None
+    ambiguity_policy: str | None
+    required_columns: list[str] = field(default_factory=list)
+    sources: list[str] = field(default_factory=list)
+    schema_fingerprint: str | None = None
+
+
+@dataclass(frozen=True)
 class Manifest:
     """Top-level manifest record."""
 
@@ -85,6 +105,7 @@ class Manifest:
     rules: list[RuleRecord] = field(default_factory=list)
     outputs: list[OutputRecord] = field(default_factory=list)
     lineage: list[OutputLineageRecord] = field(default_factory=list)
+    extracts: list[ExtractRecord] = field(default_factory=list)
 
     repro: JsonDict = field(default_factory=dict)
     notes: JsonDict = field(default_factory=dict)
@@ -120,6 +141,7 @@ class ManifestData:
     cpg_nodes: TableLike | None = None
     cpg_edges: TableLike | None = None
     cpg_props: TableLike | None = None
+    extract_evidence_plan: EvidencePlan | None = None
     relationship_rules: Sequence[RelationshipRule] | None = None
     normalize_rules: Sequence[NormalizeRule] | None = None
     produced_relationship_output_names: Sequence[str] | None = None
@@ -283,6 +305,57 @@ def _collect_lineage_records(data: ManifestData) -> list[OutputLineageRecord]:
     return records
 
 
+def _extract_record_from_spec(
+    spec: EvidenceSpec,
+    *,
+    required_columns: Sequence[str] | None = None,
+) -> ExtractRecord:
+    sources: list[str] = []
+    if spec.template is not None:
+        try:
+            sources = list(extractor_spec(spec.template).required_inputs)
+        except KeyError:
+            sources = []
+    schema = dataset_schema(spec.name)
+    return ExtractRecord(
+        name=spec.name,
+        alias=spec.alias,
+        template=spec.template,
+        evidence_family=spec.evidence_family,
+        coordinate_system=spec.coordinate_system,
+        evidence_rank=spec.evidence_rank,
+        ambiguity_policy=spec.ambiguity_policy,
+        required_columns=list(required_columns or spec.required_columns),
+        sources=sources,
+        schema_fingerprint=schema_fingerprint(schema),
+    )
+
+
+def _collect_extract_records(data: ManifestData) -> list[ExtractRecord]:
+    plan = data.extract_evidence_plan
+    records: list[ExtractRecord] = []
+    seen: set[str] = set()
+    if plan is None:
+        records.extend([_extract_record_from_spec(spec) for spec in evidence_specs()])
+        return records
+
+    for req in plan.requirements:
+        try:
+            spec = evidence_spec(req.name)
+        except KeyError:
+            continue
+        if spec.name in seen:
+            continue
+        seen.add(spec.name)
+        records.append(
+            _extract_record_from_spec(
+                spec,
+                required_columns=req.required_columns or spec.required_columns,
+            )
+        )
+    return records
+
+
 def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
     """Construct a run manifest with the required fields.
 
@@ -311,6 +384,7 @@ def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
 
     rules = _collect_rule_records(data)
     lineage = _collect_lineage_records(data)
+    extracts = _collect_extract_records(data)
 
     if data.produced_relationship_output_names:
         outputs.append(
@@ -334,6 +408,7 @@ def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
         rules=sorted(rules, key=lambda rr: (rr.output_dataset, rr.priority, rr.name)),
         outputs=outputs,
         lineage=lineage,
+        extracts=extracts,
         repro=repro,
         notes=notes,
     )

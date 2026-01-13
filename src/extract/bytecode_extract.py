@@ -22,15 +22,15 @@ from extract.helpers import (
     project_columns,
     text_from_file_ctx,
 )
+from extract.plan_helpers import apply_query_and_normalize
 from extract.registry_ids import hash_spec
 from extract.registry_specs import (
     dataset_enabled,
-    dataset_query,
     dataset_row_schema,
     dataset_schema,
     normalize_options,
 )
-from extract.schema_ops import metadata_spec_for_dataset, normalize_extract_plan
+from extract.schema_ops import metadata_spec_for_dataset
 
 type RowValue = str | int | bool | None
 type Row = dict[str, RowValue]
@@ -210,13 +210,6 @@ class BytecodeRowBuffers:
     error_rows: list[Row]
 
 
-CODE_UNITS_QUERY = dataset_query("py_bc_code_units_v1")
-INSTR_QUERY = dataset_query("py_bc_instructions_v1")
-EXC_QUERY = dataset_query("py_bc_exception_table_v1")
-BLOCKS_QUERY = dataset_query("py_bc_blocks_v1")
-CFG_EDGES_QUERY = dataset_query("py_bc_cfg_edges_v1")
-ERRORS_QUERY = dataset_query("py_bc_errors_v1")
-
 CODE_UNITS_SCHEMA = dataset_schema("py_bc_code_units_v1")
 INSTR_SCHEMA = dataset_schema("py_bc_instructions_v1")
 EXC_SCHEMA = dataset_schema("py_bc_exception_table_v1")
@@ -325,8 +318,7 @@ def _build_code_units_plan(
         ],
         ctx=exec_ctx,
     )
-    plan = CODE_UNITS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "py_bc_code_units_v1",
         plan,
         ctx=exec_ctx,
@@ -367,8 +359,7 @@ def _build_instructions_plan(
         ],
         ctx=exec_ctx,
     )
-    plan = INSTR_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "py_bc_instructions_v1",
         plan,
         ctx=exec_ctx,
@@ -409,8 +400,7 @@ def _build_exceptions_plan(
         ],
         ctx=exec_ctx,
     )
-    plan = EXC_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "py_bc_exception_table_v1",
         plan,
         ctx=exec_ctx,
@@ -451,8 +441,7 @@ def _build_blocks_plan(
         ],
         ctx=exec_ctx,
     )
-    plan = BLOCKS_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "py_bc_blocks_v1",
         plan,
         ctx=exec_ctx,
@@ -507,8 +496,7 @@ def _build_cfg_edges_plan(
         ],
         ctx=exec_ctx,
     )
-    plan = CFG_EDGES_QUERY.apply_to_plan(plan, ctx=exec_ctx)
-    return normalize_extract_plan(
+    return apply_query_and_normalize(
         "py_bc_cfg_edges_v1",
         plan,
         ctx=exec_ctx,
@@ -1004,8 +992,7 @@ def _build_bytecode_plans(
     blocks = _build_blocks_plan(buffers.block_rows, exec_ctx=exec_ctx)
     edges = _build_cfg_edges_plan(buffers.edge_rows, exec_ctx=exec_ctx)
     errors_plan = plan_from_rows(buffers.error_rows, schema=ERRORS_ROW_SCHEMA, label="bc_errors")
-    errors_plan = ERRORS_QUERY.apply_to_plan(errors_plan, ctx=exec_ctx)
-    errors_plan = normalize_extract_plan(
+    errors_plan = apply_query_and_normalize(
         "py_bc_errors_v1",
         errors_plan,
         ctx=exec_ctx,

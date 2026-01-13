@@ -24,28 +24,16 @@ from extract.helpers import (
     iter_file_contexts,
     template_outputs,
 )
+from extract.registry_bundles import output_bundle_outputs
 from extract.registry_specs import dataset_schema
 from extract.repo_scan import RepoScanOptions, scan_repo
-from extract.runtime_inspect_extract import (
-    RT_MEMBERS_SCHEMA,
-    RT_OBJECTS_SCHEMA,
-    RT_SIGNATURE_PARAMS_SCHEMA,
-    RT_SIGNATURES_SCHEMA,
-    RuntimeInspectOptions,
-    extract_runtime_tables,
-)
+from extract.runtime_inspect_extract import RuntimeInspectOptions, extract_runtime_tables
 from extract.scip_extract import SCIPParseOptions, extract_scip_tables, run_scip_python_index
 from extract.scip_identity import resolve_scip_identity
 from extract.scip_indexer import build_scip_index_options, ensure_scip_build_dir
 from extract.spec_helpers import extractor_option_values
 from extract.symtable_extract import SymtableExtractOptions, extract_symtables_table
-from extract.tree_sitter_extract import (
-    TS_ERRORS_SCHEMA,
-    TS_MISSING_SCHEMA,
-    TS_NODES_SCHEMA,
-    TreeSitterExtractOptions,
-    extract_ts_tables,
-)
+from extract.tree_sitter_extract import TreeSitterExtractOptions, extract_ts_tables
 from hamilton_pipeline.pipeline_types import (
     RepoScanConfig,
     RuntimeInspectConfig,
@@ -54,6 +42,13 @@ from hamilton_pipeline.pipeline_types import (
     ScipIndexInputs,
 )
 from relspec.registry import RelationshipRegistry
+
+AST_BUNDLE_OUTPUTS = output_bundle_outputs("ast_bundle")
+CST_BUNDLE_OUTPUTS = output_bundle_outputs("cst_bundle")
+SCIP_BUNDLE_OUTPUTS = output_bundle_outputs("scip_bundle")
+BYTECODE_BUNDLE_OUTPUTS = output_bundle_outputs("bytecode_bundle")
+TREE_SITTER_BUNDLE_OUTPUTS = output_bundle_outputs("tree_sitter_bundle")
+RUNTIME_INSPECT_BUNDLE_OUTPUTS = output_bundle_outputs("runtime_inspect_bundle")
 
 
 @cache(format="parquet")
@@ -152,17 +147,7 @@ def evidence_plan(relationship_registry: RelationshipRegistry) -> EvidencePlan:
 
 
 @cache()
-@extract_fields(
-    {
-        "cst_parse_manifest": TableLike,
-        "cst_parse_errors": TableLike,
-        "cst_name_refs": TableLike,
-        "cst_imports": TableLike,
-        "cst_callsites": TableLike,
-        "cst_defs": TableLike,
-        "cst_type_exprs": TableLike,
-    }
-)
+@extract_fields(dict.fromkeys(CST_BUNDLE_OUTPUTS, TableLike))
 @tag(layer="extract", artifact="cst_bundle", kind="bundle")
 def cst_bundle(
     repo_root: str,
@@ -189,17 +174,7 @@ def cst_bundle(
     """
     outputs = template_outputs(evidence_plan, "cst")
     if not outputs:
-        return _empty_bundle(
-            (
-                "cst_parse_manifest",
-                "cst_parse_errors",
-                "cst_name_refs",
-                "cst_imports",
-                "cst_callsites",
-                "cst_defs",
-                "cst_type_exprs",
-            )
-        )
+        return _empty_bundle(CST_BUNDLE_OUTPUTS)
     options = _options_for_template(
         "cst",
         plan=evidence_plan,
@@ -215,13 +190,7 @@ def cst_bundle(
 
 
 @cache()
-@extract_fields(
-    {
-        "ast_nodes": TableLike,
-        "ast_edges": TableLike,
-        "ast_defs": TableLike,
-    }
-)
+@extract_fields(dict.fromkeys(AST_BUNDLE_OUTPUTS, TableLike))
 @tag(layer="extract", artifact="ast_bundle", kind="bundle")
 def ast_bundle(
     repo_root: str,
@@ -239,7 +208,7 @@ def ast_bundle(
     """
     _ = repo_root
     if not template_outputs(evidence_plan, "ast"):
-        empty = _empty_bundle(("ast_nodes", "ast_edges"))
+        empty = _empty_bundle(tuple(name for name in AST_BUNDLE_OUTPUTS if name != "ast_defs"))
         empty["ast_defs"] = empty_table(dataset_schema("py_ast_nodes_v1"))
         return empty
     return extract_ast_tables(
@@ -250,17 +219,7 @@ def ast_bundle(
 
 
 @cache()
-@extract_fields(
-    {
-        "scip_metadata": TableLike,
-        "scip_documents": TableLike,
-        "scip_occurrences": TableLike,
-        "scip_symbol_information": TableLike,
-        "scip_symbol_relationships": TableLike,
-        "scip_external_symbol_information": TableLike,
-        "scip_diagnostics": TableLike,
-    }
-)
+@extract_fields(dict.fromkeys(SCIP_BUNDLE_OUTPUTS, TableLike))
 @tag(layer="extract", artifact="scip_bundle", kind="bundle")
 def scip_bundle(
     scip_index_path: str | None,
@@ -279,17 +238,7 @@ def scip_bundle(
         Bundle tables for SCIP extraction.
     """
     if not template_outputs(evidence_plan, "scip"):
-        return _empty_bundle(
-            (
-                "scip_metadata",
-                "scip_documents",
-                "scip_occurrences",
-                "scip_symbol_information",
-                "scip_symbol_relationships",
-                "scip_external_symbol_information",
-                "scip_diagnostics",
-            )
-        )
+        return _empty_bundle(SCIP_BUNDLE_OUTPUTS)
     return extract_scip_tables(
         scip_index_path=scip_index_path,
         repo_root=repo_root,
@@ -430,16 +379,7 @@ def bytecode(
 
 
 @cache()
-@extract_fields(
-    {
-        "py_bc_code_units": TableLike,
-        "py_bc_instructions": TableLike,
-        "py_bc_exception_table": TableLike,
-        "py_bc_blocks": TableLike,
-        "py_bc_cfg_edges": TableLike,
-        "py_bc_errors": TableLike,
-    }
-)
+@extract_fields(dict.fromkeys(BYTECODE_BUNDLE_OUTPUTS, TableLike))
 @tag(layer="extract", artifact="bytecode_bundle", kind="bundle")
 def bytecode_bundle(
     repo_root: str,
@@ -457,16 +397,7 @@ def bytecode_bundle(
     """
     _ = repo_root
     if not template_outputs(evidence_plan, "bytecode"):
-        return _empty_bundle(
-            (
-                "py_bc_code_units",
-                "py_bc_instructions",
-                "py_bc_exception_table",
-                "py_bc_blocks",
-                "py_bc_cfg_edges",
-                "py_bc_errors",
-            )
-        )
+        return _empty_bundle(BYTECODE_BUNDLE_OUTPUTS)
     options = _options_for_template(
         "bytecode",
         plan=evidence_plan,
@@ -489,13 +420,7 @@ def bytecode_bundle(
 
 
 @cache()
-@extract_fields(
-    {
-        "ts_nodes": TableLike,
-        "ts_errors": TableLike,
-        "ts_missing": TableLike,
-    }
-)
+@extract_fields(dict.fromkeys(TREE_SITTER_BUNDLE_OUTPUTS, TableLike))
 @tag(layer="extract", artifact="tree_sitter_bundle", kind="bundle")
 def tree_sitter_bundle(
     *,
@@ -513,11 +438,7 @@ def tree_sitter_bundle(
         Tree-sitter tables for nodes and diagnostics.
     """
     if not enable_tree_sitter or not template_outputs(evidence_plan, "tree_sitter"):
-        return {
-            "ts_nodes": empty_table(TS_NODES_SCHEMA),
-            "ts_errors": empty_table(TS_ERRORS_SCHEMA),
-            "ts_missing": empty_table(TS_MISSING_SCHEMA),
-        }
+        return _empty_bundle(TREE_SITTER_BUNDLE_OUTPUTS)
     return extract_ts_tables(
         repo_files=repo_files,
         file_contexts=file_contexts,
@@ -531,14 +452,7 @@ def tree_sitter_bundle(
 
 
 @cache()
-@extract_fields(
-    {
-        "rt_objects": TableLike,
-        "rt_signatures": TableLike,
-        "rt_signature_params": TableLike,
-        "rt_members": TableLike,
-    }
-)
+@extract_fields(dict.fromkeys(RUNTIME_INSPECT_BUNDLE_OUTPUTS, TableLike))
 @tag(layer="extract", artifact="runtime_inspect_bundle", kind="bundle")
 def runtime_inspect_bundle(
     *,
@@ -557,12 +471,7 @@ def runtime_inspect_bundle(
     _ = ctx
     enable_runtime_inspect = runtime_inspect_config.enable_runtime_inspect
     if not enable_runtime_inspect or not template_outputs(evidence_plan, "runtime_inspect"):
-        return {
-            "rt_objects": empty_table(RT_OBJECTS_SCHEMA),
-            "rt_signatures": empty_table(RT_SIGNATURES_SCHEMA),
-            "rt_signature_params": empty_table(RT_SIGNATURE_PARAMS_SCHEMA),
-            "rt_members": empty_table(RT_MEMBERS_SCHEMA),
-        }
+        return _empty_bundle(RUNTIME_INSPECT_BUNDLE_OUTPUTS)
     options = _options_for_template(
         "runtime_inspect",
         plan=evidence_plan,

@@ -18,11 +18,19 @@ from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.build import ConstExpr, FieldExpr
 from arrowdsl.schema.ops import align_plan, align_table
 from arrowdsl.spec.tables.cpg import EDGE_EMIT_STRUCT
-from arrowdsl.spec.tables.relspec import relationship_rule_table, relationship_rules_from_table
+from arrowdsl.spec.tables.relspec import (
+    evidence_row,
+    hash_join_row,
+    interval_align_row,
+    kernel_spec_row,
+    project_row,
+    relationship_rule_definition_table,
+    relationship_rules_from_table,
+    winner_select_row,
+)
 from cpg.catalog import PlanCatalog, resolve_plan_source
 from cpg.kinds_ultimate import EdgeKind
 from cpg.plan_specs import ensure_plan
-from cpg.relation_factories import build_rules_from_definitions
 from cpg.relation_registry_specs import rule_definition_specs
 from cpg.relation_template_specs import RuleDefinitionSpec
 from cpg.specs import EdgeEmitSpec, EdgePlanSpec
@@ -55,9 +63,41 @@ def relation_rule_table_cached() -> pa.Table:
     return _relation_rule_edge_table(definitions)
 
 
+def _rule_definition_row(spec: RuleDefinitionSpec) -> dict[str, object]:
+    project = project_row(spec.project)
+    predicate_expr = spec.predicate.to_json() if spec.predicate is not None else None
+    post_kernels = [kernel_spec_row(kernel) for kernel in spec.post_kernels] or None
+    return {
+        "name": spec.name,
+        "kind": spec.kind.value,
+        "output_dataset": spec.output_dataset,
+        "contract_name": spec.contract_name,
+        "inputs": list(spec.inputs) or None,
+        "hash_join": hash_join_row(spec.hash_join),
+        "interval_align": interval_align_row(spec.interval_align),
+        "winner_select": winner_select_row(spec.winner_select),
+        "predicate_expr": predicate_expr,
+        "project": project,
+        "post_kernels": post_kernels,
+        "evidence": evidence_row(spec.evidence),
+        "confidence_policy": spec.confidence_policy,
+        "ambiguity_policy": spec.ambiguity_policy,
+        "priority": int(spec.priority),
+        "emit_rule_meta": spec.emit_rule_meta,
+        "rule_name_col": spec.rule_name_col,
+        "rule_priority_col": spec.rule_priority_col,
+        "execution_mode": spec.execution_mode,
+    }
+
+
+def _relation_rule_definition_table(definitions: Sequence[RuleDefinitionSpec]) -> pa.Table:
+    rows = [_rule_definition_row(spec) for spec in definitions]
+    return relationship_rule_definition_table(rows)
+
+
 def _relation_rule_edge_table(definitions: Sequence[RuleDefinitionSpec]) -> pa.Table:
-    rules = build_rules_from_definitions(definitions)
-    table = relationship_rule_table(rules)
+    table = _relation_rule_definition_table(definitions)
+    metadata = table.schema.metadata
     edge_rows: list[dict[str, object] | None] = []
     edge_flags: list[str | None] = []
     for spec in definitions:
@@ -79,9 +119,11 @@ def _relation_rule_edge_table(definitions: Sequence[RuleDefinitionSpec]) -> pa.T
             }
         )
         edge_flags.append(edge.option_flag)
-    return table.append_column(
-        "edge_option_flag", pa.array(edge_flags, type=pa.string())
-    ).append_column("edge_emit", pa.array(edge_rows, type=EDGE_EMIT_STRUCT))
+    table = table.append_column("edge_option_flag", pa.array(edge_flags, type=pa.string()))
+    table = table.append_column("edge_emit", pa.array(edge_rows, type=EDGE_EMIT_STRUCT))
+    if metadata:
+        table = table.replace_schema_metadata(metadata)
+    return table
 
 
 def relation_rules() -> tuple[RelationshipRule, ...]:

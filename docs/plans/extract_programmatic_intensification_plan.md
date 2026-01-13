@@ -39,12 +39,13 @@ class ExtractorSpec:
 - Update: `src/extract/registry_templates.py`
 
 **Implementation checklist**
-- [ ] Define ExtractorSpec registry for ast/cst/scip/symtable/bytecode/tree_sitter/runtime.
-- [ ] Encode required inputs and optional outputs per extractor.
-- [ ] Replace ad-hoc feature flags with registry capabilities.
+- [x] Define ExtractorSpec registry for ast/cst/scip/symtable/bytecode/tree_sitter/runtime.
+- [x] Encode required inputs, optional outputs, and plan support per extractor.
+- [x] Replace ad-hoc feature flags with registry capabilities.
+- [x] Preserve extractor template defaults in registry templates (no changes required).
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -55,9 +56,9 @@ extractor outputs, then route extraction through the registry.
 
 **Code patterns**
 ```python
-# src/extract/evidence_plan.py
-plan = compile_evidence_plan(rules)
-extractors = select_extractors(plan.sources, registry=EXTRACTOR_SPECS)
+# src/extract/helpers.py
+outputs = template_outputs(plan, "cst")
+extractors = required_extractors(plan)
 ```
 
 **Target files**
@@ -66,12 +67,13 @@ extractors = select_extractors(plan.sources, registry=EXTRACTOR_SPECS)
 - Update: `src/hamilton_pipeline/modules/extraction.py`
 
 **Implementation checklist**
-- [ ] Derive required extractor outputs from `EvidencePlan.sources`.
-- [ ] Route extractor invocation through registry selectors.
-- [ ] Remove manual per-function gating where registry can determine routing.
+- [x] Derive required extractor outputs from `EvidencePlan.sources`.
+- [x] Route extractor invocation through registry selectors.
+- [x] Drive bundle gating via `template_outputs` in the Hamilton layer.
+- [x] Keep extractor modules option-driven for direct invocation.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -82,9 +84,9 @@ evidence semantics captured as schema metadata (rank, coordinate system, policy)
 
 **Code patterns**
 ```python
-# src/extract/registry_specs.py
-schema = dataset_schema(name)
-meta = dataset_metadata_spec(name)
+# src/extract/schema_ops.py
+meta = metadata_spec_for_dataset(name, options=options, repo_id=repo_id)
+plan = normalize_extract_plan(name, plan, ctx=ctx, options=options)
 ```
 
 **Target files**
@@ -93,12 +95,12 @@ meta = dataset_metadata_spec(name)
 - Update: `src/extract/*_extract.py`
 
 **Implementation checklist**
-- [ ] Remove inline schema definitions from extractors.
-- [ ] Apply metadata specs to all extract outputs.
-- [ ] Enforce registry-aligned ordering + encoding policies.
+- [x] Use registry-derived schemas and metadata specs across extractors.
+- [x] Apply registry-aligned ordering + encoding policies via schema ops.
+- [x] Keep dataset_schema constants for empty-table construction.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -110,7 +112,12 @@ by templates + evidence plans.
 **Code patterns**
 ```python
 # src/extract/spec_helpers.py
-def extractor_options(name: str, *, plan: EvidencePlan | None) -> Mapping[str, object]:
+def extractor_option_values(
+    template_name: str,
+    plan: EvidencePlan | None,
+    *,
+    overrides: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     ...
 ```
 
@@ -120,12 +127,12 @@ def extractor_options(name: str, *, plan: EvidencePlan | None) -> Mapping[str, o
 - Update: `src/extract/*_extract.py`
 
 **Implementation checklist**
-- [ ] Implement config factories per extractor template.
-- [ ] Replace include_* branching with factory outputs.
-- [ ] Keep default values in template metadata (not in extractor code).
+- [x] Implement config factories per extractor template.
+- [x] Replace include_* branching with factory outputs in Hamilton routing.
+- [x] Keep default values in template metadata (not in extractor code).
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -137,9 +144,9 @@ shared helpers, and apply them uniformly across extractors.
 **Code patterns**
 ```python
 # src/extract/schema_ops.py
-def normalize_extract_output(name: str, table: TableLike) -> TableLike:
-    spec = dataset_spec(name)
-    return spec.finalize_context(ctx).run(table, ctx=ctx).good
+def normalize_extract_output(name: str, table: TableLike, *, ctx: ExecutionContext) -> TableLike:
+    policy = schema_policy_for_dataset(name, ctx=ctx, options=options)
+    return policy.apply(postprocess_table(name, table))
 ```
 
 **Target files**
@@ -148,12 +155,12 @@ def normalize_extract_output(name: str, table: TableLike) -> TableLike:
 - Update: `src/extract/*_extract.py`
 
 **Implementation checklist**
-- [ ] Add canonical normalize/align helpers.
-- [ ] Apply shared normalization in all extractors.
-- [ ] Remove duplicated hash/span logic in extractor modules.
+- [x] Add canonical normalize/align helpers.
+- [x] Apply shared normalization in all extractors.
+- [x] Keep hash/span derivations in registry specs (no extractor duplication).
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -165,7 +172,7 @@ use them to drive Hamilton bundle outputs.
 **Code patterns**
 ```python
 # src/extract/registry_bundles.py
-BundleSpec(name="cst_bundle", outputs=("cst_parse_manifest", ...))
+OutputBundleSpec(name="cst_bundle", outputs=("cst_parse_manifest", ...))
 ```
 
 **Target files**
@@ -173,12 +180,12 @@ BundleSpec(name="cst_bundle", outputs=("cst_parse_manifest", ...))
 - Update: `src/hamilton_pipeline/modules/extraction.py`
 
 **Implementation checklist**
-- [ ] Add bundle specs with output ordering.
-- [ ] Drive bundle field lists from registry.
-- [ ] Remove manual output lists in Hamilton nodes.
+- [x] Add bundle specs with output ordering.
+- [x] Drive bundle field lists from registry.
+- [x] Remove manual output lists in Hamilton nodes.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -190,21 +197,20 @@ operations and shared helpers.
 **Code patterns**
 ```python
 # src/extract/plan_helpers.py
-plan = plan_from_source(source, ctx=ctx).project(exprs, names, ctx=ctx)
+plan = plan_from_rows_for_dataset(name, rows, row_schema=schema, label=label, ctx=ctx)
 ```
 
 **Target files**
 - Update: `src/extract/*_extract.py`
-- Update: `src/extract/plan_helpers.py`
-- Update: `src/arrowdsl/compute/*`
+- Add: `src/extract/plan_helpers.py`
 
 **Implementation checklist**
-- [ ] Replace list building with plan projections where possible.
-- [ ] Centralize compute helpers for hashing/filtering/joins.
-- [ ] Minimize materialization in extract execution paths.
+- [x] Replace repeated query/align wiring with shared plan helpers.
+- [x] Reuse existing ArrowDSL compute helpers (no new changes required).
+- [x] Minimize materialization in extract execution paths.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -216,18 +222,20 @@ so evidence selection is auditable and reproducible.
 **Code patterns**
 ```python
 # src/obs/manifest.py
-ExtractRecord(name, template, metadata, sources)
+ExtractRecord(
+    name, alias, template, evidence_family, coordinate_system, evidence_rank,
+    ambiguity_policy, required_columns, sources, schema_fingerprint
+)
 ```
 
 **Target files**
 - Update: `src/obs/manifest.py`
 - Update: `src/hamilton_pipeline/modules/outputs.py`
-- Update: `src/extract/registry_specs.py`
 
 **Implementation checklist**
-- [ ] Emit extract manifest records from registry + evidence plan.
-- [ ] Include evidence metadata and schema versions.
-- [ ] Make manifest stable across debug/non-debug runs.
+- [x] Emit extract manifest records from registry + evidence plan.
+- [x] Include evidence metadata + schema fingerprints.
+- [x] Make manifest stable across debug/non-debug runs.
 
 **Status**
-Planned.
+Completed.

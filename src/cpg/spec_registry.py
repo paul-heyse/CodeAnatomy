@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 
-from arrowdsl.compute.transforms import expr_context_value, flag_to_bool
-from cpg.catalog import PlanRef, derive_cst_defs_norm, derive_scip_role_flags
 from cpg.contract_map import PropFieldInput, prop_fields_from_contract
 from cpg.kinds import EntityKind, NodeKind
 from cpg.role_flags import ROLE_FLAG_SPECS
 from cpg.specs import (
+    INCLUDE_HEAVY_JSON,
+    TRANSFORM_EXPR_CONTEXT,
+    TRANSFORM_FLAG_TO_BOOL,
     NodeEmitSpec,
     NodePlanSpec,
     PropFieldSpec,
-    PropOptions,
     PropTableSpec,
 )
 
@@ -26,18 +25,18 @@ class EntityFamilySpec:
     name: str
     node_kind: NodeKind
     id_cols: tuple[str, ...]
-    node_table: PlanRef | None
+    node_table: str | None
     node_option_flag: str | None
     prop_fields: tuple[PropFieldSpec, ...] = ()
     prop_option_flag: str | None = "include_node_props"
-    prop_table: PlanRef | None = None
+    prop_table: str | None = None
     node_name: str | None = None
     prop_name: str | None = None
     path_cols: tuple[str, ...] = ()
     bstart_cols: tuple[str, ...] = ()
     bend_cols: tuple[str, ...] = ()
     file_id_cols: tuple[str, ...] = ()
-    prop_include_if: Callable[[PropOptions], bool] | None = None
+    prop_include_if_id: str | None = None
 
     def to_node_plan(self) -> NodePlanSpec | None:
         """Return a NodePlanSpec for this family when configured.
@@ -52,7 +51,7 @@ class EntityFamilySpec:
         return NodePlanSpec(
             name=self.node_name or self.name,
             option_flag=self.node_option_flag,
-            table_getter=self.node_table.getter(),
+            table_ref=self.node_table,
             emit=NodeEmitSpec(
                 node_kind=self.node_kind,
                 id_cols=self.id_cols,
@@ -77,17 +76,13 @@ class EntityFamilySpec:
         return PropTableSpec(
             name=self.prop_name or self.name,
             option_flag=self.prop_option_flag,
-            table_getter=table.getter(),
+            table_ref=table,
             entity_kind=EntityKind.NODE,
             id_cols=self.id_cols,
             node_kind=self.node_kind,
             fields=self.prop_fields,
-            include_if=self.prop_include_if,
+            include_if_id=self.prop_include_if_id,
         )
-
-
-def _heavy_json(options: PropOptions) -> bool:
-    return options.include_heavy_json_props
 
 
 def _fields(
@@ -102,7 +97,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         name="file",
         node_kind=NodeKind.PY_FILE,
         id_cols=("file_id",),
-        node_table=PlanRef("repo_files_nodes"),
+        node_table="repo_files_nodes",
         node_option_flag="include_file_nodes",
         prop_fields=_fields(
             NodeKind.PY_FILE,
@@ -113,7 +108,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "encoding": "encoding",
             },
         ),
-        prop_table=PlanRef("repo_files"),
+        prop_table="repo_files",
         path_cols=("path",),
         bstart_cols=("bstart",),
         bend_cols=("bend",),
@@ -123,7 +118,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         name="name_ref",
         node_kind=NodeKind.CST_NAME_REF,
         id_cols=("name_ref_id",),
-        node_table=PlanRef("cst_name_refs"),
+        node_table="cst_name_refs",
         node_option_flag="include_name_ref_nodes",
         prop_fields=_fields(
             NodeKind.CST_NAME_REF,
@@ -132,7 +127,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "expr_context": PropFieldSpec(
                     prop_key="expr_context",
                     source_col="expr_ctx",
-                    transform=expr_context_value,
+                    transform_id=TRANSFORM_EXPR_CONTEXT,
                 ),
             },
         ),
@@ -145,7 +140,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         name="import_alias",
         node_kind=NodeKind.CST_IMPORT_ALIAS,
         id_cols=("import_alias_id", "import_id"),
-        node_table=PlanRef("cst_imports"),
+        node_table="cst_imports",
         node_option_flag="include_import_alias_nodes",
         prop_fields=_fields(
             NodeKind.CST_IMPORT_ALIAS,
@@ -168,7 +163,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         name="callsite",
         node_kind=NodeKind.CST_CALLSITE,
         id_cols=("call_id",),
-        node_table=PlanRef("cst_callsites"),
+        node_table="cst_callsites",
         node_option_flag="include_callsite_nodes",
         prop_fields=_fields(
             NodeKind.CST_CALLSITE,
@@ -180,7 +175,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "callee_qnames": PropFieldSpec(
                     prop_key="callee_qnames",
                     source_col="callee_qnames",
-                    include_if=_heavy_json,
+                    include_if_id=INCLUDE_HEAVY_JSON,
                 ),
             },
         ),
@@ -193,7 +188,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         name="definition",
         node_kind=NodeKind.CST_DEF,
         id_cols=("def_id",),
-        node_table=PlanRef("cst_defs"),
+        node_table="cst_defs",
         node_option_flag="include_def_nodes",
         prop_fields=_fields(
             NodeKind.CST_DEF,
@@ -204,11 +199,11 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "qnames": PropFieldSpec(
                     prop_key="qnames",
                     source_col="qnames",
-                    include_if=_heavy_json,
+                    include_if_id=INCLUDE_HEAVY_JSON,
                 ),
             },
         ),
-        prop_table=PlanRef("cst_defs_norm", derive=derive_cst_defs_norm),
+        prop_table="cst_defs_norm",
         path_cols=("path",),
         bstart_cols=("bstart", "name_bstart"),
         bend_cols=("bend", "name_bend"),
@@ -218,7 +213,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         name="qualified_name",
         node_kind=NodeKind.PY_QUALIFIED_NAME,
         id_cols=("qname_id",),
-        node_table=PlanRef("dim_qualified_names"),
+        node_table="dim_qualified_names",
         node_option_flag="include_qname_nodes",
         prop_fields=_fields(
             NodeKind.PY_QUALIFIED_NAME,
@@ -232,7 +227,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         name="scip_symbol",
         node_kind=NodeKind.SCIP_SYMBOL,
         id_cols=("symbol",),
-        node_table=PlanRef("scip_symbols"),
+        node_table="scip_symbols",
         node_option_flag="include_symbol_nodes",
         prop_fields=_fields(
             NodeKind.SCIP_SYMBOL,
@@ -244,16 +239,16 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "documentation": PropFieldSpec(
                     prop_key="documentation",
                     source_col="documentation",
-                    include_if=_heavy_json,
+                    include_if_id=INCLUDE_HEAVY_JSON,
                 ),
                 "signature_documentation": PropFieldSpec(
                     prop_key="signature_documentation",
                     source_col="signature_documentation",
-                    include_if=_heavy_json,
+                    include_if_id=INCLUDE_HEAVY_JSON,
                 ),
             },
         ),
-        prop_table=PlanRef("scip_symbol_information"),
+        prop_table="scip_symbol_information",
     ),
     EntityFamilySpec(
         name="scip_external_symbol",
@@ -271,23 +266,23 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
                 "documentation": PropFieldSpec(
                     prop_key="documentation",
                     source_col="documentation",
-                    include_if=_heavy_json,
+                    include_if_id=INCLUDE_HEAVY_JSON,
                 ),
                 "signature_documentation": PropFieldSpec(
                     prop_key="signature_documentation",
                     source_col="signature_documentation",
-                    include_if=_heavy_json,
+                    include_if_id=INCLUDE_HEAVY_JSON,
                 ),
             },
         ),
-        prop_table=PlanRef("scip_external_symbol_information"),
+        prop_table="scip_external_symbol_information",
         prop_name="scip_external_symbol_props",
     ),
     EntityFamilySpec(
         name="tree_sitter_node",
         node_kind=NodeKind.TS_NODE,
         id_cols=("ts_node_id",),
-        node_table=PlanRef("ts_nodes"),
+        node_table="ts_nodes",
         node_option_flag="include_tree_sitter_nodes",
         prop_fields=_fields(
             NodeKind.TS_NODE,
@@ -306,7 +301,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         name="tree_sitter_error",
         node_kind=NodeKind.TS_ERROR,
         id_cols=("ts_error_id",),
-        node_table=PlanRef("ts_errors"),
+        node_table="ts_errors",
         node_option_flag="include_tree_sitter_nodes",
         prop_fields=_fields(
             NodeKind.TS_ERROR,
@@ -324,7 +319,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         name="tree_sitter_missing",
         node_kind=NodeKind.TS_MISSING,
         id_cols=("ts_missing_id",),
-        node_table=PlanRef("ts_missing"),
+        node_table="ts_missing",
         node_option_flag="include_tree_sitter_nodes",
         prop_fields=_fields(
             NodeKind.TS_MISSING,
@@ -342,7 +337,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         name="type_expr",
         node_kind=NodeKind.TYPE_EXPR,
         id_cols=("type_expr_id",),
-        node_table=PlanRef("type_exprs_norm"),
+        node_table="type_exprs_norm",
         node_option_flag="include_type_nodes",
         prop_fields=_fields(
             NodeKind.TYPE_EXPR,
@@ -362,7 +357,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         name="type",
         node_kind=NodeKind.TYPE,
         id_cols=("type_id",),
-        node_table=PlanRef("types_norm"),
+        node_table="types_norm",
         node_option_flag="include_type_nodes",
         prop_fields=_fields(
             NodeKind.TYPE,
@@ -381,7 +376,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         name="diagnostic",
         node_kind=NodeKind.DIAG,
         id_cols=("diag_id",),
-        node_table=PlanRef("diagnostics_norm"),
+        node_table="diagnostics_norm",
         node_option_flag="include_diagnostic_nodes",
         prop_fields=_fields(
             NodeKind.DIAG,
@@ -402,7 +397,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         name="runtime_object",
         node_kind=NodeKind.RT_OBJECT,
         id_cols=("rt_id",),
-        node_table=PlanRef("rt_objects"),
+        node_table="rt_objects",
         node_option_flag="include_runtime_nodes",
         prop_fields=_fields(
             NodeKind.RT_OBJECT,
@@ -421,7 +416,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         name="runtime_signature",
         node_kind=NodeKind.RT_SIGNATURE,
         id_cols=("sig_id",),
-        node_table=PlanRef("rt_signatures"),
+        node_table="rt_signatures",
         node_option_flag="include_runtime_nodes",
         prop_fields=_fields(
             NodeKind.RT_SIGNATURE,
@@ -436,7 +431,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         name="runtime_param",
         node_kind=NodeKind.RT_SIGNATURE_PARAM,
         id_cols=("param_id",),
-        node_table=PlanRef("rt_signature_params"),
+        node_table="rt_signature_params",
         node_option_flag="include_runtime_nodes",
         prop_fields=_fields(
             NodeKind.RT_SIGNATURE_PARAM,
@@ -454,7 +449,7 @@ ENTITY_FAMILY_SPECS: tuple[EntityFamilySpec, ...] = (
         name="runtime_member",
         node_kind=NodeKind.RT_MEMBER,
         id_cols=("member_id",),
-        node_table=PlanRef("rt_members"),
+        node_table="rt_members",
         node_option_flag="include_runtime_nodes",
         prop_fields=_fields(
             NodeKind.RT_MEMBER,
@@ -514,14 +509,14 @@ def scip_role_flag_prop_spec() -> PropTableSpec:
     return PropTableSpec(
         name="scip_role_flags",
         option_flag="include_node_props",
-        table_getter=PlanRef("scip_role_flags", derive=derive_scip_role_flags).getter(),
+        table_ref="scip_role_flags",
         entity_kind=EntityKind.NODE,
         id_cols=("symbol",),
         fields=tuple(
             PropFieldSpec(
                 prop_key=prop_key,
                 source_col=flag_name,
-                transform=flag_to_bool,
+                transform_id=TRANSFORM_FLAG_TO_BOOL,
                 skip_if_none=True,
                 value_type="bool",
             )
@@ -541,7 +536,7 @@ def edge_prop_spec() -> PropTableSpec:
     return PropTableSpec(
         name="edge_props",
         option_flag="include_edge_props",
-        table_getter=PlanRef("cpg_edges").getter(),
+        table_ref="cpg_edges",
         entity_kind=EntityKind.EDGE,
         id_cols=("edge_id",),
         fields=(

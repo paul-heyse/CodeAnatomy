@@ -6,10 +6,14 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.fs as pafs
 
 from arrowdsl.finalize.finalize import Contract
+from arrowdsl.spec.io import read_spec_table
 from relspec.model import RelationshipRule
+from relspec.spec_tables import relationship_rules_from_table
+from schema_spec.spec_tables import contract_specs_from_table, table_specs_from_tables
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import ContractCatalogSpec, DatasetSpec
 
@@ -138,6 +142,55 @@ class ContractCatalog:
             catalog.register(contract_spec.to_contract())
         return catalog
 
+    @classmethod
+    def from_tables(
+        cls,
+        *,
+        field_table: pa.Table,
+        constraints_table: pa.Table | None = None,
+        contract_table: pa.Table | None = None,
+    ) -> ContractCatalog:
+        """Build a catalog from schema spec tables.
+
+        Returns
+        -------
+        ContractCatalog
+            Catalog populated from spec tables.
+        """
+        table_specs = table_specs_from_tables(field_table, constraints_table=constraints_table)
+        contracts = (
+            contract_specs_from_table(contract_table, table_specs)
+            if contract_table is not None
+            else {}
+        )
+        return cls.from_spec(ContractCatalogSpec(contracts=contracts))
+
+    @classmethod
+    def from_paths(
+        cls,
+        *,
+        field_table: PathLike,
+        constraints_table: PathLike | None = None,
+        contract_table: PathLike | None = None,
+    ) -> ContractCatalog:
+        """Build a catalog from on-disk schema spec tables.
+
+        Returns
+        -------
+        ContractCatalog
+            Catalog populated from spec tables.
+        """
+        field = read_spec_table(field_table)
+        constraints = (
+            read_spec_table(constraints_table) if constraints_table is not None else None
+        )
+        contract = read_spec_table(contract_table) if contract_table is not None else None
+        return cls.from_tables(
+            field_table=field,
+            constraints_table=constraints,
+            contract_table=contract,
+        )
+
     def get(self, name: str) -> Contract:
         """Return a registered contract by name.
 
@@ -192,6 +245,30 @@ class RelationshipRegistry:
 
     def __init__(self) -> None:
         self._rules_by_name: dict[str, RelationshipRule] = {}
+
+    @classmethod
+    def from_table(cls, table: pa.Table) -> RelationshipRegistry:
+        """Build a registry from a relationship rule spec table.
+
+        Returns
+        -------
+        RelationshipRegistry
+            Registry populated from the table.
+        """
+        registry = cls()
+        registry.extend(relationship_rules_from_table(table))
+        return registry
+
+    @classmethod
+    def from_path(cls, path: PathLike) -> RelationshipRegistry:
+        """Build a registry from an on-disk relationship rule spec table.
+
+        Returns
+        -------
+        RelationshipRegistry
+            Registry populated from the table.
+        """
+        return cls.from_table(read_spec_table(path))
 
     def add(self, rule: RelationshipRule) -> None:
         """Add a validated relationship rule.

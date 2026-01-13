@@ -85,7 +85,53 @@ def derive_scip_role_flags(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan 
     return aggregated.project(rename_exprs, rename_names, ctx=ctx)
 
 
+PLAN_REF_DERIVERS: dict[str, PlanDeriver] = {
+    "cst_defs_norm": derive_cst_defs_norm,
+    "scip_role_flags": derive_scip_role_flags,
+}
+
+
+def plan_ref_for(name: str) -> PlanRef:
+    """Return a PlanRef, attaching a derive hook when registered.
+
+    Returns
+    -------
+    PlanRef
+        PlanRef with optional derive callable.
+    """
+    derive = PLAN_REF_DERIVERS.get(name)
+    if derive is None:
+        return PlanRef(name)
+    return PlanRef(name, derive=derive)
+
+
+def resolve_plan_source(
+    catalog: PlanCatalog,
+    name: str,
+    *,
+    ctx: ExecutionContext,
+) -> PlanSource | None:
+    """Resolve a plan source by name, deriving when available.
+
+    Returns
+    -------
+    PlanSource | None
+        Plan source or ``None`` when unavailable.
+    """
+    ref = plan_ref_for(name)
+    if ref.name in catalog.tables:
+        return catalog.tables[ref.name]
+    if ref.derive is None:
+        return None
+    derived = ref.derive(catalog, ctx)
+    if derived is None:
+        return None
+    catalog.tables[ref.name] = derived
+    return derived
+
+
 __all__ = [
+    "PLAN_REF_DERIVERS",
     "PlanCatalog",
     "PlanDeriver",
     "PlanGetter",
@@ -97,4 +143,6 @@ __all__ = [
     "TableRef",
     "derive_cst_defs_norm",
     "derive_scip_role_flags",
+    "plan_ref_for",
+    "resolve_plan_source",
 ]

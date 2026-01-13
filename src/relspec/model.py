@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 from arrowdsl.compute.expr import ScalarValue
-from arrowdsl.core.interop import ComputeExpression
 from arrowdsl.plan.join_specs import JoinOutputSpec, join_spec
 from arrowdsl.plan.ops import DedupeSpec, JoinSpec, JoinType, SortKey
 from arrowdsl.plan.query import QuerySpec
+from arrowdsl.spec.expr_ir import ExprIR
 
-type Expression = ComputeExpression
+type Expression = ExprIR
 
 HASH_JOIN_INPUTS = 2
 SINGLE_INPUT = 1
 
 
-class DatasetRef(BaseModel):
+@dataclass(frozen=True)
+class DatasetRef:
     """Reference a dataset by registry name.
 
     Parameters
@@ -32,8 +32,6 @@ class DatasetRef(BaseModel):
     label:
         Optional plan label override.
     """
-
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     name: str
     query: QuerySpec | None = None
@@ -51,7 +49,8 @@ class RuleKind(StrEnum):
     WINNER_SELECT = "winner_select"
 
 
-class HashJoinConfig(BaseModel):
+@dataclass(frozen=True)
+class HashJoinConfig:
     """Acero HashJoin node configuration.
 
     Parameters
@@ -71,8 +70,6 @@ class HashJoinConfig(BaseModel):
     output_suffix_for_right:
         Suffix for right output column collisions.
     """
-
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     join_type: JoinType = "inner"
     left_keys: tuple[str, ...] = ()
@@ -103,10 +100,9 @@ class HashJoinConfig(BaseModel):
         )
 
 
-class IntervalAlignConfig(BaseModel):
+@dataclass(frozen=True)
+class IntervalAlignConfig:
     """Kernel-lane interval alignment configuration."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     mode: Literal["EXACT", "CONTAINED_BEST", "OVERLAP_BEST"] = "CONTAINED_BEST"
     how: Literal["inner", "left"] = "inner"
@@ -129,10 +125,9 @@ class IntervalAlignConfig(BaseModel):
     match_score_col: str = "match_score"
 
 
-class WinnerSelectConfig(BaseModel):
+@dataclass(frozen=True)
+class WinnerSelectConfig:
     """Kernel-lane winner selection configuration."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     keys: tuple[str, ...] = ()
     score_col: str = "score"
@@ -140,23 +135,22 @@ class WinnerSelectConfig(BaseModel):
     tie_breakers: tuple[SortKey, ...] = ()
 
 
-class ProjectConfig(BaseModel):
+@dataclass(frozen=True)
+class ProjectConfig:
     """Projection performed after the primary operation."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
-
     select: tuple[str, ...] = ()
-    exprs: Mapping[str, Expression] = Field(default_factory=dict)
+    exprs: Mapping[str, Expression] = field(default_factory=dict)
 
 
-class KernelSpec(BaseModel):
+@dataclass(frozen=True)
+class KernelSpec:
     """Base class for post-kernel specifications."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     kind: str
 
 
+@dataclass(frozen=True)
 class AddLiteralSpec(KernelSpec):
     """Post-kernel spec for adding a literal column."""
 
@@ -165,6 +159,7 @@ class AddLiteralSpec(KernelSpec):
     value: ScalarValue | None = None
 
 
+@dataclass(frozen=True)
 class DropColumnsSpec(KernelSpec):
     """Post-kernel spec for dropping columns."""
 
@@ -172,13 +167,15 @@ class DropColumnsSpec(KernelSpec):
     columns: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
 class RenameColumnsSpec(KernelSpec):
     """Post-kernel spec for renaming columns."""
 
     kind: Literal["rename_columns"] = "rename_columns"
-    mapping: Mapping[str, str] = Field(default_factory=dict)
+    mapping: Mapping[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
 class ExplodeListSpec(KernelSpec):
     """Post-kernel spec for exploding list columns."""
 
@@ -189,13 +186,15 @@ class ExplodeListSpec(KernelSpec):
     out_value_col: str = "dst_id"
 
 
+@dataclass(frozen=True)
 class DedupeKernelSpec(KernelSpec):
     """Post-kernel spec for applying deduplication."""
 
     kind: Literal["dedupe"] = "dedupe"
-    spec: DedupeSpec = Field(default_factory=lambda: DedupeSpec(keys=()))
+    spec: DedupeSpec = field(default_factory=lambda: DedupeSpec(keys=()))
 
 
+@dataclass(frozen=True)
 class CanonicalSortKernelSpec(KernelSpec):
     """Post-kernel spec for applying canonical sorting."""
 
@@ -213,10 +212,9 @@ type KernelSpecT = (
 )
 
 
-class RelationshipRule(BaseModel):
+@dataclass(frozen=True)
+class RelationshipRule:
     """Declarative relationship rule configuration."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     name: str
     kind: RuleKind
@@ -237,10 +235,9 @@ class RelationshipRule(BaseModel):
     rule_name_col: str = "rule_name"
     rule_priority_col: str = "rule_priority"
 
-    @model_validator(mode="after")
-    def _validate_model(self) -> RelationshipRule:
+    def __post_init__(self) -> None:
+        """Validate relationship rule invariants."""
         self._validate_rule()
-        return self
 
     def _validate_rule(self) -> None:
         """Validate rule configuration invariants.
@@ -257,24 +254,51 @@ class RelationshipRule(BaseModel):
             msg = "RelationshipRule.output_dataset must be non-empty."
             raise ValueError(msg)
 
-        if self.kind == RuleKind.HASH_JOIN:
-            self._validate_hash_join()
+        self._validate_variant_configs()
+        self._validate_kind_inputs()
+
+    def _validate_variant_configs(self) -> None:
+        variant_configs = {
+            RuleKind.HASH_JOIN: self.hash_join,
+            RuleKind.INTERVAL_ALIGN: self.interval_align,
+            RuleKind.WINNER_SELECT: self.winner_select,
+        }
+        active_variants = {
+            kind for kind, config in variant_configs.items() if config is not None
+        }
+        if self.kind in variant_configs:
+            self._require_variant_config(active_variants)
             return
-        if self.kind == RuleKind.FILTER_PROJECT:
-            self._require_exact_inputs(SINGLE_INPUT)
+        self._forbid_variant_configs(active_variants)
+
+    def _require_variant_config(self, active_variants: set[RuleKind]) -> None:
+        if self.kind not in active_variants:
+            msg = f"{self.kind.name} rules require {self.kind.value} config."
+            raise ValueError(msg)
+        if len(active_variants) != 1:
+            extras = sorted(kind.value for kind in active_variants if kind != self.kind)
+            msg = f"{self.kind.name} rules cannot mix configs: {extras}."
+            raise ValueError(msg)
+
+    def _forbid_variant_configs(self, active_variants: set[RuleKind]) -> None:
+        if not active_variants:
             return
-        if self.kind == RuleKind.EXPLODE_LIST:
-            self._require_exact_inputs(SINGLE_INPUT)
-            return
-        if self.kind == RuleKind.WINNER_SELECT:
-            self._validate_winner_select()
-            return
-        if self.kind == RuleKind.UNION_ALL:
-            self._require_min_inputs(1)
-            return
-        if self.kind == RuleKind.INTERVAL_ALIGN:
-            self._validate_interval_align()
-            return
+        extras = sorted(kind.value for kind in active_variants)
+        msg = f"{self.kind.name} rules cannot set configs: {extras}."
+        raise ValueError(msg)
+
+    def _validate_kind_inputs(self) -> None:
+        validators: dict[RuleKind, Callable[[], None]] = {
+            RuleKind.HASH_JOIN: self._validate_hash_join,
+            RuleKind.FILTER_PROJECT: lambda: self._require_exact_inputs(SINGLE_INPUT),
+            RuleKind.EXPLODE_LIST: lambda: self._require_exact_inputs(SINGLE_INPUT),
+            RuleKind.WINNER_SELECT: self._validate_winner_select,
+            RuleKind.UNION_ALL: lambda: self._require_min_inputs(1),
+            RuleKind.INTERVAL_ALIGN: self._validate_interval_align,
+        }
+        validator = validators.get(self.kind)
+        if validator is not None:
+            validator()
 
     def _require_exact_inputs(self, count: int) -> None:
         if len(self.inputs) != count:

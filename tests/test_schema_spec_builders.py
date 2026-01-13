@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import arrowdsl.core.interop as pa
 from arrowdsl.core.context import ExecutionContext, RuntimeProfile
@@ -11,7 +11,7 @@ from cpg.emit_edges import emit_edges_plan
 from cpg.emit_nodes import emit_node_plan
 from cpg.emit_props import emit_props_plans, filter_fields
 from cpg.kinds import EdgeKind, EntityKind, NodeKind
-from cpg.specs import EdgeEmitSpec, NodeEmitSpec, PropFieldSpec, PropTableSpec
+from cpg.specs import INCLUDE_HEAVY_JSON, EdgeEmitSpec, NodeEmitSpec, PropFieldSpec, PropTableSpec
 from schema_spec import (
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
@@ -172,7 +172,7 @@ def test_prop_builder_emits_props() -> None:
     spec = PropTableSpec(
         name="basic",
         option_flag="include_props",
-        table_getter=lambda tables: tables.get("props"),
+        table_ref="props",
         entity_kind=EntityKind.NODE,
         id_cols=("node_id",),
         node_kind=NodeKind.CST_NAME_REF,
@@ -181,14 +181,14 @@ def test_prop_builder_emits_props() -> None:
             PropFieldSpec(
                 prop_key="heavy",
                 source_col="heavy",
-                include_if=lambda options: options.include_heavy_json_props,
+                include_if_id=INCLUDE_HEAVY_JSON,
                 value_type="string",
             ),
         ),
     )
     options = _PropOptions()
     filtered_fields = filter_fields(spec.fields, options=options)
-    spec = spec.model_copy(update={"fields": tuple(filtered_fields)})
+    spec = replace(spec, fields=tuple(filtered_fields))
     plans = emit_props_plans(plan, spec=spec, schema_version=None, ctx=ctx)
     out_plan = union_all_plans(plans, label="props")
     out = PlanSpec.from_plan(out_plan).to_table(ctx=ctx)

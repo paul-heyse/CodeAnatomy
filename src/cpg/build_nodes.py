@@ -15,7 +15,7 @@ from arrowdsl.schema.arrays import const_array, set_or_append_column
 from arrowdsl.schema.schema import EncodingSpec
 from arrowdsl.schema.tables import table_from_arrays
 from cpg.artifacts import CpgBuildArtifacts
-from cpg.catalog import PlanCatalog, PlanSource
+from cpg.catalog import PlanCatalog, resolve_plan_source
 from cpg.emit_nodes import emit_node_plan
 from cpg.plan_helpers import (
     align_plan,
@@ -30,6 +30,8 @@ from cpg.plan_helpers import (
 from cpg.quality import QualityPlanSpec, quality_plan_from_ids
 from cpg.schemas import CPG_NODES_SCHEMA, CPG_NODES_SPEC
 from cpg.spec_registry import node_plan_specs
+from cpg.spec_tables import node_plan_specs_from_table
+from cpg.specs import NodePlanSpec, resolve_preprocessor
 
 
 def _file_span_arrays(
@@ -98,6 +100,12 @@ NODE_ENCODING_SPECS: tuple[EncodingSpec, ...] = tuple(
 )
 
 
+def _node_plan_specs(node_spec_table: pa.Table | None) -> tuple[NodePlanSpec, ...]:
+    if node_spec_table is None:
+        return NODE_PLAN_SPECS
+    return node_plan_specs_from_table(node_spec_table)
+
+
 @dataclass(frozen=True)
 class NodeBuildOptions:
     """Configure which node families are emitted."""
@@ -158,7 +166,7 @@ def _node_tables(
     *,
     options: NodeBuildOptions,
     ctx: ExecutionContext,
-) -> dict[str, PlanSource]:
+) -> PlanCatalog:
     catalog = PlanCatalog()
     repo_files = _materialize_table(inputs.repo_files, ctx=ctx)
     if inputs.repo_files is not None:
@@ -195,7 +203,7 @@ def _node_tables(
         _materialize_table(inputs.scip_occurrences, ctx=ctx),
     )
     catalog.add("scip_symbols", symbol_nodes)
-    return catalog.snapshot()
+    return catalog
 
 
 def build_cpg_nodes_raw(
@@ -203,6 +211,7 @@ def build_cpg_nodes_raw(
     ctx: ExecutionContext,
     inputs: NodeInputTables | None = None,
     options: NodeBuildOptions | None = None,
+    node_spec_table: pa.Table | None = None,
 ) -> Plan:
     """Build CPG nodes as a plan without finalization.
 
@@ -214,6 +223,8 @@ def build_cpg_nodes_raw(
         Bundle of input tables for node construction.
     options:
         Node build options.
+    node_spec_table:
+        Optional spec table overriding the default node plan specs.
 
     Returns
     -------
@@ -226,21 +237,22 @@ def build_cpg_nodes_raw(
         Raised when an option flag is missing.
     """
     options = options or NodeBuildOptions()
-    tables = _node_tables(inputs or NodeInputTables(), options=options, ctx=ctx)
+    catalog = _node_tables(inputs or NodeInputTables(), options=options, ctx=ctx)
     parts: list[Plan] = []
-    for spec in NODE_PLAN_SPECS:
+    for spec in _node_plan_specs(node_spec_table):
         enabled = getattr(options, spec.option_flag, None)
         if enabled is None:
             msg = f"Unknown option flag: {spec.option_flag}"
             raise ValueError(msg)
         if not enabled:
             continue
-        plan_source = spec.table_getter(tables)
+        plan_source = resolve_plan_source(catalog, spec.table_ref, ctx=ctx)
         if plan_source is None:
             continue
         plan = ensure_plan(plan_source, label=spec.name, ctx=ctx)
-        if spec.preprocessor is not None:
-            plan = spec.preprocessor(plan)
+        preprocessor = resolve_preprocessor(spec.preprocessor_id)
+        if preprocessor is not None:
+            plan = preprocessor(plan)
         parts.append(emit_node_plan(plan, spec=spec.emit, ctx=ctx))
 
     if not parts:
@@ -256,6 +268,7 @@ def build_cpg_nodes(
     ctx: ExecutionContext,
     inputs: NodeInputTables | None = None,
     options: NodeBuildOptions | None = None,
+    node_spec_table: pa.Table | None = None,
 ) -> CpgBuildArtifacts:
     """Build and finalize CPG nodes with quality artifacts.
 
@@ -264,7 +277,12 @@ def build_cpg_nodes(
     CpgBuildArtifacts
         Finalize result plus quality table.
     """
-    raw_plan = build_cpg_nodes_raw(ctx=ctx, inputs=inputs, options=options)
+    raw_plan = build_cpg_nodes_raw(
+        ctx=ctx,
+        inputs=inputs,
+        options=options,
+        node_spec_table=node_spec_table,
+    )
     quality_plan = quality_plan_from_ids(
         raw_plan,
         spec=QualityPlanSpec(

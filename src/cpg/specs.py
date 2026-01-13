@@ -1,19 +1,31 @@
-"""Pydantic specifications for CPG builders."""
+"""Specifications for CPG builders."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
-
-from arrowdsl.core.interop import TableLike
+from arrowdsl.compute.transforms import (
+    expr_context_expr,
+    expr_context_value,
+    flag_to_bool,
+    flag_to_bool_expr,
+)
+from arrowdsl.core.interop import ComputeExpression, TableLike
 from arrowdsl.plan.plan import Plan
-from cpg.catalog import PlanGetter
 from cpg.kinds import EdgeKind, EntityKind, NodeKind
 
 type TableFilter = Callable[[TableLike], TableLike]
 type PropValueType = Literal["string", "int", "float", "bool", "json"]
+type PropTransformFn = Callable[[object | None], object | None]
+type PropTransformExprFn = Callable[[ComputeExpression], ComputeExpression]
+type PropIncludeFn = Callable[[PropOptions], bool]
+type PlanPreprocessor = Callable[[Plan], Plan]
+
+TRANSFORM_EXPR_CONTEXT = "expr_context"
+TRANSFORM_FLAG_TO_BOOL = "flag_to_bool"
+INCLUDE_HEAVY_JSON = "heavy_json"
 
 
 class PropOptions(Protocol):
@@ -25,37 +37,155 @@ class PropOptions(Protocol):
         ...
 
 
-class EdgeEmitSpec(BaseModel):
-    """Mapping for emitting edges from a relation table."""
+@dataclass(frozen=True)
+class PropTransformSpec:
+    """Bundle of value/expr transforms for property emission."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
+    value_fn: PropTransformFn
+    expr_fn: PropTransformExprFn
+
+
+PROP_TRANSFORMS: dict[str, PropTransformSpec] = {
+    TRANSFORM_EXPR_CONTEXT: PropTransformSpec(
+        value_fn=expr_context_value,
+        expr_fn=expr_context_expr,
+    ),
+    TRANSFORM_FLAG_TO_BOOL: PropTransformSpec(
+        value_fn=flag_to_bool,
+        expr_fn=flag_to_bool_expr,
+    ),
+}
+
+
+def _include_heavy_json(options: PropOptions) -> bool:
+    return options.include_heavy_json_props
+
+
+PROP_INCLUDES: dict[str, PropIncludeFn] = {
+    INCLUDE_HEAVY_JSON: _include_heavy_json,
+}
+
+
+PLAN_PREPROCESSORS: dict[str, PlanPreprocessor] = {}
+EDGE_FILTERS: dict[str, TableFilter] = {}
+
+
+def resolve_prop_transform(transform_id: str | None) -> PropTransformSpec | None:
+    """Return the PropTransformSpec for a transform id.
+
+    Returns
+    -------
+    PropTransformSpec | None
+        Transform spec for the id, if registered.
+
+    Raises
+    ------
+    ValueError
+        Raised when the transform id is not registered.
+    """
+    if transform_id is None:
+        return None
+    spec = PROP_TRANSFORMS.get(transform_id)
+    if spec is None:
+        msg = f"Unknown prop transform id: {transform_id!r}"
+        raise ValueError(msg)
+    return spec
+
+
+def resolve_prop_include(include_id: str | None) -> PropIncludeFn | None:
+    """Return the include-if function for a filter id.
+
+    Returns
+    -------
+    PropIncludeFn | None
+        Include predicate for the id, if registered.
+
+    Raises
+    ------
+    ValueError
+        Raised when the include id is not registered.
+    """
+    if include_id is None:
+        return None
+    fn = PROP_INCLUDES.get(include_id)
+    if fn is None:
+        msg = f"Unknown prop include id: {include_id!r}"
+        raise ValueError(msg)
+    return fn
+
+
+def resolve_preprocessor(preprocessor_id: str | None) -> PlanPreprocessor | None:
+    """Return the plan preprocessor for a preprocessor id.
+
+    Returns
+    -------
+    PlanPreprocessor | None
+        Preprocessor for the id, if registered.
+
+    Raises
+    ------
+    ValueError
+        Raised when the preprocessor id is not registered.
+    """
+    if preprocessor_id is None:
+        return None
+    fn = PLAN_PREPROCESSORS.get(preprocessor_id)
+    if fn is None:
+        msg = f"Unknown preprocessor id: {preprocessor_id!r}"
+        raise ValueError(msg)
+    return fn
+
+
+def resolve_edge_filter(filter_id: str | None) -> TableFilter | None:
+    """Return the relation filter for a filter id.
+
+    Returns
+    -------
+    TableFilter | None
+        Relation filter for the id, if registered.
+
+    Raises
+    ------
+    ValueError
+        Raised when the filter id is not registered.
+    """
+    if filter_id is None:
+        return None
+    fn = EDGE_FILTERS.get(filter_id)
+    if fn is None:
+        msg = f"Unknown edge filter id: {filter_id!r}"
+        raise ValueError(msg)
+    return fn
+
+
+@dataclass(frozen=True)
+class EdgeEmitSpec:
+    """Mapping for emitting edges from a relation table."""
 
     edge_kind: EdgeKind
     src_cols: tuple[str, ...]
     dst_cols: tuple[str, ...]
+    origin: str
+    default_resolution_method: str
     path_cols: tuple[str, ...] = ("path",)
     bstart_cols: tuple[str, ...] = ("bstart",)
     bend_cols: tuple[str, ...] = ("bend",)
-    origin: str
-    default_resolution_method: str
 
 
-class EdgePlanSpec(BaseModel):
+@dataclass(frozen=True)
+class EdgePlanSpec:
     """Spec for emitting a family of edges."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     name: str
     option_flag: str
-    relation_getter: PlanGetter
+    relation_ref: str
     emit: EdgeEmitSpec
-    filter_fn: TableFilter | None = None
+    filter_id: str | None = None
 
 
-class NodeEmitSpec(BaseModel):
+@dataclass(frozen=True)
+class NodeEmitSpec:
     """Spec for emitting anchored nodes."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     node_kind: NodeKind
     id_cols: tuple[str, ...]
@@ -65,30 +195,40 @@ class NodeEmitSpec(BaseModel):
     file_id_cols: tuple[str, ...] = ("file_id",)
 
 
-class NodePlanSpec(BaseModel):
+@dataclass(frozen=True)
+class NodePlanSpec:
     """Spec for emitting a node family from a table."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     name: str
     option_flag: str
-    table_getter: PlanGetter
+    table_ref: str
     emit: NodeEmitSpec
-    preprocessor: Callable[[Plan], Plan] | None = None
+    preprocessor_id: str | None = None
 
 
-class PropFieldSpec(BaseModel):
+@dataclass(frozen=True)
+class PropFieldSpec:
     """Spec for emitting a property from a source column."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     prop_key: str
     source_col: str | None = None
     literal: object | None = None
-    transform: Callable[[object | None], object | None] | None = None
-    include_if: Callable[[PropOptions], bool] | None = None
+    transform_id: str | None = None
+    include_if_id: str | None = None
     skip_if_none: bool = False
     value_type: PropValueType | None = None
+
+    def __post_init__(self) -> None:
+        """Validate that exactly one of literal or source_col is set.
+
+        Raises
+        ------
+        ValueError
+            Raised when literal and source_col are both set or both missing.
+        """
+        if (self.literal is None) == (self.source_col is None):
+            msg = "PropFieldSpec requires exactly one of literal or source_col."
+            raise ValueError(msg)
 
     def value_from(self, row: Mapping[str, object]) -> object | None:
         """Return the value to emit for this field.
@@ -109,21 +249,21 @@ class PropFieldSpec(BaseModel):
             value = row.get(self.source_col)
         else:
             value = None
-        if self.transform is None:
+        transform = resolve_prop_transform(self.transform_id)
+        if transform is None:
             return value
-        return self.transform(value)
+        return transform.value_fn(value)
 
 
-class PropTableSpec(BaseModel):
+@dataclass(frozen=True)
+class PropTableSpec:
     """Spec for emitting properties from a table."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     name: str
     option_flag: str
-    table_getter: PlanGetter
+    table_ref: str
     entity_kind: EntityKind
     id_cols: tuple[str, ...]
     node_kind: NodeKind | None = None
-    fields: tuple[PropFieldSpec, ...] = Field(default_factory=tuple)
-    include_if: Callable[[PropOptions], bool] | None = None
+    fields: tuple[PropFieldSpec, ...] = field(default_factory=tuple)
+    include_if_id: str | None = None

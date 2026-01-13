@@ -25,7 +25,7 @@ from arrowdsl.plan.plan import PlanSpec
 from arrowdsl.schema.arrays import const_array
 from arrowdsl.schema.columns import table_from_schema
 from arrowdsl.schema.tables import table_from_arrays
-from cpg.catalog import PlanSource
+from cpg.catalog import PlanCatalog, PlanSource, resolve_plan_source
 from cpg.defaults import fill_nulls_float, fill_nulls_string
 from cpg.kinds import EntityKind
 from cpg.plan_helpers import ensure_plan
@@ -36,6 +36,9 @@ from cpg.specs import (
     NodePlanSpec,
     PropOptions,
     PropTableSpec,
+    resolve_edge_filter,
+    resolve_preprocessor,
+    resolve_prop_include,
 )
 
 type PropValue = object | None
@@ -254,6 +257,8 @@ class EdgeBuilder:
         ValueError
             If the configured option flag is missing on the options object.
         """
+        catalog = PlanCatalog()
+        catalog.extend(tables)
         parts: list[TableLike] = []
         for emitter in self._emitters:
             enabled = getattr(options, emitter.option_flag, None)
@@ -262,15 +267,16 @@ class EdgeBuilder:
                 raise ValueError(msg)
             if not enabled:
                 continue
-            source = emitter.relation_getter(tables)
+            source = resolve_plan_source(catalog, emitter.relation_ref, ctx=ctx)
             if source is None:
                 continue
             plan = ensure_plan(source, label=emitter.name, ctx=ctx)
             rel = _materialize_source(plan, ctx=ctx)
             if rel.num_rows == 0:
                 continue
-            if emitter.filter_fn is not None:
-                rel = emitter.filter_fn(rel)
+            filter_fn = resolve_edge_filter(emitter.filter_id)
+            if filter_fn is not None:
+                rel = filter_fn(rel)
                 if rel.num_rows == 0:
                     continue
             parts.append(
@@ -358,6 +364,8 @@ class NodeBuilder:
         ValueError
             If the configured option flag is missing on the options object.
         """
+        catalog = PlanCatalog()
+        catalog.extend(tables)
         parts: list[TableLike] = []
         for emitter in self._emitters:
             enabled = getattr(options, emitter.option_flag, None)
@@ -366,12 +374,13 @@ class NodeBuilder:
                 raise ValueError(msg)
             if not enabled:
                 continue
-            source = emitter.table_getter(tables)
+            source = resolve_plan_source(catalog, emitter.table_ref, ctx=ctx)
             if source is None:
                 continue
             plan = ensure_plan(source, label=emitter.name, ctx=ctx)
-            if emitter.preprocessor is not None:
-                plan = emitter.preprocessor(plan)
+            preprocessor = resolve_preprocessor(emitter.preprocessor_id)
+            if preprocessor is not None:
+                plan = preprocessor(plan)
             table = _materialize_source(plan, ctx=ctx)
             if table.num_rows == 0:
                 continue
@@ -465,9 +474,11 @@ class PropBuilder:
         TableLike
             Property table.
         """
+        catalog = PlanCatalog()
+        catalog.extend(tables)
         rows: list[PropRow] = []
         for spec in self._table_specs:
-            table = self._table_for_spec(spec, tables=tables, options=options, ctx=ctx)
+            table = self._table_for_spec(spec, catalog=catalog, options=options, ctx=ctx)
             if table is None:
                 continue
             self._emit_props_for_table(
@@ -483,7 +494,7 @@ class PropBuilder:
     def _table_for_spec(
         spec: PropTableSpec,
         *,
-        tables: Mapping[str, PlanSource],
+        catalog: PlanCatalog,
         options: PropOptions,
         ctx: ExecutionContext,
     ) -> TableLike | None:
@@ -493,9 +504,10 @@ class PropBuilder:
             raise ValueError(msg)
         if not enabled:
             return None
-        if spec.include_if is not None and not spec.include_if(options):
+        include_if = resolve_prop_include(spec.include_if_id)
+        if include_if is not None and not include_if(options):
             return None
-        source = spec.table_getter(tables)
+        source = resolve_plan_source(catalog, spec.table_ref, ctx=ctx)
         if source is None:
             return None
         table = _materialize_source(source, ctx=ctx)
@@ -552,7 +564,8 @@ class PropBuilder:
                 )
             )
         for field in spec.fields:
-            if field.include_if is not None and not field.include_if(options):
+            include_if = resolve_prop_include(field.include_if_id)
+            if include_if is not None and not include_if(options):
                 continue
             value = field.value_from(row)
             if value is None and field.skip_if_none:

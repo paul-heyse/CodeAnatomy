@@ -27,7 +27,6 @@ dependencies = [
     "pathspec>=0.12.1",
     "plotly",
     "pyarrow",
-    "pydantic",
     "pydoclint",
     "pydocstyle",
     "pyrefly",

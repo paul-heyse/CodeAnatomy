@@ -419,7 +419,7 @@ def _apply_project_to_plan(
         names.append(col)
 
     for name, expr in project.exprs.items():
-        exprs.append(expr)
+        exprs.append(expr.to_expression())
         names.append(name)
 
     if not exprs:

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+
+import pyarrow as pa
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
@@ -10,7 +12,7 @@ from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan.source import DatasetSource
 from arrowdsl.schema.schema import EncodingSpec
 from cpg.artifacts import CpgBuildArtifacts
-from cpg.catalog import PlanCatalog, PlanSource
+from cpg.catalog import PlanCatalog, resolve_plan_source
 from cpg.emit_props import emit_props_plans, filter_fields
 from cpg.plan_helpers import (
     align_plan,
@@ -24,7 +26,8 @@ from cpg.plan_helpers import (
 from cpg.quality import QualityPlanSpec, quality_plan_from_ids
 from cpg.schemas import CPG_PROPS_SCHEMA, CPG_PROPS_SPEC, SCHEMA_VERSION
 from cpg.spec_registry import edge_prop_spec, prop_table_specs, scip_role_flag_prop_spec
-from cpg.specs import PropTableSpec
+from cpg.spec_tables import prop_table_specs_from_table
+from cpg.specs import PropTableSpec, resolve_prop_include
 
 PROP_TABLE_SPECS: tuple[PropTableSpec, ...] = (
     *prop_table_specs(),
@@ -35,6 +38,12 @@ PROP_TABLE_SPECS: tuple[PropTableSpec, ...] = (
 PROP_ENCODING_SPECS: tuple[EncodingSpec, ...] = tuple(
     EncodingSpec(column=col) for col in encoding_columns_from_metadata(CPG_PROPS_SCHEMA)
 )
+
+
+def _prop_table_specs(prop_spec_table: pa.Table | None) -> tuple[PropTableSpec, ...]:
+    if prop_spec_table is None:
+        return PROP_TABLE_SPECS
+    return prop_table_specs_from_table(prop_spec_table)
 
 
 @dataclass(frozen=True)
@@ -74,7 +83,7 @@ class PropsInputTables:
 
 def _prop_tables(
     inputs: PropsInputTables,
-) -> dict[str, PlanSource]:
+) -> PlanCatalog:
     catalog = PlanCatalog()
     catalog.extend(
         {
@@ -108,7 +117,7 @@ def _prop_tables(
 
     if inputs.scip_occurrences is not None:
         catalog.add("scip_occurrences", inputs.scip_occurrences)
-    return catalog.snapshot()
+    return catalog
 
 
 def build_cpg_props_raw(
@@ -116,6 +125,7 @@ def build_cpg_props_raw(
     ctx: ExecutionContext,
     inputs: PropsInputTables | None = None,
     options: PropsBuildOptions | None = None,
+    prop_spec_table: pa.Table | None = None,
 ) -> Plan:
     """Build CPG properties as a plan without finalization.
 
@@ -130,20 +140,21 @@ def build_cpg_props_raw(
         Raised when an option flag is missing.
     """
     options = options or PropsBuildOptions()
-    tables = _prop_tables(inputs or PropsInputTables())
+    catalog = _prop_tables(inputs or PropsInputTables())
     plans: list[Plan] = []
     include_schema_version = "schema_version" in CPG_PROPS_SCHEMA.names
     schema_version = SCHEMA_VERSION if include_schema_version else None
-    for spec in PROP_TABLE_SPECS:
+    for spec in _prop_table_specs(prop_spec_table):
         enabled = getattr(options, spec.option_flag, None)
         if enabled is None:
             msg = f"Unknown option flag: {spec.option_flag}"
             raise ValueError(msg)
         if not enabled:
             continue
-        if spec.include_if is not None and not spec.include_if(options):
+        include_if = resolve_prop_include(spec.include_if_id)
+        if include_if is not None and not include_if(options):
             continue
-        plan_source = spec.table_getter(tables)
+        plan_source = resolve_plan_source(catalog, spec.table_ref, ctx=ctx)
         if plan_source is None:
             continue
         plan = ensure_plan(plan_source, label=spec.name, ctx=ctx)
@@ -151,7 +162,7 @@ def build_cpg_props_raw(
         if not filtered_fields and spec.node_kind is None:
             continue
         if filtered_fields != list(spec.fields):
-            updated_spec = spec.model_copy(update={"fields": tuple(filtered_fields)})
+            updated_spec = replace(spec, fields=tuple(filtered_fields))
         else:
             updated_spec = spec
         plans.extend(
@@ -178,6 +189,7 @@ def build_cpg_props(
     ctx: ExecutionContext,
     inputs: PropsInputTables | None = None,
     options: PropsBuildOptions | None = None,
+    prop_spec_table: pa.Table | None = None,
 ) -> CpgBuildArtifacts:
     """Build and finalize CPG properties with quality artifacts.
 
@@ -186,7 +198,12 @@ def build_cpg_props(
     CpgBuildArtifacts
         Finalize result plus quality table.
     """
-    raw_plan = build_cpg_props_raw(ctx=ctx, inputs=inputs, options=options)
+    raw_plan = build_cpg_props_raw(
+        ctx=ctx,
+        inputs=inputs,
+        options=options,
+        prop_spec_table=prop_spec_table,
+    )
     quality_plan = quality_plan_from_ids(
         raw_plan,
         spec=QualityPlanSpec(

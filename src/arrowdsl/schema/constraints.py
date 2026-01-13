@@ -18,7 +18,9 @@ def required_field_names(spec: TableSchemaSpec) -> tuple[str, ...]:
         Required field names.
     """
     required = set(spec.required_non_null)
-    return tuple(field.name for field in spec.fields if field.name in required or not field.nullable)
+    return tuple(
+        field.name for field in spec.fields if field.name in required or not field.nullable
+    )
 
 
 def required_non_null_mask(

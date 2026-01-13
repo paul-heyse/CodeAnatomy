@@ -2,6 +2,19 @@
 
 from __future__ import annotations
 
+from schema_spec.spec_tables import (
+    CONTRACT_SPEC_SCHEMA,
+    FIELD_SPEC_SCHEMA,
+    TABLE_CONSTRAINTS_SCHEMA,
+    SchemaSpecTables,
+    contract_spec_table,
+    contract_specs_from_table,
+    dataset_specs_from_tables,
+    field_spec_table,
+    schema_spec_tables_from_dataset_specs,
+    table_constraints_table,
+    table_specs_from_tables,
+)
 from schema_spec.specs import (
     DICT_STRING,
     ENCODING_DICTIONARY,
@@ -31,6 +44,7 @@ from schema_spec.system import (
     TableSpecConstraints,
     ValidationPlans,
     VirtualFieldSpec,
+    contract_catalog_spec_from_tables,
     dataset_spec_from_contract,
     dataset_spec_from_dataset,
     dataset_spec_from_path,
@@ -43,9 +57,11 @@ from schema_spec.system import (
 )
 
 __all__ = [
+    "CONTRACT_SPEC_SCHEMA",
     "DICT_STRING",
     "ENCODING_DICTIONARY",
     "ENCODING_META",
+    "FIELD_SPEC_SCHEMA",
     "GLOBAL_SCHEMA_REGISTRY",
     "KEY_FIELDS_META",
     "PROVENANCE_COLS",
@@ -53,6 +69,7 @@ __all__ = [
     "REQUIRED_NON_NULL_META",
     "SCHEMA_META_NAME",
     "SCHEMA_META_VERSION",
+    "TABLE_CONSTRAINTS_SCHEMA",
     "ArrowFieldSpec",
     "ArrowValidationOptions",
     "ContractCatalogSpec",
@@ -64,18 +81,27 @@ __all__ = [
     "FieldBundle",
     "NestedFieldSpec",
     "SchemaRegistry",
+    "SchemaSpecTables",
     "SortKeySpec",
     "TableSchemaSpec",
     "TableSpecConstraints",
     "ValidationPlans",
     "VirtualFieldSpec",
+    "contract_catalog_spec_from_tables",
+    "contract_spec_table",
+    "contract_specs_from_table",
     "dataset_spec_from_contract",
     "dataset_spec_from_dataset",
     "dataset_spec_from_path",
     "dataset_spec_from_schema",
+    "dataset_specs_from_tables",
+    "field_spec_table",
     "make_contract_spec",
     "make_dataset_spec",
     "make_table_spec",
+    "schema_spec_tables_from_dataset_specs",
+    "table_constraints_table",
     "table_spec_from_schema",
+    "table_specs_from_tables",
     "validate_arrow_table",
 ]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 
 from cpg.kinds_ultimate import (
     EDGE_KIND_CONTRACTS,
@@ -78,7 +79,7 @@ def _coerce_prop_field(
         if source.value_type is None:
             value_type = _value_type(contract, key)
             if value_type is not None:
-                return source.model_copy(update={"value_type": value_type})
+                return replace(source, value_type=value_type)
         return source
     return PropFieldSpec(
         prop_key=key,

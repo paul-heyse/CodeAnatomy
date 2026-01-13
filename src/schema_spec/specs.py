@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field, replace
 from typing import Literal
-
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 import arrowdsl.core.interop as pa
 from arrowdsl.compute.expr import ExprSpec
@@ -79,15 +77,14 @@ def _field_metadata(metadata: dict[str, str]) -> dict[bytes, bytes]:
     return {str(k).encode("utf-8"): str(v).encode("utf-8") for k, v in metadata.items()}
 
 
-class ArrowFieldSpec(BaseModel):
+@dataclass(frozen=True)
+class ArrowFieldSpec:
     """Specification for a single Arrow field."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     name: str
     dtype: DataTypeLike
     nullable: bool = True
-    metadata: dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, str] = field(default_factory=dict)
     encoding: Literal["dictionary"] | None = None
 
     def to_arrow_field(self) -> FieldLike:
@@ -105,54 +102,70 @@ class ArrowFieldSpec(BaseModel):
         return pa.field(self.name, self.dtype, nullable=self.nullable, metadata=metadata)
 
 
-class DerivedFieldSpec(BaseModel):
+@dataclass(frozen=True)
+class DerivedFieldSpec:
     """Specification for a derived column."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     name: str
     expr: ExprSpec
 
 
-class TableSchemaSpec(BaseModel):
+@dataclass(frozen=True)
+class TableSchemaSpec:
     """Specification for a table schema and associated constraints."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
-
     name: str
-    version: int | None = None
     fields: list[ArrowFieldSpec]
+    version: int | None = None
     required_non_null: tuple[str, ...] = ()
     key_fields: tuple[str, ...] = ()
 
-    @field_validator("fields")
-    @classmethod
-    def _unique_field_names(cls, fields: list[ArrowFieldSpec]) -> list[ArrowFieldSpec]:
+    def __post_init__(self) -> None:
+        """Validate the table schema specification.
+
+        Raises
+        ------
+        ValueError
+            Raised when field definitions are duplicated or constraints reference
+            unknown fields.
+        """
         seen: set[str] = set()
         dupes: list[str] = []
-        for field in fields:
-            if field.name in seen:
-                dupes.append(field.name)
+        for field_spec in self.fields:
+            if field_spec.name in seen:
+                dupes.append(field_spec.name)
             else:
-                seen.add(field.name)
+                seen.add(field_spec.name)
         if dupes:
             msg = f"duplicate field names: {sorted(set(dupes))}"
             raise ValueError(msg)
-        return fields
-
-    @field_validator("required_non_null", "key_fields")
-    @classmethod
-    def _validate_field_refs(
-        cls,
-        values: tuple[str, ...],
-        info: ValidationInfo,
-    ) -> tuple[str, ...]:
-        field_names = {field.name for field in info.data["fields"]}
-        missing = [name for name in values if name not in field_names]
-        if missing:
-            msg = f"unknown fields: {missing}"
+        missing_required = [name for name in self.required_non_null if name not in seen]
+        if missing_required:
+            msg = f"unknown fields: {missing_required}"
             raise ValueError(msg)
-        return values
+        missing_keys = [name for name in self.key_fields if name not in seen]
+        if missing_keys:
+            msg = f"unknown fields: {missing_keys}"
+            raise ValueError(msg)
+
+    def with_constraints(
+        self,
+        *,
+        required_non_null: Iterable[str],
+        key_fields: Iterable[str],
+    ) -> TableSchemaSpec:
+        """Return a new TableSchemaSpec with updated constraints.
+
+        Returns
+        -------
+        TableSchemaSpec
+            Updated table schema spec.
+        """
+        return replace(
+            self,
+            required_non_null=tuple(required_non_null),
+            key_fields=tuple(key_fields),
+        )
 
     def to_arrow_schema(self) -> SchemaLike:
         """Build a pyarrow.Schema from the spec.

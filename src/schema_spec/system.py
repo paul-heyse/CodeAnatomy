@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal, TypedDict, Unpack
 
+import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 import pyarrow.types as patypes
-from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
 
 from arrowdsl.compute.expr import ExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel
@@ -41,6 +41,13 @@ from arrowdsl.schema.validation import (
     duplicate_key_rows_plan,
     invalid_rows_plan,
     validate_table,
+)
+from arrowdsl.spec.io import read_spec_table
+from schema_spec.spec_tables import (
+    SchemaSpecTables,
+    contract_specs_from_table,
+    dataset_specs_from_tables,
+    table_specs_from_tables,
 )
 from schema_spec.specs import (
     ENCODING_DICTIONARY,
@@ -78,10 +85,9 @@ def validate_arrow_table(
     return report.validated
 
 
-class SortKeySpec(BaseModel):
+@dataclass(frozen=True)
+class SortKeySpec:
     """Sort key specification."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     column: str
     order: Literal["ascending", "descending"] = "ascending"
@@ -97,10 +103,9 @@ class SortKeySpec(BaseModel):
         return SortKey(column=self.column, order=self.order)
 
 
-class DedupeSpecSpec(BaseModel):
+@dataclass(frozen=True)
+class DedupeSpecSpec:
     """Dedupe specification."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     keys: tuple[str, ...]
     tie_breakers: tuple[SortKeySpec, ...] = ()
@@ -139,10 +144,9 @@ def _ordering_metadata_spec(
     return None
 
 
-class ContractSpec(BaseModel):
+@dataclass(frozen=True)
+class ContractSpec:
     """Output contract specification."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     name: str
     table_schema: TableSchemaSpec
@@ -155,19 +159,20 @@ class ContractSpec(BaseModel):
     virtual_field_docs: dict[str, str] | None = None
     validation: ArrowValidationOptions | None = None
 
-    @field_validator("virtual_field_docs")
-    @classmethod
-    def _docs_match_virtual_fields(
-        cls, value: dict[str, str] | None, info: ValidationInfo
-    ) -> dict[str, str] | None:
-        if value is None:
-            return None
-        virtual_fields: tuple[str, ...] = info.data.get("virtual_fields", ())
-        missing = [key for key in value if key not in virtual_fields]
+    def __post_init__(self) -> None:
+        """Validate contract spec invariants.
+
+        Raises
+        ------
+        ValueError
+            Raised when virtual field docs reference undefined virtual fields.
+        """
+        if self.virtual_field_docs is None:
+            return
+        missing = [key for key in self.virtual_field_docs if key not in self.virtual_fields]
         if missing:
             msg = f"virtual_field_docs keys missing in virtual_fields: {missing}"
             raise ValueError(msg)
-        return value
 
     def to_contract(self) -> Contract:
         """Convert to a runtime Contract.
@@ -259,7 +264,7 @@ class DatasetSpec:
         if self.contract_spec is not None:
             if self.validation is None or self.contract_spec.validation is not None:
                 return self.contract_spec
-            return self.contract_spec.model_copy(update={"validation": self.validation})
+            return replace(self.contract_spec, validation=self.validation)
         return ContractSpec(
             name=self.table_spec.name,
             table_schema=self.table_spec,
@@ -610,11 +615,10 @@ def _table_spec_from_contract(contract: Contract) -> TableSchemaSpec:
     table_spec = table_spec_from_schema(contract.name, contract.schema, version=contract.version)
     if not contract.required_non_null and not contract.key_fields:
         return table_spec
-    return table_spec.model_copy(
-        update={
-            "required_non_null": contract.required_non_null,
-            "key_fields": contract.key_fields,
-        }
+    return replace(
+        table_spec,
+        required_non_null=contract.required_non_null,
+        key_fields=contract.key_fields,
     )
 
 
@@ -754,6 +758,27 @@ def dataset_spec_from_path(
     return dataset_spec_from_dataset(name, dataset, version=version)
 
 
+def contract_catalog_spec_from_tables(
+    *,
+    field_table: pa.Table,
+    constraints_table: pa.Table | None = None,
+    contract_table: pa.Table | None = None,
+) -> ContractCatalogSpec:
+    """Build a ContractCatalogSpec from schema spec tables.
+
+    Returns
+    -------
+    ContractCatalogSpec
+        Catalog spec derived from the provided tables.
+    """
+    table_specs = table_specs_from_tables(field_table, constraints_table=constraints_table)
+    if contract_table is None:
+        return ContractCatalogSpec(contracts={})
+    return ContractCatalogSpec(
+        contracts=contract_specs_from_table(contract_table, table_specs),
+    )
+
+
 @dataclass(frozen=True)
 class SchemaRegistry:
     """Registry for dataset specs."""
@@ -809,25 +834,68 @@ class SchemaRegistry:
         dataset = options.open(path)
         return self.register_dataset(dataset_spec_from_dataset(name, dataset, version=version))
 
+    def register_from_tables(self, tables: SchemaSpecTables) -> dict[str, DatasetSpec]:
+        """Register dataset specs from schema spec tables.
+
+        Returns
+        -------
+        dict[str, DatasetSpec]
+            Mapping of dataset names to registered specs.
+        """
+        dataset_specs = dataset_specs_from_tables(
+            tables.field_table,
+            constraints_table=tables.constraints_table,
+            contract_table=tables.contract_table,
+        )
+        for spec in dataset_specs.values():
+            self.register_dataset(spec)
+        return dataset_specs
+
+    def register_from_paths(
+        self,
+        *,
+        field_table: PathLike,
+        constraints_table: PathLike | None = None,
+        contract_table: PathLike | None = None,
+    ) -> dict[str, DatasetSpec]:
+        """Register dataset specs from on-disk spec tables.
+
+        Returns
+        -------
+        dict[str, DatasetSpec]
+            Mapping of dataset names to registered specs.
+        """
+        tables = SchemaSpecTables(
+            field_table=read_spec_table(field_table),
+            constraints_table=read_spec_table(constraints_table)
+            if constraints_table is not None
+            else None,
+            contract_table=read_spec_table(contract_table) if contract_table is not None else None,
+        )
+        return self.register_from_tables(tables)
+
 
 GLOBAL_SCHEMA_REGISTRY = SchemaRegistry()
 
 
-class ContractCatalogSpec(BaseModel):
+@dataclass(frozen=True)
+class ContractCatalogSpec:
     """Collection of contract specifications keyed by name."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     contracts: dict[str, ContractSpec]
 
-    @field_validator("contracts")
-    @classmethod
-    def _names_match(cls, contracts: dict[str, ContractSpec]) -> dict[str, ContractSpec]:
-        mismatched = [name for name, spec in contracts.items() if name != spec.name]
+    def __post_init__(self) -> None:
+        """Validate that contract names match mapping keys.
+
+        Raises
+        ------
+        ValueError
+            Raised when contract keys do not match their spec names.
+        """
+        mismatched = [name for name, spec in self.contracts.items() if name != spec.name]
         if mismatched:
             msg = f"contract key mismatch: {mismatched}"
             raise ValueError(msg)
-        return contracts
 
     def to_contracts(self) -> dict[str, ContractSpec]:
         """Return a name->spec mapping.
@@ -869,6 +937,7 @@ __all__ = [
     "TableSpecConstraints",
     "ValidationPlans",
     "VirtualFieldSpec",
+    "contract_catalog_spec_from_tables",
     "dataset_spec_from_contract",
     "dataset_spec_from_dataset",
     "dataset_spec_from_path",

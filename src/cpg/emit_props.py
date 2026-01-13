@@ -12,17 +12,18 @@ import pyarrow.types as patypes
 
 from arrowdsl.compute.predicates import null_if_empty_or_zero
 from arrowdsl.compute.scalars import null_expr, scalar_expr
-from arrowdsl.compute.transforms import (
-    expr_context_expr,
-    expr_context_value,
-    flag_to_bool,
-    flag_to_bool_expr,
-)
 from arrowdsl.compute.udfs import ensure_json_udf
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, DataTypeLike, ensure_expression, pc
 from arrowdsl.plan.plan import Plan
-from cpg.specs import PropFieldSpec, PropOptions, PropTableSpec, PropValueType
+from cpg.specs import (
+    PropFieldSpec,
+    PropOptions,
+    PropTableSpec,
+    PropValueType,
+    resolve_prop_include,
+    resolve_prop_transform,
+)
 
 
 @dataclass(frozen=True)
@@ -150,14 +151,10 @@ def _json_value_expr(
 
 
 def _apply_transform(expr: ComputeExpression, field: PropFieldSpec) -> ComputeExpression:
-    if field.transform is None:
+    transform = resolve_prop_transform(field.transform_id)
+    if transform is None:
         return expr
-    if field.transform is expr_context_value:
-        return expr_context_expr(expr)
-    if field.transform is flag_to_bool:
-        return flag_to_bool_expr(expr)
-    msg = f"Unsupported prop transform: {field.transform!r}"
-    raise ValueError(msg)
+    return transform.expr_fn(expr)
 
 
 def _value_expr(
@@ -341,7 +338,8 @@ def filter_fields(
     """
     selected: list[PropFieldSpec] = []
     for field in fields:
-        if field.include_if is not None and not field.include_if(options):
+        include_if = resolve_prop_include(field.include_if_id)
+        if include_if is not None and not include_if(options):
             continue
         selected.append(field)
     return selected

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import arrowdsl.core.interop as pa
-from arrowdsl.compute.transforms import expr_context_value
 from arrowdsl.core.context import ExecutionContext, RuntimeProfile
 from arrowdsl.plan.plan import Plan, PlanSpec, union_all_plans
 from cpg.emit_props import emit_props_plans
 from cpg.kinds import EntityKind, NodeKind
-from cpg.specs import PropFieldSpec, PropTableSpec
+from cpg.specs import TRANSFORM_EXPR_CONTEXT, PropFieldSpec, PropTableSpec
 
 
 def _ctx() -> ExecutionContext:
@@ -29,7 +28,7 @@ def test_expr_context_transform_plan() -> None:
     spec = PropTableSpec(
         name="expr_ctx_props",
         option_flag="include_props",
-        table_getter=lambda tables: tables.get("expr_ctx"),
+        table_ref="expr_ctx",
         entity_kind=EntityKind.NODE,
         id_cols=("node_id",),
         node_kind=NodeKind.CST_NAME_REF,
@@ -37,7 +36,7 @@ def test_expr_context_transform_plan() -> None:
             PropFieldSpec(
                 prop_key="expr_context",
                 source_col="expr_ctx",
-                transform=expr_context_value,
+                transform_id=TRANSFORM_EXPR_CONTEXT,
                 value_type="string",
             ),
         ),
@@ -61,7 +60,7 @@ def test_json_transform_plan() -> None:
     spec = PropTableSpec(
         name="json_props",
         option_flag="include_props",
-        table_getter=lambda tables: tables.get("json_props"),
+        table_ref="json_props",
         entity_kind=EntityKind.NODE,
         id_cols=("node_id",),
         node_kind=NodeKind.CST_DEF,

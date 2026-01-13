@@ -11,8 +11,8 @@ from typing import Literal, Protocol, TypedDict, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.compute.exprs import FieldExpr
 from arrowdsl.compute.kernels import ChunkPolicy
+from arrowdsl.compute.macros import FieldExpr
 from arrowdsl.core.interop import (
     ArrayLike,
     ComputeExpression,

@@ -9,9 +9,9 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
+from arrowdsl.compute.macros import null_expr, scalar_expr
 from arrowdsl.compute.options import cast_expr
 from arrowdsl.compute.predicates import null_if_empty_or_zero
-from arrowdsl.compute.scalars import null_expr, scalar_expr
 from arrowdsl.compute.udfs import ensure_json_udf
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, DataTypeLike, ensure_expression, pc

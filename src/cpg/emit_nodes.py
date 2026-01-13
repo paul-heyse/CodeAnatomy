@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrowdsl.compute.scalars import scalar_expr
+from arrowdsl.compute.macros import scalar_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan_helpers import coalesce_expr

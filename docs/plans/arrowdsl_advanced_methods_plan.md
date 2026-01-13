@@ -32,12 +32,12 @@ fragments = list(dataset.get_fragments(filter=predicate))
 - Update: `src/hamilton_pipeline/modules/outputs.py`
 
 **Implementation checklist**
-- [ ] Add `estimated_rows` and `count_rows` fields to `ScanTelemetry`.
-- [ ] Capture `dataset.count_rows(filter=...)` when available.
-- [ ] Propagate new fields to telemetry tables and output artifacts.
+- [x] Add `estimated_rows` and `count_rows` fields to `ScanTelemetry`.
+- [x] Capture `dataset.count_rows(filter=...)` when available.
+- [x] Propagate new fields to telemetry tables and output artifacts.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -64,12 +64,12 @@ for tagged in scanner.scan_batches():
 - Update: `src/arrowdsl/plan/source.py`
 
 **Implementation checklist**
-- [ ] Add optional provenance column injection to QuerySpec scans.
-- [ ] Expose `ScanContext.scan_batches()` for TaggedRecordBatch iteration.
-- [ ] Add opt-in debug projection for fragment/batch indices.
+- [x] Add optional provenance column injection to QuerySpec scans.
+- [x] Expose `ScanContext.scan_batches()` for TaggedRecordBatch iteration.
+- [x] Add opt-in debug projection for fragment/batch indices.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -99,12 +99,12 @@ scanner = dataset.scanner(
 - Update: `src/arrowdsl/plan/ops.py`
 
 **Implementation checklist**
-- [ ] Add `fragment_scan_options` to ScanProfile.
-- [ ] Pass scan options through `ds.Scanner` and Acero `ScanNodeOptions`.
-- [ ] Ensure options are set only via runtime profiles.
+- [x] Add `fragment_scan_options` to ScanProfile.
+- [x] Pass scan options through `ds.Scanner` and Acero `ScanNodeOptions`.
+- [x] Ensure options are set only via runtime profiles.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -126,12 +126,12 @@ if self.projection.derived:
 - Update: `src/arrowdsl/plan/source.py`
 
 **Implementation checklist**
-- [ ] Extend QuerySpec to emit dict projections when derived fields exist.
-- [ ] Ensure DatasetSpec derived fields participate in scan columns.
-- [ ] Skip redundant post-scan projection nodes where safe.
+- [x] Extend QuerySpec to emit dict projections when derived fields exist.
+- [x] Ensure DatasetSpec derived fields participate in scan columns.
+- [x] Skip redundant post-scan projection nodes where safe.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -152,12 +152,12 @@ union = pa.UnionArray.from_dense(type_ids, offsets, children)
 - Update: `src/arrowdsl/spec/structs.py`
 
 **Implementation checklist**
-- [ ] Add dense/sparse union array factory helpers.
-- [ ] Define union field specs for known heterogeneous payloads.
-- [ ] Replace JSON blobs with union encodings where feasible.
+- [x] Add dense/sparse union array factory helpers.
+- [x] Define union field specs for known heterogeneous payloads.
+- [x] Replace JSON blobs with union encodings where feasible.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -178,9 +178,9 @@ arr = pa.DictionaryArray.from_arrays(indices, dictionary)
 - Update: `src/arrowdsl/spec/codec.py`
 
 **Implementation checklist**
-- [ ] Add dictionary array factory for index+dictionary inputs.
-- [ ] Integrate into spec codecs for categorical fields.
-- [ ] Ensure dictionary unification is applied post-assembly.
+- [x] Add dictionary array factory for index+dictionary inputs.
+- [x] Integrate into spec codecs for categorical fields.
+- [x] Ensure dictionary unification is applied post-assembly.
 
 **Status**
-Planned.
+Completed.

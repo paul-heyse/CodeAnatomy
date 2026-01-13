@@ -7,15 +7,15 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
+from arrowdsl.compute.macros import null_expr, scalar_expr
 from arrowdsl.compute.predicates import bitmask_is_set_expr
-from arrowdsl.compute.scalars import null_expr, scalar_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
 from arrowdsl.plan.joins import JoinOutputSpec, join_spec
 from arrowdsl.plan.plan import Plan, hash_join
 from arrowdsl.plan_helpers import column_or_null_expr, path_meta_join
 from cpg.catalog import PlanCatalog, PlanRef
-from cpg.kinds import (
+from cpg.kinds_ultimate import (
     SCIP_ROLE_DEFINITION,
     SCIP_ROLE_IMPORT,
     SCIP_ROLE_READ,

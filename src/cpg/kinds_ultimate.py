@@ -49,6 +49,24 @@ class SourceKind(StrEnum):
     PIPELINE = "pipeline"  # build steps that aggregate/merge/normalize
 
 
+class EntityKind(StrEnum):
+    """Define entity kinds for properties tables."""
+
+    NODE = "node"
+    EDGE = "edge"
+
+
+SCIP_ROLE_DEFINITION = 1
+SCIP_ROLE_IMPORT = 2
+SCIP_ROLE_WRITE = 4
+SCIP_ROLE_READ = 8
+SCIP_ROLE_GENERATED = 16
+SCIP_ROLE_TEST = 32
+SCIP_ROLE_FORWARD_DEFINITION = 64
+
+
+
+
 class NodeKind(StrEnum):
     """Ultimate Python CPG node kinds."""
 

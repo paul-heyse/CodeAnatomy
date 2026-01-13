@@ -6,7 +6,7 @@ import arrowdsl.core.interop as pa
 from arrowdsl.core.context import ExecutionContext, RuntimeProfile
 from arrowdsl.plan.plan import PlanSpec
 from cpg.build_props import PropsInputTables, build_cpg_props_raw
-from cpg.kinds import SCIP_ROLE_FORWARD_DEFINITION, SCIP_ROLE_GENERATED, SCIP_ROLE_TEST
+from cpg.kinds_ultimate import SCIP_ROLE_FORWARD_DEFINITION, SCIP_ROLE_GENERATED, SCIP_ROLE_TEST
 
 
 def test_scip_role_props() -> None:

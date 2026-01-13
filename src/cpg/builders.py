@@ -34,7 +34,7 @@ from arrowdsl.schema.builders import (
 )
 from arrowdsl.schema.factories import rows_to_table
 from cpg.catalog import PlanCatalog, PlanSource, resolve_plan_source
-from cpg.kinds import EntityKind
+from cpg.kinds_ultimate import EntityKind
 from cpg.plan_helpers import ensure_plan
 from cpg.specs import (
     EdgeEmitSpec,

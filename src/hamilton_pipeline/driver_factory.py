@@ -14,7 +14,7 @@ from hamilton.lifecycle import base as lifecycle_base
 
 from arrowdsl.json_factory import JsonPolicy, dumps_bytes
 from core_types import JsonValue
-from cpg.kinds import validate_derivation_extractors, validate_registry_completeness
+from cpg.kinds_ultimate import validate_derivation_extractors, validate_registry_completeness
 from hamilton_pipeline.arrow_adapters import register_arrow_parquet_adapters
 from hamilton_pipeline.modules import ALL_MODULES
 

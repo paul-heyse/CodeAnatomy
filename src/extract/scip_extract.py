@@ -15,7 +15,7 @@ from typing import Literal, overload
 import pyarrow as pa
 
 from arrowdsl.compute.ids import prefixed_hash_id
-from arrowdsl.compute.transforms import normalize_string_items
+from arrowdsl.compute.macros import normalize_string_items
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
 from arrowdsl.core.interop import (
     ArrayLike,
@@ -32,7 +32,7 @@ from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.plan_helpers import encoding_columns_from_metadata, encoding_projection
 from arrowdsl.schema.arrays import set_or_append_column, struct_array_from_dicts
 from arrowdsl.schema.builders import table_from_arrays
-from arrowdsl.schema.nested import LargeListAccumulator
+from arrowdsl.schema.nested_builders import LargeListAccumulator
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from arrowdsl.schema.unify import unify_tables
 from extract.scip_parse_json import parse_index_json

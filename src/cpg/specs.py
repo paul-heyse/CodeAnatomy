@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
-from arrowdsl.compute.transforms import (
+from arrowdsl.compute.macros import (
     expr_context_expr,
     expr_context_value,
     flag_to_bool,
@@ -14,7 +14,7 @@ from arrowdsl.compute.transforms import (
 )
 from arrowdsl.core.interop import ComputeExpression, TableLike
 from arrowdsl.plan.plan import Plan
-from cpg.kinds import EdgeKind, EntityKind, NodeKind
+from cpg.kinds_ultimate import EdgeKind, EntityKind, NodeKind
 
 type TableFilter = Callable[[TableLike], TableLike]
 type PropValueType = Literal["string", "int", "float", "bool", "json"]

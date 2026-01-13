@@ -18,7 +18,7 @@ from arrowdsl.plan_helpers import column_or_null_expr
 from arrowdsl.schema.builders import column_or_null, table_from_arrays
 from arrowdsl.schema.encoding import normalize_dictionaries
 from arrowdsl.schema.factories import empty_table
-from arrowdsl.schema.nested import StructLargeListViewAccumulator
+from arrowdsl.schema.nested_builders import StructLargeListViewAccumulator
 from normalize.runner import (
     PostFn,
     ensure_canonical,

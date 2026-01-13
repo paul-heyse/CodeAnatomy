@@ -8,8 +8,8 @@ from dataclasses import dataclass
 import pyarrow as pa
 import pyarrow.types as patypes
 
+from arrowdsl.compute.macros import null_expr, scalar_expr
 from arrowdsl.compute.predicates import invalid_id_expr
-from arrowdsl.compute.scalars import null_expr, scalar_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import (
     ArrayLike,

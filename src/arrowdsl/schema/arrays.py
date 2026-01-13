@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from arrowdsl.compute.exprs import CoalesceExpr, ColumnExpr, ConstExpr, FieldExpr
+from arrowdsl.compute.macros import CoalesceExpr, ColumnExpr, ConstExpr, FieldExpr
 from arrowdsl.core.interop import (
     ArrayLike,
     DataTypeLike,

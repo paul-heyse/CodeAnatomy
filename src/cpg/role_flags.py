@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cpg.kinds import SCIP_ROLE_FORWARD_DEFINITION, SCIP_ROLE_GENERATED, SCIP_ROLE_TEST
+from cpg.kinds_ultimate import SCIP_ROLE_FORWARD_DEFINITION, SCIP_ROLE_GENERATED, SCIP_ROLE_TEST
 
 ROLE_FLAG_SPECS: tuple[tuple[str, int, str], ...] = (
     ("generated", SCIP_ROLE_GENERATED, "scip_role_generated"),

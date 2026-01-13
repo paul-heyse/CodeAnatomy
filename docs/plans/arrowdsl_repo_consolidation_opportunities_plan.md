@@ -37,12 +37,12 @@ plan = plan.project(exprs, names, ctx=ctx)
 - Update: `src/relspec/compiler.py`
 
 **Implementation checklist**
-- [ ] Add ArrowDSL-first inference + alignment helpers with consistent options.
-- [ ] Replace local wrappers with ArrowDSL imports.
-- [ ] Ensure schema metadata propagation remains intact.
+- [x] Add ArrowDSL-first inference + alignment helpers with consistent options.
+- [x] Replace local wrappers with ArrowDSL imports.
+- [x] Ensure schema metadata propagation remains intact.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -64,12 +64,12 @@ policy = encoding_policy_from_schema(schema)
 - Update: `src/normalize/schemas.py`
 
 **Implementation checklist**
-- [ ] Move dict field factory + metadata parsing into ArrowDSL encoding helpers.
-- [ ] Reuse ArrowDSL encoding constants from schema_spec and normalize.
-- [ ] Remove duplicate metadata parsing logic.
+- [x] Move dict field factory + metadata parsing into ArrowDSL encoding helpers.
+- [x] Reuse ArrowDSL encoding constants from schema_spec and normalize.
+- [x] Remove duplicate metadata parsing logic.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -94,12 +94,12 @@ plan = plan.project(exprs + [expr], names + [out_col], ctx=ctx)
 - Update: `src/cpg/hash_specs.py`
 
 **Implementation checklist**
-- [ ] Move hash column helpers into ArrowDSL (kernel + plan lanes).
-- [ ] Centralize HashSpec registries or factories where possible.
-- [ ] Replace local ID helpers with ArrowDSL APIs.
+- [x] Move hash column helpers into ArrowDSL (kernel + plan lanes).
+- [x] Centralize HashSpec registries or factories where possible.
+- [x] Replace local ID helpers with ArrowDSL APIs.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -128,12 +128,12 @@ joined = left_join(left, right, config=config, ctx=ctx)
 - Update: `src/hamilton_pipeline/modules/normalization.py`
 
 **Implementation checklist**
-- [ ] Add join config factories for common left-join patterns.
-- [ ] Replace repeated `JoinConfig.from_sequences` blocks.
-- [ ] Ensure output projections stay deterministic.
+- [x] Add join config factories for common left-join patterns.
+- [x] Replace repeated `JoinConfig.from_sequences` blocks.
+- [x] Ensure output projections stay deterministic.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -154,12 +154,12 @@ result = finalize_plan(plan, ctx=ctx, schema=target_schema)
 - Update: `src/relspec/compiler.py`
 
 **Implementation checklist**
-- [ ] Centralize `finalize_plan` and `align_plan_to_schema` helpers.
-- [ ] Remove duplicate alignment wrappers.
-- [ ] Keep ordering metadata and pipeline-breaker behavior unchanged.
+- [x] Centralize `finalize_plan` and `align_plan_to_schema` helpers.
+- [x] Remove duplicate alignment wrappers.
+- [x] Keep ordering metadata and pipeline-breaker behavior unchanged.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -181,12 +181,12 @@ payload = dumps_text(value, policy=JsonPolicy(sort_keys=True))
 - Update: `src/cpg/builders.py`
 
 **Implementation checklist**
-- [ ] Expose a shared JSON default/serializer in ArrowDSL.
-- [ ] Replace ad hoc JSON serialization in obs/cpg.
-- [ ] Ensure ASCII policies remain consistent where required.
+- [x] Expose a shared JSON default/serializer in ArrowDSL.
+- [x] Replace ad hoc JSON serialization in obs/cpg.
+- [x] Ensure ASCII policies remain consistent where required.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -208,12 +208,12 @@ write_table_parquet(table, path, opts=ParquetWriteOptions())
 - Update: `src/hamilton_pipeline/arrow_adapters.py`
 
 **Implementation checklist**
-- [ ] Ensure IO options are centralized in ArrowDSL.
-- [ ] Update storage wrappers to delegate or remove them.
-- [ ] Keep metadata sidecar behavior intact.
+- [x] Ensure IO options are centralized in ArrowDSL.
+- [x] Update storage wrappers to delegate or remove them.
+- [x] Keep metadata sidecar behavior intact.
 
 **Status**
-Planned.
+Completed (storage already delegates to ArrowDSL IO).
 
 ---
 
@@ -234,12 +234,12 @@ spec = register_dataset(name=name, version=version, fields=fields, bundles=bundl
 - Update: `src/schema_spec/system.py`
 
 **Implementation checklist**
-- [ ] Add a shared dataset registration helper in ArrowDSL.
-- [ ] Route extract/normalize schema registration through it.
-- [ ] Preserve metadata and ordering policies.
+- [x] Add a shared dataset registration helper in ArrowDSL.
+- [x] Route extract/normalize schema registration through it.
+- [x] Preserve metadata and ordering policies.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -260,9 +260,9 @@ struct = struct_type({"kind": pa.string(), "value": pa.int64()})
 - Update: `src/normalize/schemas.py`
 
 **Implementation checklist**
-- [ ] Move list/struct/map helpers to ArrowDSL arrays.
-- [ ] Replace local constructors in schema_spec/normalize.
-- [ ] Keep type factories ASCII-only and fully typed.
+- [x] Move list/struct/map helpers to ArrowDSL arrays.
+- [x] Replace local constructors in schema_spec/normalize.
+- [x] Keep type factories ASCII-only and fully typed.
 
 **Status**
-Planned.
+Completed.

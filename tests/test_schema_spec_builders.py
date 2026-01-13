@@ -10,7 +10,7 @@ from arrowdsl.plan.plan import Plan, PlanSpec, union_all_plans
 from cpg.emit_edges import emit_edges_plan
 from cpg.emit_nodes import emit_node_plan
 from cpg.emit_props import emit_props_plans, filter_fields
-from cpg.kinds import EdgeKind, EntityKind, NodeKind
+from cpg.kinds_ultimate import EdgeKind, EntityKind, NodeKind
 from cpg.specs import INCLUDE_HEAVY_JSON, EdgeEmitSpec, NodeEmitSpec, PropFieldSpec, PropTableSpec
 from schema_spec import (
     SCHEMA_META_NAME,

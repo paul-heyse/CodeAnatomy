@@ -6,7 +6,7 @@ import arrowdsl.core.interop as pa
 from arrowdsl.core.context import ExecutionContext, RuntimeProfile
 from arrowdsl.plan.plan import Plan, PlanSpec, union_all_plans
 from cpg.emit_props import emit_props_plans
-from cpg.kinds import EntityKind, NodeKind
+from cpg.kinds_ultimate import EntityKind, NodeKind
 from cpg.specs import TRANSFORM_EXPR_CONTEXT, PropFieldSpec, PropTableSpec
 
 

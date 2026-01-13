@@ -19,7 +19,7 @@ from arrowdsl.plan.rows import plan_from_rows
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.schema.builders import table_from_arrays
 from arrowdsl.schema.encoding import normalize_dictionaries
-from arrowdsl.schema.nested import LargeListViewAccumulator
+from arrowdsl.schema.nested_builders import LargeListViewAccumulator
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.file_context import FileContext

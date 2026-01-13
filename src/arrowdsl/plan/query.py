@@ -10,7 +10,7 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 
 from arrowdsl.compute.expr import ExprSpec
-from arrowdsl.compute.exprs import FieldExpr
+from arrowdsl.compute.macros import FieldExpr
 from arrowdsl.compute.predicates import FilterSpec
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, DeclarationLike, SchemaLike, pc

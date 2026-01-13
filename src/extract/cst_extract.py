@@ -20,7 +20,7 @@ from libcst.metadata import (
 )
 
 from arrowdsl.compute.expr_specs import MaskedHashExprSpec
-from arrowdsl.compute.transforms import normalize_string_items
+from arrowdsl.compute.macros import normalize_string_items
 from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan

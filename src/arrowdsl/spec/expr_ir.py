@@ -11,7 +11,7 @@ import pyarrow as pa
 
 from arrowdsl.compute.expr import ExprSpec, ScalarValue
 from arrowdsl.compute.expr_specs import ComputeExprSpec
-from arrowdsl.compute.exprs import ConstExpr, FieldExpr
+from arrowdsl.compute.macros import ConstExpr, FieldExpr
 from arrowdsl.compute.registry import ComputeRegistry, UdfSpec, default_registry
 from arrowdsl.core.interop import (
     ArrayLike,

@@ -38,12 +38,12 @@ def rows_to_table(rows: Sequence[Mapping[str, object]], schema: SchemaLike) -> T
 - Update: `src/hamilton_pipeline/modules/normalization.py`
 
 **Implementation checklist**
-- [ ] Add shared row/table factories (empty table + row table + nested arrays).
-- [ ] Replace `pa.Table.from_pylist` and manual empty-table assembly in normalization/obs/cpg.
-- [ ] Ensure schema metadata is preserved on factory outputs.
+- [x] Add shared row/table factories (empty table + row table + nested arrays).
+- [x] Replace `pa.Table.from_pylist` and manual empty-table assembly in normalization/obs/cpg.
+- [x] Ensure schema metadata is preserved on factory outputs.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -71,12 +71,12 @@ def masked_hash_expr(spec: HashSpec, *, required: Sequence[str]) -> ComputeExpre
 - Update: `src/cpg/emit_edges.py`
 
 **Implementation checklist**
-- [ ] Add kernel-lane and plan-lane mask helpers (array + expression forms).
-- [ ] Route ID creation through `masked_hash_expr` and `masked_hash_array`.
-- [ ] Remove per-module validity mask duplication.
+- [x] Add kernel-lane and plan-lane mask helpers (array + expression forms).
+- [x] Route ID creation through `masked_hash_expr` and `masked_hash_array`.
+- [x] Remove per-module validity mask duplication.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -99,12 +99,12 @@ result = run_plan(plan, ctx=ctx, prefer_reader=True, attach_ordering_metadata=Tr
 - Update: `src/arrowdsl/plan/runner.py`
 
 **Implementation checklist**
-- [ ] Ensure all plan execution flows go through `run_plan`/`PlanSpec`.
-- [ ] Propagate pipeline-breaker metadata to outputs.
-- [ ] Prefer streaming `to_reader()` when safe (no breakers + non-canonical determinism).
+- [x] Ensure all plan execution flows go through `run_plan`/`PlanSpec`.
+- [x] Propagate pipeline-breaker metadata to outputs.
+- [x] Prefer streaming `to_reader()` when safe (no breakers + non-canonical determinism).
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -131,12 +131,12 @@ def write_dataset(data: DatasetWriteInput, *, config: DatasetWriteConfig) -> str
 - Update: `src/hamilton_pipeline/modules/outputs.py`
 
 **Implementation checklist**
-- [ ] Move IO defaults and schema alignment into ArrowDSL IO helpers.
-- [ ] Standardize dataset metadata sidecar generation via `ParquetMetadataSpec`.
-- [ ] Update Hamilton adapters to call ArrowDSL IO wrappers.
+- [x] Move IO defaults and schema alignment into ArrowDSL IO helpers.
+- [x] Standardize dataset metadata sidecar generation via `ParquetMetadataSpec`.
+- [x] Update Hamilton adapters to call ArrowDSL IO wrappers.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -159,12 +159,12 @@ def dataset_stats_plan(plan: Plan, *, ctx: ExecutionContext) -> Plan:
 - Update: `src/cpg/quality.py`
 
 **Implementation checklist**
-- [ ] Build plan-lane stats helpers with aggregate + projection defaults.
-- [ ] Replace row-iteration stats builders with ArrowDSL plans.
-- [ ] Ensure quality tables share a single schema factory.
+- [x] Build plan-lane stats helpers with aggregate + projection defaults.
+- [x] Replace row-iteration stats builders with ArrowDSL plans.
+- [x] Ensure quality tables share a single schema factory.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -189,12 +189,12 @@ joined = left_join(left, right, config=config, use_threads=True)
 - Update: `src/normalize/bytecode_cfg.py`
 
 **Implementation checklist**
-- [ ] Add standardized join config factories for common patterns.
-- [ ] Centralize metadata join patterns (code_unit/file/path).
-- [ ] Ensure projection helpers preserve ordering metadata.
+- [x] Add standardized join config factories for common patterns.
+- [x] Centralize metadata join patterns (code_unit/file/path).
+- [x] Ensure projection helpers preserve ordering metadata.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -218,12 +218,12 @@ plan = scan_ctx.to_plan(label=dataset_spec.name)
 - Update: `src/obs/stats.py`
 
 **Implementation checklist**
-- [ ] Adopt provenance-aware projections via `ctx.provenance`.
-- [ ] Route scan telemetry through `ScanContext.telemetry()` everywhere.
-- [ ] Standardize provenance column naming via `PROVENANCE_COLS`.
+- [x] Adopt provenance-aware projections via `ctx.provenance`.
+- [x] Route scan telemetry through `ScanContext.telemetry()` everywhere.
+- [x] Standardize provenance column naming via `PROVENANCE_COLS`.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -249,12 +249,12 @@ table = table.combine_chunks().unify_dictionaries()
 - Update: `src/cpg/build_nodes.py`
 
 **Implementation checklist**
-- [ ] Standardize list_view and map builders via nested array factory.
-- [ ] Add dictionary/unify helpers before join/sort paths.
-- [ ] Replace manual nested array construction in normalize/extract.
+- [x] Standardize list_view and map builders via nested array factory.
+- [x] Add dictionary/unify helpers before join/sort paths.
+- [x] Replace manual nested array construction in normalize/extract.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -284,4 +284,3 @@ expr = pc.call_function(name, [pc.field("line"), pc.field("col"), pc.field("enco
 
 **Status**
 Planned.
-

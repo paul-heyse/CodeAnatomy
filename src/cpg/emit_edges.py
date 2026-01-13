@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pyarrow as pa
 
+from arrowdsl.compute.macros import null_expr, scalar_expr
 from arrowdsl.compute.masks import valid_mask_expr
-from arrowdsl.compute.scalars import null_expr, scalar_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import hash_expression
 from arrowdsl.core.interop import ensure_expression, pc

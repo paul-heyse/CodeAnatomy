@@ -8,7 +8,7 @@ from typing import Any
 import pyarrow as pa
 
 from arrowdsl.spec.codec import decode_json_text, encode_json_text
-from cpg.kinds import EdgeKind, EntityKind, NodeKind
+from cpg.kinds_ultimate import EdgeKind, EntityKind, NodeKind
 from cpg.specs import (
     EdgeEmitSpec,
     EdgePlanSpec,

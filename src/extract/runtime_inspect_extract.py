@@ -31,6 +31,7 @@ from extract.registry_specs import (
     dataset_query,
     dataset_row_schema,
     dataset_schema,
+    normalize_options,
 )
 
 type Row = dict[str, object]
@@ -797,15 +798,16 @@ def extract_runtime_tables(
     RuntimeInspectResult
         Extracted runtime inspection tables.
     """
+    normalized_options = normalize_options("runtime_inspect", options, RuntimeInspectOptions)
     exec_ctx = ctx or execution_context_factory("default")
-    if not options.module_allowlist:
-        return _empty_runtime_result(_runtime_metadata_specs(options))
-    metadata_specs = _runtime_metadata_specs(options)
+    if not normalized_options.module_allowlist:
+        return _empty_runtime_result(_runtime_metadata_specs(normalized_options))
+    metadata_specs = _runtime_metadata_specs(normalized_options)
 
     payload = _run_inspect_subprocess(
         repo_root,
-        module_allowlist=options.module_allowlist,
-        timeout_s=options.timeout_s,
+        module_allowlist=normalized_options.module_allowlist,
+        timeout_s=normalized_options.timeout_s,
     )
 
     obj_rows = _parse_runtime_objects(payload.get("objects"))
@@ -837,8 +839,9 @@ def extract_runtime_plans(
     dict[str, Plan]
         Plan bundle keyed by runtime inspection table name.
     """
+    normalized_options = normalize_options("runtime_inspect", options, RuntimeInspectOptions)
     exec_ctx = ctx or execution_context_factory("default")
-    if not options.module_allowlist:
+    if not normalized_options.module_allowlist:
         return {
             "rt_objects": Plan.table_source(empty_table(RT_OBJECTS_SCHEMA)),
             "rt_signatures": Plan.table_source(empty_table(RT_SIGNATURES_SCHEMA)),
@@ -848,8 +851,8 @@ def extract_runtime_plans(
 
     payload = _run_inspect_subprocess(
         repo_root,
-        module_allowlist=options.module_allowlist,
-        timeout_s=options.timeout_s,
+        module_allowlist=normalized_options.module_allowlist,
+        timeout_s=normalized_options.timeout_s,
     )
 
     obj_rows = _parse_runtime_objects(payload.get("objects"))

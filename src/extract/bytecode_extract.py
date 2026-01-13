@@ -30,6 +30,7 @@ from extract.registry_specs import (
     dataset_query,
     dataset_row_schema,
     dataset_schema,
+    normalize_options,
 )
 
 type RowValue = str | int | bool | None
@@ -1063,15 +1064,15 @@ def extract_bytecode(
     BytecodeExtractResult
         Tables for bytecode code units, instructions, exception data, and edges.
     """
-    options = options or BytecodeExtractOptions()
+    normalized_options = normalize_options("bytecode", options, BytecodeExtractOptions)
     exec_ctx = ctx or execution_context_factory("default")
     plans = extract_bytecode_plans(
         repo_files,
-        options=options,
+        options=normalized_options,
         file_contexts=file_contexts,
         ctx=exec_ctx,
     )
-    metadata_specs = _bytecode_metadata_specs(options)
+    metadata_specs = _bytecode_metadata_specs(normalized_options)
     return BytecodeExtractResult(
         py_bc_code_units=materialize_plan(
             plans["py_bc_code_units"],
@@ -1126,7 +1127,7 @@ def extract_bytecode_plans(
     dict[str, Plan]
         Plan bundle keyed by bytecode output name.
     """
-    options = options or BytecodeExtractOptions()
+    normalized_options = normalize_options("bytecode", options, BytecodeExtractOptions)
     exec_ctx = ctx or execution_context_factory("default")
 
     buffers = BytecodeRowBuffers(
@@ -1139,7 +1140,7 @@ def extract_bytecode_plans(
     )
 
     for file_ctx in iter_contexts(repo_files, file_contexts):
-        bc_ctx = _context_from_file_ctx(file_ctx, options)
+        bc_ctx = _context_from_file_ctx(file_ctx, normalized_options)
         if bc_ctx is None:
             continue
         text = text_from_file_ctx(bc_ctx.file_ctx)
@@ -1210,17 +1211,21 @@ def extract_bytecode_table(
         Bytecode instruction output.
     """
     repo_files = kwargs["repo_files"]
-    options = kwargs.get("options") or BytecodeExtractOptions()
+    normalized_options = normalize_options(
+        "bytecode",
+        kwargs.get("options"),
+        BytecodeExtractOptions,
+    )
     file_contexts = kwargs.get("file_contexts")
     exec_ctx = kwargs.get("ctx") or execution_context_factory("default")
     prefer_reader = kwargs.get("prefer_reader", False)
     plans = extract_bytecode_plans(
         repo_files,
-        options=options,
+        options=normalized_options,
         file_contexts=file_contexts,
         ctx=exec_ctx,
     )
-    metadata_specs = _bytecode_metadata_specs(options)
+    metadata_specs = _bytecode_metadata_specs(normalized_options)
     return run_plan_bundle(
         {"py_bc_instructions": plans["py_bc_instructions"]},
         ctx=exec_ctx,

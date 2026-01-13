@@ -9,7 +9,7 @@ from typing import Literal, Protocol, runtime_checkable
 import pyarrow.dataset as ds
 
 from arrowdsl.core.context import ExecutionContext, Ordering, OrderingEffect
-from arrowdsl.core.interop import ComputeExpression, DeclarationLike, TableLike, acero
+from arrowdsl.core.interop import ComputeExpression, DeclarationLike, TableLike, acero, pc
 
 
 class PlanOp(Protocol):
@@ -301,6 +301,74 @@ class AggregateOp:
     @staticmethod
     def apply_ordering(ordering: Ordering) -> Ordering:
         """Apply the ordering effect of the aggregate operation.
+
+        Returns
+        -------
+        Ordering
+            Unordered ordering after aggregation.
+        """
+        _ = ordering
+        return Ordering.unordered()
+
+
+@dataclass(frozen=True)
+class WinnerSelectOp:
+    """Winner-select operation using sort + aggregate."""
+
+    spec: DedupeSpec
+    columns: Sequence[str]
+
+    ordering_effect: OrderingEffect = OrderingEffect.UNORDERED
+    is_pipeline_breaker: bool = True
+
+    def to_declaration(
+        self, inputs: list[DeclarationLike], ctx: ExecutionContext | None
+    ) -> DeclarationLike:
+        """Build the winner-select declaration.
+
+        Returns
+        -------
+        DeclarationLike
+            Acero declaration for winner selection.
+
+        Raises
+        ------
+        ValueError
+            Raised when keys or tie breakers are missing.
+        """
+        _ = ctx
+        if not self.spec.keys:
+            msg = "WinnerSelectOp requires non-empty keys."
+            raise ValueError(msg)
+        if not self.spec.tie_breakers:
+            msg = "WinnerSelectOp requires at least one tie breaker."
+            raise ValueError(msg)
+        sort_keys = [(key.column, key.order) for key in self.spec.tie_breakers]
+        order_decl = acero.Declaration(
+            "order_by",
+            acero.OrderByNodeOptions(sort_keys=list(sort_keys)),
+            inputs=inputs,
+        )
+        agg_specs = [(col, "first", None, f"{col}_first") for col in self.columns]
+        agg_decl = acero.Declaration(
+            "aggregate",
+            acero.AggregateNodeOptions(agg_specs, keys=list(self.spec.keys)),
+            inputs=[order_decl],
+        )
+        proj_exprs = [pc.field(name) for name in self.spec.keys]
+        proj_names = list(self.spec.keys)
+        for col in self.columns:
+            proj_exprs.append(pc.field(f"{col}_first"))
+            proj_names.append(col)
+        return acero.Declaration(
+            "project",
+            acero.ProjectNodeOptions(proj_exprs, proj_names),
+            inputs=[agg_decl],
+        )
+
+    @staticmethod
+    def apply_ordering(ordering: Ordering) -> Ordering:
+        """Apply the ordering effect of winner selection.
 
         Returns
         -------

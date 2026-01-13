@@ -41,6 +41,7 @@ from extract.registry_specs import (
     dataset_query,
     dataset_row_schema,
     dataset_schema,
+    normalize_options,
 )
 
 type Row = dict[str, object]
@@ -824,10 +825,10 @@ def extract_cst(
     CSTExtractResult
         Tables derived from LibCST parsing and metadata providers.
     """
-    options = options or CSTExtractOptions()
+    normalized_options = normalize_options("cst", options, CSTExtractOptions)
     exec_ctx = ctx or execution_context_factory("default")
-    extract_ctx = CSTExtractContext.build(options)
-    metadata_specs = _cst_metadata_specs(options)
+    extract_ctx = CSTExtractContext.build(normalized_options)
+    metadata_specs = _cst_metadata_specs(normalized_options)
 
     for file_ctx in iter_contexts(repo_files, file_contexts):
         _extract_cst_for_context(file_ctx, extract_ctx)
@@ -1144,12 +1145,12 @@ def extract_cst_tables(
         Extracted CST outputs keyed by output name.
     """
     repo_files = kwargs["repo_files"]
-    options = kwargs.get("options") or CSTExtractOptions()
+    normalized_options = normalize_options("cst", kwargs.get("options"), CSTExtractOptions)
     file_contexts = kwargs.get("file_contexts")
     exec_ctx = kwargs.get("ctx") or execution_context_factory("default")
     prefer_reader = kwargs.get("prefer_reader", False)
-    extract_ctx = CSTExtractContext.build(options)
-    metadata_specs = _cst_metadata_specs(options)
+    extract_ctx = CSTExtractContext.build(normalized_options)
+    metadata_specs = _cst_metadata_specs(normalized_options)
     for file_ctx in iter_contexts(repo_files, file_contexts):
         _extract_cst_for_context(file_ctx, extract_ctx)
     return run_plan_bundle(

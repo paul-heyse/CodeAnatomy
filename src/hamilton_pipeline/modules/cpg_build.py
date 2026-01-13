@@ -46,6 +46,7 @@ from relspec.compiler import (
 from relspec.edge_contract_validator import EdgeContractValidationConfig
 from relspec.model import (
     DatasetRef,
+    EvidenceSpec,
     HashJoinConfig,
     IntervalAlignConfig,
     RelationshipRule,
@@ -326,6 +327,7 @@ def relationship_registry() -> RelationshipRegistry:
                 select_right=("symbol", "symbol_roles"),
                 emit_match_meta=False,
             ),
+            evidence=EvidenceSpec(sources=("cst_name_refs", "scip_occurrences")),
             priority=0,
         )
     )
@@ -351,6 +353,7 @@ def relationship_registry() -> RelationshipRegistry:
                 select_right=("symbol", "symbol_roles"),
                 emit_match_meta=False,
             ),
+            evidence=EvidenceSpec(sources=("cst_imports", "scip_occurrences")),
             priority=0,
         )
     )
@@ -376,6 +379,7 @@ def relationship_registry() -> RelationshipRegistry:
                 select_right=("symbol", "symbol_roles"),
                 emit_match_meta=False,
             ),
+            evidence=EvidenceSpec(sources=("cst_callsites", "scip_occurrences")),
             priority=0,
         )
     )
@@ -398,6 +402,7 @@ def relationship_registry() -> RelationshipRegistry:
                 left_output=("call_id", "path", "call_bstart", "call_bend", "qname_source"),
                 right_output=("qname_id",),
             ),
+            evidence=EvidenceSpec(sources=("callsite_qname_candidates", "dim_qualified_names")),
             priority=10,
         )
     )

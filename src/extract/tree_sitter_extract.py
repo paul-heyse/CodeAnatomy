@@ -28,6 +28,7 @@ from extract.registry_specs import (
     dataset_query,
     dataset_row_schema,
     dataset_schema,
+    normalize_options,
 )
 
 type Row = dict[str, object]
@@ -175,15 +176,15 @@ def extract_ts(
     TreeSitterExtractResult
         Extracted node and diagnostic tables.
     """
-    options = options or TreeSitterExtractOptions()
+    normalized_options = normalize_options("tree_sitter", options, TreeSitterExtractOptions)
     exec_ctx = ctx or execution_context_factory("default")
     plans = extract_ts_plans(
         repo_files,
-        options=options,
+        options=normalized_options,
         file_contexts=file_contexts,
         ctx=exec_ctx,
     )
-    metadata_specs = _ts_metadata_specs(options)
+    metadata_specs = _ts_metadata_specs(normalized_options)
     return TreeSitterExtractResult(
         ts_nodes=materialize_plan(
             plans["ts_nodes"],
@@ -220,7 +221,7 @@ def extract_ts_plans(
     dict[str, Plan]
         Plan bundle keyed by ``ts_nodes``, ``ts_errors``, and ``ts_missing``.
     """
-    options = options or TreeSitterExtractOptions()
+    normalized_options = normalize_options("tree_sitter", options, TreeSitterExtractOptions)
     exec_ctx = ctx or execution_context_factory("default")
     parser = _parser()
 
@@ -237,7 +238,7 @@ def extract_ts_plans(
         _extract_ts_for_row(
             file_ctx,
             parser=parser,
-            options=options,
+            options=normalized_options,
             buffers=buffers,
         )
 
@@ -343,13 +344,17 @@ def extract_ts_tables(
         Extracted tree-sitter outputs keyed by output name.
     """
     repo_files = kwargs["repo_files"]
-    options = kwargs.get("options") or TreeSitterExtractOptions()
+    normalized_options = normalize_options(
+        "tree_sitter",
+        kwargs.get("options"),
+        TreeSitterExtractOptions,
+    )
     file_contexts = kwargs.get("file_contexts")
     exec_ctx = kwargs.get("ctx") or execution_context_factory("default")
     prefer_reader = kwargs.get("prefer_reader", False)
     plans = extract_ts_plans(
         repo_files,
-        options=options,
+        options=normalized_options,
         file_contexts=file_contexts,
         ctx=exec_ctx,
     )
@@ -357,6 +362,6 @@ def extract_ts_tables(
         plans,
         ctx=exec_ctx,
         prefer_reader=prefer_reader,
-        metadata_specs=_ts_metadata_specs(options),
+        metadata_specs=_ts_metadata_specs(normalized_options),
         attach_ordering_metadata=True,
     )

@@ -8,11 +8,13 @@ from arrowdsl.compute.filters import valid_mask_expr
 from arrowdsl.compute.macros import null_expr, scalar_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import hash_expression
-from arrowdsl.core.interop import ensure_expression, pc
+from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan_helpers import coalesce_expr, column_or_null_expr
+from arrowdsl.schema.ops import align_plan
 from cpg.constants import edge_hash_specs
 from cpg.specs import EdgeEmitSpec
+from relspec.contracts import relation_output_schema
 
 EDGE_OUTPUT_NAMES: tuple[str, ...] = (
     "edge_id",
@@ -32,6 +34,77 @@ EDGE_OUTPUT_NAMES: tuple[str, ...] = (
     "rule_name",
     "rule_priority",
 )
+
+
+def _metadata_value(
+    rel: Plan,
+    *,
+    ctx: ExecutionContext,
+    key: bytes,
+) -> str | None:
+    schema = rel.schema(ctx=ctx)
+    meta = schema.metadata or {}
+    raw = meta.get(key)
+    if raw is None:
+        return None
+    try:
+        return raw.decode("utf-8")
+    except UnicodeError:
+        return None
+
+
+def _edge_id_expr(rel_norm: Plan, *, spec: EdgeEmitSpec, ctx: ExecutionContext) -> ComputeExpression:
+    available = rel_norm.schema(ctx=ctx).names
+    base_spec, full_spec = edge_hash_specs(spec.edge_kind.value)
+    base_id = hash_expression(base_spec, available=available)
+    full_id = hash_expression(full_spec, available=available)
+    has_span = valid_mask_expr(["path", "bstart", "bend"], available=available)
+    edge_id = ensure_expression(pc.if_else(has_span, full_id, base_id))
+    valid = valid_mask_expr(["src", "dst"], available=available)
+    return ensure_expression(pc.if_else(valid, edge_id, null_expr(pa.string())))
+
+
+def _edge_scoring_exprs(
+    rel: Plan,
+    *,
+    spec: EdgeEmitSpec,
+    ctx: ExecutionContext,
+) -> tuple[ComputeExpression, ComputeExpression, ComputeExpression, ComputeExpression]:
+    default_score = 1.0 if spec.origin == "scip" else 0.5
+    metadata_resolution = _metadata_value(rel, ctx=ctx, key=b"ambiguity_policy")
+    default_resolution = metadata_resolution or spec.default_resolution_method
+    origin = ensure_expression(
+        pc.cast(
+            pc.fill_null(pc.field("origin"), pc.scalar(spec.origin)),
+            pa.string(),
+            safe=False,
+        )
+    )
+    resolution_method = ensure_expression(
+        pc.cast(
+            pc.fill_null(
+                pc.field("resolution_method"),
+                pc.scalar(default_resolution),
+            ),
+            pa.string(),
+            safe=False,
+        )
+    )
+    confidence = ensure_expression(
+        pc.cast(
+            pc.fill_null(pc.field("confidence"), pc.scalar(default_score)),
+            pa.float32(),
+            safe=False,
+        )
+    )
+    score = ensure_expression(
+        pc.cast(
+            pc.fill_null(pc.field("score"), pc.scalar(default_score)),
+            pa.float32(),
+            safe=False,
+        )
+    )
+    return origin, resolution_method, confidence, score
 
 
 def _normalized_relation_plan(
@@ -173,49 +246,13 @@ def emit_edges_plan(
     Plan
         Plan emitting edge columns.
     """
+    rel = align_plan(rel, schema=relation_output_schema(), ctx=ctx)
     rel_norm = _normalized_relation_plan(rel, spec=spec, ctx=ctx)
-    available = rel_norm.schema(ctx=ctx).names
-
-    base_spec, full_spec = edge_hash_specs(spec.edge_kind.value)
-    base_id = hash_expression(base_spec, available=available)
-    full_id = hash_expression(full_spec, available=available)
-
-    has_span = valid_mask_expr(["path", "bstart", "bend"], available=available)
-    edge_id = ensure_expression(pc.if_else(has_span, full_id, base_id))
-    valid = valid_mask_expr(["src", "dst"], available=available)
-    edge_id = ensure_expression(pc.if_else(valid, edge_id, null_expr(pa.string())))
-
-    default_score = 1.0 if spec.origin == "scip" else 0.5
-    origin = ensure_expression(
-        pc.cast(
-            pc.fill_null(pc.field("origin"), pc.scalar(spec.origin)),
-            pa.string(),
-            safe=False,
-        )
-    )
-    resolution_method = ensure_expression(
-        pc.cast(
-            pc.fill_null(
-                pc.field("resolution_method"),
-                pc.scalar(spec.default_resolution_method),
-            ),
-            pa.string(),
-            safe=False,
-        )
-    )
-    confidence = ensure_expression(
-        pc.cast(
-            pc.fill_null(pc.field("confidence"), pc.scalar(default_score)),
-            pa.float32(),
-            safe=False,
-        )
-    )
-    score = ensure_expression(
-        pc.cast(
-            pc.fill_null(pc.field("score"), pc.scalar(default_score)),
-            pa.float32(),
-            safe=False,
-        )
+    edge_id = _edge_id_expr(rel_norm, spec=spec, ctx=ctx)
+    origin, resolution_method, confidence, score = _edge_scoring_exprs(
+        rel,
+        spec=spec,
+        ctx=ctx,
     )
 
     exprs = [

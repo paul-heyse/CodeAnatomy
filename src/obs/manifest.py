@@ -15,6 +15,7 @@ from core_types import JsonDict, PathLike, ensure_path
 from obs.repro import collect_repro_info
 
 if TYPE_CHECKING:
+    from normalize.rule_model import NormalizeRule
     from relspec.model import RelationshipRule
     from relspec.registry import DatasetLocation
 
@@ -38,7 +39,7 @@ class DatasetRecord:
 
 @dataclass(frozen=True)
 class RuleRecord:
-    """Record a relationship rule."""
+    """Record a rule definition."""
 
     name: str
     output_dataset: str
@@ -46,6 +47,9 @@ class RuleRecord:
     contract_name: str | None
     priority: int
     inputs: list[str] = field(default_factory=list)
+    evidence: JsonDict | None = None
+    confidence_policy: JsonDict | None = None
+    ambiguity_policy: JsonDict | None = None
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,14 @@ class OutputRecord:
     name: str
     rows: int | None = None
     schema_fingerprint: str | None = None
+
+
+@dataclass(frozen=True)
+class OutputLineageRecord:
+    """Record rule lineage for a relationship output."""
+
+    output_dataset: str
+    rules: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -72,6 +84,7 @@ class Manifest:
     datasets: list[DatasetRecord] = field(default_factory=list)
     rules: list[RuleRecord] = field(default_factory=list)
     outputs: list[OutputRecord] = field(default_factory=list)
+    lineage: list[OutputLineageRecord] = field(default_factory=list)
 
     repro: JsonDict = field(default_factory=dict)
     notes: JsonDict = field(default_factory=dict)
@@ -108,7 +121,9 @@ class ManifestData:
     cpg_edges: TableLike | None = None
     cpg_props: TableLike | None = None
     relationship_rules: Sequence[RelationshipRule] | None = None
+    normalize_rules: Sequence[NormalizeRule] | None = None
     produced_relationship_output_names: Sequence[str] | None = None
+    relationship_output_lineage: Mapping[str, Sequence[str]] | None = None
     notes: JsonDict | None = None
 
 
@@ -151,7 +166,8 @@ def _collect_relationship_inputs(data: ManifestData) -> list[DatasetRecord]:
         return []
 
     records: list[DatasetRecord] = []
-    for name, table in data.relspec_input_tables.items():
+    for name in sorted(data.relspec_input_tables):
+        table = data.relspec_input_tables[name]
         loc = data.relspec_input_locations.get(name) if data.relspec_input_locations else None
         path = str(loc.path) if loc is not None else None
         fmt = loc.format if loc is not None else None
@@ -175,7 +191,8 @@ def _collect_relationship_outputs(
 
     datasets: list[DatasetRecord] = []
     outputs: list[OutputRecord] = []
-    for name, table in data.relationship_outputs.items():
+    for name in sorted(data.relationship_outputs):
+        table = data.relationship_outputs[name]
         datasets.append(
             _dataset_record_from_table(name=name, kind="relationship_output", table=table)
         )
@@ -206,20 +223,60 @@ def _collect_cpg_outputs(data: ManifestData) -> tuple[list[DatasetRecord], list[
 
 
 def _collect_rule_records(data: ManifestData) -> list[RuleRecord]:
-    if not data.relationship_rules:
-        return []
-
-    return [
-        RuleRecord(
-            name=str(rule.name),
-            output_dataset=str(rule.output_dataset),
-            kind=str(rule.kind),
-            contract_name=rule.contract_name,
-            priority=int(rule.priority),
-            inputs=[dref.name for dref in rule.inputs],
+    records: list[RuleRecord] = []
+    if data.relationship_rules:
+        records.extend(
+            [
+                RuleRecord(
+                    name=str(rule.name),
+                    output_dataset=str(rule.output_dataset),
+                    kind=str(rule.kind),
+                    contract_name=rule.contract_name,
+                    priority=int(rule.priority),
+                    inputs=[dref.name for dref in rule.inputs],
+                    evidence=asdict(rule.evidence) if rule.evidence is not None else None,
+                    confidence_policy=asdict(rule.confidence_policy)
+                    if rule.confidence_policy is not None
+                    else None,
+                    ambiguity_policy=asdict(rule.ambiguity_policy)
+                    if rule.ambiguity_policy is not None
+                    else None,
+                )
+                for rule in data.relationship_rules
+            ]
         )
-        for rule in data.relationship_rules
-    ]
+    if data.normalize_rules:
+        records.extend(
+            [
+                RuleRecord(
+                    name=str(rule.name),
+                    output_dataset=str(rule.output),
+                    kind="normalize",
+                    contract_name=None,
+                    priority=int(rule.priority),
+                    inputs=list(rule.inputs),
+                    evidence=asdict(rule.evidence) if rule.evidence is not None else None,
+                    confidence_policy=asdict(rule.confidence_policy)
+                    if rule.confidence_policy is not None
+                    else None,
+                    ambiguity_policy=asdict(rule.ambiguity_policy)
+                    if rule.ambiguity_policy is not None
+                    else None,
+                )
+                for rule in data.normalize_rules
+            ]
+        )
+    return records
+
+
+def _collect_lineage_records(data: ManifestData) -> list[OutputLineageRecord]:
+    if not data.relationship_output_lineage:
+        return []
+    records: list[OutputLineageRecord] = []
+    for name in sorted(data.relationship_output_lineage):
+        rules = data.relationship_output_lineage[name]
+        records.append(OutputLineageRecord(output_dataset=name, rules=list(rules)))
+    return records
 
 
 def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
@@ -249,6 +306,7 @@ def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
     outputs.extend(cpg_outputs)
 
     rules = _collect_rule_records(data)
+    lineage = _collect_lineage_records(data)
 
     if data.produced_relationship_output_names:
         outputs.append(
@@ -271,6 +329,7 @@ def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
         datasets=datasets,
         rules=sorted(rules, key=lambda rr: (rr.output_dataset, rr.priority, rr.name)),
         outputs=outputs,
+        lineage=lineage,
         repro=repro,
         notes=notes,
     )

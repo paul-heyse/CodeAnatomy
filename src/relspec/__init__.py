@@ -1,7 +1,10 @@
 """Relationship spec models, registry, and compiler."""
 
 from arrowdsl.spec.tables.relspec import (
+    AMBIGUITY_STRUCT,
+    CONFIDENCE_STRUCT,
     DATASET_REF_STRUCT,
+    EVIDENCE_STRUCT,
     HASH_JOIN_STRUCT,
     INTERVAL_ALIGN_STRUCT,
     PROJECT_EXPR_STRUCT,
@@ -20,12 +23,22 @@ from relspec.compiler import (
     PlanResolver,
     RelationshipRuleCompiler,
 )
+from relspec.contracts import (
+    RELATION_OUTPUT_NAME,
+    RELATION_OUTPUT_SCHEMA,
+    relation_output_contract,
+    relation_output_schema,
+    relation_output_spec,
+)
 from relspec.model import (
     AddLiteralSpec,
+    AmbiguityPolicy,
     CanonicalSortKernelSpec,
+    ConfidencePolicy,
     DatasetRef,
     DedupeKernelSpec,
     DropColumnsSpec,
+    EvidenceSpec,
     ExplodeListSpec,
     HashJoinConfig,
     IntervalAlignConfig,
@@ -39,24 +52,32 @@ from relspec.model import (
 from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation, RelationshipRegistry
 
 __all__ = [
+    "AMBIGUITY_STRUCT",
+    "CONFIDENCE_STRUCT",
     "DATASET_REF_STRUCT",
+    "EVIDENCE_STRUCT",
     "HASH_JOIN_STRUCT",
     "INTERVAL_ALIGN_STRUCT",
     "PROJECT_EXPR_STRUCT",
     "PROJECT_STRUCT",
+    "RELATION_OUTPUT_NAME",
+    "RELATION_OUTPUT_SCHEMA",
     "RULES_SCHEMA",
     "SORT_KEY_STRUCT",
     "WINNER_SELECT_STRUCT",
     "AddLiteralSpec",
+    "AmbiguityPolicy",
     "CanonicalSortKernelSpec",
     "CompiledOutput",
     "CompiledRule",
+    "ConfidencePolicy",
     "ContractCatalog",
     "DatasetCatalog",
     "DatasetLocation",
     "DatasetRef",
     "DedupeKernelSpec",
     "DropColumnsSpec",
+    "EvidenceSpec",
     "ExplodeListSpec",
     "FilesystemPlanResolver",
     "HashJoinConfig",
@@ -71,6 +92,9 @@ __all__ = [
     "RenameColumnsSpec",
     "RuleKind",
     "WinnerSelectConfig",
+    "relation_output_contract",
+    "relation_output_schema",
+    "relation_output_spec",
     "relationship_rule_table",
     "relationship_rules_from_table",
 ]

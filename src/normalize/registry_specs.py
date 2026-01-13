@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.plan.query import QuerySpec
-from arrowdsl.schema.policy import SchemaPolicy, schema_policy_factory
+from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from normalize.registry_builders import build_dataset_spec, build_input_schema
 from normalize.registry_rows import DATASET_ROWS, DatasetRow
@@ -168,7 +168,14 @@ def dataset_schema_policy(name: str, *, ctx: ExecutionContext) -> SchemaPolicy:
     SchemaPolicy
         Schema policy derived from the dataset table spec.
     """
-    return schema_policy_factory(dataset_table_spec(name), ctx=ctx)
+    spec = dataset_spec(name)
+    contract = spec.contract()
+    options = SchemaPolicyOptions(
+        schema=contract.with_versioned_schema(),
+        encoding=spec.encoding_policy(),
+        validation=contract.validation,
+    )
+    return schema_policy_factory(spec.table_spec, ctx=ctx, options=options)
 
 
 __all__ = [

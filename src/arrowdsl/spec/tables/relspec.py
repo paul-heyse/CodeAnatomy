@@ -30,10 +30,14 @@ from arrowdsl.spec.infra import (
 from arrowdsl.spec.io import table_from_rows
 from relspec.model import (
     AddLiteralSpec,
+    AmbiguityPolicy,
     CanonicalSortKernelSpec,
+    ConfidencePolicy,
     DatasetRef,
     DedupeKernelSpec,
     DropColumnsSpec,
+    EvidenceSpec,
+    ExecutionMode,
     ExplodeListSpec,
     FilterKernelSpec,
     HashJoinConfig,
@@ -42,6 +46,7 @@ from relspec.model import (
     ProjectConfig,
     RelationshipRule,
     RenameColumnsSpec,
+    RuleFamilySpec,
     RuleKind,
     WinnerSelectConfig,
 )
@@ -100,6 +105,29 @@ PROJECT_STRUCT = pa.struct(
     ]
 )
 
+EVIDENCE_STRUCT = pa.struct(
+    [
+        pa.field("sources", pa.list_(pa.string()), nullable=True),
+        pa.field("required_columns", pa.list_(pa.string()), nullable=True),
+        pa.field("required_types", pa.map_(pa.string(), pa.string()), nullable=True),
+    ]
+)
+
+CONFIDENCE_STRUCT = pa.struct(
+    [
+        pa.field("base", pa.float64(), nullable=False),
+        pa.field("source_weight", pa.map_(pa.string(), pa.float64()), nullable=True),
+        pa.field("penalty", pa.float64(), nullable=False),
+    ]
+)
+
+AMBIGUITY_STRUCT = pa.struct(
+    [
+        pa.field("winner_select", WINNER_SELECT_STRUCT, nullable=True),
+        pa.field("tie_breakers", pa.list_(SORT_KEY_STRUCT), nullable=True),
+    ]
+)
+
 KERNEL_SPEC_STRUCT = pa.struct(
     [
         pa.field("kind", pa.string(), nullable=False),
@@ -138,12 +166,28 @@ RULES_SCHEMA = pa.schema(
         pa.field("winner_select", WINNER_SELECT_STRUCT, nullable=True),
         pa.field("project", PROJECT_STRUCT, nullable=True),
         pa.field("post_kernels", pa.list_(KERNEL_SPEC_STRUCT), nullable=True),
+        pa.field("evidence", EVIDENCE_STRUCT, nullable=True),
+        pa.field("confidence_policy", CONFIDENCE_STRUCT, nullable=True),
+        pa.field("ambiguity_policy", AMBIGUITY_STRUCT, nullable=True),
         pa.field("priority", pa.int32(), nullable=False),
         pa.field("emit_rule_meta", pa.bool_(), nullable=False),
         pa.field("rule_name_col", pa.string(), nullable=False),
         pa.field("rule_priority_col", pa.string(), nullable=False),
+        pa.field("execution_mode", pa.string(), nullable=False),
     ],
     metadata={b"spec_kind": b"relationship_rules"},
+)
+
+RULE_FAMILY_SCHEMA = pa.schema(
+    [
+        pa.field("name", pa.string(), nullable=False),
+        pa.field("factory", pa.string(), nullable=False),
+        pa.field("inputs", pa.list_(pa.string()), nullable=True),
+        pa.field("confidence_policy", pa.string(), nullable=True),
+        pa.field("ambiguity_policy", pa.string(), nullable=True),
+        pa.field("option_flag", pa.string(), nullable=True),
+    ],
+    metadata={b"spec_kind": b"relationship_rule_families"},
 )
 
 
@@ -218,6 +262,18 @@ def _parse_join_type(value: object) -> JoinType:
     if normalized in allowed:
         return cast("JoinType", normalized)
     msg = f"Unsupported join_type: {value!r}"
+    raise ValueError(msg)
+
+
+def _parse_execution_mode(value: object) -> ExecutionMode:
+    normalized = str(value)
+    if normalized == "auto":
+        return "auto"
+    if normalized == "plan":
+        return "plan"
+    if normalized == "table":
+        return "table"
+    msg = f"Unsupported execution_mode: {normalized!r}"
     raise ValueError(msg)
 
 
@@ -314,6 +370,35 @@ def _winner_select_row(config: WinnerSelectConfig | None) -> dict[str, object] |
         "score_col": config.score_col,
         "score_order": config.score_order,
         "tie_breakers": _encode_sort_keys(config.tie_breakers) or None,
+    }
+
+
+def _evidence_row(spec: EvidenceSpec | None) -> dict[str, object] | None:
+    if spec is None:
+        return None
+    return {
+        "sources": list(spec.sources) or None,
+        "required_columns": list(spec.required_columns) or None,
+        "required_types": dict(spec.required_types) or None,
+    }
+
+
+def _confidence_row(policy: ConfidencePolicy | None) -> dict[str, object] | None:
+    if policy is None:
+        return None
+    return {
+        "base": float(policy.base),
+        "source_weight": dict(policy.source_weight) or None,
+        "penalty": float(policy.penalty),
+    }
+
+
+def _ambiguity_row(policy: AmbiguityPolicy | None) -> dict[str, object] | None:
+    if policy is None:
+        return None
+    return {
+        "winner_select": _winner_select_row(policy.winner_select),
+        "tie_breakers": _encode_sort_keys(policy.tie_breakers) or None,
     }
 
 
@@ -426,10 +511,14 @@ def relationship_rule_table(rules: Sequence[RelationshipRule]) -> pa.Table:
             "winner_select": _winner_select_row(rule.winner_select),
             "project": _project_row(rule.project),
             "post_kernels": [_kernel_row(spec) for spec in rule.post_kernels] or None,
+            "evidence": _evidence_row(rule.evidence),
+            "confidence_policy": _confidence_row(rule.confidence_policy),
+            "ambiguity_policy": _ambiguity_row(rule.ambiguity_policy),
             "priority": int(rule.priority),
             "emit_rule_meta": rule.emit_rule_meta,
             "rule_name_col": rule.rule_name_col,
             "rule_priority_col": rule.rule_priority_col,
+            "execution_mode": rule.execution_mode,
         }
         for rule in rules
     ]
@@ -459,6 +548,7 @@ def relationship_rules_from_table(table: pa.Table) -> tuple[RelationshipRule, ..
                 exprs=exprs,
             )
         post_kernels = tuple(_kernel_from_row(item) for item in row.get("post_kernels") or ())
+        execution_mode = _parse_execution_mode(row.get("execution_mode", "auto"))
         rules.append(
             RelationshipRule(
                 name=str(row["name"]),
@@ -471,13 +561,60 @@ def relationship_rules_from_table(table: pa.Table) -> tuple[RelationshipRule, ..
                 winner_select=_winner_select_from_row(row.get("winner_select")),
                 project=project_spec,
                 post_kernels=post_kernels,
+                evidence=_evidence_from_row(row.get("evidence")),
+                confidence_policy=_confidence_from_row(row.get("confidence_policy")),
+                ambiguity_policy=_ambiguity_from_row(row.get("ambiguity_policy")),
                 priority=int(row.get("priority", 100)),
                 emit_rule_meta=bool(row.get("emit_rule_meta", True)),
                 rule_name_col=str(row.get("rule_name_col", "rule_name")),
                 rule_priority_col=str(row.get("rule_priority_col", "rule_priority")),
+                execution_mode=execution_mode,
             )
         )
     return tuple(rules)
+
+
+def rule_family_spec_table(specs: Sequence[RuleFamilySpec]) -> pa.Table:
+    """Build a relationship rule family spec table.
+
+    Returns
+    -------
+    pa.Table
+        Arrow table with rule family specs.
+    """
+    rows = [
+        {
+            "name": spec.name,
+            "factory": spec.factory,
+            "inputs": list(spec.inputs) or None,
+            "confidence_policy": spec.confidence_policy,
+            "ambiguity_policy": spec.ambiguity_policy,
+            "option_flag": spec.option_flag,
+        }
+        for spec in specs
+    ]
+    return table_from_rows(RULE_FAMILY_SCHEMA, rows)
+
+
+def rule_family_specs_from_table(table: pa.Table) -> tuple[RuleFamilySpec, ...]:
+    """Compile RuleFamilySpec objects from a spec table.
+
+    Returns
+    -------
+    tuple[RuleFamilySpec, ...]
+        Rule family specs parsed from the table.
+    """
+    return tuple(
+        RuleFamilySpec(
+            name=str(row["name"]),
+            factory=str(row["factory"]),
+            inputs=parse_string_tuple(row.get("inputs"), label="inputs"),
+            confidence_policy=row.get("confidence_policy"),
+            ambiguity_policy=row.get("ambiguity_policy"),
+            option_flag=row.get("option_flag"),
+        )
+        for row in table.to_pylist()
+    )
 
 
 def _hash_join_from_row(payload: Mapping[str, Any] | None) -> HashJoinConfig | None:
@@ -491,6 +628,43 @@ def _hash_join_from_row(payload: Mapping[str, Any] | None) -> HashJoinConfig | N
         right_output=parse_string_tuple(payload.get("right_output"), label="right_output"),
         output_suffix_for_left=str(payload.get("output_suffix_for_left", "")),
         output_suffix_for_right=str(payload.get("output_suffix_for_right", "")),
+    )
+
+
+def _evidence_from_row(payload: Mapping[str, Any] | None) -> EvidenceSpec | None:
+    if payload is None:
+        return None
+    required_types = payload.get("required_types")
+    required_types_map = dict(required_types) if isinstance(required_types, Mapping) else {}
+    return EvidenceSpec(
+        sources=parse_string_tuple(payload.get("sources"), label="sources"),
+        required_columns=parse_string_tuple(
+            payload.get("required_columns"), label="required_columns"
+        ),
+        required_types={str(k): str(v) for k, v in required_types_map.items()},
+    )
+
+
+def _confidence_from_row(payload: Mapping[str, Any] | None) -> ConfidencePolicy | None:
+    if payload is None:
+        return None
+    weights = payload.get("source_weight")
+    source_weight = dict(weights) if isinstance(weights, Mapping) else {}
+    return ConfidencePolicy(
+        base=float(payload.get("base", 0.5)),
+        source_weight=source_weight,
+        penalty=float(payload.get("penalty", 0.0)),
+    )
+
+
+def _ambiguity_from_row(payload: Mapping[str, Any] | None) -> AmbiguityPolicy | None:
+    if payload is None:
+        return None
+    tie_breakers = _decode_sort_keys(payload.get("tie_breakers"))
+    winner_payload = payload.get("winner_select")
+    return AmbiguityPolicy(
+        winner_select=_winner_select_from_row(winner_payload),
+        tie_breakers=tie_breakers,
     )
 
 
@@ -535,14 +709,20 @@ def _winner_select_from_row(payload: Mapping[str, Any] | None) -> WinnerSelectCo
 
 
 __all__ = [
+    "AMBIGUITY_STRUCT",
+    "CONFIDENCE_STRUCT",
     "DATASET_REF_STRUCT",
+    "EVIDENCE_STRUCT",
     "HASH_JOIN_STRUCT",
     "INTERVAL_ALIGN_STRUCT",
     "PROJECT_EXPR_STRUCT",
     "PROJECT_STRUCT",
     "RULES_SCHEMA",
+    "RULE_FAMILY_SCHEMA",
     "SORT_KEY_STRUCT",
     "WINNER_SELECT_STRUCT",
     "relationship_rule_table",
     "relationship_rules_from_table",
+    "rule_family_spec_table",
+    "rule_family_specs_from_table",
 ]

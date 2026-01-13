@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -233,6 +233,45 @@ def extractor_metadata_spec(
     }
     if extra:
         meta.update(extra)
+    return SchemaMetadataSpec(schema_metadata=meta)
+
+
+@dataclass(frozen=True)
+class EvidenceMetadata:
+    """Evidence semantics payload for schema metadata."""
+
+    evidence_family: str | None = None
+    coordinate_system: str | None = None
+    ambiguity_policy: str | None = None
+    evidence_rank: int | None = None
+    required_columns: Sequence[str] = ()
+    evidence_name: str | None = None
+    template: str | None = None
+
+
+def evidence_metadata_spec(metadata: EvidenceMetadata) -> SchemaMetadataSpec:
+    """Return schema metadata for evidence semantics.
+
+    Returns
+    -------
+    SchemaMetadataSpec
+        Metadata spec describing evidence semantics.
+    """
+    meta: dict[bytes, bytes] = {}
+    if metadata.evidence_family is not None:
+        meta[b"evidence_family"] = metadata.evidence_family.encode("utf-8")
+    if metadata.coordinate_system is not None:
+        meta[b"coordinate_system"] = metadata.coordinate_system.encode("utf-8")
+    if metadata.ambiguity_policy is not None:
+        meta[b"ambiguity_policy"] = metadata.ambiguity_policy.encode("utf-8")
+    if metadata.evidence_rank is not None:
+        meta[b"evidence_rank"] = str(metadata.evidence_rank).encode("utf-8")
+    if metadata.required_columns:
+        meta[b"evidence_required_columns"] = ",".join(metadata.required_columns).encode("utf-8")
+    if metadata.evidence_name is not None:
+        meta[b"evidence_name"] = metadata.evidence_name.encode("utf-8")
+    if metadata.template is not None:
+        meta[b"evidence_template"] = metadata.template.encode("utf-8")
     return SchemaMetadataSpec(schema_metadata=meta)
 
 
@@ -533,6 +572,7 @@ __all__ = [
     "REQUIRED_NON_NULL_META",
     "SCHEMA_META_NAME",
     "SCHEMA_META_VERSION",
+    "EvidenceMetadata",
     "TableSchemaSpec",
     "apply_spec_metadata",
     "dict_field_metadata",
@@ -540,6 +580,7 @@ __all__ = [
     "encoding_policy_from_fields",
     "encoding_policy_from_schema",
     "encoding_policy_from_spec",
+    "evidence_metadata_spec",
     "extractor_metadata_spec",
     "infer_ordering_keys",
     "merge_metadata_specs",

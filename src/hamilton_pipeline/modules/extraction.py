@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from hamilton.function_modifiers import cache, extract_fields, tag
@@ -17,7 +18,15 @@ from extract.bytecode_extract import (
     extract_bytecode_table,
 )
 from extract.cst_extract import CSTExtractOptions, extract_cst_tables
-from extract.helpers import FileContext, iter_file_contexts
+from extract.evidence_plan import EvidencePlan, compile_evidence_plan
+from extract.evidence_specs import evidence_spec
+from extract.helpers import (
+    FileContext,
+    iter_file_contexts,
+    requires_evidence,
+    requires_evidence_template,
+)
+from extract.registry_specs import dataset_schema
 from extract.repo_scan import RepoScanOptions, scan_repo
 from extract.runtime_inspect_extract import (
     RT_MEMBERS_SCHEMA,
@@ -37,7 +46,14 @@ from extract.tree_sitter_extract import (
     TS_NODES_SCHEMA,
     extract_ts_tables,
 )
-from hamilton_pipeline.pipeline_types import RepoScanConfig, ScipIdentityOverrides, ScipIndexConfig
+from hamilton_pipeline.pipeline_types import (
+    RepoScanConfig,
+    RuntimeInspectConfig,
+    ScipIdentityOverrides,
+    ScipIndexConfig,
+    ScipIndexInputs,
+)
+from relspec.registry import RelationshipRegistry
 
 
 @cache(format="parquet")
@@ -93,6 +109,72 @@ def file_contexts(
     return tuple(iter_file_contexts(repo_files))
 
 
+def _empty_registry_table(name: str) -> TableLike:
+    spec = evidence_spec(name)
+    return empty_table(dataset_schema(spec.name))
+
+
+def _empty_bundle(names: Sequence[str]) -> dict[str, TableLike]:
+    return {name: _empty_registry_table(name) for name in names}
+
+
+def _cst_options_for_plan(
+    options: CSTExtractOptions,
+    evidence_plan: EvidencePlan | None,
+) -> CSTExtractOptions:
+    if evidence_plan is None:
+        return options
+    return replace(
+        options,
+        include_parse_manifest=requires_evidence(evidence_plan, "cst_parse_manifest"),
+        include_parse_errors=requires_evidence(evidence_plan, "cst_parse_errors"),
+        include_name_refs=requires_evidence(evidence_plan, "cst_name_refs"),
+        include_imports=requires_evidence(evidence_plan, "cst_imports"),
+        include_callsites=requires_evidence(evidence_plan, "cst_callsites"),
+        include_defs=requires_evidence(evidence_plan, "cst_defs"),
+        include_type_exprs=requires_evidence(evidence_plan, "cst_type_exprs"),
+        compute_expr_context=requires_evidence(evidence_plan, "cst_name_refs"),
+        compute_qualified_names=(
+            requires_evidence(evidence_plan, "cst_callsites")
+            or requires_evidence(evidence_plan, "cst_defs")
+        ),
+    )
+
+
+def _bytecode_options_for_plan(
+    options: BytecodeExtractOptions,
+    evidence_plan: EvidencePlan | None,
+) -> BytecodeExtractOptions:
+    if evidence_plan is None:
+        return options
+    include_cfg = requires_evidence(evidence_plan, "py_bc_blocks") or requires_evidence(
+        evidence_plan, "py_bc_cfg_edges"
+    )
+    return replace(options, include_cfg_derivations=include_cfg)
+
+
+@cache()
+@tag(layer="extract", artifact="evidence_plan", kind="object")
+def evidence_plan(relationship_registry: RelationshipRegistry) -> EvidencePlan:
+    """Compile an evidence plan from relationship rules.
+
+    Returns
+    -------
+    EvidencePlan
+        Evidence plan describing required datasets and operations.
+    """
+    extra_sources = (
+        "type_exprs_norm",
+        "types_norm",
+        "diagnostics_norm",
+        "rt_objects",
+        "rt_signatures",
+        "rt_signature_params",
+        "rt_members",
+    )
+    return compile_evidence_plan(relationship_registry.rules(), extra_sources=extra_sources)
+
+
 @cache()
 @extract_fields(
     {
@@ -110,6 +192,7 @@ def cst_bundle(
     repo_root: str,
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
+    evidence_plan: EvidencePlan | None,
     ctx: ExecutionContext,
 ) -> Mapping[str, TableLike]:
     """Build the LibCST extraction bundle.
@@ -128,7 +211,20 @@ def cst_bundle(
     dict[str, TableLike]
         Bundle tables for LibCST extraction.
     """
+    if not requires_evidence_template(evidence_plan, "cst"):
+        return _empty_bundle(
+            (
+                "cst_parse_manifest",
+                "cst_parse_errors",
+                "cst_name_refs",
+                "cst_imports",
+                "cst_callsites",
+                "cst_defs",
+                "cst_type_exprs",
+            )
+        )
     options = CSTExtractOptions(repo_root=Path(repo_root))
+    options = _cst_options_for_plan(options, evidence_plan)
     return extract_cst_tables(
         repo_files=repo_files,
         options=options,
@@ -150,6 +246,7 @@ def ast_bundle(
     repo_root: str,
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
+    evidence_plan: EvidencePlan | None,
     ctx: ExecutionContext,
 ) -> Mapping[str, TableLike]:
     """Build the Python AST extraction bundle.
@@ -160,6 +257,10 @@ def ast_bundle(
         Bundle tables for AST extraction.
     """
     _ = repo_root
+    if not requires_evidence_template(evidence_plan, "ast"):
+        empty = _empty_bundle(("ast_nodes", "ast_edges"))
+        empty["ast_defs"] = empty_table(dataset_schema("py_ast_nodes_v1"))
+        return empty
     return extract_ast_tables(
         repo_files=repo_files,
         file_contexts=file_contexts,
@@ -184,6 +285,7 @@ def scip_bundle(
     scip_index_path: str | None,
     repo_root: str,
     scip_parse_options: SCIPParseOptions,
+    evidence_plan: EvidencePlan | None,
     ctx: ExecutionContext,
 ) -> Mapping[str, TableLike]:
     """Build the SCIP extraction bundle.
@@ -195,6 +297,18 @@ def scip_bundle(
     dict[str, TableLike]
         Bundle tables for SCIP extraction.
     """
+    if not requires_evidence_template(evidence_plan, "scip"):
+        return _empty_bundle(
+            (
+                "scip_metadata",
+                "scip_documents",
+                "scip_occurrences",
+                "scip_symbol_information",
+                "scip_symbol_relationships",
+                "scip_external_symbol_information",
+                "scip_diagnostics",
+            )
+        )
     return extract_scip_tables(
         scip_index_path=scip_index_path,
         repo_root=repo_root,
@@ -204,12 +318,32 @@ def scip_bundle(
 
 
 @cache()
-@tag(layer="extract", artifact="scip_index", kind="path")
-def scip_index_path(
+@tag(layer="extract", artifact="scip_index_inputs", kind="object")
+def scip_index_inputs(
     repo_root: str,
     scip_identity_overrides: ScipIdentityOverrides,
     scip_index_config: ScipIndexConfig,
+) -> ScipIndexInputs:
+    """Bundle inputs for SCIP indexing.
+
+    Returns
+    -------
+    ScipIndexInputs
+        Bundled SCIP index inputs.
+    """
+    return ScipIndexInputs(
+        repo_root=repo_root,
+        scip_identity_overrides=scip_identity_overrides,
+        scip_index_config=scip_index_config,
+    )
+
+
+@cache()
+@tag(layer="extract", artifact="scip_index", kind="path")
+def scip_index_path(
+    scip_index_inputs: ScipIndexInputs,
     cache_salt: str,
+    evidence_plan: EvidencePlan | None,
     ctx: ExecutionContext,
 ) -> str | None:
     """Build or resolve index.scip under build/scip.
@@ -221,28 +355,32 @@ def scip_index_path(
     """
     _ = ctx
     _ = cache_salt
-    repo_root_path = Path(repo_root).resolve()
-    build_dir = ensure_scip_build_dir(repo_root_path, scip_index_config.output_dir)
-    if scip_index_config.index_path_override:
-        override = Path(scip_index_config.index_path_override)
+    if not requires_evidence_template(evidence_plan, "scip"):
+        return None
+    repo_root_path = Path(scip_index_inputs.repo_root).resolve()
+    config = scip_index_inputs.scip_index_config
+    overrides = scip_index_inputs.scip_identity_overrides
+    build_dir = ensure_scip_build_dir(repo_root_path, config.output_dir)
+    if config.index_path_override:
+        override = Path(config.index_path_override)
         override_path = override if override.is_absolute() else repo_root_path / override
         target = build_dir / "index.scip"
         if override_path.resolve() != target.resolve():
             target.write_bytes(override_path.read_bytes())
         return str(target)
-    if not scip_index_config.enabled:
+    if not config.enabled:
         return None
 
     identity = resolve_scip_identity(
         repo_root_path,
-        project_name_override=scip_identity_overrides.project_name_override,
-        project_version_override=scip_identity_overrides.project_version_override,
-        project_namespace_override=scip_identity_overrides.project_namespace_override,
+        project_name_override=overrides.project_name_override,
+        project_version_override=overrides.project_version_override,
+        project_namespace_override=overrides.project_namespace_override,
     )
     opts = build_scip_index_options(
         repo_root=repo_root_path,
         identity=identity,
-        config=scip_index_config,
+        config=config,
     )
     return str(run_scip_python_index(opts))
 
@@ -253,6 +391,7 @@ def symtables(
     repo_root: str,
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
+    evidence_plan: EvidencePlan | None,
     ctx: ExecutionContext,
 ) -> TableLike:
     """Extract symbol table data into a table.
@@ -263,6 +402,8 @@ def symtables(
         Symbol table extraction table.
     """
     _ = repo_root
+    if not requires_evidence_template(evidence_plan, "symtable"):
+        return empty_table(dataset_schema("py_sym_scopes_v1"))
     return extract_symtables_table(
         repo_files=repo_files,
         file_contexts=file_contexts,
@@ -276,6 +417,7 @@ def bytecode(
     repo_root: str,
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
+    evidence_plan: EvidencePlan | None,
     ctx: ExecutionContext,
 ) -> TableLike:
     """Extract bytecode data into a table.
@@ -286,6 +428,8 @@ def bytecode(
         Bytecode extraction table.
     """
     _ = repo_root
+    if not requires_evidence_template(evidence_plan, "bytecode"):
+        return empty_table(dataset_schema("py_bc_instructions_v1"))
     return extract_bytecode_table(
         repo_files=repo_files,
         file_contexts=file_contexts,
@@ -309,6 +453,7 @@ def bytecode_bundle(
     repo_root: str,
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
+    evidence_plan: EvidencePlan | None,
     ctx: ExecutionContext,
 ) -> dict[str, TableLike]:
     """Extract bytecode tables as a bundle.
@@ -319,9 +464,21 @@ def bytecode_bundle(
         Bytecode tables for code units, instructions, blocks, cfg, and errors.
     """
     _ = repo_root
+    if not requires_evidence_template(evidence_plan, "bytecode"):
+        return _empty_bundle(
+            (
+                "py_bc_code_units",
+                "py_bc_instructions",
+                "py_bc_exception_table",
+                "py_bc_blocks",
+                "py_bc_cfg_edges",
+                "py_bc_errors",
+            )
+        )
+    options = _bytecode_options_for_plan(BytecodeExtractOptions(), evidence_plan)
     result = extract_bytecode(
         repo_files,
-        options=BytecodeExtractOptions(),
+        options=options,
         file_contexts=file_contexts,
         ctx=ctx,
     )
@@ -347,9 +504,9 @@ def bytecode_bundle(
 def tree_sitter_bundle(
     *,
     enable_tree_sitter: bool,
-    repo_root: str,
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
+    evidence_plan: EvidencePlan | None,
     ctx: ExecutionContext,
 ) -> Mapping[str, TableLike]:
     """Extract tree-sitter nodes and diagnostics when enabled.
@@ -359,8 +516,7 @@ def tree_sitter_bundle(
     dict[str, TableLike]
         Tree-sitter tables for nodes and diagnostics.
     """
-    _ = repo_root
-    if not enable_tree_sitter:
+    if not enable_tree_sitter or not requires_evidence_template(evidence_plan, "tree_sitter"):
         return {
             "ts_nodes": empty_table(TS_NODES_SCHEMA),
             "ts_errors": empty_table(TS_ERRORS_SCHEMA),
@@ -385,10 +541,9 @@ def tree_sitter_bundle(
 @tag(layer="extract", artifact="runtime_inspect_bundle", kind="bundle")
 def runtime_inspect_bundle(
     *,
-    enable_runtime_inspect: bool,
     repo_root: str,
-    runtime_module_allowlist: list[str],
-    runtime_timeout_s: int,
+    runtime_inspect_config: RuntimeInspectConfig,
+    evidence_plan: EvidencePlan | None,
     ctx: ExecutionContext,
 ) -> dict[str, TableLike]:
     """Extract runtime inspection tables when enabled.
@@ -399,7 +554,10 @@ def runtime_inspect_bundle(
         Runtime inspection tables bundle.
     """
     _ = ctx
-    if not enable_runtime_inspect:
+    enable_runtime_inspect = runtime_inspect_config.enable_runtime_inspect
+    if not enable_runtime_inspect or not requires_evidence_template(
+        evidence_plan, "runtime_inspect"
+    ):
         return {
             "rt_objects": empty_table(RT_OBJECTS_SCHEMA),
             "rt_signatures": empty_table(RT_SIGNATURES_SCHEMA),
@@ -409,8 +567,8 @@ def runtime_inspect_bundle(
     result = extract_runtime_tables(
         repo_root,
         options=RuntimeInspectOptions(
-            module_allowlist=runtime_module_allowlist,
-            timeout_s=int(runtime_timeout_s),
+            module_allowlist=runtime_inspect_config.module_allowlist,
+            timeout_s=int(runtime_inspect_config.timeout_s),
         ),
         ctx=ctx,
     )

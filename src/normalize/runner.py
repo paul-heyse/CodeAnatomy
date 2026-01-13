@@ -2,21 +2,45 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import cast
 
+import pyarrow as pa
+
+from arrowdsl.compute.ids import masked_hash_expr
+from arrowdsl.compute.kernels import apply_dedupe
+from arrowdsl.compute.macros import ColumnOrNullExpr
 from arrowdsl.core.context import (
     DeterminismTier,
     ExecutionContext,
     OrderingLevel,
     execution_context_factory,
 )
-from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
+from arrowdsl.core.ids import HashSpec
+from arrowdsl.core.interop import (
+    ComputeExpression,
+    RecordBatchReaderLike,
+    SchemaLike,
+    TableLike,
+    pc,
+)
 from arrowdsl.finalize.finalize import Contract, FinalizeOptions, FinalizeResult, finalize
+from arrowdsl.plan.catalog import PlanCatalog
 from arrowdsl.plan.plan import Plan, PlanSpec
 from arrowdsl.plan.runner import PlanRunResult, run_plan
-from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
-from arrowdsl.schema.schema import SchemaMetadataSpec
+from arrowdsl.plan.scan_io import plan_from_source
+from arrowdsl.schema.metadata import merge_metadata_specs
+from arrowdsl.schema.ops import align_table
+from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
+from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
+from normalize.compiler_graph import order_rules
+from normalize.contracts import NORMALIZE_EVIDENCE_NAME, normalize_evidence_schema
+from normalize.evidence_catalog import EvidenceCatalog
+from normalize.policies import ambiguity_kernels, confidence_expr
+from normalize.registry_specs import dataset_metadata_spec, dataset_spec
+from normalize.rule_model import EvidenceOutput, NormalizeRule
+from normalize.rule_registry import normalize_rules
 from normalize.utils import (
     PlanSource,
     encoding_policy_from_schema,
@@ -28,6 +52,23 @@ from schema_spec.specs import PROVENANCE_COLS
 from schema_spec.system import ContractSpec
 
 PostFn = Callable[[TableLike, ExecutionContext], TableLike]
+
+
+@dataclass(frozen=True)
+class NormalizeFinalizeSpec:
+    """Finalize overrides for normalize pipelines."""
+
+    metadata_spec: SchemaMetadataSpec | None = None
+    schema_policy: SchemaPolicy | None = None
+
+
+@dataclass(frozen=True)
+class NormalizeRuleCompilation:
+    """Compiled normalize rules and derived plans."""
+
+    rules: tuple[NormalizeRule, ...]
+    plans: Mapping[str, Plan]
+    catalog: PlanCatalog
 
 
 def ensure_execution_context(ctx: ExecutionContext | None) -> ExecutionContext:
@@ -81,7 +122,7 @@ def run_normalize(
     post: Iterable[PostFn],
     contract: ContractSpec,
     ctx: ExecutionContext,
-    metadata_spec: SchemaMetadataSpec | None = None,
+    finalize_spec: NormalizeFinalizeSpec | None = None,
 ) -> FinalizeResult:
     """Execute a normalize plan with post steps and finalize gate.
 
@@ -100,29 +141,43 @@ def run_normalize(
     for fn in post:
         table = fn(table, ctx)
     contract_obj = contract.to_contract()
+    finalize_spec = finalize_spec or NormalizeFinalizeSpec()
     metadata = None
-    if metadata_spec is not None:
-        schema_meta = dict(metadata_spec.schema_metadata)
+    if finalize_spec.metadata_spec is not None:
+        schema_meta = dict(finalize_spec.metadata_spec.schema_metadata)
         schema_meta[b"determinism_tier"] = ctx.determinism.value.encode("utf-8")
         metadata = SchemaMetadataSpec(
             schema_metadata=schema_meta,
-            field_metadata=metadata_spec.field_metadata,
+            field_metadata=finalize_spec.metadata_spec.field_metadata,
         )
-    schema_policy = schema_policy_factory(
-        contract.table_schema,
-        ctx=ctx,
-        options=SchemaPolicyOptions(
-            schema=contract_obj.with_versioned_schema(),
-            encoding=encoding_policy_from_schema(contract_obj.schema),
-            metadata=metadata,
-            validation=contract_obj.validation,
-        ),
-    )
+    if finalize_spec.schema_policy is None:
+        schema_policy = schema_policy_factory(
+            contract.table_schema,
+            ctx=ctx,
+            options=SchemaPolicyOptions(
+                schema=contract_obj.with_versioned_schema(),
+                encoding=encoding_policy_from_schema(contract_obj.schema),
+                metadata=metadata,
+                validation=contract_obj.validation,
+            ),
+        )
+    else:
+        schema_policy = _merge_policy_metadata(finalize_spec.schema_policy, metadata)
     options = FinalizeOptions(
         schema_policy=schema_policy,
         skip_canonical_sort=_should_skip_canonical_sort(plan, contract=contract_obj, ctx=ctx),
     )
     return finalize(table, contract=contract_obj, ctx=ctx, options=options)
+
+
+def _merge_policy_metadata(
+    policy: SchemaPolicy,
+    metadata: SchemaMetadataSpec | None,
+) -> SchemaPolicy:
+    if metadata is None:
+        return policy
+    merged = merge_metadata_specs(policy.metadata, metadata)
+    return replace(policy, metadata=merged)
 
 
 def run_normalize_reader(plan: PlanSource, *, ctx: ExecutionContext) -> RecordBatchReaderLike:
@@ -207,10 +262,348 @@ def run_normalize_streamable_result(
     )
 
 
+def _expand_required_outputs(
+    rules: Sequence[NormalizeRule],
+    outputs: Sequence[str],
+) -> set[str]:
+    required = set(outputs)
+    available_outputs = {rule.output for rule in rules}
+    changed = True
+    while changed:
+        changed = False
+        for rule in rules:
+            if rule.output not in required:
+                continue
+            for input_name in rule.inputs:
+                if input_name in available_outputs and input_name not in required:
+                    required.add(input_name)
+                    changed = True
+    return required
+
+
+def compile_normalize_rules(
+    catalog: PlanCatalog,
+    *,
+    ctx: ExecutionContext,
+    rules: Sequence[NormalizeRule] | None = None,
+    required_outputs: Sequence[str] | None = None,
+) -> NormalizeRuleCompilation:
+    """Compile normalize rules into plans with evidence gating.
+
+    Returns
+    -------
+    NormalizeRuleCompilation
+        Compiled rule set with derived plans.
+    """
+    rule_set = tuple(normalize_rules()) if rules is None else tuple(rules)
+    if required_outputs:
+        required_set = _expand_required_outputs(rule_set, required_outputs)
+        rule_set = tuple(rule for rule in rule_set if rule.output in required_set)
+    work_catalog = _clone_catalog(catalog)
+    evidence = EvidenceCatalog.from_plan_catalog(work_catalog, ctx=ctx)
+    ordered = order_rules(rule_set, evidence=evidence)
+
+    plans: dict[str, Plan] = {}
+    compiled_rules: list[NormalizeRule] = []
+    for rule in ordered:
+        plan = _resolve_rule_plan(rule, work_catalog, ctx=ctx)
+        if plan is None:
+            continue
+        compiled_rules.append(rule)
+        plans[rule.output] = plan
+        work_catalog.add(rule.output, plan)
+        evidence.register(rule.output, plan.schema(ctx=ctx))
+
+    return NormalizeRuleCompilation(
+        rules=tuple(compiled_rules),
+        plans=plans,
+        catalog=work_catalog,
+    )
+
+
+def compile_normalize_plans(
+    catalog: PlanCatalog,
+    *,
+    ctx: ExecutionContext,
+    rules: Sequence[NormalizeRule] | None = None,
+    required_outputs: Sequence[str] | None = None,
+) -> dict[str, Plan]:
+    """Compile normalize rules into plans keyed by output dataset.
+
+    Returns
+    -------
+    dict[str, Plan]
+        Mapping of output dataset names to plans.
+    """
+    compilation = compile_normalize_rules(
+        catalog,
+        ctx=ctx,
+        rules=rules,
+        required_outputs=required_outputs,
+    )
+    return dict(compilation.plans)
+
+
+def materialize_normalize_evidence(
+    catalog: PlanCatalog,
+    *,
+    ctx: ExecutionContext,
+    rules: Sequence[NormalizeRule] | None = None,
+    required_outputs: Sequence[str] | None = None,
+) -> dict[str, TableLike]:
+    """Materialize canonical evidence outputs for normalize rules.
+
+    Returns
+    -------
+    dict[str, TableLike]
+        Evidence outputs keyed by rule output dataset name.
+    """
+    compilation = compile_normalize_rules(
+        catalog,
+        ctx=ctx,
+        rules=rules,
+        required_outputs=required_outputs,
+    )
+    outputs: dict[str, TableLike] = {}
+    for rule in compilation.rules:
+        plan = compilation.plans.get(rule.output)
+        if plan is None:
+            continue
+        outputs[rule.output] = _materialize_evidence_output(plan, rule, ctx=ctx)
+    return outputs
+
+
+def normalize_evidence_table(
+    catalog: PlanCatalog,
+    *,
+    ctx: ExecutionContext,
+    rules: Sequence[NormalizeRule] | None = None,
+) -> TableLike:
+    """Return a unified canonical evidence table from normalize rules.
+
+    Returns
+    -------
+    TableLike
+        Unified evidence table aligned to the canonical contract.
+    """
+    outputs = materialize_normalize_evidence(catalog, ctx=ctx, rules=rules)
+    if not outputs:
+        return empty_table(normalize_evidence_schema())
+    spec = dataset_spec(NORMALIZE_EVIDENCE_NAME)
+    unified = spec.unify_tables(tuple(outputs.values()), ctx=ctx)
+    return spec.finalize_context(ctx).run(unified, ctx=ctx).good
+
+
+def _clone_catalog(catalog: PlanCatalog) -> PlanCatalog:
+    tables = catalog.snapshot()
+    cloned = PlanCatalog(tables=tables)
+    repo_text_index = getattr(catalog, "repo_text_index", None)
+    if repo_text_index is not None:
+        cloned.repo_text_index = repo_text_index
+    return cloned
+
+
+def _resolve_rule_plan(
+    rule: NormalizeRule,
+    catalog: PlanCatalog,
+    *,
+    ctx: ExecutionContext,
+) -> Plan | None:
+    source: PlanSource | None
+    if rule.derive is None:
+        if not rule.inputs:
+            return None
+        source = catalog.tables.get(rule.inputs[0])
+    else:
+        source = rule.derive(catalog, ctx)
+    if source is None:
+        return None
+    plan = plan_from_source(source, ctx=ctx, label=rule.name)
+    if rule.query is not None:
+        plan = rule.query.apply_to_plan(plan, ctx=ctx)
+    return plan
+
+
+def _materialize_evidence_output(
+    plan: Plan,
+    rule: NormalizeRule,
+    *,
+    ctx: ExecutionContext,
+) -> TableLike:
+    evidence_plan = _build_evidence_plan(plan, rule, ctx=ctx)
+    result = run_plan(
+        evidence_plan,
+        ctx=ctx,
+        prefer_reader=False,
+        attach_ordering_metadata=True,
+    )
+    table = cast("TableLike", result.value)
+    for spec in ambiguity_kernels(rule.ambiguity_policy):
+        table = apply_dedupe(table, spec=spec, _ctx=ctx)
+    return align_table(table, schema=normalize_evidence_schema(), ctx=ctx)
+
+
+def _build_evidence_plan(
+    plan: Plan,
+    rule: NormalizeRule,
+    *,
+    ctx: ExecutionContext,
+) -> Plan:
+    schema = normalize_evidence_schema()
+    available = frozenset(plan.schema(ctx=ctx).names)
+    output = rule.evidence_output or EvidenceOutput()
+    col_map: dict[str, str] = dict(output.column_map)
+    literals: dict[str, object] = dict(output.literals)
+    literals.setdefault("rule_name", rule.name)
+    if "source" not in literals and "source" not in col_map:
+        literals["source"] = rule.output
+    _set_metadata_literal(literals, rule.output, key=b"evidence_family", name="evidence_family")
+
+    source_field = _source_field_for_confidence(col_map, available, literals)
+
+    exprs: list[ComputeExpression] = []
+    names: list[str] = []
+    for field in schema:
+        name = field.name
+        dtype = field.type
+        if name == "span_id":
+            expr = _span_id_expr(col_map, available)
+        elif name == "confidence":
+            expr = _confidence_expr(
+                rule,
+                context=_EvidenceExprContext(
+                    dtype=dtype,
+                    available=available,
+                    col_map=col_map,
+                    literals=literals,
+                    source_field=source_field,
+                ),
+            )
+        else:
+            expr = _evidence_expr(
+                name,
+                dtype=dtype,
+                available=available,
+                col_map=col_map,
+                literals=literals,
+            )
+        exprs.append(expr)
+        names.append(name)
+    return plan.project(exprs, names, ctx=ctx)
+
+
+def _set_metadata_literal(
+    literals: dict[str, object],
+    output_name: str,
+    *,
+    key: bytes,
+    name: str,
+) -> None:
+    if name in literals:
+        return
+    meta = dataset_metadata_spec(output_name).schema_metadata
+    value = meta.get(key)
+    if isinstance(value, (bytes, bytearray)):
+        literals[name] = value.decode("utf-8")
+
+
+def _evidence_expr(
+    name: str,
+    *,
+    dtype: pa.DataType,
+    available: frozenset[str],
+    col_map: Mapping[str, str],
+    literals: Mapping[str, object],
+) -> ComputeExpression:
+    if name in literals:
+        return _literal_expr(literals[name], dtype=dtype)
+    source = col_map.get(name, name)
+    return _column_expr(source, dtype=dtype, available=available)
+
+
+@dataclass(frozen=True)
+class _EvidenceExprContext:
+    dtype: pa.DataType
+    available: frozenset[str]
+    col_map: Mapping[str, str]
+    literals: Mapping[str, object]
+    source_field: str | None
+
+
+def _confidence_expr(
+    rule: NormalizeRule,
+    *,
+    context: _EvidenceExprContext,
+) -> ComputeExpression:
+    if "confidence" in context.literals:
+        return _literal_expr(context.literals["confidence"], dtype=context.dtype)
+    mapped = context.col_map.get("confidence")
+    if mapped is not None:
+        return _column_expr(mapped, dtype=context.dtype, available=context.available)
+    if rule.confidence_policy is not None:
+        expr = confidence_expr(rule.confidence_policy, source_field=context.source_field)
+        return expr.to_expression()
+    return _column_expr("confidence", dtype=context.dtype, available=context.available)
+
+
+def _source_field_for_confidence(
+    col_map: Mapping[str, str],
+    available: frozenset[str],
+    literals: Mapping[str, object],
+) -> str | None:
+    if "source" in literals:
+        return None
+    source = col_map.get("source", "source")
+    if source in available:
+        return source
+    return None
+
+
+def _span_id_expr(
+    col_map: Mapping[str, str],
+    available: frozenset[str],
+) -> ComputeExpression:
+    path_col = col_map.get("path", "path")
+    bstart_col = col_map.get("bstart", "bstart")
+    bend_col = col_map.get("bend", "bend")
+    spec = HashSpec(
+        prefix="span",
+        cols=(path_col, bstart_col, bend_col),
+        null_sentinel="None",
+    )
+    return masked_hash_expr(
+        spec,
+        required=(path_col, bstart_col, bend_col),
+        available=tuple(available),
+    )
+
+
+def _column_expr(
+    name: str,
+    *,
+    dtype: pa.DataType,
+    available: frozenset[str],
+) -> ComputeExpression:
+    expr = ColumnOrNullExpr(name=name, dtype=dtype, available=available, cast=True)
+    return expr.to_expression()
+
+
+def _literal_expr(value: object, *, dtype: pa.DataType) -> ComputeExpression:
+    if value is None:
+        return pc.scalar(pa.scalar(None, type=dtype))
+    return pc.scalar(value)
+
+
 __all__ = [
+    "NormalizeFinalizeSpec",
+    "NormalizeRuleCompilation",
     "PostFn",
+    "compile_normalize_plans",
+    "compile_normalize_rules",
     "ensure_canonical",
     "ensure_execution_context",
+    "materialize_normalize_evidence",
+    "normalize_evidence_table",
     "run_normalize",
     "run_normalize_reader",
     "run_normalize_streamable",

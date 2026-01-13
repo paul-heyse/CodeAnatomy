@@ -552,6 +552,29 @@ def apply_dedupe(
     raise ValueError(msg)
 
 
+def winner_select_by_score(
+    table: TableLike,
+    *,
+    keys: Sequence[str],
+    score_col: str = "score",
+    score_order: Literal["ascending", "descending"] = "descending",
+    tie_breakers: Sequence[SortKey] = (),
+) -> TableLike:
+    """Select a single winner per key group based on score and tie breakers.
+
+    Returns
+    -------
+    TableLike
+        Winner-selected table.
+    """
+    spec = DedupeSpec(
+        keys=tuple(keys),
+        strategy="KEEP_BEST_BY_SCORE",
+        tie_breakers=(SortKey(score_col, score_order), *tuple(tie_breakers)),
+    )
+    return apply_dedupe(table, spec=spec, _ctx=None)
+
+
 def _unique_columns(names: Sequence[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []

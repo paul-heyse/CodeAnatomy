@@ -62,6 +62,15 @@ class ScipIndexConfig:
 
 
 @dataclass(frozen=True)
+class ScipIndexInputs:
+    """Bundle inputs for SCIP indexing and identity resolution."""
+
+    repo_root: str
+    scip_identity_overrides: ScipIdentityOverrides
+    scip_index_config: ScipIndexConfig
+
+
+@dataclass(frozen=True)
 class RuntimeInspectConfig:
     """Configuration for runtime inspection extraction."""
 

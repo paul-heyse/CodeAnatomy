@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import asdict, is_dataclass
 from functools import cache
 from typing import TYPE_CHECKING
 
@@ -11,6 +12,7 @@ from arrowdsl.plan.query import QuerySpec
 from arrowdsl.schema.metadata import merge_metadata_specs, options_metadata_spec
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import EncodingPolicy, SchemaMetadataSpec
+from extract.evidence_specs import evidence_metadata_spec as extract_evidence_metadata_spec
 from extract.registry_builders import (
     QueryContext,
     build_dataset_spec,
@@ -24,8 +26,9 @@ from extract.registry_ids import (
     add_scip_relationship_ids,
     add_scip_symbol_ids,
 )
-from extract.registry_policies import policy_row
+from extract.registry_policies import policy_row, template_policy_row
 from extract.registry_rows import DATASET_ROWS, DatasetRow
+from extract.registry_templates import config as extractor_config
 from schema_spec.system import DatasetSpec
 
 if TYPE_CHECKING:
@@ -33,6 +36,14 @@ if TYPE_CHECKING:
     from arrowdsl.schema.policy import SchemaPolicy
 
 _ROWS_BY_NAME: dict[str, DatasetRow] = {row.name: row for row in DATASET_ROWS}
+_OPTIONS_TYPE_ERROR = "Options must be a dataclass instance or dict."
+
+
+class OptionsTypeError(TypeError):
+    """Raised when options payload has an unsupported type."""
+
+    def __init__(self) -> None:
+        super().__init__(_OPTIONS_TYPE_ERROR)
 
 
 def dataset_row(name: str) -> DatasetRow:
@@ -104,7 +115,8 @@ def dataset_metadata_spec(name: str) -> SchemaMetadataSpec:
     SchemaMetadataSpec
         Base metadata spec for the dataset.
     """
-    return dataset_spec(name).metadata_spec
+    base = dataset_spec(name).metadata_spec
+    return merge_metadata_specs(base, extract_evidence_metadata_spec(name))
 
 
 def dataset_metadata_with_options(
@@ -162,6 +174,40 @@ def enabled_datasets(
     return tuple(enabled)
 
 
+def extractor_defaults(name: str) -> dict[str, object]:
+    """Return default option values for an extractor.
+
+    Returns
+    -------
+    dict[str, object]
+        Default options for the extractor.
+    """
+    return dict(extractor_config(name).defaults)
+
+
+def _options_dict(options: object) -> dict[str, object]:
+    if is_dataclass(options) and not isinstance(options, type):
+        return asdict(options)
+    if isinstance(options, dict):
+        return dict(options)
+    raise OptionsTypeError
+
+
+def normalize_options[T](name: str, options: object | None, factory: type[T]) -> T:
+    """Normalize options by applying defaults for missing fields.
+
+    Returns
+    -------
+    T
+        Options object with defaults merged in.
+    """
+    defaults = extractor_defaults(name)
+    if options is None:
+        return factory(**defaults)
+    merged = {**defaults, **_options_dict(options)}
+    return factory(**merged)
+
+
 def dataset_schema_policy(
     name: str,
     *,
@@ -179,11 +225,23 @@ def dataset_schema_policy(
     """
     spec = dataset_spec(name).table_spec
     row = policy_row(name)
+    template_row = template_policy_row(dataset_row(name).template)
+    safe_cast = row.safe_cast if row and row.safe_cast is not None else None
+    if safe_cast is None and template_row is not None:
+        safe_cast = template_row.safe_cast
+    keep_extra_columns = (
+        row.keep_extra_columns if row and row.keep_extra_columns is not None else None
+    )
+    if keep_extra_columns is None and template_row is not None:
+        keep_extra_columns = template_row.keep_extra_columns
+    on_error = row.on_error if row and row.on_error is not None else None
+    if on_error is None and template_row is not None:
+        on_error = template_row.on_error
     policy_options = SchemaPolicyOptions(
         metadata=dataset_metadata_with_options(name, options=options, repo_id=repo_id),
-        safe_cast=row.safe_cast if row is not None else None,
-        keep_extra_columns=row.keep_extra_columns if row is not None else None,
-        on_error=row.on_error if row is not None else None,
+        safe_cast=safe_cast,
+        keep_extra_columns=keep_extra_columns,
+        on_error=on_error,
         encoding=None if enable_encoding else EncodingPolicy(),
     )
     return schema_policy_factory(spec, ctx=ctx, options=policy_options)
@@ -239,6 +297,9 @@ __all__ = [
     "dataset_schema_policy",
     "dataset_spec",
     "enabled_datasets",
+    "extractor_config",
+    "extractor_defaults",
+    "normalize_options",
     "postprocess_table",
     "validate_registry",
 ]

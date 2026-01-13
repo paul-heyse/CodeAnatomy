@@ -69,6 +69,28 @@ def _def_use_kind_expr() -> DefUseKindExprSpec:
 
 DATASET_ROWS: tuple[DatasetRow, ...] = (
     DatasetRow(
+        name="normalize_evidence_v1",
+        version=SCHEMA_VERSION,
+        bundles=("file_identity", "span"),
+        fields=(
+            "span_id",
+            "evidence_family",
+            "source",
+            "role",
+            "confidence",
+            "ambiguity_group_id",
+            "rule_name",
+        ),
+        join_keys=("span_id", "rule_name"),
+        contract=ContractRow(
+            canonical_sort=(
+                SortKeySpec(column="span_id", order="ascending"),
+                SortKeySpec(column="rule_name", order="ascending"),
+            ),
+        ),
+        template="normalize_evidence",
+    ),
+    DatasetRow(
         name="type_exprs_norm_v1",
         version=SCHEMA_VERSION,
         bundles=("file_identity", "span"),
@@ -105,7 +127,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         contract=ContractRow(
             canonical_sort=(SortKeySpec(column="type_expr_id", order="ascending"),),
         ),
-        template="normalize",
+        template="normalize_cst",
     ),
     DatasetRow(
         name="type_nodes_v1",
@@ -125,7 +147,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             ),
             canonical_sort=(SortKeySpec(column="type_id", order="ascending"),),
         ),
-        template="normalize",
+        template="normalize_type",
     ),
     DatasetRow(
         name="py_bc_blocks_norm_v1",
@@ -139,7 +161,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
                 SortKeySpec(column="block_id", order="ascending"),
             ),
         ),
-        template="normalize",
+        template="normalize_bytecode",
     ),
     DatasetRow(
         name="py_bc_cfg_edges_norm_v1",
@@ -161,7 +183,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
                 SortKeySpec(column="edge_id", order="ascending"),
             ),
         ),
-        template="normalize",
+        template="normalize_bytecode",
     ),
     DatasetRow(
         name="py_bc_def_use_events_v1",
@@ -197,7 +219,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
                 SortKeySpec(column="event_id", order="ascending"),
             ),
         ),
-        template="normalize",
+        template="normalize_bytecode",
     ),
     DatasetRow(
         name="py_bc_reaches_v1",
@@ -214,14 +236,14 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
                 SortKeySpec(column="use_event_id", order="ascending"),
             ),
         ),
-        template="normalize",
+        template="normalize_bytecode",
     ),
     DatasetRow(
         name="span_errors_v1",
         version=SCHEMA_VERSION,
         bundles=(),
         fields=("document_id", "path", "reason"),
-        template="normalize",
+        template="normalize_span",
     ),
     DatasetRow(
         name="diagnostics_norm_v1",
@@ -233,7 +255,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         contract=ContractRow(
             canonical_sort=(SortKeySpec(column="diag_id", order="ascending"),),
         ),
-        template="normalize",
+        template="normalize_diagnostics",
     ),
 )
 

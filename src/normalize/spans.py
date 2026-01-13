@@ -12,7 +12,9 @@ from arrowdsl.compute.filters import position_encoding_array
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import ArrayLike, TableLike
+from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.build import column_or_null, set_or_append_column
+from normalize.registry_specs import dataset_query
 from normalize.runner import PostFn
 from normalize.span_pipeline import (
     SpanOutputColumns,
@@ -29,7 +31,7 @@ from normalize.text_index import (
     RepoTextIndex,
     row_value_int,
 )
-from normalize.utils import add_span_id_column
+from normalize.utils import PlanSource, add_span_id_column, plan_source
 from schema_spec.specs import scip_range_bundle
 
 type RowValue = object | None
@@ -38,6 +40,8 @@ SCIP_RANGE_FIELDS = tuple(field.name for field in scip_range_bundle(include_len=
 SCIP_ENC_RANGE_FIELDS = tuple(
     field.name for field in scip_range_bundle(prefix="enc_", include_len=True).fields
 )
+
+SPAN_ERRORS_NAME = "span_errors_v1"
 
 
 @dataclass(frozen=True)
@@ -729,6 +733,18 @@ def normalize_cst_imports_spans(
     if primary == "stmt":
         return append_alias_cols(py_cst_imports, {"bstart": "stmt_bstart", "bend": "stmt_bend"})
     return append_alias_cols(py_cst_imports, {"bstart": "alias_bstart", "bend": "alias_bend"})
+
+
+def span_errors_plan(span_errors: PlanSource, *, ctx: ExecutionContext) -> Plan:
+    """Build a plan-lane span error table.
+
+    Returns
+    -------
+    Plan
+        Plan producing span error rows.
+    """
+    plan = plan_source(span_errors, ctx=ctx)
+    return dataset_query(SPAN_ERRORS_NAME).apply_to_plan(plan, ctx=ctx)
 
 
 def normalize_cst_defs_spans(

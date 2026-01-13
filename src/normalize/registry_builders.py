@@ -174,7 +174,12 @@ def build_metadata_spec(row: DatasetRow) -> SchemaMetadataSpec:
     templ = template(row.template) if row.template is not None else None
     stage = templ.stage if templ is not None else "normalize"
     level = templ.ordering_level if templ is not None else OrderingLevel.IMPLICIT
-    extra = dict(templ.metadata_extra or {}) if templ is not None else {}
+    extra: dict[bytes, bytes] = dict(templ.metadata_extra or {}) if templ is not None else {}
+    if templ is not None and templ.determinism_tier is not None:
+        extra.setdefault(
+            b"determinism_tier",
+            templ.determinism_tier.value.encode("utf-8"),
+        )
     extra.update(row.metadata_extra)
     metadata = normalize_metadata_spec(row.name, ctx=MetadataContext(stage=stage), extra=extra)
     if not row.join_keys:

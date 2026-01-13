@@ -11,15 +11,23 @@ from relspec.model import RelationshipRule
 from relspec.registry import ContractCatalog
 
 DEFAULT_REL_OUTPUT_TO_EDGE_KINDS: dict[str, tuple[str, ...]] = {
-    "rel_name_symbol": (
-        "PY_DEFINES_SYMBOL",
-        "PY_REFERENCES_SYMBOL",
-        "PY_READS_SYMBOL",
-        "PY_WRITES_SYMBOL",
-    ),
-    "rel_import_symbol": ("PY_IMPORTS_SYMBOL",),
-    "rel_callsite_symbol": ("PY_CALLS_SYMBOL",),
-    "rel_callsite_qname": ("PY_CALLS_QNAME",),
+    "symbol_role_defines": ("PY_DEFINES_SYMBOL",),
+    "symbol_role_references": ("PY_REFERENCES_SYMBOL",),
+    "symbol_role_reads": ("PY_READS_SYMBOL",),
+    "symbol_role_writes": ("PY_WRITES_SYMBOL",),
+    "scip_symbol_reference": ("SCIP_SYMBOL_REFERENCE",),
+    "scip_symbol_implementation": ("SCIP_SYMBOL_IMPLEMENTATION",),
+    "scip_symbol_type_definition": ("SCIP_SYMBOL_TYPE_DEFINITION",),
+    "scip_symbol_definition": ("SCIP_SYMBOL_DEFINITION",),
+    "import_edges": ("PY_IMPORTS_SYMBOL",),
+    "call_edges": ("PY_CALLS_SYMBOL",),
+    "qname_fallback_calls": ("PY_CALLS_QNAME",),
+    "diagnostic_edges": ("HAS_DIAGNOSTIC",),
+    "type_annotation_edges": ("HAS_ANNOTATION",),
+    "inferred_type_edges": ("INFERRED_TYPE",),
+    "runtime_signatures": ("RT_HAS_SIGNATURE",),
+    "runtime_params": ("RT_HAS_PARAM",),
+    "runtime_members": ("RT_HAS_MEMBER",),
 }
 
 

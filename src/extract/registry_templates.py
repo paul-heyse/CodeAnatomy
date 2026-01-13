@@ -18,6 +18,15 @@ class ExtractorTemplate:
     confidence: float = 1.0
 
 
+@dataclass(frozen=True)
+class ExtractorConfigSpec:
+    """Programmatic default configuration for extractors."""
+
+    extractor_name: str
+    feature_flags: tuple[str, ...] = ()
+    defaults: dict[str, object] = field(default_factory=dict)
+
+
 TEMPLATES: dict[str, ExtractorTemplate] = {
     "ast": ExtractorTemplate(
         extractor_name="ast",
@@ -118,6 +127,124 @@ TEMPLATES: dict[str, ExtractorTemplate] = {
 }
 
 
+CONFIGS: dict[str, ExtractorConfigSpec] = {
+    "ast": ExtractorConfigSpec(
+        extractor_name="ast",
+        defaults={
+            "type_comments": True,
+            "feature_version": None,
+        },
+    ),
+    "cst": ExtractorConfigSpec(
+        extractor_name="cst",
+        feature_flags=(
+            "include_parse_manifest",
+            "include_parse_errors",
+            "include_name_refs",
+            "include_imports",
+            "include_callsites",
+            "include_defs",
+            "include_type_exprs",
+        ),
+        defaults={
+            "repo_id": None,
+            "repo_root": None,
+            "include_parse_manifest": True,
+            "include_parse_errors": True,
+            "include_name_refs": True,
+            "include_imports": True,
+            "include_callsites": True,
+            "include_defs": True,
+            "include_type_exprs": True,
+            "compute_expr_context": True,
+            "compute_qualified_names": True,
+        },
+    ),
+    "tree_sitter": ExtractorConfigSpec(
+        extractor_name="tree_sitter",
+        feature_flags=("include_nodes", "include_errors", "include_missing"),
+        defaults={
+            "include_nodes": True,
+            "include_errors": True,
+            "include_missing": True,
+        },
+    ),
+    "bytecode": ExtractorConfigSpec(
+        extractor_name="bytecode",
+        feature_flags=("include_cfg_derivations",),
+        defaults={
+            "optimize": 0,
+            "dont_inherit": True,
+            "adaptive": False,
+            "include_cfg_derivations": True,
+            "terminator_opnames": (
+                "RETURN_VALUE",
+                "RETURN_CONST",
+                "RAISE_VARARGS",
+                "RERAISE",
+            ),
+        },
+    ),
+    "symtable": ExtractorConfigSpec(
+        extractor_name="symtable",
+        defaults={
+            "compile_type": "exec",
+        },
+    ),
+    "repo_scan": ExtractorConfigSpec(
+        extractor_name="repo_scan",
+        defaults={
+            "repo_id": None,
+            "include_globs": ("**/*.py",),
+            "exclude_dirs": (
+                ".git",
+                "__pycache__",
+                ".venv",
+                "venv",
+                "node_modules",
+                "dist",
+                "build",
+                ".mypy_cache",
+                ".pytest_cache",
+            ),
+            "exclude_globs": (),
+            "follow_symlinks": False,
+            "include_bytes": True,
+            "include_text": True,
+            "max_file_bytes": None,
+            "max_files": None,
+        },
+    ),
+    "runtime_inspect": ExtractorConfigSpec(
+        extractor_name="runtime_inspect",
+        defaults={
+            "module_allowlist": (),
+            "timeout_s": 15,
+        },
+    ),
+    "scip": ExtractorConfigSpec(
+        extractor_name="scip",
+        defaults={
+            "prefer_protobuf": True,
+            "allow_json_fallback": False,
+            "scip_pb2_import": None,
+            "scip_cli_bin": "scip",
+            "build_dir": None,
+            "health_check": False,
+            "log_counts": False,
+            "dictionary_encode_strings": False,
+        },
+    ),
+}
+
+_FLAG_DEFAULTS: dict[str, bool] = {
+    flag: value
+    for config in CONFIGS.values()
+    for flag, value in config.defaults.items()
+    if isinstance(value, bool)
+}
+
+
 def template(name: str) -> ExtractorTemplate:
     """Return the extractor template by name.
 
@@ -129,4 +256,32 @@ def template(name: str) -> ExtractorTemplate:
     return TEMPLATES[name]
 
 
-__all__ = ["ExtractorTemplate", "template"]
+def config(name: str) -> ExtractorConfigSpec:
+    """Return the extractor configuration by name.
+
+    Returns
+    -------
+    ExtractorConfigSpec
+        Configuration for the extractor.
+    """
+    return CONFIGS[name]
+
+
+def flag_default(flag: str, *, fallback: bool = True) -> bool:
+    """Return the default value for a feature flag.
+
+    Returns
+    -------
+    bool
+        Default flag value when configured, else fallback.
+    """
+    return _FLAG_DEFAULTS.get(flag, fallback)
+
+
+__all__ = [
+    "ExtractorConfigSpec",
+    "ExtractorTemplate",
+    "config",
+    "flag_default",
+    "template",
+]

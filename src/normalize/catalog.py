@@ -37,6 +37,7 @@ class NormalizeCatalogInputs:
     py_bc_cfg_edges: PlanSource | None = None
     py_bc_code_units: PlanSource | None = None
     py_bc_instructions: PlanSource | None = None
+    span_errors: PlanSource | None = None
     repo_text_index: RepoTextIndex | None = None
 
 
@@ -65,13 +66,14 @@ class NormalizePlanCatalog(plan_catalog.PlanCatalog):
         return plan_from_source(derived, ctx=ctx, label=ref.name)
 
 
-TYPE_EXPRS_NORM_REF = plan_ref("type_exprs_norm")
-TYPES_NORM_REF = plan_ref("types_norm")
-CFG_BLOCKS_NORM_REF = plan_ref("cfg_blocks_norm")
-CFG_EDGES_NORM_REF = plan_ref("cfg_edges_norm")
-DEF_USE_EVENTS_REF = plan_ref("def_use_events")
-REACHES_REF = plan_ref("reaches")
-DIAGNOSTICS_NORM_REF = plan_ref("diagnostics_norm")
+TYPE_EXPRS_NORM_REF = plan_ref("type_exprs_norm_v1")
+TYPES_NORM_REF = plan_ref("type_nodes_v1")
+CFG_BLOCKS_NORM_REF = plan_ref("py_bc_blocks_norm_v1")
+CFG_EDGES_NORM_REF = plan_ref("py_bc_cfg_edges_norm_v1")
+DEF_USE_EVENTS_REF = plan_ref("py_bc_def_use_events_v1")
+REACHES_REF = plan_ref("py_bc_reaches_v1")
+DIAGNOSTICS_NORM_REF = plan_ref("diagnostics_norm_v1")
+SPAN_ERRORS_REF = plan_ref("span_errors_v1")
 
 
 def normalize_plan_catalog(inputs: NormalizeCatalogInputs) -> NormalizePlanCatalog:
@@ -99,6 +101,7 @@ def _input_entries(inputs: NormalizeCatalogInputs) -> Mapping[str, PlanSource | 
         "py_bc_cfg_edges": inputs.py_bc_cfg_edges,
         "py_bc_code_units": inputs.py_bc_code_units,
         "py_bc_instructions": inputs.py_bc_instructions,
+        "span_errors_v1": inputs.span_errors,
     }
 
 
@@ -108,6 +111,7 @@ __all__ = [
     "DEF_USE_EVENTS_REF",
     "DIAGNOSTICS_NORM_REF",
     "REACHES_REF",
+    "SPAN_ERRORS_REF",
     "TYPES_NORM_REF",
     "TYPE_EXPRS_NORM_REF",
     "NormalizeCatalogInputs",

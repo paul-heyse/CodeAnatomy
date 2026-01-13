@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
@@ -14,6 +14,7 @@ from arrowdsl.plan.query import QuerySpec
 from arrowdsl.spec.expr_ir import ExprIR
 
 type Expression = ExprIR
+type ExecutionMode = Literal["auto", "plan", "table"]
 
 HASH_JOIN_INPUTS = 2
 SINGLE_INPUT = 1
@@ -136,6 +137,61 @@ class WinnerSelectConfig:
 
 
 @dataclass(frozen=True)
+class EvidenceSpec:
+    """Evidence requirements for a relationship rule."""
+
+    sources: tuple[str, ...] = ()
+    required_columns: tuple[str, ...] = ()
+    required_types: Mapping[str, str] = field(default_factory=dict)
+
+    def resolved_sources(self, inputs: Sequence[DatasetRef]) -> tuple[str, ...]:
+        """Return evidence sources or fall back to rule inputs.
+
+        Parameters
+        ----------
+        inputs:
+            Dataset references for the rule inputs.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Evidence sources for the rule.
+        """
+        if self.sources:
+            return self.sources
+        return tuple(ref.name for ref in inputs)
+
+
+@dataclass(frozen=True)
+class ConfidencePolicy:
+    """Policy for computing confidence scores."""
+
+    base: float = 0.5
+    source_weight: Mapping[str, float] = field(default_factory=dict)
+    penalty: float = 0.0
+
+
+@dataclass(frozen=True)
+class AmbiguityPolicy:
+    """Policy for ambiguity resolution."""
+
+    winner_select: WinnerSelectConfig | None = None
+    tie_breakers: tuple[SortKey, ...] = ()
+
+
+@dataclass(frozen=True)
+class RuleFamilySpec:
+    """Declarative specification for a relationship rule family."""
+
+    name: str
+    factory: str
+    inputs: tuple[str, ...] = ()
+    confidence_policy: str | None = None
+    ambiguity_policy: str | None = None
+    option_flag: str | None = None
+
+
+@dataclass(frozen=True)
 class ProjectConfig:
     """Projection performed after the primary operation."""
 
@@ -243,6 +299,10 @@ class RelationshipRule:
     emit_rule_meta: bool = True
     rule_name_col: str = "rule_name"
     rule_priority_col: str = "rule_priority"
+    execution_mode: ExecutionMode = "auto"
+    evidence: EvidenceSpec | None = None
+    confidence_policy: ConfidencePolicy | None = None
+    ambiguity_policy: AmbiguityPolicy | None = None
 
     def __post_init__(self) -> None:
         """Validate relationship rule invariants."""

@@ -36,6 +36,7 @@ from arrowdsl.schema.metadata import (
 from arrowdsl.schema.ops import align_plan as align_plan_to_schema
 from arrowdsl.schema.schema import SchemaTransform, projection_for_schema
 from arrowdsl.spec.infra import DatasetRegistration, register_dataset
+from extract.evidence_plan import EvidencePlan
 
 
 @dataclass(frozen=True)
@@ -237,6 +238,32 @@ def ast_def_nodes(nodes: TableLike) -> TableLike:
         values=("FunctionDef", "AsyncFunctionDef", "ClassDef"),
     )
     return FilterSpec(predicate).apply_kernel(nodes)
+
+
+def requires_evidence(plan: EvidencePlan | None, name: str) -> bool:
+    """Return whether an evidence plan requires a dataset.
+
+    Returns
+    -------
+    bool
+        ``True`` when the dataset is required.
+    """
+    if plan is None:
+        return True
+    return plan.requires_dataset(name)
+
+
+def requires_evidence_template(plan: EvidencePlan | None, template: str) -> bool:
+    """Return whether an evidence plan requires a template.
+
+    Returns
+    -------
+    bool
+        ``True`` when the template is required.
+    """
+    if plan is None:
+        return True
+    return plan.requires_template(template)
 
 
 def ast_def_nodes_plan(plan: Plan) -> Plan:

@@ -41,6 +41,7 @@ from extract.registry_specs import (
     dataset_row_schema,
     dataset_schema,
     dataset_schema_policy,
+    normalize_options,
     postprocess_table,
 )
 
@@ -347,14 +348,14 @@ def parse_index_scip(index_path: Path, parse_opts: SCIPParseOptions | None = Non
     RuntimeError
         Raised when SCIP protobuf bindings cannot be imported.
     """
-    parse_opts = parse_opts or SCIPParseOptions()
-    if parse_opts.build_dir is None:
-        parse_opts = replace(parse_opts, build_dir=index_path.parent)
-    scip_pb2 = _load_scip_pb2(parse_opts)
-    if scip_pb2 is not None and hasattr(scip_pb2, "Index") and parse_opts.prefer_protobuf:
+    normalized_opts = normalize_options("scip", parse_opts, SCIPParseOptions)
+    if normalized_opts.build_dir is None:
+        normalized_opts = replace(normalized_opts, build_dir=index_path.parent)
+    scip_pb2 = _load_scip_pb2(normalized_opts)
+    if scip_pb2 is not None and hasattr(scip_pb2, "Index") and normalized_opts.prefer_protobuf:
         return _parse_index_protobuf(index_path, scip_pb2)
-    if parse_opts.allow_json_fallback:
-        return parse_index_json(index_path, parse_opts.scip_cli_bin)
+    if normalized_opts.allow_json_fallback:
+        return parse_index_json(index_path, normalized_opts.scip_cli_bin)
     if scip_pb2 is not None and hasattr(scip_pb2, "Index"):
         return _parse_index_protobuf(index_path, scip_pb2)
     msg = (
@@ -1086,9 +1087,9 @@ def extract_scip_tables(
     dict[str, TableLike | RecordBatchReaderLike]
         Extracted SCIP outputs keyed by output name.
     """
-    parse_opts = parse_opts or SCIPParseOptions()
+    normalized_opts = normalize_options("scip", parse_opts, SCIPParseOptions)
     exec_ctx = ctx or execution_context_factory("default")
-    metadata_specs = _scip_metadata_specs(parse_opts)
+    metadata_specs = _scip_metadata_specs(normalized_opts)
     if scip_index_path is None:
         plans = {
             "scip_metadata": Plan.table_source(empty_table(SCIP_METADATA_SCHEMA)),
@@ -1107,8 +1108,8 @@ def extract_scip_tables(
         index_path = Path(scip_index_path)
         if repo_root is not None and not index_path.is_absolute():
             index_path = Path(repo_root) / index_path
-        index = parse_index_scip(index_path, parse_opts=parse_opts)
-        if parse_opts.log_counts or parse_opts.health_check:
+        index = parse_index_scip(index_path, parse_opts=normalized_opts)
+        if normalized_opts.log_counts or normalized_opts.health_check:
             counts = _index_counts(index)
             LOGGER.info(
                 "SCIP index stats: documents=%d occurrences=%d diagnostics=%d symbols=%d "
@@ -1119,11 +1120,11 @@ def extract_scip_tables(
                 counts["symbol_information"],
                 counts["external_symbols"],
             )
-        if parse_opts.health_check:
+        if normalized_opts.health_check:
             assert_scip_index_health(index)
         plans = _extract_plan_bundle_from_index(
             index,
-            parse_opts=parse_opts,
+            parse_opts=normalized_opts,
             exec_ctx=exec_ctx,
         )
 

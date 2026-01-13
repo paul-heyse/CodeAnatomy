@@ -19,6 +19,7 @@ _DEF_USE_NAME = "py_bc_def_use_events_v1"
 _REACHES_NAME = "py_bc_reaches_v1"
 _SPAN_ERRORS_NAME = "span_errors_v1"
 _DIAG_NAME = "diagnostics_norm_v1"
+_EVIDENCE_NAME = "normalize_evidence_v1"
 
 TYPE_EXPRS_NORM_SPEC = dataset_spec(_TYPE_EXPRS_NAME)
 TYPE_EXPRS_QUERY = dataset_query(_TYPE_EXPRS_NAME)
@@ -58,6 +59,11 @@ DIAG_QUERY = dataset_query(_DIAG_NAME)
 DIAG_CONTRACT = dataset_contract(_DIAG_NAME)
 DIAG_SCHEMA = dataset_schema(_DIAG_NAME)
 
+NORMALIZE_EVIDENCE_SPEC = dataset_spec(_EVIDENCE_NAME)
+NORMALIZE_EVIDENCE_QUERY = dataset_query(_EVIDENCE_NAME)
+NORMALIZE_EVIDENCE_CONTRACT = dataset_contract(_EVIDENCE_NAME)
+NORMALIZE_EVIDENCE_SCHEMA = dataset_schema(_EVIDENCE_NAME)
+
 __all__ = [
     "CFG_BLOCKS_CONTRACT",
     "CFG_BLOCKS_NORM_SCHEMA",
@@ -77,6 +83,10 @@ __all__ = [
     "DIAG_QUERY",
     "DIAG_SCHEMA",
     "DIAG_SPEC",
+    "NORMALIZE_EVIDENCE_CONTRACT",
+    "NORMALIZE_EVIDENCE_QUERY",
+    "NORMALIZE_EVIDENCE_SCHEMA",
+    "NORMALIZE_EVIDENCE_SPEC",
     "REACHES_CONTRACT",
     "REACHES_QUERY",
     "REACHES_SCHEMA",

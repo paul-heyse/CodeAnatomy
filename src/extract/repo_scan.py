@@ -25,6 +25,7 @@ from extract.registry_specs import (
     dataset_query,
     dataset_row_schema,
     dataset_schema,
+    normalize_options,
 )
 
 SCHEMA_VERSION = 1
@@ -226,14 +227,14 @@ def scan_repo(
     TableLike | RecordBatchReaderLike
         Repo file metadata output.
     """
-    options = options or RepoScanOptions()
+    normalized_options = normalize_options("repo_scan", options, RepoScanOptions)
     ctx = ctx or execution_context_factory("default")
     metadata_spec = dataset_metadata_with_options(
         "repo_files_v1",
-        options=options,
-        repo_id=options.repo_id,
+        options=normalized_options,
+        repo_id=normalized_options.repo_id,
     )
-    max_files = options.max_files
+    max_files = normalized_options.max_files
     if max_files is not None and max_files <= 0:
         empty_plan = Plan.table_source(empty_table(REPO_FILES_SCHEMA))
         return run_plan(
@@ -244,7 +245,7 @@ def scan_repo(
             attach_ordering_metadata=True,
         ).value
 
-    plan = scan_repo_plan(repo_root, options=options, ctx=ctx)
+    plan = scan_repo_plan(repo_root, options=normalized_options, ctx=ctx)
     return run_plan(
         plan,
         ctx=ctx,

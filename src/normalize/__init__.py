@@ -27,6 +27,12 @@ from normalize.bytecode_dfg import (
     run_reaching_defs_result,
     run_reaching_defs_streamable,
 )
+from normalize.contracts import (
+    NORMALIZE_EVIDENCE_NAME,
+    normalize_evidence_contract,
+    normalize_evidence_schema,
+    normalize_evidence_spec,
+)
 from normalize.diagnostics import (
     collect_diags,
     collect_diags_canonical,
@@ -34,6 +40,7 @@ from normalize.diagnostics import (
     collect_diags_streamable,
     diagnostics_post_step,
 )
+from normalize.materializers import materialize_rule_outputs
 from normalize.registry_bundles import bundle, bundles
 from normalize.registry_fields import (
     DIAG_DETAIL_STRUCT,
@@ -67,8 +74,21 @@ from normalize.registry_specs import (
     dataset_specs,
     dataset_table_spec,
 )
+from normalize.rule_model import AmbiguityPolicy, ConfidencePolicy, EvidenceSpec, NormalizeRule
+from normalize.rule_registry import (
+    normalize_rule,
+    normalize_rule_names,
+    normalize_rule_outputs,
+    normalize_rules,
+    rule_for_output,
+)
 from normalize.runner import (
+    NormalizeRuleCompilation,
+    compile_normalize_plans,
+    compile_normalize_rules,
     ensure_canonical,
+    materialize_normalize_evidence,
+    normalize_evidence_table,
     run_normalize,
     run_normalize_reader,
     run_normalize_streamable,
@@ -87,6 +107,8 @@ from normalize.schemas import (
     CFG_EDGES_QUERY,
     DEF_USE_QUERY,
     DIAG_QUERY,
+    NORMALIZE_EVIDENCE_SCHEMA,
+    NORMALIZE_EVIDENCE_SPEC,
     REACHES_QUERY,
     TYPE_EXPRS_QUERY,
     TYPE_NODES_QUERY,
@@ -99,6 +121,7 @@ from normalize.spans import (
     normalize_cst_callsites_spans,
     normalize_cst_defs_spans,
     normalize_cst_imports_spans,
+    span_errors_plan,
 )
 from normalize.spec_tables import CONSTRAINTS_TABLE, CONTRACT_TABLE, FIELD_TABLE, SCHEMA_TABLES
 from normalize.text_index import FileTextIndex, RepoTextIndex
@@ -130,6 +153,9 @@ __all__ = [
     "DIAG_QUERY",
     "DIAG_TAGS_TYPE",
     "FIELD_TABLE",
+    "NORMALIZE_EVIDENCE_NAME",
+    "NORMALIZE_EVIDENCE_SCHEMA",
+    "NORMALIZE_EVIDENCE_SPEC",
     "REACHES_QUERY",
     "REACH_EDGE_ID_SPEC",
     "SCHEMA_TABLES",
@@ -137,8 +163,13 @@ __all__ = [
     "TYPE_EXPR_ID_SPEC",
     "TYPE_ID_SPEC",
     "TYPE_NODES_QUERY",
+    "AmbiguityPolicy",
     "BytecodeSpanColumns",
+    "ConfidencePolicy",
+    "EvidenceSpec",
     "FileTextIndex",
+    "NormalizeRule",
+    "NormalizeRuleCompilation",
     "RepoTextIndex",
     "SchemaInferOptions",
     "add_ast_byte_spans",
@@ -171,6 +202,8 @@ __all__ = [
     "collect_diags_canonical",
     "collect_diags_result",
     "collect_diags_streamable",
+    "compile_normalize_plans",
+    "compile_normalize_rules",
     "dataset_contract",
     "dataset_input_columns",
     "dataset_input_schema",
@@ -192,9 +225,19 @@ __all__ = [
     "fields",
     "hash_spec",
     "infer_schema_from_tables",
+    "materialize_normalize_evidence",
+    "materialize_rule_outputs",
     "normalize_cst_callsites_spans",
     "normalize_cst_defs_spans",
     "normalize_cst_imports_spans",
+    "normalize_evidence_contract",
+    "normalize_evidence_schema",
+    "normalize_evidence_spec",
+    "normalize_evidence_table",
+    "normalize_rule",
+    "normalize_rule_names",
+    "normalize_rule_outputs",
+    "normalize_rules",
     "normalize_type_exprs",
     "normalize_type_exprs_canonical",
     "normalize_type_exprs_result",
@@ -206,6 +249,7 @@ __all__ = [
     "plan_names",
     "plan_ref",
     "reaching_defs_plan",
+    "rule_for_output",
     "run_normalize",
     "run_normalize_reader",
     "run_normalize_streamable",
@@ -215,6 +259,7 @@ __all__ = [
     "run_reaching_defs_canonical",
     "run_reaching_defs_result",
     "run_reaching_defs_streamable",
+    "span_errors_plan",
     "span_id",
     "stable_id",
     "stable_int64",

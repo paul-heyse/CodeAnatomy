@@ -34,6 +34,7 @@ from extract.registry_specs import (
     dataset_query,
     dataset_row_schema,
     dataset_schema,
+    normalize_options,
 )
 from schema_spec.specs import NestedFieldSpec
 
@@ -476,9 +477,9 @@ def extract_symtable(
     SymtableExtractResult
         Tables for scopes, symbols, and namespace edges.
     """
-    options = options or SymtableExtractOptions()
+    normalized_options = normalize_options("symtable", options, SymtableExtractOptions)
     ctx = ctx or execution_context_factory("default")
-    metadata_specs = _symtable_metadata_specs(options)
+    metadata_specs = _symtable_metadata_specs(normalized_options)
 
     scope_rows: list[dict[str, object]] = []
     symbol_rows: list[dict[str, object]] = []
@@ -493,7 +494,10 @@ def extract_symtable(
             file_scope_edge_rows,
             file_ns_edge_rows,
             file_func_parts_acc,
-        ) = _extract_symtable_for_context(file_ctx, compile_type=options.compile_type)
+        ) = _extract_symtable_for_context(
+            file_ctx,
+            compile_type=normalized_options.compile_type,
+        )
         scope_rows.extend(file_scope_rows)
         symbol_rows.extend(file_symbol_rows)
         scope_edge_rows.extend(file_scope_edge_rows)
@@ -528,7 +532,7 @@ def extract_symtable_plans(
     dict[str, Plan]
         Plan bundle keyed by symtable outputs.
     """
-    options = options or SymtableExtractOptions()
+    normalized_options = normalize_options("symtable", options, SymtableExtractOptions)
     ctx = ctx or execution_context_factory("default")
 
     scope_rows: list[dict[str, object]] = []
@@ -544,7 +548,10 @@ def extract_symtable_plans(
             file_scope_edge_rows,
             file_ns_edge_rows,
             file_func_parts_acc,
-        ) = _extract_symtable_for_context(file_ctx, compile_type=options.compile_type)
+        ) = _extract_symtable_for_context(
+            file_ctx,
+            compile_type=normalized_options.compile_type,
+        )
         scope_rows.extend(file_scope_rows)
         symbol_rows.extend(file_symbol_rows)
         scope_edge_rows.extend(file_scope_edge_rows)
@@ -986,17 +993,21 @@ def extract_symtables_table(
         Symtable extraction output.
     """
     repo_files = kwargs["repo_files"]
-    options = kwargs.get("options") or SymtableExtractOptions()
+    normalized_options = normalize_options(
+        "symtable",
+        kwargs.get("options"),
+        SymtableExtractOptions,
+    )
     file_contexts = kwargs.get("file_contexts")
     exec_ctx = kwargs.get("ctx") or execution_context_factory("default")
     prefer_reader = kwargs.get("prefer_reader", False)
     plans = extract_symtable_plans(
         repo_files,
-        options=options,
+        options=normalized_options,
         file_contexts=file_contexts,
         ctx=exec_ctx,
     )
-    metadata_specs = _symtable_metadata_specs(options)
+    metadata_specs = _symtable_metadata_specs(normalized_options)
     return run_plan_bundle(
         {"py_sym_scopes": plans["py_sym_scopes"]},
         ctx=exec_ctx,

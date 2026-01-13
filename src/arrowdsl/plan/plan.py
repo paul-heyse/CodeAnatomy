@@ -24,6 +24,7 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.plan.ops import (
     AggregateOp,
+    DedupeSpec,
     FilterOp,
     JoinOp,
     JoinSpec,
@@ -32,6 +33,7 @@ from arrowdsl.plan.ops import (
     ProjectOp,
     ScanOp,
     TableSourceOp,
+    WinnerSelectOp,
     scan_ordering_effect,
 )
 
@@ -453,6 +455,35 @@ class Plan:
             Aggregated plan (unordered output).
         """
         op = AggregateOp(group_keys=group_keys, aggs=aggs)
+        return self._apply_plan_op(op, ctx=ctx, label=label)
+
+    def winner_select(
+        self,
+        spec: DedupeSpec,
+        columns: Sequence[str],
+        *,
+        ctx: ExecutionContext | None = None,
+        label: str = "",
+    ) -> Plan:
+        """Add a winner-select node to the plan.
+
+        Parameters
+        ----------
+        spec:
+            Winner selection specification.
+        columns:
+            Non-key columns to retain.
+        ctx:
+            Optional execution context for plan compilation.
+        label:
+            Optional plan label.
+
+        Returns
+        -------
+        Plan
+            Plan with winner-selection applied.
+        """
+        op = WinnerSelectOp(spec=spec, columns=columns)
         return self._apply_plan_op(op, ctx=ctx, label=label)
 
     def mark_unordered(self, *, label: str = "") -> Plan:

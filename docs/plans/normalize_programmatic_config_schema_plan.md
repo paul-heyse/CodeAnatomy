@@ -212,12 +212,12 @@ def dataset_schema_policy(name: str, *, ctx: ExecutionContext) -> SchemaPolicy:
 - Update: `src/normalize/diagnostics.py`
 
 **Implementation checklist**
-- [ ] Add registry accessors for `SchemaPolicy`.
+- [x] Add registry accessors for `SchemaPolicy`.
 - [ ] Replace ad-hoc encoding logic with `SchemaPolicy.apply(...)`.
-- [ ] Ensure encoding derives from `ArrowFieldSpec` metadata.
+- [ ] Ensure pipelines use `dataset_schema_policy(...)` where alignment/encoding is needed.
 
 **Status**
-Planned.
+Partially completed.
 
 ---
 
@@ -245,12 +245,12 @@ PLAN_ROWS = (
 - Update: `src/normalize/catalog.py`
 
 **Implementation checklist**
-- [ ] Encode normalize plan refs as `PlanRow` entries.
-- [ ] Replace inline plan ref constants with registry lookups.
-- [ ] Ensure plan dependencies are discoverable from `PlanRow.inputs`.
+- [x] Encode normalize plan refs as `PlanRow` entries.
+- [x] Replace inline plan ref constants with registry lookups.
+- [x] Ensure plan dependencies are discoverable from `PlanRow.inputs`.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -262,13 +262,13 @@ rows or query specs for consistent projections.
 **Code patterns**
 ```python
 # src/normalize/registry_specs.py
-def dataset_base_columns(name: str) -> tuple[str, ...]:
-    return dataset_spec(name).query().projection.base
+def dataset_input_columns(name: str) -> tuple[str, ...]:
+    return tuple(dataset_input_schema(name).names)
 
 
 # src/normalize/types.py
-base_columns = dataset_base_columns("type_exprs_norm_v1")
-plan = plan_source(cst_type_exprs, ctx=ctx, columns=base_columns)
+columns = dataset_input_columns("type_exprs_norm_v1")
+plan = plan_source(cst_type_exprs, ctx=ctx, columns=columns)
 ```
 
 **Target files**
@@ -278,12 +278,12 @@ plan = plan_source(cst_type_exprs, ctx=ctx, columns=base_columns)
 - Update: `src/normalize/bytecode_dfg.py`
 
 **Implementation checklist**
-- [ ] Add registry helper for base column lists.
-- [ ] Replace local `_BASE_*` column lists with registry lookups.
-- [ ] Keep kernel-lane conversions unchanged.
+- [x] Add registry helper for input column lists.
+- [x] Replace local `_BASE_*` column lists with registry lookups.
+- [x] Keep kernel-lane conversions unchanged.
 
 **Status**
-Planned.
+Completed.
 
 ---
 
@@ -305,9 +305,9 @@ CONTRACT_TABLE = SCHEMA_TABLES.contract_table
 - Update: `src/normalize/registry_specs.py`
 
 **Implementation checklist**
-- [ ] Generate schema/contract tables from dataset specs.
-- [ ] Expose read-only tables for registry inspection.
-- [ ] Keep this optional and non-invasive for runtime behavior.
+- [x] Generate schema/contract tables from dataset specs.
+- [x] Expose read-only tables for registry inspection.
+- [x] Keep this optional and non-invasive for runtime behavior.
 
 **Status**
-Planned.
+Completed.

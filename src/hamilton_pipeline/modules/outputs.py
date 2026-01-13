@@ -466,6 +466,10 @@ def manifest_data(
         Manifest input bundle.
     """
     produced_outputs = sorted(relspec_snapshots.compiled_outputs.keys())
+    lineage = {
+        name: [cr.rule.name for cr in compiled.contributors]
+        for name, compiled in relspec_snapshots.compiled_outputs.items()
+    }
     return ManifestData(
         relspec_input_tables=relspec_inputs_bundle.tables,
         relspec_input_locations=relspec_inputs_bundle.locations,
@@ -475,6 +479,7 @@ def manifest_data(
         cpg_props=cpg_output_tables.cpg_props,
         relationship_rules=relspec_snapshots.registry.rules(),
         produced_relationship_output_names=produced_outputs,
+        relationship_output_lineage=lineage,
         notes={"relationship_output_keys": produced_outputs},
     )
 

@@ -88,6 +88,8 @@ class EdgeBuildConfig:
     spec_tables: EdgeSpecOverrides | None = None
     registry: CpgRegistry | None = None
     legacy: Mapping[str, object] | None = None
+    materialize_relation_outputs: bool | None = None
+    required_relation_sources: tuple[str, ...] | None = None
 
 
 def _resolve_edge_config(config: EdgeBuildConfig | None) -> EdgeBuildConfig:
@@ -100,6 +102,8 @@ def _resolve_edge_config(config: EdgeBuildConfig | None) -> EdgeBuildConfig:
         spec_tables=resolved.spec_tables,
         registry=default_cpg_registry(),
         legacy=resolved.legacy,
+        materialize_relation_outputs=resolved.materialize_relation_outputs,
+        required_relation_sources=resolved.required_relation_sources,
     )
 
 
@@ -183,7 +187,13 @@ def build_cpg_edges_raw(
     catalog = _edge_catalog(inputs or EdgeBuildInputs())
     spec_tables = config.spec_tables or EdgeSpecOverrides()
     relation_rule_table = spec_tables.relation_rule_table or registry.relation_rule_table
-    relation_plans = compile_relation_plans(catalog, ctx=ctx, rule_table=relation_rule_table)
+    relation_plans = compile_relation_plans(
+        catalog,
+        ctx=ctx,
+        rule_table=relation_rule_table,
+        materialize_debug=config.materialize_relation_outputs,
+        required_sources=config.required_relation_sources,
+    )
 
     parts: list[Plan] = []
     for spec in _edge_plan_specs(spec_tables.edge_spec_table, registry=registry):

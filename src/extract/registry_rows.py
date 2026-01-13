@@ -7,18 +7,27 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from arrowdsl.core.context import OrderingKey
+from extract.registry_templates import flag_default
 
 DerivedKind = Literal["masked_hash", "hash"]
 
 
 def _flag_enabled(flag: str, *, default: bool = True) -> Callable[[object | None], bool]:
     def _predicate(options: object | None) -> bool:
+        resolved_default = flag_default(flag, fallback=default)
         if options is None:
-            return default
-        value = getattr(options, flag, default)
-        return value if isinstance(value, bool) else default
+            return resolved_default
+        value = getattr(options, flag, resolved_default)
+        return value if isinstance(value, bool) else resolved_default
 
     return _predicate
+
+
+def _allowlist_enabled(options: object | None) -> bool:
+    if options is None:
+        return False
+    allowlist = getattr(options, "module_allowlist", ())
+    return bool(allowlist)
 
 
 @dataclass(frozen=True)
@@ -48,6 +57,21 @@ class DatasetRow:
     enabled_when: Callable[[object | None], bool] | None = None
     postprocess: str | None = None
     metadata_extra: dict[bytes, bytes] = field(default_factory=dict)
+    evidence_required_columns: tuple[str, ...] = ()
+
+    def output_name(self) -> str:
+        """Return the canonical output alias for the dataset row.
+
+        Returns
+        -------
+        str
+            Output alias used by extract bundles.
+        """
+        suffix = f"_v{self.version}"
+        base = self.name[: -len(suffix)] if self.name.endswith(suffix) else self.name
+        if self.template in {"ast", "cst"} and base.startswith("py_"):
+            return base[3:]
+        return base
 
 
 DATASET_ROWS: tuple[DatasetRow, ...] = (
@@ -658,6 +682,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         ),
         template="runtime_inspect",
         join_keys=("module", "qualname"),
+        enabled_when=_allowlist_enabled,
     ),
     DatasetRow(
         name="rt_signatures_v1",
@@ -668,6 +693,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         row_fields=("object_key", "signature", "return_annotation"),
         template="runtime_inspect",
         join_keys=("rt_id", "signature"),
+        enabled_when=_allowlist_enabled,
     ),
     DatasetRow(
         name="rt_signature_params_v1",
@@ -694,6 +720,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         ),
         template="runtime_inspect",
         join_keys=("sig_id", "name", "position"),
+        enabled_when=_allowlist_enabled,
     ),
     DatasetRow(
         name="rt_members_v1",
@@ -719,6 +746,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         ),
         template="runtime_inspect",
         join_keys=("rt_id", "name"),
+        enabled_when=_allowlist_enabled,
     ),
     DatasetRow(
         name="scip_metadata_v1",

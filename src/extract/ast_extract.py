@@ -25,6 +25,7 @@ from extract.registry_specs import (
     dataset_query,
     dataset_row_schema,
     dataset_schema,
+    normalize_options,
 )
 
 
@@ -271,17 +272,17 @@ def extract_ast(
     ASTExtractResult
         Tables of AST nodes, edges, and errors.
     """
-    options = options or ASTExtractOptions()
+    normalized_options = normalize_options("ast", options, ASTExtractOptions)
     ctx = ctx or execution_context_factory("default")
     plans = extract_ast_plans(
         repo_files,
-        options=options,
+        options=normalized_options,
         file_contexts=file_contexts,
         ctx=ctx,
     )
-    nodes_meta = dataset_metadata_with_options("py_ast_nodes_v1", options=options)
-    edges_meta = dataset_metadata_with_options("py_ast_edges_v1", options=options)
-    errors_meta = dataset_metadata_with_options("py_ast_errors_v1", options=options)
+    nodes_meta = dataset_metadata_with_options("py_ast_nodes_v1", options=normalized_options)
+    edges_meta = dataset_metadata_with_options("py_ast_edges_v1", options=normalized_options)
+    errors_meta = dataset_metadata_with_options("py_ast_errors_v1", options=normalized_options)
     return ASTExtractResult(
         py_ast_nodes=materialize_plan(
             plans["ast_nodes"],
@@ -318,7 +319,7 @@ def extract_ast_plans(
     dict[str, Plan]
         Plan bundle keyed by ``ast_nodes``, ``ast_edges``, and ``ast_errors``.
     """
-    options = options or ASTExtractOptions()
+    normalized_options = normalize_options("ast", options, ASTExtractOptions)
     ctx = ctx or execution_context_factory("default")
 
     nodes_rows: list[dict[str, object]] = []
@@ -326,7 +327,7 @@ def extract_ast_plans(
     err_rows: list[dict[str, object]] = []
 
     for file_ctx in iter_contexts(repo_files, file_contexts):
-        nodes, edges, errs = _extract_ast_for_context(file_ctx, options=options)
+        nodes, edges, errs = _extract_ast_for_context(file_ctx, options=normalized_options)
         nodes_rows.extend(nodes)
         edges_rows.extend(edges)
         err_rows.extend(errs)
@@ -418,19 +419,25 @@ def extract_ast_tables(
         Extracted AST outputs keyed by name.
     """
     repo_files = kwargs["repo_files"]
-    options = kwargs.get("options") or ASTExtractOptions()
+    normalized_options = normalize_options("ast", kwargs.get("options"), ASTExtractOptions)
     file_contexts = kwargs.get("file_contexts")
     ctx = kwargs.get("ctx") or execution_context_factory("default")
     prefer_reader = kwargs.get("prefer_reader", False)
     plans = extract_ast_plans(
         repo_files,
-        options=options,
+        options=normalized_options,
         file_contexts=file_contexts,
         ctx=ctx,
     )
     defs_plan = ast_def_nodes_plan(plan=plans["ast_nodes"])
-    nodes_meta = dataset_metadata_with_options("py_ast_nodes_v1", options=options)
-    edges_meta = dataset_metadata_with_options("py_ast_edges_v1", options=options)
+    nodes_meta = dataset_metadata_with_options(
+        "py_ast_nodes_v1",
+        options=normalized_options,
+    )
+    edges_meta = dataset_metadata_with_options(
+        "py_ast_edges_v1",
+        options=normalized_options,
+    )
 
     return run_plan_bundle(
         {

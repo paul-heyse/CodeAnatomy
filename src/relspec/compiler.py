@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol, cast
 
 import pyarrow as pa
@@ -11,7 +11,7 @@ import pyarrow as pa
 from arrowdsl.compute.filters import FilterSpec
 from arrowdsl.compute.kernels import apply_dedupe, explode_list_column, interval_align_table
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, Ordering
-from arrowdsl.core.interop import ComputeExpression, TableLike
+from arrowdsl.core.interop import ComputeExpression, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
 from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions, SortKey
 from arrowdsl.plan.plan import Plan, hash_join, union_all_plans
@@ -19,7 +19,7 @@ from arrowdsl.plan.query import open_dataset
 from arrowdsl.plan.runner import run_plan
 from arrowdsl.schema.build import ConstExpr, FieldExpr, const_array, set_or_append_column
 from arrowdsl.schema.ops import align_plan
-from arrowdsl.schema.schema import SchemaEvolutionSpec
+from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
@@ -37,6 +37,11 @@ from relspec.model import (
     RelationshipRule,
     RenameColumnsSpec,
     RuleKind,
+)
+from relspec.policies import (
+    ambiguity_policy_from_schema,
+    confidence_policy_from_schema,
+    default_tie_breakers,
 )
 from relspec.registry import ContractCatalog, DatasetCatalog
 from schema_spec.system import (
@@ -194,6 +199,24 @@ def _build_rule_meta_kernel(rule: RelationshipRule) -> KernelFn:
     return _add_rule_meta
 
 
+def _rule_metadata_spec(rule: RelationshipRule) -> SchemaMetadataSpec:
+    return SchemaMetadataSpec(
+        schema_metadata={
+            b"rule_name": rule.name.encode("utf-8"),
+            b"rule_priority": str(rule.priority).encode("utf-8"),
+        }
+    )
+
+
+def _apply_rule_metadata(
+    table: TableLike,
+    *,
+    rule: RelationshipRule,
+) -> TableLike:
+    schema = _rule_metadata_spec(rule).apply(table.schema)
+    return table.cast(schema)
+
+
 def _build_add_literal_kernel(spec: AddLiteralSpec) -> KernelFn:
     def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
         if spec.name in table.column_names:
@@ -245,9 +268,36 @@ def _build_explode_list_kernel(spec: ExplodeListSpec) -> KernelFn:
 
 def _build_dedupe_kernel(spec: DedupeKernelSpec) -> KernelFn:
     def _fn(table: TableLike, ctx: ExecutionContext) -> TableLike:
-        return apply_dedupe(table, spec=spec.spec, _ctx=ctx)
+        resolved = _dedupe_spec_with_defaults(spec.spec, schema=table.schema)
+        return apply_dedupe(table, spec=resolved, _ctx=ctx)
 
     return _fn
+
+
+def _dedupe_spec_with_defaults(spec: DedupeSpec, *, schema: SchemaLike) -> DedupeSpec:
+    if spec.strategy != "KEEP_BEST_BY_SCORE":
+        return spec
+    defaults = default_tie_breakers(schema)
+    filtered_defaults = tuple(sk for sk in defaults if sk.column != "score")
+    if spec.tie_breakers:
+        if not filtered_defaults:
+            return spec
+        existing = {sk.column for sk in spec.tie_breakers}
+        extra = tuple(sk for sk in filtered_defaults if sk.column not in existing)
+        if not extra:
+            return spec
+        return DedupeSpec(
+            keys=spec.keys,
+            strategy=spec.strategy,
+            tie_breakers=tuple(spec.tie_breakers) + extra,
+        )
+    if "score" not in schema.names:
+        return spec
+    return DedupeSpec(
+        keys=spec.keys,
+        strategy=spec.strategy,
+        tie_breakers=(SortKey("score", "descending"), *filtered_defaults),
+    )
 
 
 def _kernel_from_spec(spec: object) -> KernelFn:
@@ -355,7 +405,7 @@ def _apply_dedupe_to_plan(
     rule: RelationshipRule,
 ) -> tuple[Plan, bool]:
     strategy = spec.spec.strategy
-    if strategy not in {"KEEP_ARBITRARY", "COLLAPSE_LIST"}:
+    if strategy not in {"KEEP_ARBITRARY", "COLLAPSE_LIST", "KEEP_BEST_BY_SCORE"}:
         return plan, False
     if not spec.spec.keys:
         return plan, True
@@ -366,13 +416,24 @@ def _apply_dedupe_to_plan(
     non_keys = [name for name in names if name not in spec.spec.keys]
     if not non_keys:
         return plan, False
-    agg_fn = "first" if strategy == "KEEP_ARBITRARY" else "list"
-    plan = plan.aggregate(group_keys=list(spec.spec.keys), aggs=[(col, agg_fn) for col in non_keys])
-    agg_names = [f"{col}_{agg_fn}" for col in non_keys]
-    exprs = [FieldExpr(name=name).to_expression() for name in spec.spec.keys]
-    exprs.extend(FieldExpr(name=name).to_expression() for name in agg_names)
-    out_names = list(spec.spec.keys) + non_keys
-    return plan.project(exprs, out_names, label=plan.label or rule.name), True
+    if strategy == "KEEP_BEST_BY_SCORE":
+        resolved = _dedupe_spec_with_defaults(spec.spec, schema=schema)
+        if not resolved.tie_breakers:
+            return plan, False
+        plan = plan.winner_select(
+            resolved, columns=non_keys, ctx=ctx, label=plan.label or rule.name
+        )
+    else:
+        agg_fn = "first" if strategy == "KEEP_ARBITRARY" else "list"
+        plan = plan.aggregate(
+            group_keys=list(spec.spec.keys), aggs=[(col, agg_fn) for col in non_keys]
+        )
+        agg_names = [f"{col}_{agg_fn}" for col in non_keys]
+        exprs = [FieldExpr(name=name).to_expression() for name in spec.spec.keys]
+        exprs.extend(FieldExpr(name=name).to_expression() for name in agg_names)
+        out_names = list(spec.spec.keys) + non_keys
+        plan = plan.project(exprs, out_names, label=plan.label or rule.name)
+    return plan, True
 
 
 def _apply_plan_kernel_specs(
@@ -483,6 +544,81 @@ def _union_all_plans_aligned(plans: Sequence[Plan], *, ctx: ExecutionContext) ->
     return union_all_plans(aligned, label="relspec_union")
 
 
+def _schema_for_contract(contract: Contract) -> SchemaLike:
+    dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(contract.name)
+    if dataset_spec is not None:
+        return dataset_spec.schema()
+    return contract.schema
+
+
+def _schema_for_rule(
+    rule: RelationshipRule,
+    *,
+    contracts: ContractCatalog | None,
+) -> SchemaLike | None:
+    if rule.contract_name is None:
+        return None
+    if contracts is not None:
+        return _schema_for_contract(contracts.get(rule.contract_name))
+    dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(rule.contract_name)
+    if dataset_spec is not None:
+        return dataset_spec.schema()
+    return None
+
+
+def apply_policy_defaults(rule: RelationshipRule, schema: SchemaLike) -> RelationshipRule:
+    """Apply schema-derived default policies to a rule.
+
+    Parameters
+    ----------
+    rule:
+        Rule to update.
+    schema:
+        Schema providing policy metadata.
+
+    Returns
+    -------
+    RelationshipRule
+        Rule with policies populated when missing.
+    """
+    confidence = rule.confidence_policy or confidence_policy_from_schema(schema)
+    ambiguity = rule.ambiguity_policy or ambiguity_policy_from_schema(schema)
+    if confidence is rule.confidence_policy and ambiguity is rule.ambiguity_policy:
+        return rule
+    return replace(
+        rule,
+        confidence_policy=confidence,
+        ambiguity_policy=ambiguity,
+    )
+
+
+def validate_policy_requirements(rule: RelationshipRule, schema: SchemaLike) -> None:
+    """Validate policy-specific schema requirements.
+
+    Parameters
+    ----------
+    rule:
+        Rule to validate.
+    schema:
+        Schema providing available columns.
+
+    Raises
+    ------
+    ValueError
+        Raised when required columns are missing.
+    """
+    names = set(schema.names)
+    if rule.confidence_policy is not None:
+        required = {"confidence", "score"}
+        missing = required - names
+        if missing:
+            msg = f"Rule {rule.name!r} missing confidence columns: {sorted(missing)}."
+            raise ValueError(msg)
+    if rule.ambiguity_policy is not None and "ambiguity_group_id" not in names:
+        msg = f"Rule {rule.name!r} requires ambiguity_group_id column."
+        raise ValueError(msg)
+
+
 @dataclass(frozen=True)
 class CompiledRule:
     """Executable compiled form of a rule."""
@@ -519,7 +655,7 @@ class CompiledRule:
                 table = _build_rule_meta_kernel(self.rule)(table, ctx)
             for fn in self.post_kernels:
                 table = fn(table, ctx)
-            return table
+            return _apply_rule_metadata(table, rule=self.rule)
         if self.plan is None:
             msg = "CompiledRule has neither plan nor execute_fn."
             raise RuntimeError(msg)
@@ -534,7 +670,64 @@ class CompiledRule:
             table = _build_rule_meta_kernel(self.rule)(table, ctx)
         for fn in self.post_kernels:
             table = fn(table, ctx)
-        return table
+        return _apply_rule_metadata(table, rule=self.rule)
+
+
+def _should_materialize_rule(compiled: CompiledRule) -> bool:
+    if compiled.rule.execution_mode == "table":
+        return True
+    if compiled.execute_fn is not None:
+        return True
+    if compiled.plan is None or compiled.plan.decl is None:
+        return True
+    return bool(compiled.post_kernels)
+
+
+def _collect_compiled_parts(
+    contributors: Sequence[CompiledRule],
+    *,
+    ctx: ExecutionContext,
+    resolver: PlanResolver,
+) -> tuple[list[Plan], list[TableLike]]:
+    plan_parts: list[Plan] = []
+    table_parts: list[TableLike] = []
+    for compiled in contributors:
+        if _should_materialize_rule(compiled):
+            table_parts.append(compiled.execute(ctx=ctx, resolver=resolver))
+            continue
+        plan = compiled.plan
+        if plan is None:
+            msg = f"CompiledRule {compiled.rule.name!r} missing plan for plan execution."
+            raise RuntimeError(msg)
+        plan_parts.append(_apply_rule_meta_to_plan(plan, rule=compiled.rule, ctx=ctx))
+    return plan_parts, table_parts
+
+
+def _finalize_output_tables(
+    *,
+    output_dataset: str,
+    contract_name: str | None,
+    table_parts: Sequence[TableLike],
+    ctx: ExecutionContext,
+    contracts: ContractCatalog,
+) -> FinalizeResult:
+    if contract_name is None:
+        unioned = SchemaEvolutionSpec().unify_and_cast(
+            table_parts,
+            safe_cast=ctx.safe_cast,
+            on_error="unsafe" if ctx.safe_cast else "raise",
+            keep_extra_columns=ctx.provenance,
+        )
+        dummy = Contract(name=f"{output_dataset}_NO_CONTRACT", schema=unioned.schema)
+        finalize_ctx = dataset_spec_from_contract(dummy).finalize_context(ctx)
+        return finalize_ctx.run(unioned, ctx=ctx)
+
+    contract = contracts.get(contract_name)
+    dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(contract.name)
+    if dataset_spec is None:
+        dataset_spec = dataset_spec_from_contract(contract)
+    unioned = dataset_spec.unify_tables(table_parts, ctx=ctx)
+    return dataset_spec.finalize_context(ctx).run(unioned, ctx=ctx)
 
 
 @dataclass(frozen=True)
@@ -577,19 +770,11 @@ class CompiledOutput:
             msg = f"CompiledOutput {self.output_dataset!r} has no contributors."
             raise ValueError(msg)
 
-        plan_parts: list[Plan] = []
-        table_parts: list[TableLike] = []
-        for cr in self.contributors:
-            if cr.execute_fn is not None:
-                table_parts.append(cr.execute(ctx=ctx_exec, resolver=resolver))
-                continue
-            if cr.plan is None or cr.plan.decl is None:
-                table_parts.append(cr.execute(ctx=ctx_exec, resolver=resolver))
-                continue
-            if cr.post_kernels:
-                table_parts.append(cr.execute(ctx=ctx_exec, resolver=resolver))
-                continue
-            plan_parts.append(_apply_rule_meta_to_plan(cr.plan, rule=cr.rule, ctx=ctx_exec))
+        plan_parts, table_parts = _collect_compiled_parts(
+            self.contributors,
+            ctx=ctx_exec,
+            resolver=resolver,
+        )
 
         if plan_parts:
             union = union_all_plans(plan_parts, label=self.output_dataset)
@@ -601,23 +786,13 @@ class CompiledOutput:
             )
             table_parts.append(cast("TableLike", result.value))
 
-        if self.contract_name is None:
-            unioned = SchemaEvolutionSpec().unify_and_cast(
-                table_parts,
-                safe_cast=ctx_exec.safe_cast,
-                on_error="unsafe" if ctx_exec.safe_cast else "raise",
-                keep_extra_columns=ctx_exec.provenance,
-            )
-            dummy = Contract(name=f"{self.output_dataset}_NO_CONTRACT", schema=unioned.schema)
-            finalize_ctx = dataset_spec_from_contract(dummy).finalize_context(ctx_exec)
-            return finalize_ctx.run(unioned, ctx=ctx_exec)
-
-        contract = contracts.get(self.contract_name)
-        dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(contract.name)
-        if dataset_spec is None:
-            dataset_spec = dataset_spec_from_contract(contract)
-        unioned = dataset_spec.unify_tables(table_parts, ctx=ctx_exec)
-        return dataset_spec.finalize_context(ctx_exec).run(unioned, ctx=ctx_exec)
+        return _finalize_output_tables(
+            output_dataset=self.output_dataset,
+            contract_name=self.contract_name,
+            table_parts=table_parts,
+            ctx=ctx_exec,
+            contracts=contracts,
+        )
 
 
 class RelationshipRuleCompiler:
@@ -797,8 +972,8 @@ class RelationshipRuleCompiler:
             emit_rule_meta=rule.emit_rule_meta,
         )
 
-    @staticmethod
     def _compile_winner_select(
+        self,
         rule: RelationshipRule,
         *,
         ctx: ExecutionContext,
@@ -809,28 +984,43 @@ class RelationshipRuleCompiler:
             msg = "WINNER_SELECT rules require winner_select config."
             raise ValueError(msg)
         winner_cfg = cfg
+        src = rule.inputs[0]
+        plan = self.resolver.resolve(src, ctx=ctx)
+        schema = plan.schema(ctx=ctx)
+        spec = DedupeSpec(
+            keys=winner_cfg.keys,
+            strategy="KEEP_BEST_BY_SCORE",
+            tie_breakers=(
+                SortKey(winner_cfg.score_col, winner_cfg.score_order),
+                *winner_cfg.tie_breakers,
+            ),
+        )
+        resolved = _dedupe_spec_with_defaults(spec, schema=schema)
+        if plan.decl is not None and resolved.tie_breakers:
+            non_keys = [name for name in schema.names if name not in resolved.keys]
+            plan = plan.winner_select(resolved, columns=non_keys, ctx=ctx, label=rule.name)
+            plan, remaining = _apply_plan_kernel_specs(plan, post_kernels, ctx=ctx, rule=rule)
+            return CompiledRule(
+                rule=rule,
+                plan=plan,
+                execute_fn=None,
+                post_kernels=_compile_post_kernels(remaining),
+                emit_rule_meta=rule.emit_rule_meta,
+            )
 
         def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> TableLike:
-            src = rule.inputs[0]
-            plan = resolver.resolve(src, ctx=ctx2)
+            src_exec = rule.inputs[0]
+            plan_exec = resolver.resolve(src_exec, ctx=ctx2)
             result = run_plan(
-                plan,
+                plan_exec,
                 ctx=ctx2,
                 prefer_reader=False,
                 attach_ordering_metadata=True,
             )
             table = cast("TableLike", result.value)
-            spec = DedupeSpec(
-                keys=winner_cfg.keys,
-                strategy="KEEP_BEST_BY_SCORE",
-                tie_breakers=(
-                    SortKey(winner_cfg.score_col, winner_cfg.score_order),
-                    *winner_cfg.tie_breakers,
-                ),
-            )
-            return apply_dedupe(table, spec=spec, _ctx=ctx2)
+            resolved_spec = _dedupe_spec_with_defaults(spec, schema=table.schema)
+            return apply_dedupe(table, spec=resolved_spec, _ctx=ctx2)
 
-        _ = ctx
         return CompiledRule(
             rule=rule,
             plan=None,
@@ -871,7 +1061,17 @@ class RelationshipRuleCompiler:
         if handler is None:
             msg = f"Unknown rule kind: {rule.kind}."
             raise ValueError(msg)
-        return handler(rule, ctx=ctx, post_kernels=rule.post_kernels)
+        compiled = handler(rule, ctx=ctx, post_kernels=rule.post_kernels)
+        self._enforce_execution_mode(rule, compiled)
+        return compiled
+
+    @staticmethod
+    def _enforce_execution_mode(rule: RelationshipRule, compiled: CompiledRule) -> None:
+        if rule.execution_mode != "plan":
+            return
+        if compiled.plan is None or compiled.post_kernels:
+            msg = f"Rule {rule.name!r} requires plan execution."
+            raise ValueError(msg)
 
     def compile_registry(
         self,
@@ -904,19 +1104,30 @@ class RelationshipRuleCompiler:
         ValueError
             Raised when output rules disagree on contract_name.
         """
+        rules = list(registry_rules)
         if contract_catalog is not None:
             validate_relationship_output_contracts_for_edge_kinds(
-                rules=registry_rules,
+                rules=rules,
                 contract_catalog=contract_catalog,
                 config=edge_validation or EdgeContractValidationConfig(),
             )
 
+        resolved_rules: list[RelationshipRule] = []
+        for rule in rules:
+            schema = _schema_for_rule(rule, contracts=contract_catalog)
+            resolved_rule = rule
+            if schema is not None:
+                resolved_rule = apply_policy_defaults(rule, schema)
+                validate_policy_requirements(resolved_rule, schema)
+            resolved_rules.append(resolved_rule)
+
         by_out: dict[str, list[RelationshipRule]] = {}
-        for rule in registry_rules:
+        for rule in resolved_rules:
             by_out.setdefault(rule.output_dataset, []).append(rule)
 
         compiled: dict[str, CompiledOutput] = {}
-        for out_name, rules in by_out.items():
+        for out_name in sorted(by_out):
+            rules = by_out[out_name]
             rules_sorted = sorted(rules, key=lambda rr: (rr.priority, rr.name))
             contract_names = {rr.contract_name for rr in rules_sorted}
             if len(contract_names) > 1:

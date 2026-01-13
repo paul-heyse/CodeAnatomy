@@ -14,7 +14,7 @@ from typing import Literal, overload
 import pyarrow as pa
 
 from arrowdsl.compute.expr_specs import HashExprSpec
-from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
+from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
@@ -272,7 +272,7 @@ def scan_repo(
         Repo file metadata output.
     """
     options = options or RepoScanOptions()
-    ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    ctx = ctx or execution_context_factory("default")
     metadata_spec = merge_metadata_specs(
         _REPO_METADATA,
         options_metadata_spec(options=options, repo_id=options.repo_id),

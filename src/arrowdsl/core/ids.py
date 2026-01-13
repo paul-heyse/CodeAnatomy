@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import arrowdsl.core.interop as pa
+from arrowdsl.compute.registry import UdfSpec, ensure_udf, resolve_kernel
 from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
 
 type MissingPolicy = Literal["raise", "null"]
@@ -129,27 +130,27 @@ def _hash64_udf(
 
 
 def _ensure_hash64_udf() -> None:
-    try:
-        pa.pc.get_function(_HASH64_FUNCTION)
-    except KeyError:
-        pass
-    else:
-        return
-    pa.pc.register_scalar_function(
-        _hash64_udf,
-        _HASH64_FUNCTION,
-        {"summary": "hash64 udf", "description": "Deterministic 64-bit hash for strings."},
-        {"value": pa.string()},
-        pa.int64(),
+    spec = UdfSpec(
+        name=_HASH64_FUNCTION,
+        inputs={"value": pa.string()},
+        output=pa.int64(),
+        fn=_hash64_udf,
+        summary="hash64 udf",
+        description="Deterministic 64-bit hash for strings.",
     )
+    ensure_udf(spec)
 
 
 def _hash64(values: pa.ArrayLike) -> pa.ArrayLike:
-    _ensure_hash64_udf()
-    result = pa.pc.call_function(_HASH64_FUNCTION, [values])
+    func = resolve_kernel("hash64", fallbacks=("hash",))
+    if func is not None:
+        result = pa.pc.call_function(func, [values])
+    else:
+        _ensure_hash64_udf()
+        result = pa.pc.call_function(_HASH64_FUNCTION, [values])
     if isinstance(result, pa.ScalarLike):
         return pa.array([result.as_py()], type=pa.int64())
-    return result
+    return pa.pc.cast(result, pa.int64(), safe=False)
 
 
 def _stringify(
@@ -384,7 +385,6 @@ def hash_expression(
     KeyError
         Raised when a required column is missing and ``spec.missing="raise"``.
     """
-    _ensure_hash64_udf()
     parts: list[ComputeExpression] = []
     if spec.extra_literals:
         parts.extend(pc.scalar(literal) for literal in spec.extra_literals)
@@ -404,10 +404,50 @@ def hash_expression(
     if spec.prefix:
         parts.insert(0, pc.scalar(spec.prefix))
     joined = pc.binary_join_element_wise(*parts, _NULL_SEPARATOR)
-    hashed = pc.call_function(_HASH64_FUNCTION, [joined])
+    func = resolve_kernel("hash64", fallbacks=("hash",))
+    if func is not None:
+        hashed = pc.call_function(func, [joined])
+    else:
+        _ensure_hash64_udf()
+        hashed = pc.call_function(_HASH64_FUNCTION, [joined])
+    hashed = pc.cast(hashed, pa.int64(), safe=False)
     if spec.as_string:
         hashed = pc.cast(hashed, pa.string())
         hashed = pc.binary_join_element_wise(pc.scalar(spec.prefix), hashed, ":")
+    return ensure_expression(hashed)
+
+
+def hash_expression_from_parts(
+    parts: Sequence[ComputeExpression],
+    *,
+    prefix: str,
+    null_sentinel: str = "None",
+    as_string: bool = True,
+) -> ComputeExpression:
+    """Build a compute expression for hash IDs from expression parts.
+
+    Returns
+    -------
+    ComputeExpression
+        Compute expression producing hash IDs for the expression parts.
+    """
+    exprs: list[ComputeExpression] = []
+    for part in parts:
+        expr = ensure_expression(pc.fill_null(pc.cast(part, pa.string()), pc.scalar(null_sentinel)))
+        exprs.append(expr)
+    if prefix:
+        exprs.insert(0, pc.scalar(prefix))
+    joined = pc.binary_join_element_wise(*exprs, _NULL_SEPARATOR)
+    func = resolve_kernel("hash64", fallbacks=("hash",))
+    if func is not None:
+        hashed = pc.call_function(func, [joined])
+    else:
+        _ensure_hash64_udf()
+        hashed = pc.call_function(_HASH64_FUNCTION, [joined])
+    hashed = pc.cast(hashed, pa.int64(), safe=False)
+    if as_string:
+        hashed = pc.cast(hashed, pa.string())
+        hashed = pc.binary_join_element_wise(pc.scalar(prefix), hashed, ":")
     return ensure_expression(hashed)
 
 
@@ -434,6 +474,36 @@ def masked_hash_expression(
     return ensure_expression(pc.if_else(mask, expr, null_value))
 
 
+def masked_hash_array(
+    table: pa.TableLike,
+    *,
+    spec: HashSpec,
+    required: Sequence[str],
+) -> pa.ArrayLike:
+    """Return hash values masked by required column validity.
+
+    Returns
+    -------
+    pyarrow.Array
+        Masked hash array for the spec.
+    """
+    if not required:
+        return hash_column_values(table, spec=spec)
+    hashed = hash_column_values(table, spec=spec)
+    first = required[0]
+    if first in table.column_names:
+        mask = pc.is_valid(table[first])
+    else:
+        mask = pa.array([False] * table.num_rows, type=pa.bool_())
+    for name in required[1:]:
+        if name in table.column_names:
+            mask = pc.and_(mask, pc.is_valid(table[name]))
+        else:
+            mask = pc.and_(mask, pa.array([False] * table.num_rows, type=pa.bool_()))
+    null_value = pa.scalar(None, type=pa.string() if spec.as_string else pa.int64())
+    return pc.if_else(mask, hashed, null_value)
+
+
 __all__ = [
     "HashSpec",
     "MissingPolicy",
@@ -442,9 +512,11 @@ __all__ = [
     "hash64_from_parts",
     "hash_column_values",
     "hash_expression",
+    "hash_expression_from_parts",
     "iter_array_values",
     "iter_arrays",
     "iter_table_rows",
+    "masked_hash_array",
     "masked_hash_expression",
     "prefixed_hash_id",
 ]

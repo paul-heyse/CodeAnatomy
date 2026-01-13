@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Literal, TypedDict, Unpack
+from typing import Literal, TypedDict, Unpack, cast
 
 import pyarrow as pa
 import pyarrow.dataset as ds
@@ -18,6 +18,7 @@ from arrowdsl.finalize.finalize import Contract, FinalizeContext
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import PathLike, ProjectionSpec, QuerySpec, ScanContext, open_dataset
+from arrowdsl.plan.runner import run_plan
 from arrowdsl.plan.source import DatasetSource, PlanSource, plan_from_dataset, plan_from_source
 from arrowdsl.schema.encoding import encoding_policy_from_spec
 from arrowdsl.schema.metadata import (
@@ -25,7 +26,7 @@ from arrowdsl.schema.metadata import (
     metadata_spec_from_schema,
     ordering_metadata_spec,
 )
-from arrowdsl.schema.policy import SchemaPolicy
+from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import (
     CastErrorPolicy,
     EncodingPolicy,
@@ -323,14 +324,15 @@ class DatasetSpec:
         contract = self.contract()
         ordering = _ordering_metadata_spec(self.contract_spec, self.table_spec)
         metadata = merge_metadata_specs(self.metadata_spec, ordering)
-        policy = SchemaPolicy(
-            schema=contract.with_versioned_schema(),
-            encoding=self.encoding_policy(),
-            metadata=metadata,
-            validation=contract.validation,
-            safe_cast=ctx.safe_cast,
-            keep_extra_columns=ctx.provenance,
-            on_error="unsafe" if ctx.safe_cast else "raise",
+        policy = schema_policy_factory(
+            self.table_spec,
+            ctx=ctx,
+            options=SchemaPolicyOptions(
+                schema=contract.with_versioned_schema(),
+                encoding=self.encoding_policy(),
+                metadata=metadata,
+                validation=contract.validation,
+            ),
         )
         return FinalizeContext(contract=contract, schema_policy=policy)
 
@@ -389,7 +391,19 @@ class ValidationPlans:
         tuple[TableLike, TableLike]
             Invalid rows and duplicate key tables.
         """
-        return self.invalid_rows.to_table(ctx=ctx), self.duplicate_keys.to_table(ctx=ctx)
+        invalid = run_plan(
+            self.invalid_rows,
+            ctx=ctx,
+            prefer_reader=False,
+            attach_ordering_metadata=True,
+        ).value
+        dupes = run_plan(
+            self.duplicate_keys,
+            ctx=ctx,
+            prefer_reader=False,
+            attach_ordering_metadata=True,
+        ).value
+        return cast("TableLike", invalid), cast("TableLike", dupes)
 
 
 @dataclass(frozen=True)

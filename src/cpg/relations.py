@@ -11,9 +11,9 @@ from arrowdsl.compute.predicates import bitmask_is_set_expr
 from arrowdsl.compute.scalars import null_expr, scalar_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
-from arrowdsl.plan.join_specs import JoinOutputSpec, join_spec
+from arrowdsl.plan.joins import JoinOutputSpec, join_spec
 from arrowdsl.plan.plan import Plan, hash_join
-from arrowdsl.plan_helpers import column_or_null_expr
+from arrowdsl.plan_helpers import column_or_null_expr, path_meta_join
 from cpg.catalog import PlanCatalog, PlanRef
 from cpg.kinds import (
     SCIP_ROLE_DEFINITION,
@@ -108,44 +108,7 @@ def _with_repo_file_ids(
 ) -> Plan:
     if repo_files is None:
         return diag_plan
-    diag_cols = diag_plan.schema(ctx=ctx).names
-    if "path" not in diag_cols:
-        return diag_plan
-    repo_cols = repo_files.schema(ctx=ctx).names
-    if "path" not in repo_cols or "file_id" not in repo_cols:
-        return diag_plan
-
-    repo_proj = repo_files.project(
-        [pc.field("path"), pc.field("file_id")],
-        ["path", "file_id"],
-        ctx=ctx,
-    )
-    joined = hash_join(
-        left=diag_plan,
-        right=repo_proj,
-        spec=join_spec(
-            join_type="left outer",
-            left_keys=("path",),
-            right_keys=("path",),
-            output=JoinOutputSpec(
-                left_output=tuple(diag_cols),
-                right_output=("file_id",),
-                output_suffix_for_right="_repo",
-            ),
-        ),
-    )
-    joined_cols = joined.schema(ctx=ctx).names
-    if "file_id_repo" not in joined_cols:
-        return joined
-
-    available = set(joined_cols)
-    if "file_id" in available:
-        file_id = ensure_expression(pc.coalesce(pc.field("file_id"), pc.field("file_id_repo")))
-    else:
-        file_id = pc.field("file_id_repo")
-    joined = set_or_append_column(joined, name="file_id", expr=file_id, ctx=ctx)
-    keep = [col for col in joined.schema(ctx=ctx).names if col != "file_id_repo"]
-    return joined.project([pc.field(col) for col in keep], keep, ctx=ctx)
+    return path_meta_join(diag_plan, repo_files, ctx=ctx)
 
 
 def _severity_score_expr(expr: ComputeExpression) -> ComputeExpression:

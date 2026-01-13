@@ -9,7 +9,7 @@ from typing import Literal, Required, TypedDict, Unpack, overload
 
 import pyarrow as pa
 
-from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
+from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
@@ -366,7 +366,7 @@ def extract_ast(
         Tables of AST nodes, edges, and errors.
     """
     options = options or ASTExtractOptions()
-    ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    ctx = ctx or execution_context_factory("default")
     plans = extract_ast_plans(
         repo_files,
         options=options,
@@ -411,7 +411,7 @@ def extract_ast_plans(
         Plan bundle keyed by ``ast_nodes``, ``ast_edges``, and ``ast_errors``.
     """
     options = options or ASTExtractOptions()
-    ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    ctx = ctx or execution_context_factory("default")
 
     nodes_rows: list[dict[str, object]] = []
     edges_rows: list[dict[str, object]] = []
@@ -512,7 +512,7 @@ def extract_ast_tables(
     repo_files = kwargs["repo_files"]
     options = kwargs.get("options") or ASTExtractOptions()
     file_contexts = kwargs.get("file_contexts")
-    ctx = kwargs.get("ctx") or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    ctx = kwargs.get("ctx") or execution_context_factory("default")
     prefer_reader = kwargs.get("prefer_reader", False)
     plans = extract_ast_plans(
         repo_files,

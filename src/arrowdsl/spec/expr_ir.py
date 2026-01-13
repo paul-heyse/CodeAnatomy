@@ -21,6 +21,7 @@ from arrowdsl.core.interop import (
     ensure_expression,
     pc,
 )
+from arrowdsl.json_factory import JsonPolicy, dumps_text
 from arrowdsl.spec.codec import (
     decode_scalar_json,
     decode_scalar_payload,
@@ -152,7 +153,8 @@ class ExprIR:
             JSON representation of the expression.
         """
         payload = self.to_dict()
-        return json.dumps(payload, ensure_ascii=True)
+        policy = JsonPolicy(ascii_only=True)
+        return dumps_text(payload, policy=policy)
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable dictionary.

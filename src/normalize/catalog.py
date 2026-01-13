@@ -10,6 +10,7 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.plan import catalog as plan_catalog
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.runner import run_plan
 from arrowdsl.plan.source import PlanSource, plan_from_source
 from normalize.bytecode_cfg import cfg_blocks_plan, cfg_edges_plan
 from normalize.bytecode_dfg import def_use_events_plan, reaching_defs_plan
@@ -76,8 +77,21 @@ def _table_from_source(source: PlanSource | None, *, ctx: ExecutionContext) -> T
     if isinstance(source, TableLike):
         return source
     if isinstance(source, Plan):
-        return source.to_table(ctx=ctx)
-    return plan_from_source(source, ctx=ctx, label="normalize_catalog").to_table(ctx=ctx)
+        result = run_plan(
+            source,
+            ctx=ctx,
+            prefer_reader=False,
+            attach_ordering_metadata=True,
+        )
+        return cast("TableLike", result.value)
+    plan = plan_from_source(source, ctx=ctx, label="normalize_catalog")
+    result = run_plan(
+        plan,
+        ctx=ctx,
+        prefer_reader=False,
+        attach_ordering_metadata=True,
+    )
+    return cast("TableLike", result.value)
 
 
 def derive_type_exprs_norm(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:

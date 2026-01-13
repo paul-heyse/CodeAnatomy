@@ -14,10 +14,13 @@ from arrowdsl.core.context import (
     OrderingLevel,
     RuntimeProfile,
     ScanProfile,
+    execution_context_factory,
+    runtime_profile_factory,
+    scan_profile_factory,
 )
 from arrowdsl.finalize.finalize import Contract, FinalizeContext, FinalizeResult, finalize
 from arrowdsl.plan.ops import DedupeSpec, JoinSpec, SortKey
-from arrowdsl.plan.plan import Plan, hash_join, union_all_plans
+from arrowdsl.plan.plan import Plan, PlanFactory, hash_join, union_all_plans
 from arrowdsl.plan.query import (
     ProjectionSpec,
     QuerySpec,
@@ -48,6 +51,7 @@ __all__ = [
     "Ordering",
     "OrderingLevel",
     "Plan",
+    "PlanFactory",
     "PlanRunResult",
     "PlanSource",
     "ProjectionSpec",
@@ -61,6 +65,7 @@ __all__ = [
     "canonical_sort",
     "canonical_sort_if_canonical",
     "compile_to_acero_scan",
+    "execution_context_factory",
     "explode_list_column",
     "finalize",
     "hash_join",
@@ -71,5 +76,7 @@ __all__ = [
     "run_plan",
     "run_plan_bundle",
     "run_plan_streamable",
+    "runtime_profile_factory",
+    "scan_profile_factory",
     "union_all_plans",
 ]

@@ -7,9 +7,10 @@ from collections.abc import Sequence
 import pyarrow as pa
 import pyarrow.types as patypes
 
+from arrowdsl.compute.kernels import ChunkPolicy
 from arrowdsl.core.interop import FieldLike, SchemaLike, TableLike
 from arrowdsl.schema.metadata import metadata_spec_from_schema
-from arrowdsl.schema.schema import SchemaEvolutionSpec
+from arrowdsl.schema.schema import SchemaEvolutionSpec, align_to_schema
 
 
 def _is_advanced_type(dtype: object) -> bool:
@@ -90,8 +91,12 @@ def unify_tables(
     if not tables:
         return pa.Table.from_arrays([], names=[])
     schema = unify_schemas([table.schema for table in tables], promote_options=promote_options)
-    aligned = [table.cast(schema) for table in tables]
-    return pa.concat_tables(aligned)
+    aligned: list[TableLike] = []
+    for table in tables:
+        aligned_table, _ = align_to_schema(table, schema=schema, safe_cast=True)
+        aligned.append(aligned_table)
+    combined = pa.concat_tables(aligned, promote=True)
+    return ChunkPolicy().apply(combined)
 
 
 __all__ = ["unify_schema_with_metadata", "unify_schemas", "unify_tables"]

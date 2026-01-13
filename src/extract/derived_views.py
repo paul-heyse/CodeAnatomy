@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from arrowdsl.compute.predicates import FilterSpec, InSet
+from arrowdsl.compute.predicates import FilterSpec, predicate_spec
 from arrowdsl.core.interop import TableLike
 from arrowdsl.plan.plan import Plan
 
@@ -17,7 +17,8 @@ def ast_def_nodes(nodes: TableLike) -> TableLike:
     """
     if nodes.num_rows == 0:
         return nodes
-    predicate = InSet(
+    predicate = predicate_spec(
+        "in_set",
         col="kind",
         values=("FunctionDef", "AsyncFunctionDef", "ClassDef"),
     )
@@ -32,7 +33,8 @@ def ast_def_nodes_plan(plan: Plan) -> Plan:
     Plan
         Plan filtered to function/class definitions.
     """
-    predicate = InSet(
+    predicate = predicate_spec(
+        "in_set",
         col="kind",
         values=("FunctionDef", "AsyncFunctionDef", "ClassDef"),
     )

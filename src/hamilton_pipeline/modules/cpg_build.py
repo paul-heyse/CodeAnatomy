@@ -10,6 +10,11 @@ from hamilton.function_modifiers import cache, extract_fields, tag
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
+from arrowdsl.io.parquet import (
+    NamedDatasetWriteConfig,
+    ParquetWriteOptions,
+    write_named_datasets_parquet,
+)
 from arrowdsl.schema.schema import empty_table
 from cpg.artifacts import CpgBuildArtifacts
 from cpg.build_edges import EdgeBuildInputs, build_cpg_edges
@@ -65,11 +70,6 @@ from schema_spec.system import (
     make_dataset_spec,
     make_table_spec,
     table_spec_from_schema,
-)
-from storage.parquet import (
-    NamedDatasetWriteConfig,
-    ParquetWriteOptions,
-    write_named_datasets_parquet,
 )
 
 if TYPE_CHECKING:

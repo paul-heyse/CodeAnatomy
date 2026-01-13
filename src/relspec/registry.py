@@ -181,9 +181,7 @@ class ContractCatalog:
             Catalog populated from spec tables.
         """
         field = read_spec_table(field_table)
-        constraints = (
-            read_spec_table(constraints_table) if constraints_table is not None else None
-        )
+        constraints = read_spec_table(constraints_table) if constraints_table is not None else None
         contract = read_spec_table(contract_table) if contract_table is not None else None
         return cls.from_tables(
             field_table=field,

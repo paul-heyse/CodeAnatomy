@@ -9,6 +9,7 @@ from typing import Any, Literal, cast
 import pyarrow as pa
 
 from arrowdsl.compute.expr import ScalarValue
+from arrowdsl.json_factory import JsonPolicy, dumps_text
 from arrowdsl.plan.ops import DedupeSpec, JoinType, SortKey
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.spec.codec import (
@@ -151,7 +152,8 @@ def _encode_query(spec: QuerySpec) -> str:
         msg = "QuerySpec serialization does not support predicate expressions."
         raise ValueError(msg)
     payload = {"projection": {"base": list(spec.projection.base)}}
-    return json.dumps(payload, ensure_ascii=True)
+    policy = JsonPolicy(ascii_only=True)
+    return dumps_text(payload, policy=policy)
 
 
 def _decode_query(payload: str) -> QuerySpec:

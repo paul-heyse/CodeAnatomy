@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import platform
 import shutil
 import sys
@@ -18,6 +17,7 @@ from typing import cast
 
 from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract
+from arrowdsl.json_factory import JsonPolicy, dump_path, dumps_bytes
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.schema import schema_fingerprint, schema_to_dict
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
@@ -140,12 +140,8 @@ def _json_default(obj: object) -> JsonValue:
 
 def _write_json(path: PathLike, data: JsonValue, *, overwrite: bool = True) -> str:
     target = ensure_path(path)
-    _ensure_dir(target.parent)
-    if overwrite and target.exists():
-        target.unlink()
-    with target.open("w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False, sort_keys=True, default=_json_default)
-    return str(target)
+    policy = JsonPolicy(pretty=True, sort_keys=True)
+    return dump_path(target, data, policy=policy, overwrite=overwrite)
 
 
 # -----------------------
@@ -320,9 +316,8 @@ def make_run_bundle_name(
         ts = int(created_value)
     else:
         ts = int(time.time())
-    payload = json.dumps(
-        {"manifest": run_manifest, "config": run_config}, sort_keys=True, default=str
-    ).encode("utf-8")
+    policy = JsonPolicy(sort_keys=True)
+    payload = dumps_bytes({"manifest": run_manifest, "config": run_config}, policy=policy)
     h = hashlib.sha256(payload).hexdigest()[:10]
     return f"run_{ts}_{h}"
 

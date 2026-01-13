@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import ModuleType
@@ -13,6 +12,7 @@ from hamilton import driver
 from hamilton.execution import executors
 from hamilton.lifecycle import base as lifecycle_base
 
+from arrowdsl.json_factory import JsonPolicy, dumps_bytes
 from core_types import JsonValue
 from cpg.kinds import validate_derivation_extractors, validate_registry_completeness
 from hamilton_pipeline.arrow_adapters import register_arrow_parquet_adapters
@@ -47,7 +47,8 @@ def config_fingerprint(config: Mapping[str, JsonValue]) -> str:
     str
         SHA-256 fingerprint for the config.
     """
-    payload = json.dumps(config, sort_keys=True, default=str).encode("utf-8")
+    policy = JsonPolicy(sort_keys=True)
+    payload = dumps_bytes(config, policy=policy)
     return hashlib.sha256(payload).hexdigest()
 
 

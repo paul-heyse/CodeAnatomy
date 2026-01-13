@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from typing import cast
 
-from arrowdsl.core.context import DeterminismTier, ExecutionContext, OrderingLevel, RuntimeProfile
+from arrowdsl.core.context import (
+    DeterminismTier,
+    ExecutionContext,
+    OrderingLevel,
+    execution_context_factory,
+)
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeOptions, FinalizeResult, finalize
 from arrowdsl.plan.plan import Plan, PlanSpec
-from arrowdsl.plan.runner import PlanRunResult
-from arrowdsl.schema.policy import SchemaPolicy
+from arrowdsl.plan.runner import PlanRunResult, run_plan
+from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from normalize.encoding import encoding_policy_from_schema
 from normalize.plan_helpers import (
@@ -34,7 +40,7 @@ def ensure_execution_context(ctx: ExecutionContext | None) -> ExecutionContext:
     """
     if ctx is not None:
         return ctx
-    return ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    return execution_context_factory("default")
 
 
 def ensure_canonical(ctx: ExecutionContext) -> ExecutionContext:
@@ -45,15 +51,7 @@ def ensure_canonical(ctx: ExecutionContext) -> ExecutionContext:
     ExecutionContext
         Execution context using canonical determinism.
     """
-    runtime = ctx.runtime.with_determinism(DeterminismTier.CANONICAL)
-    return ExecutionContext(
-        runtime=runtime,
-        mode=ctx.mode,
-        provenance=ctx.provenance,
-        safe_cast=ctx.safe_cast,
-        debug=ctx.debug,
-        schema_validation=ctx.schema_validation,
-    )
+    return ctx.with_determinism(DeterminismTier.CANONICAL)
 
 
 def _should_skip_canonical_sort(
@@ -92,7 +90,13 @@ def run_normalize(
     FinalizeResult
         Finalize bundle with good/errors/stats/alignment outputs.
     """
-    table = PlanSpec.from_plan(plan).to_table(ctx=ctx)
+    result = run_plan(
+        plan,
+        ctx=ctx,
+        prefer_reader=False,
+        attach_ordering_metadata=True,
+    )
+    table = cast("TableLike", result.value)
     for fn in post:
         table = fn(table, ctx)
     contract_obj = contract.to_contract()
@@ -104,14 +108,15 @@ def run_normalize(
             schema_metadata=schema_meta,
             field_metadata=metadata_spec.field_metadata,
         )
-    schema_policy = SchemaPolicy(
-        schema=contract_obj.with_versioned_schema(),
-        encoding=encoding_policy_from_schema(contract_obj.schema),
-        metadata=metadata,
-        validation=contract_obj.validation,
-        safe_cast=ctx.safe_cast,
-        keep_extra_columns=ctx.provenance,
-        on_error="unsafe" if ctx.safe_cast else "raise",
+    schema_policy = schema_policy_factory(
+        contract.table_schema,
+        ctx=ctx,
+        options=SchemaPolicyOptions(
+            schema=contract_obj.with_versioned_schema(),
+            encoding=encoding_policy_from_schema(contract_obj.schema),
+            metadata=metadata,
+            validation=contract_obj.validation,
+        ),
     )
     options = FinalizeOptions(
         schema_policy=schema_policy,

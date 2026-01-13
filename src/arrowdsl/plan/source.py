@@ -2,21 +2,26 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
 import pyarrow.dataset as ds
 
-from arrowdsl.core.context import ExecutionContext, Ordering, OrderingEffect
+from arrowdsl.core.context import (
+    ExecutionContext,
+    Ordering,
+    execution_context_factory,
+)
 from arrowdsl.core.interop import (
     ComputeExpression,
     RecordBatchReaderLike,
+    SchemaLike,
     TableLike,
 )
-from arrowdsl.plan.ops import ScanOp
-from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.query import scan_context_from_spec
+from arrowdsl.plan.plan import Plan, PlanFactory
+from arrowdsl.plan.query import scan_context_factory
+from arrowdsl.plan.rows import plan_from_rows
 from arrowdsl.plan.scan_specs import DatasetFactorySpec, ScanSpec
 from schema_spec.system import DatasetSpec
 
@@ -37,6 +42,15 @@ class InMemoryDatasetSource:
     one_shot: bool = True
 
 
+@dataclass(frozen=True)
+class RowSource:
+    """Row iterator source with an explicit schema."""
+
+    rows: Iterable[Mapping[str, object]]
+    schema: SchemaLike
+    batch_size: int = 4096
+
+
 PlanSource = (
     TableLike
     | RecordBatchReaderLike
@@ -46,6 +60,7 @@ PlanSource = (
     | DatasetFactorySpec
     | ScanSpec
     | InMemoryDatasetSource
+    | RowSource
     | Plan
 )
 
@@ -77,6 +92,59 @@ def plan_from_dataset(
     )
 
 
+def _plan_from_scan_source(
+    source: PlanSource,
+    *,
+    ctx: ExecutionContext,
+    columns: Sequence[str] | None,
+    label: str,
+) -> Plan | None:
+    if isinstance(source, DatasetSource):
+        return plan_from_dataset(source.dataset, spec=source.spec, ctx=ctx)
+    if isinstance(source, ScanSpec):
+        scan_ctx = scan_context_factory(source, ctx=ctx)
+        return scan_ctx.to_plan(label=label)
+    if isinstance(source, DatasetFactorySpec):
+        return plan_from_source(
+            source.build(),
+            ctx=ctx,
+            columns=columns,
+            label=label,
+        )
+    if isinstance(source, ds.Dataset):
+        dataset = cast("ds.Dataset", source)
+        available = set(dataset.schema.names)
+        scan_cols = list(columns) if columns is not None else list(dataset.schema.names)
+        scan_cols = [name for name in scan_cols if name in available]
+        factory = PlanFactory(ctx=ctx)
+        return factory.scan(dataset, columns=scan_cols, label=label)
+    if isinstance(source, ds.Scanner):
+        scanner = cast("ds.Scanner", source)
+        return Plan.from_reader(scanner.to_reader(), label=label)
+    return None
+
+
+def _plan_from_reader_source(
+    source: PlanSource,
+    *,
+    label: str,
+) -> Plan | None:
+    if isinstance(source, InMemoryDatasetSource):
+        if source.one_shot:
+            return Plan.table_source(source.reader.read_all(), label=label)
+        return Plan.from_reader(source.reader, label=label)
+    if isinstance(source, RowSource):
+        return plan_from_rows(
+            source.rows,
+            schema=source.schema,
+            batch_size=source.batch_size,
+            label=label,
+        )
+    if isinstance(source, RecordBatchReaderLike):
+        return Plan.from_reader(source, label=label)
+    return None
+
+
 def plan_from_source(
     source: PlanSource,
     *,
@@ -91,63 +159,33 @@ def plan_from_source(
     Plan
         Acero-backed plan for dataset/table sources.
     """
-    plan: Plan
     if isinstance(source, Plan):
-        plan = source
-    elif isinstance(source, DatasetSource):
-        plan = plan_from_dataset(source.dataset, spec=source.spec, ctx=ctx)
-    elif isinstance(source, ScanSpec):
-        scan_ctx = scan_context_from_spec(source, ctx=ctx)
-        ordering = (
-            Ordering.implicit()
-            if ctx.runtime.scan.implicit_ordering or ctx.runtime.scan.require_sequenced_output
-            else Ordering.unordered()
-        )
-        plan = Plan(
-            decl=scan_ctx.acero_decl(),
-            label=label,
-            ordering=ordering,
-            pipeline_breakers=(),
-        )
-    elif isinstance(source, DatasetFactorySpec):
-        plan = plan_from_source(
-            source.build(),
-            ctx=ctx,
-            columns=columns,
-            label=label,
-        )
-    elif isinstance(source, ds.Dataset):
-        dataset = cast("ds.Dataset", source)
-        available = set(dataset.schema.names)
-        scan_cols = list(columns) if columns is not None else list(dataset.schema.names)
-        scan_cols = [name for name in scan_cols if name in available]
-        scan_ordering = (
-            OrderingEffect.IMPLICIT
-            if ctx.runtime.scan.implicit_ordering or ctx.runtime.scan.require_sequenced_output
-            else OrderingEffect.UNORDERED
-        )
-        scan_op = ScanOp(
-            dataset=dataset,
-            columns=scan_cols,
-            predicate=None,
-            ordering_effect=scan_ordering,
-        )
-        decl = scan_op.to_declaration([], ctx=ctx)
-        ordering = scan_op.apply_ordering(Ordering.unordered())
-        plan = Plan(decl=decl, label=label, ordering=ordering, pipeline_breakers=())
-    elif isinstance(source, ds.Scanner):
-        scanner = cast("ds.Scanner", source)
-        plan = Plan.table_source(scanner.to_table(), label=label)
-    elif isinstance(source, InMemoryDatasetSource):
-        if source.one_shot:
-            plan = Plan.table_source(source.reader.read_all(), label=label)
-        else:
-            plan = Plan.from_reader(source.reader, label=label)
-    elif isinstance(source, RecordBatchReaderLike):
-        plan = Plan.table_source(source.read_all(), label=label)
-    else:
-        plan = Plan.table_source(source, label=label)
-    return plan
+        return source
+    plan = _plan_from_scan_source(source, ctx=ctx, columns=columns, label=label)
+    if plan is not None:
+        return plan
+    plan = _plan_from_reader_source(source, label=label)
+    if plan is not None:
+        return plan
+    return Plan.table_source(cast("TableLike", source), label=label)
+
+
+def plan_from_source_profile(
+    source: PlanSource,
+    *,
+    profile: str,
+    columns: Sequence[str] | None = None,
+    label: str = "",
+) -> Plan:
+    """Return a plan for a source using a named execution profile.
+
+    Returns
+    -------
+    Plan
+        Plan for the source with the named profile context.
+    """
+    ctx = execution_context_factory(profile)
+    return plan_from_source(source, ctx=ctx, columns=columns, label=label)
 
 
 def plan_from_scan_columns(
@@ -164,17 +202,17 @@ def plan_from_scan_columns(
     Plan
         Plan built from a scan declaration.
     """
-    scan_op = ScanOp(dataset=dataset, columns=columns, predicate=None)
-    decl = scan_op.to_declaration([], ctx=ctx)
-    ordering = scan_op.apply_ordering(Ordering.unordered())
-    return Plan(decl=decl, label=label, ordering=ordering, pipeline_breakers=())
+    factory = PlanFactory(ctx=ctx)
+    return factory.scan(dataset, columns=columns, label=label)
 
 
 __all__ = [
     "DatasetSource",
     "InMemoryDatasetSource",
     "PlanSource",
+    "RowSource",
     "plan_from_dataset",
     "plan_from_scan_columns",
     "plan_from_source",
+    "plan_from_source_profile",
 ]

@@ -4,26 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-import arrowdsl.core.interop as pa
+from arrowdsl.compute.ids import HashSpec, masked_hash_array, masked_hash_expr
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.ids import HashSpec, hash_column_values, hash_expression
-from arrowdsl.core.interop import ArrayLike, ComputeExpression, TableLike, ensure_expression, pc
+from arrowdsl.core.interop import ComputeExpression, TableLike, pc
 from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.arrays import set_or_append_column
-
-
-def valid_mask(table: TableLike, cols: Sequence[str]) -> ArrayLike:
-    """Return a validity mask for the provided columns.
-
-    Returns
-    -------
-    ArrayLike
-        Boolean mask of rows with all columns valid.
-    """
-    mask = pc.is_valid(table[cols[0]])
-    for col in cols[1:]:
-        mask = pc.and_(mask, pc.is_valid(table[col]))
-    return mask
 
 
 def apply_hash_column(
@@ -39,11 +24,11 @@ def apply_hash_column(
     TableLike
         Updated table with hashed id column.
     """
-    hashed = hash_column_values(table, spec=spec)
     out_col = spec.out_col or f"{spec.prefix}_id"
     if required:
-        mask = valid_mask(table, required)
-        hashed = pc.if_else(mask, hashed, pa.scalar(None, type=hashed.type))
+        hashed = masked_hash_array(table, spec=spec, required=required)
+    else:
+        hashed = masked_hash_array(table, spec=spec, required=())
     return set_or_append_column(table, out_col, hashed)
 
 
@@ -68,20 +53,6 @@ def apply_hash_columns(
     return out
 
 
-def valid_mask_expression(cols: Sequence[str]) -> ComputeExpression:
-    """Return a validity mask expression for the provided columns.
-
-    Returns
-    -------
-    ComputeExpression
-        Boolean expression of rows with all columns valid.
-    """
-    mask = pc.is_valid(pc.field(cols[0]))
-    for col in cols[1:]:
-        mask = pc.and_(mask, pc.is_valid(pc.field(col)))
-    return ensure_expression(mask)
-
-
 def hash_projection(
     spec: HashSpec,
     *,
@@ -95,10 +66,10 @@ def hash_projection(
     tuple[ComputeExpression, str]
         Hash expression and output column name.
     """
-    expr = hash_expression(spec, available=available)
     if required:
-        mask = valid_mask_expression(required)
-        expr = ensure_expression(pc.if_else(mask, expr, pc.scalar(None)))
+        expr = masked_hash_expr(spec, required=required, available=available)
+    else:
+        expr = masked_hash_expr(spec, required=(), available=available)
     out_col = spec.out_col or f"{spec.prefix}_id"
     return expr, out_col
 

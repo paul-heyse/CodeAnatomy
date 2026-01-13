@@ -11,7 +11,7 @@ from typing import Literal, Required, TypedDict, Unpack, cast, overload
 import pyarrow as pa
 
 from arrowdsl.compute.expr_specs import MaskedHashExprSpec
-from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
+from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
@@ -1459,7 +1459,7 @@ def extract_bytecode(
         Tables for bytecode code units, instructions, exception data, and edges.
     """
     options = options or BytecodeExtractOptions()
-    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    exec_ctx = ctx or execution_context_factory("default")
     plans = extract_bytecode_plans(
         repo_files,
         options=options,
@@ -1522,7 +1522,7 @@ def extract_bytecode_plans(
         Plan bundle keyed by bytecode output name.
     """
     options = options or BytecodeExtractOptions()
-    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    exec_ctx = ctx or execution_context_factory("default")
 
     buffers = BytecodeRowBuffers(
         code_unit_rows=[],
@@ -1607,7 +1607,7 @@ def extract_bytecode_table(
     repo_files = kwargs["repo_files"]
     options = kwargs.get("options") or BytecodeExtractOptions()
     file_contexts = kwargs.get("file_contexts")
-    exec_ctx = kwargs.get("ctx") or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    exec_ctx = kwargs.get("ctx") or execution_context_factory("default")
     prefer_reader = kwargs.get("prefer_reader", False)
     plans = extract_bytecode_plans(
         repo_files,

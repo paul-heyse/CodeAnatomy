@@ -3,28 +3,32 @@
 from __future__ import annotations
 
 import hashlib
-import json
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.compute as pac
 
-from arrowdsl.compute.registry import UdfSpec, default_registry
+from arrowdsl.compute.position import normalize_position_encoding
+from arrowdsl.compute.registry import UdfSpec, ensure_udf
 from arrowdsl.core.ids import iter_array_values
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, DataTypeLike, ScalarLike
+from arrowdsl.json_factory import JsonPolicy, dumps_text
 
 type ValuesLike = ArrayLike | ChunkedArrayLike | ScalarLike
 
 _EXPR_CTX_FUNCTION = "expr_ctx_norm"
-_JSON_CACHE: dict[str, str] = {}
+
+_POSITION_ENCODING_FUNCTION = "position_encoding_norm"
 
 
 def _json_stringify(value: object) -> str | None:
     if value is None:
         return None
     try:
-        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        policy = JsonPolicy(sort_keys=True)
+        return dumps_text(value, policy=policy)
     except (TypeError, ValueError):
-        return json.dumps(str(value), ensure_ascii=False)
+        return dumps_text(str(value))
 
 
 def _json_udf(ctx: pac.UdfContext, values: ValuesLike) -> ValuesLike:
@@ -72,7 +76,49 @@ def ensure_expr_context_udf() -> str:
         summary="Normalize expr context",
         description="Normalize expr context values.",
     )
-    return default_registry().ensure(spec)
+    return ensure_udf(spec)
+
+
+def _position_encoding_udf(ctx: pac.UdfContext, values: ValuesLike) -> ValuesLike:
+    _ = ctx
+    if isinstance(values, ScalarLike):
+        normalized = normalize_position_encoding(values.as_py())
+        return pa.scalar(normalized, type=pa.int32())
+    array_values = values.combine_chunks() if isinstance(values, ChunkedArrayLike) else values
+    out = [normalize_position_encoding(value) for value in iter_array_values(array_values)]
+    return pa.array(out, type=pa.int32())
+
+
+def ensure_position_encoding_udf() -> str:
+    """Ensure the position-encoding normalization UDF is registered.
+
+    Returns
+    -------
+    str
+        Registered function name.
+    """
+    spec = UdfSpec(
+        name=_POSITION_ENCODING_FUNCTION,
+        inputs={"value": pa.string()},
+        output=pa.int32(),
+        fn=_position_encoding_udf,
+        summary="Normalize position encodings",
+        description="Normalize position encodings to SCIP enum integers.",
+    )
+    return ensure_udf(spec)
+
+
+def position_encoding_array(values: ArrayLike | ChunkedArrayLike) -> ArrayLike:
+    """Normalize position encoding values to SCIP enum integers.
+
+    Returns
+    -------
+    ValuesLike
+        Normalized encoding values (int32).
+    """
+    func_name = ensure_position_encoding_udf()
+    casted = pac.cast(values, pa.string(), safe=False)
+    return cast("ArrayLike", pac.call_function(func_name, [casted]))
 
 
 def _json_udf_name(dtype: DataTypeLike) -> str:
@@ -89,9 +135,6 @@ def ensure_json_udf(dtype: DataTypeLike) -> str:
         Registered function name.
     """
     name = _json_udf_name(dtype)
-    cached = _JSON_CACHE.get(str(dtype))
-    if cached == name:
-        return name
     spec = UdfSpec(
         name=name,
         inputs={"value": dtype},
@@ -100,9 +143,12 @@ def ensure_json_udf(dtype: DataTypeLike) -> str:
         summary="JSON stringify",
         description=f"Serialize values to JSON for {dtype}.",
     )
-    default_registry().ensure(spec)
-    _JSON_CACHE[str(dtype)] = name
-    return name
+    return ensure_udf(spec)
 
 
-__all__ = ["ensure_expr_context_udf", "ensure_json_udf"]
+__all__ = [
+    "ensure_expr_context_udf",
+    "ensure_json_udf",
+    "ensure_position_encoding_udf",
+    "position_encoding_array",
+]

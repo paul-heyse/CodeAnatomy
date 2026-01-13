@@ -6,6 +6,7 @@ from collections.abc import Sequence
 
 import pyarrow.types as patypes
 
+from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.schema import EncodingPolicy, EncodingSpec
 from schema_spec.specs import (
     ENCODING_DICTIONARY,
@@ -62,7 +63,24 @@ def encoding_policy_from_fields(fields: Sequence[ArrowFieldSpec]) -> EncodingPol
     return EncodingPolicy(specs=specs)
 
 
+def normalize_dictionaries(
+    table: TableLike,
+    *,
+    combine_chunks: bool = True,
+) -> TableLike:
+    """Return a table with unified dictionaries and normalized chunks.
+
+    Returns
+    -------
+    TableLike
+        Table with unified dictionary columns.
+    """
+    out = table.combine_chunks() if combine_chunks else table
+    return out.unify_dictionaries()
+
+
 __all__ = [
     "encoding_policy_from_fields",
     "encoding_policy_from_spec",
+    "normalize_dictionaries",
 ]

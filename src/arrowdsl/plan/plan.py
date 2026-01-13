@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
-from arrowdsl.core.context import ExecutionContext, Ordering, OrderingKey, OrderingLevel
+import pyarrow.dataset as ds
+
+from arrowdsl.core.context import (
+    ExecutionContext,
+    Ordering,
+    OrderingEffect,
+    OrderingKey,
+    OrderingLevel,
+)
 from arrowdsl.core.interop import (
     ComputeExpression,
     DeclarationLike,
@@ -22,7 +30,9 @@ from arrowdsl.plan.ops import (
     OrderByOp,
     PlanOp,
     ProjectOp,
+    ScanOp,
     TableSourceOp,
+    scan_ordering_effect,
 )
 
 ReaderThunk = Callable[[], RecordBatchReaderLike]
@@ -496,6 +506,129 @@ class Plan:
             ``True`` when ordering is implicit or explicit.
         """
         return self.ordering.level in {OrderingLevel.IMPLICIT, OrderingLevel.EXPLICIT}
+
+
+@dataclass(frozen=True)
+class PlanFactory:
+    """Factory for building plans with consistent ordering metadata."""
+
+    ctx: ExecutionContext
+
+    def scan(
+        self,
+        dataset: ds.Dataset,
+        *,
+        columns: Sequence[str] | Mapping[str, ComputeExpression],
+        predicate: ComputeExpression | None = None,
+        label: str = "",
+        ordering_effect: OrderingEffect | None = None,
+    ) -> Plan:
+        """Build a scan plan for a dataset.
+
+        Returns
+        -------
+        Plan
+            Scan plan with ordering metadata applied.
+        """
+        if ordering_effect is None:
+            ordering_effect = scan_ordering_effect(self.ctx)
+        scan_op = ScanOp(
+            dataset=dataset,
+            columns=columns,
+            predicate=predicate,
+            ordering_effect=ordering_effect,
+        )
+        decl = scan_op.to_declaration([], ctx=self.ctx)
+        ordering = scan_op.apply_ordering(Ordering.unordered())
+        return Plan(
+            decl=decl,
+            label=label,
+            ordering=ordering,
+            pipeline_breakers=(),
+        )
+
+    def filter(
+        self,
+        plan: Plan,
+        predicate: ComputeExpression,
+        *,
+        label: str = "",
+    ) -> Plan:
+        """Apply a filter node to a plan.
+
+        Returns
+        -------
+        Plan
+            Filtered plan.
+        """
+        return plan.filter(predicate, ctx=self.ctx, label=label)
+
+    def project(
+        self,
+        plan: Plan,
+        *,
+        expressions: Sequence[ComputeExpression],
+        names: Sequence[str],
+        label: str = "",
+    ) -> Plan:
+        """Apply a projection node to a plan.
+
+        Returns
+        -------
+        Plan
+            Projected plan.
+        """
+        return plan.project(expressions, names, ctx=self.ctx, label=label)
+
+    def join(
+        self,
+        left: Plan,
+        right: Plan,
+        *,
+        spec: JoinSpec,
+        label: str = "",
+    ) -> Plan:
+        """Join two plans using a hash join.
+
+        Returns
+        -------
+        Plan
+            Joined plan.
+        """
+        return left.join(right, spec=spec, ctx=self.ctx, label=label)
+
+    def order_by(
+        self,
+        plan: Plan,
+        sort_keys: Sequence[OrderingKey],
+        *,
+        label: str = "",
+    ) -> Plan:
+        """Apply an order-by node to a plan.
+
+        Returns
+        -------
+        Plan
+            Ordered plan.
+        """
+        return plan.order_by(sort_keys, ctx=self.ctx, label=label)
+
+    def aggregate(
+        self,
+        plan: Plan,
+        *,
+        group_keys: Sequence[str],
+        aggs: Sequence[tuple[str, str]],
+        label: str = "",
+    ) -> Plan:
+        """Apply an aggregate node to a plan.
+
+        Returns
+        -------
+        Plan
+            Aggregated plan.
+        """
+        return plan.aggregate(group_keys, aggs, ctx=self.ctx, label=label)
 
 
 def union_all_plans(plans: Sequence[Plan], *, label: str = "") -> Plan:

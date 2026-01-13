@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Literal, Protocol
 
 from arrowdsl.core.interop import ArrayLike, ComputeExpression, ScalarLike, TableLike
 
 type ScalarValue = bool | int | float | str | bytes | ScalarLike | None
+type PredicateKind = Literal["in_set", "is_null", "not"]
 
 
 class ExprSpec(Protocol):
@@ -43,4 +44,4 @@ class ExprSpec(Protocol):
         ...
 
 
-__all__ = ["ExprSpec", "ScalarValue"]
+__all__ = ["ExprSpec", "PredicateKind", "ScalarValue"]

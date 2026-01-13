@@ -9,7 +9,10 @@ from typing import Literal, cast
 
 from arrowdsl.compute.expr import ScalarValue
 from arrowdsl.core.interop import ScalarLike
+from arrowdsl.json_factory import JsonPolicy, dumps_text
 from arrowdsl.plan.ops import DedupeStrategy
+
+ASCII_POLICY = JsonPolicy(ascii_only=True)
 
 
 def parse_sort_order(value: object) -> Literal["ascending", "descending"]:
@@ -231,7 +234,7 @@ def encode_json_text(value: object | None) -> str | None:
         JSON text payload.
     """
     payload = encode_json_payload(value)
-    return None if payload is None else json.dumps(payload, ensure_ascii=True)
+    return None if payload is None else dumps_text(payload, policy=ASCII_POLICY)
 
 
 def decode_json_text(payload: str | None) -> object | None:
@@ -283,7 +286,7 @@ def encode_scalar_json(value: ScalarValue | None) -> str | None:
         JSON text payload.
     """
     payload = encode_scalar_payload(value)
-    return None if payload is None else json.dumps(payload, ensure_ascii=True)
+    return None if payload is None else dumps_text(payload, policy=ASCII_POLICY)
 
 
 def decode_scalar_json(payload: str | None) -> ScalarValue | None:

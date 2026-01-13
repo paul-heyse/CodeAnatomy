@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import cast
 
 import pyarrow as pa
 
+from arrowdsl.compute.udfs import position_encoding_array
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, pc
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.plan import Plan, union_all_plans
+from arrowdsl.plan.runner import run_plan
 from arrowdsl.plan_helpers import column_or_null_expr
-from arrowdsl.schema.builders import column_or_null
+from arrowdsl.schema.builders import column_or_null, table_from_arrays
+from arrowdsl.schema.encoding import normalize_dictionaries
+from arrowdsl.schema.factories import empty_table
 from arrowdsl.schema.nested import StructLargeListViewAccumulator
-from arrowdsl.schema.tables import table_from_arrays
 from normalize.runner import (
     PostFn,
     ensure_canonical,
@@ -35,7 +39,6 @@ from normalize.text_index import (
     DEFAULT_POSITION_ENCODING,
     RepoTextIndex,
     file_index,
-    normalize_position_encoding,
 )
 from schema_spec.specs import NestedFieldSpec
 
@@ -59,8 +62,7 @@ _DIAG_BASE_SCHEMA = pa.schema(
 
 
 def _empty_diag_base_table() -> TableLike:
-    columns = {field.name: pa.array([], type=field.type) for field in _DIAG_BASE_SCHEMA}
-    return table_from_arrays(_DIAG_BASE_SCHEMA, columns=columns, num_rows=0)
+    return empty_table(_DIAG_BASE_SCHEMA)
 
 
 @dataclass(frozen=True)
@@ -270,7 +272,8 @@ def _cst_parse_error_table(
         "code": pa.array(buffers.codes, type=pa.string()),
         "details": details,
     }
-    return table_from_arrays(_DIAG_BASE_SCHEMA, columns=columns, num_rows=len(buffers.paths))
+    table = table_from_arrays(_DIAG_BASE_SCHEMA, columns=columns, num_rows=len(buffers.paths))
+    return normalize_dictionaries(table)
 
 
 def _scip_severity(value: object | None) -> str:
@@ -347,20 +350,21 @@ def _scip_diag_table(
         "code": pa.array(buffers.codes, type=pa.string()),
         "details": details,
     }
-    return table_from_arrays(_DIAG_BASE_SCHEMA, columns=columns, num_rows=len(buffers.paths))
+    table = table_from_arrays(_DIAG_BASE_SCHEMA, columns=columns, num_rows=len(buffers.paths))
+    return normalize_dictionaries(table)
 
 
 def _scip_doc_encodings(scip_documents: TableLike | None) -> dict[str, int]:
     doc_enc: dict[str, int] = {}
     if scip_documents is None or scip_documents.num_rows == 0:
         return doc_enc
-    arrays = [
-        column_or_null(scip_documents, "document_id", pa.string()),
-        column_or_null(scip_documents, "position_encoding", pa.string()),
-    ]
-    for doc_id, enc in iter_arrays(arrays):
+    doc_ids = column_or_null(scip_documents, "document_id", pa.string())
+    enc_values = position_encoding_array(
+        column_or_null(scip_documents, "position_encoding", pa.string())
+    )
+    for doc_id, enc in iter_arrays([doc_ids, enc_values]):
         if isinstance(doc_id, str):
-            doc_enc[doc_id] = normalize_position_encoding(enc)
+            doc_enc[doc_id] = enc if isinstance(enc, int) else DEFAULT_POSITION_ENCODING
     return doc_enc
 
 
@@ -501,7 +505,16 @@ def diagnostics_post_step(
     def _apply(table: TableLike, ctx: ExecutionContext) -> TableLike:
         _ = table
         plan = _diagnostics_plan(repo_text_index, sources=sources, ctx=ctx)
-        return plan.to_table(ctx=ctx)
+        result = run_plan(
+            plan,
+            ctx=ctx,
+            prefer_reader=False,
+            attach_ordering_metadata=True,
+        )
+        if isinstance(result.value, pa.RecordBatchReader):
+            msg = "Expected table result from diagnostics_plan."
+            raise TypeError(msg)
+        return cast("TableLike", result.value)
 
     return _apply
 

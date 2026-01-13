@@ -11,7 +11,7 @@ from hamilton.io.data_adapters import DataLoader, DataSaver
 from hamilton.io.utils import get_file_metadata
 from hamilton.registry import register_adapter
 
-from storage.parquet import read_table_parquet, write_table_parquet
+from arrowdsl.io.parquet import read_table_parquet, write_table_parquet
 
 
 @dataclass

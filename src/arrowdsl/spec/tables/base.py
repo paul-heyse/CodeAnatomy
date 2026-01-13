@@ -8,15 +8,20 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
+from pyarrow import ipc
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.validation import ArrowValidationOptions, ValidationReport
 from arrowdsl.spec.io import (
+    ipc_read_options_factory,
+    ipc_write_options_factory,
     read_spec_table,
+    rows_from_table,
     sort_spec_table,
     table_from_json,
     table_from_json_file,
+    table_from_rows,
     write_spec_table,
 )
 
@@ -43,7 +48,7 @@ class SpecTableCodec[SpecT]:
             Table built from encoded spec rows.
         """
         rows = [self.encode_row(value) for value in values]
-        table = pa.Table.from_pylist(rows, schema=self.schema)
+        table = table_from_rows(self.schema, rows)
         if not self.sort_keys:
             return table
         return sort_spec_table(table, keys=self.sort_keys)
@@ -56,7 +61,7 @@ class SpecTableCodec[SpecT]:
         tuple[SpecT, ...]
             Spec values decoded from the table.
         """
-        return tuple(self.decode_row(row) for row in table.to_pylist())
+        return tuple(self.decode_row(row) for row in rows_from_table(table))
 
     def to_json_payload(self, values: Sequence[SpecT]) -> list[dict[str, object]]:
         """Encode spec values into JSON-ready rows.
@@ -116,12 +121,21 @@ class SpecTableCodec[SpecT]:
         return self.from_table(self.table_from_json_file(path))
 
     @staticmethod
-    def write_table(path: str | Path, table: pa.Table) -> None:
+    def write_table(
+        path: str | Path,
+        table: pa.Table,
+        *,
+        options: ipc.IpcWriteOptions | None = None,
+    ) -> None:
         """Write a spec table to IPC."""
-        write_spec_table(path, table)
+        write_spec_table(path, table, options=options or ipc_write_options_factory())
 
     @staticmethod
-    def read_table(path: str | Path) -> pa.Table:
+    def read_table(
+        path: str | Path,
+        *,
+        options: ipc.IpcReadOptions | None = None,
+    ) -> pa.Table:
         """Read a spec table from IPC.
 
         Returns
@@ -129,13 +143,24 @@ class SpecTableCodec[SpecT]:
         pa.Table
             Table loaded from IPC.
         """
-        return read_spec_table(path)
+        return read_spec_table(path, options=options or ipc_read_options_factory())
 
-    def write_values(self, path: str | Path, values: Sequence[SpecT]) -> None:
+    def write_values(
+        self,
+        path: str | Path,
+        values: Sequence[SpecT],
+        *,
+        options: ipc.IpcWriteOptions | None = None,
+    ) -> None:
         """Write encoded spec values to IPC."""
-        self.write_table(path, self.to_table(values))
+        self.write_table(path, self.to_table(values), options=options)
 
-    def read_values(self, path: str | Path) -> tuple[SpecT, ...]:
+    def read_values(
+        self,
+        path: str | Path,
+        *,
+        options: ipc.IpcReadOptions | None = None,
+    ) -> tuple[SpecT, ...]:
         """Read encoded spec values from IPC.
 
         Returns
@@ -143,7 +168,7 @@ class SpecTableCodec[SpecT]:
         tuple[SpecT, ...]
             Spec values decoded from the table.
         """
-        return self.from_table(self.read_table(path))
+        return self.from_table(self.read_table(path, options=options))
 
     def align(self, table: pa.Table) -> pa.Table:
         """Align a table to the spec schema.

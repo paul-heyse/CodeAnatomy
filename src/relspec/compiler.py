@@ -4,22 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, cast
 
 import pyarrow as pa
 
-from arrowdsl.compute.kernels import (
-    IntervalAlignOptions,
-    apply_dedupe,
-    explode_list_column,
-    interval_align_table,
-)
+from arrowdsl.compute.kernels import apply_dedupe, explode_list_column, interval_align_table
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, Ordering
 from arrowdsl.core.interop import ComputeExpression, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
-from arrowdsl.plan.ops import DedupeSpec, SortKey
+from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions, SortKey
 from arrowdsl.plan.plan import Plan, hash_join, union_all_plans
 from arrowdsl.plan.query import open_dataset
+from arrowdsl.plan.runner import run_plan
 from arrowdsl.schema.arrays import ConstExpr, FieldExpr, const_array, set_or_append_column
 from arrowdsl.schema.schema import SchemaEvolutionSpec, projection_for_schema
 from relspec.edge_contract_validator import (
@@ -505,7 +501,13 @@ class CompiledRule:
         if self.plan is None:
             msg = "CompiledRule has neither plan nor execute_fn."
             raise RuntimeError(msg)
-        table = self.plan.to_table(ctx=ctx)
+        result = run_plan(
+            self.plan,
+            ctx=ctx,
+            prefer_reader=False,
+            attach_ordering_metadata=True,
+        )
+        table = cast("TableLike", result.value)
         if self.emit_rule_meta:
             table = _build_rule_meta_kernel(self.rule)(table, ctx)
         for fn in self.post_kernels:
@@ -569,7 +571,13 @@ class CompiledOutput:
 
         if plan_parts:
             union = union_all_plans(plan_parts, label=self.output_dataset)
-            table_parts.append(union.to_table(ctx=ctx_exec))
+            result = run_plan(
+                union,
+                ctx=ctx_exec,
+                prefer_reader=False,
+                attach_ordering_metadata=True,
+            )
+            table_parts.append(cast("TableLike", result.value))
 
         if self.contract_name is None:
             unioned = SchemaEvolutionSpec().unify_and_cast(
@@ -685,7 +693,13 @@ class RelationshipRuleCompiler:
             parts: list[TableLike] = []
             for inp in rule.inputs:
                 plan = resolver.resolve(inp, ctx=ctx2)
-                parts.append(plan.to_table(ctx=ctx2))
+                result = run_plan(
+                    plan,
+                    ctx=ctx2,
+                    prefer_reader=False,
+                    attach_ordering_metadata=True,
+                )
+                parts.append(cast("TableLike", result.value))
             dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(rule.output_dataset)
             if dataset_spec is not None:
                 return dataset_spec.unify_tables(parts, ctx=ctx2)
@@ -734,8 +748,22 @@ class RelationshipRuleCompiler:
 
         def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> TableLike:
             left_ref, right_ref = rule.inputs
-            lt = resolver.resolve(left_ref, ctx=ctx2).to_table(ctx=ctx2)
-            rt = resolver.resolve(right_ref, ctx=ctx2).to_table(ctx=ctx2)
+            left_plan = resolver.resolve(left_ref, ctx=ctx2)
+            right_plan = resolver.resolve(right_ref, ctx=ctx2)
+            lt_result = run_plan(
+                left_plan,
+                ctx=ctx2,
+                prefer_reader=False,
+                attach_ordering_metadata=True,
+            )
+            rt_result = run_plan(
+                right_plan,
+                ctx=ctx2,
+                prefer_reader=False,
+                attach_ordering_metadata=True,
+            )
+            lt = cast("TableLike", lt_result.value)
+            rt = cast("TableLike", rt_result.value)
             return interval_align_table(lt, rt, cfg=interval_cfg)
 
         _ = ctx
@@ -762,7 +790,14 @@ class RelationshipRuleCompiler:
 
         def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> TableLike:
             src = rule.inputs[0]
-            table = resolver.resolve(src, ctx=ctx2).to_table(ctx=ctx2)
+            plan = resolver.resolve(src, ctx=ctx2)
+            result = run_plan(
+                plan,
+                ctx=ctx2,
+                prefer_reader=False,
+                attach_ordering_metadata=True,
+            )
+            table = cast("TableLike", result.value)
             spec = DedupeSpec(
                 keys=winner_cfg.keys,
                 strategy="KEEP_BEST_BY_SCORE",

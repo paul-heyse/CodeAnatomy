@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 import pyarrow as pa
 import pyarrow.types as patypes
 
+from arrowdsl.compute.macros import ColumnOrNullExpr
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
@@ -15,6 +16,7 @@ from arrowdsl.core.interop import (
     TableLike,
     pc,
 )
+from arrowdsl.schema.nested_builders import nested_array_factory
 
 
 def column_or_null(
@@ -29,9 +31,7 @@ def column_or_null(
     ArrayLike
         Column array or a typed null array.
     """
-    if col in table.column_names:
-        return table[col]
-    return pa.nulls(table.num_rows, type=dtype)
+    return ColumnOrNullExpr(name=col, dtype=dtype).materialize(table)
 
 
 def maybe_dictionary(
@@ -116,6 +116,24 @@ def table_from_schema(
     return pa.Table.from_arrays(arrays, schema=schema)
 
 
+def table_from_rows(
+    schema: SchemaLike,
+    rows: Iterable[Mapping[str, object]],
+) -> TableLike:
+    """Build a table from row mappings aligned to the provided schema.
+
+    Returns
+    -------
+    TableLike
+        Table built from row mappings.
+    """
+    row_list = [dict(row) for row in rows]
+    arrays = [
+        nested_array_factory(field, [row.get(field.name) for row in row_list]) for field in schema
+    ]
+    return pa.Table.from_arrays(arrays, schema=pa.schema(schema))
+
+
 def table_from_arrays(
     schema: SchemaLike,
     *,
@@ -151,5 +169,6 @@ __all__ = [
     "resolve_float_col",
     "resolve_string_col",
     "table_from_arrays",
+    "table_from_rows",
     "table_from_schema",
 ]

@@ -11,7 +11,7 @@ import tree_sitter_python
 from tree_sitter import Language, Parser
 
 from arrowdsl.compute.expr_specs import MaskedHashExprSpec
-from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
+from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
@@ -373,7 +373,7 @@ def extract_ts(
         Extracted node and diagnostic tables.
     """
     options = options or TreeSitterExtractOptions()
-    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    exec_ctx = ctx or execution_context_factory("default")
     plans = extract_ts_plans(
         repo_files,
         options=options,
@@ -418,7 +418,7 @@ def extract_ts_plans(
         Plan bundle keyed by ``ts_nodes``, ``ts_errors``, and ``ts_missing``.
     """
     options = options or TreeSitterExtractOptions()
-    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    exec_ctx = ctx or execution_context_factory("default")
     parser = _parser()
 
     node_rows: list[Row] = []
@@ -539,7 +539,7 @@ def extract_ts_tables(
     repo_files = kwargs["repo_files"]
     options = kwargs.get("options") or TreeSitterExtractOptions()
     file_contexts = kwargs.get("file_contexts")
-    exec_ctx = kwargs.get("ctx") or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    exec_ctx = kwargs.get("ctx") or execution_context_factory("default")
     prefer_reader = kwargs.get("prefer_reader", False)
     plans = extract_ts_plans(
         repo_files,

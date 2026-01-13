@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from arrowdsl.core.ids import HashSpec
 
 
-def hash_spec(
+def hash_spec_factory(
     *,
     prefix: str,
     cols: Sequence[str],
@@ -15,7 +15,7 @@ def hash_spec(
     null_sentinel: str | None = None,
     extra_literals: Sequence[str] = (),
 ) -> HashSpec:
-    """Return a HashSpec with shared defaults applied.
+    """Create a hash spec with shared defaults.
 
     Returns
     -------
@@ -40,4 +40,4 @@ def hash_spec(
     )
 
 
-__all__ = ["hash_spec"]
+__all__ = ["hash_spec_factory"]

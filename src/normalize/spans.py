@@ -8,6 +8,7 @@ from typing import Literal
 
 import pyarrow as pa
 
+from arrowdsl.compute.udfs import position_encoding_array
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import ArrayLike, TableLike
@@ -28,7 +29,6 @@ from normalize.text_index import (
     ENC_UTF32,
     FileTextIndex,
     RepoTextIndex,
-    normalize_position_encoding,
     row_value_int,
 )
 from schema_spec.specs import scip_range_bundle
@@ -490,14 +490,14 @@ def _build_doc_posenc_map(
         Mapping of document IDs to position encodings.
     """
     doc_posenc: dict[str, int] = {}
-    arrays = [
-        column_or_null(scip_documents, columns.document_id, pa.string()),
-        column_or_null(scip_documents, columns.doc_posenc, pa.string()),
-    ]
-    for did, posenc in iter_arrays(arrays):
+    doc_ids = column_or_null(scip_documents, columns.document_id, pa.string())
+    enc_values = position_encoding_array(
+        column_or_null(scip_documents, columns.doc_posenc, pa.string())
+    )
+    for did, posenc in iter_arrays([doc_ids, enc_values]):
         if did is None:
             continue
-        doc_posenc[str(did)] = normalize_position_encoding(posenc)
+        doc_posenc[str(did)] = posenc if isinstance(posenc, int) else DEFAULT_POSITION_ENCODING
     return doc_posenc
 
 

@@ -44,12 +44,12 @@ def trim_expr(col: str) -> ExprMacro:
 - Update: `src/arrowdsl/compute/transforms.py`
 
 **Implementation checklist**
-- [ ] Consolidate trim/coalesce/scalar helpers into a single macro module.
-- [ ] Replace ad-hoc materializers with shared macro-backed implementations.
-- [ ] Preserve plan-lane scalar safety checks in one place.
+- [x] Consolidate trim/coalesce/scalar helpers into a single macro module.
+- [x] Replace ad-hoc materializers with shared macro-backed implementations.
+- [x] Preserve plan-lane scalar safety checks in one place.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -75,12 +75,12 @@ def hash_array(table: TableLike, *, spec: HashSpec) -> ArrayLike:
 - Update: `src/arrowdsl/compute/expr_specs.py`
 
 **Implementation checklist**
-- [ ] Replace `HashFromExprsSpec` usage with core hash helpers.
-- [ ] Keep masked hash behavior centralized in `core/ids.py`.
-- [ ] Remove duplicate hash expression assembly in compute specs.
+- [x] Replace `HashFromExprsSpec` usage with core hash helpers.
+- [x] Keep masked hash behavior centralized in `core/ids.py`.
+- [x] Remove duplicate hash expression assembly in compute specs.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -118,12 +118,12 @@ def join_any(
 - Update: `src/arrowdsl/compute/kernels.py`
 
 **Implementation checklist**
-- [ ] Collapse join spec builders into one canonical API.
-- [ ] Route table joins through `Table.join` (and `join_asof` when configured).
-- [ ] Remove redundant join helpers in kernel lane.
+- [x] Collapse join spec builders into one canonical API.
+- [x] Route table joins through `Table.join` (and `join_asof` when configured).
+- [x] Remove redundant join helpers in kernel lane.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -159,12 +159,12 @@ def array_from_values(values: Sequence[object | None], field: FieldLike) -> Arra
 - Update: `src/arrowdsl/plan/rows.py`
 
 **Implementation checklist**
-- [ ] Create a single `array_from_values` entrypoint for nested types.
-- [ ] Move list/struct accumulator logic to one module.
-- [ ] Remove duplicate row-to-array conversion logic in plan helpers.
+- [x] Create a single `array_from_values` entrypoint for nested types.
+- [x] Move list/struct accumulator logic to one module.
+- [x] Remove duplicate row-to-array conversion logic in plan helpers.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -197,12 +197,12 @@ def encode_any(value: TableLike | Plan, *, policy: EncodingPolicy, ctx: Executio
 - Update: `src/arrowdsl/plan_helpers.py`
 
 **Implementation checklist**
-- [ ] Centralize alignment logic and reuse it in plan/table callers.
-- [ ] Route encoding via one policy application helper.
-- [ ] Use `Table.unify_dictionaries` and `Table.combine_chunks` consistently.
+- [x] Centralize alignment logic and reuse it in plan/table callers.
+- [x] Route encoding via one policy application helper.
+- [x] Use `Table.unify_dictionaries` and `Table.combine_chunks` consistently.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -231,12 +231,12 @@ def write_spec_table(
 - Delete: `src/arrowdsl/spec/adapters.py`
 
 **Implementation checklist**
-- [ ] Remove `spec/adapters.py` and update call sites to use `SpecTableCodec`.
-- [ ] Add IPC options to read/write helpers.
-- [ ] Standardize JSON and IPC IO in the codec layer.
+- [x] Remove `spec/adapters.py` and update call sites to use `SpecTableCodec`.
+- [x] Add IPC options to read/write helpers.
+- [x] Standardize JSON and IPC IO in the codec layer.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -260,12 +260,12 @@ def plan_from_rows(rows: Iterable[Mapping[str, object]], *, schema: SchemaLike, 
 - Update: `src/arrowdsl/plan/source.py`
 
 **Implementation checklist**
-- [ ] Make `plan_from_rows` the single row-ingestion path.
-- [ ] Route streaming through `RecordBatchReader` consistently.
-- [ ] Remove duplicate row-to-table helpers once call sites migrate.
+- [x] Make `plan_from_rows` the single row-ingestion path.
+- [x] Route streaming through `RecordBatchReader` consistently.
+- [x] Remove duplicate row-to-table helpers once call sites migrate.
 
 **Status**
-Not started.
+Completed.
 
 ---
 
@@ -286,9 +286,9 @@ from arrowdsl.schema.builders import table_from_schema
 - Update: call sites importing these wrappers
 
 **Implementation checklist**
-- [ ] Remove wrapper modules and update imports to `schema/builders.py`.
-- [ ] Ensure no public API breakage by updating ArrowDSL exports.
-- [ ] Validate all call sites compile under pyright strict.
+- [x] Remove wrapper modules and update imports to `schema/builders.py`.
+- [x] Ensure no public API breakage by updating ArrowDSL exports.
+- [x] Validate all call sites compile under pyright strict.
 
 **Status**
-Not started.
+Completed.

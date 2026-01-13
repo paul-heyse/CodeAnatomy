@@ -12,8 +12,9 @@ from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike
 from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan.source import DatasetSource
 from arrowdsl.schema.arrays import const_array, set_or_append_column
+from arrowdsl.schema.builders import table_from_arrays
+from arrowdsl.schema.encoding import normalize_dictionaries
 from arrowdsl.schema.schema import EncodingSpec
-from arrowdsl.schema.tables import table_from_arrays
 from arrowdsl.spec.tables.cpg import node_plan_specs_from_table
 from cpg.artifacts import CpgBuildArtifacts
 from cpg.catalog import PlanCatalog, resolve_plan_source
@@ -90,7 +91,8 @@ def _symbol_nodes_table(
     uniq = sorted(symbols)
     schema = pa.schema([pa.field("symbol", pa.string())])
     columns = {"symbol": pa.array(uniq, type=pa.string())}
-    return table_from_arrays(schema, columns=columns, num_rows=len(uniq))
+    table = table_from_arrays(schema, columns=columns, num_rows=len(uniq))
+    return normalize_dictionaries(table)
 
 
 NODE_PLAN_SPECS = node_plan_specs()

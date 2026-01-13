@@ -6,7 +6,7 @@ from typing import Literal
 
 from hamilton.function_modifiers import tag
 
-from arrowdsl.core.context import ExecutionContext, RuntimeProfile
+from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from core_types import JsonDict
 from extract.scip_extract import SCIPParseOptions
 from hamilton_pipeline.pipeline_types import (
@@ -29,8 +29,7 @@ def ctx() -> ExecutionContext:
     ExecutionContext
         Default execution context instance.
     """
-    runtime = RuntimeProfile(name="DEFAULT")
-    return ExecutionContext(runtime=runtime)
+    return execution_context_factory("default")
 
 
 @tag(layer="inputs", kind="scalar")

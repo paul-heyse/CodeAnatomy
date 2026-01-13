@@ -20,13 +20,14 @@ from arrowdsl.schema.arrays import (
     build_struct,
     const_array,
 )
-from arrowdsl.schema.policy import SchemaPolicy
-from arrowdsl.schema.schema import AlignmentInfo, SchemaMetadataSpec
+from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
+from arrowdsl.schema.schema import AlignmentInfo, EncodingPolicy, SchemaMetadataSpec
 from arrowdsl.schema.validation import ArrowValidationOptions
 from schema_spec.specs import PROVENANCE_COLS, NestedFieldSpec
-from schema_spec.system import validate_arrow_table
+from schema_spec.system import table_spec_from_schema, validate_arrow_table
 
 if TYPE_CHECKING:
+    from arrowdsl.schema.policy import SchemaPolicy
     from schema_spec.specs import TableSchemaSpec
 
 
@@ -535,12 +536,24 @@ def finalize(
     options = options or FinalizeOptions()
     schema_policy = options.schema_policy
     if schema_policy is None:
-        schema_policy = SchemaPolicy(
-            schema=contract.with_versioned_schema(),
-            safe_cast=ctx.safe_cast,
-            keep_extra_columns=ctx.provenance,
-            on_error="unsafe" if ctx.safe_cast else "raise",
-        )
+        schema_spec = contract.schema_spec
+        if schema_spec is None:
+            schema_spec = table_spec_from_schema(
+                contract.name,
+                contract.schema,
+                version=contract.version,
+            )
+            policy_options = SchemaPolicyOptions(
+                schema=contract.with_versioned_schema(),
+                encoding=EncodingPolicy(specs=()),
+                validation=contract.validation,
+            )
+        else:
+            policy_options = SchemaPolicyOptions(
+                schema=contract.with_versioned_schema(),
+                validation=contract.validation,
+            )
+        schema_policy = schema_policy_factory(schema_spec, ctx=ctx, options=policy_options)
     schema = schema_policy.resolved_schema()
     aligned, align_info = schema_policy.apply_with_info(table)
     if schema_policy.encoding is None:

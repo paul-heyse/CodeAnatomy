@@ -9,6 +9,7 @@ from typing import Literal
 import arrowdsl.core.interop as pa
 
 type OrderingKey = tuple[str, str]
+type ExecutionProfileName = Literal["bulk", "default", "deterministic", "streaming"]
 
 
 class DeterminismTier(StrEnum):
@@ -313,3 +314,117 @@ class ExecutionContext:
             debug=self.debug,
             schema_validation=self.schema_validation,
         )
+
+
+@dataclass(frozen=True)
+class ExecutionContextOptions:
+    """Execution context option bundle for factory construction."""
+
+    mode: Literal["strict", "tolerant"] = "tolerant"
+    provenance: bool = False
+    safe_cast: bool = True
+    debug: bool = False
+    schema_validation: SchemaValidationPolicy = field(default_factory=SchemaValidationPolicy)
+
+
+def _normalize_profile(profile: str) -> ExecutionProfileName:
+    key = profile.strip().lower()
+    if key == "default":
+        return "default"
+    if key == "streaming":
+        return "streaming"
+    if key == "bulk":
+        return "bulk"
+    if key == "deterministic":
+        return "deterministic"
+    msg = f"Unknown execution profile: {profile!r}."
+    raise ValueError(msg)
+
+
+def scan_profile_factory(profile: str) -> ScanProfile:
+    """Return a ScanProfile for the named execution profile.
+
+    Returns
+    -------
+    ScanProfile
+        Scan profile matching the named profile.
+    """
+    profile_key = _normalize_profile(profile)
+    if profile_key == "streaming":
+        return ScanProfile(
+            name="STREAM",
+            batch_size=4096,
+            batch_readahead=1,
+            fragment_readahead=1,
+            use_threads=True,
+        )
+    if profile_key == "bulk":
+        return ScanProfile(
+            name="BULK",
+            batch_size=16384,
+            batch_readahead=4,
+            fragment_readahead=2,
+            use_threads=True,
+        )
+    if profile_key == "deterministic":
+        return ScanProfile(
+            name="DETERMINISTIC",
+            batch_size=4096,
+            batch_readahead=1,
+            fragment_readahead=1,
+            use_threads=False,
+            require_sequenced_output=True,
+            implicit_ordering=True,
+        )
+    return ScanProfile(name="DEFAULT")
+
+
+def runtime_profile_factory(profile: str) -> RuntimeProfile:
+    """Return a RuntimeProfile for the named execution profile.
+
+    Returns
+    -------
+    RuntimeProfile
+        Runtime profile matching the named profile.
+    """
+    profile_key = _normalize_profile(profile)
+    scan = scan_profile_factory(profile_key)
+    plan_use_threads = profile_key != "deterministic"
+    if profile_key == "deterministic":
+        determinism = DeterminismTier.CANONICAL
+    else:
+        determinism = DeterminismTier.BEST_EFFORT
+    name = scan.name
+    runtime = RuntimeProfile(
+        name=name,
+        scan=scan,
+        plan_use_threads=plan_use_threads,
+        determinism=determinism,
+    )
+    if determinism == DeterminismTier.CANONICAL:
+        return runtime.with_determinism(determinism)
+    return runtime
+
+
+def execution_context_factory(
+    profile: str,
+    *,
+    options: ExecutionContextOptions | None = None,
+) -> ExecutionContext:
+    """Return an ExecutionContext for the named profile.
+
+    Returns
+    -------
+    ExecutionContext
+        Execution context with profile defaults applied.
+    """
+    runtime = runtime_profile_factory(profile)
+    options = options or ExecutionContextOptions()
+    return ExecutionContext(
+        runtime=runtime,
+        mode=options.mode,
+        provenance=options.provenance,
+        safe_cast=options.safe_cast,
+        debug=options.debug,
+        schema_validation=options.schema_validation,
+    )

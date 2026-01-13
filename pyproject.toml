@@ -56,6 +56,7 @@ dependencies = [
     "ijson>=3.4.0.post0",
     "orjson>=3.11.5",
     "msgspec>=0.20.0",
+    "polars>=1.37.1",
 ]
 
 [tool.ruff]

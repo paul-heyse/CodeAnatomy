@@ -6,12 +6,16 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from arrowdsl.core.ids import (
+from arrowdsl.compute.ids import (
     HashSpec,
-    hash64_from_parts,
     hash_column_values,
     prefixed_hash_id,
 )
+from arrowdsl.compute.ids import (
+    masked_prefixed_hash as compute_masked_prefixed_hash,
+)
+from arrowdsl.compute.masks import valid_mask_array
+from arrowdsl.core.ids import hash64_from_parts
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
@@ -93,11 +97,7 @@ def masked_prefixed_hash(
     ArrayLike | ChunkedArrayLike
         Prefixed hash identifiers masked by required validity.
     """
-    hashed = prefixed_hash_id(arrays, prefix=prefix)
-    mask = pc.is_valid(required[0])
-    for arr in required[1:]:
-        mask = pc.and_(mask, pc.is_valid(arr))
-    return pc.if_else(mask, hashed, pa.scalar(None, type=pa.string()))
+    return compute_masked_prefixed_hash(prefix, arrays, required=required)
 
 
 @dataclass(frozen=True)
@@ -151,9 +151,6 @@ def add_span_id_column(table: TableLike, spec: SpanIdSpec | None = None) -> Tabl
         extra_literals=extra,
     )
     prefixed = hash_column_values(table, spec=hash_spec)
-    valid = pc.and_(
-        pc.is_valid(path_arr),
-        pc.and_(pc.is_valid(bstart_arr), pc.is_valid(bend_arr)),
-    )
+    valid = valid_mask_array([path_arr, bstart_arr, bend_arr])
     span_ids = pc.if_else(valid, prefixed, pa.scalar(None, type=pa.string()))
     return table.append_column(out_col, span_ids)

@@ -9,10 +9,8 @@ import pyarrow as pa
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
-from arrowdsl.plan.join_specs import join_spec_for_keys
-from arrowdsl.plan.joins import join_plan
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan_helpers import column_or_null_expr, project_to_schema
+from arrowdsl.plan_helpers import code_unit_meta_join, column_or_null_expr, project_to_schema
 from normalize.plan_helpers import PlanSource, plan_source
 from normalize.runner import (
     ensure_canonical,
@@ -75,18 +73,7 @@ def cfg_blocks_plan(
 
     if "code_unit_id" in blocks_available and "code_unit_id" in code_available:
         meta = _code_unit_meta_plan(code_units, ctx=ctx)
-        joined = join_plan(
-            blocks,
-            meta,
-            spec=join_spec_for_keys(
-                keys=("code_unit_id",),
-                left_out=tuple(blocks.schema(ctx=ctx).names),
-                right_out=("file_id", "path"),
-            ),
-            ctx=ctx,
-        )
-        if not isinstance(joined, Plan):
-            joined = Plan.table_source(joined)
+        joined = code_unit_meta_join(blocks, meta, ctx=ctx)
     else:
         joined = blocks
 
@@ -119,18 +106,7 @@ def cfg_edges_plan(
 
     if "code_unit_id" in edges_available and "code_unit_id" in code_available:
         meta = _code_unit_meta_plan(code_units, ctx=ctx)
-        joined = join_plan(
-            edges,
-            meta,
-            spec=join_spec_for_keys(
-                keys=("code_unit_id",),
-                left_out=tuple(edges.schema(ctx=ctx).names),
-                right_out=("file_id", "path"),
-            ),
-            ctx=ctx,
-        )
-        if not isinstance(joined, Plan):
-            joined = Plan.table_source(joined)
+        joined = code_unit_meta_join(edges, meta, ctx=ctx)
     else:
         joined = edges
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
@@ -13,19 +12,22 @@ import pyarrow.fs as pafs
 from arrowdsl.compute.expr import ExprSpec
 from arrowdsl.compute.exprs import FieldExpr
 from arrowdsl.compute.predicates import FilterSpec
-from arrowdsl.core.context import ExecutionContext, OrderingEffect
+from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, DeclarationLike, SchemaLike, pc
-from arrowdsl.plan.fragments import fragment_file_hints, list_fragments, row_group_count
-from arrowdsl.plan.ops import FilterOp, ProjectOp, ScanOp
+from arrowdsl.plan.fragments import (
+    fragment_file_hints,
+    list_fragments,
+    row_group_count,
+    scan_task_count,
+)
+from arrowdsl.plan.ops import FilterOp, ProjectOp, ScanOp, scan_ordering_effect
+from arrowdsl.plan.plan import Plan, PlanFactory
 from arrowdsl.plan.scan_specs import DatasetFactorySpec, ScanSpec
 from schema_spec import PROVENANCE_COLS, PROVENANCE_SOURCE_FIELDS
 
 type PathLike = str | Path
 type DatasetSourceLike = PathLike | ds.Dataset | DatasetFactorySpec
 type ColumnsSpec = Sequence[str] | Mapping[str, ComputeExpression]
-
-if TYPE_CHECKING:
-    from arrowdsl.plan.plan import Plan
 
 
 @dataclass(frozen=True)
@@ -149,6 +151,39 @@ class QuerySpec:
             expressions = [pc.field(name) for name in cols]
         return plan.project(expressions, names, ctx=ctx)
 
+    def to_plan(
+        self,
+        *,
+        dataset: ds.Dataset,
+        ctx: ExecutionContext,
+        label: str = "",
+    ) -> Plan:
+        """Compile the query spec into an Acero-backed Plan.
+
+        Returns
+        -------
+        Plan
+            Plan representing the scan/filter/project pipeline.
+        """
+        factory = PlanFactory(ctx=ctx)
+        columns = self.scan_columns(provenance=ctx.provenance)
+        plan = factory.scan(
+            dataset,
+            columns=columns,
+            predicate=self.pushdown_expression(),
+            label=label,
+        )
+        predicate = self.predicate_expression()
+        if predicate is not None:
+            plan = factory.filter(plan, predicate)
+        if isinstance(columns, Mapping):
+            names = list(columns.keys())
+            expressions = list(columns.values())
+        else:
+            names = list(columns)
+            expressions = [pc.field(name) for name in columns]
+        return factory.project(plan, expressions=expressions, names=names)
+
     @staticmethod
     def simple(
         *cols: str,
@@ -207,11 +242,7 @@ def compile_to_acero_scan(
     DeclarationLike
         Acero declaration for the scan pipeline.
     """
-    scan_ordering = (
-        OrderingEffect.IMPLICIT
-        if ctx.runtime.scan.implicit_ordering or ctx.runtime.scan.require_sequenced_output
-        else OrderingEffect.UNORDERED
-    )
+    scan_ordering = scan_ordering_effect(ctx)
     scan_op = ScanOp(
         dataset=dataset,
         columns=spec.scan_columns(provenance=ctx.provenance),
@@ -262,7 +293,7 @@ class ScanContext:
             Fragment counts and estimated row totals (when available).
         """
         predicate = self.spec.pushdown_expression()
-        return fragment_telemetry(self.dataset, predicate=predicate)
+        return fragment_telemetry(self.dataset, predicate=predicate, scanner=self.scanner())
 
     def scanner(self) -> ds.Scanner:
         """Return a dataset scanner for the scan spec.
@@ -287,8 +318,18 @@ class ScanContext:
         """
         return compile_to_acero_scan(self.dataset, spec=self.spec, ctx=self.ctx)
 
+    def to_plan(self, *, label: str = "") -> Plan:
+        """Compile the scan context into an Acero-backed Plan.
 
-def scan_context_from_spec(
+        Returns
+        -------
+        Plan
+            Plan representing the scan/filter/project pipeline.
+        """
+        return self.spec.to_plan(dataset=self.dataset, ctx=self.ctx, label=label)
+
+
+def scan_context_factory(
     spec: ScanSpec,
     *,
     ctx: ExecutionContext,
@@ -309,6 +350,7 @@ def fragment_telemetry(
     dataset: ds.Dataset,
     *,
     predicate: ComputeExpression | None = None,
+    scanner: ds.Scanner | None = None,
     hint_limit: int | None = 5,
 ) -> ScanTelemetry:
     """Return telemetry for dataset fragments.
@@ -329,9 +371,15 @@ def fragment_telemetry(
         total_rows += int(metadata.num_rows)
     if estimated_rows is not None:
         estimated_rows = total_rows
+    if scanner is None:
+        scanner = dataset.scanner(filter=predicate)
+    try:
+        task_count = scan_task_count(scanner)
+    except (AttributeError, TypeError):
+        task_count = row_group_count(fragments)
     return ScanTelemetry(
         fragment_count=len(fragments),
-        row_group_count=row_group_count(fragments),
+        row_group_count=task_count,
         estimated_rows=estimated_rows,
         file_hints=fragment_file_hints(fragments, limit=hint_limit),
     )
@@ -348,5 +396,5 @@ __all__ = [
     "compile_to_acero_scan",
     "fragment_telemetry",
     "open_dataset",
-    "scan_context_from_spec",
+    "scan_context_factory",
 ]

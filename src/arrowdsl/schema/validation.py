@@ -7,7 +7,11 @@ from dataclasses import dataclass
 from typing import Literal, cast
 
 import arrowdsl.core.interop as pa
-from arrowdsl.core.context import ExecutionContext, RuntimeProfile, SchemaValidationPolicy
+from arrowdsl.core.context import (
+    ExecutionContext,
+    SchemaValidationPolicy,
+    execution_context_factory,
+)
 from arrowdsl.core.interop import (
     ArrayLike,
     ScalarLike,
@@ -21,8 +25,8 @@ from arrowdsl.schema.constraints import (
     required_field_names,
     required_non_null_mask,
 )
-from arrowdsl.schema.policy import SchemaPolicy
-from arrowdsl.schema.schema import AlignmentInfo
+from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
+from arrowdsl.schema.schema import AlignmentInfo, EncodingPolicy
 from schema_spec.specs import TableSchemaSpec
 
 
@@ -73,7 +77,7 @@ class _ValidationErrorEntry:
 def _ensure_execution_context(ctx: ExecutionContext | None) -> ExecutionContext:
     if ctx is not None:
         return ctx
-    return ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    return execution_context_factory("default")
 
 
 def _align_for_validation(
@@ -85,11 +89,16 @@ def _align_for_validation(
     keep_extra = options.strict is False
     safe_cast = not options.coerce
     on_error = "unsafe" if options.coerce else "keep"
-    policy = SchemaPolicy(
-        schema=spec.to_arrow_schema(),
-        safe_cast=safe_cast,
-        keep_extra_columns=keep_extra,
-        on_error=on_error,
+    policy = schema_policy_factory(
+        spec,
+        ctx=execution_context_factory("default"),
+        options=SchemaPolicyOptions(
+            schema=spec.to_arrow_schema(),
+            encoding=EncodingPolicy(specs=()),
+            safe_cast=safe_cast,
+            keep_extra_columns=keep_extra,
+            on_error=on_error,
+        ),
     )
     return policy.apply_with_info(table)
 

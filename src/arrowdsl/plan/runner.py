@@ -121,7 +121,7 @@ def run_plan(
     ctx: ExecutionContext,
     prefer_reader: bool = False,
     metadata_spec: SchemaMetadataSpec | None = None,
-    attach_ordering_metadata: bool = False,
+    attach_ordering_metadata: bool = True,
 ) -> PlanRunResult:
     """Materialize or stream a plan with optional metadata updates.
 
@@ -179,7 +179,7 @@ def run_plan_streamable(
     *,
     ctx: ExecutionContext,
     metadata_spec: SchemaMetadataSpec | None = None,
-    attach_ordering_metadata: bool = False,
+    attach_ordering_metadata: bool = True,
 ) -> TableLike | RecordBatchReaderLike:
     """Return a reader when streamable, otherwise materialize the plan.
 
@@ -203,7 +203,7 @@ def run_plan_bundle(
     ctx: ExecutionContext,
     prefer_reader: bool = False,
     metadata_specs: Mapping[str, SchemaMetadataSpec] | None = None,
-    attach_ordering_metadata: bool = False,
+    attach_ordering_metadata: bool = True,
 ) -> dict[str, TableLike | RecordBatchReaderLike]:
     """Finalize a bundle of plans into tables or readers.
 
@@ -231,7 +231,7 @@ def materialize_plan(
     *,
     ctx: ExecutionContext,
     metadata_spec: SchemaMetadataSpec | None = None,
-    attach_ordering_metadata: bool = False,
+    attach_ordering_metadata: bool = True,
 ) -> TableLike:
     """Materialize a plan as a table.
 

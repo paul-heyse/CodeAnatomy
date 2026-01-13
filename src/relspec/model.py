@@ -8,7 +8,7 @@ from enum import StrEnum
 from typing import Literal
 
 from arrowdsl.compute.expr import ScalarValue
-from arrowdsl.plan.join_specs import JoinOutputSpec, join_spec
+from arrowdsl.plan.joins import JoinOutputSpec, join_spec
 from arrowdsl.plan.ops import DedupeSpec, JoinSpec, JoinType, SortKey
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.spec.expr_ir import ExprIR
@@ -263,9 +263,7 @@ class RelationshipRule:
             RuleKind.INTERVAL_ALIGN: self.interval_align,
             RuleKind.WINNER_SELECT: self.winner_select,
         }
-        active_variants = {
-            kind for kind, config in variant_configs.items() if config is not None
-        }
+        active_variants = {kind for kind, config in variant_configs.items() if config is not None}
         if self.kind in variant_configs:
             self._require_variant_config(active_variants)
             return

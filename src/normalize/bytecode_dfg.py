@@ -9,8 +9,7 @@ import pyarrow as pa
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, ensure_expression, pc
 from arrowdsl.finalize.finalize import FinalizeResult
-from arrowdsl.plan.join_specs import JoinOutputSpec, join_spec
-from arrowdsl.plan.joins import join_plan
+from arrowdsl.plan.joins import JoinOutputSpec, join_plan, join_spec
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan_helpers import project_to_schema
 from arrowdsl.schema.schema import empty_table

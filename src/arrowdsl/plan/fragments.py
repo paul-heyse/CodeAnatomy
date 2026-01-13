@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from typing import cast
 
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 
-from arrowdsl.core.interop import ComputeExpression
+from arrowdsl.core.interop import ComputeExpression, SchemaLike
+from core_types import PathLike, ensure_path
 
 
 def list_fragments(
@@ -97,6 +100,101 @@ def fragment_file_hints(
     return tuple(hints)
 
 
+@dataclass(frozen=True)
+class ParquetMetadataSpec:
+    """Parquet metadata sidecar configuration."""
+
+    schema: SchemaLike
+    file_metadata: tuple[pq.FileMetaData, ...] = ()
+
+    def write_common_metadata(
+        self,
+        base_dir: PathLike,
+        *,
+        filename: str = "_common_metadata",
+    ) -> str:
+        """Write a _common_metadata sidecar file.
+
+        Returns
+        -------
+        str
+            Path to the written metadata file.
+        """
+        path = ensure_path(base_dir) / filename
+        pq.write_metadata(self.schema, str(path))
+        return str(path)
+
+    def write_metadata(
+        self,
+        base_dir: PathLike,
+        *,
+        filename: str = "_metadata",
+    ) -> str | None:
+        """Write a _metadata sidecar file with row-group stats when available.
+
+        Returns
+        -------
+        str | None
+            Path to the written metadata file, or ``None`` when unavailable.
+        """
+        if not self.file_metadata:
+            return None
+        path = ensure_path(base_dir) / filename
+        pq.write_metadata(
+            self.schema,
+            str(path),
+            metadata_collector=list(self.file_metadata),
+        )
+        return str(path)
+
+
+def parquet_metadata_collector(
+    fragments: Sequence[ds.Fragment],
+) -> tuple[pq.FileMetaData, ...]:
+    """Collect Parquet file metadata from dataset fragments.
+
+    Returns
+    -------
+    tuple[pq.FileMetaData, ...]
+        File metadata entries for the fragments.
+    """
+    collector: list[pq.FileMetaData] = []
+    for fragment in fragments:
+        metadata = fragment.metadata
+        if metadata is None:
+            continue
+        collector.append(cast("pq.FileMetaData", metadata))
+    return tuple(collector)
+
+
+def parquet_metadata_factory(
+    dataset: ds.Dataset,
+    *,
+    predicate: ComputeExpression | None = None,
+) -> ParquetMetadataSpec:
+    """Return a ParquetMetadataSpec for a dataset.
+
+    Returns
+    -------
+    ParquetMetadataSpec
+        Metadata spec for sidecar generation.
+    """
+    fragments = list_fragments(dataset, predicate=predicate)
+    file_metadata = parquet_metadata_collector(fragments)
+    return ParquetMetadataSpec(schema=dataset.schema, file_metadata=file_metadata)
+
+
+def scan_task_count(scanner: ds.Scanner) -> int:
+    """Return the scan task count for a scanner.
+
+    Returns
+    -------
+    int
+        Number of scan tasks.
+    """
+    return sum(1 for _ in scanner.scan_tasks())
+
+
 def take_row_group_fragments(
     fragments: Sequence[ds.Fragment], *, limit: int | None = None
 ) -> list[ds.Fragment]:
@@ -116,10 +214,14 @@ def take_row_group_fragments(
 
 
 __all__ = [
+    "ParquetMetadataSpec",
     "fragment_file_hints",
     "list_fragments",
+    "parquet_metadata_collector",
+    "parquet_metadata_factory",
     "row_group_count",
     "row_group_fragments",
+    "scan_task_count",
     "split_fragment_by_row_group",
     "take_row_group_fragments",
 ]

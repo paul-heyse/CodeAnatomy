@@ -14,9 +14,9 @@ from typing import Literal, overload
 
 import pyarrow as pa
 
+from arrowdsl.compute.ids import prefixed_hash_id
 from arrowdsl.compute.transforms import normalize_string_items
-from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
-from arrowdsl.core.ids import prefixed_hash_id
+from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
@@ -31,9 +31,9 @@ from arrowdsl.plan.rows import plan_from_rows
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.plan_helpers import encoding_columns_from_metadata, encoding_projection
 from arrowdsl.schema.arrays import set_or_append_column, struct_array_from_dicts
+from arrowdsl.schema.builders import table_from_arrays
 from arrowdsl.schema.nested import LargeListAccumulator
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
-from arrowdsl.schema.tables import table_from_arrays
 from arrowdsl.schema.unify import unify_tables
 from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
@@ -1170,7 +1170,7 @@ def _finalize_table(
         exec_ctx=exec_ctx,
         encode_columns=encode_columns,
     )
-    return plan.to_table(ctx=exec_ctx)
+    return materialize_plan(plan, ctx=exec_ctx)
 
 
 def _extract_tables_from_index(
@@ -1392,7 +1392,7 @@ def extract_scip_tables(
         Extracted SCIP outputs keyed by output name.
     """
     parse_opts = parse_opts or SCIPParseOptions()
-    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    exec_ctx = ctx or execution_context_factory("default")
     metadata_specs = _scip_metadata_specs(parse_opts)
     if scip_index_path is None:
         plans = {

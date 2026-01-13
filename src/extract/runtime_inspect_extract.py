@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from arrowdsl.compute.expr_specs import MaskedHashExprSpec
-from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
+from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, pc
 from arrowdsl.plan.joins import JoinConfig, left_join
 from arrowdsl.plan.plan import Plan
@@ -994,7 +994,7 @@ def extract_runtime_tables(
     RuntimeInspectResult
         Extracted runtime inspection tables.
     """
-    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    exec_ctx = ctx or execution_context_factory("default")
     if not options.module_allowlist:
         return _empty_runtime_result(_runtime_metadata_specs(options))
     metadata_specs = _runtime_metadata_specs(options)
@@ -1034,7 +1034,7 @@ def extract_runtime_plans(
     dict[str, Plan]
         Plan bundle keyed by runtime inspection table name.
     """
-    exec_ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    exec_ctx = ctx or execution_context_factory("default")
     if not options.module_allowlist:
         return {
             "rt_objects": Plan.table_source(empty_table(RT_OBJECTS_SCHEMA)),
@@ -1089,7 +1089,7 @@ def extract_runtime_objects(
     metadata_specs = _runtime_metadata_specs(options)
     return run_plan_bundle(
         {"rt_objects": plans["rt_objects"]},
-        ctx=ExecutionContext(runtime=RuntimeProfile(name="DEFAULT")),
+        ctx=execution_context_factory("default"),
         prefer_reader=prefer_reader,
         metadata_specs={"rt_objects": metadata_specs["rt_objects"]},
         attach_ordering_metadata=True,
@@ -1124,7 +1124,7 @@ def extract_runtime_signatures(
             "rt_signatures": plans["rt_signatures"],
             "rt_signature_params": plans["rt_signature_params"],
         },
-        ctx=ExecutionContext(runtime=RuntimeProfile(name="DEFAULT")),
+        ctx=execution_context_factory("default"),
         prefer_reader=prefer_reader,
         metadata_specs={
             "rt_signatures": metadata_specs["rt_signatures"],
@@ -1159,7 +1159,7 @@ def extract_runtime_members(
     metadata_specs = _runtime_metadata_specs(options)
     return run_plan_bundle(
         {"rt_members": plans["rt_members"]},
-        ctx=ExecutionContext(runtime=RuntimeProfile(name="DEFAULT")),
+        ctx=execution_context_factory("default"),
         prefer_reader=prefer_reader,
         metadata_specs={"rt_members": metadata_specs["rt_members"]},
         attach_ordering_metadata=True,

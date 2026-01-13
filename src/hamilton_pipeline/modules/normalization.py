@@ -15,6 +15,7 @@ from arrowdsl.core.ids import prefixed_hash_id
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
 from arrowdsl.plan.joins import JoinConfig, left_join
 from arrowdsl.schema.arrays import set_or_append_column
+from arrowdsl.schema.factories import empty_table, table_from_arrays
 from normalize.bytecode_anchor import anchor_instructions
 from normalize.bytecode_cfg import build_cfg_blocks, build_cfg_edges
 from normalize.bytecode_dfg import build_def_use_events, run_reaching_defs
@@ -84,9 +85,17 @@ def _callsite_qname_base_table(exploded: TableLike) -> TableLike:
     qname_struct = exploded["qname_struct"]
     qname_vals = _string_or_null(pc.struct_field(qname_struct, "name"))
     qname_sources = _string_or_null(pc.struct_field(qname_struct, "source"))
-    base = pa.Table.from_arrays(
-        [call_ids, qname_vals, qname_sources],
-        names=["call_id", "qname", "qname_source"],
+    schema = pa.schema(
+        [
+            ("call_id", pa.string()),
+            ("qname", pa.string()),
+            ("qname_source", pa.string()),
+        ]
+    )
+    base = table_from_arrays(
+        schema,
+        columns={"call_id": call_ids, "qname": qname_vals, "qname_source": qname_sources},
+        num_rows=len(call_ids),
     )
     mask = pc.and_(pc.is_valid(base["call_id"]), pc.is_valid(base["qname"]))
     mask = pc.fill_null(mask, fill_value=False)
@@ -146,11 +155,16 @@ def dim_qualified_names(
     combined = pa.chunked_array([callsite_qnames, def_qnames])
     if len(combined) == 0:
         schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name, [])
-        return align_table_to_schema(pa.Table.from_pylist([]), schema)
+        return empty_table(schema)
 
     qname_array = distinct_sorted(combined)
     qname_ids = prefixed_hash_id([qname_array], prefix="qname")
-    out = pa.Table.from_arrays([qname_ids, qname_array], names=["qname_id", "qname"])
+    out_schema = pa.schema([("qname_id", pa.string()), ("qname", pa.string())])
+    out = table_from_arrays(
+        out_schema,
+        columns={"qname_id": qname_ids, "qname": qname_array},
+        num_rows=len(qname_array),
+    )
     tables = [out] if out.num_rows > 0 else []
     schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name, tables)
     return align_table_to_schema(out, schema)
@@ -184,7 +198,7 @@ def callsite_qname_candidates(
         or "callee_qnames" not in cst_callsites.column_names
     ):
         schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
-        return align_table_to_schema(pa.Table.from_pylist([]), schema)
+        return empty_table(schema)
 
     exploded = explode_list_column(
         cst_callsites,

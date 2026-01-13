@@ -11,8 +11,8 @@ import pyarrow.types as patypes
 
 from arrowdsl.core.context import DeterminismTier, ExecutionContext
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike, pc
-from arrowdsl.plan.join_specs import JoinOutputSpec, join_spec
-from arrowdsl.plan.ops import DedupeSpec, JoinSpec, SortKey
+from arrowdsl.plan.joins import JoinConfig, JoinOutputSpec, interval_join_candidates, join_spec
+from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions, JoinSpec, SortKey
 from arrowdsl.schema.arrays import const_array, set_or_append_column
 from schema_spec.specs import PROVENANCE_COLS
 
@@ -41,32 +41,6 @@ class ChunkPolicy:
 
 
 _NUMERIC_REGEX = r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$"
-
-
-@dataclass(frozen=True)
-class IntervalAlignOptions:
-    """Kernel-lane interval alignment configuration."""
-
-    mode: Literal["EXACT", "CONTAINED_BEST", "OVERLAP_BEST"] = "CONTAINED_BEST"
-    how: Literal["inner", "left"] = "inner"
-
-    left_path_col: str = "path"
-    left_start_col: str = "bstart"
-    left_end_col: str = "bend"
-
-    right_path_col: str = "path"
-    right_start_col: str = "bstart"
-    right_end_col: str = "bend"
-
-    select_left: tuple[str, ...] = ()
-    select_right: tuple[str, ...] = ()
-
-    tie_breakers: tuple[SortKey, ...] = ()
-
-    emit_match_meta: bool = True
-    match_kind_col: str = "match_kind"
-    match_score_col: str = "match_score"
-    right_suffix: str = "__r"
 
 
 @dataclass(frozen=True)
@@ -869,19 +843,18 @@ def _join_interval_candidates(
             *prepared.tie_breaker_cols,
         ]
     )
-    return apply_join(
+    join_config = JoinConfig.from_sequences(
+        left_keys=(prepared.left_key_col,),
+        right_keys=(prepared.right_key_col,),
+        left_output=left_join_cols,
+        right_output=right_join_cols,
+        output_suffix_for_right=cfg.right_suffix,
+    )
+    return interval_join_candidates(
         prepared.left,
         prepared.right,
-        spec=join_spec(
-            join_type="inner",
-            left_keys=(prepared.left_key_col,),
-            right_keys=(prepared.right_key_col,),
-            output=JoinOutputSpec(
-                left_output=left_join_cols,
-                right_output=right_join_cols,
-                output_suffix_for_right=cfg.right_suffix,
-            ),
-        ),
+        config=join_config,
+        join_type="inner",
         use_threads=True,
     )
 

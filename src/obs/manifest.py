@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from arrowdsl.core.interop import TableLike
+from arrowdsl.json_factory import JsonPolicy, dump_path
 from core_types import JsonDict, PathLike, ensure_path
 from obs.repro import collect_repro_info
 from obs.stats import schema_fingerprint, table_summary
@@ -110,10 +109,6 @@ class ManifestData:
     relationship_rules: Sequence[RelationshipRule] | None = None
     produced_relationship_output_names: Sequence[str] | None = None
     notes: JsonDict | None = None
-
-
-def _ensure_dir(path: Path) -> None:
-    path.mkdir(exist_ok=True, parents=True)
 
 
 def _dataset_record_from_table(
@@ -290,13 +285,6 @@ def write_manifest_json(
     str
         Path to the written JSON file.
     """
-    target = ensure_path(path)
-    _ensure_dir(target.parent)
-    if overwrite and target.exists():
-        target.unlink()
-
     payload = manifest.to_dict() if isinstance(manifest, Manifest) else manifest
-    with target.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False, sort_keys=True)
-
-    return str(target)
+    policy = JsonPolicy(pretty=True, sort_keys=True)
+    return dump_path(ensure_path(path), payload, policy=policy, overwrite=overwrite)

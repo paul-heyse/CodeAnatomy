@@ -7,6 +7,13 @@ from arrowdsl.schema.constraints import (
     required_non_null_mask,
 )
 from arrowdsl.schema.encoding import encoding_policy_from_fields, encoding_policy_from_spec
+from arrowdsl.schema.factories import (
+    empty_table,
+    rows_to_table,
+    table_from_arrays,
+    table_from_rows,
+    table_from_schema,
+)
 from arrowdsl.schema.infer import best_fit_type, infer_schema_from_tables
 from arrowdsl.schema.policy import SchemaPolicy
 from arrowdsl.schema.validation import (
@@ -25,6 +32,7 @@ __all__ = [
     "best_fit_type",
     "duplicate_key_rows",
     "duplicate_key_rows_plan",
+    "empty_table",
     "encoding_policy_from_fields",
     "encoding_policy_from_spec",
     "infer_schema_from_tables",
@@ -34,6 +42,10 @@ __all__ = [
     "missing_key_fields",
     "required_field_names",
     "required_non_null_mask",
+    "rows_to_table",
     "struct_type",
+    "table_from_arrays",
+    "table_from_rows",
+    "table_from_schema",
     "validate_table",
 ]

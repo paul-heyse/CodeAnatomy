@@ -5,13 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-import pyarrow as pa
 import pyarrow.dataset as ds
 from hamilton.function_modifiers import tag
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.io.parquet import (
+    NamedDatasetWriteConfig,
+    ParquetWriteOptions,
+    write_finalize_result_parquet,
+    write_named_datasets_parquet,
+)
 from arrowdsl.plan.query import open_dataset
+from arrowdsl.plan.stats import empty_scan_telemetry_table, scan_telemetry_table
 from core_types import JsonDict
 from cpg.artifacts import CpgBuildArtifacts
 from hamilton_pipeline.pipeline_types import (
@@ -30,12 +36,6 @@ from obs.stats import column_stats_table, dataset_stats_table
 from relspec.compiler import CompiledOutput
 from relspec.registry import ContractCatalog, DatasetLocation, RelationshipRegistry
 from schema_spec.system import dataset_spec_from_schema, make_dataset_spec
-from storage.parquet import (
-    NamedDatasetWriteConfig,
-    ParquetWriteOptions,
-    write_finalize_result_parquet,
-    write_named_datasets_parquet,
-)
 
 # -----------------------
 # Public CPG outputs
@@ -338,22 +338,7 @@ def relspec_scan_telemetry(
         Telemetry table with fragment counts and estimated rows.
     """
     if not persist_relspec_input_datasets:
-        return pa.Table.from_arrays(
-            [
-                pa.array([], type=pa.string()),
-                pa.array([], type=pa.int64()),
-                pa.array([], type=pa.int64()),
-                pa.array([], type=pa.int64()),
-                pa.array([], type=pa.list_(pa.string())),
-            ],
-            names=[
-                "dataset",
-                "fragment_count",
-                "row_group_count",
-                "estimated_rows",
-                "file_hints",
-            ],
-        )
+        return empty_scan_telemetry_table()
 
     rows: list[dict[str, object]] = []
     for name, loc in persist_relspec_input_datasets.items():
@@ -378,7 +363,7 @@ def relspec_scan_telemetry(
                 "file_hints": list(telemetry.file_hints),
             }
         )
-    return pa.Table.from_pylist(rows)
+    return scan_telemetry_table(rows)
 
 
 # -----------------------

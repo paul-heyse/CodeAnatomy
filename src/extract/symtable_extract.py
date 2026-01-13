@@ -10,16 +10,17 @@ from typing import Literal, Required, TypedDict, Unpack, cast, overload
 import pyarrow as pa
 
 from arrowdsl.compute.expr_specs import MaskedHashExprSpec
-from arrowdsl.core.context import ExecutionContext, OrderingLevel, RuntimeProfile
+from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
 from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, pc
 from arrowdsl.plan.joins import JoinConfig, left_join
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.plan.rows import plan_from_rows
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
+from arrowdsl.schema.builders import table_from_arrays
+from arrowdsl.schema.encoding import normalize_dictionaries
 from arrowdsl.schema.nested import LargeListViewAccumulator
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
-from arrowdsl.schema.tables import table_from_arrays
 from extract.common import file_identity_row, iter_contexts, text_from_file_ctx
 from extract.file_context import FileContext
 from extract.hash_specs import (
@@ -470,11 +471,12 @@ class _FuncPartsAccumulator:
             "nonlocals": nonlocals,
             "frees": frees,
         }
-        return table_from_arrays(
+        table = table_from_arrays(
             FUNC_PARTS_SCHEMA,
             columns=columns,
             num_rows=len(self.scope_table_ids),
         )
+        return normalize_dictionaries(table)
 
 
 def _build_func_parameters(acc: _FuncPartsAccumulator) -> ArrayLike:
@@ -722,7 +724,7 @@ def extract_symtable(
         Tables for scopes, symbols, and namespace edges.
     """
     options = options or SymtableExtractOptions()
-    ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    ctx = ctx or execution_context_factory("default")
     metadata_specs = _symtable_metadata_specs(options)
 
     scope_rows: list[dict[str, object]] = []
@@ -774,7 +776,7 @@ def extract_symtable_plans(
         Plan bundle keyed by symtable outputs.
     """
     options = options or SymtableExtractOptions()
-    ctx = ctx or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    ctx = ctx or execution_context_factory("default")
 
     scope_rows: list[dict[str, object]] = []
     symbol_rows: list[dict[str, object]] = []
@@ -1218,7 +1220,7 @@ def extract_symtables_table(
     repo_files = kwargs["repo_files"]
     options = kwargs.get("options") or SymtableExtractOptions()
     file_contexts = kwargs.get("file_contexts")
-    exec_ctx = kwargs.get("ctx") or ExecutionContext(runtime=RuntimeProfile(name="DEFAULT"))
+    exec_ctx = kwargs.get("ctx") or execution_context_factory("default")
     prefer_reader = kwargs.get("prefer_reader", False)
     plans = extract_symtable_plans(
         repo_files,

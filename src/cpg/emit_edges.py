@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
+from arrowdsl.compute.masks import valid_mask_expr
 from arrowdsl.compute.scalars import null_expr, scalar_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import hash_expression
@@ -179,14 +180,9 @@ def emit_edges_plan(
     base_id = hash_expression(base_spec, available=available)
     full_id = hash_expression(full_spec, available=available)
 
-    has_span = ensure_expression(
-        pc.and_(
-            pc.is_valid(pc.field("path")),
-            pc.and_(pc.is_valid(pc.field("bstart")), pc.is_valid(pc.field("bend"))),
-        )
-    )
+    has_span = valid_mask_expr(["path", "bstart", "bend"], available=available)
     edge_id = ensure_expression(pc.if_else(has_span, full_id, base_id))
-    valid = ensure_expression(pc.and_(pc.is_valid(pc.field("src")), pc.is_valid(pc.field("dst"))))
+    valid = valid_mask_expr(["src", "dst"], available=available)
     edge_id = ensure_expression(pc.if_else(valid, edge_id, null_expr(pa.string())))
 
     default_score = 1.0 if spec.origin == "scip" else 0.5

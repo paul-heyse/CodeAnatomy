@@ -36,6 +36,19 @@ class PlanOp(Protocol):
         ...
 
 
+def scan_ordering_effect(ctx: ExecutionContext) -> OrderingEffect:
+    """Return the default scan ordering effect for a context.
+
+    Returns
+    -------
+    OrderingEffect
+        Ordering effect implied by the execution context.
+    """
+    if ctx.runtime.scan.implicit_ordering or ctx.runtime.scan.require_sequenced_output:
+        return OrderingEffect.IMPLICIT
+    return OrderingEffect.UNORDERED
+
+
 @runtime_checkable
 class KernelOp(Protocol):
     """Protocol for kernel-lane operations on tables."""
@@ -323,6 +336,32 @@ class DedupeSpec:
     strategy: DedupeStrategy = "KEEP_FIRST_AFTER_SORT"
 
 
+@dataclass(frozen=True)
+class IntervalAlignOptions:
+    """Interval alignment configuration."""
+
+    mode: Literal["EXACT", "CONTAINED_BEST", "OVERLAP_BEST"] = "CONTAINED_BEST"
+    how: Literal["inner", "left"] = "inner"
+
+    left_path_col: str = "path"
+    left_start_col: str = "bstart"
+    left_end_col: str = "bend"
+
+    right_path_col: str = "path"
+    right_start_col: str = "bstart"
+    right_end_col: str = "bend"
+
+    select_left: tuple[str, ...] = ()
+    select_right: tuple[str, ...] = ()
+
+    tie_breakers: tuple[SortKey, ...] = ()
+
+    emit_match_meta: bool = True
+    match_kind_col: str = "match_kind"
+    match_score_col: str = "match_score"
+    right_suffix: str = "__r"
+
+
 type JoinType = Literal[
     "inner",
     "left outer",
@@ -409,6 +448,7 @@ __all__ = [
     "DedupeSpec",
     "DedupeStrategy",
     "FilterOp",
+    "IntervalAlignOptions",
     "JoinOp",
     "JoinSpec",
     "JoinType",
@@ -419,4 +459,5 @@ __all__ = [
     "ScanOp",
     "SortKey",
     "TableSourceOp",
+    "scan_ordering_effect",
 ]

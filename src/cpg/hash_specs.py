@@ -5,16 +5,16 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from arrowdsl.core.ids_registry import hash_spec
+from arrowdsl.core.ids_registry import hash_spec_factory
 
 if TYPE_CHECKING:
     from arrowdsl.core.ids import HashSpec
 
-EDGE_ID_BASE = hash_spec(
+EDGE_ID_BASE = hash_spec_factory(
     prefix="edge",
     cols=("src", "dst"),
 )
-EDGE_ID_SPAN = hash_spec(
+EDGE_ID_SPAN = hash_spec_factory(
     prefix="edge",
     cols=("src", "dst", "path", "bstart", "bend"),
 )

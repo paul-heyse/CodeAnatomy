@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import cast
@@ -10,11 +9,13 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
+from arrowdsl.compute.options import cast_expr
 from arrowdsl.compute.predicates import null_if_empty_or_zero
 from arrowdsl.compute.scalars import null_expr, scalar_expr
 from arrowdsl.compute.udfs import ensure_json_udf
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, DataTypeLike, ensure_expression, pc
+from arrowdsl.json_factory import JsonPolicy, dumps_text
 from arrowdsl.plan.plan import Plan
 from cpg.specs import (
     PropFieldSpec,
@@ -55,7 +56,7 @@ def _entity_id_expr(
     for col in cols:
         if col not in available:
             continue
-        expr = ensure_expression(pc.cast(pc.field(col), pa.string(), safe=False))
+        expr = cast_expr(pc.field(col), pa.string(), safe=False)
         expr = null_if_empty_or_zero(expr)
         exprs.append(expr)
     if not exprs:
@@ -96,9 +97,10 @@ def _null_value_exprs() -> dict[str, ComputeExpression]:
 
 def _json_literal_expr(value: object) -> ComputeExpression:
     try:
-        encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        policy = JsonPolicy(sort_keys=True)
+        encoded = dumps_text(value, policy=policy)
     except (TypeError, ValueError):
-        encoded = json.dumps(str(value), ensure_ascii=False)
+        encoded = dumps_text(str(value))
     return scalar_expr(encoded, dtype=pa.string())
 
 
@@ -110,7 +112,7 @@ def _serialize_json_expr(
 ) -> ComputeExpression:
     _ = ctx
     if dtype is None or patypes.is_string(dtype) or patypes.is_large_string(dtype):
-        return ensure_expression(pc.cast(expr, pa.string(), safe=False))
+        return cast_expr(expr, pa.string(), safe=False)
     func_name = ensure_json_udf(dtype)
     return ensure_expression(pc.call_function(func_name, [expr]))
 
@@ -123,7 +125,7 @@ def _json_value_expr(
 ) -> PropValueExpr:
     if dtype is None or patypes.is_string(dtype) or patypes.is_large_string(dtype):
         return PropValueExpr(
-            expr=ensure_expression(pc.cast(expr, pa.string(), safe=False)),
+            expr=cast_expr(expr, pa.string(), safe=False),
             value_type="json",
         )
     if patypes.is_list(dtype):
@@ -132,7 +134,7 @@ def _json_value_expr(
         target_dtype = dtype
         if not patypes.is_large_list(dtype):
             target_dtype = pa.large_list(inner)
-        coerced = ensure_expression(pc.cast(expr, target_dtype, safe=False))
+        coerced = cast_expr(expr, target_dtype, safe=False)
         return PropValueExpr(
             expr=coerced,
             value_type="json",
@@ -188,7 +190,7 @@ def _value_expr(
         return _json_value_expr(expr, dtype=dtype, ctx=ctx)
 
     return PropValueExpr(
-        expr=ensure_expression(pc.cast(expr, _value_dtype(value_type), safe=False)),
+        expr=cast_expr(expr, _value_dtype(value_type), safe=False),
         value_type=value_type,
     )
 
@@ -215,7 +217,7 @@ def _expand_value_struct(
     if defer_json:
         value_json = _serialize_json_expr(value_json, dtype=json_dtype, ctx=ctx)
     else:
-        value_json = ensure_expression(pc.cast(value_json, pa.string(), safe=False))
+        value_json = cast_expr(value_json, pa.string(), safe=False)
 
     exprs: list[ComputeExpression] = [
         pc.field("entity_kind"),

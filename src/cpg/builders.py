@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import cast
 
 import pyarrow as pa
 
+from arrowdsl.compute.ids import prefixed_hash_id
 from arrowdsl.compute.kernels import ChunkPolicy
-from arrowdsl.compute.predicates import FilterSpec, IsNull, Not
+from arrowdsl.compute.masks import valid_mask_array
+from arrowdsl.compute.predicates import FilterSpec, predicate_spec
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.ids import iter_arrays, prefixed_hash_id
+from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
@@ -19,16 +21,18 @@ from arrowdsl.core.interop import (
     TableLike,
     pc,
 )
-from arrowdsl.plan.plan import PlanSpec
+from arrowdsl.json_factory import JsonPolicy, dumps_text
+from arrowdsl.plan.runner import run_plan
 from arrowdsl.schema.arrays import const_array
 from arrowdsl.schema.builders import (
     maybe_dictionary,
     pick_first,
     resolve_float_col,
     resolve_string_col,
+    table_from_arrays,
     table_from_schema,
 )
-from arrowdsl.schema.tables import table_from_arrays
+from arrowdsl.schema.factories import rows_to_table
 from cpg.catalog import PlanCatalog, PlanSource, resolve_plan_source
 from cpg.kinds import EntityKind
 from cpg.plan_helpers import ensure_plan
@@ -50,7 +54,13 @@ type PropRow = dict[str, object]
 
 def _materialize_source(source: PlanSource, *, ctx: ExecutionContext) -> TableLike:
     plan = ensure_plan(source, ctx=ctx)
-    return PlanSpec.from_plan(plan).to_table(ctx=ctx)
+    result = run_plan(
+        plan,
+        ctx=ctx,
+        prefer_reader=False,
+        attach_ordering_metadata=True,
+    )
+    return cast("TableLike", result.value)
 
 
 def _row_id(value: object | None) -> str | None:
@@ -92,12 +102,9 @@ def _edge_id_array(
         [kind_arr, inputs.src, inputs.dst, inputs.path, inputs.bstart, inputs.bend],
         prefix="edge",
     )
-    has_span = pc.and_(
-        pc.is_valid(inputs.path),
-        pc.and_(pc.is_valid(inputs.bstart), pc.is_valid(inputs.bend)),
-    )
+    has_span = valid_mask_array([inputs.path, inputs.bstart, inputs.bend])
     edge_id = pc.if_else(has_span, full_id, base_id)
-    valid = pc.and_(pc.is_valid(inputs.src), pc.is_valid(inputs.dst))
+    valid = valid_mask_array([inputs.src, inputs.dst])
     return pc.if_else(valid, edge_id, pa.scalar(None, type=pa.string()))
 
 
@@ -194,7 +201,10 @@ def emit_edges_from_relation(
         edge_schema=edge_schema,
     )
     out = table_from_schema(edge_schema, columns=columns, num_rows=n)
-    predicate = Not(IsNull("edge_id"))
+    predicate = predicate_spec(
+        "not",
+        predicate=predicate_spec("is_null", col="edge_id"),
+    )
     filtered = FilterSpec(predicate).apply_kernel(out)
     return ChunkPolicy().apply(filtered)
 
@@ -414,9 +424,10 @@ def _prop_row(
         rec["value_str"] = value
     else:
         try:
-            rec["value_json"] = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+            policy = JsonPolicy(sort_keys=True)
+            rec["value_json"] = dumps_text(value, policy=policy)
         except (TypeError, ValueError):
-            rec["value_json"] = json.dumps(str(value), ensure_ascii=False)
+            rec["value_json"] = dumps_text(str(value))
     return rec
 
 
@@ -462,7 +473,7 @@ class PropBuilder:
                 table=table,
                 options=options,
             )
-        out = pa.Table.from_pylist(rows, schema=self._prop_schema)
+        out = rows_to_table(rows, self._prop_schema)
         return ChunkPolicy().apply(out)
 
     @staticmethod

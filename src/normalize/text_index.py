@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-ENC_UTF8 = 1
-ENC_UTF16 = 2
-ENC_UTF32 = 3
-DEFAULT_POSITION_ENCODING = ENC_UTF32
-VALID_POSITION_ENCODINGS = {ENC_UTF8, ENC_UTF16, ENC_UTF32}
+from arrowdsl.compute.position import (
+    DEFAULT_POSITION_ENCODING,
+    ENC_UTF8,
+    ENC_UTF16,
+    ENC_UTF32,
+    normalize_position_encoding,
+)
 
 
 @dataclass(frozen=True)
@@ -69,33 +71,6 @@ def file_index(
     if isinstance(path, str):
         return repo_index.by_path.get(path)
     return None
-
-
-def normalize_position_encoding(value: object | None) -> int:
-    """Normalize position encoding values to SCIP enum integers.
-
-    Returns
-    -------
-    int
-        Normalized encoding enum value.
-    """
-    encoding = DEFAULT_POSITION_ENCODING
-    if value is None:
-        return encoding
-    if isinstance(value, int):
-        return value if value in VALID_POSITION_ENCODINGS else encoding
-    if isinstance(value, str):
-        s = value.strip().upper()
-        if s.isdigit():
-            v = int(s)
-            return v if v in VALID_POSITION_ENCODINGS else encoding
-        if "UTF8" in s:
-            encoding = ENC_UTF8
-        elif "UTF16" in s:
-            encoding = ENC_UTF16
-        elif "UTF32" in s:
-            encoding = ENC_UTF32
-    return encoding
 
 
 __all__ = [

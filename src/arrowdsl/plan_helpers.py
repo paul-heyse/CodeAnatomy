@@ -8,6 +8,7 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.dataset as ds
 
+from arrowdsl.compute.macros import ColumnOrNullExpr
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, OrderingLevel
 from arrowdsl.core.interop import (
     ComputeExpression,
@@ -18,17 +19,19 @@ from arrowdsl.core.interop import (
     pc,
 )
 from arrowdsl.finalize.finalize import Contract
+from arrowdsl.plan.joins import code_unit_meta_config, left_join, path_meta_config
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.plan.runner import run_plan
 from arrowdsl.plan.source import DatasetSource, PlanSource, plan_from_source
-from arrowdsl.schema.schema import (
-    EncodingSpec,
-    empty_table,
-    encode_columns,
-    encode_expression,
-    projection_for_schema,
+from arrowdsl.schema.alignment import (
+    align_plan,
+    encode_plan,
+    encode_table,
+    encoding_columns_from_metadata,
+    encoding_projection,
 )
+from arrowdsl.schema.schema import empty_table
 from arrowdsl.schema.structs import flatten_struct_field
 
 
@@ -58,10 +61,14 @@ def column_or_null_expr(
     ComputeExpression
         Expression for the field or a typed null literal.
     """
-    expr = pc.field(name) if name in available else pc.scalar(pa.scalar(None, type=dtype))
-    if cast:
-        return ensure_expression(pc.cast(expr, dtype, safe=safe))
-    return ensure_expression(expr)
+    spec = ColumnOrNullExpr(
+        name=name,
+        dtype=dtype,
+        available=frozenset(available),
+        cast=cast,
+        safe=safe,
+    )
+    return spec.to_expression()
 
 
 def coalesce_expr(
@@ -94,44 +101,6 @@ def coalesce_expr(
     if len(exprs) == 1:
         return exprs[0]
     return ensure_expression(pc.coalesce(*exprs))
-
-
-def encoding_projection(
-    columns: Sequence[str],
-    *,
-    available: Sequence[str],
-) -> tuple[list[ComputeExpression], list[str]]:
-    """Return projection expressions to apply dictionary encoding.
-
-    Returns
-    -------
-    tuple[list[ComputeExpression], list[str]]
-        Expressions and column names for encoding projection.
-    """
-    encode_set = set(columns)
-    expressions: list[ComputeExpression] = []
-    names: list[str] = []
-    for name in available:
-        expr = encode_expression(name) if name in encode_set else pc.field(name)
-        expressions.append(expr)
-        names.append(name)
-    return expressions, names
-
-
-def encoding_columns_from_metadata(schema: SchemaLike) -> list[str]:
-    """Return columns marked for dictionary encoding via field metadata.
-
-    Returns
-    -------
-    list[str]
-        Column names marked for dictionary encoding.
-    """
-    encoding_columns: list[str] = []
-    for field in schema:
-        meta = field.metadata or {}
-        if meta.get(b"encoding") == b"dictionary":
-            encoding_columns.append(field.name)
-    return encoding_columns
 
 
 def project_columns(
@@ -212,6 +181,73 @@ def plan_source(
     return plan_from_source(source, ctx=ctx, columns=columns, label=label)
 
 
+def code_unit_meta_join(
+    plan: Plan,
+    code_units: Plan,
+    *,
+    ctx: ExecutionContext,
+) -> Plan:
+    """Left-join code-unit metadata (file_id/path) onto a plan.
+
+    Returns
+    -------
+    Plan
+        Plan with code unit metadata columns appended.
+    """
+    config = code_unit_meta_config(plan.schema(ctx=ctx).names, code_units.schema(ctx=ctx).names)
+    if config is None:
+        return plan
+    joined = left_join(plan, code_units, config=config, ctx=ctx)
+    if isinstance(joined, Plan):
+        return joined
+    return Plan.table_source(joined)
+
+
+def path_meta_join(
+    plan: Plan,
+    repo_files: Plan,
+    *,
+    ctx: ExecutionContext,
+    path_key: str = "path",
+    output_suffix_for_right: str = "_repo",
+) -> Plan:
+    """Left-join path metadata (file_id) onto a plan.
+
+    Returns
+    -------
+    Plan
+        Plan with file_id metadata columns appended.
+    """
+    config = path_meta_config(
+        plan.schema(ctx=ctx).names,
+        repo_files.schema(ctx=ctx).names,
+        key=path_key,
+        output_suffix_for_right=output_suffix_for_right,
+    )
+    if config is None:
+        return plan
+    joined = left_join(plan, repo_files, config=config, ctx=ctx)
+    out = joined if isinstance(joined, Plan) else Plan.table_source(joined)
+    file_id_key = "file_id"
+    right_col = (
+        f"{file_id_key}{output_suffix_for_right}"
+        if output_suffix_for_right
+        else file_id_key
+    )
+    available = set(out.schema(ctx=ctx).names)
+    if right_col not in available:
+        return out
+    if file_id_key in available:
+        file_id_expr = ensure_expression(pc.coalesce(pc.field(file_id_key), pc.field(right_col)))
+    else:
+        file_id_expr = pc.field(right_col)
+    out = set_or_append_column(out, name=file_id_key, expr=file_id_expr, ctx=ctx)
+    if right_col != file_id_key:
+        keep = [col for col in out.schema(ctx=ctx).names if col != right_col]
+        out = out.project([pc.field(col) for col in keep], keep, ctx=ctx)
+    return out
+
+
 def ensure_plan(
     source: PlanSource,
     *,
@@ -252,31 +288,6 @@ def empty_plan(schema: SchemaLike, *, label: str = "") -> Plan:
         Plan with an empty table source.
     """
     return Plan.table_source(empty_table(schema), label=label)
-
-
-def align_plan(plan: Plan, *, schema: SchemaLike, ctx: ExecutionContext) -> Plan:
-    """Align a plan to a target schema via projection.
-
-    Returns
-    -------
-    Plan
-        Plan projecting/casting to the schema.
-    """
-    available = plan.schema(ctx=ctx).names
-    exprs, names = projection_for_schema(schema, available=available, safe_cast=ctx.safe_cast)
-    return plan.project(exprs, names, ctx=ctx)
-
-
-def encode_plan(plan: Plan, *, columns: Sequence[str], ctx: ExecutionContext) -> Plan:
-    """Return a plan with dictionary encoding applied.
-
-    Returns
-    -------
-    Plan
-        Plan with dictionary-encoded columns.
-    """
-    exprs, names = encoding_projection(columns, available=plan.schema(ctx=ctx).names)
-    return plan.project(exprs, names, ctx=ctx)
 
 
 def set_or_append_column(
@@ -372,26 +383,13 @@ def assert_schema_metadata(table: TableLike, *, schema: SchemaLike) -> None:
         raise ValueError(msg)
 
 
-def encode_table(table: TableLike, *, columns: Sequence[str]) -> TableLike:
-    """Dictionary-encode specified string columns.
-
-    Returns
-    -------
-    TableLike
-        Table with encoded columns.
-    """
-    if not columns:
-        return table
-    specs = tuple(EncodingSpec(column=col) for col in columns)
-    return encode_columns(table, specs=specs)
-
-
 __all__ = [
     "PlanSource",
     "align_plan",
     "align_table_to_schema",
     "assert_schema_metadata",
     "coalesce_expr",
+    "code_unit_meta_join",
     "column_or_null_expr",
     "empty_plan",
     "encode_plan",
@@ -402,6 +400,7 @@ __all__ = [
     "finalize_context_for_plan",
     "finalize_plan",
     "flatten_struct_field",
+    "path_meta_join",
     "plan_source",
     "project_columns",
     "project_to_schema",

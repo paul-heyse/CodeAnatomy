@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Literal
+from typing import Literal, cast
 
 import pyarrow as pa
-from pyarrow import acero
 
 from arrowdsl.compute.kernels import canonical_sort as _canonical_sort
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.ops import SortKey
-from arrowdsl.plan.plan import Plan, PlanSpec
+from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.runner import run_plan as run_plan_core
+from arrowdsl.plan.runner import run_plan_streamable as run_plan_streamable_core
 
 
 def canonical_sort(
@@ -30,15 +31,29 @@ def canonical_sort(
     return _canonical_sort(table, sort_keys=keys)
 
 
-def run_plan(decl: acero.Declaration, *, use_threads: bool) -> pa.Table:
-    """Execute an Acero declaration as a table.
+def run_plan(plan: Plan, *, ctx: ExecutionContext) -> TableLike:
+    """Execute a plan as a table with canonical metadata handling.
 
     Returns
     -------
-    pa.Table
-        Materialized table from the declaration.
+    TableLike
+        Materialized table from the plan.
+
+    Raises
+    ------
+    TypeError
+        Raised when plan execution yields a reader instead of a table.
     """
-    return decl.to_table(use_threads=use_threads)
+    result = run_plan_core(
+        plan,
+        ctx=ctx,
+        prefer_reader=False,
+        attach_ordering_metadata=True,
+    )
+    if isinstance(result.value, pa.RecordBatchReader):
+        msg = "Expected table result from run_plan."
+        raise TypeError(msg)
+    return cast("TableLike", result.value)
 
 
 def run_plan_streamable(
@@ -53,10 +68,7 @@ def run_plan_streamable(
     RecordBatchReaderLike | TableLike
         Streaming reader when possible, otherwise a table.
     """
-    spec = PlanSpec.from_plan(plan)
-    if spec.pipeline_breakers:
-        return spec.to_table(ctx=ctx)
-    return spec.to_reader(ctx=ctx)
+    return run_plan_streamable_core(plan, ctx=ctx, attach_ordering_metadata=True)
 
 
 __all__ = ["canonical_sort", "run_plan", "run_plan_streamable"]

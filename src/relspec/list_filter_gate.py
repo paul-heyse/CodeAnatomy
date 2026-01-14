@@ -49,6 +49,24 @@ def _validate_in_rhs(
     param_policy: ParamTablePolicy,
     policy: ListFilterGatePolicy,
 ) -> None:
+    """Validate the right-hand side of an IN expression.
+
+    Parameters
+    ----------
+    rhs
+        Right-hand side payload from a SQLGlot IN expression.
+    rule_name
+        Rule name used in diagnostics.
+    param_policy
+        Param table policy for allowed sources.
+    policy
+        List-filter validation policy.
+
+    Raises
+    ------
+    ListFilterGateError
+        Raised when list-filter validation fails.
+    """
     if isinstance(rhs, (exp.Subquery, exp.Select)):
         if _subquery_is_from_param_table(
             rhs,
@@ -83,6 +101,22 @@ def _validate_in_literals(
     rule_name: str,
     policy: ListFilterGatePolicy,
 ) -> None:
+    """Validate literal IN-list usage against policy settings.
+
+    Parameters
+    ----------
+    items
+        Literal expressions used in the IN list.
+    rule_name
+        Rule name used in diagnostics.
+    policy
+        List-filter validation policy.
+
+    Raises
+    ------
+    ListFilterGateError
+        Raised when literal IN-list usage violates policy.
+    """
     lit_count = _literal_count(items)
     if _allow_small_literal_inlist(policy, lit_count):
         return
@@ -95,12 +129,38 @@ def _validate_in_literals(
 
 
 def _allow_small_literal_inlist(policy: ListFilterGatePolicy, lit_count: int) -> bool:
+    """Return True when a small literal IN-list is allowed.
+
+    Parameters
+    ----------
+    policy
+        List-filter validation policy.
+    lit_count
+        Number of literal items in the IN list.
+
+    Returns
+    -------
+    bool
+        ``True`` when the literal list is within the allowed size.
+    """
     if not policy.allow_small_literal_inlist_max:
         return False
     return lit_count <= policy.allow_small_literal_inlist_max
 
 
 def _in_rhs(node: exp.In) -> object | None:
+    """Extract the IN expression right-hand side from SQLGlot args.
+
+    Parameters
+    ----------
+    node
+        SQLGlot IN expression.
+
+    Returns
+    -------
+    object | None
+        Extracted RHS payload when present.
+    """
     if "query" in node.args:
         return node.args.get("query")
     if "expression" in node.args:
@@ -111,6 +171,18 @@ def _in_rhs(node: exp.In) -> object | None:
 
 
 def _literal_count(items: list[Expression]) -> int:
+    """Count literal expressions in an IN-list.
+
+    Parameters
+    ----------
+    items
+        Expressions to inspect.
+
+    Returns
+    -------
+    int
+        Number of literal expressions.
+    """
     return sum(1 for expr in items if isinstance(expr, exp.Literal))
 
 
@@ -120,10 +192,30 @@ def _subquery_is_from_param_table(
     param_schema: str,
     param_prefix: str,
 ) -> bool:
+    """Check whether a subquery sources from param tables.
+
+    Parameters
+    ----------
+    query
+        SQLGlot query expression to inspect.
+    param_schema
+        Allowed parameter schema name.
+    param_prefix
+        Allowed parameter table prefix.
+
+    Returns
+    -------
+    bool
+        ``True`` when the query uses only param tables.
+    """
     for table in query.find_all(exp.Table):
         schema = table.args.get("db")
         name = table.name
-        if schema == param_schema and name.startswith(param_prefix):
+        if (
+            isinstance(schema, str)
+            and (schema == param_schema or schema.startswith(f"{param_schema}_"))
+            and name.startswith(param_prefix)
+        ):
             return True
     return False
 

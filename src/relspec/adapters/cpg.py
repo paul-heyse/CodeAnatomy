@@ -94,6 +94,13 @@ class CpgRuleAdapter(RuleAdapter):
 
 @cache
 def _template_catalog() -> tuple[tuple[RuleTemplateSpec, ...], tuple[RuleDiagnostic, ...]]:
+    """Build the cached catalog of CPG templates and diagnostics.
+
+    Returns
+    -------
+    tuple[tuple[RuleTemplateSpec, ...], tuple[RuleDiagnostic, ...]]
+        Template specs and diagnostics for the CPG adapter.
+    """
     specs: list[RuleTemplateSpec] = []
     diagnostics: list[RuleDiagnostic] = []
     for spec in RULE_TEMPLATE_SPECS:
@@ -115,6 +122,18 @@ def _template_catalog() -> tuple[tuple[RuleTemplateSpec, ...], tuple[RuleDiagnos
 def _template_outputs(
     spec: CpgRuleTemplateSpec,
 ) -> tuple[tuple[str, ...], tuple[RuleDiagnostic, ...]]:
+    """Expand a template spec and collect output diagnostics.
+
+    Parameters
+    ----------
+    spec
+        CPG rule template specification.
+
+    Returns
+    -------
+    tuple[tuple[str, ...], tuple[RuleDiagnostic, ...]]
+        Output names and any diagnostics from expansion.
+    """
     try:
         expanded = expand_rule_templates((spec,))
     except (KeyError, TypeError, ValueError) as exc:
@@ -136,6 +155,18 @@ def _template_outputs(
 
 
 def _template_metadata(spec: CpgRuleTemplateSpec) -> Mapping[str, str]:
+    """Build metadata for a CPG rule template.
+
+    Parameters
+    ----------
+    spec
+        CPG rule template specification.
+
+    Returns
+    -------
+    Mapping[str, str]
+        Metadata mapping for the template.
+    """
     metadata: dict[str, str] = {"spec_name": str(getattr(spec, "name", ""))}
     factory = getattr(spec, "factory", None)
     if factory:
@@ -151,6 +182,18 @@ def _template_metadata(spec: CpgRuleTemplateSpec) -> Mapping[str, str]:
 
 
 def _rule_from_spec(spec: RuleDefinitionSpec) -> RuleDefinition:
+    """Convert a CPG rule definition spec to a central RuleDefinition.
+
+    Parameters
+    ----------
+    spec
+        Rule definition spec from CPG registry.
+
+    Returns
+    -------
+    RuleDefinition
+        Central rule definition.
+    """
     payload = RelationshipPayload(
         output_dataset=spec.output_dataset or spec.name,
         contract_name=spec.contract_name,
@@ -183,6 +226,18 @@ def _rule_from_spec(spec: RuleDefinitionSpec) -> RuleDefinition:
 
 
 def _evidence_payload(spec: RuleDefinitionSpec) -> EvidenceSpec | None:
+    """Convert evidence config from a rule definition spec.
+
+    Parameters
+    ----------
+    spec
+        Rule definition spec containing evidence settings.
+
+    Returns
+    -------
+    EvidenceSpec | None
+        Evidence spec for centralized rules.
+    """
     if spec.evidence is None:
         return None
     return EvidenceSpec(
@@ -193,6 +248,18 @@ def _evidence_payload(spec: RuleDefinitionSpec) -> EvidenceSpec | None:
 
 
 def _edge_emit_payload(edge: EdgeDefinitionSpec | None) -> EdgeEmitPayload | None:
+    """Convert an edge definition to an emit payload.
+
+    Parameters
+    ----------
+    edge
+        Edge definition spec.
+
+    Returns
+    -------
+    EdgeEmitPayload | None
+        Emit payload for edge outputs.
+    """
     if edge is None:
         return None
     return EdgeEmitPayload(

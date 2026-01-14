@@ -90,6 +90,20 @@ def compile_graph_plan(
 
 
 def _union_plans(plans: Sequence[IbisPlan], *, label: str) -> IbisPlan:
+    """Union a sequence of Ibis plans into a single plan.
+
+    Parameters
+    ----------
+    plans
+        Plans to union.
+    label
+        Label used for empty plan fallbacks.
+
+    Returns
+    -------
+    IbisPlan
+        Unioned plan with unordered ordering metadata.
+    """
     if not plans:
         _ = label
         empty = ibis.memtable(pa.table({}))
@@ -102,6 +116,18 @@ def _union_plans(plans: Sequence[IbisPlan], *, label: str) -> IbisPlan:
 
 
 def _align_union_tables(tables: Sequence[IbisTable]) -> list[IbisTable]:
+    """Align tables to a shared schema order for union.
+
+    Parameters
+    ----------
+    tables
+        Tables to align.
+
+    Returns
+    -------
+    list[IbisTable]
+        Tables with matching column order and types.
+    """
     names: list[str] = []
     types: dict[str, DataType] = {}
     for table in tables:
@@ -163,6 +189,20 @@ def order_rules(
 def _ready_rules(
     pending: Sequence[RelationshipRule], evidence: EvidenceCatalog
 ) -> list[RelationshipRule]:
+    """Return rules whose evidence dependencies are satisfied.
+
+    Parameters
+    ----------
+    pending
+        Rules not yet scheduled.
+    evidence
+        Evidence catalog used for dependency checks.
+
+    Returns
+    -------
+    list[RelationshipRule]
+        Rules ready to be scheduled.
+    """
     ready: list[RelationshipRule] = []
     for rule in pending:
         inputs = tuple(ref.name for ref in rule.inputs)
@@ -172,6 +212,15 @@ def _ready_rules(
 
 
 def _register_rule_output(evidence: EvidenceCatalog, rule: RelationshipRule) -> None:
+    """Register a rule's output schema or source in evidence.
+
+    Parameters
+    ----------
+    evidence
+        Evidence catalog to update.
+    rule
+        Relationship rule whose output is registered.
+    """
     output_schema = _virtual_output_schema(rule)
     if output_schema is not None:
         evidence.register(rule.output_dataset, output_schema)
@@ -180,6 +229,18 @@ def _register_rule_output(evidence: EvidenceCatalog, rule: RelationshipRule) -> 
 
 
 def _virtual_output_schema(rule: RelationshipRule) -> SchemaLike | None:
+    """Resolve a virtual output schema for a relationship rule.
+
+    Parameters
+    ----------
+    rule
+        Relationship rule with optional contract metadata.
+
+    Returns
+    -------
+    SchemaLike | None
+        Schema for the rule output when available.
+    """
     if rule.contract_name:
         dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(rule.contract_name)
         if dataset_spec is not None:
@@ -192,6 +253,18 @@ def _virtual_output_schema(rule: RelationshipRule) -> SchemaLike | None:
 def _central_evidence(
     spec: RelationshipEvidenceSpec | None,
 ) -> CentralEvidenceSpec | None:
+    """Convert relationship evidence spec to central evidence spec.
+
+    Parameters
+    ----------
+    spec
+        Relationship-level evidence specification.
+
+    Returns
+    -------
+    CentralEvidenceSpec | None
+        Converted evidence spec when provided.
+    """
     if spec is None:
         return None
     return CentralEvidenceSpec(

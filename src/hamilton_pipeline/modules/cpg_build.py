@@ -83,6 +83,7 @@ from schema_spec.specs import ArrowFieldSpec, call_span_bundle, span_bundle
 from schema_spec.system import (
     GLOBAL_SCHEMA_REGISTRY,
     ContractCatalogSpec,
+    DataFusionScanOptions,
     DedupeSpecSpec,
     SchemaRegistry,
     SortKeySpec,
@@ -106,6 +107,44 @@ if TYPE_CHECKING:
 # -----------------------------
 
 SCHEMA_VERSION = 1
+_HOT_DATAFUSION_INPUTS = frozenset(
+    {
+        "callsite_qname_candidates",
+        "dim_qualified_names",
+        "scip_occurrences",
+    }
+)
+
+
+@dataclass(frozen=True)
+class RelspecResolverContext:
+    """Bundled inputs for relationship resolver selection."""
+
+    ctx: ExecutionContext
+    param_table_registry: ParamTableRegistry | None
+
+
+def relspec_resolver_context(
+    ctx: ExecutionContext,
+    param_table_registry: ParamTableRegistry | None,
+) -> RelspecResolverContext:
+    """Build resolver context for relationship rule compilation.
+
+    Returns
+    -------
+    RelspecResolverContext
+        Bundled resolver context values.
+    """
+    return RelspecResolverContext(ctx=ctx, param_table_registry=param_table_registry)
+
+
+def _datafusion_scan_options(name: str) -> DataFusionScanOptions:
+    return DataFusionScanOptions(
+        file_extension=".parquet",
+        parquet_pruning=True,
+        skip_metadata=True,
+        cache=name in _HOT_DATAFUSION_INPUTS,
+    )
 
 
 @tag(layer="relspec", artifact="relationship_contract_spec", kind="spec")
@@ -574,6 +613,8 @@ def persist_relspec_input_datasets(
             filesystem=None,
             table_spec=table_spec,
             dataset_spec=dataset_spec,
+            datafusion_scan=_datafusion_scan_options(name),
+            datafusion_provider="listing",
         )
     return out
 
@@ -584,7 +625,7 @@ def relspec_resolver(
     relspec_input_datasets: dict[str, TableLike],
     persist_relspec_input_datasets: dict[str, DatasetLocation],
     ibis_backend: BaseBackend,
-    param_table_registry: ParamTableRegistry | None,
+    resolver_context: RelspecResolverContext,
 ) -> PlanResolver[IbisPlan]:
     """Select the relationship resolver implementation.
 
@@ -598,18 +639,22 @@ def relspec_resolver(
         Resolver instance for relationship rule compilation.
     """
     mode = (relspec_mode or "memory").lower().strip()
-    if param_table_registry is None:
+    if resolver_context.param_table_registry is None:
         param_tables: Mapping[str, IbisTable] = {}
         policy = ParamTablePolicy()
     else:
-        param_tables = param_table_registry.ibis_tables(ibis_backend)
-        policy = param_table_registry.policy
+        param_tables = resolver_context.param_table_registry.ibis_tables(ibis_backend)
+        policy = resolver_context.param_table_registry.policy
     param_aliases = _param_table_aliases(param_tables, policy=policy)
     if mode == "filesystem":
         cat = DatasetCatalog()
         for name, loc in persist_relspec_input_datasets.items():
             cat.register(name, loc)
-        base = FilesystemPlanResolver(cat, backend=ibis_backend)
+        base = FilesystemPlanResolver(
+            cat,
+            backend=ibis_backend,
+            runtime_profile=resolver_context.ctx.runtime.datafusion,
+        )
         if not param_aliases:
             return base
         param_resolver = InMemoryPlanResolver(param_aliases, backend=ibis_backend)
@@ -619,9 +664,7 @@ def relspec_resolver(
             primary_names=frozenset(param_aliases),
         )
 
-    combined: dict[str, TableLike | IbisPlan | IbisTable] = dict(
-        relspec_input_datasets
-    )
+    combined: dict[str, TableLike | IbisPlan | IbisTable] = dict(relspec_input_datasets)
     for name, table in param_aliases.items():
         combined.setdefault(name, table)
     return InMemoryPlanResolver(combined, backend=ibis_backend)

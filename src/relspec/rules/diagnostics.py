@@ -19,6 +19,7 @@ from sqlglot_tools.bridge import (
     SqlGlotRelationDiff,
     missing_schema_columns,
 )
+from sqlglot_tools.optimizer import plan_fingerprint
 
 RuleDiagnosticSeverity = Literal["error", "warning"]
 
@@ -256,10 +257,23 @@ def substrait_plan_bytes(diagnostic: RuleDiagnostic) -> bytes | None:
 
 
 def _sqlglot_metadata_payload(diagnostics: SqlGlotDiagnostics) -> dict[str, str]:
+    """Build a metadata payload from SQLGlot diagnostics.
+
+    Parameters
+    ----------
+    diagnostics
+        SQLGlot diagnostics bundle.
+
+    Returns
+    -------
+    dict[str, str]
+        Metadata payload describing the SQLGlot expression.
+    """
     metadata: dict[str, str] = {
         "raw_sql": diagnostics.expression.sql(unsupported_level=ErrorLevel.RAISE),
         "optimized_sql": diagnostics.optimized.sql(unsupported_level=ErrorLevel.RAISE),
         "ast_repr": diagnostics.ast_repr,
+        "plan_fingerprint": plan_fingerprint(diagnostics.optimized),
     }
     _set_joined(metadata, "tables", diagnostics.tables)
     _set_joined(metadata, "columns", diagnostics.columns)
@@ -268,11 +282,31 @@ def _sqlglot_metadata_payload(diagnostics: SqlGlotDiagnostics) -> dict[str, str]
 
 
 def _set_joined(metadata: dict[str, str], key: str, values: Sequence[str]) -> None:
+    """Join a sequence of values into a comma-separated metadata entry.
+
+    Parameters
+    ----------
+    metadata
+        Metadata mapping to update.
+    key
+        Metadata key to set.
+    values
+        Values to join and store.
+    """
     if values:
         metadata[key] = ",".join(values)
 
 
 def _apply_diff_metadata(metadata: dict[str, str], diff: SqlGlotRelationDiff) -> None:
+    """Apply SQLGlot relation diff metrics to metadata.
+
+    Parameters
+    ----------
+    metadata
+        Metadata mapping to update.
+    diff
+        Relation diff payload.
+    """
     _set_joined(metadata, "tables_added", diff.tables_added)
     _set_joined(metadata, "tables_removed", diff.tables_removed)
     _set_joined(metadata, "columns_added", diff.columns_added)
@@ -282,11 +316,37 @@ def _apply_diff_metadata(metadata: dict[str, str], diff: SqlGlotRelationDiff) ->
 
 
 def _apply_extra_metadata(metadata: dict[str, str], extra: Mapping[str, str]) -> None:
+    """Merge extra metadata into the diagnostics mapping.
+
+    Parameters
+    ----------
+    metadata
+        Metadata mapping to update.
+    extra
+        Extra metadata to merge.
+    """
     if extra:
         metadata.update({str(key): str(value) for key, value in extra.items()})
 
 
 def _metadata_from_row(value: object | None) -> dict[str, str]:
+    """Parse a metadata payload from a table row value.
+
+    Parameters
+    ----------
+    value
+        Row value containing metadata.
+
+    Returns
+    -------
+    dict[str, str]
+        Parsed metadata mapping.
+
+    Raises
+    ------
+    TypeError
+        Raised when the metadata value is not a mapping.
+    """
     if value is None:
         return {}
     if isinstance(value, Mapping):
@@ -296,6 +356,23 @@ def _metadata_from_row(value: object | None) -> dict[str, str]:
 
 
 def _parse_domain(value: object | None) -> RuleDomain:
+    """Parse a diagnostic domain value to a known domain token.
+
+    Parameters
+    ----------
+    value
+        Domain value to parse.
+
+    Returns
+    -------
+    RuleDomain
+        Parsed rule domain.
+
+    Raises
+    ------
+    ValueError
+        Raised when the domain is missing or unsupported.
+    """
     if value is None:
         msg = "Diagnostic domain is required."
         raise ValueError(msg)
@@ -311,6 +388,23 @@ def _parse_domain(value: object | None) -> RuleDomain:
 
 
 def _parse_severity(value: object | None) -> RuleDiagnosticSeverity:
+    """Parse a diagnostic severity value to a known severity token.
+
+    Parameters
+    ----------
+    value
+        Severity value to parse.
+
+    Returns
+    -------
+    RuleDiagnosticSeverity
+        Parsed severity value.
+
+    Raises
+    ------
+    ValueError
+        Raised when the severity is missing or unsupported.
+    """
     if value is None:
         msg = "Diagnostic severity is required."
         raise ValueError(msg)

@@ -140,6 +140,17 @@ def rule_graph_signature[RuleT](
 
 
 def _register_output(evidence: EvidenceCatalog, name: str, schema: SchemaLike | None) -> None:
+    """Register a rule output in the evidence catalog.
+
+    Parameters
+    ----------
+    evidence
+        Evidence catalog to update.
+    name
+        Output dataset name.
+    schema
+        Optional schema for the output dataset.
+    """
     if schema is None:
         evidence.sources.add(name)
         return
@@ -152,6 +163,24 @@ def _select_by_output[RuleT](
     priority_for: Callable[[RuleT], int],
     name_for: Callable[[RuleT], str],
 ) -> list[RuleT]:
+    """Select one rule per output based on priority and name.
+
+    Parameters
+    ----------
+    rules
+        Rules to select from.
+    output_for
+        Function mapping a rule to its output name.
+    priority_for
+        Function mapping a rule to its priority.
+    name_for
+        Function mapping a rule to its name.
+
+    Returns
+    -------
+    list[RuleT]
+        Selected rules, one per output.
+    """
     selected: dict[str, RuleT] = {}
     for rule in rules:
         output = output_for(rule)

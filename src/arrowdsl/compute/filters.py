@@ -91,6 +91,18 @@ class FilterSpec:
 
 
 def _false_mask(num_rows: int) -> ArrayLike:
+    """Return a boolean mask of all False values.
+
+    Parameters
+    ----------
+    num_rows
+        Length of the mask.
+
+    Returns
+    -------
+    ArrayLike
+        Boolean mask with all entries set to False.
+    """
     return pc.is_valid(pa.nulls(num_rows, type=pa.bool_()))
 
 
@@ -300,6 +312,18 @@ def resolve_kernel(
 
 
 def _json_stringify(value: object) -> str | None:
+    """Serialize a Python value to a stable JSON string.
+
+    Parameters
+    ----------
+    value
+        Value to serialize.
+
+    Returns
+    -------
+    str | None
+        JSON string or ``None`` for null values.
+    """
     if value is None:
         return None
     try:
@@ -310,6 +334,20 @@ def _json_stringify(value: object) -> str | None:
 
 
 def _json_udf(ctx: pac.UdfContext, values: ValuesLike) -> ValuesLike:
+    """UDF that JSON-stringifies scalars or arrays.
+
+    Parameters
+    ----------
+    ctx
+        UDF context (unused).
+    values
+        Scalar or array values to serialize.
+
+    Returns
+    -------
+    ValuesLike
+        JSON string values.
+    """
     _ = ctx
     if isinstance(values, ScalarLike):
         return pa.scalar(_json_stringify(values.as_py()), type=pa.string())
@@ -319,6 +357,18 @@ def _json_udf(ctx: pac.UdfContext, values: ValuesLike) -> ValuesLike:
 
 
 def _normalize_expr_ctx(value: object) -> str | None:
+    """Normalize expression context strings to upper-case tokens.
+
+    Parameters
+    ----------
+    value
+        Input value to normalize.
+
+    Returns
+    -------
+    str | None
+        Normalized token or ``None`` when input is not usable.
+    """
     if not isinstance(value, str):
         return None
     text = value.strip()
@@ -330,6 +380,20 @@ def _normalize_expr_ctx(value: object) -> str | None:
 
 
 def _expr_ctx_udf(ctx: pac.UdfContext, values: ValuesLike) -> ValuesLike:
+    """UDF that normalizes expression context values.
+
+    Parameters
+    ----------
+    ctx
+        UDF context (unused).
+    values
+        Scalar or array values to normalize.
+
+    Returns
+    -------
+    ValuesLike
+        Normalized string values.
+    """
     _ = ctx
     if isinstance(values, ScalarLike):
         return pa.scalar(_normalize_expr_ctx(values.as_py()), type=pa.string())
@@ -358,6 +422,20 @@ def ensure_expr_context_udf() -> str:
 
 
 def _position_encoding_udf(ctx: pac.UdfContext, values: ValuesLike) -> ValuesLike:
+    """UDF that normalizes position encoding values to int32.
+
+    Parameters
+    ----------
+    ctx
+        UDF context (unused).
+    values
+        Scalar or array values to normalize.
+
+    Returns
+    -------
+    ValuesLike
+        Normalized int32 values.
+    """
     _ = ctx
     if isinstance(values, ScalarLike):
         normalized = normalize_position_encoding(values.as_py())
@@ -400,6 +478,18 @@ def position_encoding_array(values: ArrayLike | ChunkedArrayLike) -> ArrayLike:
 
 
 def _json_udf_name(dtype: DataTypeLike) -> str:
+    """Return a stable UDF name for a JSON serializer.
+
+    Parameters
+    ----------
+    dtype
+        Data type to tag the UDF name.
+
+    Returns
+    -------
+    str
+        Deterministic UDF name.
+    """
     token = hashlib.sha1(str(dtype).encode("utf-8")).hexdigest()[:8]
     return f"to_json_{token}"
 

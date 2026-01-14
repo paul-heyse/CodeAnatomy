@@ -144,6 +144,18 @@ def compile_evidence_plan(
 
 
 def _rule_sources(rule: RuleDefinition) -> tuple[str, ...]:
+    """Return evidence source names for a rule.
+
+    Parameters
+    ----------
+    rule
+        Rule definition to inspect.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Evidence source names for the rule.
+    """
     spec = rule.evidence
     if spec is None:
         return rule.inputs
@@ -155,6 +167,17 @@ def _merge_required_columns(
     sources: Iterable[str],
     spec: EvidenceSpec | None,
 ) -> None:
+    """Merge required column names into a per-source mapping.
+
+    Parameters
+    ----------
+    required_columns
+        Accumulator of required columns per source.
+    sources
+        Evidence source names to update.
+    spec
+        Evidence spec carrying required columns.
+    """
     if spec is None or not spec.required_columns:
         return
     for name in sources:
@@ -165,6 +188,20 @@ def _expand_normalize_ops(
     sources: set[str],
     normalize_ops_for_output: NormalizeOpsProvider,
 ) -> tuple[set[str], set[str]]:
+    """Expand evidence sources with normalize op dependencies.
+
+    Parameters
+    ----------
+    sources
+        Initial evidence source names.
+    normalize_ops_for_output
+        Provider for normalize ops by output name.
+
+    Returns
+    -------
+    tuple[set[str], set[str]]
+        Expanded sources and normalize op names.
+    """
     normalize_ops: set[str] = set()
     pending = set(sources)
     while pending:
@@ -183,6 +220,22 @@ def _requirements_from_sources(
     required_columns: Mapping[str, set[str]],
     evidence_spec: EvidenceSpecProvider,
 ) -> tuple[EvidenceRequirement, ...]:
+    """Build evidence requirements from sources and specs.
+
+    Parameters
+    ----------
+    sources
+        Evidence source names to resolve.
+    required_columns
+        Required columns by source.
+    evidence_spec
+        Provider for evidence dataset specs.
+
+    Returns
+    -------
+    tuple[EvidenceRequirement, ...]
+        Requirements for evidence datasets.
+    """
     requirements: list[EvidenceRequirement] = []
     seen: set[str] = set()
     for source in sorted(set(sources)):
@@ -208,6 +261,22 @@ def _required_columns_for_source(
     spec: EvidenceDatasetSpec,
     required_columns: Mapping[str, set[str]],
 ) -> set[str]:
+    """Return extra required columns for a source alias or name.
+
+    Parameters
+    ----------
+    source
+        Evidence source name.
+    spec
+        Evidence dataset specification.
+    required_columns
+        Required columns by source.
+
+    Returns
+    -------
+    set[str]
+        Extra required columns for the source.
+    """
     extra: set[str] = set()
     for key in (source, spec.alias, spec.name):
         extra.update(required_columns.get(key, set()))
@@ -286,9 +355,35 @@ class EvidenceCatalog:
         return has_sources and has_columns and has_types and has_metadata
 
     def _sources_available(self, sources: Sequence[str]) -> bool:
+        """Return whether all sources are available.
+
+        Parameters
+        ----------
+        sources
+            Sources required by a rule.
+
+        Returns
+        -------
+        bool
+            ``True`` when all sources are available.
+        """
         return set(sources).issubset(self.sources)
 
     def _columns_available(self, sources: Sequence[str], required_columns: Sequence[str]) -> bool:
+        """Return whether required columns are available for sources.
+
+        Parameters
+        ----------
+        sources
+            Sources to validate.
+        required_columns
+            Column names required for each source.
+
+        Returns
+        -------
+        bool
+            ``True`` when all required columns are available.
+        """
         required = set(required_columns)
         for source in sources:
             columns = self.columns_by_dataset.get(source)
@@ -297,6 +392,20 @@ class EvidenceCatalog:
         return True
 
     def _types_available(self, sources: Sequence[str], required_types: Mapping[str, str]) -> bool:
+        """Return whether required column types are available for sources.
+
+        Parameters
+        ----------
+        sources
+            Sources to validate.
+        required_types
+            Column type requirements keyed by column name.
+
+        Returns
+        -------
+        bool
+            ``True`` when all required types are available.
+        """
         for source in sources:
             types = self.types_by_dataset.get(source)
             if types is None:
@@ -309,6 +418,20 @@ class EvidenceCatalog:
     def _metadata_available(
         self, sources: Sequence[str], required_metadata: Mapping[bytes, bytes]
     ) -> bool:
+        """Return whether required metadata is available for sources.
+
+        Parameters
+        ----------
+        sources
+            Sources to validate.
+        required_metadata
+            Metadata key/value requirements.
+
+        Returns
+        -------
+        bool
+            ``True`` when all required metadata is available.
+        """
         for source in sources:
             metadata = self.metadata_by_dataset.get(source)
             if metadata is None:
@@ -320,6 +443,20 @@ class EvidenceCatalog:
 
 
 def _schema_from_source(source: object, *, ctx: ExecutionContext) -> SchemaLike | None:
+    """Extract a schema from a plan or dataset source.
+
+    Parameters
+    ----------
+    source
+        Plan, dataset source, or schema-bearing object.
+    ctx
+        Execution context for plan schema evaluation.
+
+    Returns
+    -------
+    SchemaLike | None
+        Schema when available.
+    """
     if isinstance(source, Plan):
         return source.schema(ctx=ctx)
     if isinstance(source, DatasetSource):
@@ -331,10 +468,34 @@ def _schema_from_source(source: object, *, ctx: ExecutionContext) -> SchemaLike 
 
 
 def _schema_types(schema: SchemaLike) -> dict[str, str]:
+    """Return a mapping of column names to type strings.
+
+    Parameters
+    ----------
+    schema
+        Schema to inspect.
+
+    Returns
+    -------
+    dict[str, str]
+        Column type mapping.
+    """
     return {field.name: str(field.type) for field in schema}
 
 
 def _schema_metadata(schema: SchemaLike) -> dict[bytes, bytes]:
+    """Return schema metadata as a concrete mapping.
+
+    Parameters
+    ----------
+    schema
+        Schema to inspect.
+
+    Returns
+    -------
+    dict[bytes, bytes]
+        Metadata mapping.
+    """
     return dict(schema.metadata or {})
 
 

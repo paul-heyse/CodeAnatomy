@@ -9,13 +9,14 @@ from typing import cast
 import ibis
 import pyarrow as pa
 from ibis.backends import BaseBackend
-from ibis.expr.types import Table, Value
+from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 
+from arrowdsl.compute.expr_core import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from arrowdsl.core.context import ExecutionContext, Ordering
-from arrowdsl.core.interop import Table as ArrowTable
-from arrowdsl.core.interop import TableLike
 from arrowdsl.plan.scan_io import PlanSource, plan_from_source
 from arrowdsl.schema.build import empty_table
+from extract.registry_specs import dataset_schema as extract_dataset_schema
+from ibis_engine.builtin_udfs import col_to_byte, position_encoding_norm
 from ibis_engine.ids import masked_stable_id_expr, stable_id_expr
 from ibis_engine.plan import IbisPlan
 from ibis_engine.plan_bridge import SourceToIbisOptions, source_to_ibis
@@ -25,9 +26,9 @@ from ibis_engine.schema_utils import (
     ensure_columns,
     ibis_null_literal,
 )
-from normalize.diagnostics_plans import DiagnosticsSources, diagnostics_plan
 from normalize.registry_ids import (
     DEF_USE_EVENT_ID_SPEC,
+    DIAG_ID_SPEC,
     REACH_EDGE_ID_SPEC,
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
@@ -361,10 +362,238 @@ def reaching_defs_plan_ibis(
     return IbisPlan(expr=aligned, ordering=Ordering.unordered())
 
 
+def _line_base_value(line_base: Value, *, default_base: int) -> NumericValue:
+    result = ibis.coalesce(line_base.cast("int32"), ibis.literal(default_base))
+    return cast("NumericValue", result)
+
+
+def _zero_based_line(line_value: Value, line_base: Value) -> NumericValue:
+    left = cast("NumericValue", line_value.cast("int32"))
+    right = cast("NumericValue", line_base.cast("int32"))
+    result = left - right
+    return cast("NumericValue", result.cast("int32"))
+
+
+def _end_exclusive_value(end_exclusive: Value, *, default_exclusive: bool) -> BooleanValue:
+    result = ibis.coalesce(end_exclusive.cast("boolean"), ibis.literal(default_exclusive))
+    return cast("BooleanValue", result)
+
+
+def _normalize_end_col(end_col: Value, end_exclusive: Value) -> NumericValue:
+    col = cast("NumericValue", end_col.cast("int64"))
+    increment = cast("NumericValue", ibis.literal(1, type="int64"))
+    adjusted = col + increment
+    result = ibis.ifelse(end_exclusive, col, adjusted)
+    return cast("NumericValue", result)
+
+
+def _col_unit_value(col_unit: Value, *, default_unit: str) -> Value:
+    return ibis.coalesce(col_unit.cast("string"), ibis.literal(default_unit))
+
+
+def _col_unit_from_encoding(encoding: Value) -> Value:
+    return (
+        ibis.case()
+        .when(encoding == ibis.literal(ENC_UTF8), ibis.literal("utf8"))
+        .when(encoding == ibis.literal(ENC_UTF16), ibis.literal("utf16"))
+        .when(encoding == ibis.literal(ENC_UTF32), ibis.literal("utf32"))
+        .else_(ibis.literal("utf32"))
+        .end()
+    )
+
+
+def _line_index_view(line_index: Table, *, prefix: str) -> Table:
+    return line_index.select(
+        **{
+            f"{prefix}_file_id": line_index.file_id,
+            f"{prefix}_path": line_index.path,
+            f"{prefix}_line_no": line_index.line_no,
+            f"{prefix}_line_start_byte": line_index.line_start_byte,
+            f"{prefix}_line_text": line_index.line_text,
+        }
+    )
+
+
+def _line_offset_expr(
+    line_start: Value,
+    line_text: Value,
+    column: Value,
+    col_unit: Value,
+) -> Value:
+    offset = column.cast("int64")
+    byte_in_line = col_to_byte(line_text, offset, col_unit.cast("string"))
+    left = line_start.cast("int64")
+    right = byte_in_line.cast("int64")
+    return left + right
+
+
+def _non_empty_string(value: Value, *, default: str) -> Value:
+    text = value.cast("string")
+    return ibis.ifelse(
+        text.notnull() & (text.length() > ibis.literal(0)),
+        text,
+        ibis.literal(default),
+    )
+
+
+def _scip_severity_expr(value: Value) -> Value:
+    text = value.cast("string").upper()
+    values = [ibis.literal(level) for level in ("ERROR", "WARNING", "INFO", "HINT")]
+    return (
+        ibis.case()
+        .when(text == ibis.literal("1"), ibis.literal("ERROR"))
+        .when(text == ibis.literal("2"), ibis.literal("WARNING"))
+        .when(text == ibis.literal("3"), ibis.literal("INFO"))
+        .when(text == ibis.literal("4"), ibis.literal("HINT"))
+        .when(text.isin(values), text)
+        .else_(ibis.literal("ERROR"))
+        .end()
+    )
+
+
+def _cst_diag_expr(cst: Table, line_index: Table) -> Table:
+    line_base = _line_base_value(cst.line_base, default_base=1)
+    col_unit = _col_unit_value(cst.col_unit, default_unit="utf32")
+    start_line0 = _zero_based_line(cst.raw_line, line_base)
+    start_idx = _line_index_view(line_index, prefix="cst")
+    joined = cst.join(
+        start_idx,
+        [cst.path == start_idx.cst_path, start_line0 == start_idx.cst_line_no],
+        how="left",
+    )
+    bstart = _line_offset_expr(
+        joined.cst_line_start_byte,
+        joined.cst_line_text,
+        joined.raw_column,
+        col_unit,
+    )
+    path_expr = ibis.coalesce(joined.path, joined.cst_path)
+    file_id_expr = ibis.coalesce(joined.file_id, joined.cst_file_id)
+    base = joined.select(
+        file_id=file_id_expr,
+        path=path_expr,
+        bstart=bstart,
+        bend=bstart,
+        severity=ibis.literal("ERROR"),
+        message=_non_empty_string(joined.message, default="LibCST parse error"),
+        diag_source=ibis.literal("libcst"),
+        code=ibis_null_literal(pa.string()),
+    )
+    return base.filter(base.bstart.notnull() & base.bend.notnull() & base.path.notnull())
+
+
+def _ts_diag_expr(table: Table, *, severity: str, message: str) -> Table:
+    bstart = coalesce_columns(
+        table,
+        ("bstart", "start_byte"),
+        default=ibis_null_literal(pa.int64()),
+    ).cast("int64")
+    bend = coalesce_columns(
+        table,
+        ("bend", "end_byte"),
+        default=ibis_null_literal(pa.int64()),
+    ).cast("int64")
+    file_id = table.file_id if "file_id" in table.columns else ibis_null_literal(pa.string())
+    path = table.path if "path" in table.columns else ibis_null_literal(pa.string())
+    base = table.select(
+        file_id=file_id,
+        path=path,
+        bstart=bstart,
+        bend=bend,
+        severity=ibis.literal(severity),
+        message=ibis.literal(message),
+        diag_source=ibis.literal("treesitter"),
+        code=ibis_null_literal(pa.string()),
+    )
+    return base.filter(base.bstart.notnull() & base.bend.notnull() & base.path.notnull())
+
+
+@dataclass(frozen=True)
+class _ScipDiagContext:
+    joined: Table
+    path_expr: Value
+    col_unit: Value
+    end_char: Value
+
+
+def _scip_diag_expr(diags: Table, docs: Table, line_index: Table) -> Table:
+    ctx = _scip_diag_context(diags, docs, line_index)
+    bstart = _line_offset_expr(
+        ctx.joined.scip_start_line_start_byte,
+        ctx.joined.scip_start_line_text,
+        ctx.joined.start_char,
+        ctx.col_unit,
+    )
+    bend = _line_offset_expr(
+        ctx.joined.scip_end_line_start_byte,
+        ctx.joined.scip_end_line_text,
+        ctx.end_char,
+        ctx.col_unit,
+    )
+    file_id = coalesce_columns(
+        ctx.joined,
+        ("file_id", "scip_start_file_id"),
+        default=ibis_null_literal(pa.string()),
+    )
+    base = ctx.joined.select(
+        file_id=file_id,
+        path=ctx.path_expr,
+        bstart=bstart,
+        bend=bend,
+        severity=_scip_severity_expr(ctx.joined.severity),
+        message=_non_empty_string(ctx.joined.message, default="SCIP diagnostic"),
+        diag_source=ibis.literal("scip"),
+        code=ctx.joined.code.cast("string"),
+    )
+    return base.filter(base.bstart.notnull() & base.bend.notnull() & base.path.notnull())
+
+
+def _scip_diag_context(diags: Table, docs: Table, line_index: Table) -> _ScipDiagContext:
+    docs_sel = docs.select(
+        document_id=docs.document_id,
+        doc_path=docs.path,
+        position_encoding=docs.position_encoding,
+    )
+    diag_docs = diags.join(
+        docs_sel,
+        [diags.document_id == docs_sel.document_id],
+        how="left",
+    )
+    path_expr = ibis.coalesce(diag_docs.path, diag_docs.doc_path)
+    line_base = _line_base_value(diag_docs.line_base, default_base=0)
+    end_exclusive = _end_exclusive_value(diag_docs.end_exclusive, default_exclusive=True)
+    posenc = position_encoding_norm(diag_docs.position_encoding.cast("string"))
+    col_unit = ibis.coalesce(
+        diag_docs.col_unit.cast("string").lower(),
+        _col_unit_from_encoding(posenc),
+    )
+    start_line0 = _zero_based_line(diag_docs.start_line, line_base)
+    end_line0 = _zero_based_line(diag_docs.end_line, line_base)
+    end_char = _normalize_end_col(diag_docs.end_char, end_exclusive)
+    start_idx = _line_index_view(line_index, prefix="scip_start")
+    end_idx = _line_index_view(line_index, prefix="scip_end")
+    joined = diag_docs.join(
+        start_idx,
+        [path_expr == start_idx.scip_start_path, start_line0 == start_idx.scip_start_line_no],
+        how="left",
+    )
+    joined = joined.join(
+        end_idx,
+        [path_expr == end_idx.scip_end_path, end_line0 == end_idx.scip_end_line_no],
+        how="left",
+    )
+    return _ScipDiagContext(
+        joined=joined,
+        path_expr=path_expr,
+        col_unit=col_unit,
+        end_char=end_char,
+    )
+
+
 def diagnostics_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
-    backend: BaseBackend,
+    _backend: BaseBackend,
 ) -> IbisPlan | None:
     """Build an Ibis plan for normalized diagnostics.
 
@@ -373,26 +602,65 @@ def diagnostics_plan_ibis(
     IbisPlan | None
         Ibis plan for normalized diagnostics.
     """
-    if catalog.repo_text_index is None:
-        empty = ibis.memtable(empty_table(dataset_schema(DIAG_NAME)))
+    diag_schema = dataset_schema(DIAG_NAME)
+    line_index = _resolve_input(
+        catalog, ctx=ctx, name="file_line_index", schema="file_line_index_v1"
+    )
+    exprs = _diagnostic_exprs(catalog, ctx=ctx, line_index=line_index)
+
+    if not exprs:
+        empty = ibis.memtable(empty_table(diag_schema))
         return IbisPlan(expr=empty, ordering=Ordering.unordered())
-    sources = DiagnosticsSources(
-        cst_parse_errors=_resolve_table_like(catalog, "cst_parse_errors"),
-        ts_errors=_resolve_table_like(catalog, "ts_errors"),
-        ts_missing=_resolve_table_like(catalog, "ts_missing"),
-        scip_diagnostics=_resolve_table_like(catalog, "scip_diagnostics"),
-        scip_documents=_resolve_table_like(catalog, "scip_documents"),
+
+    combined = exprs[0]
+    for expr in exprs[1:]:
+        combined = combined.union(expr, distinct=False)
+
+    diag_id = stable_id_expr(
+        DIAG_ID_SPEC.prefix,
+        combined.path,
+        combined.bstart,
+        combined.bend,
+        combined.diag_source,
+        combined.message,
+        null_sentinel=DIAG_ID_SPEC.null_sentinel,
     )
-    plan = diagnostics_plan(catalog.repo_text_index, sources=sources, ctx=ctx)
-    ibis_plan = source_to_ibis(
-        plan,
-        options=SourceToIbisOptions(
-            ctx=ctx,
-            backend=backend,
-            name=DIAG_NAME,
-        ),
+    enriched = combined.mutate(diag_id=diag_id)
+    aligned = align_table_to_schema(enriched, schema=diag_schema)
+    return IbisPlan(expr=aligned, ordering=Ordering.unordered())
+
+
+def _resolve_input(
+    catalog: IbisPlanCatalog,
+    *,
+    ctx: ExecutionContext,
+    name: str,
+    schema: str,
+) -> Table:
+    resolved_schema = extract_dataset_schema(schema)
+    table = catalog.resolve_expr(name, ctx=ctx, schema=resolved_schema)
+    return ensure_columns(table, schema=resolved_schema)
+
+
+def _diagnostic_exprs(
+    catalog: IbisPlanCatalog,
+    *,
+    ctx: ExecutionContext,
+    line_index: Table,
+) -> list[Table]:
+    cst = _resolve_input(catalog, ctx=ctx, name="cst_parse_errors", schema="py_cst_parse_errors_v1")
+    ts_errors = _resolve_input(catalog, ctx=ctx, name="ts_errors", schema="ts_errors_v1")
+    ts_missing = _resolve_input(catalog, ctx=ctx, name="ts_missing", schema="ts_missing_v1")
+    scip_diags = _resolve_input(
+        catalog, ctx=ctx, name="scip_diagnostics", schema="scip_diagnostics_v1"
     )
-    return IbisPlan(expr=ibis_plan.expr, ordering=ibis_plan.ordering)
+    scip_docs = _resolve_input(catalog, ctx=ctx, name="scip_documents", schema="scip_documents_v1")
+    return [
+        _cst_diag_expr(cst, line_index),
+        _ts_diag_expr(ts_errors, severity="ERROR", message="tree-sitter error node"),
+        _ts_diag_expr(ts_missing, severity="WARNING", message="tree-sitter missing node"),
+        _scip_diag_expr(scip_diags, scip_docs, line_index),
+    ]
 
 
 def span_errors_plan_ibis(
@@ -411,17 +679,6 @@ def span_errors_plan_ibis(
     table = catalog.resolve_expr("span_errors_v1", ctx=ctx, schema=schema)
     aligned = align_table_to_schema(table, schema=schema)
     return IbisPlan(expr=aligned, ordering=Ordering.unordered())
-
-
-def _resolve_table_like(catalog: IbisPlanCatalog, name: str) -> TableLike | None:
-    source = catalog.tables.get(name)
-    if isinstance(source, IbisPlan):
-        return source.expr.to_pyarrow()
-    if isinstance(source, Table):
-        return source.to_pyarrow()
-    if isinstance(source, ArrowTable):
-        return source
-    return None
 
 
 def _def_use_kind_expr(opname: Value) -> Value:

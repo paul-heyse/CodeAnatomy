@@ -63,6 +63,8 @@ def relationship_rule_definitions() -> tuple[RuleDefinition, ...]:
 
 @dataclass(frozen=True)
 class _IntervalAlignRuleSpec:
+    """Specification for interval-align relationship rules."""
+
     name: str
     output_dataset: str
     contract_name: str
@@ -73,6 +75,18 @@ class _IntervalAlignRuleSpec:
 
 
 def _interval_align_rule(spec: _IntervalAlignRuleSpec) -> RuleDefinition:
+    """Build an interval-align rule definition from a spec.
+
+    Parameters
+    ----------
+    spec
+        Interval-align rule specification.
+
+    Returns
+    -------
+    RuleDefinition
+        Rule definition for the interval-align rule.
+    """
     payload = RelationshipPayload(
         output_dataset=spec.output_dataset,
         contract_name=spec.contract_name,
@@ -109,6 +123,24 @@ def _hash_join_rule(
     contract_name: str,
     inputs: tuple[str, str],
 ) -> RuleDefinition:
+    """Build a hash-join rule definition.
+
+    Parameters
+    ----------
+    name
+        Rule name.
+    output_dataset
+        Output dataset name.
+    contract_name
+        Contract name for the output dataset.
+    inputs
+        Input dataset names.
+
+    Returns
+    -------
+    RuleDefinition
+        Rule definition for the hash-join rule.
+    """
     payload = RelationshipPayload(
         output_dataset=output_dataset,
         contract_name=contract_name,

@@ -108,6 +108,18 @@ def iter_table_rows(table: pa.TableLike) -> Iterator[dict[str, object]]:
 
 
 def _hash64_int(value: str) -> int:
+    """Return a deterministic signed 64-bit hash for a string.
+
+    Parameters
+    ----------
+    value
+        Input string to hash.
+
+    Returns
+    -------
+    int
+        Deterministic signed 64-bit hash value.
+    """
     digest = hashlib.blake2b(value.encode("utf-8"), digest_size=8).digest()
     unsigned = int.from_bytes(digest, "big", signed=False)
     return unsigned & ((1 << 63) - 1)
@@ -130,6 +142,20 @@ def _hash64_udf(
     ctx: pa.UdfContext,
     array: pa.ArrayLike | pa.ChunkedArrayLike | pa.ScalarLike,
 ) -> pa.ArrayLike | pa.ScalarLike:
+    """Compute hash64 values for Arrow arrays or scalars.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion UDF context (unused).
+    array
+        Array-like or scalar input.
+
+    Returns
+    -------
+    pa.ArrayLike | pa.ScalarLike
+        Hash results with int64 dtype.
+    """
     _ = ctx
     if isinstance(array, pa.ScalarLike):
         value = array.as_py()
@@ -143,6 +169,7 @@ def _hash64_udf(
 
 
 def _ensure_hash64_udf() -> None:
+    """Register the hash64 UDF when the built-in kernel is unavailable."""
     spec = UdfSpec(
         name=_HASH64_FUNCTION,
         inputs={"value": pa.string()},
@@ -155,6 +182,18 @@ def _ensure_hash64_udf() -> None:
 
 
 def _hash64(values: pa.ArrayLike) -> pa.ArrayLike:
+    """Compute hash64 values using a kernel or UDF fallback.
+
+    Parameters
+    ----------
+    values
+        Input array to hash.
+
+    Returns
+    -------
+    pa.ArrayLike
+        Int64 hash array.
+    """
     func = resolve_kernel("hash64", fallbacks=("hash",))
     if func is not None:
         result = pa.pc.call_function(func, [values])
@@ -171,6 +210,20 @@ def _stringify(
     *,
     null_sentinel: str,
 ) -> pa.ArrayLike:
+    """Cast an array to string and fill nulls with a sentinel.
+
+    Parameters
+    ----------
+    array
+        Array-like input to cast.
+    null_sentinel
+        Replacement value for nulls.
+
+    Returns
+    -------
+    pa.ArrayLike
+        String array with nulls filled.
+    """
     text = pa.pc.cast(array, pa.string())
     return pa.pc.fill_null(text, null_sentinel)
 

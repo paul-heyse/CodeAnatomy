@@ -49,6 +49,10 @@ BC_DST_BLOCK_ID_SPEC = hash_spec("bc_dst_block_id")
 BC_COND_INSTR_ID_SPEC = hash_spec("bc_cond_instr_id")
 BC_EDGE_ID_SPEC = hash_spec("bc_edge_id")
 
+BC_LINE_BASE = 1
+BC_COL_UNIT = "utf32"
+BC_END_EXCLUSIVE = True
+
 
 @dataclass(frozen=True)
 class BytecodeExtractOptions:
@@ -668,6 +672,9 @@ def _append_instruction_rows(unit_ctx: CodeUnitContext, ins_rows: list[Row]) -> 
                 "pos_end_line": int(pos_end_line) if pos_end_line is not None else None,
                 "pos_start_col": int(pos_start_col) if pos_start_col is not None else None,
                 "pos_end_col": int(pos_end_col) if pos_end_col is not None else None,
+                "line_base": BC_LINE_BASE,
+                "col_unit": BC_COL_UNIT,
+                "end_exclusive": BC_END_EXCLUSIVE,
             }
         )
 

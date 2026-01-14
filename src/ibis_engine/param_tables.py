@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -67,6 +68,20 @@ class ParamTableRegistry:
     specs: Mapping[str, ParamTableSpec]
     policy: ParamTablePolicy = field(default_factory=ParamTablePolicy)
     artifacts: dict[str, ParamTableArtifact] = field(default_factory=dict)
+    scope_key: str | None = None
+    registered_signatures: dict[str, str] = field(default_factory=dict)
+    registered_schema: str | None = None
+
+    def __post_init__(self) -> None:
+        """Normalize registry scope key after initialization."""
+        if self.scope_key is None and self.policy.scope in {
+            ParamTableScope.PER_RUN,
+            ParamTableScope.PER_SESSION,
+            ParamTableScope.PER_RULE,
+        }:
+            self.scope_key = _new_scope_key()
+        if self.scope_key is not None:
+            self.scope_key = _normalize_scope_key(self.scope_key)
 
     def register_values(self, logical_name: str, values: Sequence[object]) -> ParamTableArtifact:
         """Register values for a param table and return the artifact.
@@ -85,14 +100,22 @@ class ParamTableRegistry:
         if spec is None:
             msg = f"Unknown param table spec: {logical_name!r}."
             raise KeyError(msg)
-        table = build_param_table(spec, values)
         signature = param_signature(logical_name=logical_name, values=values)
+        schema_sig = schema_fingerprint(spec.schema)
+        existing = self.artifacts.get(logical_name)
+        if (
+            existing is not None
+            and existing.signature == signature
+            and existing.schema_fingerprint == schema_sig
+        ):
+            return existing
+        table = build_param_table(spec, values)
         artifact = ParamTableArtifact(
             logical_name=logical_name,
             table=table,
             signature=signature,
             rows=table.num_rows,
-            schema_fingerprint=schema_fingerprint(table.schema),
+            schema_fingerprint=schema_sig,
         )
         self.artifacts[logical_name] = artifact
         return artifact
@@ -106,9 +129,10 @@ class ParamTableRegistry:
             Ibis table expressions keyed by logical name.
         """
         tables: dict[str, Table] = {}
+        schema_name = param_table_schema(self.policy, scope_key=self.scope_key)
         for logical_name in self.artifacts:
             table_name = param_table_name(self.policy, logical_name)
-            tables[logical_name] = backend.table(table_name, database=self.policy.schema)
+            tables[logical_name] = backend.table(table_name, database=schema_name)
         return tables
 
     def register_into_backend(self, backend: BaseBackend) -> dict[str, str]:
@@ -124,17 +148,25 @@ class ParamTableRegistry:
         TypeError
             Raised when the backend does not support table creation.
         """
+        schema_name = param_table_schema(self.policy, scope_key=self.scope_key)
+        if self.registered_schema != schema_name:
+            self.registered_signatures.clear()
+            self.registered_schema = schema_name
         if self.artifacts:
             create_database = getattr(backend, "create_database", None)
             if callable(create_database):
                 create_database(
-                    self.policy.schema,
+                    schema_name,
                     catalog=self.policy.catalog,
                     force=True,
                 )
         mapping: dict[str, str] = {}
         for logical_name, artifact in self.artifacts.items():
             table_name = param_table_name(self.policy, logical_name)
+            qualified = f"{self.policy.catalog}.{schema_name}.{table_name}"
+            if self.registered_signatures.get(logical_name) == artifact.signature:
+                mapping[logical_name] = qualified
+                continue
             create_table = getattr(backend, "create_table", None)
             if not callable(create_table):
                 msg = "Ibis backend is missing create_table."
@@ -142,14 +174,16 @@ class ParamTableRegistry:
             create_table(
                 table_name,
                 artifact.table,
-                database=self.policy.schema,
+                database=schema_name,
                 overwrite=True,
             )
-            mapping[logical_name] = f"{self.policy.catalog}.{self.policy.schema}.{table_name}"
+            mapping[logical_name] = qualified
+            self.registered_signatures[logical_name] = artifact.signature
         return mapping
 
 
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SCOPE_RE = re.compile(r"[^A-Za-z0-9_]+")
 
 
 def param_table_name(policy: ParamTablePolicy, logical_name: str) -> str:
@@ -171,6 +205,23 @@ def param_table_name(policy: ParamTablePolicy, logical_name: str) -> str:
     return f"{policy.prefix}{logical_name}"
 
 
+def param_table_schema(policy: ParamTablePolicy, *, scope_key: str | None) -> str:
+    """Return the schema name for parameter tables.
+
+    Returns
+    -------
+    str
+        Schema name with scope suffix when configured.
+    """
+    if policy.scope in {
+        ParamTableScope.PER_RUN,
+        ParamTableScope.PER_SESSION,
+        ParamTableScope.PER_RULE,
+    }:
+        return _scoped_schema(policy.schema, scope_key=scope_key)
+    return policy.schema
+
+
 def param_signature(*, logical_name: str, values: Sequence[object]) -> str:
     """Return a stable signature for a parameter list.
 
@@ -182,6 +233,19 @@ def param_signature(*, logical_name: str, values: Sequence[object]) -> str:
     normalized = sorted(str(value) for value in values)
     payload = {"name": logical_name, "values": normalized}
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def scalar_param_signature(values: Mapping[str, object]) -> str:
+    """Return a stable signature for scalar parameter values.
+
+    Returns
+    -------
+    str
+        Hex-encoded signature string.
+    """
+    payload = {str(key): str(value) for key, value in values.items()}
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
@@ -230,6 +294,21 @@ def unique_values(values: pa.Array | pa.ChunkedArray) -> pa.Array | pa.ChunkedAr
     return unique_fn(values)
 
 
+def _new_scope_key() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def _normalize_scope_key(value: str) -> str:
+    normalized = _SCOPE_RE.sub("_", value).strip("_")
+    return normalized or "scope"
+
+
+def _scoped_schema(base: str, *, scope_key: str | None) -> str:
+    if not scope_key:
+        return base
+    return f"{base}_{scope_key}"
+
+
 __all__ = [
     "ListParamSpec",
     "ParamTableArtifact",
@@ -240,5 +319,7 @@ __all__ = [
     "build_param_table",
     "param_signature",
     "param_table_name",
+    "param_table_schema",
+    "scalar_param_signature",
     "unique_values",
 ]

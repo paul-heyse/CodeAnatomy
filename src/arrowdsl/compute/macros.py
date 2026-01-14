@@ -751,6 +751,20 @@ def bitmask_is_set_expr(values: ComputeExpression, *, mask: int) -> ComputeExpre
 
 
 def _compute_array(function_name: str, args: list[object]) -> ArrayLike | ChunkedArrayLike:
+    """Call a compute kernel and cast the result to an array-like.
+
+    Parameters
+    ----------
+    function_name
+        Compute function name to invoke.
+    args
+        Arguments for the compute function.
+
+    Returns
+    -------
+    ArrayLike | ChunkedArrayLike
+        Kernel result cast to an array-like.
+    """
     return cast("ArrayLike | ChunkedArrayLike", pc.call_function(function_name, args))
 
 

@@ -63,6 +63,13 @@ class ExtractRuleAdapter(RuleAdapter):
 
 @cache
 def _template_catalog() -> tuple[tuple[RuleTemplateSpec, ...], tuple[RuleDiagnostic, ...]]:
+    """Build the cached catalog of extract templates and diagnostics.
+
+    Returns
+    -------
+    tuple[tuple[RuleTemplateSpec, ...], tuple[RuleDiagnostic, ...]]
+        Template specs and diagnostics for the extract adapter.
+    """
     specs: list[RuleTemplateSpec] = []
     diagnostics: list[RuleDiagnostic] = []
     for spec in DATASET_TEMPLATE_SPECS:
@@ -86,6 +93,18 @@ def _template_catalog() -> tuple[tuple[RuleTemplateSpec, ...], tuple[RuleDiagnos
 def _outputs_for_spec(
     spec: DatasetTemplateSpec,
 ) -> tuple[tuple[str, ...], tuple[RuleDiagnostic, ...]]:
+    """Expand a dataset template spec and capture diagnostics.
+
+    Parameters
+    ----------
+    spec
+        Dataset template specification.
+
+    Returns
+    -------
+    tuple[tuple[str, ...], tuple[RuleDiagnostic, ...]]
+        Output names and any diagnostics from expansion.
+    """
     try:
         records = expand_dataset_templates((spec,))
     except (KeyError, TypeError, ValueError) as exc:
@@ -109,6 +128,18 @@ def _outputs_for_spec(
 def _feature_flags_for_spec(
     spec: DatasetTemplateSpec,
 ) -> tuple[tuple[str, ...], tuple[RuleDiagnostic, ...]]:
+    """Resolve feature flags for a dataset template spec.
+
+    Parameters
+    ----------
+    spec
+        Dataset template specification.
+
+    Returns
+    -------
+    tuple[tuple[str, ...], tuple[RuleDiagnostic, ...]]
+        Feature flags and any diagnostics from config lookup.
+    """
     try:
         flags = extractor_config(spec.template).feature_flags
     except (KeyError, TypeError, ValueError) as exc:
@@ -129,6 +160,18 @@ def _feature_flags_for_spec(
 
 
 def _template_metadata(spec: DatasetTemplateSpec) -> Mapping[str, str]:
+    """Build metadata for an extract dataset template.
+
+    Parameters
+    ----------
+    spec
+        Dataset template specification.
+
+    Returns
+    -------
+    Mapping[str, str]
+        Metadata mapping for the template.
+    """
     metadata: dict[str, str] = {"spec_name": spec.name}
     for key, value in spec.params.items():
         metadata[f"param.{key}"] = str(value)

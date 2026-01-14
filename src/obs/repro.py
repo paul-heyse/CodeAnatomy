@@ -336,6 +336,7 @@ class RunBundleContext:
     cpg_output_tables: Mapping[str, TableLike] | None = None
     param_table_specs: Sequence[ParamTableSpec] | None = None
     param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None
+    param_scalar_signature: str | None = None
     param_dependency_reports: Sequence[RuleDependencyReport] | None = None
     param_reverse_index: Mapping[str, Sequence[str]] | None = None
     include_param_table_data: bool = False
@@ -574,49 +575,106 @@ def _write_param_tables(
     context: RunBundleContext,
     files_written: list[str],
 ) -> None:
-    if not context.param_table_specs and not context.param_table_artifacts:
+    if not _param_tables_present(context):
         return
     params_dir = bundle_dir / "params"
     _ensure_dir(params_dir)
-    if context.param_table_specs:
-        specs_payload = {"specs": [_param_spec_payload(spec) for spec in context.param_table_specs]}
-        files_written.append(_write_json(params_dir / "specs.json", specs_payload, overwrite=True))
+    _write_param_specs(params_dir, context=context, files_written=files_written)
+    _write_param_signatures(params_dir, context=context, files_written=files_written)
+    _write_param_table_data(params_dir, context=context, files_written=files_written)
+    _write_param_dependency_reports(params_dir, context=context, files_written=files_written)
+    _write_param_reverse_index(params_dir, context=context, files_written=files_written)
+
+
+def _param_tables_present(context: RunBundleContext) -> bool:
+    return bool(
+        context.param_table_specs
+        or context.param_table_artifacts
+        or context.param_scalar_signature is not None
+    )
+
+
+def _write_param_specs(
+    params_dir: Path,
+    *,
+    context: RunBundleContext,
+    files_written: list[str],
+) -> None:
+    if not context.param_table_specs:
+        return
+    specs_payload = {"specs": [_param_spec_payload(spec) for spec in context.param_table_specs]}
+    files_written.append(_write_json(params_dir / "specs.json", specs_payload, overwrite=True))
+
+
+def _write_param_signatures(
+    params_dir: Path,
+    *,
+    context: RunBundleContext,
+    files_written: list[str],
+) -> None:
+    signatures: dict[str, JsonDict] = {}
+    if context.param_scalar_signature:
+        signatures["_scalar_signature"] = {"signature": context.param_scalar_signature}
     if context.param_table_artifacts:
-        signatures: dict[str, JsonDict] = {}
         for name, artifact in context.param_table_artifacts.items():
             signatures[name] = {
                 "rows": int(artifact.rows),
                 "signature": artifact.signature,
                 "schema_fingerprint": artifact.schema_fingerprint,
             }
-        files_written.append(
-            _write_json(params_dir / "signatures.json", signatures, overwrite=True)
-        )
-        if context.include_param_table_data:
-            for name, artifact in context.param_table_artifacts.items():
-                target_dir = params_dir / name
-                _ensure_dir(target_dir)
-                path = target_dir / "part-0.parquet"
-                pq.write_table(artifact.table, path)
-                files_written.append(str(path))
-    if context.param_dependency_reports:
-        deps_payload = {
-            report.rule_name: {
-                "param_tables": list(report.param_tables),
-                "dataset_tables": list(report.dataset_tables),
-            }
-            for report in context.param_dependency_reports
+    if not signatures:
+        return
+    files_written.append(_write_json(params_dir / "signatures.json", signatures, overwrite=True))
+
+
+def _write_param_table_data(
+    params_dir: Path,
+    *,
+    context: RunBundleContext,
+    files_written: list[str],
+) -> None:
+    if not context.param_table_artifacts or not context.include_param_table_data:
+        return
+    for name, artifact in context.param_table_artifacts.items():
+        target_dir = params_dir / name
+        _ensure_dir(target_dir)
+        path = target_dir / "part-0.parquet"
+        pq.write_table(artifact.table, path)
+        files_written.append(str(path))
+
+
+def _write_param_dependency_reports(
+    params_dir: Path,
+    *,
+    context: RunBundleContext,
+    files_written: list[str],
+) -> None:
+    if not context.param_dependency_reports:
+        return
+    deps_payload = {
+        report.rule_name: {
+            "param_tables": list(report.param_tables),
+            "dataset_tables": list(report.dataset_tables),
         }
-        files_written.append(
-            _write_json(params_dir / "rule_param_deps.json", deps_payload, overwrite=True)
-        )
-    if context.param_reverse_index:
-        reverse_payload = {name: list(rules) for name, rules in context.param_reverse_index.items()}
-        files_written.append(
-            _write_json(
-                params_dir / "param_rule_reverse_index.json", reverse_payload, overwrite=True
-            )
-        )
+        for report in context.param_dependency_reports
+    }
+    files_written.append(
+        _write_json(params_dir / "rule_param_deps.json", deps_payload, overwrite=True)
+    )
+
+
+def _write_param_reverse_index(
+    params_dir: Path,
+    *,
+    context: RunBundleContext,
+    files_written: list[str],
+) -> None:
+    if not context.param_reverse_index:
+        return
+    reverse_payload = {name: list(rules) for name, rules in context.param_reverse_index.items()}
+    files_written.append(
+        _write_json(params_dir / "param_rule_reverse_index.json", reverse_payload, overwrite=True)
+    )
 
 
 def _param_spec_payload(spec: ParamTableSpec) -> JsonDict:

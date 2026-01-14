@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from typing import cast
 
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
@@ -13,11 +15,15 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.bridge import (
     IbisCompilerBackend,
     ibis_plan_to_datafusion,
+    ibis_plan_to_reader,
     ibis_plan_to_table,
 )
 from datafusion_engine.compile_options import DataFusionCompileOptions
 from datafusion_engine.runtime import DataFusionRuntimeProfile
+from ibis_engine.expr_compiler import OperationSupportBackend, unsupported_operations
 from ibis_engine.plan import IbisPlan
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -28,6 +34,8 @@ class DataFusionExecutionOptions:
     ctx: SessionContext
     options: DataFusionCompileOptions | None = None
     runtime_profile: DataFusionRuntimeProfile | None = None
+    allow_fallback: bool = True
+    probe_capabilities: bool = True
 
 
 @dataclass(frozen=True)
@@ -49,6 +57,11 @@ def materialize_plan(
     -------
     TableLike
         Arrow table with ordering metadata applied when available.
+
+    Raises
+    ------
+    ValueError
+        Raised when unsupported operations are encountered without fallback.
     """
     if execution is not None and execution.datafusion is not None:
         options = _resolve_options(
@@ -56,6 +69,35 @@ def materialize_plan(
             params=execution.params,
             runtime_profile=execution.datafusion.runtime_profile,
         )
+        if _force_bridge(options):
+            return ibis_plan_to_table(
+                plan,
+                backend=execution.datafusion.backend,
+                ctx=execution.datafusion.ctx,
+                options=options,
+            )
+        missing = _missing_ops(
+            plan,
+            execution=execution.datafusion,
+        )
+        if not missing:
+            try:
+                return plan.to_table(params=execution.params)
+            except Exception as exc:
+                if not execution.datafusion.allow_fallback:
+                    raise
+                logger.warning(
+                    "Ibis DataFusion execution failed; falling back to SQLGlot bridge: %s",
+                    exc,
+                )
+        elif not execution.datafusion.allow_fallback:
+            msg = f"Unsupported Ibis operations: {', '.join(missing)}."
+            raise ValueError(msg)
+        else:
+            logger.info(
+                "Ibis backend lacks operations (%s); using SQLGlot bridge fallback.",
+                ", ".join(missing),
+            )
         return ibis_plan_to_table(
             plan,
             backend=execution.datafusion.backend,
@@ -71,6 +113,7 @@ def stream_plan(
     *,
     batch_size: int | None = None,
     params: Mapping[Value, object] | None = None,
+    execution: IbisPlanExecutionOptions | None = None,
 ) -> RecordBatchReaderLike:
     """Return a RecordBatchReader for an Ibis plan.
 
@@ -78,8 +121,54 @@ def stream_plan(
     -------
     RecordBatchReaderLike
         RecordBatchReader with ordering metadata applied when available.
+
+    Raises
+    ------
+    ValueError
+        Raised when unsupported operations are encountered without fallback.
     """
-    return plan.to_reader(batch_size=batch_size, params=params)
+    effective_params = params
+    if execution is not None and execution.params is not None:
+        effective_params = execution.params
+    if execution is not None and execution.datafusion is not None:
+        options = _resolve_options(
+            execution.datafusion.options,
+            params=effective_params,
+            runtime_profile=execution.datafusion.runtime_profile,
+        )
+        if _force_bridge(options):
+            return ibis_plan_to_reader(
+                plan,
+                backend=execution.datafusion.backend,
+                ctx=execution.datafusion.ctx,
+                options=options,
+            )
+        missing = _missing_ops(plan, execution=execution.datafusion)
+        if not missing:
+            try:
+                return plan.to_reader(batch_size=batch_size, params=effective_params)
+            except Exception as exc:
+                if not execution.datafusion.allow_fallback:
+                    raise
+                logger.warning(
+                    "Ibis DataFusion streaming failed; falling back to SQLGlot bridge: %s",
+                    exc,
+                )
+        elif not execution.datafusion.allow_fallback:
+            msg = f"Unsupported Ibis operations: {', '.join(missing)}."
+            raise ValueError(msg)
+        else:
+            logger.info(
+                "Ibis backend lacks operations (%s); using SQLGlot bridge fallback.",
+                ", ".join(missing),
+            )
+        return ibis_plan_to_reader(
+            plan,
+            backend=execution.datafusion.backend,
+            ctx=execution.datafusion.ctx,
+            options=options,
+        )
+    return plan.to_reader(batch_size=batch_size, params=effective_params)
 
 
 def plan_to_datafusion(
@@ -121,3 +210,18 @@ def _resolve_options(
     if params is None or options.params is not None:
         return options
     return replace(options, params=params)
+
+
+def _missing_ops(
+    plan: IbisPlan,
+    *,
+    execution: DataFusionExecutionOptions,
+) -> tuple[str, ...]:
+    if not execution.probe_capabilities:
+        return ()
+    backend = cast("OperationSupportBackend", execution.backend)
+    return unsupported_operations(plan.expr, backend=backend)
+
+
+def _force_bridge(options: DataFusionCompileOptions) -> bool:
+    return options.capture_explain or options.explain_hook is not None

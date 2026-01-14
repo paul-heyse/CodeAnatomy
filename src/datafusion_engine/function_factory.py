@@ -94,6 +94,42 @@ DEFAULT_RULE_PRIMITIVES: tuple[RulePrimitive, ...] = (
         description="Placeholder scoring primitive for relationship planning.",
         supports_named_args=True,
     ),
+    RulePrimitive(
+        name="stable_hash64",
+        params=(FunctionParameter(name="value", dtype="string"),),
+        return_type="int64",
+        volatility="stable",
+        description="Stable 64-bit hash for string inputs.",
+        supports_named_args=True,
+    ),
+    RulePrimitive(
+        name="stable_hash128",
+        params=(FunctionParameter(name="value", dtype="string"),),
+        return_type="string",
+        volatility="stable",
+        description="Stable 128-bit hash for string inputs.",
+        supports_named_args=True,
+    ),
+    RulePrimitive(
+        name="position_encoding_norm",
+        params=(FunctionParameter(name="value", dtype="string"),),
+        return_type="int32",
+        volatility="stable",
+        description="Normalize position encoding values to enum integers.",
+        supports_named_args=True,
+    ),
+    RulePrimitive(
+        name="col_to_byte",
+        params=(
+            FunctionParameter(name="line_text", dtype="string"),
+            FunctionParameter(name="col", dtype="int64"),
+            FunctionParameter(name="col_unit", dtype="string"),
+        ),
+        return_type="int64",
+        volatility="stable",
+        description="Convert line/offset pairs into UTF-8 byte offsets.",
+        supports_named_args=True,
+    ),
 )
 
 

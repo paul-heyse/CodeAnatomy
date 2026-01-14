@@ -35,9 +35,7 @@ def ctx() -> SessionContext:
 
 def test_fallback_emits_diagnostics(ctx: SessionContext) -> None:
     """Emit fallback diagnostics when SQL execution is required."""
-    expr = parse_one(
-        "SELECT ROW_NUMBER() OVER (PARTITION BY a ORDER BY b) AS rn FROM t"
-    )
+    expr = parse_one("SELECT ROW_NUMBER() OVER (PARTITION BY a ORDER BY b) AS rn FROM t")
     events: list[DataFusionFallbackEvent] = []
     options = DataFusionCompileOptions(fallback_hook=events.append)
     df = df_from_sqlglot_or_sql(ctx, expr, options=options)

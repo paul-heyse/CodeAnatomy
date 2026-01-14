@@ -415,6 +415,18 @@ def rule_definitions_from_table(table: pa.Table) -> tuple[RuleDefinition, ...]:
 
 
 def _evidence_row(spec: EvidenceSpec | None) -> dict[str, object] | None:
+    """Serialize evidence spec to a row payload.
+
+    Parameters
+    ----------
+    spec
+        Evidence spec to serialize.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Row payload for the evidence spec.
+    """
     if spec is None:
         return None
     required_metadata = (
@@ -434,6 +446,18 @@ def _evidence_row(spec: EvidenceSpec | None) -> dict[str, object] | None:
 
 
 def _evidence_from_row(payload: Mapping[str, Any] | None) -> EvidenceSpec | None:
+    """Deserialize evidence spec from a row payload.
+
+    Parameters
+    ----------
+    payload
+        Row payload to deserialize.
+
+    Returns
+    -------
+    EvidenceSpec | None
+        Evidence spec parsed from the payload.
+    """
     if payload is None:
         return None
     required_types = payload.get("required_types")
@@ -453,6 +477,18 @@ def _evidence_from_row(payload: Mapping[str, Any] | None) -> EvidenceSpec | None
 
 
 def _evidence_output_row(spec: EvidenceOutput | None) -> dict[str, object] | None:
+    """Serialize evidence output settings to a row payload.
+
+    Parameters
+    ----------
+    spec
+        Evidence output settings.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Row payload for evidence output settings.
+    """
     if spec is None:
         return None
     literals = [
@@ -467,6 +503,18 @@ def _evidence_output_row(spec: EvidenceOutput | None) -> dict[str, object] | Non
 
 
 def _evidence_output_from_row(payload: Mapping[str, Any] | None) -> EvidenceOutput | None:
+    """Deserialize evidence output settings from a row payload.
+
+    Parameters
+    ----------
+    payload
+        Row payload to deserialize.
+
+    Returns
+    -------
+    EvidenceOutput | None
+        Evidence output settings parsed from the payload.
+    """
     if payload is None:
         return None
     raw_map = payload.get("column_map")
@@ -491,6 +539,18 @@ def _evidence_output_from_row(payload: Mapping[str, Any] | None) -> EvidenceOutp
 
 
 def _policy_overrides_row(overrides: PolicyOverrides) -> dict[str, object] | None:
+    """Serialize policy overrides to a row payload.
+
+    Parameters
+    ----------
+    overrides
+        Policy overrides to serialize.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Row payload for policy overrides.
+    """
     if overrides.confidence_policy is None and overrides.ambiguity_policy is None:
         return None
     return {
@@ -500,6 +560,18 @@ def _policy_overrides_row(overrides: PolicyOverrides) -> dict[str, object] | Non
 
 
 def _policy_overrides_from_row(payload: Mapping[str, Any] | None) -> PolicyOverrides:
+    """Deserialize policy overrides from a row payload.
+
+    Parameters
+    ----------
+    payload
+        Row payload to deserialize.
+
+    Returns
+    -------
+    PolicyOverrides
+        Policy overrides parsed from the payload.
+    """
     if payload is None:
         return PolicyOverrides()
     return PolicyOverrides(
@@ -509,22 +581,86 @@ def _policy_overrides_from_row(payload: Mapping[str, Any] | None) -> PolicyOverr
 
 
 def _encode_expr(expr: ExprIR) -> str:
+    """Serialize an expression to JSON text.
+
+    Parameters
+    ----------
+    expr
+        Expression to serialize.
+
+    Returns
+    -------
+    str
+        JSON representation of the expression.
+    """
     return expr.to_json()
 
 
 def _encode_sort_key(column: str, order: str) -> dict[str, object]:
+    """Encode a sort key to a row payload.
+
+    Parameters
+    ----------
+    column
+        Column name for the sort key.
+    order
+        Sort order string.
+
+    Returns
+    -------
+    dict[str, object]
+        Sort key payload.
+    """
     return {"column": column, "order": order}
 
 
 def _encode_sort_keys(keys: Sequence[SortKey]) -> list[dict[str, object]]:
+    """Encode sort keys to a list of row payloads.
+
+    Parameters
+    ----------
+    keys
+        Sort keys to encode.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        Encoded sort key payloads.
+    """
     return [_encode_sort_key(key.column, key.order) for key in keys]
 
 
 def _encode_literal(value: object | None) -> ScalarValue | None:
+    """Encode a literal value to a scalar union.
+
+    Parameters
+    ----------
+    value
+        Value to encode.
+
+    Returns
+    -------
+    ScalarValue | None
+        Encoded scalar union value.
+    """
     return encode_scalar_union(cast("ScalarValue | None", value))
 
 
 def _tagged_union_payload(tag: str, payload: Mapping[str, object] | None) -> dict[str, object]:
+    """Wrap a payload in a tagged union envelope.
+
+    Parameters
+    ----------
+    tag
+        Union tag key.
+    payload
+        Payload to wrap.
+
+    Returns
+    -------
+    dict[str, object]
+        Tagged union payload.
+    """
     return {_UNION_TAG_KEY: tag, _UNION_VALUE_KEY: payload}
 
 
@@ -620,6 +756,18 @@ def kernel_spec_row(spec: KernelSpecT) -> dict[str, object]:
 
 
 def _relationship_payload_row(payload: object | None) -> dict[str, object] | None:
+    """Serialize a relationship payload to a row payload.
+
+    Parameters
+    ----------
+    payload
+        Relationship payload to serialize.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Serialized relationship payload.
+    """
     if not isinstance(payload, RelationshipPayload):
         return None
     edge_emit = payload.edge_emit
@@ -639,12 +787,36 @@ def _relationship_payload_row(payload: object | None) -> dict[str, object] | Non
 
 
 def _normalize_payload_row(payload: object | None) -> dict[str, object] | None:
+    """Serialize a normalize payload to a row payload.
+
+    Parameters
+    ----------
+    payload
+        Normalize payload to serialize.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Serialized normalize payload.
+    """
     if not isinstance(payload, NormalizePayload):
         return None
     return {"plan_builder": payload.plan_builder}
 
 
 def _extract_payload_row(payload: object | None) -> dict[str, object] | None:
+    """Serialize an extract payload to a row payload.
+
+    Parameters
+    ----------
+    payload
+        Extract payload to serialize.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Serialized extract payload.
+    """
     if not isinstance(payload, ExtractPayload):
         return None
     metadata_extra = (
@@ -675,6 +847,18 @@ def _extract_payload_row(payload: object | None) -> dict[str, object] | None:
 
 
 def _kernel_rows(specs: Sequence[KernelSpecT]) -> list[dict[str, object]] | None:
+    """Serialize kernel specs to a list of row payloads.
+
+    Parameters
+    ----------
+    specs
+        Kernel specs to serialize.
+
+    Returns
+    -------
+    list[dict[str, object]] | None
+        Serialized kernel rows.
+    """
     if not specs:
         return None
     return [kernel_spec_row(spec) for spec in specs]
@@ -683,12 +867,38 @@ def _kernel_rows(specs: Sequence[KernelSpecT]) -> list[dict[str, object]] | None
 def _kernels_from_row(
     payload: Sequence[Mapping[str, Any]] | None,
 ) -> tuple[KernelSpecT, ...]:
+    """Deserialize kernel specs from row payloads.
+
+    Parameters
+    ----------
+    payload
+        Kernel payload rows.
+
+    Returns
+    -------
+    tuple[KernelSpecT, ...]
+        Parsed kernel specs.
+    """
     if not payload:
         return ()
     return tuple(_kernel_from_row(spec) for spec in payload)
 
 
 def _payload_from_row(domain: RuleDomain, row: Mapping[str, Any]) -> RulePayload | None:
+    """Deserialize a rule payload based on domain.
+
+    Parameters
+    ----------
+    domain
+        Rule domain.
+    row
+        Rule row payload.
+
+    Returns
+    -------
+    RulePayload | None
+        Parsed rule payload.
+    """
     if domain == "cpg":
         return _relationship_payload_from_row(row.get("relationship_payload"))
     if domain == "normalize":
@@ -704,6 +914,18 @@ def _payload_from_row(domain: RuleDomain, row: Mapping[str, Any]) -> RulePayload
 
 
 def _relationship_payload_from_row(payload: Mapping[str, Any] | None) -> RelationshipPayload | None:
+    """Deserialize a relationship payload from row data.
+
+    Parameters
+    ----------
+    payload
+        Relationship payload row data.
+
+    Returns
+    -------
+    RelationshipPayload | None
+        Parsed relationship payload.
+    """
     if payload is None:
         return None
     predicate_expr = payload.get("predicate_expr")
@@ -723,12 +945,36 @@ def _relationship_payload_from_row(payload: Mapping[str, Any] | None) -> Relatio
 
 
 def _normalize_payload_from_row(payload: Mapping[str, Any] | None) -> NormalizePayload | None:
+    """Deserialize a normalize payload from row data.
+
+    Parameters
+    ----------
+    payload
+        Normalize payload row data.
+
+    Returns
+    -------
+    NormalizePayload | None
+        Parsed normalize payload.
+    """
     if payload is None:
         return None
     return NormalizePayload(plan_builder=payload.get("plan_builder"))
 
 
 def _extract_payload_from_row(payload: Mapping[str, Any] | None) -> ExtractPayload | None:
+    """Deserialize an extract payload from row data.
+
+    Parameters
+    ----------
+    payload
+        Extract payload row data.
+
+    Returns
+    -------
+    ExtractPayload | None
+        Parsed extract payload.
+    """
     if payload is None:
         return None
     return ExtractPayload(
@@ -754,6 +1000,20 @@ def _extract_payload_from_row(payload: Mapping[str, Any] | None) -> ExtractPaylo
 
 
 def _stages_from_payload(domain: str, payload: object | None) -> tuple[RuleStage, ...]:
+    """Derive rule stages from a payload.
+
+    Parameters
+    ----------
+    domain
+        Rule domain.
+    payload
+        Rule payload to inspect.
+
+    Returns
+    -------
+    tuple[RuleStage, ...]
+        Derived rule stages.
+    """
     if domain != "extract" or not isinstance(payload, ExtractPayload):
         return ()
     enabled_when = _stage_enabled_when(payload)
@@ -764,6 +1024,18 @@ def _stages_from_payload(domain: str, payload: object | None) -> tuple[RuleStage
 
 
 def _stage_enabled_when(payload: ExtractPayload) -> str | None:
+    """Return the enabled_when expression for extract stages.
+
+    Parameters
+    ----------
+    payload
+        Extract payload to inspect.
+
+    Returns
+    -------
+    str | None
+        Enabled-when expression, if set.
+    """
     if payload.enabled_when is None:
         return None
     if payload.enabled_when == "feature_flag" and payload.feature_flag:
@@ -772,6 +1044,18 @@ def _stage_enabled_when(payload: ExtractPayload) -> str | None:
 
 
 def _edge_emit_row(payload: EdgeEmitPayload | None) -> dict[str, object] | None:
+    """Serialize edge emit payload to a row payload.
+
+    Parameters
+    ----------
+    payload
+        Edge emit payload to serialize.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Serialized edge emit payload.
+    """
     if payload is None:
         return None
     return {
@@ -790,6 +1074,20 @@ def _edge_emit_from_row(
     payload: Mapping[str, Any] | None,
     option_flag: object | None,
 ) -> EdgeEmitPayload | None:
+    """Deserialize edge emit payload from row data.
+
+    Parameters
+    ----------
+    payload
+        Edge emit payload row data.
+    option_flag
+        Option flag value from row data.
+
+    Returns
+    -------
+    EdgeEmitPayload | None
+        Parsed edge emit payload.
+    """
     if payload is None:
         return None
     return EdgeEmitPayload(
@@ -806,6 +1104,18 @@ def _edge_emit_from_row(
 
 
 def _project_from_payload(payload: Mapping[str, Any] | None) -> ProjectConfig | None:
+    """Deserialize a project config from payload data.
+
+    Parameters
+    ----------
+    payload
+        Project payload row data.
+
+    Returns
+    -------
+    ProjectConfig | None
+        Parsed project config.
+    """
     if payload is None:
         return None
     exprs = {
@@ -816,6 +1126,18 @@ def _project_from_payload(payload: Mapping[str, Any] | None) -> ProjectConfig | 
 
 
 def _hash_join_from_row(payload: Mapping[str, Any] | None) -> HashJoinConfig | None:
+    """Deserialize a hash join config from row data.
+
+    Parameters
+    ----------
+    payload
+        Hash join payload row data.
+
+    Returns
+    -------
+    HashJoinConfig | None
+        Parsed hash join config.
+    """
     if payload is None:
         return None
     return HashJoinConfig(
@@ -830,6 +1152,18 @@ def _hash_join_from_row(payload: Mapping[str, Any] | None) -> HashJoinConfig | N
 
 
 def _interval_align_from_row(payload: Mapping[str, Any] | None) -> IntervalAlignConfig | None:
+    """Deserialize an interval align config from row data.
+
+    Parameters
+    ----------
+    payload
+        Interval align payload row data.
+
+    Returns
+    -------
+    IntervalAlignConfig | None
+        Parsed interval align config.
+    """
     if payload is None:
         return None
     tie_breakers_payload = parse_mapping_sequence(payload.get("tie_breakers"), label="tie_breakers")
@@ -855,6 +1189,18 @@ def _interval_align_from_row(payload: Mapping[str, Any] | None) -> IntervalAlign
 
 
 def _winner_select_from_row(payload: Mapping[str, Any] | None) -> WinnerSelectConfig | None:
+    """Deserialize a winner select config from row data.
+
+    Parameters
+    ----------
+    payload
+        Winner select payload row data.
+
+    Returns
+    -------
+    WinnerSelectConfig | None
+        Parsed winner select config.
+    """
     if payload is None:
         return None
     tie_breakers_payload = parse_mapping_sequence(payload.get("tie_breakers"), label="tie_breakers")
@@ -870,6 +1216,23 @@ def _winner_select_from_row(payload: Mapping[str, Any] | None) -> WinnerSelectCo
 
 
 def _kernel_from_row(payload: Mapping[str, Any]) -> KernelSpecT:
+    """Deserialize a kernel spec from row payload data.
+
+    Parameters
+    ----------
+    payload
+        Kernel payload row data.
+
+    Returns
+    -------
+    KernelSpecT
+        Parsed kernel spec.
+
+    Raises
+    ------
+    ValueError
+        Raised when the kernel kind is unsupported.
+    """
     kind = str(payload["kind"])
     raw_payload = payload.get("payload")
     spec = raw_payload if isinstance(raw_payload, Mapping) else {}
@@ -912,6 +1275,18 @@ def _kernel_from_row(payload: Mapping[str, Any]) -> KernelSpecT:
 
 
 def _decode_sort_keys(payload: object | None) -> tuple[SortKey, ...]:
+    """Decode sort keys from payload data.
+
+    Parameters
+    ----------
+    payload
+        Payload containing sort key rows.
+
+    Returns
+    -------
+    tuple[SortKey, ...]
+        Parsed sort keys.
+    """
     rows = parse_mapping_sequence(payload, label="sort_keys")
     return tuple(
         SortKey(column=str(row["column"]), order=parse_sort_order(row.get("order"))) for row in rows
@@ -919,6 +1294,23 @@ def _decode_sort_keys(payload: object | None) -> tuple[SortKey, ...]:
 
 
 def _parse_domain(value: object) -> RuleDomain:
+    """Parse a rule domain from a payload value.
+
+    Parameters
+    ----------
+    value
+        Payload value to parse.
+
+    Returns
+    -------
+    RuleDomain
+        Parsed rule domain.
+
+    Raises
+    ------
+    ValueError
+        Raised when the rule domain is unsupported.
+    """
     domain_map: dict[str, RuleDomain] = {
         "cpg": "cpg",
         "normalize": "normalize",
@@ -932,6 +1324,23 @@ def _parse_domain(value: object) -> RuleDomain:
 
 
 def _parse_execution_mode(value: object | None) -> ExecutionMode:
+    """Parse execution mode from a payload value.
+
+    Parameters
+    ----------
+    value
+        Payload value to parse.
+
+    Returns
+    -------
+    ExecutionMode
+        Parsed execution mode.
+
+    Raises
+    ------
+    ValueError
+        Raised when the execution mode is unsupported.
+    """
     mode_map: dict[str, ExecutionMode] = {
         "auto": "auto",
         "plan": "plan",
@@ -947,6 +1356,23 @@ def _parse_execution_mode(value: object | None) -> ExecutionMode:
 
 
 def _parse_join_type(value: object | None) -> JoinType:
+    """Parse join type from a payload value.
+
+    Parameters
+    ----------
+    value
+        Payload value to parse.
+
+    Returns
+    -------
+    JoinType
+        Parsed join type.
+
+    Raises
+    ------
+    ValueError
+        Raised when the join type is unsupported.
+    """
     join_map: dict[str, JoinType] = {
         "inner": "inner",
         "left outer": "left outer",
@@ -965,6 +1391,23 @@ def _parse_join_type(value: object | None) -> JoinType:
 
 
 def _parse_interval_mode(value: object | None) -> IntervalMode:
+    """Parse interval mode from a payload value.
+
+    Parameters
+    ----------
+    value
+        Payload value to parse.
+
+    Returns
+    -------
+    IntervalMode
+        Parsed interval mode.
+
+    Raises
+    ------
+    ValueError
+        Raised when the interval mode is unsupported.
+    """
     mode_map: dict[str, IntervalMode] = {
         "EXACT": "EXACT",
         "CONTAINED_BEST": "CONTAINED_BEST",
@@ -978,6 +1421,23 @@ def _parse_interval_mode(value: object | None) -> IntervalMode:
 
 
 def _parse_interval_how(value: object | None) -> IntervalHow:
+    """Parse interval join mode from a payload value.
+
+    Parameters
+    ----------
+    value
+        Payload value to parse.
+
+    Returns
+    -------
+    IntervalHow
+        Parsed interval join mode.
+
+    Raises
+    ------
+    ValueError
+        Raised when the interval join mode is unsupported.
+    """
     how_map: dict[str, IntervalHow] = {
         "inner": "inner",
         "left": "left",
@@ -990,6 +1450,23 @@ def _parse_interval_how(value: object | None) -> IntervalHow:
 
 
 def _parse_score_order(value: object | None) -> ScoreOrder:
+    """Parse score order from a payload value.
+
+    Parameters
+    ----------
+    value
+        Payload value to parse.
+
+    Returns
+    -------
+    ScoreOrder
+        Parsed score order.
+
+    Raises
+    ------
+    ValueError
+        Raised when the score order is unsupported.
+    """
     order_map: dict[str, ScoreOrder] = {
         "ascending": "ascending",
         "descending": "descending",
@@ -1002,6 +1479,18 @@ def _parse_score_order(value: object | None) -> ScoreOrder:
 
 
 def _derived_rows(values: Sequence[ExtractDerivedIdSpec]) -> list[dict[str, object]] | None:
+    """Serialize derived ID specs to row payloads.
+
+    Parameters
+    ----------
+    values
+        Derived ID specs to serialize.
+
+    Returns
+    -------
+    list[dict[str, object]] | None
+        Serialized derived ID rows.
+    """
     if not values:
         return None
     return [
@@ -1016,6 +1505,23 @@ def _derived_rows(values: Sequence[ExtractDerivedIdSpec]) -> list[dict[str, obje
 
 
 def _derived_specs(value: object | None) -> tuple[ExtractDerivedIdSpec, ...]:
+    """Deserialize derived ID specs from payload data.
+
+    Parameters
+    ----------
+    value
+        Payload value to parse.
+
+    Returns
+    -------
+    tuple[ExtractDerivedIdSpec, ...]
+        Parsed derived ID specs.
+
+    Raises
+    ------
+    TypeError
+        Raised when the derived ID payload is not a sequence of mappings.
+    """
     if not value:
         return ()
     items: list[ExtractDerivedIdSpec] = []
@@ -1038,12 +1544,41 @@ def _derived_specs(value: object | None) -> tuple[ExtractDerivedIdSpec, ...]:
 
 
 def _ordering_rows(values: Sequence[OrderingKey]) -> list[dict[str, object]] | None:
+    """Serialize ordering keys to row payloads.
+
+    Parameters
+    ----------
+    values
+        Ordering keys to serialize.
+
+    Returns
+    -------
+    list[dict[str, object]] | None
+        Serialized ordering key rows.
+    """
     if not values:
         return None
     return [{"column": col, "order": order} for col, order in values]
 
 
 def _ordering_specs(value: object | None) -> tuple[OrderingKey, ...]:
+    """Deserialize ordering keys from payload data.
+
+    Parameters
+    ----------
+    value
+        Payload value to parse.
+
+    Returns
+    -------
+    tuple[OrderingKey, ...]
+        Parsed ordering keys.
+
+    Raises
+    ------
+    TypeError
+        Raised when the ordering payload is not a sequence of mappings.
+    """
     if not value:
         return ()
     if not isinstance(value, Sequence):
@@ -1064,6 +1599,23 @@ def _ordering_specs(value: object | None) -> tuple[OrderingKey, ...]:
 
 
 def _metadata_bytes(metadata: object | None) -> dict[bytes, bytes]:
+    """Convert metadata payload to bytes mapping.
+
+    Parameters
+    ----------
+    metadata
+        Metadata payload to convert.
+
+    Returns
+    -------
+    dict[bytes, bytes]
+        Metadata mapping with byte keys and values.
+
+    Raises
+    ------
+    TypeError
+        Raised when metadata payload is not a mapping.
+    """
     if metadata is None:
         return {}
     if not isinstance(metadata, Mapping):

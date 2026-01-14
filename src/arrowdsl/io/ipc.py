@@ -14,6 +14,13 @@ from core_types import PathLike, ensure_path
 
 
 def _ensure_dir(path: Path) -> None:
+    """Ensure the directory exists for a target path.
+
+    Parameters
+    ----------
+    path
+        Directory path to create if missing.
+    """
     path.mkdir(exist_ok=True, parents=True)
 
 

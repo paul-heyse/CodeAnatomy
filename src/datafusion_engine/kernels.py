@@ -131,6 +131,50 @@ def _code_unit_offset_to_py_index(line: str, offset: int, position_encoding: int
     return min(offset, len(line))
 
 
+def _normalize_col_unit(value: object | None) -> str:
+    if isinstance(value, int):
+        return _col_unit_from_int(value)
+    if isinstance(value, str):
+        return _col_unit_from_text(value)
+    return "utf32"
+
+
+def _col_unit_from_int(value: int) -> str:
+    encoding_map: dict[int, str] = {
+        ENC_UTF8: "utf8",
+        ENC_UTF16: "utf16",
+        ENC_UTF32: "utf32",
+    }
+    return encoding_map.get(value, "utf32")
+
+
+def _col_unit_from_text(value: str) -> str:
+    text = value.strip().lower()
+    if text.isdigit():
+        return _col_unit_from_int(int(text))
+    if "byte" in text:
+        return "byte"
+    if "utf8" in text:
+        return "utf8"
+    if "utf16" in text:
+        return "utf16"
+    if "utf32" in text:
+        return "utf32"
+    return "utf32"
+
+
+def _encoding_from_unit(unit: str) -> int:
+    if unit == "utf8":
+        return ENC_UTF8
+    if unit == "utf16":
+        return ENC_UTF16
+    return ENC_UTF32
+
+
+def _clamp_offset(offset: int, limit: int) -> int:
+    return max(0, min(offset, limit))
+
+
 def _col_to_byte(
     line_values: pa.Array | pa.ChunkedArray | pa.Scalar,
     offset_values: pa.Array | pa.ChunkedArray | pa.Scalar,
@@ -140,13 +184,17 @@ def _col_to_byte(
         line = line_values.as_py()
         offset_value = offset_values.as_py() if isinstance(offset_values, pa.Scalar) else None
         offset = _coerce_int(offset_value)
-        enc = normalize_position_encoding(
+        unit = _normalize_col_unit(
             encoding_values.as_py() if isinstance(encoding_values, pa.Scalar) else None
         )
         if not isinstance(line, str) or offset is None:
             return pa.scalar(None, type=pa.int64())
+        if unit == "byte":
+            byte_len = len(line.encode("utf-8"))
+            return pa.scalar(_clamp_offset(offset, byte_len), type=pa.int64())
+        enc = _encoding_from_unit(unit)
         py_index = _code_unit_offset_to_py_index(line, offset, enc)
-        py_index = max(0, min(py_index, len(line)))
+        py_index = _clamp_offset(py_index, len(line))
         return pa.scalar(len(line[:py_index].encode("utf-8")), type=pa.int64())
 
     length = len(line_values)
@@ -175,9 +223,14 @@ def _col_to_byte(
         if offset is None:
             out.append(None)
             continue
-        enc = normalize_position_encoding(encoding_value)
+        unit = _normalize_col_unit(encoding_value)
+        if unit == "byte":
+            byte_len = len(line_value.encode("utf-8"))
+            out.append(_clamp_offset(offset, byte_len))
+            continue
+        enc = _encoding_from_unit(unit)
         py_index = _code_unit_offset_to_py_index(line_value, offset, enc)
-        py_index = max(0, min(py_index, len(line_value)))
+        py_index = _clamp_offset(py_index, len(line_value))
         out.append(len(line_value[:py_index].encode("utf-8")))
     return pa.array(out, type=pa.int64())
 
@@ -208,7 +261,7 @@ _POSITION_ENCODING_NORM_UDF = udf(
 
 _COL_TO_BYTE_UDF = udf(
     _col_to_byte,
-    [pa.string(), pa.int64(), pa.int32()],
+    [pa.string(), pa.int64(), pa.string()],
     pa.int64(),
     "stable",
     "col_to_byte",

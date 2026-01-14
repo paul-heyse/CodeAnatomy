@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TypedDict, Unpack, cast
@@ -203,6 +204,19 @@ def _literal_from_value(value: object) -> Expression:
     return exp.Literal.string(str(value))
 
 
+def plan_fingerprint(expr: Expression, *, dialect: str = "datafusion_ext") -> str:
+    """Return a stable fingerprint for a SQLGlot expression.
+
+    Returns
+    -------
+    str
+        SHA-256 fingerprint for the canonical SQL representation.
+    """
+    sql = expr.sql(dialect=dialect, unsupported_level=ErrorLevel.RAISE)
+    normalized = " ".join(sql.split())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 __all__ = [
     "CanonicalizationRules",
     "DataFusionDialect",
@@ -211,6 +225,7 @@ __all__ = [
     "canonicalize_expr",
     "normalize_expr",
     "optimize_expr",
+    "plan_fingerprint",
     "qualify_expr",
     "register_datafusion_dialect",
     "rewrite_expr",

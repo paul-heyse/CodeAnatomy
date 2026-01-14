@@ -53,6 +53,10 @@ AST_NODES_ROW_SCHEMA = dataset_row_schema("py_ast_nodes_v1")
 AST_EDGES_ROW_SCHEMA = dataset_row_schema("py_ast_edges_v1")
 AST_ERRORS_ROW_SCHEMA = dataset_row_schema("py_ast_errors_v1")
 
+AST_LINE_BASE = 1
+AST_COL_UNIT = "utf32"
+AST_END_EXCLUSIVE = True
+
 
 def _maybe_int(value: object | None) -> int | None:
     if isinstance(value, int):
@@ -99,6 +103,9 @@ def _syntax_error_row(
         "offset": _maybe_int(getattr(exc, "offset", None)),
         "end_lineno": _maybe_int(getattr(exc, "end_lineno", None)),
         "end_offset": _maybe_int(getattr(exc, "end_offset", None)),
+        "line_base": AST_LINE_BASE,
+        "col_unit": AST_COL_UNIT,
+        "end_exclusive": AST_END_EXCLUSIVE,
     }
 
 
@@ -118,6 +125,9 @@ def _exception_error_row(
         "offset": None,
         "end_lineno": None,
         "end_offset": None,
+        "line_base": AST_LINE_BASE,
+        "col_unit": AST_COL_UNIT,
+        "end_exclusive": AST_END_EXCLUSIVE,
     }
 
 
@@ -191,6 +201,9 @@ def _walk_ast(
                 "col_offset": _maybe_int(getattr(node, "col_offset", None)),
                 "end_lineno": _maybe_int(getattr(node, "end_lineno", None)),
                 "end_col_offset": _maybe_int(getattr(node, "end_col_offset", None)),
+                "line_base": AST_LINE_BASE,
+                "col_unit": AST_COL_UNIT,
+                "end_exclusive": AST_END_EXCLUSIVE,
             }
         )
 

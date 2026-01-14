@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Literal
 
@@ -11,6 +11,13 @@ from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 
 def _default_datafusion_profile() -> DataFusionRuntimeProfile:
+    """Return the default DataFusion runtime profile.
+
+    Returns
+    -------
+    DataFusionRuntimeProfile
+        Default runtime profile instance.
+    """
     return DataFusionRuntimeProfile()
 
 
@@ -372,6 +379,23 @@ class ExecutionContextOptions:
 
 
 def _normalize_profile(profile: str) -> ExecutionProfileName:
+    """Normalize an execution profile name to the canonical token.
+
+    Parameters
+    ----------
+    profile
+        User-provided profile name.
+
+    Returns
+    -------
+    ExecutionProfileName
+        Canonical profile token.
+
+    Raises
+    ------
+    ValueError
+        Raised when the profile name is unknown.
+    """
     key = profile.strip().lower()
     if key == "default":
         return "default"
@@ -464,6 +488,9 @@ def execution_context_factory(
     """
     runtime = runtime_profile_factory(profile)
     options = options or ExecutionContextOptions()
+    if options.debug and runtime.datafusion is not None:
+        datafusion_profile = replace(runtime.datafusion, capture_explain=True)
+        runtime = runtime.with_datafusion(datafusion_profile)
     return ExecutionContext(
         runtime=runtime,
         mode=options.mode,

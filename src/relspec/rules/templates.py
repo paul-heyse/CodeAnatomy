@@ -137,6 +137,23 @@ def validate_template_specs(specs: Sequence[RuleTemplateSpec]) -> tuple[RuleDiag
 
 
 def _metadata_from_row(value: object | None) -> dict[str, str]:
+    """Parse template metadata from a row value.
+
+    Parameters
+    ----------
+    value
+        Row value containing template metadata.
+
+    Returns
+    -------
+    dict[str, str]
+        Parsed metadata mapping.
+
+    Raises
+    ------
+    TypeError
+        Raised when template metadata is not a mapping.
+    """
     if value is None:
         return {}
     if isinstance(value, Mapping):
@@ -146,6 +163,23 @@ def _metadata_from_row(value: object | None) -> dict[str, str]:
 
 
 def _parse_domain(value: object | None) -> RuleDomain:
+    """Parse a template domain value to a known domain token.
+
+    Parameters
+    ----------
+    value
+        Domain value to parse.
+
+    Returns
+    -------
+    RuleDomain
+        Parsed rule domain.
+
+    Raises
+    ------
+    ValueError
+        Raised when the domain is missing or unsupported.
+    """
     if value is None:
         msg = "Template domain is required."
         raise ValueError(msg)

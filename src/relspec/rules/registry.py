@@ -186,12 +186,26 @@ class RuleRegistry:
         return rule_diagnostic_table(self.rule_diagnostics())
 
     def _collect_rule_definitions(self) -> tuple[RuleDefinition, ...]:
+        """Collect rule definitions from all adapters.
+
+        Returns
+        -------
+        tuple[RuleDefinition, ...]
+            Consolidated rule definitions.
+        """
         collected: list[RuleDefinition] = []
         for adapter in self.adapters:
             collected.extend(adapter.rule_definitions())
         return tuple(collected)
 
     def _collect_template_specs(self) -> tuple[RuleTemplateSpec, ...]:
+        """Collect template specs from all adapters.
+
+        Returns
+        -------
+        tuple[RuleTemplateSpec, ...]
+            Consolidated template specs.
+        """
         collected: list[RuleTemplateSpec] = []
         for adapter in self.adapters:
             collected.extend(adapter.templates())
@@ -210,6 +224,18 @@ def collect_rule_definitions(adapters: Iterable[RuleAdapter]) -> tuple[RuleDefin
 
 
 def _raise_template_errors(diagnostics: Sequence[RuleDiagnostic]) -> None:
+    """Raise on template diagnostics errors.
+
+    Parameters
+    ----------
+    diagnostics
+        Diagnostics to inspect.
+
+    Raises
+    ------
+    ValueError
+        Raised when template diagnostics contain errors.
+    """
     errors = [diag for diag in diagnostics if diag.severity == "error"]
     if not errors:
         return
@@ -219,6 +245,18 @@ def _raise_template_errors(diagnostics: Sequence[RuleDiagnostic]) -> None:
 
 
 def _raise_rule_errors(diagnostics: Sequence[RuleDiagnostic]) -> None:
+    """Raise on rule diagnostics errors.
+
+    Parameters
+    ----------
+    diagnostics
+        Diagnostics to inspect.
+
+    Raises
+    ------
+    ValueError
+        Raised when rule diagnostics contain errors.
+    """
     errors = [diag for diag in diagnostics if diag.severity == "error"]
     if not errors:
         return

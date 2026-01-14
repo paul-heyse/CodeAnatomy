@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import pyarrow.dataset as ds
 from datafusion import SessionContext
@@ -76,12 +77,19 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
     """
     scan = resolve_datafusion_scan_options(location)
     schema = resolve_dataset_schema(location)
+    provider = location.datafusion_provider
+    if (
+        provider is None
+        and scan is not None
+        and (scan.partition_cols or scan.file_sort_order)
+    ):
+        provider = "listing"
     return DataFusionRegistryOptions(
         scan=scan,
         schema=schema,
         read_options=dict(location.read_options),
         cache=bool(scan.cache) if scan is not None else False,
-        provider=location.datafusion_provider,
+        provider=provider,
     )
 
 
@@ -164,6 +172,7 @@ def register_dataset_df(
     ValueError
         Raised when the dataset format is unsupported.
     """
+    _register_object_store(ctx, location)
     options = resolve_registry_options(location)
     cache = _resolve_cache_policy(
         options,
@@ -240,6 +249,27 @@ def _register_simple(context: DataFusionRegistrationContext, *, method: str) -> 
     _call_register(register, context.name, context.location.path, kwargs)
     df = context.ctx.table(context.name)
     return _maybe_cache(context, df)
+
+
+def _register_object_store(ctx: SessionContext, location: DatasetLocation) -> None:
+    register = getattr(ctx, "register_object_store", None)
+    if not callable(register):
+        return
+    if location.filesystem is None:
+        return
+    scheme = _scheme_prefix(location.path)
+    if scheme is None:
+        return
+    register(scheme, location.filesystem, None)
+
+
+def _scheme_prefix(path: str | Path) -> str | None:
+    if not isinstance(path, str):
+        return None
+    parsed = urlparse(path)
+    if not parsed.scheme:
+        return None
+    return f"{parsed.scheme}://"
 
 
 def _register_dataset_provider(context: DataFusionRegistrationContext) -> DataFrame:

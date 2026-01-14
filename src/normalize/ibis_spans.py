@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import cast
 
 import ibis
 from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 
-from arrowdsl.compute.expr_core import ENC_UTF32
+from arrowdsl.compute.expr_core import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from arrowdsl.core.interop import TableLike
 from ibis_engine.builtin_udfs import col_to_byte, position_encoding_norm
 from ibis_engine.ids import masked_stable_id_expr
@@ -34,35 +35,35 @@ def add_ast_byte_spans_ibis(
     start_idx = _line_index_view(line_idx, prefix="start")
     end_idx = _line_index_view(line_idx, prefix="end")
 
-    one = cast("NumericValue", ibis.literal(1))
-    start_line = (cast("NumericValue", ast.lineno) - one).cast("int32")
-    end_line = (cast("NumericValue", ast.end_lineno) - one).cast("int32")
-    joined = ast.join(
+    defaults = SpanCoordDefaults(base=1, unit="utf32", end_exclusive=True)
+    line_base, col_unit, end_exclusive = _span_base_values(
+        ast.line_base,
+        ast.col_unit,
+        ast.end_exclusive,
+        defaults=defaults,
+    )
+    start_line, end_line = _span_line_values(ast.lineno, ast.end_lineno, line_base)
+    joined = _join_line_index(
+        ast,
         start_idx,
-        [ast.file_id == start_idx.start_file_id, start_line == start_idx.start_line_no],
-        how="left",
-    )
-    joined = joined.join(
         end_idx,
-        [ast.file_id == end_idx.end_file_id, end_line == end_idx.end_line_no],
-        how="left",
+        spec=SpanJoinSpec(
+            file_id=ast.file_id,
+            start_line=start_line,
+            end_line=end_line,
+        ),
     )
-    enc = ibis.literal(ENC_UTF32)
-    bstart = _line_offset_expr(
-        start_idx.start_line_start_byte,
-        start_idx.start_line_text,
-        ast.col_offset,
-        enc,
+    bstart, bend, span_ok = _span_offsets(
+        SpanOffsetSpec(
+            start_idx=start_idx,
+            end_idx=end_idx,
+            start_col=ast.col_offset,
+            end_col=ast.end_col_offset,
+            end_line_value=ast.end_lineno,
+            col_unit=col_unit,
+            end_exclusive=end_exclusive,
+        )
     )
-    bend_raw = _line_offset_expr(
-        end_idx.end_line_start_byte,
-        end_idx.end_line_text,
-        ast.end_col_offset,
-        enc,
-    )
-    end_ok = ast.end_lineno.notnull() & ast.end_col_offset.notnull()
-    bend = ibis.ifelse(end_ok, bend_raw, bstart)
-    span_ok = bstart.notnull() & bend.notnull()
     span_id = masked_stable_id_expr(
         "span",
         parts=(ast.path, bstart, bend),
@@ -89,40 +90,36 @@ def anchor_instructions_ibis(
     start_idx = _line_index_view(line_idx, prefix="start")
     end_idx = _line_index_view(line_idx, prefix="end")
 
-    one = cast("NumericValue", ibis.literal(1))
-    start_line = (cast("NumericValue", instr.pos_start_line) - one).cast("int32")
-    end_line = (cast("NumericValue", instr.pos_end_line) - one).cast("int32")
-    joined = instr.join(
+    defaults = SpanCoordDefaults(base=1, unit="utf32", end_exclusive=True)
+    line_base, col_unit, end_exclusive = _span_base_values(
+        instr.line_base,
+        instr.col_unit,
+        instr.end_exclusive,
+        defaults=defaults,
+    )
+    start_line, end_line = _span_line_values(instr.pos_start_line, instr.pos_end_line, line_base)
+    joined = _join_line_index(
+        instr,
         start_idx,
-        [
-            instr.file_id == start_idx.start_file_id,
-            start_line == start_idx.start_line_no,
-        ],
-        how="left",
-    )
-    joined = joined.join(
         end_idx,
-        [instr.file_id == end_idx.end_file_id, end_line == end_idx.end_line_no],
-        how="left",
+        spec=SpanJoinSpec(
+            file_id=instr.file_id,
+            start_line=start_line,
+            end_line=end_line,
+        ),
     )
-    enc = ibis.literal(ENC_UTF32)
-    bstart = _line_offset_expr(
-        start_idx.start_line_start_byte,
-        start_idx.start_line_text,
-        instr.pos_start_col,
-        enc,
+    bstart, bend, span_ok = _span_offsets(
+        SpanOffsetSpec(
+            start_idx=start_idx,
+            end_idx=end_idx,
+            start_col=instr.pos_start_col,
+            end_col=instr.pos_end_col,
+            end_line_value=instr.pos_end_line,
+            col_unit=col_unit,
+            end_exclusive=end_exclusive,
+        )
     )
-    bend_raw = _line_offset_expr(
-        end_idx.end_line_start_byte,
-        end_idx.end_line_text,
-        instr.pos_end_col,
-        enc,
-    )
-    end_ok = instr.pos_end_line.notnull() & instr.pos_end_col.notnull()
-    bend = ibis.ifelse(end_ok, bend_raw, bstart)
-    span_ok = bstart.notnull() & bend.notnull()
-    expr = joined.mutate(bstart=bstart, bend=bend, span_ok=span_ok)
-    return expr.to_pyarrow()
+    return joined.mutate(bstart=bstart, bend=bend, span_ok=span_ok).to_pyarrow()
 
 
 def add_scip_occurrence_byte_spans_ibis(
@@ -142,8 +139,8 @@ def add_scip_occurrence_byte_spans_ibis(
     occ = _table_expr(scip_occurrences, backend=backend, name="scip_occurrences")
     docs = _table_expr(scip_documents, backend=backend, name="scip_documents")
     line_idx = _table_expr(line_index, backend=backend, name="file_line_index")
-    joined, posenc = _scip_occurrence_join(occ, docs, line_idx)
-    occ_expr, errors_expr = _scip_occurrence_span_exprs(joined, posenc)
+    joined = _scip_occurrence_join(occ, docs, line_idx)
+    occ_expr, errors_expr = _scip_occurrence_span_exprs(joined)
     occ_table = occ_expr.to_pyarrow()
     errors_table = errors_expr.to_pyarrow()
     if errors_table.num_rows == 0:
@@ -151,7 +148,7 @@ def add_scip_occurrence_byte_spans_ibis(
     return occ_table, errors_table
 
 
-def _scip_occurrence_join(occ: Table, docs: Table, line_idx: Table) -> tuple[Table, Value]:
+def _scip_occurrence_join(occ: Table, docs: Table, line_idx: Table) -> Table:
     docs_sel = docs.select(
         document_id=docs.document_id,
         doc_path=docs.path,
@@ -163,8 +160,24 @@ def _scip_occurrence_join(occ: Table, docs: Table, line_idx: Table) -> tuple[Tab
         how="left",
     )
     path_expr = ibis.coalesce(occ_docs.path, occ_docs.doc_path)
-    occ_docs = occ_docs.mutate(resolved_path=path_expr)
+    line_base = _line_base_value(occ_docs.line_base, default_base=0)
+    end_exclusive = _end_exclusive_value(occ_docs.end_exclusive, default_exclusive=True)
     posenc = position_encoding_norm(occ_docs.position_encoding.cast("string"))
+    occ_unit = occ_docs.col_unit.cast("string").lower()
+    posenc_unit = _col_unit_from_encoding(posenc)
+    col_unit = ibis.coalesce(occ_unit, posenc_unit)
+    occ_docs = occ_docs.mutate(
+        resolved_path=path_expr,
+        line_base_norm=line_base,
+        end_exclusive_norm=end_exclusive,
+        col_unit_norm=col_unit,
+        start_line0=_zero_based_line(occ_docs.start_line, line_base),
+        end_line0=_zero_based_line(occ_docs.end_line, line_base),
+        enc_start_line0=_zero_based_line(occ_docs.enc_start_line, line_base),
+        enc_end_line0=_zero_based_line(occ_docs.enc_end_line, line_base),
+        end_char_norm=_normalize_end_col(occ_docs.end_char, end_exclusive),
+        enc_end_char_norm=_normalize_end_col(occ_docs.enc_end_char, end_exclusive),
+    )
 
     start_idx = _line_index_view(line_idx, prefix="start")
     end_idx = _line_index_view(line_idx, prefix="end")
@@ -175,7 +188,7 @@ def _scip_occurrence_join(occ: Table, docs: Table, line_idx: Table) -> tuple[Tab
         start_idx,
         [
             occ_docs.resolved_path == start_idx.start_path,
-            occ_docs.start_line.cast("int32") == start_idx.start_line_no,
+            occ_docs.start_line0 == start_idx.start_line_no,
         ],
         how="left",
     )
@@ -183,7 +196,7 @@ def _scip_occurrence_join(occ: Table, docs: Table, line_idx: Table) -> tuple[Tab
         end_idx,
         [
             occ_docs.resolved_path == end_idx.end_path,
-            occ_docs.end_line.cast("int32") == end_idx.end_line_no,
+            occ_docs.end_line0 == end_idx.end_line_no,
         ],
         how="left",
     )
@@ -191,45 +204,44 @@ def _scip_occurrence_join(occ: Table, docs: Table, line_idx: Table) -> tuple[Tab
         enc_start_idx,
         [
             occ_docs.resolved_path == enc_start_idx.enc_start_path,
-            occ_docs.enc_start_line.cast("int32") == enc_start_idx.enc_start_line_no,
+            occ_docs.enc_start_line0 == enc_start_idx.enc_start_line_no,
         ],
         how="left",
     )
-    joined = joined.join(
+    return joined.join(
         enc_end_idx,
         [
             occ_docs.resolved_path == enc_end_idx.enc_end_path,
-            occ_docs.enc_end_line.cast("int32") == enc_end_idx.enc_end_line_no,
+            occ_docs.enc_end_line0 == enc_end_idx.enc_end_line_no,
         ],
         how="left",
     )
-    return joined, posenc
 
 
-def _scip_occurrence_span_exprs(joined: Table, posenc: Value) -> tuple[Table, Table]:
+def _scip_occurrence_span_exprs(joined: Table) -> tuple[Table, Table]:
     bstart = _line_offset_expr(
         joined.start_line_start_byte,
         joined.start_line_text,
         joined.start_char,
-        posenc,
+        joined.col_unit_norm,
     )
     bend = _line_offset_expr(
         joined.end_line_start_byte,
         joined.end_line_text,
-        joined.end_char,
-        posenc,
+        joined.end_char_norm,
+        joined.col_unit_norm,
     )
     enc_bstart_raw = _line_offset_expr(
         joined.enc_start_line_start_byte,
         joined.enc_start_line_text,
         joined.enc_start_char,
-        posenc,
+        joined.col_unit_norm,
     )
     enc_bend_raw = _line_offset_expr(
         joined.enc_end_line_start_byte,
         joined.enc_end_line_text,
-        joined.enc_end_char,
-        posenc,
+        joined.enc_end_char_norm,
+        joined.col_unit_norm,
     )
     enc_valid = joined.enc_range_len.notnull() & (joined.enc_range_len > ibis.literal(0))
     enc_bstart = ibis.ifelse(enc_valid, enc_bstart_raw, ibis.null())
@@ -290,10 +302,10 @@ def _line_offset_expr(
     line_start: Value,
     line_text: Value,
     column: Value,
-    encoding: Value,
+    col_unit: Value,
 ) -> Value:
     offset = column.cast("int64")
-    byte_in_line = col_to_byte(line_text, offset, encoding)
+    byte_in_line = col_to_byte(line_text, offset, col_unit.cast("string"))
     left = cast("NumericValue", line_start)
     right = cast("NumericValue", byte_in_line)
     return left + right
@@ -314,6 +326,133 @@ def _line_index_view(line_index: Table, *, prefix: str) -> Table:
 def _table_expr(table: TableLike, *, backend: BaseBackend, name: str) -> Table:
     plan = table_to_ibis(table, backend=backend, name=name)
     return plan.expr
+
+
+@dataclass(frozen=True)
+class SpanCoordDefaults:
+    base: int
+    unit: str
+    end_exclusive: bool
+
+
+@dataclass(frozen=True)
+class SpanJoinSpec:
+    file_id: Value
+    start_line: Value
+    end_line: Value
+
+
+@dataclass(frozen=True)
+class SpanOffsetSpec:
+    start_idx: Table
+    end_idx: Table
+    start_col: Value
+    end_col: Value
+    end_line_value: Value
+    col_unit: Value
+    end_exclusive: Value
+
+
+def _span_base_values(
+    line_base: Value,
+    col_unit: Value,
+    end_exclusive: Value,
+    *,
+    defaults: SpanCoordDefaults,
+) -> tuple[Value, Value, Value]:
+    return (
+        _line_base_value(line_base, default_base=defaults.base),
+        _col_unit_value(col_unit, default_unit=defaults.unit),
+        _end_exclusive_value(end_exclusive, default_exclusive=defaults.end_exclusive),
+    )
+
+
+def _span_line_values(start_line: Value, end_line: Value, line_base: Value) -> tuple[Value, Value]:
+    return (
+        _zero_based_line(start_line, line_base),
+        _zero_based_line(end_line, line_base),
+    )
+
+
+def _join_line_index(
+    table: Table,
+    start_idx: Table,
+    end_idx: Table,
+    *,
+    spec: SpanJoinSpec,
+) -> Table:
+    joined = table.join(
+        start_idx,
+        [
+            spec.file_id == start_idx.start_file_id,
+            spec.start_line == start_idx.start_line_no,
+        ],
+        how="left",
+    )
+    return joined.join(
+        end_idx,
+        [spec.file_id == end_idx.end_file_id, spec.end_line == end_idx.end_line_no],
+        how="left",
+    )
+
+
+def _span_offsets(spec: SpanOffsetSpec) -> tuple[Value, Value, Value]:
+    end_col_norm = _normalize_end_col(spec.end_col, spec.end_exclusive)
+    bstart = _line_offset_expr(
+        spec.start_idx.start_line_start_byte,
+        spec.start_idx.start_line_text,
+        spec.start_col,
+        spec.col_unit,
+    )
+    bend_raw = _line_offset_expr(
+        spec.end_idx.end_line_start_byte,
+        spec.end_idx.end_line_text,
+        end_col_norm,
+        spec.col_unit,
+    )
+    end_ok = spec.end_line_value.notnull() & end_col_norm.notnull()
+    bend = ibis.ifelse(end_ok, bend_raw, bstart)
+    span_ok = bstart.notnull() & bend.notnull()
+    return bstart, bend, span_ok
+
+
+def _line_base_value(line_base: Value, *, default_base: int) -> NumericValue:
+    return cast("NumericValue", ibis.coalesce(line_base.cast("int32"), ibis.literal(default_base)))
+
+
+def _zero_based_line(line_value: Value, line_base: Value) -> NumericValue:
+    left = cast("NumericValue", line_value.cast("int32"))
+    right = cast("NumericValue", line_base.cast("int32"))
+    result = left - right
+    return cast("NumericValue", result.cast("int32"))
+
+
+def _end_exclusive_value(end_exclusive: Value, *, default_exclusive: bool) -> BooleanValue:
+    result = ibis.coalesce(end_exclusive.cast("boolean"), ibis.literal(default_exclusive))
+    return cast("BooleanValue", result)
+
+
+def _normalize_end_col(end_col: Value, end_exclusive: Value) -> NumericValue:
+    col = cast("NumericValue", end_col.cast("int64"))
+    increment = cast("NumericValue", ibis.literal(1, type="int64"))
+    adjusted = col + increment
+    result = ibis.ifelse(end_exclusive, col, adjusted)
+    return cast("NumericValue", result)
+
+
+def _col_unit_value(col_unit: Value, *, default_unit: str) -> Value:
+    return ibis.coalesce(col_unit.cast("string"), ibis.literal(default_unit))
+
+
+def _col_unit_from_encoding(encoding: Value) -> Value:
+    return (
+        ibis.case()
+        .when(encoding == ibis.literal(ENC_UTF8), ibis.literal("utf8"))
+        .when(encoding == ibis.literal(ENC_UTF16), ibis.literal("utf16"))
+        .when(encoding == ibis.literal(ENC_UTF32), ibis.literal("utf32"))
+        .else_(ibis.literal("utf32"))
+        .end()
+    )
 
 
 __all__ = [

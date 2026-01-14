@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pyarrow as pa
@@ -11,6 +12,7 @@ from hamilton.function_modifiers import tag
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table
 
+from arrowdsl.core.context import ExecutionContext
 from arrowdsl.schema.schema import schema_fingerprint
 from core_types import JsonDict
 from hamilton_pipeline.pipeline_types import OutputConfig, ParamBundle
@@ -19,9 +21,13 @@ from ibis_engine.param_tables import (
     ParamTableArtifact,
     ParamTablePolicy,
     ParamTableRegistry,
+    ParamTableScope,
     ParamTableSpec,
     param_signature,
     unique_values,
+)
+from ibis_engine.param_tables import (
+    scalar_param_signature as build_scalar_param_signature,
 )
 from relspec.param_deps import ActiveParamSet, RuleDependencyReport
 
@@ -36,6 +42,25 @@ def param_table_policy() -> ParamTablePolicy:
         Default parameter table policy.
     """
     return ParamTablePolicy()
+
+
+@tag(layer="params", artifact="param_table_scope_key", kind="scalar")
+def param_table_scope_key(
+    param_table_policy: ParamTablePolicy,
+    ctx: ExecutionContext | None = None,
+) -> str | None:
+    """Return an optional scope key for parameter table registration.
+
+    Returns
+    -------
+    str | None
+        Scope key for schema/table scoping when configured.
+    """
+    if param_table_policy.scope == ParamTableScope.PER_SESSION:
+        if ctx is None or ctx.runtime.datafusion is None:
+            return None
+        return ctx.runtime.datafusion.context_cache_key()
+    return None
 
 
 @tag(layer="params", artifact="param_table_specs", kind="spec")
@@ -66,6 +91,41 @@ def param_table_specs() -> tuple[ParamTableSpec, ...]:
     )
 
 
+@dataclass(frozen=True)
+class ParamTableInputs:
+    """Bundled inputs for param table registration."""
+
+    scope_key: str | None = None
+    parquet_paths: Mapping[str, str] = field(default_factory=dict)
+    active_set: frozenset[str] | None = None
+
+
+@tag(layer="params", artifact="param_table_inputs", kind="object")
+def param_table_inputs(
+    param_table_scope_key: str | None,
+    param_table_parquet_paths: Mapping[str, str] | None,
+    active_param_set: ActiveParamSet | None,
+) -> ParamTableInputs:
+    """Bundle inputs for param table registration.
+
+    Returns
+    -------
+    ParamTableInputs
+        Normalized param table inputs for registration.
+    """
+    normalized_paths = (
+        {str(key): str(val) for key, val in param_table_parquet_paths.items()}
+        if param_table_parquet_paths
+        else {}
+    )
+    active_set = active_param_set.active if active_param_set is not None else None
+    return ParamTableInputs(
+        scope_key=param_table_scope_key,
+        parquet_paths=normalized_paths,
+        active_set=active_set,
+    )
+
+
 @tag(layer="params", artifact="param_bundle", kind="object")
 def param_bundle(
     relspec_param_values: JsonDict,
@@ -91,13 +151,24 @@ def param_bundle(
     return ParamBundle(scalar=scalar_values, lists=list_values)
 
 
+@tag(layer="params", artifact="param_scalar_signature", kind="scalar")
+def param_scalar_signature(param_bundle: ParamBundle) -> str:
+    """Return a stable signature for scalar parameters.
+
+    Returns
+    -------
+    str
+        Signature hash for scalar parameter values.
+    """
+    return build_scalar_param_signature(param_bundle.scalar)
+
+
 @tag(layer="params", artifact="param_table_registry", kind="object")
 def param_table_registry(
     param_bundle: ParamBundle,
     param_table_specs: tuple[ParamTableSpec, ...],
     param_table_policy: ParamTablePolicy,
-    param_table_parquet_paths: Mapping[str, str] | None = None,
-    active_param_set: ActiveParamSet | None = None,
+    param_table_inputs: ParamTableInputs | None = None,
 ) -> ParamTableRegistry:
     """Return a param table registry populated from runtime values.
 
@@ -107,9 +178,14 @@ def param_table_registry(
         Registry populated with param table artifacts.
     """
     specs = {spec.logical_name: spec for spec in param_table_specs}
-    registry = ParamTableRegistry(specs=specs, policy=param_table_policy)
-    paths = param_table_parquet_paths or {}
-    active = active_param_set.active if active_param_set is not None else frozenset(specs.keys())
+    inputs = param_table_inputs or ParamTableInputs()
+    registry = ParamTableRegistry(
+        specs=specs,
+        policy=param_table_policy,
+        scope_key=inputs.scope_key,
+    )
+    paths = inputs.parquet_paths
+    active = inputs.active_set if inputs.active_set is not None else frozenset(specs.keys())
     for spec in param_table_specs:
         if spec.logical_name not in active:
             continue

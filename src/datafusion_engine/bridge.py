@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, cast
 
+import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 from ibis.expr.types import Table as IbisTable
@@ -86,7 +87,7 @@ def df_from_sqlglot_or_sql(
             params=datafusion_param_bindings(resolved.params),
         )
     try:
-        return df_from_sqlglot(ctx, bound_expr)
+        df = df_from_sqlglot(ctx, bound_expr)
     except TranslationError as exc:
         _ensure_dialect(resolved.dialect)
         sql = bound_expr.sql(dialect=resolved.dialect, unsupported_level=ErrorLevel.RAISE)
@@ -113,7 +114,9 @@ def df_from_sqlglot_or_sql(
             event,
             fallback_hook=resolved.fallback_hook,
         )
-        return ctx.sql_with_options(sql, sql_options, param_values=bindings)
+        df = ctx.sql_with_options(sql, sql_options, param_values=bindings)
+    _maybe_explain(ctx, bound_expr, options=resolved)
+    return df
 
 
 def sqlglot_to_datafusion(
@@ -201,6 +204,38 @@ def datafusion_to_table(
     return table.cast(spec.apply(table.schema))
 
 
+def datafusion_to_reader(
+    df: DataFrame,
+    *,
+    ordering: Ordering | None = None,
+) -> pa.RecordBatchReader:
+    """Return a RecordBatchReader for a DataFusion DataFrame.
+
+    Returns
+    -------
+    pyarrow.RecordBatchReader
+        Record batch reader for the DataFusion results.
+    """
+    stream = getattr(df, "execute_stream", None)
+    if callable(stream):
+        reader = stream()
+        return _apply_ordering(reader, ordering=ordering)
+    to_batches = getattr(df, "to_arrow_batches", None)
+    if callable(to_batches):
+        batch_iter = cast("Iterable[pa.RecordBatch]", to_batches())
+        batches = list(batch_iter)
+        reader = pa.RecordBatchReader.from_batches(df.schema(), batches)
+        return _apply_ordering(reader, ordering=ordering)
+    collect = getattr(df, "collect", None)
+    if callable(collect):
+        batch_iter = cast("Iterable[pa.RecordBatch]", collect())
+        batches = list(batch_iter)
+        reader = pa.RecordBatchReader.from_batches(df.schema(), batches)
+        return _apply_ordering(reader, ordering=ordering)
+    reader = pa.RecordBatchReader.from_batches(df.schema(), [])
+    return _apply_ordering(reader, ordering=ordering)
+
+
 def ibis_plan_to_table(
     plan: IbisPlan,
     *,
@@ -217,6 +252,35 @@ def ibis_plan_to_table(
     """
     df = ibis_plan_to_datafusion(plan, backend=backend, ctx=ctx, options=options)
     return datafusion_to_table(df, ordering=plan.ordering)
+
+
+def ibis_plan_to_reader(
+    plan: IbisPlan,
+    *,
+    backend: IbisCompilerBackend,
+    ctx: SessionContext,
+    options: DataFusionCompileOptions | None = None,
+) -> pa.RecordBatchReader:
+    """Return a DataFusion-backed RecordBatchReader for an Ibis plan.
+
+    Returns
+    -------
+    pyarrow.RecordBatchReader
+        Record batch reader for the plan results.
+    """
+    df = ibis_plan_to_datafusion(plan, backend=backend, ctx=ctx, options=options)
+    return datafusion_to_reader(df, ordering=plan.ordering)
+
+
+def _apply_ordering(
+    reader: pa.RecordBatchReader,
+    *,
+    ordering: Ordering | None,
+) -> pa.RecordBatchReader:
+    if ordering is None or ordering.level == OrderingLevel.UNORDERED:
+        return reader
+    spec = ordering_metadata_spec(ordering.level, keys=ordering.keys)
+    return pa.RecordBatchReader.from_batches(spec.apply(reader.schema), reader)
 
 
 def _ibis_params(
@@ -249,11 +313,7 @@ def _policy_violations(expr: Expression, policy: DataFusionSqlPolicy) -> tuple[s
 
 
 def _contains_ddl(expr: Expression) -> bool:
-    return (
-        bool(expr.find(exp.Create))
-        or bool(expr.find(exp.Drop))
-        or bool(expr.find(exp.Alter))
-    )
+    return bool(expr.find(exp.Create)) or bool(expr.find(exp.Drop)) or bool(expr.find(exp.Alter))
 
 
 def _contains_dml(expr: Expression) -> bool:
@@ -292,6 +352,35 @@ def _emit_fallback_diagnostics(
     fallback_hook(event)
 
 
+def _maybe_explain(
+    ctx: SessionContext,
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+) -> None:
+    if not options.capture_explain and options.explain_hook is None:
+        return
+    _ensure_dialect(options.dialect)
+    sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
+    prefix = "EXPLAIN ANALYZE" if options.explain_analyze else "EXPLAIN"
+    explain_df = ctx.sql(f"{prefix} {sql}")
+    rows = _explain_rows(explain_df)
+    if options.explain_hook is not None:
+        options.explain_hook(sql, rows)
+
+
+def _explain_rows(df: DataFrame) -> list[Mapping[str, object]]:
+    to_arrow = getattr(df, "to_arrow_table", None)
+    if callable(to_arrow):
+        table = cast("pa.Table", to_arrow())
+        return [dict(row) for row in table.to_pylist()]
+    collect = getattr(df, "collect", None)
+    if callable(collect):
+        rows = cast("Iterable[Mapping[str, object]]", collect())
+        return [dict(row) for row in rows]
+    return []
+
+
 def replay_substrait_bytes(ctx: SessionContext, plan_bytes: bytes) -> DataFrame:
     """Replay a Substrait plan into a DataFusion DataFrame.
 
@@ -320,8 +409,10 @@ __all__ = [
     "DataFusionFallbackEvent",
     "DataFusionSqlPolicy",
     "IbisCompilerBackend",
+    "datafusion_to_reader",
     "datafusion_to_table",
     "ibis_plan_to_datafusion",
+    "ibis_plan_to_reader",
     "ibis_plan_to_table",
     "ibis_to_datafusion",
     "replay_substrait_bytes",

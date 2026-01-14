@@ -84,16 +84,52 @@ def sqlglot_metadata(
 
 
 def _extract_tables(expr: Expression) -> tuple[str, ...]:
+    """Collect table names referenced by a SQLGlot expression.
+
+    Parameters
+    ----------
+    expr
+        SQLGlot expression to inspect.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted unique table names.
+    """
     tables = {table.name for table in expr.find_all(exp.Table)}
     return tuple(sorted(tables))
 
 
 def _extract_columns(expr: Expression) -> tuple[str, ...]:
+    """Collect column labels referenced by a SQLGlot expression.
+
+    Parameters
+    ----------
+    expr
+        SQLGlot expression to inspect.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted unique column labels.
+    """
     columns = {_column_label(col) for col in expr.find_all(exp.Column)}
     return tuple(sorted(col for col in columns if col))
 
 
 def _column_label(column: exp.Column) -> str:
+    """Return a fully qualified label for a SQLGlot column when available.
+
+    Parameters
+    ----------
+    column
+        SQLGlot column node to label.
+
+    Returns
+    -------
+    str
+        Column label, prefixed with the table name when present.
+    """
     if column.table:
         return f"{column.table}.{column.name}"
     return column.name

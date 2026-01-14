@@ -205,6 +205,27 @@ def _plan_for_output(
     sources: DiagnosticsSources,
     ctx: ExecutionContext,
 ) -> Plan:
+    """Compile the diagnostics plan for the output contract.
+
+    Parameters
+    ----------
+    repo_text_index
+        Repository text index for diagnostics.
+    sources
+        Diagnostics input sources.
+    ctx
+        Execution context.
+
+    Returns
+    -------
+    Plan
+        Compiled diagnostics plan.
+
+    Raises
+    ------
+    ValueError
+        Raised when the diagnostics output plan is unavailable.
+    """
     catalog = NormalizePlanCatalog(
         tables=_diagnostics_catalog_entries(sources),
         repo_text_index=repo_text_index,
@@ -220,6 +241,18 @@ def _plan_for_output(
 def _diagnostics_catalog_entries(
     sources: DiagnosticsSources,
 ) -> dict[str, PlanSource]:
+    """Build catalog entries from diagnostics sources.
+
+    Parameters
+    ----------
+    sources
+        Diagnostics input sources.
+
+    Returns
+    -------
+    dict[str, PlanSource]
+        Catalog mapping of dataset name to plan source.
+    """
     mapping: dict[str, PlanSource] = {}
     if sources.cst_parse_errors is not None:
         mapping["cst_parse_errors"] = sources.cst_parse_errors

@@ -155,6 +155,18 @@ def rule_graph_signature_cached(domain: RuleDomain | None = None) -> str:
 
 
 def _rule_signature(rule: RuleDefinition) -> str:
+    """Return a stable signature for a rule definition.
+
+    Parameters
+    ----------
+    rule
+        Rule definition to sign.
+
+    Returns
+    -------
+    str
+        Deterministic hash for the rule definition.
+    """
     if rule.domain == "cpg":
         rel_rule = relationship_rule_from_definition(rule)
         plan = rel_plan_for_rule(rel_rule)

@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 
 import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.catalog import Catalog, Schema
 
-from ibis_engine.param_tables import ParamTableArtifact, ParamTablePolicy, param_table_name
+from ibis_engine.param_tables import (
+    ParamTableArtifact,
+    ParamTablePolicy,
+    param_table_name,
+    param_table_schema,
+)
 
 
 def ensure_param_schema(
@@ -54,6 +59,8 @@ def register_param_tables_df(
     *,
     artifacts: Mapping[str, ParamTableArtifact],
     policy: ParamTablePolicy,
+    scope_key: str | None = None,
+    signature_cache: MutableMapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Register param tables and return logical -> qualified name mapping.
 
@@ -63,16 +70,25 @@ def register_param_tables_df(
         Mapping of logical param names to fully qualified table names.
     """
     mapping: dict[str, str] = {}
+    schema_name = param_table_schema(policy, scope_key=scope_key)
     for logical_name, artifact in artifacts.items():
         table_name = param_table_name(policy, logical_name)
+        qualified = f"{policy.catalog}.{schema_name}.{table_name}"
+        if signature_cache is not None:
+            cached = signature_cache.get(logical_name)
+            if cached == artifact.signature:
+                mapping[logical_name] = qualified
+                continue
         register_param_arrow_table(
             ctx,
             catalog=policy.catalog,
-            schema=policy.schema,
+            schema=schema_name,
             table_name=table_name,
             table=artifact.table,
         )
-        mapping[logical_name] = f"{policy.catalog}.{policy.schema}.{table_name}"
+        mapping[logical_name] = qualified
+        if signature_cache is not None:
+            signature_cache[logical_name] = artifact.signature
     return mapping
 
 

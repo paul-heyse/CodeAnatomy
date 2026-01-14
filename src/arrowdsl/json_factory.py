@@ -67,6 +67,18 @@ class JsonPolicy:
 
 
 def _convert_simple(obj: object) -> object:
+    """Convert known scalar-like objects into JSON-friendly values.
+
+    Parameters
+    ----------
+    obj
+        Value to convert.
+
+    Returns
+    -------
+    object
+        Converted value or the internal sentinel when no conversion applies.
+    """
     if isinstance(obj, SchemaLike):
         return schema_to_dict(obj)
     if isinstance(obj, DataTypeLike):
@@ -81,6 +93,18 @@ def _convert_simple(obj: object) -> object:
 
 
 def _convert_collection(obj: object) -> object:
+    """Convert common collection-like objects to JSON-ready structures.
+
+    Parameters
+    ----------
+    obj
+        Collection-like value to convert.
+
+    Returns
+    -------
+    object
+        Converted value or the internal sentinel when no conversion applies.
+    """
     if isinstance(obj, (set, frozenset)):
         return sorted((_json_default(item) for item in obj), key=str)
     if isinstance(obj, tuple):
@@ -96,6 +120,23 @@ def _convert_collection(obj: object) -> object:
 
 
 def _json_default(obj: object) -> object:
+    """Normalize non-JSON-native values for serialization.
+
+    Parameters
+    ----------
+    obj
+        Value to normalize.
+
+    Returns
+    -------
+    object
+        JSON-ready representation.
+
+    Raises
+    ------
+    TypeError
+        Raised when Arrow tables are passed for JSON serialization.
+    """
     if isinstance(obj, TableLike):
         msg = "Use Arrow table export helpers instead of json_factory."
         raise TypeError(msg)
@@ -123,6 +164,18 @@ def json_default(value: object) -> object:
 
 
 def _orjson_option(policy: JsonPolicy) -> int:
+    """Map a ``JsonPolicy`` to ``orjson`` option flags.
+
+    Parameters
+    ----------
+    policy
+        Serialization policy flags.
+
+    Returns
+    -------
+    int
+        Bitmask of ``orjson`` options.
+    """
     option = 0
     if policy.pretty:
         option |= orjson.OPT_INDENT_2

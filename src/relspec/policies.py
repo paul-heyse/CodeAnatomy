@@ -148,6 +148,18 @@ def default_tie_breakers(schema: SchemaLike) -> tuple[SortKey, ...]:
 
 
 def _confidence_policy_from_metadata(meta: Mapping[bytes, bytes]) -> ConfidencePolicy | None:
+    """Build a confidence policy from schema metadata.
+
+    Parameters
+    ----------
+    meta
+        Schema metadata mapping.
+
+    Returns
+    -------
+    ConfidencePolicy | None
+        Policy derived from metadata when present.
+    """
     name = _meta_str(meta, CONFIDENCE_POLICY_META)
     if name:
         return _POLICY_REGISTRY.resolve_confidence("cpg", name)
@@ -167,6 +179,18 @@ def _confidence_policy_from_metadata(meta: Mapping[bytes, bytes]) -> ConfidenceP
 
 
 def _ambiguity_policy_from_metadata(meta: Mapping[bytes, bytes]) -> AmbiguityPolicy | None:
+    """Resolve an ambiguity policy from schema metadata.
+
+    Parameters
+    ----------
+    meta
+        Schema metadata mapping.
+
+    Returns
+    -------
+    AmbiguityPolicy | None
+        Policy resolved from metadata when present.
+    """
     name = _meta_str(meta, AMBIGUITY_POLICY_META)
     if name:
         return _POLICY_REGISTRY.resolve_ambiguity("cpg", name)
@@ -174,6 +198,20 @@ def _ambiguity_policy_from_metadata(meta: Mapping[bytes, bytes]) -> AmbiguityPol
 
 
 def _meta_str(meta: Mapping[bytes, bytes], key: bytes) -> str | None:
+    """Decode a UTF-8 metadata value to a string.
+
+    Parameters
+    ----------
+    meta
+        Schema metadata mapping.
+    key
+        Metadata key to decode.
+
+    Returns
+    -------
+    str | None
+        Decoded string value.
+    """
     raw = meta.get(key)
     if raw is None:
         return None
@@ -181,6 +219,20 @@ def _meta_str(meta: Mapping[bytes, bytes], key: bytes) -> str | None:
 
 
 def _meta_float(meta: Mapping[bytes, bytes], key: bytes) -> float | None:
+    """Decode a UTF-8 metadata value to a float.
+
+    Parameters
+    ----------
+    meta
+        Schema metadata mapping.
+    key
+        Metadata key to decode.
+
+    Returns
+    -------
+    float | None
+        Parsed float value.
+    """
     raw = meta.get(key)
     if raw is None:
         return None
@@ -188,6 +240,20 @@ def _meta_float(meta: Mapping[bytes, bytes], key: bytes) -> float | None:
 
 
 def _meta_int(meta: Mapping[bytes, bytes], key: bytes) -> int | None:
+    """Decode a UTF-8 metadata value to an integer.
+
+    Parameters
+    ----------
+    meta
+        Schema metadata mapping.
+    key
+        Metadata key to decode.
+
+    Returns
+    -------
+    int | None
+        Parsed integer value.
+    """
     raw = meta.get(key)
     if raw is None:
         return None
@@ -195,12 +261,43 @@ def _meta_int(meta: Mapping[bytes, bytes], key: bytes) -> int | None:
 
 
 def _rank_confidence(rank: int) -> float:
+    """Convert an evidence rank into a confidence score.
+
+    Parameters
+    ----------
+    rank
+        Evidence rank value.
+
+    Returns
+    -------
+    float
+        Confidence score in the range [0.1, 1.0].
+    """
     clamped = max(1, min(rank, 10))
     score = 1.0 - 0.1 * (clamped - 1)
     return max(0.1, min(1.0, score))
 
 
 def _meta_json_map(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, float]:
+    """Decode a JSON metadata mapping to float values.
+
+    Parameters
+    ----------
+    meta
+        Schema metadata mapping.
+    key
+        Metadata key to decode.
+
+    Returns
+    -------
+    dict[str, float]
+        Parsed JSON mapping.
+
+    Raises
+    ------
+    TypeError
+        Raised when the metadata payload is not a mapping.
+    """
     raw = meta.get(key)
     if raw is None:
         return {}
@@ -212,6 +309,25 @@ def _meta_json_map(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, float]:
 
 
 def _meta_json_map_str(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, str]:
+    """Decode a JSON metadata mapping to string values.
+
+    Parameters
+    ----------
+    meta
+        Schema metadata mapping.
+    key
+        Metadata key to decode.
+
+    Returns
+    -------
+    dict[str, str]
+        Parsed JSON mapping.
+
+    Raises
+    ------
+    TypeError
+        Raised when the metadata payload is not a mapping.
+    """
     raw = meta.get(key)
     if raw is None:
         return {}
@@ -223,6 +339,20 @@ def _meta_json_map_str(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, str
 
 
 def _meta_list(meta: Mapping[bytes, bytes], key: bytes) -> tuple[str, ...]:
+    """Decode a comma-separated metadata value to a tuple.
+
+    Parameters
+    ----------
+    meta
+        Schema metadata mapping.
+    key
+        Metadata key to decode.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Parsed list of values.
+    """
     raw = meta.get(key)
     if raw is None:
         return ()
@@ -233,6 +363,20 @@ def _meta_list(meta: Mapping[bytes, bytes], key: bytes) -> tuple[str, ...]:
 
 
 def _source_weight_expr(source_expr: ExprIR, weights: Mapping[str, float]) -> ExprIR:
+    """Build a source-weighted expression from weight mappings.
+
+    Parameters
+    ----------
+    source_expr
+        Expression that yields the source label.
+    weights
+        Mapping from source label to weight.
+
+    Returns
+    -------
+    ExprIR
+        Expression that selects weights by source.
+    """
     expr = ExprIR(op="literal", value=0.0)
     for source, weight in weights.items():
         cond = ExprIR(

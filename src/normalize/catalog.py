@@ -43,6 +43,7 @@ class NormalizeCatalogInputs:
 
     cst_type_exprs: PlanSource | None = None
     scip_symbol_information: PlanSource | None = None
+    file_line_index: PlanSource | None = None
     cst_parse_errors: PlanSource | None = None
     ts_errors: PlanSource | None = None
     ts_missing: PlanSource | None = None
@@ -66,6 +67,7 @@ class NormalizeCatalogInputs:
         return {
             "cst_type_exprs": self.cst_type_exprs,
             "scip_symbol_information": self.scip_symbol_information,
+            "file_line_index": self.file_line_index,
             "cst_parse_errors": self.cst_parse_errors,
             "ts_errors": self.ts_errors,
             "ts_missing": self.ts_missing,

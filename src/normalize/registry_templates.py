@@ -21,6 +21,18 @@ class RegistryTemplate:
 
 
 def _json_bytes(payload: object) -> bytes:
+    """Serialize a payload to compact JSON bytes.
+
+    Parameters
+    ----------
+    payload
+        Payload to serialize.
+
+    Returns
+    -------
+    bytes
+        UTF-8 encoded JSON payload.
+    """
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 

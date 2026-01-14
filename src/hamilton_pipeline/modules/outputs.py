@@ -26,7 +26,7 @@ from arrowdsl.plan.metrics import (
     empty_scan_telemetry_table,
     scan_telemetry_table,
 )
-from arrowdsl.plan.query import open_dataset
+from arrowdsl.plan.query import ScanTelemetry, open_dataset
 from arrowdsl.schema.schema import EncodingPolicy
 from core_types import JsonDict, JsonValue
 from cpg.constants import CpgBuildArtifacts
@@ -207,6 +207,7 @@ class RunBundleParamInputs:
 
     param_table_specs: tuple[ParamTableSpec, ...]
     param_table_artifacts: Mapping[str, ParamTableArtifact] | None
+    param_scalar_signature: str | None = None
     param_dependency_reports: tuple[RuleDependencyReport, ...]
     param_reverse_index: Mapping[str, tuple[str, ...]] | None
     include_param_table_data: bool
@@ -221,6 +222,7 @@ class ManifestInputs:
     cpg_output_tables: CpgOutputTables
     relspec_snapshots: RelspecSnapshots
     param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None
+    param_scalar_signature: str | None = None
     extract_inputs: ExtractManifestInputs | None = None
 
 
@@ -239,6 +241,7 @@ class ManifestInputArtifacts:
 
     relspec_snapshots: RelspecSnapshots
     param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None
+    param_scalar_signature: str | None = None
     extract_inputs: ExtractManifestInputs | None = None
 
 
@@ -640,6 +643,7 @@ def manifest_inputs(
     run_bundle_tables: RunBundleTables,
     relspec_snapshots: RelspecSnapshots,
     param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None,
+    param_scalar_signature: str | None = None,
     extract_manifest_inputs: ExtractManifestInputs | None = None,
 ) -> ManifestInputs:
     """Bundle manifest inputs from pipeline outputs.
@@ -655,6 +659,7 @@ def manifest_inputs(
         cpg_output_tables=run_bundle_tables.cpg_outputs,
         relspec_snapshots=relspec_snapshots,
         param_table_artifacts=param_table_artifacts,
+        param_scalar_signature=param_scalar_signature,
         extract_inputs=extract_manifest_inputs,
     )
 
@@ -695,48 +700,27 @@ def manifest_data(
     ValueError
         Raised when ExecutionContext is not provided.
     """
-    produced_outputs = sorted(manifest_inputs.relspec_snapshots.compiled_outputs.keys())
-    lineage = {
-        name: [cr.rule.name for cr in compiled.contributors]
-        for name, compiled in manifest_inputs.relspec_snapshots.compiled_outputs.items()
-    }
     normalize_rules = normalize_rule_compilation.rules if normalize_rule_compilation else None
-    normalize_lineage: dict[str, list[str]] | None = None
-    if normalize_rule_compilation:
-        normalize_lineage = {}
-        for rule in normalize_rule_compilation.rules:
-            normalize_lineage.setdefault(rule.output, []).append(rule.name)
-    notes: JsonDict = {"relationship_output_keys": produced_outputs}
-    if normalize_lineage:
-        notes["normalize_output_keys"] = sorted(normalize_lineage)
     if ctx is None:
         msg = "manifest_data requires ExecutionContext."
         raise ValueError(msg)
-    runtime_telemetry = next(
-        (
-            compiled.runtime_telemetry
-            for compiled in manifest_inputs.relspec_snapshots.compiled_outputs.values()
-            if compiled.runtime_telemetry
-        ),
-        {},
+    produced_outputs = _produced_relationship_outputs(manifest_inputs)
+    lineage = _relationship_output_lineage(manifest_inputs)
+    normalize_lineage = _normalize_output_lineage(normalize_rule_compilation)
+    notes = _manifest_notes(
+        produced_outputs,
+        normalize_lineage=normalize_lineage,
+        manifest_inputs=manifest_inputs,
+        ctx=ctx,
     )
-    if runtime_telemetry:
-        notes["relspec_runtime_telemetry"] = cast("JsonValue", runtime_telemetry)
-    scan_telemetry = {
-        name: compiled.telemetry
-        for name, compiled in manifest_inputs.relspec_snapshots.compiled_outputs.items()
-        if compiled.telemetry
-    }
+    scan_telemetry = _relspec_scan_telemetry(manifest_inputs)
     datafusion_settings = _datafusion_settings_snapshot(ctx)
     datafusion_metrics, datafusion_traces = _datafusion_runtime_artifacts(ctx)
     dataset_snapshot = _dataset_registry_snapshot(
         manifest_inputs.relspec_inputs_bundle.locations,
     )
     extract_inputs = manifest_inputs.extract_inputs
-    rule_definitions = rule_definitions_from_table(manifest_inputs.relspec_snapshots.rule_table)
-    relationship_rules = tuple(
-        relationship_rule_from_definition(defn) for defn in rule_definitions if defn.domain == "cpg"
-    )
+    relationship_rules = _relationship_rules_from_snapshots(manifest_inputs)
     return ManifestData(
         relspec_input_tables=manifest_inputs.relspec_inputs_bundle.tables,
         relspec_input_locations=manifest_inputs.relspec_inputs_bundle.locations,
@@ -745,6 +729,7 @@ def manifest_data(
         cpg_edges=manifest_inputs.cpg_output_tables.cpg_edges,
         cpg_props=manifest_inputs.cpg_output_tables.cpg_props,
         param_table_artifacts=manifest_inputs.param_table_artifacts,
+        param_scalar_signature=manifest_inputs.param_scalar_signature,
         extract_evidence_plan=extract_inputs.evidence_plan if extract_inputs else None,
         extract_error_counts=extract_inputs.extract_error_counts if extract_inputs else None,
         relationship_rules=relationship_rules,
@@ -758,6 +743,79 @@ def manifest_data(
         datafusion_traces=datafusion_traces,
         dataset_registry_snapshot=dataset_snapshot,
         notes=notes,
+    )
+
+
+def _produced_relationship_outputs(manifest_inputs: ManifestInputs) -> list[str]:
+    return sorted(manifest_inputs.relspec_snapshots.compiled_outputs.keys())
+
+
+def _relationship_output_lineage(
+    manifest_inputs: ManifestInputs,
+) -> dict[str, list[str]]:
+    return {
+        name: [cr.rule.name for cr in compiled.contributors]
+        for name, compiled in manifest_inputs.relspec_snapshots.compiled_outputs.items()
+    }
+
+
+def _normalize_output_lineage(
+    normalize_rule_compilation: NormalizeRuleCompilation | None,
+) -> dict[str, list[str]] | None:
+    if normalize_rule_compilation is None:
+        return None
+    lineage: dict[str, list[str]] = {}
+    for rule in normalize_rule_compilation.rules:
+        lineage.setdefault(rule.output, []).append(rule.name)
+    return lineage
+
+
+def _manifest_notes(
+    produced_outputs: Sequence[str],
+    *,
+    normalize_lineage: Mapping[str, Sequence[str]] | None,
+    manifest_inputs: ManifestInputs,
+    ctx: ExecutionContext,
+) -> JsonDict:
+    notes: JsonDict = {"relationship_output_keys": list(produced_outputs)}
+    if normalize_lineage:
+        notes["normalize_output_keys"] = sorted(normalize_lineage)
+    runtime_telemetry = next(
+        (
+            compiled.runtime_telemetry
+            for compiled in manifest_inputs.relspec_snapshots.compiled_outputs.values()
+            if compiled.runtime_telemetry
+        ),
+        {},
+    )
+    if runtime_telemetry:
+        notes["relspec_runtime_telemetry"] = cast("JsonValue", runtime_telemetry)
+    if ctx.runtime.datafusion is not None:
+        notes["datafusion_policy"] = cast(
+            "JsonValue", ctx.runtime.datafusion.telemetry_payload()
+        )
+        explain_collector = ctx.runtime.datafusion.explain_collector
+        if explain_collector is not None:
+            explain_entries = explain_collector.snapshot()
+            if explain_entries:
+                notes["datafusion_explain"] = cast("JsonValue", explain_entries)
+    return notes
+
+
+def _relspec_scan_telemetry(manifest_inputs: ManifestInputs) -> dict[str, ScanTelemetry]:
+    return {
+        name: compiled.telemetry
+        for name, compiled in manifest_inputs.relspec_snapshots.compiled_outputs.items()
+        if compiled.telemetry
+    }
+
+
+def _relationship_rules_from_snapshots(
+    manifest_inputs: ManifestInputs,
+) -> tuple[RelationshipRule, ...]:
+    rule_definitions = rule_definitions_from_table(manifest_inputs.relspec_snapshots.rule_table)
+    return tuple(
+        relationship_rule_from_definition(defn) for defn in rule_definitions if defn.domain == "cpg"
     )
 
 
@@ -889,6 +947,7 @@ def run_bundle_inputs(
 def run_bundle_param_inputs(
     param_table_specs: tuple[ParamTableSpec, ...],
     param_table_artifacts: Mapping[str, ParamTableArtifact] | None,
+    param_scalar_signature: str | None,
     relspec_param_dependency_reports: tuple[RuleDependencyReport, ...],
     output_config: OutputConfig,
 ) -> RunBundleParamInputs:
@@ -903,6 +962,7 @@ def run_bundle_param_inputs(
     return RunBundleParamInputs(
         param_table_specs=param_table_specs,
         param_table_artifacts=param_table_artifacts,
+        param_scalar_signature=param_scalar_signature,
         param_dependency_reports=relspec_param_dependency_reports,
         param_reverse_index=reverse_index or None,
         include_param_table_data=output_config.materialize_param_tables,
@@ -934,6 +994,9 @@ def run_bundle_context(
     param_inputs = run_bundle_inputs.param_inputs
     param_specs = param_inputs.param_table_specs if param_inputs is not None else ()
     param_artifacts = param_inputs.param_table_artifacts if param_inputs is not None else None
+    param_scalar_signature = (
+        param_inputs.param_scalar_signature if param_inputs is not None else None
+    )
     param_reports = param_inputs.param_dependency_reports if param_inputs is not None else ()
     param_reverse_index = param_inputs.param_reverse_index if param_inputs is not None else None
     include_param_table_data = (
@@ -957,6 +1020,7 @@ def run_bundle_context(
         cpg_output_tables=run_bundle_inputs.tables.cpg_outputs.as_dict(),
         param_table_specs=param_specs,
         param_table_artifacts=param_artifacts,
+        param_scalar_signature=param_scalar_signature,
         param_dependency_reports=param_reports,
         param_reverse_index=param_reverse_index,
         include_param_table_data=include_param_table_data,

@@ -100,6 +100,18 @@ def rel_plan_signature(plan: RelPlan) -> str:
 
 
 def _rel_plan_payload(plan: RelPlan) -> dict[str, object]:
+    """Build a JSON-serializable payload for a relational plan.
+
+    Parameters
+    ----------
+    plan
+        Relational plan to serialize.
+
+    Returns
+    -------
+    dict[str, object]
+        Serialized plan payload.
+    """
     return {
         "label": plan.label,
         "ordering": _ordering_payload(plan.ordering),
@@ -109,10 +121,34 @@ def _rel_plan_payload(plan: RelPlan) -> dict[str, object]:
 
 
 def _ordering_payload(ordering: Ordering) -> dict[str, object]:
+    """Serialize ordering metadata for a plan payload.
+
+    Parameters
+    ----------
+    ordering
+        Ordering metadata to serialize.
+
+    Returns
+    -------
+    dict[str, object]
+        Serialized ordering metadata.
+    """
     return {"level": ordering.level.value, "keys": list(ordering.keys)}
 
 
 def _schema_payload(schema: SchemaLike | None) -> dict[str, object] | None:
+    """Serialize a schema to a JSON-friendly payload.
+
+    Parameters
+    ----------
+    schema
+        Schema to serialize, if present.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Serialized schema payload or ``None`` when absent.
+    """
     if schema is None:
         return None
     return {
@@ -122,12 +158,41 @@ def _schema_payload(schema: SchemaLike | None) -> dict[str, object] | None:
 
 
 def _metadata_payload(metadata: Mapping[bytes, bytes] | None) -> dict[str, str]:
+    """Serialize schema metadata to string key/value pairs.
+
+    Parameters
+    ----------
+    metadata
+        Raw metadata mapping from Arrow schemas.
+
+    Returns
+    -------
+    dict[str, str]
+        UTF-8 decoded metadata mapping.
+    """
     if not metadata:
         return {}
     return {key.decode("utf-8"): value.decode("utf-8") for key, value in metadata.items()}
 
 
 def _node_payload(node: RelNode) -> dict[str, object]:
+    """Serialize a relational plan node to a JSON-friendly payload.
+
+    Parameters
+    ----------
+    node
+        Relational plan node to serialize.
+
+    Returns
+    -------
+    dict[str, object]
+        Serialized node payload.
+
+    Raises
+    ------
+    TypeError
+        Raised when the node type is unsupported.
+    """
     if isinstance(node, RelSource):
         return {
             "kind": "source",
@@ -179,6 +244,18 @@ def _node_payload(node: RelNode) -> dict[str, object]:
 
 
 def _query_payload(query: IbisQuerySpec | None) -> dict[str, object] | None:
+    """Serialize an optional query spec into a payload.
+
+    Parameters
+    ----------
+    query
+        Query specification to serialize.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Serialized query payload or ``None`` when absent.
+    """
     if query is None:
         return None
     derived = {name: _expr_payload(expr) for name, expr in query.projection.derived.items()}
@@ -193,6 +270,18 @@ def _query_payload(query: IbisQuerySpec | None) -> dict[str, object] | None:
 
 
 def _expr_payload(expr: object | None) -> object | None:
+    """Serialize an expression to a JSON-friendly payload.
+
+    Parameters
+    ----------
+    expr
+        Expression to serialize.
+
+    Returns
+    -------
+    object | None
+        Serialized expression payload or ``None`` when absent.
+    """
     if expr is None:
         return None
     if isinstance(expr, ExprIR):
@@ -201,6 +290,18 @@ def _expr_payload(expr: object | None) -> object | None:
 
 
 def _join_payload(spec: HashJoinConfig) -> dict[str, object]:
+    """Serialize a hash join configuration to a payload.
+
+    Parameters
+    ----------
+    spec
+        Hash join configuration to serialize.
+
+    Returns
+    -------
+    dict[str, object]
+        Serialized join configuration.
+    """
     return {
         "join_type": spec.join_type,
         "left_keys": list(spec.left_keys),
@@ -213,6 +314,18 @@ def _join_payload(spec: HashJoinConfig) -> dict[str, object]:
 
 
 def _aggregate_payload(spec: AggregateExpr) -> dict[str, object]:
+    """Serialize an aggregate expression to a payload.
+
+    Parameters
+    ----------
+    spec
+        Aggregate expression specification to serialize.
+
+    Returns
+    -------
+    dict[str, object]
+        Serialized aggregate payload.
+    """
     return {
         "name": spec.name,
         "func": spec.func,

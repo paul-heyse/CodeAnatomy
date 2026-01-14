@@ -34,6 +34,13 @@ NORMALIZE_AMBIGUITY_POLICIES: dict[str, NormalizeAmbiguityPolicy] = {
 
 
 def _default_confidence_policies() -> Mapping[RuleDomain, Mapping[str, object]]:
+    """Return default confidence policies by domain.
+
+    Returns
+    -------
+    Mapping[RuleDomain, Mapping[str, object]]
+        Default policy mapping.
+    """
     return {
         "cpg": RELSPEC_CONFIDENCE_POLICIES,
         "normalize": NORMALIZE_CONFIDENCE_POLICIES,
@@ -42,6 +49,13 @@ def _default_confidence_policies() -> Mapping[RuleDomain, Mapping[str, object]]:
 
 
 def _default_ambiguity_policies() -> Mapping[RuleDomain, Mapping[str, object]]:
+    """Return default ambiguity policies by domain.
+
+    Returns
+    -------
+    Mapping[RuleDomain, Mapping[str, object]]
+        Default policy mapping.
+    """
     return {
         "cpg": RELSPEC_AMBIGUITY_POLICIES,
         "normalize": NORMALIZE_AMBIGUITY_POLICIES,

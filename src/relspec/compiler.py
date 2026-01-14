@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import ibis
 import pyarrow as pa
@@ -56,6 +56,9 @@ from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, dataset_spec_from_contrac
 
 KernelFn = Callable[[TableLike, ExecutionContext], TableLike]
 
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
+
 
 def _scan_ordering_for_ctx(ctx: ExecutionContext) -> Ordering:
     """Return ordering metadata for scan output based on context.
@@ -76,6 +79,18 @@ def _scan_ordering_for_ctx(ctx: ExecutionContext) -> Ordering:
 
 
 def runtime_telemetry_for_ctx(ctx: ExecutionContext) -> Mapping[str, object]:
+    """Return runtime telemetry payload for the execution context.
+
+    Parameters
+    ----------
+    ctx
+        Execution context with runtime profiles.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Telemetry payload for the runtime backend.
+    """
     profile = ctx.runtime.datafusion
     if profile is None:
         return {}
@@ -90,6 +105,7 @@ class FilesystemPlanResolver:
         catalog: DatasetCatalog,
         *,
         backend: ibis.backends.BaseBackend | None = None,
+        runtime_profile: DataFusionRuntimeProfile | None = None,
         registry: IbisDatasetRegistry | None = None,
     ) -> None:
         self.catalog = catalog
@@ -97,7 +113,11 @@ class FilesystemPlanResolver:
             if backend is None:
                 msg = "FilesystemPlanResolver requires backend or registry."
                 raise ValueError(msg)
-            registry = IbisDatasetRegistry(backend, catalog=catalog)
+            registry = IbisDatasetRegistry(
+                backend,
+                catalog=catalog,
+                runtime_profile=runtime_profile,
+            )
         self.registry = registry
 
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
@@ -207,6 +227,24 @@ def _ibis_plan_from_table_like(
     backend: BaseBackend | None = None,
     name: str | None = None,
 ) -> IbisPlan:
+    """Build an Ibis plan from Arrow table-like inputs.
+
+    Parameters
+    ----------
+    value
+        Table-like input or record batch reader.
+    ordering
+        Ordering metadata for the resulting plan.
+    backend
+        Optional Ibis backend to register the table with.
+    name
+        Optional table name when using a backend.
+
+    Returns
+    -------
+    IbisPlan
+        Plan wrapping the table-like input.
+    """
     table = _ensure_table(value)
     if backend is not None:
         return table_to_ibis(table, backend=backend, name=name, ordering=ordering)
@@ -215,6 +253,18 @@ def _ibis_plan_from_table_like(
 
 
 def _ensure_table(value: TableLike | RecordBatchReaderLike) -> pa.Table:
+    """Return a concrete Arrow table from table-like inputs.
+
+    Parameters
+    ----------
+    value
+        Table-like input or record batch reader.
+
+    Returns
+    -------
+    pyarrow.Table
+        Materialized Arrow table.
+    """
     if isinstance(value, RecordBatchReaderLike):
         return value.read_all()
     if isinstance(value, pa.Table):
@@ -223,7 +273,26 @@ def _ensure_table(value: TableLike | RecordBatchReaderLike) -> pa.Table:
 
 
 def _build_rule_meta_kernel(rule: RelationshipRule) -> KernelFn:
+    """Build a kernel that injects rule metadata columns.
+
+    Parameters
+    ----------
+    rule
+        Relationship rule providing metadata values.
+
+    Returns
+    -------
+    KernelFn
+        Kernel that adds rule name and priority columns.
+    """
     def _add_rule_meta(table: TableLike, _ctx: ExecutionContext) -> TableLike:
+        """Append rule metadata columns when missing.
+
+        Returns
+        -------
+        TableLike
+            Table with rule metadata columns applied.
+        """
         count = table.num_rows
         if rule.rule_name_col not in table.column_names:
             table = set_or_append_column(
@@ -243,6 +312,18 @@ def _build_rule_meta_kernel(rule: RelationshipRule) -> KernelFn:
 
 
 def _rule_metadata_spec(rule: RelationshipRule) -> SchemaMetadataSpec:
+    """Build schema metadata spec containing rule metadata.
+
+    Parameters
+    ----------
+    rule
+        Relationship rule with metadata values.
+
+    Returns
+    -------
+    SchemaMetadataSpec
+        Schema metadata spec for rule name and priority.
+    """
     return SchemaMetadataSpec(
         schema_metadata={
             b"rule_name": rule.name.encode("utf-8"),
@@ -252,12 +333,45 @@ def _rule_metadata_spec(rule: RelationshipRule) -> SchemaMetadataSpec:
 
 
 def _apply_rule_metadata(table: TableLike, *, rule: RelationshipRule) -> TableLike:
+    """Apply rule metadata to a table schema.
+
+    Parameters
+    ----------
+    table
+        Table to update.
+    rule
+        Relationship rule providing metadata values.
+
+    Returns
+    -------
+    TableLike
+        Table with updated schema metadata.
+    """
     schema = _rule_metadata_spec(rule).apply(table.schema)
     return table.cast(schema)
 
 
 def _build_add_literal_kernel(spec: AddLiteralSpec) -> KernelFn:
+    """Build a kernel that adds a literal column when missing.
+
+    Parameters
+    ----------
+    spec
+        Literal column specification.
+
+    Returns
+    -------
+    KernelFn
+        Kernel that adds the literal column.
+    """
     def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
+        """Add the literal column if it does not exist.
+
+        Returns
+        -------
+        TableLike
+            Table with the literal column added when missing.
+        """
         if spec.name in table.column_names:
             return table
         return set_or_append_column(table, spec.name, const_array(table.num_rows, spec.value))
@@ -266,7 +380,26 @@ def _build_add_literal_kernel(spec: AddLiteralSpec) -> KernelFn:
 
 
 def _build_drop_columns_kernel(spec: DropColumnsSpec) -> KernelFn:
+    """Build a kernel that drops specified columns.
+
+    Parameters
+    ----------
+    spec
+        Drop-columns specification.
+
+    Returns
+    -------
+    KernelFn
+        Kernel that drops columns from the table.
+    """
     def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
+        """Drop requested columns when present.
+
+        Returns
+        -------
+        TableLike
+            Table with requested columns removed when present.
+        """
         cols = [col for col in spec.columns if col in table.column_names]
         return table.drop(cols) if cols else table
 
@@ -274,7 +407,26 @@ def _build_drop_columns_kernel(spec: DropColumnsSpec) -> KernelFn:
 
 
 def _build_filter_kernel(spec: FilterKernelSpec) -> KernelFn:
+    """Build a kernel that filters rows using a predicate.
+
+    Parameters
+    ----------
+    spec
+        Filter specification.
+
+    Returns
+    -------
+    KernelFn
+        Kernel that filters a table.
+    """
     def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
+        """Filter rows using the configured predicate.
+
+        Returns
+        -------
+        TableLike
+            Filtered table.
+        """
         predicate = FilterSpec(spec.predicate.to_expr_spec()).mask(table)
         return table.filter(predicate)
 
@@ -282,7 +434,26 @@ def _build_filter_kernel(spec: FilterKernelSpec) -> KernelFn:
 
 
 def _build_rename_columns_kernel(spec: RenameColumnsSpec) -> KernelFn:
+    """Build a kernel that renames columns per mapping.
+
+    Parameters
+    ----------
+    spec
+        Rename-columns specification.
+
+    Returns
+    -------
+    KernelFn
+        Kernel that renames columns.
+    """
     def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
+        """Rename columns when a mapping is provided.
+
+        Returns
+        -------
+        TableLike
+            Table with renamed columns when a mapping is provided.
+        """
         if not spec.mapping:
             return table
         names = list(table.column_names)
@@ -293,7 +464,26 @@ def _build_rename_columns_kernel(spec: RenameColumnsSpec) -> KernelFn:
 
 
 def _build_explode_list_kernel(spec: ExplodeListSpec) -> KernelFn:
+    """Build a kernel that explodes list columns into parent/value pairs.
+
+    Parameters
+    ----------
+    spec
+        Explode-list kernel specification.
+
+    Returns
+    -------
+    KernelFn
+        Kernel that explodes list columns.
+    """
     def _fn(table: TableLike, ctx: ExecutionContext) -> TableLike:
+        """Explode list values using the configured kernel.
+
+        Returns
+        -------
+        TableLike
+            Table with exploded list columns.
+        """
         kernel = resolve_kernel("explode_list", ctx=ctx)
         return kernel(
             table,
@@ -307,7 +497,26 @@ def _build_explode_list_kernel(spec: ExplodeListSpec) -> KernelFn:
 
 
 def _build_dedupe_kernel(spec: DedupeKernelSpec) -> KernelFn:
+    """Build a kernel that deduplicates rows using default tie breakers.
+
+    Parameters
+    ----------
+    spec
+        Dedupe kernel specification.
+
+    Returns
+    -------
+    KernelFn
+        Kernel that deduplicates a table.
+    """
     def _fn(table: TableLike, ctx: ExecutionContext) -> TableLike:
+        """Apply dedupe kernel with schema-derived defaults.
+
+        Returns
+        -------
+        TableLike
+            Table with deduplication applied.
+        """
         resolved = _dedupe_spec_with_defaults(spec.spec, schema=table.schema)
         kernel = resolve_kernel("dedupe", ctx=ctx)
         return kernel(table, spec=resolved)
@@ -316,6 +525,25 @@ def _build_dedupe_kernel(spec: DedupeKernelSpec) -> KernelFn:
 
 
 def _kernel_from_spec(spec: object) -> KernelFn:
+    """Resolve a kernel function from a kernel spec.
+
+    Parameters
+    ----------
+    spec
+        Kernel specification to resolve.
+
+    Returns
+    -------
+    KernelFn
+        Resolved kernel function.
+
+    Raises
+    ------
+    ValueError
+        Raised when the kernel spec type is unknown.
+    TypeError
+        Raised when the kernel spec type is deprecated.
+    """
     if isinstance(spec, AddLiteralSpec):
         return _build_add_literal_kernel(spec)
     if isinstance(spec, DropColumnsSpec):
@@ -336,10 +564,36 @@ def _kernel_from_spec(spec: object) -> KernelFn:
 
 
 def _compile_post_kernels(specs: Sequence[KernelSpecT]) -> tuple[KernelFn, ...]:
+    """Compile kernel specs into executable kernel functions.
+
+    Parameters
+    ----------
+    specs
+        Kernel specifications to compile.
+
+    Returns
+    -------
+    tuple[KernelFn, ...]
+        Kernel functions in spec order.
+    """
     return tuple(_kernel_from_spec(spec) for spec in specs)
 
 
 def _dedupe_spec_with_defaults(spec: DedupeSpec, *, schema: SchemaLike) -> DedupeSpec:
+    """Apply default tie breakers for score-based deduplication.
+
+    Parameters
+    ----------
+    spec
+        Deduplication specification.
+    schema
+        Schema used to derive default tie breakers.
+
+    Returns
+    -------
+    DedupeSpec
+        Updated dedupe spec with defaults applied when needed.
+    """
     if spec.strategy != "KEEP_BEST_BY_SCORE":
         return spec
     defaults = default_tie_breakers(schema)
@@ -366,6 +620,18 @@ def _dedupe_spec_with_defaults(spec: DedupeSpec, *, schema: SchemaLike) -> Dedup
 
 
 def _schema_for_contract(contract: Contract) -> SchemaLike:
+    """Resolve schema for a contract via the global registry.
+
+    Parameters
+    ----------
+    contract
+        Contract to resolve.
+
+    Returns
+    -------
+    SchemaLike
+        Schema for the contract.
+    """
     dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(contract.name)
     if dataset_spec is not None:
         return dataset_spec.schema()
@@ -377,6 +643,20 @@ def _schema_for_rule(
     *,
     contracts: ContractCatalog | None,
 ) -> SchemaLike | None:
+    """Resolve schema for a rule's contract when available.
+
+    Parameters
+    ----------
+    rule
+        Relationship rule with optional contract reference.
+    contracts
+        Optional contract catalog.
+
+    Returns
+    -------
+    SchemaLike | None
+        Schema for the rule contract when available.
+    """
     if rule.contract_name is None:
         return None
     if contracts is not None:
@@ -441,10 +721,36 @@ def validate_policy_requirements(rule: RelationshipRule, schema: SchemaLike) -> 
 
 
 def _source_node(ref: DatasetRef) -> RelSource:
+    """Build a source node from a dataset reference.
+
+    Parameters
+    ----------
+    ref
+        Dataset reference.
+
+    Returns
+    -------
+    RelSource
+        Source node for relational plans.
+    """
     return RelSource(ref=ref, query=ref.query, label=ref.label or ref.name)
 
 
 def _project_node(node: RelNode, project: ProjectConfig | None) -> RelNode:
+    """Apply a projection config to a relational plan node.
+
+    Parameters
+    ----------
+    node
+        Input relational plan node.
+    project
+        Optional projection configuration.
+
+    Returns
+    -------
+    RelNode
+        Projected node when configuration is provided.
+    """
     if project is None or (not project.select and not project.exprs):
         return node
     return RelProject(source=node, columns=project.select, derived=dict(project.exprs))
@@ -639,6 +945,20 @@ class RelationshipRuleCompiler:
         *,
         post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
+        """Compile a filter/project rule into a plan-based compiled rule.
+
+        Parameters
+        ----------
+        rule
+            Relationship rule to compile.
+        post_kernels
+            Post-kernel specs to apply after execution.
+
+        Returns
+        -------
+        CompiledRule
+            Compiled rule instance.
+        """
         src = _source_node(rule.inputs[0])
         node = _project_node(src, rule.project)
         plan = RelPlan(root=node, ordering=Ordering.unordered(), label=rule.name)
@@ -656,6 +976,25 @@ class RelationshipRuleCompiler:
         *,
         post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
+        """Compile a hash-join rule into a plan-based compiled rule.
+
+        Parameters
+        ----------
+        rule
+            Relationship rule to compile.
+        post_kernels
+            Post-kernel specs to apply after execution.
+
+        Returns
+        -------
+        CompiledRule
+            Compiled rule instance.
+
+        Raises
+        ------
+        ValueError
+            Raised when required hash-join config is missing.
+        """
         if rule.hash_join is None:
             msg = "HASH_JOIN rules require hash_join config."
             raise ValueError(msg)
@@ -680,6 +1019,20 @@ class RelationshipRuleCompiler:
         *,
         post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
+        """Compile a passthrough rule into a plan-based compiled rule.
+
+        Parameters
+        ----------
+        rule
+            Relationship rule to compile.
+        post_kernels
+            Post-kernel specs to apply after execution.
+
+        Returns
+        -------
+        CompiledRule
+            Compiled rule instance.
+        """
         src = _source_node(rule.inputs[0])
         plan = RelPlan(root=src, ordering=Ordering.unordered(), label=rule.name)
         return CompiledRule(
@@ -696,6 +1049,20 @@ class RelationshipRuleCompiler:
         *,
         post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
+        """Compile a union-all rule into a plan-based compiled rule.
+
+        Parameters
+        ----------
+        rule
+            Relationship rule to compile.
+        post_kernels
+            Post-kernel specs to apply after execution.
+
+        Returns
+        -------
+        CompiledRule
+            Compiled rule instance.
+        """
         inputs = tuple(_source_node(inp) for inp in rule.inputs)
         union_node = RelUnion(inputs=inputs, distinct=False, label=rule.name)
         node = _project_node(union_node, rule.project)
@@ -714,6 +1081,25 @@ class RelationshipRuleCompiler:
         *,
         post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
+        """Compile an interval-align rule into an execution function.
+
+        Parameters
+        ----------
+        rule
+            Relationship rule to compile.
+        post_kernels
+            Post-kernel specs to apply after execution.
+
+        Returns
+        -------
+        CompiledRule
+            Compiled rule instance.
+
+        Raises
+        ------
+        ValueError
+            Raised when required interval-align config is missing.
+        """
         cfg = rule.interval_align
         if cfg is None:
             msg = "INTERVAL_ALIGN rules require interval_align config."
@@ -736,6 +1122,13 @@ class RelationshipRuleCompiler:
         )
 
         def _exec(ctx2: ExecutionContext, resolver: PlanResolver[IbisPlan]) -> TableLike:
+            """Execute interval alignment using resolved input tables.
+
+            Returns
+            -------
+            TableLike
+                Interval-aligned output table.
+            """
             left_ref, right_ref = rule.inputs
             left_plan = resolver.resolve(left_ref, ctx=ctx2)
             right_plan = resolver.resolve(right_ref, ctx=ctx2)
@@ -758,6 +1151,25 @@ class RelationshipRuleCompiler:
         *,
         post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
+        """Compile a winner-select rule into an execution function.
+
+        Parameters
+        ----------
+        rule
+            Relationship rule to compile.
+        post_kernels
+            Post-kernel specs to apply after execution.
+
+        Returns
+        -------
+        CompiledRule
+            Compiled rule instance.
+
+        Raises
+        ------
+        ValueError
+            Raised when required winner-select config is missing.
+        """
         cfg = rule.winner_select
         if cfg is None:
             msg = "WINNER_SELECT rules require winner_select config."
@@ -765,6 +1177,13 @@ class RelationshipRuleCompiler:
         winner_cfg = cfg
 
         def _exec(ctx2: ExecutionContext, resolver: PlanResolver[IbisPlan]) -> TableLike:
+            """Execute winner selection using the resolved input table.
+
+            Returns
+            -------
+            TableLike
+                Winner-selected output table.
+            """
             src_exec = rule.inputs[0]
             plan_exec = resolver.resolve(src_exec, ctx=ctx2)
             table = plan_exec.to_table()
@@ -824,6 +1243,20 @@ class RelationshipRuleCompiler:
 
     @staticmethod
     def _enforce_execution_mode(rule: RelationshipRule, compiled: CompiledRule) -> None:
+        """Enforce plan-only execution mode when configured.
+
+        Parameters
+        ----------
+        rule
+            Relationship rule being compiled.
+        compiled
+            Compiled rule instance to validate.
+
+        Raises
+        ------
+        ValueError
+            Raised when plan-only execution constraints are violated.
+        """
         if rule.execution_mode != "plan":
             return
         if compiled.rel_plan is None or compiled.post_kernels:
@@ -943,6 +1376,26 @@ def _finalize_output_tables(
     ctx: ExecutionContext,
     contracts: ContractCatalog,
 ) -> FinalizeResult:
+    """Finalize output tables against the resolved contract.
+
+    Parameters
+    ----------
+    output_dataset
+        Output dataset name.
+    contract_name
+        Contract name to finalize against.
+    table_parts
+        Table parts to merge and finalize.
+    ctx
+        Execution context for finalization.
+    contracts
+        Contract catalog to resolve contract definitions.
+
+    Returns
+    -------
+    FinalizeResult
+        Finalized output tables and artifacts.
+    """
     if contract_name is None:
         unioned = SchemaEvolutionSpec().unify_and_cast(
             table_parts,

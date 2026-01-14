@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+import hashlib
+import json
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
@@ -12,6 +14,7 @@ from datafusion.dataframe import DataFrame
 from datafusion.object_store import LocalFileSystem
 
 from datafusion_engine.compile_options import DataFusionCompileOptions
+from datafusion_engine.function_factory import install_function_factory
 
 if TYPE_CHECKING:
     from ibis.expr.types import Value as IbisValue
@@ -38,23 +41,94 @@ class DataFusionConfigPolicy:
         return config
 
 
+@dataclass
+class DataFusionExplainCollector:
+    """Collect EXPLAIN artifacts for diagnostics."""
+
+    entries: list[dict[str, object]] = field(default_factory=list)
+
+    def hook(self, sql: str, rows: Sequence[Mapping[str, object]]) -> None:
+        """Collect an explain payload for a single statement."""
+        payload = {
+            "sql": sql,
+            "rows": [
+                {str(key): str(value) for key, value in row.items()} for row in rows
+            ],
+        }
+        self.entries.append(payload)
+
+    def snapshot(self) -> list[dict[str, object]]:
+        """Return a snapshot of explain artifacts.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            Collected explain artifacts.
+        """
+        return list(self.entries)
+
+
 DEFAULT_DF_POLICY = DataFusionConfigPolicy(
     settings={
         "datafusion.execution.collect_statistics": "true",
-        "datafusion.execution.meta_fetch_concurrency": "32",
-        "datafusion.execution.planning_concurrency": "0",
+        "datafusion.execution.meta_fetch_concurrency": "8",
+        "datafusion.execution.planning_concurrency": "8",
         "datafusion.execution.parquet.pushdown_filters": "true",
         "datafusion.execution.parquet.max_predicate_cache_size": "64M",
-        "datafusion.runtime.list_files_cache_limit": "16M",
+        "datafusion.execution.parquet.enable_page_index": "true",
+        "datafusion.execution.parquet.metadata_size_hint": "1048576",
+        "datafusion.runtime.list_files_cache_limit": "128M",
         "datafusion.runtime.list_files_cache_ttl": "2m",
-        "datafusion.runtime.metadata_cache_limit": "128M",
+        "datafusion.runtime.metadata_cache_limit": "256M",
         "datafusion.runtime.memory_limit": "8G",
         "datafusion.runtime.temp_directory": "/tmp/datafusion",
         "datafusion.runtime.max_temp_directory_size": "100G",
-        "datafusion.execution.parquet.enable_page_index": "true",
-        "datafusion.execution.parquet.metadata_size_hint": "524288",
     }
 )
+
+DEV_DF_POLICY = DataFusionConfigPolicy(
+    settings={
+        "datafusion.execution.collect_statistics": "true",
+        "datafusion.execution.meta_fetch_concurrency": "4",
+        "datafusion.execution.planning_concurrency": "2",
+        "datafusion.execution.parquet.pushdown_filters": "true",
+        "datafusion.execution.parquet.max_predicate_cache_size": "32M",
+        "datafusion.execution.parquet.enable_page_index": "true",
+        "datafusion.execution.parquet.metadata_size_hint": "524288",
+        "datafusion.runtime.list_files_cache_limit": "64M",
+        "datafusion.runtime.list_files_cache_ttl": "2m",
+        "datafusion.runtime.metadata_cache_limit": "128M",
+        "datafusion.runtime.memory_limit": "4G",
+        "datafusion.runtime.temp_directory": "/tmp/datafusion",
+        "datafusion.runtime.max_temp_directory_size": "50G",
+    }
+)
+
+PROD_DF_POLICY = DataFusionConfigPolicy(
+    settings={
+        "datafusion.execution.collect_statistics": "true",
+        "datafusion.execution.meta_fetch_concurrency": "16",
+        "datafusion.execution.planning_concurrency": "16",
+        "datafusion.execution.parquet.pushdown_filters": "true",
+        "datafusion.execution.parquet.max_predicate_cache_size": "128M",
+        "datafusion.execution.parquet.enable_page_index": "true",
+        "datafusion.execution.parquet.metadata_size_hint": "2097152",
+        "datafusion.runtime.list_files_cache_limit": "256M",
+        "datafusion.runtime.list_files_cache_ttl": "5m",
+        "datafusion.runtime.metadata_cache_limit": "512M",
+        "datafusion.runtime.memory_limit": "16G",
+        "datafusion.runtime.temp_directory": "/tmp/datafusion",
+        "datafusion.runtime.max_temp_directory_size": "200G",
+    }
+)
+
+DATAFUSION_POLICY_PRESETS: Mapping[str, DataFusionConfigPolicy] = {
+    "dev": DEV_DF_POLICY,
+    "default": DEFAULT_DF_POLICY,
+    "prod": PROD_DF_POLICY,
+}
+
+_SESSION_CONTEXT_CACHE: dict[str, SessionContext] = {}
 
 
 def snapshot_plans(df: DataFrame) -> dict[str, object]:
@@ -145,8 +219,16 @@ class DataFusionRuntimeProfile:
     enable_tracing: bool = False
     tracing_hook: Callable[[], None] | None = None
     tracing_collector: Callable[[], Mapping[str, object] | None] | None = None
+    capture_explain: bool = False
+    explain_analyze: bool = False
+    explain_collector: DataFusionExplainCollector | None = field(
+        default_factory=DataFusionExplainCollector
+    )
     local_filesystem_root: str | None = None
-    config_policy: DataFusionConfigPolicy | None = DEFAULT_DF_POLICY
+    config_policy_name: str | None = "default"
+    config_policy: DataFusionConfigPolicy | None = None
+    share_context: bool = True
+    session_context_key: str | None = None
     distributed: bool = False
     distributed_context_factory: Callable[[], SessionContext] | None = None
     runtime_env_hook: Callable[[RuntimeEnvBuilder], RuntimeEnvBuilder] | None = None
@@ -181,8 +263,9 @@ class DataFusionRuntimeProfile:
                 key="datafusion.execution.batch_size",
                 value=int(self.batch_size),
             )
-        if self.config_policy is not None:
-            config = self.config_policy.apply(config)
+        policy = self._resolved_config_policy()
+        if policy is not None:
+            config = policy.apply(config)
         return config
 
     def runtime_env_builder(self) -> RuntimeEnvBuilder:
@@ -237,37 +320,71 @@ class DataFusionRuntimeProfile:
             Session context configured for the profile. When
             ``local_filesystem_root`` is set, the ``file://`` object store
             scheme is registered against that root.
+        """
+        cached = self._cached_context()
+        if cached is not None:
+            return cached
+        ctx = self._build_session_context()
+        ctx = self._apply_url_table(ctx)
+        self._register_local_filesystem(ctx)
+        self._install_function_factory(ctx)
+        self._install_tracing()
+        if self.session_context_hook is not None:
+            ctx = self.session_context_hook(ctx)
+        self._cache_context(ctx)
+        return ctx
+
+    def _build_session_context(self) -> SessionContext:
+        """Create the SessionContext base for this runtime profile.
+
+        Returns
+        -------
+        datafusion.SessionContext
+            Base session context for this profile.
 
         Raises
         ------
         ValueError
             Raised when distributed execution is enabled without a factory.
         """
-        if self.distributed:
-            if self.distributed_context_factory is None:
-                msg = "Distributed execution requires distributed_context_factory."
-                raise ValueError(msg)
-            ctx = self.distributed_context_factory()
-        else:
-            ctx = SessionContext(self.session_config(), self.runtime_env_builder())
-        if self.enable_url_table:
-            ctx = ctx.enable_url_table()
-        if self.local_filesystem_root is not None:
-            store = LocalFileSystem(prefix=self.local_filesystem_root)
-            ctx.register_object_store("file://", store, None)
-        if self.enable_function_factory:
-            if self.function_factory_hook is None:
-                msg = "Function factory enabled but function_factory_hook is not set."
-                raise ValueError(msg)
-            self.function_factory_hook(ctx)
-        if self.enable_tracing:
-            if self.tracing_hook is None:
-                msg = "Tracing enabled but tracing_hook is not set."
-                raise ValueError(msg)
-            self.tracing_hook()
-        if self.session_context_hook is not None:
-            ctx = self.session_context_hook(ctx)
-        return ctx
+        if not self.distributed:
+            return SessionContext(self.session_config(), self.runtime_env_builder())
+        if self.distributed_context_factory is None:
+            msg = "Distributed execution requires distributed_context_factory."
+            raise ValueError(msg)
+        return self.distributed_context_factory()
+
+    def _apply_url_table(self, ctx: SessionContext) -> SessionContext:
+        return ctx.enable_url_table() if self.enable_url_table else ctx
+
+    def _register_local_filesystem(self, ctx: SessionContext) -> None:
+        if self.local_filesystem_root is None:
+            return
+        store = LocalFileSystem(prefix=self.local_filesystem_root)
+        ctx.register_object_store("file://", store, None)
+
+    def _install_function_factory(self, ctx: SessionContext) -> None:
+        if not self.enable_function_factory:
+            return
+        if self.function_factory_hook is None:
+            install_function_factory(ctx)
+            return
+        self.function_factory_hook(ctx)
+
+    def _install_tracing(self) -> None:
+        """Enable tracing when configured.
+
+        Raises
+        ------
+        ValueError
+            Raised when tracing is enabled without a hook.
+        """
+        if not self.enable_tracing:
+            return
+        if self.tracing_hook is None:
+            msg = "Tracing enabled but tracing_hook is not set."
+            raise ValueError(msg)
+        self.tracing_hook()
 
     def compile_options(
         self,
@@ -290,17 +407,29 @@ class DataFusionRuntimeProfile:
             else self.cache_max_columns
         )
         resolved_params = resolved.params if resolved.params is not None else params
-        if (
-            cache == resolved.cache
-            and cache_max_columns == resolved.cache_max_columns
-            and resolved_params == resolved.params
-        ):
+        capture_explain = resolved.capture_explain or self.capture_explain
+        explain_analyze = resolved.explain_analyze or self.explain_analyze
+        explain_hook = resolved.explain_hook
+        if explain_hook is None and capture_explain and self.explain_collector is not None:
+            explain_hook = self.explain_collector.hook
+        unchanged = (
+            cache == resolved.cache,
+            cache_max_columns == resolved.cache_max_columns,
+            resolved_params == resolved.params,
+            capture_explain == resolved.capture_explain,
+            explain_analyze == resolved.explain_analyze,
+            explain_hook == resolved.explain_hook,
+        )
+        if all(unchanged):
             return resolved
         return replace(
             resolved,
             cache=cache,
             cache_max_columns=cache_max_columns,
             params=resolved_params,
+            capture_explain=capture_explain,
+            explain_analyze=explain_analyze,
+            explain_hook=explain_hook,
         )
 
     @staticmethod
@@ -323,6 +452,7 @@ class DataFusionRuntimeProfile:
         dict[str, object]
             Runtime settings serialized for telemetry/diagnostics.
         """
+        resolved_policy = self._resolved_config_policy()
         return {
             "target_partitions": self.target_partitions,
             "batch_size": self.batch_size,
@@ -344,14 +474,18 @@ class DataFusionRuntimeProfile:
             "tracing_enabled": self.enable_tracing,
             "tracing_hook": bool(self.tracing_hook),
             "tracing_collector": bool(self.tracing_collector),
+            "capture_explain": self.capture_explain,
+            "explain_analyze": self.explain_analyze,
+            "explain_collector": bool(self.explain_collector),
             "local_filesystem_root": self.local_filesystem_root,
             "distributed": self.distributed,
             "distributed_context_factory": bool(self.distributed_context_factory),
             "runtime_env_hook": bool(self.runtime_env_hook),
             "session_context_hook": bool(self.session_context_hook),
-            "config_policy": dict(self.config_policy.settings)
-            if self.config_policy is not None
-            else None,
+            "config_policy_name": self.config_policy_name,
+            "config_policy": dict(resolved_policy.settings) if resolved_policy is not None else None,
+            "share_context": self.share_context,
+            "session_context_key": self.session_context_key,
         }
 
     def collect_metrics(self) -> Mapping[str, object] | None:
@@ -378,10 +512,48 @@ class DataFusionRuntimeProfile:
             return None
         return self.tracing_collector()
 
+    def _resolved_config_policy(self) -> DataFusionConfigPolicy | None:
+        if self.config_policy is not None:
+            return self.config_policy
+        if self.config_policy_name is None:
+            return DEFAULT_DF_POLICY
+        return DATAFUSION_POLICY_PRESETS.get(self.config_policy_name, DEFAULT_DF_POLICY)
+
+    def _cache_key(self) -> str:
+        if self.session_context_key:
+            return self.session_context_key
+        payload = self.telemetry_payload()
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def context_cache_key(self) -> str:
+        """Return a stable cache key for the session context.
+
+        Returns
+        -------
+        str
+            Stable cache key derived from the runtime profile.
+        """
+        return self._cache_key()
+
+    def _cached_context(self) -> SessionContext | None:
+        if not self.share_context:
+            return None
+        return _SESSION_CONTEXT_CACHE.get(self._cache_key())
+
+    def _cache_context(self, ctx: SessionContext) -> None:
+        if not self.share_context:
+            return
+        _SESSION_CONTEXT_CACHE[self._cache_key()] = ctx
+
 
 __all__ = [
+    "DATAFUSION_POLICY_PRESETS",
     "DEFAULT_DF_POLICY",
+    "DEV_DF_POLICY",
+    "PROD_DF_POLICY",
     "DataFusionConfigPolicy",
+    "DataFusionExplainCollector",
     "DataFusionRuntimeProfile",
     "MemoryPool",
     "snapshot_plans",

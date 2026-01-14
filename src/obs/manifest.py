@@ -158,6 +158,7 @@ class ManifestData:
     datafusion_traces: Mapping[str, object] | None = None
     dataset_registry_snapshot: Sequence[Mapping[str, object]] | None = None
     param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None
+    param_scalar_signature: str | None = None
     notes: JsonDict | None = None
 
 
@@ -408,9 +409,11 @@ def _json_dict_list(rows: Sequence[Mapping[str, object]]) -> list[JsonDict]:
 
 
 def _param_tables_payload(data: ManifestData) -> JsonDict:
-    if not data.param_table_artifacts:
-        return {}
     payload: JsonDict = {}
+    if data.param_scalar_signature:
+        payload["_scalar_signature"] = data.param_scalar_signature
+    if not data.param_table_artifacts:
+        return payload
     for name, artifact in data.param_table_artifacts.items():
         payload[name] = {
             "rows": int(artifact.rows),

@@ -44,7 +44,6 @@ from normalize.runner import (
     NormalizeIbisPlanOptions,
     NormalizeRuleCompilation,
     compile_normalize_plans_ibis,
-    compile_normalize_rules,
     run_normalize,
 )
 from relspec.adapters.normalize import NormalizeRuleAdapter
@@ -212,6 +211,7 @@ def normalize_catalog_inputs(
     diagnostics_sources: DiagnosticsSources | None = None,
     normalize_bytecode_sources: NormalizeBytecodeSources | None = None,
     normalize_span_sources: NormalizeSpanSources | None = None,
+    file_line_index: TableLike | None = None,
 ) -> NormalizeCatalogInputs:
     """Bundle plan sources for normalize rule compilation.
 
@@ -233,6 +233,7 @@ def normalize_catalog_inputs(
     return NormalizeCatalogInputs(
         cst_type_exprs=type_sources.cst_type_exprs,
         scip_symbol_information=type_sources.scip_symbol_information,
+        file_line_index=file_line_index,
         cst_parse_errors=diag_sources.cst_parse_errors,
         ts_errors=diag_sources.ts_errors,
         ts_missing=diag_sources.ts_missing,
@@ -277,6 +278,11 @@ def normalize_rule_compilation(
     -------
     NormalizeRuleCompilation
         Compiled rules, plans, and catalog updates.
+
+    Raises
+    ------
+    ValueError
+        Raised when Ibis-backed normalization is required but not enabled.
     """
     rules = _normalize_rules(ctx=ctx)
     required_outputs = _required_rule_outputs(evidence_plan, rules)
@@ -297,12 +303,8 @@ def normalize_rule_compilation(
             plans=plans,
             catalog=normalize_plan_catalog,
         )
-    return compile_normalize_rules(
-        normalize_plan_catalog,
-        ctx=ctx,
-        rules=rules,
-        required_outputs=required_outputs,
-    )
+    msg = "Design-mode normalize compilation requires AdapterMode.use_ibis_bridge."
+    raise ValueError(msg)
 
 
 def _required_rule_outputs(

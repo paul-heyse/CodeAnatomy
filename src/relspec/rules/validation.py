@@ -98,6 +98,18 @@ def validate_rule_definitions(
 
 
 def _validate_payload(rule: RuleDefinition) -> None:
+    """Validate rule payload type by domain.
+
+    Parameters
+    ----------
+    rule
+        Rule definition to validate.
+
+    Raises
+    ------
+    ValueError
+        Raised when the rule payload is missing or invalid.
+    """
     payload = rule.payload
     if rule.domain == "cpg":
         if not isinstance(payload, RelationshipPayload):
@@ -118,6 +130,20 @@ def _validate_payload(rule: RuleDefinition) -> None:
 
 
 def _validate_extract_payload(name: str, payload: ExtractPayload) -> None:
+    """Validate extract payload references against available fields.
+
+    Parameters
+    ----------
+    name
+        Rule name for diagnostics.
+    payload
+        Extract payload to validate.
+
+    Raises
+    ------
+    ValueError
+        Raised when referenced fields are missing.
+    """
     available = _extract_available_fields(payload)
     for key in payload.join_keys:
         if key not in available:
@@ -136,6 +162,20 @@ def _validate_extract_payload(name: str, payload: ExtractPayload) -> None:
 
 
 def _validate_postprocess_kernel(name: str, kernel_name: str) -> None:
+    """Validate that a postprocess kernel name is registered.
+
+    Parameters
+    ----------
+    name
+        Rule name for diagnostics.
+    kernel_name
+        Postprocess kernel name to validate.
+
+    Raises
+    ------
+    ValueError
+        Raised when the postprocess kernel name is unknown.
+    """
     try:
         post_kernels_for_postprocess(kernel_name)
     except KeyError as exc:
@@ -144,6 +184,18 @@ def _validate_postprocess_kernel(name: str, kernel_name: str) -> None:
 
 
 def _extract_available_fields(payload: ExtractPayload) -> set[str]:
+    """Return available field names for an extract payload.
+
+    Parameters
+    ----------
+    payload
+        Extract payload to inspect.
+
+    Returns
+    -------
+    set[str]
+        Field names available to the payload.
+    """
     available = set(payload.fields) | set(payload.row_fields) | set(payload.row_extras)
     if not payload.bundles:
         return available
@@ -153,6 +205,18 @@ def _extract_available_fields(payload: ExtractPayload) -> set[str]:
 
 
 def _validate_stages(rule: RuleDefinition) -> None:
+    """Validate stage names for uniqueness in a rule.
+
+    Parameters
+    ----------
+    rule
+        Rule definition to validate.
+
+    Raises
+    ------
+    ValueError
+        Raised when stage names are duplicated.
+    """
     names = [stage.name for stage in rule.stages]
     if len(set(names)) != len(names):
         msg = f"RuleDefinition {rule.name!r} contains duplicate stages."
@@ -191,6 +255,8 @@ def validate_sqlglot_columns(
 
 @dataclass(frozen=True)
 class _RuleSqlGlotSource:
+    """Compiled SQLGlot input context for a rule."""
+
     expr: IbisTable
     input_names: tuple[str, ...]
     plan_signature: str | None
@@ -234,10 +300,31 @@ class SqlGlotRuleContext:
 
 @dataclass(frozen=True)
 class _SchemaPlanResolver(PlanResolver[IbisPlan]):
+    """Plan resolver that returns empty tables from schema registry."""
+
     backend: IbisCompilerBackend
     registry: SchemaRegistry
 
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
+        """Resolve a dataset reference to an empty-schema Ibis plan.
+
+        Parameters
+        ----------
+        ref
+            Dataset reference to resolve.
+        ctx
+            Execution context (unused).
+
+        Returns
+        -------
+        IbisPlan
+            Plan built from the schema registry.
+
+        Raises
+        ------
+        KeyError
+            Raised when the dataset schema is missing from the registry.
+        """
         _ = ctx
         schema = _schema_for_dataset(ref.name, registry=self.registry)
         if schema is None:
@@ -255,12 +342,20 @@ class _SchemaPlanResolver(PlanResolver[IbisPlan]):
 
     @staticmethod
     def telemetry(ref: DatasetRef, *, ctx: ExecutionContext) -> None:
+        """Return telemetry for schema-backed plans (none)."""
         _ = ref
         _ = ctx
 
 
 @cache
 def _default_sqlglot_backend() -> IbisCompilerBackend:
+    """Return the default SQLGlot compiler backend.
+
+    Returns
+    -------
+    IbisCompilerBackend
+        Backend instance for SQLGlot compilation.
+    """
     return cast("IbisCompilerBackend", build_backend(IbisBackendConfig()))
 
 
@@ -320,6 +415,20 @@ def _sqlglot_diagnostics_for_rule(
     *,
     context: SqlGlotDiagnosticsContext,
 ) -> tuple[RuleDiagnostic, ...]:
+    """Generate SQLGlot diagnostics for a single rule.
+
+    Parameters
+    ----------
+    rule
+        Rule definition to analyze.
+    context
+        Diagnostics context bundle.
+
+    Returns
+    -------
+    tuple[RuleDiagnostic, ...]
+        Diagnostics emitted for the rule.
+    """
     rule_ctx, prep_diag = _prepare_sqlglot_rule_context(rule, context=context)
     if prep_diag:
         return prep_diag
@@ -339,6 +448,20 @@ def _prepare_sqlglot_rule_context(
     *,
     context: SqlGlotDiagnosticsContext,
 ) -> tuple[SqlGlotRuleContext | None, tuple[RuleDiagnostic, ...]]:
+    """Prepare SQLGlot compilation context for a rule.
+
+    Parameters
+    ----------
+    rule
+        Rule definition to analyze.
+    context
+        Diagnostics context bundle.
+
+    Returns
+    -------
+    tuple[SqlGlotRuleContext | None, tuple[RuleDiagnostic, ...]]
+        Prepared context and any diagnostics emitted during preparation.
+    """
     input_names = _rule_input_names(rule)
     if not input_names:
         return None, ()
@@ -385,6 +508,22 @@ def _compile_rule_sqlglot(
     context: SqlGlotDiagnosticsContext,
     normalize: bool,
 ) -> SqlGlotDiagnostics | RuleDiagnostic:
+    """Compile a rule expression to SQLGlot diagnostics.
+
+    Parameters
+    ----------
+    rule_ctx
+        Prepared SQLGlot rule context.
+    context
+        Diagnostics context bundle.
+    normalize
+        Whether to normalize the SQLGlot expression.
+
+    Returns
+    -------
+    SqlGlotDiagnostics | RuleDiagnostic
+        Diagnostics or a failure diagnostic.
+    """
     options = SqlGlotDiagnosticsOptions(
         schema_map=rule_ctx.schema_map,
         normalize=normalize,
@@ -410,6 +549,24 @@ def _build_rule_diagnostics(
     raw: SqlGlotDiagnostics,
     optimized: SqlGlotDiagnostics,
 ) -> tuple[RuleDiagnostic, ...]:
+    """Build diagnostics for a rule from SQLGlot outputs.
+
+    Parameters
+    ----------
+    rule_ctx
+        Prepared SQLGlot rule context.
+    context
+        Diagnostics context bundle.
+    raw
+        Raw SQLGlot diagnostics.
+    optimized
+        Optimized SQLGlot diagnostics.
+
+    Returns
+    -------
+    tuple[RuleDiagnostic, ...]
+        Diagnostics produced for the rule.
+    """
     diff = relation_diff(raw, optimized)
     diagnostics: list[RuleDiagnostic] = []
     diagnostics.extend(
@@ -471,6 +628,22 @@ def _list_filter_gate_diagnostics(
     context: SqlGlotDiagnosticsContext,
     optimized: SqlGlotDiagnostics,
 ) -> tuple[RuleDiagnostic, ...]:
+    """Run list-filter gate checks and return diagnostics.
+
+    Parameters
+    ----------
+    rule_ctx
+        Prepared SQLGlot rule context.
+    context
+        Diagnostics context bundle.
+    optimized
+        Optimized SQLGlot diagnostics.
+
+    Returns
+    -------
+    tuple[RuleDiagnostic, ...]
+        Diagnostics emitted for list-filter gate failures.
+    """
     try:
         validate_no_inline_inlists(
             rule_name=rule_ctx.rule.name,
@@ -499,6 +672,24 @@ def _param_metadata(
     context: SqlGlotDiagnosticsContext,
     diagnostics: list[RuleDiagnostic],
 ) -> tuple[set[str], tuple[TableRef, ...]]:
+    """Collect parameter metadata and append diagnostics as needed.
+
+    Parameters
+    ----------
+    rule_ctx
+        Prepared SQLGlot rule context.
+    optimized
+        Optimized SQLGlot diagnostics.
+    context
+        Diagnostics context bundle.
+    diagnostics
+        Diagnostics list to append to.
+
+    Returns
+    -------
+    tuple[set[str], tuple[TableRef, ...]]
+        Parameter table names and table references.
+    """
     table_refs = tuple(extract_table_refs(optimized.optimized))
     param_deps = infer_param_deps(table_refs, policy=context.param_policy)
     param_names = {dep.logical_name for dep in param_deps}
@@ -527,6 +718,24 @@ def _final_sqlglot_metadata(
     table_refs: Sequence[TableRef],
     param_policy: ParamTablePolicy,
 ) -> dict[str, str]:
+    """Build final SQLGlot metadata including param table annotations.
+
+    Parameters
+    ----------
+    base_metadata
+        Base metadata from SQLGlot diagnostics.
+    param_names
+        Param table logical names referenced.
+    table_refs
+        Table references extracted from SQLGlot.
+    param_policy
+        Parameter table policy for filtering.
+
+    Returns
+    -------
+    dict[str, str]
+        Final metadata mapping.
+    """
     metadata = dict(base_metadata)
     if param_names:
         metadata["param_tables"] = ",".join(sorted(param_names))
@@ -604,6 +813,20 @@ def _kernel_lane_diagnostics_for_rule(
     *,
     ctx: ExecutionContext,
 ) -> tuple[RuleDiagnostic, ...]:
+    """Return kernel lane diagnostics for a relationship rule.
+
+    Parameters
+    ----------
+    rule
+        Rule definition to analyze.
+    ctx
+        Execution context used for kernel capability checks.
+
+    Returns
+    -------
+    tuple[RuleDiagnostic, ...]
+        Kernel lane diagnostics.
+    """
     if rule.domain != "cpg":
         return ()
     rel_rule = relationship_rule_from_definition(rule)
@@ -629,6 +852,18 @@ def _kernel_lane_diagnostics_for_rule(
 
 
 def _kernel_names_for_rule(rule: RelationshipRule) -> tuple[str, ...]:
+    """Collect kernel names referenced by a relationship rule.
+
+    Parameters
+    ----------
+    rule
+        Relationship rule to inspect.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Kernel names referenced by the rule.
+    """
     names: list[str] = []
     if rule.interval_align is not None:
         names.append("interval_align")
@@ -648,6 +883,22 @@ def _datafusion_diagnostics_metadata(
     schema_map: Mapping[str, Mapping[str, str]] | None,
     ctx: ExecutionContext,
 ) -> dict[str, str]:
+    """Collect DataFusion diagnostics metadata for SQL.
+
+    Parameters
+    ----------
+    sql
+        SQL string to compile.
+    schema_map
+        Optional schema map for table registration.
+    ctx
+        Execution context containing DataFusion runtime profile.
+
+    Returns
+    -------
+    dict[str, str]
+        Diagnostics metadata for DataFusion compilation.
+    """
     profile = ctx.runtime.datafusion
     if profile is None:
         return {}
@@ -684,6 +935,15 @@ def _register_schema_tables(
     session: SessionContext,
     schema_map: Mapping[str, Mapping[str, str]],
 ) -> None:
+    """Register empty tables in a DataFusion session for schemas.
+
+    Parameters
+    ----------
+    session
+        DataFusion session context.
+    schema_map
+        Mapping of table name to column name/type strings.
+    """
     for name, columns in schema_map.items():
         if not columns:
             continue
@@ -694,10 +954,34 @@ def _register_schema_tables(
 
 
 def _json_payload(payload: Mapping[str, object]) -> str:
+    """Serialize a payload mapping to JSON.
+
+    Parameters
+    ----------
+    payload
+        Mapping to serialize.
+
+    Returns
+    -------
+    str
+        JSON string payload.
+    """
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
 def _settings_snapshot_payload(table: pa.Table) -> str:
+    """Serialize DataFusion settings snapshot table to JSON.
+
+    Parameters
+    ----------
+    table
+        Settings snapshot table.
+
+    Returns
+    -------
+    str
+        JSON string payload.
+    """
     rows: list[dict[str, str]] = []
     for row in table.to_pylist():
         name = row.get("name")
@@ -716,6 +1000,31 @@ def _rule_sqlglot_source(
     ctx: ExecutionContext,
     plan_signature: str | None,
 ) -> _RuleSqlGlotSource | None:
+    """Build a SQLGlot source expression for a rule when possible.
+
+    Parameters
+    ----------
+    rule
+        Rule definition to compile.
+    backend
+        Compiler backend for Ibis.
+    registry
+        Schema registry for dataset lookups.
+    ctx
+        Execution context.
+    plan_signature
+        Optional plan signature for diagnostics.
+
+    Returns
+    -------
+    _RuleSqlGlotSource | None
+        SQLGlot source for the rule when available.
+
+    Raises
+    ------
+    KeyError
+        Raised when a schema is missing for a referenced dataset.
+    """
     if rule.domain == "cpg":
         rel_rule = relationship_rule_from_definition(rule)
         rel_plan = rel_plan_for_rule(rel_rule)
@@ -748,6 +1057,18 @@ def _rule_sqlglot_source(
 
 
 def _query_spec_source(rule: RuleDefinition) -> tuple[IbisQuerySpec, str] | None:
+    """Resolve a query spec and source dataset for a rule.
+
+    Parameters
+    ----------
+    rule
+        Rule definition to inspect.
+
+    Returns
+    -------
+    tuple[IbisQuerySpec, str] | None
+        Query spec and source dataset when available.
+    """
     if rule.rel_ops:
         source = _scan_source(rule.rel_ops)
         if source is None:
@@ -770,6 +1091,18 @@ def _query_spec_source(rule: RuleDefinition) -> tuple[IbisQuerySpec, str] | None
 
 
 def _scan_source(ops: Sequence[RelOpT]) -> str | None:
+    """Return the scan source name from rel ops.
+
+    Parameters
+    ----------
+    ops
+        Relational operations to inspect.
+
+    Returns
+    -------
+    str | None
+        Source name when a scan op is present.
+    """
     for op in ops:
         if isinstance(op, ScanOp):
             return op.source
@@ -777,6 +1110,18 @@ def _scan_source(ops: Sequence[RelOpT]) -> str | None:
 
 
 def _rule_input_names(rule: RuleDefinition) -> tuple[str, ...]:
+    """Return input dataset names for a rule.
+
+    Parameters
+    ----------
+    rule
+        Rule definition to inspect.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Input dataset names for the rule.
+    """
     if rule.inputs:
         return rule.inputs
     source = _scan_source(rule.rel_ops)
@@ -790,6 +1135,20 @@ def _schema_map_for_inputs(
     *,
     registry: SchemaRegistry,
 ) -> tuple[dict[str, dict[str, str]], pa.Schema | None, tuple[str, ...]]:
+    """Build a schema map and union schema for input datasets.
+
+    Parameters
+    ----------
+    inputs
+        Input dataset names.
+    registry
+        Schema registry for dataset lookups.
+
+    Returns
+    -------
+    tuple[dict[str, dict[str, str]], pa.Schema | None, tuple[str, ...]]
+        Schema map, union schema, and missing input names.
+    """
     fields: list[pa.Field] = []
     seen: set[str] = set()
     schema_map: dict[str, dict[str, str]] = {}
@@ -811,6 +1170,20 @@ def _schema_map_for_inputs(
 
 
 def _schema_ddl(schema: SchemaLike, *, name: str) -> str:
+    """Render a CREATE TABLE DDL statement for a schema.
+
+    Parameters
+    ----------
+    schema
+        Schema to render.
+    name
+        Table name for the DDL.
+
+    Returns
+    -------
+    str
+        CREATE TABLE statement.
+    """
     spec = table_spec_from_schema(name, schema)
     return spec.to_create_table_sql(dialect="ansi")
 
@@ -820,6 +1193,20 @@ def _schema_for_dataset(
     *,
     registry: SchemaRegistry,
 ) -> SchemaLike | None:
+    """Resolve a dataset schema from the registry.
+
+    Parameters
+    ----------
+    name
+        Dataset name.
+    registry
+        Schema registry for dataset lookups.
+
+    Returns
+    -------
+    SchemaLike | None
+        Schema for the dataset when available.
+    """
     spec = registry.dataset_specs.get(name)
     if spec is None:
         return None
@@ -832,6 +1219,22 @@ def _ibis_plan_from_schema(
     schema: SchemaLike,
     backend: IbisCompilerBackend,
 ) -> IbisPlan:
+    """Build an Ibis plan backed by an empty table for a schema.
+
+    Parameters
+    ----------
+    name
+        Dataset name.
+    schema
+        Schema to materialize.
+    backend
+        Ibis backend to register the table with.
+
+    Returns
+    -------
+    IbisPlan
+        Plan wrapping an empty table of the schema.
+    """
     arrow_schema = cast("pa.Schema", schema)
     arrays = [pa.array([], type=field.type) for field in arrow_schema]
     table = pa.Table.from_arrays(arrays, schema=arrow_schema)
@@ -839,6 +1242,18 @@ def _ibis_plan_from_schema(
 
 
 def _plan_signature_for_rule(rule: RuleDefinition) -> str | None:
+    """Return a plan signature for a rule when available.
+
+    Parameters
+    ----------
+    rule
+        Rule definition to inspect.
+
+    Returns
+    -------
+    str | None
+        Plan signature when available.
+    """
     if rule.domain == "cpg":
         rel_rule = relationship_rule_from_definition(rule)
         rel_plan = rel_plan_for_rule(rel_rule)
@@ -856,6 +1271,22 @@ def _schema_missing_diagnostic(
     plan_signature: str | None,
     missing_inputs: Sequence[str],
 ) -> RuleDiagnostic:
+    """Build a diagnostic for missing input schemas.
+
+    Parameters
+    ----------
+    rule
+        Rule definition being validated.
+    plan_signature
+        Optional plan signature for the rule.
+    missing_inputs
+        Missing input dataset names.
+
+    Returns
+    -------
+    RuleDiagnostic
+        Diagnostic describing missing schemas.
+    """
     return RuleDiagnostic(
         domain=rule.domain,
         template=None,
@@ -873,6 +1304,22 @@ def _sqlglot_failure_diagnostic(
     plan_signature: str | None,
     error: Exception,
 ) -> RuleDiagnostic:
+    """Build a diagnostic for SQLGlot compilation failures.
+
+    Parameters
+    ----------
+    rule
+        Rule definition being validated.
+    plan_signature
+        Optional plan signature for the rule.
+    error
+        Compilation error captured.
+
+    Returns
+    -------
+    RuleDiagnostic
+        Diagnostic describing the failure.
+    """
     return RuleDiagnostic(
         domain=rule.domain,
         template=None,

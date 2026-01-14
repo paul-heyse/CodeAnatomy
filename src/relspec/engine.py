@@ -109,6 +109,29 @@ def _compile_node(
     resolver: PlanResolver[IbisPlan],
     registry: IbisExprRegistry,
 ) -> tuple[IbisTable, Ordering]:
+    """Compile a relational plan node into an Ibis table plus ordering.
+
+    Parameters
+    ----------
+    node
+        Relational plan node to compile.
+    ctx
+        Execution context for compilation.
+    resolver
+        Resolver for source datasets.
+    registry
+        Expression registry for IR translation.
+
+    Returns
+    -------
+    tuple[IbisTable, Ordering]
+        Compiled Ibis table and its ordering metadata.
+
+    Raises
+    ------
+    TypeError
+        Raised when an unsupported plan node is encountered.
+    """
     unary = _compile_unary_node(node, ctx=ctx, resolver=resolver, registry=registry)
     if unary is not None:
         return unary
@@ -130,6 +153,22 @@ def _compile_source_node(
     ctx: ExecutionContext,
     resolver: PlanResolver[IbisPlan],
 ) -> tuple[IbisTable, Ordering]:
+    """Compile a source node by resolving its dataset reference.
+
+    Parameters
+    ----------
+    node
+        Source node to compile.
+    ctx
+        Execution context for compilation.
+    resolver
+        Resolver for dataset references.
+
+    Returns
+    -------
+    tuple[IbisTable, Ordering]
+        Compiled Ibis table and its ordering metadata.
+    """
     ref = node.ref
     if node.query is not None:
         ref = DatasetRef(name=ref.name, query=node.query, label=ref.label)
@@ -144,6 +183,24 @@ def _compile_unary_node(
     resolver: PlanResolver[IbisPlan],
     registry: IbisExprRegistry,
 ) -> tuple[IbisTable, Ordering] | None:
+    """Compile a unary node (project or filter) when applicable.
+
+    Parameters
+    ----------
+    node
+        Relational plan node to compile.
+    ctx
+        Execution context for compilation.
+    resolver
+        Resolver for dataset references.
+    registry
+        Expression registry for IR translation.
+
+    Returns
+    -------
+    tuple[IbisTable, Ordering] | None
+        Compiled table and ordering, or ``None`` when node is not unary.
+    """
     if isinstance(node, RelProject):
         source, ordering = _compile_node(node.source, ctx=ctx, resolver=resolver, registry=registry)
         return _apply_project(source, node, registry=registry), ordering
@@ -155,6 +212,23 @@ def _compile_unary_node(
 
 
 def _ibis_join_kind(config: HashJoinConfig) -> str:
+    """Map a hash join configuration to an Ibis join kind.
+
+    Parameters
+    ----------
+    config
+        Hash join configuration to map.
+
+    Returns
+    -------
+    str
+        Ibis join kind string.
+
+    Raises
+    ------
+    ValueError
+        Raised when the join type is unsupported.
+    """
     join_type = config.join_type
     if join_type == "inner":
         return "inner"
@@ -179,6 +253,24 @@ def _compile_join_node(
     resolver: PlanResolver[IbisPlan],
     registry: IbisExprRegistry,
 ) -> tuple[IbisTable, Ordering]:
+    """Compile a join node into an Ibis table.
+
+    Parameters
+    ----------
+    node
+        Join node to compile.
+    ctx
+        Execution context for compilation.
+    resolver
+        Resolver for dataset references.
+    registry
+        Expression registry for IR translation.
+
+    Returns
+    -------
+    tuple[IbisTable, Ordering]
+        Compiled join table and ordering metadata.
+    """
     left, _left_order = _compile_node(node.left, ctx=ctx, resolver=resolver, registry=registry)
     right, _right_order = _compile_node(node.right, ctx=ctx, resolver=resolver, registry=registry)
     joined = left.join(
@@ -197,6 +289,24 @@ def _compile_aggregate_node(
     resolver: PlanResolver[IbisPlan],
     registry: IbisExprRegistry,
 ) -> tuple[IbisTable, Ordering]:
+    """Compile an aggregate node into an Ibis table.
+
+    Parameters
+    ----------
+    node
+        Aggregate node to compile.
+    ctx
+        Execution context for compilation.
+    resolver
+        Resolver for dataset references.
+    registry
+        Expression registry for IR translation.
+
+    Returns
+    -------
+    tuple[IbisTable, Ordering]
+        Compiled aggregate table and ordering metadata.
+    """
     source, _ordering = _compile_node(node.source, ctx=ctx, resolver=resolver, registry=registry)
     grouped = _apply_aggregate(source, node, registry=registry)
     return grouped, Ordering.unordered()
@@ -209,6 +319,24 @@ def _compile_union_node(
     resolver: PlanResolver[IbisPlan],
     registry: IbisExprRegistry,
 ) -> tuple[IbisTable, Ordering]:
+    """Compile a union node into an Ibis table.
+
+    Parameters
+    ----------
+    node
+        Union node to compile.
+    ctx
+        Execution context for compilation.
+    resolver
+        Resolver for dataset references.
+    registry
+        Expression registry for IR translation.
+
+    Returns
+    -------
+    tuple[IbisTable, Ordering]
+        Compiled union table and ordering metadata.
+    """
     inputs = [
         _compile_node(item, ctx=ctx, resolver=resolver, registry=registry)[0]
         for item in node.inputs
@@ -228,6 +356,22 @@ def _apply_project(
     *,
     registry: IbisExprRegistry,
 ) -> IbisTable:
+    """Apply a projection node to an Ibis table.
+
+    Parameters
+    ----------
+    table
+        Source Ibis table.
+    node
+        Projection node describing columns and derived expressions.
+    registry
+        Expression registry for IR translation.
+
+    Returns
+    -------
+    IbisTable
+        Projected Ibis table.
+    """
     cols: list[IbisValue] = []
     if node.columns:
         cols.extend(table[col] for col in node.columns if col in table.columns)
@@ -243,6 +387,27 @@ def _join_predicates(
     right: IbisTable,
     config: HashJoinConfig,
 ) -> list[BooleanValue]:
+    """Build join predicates for an Ibis join.
+
+    Parameters
+    ----------
+    left
+        Left Ibis table.
+    right
+        Right Ibis table.
+    config
+        Hash join configuration describing keys.
+
+    Returns
+    -------
+    list[BooleanValue]
+        Join predicates matching left/right key pairs.
+
+    Raises
+    ------
+    ValueError
+        Raised when join keys are missing or mismatched.
+    """
     if not config.left_keys:
         msg = "HashJoinConfig requires left_keys."
         raise ValueError(msg)
@@ -262,6 +427,29 @@ def _select_join_output(
     right: IbisTable,
     config: HashJoinConfig,
 ) -> IbisTable:
+    """Select output columns from a joined Ibis table.
+
+    Parameters
+    ----------
+    joined
+        Joined Ibis table.
+    left
+        Left input table.
+    right
+        Right input table.
+    config
+        Join configuration including output selections and suffixes.
+
+    Returns
+    -------
+    IbisTable
+        Joined table with selected output columns.
+
+    Raises
+    ------
+    ValueError
+        Raised when join output selection is invalid.
+    """
     left_cols = config.left_output or tuple(left.columns)
     right_cols = config.right_output or tuple(right.columns)
     collisions = set(left_cols) & set(right_cols)
@@ -286,6 +474,22 @@ def _apply_aggregate(
     *,
     registry: IbisExprRegistry,
 ) -> IbisTable:
+    """Apply aggregate specifications to an Ibis table.
+
+    Parameters
+    ----------
+    table
+        Source Ibis table.
+    node
+        Aggregate node with grouping and aggregate specs.
+    registry
+        Expression registry for IR translation.
+
+    Returns
+    -------
+    IbisTable
+        Aggregated Ibis table.
+    """
     group_cols = [table[col] for col in node.group_by if col in table.columns]
     aggs: list[Scalar] = [
         _aggregate_expr(table, spec, registry=registry) for spec in node.aggregates
@@ -301,6 +505,29 @@ def _aggregate_expr(
     *,
     registry: IbisExprRegistry,
 ) -> Scalar:
+    """Compile an aggregate expression into an Ibis scalar.
+
+    Parameters
+    ----------
+    table
+        Source Ibis table.
+    spec
+        Aggregate expression specification.
+    registry
+        Expression registry for IR translation.
+
+    Returns
+    -------
+    Scalar
+        Named aggregate scalar expression.
+
+    Raises
+    ------
+    TypeError
+        Raised when the aggregate function is unsupported.
+    ValueError
+        Raised when the aggregate expression has no arguments.
+    """
     if not spec.args:
         msg = f"Aggregate {spec.name!r} missing arguments."
         raise ValueError(msg)
@@ -316,6 +543,23 @@ def _aggregate_expr(
 
 
 def _align_union_tables(tables: Sequence[IbisTable]) -> list[IbisTable]:
+    """Align union inputs to a shared schema order.
+
+    Parameters
+    ----------
+    tables
+        Tables to align before union.
+
+    Returns
+    -------
+    list[IbisTable]
+        Tables with matching column order and types.
+
+    Raises
+    ------
+    ValueError
+        Raised when no union inputs are provided.
+    """
     if not tables:
         msg = "Union requires at least one table."
         raise ValueError(msg)

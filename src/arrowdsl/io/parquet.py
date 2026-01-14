@@ -74,10 +74,24 @@ class NamedDatasetWriteConfig:
 
 
 def _ensure_dir(path: Path) -> None:
+    """Ensure the directory exists for a target path.
+
+    Parameters
+    ----------
+    path
+        Directory path to create if missing.
+    """
     path.mkdir(exist_ok=True, parents=True)
 
 
 def _rm_tree(path: Path) -> None:
+    """Remove a directory tree if it exists.
+
+    Parameters
+    ----------
+    path
+        Directory path to delete.
+    """
     if path.exists():
         shutil.rmtree(path)
 
@@ -115,6 +129,20 @@ def write_table_parquet(
 
 
 def _artifact_path(base: Path, suffix: str) -> Path:
+    """Return a derived artifact path using a suffix.
+
+    Parameters
+    ----------
+    base
+        Base file path.
+    suffix
+        Suffix to insert before the file extension.
+
+    Returns
+    -------
+    Path
+        Path with the suffix inserted.
+    """
     return base.with_name(f"{base.stem}_{suffix}{base.suffix}")
 
 
@@ -124,6 +152,22 @@ def _apply_schema_and_encoding(
     schema: SchemaLike | None,
     encoding_policy: EncodingPolicy | None,
 ) -> DatasetWriteInput:
+    """Apply schema transforms and encoding policies to dataset inputs.
+
+    Parameters
+    ----------
+    data
+        Input table or record batch reader.
+    schema
+        Optional schema to enforce.
+    encoding_policy
+        Optional encoding policy to apply.
+
+    Returns
+    -------
+    DatasetWriteInput
+        Transformed data, preserving input type when possible.
+    """
     if schema is None and encoding_policy is None:
         return data
     table = data.read_all() if isinstance(data, RecordBatchReaderLike) else data

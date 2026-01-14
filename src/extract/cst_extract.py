@@ -49,6 +49,10 @@ if TYPE_CHECKING:
 
 type Row = dict[str, object]
 
+CST_LINE_BASE = 1
+CST_COL_UNIT = "utf32"
+CST_END_EXCLUSIVE = True
+
 
 @dataclass(frozen=True)
 class CSTExtractOptions:
@@ -286,6 +290,9 @@ def _parse_module(
                 "message": str(exc),
                 "raw_line": raw_line,
                 "raw_column": raw_column,
+                "line_base": CST_LINE_BASE,
+                "col_unit": CST_COL_UNIT,
+                "end_exclusive": CST_END_EXCLUSIVE,
                 "meta": {
                     "raw_line": str(raw_line),
                     "raw_column": str(raw_column),

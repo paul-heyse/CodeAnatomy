@@ -97,10 +97,7 @@ def test_bracket_access_translation(ctx: SessionContext) -> None:
 def test_aggregate_distinct_and_filter(ctx: SessionContext) -> None:
     """Translate DISTINCT aggregates and FILTER clauses."""
     expr = parse_one(
-        "SELECT "
-        "COUNT(DISTINCT a) AS distinct_a, "
-        "SUM(b) FILTER (WHERE b > 1) AS sum_b "
-        "FROM t"
+        "SELECT COUNT(DISTINCT a) AS distinct_a, SUM(b) FILTER (WHERE b > 1) AS sum_b FROM t"
     )
     table = df_from_sqlglot(ctx, expr).to_arrow_table()
     assert table.column("distinct_a").to_pylist() == [2]

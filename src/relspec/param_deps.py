@@ -49,7 +49,7 @@ def infer_param_deps(
     """
     deps: set[ParamDep] = set()
     for ref in table_refs:
-        if ref.schema != policy.schema:
+        if not _is_param_schema(ref.schema, policy=policy):
             continue
         if not ref.name.startswith(policy.prefix):
             continue
@@ -99,9 +99,17 @@ def dataset_table_names(
     names = {
         ref.name
         for ref in table_refs
-        if ref.schema != policy.schema or not ref.name.startswith(policy.prefix)
+        if not _is_param_schema(ref.schema, policy=policy) or not ref.name.startswith(policy.prefix)
     }
     return tuple(sorted(names))
+
+
+def _is_param_schema(schema: str | None, *, policy: ParamTablePolicy) -> bool:
+    if schema is None:
+        return False
+    if schema == policy.schema:
+        return True
+    return schema.startswith(f"{policy.schema}_")
 
 
 def build_param_reverse_index(

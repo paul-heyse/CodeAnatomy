@@ -45,6 +45,18 @@ _DIAG_BASE_COLUMNS: tuple[str, ...] = DIAG_QUERY.projection.base
 
 
 def _diag_base_field(field: pa.Field) -> pa.Field:
+    """Return a normalized base field for diagnostics tables.
+
+    Parameters
+    ----------
+    field
+        Arrow field to normalize.
+
+    Returns
+    -------
+    pyarrow.Field
+        Field with dictionaries normalized to value types.
+    """
     if pa.types.is_dictionary(field.type):
         return pa.field(field.name, field.type.value_type, nullable=field.nullable)
     return pa.field(field.name, field.type, nullable=field.nullable)
@@ -56,6 +68,13 @@ _DIAG_BASE_SCHEMA = pa.schema(
 
 
 def _empty_diag_base_table() -> TableLike:
+    """Return an empty diagnostics base table.
+
+    Returns
+    -------
+    TableLike
+        Empty diagnostics base table.
+    """
     return empty_table(_DIAG_BASE_SCHEMA)
 
 
@@ -80,6 +99,8 @@ class ScipDiagContext:
 
 @dataclass(frozen=True)
 class _DiagRow:
+    """Structured diagnostics row payload."""
+
     path: object | None
     file_id: object | None
     bstart: int | None
@@ -93,6 +114,8 @@ class _DiagRow:
 
 @dataclass(frozen=True)
 class _DiagDetail:
+    """Structured diagnostics detail payload."""
+
     kind: str
     error_type: str | None
     source: str | None
@@ -103,11 +126,20 @@ _DETAIL_FIELDS = ("detail_kind", "error_type", "source", "tags")
 
 
 def _detail_accumulator() -> StructLargeListViewAccumulator:
+    """Return a diagnostics detail accumulator.
+
+    Returns
+    -------
+    StructLargeListViewAccumulator
+        Accumulator configured for diagnostics details.
+    """
     return StructLargeListViewAccumulator.with_fields(_DETAIL_FIELDS)
 
 
 @dataclass
 class _DiagBuffers:
+    """Buffer accumulator for diagnostics rows."""
+
     paths: list[object | None] = field(default_factory=list)
     file_ids: list[object | None] = field(default_factory=list)
     bstarts: list[int | None] = field(default_factory=list)
@@ -119,6 +151,13 @@ class _DiagBuffers:
     details_acc: StructLargeListViewAccumulator = field(default_factory=_detail_accumulator)
 
     def append(self, row: _DiagRow) -> None:
+        """Append a diagnostics row into buffers.
+
+        Parameters
+        ----------
+        row
+            Diagnostics row to append.
+        """
         self.paths.append(row.path)
         self.file_ids.append(row.file_id)
         self.bstarts.append(row.bstart)
@@ -130,6 +169,13 @@ class _DiagBuffers:
         self._append_detail(row.detail)
 
     def _append_detail(self, detail: _DiagDetail | None) -> None:
+        """Append detail rows into the detail accumulator.
+
+        Parameters
+        ----------
+        detail
+            Detail payload to append.
+        """
         if detail is None:
             self.details_acc.append_rows([])
             return
@@ -145,11 +191,20 @@ class _DiagBuffers:
         )
 
     def details_array(self) -> ArrayLike:
+        """Build the details array from accumulated buffers.
+
+        Returns
+        -------
+        ArrayLike
+            Diagnostics detail array.
+        """
         return DIAG_DETAIL_SPEC.builder(self)
 
 
 @dataclass(frozen=True)
 class _ScipDiagInput:
+    """Row payload for SCIP diagnostics input."""
+
     doc_id: object | None
     path: object | None
     file_id: object | None
@@ -165,6 +220,18 @@ class _ScipDiagInput:
 
 
 def _build_diag_details(buffers: _DiagBuffers) -> ArrayLike:
+    """Build a details array for diagnostics buffers.
+
+    Parameters
+    ----------
+    buffers
+        Diagnostics buffers to convert.
+
+    Returns
+    -------
+    ArrayLike
+        Diagnostics detail array.
+    """
     field_types = {
         "detail_kind": pa.string(),
         "error_type": pa.string(),
@@ -182,6 +249,18 @@ DIAG_DETAIL_SPEC = NestedFieldSpec(
 
 
 def _detail_tags(value: object | None) -> list[str]:
+    """Normalize tag values for diagnostics details.
+
+    Parameters
+    ----------
+    value
+        Tag value payload.
+
+    Returns
+    -------
+    list[str]
+        Normalized tag strings.
+    """
     if isinstance(value, list):
         return [str(tag) for tag in value if tag]
     return []
@@ -191,6 +270,20 @@ def _cst_parse_error_row(
     repo_text_index: RepoTextIndex,
     values: tuple[object | None, ...],
 ) -> _DiagRow | None:
+    """Build a diagnostics row from a LibCST parse error.
+
+    Parameters
+    ----------
+    repo_text_index
+        Repository text index for path/offset resolution.
+    values
+        Raw parse error values.
+
+    Returns
+    -------
+    _DiagRow | None
+        Diagnostics row when offsets are resolvable.
+    """
     path, file_id, raw_line, raw_column, message, error_type = values
     fidx = file_index(repo_text_index, file_id=file_id, path=path)
     if fidx is None:
@@ -230,6 +323,20 @@ def _cst_parse_error_table(
     repo_text_index: RepoTextIndex,
     cst_parse_errors: TableLike,
 ) -> TableLike:
+    """Build a diagnostics table from LibCST parse errors.
+
+    Parameters
+    ----------
+    repo_text_index
+        Repository text index for path/offset resolution.
+    cst_parse_errors
+        Table of LibCST parse errors.
+
+    Returns
+    -------
+    TableLike
+        Normalized diagnostics table.
+    """
     buffers = _DiagBuffers()
     arrays = [
         column_or_null(cst_parse_errors, "path", pa.string()),
@@ -271,6 +378,18 @@ def _cst_parse_error_table(
 
 
 def _scip_severity(value: object | None) -> str:
+    """Normalize SCIP severity values to standardized labels.
+
+    Parameters
+    ----------
+    value
+        Raw severity value.
+
+    Returns
+    -------
+    str
+        Normalized severity label.
+    """
     if isinstance(value, int):
         return _scip_severity_value(value)
     if isinstance(value, str):
@@ -283,6 +402,18 @@ def _scip_severity(value: object | None) -> str:
 
 
 def _scip_severity_value(value: int) -> str:
+    """Map numeric SCIP severity to a label.
+
+    Parameters
+    ----------
+    value
+        Numeric SCIP severity value.
+
+    Returns
+    -------
+    str
+        Severity label.
+    """
     mapping = {
         SCIP_SEVERITY_ERROR: "ERROR",
         SCIP_SEVERITY_WARNING: "WARNING",
@@ -297,6 +428,22 @@ def _scip_diag_table(
     scip_diagnostics: TableLike,
     scip_documents: TableLike | None,
 ) -> TableLike:
+    """Build a diagnostics table from SCIP diagnostics.
+
+    Parameters
+    ----------
+    repo_text_index
+        Repository text index for path/offset resolution.
+    scip_diagnostics
+        Table of SCIP diagnostics.
+    scip_documents
+        Optional table of SCIP documents for encodings.
+
+    Returns
+    -------
+    TableLike
+        Normalized diagnostics table.
+    """
     ctx = ScipDiagContext(
         repo_text_index=repo_text_index,
         doc_enc=_scip_doc_encodings(scip_documents),
@@ -349,6 +496,18 @@ def _scip_diag_table(
 
 
 def _scip_doc_encodings(scip_documents: TableLike | None) -> dict[str, int]:
+    """Collect position encodings for SCIP documents.
+
+    Parameters
+    ----------
+    scip_documents
+        Optional table of SCIP documents.
+
+    Returns
+    -------
+    dict[str, int]
+        Mapping of document ID to position encoding.
+    """
     doc_enc: dict[str, int] = {}
     if scip_documents is None or scip_documents.num_rows == 0:
         return doc_enc
@@ -363,6 +522,20 @@ def _scip_doc_encodings(scip_documents: TableLike | None) -> dict[str, int]:
 
 
 def _scip_diag_row(ctx: ScipDiagContext, values: _ScipDiagInput) -> _DiagRow | None:
+    """Build a diagnostics row from SCIP diagnostics input.
+
+    Parameters
+    ----------
+    ctx
+        SCIP diagnostics context.
+    values
+        SCIP diagnostics input payload.
+
+    Returns
+    -------
+    _DiagRow | None
+        Diagnostics row when offsets are resolvable.
+    """
     fidx = file_index(ctx.repo_text_index, file_id=values.file_id, path=values.path)
     if fidx is None:
         return None
@@ -405,6 +578,24 @@ def _ts_diag_plan(
     message: str,
     ctx: ExecutionContext,
 ) -> Plan:
+    """Build a diagnostics plan for tree-sitter diagnostics.
+
+    Parameters
+    ----------
+    ts_table
+        Tree-sitter diagnostics table.
+    severity
+        Severity label to apply.
+    message
+        Message to apply.
+    ctx
+        Execution context.
+
+    Returns
+    -------
+    Plan
+        Plan emitting diagnostics rows.
+    """
     plan = Plan.table_source(ts_table)
     plan = _alias_ts_span_columns(plan, ctx=ctx)
     available = set(plan.schema(ctx=ctx).names)
@@ -424,6 +615,20 @@ def _ts_diag_plan(
 
 
 def _alias_ts_span_columns(plan: Plan, *, ctx: ExecutionContext) -> Plan:
+    """Alias tree-sitter span columns to standard names.
+
+    Parameters
+    ----------
+    plan
+        Plan to rename columns in.
+    ctx
+        Execution context.
+
+    Returns
+    -------
+    Plan
+        Updated plan with aliased columns.
+    """
     available = set(plan.schema(ctx=ctx).names)
     mapping: dict[str, str] = {}
     if "bstart" not in available and "start_byte" in available:
@@ -441,6 +646,22 @@ def _diagnostics_plan(
     sources: DiagnosticsSources,
     ctx: ExecutionContext,
 ) -> Plan:
+    """Build the diagnostics plan from available sources.
+
+    Parameters
+    ----------
+    repo_text_index
+        Repository text index for path/offset resolution.
+    sources
+        Diagnostics input sources.
+    ctx
+        Execution context.
+
+    Returns
+    -------
+    Plan
+        Plan producing diagnostics rows.
+    """
     plans: list[Plan] = []
     if sources.cst_parse_errors is not None and sources.cst_parse_errors.num_rows:
         table = _cst_parse_error_table(repo_text_index, sources.cst_parse_errors)

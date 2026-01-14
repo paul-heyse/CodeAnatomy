@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from typing import Protocol, cast
 
 import ibis
+import ibis.expr.datatypes as dt
+import ibis.expr.operations as ops
 from ibis.expr.types import Table, Value
 
 from ibis_engine.builtin_udfs import (
@@ -18,6 +20,14 @@ from ibis_engine.builtin_udfs import (
 )
 
 IbisExprFn = Callable[..., Value]
+
+
+class OperationSupportBackend(Protocol):
+    """Protocol for backends exposing operation support checks."""
+
+    def has_operation(self, operation: type[ops.Value[dt.DataType]], /) -> bool:
+        """Return whether the backend supports an operation type."""
+        ...
 
 
 class ExprIRLike(Protocol):
@@ -136,3 +146,47 @@ def expr_ir_to_ibis(
         return fn(*args)
     msg = f"Unsupported ExprIR op: {expr.op!r}."
     raise ValueError(msg)
+
+
+def unsupported_operations(
+    expr: Value | Table,
+    *,
+    backend: OperationSupportBackend,
+) -> tuple[str, ...]:
+    """Return unsupported operation names for a backend.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted operation class names not supported by the backend.
+    """
+    has_op = getattr(backend, "has_operation", None)
+    if not callable(has_op):
+        return ()
+    missing: set[str] = set()
+    try:
+        nodes = expr.op().find(ops.Value)
+    except AttributeError:
+        return ()
+    for node in nodes:
+        op_type = type(node)
+        try:
+            supported = has_op(op_type)
+        except NotImplementedError:
+            return ()
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return ()
+        if not supported:
+            missing.add(op_type.__name__)
+    return tuple(sorted(missing))
+
+
+__all__ = [
+    "ExprIRLike",
+    "IbisExprFn",
+    "IbisExprRegistry",
+    "OperationSupportBackend",
+    "default_expr_registry",
+    "expr_ir_to_ibis",
+    "unsupported_operations",
+]

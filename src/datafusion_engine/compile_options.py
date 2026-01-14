@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -66,3 +66,6 @@ class DataFusionCompileOptions:
     enable_rewrites: bool = True
     rewrite_hook: Callable[[Expression], Expression] | None = None
     fallback_hook: Callable[[DataFusionFallbackEvent], None] | None = None
+    capture_explain: bool = False
+    explain_analyze: bool = False
+    explain_hook: Callable[[str, Sequence[Mapping[str, object]]], None] | None = None

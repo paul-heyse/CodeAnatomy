@@ -240,6 +240,7 @@ def build_diagnostics_rules(
                 output="diagnostics_norm_v1",
                 inputs=(
                     "cst_parse_errors",
+                    "file_line_index",
                     "ts_errors",
                     "ts_missing",
                     "scip_diagnostics",

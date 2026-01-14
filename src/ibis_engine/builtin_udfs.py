@@ -66,8 +66,8 @@ def position_encoding_norm(value: Value) -> Value:
     return value.cast("int32")
 
 
-@ibis.udf.scalar.builtin(signature=((dt.string, dt.int64, dt.int32), dt.int64))
-def col_to_byte(_line: Value, offset: Value, _encoding: Value) -> Value:
+@ibis.udf.scalar.builtin(signature=((dt.string, dt.int64, dt.string), dt.int64))
+def col_to_byte(_line: Value, offset: Value, _col_unit: Value) -> Value:
     """Convert a line/offset pair into a UTF-8 byte offset.
 
     Returns

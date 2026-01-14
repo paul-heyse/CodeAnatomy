@@ -316,6 +316,7 @@ class RelationshipRule:
         self._validate_kind_inputs()
 
     def _validate_variant_configs(self) -> None:
+        """Validate that only the active rule variant config is set."""
         variant_configs = {
             RuleKind.HASH_JOIN: self.hash_join,
             RuleKind.INTERVAL_ALIGN: self.interval_align,
@@ -328,6 +329,18 @@ class RelationshipRule:
         self._forbid_variant_configs(active_variants)
 
     def _require_variant_config(self, active_variants: set[RuleKind]) -> None:
+        """Ensure the active rule kind has exactly one config set.
+
+        Parameters
+        ----------
+        active_variants
+            Rule kinds with non-null configs.
+
+        Raises
+        ------
+        ValueError
+            Raised when required variant configs are missing or conflicting.
+        """
         if self.kind not in active_variants:
             msg = f"{self.kind.name} rules require {self.kind.value} config."
             raise ValueError(msg)
@@ -337,6 +350,18 @@ class RelationshipRule:
             raise ValueError(msg)
 
     def _forbid_variant_configs(self, active_variants: set[RuleKind]) -> None:
+        """Reject variant configs for rule kinds that do not require them.
+
+        Parameters
+        ----------
+        active_variants
+            Rule kinds with non-null configs.
+
+        Raises
+        ------
+        ValueError
+            Raised when variant configs are present for the current rule kind.
+        """
         if not active_variants:
             return
         extras = sorted(kind.value for kind in active_variants)
@@ -344,6 +369,7 @@ class RelationshipRule:
         raise ValueError(msg)
 
     def _validate_kind_inputs(self) -> None:
+        """Validate input arity requirements for the configured rule kind."""
         validators: dict[RuleKind, Callable[[], None]] = {
             RuleKind.HASH_JOIN: self._validate_hash_join,
             RuleKind.FILTER_PROJECT: lambda: self._require_exact_inputs(SINGLE_INPUT),
@@ -357,28 +383,73 @@ class RelationshipRule:
             validator()
 
     def _require_exact_inputs(self, count: int) -> None:
+        """Ensure the rule has exactly ``count`` inputs.
+
+        Parameters
+        ----------
+        count
+            Required number of inputs.
+
+        Raises
+        ------
+        ValueError
+            Raised when the rule has a different number of inputs.
+        """
         if len(self.inputs) != count:
             msg = f"{self.kind.name} rules require exactly {count} inputs."
             raise ValueError(msg)
 
     def _require_min_inputs(self, count: int) -> None:
+        """Ensure the rule has at least ``count`` inputs.
+
+        Parameters
+        ----------
+        count
+            Minimum number of inputs.
+
+        Raises
+        ------
+        ValueError
+            Raised when the rule has fewer than the required inputs.
+        """
         if len(self.inputs) < count:
             msg = f"{self.kind.name} rules require at least {count} inputs."
             raise ValueError(msg)
 
     def _validate_hash_join(self) -> None:
+        """Validate hash-join rule inputs and configuration.
+
+        Raises
+        ------
+        ValueError
+            Raised when hash-join configuration requirements are not met.
+        """
         self._require_exact_inputs(HASH_JOIN_INPUTS)
         if self.hash_join is None:
             msg = "HASH_JOIN rules require hash_join config."
             raise ValueError(msg)
 
     def _validate_interval_align(self) -> None:
+        """Validate interval-align rule inputs and configuration.
+
+        Raises
+        ------
+        ValueError
+            Raised when interval-align configuration requirements are not met.
+        """
         self._require_exact_inputs(HASH_JOIN_INPUTS)
         if self.interval_align is None:
             msg = "INTERVAL_ALIGN rules require interval_align config."
             raise ValueError(msg)
 
     def _validate_winner_select(self) -> None:
+        """Validate winner-select rule inputs and configuration.
+
+        Raises
+        ------
+        ValueError
+            Raised when winner-select configuration requirements are not met.
+        """
         self._require_exact_inputs(SINGLE_INPUT)
         if self.winner_select is None:
             msg = "WINNER_SELECT rules require winner_select config."

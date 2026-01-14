@@ -65,6 +65,18 @@ def _load_edge_kind_required_props() -> dict[str, set[str]]:
 
 
 def _stringify_edge_kinds(edge_kinds: Sequence[object]) -> tuple[str, ...]:
+    """Normalize edge kind values to strings.
+
+    Parameters
+    ----------
+    edge_kinds
+        Edge kind values to normalize.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Stringified edge kind values.
+    """
     out: list[str] = []
     for edge_kind in edge_kinds:
         if edge_kind is None:
@@ -98,6 +110,26 @@ def _validate_edge_kinds(
     edge_kinds: Sequence[str],
     available_fields: set[str],
 ) -> list[str]:
+    """Validate required edge properties for a contract.
+
+    Parameters
+    ----------
+    ctx
+        Validation context bundle.
+    out_ds
+        Output dataset name.
+    contract_name
+        Contract name for the output dataset.
+    edge_kinds
+        Edge kinds to validate.
+    available_fields
+        Available fields in the contract.
+
+    Returns
+    -------
+    list[str]
+        Validation error messages.
+    """
     errors: list[str] = []
     for edge_kind in edge_kinds:
         if edge_kind not in ctx.required_props_by_edge_kind:
@@ -128,6 +160,24 @@ def _validate_output_dataset(
     edge_kinds: Sequence[object],
     out_rules: Sequence[RelationshipRule],
 ) -> list[str]:
+    """Validate contract requirements for a single output dataset.
+
+    Parameters
+    ----------
+    ctx
+        Validation context bundle.
+    out_ds
+        Output dataset name.
+    edge_kinds
+        Edge kinds associated with the output dataset.
+    out_rules
+        Rules producing the output dataset.
+
+    Returns
+    -------
+    list[str]
+        Validation error messages.
+    """
     if not out_rules:
         return []
 

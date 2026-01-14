@@ -5,15 +5,28 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import ibis
 from ibis.expr.types import Table
+
+try:
+    from datafusion import SessionContext
+except ImportError:  # pragma: no cover - optional dependency
+    SessionContext = None
+
+try:
+    from datafusion_engine.registry_bridge import register_dataset_df
+except ImportError:  # pragma: no cover - optional dependency
+    register_dataset_df = None
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.schema import schema_fingerprint, schema_to_dict
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import DataFusionScanOptions, DatasetSpec
+
+if TYPE_CHECKING:
+    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 type PathLike = str | Path
 type DatasetFormat = str
@@ -253,15 +266,53 @@ def _resolve_reader(
     return cast("Callable[..., Table]", reader)
 
 
+def _datafusion_context(backend: ibis.backends.BaseBackend) -> object | None:
+    if SessionContext is None:
+        return None
+    for attr in ("con", "_context", "_ctx", "ctx", "session_context"):
+        ctx = getattr(backend, attr, None)
+        if isinstance(ctx, SessionContext):
+            return ctx
+    return None
+
+
+def _register_datafusion_dataset(
+    ctx: object,
+    *,
+    name: str,
+    location: DatasetLocation,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> bool:
+    if register_dataset_df is None or SessionContext is None:
+        return False
+    if not isinstance(ctx, SessionContext):
+        return False
+    try:
+        register_dataset_df(
+            ctx,
+            name=name,
+            location=location,
+            runtime_profile=runtime_profile,
+        )
+    except ValueError:
+        return False
+    return True
+
+
 class IbisDatasetRegistry:
     """Register dataset locations as Ibis tables."""
 
     def __init__(
-        self, backend: ibis.backends.BaseBackend, *, catalog: DatasetCatalog | None = None
+        self,
+        backend: ibis.backends.BaseBackend,
+        *,
+        catalog: DatasetCatalog | None = None,
+        runtime_profile: DataFusionRuntimeProfile | None = None,
     ) -> None:
         self.backend = backend
         self.catalog = catalog or DatasetCatalog()
         self._tables: dict[str, Table] = {}
+        self._runtime_profile = runtime_profile
 
     def register_location(self, name: str, location: DatasetLocation) -> Table:
         """Register a dataset location as a stable Ibis view.
@@ -273,18 +324,27 @@ class IbisDatasetRegistry:
         """
         if name in self._tables:
             return self._tables[name]
-        table = read_dataset(
-            self.backend,
-            params=ReadDatasetParams(
-                path=location.path,
-                dataset_format=location.format,
-                read_options=location.read_options,
-                filesystem=location.filesystem,
-                partitioning=location.partitioning,
-                table_name=name,
-            ),
-        )
-        self.backend.create_view(name, table, overwrite=True)
+        ctx = _datafusion_context(self.backend)
+        if ctx is not None and not _register_datafusion_dataset(
+            ctx,
+            name=name,
+            location=location,
+            runtime_profile=self._runtime_profile,
+        ):
+            ctx = None
+        if ctx is None:
+            table = read_dataset(
+                self.backend,
+                params=ReadDatasetParams(
+                    path=location.path,
+                    dataset_format=location.format,
+                    read_options=location.read_options,
+                    filesystem=location.filesystem,
+                    partitioning=location.partitioning,
+                    table_name=name,
+                ),
+            )
+            self.backend.create_view(name, table, overwrite=True)
         registered = self.backend.table(name)
         self._tables[name] = registered
         return registered

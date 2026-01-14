@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Literal, overload
 
 import pyarrow as pa
 
+from arrowdsl.compute.expr_core import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from arrowdsl.compute.macros import normalize_string_items
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import (
@@ -58,6 +59,9 @@ RANGE_LEN_FULL = 4
 LOGGER = logging.getLogger(__name__)
 
 type Row = dict[str, object]
+
+SCIP_LINE_BASE = 0
+SCIP_END_EXCLUSIVE = True
 
 
 @dataclass(frozen=True)
@@ -295,6 +299,34 @@ def _normalize_range(rng: Sequence[int]) -> tuple[int, int, int, int, int] | Non
     return None
 
 
+def _col_unit_from_position_encoding(value: object | None) -> str:
+    if isinstance(value, int):
+        return _encoding_from_int(value)
+    if isinstance(value, str):
+        return _encoding_from_text(value)
+    return "utf32"
+
+
+def _encoding_from_int(value: int) -> str:
+    encoding_map: dict[int, str] = {
+        ENC_UTF8: "utf8",
+        ENC_UTF16: "utf16",
+        ENC_UTF32: "utf32",
+    }
+    return encoding_map.get(value, "utf32")
+
+
+def _encoding_from_text(value: str) -> str:
+    text = value.strip().upper()
+    if "UTF8" in text:
+        return "utf8"
+    if "UTF16" in text:
+        return "utf16"
+    if "UTF32" in text:
+        return "utf32"
+    return "utf32"
+
+
 def _string_list_accumulator() -> LargeListAccumulator[str | None]:
     return LargeListAccumulator()
 
@@ -482,11 +514,16 @@ class _OccurrenceAccumulator:
     enc_end_line: list[int | None] = field(default_factory=list)
     enc_end_char: list[int | None] = field(default_factory=list)
     enc_range_len: list[int | None] = field(default_factory=list)
+    line_base: list[int] = field(default_factory=list)
+    col_unit: list[str] = field(default_factory=list)
+    end_exclusive: list[bool] = field(default_factory=list)
 
     def append_from_occurrence(
         self,
         occurrence: object,
         rel_path: str | None,
+        *,
+        col_unit: str,
     ) -> tuple[int, int, int, int] | None:
         norm = _normalize_range(list(getattr(occurrence, "range", [])))
         if norm is None:
@@ -526,6 +563,9 @@ class _OccurrenceAccumulator:
         self.enc_end_line.append(eel if elen else None)
         self.enc_end_char.append(eec if elen else None)
         self.enc_range_len.append(elen if elen else None)
+        self.line_base.append(SCIP_LINE_BASE)
+        self.col_unit.append(col_unit)
+        self.end_exclusive.append(SCIP_END_EXCLUSIVE)
         return default_range
 
     def to_table(self) -> TableLike:
@@ -548,6 +588,9 @@ class _OccurrenceAccumulator:
             "enc_end_line": _array(self.enc_end_line, pa.int32()),
             "enc_end_char": _array(self.enc_end_char, pa.int32()),
             "enc_range_len": _array(self.enc_range_len, pa.int32()),
+            "line_base": _array(self.line_base, pa.int32()),
+            "col_unit": _array(self.col_unit, pa.string()),
+            "end_exclusive": _array(self.end_exclusive, pa.bool_()),
         }
         return table_from_arrays(
             SCIP_OCCURRENCES_SCHEMA,
@@ -581,12 +624,17 @@ class _DiagnosticAccumulator:
     start_char: list[int | None] = field(default_factory=list)
     end_line: list[int | None] = field(default_factory=list)
     end_char: list[int | None] = field(default_factory=list)
+    line_base: list[int] = field(default_factory=list)
+    col_unit: list[str] = field(default_factory=list)
+    end_exclusive: list[bool] = field(default_factory=list)
 
     def append_from_diag(
         self,
         diag: object,
         rel_path: str | None,
         default_range: tuple[int, int, int, int] | None,
+        *,
+        col_unit: str,
     ) -> None:
         drng = list(getattr(diag, "range", []))
         norm = _normalize_range(drng) if drng else None
@@ -615,6 +663,9 @@ class _DiagnosticAccumulator:
         self.start_char.append(dsc)
         self.end_line.append(del_)
         self.end_char.append(dec_)
+        self.line_base.append(SCIP_LINE_BASE)
+        self.col_unit.append(col_unit)
+        self.end_exclusive.append(SCIP_END_EXCLUSIVE)
 
     def to_table(self) -> TableLike:
         tags = DIAG_TAGS_SPEC.builder(self)
@@ -631,6 +682,9 @@ class _DiagnosticAccumulator:
             "start_char": _array(self.start_char, pa.int32()),
             "end_line": _array(self.end_line, pa.int32()),
             "end_char": _array(self.end_char, pa.int32()),
+            "line_base": _array(self.line_base, pa.int32()),
+            "col_unit": _array(self.col_unit, pa.string()),
+            "end_exclusive": _array(self.end_exclusive, pa.bool_()),
         }
         return table_from_arrays(
             SCIP_DIAGNOSTICS_SCHEMA,
@@ -773,16 +827,14 @@ def _document_tables(index: object) -> tuple[TableLike, TableLike, TableLike]:
         diags = _DiagnosticAccumulator()
 
         rel_path = getattr(doc, "relative_path", None)
-        docs.append(
-            rel_path,
-            getattr(doc, "language", None),
-            getattr(doc, "position_encoding", None),
-        )
+        position_encoding = getattr(doc, "position_encoding", None)
+        docs.append(rel_path, getattr(doc, "language", None), position_encoding)
+        col_unit = _col_unit_from_position_encoding(position_encoding)
 
         for occ in getattr(doc, "occurrences", []):
-            default_range = occs.append_from_occurrence(occ, rel_path)
+            default_range = occs.append_from_occurrence(occ, rel_path, col_unit=col_unit)
             for diag in getattr(occ, "diagnostics", []):
-                diags.append_from_diag(diag, rel_path, default_range)
+                diags.append_from_diag(diag, rel_path, default_range, col_unit=col_unit)
 
         doc_tables.append(docs.to_table())
         occ_tables.append(occs.to_table())

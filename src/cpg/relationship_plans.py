@@ -17,7 +17,6 @@ from arrowdsl.schema.build import ConstExpr, FieldExpr
 from arrowdsl.schema.ops import align_plan, align_table
 from cpg.catalog import PlanCatalog, resolve_plan_source
 from cpg.plan_specs import ensure_plan
-from relspec.adapters import CpgRuleAdapter
 from relspec.compiler import (
     RelationshipRuleCompiler,
     apply_policy_defaults,
@@ -27,9 +26,9 @@ from relspec.compiler_graph import EvidenceCatalog, order_rules
 from relspec.contracts import relation_output_schema
 from relspec.model import DatasetRef, RelationshipRule
 from relspec.policies import evidence_spec_from_schema
+from relspec.rules.cache import rule_definitions_cached
 from relspec.rules.compiler import RuleCompiler
 from relspec.rules.handlers.cpg import RelationshipRuleHandler
-from relspec.rules.registry import RuleRegistry
 from relspec.rules.spec_tables import rule_definitions_from_table
 
 
@@ -119,8 +118,7 @@ def _resolve_relation_rules(
     rule_table: pa.Table | None,
 ) -> tuple[RelationshipRule, ...]:
     if rule_table is None:
-        registry = RuleRegistry(adapters=(CpgRuleAdapter(),))
-        definitions = registry.rules_for_domain("cpg")
+        definitions = rule_definitions_cached("cpg")
     else:
         definitions = rule_definitions_from_table(rule_table)
     compiler = RuleCompiler(handlers={"cpg": RelationshipRuleHandler()})
@@ -137,9 +135,7 @@ def _prepare_relation_rules(
     rules = _resolve_relation_rules(ctx, rule_table=rule_table)
     if required_sources:
         required_set = set(required_sources)
-        rules = tuple(
-            rule for rule in rules if set(_rule_sources(rule)).issubset(required_set)
-        )
+        rules = tuple(rule for rule in rules if set(_rule_sources(rule)).issubset(required_set))
     output_schema = relation_output_schema()
     rules = _apply_rule_policy_defaults(rules, output_schema)
     return rules, output_schema
@@ -153,8 +149,7 @@ def _apply_rule_policy_defaults(
     inferred = evidence_spec_from_schema(output_schema)
     if inferred is not None:
         rules = tuple(
-            replace(rule, evidence=inferred) if rule.evidence is None else rule
-            for rule in rules
+            replace(rule, evidence=inferred) if rule.evidence is None else rule for rule in rules
         )
     for rule in rules:
         validate_policy_requirements(rule, output_schema)

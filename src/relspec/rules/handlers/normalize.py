@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.plan.catalog import PlanDeriver
 from normalize.plan_builders import resolve_plan_builder
+from normalize.rule_defaults import apply_rule_defaults
 from normalize.rule_model import (
     EvidenceOutput as NormalizeEvidenceOutput,
 )
@@ -45,7 +46,7 @@ class NormalizeRuleHandler(RuleHandler):
         payload = rule.payload
         query = _normalize_query(payload, pipeline_ops=rule.pipeline_ops)
         derive = _normalize_derive(payload)
-        return NormalizeRule(
+        base = NormalizeRule(
             name=rule.name,
             output=rule.output,
             inputs=rule.inputs,
@@ -63,6 +64,7 @@ class NormalizeRuleHandler(RuleHandler):
             emit_rule_meta=rule.emit_rule_meta,
             execution_mode=rule.execution_mode,
         )
+        return apply_rule_defaults(base)
 
 
 def _normalize_query(

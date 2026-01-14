@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from extract.registry_rows import DATASET_ROWS
+from extract.registry_rows import DATASET_ROWS, DatasetRow
 from schema_spec.specs import FieldBundle, call_span_bundle, file_identity_bundle, scip_range_bundle
 
 _BUNDLE_CATALOG: Mapping[str, FieldBundle] = {
@@ -51,108 +51,115 @@ class OutputBundleSpec:
         return _OUTPUT_TO_DATASET.get(output)
 
 
-_OUTPUT_BUNDLES: Mapping[str, OutputBundleSpec] = {
-    "ast_bundle": OutputBundleSpec(
-        name="ast_bundle",
-        outputs=("ast_nodes", "ast_edges", "ast_defs"),
-        template="ast",
-        ordering=("ast_nodes", "ast_edges", "ast_defs"),
-        dataset_map={"ast_defs": None},
+_OUTPUT_ALIAS_OVERRIDES: dict[str, str] = {
+    "scip_symbol_info_v1": "scip_symbol_information",
+    "scip_external_symbol_info_v1": "scip_external_symbol_information",
+}
+_DERIVED_OUTPUTS_BY_BUNDLE: dict[str, tuple[str, ...]] = {
+    "ast_bundle": ("ast_defs",),
+}
+_BUNDLE_ORDER_OVERRIDES: dict[str, tuple[str, ...]] = {
+    "ast_bundle": ("ast_nodes", "ast_edges", "ast_defs"),
+    "cst_bundle": (
+        "cst_parse_manifest",
+        "cst_parse_errors",
+        "cst_name_refs",
+        "cst_imports",
+        "cst_callsites",
+        "cst_defs",
+        "cst_type_exprs",
     ),
-    "cst_bundle": OutputBundleSpec(
-        name="cst_bundle",
-        outputs=(
-            "cst_parse_manifest",
-            "cst_parse_errors",
-            "cst_name_refs",
-            "cst_imports",
-            "cst_callsites",
-            "cst_defs",
-            "cst_type_exprs",
-        ),
-        template="cst",
-        ordering=(
-            "cst_parse_manifest",
-            "cst_parse_errors",
-            "cst_name_refs",
-            "cst_imports",
-            "cst_callsites",
-            "cst_defs",
-            "cst_type_exprs",
-        ),
+    "scip_bundle": (
+        "scip_metadata",
+        "scip_documents",
+        "scip_occurrences",
+        "scip_symbol_information",
+        "scip_symbol_relationships",
+        "scip_external_symbol_information",
+        "scip_diagnostics",
     ),
-    "scip_bundle": OutputBundleSpec(
-        name="scip_bundle",
-        outputs=(
-            "scip_metadata",
-            "scip_documents",
-            "scip_occurrences",
-            "scip_symbol_information",
-            "scip_symbol_relationships",
-            "scip_external_symbol_information",
-            "scip_diagnostics",
-        ),
-        template="scip",
-        ordering=(
-            "scip_metadata",
-            "scip_documents",
-            "scip_occurrences",
-            "scip_symbol_information",
-            "scip_symbol_relationships",
-            "scip_external_symbol_information",
-            "scip_diagnostics",
-        ),
-        dataset_map={
-            "scip_symbol_information": "scip_symbol_info_v1",
-            "scip_external_symbol_information": "scip_external_symbol_info_v1",
-        },
+    "bytecode_bundle": (
+        "py_bc_code_units",
+        "py_bc_instructions",
+        "py_bc_exception_table",
+        "py_bc_blocks",
+        "py_bc_cfg_edges",
+        "py_bc_errors",
     ),
-    "bytecode_bundle": OutputBundleSpec(
-        name="bytecode_bundle",
-        outputs=(
-            "py_bc_code_units",
-            "py_bc_instructions",
-            "py_bc_exception_table",
-            "py_bc_blocks",
-            "py_bc_cfg_edges",
-            "py_bc_errors",
-        ),
-        template="bytecode",
-        ordering=(
-            "py_bc_code_units",
-            "py_bc_instructions",
-            "py_bc_exception_table",
-            "py_bc_blocks",
-            "py_bc_cfg_edges",
-            "py_bc_errors",
-        ),
-    ),
-    "tree_sitter_bundle": OutputBundleSpec(
-        name="tree_sitter_bundle",
-        outputs=("ts_nodes", "ts_errors", "ts_missing"),
-        template="tree_sitter",
-        ordering=("ts_nodes", "ts_errors", "ts_missing"),
-    ),
-    "runtime_inspect_bundle": OutputBundleSpec(
-        name="runtime_inspect_bundle",
-        outputs=("rt_objects", "rt_signatures", "rt_signature_params", "rt_members"),
-        template="runtime_inspect",
-        ordering=("rt_objects", "rt_signatures", "rt_signature_params", "rt_members"),
-    ),
+    "tree_sitter_bundle": ("ts_nodes", "ts_errors", "ts_missing"),
+    "runtime_inspect_bundle": ("rt_objects", "rt_signatures", "rt_signature_params", "rt_members"),
 }
 
-_OUTPUT_TO_DATASET: dict[str, str] = {row.output_name(): row.name for row in DATASET_ROWS}
-_OUTPUT_TO_DATASET_OVERRIDES: dict[str, str | None] = {}
-for _bundle in _OUTPUT_BUNDLES.values():
-    _OUTPUT_TO_DATASET_OVERRIDES.update(_bundle.dataset_map)
-_OUTPUT_SKIP: set[str] = {
-    output for output, dataset in _OUTPUT_TO_DATASET_OVERRIDES.items() if dataset is None
+
+def _output_alias(row: DatasetRow) -> str:
+    override = _OUTPUT_ALIAS_OVERRIDES.get(row.name)
+    if override is not None:
+        return override
+    return row.output_name()
+
+
+def _bundle_templates(rows: tuple[DatasetRow, ...]) -> dict[str, str | None]:
+    templates: dict[str, set[str]] = {}
+    for row in rows:
+        if row.template is None:
+            continue
+        for bundle in row.bundles:
+            templates.setdefault(bundle, set()).add(row.template)
+    resolved: dict[str, str | None] = {}
+    for bundle, values in templates.items():
+        if len(values) == 1:
+            resolved[bundle] = next(iter(values))
+        else:
+            resolved[bundle] = None
+    return resolved
+
+
+def _bundle_specs_from_rows(rows: tuple[DatasetRow, ...]) -> tuple[OutputBundleSpec, ...]:
+    bundle_outputs: dict[str, list[str]] = {}
+    dataset_map: dict[str, str | None] = {}
+    for row in rows:
+        output = _output_alias(row)
+        dataset_map[output] = row.name
+        for bundle in row.bundles:
+            bundle_outputs.setdefault(bundle, []).append(output)
+    for bundle, outputs in _DERIVED_OUTPUTS_BY_BUNDLE.items():
+        bundle_outputs.setdefault(bundle, []).extend(outputs)
+        for output in outputs:
+            dataset_map.setdefault(output, None)
+    templates = _bundle_templates(rows)
+    specs: list[OutputBundleSpec] = []
+    for bundle, outputs in bundle_outputs.items():
+        ordering = _BUNDLE_ORDER_OVERRIDES.get(bundle, tuple(outputs))
+        mapped = {output: dataset_map.get(output) for output in outputs}
+        specs.append(
+            OutputBundleSpec(
+                name=bundle,
+                outputs=tuple(outputs),
+                template=templates.get(bundle),
+                ordering=ordering,
+                dataset_map=mapped,
+            )
+        )
+    return tuple(sorted(specs, key=lambda spec: spec.name))
+
+
+_OUTPUT_BUNDLES: Mapping[str, OutputBundleSpec] = {
+    spec.name: spec for spec in _bundle_specs_from_rows(DATASET_ROWS)
 }
-for _output, _dataset in _OUTPUT_TO_DATASET_OVERRIDES.items():
-    if _dataset is None:
-        _OUTPUT_TO_DATASET.pop(_output, None)
-    else:
-        _OUTPUT_TO_DATASET[_output] = _dataset
+
+_OUTPUT_TO_DATASET: dict[str, str] = {}
+_OUTPUT_SKIP: set[str] = set()
+for _bundle in _OUTPUT_BUNDLES.values():
+    for _output, _dataset in _bundle.dataset_map.items():
+        if _dataset is None:
+            _OUTPUT_SKIP.add(_output)
+            continue
+        existing = _OUTPUT_TO_DATASET.get(_output)
+        if existing is None:
+            _OUTPUT_TO_DATASET[_output] = _dataset
+        elif existing != _dataset:
+            msg = f"Extract output {_output!r} mapped to multiple datasets: {existing!r}, {_dataset!r}."
+            raise ValueError(msg)
 
 
 def bundle(name: str) -> FieldBundle:

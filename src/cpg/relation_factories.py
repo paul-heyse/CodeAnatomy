@@ -20,7 +20,9 @@ from relspec.model import (
     RuleKind,
 )
 from relspec.policies import ambiguity_kernels, confidence_expr
-from relspec.policy_registry import resolve_ambiguity_policy, resolve_confidence_policy
+from relspec.rules.policies import PolicyRegistry
+
+_POLICY_REGISTRY = PolicyRegistry()
 
 
 def _with_confidence(
@@ -118,8 +120,16 @@ def build_rules_from_definitions(
     """
     rules: list[RelationshipRule] = []
     for spec in specs:
-        confidence_policy = resolve_confidence_policy(spec.confidence_policy)
-        ambiguity_policy = resolve_ambiguity_policy(spec.ambiguity_policy)
+        confidence_policy = (
+            _POLICY_REGISTRY.resolve_confidence("cpg", spec.confidence_policy)
+            if spec.confidence_policy
+            else None
+        )
+        ambiguity_policy = (
+            _POLICY_REGISTRY.resolve_ambiguity("cpg", spec.ambiguity_policy)
+            if spec.ambiguity_policy
+            else None
+        )
         project = spec.project
         if project is None and confidence_policy is not None:
             project = ProjectConfig()

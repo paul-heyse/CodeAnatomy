@@ -7,7 +7,6 @@ from functools import cache
 import pyarrow as pa
 
 from arrowdsl.spec.tables.cpg import node_plan_table, prop_table_table
-from cpg.relation_registry import relation_rule_table_cached
 from cpg.spec_registry import (
     edge_prop_spec,
     node_plan_specs,
@@ -41,20 +40,7 @@ def prop_table_spec_table() -> pa.Table:
     return prop_table_table(specs)
 
 
-@cache
-def relation_rule_spec_table() -> pa.Table:
-    """Return the relationship rule spec table.
-
-    Returns
-    -------
-    pa.Table
-        Arrow table of relationship rule specs.
-    """
-    return relation_rule_table_cached()
-
-
 __all__ = [
     "node_plan_spec_table",
     "prop_table_spec_table",
-    "relation_rule_spec_table",
 ]

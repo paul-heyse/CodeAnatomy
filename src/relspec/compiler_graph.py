@@ -2,112 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.plan.plan import Plan, union_all_plans
-from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.build import ConstExpr, FieldExpr
-from cpg.catalog import PlanCatalog
 from relspec.compiler import RelationshipRuleCompiler
 from relspec.contracts import RELATION_OUTPUT_NAME, relation_output_schema
-from relspec.model import EvidenceSpec, RelationshipRule
+from relspec.model import EvidenceSpec as RelationshipEvidenceSpec
+from relspec.model import RelationshipRule
+from relspec.rules.definitions import EvidenceSpec as CentralEvidenceSpec
+from relspec.rules.evidence import EvidenceCatalog
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
-
-
-@dataclass
-class EvidenceCatalog:
-    """Track available evidence sources and columns."""
-
-    sources: set[str] = field(default_factory=set)
-    columns_by_dataset: dict[str, set[str]] = field(default_factory=dict)
-    types_by_dataset: dict[str, dict[str, str]] = field(default_factory=dict)
-
-    @classmethod
-    def from_plan_catalog(cls, catalog: PlanCatalog, *, ctx: ExecutionContext) -> EvidenceCatalog:
-        """Build an evidence catalog from a plan catalog.
-
-        Returns
-        -------
-        EvidenceCatalog
-            Evidence catalog populated from catalog sources.
-        """
-        evidence = cls(sources=set(catalog.tables))
-        for name, source in catalog.tables.items():
-            schema = _schema_from_source(source, ctx=ctx)
-            if schema is not None:
-                evidence.columns_by_dataset[name] = set(schema.names)
-                evidence.types_by_dataset[name] = _schema_types(schema)
-        return evidence
-
-    def register(self, name: str, schema: SchemaLike) -> None:
-        """Register an evidence dataset and its schema."""
-        self.sources.add(name)
-        self.columns_by_dataset[name] = set(schema.names)
-        self.types_by_dataset[name] = _schema_types(schema)
-
-    def clone(self) -> EvidenceCatalog:
-        """Return a shallow copy for staged updates.
-
-        Returns
-        -------
-        EvidenceCatalog
-            Copy of the catalog for staged updates.
-        """
-        return EvidenceCatalog(
-            sources=set(self.sources),
-            columns_by_dataset={key: set(cols) for key, cols in self.columns_by_dataset.items()},
-            types_by_dataset={key: dict(types) for key, types in self.types_by_dataset.items()},
-        )
-
-    def satisfies(self, spec: EvidenceSpec | None, *, inputs: Sequence[str]) -> bool:
-        """Return whether the evidence spec requirements are met.
-
-        Parameters
-        ----------
-        spec:
-            Evidence requirements to evaluate.
-        inputs:
-            Input dataset names for the rule.
-
-        Returns
-        -------
-        bool
-            ``True`` when the spec requirements are satisfied.
-        """
-        resolved = spec or EvidenceSpec(sources=tuple(inputs))
-        sources = resolved.sources or tuple(inputs)
-        has_sources = self._sources_available(sources)
-        has_columns = not resolved.required_columns or self._columns_available(
-            sources, resolved.required_columns
-        )
-        has_types = not resolved.required_types or self._types_available(
-            sources, resolved.required_types
-        )
-        return has_sources and has_columns and has_types
-
-    def _sources_available(self, sources: Sequence[str]) -> bool:
-        return set(sources).issubset(self.sources)
-
-    def _columns_available(self, sources: Sequence[str], required_columns: Sequence[str]) -> bool:
-        required = set(required_columns)
-        for source in sources:
-            columns = self.columns_by_dataset.get(source)
-            if columns is None or not required.issubset(columns):
-                return False
-        return True
-
-    def _types_available(self, sources: Sequence[str], required_types: Mapping[str, str]) -> bool:
-        for source in sources:
-            types = self.types_by_dataset.get(source)
-            if types is None:
-                return False
-            for col, dtype in required_types.items():
-                if types.get(col) != dtype:
-                    return False
-        return True
 
 
 @dataclass(frozen=True)
@@ -153,7 +61,7 @@ def compile_graph_plan(
         Graph-level plan and per-output subplans.
     """
     work = evidence.clone()
-    outputs: dict[str, Plan] = {}
+    outputs: dict[str, list[Plan]] = {}
     for rule in order_rules(rules, evidence=work):
         compiled = compiler.compile_rule(rule, ctx=ctx)
         if compiled.plan is not None and not compiled.post_kernels:
@@ -161,10 +69,16 @@ def compile_graph_plan(
         else:
             table = compiled.execute(ctx=ctx, resolver=compiler.resolver)
             plan = Plan.table_source(table, label=rule.name)
-        outputs[rule.output_dataset] = plan
+        outputs.setdefault(rule.output_dataset, []).append(plan)
         work.register(rule.output_dataset, plan.schema(ctx=ctx))
-    union = union_all_plans(list(outputs.values()), label="relspec_graph")
-    return GraphPlan(plan=union, outputs=outputs)
+    merged: dict[str, Plan] = {}
+    for output, plans in outputs.items():
+        if len(plans) == 1:
+            merged[output] = plans[0]
+            continue
+        merged[output] = union_all_plans(plans, label=output)
+    union = union_all_plans(list(merged.values()), label="relspec_graph")
+    return GraphPlan(plan=union, outputs=merged)
 
 
 def _apply_rule_meta(plan: Plan, *, rule: RelationshipRule, ctx: ExecutionContext) -> Plan:
@@ -223,7 +137,7 @@ def _ready_rules(
     ready: list[RelationshipRule] = []
     for rule in pending:
         inputs = tuple(ref.name for ref in rule.inputs)
-        if evidence.satisfies(rule.evidence, inputs=inputs):
+        if evidence.satisfies(_central_evidence(rule.evidence), inputs=inputs):
             ready.append(rule)
     return ready
 
@@ -236,21 +150,6 @@ def _register_rule_output(evidence: EvidenceCatalog, rule: RelationshipRule) -> 
         evidence.sources.add(rule.output_dataset)
 
 
-def _schema_from_source(source: object, *, ctx: ExecutionContext) -> SchemaLike | None:
-    if isinstance(source, Plan):
-        return source.schema(ctx=ctx)
-    if isinstance(source, DatasetSource):
-        return source.dataset.schema
-    schema = getattr(source, "schema", None)
-    if schema is not None and hasattr(schema, "names"):
-        return schema
-    return None
-
-
-def _schema_types(schema: SchemaLike) -> dict[str, str]:
-    return {field.name: str(field.type) for field in schema}
-
-
 def _virtual_output_schema(rule: RelationshipRule) -> SchemaLike | None:
     if rule.contract_name:
         dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(rule.contract_name)
@@ -258,8 +157,19 @@ def _virtual_output_schema(rule: RelationshipRule) -> SchemaLike | None:
             return dataset_spec.schema()
         if rule.contract_name == RELATION_OUTPUT_NAME:
             return relation_output_schema()
+    return None
+
+
+def _central_evidence(
+    spec: RelationshipEvidenceSpec | None,
+) -> CentralEvidenceSpec | None:
+    if spec is None:
         return None
-    return relation_output_schema()
+    return CentralEvidenceSpec(
+        sources=spec.sources,
+        required_columns=spec.required_columns,
+        required_types=spec.required_types,
+    )
 
 
 __all__ = ["EvidenceCatalog", "GraphPlan", "RuleNode", "compile_graph_plan", "order_rules"]

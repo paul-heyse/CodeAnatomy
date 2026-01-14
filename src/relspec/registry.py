@@ -1,8 +1,7 @@
-"""Catalogs and registries for datasets, contracts, and rules."""
+"""Catalogs and registries for datasets and contracts."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,9 +10,7 @@ import pyarrow.fs as pafs
 
 from arrowdsl.finalize.finalize import Contract
 from arrowdsl.spec.io import read_spec_table
-from arrowdsl.spec.tables.relspec import relationship_rules_from_table
 from arrowdsl.spec.tables.schema import contract_specs_from_table, table_specs_from_tables
-from relspec.model import RelationshipRule
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import ContractCatalogSpec, DatasetSpec
 
@@ -236,145 +233,3 @@ class ContractCatalog:
             Sorted contract names.
         """
         return sorted(self._contracts)
-
-
-class RelationshipRegistry:
-    """Hold relationship rules and provide grouping utilities."""
-
-    def __init__(self) -> None:
-        self._rules_by_name: dict[str, RelationshipRule] = {}
-
-    @classmethod
-    def from_table(cls, table: pa.Table) -> RelationshipRegistry:
-        """Build a registry from a relationship rule spec table.
-
-        Returns
-        -------
-        RelationshipRegistry
-            Registry populated from the table.
-        """
-        registry = cls()
-        registry.extend(relationship_rules_from_table(table))
-        return registry
-
-    @classmethod
-    def from_path(cls, path: PathLike) -> RelationshipRegistry:
-        """Build a registry from an on-disk relationship rule spec table.
-
-        Returns
-        -------
-        RelationshipRegistry
-            Registry populated from the table.
-        """
-        return cls.from_table(read_spec_table(path))
-
-    def add(self, rule: RelationshipRule) -> None:
-        """Add a validated relationship rule.
-
-        Parameters
-        ----------
-        rule:
-            Relationship rule to add.
-
-        Raises
-        ------
-        ValueError
-            Raised when the rule name is duplicated.
-        """
-        if rule.name in self._rules_by_name:
-            msg = f"Duplicate rule name: {rule.name!r}."
-            raise ValueError(msg)
-        self._rules_by_name[rule.name] = rule
-
-    def extend(self, rules: Iterable[RelationshipRule]) -> None:
-        """Add multiple relationship rules.
-
-        Parameters
-        ----------
-        rules:
-            Iterable of rules to add.
-        """
-        for rule in rules:
-            self.add(rule)
-
-    def get(self, name: str) -> RelationshipRule:
-        """Return a rule by name.
-
-        Parameters
-        ----------
-        name:
-            Rule name.
-
-        Returns
-        -------
-        RelationshipRule
-            The requested rule.
-        """
-        return self._rules_by_name[name]
-
-    def rules(self) -> list[RelationshipRule]:
-        """Return all rules in sorted order.
-
-        Returns
-        -------
-        list[RelationshipRule]
-            Rules sorted by name.
-        """
-        return [self._rules_by_name[name] for name in sorted(self._rules_by_name)]
-
-    def by_output(self) -> dict[str, list[RelationshipRule]]:
-        """Group rules by output dataset with deterministic ordering.
-
-        Returns
-        -------
-        dict[str, list[RelationshipRule]]
-            Mapping of output dataset to rules.
-        """
-        out: dict[str, list[RelationshipRule]] = {}
-        for rule in self._rules_by_name.values():
-            out.setdefault(rule.output_dataset, []).append(rule)
-        for key in list(out.keys()):
-            out[key] = sorted(out[key], key=lambda rr: (rr.priority, rr.name))
-        return out
-
-    def outputs(self) -> list[str]:
-        """Return output dataset names referenced by rules.
-
-        Returns
-        -------
-        list[str]
-            Sorted output dataset names.
-        """
-        return sorted({rule.output_dataset for rule in self._rules_by_name.values()})
-
-    def inputs(self) -> list[str]:
-        """Return input dataset names referenced by rules.
-
-        Returns
-        -------
-        list[str]
-            Sorted input dataset names.
-        """
-        names: set[str] = set()
-        for rule in self._rules_by_name.values():
-            for dref in rule.inputs:
-                names.add(dref.name)
-        return sorted(names)
-
-    def validate_contract_consistency(self) -> None:
-        """Enforce consistent contract names for shared outputs.
-
-        Raises
-        ------
-        ValueError
-            Raised when contract names differ across rules for an output dataset.
-        """
-        for out_name, rules in self.by_output().items():
-            contracts = {rule.contract_name for rule in rules}
-            if len(contracts) > 1:
-                msg = (
-                    "Output "
-                    f"{out_name!r} has inconsistent contract_name across rules: "
-                    f"{sorted(map(str, contracts))}."
-                )
-                raise ValueError(msg)

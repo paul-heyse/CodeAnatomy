@@ -14,6 +14,7 @@ from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.schema import EncodingSpec
 from cpg.catalog import PlanCatalog
 from cpg.constants import CpgBuildArtifacts, QualityPlanSpec, quality_plan_from_ids
+from cpg.edge_specs import edge_plan_specs_from_table
 from cpg.emit_edges import emit_edges_plan
 from cpg.plan_specs import (
     align_plan,
@@ -25,7 +26,7 @@ from cpg.plan_specs import (
     finalize_plan,
 )
 from cpg.registry import CpgRegistry, default_cpg_registry
-from cpg.relation_registry import compile_relation_plans, edge_plan_specs_from_table
+from cpg.relationship_plans import compile_relation_plans
 from cpg.specs import EdgePlanSpec
 
 

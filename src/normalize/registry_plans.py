@@ -6,7 +6,8 @@ from dataclasses import dataclass
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.plan.catalog import PlanCatalog, PlanDeriver, PlanRef
-from normalize.rule_registry import normalize_rules
+from normalize.rule_factories import build_rule_definitions_from_specs
+from normalize.rule_registry_specs import rule_family_specs
 from normalize.runner import compile_normalize_plans
 from normalize.utils import PlanSource
 
@@ -142,7 +143,7 @@ def derive_span_errors(
 
 PLAN_ROWS: tuple[PlanRow, ...] = tuple(
     PlanRow(name=rule.output, inputs=rule.inputs, derive=_derive_output(rule.output))
-    for rule in normalize_rules()
+    for rule in build_rule_definitions_from_specs(rule_family_specs())
 )
 
 _PLAN_REFS: dict[str, PlanRef] = {

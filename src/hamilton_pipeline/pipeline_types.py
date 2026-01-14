@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+import pyarrow as pa
+
 from arrowdsl.core.interop import TableLike
 from relspec.compiler import CompiledOutput
-from relspec.registry import ContractCatalog, DatasetLocation, RelationshipRegistry
+from relspec.registry import ContractCatalog, DatasetLocation
 
 if TYPE_CHECKING:
     from arrowdsl.plan.scan_io import DatasetSource
@@ -252,6 +254,8 @@ class RelspecInputsBundle:
 class RelspecSnapshots:
     """Snapshots required to reproduce relationship outputs."""
 
-    registry: RelationshipRegistry
+    rule_table: pa.Table
+    template_table: pa.Table
+    template_diagnostics: pa.Table
     contracts: ContractCatalog
     compiled_outputs: dict[str, CompiledOutput]

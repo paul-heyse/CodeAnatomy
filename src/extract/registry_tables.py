@@ -2,27 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from relspec.adapters import ExtractRuleAdapter
+from relspec.rules.registry import RuleRegistry
+from relspec.rules.spec_tables import rule_definition_table as canonical_rule_table
 
-from arrowdsl.spec.tables.extract import (
-    ExtractDatasetRowSpec,
-    dataset_rows_from_table,
-    extract_dataset_table_from_rows,
-)
-from extract.registry_template_specs import DATASET_TEMPLATE_SPECS
-from extract.registry_templates import expand_dataset_templates
+_REGISTRY = RuleRegistry(adapters=(ExtractRuleAdapter(),))
+EXTRACT_RULE_TABLE = canonical_rule_table(_REGISTRY.rules_for_domain("extract"))
 
-DATASET_ROW_RECORDS: tuple[Mapping[str, object], ...] = ()
-
-_TEMPLATE_ROW_RECORDS = expand_dataset_templates(DATASET_TEMPLATE_SPECS)
-
-EXTRACT_DATASET_TABLE = extract_dataset_table_from_rows(
-    (*DATASET_ROW_RECORDS, *_TEMPLATE_ROW_RECORDS)
-)
-
-DATASET_ROW_SPECS: tuple[ExtractDatasetRowSpec, ...] = dataset_rows_from_table(
-    EXTRACT_DATASET_TABLE
-)
-
-
-__all__ = ["DATASET_ROW_SPECS", "EXTRACT_DATASET_TABLE"]
+__all__ = ["EXTRACT_RULE_TABLE"]

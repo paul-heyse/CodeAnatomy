@@ -16,7 +16,6 @@ from obs.repro import (
     collect_repro_info,
     make_run_bundle_name,
     serialize_contract_catalog,
-    serialize_relationship_registry,
     try_get_git_info,
     write_run_bundle,
 )
@@ -33,7 +32,6 @@ __all__ = [
     "make_run_bundle_name",
     "schema_fingerprint",
     "serialize_contract_catalog",
-    "serialize_relationship_registry",
     "table_summary",
     "try_get_git_info",
     "write_manifest_json",

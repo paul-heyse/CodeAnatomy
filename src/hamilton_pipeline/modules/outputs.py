@@ -16,6 +16,7 @@ from arrowdsl.io.parquet import (
     ParquetWriteOptions,
     write_finalize_result_parquet,
     write_named_datasets_parquet,
+    write_table_parquet,
 )
 from arrowdsl.plan.metrics import (
     column_stats_table,
@@ -27,6 +28,7 @@ from arrowdsl.plan.query import open_dataset
 from core_types import JsonDict
 from cpg.constants import CpgBuildArtifacts
 from extract.evidence_plan import EvidencePlan
+from hamilton_pipeline.modules.extraction import ExtractErrorArtifacts
 from hamilton_pipeline.pipeline_types import (
     CpgOutputTables,
     OutputConfig,
@@ -41,7 +43,10 @@ from normalize.utils import encoding_policy_from_schema
 from obs.manifest import ManifestContext, ManifestData, build_manifest, write_manifest_json
 from obs.repro import RunBundleContext, write_run_bundle
 from relspec.compiler import CompiledOutput
-from relspec.registry import ContractCatalog, DatasetLocation, RelationshipRegistry
+from relspec.registry import ContractCatalog, DatasetLocation
+from relspec.rules.handlers.cpg import relationship_rule_from_definition
+from relspec.rules.registry import RuleRegistry
+from relspec.rules.spec_tables import rule_definitions_from_table
 from schema_spec.system import dataset_spec_from_schema, make_dataset_spec
 
 # -----------------------
@@ -323,6 +328,66 @@ def write_cpg_props_parquet(
 
 
 # -----------------------
+# Materializers: extract error artifacts
+# -----------------------
+
+
+@tag(layer="materialize", artifact="extract_errors_parquet", kind="side_effect")
+def write_extract_error_artifacts_parquet(
+    output_dir: str | None,
+    extract_error_artifacts: ExtractErrorArtifacts,
+) -> JsonDict | None:
+    """Write extract error artifacts to Parquet.
+
+    Output structure:
+      <output_dir>/extract_errors/<output>/{errors,error_stats,alignment}.parquet
+
+    Returns
+    -------
+    JsonDict | None
+        Report of written error artifacts, or None when output is disabled.
+    """
+    if not output_dir:
+        return None
+    base = Path(output_dir) / "extract_errors"
+    _ensure_dir(base)
+    options = ParquetWriteOptions()
+    datasets: dict[str, JsonDict] = {}
+    for output in sorted(extract_error_artifacts.errors):
+        errors = extract_error_artifacts.errors[output]
+        stats = extract_error_artifacts.stats[output]
+        alignment = extract_error_artifacts.alignment[output]
+        dataset_dir = base / output
+        _ensure_dir(dataset_dir)
+        datasets[output] = {
+            "paths": {
+                "errors": write_table_parquet(
+                    errors,
+                    dataset_dir / "errors.parquet",
+                    opts=options,
+                    overwrite=True,
+                ),
+                "stats": write_table_parquet(
+                    stats,
+                    dataset_dir / "error_stats.parquet",
+                    opts=options,
+                    overwrite=True,
+                ),
+                "alignment": write_table_parquet(
+                    alignment,
+                    dataset_dir / "alignment.parquet",
+                    opts=options,
+                    overwrite=True,
+                ),
+            },
+            "error_rows": int(errors.num_rows),
+            "stat_rows": int(stats.num_rows),
+            "alignment_rows": int(alignment.num_rows),
+        }
+    return {"base_dir": str(base), "datasets": datasets}
+
+
+# -----------------------
 # Debug stats for normalized datasets
 # -----------------------
 
@@ -455,7 +520,7 @@ def cpg_output_tables(
 
 @tag(layer="obs", artifact="relspec_snapshots", kind="object")
 def relspec_snapshots(
-    relationship_registry: RelationshipRegistry,
+    rule_registry: RuleRegistry,
     relationship_contracts: ContractCatalog,
     compiled_relationship_outputs: dict[str, CompiledOutput],
 ) -> RelspecSnapshots:
@@ -467,7 +532,9 @@ def relspec_snapshots(
         Relationship snapshot bundle.
     """
     return RelspecSnapshots(
-        registry=relationship_registry,
+        rule_table=rule_registry.rule_table(),
+        template_table=rule_registry.template_table(),
+        template_diagnostics=rule_registry.template_diagnostics_table(),
         contracts=relationship_contracts,
         compiled_outputs=compiled_relationship_outputs,
     )
@@ -543,6 +610,10 @@ def manifest_data(
     if normalize_lineage:
         notes["normalize_output_keys"] = sorted(normalize_lineage)
     extract_inputs = manifest_inputs.extract_inputs
+    rule_definitions = rule_definitions_from_table(relspec_snapshots.rule_table)
+    relationship_rules = tuple(
+        relationship_rule_from_definition(defn) for defn in rule_definitions if defn.domain == "cpg"
+    )
     return ManifestData(
         relspec_input_tables=manifest_inputs.relspec_inputs_bundle.tables,
         relspec_input_locations=manifest_inputs.relspec_inputs_bundle.locations,
@@ -552,7 +623,7 @@ def manifest_data(
         cpg_props=manifest_inputs.cpg_output_tables.cpg_props,
         extract_evidence_plan=extract_inputs.evidence_plan if extract_inputs else None,
         extract_error_counts=extract_inputs.extract_error_counts if extract_inputs else None,
-        relationship_rules=relspec_snapshots.registry.rules(),
+        relationship_rules=relationship_rules,
         normalize_rules=normalize_rules,
         produced_relationship_output_names=produced_outputs,
         relationship_output_lineage=lineage,
@@ -701,7 +772,9 @@ def run_bundle_context(
         base_dir=str(base_dir),
         run_manifest=run_bundle_inputs.run_manifest,
         run_config=run_bundle_inputs.run_config,
-        relationship_registry=run_bundle_inputs.relspec_snapshots.registry,
+        rule_table=run_bundle_inputs.relspec_snapshots.rule_table,
+        template_table=run_bundle_inputs.relspec_snapshots.template_table,
+        template_diagnostics=run_bundle_inputs.relspec_snapshots.template_diagnostics,
         relationship_contracts=run_bundle_inputs.relspec_snapshots.contracts,
         compiled_relationship_outputs=run_bundle_inputs.relspec_snapshots.compiled_outputs,
         relspec_input_locations=run_bundle_inputs.tables.relspec_inputs.locations,

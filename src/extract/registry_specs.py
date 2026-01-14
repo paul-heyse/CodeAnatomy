@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from functools import cache
 from typing import TYPE_CHECKING
@@ -27,6 +28,9 @@ from extract.registry_pipelines import pipeline_spec
 from extract.registry_policies import policy_row, template_policy_row
 from extract.registry_rows import DATASET_ROWS, DatasetRow
 from extract.registry_templates import config as extractor_config
+from extract.registry_validation import validate_dataset_rows
+from relspec.rules.definitions import RuleStage, stage_enabled
+from relspec.rules.options import RuleExecutionOptions
 from schema_spec.system import DatasetSpec
 
 if TYPE_CHECKING:
@@ -35,6 +39,8 @@ if TYPE_CHECKING:
 
 _ROWS_BY_NAME: dict[str, DatasetRow] = {row.name: row for row in DATASET_ROWS}
 _OPTIONS_TYPE_ERROR = "Options must be a dataclass instance or dict."
+
+validate_dataset_rows(DATASET_ROWS)
 
 
 class OptionsTypeError(TypeError):
@@ -148,7 +154,8 @@ def dataset_enabled(name: str, options: object | None = None) -> bool:
     row = dataset_row(name)
     if row.enabled_when is None:
         return True
-    return row.enabled_when(options)
+    stage = RuleStage(name=name, mode="source", enabled_when=row.enabled_when)
+    return stage_enabled(stage, _options_mapping(options))
 
 
 def enabled_datasets(
@@ -193,6 +200,18 @@ def _options_dict(options: object) -> dict[str, object]:
     if isinstance(options, dict):
         return dict(options)
     raise OptionsTypeError
+
+
+def _options_mapping(options: object | None) -> Mapping[str, object]:
+    if options is None:
+        return {}
+    if isinstance(options, RuleExecutionOptions):
+        return options.as_mapping()
+    if is_dataclass(options) and not isinstance(options, type):
+        return asdict(options)
+    if isinstance(options, Mapping):
+        return options
+    return {}
 
 
 def normalize_options[T](name: str, options: object | None, factory: type[T]) -> T:

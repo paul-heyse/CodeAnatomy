@@ -157,6 +157,7 @@ def normalize_extract_output(
     *,
     ctx: ExecutionContext,
     normalize: ExtractNormalizeOptions | None = None,
+    apply_post_kernels: bool = True,
 ) -> TableLike:
     """Align, encode, and postprocess a table using registry policy.
 
@@ -166,7 +167,7 @@ def normalize_extract_output(
         Normalized table aligned to the dataset schema policy.
     """
     normalize = normalize or ExtractNormalizeOptions()
-    processed = apply_pipeline_kernels(name, table)
+    processed = apply_pipeline_kernels(name, table) if apply_post_kernels else table
     policy = schema_policy_for_dataset(
         name,
         ctx=ctx,
@@ -222,6 +223,7 @@ def validate_extract_output(
     *,
     ctx: ExecutionContext,
     normalize: ExtractNormalizeOptions | None = None,
+    apply_post_kernels: bool = True,
 ) -> FinalizeResult:
     """Validate an extract output, returning good/errors/stats tables.
 
@@ -231,7 +233,7 @@ def validate_extract_output(
         Finalize result with good, errors, stats, and alignment outputs.
     """
     normalize = normalize or ExtractNormalizeOptions()
-    processed = apply_pipeline_kernels(name, table)
+    processed = apply_pipeline_kernels(name, table) if apply_post_kernels else table
     finalize_ctx = finalize_context_for_dataset(name, ctx=ctx, normalize=normalize)
     return finalize_ctx.run(processed, ctx=ctx)
 

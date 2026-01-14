@@ -81,13 +81,6 @@ from normalize.rule_model import (
     ExecutionMode,
     NormalizeRule,
 )
-from normalize.rule_registry import (
-    normalize_rule,
-    normalize_rule_names,
-    normalize_rule_outputs,
-    normalize_rules,
-    rule_for_output,
-)
 from normalize.runner import (
     NormalizeRuleCompilation,
     compile_normalize_plans,
@@ -241,10 +234,6 @@ __all__ = [
     "normalize_evidence_schema",
     "normalize_evidence_spec",
     "normalize_evidence_table",
-    "normalize_rule",
-    "normalize_rule_names",
-    "normalize_rule_outputs",
-    "normalize_rules",
     "normalize_type_exprs",
     "normalize_type_exprs_canonical",
     "normalize_type_exprs_result",
@@ -256,7 +245,6 @@ __all__ = [
     "plan_names",
     "plan_ref",
     "reaching_defs_plan",
-    "rule_for_output",
     "run_normalize",
     "run_normalize_reader",
     "run_normalize_streamable",

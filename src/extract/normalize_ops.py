@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cache
 
 from normalize.registry_specs import dataset_alias, dataset_names
-from normalize.spec_tables import normalize_rule_spec_rows
+from relspec.adapters import NormalizeRuleAdapter
+from relspec.rules.definitions import RuleDefinition
+from relspec.rules.registry import RuleRegistry
 
 
 @dataclass(frozen=True)
@@ -44,11 +47,17 @@ def _maybe_alias(name: str) -> str:
 
 def _normalize_rule_ops() -> tuple[NormalizeOp, ...]:
     ops: list[NormalizeOp] = []
-    for row in normalize_rule_spec_rows():
-        output = dataset_alias(row.output)
-        inputs = tuple(_maybe_alias(name) for name in row.inputs)
+    for rule in _normalize_rule_definitions():
+        output = dataset_alias(rule.output)
+        inputs = tuple(_maybe_alias(name) for name in rule.inputs)
         ops.append(NormalizeOp(name=output, inputs=inputs, outputs=(output,)))
     return tuple(ops)
+
+
+@cache
+def _normalize_rule_definitions() -> tuple[RuleDefinition, ...]:
+    registry = RuleRegistry(adapters=(NormalizeRuleAdapter(),))
+    return registry.rules_for_domain("normalize")
 
 
 _EXTRA_OPS: tuple[NormalizeOp, ...] = (

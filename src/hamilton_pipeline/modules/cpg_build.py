@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.io.parquet import (
     NamedDatasetWriteConfig,
     ParquetWriteOptions,
@@ -36,28 +38,33 @@ from hamilton_pipeline.pipeline_types import (
     TypeInputs,
 )
 from normalize.utils import encoding_policy_from_schema
+from relspec.adapters import (
+    CpgRuleAdapter,
+    ExtractRuleAdapter,
+    NormalizeRuleAdapter,
+    RelspecRuleAdapter,
+)
 from relspec.compiler import (
     CompiledOutput,
     FilesystemPlanResolver,
     InMemoryPlanResolver,
     PlanResolver,
     RelationshipRuleCompiler,
+    apply_policy_defaults,
+    validate_policy_requirements,
 )
-from relspec.edge_contract_validator import EdgeContractValidationConfig
-from relspec.model import (
-    DatasetRef,
-    EvidenceSpec,
-    HashJoinConfig,
-    IntervalAlignConfig,
-    RelationshipRule,
-    RuleKind,
+from relspec.compiler_graph import order_rules
+from relspec.edge_contract_validator import (
+    EdgeContractValidationConfig,
+    validate_relationship_output_contracts_for_edge_kinds,
 )
-from relspec.registry import (
-    ContractCatalog,
-    DatasetCatalog,
-    DatasetLocation,
-    RelationshipRegistry,
-)
+from relspec.model import RelationshipRule
+from relspec.policies import evidence_spec_from_schema
+from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation
+from relspec.rules.compiler import RuleCompiler
+from relspec.rules.evidence import EvidenceCatalog
+from relspec.rules.handlers.cpg import RelationshipRuleHandler
+from relspec.rules.registry import RuleRegistry
 from schema_spec.specs import ArrowFieldSpec, call_span_bundle, span_bundle
 from schema_spec.system import (
     GLOBAL_SCHEMA_REGISTRY,
@@ -295,119 +302,23 @@ def schema_registry(
 # -----------------------------
 
 
-@tag(layer="relspec", artifact="relationship_registry", kind="registry")
-def relationship_registry() -> RelationshipRegistry:
-    """Build the relationship rule registry.
+@tag(layer="relspec", artifact="rule_registry", kind="registry")
+def rule_registry() -> RuleRegistry:
+    """Build the central rule registry.
 
     Returns
     -------
-    RelationshipRegistry
-        Registry containing relationship rules.
+    RuleRegistry
+        Centralized registry for CPG/normalize/extract rules.
     """
-    reg = RelationshipRegistry()
-
-    # 1) CST name refs ↔ SCIP occurrences (span align)
-    reg.add(
-        RelationshipRule(
-            name="cst_name_refs__to__scip_occurrences",
-            kind=RuleKind.INTERVAL_ALIGN,
-            output_dataset="rel_name_symbol",
-            contract_name="rel_name_symbol_v1",
-            inputs=(DatasetRef(name="cst_name_refs"), DatasetRef(name="scip_occurrences")),
-            interval_align=IntervalAlignConfig(
-                mode="CONTAINED_BEST",
-                how="inner",
-                left_path_col="path",
-                left_start_col="bstart",
-                left_end_col="bend",
-                right_path_col="path",
-                right_start_col="bstart",
-                right_end_col="bend",
-                select_left=("name_ref_id", "path", "bstart", "bend"),
-                select_right=("symbol", "symbol_roles"),
-                emit_match_meta=False,
-            ),
-            evidence=EvidenceSpec(sources=("cst_name_refs", "scip_occurrences")),
-            priority=0,
+    return RuleRegistry(
+        adapters=(
+            CpgRuleAdapter(),
+            RelspecRuleAdapter(),
+            NormalizeRuleAdapter(),
+            ExtractRuleAdapter(),
         )
     )
-
-    # 2) CST imports ↔ SCIP occurrences (span align)
-    reg.add(
-        RelationshipRule(
-            name="cst_imports__to__scip_occurrences",
-            kind=RuleKind.INTERVAL_ALIGN,
-            output_dataset="rel_import_symbol",
-            contract_name="rel_import_symbol_v1",
-            inputs=(DatasetRef(name="cst_imports"), DatasetRef(name="scip_occurrences")),
-            interval_align=IntervalAlignConfig(
-                mode="CONTAINED_BEST",
-                how="inner",
-                left_path_col="path",
-                left_start_col="bstart",
-                left_end_col="bend",
-                right_path_col="path",
-                right_start_col="bstart",
-                right_end_col="bend",
-                select_left=("import_alias_id", "path", "bstart", "bend"),
-                select_right=("symbol", "symbol_roles"),
-                emit_match_meta=False,
-            ),
-            evidence=EvidenceSpec(sources=("cst_imports", "scip_occurrences")),
-            priority=0,
-        )
-    )
-
-    # 3) CST callsites ↔ SCIP occurrences (callee span align)
-    reg.add(
-        RelationshipRule(
-            name="cst_callsites__callee_to__scip_occurrences",
-            kind=RuleKind.INTERVAL_ALIGN,
-            output_dataset="rel_callsite_symbol",
-            contract_name="rel_callsite_symbol_v1",
-            inputs=(DatasetRef(name="cst_callsites"), DatasetRef(name="scip_occurrences")),
-            interval_align=IntervalAlignConfig(
-                mode="CONTAINED_BEST",
-                how="inner",
-                left_path_col="path",
-                left_start_col="callee_bstart",
-                left_end_col="callee_bend",
-                right_path_col="path",
-                right_start_col="bstart",
-                right_end_col="bend",
-                select_left=("call_id", "path", "call_bstart", "call_bend"),
-                select_right=("symbol", "symbol_roles"),
-                emit_match_meta=False,
-            ),
-            evidence=EvidenceSpec(sources=("cst_callsites", "scip_occurrences")),
-            priority=0,
-        )
-    )
-
-    # 4) callsite qname candidate fallback (hash join)
-    reg.add(
-        RelationshipRule(
-            name="callsite_qname_candidates__join__dim_qualified_names",
-            kind=RuleKind.HASH_JOIN,
-            output_dataset="rel_callsite_qname",
-            contract_name="rel_callsite_qname_v1",
-            inputs=(
-                DatasetRef(name="callsite_qname_candidates"),
-                DatasetRef(name="dim_qualified_names"),
-            ),
-            hash_join=HashJoinConfig(
-                join_type="inner",
-                left_keys=("qname",),
-                right_keys=("qname",),
-                left_output=("call_id", "path", "call_bstart", "call_bend", "qname_source"),
-                right_output=("qname_id",),
-            ),
-            evidence=EvidenceSpec(sources=("callsite_qname_candidates", "dim_qualified_names")),
-            priority=10,
-        )
-    )
-
-    return reg
 
 
 # -----------------------------
@@ -507,7 +418,7 @@ def relspec_input_datasets(
 ) -> dict[str, TableLike]:
     """Build the canonical dataset-name to table mapping.
 
-    Important: dataset keys must match the DatasetRef(...) names in relationship_registry().
+    Important: dataset keys must match the DatasetRef(...) names in ``rule_registry()``.
 
     Returns
     -------
@@ -613,6 +524,89 @@ def relspec_resolver(
     return InMemoryPlanResolver(relspec_input_datasets)
 
 
+def _relationship_rule_schema(
+    rule: RelationshipRule,
+    *,
+    contracts: ContractCatalog | None,
+) -> SchemaLike | None:
+    if rule.contract_name is None:
+        return None
+    if contracts is not None:
+        contract = contracts.get(rule.contract_name)
+        dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(contract.name)
+        if dataset_spec is not None:
+            return dataset_spec.schema()
+        return contract.schema
+    dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(rule.contract_name)
+    if dataset_spec is not None:
+        return dataset_spec.schema()
+    return None
+
+
+def _resolve_relationship_rules(
+    rules: Sequence[RelationshipRule],
+    *,
+    contracts: ContractCatalog | None,
+) -> tuple[RelationshipRule, ...]:
+    resolved: list[RelationshipRule] = []
+    for rule in rules:
+        schema = _relationship_rule_schema(rule, contracts=contracts)
+        updated = rule
+        if schema is not None:
+            updated = apply_policy_defaults(rule, schema)
+            if updated.evidence is None:
+                inferred = evidence_spec_from_schema(schema)
+                if inferred is not None:
+                    updated = replace(updated, evidence=inferred)
+            validate_policy_requirements(updated, schema)
+        resolved.append(updated)
+    return tuple(resolved)
+
+
+def _relationship_evidence_catalog(
+    relspec_input_datasets: Mapping[str, TableLike],
+) -> EvidenceCatalog:
+    evidence = EvidenceCatalog()
+    for name, table in relspec_input_datasets.items():
+        evidence.register(name, table.schema)
+    return evidence
+
+
+def _compile_relationship_outputs(
+    rules: Sequence[RelationshipRule],
+    *,
+    compiler: RelationshipRuleCompiler,
+    ctx: ExecutionContext,
+    contracts: ContractCatalog | None,
+    edge_validation: EdgeContractValidationConfig,
+) -> dict[str, CompiledOutput]:
+    if contracts is not None:
+        validate_relationship_output_contracts_for_edge_kinds(
+            rules=rules,
+            contract_catalog=contracts,
+            config=edge_validation,
+        )
+    by_output: dict[str, list[RelationshipRule]] = {}
+    for rule in rules:
+        by_output.setdefault(rule.output_dataset, []).append(rule)
+    compiled: dict[str, CompiledOutput] = {}
+    for out_name, output_rules in by_output.items():
+        contract_names = {rule.contract_name for rule in output_rules}
+        if len(contract_names) > 1:
+            msg = (
+                f"Output {out_name!r} has inconsistent contract_name across rules: "
+                f"{contract_names}."
+            )
+            raise ValueError(msg)
+        contributors = tuple(compiler.compile_rule(rule, ctx=ctx) for rule in output_rules)
+        compiled[out_name] = CompiledOutput(
+            output_dataset=out_name,
+            contract_name=output_rules[0].contract_name,
+            contributors=contributors,
+        )
+    return compiled
+
+
 # -----------------------------
 # Relationship compilation + execution
 # -----------------------------
@@ -621,7 +615,8 @@ def relspec_resolver(
 @cache()
 @tag(layer="relspec", artifact="compiled_relationship_outputs", kind="object")
 def compiled_relationship_outputs(
-    relationship_registry: RelationshipRegistry,
+    rule_registry: RuleRegistry,
+    relspec_input_datasets: dict[str, TableLike],
     relspec_resolver: PlanResolver,
     relationship_contracts: ContractCatalog,  # add dep
     ctx: ExecutionContext,
@@ -634,11 +629,24 @@ def compiled_relationship_outputs(
         Compiled relationship outputs.
     """
     compiler = RelationshipRuleCompiler(resolver=relspec_resolver)
-    return compiler.compile_registry(
-        relationship_registry.rules(),
+    rule_compiler = RuleCompiler(handlers={"cpg": RelationshipRuleHandler()})
+    compiled = rule_compiler.compile_rules(rule_registry.rules_for_domain("cpg"), ctx=ctx)
+    rules = cast("tuple[RelationshipRule, ...]", compiled)
+    resolved = _resolve_relationship_rules(rules, contracts=relationship_contracts)
+    contract_names = set(relationship_contracts.names())
+    resolved = tuple(
+        rule
+        for rule in resolved
+        if rule.contract_name is not None and rule.contract_name in contract_names
+    )
+    evidence = _relationship_evidence_catalog(relspec_input_datasets)
+    ordered = order_rules(resolved, evidence=evidence)
+    return _compile_relationship_outputs(
+        ordered,
+        compiler=compiler,
         ctx=ctx,
-        contract_catalog=relationship_contracts,
-        edge_validation=EdgeContractValidationConfig(),  # optional override
+        contracts=relationship_contracts,
+        edge_validation=EdgeContractValidationConfig(),
     )
 
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import cache as memoize
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
@@ -36,13 +38,20 @@ from normalize.registry_specs import (
     dataset_schema_policy,
     dataset_spec,
 )
-from normalize.rule_registry import normalize_rule_outputs
 from normalize.runner import (
     NormalizeFinalizeSpec,
     NormalizeRuleCompilation,
     compile_normalize_rules,
     run_normalize,
 )
+from relspec.adapters.normalize import NormalizeRuleAdapter
+from relspec.rules.compiler import RuleCompiler
+from relspec.rules.handlers.normalize import NormalizeRuleHandler
+from relspec.rules.registry import RuleRegistry
+
+if TYPE_CHECKING:
+    from normalize.rule_model import NormalizeRule
+    from relspec.rules.definitions import RuleDefinition
 from normalize.schema_infer import align_table_to_schema, infer_schema_or_registry
 from normalize.span_pipeline import span_error_table
 from normalize.spans import (
@@ -261,25 +270,38 @@ def normalize_rule_compilation(
     NormalizeRuleCompilation
         Compiled rules, plans, and catalog updates.
     """
-    required_outputs = _required_rule_outputs(evidence_plan)
+    rules = _normalize_rules(ctx=ctx)
+    required_outputs = _required_rule_outputs(evidence_plan, rules)
     if required_outputs is not None and not required_outputs:
         return NormalizeRuleCompilation(rules=(), plans={}, catalog=normalize_plan_catalog)
     return compile_normalize_rules(
         normalize_plan_catalog,
         ctx=ctx,
+        rules=rules,
         required_outputs=required_outputs,
     )
 
 
-def _required_rule_outputs(plan: EvidencePlan | None) -> tuple[str, ...] | None:
+def _required_rule_outputs(
+    plan: EvidencePlan | None,
+    rules: Sequence[NormalizeRule],
+) -> tuple[str, ...] | None:
     if plan is None:
         return None
-    outputs = [
-        output
-        for output in normalize_rule_outputs()
-        if plan.requires_dataset(dataset_alias(output))
-    ]
+    outputs = [rule.output for rule in rules if plan.requires_dataset(dataset_alias(rule.output))]
     return tuple(outputs)
+
+
+@memoize
+def _normalize_rule_definitions() -> tuple[RuleDefinition, ...]:
+    registry = RuleRegistry(adapters=(NormalizeRuleAdapter(),))
+    return registry.rules_for_domain("normalize")
+
+
+def _normalize_rules(ctx: ExecutionContext) -> tuple[NormalizeRule, ...]:
+    compiler = RuleCompiler(handlers={"normalize": NormalizeRuleHandler()})
+    compiled = compiler.compile_rules(_normalize_rule_definitions(), ctx=ctx)
+    return cast("tuple[NormalizeRule, ...]", compiled)
 
 
 def _normalize_rule_output(

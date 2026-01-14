@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, SchemaLike
@@ -19,6 +19,8 @@ from extract.registry_pipelines import pipeline_spec
 from extract.registry_specs import dataset_query, dataset_schema
 from extract.registry_specs import dataset_row as registry_row
 from extract.schema_ops import ExtractNormalizeOptions, normalize_extract_plan
+from extract.spec_helpers import plan_requires_row, rule_execution_options
+from relspec.rules.definitions import RuleStage, stage_enabled
 
 
 def empty_plan_for_dataset(name: str) -> Plan:
@@ -47,6 +49,15 @@ def apply_query_and_normalize(
     Plan
         Query-filtered and normalized plan.
     """
+    row = registry_row(name)
+    if evidence_plan is not None and not plan_requires_row(evidence_plan, row):
+        return empty_plan_for_dataset(name)
+    overrides = _options_overrides(normalize.options if normalize else None)
+    execution = rule_execution_options(row.template or name, evidence_plan, overrides=overrides)
+    if row.enabled_when is not None:
+        stage = RuleStage(name=name, mode="source", enabled_when=row.enabled_when)
+        if not stage_enabled(stage, execution.as_mapping()):
+            return empty_plan_for_dataset(name)
     plan = dataset_query(name).apply_to_plan(plan, ctx=ctx)
     plan = _apply_pipeline_query_ops(name, plan, ctx=ctx)
     plan = apply_evidence_projection(name, plan, ctx=ctx, evidence_plan=evidence_plan)
@@ -215,6 +226,16 @@ def apply_evidence_projection(
     if not names:
         return plan
     return plan.project(exprs, names, ctx=ctx)
+
+
+def _options_overrides(options: object | None) -> Mapping[str, object]:
+    if options is None:
+        return {}
+    if is_dataclass(options) and not isinstance(options, type):
+        return asdict(options)
+    if isinstance(options, Mapping):
+        return dict(options)
+    return {}
 
 
 __all__ = [

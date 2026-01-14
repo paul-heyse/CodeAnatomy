@@ -14,7 +14,7 @@ from arrowdsl.plan.query import QuerySpec
 from arrowdsl.spec.expr_ir import ExprIR
 
 type Expression = ExprIR
-type ExecutionMode = Literal["auto", "plan", "table"]
+type ExecutionMode = Literal["auto", "plan", "table", "external", "hybrid"]
 
 HASH_JOIN_INPUTS = 2
 SINGLE_INPUT = 1

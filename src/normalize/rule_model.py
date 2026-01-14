@@ -106,4 +106,4 @@ __all__ = [
     "NormalizeRule",
     "WinnerSelectConfig",
 ]
-ExecutionMode = Literal["auto", "plan", "table"]
+ExecutionMode = Literal["auto", "plan", "table", "external", "hybrid"]

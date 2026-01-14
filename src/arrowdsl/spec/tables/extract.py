@@ -43,6 +43,7 @@ EXTRACT_DATASET_SCHEMA = pa.schema(
         pa.field("postprocess", pa.string(), nullable=True),
         pa.field("metadata_extra", pa.map_(pa.string(), pa.string()), nullable=True),
         pa.field("evidence_required_columns", pa.list_(pa.string()), nullable=True),
+        pa.field("pipeline_name", pa.string(), nullable=True),
     ],
     metadata={b"spec_kind": b"extract_datasets"},
 )
@@ -85,6 +86,7 @@ class ExtractDatasetRowSpec:
     postprocess: str | None = None
     metadata_extra: dict[str, str] | None = None
     evidence_required_columns: tuple[str, ...] = ()
+    pipeline_name: str | None = None
 
 
 def extract_dataset_table_from_rows(
@@ -183,6 +185,7 @@ def dataset_rows_from_table(table: pa.Table) -> tuple[ExtractDatasetRowSpec, ...
                 record.get("evidence_required_columns"),
                 label="evidence_required_columns",
             ),
+            pipeline_name=str(record.get("pipeline_name")) if record.get("pipeline_name") else None,
         )
         for record in table.to_pylist()
     )

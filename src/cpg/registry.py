@@ -11,13 +11,16 @@ import pyarrow as pa
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.spec.tables.cpg import node_plan_specs_from_table, prop_table_specs_from_table
-from arrowdsl.spec.tables.relspec import relationship_rules_from_table
+from cpg.edge_specs import edge_plan_specs_from_table
 from cpg.registry_builders import build_dataset_spec
 from cpg.registry_rows import DATASET_ROWS
-from cpg.relation_registry import edge_plan_specs_from_table, relation_rule_table_cached
 from cpg.spec_tables import node_plan_spec_table, prop_table_spec_table
 from cpg.specs import EdgePlanSpec, NodePlanSpec, PropTableSpec
+from relspec.adapters import CpgRuleAdapter
 from relspec.model import RelationshipRule
+from relspec.rules.handlers.cpg import relationship_rule_from_definition
+from relspec.rules.registry import RuleRegistry
+from relspec.rules.spec_tables import rule_definitions_from_table
 from schema_spec.system import ContractSpec, DatasetSpec
 
 
@@ -132,7 +135,12 @@ class CpgRegistry:
         tuple[RelationshipRule, ...]
             Relationship rules decoded from the registry table.
         """
-        return relationship_rules_from_table(self.relation_rule_table)
+        definitions = rule_definitions_from_table(self.relation_rule_table)
+        return tuple(
+            relationship_rule_from_definition(defn)
+            for defn in definitions
+            if defn.domain == "cpg"
+        )
 
 
 @cache
@@ -153,4 +161,17 @@ def default_cpg_registry() -> CpgRegistry:
     )
 
 
-__all__ = ["CpgRegistry", "default_cpg_registry"]
+@cache
+def relation_rule_table_cached() -> pa.Table:
+    """Return the canonical relationship rule table for CPG edges.
+
+    Returns
+    -------
+    pa.Table
+        Canonical rule table containing CPG relationship rules.
+    """
+    registry = RuleRegistry(adapters=(CpgRuleAdapter(),))
+    return registry.rule_table()
+
+
+__all__ = ["CpgRegistry", "default_cpg_registry", "relation_rule_table_cached"]

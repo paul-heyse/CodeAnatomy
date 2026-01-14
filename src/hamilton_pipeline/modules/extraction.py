@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from hamilton.function_modifiers import cache, extract_fields, tag
 
@@ -48,7 +49,9 @@ from hamilton_pipeline.pipeline_types import (
     ScipIndexConfig,
     ScipIndexInputs,
 )
-from relspec.registry import RelationshipRegistry
+from relspec.rules.compiler import RuleCompiler
+from relspec.rules.handlers.extract import ExtractRuleCompilation, ExtractRuleHandler
+from relspec.rules.registry import RuleRegistry
 
 AST_BUNDLE_OUTPUTS = output_bundle_outputs("ast_bundle")
 CST_BUNDLE_OUTPUTS = output_bundle_outputs("cst_bundle")
@@ -66,6 +69,69 @@ class ExtractErrorArtifacts:
     stats: Mapping[str, TableLike]
     alignment: Mapping[str, TableLike]
     error_counts: Mapping[str, int]
+
+
+@dataclass(frozen=True)
+class ExtractExecutionContext:
+    """Shared execution context for extract bundles."""
+
+    evidence_plan: EvidencePlan | None
+    extract_rule_compilations: Sequence[ExtractRuleCompilation]
+    ctx: ExecutionContext
+
+
+def _post_kernels_by_dataset(
+    compilations: Sequence[ExtractRuleCompilation],
+) -> dict[str, tuple[Callable[[TableLike], TableLike], ...]]:
+    kernels: dict[str, tuple[Callable[[TableLike], TableLike], ...]] = {}
+    for compilation in compilations:
+        if compilation.post_kernels:
+            kernels[compilation.definition.output] = compilation.post_kernels
+    return kernels
+
+
+def _apply_extract_post_kernels(
+    tables: Mapping[str, TableLike],
+    *,
+    compilations: Sequence[ExtractRuleCompilation],
+) -> Mapping[str, TableLike]:
+    if not compilations:
+        return tables
+    kernels_by_dataset = _post_kernels_by_dataset(compilations)
+    if not kernels_by_dataset:
+        return tables
+    processed: dict[str, TableLike] = dict(tables)
+    for output, table in tables.items():
+        dataset_name = dataset_name_for_output(output) or output
+        kernels = kernels_by_dataset.get(dataset_name)
+        if not kernels:
+            continue
+        updated = table
+        for kernel in kernels:
+            updated = kernel(updated)
+        processed[output] = updated
+    return processed
+
+
+@cache()
+@tag(layer="extract", artifact="extract_execution_context", kind="object")
+def extract_execution_context(
+    evidence_plan: EvidencePlan | None,
+    extract_rule_compilations: Sequence[ExtractRuleCompilation],
+    ctx: ExecutionContext,
+) -> ExtractExecutionContext:
+    """Bundle extract execution inputs for bundle nodes.
+
+    Returns
+    -------
+    ExtractExecutionContext
+        Combined execution inputs for extract bundles.
+    """
+    return ExtractExecutionContext(
+        evidence_plan=evidence_plan,
+        extract_rule_compilations=extract_rule_compilations,
+        ctx=ctx,
+    )
 
 
 @cache(format="parquet")
@@ -147,16 +213,23 @@ def _validate_extract_tables(
     tables: Mapping[str, TableLike],
     *,
     ctx: ExecutionContext,
+    compilations: Sequence[ExtractRuleCompilation] | None = None,
 ) -> ExtractErrorArtifacts:
     errors: dict[str, TableLike] = {}
     stats: dict[str, TableLike] = {}
     alignment: dict[str, TableLike] = {}
     counts: dict[str, int] = {}
-    for output, table in tables.items():
+    full_tables = _complete_extract_tables(tables, compilations=compilations)
+    for output, table in full_tables.items():
         dataset_name = dataset_name_for_output(output)
         if dataset_name is None:
             continue
-        result = validate_extract_output(dataset_name, table, ctx=ctx)
+        result = validate_extract_output(
+            dataset_name,
+            table,
+            ctx=ctx,
+            apply_post_kernels=False,
+        )
         errors[output] = result.errors
         stats[output] = result.stats
         alignment[output] = result.alignment
@@ -167,6 +240,20 @@ def _validate_extract_tables(
         alignment=alignment,
         error_counts=counts,
     )
+
+
+def _complete_extract_tables(
+    tables: Mapping[str, TableLike],
+    *,
+    compilations: Sequence[ExtractRuleCompilation] | None,
+) -> Mapping[str, TableLike]:
+    if not compilations:
+        return tables
+    merged: dict[str, TableLike] = dict(tables)
+    for compilation in compilations:
+        output = compilation.definition.output
+        merged.setdefault(output, empty_table(dataset_schema(output)))
+    return merged
 
 
 def _options_for_template[T](
@@ -182,7 +269,7 @@ def _options_for_template[T](
 
 @cache()
 @tag(layer="extract", artifact="evidence_plan", kind="object")
-def evidence_plan(relationship_registry: RelationshipRegistry) -> EvidencePlan:
+def evidence_plan(rule_registry: RuleRegistry) -> EvidencePlan:
     """Compile an evidence plan from relationship rules.
 
     Returns
@@ -199,7 +286,28 @@ def evidence_plan(relationship_registry: RelationshipRegistry) -> EvidencePlan:
         "rt_signature_params",
         "rt_members",
     )
-    return compile_evidence_plan(relationship_registry.rules(), extra_sources=extra_sources)
+    return compile_evidence_plan(
+        rule_registry.rules_for_domain("cpg"),
+        extra_sources=extra_sources,
+    )
+
+
+@cache()
+@tag(layer="extract", artifact="extract_rule_compilations", kind="object")
+def extract_rule_compilations(
+    rule_registry: RuleRegistry,
+    ctx: ExecutionContext,
+) -> tuple[ExtractRuleCompilation, ...]:
+    """Compile extract rules via the centralized rule compiler.
+
+    Returns
+    -------
+    tuple[ExtractRuleCompilation, ...]
+        Extract rule compilation metadata.
+    """
+    compiler = RuleCompiler(handlers={"extract": ExtractRuleHandler()})
+    compiled = compiler.compile_rules(rule_registry.rules_for_domain("extract"), ctx=ctx)
+    return cast("tuple[ExtractRuleCompilation, ...]", compiled)
 
 
 @cache()
@@ -209,8 +317,7 @@ def cst_bundle(
     repo_root: str,
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
-    evidence_plan: EvidencePlan | None,
-    ctx: ExecutionContext,
+    extract_execution_context: ExtractExecutionContext,
 ) -> Mapping[str, TableLike]:
     """Build the LibCST extraction bundle.
 
@@ -228,6 +335,7 @@ def cst_bundle(
     dict[str, TableLike]
         Bundle tables for LibCST extraction.
     """
+    evidence_plan = extract_execution_context.evidence_plan
     outputs = template_outputs(evidence_plan, "cst")
     if not outputs:
         return _empty_bundle(CST_BUNDLE_OUTPUTS)
@@ -237,12 +345,18 @@ def cst_bundle(
         factory=CSTExtractOptions,
         overrides={"repo_root": Path(repo_root)},
     )
-    return extract_cst_tables(
+    tables = extract_cst_tables(
         repo_files=repo_files,
         options=options,
         file_contexts=file_contexts,
         evidence_plan=evidence_plan,
-        ctx=ctx,
+        ctx=extract_execution_context.ctx,
+    )
+    return dict(
+        _apply_extract_post_kernels(
+            tables,
+            compilations=extract_execution_context.extract_rule_compilations,
+        )
     )
 
 
@@ -253,8 +367,7 @@ def ast_bundle(
     repo_root: str,
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
-    evidence_plan: EvidencePlan | None,
-    ctx: ExecutionContext,
+    extract_execution_context: ExtractExecutionContext,
 ) -> Mapping[str, TableLike]:
     """Build the Python AST extraction bundle.
 
@@ -264,15 +377,22 @@ def ast_bundle(
         Bundle tables for AST extraction.
     """
     _ = repo_root
+    evidence_plan = extract_execution_context.evidence_plan
     if not template_outputs(evidence_plan, "ast"):
         empty = _empty_bundle(tuple(name for name in AST_BUNDLE_OUTPUTS if name != "ast_defs"))
         empty["ast_defs"] = empty_table(dataset_schema("py_ast_nodes_v1"))
         return empty
-    return extract_ast_tables(
+    tables = extract_ast_tables(
         repo_files=repo_files,
         file_contexts=file_contexts,
         evidence_plan=evidence_plan,
-        ctx=ctx,
+        ctx=extract_execution_context.ctx,
+    )
+    return dict(
+        _apply_extract_post_kernels(
+            tables,
+            compilations=extract_execution_context.extract_rule_compilations,
+        )
     )
 
 
@@ -283,8 +403,7 @@ def scip_bundle(
     scip_index_path: str | None,
     repo_root: str,
     scip_parse_options: SCIPParseOptions,
-    evidence_plan: EvidencePlan | None,
-    ctx: ExecutionContext,
+    extract_execution_context: ExtractExecutionContext,
 ) -> Mapping[str, TableLike]:
     """Build the SCIP extraction bundle.
 
@@ -295,16 +414,23 @@ def scip_bundle(
     dict[str, TableLike]
         Bundle tables for SCIP extraction.
     """
+    evidence_plan = extract_execution_context.evidence_plan
     if not template_outputs(evidence_plan, "scip"):
         return _empty_bundle(SCIP_BUNDLE_OUTPUTS)
-    return extract_scip_tables(
+    tables = extract_scip_tables(
         scip_index_path=scip_index_path,
         repo_root=repo_root,
-        ctx=ctx,
+        ctx=extract_execution_context.ctx,
         options=ScipExtractOptions(
             parse_opts=scip_parse_options,
             evidence_plan=evidence_plan,
         ),
+    )
+    return dict(
+        _apply_extract_post_kernels(
+            tables,
+            compilations=extract_execution_context.extract_rule_compilations,
+        )
     )
 
 
@@ -448,8 +574,7 @@ def bytecode_bundle(
     repo_root: str,
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
-    evidence_plan: EvidencePlan | None,
-    ctx: ExecutionContext,
+    extract_execution_context: ExtractExecutionContext,
 ) -> dict[str, TableLike]:
     """Extract bytecode tables as a bundle.
 
@@ -459,6 +584,7 @@ def bytecode_bundle(
         Bytecode tables for code units, instructions, blocks, cfg, and errors.
     """
     _ = repo_root
+    evidence_plan = extract_execution_context.evidence_plan
     if not template_outputs(evidence_plan, "bytecode"):
         return _empty_bundle(BYTECODE_BUNDLE_OUTPUTS)
     options = _options_for_template(
@@ -471,9 +597,9 @@ def bytecode_bundle(
         options=options,
         file_contexts=file_contexts,
         evidence_plan=evidence_plan,
-        ctx=ctx,
+        ctx=extract_execution_context.ctx,
     )
-    return {
+    tables = {
         "py_bc_code_units": result.py_bc_code_units,
         "py_bc_instructions": result.py_bc_instructions,
         "py_bc_exception_table": result.py_bc_exception_table,
@@ -481,6 +607,12 @@ def bytecode_bundle(
         "py_bc_cfg_edges": result.py_bc_cfg_edges,
         "py_bc_errors": result.py_bc_errors,
     }
+    return dict(
+        _apply_extract_post_kernels(
+            tables,
+            compilations=extract_execution_context.extract_rule_compilations,
+        )
+    )
 
 
 @cache()
@@ -491,8 +623,7 @@ def tree_sitter_bundle(
     enable_tree_sitter: bool,
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
-    evidence_plan: EvidencePlan | None,
-    ctx: ExecutionContext,
+    extract_execution_context: ExtractExecutionContext,
 ) -> Mapping[str, TableLike]:
     """Extract tree-sitter nodes and diagnostics when enabled.
 
@@ -501,9 +632,10 @@ def tree_sitter_bundle(
     dict[str, TableLike]
         Tree-sitter tables for nodes and diagnostics.
     """
+    evidence_plan = extract_execution_context.evidence_plan
     if not enable_tree_sitter or not template_outputs(evidence_plan, "tree_sitter"):
         return _empty_bundle(TREE_SITTER_BUNDLE_OUTPUTS)
-    return extract_ts_tables(
+    tables = extract_ts_tables(
         repo_files=repo_files,
         file_contexts=file_contexts,
         options=_options_for_template(
@@ -512,7 +644,13 @@ def tree_sitter_bundle(
             factory=TreeSitterExtractOptions,
         ),
         evidence_plan=evidence_plan,
-        ctx=ctx,
+        ctx=extract_execution_context.ctx,
+    )
+    return dict(
+        _apply_extract_post_kernels(
+            tables,
+            compilations=extract_execution_context.extract_rule_compilations,
+        )
     )
 
 
@@ -523,8 +661,7 @@ def runtime_inspect_bundle(
     *,
     repo_root: str,
     runtime_inspect_config: RuntimeInspectConfig,
-    evidence_plan: EvidencePlan | None,
-    ctx: ExecutionContext,
+    extract_execution_context: ExtractExecutionContext,
 ) -> dict[str, TableLike]:
     """Extract runtime inspection tables when enabled.
 
@@ -533,7 +670,7 @@ def runtime_inspect_bundle(
     dict[str, pyarrow.Table]
         Runtime inspection tables bundle.
     """
-    _ = ctx
+    evidence_plan = extract_execution_context.evidence_plan
     enable_runtime_inspect = runtime_inspect_config.enable_runtime_inspect
     if not enable_runtime_inspect or not template_outputs(evidence_plan, "runtime_inspect"):
         return _empty_bundle(RUNTIME_INSPECT_BUNDLE_OUTPUTS)
@@ -550,14 +687,20 @@ def runtime_inspect_bundle(
         repo_root,
         options=options,
         evidence_plan=evidence_plan,
-        ctx=ctx,
+        ctx=extract_execution_context.ctx,
     )
-    return {
+    tables = {
         "rt_objects": result.rt_objects,
         "rt_signatures": result.rt_signatures,
         "rt_signature_params": result.rt_signature_params,
         "rt_members": result.rt_members,
     }
+    return dict(
+        _apply_extract_post_kernels(
+            tables,
+            compilations=extract_execution_context.extract_rule_compilations,
+        )
+    )
 
 
 @cache()
@@ -601,6 +744,7 @@ def extract_bundle_group_b(
 def extract_error_artifacts(
     extract_bundle_group_a: Mapping[str, TableLike],
     extract_bundle_group_b: Mapping[str, TableLike],
+    extract_rule_compilations: Sequence[ExtractRuleCompilation],
     ctx: ExecutionContext,
 ) -> ExtractErrorArtifacts:
     """Validate extract outputs and emit error artifacts.
@@ -611,7 +755,11 @@ def extract_error_artifacts(
         Error artifacts for extract outputs.
     """
     tables = _merge_bundles((extract_bundle_group_a, extract_bundle_group_b))
-    return _validate_extract_tables(tables, ctx=ctx)
+    return _validate_extract_tables(
+        tables,
+        ctx=ctx,
+        compilations=extract_rule_compilations,
+    )
 
 
 @cache()

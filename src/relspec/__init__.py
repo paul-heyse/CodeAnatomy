@@ -12,8 +12,6 @@ from arrowdsl.spec.tables.relspec import (
     RULES_SCHEMA,
     SORT_KEY_STRUCT,
     WINNER_SELECT_STRUCT,
-    relationship_rule_table,
-    relationship_rules_from_table,
 )
 from relspec.compiler import (
     CompiledOutput,
@@ -49,7 +47,7 @@ from relspec.model import (
     RuleKind,
     WinnerSelectConfig,
 )
-from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation, RelationshipRegistry
+from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation
 
 __all__ = [
     "AMBIGUITY_STRUCT",
@@ -86,7 +84,6 @@ __all__ = [
     "KernelSpec",
     "PlanResolver",
     "ProjectConfig",
-    "RelationshipRegistry",
     "RelationshipRule",
     "RelationshipRuleCompiler",
     "RenameColumnsSpec",
@@ -95,6 +92,4 @@ __all__ = [
     "relation_output_contract",
     "relation_output_schema",
     "relation_output_spec",
-    "relationship_rule_table",
-    "relationship_rules_from_table",
 ]

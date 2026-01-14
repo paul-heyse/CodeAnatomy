@@ -28,7 +28,6 @@ from arrowdsl.spec.infra import (
     SORT_KEY_STRUCT,
 )
 from arrowdsl.spec.io import table_from_rows
-from relspec.contracts import RELATION_OUTPUT_NAME
 from relspec.model import (
     AddLiteralSpec,
     AmbiguityPolicy,
@@ -45,14 +44,15 @@ from relspec.model import (
     IntervalAlignConfig,
     KernelSpecT,
     ProjectConfig,
-    RelationshipRule,
     RenameColumnsSpec,
     RuleFamilySpec,
     RuleKind,
     WinnerSelectConfig,
 )
-from relspec.policies import ambiguity_kernels, confidence_expr
-from relspec.policy_registry import resolve_ambiguity_policy, resolve_confidence_policy
+from relspec.policies import confidence_expr
+from relspec.rules.policies import PolicyRegistry
+
+_POLICY_REGISTRY = PolicyRegistry()
 
 HASH_JOIN_STRUCT = pa.struct(
     [
@@ -294,6 +294,8 @@ def _parse_join_type(value: object) -> JoinType:
 
 
 def _parse_execution_mode(value: object) -> ExecutionMode:
+    if value is None:
+        return "auto"
     normalized = str(value)
     if normalized == "auto":
         return "auto"
@@ -301,6 +303,10 @@ def _parse_execution_mode(value: object) -> ExecutionMode:
         return "plan"
     if normalized == "table":
         return "table"
+    if normalized == "external":
+        return "external"
+    if normalized == "hybrid":
+        return "hybrid"
     msg = f"Unsupported execution_mode: {normalized!r}"
     raise ValueError(msg)
 
@@ -677,165 +683,6 @@ def _resolve_evidence_spec(
     )
 
 
-def relationship_rule_definition_table(rows: Sequence[Mapping[str, Any]]) -> pa.Table:
-    """Build a relationship rule definition table.
-
-    Returns
-    -------
-    pa.Table
-        Arrow table with rule definition rows.
-    """
-    return table_from_rows(RULE_DEFINITION_SCHEMA, rows)
-
-
-def relationship_rule_table(rules: Sequence[RelationshipRule]) -> pa.Table:
-    """Build a relationship rule table.
-
-    Returns
-    -------
-    pa.Table
-        Arrow table with relationship rules.
-    """
-    rows = [
-        {
-            "name": rule.name,
-            "kind": rule.kind.value,
-            "output_dataset": rule.output_dataset,
-            "contract_name": rule.contract_name,
-            "inputs": [_dataset_ref_row(ref) for ref in rule.inputs],
-            "hash_join": _hash_join_row(rule.hash_join),
-            "interval_align": _interval_align_row(rule.interval_align),
-            "winner_select": _winner_select_row(rule.winner_select),
-            "project": _project_row(rule.project),
-            "post_kernels": [_kernel_row(spec) for spec in rule.post_kernels] or None,
-            "evidence": _evidence_row(rule.evidence),
-            "confidence_policy": _confidence_row(rule.confidence_policy),
-            "ambiguity_policy": _ambiguity_row(rule.ambiguity_policy),
-            "priority": int(rule.priority),
-            "emit_rule_meta": rule.emit_rule_meta,
-            "rule_name_col": rule.rule_name_col,
-            "rule_priority_col": rule.rule_priority_col,
-            "execution_mode": rule.execution_mode,
-        }
-        for rule in rules
-    ]
-    return table_from_rows(RULES_SCHEMA, rows)
-
-
-def _relationship_rules_from_rule_table(table: pa.Table) -> tuple[RelationshipRule, ...]:
-    """Compile RelationshipRule objects from a rule spec table.
-
-    Returns
-    -------
-    tuple[RelationshipRule, ...]
-        Relationship rules parsed from the rules table.
-    """
-    rules: list[RelationshipRule] = []
-    for row in table.to_pylist():
-        inputs = tuple(_dataset_ref_from_row(item) for item in row.get("inputs") or ())
-        project_spec = _project_from_payload(row.get("project"))
-        post_kernels = tuple(_kernel_from_row(item) for item in row.get("post_kernels") or ())
-        execution_mode = _parse_execution_mode(row.get("execution_mode", "auto"))
-        rules.append(
-            RelationshipRule(
-                name=str(row["name"]),
-                kind=RuleKind(str(row["kind"])),
-                output_dataset=str(row["output_dataset"]),
-                contract_name=row.get("contract_name"),
-                inputs=inputs,
-                hash_join=_hash_join_from_row(row.get("hash_join")),
-                interval_align=_interval_align_from_row(row.get("interval_align")),
-                winner_select=_winner_select_from_row(row.get("winner_select")),
-                project=project_spec,
-                post_kernels=post_kernels,
-                evidence=_evidence_from_row(row.get("evidence")),
-                confidence_policy=_confidence_from_row(row.get("confidence_policy")),
-                ambiguity_policy=_ambiguity_from_row(row.get("ambiguity_policy")),
-                priority=int(row.get("priority", 100)),
-                emit_rule_meta=bool(row.get("emit_rule_meta", True)),
-                rule_name_col=str(row.get("rule_name_col", "rule_name")),
-                rule_priority_col=str(row.get("rule_priority_col", "rule_priority")),
-                execution_mode=execution_mode,
-            )
-        )
-    return tuple(rules)
-
-
-def _relationship_rules_from_definition_table(table: pa.Table) -> tuple[RelationshipRule, ...]:
-    return tuple(_relationship_rule_from_definition_row(row) for row in table.to_pylist())
-
-
-def _relationship_rule_from_definition_row(row: Mapping[str, Any]) -> RelationshipRule:
-    inputs = parse_string_tuple(row.get("inputs"), label="inputs")
-    predicate = _decode_expr(str(row["predicate_expr"])) if row.get("predicate_expr") else None
-    base_project = _project_from_payload(row.get("project"))
-    kind = RuleKind(str(row["kind"]))
-    confidence_policy = (
-        resolve_confidence_policy(str(row["confidence_policy"]))
-        if row.get("confidence_policy")
-        else None
-    )
-    ambiguity_policy = (
-        resolve_ambiguity_policy(str(row["ambiguity_policy"]))
-        if row.get("ambiguity_policy")
-        else None
-    )
-    project = base_project
-    if project is None and confidence_policy is not None:
-        project = ProjectConfig()
-    if project is not None:
-        project = _with_confidence(project, confidence_policy)
-    post_kernels = tuple(_kernel_from_row(item) for item in row.get("post_kernels") or ())
-    if predicate is not None:
-        post_kernels = (FilterKernelSpec(predicate=predicate), *post_kernels)
-    post_kernels = (*post_kernels, *ambiguity_kernels(ambiguity_policy))
-    evidence = _resolve_evidence_spec(
-        row.get("evidence"),
-        kind=kind,
-        inputs=inputs,
-        project=base_project,
-        predicate=predicate,
-    )
-    execution_mode = _parse_execution_mode(row.get("execution_mode", "auto"))
-    output_dataset = str(row.get("output_dataset") or row["name"])
-    contract_name = str(row.get("contract_name") or RELATION_OUTPUT_NAME)
-    return RelationshipRule(
-        name=str(row["name"]),
-        kind=kind,
-        output_dataset=output_dataset,
-        contract_name=contract_name,
-        inputs=tuple(DatasetRef(name=name) for name in inputs),
-        hash_join=_hash_join_from_row(row.get("hash_join")),
-        interval_align=_interval_align_from_row(row.get("interval_align")),
-        winner_select=_winner_select_from_row(row.get("winner_select")),
-        project=project,
-        post_kernels=post_kernels,
-        evidence=evidence,
-        confidence_policy=confidence_policy,
-        ambiguity_policy=ambiguity_policy,
-        priority=int(row.get("priority", 100)),
-        emit_rule_meta=bool(row.get("emit_rule_meta", True)),
-        rule_name_col=str(row.get("rule_name_col", "rule_name")),
-        rule_priority_col=str(row.get("rule_priority_col", "rule_priority")),
-        execution_mode=execution_mode,
-    )
-
-
-def relationship_rules_from_table(table: pa.Table) -> tuple[RelationshipRule, ...]:
-    """Compile RelationshipRule objects from a spec table.
-
-    Returns
-    -------
-    tuple[RelationshipRule, ...]
-        Relationship rules parsed from the table.
-    """
-    meta = table.schema.metadata or {}
-    spec_kind = meta.get(b"spec_kind", b"").decode("utf-8")
-    if spec_kind == "relationship_rule_definitions" or "predicate_expr" in table.schema.names:
-        return _relationship_rules_from_definition_table(table)
-    return _relationship_rules_from_rule_table(table)
-
-
 def rule_family_spec_table(specs: Sequence[RuleFamilySpec]) -> pa.Table:
     """Build a relationship rule family spec table.
 
@@ -989,9 +836,6 @@ __all__ = [
     "interval_align_row",
     "kernel_spec_row",
     "project_row",
-    "relationship_rule_definition_table",
-    "relationship_rule_table",
-    "relationship_rules_from_table",
     "rule_family_spec_table",
     "rule_family_specs_from_table",
     "winner_select_row",

@@ -15,15 +15,18 @@ from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from typing import cast
 
+import pyarrow as pa
+
 from arrowdsl.core.interop import TableLike
 from arrowdsl.finalize.finalize import Contract
 from arrowdsl.json_factory import JsonPolicy, dump_path, dumps_bytes, json_default
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.schema import schema_fingerprint, schema_to_dict
+from arrowdsl.spec.io import write_spec_table
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from relspec.compiler import CompiledOutput
 from relspec.model import RelationshipRule
-from relspec.registry import ContractCatalog, DatasetLocation, RelationshipRegistry
+from relspec.registry import ContractCatalog, DatasetLocation
 
 # -----------------------
 # Basic environment capture
@@ -208,21 +211,6 @@ def serialize_relationship_rule(rule: RelationshipRule) -> JsonDict:
     }
 
 
-def serialize_relationship_registry(registry: RelationshipRegistry) -> JsonDict:
-    """Serialize a ``RelationshipRegistry`` snapshot.
-
-    Returns
-    -------
-    JsonDict
-        Serialized relationship registry.
-    """
-    return {
-        "rules": [serialize_relationship_rule(r) for r in registry.rules()],
-        "outputs": list(registry.outputs()),
-        "inputs": list(registry.inputs()),
-    }
-
-
 def serialize_dataset_locations(locations: Mapping[str, DatasetLocation]) -> JsonDict:
     """Serialize dataset locations returned by persistence helpers.
 
@@ -313,7 +301,9 @@ class RunBundleContext:
     run_manifest: Mapping[str, JsonValue]
     run_config: Mapping[str, JsonValue]
 
-    relationship_registry: RelationshipRegistry | None = None
+    rule_table: pa.Table | None = None
+    template_table: pa.Table | None = None
+    template_diagnostics: pa.Table | None = None
     relationship_contracts: ContractCatalog | None = None
     compiled_relationship_outputs: Mapping[str, CompiledOutput] | None = None
 
@@ -368,9 +358,18 @@ def _write_relspec_snapshots(
 ) -> None:
     relspec_dir = bundle_dir / "relspec"
     _ensure_dir(relspec_dir)
-    if context.relationship_registry is not None:
-        snap = serialize_relationship_registry(context.relationship_registry)
-        files_written.append(_write_json(relspec_dir / "rules.json", snap, overwrite=True))
+    if context.rule_table is not None:
+        target = relspec_dir / "rules.arrow"
+        write_spec_table(target, context.rule_table)
+        files_written.append(str(target))
+    if context.template_table is not None:
+        target = relspec_dir / "templates.arrow"
+        write_spec_table(target, context.template_table)
+        files_written.append(str(target))
+    if context.template_diagnostics is not None:
+        target = relspec_dir / "template_diagnostics.arrow"
+        write_spec_table(target, context.template_diagnostics)
+        files_written.append(str(target))
     if context.relationship_contracts is not None:
         snap = serialize_contract_catalog(context.relationship_contracts)
         files_written.append(_write_json(relspec_dir / "contracts.json", snap, overwrite=True))
@@ -458,7 +457,9 @@ def write_run_bundle(
         config.json
         repro.json
         datasets/locations.json
-        relspec/rules.json
+        relspec/rules.arrow
+        relspec/templates.arrow
+        relspec/template_diagnostics.arrow
         relspec/contracts.json
         relspec/compiled_outputs.json
         schemas/*.schema.json

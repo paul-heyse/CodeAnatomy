@@ -42,11 +42,27 @@ _POST_KERNELS: Mapping[str, KernelFn] = {
 
 
 def _post_kernels_for_row(row: DatasetRow) -> tuple[KernelFn, ...]:
-    if row.postprocess is None:
+    return post_kernels_for_postprocess(row.postprocess)
+
+
+def post_kernels_for_postprocess(name: str | None) -> tuple[KernelFn, ...]:
+    """Return postprocess kernels for the given postprocess key.
+
+    Returns
+    -------
+    tuple[KernelFn, ...]
+        Kernel functions for the postprocess key.
+
+    Raises
+    ------
+    KeyError
+        Raised when the postprocess key is unknown.
+    """
+    if name is None:
         return ()
-    kernel = _POST_KERNELS.get(row.postprocess)
+    kernel = _POST_KERNELS.get(name)
     if kernel is None:
-        msg = f"Unknown postprocess kernel: {row.postprocess!r}."
+        msg = f"Unknown postprocess kernel: {name!r}."
         raise KeyError(msg)
     return (kernel,)
 
@@ -94,4 +110,9 @@ def pipeline_specs() -> tuple[ExtractPipelineSpec, ...]:
     return tuple(_PIPELINES[name] for name in sorted(_PIPELINES))
 
 
-__all__ = ["ExtractPipelineSpec", "pipeline_spec", "pipeline_specs"]
+__all__ = [
+    "ExtractPipelineSpec",
+    "pipeline_spec",
+    "pipeline_specs",
+    "post_kernels_for_postprocess",
+]

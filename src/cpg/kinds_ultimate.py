@@ -1385,7 +1385,7 @@ DERIV_T_CPG_NODES = DerivationTemplate(
     ambiguity_policy="none",
 )
 DERIV_T_REL_REGISTRY = DerivationTemplate(
-    extractor="hamilton_pipeline.modules.cpg_build:relationship_registry",
+    extractor="hamilton_pipeline.modules.cpg_build:rule_registry",
     confidence_policy="confidence=1.0",
     ambiguity_policy="none",
 )

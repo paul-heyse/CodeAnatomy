@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import cast
+from functools import cache
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
@@ -34,9 +35,7 @@ from arrowdsl.schema.ops import align_table
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from normalize.catalog import NormalizePlanCatalog
-from normalize.compiler_graph import NormalizeGraphPlan, compile_graph_plan, order_rules
 from normalize.contracts import NORMALIZE_EVIDENCE_NAME, normalize_evidence_schema
-from normalize.evidence_catalog import EvidenceCatalog
 from normalize.evidence_specs import evidence_output_from_schema, evidence_spec_from_schema
 from normalize.policies import (
     ambiguity_kernels,
@@ -46,8 +45,17 @@ from normalize.policies import (
     default_tie_breakers,
 )
 from normalize.registry_specs import dataset_metadata_spec, dataset_schema, dataset_spec
-from normalize.rule_model import AmbiguityPolicy, EvidenceOutput, EvidenceSpec, NormalizeRule
-from normalize.rule_registry import normalize_rules
+from normalize.registry_validation import validate_rule_specs
+from normalize.rule_factories import build_rule_definitions_from_specs
+from normalize.rule_model import (
+    AmbiguityPolicy,
+    EvidenceOutput,
+    NormalizeRule,
+)
+from normalize.rule_model import (
+    EvidenceSpec as NormalizeEvidenceSpec,
+)
+from normalize.rule_registry_specs import rule_family_specs
 from normalize.utils import (
     PlanSource,
     encoding_policy_from_schema,
@@ -55,8 +63,21 @@ from normalize.utils import (
     finalize_plan_result,
     plan_source,
 )
+from relspec.rules.compiler import RuleCompiler
+from relspec.rules.definitions import EvidenceSpec as CentralEvidenceSpec
+from relspec.rules.evidence import EvidenceCatalog
+from relspec.rules.graph import (
+    GraphPlan,
+    RuleSelectors,
+    compile_graph_plan,
+    order_rules_by_evidence,
+)
+from relspec.rules.handlers.normalize import NormalizeRuleHandler
 from schema_spec.specs import PROVENANCE_COLS
 from schema_spec.system import ContractSpec
+
+if TYPE_CHECKING:
+    from relspec.rules.definitions import RuleDefinition
 
 PostFn = Callable[[TableLike, ExecutionContext], TableLike]
 
@@ -100,6 +121,19 @@ def ensure_canonical(ctx: ExecutionContext) -> ExecutionContext:
         Execution context using canonical determinism.
     """
     return ctx.with_determinism(DeterminismTier.CANONICAL)
+
+
+@cache
+def _normalize_rule_definitions() -> tuple[RuleDefinition, ...]:
+    return build_rule_definitions_from_specs(rule_family_specs())
+
+
+def _default_normalize_rules(ctx: ExecutionContext) -> tuple[NormalizeRule, ...]:
+    compiler = RuleCompiler(handlers={"normalize": NormalizeRuleHandler()})
+    compiled = compiler.compile_rules(_normalize_rule_definitions(), ctx=ctx)
+    rules = cast("tuple[NormalizeRule, ...]", compiled)
+    validate_rule_specs(rules)
+    return rules
 
 
 def _should_skip_canonical_sort(
@@ -304,9 +338,9 @@ def _apply_policy_defaults(rule: NormalizeRule) -> NormalizeRule:
 
 
 def _merge_evidence(
-    base: EvidenceSpec | None,
-    defaults: EvidenceSpec | None,
-) -> EvidenceSpec | None:
+    base: NormalizeEvidenceSpec | None,
+    defaults: NormalizeEvidenceSpec | None,
+) -> NormalizeEvidenceSpec | None:
     if base is None:
         return defaults
     if defaults is None:
@@ -319,7 +353,7 @@ def _merge_evidence(
     required_metadata.update(base.required_metadata)
     if not sources and not required_columns and not required_types and not required_metadata:
         return None
-    return EvidenceSpec(
+    return NormalizeEvidenceSpec(
         sources=sources,
         required_columns=required_columns,
         required_types=required_types,
@@ -411,6 +445,24 @@ def _apply_default_tie_breakers(
     return replace(policy, tie_breakers=defaults)
 
 
+def _central_evidence(spec: NormalizeEvidenceSpec | None) -> CentralEvidenceSpec | None:
+    if spec is None:
+        return None
+    return CentralEvidenceSpec(
+        sources=spec.sources,
+        required_columns=spec.required_columns,
+        required_types=spec.required_types,
+        required_metadata=spec.required_metadata,
+    )
+
+
+def _normalize_output_schema(rule: NormalizeRule) -> SchemaLike | None:
+    try:
+        return dataset_schema(rule.output)
+    except KeyError:
+        return None
+
+
 def compile_normalize_rules(
     catalog: PlanCatalog,
     *,
@@ -430,7 +482,7 @@ def compile_normalize_rules(
     ValueError
         Raised when a rule requires plan execution but no plan can be built.
     """
-    rule_set = tuple(normalize_rules()) if rules is None else tuple(rules)
+    rule_set = _default_normalize_rules(ctx) if rules is None else tuple(rules)
     if required_outputs:
         required_set = _expand_required_outputs(rule_set, required_outputs)
         rule_set = tuple(rule for rule in rule_set if rule.output in required_set)
@@ -439,7 +491,21 @@ def compile_normalize_rules(
         _validate_rule_policies(rule)
     work_catalog = _clone_catalog(catalog)
     evidence = EvidenceCatalog.from_plan_catalog(work_catalog, ctx=ctx)
-    ordered = order_rules(rule_set, evidence=evidence)
+    selectors = RuleSelectors(
+        inputs_for=lambda rule: rule.inputs,
+        output_for=lambda rule: rule.output,
+        name_for=lambda rule: rule.name,
+        priority_for=lambda rule: rule.priority,
+        evidence_for=lambda rule: _central_evidence(rule.evidence),
+        output_schema_for=_normalize_output_schema,
+    )
+    ordered = order_rules_by_evidence(
+        rule_set,
+        evidence=evidence,
+        selectors=selectors,
+        allow_fallback=True,
+        label="Normalize rule",
+    )
 
     plans: dict[str, Plan] = {}
     compiled_rules: list[NormalizeRule] = []
@@ -491,12 +557,12 @@ def compile_normalize_graph_plan(
     ctx: ExecutionContext,
     rules: Sequence[NormalizeRule] | None = None,
     required_outputs: Sequence[str] | None = None,
-) -> NormalizeGraphPlan:
+) -> GraphPlan:
     """Compile normalize rules into a unified graph plan.
 
     Returns
     -------
-    NormalizeGraphPlan
+    GraphPlan
         Graph-level plan with per-output subplans.
     """
     compilation = compile_normalize_rules(
@@ -507,8 +573,13 @@ def compile_normalize_graph_plan(
     )
     if not compilation.plans:
         empty = Plan.table_source(empty_table(pa.schema([])), label="normalize_graph_empty")
-        return NormalizeGraphPlan(plan=empty, outputs={})
-    return compile_graph_plan(compilation.rules, plans=dict(compilation.plans))
+        return GraphPlan(plan=empty, outputs={})
+    return compile_graph_plan(
+        compilation.rules,
+        plans=dict(compilation.plans),
+        output_for=lambda rule: rule.output,
+        label="normalize_graph",
+    )
 
 
 def materialize_normalize_evidence(

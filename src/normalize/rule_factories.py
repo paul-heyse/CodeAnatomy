@@ -6,12 +6,18 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from normalize.rule_definitions import NormalizeRuleDefinition
-from normalize.rule_model import EvidenceSpec
 from normalize.rule_specs import NormalizeRuleFamilySpec
+from relspec.rules.definitions import (
+    EvidenceOutput,
+    EvidenceSpec,
+    ExecutionMode,
+    NormalizePayload,
+    PolicyOverrides,
+    RuleDefinition,
+)
 
 if TYPE_CHECKING:
-    from normalize.rule_model import EvidenceOutput, ExecutionMode
+    from relspec.rules.definitions import RuleDomain
 
 
 @dataclass(frozen=True)
@@ -35,17 +41,17 @@ class RuleDefinitionSpec:
     execution_mode: ExecutionMode = "auto"
 
 
-RuleFamilyFactory = Callable[[NormalizeRuleFamilySpec], tuple[NormalizeRuleDefinition, ...]]
+RuleFamilyFactory = Callable[[NormalizeRuleFamilySpec], tuple[RuleDefinition, ...]]
 
 
 def build_rule_definitions_from_specs(
     specs: Sequence[NormalizeRuleFamilySpec],
-) -> tuple[NormalizeRuleDefinition, ...]:
+) -> tuple[RuleDefinition, ...]:
     """Build normalize rules from rule-family specs.
 
     Returns
     -------
-    tuple[NormalizeRuleDefinition, ...]
+    tuple[RuleDefinition, ...]
         Normalize rule definitions derived from the specs.
 
     Raises
@@ -53,7 +59,7 @@ def build_rule_definitions_from_specs(
     KeyError
         Raised when a rule family spec references an unknown factory.
     """
-    rules: list[NormalizeRuleDefinition] = []
+    rules: list[RuleDefinition] = []
     for spec in specs:
         factory = RULE_FAMILY_FACTORIES.get(spec.factory)
         if factory is None:
@@ -95,13 +101,13 @@ def _execution_mode_from_spec(spec: NormalizeRuleFamilySpec) -> ExecutionMode:
 
 def build_type_rules(
     spec: NormalizeRuleFamilySpec,
-) -> tuple[NormalizeRuleDefinition, ...]:
+) -> tuple[RuleDefinition, ...]:
     """Return normalize rules for type expressions and nodes.
 
     Returns
     -------
-    tuple[NormalizeRuleDefinition, ...]
-        Type-related normalize rule definition specs.
+    tuple[RuleDefinition, ...]
+        Type-related normalize rule definitions.
     """
     execution_mode = _execution_mode_from_spec(spec)
     return (
@@ -136,13 +142,13 @@ def build_type_rules(
 
 def build_bytecode_cfg_rules(
     spec: NormalizeRuleFamilySpec,
-) -> tuple[NormalizeRuleDefinition, ...]:
+) -> tuple[RuleDefinition, ...]:
     """Return normalize rules for bytecode CFG outputs.
 
     Returns
     -------
-    tuple[NormalizeRuleDefinition, ...]
-        Bytecode normalize rule definition specs.
+    tuple[RuleDefinition, ...]
+        Bytecode normalize rule definitions.
     """
     execution_mode = _execution_mode_from_spec(spec)
     return (
@@ -177,13 +183,13 @@ def build_bytecode_cfg_rules(
 
 def build_bytecode_dfg_rules(
     spec: NormalizeRuleFamilySpec,
-) -> tuple[NormalizeRuleDefinition, ...]:
+) -> tuple[RuleDefinition, ...]:
     """Return normalize rules for bytecode DFG outputs.
 
     Returns
     -------
-    tuple[NormalizeRuleDefinition, ...]
-        Bytecode DFG normalize rule definition specs.
+    tuple[RuleDefinition, ...]
+        Bytecode DFG normalize rule definitions.
     """
     execution_mode = _execution_mode_from_spec(spec)
     return (
@@ -218,13 +224,13 @@ def build_bytecode_dfg_rules(
 
 def build_diagnostics_rules(
     spec: NormalizeRuleFamilySpec,
-) -> tuple[NormalizeRuleDefinition, ...]:
+) -> tuple[RuleDefinition, ...]:
     """Return normalize rules for diagnostics outputs.
 
     Returns
     -------
-    tuple[NormalizeRuleDefinition, ...]
-        Diagnostics normalize rule definition specs.
+    tuple[RuleDefinition, ...]
+        Diagnostics normalize rule definitions.
     """
     execution_mode = _execution_mode_from_spec(spec)
     return (
@@ -252,13 +258,13 @@ def build_diagnostics_rules(
 
 def build_span_error_rules(
     spec: NormalizeRuleFamilySpec,
-) -> tuple[NormalizeRuleDefinition, ...]:
+) -> tuple[RuleDefinition, ...]:
     """Return normalize rules for span error outputs.
 
     Returns
     -------
-    tuple[NormalizeRuleDefinition, ...]
-        Span error normalize rule definition specs.
+    tuple[RuleDefinition, ...]
+        Span error normalize rule definitions.
     """
     execution_mode = _execution_mode_from_spec(spec)
     return (
@@ -291,19 +297,23 @@ def _definition(
     spec: RuleDefinitionSpec,
     *,
     config: RuleConfig | None = None,
-) -> NormalizeRuleDefinition:
+) -> RuleDefinition:
     config = config or RuleConfig()
     evidence = _evidence_spec(config.evidence_sources)
-    return NormalizeRuleDefinition(
+    return RuleDefinition(
         name=spec.name,
+        domain=_normalize_domain(),
+        kind="normalize",
         output=spec.output,
         inputs=tuple(spec.inputs),
-        plan_builder=spec.plan_builder,
+        payload=NormalizePayload(plan_builder=spec.plan_builder, query=None),
         evidence=evidence,
-        confidence_policy=config.confidence_policy,
-        ambiguity_policy=config.ambiguity_policy,
         evidence_output=config.evidence_output,
         execution_mode=spec.execution_mode,
+        policy_overrides=PolicyOverrides(
+            confidence_policy=config.confidence_policy,
+            ambiguity_policy=config.ambiguity_policy,
+        ),
     )
 
 
@@ -311,6 +321,10 @@ def _evidence_spec(sources: Sequence[str]) -> EvidenceSpec | None:
     if not sources:
         return None
     return EvidenceSpec(sources=tuple(sources))
+
+
+def _normalize_domain() -> RuleDomain:
+    return "normalize"
 
 
 __all__ = [

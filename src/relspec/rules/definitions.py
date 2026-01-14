@@ -10,7 +10,7 @@ from arrowdsl.compute.expr_core import ScalarValue
 from arrowdsl.core.context import OrderingKey
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.spec.expr_ir import ExprIR
-from arrowdsl.spec.tables.extract import ExtractDerivedIdSpec
+from extract.spec_tables import ExtractDerivedIdSpec
 from relspec.model import (
     HashJoinConfig,
     IntervalAlignConfig,
@@ -41,6 +41,7 @@ class EvidenceOutput:
 
     column_map: Mapping[str, str] = field(default_factory=dict)
     literals: Mapping[str, ScalarValue] = field(default_factory=dict)
+    provenance_columns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

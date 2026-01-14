@@ -14,7 +14,6 @@ from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.build import const_array, set_or_append_column, table_from_arrays
 from arrowdsl.schema.metadata import normalize_dictionaries
 from arrowdsl.schema.schema import EncodingSpec
-from arrowdsl.spec.tables.cpg import node_plan_specs_from_table
 from cpg.catalog import PlanCatalog, resolve_plan_source
 from cpg.constants import CpgBuildArtifacts, QualityPlanSpec, quality_plan_from_ids
 from cpg.emit_nodes import emit_node_plan
@@ -29,6 +28,7 @@ from cpg.plan_specs import (
     finalize_plan,
 )
 from cpg.registry import CpgRegistry, default_cpg_registry
+from cpg.spec_tables import node_plan_specs_from_table
 from cpg.specs import NodePlanSpec, resolve_preprocessor
 
 

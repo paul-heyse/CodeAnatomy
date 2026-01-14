@@ -50,10 +50,14 @@ def _validate_evidence_output(rule: NormalizeRule, schema: SchemaLike) -> None:
     missing_literals = sorted(
         name for name in evidence_output.literals if name not in evidence_columns
     )
-    if missing_keys or missing_literals:
+    missing_provenance = sorted(
+        name for name in evidence_output.provenance_columns if name not in evidence_columns
+    )
+    if missing_keys or missing_literals or missing_provenance:
         msg = (
             "Normalize rule evidence output uses unknown evidence columns "
-            f"for rule {rule.name!r}: {sorted(set(missing_keys + missing_literals))}"
+            f"for rule {rule.name!r}: "
+            f"{sorted(set(missing_keys + missing_literals + missing_provenance))}"
         )
         raise ValueError(msg)
 
@@ -199,9 +203,16 @@ def _merge_evidence_output(
     column_map.update(base.column_map)
     literals: dict[str, ScalarValue] = dict(defaults.literals)
     literals.update(base.literals)
-    if not column_map and not literals:
+    provenance_columns = tuple(
+        dict.fromkeys((*defaults.provenance_columns, *base.provenance_columns))
+    )
+    if not column_map and not literals and not provenance_columns:
         return None
-    return EvidenceOutput(column_map=column_map, literals=literals)
+    return EvidenceOutput(
+        column_map=column_map,
+        literals=literals,
+        provenance_columns=provenance_columns,
+    )
 
 
 __all__ = ["validate_rule_specs"]

@@ -127,9 +127,16 @@ def _merge_evidence_output(
     column_map.update(base.column_map)
     literals = dict(defaults.literals)
     literals.update(base.literals)
-    if not column_map and not literals:
+    provenance_columns = tuple(
+        dict.fromkeys((*defaults.provenance_columns, *base.provenance_columns))
+    )
+    if not column_map and not literals and not provenance_columns:
         return None
-    return EvidenceOutput(column_map=column_map, literals=literals)
+    return EvidenceOutput(
+        column_map=column_map,
+        literals=literals,
+        provenance_columns=provenance_columns,
+    )
 
 
 __all__ = ["apply_evidence_defaults", "apply_policy_defaults", "apply_rule_defaults"]

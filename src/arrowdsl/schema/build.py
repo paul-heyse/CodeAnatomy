@@ -32,6 +32,7 @@ from arrowdsl.schema.nested_builders import (
     nested_array_factory,
     sparse_union_array,
     struct_array_from_dicts,
+    union_array_from_tagged_values,
     union_array_from_values,
 )
 
@@ -317,5 +318,6 @@ __all__ = [
     "table_from_arrays",
     "table_from_rows",
     "table_from_schema",
+    "union_array_from_tagged_values",
     "union_array_from_values",
 ]

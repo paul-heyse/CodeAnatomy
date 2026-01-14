@@ -11,7 +11,7 @@ import pyarrow as pa
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.query import QuerySpec
+from arrowdsl.plan.query import QuerySpec, ScanTelemetry
 from arrowdsl.plan.runner import run_plan
 from arrowdsl.schema.build import ConstExpr, FieldExpr
 from arrowdsl.schema.ops import align_plan, align_table
@@ -59,6 +59,19 @@ class CatalogPlanResolver:
         if ref.query is None:
             return plan
         return _apply_query_spec(plan, ref.query, ctx=ctx)
+
+    @staticmethod
+    def telemetry(ref: DatasetRef, *, ctx: ExecutionContext) -> ScanTelemetry | None:
+        """Return scan telemetry for catalog-resolved plans (unavailable).
+
+        Returns
+        -------
+        ScanTelemetry | None
+            ``None`` because catalog-resolved plans do not expose telemetry.
+        """
+        _ = ref
+        _ = ctx
+        return None
 
 
 def compile_relation_plans(

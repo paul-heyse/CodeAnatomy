@@ -582,6 +582,9 @@ def _build_evidence_plan(
     if "source" not in literals and "source" not in col_map:
         literals["source"] = rule.output
     _set_metadata_literal(literals, rule.output, key=b"evidence_family", name="evidence_family")
+    for name in output.provenance_columns:
+        if name in schema.names and name not in col_map and name not in literals:
+            col_map[name] = name
 
     source_field = _source_field_for_confidence(col_map, available, literals)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pyarrow as pa
 
@@ -12,6 +12,8 @@ from arrowdsl.compute.expr_core import ExprSpec, ScalarValue
 from arrowdsl.core.context import OrderingKey
 from arrowdsl.plan.ops import JoinType, SortKey
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
+from arrowdsl.schema.build import list_view_type
+from arrowdsl.schema.schema import EncodingPolicy, EncodingSpec
 from arrowdsl.spec.codec import (
     decode_scalar_union,
     encode_scalar_union,
@@ -21,26 +23,18 @@ from arrowdsl.spec.codec import (
     parse_string_tuple,
 )
 from arrowdsl.spec.expr_ir import ExprIR, expr_spec_from_json
-from arrowdsl.spec.infra import SCALAR_UNION_TYPE
+from arrowdsl.spec.infra import (
+    DATASET_REF_STRUCT,
+    SCALAR_UNION_TYPE,
+    SORT_KEY_STRUCT,
+)
 from arrowdsl.spec.io import table_from_rows
-from arrowdsl.spec.tables.cpg import EDGE_EMIT_STRUCT
-from arrowdsl.spec.tables.extract import (
+from cpg.spec_tables import EDGE_EMIT_STRUCT
+from extract.spec_tables import (
     DERIVED_ID_STRUCT,
     ORDERING_KEY_STRUCT,
     ExtractDerivedIdSpec,
     ExtractOrderingKeySpec,
-)
-from arrowdsl.spec.tables.relspec import (
-    HASH_JOIN_STRUCT,
-    INTERVAL_ALIGN_STRUCT,
-    KERNEL_SPEC_STRUCT,
-    PROJECT_STRUCT,
-    WINNER_SELECT_STRUCT,
-    hash_join_row,
-    interval_align_row,
-    kernel_spec_row,
-    project_row,
-    winner_select_row,
 )
 from relspec.model import (
     AddLiteralSpec,
@@ -75,12 +69,141 @@ from relspec.rules.definitions import (
 IntervalMode = Literal["EXACT", "CONTAINED_BEST", "OVERLAP_BEST"]
 IntervalHow = Literal["inner", "left"]
 ScoreOrder = Literal["ascending", "descending"]
+_UNION_TAG_KEY = "__union_tag__"
+_UNION_VALUE_KEY = "value"
+
+HASH_JOIN_STRUCT = pa.struct(
+    [
+        pa.field("join_type", pa.string(), nullable=False),
+        pa.field("left_keys", list_view_type(pa.string()), nullable=False),
+        pa.field("right_keys", list_view_type(pa.string()), nullable=True),
+        pa.field("left_output", list_view_type(pa.string()), nullable=True),
+        pa.field("right_output", list_view_type(pa.string()), nullable=True),
+        pa.field("output_suffix_for_left", pa.string(), nullable=False),
+        pa.field("output_suffix_for_right", pa.string(), nullable=False),
+    ]
+)
+
+INTERVAL_ALIGN_STRUCT = pa.struct(
+    [
+        pa.field("mode", pa.string(), nullable=False),
+        pa.field("how", pa.string(), nullable=False),
+        pa.field("left_path_col", pa.string(), nullable=False),
+        pa.field("left_start_col", pa.string(), nullable=False),
+        pa.field("left_end_col", pa.string(), nullable=False),
+        pa.field("right_path_col", pa.string(), nullable=False),
+        pa.field("right_start_col", pa.string(), nullable=False),
+        pa.field("right_end_col", pa.string(), nullable=False),
+        pa.field("select_left", list_view_type(pa.string()), nullable=True),
+        pa.field("select_right", list_view_type(pa.string()), nullable=True),
+        pa.field("tie_breakers", list_view_type(SORT_KEY_STRUCT), nullable=True),
+        pa.field("emit_match_meta", pa.bool_(), nullable=False),
+        pa.field("match_kind_col", pa.string(), nullable=False),
+        pa.field("match_score_col", pa.string(), nullable=False),
+    ]
+)
+
+WINNER_SELECT_STRUCT = pa.struct(
+    [
+        pa.field("keys", list_view_type(pa.string()), nullable=True),
+        pa.field("score_col", pa.string(), nullable=False),
+        pa.field("score_order", pa.string(), nullable=False),
+        pa.field("tie_breakers", list_view_type(SORT_KEY_STRUCT), nullable=True),
+    ]
+)
+
+PROJECT_EXPR_STRUCT = pa.struct(
+    [
+        pa.field("name", pa.string(), nullable=False),
+        pa.field("expr_json", pa.string(), nullable=False),
+    ]
+)
+
+PROJECT_STRUCT = pa.struct(
+    [
+        pa.field("select", list_view_type(pa.string()), nullable=True),
+        pa.field("exprs", list_view_type(PROJECT_EXPR_STRUCT), nullable=True),
+    ]
+)
+
+CONFIDENCE_STRUCT = pa.struct(
+    [
+        pa.field("base", pa.float64(), nullable=False),
+        pa.field("source_weight", pa.map_(pa.string(), pa.float64()), nullable=True),
+        pa.field("penalty", pa.float64(), nullable=False),
+    ]
+)
+
+AMBIGUITY_STRUCT = pa.struct(
+    [
+        pa.field("winner_select", WINNER_SELECT_STRUCT, nullable=True),
+        pa.field("tie_breakers", list_view_type(SORT_KEY_STRUCT), nullable=True),
+    ]
+)
+
+KERNEL_ADD_LITERAL_STRUCT = pa.struct(
+    [
+        pa.field("name", pa.string(), nullable=False),
+        pa.field("value_union", SCALAR_UNION_TYPE, nullable=True),
+    ]
+)
+
+KERNEL_FILTER_STRUCT = pa.struct([pa.field("expr_json", pa.string(), nullable=False)])
+
+KERNEL_DROP_COLUMNS_STRUCT = pa.struct(
+    [pa.field("columns", list_view_type(pa.string()), nullable=True)]
+)
+
+KERNEL_RENAME_COLUMNS_STRUCT = pa.struct(
+    [pa.field("mapping", pa.map_(pa.string(), pa.string()), nullable=True)]
+)
+
+KERNEL_EXPLODE_LIST_STRUCT = pa.struct(
+    [
+        pa.field("parent_id_col", pa.string(), nullable=False),
+        pa.field("list_col", pa.string(), nullable=False),
+        pa.field("out_parent_col", pa.string(), nullable=False),
+        pa.field("out_value_col", pa.string(), nullable=False),
+    ]
+)
+
+KERNEL_DEDUPE_STRUCT = pa.struct(
+    [
+        pa.field("keys", list_view_type(pa.string()), nullable=False),
+        pa.field("tie_breakers", list_view_type(SORT_KEY_STRUCT), nullable=True),
+        pa.field("strategy", pa.string(), nullable=False),
+    ]
+)
+
+KERNEL_CANONICAL_SORT_STRUCT = pa.struct(
+    [pa.field("sort_keys", list_view_type(SORT_KEY_STRUCT), nullable=True)]
+)
+
+KERNEL_PAYLOAD_UNION = pa.union(
+    [
+        pa.field("add_literal", KERNEL_ADD_LITERAL_STRUCT),
+        pa.field("filter", KERNEL_FILTER_STRUCT),
+        pa.field("drop_columns", KERNEL_DROP_COLUMNS_STRUCT),
+        pa.field("rename_columns", KERNEL_RENAME_COLUMNS_STRUCT),
+        pa.field("explode_list", KERNEL_EXPLODE_LIST_STRUCT),
+        pa.field("dedupe", KERNEL_DEDUPE_STRUCT),
+        pa.field("canonical_sort", KERNEL_CANONICAL_SORT_STRUCT),
+    ],
+    mode="dense",
+)
+
+KERNEL_SPEC_STRUCT = pa.struct(
+    [
+        pa.field("kind", pa.string(), nullable=False),
+        pa.field("payload", KERNEL_PAYLOAD_UNION, nullable=True),
+    ]
+)
 
 
 EVIDENCE_STRUCT = pa.struct(
     [
-        pa.field("sources", pa.list_(pa.string()), nullable=True),
-        pa.field("required_columns", pa.list_(pa.string()), nullable=True),
+        pa.field("sources", list_view_type(pa.string()), nullable=True),
+        pa.field("required_columns", list_view_type(pa.string()), nullable=True),
         pa.field("required_types", pa.map_(pa.string(), pa.string()), nullable=True),
         pa.field("required_metadata", pa.map_(pa.string(), pa.string()), nullable=True),
     ]
@@ -89,9 +212,10 @@ EVIDENCE_STRUCT = pa.struct(
 EVIDENCE_OUTPUT_STRUCT = pa.struct(
     [
         pa.field("column_map", pa.map_(pa.string(), pa.string()), nullable=True),
+        pa.field("provenance_columns", list_view_type(pa.string()), nullable=True),
         pa.field(
             "literals",
-            pa.list_(
+            list_view_type(
                 pa.struct(
                     [
                         pa.field("name", pa.string(), nullable=False),
@@ -104,6 +228,30 @@ EVIDENCE_OUTPUT_STRUCT = pa.struct(
     ]
 )
 
+RULES_SCHEMA = pa.schema(
+    [
+        pa.field("name", pa.string(), nullable=False),
+        pa.field("kind", pa.string(), nullable=False),
+        pa.field("output_dataset", pa.string(), nullable=False),
+        pa.field("contract_name", pa.string(), nullable=True),
+        pa.field("inputs", list_view_type(DATASET_REF_STRUCT), nullable=False),
+        pa.field("hash_join", HASH_JOIN_STRUCT, nullable=True),
+        pa.field("interval_align", INTERVAL_ALIGN_STRUCT, nullable=True),
+        pa.field("winner_select", WINNER_SELECT_STRUCT, nullable=True),
+        pa.field("project", PROJECT_STRUCT, nullable=True),
+        pa.field("post_kernels", list_view_type(KERNEL_SPEC_STRUCT), nullable=True),
+        pa.field("evidence", EVIDENCE_STRUCT, nullable=True),
+        pa.field("confidence_policy", CONFIDENCE_STRUCT, nullable=True),
+        pa.field("ambiguity_policy", AMBIGUITY_STRUCT, nullable=True),
+        pa.field("priority", pa.int32(), nullable=False),
+        pa.field("emit_rule_meta", pa.bool_(), nullable=False),
+        pa.field("rule_name_col", pa.string(), nullable=False),
+        pa.field("rule_priority_col", pa.string(), nullable=False),
+        pa.field("execution_mode", pa.string(), nullable=False),
+    ],
+    metadata={b"spec_kind": b"relationship_rules"},
+)
+
 POLICY_OVERRIDE_STRUCT = pa.struct(
     [
         pa.field("confidence_policy", pa.string(), nullable=True),
@@ -114,7 +262,7 @@ POLICY_OVERRIDE_STRUCT = pa.struct(
 QUERY_OP_STRUCT = pa.struct(
     [
         pa.field("kind", pa.string(), nullable=False),
-        pa.field("columns", pa.list_(pa.string()), nullable=True),
+        pa.field("columns", list_view_type(pa.string()), nullable=True),
         pa.field("name", pa.string(), nullable=True),
         pa.field("expr_json", pa.string(), nullable=True),
     ]
@@ -146,18 +294,18 @@ EXTRACT_STRUCT = pa.struct(
     [
         pa.field("version", pa.int32(), nullable=False),
         pa.field("template", pa.string(), nullable=True),
-        pa.field("bundles", pa.list_(pa.string()), nullable=True),
-        pa.field("fields", pa.list_(pa.string()), nullable=True),
-        pa.field("derived", pa.list_(DERIVED_ID_STRUCT), nullable=True),
-        pa.field("row_fields", pa.list_(pa.string()), nullable=True),
-        pa.field("row_extras", pa.list_(pa.string()), nullable=True),
-        pa.field("ordering_keys", pa.list_(ORDERING_KEY_STRUCT), nullable=True),
-        pa.field("join_keys", pa.list_(pa.string()), nullable=True),
+        pa.field("bundles", list_view_type(pa.string()), nullable=True),
+        pa.field("fields", list_view_type(pa.string()), nullable=True),
+        pa.field("derived", list_view_type(DERIVED_ID_STRUCT), nullable=True),
+        pa.field("row_fields", list_view_type(pa.string()), nullable=True),
+        pa.field("row_extras", list_view_type(pa.string()), nullable=True),
+        pa.field("ordering_keys", list_view_type(ORDERING_KEY_STRUCT), nullable=True),
+        pa.field("join_keys", list_view_type(pa.string()), nullable=True),
         pa.field("enabled_when", pa.string(), nullable=True),
         pa.field("feature_flag", pa.string(), nullable=True),
         pa.field("postprocess", pa.string(), nullable=True),
         pa.field("metadata_extra", pa.map_(pa.string(), pa.string()), nullable=True),
-        pa.field("evidence_required_columns", pa.list_(pa.string()), nullable=True),
+        pa.field("evidence_required_columns", list_view_type(pa.string()), nullable=True),
         pa.field("pipeline_name", pa.string(), nullable=True),
     ]
 )
@@ -167,7 +315,7 @@ RULE_DEF_SCHEMA = pa.schema(
         pa.field("name", pa.string(), nullable=False),
         pa.field("domain", pa.string(), nullable=False),
         pa.field("kind", pa.string(), nullable=False),
-        pa.field("inputs", pa.list_(pa.string()), nullable=True),
+        pa.field("inputs", list_view_type(pa.string()), nullable=True),
         pa.field("output", pa.string(), nullable=False),
         pa.field("execution_mode", pa.string(), nullable=True),
         pa.field("priority", pa.int32(), nullable=True),
@@ -177,10 +325,19 @@ RULE_DEF_SCHEMA = pa.schema(
         pa.field("relationship_payload", RELATIONSHIP_STRUCT, nullable=True),
         pa.field("normalize_payload", NORMALIZE_STRUCT, nullable=True),
         pa.field("extract_payload", EXTRACT_STRUCT, nullable=True),
-        pa.field("pipeline_ops", pa.list_(QUERY_OP_STRUCT), nullable=True),
-        pa.field("post_kernels", pa.list_(KERNEL_SPEC_STRUCT), nullable=True),
+        pa.field("pipeline_ops", list_view_type(QUERY_OP_STRUCT), nullable=True),
+        pa.field("post_kernels", list_view_type(KERNEL_SPEC_STRUCT), nullable=True),
     ],
     metadata={b"spec_kind": b"relspec_rule_definitions"},
+)
+
+RULE_DEF_ENCODING_POLICY = EncodingPolicy(
+    specs=(
+        EncodingSpec(column="domain"),
+        EncodingSpec(column="kind"),
+        EncodingSpec(column="output"),
+        EncodingSpec(column="execution_mode"),
+    )
 )
 
 
@@ -212,7 +369,8 @@ def rule_definition_table(definitions: Sequence[RuleDefinition]) -> pa.Table:
         }
         for definition in definitions
     ]
-    return table_from_rows(RULE_DEF_SCHEMA, rows)
+    table = table_from_rows(RULE_DEF_SCHEMA, rows)
+    return RULE_DEF_ENCODING_POLICY.apply(table)
 
 
 def rule_definitions_from_table(table: pa.Table) -> tuple[RuleDefinition, ...]:
@@ -299,6 +457,7 @@ def _evidence_output_row(spec: EvidenceOutput | None) -> dict[str, object] | Non
     ]
     return {
         "column_map": dict(spec.column_map) or None,
+        "provenance_columns": list(spec.provenance_columns) or None,
         "literals": literals or None,
     }
 
@@ -308,15 +467,23 @@ def _evidence_output_from_row(payload: Mapping[str, Any] | None) -> EvidenceOutp
         return None
     raw_map = payload.get("column_map")
     column_map = dict(raw_map) if isinstance(raw_map, Mapping) else {}
+    provenance_columns = parse_string_tuple(
+        payload.get("provenance_columns"),
+        label="provenance_columns",
+    )
     literals: dict[str, ScalarValue] = {}
     for item in payload.get("literals") or ():
         name = item.get("name")
         if name is None:
             continue
         literals[str(name)] = decode_scalar_union(item.get("value_union"))
-    if not column_map and not literals:
+    if not column_map and not literals and not provenance_columns:
         return None
-    return EvidenceOutput(column_map=column_map, literals=literals)
+    return EvidenceOutput(
+        column_map=column_map,
+        literals=literals,
+        provenance_columns=provenance_columns,
+    )
 
 
 def _policy_overrides_row(overrides: PolicyOverrides) -> dict[str, object] | None:
@@ -335,6 +502,117 @@ def _policy_overrides_from_row(payload: Mapping[str, Any] | None) -> PolicyOverr
         confidence_policy=payload.get("confidence_policy"),
         ambiguity_policy=payload.get("ambiguity_policy"),
     )
+
+
+def _encode_expr(expr: ExprIR) -> str:
+    return expr.to_json()
+
+
+def _encode_sort_key(column: str, order: str) -> dict[str, object]:
+    return {"column": column, "order": order}
+
+
+def _encode_sort_keys(keys: Sequence[SortKey]) -> list[dict[str, object]]:
+    return [_encode_sort_key(key.column, key.order) for key in keys]
+
+
+def _encode_literal(value: object | None) -> ScalarValue | None:
+    return encode_scalar_union(cast("ScalarValue | None", value))
+
+
+def _tagged_union_payload(tag: str, payload: Mapping[str, object] | None) -> dict[str, object]:
+    return {_UNION_TAG_KEY: tag, _UNION_VALUE_KEY: payload}
+
+
+def hash_join_row(config: HashJoinConfig | None) -> dict[str, object] | None:
+    if config is None:
+        return None
+    return {
+        "join_type": config.join_type,
+        "left_keys": list(config.left_keys),
+        "right_keys": list(config.right_keys) or None,
+        "left_output": list(config.left_output) or None,
+        "right_output": list(config.right_output) or None,
+        "output_suffix_for_left": config.output_suffix_for_left,
+        "output_suffix_for_right": config.output_suffix_for_right,
+    }
+
+
+def interval_align_row(config: IntervalAlignConfig | None) -> dict[str, object] | None:
+    if config is None:
+        return None
+    return {
+        "mode": config.mode,
+        "how": config.how,
+        "left_path_col": config.left_path_col,
+        "left_start_col": config.left_start_col,
+        "left_end_col": config.left_end_col,
+        "right_path_col": config.right_path_col,
+        "right_start_col": config.right_start_col,
+        "right_end_col": config.right_end_col,
+        "select_left": list(config.select_left) or None,
+        "select_right": list(config.select_right) or None,
+        "tie_breakers": _encode_sort_keys(config.tie_breakers) or None,
+        "emit_match_meta": config.emit_match_meta,
+        "match_kind_col": config.match_kind_col,
+        "match_score_col": config.match_score_col,
+    }
+
+
+def winner_select_row(config: WinnerSelectConfig | None) -> dict[str, object] | None:
+    if config is None:
+        return None
+    return {
+        "keys": list(config.keys) or None,
+        "score_col": config.score_col,
+        "score_order": config.score_order,
+        "tie_breakers": _encode_sort_keys(config.tie_breakers) or None,
+    }
+
+
+def project_row(config: ProjectConfig | None) -> dict[str, object] | None:
+    if config is None:
+        return None
+    expr_rows = [
+        {"name": name, "expr_json": _encode_expr(expr)} for name, expr in config.exprs.items()
+    ]
+    return {
+        "select": list(config.select) or None,
+        "exprs": expr_rows or None,
+    }
+
+
+def kernel_spec_row(spec: KernelSpecT) -> dict[str, object]:
+    kind = spec.kind
+    base: dict[str, object] = {"kind": kind}
+    if isinstance(spec, AddLiteralSpec):
+        payload = {"name": spec.name, "value_union": _encode_literal(spec.value)}
+    elif isinstance(spec, FilterKernelSpec):
+        payload = {"expr_json": _encode_expr(spec.predicate)}
+    elif isinstance(spec, DropColumnsSpec):
+        payload = {"columns": list(spec.columns) or None}
+    elif isinstance(spec, RenameColumnsSpec):
+        payload = {"mapping": dict(spec.mapping) or None}
+    elif isinstance(spec, ExplodeListSpec):
+        payload = {
+            "parent_id_col": spec.parent_id_col,
+            "list_col": spec.list_col,
+            "out_parent_col": spec.out_parent_col,
+            "out_value_col": spec.out_value_col,
+        }
+    elif isinstance(spec, DedupeKernelSpec):
+        payload = {
+            "keys": list(spec.spec.keys),
+            "tie_breakers": _encode_sort_keys(spec.spec.tie_breakers) or None,
+            "strategy": spec.spec.strategy,
+        }
+    elif isinstance(spec, CanonicalSortKernelSpec):
+        payload = {"sort_keys": _encode_sort_keys(spec.sort_keys) or None}
+    else:
+        msg = f"Unsupported KernelSpec type: {type(spec).__name__}."
+        raise TypeError(msg)
+    base["payload"] = _tagged_union_payload(kind, payload)
+    return base
 
 
 def _relationship_payload_row(payload: object | None) -> dict[str, object] | None:
@@ -681,25 +959,23 @@ def _winner_select_from_row(payload: Mapping[str, Any] | None) -> WinnerSelectCo
 
 def _kernel_from_row(payload: Mapping[str, Any]) -> KernelSpecT:
     kind = str(payload["kind"])
+    raw_payload = payload.get("payload")
+    spec = raw_payload if isinstance(raw_payload, Mapping) else {}
     if kind == "add_literal":
-        spec = payload.get("add_literal") or {}
         result: KernelSpecT = AddLiteralSpec(
             name=str(spec.get("name", "")),
             value=decode_scalar_union(spec.get("value_union")),
         )
     elif kind == "filter":
-        spec = payload.get("filter") or {}
         expr_json = str(spec.get("expr_json", ""))
         result = FilterKernelSpec(predicate=ExprIR.from_json(expr_json))
     elif kind == "drop_columns":
-        spec = payload.get("drop_columns") or {}
         result = DropColumnsSpec(columns=parse_string_tuple(spec.get("columns"), label="columns"))
     elif kind == "rename_columns":
-        spec = payload.get("rename_columns") or {}
-        mapping = spec.get("mapping") or {}
-        result = RenameColumnsSpec(mapping=dict(mapping))
+        mapping_payload = spec.get("mapping")
+        mapping = mapping_payload if isinstance(mapping_payload, Mapping) else {}
+        result = RenameColumnsSpec(mapping={str(key): str(val) for key, val in mapping.items()})
     elif kind == "explode_list":
-        spec = payload.get("explode_list") or {}
         result = ExplodeListSpec(
             parent_id_col=str(spec.get("parent_id_col", "src_id")),
             list_col=str(spec.get("list_col", "dst_ids")),
@@ -707,7 +983,6 @@ def _kernel_from_row(payload: Mapping[str, Any]) -> KernelSpecT:
             out_value_col=str(spec.get("out_value_col", "dst_id")),
         )
     elif kind == "dedupe":
-        spec = payload.get("dedupe") or {}
         tie_breakers = _decode_sort_keys(spec.get("tie_breakers"))
         result = DedupeKernelSpec(
             spec=DedupeSpec(
@@ -717,7 +992,6 @@ def _kernel_from_row(payload: Mapping[str, Any]) -> KernelSpecT:
             )
         )
     elif kind == "canonical_sort":
-        spec = payload.get("canonical_sort") or {}
         result = CanonicalSortKernelSpec(sort_keys=_decode_sort_keys(spec.get("sort_keys")))
     else:
         msg = f"Unsupported kernel kind: {kind!r}"
@@ -887,10 +1161,21 @@ def _metadata_bytes(metadata: object | None) -> dict[bytes, bytes]:
 
 
 __all__ = [
+    "AMBIGUITY_STRUCT",
+    "CONFIDENCE_STRUCT",
+    "EVIDENCE_OUTPUT_STRUCT",
+    "EVIDENCE_STRUCT",
     "EXTRACT_STRUCT",
+    "HASH_JOIN_STRUCT",
+    "INTERVAL_ALIGN_STRUCT",
+    "KERNEL_SPEC_STRUCT",
     "NORMALIZE_STRUCT",
+    "PROJECT_EXPR_STRUCT",
+    "PROJECT_STRUCT",
     "RELATIONSHIP_STRUCT",
+    "RULES_SCHEMA",
     "RULE_DEF_SCHEMA",
+    "WINNER_SELECT_STRUCT",
     "query_from_ops",
     "rule_definition_table",
     "rule_definitions_from_table",

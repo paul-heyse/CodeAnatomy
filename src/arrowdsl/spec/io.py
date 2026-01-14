@@ -27,7 +27,6 @@ class IpcWriteConfig:
     unify_dictionaries: bool = True
     emit_dictionary_deltas: bool = False
     allow_64bit: bool = False
-    use_legacy_format: bool = False
     metadata_version: ipc.MetadataVersion = ipc.MetadataVersion.V5
 
 
@@ -45,7 +44,6 @@ def ipc_write_options_factory(
     return ipc.IpcWriteOptions(
         metadata_version=config.metadata_version,
         allow_64bit=config.allow_64bit,
-        use_legacy_format=config.use_legacy_format,
         compression=config.compression,
         use_threads=config.use_threads,
         emit_dictionary_deltas=config.emit_dictionary_deltas,

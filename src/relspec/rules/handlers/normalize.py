@@ -42,7 +42,6 @@ class NormalizeRuleHandler(RuleHandler):
         NormalizeRule
             Normalize rule derived from the definition.
         """
-        _ = ctx
         payload = rule.payload
         query = _normalize_query(payload, pipeline_ops=rule.pipeline_ops)
         derive = _normalize_derive(payload)
@@ -53,7 +52,7 @@ class NormalizeRuleHandler(RuleHandler):
             derive=derive,
             query=query,
             evidence=_normalize_evidence(rule.evidence),
-            evidence_output=_normalize_evidence_output(rule.evidence_output),
+            evidence_output=_normalize_evidence_output(rule.evidence_output, ctx=ctx),
             confidence_policy=self.policies.resolve_confidence(
                 "normalize", rule.policy_overrides.confidence_policy
             ),
@@ -94,10 +93,32 @@ def _normalize_evidence(spec: EvidenceSpec | None) -> NormalizeEvidenceSpec | No
     )
 
 
-def _normalize_evidence_output(spec: EvidenceOutput | None) -> NormalizeEvidenceOutput | None:
-    if spec is None:
+def _normalize_evidence_output(
+    spec: EvidenceOutput | None,
+    *,
+    ctx: ExecutionContext,
+) -> NormalizeEvidenceOutput | None:
+    if spec is None and not ctx.runtime.scan.scan_provenance_columns:
         return None
-    return NormalizeEvidenceOutput(column_map=spec.column_map, literals=spec.literals)
+    column_map = dict(spec.column_map) if spec is not None else {}
+    literals = dict(spec.literals) if spec is not None else {}
+    provenance_columns = (
+        tuple(
+            dict.fromkeys(
+                (
+                    *(spec.provenance_columns if spec is not None else ()),
+                    *ctx.runtime.scan.scan_provenance_columns,
+                )
+            )
+        )
+        if spec is not None or ctx.runtime.scan.scan_provenance_columns
+        else ()
+    )
+    return NormalizeEvidenceOutput(
+        column_map=column_map,
+        literals=literals,
+        provenance_columns=provenance_columns,
+    )
 
 
 __all__ = ["NormalizeRuleHandler"]

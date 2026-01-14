@@ -10,7 +10,6 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan.scan_io import DatasetSource
-from arrowdsl.spec.tables.cpg import prop_table_specs_from_table
 from cpg.catalog import PlanCatalog, resolve_plan_source
 from cpg.constants import CpgBuildArtifacts, QualityPlanSpec, quality_plan_from_ids
 from cpg.emit_props import emit_props_plans, filter_fields
@@ -23,6 +22,7 @@ from cpg.plan_specs import (
     finalize_plan,
 )
 from cpg.registry import CpgRegistry, default_cpg_registry
+from cpg.spec_tables import prop_table_specs_from_table
 from cpg.specs import PropTableSpec, resolve_prop_include
 
 

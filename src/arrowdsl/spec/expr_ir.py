@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol, cast, runtime_checkable
 
 import pyarrow as pa
 
@@ -23,12 +23,80 @@ from arrowdsl.core.interop import (
 from arrowdsl.json_factory import JsonPolicy, dumps_text
 from arrowdsl.schema.build import dictionary_array_from_indices, union_array_from_values
 from arrowdsl.spec.codec import (
+    decode_json_text,
+    decode_options_payload,
     decode_scalar_payload,
     decode_scalar_union,
+    encode_json_text,
+    encode_options_payload,
     encode_scalar_payload,
     encode_scalar_union,
 )
 from arrowdsl.spec.infra import SCALAR_UNION_TYPE
+
+
+@runtime_checkable
+class FunctionOptionsProto(Protocol):
+    """Arrow compute function options protocol."""
+
+    def serialize(self) -> bytes:
+        """Serialize options to bytes."""
+        raise NotImplementedError
+
+    @classmethod
+    def deserialize(cls, payload: bytes) -> FunctionOptionsProto:
+        """Deserialize options from bytes."""
+        raise NotImplementedError
+
+
+type FunctionOptionsPayload = bytes | bytearray | FunctionOptionsProto
+
+
+def _options_bytes(options: FunctionOptionsPayload | None) -> bytes | None:
+    if options is None:
+        return None
+    if isinstance(options, FunctionOptionsProto):
+        return options.serialize()
+    if isinstance(options, bytearray):
+        return bytes(options)
+    if isinstance(options, bytes):
+        return options
+    msg = "ExprIR options must be FunctionOptions or serialized bytes."
+    raise TypeError(msg)
+
+
+def _encode_options(options: FunctionOptionsPayload | None) -> object | None:
+    return encode_options_payload(_options_bytes(options))
+
+
+def _decode_options(payload: object | None) -> bytes | None:
+    return decode_options_payload(payload)
+
+
+def _encode_options_text(options: FunctionOptionsPayload | None) -> str | None:
+    return encode_json_text(_options_bytes(options))
+
+
+def _decode_options_text(payload: str | None) -> bytes | None:
+    decoded = decode_json_text(payload)
+    if decoded is None:
+        return None
+    if isinstance(decoded, bytearray):
+        return bytes(decoded)
+    if isinstance(decoded, bytes):
+        return decoded
+    msg = "ExprIR options JSON must decode to bytes."
+    raise TypeError(msg)
+
+
+def _deserialize_options(payload: bytes | None) -> FunctionOptionsProto | None:
+    if payload is None:
+        return None
+    options_type = cast("type[FunctionOptionsProto] | None", getattr(pc, "FunctionOptions", None))
+    if options_type is None:
+        msg = "Arrow compute FunctionOptions is unavailable."
+        raise TypeError(msg)
+    return options_type.deserialize(payload)
 
 
 @dataclass(frozen=True)
@@ -63,6 +131,7 @@ EXPR_NODE_SCHEMA = pa.schema(
         pa.field("name", pa.string(), nullable=True),
         pa.field("value_union", SCALAR_UNION_TYPE, nullable=True),
         pa.field("args", pa.list_(pa.int64()), nullable=True),
+        pa.field("options_json", pa.string(), nullable=True),
     ],
     metadata={b"spec_kind": b"expr_ir_nodes"},
 )
@@ -76,6 +145,7 @@ class ExprIR:
     name: str | None = None
     value: ScalarValue | None = None
     args: tuple[ExprIR, ...] = ()
+    options: FunctionOptionsPayload | None = None
 
     def to_expression(self, *, registry: ExprRegistry | None = None) -> ComputeExpression:
         """Compile the IR into a compute expression.
@@ -103,7 +173,9 @@ class ExprIR:
                 raise ValueError(msg)
             name = registry.ensure(self.name) if registry is not None else self.name
             args = [arg.to_expression(registry=registry) for arg in self.args]
-            return ensure_expression(pc.call_function(name, args))
+            options = _options_bytes(self.options)
+            opts = _deserialize_options(options)
+            return ensure_expression(pc.call_function(name, args, options=opts))
         msg = f"Unsupported ExprIR op: {self.op}"
         raise ValueError(msg)
 
@@ -134,10 +206,12 @@ class ExprIR:
             args = tuple(arg.to_expr_spec(registry=registry) for arg in self.args)
             expr = self.to_expression(registry=registry)
             name = registry.ensure(self.name) if registry is not None else self.name
+            options = _options_bytes(self.options)
+            opts = _deserialize_options(options)
 
             def _materialize(table: TableLike) -> ArrayLike:
                 values = [arg.materialize(table) for arg in args]
-                result = pc.call_function(name, values)
+                result = pc.call_function(name, values, options=opts)
                 if isinstance(result, ChunkedArrayLike):
                     return result.combine_chunks()
                 if isinstance(result, ArrayLike):
@@ -174,6 +248,7 @@ class ExprIR:
             "name": self.name,
             "value": encode_scalar_payload(self.value),
             "args": [arg.to_dict() for arg in self.args],
+            "options": _encode_options(self.options),
         }
 
     @staticmethod
@@ -205,6 +280,7 @@ class ExprIR:
             name=name_value,
             value=decode_scalar_payload(payload.get("value")),
             args=args,
+            options=_decode_options(payload.get("options")),
         )
 
     @staticmethod
@@ -281,6 +357,7 @@ def expr_ir_table(exprs: Sequence[ExprIR]) -> ExprIRTable:
     names = [expr.name for expr in nodes]
     values = [encode_scalar_union(expr.value) for expr in nodes]
     args = [[id_map[id(arg)] for arg in expr.args] or None for expr in nodes]
+    options_json = [_encode_options_text(expr.options) for expr in nodes]
     table = pa.Table.from_arrays(
         [
             pa.array(expr_ids, type=pa.int64()),
@@ -288,6 +365,7 @@ def expr_ir_table(exprs: Sequence[ExprIR]) -> ExprIRTable:
             pa.array(names, type=pa.string()),
             union_array_from_values(values, union_type=SCALAR_UNION_TYPE),
             pa.array(args, type=pa.list_(pa.int64())),
+            pa.array(options_json, type=pa.string()),
         ],
         schema=EXPR_NODE_SCHEMA,
     )
@@ -343,11 +421,13 @@ def expr_ir_from_table(
         name = row.get("name")
         name_value = str(name) if name is not None else None
         value = decode_scalar_union(row.get("value_union"))
+        options = _decode_options_text(row.get("options_json"))
         expr = ExprIR(
             op=str(row.get("op", "")),
             name=name_value,
             value=value,
             args=args,
+            options=options,
         )
         cache[expr_id] = expr
         return expr

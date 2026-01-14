@@ -7,15 +7,6 @@ from functools import cache
 
 import pyarrow as pa
 
-from arrowdsl.spec.tables.cpg_registry import (
-    derivation_table as _derivation_table,
-)
-from arrowdsl.spec.tables.cpg_registry import (
-    edge_contract_table as _edge_contract_table,
-)
-from arrowdsl.spec.tables.cpg_registry import (
-    node_contract_table as _node_contract_table,
-)
 from cpg.kinds_registry_enums import EdgeKind, NodeKind, SourceKind
 from cpg.kinds_registry_models import (
     DerivationSpec,
@@ -24,6 +15,15 @@ from cpg.kinds_registry_models import (
     NodeKindContract,
 )
 from cpg.kinds_registry_props import resolve_prop_specs
+from cpg.registry_tables import (
+    derivation_table as _derivation_table,
+)
+from cpg.registry_tables import (
+    edge_contract_table as _edge_contract_table,
+)
+from cpg.registry_tables import (
+    node_contract_table as _node_contract_table,
+)
 
 
 def _as_str_list(value: object | None) -> list[str]:

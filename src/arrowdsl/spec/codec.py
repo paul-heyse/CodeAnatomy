@@ -250,6 +250,43 @@ def decode_json_text(payload: str | None) -> object | None:
     return decode_json_payload(json.loads(payload))
 
 
+def encode_options_payload(value: bytes | bytearray | None) -> object | None:
+    """Encode serialized FunctionOptions payloads.
+
+    Returns
+    -------
+    object | None
+        Encoded payload with a discriminator.
+    """
+    if value is None:
+        return None
+    return encode_json_payload(bytes(value))
+
+
+def decode_options_payload(payload: object | None) -> bytes | None:
+    """Decode serialized FunctionOptions payloads.
+
+    Returns
+    -------
+    bytes | None
+        Decoded options payload.
+
+    Raises
+    ------
+    TypeError
+        Raised when the payload does not decode to bytes.
+    """
+    decoded = decode_json_payload(payload)
+    if decoded is None:
+        return None
+    if isinstance(decoded, bytearray):
+        return bytes(decoded)
+    if isinstance(decoded, bytes):
+        return decoded
+    msg = "Options payload must decode to bytes."
+    raise TypeError(msg)
+
+
 def encode_scalar_payload(value: ScalarValue | None) -> object | None:
     """Encode a scalar payload with bytes handling.
 
@@ -327,12 +364,14 @@ def decode_scalar_json(payload: str | None) -> ScalarValue | None:
 __all__ = [
     "decode_json_payload",
     "decode_json_text",
+    "decode_options_payload",
     "decode_scalar_json",
     "decode_scalar_payload",
     "decode_scalar_union",
     "decode_strict",
     "encode_json_payload",
     "encode_json_text",
+    "encode_options_payload",
     "encode_scalar_json",
     "encode_scalar_payload",
     "encode_scalar_union",

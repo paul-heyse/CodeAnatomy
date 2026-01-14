@@ -599,10 +599,12 @@ def _compile_relationship_outputs(
             )
             raise ValueError(msg)
         contributors = tuple(compiler.compile_rule(rule, ctx=ctx) for rule in output_rules)
+        telemetry = compiler.collect_scan_telemetry(output_rules, ctx=ctx)
         compiled[out_name] = CompiledOutput(
             output_dataset=out_name,
             contract_name=output_rules[0].contract_name,
             contributors=contributors,
+            telemetry=telemetry,
         )
     return compiled
 

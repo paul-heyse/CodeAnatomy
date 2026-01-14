@@ -49,22 +49,11 @@ from arrowdsl.spec.io import (
     write_spec_values,
 )
 from arrowdsl.spec.tables.base import SpecTableCodec
-from arrowdsl.spec.tables.cpg_registry import (
-    DERIVATION_SCHEMA,
-    EDGE_CONTRACT_SCHEMA,
-    NODE_CONTRACT_SCHEMA,
-    derivation_table,
-    edge_contract_table,
-    node_contract_table,
-)
 
 __all__ = [
     "DATASET_REF_STRUCT",
     "DEDUPE_STRUCT",
-    "DERIVATION_SCHEMA",
-    "EDGE_CONTRACT_SCHEMA",
     "EXPR_NODE_SCHEMA",
-    "NODE_CONTRACT_SCHEMA",
     "SCALAR_UNION_FIELDS",
     "SCALAR_UNION_TYPE",
     "SORT_KEY_STRUCT",
@@ -82,8 +71,6 @@ __all__ = [
     "decode_scalar_payload",
     "decode_scalar_union",
     "decode_strict",
-    "derivation_table",
-    "edge_contract_table",
     "encode_json_payload",
     "encode_json_text",
     "encode_scalar_json",
@@ -93,7 +80,6 @@ __all__ = [
     "expr_ir_from_table",
     "expr_ir_table",
     "expr_spec_from_json",
-    "node_contract_table",
     "parse_dedupe_strategy",
     "parse_mapping_sequence",
     "parse_scalar_value",

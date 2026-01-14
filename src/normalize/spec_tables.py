@@ -2,14 +2,82 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from functools import cache
 
 import pyarrow as pa
 
-from arrowdsl.spec.tables.normalize import normalize_rule_family_table
+from arrowdsl.spec.codec import parse_string_tuple
 from arrowdsl.spec.tables.schema import SchemaSpecTables, schema_spec_tables_from_dataset_specs
 from normalize.registry_specs import dataset_specs
 from normalize.rule_registry_specs import rule_family_specs
+from normalize.rule_specs import NormalizeRuleFamilySpec
+
+RULE_FAMILY_SCHEMA = pa.schema(
+    [
+        pa.field("name", pa.string(), nullable=False),
+        pa.field("factory", pa.string(), nullable=False),
+        pa.field("inputs", pa.list_(pa.string()), nullable=True),
+        pa.field("output", pa.string(), nullable=True),
+        pa.field("confidence_policy", pa.string(), nullable=True),
+        pa.field("ambiguity_policy", pa.string(), nullable=True),
+        pa.field("option_flag", pa.string(), nullable=True),
+        pa.field("execution_mode", pa.string(), nullable=True),
+    ],
+    metadata={b"spec_kind": b"normalize_rule_families"},
+)
+
+
+def normalize_rule_family_table(
+    specs: Sequence[NormalizeRuleFamilySpec],
+) -> pa.Table:
+    """Build a normalize rule family spec table.
+
+    Returns
+    -------
+    pa.Table
+        Arrow table with normalize rule family specs.
+    """
+    rows = [
+        {
+            "name": spec.name,
+            "factory": spec.factory,
+            "inputs": list(spec.inputs) or None,
+            "output": spec.output,
+            "confidence_policy": spec.confidence_policy,
+            "ambiguity_policy": spec.ambiguity_policy,
+            "option_flag": spec.option_flag,
+            "execution_mode": spec.execution_mode,
+        }
+        for spec in specs
+    ]
+    return pa.Table.from_pylist(rows, schema=RULE_FAMILY_SCHEMA)
+
+
+def normalize_rule_family_specs_from_table(
+    table: pa.Table,
+) -> tuple[NormalizeRuleFamilySpec, ...]:
+    """Compile NormalizeRuleFamilySpec objects from a spec table.
+
+    Returns
+    -------
+    tuple[NormalizeRuleFamilySpec, ...]
+        Rule family specs parsed from the table.
+    """
+    return tuple(
+        NormalizeRuleFamilySpec(
+            name=str(row["name"]),
+            factory=str(row["factory"]),
+            inputs=parse_string_tuple(row.get("inputs"), label="inputs"),
+            output=row.get("output"),
+            confidence_policy=row.get("confidence_policy"),
+            ambiguity_policy=row.get("ambiguity_policy"),
+            option_flag=row.get("option_flag"),
+            execution_mode=row.get("execution_mode"),
+        )
+        for row in table.to_pylist()
+    )
+
 
 SCHEMA_TABLES: SchemaSpecTables = schema_spec_tables_from_dataset_specs(dataset_specs())
 FIELD_TABLE = SCHEMA_TABLES.field_table
@@ -33,6 +101,9 @@ __all__ = [
     "CONSTRAINTS_TABLE",
     "CONTRACT_TABLE",
     "FIELD_TABLE",
+    "RULE_FAMILY_SCHEMA",
     "SCHEMA_TABLES",
+    "normalize_rule_family_specs_from_table",
+    "normalize_rule_family_table",
     "rule_family_spec_table",
 ]

@@ -10,11 +10,15 @@ from typing import ClassVar
 import pyarrow as pa
 
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.spec.tables.cpg import node_plan_specs_from_table, prop_table_specs_from_table
 from cpg.edge_specs import edge_plan_specs_from_table
 from cpg.registry_builders import build_dataset_spec
 from cpg.registry_rows import DATASET_ROWS
-from cpg.spec_tables import node_plan_spec_table, prop_table_spec_table
+from cpg.spec_tables import (
+    node_plan_spec_table,
+    node_plan_specs_from_table,
+    prop_table_spec_table,
+    prop_table_specs_from_table,
+)
 from cpg.specs import EdgePlanSpec, NodePlanSpec, PropTableSpec
 from relspec.model import RelationshipRule
 from relspec.rules.cache import rule_table_cached

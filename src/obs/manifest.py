@@ -18,6 +18,7 @@ from extract.registry_specs import dataset_schema
 from obs.repro import collect_repro_info
 
 if TYPE_CHECKING:
+    from arrowdsl.plan.query import ScanTelemetry
     from extract.evidence_plan import EvidencePlan
     from normalize.rule_model import NormalizeRule
     from relspec.model import RelationshipRule
@@ -149,6 +150,7 @@ class ManifestData:
     produced_relationship_output_names: Sequence[str] | None = None
     relationship_output_lineage: Mapping[str, Sequence[str]] | None = None
     normalize_output_lineage: Mapping[str, Sequence[str]] | None = None
+    relspec_scan_telemetry: Mapping[str, Mapping[str, ScanTelemetry]] | None = None
     notes: JsonDict | None = None
 
 
@@ -370,6 +372,24 @@ def _collect_extract_records(data: ManifestData) -> list[ExtractRecord]:
     return records
 
 
+def _scan_telemetry_payload(
+    telemetry: Mapping[str, Mapping[str, ScanTelemetry]],
+) -> JsonDict:
+    payload: JsonDict = {}
+    for output_name, entries in telemetry.items():
+        payload[output_name] = {
+            dataset_name: {
+                "fragment_count": entry.fragment_count,
+                "row_group_count": entry.row_group_count,
+                "count_rows": entry.count_rows,
+                "estimated_rows": entry.estimated_rows,
+                "file_hints": list(entry.file_hints),
+            }
+            for dataset_name, entry in entries.items()
+        }
+    return payload
+
+
 def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
     """Construct a run manifest with the required fields.
 
@@ -409,7 +429,9 @@ def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
         )
 
     repro = collect_repro_info(context.repo_root)
-    notes = dict(data.notes) if data.notes else {}
+    notes: JsonDict = dict(data.notes) if data.notes else {}
+    if data.relspec_scan_telemetry:
+        notes["relspec_scan_telemetry"] = _scan_telemetry_payload(data.relspec_scan_telemetry)
 
     return Manifest(
         manifest_version=1,

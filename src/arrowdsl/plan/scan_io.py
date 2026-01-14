@@ -16,11 +16,13 @@ from arrowdsl.core.interop import (
     RecordBatchReaderLike,
     SchemaLike,
     TableLike,
+    pc,
 )
 from arrowdsl.plan.plan import Plan, PlanFactory
 from arrowdsl.plan.query import scan_context_factory
 from arrowdsl.schema.build import rows_to_table as rows_to_table_factory
 from arrowdsl.schema.nested_builders import nested_array_factory
+from schema_spec import PROVENANCE_SOURCE_FIELDS
 from schema_spec.system import DatasetSpec
 
 if TYPE_CHECKING:
@@ -272,20 +274,12 @@ def _plan_from_scan_source(
             columns=columns,
             label=label,
         )
-    if isinstance(source, ds.Dataset):
-        dataset = cast("ds.Dataset", source)
-        available = set(dataset.schema.names)
-        scan_cols = list(columns) if columns is not None else list(dataset.schema.names)
-        scan_cols = [name for name in scan_cols if name in available]
-        for name in ctx.runtime.scan.scan_provenance_columns:
-            if name not in scan_cols:
-                scan_cols.append(name)
-        factory = PlanFactory(ctx=ctx)
-        return factory.scan(dataset, columns=scan_cols, label=label)
-    if isinstance(source, ds.Scanner):
-        scanner = cast("ds.Scanner", source)
-        return Plan.from_reader(scanner.to_reader(), label=label)
-    return None
+    return _plan_from_dataset_or_scanner(
+        source,
+        ctx=ctx,
+        columns=columns,
+        label=label,
+    )
 
 
 def _plan_from_reader_source(
@@ -307,6 +301,48 @@ def _plan_from_reader_source(
     if isinstance(source, RecordBatchReaderLike):
         return Plan.from_reader(source, label=label)
     return None
+
+
+def _plan_from_dataset_or_scanner(
+    source: PlanSource,
+    *,
+    ctx: ExecutionContext,
+    columns: Sequence[str] | None,
+    label: str,
+) -> Plan | None:
+    if isinstance(source, ds.Dataset):
+        return _plan_from_dataset_obj(source, ctx=ctx, columns=columns, label=label)
+    if isinstance(source, ds.Scanner):
+        scanner = cast("ds.Scanner", source)
+        return Plan.from_reader(scanner.to_reader(), label=label)
+    return None
+
+
+def _plan_from_dataset_obj(
+    dataset: ds.Dataset,
+    *,
+    ctx: ExecutionContext,
+    columns: Sequence[str] | None,
+    label: str,
+) -> Plan:
+    available = set(dataset.schema.names)
+    scan_cols = list(columns) if columns is not None else list(dataset.schema.names)
+    scan_cols = [name for name in scan_cols if name in available]
+    factory = PlanFactory(ctx=ctx)
+    scan_provenance = tuple(ctx.runtime.scan.scan_provenance_columns)
+    if not scan_provenance:
+        return factory.scan(dataset, columns=scan_cols, label=label)
+    cols_map: dict[str, ComputeExpression] = {name: pc.field(name) for name in scan_cols}
+    for name in scan_provenance:
+        if name in cols_map:
+            continue
+        source_field = PROVENANCE_SOURCE_FIELDS.get(name)
+        if source_field is not None:
+            cols_map[name] = pc.field(source_field)
+            continue
+        if name in available:
+            cols_map[name] = pc.field(name)
+    return factory.scan(dataset, columns=cols_map, label=label)
 
 
 def plan_from_source(

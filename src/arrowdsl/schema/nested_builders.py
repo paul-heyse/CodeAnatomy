@@ -23,6 +23,8 @@ T = TypeVar("T")
 
 MAX_INT8_CODE = 127
 MAX_INT16_CODE = 32767
+_UNION_TAG_KEY = "__union_tag__"
+_UNION_VALUE_KEY = "value"
 
 
 class _ListType(Protocol):
@@ -149,6 +151,90 @@ def _union_child_index(
         return idx
     msg = f"Union array cannot encode value: {value!r}."
     raise TypeError(msg)
+
+
+def _tagged_union_mode(values: Sequence[object | None]) -> bool:
+    tagged = False
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, Mapping) and _UNION_TAG_KEY in value:
+            tagged = True
+            continue
+        if tagged:
+            msg = "Tagged union values must include __union_tag__ for all non-null entries."
+            raise TypeError(msg)
+        return False
+    return tagged
+
+
+def _tagged_union_values(
+    values: Sequence[object | None],
+    *,
+    child_types: Sequence[DataTypeLike],
+    child_names: Sequence[str],
+    type_codes: Sequence[int],
+    null_index: int | None,
+) -> tuple[list[int], list[int], list[list[object | None]]]:
+    type_ids: list[int] = []
+    offsets: list[int] = []
+    child_values: list[list[object | None]] = [[] for _ in child_types]
+    name_to_index = {name: idx for idx, name in enumerate(child_names)}
+    for value in values:
+        if value is None:
+            child_index = null_index if null_index is not None else 0
+            normalized = None
+        else:
+            if not isinstance(value, Mapping):
+                msg = "Tagged union values must be mappings."
+                raise TypeError(msg)
+            tag = value.get(_UNION_TAG_KEY)
+            if tag is None:
+                msg = "Tagged union values require __union_tag__."
+                raise TypeError(msg)
+            child_index = name_to_index.get(str(tag))
+            if child_index is None:
+                msg = f"Tagged union value has unknown tag: {tag!r}."
+                raise ValueError(msg)
+            normalized = _normalize_union_value(value.get(_UNION_VALUE_KEY))
+        type_ids.append(type_codes[child_index])
+        child_values[child_index].append(normalized)
+        offsets.append(len(child_values[child_index]) - 1)
+    return type_ids, offsets, child_values
+
+
+def _tagged_sparse_union_values(
+    values: Sequence[object | None],
+    *,
+    child_types: Sequence[DataTypeLike],
+    child_names: Sequence[str],
+    type_codes: Sequence[int],
+    null_index: int | None,
+) -> tuple[list[int], list[list[object | None]]]:
+    length = len(values)
+    child_values: list[list[object | None]] = [[None for _ in range(length)] for _ in child_types]
+    type_ids: list[int] = []
+    name_to_index = {name: idx for idx, name in enumerate(child_names)}
+    for offset, value in enumerate(values):
+        if value is None:
+            child_index = null_index if null_index is not None else 0
+            normalized = None
+        else:
+            if not isinstance(value, Mapping):
+                msg = "Tagged union values must be mappings."
+                raise TypeError(msg)
+            tag = value.get(_UNION_TAG_KEY)
+            if tag is None:
+                msg = "Tagged union values require __union_tag__."
+                raise TypeError(msg)
+            child_index = name_to_index.get(str(tag))
+            if child_index is None:
+                msg = f"Tagged union value has unknown tag: {tag!r}."
+                raise ValueError(msg)
+            normalized = _normalize_union_value(value.get(_UNION_VALUE_KEY))
+        type_ids.append(type_codes[child_index])
+        child_values[child_index][offset] = normalized
+    return type_ids, child_values
 
 
 def _dense_union_values(
@@ -522,6 +608,69 @@ def union_array_from_values(
     raise ValueError(msg)
 
 
+def union_array_from_tagged_values(
+    values: Sequence[object | None],
+    *,
+    union_type: DataTypeLike,
+) -> ArrayLike:
+    """Build a union array from tagged values.
+
+    Returns
+    -------
+    ArrayLike
+        Union array built from tagged payloads.
+
+    Raises
+    ------
+    TypeError
+        Raised when union_type is not a union dtype.
+    ValueError
+        Raised when the union mode is unsupported.
+    """
+    if not patypes.is_union(union_type):
+        msg = "union_array_from_tagged_values requires a union dtype."
+        raise TypeError(msg)
+    union_type = cast("_UnionType", union_type)
+    child_fields = list(union_type)
+    child_names = [field.name for field in child_fields]
+    child_types = [field.type for field in child_fields]
+    type_codes = list(union_type.type_codes)
+    null_index = _find_child_index(child_types, patypes.is_null)
+    if union_type.mode == "dense":
+        type_ids, offsets, child_values = _tagged_union_values(
+            values,
+            child_types=child_types,
+            child_names=child_names,
+            type_codes=type_codes,
+            null_index=null_index,
+        )
+        children = _union_children_arrays(child_types, child_values)
+        return dense_union_array(
+            type_ids,
+            offsets,
+            children,
+            field_names=child_names,
+            type_codes=type_codes,
+        )
+    if union_type.mode == "sparse":
+        type_ids, child_values = _tagged_sparse_union_values(
+            values,
+            child_types=child_types,
+            child_names=child_names,
+            type_codes=type_codes,
+            null_index=null_index,
+        )
+        children = _union_children_arrays(child_types, child_values)
+        return sparse_union_array(
+            type_ids,
+            children,
+            field_names=child_names,
+            type_codes=type_codes,
+        )
+    msg = f"Unsupported union mode: {union_type.mode!r}."
+    raise ValueError(msg)
+
+
 def dictionary_array_from_values(
     values: Sequence[object | None],
     *,
@@ -596,7 +745,10 @@ def nested_array_factory(field: FieldLike, values: Sequence[object | None]) -> A
     elif patypes.is_dictionary(dtype):
         array = dictionary_array_from_values(values, dictionary_type=dtype)
     elif patypes.is_union(dtype):
-        array = union_array_from_values(values, union_type=dtype)
+        if _tagged_union_mode(values):
+            array = union_array_from_tagged_values(values, union_type=dtype)
+        else:
+            array = union_array_from_values(values, union_type=dtype)
     else:
         array = pa.array(values, type=dtype)
     return array

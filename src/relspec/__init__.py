@@ -1,18 +1,6 @@
 """Relationship spec models, registry, and compiler."""
 
-from arrowdsl.spec.tables.relspec import (
-    AMBIGUITY_STRUCT,
-    CONFIDENCE_STRUCT,
-    DATASET_REF_STRUCT,
-    EVIDENCE_STRUCT,
-    HASH_JOIN_STRUCT,
-    INTERVAL_ALIGN_STRUCT,
-    PROJECT_EXPR_STRUCT,
-    PROJECT_STRUCT,
-    RULES_SCHEMA,
-    SORT_KEY_STRUCT,
-    WINNER_SELECT_STRUCT,
-)
+from arrowdsl.spec.infra import DATASET_REF_STRUCT, SORT_KEY_STRUCT
 from relspec.compiler import (
     CompiledOutput,
     CompiledRule,
@@ -48,6 +36,17 @@ from relspec.model import (
     WinnerSelectConfig,
 )
 from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation
+from relspec.rules.spec_tables import (
+    AMBIGUITY_STRUCT,
+    CONFIDENCE_STRUCT,
+    EVIDENCE_STRUCT,
+    HASH_JOIN_STRUCT,
+    INTERVAL_ALIGN_STRUCT,
+    PROJECT_EXPR_STRUCT,
+    PROJECT_STRUCT,
+    RULES_SCHEMA,
+    WINNER_SELECT_STRUCT,
+)
 
 __all__ = [
     "AMBIGUITY_STRUCT",

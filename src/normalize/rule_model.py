@@ -28,6 +28,7 @@ class EvidenceOutput:
 
     column_map: Mapping[str, str] = field(default_factory=dict)
     literals: Mapping[str, ScalarValue] = field(default_factory=dict)
+    provenance_columns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

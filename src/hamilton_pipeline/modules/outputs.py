@@ -609,6 +609,11 @@ def manifest_data(
     notes: JsonDict = {"relationship_output_keys": produced_outputs}
     if normalize_lineage:
         notes["normalize_output_keys"] = sorted(normalize_lineage)
+    scan_telemetry = {
+        name: compiled.telemetry
+        for name, compiled in relspec_snapshots.compiled_outputs.items()
+        if compiled.telemetry
+    }
     extract_inputs = manifest_inputs.extract_inputs
     rule_definitions = rule_definitions_from_table(relspec_snapshots.rule_table)
     relationship_rules = tuple(
@@ -628,6 +633,7 @@ def manifest_data(
         produced_relationship_output_names=produced_outputs,
         relationship_output_lineage=lineage,
         normalize_output_lineage=normalize_lineage,
+        relspec_scan_telemetry=scan_telemetry or None,
         notes=notes,
     )
 

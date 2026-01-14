@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Protocol, cast
 
 import pyarrow as pa
+import pyarrow.dataset as ds
 
 from arrowdsl.compute.filters import FilterSpec
 from arrowdsl.compute.kernels import apply_dedupe, explode_list_column, interval_align_table
@@ -15,7 +16,7 @@ from arrowdsl.core.interop import ComputeExpression, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
 from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions, SortKey
 from arrowdsl.plan.plan import Plan, hash_join, union_all_plans
-from arrowdsl.plan.query import open_dataset
+from arrowdsl.plan.query import ScanTelemetry, open_dataset
 from arrowdsl.plan.runner import run_plan
 from arrowdsl.schema.build import ConstExpr, FieldExpr, const_array, set_or_append_column
 from arrowdsl.schema.ops import align_plan
@@ -47,6 +48,7 @@ from relspec.policies import (
 from relspec.registry import ContractCatalog, DatasetCatalog
 from schema_spec.system import (
     GLOBAL_SCHEMA_REGISTRY,
+    DatasetSpec,
     dataset_spec_from_contract,
     make_dataset_spec,
     table_spec_from_schema,
@@ -75,6 +77,23 @@ class PlanResolver(Protocol):
         """
         ...
 
+    def telemetry(self, ref: DatasetRef, *, ctx: ExecutionContext) -> ScanTelemetry | None:
+        """Return scan telemetry for a dataset reference.
+
+        Parameters
+        ----------
+        ref:
+            Dataset reference to scan.
+        ctx:
+            Execution context.
+
+        Returns
+        -------
+        ScanTelemetry | None
+            Scan telemetry when available.
+        """
+        ...
+
 
 def _scan_ordering_for_ctx(ctx: ExecutionContext) -> Ordering:
     """Return ordering metadata for scan output based on context.
@@ -100,21 +119,7 @@ class FilesystemPlanResolver:
     def __init__(self, catalog: DatasetCatalog) -> None:
         self.catalog = catalog
 
-    def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> Plan:
-        """Resolve a dataset reference into a filesystem-backed plan.
-
-        Parameters
-        ----------
-        ref:
-            Dataset reference to resolve.
-        ctx:
-            Execution context.
-
-        Returns
-        -------
-        Plan
-            Executable plan for the dataset reference.
-        """
+    def _dataset_spec_for_ref(self, ref: DatasetRef) -> tuple[ds.Dataset, DatasetSpec]:
         loc = self.catalog.get(ref.name)
         dataset = open_dataset(
             loc.path,
@@ -139,9 +144,38 @@ class FilesystemPlanResolver:
                 metadata_spec=dataset_spec.metadata_spec,
                 validation=dataset_spec.validation,
             )
+        return dataset, dataset_spec
+
+    def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> Plan:
+        """Resolve a dataset reference into a filesystem-backed plan.
+
+        Parameters
+        ----------
+        ref:
+            Dataset reference to resolve.
+        ctx:
+            Execution context.
+
+        Returns
+        -------
+        Plan
+            Executable plan for the dataset reference.
+        """
+        dataset, dataset_spec = self._dataset_spec_for_ref(ref)
         decl = dataset_spec.scan_context(dataset, ctx).acero_decl()
         label = ref.label or ref.name
         return Plan(decl=decl, label=label, ordering=_scan_ordering_for_ctx(ctx))
+
+    def telemetry(self, ref: DatasetRef, *, ctx: ExecutionContext) -> ScanTelemetry | None:
+        """Return scan telemetry for a dataset reference.
+
+        Returns
+        -------
+        ScanTelemetry | None
+            Scan telemetry for the dataset reference.
+        """
+        dataset, dataset_spec = self._dataset_spec_for_ref(ref)
+        return dataset_spec.scan_context(dataset, ctx).telemetry()
 
 
 class InMemoryPlanResolver:
@@ -178,6 +212,19 @@ class InMemoryPlanResolver:
         if isinstance(obj, Plan):
             return obj
         return Plan.table_source(obj, label=ref.label or ref.name)
+
+    @staticmethod
+    def telemetry(ref: DatasetRef, *, ctx: ExecutionContext) -> ScanTelemetry | None:
+        """Return scan telemetry for in-memory datasets (unavailable).
+
+        Returns
+        -------
+        ScanTelemetry | None
+            ``None`` because in-memory datasets do not have scan telemetry.
+        """
+        _ = ref
+        _ = ctx
+        return None
 
 
 def _build_rule_meta_kernel(rule: RelationshipRule) -> KernelFn:
@@ -817,6 +864,7 @@ class CompiledOutput:
     output_dataset: str
     contract_name: str | None
     contributors: tuple[CompiledRule, ...] = ()
+    telemetry: Mapping[str, ScanTelemetry] = field(default_factory=dict)
 
     def execute(
         self, *, ctx: ExecutionContext, resolver: PlanResolver, contracts: ContractCatalog
@@ -1222,9 +1270,35 @@ class RelationshipRuleCompiler:
                 raise ValueError(msg)
 
             contributors = tuple(self.compile_rule(rule, ctx=ctx) for rule in rules_sorted)
+            telemetry = self.collect_scan_telemetry(rules_sorted, ctx=ctx)
             compiled[out_name] = CompiledOutput(
                 output_dataset=out_name,
                 contract_name=rules_sorted[0].contract_name,
                 contributors=contributors,
+                telemetry=telemetry,
             )
         return compiled
+
+    def collect_scan_telemetry(
+        self,
+        rules: Sequence[RelationshipRule],
+        *,
+        ctx: ExecutionContext,
+    ) -> dict[str, ScanTelemetry]:
+        """Collect scan telemetry for rule inputs.
+
+        Returns
+        -------
+        dict[str, ScanTelemetry]
+            Telemetry keyed by dataset label or name.
+        """
+        telemetry: dict[str, ScanTelemetry] = {}
+        for rule in rules:
+            for ref in rule.inputs:
+                key = ref.label or ref.name
+                if key in telemetry:
+                    continue
+                info = self.resolver.telemetry(ref, ctx=ctx)
+                if info is not None:
+                    telemetry[key] = info
+        return telemetry

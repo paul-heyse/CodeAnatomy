@@ -192,7 +192,9 @@ def dataset_rows_from_table(table: pa.Table) -> tuple[ExtractDatasetRowSpec, ...
 
 
 __all__ = [
+    "DERIVED_ID_STRUCT",
     "EXTRACT_DATASET_SCHEMA",
+    "ORDERING_KEY_STRUCT",
     "ExtractDatasetRowSpec",
     "ExtractDerivedIdSpec",
     "ExtractOrderingKeySpec",

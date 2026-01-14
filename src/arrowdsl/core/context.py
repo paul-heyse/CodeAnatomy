@@ -100,6 +100,7 @@ class ScanProfile:
     batch_readahead: int | None = None
     fragment_readahead: int | None = None
     fragment_scan_options: object | None = None
+    cache_metadata: bool = False
     use_threads: bool = True
 
     require_sequenced_output: bool = False
@@ -123,6 +124,8 @@ class ScanProfile:
             kw["fragment_readahead"] = self.fragment_readahead
         if self.fragment_scan_options is not None:
             kw["fragment_scan_options"] = self.fragment_scan_options
+        if self.cache_metadata:
+            kw["cache_metadata"] = True
         return kw
 
     def scan_node_kwargs(self) -> dict[str, object]:
@@ -185,6 +188,7 @@ class RuntimeProfile:
                 batch_readahead=scan.batch_readahead,
                 fragment_readahead=scan.fragment_readahead,
                 fragment_scan_options=scan.fragment_scan_options,
+                cache_metadata=scan.cache_metadata,
                 use_threads=scan.use_threads,
                 require_sequenced_output=True,
                 implicit_ordering=True,

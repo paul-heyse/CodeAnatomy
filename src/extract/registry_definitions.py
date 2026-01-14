@@ -6,14 +6,14 @@ from collections.abc import Mapping, Sequence
 from functools import cache
 
 from arrowdsl.core.context import OrderingKey
-from arrowdsl.spec.tables.extract import (
+from extract.registry_template_specs import DATASET_TEMPLATE_SPECS
+from extract.registry_templates import expand_dataset_templates
+from extract.spec_tables import (
     ExtractDatasetRowSpec,
     ExtractDerivedIdSpec,
     dataset_rows_from_table,
     extract_dataset_table_from_rows,
 )
-from extract.registry_template_specs import DATASET_TEMPLATE_SPECS
-from extract.registry_templates import expand_dataset_templates
 from relspec.rules.definitions import ExtractPayload, RuleDefinition, RuleStage
 from relspec.rules.validation import validate_rule_definitions
 

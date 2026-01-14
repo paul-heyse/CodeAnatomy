@@ -143,7 +143,7 @@ class QuerySpec:
         plan: Plan,
         *,
         ctx: ExecutionContext,
-        scan_provenance: Sequence[str] = (),
+        scan_provenance: Sequence[str] | None = None,
     ) -> Plan:
         """Apply filters and projections to a plan.
 
@@ -155,7 +155,20 @@ class QuerySpec:
         predicate = self.predicate_expression()
         if predicate is not None:
             plan = plan.filter(predicate, ctx=ctx)
+        scan_provenance = (
+            ctx.runtime.scan.scan_provenance_columns if scan_provenance is None else scan_provenance
+        )
         cols = self.scan_columns(provenance=ctx.provenance, scan_provenance=scan_provenance)
+        available = set(plan.schema(ctx=ctx).names)
+        if isinstance(cols, Mapping):
+            derived_names = set(self.projection.derived)
+            cols = {
+                name: expr
+                for name, expr in cols.items()
+                if name in available or name in derived_names
+            }
+        else:
+            cols = [name for name in cols if name in available]
         if isinstance(cols, Mapping):
             names = list(cols.keys())
             expressions = list(cols.values())

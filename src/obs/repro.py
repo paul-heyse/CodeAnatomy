@@ -250,11 +250,24 @@ def serialize_compiled_outputs(compiled: Mapping[str, CompiledOutput]) -> JsonDi
                     "inputs": [ref.name for ref in rule.inputs],
                 }
             )
-        outputs[key] = {
+        telemetry = {
+            name: {
+                "fragment_count": entry.fragment_count,
+                "row_group_count": entry.row_group_count,
+                "count_rows": entry.count_rows,
+                "estimated_rows": entry.estimated_rows,
+                "file_hints": list(entry.file_hints),
+            }
+            for name, entry in obj.telemetry.items()
+        }
+        payload: JsonDict = {
             "output_dataset": obj.output_dataset,
             "contract_name": obj.contract_name,
             "contributors": contributors,
         }
+        if telemetry:
+            payload["telemetry"] = telemetry
+        outputs[key] = payload
     return {
         "outputs": outputs,
         "produced_output_keys": sorted(compiled.keys()),

@@ -258,6 +258,17 @@ def ensure_udf(spec: UdfSpec) -> str:
     return default_registry().ensure(spec)
 
 
+def ensure_udfs(specs: Sequence[UdfSpec]) -> tuple[str, ...]:
+    """Ensure a sequence of UDFs are registered in the default registry.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Registered UDF names in input order.
+    """
+    return tuple(ensure_udf(spec) for spec in specs)
+
+
 def resolve_kernel(
     name: str,
     *,
@@ -423,6 +434,7 @@ __all__ = [
     "ensure_json_udf",
     "ensure_position_encoding_udf",
     "ensure_udf",
+    "ensure_udfs",
     "filter_non_empty_utf8",
     "invalid_id_expr",
     "null_if_empty_or_zero",

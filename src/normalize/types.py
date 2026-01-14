@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
@@ -280,7 +282,7 @@ def _plan_for_output(
     if plan is None:
         msg = f"Normalize rule output {output_name!r} is not available."
         raise ValueError(msg)
-    return plan
+    return cast("Plan", plan)
 
 
 __all__ = [

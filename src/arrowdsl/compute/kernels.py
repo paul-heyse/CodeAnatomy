@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import functools
+import importlib
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Literal, cast
 
 import pyarrow as pa
@@ -41,6 +44,141 @@ class ChunkPolicy:
 
 
 _NUMERIC_REGEX = r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$"
+
+type KernelFn = Callable[..., TableLike]
+
+
+class KernelLane(StrEnum):
+    """Execution lane for a kernel."""
+
+    BUILTIN = "builtin"
+    DF_UDF = "df_udf"
+    ARROW_FALLBACK = "arrow_fallback"
+
+
+@dataclass(frozen=True)
+class KernelCapability:
+    """Capability metadata for kernel selection."""
+
+    name: str
+    lane: KernelLane
+    volatility: Literal["stable", "volatile", "immutable"] = "stable"
+    requires_ordering: bool = False
+
+    def with_lane(self, lane: KernelLane) -> KernelCapability:
+        """Return a copy with the lane updated.
+
+        Returns
+        -------
+        KernelCapability
+            Capability metadata updated with the provided lane.
+        """
+        return KernelCapability(
+            name=self.name,
+            lane=lane,
+            volatility=self.volatility,
+            requires_ordering=self.requires_ordering,
+        )
+
+
+_KERNEL_CAPABILITIES: dict[str, KernelCapability] = {
+    "interval_align": KernelCapability(
+        name="interval_align",
+        lane=KernelLane.DF_UDF,
+        volatility="stable",
+        requires_ordering=True,
+    ),
+    "explode_list": KernelCapability(
+        name="explode_list",
+        lane=KernelLane.BUILTIN,
+        volatility="stable",
+        requires_ordering=False,
+    ),
+    "dedupe": KernelCapability(
+        name="dedupe",
+        lane=KernelLane.BUILTIN,
+        volatility="stable",
+        requires_ordering=True,
+    ),
+    "winner_select": KernelCapability(
+        name="winner_select",
+        lane=KernelLane.ARROW_FALLBACK,
+        volatility="stable",
+        requires_ordering=True,
+    ),
+}
+
+
+def kernel_registry() -> dict[str, KernelFn]:
+    """Return the Arrow kernel registry.
+
+    Returns
+    -------
+    dict[str, KernelFn]
+        Mapping of kernel names to Arrow implementations.
+    """
+    return {
+        "interval_align": interval_align_table,
+        "explode_list": explode_list_column,
+        "dedupe": apply_dedupe,
+        "winner_select": winner_select_by_score,
+    }
+
+
+def kernel_capability(name: str, *, ctx: ExecutionContext) -> KernelCapability:
+    """Return the capability metadata for a kernel given a runtime context.
+
+    Returns
+    -------
+    KernelCapability
+        Capability metadata for the requested kernel.
+
+    Raises
+    ------
+    KeyError
+        Raised when the kernel name is unknown.
+    """
+    capability = _KERNEL_CAPABILITIES.get(name)
+    if capability is None:
+        msg = f"Unknown kernel capability: {name!r}."
+        raise KeyError(msg)
+    if ctx.runtime.datafusion is None:
+        return capability.with_lane(KernelLane.ARROW_FALLBACK)
+    if _datafusion_kernel(name) is None:
+        return capability.with_lane(KernelLane.ARROW_FALLBACK)
+    return capability
+
+
+def resolve_kernel(name: str, *, ctx: ExecutionContext) -> KernelFn:
+    """Return the best available kernel implementation for the runtime.
+
+    Returns
+    -------
+    KernelFn
+        Kernel implementation for the requested name.
+
+    Raises
+    ------
+    KeyError
+        Raised when the kernel name is unknown.
+    """
+    if ctx.runtime.datafusion is not None:
+        datafusion_kernel = _datafusion_kernel(name)
+        if datafusion_kernel is not None:
+            return functools.partial(datafusion_kernel, _ctx=ctx)
+    registry = kernel_registry()
+    if name not in registry:
+        msg = f"Unknown kernel name: {name!r}."
+        raise KeyError(msg)
+    return registry[name]
+
+
+def _datafusion_kernel(name: str) -> KernelFn | None:
+    module = importlib.import_module("datafusion_engine.kernels")
+    registry = getattr(module, "datafusion_kernel_registry", None)
+    if not callable(registry):
+        return None
+    return cast("dict[str, KernelFn]", registry()).get(name)
 
 
 @dataclass(frozen=True)

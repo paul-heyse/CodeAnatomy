@@ -257,5 +257,6 @@ class RelspecSnapshots:
     rule_table: pa.Table
     template_table: pa.Table
     template_diagnostics: pa.Table
+    rule_diagnostics: pa.Table
     contracts: ContractCatalog
     compiled_outputs: dict[str, CompiledOutput]

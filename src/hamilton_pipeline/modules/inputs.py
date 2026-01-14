@@ -5,8 +5,10 @@ from __future__ import annotations
 from typing import Literal
 
 from hamilton.function_modifiers import tag
+from ibis.backends import BaseBackend
 
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
+from config import AdapterMode
 from core_types import JsonDict
 from extract.scip_extract import SCIPParseOptions
 from hamilton_pipeline.pipeline_types import (
@@ -18,6 +20,7 @@ from hamilton_pipeline.pipeline_types import (
     ScipIndexConfig,
     TreeSitterConfig,
 )
+from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 
 
@@ -43,6 +46,56 @@ def ibis_backend_config() -> IbisBackendConfig:
         Backend configuration for Ibis execution.
     """
     return IbisBackendConfig()
+
+
+@tag(layer="inputs", kind="runtime")
+def ibis_backend(ibis_backend_config: IbisBackendConfig) -> BaseBackend:
+    """Return a configured Ibis backend for pipeline execution.
+
+    Returns
+    -------
+    ibis.backends.BaseBackend
+        Backend instance for Ibis execution.
+    """
+    return build_backend(ibis_backend_config)
+
+
+@tag(layer="inputs", kind="runtime")
+def streaming_table_provider() -> object | None:
+    """Return an optional streaming table provider (placeholder).
+
+    This hook is reserved for Rust-backed StreamingTable providers.
+
+    Returns
+    -------
+    object | None
+        Provider instance or None when disabled.
+    """
+    return None
+
+
+@tag(layer="inputs", kind="runtime")
+def adapter_mode() -> AdapterMode:
+    """Return the adapter mode flags for plan execution.
+
+    Returns
+    -------
+    AdapterMode
+        Adapter mode configuration bundle.
+    """
+    return AdapterMode()
+
+
+@tag(layer="inputs", kind="object")
+def relspec_param_values() -> JsonDict:
+    """Return parameter values for relspec execution.
+
+    Returns
+    -------
+    JsonDict
+        Mapping of parameter names to values.
+    """
+    return {}
 
 
 @tag(layer="inputs", kind="scalar")

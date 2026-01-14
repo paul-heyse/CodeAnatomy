@@ -12,6 +12,14 @@ from ibis_engine.config import IbisBackendConfig
 
 
 @dataclass(frozen=True)
+class AdapterMode:
+    """Adapter selection flags for plan execution."""
+
+    use_ibis_bridge: bool = True
+    use_datafusion_bridge: bool = False
+
+
+@dataclass(frozen=True)
 class CodeIntelCPGConfig:
     """Define top-level configuration for building CPG artifacts."""
 
@@ -23,6 +31,7 @@ class CodeIntelCPGConfig:
     provenance: bool = False
 
     mode: Literal["strict", "tolerant"] = "tolerant"
+    adapter_mode: AdapterMode = field(default_factory=AdapterMode)
 
     def resolved_runtime(self) -> RuntimeProfile:
         """Resolve the runtime profile with overrides applied.
@@ -126,3 +135,12 @@ class IbisExecutionConfig:
     """Configuration for Ibis-backed execution."""
 
     backend: IbisBackendConfig = field(default_factory=IbisBackendConfig)
+
+
+ARROWDSL_PLAN_LANE_DECOMMISSION_CHECKLIST: tuple[str, ...] = (
+    "All plan builders have Ibis bridge coverage.",
+    "Ibis bridge enabled across pipeline entry points.",
+    "DataFusion registry bridge validated for dataset formats.",
+    "Kernel fallbacks verified against Arrow outputs.",
+    "Legacy ArrowDSL plan helpers removed or deprecated.",
+)

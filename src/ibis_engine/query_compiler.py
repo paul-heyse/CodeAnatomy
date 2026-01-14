@@ -8,7 +8,12 @@ from typing import cast
 
 from ibis.expr.types import BooleanValue, Table, Value
 
-from ibis_engine.expr_compiler import ExprIRLike, IbisExprRegistry, expr_ir_to_ibis
+from ibis_engine.expr_compiler import (
+    ExprIRLike,
+    IbisExprRegistry,
+    default_expr_registry,
+    expr_ir_to_ibis,
+)
 
 
 @dataclass(frozen=True)
@@ -52,7 +57,7 @@ def apply_query_spec(
     ibis.expr.types.Table
         Ibis table with filters and projections applied.
     """
-    registry = registry or IbisExprRegistry()
+    registry = registry or default_expr_registry()
     cols: list[Value] = [table[name] for name in spec.projection.base if name in table.columns]
     for name, expr in spec.projection.derived.items():
         cols.append(expr_ir_to_ibis(expr, table, registry=registry).name(name))
@@ -82,7 +87,7 @@ def apply_projection(
         Ibis table with projection applied.
     """
     derived = derived or {}
-    registry = registry or IbisExprRegistry()
+    registry = registry or default_expr_registry()
     cols: list[Value] = [table[name] for name in base if name in table.columns]
     for name, expr in derived.items():
         cols.append(expr_ir_to_ibis(expr, table, registry=registry).name(name))

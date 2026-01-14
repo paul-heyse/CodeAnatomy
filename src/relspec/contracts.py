@@ -76,10 +76,23 @@ def relation_output_contract() -> Contract:
     return relation_output_spec().contract()
 
 
+def relation_output_ddl(*, dialect: str | None = None) -> str:
+    """Return a CREATE TABLE statement for the relation output contract.
+
+    Returns
+    -------
+    str
+        CREATE TABLE statement for contract auditing.
+    """
+    spec = relation_output_spec()
+    return spec.table_spec.to_create_table_sql(dialect=dialect)
+
+
 __all__ = [
     "RELATION_OUTPUT_NAME",
     "RELATION_OUTPUT_SCHEMA",
     "relation_output_contract",
+    "relation_output_ddl",
     "relation_output_schema",
     "relation_output_spec",
 ]

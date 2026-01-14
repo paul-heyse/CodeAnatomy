@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.plan.catalog import PlanDeriver
+from arrowdsl.plan.query import ProjectionSpec, QuerySpec
+from arrowdsl.spec.expr_ir import ExprIR
+from ibis_engine.query_compiler import IbisQuerySpec
 from normalize.plan_builders import resolve_plan_builder
 from normalize.rule_defaults import apply_rule_defaults
 from normalize.rule_model import (
@@ -20,11 +22,11 @@ from normalize.rule_model import NormalizeRule
 from relspec.rules.compiler import RuleHandler
 from relspec.rules.definitions import NormalizePayload
 from relspec.rules.policies import PolicyRegistry
-from relspec.rules.spec_tables import query_from_ops
+from relspec.rules.rel_ops import query_spec_from_rel_ops
 
 if TYPE_CHECKING:
-    from arrowdsl.plan.query import QuerySpec
     from relspec.rules.definitions import EvidenceOutput, EvidenceSpec, RuleDefinition, RuleDomain
+    from relspec.rules.rel_ops import RelOpT
 
 
 @dataclass(frozen=True)
@@ -43,7 +45,7 @@ class NormalizeRuleHandler(RuleHandler):
             Normalize rule derived from the definition.
         """
         payload = rule.payload
-        query = _normalize_query(payload, pipeline_ops=rule.pipeline_ops)
+        query = _normalize_query(payload, rel_ops=rule.rel_ops)
         derive = _normalize_derive(payload)
         base = NormalizeRule(
             name=rule.name,
@@ -66,14 +68,36 @@ class NormalizeRuleHandler(RuleHandler):
         return apply_rule_defaults(base)
 
 
-def _normalize_query(
-    payload: object | None, *, pipeline_ops: tuple[Mapping[str, object], ...]
-) -> QuerySpec | None:
+def _normalize_query(payload: object | None, *, rel_ops: tuple[RelOpT, ...]) -> QuerySpec | None:
     if isinstance(payload, NormalizePayload) and payload.query is not None:
-        return payload.query
-    if pipeline_ops:
-        return query_from_ops(pipeline_ops)
+        return _query_spec_for_plan(payload.query)
+    if rel_ops:
+        query = query_spec_from_rel_ops(rel_ops)
+        return _query_spec_for_plan(query) if query is not None else None
     return None
+
+
+def _query_spec_for_plan(spec: IbisQuerySpec) -> QuerySpec:
+    projection = ProjectionSpec(
+        base=spec.projection.base,
+        derived={
+            name: cast("ExprIR", expr).to_expr_spec()
+            for name, expr in spec.projection.derived.items()
+        },
+    )
+    predicate = (
+        cast("ExprIR", spec.predicate).to_expr_spec() if spec.predicate is not None else None
+    )
+    pushdown = (
+        cast("ExprIR", spec.pushdown_predicate).to_expr_spec()
+        if spec.pushdown_predicate is not None
+        else None
+    )
+    return QuerySpec(
+        projection=projection,
+        predicate=predicate,
+        pushdown_predicate=pushdown,
+    )
 
 
 def _normalize_derive(payload: object | None) -> PlanDeriver | None:

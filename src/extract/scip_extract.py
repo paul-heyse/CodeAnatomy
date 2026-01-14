@@ -1057,12 +1057,32 @@ class ScipExtractOptions:
     profile: str = "default"
 
 
+@dataclass(frozen=True)
+class ScipExtractContext:
+    """Execution context inputs for SCIP extraction."""
+
+    scip_index_path: str | None
+    repo_root: str | None
+    ctx: ExecutionContext | None = None
+    profile: str = "default"
+
+    def ensure_ctx(self) -> ExecutionContext:
+        """Return the effective execution context.
+
+        Returns
+        -------
+        ExecutionContext
+            Provided context or a profile-derived context when missing.
+        """
+        if self.ctx is not None:
+            return self.ctx
+        return execution_context_factory(self.profile)
+
+
 @overload
 def extract_scip_tables(
     *,
-    scip_index_path: str | None,
-    repo_root: str | None,
-    ctx: ExecutionContext | None = None,
+    context: ScipExtractContext,
     options: ScipExtractOptions | None = None,
     prefer_reader: Literal[False] = False,
 ) -> Mapping[str, TableLike]: ...
@@ -1071,9 +1091,7 @@ def extract_scip_tables(
 @overload
 def extract_scip_tables(
     *,
-    scip_index_path: str | None,
-    repo_root: str | None,
-    ctx: ExecutionContext | None = None,
+    context: ScipExtractContext,
     options: ScipExtractOptions | None = None,
     prefer_reader: Literal[True],
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]: ...
@@ -1081,9 +1099,7 @@ def extract_scip_tables(
 
 def extract_scip_tables(
     *,
-    scip_index_path: str | None,
-    repo_root: str | None,
-    ctx: ExecutionContext | None = None,
+    context: ScipExtractContext,
     options: ScipExtractOptions | None = None,
     prefer_reader: bool = False,
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]:
@@ -1091,12 +1107,8 @@ def extract_scip_tables(
 
     Parameters
     ----------
-    scip_index_path:
-        Path to the index.scip file or ``None``.
-    repo_root:
-        Optional repository root used for resolving relative paths.
-    ctx:
-        Execution context for plan execution.
+    context:
+        Execution context bundle for SCIP extraction.
     options:
         Extraction options including parsing and evidence settings.
     prefer_reader:
@@ -1108,10 +1120,11 @@ def extract_scip_tables(
         Extracted SCIP outputs keyed by output name.
     """
     options = options or ScipExtractOptions()
-    profile = options.profile
     normalized_opts = normalize_options("scip", options.parse_opts, SCIPParseOptions)
     evidence_plan = options.evidence_plan
-    exec_ctx = ctx or execution_context_factory(profile)
+    exec_ctx = context.ensure_ctx()
+    scip_index_path = context.scip_index_path
+    repo_root = context.repo_root
     metadata_specs = _scip_metadata_specs(normalized_opts)
     if scip_index_path is None:
         plans = {

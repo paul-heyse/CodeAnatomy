@@ -151,6 +151,8 @@ class ManifestData:
     relationship_output_lineage: Mapping[str, Sequence[str]] | None = None
     normalize_output_lineage: Mapping[str, Sequence[str]] | None = None
     relspec_scan_telemetry: Mapping[str, Mapping[str, ScanTelemetry]] | None = None
+    datafusion_settings: Sequence[Mapping[str, str]] | None = None
+    dataset_registry_snapshot: Sequence[Mapping[str, object]] | None = None
     notes: JsonDict | None = None
 
 
@@ -432,6 +434,10 @@ def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
     notes: JsonDict = dict(data.notes) if data.notes else {}
     if data.relspec_scan_telemetry:
         notes["relspec_scan_telemetry"] = _scan_telemetry_payload(data.relspec_scan_telemetry)
+    if data.datafusion_settings:
+        notes["datafusion_settings"] = list(data.datafusion_settings)
+    if data.dataset_registry_snapshot:
+        notes["dataset_registry_snapshot"] = list(data.dataset_registry_snapshot)
 
     return Manifest(
         manifest_version=1,

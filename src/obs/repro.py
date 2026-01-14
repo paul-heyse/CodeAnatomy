@@ -317,6 +317,7 @@ class RunBundleContext:
     rule_table: pa.Table | None = None
     template_table: pa.Table | None = None
     template_diagnostics: pa.Table | None = None
+    rule_diagnostics: pa.Table | None = None
     relationship_contracts: ContractCatalog | None = None
     compiled_relationship_outputs: Mapping[str, CompiledOutput] | None = None
 
@@ -382,6 +383,10 @@ def _write_relspec_snapshots(
     if context.template_diagnostics is not None:
         target = relspec_dir / "template_diagnostics.arrow"
         write_spec_table(target, context.template_diagnostics)
+        files_written.append(str(target))
+    if context.rule_diagnostics is not None:
+        target = relspec_dir / "rule_diagnostics.arrow"
+        write_spec_table(target, context.rule_diagnostics)
         files_written.append(str(target))
     if context.relationship_contracts is not None:
         snap = serialize_contract_catalog(context.relationship_contracts)
@@ -473,6 +478,7 @@ def write_run_bundle(
         relspec/rules.arrow
         relspec/templates.arrow
         relspec/template_diagnostics.arrow
+        relspec/rule_diagnostics.arrow
         relspec/contracts.json
         relspec/compiled_outputs.json
         schemas/*.schema.json

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, cast
 
 import pyarrow as pa
@@ -23,6 +23,8 @@ from arrowdsl.schema.metadata import (
     ordering_metadata_spec,
 )
 from arrowdsl.schema.schema import SchemaMetadataSpec
+from config import AdapterMode
+from ibis_engine.plan import IbisPlan
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,16 @@ class PlanRunResult:
 
     value: TableLike | RecordBatchReaderLike
     kind: Literal["reader", "table"]
+
+
+@dataclass(frozen=True)
+class AdapterRunOptions:
+    """Options for running plan adapters."""
+
+    adapter_mode: AdapterMode | None = None
+    prefer_reader: bool = False
+    metadata_spec: SchemaMetadataSpec | None = None
+    attach_ordering_metadata: bool = True
 
 
 def _parse_ordering_keys(schema: SchemaLike) -> list[OrderingKey]:
@@ -174,6 +186,89 @@ def run_plan(
     )
 
 
+def _run_ibis_plan(
+    plan: IbisPlan,
+    *,
+    ctx: ExecutionContext,
+    prefer_reader: bool = False,
+    metadata_spec: SchemaMetadataSpec | None = None,
+    attach_ordering_metadata: bool = True,
+) -> PlanRunResult:
+    if prefer_reader and ctx.determinism != DeterminismTier.CANONICAL:
+        reader = plan.to_reader()
+        combined = metadata_spec
+        if attach_ordering_metadata:
+            schema_for_ordering = (
+                metadata_spec.apply(reader.schema) if metadata_spec is not None else reader.schema
+            )
+            ordering_spec = _ordering_metadata_for_plan(
+                plan.ordering,
+                schema=schema_for_ordering,
+            )
+            combined = merge_metadata_specs(metadata_spec, ordering_spec)
+        return PlanRunResult(
+            value=_apply_metadata_spec(reader, metadata_spec=combined),
+            kind="reader",
+        )
+    table = plan.to_table()
+    table, canonical_keys = _apply_canonical_sort(table, ctx=ctx)
+    combined = metadata_spec
+    if attach_ordering_metadata:
+        schema_for_ordering = (
+            metadata_spec.apply(table.schema) if metadata_spec is not None else table.schema
+        )
+        ordering_spec = _ordering_metadata_for_plan(
+            plan.ordering,
+            schema=schema_for_ordering,
+            canonical_keys=canonical_keys,
+        )
+        combined = merge_metadata_specs(metadata_spec, ordering_spec)
+    return PlanRunResult(
+        value=_apply_metadata_spec(table, metadata_spec=combined),
+        kind="table",
+    )
+
+
+def run_plan_adapter(
+    plan: Plan | IbisPlan,
+    *,
+    ctx: ExecutionContext,
+    options: AdapterRunOptions | None = None,
+) -> PlanRunResult:
+    """Materialize a plan or Ibis plan with adapter gating.
+
+    Returns
+    -------
+    PlanRunResult
+        Materialized plan result.
+
+    Raises
+    ------
+    ValueError
+        Raised when the Ibis adapter is disabled for an Ibis plan.
+    """
+    options = options or AdapterRunOptions()
+    adapter_mode = options.adapter_mode or AdapterMode()
+    if isinstance(plan, IbisPlan):
+        if not adapter_mode.use_ibis_bridge:
+            msg = "AdapterMode.use_ibis_bridge is disabled for IbisPlan execution."
+            raise ValueError(msg)
+        return _run_ibis_plan(
+            plan,
+            ctx=ctx,
+            prefer_reader=options.prefer_reader,
+            metadata_spec=options.metadata_spec,
+            attach_ordering_metadata=options.attach_ordering_metadata,
+        )
+    return run_plan(
+        plan,
+        ctx=ctx,
+        prefer_reader=options.prefer_reader,
+        metadata_spec=options.metadata_spec,
+        attach_ordering_metadata=options.attach_ordering_metadata,
+    )
+
+
 def run_plan_streamable(
     plan: Plan,
     *,
@@ -226,6 +321,34 @@ def run_plan_bundle(
     return outputs
 
 
+def run_plan_bundle_adapter(
+    plans: Mapping[str, Plan | IbisPlan],
+    *,
+    ctx: ExecutionContext,
+    options: AdapterRunOptions | None = None,
+    metadata_specs: Mapping[str, SchemaMetadataSpec] | None = None,
+) -> dict[str, TableLike | RecordBatchReaderLike]:
+    """Finalize a bundle of plans or Ibis plans.
+
+    Returns
+    -------
+    dict[str, TableLike | RecordBatchReaderLike]
+        Finalized outputs keyed by dataset name.
+    """
+    options = options or AdapterRunOptions()
+    outputs: dict[str, TableLike | RecordBatchReaderLike] = {}
+    for name, plan in plans.items():
+        spec = metadata_specs.get(name) if metadata_specs is not None else None
+        run_options = replace(options, metadata_spec=spec)
+        result = run_plan_adapter(
+            plan,
+            ctx=ctx,
+            options=run_options,
+        )
+        outputs[name] = result.value
+    return outputs
+
+
 def materialize_plan(
     plan: Plan,
     *,
@@ -255,6 +378,29 @@ def materialize_plan(
     if isinstance(result.value, pa.RecordBatchReader):
         msg = "Expected table result from run_plan."
         raise TypeError(msg)
+    return cast("TableLike", result.value)
+
+
+def materialize_plan_adapter(
+    plan: Plan | IbisPlan,
+    *,
+    ctx: ExecutionContext,
+    options: AdapterRunOptions | None = None,
+) -> TableLike:
+    """Materialize a plan or Ibis plan as a table.
+
+    Returns
+    -------
+    TableLike
+        Materialized table output.
+    """
+    options = options or AdapterRunOptions()
+    run_options = replace(options, prefer_reader=False)
+    result = run_plan_adapter(
+        plan,
+        ctx=ctx,
+        options=run_options,
+    )
     return cast("TableLike", result.value)
 
 

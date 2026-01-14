@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from arrowdsl.compute.expr_core import ScalarValue
-from arrowdsl.plan.catalog import PlanDeriver
 from arrowdsl.plan.ops import SortKey
 from arrowdsl.plan.query import QuerySpec
+from normalize.catalog import PlanDeriver
 
 
 @dataclass(frozen=True)

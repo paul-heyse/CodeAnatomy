@@ -7,9 +7,17 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import pyarrow as pa
+from sqlglot import ErrorLevel
 
+from arrowdsl.compute.kernels import KernelCapability
+from arrowdsl.core.interop import SchemaLike
 from arrowdsl.spec.io import table_from_rows
 from relspec.rules.definitions import RuleDomain
+from sqlglot_tools.bridge import (
+    SqlGlotDiagnostics,
+    SqlGlotRelationDiff,
+    missing_schema_columns,
+)
 
 RuleDiagnosticSeverity = Literal["error", "warning"]
 
@@ -18,6 +26,7 @@ RULE_DIAGNOSTIC_SCHEMA = pa.schema(
         pa.field("domain", pa.string(), nullable=False),
         pa.field("template", pa.string(), nullable=True),
         pa.field("rule_name", pa.string(), nullable=True),
+        pa.field("plan_signature", pa.string(), nullable=True),
         pa.field("severity", pa.string(), nullable=False),
         pa.field("message", pa.string(), nullable=False),
         pa.field("metadata", pa.map_(pa.string(), pa.string()), nullable=True),
@@ -35,6 +44,7 @@ class RuleDiagnostic:
     rule_name: str | None
     severity: RuleDiagnosticSeverity
     message: str
+    plan_signature: str | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
 
     def to_row(self) -> dict[str, object]:
@@ -49,10 +59,44 @@ class RuleDiagnostic:
             "domain": self.domain,
             "template": self.template,
             "rule_name": self.rule_name,
+            "plan_signature": self.plan_signature,
             "severity": self.severity,
             "message": self.message,
             "metadata": dict(self.metadata) or None,
         }
+
+
+@dataclass(frozen=True)
+class MissingColumnsDiagnosticOptions:
+    """Optional metadata for missing-column diagnostics."""
+
+    template: str | None = None
+    rule_name: str | None = None
+    severity: RuleDiagnosticSeverity = "error"
+    plan_signature: str | None = None
+    schema_ddl: str | None = None
+
+
+@dataclass(frozen=True)
+class SqlGlotMetadataDiagnosticOptions:
+    """Optional metadata for SQLGlot metadata diagnostics."""
+
+    template: str | None = None
+    rule_name: str | None = None
+    severity: RuleDiagnosticSeverity = "warning"
+    plan_signature: str | None = None
+    schema_ddl: str | None = None
+    extra_metadata: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class KernelLaneDiagnosticOptions:
+    """Optional metadata for kernel lane diagnostics."""
+
+    template: str | None = None
+    rule_name: str | None = None
+    severity: RuleDiagnosticSeverity = "warning"
+    plan_signature: str | None = None
 
 
 def rule_diagnostic_table(diagnostics: Sequence[RuleDiagnostic]) -> pa.Table:
@@ -79,12 +123,144 @@ def rule_diagnostics_from_table(table: pa.Table) -> tuple[RuleDiagnostic, ...]:
             domain=_parse_domain(row.get("domain")),
             template=str(row.get("template")) if row.get("template") else None,
             rule_name=str(row.get("rule_name")) if row.get("rule_name") else None,
+            plan_signature=str(row.get("plan_signature"))
+            if row.get("plan_signature") is not None
+            else None,
             severity=_parse_severity(row.get("severity")),
             message=str(row.get("message")),
             metadata=_metadata_from_row(row.get("metadata")),
         )
         for row in table.to_pylist()
     )
+
+
+def sqlglot_missing_columns_diagnostic(
+    diagnostics: SqlGlotDiagnostics,
+    *,
+    domain: RuleDomain,
+    schema: SchemaLike,
+    options: MissingColumnsDiagnosticOptions | None = None,
+) -> RuleDiagnostic | None:
+    """Return a diagnostic when SQLGlot references missing columns.
+
+    Returns
+    -------
+    RuleDiagnostic | None
+        Diagnostic describing missing columns, or ``None`` when none are missing.
+    """
+    missing = missing_schema_columns(diagnostics.columns, schema=schema.names)
+    if not missing:
+        return None
+    options = options or MissingColumnsDiagnosticOptions()
+    metadata = {"missing_columns": ",".join(missing)}
+    if diagnostics.tables:
+        metadata["tables"] = ",".join(diagnostics.tables)
+    if options.schema_ddl:
+        metadata["schema_ddl"] = options.schema_ddl
+    return RuleDiagnostic(
+        domain=domain,
+        template=options.template,
+        rule_name=options.rule_name,
+        severity=options.severity,
+        message="SQLGlot references columns not present in the schema.",
+        plan_signature=options.plan_signature,
+        metadata=metadata,
+    )
+
+
+def sqlglot_metadata_diagnostic(
+    diagnostics: SqlGlotDiagnostics,
+    *,
+    domain: RuleDomain,
+    diff: SqlGlotRelationDiff | None = None,
+    options: SqlGlotMetadataDiagnosticOptions | None = None,
+) -> RuleDiagnostic:
+    """Return a diagnostic capturing SQLGlot metadata snapshots.
+
+    Returns
+    -------
+    RuleDiagnostic
+        Diagnostic with SQLGlot metadata attached.
+    """
+    options = options or SqlGlotMetadataDiagnosticOptions()
+    metadata = _sqlglot_metadata_payload(diagnostics)
+    if options.schema_ddl:
+        metadata["schema_ddl"] = options.schema_ddl
+    if diff is not None:
+        _apply_diff_metadata(metadata, diff)
+    _apply_extra_metadata(metadata, options.extra_metadata)
+    return RuleDiagnostic(
+        domain=domain,
+        template=options.template,
+        rule_name=options.rule_name,
+        severity=options.severity,
+        message="SQLGlot metadata snapshot.",
+        plan_signature=options.plan_signature,
+        metadata=metadata,
+    )
+
+
+def kernel_lane_diagnostic(
+    capability: KernelCapability,
+    *,
+    domain: RuleDomain,
+    options: KernelLaneDiagnosticOptions | None = None,
+) -> RuleDiagnostic:
+    """Return a diagnostic capturing kernel lane selection.
+
+    Returns
+    -------
+    RuleDiagnostic
+        Diagnostic entry describing the selected kernel lane.
+    """
+    options = options or KernelLaneDiagnosticOptions()
+    metadata = {
+        "kernel": capability.name,
+        "lane": capability.lane.value,
+        "volatility": capability.volatility,
+        "ordering_required": str(capability.requires_ordering).lower(),
+    }
+    return RuleDiagnostic(
+        domain=domain,
+        template=options.template,
+        rule_name=options.rule_name,
+        severity=options.severity,
+        message="Kernel lane selection.",
+        plan_signature=options.plan_signature,
+        metadata=metadata,
+    )
+
+
+def _sqlglot_metadata_payload(diagnostics: SqlGlotDiagnostics) -> dict[str, str]:
+    opts = {"unsupported_level": ErrorLevel.RAISE}
+    metadata: dict[str, str] = {
+        "raw_sql": diagnostics.expression.sql(**opts),
+        "optimized_sql": diagnostics.optimized.sql(**opts),
+        "ast_repr": diagnostics.ast_repr,
+    }
+    _set_joined(metadata, "tables", diagnostics.tables)
+    _set_joined(metadata, "columns", diagnostics.columns)
+    _set_joined(metadata, "identifiers", diagnostics.identifiers)
+    return metadata
+
+
+def _set_joined(metadata: dict[str, str], key: str, values: Sequence[str]) -> None:
+    if values:
+        metadata[key] = ",".join(values)
+
+
+def _apply_diff_metadata(metadata: dict[str, str], diff: SqlGlotRelationDiff) -> None:
+    _set_joined(metadata, "tables_added", diff.tables_added)
+    _set_joined(metadata, "tables_removed", diff.tables_removed)
+    _set_joined(metadata, "columns_added", diff.columns_added)
+    _set_joined(metadata, "columns_removed", diff.columns_removed)
+    for key, count in diff.ast_diff.items():
+        metadata[f"ast_diff_{key}"] = str(count)
+
+
+def _apply_extra_metadata(metadata: dict[str, str], extra: Mapping[str, str]) -> None:
+    if extra:
+        metadata.update({str(key): str(value) for key, value in extra.items()})
 
 
 def _metadata_from_row(value: object | None) -> dict[str, str]:
@@ -126,8 +302,14 @@ def _parse_severity(value: object | None) -> RuleDiagnosticSeverity:
 
 __all__ = [
     "RULE_DIAGNOSTIC_SCHEMA",
+    "KernelLaneDiagnosticOptions",
+    "MissingColumnsDiagnosticOptions",
     "RuleDiagnostic",
     "RuleDiagnosticSeverity",
+    "SqlGlotMetadataDiagnosticOptions",
+    "kernel_lane_diagnostic",
     "rule_diagnostic_table",
     "rule_diagnostics_from_table",
+    "sqlglot_metadata_diagnostic",
+    "sqlglot_missing_columns_diagnostic",
 ]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Literal, cast, overload
 
 import pyarrow as pa
@@ -25,7 +26,7 @@ from arrowdsl.finalize.finalize import Contract
 from arrowdsl.plan.joins import code_unit_meta_config, left_join, path_meta_config
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
-from arrowdsl.plan.runner import PlanRunResult, run_plan
+from arrowdsl.plan.runner import AdapterRunOptions, PlanRunResult, run_plan, run_plan_adapter
 from arrowdsl.plan.scan_io import DatasetSource, PlanSource, plan_from_source
 from arrowdsl.schema.ops import (
     align_plan,
@@ -36,8 +37,21 @@ from arrowdsl.schema.ops import (
 )
 from arrowdsl.schema.schema import CastErrorPolicy, align_to_schema, empty_table
 from arrowdsl.schema.structs import flatten_struct_field
+from config import AdapterMode
 from ibis_engine.expr_compiler import IbisExprRegistry
+from ibis_engine.plan import IbisPlan
+from ibis_engine.query_bridge import QueryBridgeResult, queryspec_to_ibis
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
+
+
+@dataclass(frozen=True)
+class FinalizePlanAdapterOptions:
+    """Options for finalizing plan adapters."""
+
+    adapter_mode: AdapterMode | None = None
+    prefer_reader: bool = False
+    schema: SchemaLike | None = None
+    keep_extra_columns: bool = False
 
 
 def query_for_schema(schema: SchemaLike) -> QuerySpec:
@@ -227,16 +241,28 @@ def plan_source(
 def apply_query_spec_ibis(
     table: IbisTable,
     *,
-    spec: IbisQuerySpec,
+    spec: IbisQuerySpec | QuerySpec | QueryBridgeResult,
     registry: IbisExprRegistry | None = None,
 ) -> IbisTable:
-    """Apply an Ibis query spec to a table expression.
+    """Apply a query spec to a table expression.
 
     Returns
     -------
     ibis.expr.types.Table
         Ibis table with projections and filters applied.
+
+    Raises
+    ------
+    ValueError
+        Raised when kernel-lane fallbacks are required.
     """
+    if isinstance(spec, QuerySpec):
+        spec = queryspec_to_ibis(spec)
+    if isinstance(spec, QueryBridgeResult):
+        if spec.has_kernel_fallback():
+            msg = "QuerySpec requires kernel-lane fallback; apply after materialization."
+            raise ValueError(msg)
+        return apply_query_spec(table, spec=spec.ibis_spec, registry=registry)
     return apply_query_spec(table, spec=spec, registry=registry)
 
 
@@ -415,6 +441,47 @@ def finalize_plan_result(
     return run_plan(plan, ctx=ctx, prefer_reader=prefer_reader)
 
 
+def finalize_plan_result_adapter(
+    plan: Plan | IbisPlan,
+    *,
+    ctx: ExecutionContext,
+    options: FinalizePlanAdapterOptions | None = None,
+) -> PlanRunResult:
+    """Return a reader or table for Plan/IbisPlan plus metadata.
+
+    Returns
+    -------
+    PlanRunResult
+        Plan output and the materialization kind.
+    """
+    options = options or FinalizePlanAdapterOptions()
+    if isinstance(plan, IbisPlan):
+        if options.schema is not None:
+            aligned = align_table_to_schema(
+                plan.to_table(),
+                schema=options.schema,
+                safe_cast=ctx.safe_cast,
+                keep_extra_columns=options.keep_extra_columns,
+                on_error="unsafe" if ctx.safe_cast else "raise",
+            )
+            return PlanRunResult(value=aligned, kind="table")
+        return run_plan_adapter(
+            plan,
+            ctx=ctx,
+            options=AdapterRunOptions(
+                adapter_mode=options.adapter_mode,
+                prefer_reader=options.prefer_reader,
+            ),
+        )
+    return finalize_plan_result(
+        plan,
+        ctx=ctx,
+        prefer_reader=options.prefer_reader,
+        schema=options.schema,
+        keep_extra_columns=options.keep_extra_columns,
+    )
+
+
 @overload
 def finalize_plan(
     plan: Plan,
@@ -458,6 +525,31 @@ def finalize_plan(
         prefer_reader=prefer_reader,
         schema=schema,
         keep_extra_columns=keep_extra_columns,
+    )
+    value = result.value
+    if isinstance(value, pa.RecordBatchReader):
+        return value
+    table = cast("TableLike", value)
+    return table.unify_dictionaries()
+
+
+def finalize_plan_adapter(
+    plan: Plan | IbisPlan,
+    *,
+    ctx: ExecutionContext,
+    options: FinalizePlanAdapterOptions | None = None,
+) -> TableLike | RecordBatchReaderLike:
+    """Return a reader when possible, otherwise materialize the plan.
+
+    Returns
+    -------
+    TableLike | RecordBatchReaderLike
+        Reader when allowed, otherwise a table.
+    """
+    result = finalize_plan_result_adapter(
+        plan,
+        ctx=ctx,
+        options=options,
     )
     value = result.value
     if isinstance(value, pa.RecordBatchReader):
@@ -528,6 +620,7 @@ def assert_schema_metadata(table: TableLike, *, schema: SchemaLike) -> None:
 
 
 __all__ = [
+    "FinalizePlanAdapterOptions",
     "PlanSource",
     "align_plan",
     "align_table_to_schema",
@@ -545,7 +638,9 @@ __all__ = [
     "ensure_plan",
     "finalize_context_for_plan",
     "finalize_plan",
+    "finalize_plan_adapter",
     "finalize_plan_result",
+    "finalize_plan_result_adapter",
     "flatten_struct_field",
     "path_meta_join",
     "plan_source",

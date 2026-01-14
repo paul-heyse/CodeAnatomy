@@ -6,6 +6,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from typing import Literal, cast
 
+import ibis
+
 import arrowdsl.core.interop as pa
 from arrowdsl.compute.expr_core import ExprSpec
 from arrowdsl.core.interop import DataTypeLike, FieldLike, SchemaLike
@@ -73,6 +75,56 @@ def _field_metadata(metadata: dict[str, str]) -> dict[bytes, bytes]:
         Encoded metadata mapping.
     """
     return {str(k).encode("utf-8"): str(v).encode("utf-8") for k, v in metadata.items()}
+
+
+_SIMPLE_IBIS_TYPES: tuple[tuple[Callable[[pa.DataType], bool], str], ...] = (
+    (pa.types.is_boolean, "boolean"),
+    (pa.types.is_int8, "int8"),
+    (pa.types.is_int16, "int16"),
+    (pa.types.is_int32, "int32"),
+    (pa.types.is_int64, "int64"),
+    (pa.types.is_uint8, "uint8"),
+    (pa.types.is_uint16, "uint16"),
+    (pa.types.is_uint32, "uint32"),
+    (pa.types.is_uint64, "uint64"),
+    (pa.types.is_float16, "float16"),
+    (pa.types.is_float32, "float32"),
+    (pa.types.is_float64, "float64"),
+    (lambda dt: pa.types.is_string(dt) or pa.types.is_large_string(dt), "string"),
+    (lambda dt: pa.types.is_binary(dt) or pa.types.is_large_binary(dt), "binary"),
+    (lambda dt: pa.types.is_date32(dt) or pa.types.is_date64(dt), "date"),
+)
+
+
+def _arrow_dtype_to_ibis(dtype: pa.DataType) -> str:
+    for check, name in _SIMPLE_IBIS_TYPES:
+        if check(dtype):
+            return name
+    if pa.types.is_timestamp(dtype):
+        return _timestamp_to_ibis(dtype)
+    if pa.types.is_list(dtype) or pa.types.is_large_list(dtype):
+        return _list_to_ibis(dtype)
+    if pa.types.is_struct(dtype):
+        return _struct_to_ibis(dtype)
+    if pa.types.is_dictionary(dtype):
+        return _arrow_dtype_to_ibis(dtype.value_type)
+    msg = f"Unsupported Arrow dtype for Ibis schema: {dtype}"
+    raise ValueError(msg)
+
+
+def _timestamp_to_ibis(dtype: pa.DataType) -> str:
+    unit = dtype.unit
+    tz = f", tz='{dtype.tz}'" if dtype.tz else ""
+    return f"timestamp('{unit}'{tz})"
+
+
+def _list_to_ibis(dtype: pa.DataType) -> str:
+    return f"array<{_arrow_dtype_to_ibis(dtype.value_type)}>"
+
+
+def _struct_to_ibis(dtype: pa.DataType) -> str:
+    fields = ", ".join(f"{field.name}: {_arrow_dtype_to_ibis(field.type)}" for field in dtype)
+    return f"struct<{fields}>"
 
 
 @dataclass(frozen=True)
@@ -203,6 +255,44 @@ class TableSchemaSpec:
         schema = pa.schema([field.to_arrow_field() for field in self.fields])
         meta = schema_metadata_for_spec(self)
         return SchemaMetadataSpec(schema_metadata=meta).apply(schema)
+
+    def to_ibis_schema(self) -> ibis.Schema:
+        """Build an Ibis schema for SQLGlot/DDL tooling.
+
+        Returns
+        -------
+        ibis.Schema
+            Ibis schema derived from the Arrow field specs.
+        """
+        return ibis.schema({field.name: _arrow_dtype_to_ibis(field.dtype) for field in self.fields})
+
+    def to_sqlglot_column_defs(self, *, dialect: str | None = None) -> list[object]:
+        """Return SQLGlot ColumnDef nodes for the schema.
+
+        Returns
+        -------
+        list[object]
+            SQLGlot ColumnDef nodes derived from the Ibis schema.
+        """
+        return self.to_ibis_schema().to_sqlglot_column_defs(dialect=dialect)
+
+    def to_create_table_sql(
+        self,
+        *,
+        dialect: str | None = None,
+        table_name: str | None = None,
+    ) -> str:
+        """Return a CREATE TABLE statement for the schema.
+
+        Returns
+        -------
+        str
+            CREATE TABLE statement using SQLGlot-rendered column definitions.
+        """
+        name = table_name or self.name
+        column_defs = self.to_sqlglot_column_defs(dialect=dialect)
+        columns_sql = ", ".join(col.sql(dialect=dialect) for col in column_defs)
+        return f"CREATE TABLE {name} ({columns_sql})"
 
     def to_transform(
         self,

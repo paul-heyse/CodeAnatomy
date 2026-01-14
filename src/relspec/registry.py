@@ -2,106 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow as pa
-import pyarrow.fs as pafs
 
 from arrowdsl.finalize.finalize import Contract
 from arrowdsl.spec.io import read_spec_table
 from arrowdsl.spec.tables.schema import contract_specs_from_table, table_specs_from_tables
-from schema_spec.specs import TableSchemaSpec
-from schema_spec.system import ContractCatalogSpec, DatasetSpec
+from ibis_engine.registry import DatasetCatalog, DatasetLocation
+from schema_spec.system import ContractCatalogSpec
 
 type PathLike = str | Path
-
-
-@dataclass(frozen=True)
-class DatasetLocation:
-    """Location metadata for a dataset."""
-
-    path: PathLike
-    format: str = "parquet"
-    partitioning: str | None = "hive"
-    filesystem: pafs.FileSystem | None = None
-    table_spec: TableSchemaSpec | None = None
-    dataset_spec: DatasetSpec | None = None
-
-
-class DatasetCatalog:
-    """Map dataset names to locations for plan resolution."""
-
-    def __init__(self) -> None:
-        self._locs: dict[str, DatasetLocation] = {}
-
-    def register(self, name: str, location: DatasetLocation) -> None:
-        """Register a dataset location.
-
-        Parameters
-        ----------
-        name:
-            Dataset name.
-        location:
-            Location metadata.
-
-        Raises
-        ------
-        ValueError
-            Raised when the dataset name is empty.
-        """
-        if not name:
-            msg = "DatasetCatalog.register: name must be non-empty."
-            raise ValueError(msg)
-        self._locs[name] = location
-
-    def get(self, name: str) -> DatasetLocation:
-        """Return a registered dataset location.
-
-        Parameters
-        ----------
-        name:
-            Dataset name.
-
-        Returns
-        -------
-        DatasetLocation
-            Location metadata for the dataset.
-
-        Raises
-        ------
-        KeyError
-            Raised when the dataset name is not registered.
-        """
-        if name not in self._locs:
-            msg = f"DatasetCatalog: unknown dataset {name!r}."
-            raise KeyError(msg)
-        return self._locs[name]
-
-    def has(self, name: str) -> bool:
-        """Return whether a dataset name is registered.
-
-        Parameters
-        ----------
-        name:
-            Dataset name.
-
-        Returns
-        -------
-        bool
-            ``True`` when the dataset is registered.
-        """
-        return name in self._locs
-
-    def names(self) -> list[str]:
-        """Return registered dataset names in sorted order.
-
-        Returns
-        -------
-        list[str]
-            Sorted dataset names.
-        """
-        return sorted(self._locs)
 
 
 class ContractCatalog:
@@ -233,3 +144,6 @@ class ContractCatalog:
             Sorted contract names.
         """
         return sorted(self._contracts)
+
+
+__all__ = ["ContractCatalog", "DatasetCatalog", "DatasetLocation"]

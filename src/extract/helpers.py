@@ -6,6 +6,8 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from ibis.backends import BaseBackend
+
 from arrowdsl.compute.filters import FilterSpec, predicate_spec
 from arrowdsl.compute.ids import (
     HashSpec,
@@ -36,6 +38,7 @@ from arrowdsl.schema.metadata import (
 from arrowdsl.schema.ops import align_plan as align_plan_to_schema
 from arrowdsl.schema.schema import SchemaTransform, projection_for_schema
 from arrowdsl.spec.infra import DatasetRegistration, register_dataset
+from config import AdapterMode
 from extract.evidence_plan import EvidencePlan
 from extract.registry_extractors import (
     ExtractorSpec,
@@ -43,6 +46,7 @@ from extract.registry_extractors import (
     outputs_for_template,
     select_extractors_for_outputs,
 )
+from ibis_engine.plan import IbisPlan
 
 
 @dataclass(frozen=True)
@@ -105,6 +109,8 @@ class ExtractExecutionContext:
     file_contexts: Iterable[FileContext] | None = None
     evidence_plan: EvidencePlan | None = None
     ctx: ExecutionContext | None = None
+    adapter_mode: AdapterMode | None = None
+    ibis_backend: BaseBackend | None = None
     profile: str = "default"
 
     def ensure_ctx(self) -> ExecutionContext:
@@ -322,7 +328,7 @@ def template_outputs(plan: EvidencePlan | None, template: str) -> tuple[str, ...
     return outputs_for_template(template)
 
 
-def ast_def_nodes_plan(plan: Plan) -> Plan:
+def ast_def_nodes_plan(plan: Plan | IbisPlan) -> Plan:
     """Return a plan filtered to AST definition nodes.
 
     Returns
@@ -335,6 +341,9 @@ def ast_def_nodes_plan(plan: Plan) -> Plan:
         col="kind",
         values=("FunctionDef", "AsyncFunctionDef", "ClassDef"),
     )
+    if isinstance(plan, IbisPlan):
+        filtered = FilterSpec(predicate).apply_kernel(plan.to_table())
+        return Plan.table_source(filtered, label="ast_defs")
     return FilterSpec(predicate).apply_plan(plan)
 
 

@@ -214,7 +214,7 @@ def _plan_for_output(
     if plan is None:
         msg = f"Normalize rule output {DIAG_NAME!r} is not available."
         raise ValueError(msg)
-    return plan
+    return cast("Plan", plan)
 
 
 def _diagnostics_catalog_entries(

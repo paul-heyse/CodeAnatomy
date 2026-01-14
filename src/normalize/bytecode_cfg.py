@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
@@ -166,7 +168,9 @@ def build_cfg_blocks_canonical(
         Canonicalized CFG block table.
     """
     exec_ctx = ensure_canonical(ensure_execution_context(ctx, profile=profile))
-    return build_cfg_blocks_result(py_bc_blocks, py_bc_code_units, ctx=exec_ctx, profile=profile).good
+    return build_cfg_blocks_result(
+        py_bc_blocks, py_bc_code_units, ctx=exec_ctx, profile=profile
+    ).good
 
 
 def build_cfg_edges(
@@ -212,7 +216,9 @@ def build_cfg_edges_canonical(
         Canonicalized CFG edge table.
     """
     exec_ctx = ensure_canonical(ensure_execution_context(ctx, profile=profile))
-    return build_cfg_edges_result(py_bc_code_units, py_bc_cfg_edges, ctx=exec_ctx, profile=profile).good
+    return build_cfg_edges_result(
+        py_bc_code_units, py_bc_cfg_edges, ctx=exec_ctx, profile=profile
+    ).good
 
 
 def build_cfg_blocks_streamable(
@@ -321,7 +327,7 @@ def _plan_for_output(
     if plan is None:
         msg = f"Normalize rule output {output_name!r} is not available."
         raise ValueError(msg)
-    return plan
+    return cast("Plan", plan)
 
 
 __all__ = [

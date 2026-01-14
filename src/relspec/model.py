@@ -8,10 +8,9 @@ from enum import StrEnum
 from typing import Literal
 
 from arrowdsl.compute.expr_core import ScalarValue
-from arrowdsl.plan.joins import JoinOutputSpec, join_spec
-from arrowdsl.plan.ops import DedupeSpec, JoinSpec, JoinType, SortKey
-from arrowdsl.plan.query import QuerySpec
+from arrowdsl.plan.ops import DedupeSpec, JoinType, SortKey
 from arrowdsl.spec.expr_ir import ExprIR
+from ibis_engine.query_compiler import IbisQuerySpec
 
 type Expression = ExprIR
 type ExecutionMode = Literal["auto", "plan", "table", "external", "hybrid"]
@@ -35,7 +34,7 @@ class DatasetRef:
     """
 
     name: str
-    query: QuerySpec | None = None
+    query: IbisQuerySpec | None = None
     label: str = ""
 
 
@@ -52,7 +51,7 @@ class RuleKind(StrEnum):
 
 @dataclass(frozen=True)
 class HashJoinConfig:
-    """Acero HashJoin node configuration.
+    """Hash join configuration.
 
     Parameters
     ----------
@@ -80,25 +79,15 @@ class HashJoinConfig:
     output_suffix_for_left: str = ""
     output_suffix_for_right: str = ""
 
-    def to_join_spec(self) -> JoinSpec:
-        """Convert the config into a JoinSpec.
+    def resolved_right_keys(self) -> tuple[str, ...]:
+        """Return the right-hand join keys (fallback to left keys).
 
         Returns
         -------
-        JoinSpec
-            Join specification for hash joins.
+        tuple[str, ...]
+            Join keys for the right-hand side.
         """
-        return join_spec(
-            join_type=self.join_type,
-            left_keys=self.left_keys,
-            right_keys=self.right_keys or self.left_keys,
-            output=JoinOutputSpec(
-                left_output=self.left_output,
-                right_output=self.right_output,
-                output_suffix_for_left=self.output_suffix_for_left,
-                output_suffix_for_right=self.output_suffix_for_right,
-            ),
-        )
+        return self.right_keys or self.left_keys
 
 
 @dataclass(frozen=True)

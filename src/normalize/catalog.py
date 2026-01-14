@@ -6,20 +6,35 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.plan import catalog as plan_catalog
+from arrowdsl.plan.catalog import PlanCatalog, PlanDeriver, PlanRef, PlanSource
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.scan_io import PlanSource, plan_from_source
-from normalize.registry_plans import plan_ref
+from arrowdsl.plan.scan_io import plan_from_source
 from normalize.text_index import RepoTextIndex
 
-PlanCatalog = plan_catalog.PlanCatalog
-PlanDeriver = plan_catalog.PlanDeriver
-PlanGetter = plan_catalog.PlanGetter
-PlanRef = plan_catalog.PlanRef
-TableCatalog = plan_catalog.TableCatalog
-TableDeriver = plan_catalog.TableDeriver
-TableGetter = plan_catalog.TableGetter
-TableRef = plan_catalog.TableRef
+
+@dataclass
+class NormalizePlanCatalog(PlanCatalog):
+    """Plan catalog that avoids caching derived entries."""
+
+    repo_text_index: RepoTextIndex | None = None
+
+    def resolve(self, ref: PlanRef, *, ctx: ExecutionContext) -> Plan | None:
+        """Resolve a plan without caching derived results.
+
+        Returns
+        -------
+        Plan | None
+            Resolved plan or ``None`` when unavailable.
+        """
+        value = self.tables.get(ref.name)
+        if value is not None:
+            return plan_from_source(value, ctx=ctx, label=ref.name)
+        if ref.derive is None:
+            return None
+        derived = ref.derive(self, ctx)
+        if derived is None:
+            return None
+        return plan_from_source(derived, ctx=ctx, label=ref.name)
 
 
 @dataclass(frozen=True)
@@ -64,41 +79,6 @@ class NormalizeCatalogInputs:
         }
 
 
-@dataclass
-class NormalizePlanCatalog(plan_catalog.PlanCatalog):
-    """Plan catalog that avoids caching derived entries."""
-
-    repo_text_index: RepoTextIndex | None = None
-
-    def resolve(self, ref: PlanRef, *, ctx: ExecutionContext) -> Plan | None:
-        """Resolve a plan without caching derived results.
-
-        Returns
-        -------
-        Plan | None
-            Resolved plan or ``None`` when unavailable.
-        """
-        value = self.tables.get(ref.name)
-        if value is not None:
-            return plan_from_source(value, ctx=ctx, label=ref.name)
-        if ref.derive is None:
-            return None
-        derived = ref.derive(self, ctx)
-        if derived is None:
-            return None
-        return plan_from_source(derived, ctx=ctx, label=ref.name)
-
-
-TYPE_EXPRS_NORM_REF = plan_ref("type_exprs_norm_v1")
-TYPES_NORM_REF = plan_ref("type_nodes_v1")
-CFG_BLOCKS_NORM_REF = plan_ref("py_bc_blocks_norm_v1")
-CFG_EDGES_NORM_REF = plan_ref("py_bc_cfg_edges_norm_v1")
-DEF_USE_EVENTS_REF = plan_ref("py_bc_def_use_events_v1")
-REACHES_REF = plan_ref("py_bc_reaches_v1")
-DIAGNOSTICS_NORM_REF = plan_ref("diagnostics_norm_v1")
-SPAN_ERRORS_REF = plan_ref("span_errors_v1")
-
-
 def normalize_plan_catalog(inputs: NormalizeCatalogInputs) -> NormalizePlanCatalog:
     """Build a normalize plan catalog from source inputs.
 
@@ -112,23 +92,10 @@ def normalize_plan_catalog(inputs: NormalizeCatalogInputs) -> NormalizePlanCatal
 
 
 __all__ = [
-    "CFG_BLOCKS_NORM_REF",
-    "CFG_EDGES_NORM_REF",
-    "DEF_USE_EVENTS_REF",
-    "DIAGNOSTICS_NORM_REF",
-    "REACHES_REF",
-    "SPAN_ERRORS_REF",
-    "TYPES_NORM_REF",
-    "TYPE_EXPRS_NORM_REF",
     "NormalizeCatalogInputs",
     "NormalizePlanCatalog",
-    "PlanCatalog",
     "PlanDeriver",
-    "PlanGetter",
     "PlanRef",
-    "TableCatalog",
-    "TableDeriver",
-    "TableGetter",
-    "TableRef",
+    "PlanSource",
     "normalize_plan_catalog",
 ]

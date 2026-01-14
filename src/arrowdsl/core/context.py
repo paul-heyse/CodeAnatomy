@@ -7,6 +7,11 @@ from enum import StrEnum
 from typing import Literal
 
 import arrowdsl.core.interop as pa
+from datafusion_engine.runtime import DataFusionRuntimeProfile
+
+
+def _default_datafusion_profile() -> DataFusionRuntimeProfile:
+    return DataFusionRuntimeProfile()
 
 type OrderingKey = tuple[str, str]
 type ExecutionProfileName = Literal["bulk", "default", "deterministic", "streaming"]
@@ -157,6 +162,7 @@ class RuntimeProfile:
     plan_use_threads: bool = True
 
     determinism: DeterminismTier = DeterminismTier.BEST_EFFORT
+    datafusion: DataFusionRuntimeProfile | None = field(default_factory=_default_datafusion_profile)
 
     def apply_global_thread_pools(self) -> None:
         """Set Arrow CPU + IO thread pools."""
@@ -201,6 +207,33 @@ class RuntimeProfile:
             scan=scan,
             plan_use_threads=self.plan_use_threads,
             determinism=tier,
+            datafusion=self.datafusion,
+        )
+
+    def with_datafusion(
+        self,
+        profile: DataFusionRuntimeProfile | None,
+    ) -> RuntimeProfile:
+        """Return a copy with the DataFusion runtime profile attached.
+
+        Parameters
+        ----------
+        profile:
+            DataFusion runtime profile to attach.
+
+        Returns
+        -------
+        RuntimeProfile
+            Updated runtime profile.
+        """
+        return RuntimeProfile(
+            name=self.name,
+            cpu_threads=self.cpu_threads,
+            io_threads=self.io_threads,
+            scan=self.scan,
+            plan_use_threads=self.plan_use_threads,
+            determinism=self.determinism,
+            datafusion=profile,
         )
 
 

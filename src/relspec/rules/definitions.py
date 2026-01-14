@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from arrowdsl.compute.expr_core import ScalarValue
 from arrowdsl.core.context import OrderingKey
-from arrowdsl.plan.query import QuerySpec
 from arrowdsl.spec.expr_ir import ExprIR
 from extract.spec_tables import ExtractDerivedIdSpec
+from ibis_engine.query_compiler import IbisQuerySpec
 from relspec.model import (
     HashJoinConfig,
     IntervalAlignConfig,
@@ -18,11 +18,14 @@ from relspec.model import (
     ProjectConfig,
     WinnerSelectConfig,
 )
+from relspec.rules.rel_ops import validate_rel_ops
+
+if TYPE_CHECKING:
+    from relspec.rules.rel_ops import RelOpT
 
 RuleDomain = Literal["cpg", "normalize", "extract"]
 ExecutionMode = Literal["auto", "plan", "table", "external", "hybrid"]
 RuleStageMode = Literal["source", "plan", "post_kernel", "finalize"]
-type PipelineOp = Mapping[str, object]
 
 
 @dataclass(frozen=True)
@@ -88,7 +91,7 @@ class NormalizePayload:
     """Normalize-specific rule payload."""
 
     plan_builder: str | None = None
-    query: QuerySpec | None = None
+    query: IbisQuerySpec | None = None
 
 
 @dataclass(frozen=True)
@@ -139,7 +142,7 @@ class RuleDefinition:
     evidence_output: EvidenceOutput | None = None
     policy_overrides: PolicyOverrides = field(default_factory=PolicyOverrides)
     emit_rule_meta: bool = True
-    pipeline_ops: tuple[PipelineOp, ...] = ()
+    rel_ops: tuple[RelOpT, ...] = ()
     post_kernels: tuple[KernelSpecT, ...] = ()
     stages: tuple[RuleStage, ...] = ()
     payload: RulePayload | None = None
@@ -164,6 +167,8 @@ class RuleDefinition:
         if self.domain not in {"cpg", "normalize", "extract"}:
             msg = f"RuleDefinition.domain is invalid: {self.domain!r}."
             raise ValueError(msg)
+        if self.rel_ops:
+            validate_rel_ops(self.rel_ops)
 
 
 def stage_enabled(stage: RuleStage, options: Mapping[str, object]) -> bool:
@@ -196,7 +201,6 @@ __all__ = [
     "ExecutionMode",
     "ExtractPayload",
     "NormalizePayload",
-    "PipelineOp",
     "PolicyOverrides",
     "RelationshipPayload",
     "RuleDefinition",

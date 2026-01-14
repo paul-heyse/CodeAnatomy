@@ -15,7 +15,7 @@ from relspec.rules.templates import (
     rule_template_table,
     validate_template_specs,
 )
-from relspec.rules.validation import validate_rule_definitions
+from relspec.rules.validation import rule_sqlglot_diagnostics, validate_rule_definitions
 
 if TYPE_CHECKING:
     from relspec.rules.definitions import RuleDefinition, RuleDomain
@@ -56,11 +56,10 @@ class RuleRegistry:
         tuple[RuleDefinition, ...]
             Consolidated rule definitions.
         """
-        collected: list[RuleDefinition] = []
-        for adapter in self.adapters:
-            collected.extend(adapter.rule_definitions())
-        rules = tuple(collected)
+        rules = self._collect_rule_definitions()
         validate_rule_definitions(rules)
+        diagnostics = rule_sqlglot_diagnostics(rules)
+        _raise_rule_errors(diagnostics)
         return rules
 
     def rules_for_domain(self, domain: RuleDomain) -> tuple[RuleDefinition, ...]:
@@ -141,6 +140,34 @@ class RuleRegistry:
         """
         return rule_diagnostic_table(self.template_diagnostics())
 
+    def rule_diagnostics(self) -> tuple[RuleDiagnostic, ...]:
+        """Return SQLGlot diagnostics for rule definitions.
+
+        Returns
+        -------
+        tuple[RuleDiagnostic, ...]
+            Diagnostics emitted for rule validation.
+        """
+        rules = self._collect_rule_definitions()
+        validate_rule_definitions(rules)
+        return rule_sqlglot_diagnostics(rules)
+
+    def rule_diagnostics_table(self) -> pa.Table:
+        """Return a diagnostics table for rule validation.
+
+        Returns
+        -------
+        pyarrow.Table
+            Diagnostics table for rule validation.
+        """
+        return rule_diagnostic_table(self.rule_diagnostics())
+
+    def _collect_rule_definitions(self) -> tuple[RuleDefinition, ...]:
+        collected: list[RuleDefinition] = []
+        for adapter in self.adapters:
+            collected.extend(adapter.rule_definitions())
+        return tuple(collected)
+
     def _collect_template_specs(self) -> tuple[RuleTemplateSpec, ...]:
         collected: list[RuleTemplateSpec] = []
         for adapter in self.adapters:
@@ -165,6 +192,15 @@ def _raise_template_errors(diagnostics: Sequence[RuleDiagnostic]) -> None:
         return
     summary = ", ".join(diag.message for diag in errors)
     msg = f"Template diagnostics reported errors: {summary}"
+    raise ValueError(msg)
+
+
+def _raise_rule_errors(diagnostics: Sequence[RuleDiagnostic]) -> None:
+    errors = [diag for diag in diagnostics if diag.severity == "error"]
+    if not errors:
+        return
+    summary = ", ".join(f"{diag.rule_name or 'unknown'}: {diag.message}" for diag in errors)
+    msg = f"Rule diagnostics reported errors: {summary}"
     raise ValueError(msg)
 
 

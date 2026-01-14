@@ -8,6 +8,7 @@ from functools import cache
 from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
+from ibis.backends import BaseBackend
 
 from arrowdsl.compute.ids import masked_hash_expr
 from arrowdsl.compute.macros import ColumnOrNullExpr
@@ -28,12 +29,14 @@ from arrowdsl.core.interop import (
 from arrowdsl.finalize.finalize import Contract, FinalizeOptions, FinalizeResult, finalize
 from arrowdsl.plan.catalog import PlanCatalog
 from arrowdsl.plan.plan import Plan, PlanSpec
-from arrowdsl.plan.runner import PlanRunResult, run_plan
+from arrowdsl.plan.runner import AdapterRunOptions, PlanRunResult, run_plan, run_plan_adapter
 from arrowdsl.plan.scan_io import plan_from_source
 from arrowdsl.schema.metadata import merge_metadata_specs
 from arrowdsl.schema.ops import align_table
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
+from ibis_engine.plan import IbisPlan
+from ibis_engine.plan_bridge import plan_to_ibis
 from normalize.catalog import NormalizePlanCatalog
 from normalize.contracts import NORMALIZE_EVIDENCE_NAME, normalize_evidence_schema
 from normalize.policies import ambiguity_kernels, confidence_expr
@@ -88,8 +91,18 @@ class NormalizeRuleCompilation:
     """Compiled normalize rules and derived plans."""
 
     rules: tuple[NormalizeRule, ...]
-    plans: Mapping[str, Plan]
+    plans: Mapping[str, Plan | IbisPlan]
     catalog: PlanCatalog
+
+
+@dataclass(frozen=True)
+class NormalizeIbisPlanOptions:
+    """Options for compiling normalize plans into Ibis plans."""
+
+    backend: BaseBackend
+    rules: Sequence[NormalizeRule] | None = None
+    required_outputs: Sequence[str] | None = None
+    name_prefix: str = "normalize"
 
 
 def ensure_execution_context(
@@ -134,7 +147,7 @@ def _default_normalize_rules(ctx: ExecutionContext) -> tuple[NormalizeRule, ...]
 
 
 def _should_skip_canonical_sort(
-    plan: Plan,
+    plan: Plan | IbisPlan,
     *,
     contract: Contract,
     ctx: ExecutionContext,
@@ -147,7 +160,7 @@ def _should_skip_canonical_sort(
         return False
     expected = tuple((key.column, key.order) for key in contract.canonical_sort)
     if ctx.provenance:
-        schema = plan.schema(ctx=ctx)
+        schema = plan.schema(ctx=ctx) if isinstance(plan, Plan) else plan.to_table().schema
         for col in PROVENANCE_COLS:
             if col in schema.names:
                 expected = (*expected, (col, "ascending"))
@@ -156,7 +169,7 @@ def _should_skip_canonical_sort(
 
 def run_normalize(
     *,
-    plan: Plan,
+    plan: Plan | IbisPlan,
     post: Iterable[PostFn],
     contract: ContractSpec,
     ctx: ExecutionContext,
@@ -169,11 +182,10 @@ def run_normalize(
     FinalizeResult
         Finalize bundle with good/errors/stats/alignment outputs.
     """
-    result = run_plan(
+    result = run_plan_adapter(
         plan,
         ctx=ctx,
-        prefer_reader=False,
-        attach_ordering_metadata=True,
+        options=AdapterRunOptions(prefer_reader=False),
     )
     table = cast("TableLike", result.value)
     for fn in post:
@@ -442,7 +454,62 @@ def compile_normalize_plans(
         rules=rules,
         required_outputs=required_outputs,
     )
-    return dict(compilation.plans)
+    return {name: cast("Plan", plan) for name, plan in compilation.plans.items()}
+
+
+def normalize_plans_to_ibis(
+    plans: Mapping[str, Plan | IbisPlan],
+    *,
+    ctx: ExecutionContext,
+    backend: BaseBackend,
+    name_prefix: str = "normalize",
+) -> dict[str, IbisPlan]:
+    """Convert normalize plans into Ibis plans keyed by output dataset.
+
+    Returns
+    -------
+    dict[str, IbisPlan]
+        Mapping of output dataset names to Ibis plans.
+    """
+    out: dict[str, IbisPlan] = {}
+    for name, plan in plans.items():
+        if isinstance(plan, IbisPlan):
+            out[name] = plan
+            continue
+        out[name] = plan_to_ibis(
+            plan,
+            ctx=ctx,
+            backend=backend,
+            name=f"{name_prefix}_{name}",
+        )
+    return out
+
+
+def compile_normalize_plans_ibis(
+    catalog: PlanCatalog,
+    *,
+    ctx: ExecutionContext,
+    options: NormalizeIbisPlanOptions,
+) -> dict[str, IbisPlan]:
+    """Compile normalize rules into Ibis plans keyed by output dataset.
+
+    Returns
+    -------
+    dict[str, IbisPlan]
+        Mapping of output dataset names to Ibis plans.
+    """
+    plans = compile_normalize_plans(
+        catalog,
+        ctx=ctx,
+        rules=options.rules,
+        required_outputs=options.required_outputs,
+    )
+    return normalize_plans_to_ibis(
+        plans,
+        ctx=ctx,
+        backend=options.backend,
+        name_prefix=options.name_prefix,
+    )
 
 
 def compile_normalize_graph_plan(
@@ -468,9 +535,10 @@ def compile_normalize_graph_plan(
     if not compilation.plans:
         empty = Plan.table_source(empty_table(pa.schema([])), label="normalize_graph_empty")
         return GraphPlan(plan=empty, outputs={})
+    plans = {name: cast("Plan", plan) for name, plan in compilation.plans.items()}
     return compile_graph_plan(
         compilation.rules,
-        plans=dict(compilation.plans),
+        plans=plans,
         output_for=lambda rule: rule.output,
         label="normalize_graph",
     )
@@ -501,7 +569,7 @@ def materialize_normalize_evidence(
         plan = compilation.plans.get(rule.output)
         if plan is None:
             continue
-        outputs[rule.output] = _materialize_evidence_output(plan, rule, ctx=ctx)
+        outputs[rule.output] = _materialize_evidence_output(cast("Plan", plan), rule, ctx=ctx)
     return outputs
 
 
@@ -753,11 +821,13 @@ __all__ = [
     "apply_policy_defaults",
     "compile_normalize_graph_plan",
     "compile_normalize_plans",
+    "compile_normalize_plans_ibis",
     "compile_normalize_rules",
     "ensure_canonical",
     "ensure_execution_context",
     "materialize_normalize_evidence",
     "normalize_evidence_table",
+    "normalize_plans_to_ibis",
     "run_normalize",
     "run_normalize_reader",
     "run_normalize_streamable",

@@ -6,17 +6,21 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import pyarrow as pa
+from ibis.backends import BaseBackend
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, Table, TableLike
 from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan.query import ScanTelemetry
+from arrowdsl.plan.runner import AdapterRunOptions, run_plan_bundle_adapter
 from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.schema import EncodingSpec
+from config import AdapterMode
 from cpg.catalog import PlanCatalog
 from cpg.constants import CpgBuildArtifacts, QualityPlanSpec, quality_plan_from_ids
 from cpg.edge_specs import edge_plan_specs_from_table
 from cpg.emit_edges import emit_edges_plan
+from cpg.ibis_bridge import plan_bundle_to_ibis
 from cpg.plan_specs import (
     align_plan,
     assert_schema_metadata,
@@ -27,7 +31,11 @@ from cpg.plan_specs import (
     finalize_plan,
 )
 from cpg.registry import CpgRegistry, default_cpg_registry
-from cpg.relationship_plans import RelationPlanBundle, compile_relation_plans
+from cpg.relationship_plans import (
+    RelationPlanBundle,
+    RelationPlanCompileOptions,
+    compile_relation_plans,
+)
 from cpg.specs import EdgePlanSpec
 
 
@@ -116,10 +124,35 @@ def _edge_relation_context(
     relation_bundle = compile_relation_plans(
         catalog,
         ctx=ctx,
-        rule_table=relation_rule_table,
-        materialize_debug=config.materialize_relation_outputs,
-        required_sources=config.required_relation_sources,
+        options=RelationPlanCompileOptions(
+            rule_table=relation_rule_table,
+            materialize_debug=config.materialize_relation_outputs,
+            required_sources=config.required_relation_sources,
+        ),
     )
+    if config.adapter_mode is not None and config.adapter_mode.use_ibis_bridge:
+        if config.ibis_backend is None:
+            msg = "Ibis backend is required when AdapterMode.use_ibis_bridge is enabled."
+            raise ValueError(msg)
+        ibis_plans = plan_bundle_to_ibis(
+            relation_bundle.plans,
+            ctx=ctx,
+            backend=config.ibis_backend,
+            name_prefix="cpg_rel",
+        )
+        tables = run_plan_bundle_adapter(
+            ibis_plans,
+            ctx=ctx,
+            options=AdapterRunOptions(
+                adapter_mode=config.adapter_mode,
+                prefer_reader=False,
+                attach_ordering_metadata=True,
+            ),
+        )
+        relation_bundle = RelationPlanBundle(
+            plans={name: Plan.table_source(table, label=name) for name, table in tables.items()},
+            telemetry=relation_bundle.telemetry,
+        )
     return EdgeRelationContext(
         relation_bundle=relation_bundle,
         options=options,
@@ -140,6 +173,8 @@ class EdgeBuildConfig:
     legacy: Mapping[str, object] | None = None
     materialize_relation_outputs: bool | None = None
     required_relation_sources: tuple[str, ...] | None = None
+    adapter_mode: AdapterMode | None = None
+    ibis_backend: BaseBackend | None = None
 
 
 def _resolve_edge_config(config: EdgeBuildConfig | None) -> EdgeBuildConfig:
@@ -154,6 +189,8 @@ def _resolve_edge_config(config: EdgeBuildConfig | None) -> EdgeBuildConfig:
         legacy=resolved.legacy,
         materialize_relation_outputs=resolved.materialize_relation_outputs,
         required_relation_sources=resolved.required_relation_sources,
+        adapter_mode=resolved.adapter_mode,
+        ibis_backend=resolved.ibis_backend,
     )
 
 

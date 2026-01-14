@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -117,6 +119,26 @@ def order_rules_by_evidence[RuleT](
     return resolved
 
 
+def rule_graph_signature[RuleT](
+    rules: Sequence[RuleT],
+    *,
+    name_for: Callable[[RuleT], str],
+    signature_for: Callable[[RuleT], str],
+    label: str,
+) -> str:
+    """Return a stable signature for a rule graph.
+
+    Returns
+    -------
+    str
+        Deterministic hash for the rule graph.
+    """
+    entries = sorted((name_for(rule), signature_for(rule)) for rule in rules)
+    payload = {"label": label, "rules": entries}
+    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 def _register_output(evidence: EvidenceCatalog, name: str, schema: SchemaLike | None) -> None:
     if schema is None:
         evidence.sources.add(name)
@@ -150,4 +172,5 @@ __all__ = [
     "RuleSelectors",
     "compile_graph_plan",
     "order_rules_by_evidence",
+    "rule_graph_signature",
 ]

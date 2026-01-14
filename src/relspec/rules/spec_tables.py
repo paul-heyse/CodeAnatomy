@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal, cast
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_core import ExprSpec, ScalarValue
+from arrowdsl.compute.expr_core import ScalarValue
 from arrowdsl.core.context import OrderingKey
 from arrowdsl.plan.ops import JoinType, SortKey
-from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.schema.build import list_view_type
 from arrowdsl.schema.schema import EncodingPolicy, EncodingSpec
 from arrowdsl.spec.codec import (
@@ -22,7 +20,7 @@ from arrowdsl.spec.codec import (
     parse_sort_order,
     parse_string_tuple,
 )
-from arrowdsl.spec.expr_ir import ExprIR, expr_spec_from_json
+from arrowdsl.spec.expr_ir import ExprIR
 from arrowdsl.spec.infra import (
     DATASET_REF_STRUCT,
     SCALAR_UNION_TYPE,
@@ -64,6 +62,11 @@ from relspec.rules.definitions import (
     RuleDomain,
     RulePayload,
     RuleStage,
+)
+from relspec.rules.rel_ops import (
+    query_spec_from_rel_ops,
+    rel_ops_from_rows,
+    rel_ops_to_rows,
 )
 
 IntervalMode = Literal["EXACT", "CONTAINED_BEST", "OVERLAP_BEST"]
@@ -259,12 +262,13 @@ POLICY_OVERRIDE_STRUCT = pa.struct(
     ]
 )
 
-QUERY_OP_STRUCT = pa.struct(
+REL_OP_STRUCT = pa.struct(
     [
         pa.field("kind", pa.string(), nullable=False),
         pa.field("columns", list_view_type(pa.string()), nullable=True),
         pa.field("name", pa.string(), nullable=True),
         pa.field("expr_json", pa.string(), nullable=True),
+        pa.field("payload_json", pa.string(), nullable=True),
     ]
 )
 
@@ -325,7 +329,7 @@ RULE_DEF_SCHEMA = pa.schema(
         pa.field("relationship_payload", RELATIONSHIP_STRUCT, nullable=True),
         pa.field("normalize_payload", NORMALIZE_STRUCT, nullable=True),
         pa.field("extract_payload", EXTRACT_STRUCT, nullable=True),
-        pa.field("pipeline_ops", list_view_type(QUERY_OP_STRUCT), nullable=True),
+        pa.field("rel_ops", list_view_type(REL_OP_STRUCT), nullable=True),
         pa.field("post_kernels", list_view_type(KERNEL_SPEC_STRUCT), nullable=True),
     ],
     metadata={b"spec_kind": b"relspec_rule_definitions"},
@@ -364,7 +368,7 @@ def rule_definition_table(definitions: Sequence[RuleDefinition]) -> pa.Table:
             "relationship_payload": _relationship_payload_row(definition.payload),
             "normalize_payload": _normalize_payload_row(definition.payload),
             "extract_payload": _extract_payload_row(definition.payload),
-            "pipeline_ops": _pipeline_ops_row(definition.pipeline_ops),
+            "rel_ops": rel_ops_to_rows(definition.rel_ops),
             "post_kernels": _kernel_rows(definition.post_kernels),
         }
         for definition in definitions
@@ -387,7 +391,7 @@ def rule_definitions_from_table(table: pa.Table) -> tuple[RuleDefinition, ...]:
         execution_mode = row.get("execution_mode")
         priority = row.get("priority")
         payload = _payload_from_row(domain, row)
-        pipeline_ops = _pipeline_ops_from_row(row.get("pipeline_ops"))
+        rel_ops = rel_ops_from_rows(row.get("rel_ops"))
         post_kernels = _kernels_from_row(row.get("post_kernels"))
         definitions.append(
             RuleDefinition(
@@ -401,7 +405,7 @@ def rule_definitions_from_table(table: pa.Table) -> tuple[RuleDefinition, ...]:
                 evidence=_evidence_from_row(row.get("evidence")),
                 evidence_output=_evidence_output_from_row(row.get("evidence_output")),
                 policy_overrides=_policy_overrides_from_row(row.get("policy_overrides")),
-                pipeline_ops=pipeline_ops,
+                rel_ops=rel_ops,
                 post_kernels=post_kernels,
                 stages=_stages_from_payload(domain, payload),
                 payload=payload,
@@ -670,20 +674,6 @@ def _extract_payload_row(payload: object | None) -> dict[str, object] | None:
     }
 
 
-def _pipeline_ops_row(ops: Sequence[Mapping[str, object]]) -> list[dict[str, object]] | None:
-    if not ops:
-        return None
-    return [dict(op) for op in ops]
-
-
-def _pipeline_ops_from_row(
-    payload: Sequence[Mapping[str, Any]] | None,
-) -> tuple[Mapping[str, object], ...]:
-    if not payload:
-        return ()
-    return tuple(dict(row) for row in payload)
-
-
 def _kernel_rows(specs: Sequence[KernelSpecT]) -> list[dict[str, object]] | None:
     if not specs:
         return None
@@ -703,9 +693,10 @@ def _payload_from_row(domain: RuleDomain, row: Mapping[str, Any]) -> RulePayload
         return _relationship_payload_from_row(row.get("relationship_payload"))
     if domain == "normalize":
         normalize_payload = _normalize_payload_from_row(row.get("normalize_payload"))
-        ops = row.get("pipeline_ops")
+        ops = row.get("rel_ops")
         if normalize_payload is None and ops:
-            normalize_payload = NormalizePayload(query=query_from_ops(ops))
+            rel_ops = rel_ops_from_rows(ops)
+            normalize_payload = NormalizePayload(query=query_spec_from_rel_ops(rel_ops))
         return normalize_payload
     if domain == "extract":
         return _extract_payload_from_row(row.get("extract_payload"))
@@ -811,85 +802,6 @@ def _edge_emit_from_row(
         path_cols=parse_string_tuple(payload.get("path_cols"), label="path_cols"),
         bstart_cols=parse_string_tuple(payload.get("bstart_cols"), label="bstart_cols"),
         bend_cols=parse_string_tuple(payload.get("bend_cols"), label="bend_cols"),
-    )
-
-
-@dataclass
-class _QueryOpState:
-    base: tuple[str, ...] = ()
-    derived: dict[str, ExprSpec] = field(default_factory=dict)
-    predicate: ExprSpec | None = None
-    pushdown: ExprSpec | None = None
-
-
-def _handle_project(row: Mapping[str, Any], state: _QueryOpState) -> None:
-    columns = parse_string_tuple(row.get("columns"), label="columns")
-    if columns:
-        state.base = columns
-
-
-def _handle_derive(row: Mapping[str, Any], state: _QueryOpState) -> None:
-    name = row.get("name")
-    expr_json = row.get("expr_json")
-    if name is None or expr_json is None:
-        msg = "Query derive op requires name and expr_json."
-        raise ValueError(msg)
-    state.derived[str(name)] = expr_spec_from_json(str(expr_json))
-
-
-def _handle_filter(row: Mapping[str, Any], state: _QueryOpState) -> None:
-    expr_json = row.get("expr_json")
-    if expr_json is None:
-        msg = "Query filter op requires expr_json."
-        raise ValueError(msg)
-    state.predicate = expr_spec_from_json(str(expr_json))
-
-
-def _handle_pushdown_filter(row: Mapping[str, Any], state: _QueryOpState) -> None:
-    expr_json = row.get("expr_json")
-    if expr_json is None:
-        msg = "Query pushdown_filter op requires expr_json."
-        raise ValueError(msg)
-    state.pushdown = expr_spec_from_json(str(expr_json))
-
-
-_QUERY_OP_HANDLERS: dict[str, Callable[[Mapping[str, Any], _QueryOpState], None]] = {
-    "project": _handle_project,
-    "derive": _handle_derive,
-    "filter": _handle_filter,
-    "pushdown_filter": _handle_pushdown_filter,
-}
-
-
-def query_from_ops(payload: Sequence[Mapping[str, Any]] | None) -> QuerySpec | None:
-    """Decode a query spec from pipeline ops.
-
-    Returns
-    -------
-    QuerySpec | None
-        Query spec constructed from ops.
-
-    Raises
-    ------
-    ValueError
-        Raised when an unsupported op kind is encountered.
-    """
-    if not payload:
-        return None
-    state = _QueryOpState()
-    for row in payload:
-        kind = str(row.get("kind", ""))
-        handler = _QUERY_OP_HANDLERS.get(kind)
-        if handler is None:
-            msg = f"Unsupported query op kind: {kind!r}"
-            raise ValueError(msg)
-        handler(row, state)
-    if not state.base:
-        state.base = tuple(state.derived)
-    return QuerySpec(
-        projection=ProjectionSpec(base=state.base, derived=state.derived),
-        predicate=state.predicate,
-        pushdown_predicate=state.pushdown,
     )
 
 
@@ -1173,10 +1085,10 @@ __all__ = [
     "PROJECT_EXPR_STRUCT",
     "PROJECT_STRUCT",
     "RELATIONSHIP_STRUCT",
+    "REL_OP_STRUCT",
     "RULES_SCHEMA",
     "RULE_DEF_SCHEMA",
     "WINNER_SELECT_STRUCT",
-    "query_from_ops",
     "rule_definition_table",
     "rule_definitions_from_table",
 ]

@@ -9,6 +9,8 @@ from typing import Protocol, cast
 import ibis
 from ibis.expr.types import Table, Value
 
+from ibis_engine.builtin_udfs import cpg_score
+
 IbisExprFn = Callable[..., Value]
 
 
@@ -70,6 +72,22 @@ class IbisExprRegistry:
         raise KeyError(msg)
 
 
+def default_expr_registry() -> IbisExprRegistry:
+    """Return a registry with project-specific helpers registered.
+
+    Returns
+    -------
+    IbisExprRegistry
+        Registry with default helper mappings.
+    """
+    return IbisExprRegistry(
+        functions={
+            "strip": lambda value: value.strip(),
+            "cpg_score": cpg_score,
+        }
+    )
+
+
 def expr_ir_to_ibis(
     expr: ExprIRLike,
     table: Table,
@@ -88,7 +106,7 @@ def expr_ir_to_ibis(
     ValueError
         Raised when the node cannot be compiled.
     """
-    registry = registry or IbisExprRegistry()
+    registry = registry or default_expr_registry()
     if expr.op == "field":
         if expr.name is None:
             msg = "ExprIR field op requires name."

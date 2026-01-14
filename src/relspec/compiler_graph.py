@@ -4,13 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import cast
 
-from arrowdsl.core.context import ExecutionContext
+import ibis
+import pyarrow as pa
+from ibis.expr.datatypes import DataType
+from ibis.expr.types import Table as IbisTable
+from ibis.expr.types import Value as IbisValue
+
+from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.plan.plan import Plan, union_all_plans
-from arrowdsl.schema.build import ConstExpr, FieldExpr
+from ibis_engine.plan import IbisPlan
 from relspec.compiler import RelationshipRuleCompiler
 from relspec.contracts import RELATION_OUTPUT_NAME, relation_output_schema
+from relspec.engine import IbisRelPlanCompiler
 from relspec.model import EvidenceSpec as RelationshipEvidenceSpec
 from relspec.model import RelationshipRule
 from relspec.rules.definitions import EvidenceSpec as CentralEvidenceSpec
@@ -31,8 +38,8 @@ class RuleNode:
 class GraphPlan:
     """Compiled plan graph for relationship rules."""
 
-    plan: Plan
-    outputs: dict[str, Plan]
+    plan: IbisPlan
+    outputs: dict[str, IbisPlan]
 
 
 def compile_graph_plan(
@@ -61,39 +68,61 @@ def compile_graph_plan(
         Graph-level plan and per-output subplans.
     """
     work = evidence.clone()
-    outputs: dict[str, list[Plan]] = {}
+    plan_compiler = compiler.plan_compiler or IbisRelPlanCompiler()
+    outputs: dict[str, list[IbisPlan]] = {}
     for rule in order_rules(rules, evidence=work):
         compiled = compiler.compile_rule(rule, ctx=ctx)
-        if compiled.plan is not None and not compiled.post_kernels:
-            plan = _apply_rule_meta(compiled.plan, rule=rule, ctx=ctx)
+        if compiled.rel_plan is not None and not compiled.post_kernels:
+            plan = plan_compiler.compile(compiled.rel_plan, ctx=ctx, resolver=compiler.resolver)
         else:
-            table = compiled.execute(ctx=ctx, resolver=compiler.resolver)
-            plan = Plan.table_source(table, label=rule.name)
+            table = compiled.execute(ctx=ctx, resolver=compiler.resolver, compiler=plan_compiler)
+            plan = IbisPlan(expr=ibis.memtable(table), ordering=Ordering.unordered())
         outputs.setdefault(rule.output_dataset, []).append(plan)
-        work.register(rule.output_dataset, plan.schema(ctx=ctx))
-    merged: dict[str, Plan] = {}
+        work.register(rule.output_dataset, plan.expr.schema().to_pyarrow())
+    merged: dict[str, IbisPlan] = {}
     for output, plans in outputs.items():
         if len(plans) == 1:
             merged[output] = plans[0]
             continue
-        merged[output] = union_all_plans(plans, label=output)
-    union = union_all_plans(list(merged.values()), label="relspec_graph")
+        merged[output] = _union_plans(plans, label=output)
+    union = _union_plans(list(merged.values()), label="relspec_graph")
     return GraphPlan(plan=union, outputs=merged)
 
 
-def _apply_rule_meta(plan: Plan, *, rule: RelationshipRule, ctx: ExecutionContext) -> Plan:
-    if not rule.emit_rule_meta:
-        return plan
-    schema = plan.schema(ctx=ctx)
-    names = list(schema.names)
-    exprs = [FieldExpr(name=name).to_expression() for name in names]
-    if rule.rule_name_col not in names:
-        exprs.append(ConstExpr(value=rule.name).to_expression())
-        names.append(rule.rule_name_col)
-    if rule.rule_priority_col not in names:
-        exprs.append(ConstExpr(value=int(rule.priority)).to_expression())
-        names.append(rule.rule_priority_col)
-    return plan.project(exprs, names, label=plan.label or rule.name)
+def _union_plans(plans: Sequence[IbisPlan], *, label: str) -> IbisPlan:
+    if not plans:
+        _ = label
+        empty = ibis.memtable(pa.table({}))
+        return IbisPlan(expr=empty, ordering=Ordering.unordered())
+    aligned = _align_union_tables([plan.expr for plan in plans])
+    unioned = aligned[0]
+    for table in aligned[1:]:
+        unioned = unioned.union(table)
+    return IbisPlan(expr=unioned, ordering=Ordering.unordered())
+
+
+def _align_union_tables(tables: Sequence[IbisTable]) -> list[IbisTable]:
+    names: list[str] = []
+    types: dict[str, DataType] = {}
+    for table in tables:
+        schema = table.schema()
+        schema_names = cast("Sequence[str]", schema.names)
+        schema_types = cast("Sequence[DataType]", schema.types)
+        for name, dtype in zip(schema_names, schema_types, strict=True):
+            if name in types:
+                continue
+            names.append(name)
+            types[name] = dtype
+    aligned: list[IbisTable] = []
+    for table in tables:
+        cols: list[IbisValue] = []
+        for name in names:
+            if name in table.columns:
+                cols.append(table[name])
+            else:
+                cols.append(ibis.literal(None, type=types[name]).name(name))
+        aligned.append(table.select(cols))
+    return aligned
 
 
 def order_rules(

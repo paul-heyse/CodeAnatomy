@@ -1,30 +1,35 @@
-"""Compile relationship rules into executable plans and kernels."""
+"""Compile relationship rules into relational plans and kernel operations."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Protocol, cast
+from typing import cast
 
+import ibis
 import pyarrow as pa
-import pyarrow.dataset as ds
+from ibis.backends import BaseBackend
+from ibis.expr.types import Table as IbisTable
+from ibis.expr.types import Value as IbisValue
 
 from arrowdsl.compute.filters import FilterSpec
-from arrowdsl.compute.kernels import apply_dedupe, explode_list_column, interval_align_table
+from arrowdsl.compute.kernels import resolve_kernel
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, Ordering
-from arrowdsl.core.interop import ComputeExpression, SchemaLike, TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
 from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions, SortKey
-from arrowdsl.plan.plan import Plan, hash_join, union_all_plans
-from arrowdsl.plan.query import ScanTelemetry, open_dataset
-from arrowdsl.plan.runner import run_plan
-from arrowdsl.schema.build import ConstExpr, FieldExpr, const_array, set_or_append_column
-from arrowdsl.schema.ops import align_plan
+from arrowdsl.plan.query import ScanTelemetry
+from arrowdsl.schema.build import const_array, set_or_append_column
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
+from ibis_engine.plan import IbisPlan
+from ibis_engine.plan_bridge import table_to_ibis
+from ibis_engine.query_compiler import apply_query_spec
+from ibis_engine.registry import IbisDatasetRegistry
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
 )
+from relspec.engine import IbisRelPlanCompiler, PlanResolver, RelPlanCompiler
 from relspec.model import (
     AddLiteralSpec,
     CanonicalSortKernelSpec,
@@ -39,6 +44,7 @@ from relspec.model import (
     RenameColumnsSpec,
     RuleKind,
 )
+from relspec.plan import RelJoin, RelNode, RelPlan, RelProject, RelSource, RelUnion
 from relspec.policies import (
     ambiguity_policy_from_schema,
     confidence_policy_from_schema,
@@ -46,53 +52,9 @@ from relspec.policies import (
     evidence_spec_from_schema,
 )
 from relspec.registry import ContractCatalog, DatasetCatalog
-from schema_spec.system import (
-    GLOBAL_SCHEMA_REGISTRY,
-    DatasetSpec,
-    dataset_spec_from_contract,
-    make_dataset_spec,
-    table_spec_from_schema,
-)
+from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, dataset_spec_from_contract
 
-type KernelFn = Callable[[TableLike, ExecutionContext], TableLike]
-
-
-class PlanResolver(Protocol):
-    """Resolve a ``DatasetRef`` to an executable plan."""
-
-    def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> Plan:
-        """Resolve a dataset reference into a plan.
-
-        Parameters
-        ----------
-        ref:
-            Dataset reference to resolve.
-        ctx:
-            Execution context.
-
-        Returns
-        -------
-        Plan
-            Executable plan for the dataset reference.
-        """
-        ...
-
-    def telemetry(self, ref: DatasetRef, *, ctx: ExecutionContext) -> ScanTelemetry | None:
-        """Return scan telemetry for a dataset reference.
-
-        Parameters
-        ----------
-        ref:
-            Dataset reference to scan.
-        ctx:
-            Execution context.
-
-        Returns
-        -------
-        ScanTelemetry | None
-            Scan telemetry when available.
-        """
-        ...
+KernelFn = Callable[[TableLike, ExecutionContext], TableLike]
 
 
 def _scan_ordering_for_ctx(ctx: ExecutionContext) -> Ordering:
@@ -113,40 +75,32 @@ def _scan_ordering_for_ctx(ctx: ExecutionContext) -> Ordering:
     return Ordering.unordered()
 
 
+def runtime_telemetry_for_ctx(ctx: ExecutionContext) -> Mapping[str, object]:
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        return {}
+    return {"datafusion": profile.telemetry_payload()}
+
+
 class FilesystemPlanResolver:
-    """Resolve dataset names to filesystem-backed Arrow datasets."""
+    """Resolve dataset names to filesystem-backed Ibis tables."""
 
-    def __init__(self, catalog: DatasetCatalog) -> None:
+    def __init__(
+        self,
+        catalog: DatasetCatalog,
+        *,
+        backend: ibis.backends.BaseBackend | None = None,
+        registry: IbisDatasetRegistry | None = None,
+    ) -> None:
         self.catalog = catalog
+        if registry is None:
+            if backend is None:
+                msg = "FilesystemPlanResolver requires backend or registry."
+                raise ValueError(msg)
+            registry = IbisDatasetRegistry(backend, catalog=catalog)
+        self.registry = registry
 
-    def _dataset_spec_for_ref(self, ref: DatasetRef) -> tuple[ds.Dataset, DatasetSpec]:
-        loc = self.catalog.get(ref.name)
-        dataset = open_dataset(
-            loc.path,
-            dataset_format=loc.format,
-            filesystem=loc.filesystem,
-            partitioning=loc.partitioning,
-        )
-
-        dataset_spec = loc.dataset_spec
-        if dataset_spec is None:
-            if loc.table_spec is not None:
-                table_spec = loc.table_spec
-            else:
-                table_spec = table_spec_from_schema(ref.name, dataset.schema)
-            dataset_spec = make_dataset_spec(table_spec=table_spec, query_spec=ref.query)
-        elif ref.query is not None:
-            dataset_spec = make_dataset_spec(
-                table_spec=dataset_spec.table_spec,
-                contract_spec=dataset_spec.contract_spec,
-                query_spec=ref.query,
-                evolution_spec=dataset_spec.evolution_spec,
-                metadata_spec=dataset_spec.metadata_spec,
-                validation=dataset_spec.validation,
-            )
-        return dataset, dataset_spec
-
-    def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> Plan:
+    def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
         """Resolve a dataset reference into a filesystem-backed plan.
 
         Parameters
@@ -158,33 +112,41 @@ class FilesystemPlanResolver:
 
         Returns
         -------
-        Plan
+        IbisPlan
             Executable plan for the dataset reference.
         """
-        dataset, dataset_spec = self._dataset_spec_for_ref(ref)
-        decl = dataset_spec.scan_context(dataset, ctx).acero_decl()
-        label = ref.label or ref.name
-        return Plan(decl=decl, label=label, ordering=_scan_ordering_for_ctx(ctx))
+        table = self.registry.table(ref.name)
+        if ref.query is not None:
+            table = apply_query_spec(table, spec=ref.query)
+        return IbisPlan(expr=table, ordering=_scan_ordering_for_ctx(ctx))
 
-    def telemetry(self, ref: DatasetRef, *, ctx: ExecutionContext) -> ScanTelemetry | None:
-        """Return scan telemetry for a dataset reference.
+    @staticmethod
+    def telemetry(ref: DatasetRef, *, ctx: ExecutionContext) -> ScanTelemetry | None:
+        """Return scan telemetry for filesystem-backed datasets (unavailable).
 
         Returns
         -------
         ScanTelemetry | None
-            Scan telemetry for the dataset reference.
+            ``None`` because Ibis scans do not expose telemetry.
         """
-        dataset, dataset_spec = self._dataset_spec_for_ref(ref)
-        return dataset_spec.scan_context(dataset, ctx).telemetry()
+        _ = ref
+        _ = ctx
+        return None
 
 
 class InMemoryPlanResolver:
     """Resolve dataset names to in-memory tables or plans."""
 
-    def __init__(self, mapping: Mapping[str, TableLike | Plan]) -> None:
+    def __init__(
+        self,
+        mapping: Mapping[str, TableLike | IbisPlan | IbisTable],
+        *,
+        backend: BaseBackend | None = None,
+    ) -> None:
         self.mapping = dict(mapping)
+        self.backend = backend
 
-    def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> Plan:
+    def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
         """Resolve a dataset reference into an in-memory plan.
 
         Parameters
@@ -192,11 +154,11 @@ class InMemoryPlanResolver:
         ref:
             Dataset reference to resolve.
         ctx:
-            Execution context (unused for in-memory resolution).
+            Execution context.
 
         Returns
         -------
-        Plan
+        IbisPlan
             Executable plan for the dataset reference.
 
         Raises
@@ -204,14 +166,25 @@ class InMemoryPlanResolver:
         KeyError
             Raised when the dataset reference is unknown.
         """
-        _ = ctx
         obj = self.mapping.get(ref.name)
         if obj is None:
             msg = f"InMemoryPlanResolver: unknown dataset {ref.name!r}."
             raise KeyError(msg)
-        if isinstance(obj, Plan):
-            return obj
-        return Plan.table_source(obj, label=ref.label or ref.name)
+        if isinstance(obj, IbisPlan):
+            plan = obj
+        elif isinstance(obj, IbisTable):
+            plan = IbisPlan(expr=obj, ordering=_scan_ordering_for_ctx(ctx))
+        else:
+            plan = _ibis_plan_from_table_like(
+                obj,
+                ordering=_scan_ordering_for_ctx(ctx),
+                backend=self.backend,
+                name=ref.name,
+            )
+        if ref.query is not None:
+            expr = apply_query_spec(plan.expr, spec=ref.query)
+            plan = IbisPlan(expr=expr, ordering=plan.ordering)
+        return plan
 
     @staticmethod
     def telemetry(ref: DatasetRef, *, ctx: ExecutionContext) -> ScanTelemetry | None:
@@ -225,6 +198,28 @@ class InMemoryPlanResolver:
         _ = ref
         _ = ctx
         return None
+
+
+def _ibis_plan_from_table_like(
+    value: TableLike | RecordBatchReaderLike,
+    *,
+    ordering: Ordering,
+    backend: BaseBackend | None = None,
+    name: str | None = None,
+) -> IbisPlan:
+    table = _ensure_table(value)
+    if backend is not None:
+        return table_to_ibis(table, backend=backend, name=name, ordering=ordering)
+    expr = ibis.memtable(table)
+    return IbisPlan(expr=expr, ordering=ordering)
+
+
+def _ensure_table(value: TableLike | RecordBatchReaderLike) -> pa.Table:
+    if isinstance(value, RecordBatchReaderLike):
+        return value.read_all()
+    if isinstance(value, pa.Table):
+        return value
+    return cast("pa.Table", value)
 
 
 def _build_rule_meta_kernel(rule: RelationshipRule) -> KernelFn:
@@ -256,11 +251,7 @@ def _rule_metadata_spec(rule: RelationshipRule) -> SchemaMetadataSpec:
     )
 
 
-def _apply_rule_metadata(
-    table: TableLike,
-    *,
-    rule: RelationshipRule,
-) -> TableLike:
+def _apply_rule_metadata(table: TableLike, *, rule: RelationshipRule) -> TableLike:
     schema = _rule_metadata_spec(rule).apply(table.schema)
     return table.cast(schema)
 
@@ -302,8 +293,9 @@ def _build_rename_columns_kernel(spec: RenameColumnsSpec) -> KernelFn:
 
 
 def _build_explode_list_kernel(spec: ExplodeListSpec) -> KernelFn:
-    def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
-        return explode_list_column(
+    def _fn(table: TableLike, ctx: ExecutionContext) -> TableLike:
+        kernel = resolve_kernel("explode_list", ctx=ctx)
+        return kernel(
             table,
             parent_id_col=spec.parent_id_col,
             list_col=spec.list_col,
@@ -317,9 +309,34 @@ def _build_explode_list_kernel(spec: ExplodeListSpec) -> KernelFn:
 def _build_dedupe_kernel(spec: DedupeKernelSpec) -> KernelFn:
     def _fn(table: TableLike, ctx: ExecutionContext) -> TableLike:
         resolved = _dedupe_spec_with_defaults(spec.spec, schema=table.schema)
-        return apply_dedupe(table, spec=resolved, _ctx=ctx)
+        kernel = resolve_kernel("dedupe", ctx=ctx)
+        return kernel(table, spec=resolved)
 
     return _fn
+
+
+def _kernel_from_spec(spec: object) -> KernelFn:
+    if isinstance(spec, AddLiteralSpec):
+        return _build_add_literal_kernel(spec)
+    if isinstance(spec, DropColumnsSpec):
+        return _build_drop_columns_kernel(spec)
+    if isinstance(spec, FilterKernelSpec):
+        return _build_filter_kernel(spec)
+    if isinstance(spec, RenameColumnsSpec):
+        return _build_rename_columns_kernel(spec)
+    if isinstance(spec, ExplodeListSpec):
+        return _build_explode_list_kernel(spec)
+    if isinstance(spec, DedupeKernelSpec):
+        return _build_dedupe_kernel(spec)
+    if isinstance(spec, CanonicalSortKernelSpec):
+        msg = "CanonicalSortKernelSpec is deprecated; use contract canonical_sort in finalize."
+        raise TypeError(msg)
+    msg = f"Unknown KernelSpec type: {type(spec).__name__}."
+    raise ValueError(msg)
+
+
+def _compile_post_kernels(specs: Sequence[KernelSpecT]) -> tuple[KernelFn, ...]:
+    return tuple(_kernel_from_spec(spec) for spec in specs)
 
 
 def _dedupe_spec_with_defaults(spec: DedupeSpec, *, schema: SchemaLike) -> DedupeSpec:
@@ -346,329 +363,6 @@ def _dedupe_spec_with_defaults(spec: DedupeSpec, *, schema: SchemaLike) -> Dedup
         strategy=spec.strategy,
         tie_breakers=(SortKey("score", "descending"), *filtered_defaults),
     )
-
-
-def _kernel_from_spec(spec: object) -> KernelFn:
-    if isinstance(spec, AddLiteralSpec):
-        return _build_add_literal_kernel(spec)
-    if isinstance(spec, DropColumnsSpec):
-        return _build_drop_columns_kernel(spec)
-    if isinstance(spec, FilterKernelSpec):
-        return _build_filter_kernel(spec)
-    if isinstance(spec, RenameColumnsSpec):
-        return _build_rename_columns_kernel(spec)
-    if isinstance(spec, ExplodeListSpec):
-        return _build_explode_list_kernel(spec)
-    if isinstance(spec, DedupeKernelSpec):
-        return _build_dedupe_kernel(spec)
-    if isinstance(spec, CanonicalSortKernelSpec):
-        msg = "CanonicalSortKernelSpec is deprecated; use contract canonical_sort in finalize."
-        raise TypeError(msg)
-    msg = f"Unknown KernelSpec type: {type(spec).__name__}."
-    raise ValueError(msg)
-
-
-def _compile_post_kernels(specs: Sequence[KernelSpecT]) -> tuple[KernelFn, ...]:
-    """Compile post-kernel specifications into callables.
-
-    Parameters
-    ----------
-    specs:
-        Post-kernel specs to compile.
-
-    Returns
-    -------
-    tuple[KernelFn, ...]
-        Post-kernel functions.
-    """
-    return tuple(_kernel_from_spec(spec) for spec in specs)
-
-
-def _materialize_plan_with_kernels(
-    plan: Plan,
-    specs: Sequence[KernelSpecT],
-    *,
-    ctx: ExecutionContext,
-    label: str,
-) -> Plan:
-    kernels = _compile_post_kernels(specs)
-
-    def _thunk() -> TableLike:
-        result = run_plan(
-            plan,
-            ctx=ctx,
-            prefer_reader=False,
-            attach_ordering_metadata=True,
-        )
-        table = cast("TableLike", result.value)
-        for kernel in kernels:
-            table = kernel(table, ctx)
-        return table
-
-    pipeline_breakers = (*plan.pipeline_breakers, "kernel_pipeline")
-    return Plan(
-        table_thunk=_thunk,
-        label=label,
-        ordering=Ordering.unordered(),
-        pipeline_breakers=pipeline_breakers,
-    )
-
-
-def _apply_add_literal_to_plan(
-    plan: Plan,
-    spec: AddLiteralSpec,
-    *,
-    ctx: ExecutionContext,
-    rule: RelationshipRule,
-) -> Plan:
-    schema = plan.schema(ctx=ctx)
-    names = list(schema.names)
-    if spec.name in names:
-        return plan
-    exprs = [FieldExpr(name=name).to_expression() for name in names]
-    exprs.append(ConstExpr(value=spec.value).to_expression())
-    names.append(spec.name)
-    return plan.project(exprs, names, label=plan.label or rule.name)
-
-
-def _apply_drop_columns_to_plan(
-    plan: Plan,
-    spec: DropColumnsSpec,
-    *,
-    ctx: ExecutionContext,
-    rule: RelationshipRule,
-) -> Plan:
-    schema = plan.schema(ctx=ctx)
-    keep = [name for name in schema.names if name not in spec.columns]
-    if keep == list(schema.names):
-        return plan
-    exprs = [FieldExpr(name=name).to_expression() for name in keep]
-    return plan.project(exprs, keep, label=plan.label or rule.name)
-
-
-def _apply_filter_to_plan(
-    plan: Plan,
-    spec: FilterKernelSpec,
-    *,
-    ctx: ExecutionContext,
-    rule: RelationshipRule,
-) -> Plan:
-    predicate = FilterSpec(spec.predicate.to_expr_spec()).to_expression()
-    return plan.filter(predicate, label=plan.label or rule.name, ctx=ctx)
-
-
-def _apply_rename_columns_to_plan(
-    plan: Plan,
-    spec: RenameColumnsSpec,
-    *,
-    ctx: ExecutionContext,
-    rule: RelationshipRule,
-) -> Plan:
-    if not spec.mapping:
-        return plan
-    schema = plan.schema(ctx=ctx)
-    names = list(schema.names)
-    renamed = [spec.mapping.get(name, name) for name in names]
-    if renamed == names:
-        return plan
-    exprs = [FieldExpr(name=name).to_expression() for name in names]
-    return plan.project(exprs, renamed, label=plan.label or rule.name)
-
-
-def _apply_canonical_sort_to_plan(
-    plan: Plan,
-    spec: CanonicalSortKernelSpec,
-    *,
-    ctx: ExecutionContext,
-    rule: RelationshipRule,
-) -> tuple[Plan, bool]:
-    if not spec.sort_keys:
-        return plan, True
-    schema = plan.schema(ctx=ctx)
-    names = set(schema.names)
-    if any(key.column not in names for key in spec.sort_keys):
-        return plan, False
-    sort_keys = [(key.column, key.order) for key in spec.sort_keys]
-    return plan.order_by(sort_keys, ctx=ctx, label=plan.label or rule.name), True
-
-
-def _apply_dedupe_to_plan(
-    plan: Plan,
-    spec: DedupeKernelSpec,
-    *,
-    ctx: ExecutionContext,
-    rule: RelationshipRule,
-) -> tuple[Plan, bool]:
-    strategy = spec.spec.strategy
-    if strategy not in {"KEEP_ARBITRARY", "COLLAPSE_LIST", "KEEP_BEST_BY_SCORE"}:
-        return plan, False
-    if not spec.spec.keys:
-        return plan, True
-    schema = plan.schema(ctx=ctx)
-    names = list(schema.names)
-    if any(key not in names for key in spec.spec.keys):
-        return plan, False
-    non_keys = [name for name in names if name not in spec.spec.keys]
-    if not non_keys:
-        return plan, False
-    if strategy == "KEEP_BEST_BY_SCORE":
-        resolved = _dedupe_spec_with_defaults(spec.spec, schema=schema)
-        if not resolved.tie_breakers:
-            return plan, False
-        plan = plan.winner_select(
-            resolved, columns=non_keys, ctx=ctx, label=plan.label or rule.name
-        )
-    else:
-        agg_fn = "first" if strategy == "KEEP_ARBITRARY" else "list"
-        plan = plan.aggregate(
-            group_keys=list(spec.spec.keys), aggs=[(col, agg_fn) for col in non_keys]
-        )
-        agg_names = [f"{col}_{agg_fn}" for col in non_keys]
-        exprs = [FieldExpr(name=name).to_expression() for name in spec.spec.keys]
-        exprs.extend(FieldExpr(name=name).to_expression() for name in agg_names)
-        out_names = list(spec.spec.keys) + non_keys
-        plan = plan.project(exprs, out_names, label=plan.label or rule.name)
-    return plan, True
-
-
-def _apply_simple_kernel_spec(
-    plan: Plan,
-    spec: KernelSpecT,
-    *,
-    ctx: ExecutionContext,
-    rule: RelationshipRule,
-) -> Plan | None:
-    if isinstance(spec, AddLiteralSpec):
-        return _apply_add_literal_to_plan(plan, spec, ctx=ctx, rule=rule)
-    if isinstance(spec, DropColumnsSpec):
-        return _apply_drop_columns_to_plan(plan, spec, ctx=ctx, rule=rule)
-    if isinstance(spec, FilterKernelSpec):
-        return _apply_filter_to_plan(plan, spec, ctx=ctx, rule=rule)
-    if isinstance(spec, RenameColumnsSpec):
-        return _apply_rename_columns_to_plan(plan, spec, ctx=ctx, rule=rule)
-    return None
-
-
-def _apply_plan_kernel_specs(
-    plan: Plan,
-    specs: Sequence[KernelSpecT],
-    *,
-    ctx: ExecutionContext,
-    rule: RelationshipRule,
-) -> tuple[Plan, tuple[KernelSpecT, ...]]:
-    if plan.decl is None or not specs:
-        return plan, tuple(specs)
-    remaining: list[KernelSpecT] = []
-    for idx, spec in enumerate(specs):
-        applied = _apply_simple_kernel_spec(plan, spec, ctx=ctx, rule=rule)
-        if applied is not None:
-            plan = applied
-            continue
-        if isinstance(spec, CanonicalSortKernelSpec):
-            plan, applied = _apply_canonical_sort_to_plan(plan, spec, ctx=ctx, rule=rule)
-            if applied:
-                continue
-        if isinstance(spec, ExplodeListSpec):
-            plan = plan.explode_list(
-                parent_id_col=spec.parent_id_col,
-                list_col=spec.list_col,
-                out_cols=(spec.out_parent_col, spec.out_value_col),
-                ctx=ctx,
-                label=plan.label or rule.name,
-            )
-            remaining_specs = list(specs[idx + 1 :])
-            if remaining_specs:
-                plan = _materialize_plan_with_kernels(
-                    plan,
-                    remaining_specs,
-                    ctx=ctx,
-                    label=plan.label or rule.name,
-                )
-            remaining = []
-            break
-        if isinstance(spec, DedupeKernelSpec):
-            plan, applied = _apply_dedupe_to_plan(plan, spec, ctx=ctx, rule=rule)
-            if applied:
-                continue
-        remaining = list(specs[idx:])
-        break
-    else:
-        remaining = []
-    return plan, tuple(remaining)
-
-
-def _apply_project_to_plan(
-    plan: Plan, project: ProjectConfig | None, *, rule: RelationshipRule
-) -> Plan:
-    """Apply a projection in the plan lane when configured.
-
-    Parameters
-    ----------
-    plan:
-        Input plan.
-    project:
-        Optional projection configuration.
-    rule:
-        Rule providing a fallback label.
-
-    Returns
-    -------
-    Plan
-        Projected plan when projection is configured; otherwise the original plan.
-    """
-    if project is None:
-        return plan
-
-    if not project.select and not project.exprs:
-        return plan
-
-    exprs: list[ComputeExpression] = []
-    names: list[str] = []
-
-    for col in project.select:
-        exprs.append(FieldExpr(name=col).to_expression())
-        names.append(col)
-
-    for name, expr in project.exprs.items():
-        exprs.append(expr.to_expression())
-        names.append(name)
-
-    if not exprs:
-        return plan
-
-    return plan.project(exprs, names, label=plan.label or rule.name)
-
-
-def _apply_rule_meta_to_plan(
-    plan: Plan,
-    *,
-    rule: RelationshipRule,
-    ctx: ExecutionContext,
-) -> Plan:
-    if not rule.emit_rule_meta:
-        return plan
-    schema = plan.schema(ctx=ctx)
-    names = list(schema.names)
-    exprs = [FieldExpr(name=name).to_expression() for name in names]
-    if rule.rule_name_col not in names:
-        exprs.append(ConstExpr(value=rule.name).to_expression())
-        names.append(rule.rule_name_col)
-    if rule.rule_priority_col not in names:
-        exprs.append(ConstExpr(value=int(rule.priority)).to_expression())
-        names.append(rule.rule_priority_col)
-    return plan.project(exprs, names, label=plan.label or rule.name)
-
-
-def _align_plan(plan: Plan, *, schema: pa.Schema, ctx: ExecutionContext) -> Plan:
-    return align_plan(plan, schema=schema, ctx=ctx)
-
-
-def _union_all_plans_aligned(plans: Sequence[Plan], *, ctx: ExecutionContext) -> Plan:
-    schema = SchemaEvolutionSpec().unify_schema_from_schemas(
-        [plan.schema(ctx=ctx) for plan in plans]
-    )
-    aligned = [_align_plan(plan, schema=schema, ctx=ctx) for plan in plans]
-    return union_all_plans(aligned, label="relspec_union")
 
 
 def _schema_for_contract(contract: Contract) -> SchemaLike:
@@ -746,17 +440,80 @@ def validate_policy_requirements(rule: RelationshipRule, schema: SchemaLike) -> 
         raise ValueError(msg)
 
 
+def _source_node(ref: DatasetRef) -> RelSource:
+    return RelSource(ref=ref, query=ref.query, label=ref.label or ref.name)
+
+
+def _project_node(node: RelNode, project: ProjectConfig | None) -> RelNode:
+    if project is None or (not project.select and not project.exprs):
+        return node
+    return RelProject(source=node, columns=project.select, derived=dict(project.exprs))
+
+
+def rel_plan_for_rule(rule: RelationshipRule) -> RelPlan | None:
+    """Return a relational plan for rules that can compile to plan lane.
+
+    Returns
+    -------
+    RelPlan | None
+        Compiled plan for plan-lane rules, otherwise ``None``.
+
+    Raises
+    ------
+    ValueError
+        Raised when a rule is missing required configuration.
+    """
+    if rule.kind == RuleKind.FILTER_PROJECT:
+        node = _project_node(_source_node(rule.inputs[0]), rule.project)
+        return RelPlan(root=node, ordering=Ordering.unordered(), label=rule.name)
+    if rule.kind == RuleKind.HASH_JOIN:
+        if rule.hash_join is None:
+            msg = "HASH_JOIN rules require hash_join config."
+            raise ValueError(msg)
+        left, right = rule.inputs
+        join_node = RelJoin(
+            left=_source_node(left),
+            right=_source_node(right),
+            join=rule.hash_join,
+            label=rule.name,
+        )
+        node = _project_node(join_node, rule.project)
+        return RelPlan(root=node, ordering=Ordering.unordered(), label=rule.name)
+    if rule.kind == RuleKind.EXPLODE_LIST:
+        return RelPlan(
+            root=_source_node(rule.inputs[0]),
+            ordering=Ordering.unordered(),
+            label=rule.name,
+        )
+    if rule.kind == RuleKind.UNION_ALL:
+        union_node = RelUnion(
+            inputs=tuple(_source_node(ref) for ref in rule.inputs),
+            distinct=False,
+            label=rule.name,
+        )
+        node = _project_node(union_node, rule.project)
+        return RelPlan(root=node, ordering=Ordering.unordered(), label=rule.name)
+    return None
+
+
 @dataclass(frozen=True)
 class CompiledRule:
     """Executable compiled form of a rule."""
 
     rule: RelationshipRule
-    plan: Plan | None
-    execute_fn: Callable[[ExecutionContext, PlanResolver], TableLike] | None
+    rel_plan: RelPlan | None
+    execute_fn: Callable[[ExecutionContext, PlanResolver[IbisPlan]], TableLike] | None
     post_kernels: tuple[KernelFn, ...] = ()
     emit_rule_meta: bool = True
 
-    def execute(self, *, ctx: ExecutionContext, resolver: PlanResolver) -> TableLike:
+    def execute(
+        self,
+        *,
+        ctx: ExecutionContext,
+        resolver: PlanResolver[IbisPlan],
+        compiler: RelPlanCompiler[IbisPlan],
+        params: Mapping[IbisValue, object] | None = None,
+    ) -> TableLike:
         """Execute the compiled rule into a table.
 
         Parameters
@@ -765,6 +522,10 @@ class CompiledRule:
             Execution context.
         resolver:
             Plan resolver for dataset references.
+        compiler:
+            Compiler for relationship plans.
+        params:
+            Optional Ibis parameter bindings for plan execution.
 
         Returns
         -------
@@ -778,83 +539,17 @@ class CompiledRule:
         """
         if self.execute_fn is not None:
             table = self.execute_fn(ctx, resolver)
-            if self.emit_rule_meta:
-                table = _build_rule_meta_kernel(self.rule)(table, ctx)
-            for fn in self.post_kernels:
-                table = fn(table, ctx)
-            return _apply_rule_metadata(table, rule=self.rule)
-        if self.plan is None:
-            msg = "CompiledRule has neither plan nor execute_fn."
+        elif self.rel_plan is not None:
+            plan = compiler.compile(self.rel_plan, ctx=ctx, resolver=resolver)
+            table = plan.to_table(params=params)
+        else:
+            msg = "CompiledRule has neither rel_plan nor execute_fn."
             raise RuntimeError(msg)
-        result = run_plan(
-            self.plan,
-            ctx=ctx,
-            prefer_reader=False,
-            attach_ordering_metadata=True,
-        )
-        table = cast("TableLike", result.value)
         if self.emit_rule_meta:
             table = _build_rule_meta_kernel(self.rule)(table, ctx)
         for fn in self.post_kernels:
             table = fn(table, ctx)
         return _apply_rule_metadata(table, rule=self.rule)
-
-
-def _should_materialize_rule(compiled: CompiledRule) -> bool:
-    if compiled.rule.execution_mode == "table":
-        return True
-    if compiled.execute_fn is not None:
-        return True
-    if compiled.plan is None or compiled.plan.decl is None:
-        return True
-    return bool(compiled.post_kernels)
-
-
-def _collect_compiled_parts(
-    contributors: Sequence[CompiledRule],
-    *,
-    ctx: ExecutionContext,
-    resolver: PlanResolver,
-) -> tuple[list[Plan], list[TableLike]]:
-    plan_parts: list[Plan] = []
-    table_parts: list[TableLike] = []
-    for compiled in contributors:
-        if _should_materialize_rule(compiled):
-            table_parts.append(compiled.execute(ctx=ctx, resolver=resolver))
-            continue
-        plan = compiled.plan
-        if plan is None:
-            msg = f"CompiledRule {compiled.rule.name!r} missing plan for plan execution."
-            raise RuntimeError(msg)
-        plan_parts.append(_apply_rule_meta_to_plan(plan, rule=compiled.rule, ctx=ctx))
-    return plan_parts, table_parts
-
-
-def _finalize_output_tables(
-    *,
-    output_dataset: str,
-    contract_name: str | None,
-    table_parts: Sequence[TableLike],
-    ctx: ExecutionContext,
-    contracts: ContractCatalog,
-) -> FinalizeResult:
-    if contract_name is None:
-        unioned = SchemaEvolutionSpec().unify_and_cast(
-            table_parts,
-            safe_cast=ctx.safe_cast,
-            on_error="unsafe" if ctx.safe_cast else "raise",
-            keep_extra_columns=ctx.provenance,
-        )
-        dummy = Contract(name=f"{output_dataset}_NO_CONTRACT", schema=unioned.schema)
-        finalize_ctx = dataset_spec_from_contract(dummy).finalize_context(ctx)
-        return finalize_ctx.run(unioned, ctx=ctx)
-
-    contract = contracts.get(contract_name)
-    dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(contract.name)
-    if dataset_spec is None:
-        dataset_spec = dataset_spec_from_contract(contract)
-    unioned = dataset_spec.unify_tables(table_parts, ctx=ctx)
-    return dataset_spec.finalize_context(ctx).run(unioned, ctx=ctx)
 
 
 @dataclass(frozen=True)
@@ -865,9 +560,16 @@ class CompiledOutput:
     contract_name: str | None
     contributors: tuple[CompiledRule, ...] = ()
     telemetry: Mapping[str, ScanTelemetry] = field(default_factory=dict)
+    runtime_telemetry: Mapping[str, object] = field(default_factory=dict)
 
     def execute(
-        self, *, ctx: ExecutionContext, resolver: PlanResolver, contracts: ContractCatalog
+        self,
+        *,
+        ctx: ExecutionContext,
+        resolver: PlanResolver[IbisPlan],
+        compiler: RelPlanCompiler[IbisPlan] | None = None,
+        contracts: ContractCatalog,
+        params: Mapping[IbisValue, object] | None = None,
     ) -> FinalizeResult:
         """Execute contributing rules and finalize against the output contract.
 
@@ -877,8 +579,12 @@ class CompiledOutput:
             Execution context.
         resolver:
             Plan resolver for dataset references.
+        compiler:
+            Compiler for relationship plans.
         contracts:
             Contract catalog for finalization.
+        params:
+            Optional Ibis parameter bindings for plan execution.
 
         Returns
         -------
@@ -893,27 +599,19 @@ class CompiledOutput:
         ctx_exec = ctx
         if ctx.determinism == DeterminismTier.CANONICAL and not ctx.provenance:
             ctx_exec = ctx.with_provenance(provenance=True)
-
         if not self.contributors:
             msg = f"CompiledOutput {self.output_dataset!r} has no contributors."
             raise ValueError(msg)
-
-        plan_parts, table_parts = _collect_compiled_parts(
-            self.contributors,
-            ctx=ctx_exec,
-            resolver=resolver,
-        )
-
-        if plan_parts:
-            union = union_all_plans(plan_parts, label=self.output_dataset)
-            result = run_plan(
-                union,
+        plan_compiler = compiler or IbisRelPlanCompiler()
+        table_parts = [
+            compiled.execute(
                 ctx=ctx_exec,
-                prefer_reader=False,
-                attach_ordering_metadata=True,
+                resolver=resolver,
+                compiler=plan_compiler,
+                params=params,
             )
-            table_parts.append(cast("TableLike", result.value))
-
+            for compiled in self.contributors
+        ]
         return _finalize_output_tables(
             output_dataset=self.output_dataset,
             contract_name=self.contract_name,
@@ -926,119 +624,86 @@ class CompiledOutput:
 class RelationshipRuleCompiler:
     """Compile ``RelationshipRule`` instances into executable units."""
 
-    def __init__(self, *, resolver: PlanResolver) -> None:
-        self.resolver = resolver
-
-    def _compile_filter_project(
+    def __init__(
         self,
+        *,
+        resolver: PlanResolver[IbisPlan],
+        plan_compiler: RelPlanCompiler[IbisPlan] | None = None,
+    ) -> None:
+        self.resolver = resolver
+        self.plan_compiler = plan_compiler or IbisRelPlanCompiler()
+
+    @staticmethod
+    def _compile_filter_project(
         rule: RelationshipRule,
         *,
-        ctx: ExecutionContext,
         post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
-        src = rule.inputs[0]
-        plan = self.resolver.resolve(src, ctx=ctx)
-        plan = _apply_project_to_plan(plan, rule.project, rule=rule)
-        plan, remaining = _apply_plan_kernel_specs(plan, post_kernels, ctx=ctx, rule=rule)
+        src = _source_node(rule.inputs[0])
+        node = _project_node(src, rule.project)
+        plan = RelPlan(root=node, ordering=Ordering.unordered(), label=rule.name)
         return CompiledRule(
             rule=rule,
-            plan=plan,
+            rel_plan=plan,
             execute_fn=None,
-            post_kernels=_compile_post_kernels(remaining),
+            post_kernels=_compile_post_kernels(post_kernels),
             emit_rule_meta=rule.emit_rule_meta,
         )
 
+    @staticmethod
     def _compile_hash_join(
-        self,
         rule: RelationshipRule,
         *,
-        ctx: ExecutionContext,
         post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
         if rule.hash_join is None:
             msg = "HASH_JOIN rules require hash_join config."
             raise ValueError(msg)
         left_ref, right_ref = rule.inputs
-        left_plan = self.resolver.resolve(left_ref, ctx=ctx)
-        right_plan = self.resolver.resolve(right_ref, ctx=ctx)
-
-        join_plan = hash_join(
-            left=left_plan,
-            right=right_plan,
-            spec=rule.hash_join.to_join_spec(),
-            label=rule.name,
-        )
-        join_plan = _apply_project_to_plan(join_plan, rule.project, rule=rule)
-        join_plan, remaining = _apply_plan_kernel_specs(join_plan, post_kernels, ctx=ctx, rule=rule)
+        join_cfg = rule.hash_join
+        left = _source_node(left_ref)
+        right = _source_node(right_ref)
+        join_node = RelJoin(left=left, right=right, join=join_cfg, label=rule.name)
+        node = _project_node(join_node, rule.project)
+        plan = RelPlan(root=node, ordering=Ordering.unordered(), label=rule.name)
         return CompiledRule(
             rule=rule,
-            plan=join_plan,
+            rel_plan=plan,
             execute_fn=None,
-            post_kernels=_compile_post_kernels(remaining),
+            post_kernels=_compile_post_kernels(post_kernels),
             emit_rule_meta=rule.emit_rule_meta,
         )
 
+    @staticmethod
     def _compile_passthrough(
-        self,
         rule: RelationshipRule,
         *,
-        ctx: ExecutionContext,
         post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
-        src = rule.inputs[0]
-        plan = self.resolver.resolve(src, ctx=ctx)
-        plan, remaining = _apply_plan_kernel_specs(plan, post_kernels, ctx=ctx, rule=rule)
+        src = _source_node(rule.inputs[0])
+        plan = RelPlan(root=src, ordering=Ordering.unordered(), label=rule.name)
         return CompiledRule(
             rule=rule,
-            plan=plan,
+            rel_plan=plan,
             execute_fn=None,
-            post_kernels=_compile_post_kernels(remaining),
+            post_kernels=_compile_post_kernels(post_kernels),
             emit_rule_meta=rule.emit_rule_meta,
         )
 
+    @staticmethod
     def _compile_union_all(
-        self,
         rule: RelationshipRule,
         *,
-        ctx: ExecutionContext,
         post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
-        plans = [self.resolver.resolve(inp, ctx=ctx) for inp in rule.inputs]
-        if all(plan.decl is not None for plan in plans):
-            aligned = _union_all_plans_aligned(plans, ctx=ctx)
-            return CompiledRule(
-                rule=rule,
-                plan=aligned,
-                execute_fn=None,
-                post_kernels=_compile_post_kernels(post_kernels),
-                emit_rule_meta=rule.emit_rule_meta,
-            )
-
-        def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> TableLike:
-            parts: list[TableLike] = []
-            for inp in rule.inputs:
-                plan = resolver.resolve(inp, ctx=ctx2)
-                result = run_plan(
-                    plan,
-                    ctx=ctx2,
-                    prefer_reader=False,
-                    attach_ordering_metadata=True,
-                )
-                parts.append(cast("TableLike", result.value))
-            dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(rule.output_dataset)
-            if dataset_spec is not None:
-                return dataset_spec.unify_tables(parts, ctx=ctx2)
-            return SchemaEvolutionSpec().unify_and_cast(
-                parts,
-                safe_cast=ctx2.safe_cast,
-                on_error="unsafe" if ctx2.safe_cast else "raise",
-                keep_extra_columns=ctx2.provenance,
-            )
-
+        inputs = tuple(_source_node(inp) for inp in rule.inputs)
+        union_node = RelUnion(inputs=inputs, distinct=False, label=rule.name)
+        node = _project_node(union_node, rule.project)
+        plan = RelPlan(root=node, ordering=Ordering.unordered(), label=rule.name)
         return CompiledRule(
             rule=rule,
-            plan=None,
-            execute_fn=_exec,
+            rel_plan=plan,
+            execute_fn=None,
             post_kernels=_compile_post_kernels(post_kernels),
             emit_rule_meta=rule.emit_rule_meta,
         )
@@ -1047,7 +712,6 @@ class RelationshipRuleCompiler:
     def _compile_interval_align(
         rule: RelationshipRule,
         *,
-        ctx: ExecutionContext,
         post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
         cfg = rule.interval_align
@@ -1071,40 +735,27 @@ class RelationshipRuleCompiler:
             match_score_col=cfg.match_score_col,
         )
 
-        def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> TableLike:
+        def _exec(ctx2: ExecutionContext, resolver: PlanResolver[IbisPlan]) -> TableLike:
             left_ref, right_ref = rule.inputs
             left_plan = resolver.resolve(left_ref, ctx=ctx2)
             right_plan = resolver.resolve(right_ref, ctx=ctx2)
-            lt_result = run_plan(
-                left_plan,
-                ctx=ctx2,
-                prefer_reader=False,
-                attach_ordering_metadata=True,
-            )
-            rt_result = run_plan(
-                right_plan,
-                ctx=ctx2,
-                prefer_reader=False,
-                attach_ordering_metadata=True,
-            )
-            lt = cast("TableLike", lt_result.value)
-            rt = cast("TableLike", rt_result.value)
-            return interval_align_table(lt, rt, cfg=interval_cfg)
+            lt = left_plan.to_table()
+            rt = right_plan.to_table()
+            kernel = resolve_kernel("interval_align", ctx=ctx2)
+            return kernel(lt, rt, cfg=interval_cfg)
 
-        _ = ctx
         return CompiledRule(
             rule=rule,
-            plan=None,
+            rel_plan=None,
             execute_fn=_exec,
             post_kernels=_compile_post_kernels(post_kernels),
             emit_rule_meta=rule.emit_rule_meta,
         )
 
+    @staticmethod
     def _compile_winner_select(
-        self,
         rule: RelationshipRule,
         *,
-        ctx: ExecutionContext,
         post_kernels: tuple[KernelSpecT, ...],
     ) -> CompiledRule:
         cfg = rule.winner_select
@@ -1112,46 +763,23 @@ class RelationshipRuleCompiler:
             msg = "WINNER_SELECT rules require winner_select config."
             raise ValueError(msg)
         winner_cfg = cfg
-        src = rule.inputs[0]
-        plan = self.resolver.resolve(src, ctx=ctx)
-        schema = plan.schema(ctx=ctx)
-        spec = DedupeSpec(
-            keys=winner_cfg.keys,
-            strategy="KEEP_BEST_BY_SCORE",
-            tie_breakers=(
-                SortKey(winner_cfg.score_col, winner_cfg.score_order),
-                *winner_cfg.tie_breakers,
-            ),
-        )
-        resolved = _dedupe_spec_with_defaults(spec, schema=schema)
-        if plan.decl is not None and resolved.tie_breakers:
-            non_keys = [name for name in schema.names if name not in resolved.keys]
-            plan = plan.winner_select(resolved, columns=non_keys, ctx=ctx, label=rule.name)
-            plan, remaining = _apply_plan_kernel_specs(plan, post_kernels, ctx=ctx, rule=rule)
-            return CompiledRule(
-                rule=rule,
-                plan=plan,
-                execute_fn=None,
-                post_kernels=_compile_post_kernels(remaining),
-                emit_rule_meta=rule.emit_rule_meta,
-            )
 
-        def _exec(ctx2: ExecutionContext, resolver: PlanResolver) -> TableLike:
+        def _exec(ctx2: ExecutionContext, resolver: PlanResolver[IbisPlan]) -> TableLike:
             src_exec = rule.inputs[0]
             plan_exec = resolver.resolve(src_exec, ctx=ctx2)
-            result = run_plan(
-                plan_exec,
-                ctx=ctx2,
-                prefer_reader=False,
-                attach_ordering_metadata=True,
+            table = plan_exec.to_table()
+            kernel = resolve_kernel("winner_select", ctx=ctx2)
+            return kernel(
+                table,
+                keys=winner_cfg.keys,
+                score_col=winner_cfg.score_col,
+                score_order=winner_cfg.score_order,
+                tie_breakers=winner_cfg.tie_breakers,
             )
-            table = cast("TableLike", result.value)
-            resolved_spec = _dedupe_spec_with_defaults(spec, schema=table.schema)
-            return apply_dedupe(table, spec=resolved_spec, _ctx=ctx2)
 
         return CompiledRule(
             rule=rule,
-            plan=None,
+            rel_plan=None,
             execute_fn=_exec,
             post_kernels=_compile_post_kernels(post_kernels),
             emit_rule_meta=rule.emit_rule_meta,
@@ -1177,6 +805,7 @@ class RelationshipRuleCompiler:
         ValueError
             Raised when the rule kind is unknown.
         """
+        _ = ctx
         handlers: dict[RuleKind, Callable[..., CompiledRule]] = {
             RuleKind.FILTER_PROJECT: self._compile_filter_project,
             RuleKind.HASH_JOIN: self._compile_hash_join,
@@ -1189,7 +818,7 @@ class RelationshipRuleCompiler:
         if handler is None:
             msg = f"Unknown rule kind: {rule.kind}."
             raise ValueError(msg)
-        compiled = handler(rule, ctx=ctx, post_kernels=rule.post_kernels)
+        compiled = handler(rule, post_kernels=rule.post_kernels)
         self._enforce_execution_mode(rule, compiled)
         return compiled
 
@@ -1197,7 +826,7 @@ class RelationshipRuleCompiler:
     def _enforce_execution_mode(rule: RelationshipRule, compiled: CompiledRule) -> None:
         if rule.execution_mode != "plan":
             return
-        if compiled.plan is None or compiled.post_kernels:
+        if compiled.rel_plan is None or compiled.post_kernels:
             msg = f"Rule {rule.name!r} requires plan execution."
             raise ValueError(msg)
 
@@ -1271,11 +900,13 @@ class RelationshipRuleCompiler:
 
             contributors = tuple(self.compile_rule(rule, ctx=ctx) for rule in rules_sorted)
             telemetry = self.collect_scan_telemetry(rules_sorted, ctx=ctx)
+            runtime_telemetry = runtime_telemetry_for_ctx(ctx)
             compiled[out_name] = CompiledOutput(
                 output_dataset=out_name,
                 contract_name=rules_sorted[0].contract_name,
                 contributors=contributors,
                 telemetry=telemetry,
+                runtime_telemetry=runtime_telemetry,
             )
         return compiled
 
@@ -1302,3 +933,42 @@ class RelationshipRuleCompiler:
                 if info is not None:
                     telemetry[key] = info
         return telemetry
+
+
+def _finalize_output_tables(
+    *,
+    output_dataset: str,
+    contract_name: str | None,
+    table_parts: Sequence[TableLike],
+    ctx: ExecutionContext,
+    contracts: ContractCatalog,
+) -> FinalizeResult:
+    if contract_name is None:
+        unioned = SchemaEvolutionSpec().unify_and_cast(
+            table_parts,
+            safe_cast=ctx.safe_cast,
+            on_error="unsafe" if ctx.safe_cast else "raise",
+            keep_extra_columns=ctx.provenance,
+        )
+        dummy = Contract(name=f"{output_dataset}_NO_CONTRACT", schema=unioned.schema)
+        finalize_ctx = dataset_spec_from_contract(dummy).finalize_context(ctx)
+        return finalize_ctx.run(unioned, ctx=ctx)
+
+    contract = contracts.get(contract_name)
+    dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(contract.name)
+    if dataset_spec is None:
+        dataset_spec = dataset_spec_from_contract(contract)
+    unioned = dataset_spec.unify_tables(table_parts, ctx=ctx)
+    return dataset_spec.finalize_context(ctx).run(unioned, ctx=ctx)
+
+
+__all__ = [
+    "CompiledOutput",
+    "CompiledRule",
+    "FilesystemPlanResolver",
+    "InMemoryPlanResolver",
+    "PlanResolver",
+    "RelationshipRuleCompiler",
+    "apply_policy_defaults",
+    "validate_policy_requirements",
+]

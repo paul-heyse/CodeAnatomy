@@ -4,19 +4,22 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
+import ibis
 import pyarrow as pa
+from ibis.backends import BaseBackend
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import TableLike
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.query import QuerySpec, ScanTelemetry
-from arrowdsl.plan.runner import run_plan
-from arrowdsl.schema.build import ConstExpr, FieldExpr
-from arrowdsl.schema.ops import align_plan, align_table
+from arrowdsl.plan.query import ScanTelemetry
+from arrowdsl.schema.ops import align_table
 from cpg.catalog import PlanCatalog, resolve_plan_source
+from cpg.ibis_bridge import plan_bundle_to_ibis
 from cpg.plan_specs import ensure_plan
+from ibis_engine.plan import IbisPlan
+from ibis_engine.plan_bridge import table_to_ibis
+from ibis_engine.query_compiler import apply_query_spec
 from relspec.compiler import (
     RelationshipRuleCompiler,
     apply_policy_defaults,
@@ -31,6 +34,9 @@ from relspec.rules.compiler import RuleCompiler
 from relspec.rules.handlers.cpg import RelationshipRuleHandler
 from relspec.rules.spec_tables import rule_definitions_from_table
 
+if TYPE_CHECKING:
+    from ibis.expr.types import Value as IbisValue
+
 
 @dataclass(frozen=True)
 class RelationPlanBundle:
@@ -40,19 +46,31 @@ class RelationPlanBundle:
     telemetry: Mapping[str, ScanTelemetry] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class RelationPlanCompileOptions:
+    """Options for compiling relationship plans."""
+
+    rule_table: pa.Table | None = None
+    materialize_debug: bool | None = None
+    required_sources: Sequence[str] | None = None
+    backend: BaseBackend | None = None
+    param_bindings: Mapping[IbisValue, object] | None = None
+
+
 class CatalogPlanResolver:
     """Resolve dataset refs using the CPG plan catalog."""
 
-    def __init__(self, catalog: PlanCatalog) -> None:
+    def __init__(self, catalog: PlanCatalog, *, backend: BaseBackend | None = None) -> None:
         self._catalog = catalog
+        self._backend = backend
 
-    def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> Plan:
-        """Resolve a DatasetRef into a Plan.
+    def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
+        """Resolve a DatasetRef into an Ibis plan.
 
         Returns
         -------
-        Plan
-            Plan for the dataset reference.
+        IbisPlan
+            Ibis plan for the dataset reference.
 
         Raises
         ------
@@ -64,9 +82,21 @@ class CatalogPlanResolver:
             msg = f"Unknown dataset reference: {ref.name!r}."
             raise KeyError(msg)
         plan = ensure_plan(source, label=ref.label or ref.name, ctx=ctx)
+        table = plan.to_table(ctx=ctx)
+        if self._backend is None:
+            expr = ibis.memtable(table)
+            ibis_plan = IbisPlan(expr=expr, ordering=plan.ordering)
+        else:
+            ibis_plan = table_to_ibis(
+                table,
+                backend=self._backend,
+                name=ref.label or ref.name,
+                ordering=plan.ordering,
+            )
         if ref.query is None:
-            return plan
-        return _apply_query_spec(plan, ref.query, ctx=ctx)
+            return ibis_plan
+        expr = apply_query_spec(ibis_plan.expr, spec=ref.query)
+        return IbisPlan(expr=expr, ordering=ibis_plan.ordering)
 
     @staticmethod
     def telemetry(ref: DatasetRef, *, ctx: ExecutionContext) -> ScanTelemetry | None:
@@ -86,9 +116,7 @@ def compile_relation_plans(
     catalog: PlanCatalog,
     *,
     ctx: ExecutionContext,
-    rule_table: pa.Table | None = None,
-    materialize_debug: bool | None = None,
-    required_sources: Sequence[str] | None = None,
+    options: RelationPlanCompileOptions | None = None,
 ) -> RelationPlanBundle:
     """Compile relationship rules into plans keyed by output dataset name.
 
@@ -97,41 +125,67 @@ def compile_relation_plans(
     RelationPlanBundle
         Plan bundle with output plans and scan telemetry.
     """
+    options = options or RelationPlanCompileOptions()
     rules, output_schema = _prepare_relation_rules(
         ctx,
-        rule_table=rule_table,
-        required_sources=required_sources,
+        rule_table=options.rule_table,
+        required_sources=options.required_sources,
     )
-    materialize = ctx.debug if materialize_debug is None else materialize_debug
+    ctx_exec = ctx if options.materialize_debug is None else replace(
+        ctx,
+        debug=options.materialize_debug,
+    )
     work_catalog = PlanCatalog(catalog.snapshot())
     evidence = EvidenceCatalog.from_plan_catalog(work_catalog, ctx=ctx)
-    resolver = CatalogPlanResolver(work_catalog)
+    resolver = CatalogPlanResolver(work_catalog, backend=options.backend)
     compiler = RelationshipRuleCompiler(resolver=resolver)
     plans: dict[str, Plan] = {}
     telemetry = compiler.collect_scan_telemetry(rules, ctx=ctx)
     for rule in order_rules(rules, evidence=evidence):
-        compiled = compiler.compile_rule(rule, ctx=ctx)
-        if compiled.plan is not None and not compiled.post_kernels:
-            plan = _apply_rule_meta(compiled.plan, rule, ctx=ctx)
-            aligned = align_plan(plan, schema=output_schema, ctx=ctx)
-            force_materialize = materialize or rule.execution_mode == "table"
-            if force_materialize:
-                materialized = _materialize_plan(aligned, ctx=ctx, label=rule.name)
-                plans[rule.output_dataset] = materialized
-                work_catalog.add(rule.output_dataset, materialized)
-                evidence.register(rule.output_dataset, materialized.schema(ctx=ctx))
-            else:
-                plans[rule.output_dataset] = aligned
-                work_catalog.add(rule.output_dataset, aligned)
-                evidence.register(rule.output_dataset, aligned.schema(ctx=ctx))
-            continue
-        table = compiled.execute(ctx=ctx, resolver=resolver)
-        aligned = align_table(table, schema=output_schema, ctx=ctx)
+        compiled = compiler.compile_rule(rule, ctx=ctx_exec)
+        table = compiled.execute(
+            ctx=ctx_exec,
+            resolver=resolver,
+            compiler=compiler.plan_compiler,
+            params=options.param_bindings,
+        )
+        aligned = align_table(table, schema=output_schema, ctx=ctx_exec)
         plan = Plan.table_source(aligned, label=rule.name)
         plans[rule.output_dataset] = plan
         work_catalog.add(rule.output_dataset, plan)
         evidence.register(rule.output_dataset, aligned.schema)
     return RelationPlanBundle(plans=plans, telemetry=telemetry)
+
+
+def compile_relation_plans_ibis(
+    catalog: PlanCatalog,
+    *,
+    ctx: ExecutionContext,
+    backend: BaseBackend,
+    options: RelationPlanCompileOptions | None = None,
+    name_prefix: str = "cpg_rel",
+) -> dict[str, IbisPlan]:
+    """Compile relationship rules into Ibis plans keyed by output dataset name.
+
+    Returns
+    -------
+    dict[str, IbisPlan]
+        Ibis plans keyed by output dataset name.
+    """
+    options = options or RelationPlanCompileOptions()
+    if options.backend is None:
+        options = replace(options, backend=backend)
+    bundle = compile_relation_plans(
+        catalog,
+        ctx=ctx,
+        options=options,
+    )
+    return plan_bundle_to_ibis(
+        bundle.plans,
+        ctx=ctx,
+        backend=backend,
+        name_prefix=name_prefix,
+    )
 
 
 def _resolve_relation_rules(
@@ -178,42 +232,14 @@ def _apply_rule_policy_defaults(
     return rules
 
 
-def _apply_query_spec(plan: Plan, spec: QuerySpec, *, ctx: ExecutionContext) -> Plan:
-    plan = spec.apply_to_plan(plan, ctx=ctx)
-    pushdown = spec.pushdown_expression()
-    if pushdown is not None:
-        plan = plan.filter(pushdown, ctx=ctx)
-    return plan
-
-
-def _apply_rule_meta(plan: Plan, rule: RelationshipRule, *, ctx: ExecutionContext) -> Plan:
-    if not rule.emit_rule_meta:
-        return plan
-    schema = plan.schema(ctx=ctx)
-    names = list(schema.names)
-    exprs = [FieldExpr(name=name).to_expression() for name in names]
-    if rule.rule_name_col not in names:
-        exprs.append(ConstExpr(value=rule.name).to_expression())
-        names.append(rule.rule_name_col)
-    if rule.rule_priority_col not in names:
-        exprs.append(ConstExpr(value=int(rule.priority)).to_expression())
-        names.append(rule.rule_priority_col)
-    return plan.project(exprs, names, label=plan.label or rule.name)
-
-
-def _materialize_plan(plan: Plan, *, ctx: ExecutionContext, label: str) -> Plan:
-    result = run_plan(
-        plan,
-        ctx=ctx,
-        prefer_reader=False,
-        attach_ordering_metadata=True,
-    )
-    table = cast("TableLike", result.value)
-    return Plan.table_source(table, label=label)
-
-
 def _rule_sources(rule: RelationshipRule) -> tuple[str, ...]:
     return tuple(ref.name for ref in rule.inputs)
 
 
-__all__ = ["CatalogPlanResolver", "RelationPlanBundle", "compile_relation_plans"]
+__all__ = [
+    "CatalogPlanResolver",
+    "RelationPlanBundle",
+    "RelationPlanCompileOptions",
+    "compile_relation_plans",
+    "compile_relation_plans_ibis",
+]

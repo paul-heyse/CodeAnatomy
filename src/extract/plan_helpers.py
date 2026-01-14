@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass
 
+from ibis.backends import BaseBackend
+
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, SchemaLike
 from arrowdsl.plan.plan import Plan
@@ -14,12 +16,16 @@ from arrowdsl.plan_helpers import column_or_null_expr
 from arrowdsl.schema.schema import empty_table
 from arrowdsl.spec.codec import parse_string_tuple
 from arrowdsl.spec.expr_ir import ExprIR, ExprRegistry, ExprSpec, expr_spec_from_json
+from config import AdapterMode
 from extract.evidence_plan import EvidencePlan
 from extract.registry_pipelines import pipeline_spec
 from extract.registry_specs import dataset_query, dataset_schema, query_expr_registry
 from extract.registry_specs import dataset_row as registry_row
 from extract.schema_ops import ExtractNormalizeOptions, normalize_extract_plan
 from extract.spec_helpers import plan_requires_row, rule_execution_options
+from ibis_engine.plan import IbisPlan
+from ibis_engine.plan_bridge import plan_to_ibis
+from ibis_engine.query_bridge import QueryBridgeResult, queryspec_to_ibis
 from relspec.rules.definitions import RuleStage, stage_enabled
 
 
@@ -72,6 +78,23 @@ class ExtractPlanBuildOptions:
     evidence_plan: EvidencePlan | None = None
 
 
+@dataclass(frozen=True)
+class ExtractIbisPlanBuildOptions:
+    """Options for building Ibis plans from extract row data."""
+
+    backend: BaseBackend
+    plan_options: ExtractPlanBuildOptions | None = None
+
+
+@dataclass(frozen=True)
+class ExtractPlanAdapterOptions:
+    """Options for building adapter-routed extract plans."""
+
+    adapter_mode: AdapterMode | None = None
+    ibis_backend: BaseBackend | None = None
+    plan_options: ExtractPlanBuildOptions | None = None
+
+
 def plan_from_rows_for_dataset(
     name: str,
     rows: Iterable[Mapping[str, object]],
@@ -95,6 +118,76 @@ def plan_from_rows_for_dataset(
         ctx=ctx,
         normalize=options.normalize,
         evidence_plan=options.evidence_plan,
+    )
+
+
+def plan_from_rows_for_dataset_ibis(
+    name: str,
+    rows: Iterable[Mapping[str, object]],
+    *,
+    row_schema: SchemaLike,
+    ctx: ExecutionContext,
+    ibis_options: ExtractIbisPlanBuildOptions,
+) -> IbisPlan:
+    """Build an Ibis plan from row data with dataset query and normalization.
+
+    Returns
+    -------
+    IbisPlan
+        Ibis plan for the dataset rows.
+    """
+    plan = plan_from_rows_for_dataset(
+        name,
+        rows,
+        row_schema=row_schema,
+        ctx=ctx,
+        options=ibis_options.plan_options,
+    )
+    return plan_to_ibis(plan, ctx=ctx, backend=ibis_options.backend, name=name)
+
+
+def plan_from_rows_for_dataset_adapter(
+    name: str,
+    rows: Iterable[Mapping[str, object]],
+    *,
+    row_schema: SchemaLike,
+    ctx: ExecutionContext,
+    options: ExtractPlanAdapterOptions | None = None,
+) -> Plan | IbisPlan:
+    """Build a plan (or Ibis plan) from row data with adapter routing.
+
+    Returns
+    -------
+    Plan | IbisPlan
+        Plan or Ibis plan for the dataset rows.
+
+    Raises
+    ------
+    ValueError
+        Raised when the Ibis adapter is enabled without a backend.
+    """
+    options = options or ExtractPlanAdapterOptions()
+    resolved_mode = options.adapter_mode or AdapterMode()
+    if resolved_mode.use_ibis_bridge:
+        if options.ibis_backend is None:
+            msg = "Ibis backend is required when AdapterMode.use_ibis_bridge is enabled."
+            raise ValueError(msg)
+        return plan_from_rows_for_dataset_ibis(
+            name,
+            rows,
+            row_schema=row_schema,
+            ctx=ctx,
+            ibis_options=ExtractIbisPlanBuildOptions(
+                backend=options.ibis_backend,
+                plan_options=options.plan_options,
+            ),
+        )
+    return plan_from_rows_for_dataset(
+        name,
+        rows,
+        row_schema=row_schema,
+        ctx=ctx,
+        options=options.plan_options,
     )
 
 
@@ -174,6 +267,20 @@ def _query_ops_to_spec(ops: Sequence[Mapping[str, object]]) -> QuerySpec | None:
     )
 
 
+def query_ops_to_ibis(ops: Sequence[Mapping[str, object]]) -> QueryBridgeResult | None:
+    """Return an Ibis bridge spec for query ops when possible.
+
+    Returns
+    -------
+    QueryBridgeResult | None
+        Bridge spec when the ops can be represented, otherwise ``None``.
+    """
+    spec = _query_ops_to_spec(ops)
+    if spec is None:
+        return None
+    return queryspec_to_ibis(spec)
+
+
 def _apply_pipeline_query_ops(name: str, plan: Plan, *, ctx: ExecutionContext) -> Plan:
     ops = pipeline_spec(name).query_ops
     spec = _query_ops_to_spec(ops)
@@ -248,9 +355,13 @@ def _options_overrides(options: object | None) -> Mapping[str, object]:
 
 
 __all__ = [
+    "ExtractPlanAdapterOptions",
     "ExtractPlanBuildOptions",
     "apply_evidence_projection",
     "apply_query_and_normalize",
     "empty_plan_for_dataset",
     "plan_from_rows_for_dataset",
+    "plan_from_rows_for_dataset_adapter",
+    "plan_from_rows_for_dataset_ibis",
+    "query_ops_to_ibis",
 ]

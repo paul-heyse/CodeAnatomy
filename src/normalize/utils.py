@@ -20,7 +20,7 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.plan.joins import code_unit_meta_config, left_join
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.runner import run_plan_bundle
+from arrowdsl.plan.runner import AdapterRunOptions, run_plan_bundle_adapter
 from arrowdsl.plan_helpers import (
     PlanSource,
     encoding_columns_from_metadata,
@@ -40,6 +40,8 @@ from arrowdsl.schema.metadata import (
     encoding_policy_from_schema,
 )
 from arrowdsl.schema.ops import align_plan as align_plan_to_schema_helper
+from config import AdapterMode
+from ibis_engine.plan import IbisPlan
 from normalize.registry_ids import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
@@ -87,9 +89,10 @@ def align_plan_to_schema(
 
 
 def finalize_plan_bundle(
-    plans: Mapping[str, Plan],
+    plans: Mapping[str, Plan | IbisPlan],
     *,
     ctx: ExecutionContext,
+    adapter_mode: AdapterMode | None = None,
     prefer_reader: bool = False,
 ) -> dict[str, TableLike | RecordBatchReaderLike]:
     """Finalize a bundle of plans into tables or readers.
@@ -99,7 +102,14 @@ def finalize_plan_bundle(
     dict[str, TableLike | RecordBatchReaderLike]
         Finalized plan outputs keyed by name.
     """
-    return run_plan_bundle(plans, ctx=ctx, prefer_reader=prefer_reader)
+    return run_plan_bundle_adapter(
+        plans,
+        ctx=ctx,
+        options=AdapterRunOptions(
+            adapter_mode=adapter_mode,
+            prefer_reader=prefer_reader,
+        ),
+    )
 
 
 __all__ = [

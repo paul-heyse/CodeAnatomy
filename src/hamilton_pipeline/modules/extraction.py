@@ -35,6 +35,7 @@ from extract.repo_scan import RepoScanOptions, scan_repo
 from extract.runtime_inspect_extract import RuntimeInspectOptions, extract_runtime_tables
 from extract.schema_ops import validate_extract_output
 from extract.scip_extract import (
+    ScipExtractContext,
     ScipExtractOptions,
     SCIPParseOptions,
     extract_scip_tables,
@@ -421,9 +422,11 @@ def scip_bundle(
     if not template_outputs(evidence_plan, "scip"):
         return _empty_bundle(SCIP_BUNDLE_OUTPUTS)
     tables = extract_scip_tables(
-        scip_index_path=scip_index_path,
-        repo_root=repo_root,
-        ctx=extract_execution_context.ctx,
+        context=ScipExtractContext(
+            scip_index_path=scip_index_path,
+            repo_root=repo_root,
+            ctx=extract_execution_context.ctx,
+        ),
         options=ScipExtractOptions(
             parse_opts=scip_parse_options,
             evidence_plan=evidence_plan,

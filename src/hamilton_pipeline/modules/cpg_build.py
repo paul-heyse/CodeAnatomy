@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
+from ibis.backends import BaseBackend
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
@@ -18,6 +19,8 @@ from arrowdsl.io.parquet import (
     write_named_datasets_parquet,
 )
 from arrowdsl.schema.schema import empty_table
+from config import AdapterMode
+from core_types import JsonDict
 from cpg.build_edges import EdgeBuildConfig, EdgeBuildInputs, build_cpg_edges
 from cpg.build_nodes import NodeInputTables, build_cpg_nodes
 from cpg.build_props import PropsInputTables, build_cpg_props
@@ -37,6 +40,8 @@ from hamilton_pipeline.pipeline_types import (
     TreeSitterInputs,
     TypeInputs,
 )
+from ibis_engine.params_bridge import IbisParamRegistry, registry_from_specs, specs_from_rel_ops
+from ibis_engine.plan import IbisPlan
 from normalize.utils import encoding_policy_from_schema
 from relspec.adapters import (
     CpgRuleAdapter,
@@ -81,6 +86,8 @@ from schema_spec.system import (
 )
 
 if TYPE_CHECKING:
+    from ibis.expr.types import Value as IbisValue
+
     from arrowdsl.plan.scan_io import DatasetSource
 
 # -----------------------------
@@ -321,6 +328,36 @@ def rule_registry() -> RuleRegistry:
     )
 
 
+@tag(layer="relspec", artifact="relspec_param_registry", kind="object")
+def relspec_param_registry(rule_registry: RuleRegistry) -> IbisParamRegistry:
+    """Build the relspec parameter registry from rule definitions.
+
+    Returns
+    -------
+    IbisParamRegistry
+        Registry populated with parameter specs from rule rel_ops.
+    """
+    specs = []
+    for rule in rule_registry.rules_for_domain("cpg"):
+        specs.extend(specs_from_rel_ops(rule.rel_ops))
+    return registry_from_specs(specs)
+
+
+@tag(layer="relspec", artifact="relspec_param_bindings", kind="object")
+def relspec_param_bindings(
+    relspec_param_registry: IbisParamRegistry,
+    relspec_param_values: JsonDict,
+) -> Mapping[IbisValue, object]:
+    """Return parameter bindings for relspec execution.
+
+    Returns
+    -------
+    Mapping[IbisValue, object]
+        Parameter bindings for Ibis plan execution.
+    """
+    return relspec_param_registry.bindings(relspec_param_values)
+
+
 # -----------------------------
 # Alternate resolver mode (memory vs filesystem)
 # -----------------------------
@@ -502,7 +539,7 @@ def relspec_resolver(
     relspec_mode: str,
     relspec_input_datasets: dict[str, TableLike],
     persist_relspec_input_datasets: dict[str, DatasetLocation],
-) -> PlanResolver:
+) -> PlanResolver[IbisPlan]:
     """Select the relationship resolver implementation.
 
     Resolver selection:
@@ -511,7 +548,7 @@ def relspec_resolver(
 
     Returns
     -------
-    PlanResolver
+    PlanResolver[IbisPlan]
         Resolver instance for relationship rule compilation.
     """
     mode = (relspec_mode or "memory").lower().strip()
@@ -572,6 +609,13 @@ def _relationship_evidence_catalog(
     return evidence
 
 
+def _runtime_telemetry(ctx: ExecutionContext) -> Mapping[str, object]:
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        return {}
+    return {"datafusion": profile.telemetry_payload()}
+
+
 def _compile_relationship_outputs(
     rules: Sequence[RelationshipRule],
     *,
@@ -600,11 +644,13 @@ def _compile_relationship_outputs(
             raise ValueError(msg)
         contributors = tuple(compiler.compile_rule(rule, ctx=ctx) for rule in output_rules)
         telemetry = compiler.collect_scan_telemetry(output_rules, ctx=ctx)
+        runtime_telemetry = _runtime_telemetry(ctx)
         compiled[out_name] = CompiledOutput(
             output_dataset=out_name,
             contract_name=output_rules[0].contract_name,
             contributors=contributors,
             telemetry=telemetry,
+            runtime_telemetry=runtime_telemetry,
         )
     return compiled
 
@@ -619,7 +665,7 @@ def _compile_relationship_outputs(
 def compiled_relationship_outputs(
     rule_registry: RuleRegistry,
     relspec_input_datasets: dict[str, TableLike],
-    relspec_resolver: PlanResolver,
+    relspec_resolver: PlanResolver[IbisPlan],
     relationship_contracts: ContractCatalog,  # add dep
     ctx: ExecutionContext,
 ) -> dict[str, CompiledOutput]:
@@ -664,8 +710,9 @@ def compiled_relationship_outputs(
 @tag(layer="relspec", artifact="relationship_tables", kind="bundle")
 def relationship_tables(
     compiled_relationship_outputs: dict[str, CompiledOutput],
-    relspec_resolver: PlanResolver,
+    relspec_resolver: PlanResolver[IbisPlan],
     relationship_contracts: ContractCatalog,
+    relspec_param_bindings: Mapping[IbisValue, object],
     ctx: ExecutionContext,
 ) -> dict[str, TableLike]:
     """Execute compiled relationship outputs into tables.
@@ -677,7 +724,12 @@ def relationship_tables(
     """
     out: dict[str, TableLike] = {}
     for key, compiled in compiled_relationship_outputs.items():
-        res = compiled.execute(ctx=ctx, resolver=relspec_resolver, contracts=relationship_contracts)
+        res = compiled.execute(
+            ctx=ctx,
+            resolver=relspec_resolver,
+            contracts=relationship_contracts,
+            params=relspec_param_bindings,
+        )
         out[key] = res.good
 
     # Ensure expected keys exist for extract_fields
@@ -1052,6 +1104,8 @@ def cpg_edges_final(
 def cpg_edges_finalize(
     ctx: ExecutionContext,
     cpg_edge_inputs: EdgeBuildInputs,
+    adapter_mode: AdapterMode,
+    ibis_backend: BaseBackend,
 ) -> CpgBuildArtifacts:
     """Build finalized CPG edges with quality artifacts.
 
@@ -1060,7 +1114,14 @@ def cpg_edges_finalize(
     CpgBuildArtifacts
         Finalized edges bundle plus quality table.
     """
-    return build_cpg_edges(ctx=ctx, config=EdgeBuildConfig(inputs=cpg_edge_inputs))
+    return build_cpg_edges(
+        ctx=ctx,
+        config=EdgeBuildConfig(
+            inputs=cpg_edge_inputs,
+            adapter_mode=adapter_mode,
+            ibis_backend=ibis_backend,
+        ),
+    )
 
 
 @cache(format="parquet")

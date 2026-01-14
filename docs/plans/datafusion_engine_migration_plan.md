@@ -1,16 +1,17 @@
-## DataFusion + Ibis Programmatic Migration Plan
+## DataFusion + Ibis Programmatic Migration Plan (Aligned with Relspec Optimization)
 
 ### Goals
-- Pivot the plan lane from ArrowDSL Acero plans to Ibis expression IR (fully programmatic).
+- Pivot the plan lane from ArrowDSL Acero plans to a programmatic Ibis expression IR.
+- Keep relspec rule execution engine-agnostic via typed relational ops and RelPlan compilation.
 - Use SQLGlot for AST-level analysis, optimization, and lineage without handwritten SQL.
 - Preserve ArrowDSL schema contracts, finalize gates, and custom kernel operations.
-- Enable SQL-free authoring across relspec, normalize, extract, and CPG.
 - Provide an optional DataFusion execution adapter that avoids SQL strings at runtime.
 
 ### Constraints
 - Preserve output schemas, column names, and metadata semantics.
 - Keep strict typing and Ruff compliance (no suppressions).
 - Avoid relative imports; keep modules fully typed and pyright clean.
+- Avoid SQL string authoring; prefer Ibis/SQLGlot and DataFusion APIs.
 - Breaking changes are acceptable when they improve cohesion and correctness.
 
 ---
@@ -22,15 +23,15 @@ and filesystem registration. This becomes the top-level entry point for all plan
 
 **Code patterns**
 ```python
+from dataclasses import dataclass, field
 import ibis
-from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class IbisBackendConfig:
     database: str = ":memory:"
     read_only: bool = False
     extensions: tuple[str, ...] = ()
-    config: dict[str, object] = None
+    config: dict[str, object] = field(default_factory=dict)
     filesystem: object | None = None
 
 def build_backend(cfg: IbisBackendConfig):
@@ -38,7 +39,7 @@ def build_backend(cfg: IbisBackendConfig):
         database=cfg.database,
         read_only=cfg.read_only,
         extensions=list(cfg.extensions) or None,
-        **(cfg.config or {}),
+        **cfg.config,
     )
     if cfg.filesystem is not None:
         con.register_filesystem(cfg.filesystem)
@@ -53,42 +54,61 @@ def build_backend(cfg: IbisBackendConfig):
 - Update: `src/config.py`
 
 **Implementation checklist**
-- [ ] Define backend config dataclasses (database, extensions, config, filesystem).
-- [ ] Build a shared backend factory with explicit session defaults.
-- [ ] Thread backend config through pipeline entry points.
-- [ ] Document backend naming and session lifetimes.
+- [x] Define backend config dataclasses (database, extensions, config, filesystem).
+- [x] Build a shared backend factory with explicit session defaults.
+- [x] Thread backend config through pipeline entry points.
+- [x] Document backend naming and session lifetimes.
 
 **Status**
-Pending.
+Implemented.
 
 ---
 
-### Scope 2: Dataset Registry to Ibis Tables (No SQL Strings)
+### Scope 2: Dataset Registry to Ibis Tables + Scan Options
 **Description**
 Replace dataset scanning with Ibis table registration. Map DatasetSpec to Ibis
 readers (parquet/csv/json) and materialize stable names via create_view/create_table.
+Add DataFusion scan options to DatasetSpec/registry so partitioning and pruning
+can be honored by engine adapters.
 
 **Code patterns**
 ```python
-def register_dataset(con, name: str, location: DatasetLocation):
-    table = con.read_parquet(location.path, **location.read_options)
-    con.create_view(name, table, overwrite=True)
-    return con.table(name)
+from dataclasses import dataclass, field
+from typing import Mapping
+
+@dataclass(frozen=True)
+class DataFusionScanOptions:
+    partition_cols: tuple[tuple[str, str], ...] = ()
+    file_sort_order: tuple[str, ...] = ()
+    parquet_pruning: bool = True
+    skip_metadata: bool = False
+
+@dataclass(frozen=True)
+class DatasetLocation:
+    path: str
+    format: str = "parquet"
+    partitioning: str | None = "hive"
+    read_options: Mapping[str, object] = field(default_factory=dict)
+    filesystem: object | None = None
+    scan_options: DataFusionScanOptions | None = None
 ```
 
 **Target files**
 - Add: `src/ibis_engine/registry.py`
-- Update: `src/relspec/registry.py`
 - Update: `src/schema_spec/system.py`
+- Update: `src/relspec/registry.py`
+- Update: `src/datafusion_engine/df_builder.py`
 
 **Implementation checklist**
-- [ ] Map DatasetSpec/Location to Ibis read_* options.
-- [ ] Use create_view/create_table for stable names (memtable naming removed).
-- [ ] Register filesystem access through the backend when needed.
-- [ ] Keep dataset naming consistent with catalog conventions.
+- [x] Map DatasetLocation to Ibis read_* options and stable view registration.
+- [x] Register filesystem access through the backend when needed.
+- [x] Preserve partitioning hints for Ibis parquet scans (hive support).
+- [ ] Add DataFusionScanOptions to DatasetSpec/registry entries.
+- [ ] Thread scan options into DataFusion table registration and scans.
+- [ ] Document precedence rules for scan options vs schema defaults.
 
 **Status**
-Pending.
+In progress.
 
 ---
 
@@ -99,37 +119,35 @@ Arrow-native materialization helpers.
 
 **Code patterns**
 ```python
-from dataclasses import dataclass
-import pyarrow as pa
-import ibis
+from dataclasses import dataclass, field
+from ibis.expr.types import Table
 
 @dataclass(frozen=True)
 class IbisPlan:
-    expr: ibis.expr.types.Table
-    ordering: Ordering = Ordering.unordered()
+    expr: Table
+    ordering: Ordering = field(default_factory=Ordering.unordered)
 
-    def to_table(self) -> pa.Table:
+    def to_table(self) -> TableLike:
         table = self.expr.to_pyarrow()
-        return apply_ordering_metadata(table, ordering=self.ordering)
+        metadata = ordering_metadata_spec(self.ordering.level, keys=self.ordering.keys)
+        return table.cast(metadata.apply(table.schema))
 ```
 
 **Target files**
 - Add: `src/ibis_engine/plan.py`
 - Add: `src/ibis_engine/runner.py`
-- Update: `src/relspec/compiler.py`
-- Update: `src/normalize/pipeline.py`
 
 **Implementation checklist**
-- [ ] Implement an IbisPlan wrapper with ordering metadata.
-- [ ] Provide Arrow materialization helpers (table and reader).
-- [ ] Integrate deterministic ordering metadata with ArrowDSL finalize.
+- [x] Implement an IbisPlan wrapper with ordering metadata.
+- [x] Provide Arrow materialization helpers (table and reader).
+- [x] Integrate deterministic ordering metadata with ArrowDSL finalize.
 
 **Status**
-Pending.
+Implemented.
 
 ---
 
-### Scope 4: ExprIR and QuerySpec to Ibis Expressions
+### Scope 4: ExprIR and Ibis QuerySpec Compiler
 **Description**
 Replace SQL rendering with a direct ExprIR/QuerySpec to Ibis expression compiler.
 This keeps all authoring programmatic and type-aware.
@@ -138,22 +156,12 @@ This keeps all authoring programmatic and type-aware.
 ```python
 import ibis
 
-FN_REGISTRY: dict[str, callable] = {
-    "coalesce": ibis.coalesce,
-}
+class IbisQuerySpec:
+    projection: IbisProjectionSpec
+    predicate: ExprIR | None
+    pushdown_predicate: ExprIR | None
 
-def expr_ir_to_ibis(expr: ExprIR, table: ibis.expr.types.Table):
-    if expr.op == "field":
-        return table[expr.name or ""]
-    if expr.op == "literal":
-        return ibis.literal(expr.value)
-    if expr.op == "call":
-        fn = FN_REGISTRY.get(expr.name or "")
-        if fn is None:
-            raise ValueError(f"Unsupported function: {expr.name}")
-        args = [expr_ir_to_ibis(arg, table) for arg in expr.args]
-        return fn(*args)
-    raise ValueError(f"Unsupported ExprIR op: {expr.op}")
+expr = expr_ir_to_ibis(expr_ir, table)
 ```
 
 **Target files**
@@ -163,25 +171,24 @@ def expr_ir_to_ibis(expr: ExprIR, table: ibis.expr.types.Table):
 - Update: `src/arrowdsl/plan_helpers.py`
 
 **Implementation checklist**
-- [ ] Define a function registry mapping ExprIR calls to Ibis expressions.
-- [ ] Compile QuerySpec projections and predicates into Ibis operations.
-- [ ] Preserve pushdown predicates when the source is scan-backed.
-- [ ] Add a fallback path to Arrow kernels for unsupported functions.
+- [x] Define a function registry mapping ExprIR calls to Ibis expressions.
+- [x] Compile QuerySpec projections and predicates into Ibis operations.
+- [x] Preserve pushdown predicates when the source is scan-backed.
+- [ ] Route unsupported ops to kernel-lane fallbacks (see Hybrid Kernel scope).
 
 **Status**
-Pending.
+Implemented (core compiler), kernel fallback pending.
 
 ---
 
-### Scope 5: SQLGlot AST Pipeline for Validation and Optimization
+### Scope 5: SQLGlot Tooling + Relspec Diagnostics Layer
 **Description**
 Use SQLGlot as the compiler IR for analysis, optimization, and lineage without
-handwritten SQL. This is a policy and diagnostics layer only.
+handwritten SQL. Add a relspec diagnostics layer that compiles rule plans to
+SQLGlot for validation and migration safety.
 
 **Code patterns**
 ```python
-from sqlglot.optimizer import optimize, qualify
-
 sg_expr = con.compiler.to_sqlglot(expr)
 sg_expr = qualify(sg_expr, schema=schema_map)
 sg_expr = optimize(sg_expr, schema=schema_map)
@@ -190,15 +197,18 @@ sg_expr = optimize(sg_expr, schema=schema_map)
 **Target files**
 - Add: `src/sqlglot_tools/optimizer.py`
 - Add: `src/sqlglot_tools/lineage.py`
-- Update: `src/ibis_engine/plan.py`
+- Add: `src/relspec/sqlglot_diagnostics.py`
+- Update: `src/relspec/rules/diagnostics.py`
+- Update: `src/relspec/rules/validation.py`
 
 **Implementation checklist**
-- [ ] Extract SQLGlot AST from Ibis expressions.
-- [ ] Apply qualify/optimize with schema-derived types.
-- [ ] Add AST-level diffing for regression tests and upgrades.
+- [x] Extract SQLGlot AST from Ibis expressions.
+- [x] Apply qualify/optimize with schema-derived types.
+- [ ] Add relspec diagnostics: lineage extraction, semantic diffing, validation gates.
+- [ ] Store optimized ASTs in diagnostics artifacts for migrations.
 
 **Status**
-Pending.
+In progress.
 
 ---
 
@@ -211,8 +221,8 @@ DataFrame operations directly, avoiding SQL string generation at runtime.
 ```python
 from datafusion import SessionContext
 
-def ibis_to_datafusion(expr, ctx: SessionContext):
-    sg_expr = con.compiler.to_sqlglot(expr)
+def ibis_to_datafusion(expr, *, backend, ctx: SessionContext):
+    sg_expr = backend.compiler.to_sqlglot(expr)
     return df_from_sqlglot(ctx, sg_expr)
 ```
 
@@ -222,46 +232,185 @@ def ibis_to_datafusion(expr, ctx: SessionContext):
 - Update: `src/ibis_engine/runner.py`
 
 **Implementation checklist**
-- [ ] Define a SQLGlot-to-DataFusion DataFrame translator.
-- [ ] Support core relational ops (select/filter/join/group/order/union).
-- [ ] Keep Arrow output parity with Ibis and ArrowDSL contracts.
+- [x] Define a SQLGlot-to-DataFusion DataFrame translator.
+- [x] Support core relational ops (select/filter/join/group/order/union).
+- [x] Keep Arrow output parity with Ibis and ArrowDSL contracts.
 
 **Status**
-Pending.
+Implemented.
 
 ---
 
-### Scope 7: Relspec Compiler Migration to Ibis Plans
+### Scope 7: Typed Relational Op IR for Rule Definitions
 **Description**
-Replace ArrowDSL plan compilation with Ibis expression pipelines, while keeping
-post-kernel hooks and contract finalization intact.
+Replace untyped `pipeline_ops` mappings with structured relational operations so rule
+execution is programmatically defined and portable across engines.
 
 **Code patterns**
 ```python
-left = resolver.resolve(ref_left)
-right = resolver.resolve(ref_right)
-joined = left.expr.join(right.expr, predicates=preds, how="inner")
-expr = joined.select(columns).filter(predicate)
-plan = IbisPlan(expr=expr, ordering=Ordering.unordered())
+from dataclasses import dataclass
+from typing import Literal
+
+RelOpKind = Literal["scan", "filter", "project", "join", "aggregate", "union", "param"]
+
+@dataclass(frozen=True)
+class RelOp:
+    kind: RelOpKind
+
+@dataclass(frozen=True)
+class FilterOp(RelOp):
+    predicate: ExprIR
 ```
 
 **Target files**
-- Update: `src/relspec/compiler.py`
-- Update: `src/relspec/compiler_graph.py`
-- Update: `src/relspec/model.py`
+- Add: `src/relspec/rules/rel_ops.py`
 - Update: `src/relspec/rules/definitions.py`
+- Update: `src/relspec/model.py`
+- Update: `src/relspec/compiler.py`
 
 **Implementation checklist**
-- [ ] Map rule kinds to Ibis expressions (filter/project/join/union/aggregate).
-- [ ] Preserve rule metadata columns and ordering semantics.
-- [ ] Keep post-kernel hooks and finalize contracts unchanged.
+- [x] Define typed op dataclasses for scan/filter/project/join/aggregate/union/param.
+- [x] Replace `pipeline_ops` with `rel_ops: tuple[RelOp, ...]` on RuleDefinition.
+- [x] Add validation to ensure op sequences are well-formed (scan-first, etc.).
+- [ ] Update rule authorship to emit structured ops everywhere.
+
+**Status**
+Implemented (core IR), rule authorship rollout pending.
+
+---
+
+### Scope 8: Engine-Agnostic RelPlan + Compiler Interface
+**Description**
+Introduce a RelPlan container plus compiler interface that emits engine-specific
+plans (Ibis/DataFusion) while preserving schemas and ordering metadata.
+
+**Code patterns**
+```python
+from dataclasses import dataclass
+from arrowdsl.core.context import Ordering
+
+@dataclass(frozen=True)
+class RelPlan:
+    root: RelNode
+    schema: SchemaLike | None
+    ordering: Ordering
+
+class RelPlanCompiler(Protocol):
+    def compile(self, plan: RelPlan, *, ctx: ExecutionContext) -> object: ...
+```
+
+**Target files**
+- Add: `src/relspec/plan.py`
+- Add: `src/relspec/engine.py`
+- Update: `src/relspec/compiler.py`
+- Update: `src/relspec/compiler_graph.py`
+
+**Implementation checklist**
+- [x] Define RelPlan with schema + ordering metadata.
+- [x] Introduce RelPlanCompiler protocol and Ibis adapter.
+- [ ] Convert relspec rule compilation to produce RelPlan first.
+- [ ] Defer execution to engine adapters (Ibis/DataFusion).
+
+**Status**
+In progress.
+
+---
+
+### Scope 9: Rule Graph Canonicalization and Plan Hashing
+**Description**
+Generate a stable logical plan hash and canonical graph signature so rules can be
+cached, diffed, and validated independently of the execution engine.
+
+**Code patterns**
+```python
+def plan_signature(plan: RelPlan) -> str:
+    payload = _rel_plan_payload(plan)
+    encoded = json.dumps(payload, sort_keys=True, separators=(\",\", \":\"))
+    return hashlib.sha256(encoded.encode(\"utf-8\")).hexdigest()
+```
+
+**Target files**
+- Update: `src/relspec/rules/graph.py`
+- Update: `src/relspec/rules/cache.py`
+- Update: `src/relspec/rules/diagnostics.py`
+
+**Implementation checklist**
+- [x] Define canonical serialization helpers for RelPlan payloads.
+- [ ] Store plan hash in rule diagnostics and cache entries.
+- [ ] Emit graph-level signatures for rule bundles.
+- [ ] Expose plan signatures for migration/regression tooling.
+
+**Status**
+Pending (signature wiring not yet integrated).
+
+---
+
+### Scope 10: DataFusion Runtime Profile
+**Description**
+Introduce a runtime profile for DataFusion execution controls (partitions, memory
+pool, spill paths, batch sizes) and integrate it into relspec execution paths.
+
+**Code patterns**
+```python
+from dataclasses import dataclass
+from typing import Literal
+
+@dataclass(frozen=True)
+class DataFusionRuntimeProfile:
+    target_partitions: int = 8
+    batch_size: int = 8192
+    spill_dir: str | None = None
+    memory_pool: Literal["greedy", "fair"] = "greedy"
+```
+
+**Target files**
+- Add: `src/datafusion_engine/runtime.py`
+- Update: `src/arrowdsl/core/context.py`
+- Update: `src/relspec/compiler.py`
+
+**Implementation checklist**
+- [ ] Define a DataFusion runtime profile dataclass.
+- [ ] Add profile hooks to relspec execution context.
+- [ ] Configure DataFusion RuntimeEnv/SessionContext from the profile.
+- [ ] Store runtime settings in telemetry for diagnostics.
 
 **Status**
 Pending.
 
 ---
 
-### Scope 8: Normalize, Extract, and CPG Plan Builders in Ibis
+### Scope 11: Hybrid Kernel Bridge (DataFusion UDF/UDTF + Arrow Fallback)
+**Description**
+Create a bridge that maps kernel ops to DataFusion UDF/UDTF when available, while
+preserving ArrowDSL kernel fallback for unsupported operations.
+
+**Code patterns**
+```python
+from arrowdsl.compute.kernels import interval_align_table, explode_list_column
+
+def apply_kernel_bridge(table: pa.Table) -> pa.Table:
+    table = interval_align_table(table, cfg=cfg)
+    table = explode_list_column(table, parent_id_col="src_id", list_col="dst_ids")
+    return table
+```
+
+**Target files**
+- Add: `src/datafusion_engine/kernels.py`
+- Add: `src/ibis_engine/hybrid.py`
+- Update: `src/relspec/compiler.py`
+
+**Implementation checklist**
+- [x] Add Arrow kernel bridge helpers for Ibis -> Arrow tables.
+- [ ] Define kernel capability registry (DF UDF/UDTF vs Arrow fallback).
+- [ ] Add DataFusion kernel adapters for interval align/explode/dedupe.
+- [ ] Ensure ordering metadata and schema contracts are preserved post-kernel.
+
+**Status**
+In progress.
+
+---
+
+### Scope 12: Normalize, Extract, and CPG Plan Builders in Ibis
 **Description**
 Convert normalize/extract/CPG plan builders to Ibis expressions, preserving
 dataset schemas and output invariants.
@@ -292,34 +441,7 @@ Pending.
 
 ---
 
-### Scope 9: Hybrid Kernel Lane Integration
-**Description**
-Introduce a hybrid path where Ibis handles relational work and ArrowDSL kernels
-handle custom operations (interval align, explode list, dedupe).
-
-**Code patterns**
-```python
-table = ibis_plan.expr.to_pyarrow()
-table = interval_align_table(table, spec=spec, ctx=ctx)
-table = explode_list_column(table, parent_id_col="src_id", list_col="dst_ids")
-```
-
-**Target files**
-- Add: `src/ibis_engine/hybrid.py`
-- Update: `src/relspec/compiler.py`
-- Update: `src/arrowdsl/compute/kernels.py`
-
-**Implementation checklist**
-- [ ] Add a hybrid executor that bridges Ibis -> Arrow tables.
-- [ ] Apply kernel-lane operations after Ibis execution.
-- [ ] Re-apply ordering metadata and canonical sort when required.
-
-**Status**
-Pending.
-
----
-
-### Scope 10: IO and Materialization via Ibis Outputs
+### Scope 13: IO and Materialization via Ibis Outputs
 **Description**
 Standardize dataset writes and streams on Ibis outputs, while preserving ArrowDSL
 metadata sidecars and schema policies when needed.
@@ -346,7 +468,7 @@ Pending.
 
 ---
 
-### Scope 11: Parameterization and Safe Execution (Ibis Params)
+### Scope 14: Parameterization and Safe Execution (Ibis Params)
 **Description**
 Adopt Ibis parameters for safe, programmatic execution without SQL string
 interpolation.
@@ -373,7 +495,7 @@ Pending.
 
 ---
 
-### Scope 12: Decommission ArrowDSL Plan Lane
+### Scope 15: Decommission ArrowDSL Plan Lane
 **Description**
 Remove or freeze ArrowDSL plan-lane modules and migrate call sites to the Ibis
 plan layer, keeping kernel-lane and schema systems intact.

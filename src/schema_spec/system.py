@@ -6,10 +6,12 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Literal, TypedDict, Unpack, cast
 
+import ibis
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 import pyarrow.types as patypes
+from ibis.expr.types import Table
 
 from arrowdsl.compute.expr_core import ExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel
@@ -48,6 +50,7 @@ from arrowdsl.spec.tables.schema import (
     dataset_specs_from_tables,
     table_specs_from_tables,
 )
+from ibis_engine.registry import ReadDatasetParams, read_dataset
 from schema_spec.specs import (
     ENCODING_DICTIONARY,
     ENCODING_META,
@@ -130,6 +133,18 @@ class DedupeSpecSpec:
         )
 
 
+@dataclass(frozen=True)
+class DataFusionScanOptions:
+    """DataFusion-specific scan configuration."""
+
+    partition_cols: tuple[tuple[str, pa.DataType], ...] = ()
+    file_sort_order: tuple[str, ...] = ()
+    parquet_pruning: bool = True
+    skip_metadata: bool = False
+    file_extension: str | None = None
+    cache: bool = False
+
+
 def _ordering_metadata_spec(
     contract_spec: ContractSpec | None,
     table_spec: TableSchemaSpec,
@@ -204,6 +219,7 @@ class DatasetSpec:
     table_spec: TableSchemaSpec
     contract_spec: ContractSpec | None = None
     query_spec: QuerySpec | None = None
+    datafusion_scan: DataFusionScanOptions | None = None
     derived_fields: tuple[DerivedFieldSpec, ...] = ()
     predicate: ExprSpec | None = None
     pushdown_predicate: ExprSpec | None = None
@@ -412,6 +428,7 @@ class DatasetOpenSpec:
     filesystem: pafs.FileSystem | None = None
     partitioning: str | None = "hive"
     schema: SchemaLike | None = None
+    read_options: Mapping[str, object] = field(default_factory=dict)
 
     def open(self, path: PathLike) -> ds.Dataset:
         """Open a dataset using the stored options.
@@ -427,6 +444,32 @@ class DatasetOpenSpec:
             filesystem=self.filesystem,
             partitioning=self.partitioning,
             schema=self.schema,
+        )
+
+    def read_ibis_table(
+        self,
+        path: PathLike,
+        *,
+        backend: ibis.backends.BaseBackend,
+        table_name: str | None = None,
+    ) -> Table:
+        """Read an Ibis table using the stored options.
+
+        Returns
+        -------
+        ibis.expr.types.Table
+            Ibis table expression for the dataset.
+        """
+        return read_dataset(
+            backend,
+            params=ReadDatasetParams(
+                path=path,
+                dataset_format=self.dataset_format,
+                read_options=self.read_options,
+                filesystem=self.filesystem,
+                partitioning=self.partitioning,
+                table_name=table_name,
+            ),
         )
 
 
@@ -461,6 +504,7 @@ class DatasetSpecKwargs(TypedDict, total=False):
 
     contract_spec: ContractSpec | None
     query_spec: QuerySpec | None
+    datafusion_scan: DataFusionScanOptions | None
     derived_fields: Sequence[DerivedFieldSpec]
     predicate: ExprSpec | None
     pushdown_predicate: ExprSpec | None
@@ -565,6 +609,7 @@ def make_dataset_spec(
     """
     contract_spec = kwargs.get("contract_spec")
     query_spec = kwargs.get("query_spec")
+    datafusion_scan = kwargs.get("datafusion_scan")
     derived_fields = tuple(kwargs["derived_fields"]) if "derived_fields" in kwargs else ()
     predicate = kwargs.get("predicate")
     pushdown_predicate = kwargs.get("pushdown_predicate")
@@ -577,6 +622,7 @@ def make_dataset_spec(
         table_spec=table_spec,
         contract_spec=contract_spec,
         query_spec=query_spec,
+        datafusion_scan=datafusion_scan,
         derived_fields=derived_fields,
         predicate=predicate,
         pushdown_predicate=pushdown_predicate,
@@ -956,6 +1002,7 @@ __all__ = [
     "ContractCatalogSpec",
     "ContractSpec",
     "ContractSpecKwargs",
+    "DataFusionScanOptions",
     "DatasetOpenSpec",
     "DatasetSpec",
     "DatasetSpecKwargs",

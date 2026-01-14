@@ -345,6 +345,7 @@ class ComputeModule(Protocol):
         ArrayLike,
     ]
     if_else: Callable[..., ArrayLike]
+    fill_null: Callable[..., ArrayLike]
     equal: Callable[..., ArrayLike]
     not_equal: Callable[..., ArrayLike]
     less: Callable[..., ArrayLike]
@@ -358,6 +359,8 @@ class ComputeModule(Protocol):
     starts_with: Callable[[ComputeOperand, ScalarOperand], ArrayLike]
     ends_with: Callable[[ComputeOperand, ScalarOperand], ArrayLike]
     match_substring: Callable[[ComputeOperand, ScalarOperand], ArrayLike]
+    match_substring_regex: Callable[[ComputeOperand, ScalarOperand], ArrayLike]
+    utf8_trim: Callable[[ComputeOperand], ArrayLike]
     match_substring_regex: Callable[[ComputeOperand, ScalarOperand], ArrayLike]
     is_in: Callable[..., ArrayLike]
     drop_null: Callable[[ArrayLike | ChunkedArrayLike], ArrayLike]

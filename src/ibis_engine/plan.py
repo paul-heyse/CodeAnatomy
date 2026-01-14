@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import cast, overload
 
 import pyarrow as pa
-from ibis.expr.types import Table
+from ibis.expr.types import Scalar, Table, Value
 
 from arrowdsl.core.context import Ordering, OrderingLevel
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
@@ -59,7 +60,7 @@ class IbisPlan:
     expr: Table
     ordering: Ordering = field(default_factory=Ordering.unordered)
 
-    def to_table(self) -> TableLike:
+    def to_table(self, *, params: Mapping[Value, object] | None = None) -> TableLike:
         """Materialize the plan to an Arrow table.
 
         Returns
@@ -67,10 +68,17 @@ class IbisPlan:
         TableLike
             Arrow table with ordering metadata applied when available.
         """
-        table = self.expr.to_pyarrow()
+        table = self.expr.to_pyarrow(
+            params=cast("Mapping[Scalar, object] | None", params),
+        )
         return _apply_metadata_spec(table, metadata_spec=_ordering_spec(self.ordering))
 
-    def to_reader(self, *, batch_size: int | None = None) -> RecordBatchReaderLike:
+    def to_reader(
+        self,
+        *,
+        batch_size: int | None = None,
+        params: Mapping[Value, object] | None = None,
+    ) -> RecordBatchReaderLike:
         """Return a RecordBatchReader for the plan.
 
         Returns
@@ -79,7 +87,7 @@ class IbisPlan:
             RecordBatchReader with ordering metadata applied when available.
         """
         if batch_size is None:
-            reader = self.expr.to_pyarrow_batches()
+            reader = self.expr.to_pyarrow_batches(params=params)
         else:
-            reader = self.expr.to_pyarrow_batches(chunk_size=batch_size)
+            reader = self.expr.to_pyarrow_batches(chunk_size=batch_size, params=params)
         return _apply_metadata_spec(reader, metadata_spec=_ordering_spec(self.ordering))

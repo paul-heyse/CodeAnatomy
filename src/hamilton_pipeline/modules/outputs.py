@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
+import pyarrow as pa
 import pyarrow.dataset as ds
 from hamilton.function_modifiers import tag
 
@@ -25,7 +27,8 @@ from arrowdsl.plan.metrics import (
     scan_telemetry_table,
 )
 from arrowdsl.plan.query import open_dataset
-from core_types import JsonDict
+from arrowdsl.schema.schema import EncodingPolicy
+from core_types import JsonDict, JsonValue
 from cpg.constants import CpgBuildArtifacts
 from extract.evidence_plan import EvidencePlan
 from hamilton_pipeline.modules.extraction import ExtractErrorArtifacts
@@ -38,12 +41,15 @@ from hamilton_pipeline.pipeline_types import (
     RelspecSnapshots,
     RepoScanConfig,
 )
+from ibis_engine.io_bridge import write_ibis_named_datasets_parquet
+from ibis_engine.plan import IbisPlan
+from ibis_engine.registry import registry_snapshot
 from normalize.runner import NormalizeRuleCompilation
 from normalize.utils import encoding_policy_from_schema
 from obs.manifest import ManifestContext, ManifestData, build_manifest, write_manifest_json
 from obs.repro import RunBundleContext, write_run_bundle
 from relspec.compiler import CompiledOutput
-from relspec.registry import ContractCatalog, DatasetLocation
+from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
 from relspec.rules.registry import RuleRegistry
 from relspec.rules.spec_tables import rule_definitions_from_table
@@ -113,6 +119,35 @@ def _ensure_dir(path: Path) -> None:
     path.mkdir(exist_ok=True, parents=True)
 
 
+def _datafusion_settings_snapshot(
+    ctx: ExecutionContext,
+) -> list[dict[str, str]] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or not profile.enable_information_schema:
+        return None
+    session = profile.session_context()
+    table = profile.settings_snapshot(session)
+    snapshot: list[dict[str, str]] = []
+    for row in table.to_pylist():
+        name = row.get("name")
+        value = row.get("value")
+        if name is None or value is None:
+            continue
+        snapshot.append({"name": str(name), "value": str(value)})
+    return snapshot or None
+
+
+def _dataset_registry_snapshot(
+    locations: Mapping[str, DatasetLocation],
+) -> list[dict[str, object]] | None:
+    if not locations:
+        return None
+    catalog = DatasetCatalog()
+    for name, location in locations.items():
+        catalog.register(name, location)
+    return registry_snapshot(catalog) or None
+
+
 def _default_debug_dir(output_dir: str | None, work_dir: str | None) -> Path | None:
     base = output_dir or work_dir
     if not base:
@@ -172,7 +207,7 @@ class ExtractManifestInputs:
 
 @tag(layer="materialize", artifact="normalized_inputs_parquet", kind="side_effect")
 def write_normalized_inputs_parquet(
-    relspec_input_datasets: dict[str, TableLike | RecordBatchReaderLike],
+    relspec_input_datasets: dict[str, TableLike | RecordBatchReaderLike | IbisPlan],
     output_dir: str | None,
     work_dir: str | None,
 ) -> JsonDict | None:
@@ -195,26 +230,32 @@ def write_normalized_inputs_parquet(
     out_dir = base / "normalized_inputs"
     _ensure_dir(out_dir)
 
-    schemas = {
-        name: table.schema
-        for name, table in relspec_input_datasets.items()
-        if not isinstance(table, RecordBatchReaderLike)
-    }
-    encoding_policies = {
-        name: encoding_policy_from_schema(table.schema)
-        for name, table in relspec_input_datasets.items()
-        if not isinstance(table, RecordBatchReaderLike)
-    }
-    paths = write_named_datasets_parquet(
-        relspec_input_datasets,
-        str(out_dir),
-        config=NamedDatasetWriteConfig(
-            opts=ParquetWriteOptions(),
-            overwrite=True,
-            schemas=schemas,
-            encoding_policies=encoding_policies,
-        ),
+    schemas: dict[str, pa.Schema] = {}
+    encoding_policies: dict[str, EncodingPolicy] = {}
+    for name, table in relspec_input_datasets.items():
+        if isinstance(table, RecordBatchReaderLike):
+            continue
+        schema = table.expr.schema().to_pyarrow() if isinstance(table, IbisPlan) else table.schema
+        schemas[name] = schema
+        encoding_policies[name] = encoding_policy_from_schema(schema)
+    config = NamedDatasetWriteConfig(
+        opts=ParquetWriteOptions(),
+        overwrite=True,
+        schemas=schemas,
+        encoding_policies=encoding_policies,
     )
+    if any(isinstance(table, IbisPlan) for table in relspec_input_datasets.values()):
+        paths = write_ibis_named_datasets_parquet(
+            relspec_input_datasets,
+            str(out_dir),
+            config=config,
+        )
+    else:
+        paths = write_named_datasets_parquet(
+            cast("dict[str, TableLike | RecordBatchReaderLike]", relspec_input_datasets),
+            str(out_dir),
+            config=config,
+        )
 
     # Provide lightweight report
     datasets: dict[str, JsonDict] = {}
@@ -224,6 +265,9 @@ def write_normalized_inputs_parquet(
         if isinstance(t, RecordBatchReaderLike):
             rows = int(ds.dataset(path, format="parquet").count_rows()) if path else None
             columns = len(t.schema.names)
+        elif isinstance(t, IbisPlan):
+            rows = int(ds.dataset(path, format="parquet").count_rows()) if path else None
+            columns = len(t.expr.schema())
         else:
             rows = int(t.num_rows)
             columns = len(t.column_names)
@@ -535,6 +579,7 @@ def relspec_snapshots(
         rule_table=rule_registry.rule_table(),
         template_table=rule_registry.template_table(),
         template_diagnostics=rule_registry.template_diagnostics_table(),
+        rule_diagnostics=rule_registry.rule_diagnostics_table(),
         contracts=relationship_contracts,
         compiled_outputs=compiled_relationship_outputs,
     )
@@ -586,6 +631,7 @@ def extract_manifest_inputs(
 def manifest_data(
     manifest_inputs: ManifestInputs,
     normalize_rule_compilation: NormalizeRuleCompilation | None = None,
+    ctx: ExecutionContext | None = None,
 ) -> ManifestData:
     """Assemble manifest data inputs from pipeline outputs.
 
@@ -593,6 +639,11 @@ def manifest_data(
     -------
     ManifestData
         Manifest input bundle.
+
+    Raises
+    ------
+    ValueError
+        Raised when ExecutionContext is not provided.
     """
     relspec_snapshots = manifest_inputs.relspec_snapshots
     produced_outputs = sorted(relspec_snapshots.compiled_outputs.keys())
@@ -609,11 +660,28 @@ def manifest_data(
     notes: JsonDict = {"relationship_output_keys": produced_outputs}
     if normalize_lineage:
         notes["normalize_output_keys"] = sorted(normalize_lineage)
+    if ctx is None:
+        msg = "manifest_data requires ExecutionContext."
+        raise ValueError(msg)
+    runtime_telemetry = next(
+        (
+            compiled.runtime_telemetry
+            for compiled in relspec_snapshots.compiled_outputs.values()
+            if compiled.runtime_telemetry
+        ),
+        {},
+    )
+    if runtime_telemetry:
+        notes["relspec_runtime_telemetry"] = cast("JsonValue", runtime_telemetry)
     scan_telemetry = {
         name: compiled.telemetry
         for name, compiled in relspec_snapshots.compiled_outputs.items()
         if compiled.telemetry
     }
+    datafusion_settings = _datafusion_settings_snapshot(ctx)
+    dataset_snapshot = _dataset_registry_snapshot(
+        manifest_inputs.relspec_inputs_bundle.locations,
+    )
     extract_inputs = manifest_inputs.extract_inputs
     rule_definitions = rule_definitions_from_table(relspec_snapshots.rule_table)
     relationship_rules = tuple(
@@ -634,6 +702,8 @@ def manifest_data(
         relationship_output_lineage=lineage,
         normalize_output_lineage=normalize_lineage,
         relspec_scan_telemetry=scan_telemetry or None,
+        datafusion_settings=datafusion_settings,
+        dataset_registry_snapshot=dataset_snapshot,
         notes=notes,
     )
 
@@ -781,6 +851,7 @@ def run_bundle_context(
         rule_table=run_bundle_inputs.relspec_snapshots.rule_table,
         template_table=run_bundle_inputs.relspec_snapshots.template_table,
         template_diagnostics=run_bundle_inputs.relspec_snapshots.template_diagnostics,
+        rule_diagnostics=run_bundle_inputs.relspec_snapshots.rule_diagnostics,
         relationship_contracts=run_bundle_inputs.relspec_snapshots.contracts,
         compiled_relationship_outputs=run_bundle_inputs.relspec_snapshots.compiled_outputs,
         relspec_input_locations=run_bundle_inputs.tables.relspec_inputs.locations,

@@ -464,11 +464,13 @@ def _collect_symtable_rows(
     *,
     compile_type: str,
 ) -> _SymtableRows:
-    scope_rows: list[dict[str, object]] = []
-    symbol_rows: list[dict[str, object]] = []
-    scope_edge_rows: list[dict[str, object]] = []
-    ns_edge_rows: list[dict[str, object]] = []
-    func_parts_acc = _FuncPartsAccumulator()
+    rows = _SymtableRows(
+        scope_rows=[],
+        symbol_rows=[],
+        scope_edge_rows=[],
+        ns_edge_rows=[],
+        func_parts_acc=_FuncPartsAccumulator(),
+    )
 
     for file_ctx in iter_contexts(repo_files, file_contexts):
         (
@@ -481,19 +483,13 @@ def _collect_symtable_rows(
             file_ctx,
             compile_type=compile_type,
         )
-        scope_rows.extend(file_scope_rows)
-        symbol_rows.extend(file_symbol_rows)
-        scope_edge_rows.extend(file_scope_edge_rows)
-        ns_edge_rows.extend(file_ns_edge_rows)
-        func_parts_acc.extend(file_func_parts_acc)
+        rows.scope_rows.extend(file_scope_rows)
+        rows.symbol_rows.extend(file_symbol_rows)
+        rows.scope_edge_rows.extend(file_scope_edge_rows)
+        rows.ns_edge_rows.extend(file_ns_edge_rows)
+        rows.func_parts_acc.extend(file_func_parts_acc)
 
-    return _SymtableRows(
-        scope_rows=scope_rows,
-        symbol_rows=symbol_rows,
-        scope_edge_rows=scope_edge_rows,
-        ns_edge_rows=ns_edge_rows,
-        func_parts_acc=func_parts_acc,
-    )
+    return rows
 
 
 def extract_symtable(

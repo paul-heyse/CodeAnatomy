@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -14,6 +14,7 @@ from relspec.rules.definitions import ExtractPayload, RuleStage
 if TYPE_CHECKING:
     from arrowdsl.core.context import ExecutionContext
     from relspec.rules.definitions import RuleDefinition, RuleDomain
+    from relspec.rules.rel_ops import RelOpT
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,7 @@ class ExtractRuleCompilation:
 
     definition: RuleDefinition
     payload: ExtractPayload
-    pipeline_ops: tuple[Mapping[str, object], ...]
+    rel_ops: tuple[RelOpT, ...]
     post_kernels: tuple[Callable[[TableLike], TableLike], ...]
     stages: tuple[RuleStage, ...]
 
@@ -52,7 +53,7 @@ class ExtractRuleHandler(RuleHandler):
         return ExtractRuleCompilation(
             definition=rule,
             payload=payload,
-            pipeline_ops=rule.pipeline_ops,
+            rel_ops=rule.rel_ops,
             post_kernels=post_kernels_for_postprocess(payload.postprocess),
             stages=stages,
         )

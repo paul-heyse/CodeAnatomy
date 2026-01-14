@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
+from ibis.backends import BaseBackend
 
 from arrowdsl.compute.kernels import (
     distinct_sorted,
@@ -20,6 +21,7 @@ from arrowdsl.core.ids import prefixed_hash_id
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
 from arrowdsl.plan.joins import JoinConfig, left_join
 from arrowdsl.schema.build import empty_table, set_or_append_column, table_from_arrays
+from config import AdapterMode
 from extract.evidence_plan import EvidencePlan
 from normalize.bytecode_anchor import anchor_instructions
 from normalize.catalog import (
@@ -42,6 +44,7 @@ from normalize.runner import (
     NormalizeFinalizeSpec,
     NormalizeRuleCompilation,
     compile_normalize_rules,
+    normalize_plans_to_ibis,
     run_normalize,
 )
 from relspec.adapters.normalize import NormalizeRuleAdapter
@@ -261,6 +264,8 @@ def normalize_plan_catalog(
 def normalize_rule_compilation(
     normalize_plan_catalog: NormalizePlanCatalog,
     ctx: ExecutionContext,
+    adapter_mode: AdapterMode,
+    ibis_backend: BaseBackend,
     evidence_plan: EvidencePlan | None = None,
 ) -> NormalizeRuleCompilation:
     """Compile normalize rules into plan outputs.
@@ -274,12 +279,23 @@ def normalize_rule_compilation(
     required_outputs = _required_rule_outputs(evidence_plan, rules)
     if required_outputs is not None and not required_outputs:
         return NormalizeRuleCompilation(rules=(), plans={}, catalog=normalize_plan_catalog)
-    return compile_normalize_rules(
+    compilation = compile_normalize_rules(
         normalize_plan_catalog,
         ctx=ctx,
         rules=rules,
         required_outputs=required_outputs,
     )
+    if adapter_mode.use_ibis_bridge:
+        return NormalizeRuleCompilation(
+            rules=compilation.rules,
+            plans=normalize_plans_to_ibis(
+                compilation.plans,
+                ctx=ctx,
+                backend=ibis_backend,
+            ),
+            catalog=compilation.catalog,
+        )
+    return compilation
 
 
 def _required_rule_outputs(

@@ -13,10 +13,10 @@ from arrowdsl.plan.scan_io import plan_from_rows
 from arrowdsl.plan_helpers import column_or_null_expr
 from arrowdsl.schema.schema import empty_table
 from arrowdsl.spec.codec import parse_string_tuple
-from arrowdsl.spec.expr_ir import ExprSpec, expr_spec_from_json
+from arrowdsl.spec.expr_ir import ExprIR, ExprRegistry, ExprSpec, expr_spec_from_json
 from extract.evidence_plan import EvidencePlan
 from extract.registry_pipelines import pipeline_spec
-from extract.registry_specs import dataset_query, dataset_schema
+from extract.registry_specs import dataset_query, dataset_schema, query_expr_registry
 from extract.registry_specs import dataset_row as registry_row
 from extract.schema_ops import ExtractNormalizeOptions, normalize_extract_plan
 from extract.spec_helpers import plan_requires_row, rule_execution_options
@@ -104,6 +104,24 @@ class _QueryOpState:
     derived: dict[str, ExprSpec] = field(default_factory=dict)
     predicate: ExprSpec | None = None
     pushdown: ExprSpec | None = None
+    registry: ExprRegistry = field(default_factory=query_expr_registry)
+
+
+def _expr_spec_from_row(
+    row: Mapping[str, object],
+    registry: ExprRegistry,
+    *,
+    label: str,
+) -> ExprSpec:
+    expr_ir_json = row.get("expr_ir_json")
+    if expr_ir_json is not None:
+        expr_ir = ExprIR.from_json(str(expr_ir_json))
+        return expr_ir.to_expr_spec(registry=registry)
+    expr_json = row.get("expr_json")
+    if expr_json is None:
+        msg = f"Query {label} op requires expr_ir_json or expr_json."
+        raise ValueError(msg)
+    return expr_spec_from_json(str(expr_json), registry=registry)
 
 
 def _handle_project(row: Mapping[str, object], state: _QueryOpState) -> None:
@@ -114,27 +132,18 @@ def _handle_project(row: Mapping[str, object], state: _QueryOpState) -> None:
 
 def _handle_derive(row: Mapping[str, object], state: _QueryOpState) -> None:
     name = row.get("name")
-    expr_json = row.get("expr_json")
-    if name is None or expr_json is None:
-        msg = "Query derive op requires name and expr_json."
+    if name is None:
+        msg = "Query derive op requires name."
         raise ValueError(msg)
-    state.derived[str(name)] = expr_spec_from_json(str(expr_json))
+    state.derived[str(name)] = _expr_spec_from_row(row, state.registry, label="derive")
 
 
 def _handle_filter(row: Mapping[str, object], state: _QueryOpState) -> None:
-    expr_json = row.get("expr_json")
-    if expr_json is None:
-        msg = "Query filter op requires expr_json."
-        raise ValueError(msg)
-    state.predicate = expr_spec_from_json(str(expr_json))
+    state.predicate = _expr_spec_from_row(row, state.registry, label="filter")
 
 
 def _handle_pushdown_filter(row: Mapping[str, object], state: _QueryOpState) -> None:
-    expr_json = row.get("expr_json")
-    if expr_json is None:
-        msg = "Query pushdown_filter op requires expr_json."
-        raise ValueError(msg)
-    state.pushdown = expr_spec_from_json(str(expr_json))
+    state.pushdown = _expr_spec_from_row(row, state.registry, label="pushdown_filter")
 
 
 _QUERY_OP_HANDLERS: dict[str, Callable[[Mapping[str, object], _QueryOpState], None]] = {

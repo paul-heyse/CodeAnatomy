@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import replace
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from typing import cast
 
 import pyarrow as pa
@@ -30,6 +30,14 @@ from relspec.rules.cache import rule_definitions_cached
 from relspec.rules.compiler import RuleCompiler
 from relspec.rules.handlers.cpg import RelationshipRuleHandler
 from relspec.rules.spec_tables import rule_definitions_from_table
+
+
+@dataclass(frozen=True)
+class RelationPlanBundle:
+    """Compiled relation plans plus scan telemetry."""
+
+    plans: dict[str, Plan]
+    telemetry: Mapping[str, ScanTelemetry] = field(default_factory=dict)
 
 
 class CatalogPlanResolver:
@@ -81,13 +89,13 @@ def compile_relation_plans(
     rule_table: pa.Table | None = None,
     materialize_debug: bool | None = None,
     required_sources: Sequence[str] | None = None,
-) -> dict[str, Plan]:
+) -> RelationPlanBundle:
     """Compile relationship rules into plans keyed by output dataset name.
 
     Returns
     -------
-    dict[str, Plan]
-        Mapping of output dataset names to relation plans.
+    RelationPlanBundle
+        Plan bundle with output plans and scan telemetry.
     """
     rules, output_schema = _prepare_relation_rules(
         ctx,
@@ -100,6 +108,7 @@ def compile_relation_plans(
     resolver = CatalogPlanResolver(work_catalog)
     compiler = RelationshipRuleCompiler(resolver=resolver)
     plans: dict[str, Plan] = {}
+    telemetry = compiler.collect_scan_telemetry(rules, ctx=ctx)
     for rule in order_rules(rules, evidence=evidence):
         compiled = compiler.compile_rule(rule, ctx=ctx)
         if compiled.plan is not None and not compiled.post_kernels:
@@ -122,7 +131,7 @@ def compile_relation_plans(
         plans[rule.output_dataset] = plan
         work_catalog.add(rule.output_dataset, plan)
         evidence.register(rule.output_dataset, aligned.schema)
-    return plans
+    return RelationPlanBundle(plans=plans, telemetry=telemetry)
 
 
 def _resolve_relation_rules(
@@ -170,16 +179,7 @@ def _apply_rule_policy_defaults(
 
 
 def _apply_query_spec(plan: Plan, spec: QuerySpec, *, ctx: ExecutionContext) -> Plan:
-    exprs = [FieldExpr(name=col).to_expression() for col in spec.projection.base]
-    names = list(spec.projection.base)
-    for name, expr_spec in spec.projection.derived.items():
-        exprs.append(expr_spec.to_expression())
-        names.append(name)
-    if exprs:
-        plan = plan.project(exprs, names, label=plan.label or "")
-    predicate = spec.predicate_expression()
-    if predicate is not None:
-        plan = plan.filter(predicate, ctx=ctx)
+    plan = spec.apply_to_plan(plan, ctx=ctx)
     pushdown = spec.pushdown_expression()
     if pushdown is not None:
         plan = plan.filter(pushdown, ctx=ctx)
@@ -216,4 +216,4 @@ def _rule_sources(rule: RelationshipRule) -> tuple[str, ...]:
     return tuple(ref.name for ref in rule.inputs)
 
 
-__all__ = ["CatalogPlanResolver", "compile_relation_plans"]
+__all__ = ["CatalogPlanResolver", "RelationPlanBundle", "compile_relation_plans"]

@@ -7,6 +7,8 @@ from functools import cache
 
 import pyarrow as pa
 
+from arrowdsl.schema.build import list_view_type, table_from_rows
+from arrowdsl.schema.schema import EncodingPolicy, EncodingSpec
 from arrowdsl.spec.codec import parse_string_tuple
 from arrowdsl.spec.tables.schema import SchemaSpecTables, schema_spec_tables_from_dataset_specs
 from normalize.registry_specs import dataset_specs
@@ -17,7 +19,7 @@ RULE_FAMILY_SCHEMA = pa.schema(
     [
         pa.field("name", pa.string(), nullable=False),
         pa.field("factory", pa.string(), nullable=False),
-        pa.field("inputs", pa.list_(pa.string()), nullable=True),
+        pa.field("inputs", list_view_type(pa.string()), nullable=True),
         pa.field("output", pa.string(), nullable=True),
         pa.field("confidence_policy", pa.string(), nullable=True),
         pa.field("ambiguity_policy", pa.string(), nullable=True),
@@ -25,6 +27,14 @@ RULE_FAMILY_SCHEMA = pa.schema(
         pa.field("execution_mode", pa.string(), nullable=True),
     ],
     metadata={b"spec_kind": b"normalize_rule_families"},
+)
+
+NORMALIZE_RULE_FAMILY_ENCODING = EncodingPolicy(
+    specs=(
+        EncodingSpec(column="name"),
+        EncodingSpec(column="factory"),
+        EncodingSpec(column="option_flag"),
+    )
 )
 
 
@@ -51,7 +61,8 @@ def normalize_rule_family_table(
         }
         for spec in specs
     ]
-    return pa.Table.from_pylist(rows, schema=RULE_FAMILY_SCHEMA)
+    table = table_from_rows(RULE_FAMILY_SCHEMA, rows)
+    return NORMALIZE_RULE_FAMILY_ENCODING.apply(table)
 
 
 def normalize_rule_family_specs_from_table(

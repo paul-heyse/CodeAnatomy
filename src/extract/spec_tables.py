@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
+from arrowdsl.schema.build import list_view_type
+from arrowdsl.schema.schema import EncodingPolicy, EncodingSpec
 from arrowdsl.spec.codec import parse_string_tuple
 from arrowdsl.spec.io import table_from_rows
 
@@ -15,7 +17,7 @@ DERIVED_ID_STRUCT = pa.struct(
         pa.field("name", pa.string(), nullable=False),
         pa.field("spec", pa.string(), nullable=False),
         pa.field("kind", pa.string(), nullable=False),
-        pa.field("required", pa.list_(pa.string()), nullable=True),
+        pa.field("required", list_view_type(pa.string()), nullable=True),
     ]
 )
 
@@ -30,22 +32,30 @@ EXTRACT_DATASET_SCHEMA = pa.schema(
     [
         pa.field("name", pa.string(), nullable=False),
         pa.field("version", pa.int32(), nullable=False),
-        pa.field("bundles", pa.list_(pa.string()), nullable=True),
-        pa.field("fields", pa.list_(pa.string()), nullable=True),
-        pa.field("derived", pa.list_(DERIVED_ID_STRUCT), nullable=True),
-        pa.field("row_fields", pa.list_(pa.string()), nullable=True),
-        pa.field("row_extras", pa.list_(pa.string()), nullable=True),
+        pa.field("bundles", list_view_type(pa.string()), nullable=True),
+        pa.field("fields", list_view_type(pa.string()), nullable=True),
+        pa.field("derived", list_view_type(DERIVED_ID_STRUCT), nullable=True),
+        pa.field("row_fields", list_view_type(pa.string()), nullable=True),
+        pa.field("row_extras", list_view_type(pa.string()), nullable=True),
         pa.field("template", pa.string(), nullable=True),
-        pa.field("ordering_keys", pa.list_(ORDERING_KEY_STRUCT), nullable=True),
-        pa.field("join_keys", pa.list_(pa.string()), nullable=True),
+        pa.field("ordering_keys", list_view_type(ORDERING_KEY_STRUCT), nullable=True),
+        pa.field("join_keys", list_view_type(pa.string()), nullable=True),
         pa.field("enabled_when", pa.string(), nullable=True),
         pa.field("feature_flag", pa.string(), nullable=True),
         pa.field("postprocess", pa.string(), nullable=True),
         pa.field("metadata_extra", pa.map_(pa.string(), pa.string()), nullable=True),
-        pa.field("evidence_required_columns", pa.list_(pa.string()), nullable=True),
+        pa.field("evidence_required_columns", list_view_type(pa.string()), nullable=True),
         pa.field("pipeline_name", pa.string(), nullable=True),
     ],
     metadata={b"spec_kind": b"extract_datasets"},
+)
+
+EXTRACT_DATASET_ENCODING = EncodingPolicy(
+    specs=(
+        EncodingSpec(column="name"),
+        EncodingSpec(column="template"),
+        EncodingSpec(column="pipeline_name"),
+    )
 )
 
 
@@ -99,7 +109,8 @@ def extract_dataset_table_from_rows(
     pyarrow.Table
         Table of extract dataset rows.
     """
-    return table_from_rows(EXTRACT_DATASET_SCHEMA, rows)
+    table = table_from_rows(EXTRACT_DATASET_SCHEMA, rows)
+    return EXTRACT_DATASET_ENCODING.apply(table)
 
 
 def _string_tuple(value: object | None, *, label: str) -> tuple[str, ...]:

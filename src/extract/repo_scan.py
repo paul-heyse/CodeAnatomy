@@ -190,6 +190,7 @@ def scan_repo(
     repo_root: PathLike,
     options: RepoScanOptions | None = None,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
     *,
     prefer_reader: Literal[False] = False,
 ) -> TableLike: ...
@@ -200,6 +201,7 @@ def scan_repo(
     repo_root: PathLike,
     options: RepoScanOptions | None = None,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
     *,
     prefer_reader: Literal[True],
 ) -> TableLike | RecordBatchReaderLike: ...
@@ -209,6 +211,7 @@ def scan_repo(
     repo_root: PathLike,
     options: RepoScanOptions | None = None,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
     *,
     prefer_reader: bool = False,
 ) -> TableLike | RecordBatchReaderLike:
@@ -222,6 +225,8 @@ def scan_repo(
         Scan options.
     ctx:
         Execution context for plan execution.
+    profile:
+        Execution profile name used when ``ctx`` is not provided.
     prefer_reader:
         When True, return a streaming reader when possible.
 
@@ -231,7 +236,7 @@ def scan_repo(
         Repo file metadata output.
     """
     normalized_options = normalize_options("repo_scan", options, RepoScanOptions)
-    ctx = ctx or execution_context_factory("default")
+    ctx = ctx or execution_context_factory(profile)
     metadata_spec = metadata_spec_for_dataset(
         "repo_files_v1",
         options=normalized_options,

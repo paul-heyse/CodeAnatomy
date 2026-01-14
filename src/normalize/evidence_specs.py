@@ -18,6 +18,7 @@ EVIDENCE_REQUIRED_TYPES_META = b"evidence_required_types"
 EVIDENCE_REQUIRED_METADATA_META = b"evidence_required_metadata"
 EVIDENCE_OUTPUT_MAP_META = b"evidence_output_map"
 EVIDENCE_OUTPUT_LITERALS_META = b"evidence_output_literals"
+EVIDENCE_OUTPUT_PROVENANCE_META = b"evidence_output_provenance"
 
 
 def evidence_spec_from_schema(schema: SchemaLike) -> EvidenceSpec | None:
@@ -52,9 +53,14 @@ def evidence_output_from_schema(schema: SchemaLike) -> EvidenceOutput | None:
     meta = schema.metadata or {}
     column_map = _meta_map(meta, EVIDENCE_OUTPUT_MAP_META)
     literals = _meta_scalar_map(meta, EVIDENCE_OUTPUT_LITERALS_META)
-    if not column_map and not literals:
+    provenance = tuple(_meta_list(meta, EVIDENCE_OUTPUT_PROVENANCE_META))
+    if not column_map and not literals and not provenance:
         return None
-    return EvidenceOutput(column_map=column_map, literals=literals)
+    return EvidenceOutput(
+        column_map=column_map,
+        literals=literals,
+        provenance_columns=provenance,
+    )
 
 
 def _meta_list(meta: Mapping[bytes, bytes], key: bytes) -> list[str]:
@@ -119,6 +125,7 @@ def _meta_json(meta: Mapping[bytes, bytes], key: bytes) -> object | None:
 __all__ = [
     "EVIDENCE_OUTPUT_LITERALS_META",
     "EVIDENCE_OUTPUT_MAP_META",
+    "EVIDENCE_OUTPUT_PROVENANCE_META",
     "EVIDENCE_REQUIRED_COLUMNS_META",
     "EVIDENCE_REQUIRED_METADATA_META",
     "EVIDENCE_REQUIRED_TYPES_META",

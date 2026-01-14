@@ -35,6 +35,7 @@ def normalize_type_exprs_result(
     cst_type_exprs: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> FinalizeResult:
     """Normalize type expression rows into join-ready tables.
 
@@ -44,13 +45,15 @@ def normalize_type_exprs_result(
         CST type expression rows captured during extraction.
     ctx:
         Optional execution context for plan compilation and finalize.
+    profile:
+        Execution profile name used when ``ctx`` is not provided.
 
     Returns
     -------
     FinalizeResult
         Finalize bundle with normalized type expressions.
     """
-    exec_ctx = ensure_execution_context(ctx)
+    exec_ctx = ensure_execution_context(ctx, profile=profile)
     plan = _plan_for_output(
         TYPE_EXPRS_NAME,
         {"cst_type_exprs": cst_type_exprs},
@@ -73,6 +76,7 @@ def normalize_type_exprs(
     cst_type_exprs: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike:
     """Normalize type expression rows into join-ready tables.
 
@@ -82,19 +86,22 @@ def normalize_type_exprs(
         CST type expression rows captured during extraction.
     ctx:
         Optional execution context for plan compilation and finalize.
+    profile:
+        Execution profile name used when ``ctx`` is not provided.
 
     Returns
     -------
     TableLike
         Normalized type expressions table with type ids.
     """
-    return normalize_type_exprs_result(cst_type_exprs, ctx=ctx).good
+    return normalize_type_exprs_result(cst_type_exprs, ctx=ctx, profile=profile).good
 
 
 def normalize_type_exprs_canonical(
     cst_type_exprs: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike:
     """Normalize type expressions under canonical determinism.
 
@@ -103,14 +110,15 @@ def normalize_type_exprs_canonical(
     TableLike
         Canonicalized type expressions table.
     """
-    exec_ctx = ensure_canonical(ensure_execution_context(ctx))
-    return normalize_type_exprs_result(cst_type_exprs, ctx=exec_ctx).good
+    exec_ctx = ensure_canonical(ensure_execution_context(ctx, profile=profile))
+    return normalize_type_exprs_result(cst_type_exprs, ctx=exec_ctx, profile=profile).good
 
 
 def normalize_type_exprs_streamable(
     cst_type_exprs: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike | RecordBatchReaderLike:
     """Normalize type expressions with a streamable output.
 
@@ -119,14 +127,17 @@ def normalize_type_exprs_streamable(
     TableLike | RecordBatchReaderLike
         Reader when streamable, otherwise a materialized table.
     """
-    exec_ctx = ensure_execution_context(ctx)
+    exec_ctx = ensure_execution_context(ctx, profile=profile)
     plan = _plan_for_output(
         TYPE_EXPRS_NAME,
         {"cst_type_exprs": cst_type_exprs},
         ctx=exec_ctx,
     )
     return run_normalize_streamable_contract(
-        plan, contract=dataset_contract(TYPE_EXPRS_NAME), ctx=exec_ctx
+        plan,
+        contract=dataset_contract(TYPE_EXPRS_NAME),
+        ctx=exec_ctx,
+        profile=profile,
     )
 
 
@@ -135,6 +146,7 @@ def normalize_types_result(
     scip_symbol_information: PlanSource | None = None,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> FinalizeResult:
     """Build a type node table from normalized type expressions.
 
@@ -146,13 +158,15 @@ def normalize_types_result(
         Optional SCIP symbol information table with type details.
     ctx:
         Optional execution context for plan compilation and finalize.
+    profile:
+        Execution profile name used when ``ctx`` is not provided.
 
     Returns
     -------
     FinalizeResult
         Finalize bundle with normalized type nodes.
     """
-    exec_ctx = ensure_execution_context(ctx)
+    exec_ctx = ensure_execution_context(ctx, profile=profile)
     inputs: dict[str, PlanSource] = {"type_exprs_norm_v1": type_exprs_norm}
     if scip_symbol_information is not None:
         inputs["scip_symbol_information"] = scip_symbol_information
@@ -176,6 +190,7 @@ def normalize_types(
     scip_symbol_information: PlanSource | None = None,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike:
     """Build a type node table from normalized type expressions.
 
@@ -187,6 +202,8 @@ def normalize_types(
         Optional SCIP symbol information table with type details.
     ctx:
         Optional execution context for plan compilation and finalize.
+    profile:
+        Execution profile name used when ``ctx`` is not provided.
 
     Returns
     -------
@@ -197,6 +214,7 @@ def normalize_types(
         type_exprs_norm,
         scip_symbol_information=scip_symbol_information,
         ctx=ctx,
+        profile=profile,
     ).good
 
 
@@ -205,6 +223,7 @@ def normalize_types_canonical(
     scip_symbol_information: PlanSource | None = None,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike:
     """Normalize type nodes under canonical determinism.
 
@@ -213,11 +232,12 @@ def normalize_types_canonical(
     TableLike
         Canonicalized type node table.
     """
-    exec_ctx = ensure_canonical(ensure_execution_context(ctx))
+    exec_ctx = ensure_canonical(ensure_execution_context(ctx, profile=profile))
     return normalize_types_result(
         type_exprs_norm,
         scip_symbol_information=scip_symbol_information,
         ctx=exec_ctx,
+        profile=profile,
     ).good
 
 
@@ -226,6 +246,7 @@ def normalize_types_streamable(
     scip_symbol_information: PlanSource | None = None,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike | RecordBatchReaderLike:
     """Normalize type nodes with a streamable output.
 
@@ -234,13 +255,16 @@ def normalize_types_streamable(
     TableLike | RecordBatchReaderLike
         Reader when streamable, otherwise a materialized table.
     """
-    exec_ctx = ensure_execution_context(ctx)
+    exec_ctx = ensure_execution_context(ctx, profile=profile)
     inputs: dict[str, PlanSource] = {"type_exprs_norm_v1": type_exprs_norm}
     if scip_symbol_information is not None:
         inputs["scip_symbol_information"] = scip_symbol_information
     plan = _plan_for_output(TYPE_NODES_NAME, inputs, ctx=exec_ctx)
     return run_normalize_streamable_contract(
-        plan, contract=dataset_contract(TYPE_NODES_NAME), ctx=exec_ctx
+        plan,
+        contract=dataset_contract(TYPE_NODES_NAME),
+        ctx=exec_ctx,
+        profile=profile,
     )
 
 

@@ -17,6 +17,7 @@ from arrowdsl.schema.metadata import (
 )
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import EncodingPolicy, SchemaMetadataSpec
+from arrowdsl.spec.expr_ir import ExprRegistry
 from extract.evidence_specs import evidence_metadata_spec as extract_evidence_metadata_spec
 from extract.registry_builders import (
     QueryContext,
@@ -109,6 +110,18 @@ def dataset_query(name: str, *, repo_id: str | None = None) -> QuerySpec:
     """
     row = dataset_row(name)
     return build_query_spec(row, ctx=QueryContext(repo_id=repo_id))
+
+
+@cache
+def query_expr_registry() -> ExprRegistry:
+    """Return the shared ExprRegistry for extract query ops.
+
+    Returns
+    -------
+    ExprRegistry
+        Registry used when decoding ExprIR query ops.
+    """
+    return ExprRegistry()
 
 
 def dataset_metadata_spec(name: str) -> SchemaMetadataSpec:

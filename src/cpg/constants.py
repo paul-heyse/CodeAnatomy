@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from arrowdsl.compute.ids import hash_spec_factory
@@ -16,6 +17,7 @@ from arrowdsl.plan.metrics import (
     quality_from_ids,
     quality_plan_from_ids,
 )
+from arrowdsl.plan.query import ScanTelemetry
 from cpg.kinds_ultimate import (
     SCIP_ROLE_FORWARD_DEFINITION,
     SCIP_ROLE_GENERATED,
@@ -35,6 +37,7 @@ class CpgBuildArtifacts:
     finalize: FinalizeResult
     quality: TableLike
     pipeline_breakers: tuple[str, ...] = ()
+    relspec_scan_telemetry: Mapping[str, ScanTelemetry] = field(default_factory=dict)
 
 
 EDGE_ID_BASE = hash_spec_factory(

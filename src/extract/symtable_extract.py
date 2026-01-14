@@ -21,6 +21,7 @@ from arrowdsl.schema.metadata import normalize_dictionaries
 from arrowdsl.schema.nested_builders import LargeListViewAccumulator
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.helpers import (
+    ExtractExecutionContext,
     FileContext,
     file_identity_row,
     iter_contexts,
@@ -457,13 +458,49 @@ class _SymtableRows:
     func_parts_acc: _FuncPartsAccumulator
 
 
+def _collect_symtable_rows(
+    repo_files: TableLike,
+    file_contexts: Iterable[FileContext] | None,
+    *,
+    compile_type: str,
+) -> _SymtableRows:
+    scope_rows: list[dict[str, object]] = []
+    symbol_rows: list[dict[str, object]] = []
+    scope_edge_rows: list[dict[str, object]] = []
+    ns_edge_rows: list[dict[str, object]] = []
+    func_parts_acc = _FuncPartsAccumulator()
+
+    for file_ctx in iter_contexts(repo_files, file_contexts):
+        (
+            file_scope_rows,
+            file_symbol_rows,
+            file_scope_edge_rows,
+            file_ns_edge_rows,
+            file_func_parts_acc,
+        ) = _extract_symtable_for_context(
+            file_ctx,
+            compile_type=compile_type,
+        )
+        scope_rows.extend(file_scope_rows)
+        symbol_rows.extend(file_symbol_rows)
+        scope_edge_rows.extend(file_scope_edge_rows)
+        ns_edge_rows.extend(file_ns_edge_rows)
+        func_parts_acc.extend(file_func_parts_acc)
+
+    return _SymtableRows(
+        scope_rows=scope_rows,
+        symbol_rows=symbol_rows,
+        scope_edge_rows=scope_edge_rows,
+        ns_edge_rows=ns_edge_rows,
+        func_parts_acc=func_parts_acc,
+    )
+
+
 def extract_symtable(
     repo_files: TableLike,
     options: SymtableExtractOptions | None = None,
     *,
-    file_contexts: Iterable[FileContext] | None = None,
-    evidence_plan: EvidencePlan | None = None,
-    ctx: ExecutionContext | None = None,
+    context: ExtractExecutionContext | None = None,
 ) -> SymtableExtractResult:
     """Extract symbol table artifacts from repository files.
 
@@ -473,44 +510,20 @@ def extract_symtable(
         Tables for scopes, symbols, and namespace edges.
     """
     normalized_options = normalize_options("symtable", options, SymtableExtractOptions)
-    ctx = ctx or execution_context_factory("default")
+    exec_context = context or ExtractExecutionContext()
+    ctx = exec_context.ensure_ctx()
     metadata_specs = _symtable_metadata_specs(normalized_options)
 
-    scope_rows: list[dict[str, object]] = []
-    symbol_rows: list[dict[str, object]] = []
-    scope_edge_rows: list[dict[str, object]] = []
-    ns_edge_rows: list[dict[str, object]] = []
-    func_parts_acc = _FuncPartsAccumulator()
-
-    for file_ctx in iter_contexts(repo_files, file_contexts):
-        (
-            file_scope_rows,
-            file_symbol_rows,
-            file_scope_edge_rows,
-            file_ns_edge_rows,
-            file_func_parts_acc,
-        ) = _extract_symtable_for_context(
-            file_ctx,
-            compile_type=normalized_options.compile_type,
-        )
-        scope_rows.extend(file_scope_rows)
-        symbol_rows.extend(file_symbol_rows)
-        scope_edge_rows.extend(file_scope_edge_rows)
-        ns_edge_rows.extend(file_ns_edge_rows)
-        func_parts_acc.extend(file_func_parts_acc)
-
-    rows = _SymtableRows(
-        scope_rows=scope_rows,
-        symbol_rows=symbol_rows,
-        scope_edge_rows=scope_edge_rows,
-        ns_edge_rows=ns_edge_rows,
-        func_parts_acc=func_parts_acc,
+    rows = _collect_symtable_rows(
+        repo_files,
+        exec_context.file_contexts,
+        compile_type=normalized_options.compile_type,
     )
     return _build_symtable_result(
         rows,
         ctx=ctx,
         metadata_specs=metadata_specs,
-        evidence_plan=evidence_plan,
+        evidence_plan=exec_context.evidence_plan,
     )
 
 
@@ -518,9 +531,7 @@ def extract_symtable_plans(
     repo_files: TableLike,
     options: SymtableExtractOptions | None = None,
     *,
-    file_contexts: Iterable[FileContext] | None = None,
-    evidence_plan: EvidencePlan | None = None,
-    ctx: ExecutionContext | None = None,
+    context: ExtractExecutionContext | None = None,
 ) -> dict[str, Plan]:
     """Extract symbol table plans from repository files.
 
@@ -530,37 +541,13 @@ def extract_symtable_plans(
         Plan bundle keyed by symtable outputs.
     """
     normalized_options = normalize_options("symtable", options, SymtableExtractOptions)
-    ctx = ctx or execution_context_factory("default")
-
-    scope_rows: list[dict[str, object]] = []
-    symbol_rows: list[dict[str, object]] = []
-    scope_edge_rows: list[dict[str, object]] = []
-    ns_edge_rows: list[dict[str, object]] = []
-    func_parts_acc = _FuncPartsAccumulator()
-
-    for file_ctx in iter_contexts(repo_files, file_contexts):
-        (
-            file_scope_rows,
-            file_symbol_rows,
-            file_scope_edge_rows,
-            file_ns_edge_rows,
-            file_func_parts_acc,
-        ) = _extract_symtable_for_context(
-            file_ctx,
-            compile_type=normalized_options.compile_type,
-        )
-        scope_rows.extend(file_scope_rows)
-        symbol_rows.extend(file_symbol_rows)
-        scope_edge_rows.extend(file_scope_edge_rows)
-        ns_edge_rows.extend(file_ns_edge_rows)
-        func_parts_acc.extend(file_func_parts_acc)
-
-    rows = _SymtableRows(
-        scope_rows=scope_rows,
-        symbol_rows=symbol_rows,
-        scope_edge_rows=scope_edge_rows,
-        ns_edge_rows=ns_edge_rows,
-        func_parts_acc=func_parts_acc,
+    exec_context = context or ExtractExecutionContext()
+    ctx = exec_context.ensure_ctx()
+    evidence_plan = exec_context.evidence_plan
+    rows = _collect_symtable_rows(
+        repo_files,
+        exec_context.file_contexts,
+        compile_type=normalized_options.compile_type,
     )
     return _build_symtable_plans(rows, ctx=ctx, evidence_plan=evidence_plan)
 
@@ -957,6 +944,7 @@ class _SymtableTableKwargs(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
+    profile: str
     prefer_reader: bool
 
 
@@ -966,6 +954,7 @@ class _SymtableTableKwargsTable(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
+    profile: str
     prefer_reader: Literal[False]
 
 
@@ -975,6 +964,7 @@ class _SymtableTableKwargsReader(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
+    profile: str
     prefer_reader: Required[Literal[True]]
 
 
@@ -998,7 +988,7 @@ def extract_symtables_table(
     Parameters
     ----------
     kwargs:
-        Keyword-only arguments for extraction (repo_files, options, file_contexts, ctx,
+        Keyword-only arguments for extraction (repo_files, options, file_contexts, ctx, profile,
         prefer_reader).
 
     Returns
@@ -1014,14 +1004,18 @@ def extract_symtables_table(
     )
     file_contexts = kwargs.get("file_contexts")
     evidence_plan = kwargs.get("evidence_plan")
-    exec_ctx = kwargs.get("ctx") or execution_context_factory("default")
+    profile = kwargs.get("profile", "default")
+    exec_ctx = kwargs.get("ctx") or execution_context_factory(profile)
     prefer_reader = kwargs.get("prefer_reader", False)
     plans = extract_symtable_plans(
         repo_files,
         options=normalized_options,
-        file_contexts=file_contexts,
-        evidence_plan=evidence_plan,
-        ctx=exec_ctx,
+        context=ExtractExecutionContext(
+            file_contexts=file_contexts,
+            evidence_plan=evidence_plan,
+            ctx=exec_ctx,
+            profile=profile,
+        ),
     )
     metadata_specs = _symtable_metadata_specs(normalized_options)
     return run_plan_bundle(

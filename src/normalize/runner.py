@@ -92,7 +92,11 @@ class NormalizeRuleCompilation:
     catalog: PlanCatalog
 
 
-def ensure_execution_context(ctx: ExecutionContext | None) -> ExecutionContext:
+def ensure_execution_context(
+    ctx: ExecutionContext | None,
+    *,
+    profile: str = "default",
+) -> ExecutionContext:
     """Return a normalized execution context.
 
     Returns
@@ -102,7 +106,7 @@ def ensure_execution_context(ctx: ExecutionContext | None) -> ExecutionContext:
     """
     if ctx is not None:
         return ctx
-    return execution_context_factory("default")
+    return execution_context_factory(profile)
 
 
 def ensure_canonical(ctx: ExecutionContext) -> ExecutionContext:
@@ -260,6 +264,7 @@ def run_normalize_streamable_contract(
     *,
     contract: ContractSpec,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> RecordBatchReaderLike | TableLike:
     """Return a streamable output aligned to the contract schema.
 
@@ -268,7 +273,7 @@ def run_normalize_streamable_contract(
     RecordBatchReaderLike | TableLike
         Reader when streamable, otherwise a materialized table.
     """
-    exec_ctx = ensure_execution_context(ctx)
+    exec_ctx = ensure_execution_context(ctx, profile=profile)
     schema = contract.to_contract().schema
     return run_normalize_streamable(plan, ctx=exec_ctx, schema=schema)
 

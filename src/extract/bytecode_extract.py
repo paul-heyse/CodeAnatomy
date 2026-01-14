@@ -16,6 +16,7 @@ from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.plan.scan_io import plan_from_rows
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.helpers import (
+    ExtractExecutionContext,
     FileContext,
     file_identity_row,
     iter_contexts,
@@ -1079,9 +1080,7 @@ def extract_bytecode(
     repo_files: TableLike,
     options: BytecodeExtractOptions | None = None,
     *,
-    file_contexts: Iterable[FileContext] | None = None,
-    evidence_plan: EvidencePlan | None = None,
-    ctx: ExecutionContext | None = None,
+    context: ExtractExecutionContext | None = None,
 ) -> BytecodeExtractResult:
     """Extract bytecode tables from repository files.
 
@@ -1091,13 +1090,12 @@ def extract_bytecode(
         Tables for bytecode code units, instructions, exception data, and edges.
     """
     normalized_options = normalize_options("bytecode", options, BytecodeExtractOptions)
-    exec_ctx = ctx or execution_context_factory("default")
+    exec_context = context or ExtractExecutionContext()
+    exec_ctx = exec_context.ensure_ctx()
     plans = extract_bytecode_plans(
         repo_files,
         options=normalized_options,
-        file_contexts=file_contexts,
-        evidence_plan=evidence_plan,
-        ctx=exec_ctx,
+        context=exec_context,
     )
     metadata_specs = _bytecode_metadata_specs(normalized_options)
     return BytecodeExtractResult(
@@ -1144,9 +1142,7 @@ def extract_bytecode_plans(
     repo_files: TableLike,
     options: BytecodeExtractOptions | None = None,
     *,
-    file_contexts: Iterable[FileContext] | None = None,
-    evidence_plan: EvidencePlan | None = None,
-    ctx: ExecutionContext | None = None,
+    context: ExtractExecutionContext | None = None,
 ) -> dict[str, Plan]:
     """Extract bytecode plans from repository files.
 
@@ -1156,7 +1152,10 @@ def extract_bytecode_plans(
         Plan bundle keyed by bytecode output name.
     """
     normalized_options = normalize_options("bytecode", options, BytecodeExtractOptions)
-    exec_ctx = ctx or execution_context_factory("default")
+    exec_context = context or ExtractExecutionContext()
+    exec_ctx = exec_context.ensure_ctx()
+    file_contexts = exec_context.file_contexts
+    evidence_plan = exec_context.evidence_plan
 
     buffers = BytecodeRowBuffers(
         code_unit_rows=[],
@@ -1196,6 +1195,7 @@ class _BytecodeTableKwargs(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
+    profile: str
     prefer_reader: bool
 
 
@@ -1205,6 +1205,7 @@ class _BytecodeTableKwargsTable(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
+    profile: str
     prefer_reader: Literal[False]
 
 
@@ -1214,6 +1215,7 @@ class _BytecodeTableKwargsReader(TypedDict, total=False):
     file_contexts: Iterable[FileContext] | None
     evidence_plan: EvidencePlan | None
     ctx: ExecutionContext | None
+    profile: str
     prefer_reader: Required[Literal[True]]
 
 
@@ -1237,7 +1239,7 @@ def extract_bytecode_table(
     Parameters
     ----------
     kwargs:
-        Keyword-only arguments for extraction (repo_files, options, file_contexts, ctx,
+        Keyword-only arguments for extraction (repo_files, options, file_contexts, ctx, profile,
         prefer_reader).
 
     Returns
@@ -1253,14 +1255,18 @@ def extract_bytecode_table(
     )
     file_contexts = kwargs.get("file_contexts")
     evidence_plan = kwargs.get("evidence_plan")
-    exec_ctx = kwargs.get("ctx") or execution_context_factory("default")
+    profile = kwargs.get("profile", "default")
+    exec_ctx = kwargs.get("ctx") or execution_context_factory(profile)
     prefer_reader = kwargs.get("prefer_reader", False)
     plans = extract_bytecode_plans(
         repo_files,
         options=normalized_options,
-        file_contexts=file_contexts,
-        evidence_plan=evidence_plan,
-        ctx=exec_ctx,
+        context=ExtractExecutionContext(
+            file_contexts=file_contexts,
+            evidence_plan=evidence_plan,
+            ctx=exec_ctx,
+            profile=profile,
+        ),
     )
     metadata_specs = _bytecode_metadata_specs(normalized_options)
     return run_plan_bundle(

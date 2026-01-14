@@ -18,6 +18,7 @@ from hamilton_pipeline.pipeline_types import (
     ScipIndexConfig,
     TreeSitterConfig,
 )
+from ibis_engine.config import IbisBackendConfig
 
 
 @tag(layer="inputs", kind="runtime")
@@ -30,6 +31,18 @@ def ctx() -> ExecutionContext:
         Default execution context instance.
     """
     return execution_context_factory("default")
+
+
+@tag(layer="inputs", kind="runtime")
+def ibis_backend_config() -> IbisBackendConfig:
+    """Return the default Ibis backend configuration.
+
+    Returns
+    -------
+    IbisBackendConfig
+        Backend configuration for Ibis execution.
+    """
+    return IbisBackendConfig()
 
 
 @tag(layer="inputs", kind="scalar")

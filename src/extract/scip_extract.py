@@ -1054,6 +1054,7 @@ class ScipExtractOptions:
 
     parse_opts: SCIPParseOptions | None = None
     evidence_plan: EvidencePlan | None = None
+    profile: str = "default"
 
 
 @overload
@@ -1107,9 +1108,10 @@ def extract_scip_tables(
         Extracted SCIP outputs keyed by output name.
     """
     options = options or ScipExtractOptions()
+    profile = options.profile
     normalized_opts = normalize_options("scip", options.parse_opts, SCIPParseOptions)
     evidence_plan = options.evidence_plan
-    exec_ctx = ctx or execution_context_factory("default")
+    exec_ctx = ctx or execution_context_factory(profile)
     metadata_specs = _scip_metadata_specs(normalized_opts)
     if scip_index_path is None:
         plans = {

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pyarrow as pa
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, Table, TableLike
 from arrowdsl.plan.plan import Plan, union_all_plans
+from arrowdsl.plan.query import ScanTelemetry
 from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.schema import EncodingSpec
 from cpg.catalog import PlanCatalog
@@ -26,7 +27,7 @@ from cpg.plan_specs import (
     finalize_plan,
 )
 from cpg.registry import CpgRegistry, default_cpg_registry
-from cpg.relationship_plans import compile_relation_plans
+from cpg.relationship_plans import RelationPlanBundle, compile_relation_plans
 from cpg.specs import EdgePlanSpec
 
 
@@ -76,6 +77,56 @@ class EdgeSpecOverrides:
     """Optional spec table overrides for edge construction."""
 
     relation_rule_table: pa.Table | None = None
+
+
+@dataclass(frozen=True)
+class EdgeRelationContext:
+    """Resolved relation plan context for edge compilation."""
+
+    relation_bundle: RelationPlanBundle
+    options: EdgeBuildOptions
+    edges_schema: SchemaLike
+    relation_rule_table: pa.Table
+    registry: CpgRegistry
+
+
+@dataclass(frozen=True)
+class EdgePlanBundle:
+    """Raw edge plan plus relspec scan telemetry."""
+
+    plan: Plan
+    telemetry: Mapping[str, ScanTelemetry] = field(default_factory=dict)
+
+
+def _edge_relation_context(
+    config: EdgeBuildConfig | None,
+    *,
+    ctx: ExecutionContext,
+) -> EdgeRelationContext:
+    config = _resolve_edge_config(config)
+    registry = config.registry or default_cpg_registry()
+    edges_schema = registry.edges_spec().schema()
+    options = config.options or EdgeBuildOptions()
+    inputs = config.inputs
+    if inputs is None and config.legacy:
+        inputs = _edge_inputs_from_legacy(config.legacy)
+    catalog = _edge_catalog(inputs or EdgeBuildInputs())
+    spec_tables = config.spec_tables or EdgeSpecOverrides()
+    relation_rule_table = spec_tables.relation_rule_table or registry.relation_rule_table
+    relation_bundle = compile_relation_plans(
+        catalog,
+        ctx=ctx,
+        rule_table=relation_rule_table,
+        materialize_debug=config.materialize_relation_outputs,
+        required_sources=config.required_relation_sources,
+    )
+    return EdgeRelationContext(
+        relation_bundle=relation_bundle,
+        options=options,
+        edges_schema=edges_schema,
+        relation_rule_table=relation_rule_table,
+        registry=registry,
+    )
 
 
 @dataclass(frozen=True)
@@ -162,41 +213,25 @@ def build_cpg_edges_raw(
     *,
     ctx: ExecutionContext,
     config: EdgeBuildConfig | None = None,
-) -> Plan:
+) -> EdgePlanBundle:
     """Emit raw CPG edges as a plan without finalization.
 
     Returns
     -------
-    Plan
-        Plan producing the raw edges table.
+    EdgePlanBundle
+        Raw plan plus scan telemetry.
 
     Raises
     ------
     ValueError
         Raised when an option flag is missing.
     """
-    config = _resolve_edge_config(config)
-    registry = config.registry or default_cpg_registry()
-    edges_spec = registry.edges_spec()
-    edges_schema = edges_spec.schema()
-    options = config.options or EdgeBuildOptions()
-    inputs = config.inputs
-    if inputs is None and config.legacy:
-        inputs = _edge_inputs_from_legacy(config.legacy)
-    catalog = _edge_catalog(inputs or EdgeBuildInputs())
-    spec_tables = config.spec_tables or EdgeSpecOverrides()
-    relation_rule_table = spec_tables.relation_rule_table or registry.relation_rule_table
-    relation_plans = compile_relation_plans(
-        catalog,
-        ctx=ctx,
-        rule_table=relation_rule_table,
-        materialize_debug=config.materialize_relation_outputs,
-        required_sources=config.required_relation_sources,
-    )
+    edge_context = _edge_relation_context(config, ctx=ctx)
+    relation_plans = edge_context.relation_bundle.plans
 
     parts: list[Plan] = []
-    for spec in _edge_plan_specs(relation_rule_table, registry=registry):
-        enabled = getattr(options, spec.option_flag, None)
+    for spec in _edge_plan_specs(edge_context.relation_rule_table, registry=edge_context.registry):
+        enabled = getattr(edge_context.options, spec.option_flag, None)
         if enabled is None:
             msg = f"Unknown option flag: {spec.option_flag}"
             raise ValueError(msg)
@@ -208,11 +243,17 @@ def build_cpg_edges_raw(
         parts.append(emit_edges_plan(rel, spec=spec.emit, ctx=ctx))
 
     if not parts:
-        return empty_plan(edges_schema, label="cpg_edges_raw")
+        return EdgePlanBundle(
+            plan=empty_plan(edge_context.edges_schema, label="cpg_edges_raw"),
+            telemetry=edge_context.relation_bundle.telemetry,
+        )
 
     combined = union_all_plans(parts, label="cpg_edges_raw")
-    combined = encode_plan(combined, specs=_encoding_specs(edges_schema), ctx=ctx)
-    return align_plan(combined, schema=edges_schema, ctx=ctx)
+    combined = encode_plan(combined, specs=_encoding_specs(edge_context.edges_schema), ctx=ctx)
+    return EdgePlanBundle(
+        plan=align_plan(combined, schema=edge_context.edges_schema, ctx=ctx),
+        telemetry=edge_context.relation_bundle.telemetry,
+    )
 
 
 def build_cpg_edges(
@@ -230,10 +271,11 @@ def build_cpg_edges(
     config = _resolve_edge_config(config)
     registry = config.registry or default_cpg_registry()
     edges_spec = registry.edges_spec()
-    raw_plan = build_cpg_edges_raw(
+    raw_bundle = build_cpg_edges_raw(
         ctx=ctx,
         config=config,
     )
+    raw_plan = raw_bundle.plan
     quality_plan = quality_plan_from_ids(
         raw_plan,
         spec=QualityPlanSpec(
@@ -258,4 +300,5 @@ def build_cpg_edges(
         finalize=finalize,
         quality=quality,
         pipeline_breakers=raw_plan.pipeline_breakers,
+        relspec_scan_telemetry=raw_bundle.telemetry,
     )

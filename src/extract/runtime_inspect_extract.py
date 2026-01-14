@@ -794,6 +794,7 @@ def extract_runtime_tables(
     options: RuntimeInspectOptions,
     evidence_plan: EvidencePlan | None = None,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> RuntimeInspectResult:
     """Extract runtime inspection tables via subprocess.
 
@@ -807,6 +808,8 @@ def extract_runtime_tables(
         Evidence plan used for early column projection.
     ctx:
         Execution context for plan execution.
+    profile:
+        Execution profile name used when ``ctx`` is not provided.
 
     Returns
     -------
@@ -814,7 +817,7 @@ def extract_runtime_tables(
         Extracted runtime inspection tables.
     """
     normalized_options = normalize_options("runtime_inspect", options, RuntimeInspectOptions)
-    exec_ctx = ctx or execution_context_factory("default")
+    exec_ctx = ctx or execution_context_factory(profile)
     if not normalized_options.module_allowlist:
         return _empty_runtime_result(_runtime_metadata_specs(normalized_options))
     metadata_specs = _runtime_metadata_specs(normalized_options)
@@ -848,6 +851,7 @@ def extract_runtime_plans(
     options: RuntimeInspectOptions,
     evidence_plan: EvidencePlan | None = None,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> dict[str, Plan]:
     """Extract runtime inspection plans via subprocess.
 
@@ -857,7 +861,7 @@ def extract_runtime_plans(
         Plan bundle keyed by runtime inspection table name.
     """
     normalized_options = normalize_options("runtime_inspect", options, RuntimeInspectOptions)
-    exec_ctx = ctx or execution_context_factory("default")
+    exec_ctx = ctx or execution_context_factory(profile)
     if not normalized_options.module_allowlist:
         return {
             "rt_objects": Plan.table_source(empty_table(RT_OBJECTS_SCHEMA)),
@@ -894,11 +898,14 @@ def extract_runtime_objects(
     module_allowlist: Sequence[str],
     timeout_s: int,
     prefer_reader: bool = False,
+    profile: str = "default",
 ) -> TableLike | RecordBatchReaderLike:
     """Extract runtime objects via subprocess.
 
     prefer_reader:
         When True, return a streaming reader when possible.
+    profile:
+        Execution profile name used for the default execution context.
 
     Returns
     -------
@@ -909,11 +916,12 @@ def extract_runtime_objects(
     plans = extract_runtime_plans(
         repo_root,
         options=options,
+        profile=profile,
     )
     metadata_specs = _runtime_metadata_specs(options)
     return run_plan_bundle(
         {"rt_objects": plans["rt_objects"]},
-        ctx=execution_context_factory("default"),
+        ctx=execution_context_factory(profile),
         prefer_reader=prefer_reader,
         metadata_specs={"rt_objects": metadata_specs["rt_objects"]},
         attach_ordering_metadata=True,
@@ -926,11 +934,14 @@ def extract_runtime_signatures(
     module_allowlist: Sequence[str],
     timeout_s: int,
     prefer_reader: bool = False,
+    profile: str = "default",
 ) -> dict[str, TableLike | RecordBatchReaderLike]:
     """Extract runtime signatures and parameters via subprocess.
 
     prefer_reader:
         When True, return streaming readers when possible.
+    profile:
+        Execution profile name used for the default execution context.
 
     Returns
     -------
@@ -941,6 +952,7 @@ def extract_runtime_signatures(
     plans = extract_runtime_plans(
         repo_root,
         options=options,
+        profile=profile,
     )
     metadata_specs = _runtime_metadata_specs(options)
     return run_plan_bundle(
@@ -948,7 +960,7 @@ def extract_runtime_signatures(
             "rt_signatures": plans["rt_signatures"],
             "rt_signature_params": plans["rt_signature_params"],
         },
-        ctx=execution_context_factory("default"),
+        ctx=execution_context_factory(profile),
         prefer_reader=prefer_reader,
         metadata_specs={
             "rt_signatures": metadata_specs["rt_signatures"],
@@ -964,11 +976,14 @@ def extract_runtime_members(
     module_allowlist: Sequence[str],
     timeout_s: int,
     prefer_reader: bool = False,
+    profile: str = "default",
 ) -> TableLike | RecordBatchReaderLike:
     """Extract runtime members via subprocess.
 
     prefer_reader:
         When True, return a streaming reader when possible.
+    profile:
+        Execution profile name used for the default execution context.
 
     Returns
     -------
@@ -979,11 +994,12 @@ def extract_runtime_members(
     plans = extract_runtime_plans(
         repo_root,
         options=options,
+        profile=profile,
     )
     metadata_specs = _runtime_metadata_specs(options)
     return run_plan_bundle(
         {"rt_members": plans["rt_members"]},
-        ctx=execution_context_factory("default"),
+        ctx=execution_context_factory(profile),
         prefer_reader=prefer_reader,
         metadata_specs={"rt_members": metadata_specs["rt_members"]},
         attach_ordering_metadata=True,

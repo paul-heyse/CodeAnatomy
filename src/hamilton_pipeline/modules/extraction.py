@@ -22,6 +22,9 @@ from extract.cst_extract import CSTExtractOptions, extract_cst_tables
 from extract.evidence_plan import EvidencePlan, compile_evidence_plan
 from extract.evidence_specs import evidence_spec
 from extract.helpers import (
+    ExtractExecutionContext as ExtractRunContext,
+)
+from extract.helpers import (
     FileContext,
     iter_file_contexts,
     template_outputs,
@@ -595,9 +598,11 @@ def bytecode_bundle(
     result = extract_bytecode(
         repo_files,
         options=options,
-        file_contexts=file_contexts,
-        evidence_plan=evidence_plan,
-        ctx=extract_execution_context.ctx,
+        context=ExtractRunContext(
+            file_contexts=file_contexts,
+            evidence_plan=evidence_plan,
+            ctx=extract_execution_context.ctx,
+        ),
     )
     tables = {
         "py_bc_code_units": result.py_bc_code_units,

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, cast, runtime_checkable
 
 import pyarrow as pa
+from ibis.expr.types import Table, Value
 
 from arrowdsl.compute.expr_core import ComputeExprSpec, ExprSpec, ScalarValue
 from arrowdsl.compute.filters import ComputeRegistry, UdfSpec, default_registry
@@ -33,6 +34,7 @@ from arrowdsl.spec.codec import (
     encode_scalar_union,
 )
 from arrowdsl.spec.infra import SCALAR_UNION_TYPE
+from ibis_engine.expr_compiler import IbisExprRegistry, expr_ir_to_ibis
 
 
 @runtime_checkable
@@ -222,6 +224,22 @@ class ExprIR:
             return ComputeExprSpec(expr=expr, materialize_fn=_materialize)
         msg = f"Unsupported ExprIR op: {self.op}"
         raise ValueError(msg)
+
+    def to_ibis_expr(
+        self,
+        table: Table,
+        *,
+        registry: IbisExprRegistry | None = None,
+    ) -> Value:
+        """Compile the IR into an Ibis expression.
+
+        Returns
+        -------
+        ibis.expr.types.Value
+            Ibis expression for the provided ExprIR node.
+        """
+        registry = registry or IbisExprRegistry()
+        return expr_ir_to_ibis(self, table, registry=registry)
 
     def to_json(self) -> str:
         """Serialize the IR to JSON.

@@ -15,7 +15,7 @@ from arrowdsl.compute.ids import (
     masked_hash_array,
     masked_hash_expr,
 )
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.ids import iter_table_rows
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.plan.plan import Plan
@@ -96,6 +96,28 @@ class FileContext:
             text=text,
             data=data,
         )
+
+
+@dataclass(frozen=True)
+class ExtractExecutionContext:
+    """Execution context bundle for extract entry points."""
+
+    file_contexts: Iterable[FileContext] | None = None
+    evidence_plan: EvidencePlan | None = None
+    ctx: ExecutionContext | None = None
+    profile: str = "default"
+
+    def ensure_ctx(self) -> ExecutionContext:
+        """Return the effective execution context.
+
+        Returns
+        -------
+        ExecutionContext
+            Provided context or a profile-derived context when missing.
+        """
+        if self.ctx is not None:
+            return self.ctx
+        return execution_context_factory(self.profile)
 
 
 def iter_file_contexts(repo_files: TableLike) -> Iterator[FileContext]:

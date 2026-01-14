@@ -7,6 +7,7 @@ from typing import Literal, cast, overload
 
 import pyarrow as pa
 import pyarrow.dataset as ds
+from ibis.expr.types import Table as IbisTable
 
 from arrowdsl.compute.ids import HashSpec, hash_projection
 from arrowdsl.compute.macros import ColumnOrNullExpr
@@ -35,6 +36,8 @@ from arrowdsl.schema.ops import (
 )
 from arrowdsl.schema.schema import CastErrorPolicy, align_to_schema, empty_table
 from arrowdsl.schema.structs import flatten_struct_field
+from ibis_engine.expr_compiler import IbisExprRegistry
+from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 
 
 def query_for_schema(schema: SchemaLike) -> QuerySpec:
@@ -219,6 +222,22 @@ def plan_source(
         Acero-backed plan for dataset/table sources.
     """
     return plan_from_source(source, ctx=ctx, columns=columns, label=label)
+
+
+def apply_query_spec_ibis(
+    table: IbisTable,
+    *,
+    spec: IbisQuerySpec,
+    registry: IbisExprRegistry | None = None,
+) -> IbisTable:
+    """Apply an Ibis query spec to a table expression.
+
+    Returns
+    -------
+    ibis.expr.types.Table
+        Ibis table with projections and filters applied.
+    """
+    return apply_query_spec(table, spec=spec, registry=registry)
 
 
 def code_unit_meta_join(
@@ -513,6 +532,7 @@ __all__ = [
     "align_plan",
     "align_table_to_schema",
     "apply_hash_projection",
+    "apply_query_spec_ibis",
     "assert_schema_metadata",
     "coalesce_expr",
     "code_unit_meta_join",

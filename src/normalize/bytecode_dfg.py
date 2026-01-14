@@ -33,6 +33,7 @@ def build_def_use_events_result(
     py_bc_instructions: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> FinalizeResult:
     """Build def/use events from bytecode instruction rows.
 
@@ -42,13 +43,15 @@ def build_def_use_events_result(
         Bytecode instruction table with opname and argval data.
     ctx:
         Optional execution context for plan compilation and finalize.
+    profile:
+        Execution profile name used when ``ctx`` is not provided.
 
     Returns
     -------
     FinalizeResult
         Finalize bundle with def/use events.
     """
-    exec_ctx = ensure_execution_context(ctx)
+    exec_ctx = ensure_execution_context(ctx, profile=profile)
     plan = _plan_for_output(
         DEF_USE_NAME,
         {"py_bc_instructions": py_bc_instructions},
@@ -71,6 +74,7 @@ def build_def_use_events(
     py_bc_instructions: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike:
     """Build def/use events from bytecode instruction rows.
 
@@ -80,19 +84,22 @@ def build_def_use_events(
         Bytecode instruction table with opname and argval data.
     ctx:
         Optional execution context for plan compilation and finalize.
+    profile:
+        Execution profile name used when ``ctx`` is not provided.
 
     Returns
     -------
     TableLike
         Def/use events table.
     """
-    return build_def_use_events_result(py_bc_instructions, ctx=ctx).good
+    return build_def_use_events_result(py_bc_instructions, ctx=ctx, profile=profile).good
 
 
 def build_def_use_events_canonical(
     py_bc_instructions: TableLike,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike:
     """Build def/use events under canonical determinism.
 
@@ -101,14 +108,15 @@ def build_def_use_events_canonical(
     TableLike
         Canonicalized def/use events table.
     """
-    exec_ctx = ensure_canonical(ensure_execution_context(ctx))
-    return build_def_use_events_result(py_bc_instructions, ctx=exec_ctx).good
+    exec_ctx = ensure_canonical(ensure_execution_context(ctx, profile=profile))
+    return build_def_use_events_result(py_bc_instructions, ctx=exec_ctx, profile=profile).good
 
 
 def build_def_use_events_streamable(
     py_bc_instructions: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike | RecordBatchReaderLike:
     """Build def/use events with a streamable output.
 
@@ -117,7 +125,7 @@ def build_def_use_events_streamable(
     TableLike | RecordBatchReaderLike
         Reader when streamable, otherwise a materialized table.
     """
-    exec_ctx = ensure_execution_context(ctx)
+    exec_ctx = ensure_execution_context(ctx, profile=profile)
     plan = _plan_for_output(
         DEF_USE_NAME,
         {"py_bc_instructions": py_bc_instructions},
@@ -132,6 +140,7 @@ def run_reaching_defs_result(
     def_use_events: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> FinalizeResult:
     """Compute a best-effort reaching-defs edge table.
 
@@ -144,13 +153,15 @@ def run_reaching_defs_result(
         Def/use events table.
     ctx:
         Optional execution context for plan compilation and finalize.
+    profile:
+        Execution profile name used when ``ctx`` is not provided.
 
     Returns
     -------
     FinalizeResult
         Finalize bundle with reaching-def edges.
     """
-    exec_ctx = ensure_execution_context(ctx)
+    exec_ctx = ensure_execution_context(ctx, profile=profile)
     plan = _plan_for_output(
         REACHES_NAME,
         {"py_bc_def_use_events_v1": def_use_events},
@@ -173,6 +184,7 @@ def run_reaching_defs(
     def_use_events: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike:
     """Compute a best-effort reaching-defs edge table.
 
@@ -185,19 +197,22 @@ def run_reaching_defs(
         Def/use events table.
     ctx:
         Optional execution context for plan compilation and finalize.
+    profile:
+        Execution profile name used when ``ctx`` is not provided.
 
     Returns
     -------
     TableLike
         Reaching-def edges table.
     """
-    return run_reaching_defs_result(def_use_events, ctx=ctx).good
+    return run_reaching_defs_result(def_use_events, ctx=ctx, profile=profile).good
 
 
 def run_reaching_defs_canonical(
     def_use_events: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike:
     """Compute reaching-def edges under canonical determinism.
 
@@ -206,14 +221,15 @@ def run_reaching_defs_canonical(
     TableLike
         Canonicalized reaching-def edges.
     """
-    exec_ctx = ensure_canonical(ensure_execution_context(ctx))
-    return run_reaching_defs_result(def_use_events, ctx=exec_ctx).good
+    exec_ctx = ensure_canonical(ensure_execution_context(ctx, profile=profile))
+    return run_reaching_defs_result(def_use_events, ctx=exec_ctx, profile=profile).good
 
 
 def run_reaching_defs_streamable(
     def_use_events: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike | RecordBatchReaderLike:
     """Compute reaching-def edges with a streamable output.
 
@@ -222,7 +238,7 @@ def run_reaching_defs_streamable(
     TableLike | RecordBatchReaderLike
         Reader when streamable, otherwise a materialized table.
     """
-    exec_ctx = ensure_execution_context(ctx)
+    exec_ctx = ensure_execution_context(ctx, profile=profile)
     plan = _plan_for_output(
         REACHES_NAME,
         {"py_bc_def_use_events_v1": def_use_events},
@@ -232,6 +248,7 @@ def run_reaching_defs_streamable(
         plan,
         contract=dataset_contract(REACHES_NAME),
         ctx=exec_ctx,
+        profile=profile,
     )
 
 

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import replace
 
+from arrowdsl.plan.query import ScanTelemetry
 from extract.evidence_specs import EvidenceSpec as ExtractEvidenceSpec
 from extract.evidence_specs import evidence_spec
 from extract.normalize_ops import normalize_ops_for_output
@@ -24,6 +26,7 @@ def compile_evidence_plan(
     rules: Sequence[RelationshipRule | RuleDefinition],
     *,
     extra_sources: Sequence[str] = (),
+    telemetry_provider: Callable[[str], ScanTelemetry | None] | None = None,
 ) -> EvidencePlan:
     """Compile an evidence plan from relationship rules.
 
@@ -33,12 +36,23 @@ def compile_evidence_plan(
         Evidence plan describing required datasets and ops.
     """
     normalized = tuple(_normalize_rule(rule) for rule in rules)
-    return compile_central_plan(
+    plan = compile_central_plan(
         normalized,
         extra_sources=extra_sources,
         evidence_spec=_evidence_spec_record,
         normalize_ops_for_output=normalize_ops_for_output,
     )
+    if telemetry_provider is None:
+        return plan
+    telemetry = {
+        source: info
+        for source in plan.sources
+        for info in (telemetry_provider(source),)
+        if info is not None
+    }
+    if not telemetry:
+        return plan
+    return replace(plan, telemetry=telemetry)
 
 
 def _normalize_rule(rule: RelationshipRule | RuleDefinition) -> RuleDefinition:

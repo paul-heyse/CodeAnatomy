@@ -84,6 +84,7 @@ def collect_diags_result(
     *,
     sources: DiagnosticsSources,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> FinalizeResult:
     """Aggregate diagnostics into a single normalized table.
 
@@ -95,13 +96,15 @@ def collect_diags_result(
         Diagnostics source tables.
     ctx:
         Optional execution context for plan compilation and finalize.
+    profile:
+        Execution profile name used when ``ctx`` is not provided.
 
     Returns
     -------
     FinalizeResult
         Finalize bundle with normalized diagnostics.
     """
-    exec_ctx = ensure_execution_context(ctx)
+    exec_ctx = ensure_execution_context(ctx, profile=profile)
     plan = _plan_for_output(repo_text_index, sources=sources, ctx=exec_ctx)
     finalize_spec = NormalizeFinalizeSpec(
         metadata_spec=DIAG_SPEC.metadata_spec,
@@ -121,6 +124,7 @@ def collect_diags(
     *,
     sources: DiagnosticsSources,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike:
     """Aggregate diagnostics into a single normalized table.
 
@@ -132,13 +136,20 @@ def collect_diags(
         Diagnostics source tables.
     ctx:
         Optional execution context for plan compilation and finalize.
+    profile:
+        Execution profile name used when ``ctx`` is not provided.
 
     Returns
     -------
     TableLike
         Normalized diagnostics table.
     """
-    return collect_diags_result(repo_text_index, sources=sources, ctx=ctx).good
+    return collect_diags_result(
+        repo_text_index,
+        sources=sources,
+        ctx=ctx,
+        profile=profile,
+    ).good
 
 
 def collect_diags_canonical(
@@ -146,6 +157,7 @@ def collect_diags_canonical(
     *,
     sources: DiagnosticsSources,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike:
     """Aggregate diagnostics under canonical determinism.
 
@@ -154,8 +166,13 @@ def collect_diags_canonical(
     TableLike
         Canonicalized diagnostics table.
     """
-    exec_ctx = ensure_canonical(ensure_execution_context(ctx))
-    return collect_diags_result(repo_text_index, sources=sources, ctx=exec_ctx).good
+    exec_ctx = ensure_canonical(ensure_execution_context(ctx, profile=profile))
+    return collect_diags_result(
+        repo_text_index,
+        sources=sources,
+        ctx=exec_ctx,
+        profile=profile,
+    ).good
 
 
 def collect_diags_streamable(
@@ -163,6 +180,7 @@ def collect_diags_streamable(
     *,
     sources: DiagnosticsSources,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike | RecordBatchReaderLike:
     """Aggregate diagnostics and return a streamable output.
 
@@ -171,9 +189,14 @@ def collect_diags_streamable(
     TableLike | RecordBatchReaderLike
         Reader when streamable, otherwise a materialized table.
     """
-    exec_ctx = ensure_execution_context(ctx)
+    exec_ctx = ensure_execution_context(ctx, profile=profile)
     plan = _plan_for_output(repo_text_index, sources=sources, ctx=exec_ctx)
-    return run_normalize_streamable_contract(plan, contract=DIAG_CONTRACT, ctx=exec_ctx)
+    return run_normalize_streamable_contract(
+        plan,
+        contract=DIAG_CONTRACT,
+        ctx=exec_ctx,
+        profile=profile,
+    )
 
 
 def _plan_for_output(

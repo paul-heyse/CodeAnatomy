@@ -34,6 +34,7 @@ def build_cfg_blocks_result(
     py_bc_code_units: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> FinalizeResult:
     """Normalize CFG block rows and enrich with file/path metadata.
 
@@ -45,13 +46,15 @@ def build_cfg_blocks_result(
         Bytecode code-unit table containing file/path metadata.
     ctx:
         Optional execution context for plan compilation and finalize.
+    profile:
+        Execution profile name used when ``ctx`` is not provided.
 
     Returns
     -------
     FinalizeResult
         Finalize bundle with normalized CFG blocks.
     """
-    exec_ctx = ensure_execution_context(ctx)
+    exec_ctx = ensure_execution_context(ctx, profile=profile)
     plan = _plan_for_output(
         CFG_BLOCKS_NAME,
         {
@@ -78,6 +81,7 @@ def build_cfg_edges_result(
     py_bc_cfg_edges: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> FinalizeResult:
     """Normalize CFG edges and enrich with file/path metadata.
 
@@ -89,13 +93,15 @@ def build_cfg_edges_result(
         Raw CFG edge table emitted by bytecode extraction.
     ctx:
         Optional execution context for plan compilation and finalize.
+    profile:
+        Execution profile name used when ``ctx`` is not provided.
 
     Returns
     -------
     FinalizeResult
         Finalize bundle with normalized CFG edges.
     """
-    exec_ctx = ensure_execution_context(ctx)
+    exec_ctx = ensure_execution_context(ctx, profile=profile)
     plan = _plan_for_output(
         CFG_EDGES_NAME,
         {
@@ -122,6 +128,7 @@ def build_cfg_blocks(
     py_bc_code_units: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike:
     """Normalize CFG block rows and enrich with file/path metadata.
 
@@ -133,13 +140,15 @@ def build_cfg_blocks(
         Bytecode code-unit table containing file/path metadata.
     ctx:
         Optional execution context for plan compilation and finalize.
+    profile:
+        Execution profile name used when ``ctx`` is not provided.
 
     Returns
     -------
     TableLike
         Normalized CFG block table.
     """
-    return build_cfg_blocks_result(py_bc_blocks, py_bc_code_units, ctx=ctx).good
+    return build_cfg_blocks_result(py_bc_blocks, py_bc_code_units, ctx=ctx, profile=profile).good
 
 
 def build_cfg_blocks_canonical(
@@ -147,6 +156,7 @@ def build_cfg_blocks_canonical(
     py_bc_code_units: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike:
     """Normalize CFG blocks under canonical determinism.
 
@@ -155,8 +165,8 @@ def build_cfg_blocks_canonical(
     TableLike
         Canonicalized CFG block table.
     """
-    exec_ctx = ensure_canonical(ensure_execution_context(ctx))
-    return build_cfg_blocks_result(py_bc_blocks, py_bc_code_units, ctx=exec_ctx).good
+    exec_ctx = ensure_canonical(ensure_execution_context(ctx, profile=profile))
+    return build_cfg_blocks_result(py_bc_blocks, py_bc_code_units, ctx=exec_ctx, profile=profile).good
 
 
 def build_cfg_edges(
@@ -164,6 +174,7 @@ def build_cfg_edges(
     py_bc_cfg_edges: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike:
     """Normalize CFG edges and enrich with file/path metadata.
 
@@ -175,13 +186,15 @@ def build_cfg_edges(
         Raw CFG edge table emitted by bytecode extraction.
     ctx:
         Optional execution context for plan compilation and finalize.
+    profile:
+        Execution profile name used when ``ctx`` is not provided.
 
     Returns
     -------
     TableLike
         Normalized CFG edge table.
     """
-    return build_cfg_edges_result(py_bc_code_units, py_bc_cfg_edges, ctx=ctx).good
+    return build_cfg_edges_result(py_bc_code_units, py_bc_cfg_edges, ctx=ctx, profile=profile).good
 
 
 def build_cfg_edges_canonical(
@@ -189,6 +202,7 @@ def build_cfg_edges_canonical(
     py_bc_cfg_edges: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike:
     """Normalize CFG edges under canonical determinism.
 
@@ -197,8 +211,8 @@ def build_cfg_edges_canonical(
     TableLike
         Canonicalized CFG edge table.
     """
-    exec_ctx = ensure_canonical(ensure_execution_context(ctx))
-    return build_cfg_edges_result(py_bc_code_units, py_bc_cfg_edges, ctx=exec_ctx).good
+    exec_ctx = ensure_canonical(ensure_execution_context(ctx, profile=profile))
+    return build_cfg_edges_result(py_bc_code_units, py_bc_cfg_edges, ctx=exec_ctx, profile=profile).good
 
 
 def build_cfg_blocks_streamable(
@@ -206,6 +220,7 @@ def build_cfg_blocks_streamable(
     py_bc_code_units: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike | RecordBatchReaderLike:
     """Normalize CFG blocks and return a streamable output.
 
@@ -214,7 +229,7 @@ def build_cfg_blocks_streamable(
     TableLike | pa.RecordBatchReader
         Reader when streamable, otherwise a materialized table.
     """
-    exec_ctx = ensure_execution_context(ctx)
+    exec_ctx = ensure_execution_context(ctx, profile=profile)
     plan = _plan_for_output(
         CFG_BLOCKS_NAME,
         {
@@ -227,6 +242,7 @@ def build_cfg_blocks_streamable(
         plan,
         contract=dataset_contract(CFG_BLOCKS_NAME),
         ctx=exec_ctx,
+        profile=profile,
     )
 
 
@@ -235,6 +251,7 @@ def build_cfg_edges_streamable(
     py_bc_cfg_edges: PlanSource,
     *,
     ctx: ExecutionContext | None = None,
+    profile: str = "default",
 ) -> TableLike | RecordBatchReaderLike:
     """Normalize CFG edges and return a streamable output.
 
@@ -243,7 +260,7 @@ def build_cfg_edges_streamable(
     TableLike | pa.RecordBatchReader
         Reader when streamable, otherwise a materialized table.
     """
-    exec_ctx = ensure_execution_context(ctx)
+    exec_ctx = ensure_execution_context(ctx, profile=profile)
     plan = _plan_for_output(
         CFG_EDGES_NAME,
         {
@@ -256,6 +273,7 @@ def build_cfg_edges_streamable(
         plan,
         contract=dataset_contract(CFG_EDGES_NAME),
         ctx=exec_ctx,
+        profile=profile,
     )
 
 

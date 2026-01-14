@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
 from arrowdsl.core.context import DeterminismTier, RuntimeProfile, ScanProfile
+from ibis_engine.config import IbisBackendConfig
 
 
 @dataclass(frozen=True)
@@ -118,3 +119,10 @@ DEFAULT_RUNTIME_PROFILES: Mapping[str, RuntimeProfile] = {
         determinism=DeterminismTier.STABLE_SET,
     ),
 }
+
+
+@dataclass(frozen=True)
+class IbisExecutionConfig:
+    """Configuration for Ibis-backed execution."""
+
+    backend: IbisBackendConfig = field(default_factory=IbisBackendConfig)

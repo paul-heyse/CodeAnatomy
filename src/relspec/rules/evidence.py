@@ -10,6 +10,7 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.plan.catalog import PlanCatalog
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.query import ScanTelemetry
 from arrowdsl.plan.scan_io import DatasetSource
 from relspec.rules.definitions import EvidenceSpec, RuleDefinition
 
@@ -41,6 +42,7 @@ class EvidencePlan:
     sources: tuple[str, ...]
     normalize_ops: tuple[str, ...]
     requirements: tuple[EvidenceRequirement, ...]
+    telemetry: Mapping[str, ScanTelemetry] = field(default_factory=dict)
 
     def templates(self) -> tuple[str, ...]:
         """Return required extractor templates.

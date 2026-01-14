@@ -8,6 +8,8 @@ from typing import Any
 
 import pyarrow as pa
 
+from arrowdsl.schema.build import list_view_type, table_from_rows
+from arrowdsl.schema.schema import EncodingPolicy, EncodingSpec
 from arrowdsl.spec.codec import decode_json_text, encode_json_text
 from cpg.kinds_ultimate import EdgeKind, EntityKind, NodeKind
 from cpg.spec_registry import (
@@ -28,22 +30,22 @@ from cpg.specs import (
 NODE_EMIT_STRUCT = pa.struct(
     [
         pa.field("node_kind", pa.string(), nullable=False),
-        pa.field("id_cols", pa.list_(pa.string()), nullable=False),
-        pa.field("path_cols", pa.list_(pa.string()), nullable=False),
-        pa.field("bstart_cols", pa.list_(pa.string()), nullable=False),
-        pa.field("bend_cols", pa.list_(pa.string()), nullable=False),
-        pa.field("file_id_cols", pa.list_(pa.string()), nullable=False),
+        pa.field("id_cols", list_view_type(pa.string()), nullable=False),
+        pa.field("path_cols", list_view_type(pa.string()), nullable=False),
+        pa.field("bstart_cols", list_view_type(pa.string()), nullable=False),
+        pa.field("bend_cols", list_view_type(pa.string()), nullable=False),
+        pa.field("file_id_cols", list_view_type(pa.string()), nullable=False),
     ]
 )
 
 EDGE_EMIT_STRUCT = pa.struct(
     [
         pa.field("edge_kind", pa.string(), nullable=False),
-        pa.field("src_cols", pa.list_(pa.string()), nullable=False),
-        pa.field("dst_cols", pa.list_(pa.string()), nullable=False),
-        pa.field("path_cols", pa.list_(pa.string()), nullable=False),
-        pa.field("bstart_cols", pa.list_(pa.string()), nullable=False),
-        pa.field("bend_cols", pa.list_(pa.string()), nullable=False),
+        pa.field("src_cols", list_view_type(pa.string()), nullable=False),
+        pa.field("dst_cols", list_view_type(pa.string()), nullable=False),
+        pa.field("path_cols", list_view_type(pa.string()), nullable=False),
+        pa.field("bstart_cols", list_view_type(pa.string()), nullable=False),
+        pa.field("bend_cols", list_view_type(pa.string()), nullable=False),
         pa.field("origin", pa.string(), nullable=False),
         pa.field("default_resolution_method", pa.string(), nullable=False),
     ]
@@ -89,12 +91,37 @@ PROP_TABLE_SCHEMA = pa.schema(
         pa.field("option_flag", pa.string(), nullable=False),
         pa.field("table_ref", pa.string(), nullable=False),
         pa.field("entity_kind", pa.string(), nullable=False),
-        pa.field("id_cols", pa.list_(pa.string()), nullable=False),
+        pa.field("id_cols", list_view_type(pa.string()), nullable=False),
         pa.field("node_kind", pa.string(), nullable=True),
-        pa.field("fields", pa.list_(PROP_FIELD_STRUCT), nullable=True),
+        pa.field("fields", list_view_type(PROP_FIELD_STRUCT), nullable=True),
         pa.field("include_if_id", pa.string(), nullable=True),
     ],
     metadata={b"spec_kind": b"cpg_prop_specs"},
+)
+
+CPG_NODE_ENCODING = EncodingPolicy(
+    specs=(
+        EncodingSpec(column="name"),
+        EncodingSpec(column="option_flag"),
+        EncodingSpec(column="table_ref"),
+    )
+)
+
+CPG_EDGE_ENCODING = EncodingPolicy(
+    specs=(
+        EncodingSpec(column="name"),
+        EncodingSpec(column="option_flag"),
+        EncodingSpec(column="relation_ref"),
+    )
+)
+
+CPG_PROP_ENCODING = EncodingPolicy(
+    specs=(
+        EncodingSpec(column="name"),
+        EncodingSpec(column="option_flag"),
+        EncodingSpec(column="table_ref"),
+        EncodingSpec(column="entity_kind"),
+    )
 )
 
 
@@ -160,7 +187,8 @@ def node_plan_table(specs: Sequence[NodePlanSpec]) -> pa.Table:
         }
         for spec in specs
     ]
-    return pa.Table.from_pylist(rows, schema=NODE_PLAN_SCHEMA)
+    table = table_from_rows(NODE_PLAN_SCHEMA, rows)
+    return CPG_NODE_ENCODING.apply(table)
 
 
 def edge_plan_table(specs: Sequence[EdgePlanSpec]) -> pa.Table:
@@ -181,7 +209,8 @@ def edge_plan_table(specs: Sequence[EdgePlanSpec]) -> pa.Table:
         }
         for spec in specs
     ]
-    return pa.Table.from_pylist(rows, schema=EDGE_PLAN_SCHEMA)
+    table = table_from_rows(EDGE_PLAN_SCHEMA, rows)
+    return CPG_EDGE_ENCODING.apply(table)
 
 
 def prop_table_table(specs: Sequence[PropTableSpec]) -> pa.Table:
@@ -205,7 +234,8 @@ def prop_table_table(specs: Sequence[PropTableSpec]) -> pa.Table:
         }
         for spec in specs
     ]
-    return pa.Table.from_pylist(rows, schema=PROP_TABLE_SCHEMA)
+    table = table_from_rows(PROP_TABLE_SCHEMA, rows)
+    return CPG_PROP_ENCODING.apply(table)
 
 
 def _node_emit_from_row(payload: dict[str, Any]) -> NodeEmitSpec:

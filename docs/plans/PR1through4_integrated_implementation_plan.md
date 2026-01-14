@@ -80,9 +80,9 @@ class DataFusionRuntimeProfile:
 
 **Implementation checklist**
 
-- [ ] Add `default_catalog`, `default_schema`, `enable_information_schema`.
-- [ ] Thread catalog/schema defaults into `SessionConfig`.
-- [ ] Ensure every SessionContext is created via the profile factory.
+- [x] Add `default_catalog`, `default_schema`, `enable_information_schema`.
+- [x] Thread catalog/schema defaults into `SessionConfig`.
+- [x] Ensure every SessionContext is created via the profile factory.
 
 ---
 
@@ -127,10 +127,10 @@ DEFAULT_DF_POLICY = DataFusionConfigPolicy(
 
 **Implementation checklist**
 
-- [ ] Define a policy pack for critical config keys.
-- [ ] Apply policy pack in the session factory.
-- [ ] Include policy values in telemetry payloads.
-- [ ] Include predicate cache + pushdown filters + runtime guardrails.
+- [x] Define a policy pack for critical config keys.
+- [x] Apply policy pack in the session factory.
+- [x] Include policy values in telemetry payloads.
+- [x] Include predicate cache + pushdown filters + runtime guardrails.
 
 ---
 
@@ -153,9 +153,9 @@ def settings_snapshot(ctx: SessionContext) -> pa.Table:
 
 **Implementation checklist**
 
-- [ ] Enable information_schema in the runtime profile.
-- [ ] Capture df_settings into run bundle artifacts.
-- [ ] Record settings snapshots alongside plan diagnostics.
+- [x] Enable information_schema in the runtime profile.
+- [x] Capture df_settings into run bundle artifacts.
+- [x] Record settings snapshots alongside plan diagnostics.
 
 ---
 
@@ -179,8 +179,8 @@ def snapshot_plans(df: DataFrame) -> dict[str, object]:
 
 **Implementation checklist**
 
-- [ ] Add a plan snapshot helper to diagnostics.
-- [ ] Attach runtime profile payload to diagnostics artifacts.
+- [x] Add a plan snapshot helper to diagnostics.
+- [x] Attach runtime profile payload to diagnostics artifacts.
 
 ---
 
@@ -203,9 +203,9 @@ def maybe_cache(df: DataFrame, *, enabled: bool) -> DataFrame:
 
 **Implementation checklist**
 
-- [ ] Add a cache policy hook for hot normalized inputs.
-- [ ] Avoid caching wide tables before projection + filter.
-- [ ] Keep caching opt-in and profile-driven.
+- [x] Add a cache policy hook for hot normalized inputs.
+- [x] Avoid caching wide tables before projection + filter.
+- [x] Keep caching opt-in and profile-driven.
 
 ---
 
@@ -230,8 +230,8 @@ def _session_context(
 
 **Implementation checklist**
 
-- [ ] Ensure kernel helpers never create a bare SessionContext by default.
-- [ ] Register UDFs on the profile-derived session only.
+- [x] Ensure kernel helpers never create a bare SessionContext by default.
+- [x] Register UDFs on the profile-derived session only.
 
 ---
 
@@ -253,9 +253,9 @@ let runtime = RuntimeEnvBuilder::new()
 
 **Implementation checklist**
 
-- [ ] Define a cache manager contract for embedded deployments.
-- [ ] Keep this optional and gated by a feature flag.
-- [ ] Surface cache policy in runtime diagnostics.
+- [x] Define a cache manager contract for embedded deployments.
+- [x] Keep this optional and gated by a feature flag.
+- [x] Surface cache policy in runtime diagnostics.
 
 ---
 
@@ -276,9 +276,9 @@ df = ctx.sql("SELECT * FROM cst_callsites")
 
 **Implementation checklist**
 
-- [ ] Keep distributed execution optional and off by default.
-- [ ] Provide a runtime profile switch for distributed contexts.
-- [ ] Treat Ballista/Ray as alternatives, not requirements.
+- [x] Keep distributed execution optional and off by default.
+- [x] Provide a runtime profile switch for distributed contexts.
+- [x] Treat Ballista/Ray as alternatives, not requirements.
 
 ---
 
@@ -342,9 +342,9 @@ def _register_parquet(
 
 **Implementation checklist**
 
-- [ ] Wire `file_sort_order` into registry registration.
-- [ ] Preserve `skip_metadata` for schema conflict control.
-- [ ] Keep scan options centralized in `DatasetSpec`.
+- [x] Wire `file_sort_order` into registry registration.
+- [x] Preserve `skip_metadata` for schema conflict control.
+- [x] Keep scan options centralized in `DatasetSpec`.
 
 ---
 
@@ -370,8 +370,8 @@ ctx.register_dataset(name, dataset)
 
 **Implementation checklist**
 
-- [ ] Add DatasetLocation option for provider registration.
-- [ ] Support dataset-based registration path in the registry bridge.
+- [x] Add DatasetLocation option for provider registration.
+- [x] Support dataset-based registration path in the registry bridge.
 
 ---
 
@@ -394,9 +394,9 @@ ctx.register_object_store("file://", store, None)
 
 **Implementation checklist**
 
-- [ ] Add local filesystem object store registration when a root is configured.
-- [ ] Keep the registration optional and scoped to local paths only.
-- [ ] Document the registered scheme for local paths.
+- [x] Add local filesystem object store registration when a root is configured.
+- [x] Keep the registration optional and scoped to local paths only.
+- [x] Document the registered scheme for local paths.
 
 ---
 
@@ -418,8 +418,8 @@ def write_metadata_sidecars(schema: pa.Schema, *, root: Path) -> None:
 
 **Implementation checklist**
 
-- [ ] Generate `_common_metadata` on materialization paths.
-- [ ] Favor `skip_metadata=False` when sidecars exist.
+- [x] Generate `_common_metadata` on materialization paths.
+- [x] Favor `skip_metadata=False` when sidecars exist.
 
 ---
 
@@ -439,8 +439,8 @@ df = ctx.table("/tmp/datasets/events.parquet")
 
 **Implementation checklist**
 
-- [ ] Gate url-table mode behind a dev-only flag.
-- [ ] Keep production registry paths explicit and catalog-backed.
+- [x] Gate url-table mode behind a dev-only flag.
+- [x] Keep production registry paths explicit and catalog-backed.
 
 ---
 
@@ -463,8 +463,8 @@ def registry_snapshot(registry: DatasetCatalog) -> list[dict[str, object]]:
 
 **Implementation checklist**
 
-- [ ] Emit dataset name → location → scan options snapshot.
-- [ ] Include schema hints for validation tooling.
+- [x] Emit dataset name → location → scan options snapshot.
+- [x] Include schema hints for validation tooling.
 
 ---
 
@@ -487,9 +487,9 @@ expr = backend.table("staging_rules")
 
 **Implementation checklist**
 
-- [ ] Keep memtables anonymous unless a stable name is required.
-- [ ] Prefer create_view/create_table over Table.alias side effects.
-- [ ] Ensure view naming is centralized and deterministic.
+- [x] Keep memtables anonymous unless a stable name is required.
+- [x] Prefer create_view/create_table over Table.alias side effects.
+- [x] Ensure view naming is centralized and deterministic.
 
 ---
 
@@ -510,8 +510,8 @@ ctx.register_table("repo_events", table)?;
 
 **Implementation checklist**
 
-- [ ] Keep streaming providers optional and behind a feature flag.
-- [ ] Use for incremental pipelines, not batch runs.
+- [x] Keep streaming providers optional and behind a feature flag.
+- [x] Use for incremental pipelines, not batch runs.
 
 ---
 
@@ -549,8 +549,8 @@ def plan_signature(payload: Mapping[str, object]) -> str:
 
 **Implementation checklist**
 
-- [ ] Canonicalize payloads before hashing.
-- [ ] Store signatures in diagnostics artifacts.
+- [x] Canonicalize payloads before hashing.
+- [x] Store signatures in diagnostics artifacts.
 
 ---
 
@@ -572,8 +572,8 @@ optimized = normalize_expr(expr, schema=schema_map)
 
 **Implementation checklist**
 
-- [ ] Fail fast on unsupported constructs in diagnostics mode.
-- [ ] Normalize ASTs before lineage extraction.
+- [x] Fail fast on unsupported constructs in diagnostics mode.
+- [x] Normalize ASTs before lineage extraction.
 
 ---
 
@@ -594,8 +594,8 @@ diff = sqlglot.diff(old_expr, new_expr)
 
 **Implementation checklist**
 
-- [ ] Attach diff summaries to diagnostic metadata.
-- [ ] Keep AST diffs alongside raw SQL snapshots.
+- [x] Attach diff summaries to diagnostic metadata.
+- [x] Keep AST diffs alongside raw SQL snapshots.
 
 ---
 
@@ -616,8 +616,8 @@ plan_bytes = Serde.serialize_bytes(sql, ctx)
 
 **Implementation checklist**
 
-- [ ] Make Substrait capture optional by config flag.
-- [ ] Store bytes in run bundle artifacts.
+- [x] Make Substrait capture optional by config flag.
+- [x] Store bytes in run bundle artifacts.
 
 ---
 
@@ -638,8 +638,8 @@ if missing:
 
 **Implementation checklist**
 
-- [ ] Validate produced schema against contract at compile time.
-- [ ] Fail before materialization to preserve local context.
+- [x] Validate produced schema against contract at compile time.
+- [x] Fail before materialization to preserve local context.
 
 ---
 
@@ -662,9 +662,9 @@ ast_repr = repr(sg_expr)
 
 **Implementation checklist**
 
-- [ ] Treat SQLGlot AST as the canonical diagnostics IR.
-- [ ] Extract tables/columns/identifiers from the AST.
-- [ ] Store AST repr for debug-grade artifacts.
+- [x] Treat SQLGlot AST as the canonical diagnostics IR.
+- [x] Extract tables/columns/identifiers from the AST.
+- [x] Store AST repr for debug-grade artifacts.
 
 ---
 
@@ -688,8 +688,8 @@ def canonicalize(expr: Expression) -> Expression:
 
 **Implementation checklist**
 
-- [ ] Normalize column/function names before hashing.
-- [ ] Keep rewrite rules deterministic and explicit.
+- [x] Normalize column/function names before hashing.
+- [x] Keep rewrite rules deterministic and explicit.
 
 ---
 
@@ -715,8 +715,8 @@ class DataFusionDialect(Dialect):
 
 **Implementation checklist**
 
-- [ ] Only enable when DataFusion SQL rendering needs overrides.
-- [ ] Keep dialect changes scoped to SQL emission, not parsing.
+- [x] Only enable when DataFusion SQL rendering needs overrides.
+- [x] Keep dialect changes scoped to SQL emission, not parsing.
 
 ---
 
@@ -737,8 +737,8 @@ column_defs = schema.to_sqlglot_column_defs(dialect="ansi")
 
 **Implementation checklist**
 
-- [ ] Emit contract DDL artifacts from schemas.
-- [ ] Use DDL artifacts in diagnostics bundles for audits.
+- [x] Emit contract DDL artifacts from schemas.
+- [x] Use DDL artifacts in diagnostics bundles for audits.
 
 ---
 
@@ -759,8 +759,8 @@ expr = backend.sql("SELECT * FROM cst_callsites")
 
 **Implementation checklist**
 
-- [ ] Prefer Table.sql/Backend.sql to keep SQLGlot visibility.
-- [ ] Use raw_sql only for truly opaque operations.
+- [x] Prefer Table.sql/Backend.sql to keep SQLGlot visibility.
+- [x] Use raw_sql only for truly opaque operations.
 
 ---
 
@@ -781,8 +781,8 @@ compiled = backend.compile(expr, params={"repo_id": 1})
 
 **Implementation checklist**
 
-- [ ] Standardize scalar params via Ibis compile params.
-- [ ] Avoid ad-hoc SQL string interpolation.
+- [x] Standardize scalar params via Ibis compile params.
+- [x] Avoid ad-hoc SQL string interpolation.
 
 ---
 
@@ -806,8 +806,8 @@ result = executor.execute(
 
 **Implementation checklist**
 
-- [ ] Add tiny executor-based tests for compiler regressions.
-- [ ] Keep datasets small and deterministic.
+- [x] Add tiny executor-based tests for compiler regressions.
+- [x] Keep datasets small and deterministic.
 
 ---
 
@@ -829,8 +829,8 @@ let metrics = plan.metrics().unwrap_or_default();
 
 **Implementation checklist**
 
-- [ ] Gate tracing behind an opt-in flag.
-- [ ] Expose operator metrics in run bundle artifacts.
+- [x] Gate tracing behind an opt-in flag.
+- [x] Expose operator metrics in run bundle artifacts.
 
 ---
 
@@ -875,8 +875,8 @@ class KernelSpec:
 
 **Implementation checklist**
 
-- [ ] Map kernel names to a preferred lane.
-- [ ] Include volatility and ordering requirements in the spec.
+- [x] Map kernel names to a preferred lane.
+- [x] Include volatility and ordering requirements in the spec.
 
 ---
 
@@ -899,8 +899,8 @@ ctx.register_udf(udf_fn)
 
 **Implementation checklist**
 
-- [ ] Keep UDFs Arrow-native (no `as_py()` loops).
-- [ ] Register UDFs once per SessionContext.
+- [x] Keep UDFs Arrow-native (no `as_py()` loops).
+- [x] Register UDFs once per SessionContext.
 
 ---
 
@@ -920,8 +920,8 @@ result = pc.take(table, indices)
 
 **Implementation checklist**
 
-- [ ] Use compute options objects for stable behavior.
-- [ ] Honor ordering metadata when falling back.
+- [x] Use compute options objects for stable behavior.
+- [x] Honor ordering metadata when falling back.
 
 ---
 
@@ -945,8 +945,8 @@ diagnostics = {
 
 **Implementation checklist**
 
-- [ ] Emit lane selection in diagnostics artifacts.
-- [ ] Enforce explicit ordering before dedupe kernels.
+- [x] Emit lane selection in diagnostics artifacts.
+- [x] Enforce explicit ordering before dedupe kernels.
 
 ---
 
@@ -969,8 +969,8 @@ selected = exploded.select(
 
 **Implementation checklist**
 
-- [ ] Use DataFusion unnest/table functions before Arrow fallback.
-- [ ] Keep explode semantics centralized in the kernel registry.
+- [x] Use DataFusion unnest/table functions before Arrow fallback.
+- [x] Keep explode semantics centralized in the kernel registry.
 
 ---
 
@@ -990,12 +990,13 @@ def cpg_score(value: dt.float64) -> dt.float64:
 
 - `src/relspec/rules/rel_ops.py`
 - `src/ibis_engine/expr_compiler.py`
+- `src/ibis_engine/builtin_udfs.py`
 - `src/cpg/relationship_plans.py`
 
 **Implementation checklist**
 
-- [ ] Use builtin UDFs when Ibis lacks a function wrapper.
-- [ ] Keep signatures stable and document volatility.
+- [x] Use builtin UDFs when Ibis lacks a function wrapper.
+- [x] Keep signatures stable and document volatility.
 
 ---
 
@@ -1019,8 +1020,8 @@ ts = table.col.as_timestamp("us")
 
 **Implementation checklist**
 
-- [ ] Replace deprecated Ibis APIs with v11 equivalents.
-- [ ] Keep expression builders aligned with SQLGlot compilation.
+- [x] Replace deprecated Ibis APIs with v11 equivalents (no deprecated usage found).
+- [x] Keep expression builders aligned with SQLGlot compilation (no updates required).
 
 ---
 
@@ -1038,14 +1039,15 @@ RETURN x;
 
 - `rust/datafusion_ext/lib.rs`
 - `src/datafusion_engine/runtime.py`
+- `src/datafusion_engine/function_factory.py`
 
 **Implementation checklist**
 
-- [ ] Gate FunctionFactory behind a feature flag.
-- [ ] Use it to standardize global rule primitives.
-- [ ] Consider async scalar UDFs only for IO-bound primitives.
-- [ ] Use custom expression planning hooks for domain operators.
-- [ ] Prefer named arguments when the SQL surface supports them.
+- [x] Gate FunctionFactory behind a feature flag.
+- [x] Use it to standardize global rule primitives.
+- [x] Consider async scalar UDFs only for IO-bound primitives.
+- [x] Use custom expression planning hooks for domain operators.
+- [x] Prefer named arguments when the SQL surface supports them.
 
 ---
 

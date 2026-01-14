@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 import pyarrow.dataset as ds
 
-from arrowdsl.compute.kernels import explode_list_column
+from arrowdsl.compute.kernels import resolve_kernel
 from arrowdsl.core.context import (
     ExecutionContext,
     Ordering,
@@ -510,7 +510,8 @@ class Plan:
 
         def _thunk() -> TableLike:
             table = self.to_table(ctx=ctx)
-            return explode_list_column(
+            kernel = resolve_kernel("explode_list", ctx=ctx)
+            return kernel(
                 table,
                 parent_id_col=parent_id_col,
                 list_col=list_col,

@@ -12,11 +12,20 @@ from typing import Literal, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.core.context import DeterminismTier, ExecutionContext
-from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, DataTypeLike, TableLike, pc
+from arrowdsl.core.context import DeterminismTier, ExecutionContext, Ordering, OrderingLevel
+from arrowdsl.core.interop import (
+    ArrayLike,
+    ChunkedArrayLike,
+    DataTypeLike,
+    SchemaLike,
+    TableLike,
+    pc,
+)
 from arrowdsl.plan.joins import JoinConfig, JoinOutputSpec, interval_join_candidates, join_spec
 from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions, JoinSpec, SortKey
 from arrowdsl.schema.build import const_array, set_or_append_column
+from arrowdsl.schema.metadata import metadata_spec_from_schema, ordering_from_schema
+from arrowdsl.schema.schema import SchemaMetadataSpec
 from schema_spec.specs import PROVENANCE_COLS
 
 
@@ -239,8 +248,9 @@ def distinct_sorted(values: ArrayLike | ChunkedArrayLike) -> ArrayLike:
     ArrayLike
         Sorted unique values.
     """
-    unique = pc.unique(values)
-    indices = pc.sort_indices(unique)
+    unique = _unique_values(values)
+    options = _sort_options_for_keys(None)
+    indices = pc.sort_indices(unique, options=options)
     return pc.take(unique, indices)
 
 
@@ -307,6 +317,29 @@ def _sort_key_tuples(sort_keys: Sequence[SortKey]) -> list[tuple[str, str]]:
     return [(sk.column, sk.order) for sk in sort_keys]
 
 
+def _unique_values(values: ArrayLike | ChunkedArrayLike) -> ArrayLike:
+    unique_fn = getattr(pc, "unique", None)
+    if unique_fn is None:
+        msg = "pyarrow.compute.unique is unavailable."
+        raise RuntimeError(msg)
+    return unique_fn(values)
+
+
+def _sort_options_for_keys(sort_keys: Sequence[SortKey] | None) -> object:
+    sort_options = getattr(pc, "SortOptions", None)
+    if sort_options is None:
+        msg = "pyarrow.compute.SortOptions is unavailable."
+        raise RuntimeError(msg)
+    kwargs: dict[str, object] = {"null_placement": "at_end"}
+    if sort_keys:
+        kwargs["sort_keys"] = _sort_key_tuples(sort_keys)
+    return sort_options(**kwargs)
+
+
+def _sort_options(sort_keys: Sequence[SortKey]) -> object:
+    return _sort_options_for_keys(sort_keys)
+
+
 def canonical_sort(table: TableLike, *, sort_keys: Sequence[SortKey]) -> TableLike:
     """Return a canonically ordered table using stable sort indices.
 
@@ -324,8 +357,53 @@ def canonical_sort(table: TableLike, *, sort_keys: Sequence[SortKey]) -> TableLi
     """
     if not sort_keys:
         return table
-    idx = pc.sort_indices(table, sort_keys=_sort_key_tuples(sort_keys))
+    options = _sort_options(sort_keys)
+    idx = pc.sort_indices(table, options=options)
     return table.take(idx)
+
+
+def _metadata_spec_from_table(table: TableLike) -> SchemaMetadataSpec | None:
+    spec = metadata_spec_from_schema(table.schema)
+    if not spec.schema_metadata and not spec.field_metadata:
+        return None
+    return spec
+
+
+def _apply_metadata(table: TableLike, *, metadata: SchemaMetadataSpec | None) -> TableLike:
+    if metadata is None:
+        return table
+    schema = metadata.apply(table.schema)
+    return table.cast(schema)
+
+
+def _require_explicit_ordering(schema: SchemaLike, *, kernel: str) -> Ordering:
+    ordering = ordering_from_schema(schema)
+    if ordering.level != OrderingLevel.EXPLICIT or not ordering.keys:
+        msg = f"{kernel} requires explicit ordering metadata."
+        raise ValueError(msg)
+    return ordering
+
+
+def _dedupe_spec_with_ordering(spec: DedupeSpec, ordering: Ordering) -> DedupeSpec:
+    if ordering.level != OrderingLevel.EXPLICIT or not ordering.keys:
+        return spec
+    existing = {sk.column for sk in spec.tie_breakers}
+    extras = [
+        SortKey(col, _normalize_sort_order(order))
+        for col, order in ordering.keys
+        if col not in existing
+    ]
+    if not extras:
+        return spec
+    return DedupeSpec(
+        keys=spec.keys,
+        strategy=spec.strategy,
+        tie_breakers=tuple(spec.tie_breakers) + tuple(extras),
+    )
+
+
+def _normalize_sort_order(order: str) -> Literal["ascending", "descending"]:
+    return "descending" if order == "descending" else "ascending"
 
 
 def apply_join(
@@ -666,26 +744,37 @@ def apply_dedupe(
     ValueError
         Raised when the dedupe strategy is unknown or misconfigured.
     """
+    ordering = _require_explicit_ordering(table.schema, kernel="dedupe")
+    spec = _dedupe_spec_with_ordering(spec, ordering)
+    metadata = _metadata_spec_from_table(table)
     strategy = spec.strategy
     if strategy == "KEEP_FIRST_AFTER_SORT":
-        return dedupe_keep_first_after_sort(table, keys=spec.keys, tie_breakers=spec.tie_breakers)
+        result = dedupe_keep_first_after_sort(
+            table,
+            keys=spec.keys,
+            tie_breakers=spec.tie_breakers,
+        )
+        return _apply_metadata(result, metadata=metadata)
     if strategy == "KEEP_ARBITRARY":
-        return dedupe_keep_arbitrary(table, keys=spec.keys)
+        result = dedupe_keep_arbitrary(table, keys=spec.keys)
+        return _apply_metadata(result, metadata=metadata)
     if strategy == "COLLAPSE_LIST":
-        return dedupe_collapse_list(table, keys=spec.keys)
+        result = dedupe_collapse_list(table, keys=spec.keys)
+        return _apply_metadata(result, metadata=metadata)
     if strategy == "KEEP_BEST_BY_SCORE":
         if not spec.tie_breakers:
             msg = "KEEP_BEST_BY_SCORE requires tie_breakers with a score column as the first entry."
             raise ValueError(msg)
         score = spec.tie_breakers[0]
         rest = spec.tie_breakers[1:]
-        return dedupe_keep_best_by_score(
+        result = dedupe_keep_best_by_score(
             table,
             keys=spec.keys,
             score_col=score.column,
             score_order=score.order,
             tie_breakers=rest,
         )
+        return _apply_metadata(result, metadata=metadata)
     msg = f"Unknown dedupe strategy: {strategy!r}."
     raise ValueError(msg)
 

@@ -8,6 +8,7 @@ from typing import Protocol
 
 import sqlglot
 from ibis.expr.types import Table as IbisTable
+from ibis.expr.types import Value
 from sqlglot import Expression
 
 from sqlglot_tools.lineage import (
@@ -23,7 +24,12 @@ SchemaMapping = Mapping[str, Mapping[str, str]]
 class SqlGlotCompiler(Protocol):
     """Protocol for backends exposing SQLGlot compilation."""
 
-    def to_sqlglot(self, expr: IbisTable) -> Expression:
+    def to_sqlglot(
+        self,
+        expr: IbisTable,
+        *,
+        params: Mapping[Value, object] | None = None,
+    ) -> Expression:
         """Return a SQLGlot expression."""
         ...
 
@@ -57,7 +63,22 @@ class SqlGlotRelationDiff:
     ast_diff: Mapping[str, int]
 
 
-def ibis_to_sqlglot(expr: IbisTable, *, backend: IbisCompilerBackend) -> Expression:
+@dataclass(frozen=True)
+class SqlGlotDiagnosticsOptions:
+    """Options for compiling SQLGlot diagnostics."""
+
+    schema_map: SchemaMapping | None = None
+    rules: CanonicalizationRules | None = None
+    normalize: bool = True
+    params: Mapping[Value, object] | None = None
+
+
+def ibis_to_sqlglot(
+    expr: IbisTable,
+    *,
+    backend: IbisCompilerBackend,
+    params: Mapping[Value, object] | None = None,
+) -> Expression:
     """Compile an Ibis expression into SQLGlot.
 
     Returns
@@ -65,16 +86,14 @@ def ibis_to_sqlglot(expr: IbisTable, *, backend: IbisCompilerBackend) -> Express
     sqlglot.Expression
         SQLGlot expression compiled from the Ibis expression.
     """
-    return backend.compiler.to_sqlglot(expr)
+    return backend.compiler.to_sqlglot(expr, params=params)
 
 
 def sqlglot_diagnostics(
     expr: IbisTable,
     *,
     backend: IbisCompilerBackend,
-    schema_map: SchemaMapping | None = None,
-    rules: CanonicalizationRules | None = None,
-    normalize: bool = True,
+    options: SqlGlotDiagnosticsOptions | None = None,
 ) -> SqlGlotDiagnostics:
     """Return AST-derived metadata for an Ibis expression.
 
@@ -83,8 +102,13 @@ def sqlglot_diagnostics(
     SqlGlotDiagnostics
         Metadata extracted from the SQLGlot AST.
     """
-    compiled = ibis_to_sqlglot(expr, backend=backend)
-    optimized = normalize_expr(compiled, schema=schema_map, rules=rules) if normalize else compiled
+    options = options or SqlGlotDiagnosticsOptions()
+    compiled = ibis_to_sqlglot(expr, backend=backend, params=options.params)
+    optimized = (
+        normalize_expr(compiled, schema=options.schema_map, rules=options.rules)
+        if options.normalize
+        else compiled
+    )
     return SqlGlotDiagnostics(
         expression=compiled,
         optimized=optimized,
@@ -150,6 +174,7 @@ __all__ = [
     "SchemaMapping",
     "SqlGlotCompiler",
     "SqlGlotDiagnostics",
+    "SqlGlotDiagnosticsOptions",
     "SqlGlotRelationDiff",
     "ibis_to_sqlglot",
     "missing_schema_columns",

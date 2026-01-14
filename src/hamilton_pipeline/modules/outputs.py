@@ -42,6 +42,7 @@ from hamilton_pipeline.pipeline_types import (
     RepoScanConfig,
 )
 from ibis_engine.io_bridge import write_ibis_named_datasets_parquet
+from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
 from ibis_engine.plan import IbisPlan
 from ibis_engine.registry import registry_snapshot
 from normalize.runner import NormalizeRuleCompilation
@@ -49,6 +50,7 @@ from normalize.utils import encoding_policy_from_schema
 from obs.manifest import ManifestContext, ManifestData, build_manifest, write_manifest_json
 from obs.repro import RunBundleContext, write_run_bundle
 from relspec.compiler import CompiledOutput
+from relspec.param_deps import RuleDependencyReport, build_param_reverse_index
 from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
 from relspec.rules.registry import RuleRegistry
@@ -137,6 +139,23 @@ def _datafusion_settings_snapshot(
     return snapshot or None
 
 
+def _json_mapping(payload: Mapping[str, object] | None) -> JsonDict | None:
+    if payload is None:
+        return None
+    return cast("JsonDict", dict(payload))
+
+
+def _datafusion_runtime_artifacts(
+    ctx: ExecutionContext,
+) -> tuple[JsonDict | None, JsonDict | None]:
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        return None, None
+    metrics = _json_mapping(profile.collect_metrics())
+    traces = _json_mapping(profile.collect_traces())
+    return metrics, traces
+
+
 def _dataset_registry_snapshot(
     locations: Mapping[str, DatasetLocation],
 ) -> list[dict[str, object]] | None:
@@ -179,6 +198,18 @@ class RunBundleInputs:
     run_config: JsonDict
     relspec_snapshots: RelspecSnapshots
     tables: RunBundleTables
+    param_inputs: RunBundleParamInputs | None = None
+
+
+@dataclass(frozen=True)
+class RunBundleParamInputs:
+    """Parameter-table inputs for run bundle materialization."""
+
+    param_table_specs: tuple[ParamTableSpec, ...]
+    param_table_artifacts: Mapping[str, ParamTableArtifact] | None
+    param_dependency_reports: tuple[RuleDependencyReport, ...]
+    param_reverse_index: Mapping[str, tuple[str, ...]] | None
+    include_param_table_data: bool
 
 
 @dataclass(frozen=True)
@@ -189,6 +220,25 @@ class ManifestInputs:
     relationship_output_tables: RelationshipOutputTables
     cpg_output_tables: CpgOutputTables
     relspec_snapshots: RelspecSnapshots
+    param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None
+    extract_inputs: ExtractManifestInputs | None = None
+
+
+@dataclass(frozen=True)
+class ManifestInputTables:
+    """Table bundles required to build manifest inputs."""
+
+    relspec_inputs_bundle: RelspecInputsBundle
+    relationship_output_tables: RelationshipOutputTables
+    cpg_output_tables: CpgOutputTables
+
+
+@dataclass(frozen=True)
+class ManifestInputArtifacts:
+    """Artifacts required to build manifest inputs."""
+
+    relspec_snapshots: RelspecSnapshots
+    param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None
     extract_inputs: ExtractManifestInputs | None = None
 
 
@@ -587,10 +637,9 @@ def relspec_snapshots(
 
 @tag(layer="obs", artifact="manifest_inputs", kind="object")
 def manifest_inputs(
-    relspec_inputs_bundle: RelspecInputsBundle,
-    relationship_output_tables: RelationshipOutputTables,
-    cpg_output_tables: CpgOutputTables,
+    run_bundle_tables: RunBundleTables,
     relspec_snapshots: RelspecSnapshots,
+    param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None,
     extract_manifest_inputs: ExtractManifestInputs | None = None,
 ) -> ManifestInputs:
     """Bundle manifest inputs from pipeline outputs.
@@ -601,10 +650,11 @@ def manifest_inputs(
         Manifest input bundle.
     """
     return ManifestInputs(
-        relspec_inputs_bundle=relspec_inputs_bundle,
-        relationship_output_tables=relationship_output_tables,
-        cpg_output_tables=cpg_output_tables,
+        relspec_inputs_bundle=run_bundle_tables.relspec_inputs,
+        relationship_output_tables=run_bundle_tables.relationship_outputs,
+        cpg_output_tables=run_bundle_tables.cpg_outputs,
         relspec_snapshots=relspec_snapshots,
+        param_table_artifacts=param_table_artifacts,
         extract_inputs=extract_manifest_inputs,
     )
 
@@ -645,11 +695,10 @@ def manifest_data(
     ValueError
         Raised when ExecutionContext is not provided.
     """
-    relspec_snapshots = manifest_inputs.relspec_snapshots
-    produced_outputs = sorted(relspec_snapshots.compiled_outputs.keys())
+    produced_outputs = sorted(manifest_inputs.relspec_snapshots.compiled_outputs.keys())
     lineage = {
         name: [cr.rule.name for cr in compiled.contributors]
-        for name, compiled in relspec_snapshots.compiled_outputs.items()
+        for name, compiled in manifest_inputs.relspec_snapshots.compiled_outputs.items()
     }
     normalize_rules = normalize_rule_compilation.rules if normalize_rule_compilation else None
     normalize_lineage: dict[str, list[str]] | None = None
@@ -666,7 +715,7 @@ def manifest_data(
     runtime_telemetry = next(
         (
             compiled.runtime_telemetry
-            for compiled in relspec_snapshots.compiled_outputs.values()
+            for compiled in manifest_inputs.relspec_snapshots.compiled_outputs.values()
             if compiled.runtime_telemetry
         ),
         {},
@@ -675,15 +724,16 @@ def manifest_data(
         notes["relspec_runtime_telemetry"] = cast("JsonValue", runtime_telemetry)
     scan_telemetry = {
         name: compiled.telemetry
-        for name, compiled in relspec_snapshots.compiled_outputs.items()
+        for name, compiled in manifest_inputs.relspec_snapshots.compiled_outputs.items()
         if compiled.telemetry
     }
     datafusion_settings = _datafusion_settings_snapshot(ctx)
+    datafusion_metrics, datafusion_traces = _datafusion_runtime_artifacts(ctx)
     dataset_snapshot = _dataset_registry_snapshot(
         manifest_inputs.relspec_inputs_bundle.locations,
     )
     extract_inputs = manifest_inputs.extract_inputs
-    rule_definitions = rule_definitions_from_table(relspec_snapshots.rule_table)
+    rule_definitions = rule_definitions_from_table(manifest_inputs.relspec_snapshots.rule_table)
     relationship_rules = tuple(
         relationship_rule_from_definition(defn) for defn in rule_definitions if defn.domain == "cpg"
     )
@@ -694,6 +744,7 @@ def manifest_data(
         cpg_nodes=manifest_inputs.cpg_output_tables.cpg_nodes,
         cpg_edges=manifest_inputs.cpg_output_tables.cpg_edges,
         cpg_props=manifest_inputs.cpg_output_tables.cpg_props,
+        param_table_artifacts=manifest_inputs.param_table_artifacts,
         extract_evidence_plan=extract_inputs.evidence_plan if extract_inputs else None,
         extract_error_counts=extract_inputs.extract_error_counts if extract_inputs else None,
         relationship_rules=relationship_rules,
@@ -703,6 +754,8 @@ def manifest_data(
         normalize_output_lineage=normalize_lineage,
         relspec_scan_telemetry=scan_telemetry or None,
         datafusion_settings=datafusion_settings,
+        datafusion_metrics=datafusion_metrics,
+        datafusion_traces=datafusion_traces,
         dataset_registry_snapshot=dataset_snapshot,
         notes=notes,
     )
@@ -762,6 +815,7 @@ def run_config(
     repo_scan_config: RepoScanConfig,
     relspec_config: RelspecConfig,
     output_config: OutputConfig,
+    relspec_param_values: JsonDict,
 ) -> JsonDict:
     """Return the execution-relevant config snapshot for this run.
 
@@ -782,6 +836,8 @@ def run_config(
         "work_dir": output_config.work_dir,
         "output_dir": output_config.output_dir,
         "overwrite_intermediate_datasets": bool(output_config.overwrite_intermediate_datasets),
+        "materialize_param_tables": bool(output_config.materialize_param_tables),
+        "relspec_param_values": dict(relspec_param_values),
     }
 
 
@@ -811,6 +867,7 @@ def run_bundle_inputs(
     run_config: JsonDict,
     relspec_snapshots: RelspecSnapshots,
     run_bundle_tables: RunBundleTables,
+    run_bundle_param_inputs: RunBundleParamInputs | None,
 ) -> RunBundleInputs:
     """Bundle inputs for run bundle context creation.
 
@@ -824,6 +881,31 @@ def run_bundle_inputs(
         run_config=run_config,
         relspec_snapshots=relspec_snapshots,
         tables=run_bundle_tables,
+        param_inputs=run_bundle_param_inputs,
+    )
+
+
+@tag(layer="obs", artifact="run_bundle_param_inputs", kind="object")
+def run_bundle_param_inputs(
+    param_table_specs: tuple[ParamTableSpec, ...],
+    param_table_artifacts: Mapping[str, ParamTableArtifact] | None,
+    relspec_param_dependency_reports: tuple[RuleDependencyReport, ...],
+    output_config: OutputConfig,
+) -> RunBundleParamInputs:
+    """Bundle param-table inputs for run bundle context creation.
+
+    Returns
+    -------
+    RunBundleParamInputs
+        Parameter-table inputs for run bundle context.
+    """
+    reverse_index = build_param_reverse_index(relspec_param_dependency_reports)
+    return RunBundleParamInputs(
+        param_table_specs=param_table_specs,
+        param_table_artifacts=param_table_artifacts,
+        param_dependency_reports=relspec_param_dependency_reports,
+        param_reverse_index=reverse_index or None,
+        include_param_table_data=output_config.materialize_param_tables,
     )
 
 
@@ -831,6 +913,7 @@ def run_bundle_inputs(
 def run_bundle_context(
     run_bundle_inputs: RunBundleInputs,
     output_config: OutputConfig,
+    ctx: ExecutionContext | None = None,
 ) -> RunBundleContext | None:
     """Build the run bundle context when outputs are enabled.
 
@@ -844,6 +927,18 @@ def run_bundle_context(
         return None
 
     base_dir = Path(base) / "run_bundles"
+    datafusion_metrics: JsonDict | None = None
+    datafusion_traces: JsonDict | None = None
+    if ctx is not None:
+        datafusion_metrics, datafusion_traces = _datafusion_runtime_artifacts(ctx)
+    param_inputs = run_bundle_inputs.param_inputs
+    param_specs = param_inputs.param_table_specs if param_inputs is not None else ()
+    param_artifacts = param_inputs.param_table_artifacts if param_inputs is not None else None
+    param_reports = param_inputs.param_dependency_reports if param_inputs is not None else ()
+    param_reverse_index = param_inputs.param_reverse_index if param_inputs is not None else None
+    include_param_table_data = (
+        param_inputs.include_param_table_data if param_inputs is not None else False
+    )
     return RunBundleContext(
         base_dir=str(base_dir),
         run_manifest=run_bundle_inputs.run_manifest,
@@ -854,10 +949,17 @@ def run_bundle_context(
         rule_diagnostics=run_bundle_inputs.relspec_snapshots.rule_diagnostics,
         relationship_contracts=run_bundle_inputs.relspec_snapshots.contracts,
         compiled_relationship_outputs=run_bundle_inputs.relspec_snapshots.compiled_outputs,
+        datafusion_metrics=datafusion_metrics,
+        datafusion_traces=datafusion_traces,
         relspec_input_locations=run_bundle_inputs.tables.relspec_inputs.locations,
         relspec_input_tables=run_bundle_inputs.tables.relspec_inputs.tables,
         relationship_output_tables=run_bundle_inputs.tables.relationship_outputs.as_dict(),
         cpg_output_tables=run_bundle_inputs.tables.cpg_outputs.as_dict(),
+        param_table_specs=param_specs,
+        param_table_artifacts=param_artifacts,
+        param_dependency_reports=param_reports,
+        param_reverse_index=param_reverse_index,
+        include_param_table_data=include_param_table_data,
         include_schemas=True,
         overwrite=bool(output_config.overwrite_intermediate_datasets),
     )

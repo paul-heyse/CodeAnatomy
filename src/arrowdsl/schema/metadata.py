@@ -12,7 +12,7 @@ from typing import Protocol, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.core.context import OrderingKey, OrderingLevel
+from arrowdsl.core.context import Ordering, OrderingKey, OrderingLevel
 from arrowdsl.core.interop import ArrayLike, DataTypeLike, FieldLike, SchemaLike, TableLike
 from arrowdsl.json_factory import JsonPolicy, dumps_bytes, loads
 from arrowdsl.schema.nested_builders import (
@@ -256,6 +256,35 @@ def ordering_metadata_spec(
     if extra:
         meta.update(extra)
     return SchemaMetadataSpec(schema_metadata=meta)
+
+
+def ordering_from_schema(schema: SchemaLike) -> Ordering:
+    """Return ordering metadata parsed from a schema.
+
+    Returns
+    -------
+    Ordering
+        Ordering metadata derived from schema annotations.
+    """
+    metadata = schema.metadata or {}
+    raw_level = metadata.get(b"ordering_level")
+    if raw_level is None:
+        return Ordering.unordered()
+    try:
+        level = OrderingLevel(raw_level.decode("utf-8"))
+    except ValueError:
+        return Ordering.unordered()
+    raw_keys = metadata.get(b"ordering_keys")
+    if raw_keys is None:
+        return Ordering(level, ())
+    text = raw_keys.decode("utf-8")
+    keys: list[OrderingKey] = []
+    for entry in text.split(","):
+        col, _, order = entry.partition(":")
+        if not col:
+            continue
+        keys.append((col, order or "ascending"))
+    return Ordering(level, tuple(keys))
 
 
 def extractor_metadata_spec(
@@ -628,6 +657,7 @@ __all__ = [
     "normalize_dictionaries",
     "options_hash",
     "options_metadata_spec",
+    "ordering_from_schema",
     "ordering_metadata_spec",
     "schema_constraints_from_metadata",
     "schema_identity_from_metadata",

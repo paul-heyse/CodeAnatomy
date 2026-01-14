@@ -48,7 +48,7 @@ _EXTRA_OP_SPECS: tuple[NormalizeOpSpec, ...] = (
     ),
     NormalizeOpSpec(
         name="scip_occurrences_norm",
-        inputs=("scip_documents", "scip_occurrences", "repo_text_index"),
+        inputs=("scip_documents", "scip_occurrences", "file_line_index"),
         outputs=("scip_occurrences_norm", "scip_occurrences", "scip_span_errors"),
     ),
     NormalizeOpSpec(
@@ -63,12 +63,12 @@ _EXTRA_OP_SPECS: tuple[NormalizeOpSpec, ...] = (
     ),
     NormalizeOpSpec(
         name="ast_nodes_norm",
-        inputs=("ast_nodes", "repo_text_index"),
+        inputs=("ast_nodes", "file_line_index"),
         outputs=("ast_nodes_norm",),
     ),
     NormalizeOpSpec(
         name="py_bc_instructions_norm",
-        inputs=("py_bc_instructions", "repo_text_index"),
+        inputs=("py_bc_instructions", "file_line_index"),
         outputs=("py_bc_instructions_norm",),
     ),
 )

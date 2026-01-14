@@ -113,6 +113,19 @@ def _hash64_int(value: str) -> int:
     return unsigned & ((1 << 63) - 1)
 
 
+def hash64_from_text(value: str | None) -> int | None:
+    """Return a deterministic int64 hash for a string value.
+
+    Returns
+    -------
+    int | None
+        Deterministic hash value or ``None`` when input is ``None``.
+    """
+    if value is None:
+        return None
+    return _hash64_int(value)
+
+
 def _hash64_udf(
     ctx: pa.UdfContext,
     array: pa.ArrayLike | pa.ChunkedArrayLike | pa.ScalarLike,
@@ -510,6 +523,7 @@ __all__ = [
     "hash64_from_arrays",
     "hash64_from_columns",
     "hash64_from_parts",
+    "hash64_from_text",
     "hash_column_values",
     "hash_expression",
     "hash_expression_from_parts",

@@ -13,6 +13,7 @@ from datafusion_engine.runtime import DataFusionRuntimeProfile
 def _default_datafusion_profile() -> DataFusionRuntimeProfile:
     return DataFusionRuntimeProfile()
 
+
 type OrderingKey = tuple[str, str]
 type ExecutionProfileName = Literal["bulk", "default", "deterministic", "streaming"]
 

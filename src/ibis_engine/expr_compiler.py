@@ -9,7 +9,13 @@ from typing import Protocol, cast
 import ibis
 from ibis.expr.types import Table, Value
 
-from ibis_engine.builtin_udfs import cpg_score
+from ibis_engine.builtin_udfs import (
+    col_to_byte,
+    cpg_score,
+    position_encoding_norm,
+    stable_hash64,
+    stable_hash128,
+)
 
 IbisExprFn = Callable[..., Value]
 
@@ -84,6 +90,10 @@ def default_expr_registry() -> IbisExprRegistry:
         functions={
             "strip": lambda value: value.strip(),
             "cpg_score": cpg_score,
+            "stable_hash64": stable_hash64,
+            "stable_hash128": stable_hash128,
+            "position_encoding_norm": position_encoding_norm,
+            "col_to_byte": col_to_byte,
         }
     )
 

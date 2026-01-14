@@ -29,6 +29,7 @@ from extract.helpers import (
     iter_file_contexts,
     template_outputs,
 )
+from extract.line_index import build_line_index_table
 from extract.registry_bundles import dataset_name_for_output, output_bundle_outputs
 from extract.registry_specs import dataset_schema
 from extract.repo_scan import RepoScanOptions, scan_repo
@@ -170,6 +171,26 @@ def repo_files(
         include_bytes=bool(repo_include_bytes),
     )
     return scan_repo(repo_root=repo_scan_config.repo_root, options=options, ctx=ctx)
+
+
+@cache(format="parquet")
+@tag(layer="extract", artifact="file_line_index", kind="table")
+def file_line_index(
+    repo_files: TableLike,
+    ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
+) -> TableLike:
+    """Build a per-file line index table from repo files.
+
+    Returns
+    -------
+    TableLike
+        File line index table with byte offsets.
+    """
+    _ = ctx
+    if evidence_plan is not None and not evidence_plan.requires_dataset("file_line_index"):
+        return empty_table(dataset_schema("file_line_index_v1"))
+    return build_line_index_table(repo_files, ctx=ctx)
 
 
 @cache()
@@ -715,6 +736,7 @@ def runtime_inspect_bundle(
 @tag(layer="extract", artifact="extract_bundle_group_a", kind="object")
 def extract_bundle_group_a(
     repo_files: TableLike,
+    file_line_index: TableLike,
     ast_bundle: Mapping[str, TableLike],
     cst_bundle: Mapping[str, TableLike],
     scip_bundle: Mapping[str, TableLike],
@@ -726,7 +748,7 @@ def extract_bundle_group_a(
     Mapping[str, TableLike]
         Merged bundle tables.
     """
-    repo_bundle = {"repo_files": repo_files}
+    repo_bundle = {"repo_files": repo_files, "file_line_index": file_line_index}
     return _merge_bundles((repo_bundle, ast_bundle, cst_bundle, scip_bundle))
 
 

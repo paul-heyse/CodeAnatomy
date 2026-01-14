@@ -4,9 +4,23 @@ from __future__ import annotations
 
 from types import ModuleType
 
-from hamilton_pipeline.modules import cpg_build, extraction, inputs, normalization, outputs
+from hamilton_pipeline.modules import (
+    cpg_build,
+    extraction,
+    inputs,
+    normalization,
+    outputs,
+    params,
+)
 
-ALL_MODULES: list[ModuleType] = [inputs, extraction, normalization, cpg_build, outputs]
+ALL_MODULES: list[ModuleType] = [
+    inputs,
+    params,
+    extraction,
+    normalization,
+    cpg_build,
+    outputs,
+]
 
 __all__ = [
     "ALL_MODULES",
@@ -15,4 +29,5 @@ __all__ = [
     "inputs",
     "normalization",
     "outputs",
+    "params",
 ]

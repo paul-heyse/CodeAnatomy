@@ -13,8 +13,8 @@ from ibis.backends import BaseBackend
 
 from arrowdsl.compute.kernels import (
     distinct_sorted,
-    explode_list_column,
     flatten_list_struct_field,
+    resolve_kernel,
 )
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import prefixed_hash_id
@@ -23,7 +23,6 @@ from arrowdsl.plan.joins import JoinConfig, left_join
 from arrowdsl.schema.build import empty_table, set_or_append_column, table_from_arrays
 from config import AdapterMode
 from extract.evidence_plan import EvidencePlan
-from normalize.bytecode_anchor import anchor_instructions
 from normalize.catalog import (
     NormalizeCatalogInputs,
     NormalizePlanCatalog,
@@ -42,9 +41,10 @@ from normalize.registry_specs import (
 )
 from normalize.runner import (
     NormalizeFinalizeSpec,
+    NormalizeIbisPlanOptions,
     NormalizeRuleCompilation,
+    compile_normalize_plans_ibis,
     compile_normalize_rules,
-    normalize_plans_to_ibis,
     run_normalize,
 )
 from relspec.adapters.normalize import NormalizeRuleAdapter
@@ -55,12 +55,15 @@ from relspec.rules.registry import RuleRegistry
 if TYPE_CHECKING:
     from normalize.rule_model import NormalizeRule
     from relspec.rules.definitions import RuleDefinition
+from normalize.ibis_spans import (
+    add_ast_byte_spans_ibis,
+    add_scip_occurrence_byte_spans_ibis,
+    anchor_instructions_ibis,
+)
 from normalize.schema_infer import align_table_to_schema, infer_schema_or_registry
 from normalize.span_pipeline import span_error_table
 from normalize.spans import (
     RepoTextIndex,
-    add_ast_byte_spans,
-    add_scip_occurrence_byte_spans,
     build_repo_text_index,
     normalize_cst_defs_spans,
     normalize_cst_imports_spans,
@@ -279,23 +282,27 @@ def normalize_rule_compilation(
     required_outputs = _required_rule_outputs(evidence_plan, rules)
     if required_outputs is not None and not required_outputs:
         return NormalizeRuleCompilation(rules=(), plans={}, catalog=normalize_plan_catalog)
-    compilation = compile_normalize_rules(
+    if adapter_mode.use_ibis_bridge:
+        plans = compile_normalize_plans_ibis(
+            normalize_plan_catalog,
+            ctx=ctx,
+            options=NormalizeIbisPlanOptions(
+                backend=ibis_backend,
+                rules=rules,
+                required_outputs=required_outputs,
+            ),
+        )
+        return NormalizeRuleCompilation(
+            rules=rules,
+            plans=plans,
+            catalog=normalize_plan_catalog,
+        )
+    return compile_normalize_rules(
         normalize_plan_catalog,
         ctx=ctx,
         rules=rules,
         required_outputs=required_outputs,
     )
-    if adapter_mode.use_ibis_bridge:
-        return NormalizeRuleCompilation(
-            rules=compilation.rules,
-            plans=normalize_plans_to_ibis(
-                compilation.plans,
-                ctx=ctx,
-                backend=ibis_backend,
-            ),
-            catalog=compilation.catalog,
-        )
-    return compilation
 
 
 def _required_rule_outputs(
@@ -475,7 +482,6 @@ def callsite_qname_candidates(
     TableLike
         Table of callsite qualified name candidates.
     """
-    _ = ctx
     if not _requires_output(evidence_plan, "callsite_qname_candidates"):
         schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
         return empty_table(schema)
@@ -487,7 +493,8 @@ def callsite_qname_candidates(
         schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
         return empty_table(schema)
 
-    exploded = explode_list_column(
+    kernel = resolve_kernel("explode_list", ctx=ctx)
+    exploded = kernel(
         cst_callsites,
         parent_id_col="call_id",
         list_col="callee_qnames",
@@ -508,8 +515,9 @@ def callsite_qname_candidates(
 @cache(format="parquet")
 @tag(layer="normalize", artifact="ast_nodes_norm", kind="table")
 def ast_nodes_norm(
-    repo_text_index: RepoTextIndex,
+    file_line_index: TableLike,
     ast_nodes: TableLike,
+    ibis_backend: BaseBackend,
     ctx: ExecutionContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
@@ -523,14 +531,19 @@ def ast_nodes_norm(
     _ = ctx
     if not _requires_output(evidence_plan, "ast_nodes_norm"):
         return empty_table(ast_nodes.schema)
-    return add_ast_byte_spans(repo_text_index, ast_nodes)
+    return add_ast_byte_spans_ibis(
+        file_line_index,
+        ast_nodes,
+        backend=ibis_backend,
+    )
 
 
 @cache(format="parquet")
 @tag(layer="normalize", artifact="py_bc_instructions_norm", kind="table")
 def py_bc_instructions_norm(
-    repo_text_index: RepoTextIndex,
+    file_line_index: TableLike,
     py_bc_instructions: TableLike,
+    ibis_backend: BaseBackend,
     ctx: ExecutionContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
@@ -544,7 +557,11 @@ def py_bc_instructions_norm(
     _ = ctx
     if not _requires_output(evidence_plan, "py_bc_instructions_norm"):
         return empty_table(py_bc_instructions.schema)
-    return anchor_instructions(repo_text_index, py_bc_instructions)
+    return anchor_instructions_ibis(
+        file_line_index,
+        py_bc_instructions,
+        backend=ibis_backend,
+    )
 
 
 @cache(format="parquet")
@@ -748,7 +765,10 @@ def repo_text_index(
     RepoTextIndex
         Repository text index for span conversion.
     """
-    if not _requires_output(evidence_plan, "repo_text_index"):
+    if evidence_plan is not None and not (
+        evidence_plan.requires_dataset("repo_text_index")
+        or evidence_plan.requires_dataset("diagnostics_norm")
+    ):
         return RepoTextIndex(by_file_id={}, by_path={})
     return build_repo_text_index(repo_root=repo_root, repo_files=repo_files, ctx=ctx)
 
@@ -764,8 +784,8 @@ def repo_text_index(
 def scip_occurrences_norm_bundle(
     scip_documents: TableLike,
     scip_occurrences: TableLike,
-    repo_text_index: RepoTextIndex,
-    ctx: ExecutionContext,
+    file_line_index: TableLike,
+    ibis_backend: BaseBackend,
     evidence_plan: EvidencePlan | None = None,
 ) -> dict[str, TableLike]:
     """Convert SCIP occurrences into byte offsets.
@@ -780,11 +800,11 @@ def scip_occurrences_norm_bundle(
             "scip_occurrences_norm": _empty_scip_occurrences_norm(scip_occurrences),
             "scip_span_errors": span_error_table([]),
         }
-    occ, errs = add_scip_occurrence_byte_spans(
-        scip_documents=scip_documents,
-        scip_occurrences=scip_occurrences,
-        repo_text_index=repo_text_index,
-        ctx=ctx,
+    occ, errs = add_scip_occurrence_byte_spans_ibis(
+        file_line_index,
+        scip_documents,
+        scip_occurrences,
+        backend=ibis_backend,
     )
     return {"scip_occurrences_norm": occ, "scip_span_errors": errs}
 

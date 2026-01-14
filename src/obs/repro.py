@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import platform
+import re
 import shutil
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
@@ -16,6 +19,7 @@ from pathlib import Path
 from typing import cast
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.finalize.finalize import Contract
@@ -24,9 +28,12 @@ from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.schema import schema_fingerprint, schema_to_dict
 from arrowdsl.spec.io import write_spec_table
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
+from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
 from relspec.compiler import CompiledOutput
 from relspec.model import RelationshipRule
+from relspec.param_deps import RuleDependencyReport
 from relspec.registry import ContractCatalog, DatasetLocation
+from relspec.rules.diagnostics import rule_diagnostics_from_table
 
 # -----------------------
 # Basic environment capture
@@ -320,11 +327,18 @@ class RunBundleContext:
     rule_diagnostics: pa.Table | None = None
     relationship_contracts: ContractCatalog | None = None
     compiled_relationship_outputs: Mapping[str, CompiledOutput] | None = None
+    datafusion_metrics: JsonDict | None = None
+    datafusion_traces: JsonDict | None = None
 
     relspec_input_locations: Mapping[str, DatasetLocation] | None = None
     relspec_input_tables: Mapping[str, TableLike] | None = None
     relationship_output_tables: Mapping[str, TableLike] | None = None
     cpg_output_tables: Mapping[str, TableLike] | None = None
+    param_table_specs: Sequence[ParamTableSpec] | None = None
+    param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None
+    param_dependency_reports: Sequence[RuleDependencyReport] | None = None
+    param_reverse_index: Mapping[str, Sequence[str]] | None = None
+    include_param_table_data: bool = False
 
     include_schemas: bool = True
     overwrite: bool = True
@@ -396,6 +410,100 @@ def _write_relspec_snapshots(
         files_written.append(
             _write_json(relspec_dir / "compiled_outputs.json", snap, overwrite=True)
         )
+    _write_runtime_artifacts(relspec_dir, context, files_written)
+    if context.rule_diagnostics is not None:
+        _write_substrait_artifacts(relspec_dir, context.rule_diagnostics, files_written)
+
+
+def _write_runtime_artifacts(
+    relspec_dir: Path,
+    context: RunBundleContext,
+    files_written: list[str],
+) -> None:
+    if context.datafusion_metrics is not None:
+        files_written.append(
+            _write_json(
+                relspec_dir / "datafusion_metrics.json",
+                context.datafusion_metrics,
+                overwrite=True,
+            )
+        )
+    if context.datafusion_traces is not None:
+        files_written.append(
+            _write_json(
+                relspec_dir / "datafusion_traces.json",
+                context.datafusion_traces,
+                overwrite=True,
+            )
+        )
+
+
+def _safe_label(value: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("_")
+    return sanitized or "unknown"
+
+
+def _substrait_filename(
+    diagnostic: object,
+    *,
+    used: set[str],
+) -> str:
+    name = getattr(diagnostic, "rule_name", None) or getattr(diagnostic, "template", None) or ""
+    domain = getattr(diagnostic, "domain", None) or "unknown"
+    signature = getattr(diagnostic, "plan_signature", None) or "no_signature"
+    base = _safe_label(f"{domain}__{name}__{signature}")
+    candidate = base or "substrait"
+    if candidate not in used:
+        used.add(candidate)
+        return f"{candidate}.substrait"
+    idx = 1
+    while f"{candidate}_{idx}" in used:
+        idx += 1
+    used.add(f"{candidate}_{idx}")
+    return f"{candidate}_{idx}.substrait"
+
+
+def _write_substrait_artifacts(
+    relspec_dir: Path,
+    diagnostics_table: pa.Table,
+    files_written: list[str],
+) -> None:
+    diagnostics = rule_diagnostics_from_table(diagnostics_table)
+    substrait_dir = relspec_dir / "substrait"
+    used: set[str] = set()
+    index: list[JsonDict] = []
+    for diagnostic in diagnostics:
+        payload_b64 = diagnostic.metadata.get("substrait_plan_b64")
+        if not payload_b64:
+            continue
+        try:
+            payload = base64.b64decode(payload_b64)
+        except (binascii.Error, ValueError):
+            continue
+        if not payload:
+            continue
+        _ensure_dir(substrait_dir)
+        filename = _substrait_filename(diagnostic, used=used)
+        target = substrait_dir / filename
+        target.write_bytes(payload)
+        files_written.append(str(target))
+        index.append(
+            {
+                "file": str(target.relative_to(relspec_dir)),
+                "domain": str(diagnostic.domain),
+                "rule_name": diagnostic.rule_name,
+                "template": diagnostic.template,
+                "plan_signature": diagnostic.plan_signature,
+            }
+        )
+    if index:
+        files_written.append(
+            _write_json(
+                relspec_dir / "substrait_index.json",
+                {"plans": index},
+                overwrite=True,
+            )
+        )
 
 
 def _write_schema_snapshot(
@@ -461,6 +569,66 @@ def _write_schema_snapshots(
     )
 
 
+def _write_param_tables(
+    bundle_dir: Path,
+    context: RunBundleContext,
+    files_written: list[str],
+) -> None:
+    if not context.param_table_specs and not context.param_table_artifacts:
+        return
+    params_dir = bundle_dir / "params"
+    _ensure_dir(params_dir)
+    if context.param_table_specs:
+        specs_payload = {"specs": [_param_spec_payload(spec) for spec in context.param_table_specs]}
+        files_written.append(_write_json(params_dir / "specs.json", specs_payload, overwrite=True))
+    if context.param_table_artifacts:
+        signatures: dict[str, JsonDict] = {}
+        for name, artifact in context.param_table_artifacts.items():
+            signatures[name] = {
+                "rows": int(artifact.rows),
+                "signature": artifact.signature,
+                "schema_fingerprint": artifact.schema_fingerprint,
+            }
+        files_written.append(
+            _write_json(params_dir / "signatures.json", signatures, overwrite=True)
+        )
+        if context.include_param_table_data:
+            for name, artifact in context.param_table_artifacts.items():
+                target_dir = params_dir / name
+                _ensure_dir(target_dir)
+                path = target_dir / "part-0.parquet"
+                pq.write_table(artifact.table, path)
+                files_written.append(str(path))
+    if context.param_dependency_reports:
+        deps_payload = {
+            report.rule_name: {
+                "param_tables": list(report.param_tables),
+                "dataset_tables": list(report.dataset_tables),
+            }
+            for report in context.param_dependency_reports
+        }
+        files_written.append(
+            _write_json(params_dir / "rule_param_deps.json", deps_payload, overwrite=True)
+        )
+    if context.param_reverse_index:
+        reverse_payload = {name: list(rules) for name, rules in context.param_reverse_index.items()}
+        files_written.append(
+            _write_json(
+                params_dir / "param_rule_reverse_index.json", reverse_payload, overwrite=True
+            )
+        )
+
+
+def _param_spec_payload(spec: ParamTableSpec) -> JsonDict:
+    return {
+        "logical_name": spec.logical_name,
+        "key_col": spec.key_col,
+        "schema": schema_to_dict(spec.schema),
+        "empty_semantics": spec.empty_semantics,
+        "distinct": bool(spec.distinct),
+    }
+
+
 def write_run_bundle(
     *,
     context: RunBundleContext,
@@ -479,9 +647,17 @@ def write_run_bundle(
         relspec/templates.arrow
         relspec/template_diagnostics.arrow
         relspec/rule_diagnostics.arrow
+        relspec/datafusion_metrics.json
+        relspec/datafusion_traces.json
         relspec/contracts.json
         relspec/compiled_outputs.json
+        relspec/substrait/*.substrait
+        relspec/substrait_index.json
         schemas/*.schema.json
+        params/specs.json
+        params/signatures.json
+        params/rule_param_deps.json
+        params/param_rule_reverse_index.json
 
     Parameters
     ----------
@@ -506,6 +682,7 @@ def write_run_bundle(
     _write_dataset_locations(bundle_dir, context, files_written)
     _write_relspec_snapshots(bundle_dir, context, files_written)
     _write_schema_snapshots(bundle_dir, context, files_written)
+    _write_param_tables(bundle_dir, context, files_written)
 
     return {
         "bundle_dir": str(bundle_dir),

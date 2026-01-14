@@ -7,9 +7,11 @@ via DataFusion operations, callers should fall back to Arrow kernel lanes.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import cast
+from itertools import repeat
+from typing import Literal, cast
 from weakref import WeakSet
 
 import pyarrow as pa
@@ -19,11 +21,17 @@ from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr, SortExpr
 from datafusion.expr import SortKey as DFSortKey
 
-from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import TableLike, pc
+from arrowdsl.compute.expr_core import ENC_UTF8, ENC_UTF16, ENC_UTF32, normalize_position_encoding
+from arrowdsl.core.context import ExecutionContext, Ordering, OrderingLevel
+from arrowdsl.core.ids import hash64_from_text, iter_array_values
+from arrowdsl.core.interop import SchemaLike, TableLike, pc
 from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions
 from arrowdsl.plan.ops import SortKey as PlanSortKey
-from arrowdsl.schema.metadata import merge_metadata_specs, metadata_spec_from_schema
+from arrowdsl.schema.metadata import (
+    merge_metadata_specs,
+    metadata_spec_from_schema,
+    ordering_from_schema,
+)
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 
@@ -51,11 +59,176 @@ _NORMALIZE_SPAN_UDF = udf(
 )
 
 
+def _stable_hash64(
+    values: pa.Array | pa.ChunkedArray | pa.Scalar,
+) -> pa.Array | pa.Scalar:
+    if isinstance(values, pa.Scalar):
+        value = values.as_py()
+        if value is None:
+            return pa.scalar(None, type=pa.int64())
+        hashed = hash64_from_text(str(value))
+        return pa.scalar(hashed, type=pa.int64())
+    out = [
+        hash64_from_text(str(value)) if value is not None else None
+        for value in iter_array_values(values)
+    ]
+    return pa.array(out, type=pa.int64())
+
+
+def _stable_hash128(
+    values: pa.Array | pa.ChunkedArray | pa.Scalar,
+) -> pa.Array | pa.Scalar:
+    if isinstance(values, pa.Scalar):
+        value = values.as_py()
+        if value is None:
+            return pa.scalar(None, type=pa.string())
+        return pa.scalar(_hash128_text(str(value)), type=pa.string())
+    out = [
+        _hash128_text(str(value)) if value is not None else None
+        for value in iter_array_values(values)
+    ]
+    return pa.array(out, type=pa.string())
+
+
+def _hash128_text(value: str) -> str:
+    return hashlib.blake2b(value.encode("utf-8"), digest_size=16).hexdigest()
+
+
+def _position_encoding_norm(
+    values: pa.Array | pa.ChunkedArray | pa.Scalar,
+) -> pa.Array | pa.Scalar:
+    if isinstance(values, pa.Scalar):
+        value = normalize_position_encoding(values.as_py())
+        return pa.scalar(value, type=pa.int32())
+    out = [normalize_position_encoding(value) for value in iter_array_values(values)]
+    return pa.array(out, type=pa.int32())
+
+
+def _coerce_int(value: object | None) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        return int(raw) if raw.isdigit() else None
+    return None
+
+
+def _code_unit_offset_to_py_index(line: str, offset: int, position_encoding: int) -> int:
+    if position_encoding == ENC_UTF32:
+        return offset
+    if position_encoding == ENC_UTF8:
+        encoded = line.encode("utf-8")
+        byte_off = min(offset, len(encoded))
+        return len(encoded[:byte_off].decode("utf-8", errors="strict"))
+    if position_encoding == ENC_UTF16:
+        encoded = line.encode("utf-16-le")
+        byte_off = min(offset * 2, len(encoded))
+        return len(encoded[:byte_off].decode("utf-16-le", errors="strict"))
+    return min(offset, len(line))
+
+
+def _col_to_byte(
+    line_values: pa.Array | pa.ChunkedArray | pa.Scalar,
+    offset_values: pa.Array | pa.ChunkedArray | pa.Scalar,
+    encoding_values: pa.Array | pa.ChunkedArray | pa.Scalar,
+) -> pa.Array | pa.Scalar:
+    if isinstance(line_values, pa.Scalar):
+        line = line_values.as_py()
+        offset_value = offset_values.as_py() if isinstance(offset_values, pa.Scalar) else None
+        offset = _coerce_int(offset_value)
+        enc = normalize_position_encoding(
+            encoding_values.as_py() if isinstance(encoding_values, pa.Scalar) else None
+        )
+        if not isinstance(line, str) or offset is None:
+            return pa.scalar(None, type=pa.int64())
+        py_index = _code_unit_offset_to_py_index(line, offset, enc)
+        py_index = max(0, min(py_index, len(line)))
+        return pa.scalar(len(line[:py_index].encode("utf-8")), type=pa.int64())
+
+    length = len(line_values)
+    line_iter = iter_array_values(line_values)
+    offset_iter = (
+        repeat(offset_values.as_py(), length)
+        if isinstance(offset_values, pa.Scalar)
+        else iter_array_values(offset_values)
+    )
+    encoding_iter = (
+        repeat(encoding_values.as_py(), length)
+        if isinstance(encoding_values, pa.Scalar)
+        else iter_array_values(encoding_values)
+    )
+    out: list[int | None] = []
+    for line_value, offset_value, encoding_value in zip(
+        line_iter,
+        offset_iter,
+        encoding_iter,
+        strict=True,
+    ):
+        if not isinstance(line_value, str):
+            out.append(None)
+            continue
+        offset = _coerce_int(offset_value)
+        if offset is None:
+            out.append(None)
+            continue
+        enc = normalize_position_encoding(encoding_value)
+        py_index = _code_unit_offset_to_py_index(line_value, offset, enc)
+        py_index = max(0, min(py_index, len(line_value)))
+        out.append(len(line_value[:py_index].encode("utf-8")))
+    return pa.array(out, type=pa.int64())
+
+
+_STABLE_HASH64_UDF = udf(
+    _stable_hash64,
+    [pa.string()],
+    pa.int64(),
+    "stable",
+    "stable_hash64",
+)
+
+_STABLE_HASH128_UDF = udf(
+    _stable_hash128,
+    [pa.string()],
+    pa.string(),
+    "stable",
+    "stable_hash128",
+)
+
+_POSITION_ENCODING_NORM_UDF = udf(
+    _position_encoding_norm,
+    [pa.string()],
+    pa.int32(),
+    "stable",
+    "position_encoding_norm",
+)
+
+_COL_TO_BYTE_UDF = udf(
+    _col_to_byte,
+    [pa.string(), pa.int64(), pa.int32()],
+    pa.int64(),
+    "stable",
+    "col_to_byte",
+)
+
+
 def _register_kernel_udfs(ctx: SessionContext) -> None:
     if ctx in _KERNEL_UDF_CONTEXTS:
         return
     ctx.register_udf(_NORMALIZE_SPAN_UDF)
+    ctx.register_udf(_STABLE_HASH64_UDF)
+    ctx.register_udf(_STABLE_HASH128_UDF)
+    ctx.register_udf(_POSITION_ENCODING_NORM_UDF)
+    ctx.register_udf(_COL_TO_BYTE_UDF)
     _KERNEL_UDF_CONTEXTS.add(ctx)
+
+
+def register_datafusion_udfs(ctx: SessionContext) -> None:
+    """Register shared DataFusion UDFs in the provided session context."""
+    _register_kernel_udfs(ctx)
 
 
 def _session_context(ctx: ExecutionContext | None) -> SessionContext:
@@ -82,6 +255,36 @@ def _metadata_spec_from_tables(tables: Sequence[TableLike]) -> SchemaMetadataSpe
     if not merged.schema_metadata and not merged.field_metadata:
         return None
     return merged
+
+
+def _require_explicit_ordering(schema: SchemaLike, *, kernel: str) -> Ordering:
+    ordering = ordering_from_schema(schema)
+    if ordering.level != OrderingLevel.EXPLICIT or not ordering.keys:
+        msg = f"{kernel} requires explicit ordering metadata."
+        raise ValueError(msg)
+    return ordering
+
+
+def _dedupe_spec_with_ordering(spec: DedupeSpec, ordering: Ordering) -> DedupeSpec:
+    if ordering.level != OrderingLevel.EXPLICIT or not ordering.keys:
+        return spec
+    existing = {sk.column for sk in spec.tie_breakers}
+    extras = [
+        PlanSortKey(col, _normalize_sort_order(order))
+        for col, order in ordering.keys
+        if col not in existing
+    ]
+    if not extras:
+        return spec
+    return DedupeSpec(
+        keys=spec.keys,
+        strategy=spec.strategy,
+        tie_breakers=tuple(spec.tie_breakers) + tuple(extras),
+    )
+
+
+def _normalize_sort_order(order: str) -> Literal["ascending", "descending"]:
+    return "descending" if order == "descending" else "ascending"
 
 
 def _apply_metadata(
@@ -193,9 +396,11 @@ def dedupe_kernel(
         Deduplicated table.
     """
     ctx = _session_context(_ctx)
+    ordering = _require_explicit_ordering(table.schema, kernel="dedupe")
+    resolved_spec = _dedupe_spec_with_ordering(spec, ordering)
     df = _df_from_table(ctx, table, name="dedupe")
     columns = list(table.schema.names)
-    result_df = _dedupe_dataframe(df, spec=spec, columns=columns)
+    result_df = _dedupe_dataframe(df, spec=resolved_spec, columns=columns)
     out = result_df.to_arrow_table()
     return _apply_metadata(out, metadata=_metadata_spec_from_tables([table]))
 
@@ -595,4 +800,5 @@ __all__ = [
     "dedupe_kernel",
     "explode_list_kernel",
     "interval_align_kernel",
+    "register_datafusion_udfs",
 ]

@@ -3,8 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 from sqlglot import Expression, exp
+
+
+@dataclass(frozen=True)
+class TableRef:
+    """Normalized table reference metadata."""
+
+    catalog: str | None
+    schema: str | None
+    name: str
 
 
 def referenced_tables(expr: Expression) -> tuple[str, ...]:
@@ -70,3 +80,34 @@ def iter_table_nodes(expr: Expression) -> Iterable[exp.Table]:
         Table nodes encountered in the expression.
     """
     yield from expr.find_all(exp.Table)
+
+
+def extract_table_refs(expr: Expression) -> tuple[TableRef, ...]:
+    """Return normalized table references for an expression.
+
+    Returns
+    -------
+    tuple[TableRef, ...]
+        Table references extracted from the expression.
+    """
+    refs: set[TableRef] = set()
+    for table in expr.find_all(exp.Table):
+        catalog = table.args.get("catalog")
+        schema = table.args.get("db")
+        catalog_value = str(catalog) if catalog else None
+        schema_value = str(schema) if schema else None
+        name = table.name
+        if name:
+            refs.add(TableRef(catalog=catalog_value, schema=schema_value, name=name))
+    return tuple(sorted(refs, key=lambda ref: (ref.catalog or "", ref.schema or "", ref.name)))
+
+
+__all__ = [
+    "TableRef",
+    "extract_table_refs",
+    "iter_table_nodes",
+    "referenced_columns",
+    "referenced_identifiers",
+    "referenced_relations",
+    "referenced_tables",
+]

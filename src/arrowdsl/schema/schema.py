@@ -24,6 +24,7 @@ from arrowdsl.core.interop import (
     pc,
 )
 from arrowdsl.schema.build import empty_table, set_or_append_column
+from core_types import JsonDict
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
 
@@ -529,7 +530,7 @@ def projection_for_schema(
     return expressions, names
 
 
-def schema_to_dict(schema: SchemaLike) -> dict[str, object]:
+def schema_to_dict(schema: SchemaLike) -> JsonDict:
     """Serialize an Arrow schema to a plain dictionary.
 
     Returns

@@ -56,6 +56,7 @@ from schema_spec.specs import (
     ENCODING_META,
     ArrowFieldSpec,
     DerivedFieldSpec,
+    ExternalTableConfig,
     FieldBundle,
     TableSchemaSpec,
 )
@@ -296,6 +297,16 @@ class DatasetSpec:
             Runtime contract instance.
         """
         return self.contract_spec_or_default().to_contract()
+
+    def external_table_sql(self, config: ExternalTableConfig) -> str:
+        """Return a CREATE EXTERNAL TABLE statement for this dataset.
+
+        Returns
+        -------
+        str
+            CREATE EXTERNAL TABLE statement for this dataset schema.
+        """
+        return self.table_spec.to_create_external_table_sql(config)
 
     def scan_context(self, dataset: ds.Dataset, ctx: ExecutionContext) -> ScanContext:
         """Return a ScanContext for dataset scanning.

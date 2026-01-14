@@ -24,12 +24,20 @@ from extract.registry_bundles import bundle
 from extract.registry_pipelines import post_kernels_for_postprocess
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
+from ibis_engine.param_tables import ParamTablePolicy, ParamTableSpec
+from ibis_engine.params_bridge import list_param_names_from_rel_ops
 from ibis_engine.plan import IbisPlan
 from ibis_engine.plan_bridge import table_to_ibis
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 from relspec.compiler import rel_plan_for_rule
 from relspec.engine import IbisRelPlanCompiler, PlanResolver
+from relspec.list_filter_gate import (
+    ListFilterGateError,
+    ListFilterGatePolicy,
+    validate_no_inline_inlists,
+)
 from relspec.model import DatasetRef, DedupeKernelSpec, ExplodeListSpec, RelationshipRule
+from relspec.param_deps import RuleDependencyReport, dataset_table_names, infer_param_deps
 from relspec.plan import rel_plan_signature
 from relspec.rules.definitions import (
     ExtractPayload,
@@ -57,10 +65,12 @@ from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, SchemaRegistry, table_spe
 from sqlglot_tools.bridge import (
     IbisCompilerBackend,
     SqlGlotDiagnostics,
+    SqlGlotDiagnosticsOptions,
     missing_schema_columns,
     relation_diff,
     sqlglot_diagnostics,
 )
+from sqlglot_tools.lineage import TableRef, extract_table_refs
 
 
 def validate_rule_definitions(
@@ -167,7 +177,11 @@ def validate_sqlglot_columns(
     ValueError
         Raised when SQLGlot references missing columns.
     """
-    diagnostics = sqlglot_diagnostics(expr, backend=backend)
+    diagnostics = sqlglot_diagnostics(
+        expr,
+        backend=backend,
+        options=SqlGlotDiagnosticsOptions(),
+    )
     missing = missing_schema_columns(diagnostics.columns, schema=schema.names)
     if missing:
         msg = f"SQLGlot validation missing columns: {missing}."
@@ -179,6 +193,42 @@ def validate_sqlglot_columns(
 class _RuleSqlGlotSource:
     expr: IbisTable
     input_names: tuple[str, ...]
+    plan_signature: str | None
+
+
+@dataclass(frozen=True)
+class SqlGlotDiagnosticsConfig:
+    """Optional inputs for SQLGlot diagnostics."""
+
+    backend: IbisCompilerBackend | None = None
+    registry: SchemaRegistry | None = None
+    ctx: ExecutionContext | None = None
+    param_table_specs: Sequence[ParamTableSpec] = ()
+    param_table_policy: ParamTablePolicy | None = None
+    list_filter_gate_policy: ListFilterGatePolicy | None = None
+
+
+@dataclass(frozen=True)
+class SqlGlotDiagnosticsContext:
+    """Resolved SQLGlot diagnostics context."""
+
+    backend: IbisCompilerBackend
+    registry: SchemaRegistry
+    ctx: ExecutionContext
+    param_specs: Mapping[str, ParamTableSpec]
+    param_policy: ParamTablePolicy
+    list_filter_gate_policy: ListFilterGatePolicy | None
+
+
+@dataclass(frozen=True)
+class SqlGlotRuleContext:
+    """Prepared context for SQLGlot diagnostics on a single rule."""
+
+    rule: RuleDefinition
+    source: _RuleSqlGlotSource
+    schema_map: Mapping[str, Mapping[str, str]] | None
+    union_schema: pa.Schema | None
+    schema_ddl: str | None
     plan_signature: str | None
 
 
@@ -214,12 +264,36 @@ def _default_sqlglot_backend() -> IbisCompilerBackend:
     return cast("IbisCompilerBackend", build_backend(IbisBackendConfig()))
 
 
+def build_sqlglot_context(
+    config: SqlGlotDiagnosticsConfig | None = None,
+) -> SqlGlotDiagnosticsContext:
+    """Resolve SQLGlot diagnostics context defaults.
+
+    Returns
+    -------
+    SqlGlotDiagnosticsContext
+        Resolved diagnostics context.
+    """
+    config = config or SqlGlotDiagnosticsConfig()
+    backend = config.backend or _default_sqlglot_backend()
+    registry = config.registry or GLOBAL_SCHEMA_REGISTRY
+    ctx = config.ctx or execution_context_factory("default")
+    spec_map = {spec.logical_name: spec for spec in config.param_table_specs}
+    param_policy = config.param_table_policy or ParamTablePolicy()
+    return SqlGlotDiagnosticsContext(
+        backend=backend,
+        registry=registry,
+        ctx=ctx,
+        param_specs=spec_map,
+        param_policy=param_policy,
+        list_filter_gate_policy=config.list_filter_gate_policy,
+    )
+
+
 def rule_sqlglot_diagnostics(
     rules: Sequence[RuleDefinition],
     *,
-    backend: IbisCompilerBackend | None = None,
-    registry: SchemaRegistry | None = None,
-    ctx: ExecutionContext | None = None,
+    config: SqlGlotDiagnosticsConfig | None = None,
 ) -> tuple[RuleDiagnostic, ...]:
     """Return SQLGlot diagnostics for rule definitions.
 
@@ -228,112 +302,301 @@ def rule_sqlglot_diagnostics(
     tuple[RuleDiagnostic, ...]
         SQLGlot diagnostics for rules that can compile to SQLGlot.
     """
-    backend = backend or _default_sqlglot_backend()
-    registry = registry or GLOBAL_SCHEMA_REGISTRY
-    ctx = ctx or execution_context_factory("default")
+    context = build_sqlglot_context(config)
     diagnostics: list[RuleDiagnostic] = []
     for rule in rules:
         diagnostics.extend(
             _sqlglot_diagnostics_for_rule(
                 rule,
-                backend=backend,
-                registry=registry,
-                ctx=ctx,
+                context=context,
             )
         )
-        diagnostics.extend(_kernel_lane_diagnostics_for_rule(rule, ctx=ctx))
+        diagnostics.extend(_kernel_lane_diagnostics_for_rule(rule, ctx=context.ctx))
     return tuple(diagnostics)
 
 
 def _sqlglot_diagnostics_for_rule(
     rule: RuleDefinition,
     *,
-    backend: IbisCompilerBackend,
-    registry: SchemaRegistry,
-    ctx: ExecutionContext,
+    context: SqlGlotDiagnosticsContext,
 ) -> tuple[RuleDiagnostic, ...]:
+    rule_ctx, prep_diag = _prepare_sqlglot_rule_context(rule, context=context)
+    if prep_diag:
+        return prep_diag
+    if rule_ctx is None:
+        return ()
+    raw = _compile_rule_sqlglot(rule_ctx, context=context, normalize=False)
+    if isinstance(raw, RuleDiagnostic):
+        return (raw,)
+    optimized = _compile_rule_sqlglot(rule_ctx, context=context, normalize=True)
+    if isinstance(optimized, RuleDiagnostic):
+        return (optimized,)
+    return _build_rule_diagnostics(rule_ctx, context=context, raw=raw, optimized=optimized)
+
+
+def _prepare_sqlglot_rule_context(
+    rule: RuleDefinition,
+    *,
+    context: SqlGlotDiagnosticsContext,
+) -> tuple[SqlGlotRuleContext | None, tuple[RuleDiagnostic, ...]]:
     input_names = _rule_input_names(rule)
     if not input_names:
-        return ()
+        return None, ()
     schema_map, union_schema, missing_inputs = _schema_map_for_inputs(
         input_names,
-        registry=registry,
+        registry=context.registry,
     )
     plan_signature = _plan_signature_for_rule(rule)
     if missing_inputs:
-        return (
-            _schema_missing_diagnostic(
-                rule,
-                plan_signature=plan_signature,
-                missing_inputs=missing_inputs,
-            ),
+        diagnostic = _schema_missing_diagnostic(
+            rule,
+            plan_signature=plan_signature,
+            missing_inputs=missing_inputs,
         )
+        return None, (diagnostic,)
     schema_ddl = None
     if union_schema is not None:
         schema_ddl = _schema_ddl(union_schema, name=f"{rule.name}_inputs")
     source = _rule_sqlglot_source(
         rule,
-        backend=backend,
-        registry=registry,
-        ctx=ctx,
+        backend=context.backend,
+        registry=context.registry,
+        ctx=context.ctx,
         plan_signature=plan_signature,
     )
     if source is None:
-        return ()
+        return None, ()
+    return (
+        SqlGlotRuleContext(
+            rule=rule,
+            source=source,
+            schema_map=schema_map or None,
+            union_schema=union_schema,
+            schema_ddl=schema_ddl,
+            plan_signature=plan_signature,
+        ),
+        (),
+    )
+
+
+def _compile_rule_sqlglot(
+    rule_ctx: SqlGlotRuleContext,
+    *,
+    context: SqlGlotDiagnosticsContext,
+    normalize: bool,
+) -> SqlGlotDiagnostics | RuleDiagnostic:
+    options = SqlGlotDiagnosticsOptions(
+        schema_map=rule_ctx.schema_map,
+        normalize=normalize,
+    )
     try:
-        raw = sqlglot_diagnostics(
-            source.expr,
-            backend=backend,
-            schema_map=schema_map or None,
-            normalize=False,
-        )
-        optimized = sqlglot_diagnostics(
-            source.expr,
-            backend=backend,
-            schema_map=schema_map or None,
-            normalize=True,
+        return sqlglot_diagnostics(
+            rule_ctx.source.expr,
+            backend=context.backend,
+            options=options,
         )
     except (TypeError, ValueError) as exc:
-        return (
-            _sqlglot_failure_diagnostic(
-                rule,
-                plan_signature=source.plan_signature,
-                error=exc,
-            ),
+        return _sqlglot_failure_diagnostic(
+            rule_ctx.rule,
+            plan_signature=rule_ctx.source.plan_signature,
+            error=exc,
         )
+
+
+def _build_rule_diagnostics(
+    rule_ctx: SqlGlotRuleContext,
+    *,
+    context: SqlGlotDiagnosticsContext,
+    raw: SqlGlotDiagnostics,
+    optimized: SqlGlotDiagnostics,
+) -> tuple[RuleDiagnostic, ...]:
     diff = relation_diff(raw, optimized)
+    diagnostics: list[RuleDiagnostic] = []
+    diagnostics.extend(
+        _list_filter_gate_diagnostics(
+            rule_ctx,
+            context=context,
+            optimized=optimized,
+        )
+    )
+    param_names, table_refs = _param_metadata(
+        rule_ctx,
+        optimized=optimized,
+        context=context,
+        diagnostics=diagnostics,
+    )
     extra_metadata = _datafusion_diagnostics_metadata(
         sql=optimized.optimized.sql(unsupported_level=ErrorLevel.RAISE),
-        schema_map=schema_map or None,
-        ctx=ctx,
+        schema_map=rule_ctx.schema_map,
+        ctx=context.ctx,
     )
-    diagnostics: list[RuleDiagnostic] = [
+    metadata = _final_sqlglot_metadata(
+        extra_metadata,
+        param_names=param_names,
+        table_refs=table_refs,
+        param_policy=context.param_policy,
+    )
+    diagnostics.append(
         sqlglot_metadata_diagnostic(
             optimized,
-            domain=rule.domain,
+            domain=rule_ctx.rule.domain,
             diff=diff,
             options=SqlGlotMetadataDiagnosticOptions(
-                rule_name=rule.name,
-                plan_signature=source.plan_signature,
-                schema_ddl=schema_ddl,
-                extra_metadata=extra_metadata,
+                rule_name=rule_ctx.rule.name,
+                plan_signature=rule_ctx.source.plan_signature,
+                schema_ddl=rule_ctx.schema_ddl,
+                extra_metadata=metadata,
             ),
         )
-    ]
-    if union_schema is not None:
+    )
+    if rule_ctx.union_schema is not None:
         missing = sqlglot_missing_columns_diagnostic(
             optimized,
-            domain=rule.domain,
-            schema=union_schema,
+            domain=rule_ctx.rule.domain,
+            schema=rule_ctx.union_schema,
             options=MissingColumnsDiagnosticOptions(
-                rule_name=rule.name,
-                plan_signature=source.plan_signature,
-                schema_ddl=schema_ddl,
+                rule_name=rule_ctx.rule.name,
+                plan_signature=rule_ctx.source.plan_signature,
+                schema_ddl=rule_ctx.schema_ddl,
             ),
         )
         if missing is not None:
             diagnostics.append(missing)
     return tuple(diagnostics)
+
+
+def _list_filter_gate_diagnostics(
+    rule_ctx: SqlGlotRuleContext,
+    *,
+    context: SqlGlotDiagnosticsContext,
+    optimized: SqlGlotDiagnostics,
+) -> tuple[RuleDiagnostic, ...]:
+    try:
+        validate_no_inline_inlists(
+            rule_name=rule_ctx.rule.name,
+            sg_ast=optimized.optimized,
+            param_policy=context.param_policy,
+            policy=context.list_filter_gate_policy,
+        )
+    except ListFilterGateError as exc:
+        return (
+            RuleDiagnostic(
+                domain=rule_ctx.rule.domain,
+                template=None,
+                rule_name=rule_ctx.rule.name,
+                severity="error",
+                message=str(exc),
+                plan_signature=rule_ctx.source.plan_signature,
+            ),
+        )
+    return ()
+
+
+def _param_metadata(
+    rule_ctx: SqlGlotRuleContext,
+    *,
+    optimized: SqlGlotDiagnostics,
+    context: SqlGlotDiagnosticsContext,
+    diagnostics: list[RuleDiagnostic],
+) -> tuple[set[str], tuple[TableRef, ...]]:
+    table_refs = tuple(extract_table_refs(optimized.optimized))
+    param_deps = infer_param_deps(table_refs, policy=context.param_policy)
+    param_names = {dep.logical_name for dep in param_deps}
+    param_names.update(list_param_names_from_rel_ops(rule_ctx.rule.rel_ops))
+    if context.param_specs:
+        missing = sorted(name for name in param_names if name not in context.param_specs)
+        if missing:
+            diagnostics.append(
+                RuleDiagnostic(
+                    domain=rule_ctx.rule.domain,
+                    template=None,
+                    rule_name=rule_ctx.rule.name,
+                    severity="error",
+                    message="Rule references undeclared param tables.",
+                    plan_signature=rule_ctx.source.plan_signature,
+                    metadata={"missing_params": ",".join(missing)},
+                )
+            )
+    return param_names, table_refs
+
+
+def _final_sqlglot_metadata(
+    base_metadata: Mapping[str, str],
+    *,
+    param_names: set[str],
+    table_refs: Sequence[TableRef],
+    param_policy: ParamTablePolicy,
+) -> dict[str, str]:
+    metadata = dict(base_metadata)
+    if param_names:
+        metadata["param_tables"] = ",".join(sorted(param_names))
+    non_param_tables = dataset_table_names(table_refs, policy=param_policy)
+    if non_param_tables:
+        metadata["dataset_tables"] = ",".join(non_param_tables)
+    return metadata
+
+
+def rule_dependency_reports(
+    rules: Sequence[RuleDefinition],
+    *,
+    config: SqlGlotDiagnosticsConfig | None = None,
+) -> tuple[RuleDependencyReport, ...]:
+    """Return dependency reports for rule definitions.
+
+    Returns
+    -------
+    tuple[RuleDependencyReport, ...]
+        Rule dependency reports with param and dataset tables.
+    """
+    context = build_sqlglot_context(config)
+    reports: list[RuleDependencyReport] = []
+    for rule in rules:
+        input_names = _rule_input_names(rule)
+        if not input_names:
+            continue
+        schema_map, _union_schema, missing_inputs = _schema_map_for_inputs(
+            input_names,
+            registry=context.registry,
+        )
+        if missing_inputs:
+            continue
+        plan_signature = _plan_signature_for_rule(rule)
+        source = _rule_sqlglot_source(
+            rule,
+            backend=context.backend,
+            registry=context.registry,
+            ctx=context.ctx,
+            plan_signature=plan_signature,
+        )
+        if source is None:
+            continue
+        try:
+            optimized = sqlglot_diagnostics(
+                source.expr,
+                backend=context.backend,
+                options=SqlGlotDiagnosticsOptions(
+                    schema_map=schema_map or None,
+                    normalize=True,
+                ),
+            )
+        except (TypeError, ValueError):
+            continue
+        table_refs = extract_table_refs(optimized.optimized)
+        param_deps = infer_param_deps(table_refs, policy=context.param_policy)
+        param_names = {dep.logical_name for dep in param_deps}
+        param_names.update(list_param_names_from_rel_ops(rule.rel_ops))
+        if context.param_specs:
+            missing = sorted(name for name in param_names if name not in context.param_specs)
+            if missing:
+                continue
+        reports.append(
+            RuleDependencyReport(
+                rule_name=rule.name,
+                param_tables=tuple(sorted(param_names)),
+                dataset_tables=dataset_table_names(table_refs, policy=context.param_policy),
+            )
+        )
+    return tuple(reports)
 
 
 def _kernel_lane_diagnostics_for_rule(
@@ -391,18 +654,24 @@ def _datafusion_diagnostics_metadata(
     metadata: dict[str, str] = {
         "datafusion_profile": _json_payload(profile.telemetry_payload()),
     }
-    if not ctx.debug or not schema_map:
+    if not ctx.debug:
         return metadata
     session = profile.session_context()
+    if schema_map:
+        try:
+            _register_schema_tables(session, schema_map)
+            df = session.sql(sql)
+            plans = snapshot_plans(df)
+            metadata["df_logical_plan"] = str(plans["logical"])
+            metadata["df_optimized_plan"] = str(plans["optimized"])
+            metadata["df_physical_plan"] = str(plans["physical"])
+        except (RuntimeError, TypeError, ValueError) as exc:
+            metadata["df_plan_error"] = str(exc)
     try:
-        _register_schema_tables(session, schema_map)
-        df = session.sql(sql)
-        plans = snapshot_plans(df)
-        metadata["df_logical_plan"] = str(plans["logical"])
-        metadata["df_optimized_plan"] = str(plans["optimized"])
-        metadata["df_physical_plan"] = str(plans["physical"])
+        settings = profile.settings_snapshot(session)
+        metadata["df_settings"] = _settings_snapshot_payload(settings)
     except (RuntimeError, TypeError, ValueError) as exc:
-        metadata["df_plan_error"] = str(exc)
+        metadata["df_settings_error"] = str(exc)
     try:
         substrait = Serde.serialize_bytes(sql, session)
         metadata["substrait_plan_b64"] = base64.b64encode(substrait).decode("ascii")
@@ -419,14 +688,24 @@ def _register_schema_tables(
         if not columns:
             continue
         arrays = {
-            col: pa.array([], type=pa.type_for_alias(dtype))
-            for col, dtype in columns.items()
+            col: pa.array([], type=pa.type_for_alias(dtype)) for col, dtype in columns.items()
         }
         session.register_table(name, pa.table(arrays))
 
 
 def _json_payload(payload: Mapping[str, object]) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _settings_snapshot_payload(table: pa.Table) -> str:
+    rows: list[dict[str, str]] = []
+    for row in table.to_pylist():
+        name = row.get("name")
+        value = row.get("value")
+        if name is None or value is None:
+            continue
+        rows.append({"name": str(name), "value": str(value)})
+    return json.dumps(rows, sort_keys=True, separators=(",", ":"))
 
 
 def _rule_sqlglot_source(
@@ -606,6 +885,7 @@ def _sqlglot_failure_diagnostic(
 
 
 __all__ = [
+    "rule_dependency_reports",
     "rule_sqlglot_diagnostics",
     "validate_rule_definitions",
     "validate_sqlglot_columns",

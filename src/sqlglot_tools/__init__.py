@@ -20,6 +20,7 @@ from sqlglot_tools.optimizer import (
     optimize_expr,
     qualify_expr,
     register_datafusion_dialect,
+    rewrite_expr,
 )
 
 __all__ = [
@@ -41,5 +42,6 @@ __all__ = [
     "referenced_tables",
     "register_datafusion_dialect",
     "relation_diff",
+    "rewrite_expr",
     "sqlglot_diagnostics",
 ]

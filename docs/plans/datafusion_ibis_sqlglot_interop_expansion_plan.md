@@ -83,9 +83,9 @@ _EXPR_DISPATCH.update(
 
 **Implementation checklist**
 
-- [ ] Add handlers for arithmetic, case/coalesce, like/ilike, in/between, concat.
-- [ ] Ensure new handlers align with SQLGlot node types.
-- [ ] Add explicit casts when DataFusion requires typed literals.
+- [x] Add handlers for arithmetic, case/coalesce, like/ilike, in/between, concat.
+- [x] Ensure new handlers align with SQLGlot node types.
+- [x] Add explicit casts when DataFusion requires typed literals.
 
 ---
 
@@ -116,9 +116,9 @@ if select.args.get("distinct"):
 
 **Implementation checklist**
 
-- [ ] Add COUNT(*) support with explicit literal.
-- [ ] Handle DISTINCT aggregates and SELECT DISTINCT.
-- [ ] Implement aggregate FILTER clauses.
+- [x] Add COUNT(*) support with explicit literal.
+- [x] Handle DISTINCT aggregates and SELECT DISTINCT.
+- [x] Implement aggregate FILTER clauses.
 
 ---
 
@@ -149,9 +149,9 @@ def _column_name(expr: Expression, *, strip_qualifier: bool = False) -> str | No
 
 **Implementation checklist**
 
-- [ ] Support JOIN ... USING in SQLGlot translation.
-- [ ] Strip qualifiers when DataFusion expects unqualified join keys.
-- [ ] Fail fast on ambiguous join keys.
+- [x] Support JOIN ... USING in SQLGlot translation.
+- [x] Strip qualifiers when DataFusion expects unqualified join keys.
+- [x] Fail fast on ambiguous join keys.
 
 ---
 
@@ -182,9 +182,9 @@ def df_from_sqlglot_or_sql(
 
 **Implementation checklist**
 
-- [ ] Add fallback helper that renders SQLGlot to DataFusion SQL.
-- [ ] Use param_values for scalar bindings (no string interpolation).
-- [ ] Emit diagnostics when fallback is used for coverage tracking.
+- [x] Add fallback helper that renders SQLGlot to DataFusion SQL. (already covered elsewhere)
+- [x] Use param_values for scalar bindings (no string interpolation). (already covered elsewhere)
+- [x] Emit diagnostics when fallback is used for coverage tracking.
 
 ---
 
@@ -212,9 +212,9 @@ def ibis_to_datafusion(
 
 **Implementation checklist**
 
-- [ ] Thread param bindings through all DataFusion execution paths.
-- [ ] Align Ibis param names with DataFusion param_values.
-- [ ] Keep types intact for all bound values.
+- [x] Thread param bindings through all DataFusion execution paths. (already covered elsewhere)
+- [x] Align Ibis param names with DataFusion param_values. (already covered elsewhere)
+- [x] Keep types intact for all bound values. (already covered elsewhere)
 
 ---
 
@@ -248,9 +248,9 @@ def compile_ibis_to_df(
 
 **Implementation checklist**
 
-- [ ] Route all Ibis -> DataFusion translation through one helper.
-- [ ] Remove duplicate adapter logic to prevent drift.
-- [ ] Keep optimization + caching behavior consistent across callers.
+- [x] Route all Ibis -> DataFusion translation through one helper.
+- [x] Remove duplicate adapter logic to prevent drift.
+- [x] Keep optimization + caching behavior consistent across callers.
 
 ---
 
@@ -273,9 +273,9 @@ def test_sqlglot_expr_addition(ctx: SessionContext, backend: BaseBackend) -> Non
 
 **Implementation checklist**
 
-- [ ] Add unit tests for new SQLGlot nodes.
-- [ ] Add fallback-path tests for unsupported nodes.
-- [ ] Skip tests cleanly if DataFusion is unavailable.
+- [x] Add unit tests for new SQLGlot nodes.
+- [x] Add fallback-path tests for unsupported nodes.
+- [x] Skip tests cleanly if DataFusion is unavailable.
 
 ---
 
@@ -316,9 +316,9 @@ def render_sql(expr: Expression, *, dialect: str) -> str:
 
 **Implementation checklist**
 
-- [ ] Add a strict render helper with unsupported_level=RAISE.
-- [ ] Use strict rendering in diagnostics and fallback SQL generation.
-- [ ] Surface parse/unsupported errors with actionable diagnostics.
+- [x] Add a strict render helper with unsupported_level=RAISE. (already covered elsewhere)
+- [x] Use strict rendering in diagnostics and fallback SQL generation. (already covered elsewhere)
+- [x] Surface parse/unsupported errors with actionable diagnostics. (already covered elsewhere)
 
 ---
 
@@ -340,9 +340,9 @@ def sqlglot_semantic_diff(left: Expression, right: Expression) -> list[object]:
 
 **Implementation checklist**
 
-- [ ] Add semantic diff helper between compiled/optimized ASTs.
-- [ ] Emit diff artifacts in rule diagnostics bundles.
-- [ ] Store diff summaries alongside SQL snapshots.
+- [x] Add semantic diff helper between compiled/optimized ASTs. (already covered elsewhere)
+- [x] Emit diff artifacts in rule diagnostics bundles. (already covered elsewhere)
+- [x] Store diff summaries alongside SQL snapshots. (already covered elsewhere)
 
 ---
 
@@ -368,9 +368,9 @@ class DataFusionDialect(Dialect):
 
 **Implementation checklist**
 
-- [ ] Add a DataFusion-specific dialect or generator overrides.
-- [ ] Use the tuned dialect for SQL fallback rendering.
-- [ ] Keep type mappings in sync with DataFusion expectations.
+- [x] Add a DataFusion-specific dialect or generator overrides. (already covered elsewhere)
+- [x] Use the tuned dialect for SQL fallback rendering.
+- [x] Keep type mappings in sync with DataFusion expectations.
 
 ---
 
@@ -394,9 +394,9 @@ def rewrite_expr(expr: Expression) -> Expression:
 
 **Implementation checklist**
 
-- [ ] Add a rewrite pipeline hook before rendering or translation.
-- [ ] Keep rewrites deterministic for stable SQL artifacts.
-- [ ] Guard with feature flags to avoid unintentional changes.
+- [x] Add a rewrite pipeline hook before rendering or translation. (already covered elsewhere)
+- [x] Keep rewrites deterministic for stable SQL artifacts. (already covered elsewhere)
+- [x] Guard with feature flags to avoid unintentional changes.
 
 ---
 
@@ -424,9 +424,9 @@ sql = stmt.sql(dialect="datafusion")
 
 **Implementation checklist**
 
-- [ ] Build DDL helpers from schema specs via SQLGlot ColumnDef.
-- [ ] Support CREATE EXTERNAL TABLE with format options when needed.
-- [ ] Use DDL helpers for reproducible IO contracts.
+- [x] Build DDL helpers from schema specs via SQLGlot ColumnDef. (already covered elsewhere)
+- [x] Support CREATE EXTERNAL TABLE with format options when needed.
+- [x] Use DDL helpers for reproducible IO contracts.
 
 ---
 
@@ -453,9 +453,9 @@ return ctx.sql_with_options(sql, opts, param_values=bindings)
 
 **Implementation checklist**
 
-- [ ] Use SQLOptions to block DDL/DML in fallback SQL paths.
-- [ ] Keep policy configurable for trusted vs untrusted callers.
-- [ ] Log any policy violations as diagnostics.
+- [x] Use SQLOptions to block DDL/DML in fallback SQL paths. (already covered elsewhere)
+- [x] Keep policy configurable for trusted vs untrusted callers.
+- [x] Log any policy violations as diagnostics.
 
 ---
 
@@ -480,9 +480,9 @@ def _bracket_expr(expr: exp.Bracket) -> Expr:
 
 **Implementation checklist**
 
-- [ ] Map SQLGlot bracket access to DataFusion array/struct access.
-- [ ] Support both integer index and string field access.
-- [ ] Fail fast on unsupported nested access patterns.
+- [x] Map SQLGlot bracket access to DataFusion array/struct access.
+- [x] Support both integer index and string field access.
+- [x] Fail fast on unsupported nested access patterns.
 
 ---
 
@@ -505,9 +505,9 @@ replay = Consumer.from_substrait_plan(ctx, Serde.deserialize_bytes(plan_bytes))
 
 **Implementation checklist**
 
-- [ ] Capture Substrait bytes as a diagnostics artifact.
-- [ ] Provide replay helpers for regression testing.
-- [ ] Gate Substrait usage behind feature flags if needed.
+- [x] Capture Substrait bytes as a diagnostics artifact. (already covered elsewhere)
+- [x] Provide replay helpers for regression testing.
+- [x] Gate Substrait usage behind feature flags if needed. (already covered elsewhere)
 
 ---
 
@@ -528,9 +528,9 @@ def eval_sql_smoke(sql: str, *, tables: dict[str, object]) -> list[dict[str, obj
 
 **Implementation checklist**
 
-- [ ] Add smoke tests for SQLGlot AST rewrites.
-- [ ] Keep fixtures small and deterministic.
-- [ ] Use only for unit-level validation, not perf tests.
+- [x] Add smoke tests for SQLGlot AST rewrites. (already covered elsewhere)
+- [x] Keep fixtures small and deterministic. (already covered elsewhere)
+- [x] Use only for unit-level validation, not perf tests. (already covered elsewhere)
 
 ---
 

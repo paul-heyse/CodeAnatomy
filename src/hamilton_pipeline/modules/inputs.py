@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+import os
 from typing import Literal
 
 from hamilton.function_modifiers import tag
@@ -22,6 +24,11 @@ from hamilton_pipeline.pipeline_types import (
 )
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
+
+
+def _incremental_pipeline_enabled() -> bool:
+    mode = os.environ.get("CODEANATOMY_PIPELINE_MODE", "").strip().lower()
+    return mode in {"incremental", "streaming"}
 
 
 @tag(layer="inputs", kind="runtime")
@@ -64,13 +71,29 @@ def ibis_backend(ibis_backend_config: IbisBackendConfig) -> BaseBackend:
 def streaming_table_provider() -> object | None:
     """Return an optional streaming table provider (placeholder).
 
-    This hook is reserved for Rust-backed StreamingTable providers.
+    This hook is reserved for Rust-backed StreamingTable providers. It is
+    restricted to incremental/streaming pipeline runs only.
 
     Returns
     -------
     object | None
         Provider instance or None when disabled.
     """
+    if not _incremental_pipeline_enabled():
+        return None
+    flag = os.environ.get("CODEANATOMY_ENABLE_STREAMING_TABLES", "").strip().lower()
+    if flag not in {"1", "true", "yes", "y"}:
+        return None
+    try:
+        module = importlib.import_module("datafusion_ext")
+    except ImportError:
+        return None
+    factory = getattr(module, "streaming_table_provider", None)
+    if callable(factory):
+        provider = factory()
+        if isinstance(provider, bool):
+            return None
+        return provider
     return None
 
 
@@ -94,6 +117,18 @@ def relspec_param_values() -> JsonDict:
     -------
     JsonDict
         Mapping of parameter names to values.
+    """
+    return {}
+
+
+@tag(layer="inputs", kind="object")
+def param_table_parquet_paths() -> JsonDict:
+    """Return optional parquet paths for param table replay.
+
+    Returns
+    -------
+    JsonDict
+        Mapping of logical param names to parquet dataset paths.
     """
     return {}
 
@@ -389,6 +424,7 @@ def output_config(
     output_dir: str | None,
     *,
     overwrite_intermediate_datasets: bool,
+    materialize_param_tables: bool = False,
 ) -> OutputConfig:
     """Bundle output configuration values.
 
@@ -401,6 +437,7 @@ def output_config(
         work_dir=work_dir,
         output_dir=output_dir,
         overwrite_intermediate_datasets=overwrite_intermediate_datasets,
+        materialize_param_tables=materialize_param_tables,
     )
 
 

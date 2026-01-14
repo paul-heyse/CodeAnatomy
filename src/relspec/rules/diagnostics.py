@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
@@ -231,11 +232,33 @@ def kernel_lane_diagnostic(
     )
 
 
+def substrait_plan_bytes(diagnostic: RuleDiagnostic) -> bytes | None:
+    """Return Substrait plan bytes from a diagnostic, if present.
+
+    Returns
+    -------
+    bytes | None
+        Substrait plan bytes or ``None`` when not available.
+
+    Raises
+    ------
+    ValueError
+        Raised when the Substrait payload is not valid base64.
+    """
+    payload = diagnostic.metadata.get("substrait_plan_b64")
+    if not payload:
+        return None
+    try:
+        return base64.b64decode(payload)
+    except (TypeError, ValueError) as exc:
+        msg = "Invalid Substrait payload in diagnostic metadata."
+        raise ValueError(msg) from exc
+
+
 def _sqlglot_metadata_payload(diagnostics: SqlGlotDiagnostics) -> dict[str, str]:
-    opts = {"unsupported_level": ErrorLevel.RAISE}
     metadata: dict[str, str] = {
-        "raw_sql": diagnostics.expression.sql(**opts),
-        "optimized_sql": diagnostics.optimized.sql(**opts),
+        "raw_sql": diagnostics.expression.sql(unsupported_level=ErrorLevel.RAISE),
+        "optimized_sql": diagnostics.optimized.sql(unsupported_level=ErrorLevel.RAISE),
         "ast_repr": diagnostics.ast_repr,
     }
     _set_joined(metadata, "tables", diagnostics.tables)
@@ -312,4 +335,5 @@ __all__ = [
     "rule_diagnostics_from_table",
     "sqlglot_metadata_diagnostic",
     "sqlglot_missing_columns_diagnostic",
+    "substrait_plan_bytes",
 ]

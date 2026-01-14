@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Protocol
 
 import pyarrow as pa
 
+from ibis_engine.param_tables import ParamTablePolicy, ParamTableSpec
+from relspec.list_filter_gate import ListFilterGatePolicy
 from relspec.rules.diagnostics import RuleDiagnostic, rule_diagnostic_table
 from relspec.rules.spec_tables import rule_definition_table
 from relspec.rules.templates import (
@@ -15,7 +17,11 @@ from relspec.rules.templates import (
     rule_template_table,
     validate_template_specs,
 )
-from relspec.rules.validation import rule_sqlglot_diagnostics, validate_rule_definitions
+from relspec.rules.validation import (
+    SqlGlotDiagnosticsConfig,
+    rule_sqlglot_diagnostics,
+    validate_rule_definitions,
+)
 
 if TYPE_CHECKING:
     from relspec.rules.definitions import RuleDefinition, RuleDomain
@@ -47,6 +53,9 @@ class RuleRegistry:
     """Aggregates rule definitions across adapters."""
 
     adapters: Sequence[RuleAdapter]
+    param_table_specs: Sequence[ParamTableSpec] = ()
+    param_table_policy: ParamTablePolicy | None = None
+    list_filter_gate_policy: ListFilterGatePolicy | None = None
 
     def rule_definitions(self) -> tuple[RuleDefinition, ...]:
         """Return all rule definitions across adapters.
@@ -58,7 +67,14 @@ class RuleRegistry:
         """
         rules = self._collect_rule_definitions()
         validate_rule_definitions(rules)
-        diagnostics = rule_sqlglot_diagnostics(rules)
+        diagnostics = rule_sqlglot_diagnostics(
+            rules,
+            config=SqlGlotDiagnosticsConfig(
+                param_table_specs=self.param_table_specs,
+                param_table_policy=self.param_table_policy,
+                list_filter_gate_policy=self.list_filter_gate_policy,
+            ),
+        )
         _raise_rule_errors(diagnostics)
         return rules
 
@@ -150,7 +166,14 @@ class RuleRegistry:
         """
         rules = self._collect_rule_definitions()
         validate_rule_definitions(rules)
-        return rule_sqlglot_diagnostics(rules)
+        return rule_sqlglot_diagnostics(
+            rules,
+            config=SqlGlotDiagnosticsConfig(
+                param_table_specs=self.param_table_specs,
+                param_table_policy=self.param_table_policy,
+                list_filter_gate_policy=self.list_filter_gate_policy,
+            ),
+        )
 
     def rule_diagnostics_table(self) -> pa.Table:
         """Return a diagnostics table for rule validation.

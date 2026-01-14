@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol, cast
-from uuid import uuid4
 
 import ibis
 from ibis.backends import BaseBackend
@@ -118,8 +118,10 @@ def table_to_ibis(
     IbisPlan
         Ibis plan backed by the registered view.
     """
-    view_name = _resolve_name(name)
     expr = ibis.memtable(table)
+    view_name = _resolve_name(name)
+    if view_name is None:
+        return IbisPlan(expr=expr, ordering=ordering or Ordering.unordered())
     backend_view = cast("ViewBackend", backend)
     backend_view.create_view(view_name, expr, overwrite=overwrite)
     registered = backend.table(view_name)
@@ -157,10 +159,11 @@ def _ensure_table(value: TableLike | RecordBatchReaderLike) -> TableLike:
     return value
 
 
-def _resolve_name(name: str | None) -> str:
-    if name:
-        return name
-    return f"plan_bridge_{uuid4().hex}"
+def _resolve_name(name: str | None) -> str | None:
+    if not name:
+        return None
+    sanitized = re.sub(r"[^A-Za-z0-9_]+", "_", name).strip("_")
+    return sanitized or "view"
 
 
 def collect_plan_bridge(

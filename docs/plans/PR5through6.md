@@ -1,268 +1,946 @@
 Below are **PR‑05** and **PR‑06** in the same “scope item” style as your `datafusion_engine_migration_plan.md`, but with **much denser technical narrative** and **no target file list**, per your request. 
 
----
+According to a document in your repo (`datafusion_engine_migration_plan.md`; timestamp metadata wasn’t provided in the snippet), PR‑05 is essentially **Scope 12: “Normalize, Extract, and CPG Plan Builders in Ibis”**—i.e., replacing the remaining ad‑hoc plan builders with **Ibis expression builders** while preserving output invariants and handling optional inputs correctly. 
 
-## PR‑05 — Convert remaining plan builders (normalize / extract / cpg) to Ibis expressions
+You’re right that the earlier PR‑05 notes were “directionally correct but underspecified.” Below is the missing “zero‑thinking required” context: **rules to apply**, **functional design target**, **why** each rule exists, and exactly what is meant by:
 
-**Description**
-Complete the “declarative plan lane” migration by rewriting any remaining plan builders in `normalize/`, `extract/`, and `cpg/` so they **return Ibis IR (table expressions)** (wrapped in your `IbisPlan` / `RelPlan` containers), instead of producing Arrow tables early, constructing ad‑hoc engine plans, or embedding bespoke procedural logic in these layers. This corresponds to the “Normalize, Extract, and CPG Plan Builders in Ibis” objective. 
+* **“stable ID generation must be expressed relationally”**
+* **“span normalization must be join-driven against a line index”**
 
-This PR is the point where the project becomes *meaningfully* rules/relationship driven, because:
-
-* every “dataset derivation” is now an **Ibis expression template**,
-* relspec rules can **compose** these templates,
-* SQLGlot tooling can analyze the full logical plan graph,
-* and DataFusion can optimize/execute without you writing SQL strings.
+I’ll make this concrete enough that a Python expert can implement without having to infer what we mean.
 
 ---
 
-### Code patterns (key snippets only)
+# 1) PR‑05 functional design target
 
-#### 1) Canonical “plan builder” signature → returns IbisPlan (not Arrow)
+PR‑05 is not “convert code to Ibis” in the abstract. It is specifically:
+
+### Target state
+
+Every dataset derivation step in **normalize/**, **extract/** (post-parse shaping), and **cpg/** (relationship-derived outputs) becomes:
+
+1. **A pure, declarative Ibis table expression template**
+
+   * Inputs: named datasets (Ibis tables) + param tables
+   * Output: an Ibis expression (lazy)
+
+2. **Contract-first**
+
+   * The plan explicitly *projects* the contract columns and aliases them into canonical names
+   * It does not leak “accidental extra columns” as part of the dataset contract.
+
+3. **Deterministic-by-construction**
+
+   * If the dataset needs canonical determinism, the expression includes explicit sorting keys / winner selection logic, rather than “whatever the engine happens to return.”
+
+4. **Join-ready**
+
+   * Normalization produces canonical join keys (especially byte spans + stable ids) so relspec rules can join without bespoke glue code.
+
+This aligns exactly with the migration plan’s definition of PR‑05/Scope 12: “Convert normalize/extract/CPG plan builders to Ibis expressions, preserving dataset schemas and output invariants.” 
+
+---
+
+# 2) “Stable ID generation must be expressed relationally”
+
+## 2.1 What “stable ID” means here
+
+A **stable ID** is an identifier that:
+
+* is **deterministic** across runs given the same repo content + same normalization rules,
+* is **independent of row order** or partitioning,
+* is **portable** across execution lanes (Ibis/DataFusion/Arrow),
+* and is derived from **semantic identity**, not incidental computation.
+
+Examples:
+
+* syntax anchor node ID = identity of *(file_id, span_start_byte, span_end_byte, kind)*
+* edge ID = identity of *(src_id, dst_id, edge_kind, anchor span if applicable)*
+* binding ID = identity of *(scope_id, name)* (compiler-truth inventory) 
+
+## 2.2 What “expressed relationally” means (the non-negotiable rule)
+
+**Stable IDs must be produced as columns by a plan**, not assigned after the fact by Python control flow.
+
+Concretely, this means:
+
+✅ Allowed:
+
+* `stable_id = stable_hash64(kind, file_id, bstart, bend, extra…)` computed via:
+
+  * an engine builtin hash function, or
+  * a DataFusion UDF (vectorized), or
+  * an Arrow kernel that is invoked as part of a hybrid “relational → kernel → relational” block (still treated as part of the compiled plan output).
+
+❌ Not allowed:
+
+* `enumerate(rows)` / “row_number used as identity”
+* “append a UUID per row in Python”
+* “take engine row order and assign sequential IDs”
+
+### Why it must be relational
+
+Because Arrow/Acero and parallel engines do not guarantee stable row ordering unless you enforce it, and ordering can change with threading and versions. Your DSL doc explicitly calls out that ordering guarantees are *not stable* under threading and that determinism must be encoded as a contract, not developer memory. 
+
+If you generate IDs procedurally after materialization:
+
+* the same logical dataset can produce different IDs across runs,
+* downstream joins break,
+* and run bundles can’t be diffed meaningfully.
+
+## 2.3 The minimal rules for stable ID recipes
+
+You should standardize these rules globally (and then enforce them via a “finalize gate” or compiler validator):
+
+### Rule ID‑1: IDs must be a function of *semantic identity keys*
+
+Pick keys that define “same fact,” similar to your DSL’s dedupe guidance: choose keys that represent semantic identity, not incidental structure. 
+
+Examples of semantic identity keys:
+
+* **Syntax anchor**: `(file_id, bstart, bend, kind, subkind?)`
+* **Callsite**: `(file_id, callee_bstart, callee_bend, call_paren_bstart, call_paren_bend)` (if you need call-paren stability)
+* **Symbol node**: `(scip_symbol_string)`
+* **Binding slot**: `(scope_id, name)` 
+* **Edge**: `(src_id, dst_id, edge_kind, anchor_span?)`
+
+### Rule ID‑2: IDs must not depend on row order
+
+No use of:
+
+* implicit record batch order,
+* `row_number()` as identity (you *can* use row_number for winner selection, but not for ID).
+
+### Rule ID‑3: Normalize end semantics before hashing
+
+Before hashing:
+
+* normalize spans to the same convention (start inclusive, end exclusive),
+* normalize any “kind” strings (canonical enum value),
+* normalize strings (ensure consistent casing and encoding policies).
+
+### Rule ID‑4: Use a single canonical hash implementation
+
+This is the practical “best-in-class” approach:
+
+* define `stable_hash64` and `stable_hash128` as *named kernel functions* in your hybrid kernel bridge
+* provide:
+
+  * a DataFusion UDF implementation (preferred runtime),
+  * an Arrow kernel fallback implementation.
+
+Then in Ibis you only ever call:
+
+* `f.stable_hash64(...)` (function registry entry)
+  and the compiler determines whether that compiles to:
+* DataFusion builtin hash (if you decide), or
+* DataFusion UDF, or
+* fallback.
+
+This ensures:
+
+* identical IDs across engines,
+* and one place to audit hash behavior.
+
+### Rule ID‑5: Emit both “natural keys” and “hashed id” during migration
+
+During the PR‑05 migration period, output datasets should include:
+
+* the stable ID column, **and**
+* the natural key columns used to generate it (at least in debug mode).
+
+This makes debugging *dramatically* easier when you later discover span normalization mistakes.
+
+---
+
+# 3) “Span normalization must be join-driven against a line index”
+
+This is the other critical PR‑05 hinge, and it’s the piece that makes cross-source joins actually work.
+
+## 3.1 Why span normalization exists (the bytes-first invariant)
+
+Multiple upstream sources describe locations differently:
+
+* symtable is line-based (line/col)
+* AST often provides lineno/end_lineno + col offsets
+* SCIP occurrences use ranges in line/character space
+* LibCST can give byte spans directly
+* tree-sitter is byte-native
+
+But your CPG joins need a single coordinate system, and your design target is **bytes-first**, because byte spans are the best join key across tools and languages.
+
+Your CPG construction guide states the invariant explicitly:
+
+> Symtable is **line-based**. Your CPG is **bytes-first**. So symtable facts are only “index-grade” once you **anchor** them to AST/CST spans. 
+
+Span normalization is the step that converts “line/col-ish” spans into **canonical byte spans**.
+
+## 3.2 What a “line index” is (precise definition)
+
+A **line index** is a dataset that, for every file, provides a mapping:
+
+> **(file_id, line_no)** → **line_start_byte_offset**
+
+Optionally also:
+
+* line_end_byte_offset
+* line_text (or line_bytes)
+* per-line encoding features used for col→byte conversion
+
+### Minimal line index schema
+
+`file_line_index`:
+
+* `file_id: int64` (or stable file id)
+* `line_no: int32` (choose a canonical base: 0-based or 1-based; I recommend 0-based internally)
+* `line_start_byte: int64`
+* `line_end_byte: int64` (exclusive)
+* `line_text: string` (optional but extremely useful for col→byte conversion and validation)
+* `newline_kind: string` (optional diagnostic: LF/CRLF/none-last-line)
+
+### Why this table exists at all
+
+Because you will normalize **millions** of spans across a repo. You don’t want to:
+
+* repeatedly scan file contents per span,
+* run Python loops per span,
+* or re-derive line starts independently in every extractor.
+
+Instead you compute line starts once per file, store them, and then all span normalization is a **join + arithmetic** problem.
+
+That is what “join-driven” means.
+
+## 3.3 What “join-driven span normalization” means mechanically
+
+### Inputs
+
+You’ll usually have “raw span” tables with some variant of:
+
+* `file_id`
+* `start_line`, `start_col`
+* `end_line`, `end_col`
+* `coord_system` metadata (more on this below)
+
+### Output
+
+A normalized span table with:
+
+* `bstart`, `bend` (bytes, canonical)
+* `span_quality` / `confidence`
+* “raw coords preserved” columns (for debugging)
+
+### The join-driven computation (single-line case)
+
+To normalize a span:
+
+1. join raw spans to `file_line_index` on `(file_id, start_line)`
+2. compute `bstart = line_start_byte + col_to_byte(line_text, start_col, coord_system)`
+3. join raw spans to `file_line_index` on `(file_id, end_line)`
+4. compute `bend = line_start_byte + col_to_byte(line_text, end_col, coord_system)`
+
+This is relational because:
+
+* the file contents are not re-read inside the normalization for each span,
+* the per-line reference data is brought in via joins,
+* and the rest is vector arithmetic/UDF.
+
+### “col_to_byte” is the one hard part
+
+Different tools define “col” differently (and that’s where span normalization commonly goes wrong).
+
+You should treat this as a **kernel** (vectorized UDF):
+
+* input: `line_text` (string) and `col` (int)
+* output: `byte_offset_into_line` (int)
+
+The join-driven part provides the `line_text`. The kernel converts col semantics into bytes.
+
+---
+
+# 4) Where span normalization goes wrong (common failure modes + consequences)
+
+This is the context you explicitly asked for: what breaks, why, and what the downstream blast radius is.
+
+## 4.1 Failure mode: line numbering base mismatch
+
+Different sources may use:
+
+* 0-based lines (common in LSP-like systems),
+* 1-based lines (common in Python lineno).
+
+If you join `(file_id, line_no)` with the wrong base:
+
+* you compute bstart/bend on the wrong line,
+* and spans “look plausible” but are wrong.
+
+**Consequence**
+
+* AST↔CST joins by byte span fail or mis-join
+* SCIP occurrence linking attaches symbols to the wrong identifiers
+* your stable IDs become permanently wrong (because they’re hashed from bstart/bend)
+
+This is catastrophic because it produces *confidently wrong graph edges*, not just missing data.
+
+## 4.2 Failure mode: end position convention mismatch (inclusive vs exclusive)
+
+Some sources treat `end_col` as:
+
+* exclusive end,
+* inclusive end,
+* or “end of token” vs “end of node”.
+
+If you don’t normalize end semantics, you get:
+
+* off-by-one errors on bends
+* overlaps that shouldn’t exist
+* missing containment relationships
+
+**Consequence**
+
+* interval alignment joins (e.g., name token ↔ SCIP occurrence) become unstable
+* dedupe keys that include span_end change spuriously
+* callsite/callee anchoring becomes inconsistent
+
+## 4.3 Failure mode: “col” is not bytes (UTF‑8 vs codepoints vs UTF‑16)
+
+This is the most common subtle bug.
+
+Possible col meanings:
+
+* byte offset into UTF‑8 bytes
+* Unicode codepoint index
+* UTF‑16 code unit index (LSP often uses this)
+* “display columns” (tab expansion) — less common but real in some tools
+
+If you assume `col` is bytes but it’s actually codepoints (or UTF‑16), multi-byte characters cause drift.
+
+**Consequence**
+
+* ASCII-only repos look fine
+* repos with emoji / non-Latin identifiers produce broken cross-source joins
+* symbol resolution coverage drops unpredictably
+
+## 4.4 Failure mode: newline normalization mismatches
+
+If one source reads files with universal newlines (CRLF→LF) and another treats raw bytes:
+
+* line_start_byte differs
+* col offsets refer to different underlying strings
+
+**Consequence**
+
+* widespread join failure between sources for CRLF files
+* “mostly works” until you hit Windows-origin files, then everything breaks
+
+## 4.5 Failure mode: tabs treated inconsistently
+
+If a tool defines col as “visual columns” (tabs expand to 8) and you treat it as “character index”:
+
+* offsets drift after tabs
+
+**Consequence**
+
+* wrong spans in indented code blocks
+* especially damaging for leading whitespace tokens and decorators
+
+---
+
+# 5) How to prevent span normalization errors (design + validation rules)
+
+## 5.1 Span normalization rules (the concrete checklist)
+
+### Rule SPAN‑1: Every raw span dataset must declare its coordinate system
+
+Add columns like:
+
+* `line_base`: 0 or 1
+* `col_unit`: `"byte"` | `"codepoint"` | `"utf16"`
+* `end_is_exclusive`: bool
+
+This avoids “tribal knowledge” and makes normalization explicit.
+
+### Rule SPAN‑2: Normalize to one canonical span convention
+
+Canonical:
+
+* line_base → 0-based internal (or 1-based, but pick one)
+* end_is_exclusive → true
+* bstart/bend are UTF‑8 byte offsets into the canonical text representation
+
+### Rule SPAN‑3: Use the line index for line_start_byte; never recompute in the row loop
+
+Even if you *could* compute bstart by scanning the whole string each time, don’t.
+Join to `file_line_index` and add offsets.
+
+This is the “join-driven” rule.
+
+### Rule SPAN‑4: “col_to_byte” must be centralized and tested
+
+Implement `col_to_byte(line_text, col, col_unit)` as:
+
+* DataFusion UDF for runtime
+* Arrow kernel fallback (for correctness testing and non-DF lanes)
+
+### Rule SPAN‑5: Preserve raw coords + emit span_quality flags
+
+Every normalized span row should include:
+
+* raw line/col values
+* `span_quality`: enum like `OK`, `OUT_OF_RANGE`, `LINE_MISSING`, `BAD_COL_UNIT`, `NEGATIVE`, `REVERSED`
+* optional `confidence` float
+
+This makes debugging and telemetry straightforward.
+
+## 5.2 Validation gates (what to measure and when to fail)
+
+PR‑05 should introduce (or require) these checks:
+
+1. **Bounds check**
+
+* 0 ≤ bstart ≤ bend ≤ file_byte_length
+
+2. **Substring sanity check (sampled)**
+
+* for a sample of spans, slice the canonical file text and check:
+
+  * it is non-empty when expected
+  * it matches an identifier regex when the span claims to be an identifier token
+
+3. **Join coverage metrics**
+
+* percent of CST name refs that find at least one SCIP occurrence
+* percent of symtable scopes anchored to AST nodes
+  (this matters because symtable is line-based and must become byte-anchored to be “index-grade”) 
+
+4. **Deterministic dedupe gate**
+   Any relationship dataset that does “winner selection” must obey the DSL’s determinism contract:
+
+* explicit keys
+* explicit tie-breakers
+* total ordering (no ties left)
+  The DSL doc makes clear that determinism must be enforced as a contract because ordering guarantees can break under threading and because order-dependent aggregations exist. 
+
+---
+
+# 6) Putting it together: PR‑05 “rules we apply” (the final checklist)
+
+This is the compact “do this everywhere” rule set for the PR.
+
+## Rule group A — Plan builders are expression templates
+
+* Plan builders return `IbisPlan(expr=..., ordering=...)`, not Arrow tables.
+* No Python loops over rows.
+* No “materialize to inspect then re-enter” unless routed through the hybrid kernel bridge.
+
+(That’s exactly the intent of Scope 12.) 
+
+## Rule group B — Stable IDs are columns, derived from semantic identity
+
+* Every dataset that emits CPG-relevant entities must emit stable IDs as columns.
+* IDs are computed by deterministic hash over semantic identity keys.
+* IDs must not depend on row order or engine partitioning.
+* IDs must be computed in the plan (or via a registered UDF/kernel that is invoked as part of the plan).
+
+## Rule group C — Span normalization is a dedicated normalization pass
+
+* Build `file_line_index` once from canonical file text.
+* All line/col spans normalize via joins to `file_line_index`.
+* Column-to-byte conversion is centralized (`col_to_byte`) and coordinate system is explicit.
+
+## Rule group D — Determinism and winner selection are explicit
+
+* If the dataset has a dedupe policy: enforce canonical ordering + tie-breakers explicitly.
+* Do not rely on engine “natural order.”
+* The need for explicit determinism is a foundational DSL requirement (threading breaks ordering guarantees; deterministic dedupe must be standardized). 
+
+---
+
+# 7) What you should add to PR‑05 as explicit “context docs” for implementers
+
+If you want to remove all remaining ambiguity for your team/agents, PR‑05 should include a short internal doc (or module-level docstrings) that defines:
+
+1. **Canonical coordinate system**
+
+* what a byte span is, what it indexes into (canonical file text), and the end-exclusivity rule
+
+2. **`file_line_index` contract**
+
+* schema + how it is built + line numbering base
+
+3. **Stable ID recipes per entity family**
+
+* anchors, symbols, scopes/bindings, edges
+* which natural keys are used
+
+4. **A “span normalization failure playbook”**
+
+* typical symptoms:
+
+  * SCIP join coverage collapses
+  * AST↔CST join collapses
+* the metrics to inspect
+* how to identify which coordinate system mismatch is occurring
+
+This ensures future changes don’t silently break the core join substrate.
+
+---
+
+If you want, I can now convert the above into a **PR‑05 sub-PR stack** (05a line index + span normalization, 05b stable id kernel + function registry, 05c normalize builder conversions, 05d cpg builder conversions) in the same migration-plan format you’re using, so it’s directly executable by the team. 
+
+
+Below is a **PR‑05 sub‑PR stack** in the same “migration-plan” format as your `datafusion_engine_migration_plan.md` (with dense “why”, key code patterns, and executable checklists). 
+
+This stack is explicitly the “Scope 12” continuation—moving **normalize/extract/CPG plan builders** into **Ibis expressions** while preserving **schemas + invariants**. 
+
+---
+
+# PR‑05a: Line index + join-driven span normalization (byte offsets)
+
+## Description (what changes)
+
+Introduce a **canonical line-index dataset** per file and refactor all span normalization to be:
+
+* **join-driven** (raw spans ↔ line_index)
+* **unit-aware** (line/col → byte offsets)
+* **fully relational at the plan level** (no “read file text per-row” inside join rules)
+
+This provides the single, audited mechanism for producing **join-ready byte spans** that all later rules depend on.
+
+### What “line index” means (precise definition)
+
+A **line index** is a table derived from *the file bytes* with one row per (file_id, line_no):
+
+* `file_id: u64` (or stable file key)
+* `line_no0: i32` (0-based line index, canonical)
+* `line_start_byte: i64` (byte offset in file to the first byte of that line)
+* optional `line_end_byte: i64` (exclusive)
+* optional `line_text: large_string` (decoded line; useful for col→byte conversion when columns are codepoint-based)
+* optional `newline_kind: enum` / `has_crlf: bool` (diagnostics)
+
+Once you have `line_start_byte`, any line/col span can become a byte span as:
+
+* `bstart = line_start_byte + col_to_byte_offset(line_text, col_start, col_unit)`
+* `bend   = line_start_byte + col_to_byte_offset(line_text, col_end,   col_unit)`
+
+and now every downstream relationship rule can use **(file_id, bstart, bend)** as join keys.
+
+## Why this exists (functional intent + consequences)
+
+Span alignment is *the* “keystone join primitive” for CPG binding:
+
+* CST nodes, AST nodes, bytecode blocks, and SCIP occurrences all need to converge on shared span coordinates to link identity and meaning.
+* If spans are inconsistent, you get silent failure modes: joins that drop rows, incorrect candidate rankings, wrong winner selection, or “phantom ambiguity”.
+
+This PR makes span normalization:
+
+* deterministic and centrally auditable,
+* cheap (one scan per file to build line index),
+* relational (joins and projections), and therefore portable across engines.
+
+It also aligns with the DSL’s determinism ethos: **row order is rarely guaranteed**, and many operations destroy ordering—so if you derive *anything* (including IDs) from implicit order, you get drift. 
+
+## Common ways span normalization goes wrong (and why it matters)
+
+These are the failure modes you’re protecting against:
+
+1. **CRLF vs LF mismatch**
+
+* If one extractor treats CRLF as 2 bytes and another normalizes to LF, your byte offsets diverge.
+* Result: interval joins miss, “same node” fails to unify across sources.
+
+2. **0-based vs 1-based line numbers**
+
+* Some ecosystems are 1-based for line numbers. If you don’t canonicalize, everything shifts by one line.
+
+3. **Column unit mismatch**
+
+* Python `ast` columns are typically “character index” (codepoint-ish).
+* Other sources might be UTF-8 byte offsets.
+* If you treat codepoints as bytes, any non-ASCII yields wrong offsets and join failures.
+
+4. **End-exclusive vs end-inclusive spans**
+
+* Normalize to one convention (strongly recommend **end-exclusive** for intervals).
+* If you don’t, you’ll get off-by-one interval containment errors.
+
+5. **Missing `end_*`**
+
+* Some extractors provide start-only. You must define fallback heuristics (e.g., bend=bstart, or bstart+1 for tokens) and carry confidence/diagnostic flags.
+
+## Code patterns (key snippets only)
+
+### 1) Line index build surface (dataset contract)
 
 ```python
-from dataclasses import dataclass
-from ibis.expr.types import Table as IbisTable
-
-@dataclass(frozen=True)
-class PlanInputs:
-    # stable accessors to registered tables (by dataset id)
-    tables: dict[str, IbisTable]
-    # (optional) prebuilt param tables, e.g. for list filters
-    param_tables: dict[str, IbisTable]
-
-def build_normalized_spans(inputs: PlanInputs) -> "IbisPlan":
-    raw = inputs.tables["cst_spans_raw"]
-    files = inputs.tables["repo_files"]
-    expr = (
-        raw.join(files, predicates=[raw.file_id == files.file_id], how="inner")
-           .select(
-               raw.span_id,
-               raw.file_id,
-               raw.line_start,
-               raw.col_start,
-               raw.line_end,
-               raw.col_end,
-               # ...derived columns...
-           )
-    )
-    return IbisPlan(expr=expr, ordering=Ordering.unordered())
+# normalize/contracts.py-like (conceptual)
+LineIndexContract = {
+  "file_id": "uint64",
+  "line_no0": "int32",
+  "line_start_byte": "int64",
+  # optional but recommended:
+  "line_text": "large_string",
+}
 ```
 
-#### 2) Deterministic dedupe / “winner selection” via window + row_number
-
-(you must do this anywhere “pick best candidate” exists)
+### 2) Join-driven normalization pattern (Ibis)
 
 ```python
-import ibis
+raw = raw_spans  # file_id, start_line, start_col, end_line, end_col, col_unit, ...
+li  = line_index # file_id, line_no0, line_start_byte, line_text
 
-w = ibis.window(
-    group_by=[t.anchor_id, t.role],      # partition keys
-    order_by=[t.score.desc(), t.source_rank.asc(), t.candidate_id.asc()],  # tie-breakers
+# Join start line
+s = raw.join(
+  li,
+  predicates=[raw.file_id == li.file_id, raw.start_line0 == li.line_no0],
+).mutate(
+  bstart = li.line_start_byte + col_to_byte(li.line_text, raw.start_col, raw.col_unit)
 )
 
-ranked = t.mutate(_rn=ibis.row_number().over(w))
-winners = ranked.filter(ranked._rn == 0).drop("_rn")
+# Join end line (separate alias)
+li2 = li.view()
+out = s.join(
+  li2,
+  predicates=[s.file_id == li2.file_id, s.end_line0 == li2.line_no0],
+).mutate(
+  bend = li2.line_start_byte + col_to_byte(li2.line_text, s.end_col, s.col_unit)
+)
 ```
 
-#### 3) “Evidence split” pattern (filter by kind + project contract columns)
+### 3) `col_to_byte` must be a kernel/UDF (engine-agnostic)
+
+This is exactly the kind of “hard to express purely relationally” operation that belongs in the **hybrid kernel bridge**: prefer DataFusion built-ins; else Python UDF; else Arrow fallback. 
+
+DataFusion’s guidance: **UDFs should operate on Arrow arrays and use `pyarrow.compute.*`** for performance and correctness. 
 
 ```python
-defs = events.filter(events.kind == "def").select("code_unit_id", "symbol", "event_id")
-uses = events.filter(events.kind == "use").select("code_unit_id", "symbol", "event_id")
-joined = defs.join(uses, predicates=[defs.code_unit_id == uses.code_unit_id], how="inner")
+# pseudo-pattern
+def col_to_byte(line_text_arr: pa.Array, col_arr: pa.Array, unit_arr: pa.Array) -> pa.Array:
+    # vectorized conversion (codepoint→byte) implemented Arrow-native
+    ...
+
+# register as DataFusion scalar UDF (or keep as Arrow fallback kernel)
 ```
 
-(This is the exact kind of conversion PR‑05 should finish everywhere.) 
+## Implementation checklist (directly executable)
 
-#### 4) Optional inputs must compile to empty tables *with the correct schema*
+* [ ] Define canonical `line_no0` convention (0-based) + canonical newline policy (no implicit normalization unless explicitly encoded).
+* [ ] Add dataset: `file_line_index` (produced from repo file bytes; stored as parquet alongside extracted datasets).
+* [ ] Add a **single normalization function** `normalize_spans(raw_spans, line_index)` that:
+
+  * [ ] converts all line numbers to `*_line0`
+  * [ ] computes `(bstart, bend)` end-exclusive
+  * [ ] emits `span_confidence`, `span_diag_flags` (optional but strongly recommended)
+* [ ] Refactor each extractor’s “raw span table” to include:
+
+  * `start_line`, `start_col`, `end_line`, `end_col`
+  * `col_unit` (enum: `"codepoint" | "utf8_byte" | ...`)
+  * `span_source` (enum: AST/CST/SCIP/BC/SYMTABLE)
+* [ ] Add regression fixtures:
+
+  * [ ] CRLF file
+  * [ ] non-ASCII identifier file (e.g., `π = 1`)
+  * [ ] tabs and mixed indentation file
+* [ ] Add a **diagnostic join coverage report**:
+
+  * percent of raw spans that successfully join to line index
+  * percent with non-null bstart/bend
+  * distribution of `col_unit`
+
+## Status
+
+Pending.
+
+---
+
+# PR‑05b: Stable ID kernel + function registry (relational IDs, engine-safe)
+
+## Description (what changes)
+
+Implement a single, centralized **stable ID generation kernel** and expose it through:
+
+* the ExprIR→Ibis function registry (so builders use it like any other expression), and
+* the kernel bridge (so it runs as built-in / DataFusion UDF / Arrow fallback consistently).
+
+This PR makes the rule “**stable id generation must be expressed relationally**” enforceable in practice.
+
+## What “stable id generation must be expressed relationally” means
+
+It means:
+
+* **No ID is produced by “row order”** (`row_number()`, enumerate batches, etc.)
+* IDs are computed as a deterministic function of **semantic identity columns** via projection:
+
+  * `id = stable_hash64(col_a, col_b, ..., type_tags, null_sentinels)`
+* If IDs depend on implicit ordering, they will drift because joins/aggregations frequently destroy order (hash join in particular). 
+
+This is also essential for:
+
+* caching/materialization correctness,
+* stable diffs and manifests,
+* rule output reproducibility across machines/threads. 
+
+## Why this exists (functional intent)
+
+Your CPG build is only “rules-based” if identity is rules-based.
+
+Stable IDs are the glue across:
+
+* normalized datasets,
+* relationship outputs,
+* emitted node/edge tables.
+
+If an ID drifts because it came from incidental order, you cannot reliably:
+
+* dedupe/winner-select,
+* compare manifests,
+* reproduce run bundles.
+
+## Code patterns (key snippets only)
+
+### 1) Stable ID as an expression macro (Ibis-level)
 
 ```python
-def empty_table(schema: ibis.Schema) -> ibis.expr.types.Table:
-    # use a backend-friendly empty memtable pattern; schema must be explicit
-    return ibis.memtable([], schema=schema)
-
-t = inputs.tables.get("optional_dataset") or empty_table(OPTIONAL_SCHEMA)
+# ibis_engine/functions.py (conceptual)
+def stable_id64(*cols: ibis.Expr) -> ibis.IntegerValue:
+    # implemented by:
+    # - DF builtin if available
+    # - else DF UDF
+    # - else Arrow fallback kernel
+    return call_kernel("stable_id64", cols)
 ```
 
-#### 5) Complex transforms must be routed through the “hybrid kernel bridge”
-
-(keep the plan declarative; do the “hard part” as DF UDF/UDTF or Arrow fallback)
+### 2) Use it everywhere IDs are needed
 
 ```python
-# shape: ibis expr → (optional) batch materialize → pyarrow.compute transform → memtable back
-out = hybrid.apply_kernel(expr, kernel="explode_list_column", args={...})
+nodes = nodes.mutate(
+  node_id = stable_id64(nodes.repo_id, nodes.file_id, nodes.node_kind, nodes.bstart, nodes.bend)
+)
+edges = edges.mutate(
+  edge_id = stable_id64(edges.src_id, edges.dst_id, edges.edge_kind, edges.provenance_rank)
+)
 ```
 
----
+### 3) Determinism gates: canonical ordering + dedupe
 
-### Narrative (dense technical intent + function-level guidance)
+If any downstream step uses “keep first”, you must enforce canonical sort first. The DSL guide is explicit that “first” semantics are order-dependent and output ordering can drift (especially under threading). 
 
-#### A) What PR‑05 is *really* doing
+So the stable-ID rule pairs naturally with:
 
-Right now, any remaining “plan builders” that aren’t expressed as Ibis IR create three systemic problems:
+* canonical sort primitives (`sort_indices` + `take`) and
+* explicit dedupe specs (keys + tie-breakers + winner strategy). 
 
-1. **They are not optimizable** by SQLGlot/DataFusion in the same global plan context
-   If normalize/extract/cpg steps materialize Arrow early (or build bespoke plans), you’ve cut the plan graph, which prevents:
+## Implementation checklist
 
-   * join reordering,
-   * predicate pushdown into scans,
-   * projection pruning,
-   * and cost-based join strategy selection.
+* [ ] Specify ID recipes as contracts:
 
-2. **They aren’t portable** across engines
-   Your relspec compiler is converging on “engine agnostic” definitions. The moment a plan builder returns a concrete engine object (or Arrow table), you’ve violated the boundary.
+  * stable inputs (typed)
+  * null sentinel policy
+  * string normalization policy (e.g., NFC? exact bytes?—must be fixed)
+* [ ] Implement `stable_id64` kernel in the kernel bridge:
 
-3. **They block inference-driven extensibility**
-   Your target state is: “add a relationship rule / edge kind, and the system recomputes what’s needed.”
-   You don’t get that if half the derivations are implicit procedural code.
+  * [ ] attempt DataFusion built-in (if you standardize on one)
+  * [ ] else register a DataFusion scalar UDF (Arrow-native arrays; prefer `pyarrow.compute`) 
+  * [ ] else Arrow fallback kernel
+* [ ] Register it in the ExprIR→Ibis function registry (so all builders can call it) 
+* [ ] Add “no row-order IDs” lint gate:
 
-So PR‑05’s job is: *close the gap*—ensure everything that can be a relational operation becomes a relational expression.
+  * [ ] forbid usage of row_number/auto_increment patterns in normalize/cpg plan builders
+* [ ] Add golden tests:
 
----
+  * [ ] same input → same IDs across two runs
+  * [ ] shuffled input ordering → same IDs
 
-#### B) Normalize plan builders → strict relational derivations
+## Status
 
-Normalization is where you convert “extractor-specific representations” into **join keys** and **stable IDs**.
-
-PR‑05 should enforce these constraints in normalize builders:
-
-1. **No Python loops over rows**
-
-   * Anything row-wise should be represented as:
-
-     * an Ibis expression, or
-     * a DataFusion UDF/UDTF, or
-     * an Arrow compute kernel invoked via the hybrid bridge.
-
-2. **Stable ID generation must be expressed relationally**
-
-   * Preferred: a deterministic “hash of canonicalized fields” expressed as Ibis ops.
-   * If hashing primitives differ across engines, define a single canonical “id kernel” in the hybrid bridge:
-
-     * input: record batches with canonicalized columns
-     * output: `id64` / `id128` columns
-   * Then treat `id64/id128` as contract outputs from normalize tables, not “runtime incidental”.
-
-3. **Span normalization must be join-driven**
-
-   * Any mapping from (line, col) → byte offsets should be computed via joins against a “line index” table (per file).
-   * Ambiguity arises when:
-
-     * tabs vs spaces or different newline normalization,
-     * multi-byte encodings (UTF‑8) where “column” isn’t byte offset,
-     * CST “synthetic” nodes (implied tokens) don’t correspond to real source slices.
-   * Your normalize outputs must therefore add:
-
-     * `confidence` (or `span_quality`) fields,
-     * and preserve original coordinates for later debugging.
-
-4. **Bytecode CFG/DFG plan builders**
-   Bytecode-derived graphs often include:
-
-   * nested/array-like structures (basic block sequences, edge lists),
-   * explode/unnest transforms,
-   * and multi-stage unions.
-
-   The rule: keep the *shape* relational (tables of nodes/edges), and treat:
-
-   * list explosions,
-   * interval alignment,
-   * or “decode instruction arg” logic
-     as hybrid kernels (DataFusion UDTF if you implement, Arrow fallback otherwise).
+Pending.
 
 ---
 
-#### C) Extract plan builders → “evidence shaping”, not “computation”
+# PR‑05c: Convert normalize builders to Ibis expressions (span + ids + bytecode normalization)
 
-Extraction is the “ingress” of facts from AST/CST/SCIP/etc. It’s fine that the raw parsing is procedural, but **extract plan builders** should only do:
+## Description (what changes)
 
-* projection,
-* canonical renaming,
-* splitting tables by “kind”,
-* and applying repository/file filters (via PR‑06 params).
+Refactor the `normalize/*` plan builders to build **Ibis expressions** rather than ad-hoc logic, while preserving:
 
-The only acceptable computations here are *schema shaping* computations, e.g.:
+* schema contracts and column names,
+* deterministic invariants (ordering metadata where needed),
+* optional-input behavior (missing inputs yield empty tables).
 
-* deriving `qualified_name_candidates` from CST token segments (still relational string ops),
-* normalizing file paths,
-* standardizing symbol string forms for joins.
+This is directly aligned to “Scope 12” target files. 
 
-Everything else belongs in normalize or relspec rules.
+## Why normalize is special (dense rationale)
 
----
+Normalize is the “make it join-ready” stage:
 
-#### D) CPG plan builders → should collapse into relspec rule outputs
+* It converts raw extractor outputs into canonical keys:
 
-Your `cpg/` layer should increasingly become:
+  * `file_id` normalization
+  * span normalization (PR‑05a)
+  * stable IDs (PR‑05b)
+  * canonical typing/provenance columns
+* If normalize is not fully declarative, rule compilation cannot safely infer dependencies or validate contracts.
 
-* **node/edge emission from relationship datasets**, not bespoke joins.
+Normalize is also where you must be ruthless about determinism:
 
-But pragmatically, PR‑05 can:
+* Many transforms require dedupe/winner-selection.
+* Any time you do winner-selection, you must enforce ordering keys first. 
 
-1. convert remaining relationship plan builders into Ibis IR (so DataFusion can run them), and
-2. move them into relspec as *named rules* where possible.
+## Code patterns (key snippets only)
 
-Key idea: once relationship derivations are Ibis expressions, the *same rules* can be reused to emit:
+### 1) Normalize builder signature pattern
 
-* edge tables,
-* property tables,
-* diagnostics tables.
+```python
+def build_normalized_spans(raw_spans: ibis.Table, line_index: ibis.Table) -> ibis.Table:
+    # join-driven span normalization + stable ids
+    ...
+    return normalized
+```
 
-So in PR‑05, any `cpg/relationship_plans.py` style artifacts should become either:
+### 2) Optional inputs → empty tables contract
 
-* `relspec` rules (preferred), or
-* thin wrappers that just call the relspec compiler and return the rule output expression.
+```python
+def maybe_table(name: str, schema: pa.Schema) -> ibis.Table:
+    # if dataset missing, return ibis.memtable(empty_arrow_table(schema))
+    ...
+```
 
----
+### 3) Kernel bridge usage for hard ops
 
-#### E) Required updates to the DataFusion adapter / SQLGlot tooling (don’t skip)
+Span conversions and interval alignment are explicitly in-scope for the kernel bridge. 
 
-As you convert these plan builders, you will introduce expression constructs that *must* be supported consistently by:
+```python
+expr = expr.mutate(
+  bstart = call_kernel("col_to_byte", expr.line_text, expr.start_col, expr.col_unit)
+)
+```
 
-* **SQLGlot compilation** (for diagnostics & optimization)
-* **DataFusion df_builder** (for runtime SQL-free execution)
+## Implementation checklist
 
-The most common “new constructs” PR‑05 will introduce:
+* [ ] Convert these builders to Ibis expression builders:
 
-* window functions (row_number / dense_rank),
-* `CASE WHEN` (coalesce-style scoring),
-* struct/array ops (if you represent candidates as list columns),
-* string canonicalization functions.
+  * `normalize/plan_builders.py`
+  * `normalize/bytecode_cfg_plans.py`
+  * `normalize/bytecode_dfg_plans.py`
+  * `normalize/types_plans.py` 
+* [ ] Ensure each builder:
 
-Policy:
+  * [ ] returns an Ibis table expression (not materialized Arrow table)
+  * [ ] declares or preserves ordering metadata (unordered by default)
+  * [ ] applies stable ID projection via `stable_id64`
+  * [ ] uses PR‑05a span normalization outputs where spans are needed
+* [ ] Add schema parity tests:
 
-* if the DataFusion adapter doesn’t support a construct, **fail fast** with a “translator unsupported node” error that prints:
+  * [ ] columns match exactly
+  * [ ] metadata semantics preserved (ordering tags, determinism tier if encoded)
+* [ ] Add row-count sanity checks at key junctions:
 
-  * the SQLGlot subtree,
-  * the source rule name,
-  * and a suggested fallback (execute via backend SQL only in dev/debug).
+  * e.g., `#normalized_spans >= #raw_spans_joinable` (with diagnostics explaining any drop)
 
----
+## Status
 
-### Implementation checklist (PR‑05)
-
-* [ ] Inventory *all* remaining plan builders in normalize/extract/cpg and classify:
-
-  * (a) purely relational → rewrite to Ibis directly
-  * (b) relational + needs explode/interval align/ID hashing → route those pieces through hybrid kernel bridge
-  * (c) truly non-relational → keep procedural, but move out of plan builders (should be rare)
-* [ ] For each builder:
-
-  * [ ] Rewrite as `IbisTable` expression chain (`select`, `filter`, `mutate`, `join`, `aggregate`, `union`, `order_by`)
-  * [ ] Wrap in `IbisPlan(expr=..., ordering=...)`
-  * [ ] Apply contract projection at the end (explicit column list; explicit aliases)
-* [ ] Replace any “winner selection” logic with window-based ranking + deterministic tie-breakers
-* [ ] Enforce optional-input behavior: missing datasets compile to schema-correct empty tables
-* [ ] Add/extend SQLGlot snapshot diagnostics for each converted builder
-* [ ] Extend DataFusion df_builder translator for any newly used SQLGlot/Ibis nodes
-* [ ] Run end-to-end: parquet outputs (schemas + column names + row counts) unchanged
-
-**Status**: Proposed → ready to implement
+Pending.
 
 ---
 
+# PR‑05d: Convert CPG relationship plan builders to Ibis expressions (join + winner selection → edges)
+
+## Description (what changes)
+
+Refactor `cpg/relationship_plans.py` (and any remaining join-heavy CPG builders) into Ibis expression builders that:
+
+* consume normalized datasets (spans + IDs already canonical),
+* execute joins/winner selection deterministically, and
+* emit relationship datasets / edge tables with exact output schema contracts.
+
+This is the last major step in “Scope 12”. 
+
+## Why this is the payoff PR
+
+Once PR‑05a/b/c are in:
+
+* relationship rules become “just joins + policies”
+* ambiguity handling becomes centralized ranking + dedupe contracts
+* the CPG edge emission becomes stable and reproducible
+
+This is also where ordering/dedupe policy must be consistently enforced. The DSL guide gives the canonical primitive set:
+
+* stable sort via `sort_indices + take`
+* dedupe strategies like KEEP_FIRST_AFTER_SORT / KEEP_BEST_BY_SCORE
+* final canonical sort after grouping because group output ordering is not guaranteed. 
+
+## Code patterns (key snippets only)
+
+### 1) Relationship builder shape
+
+```python
+def build_callsite_symbol_edges(callsites: ibis.Table, scip_occ: ibis.Table) -> ibis.Table:
+    candidates = callsites.join(
+        scip_occ,
+        predicates=[
+          callsites.file_id == scip_occ.file_id,
+          # span overlap / containment is usually a kernel (interval align) or explicit predicate
+        ],
+    )
+
+    ranked = candidates.mutate(score = score_call_candidate(candidates))
+
+    winners = dedupe_by_policy(
+        ranked,
+        keys=("callsite_id",),
+        order_by=("score DESC", "confidence DESC", "span_len ASC"),
+        strategy="KEEP_FIRST_AFTER_SORT",
+    )
+
+    return winners.select(
+      "src_node_id", "dst_symbol_id", "edge_kind", "confidence", "provenance"
+    )
+```
+
+### 2) Prefer kernel bridge for interval alignment + explode
+
+This PR assumes PR‑04 kernel bridge patterns (built-in → UDF/UDTF → Arrow fallback) are available and used explicitly. 
+
+### 3) Output must match schema contracts, always
+
+This is consistent with the migration plan’s constraints (“preserve output schemas, column names, metadata semantics”). 
+
+## Implementation checklist
+
+* [ ] Convert `cpg/relationship_plans.py` to Ibis expression builders
+* [ ] Ensure relationship builders:
+
+  * [ ] never perform ad-hoc materialization mid-plan
+  * [ ] use normalized spans + stable IDs as join keys
+  * [ ] enforce canonical ordering before any KEEP_FIRST* policy
+  * [ ] emit confidence/provenance fields needed for diagnostics
+* [ ] Add “join coverage” diagnostics:
+
+  * percent of callsites with a resolved symbol edge
+  * percent that fall back to qualified-name edges
+  * ambiguity distributions (N candidates before winner selection)
+* [ ] Add parity harness:
+
+  * compare edge row counts and key distributions before/after conversion
+
+## Status
+
+Pending.
+
 ---
+
+# PR‑05 overall sequencing + merge strategy (how the stack fits)
+
+* **PR‑05a** must land first because it creates the canonical join keys (byte spans).
+* **PR‑05b** next because it defines the only allowed ID mechanism and plugs into the function registry/kernel bridge.
+* **PR‑05c** then converts normalize builders and ensures all downstream datasets already carry stable IDs + normalized spans.
+* **PR‑05d** finally converts CPG relationship builders, which now become mostly “pure join logic + policy”.
+
+This matches the migration plan’s intent: convert plan builders to Ibis while preserving schema invariants and optional-input behavior. 
+
+---
+
+
+
 
 ## PR‑06 — Parameterization everywhere (Ibis params + memtable-join for list params)
 

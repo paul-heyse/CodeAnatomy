@@ -13,12 +13,13 @@ from relspec.rules.rel_ops import ParamOp, RelOpT
 
 
 @dataclass(frozen=True)
-class ParamSpec:
-    """Parameter specification for rule execution."""
+class ScalarParamSpec:
+    """Scalar parameter specification for rule execution."""
 
     name: str
     dtype: str
-    kind: Literal["scalar", "array"] = "scalar"
+    default: object | None = None
+    required: bool = True
 
 
 @dataclass
@@ -26,8 +27,9 @@ class IbisParamRegistry:
     """Registry for mapping param specs to Ibis parameter expressions."""
 
     params: dict[str, Value] = field(default_factory=dict)
+    specs: dict[str, ScalarParamSpec] = field(default_factory=dict)
 
-    def register(self, spec: ParamSpec) -> Value:
+    def register(self, spec: ScalarParamSpec) -> Value:
         """Return (and register) the Ibis parameter for a spec.
 
         Returns
@@ -52,6 +54,7 @@ class IbisParamRegistry:
         dtype = _normalize_param_dtype(spec)
         param = ibis.param(ibis.dtype(dtype)).name(spec.name)
         self.params[spec.name] = param
+        self.specs[spec.name] = spec
         return param
 
     def bindings(self, values: Mapping[str, object]) -> dict[Value, object]:
@@ -67,14 +70,23 @@ class IbisParamRegistry:
         ValueError
             Raised when required parameter values are missing.
         """
-        missing = [name for name in self.params if name not in values]
+        resolved: dict[str, object] = dict(values)
+        missing: list[str] = []
+        for name, spec in self.specs.items():
+            if name in resolved:
+                continue
+            if spec.default is not None:
+                resolved[name] = spec.default
+                continue
+            if spec.required:
+                missing.append(name)
         if missing:
             msg = f"Missing parameter values: {sorted(missing)}."
             raise ValueError(msg)
-        return {self.params[name]: values[name] for name in self.params}
+        return {self.params[name]: resolved[name] for name in self.params}
 
 
-def specs_from_rel_ops(ops: Sequence[RelOpT]) -> tuple[ParamSpec, ...]:
+def specs_from_rel_ops(ops: Sequence[RelOpT]) -> tuple[ScalarParamSpec, ...]:
     """Extract parameter specs from a sequence of relational ops.
 
     Returns
@@ -82,11 +94,33 @@ def specs_from_rel_ops(ops: Sequence[RelOpT]) -> tuple[ParamSpec, ...]:
     tuple[ParamSpec, ...]
         Parameter specs in encounter order.
     """
-    return tuple(
-        ParamSpec(name=op.name, dtype=op.dtype, kind=_param_kind(op.dtype))
-        for op in ops
-        if isinstance(op, ParamOp)
-    )
+    specs: list[ScalarParamSpec] = []
+    for op in ops:
+        if not isinstance(op, ParamOp):
+            continue
+        if _param_kind(op.dtype) != "scalar":
+            continue
+        specs.append(ScalarParamSpec(name=op.name, dtype=op.dtype))
+    return tuple(specs)
+
+
+def list_param_names_from_rel_ops(ops: Sequence[RelOpT]) -> tuple[str, ...]:
+    """Return list-param names declared via ParamOp entries.
+
+    Returns
+    -------
+    tuple[str, ...]
+        List parameter names in encounter order.
+    """
+    names: list[str] = []
+    for op in ops:
+        if not isinstance(op, ParamOp):
+            continue
+        if _param_kind(op.dtype) != "array":
+            continue
+        if op.name:
+            names.append(op.name)
+    return tuple(dict.fromkeys(names))
 
 
 def _param_kind(dtype: str) -> Literal["scalar", "array"]:
@@ -96,17 +130,11 @@ def _param_kind(dtype: str) -> Literal["scalar", "array"]:
     return "scalar"
 
 
-def _normalize_param_dtype(spec: ParamSpec) -> str:
-    if spec.kind != "array":
-        return spec.dtype
-    normalized = spec.dtype.strip()
-    lowered = normalized.lower()
-    if lowered.startswith(("array<", "array[", "list<", "list[")):
-        return normalized
-    return f"array<{normalized}>"
+def _normalize_param_dtype(spec: ScalarParamSpec) -> str:
+    return spec.dtype
 
 
-def registry_from_specs(specs: Iterable[ParamSpec]) -> IbisParamRegistry:
+def registry_from_specs(specs: Iterable[ScalarParamSpec]) -> IbisParamRegistry:
     """Build an Ibis parameter registry from parameter specs.
 
     Returns
@@ -131,21 +159,51 @@ def registry_from_ops(ops: Sequence[RelOpT]) -> IbisParamRegistry:
     return registry_from_specs(specs_from_rel_ops(ops))
 
 
-def datafusion_param_bindings(values: Mapping[str, object]) -> dict[str, object]:
+def datafusion_param_bindings(
+    values: Mapping[str, object] | Mapping[Value, object],
+) -> dict[str, object]:
     """Return DataFusion parameter bindings for execution.
 
     Returns
     -------
     dict[str, object]
         DataFusion parameter bindings.
+
+    Raises
+    ------
+    ValueError
+        Raised when a parameter expression lacks a stable name.
     """
-    return dict(values)
+    bindings: dict[str, object] = {}
+    for key, value in values.items():
+        if isinstance(key, str):
+            bindings[key] = value
+            continue
+        name = _param_name(key)
+        if not name:
+            msg = "Parameter expression is missing a stable name."
+            raise ValueError(msg)
+        bindings[name] = value
+    return bindings
+
+
+def _param_name(param: Value) -> str:
+    getter = getattr(param, "get_name", None)
+    if callable(getter):
+        result = getter()
+        return result if isinstance(result, str) else ""
+    return ""
+
+
+ParamSpec = ScalarParamSpec
 
 
 __all__ = [
     "IbisParamRegistry",
     "ParamSpec",
+    "ScalarParamSpec",
     "datafusion_param_bindings",
+    "list_param_names_from_rel_ops",
     "registry_from_ops",
     "registry_from_specs",
     "specs_from_rel_ops",

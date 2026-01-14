@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
@@ -40,6 +41,7 @@ class OutputConfig:
     work_dir: str | None
     output_dir: str | None
     overwrite_intermediate_datasets: bool
+    materialize_param_tables: bool = False
 
 
 @dataclass(frozen=True)
@@ -260,3 +262,24 @@ class RelspecSnapshots:
     rule_diagnostics: pa.Table
     contracts: ContractCatalog
     compiled_outputs: dict[str, CompiledOutput]
+
+
+@dataclass(frozen=True)
+class ParamBundle:
+    """Runtime parameter values grouped for scalar and list bindings."""
+
+    scalar: Mapping[str, object] = field(default_factory=dict)
+    lists: Mapping[str, tuple[object, ...]] = field(default_factory=dict)
+
+    def list_values(self, name: str) -> tuple[object, ...]:
+        """Return list values for a param name.
+
+        Returns
+        -------
+        tuple[object, ...]
+            List parameter values, or an empty tuple when missing.
+        """
+        values = self.lists.get(name)
+        if values is None:
+            return ()
+        return tuple(values)

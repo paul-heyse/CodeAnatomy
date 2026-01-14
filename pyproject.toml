@@ -59,6 +59,7 @@ dependencies = [
     "polars>=1.37.1",
     "pygithub>=2.8.1",
     "ibis-framework[datafusion]>=11.0.0",
+    "ibis-substrait>=3.2.0",
 ]
 
 [tool.ruff]

@@ -69,10 +69,15 @@ def sqlglot_metadata(
     optimized = normalize_expr(sg_expr, schema=schema, rules=rules)
     tables = _extract_tables(optimized)
     columns = _extract_columns(optimized)
-    opts = {"unsupported_level": ErrorLevel.RAISE} if strict else {}
+    if strict:
+        raw_sql = sg_expr.sql(unsupported_level=ErrorLevel.RAISE)
+        optimized_sql = optimized.sql(unsupported_level=ErrorLevel.RAISE)
+    else:
+        raw_sql = sg_expr.sql()
+        optimized_sql = optimized.sql()
     return SqlGlotMetadata(
-        raw_sql=sg_expr.sql(**opts),
-        optimized_sql=optimized.sql(**opts),
+        raw_sql=raw_sql,
+        optimized_sql=optimized_sql,
         tables=tables,
         columns=columns,
     )

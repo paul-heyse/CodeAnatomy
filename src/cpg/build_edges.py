@@ -5,24 +5,32 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+import ibis
 import pyarrow as pa
 from ibis.backends import BaseBackend
 
-from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import SchemaLike, Table, TableLike
+from arrowdsl.core.context import ExecutionContext, Ordering
+from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, Table, TableLike
 from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan.query import ScanTelemetry
-from arrowdsl.plan.runner import AdapterRunOptions, run_plan_bundle_adapter
 from arrowdsl.plan.scan_io import DatasetSource
-from arrowdsl.schema.schema import EncodingSpec
+from arrowdsl.plan_helpers import FinalizePlanAdapterOptions, finalize_plan_adapter
+from arrowdsl.schema.ops import encode_table
+from arrowdsl.schema.schema import EncodingSpec, empty_table
 from config import AdapterMode
 from cpg.catalog import PlanCatalog
-from cpg.constants import CpgBuildArtifacts, QualityPlanSpec, quality_plan_from_ids
+from cpg.constants import (
+    CpgBuildArtifacts,
+    QualityPlanSpec,
+    quality_from_ids,
+    quality_plan_from_ids,
+)
 from cpg.edge_specs import edge_plan_specs_from_table
 from cpg.emit_edges import emit_edges_plan
-from cpg.ibis_bridge import plan_bundle_to_ibis
+from cpg.emit_edges_ibis import emit_edges_ibis
 from cpg.plan_specs import (
     align_plan,
+    align_table_to_schema,
     assert_schema_metadata,
     empty_plan,
     encode_plan,
@@ -35,8 +43,10 @@ from cpg.relationship_plans import (
     RelationPlanBundle,
     RelationPlanCompileOptions,
     compile_relation_plans,
+    compile_relation_plans_ibis,
 )
 from cpg.specs import EdgePlanSpec
+from ibis_engine.plan import IbisPlan
 
 
 def _encoding_specs(schema: SchemaLike) -> tuple[EncodingSpec, ...]:
@@ -50,6 +60,96 @@ def _edge_plan_specs(
 ) -> tuple[EdgePlanSpec, ...]:
     table = relation_rule_table or registry.relation_rule_table
     return edge_plan_specs_from_table(table)
+
+
+def _materialize_table(table: TableLike | RecordBatchReaderLike) -> TableLike:
+    if isinstance(table, RecordBatchReaderLike):
+        return table.read_all()
+    return table
+
+
+def _empty_edges_ibis(schema: SchemaLike) -> IbisPlan:
+    table = empty_table(schema)
+    return IbisPlan(expr=ibis.memtable(table), ordering=Ordering.unordered())
+
+
+def _union_edges_ibis(parts: list[IbisPlan]) -> IbisPlan:
+    combined = parts[0].expr
+    for part in parts[1:]:
+        combined = combined.union(part.expr)
+    return IbisPlan(expr=combined, ordering=Ordering.unordered())
+
+
+def _build_edges_raw_ibis(edge_context: EdgeRelationContext) -> EdgePlanBundle:
+    relation_plans = edge_context.relation_bundle.plans
+    parts: list[IbisPlan] = []
+    for spec in _edge_plan_specs(
+        edge_context.relation_rule_table,
+        registry=edge_context.registry,
+    ):
+        enabled = getattr(edge_context.options, spec.option_flag, None)
+        if enabled is None:
+            msg = f"Unknown option flag: {spec.option_flag}"
+            raise ValueError(msg)
+        if not enabled:
+            continue
+        rel = relation_plans.get(spec.relation_ref)
+        if rel is None:
+            continue
+        if not isinstance(rel, IbisPlan):
+            msg = f"Expected Ibis plan for relation {spec.relation_ref!r}."
+            raise TypeError(msg)
+        parts.append(emit_edges_ibis(rel, spec=spec.emit))
+    if not parts:
+        return EdgePlanBundle(
+            plan=_empty_edges_ibis(edge_context.edges_schema),
+            telemetry=edge_context.relation_bundle.telemetry,
+        )
+    return EdgePlanBundle(
+        plan=_union_edges_ibis(parts),
+        telemetry=edge_context.relation_bundle.telemetry,
+    )
+
+
+def _build_edges_raw_plan(
+    edge_context: EdgeRelationContext,
+    *,
+    ctx: ExecutionContext,
+) -> EdgePlanBundle:
+    relation_plans = edge_context.relation_bundle.plans
+    parts: list[Plan] = []
+    for spec in _edge_plan_specs(
+        edge_context.relation_rule_table,
+        registry=edge_context.registry,
+    ):
+        enabled = getattr(edge_context.options, spec.option_flag, None)
+        if enabled is None:
+            msg = f"Unknown option flag: {spec.option_flag}"
+            raise ValueError(msg)
+        if not enabled:
+            continue
+        rel = relation_plans.get(spec.relation_ref)
+        if rel is None:
+            continue
+        if not isinstance(rel, Plan):
+            msg = f"Expected plan for relation {spec.relation_ref!r}."
+            raise TypeError(msg)
+        parts.append(emit_edges_plan(rel, spec=spec.emit, ctx=ctx))
+    if not parts:
+        return EdgePlanBundle(
+            plan=empty_plan(edge_context.edges_schema, label="cpg_edges_raw"),
+            telemetry=edge_context.relation_bundle.telemetry,
+        )
+    combined = union_all_plans(parts, label="cpg_edges_raw")
+    combined = encode_plan(
+        combined,
+        specs=_encoding_specs(edge_context.edges_schema),
+        ctx=ctx,
+    )
+    return EdgePlanBundle(
+        plan=align_plan(combined, schema=edge_context.edges_schema, ctx=ctx),
+        telemetry=edge_context.relation_bundle.telemetry,
+    )
 
 
 @dataclass(frozen=True)
@@ -96,13 +196,14 @@ class EdgeRelationContext:
     edges_schema: SchemaLike
     relation_rule_table: pa.Table
     registry: CpgRegistry
+    use_ibis: bool
 
 
 @dataclass(frozen=True)
 class EdgePlanBundle:
     """Raw edge plan plus relspec scan telemetry."""
 
-    plan: Plan
+    plan: Plan | IbisPlan
     telemetry: Mapping[str, ScanTelemetry] = field(default_factory=dict)
 
 
@@ -121,37 +222,31 @@ def _edge_relation_context(
     catalog = _edge_catalog(inputs or EdgeBuildInputs())
     spec_tables = config.spec_tables or EdgeSpecOverrides()
     relation_rule_table = spec_tables.relation_rule_table or registry.relation_rule_table
-    relation_bundle = compile_relation_plans(
-        catalog,
-        ctx=ctx,
-        options=RelationPlanCompileOptions(
-            rule_table=relation_rule_table,
-            materialize_debug=config.materialize_relation_outputs,
-            required_sources=config.required_relation_sources,
-        ),
-    )
-    if config.adapter_mode is not None and config.adapter_mode.use_ibis_bridge:
+    use_ibis = bool(config.adapter_mode and config.adapter_mode.use_ibis_bridge)
+    if use_ibis:
         if config.ibis_backend is None:
             msg = "Ibis backend is required when AdapterMode.use_ibis_bridge is enabled."
             raise ValueError(msg)
-        ibis_plans = plan_bundle_to_ibis(
-            relation_bundle.plans,
+        relation_bundle = compile_relation_plans_ibis(
+            catalog,
             ctx=ctx,
             backend=config.ibis_backend,
-            name_prefix="cpg_rel",
-        )
-        tables = run_plan_bundle_adapter(
-            ibis_plans,
-            ctx=ctx,
-            options=AdapterRunOptions(
-                adapter_mode=config.adapter_mode,
-                prefer_reader=False,
-                attach_ordering_metadata=True,
+            options=RelationPlanCompileOptions(
+                rule_table=relation_rule_table,
+                materialize_debug=config.materialize_relation_outputs,
+                required_sources=config.required_relation_sources,
+                backend=config.ibis_backend,
             ),
         )
-        relation_bundle = RelationPlanBundle(
-            plans={name: Plan.table_source(table, label=name) for name, table in tables.items()},
-            telemetry=relation_bundle.telemetry,
+    else:
+        relation_bundle = compile_relation_plans(
+            catalog,
+            ctx=ctx,
+            options=RelationPlanCompileOptions(
+                rule_table=relation_rule_table,
+                materialize_debug=config.materialize_relation_outputs,
+                required_sources=config.required_relation_sources,
+            ),
         )
     return EdgeRelationContext(
         relation_bundle=relation_bundle,
@@ -159,6 +254,7 @@ def _edge_relation_context(
         edges_schema=edges_schema,
         relation_rule_table=relation_rule_table,
         registry=registry,
+        use_ibis=use_ibis,
     )
 
 
@@ -257,40 +353,11 @@ def build_cpg_edges_raw(
     -------
     EdgePlanBundle
         Raw plan plus scan telemetry.
-
-    Raises
-    ------
-    ValueError
-        Raised when an option flag is missing.
     """
     edge_context = _edge_relation_context(config, ctx=ctx)
-    relation_plans = edge_context.relation_bundle.plans
-
-    parts: list[Plan] = []
-    for spec in _edge_plan_specs(edge_context.relation_rule_table, registry=edge_context.registry):
-        enabled = getattr(edge_context.options, spec.option_flag, None)
-        if enabled is None:
-            msg = f"Unknown option flag: {spec.option_flag}"
-            raise ValueError(msg)
-        if not enabled:
-            continue
-        rel = relation_plans.get(spec.relation_ref)
-        if rel is None:
-            continue
-        parts.append(emit_edges_plan(rel, spec=spec.emit, ctx=ctx))
-
-    if not parts:
-        return EdgePlanBundle(
-            plan=empty_plan(edge_context.edges_schema, label="cpg_edges_raw"),
-            telemetry=edge_context.relation_bundle.telemetry,
-        )
-
-    combined = union_all_plans(parts, label="cpg_edges_raw")
-    combined = encode_plan(combined, specs=_encoding_specs(edge_context.edges_schema), ctx=ctx)
-    return EdgePlanBundle(
-        plan=align_plan(combined, schema=edge_context.edges_schema, ctx=ctx),
-        telemetry=edge_context.relation_bundle.telemetry,
-    )
+    if edge_context.use_ibis:
+        return _build_edges_raw_ibis(edge_context)
+    return _build_edges_raw_plan(edge_context, ctx=ctx)
 
 
 def build_cpg_edges(
@@ -313,6 +380,39 @@ def build_cpg_edges(
         config=config,
     )
     raw_plan = raw_bundle.plan
+    if isinstance(raw_plan, IbisPlan):
+        raw_table = finalize_plan_adapter(
+            raw_plan,
+            ctx=ctx,
+            options=FinalizePlanAdapterOptions(adapter_mode=config.adapter_mode),
+        )
+        raw = _materialize_table(raw_table)
+        raw = encode_table(
+            raw,
+            columns=encoding_columns_from_metadata(edges_spec.schema()),
+        )
+        raw = align_table_to_schema(
+            raw,
+            schema=edges_spec.schema(),
+            safe_cast=ctx.safe_cast,
+        )
+        quality = quality_from_ids(
+            raw,
+            id_col="edge_id",
+            entity_kind="edge",
+            issue="invalid_edge_id",
+            source_table="cpg_edges_raw",
+        )
+        finalize = edges_spec.finalize_context(ctx).run(raw, ctx=ctx)
+        if ctx.debug:
+            assert_schema_metadata(finalize.good, schema=edges_spec.schema())
+        return CpgBuildArtifacts(
+            finalize=finalize,
+            quality=quality,
+            pipeline_breakers=(),
+            relspec_scan_telemetry=raw_bundle.telemetry,
+        )
+
     quality_plan = quality_plan_from_ids(
         raw_plan,
         spec=QualityPlanSpec(

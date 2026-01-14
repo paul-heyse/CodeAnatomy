@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 from ibis.backends import BaseBackend
+from ibis.expr.types import Table
 
 from arrowdsl.compute.ids import masked_hash_expr
 from arrowdsl.compute.macros import ColumnOrNullExpr
@@ -27,7 +28,7 @@ from arrowdsl.core.interop import (
     pc,
 )
 from arrowdsl.finalize.finalize import Contract, FinalizeOptions, FinalizeResult, finalize
-from arrowdsl.plan.catalog import PlanCatalog
+from arrowdsl.plan.catalog import PlanCatalog, PlanDeriver
 from arrowdsl.plan.plan import Plan, PlanSpec
 from arrowdsl.plan.runner import AdapterRunOptions, PlanRunResult, run_plan, run_plan_adapter
 from arrowdsl.plan.scan_io import plan_from_source
@@ -36,9 +37,12 @@ from arrowdsl.schema.ops import align_table
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from ibis_engine.plan import IbisPlan
-from ibis_engine.plan_bridge import plan_to_ibis
+from ibis_engine.plan_bridge import SourceToIbisOptions, plan_to_ibis, source_to_ibis
 from normalize.catalog import NormalizePlanCatalog
 from normalize.contracts import NORMALIZE_EVIDENCE_NAME, normalize_evidence_schema
+from normalize.ibis_bridge import resolve_plan_builder_ibis
+from normalize.ibis_plan_builders import IbisPlanCatalog, IbisPlanSource
+from normalize.plan_builders import PLAN_BUILDERS
 from normalize.policies import ambiguity_kernels, confidence_expr
 from normalize.registry_specs import dataset_metadata_spec, dataset_schema, dataset_spec
 from normalize.registry_validation import validate_rule_specs
@@ -497,19 +501,61 @@ def compile_normalize_plans_ibis(
     -------
     dict[str, IbisPlan]
         Mapping of output dataset names to Ibis plans.
+
+    Raises
+    ------
+    ValueError
+        Raised when a rule requires plan execution but no plan is available.
     """
-    plans = compile_normalize_plans(
-        catalog,
-        ctx=ctx,
-        rules=options.rules,
-        required_outputs=options.required_outputs,
+    rule_set = _default_normalize_rules(ctx) if options.rules is None else tuple(options.rules)
+    if options.required_outputs:
+        required_set = _expand_required_outputs(rule_set, options.required_outputs)
+        rule_set = tuple(rule for rule in rule_set if rule.output in required_set)
+    for rule in rule_set:
+        _validate_rule_policies(rule)
+    work_catalog = _clone_catalog(catalog)
+    evidence = EvidenceCatalog.from_plan_catalog(work_catalog, ctx=ctx)
+    selectors = RuleSelectors(
+        inputs_for=lambda rule: rule.inputs,
+        output_for=lambda rule: rule.output,
+        name_for=lambda rule: rule.name,
+        priority_for=lambda rule: rule.priority,
+        evidence_for=lambda rule: _central_evidence(rule.evidence),
+        output_schema_for=_normalize_output_schema,
     )
-    return normalize_plans_to_ibis(
-        plans,
-        ctx=ctx,
+    ordered = order_rules_by_evidence(
+        rule_set,
+        evidence=evidence,
+        selectors=selectors,
+        allow_fallback=True,
+        label="Normalize rule",
+    )
+
+    repo_text_index = (
+        work_catalog.repo_text_index if isinstance(work_catalog, NormalizePlanCatalog) else None
+    )
+    tables: dict[str, IbisPlanSource] = {}
+    tables.update(work_catalog.snapshot())
+    ibis_catalog = IbisPlanCatalog(
         backend=options.backend,
-        name_prefix=options.name_prefix,
+        tables=tables,
+        repo_text_index=repo_text_index,
     )
+    plans: dict[str, IbisPlan] = {}
+    for rule in ordered:
+        plan = _resolve_rule_plan_ibis(rule, ibis_catalog, ctx=ctx, backend=options.backend)
+        if plan is None:
+            if rule.execution_mode == "plan":
+                msg = f"Normalize rule {rule.name!r} requires plan execution."
+                raise ValueError(msg)
+            continue
+        plans[rule.output] = plan
+        ibis_catalog.add(rule.output, plan)
+        try:
+            evidence.register(rule.output, dataset_schema(rule.output))
+        except KeyError:
+            continue
+    return plans
 
 
 def compile_normalize_graph_plan(
@@ -620,6 +666,50 @@ def _resolve_rule_plan(
     if rule.query is not None:
         plan = rule.query.apply_to_plan(plan, ctx=ctx)
     return plan
+
+
+_PLAN_BUILDER_NAMES: dict[PlanDeriver, str] = {fn: name for name, fn in PLAN_BUILDERS.items()}
+
+
+def _resolve_rule_plan_ibis(
+    rule: NormalizeRule,
+    catalog: IbisPlanCatalog,
+    *,
+    ctx: ExecutionContext,
+    backend: BaseBackend,
+) -> IbisPlan | None:
+    if rule.derive is None:
+        if not rule.inputs:
+            return None
+        source = catalog.tables.get(rule.inputs[0])
+        if source is None:
+            return None
+        if isinstance(source, IbisPlan):
+            return source
+        if isinstance(source, Table):
+            return source_to_ibis(
+                source,
+                options=SourceToIbisOptions(
+                    ctx=ctx,
+                    backend=backend,
+                    name=rule.inputs[0],
+                ),
+            )
+        plan_source = plan_from_source(cast("PlanSource", source), ctx=ctx, label=rule.inputs[0])
+        return source_to_ibis(
+            plan_source,
+            options=SourceToIbisOptions(
+                ctx=ctx,
+                backend=backend,
+                name=rule.inputs[0],
+            ),
+        )
+    builder_name = _PLAN_BUILDER_NAMES.get(rule.derive)
+    if builder_name is None:
+        msg = f"Unknown normalize Ibis builder for rule {rule.name!r}."
+        raise KeyError(msg)
+    builder = resolve_plan_builder_ibis(builder_name)
+    return builder(catalog, ctx, backend)
 
 
 def _materialize_evidence_output(

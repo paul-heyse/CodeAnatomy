@@ -303,6 +303,30 @@ def _repo_scan_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...
             "metadata_extra": None,
             "evidence_required_columns": None,
         },
+        {
+            **base,
+            "name": "file_line_index_v1",
+            "fields": [
+                "line_no",
+                "line_start_byte",
+                "line_end_byte",
+                "line_text",
+                "newline_kind",
+            ],
+            "derived": None,
+            "row_fields": None,
+            "row_extras": None,
+            "ordering_keys": [
+                {"column": "path", "order": "ascending"},
+                {"column": "line_no", "order": "ascending"},
+            ],
+            "join_keys": ["file_id", "line_no"],
+            "enabled_when": None,
+            "feature_flag": None,
+            "postprocess": None,
+            "metadata_extra": None,
+            "evidence_required_columns": None,
+        },
     )
 
 

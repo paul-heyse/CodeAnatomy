@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -18,9 +18,9 @@ from arrowdsl.io.parquet import (
     ParquetWriteOptions,
     write_named_datasets_parquet,
 )
+from arrowdsl.plan.query import ScanTelemetry
 from arrowdsl.schema.schema import empty_table
 from config import AdapterMode
-from core_types import JsonDict
 from cpg.build_edges import EdgeBuildConfig, EdgeBuildInputs, build_cpg_edges
 from cpg.build_nodes import NodeInputTables, build_cpg_nodes
 from cpg.build_props import PropsInputTables, build_cpg_props
@@ -32,6 +32,7 @@ from hamilton_pipeline.pipeline_types import (
     CstBuildInputs,
     CstRelspecInputs,
     DiagnosticsInputs,
+    ParamBundle,
     QnameInputs,
     RelationshipOutputTables,
     RuntimeInputs,
@@ -39,6 +40,12 @@ from hamilton_pipeline.pipeline_types import (
     ScipOccurrenceInputs,
     TreeSitterInputs,
     TypeInputs,
+)
+from ibis_engine.param_tables import (
+    ParamTablePolicy,
+    ParamTableRegistry,
+    ParamTableSpec,
+    param_table_name,
 )
 from ibis_engine.params_bridge import IbisParamRegistry, registry_from_specs, specs_from_rel_ops
 from ibis_engine.plan import IbisPlan
@@ -63,13 +70,15 @@ from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
 )
-from relspec.model import RelationshipRule
+from relspec.model import DatasetRef, RelationshipRule
+from relspec.param_deps import RuleDependencyReport
 from relspec.policies import evidence_spec_from_schema
 from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation
 from relspec.rules.compiler import RuleCompiler
 from relspec.rules.evidence import EvidenceCatalog
 from relspec.rules.handlers.cpg import RelationshipRuleHandler
 from relspec.rules.registry import RuleRegistry
+from relspec.rules.validation import SqlGlotDiagnosticsConfig, rule_dependency_reports
 from schema_spec.specs import ArrowFieldSpec, call_span_bundle, span_bundle
 from schema_spec.system import (
     GLOBAL_SCHEMA_REGISTRY,
@@ -84,8 +93,10 @@ from schema_spec.system import (
     make_table_spec,
     table_spec_from_schema,
 )
+from sqlglot_tools.bridge import IbisCompilerBackend
 
 if TYPE_CHECKING:
+    from ibis.expr.types import Table as IbisTable
     from ibis.expr.types import Value as IbisValue
 
     from arrowdsl.plan.scan_io import DatasetSource
@@ -310,7 +321,10 @@ def schema_registry(
 
 
 @tag(layer="relspec", artifact="rule_registry", kind="registry")
-def rule_registry() -> RuleRegistry:
+def rule_registry(
+    param_table_specs: tuple[ParamTableSpec, ...],
+    param_table_policy: ParamTablePolicy,
+) -> RuleRegistry:
     """Build the central rule registry.
 
     Returns
@@ -324,7 +338,9 @@ def rule_registry() -> RuleRegistry:
             RelspecRuleAdapter(),
             NormalizeRuleAdapter(),
             ExtractRuleAdapter(),
-        )
+        ),
+        param_table_specs=param_table_specs,
+        param_table_policy=param_table_policy,
     )
 
 
@@ -343,10 +359,38 @@ def relspec_param_registry(rule_registry: RuleRegistry) -> IbisParamRegistry:
     return registry_from_specs(specs)
 
 
+@tag(layer="relspec", artifact="relspec_param_dependency_reports", kind="object")
+def relspec_param_dependency_reports(
+    rule_registry: RuleRegistry,
+    ibis_backend: BaseBackend,
+    param_table_specs: tuple[ParamTableSpec, ...],
+    param_table_policy: ParamTablePolicy,
+    ctx: ExecutionContext,
+) -> tuple[RuleDependencyReport, ...]:
+    """Return inferred param dependency reports for relspec rules.
+
+    Returns
+    -------
+    tuple[RuleDependencyReport, ...]
+        Dependency reports for relspec rules.
+    """
+    rules = rule_registry.rule_definitions()
+    return rule_dependency_reports(
+        rules,
+        config=SqlGlotDiagnosticsConfig(
+            backend=cast("IbisCompilerBackend", ibis_backend),
+            registry=GLOBAL_SCHEMA_REGISTRY,
+            ctx=ctx,
+            param_table_specs=param_table_specs,
+            param_table_policy=param_table_policy,
+        ),
+    )
+
+
 @tag(layer="relspec", artifact="relspec_param_bindings", kind="object")
 def relspec_param_bindings(
     relspec_param_registry: IbisParamRegistry,
-    relspec_param_values: JsonDict,
+    param_bundle: ParamBundle,
 ) -> Mapping[IbisValue, object]:
     """Return parameter bindings for relspec execution.
 
@@ -355,7 +399,7 @@ def relspec_param_bindings(
     Mapping[IbisValue, object]
         Parameter bindings for Ibis plan execution.
     """
-    return relspec_param_registry.bindings(relspec_param_values)
+    return relspec_param_registry.bindings(param_bundle.scalar)
 
 
 # -----------------------------
@@ -539,6 +583,8 @@ def relspec_resolver(
     relspec_mode: str,
     relspec_input_datasets: dict[str, TableLike],
     persist_relspec_input_datasets: dict[str, DatasetLocation],
+    ibis_backend: BaseBackend,
+    param_table_registry: ParamTableRegistry | None,
 ) -> PlanResolver[IbisPlan]:
     """Select the relationship resolver implementation.
 
@@ -552,13 +598,33 @@ def relspec_resolver(
         Resolver instance for relationship rule compilation.
     """
     mode = (relspec_mode or "memory").lower().strip()
+    if param_table_registry is None:
+        param_tables: Mapping[str, IbisTable] = {}
+        policy = ParamTablePolicy()
+    else:
+        param_tables = param_table_registry.ibis_tables(ibis_backend)
+        policy = param_table_registry.policy
+    param_aliases = _param_table_aliases(param_tables, policy=policy)
     if mode == "filesystem":
         cat = DatasetCatalog()
         for name, loc in persist_relspec_input_datasets.items():
             cat.register(name, loc)
-        return FilesystemPlanResolver(cat)
+        base = FilesystemPlanResolver(cat, backend=ibis_backend)
+        if not param_aliases:
+            return base
+        param_resolver = InMemoryPlanResolver(param_aliases, backend=ibis_backend)
+        return _CompositePlanResolver(
+            primary=param_resolver,
+            fallback=base,
+            primary_names=frozenset(param_aliases),
+        )
 
-    return InMemoryPlanResolver(relspec_input_datasets)
+    combined: dict[str, TableLike | IbisPlan | IbisTable] = dict(
+        relspec_input_datasets
+    )
+    for name, table in param_aliases.items():
+        combined.setdefault(name, table)
+    return InMemoryPlanResolver(combined, backend=ibis_backend)
 
 
 def _relationship_rule_schema(
@@ -614,6 +680,47 @@ def _runtime_telemetry(ctx: ExecutionContext) -> Mapping[str, object]:
     if profile is None:
         return {}
     return {"datafusion": profile.telemetry_payload()}
+
+
+def _param_table_aliases(
+    param_tables: Mapping[str, IbisTable],
+    *,
+    policy: ParamTablePolicy,
+) -> dict[str, IbisTable]:
+    aliases: dict[str, IbisTable] = {}
+    for logical_name, table in param_tables.items():
+        table_name = param_table_name(policy, logical_name)
+        names = (
+            logical_name,
+            table_name,
+            f"{policy.schema}.{table_name}",
+            f"{policy.catalog}.{policy.schema}.{table_name}",
+        )
+        for name in names:
+            aliases.setdefault(name, table)
+    return aliases
+
+
+@dataclass(frozen=True)
+class _CompositePlanResolver(PlanResolver[IbisPlan]):
+    primary: PlanResolver[IbisPlan]
+    fallback: PlanResolver[IbisPlan]
+    primary_names: frozenset[str]
+
+    def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
+        if ref.name in self.primary_names:
+            return self.primary.resolve(ref, ctx=ctx)
+        return self.fallback.resolve(ref, ctx=ctx)
+
+    def telemetry(
+        self,
+        ref: DatasetRef,
+        *,
+        ctx: ExecutionContext,
+    ) -> ScanTelemetry | None:
+        if ref.name in self.primary_names:
+            return self.primary.telemetry(ref, ctx=ctx)
+        return self.fallback.telemetry(ref, ctx=ctx)
 
 
 def _compile_relationship_outputs(

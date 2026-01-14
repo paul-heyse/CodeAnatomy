@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Literal, cast
 
 import ibis
+import pyarrow as pa
+from sqlglot import exp
 
-import arrowdsl.core.interop as pa
 from arrowdsl.compute.expr_core import ExprSpec
+from arrowdsl.core import interop
 from arrowdsl.core.interop import DataTypeLike, FieldLike, SchemaLike
 from arrowdsl.schema.build import list_view_type
 from arrowdsl.schema.metadata import ENCODING_DICTIONARY, ENCODING_META, dict_field_metadata
@@ -19,7 +21,7 @@ SCHEMA_META_NAME = b"schema_name"
 SCHEMA_META_VERSION = b"schema_version"
 REQUIRED_NON_NULL_META = b"required_non_null"
 KEY_FIELDS_META = b"key_fields"
-DICT_STRING = pa.dictionary(pa.int32(), pa.string())
+DICT_STRING = interop.dictionary(interop.int32(), interop.string())
 
 PROVENANCE_COLS: tuple[str, ...] = (
     "prov_filename",
@@ -77,6 +79,13 @@ def _field_metadata(metadata: dict[str, str]) -> dict[bytes, bytes]:
     return {str(k).encode("utf-8"): str(v).encode("utf-8") for k, v in metadata.items()}
 
 
+def _ensure_arrow_dtype(dtype: DataTypeLike) -> pa.DataType:
+    if isinstance(dtype, pa.DataType):
+        return dtype
+    msg = f"Expected pyarrow.DataType, got {type(dtype)!r}."
+    raise TypeError(msg)
+
+
 _SIMPLE_IBIS_TYPES: tuple[tuple[Callable[[pa.DataType], bool], str], ...] = (
     (pa.types.is_boolean, "boolean"),
     (pa.types.is_int8, "int8"),
@@ -96,35 +105,69 @@ _SIMPLE_IBIS_TYPES: tuple[tuple[Callable[[pa.DataType], bool], str], ...] = (
 )
 
 
-def _arrow_dtype_to_ibis(dtype: pa.DataType) -> str:
+def _arrow_dtype_to_ibis(dtype: DataTypeLike) -> str:
+    arrow_dtype = _ensure_arrow_dtype(dtype)
     for check, name in _SIMPLE_IBIS_TYPES:
-        if check(dtype):
+        if check(arrow_dtype):
             return name
-    if pa.types.is_timestamp(dtype):
-        return _timestamp_to_ibis(dtype)
-    if pa.types.is_list(dtype) or pa.types.is_large_list(dtype):
-        return _list_to_ibis(dtype)
-    if pa.types.is_struct(dtype):
-        return _struct_to_ibis(dtype)
-    if pa.types.is_dictionary(dtype):
-        return _arrow_dtype_to_ibis(dtype.value_type)
-    msg = f"Unsupported Arrow dtype for Ibis schema: {dtype}"
+    if pa.types.is_timestamp(arrow_dtype):
+        return _timestamp_to_ibis(cast("pa.TimestampType", arrow_dtype))
+    if pa.types.is_list(arrow_dtype) or pa.types.is_large_list(arrow_dtype):
+        list_dtype = cast("pa.ListType | pa.LargeListType", arrow_dtype)
+        return _list_to_ibis(list_dtype)
+    if pa.types.is_struct(arrow_dtype):
+        return _struct_to_ibis(cast("pa.StructType", arrow_dtype))
+    if pa.types.is_dictionary(arrow_dtype):
+        dict_dtype = cast("pa.DictionaryType", arrow_dtype)
+        return _arrow_dtype_to_ibis(dict_dtype.value_type)
+    msg = f"Unsupported Arrow dtype for Ibis schema: {arrow_dtype}"
     raise ValueError(msg)
 
 
-def _timestamp_to_ibis(dtype: pa.DataType) -> str:
+def _timestamp_to_ibis(dtype: pa.TimestampType) -> str:
     unit = dtype.unit
     tz = f", tz='{dtype.tz}'" if dtype.tz else ""
     return f"timestamp('{unit}'{tz})"
 
 
-def _list_to_ibis(dtype: pa.DataType) -> str:
+def _list_to_ibis(dtype: pa.ListType | pa.LargeListType) -> str:
     return f"array<{_arrow_dtype_to_ibis(dtype.value_type)}>"
 
 
-def _struct_to_ibis(dtype: pa.DataType) -> str:
+def _struct_to_ibis(dtype: pa.StructType) -> str:
     fields = ", ".join(f"{field.name}: {_arrow_dtype_to_ibis(field.type)}" for field in dtype)
     return f"struct<{fields}>"
+
+
+def _sql_literal(value: str) -> str:
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _external_table_options_clause(options: Mapping[str, object] | None) -> str | None:
+    if not options:
+        return None
+    formatted: list[str] = []
+    for key, value in options.items():
+        if key in {"schema", "table_name"} or value is None:
+            continue
+        rendered = _option_literal(value)
+        if rendered is None:
+            continue
+        formatted.append(f"{_sql_literal(str(key))} {rendered}")
+    if not formatted:
+        return None
+    return f"OPTIONS ({', '.join(formatted)})"
+
+
+def _option_literal(value: object) -> str | None:
+    if isinstance(value, bool):
+        return _sql_literal("true" if value else "false")
+    if isinstance(value, (int, float)):
+        return _sql_literal(str(value))
+    if isinstance(value, str):
+        return _sql_literal(value)
+    return None
 
 
 @dataclass(frozen=True)
@@ -149,7 +192,7 @@ class ArrowFieldSpec:
         if self.encoding is not None:
             metadata[ENCODING_META] = self.encoding
         metadata = _field_metadata(metadata)
-        return pa.field(self.name, self.dtype, nullable=self.nullable, metadata=metadata)
+        return interop.field(self.name, self.dtype, nullable=self.nullable, metadata=metadata)
 
 
 def dict_field(
@@ -167,10 +210,10 @@ def dict_field(
     ArrowFieldSpec
         Field spec configured with dictionary encoding metadata.
     """
-    idx_type = index_type or pa.int32()
+    idx_type = index_type or interop.int32()
     meta = dict_field_metadata(index_type=idx_type, ordered=ordered, metadata=metadata)
-    dict_factory = cast("Callable[..., object]", pa.dictionary)
-    dtype = cast("DataTypeLike", dict_factory(idx_type, pa.string(), ordered=ordered))
+    dict_factory = cast("Callable[..., object]", interop.dictionary)
+    dtype = cast("DataTypeLike", dict_factory(idx_type, interop.string(), ordered=ordered))
     return ArrowFieldSpec(
         name=name,
         dtype=dtype,
@@ -185,6 +228,19 @@ class DerivedFieldSpec:
 
     name: str
     expr: ExprSpec
+
+
+@dataclass(frozen=True)
+class ExternalTableConfig:
+    """Configuration for CREATE EXTERNAL TABLE statements."""
+
+    location: str
+    file_format: str
+    table_name: str | None = None
+    dialect: str | None = None
+    options: Mapping[str, object] | None = None
+    partitioned_by: Sequence[str] | None = None
+    compression: str | None = None
 
 
 @dataclass(frozen=True)
@@ -252,7 +308,7 @@ class TableSchemaSpec:
         pyarrow.Schema
             Arrow schema instance.
         """
-        schema = pa.schema([field.to_arrow_field() for field in self.fields])
+        schema = interop.schema([field.to_arrow_field() for field in self.fields])
         meta = schema_metadata_for_spec(self)
         return SchemaMetadataSpec(schema_metadata=meta).apply(schema)
 
@@ -266,15 +322,16 @@ class TableSchemaSpec:
         """
         return ibis.schema({field.name: _arrow_dtype_to_ibis(field.dtype) for field in self.fields})
 
-    def to_sqlglot_column_defs(self, *, dialect: str | None = None) -> list[object]:
+    def to_sqlglot_column_defs(self, *, dialect: str | None = None) -> list[exp.ColumnDef]:
         """Return SQLGlot ColumnDef nodes for the schema.
 
         Returns
         -------
-        list[object]
+        list[sqlglot.expressions.ColumnDef]
             SQLGlot ColumnDef nodes derived from the Ibis schema.
         """
-        return self.to_ibis_schema().to_sqlglot_column_defs(dialect=dialect)
+        dialect_name = dialect or "ansi"
+        return self.to_ibis_schema().to_sqlglot_column_defs(dialect=dialect_name)
 
     def to_create_table_sql(
         self,
@@ -290,9 +347,34 @@ class TableSchemaSpec:
             CREATE TABLE statement using SQLGlot-rendered column definitions.
         """
         name = table_name or self.name
-        column_defs = self.to_sqlglot_column_defs(dialect=dialect)
-        columns_sql = ", ".join(col.sql(dialect=dialect) for col in column_defs)
+        dialect_name = dialect or "ansi"
+        column_defs = self.to_sqlglot_column_defs(dialect=dialect_name)
+        columns_sql = ", ".join(col.sql(dialect=dialect_name) for col in column_defs)
         return f"CREATE TABLE {name} ({columns_sql})"
+
+    def to_create_external_table_sql(self, config: ExternalTableConfig) -> str:
+        """Return a CREATE EXTERNAL TABLE statement for the schema.
+
+        Returns
+        -------
+        str
+            CREATE EXTERNAL TABLE statement using SQLGlot-rendered column definitions.
+        """
+        name = config.table_name or self.name
+        dialect_name = config.dialect or "datafusion"
+        column_defs = self.to_sqlglot_column_defs(dialect=dialect_name)
+        columns_sql = ", ".join(col.sql(dialect=dialect_name) for col in column_defs)
+        parts = [f"CREATE EXTERNAL TABLE {name} ({columns_sql})"]
+        parts.append(f"STORED AS {config.file_format.upper()}")
+        if config.compression:
+            parts.append(f"COMPRESSION TYPE {config.compression}")
+        parts.append(f"LOCATION {_sql_literal(config.location)}")
+        if config.partitioned_by:
+            parts.append(f"PARTITIONED BY ({', '.join(config.partitioned_by)})")
+        options_clause = _external_table_options_clause(config.options)
+        if options_clause:
+            parts.append(options_clause)
+        return "\n".join(parts)
 
     def to_transform(
         self,
@@ -332,7 +414,7 @@ class NestedFieldSpec:
 
     name: str
     dtype: DataTypeLike
-    builder: Callable[..., pa.ArrayLike]
+    builder: Callable[..., interop.ArrayLike]
 
 
 def file_identity_bundle(*, include_sha256: bool = True) -> FieldBundle:
@@ -344,11 +426,11 @@ def file_identity_bundle(*, include_sha256: bool = True) -> FieldBundle:
         Bundle containing file identity fields.
     """
     fields = [
-        ArrowFieldSpec(name="file_id", dtype=pa.string()),
-        ArrowFieldSpec(name="path", dtype=pa.string()),
+        ArrowFieldSpec(name="file_id", dtype=interop.string()),
+        ArrowFieldSpec(name="path", dtype=interop.string()),
     ]
     if include_sha256:
-        fields.append(ArrowFieldSpec(name="file_sha256", dtype=pa.string()))
+        fields.append(ArrowFieldSpec(name="file_sha256", dtype=interop.string()))
     return FieldBundle(name="file_identity", fields=tuple(fields))
 
 
@@ -363,8 +445,8 @@ def span_bundle() -> FieldBundle:
     return FieldBundle(
         name="span",
         fields=(
-            ArrowFieldSpec(name="bstart", dtype=pa.int64()),
-            ArrowFieldSpec(name="bend", dtype=pa.int64()),
+            ArrowFieldSpec(name="bstart", dtype=interop.int64()),
+            ArrowFieldSpec(name="bend", dtype=interop.int64()),
         ),
     )
 
@@ -380,8 +462,8 @@ def call_span_bundle() -> FieldBundle:
     return FieldBundle(
         name="call_span",
         fields=(
-            ArrowFieldSpec(name="call_bstart", dtype=pa.int64()),
-            ArrowFieldSpec(name="call_bend", dtype=pa.int64()),
+            ArrowFieldSpec(name="call_bstart", dtype=interop.int64()),
+            ArrowFieldSpec(name="call_bend", dtype=interop.int64()),
         ),
     )
 
@@ -396,13 +478,13 @@ def scip_range_bundle(*, prefix: str = "", include_len: bool = False) -> FieldBu
     """
     normalized = f"{prefix}_" if prefix and not prefix.endswith("_") else prefix
     fields = [
-        ArrowFieldSpec(name=f"{normalized}start_line", dtype=pa.int32()),
-        ArrowFieldSpec(name=f"{normalized}start_char", dtype=pa.int32()),
-        ArrowFieldSpec(name=f"{normalized}end_line", dtype=pa.int32()),
-        ArrowFieldSpec(name=f"{normalized}end_char", dtype=pa.int32()),
+        ArrowFieldSpec(name=f"{normalized}start_line", dtype=interop.int32()),
+        ArrowFieldSpec(name=f"{normalized}start_char", dtype=interop.int32()),
+        ArrowFieldSpec(name=f"{normalized}end_line", dtype=interop.int32()),
+        ArrowFieldSpec(name=f"{normalized}end_char", dtype=interop.int32()),
     ]
     if include_len:
-        fields.append(ArrowFieldSpec(name=f"{normalized}range_len", dtype=pa.int32()))
+        fields.append(ArrowFieldSpec(name=f"{normalized}range_len", dtype=interop.int32()))
     name = f"{normalized}scip_range" if normalized else "scip_range"
     return FieldBundle(name=name, fields=tuple(fields))
 
@@ -418,10 +500,10 @@ def provenance_bundle() -> FieldBundle:
     return FieldBundle(
         name="provenance",
         fields=(
-            ArrowFieldSpec(name=PROVENANCE_COLS[0], dtype=pa.string()),
-            ArrowFieldSpec(name=PROVENANCE_COLS[1], dtype=pa.int32()),
-            ArrowFieldSpec(name=PROVENANCE_COLS[2], dtype=pa.int32()),
-            ArrowFieldSpec(name=PROVENANCE_COLS[3], dtype=pa.bool_()),
+            ArrowFieldSpec(name=PROVENANCE_COLS[0], dtype=interop.string()),
+            ArrowFieldSpec(name=PROVENANCE_COLS[1], dtype=interop.int32()),
+            ArrowFieldSpec(name=PROVENANCE_COLS[2], dtype=interop.int32()),
+            ArrowFieldSpec(name=PROVENANCE_COLS[3], dtype=interop.bool_()),
         ),
     )
 

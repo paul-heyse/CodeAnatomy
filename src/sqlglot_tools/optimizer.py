@@ -2,16 +2,31 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import ClassVar, cast
+from typing import TypedDict, Unpack, cast
 
-from sqlglot import Dialect, Expression, exp
+from sqlglot import Dialect, ErrorLevel, Expression, exp
 from sqlglot.generator import Generator as SqlGlotGenerator
 from sqlglot.optimizer import optimize
 from sqlglot.optimizer.qualify import qualify
 
 SchemaMapping = Mapping[str, Mapping[str, str]]
+
+
+class GeneratorInitKwargs(TypedDict, total=False):
+    pretty: bool | None
+    identify: bool | str
+    normalize: bool
+    pad: int
+    indent: int
+    normalize_functions: bool | str | None
+    unsupported_level: ErrorLevel
+    max_unsupported: int
+    leading_comma: bool
+    max_text_width: int
+    comments: bool
+    dialect: Dialect | str | type[Dialect] | None
 
 
 @dataclass(frozen=True)
@@ -22,7 +37,9 @@ class CanonicalizationRules:
     function_renames: Mapping[str, str] = field(default_factory=dict)
 
 
-def canonicalize_expr(expr: Expression, *, rules: CanonicalizationRules | None = None) -> Expression:
+def canonicalize_expr(
+    expr: Expression, *, rules: CanonicalizationRules | None = None
+) -> Expression:
     """Return a canonicalized SQLGlot expression.
 
     Applies deterministic renames for columns and functions when rules are provided.
@@ -53,13 +70,16 @@ def canonicalize_expr(expr: Expression, *, rules: CanonicalizationRules | None =
     return expr.transform(_rewrite)
 
 
+def _array_transform(generator: SqlGlotGenerator, expression: Expression) -> str:
+    return "ARRAY[" + generator.expressions(expression) + "]"
+
+
 class DataFusionGenerator(SqlGlotGenerator):
     """SQL generator overrides for DataFusion."""
 
-    TRANSFORMS: ClassVar[dict[type[Expression], object]] = {
-        **SqlGlotGenerator.TRANSFORMS,
-        exp.Array: lambda self, e: "ARRAY[" + self.expressions(e) + "]",
-    }
+    def __init__(self, **kwargs: Unpack[GeneratorInitKwargs]) -> None:
+        super().__init__(**kwargs)
+        self.TRANSFORMS = {**self.TRANSFORMS, exp.Array: _array_transform}
 
 
 class DataFusionDialect(Dialect):
@@ -106,6 +126,8 @@ def normalize_expr(
     *,
     schema: SchemaMapping | None = None,
     rules: CanonicalizationRules | None = None,
+    rewrite_hook: Callable[[Expression], Expression] | None = None,
+    enable_rewrites: bool = True,
 ) -> Expression:
     """Return a qualified + optimized SQLGlot expression.
 
@@ -115,17 +137,81 @@ def normalize_expr(
         Normalized expression tree.
     """
     canonical = canonicalize_expr(expr, rules=rules)
-    qualified = qualify_expr(canonical, schema=schema)
+    rewritten = rewrite_expr(canonical, rewrite_hook=rewrite_hook, enabled=enable_rewrites)
+    qualified = qualify_expr(rewritten, schema=schema)
     return optimize_expr(qualified, schema=schema)
+
+
+def rewrite_expr(
+    expr: Expression,
+    *,
+    rewrite_hook: Callable[[Expression], Expression] | None = None,
+    enabled: bool = True,
+) -> Expression:
+    """Return a SQLGlot expression after applying a rewrite hook.
+
+    Returns
+    -------
+    sqlglot.Expression
+        Rewritten expression tree.
+    """
+    if not enabled or rewrite_hook is None:
+        return expr
+    return rewrite_hook(expr)
+
+
+def bind_params(expr: Expression, *, params: Mapping[str, object]) -> Expression:
+    """Return a SQLGlot expression with parameter nodes bound to literals.
+
+    Returns
+    -------
+    sqlglot.Expression
+        Expression tree with parameters replaced by literals.
+    """
+    if not params:
+        return expr
+
+    def _rewrite(node: Expression) -> Expression:
+        if isinstance(node, exp.Parameter):
+            name = _param_name(node)
+            if name not in params:
+                msg = f"Missing parameter binding for {name!r}."
+                raise KeyError(msg)
+            return _literal_from_value(params[name])
+        return node
+
+    return expr.transform(_rewrite)
+
+
+def _param_name(node: exp.Parameter) -> str:
+    name = getattr(node, "name", None)
+    if isinstance(name, str):
+        return name
+    value = node.this
+    return value if isinstance(value, str) else str(value)
+
+
+def _literal_from_value(value: object) -> Expression:
+    if value is None:
+        return exp.Null()
+    if isinstance(value, bool):
+        return exp.Boolean(this=value)
+    if isinstance(value, int):
+        return exp.Literal.number(value)
+    if isinstance(value, float):
+        return exp.Literal.number(value)
+    return exp.Literal.string(str(value))
 
 
 __all__ = [
     "CanonicalizationRules",
     "DataFusionDialect",
     "SchemaMapping",
+    "bind_params",
     "canonicalize_expr",
     "normalize_expr",
     "optimize_expr",
     "qualify_expr",
     "register_datafusion_dialect",
+    "rewrite_expr",
 ]

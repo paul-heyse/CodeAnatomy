@@ -5,16 +5,17 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.json_factory import JsonPolicy, dump_path
+from arrowdsl.json_factory import JsonPolicy, dump_path, json_default
 from arrowdsl.plan.metrics import table_summary
 from arrowdsl.schema.schema import schema_fingerprint
-from core_types import JsonDict, PathLike, ensure_path
+from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from extract.evidence_specs import EvidenceSpec, evidence_spec, evidence_specs
 from extract.registry_extractors import extractor_spec
 from extract.registry_specs import dataset_schema
+from ibis_engine.param_tables import ParamTableArtifact
 from obs.repro import collect_repro_info
 
 if TYPE_CHECKING:
@@ -108,6 +109,7 @@ class Manifest:
     outputs: list[OutputRecord] = field(default_factory=list)
     lineage: list[OutputLineageRecord] = field(default_factory=list)
     extracts: list[ExtractRecord] = field(default_factory=list)
+    params: JsonDict = field(default_factory=dict)
 
     repro: JsonDict = field(default_factory=dict)
     notes: JsonDict = field(default_factory=dict)
@@ -152,7 +154,10 @@ class ManifestData:
     normalize_output_lineage: Mapping[str, Sequence[str]] | None = None
     relspec_scan_telemetry: Mapping[str, Mapping[str, ScanTelemetry]] | None = None
     datafusion_settings: Sequence[Mapping[str, str]] | None = None
+    datafusion_metrics: Mapping[str, object] | None = None
+    datafusion_traces: Mapping[str, object] | None = None
     dataset_registry_snapshot: Sequence[Mapping[str, object]] | None = None
+    param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None
     notes: JsonDict | None = None
 
 
@@ -392,6 +397,29 @@ def _scan_telemetry_payload(
     return payload
 
 
+def _json_dict_list(rows: Sequence[Mapping[str, object]]) -> list[JsonDict]:
+    payload: list[JsonDict] = []
+    for row in rows:
+        record: JsonDict = {}
+        for key, value in row.items():
+            record[str(key)] = cast("JsonValue", json_default(value))
+        payload.append(record)
+    return payload
+
+
+def _param_tables_payload(data: ManifestData) -> JsonDict:
+    if not data.param_table_artifacts:
+        return {}
+    payload: JsonDict = {}
+    for name, artifact in data.param_table_artifacts.items():
+        payload[name] = {
+            "rows": int(artifact.rows),
+            "signature": artifact.signature,
+            "schema_fingerprint": artifact.schema_fingerprint,
+        }
+    return payload
+
+
 def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
     """Construct a run manifest with the required fields.
 
@@ -436,8 +464,13 @@ def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
         notes["relspec_scan_telemetry"] = _scan_telemetry_payload(data.relspec_scan_telemetry)
     if data.datafusion_settings:
         notes["datafusion_settings"] = list(data.datafusion_settings)
+    if data.datafusion_metrics:
+        notes["datafusion_metrics"] = cast("JsonValue", data.datafusion_metrics)
+    if data.datafusion_traces:
+        notes["datafusion_traces"] = cast("JsonValue", data.datafusion_traces)
     if data.dataset_registry_snapshot:
-        notes["dataset_registry_snapshot"] = list(data.dataset_registry_snapshot)
+        notes["dataset_registry_snapshot"] = _json_dict_list(data.dataset_registry_snapshot)
+    params_payload = _param_tables_payload(data)
 
     return Manifest(
         manifest_version=1,
@@ -451,6 +484,7 @@ def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
         outputs=outputs,
         lineage=lineage,
         extracts=extracts,
+        params=params_payload,
         repro=repro,
         notes=notes,
     )

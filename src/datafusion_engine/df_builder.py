@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
 
+import pyarrow as pa
 from datafusion import SessionContext, col, lit
 from datafusion import functions as f
 from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr, SortExpr
 from sqlglot import Expression, exp
 
-from datafusion_engine.registry_bridge import register_dataset_df
+from datafusion_engine.registry_bridge import DataFusionCachePolicy, register_dataset_df
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.registry import DatasetLocation
 
 
@@ -43,6 +46,27 @@ _JOIN_TYPE_MAP: dict[str, JoinType] = {
     "full": "full",
     "semi": "semi",
     "anti": "anti",
+}
+
+_SQLGLOT_CAST_TYPES: dict[exp.DataType.Type, pa.DataType] = {
+    exp.DataType.Type.BOOLEAN: pa.bool_(),
+    exp.DataType.Type.TINYINT: pa.int8(),
+    exp.DataType.Type.SMALLINT: pa.int16(),
+    exp.DataType.Type.INT: pa.int32(),
+    exp.DataType.Type.BIGINT: pa.int64(),
+    exp.DataType.Type.UTINYINT: pa.uint8(),
+    exp.DataType.Type.USMALLINT: pa.uint16(),
+    exp.DataType.Type.UINT: pa.uint32(),
+    exp.DataType.Type.UBIGINT: pa.uint64(),
+    exp.DataType.Type.FLOAT: pa.float32(),
+    exp.DataType.Type.DOUBLE: pa.float64(),
+    exp.DataType.Type.DATE: pa.date32(),
+    exp.DataType.Type.DATE32: pa.date32(),
+    exp.DataType.Type.TIME: pa.time64("us"),
+    exp.DataType.Type.TIMESTAMP: pa.timestamp("us"),
+    exp.DataType.Type.TIMESTAMP_S: pa.timestamp("s"),
+    exp.DataType.Type.TIMESTAMP_MS: pa.timestamp("ms"),
+    exp.DataType.Type.TIMESTAMP_NS: pa.timestamp("ns"),
 }
 
 
@@ -78,6 +102,8 @@ def register_dataset(
     *,
     name: str,
     location: DatasetLocation,
+    cache_policy: DataFusionCachePolicy | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> DataFrame:
     """Register a dataset location with DataFusion and return a DataFrame.
 
@@ -92,7 +118,13 @@ def register_dataset(
         Raised when the dataset format is not supported.
     """
     try:
-        return register_dataset_df(ctx, name=name, location=location)
+        return register_dataset_df(
+            ctx,
+            name=name,
+            location=location,
+            cache_policy=cache_policy,
+            runtime_profile=runtime_profile,
+        )
     except ValueError as exc:
         raise TranslationError(str(exc)) from exc
 
@@ -108,6 +140,8 @@ def _select_to_df(ctx: SessionContext, select: exp.Select) -> DataFrame:
         df = df.select(*_select_exprs(select.expressions))
     if select.args.get("having") is not None:
         df = df.filter(_expr_to_df(select.args["having"].this))
+    if select.args.get("distinct") is not None:
+        df = df.distinct()
     if select.args.get("order") is not None:
         df = df.sort(*_order_exprs(select.args["order"]))
     if select.args.get("limit") is not None:
@@ -141,7 +175,9 @@ def _apply_joins(
     for join in joins:
         right = _join_source(ctx, join.this)
         how = _join_type(join)
-        join_keys = _join_keys(join.args.get("on"))
+        left_schema = tuple(df.schema().names)
+        right_schema = tuple(right.schema().names)
+        join_keys = _join_keys(join, left_schema=left_schema, right_schema=right_schema)
         if join_keys is None:
             msg = "JOIN predicate does not contain equi-join columns."
             raise TranslationError(msg)
@@ -171,16 +207,114 @@ def _join_type(join: exp.Join) -> JoinType:
     raise TranslationError(msg)
 
 
-def _join_keys(on_expr: Expression | None) -> tuple[list[str], list[str]] | None:
+def _join_keys(
+    join: exp.Join,
+    *,
+    left_schema: Sequence[str],
+    right_schema: Sequence[str],
+) -> tuple[list[str], list[str]] | None:
+    using = join.args.get("using")
+    if using:
+        using_exprs = _using_exprs(using)
+        if not using_exprs:
+            msg = "JOIN USING clause must include column names."
+            raise TranslationError(msg)
+        names = [_using_column_name(expr) for expr in using_exprs]
+        left_keys = [
+            _resolve_join_key(
+                name,
+                schema_names=left_schema,
+                other_schema=right_schema,
+                side="left",
+                allow_ambiguous=True,
+            )
+            for name in names
+        ]
+        right_keys = [
+            _resolve_join_key(
+                name,
+                schema_names=right_schema,
+                other_schema=left_schema,
+                side="right",
+                allow_ambiguous=True,
+            )
+            for name in names
+        ]
+        return left_keys, right_keys
+    on_expr = join.args.get("on")
     if on_expr is None:
         return None
     pairs = _extract_join_pairs(on_expr)
     if not pairs:
         msg = "JOIN predicate does not contain equi-join columns."
         raise TranslationError(msg)
-    left_keys = [left for left, _ in pairs]
-    right_keys = [right for _, right in pairs]
+    left_keys = [
+        _resolve_join_key(
+            left,
+            schema_names=left_schema,
+            other_schema=right_schema,
+            side="left",
+            allow_ambiguous=False,
+        )
+        for left, _ in pairs
+    ]
+    right_keys = [
+        _resolve_join_key(
+            right,
+            schema_names=right_schema,
+            other_schema=left_schema,
+            side="right",
+            allow_ambiguous=False,
+        )
+        for _, right in pairs
+    ]
     return left_keys, right_keys
+
+
+def _using_exprs(using: object) -> list[Expression]:
+    if isinstance(using, list):
+        return [expr for expr in using if isinstance(expr, Expression)]
+    if isinstance(using, Expression):
+        return list(using.expressions)
+    return []
+
+
+def _using_column_name(expr: Expression) -> str:
+    if isinstance(expr, exp.Identifier):
+        return expr.this
+    if isinstance(expr, exp.Column):
+        if expr.table:
+            msg = f"JOIN USING columns must be unqualified: {expr.sql()}."
+            raise TranslationError(msg)
+        return expr.name
+    msg = f"Unsupported JOIN USING expression: {expr.__class__.__name__}."
+    raise TranslationError(msg)
+
+
+def _resolve_join_key(
+    name: str,
+    *,
+    schema_names: Sequence[str],
+    other_schema: Sequence[str],
+    side: str,
+    allow_ambiguous: bool,
+) -> str:
+    if name in schema_names:
+        if not allow_ambiguous and name in other_schema:
+            msg = f"Ambiguous JOIN key {name!r} on {side} side."
+            raise TranslationError(msg)
+        return name
+    unqualified = _strip_qualifier(name)
+    if unqualified in schema_names:
+        return unqualified
+    msg = f"JOIN key {name!r} not found on {side} side."
+    raise TranslationError(msg)
+
+
+def _strip_qualifier(name: str) -> str:
+    if "." not in name:
+        return name
+    return name.split(".", maxsplit=1)[-1]
 
 
 def _extract_join_pairs(expr: Expression) -> list[tuple[str, str]]:
@@ -195,9 +329,9 @@ def _extract_join_pairs(expr: Expression) -> list[tuple[str, str]]:
     return []
 
 
-def _column_name(expr: Expression) -> str | None:
+def _column_name(expr: Expression, *, strip_qualifier: bool = False) -> str | None:
     if isinstance(expr, exp.Column):
-        if expr.table:
+        if expr.table and not strip_qualifier:
             return f"{expr.table}.{expr.name}"
         return expr.name
     return None
@@ -230,14 +364,24 @@ def _is_group_expr(expr: Expression) -> bool:
     return isinstance(expr, exp.Column)
 
 
-def _aggregate_expr(expr: Expression) -> Expr:
+def _aggregate_expr(expr: Expression, *, apply_default_alias: bool = True) -> Expr:
+    if isinstance(expr, exp.Filter):
+        agg_expr = _aggregate_func(expr.this)
+        predicate = _expr_to_df(expr.expression.this)
+        filtered = agg_expr.filter(predicate).build()
+        if not apply_default_alias:
+            return filtered
+        alias = _aggregate_alias(expr.this)
+        return filtered.alias(alias)
     if isinstance(expr, exp.Alias):
-        base = _aggregate_expr(expr.this)
+        base = _aggregate_expr(expr.this, apply_default_alias=False)
         return base.alias(expr.alias)
     if isinstance(expr, exp.AggFunc):
-        agg = _func_expr(expr)
-        alias = expr.alias_or_name or _default_agg_alias(expr)
-        return agg.alias(alias)
+        agg_expr = _aggregate_func(expr)
+        if not apply_default_alias:
+            return agg_expr
+        alias = _aggregate_alias(expr)
+        return agg_expr.alias(alias)
     msg = f"Unsupported aggregate expression: {expr.__class__.__name__}."
     raise TranslationError(msg)
 
@@ -280,6 +424,10 @@ def _column_expr(expr: exp.Column) -> Expr:
     return col(_column_name(expr) or expr.name)
 
 
+def _boolean_expr(expr: exp.Boolean) -> Expr:
+    return lit(expr.this)
+
+
 def _literal_expr(expr: exp.Literal) -> Expr:
     if expr.is_string:
         return lit(expr.this)
@@ -294,7 +442,68 @@ def _null_expr(expr: exp.Null) -> Expr:
 
 
 def _cast_expr(expr: exp.Cast) -> Expr:
-    return _expr_to_df(expr.this).cast(expr.to.sql())
+    return _expr_to_df(expr.this).cast(_cast_target(expr.to))
+
+
+def _cast_target(data_type: exp.DataType) -> pa.DataType | type:
+    dtype = data_type.this
+    if isinstance(dtype, exp.DataType.Type):
+        if dtype in _SQLGLOT_CAST_TYPES:
+            return _SQLGLOT_CAST_TYPES[dtype]
+        if dtype in {
+            exp.DataType.Type.CHAR,
+            exp.DataType.Type.NCHAR,
+            exp.DataType.Type.TEXT,
+            exp.DataType.Type.VARCHAR,
+            exp.DataType.Type.NVARCHAR,
+            exp.DataType.Type.BPCHAR,
+            exp.DataType.Type.FIXEDSTRING,
+            exp.DataType.Type.UUID,
+            exp.DataType.Type.JSON,
+            exp.DataType.Type.JSONB,
+        }:
+            return pa.string()
+        if dtype in {
+            exp.DataType.Type.BINARY,
+            exp.DataType.Type.VARBINARY,
+            exp.DataType.Type.BLOB,
+            exp.DataType.Type.LONGBLOB,
+            exp.DataType.Type.MEDIUMBLOB,
+            exp.DataType.Type.TINYBLOB,
+        }:
+            return pa.binary()
+        if dtype in {exp.DataType.Type.DECIMAL, exp.DataType.Type.DECIMAL128}:
+            precision, scale = _decimal_params(data_type)
+            return pa.decimal128(precision, scale)
+        if dtype == exp.DataType.Type.DECIMAL256:
+            precision, scale = _decimal_params(data_type)
+            return pa.decimal256(precision, scale)
+        if dtype == exp.DataType.Type.TIMESTAMPTZ:
+            return pa.timestamp("us", tz="UTC")
+    msg = f"Unsupported cast target: {data_type.sql()}."
+    raise TranslationError(msg)
+
+
+def _decimal_params(data_type: exp.DataType) -> tuple[int, int]:
+    params = data_type.args.get("expressions") or []
+    if not params:
+        return (38, 10)
+    precision = _data_type_param_int(params[0])
+    scale = _data_type_param_int(params[1]) if len(params) > 1 else 0
+    if precision is None:
+        msg = f"Decimal precision must be numeric: {data_type.sql()}."
+        raise TranslationError(msg)
+    if scale is None:
+        msg = f"Decimal scale must be numeric: {data_type.sql()}."
+        raise TranslationError(msg)
+    return precision, scale
+
+
+def _data_type_param_int(param: exp.DataTypeParam) -> int | None:
+    value = param.this
+    if isinstance(value, exp.Literal) and not value.is_string:
+        return int(_numeric_literal(value.this))
+    return None
 
 
 def _and_expr(expr: exp.And) -> Expr:
@@ -339,8 +548,167 @@ def _is_expr(expr: exp.Is) -> Expr:
     return _expr_to_df(expr.this) == _expr_to_df(expr.expression)
 
 
+def _add_expr(expr: exp.Add) -> Expr:
+    return _expr_to_df(expr.left) + _expr_to_df(expr.right)
+
+
+def _sub_expr(expr: exp.Sub) -> Expr:
+    return _expr_to_df(expr.left) - _expr_to_df(expr.right)
+
+
+def _mul_expr(expr: exp.Mul) -> Expr:
+    return _expr_to_df(expr.left) * _expr_to_df(expr.right)
+
+
+def _div_expr(expr: exp.Div) -> Expr:
+    return _expr_to_df(expr.left) / _expr_to_df(expr.right)
+
+
+def _neg_expr(expr: exp.Neg) -> Expr:
+    return lit(-1) * _expr_to_df(expr.this)
+
+
+def _coalesce_expr(expr: exp.Coalesce) -> Expr:
+    args = [_expr_to_df(arg) for arg in expr.expressions]
+    if not args:
+        msg = "COALESCE requires at least one argument."
+        raise TranslationError(msg)
+    return f.coalesce(*args)
+
+
+def _case_expr(expr: exp.Case) -> Expr:
+    clauses = list(expr.args.get("ifs") or [])
+    if not clauses:
+        default = expr.args.get("default")
+        return _expr_to_df(default) if default is not None else lit(None)
+    first = clauses[0]
+    case_builder = f.when(_expr_to_df(first.this), _expr_to_df(first.args["true"]))
+    for clause in clauses[1:]:
+        case_builder = case_builder.when(
+            _expr_to_df(clause.this),
+            _expr_to_df(clause.args["true"]),
+        )
+    default = expr.args.get("default")
+    if default is not None:
+        return case_builder.otherwise(_expr_to_df(default))
+    return case_builder.end()
+
+
+def _concat_expr(expr: exp.Concat) -> Expr:
+    args = [_expr_to_df(arg) for arg in expr.expressions]
+    if not args:
+        msg = "CONCAT requires at least one argument."
+        raise TranslationError(msg)
+    return f.concat(*args)
+
+
+def _pipe_concat_expr(expr: exp.DPipe) -> Expr:
+    return f.concat(_expr_to_df(expr.left), _expr_to_df(expr.right))
+
+
+def _like_expr(expr: exp.Like) -> Expr:
+    return _like_match(expr, case_sensitive=True, escape=None)
+
+
+def _ilike_expr(expr: exp.ILike) -> Expr:
+    return _like_match(expr, case_sensitive=False, escape=None)
+
+
+def _escape_expr(expr: exp.Escape) -> Expr:
+    base = expr.this
+    if not isinstance(base, (exp.Like, exp.ILike)):
+        msg = f"Unsupported ESCAPE expression: {base.__class__.__name__}."
+        raise TranslationError(msg)
+    escape = expr.expression
+    if escape is None:
+        msg = "ESCAPE clause requires a literal escape character."
+        raise TranslationError(msg)
+    return _like_match(base, case_sensitive=isinstance(base, exp.Like), escape=escape)
+
+
+def _like_match(
+    expr: exp.Like | exp.ILike,
+    *,
+    case_sensitive: bool,
+    escape: Expression | None,
+) -> Expr:
+    pattern_expr = expr.expression
+    if not isinstance(pattern_expr, exp.Literal) or not pattern_expr.is_string:
+        msg = "LIKE patterns must be string literals."
+        raise TranslationError(msg)
+    escape_char = _escape_literal(escape)
+    regex = _like_pattern_to_regex(pattern_expr.this, escape=escape_char)
+    flags = None if case_sensitive else lit("i")
+    return f.regexp_like(_expr_to_df(expr.this), lit(regex), flags)
+
+
+def _escape_literal(expr: Expression | None) -> str | None:
+    if expr is None:
+        return None
+    if isinstance(expr, exp.Literal) and expr.is_string and expr.this:
+        return expr.this
+    msg = "ESCAPE clause requires a string literal."
+    raise TranslationError(msg)
+
+
+def _like_pattern_to_regex(pattern: str, *, escape: str | None) -> str:
+    regex_parts = ["^"]
+    idx = 0
+    while idx < len(pattern):
+        char = pattern[idx]
+        if escape is not None and char == escape:
+            idx += 1
+            if idx >= len(pattern):
+                regex_parts.append(re.escape(escape))
+                break
+            regex_parts.append(re.escape(pattern[idx]))
+        elif char == "%":
+            regex_parts.append(".*")
+        elif char == "_":
+            regex_parts.append(".")
+        else:
+            regex_parts.append(re.escape(char))
+        idx += 1
+    regex_parts.append("$")
+    return "".join(regex_parts)
+
+
+def _in_expr(expr: exp.In) -> Expr:
+    values = expr.expressions
+    if not values:
+        msg = "IN requires a list of literals or expressions."
+        raise TranslationError(msg)
+    args = [_expr_to_df(value) for value in values]
+    return f.in_list(_expr_to_df(expr.this), args)
+
+
+def _between_expr(expr: exp.Between) -> Expr:
+    if expr.args.get("symmetric"):
+        msg = "BETWEEN SYMMETRIC is not supported."
+        raise TranslationError(msg)
+    low = _expr_to_df(expr.args["low"])
+    high = _expr_to_df(expr.args["high"])
+    return _expr_to_df(expr.this).between(low, high)
+
+
+def _bracket_expr(expr: exp.Bracket) -> Expr:
+    base = _expr_to_df(expr.this)
+    index = expr.expression
+    if isinstance(index, exp.Literal):
+        if index.is_string:
+            return base[index.this]
+        position = int(_numeric_literal(index.this))
+        if position < 1:
+            msg = "Array indices must be 1-based for SQL bracket access."
+            raise TranslationError(msg)
+        return base[position - 1]
+    msg = "Bracket access requires a string or integer literal."
+    raise TranslationError(msg)
+
+
 _EXPR_DISPATCH: dict[type[Expression], Callable[[Expression], Expr]] = {
     exp.Column: cast("Callable[[Expression], Expr]", _column_expr),
+    exp.Boolean: cast("Callable[[Expression], Expr]", _boolean_expr),
     exp.Literal: cast("Callable[[Expression], Expr]", _literal_expr),
     exp.Null: cast("Callable[[Expression], Expr]", _null_expr),
     exp.Cast: cast("Callable[[Expression], Expr]", _cast_expr),
@@ -354,6 +722,21 @@ _EXPR_DISPATCH: dict[type[Expression], Callable[[Expression], Expr]] = {
     exp.LT: cast("Callable[[Expression], Expr]", _lt_expr),
     exp.LTE: cast("Callable[[Expression], Expr]", _lte_expr),
     exp.Is: cast("Callable[[Expression], Expr]", _is_expr),
+    exp.Add: cast("Callable[[Expression], Expr]", _add_expr),
+    exp.Sub: cast("Callable[[Expression], Expr]", _sub_expr),
+    exp.Mul: cast("Callable[[Expression], Expr]", _mul_expr),
+    exp.Div: cast("Callable[[Expression], Expr]", _div_expr),
+    exp.Neg: cast("Callable[[Expression], Expr]", _neg_expr),
+    exp.Coalesce: cast("Callable[[Expression], Expr]", _coalesce_expr),
+    exp.Case: cast("Callable[[Expression], Expr]", _case_expr),
+    exp.Concat: cast("Callable[[Expression], Expr]", _concat_expr),
+    exp.DPipe: cast("Callable[[Expression], Expr]", _pipe_concat_expr),
+    exp.Like: cast("Callable[[Expression], Expr]", _like_expr),
+    exp.ILike: cast("Callable[[Expression], Expr]", _ilike_expr),
+    exp.Escape: cast("Callable[[Expression], Expr]", _escape_expr),
+    exp.In: cast("Callable[[Expression], Expr]", _in_expr),
+    exp.Between: cast("Callable[[Expression], Expr]", _between_expr),
+    exp.Bracket: cast("Callable[[Expression], Expr]", _bracket_expr),
 }
 
 
@@ -363,12 +746,63 @@ def _func_expr(expr: exp.Func) -> Expr:
     if func is None:
         msg = f"Unsupported function: {name!r}."
         raise TranslationError(msg)
-    args = [_expr_to_df(arg) for arg in expr.expressions]
+    args = _function_args(expr)
     result = func(*args)
     alias = expr.alias_or_name
     if alias:
         return result.alias(alias)
     return result
+
+
+def _function_args(expr: exp.Func) -> list[Expr]:
+    args = [_expr_to_df(arg) for arg in expr.expressions]
+    if args:
+        return args
+    if expr.this is None or isinstance(expr, exp.Anonymous):
+        return []
+    resolved = [_expr_to_df(expr.this)]
+    extra = expr.args.get("expression")
+    if isinstance(extra, Expression):
+        resolved.append(_expr_to_df(extra))
+    return resolved
+
+
+def _aggregate_func(expr: exp.AggFunc) -> Expr:
+    distinct = False
+    args: list[Expression] = []
+    if isinstance(expr, exp.Count) and isinstance(expr.this, exp.Star):
+        args = []
+    elif isinstance(expr.this, exp.Distinct):
+        distinct = True
+        args = list(expr.this.expressions)
+    else:
+        args = _function_arg_exprs(expr)
+    agg_expr = _call_aggregate(expr, args)
+    if distinct:
+        agg_expr = agg_expr.distinct().build()
+    return agg_expr
+
+
+def _function_arg_exprs(expr: exp.Func) -> list[Expression]:
+    if expr.expressions:
+        return list(expr.expressions)
+    if expr.this is None or isinstance(expr, exp.Anonymous):
+        return []
+    args = [expr.this]
+    extra = expr.args.get("expression")
+    if isinstance(extra, Expression):
+        args.append(extra)
+    return args
+
+
+def _call_aggregate(expr: exp.AggFunc, args: Sequence[Expression]) -> Expr:
+    name = expr.sql_name().lower()
+    func = getattr(f, name, None)
+    if func is None:
+        msg = f"Unsupported aggregate function: {name!r}."
+        raise TranslationError(msg)
+    resolved = [_expr_to_df(arg) for arg in args]
+    return func(*resolved)
 
 
 def _numeric_literal(value: str) -> int | float:
@@ -392,11 +826,25 @@ def _int_value(expr: Expression | None) -> int:
 def _default_agg_alias(expr: exp.AggFunc) -> str:
     name = expr.sql_name().lower()
     args = list(expr.expressions)
+    if not args:
+        if isinstance(expr.this, exp.Distinct):
+            args = list(expr.this.expressions)
+        elif isinstance(expr.this, exp.Star):
+            args = []
+        elif isinstance(expr.this, Expression):
+            args = [expr.this]
     if args:
         col_name = _column_name(args[0])
         if col_name:
             return f"{name}_{col_name.replace('.', '_')}"
     return f"{name}_expr"
+
+
+def _aggregate_alias(expr: exp.AggFunc) -> str:
+    alias = expr.alias_or_name
+    if alias and alias != "*":
+        return alias
+    return _default_agg_alias(expr)
 
 
 def _select_output_expr(expr: Expression) -> Expr | str:
@@ -406,6 +854,8 @@ def _select_output_expr(expr: Expression) -> Expr | str:
         return col(expr.alias)
     if isinstance(expr, exp.Column):
         return col(_column_name(expr) or expr.name)
+    if isinstance(expr, exp.Filter) and isinstance(expr.this, exp.AggFunc):
+        return col(_aggregate_alias(expr.this))
     if isinstance(expr, exp.AggFunc):
-        return col(expr.alias_or_name or _default_agg_alias(expr))
+        return col(_aggregate_alias(expr))
     return _expr_to_df(expr)

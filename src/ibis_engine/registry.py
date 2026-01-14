@@ -11,6 +11,7 @@ import ibis
 from ibis.expr.types import Table
 
 from arrowdsl.core.interop import SchemaLike
+from arrowdsl.schema.schema import schema_fingerprint, schema_to_dict
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import DataFusionScanOptions, DatasetSpec
 
@@ -140,6 +141,7 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
     snapshot: list[dict[str, object]] = []
     for name in catalog.names():
         loc = catalog.get(name)
+        schema = resolve_dataset_schema(loc)
         scan = None
         if loc.datafusion_scan is not None:
             scan = {
@@ -160,6 +162,8 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "partitioning": loc.partitioning,
                 "datafusion_provider": loc.datafusion_provider,
                 "scan": scan,
+                "schema_fingerprint": schema_fingerprint(schema) if schema is not None else None,
+                "schema": schema_to_dict(schema) if schema is not None else None,
             }
         )
     return snapshot

@@ -22,6 +22,7 @@ from normalize.diagnostics_plans import (
 from normalize.registry_specs import dataset_schema_policy
 from normalize.runner import (
     NormalizeFinalizeSpec,
+    NormalizeRunOptions,
     PostFn,
     compile_normalize_rules,
     ensure_canonical,
@@ -115,7 +116,7 @@ def collect_diags_result(
         post=(),
         contract=DIAG_CONTRACT,
         ctx=exec_ctx,
-        finalize_spec=finalize_spec,
+        options=NormalizeRunOptions(finalize_spec=finalize_spec),
     )
 
 

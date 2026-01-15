@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 from ibis.backends import BaseBackend
-from ibis.expr.types import Table
+from ibis.expr.types import Table, Value
 
 from arrowdsl.compute.ids import masked_hash_expr
 from arrowdsl.compute.macros import ColumnOrNullExpr
@@ -35,6 +35,7 @@ from arrowdsl.plan.scan_io import plan_from_source
 from arrowdsl.schema.metadata import merge_metadata_specs
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec, align_table, empty_table
+from config import AdapterMode
 from ibis_engine.plan import IbisPlan
 from ibis_engine.plan_bridge import (
     SourceToIbisOptions,
@@ -93,6 +94,16 @@ class NormalizeFinalizeSpec:
 
     metadata_spec: SchemaMetadataSpec | None = None
     schema_policy: SchemaPolicy | None = None
+
+
+@dataclass(frozen=True)
+class NormalizeRunOptions:
+    """Execution options for normalize plans."""
+
+    finalize_spec: NormalizeFinalizeSpec | None = None
+    adapter_mode: AdapterMode | None = None
+    ibis_backend: BaseBackend | None = None
+    params: Mapping[Value, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -184,7 +195,7 @@ def run_normalize(
     post: Iterable[PostFn],
     contract: ContractSpec,
     ctx: ExecutionContext,
-    finalize_spec: NormalizeFinalizeSpec | None = None,
+    options: NormalizeRunOptions | None = None,
 ) -> FinalizeResult:
     """Execute a normalize plan with post steps and finalize gate.
 
@@ -193,16 +204,22 @@ def run_normalize(
     FinalizeResult
         Finalize bundle with good/errors/stats/alignment outputs.
     """
+    options = options or NormalizeRunOptions()
     result = run_plan_adapter(
         plan,
         ctx=ctx,
-        options=AdapterRunOptions(prefer_reader=False),
+        options=AdapterRunOptions(
+            adapter_mode=options.adapter_mode,
+            prefer_reader=False,
+            ibis_backend=options.ibis_backend,
+            ibis_params=options.params,
+        ),
     )
     table = _materialize_table(result.value)
     for fn in post:
         table = fn(table, ctx)
     contract_obj = contract.to_contract()
-    finalize_spec = finalize_spec or NormalizeFinalizeSpec()
+    finalize_spec = options.finalize_spec or NormalizeFinalizeSpec()
     metadata = None
     if finalize_spec.metadata_spec is not None:
         schema_meta = dict(finalize_spec.metadata_spec.schema_metadata)
@@ -224,11 +241,11 @@ def run_normalize(
         )
     else:
         schema_policy = _merge_policy_metadata(finalize_spec.schema_policy, metadata)
-    options = FinalizeOptions(
+    finalize_options = FinalizeOptions(
         schema_policy=schema_policy,
         skip_canonical_sort=_should_skip_canonical_sort(plan, contract=contract_obj, ctx=ctx),
     )
-    return finalize(table, contract=contract_obj, ctx=ctx, options=options)
+    return finalize(table, contract=contract_obj, ctx=ctx, options=finalize_options)
 
 
 def _merge_policy_metadata(
@@ -938,6 +955,7 @@ def _literal_expr(value: object, *, dtype: pa.DataType) -> ComputeExpression:
 __all__ = [
     "NormalizeFinalizeSpec",
     "NormalizeRuleCompilation",
+    "NormalizeRunOptions",
     "PostFn",
     "apply_evidence_defaults",
     "apply_policy_defaults",

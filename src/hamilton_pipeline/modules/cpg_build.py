@@ -19,6 +19,7 @@ from arrowdsl.io.parquet import (
     write_named_datasets_parquet,
 )
 from arrowdsl.plan.query import ScanTelemetry
+from arrowdsl.plan.runner import AdapterRunOptions, run_plan_adapter
 from arrowdsl.schema.schema import empty_table
 from config import AdapterMode
 from cpg.build_edges import EdgeBuildConfig, EdgeBuildInputs, build_cpg_edges
@@ -58,6 +59,7 @@ from relspec.adapters import (
 )
 from relspec.compiler import (
     CompiledOutput,
+    CompiledOutputExecutionOptions,
     FilesystemPlanResolver,
     InMemoryPlanResolver,
     PlanResolver,
@@ -140,6 +142,38 @@ def relspec_resolver_context(
         Bundled resolver context values.
     """
     return RelspecResolverContext(ctx=ctx, param_table_registry=param_table_registry)
+
+
+@dataclass(frozen=True)
+class RelationshipExecutionContext:
+    """Execution settings for relationship table materialization."""
+
+    ctx: ExecutionContext
+    adapter_mode: AdapterMode
+    ibis_backend: BaseBackend
+    relspec_param_bindings: Mapping[IbisValue, object]
+
+
+@tag(layer="relspec", artifact="relationship_execution_context", kind="object")
+def relationship_execution_context(
+    ctx: ExecutionContext,
+    adapter_mode: AdapterMode,
+    ibis_backend: BaseBackend,
+    relspec_param_bindings: Mapping[IbisValue, object],
+) -> RelationshipExecutionContext:
+    """Bundle execution settings for relationship table materialization.
+
+    Returns
+    -------
+    RelationshipExecutionContext
+        Execution settings for relationship output execution.
+    """
+    return RelationshipExecutionContext(
+        ctx=ctx,
+        adapter_mode=adapter_mode,
+        ibis_backend=ibis_backend,
+        relspec_param_bindings=relspec_param_bindings,
+    )
 
 
 def _datafusion_scan_options(
@@ -881,8 +915,7 @@ def relationship_tables(
     compiled_relationship_outputs: dict[str, CompiledOutput],
     relspec_resolver: PlanResolver[IbisPlan],
     relationship_contracts: ContractCatalog,
-    relspec_param_bindings: Mapping[IbisValue, object],
-    ctx: ExecutionContext,
+    relationship_execution_context: RelationshipExecutionContext,
 ) -> dict[str, TableLike]:
     """Execute compiled relationship outputs into tables.
 
@@ -891,13 +924,39 @@ def relationship_tables(
     dict[str, TableLike]
         Relationship tables keyed by output dataset.
     """
+    exec_ctx = relationship_execution_context.ctx
+    adapter_mode = relationship_execution_context.adapter_mode
+    ibis_backend = relationship_execution_context.ibis_backend
+    relspec_param_bindings = relationship_execution_context.relspec_param_bindings
+
+    def _executor(
+        plan: IbisPlan,
+        exec_ctx: ExecutionContext,
+        params: Mapping[IbisValue, object] | None,
+    ) -> TableLike:
+        result = run_plan_adapter(
+            plan,
+            ctx=exec_ctx,
+            options=AdapterRunOptions(
+                adapter_mode=adapter_mode,
+                prefer_reader=False,
+                ibis_backend=ibis_backend,
+                ibis_params=params,
+            ),
+        )
+        return cast("TableLike", result.value)
+
     out: dict[str, TableLike] = {}
+    exec_options = CompiledOutputExecutionOptions(
+        contracts=relationship_contracts,
+        params=relspec_param_bindings,
+        plan_executor=_executor,
+    )
     for key, compiled in compiled_relationship_outputs.items():
         res = compiled.execute(
-            ctx=ctx,
+            ctx=exec_ctx,
             resolver=relspec_resolver,
-            contracts=relationship_contracts,
-            params=relspec_param_bindings,
+            options=exec_options,
         )
         out[key] = res.good
 

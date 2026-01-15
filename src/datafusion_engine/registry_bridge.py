@@ -337,7 +337,13 @@ def _maybe_cache(context: DataFusionRegistrationContext, df: DataFrame) -> DataF
 
 
 def cached_dataset_names(ctx: SessionContext) -> tuple[str, ...]:
-    """Return cached dataset names for a SessionContext."""
+    """Return cached dataset names for a SessionContext.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Cached dataset names sorted in ascending order.
+    """
     cached = _CACHED_DATASETS.get(id(ctx), set())
     return tuple(sorted(cached))
 

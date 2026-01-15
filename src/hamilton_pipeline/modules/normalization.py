@@ -43,6 +43,7 @@ from normalize.runner import (
     NormalizeFinalizeSpec,
     NormalizeIbisPlanOptions,
     NormalizeRuleCompilation,
+    NormalizeRunOptions,
     compile_normalize_plans_ibis,
     run_normalize,
 )
@@ -171,6 +172,36 @@ class SpanNormalizeContext:
     ibis_backend: BaseBackend
     repo_text_index: RepoTextIndex | None
     ctx: ExecutionContext
+
+
+@dataclass(frozen=True)
+class NormalizeExecutionContext:
+    """Execution settings for normalize compilation and execution."""
+
+    ctx: ExecutionContext
+    adapter_mode: AdapterMode
+    ibis_backend: BaseBackend
+
+
+@cache()
+@tag(layer="normalize", artifact="normalize_execution_context", kind="object")
+def normalize_execution_context(
+    ctx: ExecutionContext,
+    adapter_mode: AdapterMode,
+    ibis_backend: BaseBackend,
+) -> NormalizeExecutionContext:
+    """Bundle execution settings for normalize pipelines.
+
+    Returns
+    -------
+    NormalizeExecutionContext
+        Execution settings for normalize compilation and execution.
+    """
+    return NormalizeExecutionContext(
+        ctx=ctx,
+        adapter_mode=adapter_mode,
+        ibis_backend=ibis_backend,
+    )
 
 
 @cache()
@@ -318,9 +349,7 @@ def normalize_plan_catalog(
 @tag(layer="normalize", artifact="normalize_rule_compilation", kind="object")
 def normalize_rule_compilation(
     normalize_plan_catalog: NormalizePlanCatalog,
-    ctx: ExecutionContext,
-    adapter_mode: AdapterMode,
-    ibis_backend: BaseBackend,
+    normalize_execution_context: NormalizeExecutionContext,
     evidence_plan: EvidencePlan | None = None,
     materialize_outputs: Sequence[str] | None = None,
 ) -> NormalizeRuleCompilation:
@@ -336,6 +365,9 @@ def normalize_rule_compilation(
     ValueError
         Raised when Ibis-backed normalization is required but not enabled.
     """
+    ctx = normalize_execution_context.ctx
+    adapter_mode = normalize_execution_context.adapter_mode
+    ibis_backend = normalize_execution_context.ibis_backend
     rules = _normalize_rules(ctx=ctx)
     required_outputs = _required_rule_outputs(evidence_plan, rules)
     if required_outputs is not None and not required_outputs:
@@ -396,6 +428,8 @@ def _normalize_rule_output(
     output: str,
     *,
     ctx: ExecutionContext,
+    adapter_mode: AdapterMode,
+    ibis_backend: BaseBackend,
 ) -> TableLike:
     plan = compilation.plans.get(output)
     if plan is None:
@@ -409,7 +443,11 @@ def _normalize_rule_output(
         post=(),
         contract=dataset_contract(output),
         ctx=ctx,
-        finalize_spec=finalize_spec,
+        options=NormalizeRunOptions(
+            finalize_spec=finalize_spec,
+            adapter_mode=adapter_mode,
+            ibis_backend=ibis_backend,
+        ),
     ).good
 
 
@@ -633,6 +671,8 @@ def py_bc_instructions_norm(
 def py_bc_blocks_norm(
     normalize_rule_compilation: NormalizeRuleCompilation,
     ctx: ExecutionContext,
+    adapter_mode: AdapterMode,
+    ibis_backend: BaseBackend,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Normalize bytecode CFG blocks with file/path metadata.
@@ -648,6 +688,8 @@ def py_bc_blocks_norm(
         normalize_rule_compilation,
         dataset_name_from_alias("py_bc_blocks_norm"),
         ctx=ctx,
+        adapter_mode=adapter_mode,
+        ibis_backend=ibis_backend,
     )
 
 
@@ -656,6 +698,8 @@ def py_bc_blocks_norm(
 def py_bc_cfg_edges_norm(
     normalize_rule_compilation: NormalizeRuleCompilation,
     ctx: ExecutionContext,
+    adapter_mode: AdapterMode,
+    ibis_backend: BaseBackend,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Normalize bytecode CFG edges with file/path metadata.
@@ -671,6 +715,8 @@ def py_bc_cfg_edges_norm(
         normalize_rule_compilation,
         dataset_name_from_alias("py_bc_cfg_edges_norm"),
         ctx=ctx,
+        adapter_mode=adapter_mode,
+        ibis_backend=ibis_backend,
     )
 
 
@@ -679,6 +725,8 @@ def py_bc_cfg_edges_norm(
 def py_bc_def_use_events(
     normalize_rule_compilation: NormalizeRuleCompilation,
     ctx: ExecutionContext,
+    adapter_mode: AdapterMode,
+    ibis_backend: BaseBackend,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Derive def/use events from bytecode instructions.
@@ -694,6 +742,8 @@ def py_bc_def_use_events(
         normalize_rule_compilation,
         dataset_name_from_alias("py_bc_def_use_events"),
         ctx=ctx,
+        adapter_mode=adapter_mode,
+        ibis_backend=ibis_backend,
     )
 
 
@@ -702,6 +752,8 @@ def py_bc_def_use_events(
 def py_bc_reaching_defs(
     normalize_rule_compilation: NormalizeRuleCompilation,
     ctx: ExecutionContext,
+    adapter_mode: AdapterMode,
+    ibis_backend: BaseBackend,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Compute reaching-def edges from def/use events.
@@ -717,6 +769,8 @@ def py_bc_reaching_defs(
         normalize_rule_compilation,
         dataset_name_from_alias("py_bc_reaching_defs"),
         ctx=ctx,
+        adapter_mode=adapter_mode,
+        ibis_backend=ibis_backend,
     )
 
 
@@ -725,6 +779,8 @@ def py_bc_reaching_defs(
 def type_exprs_norm(
     normalize_rule_compilation: NormalizeRuleCompilation,
     ctx: ExecutionContext,
+    adapter_mode: AdapterMode,
+    ibis_backend: BaseBackend,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Normalize CST type expressions into join-ready tables.
@@ -740,6 +796,8 @@ def type_exprs_norm(
         normalize_rule_compilation,
         dataset_name_from_alias("type_exprs_norm"),
         ctx=ctx,
+        adapter_mode=adapter_mode,
+        ibis_backend=ibis_backend,
     )
 
 
@@ -748,6 +806,8 @@ def type_exprs_norm(
 def types_norm(
     normalize_rule_compilation: NormalizeRuleCompilation,
     ctx: ExecutionContext,
+    adapter_mode: AdapterMode,
+    ibis_backend: BaseBackend,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Normalize type expressions into type nodes.
@@ -763,6 +823,8 @@ def types_norm(
         normalize_rule_compilation,
         dataset_name_from_alias("types_norm"),
         ctx=ctx,
+        adapter_mode=adapter_mode,
+        ibis_backend=ibis_backend,
     )
 
 
@@ -796,6 +858,8 @@ def diagnostics_sources(
 def diagnostics_norm(
     normalize_rule_compilation: NormalizeRuleCompilation,
     ctx: ExecutionContext,
+    adapter_mode: AdapterMode,
+    ibis_backend: BaseBackend,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Aggregate diagnostics into a normalized table.
@@ -811,6 +875,8 @@ def diagnostics_norm(
         normalize_rule_compilation,
         dataset_name_from_alias("diagnostics_norm"),
         ctx=ctx,
+        adapter_mode=adapter_mode,
+        ibis_backend=ibis_backend,
     )
 
 

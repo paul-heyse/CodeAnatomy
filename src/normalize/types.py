@@ -16,6 +16,7 @@ from normalize.registry_specs import (
 )
 from normalize.runner import (
     NormalizeFinalizeSpec,
+    NormalizeRunOptions,
     compile_normalize_rules,
     ensure_canonical,
     ensure_execution_context,
@@ -70,7 +71,7 @@ def normalize_type_exprs_result(
         post=(),
         contract=dataset_contract(TYPE_EXPRS_NAME),
         ctx=exec_ctx,
-        finalize_spec=finalize_spec,
+        options=NormalizeRunOptions(finalize_spec=finalize_spec),
     )
 
 
@@ -183,7 +184,7 @@ def normalize_types_result(
         post=(),
         contract=dataset_contract(TYPE_NODES_NAME),
         ctx=exec_ctx,
-        finalize_spec=finalize_spec,
+        options=NormalizeRunOptions(finalize_spec=finalize_spec),
     )
 
 

@@ -269,7 +269,14 @@ def _resolve_reader(
     return cast("Callable[..., Table]", reader)
 
 
-def datafusion_context(backend: ibis.backends.BaseBackend) -> SessionContext | None:
+def datafusion_context(backend: ibis.backends.BaseBackend) -> object | None:
+    """Return a DataFusion SessionContext from an Ibis backend when available.
+
+    Returns
+    -------
+    object | None
+        DataFusion SessionContext when detected, otherwise ``None``.
+    """
     if SessionContext is None:
         return None
     for attr in ("con", "_context", "_ctx", "ctx", "session_context"):
@@ -280,7 +287,15 @@ def datafusion_context(backend: ibis.backends.BaseBackend) -> SessionContext | N
 
 
 def _datafusion_context(backend: ibis.backends.BaseBackend) -> object | None:
-    """Deprecated: use datafusion_context instead."""
+    """Return the DataFusion SessionContext when available.
+
+    Deprecated: use ``datafusion_context`` instead.
+
+    Returns
+    -------
+    object | None
+        SessionContext when detected, otherwise ``None``.
+    """
     return datafusion_context(backend)
 
 

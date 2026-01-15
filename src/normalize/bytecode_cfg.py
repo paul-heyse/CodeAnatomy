@@ -22,6 +22,7 @@ from normalize.registry_specs import (
 )
 from normalize.runner import (
     NormalizeFinalizeSpec,
+    NormalizeRunOptions,
     compile_normalize_rules,
     ensure_canonical,
     ensure_execution_context,
@@ -74,7 +75,7 @@ def build_cfg_blocks_result(
         post=(),
         contract=dataset_contract(CFG_BLOCKS_NAME),
         ctx=exec_ctx,
-        finalize_spec=finalize_spec,
+        options=NormalizeRunOptions(finalize_spec=finalize_spec),
     )
 
 
@@ -121,7 +122,7 @@ def build_cfg_edges_result(
         post=(),
         contract=dataset_contract(CFG_EDGES_NAME),
         ctx=exec_ctx,
-        finalize_spec=finalize_spec,
+        options=NormalizeRunOptions(finalize_spec=finalize_spec),
     )
 
 

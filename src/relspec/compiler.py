@@ -55,6 +55,7 @@ from relspec.registry import ContractCatalog, DatasetCatalog
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, dataset_spec_from_contract
 
 KernelFn = Callable[[TableLike, ExecutionContext], TableLike]
+PlanExecutor = Callable[[IbisPlan, ExecutionContext, Mapping[IbisValue, object] | None], TableLike]
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -534,6 +535,17 @@ def _build_canonical_sort_kernel(spec: CanonicalSortKernelSpec) -> KernelFn:
     return _fn
 
 
+_KERNEL_BUILDERS: tuple[tuple[type[object], Callable[[object], KernelFn]], ...] = (
+    (AddLiteralSpec, cast("Callable[[object], KernelFn]", _build_add_literal_kernel)),
+    (DropColumnsSpec, cast("Callable[[object], KernelFn]", _build_drop_columns_kernel)),
+    (FilterKernelSpec, cast("Callable[[object], KernelFn]", _build_filter_kernel)),
+    (RenameColumnsSpec, cast("Callable[[object], KernelFn]", _build_rename_columns_kernel)),
+    (ExplodeListSpec, cast("Callable[[object], KernelFn]", _build_explode_list_kernel)),
+    (DedupeKernelSpec, cast("Callable[[object], KernelFn]", _build_dedupe_kernel)),
+    (CanonicalSortKernelSpec, cast("Callable[[object], KernelFn]", _build_canonical_sort_kernel)),
+)
+
+
 def _kernel_from_spec(spec: object) -> KernelFn:
     """Resolve a kernel function from a kernel spec.
 
@@ -551,25 +563,16 @@ def _kernel_from_spec(spec: object) -> KernelFn:
     ------
     ValueError
         Raised when the kernel spec type is unknown.
-    TypeError
-        Raised when the kernel spec type is deprecated.
     """
-    if isinstance(spec, AddLiteralSpec):
-        return _build_add_literal_kernel(spec)
-    if isinstance(spec, DropColumnsSpec):
-        return _build_drop_columns_kernel(spec)
-    if isinstance(spec, FilterKernelSpec):
-        return _build_filter_kernel(spec)
-    if isinstance(spec, RenameColumnsSpec):
-        return _build_rename_columns_kernel(spec)
-    if isinstance(spec, ExplodeListSpec):
-        return _build_explode_list_kernel(spec)
-    if isinstance(spec, DedupeKernelSpec):
-        return _build_dedupe_kernel(spec)
-    if isinstance(spec, CanonicalSortKernelSpec):
-        return _build_canonical_sort_kernel(spec)
-    msg = f"Unknown KernelSpec type: {type(spec).__name__}."
-    raise ValueError(msg)
+    handler: Callable[[object], KernelFn] | None = None
+    for spec_type, builder in _KERNEL_BUILDERS:
+        if isinstance(spec, spec_type):
+            handler = builder
+            break
+    if handler is None:
+        msg = f"Unknown KernelSpec type: {type(spec).__name__}."
+        raise ValueError(msg)
+    return handler(spec)
 
 
 def _compile_post_kernels(specs: Sequence[KernelSpecT]) -> tuple[KernelFn, ...]:
@@ -828,6 +831,7 @@ class CompiledRule:
         resolver: PlanResolver[IbisPlan],
         compiler: RelPlanCompiler[IbisPlan],
         params: Mapping[IbisValue, object] | None = None,
+        plan_executor: PlanExecutor | None = None,
     ) -> TableLike:
         """Execute the compiled rule into a table.
 
@@ -841,6 +845,8 @@ class CompiledRule:
             Compiler for relationship plans.
         params:
             Optional Ibis parameter bindings for plan execution.
+        plan_executor:
+            Optional plan executor override for Ibis plans.
 
         Returns
         -------
@@ -856,7 +862,10 @@ class CompiledRule:
             table = self.execute_fn(ctx, resolver)
         elif self.rel_plan is not None:
             plan = compiler.compile(self.rel_plan, ctx=ctx, resolver=resolver)
-            table = plan.to_table(params=params)
+            if plan_executor is not None:
+                table = plan_executor(plan, ctx, params)
+            else:
+                table = plan.to_table(params=params)
         else:
             msg = "CompiledRule has neither rel_plan nor execute_fn."
             raise RuntimeError(msg)
@@ -865,6 +874,16 @@ class CompiledRule:
         for fn in self.post_kernels:
             table = fn(table, ctx)
         return _apply_rule_metadata(table, rule=self.rule)
+
+
+@dataclass(frozen=True)
+class CompiledOutputExecutionOptions:
+    """Execution options for compiled outputs."""
+
+    contracts: ContractCatalog
+    compiler: RelPlanCompiler[IbisPlan] | None = None
+    params: Mapping[IbisValue, object] | None = None
+    plan_executor: PlanExecutor | None = None
 
 
 @dataclass(frozen=True)
@@ -882,9 +901,7 @@ class CompiledOutput:
         *,
         ctx: ExecutionContext,
         resolver: PlanResolver[IbisPlan],
-        compiler: RelPlanCompiler[IbisPlan] | None = None,
-        contracts: ContractCatalog,
-        params: Mapping[IbisValue, object] | None = None,
+        options: CompiledOutputExecutionOptions,
     ) -> FinalizeResult:
         """Execute contributing rules and finalize against the output contract.
 
@@ -894,12 +911,8 @@ class CompiledOutput:
             Execution context.
         resolver:
             Plan resolver for dataset references.
-        compiler:
-            Compiler for relationship plans.
-        contracts:
-            Contract catalog for finalization.
-        params:
-            Optional Ibis parameter bindings for plan execution.
+        options:
+            Execution options including compiler, contracts, and parameter bindings.
 
         Returns
         -------
@@ -917,13 +930,14 @@ class CompiledOutput:
         if not self.contributors:
             msg = f"CompiledOutput {self.output_dataset!r} has no contributors."
             raise ValueError(msg)
-        plan_compiler = compiler or IbisRelPlanCompiler()
+        plan_compiler = options.compiler or IbisRelPlanCompiler()
         table_parts = [
             compiled.execute(
                 ctx=ctx_exec,
                 resolver=resolver,
                 compiler=plan_compiler,
-                params=params,
+                params=options.params,
+                plan_executor=options.plan_executor,
             )
             for compiled in self.contributors
         ]
@@ -932,7 +946,7 @@ class CompiledOutput:
             contract_name=self.contract_name,
             table_parts=table_parts,
             ctx=ctx_exec,
-            contracts=contracts,
+            contracts=options.contracts,
         )
 
 
@@ -1426,6 +1440,7 @@ def _finalize_output_tables(
 
 __all__ = [
     "CompiledOutput",
+    "CompiledOutputExecutionOptions",
     "CompiledRule",
     "FilesystemPlanResolver",
     "InMemoryPlanResolver",

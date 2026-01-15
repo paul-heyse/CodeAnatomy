@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
+from datafusion import SessionContext
 
 from arrowdsl.core.context import DeterminismTier, ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
@@ -20,7 +21,11 @@ from ibis_engine.registry import datafusion_context
 from ibis_engine.runner import (
     DataFusionExecutionOptions,
     IbisPlanExecutionOptions,
+)
+from ibis_engine.runner import (
     materialize_plan as ibis_materialize_plan,
+)
+from ibis_engine.runner import (
     stream_plan as ibis_stream_plan,
 )
 from sqlglot_tools.bridge import IbisCompilerBackend
@@ -99,8 +104,8 @@ def _run_ibis_plan(
         execution = IbisPlanExecutionOptions(
             params=options.ibis_params,
             datafusion=DataFusionExecutionOptions(
-                backend=cast(IbisCompilerBackend, options.ibis_backend),
-                ctx=df_ctx,
+                backend=cast("IbisCompilerBackend", options.ibis_backend),
+                ctx=cast("SessionContext", df_ctx),
                 runtime_profile=ctx.runtime.datafusion,
                 options=None,
                 allow_fallback=True,

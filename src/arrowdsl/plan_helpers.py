@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, cast, overload
+from typing import TYPE_CHECKING, Literal, cast, overload
 
 import pyarrow as pa
 import pyarrow.dataset as ds
@@ -44,6 +44,10 @@ from ibis_engine.plan import IbisPlan
 from ibis_engine.query_bridge import QueryBridgeResult, queryspec_to_ibis
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 
+if TYPE_CHECKING:
+    from ibis.backends import BaseBackend
+    from ibis.expr.types import Value as IbisValue
+
 
 @dataclass(frozen=True)
 class FinalizePlanAdapterOptions:
@@ -53,6 +57,8 @@ class FinalizePlanAdapterOptions:
     prefer_reader: bool = False
     schema: SchemaLike | None = None
     keep_extra_columns: bool = False
+    ibis_backend: BaseBackend | None = None
+    ibis_params: Mapping[IbisValue, object] | None = None
 
 
 def query_for_schema(schema: SchemaLike) -> QuerySpec:
@@ -478,23 +484,28 @@ def finalize_plan_result_adapter(
     """
     options = options or FinalizePlanAdapterOptions()
     if isinstance(plan, IbisPlan):
+        run_opts = AdapterRunOptions(
+            adapter_mode=options.adapter_mode,
+            prefer_reader=False if options.schema is not None else options.prefer_reader,
+            ibis_backend=options.ibis_backend,
+            ibis_params=options.ibis_params,
+        )
+        result = run_plan_adapter(
+            plan,
+            ctx=ctx,
+            options=run_opts,
+        )
         if options.schema is not None:
+            table = cast("TableLike", result.value)
             aligned = align_table_to_schema(
-                plan.to_table(),
+                table,
                 schema=options.schema,
                 safe_cast=ctx.safe_cast,
                 keep_extra_columns=options.keep_extra_columns,
                 on_error="unsafe" if ctx.safe_cast else "raise",
             )
             return PlanRunResult(value=aligned, kind="table")
-        return run_plan_adapter(
-            plan,
-            ctx=ctx,
-            options=AdapterRunOptions(
-                adapter_mode=options.adapter_mode,
-                prefer_reader=options.prefer_reader,
-            ),
-        )
+        return result
     return finalize_plan_result(
         plan,
         ctx=ctx,

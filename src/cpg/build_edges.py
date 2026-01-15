@@ -413,6 +413,7 @@ def build_cpg_edges(
             options=FinalizePlanAdapterOptions(
                 adapter_mode=config.adapter_mode,
                 prefer_reader=True,
+                ibis_backend=config.ibis_backend,
             ),
         )
         raw = _materialize_table(raw_table)

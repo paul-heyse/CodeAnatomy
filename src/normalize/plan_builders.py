@@ -103,12 +103,12 @@ def reaching_defs_builder(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan |
 
 
 def diagnostics_builder(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
-    """Build a plan for normalized diagnostics.
+    """Raise because the plan-lane diagnostics builder is deprecated.
 
-    Returns
-    -------
-    Plan | None
-        Plan for diagnostics, or None when inputs are missing.
+    Raises
+    ------
+    ValueError
+        Raised to signal that the plan-lane diagnostics builder is deprecated.
     """
     _ = catalog
     _ = ctx

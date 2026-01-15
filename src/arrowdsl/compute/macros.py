@@ -9,9 +9,11 @@ from typing import Protocol, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.compute.expr_core import ExprSpec, PredicateKind, cast_expr
+from arrowdsl.compile.expr_compiler import ExprCompiler
+from arrowdsl.compute.expr_core import ExprSpec, cast_expr
 from arrowdsl.compute.filters import ensure_expr_context_udf, ensure_position_encoding_udf
 from arrowdsl.compute.kernels import def_use_kind_array
+from arrowdsl.compute.predicates import InSet, IsNull, Not, predicate_spec
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
@@ -21,6 +23,7 @@ from arrowdsl.core.interop import (
     ensure_expression,
     pc,
 )
+from arrowdsl.ir.expr import ExprNode
 
 
 class ColumnExpr(ExprSpec, Protocol):
@@ -31,9 +34,10 @@ class ColumnExpr(ExprSpec, Protocol):
 class ComputeExprSpec:
     """ExprSpec backed by a compute expression and a materializer."""
 
-    expr: ComputeExpression
+    expr: ComputeExpression | ExprNode
     materialize_fn: Callable[[TableLike], ArrayLike]
     scalar_safe: bool = True
+    registry: object | None = None
 
     def to_expression(self) -> ComputeExpression:
         """Return the compute expression for plan-lane evaluation.
@@ -43,6 +47,9 @@ class ComputeExprSpec:
         ComputeExpression
             Plan-lane compute expression.
         """
+        if isinstance(self.expr, ExprNode):
+            compiler = ExprCompiler(registry=self.registry)
+            return compiler.to_compute_expr(self.expr)
         return self.expr
 
     def materialize(self, table: TableLike) -> ArrayLike:
@@ -536,156 +543,6 @@ def normalize_string_items(items: Sequence[object]) -> list[str | None]:
     return out
 
 
-@dataclass(frozen=True)
-class IsNull:
-    """Predicate testing nulls in a column."""
-
-    col: str
-
-    def to_expression(self) -> ComputeExpression:
-        """Return the plan-lane predicate expression.
-
-        Returns
-        -------
-        ComputeExpression
-            Expression representing the predicate.
-        """
-        return ensure_expression(pc.is_null(pc.field(self.col)))
-
-    def materialize(self, table: TableLike) -> ArrayLike:
-        """Return the kernel-lane predicate mask.
-
-        Returns
-        -------
-        ArrayLike
-            Boolean mask for the predicate.
-        """
-        return pc.is_null(table[self.col])
-
-    def is_scalar(self) -> bool:
-        """Return whether this predicate is scalar-safe.
-
-        Returns
-        -------
-        bool
-            ``True`` for scalar-safe predicates.
-        """
-        return self is not None
-
-
-@dataclass(frozen=True)
-class InSet:
-    """Predicate testing membership in a static value set."""
-
-    col: str
-    values: tuple[object, ...]
-
-    def to_expression(self) -> ComputeExpression:
-        """Return the membership predicate expression.
-
-        Returns
-        -------
-        ComputeExpression
-            Expression representing the predicate.
-        """
-        return ensure_expression(pc.is_in(pc.field(self.col), value_set=list(self.values)))
-
-    def materialize(self, table: TableLike) -> ArrayLike:
-        """Return the kernel-lane predicate mask.
-
-        Returns
-        -------
-        ArrayLike
-            Boolean mask for the predicate.
-        """
-        return pc.is_in(table[self.col], value_set=list(self.values))
-
-    def is_scalar(self) -> bool:
-        """Return whether this predicate is scalar-safe.
-
-        Returns
-        -------
-        bool
-            ``True`` for scalar-safe predicates.
-        """
-        return self is not None
-
-
-@dataclass(frozen=True)
-class Not:
-    """Logical NOT of a predicate."""
-
-    pred: ExprSpec
-
-    def to_expression(self) -> ComputeExpression:
-        """Return the inverted predicate expression.
-
-        Returns
-        -------
-        ComputeExpression
-            Expression representing the inverted predicate.
-        """
-        return ensure_expression(pc.invert(self.pred.to_expression()))
-
-    def materialize(self, table: TableLike) -> ArrayLike:
-        """Return the kernel-lane inverted mask.
-
-        Returns
-        -------
-        ArrayLike
-            Boolean mask for the predicate.
-        """
-        return pc.invert(self.pred.materialize(table))
-
-    def is_scalar(self) -> bool:
-        """Return whether this predicate is scalar-safe.
-
-        Returns
-        -------
-        bool
-            ``True`` for scalar-safe predicates.
-        """
-        return self is not None
-
-
-def predicate_spec(
-    kind: PredicateKind,
-    *,
-    col: str | None = None,
-    values: Sequence[object] = (),
-    predicate: ExprSpec | None = None,
-) -> ExprSpec:
-    """Return a predicate spec for the requested kind.
-
-    Returns
-    -------
-    ExprSpec
-        Predicate specification instance.
-
-    Raises
-    ------
-    ValueError
-        Raised when required arguments are missing or unknown.
-    """
-    if kind == "is_null":
-        if col is None:
-            msg = "predicate_spec requires col for is_null."
-            raise ValueError(msg)
-        return IsNull(col)
-    if kind == "in_set":
-        if col is None:
-            msg = "predicate_spec requires col for in_set."
-            raise ValueError(msg)
-        return InSet(col, tuple(values))
-    if kind == "not":
-        if predicate is None:
-            msg = "predicate_spec requires predicate for not."
-            raise ValueError(msg)
-        return Not(predicate)
-    msg = f"Unknown predicate kind: {kind}."
-    raise ValueError(msg)
-
-
 def null_if_empty_or_zero(expr: ComputeExpression) -> ComputeExpression:
     """Return ``expr`` with empty/zero strings normalized to null.
 
@@ -799,6 +656,9 @@ def filter_non_empty_utf8(
     """
     trimmed, mask = trimmed_non_empty_utf8(table[column])
     return table.filter(mask), _compute_array("filter", [trimmed, mask])
+
+
+_PREDICATE_EXPORTS = (InSet, IsNull, Not, predicate_spec)
 
 
 __all__ = [

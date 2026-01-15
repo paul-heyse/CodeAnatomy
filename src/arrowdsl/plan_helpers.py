@@ -11,7 +11,7 @@ import pyarrow.dataset as ds
 from ibis.expr.types import Table as IbisTable
 
 from arrowdsl.compute.ids import HashSpec, hash_projection
-from arrowdsl.compute.macros import ColumnOrNullExpr
+from arrowdsl.compute.macros import CoalesceExpr, ColumnOrNullExpr
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, OrderingLevel
 from arrowdsl.core.interop import (
     ComputeExpression,
@@ -28,14 +28,15 @@ from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.plan.runner import AdapterRunOptions, PlanRunResult, run_plan, run_plan_adapter
 from arrowdsl.plan.scan_io import DatasetSource, PlanSource, plan_from_source
-from arrowdsl.schema.ops import (
-    align_plan,
-    encode_plan,
+from arrowdsl.schema.schema import (
+    CastErrorPolicy,
+    align_to_schema,
+    empty_table,
     encode_table,
     encoding_columns_from_metadata,
     encoding_projection,
+    projection_for_schema,
 )
-from arrowdsl.schema.schema import CastErrorPolicy, align_to_schema, empty_table
 from arrowdsl.schema.structs import flatten_struct_field
 from config import AdapterMode
 from ibis_engine.expr_compiler import IbisExprRegistry
@@ -105,21 +106,23 @@ def coalesce_expr(
     ComputeExpression
         Coalesced expression or typed null when none are available.
     """
-    exprs: list[ComputeExpression] = []
+    expr_specs: list[ColumnOrNullExpr] = []
     for col in cols:
         if col not in available:
             continue
-        expr = pc.field(col)
-        if cast:
-            expr = ensure_expression(pc.cast(expr, dtype, safe=safe))
-        else:
-            expr = ensure_expression(expr)
-        exprs.append(expr)
-    if not exprs:
+        expr_specs.append(
+            ColumnOrNullExpr(
+                name=col,
+                dtype=dtype,
+                cast=cast,
+                safe=safe,
+            )
+        )
+    if not expr_specs:
         return ensure_expression(pc.scalar(pa.scalar(None, type=dtype)))
-    if len(exprs) == 1:
-        return exprs[0]
-    return ensure_expression(pc.coalesce(*exprs))
+    if len(expr_specs) == 1:
+        return expr_specs[0].to_expression()
+    return CoalesceExpr(exprs=tuple(expr_specs)).to_expression()
 
 
 def project_columns(
@@ -218,6 +221,43 @@ def project_to_schema(
                 continue
             names.append(name)
             exprs.append(pc.field(name))
+    return plan.project(exprs, names, ctx=ctx)
+
+
+def align_plan(
+    plan: Plan,
+    *,
+    schema: SchemaLike,
+    ctx: ExecutionContext,
+    keep_extra_columns: bool = False,
+    available: Sequence[str] | None = None,
+) -> Plan:
+    """Align a plan to a target schema via projection.
+
+    Returns
+    -------
+    Plan
+        Plan projecting/casting to the schema.
+    """
+    available = plan.schema(ctx=ctx).names if available is None else available
+    exprs, names = projection_for_schema(schema, available=available, safe_cast=ctx.safe_cast)
+    if keep_extra_columns:
+        extras = [name for name in available if name not in names]
+        for name in extras:
+            names.append(name)
+            exprs.append(pc.field(name))
+    return plan.project(exprs, names, ctx=ctx)
+
+
+def encode_plan(plan: Plan, *, columns: Sequence[str], ctx: ExecutionContext) -> Plan:
+    """Return a plan with dictionary encoding applied.
+
+    Returns
+    -------
+    Plan
+        Plan with dictionary-encoded columns.
+    """
+    exprs, names = encoding_projection(columns, available=plan.schema(ctx=ctx).names)
     return plan.project(exprs, names, ctx=ctx)
 
 
@@ -412,26 +452,8 @@ def finalize_plan_result(
     -------
     PlanRunResult
         Plan output and the materialization kind.
-
-    Raises
-    ------
-    TypeError
-        Raised when run_plan returns a reader instead of a table.
     """
     if schema is not None:
-        if plan.decl is None:
-            result = run_plan(plan, ctx=ctx, prefer_reader=False)
-            if isinstance(result.value, pa.RecordBatchReader):
-                msg = "Expected table result from run_plan."
-                raise TypeError(msg)
-            aligned = align_table_to_schema(
-                cast("TableLike", result.value),
-                schema=schema,
-                safe_cast=ctx.safe_cast,
-                keep_extra_columns=keep_extra_columns,
-                on_error="unsafe" if ctx.safe_cast else "raise",
-            )
-            return PlanRunResult(value=aligned, kind="table")
         plan = align_plan(
             plan,
             schema=schema,

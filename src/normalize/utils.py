@@ -13,8 +13,6 @@ from arrowdsl.compute.ids import (
     prefixed_hash64,
     prefixed_hash_id,
     span_id,
-    stable_id,
-    stable_int64,
 )
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
@@ -32,6 +30,7 @@ from arrowdsl.plan_helpers import (
     project_columns,
     query_for_schema,
 )
+from arrowdsl.plan_helpers import align_plan as align_plan_to_schema_helper
 from arrowdsl.schema.metadata import (
     DICT_INDEX_META,
     DICT_ORDERED_META,
@@ -39,7 +38,6 @@ from arrowdsl.schema.metadata import (
     ENCODING_META,
     encoding_policy_from_schema,
 )
-from arrowdsl.schema.ops import align_plan as align_plan_to_schema_helper
 from config import AdapterMode
 from ibis_engine.plan import IbisPlan
 from normalize.registry_ids import (
@@ -144,6 +142,4 @@ __all__ = [
     "project_columns",
     "query_for_schema",
     "span_id",
-    "stable_id",
-    "stable_int64",
 ]

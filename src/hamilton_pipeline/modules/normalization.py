@@ -59,7 +59,11 @@ from normalize.ibis_spans import (
     add_scip_occurrence_byte_spans_ibis,
     anchor_instructions_ibis,
 )
-from normalize.schema_infer import align_table_to_schema, infer_schema_or_registry
+from normalize.schema_infer import (
+    SchemaInferOptions,
+    align_table_to_schema,
+    infer_schema_or_registry,
+)
 from normalize.span_pipeline import span_error_table
 from normalize.spans import (
     RepoTextIndex,
@@ -71,6 +75,7 @@ from schema_spec.specs import ArrowFieldSpec, call_span_bundle
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
 
 SCHEMA_VERSION = 1
+DEFAULT_MATERIALIZE_OUTPUTS: tuple[str, ...] = ()
 
 QNAME_DIM_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
     make_dataset_spec(
@@ -120,6 +125,18 @@ def _requires_any(plan: EvidencePlan | None, names: Sequence[str]) -> bool:
     return any(_requires_output(plan, name) for name in names)
 
 
+def _is_datafusion_backend(backend: BaseBackend) -> bool:
+    name = getattr(backend, "name", "")
+    return str(name).lower() == "datafusion"
+
+
+def _require_datafusion_backend(backend: BaseBackend) -> None:
+    if _is_datafusion_backend(backend):
+        return
+    msg = "Legacy span normalization is disabled; use the DataFusion Ibis backend."
+    raise ValueError(msg)
+
+
 @dataclass(frozen=True)
 class NormalizeTypeSources:
     """Normalize sources for type rules."""
@@ -144,6 +161,16 @@ class NormalizeSpanSources:
 
     repo_text_index: RepoTextIndex | None = None
     span_errors: TableLike | None = None
+
+
+@dataclass(frozen=True)
+class SpanNormalizeContext:
+    """Shared inputs for span normalization helpers."""
+
+    file_line_index: TableLike
+    ibis_backend: BaseBackend
+    repo_text_index: RepoTextIndex | None
+    ctx: ExecutionContext
 
 
 @cache()
@@ -202,6 +229,30 @@ def normalize_span_sources(
         Span-related inputs for normalize rule compilation.
     """
     return NormalizeSpanSources(repo_text_index=repo_text_index, span_errors=span_errors)
+
+
+@cache()
+@tag(layer="normalize", artifact="span_normalize_context", kind="object")
+def span_normalize_context(
+    file_line_index: TableLike,
+    ibis_backend: BaseBackend,
+    repo_text_index: RepoTextIndex | None,
+    ctx: ExecutionContext,
+) -> SpanNormalizeContext:
+    """Bundle inputs for span normalization helpers.
+
+    Returns
+    -------
+    SpanNormalizeContext
+        Shared inputs for span normalization operations.
+    """
+    _require_datafusion_backend(ibis_backend)
+    return SpanNormalizeContext(
+        file_line_index=file_line_index,
+        ibis_backend=ibis_backend,
+        repo_text_index=repo_text_index,
+        ctx=ctx,
+    )
 
 
 @cache()
@@ -271,6 +322,7 @@ def normalize_rule_compilation(
     adapter_mode: AdapterMode,
     ibis_backend: BaseBackend,
     evidence_plan: EvidencePlan | None = None,
+    materialize_outputs: Sequence[str] | None = None,
 ) -> NormalizeRuleCompilation:
     """Compile normalize rules into plan outputs.
 
@@ -289,6 +341,11 @@ def normalize_rule_compilation(
     if required_outputs is not None and not required_outputs:
         return NormalizeRuleCompilation(rules=(), plans={}, catalog=normalize_plan_catalog)
     if adapter_mode.use_ibis_bridge:
+        materialize = (
+            tuple(materialize_outputs)
+            if materialize_outputs is not None
+            else DEFAULT_MATERIALIZE_OUTPUTS
+        )
         plans = compile_normalize_plans_ibis(
             normalize_plan_catalog,
             ctx=ctx,
@@ -296,12 +353,17 @@ def normalize_rule_compilation(
                 backend=ibis_backend,
                 rules=rules,
                 required_outputs=required_outputs,
+                materialize_outputs=materialize,
             ),
         )
+        output_storage = {
+            name: ("materialized" if name in materialize else "view") for name in plans
+        }
         return NormalizeRuleCompilation(
             rules=rules,
             plans=plans,
             catalog=normalize_plan_catalog,
+            output_storage=output_storage,
         )
     msg = "Design-mode normalize compilation requires AdapterMode.use_ibis_bridge."
     raise ValueError(msg)
@@ -517,10 +579,8 @@ def callsite_qname_candidates(
 @cache(format="parquet")
 @tag(layer="normalize", artifact="ast_nodes_norm", kind="table")
 def ast_nodes_norm(
-    file_line_index: TableLike,
     ast_nodes: TableLike,
-    ibis_backend: BaseBackend,
-    ctx: ExecutionContext,
+    span_context: SpanNormalizeContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Add byte-span columns to AST nodes for join-ready alignment.
@@ -530,23 +590,23 @@ def ast_nodes_norm(
     TableLike
         AST nodes with bstart/bend/span_ok columns appended.
     """
-    _ = ctx
     if not _requires_output(evidence_plan, "ast_nodes_norm"):
         return empty_table(ast_nodes.schema)
-    return add_ast_byte_spans_ibis(
-        file_line_index,
+    _require_datafusion_backend(span_context.ibis_backend)
+    table = add_ast_byte_spans_ibis(
+        span_context.file_line_index,
         ast_nodes,
-        backend=ibis_backend,
+        backend=span_context.ibis_backend,
     )
+    schema = infer_schema_or_registry("py_ast_nodes_v1", [ast_nodes])
+    return align_table_to_schema(table, schema, opts=SchemaInferOptions(keep_extra_columns=True))
 
 
 @cache(format="parquet")
 @tag(layer="normalize", artifact="py_bc_instructions_norm", kind="table")
 def py_bc_instructions_norm(
-    file_line_index: TableLike,
     py_bc_instructions: TableLike,
-    ibis_backend: BaseBackend,
-    ctx: ExecutionContext,
+    span_context: SpanNormalizeContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Anchor bytecode instructions to source byte spans.
@@ -556,14 +616,16 @@ def py_bc_instructions_norm(
     TableLike
         Bytecode instruction table with bstart/bend/span_ok columns.
     """
-    _ = ctx
     if not _requires_output(evidence_plan, "py_bc_instructions_norm"):
         return empty_table(py_bc_instructions.schema)
-    return anchor_instructions_ibis(
-        file_line_index,
+    _require_datafusion_backend(span_context.ibis_backend)
+    table = anchor_instructions_ibis(
+        span_context.file_line_index,
         py_bc_instructions,
-        backend=ibis_backend,
+        backend=span_context.ibis_backend,
     )
+    schema = infer_schema_or_registry("py_bc_instructions_v1", [py_bc_instructions])
+    return align_table_to_schema(table, schema, opts=SchemaInferOptions(keep_extra_columns=True))
 
 
 @cache(format="parquet")
@@ -786,8 +848,7 @@ def repo_text_index(
 def scip_occurrences_norm_bundle(
     scip_documents: TableLike,
     scip_occurrences: TableLike,
-    file_line_index: TableLike,
-    ibis_backend: BaseBackend,
+    span_context: SpanNormalizeContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> dict[str, TableLike]:
     """Convert SCIP occurrences into byte offsets.
@@ -802,12 +863,15 @@ def scip_occurrences_norm_bundle(
             "scip_occurrences_norm": _empty_scip_occurrences_norm(scip_occurrences),
             "scip_span_errors": span_error_table([]),
         }
+    _require_datafusion_backend(span_context.ibis_backend)
     occ, errs = add_scip_occurrence_byte_spans_ibis(
-        file_line_index,
+        span_context.file_line_index,
         scip_documents,
         scip_occurrences,
-        backend=ibis_backend,
+        backend=span_context.ibis_backend,
     )
+    schema = infer_schema_or_registry("scip_occurrences_v1", [scip_occurrences])
+    occ = align_table_to_schema(occ, schema, opts=SchemaInferOptions(keep_extra_columns=True))
     return {"scip_occurrences_norm": occ, "scip_span_errors": errs}
 
 

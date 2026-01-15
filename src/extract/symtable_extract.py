@@ -15,7 +15,6 @@ from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, p
 from arrowdsl.plan.joins import join_config_for_output, left_join
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
-from arrowdsl.plan.scan_io import plan_from_rows
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.metadata import normalize_dictionaries
 from arrowdsl.schema.nested_builders import LargeListViewAccumulator
@@ -28,7 +27,7 @@ from extract.helpers import (
     project_columns,
     text_from_file_ctx,
 )
-from extract.plan_helpers import apply_query_and_normalize
+from extract.plan_helpers import apply_query_and_normalize, plan_from_rows
 from extract.registry_ids import hash_spec
 from extract.registry_specs import (
     dataset_row_schema,

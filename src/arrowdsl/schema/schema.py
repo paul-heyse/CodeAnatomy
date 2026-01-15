@@ -18,13 +18,18 @@ from arrowdsl.core.interop import (
     ComputeExpression,
     DataTypeLike,
     FieldLike,
+    ScalarLike,
     SchemaLike,
     TableLike,
     ensure_expression,
     pc,
 )
-from arrowdsl.schema.build import empty_table, set_or_append_column
+from arrowdsl.schema.build import empty_table
+from arrowdsl.schema.encoding_policy import EncodingPolicy, EncodingSpec, apply_encoding
+from arrowdsl.schema.metadata import metadata_spec_from_schema
+from arrowdsl.schema.normalize import NormalizePolicy
 from core_types import JsonDict
+from schema_spec.specs import TableSchemaSpec
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
 
@@ -52,6 +57,36 @@ class AlignmentInfo(TypedDict):
     dropped_cols: list[str]
     casted_cols: list[str]
     output_rows: int
+
+
+def _is_nested_type(dtype: DataTypeLike) -> bool:
+    return (
+        patypes.is_struct(dtype)
+        or patypes.is_list(dtype)
+        or patypes.is_large_list(dtype)
+        or patypes.is_map(dtype)
+    )
+
+
+def _prefer_base_nested(base: SchemaLike, unified: SchemaLike) -> SchemaLike:
+    base_fields = {schema_field.name: schema_field for schema_field in base}
+    fields: list[FieldLike] = []
+    for schema_field in unified:
+        base_field = base_fields.get(schema_field.name)
+        if base_field is None:
+            fields.append(schema_field)
+            continue
+        if _is_nested_type(base_field.type) and _is_nested_type(schema_field.type):
+            updated = pa.field(
+                base_field.name,
+                base_field.type,
+                nullable=schema_field.nullable,
+                metadata=base_field.metadata,
+            )
+            fields.append(updated)
+            continue
+        fields.append(schema_field)
+    return pa.schema(fields, metadata=unified.metadata)
 
 
 def _cast_column(
@@ -141,6 +176,31 @@ def align_to_schema(
                 aligned = aligned.append_column(name, table[name])
 
     return aligned, info
+
+
+def align_table(
+    table: TableLike,
+    *,
+    schema: SchemaLike,
+    safe_cast: bool = True,
+    keep_extra_columns: bool = False,
+    on_error: CastErrorPolicy = "unsafe",
+) -> TableLike:
+    """Return a table aligned to the target schema.
+
+    Returns
+    -------
+    TableLike
+        Aligned table.
+    """
+    aligned, _ = align_to_schema(
+        table,
+        schema=schema,
+        safe_cast=safe_cast,
+        keep_extra_columns=keep_extra_columns,
+        on_error=on_error,
+    )
+    return aligned
 
 
 @dataclass(frozen=True)
@@ -377,12 +437,7 @@ class SchemaEvolutionSpec:
             Unified schema for the tables.
         """
         schemas = [table.schema for table in tables]
-        if not schemas:
-            return pa.schema([])
-        try:
-            return pa.unify_schemas(list(schemas), promote_options=self.promote_options)
-        except TypeError:
-            return pa.unify_schemas(list(schemas))
+        return unify_schemas_core(schemas, promote_options=self.promote_options)
 
     def unify_schema_from_schemas(self, schemas: Sequence[SchemaLike]) -> SchemaLike:
         """Return a unified schema for a sequence of schemas.
@@ -392,12 +447,7 @@ class SchemaEvolutionSpec:
         SchemaLike
             Unified schema for the schemas.
         """
-        if not schemas:
-            return pa.schema([])
-        try:
-            return pa.unify_schemas(list(schemas), promote_options=self.promote_options)
-        except TypeError:
-            return pa.unify_schemas(list(schemas))
+        return unify_schemas_core(schemas, promote_options=self.promote_options)
 
     def unify_and_cast(
         self,
@@ -431,64 +481,21 @@ class SchemaEvolutionSpec:
 
 
 @dataclass(frozen=True)
-class EncodingSpec:
-    """Specification for dictionary encoding a column."""
+class EncodingPolicyWithChunks:
+    """Encoding policy plus chunk normalization for schema alignment."""
 
-    column: str
-    dtype: DataTypeLike | None = None
-
-
-@dataclass(frozen=True)
-class EncodingPolicy:
-    """Encoding policy bundling dictionary encodes and chunk normalization."""
-
-    specs: tuple[EncodingSpec, ...] = ()
+    policy: EncodingPolicy
     chunk_policy: ChunkPolicy = field(default_factory=ChunkPolicy)
 
     def apply(self, table: TableLike) -> TableLike:
-        """Apply encoding specs and chunk policy.
+        """Apply encoding policy and chunk policy.
 
         Returns
         -------
         TableLike
             Table with encoding and chunk policy applied.
         """
-        out = encode_columns(table, specs=self.specs)
-        return self.chunk_policy.apply(out)
-
-
-def encode_dictionary(table: TableLike, spec: EncodingSpec) -> TableLike:
-    """Dictionary-encode a column.
-
-    Returns
-    -------
-    TableLike
-        Table with the column dictionary-encoded when applicable.
-    """
-    if spec.column not in table.column_names:
-        return table
-    column = table[spec.column]
-    if patypes.is_dictionary(column.type) and (spec.dtype is None or column.type == spec.dtype):
-        return table
-    if spec.dtype is not None:
-        encoded = pc.cast(column, spec.dtype, safe=False)
-        return set_or_append_column(table, spec.column, encoded)
-    encoded = pc.dictionary_encode(column)
-    return set_or_append_column(table, spec.column, encoded)
-
-
-def encode_columns(table: TableLike, specs: tuple[EncodingSpec, ...]) -> TableLike:
-    """Apply dictionary encoding for multiple columns.
-
-    Returns
-    -------
-    TableLike
-        Table with dictionary encoding applied.
-    """
-    out = table
-    for spec in specs:
-        out = encode_dictionary(out, spec)
-    return out
+        return NormalizePolicy(encoding=self.policy, chunk=self.chunk_policy).apply(table)
 
 
 def encode_expression(column: str) -> ComputeExpression:
@@ -530,6 +537,207 @@ def projection_for_schema(
     return expressions, names
 
 
+def encoding_projection(
+    columns: Sequence[str],
+    *,
+    available: Sequence[str],
+) -> tuple[list[ComputeExpression], list[str]]:
+    """Return projection expressions to apply dictionary encoding.
+
+    Returns
+    -------
+    tuple[list[ComputeExpression], list[str]]
+        Expressions and column names for encoding projection.
+    """
+    encode_set = set(columns)
+    expressions: list[ComputeExpression] = []
+    names: list[str] = []
+    for name in available:
+        expr = encode_expression(name) if name in encode_set else pc.field(name)
+        expressions.append(expr)
+        names.append(name)
+    return expressions, names
+
+
+def encoding_columns_from_metadata(schema: SchemaLike) -> list[str]:
+    """Return columns marked for dictionary encoding via field metadata.
+
+    Returns
+    -------
+    list[str]
+        Column names marked for dictionary encoding.
+    """
+    encoding_columns: list[str] = []
+    for schema_field in schema:
+        meta = schema_field.metadata or {}
+        if meta.get(b"encoding") == b"dictionary":
+            encoding_columns.append(schema_field.name)
+    return encoding_columns
+
+
+def encode_table(table: TableLike, *, columns: Sequence[str]) -> TableLike:
+    """Dictionary-encode specified columns on a table.
+
+    Returns
+    -------
+    TableLike
+        Table with encoded columns.
+    """
+    if not columns:
+        return table
+    policy = EncodingPolicy(dictionary_cols=frozenset(columns))
+    return apply_encoding(table, policy=policy)
+
+
+def best_fit_type(array: ArrayLike, candidates: Sequence[DataTypeLike]) -> DataTypeLike:
+    """Return the most specific candidate type that preserves validity.
+
+    Returns
+    -------
+    pyarrow.DataType
+        Best-fit type for the array.
+    """
+    total_rows = len(array)
+    for dtype in candidates:
+        casted = pc.cast(array, dtype, safe=False)
+        valid = pc.is_valid(casted)
+        total = pc.call_function("sum", [pc.cast(valid, pa.int64())])
+        value = cast("int | float | bool | None", cast("ScalarLike", total).as_py())
+        if value is None:
+            continue
+        count = int(value)
+        if count == total_rows:
+            return dtype
+    return array.type
+
+
+def unify_schemas(
+    schemas: Sequence[SchemaLike],
+    *,
+    promote_options: str = "permissive",
+    prefer_nested: bool = True,
+) -> SchemaLike:
+    """Unify schemas while preserving metadata from the first schema.
+
+    Returns
+    -------
+    SchemaLike
+        Unified schema with metadata preserved.
+    """
+    if not schemas:
+        return pa.schema([])
+    unified = unify_schemas_core(schemas, promote_options=promote_options)
+    if prefer_nested:
+        unified = _prefer_base_nested(schemas[0], unified)
+    return metadata_spec_from_schema(schemas[0]).apply(unified)
+
+
+def unify_schema_with_metadata(
+    schemas: Sequence[SchemaLike],
+    *,
+    promote_options: str = "permissive",
+) -> SchemaLike:
+    """Unify schemas while preserving metadata from the first schema.
+
+    Returns
+    -------
+    SchemaLike
+        Unified schema with metadata preserved.
+    """
+    return unify_schemas(schemas, promote_options=promote_options)
+
+
+def unify_tables(
+    tables: Sequence[TableLike],
+    *,
+    promote_options: str = "permissive",
+) -> TableLike:
+    """Unify and concatenate tables with metadata-aware schema alignment.
+
+    Returns
+    -------
+    TableLike
+        Concatenated table aligned to the unified schema.
+    """
+    if not tables:
+        return pa.Table.from_arrays([], names=[])
+    schema = unify_schemas([table.schema for table in tables], promote_options=promote_options)
+    aligned: list[TableLike] = []
+    for table in tables:
+        aligned_table, _ = align_to_schema(table, schema=schema, safe_cast=True)
+        aligned.append(aligned_table)
+    combined = pa.concat_tables(aligned, promote=True)
+    return ChunkPolicy().apply(combined)
+
+
+def infer_schema_from_tables(
+    tables: Sequence[TableLike],
+    *,
+    promote_options: str = "permissive",
+    prefer_nested: bool = True,
+) -> SchemaLike:
+    """Infer a unified schema from tables using Arrow evolution rules.
+
+    Returns
+    -------
+    SchemaLike
+        Unified schema for the input tables.
+    """
+    schemas = [table.schema for table in tables if table is not None]
+    return unify_schemas(
+        schemas,
+        promote_options=promote_options,
+        prefer_nested=prefer_nested,
+    )
+
+
+def required_field_names(spec: TableSchemaSpec) -> tuple[str, ...]:
+    """Return required field names (explicit or non-nullable).
+
+    Returns
+    -------
+    tuple[str, ...]
+        Required field names.
+    """
+    required = set(spec.required_non_null)
+    return tuple(
+        field.name for field in spec.fields if field.name in required or not field.nullable
+    )
+
+
+def required_non_null_mask(
+    required: Sequence[str],
+    *,
+    available: set[str],
+) -> ComputeExpression:
+    """Return a plan-lane mask for required non-null violations.
+
+    Returns
+    -------
+    ComputeExpression
+        Boolean expression for invalid rows.
+    """
+    exprs = [
+        ensure_expression(pc.invert(pc.is_valid(pc.field(name))))
+        for name in required
+        if name in available
+    ]
+    if not exprs:
+        return ensure_expression(pc.scalar(pa.scalar(value=False)))
+    return ensure_expression(pc.or_(*exprs))
+
+
+def missing_key_fields(keys: Sequence[str], *, missing_cols: Sequence[str]) -> tuple[str, ...]:
+    """Return key fields missing from the available columns.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Missing key field names.
+    """
+    missing = set(missing_cols)
+    return tuple(key for key in keys if key in missing)
+
 def schema_to_dict(schema: SchemaLike) -> JsonDict:
     """Serialize an Arrow schema to a plain dictionary.
 
@@ -558,20 +766,52 @@ def schema_fingerprint(schema: SchemaLike) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def unify_schemas_core(
+    schemas: Sequence[SchemaLike],
+    *,
+    promote_options: str = "permissive",
+) -> SchemaLike:
+    """Return a unified schema using Arrow evolution rules.
+
+    Returns
+    -------
+    SchemaLike
+        Unified schema derived from the input schemas.
+    """
+    if not schemas:
+        return pa.schema([])
+    try:
+        return pa.unify_schemas(list(schemas), promote_options=promote_options)
+    except TypeError:
+        return pa.unify_schemas(list(schemas))
+
+
 __all__ = [
     "AlignmentInfo",
     "CastErrorPolicy",
     "EncodingPolicy",
+    "EncodingPolicyWithChunks",
     "EncodingSpec",
     "SchemaEvolutionSpec",
     "SchemaMetadataSpec",
     "SchemaTransform",
+    "align_table",
     "align_to_schema",
+    "best_fit_type",
     "empty_table",
-    "encode_columns",
-    "encode_dictionary",
     "encode_expression",
+    "encode_table",
+    "encoding_columns_from_metadata",
+    "encoding_projection",
+    "infer_schema_from_tables",
+    "missing_key_fields",
     "projection_for_schema",
+    "required_field_names",
+    "required_non_null_mask",
     "schema_fingerprint",
     "schema_to_dict",
+    "unify_schema_with_metadata",
+    "unify_schemas",
+    "unify_schemas_core",
+    "unify_tables",
 ]

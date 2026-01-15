@@ -15,14 +15,14 @@ from arrowdsl.schema.metadata import (
     encoding_policy_from_schema,
     encoding_policy_from_spec,
 )
-from arrowdsl.schema.ops import (
+from arrowdsl.schema.policy import SchemaPolicy
+from arrowdsl.schema.schema import (
     best_fit_type,
     infer_schema_from_tables,
     missing_key_fields,
     required_field_names,
     required_non_null_mask,
 )
-from arrowdsl.schema.policy import SchemaPolicy
 from arrowdsl.schema.validation import (
     ArrowValidationOptions,
     ValidationReport,

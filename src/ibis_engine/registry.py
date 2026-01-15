@@ -32,6 +32,9 @@ type PathLike = str | Path
 type DatasetFormat = str
 type DataFusionProvider = Literal["dataset", "listing", "parquet"]
 
+_REGISTERED_CATALOGS: dict[int, set[str]] = {}
+_REGISTERED_SCHEMAS: dict[int, set[tuple[str, str]]] = {}
+
 
 class FilesystemBackend(Protocol):
     """Protocol for backends supporting filesystem registration."""
@@ -299,6 +302,30 @@ def _register_datafusion_dataset(
     return True
 
 
+def _ensure_backend_catalog_schema(
+    backend: ibis.backends.BaseBackend,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> None:
+    if runtime_profile is None:
+        return
+    backend_id = id(backend)
+    catalogs = _REGISTERED_CATALOGS.setdefault(backend_id, set())
+    schemas = _REGISTERED_SCHEMAS.setdefault(backend_id, set())
+    catalog = runtime_profile.default_catalog
+    schema = runtime_profile.default_schema
+    if catalog not in catalogs:
+        create_catalog = getattr(backend, "create_catalog", None)
+        if callable(create_catalog):
+            create_catalog(catalog, force=True)
+        catalogs.add(catalog)
+    if (catalog, schema) not in schemas:
+        create_database = getattr(backend, "create_database", None)
+        if callable(create_database):
+            create_database(schema, catalog=catalog, force=True)
+        schemas.add((catalog, schema))
+
+
 class IbisDatasetRegistry:
     """Register dataset locations as Ibis tables."""
 
@@ -324,6 +351,7 @@ class IbisDatasetRegistry:
         """
         if name in self._tables:
             return self._tables[name]
+        _ensure_backend_catalog_schema(self.backend, runtime_profile=self._runtime_profile)
         ctx = _datafusion_context(self.backend)
         if ctx is not None and not _register_datafusion_dataset(
             ctx,

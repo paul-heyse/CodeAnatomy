@@ -1,39 +1,11 @@
-"""Plan ops and shared specs for ArrowDSL."""
+"""Plan specs and shared operation metadata for ArrowDSL."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol, runtime_checkable
+from typing import Literal
 
-import pyarrow.dataset as ds
-
-from arrowdsl.core.context import ExecutionContext, Ordering, OrderingEffect
-from arrowdsl.core.interop import ComputeExpression, DeclarationLike, TableLike, acero, pc
-
-
-class PlanOp(Protocol):
-    """Protocol for Acero plan operations."""
-
-    @property
-    def ordering_effect(self) -> OrderingEffect:
-        """Return the ordering effect for this operation."""
-        ...
-
-    @property
-    def is_pipeline_breaker(self) -> bool:
-        """Return whether the operation is a pipeline breaker."""
-        ...
-
-    def to_declaration(
-        self, inputs: list[DeclarationLike], ctx: ExecutionContext | None
-    ) -> DeclarationLike:
-        """Build an Acero declaration for this operation."""
-        ...
-
-    def apply_ordering(self, ordering: Ordering) -> Ordering:
-        """Return the updated ordering metadata for this operation."""
-        ...
+from arrowdsl.core.context import ExecutionContext, OrderingEffect
 
 
 def scan_ordering_effect(ctx: ExecutionContext) -> OrderingEffect:
@@ -47,377 +19,6 @@ def scan_ordering_effect(ctx: ExecutionContext) -> OrderingEffect:
     if ctx.runtime.scan.implicit_ordering or ctx.runtime.scan.require_sequenced_output:
         return OrderingEffect.IMPLICIT
     return OrderingEffect.UNORDERED
-
-
-@runtime_checkable
-class KernelOp(Protocol):
-    """Protocol for kernel-lane operations on tables."""
-
-    @property
-    def ordering_effect(self) -> OrderingEffect:
-        """Return the ordering effect for this operation."""
-        ...
-
-    def apply(self, table: TableLike, ctx: ExecutionContext) -> TableLike:
-        """Apply the operation to a table."""
-        ...
-
-    def apply_ordering(self, ordering: Ordering) -> Ordering:
-        """Return the updated ordering metadata for this operation."""
-        ...
-
-
-@dataclass(frozen=True)
-class ScanOp:
-    """Scan operation for dataset sources."""
-
-    dataset: ds.Dataset
-    columns: Sequence[str] | Mapping[str, ComputeExpression]
-    predicate: ComputeExpression | None = None
-
-    ordering_effect: OrderingEffect = OrderingEffect.IMPLICIT
-    is_pipeline_breaker: bool = False
-
-    def to_declaration(
-        self, inputs: list[DeclarationLike], ctx: ExecutionContext | None
-    ) -> DeclarationLike:
-        """Build the Acero scan declaration.
-
-        Returns
-        -------
-        DeclarationLike
-            Acero scan declaration.
-
-        Raises
-        ------
-        ValueError
-            Raised when the execution context is missing.
-        """
-        _ = inputs
-        if ctx is None:
-            msg = "ScanOp requires an execution context."
-            raise ValueError(msg)
-        scan_kwargs = ctx.runtime.scan.scanner_kwargs()
-        scan_kwargs.update(ctx.runtime.scan.scan_node_kwargs())
-        opts = acero.ScanNodeOptions(
-            self.dataset,
-            columns=self.columns,
-            filter=self.predicate,
-            **scan_kwargs,
-        )
-        return acero.Declaration("scan", opts)
-
-    def apply_ordering(self, ordering: Ordering) -> Ordering:
-        """Apply the ordering effect of the scan operation.
-
-        Returns
-        -------
-        Ordering
-            Updated ordering after the scan.
-        """
-        if self.ordering_effect == OrderingEffect.IMPLICIT:
-            if ordering.level == Ordering.unordered().level:
-                return Ordering.implicit()
-            return ordering
-        return ordering
-
-
-@dataclass(frozen=True)
-class TableSourceOp:
-    """Table source operation for in-memory tables."""
-
-    table: TableLike
-
-    ordering_effect: OrderingEffect = OrderingEffect.IMPLICIT
-    is_pipeline_breaker: bool = False
-
-    def to_declaration(
-        self, inputs: list[DeclarationLike], ctx: ExecutionContext | None
-    ) -> DeclarationLike:
-        """Build the Acero table-source declaration.
-
-        Returns
-        -------
-        DeclarationLike
-            Acero table-source declaration.
-        """
-        _ = inputs
-        _ = ctx
-        return acero.Declaration("table_source", acero.TableSourceNodeOptions(self.table))
-
-    def apply_ordering(self, ordering: Ordering) -> Ordering:
-        """Apply the ordering effect of the table source.
-
-        Returns
-        -------
-        Ordering
-            Updated ordering after the table source.
-        """
-        if self.ordering_effect == OrderingEffect.IMPLICIT:
-            return Ordering.implicit()
-        return ordering
-
-
-@dataclass(frozen=True)
-class FilterOp:
-    """Filter operation preserving ordering."""
-
-    predicate: ComputeExpression
-
-    ordering_effect: OrderingEffect = OrderingEffect.PRESERVE
-    is_pipeline_breaker: bool = False
-
-    def to_declaration(
-        self, inputs: list[DeclarationLike], ctx: ExecutionContext | None
-    ) -> DeclarationLike:
-        """Build the Acero filter declaration.
-
-        Returns
-        -------
-        DeclarationLike
-            Acero filter declaration.
-        """
-        _ = ctx
-        return acero.Declaration("filter", acero.FilterNodeOptions(self.predicate), inputs=inputs)
-
-    @staticmethod
-    def apply_ordering(ordering: Ordering) -> Ordering:
-        """Apply the ordering effect of the filter.
-
-        Returns
-        -------
-        Ordering
-            Unchanged ordering for filters.
-        """
-        return ordering
-
-
-@dataclass(frozen=True)
-class ProjectOp:
-    """Projection operation preserving ordering."""
-
-    expressions: Sequence[ComputeExpression]
-    names: Sequence[str]
-
-    ordering_effect: OrderingEffect = OrderingEffect.PRESERVE
-    is_pipeline_breaker: bool = False
-
-    def to_declaration(
-        self, inputs: list[DeclarationLike], ctx: ExecutionContext | None
-    ) -> DeclarationLike:
-        """Build the Acero project declaration.
-
-        Returns
-        -------
-        DeclarationLike
-            Acero project declaration.
-        """
-        _ = ctx
-        return acero.Declaration(
-            "project",
-            acero.ProjectNodeOptions(list(self.expressions), list(self.names)),
-            inputs=inputs,
-        )
-
-    @staticmethod
-    def apply_ordering(ordering: Ordering) -> Ordering:
-        """Apply the ordering effect of the projection.
-
-        Returns
-        -------
-        Ordering
-            Unchanged ordering for projections.
-        """
-        return ordering
-
-
-@dataclass(frozen=True)
-class RenameColumnsOp:
-    """Rename columns while preserving ordering."""
-
-    mapping: Mapping[str, str]
-    columns: Sequence[str]
-
-    ordering_effect: OrderingEffect = OrderingEffect.PRESERVE
-    is_pipeline_breaker: bool = False
-
-    def to_declaration(
-        self, inputs: list[DeclarationLike], ctx: ExecutionContext | None
-    ) -> DeclarationLike:
-        """Build the Acero project declaration with renamed columns.
-
-        Returns
-        -------
-        DeclarationLike
-            Acero project declaration.
-        """
-        _ = ctx
-        expressions = [pc.field(name) for name in self.columns]
-        names = [self.mapping.get(name, name) for name in self.columns]
-        return acero.Declaration(
-            "project",
-            acero.ProjectNodeOptions(expressions, names),
-            inputs=inputs,
-        )
-
-    @staticmethod
-    def apply_ordering(ordering: Ordering) -> Ordering:
-        """Apply the ordering effect of the rename.
-
-        Returns
-        -------
-        Ordering
-            Unchanged ordering for renames.
-        """
-        return ordering
-
-
-@dataclass(frozen=True)
-class OrderByOp:
-    """Order-by operation establishing explicit ordering."""
-
-    sort_keys: Sequence[tuple[str, str]]
-
-    ordering_effect: OrderingEffect = OrderingEffect.EXPLICIT
-    is_pipeline_breaker: bool = True
-
-    def to_declaration(
-        self, inputs: list[DeclarationLike], ctx: ExecutionContext | None
-    ) -> DeclarationLike:
-        """Build the Acero order-by declaration.
-
-        Returns
-        -------
-        DeclarationLike
-            Acero order-by declaration.
-        """
-        _ = ctx
-        return acero.Declaration(
-            "order_by",
-            acero.OrderByNodeOptions(sort_keys=list(self.sort_keys)),
-            inputs=inputs,
-        )
-
-    def apply_ordering(self, ordering: Ordering) -> Ordering:
-        """Apply the ordering effect of the order-by operation.
-
-        Returns
-        -------
-        Ordering
-            Explicit ordering for the sort keys.
-        """
-        _ = ordering
-        return Ordering.explicit(tuple(self.sort_keys))
-
-
-@dataclass(frozen=True)
-class AggregateOp:
-    """Aggregate operation that breaks ordering."""
-
-    group_keys: Sequence[str]
-    aggs: Sequence[tuple[str, str]]
-
-    ordering_effect: OrderingEffect = OrderingEffect.UNORDERED
-    is_pipeline_breaker: bool = True
-
-    def to_declaration(
-        self, inputs: list[DeclarationLike], ctx: ExecutionContext | None
-    ) -> DeclarationLike:
-        """Build the Acero aggregate declaration.
-
-        Returns
-        -------
-        DeclarationLike
-            Acero aggregate declaration.
-        """
-        _ = ctx
-        agg_specs = [(col, fn, None, f"{col}_{fn}") for col, fn in self.aggs]
-        keys = list(self.group_keys) if self.group_keys else None
-        return acero.Declaration(
-            "aggregate",
-            acero.AggregateNodeOptions(agg_specs, keys=keys),
-            inputs=inputs,
-        )
-
-    @staticmethod
-    def apply_ordering(ordering: Ordering) -> Ordering:
-        """Apply the ordering effect of the aggregate operation.
-
-        Returns
-        -------
-        Ordering
-            Unordered ordering after aggregation.
-        """
-        _ = ordering
-        return Ordering.unordered()
-
-
-@dataclass(frozen=True)
-class WinnerSelectOp:
-    """Winner-select operation using sort + aggregate."""
-
-    spec: DedupeSpec
-    columns: Sequence[str]
-
-    ordering_effect: OrderingEffect = OrderingEffect.UNORDERED
-    is_pipeline_breaker: bool = True
-
-    def to_declaration(
-        self, inputs: list[DeclarationLike], ctx: ExecutionContext | None
-    ) -> DeclarationLike:
-        """Build the winner-select declaration.
-
-        Returns
-        -------
-        DeclarationLike
-            Acero declaration for winner selection.
-
-        Raises
-        ------
-        ValueError
-            Raised when keys or tie breakers are missing.
-        """
-        _ = ctx
-        if not self.spec.keys:
-            msg = "WinnerSelectOp requires non-empty keys."
-            raise ValueError(msg)
-        if not self.spec.tie_breakers:
-            msg = "WinnerSelectOp requires at least one tie breaker."
-            raise ValueError(msg)
-        sort_keys = [(key.column, key.order) for key in self.spec.tie_breakers]
-        order_decl = acero.Declaration(
-            "order_by",
-            acero.OrderByNodeOptions(sort_keys=list(sort_keys)),
-            inputs=inputs,
-        )
-        agg_specs = [(col, "first", None, f"{col}_first") for col in self.columns]
-        agg_decl = acero.Declaration(
-            "aggregate",
-            acero.AggregateNodeOptions(agg_specs, keys=list(self.spec.keys)),
-            inputs=[order_decl],
-        )
-        proj_exprs = [pc.field(name) for name in self.spec.keys]
-        proj_names = list(self.spec.keys)
-        for col in self.columns:
-            proj_exprs.append(pc.field(f"{col}_first"))
-            proj_names.append(col)
-        return acero.Declaration(
-            "project",
-            acero.ProjectNodeOptions(proj_exprs, proj_names),
-            inputs=[agg_decl],
-        )
-
-    @staticmethod
-    def apply_ordering(ordering: Ordering) -> Ordering:
-        """Apply the ordering effect of winner selection.
-
-        Returns
-        -------
-        Ordering
-            Unordered ordering after aggregation.
-        """
-        _ = ordering
-        return Ordering.unordered()
 
 
 @dataclass(frozen=True)
@@ -471,6 +72,17 @@ class IntervalAlignOptions:
     right_suffix: str = "__r"
 
 
+@dataclass(frozen=True)
+class AsofJoinSpec:
+    """As-of join specification for nearest-match joins."""
+
+    on: str
+    by: tuple[str, ...] = ()
+    tolerance: object | None = None
+    right_on: str | None = None
+    right_by: tuple[str, ...] = ()
+
+
 type JoinType = Literal[
     "inner",
     "left outer",
@@ -508,66 +120,13 @@ class JoinSpec:
             raise ValueError(msg)
 
 
-@dataclass(frozen=True)
-class JoinOp:
-    """Hash-join operation producing unordered output."""
-
-    spec: JoinSpec
-
-    ordering_effect: OrderingEffect = OrderingEffect.UNORDERED
-    is_pipeline_breaker: bool = False
-
-    def to_declaration(
-        self, inputs: list[DeclarationLike], ctx: ExecutionContext | None
-    ) -> DeclarationLike:
-        """Build the Acero hash-join declaration.
-
-        Returns
-        -------
-        DeclarationLike
-            Acero hash-join declaration.
-        """
-        _ = ctx
-        opts = acero.HashJoinNodeOptions(
-            self.spec.join_type,
-            list(self.spec.left_keys),
-            list(self.spec.right_keys),
-            left_output=list(self.spec.left_output),
-            right_output=list(self.spec.right_output),
-            output_suffix_for_left=self.spec.output_suffix_for_left,
-            output_suffix_for_right=self.spec.output_suffix_for_right,
-        )
-        return acero.Declaration("hashjoin", opts, inputs=inputs)
-
-    @staticmethod
-    def apply_ordering(ordering: Ordering) -> Ordering:
-        """Return unordered output after a hash join.
-
-        Returns
-        -------
-        Ordering
-            Unordered ordering after the join.
-        """
-        _ = ordering
-        return Ordering.unordered()
-
-
 __all__ = [
-    "AggregateOp",
+    "AsofJoinSpec",
     "DedupeSpec",
     "DedupeStrategy",
-    "FilterOp",
     "IntervalAlignOptions",
-    "JoinOp",
     "JoinSpec",
     "JoinType",
-    "KernelOp",
-    "OrderByOp",
-    "PlanOp",
-    "ProjectOp",
-    "RenameColumnsOp",
-    "ScanOp",
     "SortKey",
-    "TableSourceOp",
     "scan_ordering_effect",
 ]

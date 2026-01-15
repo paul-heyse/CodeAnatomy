@@ -6,7 +6,6 @@ import functools
 import importlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Literal, cast
 
 import pyarrow as pa
@@ -21,8 +20,15 @@ from arrowdsl.core.interop import (
     TableLike,
     pc,
 )
-from arrowdsl.plan.joins import JoinConfig, JoinOutputSpec, interval_join_candidates, join_spec
-from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions, JoinSpec, SortKey
+from arrowdsl.kernel.registry import KernelLane, kernel_def
+from arrowdsl.plan.joins import (
+    JoinConfig,
+    JoinOutputSpec,
+    interval_join_candidates,
+    join_spec,
+    resolve_join_outputs,
+)
+from arrowdsl.plan.ops import AsofJoinSpec, DedupeSpec, IntervalAlignOptions, JoinSpec, SortKey
 from arrowdsl.schema.build import const_array, set_or_append_column
 from arrowdsl.schema.metadata import metadata_spec_from_schema, ordering_from_schema
 from arrowdsl.schema.schema import SchemaMetadataSpec
@@ -57,14 +63,6 @@ _NUMERIC_REGEX = r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$"
 type KernelFn = Callable[..., TableLike]
 
 
-class KernelLane(StrEnum):
-    """Execution lane for a kernel."""
-
-    BUILTIN = "builtin"
-    DF_UDF = "df_udf"
-    ARROW_FALLBACK = "arrow_fallback"
-
-
 @dataclass(frozen=True)
 class KernelCapability:
     """Capability metadata for kernel selection."""
@@ -88,34 +86,6 @@ class KernelCapability:
             volatility=self.volatility,
             requires_ordering=self.requires_ordering,
         )
-
-
-_KERNEL_CAPABILITIES: dict[str, KernelCapability] = {
-    "interval_align": KernelCapability(
-        name="interval_align",
-        lane=KernelLane.DF_UDF,
-        volatility="stable",
-        requires_ordering=True,
-    ),
-    "explode_list": KernelCapability(
-        name="explode_list",
-        lane=KernelLane.BUILTIN,
-        volatility="stable",
-        requires_ordering=False,
-    ),
-    "dedupe": KernelCapability(
-        name="dedupe",
-        lane=KernelLane.BUILTIN,
-        volatility="stable",
-        requires_ordering=True,
-    ),
-    "winner_select": KernelCapability(
-        name="winner_select",
-        lane=KernelLane.ARROW_FALLBACK,
-        volatility="stable",
-        requires_ordering=True,
-    ),
-}
 
 
 def kernel_registry() -> dict[str, KernelFn]:
@@ -142,15 +112,14 @@ def kernel_capability(name: str, *, ctx: ExecutionContext) -> KernelCapability:
     KernelCapability
         Capability metadata for the requested kernel.
 
-    Raises
-    ------
-    KeyError
-        Raised when the kernel name is unknown.
     """
-    capability = _KERNEL_CAPABILITIES.get(name)
-    if capability is None:
-        msg = f"Unknown kernel capability: {name!r}."
-        raise KeyError(msg)
+    definition = kernel_def(name)
+    capability = KernelCapability(
+        name=definition.name,
+        lane=definition.lane,
+        volatility=definition.volatility,
+        requires_ordering=definition.requires_ordering,
+    )
     if ctx.runtime.datafusion is None:
         return capability.with_lane(KernelLane.ARROW_FALLBACK)
     if _datafusion_kernel(name) is None:
@@ -459,54 +428,55 @@ def apply_join(
     return _select_join_outputs(joined, spec=spec)
 
 
-def _select_join_outputs(joined: TableLike, *, spec: JoinSpec) -> TableLike:
-    if not spec.left_output and not spec.right_output:
-        return joined
-
-    left_names = set(spec.left_output) | set(spec.left_keys)
-    prefer_right_suffix = bool(spec.output_suffix_for_right) and any(
-        name in left_names for name in spec.right_output
-    )
-    left_cols = _resolve_join_outputs(
-        joined,
-        outputs=spec.left_output,
-        suffix=spec.output_suffix_for_left,
-        prefer_suffix=False,
-    )
-    right_cols = _resolve_join_outputs(
-        joined,
-        outputs=spec.right_output,
-        suffix=spec.output_suffix_for_right,
-        prefer_suffix=prefer_right_suffix,
-    )
-    keep = [*left_cols, *right_cols]
-    if keep:
-        return joined.select(keep)
-    return joined
-
-
-def _resolve_join_outputs(
-    joined: TableLike,
+def apply_asof_join(
+    left: TableLike,
+    right: TableLike,
     *,
-    outputs: Sequence[str],
-    suffix: str,
-    prefer_suffix: bool,
-) -> list[str]:
-    resolved: list[str] = []
-    for name in outputs:
-        if suffix and prefer_suffix:
-            suffixed = f"{name}{suffix}"
-            if suffixed in joined.column_names:
-                resolved.append(suffixed)
-                continue
-        if name in joined.column_names:
-            resolved.append(name)
-            continue
-        if suffix and not prefer_suffix:
-            suffixed = f"{name}{suffix}"
-            if suffixed in joined.column_names:
-                resolved.append(suffixed)
-    return resolved
+    spec: AsofJoinSpec,
+    use_threads: bool = True,
+    chunk_policy: ChunkPolicy | None = None,
+) -> TableLike:
+    """Join two tables using an as-of join.
+
+    Parameters
+    ----------
+    left:
+        Left table.
+    right:
+        Right table.
+    spec:
+        As-of join specification.
+    use_threads:
+        Unused (kept for API symmetry).
+    chunk_policy:
+        Optional chunk normalization policy applied to inputs.
+
+    Returns
+    -------
+    pyarrow.Table
+        Joined table.
+    """
+    _ = use_threads
+    policy = chunk_policy or ChunkPolicy()
+    left = policy.apply(left)
+    right = policy.apply(right)
+    by = list(spec.by) if spec.by else None
+    right_by = list(spec.right_by) if spec.right_by else None
+    return left.join_asof(
+        right,
+        on=spec.on,
+        by=by,
+        tolerance=spec.tolerance,
+        right_on=spec.right_on,
+        right_by=right_by,
+    )
+
+
+def _select_join_outputs(joined: TableLike, *, spec: JoinSpec) -> TableLike:
+    plan = resolve_join_outputs(joined.column_names, spec=spec)
+    if not plan.output_names:
+        return joined
+    return joined.select(list(plan.output_names))
 
 
 def canonical_sort_if_canonical(

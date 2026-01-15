@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import ibis
-from ibis.expr.types import Value
+from ibis.expr.types import Table, Value
 
 from relspec.rules.rel_ops import ParamOp, RelOpT
 
@@ -187,6 +187,24 @@ def datafusion_param_bindings(
     return bindings
 
 
+def list_param_join(
+    table: Table,
+    *,
+    param_table: Table,
+    left_col: str,
+    right_col: str | None = None,
+) -> Table:
+    """Return a semi-join against a list-parameter table.
+
+    Returns
+    -------
+    ibis.expr.types.Table
+        Filtered table constrained by param table membership.
+    """
+    key = right_col or left_col
+    return table.join(param_table, [table[left_col] == param_table[key]], how="semi")
+
+
 def _param_name(param: Value) -> str:
     getter = getattr(param, "get_name", None)
     if callable(getter):
@@ -203,6 +221,7 @@ __all__ = [
     "ParamSpec",
     "ScalarParamSpec",
     "datafusion_param_bindings",
+    "list_param_join",
     "list_param_names_from_rel_ops",
     "registry_from_ops",
     "registry_from_specs",

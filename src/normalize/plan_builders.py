@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import cast
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.catalog import PlanCatalog, PlanDeriver
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.runner import run_plan
 from arrowdsl.plan.scan_io import PlanSource, plan_from_source
 from normalize.bytecode_cfg_plans import cfg_blocks_plan, cfg_edges_plan
 from normalize.bytecode_dfg_plans import def_use_events_plan, reaching_defs_plan
-from normalize.diagnostics_plans import DiagnosticsSources, diagnostics_plan
-from normalize.text_index import RepoTextIndex
 from normalize.types_plans import type_exprs_plan, type_nodes_plan
 
 
@@ -113,17 +110,10 @@ def diagnostics_builder(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | N
     Plan | None
         Plan for diagnostics, or None when inputs are missing.
     """
-    repo_text_index = getattr(catalog, "repo_text_index", None)
-    if not isinstance(repo_text_index, RepoTextIndex):
-        return None
-    sources = DiagnosticsSources(
-        cst_parse_errors=_table_from_source(catalog.tables.get("cst_parse_errors"), ctx=ctx),
-        ts_errors=_table_from_source(catalog.tables.get("ts_errors"), ctx=ctx),
-        ts_missing=_table_from_source(catalog.tables.get("ts_missing"), ctx=ctx),
-        scip_diagnostics=_table_from_source(catalog.tables.get("scip_diagnostics"), ctx=ctx),
-        scip_documents=_table_from_source(catalog.tables.get("scip_documents"), ctx=ctx),
-    )
-    return diagnostics_plan(repo_text_index, sources=sources, ctx=ctx)
+    _ = catalog
+    _ = ctx
+    msg = "Plan-lane diagnostics are deprecated; use Ibis normalize builders."
+    raise ValueError(msg)
 
 
 def span_errors_builder(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
@@ -180,18 +170,24 @@ def _table_from_source(source: PlanSource | None, *, ctx: ExecutionContext) -> T
         result = run_plan(
             source,
             ctx=ctx,
-            prefer_reader=False,
+            prefer_reader=True,
             attach_ordering_metadata=True,
         )
-        return cast("TableLike", result.value)
+        return _materialize_table(result.value)
     plan = plan_from_source(source, ctx=ctx, label="normalize_rule_source")
     result = run_plan(
         plan,
         ctx=ctx,
-        prefer_reader=False,
+        prefer_reader=True,
         attach_ordering_metadata=True,
     )
-    return cast("TableLike", result.value)
+    return _materialize_table(result.value)
+
+
+def _materialize_table(value: TableLike | RecordBatchReaderLike) -> TableLike:
+    if isinstance(value, RecordBatchReaderLike):
+        return value.read_all()
+    return value
 
 
 PLAN_BUILDERS: dict[str, PlanDeriver] = {

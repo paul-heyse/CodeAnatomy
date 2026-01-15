@@ -38,11 +38,11 @@ end_exclusive = ibis.ifelse(raw.end_exclusive, raw.end_col, raw.end_col + 1)
 - `src/normalize/registry_fields.py`
 
 **Implementation checklist**
-- [ ] Add coord metadata columns (line_base, col_unit, end_exclusive) to raw
+- [x] Add coord metadata columns (line_base, col_unit, end_exclusive) to raw
       span datasets in extract templates.
-- [ ] Update normalize dataset specs to carry these metadata columns forward.
-- [ ] Canonicalize line base and end exclusivity in span normalization inputs.
-- [ ] Document the canonical policy alongside dataset contracts.
+- [x] Update normalize dataset specs to carry these metadata columns forward.
+- [x] Canonicalize line base and end exclusivity in span normalization inputs.
+- [x] Document the canonical policy alongside dataset contracts.
 
 ---
 
@@ -96,11 +96,11 @@ bend = end_idx.line_start_byte + col_to_byte(
 - `src/hamilton_pipeline/modules/normalization.py`
 
 **Implementation checklist**
-- [ ] Add an Ibis-based span normalization path for AST, bytecode, and SCIP.
-- [ ] Convert diagnostics span conversion to Ibis join-driven logic.
-- [ ] Retire Python loop-based span conversion helpers or gate them behind
+- [x] Add an Ibis-based span normalization path for AST, bytecode, and SCIP.
+- [x] Convert diagnostics span conversion to Ibis join-driven logic.
+- [x] Retire Python loop-based span conversion helpers or gate them behind
       legacy-only paths.
-- [ ] Ensure all normalized outputs align to schema contracts.
+- [x] Ensure all normalized outputs align to schema contracts.
 
 ---
 
@@ -130,10 +130,10 @@ def _col_to_byte_kernel(line_text: pa.Array, col: pa.Array, unit: pa.Array) -> p
 - `src/normalize/ibis_spans.py`
 
 **Implementation checklist**
-- [ ] Extend `col_to_byte` signature to accept `col_unit`.
-- [ ] Register a DataFusion UDF implementation (vectorized Arrow arrays).
-- [ ] Preserve Arrow fallback behavior for non-DataFusion lanes.
-- [ ] Update all Ibis span normalization to call the centralized kernel.
+- [x] Extend `col_to_byte` signature to accept `col_unit`.
+- [x] Register a DataFusion UDF implementation (vectorized Arrow arrays).
+- [x] Preserve Arrow fallback behavior for non-DataFusion lanes.
+- [x] Update all Ibis span normalization to call the centralized kernel.
 
 ---
 
@@ -169,9 +169,10 @@ output = edges.mutate(
 - `src/cpg/relationship_plans.py`
 
 **Implementation checklist**
-- [ ] Replace any remaining Arrow/Python stable ID generation paths.
-- [ ] Emit natural keys alongside hashed IDs (debug-only if needed).
-- [ ] Ensure all IDs use the same `stable_hash64`/`stable_hash128` implementation.
+- [x] Replace any remaining Arrow/Python stable ID generation paths.
+- [x] Emit natural keys alongside hashed IDs (debug-only) for normalize Ibis outputs.
+- [x] Emit natural keys for CPG edges/relations in Ibis debug outputs.
+- [x] Ensure all IDs use the same `stable_hash64`/`stable_hash128` implementation.
 
 ---
 
@@ -197,9 +198,9 @@ def _apply_canonical_sort(table: Table, spec: CanonicalSortKernelSpec) -> Table:
 - `src/relspec/model.py`
 
 **Implementation checklist**
-- [ ] Add `CanonicalSortKernelSpec` handling to the Ibis kernel spec pipeline.
-- [ ] Ensure dedupe uses canonical sort output, not implicit order.
-- [ ] Keep Arrow behavior consistent for legacy paths.
+- [x] Add `CanonicalSortKernelSpec` handling to the Ibis kernel spec pipeline.
+- [x] Ensure dedupe uses canonical sort output, not implicit order.
+- [x] Keep Arrow behavior consistent for legacy paths.
 
 ---
 
@@ -222,9 +223,9 @@ else:
 - `src/normalize/plan_builders.py`
 
 **Implementation checklist**
-- [ ] Use Ibis builders as the default when adapter mode enables Ibis bridge.
-- [ ] Deprecate or gate Arrow builders for design-phase runs.
-- [ ] Ensure diagnostics normalization is Ibis-native end-to-end.
+- [x] Use Ibis builders as the default when adapter mode enables Ibis bridge.
+- [x] Deprecate or gate Arrow builders for design-phase runs.
+- [x] Ensure diagnostics normalization is Ibis-native end-to-end.
 
 ---
 
@@ -253,9 +254,9 @@ winners = ranked.mutate(row_num=ibis.row_number().over(window)).filter(
 - `src/relspec/rules/diagnostics.py`
 
 **Implementation checklist**
-- [ ] Implement interval overlap predicates for Ibis relationship joins.
-- [ ] Add ambiguity metrics (candidate counts, winner selection rates).
-- [ ] Ensure output schemas still align to CPG contracts.
+- [x] Implement interval overlap predicates for Ibis relationship joins.
+- [x] Add ambiguity metrics (candidate counts, winner selection rates).
+- [x] Ensure output schemas still align to CPG contracts.
 
 ---
 
@@ -295,10 +296,10 @@ ctx = SessionContext(config=config)
 - `src/obs/repro.py`
 
 **Implementation checklist**
-- [ ] Define a canonical policy map (dev/default/prod tiers).
-- [ ] Apply policy at SessionContext construction time.
-- [ ] Record applied policy in run manifests and repro bundles.
-- [ ] Surface policy in diagnostics artifacts for debugging.
+- [x] Define a canonical policy map (dev/default/prod tiers).
+- [x] Apply policy at SessionContext construction time.
+- [x] Record applied policy in run manifests and repro bundles.
+- [x] Surface policy in diagnostics artifacts for debugging.
 
 ---
 
@@ -329,9 +330,9 @@ except TranslationError:
 - `src/sqlglot_tools/optimizer.py`
 
 **Implementation checklist**
-- [ ] Use DataFusion backend as the primary executor for Ibis plans.
-- [ ] Preserve SQLGlot AST for lineage, diff, and diagnostics.
-- [ ] Keep SQLGlot->DataFusion translation as fallback only.
+- [x] Use DataFusion backend as the primary executor for Ibis plans.
+- [x] Preserve SQLGlot AST for lineage, diff, and diagnostics.
+- [x] Keep SQLGlot->DataFusion translation as fallback only.
 
 ---
 
@@ -360,10 +361,10 @@ ctx.register_listing_table(
 - `src/hamilton_pipeline/modules/inputs.py`
 
 **Implementation checklist**
-- [ ] Add listing-table registration when datasets use directory prefixes.
-- [ ] Declare partition columns and file_sort_order where known.
-- [ ] Register object stores once per session and reuse across datasets.
-- [ ] Standardize default Parquet options (pruning, skip_metadata).
+- [x] Add listing-table registration when datasets use directory prefixes.
+- [x] Declare partition columns and file_sort_order where known.
+- [x] Register object stores once per session and reuse across datasets.
+- [x] Standardize default Parquet options (pruning, skip_metadata).
 
 ---
 
@@ -387,10 +388,10 @@ ctx.register_table("type_nodes_cached", cached)
 - `src/hamilton_pipeline/modules/cpg_build.py`
 
 **Implementation checklist**
-- [ ] Identify high-reuse datasets (line index, types, SCIP).
-- [ ] Cache after projection/filters to reduce memory footprint.
-- [ ] Gate caching behind a runtime profile setting.
-- [ ] Record cached datasets in diagnostics artifacts.
+- [x] Identify high-reuse datasets (line index, types, SCIP).
+- [x] Cache after projection/filters to reduce memory footprint.
+- [x] Gate caching behind a runtime profile setting.
+- [x] Record cached datasets in diagnostics artifacts.
 
 ---
 
@@ -414,10 +415,10 @@ plan_fingerprint = hash_sqlglot(sqlglot_expr)
 - `src/obs/manifest.py`
 
 **Implementation checklist**
-- [ ] Capture canonical SQLGlot SQL per compiled rule.
-- [ ] Store EXPLAIN ANALYZE output for key rule plans.
-- [ ] Compute stable plan fingerprints from canonical SQLGlot ASTs.
-- [ ] Include DataFusion policy + param signatures in artifacts.
+- [x] Capture canonical SQLGlot SQL per compiled rule.
+- [x] Store EXPLAIN ANALYZE output for key rule plans.
+- [x] Compute stable plan fingerprints from canonical SQLGlot ASTs.
+- [x] Include DataFusion policy + param signatures in artifacts.
 
 ---
 
@@ -443,9 +444,9 @@ fn register_function_factory(ctx: &SessionContext) {
 - `src/ibis_engine/builtin_udfs.py`
 
 **Implementation checklist**
-- [ ] Register stable hash + col_to_byte as global functions.
-- [ ] Use FunctionFactory where available; fallback to UDFs in Python-only mode.
-- [ ] Keep function volatility metadata explicit (stable vs immutable).
+- [x] Register stable hash + col_to_byte as global functions.
+- [x] Use FunctionFactory where available; fallback to UDFs in Python-only mode.
+- [x] Keep function volatility metadata explicit (stable vs immutable).
 
 ---
 
@@ -472,9 +473,10 @@ ibis_backend.create_database("normalize", catalog="codeintel", force=True)
 - `src/ibis_engine/registry.py`
 
 **Implementation checklist**
-- [ ] Thread a shared SessionContext through Ibis backend construction.
-- [ ] Register object stores/catalogs once per session.
-- [ ] Avoid creating shadow contexts in adapter code paths.
+- [x] Thread a shared SessionContext through Ibis backend construction.
+- [x] Register object stores once per session.
+- [x] Register catalogs once per session.
+- [x] Avoid creating shadow contexts in adapter code paths.
 
 ---
 
@@ -500,9 +502,9 @@ if materialize:
 - `src/cpg/build_edges.py`
 
 **Implementation checklist**
-- [ ] Default to view registration for rule outputs.
-- [ ] Add explicit materialization switches for heavy outputs.
-- [ ] Record view/table choice in diagnostics artifacts.
+- [x] Default to view registration for rule outputs.
+- [x] Add explicit materialization switches for heavy outputs.
+- [x] Record view/table choice in diagnostics artifacts.
 
 ---
 
@@ -525,9 +527,9 @@ return reader
 - `src/datafusion_engine/bridge.py`
 
 **Implementation checklist**
-- [ ] Implement `to_pyarrow_batches` via Arrow C stream.
-- [ ] Prefer streaming for large outputs in normalize/cpg emission.
-- [ ] Keep table materialization only for explicit materialize steps.
+- [x] Implement `to_pyarrow_batches` via Arrow C stream.
+- [x] Prefer streaming for large outputs in normalize/cpg emission.
+- [x] Keep table materialization only for explicit materialize steps.
 
 ---
 
@@ -552,9 +554,9 @@ tables = backend.list_tables(database="params")
 - `src/obs/manifest.py`
 
 **Implementation checklist**
-- [ ] Create explicit catalogs and schemas for datasets/params.
-- [ ] Enable information_schema in diagnostic runs.
-- [ ] Record catalog/schema inventory in run manifests.
+- [x] Create explicit catalogs and schemas for datasets/params.
+- [x] Enable information_schema in diagnostic runs.
+- [x] Record catalog/schema inventory in run manifests.
 
 ---
 
@@ -581,9 +583,9 @@ ctx.register_listing_table(
 - `src/datafusion_engine/runtime.py`
 
 **Implementation checklist**
-- [ ] Implement Ibis read_* wrappers with explicit options.
-- [ ] Support listing-table and dataset registration for large prefixes.
-- [ ] Standardize file sort order and partition column declarations.
+- [x] Implement Ibis read_* wrappers with explicit options.
+- [x] Support listing-table and dataset registration for large prefixes.
+- [x] Standardize file sort order and partition column declarations.
 
 ---
 
@@ -609,9 +611,9 @@ return run_kernel_lane(expr, ctx=ctx)
 - `src/cpg/build_edges.py`
 
 **Implementation checklist**
-- [ ] Check `has_operation` for unsupported nodes before execution.
-- [ ] Route unsupported plans to SQLGlot fallback or kernel lane.
-- [ ] Emit diagnostics when a fallback path is taken.
+- [x] Check `has_operation` for unsupported nodes before execution.
+- [x] Route unsupported plans to SQLGlot fallback or kernel lane.
+- [x] Emit diagnostics when a fallback path is taken.
 
 ---
 
@@ -637,9 +639,9 @@ filtered = table.filter(table.score >= param)
 - `src/hamilton_pipeline/modules/cpg_build.py`
 
 **Implementation checklist**
-- [ ] Extract scalar ParamOp specs into the Ibis param registry.
-- [ ] Ensure rule compilation binds params at runtime (no literal thresholds).
-- [ ] Require stable param names for DataFusion binding.
+- [x] Extract scalar ParamOp specs into the Ibis param registry.
+- [x] Ensure rule compilation binds params at runtime (no literal thresholds).
+- [x] Require stable param names for DataFusion binding.
 
 ---
 
@@ -666,9 +668,9 @@ filtered = base.join(
 - `src/relspec/rules/validation.py`
 
 **Implementation checklist**
-- [ ] Ensure list params are always materialized as param tables.
-- [ ] Add lowering helpers from list ParamOp to join-based filters.
-- [ ] Enforce list-filter gate in rule validation diagnostics.
+- [x] Ensure list params are always materialized as param tables.
+- [x] Add lowering helpers from list ParamOp to join-based filters.
+- [x] Enforce list-filter gate in rule validation diagnostics.
 
 ---
 
@@ -692,9 +694,9 @@ else:
 - `src/hamilton_pipeline/modules/params.py`
 
 **Implementation checklist**
-- [ ] Add scope-aware schema naming for PER_SESSION.
-- [ ] Keep stable logical names via aliases when needed.
-- [ ] Ensure param tables are re-registered safely per run.
+- [x] Add scope-aware schema naming for PER_SESSION.
+- [x] Keep stable logical names via aliases when needed.
+- [x] Ensure param tables are re-registered safely per run.
 
 ---
 
@@ -717,9 +719,9 @@ active = ActiveParamSet(frozenset(dep.logical_name for dep in deps))
 - `src/obs/repro.py`
 
 **Implementation checklist**
-- [ ] Ensure dependency reports are emitted during rule diagnostics.
-- [ ] Use inferred deps to drive active param table registration.
-- [ ] Record active param tables and signatures in manifests/run bundles.
+- [x] Ensure dependency reports are emitted during rule diagnostics.
+- [x] Use inferred deps to drive active param table registration.
+- [x] Record active param tables and signatures in manifests/run bundles.
 
 ---
 
@@ -745,9 +747,9 @@ cache[artifact.logical_name] = artifact
 - `src/obs/manifest.py`
 
 **Implementation checklist**
-- [ ] Track param table signatures and reuse identical artifacts.
-- [ ] Skip backend re-registration when signatures match.
-- [ ] Persist signatures in manifests and repro bundles.
+- [x] Track param table signatures and reuse identical artifacts.
+- [x] Skip backend re-registration when signatures match.
+- [x] Persist signatures in manifests and repro bundles.
 
 ---
 
@@ -772,9 +774,9 @@ bindings = registry.bindings(param_bundle.scalar)
 - `src/obs/manifest.py`
 
 **Implementation checklist**
-- [ ] Compute plan signatures from canonical SQLGlot ASTs.
-- [ ] Record param signatures separately from plan fingerprints.
-- [ ] Bind params only at execution, not at compile time.
+- [x] Compute plan signatures from canonical SQLGlot ASTs.
+- [x] Record param signatures separately from plan fingerprints.
+- [x] Bind params only at execution, not at compile time.
 
 ---
 
@@ -797,9 +799,9 @@ backend.create_table(table_name, artifact.table, database=policy.schema, overwri
 - `src/ibis_engine/registry.py`
 
 **Implementation checklist**
-- [ ] Enable information_schema in diagnostic runs where supported.
-- [ ] Ensure param tables register into explicit catalog/schema.
-- [ ] Maintain stable qualified names for SQLGlot lineage.
+- [x] Enable information_schema in diagnostic runs where supported.
+- [x] Ensure param tables register into explicit catalog/schema.
+- [x] Maintain stable qualified names for SQLGlot lineage.
 
 ---
 

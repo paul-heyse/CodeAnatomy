@@ -20,8 +20,9 @@ from arrowdsl.schema.build import (
     build_struct,
     const_array,
 )
+from arrowdsl.schema.encoding_policy import EncodingPolicy
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
-from arrowdsl.schema.schema import AlignmentInfo, EncodingPolicy, SchemaMetadataSpec
+from arrowdsl.schema.schema import AlignmentInfo, SchemaMetadataSpec
 from arrowdsl.schema.validation import ArrowValidationOptions
 from schema_spec.specs import PROVENANCE_COLS, NestedFieldSpec
 from schema_spec.system import table_spec_from_schema, validate_arrow_table
@@ -545,7 +546,7 @@ def finalize(
             )
             policy_options = SchemaPolicyOptions(
                 schema=contract.with_versioned_schema(),
-                encoding=EncodingPolicy(specs=()),
+                encoding=EncodingPolicy(dictionary_cols=frozenset()),
                 validation=contract.validation,
             )
         else:

@@ -13,7 +13,7 @@ from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
 
 from arrowdsl.compute.filters import FilterSpec
-from arrowdsl.compute.kernels import resolve_kernel
+from arrowdsl.compute.kernels import canonical_sort, resolve_kernel
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, Ordering
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
@@ -524,6 +524,16 @@ def _build_dedupe_kernel(spec: DedupeKernelSpec) -> KernelFn:
     return _fn
 
 
+def _build_canonical_sort_kernel(spec: CanonicalSortKernelSpec) -> KernelFn:
+    def _fn(table: TableLike, ctx: ExecutionContext) -> TableLike:
+        _ = ctx
+        if not spec.sort_keys:
+            return table
+        return canonical_sort(table, sort_keys=spec.sort_keys)
+
+    return _fn
+
+
 def _kernel_from_spec(spec: object) -> KernelFn:
     """Resolve a kernel function from a kernel spec.
 
@@ -557,8 +567,7 @@ def _kernel_from_spec(spec: object) -> KernelFn:
     if isinstance(spec, DedupeKernelSpec):
         return _build_dedupe_kernel(spec)
     if isinstance(spec, CanonicalSortKernelSpec):
-        msg = "CanonicalSortKernelSpec is deprecated; use contract canonical_sort in finalize."
-        raise TypeError(msg)
+        return _build_canonical_sort_kernel(spec)
     msg = f"Unknown KernelSpec type: {type(spec).__name__}."
     raise ValueError(msg)
 

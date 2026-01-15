@@ -27,12 +27,10 @@ from arrowdsl.core.interop import (
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
-from arrowdsl.plan.scan_io import plan_from_rows
 from arrowdsl.schema.build import struct_array_from_dicts, table_from_arrays
 from arrowdsl.schema.nested_builders import LargeListAccumulator
-from arrowdsl.schema.ops import unify_tables
-from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
-from extract.plan_helpers import apply_evidence_projection
+from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table, unify_tables
+from extract.plan_helpers import apply_evidence_projection, plan_from_rows
 from extract.registry_fields import (
     SCIP_SIGNATURE_DOCUMENTATION_TYPE,
 )

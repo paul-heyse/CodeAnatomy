@@ -24,7 +24,6 @@ from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
-from arrowdsl.plan.scan_io import plan_from_rows
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from arrowdsl.schema.structs import flatten_struct_field
 from extract.helpers import (
@@ -34,7 +33,7 @@ from extract.helpers import (
     file_identity_row,
     iter_contexts,
 )
-from extract.plan_helpers import apply_query_and_normalize
+from extract.plan_helpers import apply_query_and_normalize, plan_from_rows
 from extract.registry_fields import QNAME_STRUCT
 from extract.registry_specs import (
     dataset_enabled,

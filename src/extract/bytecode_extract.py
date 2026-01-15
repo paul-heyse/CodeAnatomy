@@ -13,7 +13,6 @@ from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
-from arrowdsl.plan.scan_io import plan_from_rows
 from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.helpers import (
     ExtractExecutionContext,
@@ -23,7 +22,7 @@ from extract.helpers import (
     project_columns,
     text_from_file_ctx,
 )
-from extract.plan_helpers import apply_query_and_normalize
+from extract.plan_helpers import apply_query_and_normalize, plan_from_rows
 from extract.registry_ids import hash_spec
 from extract.registry_specs import (
     dataset_enabled,

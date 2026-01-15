@@ -201,6 +201,18 @@ class TableLike(Protocol):
         """Join with another table."""
         ...
 
+    def join_asof(
+        self,
+        right: TableLike,
+        on: str,
+        by: Sequence[str] | None = None,
+        tolerance: object | None = None,
+        right_on: str | None = None,
+        right_by: Sequence[str] | None = None,
+    ) -> TableLike:
+        """Join with another table using as-of semantics."""
+        ...
+
     def select(self, names: Sequence[str]) -> TableLike:
         """Select columns by name."""
         ...

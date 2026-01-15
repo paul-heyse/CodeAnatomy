@@ -19,7 +19,7 @@ from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeContext
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.query import PathLike, ProjectionSpec, QuerySpec, ScanContext, open_dataset
+from arrowdsl.plan.query import PathLike, ProjectionSpec, QuerySpec, open_dataset
 from arrowdsl.plan.runner import run_plan
 from arrowdsl.plan.scan_io import DatasetSource, PlanSource, plan_from_dataset, plan_from_source
 from arrowdsl.schema.metadata import (
@@ -307,16 +307,6 @@ class DatasetSpec:
             CREATE EXTERNAL TABLE statement for this dataset schema.
         """
         return self.table_spec.to_create_external_table_sql(config)
-
-    def scan_context(self, dataset: ds.Dataset, ctx: ExecutionContext) -> ScanContext:
-        """Return a ScanContext for dataset scanning.
-
-        Returns
-        -------
-        ScanContext
-            Scan context configured for this dataset.
-        """
-        return ScanContext(dataset=dataset, spec=self.query(), ctx=ctx)
 
     def _plan_for_validation(self, source: PlanSource, *, ctx: ExecutionContext) -> Plan:
         if isinstance(source, ds.Dataset):

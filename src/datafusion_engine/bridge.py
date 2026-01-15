@@ -10,7 +10,6 @@ import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 from ibis.expr.types import Table as IbisTable
-from ibis.expr.types import Value
 from sqlglot import ErrorLevel, Expression, exp
 
 from arrowdsl.core.context import Ordering, OrderingLevel
@@ -26,7 +25,6 @@ from ibis_engine.params_bridge import datafusion_param_bindings
 from ibis_engine.plan import IbisPlan
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
 from sqlglot_tools.optimizer import (
-    bind_params,
     normalize_expr,
     register_datafusion_dialect,
     rewrite_expr,
@@ -81,40 +79,13 @@ def df_from_sqlglot_or_sql(
     """
     resolved = options or DataFusionCompileOptions()
     bound_expr = expr
-    if resolved.params:
-        bound_expr = bind_params(
-            expr,
-            params=datafusion_param_bindings(resolved.params),
-        )
+    if resolved.params and _contains_params(expr):
+        return _df_from_sql(ctx, bound_expr, options=resolved, reason="params")
     try:
         df = df_from_sqlglot(ctx, bound_expr)
     except TranslationError as exc:
         _ensure_dialect(resolved.dialect)
-        sql = bound_expr.sql(dialect=resolved.dialect, unsupported_level=ErrorLevel.RAISE)
-        bindings = datafusion_param_bindings(resolved.params or {})
-        policy = resolved.sql_policy or _default_sql_policy()
-        sql_options = resolved.sql_options or policy.to_sql_options()
-        violations = ()
-        if resolved.sql_options is None or resolved.sql_policy is not None:
-            violations = _policy_violations(bound_expr, policy)
-            if violations:
-                logger.warning(
-                    "DataFusion SQL policy violations detected: %s",
-                    ", ".join(violations),
-                )
-        event = DataFusionFallbackEvent(
-            reason="translation_error",
-            error=str(exc),
-            expression_type=bound_expr.__class__.__name__,
-            sql=sql,
-            dialect=resolved.dialect,
-            policy_violations=violations,
-        )
-        _emit_fallback_diagnostics(
-            event,
-            fallback_hook=resolved.fallback_hook,
-        )
-        df = ctx.sql_with_options(sql, sql_options, param_values=bindings)
+        df = _df_from_sql(ctx, bound_expr, options=resolved, reason="translation_error", error=exc)
     _maybe_explain(ctx, bound_expr, options=resolved)
     return df
 
@@ -156,7 +127,7 @@ def ibis_to_datafusion(
         DataFusion DataFrame for the Ibis expression.
     """
     options = options or DataFusionCompileOptions()
-    sg_expr = ibis_to_sqlglot(expr, backend=backend, params=_ibis_params(options.params))
+    sg_expr = ibis_to_sqlglot(expr, backend=backend, params=None)
     sg_expr = _apply_rewrite_hook(sg_expr, options=options)
     if options.optimize:
         sg_expr = normalize_expr(sg_expr, schema=options.schema_map)
@@ -283,16 +254,6 @@ def _apply_ordering(
     return pa.RecordBatchReader.from_batches(spec.apply(reader.schema), reader)
 
 
-def _ibis_params(
-    params: Mapping[str, object] | Mapping[Value, object] | None,
-) -> Mapping[Value, object] | None:
-    if not params:
-        return None
-    if all(isinstance(key, Value) for key in params):
-        return cast("Mapping[Value, object]", params)
-    return None
-
-
 def _apply_rewrite_hook(expr: Expression, *, options: DataFusionCompileOptions) -> Expression:
     return rewrite_expr(
         expr,
@@ -336,6 +297,46 @@ def _contains_statements(expr: Expression) -> bool:
         or bool(expr.find(exp.Use))
         or bool(expr.find(exp.Pragma))
     )
+
+
+def _contains_params(expr: Expression) -> bool:
+    return bool(expr.find(exp.Parameter))
+
+
+def _df_from_sql(
+    ctx: SessionContext,
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+    reason: str,
+    error: TranslationError | None = None,
+) -> DataFrame:
+    _ensure_dialect(options.dialect)
+    sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
+    bindings = datafusion_param_bindings(options.params or {})
+    policy = options.sql_policy or _default_sql_policy()
+    sql_options = options.sql_options or policy.to_sql_options()
+    violations = ()
+    if options.sql_options is None or options.sql_policy is not None:
+        violations = _policy_violations(expr, policy)
+        if violations:
+            logger.warning(
+                "DataFusion SQL policy violations detected: %s",
+                ", ".join(violations),
+            )
+    event = DataFusionFallbackEvent(
+        reason=reason,
+        error=str(error) if error is not None else "",
+        expression_type=expr.__class__.__name__,
+        sql=sql,
+        dialect=options.dialect,
+        policy_violations=violations,
+    )
+    _emit_fallback_diagnostics(
+        event,
+        fallback_hook=options.fallback_hook,
+    )
+    return ctx.sql_with_options(sql, sql_options, param_values=bindings)
 
 
 def _emit_fallback_diagnostics(

@@ -17,7 +17,7 @@ from arrowdsl.plan.scan_io import PlanSource, plan_from_source
 from arrowdsl.schema.build import empty_table
 from extract.registry_specs import dataset_schema as extract_dataset_schema
 from ibis_engine.builtin_udfs import col_to_byte, position_encoding_norm
-from ibis_engine.ids import masked_stable_id_expr, stable_id_expr
+from ibis_engine.ids import masked_stable_id_expr, stable_id_expr, stable_key_expr
 from ibis_engine.plan import IbisPlan
 from ibis_engine.plan_bridge import SourceToIbisOptions, source_to_ibis
 from ibis_engine.schema_utils import (
@@ -26,6 +26,7 @@ from ibis_engine.schema_utils import (
     ensure_columns,
     ibis_null_literal,
 )
+from normalize.registry_fields import DIAG_DETAILS_TYPE
 from normalize.registry_ids import (
     DEF_USE_EVENT_ID_SPEC,
     DIAG_ID_SPEC,
@@ -131,8 +132,30 @@ def type_exprs_plan_ibis(
         trimmed,
         null_sentinel=TYPE_ID_SPEC.null_sentinel,
     )
-    enriched = filtered.mutate(type_repr=trimmed, type_expr_id=type_expr_id, type_id=type_id)
-    aligned = align_table_to_schema(enriched, schema=dataset_schema(TYPE_EXPRS_NAME))
+    updates: dict[str, Value] = {
+        "type_repr": trimmed,
+        "type_expr_id": type_expr_id,
+        "type_id": type_id,
+    }
+    if ctx.debug:
+        updates["type_expr_key"] = stable_key_expr(
+            filtered.path,
+            filtered.bstart,
+            filtered.bend,
+            prefix=TYPE_EXPR_ID_SPEC.prefix,
+            null_sentinel=TYPE_EXPR_ID_SPEC.null_sentinel,
+        )
+        updates["type_id_key"] = stable_key_expr(
+            trimmed,
+            prefix=TYPE_ID_SPEC.prefix,
+            null_sentinel=TYPE_ID_SPEC.null_sentinel,
+        )
+    enriched = filtered.mutate(**updates)
+    aligned = align_table_to_schema(
+        enriched,
+        schema=dataset_schema(TYPE_EXPRS_NAME),
+        keep_extra_columns=ctx.debug,
+    )
     return IbisPlan(expr=aligned, ordering=Ordering.unordered())
 
 
@@ -166,6 +189,14 @@ def type_nodes_plan_ibis(
         type_form=ibis.literal("scip"),
         origin=ibis.literal("inferred"),
     )
+    if ctx.debug:
+        scip_rows = scip_rows.mutate(
+            type_id_key=stable_key_expr(
+                scip_trimmed,
+                prefix=TYPE_ID_SPEC.prefix,
+                null_sentinel=TYPE_ID_SPEC.null_sentinel,
+            )
+        )
 
     expr_trimmed = exprs.type_repr.cast("string").strip()
     expr_non_empty = expr_trimmed.notnull() & (expr_trimmed.length() > ibis.literal(0))
@@ -175,11 +206,23 @@ def type_nodes_plan_ibis(
         type_form=ibis.literal("annotation"),
         origin=ibis.literal("annotation"),
     )
+    if ctx.debug:
+        expr_rows = expr_rows.mutate(
+            type_id_key=stable_key_expr(
+                expr_trimmed,
+                prefix=TYPE_ID_SPEC.prefix,
+                null_sentinel=TYPE_ID_SPEC.null_sentinel,
+            )
+        )
 
     scip_count = scip_rows.count()
     use_scip = scip_count > ibis.literal(0)
     combined = scip_rows.filter(use_scip).union(expr_rows.filter(~use_scip))
-    aligned = align_table_to_schema(combined, schema=dataset_schema(TYPE_NODES_NAME))
+    aligned = align_table_to_schema(
+        combined,
+        schema=dataset_schema(TYPE_NODES_NAME),
+        keep_extra_columns=ctx.debug,
+    )
     return IbisPlan(expr=aligned, ordering=Ordering.unordered())
 
 
@@ -311,8 +354,22 @@ def def_use_events_plan_ibis(
         null_sentinel=DEF_USE_EVENT_ID_SPEC.null_sentinel,
     )
     valid = symbol.notnull() & kind.notnull()
-    enriched = table.filter(valid).mutate(symbol=symbol, kind=kind, event_id=event_id)
-    aligned = align_table_to_schema(enriched, schema=dataset_schema(DEF_USE_NAME))
+    updates: dict[str, Value] = {"symbol": symbol, "kind": kind, "event_id": event_id}
+    if ctx.debug:
+        updates["event_key"] = stable_key_expr(
+            table.code_unit_id,
+            table.instr_id,
+            kind,
+            symbol,
+            prefix=DEF_USE_EVENT_ID_SPEC.prefix,
+            null_sentinel=DEF_USE_EVENT_ID_SPEC.null_sentinel,
+        )
+    enriched = table.filter(valid).mutate(**updates)
+    aligned = align_table_to_schema(
+        enriched,
+        schema=dataset_schema(DEF_USE_NAME),
+        keep_extra_columns=ctx.debug,
+    )
     return IbisPlan(expr=aligned, ordering=Ordering.unordered())
 
 
@@ -357,8 +414,20 @@ def reaching_defs_plan_ibis(
         joined.use_event_id,
         null_sentinel=REACH_EDGE_ID_SPEC.null_sentinel,
     )
-    enriched = joined.mutate(edge_id=edge_id)
-    aligned = align_table_to_schema(enriched, schema=dataset_schema(REACHES_NAME))
+    updates: dict[str, Value] = {"edge_id": edge_id}
+    if ctx.debug:
+        updates["edge_key"] = stable_key_expr(
+            joined.def_event_id,
+            joined.use_event_id,
+            prefix=REACH_EDGE_ID_SPEC.prefix,
+            null_sentinel=REACH_EDGE_ID_SPEC.null_sentinel,
+        )
+    enriched = joined.mutate(**updates)
+    aligned = align_table_to_schema(
+        enriched,
+        schema=dataset_schema(REACHES_NAME),
+        keep_extra_columns=ctx.debug,
+    )
     return IbisPlan(expr=aligned, ordering=Ordering.unordered())
 
 
@@ -454,6 +523,7 @@ def _scip_severity_expr(value: Value) -> Value:
 def _cst_diag_expr(cst: Table, line_index: Table) -> Table:
     line_base = _line_base_value(cst.line_base, default_base=1)
     col_unit = _col_unit_value(cst.col_unit, default_unit="utf32")
+    end_exclusive = _end_exclusive_value(cst.end_exclusive, default_exclusive=True)
     start_line0 = _zero_based_line(cst.raw_line, line_base)
     start_idx = _line_index_view(line_index, prefix="cst")
     joined = cst.join(
@@ -478,6 +548,10 @@ def _cst_diag_expr(cst: Table, line_index: Table) -> Table:
         message=_non_empty_string(joined.message, default="LibCST parse error"),
         diag_source=ibis.literal("libcst"),
         code=ibis_null_literal(pa.string()),
+        details=ibis_null_literal(DIAG_DETAILS_TYPE),
+        line_base=line_base,
+        col_unit=col_unit.cast("string"),
+        end_exclusive=end_exclusive,
     )
     return base.filter(base.bstart.notnull() & base.bend.notnull() & base.path.notnull())
 
@@ -504,6 +578,10 @@ def _ts_diag_expr(table: Table, *, severity: str, message: str) -> Table:
         message=ibis.literal(message),
         diag_source=ibis.literal("treesitter"),
         code=ibis_null_literal(pa.string()),
+        details=ibis_null_literal(DIAG_DETAILS_TYPE),
+        line_base=ibis_null_literal(pa.int32()),
+        col_unit=ibis_null_literal(pa.string()),
+        end_exclusive=ibis_null_literal(pa.bool_()),
     )
     return base.filter(base.bstart.notnull() & base.bend.notnull() & base.path.notnull())
 
@@ -514,6 +592,8 @@ class _ScipDiagContext:
     path_expr: Value
     col_unit: Value
     end_char: Value
+    line_base: Value
+    end_exclusive: Value
 
 
 def _scip_diag_expr(diags: Table, docs: Table, line_index: Table) -> Table:
@@ -544,6 +624,10 @@ def _scip_diag_expr(diags: Table, docs: Table, line_index: Table) -> Table:
         message=_non_empty_string(ctx.joined.message, default="SCIP diagnostic"),
         diag_source=ibis.literal("scip"),
         code=ctx.joined.code.cast("string"),
+        details=ibis_null_literal(DIAG_DETAILS_TYPE),
+        line_base=ctx.line_base,
+        col_unit=ctx.col_unit.cast("string"),
+        end_exclusive=ctx.end_exclusive,
     )
     return base.filter(base.bstart.notnull() & base.bend.notnull() & base.path.notnull())
 
@@ -587,6 +671,8 @@ def _scip_diag_context(diags: Table, docs: Table, line_index: Table) -> _ScipDia
         path_expr=path_expr,
         col_unit=col_unit,
         end_char=end_char,
+        line_base=line_base,
+        end_exclusive=end_exclusive,
     )
 
 
@@ -625,8 +711,23 @@ def diagnostics_plan_ibis(
         combined.message,
         null_sentinel=DIAG_ID_SPEC.null_sentinel,
     )
-    enriched = combined.mutate(diag_id=diag_id)
-    aligned = align_table_to_schema(enriched, schema=diag_schema)
+    updates: dict[str, Value] = {"diag_id": diag_id}
+    if ctx.debug:
+        updates["diag_key"] = stable_key_expr(
+            combined.path,
+            combined.bstart,
+            combined.bend,
+            combined.diag_source,
+            combined.message,
+            prefix=DIAG_ID_SPEC.prefix,
+            null_sentinel=DIAG_ID_SPEC.null_sentinel,
+        )
+    enriched = combined.mutate(**updates)
+    aligned = align_table_to_schema(
+        enriched,
+        schema=diag_schema,
+        keep_extra_columns=ctx.debug,
+    )
     return IbisPlan(expr=aligned, ordering=Ordering.unordered())
 
 

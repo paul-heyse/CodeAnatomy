@@ -7,9 +7,9 @@ import os
 import subprocess
 import sys
 import textwrap
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
@@ -19,9 +19,8 @@ from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, 
 from arrowdsl.plan.joins import join_config_for_output, left_join
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
-from arrowdsl.plan.scan_io import record_batches_from_rows
-from arrowdsl.schema.ops import unify_tables
-from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
+from arrowdsl.plan.scan_io import rows_to_table
+from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table, unify_tables
 from extract.helpers import project_columns
 from extract.plan_helpers import apply_query_and_normalize
 from extract.registry_ids import hash_spec
@@ -101,6 +100,17 @@ def _runtime_metadata_specs(
         "rt_signature_params": metadata_spec_for_dataset("rt_signature_params_v1", options=options),
         "rt_members": metadata_spec_for_dataset("rt_members_v1", options=options),
     }
+
+
+def _record_batches_from_rows(
+    rows: Iterable[Mapping[str, object]],
+    *,
+    schema: SchemaLike,
+    batch_size: int,
+) -> Iterable[pa.RecordBatch]:
+    row_sequence = rows if isinstance(rows, Sequence) else list(rows)
+    table = rows_to_table(row_sequence, schema)
+    return cast("pa.Table", table).to_batches(max_chunksize=batch_size)
 
 
 def _inspect_script() -> str:
@@ -471,7 +481,7 @@ def _plan_from_row_fragments(
         return Plan.table_source(empty_table(schema), label=label)
     tables = [
         pa.Table.from_batches([batch], schema=schema)
-        for batch in record_batches_from_rows(rows, schema=schema, batch_size=batch_size)
+        for batch in _record_batches_from_rows(rows, schema=schema, batch_size=batch_size)
     ]
     table = unify_tables(tables)
     return Plan.table_source(table, label=label)

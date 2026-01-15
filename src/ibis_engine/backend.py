@@ -36,18 +36,8 @@ def build_backend(cfg: IbisBackendConfig) -> ibis.backends.BaseBackend:
         Configured backend instance.
 
     """
-    if cfg.engine == "datafusion":
-        ibis_datafusion = _load_ibis_datafusion()
-        profile = cfg.datafusion_profile or DataFusionRuntimeProfile()
-        ctx = profile.session_context()
-        register_datafusion_udfs(ctx)
-        return ibis_datafusion.connect(ctx)
-    con = ibis.duckdb.connect(
-        database=cfg.database,
-        read_only=cfg.read_only,
-        extensions=list(cfg.extensions) or None,
-        **cfg.config,
-    )
-    if cfg.filesystem is not None:
-        con.register_filesystem(cfg.filesystem)
-    return con
+    ibis_datafusion = _load_ibis_datafusion()
+    profile = cfg.datafusion_profile or DataFusionRuntimeProfile()
+    ctx = profile.session_context()
+    register_datafusion_udfs(ctx)
+    return ibis_datafusion.connect(ctx)

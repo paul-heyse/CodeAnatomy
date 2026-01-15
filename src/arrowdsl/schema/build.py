@@ -35,6 +35,7 @@ from arrowdsl.schema.nested_builders import (
     union_array_from_tagged_values,
     union_array_from_values,
 )
+from arrowdsl.schema.types import list_view_type, map_type
 
 
 def const_array(n: int, value: object, *, dtype: DataTypeLike | None = None) -> ArrayLike:
@@ -85,35 +86,6 @@ class ColumnDefaultsSpec:
             values = expr.materialize(out)
             out = set_or_append_column(out, name, values)
         return out
-
-
-def list_view_type(value_type: DataTypeLike, *, large: bool = False) -> DataTypeLike:
-    """Return a list_view type (large_list_view when requested).
-
-    Returns
-    -------
-    DataTypeLike
-        List view data type.
-    """
-    return pa.large_list_view(value_type) if large else pa.list_view(value_type)
-
-
-def map_type(
-    key_type: DataTypeLike,
-    item_type: DataTypeLike,
-    *,
-    keys_sorted: bool | None = None,
-) -> DataTypeLike:
-    """Return a map type for the provided key/value types.
-
-    Returns
-    -------
-    DataTypeLike
-        Map data type.
-    """
-    if keys_sorted is None:
-        return pa.map_(key_type, item_type)
-    return pa.map_(key_type, item_type, keys_sorted=keys_sorted)
 
 
 def struct_type(fields: Sequence[FieldLike] | Mapping[str, DataTypeLike]) -> DataTypeLike:

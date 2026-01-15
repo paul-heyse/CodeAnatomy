@@ -60,6 +60,9 @@ _register_many(
     {
         "file_id": _spec("file_id", pa.string()),
         "path": _spec("path", pa.string()),
+        "line_base": _spec("line_base", pa.int32()),
+        "col_unit": _spec("col_unit", pa.string()),
+        "end_exclusive": _spec("end_exclusive", pa.bool_()),
         "span_id": _spec("span_id", pa.string()),
         "bstart": _spec("bstart", pa.int64()),
         "bend": _spec("bend", pa.int64()),

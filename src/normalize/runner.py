@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import cache
 from typing import TYPE_CHECKING, cast
 
@@ -33,11 +33,16 @@ from arrowdsl.plan.plan import Plan, PlanSpec
 from arrowdsl.plan.runner import AdapterRunOptions, PlanRunResult, run_plan, run_plan_adapter
 from arrowdsl.plan.scan_io import plan_from_source
 from arrowdsl.schema.metadata import merge_metadata_specs
-from arrowdsl.schema.ops import align_table
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
-from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
+from arrowdsl.schema.schema import SchemaMetadataSpec, align_table, empty_table
 from ibis_engine.plan import IbisPlan
-from ibis_engine.plan_bridge import SourceToIbisOptions, plan_to_ibis, source_to_ibis
+from ibis_engine.plan_bridge import (
+    SourceToIbisOptions,
+    plan_to_ibis,
+    register_ibis_view,
+    source_to_ibis,
+    table_to_ibis,
+)
 from normalize.catalog import NormalizePlanCatalog
 from normalize.contracts import NORMALIZE_EVIDENCE_NAME, normalize_evidence_schema
 from normalize.ibis_bridge import resolve_plan_builder_ibis
@@ -97,6 +102,7 @@ class NormalizeRuleCompilation:
     rules: tuple[NormalizeRule, ...]
     plans: Mapping[str, Plan | IbisPlan]
     catalog: PlanCatalog
+    output_storage: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -107,6 +113,7 @@ class NormalizeIbisPlanOptions:
     rules: Sequence[NormalizeRule] | None = None
     required_outputs: Sequence[str] | None = None
     name_prefix: str = "normalize"
+    materialize_outputs: Sequence[str] | None = None
 
 
 def ensure_execution_context(
@@ -191,7 +198,7 @@ def run_normalize(
         ctx=ctx,
         options=AdapterRunOptions(prefer_reader=False),
     )
-    table = cast("TableLike", result.value)
+    table = _materialize_table(result.value)
     for fn in post:
         table = fn(table, ctx)
     contract_obj = contract.to_contract()
@@ -542,6 +549,7 @@ def compile_normalize_plans_ibis(
         repo_text_index=repo_text_index,
     )
     plans: dict[str, IbisPlan] = {}
+    materialize = set(options.materialize_outputs or ())
     for rule in ordered:
         plan = _resolve_rule_plan_ibis(rule, ibis_catalog, ctx=ctx, backend=options.backend)
         if plan is None:
@@ -549,6 +557,24 @@ def compile_normalize_plans_ibis(
                 msg = f"Normalize rule {rule.name!r} requires plan execution."
                 raise ValueError(msg)
             continue
+        view_name = (
+            f"{options.name_prefix}_{rule.output}" if options.name_prefix else rule.output
+        )
+        plan = register_ibis_view(
+            plan.expr,
+            backend=options.backend,
+            name=view_name,
+            ordering=plan.ordering,
+        )
+        if rule.output in materialize:
+            materialized = plan.to_table()
+            plan = table_to_ibis(
+                materialized,
+                backend=options.backend,
+                name=view_name,
+                ordering=plan.ordering,
+                overwrite=True,
+            )
         plans[rule.output] = plan
         ibis_catalog.add(rule.output, plan)
         try:
@@ -723,11 +749,17 @@ def _materialize_evidence_output(
     result = run_plan(
         evidence_plan,
         ctx=ctx,
-        prefer_reader=False,
+        prefer_reader=True,
         attach_ordering_metadata=True,
     )
-    table = cast("TableLike", result.value)
-    return align_table(table, schema=normalize_evidence_schema(), ctx=ctx)
+    table = _materialize_table(result.value)
+    return align_table(table, schema=normalize_evidence_schema())
+
+
+def _materialize_table(value: TableLike | RecordBatchReaderLike) -> TableLike:
+    if isinstance(value, RecordBatchReaderLike):
+        return value.read_all()
+    return value
 
 
 def _build_evidence_plan(
@@ -753,9 +785,9 @@ def _build_evidence_plan(
 
     exprs: list[ComputeExpression] = []
     names: list[str] = []
-    for field in schema:
-        name = field.name
-        dtype = field.type
+    for schema_field in schema:
+        name = schema_field.name
+        dtype = schema_field.type
         if name == "span_id":
             expr = _span_id_expr(col_map, available)
         elif name == "confidence":

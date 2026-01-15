@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
+from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
 from arrowdsl.schema.metadata import encoding_policy_from_spec
 from arrowdsl.schema.schema import (
     AlignmentInfo,
     CastErrorPolicy,
-    EncodingPolicy,
     SchemaMetadataSpec,
     SchemaTransform,
 )
@@ -72,7 +72,7 @@ class SchemaPolicy:
         aligned = self.transform().apply(table)
         if self.encoding is None:
             return aligned
-        return self.encoding.apply(aligned)
+        return apply_encoding(aligned, policy=self.encoding)
 
     def apply_with_info(self, table: TableLike) -> tuple[TableLike, AlignmentInfo]:
         """Align and optionally encode a table, returning alignment metadata.
@@ -85,7 +85,7 @@ class SchemaPolicy:
         aligned, info = self.transform().apply_with_info(table)
         if self.encoding is None:
             return aligned, info
-        return self.encoding.apply(aligned), info
+        return apply_encoding(aligned, policy=self.encoding), info
 
 
 @dataclass(frozen=True)
@@ -117,7 +117,7 @@ def schema_policy_factory(
     options = options or SchemaPolicyOptions()
     resolved_schema = options.schema or spec.to_arrow_schema()
     resolved_encoding = options.encoding or encoding_policy_from_spec(spec)
-    if resolved_encoding is not None and not resolved_encoding.specs:
+    if resolved_encoding is not None and not resolved_encoding.dictionary_cols:
         resolved_encoding = None
     resolved_safe_cast = ctx.safe_cast if options.safe_cast is None else options.safe_cast
     resolved_keep_extra = (

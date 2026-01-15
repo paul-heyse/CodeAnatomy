@@ -53,6 +53,9 @@ class AstSpanColumns:
     col: str = "col_offset"
     end_lineno: str = "end_lineno"
     end_col: str = "end_col_offset"
+    line_base: str = "line_base"
+    col_unit: str = "col_unit"
+    end_exclusive: str = "end_exclusive"
     out_bstart: str = "bstart"
     out_bend: str = "bend"
     out_ok: str = "span_ok"
@@ -75,6 +78,9 @@ class ScipOccurrenceColumns:
     enc_end_line: str = SCIP_ENC_RANGE_FIELDS[2]
     enc_end_char: str = SCIP_ENC_RANGE_FIELDS[3]
     enc_range_len: str = SCIP_ENC_RANGE_FIELDS[4]
+    line_base: str = "line_base"
+    col_unit: str = "col_unit"
+    end_exclusive: str = "end_exclusive"
     out_bstart: str = "bstart"
     out_bend: str = "bend"
     out_enc_bstart: str = "enc_bstart"
@@ -98,6 +104,9 @@ class OccurrenceRow:
     enc_end_line: RowValue
     enc_end_char: RowValue
     enc_range_len: RowValue
+    line_base: RowValue
+    col_unit: RowValue
+    end_exclusive: RowValue
 
 
 @dataclass(frozen=True)
@@ -110,6 +119,38 @@ class OccurrenceSpanResult:
     enc_bend: int | None
     ok: bool
     error: dict[str, str] | None
+
+
+@dataclass(frozen=True)
+class SpanCoordPolicy:
+    """Normalization policy for span coordinate inputs."""
+
+    line_base: int
+    end_exclusive: bool
+
+
+@dataclass(frozen=True)
+class AstSpanInput:
+    """AST span input payload."""
+
+    lineno: int | None
+    col_offset: int | None
+    end_lineno: int | None
+    end_col: int | None
+    line_base: RowValue = None
+    col_unit: RowValue = None
+    end_exclusive: RowValue = None
+
+
+@dataclass(frozen=True)
+class _OccurrenceContext:
+    """Derived context for occurrence span conversion."""
+
+    doc_id: str
+    path: str
+    fidx: FileTextIndex
+    policy: SpanCoordPolicy
+    unit_value: RowValue
 
 
 def _decode_repo_row_text(
@@ -133,6 +174,8 @@ def _normalized_range(
     start_char: RowValue,
     end_line: RowValue,
     end_char: RowValue,
+    *,
+    policy: SpanCoordPolicy,
 ) -> tuple[int, int, int, int] | None:
     sl = row_value_int(start_line)
     sc = row_value_int(start_char)
@@ -140,7 +183,12 @@ def _normalized_range(
     ec = row_value_int(end_char)
     if sl is None or sc is None or el is None or ec is None:
         return None
-    return sl, sc, el, ec
+    return (
+        sl - policy.line_base,
+        sc,
+        el - policy.line_base,
+        _normalize_end_col(ec, end_exclusive=policy.end_exclusive),
+    )
 
 
 def _build_line_index_utf8(text: str) -> tuple[list[str], list[int]]:
@@ -265,11 +313,79 @@ def code_unit_offset_to_py_index(line: str, offset: int, position_encoding: int)
     return min(offset, len(line))
 
 
+def _normalize_col_unit(value: object | None) -> str:
+    if isinstance(value, int):
+        return _col_unit_from_int(value)
+    if not isinstance(value, str):
+        return "utf32"
+    text = value.strip().lower()
+    if text.isdigit():
+        return _col_unit_from_int(int(text))
+    if "byte" in text:
+        return "byte"
+    for unit in ("utf8", "utf16", "utf32"):
+        if unit in text:
+            return unit
+    return "utf32"
+
+
+def _col_unit_from_int(value: int) -> str:
+    if value == ENC_UTF8:
+        return "utf8"
+    if value == ENC_UTF16:
+        return "utf16"
+    if value == ENC_UTF32:
+        return "utf32"
+    return "utf32"
+
+
+def _encoding_from_unit(unit: str) -> int:
+    if unit == "utf8":
+        return ENC_UTF8
+    if unit == "utf16":
+        return ENC_UTF16
+    return ENC_UTF32
+
+
+def _normalize_line_base(value: RowValue, *, default_base: int) -> int:
+    base = row_value_int(value)
+    if base is None:
+        return default_base
+    return base
+
+
+def _normalize_end_exclusive(value: RowValue, *, default_exclusive: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+    return default_exclusive
+
+
+def _normalize_end_col(end_col: int, *, end_exclusive: bool) -> int:
+    return end_col if end_exclusive else end_col + 1
+
+
+def _clamp_offset(offset: int, limit: int) -> int:
+    return max(0, min(offset, limit))
+
+
+def _col_to_byte_offset(line: str, offset: int, col_unit: object | None) -> int | None:
+    unit = _normalize_col_unit(col_unit)
+    if unit == "byte":
+        byte_len = len(line.encode("utf-8"))
+        return _clamp_offset(offset, byte_len)
+    enc = _encoding_from_unit(unit)
+    py_i = code_unit_offset_to_py_index(line, int(offset), int(enc))
+    py_i = _clamp_offset(py_i, len(line))
+    return len(line[:py_i].encode("utf-8"))
+
+
 def line_char_to_byte_offset(
     fidx: FileTextIndex,
     line0: int,
     char_off: int,
-    position_encoding: int,
+    col_unit: object | None,
 ) -> int | None:
     """Convert a line/char offset to a UTF-8 byte offset.
 
@@ -281,10 +397,9 @@ def line_char_to_byte_offset(
     if line0 < 0 or line0 >= len(fidx.lines):
         return None
     line = fidx.lines[line0]
-    py_i = code_unit_offset_to_py_index(line, int(char_off), int(position_encoding))
-    # Clamp to line length to avoid slicing errors
-    py_i = max(0, min(py_i, len(line)))
-    byte_in_line = len(line[:py_i].encode("utf-8"))
+    byte_in_line = _col_to_byte_offset(line, int(char_off), col_unit)
+    if byte_in_line is None:
+        return None
     return fidx.line_start_utf8[line0] + byte_in_line
 
 
@@ -292,7 +407,7 @@ def scip_range_to_byte_span(
     fidx: FileTextIndex,
     start: tuple[int, int],
     end: tuple[int, int],
-    position_encoding: int,
+    col_unit: object | None,
 ) -> tuple[int | None, int | None]:
     """Convert SCIP normalized ranges into UTF-8 byte spans.
 
@@ -303,8 +418,8 @@ def scip_range_to_byte_span(
     """
     start_line, start_char = start
     end_line, end_char = end
-    bstart = line_char_to_byte_offset(fidx, start_line, start_char, position_encoding)
-    bend = line_char_to_byte_offset(fidx, end_line, end_char, position_encoding)
+    bstart = line_char_to_byte_offset(fidx, start_line, start_char, col_unit)
+    bend = line_char_to_byte_offset(fidx, end_line, end_char, col_unit)
     return bstart, bend
 
 
@@ -315,10 +430,7 @@ def scip_range_to_byte_span(
 
 def ast_range_to_byte_span(
     fidx: FileTextIndex,
-    lineno_1: int | None,
-    col_utf8_bytes: int | None,
-    end_lineno_1: int | None,
-    end_col_utf8_bytes: int | None,
+    span: AstSpanInput,
 ) -> tuple[int | None, int | None]:
     """Convert CPython AST coordinates to UTF-8 byte spans.
 
@@ -329,23 +441,41 @@ def ast_range_to_byte_span(
     tuple[int | None, int | None]
         Byte-span start and end offsets.
     """
-    if lineno_1 is None or col_utf8_bytes is None:
+    if span.lineno is None or span.col_offset is None:
         return None, None
 
-    li = int(lineno_1) - 1
-    if li < 0 or li >= len(fidx.line_start_utf8) - 1:
+    line_base_value = _normalize_line_base(span.line_base, default_base=1)
+    start_line0 = int(span.lineno) - line_base_value
+    if start_line0 < 0 or start_line0 >= len(fidx.line_start_utf8) - 1:
         return None, None
 
-    bstart = fidx.line_start_utf8[li] + int(col_utf8_bytes)
+    bstart = line_char_to_byte_offset(
+        fidx,
+        start_line0,
+        int(span.col_offset),
+        span.col_unit,
+    )
+    if bstart is None:
+        return None, None
 
-    if end_lineno_1 is None or end_col_utf8_bytes is None:
-        return bstart, bstart
-
-    eli = int(end_lineno_1) - 1
-    if eli < 0 or eli >= len(fidx.line_start_utf8) - 1:
-        return bstart, bstart
-
-    bend = fidx.line_start_utf8[eli] + int(end_col_utf8_bytes)
+    bend = bstart
+    if span.end_lineno is not None and span.end_col is not None:
+        end_line0 = int(span.end_lineno) - line_base_value
+        if 0 <= end_line0 < len(fidx.line_start_utf8) - 1:
+            end_exclusive_value = _normalize_end_exclusive(
+                span.end_exclusive, default_exclusive=True
+            )
+            end_col_norm = _normalize_end_col(
+                int(span.end_col), end_exclusive=end_exclusive_value
+            )
+            candidate = line_char_to_byte_offset(
+                fidx,
+                end_line0,
+                end_col_norm,
+                span.col_unit,
+            )
+            if candidate is not None:
+                bend = candidate
     return bstart, bend
 
 
@@ -358,6 +488,9 @@ class AstSpanInputs:
     col_offsets: ArrayLike
     end_linenos: ArrayLike
     end_cols: ArrayLike
+    line_base: ArrayLike
+    col_unit: ArrayLike
+    end_exclusive: ArrayLike
 
 
 def _ast_span_inputs(py_ast_nodes: TableLike, cols: AstSpanColumns) -> AstSpanInputs:
@@ -369,6 +502,9 @@ def _ast_span_inputs(py_ast_nodes: TableLike, cols: AstSpanColumns) -> AstSpanIn
         col_offsets=column_or_null(py_ast_nodes, cols.col, pa.int64()),
         end_linenos=end_linenos,
         end_cols=end_cols,
+        line_base=column_or_null(py_ast_nodes, cols.line_base, pa.int32()),
+        col_unit=column_or_null(py_ast_nodes, cols.col_unit, pa.string()),
+        end_exclusive=column_or_null(py_ast_nodes, cols.end_exclusive, pa.bool_()),
     )
 
 
@@ -378,8 +514,17 @@ def _compute_ast_spans(
     bstarts: list[int | None] = []
     bends: list[int | None] = []
     oks: list[bool] = []
-    for fid, ln, co, eln, eco in iter_arrays(
-        [inputs.file_ids, inputs.linenos, inputs.col_offsets, inputs.end_linenos, inputs.end_cols]
+    for fid, ln, co, eln, eco, line_base, col_unit, end_exclusive in iter_arrays(
+        [
+            inputs.file_ids,
+            inputs.linenos,
+            inputs.col_offsets,
+            inputs.end_linenos,
+            inputs.end_cols,
+            inputs.line_base,
+            inputs.col_unit,
+            inputs.end_exclusive,
+        ]
     ):
         fid_key = str(fid) if fid is not None else None
         if fid_key is None:
@@ -397,12 +542,23 @@ def _compute_ast_spans(
         co_int = row_value_int(co)
         eln_int = row_value_int(eln)
         eco_int = row_value_int(eco)
-        if ln_int is None or co_int is None or eln_int is None or eco_int is None:
+        if ln_int is None or co_int is None:
             bstarts.append(None)
             bends.append(None)
             oks.append(False)
             continue
-        bs, be = ast_range_to_byte_span(fidx, ln_int, co_int, eln_int, eco_int)
+        bs, be = ast_range_to_byte_span(
+            fidx,
+            AstSpanInput(
+                lineno=ln_int,
+                col_offset=co_int,
+                end_lineno=eln_int,
+                end_col=eco_int,
+                line_base=line_base,
+                col_unit=col_unit,
+                end_exclusive=end_exclusive,
+            ),
+        )
         bstarts.append(bs)
         bends.append(be)
         oks.append(bs is not None and be is not None)
@@ -528,9 +684,28 @@ def _build_occurrence_rows(
         column_or_null(scip_occurrences, columns.enc_end_line, pa.int64()),
         column_or_null(scip_occurrences, columns.enc_end_char, pa.int64()),
         column_or_null(scip_occurrences, columns.enc_range_len, pa.int64()),
+        column_or_null(scip_occurrences, columns.line_base, pa.int32()),
+        column_or_null(scip_occurrences, columns.col_unit, pa.string()),
+        column_or_null(scip_occurrences, columns.end_exclusive, pa.bool_()),
     ]
     rows: list[OccurrenceRow] = []
-    for did, path, sl, sc, el, ec, rl, esl, esc, eel, eec, erl in iter_arrays(base_arrays):
+    for (
+        did,
+        path,
+        sl,
+        sc,
+        el,
+        ec,
+        rl,
+        esl,
+        esc,
+        eel,
+        eec,
+        erl,
+        line_base,
+        col_unit,
+        end_exclusive,
+    ) in iter_arrays(base_arrays):
         rows.append(
             OccurrenceRow(
                 document_id=did,
@@ -545,6 +720,9 @@ def _build_occurrence_rows(
                 enc_end_line=eel,
                 enc_end_char=eec,
                 enc_range_len=erl,
+                line_base=line_base,
+                col_unit=col_unit,
+                end_exclusive=end_exclusive,
             )
         )
     return rows
@@ -561,21 +739,18 @@ def _compute_occurrence_span(
     -------
     OccurrenceSpanResult
         Computed span results and optional error.
-    """
-    did = str(row.document_id) if row.document_id is not None else ""
-    path_value = str(row.path) if row.path is not None else ""
-    posenc = doc_posenc.get(did, DEFAULT_POSITION_ENCODING)
 
-    fidx = repo_index.by_path.get(path_value) if path_value else None
-    if fidx is None:
-        return OccurrenceSpanResult(
-            bstart=None,
-            bend=None,
-            enc_bstart=None,
-            enc_bend=None,
-            ok=False,
-            error=_span_error(did, path_value, "missing_repo_text_for_path"),
-        )
+    Raises
+    ------
+    ValueError
+        Raised when occurrence context resolution fails.
+    """
+    context, error = _resolve_occurrence_context(repo_index, doc_posenc, row)
+    if error is not None:
+        return error
+    if context is None:
+        msg = "Occurrence context resolution failed."
+        raise ValueError(msg)
 
     range_len = row_value_int(row.range_len)
     if range_len is None or range_len <= 0:
@@ -585,10 +760,16 @@ def _compute_occurrence_span(
             enc_bstart=None,
             enc_bend=None,
             ok=False,
-            error=_span_error(did, fidx.path, "invalid_range_len"),
+            error=_span_error(context.doc_id, context.fidx.path, "invalid_range_len"),
         )
 
-    main_range = _normalized_range(row.start_line, row.start_char, row.end_line, row.end_char)
+    main_range = _normalized_range(
+        row.start_line,
+        row.start_char,
+        row.end_line,
+        row.end_char,
+        policy=context.policy,
+    )
     if main_range is None:
         return OccurrenceSpanResult(
             bstart=None,
@@ -596,14 +777,14 @@ def _compute_occurrence_span(
             enc_bstart=None,
             enc_bend=None,
             ok=False,
-            error=_span_error(did, fidx.path, "missing_range_fields"),
+            error=_span_error(context.doc_id, context.fidx.path, "missing_range_fields"),
         )
 
     bstart, bend = scip_range_to_byte_span(
-        fidx,
+        context.fidx,
         (main_range[0], main_range[1]),
         (main_range[2], main_range[3]),
-        posenc,
+        context.unit_value,
     )
     enc_bstart: int | None = None
     enc_bend: int | None = None
@@ -614,17 +795,22 @@ def _compute_occurrence_span(
             row.enc_start_char,
             row.enc_end_line,
             row.enc_end_char,
+            policy=context.policy,
         )
         if enc_range is not None:
             enc_bstart, enc_bend = scip_range_to_byte_span(
-                fidx,
+                context.fidx,
                 (enc_range[0], enc_range[1]),
                 (enc_range[2], enc_range[3]),
-                posenc,
+                context.unit_value,
             )
 
     ok = bstart is not None and bend is not None
-    error = _span_error(did, fidx.path, "range_to_byte_span_failed") if not ok else None
+    error = (
+        _span_error(context.doc_id, context.fidx.path, "range_to_byte_span_failed")
+        if not ok
+        else None
+    )
 
     return OccurrenceSpanResult(
         bstart=bstart,
@@ -634,6 +820,40 @@ def _compute_occurrence_span(
         ok=ok,
         error=error,
     )
+
+
+def _resolve_occurrence_context(
+    repo_index: RepoTextIndex,
+    doc_posenc: Mapping[str, int],
+    row: OccurrenceRow,
+) -> tuple[_OccurrenceContext | None, OccurrenceSpanResult | None]:
+    did = str(row.document_id) if row.document_id is not None else ""
+    path_value = str(row.path) if row.path is not None else ""
+    posenc = doc_posenc.get(did, DEFAULT_POSITION_ENCODING)
+    line_base = _normalize_line_base(row.line_base, default_base=0)
+    end_exclusive = _normalize_end_exclusive(row.end_exclusive, default_exclusive=True)
+    unit_value = row.col_unit if row.col_unit is not None else posenc
+    fidx = repo_index.by_path.get(path_value) if path_value else None
+    if fidx is None:
+        return (
+            None,
+            OccurrenceSpanResult(
+                bstart=None,
+                bend=None,
+                enc_bstart=None,
+                enc_bend=None,
+                ok=False,
+                error=_span_error(did, path_value, "missing_repo_text_for_path"),
+            ),
+        )
+    context = _OccurrenceContext(
+        doc_id=did,
+        path=path_value,
+        fidx=fidx,
+        policy=SpanCoordPolicy(line_base=line_base, end_exclusive=end_exclusive),
+        unit_value=unit_value,
+    )
+    return context, None
 
 
 def add_scip_occurrence_byte_spans(

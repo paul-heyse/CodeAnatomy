@@ -10,8 +10,7 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import hash_expression
 from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan_helpers import coalesce_expr, column_or_null_expr
-from arrowdsl.schema.ops import align_plan
+from arrowdsl.plan_helpers import align_plan, coalesce_expr, column_or_null_expr
 from cpg.constants import edge_hash_specs
 from cpg.specs import EdgeEmitSpec
 from relspec.contracts import relation_output_schema

@@ -2,37 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Literal, cast
+from typing import cast
 
 import pyarrow as pa
 
-from arrowdsl.core.context import (
-    DeterminismTier,
-    ExecutionContext,
-    Ordering,
-    OrderingKey,
-    OrderingLevel,
-)
-from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, pc
-from arrowdsl.plan.plan import Plan, PlanSpec
-from arrowdsl.schema.metadata import (
-    infer_ordering_keys,
-    merge_metadata_specs,
-    ordering_metadata_spec,
-)
+from arrowdsl.core.context import DeterminismTier, ExecutionContext
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.plan.ordering_policy import apply_canonical_sort, ordering_metadata_for_plan
+from arrowdsl.plan.plan import Plan, PlanRunResult, execute_plan
+from arrowdsl.schema.metadata import merge_metadata_specs
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from config import AdapterMode
 from ibis_engine.plan import IbisPlan
-
-
-@dataclass(frozen=True)
-class PlanRunResult:
-    """Plan output bundled with materialization metadata."""
-
-    value: TableLike | RecordBatchReaderLike
-    kind: Literal["reader", "table"]
 
 
 @dataclass(frozen=True)
@@ -43,72 +26,6 @@ class AdapterRunOptions:
     prefer_reader: bool = False
     metadata_spec: SchemaMetadataSpec | None = None
     attach_ordering_metadata: bool = True
-
-
-def _parse_ordering_keys(schema: SchemaLike) -> list[OrderingKey]:
-    metadata = schema.metadata or {}
-    raw = metadata.get(b"ordering_keys")
-    if not raw:
-        return []
-    decoded = raw.decode("utf-8")
-    keys: list[OrderingKey] = []
-    for part in decoded.split(","):
-        text = part.strip()
-        if not text:
-            continue
-        if ":" in text:
-            col, order = text.split(":", maxsplit=1)
-        else:
-            col, order = text, "ascending"
-        keys.append((col.strip(), order.strip()))
-    return keys
-
-
-def _ordering_keys(schema: SchemaLike) -> list[OrderingKey]:
-    keys = _parse_ordering_keys(schema)
-    if keys:
-        return keys
-    return list(infer_ordering_keys(schema.names))
-
-
-def _apply_canonical_sort(
-    table: TableLike,
-    *,
-    ctx: ExecutionContext,
-) -> tuple[TableLike, list[OrderingKey]]:
-    if ctx.determinism != DeterminismTier.CANONICAL:
-        return table, []
-    keys = _ordering_keys(table.schema)
-    if not keys:
-        return table, []
-    indices = pc.sort_indices(table, sort_keys=keys)
-    return table.take(indices), keys
-
-
-def _ordering_metadata_for_plan(
-    ordering: Ordering,
-    *,
-    schema: SchemaLike,
-    canonical_keys: Sequence[OrderingKey] | None = None,
-) -> SchemaMetadataSpec:
-    level = ordering.level
-    keys: Sequence[OrderingKey] = ()
-    if canonical_keys:
-        level = OrderingLevel.EXPLICIT
-        keys = canonical_keys
-    elif ordering.level == OrderingLevel.EXPLICIT and ordering.keys:
-        keys = ordering.keys
-    elif ordering.level == OrderingLevel.IMPLICIT:
-        keys = _ordering_keys(schema)
-    return ordering_metadata_spec(level, keys=keys)
-
-
-def _pipeline_breaker_spec(pipeline_breakers: Sequence[str]) -> SchemaMetadataSpec:
-    if not pipeline_breakers:
-        return SchemaMetadataSpec()
-    return SchemaMetadataSpec(
-        schema_metadata={b"pipeline_breakers": ",".join(pipeline_breakers).encode("utf-8")}
-    )
 
 
 def _apply_metadata_spec(
@@ -142,47 +59,12 @@ def run_plan(
     PlanRunResult
         Plan output and materialization kind.
     """
-    spec = PlanSpec.from_plan(plan)
-    if (
-        prefer_reader
-        and not spec.pipeline_breakers
-        and ctx.determinism != DeterminismTier.CANONICAL
-    ):
-        reader = spec.to_reader(ctx=ctx)
-        combined = metadata_spec
-        if attach_ordering_metadata:
-            schema_for_ordering = (
-                metadata_spec.apply(reader.schema) if metadata_spec is not None else reader.schema
-            )
-            ordering_spec = _ordering_metadata_for_plan(
-                spec.plan.ordering,
-                schema=schema_for_ordering,
-            )
-            combined = merge_metadata_specs(metadata_spec, ordering_spec)
-        return PlanRunResult(
-            value=_apply_metadata_spec(reader, metadata_spec=combined),
-            kind="reader",
-        )
-    table = spec.to_table(ctx=ctx)
-    table, canonical_keys = _apply_canonical_sort(table, ctx=ctx)
-    combined = metadata_spec
-    if attach_ordering_metadata:
-        schema_for_ordering = (
-            metadata_spec.apply(table.schema) if metadata_spec is not None else table.schema
-        )
-        ordering_spec = _ordering_metadata_for_plan(
-            spec.plan.ordering,
-            schema=schema_for_ordering,
-            canonical_keys=canonical_keys,
-        )
-        combined = merge_metadata_specs(
-            metadata_spec,
-            ordering_spec,
-            _pipeline_breaker_spec(spec.pipeline_breakers),
-        )
-    return PlanRunResult(
-        value=_apply_metadata_spec(table, metadata_spec=combined),
-        kind="table",
+    return execute_plan(
+        plan,
+        ctx=ctx,
+        prefer_reader=prefer_reader,
+        metadata_spec=metadata_spec,
+        attach_ordering_metadata=attach_ordering_metadata,
     )
 
 
@@ -201,7 +83,7 @@ def _run_ibis_plan(
             schema_for_ordering = (
                 metadata_spec.apply(reader.schema) if metadata_spec is not None else reader.schema
             )
-            ordering_spec = _ordering_metadata_for_plan(
+            ordering_spec = ordering_metadata_for_plan(
                 plan.ordering,
                 schema=schema_for_ordering,
             )
@@ -211,13 +93,13 @@ def _run_ibis_plan(
             kind="reader",
         )
     table = plan.to_table()
-    table, canonical_keys = _apply_canonical_sort(table, ctx=ctx)
+    table, canonical_keys = apply_canonical_sort(table, determinism=ctx.determinism)
     combined = metadata_spec
     if attach_ordering_metadata:
         schema_for_ordering = (
             metadata_spec.apply(table.schema) if metadata_spec is not None else table.schema
         )
-        ordering_spec = _ordering_metadata_for_plan(
+        ordering_spec = ordering_metadata_for_plan(
             plan.ordering,
             schema=schema_for_ordering,
             canonical_keys=canonical_keys,
@@ -411,15 +293,27 @@ def stream_plan(plan: Plan, *, ctx: ExecutionContext) -> RecordBatchReaderLike:
     -------
     RecordBatchReaderLike
         Streaming reader for the plan.
+
+    Raises
+    ------
+    TypeError
+        Raised when plan execution does not yield a streaming reader.
     """
-    return PlanSpec.from_plan(plan).to_reader(ctx=ctx)
+    result = run_plan(plan, ctx=ctx, prefer_reader=True)
+    if isinstance(result.value, pa.RecordBatchReader):
+        return cast("RecordBatchReaderLike", result.value)
+    msg = "Expected streamable plan for PlanIR execution."
+    raise TypeError(msg)
 
 
 __all__ = [
+    "AdapterRunOptions",
     "PlanRunResult",
     "materialize_plan",
     "run_plan",
+    "run_plan_adapter",
     "run_plan_bundle",
+    "run_plan_bundle_adapter",
     "run_plan_streamable",
     "stream_plan",
 ]

@@ -109,6 +109,9 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             "expr_text",
             "type_repr",
             "type_id",
+            "line_base",
+            "col_unit",
+            "end_exclusive",
         ),
         derived=(
             DerivedFieldSpec(name="type_repr", expr=TrimExprSpec("expr_text")),
@@ -274,7 +277,17 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         name="diagnostics_norm_v1",
         version=SCHEMA_VERSION,
         bundles=("file_identity", "span"),
-        fields=("diag_id", "severity", "message", "diag_source", "code", "details"),
+        fields=(
+            "diag_id",
+            "severity",
+            "message",
+            "diag_source",
+            "code",
+            "details",
+            "line_base",
+            "col_unit",
+            "end_exclusive",
+        ),
         derived=(DerivedFieldSpec(name="diag_id", expr=HashExprSpec(spec=DIAG_ID_SPEC)),),
         join_keys=("diag_id",),
         contract=ContractRow(

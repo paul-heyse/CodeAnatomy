@@ -15,10 +15,11 @@ import pyarrow.types as patypes
 from arrowdsl.core.context import Ordering, OrderingKey, OrderingLevel
 from arrowdsl.core.interop import ArrayLike, DataTypeLike, FieldLike, SchemaLike, TableLike
 from arrowdsl.json_factory import JsonPolicy, dumps_bytes, loads
+from arrowdsl.schema.encoding_policy import EncodingPolicy, EncodingSpec
 from arrowdsl.schema.nested_builders import (
     dictionary_array_from_indices as _dictionary_from_indices,
 )
-from arrowdsl.schema.schema import EncodingPolicy, EncodingSpec, SchemaMetadataSpec
+from arrowdsl.schema.schema import SchemaMetadataSpec
 from schema_spec import PROVENANCE_COLS
 from schema_spec.specs import (
     KEY_FIELDS_META,
@@ -463,27 +464,55 @@ def _encoding_hint(field: _ArrowFieldSpec) -> str | None:
     return field.metadata.get(ENCODING_META)
 
 
-def _encoding_spec_from_field(field: _ArrowFieldSpec) -> EncodingSpec | None:
+def _encoding_info_from_field(
+    field: _ArrowFieldSpec,
+) -> tuple[str, DataTypeLike | None, bool | None] | None:
     hint = _encoding_hint(field)
     if hint != ENCODING_DICTIONARY:
         if patypes.is_dictionary(field.dtype):
-            return EncodingSpec(column=field.name, dtype=field.dtype)
+            dtype = cast("pa.DictionaryType", field.dtype)
+            return field.name, dtype.index_type, dtype.ordered
         return None
     if patypes.is_dictionary(field.dtype):
-        return EncodingSpec(column=field.name, dtype=field.dtype)
-    return EncodingSpec(column=field.name)
+        dtype = cast("pa.DictionaryType", field.dtype)
+        return field.name, dtype.index_type, dtype.ordered
+    return field.name, None, None
 
 
-def _encoding_spec_from_metadata(field: FieldLike) -> EncodingSpec | None:
+def _encoding_info_from_metadata(
+    field: FieldLike,
+) -> tuple[str, DataTypeLike | None, bool | None] | None:
     meta = field.metadata or {}
     if meta.get(ENCODING_META.encode("utf-8")) != ENCODING_DICTIONARY.encode("utf-8"):
         return None
     if patypes.is_dictionary(field.type):
-        return EncodingSpec(column=field.name, dtype=field.type)
+        dtype = cast("pa.DictionaryType", field.type)
+        return field.name, dtype.index_type, dtype.ordered
     idx_type = _index_type_from_meta(meta)
     ordered = _ordered_from_meta(meta)
-    dtype = pa.dictionary(idx_type, field.type, ordered=ordered)
-    return EncodingSpec(column=field.name, dtype=dtype)
+    return field.name, idx_type, ordered
+
+
+def _build_encoding_policy(
+    entries: Sequence[tuple[str, DataTypeLike | None, bool | None]],
+) -> EncodingPolicy:
+    dictionary_cols: set[str] = set()
+    index_types: dict[str, DataTypeLike] = {}
+    ordered_flags: dict[str, bool] = {}
+    specs: list[EncodingSpec] = []
+    for name, idx_type, ordered in entries:
+        dictionary_cols.add(name)
+        if idx_type is not None:
+            index_types[name] = idx_type
+        if ordered is not None:
+            ordered_flags[name] = ordered
+        specs.append(EncodingSpec(column=name, index_type=idx_type, ordered=ordered))
+    return EncodingPolicy(
+        dictionary_cols=frozenset(dictionary_cols),
+        specs=tuple(specs),
+        dictionary_index_types=index_types,
+        dictionary_ordered_flags=ordered_flags,
+    )
 
 
 def encoding_policy_from_spec(table_spec: _TableSchemaSpec) -> EncodingPolicy:
@@ -494,12 +523,12 @@ def encoding_policy_from_spec(table_spec: _TableSchemaSpec) -> EncodingPolicy:
     EncodingPolicy
         Encoding policy derived from the table spec.
     """
-    specs = tuple(
-        spec
+    entries = [
+        info
         for field in table_spec.fields
-        if (spec := _encoding_spec_from_field(field)) is not None
-    )
-    return EncodingPolicy(specs=specs)
+        if (info := _encoding_info_from_field(field)) is not None
+    ]
+    return _build_encoding_policy(entries)
 
 
 def encoding_policy_from_fields(fields: Sequence[_ArrowFieldSpec]) -> EncodingPolicy:
@@ -510,10 +539,8 @@ def encoding_policy_from_fields(fields: Sequence[_ArrowFieldSpec]) -> EncodingPo
     EncodingPolicy
         Encoding policy derived from field specs.
     """
-    specs = tuple(
-        spec for field in fields if (spec := _encoding_spec_from_field(field)) is not None
-    )
-    return EncodingPolicy(specs=specs)
+    entries = [info for field in fields if (info := _encoding_info_from_field(field)) is not None]
+    return _build_encoding_policy(entries)
 
 
 def encoding_policy_from_schema(schema: SchemaLike) -> EncodingPolicy:
@@ -524,10 +551,10 @@ def encoding_policy_from_schema(schema: SchemaLike) -> EncodingPolicy:
     EncodingPolicy
         Encoding policy for dictionary-encoded columns.
     """
-    specs = tuple(
-        spec for field in schema if (spec := _encoding_spec_from_metadata(field)) is not None
-    )
-    return EncodingPolicy(specs=specs)
+    entries = [
+        info for field in schema if (info := _encoding_info_from_metadata(field)) is not None
+    ]
+    return _build_encoding_policy(entries)
 
 
 def normalize_dictionaries(

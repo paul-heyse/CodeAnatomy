@@ -16,9 +16,9 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.plan.runner import run_plan
-from arrowdsl.plan.scan_io import plan_from_rows
 from arrowdsl.schema.schema import empty_table
 from core_types import PathLike, ensure_path
+from extract.plan_helpers import plan_from_rows
 from extract.registry_specs import (
     dataset_query,
     dataset_row_schema,

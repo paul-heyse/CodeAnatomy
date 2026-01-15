@@ -26,11 +26,10 @@ if TYPE_CHECKING:
     )
     from arrowdsl.finalize.finalize import Contract, FinalizeContext, FinalizeResult, finalize
     from arrowdsl.plan.ops import DedupeSpec, JoinSpec, SortKey
-    from arrowdsl.plan.plan import Plan, PlanFactory, hash_join, union_all_plans
+    from arrowdsl.plan.plan import Plan, hash_join, union_all_plans
     from arrowdsl.plan.query import (
         ProjectionSpec,
         QuerySpec,
-        ScanContext,
         compile_to_acero_scan,
         open_dataset,
     )
@@ -57,13 +56,11 @@ __all__ = [
     "Ordering",
     "OrderingLevel",
     "Plan",
-    "PlanFactory",
     "PlanRunResult",
     "PlanSource",
     "ProjectionSpec",
     "QuerySpec",
     "RuntimeProfile",
-    "ScanContext",
     "ScanProfile",
     "SortKey",
     "TrimExprSpec",
@@ -112,12 +109,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "JoinSpec": ("arrowdsl.plan.ops", "JoinSpec"),
     "SortKey": ("arrowdsl.plan.ops", "SortKey"),
     "Plan": ("arrowdsl.plan.plan", "Plan"),
-    "PlanFactory": ("arrowdsl.plan.plan", "PlanFactory"),
     "hash_join": ("arrowdsl.plan.plan", "hash_join"),
     "union_all_plans": ("arrowdsl.plan.plan", "union_all_plans"),
     "ProjectionSpec": ("arrowdsl.plan.query", "ProjectionSpec"),
     "QuerySpec": ("arrowdsl.plan.query", "QuerySpec"),
-    "ScanContext": ("arrowdsl.plan.query", "ScanContext"),
     "compile_to_acero_scan": ("arrowdsl.plan.query", "compile_to_acero_scan"),
     "open_dataset": ("arrowdsl.plan.query", "open_dataset"),
     "PlanRunResult": ("arrowdsl.plan.runner", "PlanRunResult"),

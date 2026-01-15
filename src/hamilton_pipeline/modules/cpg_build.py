@@ -79,11 +79,12 @@ from relspec.rules.evidence import EvidenceCatalog
 from relspec.rules.handlers.cpg import RelationshipRuleHandler
 from relspec.rules.registry import RuleRegistry
 from relspec.rules.validation import SqlGlotDiagnosticsConfig, rule_dependency_reports
-from schema_spec.specs import ArrowFieldSpec, call_span_bundle, span_bundle
+from schema_spec.specs import ArrowFieldSpec, TableSchemaSpec, call_span_bundle, span_bundle
 from schema_spec.system import (
     GLOBAL_SCHEMA_REGISTRY,
     ContractCatalogSpec,
     DataFusionScanOptions,
+    DatasetSpec,
     DedupeSpecSpec,
     SchemaRegistry,
     SortKeySpec,
@@ -111,7 +112,10 @@ _HOT_DATAFUSION_INPUTS = frozenset(
     {
         "callsite_qname_candidates",
         "dim_qualified_names",
+        "file_line_index",
         "scip_occurrences",
+        "type_exprs_norm_v1",
+        "type_nodes_v1",
     }
 )
 
@@ -138,12 +142,23 @@ def relspec_resolver_context(
     return RelspecResolverContext(ctx=ctx, param_table_registry=param_table_registry)
 
 
-def _datafusion_scan_options(name: str) -> DataFusionScanOptions:
+def _datafusion_scan_options(
+    name: str,
+    *,
+    table_spec: TableSchemaSpec | None,
+    dataset_spec: DatasetSpec | None,
+) -> DataFusionScanOptions:
+    if dataset_spec is not None and dataset_spec.datafusion_scan is not None:
+        return dataset_spec.datafusion_scan
+    file_sort_order: tuple[str, ...] = ()
+    if table_spec is not None and table_spec.key_fields:
+        file_sort_order = tuple(table_spec.key_fields)
     return DataFusionScanOptions(
         file_extension=".parquet",
         parquet_pruning=True,
         skip_metadata=True,
         cache=name in _HOT_DATAFUSION_INPUTS,
+        file_sort_order=file_sort_order,
     )
 
 
@@ -613,7 +628,11 @@ def persist_relspec_input_datasets(
             filesystem=None,
             table_spec=table_spec,
             dataset_spec=dataset_spec,
-            datafusion_scan=_datafusion_scan_options(name),
+            datafusion_scan=_datafusion_scan_options(
+                name,
+                table_spec=table_spec,
+                dataset_spec=dataset_spec,
+            ),
             datafusion_provider="listing",
         )
     return out

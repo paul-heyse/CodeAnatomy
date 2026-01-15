@@ -9,12 +9,17 @@ from ibis.expr.types import Table, Value
 from arrowdsl.core.context import Ordering
 from cpg.schemas import CPG_EDGES_SCHEMA
 from cpg.specs import EdgeEmitSpec
-from ibis_engine.ids import stable_id_expr
+from ibis_engine.ids import stable_id_expr, stable_key_expr
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import align_table_to_schema, coalesce_columns, ibis_null_literal
 
 
-def emit_edges_ibis(rel: IbisPlan | Table, *, spec: EdgeEmitSpec) -> IbisPlan:
+def emit_edges_ibis(
+    rel: IbisPlan | Table,
+    *,
+    spec: EdgeEmitSpec,
+    include_keys: bool = False,
+) -> IbisPlan:
     """Emit CPG edges from a relation table using Ibis expressions.
 
     Returns
@@ -27,6 +32,9 @@ def emit_edges_ibis(rel: IbisPlan | Table, *, spec: EdgeEmitSpec) -> IbisPlan:
     edge_id = _edge_id_expr(normalized, spec=spec)
     edge_kind = ibis.literal(spec.edge_kind.value)
     output = normalized.mutate(edge_id=edge_id, edge_kind=edge_kind)
+    if include_keys:
+        edge_key = _edge_key_expr(normalized, spec=spec)
+        output = output.mutate(edge_key=edge_key)
     output = output.select(
         edge_id=output.edge_id,
         edge_kind=output.edge_kind,
@@ -45,7 +53,11 @@ def emit_edges_ibis(rel: IbisPlan | Table, *, spec: EdgeEmitSpec) -> IbisPlan:
         rule_name=output.rule_name,
         rule_priority=output.rule_priority,
     )
-    aligned = align_table_to_schema(output, schema=CPG_EDGES_SCHEMA)
+    aligned = align_table_to_schema(
+        output,
+        schema=CPG_EDGES_SCHEMA,
+        keep_extra_columns=include_keys,
+    )
     return IbisPlan(expr=aligned, ordering=Ordering.unordered())
 
 
@@ -64,6 +76,28 @@ def _edge_id_expr(rel: Table, *, spec: EdgeEmitSpec) -> Value:
     has_span = rel.path.notnull() & rel.bstart.notnull() & rel.bend.notnull()
     valid_nodes = rel.src.notnull() & rel.dst.notnull()
     return ibis.ifelse(valid_nodes, ibis.ifelse(has_span, span_id, base_id), ibis.null())
+
+
+def _edge_key_expr(rel: Table, *, spec: EdgeEmitSpec) -> Value:
+    edge_kind = spec.edge_kind.value
+    base_key = stable_key_expr(
+        edge_kind,
+        rel.src,
+        rel.dst,
+        prefix="edge",
+    )
+    span_key = stable_key_expr(
+        edge_kind,
+        rel.src,
+        rel.dst,
+        rel.path,
+        rel.bstart,
+        rel.bend,
+        prefix="edge",
+    )
+    has_span = rel.path.notnull() & rel.bstart.notnull() & rel.bend.notnull()
+    valid_nodes = rel.src.notnull() & rel.dst.notnull()
+    return ibis.ifelse(valid_nodes, ibis.ifelse(has_span, span_key, base_key), ibis.null())
 
 
 def _normalized_relation_expr(rel: Table, *, spec: EdgeEmitSpec) -> Table:

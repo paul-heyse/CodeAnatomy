@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, cast
@@ -13,13 +14,16 @@ from datafusion import RuntimeEnvBuilder, SessionConfig, SessionContext
 from datafusion.dataframe import DataFrame
 from datafusion.object_store import LocalFileSystem
 
-from datafusion_engine.compile_options import DataFusionCompileOptions
+from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionFallbackEvent
 from datafusion_engine.function_factory import install_function_factory
+from datafusion_engine.udf_registry import register_datafusion_udfs
 
 if TYPE_CHECKING:
     from ibis.expr.types import Value as IbisValue
 
 MemoryPool = Literal["greedy", "fair", "unbounded"]
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -49,13 +53,11 @@ class DataFusionExplainCollector:
 
     def hook(self, sql: str, rows: Sequence[Mapping[str, object]]) -> None:
         """Collect an explain payload for a single statement."""
-        payload = {
-            "sql": sql,
-            "rows": [
-                {str(key): str(value) for key, value in row.items()} for row in rows
-            ],
-        }
-        self.entries.append(payload)
+        row_payload: list[dict[str, str]] = [
+            {str(key): str(value) for key, value in row.items()} for row in rows
+        ]
+        payload = {"sql": sql, "rows": row_payload}
+        self.entries.append(cast("dict[str, object]", payload))
 
     def snapshot(self) -> list[dict[str, object]]:
         """Return a snapshot of explain artifacts.
@@ -64,6 +66,35 @@ class DataFusionExplainCollector:
         -------
         list[dict[str, object]]
             Collected explain artifacts.
+        """
+        return list(self.entries)
+
+
+@dataclass
+class DataFusionFallbackCollector:
+    """Collect SQL fallback events for diagnostics."""
+
+    entries: list[dict[str, object]] = field(default_factory=list)
+
+    def hook(self, event: DataFusionFallbackEvent) -> None:
+        """Collect a fallback event payload."""
+        payload = {
+            "reason": event.reason,
+            "error": event.error,
+            "expression_type": event.expression_type,
+            "sql": event.sql,
+            "dialect": event.dialect,
+            "policy_violations": list(event.policy_violations),
+        }
+        self.entries.append(cast("dict[str, object]", payload))
+
+    def snapshot(self) -> list[dict[str, object]]:
+        """Return a snapshot of fallback artifacts.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            Collected fallback artifacts.
         """
         return list(self.entries)
 
@@ -220,9 +251,13 @@ class DataFusionRuntimeProfile:
     tracing_hook: Callable[[], None] | None = None
     tracing_collector: Callable[[], Mapping[str, object] | None] | None = None
     capture_explain: bool = False
-    explain_analyze: bool = False
+    explain_analyze: bool = True
     explain_collector: DataFusionExplainCollector | None = field(
         default_factory=DataFusionExplainCollector
+    )
+    capture_fallbacks: bool = True
+    fallback_collector: DataFusionFallbackCollector | None = field(
+        default_factory=DataFusionFallbackCollector
     )
     local_filesystem_root: str | None = None
     config_policy_name: str | None = "default"
@@ -366,10 +401,17 @@ class DataFusionRuntimeProfile:
     def _install_function_factory(self, ctx: SessionContext) -> None:
         if not self.enable_function_factory:
             return
-        if self.function_factory_hook is None:
-            install_function_factory(ctx)
-            return
-        self.function_factory_hook(ctx)
+        try:
+            if self.function_factory_hook is None:
+                install_function_factory(ctx)
+            else:
+                self.function_factory_hook(ctx)
+        except (ImportError, RuntimeError, TypeError) as exc:
+            logger.warning(
+                "FunctionFactory unavailable; falling back to DataFusion UDFs: %s",
+                exc,
+            )
+            register_datafusion_udfs(ctx)
 
     def _install_tracing(self) -> None:
         """Enable tracing when configured.
@@ -412,6 +454,9 @@ class DataFusionRuntimeProfile:
         explain_hook = resolved.explain_hook
         if explain_hook is None and capture_explain and self.explain_collector is not None:
             explain_hook = self.explain_collector.hook
+        fallback_hook = resolved.fallback_hook
+        if fallback_hook is None and self.capture_fallbacks and self.fallback_collector is not None:
+            fallback_hook = self.fallback_collector.hook
         unchanged = (
             cache == resolved.cache,
             cache_max_columns == resolved.cache_max_columns,
@@ -419,6 +464,7 @@ class DataFusionRuntimeProfile:
             capture_explain == resolved.capture_explain,
             explain_analyze == resolved.explain_analyze,
             explain_hook == resolved.explain_hook,
+            fallback_hook == resolved.fallback_hook,
         )
         if all(unchanged):
             return resolved
@@ -430,6 +476,7 @@ class DataFusionRuntimeProfile:
             capture_explain=capture_explain,
             explain_analyze=explain_analyze,
             explain_hook=explain_hook,
+            fallback_hook=fallback_hook,
         )
 
     @staticmethod
@@ -442,6 +489,21 @@ class DataFusionRuntimeProfile:
             Table of settings from information_schema.df_settings.
         """
         query = "SELECT name, value FROM information_schema.df_settings"
+        return ctx.sql(query).to_arrow_table()
+
+    @staticmethod
+    def catalog_snapshot(ctx: SessionContext) -> pa.Table:
+        """Return a snapshot of DataFusion catalog tables when available.
+
+        Returns
+        -------
+        pyarrow.Table
+            Table inventory from information_schema.tables.
+        """
+        query = (
+            "SELECT table_catalog, table_schema, table_name, table_type "
+            "FROM information_schema.tables"
+        )
         return ctx.sql(query).to_arrow_table()
 
     def telemetry_payload(self) -> dict[str, object]:
@@ -477,6 +539,8 @@ class DataFusionRuntimeProfile:
             "capture_explain": self.capture_explain,
             "explain_analyze": self.explain_analyze,
             "explain_collector": bool(self.explain_collector),
+            "capture_fallbacks": self.capture_fallbacks,
+            "fallback_collector": bool(self.fallback_collector),
             "local_filesystem_root": self.local_filesystem_root,
             "distributed": self.distributed,
             "distributed_context_factory": bool(self.distributed_context_factory),
@@ -554,6 +618,7 @@ __all__ = [
     "PROD_DF_POLICY",
     "DataFusionConfigPolicy",
     "DataFusionExplainCollector",
+    "DataFusionFallbackCollector",
     "DataFusionRuntimeProfile",
     "MemoryPool",
     "snapshot_plans",

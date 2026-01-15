@@ -84,6 +84,14 @@ def source_to_ibis(
     if isinstance(source, IbisPlan):
         return source
     if isinstance(source, IbisTable):
+        if options.name:
+            return register_ibis_view(
+                source,
+                backend=options.backend,
+                name=options.name,
+                ordering=options.ordering,
+                overwrite=options.overwrite,
+            )
         return IbisPlan(expr=source, ordering=options.ordering or Ordering.unordered())
     if isinstance(source, Plan):
         return plan_to_ibis(
@@ -119,6 +127,30 @@ def table_to_ibis(
         Ibis plan backed by the registered view.
     """
     expr = ibis.memtable(table)
+    view_name = _resolve_name(name)
+    if view_name is None:
+        return IbisPlan(expr=expr, ordering=ordering or Ordering.unordered())
+    backend_view = cast("ViewBackend", backend)
+    backend_view.create_view(view_name, expr, overwrite=overwrite)
+    registered = backend.table(view_name)
+    return IbisPlan(expr=registered, ordering=ordering or Ordering.unordered())
+
+
+def register_ibis_view(
+    expr: IbisTable,
+    *,
+    backend: BaseBackend,
+    name: str | None,
+    ordering: Ordering | None = None,
+    overwrite: bool = True,
+) -> IbisPlan:
+    """Register an Ibis expression as a backend view and return a plan.
+
+    Returns
+    -------
+    IbisPlan
+        Ibis plan backed by the registered view.
+    """
     view_name = _resolve_name(name)
     if view_name is None:
         return IbisPlan(expr=expr, ordering=ordering or Ordering.unordered())
@@ -192,6 +224,7 @@ __all__ = [
     "collect_plan_bridge",
     "plan_to_ibis",
     "reader_to_ibis",
+    "register_ibis_view",
     "source_to_ibis",
     "table_to_ibis",
 ]

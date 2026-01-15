@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
@@ -16,9 +16,21 @@ from arrowdsl.compute.macros import (
     filter_non_empty_utf8,
     invalid_id_expr,
     null_if_empty_or_zero,
-    predicate_spec,
     trimmed_non_empty_utf8,
     zero_expr,
+)
+from arrowdsl.compute.predicates import (
+    predicate_spec,
+    valid_mask_array,
+    valid_mask_expr,
+    valid_mask_for_columns,
+)
+from arrowdsl.compute.registry import (
+    ComputeRegistry,
+    UdfSpec,
+    default_registry,
+    ensure_udf,
+    ensure_udfs,
 )
 from arrowdsl.core.ids import iter_array_values
 from arrowdsl.core.interop import (
@@ -28,7 +40,6 @@ from arrowdsl.core.interop import (
     DataTypeLike,
     ScalarLike,
     TableLike,
-    ensure_expression,
     pc,
 )
 from arrowdsl.json_factory import JsonPolicy, dumps_text
@@ -36,7 +47,6 @@ from arrowdsl.json_factory import JsonPolicy, dumps_text
 if TYPE_CHECKING:
     from arrowdsl.plan.plan import Plan
 
-type UdfFn = Callable[..., object]
 type ValuesLike = ArrayLike | ChunkedArrayLike | ScalarLike
 
 _EXPR_CTX_FUNCTION = "expr_ctx_norm"
@@ -88,197 +98,6 @@ class FilterSpec:
             Filtered table.
         """
         return table.filter(self.mask(table))
-
-
-def _false_mask(num_rows: int) -> ArrayLike:
-    """Return a boolean mask of all False values.
-
-    Parameters
-    ----------
-    num_rows
-        Length of the mask.
-
-    Returns
-    -------
-    ArrayLike
-        Boolean mask with all entries set to False.
-    """
-    return pc.is_valid(pa.nulls(num_rows, type=pa.bool_()))
-
-
-def valid_mask_array(
-    values: Sequence[ArrayLike | ChunkedArrayLike],
-) -> ArrayLike | ChunkedArrayLike:
-    """Return a validity mask for a sequence of arrays.
-
-    Returns
-    -------
-    ArrayLike | ChunkedArrayLike
-        Boolean mask where all inputs are valid.
-
-    Raises
-    ------
-    ValueError
-        Raised when no arrays are provided.
-    """
-    if not values:
-        msg = "valid_mask_array requires at least one array."
-        raise ValueError(msg)
-    mask = pc.is_valid(values[0])
-    for value in values[1:]:
-        mask = pc.and_(mask, pc.is_valid(value))
-    return mask
-
-
-def valid_mask_for_columns(table: TableLike, cols: Sequence[str]) -> ArrayLike | ChunkedArrayLike:
-    """Return a validity mask for columns, treating missing columns as invalid.
-
-    Returns
-    -------
-    ArrayLike | ChunkedArrayLike
-        Boolean mask where all referenced columns are valid.
-
-    Raises
-    ------
-    ValueError
-        Raised when no column names are provided.
-    """
-    if not cols:
-        msg = "valid_mask_for_columns requires at least one column."
-        raise ValueError(msg)
-    mask: ArrayLike | ChunkedArrayLike | None = None
-    for name in cols:
-        if name in table.column_names:
-            next_mask = pc.is_valid(table[name])
-        else:
-            next_mask = _false_mask(table.num_rows)
-        mask = next_mask if mask is None else pc.and_(mask, next_mask)
-    return mask if mask is not None else _false_mask(table.num_rows)
-
-
-def valid_mask_expr(
-    cols: Sequence[str],
-    *,
-    available: Sequence[str] | None = None,
-) -> ComputeExpression:
-    """Return a validity mask expression for the provided columns.
-
-    Returns
-    -------
-    ComputeExpression
-        Boolean expression where all columns are valid.
-
-    Raises
-    ------
-    ValueError
-        Raised when no column names are provided.
-    """
-    if not cols:
-        msg = "valid_mask_expr requires at least one column."
-        raise ValueError(msg)
-
-    def _expr_for(name: str) -> ComputeExpression:
-        if available is not None and name not in available:
-            return ensure_expression(pc.scalar(pa.scalar(value=False)))
-        return ensure_expression(pc.is_valid(pc.field(name)))
-
-    mask = _expr_for(cols[0])
-    for name in cols[1:]:
-        mask = ensure_expression(pc.and_(mask, _expr_for(name)))
-    return mask
-
-
-@dataclass(frozen=True)
-class UdfSpec:
-    """Specification for a scalar UDF registration."""
-
-    name: str
-    inputs: Mapping[str, DataTypeLike]
-    output: DataTypeLike
-    fn: UdfFn
-    summary: str | None = None
-    description: str | None = None
-
-    def metadata(self) -> dict[str, str]:
-        """Return metadata for UDF registration.
-
-        Returns
-        -------
-        dict[str, str]
-            Metadata mapping for the UDF.
-        """
-        meta: dict[str, str] = {}
-        if self.summary:
-            meta["summary"] = self.summary
-        if self.description:
-            meta["description"] = self.description
-        return meta
-
-
-@dataclass
-class ComputeRegistry:
-    """Registry for cached compute UDF registrations."""
-
-    registered: set[str] = field(default_factory=set)
-
-    def ensure(self, spec: UdfSpec) -> str:
-        """Ensure a UDF is registered and return its name.
-
-        Returns
-        -------
-        str
-            Registered UDF name.
-        """
-        if spec.name in self.registered:
-            return spec.name
-        try:
-            pc.get_function(spec.name)
-        except KeyError:
-            pc.register_scalar_function(
-                spec.fn,
-                spec.name,
-                spec.metadata(),
-                spec.inputs,
-                spec.output,
-            )
-        self.registered.add(spec.name)
-        return spec.name
-
-
-_DEFAULT_REGISTRY = ComputeRegistry()
-
-
-def default_registry() -> ComputeRegistry:
-    """Return the default compute registry.
-
-    Returns
-    -------
-    ComputeRegistry
-        Shared compute registry instance.
-    """
-    return _DEFAULT_REGISTRY
-
-
-def ensure_udf(spec: UdfSpec) -> str:
-    """Ensure a UDF is registered in the default registry.
-
-    Returns
-    -------
-    str
-        Registered UDF name.
-    """
-    return default_registry().ensure(spec)
-
-
-def ensure_udfs(specs: Sequence[UdfSpec]) -> tuple[str, ...]:
-    """Ensure a sequence of UDFs are registered in the default registry.
-
-    Returns
-    -------
-    tuple[str, ...]
-        Registered UDF names in input order.
-    """
-    return tuple(ensure_udf(spec) for spec in specs)
 
 
 def resolve_kernel(

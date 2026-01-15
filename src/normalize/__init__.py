@@ -137,7 +137,7 @@ from normalize.types import (
     type_nodes_plan_from_exprs,
     type_nodes_plan_from_scip,
 )
-from normalize.utils import add_span_id_column, span_id, stable_id, stable_int64
+from normalize.utils import add_span_id_column, span_id
 
 __all__ = [
     "CFG_BLOCKS_QUERY",
@@ -256,8 +256,6 @@ __all__ = [
     "run_reaching_defs_streamable",
     "span_errors_plan",
     "span_id",
-    "stable_id",
-    "stable_int64",
     "type_exprs_plan",
     "type_nodes_plan_from_exprs",
     "type_nodes_plan_from_scip",

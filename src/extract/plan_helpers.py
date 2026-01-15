@@ -11,7 +11,7 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, SchemaLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
-from arrowdsl.plan.scan_io import plan_from_rows
+from arrowdsl.plan.scan_io import rows_to_table
 from arrowdsl.plan_helpers import column_or_null_expr
 from arrowdsl.schema.schema import empty_table
 from arrowdsl.spec.codec import parse_string_tuple
@@ -38,6 +38,24 @@ def empty_plan_for_dataset(name: str) -> Plan:
         Plan sourcing an empty table for the dataset.
     """
     return Plan.table_source(empty_table(dataset_schema(name)))
+
+
+def plan_from_rows(
+    rows: Iterable[Mapping[str, object]],
+    *,
+    schema: SchemaLike,
+    label: str = "",
+) -> Plan:
+    """Build a plan from row data by materializing a table source.
+
+    Returns
+    -------
+    Plan
+        Plan for the row data.
+    """
+    row_sequence = rows if isinstance(rows, Sequence) else list(rows)
+    table = rows_to_table(row_sequence, schema)
+    return Plan.table_source(table, label=label)
 
 
 def apply_query_and_normalize(
@@ -360,6 +378,7 @@ __all__ = [
     "apply_evidence_projection",
     "apply_query_and_normalize",
     "empty_plan_for_dataset",
+    "plan_from_rows",
     "plan_from_rows_for_dataset",
     "plan_from_rows_for_dataset_adapter",
     "plan_from_rows_for_dataset_ibis",

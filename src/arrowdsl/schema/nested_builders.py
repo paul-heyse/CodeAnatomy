@@ -18,6 +18,7 @@ from arrowdsl.core.interop import (
     ScalarLike,
     StructArrayLike,
 )
+from arrowdsl.schema.types import list_view_type, map_type
 
 T = TypeVar("T")
 
@@ -419,7 +420,7 @@ def list_view_array_from_lists(
             normalized.append(list(value))
         else:
             normalized.append(None)
-    list_type = pa.large_list_view(value_type) if large else pa.list_view(value_type)
+    list_type = list_view_type(value_type, large=large)
     return pa.array(normalized, type=list_type)
 
 
@@ -447,12 +448,8 @@ def map_array_from_pairs(
             normalized.append(list(value))
         else:
             normalized.append(None)
-    map_type = (
-        pa.map_(key_type, item_type, keys_sorted=keys_sorted)
-        if keys_sorted is not None
-        else pa.map_(key_type, item_type)
-    )
-    return pa.array(normalized, type=map_type)
+    map_dtype = map_type(key_type, item_type, keys_sorted=keys_sorted)
+    return pa.array(normalized, type=map_dtype)
 
 
 def struct_array_from_dicts(
@@ -856,7 +853,7 @@ class ListViewAccumulator[T]:
         offsets = pa.array(self.offsets, type=pa.int32())
         sizes = pa.array(self.sizes, type=pa.int32())
         values = pa.array(self.values, type=value_type)
-        list_type = pa.list_view(value_type)
+        list_type = list_view_type(value_type)
         return build_list_view(offsets, sizes, values, list_type=list_type)
 
 
@@ -895,7 +892,7 @@ class LargeListViewAccumulator[T]:
         offsets = pa.array(self.offsets, type=pa.int64())
         sizes = pa.array(self.sizes, type=pa.int64())
         values = pa.array(self.values, type=value_type)
-        list_type = pa.large_list_view(value_type)
+        list_type = list_view_type(value_type, large=True)
         return build_list_view(offsets, sizes, values, list_type=list_type)
 
 
@@ -1161,7 +1158,7 @@ class StructLargeListViewAccumulator:
         )
         offsets = pa.array(self.offsets, type=pa.int64())
         sizes = pa.array(self.sizes, type=pa.int64())
-        list_type = pa.large_list_view(struct_values.type)
+        list_type = list_view_type(struct_values.type, large=True)
         return build_list_view(offsets, sizes, struct_values, list_type=list_type)
 
 

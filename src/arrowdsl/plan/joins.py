@@ -6,10 +6,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import overload
 
-from arrowdsl.compute.kernels import apply_join
+from arrowdsl.compute.kernels import apply_asof_join, apply_join
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
-from arrowdsl.plan.ops import JoinSpec, JoinType
+from arrowdsl.plan.ops import AsofJoinSpec, JoinSpec, JoinType
 from arrowdsl.plan.plan import Plan
 
 JoinInput = TableLike | Plan
@@ -27,6 +27,73 @@ class JoinOutputSpec:
     right_output: Sequence[str] = ()
     output_suffix_for_left: str = ""
     output_suffix_for_right: str = ""
+
+
+@dataclass(frozen=True)
+class JoinPlan:
+    """Join specification plus resolved output columns."""
+
+    spec: JoinSpec
+    output_names: tuple[str, ...]
+
+
+def _resolve_outputs(
+    joined_columns: Sequence[str],
+    *,
+    outputs: Sequence[str],
+    suffix: str,
+    prefer_suffix: bool,
+) -> list[str]:
+    resolved: list[str] = []
+    joined_set = set(joined_columns)
+    for name in outputs:
+        if suffix and prefer_suffix:
+            candidate = f"{name}{suffix}"
+            if candidate in joined_set:
+                resolved.append(candidate)
+                continue
+        if name in joined_set:
+            resolved.append(name)
+            continue
+        if suffix and not prefer_suffix:
+            candidate = f"{name}{suffix}"
+            if candidate in joined_set:
+                resolved.append(candidate)
+    return resolved
+
+
+def resolve_join_outputs(
+    joined_columns: Sequence[str],
+    *,
+    spec: JoinSpec,
+) -> JoinPlan:
+    """Resolve join output column names with suffix handling.
+
+    Returns
+    -------
+    JoinPlan
+        Join plan with resolved output names.
+    """
+    if not spec.left_output and not spec.right_output:
+        return JoinPlan(spec=spec, output_names=tuple(joined_columns))
+    left_names = set(spec.left_output) | set(spec.left_keys)
+    prefer_right_suffix = bool(spec.output_suffix_for_right) and any(
+        name in left_names for name in spec.right_output
+    )
+    left_cols = _resolve_outputs(
+        joined_columns,
+        outputs=spec.left_output,
+        suffix=spec.output_suffix_for_left,
+        prefer_suffix=False,
+    )
+    right_cols = _resolve_outputs(
+        joined_columns,
+        outputs=spec.right_output,
+        suffix=spec.output_suffix_for_right,
+        prefer_suffix=prefer_right_suffix,
+    )
+    output = [*left_cols, *right_cols]
+    return JoinPlan(spec=spec, output_names=tuple(output))
 
 
 def join_spec(
@@ -318,11 +385,13 @@ def left_join(
         Joined table.
     """
     spec = config.to_spec(join_type="left outer")
-    if isinstance(left, Plan) or isinstance(right, Plan):
-        left_plan = left if isinstance(left, Plan) else Plan.table_source(left)
-        right_plan = right if isinstance(right, Plan) else Plan.table_source(right)
-        return left_plan.join(right_plan, spec=spec, ctx=ctx)
-    return apply_join(left, right, spec=spec, use_threads=use_threads)
+    return _join_any(
+        left,
+        right,
+        spec=spec,
+        use_threads=use_threads,
+        ctx=ctx,
+    )
 
 
 def interval_join_candidates(
@@ -344,6 +413,23 @@ def interval_join_candidates(
     return apply_join(left, right, spec=spec, use_threads=use_threads)
 
 
+def asof_join(
+    left: TableLike,
+    right: TableLike,
+    *,
+    spec: AsofJoinSpec,
+    use_threads: bool = True,
+) -> TableLike:
+    """Return an as-of join between two tables.
+
+    Returns
+    -------
+    TableLike
+        As-of joined table.
+    """
+    return apply_asof_join(left, right, spec=spec, use_threads=use_threads)
+
+
 def join_plan(
     left: JoinInput,
     right: JoinInput,
@@ -359,6 +445,23 @@ def join_plan(
     TableLike | Plan
         Joined output, plan-backed when inputs are plan-backed.
     """
+    return _join_any(
+        left,
+        right,
+        spec=spec,
+        use_threads=use_threads,
+        ctx=ctx,
+    )
+
+
+def _join_any(
+    left: JoinInput,
+    right: JoinInput,
+    *,
+    spec: JoinSpec,
+    use_threads: bool,
+    ctx: ExecutionContext | None,
+) -> JoinOutput:
     if isinstance(left, Plan) or isinstance(right, Plan):
         left_plan = left if isinstance(left, Plan) else Plan.table_source(left)
         right_plan = right if isinstance(right, Plan) else Plan.table_source(right)
@@ -369,8 +472,11 @@ def join_plan(
 __all__ = [
     "CODE_UNIT_META_COLUMNS",
     "PATH_META_COLUMNS",
+    "AsofJoinSpec",
     "JoinConfig",
     "JoinOutputSpec",
+    "JoinPlan",
+    "asof_join",
     "code_unit_meta_config",
     "interval_join_candidates",
     "join_config_for_output",
@@ -379,4 +485,5 @@ __all__ = [
     "join_spec_for_keys",
     "left_join",
     "path_meta_config",
+    "resolve_join_outputs",
 ]

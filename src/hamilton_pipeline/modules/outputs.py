@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -26,10 +26,13 @@ from arrowdsl.plan.metrics import (
     empty_scan_telemetry_table,
     scan_telemetry_table,
 )
-from arrowdsl.plan.query import ScanTelemetry, open_dataset
+from arrowdsl.plan.query import open_dataset
+from arrowdsl.plan.scan_builder import ScanBuildSpec
+from arrowdsl.plan.scan_telemetry import ScanTelemetry, fragment_telemetry
 from arrowdsl.schema.schema import EncodingPolicy
 from core_types import JsonDict, JsonValue
 from cpg.constants import CpgBuildArtifacts
+from datafusion_engine.registry_bridge import cached_dataset_names
 from extract.evidence_plan import EvidencePlan
 from hamilton_pipeline.modules.extraction import ExtractErrorArtifacts
 from hamilton_pipeline.pipeline_types import (
@@ -50,6 +53,7 @@ from normalize.utils import encoding_policy_from_schema
 from obs.manifest import ManifestContext, ManifestData, build_manifest, write_manifest_json
 from obs.repro import RunBundleContext, write_run_bundle
 from relspec.compiler import CompiledOutput
+from relspec.model import RelationshipRule
 from relspec.param_deps import RuleDependencyReport, build_param_reverse_index
 from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
@@ -139,6 +143,33 @@ def _datafusion_settings_snapshot(
     return snapshot or None
 
 
+def _datafusion_catalog_snapshot(
+    ctx: ExecutionContext,
+) -> list[dict[str, str]] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or not profile.enable_information_schema:
+        return None
+    session = profile.session_context()
+    table = profile.catalog_snapshot(session)
+    snapshot: list[dict[str, str]] = []
+    for row in table.to_pylist():
+        catalog = row.get("table_catalog")
+        schema = row.get("table_schema")
+        name = row.get("table_name")
+        table_type = row.get("table_type")
+        if catalog is None or schema is None or name is None:
+            continue
+        snapshot.append(
+            {
+                "table_catalog": str(catalog),
+                "table_schema": str(schema),
+                "table_name": str(name),
+                "table_type": str(table_type) if table_type is not None else "",
+            }
+        )
+    return snapshot or None
+
+
 def _json_mapping(payload: Mapping[str, object] | None) -> JsonDict | None:
     if payload is None:
         return None
@@ -208,9 +239,9 @@ class RunBundleParamInputs:
     param_table_specs: tuple[ParamTableSpec, ...]
     param_table_artifacts: Mapping[str, ParamTableArtifact] | None
     param_scalar_signature: str | None = None
-    param_dependency_reports: tuple[RuleDependencyReport, ...]
-    param_reverse_index: Mapping[str, tuple[str, ...]] | None
-    include_param_table_data: bool
+    param_dependency_reports: tuple[RuleDependencyReport, ...] = ()
+    param_reverse_index: Mapping[str, tuple[str, ...]] | None = None
+    include_param_table_data: bool = False
 
 
 @dataclass(frozen=True)
@@ -540,8 +571,19 @@ def relspec_scan_telemetry(
             dataset_spec = make_dataset_spec(table_spec=loc.table_spec)
         else:
             dataset_spec = dataset_spec_from_schema(name=name, schema=dataset.schema)
-        scan_ctx = dataset_spec.scan_context(dataset, ctx)
-        telemetry = scan_ctx.telemetry()
+        query = dataset_spec.query()
+        scan_provenance = tuple(ctx.runtime.scan.scan_provenance_columns)
+        scanner = ScanBuildSpec(
+            dataset=dataset,
+            query=query,
+            ctx=ctx,
+            scan_provenance=scan_provenance,
+        ).scanner()
+        telemetry = fragment_telemetry(
+            dataset,
+            predicate=query.pushdown_expression(),
+            scanner=scanner,
+        )
         rows.append(
             {
                 "dataset": name,
@@ -710,6 +752,7 @@ def manifest_data(
     notes = _manifest_notes(
         produced_outputs,
         normalize_lineage=normalize_lineage,
+        normalize_rule_compilation=normalize_rule_compilation,
         manifest_inputs=manifest_inputs,
         ctx=ctx,
     )
@@ -774,12 +817,33 @@ def _manifest_notes(
     produced_outputs: Sequence[str],
     *,
     normalize_lineage: Mapping[str, Sequence[str]] | None,
+    normalize_rule_compilation: NormalizeRuleCompilation | None,
     manifest_inputs: ManifestInputs,
     ctx: ExecutionContext,
 ) -> JsonDict:
     notes: JsonDict = {"relationship_output_keys": list(produced_outputs)}
+    notes.update(_normalize_notes(normalize_lineage, normalize_rule_compilation))
+    notes.update(_runtime_telemetry_notes(manifest_inputs))
+    notes.update(_datafusion_notes(ctx))
+    return notes
+
+
+def _normalize_notes(
+    normalize_lineage: Mapping[str, Sequence[str]] | None,
+    normalize_rule_compilation: NormalizeRuleCompilation | None,
+) -> JsonDict:
+    notes: JsonDict = {}
     if normalize_lineage:
         notes["normalize_output_keys"] = sorted(normalize_lineage)
+    if normalize_rule_compilation is None or not normalize_rule_compilation.output_storage:
+        return notes
+    notes["normalize_output_storage"] = cast(
+        "JsonValue", dict(normalize_rule_compilation.output_storage)
+    )
+    return notes
+
+
+def _runtime_telemetry_notes(manifest_inputs: ManifestInputs) -> JsonDict:
     runtime_telemetry = next(
         (
             compiled.runtime_telemetry
@@ -788,21 +852,38 @@ def _manifest_notes(
         ),
         {},
     )
-    if runtime_telemetry:
-        notes["relspec_runtime_telemetry"] = cast("JsonValue", runtime_telemetry)
-    if ctx.runtime.datafusion is not None:
-        notes["datafusion_policy"] = cast(
-            "JsonValue", ctx.runtime.datafusion.telemetry_payload()
-        )
-        explain_collector = ctx.runtime.datafusion.explain_collector
-        if explain_collector is not None:
-            explain_entries = explain_collector.snapshot()
-            if explain_entries:
-                notes["datafusion_explain"] = cast("JsonValue", explain_entries)
+    if not runtime_telemetry:
+        return {}
+    return {"relspec_runtime_telemetry": cast("JsonValue", runtime_telemetry)}
+
+
+def _datafusion_notes(ctx: ExecutionContext) -> JsonDict:
+    runtime = ctx.runtime.datafusion
+    if runtime is None:
+        return {}
+    notes: JsonDict = {"datafusion_policy": cast("JsonValue", runtime.telemetry_payload())}
+    catalog_snapshot = _datafusion_catalog_snapshot(ctx)
+    if catalog_snapshot:
+        notes["datafusion_catalog"] = cast("JsonValue", catalog_snapshot)
+    cached = cached_dataset_names(runtime.session_context())
+    if cached:
+        notes["datafusion_cached_datasets"] = cast("JsonValue", list(cached))
+    explain_collector = runtime.explain_collector
+    if explain_collector is not None:
+        explain_entries = explain_collector.snapshot()
+        if explain_entries:
+            notes["datafusion_explain"] = cast("JsonValue", explain_entries)
+    fallback_collector = runtime.fallback_collector
+    if fallback_collector is not None:
+        fallback_entries = fallback_collector.snapshot()
+        if fallback_entries:
+            notes["datafusion_fallbacks"] = cast("JsonValue", fallback_entries)
     return notes
 
 
-def _relspec_scan_telemetry(manifest_inputs: ManifestInputs) -> dict[str, ScanTelemetry]:
+def _relspec_scan_telemetry(
+    manifest_inputs: ManifestInputs,
+) -> dict[str, Mapping[str, ScanTelemetry]]:
     return {
         name: compiled.telemetry
         for name, compiled in manifest_inputs.relspec_snapshots.compiled_outputs.items()

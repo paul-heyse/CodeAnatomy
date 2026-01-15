@@ -20,8 +20,7 @@ from arrowdsl.plan_helpers import (
     set_or_append_column,
 )
 from arrowdsl.plan_helpers import encode_plan as plan_encode_plan
-from arrowdsl.schema.ops import unify_schema_with_metadata
-from arrowdsl.schema.schema import EncodingSpec
+from arrowdsl.schema.schema import EncodingSpec, unify_schema_with_metadata
 from cpg.schemas import CPG_EDGES_SPEC, CPG_NODES_SPEC, CPG_PROPS_SPEC
 
 CPG_NODES_QUERY: QuerySpec = CPG_NODES_SPEC.query()

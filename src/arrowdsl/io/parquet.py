@@ -13,7 +13,8 @@ import pyarrow.parquet as pq
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.plan.metrics import ParquetMetadataSpec, parquet_metadata_factory
-from arrowdsl.schema.schema import EncodingPolicy, SchemaTransform
+from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
+from arrowdsl.schema.schema import SchemaTransform
 from core_types import PathLike, ensure_path
 
 type DatasetWriteInput = TableLike | RecordBatchReaderLike
@@ -180,7 +181,7 @@ def _apply_schema_and_encoding(
         )
         table = transform.apply(table)
     if encoding_policy is not None:
-        table = encoding_policy.apply(table)
+        table = apply_encoding(table, policy=encoding_policy)
     return table
 
 

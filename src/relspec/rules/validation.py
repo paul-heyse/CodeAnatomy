@@ -24,7 +24,11 @@ from extract.registry_bundles import bundle
 from extract.registry_pipelines import post_kernels_for_postprocess
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
-from ibis_engine.param_tables import ParamTablePolicy, ParamTableSpec
+from ibis_engine.param_tables import (
+    ParamTablePolicy,
+    ParamTableSpec,
+    qualified_param_table_name,
+)
 from ibis_engine.params_bridge import list_param_names_from_rel_ops
 from ibis_engine.plan import IbisPlan
 from ibis_engine.plan_bridge import table_to_ibis
@@ -739,6 +743,11 @@ def _final_sqlglot_metadata(
     metadata = dict(base_metadata)
     if param_names:
         metadata["param_tables"] = ",".join(sorted(param_names))
+        qualified = [
+            qualified_param_table_name(param_policy, name, scope_key=None)
+            for name in sorted(param_names)
+        ]
+        metadata["param_tables_qualified"] = ",".join(qualified)
     non_param_tables = dataset_table_names(table_refs, policy=param_policy)
     if non_param_tables:
         metadata["dataset_tables"] = ",".join(non_param_tables)

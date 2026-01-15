@@ -5,14 +5,20 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any
 
 import pyarrow as pa
 from ibis.expr.types import Table, Value
 
 from arrowdsl.compute.expr_core import ComputeExprSpec, ExprSpec, ScalarValue
-from arrowdsl.compute.filters import ComputeRegistry, UdfSpec, default_registry
 from arrowdsl.compute.macros import ConstExpr, FieldExpr
+from arrowdsl.compute.options import (
+    FunctionOptionsPayload,
+    FunctionOptionsProto,
+    deserialize_options,
+    serialize_options,
+)
+from arrowdsl.compute.registry import ComputeRegistry, UdfSpec, default_registry
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
@@ -21,6 +27,7 @@ from arrowdsl.core.interop import (
     ensure_expression,
     pc,
 )
+from arrowdsl.ir.expr import expr_from_expr_ir
 from arrowdsl.json_factory import JsonPolicy, dumps_text
 from arrowdsl.schema.build import dictionary_array_from_indices, union_array_from_values
 from arrowdsl.spec.codec import (
@@ -37,34 +44,12 @@ from arrowdsl.spec.infra import SCALAR_UNION_TYPE
 from ibis_engine.expr_compiler import IbisExprRegistry, expr_ir_to_ibis
 
 
-@runtime_checkable
-class FunctionOptionsProto(Protocol):
-    """Arrow compute function options protocol."""
-
-    def serialize(self) -> bytes:
-        """Serialize options to bytes."""
-        raise NotImplementedError
-
-    @classmethod
-    def deserialize(cls, payload: bytes) -> FunctionOptionsProto:
-        """Deserialize options from bytes."""
-        raise NotImplementedError
-
-
-type FunctionOptionsPayload = bytes | bytearray | FunctionOptionsProto
-
-
 def _options_bytes(options: FunctionOptionsPayload | None) -> bytes | None:
-    if options is None:
-        return None
-    if isinstance(options, FunctionOptionsProto):
-        return options.serialize()
-    if isinstance(options, bytearray):
-        return bytes(options)
-    if isinstance(options, bytes):
-        return options
-    msg = "ExprIR options must be FunctionOptions or serialized bytes."
-    raise TypeError(msg)
+    try:
+        return serialize_options(options)
+    except TypeError as exc:
+        msg = "ExprIR options must be FunctionOptions or serialized bytes."
+        raise TypeError(msg) from exc
 
 
 def _encode_options(options: FunctionOptionsPayload | None) -> object | None:
@@ -92,13 +77,7 @@ def _decode_options_text(payload: str | None) -> bytes | None:
 
 
 def _deserialize_options(payload: bytes | None) -> FunctionOptionsProto | None:
-    if payload is None:
-        return None
-    options_type = cast("type[FunctionOptionsProto] | None", getattr(pc, "FunctionOptions", None))
-    if options_type is None:
-        msg = "Arrow compute FunctionOptions is unavailable."
-        raise TypeError(msg)
-    return options_type.deserialize(payload)
+    return deserialize_options(payload)
 
 
 @dataclass(frozen=True)
@@ -206,10 +185,10 @@ class ExprIR:
                 msg = "ExprIR call op requires name."
                 raise ValueError(msg)
             args = tuple(arg.to_expr_spec(registry=registry) for arg in self.args)
-            expr = self.to_expression(registry=registry)
             name = registry.ensure(self.name) if registry is not None else self.name
             options = _options_bytes(self.options)
             opts = _deserialize_options(options)
+            node = expr_from_expr_ir(self)
 
             def _materialize(table: TableLike) -> ArrayLike:
                 values = [arg.materialize(table) for arg in args]
@@ -221,7 +200,7 @@ class ExprIR:
                 msg = "ExprIR call op materialization returned non-array output."
                 raise TypeError(msg)
 
-            return ComputeExprSpec(expr=expr, materialize_fn=_materialize)
+            return ComputeExprSpec(expr=node, materialize_fn=_materialize, registry=registry)
         msg = f"Unsupported ExprIR op: {self.op}"
         raise ValueError(msg)
 

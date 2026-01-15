@@ -12,7 +12,6 @@ import pyarrow.parquet as pq
 import pyarrow.types as patypes
 
 from arrowdsl.compute.filters import invalid_id_expr
-from arrowdsl.compute.kernels import ChunkPolicy
 from arrowdsl.compute.macros import null_expr, scalar_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import (
@@ -32,19 +31,19 @@ from arrowdsl.schema.build import (
     table_from_arrays,
     table_from_schema,
 )
-from arrowdsl.schema.schema import EncodingSpec, encode_columns, schema_fingerprint, schema_to_dict
+from arrowdsl.schema.encoding_policy import EncodingPolicy
+from arrowdsl.schema.normalize import NormalizePolicy
+from arrowdsl.schema.schema import schema_fingerprint, schema_to_dict
 from core_types import JsonDict, PathLike, ensure_path
 
 type RowValue = str | int
 type Row = dict[str, RowValue]
 type ValuesLike = ArrayLike | ChunkedArrayLike
 
-DATASET_STATS_ENCODING_SPECS: tuple[EncodingSpec, ...] = (EncodingSpec(column="dataset_name"),)
+DATASET_STATS_ENCODING_POLICY = EncodingPolicy(dictionary_cols=frozenset({"dataset_name"}))
 
-COLUMN_STATS_ENCODING_SPECS: tuple[EncodingSpec, ...] = (
-    EncodingSpec(column="dataset_name"),
-    EncodingSpec(column="column_name"),
-    EncodingSpec(column="type"),
+COLUMN_STATS_ENCODING_POLICY = EncodingPolicy(
+    dictionary_cols=frozenset({"dataset_name", "column_name", "type"})
 )
 
 DATASET_STATS_SCHEMA = pa.schema(
@@ -138,8 +137,7 @@ def dataset_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
             }
         )
     table = rows_to_table(rows, DATASET_STATS_SCHEMA)
-    encoded = encode_columns(table, specs=DATASET_STATS_ENCODING_SPECS)
-    return ChunkPolicy().apply(encoded)
+    return NormalizePolicy(encoding=DATASET_STATS_ENCODING_POLICY).apply(table)
 
 
 def column_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
@@ -168,8 +166,7 @@ def column_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
                 }
             )
     table = rows_to_table(rows, COLUMN_STATS_SCHEMA)
-    encoded = encode_columns(table, specs=COLUMN_STATS_ENCODING_SPECS)
-    return ChunkPolicy().apply(encoded)
+    return NormalizePolicy(encoding=COLUMN_STATS_ENCODING_POLICY).apply(table)
 
 
 def empty_scan_telemetry_table() -> TableLike:
@@ -541,9 +538,9 @@ def quality_plan_from_ids(
 
 
 __all__ = [
-    "COLUMN_STATS_ENCODING_SPECS",
+    "COLUMN_STATS_ENCODING_POLICY",
     "COLUMN_STATS_SCHEMA",
-    "DATASET_STATS_ENCODING_SPECS",
+    "DATASET_STATS_ENCODING_POLICY",
     "DATASET_STATS_SCHEMA",
     "QUALITY_SCHEMA",
     "SCAN_TELEMETRY_SCHEMA",

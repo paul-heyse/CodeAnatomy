@@ -20,13 +20,14 @@ from arrowdsl.core.interop import (
     pc,
 )
 from arrowdsl.plan.plan import Plan
-from arrowdsl.schema.ops import (
+from arrowdsl.schema.encoding_policy import EncodingPolicy
+from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
+from arrowdsl.schema.schema import (
+    AlignmentInfo,
     missing_key_fields,
     required_field_names,
     required_non_null_mask,
 )
-from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
-from arrowdsl.schema.schema import AlignmentInfo, EncodingPolicy
 from schema_spec.specs import TableSchemaSpec
 
 
@@ -94,7 +95,7 @@ def _align_for_validation(
         ctx=execution_context_factory("default"),
         options=SchemaPolicyOptions(
             schema=spec.to_arrow_schema(),
-            encoding=EncodingPolicy(specs=()),
+            encoding=EncodingPolicy(dictionary_cols=frozenset()),
             safe_cast=safe_cast,
             keep_extra_columns=keep_extra,
             on_error=on_error,

@@ -62,6 +62,22 @@ def stable_id_expr(
     return ibis.concat(ibis.literal(f"{prefix}:"), hashed.cast("string"))
 
 
+def stable_key_expr(
+    *parts: Value | str | None,
+    prefix: str | None = None,
+    null_sentinel: str = "None",
+) -> Value:
+    """Return the natural key string used for stable hashing.
+
+    Returns
+    -------
+    ibis.expr.types.Value
+        Joined key expression prior to hashing.
+    """
+    values = _parts_with_prefix(parts, prefix=prefix, null_sentinel=null_sentinel)
+    return _join_with_separator(values)
+
+
 def masked_stable_id_expr(
     prefix: str,
     *,
@@ -136,4 +152,5 @@ __all__ = [
     "stable_hash64_expr",
     "stable_hash128_expr",
     "stable_id_expr",
+    "stable_key_expr",
 ]

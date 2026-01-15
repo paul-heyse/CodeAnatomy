@@ -7,7 +7,11 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from arrowdsl.compute.filters import valid_mask_array, valid_mask_expr, valid_mask_for_columns
+from arrowdsl.compute.predicates import (
+    valid_mask_array,
+    valid_mask_expr,
+    valid_mask_for_columns,
+)
 from arrowdsl.core.ids import (
     HashSpec,
     hash64_from_arrays,

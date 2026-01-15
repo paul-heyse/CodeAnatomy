@@ -21,6 +21,7 @@ from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.ids import iter_table_rows
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan_helpers import align_plan as align_plan_to_schema
 from arrowdsl.plan_helpers import (
     apply_hash_projection,
     flatten_struct_field,
@@ -35,7 +36,6 @@ from arrowdsl.schema.metadata import (
     options_metadata_spec,
     ordering_metadata_spec,
 )
-from arrowdsl.schema.ops import align_plan as align_plan_to_schema
 from arrowdsl.schema.schema import SchemaTransform, projection_for_schema
 from arrowdsl.spec.infra import DatasetRegistration, register_dataset
 from config import AdapterMode

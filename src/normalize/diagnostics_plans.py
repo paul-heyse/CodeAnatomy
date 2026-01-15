@@ -6,10 +6,11 @@ from dataclasses import dataclass, field
 
 import pyarrow as pa
 
+from arrowdsl.compute.expr_core import ENC_UTF8, ENC_UTF16
 from arrowdsl.compute.filters import position_encoding_array
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_arrays
-from arrowdsl.core.interop import ArrayLike, TableLike, pc
+from arrowdsl.core.interop import ArrayLike, ComputeExpression, TableLike, pc
 from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan_helpers import column_or_null_expr
 from arrowdsl.schema.build import column_or_null, empty_table, table_from_arrays
@@ -107,9 +108,12 @@ class _DiagRow:
     bend: int | None
     severity: str
     message: str
-    source: str
+    diag_source: str
     code: object | None
     detail: _DiagDetail | None
+    line_base: int | None
+    col_unit: str | None
+    end_exclusive: bool | None
 
 
 @dataclass(frozen=True)
@@ -146,8 +150,11 @@ class _DiagBuffers:
     bends: list[int | None] = field(default_factory=list)
     severities: list[str] = field(default_factory=list)
     messages: list[str] = field(default_factory=list)
-    sources: list[str] = field(default_factory=list)
+    diag_sources: list[str] = field(default_factory=list)
     codes: list[object | None] = field(default_factory=list)
+    line_bases: list[int | None] = field(default_factory=list)
+    col_units: list[str | None] = field(default_factory=list)
+    end_exclusives: list[bool | None] = field(default_factory=list)
     details_acc: StructLargeListViewAccumulator = field(default_factory=_detail_accumulator)
 
     def append(self, row: _DiagRow) -> None:
@@ -164,8 +171,11 @@ class _DiagBuffers:
         self.bends.append(row.bend)
         self.severities.append(row.severity)
         self.messages.append(row.message)
-        self.sources.append(row.source)
+        self.diag_sources.append(row.diag_source)
         self.codes.append(row.code)
+        self.line_bases.append(row.line_base)
+        self.col_units.append(row.col_unit)
+        self.end_exclusives.append(row.end_exclusive)
         self._append_detail(row.detail)
 
     def _append_detail(self, detail: _DiagDetail | None) -> None:
@@ -266,6 +276,21 @@ def _detail_tags(value: object | None) -> list[str]:
     return []
 
 
+def _col_unit_from_posenc(value: int) -> str:
+    """Return the column unit label for a position encoding.
+
+    Returns
+    -------
+    str
+        Column unit label for the encoding.
+    """
+    if value == ENC_UTF8:
+        return "utf8"
+    if value == ENC_UTF16:
+        return "utf16"
+    return "utf32"
+
+
 def _cst_parse_error_row(
     repo_text_index: RepoTextIndex,
     values: tuple[object | None, ...],
@@ -313,9 +338,12 @@ def _cst_parse_error_row(
         bend=bstart,
         severity="ERROR",
         message=msg,
-        source="libcst",
+        diag_source="libcst",
         code=None,
         detail=detail,
+        line_base=1,
+        col_unit=_col_unit_from_posenc(DEFAULT_POSITION_ENCODING),
+        end_exclusive=True,
     )
 
 
@@ -358,7 +386,7 @@ def _cst_parse_error_table(
     path_arr = pa.array(buffers.paths, type=pa.string())
     bstart_arr = pa.array(buffers.bstarts, type=pa.int64())
     bend_arr = pa.array(buffers.bends, type=pa.int64())
-    source_arr = pa.array(buffers.sources, type=pa.string())
+    diag_source_arr = pa.array(buffers.diag_sources, type=pa.string())
     message_arr = pa.array(buffers.messages, type=pa.string())
     severity_arr = pa.array(buffers.severities, type=pa.string())
     details = buffers.details_array()
@@ -369,9 +397,12 @@ def _cst_parse_error_table(
         "bend": bend_arr,
         "severity": severity_arr,
         "message": message_arr,
-        "source": source_arr,
+        "diag_source": diag_source_arr,
         "code": pa.array(buffers.codes, type=pa.string()),
         "details": details,
+        "line_base": pa.array(buffers.line_bases, type=pa.int32()),
+        "col_unit": pa.array(buffers.col_units, type=pa.string()),
+        "end_exclusive": pa.array(buffers.end_exclusives, type=pa.bool_()),
     }
     table = table_from_arrays(_DIAG_BASE_SCHEMA, columns=columns, num_rows=len(buffers.paths))
     return normalize_dictionaries(table)
@@ -476,7 +507,7 @@ def _scip_diag_table(
     path_arr = pa.array(buffers.paths, type=pa.string())
     bstart_arr = pa.array(buffers.bstarts, type=pa.int64())
     bend_arr = pa.array(buffers.bends, type=pa.int64())
-    source_arr = pa.array(buffers.sources, type=pa.string())
+    diag_source_arr = pa.array(buffers.diag_sources, type=pa.string())
     message_arr = pa.array(buffers.messages, type=pa.string())
     severity_arr = pa.array(buffers.severities, type=pa.string())
     details = buffers.details_array()
@@ -487,9 +518,12 @@ def _scip_diag_table(
         "bend": bend_arr,
         "severity": severity_arr,
         "message": message_arr,
-        "source": source_arr,
+        "diag_source": diag_source_arr,
         "code": pa.array(buffers.codes, type=pa.string()),
         "details": details,
+        "line_base": pa.array(buffers.line_bases, type=pa.int32()),
+        "col_unit": pa.array(buffers.col_units, type=pa.string()),
+        "end_exclusive": pa.array(buffers.end_exclusives, type=pa.bool_()),
     }
     table = table_from_arrays(_DIAG_BASE_SCHEMA, columns=columns, num_rows=len(buffers.paths))
     return normalize_dictionaries(table)
@@ -565,9 +599,12 @@ def _scip_diag_row(ctx: ScipDiagContext, values: _ScipDiagInput) -> _DiagRow | N
         bend=bend,
         severity=sev,
         message=msg,
-        source="scip",
+        diag_source="scip",
         code=values.code,
         detail=detail,
+        line_base=0,
+        col_unit=_col_unit_from_posenc(enc),
+        end_exclusive=True,
     )
 
 
@@ -600,18 +637,25 @@ def _ts_diag_plan(
     plan = _alias_ts_span_columns(plan, ctx=ctx)
     available = set(plan.schema(ctx=ctx).names)
     details_scalar = pa.scalar([], type=DIAG_DETAILS_TYPE)
-    exprs = [
-        column_or_null_expr("file_id", pa.string(), available=available),
-        column_or_null_expr("path", pa.string(), available=available),
-        column_or_null_expr("bstart", pa.int64(), available=available),
-        column_or_null_expr("bend", pa.int64(), available=available),
-        pc.scalar(severity),
-        pc.scalar(message),
-        pc.scalar("treesitter"),
-        pc.scalar(pa.scalar(None, type=pa.string())),
-        pc.scalar(details_scalar),
-    ]
-    return plan.project(exprs, list(_DIAG_BASE_COLUMNS), ctx=ctx)
+    defaults: dict[str, ComputeExpression] = {
+        "severity": pc.scalar(severity),
+        "message": pc.scalar(message),
+        "diag_source": pc.scalar("treesitter"),
+        "code": pc.scalar(pa.scalar(None, type=pa.string())),
+        "details": pc.scalar(details_scalar),
+        "line_base": pc.scalar(pa.scalar(None, type=pa.int32())),
+        "col_unit": pc.scalar(pa.scalar(None, type=pa.string())),
+        "end_exclusive": pc.scalar(pa.scalar(None, type=pa.bool_())),
+    }
+    exprs: list[ComputeExpression] = []
+    names = list(_DIAG_BASE_COLUMNS)
+    for name in names:
+        if name in defaults:
+            exprs.append(defaults[name])
+            continue
+        dtype = DIAG_SCHEMA.field(name).type
+        exprs.append(column_or_null_expr(name, dtype, available=available))
+    return plan.project(exprs, names, ctx=ctx)
 
 
 def _alias_ts_span_columns(plan: Plan, *, ctx: ExecutionContext) -> Plan:

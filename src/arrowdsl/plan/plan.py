@@ -1,48 +1,48 @@
-"""Plan wrapper around Acero declarations and eager sources."""
+"""Plan wrapper around PlanIR for ArrowDSL fallback execution."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Literal, cast
 
-import pyarrow.dataset as ds
+import pyarrow as pa
 
-from arrowdsl.compute.kernels import resolve_kernel
 from arrowdsl.core.context import (
     ExecutionContext,
     Ordering,
-    OrderingEffect,
     OrderingKey,
     OrderingLevel,
 )
 from arrowdsl.core.interop import (
     ComputeExpression,
-    DeclarationLike,
     RecordBatchReaderLike,
     SchemaLike,
     TableLike,
-    acero,
+    pc,
 )
-from arrowdsl.plan.ops import (
-    AggregateOp,
-    DedupeSpec,
-    FilterOp,
-    JoinOp,
-    JoinSpec,
-    OrderByOp,
-    PlanOp,
-    ProjectOp,
-    RenameColumnsOp,
-    ScanOp,
-    TableSourceOp,
-    WinnerSelectOp,
-    scan_ordering_effect,
-)
-
-ReaderThunk = Callable[[], RecordBatchReaderLike]
-TableThunk = Callable[[], TableLike]
+from arrowdsl.exec.runtime import run_segments
+from arrowdsl.ir.plan import PlanIR
+from arrowdsl.ops.catalog import OP_CATALOG
+from arrowdsl.plan.builder import PlanBuilder
+from arrowdsl.plan.ops import DedupeSpec, JoinSpec
+from arrowdsl.plan.ordering_policy import apply_canonical_sort, ordering_metadata_for_plan
+from arrowdsl.plan.planner import segment_plan
+from arrowdsl.schema.metadata import merge_metadata_specs
+from arrowdsl.schema.schema import SchemaMetadataSpec
 
 EXPLODE_OUT_COLS_LEN = 2
+
+
+type PlanKind = Literal["reader", "table"]
+
+
+@dataclass(frozen=True)
+class PlanRunResult:
+    """Plan output bundled with materialization metadata."""
+
+    value: TableLike | RecordBatchReaderLike
+    kind: PlanKind
 
 
 @dataclass(frozen=True)
@@ -104,35 +104,12 @@ class PlanSpec:
 
 @dataclass(frozen=True)
 class Plan:
-    """Wrapper around an Acero Declaration or eager source.
+    """Plan wrapper around PlanIR for fallback execution."""
 
-    Exactly one of ``decl``, ``reader_thunk``, or ``table_thunk`` must be provided.
-    """
-
-    decl: DeclarationLike | None = None
-    reader_thunk: ReaderThunk | None = None
-    table_thunk: TableThunk | None = None
-
+    ir: PlanIR
     label: str = ""
     ordering: Ordering = field(default_factory=Ordering.unordered)
     pipeline_breakers: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        """Validate that exactly one execution source is set.
-
-        Raises
-        ------
-        ValueError
-            Raised when zero or multiple sources are provided.
-        """
-        sources = [
-            self.decl is not None,
-            self.reader_thunk is not None,
-            self.table_thunk is not None,
-        ]
-        if sum(sources) != 1:
-            msg = "Plan must have exactly one of: decl, reader_thunk, table_thunk."
-            raise ValueError(msg)
 
     def to_reader(self, *, ctx: ExecutionContext) -> RecordBatchReaderLike:
         """Return a streaming reader for this plan.
@@ -150,18 +127,16 @@ class Plan:
         Raises
         ------
         ValueError
-            Raised when the plan has no execution source.
+            Raised when the plan is not streamable.
         """
-        if self.pipeline_breakers:
-            msg = f"Plan contains pipeline breakers: {self.pipeline_breakers}"
-            raise ValueError(msg)
-        if self.reader_thunk is not None:
-            return self.reader_thunk()
-        if self.decl is not None:
-            return self.decl.to_reader(use_threads=ctx.use_threads)
-        if self.table_thunk is not None:
-            return self.table_thunk().to_reader()
-        msg = "Plan has no execution source."
+        result = execute_plan(
+            self,
+            ctx=ctx,
+            prefer_reader=True,
+        )
+        if isinstance(result.value, pa.RecordBatchReader):
+            return cast("RecordBatchReaderLike", result.value)
+        msg = "Plan is not streamable."
         raise ValueError(msg)
 
     def to_table(self, *, ctx: ExecutionContext) -> TableLike:
@@ -176,87 +151,16 @@ class Plan:
         -------
         pyarrow.Table
             Materialized table.
-
-        Raises
-        ------
-        ValueError
-            Raised when the plan has no execution source.
         """
-        if self.table_thunk is not None:
-            return self.table_thunk()
-        if self.decl is not None:
-            return self.decl.to_table(use_threads=ctx.use_threads)
-        if self.reader_thunk is not None:
-            return self.reader_thunk().read_all()
-        msg = "Plan has no execution source."
-        raise ValueError(msg)
-
-    def _apply_plan_op(
-        self,
-        op: PlanOp,
-        *,
-        ctx: ExecutionContext | None = None,
-        label: str = "",
-    ) -> Plan:
-        if self.decl is None:
-            msg = "Plan operation requires an Acero-backed Plan (decl is None)."
-            raise TypeError(msg)
-        decl = op.to_declaration([self.decl], ctx=ctx)
-        ordering = op.apply_ordering(self.ordering)
-        pipeline_breakers = self.pipeline_breakers
-        if op.is_pipeline_breaker:
-            pipeline_breakers = (*pipeline_breakers, op.__class__.__name__)
-        return Plan(
-            decl=decl,
-            label=label or self.label,
-            ordering=ordering,
-            pipeline_breakers=pipeline_breakers,
+        result = execute_plan(
+            self,
+            ctx=ctx,
+            prefer_reader=False,
         )
-
-    def join(
-        self,
-        right: Plan,
-        *,
-        spec: JoinSpec,
-        ctx: ExecutionContext | None = None,
-        label: str = "",
-    ) -> Plan:
-        """Join this plan with another plan using a hash join.
-
-        Parameters
-        ----------
-        right:
-            Right-hand plan to join against.
-        spec:
-            Join specification for keys and outputs.
-        ctx:
-            Optional execution context for plan compilation.
-        label:
-            Optional plan label.
-
-        Returns
-        -------
-        Plan
-            Joined plan with unordered output.
-
-        Raises
-        ------
-        TypeError
-            Raised when either plan lacks an Acero declaration.
-        """
-        if self.decl is None or right.decl is None:
-            msg = "Plan.join requires Acero-backed plans (decl is None)."
-            raise TypeError(msg)
-        op = JoinOp(spec=spec)
-        decl = op.to_declaration([self.decl, right.decl], ctx=ctx)
-        ordering = op.apply_ordering(self.ordering)
-        pipeline_breakers = (*self.pipeline_breakers, *right.pipeline_breakers)
-        return Plan(
-            decl=decl,
-            label=label or self.label,
-            ordering=ordering,
-            pipeline_breakers=pipeline_breakers,
-        )
+        if isinstance(result.value, pa.RecordBatchReader):
+            reader = cast("RecordBatchReaderLike", result.value)
+            return reader.read_all()
+        return cast("TableLike", result.value)
 
     def schema(self, *, ctx: ExecutionContext) -> SchemaLike:
         """Return the output schema for this plan.
@@ -271,37 +175,34 @@ class Plan:
         pyarrow.Schema
             Output schema for the plan.
         """
-        if self.pipeline_breakers:
-            return self.to_table(ctx=ctx).schema
-        if self.table_thunk is not None:
-            return self.table_thunk().schema
-        reader = self.to_reader(ctx=ctx)
-        schema = reader.schema
-        close = getattr(reader, "close", None)
-        if callable(close):
-            close()
-        return schema
+        result = execute_plan(self, ctx=ctx, prefer_reader=not self.pipeline_breakers)
+        return result.value.schema
 
     @staticmethod
-    def table_source(table: TableLike, *, label: str = "") -> Plan:
-        """Create a Plan from an in-memory table using a table_source node.
+    def table_source(table: TableLike | RecordBatchReaderLike, *, label: str = "") -> Plan:
+        """Create a Plan from an in-memory table or reader.
 
         Parameters
         ----------
         table:
-            Source table.
+            Source table or reader.
         label:
             Optional plan label.
 
         Returns
         -------
         Plan
-            Plan backed by a table_source declaration.
+            Plan backed by a table_source node.
         """
-        op = TableSourceOp(table=table)
-        decl = op.to_declaration([], ctx=None)
-        ordering = op.apply_ordering(Ordering.unordered())
-        return Plan(decl=decl, label=label, ordering=ordering, pipeline_breakers=())
+        builder = PlanBuilder()
+        builder.table_source(table=table)
+        ir, ordering, pipeline_breakers = builder.build()
+        return Plan(
+            ir=ir,
+            label=label,
+            ordering=ordering,
+            pipeline_breakers=pipeline_breakers,
+        )
 
     @staticmethod
     def from_table(table: TableLike, *, label: str = "") -> Plan:
@@ -317,14 +218,9 @@ class Plan:
         Returns
         -------
         Plan
-            Plan backed by a table thunk.
+            Plan backed by a table_source node.
         """
-        return Plan(
-            table_thunk=lambda: table,
-            label=label,
-            ordering=Ordering.implicit(),
-            pipeline_breakers=(),
-        )
+        return Plan.table_source(table, label=label)
 
     @staticmethod
     def from_reader(reader: RecordBatchReaderLike, *, label: str = "") -> Plan:
@@ -340,14 +236,9 @@ class Plan:
         Returns
         -------
         Plan
-            Plan backed by a reader thunk.
+            Plan backed by a table_source node.
         """
-        return Plan(
-            reader_thunk=lambda: reader,
-            label=label,
-            ordering=Ordering.implicit(),
-            pipeline_breakers=(),
-        )
+        return Plan.table_source(reader, label=label)
 
     def filter(
         self,
@@ -372,7 +263,20 @@ class Plan:
         Plan
             Filtered plan.
         """
-        return self._apply_plan_op(FilterOp(predicate=predicate), ctx=ctx, label=label)
+        _ = ctx
+        builder = PlanBuilder.from_plan(
+            ir=self.ir,
+            ordering=self.ordering,
+            pipeline_breakers=self.pipeline_breakers,
+        )
+        builder.filter(predicate=predicate)
+        ir, ordering, pipeline_breakers = builder.build()
+        return Plan(
+            ir=ir,
+            label=label or self.label,
+            ordering=ordering,
+            pipeline_breakers=pipeline_breakers,
+        )
 
     def project(
         self,
@@ -400,10 +304,19 @@ class Plan:
         Plan
             Projected plan.
         """
-        return self._apply_plan_op(
-            ProjectOp(expressions=expressions, names=names),
-            ctx=ctx,
-            label=label,
+        _ = ctx
+        builder = PlanBuilder.from_plan(
+            ir=self.ir,
+            ordering=self.ordering,
+            pipeline_breakers=self.pipeline_breakers,
+        )
+        builder.project(expressions=list(expressions), names=list(names))
+        ir, ordering, pipeline_breakers = builder.build()
+        return Plan(
+            ir=ir,
+            label=label or self.label,
+            ordering=ordering,
+            pipeline_breakers=pipeline_breakers,
         )
 
     def rename_columns(
@@ -440,8 +353,9 @@ class Plan:
             msg = "rename_columns requires an execution context."
             raise ValueError(msg)
         columns = list(self.schema(ctx=ctx).names)
-        op = RenameColumnsOp(mapping=mapping, columns=columns)
-        return self._apply_plan_op(op, ctx=ctx, label=label)
+        expressions = [pc.field(name) for name in columns]
+        names = [mapping.get(name, name) for name in columns]
+        return self.project(expressions, names, ctx=ctx, label=label)
 
     def order_by(
         self,
@@ -466,8 +380,20 @@ class Plan:
         Plan
             Ordered plan.
         """
-        op = OrderByOp(sort_keys=sort_keys)
-        return self._apply_plan_op(op, ctx=ctx, label=label)
+        _ = ctx
+        builder = PlanBuilder.from_plan(
+            ir=self.ir,
+            ordering=self.ordering,
+            pipeline_breakers=self.pipeline_breakers,
+        )
+        builder.order_by(sort_keys=tuple(sort_keys))
+        ir, ordering, pipeline_breakers = builder.build()
+        return Plan(
+            ir=ir,
+            label=label or self.label,
+            ordering=ordering,
+            pipeline_breakers=pipeline_breakers,
+        )
 
     def explode_list(
         self,
@@ -496,34 +422,34 @@ class Plan:
         Returns
         -------
         Plan
-            Plan that materializes and explodes the list column.
+            Plan that explodes the list column.
 
         Raises
         ------
         ValueError
             Raised when out_cols does not contain exactly two names.
         """
+        _ = ctx
         if len(out_cols) != EXPLODE_OUT_COLS_LEN:
             msg = "explode_list out_cols must contain exactly two names."
             raise ValueError(msg)
         out_parent_col, out_value_col = out_cols
-
-        def _thunk() -> TableLike:
-            table = self.to_table(ctx=ctx)
-            kernel = resolve_kernel("explode_list", ctx=ctx)
-            return kernel(
-                table,
-                parent_id_col=parent_id_col,
-                list_col=list_col,
-                out_parent_col=out_parent_col,
-                out_value_col=out_value_col,
-            )
-
-        pipeline_breakers = (*self.pipeline_breakers, "explode_list")
+        builder = PlanBuilder.from_plan(
+            ir=self.ir,
+            ordering=self.ordering,
+            pipeline_breakers=self.pipeline_breakers,
+        )
+        builder.explode_list(
+            parent_id_col=parent_id_col,
+            list_col=list_col,
+            out_parent_col=out_parent_col,
+            out_value_col=out_value_col,
+        )
+        ir, ordering, pipeline_breakers = builder.build()
         return Plan(
-            table_thunk=_thunk,
+            ir=ir,
             label=label or self.label,
-            ordering=Ordering.unordered(),
+            ordering=ordering,
             pipeline_breakers=pipeline_breakers,
         )
 
@@ -553,8 +479,20 @@ class Plan:
         Plan
             Aggregated plan (unordered output).
         """
-        op = AggregateOp(group_keys=group_keys, aggs=aggs)
-        return self._apply_plan_op(op, ctx=ctx, label=label)
+        _ = ctx
+        builder = PlanBuilder.from_plan(
+            ir=self.ir,
+            ordering=self.ordering,
+            pipeline_breakers=self.pipeline_breakers,
+        )
+        builder.aggregate(group_keys=list(group_keys), aggs=list(aggs))
+        ir, ordering, pipeline_breakers = builder.build()
+        return Plan(
+            ir=ir,
+            label=label or self.label,
+            ordering=ordering,
+            pipeline_breakers=pipeline_breakers,
+        )
 
     def winner_select(
         self,
@@ -582,8 +520,62 @@ class Plan:
         Plan
             Plan with winner-selection applied.
         """
-        op = WinnerSelectOp(spec=spec, columns=columns)
-        return self._apply_plan_op(op, ctx=ctx, label=label)
+        _ = ctx
+        builder = PlanBuilder.from_plan(
+            ir=self.ir,
+            ordering=self.ordering,
+            pipeline_breakers=self.pipeline_breakers,
+        )
+        builder.winner_select(spec=spec, columns=list(columns))
+        ir, ordering, pipeline_breakers = builder.build()
+        return Plan(
+            ir=ir,
+            label=label or self.label,
+            ordering=ordering,
+            pipeline_breakers=pipeline_breakers,
+        )
+
+    def join(
+        self,
+        right: Plan,
+        *,
+        spec: JoinSpec,
+        ctx: ExecutionContext | None = None,
+        label: str = "",
+    ) -> Plan:
+        """Join this plan with another plan using a hash join.
+
+        Parameters
+        ----------
+        right:
+            Right-hand plan to join against.
+        spec:
+            Join specification for keys and outputs.
+        ctx:
+            Optional execution context for plan compilation.
+        label:
+            Optional plan label.
+
+        Returns
+        -------
+        Plan
+            Joined plan with unordered output.
+        """
+        _ = ctx
+        builder = PlanBuilder.from_plan(
+            ir=self.ir,
+            ordering=self.ordering,
+            pipeline_breakers=self.pipeline_breakers,
+        )
+        builder.pipeline_breakers.extend(right.pipeline_breakers)
+        builder.hash_join(right=right.ir, spec=spec)
+        ir, ordering, pipeline_breakers = builder.build()
+        return Plan(
+            ir=ir,
+            label=label or self.label,
+            ordering=ordering,
+            pipeline_breakers=pipeline_breakers,
+        )
 
     def mark_unordered(self, *, label: str = "") -> Plan:
         """Return a copy of the plan marked unordered.
@@ -597,35 +589,13 @@ class Plan:
         -------
         Plan
             Plan marked unordered.
-
-        Raises
-        ------
-        ValueError
-            Raised when the plan has no execution source.
         """
-        if self.decl is not None:
-            return Plan(
-                decl=self.decl,
-                label=label or self.label,
-                ordering=Ordering.unordered(),
-                pipeline_breakers=self.pipeline_breakers,
-            )
-        if self.table_thunk is not None:
-            return Plan(
-                table_thunk=self.table_thunk,
-                label=label or self.label,
-                ordering=Ordering.unordered(),
-                pipeline_breakers=self.pipeline_breakers,
-            )
-        if self.reader_thunk is not None:
-            return Plan(
-                reader_thunk=self.reader_thunk,
-                label=label or self.label,
-                ordering=Ordering.unordered(),
-                pipeline_breakers=self.pipeline_breakers,
-            )
-        msg = "Plan has no execution source."
-        raise ValueError(msg)
+        return Plan(
+            ir=self.ir,
+            label=label or self.label,
+            ordering=Ordering.unordered(),
+            pipeline_breakers=self.pipeline_breakers,
+        )
 
     def is_ordered(self) -> bool:
         """Return whether this plan is ordered.
@@ -638,131 +608,99 @@ class Plan:
         return self.ordering.level in {OrderingLevel.IMPLICIT, OrderingLevel.EXPLICIT}
 
 
-@dataclass(frozen=True)
-class PlanFactory:
-    """Factory for building plans with consistent ordering metadata."""
+def _pipeline_breaker_spec(pipeline_breakers: Sequence[str]) -> SchemaMetadataSpec:
+    if not pipeline_breakers:
+        return SchemaMetadataSpec()
+    return SchemaMetadataSpec(
+        schema_metadata={b"pipeline_breakers": ",".join(pipeline_breakers).encode("utf-8")}
+    )
 
-    ctx: ExecutionContext
 
-    def scan(
-        self,
-        dataset: ds.Dataset,
-        *,
-        columns: Sequence[str] | Mapping[str, ComputeExpression],
-        predicate: ComputeExpression | None = None,
-        label: str = "",
-        ordering_effect: OrderingEffect | None = None,
-    ) -> Plan:
-        """Build a scan plan for a dataset.
+def _apply_metadata_spec(
+    result: TableLike | RecordBatchReaderLike,
+    *,
+    metadata_spec: SchemaMetadataSpec | None,
+) -> TableLike | RecordBatchReaderLike:
+    if metadata_spec is None:
+        return result
+    if not metadata_spec.schema_metadata and not metadata_spec.field_metadata:
+        return result
+    schema = metadata_spec.apply(result.schema)
+    if isinstance(result, pa.RecordBatchReader):
+        return pa.RecordBatchReader.from_batches(schema, result)
+    table = cast("TableLike", result)
+    return table.cast(schema)
 
-        Returns
-        -------
-        Plan
-            Scan plan with ordering metadata applied.
-        """
-        if ordering_effect is None:
-            ordering_effect = scan_ordering_effect(self.ctx)
-        scan_op = ScanOp(
-            dataset=dataset,
-            columns=columns,
-            predicate=predicate,
-            ordering_effect=ordering_effect,
+
+def execute_plan(
+    plan: Plan,
+    *,
+    ctx: ExecutionContext,
+    prefer_reader: bool = False,
+    metadata_spec: SchemaMetadataSpec | None = None,
+    attach_ordering_metadata: bool = True,
+) -> PlanRunResult:
+    """Execute a Plan via PlanIR segmentation and runtime execution.
+
+    Returns
+    -------
+    PlanRunResult
+        Plan output and materialization kind.
+
+    Raises
+    ------
+    ValueError
+        Raised when the plan requires DataFusion execution.
+    """
+    segmented = segment_plan(plan.ir, catalog=OP_CATALOG, ctx=ctx)
+    if any(segment.lane == "datafusion" for segment in segmented.segments):
+        msg = "DataFusion segments must be executed by the primary pipeline."
+        raise ValueError(msg)
+    result = run_segments(segmented, ctx=ctx)
+    if isinstance(result, pa.RecordBatchReader) and prefer_reader:
+        combined = metadata_spec
+        if attach_ordering_metadata:
+            schema_for_ordering = (
+                metadata_spec.apply(result.schema) if metadata_spec is not None else result.schema
+            )
+            ordering_spec = ordering_metadata_for_plan(
+                plan.ordering,
+                schema=schema_for_ordering,
+            )
+            combined = merge_metadata_specs(metadata_spec, ordering_spec)
+        return PlanRunResult(
+            value=_apply_metadata_spec(result, metadata_spec=combined),
+            kind="reader",
         )
-        decl = scan_op.to_declaration([], ctx=self.ctx)
-        ordering = scan_op.apply_ordering(Ordering.unordered())
-        return Plan(
-            decl=decl,
-            label=label,
-            ordering=ordering,
-            pipeline_breakers=(),
+    if isinstance(result, pa.RecordBatchReader):
+        reader = cast("RecordBatchReaderLike", result)
+        table = reader.read_all()
+    else:
+        table = cast("TableLike", result)
+    table, canonical_keys = apply_canonical_sort(table, determinism=ctx.determinism)
+    combined = metadata_spec
+    if attach_ordering_metadata:
+        schema_for_ordering = (
+            metadata_spec.apply(table.schema) if metadata_spec is not None else table.schema
         )
-
-    def filter(
-        self,
-        plan: Plan,
-        predicate: ComputeExpression,
-        *,
-        label: str = "",
-    ) -> Plan:
-        """Apply a filter node to a plan.
-
-        Returns
-        -------
-        Plan
-            Filtered plan.
-        """
-        return plan.filter(predicate, ctx=self.ctx, label=label)
-
-    def project(
-        self,
-        plan: Plan,
-        *,
-        expressions: Sequence[ComputeExpression],
-        names: Sequence[str],
-        label: str = "",
-    ) -> Plan:
-        """Apply a projection node to a plan.
-
-        Returns
-        -------
-        Plan
-            Projected plan.
-        """
-        return plan.project(expressions, names, ctx=self.ctx, label=label)
-
-    def join(
-        self,
-        left: Plan,
-        right: Plan,
-        *,
-        spec: JoinSpec,
-        label: str = "",
-    ) -> Plan:
-        """Join two plans using a hash join.
-
-        Returns
-        -------
-        Plan
-            Joined plan.
-        """
-        return left.join(right, spec=spec, ctx=self.ctx, label=label)
-
-    def order_by(
-        self,
-        plan: Plan,
-        sort_keys: Sequence[OrderingKey],
-        *,
-        label: str = "",
-    ) -> Plan:
-        """Apply an order-by node to a plan.
-
-        Returns
-        -------
-        Plan
-            Ordered plan.
-        """
-        return plan.order_by(sort_keys, ctx=self.ctx, label=label)
-
-    def aggregate(
-        self,
-        plan: Plan,
-        *,
-        group_keys: Sequence[str],
-        aggs: Sequence[tuple[str, str]],
-        label: str = "",
-    ) -> Plan:
-        """Apply an aggregate node to a plan.
-
-        Returns
-        -------
-        Plan
-            Aggregated plan.
-        """
-        return plan.aggregate(group_keys, aggs, ctx=self.ctx, label=label)
+        ordering_spec = ordering_metadata_for_plan(
+            plan.ordering,
+            schema=schema_for_ordering,
+            canonical_keys=canonical_keys,
+        )
+        combined = merge_metadata_specs(
+            metadata_spec,
+            ordering_spec,
+            _pipeline_breaker_spec(plan.pipeline_breakers),
+        )
+    return PlanRunResult(
+        value=_apply_metadata_spec(table, metadata_spec=combined),
+        kind="table",
+    )
 
 
 def union_all_plans(plans: Sequence[Plan], *, label: str = "") -> Plan:
-    """Union multiple Acero-backed plans into a single plan.
+    """Union multiple plans into a single plan.
 
     Parameters
     ----------
@@ -780,37 +718,30 @@ def union_all_plans(plans: Sequence[Plan], *, label: str = "") -> Plan:
     ------
     ValueError
         Raised when no plans are provided.
-    TypeError
-        Raised when any plan is not Acero-backed.
     """
     if not plans:
         msg = "union_all_plans requires at least one plan."
         raise ValueError(msg)
     if len(plans) == 1:
         plan = plans[0]
-        if plan.decl is None:
-            msg = "union_all_plans requires Acero-backed Plans (missing declarations)."
-            raise TypeError(msg)
         return Plan(
-            decl=plan.decl,
+            ir=plan.ir,
             label=label or plan.label,
             ordering=Ordering.unordered(),
             pipeline_breakers=plan.pipeline_breakers,
         )
-    decls: list[DeclarationLike] = []
-    pipeline_breakers: list[str] = []
+    builder = PlanBuilder()
+    builder.union_all(inputs=tuple(plan.ir for plan in plans))
+    ir, ordering, pipeline_breakers = builder.build()
+    combined: list[str] = []
     for plan in plans:
-        if plan.decl is None:
-            msg = "union_all_plans requires Acero-backed Plans (missing declarations)."
-            raise TypeError(msg)
-        decls.append(plan.decl)
-        pipeline_breakers.extend(plan.pipeline_breakers)
-    decl = acero.Declaration("union", None, inputs=decls)
+        combined.extend(plan.pipeline_breakers)
+    combined.extend(pipeline_breakers)
     return Plan(
-        decl=decl,
+        ir=ir,
         label=label,
-        ordering=Ordering.unordered(),
-        pipeline_breakers=tuple(pipeline_breakers),
+        ordering=ordering,
+        pipeline_breakers=tuple(combined),
     )
 
 
@@ -832,31 +763,15 @@ def hash_join(*, left: Plan, right: Plan, spec: JoinSpec, label: str = "") -> Pl
     -------
     Plan
         Joined plan (unordered output).
-
-    Raises
-    ------
-    TypeError
-        Raised when one or both plans are missing Acero declarations.
     """
-    if left.decl is None or right.decl is None:
-        msg = "hash_join requires Acero-backed Plans (missing declarations)."
-        raise TypeError(msg)
+    return left.join(right, spec=spec, label=label)
 
-    decl = acero.Declaration(
-        "hashjoin",
-        acero.HashJoinNodeOptions(
-            join_type=spec.join_type,
-            left_keys=list(spec.left_keys),
-            right_keys=list(spec.right_keys),
-            left_output=list(spec.left_output),
-            right_output=list(spec.right_output),
-            output_suffix_for_left=spec.output_suffix_for_left,
-            output_suffix_for_right=spec.output_suffix_for_right,
-        ),
-        inputs=[left.decl, right.decl],
-    )
-    return Plan(
-        decl=decl,
-        label=label or f"{left.label}_join_{right.label}",
-        ordering=Ordering.unordered(),
-    )
+
+__all__ = [
+    "Plan",
+    "PlanRunResult",
+    "PlanSpec",
+    "execute_plan",
+    "hash_join",
+    "union_all_plans",
+]

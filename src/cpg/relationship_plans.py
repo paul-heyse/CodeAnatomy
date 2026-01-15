@@ -16,7 +16,7 @@ from arrowdsl.core.interop import Scalar
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ScanTelemetry
-from arrowdsl.schema.ops import align_table
+from arrowdsl.schema.schema import align_table
 from cpg.catalog import PlanCatalog, PlanSource, resolve_plan_source
 from cpg.plan_specs import ensure_plan
 from ibis_engine.expr_compiler import (
@@ -25,7 +25,12 @@ from ibis_engine.expr_compiler import (
     expr_ir_to_ibis,
 )
 from ibis_engine.plan import IbisPlan
-from ibis_engine.plan_bridge import SourceToIbisOptions, source_to_ibis, table_to_ibis
+from ibis_engine.plan_bridge import (
+    SourceToIbisOptions,
+    register_ibis_view,
+    source_to_ibis,
+    table_to_ibis,
+)
 from ibis_engine.query_compiler import apply_query_spec
 from ibis_engine.schema_utils import align_table_to_schema
 from relspec.compiler import (
@@ -185,7 +190,7 @@ def compile_relation_plans(
             compiler=compiler.plan_compiler,
             params=options.param_bindings,
         )
-        aligned = align_table(table, schema=output_schema, ctx=ctx_exec)
+        aligned = align_table(table, schema=output_schema)
         plan = Plan.table_source(aligned, label=rule.name)
         if plan is None:
             msg = f"Failed to compile relation plan for rule {rule.name!r}."
@@ -495,7 +500,7 @@ def _compile_relation_plans_ibis(
                 compiler=context.plan_compiler,
                 params=context.param_bindings,
             )
-            aligned = align_table(table, schema=context.output_schema, ctx=context.ctx_exec)
+            aligned = align_table(table, schema=context.output_schema)
             plan = table_to_ibis(
                 aligned,
                 backend=backend,
@@ -516,6 +521,15 @@ def _compile_relation_plans_ibis(
         if plan is None:
             msg = f"Failed to compile ibis relation plan for rule {rule.name!r}."
             raise ValueError(msg)
+        view_name = (
+            f"{name_prefix}_{rule.output_dataset}" if name_prefix else rule.output_dataset
+        )
+        plan = register_ibis_view(
+            plan.expr,
+            backend=backend,
+            name=view_name,
+            ordering=plan.ordering,
+        )
         plans[rule.output_dataset] = plan
         context.ibis_catalog.tables[rule.output_dataset] = plan
         context.evidence.register(rule.output_dataset, context.output_schema)

@@ -71,6 +71,7 @@ class ParamTableRegistry:
     scope_key: str | None = None
     registered_signatures: dict[str, str] = field(default_factory=dict)
     registered_schema: str | None = None
+    registered_catalog: str | None = None
 
     def __post_init__(self) -> None:
         """Normalize registry scope key after initialization."""
@@ -149,6 +150,11 @@ class ParamTableRegistry:
             Raised when the backend does not support table creation.
         """
         schema_name = param_table_schema(self.policy, scope_key=self.scope_key)
+        if self.registered_catalog != self.policy.catalog:
+            create_catalog = getattr(backend, "create_catalog", None)
+            if callable(create_catalog):
+                create_catalog(self.policy.catalog, force=True)
+            self.registered_catalog = self.policy.catalog
         if self.registered_schema != schema_name:
             self.registered_signatures.clear()
             self.registered_schema = schema_name
@@ -220,6 +226,24 @@ def param_table_schema(policy: ParamTablePolicy, *, scope_key: str | None) -> st
     }:
         return _scoped_schema(policy.schema, scope_key=scope_key)
     return policy.schema
+
+
+def qualified_param_table_name(
+    policy: ParamTablePolicy,
+    logical_name: str,
+    *,
+    scope_key: str | None = None,
+) -> str:
+    """Return a fully qualified param table name.
+
+    Returns
+    -------
+    str
+        Qualified name in catalog.schema.table form.
+    """
+    schema_name = param_table_schema(policy, scope_key=scope_key)
+    table_name = param_table_name(policy, logical_name)
+    return f"{policy.catalog}.{schema_name}.{table_name}"
 
 
 def param_signature(*, logical_name: str, values: Sequence[object]) -> str:
@@ -320,6 +344,7 @@ __all__ = [
     "param_signature",
     "param_table_name",
     "param_table_schema",
+    "qualified_param_table_name",
     "scalar_param_signature",
     "unique_values",
 ]

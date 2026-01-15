@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import cast
 
 import pyarrow as pa
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.runner import run_plan
 from arrowdsl.schema.build import const_array, set_or_append_column
@@ -34,10 +33,10 @@ def materialize_rule_outputs(
         result = run_plan(
             plan,
             ctx=ctx,
-            prefer_reader=False,
+            prefer_reader=True,
             attach_ordering_metadata=True,
         )
-        table = cast("TableLike", result.value)
+        table = _materialize_table(result.value)
         if attach_rule_meta and rules is not None:
             rule = rules.get(name)
             if rule is not None:
@@ -61,6 +60,12 @@ def _with_rule_meta(table: TableLike, rule: NormalizeRule) -> TableLike:
             const_array(count, int(rule.priority), dtype=pa.int32()),
         )
     return table
+
+
+def _materialize_table(value: TableLike | RecordBatchReaderLike) -> TableLike:
+    if isinstance(value, RecordBatchReaderLike):
+        return value.read_all()
+    return value
 
 
 __all__ = ["materialize_rule_outputs"]

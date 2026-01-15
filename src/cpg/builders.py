@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import cast
 
 import pyarrow as pa
 
@@ -16,6 +15,7 @@ from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
+    RecordBatchReaderLike,
     SchemaLike,
     TableLike,
     pc,
@@ -56,10 +56,16 @@ def _materialize_source(source: PlanSource, *, ctx: ExecutionContext) -> TableLi
     result = run_plan(
         plan,
         ctx=ctx,
-        prefer_reader=False,
+        prefer_reader=True,
         attach_ordering_metadata=True,
     )
-    return cast("TableLike", result.value)
+    return _materialize_table(result.value)
+
+
+def _materialize_table(value: TableLike | RecordBatchReaderLike) -> TableLike:
+    if isinstance(value, RecordBatchReaderLike):
+        return value.read_all()
+    return value
 
 
 def _row_id(value: object | None) -> str | None:

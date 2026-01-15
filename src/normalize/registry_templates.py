@@ -36,6 +36,9 @@ def _json_bytes(payload: object) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+_SPAN_COORD_POLICY = b"line_base=0;col_unit=utf32;end_exclusive=true"
+
+
 _TEMPLATES: dict[str, RegistryTemplate] = {
     "normalize": RegistryTemplate(
         stage="normalize",
@@ -48,6 +51,7 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
             b"confidence_policy": b"cst",
             b"evidence_family": b"cst",
             b"coordinate_system": b"bytes",
+            b"span_coord_policy": _SPAN_COORD_POLICY,
             b"ambiguity_policy": b"preserve",
             b"superior_rank": b"3",
             EVIDENCE_OUTPUT_MAP_META: _json_bytes({"role": "expr_role"}),
@@ -61,6 +65,7 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
             b"confidence_policy": b"scip",
             b"evidence_family": b"scip",
             b"coordinate_system": b"bytes",
+            b"span_coord_policy": _SPAN_COORD_POLICY,
             b"ambiguity_policy": b"preserve",
             b"superior_rank": b"1",
         },
@@ -83,6 +88,7 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
             b"confidence_policy": b"diagnostic",
             b"evidence_family": b"diagnostic",
             b"coordinate_system": b"bytes",
+            b"span_coord_policy": _SPAN_COORD_POLICY,
             b"ambiguity_policy": b"preserve",
             b"superior_rank": b"2",
             EVIDENCE_OUTPUT_MAP_META: _json_bytes({"role": "severity", "source": "diag_source"}),
@@ -95,6 +101,7 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
             b"confidence_policy": b"span",
             b"evidence_family": b"span",
             b"coordinate_system": b"bytes",
+            b"span_coord_policy": _SPAN_COORD_POLICY,
             b"ambiguity_policy": b"preserve",
             b"superior_rank": b"4",
             EVIDENCE_OUTPUT_MAP_META: _json_bytes({"role": "reason"}),
@@ -121,6 +128,7 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
             b"confidence_policy": b"evidence",
             b"evidence_family": b"normalize_evidence",
             b"coordinate_system": b"bytes",
+            b"span_coord_policy": _SPAN_COORD_POLICY,
             b"ambiguity_policy": b"preserve",
             b"superior_rank": b"0",
         },

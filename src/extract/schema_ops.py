@@ -9,8 +9,8 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.finalize.finalize import FinalizeContext, FinalizeResult
 from arrowdsl.plan.plan import Plan
-from arrowdsl.schema.ops import align_plan as align_plan_to_schema
-from arrowdsl.schema.ops import encode_plan
+from arrowdsl.plan_helpers import align_plan as align_plan_to_schema
+from arrowdsl.plan_helpers import encode_plan
 from arrowdsl.schema.policy import SchemaPolicy
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from extract.registry_pipelines import pipeline_spec

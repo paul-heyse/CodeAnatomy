@@ -11,7 +11,7 @@ from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import TableLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.build import column_or_null, set_or_append_column
-from normalize.spans import ast_range_to_byte_span
+from normalize.spans import AstSpanInput, ast_range_to_byte_span
 from normalize.text_index import RepoTextIndex, file_index, row_value_int
 from normalize.utils import PlanSource, plan_source
 
@@ -26,6 +26,9 @@ class BytecodeSpanColumns:
     start_col: str = "pos_start_col"
     end_line: str = "pos_end_line"
     end_col: str = "pos_end_col"
+    line_base: str = "line_base"
+    col_unit: str = "col_unit"
+    end_exclusive: str = "end_exclusive"
     out_bstart: str = "bstart"
     out_bend: str = "bend"
     out_ok: str = "span_ok"
@@ -71,8 +74,21 @@ def anchor_instructions(
         column_or_null(py_bc_instructions, cols.start_col, pa.int64()),
         column_or_null(py_bc_instructions, cols.end_line, pa.int64()),
         column_or_null(py_bc_instructions, cols.end_col, pa.int64()),
+        column_or_null(py_bc_instructions, cols.line_base, pa.int32()),
+        column_or_null(py_bc_instructions, cols.col_unit, pa.string()),
+        column_or_null(py_bc_instructions, cols.end_exclusive, pa.bool_()),
     ]
-    for file_id, path, start_line, start_col, end_line, end_col in iter_arrays(arrays):
+    for (
+        file_id,
+        path,
+        start_line,
+        start_col,
+        end_line,
+        end_col,
+        line_base,
+        col_unit,
+        end_exclusive,
+    ) in iter_arrays(arrays):
         fidx = file_index(repo_index, file_id=file_id, path=path)
         if fidx is None:
             bstarts.append(None)
@@ -88,7 +104,18 @@ def anchor_instructions(
             bends.append(None)
             oks.append(False)
             continue
-        bstart, bend = ast_range_to_byte_span(fidx, ln_i, col_i, eln_i, ecol_i)
+        bstart, bend = ast_range_to_byte_span(
+            fidx,
+            AstSpanInput(
+                lineno=ln_i,
+                col_offset=col_i,
+                end_lineno=eln_i,
+                end_col=ecol_i,
+                line_base=line_base,
+                col_unit=col_unit,
+                end_exclusive=end_exclusive,
+            ),
+        )
         bstarts.append(bstart)
         bends.append(bend)
         oks.append(bstart is not None and bend is not None)

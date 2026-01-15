@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 import pyarrow.dataset as ds
 from datafusion import SessionContext
+from datafusion.catalog import Catalog, Schema
 from datafusion.dataframe import DataFrame
 
 from arrowdsl.core.interop import SchemaLike
@@ -26,6 +27,10 @@ from schema_spec.system import DataFusionScanOptions
 from sqlglot_tools.optimizer import register_datafusion_dialect
 
 DEFAULT_CACHE_MAX_COLUMNS = 64
+_REGISTERED_OBJECT_STORES: dict[int, set[str]] = {}
+_CACHED_DATASETS: dict[int, set[str]] = {}
+_REGISTERED_CATALOGS: dict[int, set[str]] = {}
+_REGISTERED_SCHEMAS: dict[int, set[tuple[str, str]]] = {}
 
 
 @dataclass(frozen=True)
@@ -173,6 +178,12 @@ def register_dataset_df(
         Raised when the dataset format is unsupported.
     """
     _register_object_store(ctx, location)
+    if runtime_profile is not None:
+        _ensure_catalog_schema(
+            ctx,
+            catalog=runtime_profile.default_catalog,
+            schema=runtime_profile.default_schema,
+        )
     options = resolve_registry_options(location)
     cache = _resolve_cache_policy(
         options,
@@ -260,7 +271,12 @@ def _register_object_store(ctx: SessionContext, location: DatasetLocation) -> No
     scheme = _scheme_prefix(location.path)
     if scheme is None:
         return
+    ctx_key = id(ctx)
+    registered = _REGISTERED_OBJECT_STORES.setdefault(ctx_key, set())
+    if scheme in registered:
+        return
     register(scheme, location.filesystem, None)
+    registered.add(scheme)
 
 
 def _scheme_prefix(path: str | Path) -> str | None:
@@ -315,7 +331,36 @@ def _maybe_cache(context: DataFusionRegistrationContext, df: DataFrame) -> DataF
     cached = df.cache()
     context.ctx.deregister_table(context.name)
     context.ctx.register_table(context.name, cached)
+    cached_set = _CACHED_DATASETS.setdefault(id(context.ctx), set())
+    cached_set.add(context.name)
     return cached
+
+
+def cached_dataset_names(ctx: SessionContext) -> tuple[str, ...]:
+    """Return cached dataset names for a SessionContext."""
+    cached = _CACHED_DATASETS.get(id(ctx), set())
+    return tuple(sorted(cached))
+
+
+def _ensure_catalog_schema(ctx: SessionContext, *, catalog: str, schema: str) -> None:
+    ctx_id = id(ctx)
+    registered_catalogs = _REGISTERED_CATALOGS.setdefault(ctx_id, set())
+    registered_schemas = _REGISTERED_SCHEMAS.setdefault(ctx_id, set())
+    cat: Catalog
+    if catalog in registered_catalogs:
+        cat = ctx.catalog(catalog)
+    else:
+        try:
+            cat = ctx.catalog(catalog)
+        except KeyError:
+            cat = Catalog.memory_catalog()
+            ctx.register_catalog_provider(catalog, cat)
+        registered_catalogs.add(catalog)
+    if (catalog, schema) in registered_schemas:
+        return
+    if schema not in cat.schema_names():
+        cat.register_schema(schema, Schema.memory_schema())
+    registered_schemas.add((catalog, schema))
 
 
 def _should_cache_df(df: DataFrame, *, cache_max_columns: int | None) -> bool:

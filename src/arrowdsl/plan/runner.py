@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
@@ -16,6 +16,18 @@ from arrowdsl.schema.metadata import merge_metadata_specs
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from config import AdapterMode
 from ibis_engine.plan import IbisPlan
+from ibis_engine.registry import datafusion_context
+from ibis_engine.runner import (
+    DataFusionExecutionOptions,
+    IbisPlanExecutionOptions,
+    materialize_plan as ibis_materialize_plan,
+    stream_plan as ibis_stream_plan,
+)
+from sqlglot_tools.bridge import IbisCompilerBackend
+
+if TYPE_CHECKING:
+    from ibis.backends import BaseBackend
+    from ibis.expr.types import Value as IbisValue
 
 
 @dataclass(frozen=True)
@@ -26,6 +38,8 @@ class AdapterRunOptions:
     prefer_reader: bool = False
     metadata_spec: SchemaMetadataSpec | None = None
     attach_ordering_metadata: bool = True
+    ibis_backend: BaseBackend | None = None
+    ibis_params: Mapping[IbisValue, object] | None = None
 
 
 def _apply_metadata_spec(
@@ -72,39 +86,67 @@ def _run_ibis_plan(
     plan: IbisPlan,
     *,
     ctx: ExecutionContext,
-    prefer_reader: bool = False,
-    metadata_spec: SchemaMetadataSpec | None = None,
-    attach_ordering_metadata: bool = True,
+    options: AdapterRunOptions,
 ) -> PlanRunResult:
-    if prefer_reader and ctx.determinism != DeterminismTier.CANONICAL:
-        reader = plan.to_reader()
-        combined = metadata_spec
-        if attach_ordering_metadata:
+    adapter_mode = options.adapter_mode or AdapterMode()
+    execution: IbisPlanExecutionOptions | None = None
+    if (
+        adapter_mode.use_datafusion_bridge
+        and options.ibis_backend is not None
+        and ctx.runtime.datafusion is not None
+    ):
+        df_ctx = datafusion_context(options.ibis_backend) or ctx.runtime.datafusion.session_context()
+        execution = IbisPlanExecutionOptions(
+            params=options.ibis_params,
+            datafusion=DataFusionExecutionOptions(
+                backend=cast(IbisCompilerBackend, options.ibis_backend),
+                ctx=df_ctx,
+                runtime_profile=ctx.runtime.datafusion,
+                options=None,
+                allow_fallback=True,
+            ),
+        )
+    if options.prefer_reader and ctx.determinism != DeterminismTier.CANONICAL:
+        reader = (
+            ibis_stream_plan(plan, batch_size=None, execution=execution)
+            if execution is not None
+            else plan.to_reader(params=options.ibis_params)
+        )
+        combined = options.metadata_spec
+        if options.attach_ordering_metadata:
             schema_for_ordering = (
-                metadata_spec.apply(reader.schema) if metadata_spec is not None else reader.schema
+                options.metadata_spec.apply(reader.schema)
+                if options.metadata_spec is not None
+                else reader.schema
             )
             ordering_spec = ordering_metadata_for_plan(
                 plan.ordering,
                 schema=schema_for_ordering,
             )
-            combined = merge_metadata_specs(metadata_spec, ordering_spec)
+            combined = merge_metadata_specs(options.metadata_spec, ordering_spec)
         return PlanRunResult(
             value=_apply_metadata_spec(reader, metadata_spec=combined),
             kind="reader",
         )
-    table = plan.to_table()
+    table = (
+        ibis_materialize_plan(plan, execution=execution)
+        if execution is not None
+        else plan.to_table(params=options.ibis_params)
+    )
     table, canonical_keys = apply_canonical_sort(table, determinism=ctx.determinism)
-    combined = metadata_spec
-    if attach_ordering_metadata:
+    combined = options.metadata_spec
+    if options.attach_ordering_metadata:
         schema_for_ordering = (
-            metadata_spec.apply(table.schema) if metadata_spec is not None else table.schema
+            options.metadata_spec.apply(table.schema)
+            if options.metadata_spec is not None
+            else table.schema
         )
         ordering_spec = ordering_metadata_for_plan(
             plan.ordering,
             schema=schema_for_ordering,
             canonical_keys=canonical_keys,
         )
-        combined = merge_metadata_specs(metadata_spec, ordering_spec)
+        combined = merge_metadata_specs(options.metadata_spec, ordering_spec)
     return PlanRunResult(
         value=_apply_metadata_spec(table, metadata_spec=combined),
         kind="table",
@@ -138,9 +180,7 @@ def run_plan_adapter(
         return _run_ibis_plan(
             plan,
             ctx=ctx,
-            prefer_reader=options.prefer_reader,
-            metadata_spec=options.metadata_spec,
-            attach_ordering_metadata=options.attach_ordering_metadata,
+            options=options,
         )
     return run_plan(
         plan,

@@ -269,7 +269,7 @@ def _resolve_reader(
     return cast("Callable[..., Table]", reader)
 
 
-def _datafusion_context(backend: ibis.backends.BaseBackend) -> object | None:
+def datafusion_context(backend: ibis.backends.BaseBackend) -> SessionContext | None:
     if SessionContext is None:
         return None
     for attr in ("con", "_context", "_ctx", "ctx", "session_context"):
@@ -277,6 +277,11 @@ def _datafusion_context(backend: ibis.backends.BaseBackend) -> object | None:
         if isinstance(ctx, SessionContext):
             return ctx
     return None
+
+
+def _datafusion_context(backend: ibis.backends.BaseBackend) -> object | None:
+    """Deprecated: use datafusion_context instead."""
+    return datafusion_context(backend)
 
 
 def _register_datafusion_dataset(
@@ -352,7 +357,7 @@ class IbisDatasetRegistry:
         if name in self._tables:
             return self._tables[name]
         _ensure_backend_catalog_schema(self.backend, runtime_profile=self._runtime_profile)
-        ctx = _datafusion_context(self.backend)
+        ctx = datafusion_context(self.backend)
         if ctx is not None and not _register_datafusion_dataset(
             ctx,
             name=name,
@@ -398,6 +403,7 @@ __all__ = [
     "DatasetLocation",
     "IbisDatasetRegistry",
     "PathLike",
+    "datafusion_context",
     "read_dataset",
     "registry_snapshot",
     "resolve_datafusion_scan_options",

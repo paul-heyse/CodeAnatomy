@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import importlib
 import os
 from typing import Literal
@@ -44,7 +45,7 @@ def ctx() -> ExecutionContext:
 
 
 @tag(layer="inputs", kind="runtime")
-def ibis_backend_config() -> IbisBackendConfig:
+def ibis_backend_config(ctx: ExecutionContext) -> IbisBackendConfig:
     """Return the default Ibis backend configuration.
 
     Returns
@@ -52,7 +53,7 @@ def ibis_backend_config() -> IbisBackendConfig:
     IbisBackendConfig
         Backend configuration for Ibis execution.
     """
-    return IbisBackendConfig()
+    return IbisBackendConfig(datafusion_profile=ctx.runtime.datafusion)
 
 
 @tag(layer="inputs", kind="runtime")
@@ -98,7 +99,7 @@ def streaming_table_provider() -> object | None:
 
 
 @tag(layer="inputs", kind="runtime")
-def adapter_mode() -> AdapterMode:
+def adapter_mode(ctx: ExecutionContext) -> AdapterMode:
     """Return the adapter mode flags for plan execution.
 
     Returns
@@ -106,7 +107,13 @@ def adapter_mode() -> AdapterMode:
     AdapterMode
         Adapter mode configuration bundle.
     """
-    return AdapterMode()
+    mode = AdapterMode()
+    if ctx.debug:
+        return replace(mode, use_datafusion_bridge=True)
+    flag = os.environ.get("CODEANATOMY_USE_DATAFUSION_BRIDGE", "").strip().lower()
+    if flag in {"1", "true", "yes", "y"}:
+        return replace(mode, use_datafusion_bridge=True)
+    return mode
 
 
 @tag(layer="inputs", kind="object")

@@ -110,6 +110,13 @@ def _derived_expr(spec: DerivedIdSpec, *, ctx: QueryContext) -> HashExprSpec | M
     return MaskedHashExprSpec(spec=hash_spec_obj, required=required)
 
 
+def _normalize_ordering_key(key: str) -> str:
+    try:
+        return field_name(key)
+    except KeyError:
+        return key
+
+
 def build_query_spec(row: DatasetRow, *, ctx: QueryContext) -> QuerySpec:
     """Build the QuerySpec for a dataset row.
 
@@ -153,9 +160,13 @@ def build_metadata_spec(row: DatasetRow, *, base_columns: Sequence[str]) -> Sche
             merged_extra.update(defaults_meta)
             extractor_extra = merged_extra
     if row.ordering_keys:
-        ordering_keys = row.ordering_keys
+        ordering_keys = tuple(
+            (_normalize_ordering_key(col), order) for col, order in row.ordering_keys
+        )
     elif row.join_keys:
-        ordering_keys = tuple((name, "ascending") for name in row.join_keys)
+        ordering_keys = tuple(
+            (_normalize_ordering_key(name), "ascending") for name in row.join_keys
+        )
     else:
         ordering_keys = infer_ordering_keys(base_columns)
     ordering = ordering_metadata_spec(level, keys=ordering_keys)

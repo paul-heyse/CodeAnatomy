@@ -12,6 +12,7 @@ from arrowdsl.core.interop import ComputeExpression, SchemaLike
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.plan.scan_io import rows_to_table
+from arrowdsl.plan.schema_utils import plan_output_columns
 from arrowdsl.plan_helpers import column_or_null_expr
 from arrowdsl.schema.schema import empty_table
 from arrowdsl.spec.codec import parse_string_tuple
@@ -340,7 +341,8 @@ def apply_evidence_projection(
         return plan
     schema = dataset_schema(name)
     field_types = {field.name: field.type for field in schema}
-    available = set(plan.schema(ctx=ctx).names)
+    inferred = plan_output_columns(plan)
+    available = set(dataset_schema(name).names) if inferred is None else set(inferred)
     names: list[str] = []
     exprs: list[ComputeExpression] = []
     for column in columns:

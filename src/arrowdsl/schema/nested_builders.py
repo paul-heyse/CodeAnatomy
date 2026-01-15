@@ -11,7 +11,7 @@ import pyarrow.types as patypes
 
 from arrowdsl.core.interop import (
     ArrayLike,
-    ChunkedArrayLike,
+    ChunkedArray,
     DataTypeLike,
     FieldLike,
     ListArrayLike,
@@ -284,14 +284,60 @@ def _union_children_arrays(
         if patypes.is_null(child_type):
             arrays.append(pa.nulls(len(values), type=child_type))
         else:
-            arrays.append(pa.array(list(values), type=child_type))
+            field = pa.field("_", child_type)
+            arrays.append(nested_array_factory(field, list(values)))
     return arrays
+
+
+def _default_value_for_type(dtype: DataTypeLike) -> object:
+    if patypes.is_string(dtype) or patypes.is_large_string(dtype):
+        return ""
+    if patypes.is_binary(dtype) or patypes.is_large_binary(dtype):
+        return b""
+    if patypes.is_boolean(dtype):
+        return False
+    if patypes.is_integer(dtype):
+        return 0
+    if patypes.is_floating(dtype):
+        return 0.0
+    if (
+        patypes.is_date(dtype)
+        or patypes.is_time(dtype)
+        or patypes.is_timestamp(dtype)
+        or patypes.is_duration(dtype)
+        or patypes.is_decimal(dtype)
+    ):
+        return pa.scalar(0, type=dtype).as_py()
+    if (
+        patypes.is_list(dtype)
+        or patypes.is_large_list(dtype)
+        or patypes.is_list_view(dtype)
+        or patypes.is_large_list_view(dtype)
+    ):
+        return []
+    if patypes.is_map(dtype):
+        return []
+    if patypes.is_struct(dtype):
+        struct_type = cast("_StructType", dtype)
+        return {field.name: _default_value_for_type(field.type) for field in struct_type}
+    if patypes.is_union(dtype):
+        union_type = cast("_UnionType", dtype)
+        for field in union_type:
+            if not patypes.is_null(field.type):
+                return _default_value_for_type(field.type)
+        msg = "Union type has only null children; cannot build default value."
+        raise ValueError(msg)
+    if patypes.is_dictionary(dtype):
+        dict_type = cast("pa.DictionaryType", dtype)
+        return _default_value_for_type(dict_type.value_type)
+    return 0
 
 
 def build_struct(
     fields: dict[str, ArrayLike],
     *,
     mask: ArrayLike | None = None,
+    struct_type: DataTypeLike | None = None,
 ) -> StructArrayLike:
     """Build a struct array from named child arrays.
 
@@ -304,12 +350,14 @@ def build_struct(
     arrays: list[ArrayLike] = []
     for name in names:
         arr = fields[name]
-        if isinstance(arr, ChunkedArrayLike):
+        if isinstance(arr, ChunkedArray):
             arr = arr.combine_chunks()
         arrays.append(arr)
-    if mask is not None and isinstance(mask, ChunkedArrayLike):
+    if mask is not None and isinstance(mask, ChunkedArray):
         mask = mask.combine_chunks()
-    return pa.StructArray.from_arrays(arrays, names=names, mask=mask)
+    if struct_type is None:
+        return pa.StructArray.from_arrays(arrays, names=names, mask=mask)
+    return pa.StructArray.from_arrays(arrays, mask=mask, type=struct_type)
 
 
 def build_list(offsets: ArrayLike, values: ArrayLike) -> ListArrayLike:
@@ -465,24 +513,40 @@ def struct_array_from_dicts(
         Struct array with inferred or explicit type.
     """
     normalized: list[Mapping[str, object] | None] = []
+    mask_values: list[bool] = []
     for value in values:
         if value is None:
             normalized.append(None)
+            mask_values.append(True)
         elif isinstance(value, Mapping):
             normalized.append(value)
+            mask_values.append(False)
         else:
             normalized.append(None)
+            mask_values.append(True)
     if struct_type is None:
         return pa.array(normalized, type=None)
     struct_type = cast("_StructType", struct_type)
-    fields = {
-        field.name: nested_array_factory(
-            field,
-            [row.get(field.name) if row is not None else None for row in normalized],
-        )
-        for field in struct_type
-    }
-    return build_struct(fields)
+    fields: dict[str, ArrayLike] = {}
+    for field in struct_type:
+        column_values: list[object | None] = []
+        for row, is_null in zip(normalized, mask_values, strict=True):
+            if row is None:
+                if field.nullable:
+                    column_values.append(None)
+                else:
+                    column_values.append(_default_value_for_type(field.type))
+                continue
+            if field.name in row:
+                column_values.append(row.get(field.name))
+            elif field.nullable:
+                column_values.append(None)
+            else:
+                msg = f"Missing required struct field: {field.name!r}."
+                raise ValueError(msg)
+        fields[field.name] = nested_array_factory(field, column_values)
+    mask_array = pa.array(mask_values, type=pa.bool_()) if any(mask_values) else None
+    return build_struct(fields, mask=mask_array, struct_type=cast("DataTypeLike", struct_type))
 
 
 def dense_union_array(
@@ -505,7 +569,7 @@ def dense_union_array(
     types = pa.array(type_ids, type=type_id_type)
     value_offsets = pa.array(offsets, type=pa.int32())
     child_arrays = [
-        arr.combine_chunks() if isinstance(arr, ChunkedArrayLike) else arr for arr in children
+        arr.combine_chunks() if isinstance(arr, ChunkedArray) else arr for arr in children
     ]
     return pa.UnionArray.from_dense(
         types,
@@ -534,7 +598,7 @@ def sparse_union_array(
     type_id_type = _union_type_id_type(type_codes_list or [])
     types = pa.array(type_ids, type=type_id_type)
     child_arrays = [
-        arr.combine_chunks() if isinstance(arr, ChunkedArrayLike) else arr for arr in children
+        arr.combine_chunks() if isinstance(arr, ChunkedArray) else arr for arr in children
     ]
     return pa.UnionArray.from_sparse(
         types,

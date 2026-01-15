@@ -11,14 +11,14 @@ from arrowdsl.core.interop import DataTypeLike, FieldLike
 
 
 def list_view_type(value_type: DataTypeLike, *, large: bool = False) -> DataTypeLike:
-    """Return a list_view or large_list_view type.
+    """Return a list or large_list type.
 
     Returns
     -------
     DataTypeLike
-        Arrow list-view data type.
+        Arrow list data type.
     """
-    return pa.large_list_view(value_type) if large else pa.list_view(value_type)
+    return pa.large_list(value_type) if large else pa.list_(value_type)
 
 
 def map_type(

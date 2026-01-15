@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from arrowdsl.core.interop import TableLike
+from arrowdsl.schema.dictionary import normalize_dictionaries
 
 
 @dataclass(frozen=True)
@@ -24,7 +25,7 @@ class ChunkPolicy:
         """
         out = table
         if self.unify_dictionaries:
-            out = out.unify_dictionaries()
+            out = normalize_dictionaries(out, combine_chunks=False)
         if self.combine_chunks:
             out = out.combine_chunks()
         return out

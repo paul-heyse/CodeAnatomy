@@ -18,10 +18,11 @@ def ibis_dtype_from_arrow(dtype: pa.DataType) -> dt.DataType:
     ibis.expr.datatypes.DataType
         Ibis dtype for the provided Arrow dtype.
     """
+    normalized = _normalize_arrow_dtype(dtype)
     try:
-        return ibis.dtype(dtype)
+        return ibis.dtype(normalized)
     except (TypeError, ValueError):
-        return ibis.dtype(str(dtype))
+        return ibis.dtype(str(normalized))
 
 
 def ibis_null_literal(dtype: pa.DataType) -> Value:
@@ -34,6 +35,78 @@ def ibis_null_literal(dtype: pa.DataType) -> Value:
     """
     ibis_type = ibis_dtype_from_arrow(dtype)
     return ibis.literal(None, type=ibis_type)
+
+
+def ibis_schema_from_arrow(schema: pa.Schema) -> ibis.Schema:
+    """Return an Ibis schema for a PyArrow schema.
+
+    Returns
+    -------
+    ibis.Schema
+        Ibis schema derived from the Arrow schema.
+    """
+    fields = {field.name: ibis_dtype_from_arrow(field.type) for field in schema}
+    return ibis.schema(fields)
+
+
+def normalize_table_for_ibis(table: pa.Table) -> pa.Table:
+    """Return a table with Arrow view types normalized for Ibis.
+
+    Returns
+    -------
+    pyarrow.Table
+        Table with list view types normalized to list types.
+    """
+    normalized_schema = _normalize_arrow_schema(table.schema)
+    if normalized_schema == table.schema:
+        return table
+    return pa.table(table.to_pydict(), schema=normalized_schema)
+
+
+def _normalize_arrow_dtype(dtype: pa.DataType) -> pa.DataType:
+    if pa.types.is_list_view(dtype):
+        return pa.list_(_normalize_arrow_dtype(dtype.value_type))
+    if pa.types.is_large_list_view(dtype):
+        return pa.large_list(_normalize_arrow_dtype(dtype.value_type))
+    if pa.types.is_fixed_size_list(dtype):
+        return pa.list_(_normalize_arrow_dtype(dtype.value_type), dtype.list_size)
+    if pa.types.is_list(dtype):
+        return pa.list_(_normalize_arrow_dtype(dtype.value_type))
+    if pa.types.is_large_list(dtype):
+        return pa.large_list(_normalize_arrow_dtype(dtype.value_type))
+    if pa.types.is_struct(dtype):
+        fields = [
+            pa.field(
+                field.name,
+                _normalize_arrow_dtype(field.type),
+                nullable=field.nullable,
+                metadata=field.metadata,
+            )
+            for field in dtype
+        ]
+        return pa.struct(fields)
+    if pa.types.is_map(dtype):
+        return pa.map_(
+            _normalize_arrow_dtype(dtype.key_type),
+            _normalize_arrow_dtype(dtype.item_type),
+            keys_sorted=dtype.keys_sorted,
+        )
+    if pa.types.is_dictionary(dtype):
+        return pa.dictionary(dtype.index_type, _normalize_arrow_dtype(dtype.value_type))
+    return dtype
+
+
+def _normalize_arrow_schema(schema: pa.Schema) -> pa.Schema:
+    fields = [
+        pa.field(
+            field.name,
+            _normalize_arrow_dtype(field.type),
+            nullable=field.nullable,
+            metadata=field.metadata,
+        )
+        for field in schema
+    ]
+    return pa.schema(fields, metadata=schema.metadata)
 
 
 def align_table_to_schema(
@@ -114,4 +187,6 @@ __all__ = [
     "ensure_columns",
     "ibis_dtype_from_arrow",
     "ibis_null_literal",
+    "ibis_schema_from_arrow",
+    "normalize_table_for_ibis",
 ]

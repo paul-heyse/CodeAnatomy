@@ -199,12 +199,12 @@ def file_contexts(
     repo_files: TableLike,
     cache_salt: str,
     ctx: ExecutionContext,
-) -> tuple[FileContext, ...]:
+) -> Sequence[FileContext]:
     """Build file contexts from the repo_files table.
 
     Returns
     -------
-    tuple[FileContext, ...]
+    Sequence[FileContext]
         File contexts for each repo file row.
     """
     _ = ctx
@@ -322,17 +322,17 @@ def evidence_plan(rule_registry: RuleRegistry) -> EvidencePlan:
 def extract_rule_compilations(
     rule_registry: RuleRegistry,
     ctx: ExecutionContext,
-) -> tuple[ExtractRuleCompilation, ...]:
+) -> Sequence[ExtractRuleCompilation]:
     """Compile extract rules via the centralized rule compiler.
 
     Returns
     -------
-    tuple[ExtractRuleCompilation, ...]
+    Sequence[ExtractRuleCompilation]
         Extract rule compilation metadata.
     """
     compiler = RuleCompiler(handlers={"extract": ExtractRuleHandler()})
     compiled = compiler.compile_rules(rule_registry.rules_for_domain("extract"), ctx=ctx)
-    return cast("tuple[ExtractRuleCompilation, ...]", compiled)
+    return cast("Sequence[ExtractRuleCompilation]", compiled)
 
 
 @cache()

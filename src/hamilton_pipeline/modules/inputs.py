@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import os
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Literal
 
@@ -174,12 +175,12 @@ def relspec_param_values() -> JsonDict:
 
 
 @tag(layer="inputs", kind="object")
-def param_table_parquet_paths() -> JsonDict:
+def param_table_parquet_paths() -> Mapping[str, str] | None:
     """Return optional parquet paths for param table replay.
 
     Returns
     -------
-    JsonDict
+    Mapping[str, str] | None
         Mapping of logical param names to parquet dataset paths.
     """
     return {}

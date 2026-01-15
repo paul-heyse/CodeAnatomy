@@ -282,14 +282,12 @@ def _scip_span_errors_expr(
         | occ.end_line.isnull()
         | occ.end_char.isnull()
     )
-    reason = (
-        ibis.case()
-        .when(missing_repo, "missing_repo_text_for_path")
-        .when(invalid_len, "invalid_range_len")
-        .when(missing_fields, "missing_range_fields")
-        .when(~cast("BooleanValue", span_ok), "range_to_byte_span_failed")
-        .else_(ibis.null())
-        .end()
+    reason = ibis.cases(
+        (missing_repo, ibis.literal("missing_repo_text_for_path")),
+        (invalid_len, ibis.literal("invalid_range_len")),
+        (missing_fields, ibis.literal("missing_range_fields")),
+        (~cast("BooleanValue", span_ok), ibis.literal("range_to_byte_span_failed")),
+        else_=ibis.null(),
     )
     return (
         occ.mutate(reason=reason, path=path_expr)
@@ -445,13 +443,11 @@ def _col_unit_value(col_unit: Value, *, default_unit: str) -> Value:
 
 
 def _col_unit_from_encoding(encoding: Value) -> Value:
-    return (
-        ibis.case()
-        .when(encoding == ibis.literal(ENC_UTF8), ibis.literal("utf8"))
-        .when(encoding == ibis.literal(ENC_UTF16), ibis.literal("utf16"))
-        .when(encoding == ibis.literal(ENC_UTF32), ibis.literal("utf32"))
-        .else_(ibis.literal("utf32"))
-        .end()
+    return ibis.cases(
+        (encoding == ibis.literal(ENC_UTF8), ibis.literal("utf8")),
+        (encoding == ibis.literal(ENC_UTF16), ibis.literal("utf16")),
+        (encoding == ibis.literal(ENC_UTF32), ibis.literal("utf32")),
+        else_=ibis.literal("utf32"),
     )
 
 

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, TypedDict, Unpack, cast
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_core import ExprSpec
+from arrowdsl.compute.expr_core import ExprSpec, or_exprs
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, SchemaLike, TableLike, ensure_expression, pc
 from arrowdsl.plan.query import QuerySpec
@@ -198,7 +198,7 @@ class SpecValidationSuite:
         if not self.rules:
             return ensure_expression(pc.scalar(pa.scalar(value=False)))
         exprs = [rule.predicate for rule in self.rules]
-        return ensure_expression(pc.or_(*exprs))
+        return or_exprs(exprs)
 
     def invalid_rows_plan(self, plan: Plan, *, ctx: ExecutionContext) -> Plan:
         """Return a plan filtering invalid rows.

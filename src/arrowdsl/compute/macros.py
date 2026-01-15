@@ -12,6 +12,7 @@ import pyarrow.types as patypes
 
 from arrowdsl.compile.expr_compiler import ExprCompiler
 from arrowdsl.compute.expr_core import ExprSpec, cast_expr
+from arrowdsl.compute.expr_ops import and_expr, or_expr
 from arrowdsl.compute.predicates import InSet, IsNull, Not, predicate_spec
 from arrowdsl.compute.udf_helpers import (
     ensure_expr_context_udf,
@@ -322,11 +323,15 @@ class DefUseKindExprSpec:
         """
         opname = cast_expr(pc.field(self.column), pa.string())
         def_ops_arr = pa.array(sorted(self.def_ops), type=pa.string())
-        is_def = pc.or_(
-            pc.is_in(opname, value_set=def_ops_arr),
-            pc.or_(
-                pc.starts_with(opname, self.def_prefixes[0]),
-                pc.starts_with(opname, self.def_prefixes[1]),
+        is_def = or_expr(
+            ensure_expression(cast("ComputeExpression", pc.is_in(opname, value_set=def_ops_arr))),
+            or_expr(
+                ensure_expression(
+                    cast("ComputeExpression", pc.starts_with(opname, self.def_prefixes[0]))
+                ),
+                ensure_expression(
+                    cast("ComputeExpression", pc.starts_with(opname, self.def_prefixes[1]))
+                ),
             ),
         )
         is_use = pc.starts_with(opname, self.use_prefixes[0])
@@ -416,11 +421,17 @@ def trimmed_non_empty_expr(col: str) -> tuple[ComputeExpression, ComputeExpressi
         Trimmed expression and non-empty predicate.
     """
     trimmed = ensure_expression(pc.call_function("utf8_trim_whitespace", [pc.field(col)]))
-    non_empty = ensure_expression(
-        pc.and_(
-            pc.is_valid(trimmed),
-            pc.greater(ensure_expression(pc.call_function("utf8_length", [trimmed])), pc.scalar(0)),
-        )
+    non_empty = and_expr(
+        ensure_expression(cast("ComputeExpression", pc.is_valid(trimmed))),
+        ensure_expression(
+            cast(
+                "ComputeExpression",
+                pc.greater(
+                    ensure_expression(pc.call_function("utf8_length", [trimmed])),
+                    pc.scalar(0),
+                ),
+            )
+        ),
     )
     return trimmed, non_empty
 
@@ -567,7 +578,7 @@ def null_if_empty_or_zero(expr: ComputeExpression) -> ComputeExpression:
     zero = ensure_expression(pc.equal(expr, pc.scalar("0")))
     return ensure_expression(
         pc.if_else(
-            pc.or_(empty, zero),
+            or_expr(empty, zero),
             cast_expr(pc.scalar(None), pa.string(), safe=False),
             expr,
         )
@@ -603,7 +614,10 @@ def invalid_id_expr(values: ComputeExpression, *, dtype: DataTypeLike) -> Comput
     ComputeExpression
         Expression identifying null or zero identifiers.
     """
-    return ensure_expression(pc.or_(pc.is_null(values), zero_expr(values, dtype=dtype)))
+    return or_expr(
+        ensure_expression(cast("ComputeExpression", pc.is_null(values))),
+        zero_expr(values, dtype=dtype),
+    )
 
 
 def bitmask_is_set_expr(values: ComputeExpression, *, mask: int) -> ComputeExpression:
@@ -616,7 +630,7 @@ def bitmask_is_set_expr(values: ComputeExpression, *, mask: int) -> ComputeExpre
     """
     roles = pc.cast(values, pa.int64(), safe=False)
     hit = pc.not_equal(pc.bit_wise_and(roles, pa.scalar(mask)), pa.scalar(0))
-    return ensure_expression(pc.fill_null(hit, fill_value=False))
+    return ensure_expression(pc.coalesce(hit, pc.scalar(pa.scalar(value=False))))
 
 
 def _compute_array(function_name: str, args: list[object]) -> ArrayLike | ChunkedArrayLike:

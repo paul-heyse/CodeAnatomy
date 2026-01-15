@@ -10,6 +10,7 @@ from typing import Literal, Protocol, TypedDict, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
+from arrowdsl.compute.expr_core import cast_expr, or_exprs
 from arrowdsl.core.interop import (
     ArrayLike,
     ComputeExpression,
@@ -540,10 +541,15 @@ def projection_for_schema(
     expressions: list[ComputeExpression] = []
     names: list[str] = []
     for schema_field in schema:
-        if schema_field.name in available_set:
-            expr = pc.cast(pc.field(schema_field.name), schema_field.type, safe=safe_cast)
+        if patypes.is_list_view(schema_field.type) or patypes.is_large_list_view(schema_field.type):
+            if schema_field.name in available_set:
+                expr = ensure_expression(pc.field(schema_field.name))
+            else:
+                expr = ensure_expression(pc.scalar(pa.scalar(None, type=schema_field.type)))
+        elif schema_field.name in available_set:
+            expr = cast_expr(pc.field(schema_field.name), schema_field.type, safe=safe_cast)
         else:
-            expr = pc.cast(pc.scalar(None), schema_field.type, safe=safe_cast)
+            expr = cast_expr(pc.scalar(None), schema_field.type, safe=safe_cast)
         expressions.append(ensure_expression(expr))
         names.append(schema_field.name)
     return expressions, names
@@ -737,7 +743,7 @@ def required_non_null_mask(
     ]
     if not exprs:
         return ensure_expression(pc.scalar(pa.scalar(value=False)))
-    return ensure_expression(pc.or_(*exprs))
+    return or_exprs(exprs)
 
 
 def missing_key_fields(keys: Sequence[str], *, missing_cols: Sequence[str]) -> tuple[str, ...]:

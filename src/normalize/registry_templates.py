@@ -110,6 +110,7 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
     ),
     "normalize_type": RegistryTemplate(
         stage="normalize",
+        ordering_level=OrderingLevel.EXPLICIT,
         determinism_tier=DeterminismTier.BEST_EFFORT,
         metadata_extra={
             b"confidence_policy": b"type",

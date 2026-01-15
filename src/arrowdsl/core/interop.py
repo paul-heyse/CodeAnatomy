@@ -108,6 +108,20 @@ class RecordBatchReaderLike(Protocol):
 
     schema: SchemaLike
 
+    @classmethod
+    def __subclasshook__(cls, subclass: type, /) -> bool:
+        """Return True when a subclass satisfies the reader protocol shape.
+
+        Returns
+        -------
+        bool
+            True when the subclass advertises the expected reader attributes.
+        """
+        if cls is not RecordBatchReaderLike:
+            return NotImplemented
+        required = ("schema", "read_all")
+        return all(hasattr(subclass, name) for name in required)
+
     def read_all(self) -> TableLike:
         """Read all batches into a table."""
         ...
@@ -147,6 +161,29 @@ class TableLike(Protocol):
     num_rows: int
     column_names: list[str]
     schema: SchemaLike
+
+    @classmethod
+    def __subclasshook__(cls, subclass: type, /) -> bool:
+        """Return True when a subclass satisfies the table protocol shape.
+
+        Returns
+        -------
+        bool
+            True when the subclass advertises the expected table attributes.
+        """
+        if cls is not TableLike:
+            return NotImplemented
+        required = (
+            "schema",
+            "column_names",
+            "num_rows",
+            "to_pylist",
+            "to_pydict",
+            "filter",
+            "take",
+            "select",
+        )
+        return all(hasattr(subclass, name) for name in required)
 
     @classmethod
     def from_pylist(
@@ -268,8 +305,12 @@ class ListArrayLike(ArrayLike, Protocol):
 class ComputeExpression(Protocol):
     """Protocol for pyarrow.compute.Expression behavior we rely on."""
 
-    def __hash__(self) -> int:
-        """Return a hash for the expression."""
+    def __and__(self, other: ComputeExpression) -> ComputeExpression:
+        """Return a logical AND expression."""
+        ...
+
+    def __or__(self, other: ComputeExpression) -> ComputeExpression:
+        """Return a logical OR expression."""
         ...
 
     def isin(self, values: Sequence[object]) -> ComputeExpression:
@@ -282,6 +323,25 @@ class ComputeExpression(Protocol):
 
     def is_valid(self) -> ComputeExpression:
         """Return a validity-check expression."""
+        ...
+
+    def cast(
+        self,
+        target_type: DataTypeLike | None = None,
+        *,
+        safe: bool | None = None,
+        options: object | None = None,
+    ) -> ComputeExpression:
+        """Return a casted expression."""
+        ...
+
+    def _call(
+        self,
+        function_name: str,
+        arguments: Sequence[ComputeExpression],
+        options: object | None = None,
+    ) -> ComputeExpression:
+        """Call a compute function and return the derived expression."""
         ...
 
 

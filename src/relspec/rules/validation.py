@@ -1194,7 +1194,7 @@ def _schema_map_for_inputs(
             missing.append(name)
             continue
         schema = cast("pa.Schema", spec.schema())
-        schema_map[name] = {field.name: field.type.to_string() for field in schema}
+        schema_map[name] = {field.name: str(field.type) for field in schema}
         for field in schema:
             if field.name in seen:
                 continue
@@ -1220,7 +1220,7 @@ def _schema_ddl(schema: SchemaLike, *, name: str) -> str:
         CREATE TABLE statement.
     """
     spec = table_spec_from_schema(name, schema)
-    return spec.to_create_table_sql(dialect="ansi")
+    return spec.to_create_table_sql(dialect="datafusion")
 
 
 def _schema_for_dataset(

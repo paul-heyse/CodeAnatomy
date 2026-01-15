@@ -30,6 +30,7 @@ class _DefinitionsModule(Protocol):
 class _ValidationModule(Protocol):
     def validate_rule_definitions(self, definitions: Sequence[RuleDefinition]) -> None: ...
 
+
 DATASET_ROW_RECORDS: tuple[Mapping[str, object], ...] = ()
 
 _TEMPLATE_ROW_RECORDS = expand_dataset_templates(DATASET_TEMPLATE_SPECS)

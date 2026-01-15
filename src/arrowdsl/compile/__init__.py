@@ -1,1 +1,1 @@
-"""Compilation helpers for ArrowDSL fallback lanes."""
+"""Compilation helpers for ArrowDSL."""

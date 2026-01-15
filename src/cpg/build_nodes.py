@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 import pyarrow as pa
+import pyarrow.types as patypes
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_array_values
@@ -12,17 +14,18 @@ from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, SchemaLike, Table
 from arrowdsl.plan.plan import Plan, union_all_plans
 from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.build import const_array, set_or_append_column, table_from_arrays
-from arrowdsl.schema.metadata import normalize_dictionaries
-from arrowdsl.schema.schema import EncodingSpec
+from arrowdsl.schema.metadata import (
+    DICT_INDEX_META,
+    DICT_ORDERED_META,
+    ENCODING_META,
+    normalize_dictionaries,
+)
 from cpg.catalog import PlanCatalog, resolve_plan_source
 from cpg.constants import CpgBuildArtifacts, QualityPlanSpec, quality_plan_from_ids
 from cpg.emit_nodes import emit_node_plan
 from cpg.plan_specs import (
-    align_plan,
     assert_schema_metadata,
     empty_plan,
-    encode_plan,
-    encoding_columns_from_metadata,
     ensure_plan,
     finalize_context_for_plan,
     finalize_plan,
@@ -92,8 +95,108 @@ def _symbol_nodes_table(
     return normalize_dictionaries(table)
 
 
-def _encoding_specs(schema: SchemaLike) -> tuple[EncodingSpec, ...]:
-    return tuple(EncodingSpec(column=col) for col in encoding_columns_from_metadata(schema))
+def _strip_encoding_metadata(metadata: dict[bytes, bytes] | None) -> dict[bytes, bytes] | None:
+    if not metadata:
+        return None
+    encoding_keys = {
+        ENCODING_META.encode("utf-8"),
+        DICT_INDEX_META.encode("utf-8"),
+        DICT_ORDERED_META.encode("utf-8"),
+    }
+    stripped = {key: value for key, value in metadata.items() if key not in encoding_keys}
+    return stripped or None
+
+
+def _raw_nodes_schema(nodes_schema: SchemaLike) -> pa.Schema:
+    names = ["node_id", "node_kind", "path", "bstart", "bend", "file_id"]
+    schema = pa.schema(nodes_schema)
+    field_map = {field.name: field for field in schema}
+    fields: list[pa.Field] = []
+    for name in names:
+        field = field_map[name]
+        dtype = field.type
+        if patypes.is_dictionary(dtype):
+            dict_type = cast("pa.DictionaryType", dtype)
+            dtype = dict_type.value_type
+        fields.append(
+            pa.field(
+                name,
+                dtype,
+                nullable=field.nullable,
+                metadata=_strip_encoding_metadata(field.metadata),
+            )
+        )
+    return pa.schema(fields)
+
+
+def _schema_diff(expected: pa.Schema, actual: pa.Schema) -> str:
+    lines: list[str] = []
+    if expected.names != actual.names:
+        lines.append(f"column_order: expected={expected.names}, actual={actual.names}")
+    missing = [name for name in expected.names if name not in actual.names]
+    extra = [name for name in actual.names if name not in expected.names]
+    if missing:
+        lines.append(f"missing_fields: {missing}")
+    if extra:
+        lines.append(f"extra_fields: {extra}")
+    type_mismatches: list[str] = []
+    metadata_mismatches: list[str] = []
+    nullability_mismatches: list[str] = []
+    for name in sorted(set(expected.names) & set(actual.names)):
+        expected_field = expected.field(name)
+        actual_field = actual.field(name)
+        if expected_field.type != actual_field.type:
+            type_mismatches.append(
+                f"{name}: expected={expected_field.type}, actual={actual_field.type}"
+            )
+        if (expected_field.metadata or {}) != (actual_field.metadata or {}):
+            metadata_mismatches.append(
+                f"{name}: expected={expected_field.metadata!r}, actual={actual_field.metadata!r}"
+            )
+        if expected_field.nullable != actual_field.nullable:
+            nullability_mismatches.append(
+                f"{name}: expected={expected_field.nullable}, actual={actual_field.nullable}"
+            )
+    if type_mismatches:
+        lines.append("type_mismatches:")
+        lines.extend(type_mismatches)
+    if metadata_mismatches:
+        lines.append("metadata_mismatches:")
+        lines.extend(metadata_mismatches)
+    if nullability_mismatches:
+        lines.append("nullability_mismatches:")
+        lines.extend(nullability_mismatches)
+    if (expected.metadata or {}) != (actual.metadata or {}):
+        lines.append(f"schema_metadata: expected={expected.metadata!r}, actual={actual.metadata!r}")
+    return "\n".join(lines)
+
+
+def _schemas_match(expected: pa.Schema, actual: pa.Schema) -> bool:
+    if expected.names != actual.names:
+        return False
+    for name in expected.names:
+        expected_field = expected.field(name)
+        actual_field = actual.field(name)
+        if expected_field.type != actual_field.type:
+            return False
+        if (expected_field.metadata or {}) != (actual_field.metadata or {}):
+            return False
+    return (expected.metadata or {}) == (actual.metadata or {})
+
+
+def _assert_emit_schema(
+    plan: Plan,
+    *,
+    expected: pa.Schema,
+    ctx: ExecutionContext,
+    label: str,
+) -> None:
+    actual = pa.schema(plan.schema(ctx=ctx))
+    if _schemas_match(expected, actual):
+        return
+    diff = _schema_diff(expected, actual)
+    msg = f"Node emit schema mismatch for {label}.\n{diff}"
+    raise ValueError(msg)
 
 
 def _node_plan_specs(
@@ -241,6 +344,7 @@ def build_cpg_nodes_raw(
     registry = registry or default_cpg_registry()
     nodes_spec = registry.nodes_spec()
     nodes_schema = nodes_spec.schema()
+    expected_schema = _raw_nodes_schema(nodes_schema)
     options = options or NodeBuildOptions()
     catalog = _node_tables(inputs or NodeInputTables(), options=options, ctx=ctx)
     parts: list[Plan] = []
@@ -258,14 +362,15 @@ def build_cpg_nodes_raw(
         preprocessor = resolve_preprocessor(spec.preprocessor_id)
         if preprocessor is not None:
             plan = preprocessor(plan)
-        parts.append(emit_node_plan(plan, spec=spec.emit, ctx=ctx))
+        emitted = emit_node_plan(plan, spec=spec.emit, ctx=ctx)
+        _assert_emit_schema(emitted, expected=expected_schema, ctx=ctx, label=spec.name)
+        parts.append(emitted)
 
     if not parts:
         return empty_plan(nodes_schema, label="cpg_nodes_raw")
 
     combined = union_all_plans(parts, label="cpg_nodes_raw")
-    combined = encode_plan(combined, specs=_encoding_specs(nodes_schema), ctx=ctx)
-    return align_plan(combined, schema=nodes_schema, ctx=ctx)
+    return combined
 
 
 def build_cpg_nodes(

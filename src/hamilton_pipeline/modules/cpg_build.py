@@ -5,11 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
 from ibis.backends import BaseBackend
+from ibis.expr.types import Value as IbisValue
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
@@ -20,6 +21,7 @@ from arrowdsl.io.parquet import (
 )
 from arrowdsl.plan.query import ScanTelemetry
 from arrowdsl.plan.runner import AdapterRunOptions, run_plan_adapter
+from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.schema import empty_table
 from config import AdapterMode
 from cpg.build_edges import EdgeBuildConfig, EdgeBuildInputs, build_cpg_edges
@@ -69,6 +71,7 @@ from relspec.compiler import (
     validate_policy_requirements,
 )
 from relspec.compiler_graph import order_rules
+from relspec.contracts import relation_output_contract
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
@@ -102,9 +105,6 @@ from sqlglot_tools.bridge import IbisCompilerBackend
 
 if TYPE_CHECKING:
     from ibis.expr.types import Table as IbisTable
-    from ibis.expr.types import Value as IbisValue
-
-    from arrowdsl.plan.scan_io import DatasetSource
 
 # -----------------------------
 # Relationship contracts
@@ -388,7 +388,9 @@ def relationship_contracts(
     ContractCatalog
         Contract catalog for relationship outputs.
     """
-    return ContractCatalog.from_spec(relationship_contract_spec)
+    catalog = ContractCatalog.from_spec(relationship_contract_spec)
+    catalog.register(relation_output_contract())
+    return catalog
 
 
 @tag(layer="relspec", artifact="schema_registry", kind="registry")
@@ -583,11 +585,20 @@ def relspec_qname_inputs(
     )
 
 
+def _require_table(name: str, value: TableLike | DatasetSource) -> TableLike:
+    if isinstance(value, DatasetSource):
+        msg = f"Relspec input {name!r} must be a table, not a dataset source."
+        raise TypeError(msg)
+    return value
+
+
 @tag(layer="relspec", artifact="relspec_input_datasets", kind="bundle")
 def relspec_input_datasets(
     relspec_cst_inputs: CstRelspecInputs,
     relspec_scip_inputs: ScipOccurrenceInputs,
     relspec_qname_inputs: QnameInputs,
+    scip_build_inputs: ScipBuildInputs,
+    cpg_extra_inputs: CpgExtraInputs,
 ) -> dict[str, TableLike]:
     """Build the canonical dataset-name to table mapping.
 
@@ -603,15 +614,30 @@ def relspec_input_datasets(
         "cst_imports": relspec_cst_inputs.cst_imports_norm,
         "cst_callsites": relspec_cst_inputs.cst_callsites,
         "scip_occurrences": relspec_scip_inputs.scip_occurrences_norm,
+        "scip_symbol_relationships": _require_table(
+            "scip_symbol_relationships",
+            scip_build_inputs.scip_symbol_relationships,
+        ),
         "callsite_qname_candidates": relspec_qname_inputs.callsite_qname_candidates,
         "dim_qualified_names": relspec_qname_inputs.dim_qualified_names,
+        "type_exprs_norm": _require_table("type_exprs_norm", cpg_extra_inputs.type_exprs_norm),
+        "diagnostics_norm": _require_table(
+            "diagnostics_norm",
+            cpg_extra_inputs.diagnostics_norm,
+        ),
+        "rt_signatures": _require_table("rt_signatures", cpg_extra_inputs.rt_signatures),
+        "rt_signature_params": _require_table(
+            "rt_signature_params",
+            cpg_extra_inputs.rt_signature_params,
+        ),
+        "rt_members": _require_table("rt_members", cpg_extra_inputs.rt_members),
     }
 
 
 @cache()
 @tag(layer="relspec", artifact="persisted_relspec_inputs", kind="object")
 def persist_relspec_input_datasets(
-    relspec_mode: str,
+    relspec_mode: Literal["memory", "filesystem"],
     relspec_input_datasets: dict[str, TableLike],
     relspec_input_dataset_dir: str,
     *,
@@ -678,11 +704,11 @@ def persist_relspec_input_datasets(
 
 @tag(layer="relspec", artifact="relspec_resolver", kind="runtime")
 def relspec_resolver(
-    relspec_mode: str,
+    relspec_mode: Literal["memory", "filesystem"],
     relspec_input_datasets: dict[str, TableLike],
     persist_relspec_input_datasets: dict[str, DatasetLocation],
     ibis_backend: BaseBackend,
-    resolver_context: RelspecResolverContext,
+    relspec_resolver_context: RelspecResolverContext,
 ) -> PlanResolver[IbisPlan]:
     """Select the relationship resolver implementation.
 
@@ -696,12 +722,12 @@ def relspec_resolver(
         Resolver instance for relationship rule compilation.
     """
     mode = (relspec_mode or "memory").lower().strip()
-    if resolver_context.param_table_registry is None:
+    if relspec_resolver_context.param_table_registry is None:
         param_tables: Mapping[str, IbisTable] = {}
         policy = ParamTablePolicy()
     else:
-        param_tables = resolver_context.param_table_registry.ibis_tables(ibis_backend)
-        policy = resolver_context.param_table_registry.policy
+        param_tables = relspec_resolver_context.param_table_registry.ibis_tables(ibis_backend)
+        policy = relspec_resolver_context.param_table_registry.policy
     param_aliases = _param_table_aliases(param_tables, policy=policy)
     if mode == "filesystem":
         cat = DatasetCatalog()
@@ -710,7 +736,7 @@ def relspec_resolver(
         base = FilesystemPlanResolver(
             cat,
             backend=ibis_backend,
-            runtime_profile=resolver_context.ctx.runtime.datafusion,
+            runtime_profile=relspec_resolver_context.ctx.runtime.datafusion,
         )
         if not param_aliases:
             return base

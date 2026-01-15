@@ -23,6 +23,7 @@ from arrowdsl.core.schema_constants import (
     SCHEMA_META_VERSION,
 )
 from arrowdsl.json_factory import JsonPolicy, dumps_bytes, loads
+from arrowdsl.schema.dictionary import normalize_dictionaries
 from arrowdsl.schema.encoding_policy import EncodingPolicy, EncodingSpec
 from arrowdsl.schema.nested_builders import (
     dictionary_array_from_indices as _dictionary_from_indices,
@@ -557,22 +558,6 @@ def encoding_policy_from_schema(schema: SchemaLike) -> EncodingPolicy:
         info for field in schema if (info := _encoding_info_from_metadata(field)) is not None
     ]
     return _build_encoding_policy(entries)
-
-
-def normalize_dictionaries(
-    table: TableLike,
-    *,
-    combine_chunks: bool = True,
-) -> TableLike:
-    """Return a table with unified dictionaries and normalized chunks.
-
-    Returns
-    -------
-    TableLike
-        Table with unified dictionary columns.
-    """
-    out = table.combine_chunks() if combine_chunks else table
-    return out.unify_dictionaries()
 
 
 def dictionary_array_from_indices(

@@ -1,1 +1,1 @@
-"""Intermediate representation models for ArrowDSL fallback compilation."""
+"""Intermediate representation models for ArrowDSL."""

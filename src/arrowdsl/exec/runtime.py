@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import cast
+
+import pyarrow as pa
 
 from arrowdsl.compile.kernel_compiler import KernelCompiler
 from arrowdsl.compile.plan_compiler import PlanCompiler
 from arrowdsl.core.context import DeterminismTier, ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.ir.plan import PlanIR
+from arrowdsl.ir.plan import OpNode, PlanIR
 from arrowdsl.ops.catalog import OP_CATALOG
-from arrowdsl.plan.planner import Segment, SegmentPlan
+from arrowdsl.plan.planner import Segment, SegmentPlan, segment_plan
 
 DefExecutor = Callable[[Segment, ExecutionContext], TableLike]
 
@@ -53,7 +56,13 @@ def run_segments(
             current = df_executor(segment, ctx)
             continue
         if segment.lane == "acero":
-            decl = PlanCompiler(catalog=OP_CATALOG).to_acero(PlanIR(segment.ops), ctx=ctx)
+            if _is_union_all_segment(segment):
+                current = _run_union_all(segment.ops[0], ctx=ctx, df_executor=df_executor)
+                continue
+            ops = segment.ops
+            if current is not None and _needs_input_source(ops):
+                ops = (_table_source_op(current),) + ops
+            decl = PlanCompiler(catalog=OP_CATALOG).to_acero(PlanIR(ops), ctx=ctx)
             if streamable(plan, ctx=ctx):
                 current = decl.to_reader(use_threads=ctx.use_threads)
             else:
@@ -75,6 +84,44 @@ def run_segments(
         msg = "No segments executed."
         raise ValueError(msg)
     return current
+
+
+def _is_union_all_segment(segment: Segment) -> bool:
+    return len(segment.ops) == 1 and segment.ops[0].name == "union_all"
+
+
+def _table_source_op(table: TableLike | RecordBatchReaderLike) -> OpNode:
+    return OpNode(name="table_source", args={"table": table})
+
+
+def _needs_input_source(ops: tuple[OpNode, ...]) -> bool:
+    if not ops:
+        return False
+    first = ops[0].name
+    return first not in {"scan", "table_source", "union_all", "hash_join", "winner_select"}
+
+
+def _run_union_all(
+    node: OpNode,
+    *,
+    ctx: ExecutionContext,
+    df_executor: DefExecutor | None,
+) -> TableLike:
+    inputs = cast("tuple[PlanIR, ...]", node.inputs)
+    if not inputs:
+        msg = "union_all requires at least one input plan."
+        raise ValueError(msg)
+    tables: list[TableLike] = []
+    for input_ir in inputs:
+        segmented = segment_plan(input_ir, catalog=OP_CATALOG, ctx=ctx)
+        result = run_segments(segmented, ctx=ctx, df_executor=df_executor)
+        if isinstance(result, RecordBatchReaderLike):
+            reader = cast("RecordBatchReaderLike", result)
+            table = reader.read_all()
+        else:
+            table = cast("TableLike", result)
+        tables.append(table)
+    return pa.concat_tables(tables)
 
 
 __all__ = ["DefExecutor", "run_segments", "streamable"]

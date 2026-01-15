@@ -296,7 +296,7 @@ class ExtractManifestInputs:
 
 @tag(layer="materialize", artifact="normalized_inputs_parquet", kind="side_effect")
 def write_normalized_inputs_parquet(
-    relspec_input_datasets: dict[str, TableLike | RecordBatchReaderLike | IbisPlan],
+    relspec_input_datasets: dict[str, TableLike],
     output_dir: str | None,
     work_dir: str | None,
     ibis_execution: IbisAdapterExecution,
@@ -313,6 +313,10 @@ def write_normalized_inputs_parquet(
     JsonDict | None
         Report of written datasets, or None when output is disabled.
     """
+    input_datasets = cast(
+        "dict[str, TableLike | RecordBatchReaderLike | IbisPlan]",
+        relspec_input_datasets,
+    )
     base = _default_debug_dir(output_dir, work_dir)
     if not base:
         return None
@@ -322,7 +326,7 @@ def write_normalized_inputs_parquet(
 
     schemas: dict[str, pa.Schema] = {}
     encoding_policies: dict[str, EncodingPolicy] = {}
-    for name, table in relspec_input_datasets.items():
+    for name, table in input_datasets.items():
         if isinstance(table, RecordBatchReaderLike):
             continue
         schema = (
@@ -338,9 +342,9 @@ def write_normalized_inputs_parquet(
         schemas=schemas,
         encoding_policies=encoding_policies,
     )
-    if any(isinstance(table, IbisPlan) for table in relspec_input_datasets.values()):
+    if any(isinstance(table, IbisPlan) for table in input_datasets.values()):
         paths = write_ibis_named_datasets_parquet(
-            relspec_input_datasets,
+            input_datasets,
             str(out_dir),
             options=IbisNamedDatasetWriteOptions(
                 config=config,
@@ -349,7 +353,7 @@ def write_normalized_inputs_parquet(
         )
     else:
         paths = write_named_datasets_parquet(
-            cast("dict[str, TableLike | RecordBatchReaderLike]", relspec_input_datasets),
+            cast("dict[str, TableLike | RecordBatchReaderLike]", input_datasets),
             str(out_dir),
             config=config,
         )
@@ -357,7 +361,7 @@ def write_normalized_inputs_parquet(
     # Provide lightweight report
     datasets: dict[str, JsonDict] = {}
     report: JsonDict = {"base_dir": str(out_dir), "datasets": datasets}
-    for name, t in relspec_input_datasets.items():
+    for name, t in input_datasets.items():
         path = paths.get(name)
         if isinstance(t, RecordBatchReaderLike):
             rows = int(ds.dataset(path, format="parquet").count_rows()) if path else None

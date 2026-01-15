@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 
 import pyarrow.compute as pc
 
+from arrowdsl.compute.expr_ops import and_expr, and_exprs, or_expr, or_exprs
 from arrowdsl.compute.ids import (
     HashSpec,
     hash64_from_arrays,
@@ -96,7 +97,12 @@ class CastOptionsConfig:
     allow_invalid_utf8: bool | None = None
 
 
-def cast_options_factory(config: CastOptionsConfig | None = None) -> pc.CastOptions:
+def cast_options_factory(
+    config: CastOptionsConfig | None = None,
+    *,
+    safe: bool = True,
+    target_type: DataTypeLike | None = None,
+) -> pc.CastOptions:
     """Return a configured CastOptions instance.
 
     Returns
@@ -105,13 +111,40 @@ def cast_options_factory(config: CastOptionsConfig | None = None) -> pc.CastOpti
         Cast options instance.
     """
     config = config or CastOptionsConfig()
+    if safe:
+        allow_int_overflow = config.allow_int_overflow
+        allow_time_truncate = config.allow_time_truncate
+        allow_time_overflow = config.allow_time_overflow
+        allow_decimal_truncate = config.allow_decimal_truncate
+        allow_float_truncate = config.allow_float_truncate
+        allow_invalid_utf8 = config.allow_invalid_utf8
+    else:
+        allow_int_overflow = (
+            True if config.allow_int_overflow is None else config.allow_int_overflow
+        )
+        allow_time_truncate = (
+            True if config.allow_time_truncate is None else config.allow_time_truncate
+        )
+        allow_time_overflow = (
+            True if config.allow_time_overflow is None else config.allow_time_overflow
+        )
+        allow_decimal_truncate = (
+            True if config.allow_decimal_truncate is None else config.allow_decimal_truncate
+        )
+        allow_float_truncate = (
+            True if config.allow_float_truncate is None else config.allow_float_truncate
+        )
+        allow_invalid_utf8 = (
+            True if config.allow_invalid_utf8 is None else config.allow_invalid_utf8
+        )
     return pc.CastOptions(
-        allow_int_overflow=config.allow_int_overflow,
-        allow_time_truncate=config.allow_time_truncate,
-        allow_time_overflow=config.allow_time_overflow,
-        allow_decimal_truncate=config.allow_decimal_truncate,
-        allow_float_truncate=config.allow_float_truncate,
-        allow_invalid_utf8=config.allow_invalid_utf8,
+        target_type=target_type,
+        allow_int_overflow=allow_int_overflow,
+        allow_time_truncate=allow_time_truncate,
+        allow_time_overflow=allow_time_overflow,
+        allow_decimal_truncate=allow_decimal_truncate,
+        allow_float_truncate=allow_float_truncate,
+        allow_invalid_utf8=allow_invalid_utf8,
     )
 
 
@@ -129,8 +162,8 @@ def cast_expr(
     ComputeExpression
         Cast expression for the provided dtype.
     """
-    options = cast_options_factory(config)
-    return ensure_expression(pc.cast(expr, dtype, safe=safe, options=options))
+    options = cast_options_factory(config, safe=safe, target_type=dtype)
+    return ensure_expression(expr.cast(options=options))
 
 
 @dataclass(frozen=True)
@@ -321,10 +354,14 @@ __all__ = [
     "ScalarAggregateOptionsConfig",
     "ScalarValue",
     "TrimExprSpec",
+    "and_expr",
+    "and_exprs",
     "cast_expr",
     "cast_options_factory",
     "coalesce_string_expr",
     "normalize_position_encoding",
+    "or_expr",
+    "or_exprs",
     "scalar_aggregate_options_factory",
     "trimmed_non_empty_expr",
 ]

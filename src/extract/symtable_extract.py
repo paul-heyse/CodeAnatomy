@@ -249,31 +249,31 @@ def _build_func_frees(acc: _FuncPartsAccumulator) -> ArrayLike:
 
 FUNC_PARTS_PARAMETERS_SPEC = NestedFieldSpec(
     name="parameters",
-    dtype=pa.large_list_view(pa.string()),
+    dtype=pa.large_list(pa.string()),
     builder=_build_func_parameters,
 )
 
 FUNC_PARTS_LOCALS_SPEC = NestedFieldSpec(
     name="locals",
-    dtype=pa.large_list_view(pa.string()),
+    dtype=pa.large_list(pa.string()),
     builder=_build_func_locals,
 )
 
 FUNC_PARTS_GLOBALS_SPEC = NestedFieldSpec(
     name="globals",
-    dtype=pa.large_list_view(pa.string()),
+    dtype=pa.large_list(pa.string()),
     builder=_build_func_globals,
 )
 
 FUNC_PARTS_NONLOCALS_SPEC = NestedFieldSpec(
     name="nonlocals",
-    dtype=pa.large_list_view(pa.string()),
+    dtype=pa.large_list(pa.string()),
     builder=_build_func_nonlocals,
 )
 
 FUNC_PARTS_FREES_SPEC = NestedFieldSpec(
     name="frees",
-    dtype=pa.large_list_view(pa.string()),
+    dtype=pa.large_list(pa.string()),
     builder=_build_func_frees,
 )
 

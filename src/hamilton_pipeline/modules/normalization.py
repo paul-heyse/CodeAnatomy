@@ -631,7 +631,7 @@ def callsite_qname_candidates(
 @tag(layer="normalize", artifact="ast_nodes_norm", kind="table")
 def ast_nodes_norm(
     ast_nodes: TableLike,
-    span_context: SpanNormalizeContext,
+    span_normalize_context: SpanNormalizeContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Add byte-span columns to AST nodes for join-ready alignment.
@@ -643,11 +643,11 @@ def ast_nodes_norm(
     """
     if not _requires_output(evidence_plan, "ast_nodes_norm"):
         return empty_table(ast_nodes.schema)
-    _require_datafusion_backend(span_context.ibis_backend)
+    _require_datafusion_backend(span_normalize_context.ibis_backend)
     table = add_ast_byte_spans_ibis(
-        span_context.file_line_index,
+        span_normalize_context.file_line_index,
         ast_nodes,
-        backend=span_context.ibis_backend,
+        backend=span_normalize_context.ibis_backend,
     )
     schema = infer_schema_or_registry("py_ast_nodes_v1", [ast_nodes])
     return align_table_to_schema(table, schema, opts=SchemaInferOptions(keep_extra_columns=True))
@@ -657,7 +657,7 @@ def ast_nodes_norm(
 @tag(layer="normalize", artifact="py_bc_instructions_norm", kind="table")
 def py_bc_instructions_norm(
     py_bc_instructions: TableLike,
-    span_context: SpanNormalizeContext,
+    span_normalize_context: SpanNormalizeContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Anchor bytecode instructions to source byte spans.
@@ -669,11 +669,11 @@ def py_bc_instructions_norm(
     """
     if not _requires_output(evidence_plan, "py_bc_instructions_norm"):
         return empty_table(py_bc_instructions.schema)
-    _require_datafusion_backend(span_context.ibis_backend)
+    _require_datafusion_backend(span_normalize_context.ibis_backend)
     table = anchor_instructions_ibis(
-        span_context.file_line_index,
+        span_normalize_context.file_line_index,
         py_bc_instructions,
-        backend=span_context.ibis_backend,
+        backend=span_normalize_context.ibis_backend,
     )
     schema = infer_schema_or_registry("py_bc_instructions_v1", [py_bc_instructions])
     return align_table_to_schema(table, schema, opts=SchemaInferOptions(keep_extra_columns=True))
@@ -899,7 +899,7 @@ def repo_text_index(
 def scip_occurrences_norm_bundle(
     scip_documents: TableLike,
     scip_occurrences: TableLike,
-    span_context: SpanNormalizeContext,
+    span_normalize_context: SpanNormalizeContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> dict[str, TableLike]:
     """Convert SCIP occurrences into byte offsets.
@@ -914,12 +914,12 @@ def scip_occurrences_norm_bundle(
             "scip_occurrences_norm": _empty_scip_occurrences_norm(scip_occurrences),
             "scip_span_errors": span_error_table([]),
         }
-    _require_datafusion_backend(span_context.ibis_backend)
+    _require_datafusion_backend(span_normalize_context.ibis_backend)
     occ, errs = add_scip_occurrence_byte_spans_ibis(
-        span_context.file_line_index,
+        span_normalize_context.file_line_index,
         scip_documents,
         scip_occurrences,
-        backend=span_context.ibis_backend,
+        backend=span_normalize_context.ibis_backend,
     )
     schema = infer_schema_or_registry("scip_occurrences_v1", [scip_occurrences])
     occ = align_table_to_schema(occ, schema, opts=SchemaInferOptions(keep_extra_columns=True))

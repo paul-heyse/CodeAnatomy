@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 
 import ibis
+import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table as IbisTable
 
@@ -15,12 +16,22 @@ from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
 from ibis_engine.plan import IbisPlan
+from ibis_engine.schema_utils import ibis_schema_from_arrow, normalize_table_for_ibis
+
+DatabaseHint = tuple[str, str] | str | None
 
 
 class ViewBackend(Protocol):
     """Protocol for backends supporting view registration."""
 
-    def create_view(self, name: str, expr: IbisTable, *, overwrite: bool = False) -> None:
+    def create_view(
+        self,
+        name: str,
+        expr: IbisTable,
+        *,
+        database: DatabaseHint = None,
+        overwrite: bool = False,
+    ) -> None:
         """Register an Ibis view on the backend."""
         ...
 
@@ -126,13 +137,22 @@ def table_to_ibis(
     IbisPlan
         Ibis plan backed by the registered view.
     """
-    expr = ibis.memtable(table)
+    if isinstance(table, pa.Table):
+        normalized = normalize_table_for_ibis(table)
+        expr = ibis.memtable(normalized, schema=ibis_schema_from_arrow(normalized.schema))
+    else:
+        expr = ibis.memtable(table)
     view_name = _resolve_name(name)
     if view_name is None:
         return IbisPlan(expr=expr, ordering=ordering or Ordering.unordered())
     backend_view = cast("ViewBackend", backend)
-    backend_view.create_view(view_name, expr, overwrite=overwrite)
-    registered = backend.table(view_name)
+    database = _default_database_hint(backend)
+    if database is None:
+        backend_view.create_view(view_name, expr, overwrite=overwrite)
+        registered = backend.table(view_name)
+    else:
+        backend_view.create_view(view_name, expr, database=database, overwrite=overwrite)
+        registered = backend.table(view_name, database=database)
     return IbisPlan(expr=registered, ordering=ordering or Ordering.unordered())
 
 
@@ -155,9 +175,26 @@ def register_ibis_view(
     if view_name is None:
         return IbisPlan(expr=expr, ordering=ordering or Ordering.unordered())
     backend_view = cast("ViewBackend", backend)
-    backend_view.create_view(view_name, expr, overwrite=overwrite)
-    registered = backend.table(view_name)
+    database = _default_database_hint(backend)
+    if database is None:
+        backend_view.create_view(view_name, expr, overwrite=overwrite)
+        registered = backend.table(view_name)
+    else:
+        backend_view.create_view(view_name, expr, database=database, overwrite=overwrite)
+        registered = backend.table(view_name, database=database)
     return IbisPlan(expr=registered, ordering=ordering or Ordering.unordered())
+
+
+def _default_database_hint(backend: BaseBackend) -> tuple[str, str] | None:
+    catalog = getattr(backend, "current_catalog", None)
+    if callable(catalog):
+        catalog = catalog()
+    database = getattr(backend, "current_database", None)
+    if callable(database):
+        database = database()
+    if isinstance(catalog, str) and isinstance(database, str):
+        return (catalog, database)
+    return None
 
 
 def reader_to_ibis(

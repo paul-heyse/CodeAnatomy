@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import os
+import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
-from typing import Literal, cast
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Any, Literal, cast
 
 import pyarrow as pa
 
@@ -27,11 +31,15 @@ from arrowdsl.ops.catalog import OP_CATALOG
 from arrowdsl.plan.builder import PlanBuilder
 from arrowdsl.plan.ops import DedupeSpec, JoinSpec
 from arrowdsl.plan.ordering_policy import apply_canonical_sort, ordering_metadata_for_plan
-from arrowdsl.plan.planner import segment_plan
+from arrowdsl.plan.planner import SegmentPlan, segment_plan
 from arrowdsl.schema.metadata import merge_metadata_specs
 from arrowdsl.schema.schema import SchemaMetadataSpec
 
 EXPLODE_OUT_COLS_LEN = 2
+_PLAN_SNAPSHOT_ENV = "ARROWDSL_PLAN_SNAPSHOT_PATH"
+_PLAN_SCHEMA_LOG_ENV = "ARROWDSL_PLAN_SCHEMA_LOG_PATH"
+_PLAN_SNAPSHOT_NODE_LIMIT = 200
+_PLAN_SNAPSHOT_OP_LIMIT = 200
 
 
 type PlanKind = Literal["reader", "table"]
@@ -175,8 +183,14 @@ class Plan:
         pyarrow.Schema
             Output schema for the plan.
         """
-        result = execute_plan(self, ctx=ctx, prefer_reader=not self.pipeline_breakers)
-        return result.value.schema
+        result = execute_plan(
+            self,
+            ctx=ctx,
+            prefer_reader=False,
+            attach_ordering_metadata=False,
+        )
+        _log_plan_schema(self, value=result.value, ctx=ctx)
+        return _schema_from_value(result.value)
 
     @staticmethod
     def table_source(table: TableLike | RecordBatchReaderLike, *, label: str = "") -> Plan:
@@ -632,6 +646,120 @@ def _apply_metadata_spec(
     return table.cast(schema)
 
 
+def _plan_snapshot_path() -> Path | None:
+    raw = os.environ.get(_PLAN_SNAPSHOT_ENV, "").strip()
+    if not raw:
+        return None
+    return Path(raw)
+
+
+def _plan_schema_log_path() -> Path | None:
+    raw = os.environ.get(_PLAN_SCHEMA_LOG_ENV, "").strip()
+    if not raw:
+        return None
+    return Path(raw)
+
+
+def _snapshot_node_args(args: Mapping[str, object]) -> dict[str, str]:
+    return {key: type(value).__name__ for key, value in args.items()}
+
+
+def _snapshot_segments(segmented: SegmentPlan | None) -> list[dict[str, object]]:
+    if segmented is None:
+        return []
+    snapshot: list[dict[str, object]] = []
+    for segment in segmented.segments:
+        ops = [node.name for node in segment.ops][:_PLAN_SNAPSHOT_OP_LIMIT]
+        snapshot.append(
+            {
+                "lane": segment.lane,
+                "op_count": len(segment.ops),
+                "ops": ops,
+            }
+        )
+    return snapshot
+
+
+def _log_plan_snapshot(
+    plan: Plan,
+    *,
+    ctx: ExecutionContext,
+    segmented: SegmentPlan | None,
+    stage: str,
+) -> None:
+    path = _plan_snapshot_path()
+    if path is None:
+        return
+    try:
+        nodes = plan.ir.nodes
+        node_names = [node.name for node in nodes]
+        node_samples = node_names[:_PLAN_SNAPSHOT_NODE_LIMIT]
+        node_details = [
+            {
+                "name": node.name,
+                "arg_keys": list(node.args.keys()),
+                "arg_types": _snapshot_node_args(node.args),
+            }
+            for node in nodes[:_PLAN_SNAPSHOT_NODE_LIMIT]
+        ]
+        payload: dict[str, Any] = {
+            "timestamp": time.time(),
+            "stage": stage,
+            "plan_label": plan.label,
+            "node_count": len(nodes),
+            "node_names": node_samples,
+            "nodes": node_details,
+            "ordering_level": plan.ordering.level,
+            "ordering_keys": list(plan.ordering.keys),
+            "pipeline_breakers": list(plan.pipeline_breakers),
+            "runtime_profile": ctx.runtime.name,
+            "determinism": ctx.runtime.determinism,
+            "mode": ctx.mode,
+            "provenance": ctx.provenance,
+            "safe_cast": ctx.safe_cast,
+            "datafusion_enabled": ctx.runtime.datafusion is not None,
+            "segments": _snapshot_segments(segmented),
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, default=str) + "\n")
+    except OSError:
+        return
+
+
+def _schema_from_value(value: TableLike | RecordBatchReaderLike) -> SchemaLike:
+    if isinstance(value, pa.RecordBatchReader):
+        reader = cast("RecordBatchReaderLike", value)
+        return reader.read_all().schema
+    table = cast("TableLike", value)
+    return table.schema
+
+
+def _log_plan_schema(plan: Plan, *, value: object, ctx: ExecutionContext) -> None:
+    path = _plan_schema_log_path()
+    if path is None:
+        return
+    try:
+        payload: dict[str, Any] = {
+            "timestamp": time.time(),
+            "plan_label": plan.label,
+            "node_count": len(plan.ir.nodes),
+            "value_type": type(value).__name__,
+            "value_module": type(value).__module__,
+            "is_table": isinstance(value, pa.Table),
+            "is_reader": isinstance(value, pa.RecordBatchReader),
+            "runtime_profile": ctx.runtime.name,
+            "determinism": ctx.runtime.determinism,
+            "use_threads": ctx.use_threads,
+            "datafusion_enabled": ctx.runtime.datafusion is not None,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, default=str) + "\n")
+    except OSError:
+        return
+
+
 def execute_plan(
     plan: Plan,
     *,
@@ -652,11 +780,16 @@ def execute_plan(
     ValueError
         Raised when the plan requires DataFusion execution.
     """
-    segmented = segment_plan(plan.ir, catalog=OP_CATALOG, ctx=ctx)
+    plan_ctx = ctx
+    if ctx.runtime.datafusion is not None:
+        plan_ctx = replace(ctx, runtime=ctx.runtime.with_datafusion(None))
+    segmented = segment_plan(plan.ir, catalog=OP_CATALOG, ctx=plan_ctx)
+    _log_plan_snapshot(plan, ctx=plan_ctx, segmented=segmented, stage="execute_plan")
     if any(segment.lane == "datafusion" for segment in segmented.segments):
         msg = "DataFusion segments must be executed by the primary pipeline."
         raise ValueError(msg)
-    result = run_segments(segmented, ctx=ctx)
+    result = run_segments(segmented, ctx=plan_ctx)
+    _log_plan_snapshot(plan, ctx=plan_ctx, segmented=segmented, stage="execute_plan_result")
     if isinstance(result, pa.RecordBatchReader) and prefer_reader:
         combined = metadata_spec
         if attach_ordering_metadata:
@@ -678,6 +811,7 @@ def execute_plan(
     else:
         table = cast("TableLike", result)
     table, canonical_keys = apply_canonical_sort(table, determinism=ctx.determinism)
+    _log_plan_snapshot(plan, ctx=plan_ctx, segmented=segmented, stage="execute_plan_sorted")
     combined = metadata_spec
     if attach_ordering_metadata:
         schema_for_ordering = (

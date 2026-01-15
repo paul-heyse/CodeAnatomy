@@ -303,6 +303,32 @@ def _sort_options(sort_keys: Sequence[SortKey]) -> object:
     return _sort_options_for_keys(sort_keys)
 
 
+def _unique_sort_keys(sort_keys: Sequence[SortKey]) -> list[SortKey]:
+    seen: set[str] = set()
+    unique: list[SortKey] = []
+    for key in sort_keys:
+        if key.column in seen:
+            continue
+        seen.add(key.column)
+        unique.append(key)
+    return unique
+
+
+def _sort_table_for_keys(table: TableLike, sort_keys: Sequence[SortKey]) -> pa.Table:
+    names: list[str] = []
+    columns: list[ChunkedArrayLike] = []
+    for key in sort_keys:
+        name = key.column
+        field = table.schema.field(name)
+        col = cast("ChunkedArrayLike", table[name])
+        if patypes.is_dictionary(field.type):
+            dict_type = cast("pa.DictionaryType", field.type)
+            col = cast("ChunkedArrayLike", pc.cast(col, dict_type.value_type))
+        names.append(name)
+        columns.append(col)
+    return pa.table(columns, names=names)
+
+
 def canonical_sort(table: TableLike, *, sort_keys: Sequence[SortKey]) -> TableLike:
     """Return a canonically ordered table using stable sort indices.
 
@@ -320,8 +346,12 @@ def canonical_sort(table: TableLike, *, sort_keys: Sequence[SortKey]) -> TableLi
     """
     if not sort_keys:
         return table
-    options = _sort_options(sort_keys)
-    idx = pc.sort_indices(table, options=options)
+    normalized_keys = _unique_sort_keys(sort_keys)
+    if not normalized_keys:
+        return table
+    options = _sort_options(normalized_keys)
+    sort_table = _sort_table_for_keys(table, normalized_keys)
+    idx = pc.sort_indices(sort_table, options=options)
     return table.take(idx)
 
 
@@ -501,6 +531,44 @@ def canonical_sort_if_canonical(
     return table
 
 
+def _decode_dictionary_columns(
+    table: pa.Table,
+) -> tuple[pa.Table, dict[str, pa.DictionaryType]]:
+    dict_cols: dict[str, pa.DictionaryType] = {}
+    columns: list[ChunkedArrayLike] = []
+    names: list[str] = []
+    for field in table.schema:
+        col = table[field.name]
+        if patypes.is_dictionary(field.type):
+            dict_type = cast("pa.DictionaryType", field.type)
+            dict_cols[field.name] = dict_type
+            col = cast("ChunkedArrayLike", pc.cast(col, dict_type.value_type))
+        columns.append(col)
+        names.append(field.name)
+    if not dict_cols:
+        return table, {}
+    return pa.table(columns, names=names), dict_cols
+
+
+def _reencode_dictionary_columns(
+    table: pa.Table,
+    dict_cols: dict[str, pa.DictionaryType],
+) -> pa.Table:
+    if not dict_cols:
+        return table
+    columns: list[ChunkedArrayLike] = []
+    names: list[str] = []
+    for name in table.schema.names:
+        col = table[name]
+        dict_type = dict_cols.get(name)
+        if dict_type is not None:
+            encoded = pc.dictionary_encode(col)
+            col = cast("ChunkedArrayLike", pc.cast(encoded, dict_type))
+        columns.append(col)
+        names.append(name)
+    return pa.table(columns, names=names)
+
+
 def dedupe_keep_first_after_sort(
     table: TableLike,
     *,
@@ -530,9 +598,10 @@ def dedupe_keep_first_after_sort(
     sort_keys = [SortKey(key, "ascending") for key in keys] + list(tie_breakers)
     t_sorted = canonical_sort(table, sort_keys=sort_keys)
 
-    non_keys = [col for col in t_sorted.column_names if col not in keys]
+    t_group, dict_cols = _decode_dictionary_columns(cast("pa.Table", t_sorted))
+    non_keys = [col for col in t_group.column_names if col not in keys]
     aggs = [(col, "first") for col in non_keys]
-    out = t_sorted.group_by(list(keys), use_threads=False).aggregate(aggs)
+    out = t_group.group_by(list(keys), use_threads=False).aggregate(aggs)
 
     new_names: list[str] = []
     for name in out.schema.names:
@@ -540,7 +609,10 @@ def dedupe_keep_first_after_sort(
             new_names.append(name[: -len("_first")])
         else:
             new_names.append(name)
-    return out.rename_columns(new_names)
+    out = out.rename_columns(new_names)
+    if dict_cols:
+        out = _reencode_dictionary_columns(out, dict_cols)
+    return out
 
 
 def dedupe_keep_arbitrary(table: TableLike, *, keys: Sequence[str]) -> TableLike:

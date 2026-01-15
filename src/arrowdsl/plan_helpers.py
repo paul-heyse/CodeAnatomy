@@ -32,6 +32,7 @@ from arrowdsl.plan.runner_types import (
     plan_runner_module,
 )
 from arrowdsl.plan.scan_io import DatasetSource, PlanSource, plan_from_source
+from arrowdsl.schema.dictionary import normalize_dictionaries
 from arrowdsl.schema.schema import (
     CastErrorPolicy,
     align_to_schema,
@@ -619,7 +620,7 @@ def finalize_plan(
     if isinstance(value, pa.RecordBatchReader):
         return value
     table = cast("TableLike", value)
-    return table.unify_dictionaries()
+    return normalize_dictionaries(table, combine_chunks=False)
 
 
 def finalize_plan_adapter(
@@ -644,7 +645,7 @@ def finalize_plan_adapter(
     if isinstance(value, pa.RecordBatchReader):
         return value
     table = cast("TableLike", value)
-    return table.unify_dictionaries()
+    return normalize_dictionaries(table, combine_chunks=False)
 
 
 def align_table_to_schema(

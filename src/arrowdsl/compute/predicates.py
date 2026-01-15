@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 
+from arrowdsl.compute.expr_ops import and_expr
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
@@ -106,11 +107,11 @@ def valid_mask_expr(
     def _expr_for(name: str) -> ComputeExpression:
         if available is not None and name not in available:
             return ensure_expression(pc.scalar(pa.scalar(value=False)))
-        return ensure_expression(pc.is_valid(pc.field(name)))
+        return ensure_expression(cast("ComputeExpression", pc.is_valid(pc.field(name))))
 
     mask = _expr_for(cols[0])
     for name in cols[1:]:
-        mask = ensure_expression(pc.and_(mask, _expr_for(name)))
+        mask = and_expr(mask, _expr_for(name))
     return mask
 
 

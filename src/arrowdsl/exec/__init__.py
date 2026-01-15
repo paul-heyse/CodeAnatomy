@@ -1,1 +1,1 @@
-"""Execution helpers for ArrowDSL fallback segments."""
+"""Execution helpers for ArrowDSL."""

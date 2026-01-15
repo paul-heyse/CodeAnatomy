@@ -31,6 +31,7 @@ from arrowdsl.core.interop import (
 from arrowdsl.ir.expr import expr_from_expr_ir
 from arrowdsl.json_factory import JsonPolicy, dumps_text
 from arrowdsl.schema.build import dictionary_array_from_indices, union_array_from_values
+from arrowdsl.schema.dictionary import normalize_dictionaries
 from arrowdsl.spec.codec import (
     decode_json_text,
     decode_options_payload,
@@ -372,7 +373,7 @@ def expr_ir_table(exprs: Sequence[ExprIR]) -> ExprIRTable:
         ],
         schema=EXPR_NODE_SCHEMA,
     )
-    table = table.unify_dictionaries()
+    table = normalize_dictionaries(table, combine_chunks=False)
     return ExprIRTable(table=table, root_ids=root_ids)
 
 

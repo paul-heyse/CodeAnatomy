@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
@@ -46,6 +46,7 @@ from extract.schema_ops import ExtractNormalizeOptions, metadata_spec_for_datase
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
 
+type QualifiedNameSet = Collection[QualifiedName] | Callable[[], Collection[QualifiedName]]
 type Row = dict[str, object]
 
 CST_LINE_BASE = 1
@@ -357,7 +358,7 @@ def _resolve_metadata_maps(
 ) -> tuple[
     Mapping[cst.CSTNode, object],
     Mapping[cst.CSTNode, object],
-    Mapping[cst.CSTNode, Collection[QualifiedName]],
+    Mapping[cst.CSTNode, QualifiedNameSet],
 ]:
     providers: set[type[BaseMetadataProvider[object]]] = {ByteSpanPositionProvider}
     if options.compute_expr_context and dataset_enabled("py_cst_name_refs_v1", options):
@@ -371,10 +372,7 @@ def _resolve_metadata_maps(
     return (
         resolved.get(ByteSpanPositionProvider, {}),
         resolved.get(ExpressionContextProvider, {}),
-        cast(
-            "Mapping[cst.CSTNode, Collection[QualifiedName]]",
-            resolved.get(QualifiedNameProvider, {}),
-        ),
+        cast("Mapping[cst.CSTNode, QualifiedNameSet]", resolved.get(QualifiedNameProvider, {})),
     )
 
 
@@ -393,7 +391,7 @@ class CollectorMetadata:
 
     span_map: Mapping[cst.CSTNode, object]
     ctx_map: Mapping[cst.CSTNode, object]
-    qn_map: Mapping[cst.CSTNode, Collection[QualifiedName]]
+    qn_map: Mapping[cst.CSTNode, QualifiedNameSet]
 
 
 def _visit_with_collector(
@@ -453,6 +451,8 @@ class CSTCollector(cst.CSTVisitor):
         qset = self._qn_map.get(node)
         if not qset:
             return []
+        if callable(qset):
+            qset = qset()
         qualified = sorted(qset, key=lambda q: (q.name, str(q.source)))
         return [dict(zip(QNAME_KEYS, (q.name, str(q.source)), strict=True)) for q in qualified]
 

@@ -21,7 +21,6 @@ class _PolicyRegistry(Protocol):
     def resolve_ambiguity(self, domain: str, name: str) -> AmbiguityPolicy: ...
 
 
-
 CONFIDENCE_POLICY_META = b"confidence_policy"
 CONFIDENCE_BASE_META = b"confidence_base"
 CONFIDENCE_PENALTY_META = b"confidence_penalty"

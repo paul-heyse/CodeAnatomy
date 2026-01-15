@@ -230,7 +230,7 @@ _STABLE_HASH128_UDF = udf(
 )
 _POSITION_ENCODING_NORM_UDF = udf(
     _position_encoding_norm,
-    [pa.int32()],
+    [pa.string()],
     pa.int32(),
     "stable",
     "position_encoding_norm",

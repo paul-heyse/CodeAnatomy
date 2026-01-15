@@ -19,12 +19,25 @@ class _IbisDataFusionModule(Protocol):
 
 
 def _load_ibis_datafusion() -> _IbisDataFusionModule:
-    try:
-        module = importlib.import_module("ibis.datafusion")
-    except ImportError as exc:
-        msg = "Ibis datafusion backend is unavailable; install ibis-framework[datafusion]."
-        raise ImportError(msg) from exc
-    return cast("_IbisDataFusionModule", module)
+    msg = "Ibis datafusion backend is unavailable; install ibis-framework[datafusion]."
+    module_names = ("ibis.datafusion", "ibis.backends.datafusion")
+    for module_name in module_names:
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            if exc.name == module_name:
+                continue
+            raise ImportError(msg) from exc
+        except ImportError as exc:
+            raise ImportError(msg) from exc
+        connect = getattr(module, "connect", None)
+        if callable(connect):
+            return cast("_IbisDataFusionModule", module)
+        backend_cls = getattr(module, "Backend", None)
+        if callable(backend_cls):
+            return cast("_IbisDataFusionModule", backend_cls())
+        raise ImportError(msg)
+    raise ImportError(msg)
 
 
 def build_backend(cfg: IbisBackendConfig) -> ibis.backends.BaseBackend:

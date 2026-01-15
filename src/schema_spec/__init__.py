@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
-from arrowdsl.spec.tables.schema import (
-    CONTRACT_SPEC_SCHEMA,
-    FIELD_SPEC_SCHEMA,
-    TABLE_CONSTRAINTS_SCHEMA,
-    SchemaSpecTables,
-    contract_spec_table,
-    contract_specs_from_table,
-    dataset_specs_from_tables,
-    field_spec_table,
-    schema_spec_tables_from_dataset_specs,
-    table_constraints_table,
-    table_specs_from_tables,
-)
+import importlib
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from arrowdsl.spec.tables.schema import (
+        CONTRACT_SPEC_SCHEMA,
+        FIELD_SPEC_SCHEMA,
+        TABLE_CONSTRAINTS_SCHEMA,
+        SchemaSpecTables,
+        contract_spec_table,
+        contract_specs_from_table,
+        dataset_specs_from_tables,
+        field_spec_table,
+        schema_spec_tables_from_dataset_specs,
+        table_constraints_table,
+        table_specs_from_tables,
+    )
 from schema_spec.specs import (
     DICT_STRING,
     ENCODING_DICTIONARY,
@@ -55,6 +59,33 @@ from schema_spec.system import (
     table_spec_from_schema,
     validate_arrow_table,
 )
+
+_SCHEMA_TABLE_EXPORTS: set[str] = {
+    "CONTRACT_SPEC_SCHEMA",
+    "FIELD_SPEC_SCHEMA",
+    "TABLE_CONSTRAINTS_SCHEMA",
+    "SchemaSpecTables",
+    "contract_spec_table",
+    "contract_specs_from_table",
+    "dataset_specs_from_tables",
+    "field_spec_table",
+    "schema_spec_tables_from_dataset_specs",
+    "table_constraints_table",
+    "table_specs_from_tables",
+}
+
+
+def __getattr__(name: str) -> object:
+    if name in _SCHEMA_TABLE_EXPORTS:
+        module = importlib.import_module("arrowdsl.spec.tables.schema")
+        return getattr(module, name)
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
+
+
+def __dir__() -> list[str]:
+    return sorted(list(globals()) + list(_SCHEMA_TABLE_EXPORTS))
+
 
 __all__ = [
     "CONTRACT_SPEC_SCHEMA",

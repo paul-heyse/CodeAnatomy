@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import cast
 
 import ibis
-from ibis.expr.types import Value
+from ibis.expr.types import StringValue, Value
 
 from ibis_engine.builtin_udfs import stable_hash64, stable_hash128
 
@@ -59,7 +60,7 @@ def stable_id_expr(
         Stable id expression.
     """
     hashed = stable_hash64_expr(*parts, prefix=prefix, null_sentinel=null_sentinel)
-    return ibis.concat(ibis.literal(f"{prefix}:"), hashed.cast("string"))
+    return _concat_values([ibis.literal(f"{prefix}:"), hashed.cast("string")])
 
 
 def stable_key_expr(
@@ -143,7 +144,17 @@ def _join_with_separator(parts: Sequence[Value]) -> Value:
         if idx:
             pieces.append(sep)
         pieces.append(part)
-    return ibis.concat(*pieces)
+    return _concat_values(pieces)
+
+
+def _concat_values(parts: Sequence[Value]) -> Value:
+    if not parts:
+        msg = "concat requires at least one part."
+        raise ValueError(msg)
+    result = cast("StringValue", parts[0])
+    for part in parts[1:]:
+        result = cast("StringValue", result.concat(part))
+    return result
 
 
 __all__ = [

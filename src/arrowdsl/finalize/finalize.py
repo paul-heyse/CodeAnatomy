@@ -8,11 +8,19 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import pyarrow as pa
+import pyarrow.types as patypes
 
 from arrowdsl.compute.kernels import apply_dedupe, canonical_sort_if_canonical
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import HashSpec, hash_column_values, iter_array_values
-from arrowdsl.core.interop import ArrayLike, DataTypeLike, SchemaLike, TableLike, pc
+from arrowdsl.core.interop import (
+    ArrayLike,
+    ChunkedArrayLike,
+    DataTypeLike,
+    SchemaLike,
+    TableLike,
+    pc,
+)
 from arrowdsl.core.schema_constants import PROVENANCE_COLS
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.build import (
@@ -35,6 +43,7 @@ if TYPE_CHECKING:
 
 
 type InvariantFn = Callable[[TableLike], tuple[ArrayLike, str]]
+
 
 class _TableSpecFromSchema(Protocol):
     def __call__(
@@ -193,17 +202,8 @@ ERROR_DETAIL_STRUCT = pa.struct([(name, dtype) for name, dtype in ERROR_DETAIL_F
 
 
 def _build_error_detail_list(errors: TableLike) -> ArrayLike:
-    detail = build_struct(
-        {
-            "code": errors["error_code"],
-            "message": errors["error_message"],
-            "column": errors["error_column"],
-            "severity": errors["error_severity"],
-            "rule_name": errors["error_rule_name"],
-            "rule_priority": errors["error_rule_priority"],
-            "source": errors["error_source"],
-        }
-    )
+    detail_fields = {name: errors[name] for name, _ in ERROR_DETAIL_FIELDS}
+    detail = build_struct(detail_fields, struct_type=ERROR_DETAIL_STRUCT)
     offsets = pa.array(range(errors.num_rows + 1), type=pa.int32())
     return build_list(offsets, detail)
 
@@ -501,17 +501,79 @@ def _aggregate_error_details(
     else:
         row_id = pa.array(range(errors.num_rows), type=pa.int64())
     errors = errors.append_column("row_id", row_id)
-    detail_list = ERROR_DETAIL_SPEC.builder(errors)
-    errors = errors.append_column("error_detail_list", detail_list)
     group_cols = ["row_id"] + [col for col in key_cols if col in errors.column_names] + provenance
-    aggregated = errors.group_by(group_cols, use_threads=True).aggregate(
-        [("error_detail_list", "list")]
-    )
-    list_col = "error_detail_list_list"
-    if list_col not in aggregated.column_names:
-        list_col = "error_detail_list"
-    flattened = pc.list_flatten(aggregated[list_col])
-    return aggregated.append_column("error_detail", flattened).drop([list_col])
+    detail_field_names = [name for name, _ in ERROR_DETAIL_FIELDS]
+    aggregates = [(name, "list") for name in detail_field_names]
+    group_table = errors.select(list(group_cols) + detail_field_names)
+    group_table, dict_cols = _decode_dictionary_columns(group_table)
+    aggregated = group_table.group_by(group_cols, use_threads=True).aggregate(aggregates)
+    list_columns = {name: aggregated[f"{name}_list"] for name in detail_field_names}
+    error_detail = _build_error_detail_from_lists(list_columns)
+    list_cols = [f"{name}_list" for name in detail_field_names]
+    aggregated = aggregated.append_column("error_detail", error_detail).drop(list_cols)
+    if dict_cols:
+        aggregated = _reencode_dictionary_columns(aggregated, dict_cols)
+    return aggregated
+
+
+def _build_error_detail_from_lists(
+    list_columns: dict[str, ArrayLike | ChunkedArrayLike],
+) -> ArrayLike:
+    first = _combine_list_array(next(iter(list_columns.values())))
+    offsets = first.offsets
+    struct_fields: dict[str, ArrayLike] = {}
+    for name, list_col in list_columns.items():
+        list_array = _combine_list_array(list_col)
+        values = pc.list_flatten(list_array)
+        struct_fields[name] = values
+    detail_struct = build_struct(struct_fields, struct_type=ERROR_DETAIL_STRUCT)
+    return build_list(offsets, detail_struct)
+
+
+def _combine_list_array(values: ArrayLike | ChunkedArrayLike) -> pa.ListArray:
+    combined = values.combine_chunks() if isinstance(values, pa.ChunkedArray) else values
+    if not isinstance(combined, pa.ListArray):
+        msg = "Expected list array for error detail aggregation."
+        raise TypeError(msg)
+    return combined
+
+
+def _decode_dictionary_columns(
+    table: TableLike,
+) -> tuple[pa.Table, dict[str, pa.DictionaryType]]:
+    dict_cols: dict[str, pa.DictionaryType] = {}
+    columns: list[ChunkedArrayLike] = []
+    names: list[str] = []
+    for field in table.schema:
+        col = cast("ChunkedArrayLike", table[field.name])
+        if patypes.is_dictionary(field.type):
+            dict_type = cast("pa.DictionaryType", field.type)
+            dict_cols[field.name] = dict_type
+            col = cast("ChunkedArrayLike", pc.cast(col, dict_type.value_type))
+        columns.append(col)
+        names.append(field.name)
+    if not dict_cols:
+        return cast("pa.Table", table), {}
+    return pa.table(columns, names=names), dict_cols
+
+
+def _reencode_dictionary_columns(
+    table: pa.Table,
+    dict_cols: dict[str, pa.DictionaryType],
+) -> pa.Table:
+    if not dict_cols:
+        return table
+    columns: list[ChunkedArrayLike] = []
+    names: list[str] = []
+    for name in table.schema.names:
+        col = table[name]
+        dict_type = dict_cols.get(name)
+        if dict_type is not None:
+            encoded = pc.dictionary_encode(col)
+            col = cast("ChunkedArrayLike", pc.cast(encoded, dict_type))
+        columns.append(col)
+        names.append(name)
+    return pa.table(columns, names=names)
 
 
 def _build_alignment_table(

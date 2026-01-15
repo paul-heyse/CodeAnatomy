@@ -525,7 +525,7 @@ def quality_plan_from_ids(
         dtype = pa.string()
         id_expr = null_expr(dtype)
 
-    id_str = ensure_expression(pc.cast(id_expr, pa.string(), safe=False))
+    id_str = ensure_expression(id_expr.cast(pa.string(), safe=False))
     invalid = invalid_id_expr(id_expr, dtype=dtype)
     issue_expr = scalar_expr(spec.issue, dtype=pa.string())
     kind_expr = scalar_expr(spec.entity_kind, dtype=pa.string())

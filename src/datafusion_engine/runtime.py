@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, cast
 
+import datafusion
 import pyarrow as pa
 from datafusion import RuntimeEnvBuilder, SessionConfig, SessionContext
 from datafusion.dataframe import DataFrame
@@ -25,6 +26,20 @@ MemoryPool = Literal["greedy", "fair", "unbounded"]
 
 logger = logging.getLogger(__name__)
 
+KIB: int = 1024
+MIB: int = 1024 * KIB
+GIB: int = 1024 * MIB
+
+
+def _parse_major_version(version: str) -> int | None:
+    major = version.split(".", maxsplit=1)[0]
+    if major.isdigit():
+        return int(major)
+    return None
+
+
+DATAFUSION_MAJOR_VERSION: int | None = _parse_major_version(datafusion.__version__)
+
 
 @dataclass(frozen=True)
 class DataFusionConfigPolicy:
@@ -40,7 +55,12 @@ class DataFusionConfigPolicy:
         datafusion.SessionConfig
             Session config with policy settings applied.
         """
+        skip_runtime_settings = (
+            DATAFUSION_MAJOR_VERSION is not None and DATAFUSION_MAJOR_VERSION >= 51
+        )
         for key, value in self.settings.items():
+            if skip_runtime_settings and key.startswith("datafusion.runtime."):
+                continue
             config = config.set(key, value)
         return config
 
@@ -121,15 +141,15 @@ DEFAULT_DF_POLICY = DataFusionConfigPolicy(
         "datafusion.execution.meta_fetch_concurrency": "8",
         "datafusion.execution.planning_concurrency": "8",
         "datafusion.execution.parquet.pushdown_filters": "true",
-        "datafusion.execution.parquet.max_predicate_cache_size": "64M",
+        "datafusion.execution.parquet.max_predicate_cache_size": str(64 * MIB),
         "datafusion.execution.parquet.enable_page_index": "true",
         "datafusion.execution.parquet.metadata_size_hint": "1048576",
-        "datafusion.runtime.list_files_cache_limit": "128M",
+        "datafusion.runtime.list_files_cache_limit": str(128 * MIB),
         "datafusion.runtime.list_files_cache_ttl": "2m",
-        "datafusion.runtime.metadata_cache_limit": "256M",
-        "datafusion.runtime.memory_limit": "8G",
+        "datafusion.runtime.metadata_cache_limit": str(256 * MIB),
+        "datafusion.runtime.memory_limit": str(8 * GIB),
         "datafusion.runtime.temp_directory": "/tmp/datafusion",
-        "datafusion.runtime.max_temp_directory_size": "100G",
+        "datafusion.runtime.max_temp_directory_size": str(100 * GIB),
     }
 )
 
@@ -139,15 +159,15 @@ DEV_DF_POLICY = DataFusionConfigPolicy(
         "datafusion.execution.meta_fetch_concurrency": "4",
         "datafusion.execution.planning_concurrency": "2",
         "datafusion.execution.parquet.pushdown_filters": "true",
-        "datafusion.execution.parquet.max_predicate_cache_size": "32M",
+        "datafusion.execution.parquet.max_predicate_cache_size": str(32 * MIB),
         "datafusion.execution.parquet.enable_page_index": "true",
         "datafusion.execution.parquet.metadata_size_hint": "524288",
-        "datafusion.runtime.list_files_cache_limit": "64M",
+        "datafusion.runtime.list_files_cache_limit": str(64 * MIB),
         "datafusion.runtime.list_files_cache_ttl": "2m",
-        "datafusion.runtime.metadata_cache_limit": "128M",
-        "datafusion.runtime.memory_limit": "4G",
+        "datafusion.runtime.metadata_cache_limit": str(128 * MIB),
+        "datafusion.runtime.memory_limit": str(4 * GIB),
         "datafusion.runtime.temp_directory": "/tmp/datafusion",
-        "datafusion.runtime.max_temp_directory_size": "50G",
+        "datafusion.runtime.max_temp_directory_size": str(50 * GIB),
     }
 )
 
@@ -157,15 +177,15 @@ PROD_DF_POLICY = DataFusionConfigPolicy(
         "datafusion.execution.meta_fetch_concurrency": "16",
         "datafusion.execution.planning_concurrency": "16",
         "datafusion.execution.parquet.pushdown_filters": "true",
-        "datafusion.execution.parquet.max_predicate_cache_size": "128M",
+        "datafusion.execution.parquet.max_predicate_cache_size": str(128 * MIB),
         "datafusion.execution.parquet.enable_page_index": "true",
         "datafusion.execution.parquet.metadata_size_hint": "2097152",
-        "datafusion.runtime.list_files_cache_limit": "256M",
+        "datafusion.runtime.list_files_cache_limit": str(256 * MIB),
         "datafusion.runtime.list_files_cache_ttl": "5m",
-        "datafusion.runtime.metadata_cache_limit": "512M",
-        "datafusion.runtime.memory_limit": "16G",
+        "datafusion.runtime.metadata_cache_limit": str(512 * MIB),
+        "datafusion.runtime.memory_limit": str(16 * GIB),
         "datafusion.runtime.temp_directory": "/tmp/datafusion",
-        "datafusion.runtime.max_temp_directory_size": "200G",
+        "datafusion.runtime.max_temp_directory_size": str(200 * GIB),
     }
 )
 

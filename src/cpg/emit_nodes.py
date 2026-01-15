@@ -7,6 +7,7 @@ import pyarrow as pa
 from arrowdsl.compute.macros import scalar_expr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.schema_utils import plan_output_columns
 from arrowdsl.plan_helpers import coalesce_expr
 from cpg.specs import NodeEmitSpec
 
@@ -24,7 +25,7 @@ def emit_node_plan(
     Plan
         Plan emitting node columns.
     """
-    available = set(plan.schema(ctx=ctx).names)
+    available = set(plan_output_columns(plan) or plan.schema(ctx=ctx).names)
     node_id = coalesce_expr(
         spec.id_cols,
         available=available,

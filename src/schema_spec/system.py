@@ -418,7 +418,6 @@ class ValidationPlans:
         return cast("TableLike", invalid), cast("TableLike", dupes)
 
 
-
 def _run_plan(
     plan: Plan,
     *,

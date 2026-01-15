@@ -13,6 +13,7 @@ from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 
 from arrowdsl.compute.position_encoding import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from arrowdsl.core.context import ExecutionContext, Ordering
+from arrowdsl.plan.ordering_policy import ordering_keys_for_schema
 from arrowdsl.plan.scan_io import PlanSource, plan_from_source
 from arrowdsl.schema.build import empty_table
 from extract.registry_specs import dataset_schema as extract_dataset_schema
@@ -180,23 +181,11 @@ def type_nodes_plan_ibis(
     scip_schema = pa.schema([pa.field("type_repr", pa.string())])
     exprs = catalog.resolve_expr("type_exprs_norm_v1", ctx=ctx, schema=expr_schema)
     scip = catalog.resolve_expr("scip_symbol_information", ctx=ctx, schema=scip_schema)
+    scip_has_type_repr = "type_repr" in scip.columns
 
-    scip_trimmed = scip.type_repr.cast("string").strip()
-    scip_non_empty = scip_trimmed.notnull() & (scip_trimmed.length() > ibis.literal(0))
-    scip_rows = scip.filter(scip_non_empty).mutate(
-        type_repr=scip_trimmed,
-        type_id=stable_id_expr(TYPE_ID_SPEC.prefix, scip_trimmed),
-        type_form=ibis.literal("scip"),
-        origin=ibis.literal("inferred"),
-    )
+    type_node_columns = ["type_id", "type_repr", "type_form", "origin"]
     if ctx.debug:
-        scip_rows = scip_rows.mutate(
-            type_id_key=stable_key_expr(
-                scip_trimmed,
-                prefix=TYPE_ID_SPEC.prefix,
-                null_sentinel=TYPE_ID_SPEC.null_sentinel,
-            )
-        )
+        type_node_columns.append("type_id_key")
 
     expr_trimmed = exprs.type_repr.cast("string").strip()
     expr_non_empty = expr_trimmed.notnull() & (expr_trimmed.length() > ibis.literal(0))
@@ -214,16 +203,43 @@ def type_nodes_plan_ibis(
                 null_sentinel=TYPE_ID_SPEC.null_sentinel,
             )
         )
+    expr_rows = expr_rows.select(*[expr_rows[name] for name in type_node_columns])
 
-    scip_count = scip_rows.count()
-    use_scip = scip_count > ibis.literal(0)
-    combined = scip_rows.filter(use_scip).union(expr_rows.filter(~use_scip))
+    scip_rows: Table | None = None
+    if scip_has_type_repr:
+        scip = ensure_columns(scip, schema=scip_schema)
+        scip_trimmed = scip.type_repr.cast("string").strip()
+        scip_non_empty = scip_trimmed.notnull() & (scip_trimmed.length() > ibis.literal(0))
+        scip_rows = scip.filter(scip_non_empty).mutate(
+            type_repr=scip_trimmed,
+            type_id=stable_id_expr(TYPE_ID_SPEC.prefix, scip_trimmed),
+            type_form=ibis.literal("scip"),
+            origin=ibis.literal("inferred"),
+        )
+        if ctx.debug:
+            scip_rows = scip_rows.mutate(
+                type_id_key=stable_key_expr(
+                    scip_trimmed,
+                    prefix=TYPE_ID_SPEC.prefix,
+                    null_sentinel=TYPE_ID_SPEC.null_sentinel,
+                )
+            )
+        scip_rows = scip_rows.select(*[scip_rows[name] for name in type_node_columns])
+
+    combined = expr_rows
+    if scip_rows is not None:
+        scip_preview = scip_rows.limit(1).to_pyarrow()
+        if scip_preview.num_rows > 0:
+            combined = scip_rows
+    target_schema = dataset_schema(TYPE_NODES_NAME)
     aligned = align_table_to_schema(
         combined,
-        schema=dataset_schema(TYPE_NODES_NAME),
+        schema=target_schema,
         keep_extra_columns=ctx.debug,
     )
-    return IbisPlan(expr=aligned, ordering=Ordering.unordered())
+    ordering_keys = ordering_keys_for_schema(target_schema)
+    ordering = Ordering.explicit(ordering_keys) if ordering_keys else Ordering.unordered()
+    return IbisPlan(expr=aligned, ordering=ordering)
 
 
 def cfg_blocks_plan_ibis(
@@ -461,13 +477,11 @@ def _col_unit_value(col_unit: Value, *, default_unit: str) -> Value:
 
 
 def _col_unit_from_encoding(encoding: Value) -> Value:
-    return (
-        ibis.case()
-        .when(encoding == ibis.literal(ENC_UTF8), ibis.literal("utf8"))
-        .when(encoding == ibis.literal(ENC_UTF16), ibis.literal("utf16"))
-        .when(encoding == ibis.literal(ENC_UTF32), ibis.literal("utf32"))
-        .else_(ibis.literal("utf32"))
-        .end()
+    return ibis.cases(
+        (encoding == ibis.literal(ENC_UTF8), ibis.literal("utf8")),
+        (encoding == ibis.literal(ENC_UTF16), ibis.literal("utf16")),
+        (encoding == ibis.literal(ENC_UTF32), ibis.literal("utf32")),
+        else_=ibis.literal("utf32"),
     )
 
 
@@ -508,15 +522,13 @@ def _non_empty_string(value: Value, *, default: str) -> Value:
 def _scip_severity_expr(value: Value) -> Value:
     text = value.cast("string").upper()
     values = [ibis.literal(level) for level in ("ERROR", "WARNING", "INFO", "HINT")]
-    return (
-        ibis.case()
-        .when(text == ibis.literal("1"), ibis.literal("ERROR"))
-        .when(text == ibis.literal("2"), ibis.literal("WARNING"))
-        .when(text == ibis.literal("3"), ibis.literal("INFO"))
-        .when(text == ibis.literal("4"), ibis.literal("HINT"))
-        .when(text.isin(values), text)
-        .else_(ibis.literal("ERROR"))
-        .end()
+    return ibis.cases(
+        (text == ibis.literal("1"), ibis.literal("ERROR")),
+        (text == ibis.literal("2"), ibis.literal("WARNING")),
+        (text == ibis.literal("3"), ibis.literal("INFO")),
+        (text == ibis.literal("4"), ibis.literal("HINT")),
+        (text.isin(values), text),
+        else_=ibis.literal("ERROR"),
     )
 
 
@@ -654,25 +666,40 @@ def _scip_diag_context(diags: Table, docs: Table, line_index: Table) -> _ScipDia
     start_line0 = _zero_based_line(diag_docs.start_line, line_base)
     end_line0 = _zero_based_line(diag_docs.end_line, line_base)
     end_char = _normalize_end_col(diag_docs.end_char, end_exclusive)
+    diag_docs = diag_docs.mutate(
+        scip_path=path_expr,
+        scip_line_base=line_base,
+        scip_end_exclusive=end_exclusive,
+        scip_col_unit=col_unit,
+        scip_end_char=end_char,
+        scip_start_line0=start_line0,
+        scip_end_line0=end_line0,
+    )
     start_idx = _line_index_view(line_index, prefix="scip_start")
     end_idx = _line_index_view(line_index, prefix="scip_end")
     joined = diag_docs.join(
         start_idx,
-        [path_expr == start_idx.scip_start_path, start_line0 == start_idx.scip_start_line_no],
+        [
+            diag_docs.scip_path == start_idx.scip_start_path,
+            diag_docs.scip_start_line0 == start_idx.scip_start_line_no,
+        ],
         how="left",
     )
     joined = joined.join(
         end_idx,
-        [path_expr == end_idx.scip_end_path, end_line0 == end_idx.scip_end_line_no],
+        [
+            joined.scip_path == end_idx.scip_end_path,
+            joined.scip_end_line0 == end_idx.scip_end_line_no,
+        ],
         how="left",
     )
     return _ScipDiagContext(
         joined=joined,
-        path_expr=path_expr,
-        col_unit=col_unit,
-        end_char=end_char,
-        line_base=line_base,
-        end_exclusive=end_exclusive,
+        path_expr=joined.scip_path,
+        col_unit=joined.scip_col_unit,
+        end_char=joined.scip_end_char,
+        line_base=joined.scip_line_base,
+        end_exclusive=joined.scip_end_exclusive,
     )
 
 

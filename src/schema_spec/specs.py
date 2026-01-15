@@ -320,7 +320,7 @@ class TableSchemaSpec:
         list[sqlglot.expressions.ColumnDef]
             SQLGlot ColumnDef nodes derived from the Ibis schema.
         """
-        dialect_name = dialect or "ansi"
+        dialect_name = dialect or "datafusion"
         return self.to_ibis_schema().to_sqlglot_column_defs(dialect=dialect_name)
 
     def to_create_table_sql(
@@ -337,7 +337,7 @@ class TableSchemaSpec:
             CREATE TABLE statement using SQLGlot-rendered column definitions.
         """
         name = table_name or self.name
-        dialect_name = dialect or "ansi"
+        dialect_name = dialect or "datafusion"
         column_defs = self.to_sqlglot_column_defs(dialect=dialect_name)
         columns_sql = ", ".join(col.sql(dialect=dialect_name) for col in column_defs)
         return f"CREATE TABLE {name} ({columns_sql})"

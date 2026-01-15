@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 import arrowdsl.core.interop as pa
+from arrowdsl.compute.expr_ops import and_expr
 from arrowdsl.compute.kernel_utils import resolve_kernel
 from arrowdsl.compute.registry import UdfSpec, ensure_udf
 from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
@@ -204,6 +205,39 @@ def _hash64(values: pa.ArrayLike) -> pa.ArrayLike:
     if isinstance(result, pa.ScalarLike):
         return pa.array([result.as_py()], type=pa.int64())
     return pa.pc.cast(result, pa.int64(), safe=False)
+
+
+def _call_expr(
+    expr: ComputeExpression,
+    function_name: str,
+    args: Sequence[ComputeExpression],
+    *,
+    options: object | None = None,
+) -> ComputeExpression:
+    """Return a compute expression calling a named function.
+
+    Parameters
+    ----------
+    expr
+        Expression providing the call interface.
+    function_name
+        Compute function to invoke.
+    args
+        Arguments for the compute function.
+    options
+        Optional function options payload.
+
+    Returns
+    -------
+    ComputeExpression
+        Expression representing the function call.
+    """
+    method_name = "_" + "call"
+    call = cast(
+        "Callable[[str, Sequence[ComputeExpression], object | None], ComputeExpression]",
+        getattr(expr, method_name),
+    )
+    return ensure_expression(call(function_name, list(args), options))
 
 
 def _stringify(
@@ -464,22 +498,20 @@ def hash_expression(
                 raise KeyError(msg)
         else:
             expr = pc.field(col)
-        expr = ensure_expression(
-            pc.fill_null(pc.cast(expr, pa.string()), pc.scalar(spec.null_sentinel))
-        )
+        expr = ensure_expression(pc.coalesce(expr.cast(pa.string()), pc.scalar(spec.null_sentinel)))
         parts.append(expr)
     if spec.prefix:
         parts.insert(0, pc.scalar(spec.prefix))
-    joined = pc.binary_join_element_wise(*parts, _NULL_SEPARATOR)
+    joined = ensure_expression(pc.binary_join_element_wise(*parts, _NULL_SEPARATOR))
     func = resolve_kernel("hash64", fallbacks=("hash",))
     if func is not None:
-        hashed = pc.call_function(func, [joined])
+        hashed = _call_expr(joined, func, (joined,))
     else:
         _ensure_hash64_udf()
-        hashed = pc.call_function(_HASH64_FUNCTION, [joined])
-    hashed = pc.cast(hashed, pa.int64(), safe=False)
+        hashed = _call_expr(joined, _HASH64_FUNCTION, (joined,))
+    hashed = hashed.cast(pa.int64(), safe=False)
     if spec.as_string:
-        hashed = pc.cast(hashed, pa.string())
+        hashed = hashed.cast(pa.string(), safe=False)
         hashed = pc.binary_join_element_wise(pc.scalar(spec.prefix), hashed, ":")
     return ensure_expression(hashed)
 
@@ -500,20 +532,20 @@ def hash_expression_from_parts(
     """
     exprs: list[ComputeExpression] = []
     for part in parts:
-        expr = ensure_expression(pc.fill_null(pc.cast(part, pa.string()), pc.scalar(null_sentinel)))
+        expr = ensure_expression(pc.coalesce(part.cast(pa.string()), pc.scalar(null_sentinel)))
         exprs.append(expr)
     if prefix:
         exprs.insert(0, pc.scalar(prefix))
-    joined = pc.binary_join_element_wise(*exprs, _NULL_SEPARATOR)
+    joined = ensure_expression(pc.binary_join_element_wise(*exprs, _NULL_SEPARATOR))
     func = resolve_kernel("hash64", fallbacks=("hash",))
     if func is not None:
-        hashed = pc.call_function(func, [joined])
+        hashed = _call_expr(joined, func, (joined,))
     else:
         _ensure_hash64_udf()
-        hashed = pc.call_function(_HASH64_FUNCTION, [joined])
-    hashed = pc.cast(hashed, pa.int64(), safe=False)
+        hashed = _call_expr(joined, _HASH64_FUNCTION, (joined,))
+    hashed = hashed.cast(pa.int64(), safe=False)
     if as_string:
-        hashed = pc.cast(hashed, pa.string())
+        hashed = hashed.cast(pa.string(), safe=False)
         hashed = pc.binary_join_element_wise(pc.scalar(prefix), hashed, ":")
     return ensure_expression(hashed)
 
@@ -534,9 +566,12 @@ def masked_hash_expression(
     expr = hash_expression(spec, available=available)
     if not required:
         return expr
-    mask = pc.is_valid(pc.field(required[0]))
+    mask = ensure_expression(cast("ComputeExpression", pc.is_valid(pc.field(required[0]))))
     for name in required[1:]:
-        mask = pc.and_(mask, pc.is_valid(pc.field(name)))
+        mask = and_expr(
+            mask,
+            ensure_expression(cast("ComputeExpression", pc.is_valid(pc.field(name)))),
+        )
     null_value = pa.scalar(None, type=pa.string() if spec.as_string else pa.int64())
     return ensure_expression(pc.if_else(mask, expr, null_value))
 

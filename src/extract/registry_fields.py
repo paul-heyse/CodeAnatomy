@@ -11,7 +11,7 @@ from schema_spec.specs import ArrowFieldSpec
 ENCODING_META: dict[str, str] = {"encoding": "dictionary"}
 
 QNAME_STRUCT = pa.struct([("name", pa.string()), ("source", pa.string())])
-QNAME_LIST = pa.large_list_view(QNAME_STRUCT)
+QNAME_LIST = pa.large_list(QNAME_STRUCT)
 
 SCIP_SIGNATURE_OCCURRENCE_TYPE = pa.struct(
     [
@@ -24,7 +24,7 @@ SCIP_SIGNATURE_DOCUMENTATION_TYPE = pa.struct(
     [
         ("text", pa.string()),
         ("language", pa.string()),
-        ("occurrences", pa.large_list_view(SCIP_SIGNATURE_OCCURRENCE_TYPE)),
+        ("occurrences", pa.large_list(SCIP_SIGNATURE_OCCURRENCE_TYPE)),
     ]
 )
 
@@ -100,7 +100,7 @@ _register_many(
         "default_indent": _spec("default_indent", pa.string()),
         "default_newline": _spec("default_newline", pa.string()),
         "has_trailing_newline": _spec("has_trailing_newline", pa.bool_()),
-        "future_imports": _spec("future_imports", pa.large_list_view(pa.string())),
+        "future_imports": _spec("future_imports", pa.large_list(pa.string())),
         "module_name": _spec("module_name", pa.string()),
         "package_name": _spec("package_name", pa.string()),
         "raw_line": _spec("raw_line", pa.int32()),
@@ -187,11 +187,11 @@ _register_many(
         "edge_id": _spec("edge_id", pa.string()),
         "parent_scope_id": _spec("parent_scope_id", pa.string()),
         "child_scope_id": _spec("child_scope_id", pa.string()),
-        "parameters": _spec("parameters", pa.large_list_view(pa.string())),
-        "locals": _spec("locals", pa.large_list_view(pa.string())),
-        "globals": _spec("globals", pa.large_list_view(pa.string())),
-        "nonlocals": _spec("nonlocals", pa.large_list_view(pa.string())),
-        "frees": _spec("frees", pa.large_list_view(pa.string())),
+        "parameters": _spec("parameters", pa.large_list(pa.string())),
+        "locals": _spec("locals", pa.large_list(pa.string())),
+        "globals": _spec("globals", pa.large_list(pa.string())),
+        "nonlocals": _spec("nonlocals", pa.large_list(pa.string())),
+        "frees": _spec("frees", pa.large_list(pa.string())),
         "scope_table_id": _spec("scope_table_id", pa.int64()),
         "parent_table_id": _spec("parent_table_id", pa.int64()),
         "child_table_id": _spec("child_table_id", pa.int64()),

@@ -3,7 +3,7 @@ name = "codeanatomy"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = "==3.13.11"
 dependencies = [
     "pip>=25.3",
     "setuptools>=80.9.0",
@@ -64,7 +64,7 @@ dependencies = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
+target-version = "py313"
 required-version = ">=0.14.8"
 output-format = "grouped"
 src = ["src"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass, replace
 
 from ibis.expr.types import Table as IbisTable
 
@@ -17,12 +18,42 @@ from arrowdsl.io.parquet import (
     write_table_parquet,
 )
 from core_types import PathLike
+from ibis_engine.execution import (
+    IbisAdapterExecution,
+    materialize_ibis_plan,
+    stream_ibis_plan,
+)
 from ibis_engine.plan import IbisPlan
 
 type IbisWriteInput = DatasetWriteInput | IbisPlan | IbisTable
 
 
-def ibis_plan_to_reader(plan: IbisPlan, *, batch_size: int | None = None) -> RecordBatchReaderLike:
+@dataclass(frozen=True)
+class IbisDatasetWriteOptions:
+    """Options for writing a single dataset from Ibis inputs."""
+
+    config: DatasetWriteConfig | None = None
+    batch_size: int | None = None
+    prefer_reader: bool = True
+    execution: IbisAdapterExecution | None = None
+
+
+@dataclass(frozen=True)
+class IbisNamedDatasetWriteOptions:
+    """Options for writing named datasets from Ibis inputs."""
+
+    config: NamedDatasetWriteConfig | None = None
+    batch_size: int | None = None
+    prefer_reader: bool = True
+    execution: IbisAdapterExecution | None = None
+
+
+def ibis_plan_to_reader(
+    plan: IbisPlan,
+    *,
+    batch_size: int | None = None,
+    execution: IbisAdapterExecution | None = None,
+) -> RecordBatchReaderLike:
     """Return a RecordBatchReader for an Ibis plan.
 
     Returns
@@ -30,6 +61,10 @@ def ibis_plan_to_reader(plan: IbisPlan, *, batch_size: int | None = None) -> Rec
     RecordBatchReaderLike
         Reader yielding batches from the plan.
     """
+    if execution is not None:
+        if batch_size is not None and execution.batch_size != batch_size:
+            execution = replace(execution, batch_size=batch_size)
+        return stream_ibis_plan(plan, execution=execution)
     return plan.to_reader(batch_size=batch_size)
 
 
@@ -50,7 +85,11 @@ def ibis_table_to_reader(
     return table.to_pyarrow_batches(chunk_size=batch_size)
 
 
-def ibis_to_table(value: IbisPlan | IbisTable) -> TableLike:
+def ibis_to_table(
+    value: IbisPlan | IbisTable,
+    *,
+    execution: IbisAdapterExecution | None = None,
+) -> TableLike:
     """Materialize an Ibis plan or table to an Arrow table.
 
     Returns
@@ -59,6 +98,8 @@ def ibis_to_table(value: IbisPlan | IbisTable) -> TableLike:
         Materialized Arrow table.
     """
     if isinstance(value, IbisPlan):
+        if execution is not None:
+            return materialize_ibis_plan(value, execution=execution)
         return value.to_table()
     return value.to_pyarrow()
 
@@ -68,10 +109,13 @@ def _coerce_write_input(
     *,
     batch_size: int | None,
     prefer_reader: bool,
+    execution: IbisAdapterExecution | None,
 ) -> DatasetWriteInput:
     if isinstance(value, IbisPlan):
         return (
-            ibis_plan_to_reader(value, batch_size=batch_size) if prefer_reader else value.to_table()
+            ibis_plan_to_reader(value, batch_size=batch_size, execution=execution)
+            if prefer_reader
+            else ibis_to_table(value, execution=execution)
         )
     if isinstance(value, IbisTable):
         return (
@@ -88,6 +132,7 @@ def write_ibis_table_parquet(
     *,
     opts: ParquetWriteOptions | None = None,
     overwrite: bool = True,
+    execution: IbisAdapterExecution | None = None,
 ) -> str:
     """Write an Ibis plan/table as a single Parquet file.
 
@@ -96,16 +141,19 @@ def write_ibis_table_parquet(
     str
         Written file path.
     """
-    return write_table_parquet(ibis_to_table(table), path, opts=opts, overwrite=overwrite)
+    return write_table_parquet(
+        ibis_to_table(table, execution=execution),
+        path,
+        opts=opts,
+        overwrite=overwrite,
+    )
 
 
 def write_ibis_dataset_parquet(
     data: IbisWriteInput,
     base_dir: PathLike,
     *,
-    config: DatasetWriteConfig | None = None,
-    batch_size: int | None = None,
-    prefer_reader: bool = True,
+    options: IbisDatasetWriteOptions | None = None,
 ) -> str:
     """Write an Ibis plan/table or Arrow input as a Parquet dataset.
 
@@ -114,17 +162,21 @@ def write_ibis_dataset_parquet(
     str
         Output dataset directory.
     """
-    value = _coerce_write_input(data, batch_size=batch_size, prefer_reader=prefer_reader)
-    return write_dataset_parquet(value, base_dir, config=config)
+    options = options or IbisDatasetWriteOptions()
+    value = _coerce_write_input(
+        data,
+        batch_size=options.batch_size,
+        prefer_reader=options.prefer_reader,
+        execution=options.execution,
+    )
+    return write_dataset_parquet(value, base_dir, config=options.config)
 
 
 def write_ibis_named_datasets_parquet(
     datasets: Mapping[str, IbisWriteInput],
     base_dir: PathLike,
     *,
-    config: NamedDatasetWriteConfig | None = None,
-    batch_size: int | None = None,
-    prefer_reader: bool = True,
+    options: IbisNamedDatasetWriteOptions | None = None,
 ) -> dict[str, str]:
     """Write a mapping of Ibis/Arrow datasets to Parquet directories.
 
@@ -133,14 +185,22 @@ def write_ibis_named_datasets_parquet(
     dict[str, str]
         Mapping of dataset names to output directories.
     """
+    options = options or IbisNamedDatasetWriteOptions()
     converted = {
-        name: _coerce_write_input(value, batch_size=batch_size, prefer_reader=prefer_reader)
+        name: _coerce_write_input(
+            value,
+            batch_size=options.batch_size,
+            prefer_reader=options.prefer_reader,
+            execution=options.execution,
+        )
         for name, value in datasets.items()
     }
-    return write_named_datasets_parquet(converted, base_dir, config=config)
+    return write_named_datasets_parquet(converted, base_dir, config=options.config)
 
 
 __all__ = [
+    "IbisDatasetWriteOptions",
+    "IbisNamedDatasetWriteOptions",
     "IbisWriteInput",
     "ibis_plan_to_reader",
     "ibis_table_to_reader",

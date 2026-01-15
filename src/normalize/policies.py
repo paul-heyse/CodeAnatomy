@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 from collections.abc import Mapping
-from typing import Literal
+from functools import cache
+from typing import Literal, Protocol, cast
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.metadata import infer_ordering_keys
 from arrowdsl.spec.expr_ir import ExprIR
 from normalize.rule_model import AmbiguityPolicy, ConfidencePolicy
-from relspec.rules.policies import PolicyRegistry
 
-_POLICY_REGISTRY = PolicyRegistry()
+
+class _PolicyRegistry(Protocol):
+    def resolve_confidence(self, domain: str, name: str) -> ConfidencePolicy: ...
+
+    def resolve_ambiguity(self, domain: str, name: str) -> AmbiguityPolicy: ...
+
+
 
 CONFIDENCE_POLICY_META = b"confidence_policy"
 CONFIDENCE_BASE_META = b"confidence_base"
@@ -123,7 +130,8 @@ def default_tie_breakers(schema: SchemaLike) -> tuple[SortKey, ...]:
 def _confidence_policy_from_metadata(meta: Mapping[bytes, bytes]) -> ConfidencePolicy | None:
     name = _meta_str(meta, CONFIDENCE_POLICY_META)
     if name:
-        return _POLICY_REGISTRY.resolve_confidence("normalize", name)
+        registry = _policy_registry()
+        return registry.resolve_confidence("normalize", name)
     base = _meta_float(meta, CONFIDENCE_BASE_META)
     penalty = _meta_float(meta, CONFIDENCE_PENALTY_META)
     weights = _meta_json_map(meta, CONFIDENCE_SOURCE_WEIGHT_META)
@@ -139,8 +147,16 @@ def _confidence_policy_from_metadata(meta: Mapping[bytes, bytes]) -> ConfidenceP
 def _ambiguity_policy_from_metadata(meta: Mapping[bytes, bytes]) -> AmbiguityPolicy | None:
     name = _meta_str(meta, AMBIGUITY_POLICY_META)
     if name:
-        return _POLICY_REGISTRY.resolve_ambiguity("normalize", name)
+        registry = _policy_registry()
+        return registry.resolve_ambiguity("normalize", name)
     return None
+
+
+@cache
+def _policy_registry() -> _PolicyRegistry:
+    module = importlib.import_module("relspec.rules.policies")
+    registry_cls = cast("type[_PolicyRegistry]", module.PolicyRegistry)
+    return registry_cls()
 
 
 def _meta_str(meta: Mapping[bytes, bytes], key: bytes) -> str | None:

@@ -12,13 +12,16 @@ from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 
 from arrowdsl.core.context import ExecutionContext, Ordering
-from arrowdsl.core.interop import Scalar
+from arrowdsl.core.interop import Scalar, TableLike
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ScanTelemetry
+from arrowdsl.plan.runner import AdapterRunOptions, run_plan_adapter
 from arrowdsl.schema.schema import align_table
+from config import AdapterMode
 from cpg.catalog import PlanCatalog, PlanSource, resolve_plan_source
 from cpg.plan_specs import ensure_plan
+from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from ibis_engine.expr_compiler import (
     IbisExprRegistry,
     default_expr_registry,
@@ -34,7 +37,9 @@ from ibis_engine.plan_bridge import (
 from ibis_engine.query_compiler import apply_query_spec
 from ibis_engine.schema_utils import align_table_to_schema
 from relspec.compiler import (
+    PlanExecutor,
     RelationshipRuleCompiler,
+    RuleExecutionOptions,
     apply_policy_defaults,
     validate_policy_requirements,
 )
@@ -84,6 +89,8 @@ class RelationPlanCompileOptions:
     required_sources: Sequence[str] | None = None
     backend: BaseBackend | None = None
     param_bindings: Mapping[IbisValue, object] | None = None
+    adapter_mode: AdapterMode | None = None
+    execution_policy: AdapterExecutionPolicy | None = None
 
 
 IbisPlanSource = PlanSource | IbisPlan | Table
@@ -94,7 +101,7 @@ class CatalogPlanResolver:
 
     def __init__(self, catalog: PlanCatalog, *, backend: BaseBackend | None = None) -> None:
         self._catalog = catalog
-        self._backend = backend
+        self.backend: BaseBackend | None = backend
 
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
         """Resolve a DatasetRef into an Ibis plan.
@@ -115,13 +122,13 @@ class CatalogPlanResolver:
             raise KeyError(msg)
         plan = ensure_plan(source, label=ref.label or ref.name, ctx=ctx)
         table = plan.to_table(ctx=ctx)
-        if self._backend is None:
+        if self.backend is None:
             expr = ibis.memtable(table)
             ibis_plan = IbisPlan(expr=expr, ordering=plan.ordering)
         else:
             ibis_plan = table_to_ibis(
                 table,
-                backend=self._backend,
+                backend=self.backend,
                 name=ref.label or ref.name,
                 ordering=plan.ordering,
             )
@@ -142,6 +149,39 @@ class CatalogPlanResolver:
         _ = ref
         _ = ctx
         return None
+
+
+def _plan_executor_factory(
+    *,
+    adapter_mode: AdapterMode | None,
+    execution_policy: AdapterExecutionPolicy | None,
+    ibis_backend: BaseBackend | None,
+) -> PlanExecutor:
+    resolved_adapter_mode = (
+        adapter_mode if adapter_mode is None or adapter_mode.use_ibis_bridge else None
+    )
+
+    def _plan_executor(
+        plan: IbisPlan,
+        exec_ctx: ExecutionContext,
+        exec_params: Mapping[IbisValue, object] | None,
+        execution_label: ExecutionLabel | None = None,
+    ) -> TableLike:
+        result = run_plan_adapter(
+            plan,
+            ctx=exec_ctx,
+            options=AdapterRunOptions(
+                adapter_mode=resolved_adapter_mode,
+                prefer_reader=False,
+                execution_policy=execution_policy,
+                execution_label=execution_label,
+                ibis_backend=ibis_backend,
+                ibis_params=exec_params,
+            ),
+        )
+        return cast("TableLike", result.value)
+
+    return _plan_executor
 
 
 def compile_relation_plans(
@@ -180,6 +220,11 @@ def compile_relation_plans(
     evidence = EvidenceCatalog.from_plan_catalog(work_catalog, ctx=ctx)
     resolver = CatalogPlanResolver(work_catalog, backend=options.backend)
     compiler = RelationshipRuleCompiler(resolver=resolver)
+    plan_executor = _plan_executor_factory(
+        adapter_mode=options.adapter_mode,
+        execution_policy=options.execution_policy,
+        ibis_backend=options.backend,
+    )
     plans: dict[str, Plan | IbisPlan] = {}
     telemetry = compiler.collect_scan_telemetry(rules, ctx=ctx)
     for rule in order_rules(rules, evidence=evidence):
@@ -188,16 +233,22 @@ def compile_relation_plans(
             ctx=ctx_exec,
             resolver=resolver,
             compiler=compiler.plan_compiler,
-            params=options.param_bindings,
+            options=RuleExecutionOptions(
+                params=options.param_bindings,
+                plan_executor=plan_executor,
+                adapter_mode=options.adapter_mode,
+                execution_policy=options.execution_policy,
+                ibis_backend=options.backend,
+            ),
         )
-        aligned = align_table(table, schema=output_schema)
-        plan = Plan.table_source(aligned, label=rule.name)
+        table = align_table(table, schema=output_schema)
+        plan = Plan.table_source(table, label=rule.name)
         if plan is None:
             msg = f"Failed to compile relation plan for rule {rule.name!r}."
             raise ValueError(msg)
         plans[rule.output_dataset] = plan
         work_catalog.add(rule.output_dataset, plan)
-        evidence.register(rule.output_dataset, aligned.schema)
+        evidence.register(rule.output_dataset, table.schema)
     return RelationPlanBundle(plans=plans, telemetry=telemetry)
 
 
@@ -240,6 +291,7 @@ class CatalogIbisResolver:
 
     def __init__(self, catalog: IbisPlanCatalog) -> None:
         self._catalog = catalog
+        self.backend: BaseBackend | None = catalog.backend
 
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
         plan = self._catalog.resolve(ref.name, ctx=ctx, label=ref.label or ref.name)
@@ -271,6 +323,8 @@ class _IbisRelationContext:
     compiler: RelationshipRuleCompiler
     telemetry: Mapping[str, ScanTelemetry]
     param_bindings: Mapping[IbisValue, object] | None
+    adapter_mode: AdapterMode | None
+    execution_policy: AdapterExecutionPolicy | None
 
 
 @dataclass(frozen=True)
@@ -422,9 +476,7 @@ def _apply_dedupe_ibis(table: Table, spec: DedupeKernelSpec) -> Table:
 
 
 def _apply_canonical_sort_ibis(table: Table, spec: CanonicalSortKernelSpec) -> Table:
-    order_by = [
-        _sort_expr(table, key) for key in spec.sort_keys if key.column in table.columns
-    ]
+    order_by = [_sort_expr(table, key) for key in spec.sort_keys if key.column in table.columns]
     if not order_by:
         return table
     order_exprs = cast("Sequence[str | Column | Selector | Deferred]", order_by)
@@ -476,6 +528,8 @@ def _ibis_relation_context(
         compiler=compiler,
         telemetry=telemetry,
         param_bindings=resolved.param_bindings,
+        adapter_mode=resolved.adapter_mode,
+        execution_policy=resolved.execution_policy,
     )
 
 
@@ -487,6 +541,12 @@ def _compile_relation_plans_ibis(
 ) -> tuple[dict[str, IbisPlan], dict[str, IbisPlan]]:
     plans: dict[str, IbisPlan] = {}
     coverage: dict[str, IbisPlan] = {}
+    plan_executor = _plan_executor_factory(
+        adapter_mode=context.adapter_mode,
+        execution_policy=context.execution_policy,
+        ibis_backend=backend,
+    )
+
     for rule in order_rules(context.rules, evidence=context.evidence):
         compiled = context.compiler.compile_rule(rule, ctx=context.ctx_exec)
         plan = None
@@ -498,7 +558,13 @@ def _compile_relation_plans_ibis(
                 ctx=context.ctx_exec,
                 resolver=context.resolver,
                 compiler=context.plan_compiler,
-                params=context.param_bindings,
+                options=RuleExecutionOptions(
+                    params=context.param_bindings,
+                    plan_executor=plan_executor,
+                    adapter_mode=context.adapter_mode,
+                    execution_policy=context.execution_policy,
+                    ibis_backend=backend,
+                ),
             )
             aligned = align_table(table, schema=context.output_schema)
             plan = table_to_ibis(
@@ -521,9 +587,7 @@ def _compile_relation_plans_ibis(
         if plan is None:
             msg = f"Failed to compile ibis relation plan for rule {rule.name!r}."
             raise ValueError(msg)
-        view_name = (
-            f"{name_prefix}_{rule.output_dataset}" if name_prefix else rule.output_dataset
-        )
+        view_name = f"{name_prefix}_{rule.output_dataset}" if name_prefix else rule.output_dataset
         plan = register_ibis_view(
             plan.expr,
             backend=backend,
@@ -757,8 +821,10 @@ def _interval_align_matches(
         right_end=_span_value(joined[inputs.right_end]),
     )
     matched = joined.filter(match_mask)
-    score_col = cfg.match_score_col if cfg.emit_match_meta else _unique_name(
-        "match_score", set(matched.columns)
+    score_col = (
+        cfg.match_score_col
+        if cfg.emit_match_meta
+        else _unique_name("match_score", set(matched.columns))
     )
     match_score = _interval_match_score(matched[inputs.right_start], matched[inputs.right_end])
     matched = matched.mutate(**{score_col: match_score})
@@ -927,9 +993,7 @@ def _interval_tie_breakers(
     cfg: IntervalAlignConfig,
     right_map: Mapping[str, str],
 ) -> list[SortKey]:
-    return [
-        SortKey(_right_name(key.column, right_map), key.order) for key in cfg.tie_breakers
-    ]
+    return [SortKey(_right_name(key.column, right_map), key.order) for key in cfg.tie_breakers]
 
 
 def _winner_by_score(table: Table, *, spec: _WinnerByScoreSpec) -> Table:
@@ -953,9 +1017,7 @@ def _interval_output(table: Table, *, spec: _IntervalOutputSpec) -> Table:
             exprs.append(_value_or_null(table, spec.score_col).name(name))
             continue
         if name in spec.right_keep and name not in spec.left_keep:
-            exprs.append(
-                _value_or_null(table, _right_name(name, spec.right_map)).name(name)
-            )
+            exprs.append(_value_or_null(table, _right_name(name, spec.right_map)).name(name))
             continue
         exprs.append(_value_or_null(table, name).name(name))
     return table.select(exprs)

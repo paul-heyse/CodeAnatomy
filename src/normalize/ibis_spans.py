@@ -9,7 +9,7 @@ import ibis
 from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 
-from arrowdsl.compute.expr_core import ENC_UTF8, ENC_UTF16, ENC_UTF32
+from arrowdsl.compute.position_encoding import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from arrowdsl.core.interop import TableLike
 from ibis_engine.builtin_udfs import col_to_byte, position_encoding_norm
 from ibis_engine.ids import masked_stable_id_expr

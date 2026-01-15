@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from arrowdsl.compute.kernels import ChunkPolicy
 from arrowdsl.core.interop import TableLike
+from arrowdsl.schema.chunking import ChunkPolicy
 from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
 
 

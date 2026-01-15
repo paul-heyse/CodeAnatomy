@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cache
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 import pyarrow as pa
 from ibis.backends import BaseBackend
@@ -27,15 +28,24 @@ from arrowdsl.core.interop import (
     TableLike,
     pc,
 )
+from arrowdsl.core.schema_constants import PROVENANCE_COLS
 from arrowdsl.finalize.finalize import Contract, FinalizeOptions, FinalizeResult, finalize
 from arrowdsl.plan.catalog import PlanCatalog, PlanDeriver
 from arrowdsl.plan.plan import Plan, PlanSpec
-from arrowdsl.plan.runner import AdapterRunOptions, PlanRunResult, run_plan, run_plan_adapter
+from arrowdsl.plan.runner_types import (
+    AdapterRunOptionsProto,
+    PlanRunnerModule,
+    PlanRunResultProto,
+    plan_runner_module,
+)
 from arrowdsl.plan.scan_io import plan_from_source
+from arrowdsl.plan.schema_utils import plan_schema
 from arrowdsl.schema.metadata import merge_metadata_specs
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec, align_table, empty_table
 from config import AdapterMode
+from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
+from ibis_engine.execution import IbisAdapterExecution, materialize_ibis_plan
 from ibis_engine.plan import IbisPlan
 from ibis_engine.plan_bridge import (
     SourceToIbisOptions,
@@ -69,7 +79,7 @@ from normalize.utils import (
     finalize_plan_result,
     plan_source,
 )
-from relspec.rules.compiler import RuleCompiler
+from relspec.rules.compiler import RuleCompiler, RuleHandler
 from relspec.rules.definitions import EvidenceSpec as CentralEvidenceSpec
 from relspec.rules.evidence import EvidenceCatalog
 from relspec.rules.graph import (
@@ -78,11 +88,10 @@ from relspec.rules.graph import (
     compile_graph_plan,
     order_rules_by_evidence,
 )
-from relspec.rules.handlers.normalize import NormalizeRuleHandler
-from schema_spec.specs import PROVENANCE_COLS
 from schema_spec.system import ContractSpec
 
 if TYPE_CHECKING:
+    from arrowdsl.plan.runner import PlanRunResult
     from relspec.rules.definitions import RuleDefinition
 
 PostFn = Callable[[TableLike, ExecutionContext], TableLike]
@@ -96,12 +105,73 @@ class NormalizeFinalizeSpec:
     schema_policy: SchemaPolicy | None = None
 
 
+def _plan_runner_module() -> PlanRunnerModule:
+    return plan_runner_module()
+
+
+def _adapter_run_options(
+    options: NormalizeRunOptions,
+    *,
+    prefer_reader: bool = False,
+) -> AdapterRunOptionsProto:
+    module = _plan_runner_module()
+    params = cast("Mapping[object, object] | None", options.params)
+    return module.AdapterRunOptions(
+        adapter_mode=options.adapter_mode,
+        prefer_reader=prefer_reader,
+        execution_policy=options.execution_policy,
+        execution_label=options.execution_label,
+        ibis_backend=options.ibis_backend,
+        ibis_params=params,
+    )
+
+
+def _run_plan_adapter(
+    plan: Plan | IbisPlan,
+    *,
+    ctx: ExecutionContext,
+    options: AdapterRunOptionsProto | None,
+) -> PlanRunResultProto:
+    module = _plan_runner_module()
+    return module.run_plan_adapter(plan, ctx=ctx, options=options)
+
+
+def _run_plan(
+    plan: Plan,
+    *,
+    ctx: ExecutionContext,
+    prefer_reader: bool,
+    attach_ordering_metadata: bool,
+) -> PlanRunResultProto:
+    module = _plan_runner_module()
+    return module.run_plan(
+        plan,
+        ctx=ctx,
+        prefer_reader=prefer_reader,
+        attach_ordering_metadata=attach_ordering_metadata,
+    )
+
+
+class _NormalizeHandlerModule(Protocol):
+    NormalizeRuleHandler: type[RuleHandler]
+
+
+def _normalize_rule_handler() -> RuleHandler:
+    module = cast(
+        "_NormalizeHandlerModule",
+        importlib.import_module("relspec.rules.handlers.normalize"),
+    )
+    return module.NormalizeRuleHandler()
+
+
 @dataclass(frozen=True)
 class NormalizeRunOptions:
     """Execution options for normalize plans."""
 
     finalize_spec: NormalizeFinalizeSpec | None = None
     adapter_mode: AdapterMode | None = None
+    execution_policy: AdapterExecutionPolicy | None = None
+    execution_label: ExecutionLabel | None = None
     ibis_backend: BaseBackend | None = None
     params: Mapping[Value, object] | None = None
 
@@ -125,6 +195,69 @@ class NormalizeIbisPlanOptions:
     required_outputs: Sequence[str] | None = None
     name_prefix: str = "normalize"
     materialize_outputs: Sequence[str] | None = None
+    adapter_mode: AdapterMode | None = None
+    execution_policy: AdapterExecutionPolicy | None = None
+
+
+@dataclass(frozen=True)
+class _NormalizeIbisCompilationContext:
+    ordered: tuple[NormalizeRule, ...]
+    ibis_catalog: IbisPlanCatalog
+    execution: IbisAdapterExecution
+    evidence: EvidenceCatalog
+
+
+def _normalize_ibis_context(
+    catalog: PlanCatalog,
+    *,
+    ctx: ExecutionContext,
+    options: NormalizeIbisPlanOptions,
+) -> _NormalizeIbisCompilationContext:
+    rule_set = _default_normalize_rules(ctx) if options.rules is None else tuple(options.rules)
+    if options.required_outputs:
+        required_set = _expand_required_outputs(rule_set, options.required_outputs)
+        rule_set = tuple(rule for rule in rule_set if rule.output in required_set)
+    for rule in rule_set:
+        _validate_rule_policies(rule)
+    work_catalog = _clone_catalog(catalog)
+    evidence = EvidenceCatalog.from_plan_catalog(work_catalog, ctx=ctx)
+    selectors = RuleSelectors(
+        inputs_for=lambda rule: rule.inputs,
+        output_for=lambda rule: rule.output,
+        name_for=lambda rule: rule.name,
+        priority_for=lambda rule: rule.priority,
+        evidence_for=lambda rule: _central_evidence(rule.evidence),
+        output_schema_for=_normalize_output_schema,
+    )
+    ordered = order_rules_by_evidence(
+        rule_set,
+        evidence=evidence,
+        selectors=selectors,
+        allow_fallback=True,
+        label="Normalize rule",
+    )
+    repo_text_index = (
+        work_catalog.repo_text_index if isinstance(work_catalog, NormalizePlanCatalog) else None
+    )
+    tables: dict[str, IbisPlanSource] = {}
+    tables.update(work_catalog.snapshot())
+    ibis_catalog = IbisPlanCatalog(
+        backend=options.backend,
+        tables=tables,
+        repo_text_index=repo_text_index,
+    )
+    execution = IbisAdapterExecution(
+        ctx=ctx,
+        adapter_mode=options.adapter_mode,
+        execution_policy=options.execution_policy,
+        ibis_backend=options.backend,
+    )
+    return _NormalizeIbisCompilationContext(
+        ordered=tuple(ordered),
+        ibis_catalog=ibis_catalog,
+        execution=execution,
+        evidence=evidence,
+    )
 
 
 def ensure_execution_context(
@@ -161,7 +294,7 @@ def _normalize_rule_definitions() -> tuple[RuleDefinition, ...]:
 
 
 def _default_normalize_rules(ctx: ExecutionContext) -> tuple[NormalizeRule, ...]:
-    compiler = RuleCompiler(handlers={"normalize": NormalizeRuleHandler()})
+    compiler = RuleCompiler(handlers={"normalize": _normalize_rule_handler()})
     compiled = compiler.compile_rules(_normalize_rule_definitions(), ctx=ctx)
     rules = cast("tuple[NormalizeRule, ...]", compiled)
     validate_rule_specs(rules)
@@ -182,7 +315,7 @@ def _should_skip_canonical_sort(
         return False
     expected = tuple((key.column, key.order) for key in contract.canonical_sort)
     if ctx.provenance:
-        schema = plan.schema(ctx=ctx) if isinstance(plan, Plan) else plan.to_table().schema
+        schema = plan_schema(plan, ctx=ctx)
         for col in PROVENANCE_COLS:
             if col in schema.names:
                 expected = (*expected, (col, "ascending"))
@@ -205,15 +338,10 @@ def run_normalize(
         Finalize bundle with good/errors/stats/alignment outputs.
     """
     options = options or NormalizeRunOptions()
-    result = run_plan_adapter(
+    result = _run_plan_adapter(
         plan,
         ctx=ctx,
-        options=AdapterRunOptions(
-            adapter_mode=options.adapter_mode,
-            prefer_reader=False,
-            ibis_backend=options.ibis_backend,
-            ibis_params=options.params,
-        ),
+        options=_adapter_run_options(options, prefer_reader=False),
     )
     table = _materialize_table(result.value)
     for fn in post:
@@ -471,18 +599,25 @@ def compile_normalize_plans(
 ) -> dict[str, Plan]:
     """Compile normalize rules into plans keyed by output dataset.
 
-    Returns
-    -------
-    dict[str, Plan]
-        Mapping of output dataset names to plans.
+    Notes
+    -----
+    The ArrowDSL plan lane is retired in design mode. Use
+    ``compile_normalize_plans_ibis`` instead.
+
+    Raises
+    ------
+    RuntimeError
+        Raised to enforce Ibis-backed normalize compilation.
     """
-    compilation = compile_normalize_rules(
-        catalog,
-        ctx=ctx,
-        rules=rules,
-        required_outputs=required_outputs,
+    rules_summary = "default" if rules is None else str(len(rules))
+    outputs_summary = "all" if required_outputs is None else str(len(required_outputs))
+    msg = (
+        "ArrowDSL normalize plan compilation is retired; use "
+        "compile_normalize_plans_ibis(..., options=NormalizeIbisPlanOptions(...)). "
+        f"catalog={type(catalog).__name__}, ctx={ctx.runtime.name}, "
+        f"rules={rules_summary}, required_outputs={outputs_summary}."
     )
-    return {name: cast("Plan", plan) for name, plan in compilation.plans.items()}
+    raise RuntimeError(msg)
 
 
 def normalize_plans_to_ibis(
@@ -531,52 +666,22 @@ def compile_normalize_plans_ibis(
     ValueError
         Raised when a rule requires plan execution but no plan is available.
     """
-    rule_set = _default_normalize_rules(ctx) if options.rules is None else tuple(options.rules)
-    if options.required_outputs:
-        required_set = _expand_required_outputs(rule_set, options.required_outputs)
-        rule_set = tuple(rule for rule in rule_set if rule.output in required_set)
-    for rule in rule_set:
-        _validate_rule_policies(rule)
-    work_catalog = _clone_catalog(catalog)
-    evidence = EvidenceCatalog.from_plan_catalog(work_catalog, ctx=ctx)
-    selectors = RuleSelectors(
-        inputs_for=lambda rule: rule.inputs,
-        output_for=lambda rule: rule.output,
-        name_for=lambda rule: rule.name,
-        priority_for=lambda rule: rule.priority,
-        evidence_for=lambda rule: _central_evidence(rule.evidence),
-        output_schema_for=_normalize_output_schema,
-    )
-    ordered = order_rules_by_evidence(
-        rule_set,
-        evidence=evidence,
-        selectors=selectors,
-        allow_fallback=True,
-        label="Normalize rule",
-    )
-
-    repo_text_index = (
-        work_catalog.repo_text_index if isinstance(work_catalog, NormalizePlanCatalog) else None
-    )
-    tables: dict[str, IbisPlanSource] = {}
-    tables.update(work_catalog.snapshot())
-    ibis_catalog = IbisPlanCatalog(
-        backend=options.backend,
-        tables=tables,
-        repo_text_index=repo_text_index,
-    )
+    context = _normalize_ibis_context(catalog, ctx=ctx, options=options)
     plans: dict[str, IbisPlan] = {}
     materialize = set(options.materialize_outputs or ())
-    for rule in ordered:
-        plan = _resolve_rule_plan_ibis(rule, ibis_catalog, ctx=ctx, backend=options.backend)
+    for rule in context.ordered:
+        plan = _resolve_rule_plan_ibis(
+            rule,
+            context.ibis_catalog,
+            ctx=ctx,
+            backend=options.backend,
+        )
         if plan is None:
             if rule.execution_mode == "plan":
                 msg = f"Normalize rule {rule.name!r} requires plan execution."
                 raise ValueError(msg)
             continue
-        view_name = (
-            f"{options.name_prefix}_{rule.output}" if options.name_prefix else rule.output
-        )
+        view_name = f"{options.name_prefix}_{rule.output}" if options.name_prefix else rule.output
         plan = register_ibis_view(
             plan.expr,
             backend=options.backend,
@@ -584,7 +689,7 @@ def compile_normalize_plans_ibis(
             ordering=plan.ordering,
         )
         if rule.output in materialize:
-            materialized = plan.to_table()
+            materialized = materialize_ibis_plan(plan, execution=context.execution)
             plan = table_to_ibis(
                 materialized,
                 backend=options.backend,
@@ -593,9 +698,9 @@ def compile_normalize_plans_ibis(
                 overwrite=True,
             )
         plans[rule.output] = plan
-        ibis_catalog.add(rule.output, plan)
+        context.ibis_catalog.add(rule.output, plan)
         try:
-            evidence.register(rule.output, dataset_schema(rule.output))
+            context.evidence.register(rule.output, dataset_schema(rule.output))
         except KeyError:
             continue
     return plans
@@ -763,11 +868,14 @@ def _materialize_evidence_output(
 ) -> TableLike:
     evidence_plan = _build_evidence_plan(plan, rule, ctx=ctx)
     evidence_plan = _apply_ambiguity_plan_ops(evidence_plan, rule, ctx=ctx)
-    result = run_plan(
-        evidence_plan,
-        ctx=ctx,
-        prefer_reader=True,
-        attach_ordering_metadata=True,
+    result = cast(
+        "PlanRunResult",
+        _run_plan(
+            evidence_plan,
+            ctx=ctx,
+            prefer_reader=True,
+            attach_ordering_metadata=True,
+        ),
     )
     table = _materialize_table(result.value)
     return align_table(table, schema=normalize_evidence_schema())

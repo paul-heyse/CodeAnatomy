@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
@@ -13,14 +14,16 @@ from arrowdsl.compute.filters import FilterSpec
 from arrowdsl.compute.macros import FieldExpr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, DeclarationLike, SchemaLike, pc
-from arrowdsl.plan.plan import Plan
+from arrowdsl.core.schema_constants import PROVENANCE_COLS, PROVENANCE_SOURCE_FIELDS
 from arrowdsl.plan.scan_builder import ScanBuildSpec
 from arrowdsl.plan.scan_telemetry import ScanTelemetry, fragment_telemetry
 from arrowdsl.plan.source_normalize import PathLike, normalize_dataset_source
-from schema_spec import PROVENANCE_COLS, PROVENANCE_SOURCE_FIELDS
 
 type DatasetSourceLike = PathLike | ds.Dataset
 type ColumnsSpec = Sequence[str] | Mapping[str, ComputeExpression]
+
+if TYPE_CHECKING:
+    from arrowdsl.plan.plan import Plan
 
 
 @dataclass(frozen=True)

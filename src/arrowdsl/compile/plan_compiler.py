@@ -167,7 +167,9 @@ def _table_source_decl(node: OpNode) -> DeclarationLike:
     return _table_source_declaration(table=table)
 
 
-def _union_all_decl(node: OpNode, *, ctx: ExecutionContext, compile_ir: CompileFn) -> DeclarationLike:
+def _union_all_decl(
+    node: OpNode, *, ctx: ExecutionContext, compile_ir: CompileFn
+) -> DeclarationLike:
     if not node.inputs:
         msg = "union_all requires at least one input plan."
         raise ValueError(msg)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from arrowdsl.finalize.finalize import Contract
 from cpg.kinds_ultimate import EDGE_KIND_CONTRACTS
@@ -35,7 +35,9 @@ DEFAULT_REL_OUTPUT_TO_EDGE_KINDS: dict[str, tuple[str, ...]] = {
 class EdgeContractValidationConfig:
     """Configuration for validating output contracts against edge kind requirements."""
 
-    dataset_to_edge_kinds: Mapping[str, Sequence[str]] = DEFAULT_REL_OUTPUT_TO_EDGE_KINDS
+    dataset_to_edge_kinds: Mapping[str, Sequence[str]] = field(
+        default_factory=lambda: dict(DEFAULT_REL_OUTPUT_TO_EDGE_KINDS)
+    )
     require_contract_name: bool = True
     require_single_contract_per_output_dataset: bool = True
     error_on_unknown_edge_kind: bool = True

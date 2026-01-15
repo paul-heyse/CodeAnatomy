@@ -24,9 +24,13 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.finalize.finalize import Contract
 from arrowdsl.plan.joins import code_unit_meta_config, left_join, path_meta_config
-from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.plan import Plan, PlanRunResult
 from arrowdsl.plan.query import QuerySpec
-from arrowdsl.plan.runner import AdapterRunOptions, PlanRunResult, run_plan, run_plan_adapter
+from arrowdsl.plan.runner_types import (
+    AdapterRunOptionsProto,
+    PlanRunResultProto,
+    plan_runner_module,
+)
 from arrowdsl.plan.scan_io import DatasetSource, PlanSource, plan_from_source
 from arrowdsl.schema.schema import (
     CastErrorPolicy,
@@ -39,6 +43,7 @@ from arrowdsl.schema.schema import (
 )
 from arrowdsl.schema.structs import flatten_struct_field
 from config import AdapterMode
+from datafusion_engine.runtime import AdapterExecutionPolicy
 from ibis_engine.expr_compiler import IbisExprRegistry
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_bridge import QueryBridgeResult, queryspec_to_ibis
@@ -49,6 +54,49 @@ if TYPE_CHECKING:
     from ibis.expr.types import Value as IbisValue
 
 
+def _adapter_run_options(
+    *,
+    adapter_mode: AdapterMode | None = None,
+    prefer_reader: bool = False,
+    execution_policy: AdapterExecutionPolicy | None = None,
+    ibis_backend: BaseBackend | None = None,
+    ibis_params: Mapping[IbisValue, object] | None = None,
+) -> AdapterRunOptionsProto:
+    module = plan_runner_module()
+    params = cast("Mapping[object, object] | None", ibis_params)
+    return module.AdapterRunOptions(
+        adapter_mode=adapter_mode,
+        prefer_reader=prefer_reader,
+        execution_policy=execution_policy,
+        ibis_backend=ibis_backend,
+        ibis_params=params,
+    )
+
+
+def _run_plan(plan: Plan, *, ctx: ExecutionContext, prefer_reader: bool) -> PlanRunResultProto:
+    module = plan_runner_module()
+    return module.run_plan(plan, ctx=ctx, prefer_reader=prefer_reader)
+
+
+def _run_plan_adapter(
+    plan: Plan | IbisPlan,
+    *,
+    ctx: ExecutionContext,
+    options: AdapterRunOptionsProto | None,
+) -> PlanRunResultProto:
+    module = plan_runner_module()
+    return module.run_plan_adapter(plan, ctx=ctx, options=options)
+
+
+def _plan_run_result(
+    value: TableLike | RecordBatchReaderLike,
+    *,
+    kind: str,
+) -> PlanRunResultProto:
+    module = plan_runner_module()
+    return module.PlanRunResult(value=value, kind=kind)
+
+
 @dataclass(frozen=True)
 class FinalizePlanAdapterOptions:
     """Options for finalizing plan adapters."""
@@ -57,6 +105,7 @@ class FinalizePlanAdapterOptions:
     prefer_reader: bool = False
     schema: SchemaLike | None = None
     keep_extra_columns: bool = False
+    execution_policy: AdapterExecutionPolicy | None = None
     ibis_backend: BaseBackend | None = None
     ibis_params: Mapping[IbisValue, object] | None = None
 
@@ -466,7 +515,10 @@ def finalize_plan_result(
             ctx=ctx,
             keep_extra_columns=keep_extra_columns,
         )
-    return run_plan(plan, ctx=ctx, prefer_reader=prefer_reader)
+    return cast(
+        "PlanRunResult",
+        _run_plan(plan, ctx=ctx, prefer_reader=prefer_reader),
+    )
 
 
 def finalize_plan_result_adapter(
@@ -484,16 +536,20 @@ def finalize_plan_result_adapter(
     """
     options = options or FinalizePlanAdapterOptions()
     if isinstance(plan, IbisPlan):
-        run_opts = AdapterRunOptions(
+        run_opts = _adapter_run_options(
             adapter_mode=options.adapter_mode,
             prefer_reader=False if options.schema is not None else options.prefer_reader,
+            execution_policy=options.execution_policy,
             ibis_backend=options.ibis_backend,
             ibis_params=options.ibis_params,
         )
-        result = run_plan_adapter(
-            plan,
-            ctx=ctx,
-            options=run_opts,
+        result = cast(
+            "PlanRunResult",
+            _run_plan_adapter(
+                plan,
+                ctx=ctx,
+                options=run_opts,
+            ),
         )
         if options.schema is not None:
             table = cast("TableLike", result.value)
@@ -504,7 +560,7 @@ def finalize_plan_result_adapter(
                 keep_extra_columns=options.keep_extra_columns,
                 on_error="unsafe" if ctx.safe_cast else "raise",
             )
-            return PlanRunResult(value=aligned, kind="table")
+            return cast("PlanRunResult", _plan_run_result(aligned, kind="table"))
         return result
     return finalize_plan_result(
         plan,

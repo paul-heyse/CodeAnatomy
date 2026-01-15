@@ -2,21 +2,51 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import importlib
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import overload
+from functools import cache
+from typing import TYPE_CHECKING, cast, overload
 
-from arrowdsl.compute.kernels import apply_asof_join, apply_join
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.plan.ops import AsofJoinSpec, JoinSpec, JoinType
-from arrowdsl.plan.plan import Plan
 
-JoinInput = TableLike | Plan
-JoinOutput = TableLike | Plan
+if TYPE_CHECKING:
+    from arrowdsl.plan.plan import Plan
+
+    type JoinInput = TableLike | Plan
+    type JoinOutput = TableLike | Plan
+else:
+    type JoinInput = TableLike | object
+    type JoinOutput = TableLike | object
 
 CODE_UNIT_META_COLUMNS: tuple[str, ...] = ("code_unit_id", "file_id", "path")
 PATH_META_COLUMNS: tuple[str, ...] = ("path", "file_id")
+
+type _JoinFn = Callable[..., TableLike]
+
+
+def _apply_join_fn() -> _JoinFn:
+    module = importlib.import_module("arrowdsl.compute.kernels")
+    return cast("_JoinFn", module.apply_join)
+
+
+def _apply_asof_join_fn() -> _JoinFn:
+    module = importlib.import_module("arrowdsl.compute.kernels")
+    return cast("_JoinFn", module.apply_asof_join)
+
+
+@cache
+def _plan_class() -> type[Plan]:
+    module = importlib.import_module("arrowdsl.plan.plan")
+    return cast("type[Plan]", module.Plan)
+
+
+def _as_plan(value: JoinInput, plan_cls: type[Plan]) -> Plan | None:
+    if isinstance(value, plan_cls):
+        return value
+    return None
 
 
 @dataclass(frozen=True)
@@ -410,6 +440,7 @@ def interval_join_candidates(
         Joined table with left/right output selections.
     """
     spec = config.to_spec(join_type=join_type)
+    apply_join = _apply_join_fn()
     return apply_join(left, right, spec=spec, use_threads=use_threads)
 
 
@@ -427,6 +458,7 @@ def asof_join(
     TableLike
         As-of joined table.
     """
+    apply_asof_join = _apply_asof_join_fn()
     return apply_asof_join(left, right, spec=spec, use_threads=use_threads)
 
 
@@ -462,10 +494,14 @@ def _join_any(
     use_threads: bool,
     ctx: ExecutionContext | None,
 ) -> JoinOutput:
-    if isinstance(left, Plan) or isinstance(right, Plan):
-        left_plan = left if isinstance(left, Plan) else Plan.table_source(left)
-        right_plan = right if isinstance(right, Plan) else Plan.table_source(right)
-        return left_plan.join(right_plan, spec=spec, ctx=ctx)
+    plan_cls = _plan_class()
+    left_plan = _as_plan(left, plan_cls)
+    right_plan = _as_plan(right, plan_cls)
+    if left_plan is not None or right_plan is not None:
+        resolved_left = left_plan or plan_cls.table_source(cast("TableLike", left))
+        resolved_right = right_plan or plan_cls.table_source(cast("TableLike", right))
+        return resolved_left.join(resolved_right, spec=spec, ctx=ctx)
+    apply_join = _apply_join_fn()
     return apply_join(left, right, spec=spec, use_threads=use_threads)
 
 

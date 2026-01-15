@@ -99,6 +99,22 @@ class DataFusionFallbackCollector:
         return list(self.entries)
 
 
+@dataclass(frozen=True)
+class AdapterExecutionPolicy:
+    """Execution policy for adapterized fallback handling."""
+
+    allow_fallback: bool = True
+    fail_on_fallback: bool = False
+
+
+@dataclass(frozen=True)
+class ExecutionLabel:
+    """Execution label for rule-scoped diagnostics."""
+
+    rule_name: str
+    output_dataset: str
+
+
 DEFAULT_DF_POLICY = DataFusionConfigPolicy(
     settings={
         "datafusion.execution.collect_statistics": "true",
@@ -205,6 +221,111 @@ def _apply_builder(
     return builder
 
 
+def _apply_fallback_policy(
+    *,
+    policy: AdapterExecutionPolicy | None,
+    fallback_hook: Callable[[DataFusionFallbackEvent], None] | None,
+    label: ExecutionLabel | None = None,
+) -> Callable[[DataFusionFallbackEvent], None] | None:
+    if policy is None:
+        return fallback_hook
+    if policy.allow_fallback and not policy.fail_on_fallback:
+        return fallback_hook
+
+    def _hook(event: DataFusionFallbackEvent) -> None:
+        if fallback_hook is not None:
+            fallback_hook(event)
+        label_info = ""
+        if label is not None:
+            label_info = f" for rule {label.rule_name!r} output {label.output_dataset!r}"
+        msg = f"DataFusion fallback blocked{label_info} ({event.reason}): {event.expression_type}"
+        raise ValueError(msg)
+
+    return _hook
+
+
+def _chain_fallback_hooks(
+    *hooks: Callable[[DataFusionFallbackEvent], None] | None,
+) -> Callable[[DataFusionFallbackEvent], None] | None:
+    active = [hook for hook in hooks if hook is not None]
+    if not active:
+        return None
+
+    def _hook(event: DataFusionFallbackEvent) -> None:
+        for hook in active:
+            hook(event)
+
+    return _hook
+
+
+def _chain_explain_hooks(
+    *hooks: Callable[[str, Sequence[Mapping[str, object]]], None] | None,
+) -> Callable[[str, Sequence[Mapping[str, object]]], None] | None:
+    active = [hook for hook in hooks if hook is not None]
+    if not active:
+        return None
+
+    def _hook(sql: str, rows: Sequence[Mapping[str, object]]) -> None:
+        for hook in active:
+            hook(sql, rows)
+
+    return _hook
+
+
+def labeled_fallback_hook(
+    label: ExecutionLabel,
+    sink: list[dict[str, object]],
+) -> Callable[[DataFusionFallbackEvent], None]:
+    """Return a fallback hook that records rule-scoped diagnostics.
+
+    Returns
+    -------
+    Callable[[DataFusionFallbackEvent], None]
+        Hook that appends labeled fallback diagnostics to the sink.
+    """
+
+    def _hook(event: DataFusionFallbackEvent) -> None:
+        sink.append(
+            {
+                "rule": label.rule_name,
+                "output": label.output_dataset,
+                "reason": event.reason,
+                "error": event.error,
+                "expression_type": event.expression_type,
+                "sql": event.sql,
+                "dialect": event.dialect,
+                "policy_violations": list(event.policy_violations),
+            }
+        )
+
+    return _hook
+
+
+def labeled_explain_hook(
+    label: ExecutionLabel,
+    sink: list[dict[str, object]],
+) -> Callable[[str, Sequence[Mapping[str, object]]], None]:
+    """Return an explain hook that records rule-scoped diagnostics.
+
+    Returns
+    -------
+    Callable[[str, Sequence[Mapping[str, object]]], None]
+        Hook that appends labeled explain diagnostics to the sink.
+    """
+
+    def _hook(sql: str, rows: Sequence[Mapping[str, object]]) -> None:
+        sink.append(
+            {
+                "rule": label.rule_name,
+                "output": label.output_dataset,
+                "sql": sql,
+                "rows": [dict(row) for row in rows],
+            }
+        )
+
+    return _hook
+
+
 def _attach_cache_manager(
     builder: RuntimeEnvBuilder,
     *,
@@ -259,6 +380,8 @@ class DataFusionRuntimeProfile:
     fallback_collector: DataFusionFallbackCollector | None = field(
         default_factory=DataFusionFallbackCollector
     )
+    labeled_fallbacks: list[dict[str, object]] = field(default_factory=list)
+    labeled_explains: list[dict[str, object]] = field(default_factory=list)
     local_filesystem_root: str | None = None
     config_policy_name: str | None = "default"
     config_policy: DataFusionConfigPolicy | None = None
@@ -433,6 +556,8 @@ class DataFusionRuntimeProfile:
         *,
         options: DataFusionCompileOptions | None = None,
         params: Mapping[str, object] | Mapping[IbisValue, object] | None = None,
+        execution_policy: AdapterExecutionPolicy | None = None,
+        execution_label: ExecutionLabel | None = None,
     ) -> DataFusionCompileOptions:
         """Return DataFusion compile options derived from the profile.
 
@@ -466,9 +591,9 @@ class DataFusionRuntimeProfile:
             explain_hook == resolved.explain_hook,
             fallback_hook == resolved.fallback_hook,
         )
-        if all(unchanged):
+        if all(unchanged) and execution_policy is None and execution_label is None:
             return resolved
-        return replace(
+        updated = replace(
             resolved,
             cache=cache,
             cache_max_columns=cache_max_columns,
@@ -477,6 +602,20 @@ class DataFusionRuntimeProfile:
             explain_analyze=explain_analyze,
             explain_hook=explain_hook,
             fallback_hook=fallback_hook,
+        )
+        if execution_label is not None:
+            updated = apply_execution_label(
+                updated,
+                execution_label=execution_label,
+                fallback_sink=self.labeled_fallbacks,
+                explain_sink=self.labeled_explains,
+            )
+        if execution_policy is None:
+            return updated
+        return apply_execution_policy(
+            updated,
+            execution_policy=execution_policy,
+            execution_label=execution_label,
         )
 
     @staticmethod
@@ -547,7 +686,9 @@ class DataFusionRuntimeProfile:
             "runtime_env_hook": bool(self.runtime_env_hook),
             "session_context_hook": bool(self.session_context_hook),
             "config_policy_name": self.config_policy_name,
-            "config_policy": dict(resolved_policy.settings) if resolved_policy is not None else None,
+            "config_policy": dict(resolved_policy.settings)
+            if resolved_policy is not None
+            else None,
             "share_context": self.share_context,
             "session_context_key": self.session_context_key,
         }
@@ -611,15 +752,97 @@ class DataFusionRuntimeProfile:
         _SESSION_CONTEXT_CACHE[self._cache_key()] = ctx
 
 
+def apply_execution_label(
+    options: DataFusionCompileOptions,
+    *,
+    execution_label: ExecutionLabel | None,
+    fallback_sink: list[dict[str, object]] | None,
+    explain_sink: list[dict[str, object]] | None,
+) -> DataFusionCompileOptions:
+    """Return compile options with rule-scoped diagnostics hooks applied.
+
+    Parameters
+    ----------
+    options:
+        Base compile options to update.
+    execution_label:
+        Optional label used to annotate diagnostics.
+    fallback_sink:
+        Destination list for labeled fallback entries.
+    explain_sink:
+        Destination list for labeled explain entries.
+
+    Returns
+    -------
+    DataFusionCompileOptions
+        Options updated with labeled diagnostics hooks when configured.
+    """
+    if execution_label is None:
+        return options
+    fallback_hook = options.fallback_hook
+    if fallback_sink is not None:
+        fallback_hook = _chain_fallback_hooks(
+            fallback_hook,
+            labeled_fallback_hook(execution_label, fallback_sink),
+        )
+    explain_hook = options.explain_hook
+    if explain_sink is not None and (options.capture_explain or explain_hook is not None):
+        explain_hook = _chain_explain_hooks(
+            explain_hook,
+            labeled_explain_hook(execution_label, explain_sink),
+        )
+    if fallback_hook is options.fallback_hook and explain_hook is options.explain_hook:
+        return options
+    return replace(options, fallback_hook=fallback_hook, explain_hook=explain_hook)
+
+
+def apply_execution_policy(
+    options: DataFusionCompileOptions,
+    *,
+    execution_policy: AdapterExecutionPolicy | None,
+    execution_label: ExecutionLabel | None = None,
+) -> DataFusionCompileOptions:
+    """Return compile options with an execution policy enforced.
+
+    Parameters
+    ----------
+    options:
+        Base compile options to update.
+    execution_policy:
+        Optional execution policy that can block fallback usage.
+    execution_label:
+        Optional label used for fallback error context.
+    execution_label:
+        Optional label used to provide context in fallback errors.
+
+    Returns
+    -------
+    DataFusionCompileOptions
+        Options updated with fallback policy enforcement when configured.
+    """
+    fallback_hook = _apply_fallback_policy(
+        policy=execution_policy,
+        fallback_hook=options.fallback_hook,
+        label=execution_label,
+    )
+    if fallback_hook is options.fallback_hook:
+        return options
+    return replace(options, fallback_hook=fallback_hook)
+
+
 __all__ = [
     "DATAFUSION_POLICY_PRESETS",
     "DEFAULT_DF_POLICY",
     "DEV_DF_POLICY",
     "PROD_DF_POLICY",
+    "AdapterExecutionPolicy",
     "DataFusionConfigPolicy",
     "DataFusionExplainCollector",
     "DataFusionFallbackCollector",
     "DataFusionRuntimeProfile",
+    "ExecutionLabel",
     "MemoryPool",
+    "apply_execution_label",
+    "apply_execution_policy",
     "snapshot_plans",
 ]

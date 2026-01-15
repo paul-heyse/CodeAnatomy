@@ -1494,6 +1494,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         confidence_policy="confidence=1.0",
         ambiguity_policy="none",
         extractor="extract.bytecode_extract:extract_bytecode_table",
+        status="planned",
     ),
     DerivationRow(
         kind=NodeKind.BC_INSTR,
@@ -1506,6 +1507,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         confidence_policy="confidence=1.0",
         ambiguity_policy="none",
         extractor="extract.bytecode_extract:extract_bytecode_table",
+        status="planned",
     ),
     DerivationRow(
         kind=NodeKind.CFG_BLOCK,
@@ -1515,6 +1517,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         confidence_policy="confidence=0.95",
         ambiguity_policy="none",
         extractor="normalize.bytecode_cfg:build_cfg_blocks",
+        status="planned",
     ),
     DerivationRow(
         kind=NodeKind.CFG_EXIT,
@@ -1707,6 +1710,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         confidence_policy="confidence=0.8-0.95 depending on opcode coverage",
         ambiguity_policy="if binding ambiguous, emit multiple DF_DEF candidates with scores",
         extractor="normalize.bytecode_dfg:build_def_use_events",
+        status="planned",
     ),
     DerivationRow(
         kind=NodeKind.DF_USE,
@@ -1720,6 +1724,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         confidence_policy="confidence=0.8-0.95 depending on opcode coverage",
         ambiguity_policy="if binding ambiguous, emit multiple DF_USE candidates with scores",
         extractor="normalize.bytecode_dfg:build_def_use_events",
+        status="planned",
     ),
     DerivationRow(
         kind=NodeKind.DIAG,
@@ -1735,6 +1740,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         confidence_policy="confidence=1.0 for source diag; 0.7 for derived diag",
         ambiguity_policy="none",
         extractor="normalize.diagnostics:collect_diags",
+        status="planned",
     ),
     DerivationRow(
         kind=NodeKind.PY_BINDING,
@@ -1819,6 +1825,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         confidence_policy="confidence=0.6-0.9 depending on provider (FullyQualified > Qualified)",
         ambiguity_policy="qname nodes are distinct; ambiguity lives on edges from ref->qname",
         extractor="hamilton_pipeline.modules.normalization:dim_qualified_names",
+        status="planned",
     ),
     DerivationRow(
         kind=NodeKind.PY_REPO,
@@ -1948,6 +1955,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         ),
         ambiguity_policy="none",
         extractor="normalize.spans:add_scip_occurrence_byte_spans",
+        status="planned",
     ),
     DerivationRow(
         kind=NodeKind.SCIP_SYMBOL,
@@ -1989,6 +1997,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         confidence_policy="confidence=1.0",
         ambiguity_policy="n/a",
         extractor="extract.tree_sitter_extract:extract_ts_tables",
+        status="planned",
     ),
     DerivationRow(
         kind=NodeKind.TS_MISSING,
@@ -1997,6 +2006,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         confidence_policy="confidence=1.0",
         ambiguity_policy="n/a",
         extractor="extract.tree_sitter_extract:extract_ts_tables",
+        status="planned",
     ),
     DerivationRow(
         kind=NodeKind.TS_NODE,
@@ -2005,6 +2015,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         confidence_policy="confidence=1.0",
         ambiguity_policy="n/a",
         extractor="extract.tree_sitter_extract:extract_ts_tables",
+        status="planned",
     ),
     DerivationRow(
         kind=NodeKind.TYPE,
@@ -2019,6 +2030,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
             "multi-valued types allowed (union/overload); store multiple TYPE nodes/edges"
         ),
         extractor="normalize.types:normalize_types",
+        status="planned",
     ),
     DerivationRow(
         kind=NodeKind.TYPE_ALIAS,
@@ -2105,6 +2117,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         confidence_policy="line_table=0.9, offset_span=0.8, heuristic=0.6",
         ambiguity_policy="if multiple anchors, keep all with scores; winner selection by score",
         extractor="normalize.bytecode_anchor:anchor_instructions",
+        status="planned",
     ),
     DerivationRow(
         kind=EdgeKind.CALLSITE_CANDIDATE_QNAME,
@@ -2117,6 +2130,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         confidence_policy="score based on candidate position; confidence default 0.6",
         ambiguity_policy="multi-valued; ambiguity_group_id = call_id",
         extractor="hamilton_pipeline.modules.normalization:callsite_qname_candidates",
+        status="planned",
     ),
     DerivationRow(
         kind=EdgeKind.CFG_BRANCH,
@@ -2126,6 +2140,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         confidence_policy="confidence=0.9",
         ambiguity_policy="none",
         extractor="normalize.bytecode_cfg:build_cfg_edges",
+        status="planned",
     ),
     DerivationRow(
         kind=EdgeKind.CFG_BRANCH_FALSE,
@@ -2135,6 +2150,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         confidence_policy="confidence=0.95",
         ambiguity_policy="none",
         extractor="normalize.bytecode_cfg:build_cfg_edges",
+        status="planned",
     ),
     DerivationRow(
         kind=EdgeKind.CFG_BRANCH_TRUE,
@@ -2144,6 +2160,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         confidence_policy="confidence=0.95",
         ambiguity_policy="none",
         extractor="normalize.bytecode_cfg:build_cfg_edges",
+        status="planned",
     ),
     DerivationRow(
         kind=EdgeKind.CFG_EXC,
@@ -2153,6 +2170,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         confidence_policy="confidence=0.9-0.95",
         ambiguity_policy="none",
         extractor="normalize.bytecode_cfg:build_cfg_edges",
+        status="planned",
     ),
     DerivationRow(
         kind=EdgeKind.CFG_JUMP,
@@ -2162,6 +2180,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         confidence_policy="confidence=0.95",
         ambiguity_policy="none",
         extractor="normalize.bytecode_cfg:build_cfg_edges",
+        status="planned",
     ),
     DerivationRow(
         kind=EdgeKind.CFG_NEXT,
@@ -2171,6 +2190,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         confidence_policy="confidence=0.95",
         ambiguity_policy="none",
         extractor="normalize.bytecode_cfg:build_cfg_edges",
+        status="planned",
     ),
     DerivationRow(
         kind=EdgeKind.CST_PARENT_OF,
@@ -2358,6 +2378,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         confidence_policy="confidence=0.8-0.95",
         ambiguity_policy="none",
         extractor="normalize.bytecode_dfg:run_reaching_defs",
+        status="planned",
     ),
     DerivationRow(
         kind=EdgeKind.REPO_CONTAINS,
@@ -2483,6 +2504,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         confidence_policy="confidence=0.8-0.95",
         ambiguity_policy="if binding ambiguous, keep multiple with scores",
         extractor="normalize.bytecode_dfg:build_def_use_events",
+        status="planned",
     ),
     DerivationRow(
         kind=EdgeKind.STEP_USE,
@@ -2495,6 +2517,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         confidence_policy="confidence=0.8-0.95",
         ambiguity_policy="if binding ambiguous, keep multiple with scores",
         extractor="normalize.bytecode_dfg:build_def_use_events",
+        status="planned",
     ),
     DerivationRow(
         kind=EdgeKind.TS_PARENT_OF,

@@ -9,7 +9,12 @@ from weakref import WeakSet
 import pyarrow as pa
 from datafusion import SessionContext, udf
 
-from arrowdsl.compute.expr_core import ENC_UTF8, ENC_UTF16, ENC_UTF32, normalize_position_encoding
+from arrowdsl.compute.position_encoding import (
+    ENC_UTF8,
+    ENC_UTF16,
+    ENC_UTF32,
+    normalize_position_encoding,
+)
 from arrowdsl.core.ids import hash64_from_text, iter_array_values
 from arrowdsl.core.interop import pc
 

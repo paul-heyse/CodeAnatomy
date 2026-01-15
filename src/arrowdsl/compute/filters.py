@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 import pyarrow.compute as pac
 
-from arrowdsl.compute.expr_core import ExprSpec, normalize_position_encoding
+from arrowdsl.compute.kernel_utils import resolve_kernel
 from arrowdsl.compute.macros import (
     bitmask_is_set_expr,
     filter_non_empty_utf8,
@@ -32,6 +31,10 @@ from arrowdsl.compute.registry import (
     ensure_udf,
     ensure_udfs,
 )
+from arrowdsl.compute.udf_helpers import (
+    ensure_expr_context_udf,
+    ensure_position_encoding_udf,
+)
 from arrowdsl.core.ids import iter_array_values
 from arrowdsl.core.interop import (
     ArrayLike,
@@ -40,17 +43,14 @@ from arrowdsl.core.interop import (
     DataTypeLike,
     ScalarLike,
     TableLike,
-    pc,
 )
 from arrowdsl.json_factory import JsonPolicy, dumps_text
 
 if TYPE_CHECKING:
+    from arrowdsl.compute.expr_core import ExprSpec
     from arrowdsl.plan.plan import Plan
 
 type ValuesLike = ArrayLike | ChunkedArrayLike | ScalarLike
-
-_EXPR_CTX_FUNCTION = "expr_ctx_norm"
-_POSITION_ENCODING_FUNCTION = "position_encoding_norm"
 
 
 @dataclass(frozen=True)
@@ -100,36 +100,6 @@ class FilterSpec:
         return table.filter(self.mask(table))
 
 
-def resolve_kernel(
-    name: str,
-    *,
-    fallbacks: Sequence[str] = (),
-    required: bool = False,
-) -> str | None:
-    """Resolve a compute kernel name from candidates.
-
-    Returns
-    -------
-    str | None
-        Resolved kernel name or ``None`` when unavailable and not required.
-
-    Raises
-    ------
-    KeyError
-        Raised when no candidate kernels exist and ``required=True``.
-    """
-    for candidate in (name, *fallbacks):
-        try:
-            pc.get_function(candidate)
-        except KeyError:
-            continue
-        return candidate
-    if required:
-        msg = f"Missing compute kernel: {name!r}."
-        raise KeyError(msg)
-    return None
-
-
 def _json_stringify(value: object) -> str | None:
     """Serialize a Python value to a stable JSON string.
 
@@ -173,114 +143,6 @@ def _json_udf(ctx: pac.UdfContext, values: ValuesLike) -> ValuesLike:
     array_values = values.combine_chunks() if isinstance(values, ChunkedArrayLike) else values
     out = [_json_stringify(value) for value in iter_array_values(array_values)]
     return pa.array(out, type=pa.string())
-
-
-def _normalize_expr_ctx(value: object) -> str | None:
-    """Normalize expression context strings to upper-case tokens.
-
-    Parameters
-    ----------
-    value
-        Input value to normalize.
-
-    Returns
-    -------
-    str | None
-        Normalized token or ``None`` when input is not usable.
-    """
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text:
-        return None
-    if "." in text:
-        text = text.rsplit(".", 1)[-1]
-    return text.upper() or None
-
-
-def _expr_ctx_udf(ctx: pac.UdfContext, values: ValuesLike) -> ValuesLike:
-    """UDF that normalizes expression context values.
-
-    Parameters
-    ----------
-    ctx
-        UDF context (unused).
-    values
-        Scalar or array values to normalize.
-
-    Returns
-    -------
-    ValuesLike
-        Normalized string values.
-    """
-    _ = ctx
-    if isinstance(values, ScalarLike):
-        return pa.scalar(_normalize_expr_ctx(values.as_py()), type=pa.string())
-    array_values = values.combine_chunks() if isinstance(values, ChunkedArrayLike) else values
-    out = [_normalize_expr_ctx(value) for value in iter_array_values(array_values)]
-    return pa.array(out, type=pa.string())
-
-
-def ensure_expr_context_udf() -> str:
-    """Ensure the expr-context normalization UDF is registered.
-
-    Returns
-    -------
-    str
-        Registered function name.
-    """
-    spec = UdfSpec(
-        name=_EXPR_CTX_FUNCTION,
-        inputs={"value": pa.string()},
-        output=pa.string(),
-        fn=_expr_ctx_udf,
-        summary="Normalize expr context",
-        description="Normalize expr context values.",
-    )
-    return ensure_udf(spec)
-
-
-def _position_encoding_udf(ctx: pac.UdfContext, values: ValuesLike) -> ValuesLike:
-    """UDF that normalizes position encoding values to int32.
-
-    Parameters
-    ----------
-    ctx
-        UDF context (unused).
-    values
-        Scalar or array values to normalize.
-
-    Returns
-    -------
-    ValuesLike
-        Normalized int32 values.
-    """
-    _ = ctx
-    if isinstance(values, ScalarLike):
-        normalized = normalize_position_encoding(values.as_py())
-        return pa.scalar(normalized, type=pa.int32())
-    array_values = values.combine_chunks() if isinstance(values, ChunkedArrayLike) else values
-    out = [normalize_position_encoding(value) for value in iter_array_values(array_values)]
-    return pa.array(out, type=pa.int32())
-
-
-def ensure_position_encoding_udf() -> str:
-    """Ensure the position-encoding normalization UDF is registered.
-
-    Returns
-    -------
-    str
-        Registered function name.
-    """
-    spec = UdfSpec(
-        name=_POSITION_ENCODING_FUNCTION,
-        inputs={"value": pa.string()},
-        output=pa.int32(),
-        fn=_position_encoding_udf,
-        summary="Normalize position encodings",
-        description="Normalize position encodings to SCIP enum integers.",
-    )
-    return ensure_udf(spec)
 
 
 def position_encoding_array(values: ArrayLike | ChunkedArrayLike) -> ArrayLike:

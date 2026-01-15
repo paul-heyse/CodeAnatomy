@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
+import importlib
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol, TypedDict, cast
@@ -11,8 +10,6 @@ from typing import Literal, Protocol, TypedDict, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.compute.kernels import ChunkPolicy
-from arrowdsl.compute.macros import FieldExpr
 from arrowdsl.core.interop import (
     ArrayLike,
     ComputeExpression,
@@ -25,11 +22,10 @@ from arrowdsl.core.interop import (
     pc,
 )
 from arrowdsl.schema.build import empty_table
+from arrowdsl.schema.chunking import ChunkPolicy
 from arrowdsl.schema.encoding_policy import EncodingPolicy, EncodingSpec, apply_encoding
-from arrowdsl.schema.metadata import metadata_spec_from_schema
 from arrowdsl.schema.normalize import NormalizePolicy
-from core_types import JsonDict
-from schema_spec.specs import TableSchemaSpec
+from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
 
@@ -46,6 +42,22 @@ class _MapType(Protocol):
     key_field: FieldLike
     item_field: FieldLike
     keys_sorted: bool
+
+
+class _SchemaFieldSpec(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def nullable(self) -> bool: ...
+
+
+class _TableSchemaSpec(Protocol):
+    @property
+    def required_non_null(self) -> Sequence[str]: ...
+
+    @property
+    def fields(self) -> Sequence[_SchemaFieldSpec]: ...
 
 
 class AlignmentInfo(TypedDict):
@@ -506,7 +518,7 @@ def encode_expression(column: str) -> ComputeExpression:
     ComputeExpression
         Expression applying dictionary encoding.
     """
-    expr = FieldExpr(column).to_expression()
+    expr = pc.field(column)
     encoded = pc.dictionary_encode(cast("ArrayLike", expr))
     return ensure_expression(encoded)
 
@@ -629,7 +641,8 @@ def unify_schemas(
     unified = unify_schemas_core(schemas, promote_options=promote_options)
     if prefer_nested:
         unified = _prefer_base_nested(schemas[0], unified)
-    return metadata_spec_from_schema(schemas[0]).apply(unified)
+    metadata_module = importlib.import_module("arrowdsl.schema.metadata")
+    return metadata_module.metadata_spec_from_schema(schemas[0]).apply(unified)
 
 
 def unify_schema_with_metadata(
@@ -691,7 +704,7 @@ def infer_schema_from_tables(
     )
 
 
-def required_field_names(spec: TableSchemaSpec) -> tuple[str, ...]:
+def required_field_names(spec: _TableSchemaSpec) -> tuple[str, ...]:
     """Return required field names (explicit or non-nullable).
 
     Returns
@@ -737,33 +750,6 @@ def missing_key_fields(keys: Sequence[str], *, missing_cols: Sequence[str]) -> t
     """
     missing = set(missing_cols)
     return tuple(key for key in keys if key in missing)
-
-def schema_to_dict(schema: SchemaLike) -> JsonDict:
-    """Serialize an Arrow schema to a plain dictionary.
-
-    Returns
-    -------
-    dict[str, object]
-        JSON-serializable schema representation.
-    """
-    return {
-        "fields": [
-            {"name": field.name, "type": str(field.type), "nullable": bool(field.nullable)}
-            for field in schema
-        ]
-    }
-
-
-def schema_fingerprint(schema: SchemaLike) -> str:
-    """Compute a stable schema fingerprint hash.
-
-    Returns
-    -------
-    str
-        SHA-256 fingerprint of the schema.
-    """
-    payload = json.dumps(schema_to_dict(schema), sort_keys=True).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
 
 
 def unify_schemas_core(

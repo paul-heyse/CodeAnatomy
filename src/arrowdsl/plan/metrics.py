@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TypedDict, cast
+from typing import TYPE_CHECKING, TypedDict, cast
 
 import pyarrow as pa
 import pyarrow.dataset as ds
@@ -23,7 +23,6 @@ from arrowdsl.core.interop import (
     ensure_expression,
     pc,
 )
-from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.build import (
     const_array,
     empty_table,
@@ -33,12 +32,15 @@ from arrowdsl.schema.build import (
 )
 from arrowdsl.schema.encoding_policy import EncodingPolicy
 from arrowdsl.schema.normalize import NormalizePolicy
-from arrowdsl.schema.schema import schema_fingerprint, schema_to_dict
+from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from core_types import JsonDict, PathLike, ensure_path
 
 type RowValue = str | int
 type Row = dict[str, RowValue]
 type ValuesLike = ArrayLike | ChunkedArrayLike
+
+if TYPE_CHECKING:
+    from arrowdsl.plan.plan import Plan
 
 DATASET_STATS_ENCODING_POLICY = EncodingPolicy(dictionary_cols=frozenset({"dataset_name"}))
 

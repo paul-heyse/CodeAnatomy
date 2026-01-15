@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, cast
 from arrowdsl.core.interop import TableLike
 from arrowdsl.json_factory import JsonPolicy, dump_path, json_default
 from arrowdsl.plan.metrics import table_summary
-from arrowdsl.schema.schema import schema_fingerprint
+from arrowdsl.schema.serialization import schema_fingerprint
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from extract.evidence_specs import EvidenceSpec, evidence_spec, evidence_specs
 from extract.registry_extractors import extractor_spec

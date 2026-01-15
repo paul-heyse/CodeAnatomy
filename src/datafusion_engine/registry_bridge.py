@@ -83,11 +83,7 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
     scan = resolve_datafusion_scan_options(location)
     schema = resolve_dataset_schema(location)
     provider = location.datafusion_provider
-    if (
-        provider is None
-        and scan is not None
-        and (scan.partition_cols or scan.file_sort_order)
-    ):
+    if provider is None and scan is not None and (scan.partition_cols or scan.file_sort_order):
         provider = "listing"
     return DataFusionRegistryOptions(
         scan=scan,

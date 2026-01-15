@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import base64
+import importlib
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
-from typing import cast
+from typing import Protocol, cast
 
 import pyarrow as pa
 from datafusion import SessionContext
@@ -33,8 +34,6 @@ from ibis_engine.params_bridge import list_param_names_from_rel_ops
 from ibis_engine.plan import IbisPlan
 from ibis_engine.plan_bridge import table_to_ibis
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
-from relspec.compiler import rel_plan_for_rule
-from relspec.engine import IbisRelPlanCompiler, PlanResolver
 from relspec.list_filter_gate import (
     ListFilterGateError,
     ListFilterGatePolicy,
@@ -42,7 +41,6 @@ from relspec.list_filter_gate import (
 )
 from relspec.model import DatasetRef, DedupeKernelSpec, ExplodeListSpec, RelationshipRule
 from relspec.param_deps import RuleDependencyReport, dataset_table_names, infer_param_deps
-from relspec.plan import rel_plan_signature
 from relspec.rules.definitions import (
     ExtractPayload,
     NormalizePayload,
@@ -75,6 +73,28 @@ from sqlglot_tools.bridge import (
     sqlglot_diagnostics,
 )
 from sqlglot_tools.lineage import TableRef, extract_table_refs
+
+
+def _rel_plan_for_rule(rule: RelationshipRule) -> object:
+    module = importlib.import_module("relspec.compiler")
+    rel_plan_fn = cast("Callable[..., object]", module.rel_plan_for_rule)
+    return rel_plan_fn(rule)
+
+
+class _IbisRelPlanCompiler(Protocol):
+    def compile(self, plan: object, *, ctx: ExecutionContext, resolver: object) -> IbisPlan: ...
+
+
+def _ibis_rel_plan_compiler() -> _IbisRelPlanCompiler:
+    module = importlib.import_module("relspec.engine")
+    compiler_cls = cast("type[_IbisRelPlanCompiler]", module.IbisRelPlanCompiler)
+    return compiler_cls()
+
+
+def _rel_plan_signature(plan: object) -> str:
+    module = importlib.import_module("relspec.plan")
+    sig_fn = cast("Callable[..., str]", module.rel_plan_signature)
+    return sig_fn(plan)
 
 
 def validate_rule_definitions(
@@ -303,7 +323,7 @@ class SqlGlotRuleContext:
 
 
 @dataclass(frozen=True)
-class _SchemaPlanResolver(PlanResolver[IbisPlan]):
+class _SchemaPlanResolver:
     """Plan resolver that returns empty tables from schema registry."""
 
     backend: IbisCompilerBackend
@@ -401,7 +421,10 @@ def rule_sqlglot_diagnostics(
     tuple[RuleDiagnostic, ...]
         SQLGlot diagnostics for rules that can compile to SQLGlot.
     """
-    context = build_sqlglot_context(config)
+    try:
+        context = build_sqlglot_context(config)
+    except ImportError:
+        return ()
     diagnostics: list[RuleDiagnostic] = []
     for rule in rules:
         diagnostics.extend(
@@ -766,7 +789,10 @@ def rule_dependency_reports(
     tuple[RuleDependencyReport, ...]
         Rule dependency reports with param and dataset tables.
     """
-    context = build_sqlglot_context(config)
+    try:
+        context = build_sqlglot_context(config)
+    except ImportError:
+        return ()
     reports: list[RuleDependencyReport] = []
     for rule in rules:
         input_names = _rule_input_names(rule)
@@ -1036,11 +1062,11 @@ def _rule_sqlglot_source(
     """
     if rule.domain == "cpg":
         rel_rule = relationship_rule_from_definition(rule)
-        rel_plan = rel_plan_for_rule(rel_rule)
+        rel_plan = _rel_plan_for_rule(rel_rule)
         if rel_plan is None:
             return None
         resolver = _SchemaPlanResolver(backend=backend, registry=registry)
-        compiler = IbisRelPlanCompiler()
+        compiler = _ibis_rel_plan_compiler()
         ibis_plan = compiler.compile(rel_plan, ctx=ctx, resolver=resolver)
         inputs = tuple(ref.name for ref in rel_rule.inputs)
         return _RuleSqlGlotSource(
@@ -1265,10 +1291,10 @@ def _plan_signature_for_rule(rule: RuleDefinition) -> str | None:
     """
     if rule.domain == "cpg":
         rel_rule = relationship_rule_from_definition(rule)
-        rel_plan = rel_plan_for_rule(rel_rule)
+        rel_plan = _rel_plan_for_rule(rel_rule)
         if rel_plan is None:
             return None
-        return rel_plan_signature(rel_plan)
+        return _rel_plan_signature(rel_plan)
     if rule.rel_ops:
         return rel_ops_signature(rule.rel_ops)
     return None

@@ -40,7 +40,6 @@ from normalize.diagnostics import (
     collect_diags_streamable,
     diagnostics_post_step,
 )
-from normalize.materializers import materialize_rule_outputs
 from normalize.registry_bundles import bundle, bundles
 from normalize.registry_fields import (
     DIAG_DETAIL_STRUCT,
@@ -58,7 +57,6 @@ from normalize.registry_ids import (
     TYPE_ID_SPEC,
     hash_spec,
 )
-from normalize.registry_plans import plan_names, plan_ref
 from normalize.registry_specs import (
     dataset_contract,
     dataset_input_columns,
@@ -83,8 +81,6 @@ from normalize.rule_model import (
 )
 from normalize.runner import (
     NormalizeRuleCompilation,
-    compile_normalize_plans,
-    compile_normalize_rules,
     ensure_canonical,
     materialize_normalize_evidence,
     normalize_evidence_table,
@@ -202,8 +198,6 @@ __all__ = [
     "collect_diags_canonical",
     "collect_diags_result",
     "collect_diags_streamable",
-    "compile_normalize_plans",
-    "compile_normalize_rules",
     "dataset_contract",
     "dataset_input_columns",
     "dataset_input_schema",
@@ -226,7 +220,6 @@ __all__ = [
     "hash_spec",
     "infer_schema_from_tables",
     "materialize_normalize_evidence",
-    "materialize_rule_outputs",
     "normalize_cst_callsites_spans",
     "normalize_cst_defs_spans",
     "normalize_cst_imports_spans",
@@ -242,8 +235,6 @@ __all__ = [
     "normalize_types_canonical",
     "normalize_types_result",
     "normalize_types_streamable",
-    "plan_names",
-    "plan_ref",
     "reaching_defs_plan",
     "run_normalize",
     "run_normalize_reader",

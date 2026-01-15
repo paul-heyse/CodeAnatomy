@@ -103,7 +103,9 @@ def _bundle_templates(rows: tuple[DatasetRow, ...]) -> dict[str, str | None]:
     for row in rows:
         if row.template is None:
             continue
-        for bundle in row.bundles:
+        bundles = set(row.bundles)
+        bundles.add(f"{row.template}_bundle")
+        for bundle in bundles:
             templates.setdefault(bundle, set()).add(row.template)
     resolved: dict[str, str | None] = {}
     for bundle, values in templates.items():
@@ -120,7 +122,10 @@ def _bundle_specs_from_rows(rows: tuple[DatasetRow, ...]) -> tuple[OutputBundleS
     for row in rows:
         output = _output_alias(row)
         dataset_map[output] = row.name
-        for bundle in row.bundles:
+        bundles = set(row.bundles)
+        if row.template:
+            bundles.add(f"{row.template}_bundle")
+        for bundle in bundles:
             bundle_outputs.setdefault(bundle, []).append(output)
     for bundle, outputs in _DERIVED_OUTPUTS_BY_BUNDLE.items():
         bundle_outputs.setdefault(bundle, []).extend(outputs)

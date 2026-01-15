@@ -20,6 +20,7 @@ from arrowdsl.core.interop import (
     TableLike,
     pc,
 )
+from arrowdsl.core.schema_constants import PROVENANCE_COLS
 from arrowdsl.kernel.registry import KernelLane, kernel_def
 from arrowdsl.plan.joins import (
     JoinConfig,
@@ -29,33 +30,26 @@ from arrowdsl.plan.joins import (
     resolve_join_outputs,
 )
 from arrowdsl.plan.ops import AsofJoinSpec, DedupeSpec, IntervalAlignOptions, JoinSpec, SortKey
-from arrowdsl.schema.build import const_array, set_or_append_column
+from arrowdsl.schema.chunking import ChunkPolicy
 from arrowdsl.schema.metadata import metadata_spec_from_schema, ordering_from_schema
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from schema_spec.specs import PROVENANCE_COLS
 
 
-@dataclass(frozen=True)
-class ChunkPolicy:
-    """Normalization policy for dictionary encoding and chunking."""
+def _const_array(
+    n: int,
+    value: object,
+    *,
+    dtype: DataTypeLike | None = None,
+) -> ArrayLike:
+    scalar = pa.scalar(value) if dtype is None else pa.scalar(value, type=dtype)
+    return pa.array([value] * n, type=scalar.type)
 
-    unify_dictionaries: bool = True
-    combine_chunks: bool = True
 
-    def apply(self, table: TableLike) -> TableLike:
-        """Apply dictionary unification and chunk combination.
-
-        Returns
-        -------
-        TableLike
-            Normalized table with unified dictionaries and combined chunks.
-        """
-        out = table
-        if self.unify_dictionaries:
-            out = out.unify_dictionaries()
-        if self.combine_chunks:
-            out = out.combine_chunks()
-        return out
+def _set_or_append_column(table: TableLike, name: str, values: ArrayLike) -> TableLike:
+    if name in table.column_names:
+        idx = table.schema.get_field_index(name)
+        return table.set_column(idx, name, values)
+    return table.append_column(name, values)
 
 
 _NUMERIC_REGEX = r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$"
@@ -802,7 +796,7 @@ def _ensure_column(
     if name in table.column_names:
         return table
     col_type = dtype if dtype is not None else pa.null()
-    return set_or_append_column(table, name, pa.nulls(table.num_rows, type=col_type))
+    return _set_or_append_column(table, name, pa.nulls(table.num_rows, type=col_type))
 
 
 def _call_function(name: str, args: Sequence[object]) -> ArrayLike:
@@ -1013,17 +1007,17 @@ def _prepare_interval_tables(
     for name in right_required:
         right_table = _ensure_column(right_table, name)
 
-    left_table = set_or_append_column(
+    left_table = _set_or_append_column(
         left_table,
         left_key_col,
         pc.cast(left_table[cfg.left_path_col], pa.string(), safe=False),
     )
-    right_table = set_or_append_column(
+    right_table = _set_or_append_column(
         right_table,
         right_key_col,
         pc.cast(right_table[cfg.right_path_col], pa.string(), safe=False),
     )
-    left_table = set_or_append_column(
+    left_table = _set_or_append_column(
         left_table,
         left_id_col,
         pa.array(range(left_table.num_rows), type=pa.int64()),
@@ -1106,12 +1100,12 @@ def _select_best_interval_matches(
         "multiply",
         [pc.cast(span_len, pa.float64()), pa.scalar(-1.0)],
     )
-    matched = set_or_append_column(matched, prepared.score_col, match_score)
+    matched = _set_or_append_column(matched, prepared.score_col, match_score)
     if cfg.emit_match_meta:
-        matched = set_or_append_column(
+        matched = _set_or_append_column(
             matched,
             cfg.match_kind_col,
-            const_array(matched.num_rows, cfg.mode, dtype=pa.string()),
+            _const_array(matched.num_rows, cfg.mode, dtype=pa.string()),
         )
 
     resolved_tie_breakers = tuple(

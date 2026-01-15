@@ -16,6 +16,7 @@ from arrowdsl.plan.plan import Plan, PlanRunResult, execute_plan
 from arrowdsl.schema.metadata import merge_metadata_specs
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from config import AdapterMode
+from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from ibis_engine.plan import IbisPlan
 from ibis_engine.registry import datafusion_context
 from ibis_engine.runner import (
@@ -43,8 +44,11 @@ class AdapterRunOptions:
     prefer_reader: bool = False
     metadata_spec: SchemaMetadataSpec | None = None
     attach_ordering_metadata: bool = True
+    execution_policy: AdapterExecutionPolicy | None = None
+    execution_label: ExecutionLabel | None = None
     ibis_backend: BaseBackend | None = None
     ibis_params: Mapping[IbisValue, object] | None = None
+    ibis_batch_size: int | None = None
 
 
 def _apply_metadata_spec(
@@ -100,7 +104,14 @@ def _run_ibis_plan(
         and options.ibis_backend is not None
         and ctx.runtime.datafusion is not None
     ):
-        df_ctx = datafusion_context(options.ibis_backend) or ctx.runtime.datafusion.session_context()
+        allow_fallback = (
+            options.execution_policy.allow_fallback
+            if options.execution_policy is not None
+            else True
+        )
+        df_ctx = (
+            datafusion_context(options.ibis_backend) or ctx.runtime.datafusion.session_context()
+        )
         execution = IbisPlanExecutionOptions(
             params=options.ibis_params,
             datafusion=DataFusionExecutionOptions(
@@ -108,14 +119,16 @@ def _run_ibis_plan(
                 ctx=cast("SessionContext", df_ctx),
                 runtime_profile=ctx.runtime.datafusion,
                 options=None,
-                allow_fallback=True,
+                allow_fallback=allow_fallback,
+                execution_policy=options.execution_policy,
+                execution_label=options.execution_label,
             ),
         )
     if options.prefer_reader and ctx.determinism != DeterminismTier.CANONICAL:
         reader = (
-            ibis_stream_plan(plan, batch_size=None, execution=execution)
+            ibis_stream_plan(plan, batch_size=options.ibis_batch_size, execution=execution)
             if execution is not None
-            else plan.to_reader(params=options.ibis_params)
+            else plan.to_reader(batch_size=options.ibis_batch_size, params=options.ibis_params)
         )
         combined = options.metadata_spec
         if options.attach_ordering_metadata:

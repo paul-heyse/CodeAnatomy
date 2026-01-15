@@ -6,6 +6,7 @@ from collections.abc import Sequence
 
 from arrowdsl.core.context import ExecutionContext
 from relspec.compiler import RelationshipRuleCompiler
+from relspec.compiler_graph import GraphExecutionOptions
 from relspec.compiler_graph import GraphPlan as RelationshipGraphPlan
 from relspec.compiler_graph import compile_graph_plan as compile_relationship_graph
 from relspec.model import RelationshipRule
@@ -18,6 +19,7 @@ def compile_cpg_graph_plan(
     ctx: ExecutionContext,
     compiler: RelationshipRuleCompiler,
     evidence: EvidenceCatalog,
+    execution: GraphExecutionOptions | None = None,
 ) -> RelationshipGraphPlan:
     """Compile a graph-level plan for relationship rules.
 
@@ -26,7 +28,13 @@ def compile_cpg_graph_plan(
     RelationshipGraphPlan
         Graph plan for relationship rules.
     """
-    return compile_relationship_graph(rules, ctx=ctx, compiler=compiler, evidence=evidence)
+    return compile_relationship_graph(
+        rules,
+        ctx=ctx,
+        compiler=compiler,
+        evidence=evidence,
+        execution=execution,
+    )
 
 
 __all__ = ["RelationshipGraphPlan", "compile_cpg_graph_plan"]

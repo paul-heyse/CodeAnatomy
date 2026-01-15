@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+import ibis
 from ibis.backends import BaseBackend
 
 from arrowdsl.compute.filters import FilterSpec, predicate_spec
@@ -21,13 +24,6 @@ from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.ids import iter_table_rows
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan_helpers import align_plan as align_plan_to_schema
-from arrowdsl.plan_helpers import (
-    apply_hash_projection,
-    flatten_struct_field,
-    project_columns,
-    query_for_schema,
-)
 from arrowdsl.schema.metadata import (
     extractor_metadata_spec,
     infer_ordering_keys,
@@ -39,6 +35,7 @@ from arrowdsl.schema.metadata import (
 from arrowdsl.schema.schema import SchemaTransform, projection_for_schema
 from arrowdsl.spec.infra import DatasetRegistration, register_dataset
 from config import AdapterMode
+from datafusion_engine.runtime import AdapterExecutionPolicy
 from extract.evidence_plan import EvidencePlan
 from extract.registry_extractors import (
     ExtractorSpec,
@@ -47,6 +44,14 @@ from extract.registry_extractors import (
     select_extractors_for_outputs,
 )
 from ibis_engine.plan import IbisPlan
+
+if TYPE_CHECKING:
+    from arrowdsl.plan_helpers import (
+        apply_hash_projection,
+        flatten_struct_field,
+        project_columns,
+        query_for_schema,
+    )
 
 
 @dataclass(frozen=True)
@@ -110,6 +115,7 @@ class ExtractExecutionContext:
     evidence_plan: EvidencePlan | None = None
     ctx: ExecutionContext | None = None
     adapter_mode: AdapterMode | None = None
+    execution_policy: AdapterExecutionPolicy | None = None
     ibis_backend: BaseBackend | None = None
     profile: str = "default"
 
@@ -248,12 +254,9 @@ def align_plan(
             available = schema.names
         exprs, names = projection_for_schema(schema, available=available, safe_cast=True)
         return plan.project(exprs, names)
-    return align_plan_to_schema(
-        plan,
-        schema=schema,
-        ctx=ctx,
-        available=available,
-    )
+    module = importlib.import_module("arrowdsl.plan_helpers")
+    align_plan_to_schema = module.align_plan
+    return align_plan_to_schema(plan, schema=schema, ctx=ctx, available=available)
 
 
 def ast_def_nodes(nodes: TableLike) -> TableLike:
@@ -328,12 +331,12 @@ def template_outputs(plan: EvidencePlan | None, template: str) -> tuple[str, ...
     return outputs_for_template(template)
 
 
-def ast_def_nodes_plan(plan: Plan | IbisPlan) -> Plan:
+def ast_def_nodes_plan(plan: Plan | IbisPlan) -> Plan | IbisPlan:
     """Return a plan filtered to AST definition nodes.
 
     Returns
     -------
-    Plan
+    Plan | IbisPlan
         Plan filtered to function/class definitions.
     """
     predicate = predicate_spec(
@@ -342,9 +345,35 @@ def ast_def_nodes_plan(plan: Plan | IbisPlan) -> Plan:
         values=("FunctionDef", "AsyncFunctionDef", "ClassDef"),
     )
     if isinstance(plan, IbisPlan):
-        filtered = FilterSpec(predicate).apply_kernel(plan.to_table())
-        return Plan.table_source(filtered, label="ast_defs")
+        expr = plan.expr
+        values = [
+            ibis.literal("FunctionDef"),
+            ibis.literal("AsyncFunctionDef"),
+            ibis.literal("ClassDef"),
+        ]
+        filtered = expr.filter(expr["kind"].isin(values))
+        return IbisPlan(expr=filtered, ordering=plan.ordering)
     return FilterSpec(predicate).apply_plan(plan)
+
+
+_PLAN_HELPERS_EXPORTS: set[str] = {
+    "apply_hash_projection",
+    "flatten_struct_field",
+    "project_columns",
+    "query_for_schema",
+}
+
+
+def __getattr__(name: str) -> object:
+    if name in _PLAN_HELPERS_EXPORTS:
+        module = importlib.import_module("arrowdsl.plan_helpers")
+        return getattr(module, name)
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
+
+
+def __dir__() -> list[str]:
+    return sorted(list(globals()) + list(_PLAN_HELPERS_EXPORTS))
 
 
 __all__ = [

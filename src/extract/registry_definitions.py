@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Mapping, Sequence
 from functools import cache
+from typing import TYPE_CHECKING, Protocol, cast
 
 from arrowdsl.core.context import OrderingKey
 from extract.registry_template_specs import DATASET_TEMPLATE_SPECS
@@ -14,8 +16,19 @@ from extract.spec_tables import (
     dataset_rows_from_table,
     extract_dataset_table_from_rows,
 )
-from relspec.rules.definitions import ExtractPayload, RuleDefinition, RuleStage
-from relspec.rules.validation import validate_rule_definitions
+
+if TYPE_CHECKING:
+    from relspec.rules.definitions import ExtractPayload, RuleDefinition, RuleStage
+
+
+class _DefinitionsModule(Protocol):
+    ExtractPayload: type[ExtractPayload]
+    RuleDefinition: type[RuleDefinition]
+    RuleStage: type[RuleStage]
+
+
+class _ValidationModule(Protocol):
+    def validate_rule_definitions(self, definitions: Sequence[RuleDefinition]) -> None: ...
 
 DATASET_ROW_RECORDS: tuple[Mapping[str, object], ...] = ()
 
@@ -24,6 +37,30 @@ _TEMPLATE_ROW_RECORDS = expand_dataset_templates(DATASET_TEMPLATE_SPECS)
 EXTRACT_DATASET_TABLE = extract_dataset_table_from_rows(
     (*DATASET_ROW_RECORDS, *_TEMPLATE_ROW_RECORDS)
 )
+
+
+def _definitions_module() -> _DefinitionsModule:
+    return cast("_DefinitionsModule", importlib.import_module("relspec.rules.definitions"))
+
+
+def _validation_module() -> _ValidationModule:
+    return cast("_ValidationModule", importlib.import_module("relspec.rules.validation"))
+
+
+def _extract_payload_cls() -> type[ExtractPayload]:
+    return _definitions_module().ExtractPayload
+
+
+def _rule_definition_cls() -> type[RuleDefinition]:
+    return _definitions_module().RuleDefinition
+
+
+def _rule_stage_cls() -> type[RuleStage]:
+    return _definitions_module().RuleStage
+
+
+def _validate_rule_definitions(definitions: Sequence[RuleDefinition]) -> None:
+    _validation_module().validate_rule_definitions(definitions)
 
 
 @cache
@@ -50,12 +87,12 @@ def extract_rule_definitions() -> tuple[RuleDefinition, ...]:
     specs = dataset_row_specs()
     definitions = tuple(_rule_from_spec(spec) for spec in specs)
     _assert_roundtrip(specs, definitions)
-    validate_rule_definitions(definitions)
     return definitions
 
 
 def _rule_from_spec(spec: ExtractDatasetRowSpec) -> RuleDefinition:
-    payload = ExtractPayload(
+    payload_cls = _extract_payload_cls()
+    payload = payload_cls(
         version=spec.version,
         template=spec.template,
         bundles=spec.bundles,
@@ -72,7 +109,8 @@ def _rule_from_spec(spec: ExtractDatasetRowSpec) -> RuleDefinition:
         evidence_required_columns=spec.evidence_required_columns,
         pipeline_name=spec.pipeline_name or spec.template,
     )
-    return RuleDefinition(
+    definition_cls = _rule_definition_cls()
+    return definition_cls(
         name=spec.name,
         domain="extract",
         kind="extract",
@@ -117,7 +155,7 @@ def _assert_roundtrip(
         if spec is None:
             continue
         payload = definition.payload
-        if not isinstance(payload, ExtractPayload):
+        if not isinstance(payload, _extract_payload_cls()):
             msg = f"RuleDefinition {definition.name!r} missing extract payload."
             raise TypeError(msg)
         if not _payload_matches_spec(payload, spec):
@@ -127,9 +165,10 @@ def _assert_roundtrip(
 
 def _extract_stages(payload: ExtractPayload) -> tuple[RuleStage, ...]:
     enabled_when = _stage_enabled_when(payload)
-    stages = [RuleStage(name="source", mode="source", enabled_when=enabled_when)]
+    stage_cls = _rule_stage_cls()
+    stages = [stage_cls(name="source", mode="source", enabled_when=enabled_when)]
     if payload.postprocess:
-        stages.append(RuleStage(name=payload.postprocess, mode="post_kernel"))
+        stages.append(stage_cls(name=payload.postprocess, mode="post_kernel"))
     return tuple(stages)
 
 

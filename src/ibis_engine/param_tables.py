@@ -15,7 +15,7 @@ import pyarrow.compute as pc
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table
 
-from arrowdsl.schema.schema import schema_fingerprint
+from arrowdsl.schema.serialization import schema_fingerprint
 
 
 class ParamTableScope(Enum):

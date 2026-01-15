@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_core import ENC_UTF8, ENC_UTF16
 from arrowdsl.compute.filters import position_encoding_array
+from arrowdsl.compute.position_encoding import ENC_UTF8, ENC_UTF16
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import ArrayLike, ComputeExpression, TableLike, pc

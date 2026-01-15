@@ -19,7 +19,13 @@ from datafusion_engine.bridge import (
     ibis_plan_to_table,
 )
 from datafusion_engine.compile_options import DataFusionCompileOptions
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.runtime import (
+    AdapterExecutionPolicy,
+    DataFusionRuntimeProfile,
+    ExecutionLabel,
+    apply_execution_label,
+    apply_execution_policy,
+)
 from ibis_engine.expr_compiler import OperationSupportBackend, unsupported_operations
 from ibis_engine.plan import IbisPlan
 
@@ -35,6 +41,8 @@ class DataFusionExecutionOptions:
     options: DataFusionCompileOptions | None = None
     runtime_profile: DataFusionRuntimeProfile | None = None
     allow_fallback: bool = True
+    execution_policy: AdapterExecutionPolicy | None = None
+    execution_label: ExecutionLabel | None = None
     probe_capabilities: bool = True
 
 
@@ -68,6 +76,8 @@ def materialize_plan(
             execution.datafusion.options,
             params=execution.params,
             runtime_profile=execution.datafusion.runtime_profile,
+            execution_policy=execution.datafusion.execution_policy,
+            execution_label=execution.datafusion.execution_label,
         )
         if _force_bridge(options):
             return ibis_plan_to_table(
@@ -135,6 +145,8 @@ def stream_plan(
             execution.datafusion.options,
             params=effective_params,
             runtime_profile=execution.datafusion.runtime_profile,
+            execution_policy=execution.datafusion.execution_policy,
+            execution_label=execution.datafusion.execution_label,
         )
         if _force_bridge(options):
             return ibis_plan_to_reader(
@@ -188,6 +200,8 @@ def plan_to_datafusion(
         execution.options,
         params=params,
         runtime_profile=execution.runtime_profile,
+        execution_policy=execution.execution_policy,
+        execution_label=execution.execution_label,
     )
     return ibis_plan_to_datafusion(
         plan,
@@ -202,14 +216,32 @@ def _resolve_options(
     *,
     params: Mapping[Value, object] | None,
     runtime_profile: DataFusionRuntimeProfile | None,
+    execution_policy: AdapterExecutionPolicy | None,
+    execution_label: ExecutionLabel | None,
 ) -> DataFusionCompileOptions:
-    if options is None:
+    resolved = options
+    if resolved is None:
         if runtime_profile is not None:
-            return runtime_profile.compile_options(params=params)
-        return DataFusionCompileOptions(params=params)
-    if params is None or options.params is not None:
-        return options
-    return replace(options, params=params)
+            return runtime_profile.compile_options(
+                params=params,
+                execution_policy=execution_policy,
+                execution_label=execution_label,
+            )
+        resolved = DataFusionCompileOptions(params=params)
+    elif params is not None and resolved.params is None:
+        resolved = replace(resolved, params=params)
+    if runtime_profile is not None:
+        resolved = apply_execution_label(
+            resolved,
+            execution_label=execution_label,
+            fallback_sink=runtime_profile.labeled_fallbacks,
+            explain_sink=runtime_profile.labeled_explains,
+        )
+    return apply_execution_policy(
+        resolved,
+        execution_policy=execution_policy,
+        execution_label=execution_label,
+    )
 
 
 def _missing_ops(

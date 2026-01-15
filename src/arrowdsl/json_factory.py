@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -12,7 +13,6 @@ from pathlib import Path
 import orjson
 
 from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
-from arrowdsl.schema.schema import schema_to_dict
 
 _UNSET = object()
 
@@ -80,7 +80,8 @@ def _convert_simple(obj: object) -> object:
         Converted value or the internal sentinel when no conversion applies.
     """
     if isinstance(obj, SchemaLike):
-        return schema_to_dict(obj)
+        schema_module = importlib.import_module("arrowdsl.schema.serialization")
+        return schema_module.schema_to_dict(obj)
     if isinstance(obj, DataTypeLike):
         return str(obj)
     if isinstance(obj, Path):

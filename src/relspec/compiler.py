@@ -19,8 +19,11 @@ from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
 from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions, SortKey
 from arrowdsl.plan.query import ScanTelemetry
+from arrowdsl.plan.runner import AdapterRunOptions, run_plan_adapter
 from arrowdsl.schema.build import const_array, set_or_append_column
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
+from config import AdapterMode
+from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from ibis_engine.plan import IbisPlan
 from ibis_engine.plan_bridge import table_to_ibis
 from ibis_engine.query_compiler import apply_query_spec
@@ -55,7 +58,10 @@ from relspec.registry import ContractCatalog, DatasetCatalog
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, dataset_spec_from_contract
 
 KernelFn = Callable[[TableLike, ExecutionContext], TableLike]
-PlanExecutor = Callable[[IbisPlan, ExecutionContext, Mapping[IbisValue, object] | None], TableLike]
+PlanExecutor = Callable[
+    [IbisPlan, ExecutionContext, Mapping[IbisValue, object] | None, ExecutionLabel | None],
+    TableLike,
+]
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -98,6 +104,46 @@ def runtime_telemetry_for_ctx(ctx: ExecutionContext) -> Mapping[str, object]:
     return {"datafusion": profile.telemetry_payload()}
 
 
+def _adapter_plan_executor(
+    *,
+    adapter_mode: AdapterMode | None,
+    execution_policy: AdapterExecutionPolicy | None,
+    ibis_backend: BaseBackend | None,
+) -> PlanExecutor:
+    def _executor(
+        plan: IbisPlan,
+        exec_ctx: ExecutionContext,
+        exec_params: Mapping[IbisValue, object] | None,
+        execution_label: ExecutionLabel | None = None,
+    ) -> TableLike:
+        result = run_plan_adapter(
+            plan,
+            ctx=exec_ctx,
+            options=AdapterRunOptions(
+                adapter_mode=adapter_mode,
+                prefer_reader=False,
+                execution_policy=execution_policy,
+                execution_label=execution_label,
+                ibis_backend=ibis_backend,
+                ibis_params=exec_params,
+            ),
+        )
+        return cast("TableLike", result.value)
+
+    return _executor
+
+
+@dataclass(frozen=True)
+class RuleExecutionOptions:
+    """Execution options for compiled rules."""
+
+    params: Mapping[IbisValue, object] | None = None
+    plan_executor: PlanExecutor | None = None
+    adapter_mode: AdapterMode | None = None
+    execution_policy: AdapterExecutionPolicy | None = None
+    ibis_backend: BaseBackend | None = None
+
+
 class FilesystemPlanResolver:
     """Resolve dataset names to filesystem-backed Ibis tables."""
 
@@ -120,6 +166,7 @@ class FilesystemPlanResolver:
                 runtime_profile=runtime_profile,
             )
         self.registry = registry
+        self.backend: BaseBackend | None = registry.backend
 
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
         """Resolve a dataset reference into a filesystem-backed plan.
@@ -165,7 +212,7 @@ class InMemoryPlanResolver:
         backend: BaseBackend | None = None,
     ) -> None:
         self.mapping = dict(mapping)
-        self.backend = backend
+        self.backend: BaseBackend | None = backend
 
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
         """Resolve a dataset reference into an in-memory plan.
@@ -286,6 +333,7 @@ def _build_rule_meta_kernel(rule: RelationshipRule) -> KernelFn:
     KernelFn
         Kernel that adds rule name and priority columns.
     """
+
     def _add_rule_meta(table: TableLike, _ctx: ExecutionContext) -> TableLike:
         """Append rule metadata columns when missing.
 
@@ -365,6 +413,7 @@ def _build_add_literal_kernel(spec: AddLiteralSpec) -> KernelFn:
     KernelFn
         Kernel that adds the literal column.
     """
+
     def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
         """Add the literal column if it does not exist.
 
@@ -393,6 +442,7 @@ def _build_drop_columns_kernel(spec: DropColumnsSpec) -> KernelFn:
     KernelFn
         Kernel that drops columns from the table.
     """
+
     def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
         """Drop requested columns when present.
 
@@ -420,6 +470,7 @@ def _build_filter_kernel(spec: FilterKernelSpec) -> KernelFn:
     KernelFn
         Kernel that filters a table.
     """
+
     def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
         """Filter rows using the configured predicate.
 
@@ -447,6 +498,7 @@ def _build_rename_columns_kernel(spec: RenameColumnsSpec) -> KernelFn:
     KernelFn
         Kernel that renames columns.
     """
+
     def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
         """Rename columns when a mapping is provided.
 
@@ -477,6 +529,7 @@ def _build_explode_list_kernel(spec: ExplodeListSpec) -> KernelFn:
     KernelFn
         Kernel that explodes list columns.
     """
+
     def _fn(table: TableLike, ctx: ExecutionContext) -> TableLike:
         """Explode list values using the configured kernel.
 
@@ -510,6 +563,7 @@ def _build_dedupe_kernel(spec: DedupeKernelSpec) -> KernelFn:
     KernelFn
         Kernel that deduplicates a table.
     """
+
     def _fn(table: TableLike, ctx: ExecutionContext) -> TableLike:
         """Apply dedupe kernel with schema-derived defaults.
 
@@ -820,7 +874,7 @@ class CompiledRule:
 
     rule: RelationshipRule
     rel_plan: RelPlan | None
-    execute_fn: Callable[[ExecutionContext, PlanResolver[IbisPlan]], TableLike] | None
+    execute_fn: Callable[[ExecutionContext, PlanResolver[IbisPlan], PlanExecutor], TableLike] | None
     post_kernels: tuple[KernelFn, ...] = ()
     emit_rule_meta: bool = True
 
@@ -830,8 +884,7 @@ class CompiledRule:
         ctx: ExecutionContext,
         resolver: PlanResolver[IbisPlan],
         compiler: RelPlanCompiler[IbisPlan],
-        params: Mapping[IbisValue, object] | None = None,
-        plan_executor: PlanExecutor | None = None,
+        options: RuleExecutionOptions | None = None,
     ) -> TableLike:
         """Execute the compiled rule into a table.
 
@@ -843,10 +896,8 @@ class CompiledRule:
             Plan resolver for dataset references.
         compiler:
             Compiler for relationship plans.
-        params:
-            Optional Ibis parameter bindings for plan execution.
-        plan_executor:
-            Optional plan executor override for Ibis plans.
+        options:
+            Optional execution options for plan materialization.
 
         Returns
         -------
@@ -858,14 +909,36 @@ class CompiledRule:
         RuntimeError
             Raised when no execution path is available.
         """
+        options = options or RuleExecutionOptions()
+        label = ExecutionLabel(
+            rule_name=self.rule.name,
+            output_dataset=self.rule.output_dataset,
+        )
+        if options.plan_executor is None:
+            resolved_backend = options.ibis_backend or resolver.backend
+            resolved_executor = _adapter_plan_executor(
+                adapter_mode=options.adapter_mode,
+                execution_policy=options.execution_policy,
+                ibis_backend=resolved_backend,
+            )
+        else:
+            resolved_executor = options.plan_executor
+
+        def _execute_plan(
+            plan: IbisPlan,
+            exec_ctx: ExecutionContext,
+            exec_params: Mapping[IbisValue, object] | None,
+            execution_label: ExecutionLabel | None = None,
+        ) -> TableLike:
+            resolved_params = exec_params if exec_params is not None else options.params
+            effective_label = execution_label or label
+            return resolved_executor(plan, exec_ctx, resolved_params, effective_label)
+
         if self.execute_fn is not None:
-            table = self.execute_fn(ctx, resolver)
+            table = self.execute_fn(ctx, resolver, _execute_plan)
         elif self.rel_plan is not None:
             plan = compiler.compile(self.rel_plan, ctx=ctx, resolver=resolver)
-            if plan_executor is not None:
-                table = plan_executor(plan, ctx, params)
-            else:
-                table = plan.to_table(params=params)
+            table = resolved_executor(plan, ctx, options.params, label)
         else:
             msg = "CompiledRule has neither rel_plan nor execute_fn."
             raise RuntimeError(msg)
@@ -884,6 +957,9 @@ class CompiledOutputExecutionOptions:
     compiler: RelPlanCompiler[IbisPlan] | None = None
     params: Mapping[IbisValue, object] | None = None
     plan_executor: PlanExecutor | None = None
+    adapter_mode: AdapterMode | None = None
+    execution_policy: AdapterExecutionPolicy | None = None
+    ibis_backend: BaseBackend | None = None
 
 
 @dataclass(frozen=True)
@@ -931,13 +1007,19 @@ class CompiledOutput:
             msg = f"CompiledOutput {self.output_dataset!r} has no contributors."
             raise ValueError(msg)
         plan_compiler = options.compiler or IbisRelPlanCompiler()
+        rule_options = RuleExecutionOptions(
+            params=options.params,
+            plan_executor=options.plan_executor,
+            adapter_mode=options.adapter_mode,
+            execution_policy=options.execution_policy,
+            ibis_backend=options.ibis_backend,
+        )
         table_parts = [
             compiled.execute(
                 ctx=ctx_exec,
                 resolver=resolver,
                 compiler=plan_compiler,
-                params=options.params,
-                plan_executor=options.plan_executor,
+                options=rule_options,
             )
             for compiled in self.contributors
         ]
@@ -1144,7 +1226,11 @@ class RelationshipRuleCompiler:
             match_score_col=cfg.match_score_col,
         )
 
-        def _exec(ctx2: ExecutionContext, resolver: PlanResolver[IbisPlan]) -> TableLike:
+        def _exec(
+            ctx2: ExecutionContext,
+            resolver: PlanResolver[IbisPlan],
+            plan_executor: PlanExecutor,
+        ) -> TableLike:
             """Execute interval alignment using resolved input tables.
 
             Returns
@@ -1155,8 +1241,12 @@ class RelationshipRuleCompiler:
             left_ref, right_ref = rule.inputs
             left_plan = resolver.resolve(left_ref, ctx=ctx2)
             right_plan = resolver.resolve(right_ref, ctx=ctx2)
-            lt = left_plan.to_table()
-            rt = right_plan.to_table()
+            label = ExecutionLabel(
+                rule_name=rule.name,
+                output_dataset=rule.output_dataset,
+            )
+            lt = plan_executor(left_plan, ctx2, None, label)
+            rt = plan_executor(right_plan, ctx2, None, label)
             kernel = resolve_kernel("interval_align", ctx=ctx2)
             return kernel(lt, rt, cfg=interval_cfg)
 
@@ -1199,7 +1289,11 @@ class RelationshipRuleCompiler:
             raise ValueError(msg)
         winner_cfg = cfg
 
-        def _exec(ctx2: ExecutionContext, resolver: PlanResolver[IbisPlan]) -> TableLike:
+        def _exec(
+            ctx2: ExecutionContext,
+            resolver: PlanResolver[IbisPlan],
+            plan_executor: PlanExecutor,
+        ) -> TableLike:
             """Execute winner selection using the resolved input table.
 
             Returns
@@ -1209,7 +1303,11 @@ class RelationshipRuleCompiler:
             """
             src_exec = rule.inputs[0]
             plan_exec = resolver.resolve(src_exec, ctx=ctx2)
-            table = plan_exec.to_table()
+            label = ExecutionLabel(
+                rule_name=rule.name,
+                output_dataset=rule.output_dataset,
+            )
+            table = plan_executor(plan_exec, ctx2, None, label)
             kernel = resolve_kernel("winner_select", ctx=ctx2)
             return kernel(
                 table,
@@ -1446,6 +1544,7 @@ __all__ = [
     "InMemoryPlanResolver",
     "PlanResolver",
     "RelationshipRuleCompiler",
+    "RuleExecutionOptions",
     "apply_policy_defaults",
     "validate_policy_requirements",
 ]

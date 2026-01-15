@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.compute.macros import CoalesceExpr, ColumnExpr, ColumnOrNullExpr, ConstExpr, FieldExpr
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
@@ -36,6 +37,30 @@ from arrowdsl.schema.nested_builders import (
     union_array_from_values,
 )
 from arrowdsl.schema.types import list_view_type, map_type
+
+if TYPE_CHECKING:
+    from arrowdsl.compute.macros import (
+        CoalesceExpr,
+        ColumnExpr,
+        ColumnOrNullExpr,
+        ConstExpr,
+        FieldExpr,
+    )
+
+_MACRO_EXPORTS: frozenset[str] = frozenset(
+    (
+        "CoalesceExpr",
+        "ColumnExpr",
+        "ColumnOrNullExpr",
+        "ConstExpr",
+        "FieldExpr",
+    )
+)
+
+
+def _column_or_null_expr() -> type[ColumnOrNullExpr]:
+    macros = importlib.import_module("arrowdsl.compute.macros")
+    return cast("type[ColumnOrNullExpr]", macros.ColumnOrNullExpr)
 
 
 def const_array(n: int, value: object, *, dtype: DataTypeLike | None = None) -> ArrayLike:
@@ -113,7 +138,8 @@ def column_or_null(
     ArrayLike
         Column array or a typed null array.
     """
-    return ColumnOrNullExpr(name=col, dtype=dtype).materialize(table)
+    expr_cls = _column_or_null_expr()
+    return expr_cls(name=col, dtype=dtype).materialize(table)
 
 
 def maybe_dictionary(
@@ -254,6 +280,18 @@ def rows_to_table(rows: Sequence[Mapping[str, object]], schema: SchemaLike) -> T
     if not rows:
         return empty_table(schema)
     return table_from_rows(schema, rows)
+
+
+def __getattr__(name: str) -> object:
+    if name in _MACRO_EXPORTS:
+        macros = importlib.import_module("arrowdsl.compute.macros")
+        return getattr(macros, name)
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
+
+
+def __dir__() -> list[str]:
+    return sorted(__all__)
 
 
 __all__ = [

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import SchemaLike, TableLike
+from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
 from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
 from arrowdsl.schema.metadata import encoding_policy_from_spec
 from arrowdsl.schema.schema import (
@@ -15,10 +16,30 @@ from arrowdsl.schema.schema import (
     SchemaMetadataSpec,
     SchemaTransform,
 )
-from schema_spec.specs import TableSchemaSpec
 
 if TYPE_CHECKING:
     from arrowdsl.schema.validation import ArrowValidationOptions
+
+
+class _ArrowFieldSpec(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def dtype(self) -> DataTypeLike: ...
+
+    @property
+    def metadata(self) -> Mapping[str, str]: ...
+
+    @property
+    def encoding(self) -> str | None: ...
+
+
+class _TableSchemaSpec(Protocol):
+    @property
+    def fields(self) -> Sequence[_ArrowFieldSpec]: ...
+
+    def to_arrow_schema(self) -> SchemaLike: ...
 
 
 @dataclass(frozen=True)
@@ -102,7 +123,7 @@ class SchemaPolicyOptions:
 
 
 def schema_policy_factory(
-    spec: TableSchemaSpec,
+    spec: _TableSchemaSpec,
     *,
     ctx: ExecutionContext,
     options: SchemaPolicyOptions | None = None,

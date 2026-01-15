@@ -13,6 +13,7 @@ from ibis.backends import BaseBackend
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from config import AdapterMode
 from core_types import JsonDict
+from datafusion_engine.runtime import AdapterExecutionPolicy
 from extract.scip_extract import SCIPParseOptions
 from hamilton_pipeline.pipeline_types import (
     OutputConfig,
@@ -25,6 +26,7 @@ from hamilton_pipeline.pipeline_types import (
 )
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
+from ibis_engine.execution import IbisAdapterExecution
 
 
 def _incremental_pipeline_enabled() -> bool:
@@ -66,6 +68,28 @@ def ibis_backend(ibis_backend_config: IbisBackendConfig) -> BaseBackend:
         Backend instance for Ibis execution.
     """
     return build_backend(ibis_backend_config)
+
+
+@tag(layer="inputs", kind="runtime")
+def ibis_execution(
+    ctx: ExecutionContext,
+    adapter_mode: AdapterMode,
+    adapter_execution_policy: AdapterExecutionPolicy,
+    ibis_backend: BaseBackend,
+) -> IbisAdapterExecution:
+    """Bundle adapter execution settings for Ibis plans.
+
+    Returns
+    -------
+    IbisAdapterExecution
+        Execution context used by adapterized Ibis materialization.
+    """
+    return IbisAdapterExecution(
+        ctx=ctx,
+        adapter_mode=adapter_mode,
+        execution_policy=adapter_execution_policy,
+        ibis_backend=ibis_backend,
+    )
 
 
 @tag(layer="inputs", kind="runtime")
@@ -114,6 +138,27 @@ def adapter_mode(ctx: ExecutionContext) -> AdapterMode:
     if flag in {"1", "true", "yes", "y"}:
         return replace(mode, use_datafusion_bridge=True)
     return mode
+
+
+@tag(layer="inputs", kind="runtime")
+def adapter_execution_policy(ctx: ExecutionContext) -> AdapterExecutionPolicy:
+    """Return the execution policy for adapter fallback behavior.
+
+    Returns
+    -------
+    AdapterExecutionPolicy
+        Policy that governs fallback and strictness behavior.
+    """
+    policy = AdapterExecutionPolicy()
+    if ctx.mode == "strict":
+        policy = replace(policy, fail_on_fallback=True)
+    strict_flag = os.environ.get("CODEANATOMY_STRICT_FALLBACK", "").strip().lower()
+    if strict_flag in {"1", "true", "yes", "y"}:
+        policy = replace(policy, fail_on_fallback=True)
+    disable_flag = os.environ.get("CODEANATOMY_DISABLE_FALLBACK", "").strip().lower()
+    if disable_flag in {"1", "true", "yes", "y"}:
+        policy = replace(policy, allow_fallback=False)
+    return policy
 
 
 @tag(layer="inputs", kind="object")

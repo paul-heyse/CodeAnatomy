@@ -45,6 +45,7 @@ from cpg.relationship_plans import (
     compile_relation_plans_ibis,
 )
 from cpg.specs import EdgePlanSpec
+from datafusion_engine.runtime import AdapterExecutionPolicy
 from ibis_engine.plan import IbisPlan
 from ibis_engine.plan_bridge import register_ibis_view
 
@@ -238,6 +239,8 @@ def _edge_relation_context(
                 materialize_debug=config.materialize_relation_outputs,
                 required_sources=config.required_relation_sources,
                 backend=config.ibis_backend,
+                adapter_mode=config.adapter_mode,
+                execution_policy=config.execution_policy,
             ),
         )
     else:
@@ -248,6 +251,9 @@ def _edge_relation_context(
                 rule_table=relation_rule_table,
                 materialize_debug=config.materialize_relation_outputs,
                 required_sources=config.required_relation_sources,
+                backend=config.ibis_backend,
+                adapter_mode=config.adapter_mode,
+                execution_policy=config.execution_policy,
             ),
         )
     return EdgeRelationContext(
@@ -273,6 +279,7 @@ class EdgeBuildConfig:
     materialize_relation_outputs: bool | None = None
     required_relation_sources: tuple[str, ...] | None = None
     adapter_mode: AdapterMode | None = None
+    execution_policy: AdapterExecutionPolicy | None = None
     ibis_backend: BaseBackend | None = None
 
 
@@ -289,6 +296,7 @@ def _resolve_edge_config(config: EdgeBuildConfig | None) -> EdgeBuildConfig:
         materialize_relation_outputs=resolved.materialize_relation_outputs,
         required_relation_sources=resolved.required_relation_sources,
         adapter_mode=resolved.adapter_mode,
+        execution_policy=resolved.execution_policy,
         ibis_backend=resolved.ibis_backend,
     )
 
@@ -413,6 +421,7 @@ def build_cpg_edges(
             options=FinalizePlanAdapterOptions(
                 adapter_mode=config.adapter_mode,
                 prefer_reader=True,
+                execution_policy=config.execution_policy,
                 ibis_backend=config.ibis_backend,
             ),
         )

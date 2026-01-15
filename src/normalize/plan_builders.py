@@ -8,11 +8,27 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.catalog import PlanCatalog, PlanDeriver
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.runner import run_plan
+from arrowdsl.plan.runner_types import PlanRunResultProto, plan_runner_module
 from arrowdsl.plan.scan_io import PlanSource, plan_from_source
 from normalize.bytecode_cfg_plans import cfg_blocks_plan, cfg_edges_plan
 from normalize.bytecode_dfg_plans import def_use_events_plan, reaching_defs_plan
 from normalize.types_plans import type_exprs_plan, type_nodes_plan
+
+
+def _run_plan(
+    plan: Plan,
+    *,
+    ctx: ExecutionContext,
+    prefer_reader: bool,
+    attach_ordering_metadata: bool,
+) -> PlanRunResultProto:
+    module = plan_runner_module()
+    return module.run_plan(
+        plan,
+        ctx=ctx,
+        prefer_reader=prefer_reader,
+        attach_ordering_metadata=attach_ordering_metadata,
+    )
 
 
 def type_exprs_builder(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan | None:
@@ -167,7 +183,7 @@ def _table_from_source(source: PlanSource | None, *, ctx: ExecutionContext) -> T
     if isinstance(source, TableLike):
         return source
     if isinstance(source, Plan):
-        result = run_plan(
+        result = _run_plan(
             source,
             ctx=ctx,
             prefer_reader=True,
@@ -175,7 +191,7 @@ def _table_from_source(source: PlanSource | None, *, ctx: ExecutionContext) -> T
         )
         return _materialize_table(result.value)
     plan = plan_from_source(source, ctx=ctx, label="normalize_rule_source")
-    result = run_plan(
+    result = _run_plan(
         plan,
         ctx=ctx,
         prefer_reader=True,

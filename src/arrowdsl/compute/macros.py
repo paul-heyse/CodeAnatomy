@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol, cast
@@ -11,9 +12,11 @@ import pyarrow.types as patypes
 
 from arrowdsl.compile.expr_compiler import ExprCompiler
 from arrowdsl.compute.expr_core import ExprSpec, cast_expr
-from arrowdsl.compute.filters import ensure_expr_context_udf, ensure_position_encoding_udf
-from arrowdsl.compute.kernels import def_use_kind_array
 from arrowdsl.compute.predicates import InSet, IsNull, Not, predicate_spec
+from arrowdsl.compute.udf_helpers import (
+    ensure_expr_context_udf,
+    ensure_position_encoding_udf,
+)
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
@@ -28,6 +31,14 @@ from arrowdsl.ir.expr import ExprNode
 
 class ColumnExpr(ExprSpec, Protocol):
     """Alias for expression specs used as column expressions."""
+
+
+type _DefUseFn = Callable[..., ArrayLike]
+
+
+def _def_use_kind_array_fn() -> _DefUseFn:
+    module = importlib.import_module("arrowdsl.compute.kernels")
+    return cast("_DefUseFn", module.def_use_kind_array)
 
 
 @dataclass(frozen=True)
@@ -338,6 +349,7 @@ class DefUseKindExprSpec:
         ArrayLike
             Def/use classification array.
         """
+        def_use_kind_array = _def_use_kind_array_fn()
         return def_use_kind_array(
             table[self.column],
             def_ops=tuple(self.def_ops),

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from arrowdsl.plan.metrics import column_stats_table, dataset_stats_table, table_summary
-from arrowdsl.schema.schema import schema_fingerprint
+from arrowdsl.schema.serialization import schema_fingerprint
 from obs.manifest import (
     DatasetRecord,
     Manifest,

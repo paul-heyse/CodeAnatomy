@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Literal, TypedDict, Unpack, cast
+from typing import TYPE_CHECKING, Literal, Protocol, TypedDict, Unpack, cast
 
 import ibis
 import pyarrow as pa
@@ -20,8 +21,7 @@ from arrowdsl.finalize.finalize import Contract, FinalizeContext
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import PathLike, ProjectionSpec, QuerySpec, open_dataset
-from arrowdsl.plan.runner import run_plan
-from arrowdsl.plan.scan_io import DatasetSource, PlanSource, plan_from_dataset, plan_from_source
+from arrowdsl.plan.runner_types import PlanRunResultProto, plan_runner_module
 from arrowdsl.schema.metadata import (
     encoding_policy_from_spec,
     merge_metadata_specs,
@@ -44,13 +44,6 @@ from arrowdsl.schema.validation import (
     validate_table,
 )
 from arrowdsl.spec.io import read_spec_table
-from arrowdsl.spec.tables.schema import (
-    SchemaSpecTables,
-    contract_specs_from_table,
-    dataset_specs_from_tables,
-    table_specs_from_tables,
-)
-from ibis_engine.registry import ReadDatasetParams, read_dataset
 from schema_spec.specs import (
     ENCODING_DICTIONARY,
     ENCODING_META,
@@ -60,6 +53,10 @@ from schema_spec.specs import (
     FieldBundle,
     TableSchemaSpec,
 )
+
+if TYPE_CHECKING:
+    from arrowdsl.plan.scan_io import DatasetSource, PlanSource
+    from arrowdsl.spec.tables.schema import SchemaSpecTables
 
 
 def validate_arrow_table(
@@ -310,10 +307,10 @@ class DatasetSpec:
 
     def _plan_for_validation(self, source: PlanSource, *, ctx: ExecutionContext) -> Plan:
         if isinstance(source, ds.Dataset):
-            return plan_from_dataset(source, spec=self, ctx=ctx)
-        if isinstance(source, DatasetSource):
-            return plan_from_dataset(source.dataset, spec=self, ctx=ctx)
-        return plan_from_source(source, ctx=ctx, label=f"{self.name}_validate")
+            return _plan_from_dataset(source, spec=self, ctx=ctx)
+        if isinstance(source, _dataset_source_class()):
+            return _plan_from_dataset(source.dataset, spec=self, ctx=ctx)
+        return _plan_from_source(source, ctx=ctx, label=f"{self.name}_validate")
 
     def validation_plans(self, source: PlanSource, *, ctx: ExecutionContext) -> ValidationPlans:
         """Return plan-lane validation pipelines for invalid rows and duplicate keys.
@@ -406,19 +403,165 @@ class ValidationPlans:
         tuple[TableLike, TableLike]
             Invalid rows and duplicate key tables.
         """
-        invalid = run_plan(
+        invalid = _run_plan(
             self.invalid_rows,
             ctx=ctx,
             prefer_reader=False,
             attach_ordering_metadata=True,
         ).value
-        dupes = run_plan(
+        dupes = _run_plan(
             self.duplicate_keys,
             ctx=ctx,
             prefer_reader=False,
             attach_ordering_metadata=True,
         ).value
         return cast("TableLike", invalid), cast("TableLike", dupes)
+
+
+
+def _run_plan(
+    plan: Plan,
+    *,
+    ctx: ExecutionContext,
+    prefer_reader: bool,
+    attach_ordering_metadata: bool,
+) -> PlanRunResultProto:
+    module = plan_runner_module()
+    return module.run_plan(
+        plan,
+        ctx=ctx,
+        prefer_reader=prefer_reader,
+        attach_ordering_metadata=attach_ordering_metadata,
+    )
+
+
+class _ScanIOModule(Protocol):
+    DatasetSource: type[DatasetSource]
+
+    def plan_from_dataset(
+        self,
+        dataset: ds.Dataset,
+        *,
+        spec: DatasetSpec,
+        ctx: ExecutionContext,
+    ) -> Plan: ...
+
+    def plan_from_source(
+        self,
+        source: PlanSource,
+        *,
+        ctx: ExecutionContext,
+        label: str,
+    ) -> Plan: ...
+
+
+def _scan_io_module() -> _ScanIOModule:
+    return cast("_ScanIOModule", importlib.import_module("arrowdsl.plan.scan_io"))
+
+
+def _dataset_source_class() -> type[DatasetSource]:
+    return _scan_io_module().DatasetSource
+
+
+def _plan_from_dataset(
+    dataset: ds.Dataset,
+    *,
+    spec: DatasetSpec,
+    ctx: ExecutionContext,
+) -> Plan:
+    return _scan_io_module().plan_from_dataset(dataset, spec=spec, ctx=ctx)
+
+
+def _plan_from_source(
+    source: PlanSource,
+    *,
+    ctx: ExecutionContext,
+    label: str,
+) -> Plan:
+    return _scan_io_module().plan_from_source(source, ctx=ctx, label=label)
+
+
+class _SpecTablesModule(Protocol):
+    SchemaSpecTables: type[SchemaSpecTables]
+
+    def table_specs_from_tables(
+        self,
+        field_table: pa.Table,
+        *,
+        constraints_table: pa.Table | None = None,
+    ) -> dict[str, TableSchemaSpec]: ...
+
+    def contract_specs_from_table(
+        self,
+        contract_table: pa.Table,
+        table_specs: dict[str, TableSchemaSpec],
+    ) -> dict[str, ContractSpec]: ...
+
+    def dataset_specs_from_tables(
+        self,
+        field_table: pa.Table,
+        *,
+        constraints_table: pa.Table | None = None,
+        contract_table: pa.Table | None = None,
+    ) -> dict[str, DatasetSpec]: ...
+
+
+def _spec_tables_module() -> _SpecTablesModule:
+    return cast("_SpecTablesModule", importlib.import_module("arrowdsl.spec.tables.schema"))
+
+
+def _schema_spec_tables_class() -> type[SchemaSpecTables]:
+    return _spec_tables_module().SchemaSpecTables
+
+
+def _table_specs_from_tables(
+    field_table: pa.Table,
+    *,
+    constraints_table: pa.Table | None = None,
+) -> dict[str, TableSchemaSpec]:
+    return _spec_tables_module().table_specs_from_tables(
+        field_table,
+        constraints_table=constraints_table,
+    )
+
+
+def _contract_specs_from_table(
+    contract_table: pa.Table,
+    table_specs: dict[str, TableSchemaSpec],
+) -> dict[str, ContractSpec]:
+    return _spec_tables_module().contract_specs_from_table(contract_table, table_specs)
+
+
+def _dataset_specs_from_tables(
+    field_table: pa.Table,
+    *,
+    constraints_table: pa.Table | None = None,
+    contract_table: pa.Table | None = None,
+) -> dict[str, DatasetSpec]:
+    return _spec_tables_module().dataset_specs_from_tables(
+        field_table,
+        constraints_table=constraints_table,
+        contract_table=contract_table,
+    )
+
+
+class _ReadDatasetParams(Protocol):
+    def __init__(self, **kwargs: object) -> None: ...
+
+
+class _IbisRegistryModule(Protocol):
+    ReadDatasetParams: type[_ReadDatasetParams]
+
+    def read_dataset(
+        self,
+        backend: ibis.backends.BaseBackend,
+        *,
+        params: _ReadDatasetParams,
+    ) -> Table: ...
+
+
+def _ibis_registry_module() -> _IbisRegistryModule:
+    return cast("_IbisRegistryModule", importlib.import_module("ibis_engine.registry"))
 
 
 @dataclass(frozen=True)
@@ -461,17 +604,16 @@ class DatasetOpenSpec:
         ibis.expr.types.Table
             Ibis table expression for the dataset.
         """
-        return read_dataset(
-            backend,
-            params=ReadDatasetParams(
-                path=path,
-                dataset_format=self.dataset_format,
-                read_options=self.read_options,
-                filesystem=self.filesystem,
-                partitioning=self.partitioning,
-                table_name=table_name,
-            ),
+        module = _ibis_registry_module()
+        params = module.ReadDatasetParams(
+            path=path,
+            dataset_format=self.dataset_format,
+            read_options=self.read_options,
+            filesystem=self.filesystem,
+            partitioning=self.partitioning,
+            table_name=table_name,
         )
+        return module.read_dataset(backend, params=params)
 
 
 @dataclass(frozen=True)
@@ -830,11 +972,11 @@ def contract_catalog_spec_from_tables(
     ContractCatalogSpec
         Catalog spec derived from the provided tables.
     """
-    table_specs = table_specs_from_tables(field_table, constraints_table=constraints_table)
+    table_specs = _table_specs_from_tables(field_table, constraints_table=constraints_table)
     if contract_table is None:
         return ContractCatalogSpec(contracts={})
     return ContractCatalogSpec(
-        contracts=contract_specs_from_table(contract_table, table_specs),
+        contracts=_contract_specs_from_table(contract_table, table_specs),
     )
 
 
@@ -901,7 +1043,7 @@ class SchemaRegistry:
         dict[str, DatasetSpec]
             Mapping of dataset names to registered specs.
         """
-        dataset_specs = dataset_specs_from_tables(
+        dataset_specs = _dataset_specs_from_tables(
             tables.field_table,
             constraints_table=tables.constraints_table,
             contract_table=tables.contract_table,
@@ -924,7 +1066,7 @@ class SchemaRegistry:
         dict[str, DatasetSpec]
             Mapping of dataset names to registered specs.
         """
-        tables = SchemaSpecTables(
+        tables = _schema_spec_tables_class()(
             field_table=read_spec_table(field_table),
             constraints_table=read_spec_table(constraints_table)
             if constraints_table is not None

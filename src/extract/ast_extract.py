@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, ov
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.runner import AdapterRunOptions, run_plan_adapter, run_plan_bundle_adapter
+from arrowdsl.plan.runner_types import (
+    AdapterRunOptionsProto,
+    PlanRunResultProto,
+    plan_runner_module,
+)
 from extract.helpers import (
     ExtractExecutionContext,
     FileContext,
@@ -29,7 +33,51 @@ from extract.schema_ops import ExtractNormalizeOptions, metadata_spec_for_datase
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
+    from arrowdsl.schema.schema import SchemaMetadataSpec
     from extract.evidence_plan import EvidencePlan
+
+
+def _adapter_run_options(
+    context: ExtractExecutionContext,
+    *,
+    metadata_spec: SchemaMetadataSpec | None = None,
+    prefer_reader: bool = False,
+) -> AdapterRunOptionsProto:
+    module = plan_runner_module()
+    return module.AdapterRunOptions(
+        adapter_mode=context.adapter_mode,
+        prefer_reader=prefer_reader,
+        metadata_spec=metadata_spec,
+        attach_ordering_metadata=True,
+        execution_policy=context.execution_policy,
+        ibis_backend=context.ibis_backend,
+    )
+
+
+def _run_plan_adapter(
+    plan: Plan | IbisPlan,
+    *,
+    ctx: ExecutionContext,
+    options: AdapterRunOptionsProto | None,
+) -> PlanRunResultProto:
+    module = plan_runner_module()
+    return module.run_plan_adapter(plan, ctx=ctx, options=options)
+
+
+def _run_plan_bundle_adapter(
+    plans: Mapping[str, Plan | IbisPlan],
+    *,
+    ctx: ExecutionContext,
+    options: AdapterRunOptionsProto | None,
+    metadata_specs: Mapping[str, SchemaMetadataSpec] | None = None,
+) -> Mapping[str, TableLike | RecordBatchReaderLike]:
+    module = plan_runner_module()
+    return module.run_plan_bundle_adapter(
+        plans,
+        ctx=ctx,
+        options=options,
+        metadata_specs=metadata_specs,
+    )
 
 
 @dataclass(frozen=True)
@@ -293,38 +341,26 @@ def extract_ast(
     return ASTExtractResult(
         py_ast_nodes=cast(
             "TableLike",
-            run_plan_adapter(
+            _run_plan_adapter(
                 plans["ast_nodes"],
                 ctx=ctx,
-                options=AdapterRunOptions(
-                    adapter_mode=exec_context.adapter_mode,
-                    metadata_spec=nodes_meta,
-                    attach_ordering_metadata=True,
-                ),
+                options=_adapter_run_options(exec_context, metadata_spec=nodes_meta),
             ).value,
         ),
         py_ast_edges=cast(
             "TableLike",
-            run_plan_adapter(
+            _run_plan_adapter(
                 plans["ast_edges"],
                 ctx=ctx,
-                options=AdapterRunOptions(
-                    adapter_mode=exec_context.adapter_mode,
-                    metadata_spec=edges_meta,
-                    attach_ordering_metadata=True,
-                ),
+                options=_adapter_run_options(exec_context, metadata_spec=edges_meta),
             ).value,
         ),
         py_ast_errors=cast(
             "TableLike",
-            run_plan_adapter(
+            _run_plan_adapter(
                 plans["ast_errors"],
                 ctx=ctx,
-                options=AdapterRunOptions(
-                    adapter_mode=exec_context.adapter_mode,
-                    metadata_spec=errors_meta,
-                    attach_ordering_metadata=True,
-                ),
+                options=_adapter_run_options(exec_context, metadata_spec=errors_meta),
             ).value,
         ),
     )
@@ -491,18 +527,14 @@ def extract_ast_tables(
     nodes_meta = metadata_spec_for_dataset("py_ast_nodes_v1", options=normalized_options)
     edges_meta = metadata_spec_for_dataset("py_ast_edges_v1", options=normalized_options)
 
-    return run_plan_bundle_adapter(
+    return _run_plan_bundle_adapter(
         {
             "ast_nodes": plans["ast_nodes"],
             "ast_edges": plans["ast_edges"],
             "ast_defs": defs_plan,
         },
         ctx=ctx,
-        options=AdapterRunOptions(
-            adapter_mode=exec_context.adapter_mode,
-            prefer_reader=prefer_reader,
-            attach_ordering_metadata=True,
-        ),
+        options=_adapter_run_options(exec_context, prefer_reader=prefer_reader),
         metadata_specs={
             "ast_nodes": nodes_meta,
             "ast_edges": edges_meta,

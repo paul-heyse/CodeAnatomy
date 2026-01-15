@@ -13,29 +13,19 @@ from sqlglot import exp
 from arrowdsl.compute.expr_core import ExprSpec
 from arrowdsl.core import interop
 from arrowdsl.core.interop import DataTypeLike, FieldLike, SchemaLike
+from arrowdsl.core.schema_constants import (
+    KEY_FIELDS_META,
+    PROVENANCE_COLS,
+    PROVENANCE_SOURCE_FIELDS,
+    REQUIRED_NON_NULL_META,
+    SCHEMA_META_NAME,
+    SCHEMA_META_VERSION,
+)
 from arrowdsl.schema.build import list_view_type
 from arrowdsl.schema.metadata import ENCODING_DICTIONARY, ENCODING_META, dict_field_metadata
 from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTransform
 
-SCHEMA_META_NAME = b"schema_name"
-SCHEMA_META_VERSION = b"schema_version"
-REQUIRED_NON_NULL_META = b"required_non_null"
-KEY_FIELDS_META = b"key_fields"
 DICT_STRING = interop.dictionary(interop.int32(), interop.string())
-
-PROVENANCE_COLS: tuple[str, ...] = (
-    "prov_filename",
-    "prov_fragment_index",
-    "prov_batch_index",
-    "prov_last_in_fragment",
-)
-
-PROVENANCE_SOURCE_FIELDS: dict[str, str] = {
-    "prov_filename": "__filename",
-    "prov_fragment_index": "__fragment_index",
-    "prov_batch_index": "__batch_index",
-    "prov_last_in_fragment": "__last_in_fragment",
-}
 
 
 def schema_metadata(name: str, version: int | None) -> dict[bytes, bytes]:

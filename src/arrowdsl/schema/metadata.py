@@ -3,32 +3,34 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 import pyarrow as pa
 import pyarrow.types as patypes
 
 from arrowdsl.core.context import Ordering, OrderingKey, OrderingLevel
 from arrowdsl.core.interop import ArrayLike, DataTypeLike, FieldLike, SchemaLike, TableLike
+from arrowdsl.core.schema_constants import (
+    KEY_FIELDS_META,
+    PROVENANCE_COLS,
+    REQUIRED_NON_NULL_META,
+    SCHEMA_META_NAME,
+    SCHEMA_META_VERSION,
+)
 from arrowdsl.json_factory import JsonPolicy, dumps_bytes, loads
 from arrowdsl.schema.encoding_policy import EncodingPolicy, EncodingSpec
 from arrowdsl.schema.nested_builders import (
     dictionary_array_from_indices as _dictionary_from_indices,
 )
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from schema_spec import PROVENANCE_COLS
-from schema_spec.specs import (
-    KEY_FIELDS_META,
-    REQUIRED_NON_NULL_META,
-    SCHEMA_META_NAME,
-    SCHEMA_META_VERSION,
-    TableSchemaSpec,
-    schema_metadata_for_spec,
-)
+
+if TYPE_CHECKING:
+    from schema_spec.specs import TableSchemaSpec
 
 _POSITION_COLS: tuple[str, ...] = (
     "ast_idx",
@@ -604,6 +606,22 @@ def _split_names(raw: bytes | None) -> tuple[str, ...]:
     return tuple(name for name in text.split(",") if name)
 
 
+def schema_metadata_for_spec(spec: TableSchemaSpec) -> dict[bytes, bytes]:
+    """Return schema metadata for the given schema spec.
+
+    Returns
+    -------
+    dict[bytes, bytes]
+        Encoded schema metadata mapping.
+    """
+    module = importlib.import_module("schema_spec.specs")
+    metadata_fn = cast(
+        "Callable[[TableSchemaSpec], dict[bytes, bytes]]",
+        module.schema_metadata_for_spec,
+    )
+    return metadata_fn(spec)
+
+
 def apply_spec_metadata(spec: TableSchemaSpec) -> SchemaMetadataSpec:
     """Return a metadata spec for the provided schema spec.
 
@@ -654,6 +672,18 @@ def schema_constraints_from_metadata(
     required = _split_names(metadata.get(REQUIRED_NON_NULL_META))
     key_fields = _split_names(metadata.get(KEY_FIELDS_META))
     return required, key_fields
+
+
+def __getattr__(name: str) -> object:
+    if name == "TableSchemaSpec":
+        module = importlib.import_module("schema_spec.specs")
+        return getattr(module, name)
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
+
+
+def __dir__() -> list[str]:
+    return sorted([*list(globals()), "TableSchemaSpec"])
 
 
 __all__ = [

@@ -27,6 +27,7 @@ from cpg.build_nodes import NodeInputTables, build_cpg_nodes
 from cpg.build_props import PropsInputTables, build_cpg_props
 from cpg.constants import CpgBuildArtifacts
 from cpg.schemas import register_cpg_specs
+from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from hamilton_pipeline.pipeline_types import (
     CpgBaseInputs,
     CpgExtraInputs,
@@ -150,6 +151,7 @@ class RelationshipExecutionContext:
 
     ctx: ExecutionContext
     adapter_mode: AdapterMode
+    execution_policy: AdapterExecutionPolicy
     ibis_backend: BaseBackend
     relspec_param_bindings: Mapping[IbisValue, object]
 
@@ -158,6 +160,7 @@ class RelationshipExecutionContext:
 def relationship_execution_context(
     ctx: ExecutionContext,
     adapter_mode: AdapterMode,
+    adapter_execution_policy: AdapterExecutionPolicy,
     ibis_backend: BaseBackend,
     relspec_param_bindings: Mapping[IbisValue, object],
 ) -> RelationshipExecutionContext:
@@ -171,6 +174,7 @@ def relationship_execution_context(
     return RelationshipExecutionContext(
         ctx=ctx,
         adapter_mode=adapter_mode,
+        execution_policy=adapter_execution_policy,
         ibis_backend=ibis_backend,
         relspec_param_bindings=relspec_param_bindings,
     )
@@ -802,6 +806,13 @@ class _CompositePlanResolver(PlanResolver[IbisPlan]):
     primary: PlanResolver[IbisPlan]
     fallback: PlanResolver[IbisPlan]
     primary_names: frozenset[str]
+    backend: BaseBackend | None = None
+
+    def __post_init__(self) -> None:
+        if self.backend is not None:
+            return
+        resolved = self.primary.backend or self.fallback.backend
+        object.__setattr__(self, "backend", resolved)
 
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
         if ref.name in self.primary_names:
@@ -926,6 +937,7 @@ def relationship_tables(
     """
     exec_ctx = relationship_execution_context.ctx
     adapter_mode = relationship_execution_context.adapter_mode
+    execution_policy = relationship_execution_context.execution_policy
     ibis_backend = relationship_execution_context.ibis_backend
     relspec_param_bindings = relationship_execution_context.relspec_param_bindings
 
@@ -933,6 +945,7 @@ def relationship_tables(
         plan: IbisPlan,
         exec_ctx: ExecutionContext,
         params: Mapping[IbisValue, object] | None,
+        execution_label: ExecutionLabel | None = None,
     ) -> TableLike:
         result = run_plan_adapter(
             plan,
@@ -940,6 +953,8 @@ def relationship_tables(
             options=AdapterRunOptions(
                 adapter_mode=adapter_mode,
                 prefer_reader=False,
+                execution_policy=execution_policy,
+                execution_label=execution_label,
                 ibis_backend=ibis_backend,
                 ibis_params=params,
             ),
@@ -951,6 +966,9 @@ def relationship_tables(
         contracts=relationship_contracts,
         params=relspec_param_bindings,
         plan_executor=_executor,
+        adapter_mode=adapter_mode,
+        execution_policy=execution_policy,
+        ibis_backend=ibis_backend,
     )
     for key, compiled in compiled_relationship_outputs.items():
         res = compiled.execute(
@@ -1333,6 +1351,7 @@ def cpg_edges_finalize(
     ctx: ExecutionContext,
     cpg_edge_inputs: EdgeBuildInputs,
     adapter_mode: AdapterMode,
+    adapter_execution_policy: AdapterExecutionPolicy,
     ibis_backend: BaseBackend,
 ) -> CpgBuildArtifacts:
     """Build finalized CPG edges with quality artifacts.
@@ -1347,6 +1366,7 @@ def cpg_edges_finalize(
         config=EdgeBuildConfig(
             inputs=cpg_edge_inputs,
             adapter_mode=adapter_mode,
+            execution_policy=adapter_execution_policy,
             ibis_backend=ibis_backend,
         ),
     )

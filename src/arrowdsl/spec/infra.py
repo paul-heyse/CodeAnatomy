@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TypedDict, Unpack
+from functools import cache
+from typing import TYPE_CHECKING, TypedDict, Unpack, cast
 
 import pyarrow as pa
 
 from arrowdsl.compute.expr_core import ExprSpec
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, SchemaLike, TableLike, ensure_expression, pc
-from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec, SchemaTransform
 from arrowdsl.schema.validation import ArrowValidationOptions, ValidationReport, validate_table
@@ -26,6 +27,16 @@ from schema_spec.system import (
     register_dataset_spec,
     table_spec_from_schema,
 )
+
+if TYPE_CHECKING:
+    from arrowdsl.plan.plan import Plan
+
+
+@cache
+def _plan_class() -> type[Plan]:
+    module = importlib.import_module("arrowdsl.plan.plan")
+    return cast("type[Plan]", module.Plan)
+
 
 SORT_KEY_STRUCT = pa.struct(
     [
@@ -207,7 +218,8 @@ class SpecValidationSuite:
         TableLike
             Invalid rows table.
         """
-        plan = Plan.table_source(table, label="spec_validate")
+        plan_cls = _plan_class()
+        plan = plan_cls.table_source(table, label="spec_validate")
         return self.invalid_rows_plan(plan, ctx=ctx).to_table(ctx=ctx)
 
 

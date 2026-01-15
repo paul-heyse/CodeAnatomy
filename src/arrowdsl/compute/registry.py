@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import DataTypeLike, pc
-from arrowdsl.ops.catalog import Lane
+
+if TYPE_CHECKING:
+    from arrowdsl.core.context import ExecutionContext
 
 type UdfFn = Callable[..., object]
 type Volatility = Literal["immutable", "stable", "volatile"]
+type Lane = Literal["datafusion", "acero", "kernel"]
 
 
 @dataclass(frozen=True)

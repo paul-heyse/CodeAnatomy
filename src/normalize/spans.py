@@ -465,9 +465,7 @@ def ast_range_to_byte_span(
             end_exclusive_value = _normalize_end_exclusive(
                 span.end_exclusive, default_exclusive=True
             )
-            end_col_norm = _normalize_end_col(
-                int(span.end_col), end_exclusive=end_exclusive_value
-            )
+            end_col_norm = _normalize_end_col(int(span.end_col), end_exclusive=end_exclusive_value)
             candidate = line_char_to_byte_offset(
                 fidx,
                 end_line0,

@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Literal, Protocol, TypeVar, cast
 
 import ibis
+from ibis.backends import BaseBackend
 from ibis.expr.datatypes import DataType
 from ibis.expr.types import BooleanValue, Scalar
 from ibis.expr.types import Table as IbisTable
@@ -47,6 +48,11 @@ JoinKind = Literal[
 
 class PlanResolver(Protocol[PlanT_co]):
     """Resolve a ``DatasetRef`` to an executable plan."""
+
+    @property
+    def backend(self) -> BaseBackend | None:
+        """Return the backend associated with this resolver."""
+        ...
 
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> PlanT_co:
         """Resolve a dataset reference into a plan."""

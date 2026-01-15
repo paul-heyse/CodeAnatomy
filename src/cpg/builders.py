@@ -9,7 +9,6 @@ import pyarrow as pa
 
 from arrowdsl.compute.filters import FilterSpec, predicate_spec, valid_mask_array
 from arrowdsl.compute.ids import prefixed_hash_id
-from arrowdsl.compute.kernels import ChunkPolicy
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import (
@@ -32,6 +31,7 @@ from arrowdsl.schema.build import (
     table_from_arrays,
     table_from_schema,
 )
+from arrowdsl.schema.chunking import ChunkPolicy
 from cpg.catalog import PlanCatalog, PlanSource, resolve_plan_source
 from cpg.kinds_ultimate import EntityKind
 from cpg.plan_specs import ensure_plan

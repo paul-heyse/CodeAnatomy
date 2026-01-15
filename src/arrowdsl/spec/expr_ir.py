@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pyarrow as pa
 from ibis.expr.types import Table, Value
@@ -41,7 +42,9 @@ from arrowdsl.spec.codec import (
     encode_scalar_union,
 )
 from arrowdsl.spec.infra import SCALAR_UNION_TYPE
-from ibis_engine.expr_compiler import IbisExprRegistry, expr_ir_to_ibis
+
+if TYPE_CHECKING:
+    from ibis_engine.expr_compiler import IbisExprRegistry
 
 
 def _options_bytes(options: FunctionOptionsPayload | None) -> bytes | None:
@@ -217,7 +220,10 @@ class ExprIR:
         ibis.expr.types.Value
             Ibis expression for the provided ExprIR node.
         """
-        registry = registry or IbisExprRegistry()
+        module = importlib.import_module("ibis_engine.expr_compiler")
+        registry_cls = cast("type[object]", module.IbisExprRegistry)
+        expr_ir_to_ibis = cast("Callable[..., Value]", module.expr_ir_to_ibis)
+        registry = registry or cast("IbisExprRegistry", registry_cls())
         return expr_ir_to_ibis(self, table, registry=registry)
 
     def to_json(self) -> str:

@@ -41,9 +41,7 @@ class EncodingPolicy:
             object.__setattr__(self, "dictionary_cols", cols)
         if not self.dictionary_index_types:
             index_types = {
-                spec.column: spec.index_type
-                for spec in self.specs
-                if spec.index_type is not None
+                spec.column: spec.index_type for spec in self.specs if spec.index_type is not None
             }
             object.__setattr__(self, "dictionary_index_types", index_types)
         if not self.dictionary_ordered_flags:

@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING, Literal, overload
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_core import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from arrowdsl.compute.macros import normalize_string_items
+from arrowdsl.compute.position_encoding import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import (
     ArrayLike,

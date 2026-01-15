@@ -106,6 +106,7 @@ _register_many(
         "raw_line": _spec("raw_line", pa.int32()),
         "raw_column": _spec("raw_column", pa.int32()),
         "meta": _spec("meta", pa.map_(pa.string(), pa.string())),
+        "diagnostic_id": _spec("diagnostic_id", pa.string()),
         "name_ref_id": _spec("name_ref_id", pa.string()),
         "span_id": _spec("span_id", pa.string()),
         "expr_ctx": _spec("expr_ctx", pa.string()),

@@ -28,20 +28,28 @@ if TYPE_CHECKING:
     from datafusion_engine.registry_bridge import register_dataset_df
     from datafusion_engine.runtime import (
         DEFAULT_DF_POLICY,
+        AdapterExecutionPolicy,
         DataFusionConfigPolicy,
         DataFusionRuntimeProfile,
+        ExecutionLabel,
         MemoryPool,
+        apply_execution_label,
+        apply_execution_policy,
         snapshot_plans,
     )
 
 __all__ = [
     "DEFAULT_DF_POLICY",
+    "AdapterExecutionPolicy",
     "DataFusionCompileOptions",
     "DataFusionConfigPolicy",
     "DataFusionFallbackEvent",
     "DataFusionRuntimeProfile",
     "DataFusionSqlPolicy",
+    "ExecutionLabel",
     "MemoryPool",
+    "apply_execution_label",
+    "apply_execution_policy",
     "datafusion_to_table",
     "df_from_sqlglot",
     "ensure_param_schema",
@@ -59,12 +67,16 @@ __all__ = [
 
 _EXPORTS: dict[str, tuple[str, str]] = {
     "DEFAULT_DF_POLICY": ("datafusion_engine.runtime", "DEFAULT_DF_POLICY"),
+    "AdapterExecutionPolicy": ("datafusion_engine.runtime", "AdapterExecutionPolicy"),
+    "ExecutionLabel": ("datafusion_engine.runtime", "ExecutionLabel"),
     "DataFusionCompileOptions": ("datafusion_engine.compile_options", "DataFusionCompileOptions"),
     "DataFusionFallbackEvent": ("datafusion_engine.compile_options", "DataFusionFallbackEvent"),
     "DataFusionConfigPolicy": ("datafusion_engine.runtime", "DataFusionConfigPolicy"),
     "DataFusionRuntimeProfile": ("datafusion_engine.runtime", "DataFusionRuntimeProfile"),
     "DataFusionSqlPolicy": ("datafusion_engine.compile_options", "DataFusionSqlPolicy"),
     "MemoryPool": ("datafusion_engine.runtime", "MemoryPool"),
+    "apply_execution_label": ("datafusion_engine.runtime", "apply_execution_label"),
+    "apply_execution_policy": ("datafusion_engine.runtime", "apply_execution_policy"),
     "datafusion_to_table": ("datafusion_engine.bridge", "datafusion_to_table"),
     "df_from_sqlglot": ("datafusion_engine.df_builder", "df_from_sqlglot"),
     "ensure_param_schema": ("datafusion_engine.param_tables", "ensure_param_schema"),

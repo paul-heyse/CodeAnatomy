@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - optional dependency
     register_dataset_df = None
 
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.schema.schema import schema_fingerprint, schema_to_dict
+from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import DataFusionScanOptions, DatasetSpec
 

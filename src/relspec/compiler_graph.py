@@ -2,20 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
 import ibis
 import pyarrow as pa
+from ibis.backends import BaseBackend
 from ibis.expr.datatypes import DataType
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
 
 from arrowdsl.core.context import ExecutionContext, Ordering
-from arrowdsl.core.interop import SchemaLike
+from arrowdsl.core.interop import SchemaLike, TableLike
+from arrowdsl.plan.runner import AdapterRunOptions, run_plan_adapter
+from arrowdsl.plan.schema_utils import plan_schema
+from config import AdapterMode
+from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from ibis_engine.plan import IbisPlan
-from relspec.compiler import RelationshipRuleCompiler
+from relspec.compiler import RelationshipRuleCompiler, RuleExecutionOptions
 from relspec.contracts import RELATION_OUTPUT_NAME, relation_output_schema
 from relspec.engine import IbisRelPlanCompiler
 from relspec.model import EvidenceSpec as RelationshipEvidenceSpec
@@ -42,12 +47,23 @@ class GraphPlan:
     outputs: dict[str, IbisPlan]
 
 
+@dataclass(frozen=True)
+class GraphExecutionOptions:
+    """Execution options for graph-level plan materialization."""
+
+    adapter_mode: AdapterMode | None = None
+    execution_policy: AdapterExecutionPolicy | None = None
+    ibis_backend: BaseBackend | None = None
+    params: Mapping[IbisValue, object] | None = None
+
+
 def compile_graph_plan(
     rules: Sequence[RelationshipRule],
     *,
     ctx: ExecutionContext,
     compiler: RelationshipRuleCompiler,
     evidence: EvidenceCatalog,
+    execution: GraphExecutionOptions | None = None,
 ) -> GraphPlan:
     """Compile relationship rules into a graph-level plan.
 
@@ -61,6 +77,8 @@ def compile_graph_plan(
         Rule compiler with plan resolver.
     evidence:
         Evidence catalog used to order rules.
+    execution:
+        Execution options for adapterized plan materialization.
 
     Returns
     -------
@@ -69,16 +87,54 @@ def compile_graph_plan(
     """
     work = evidence.clone()
     plan_compiler = compiler.plan_compiler or IbisRelPlanCompiler()
+    execution = execution or GraphExecutionOptions()
+
+    def _plan_executor(
+        plan: IbisPlan,
+        exec_ctx: ExecutionContext,
+        exec_params: Mapping[IbisValue, object] | None,
+        execution_label: ExecutionLabel | None = None,
+    ) -> TableLike:
+        resolved_params = exec_params if exec_params is not None else execution.params
+        result = run_plan_adapter(
+            plan,
+            ctx=exec_ctx,
+            options=AdapterRunOptions(
+                adapter_mode=execution.adapter_mode,
+                prefer_reader=False,
+                execution_policy=execution.execution_policy,
+                execution_label=execution_label,
+                ibis_backend=execution.ibis_backend,
+                ibis_params=resolved_params,
+            ),
+        )
+        return cast("TableLike", result.value)
+
     outputs: dict[str, list[IbisPlan]] = {}
     for rule in order_rules(rules, evidence=work):
         compiled = compiler.compile_rule(rule, ctx=ctx)
         if compiled.rel_plan is not None and not compiled.post_kernels:
-            plan = plan_compiler.compile(compiled.rel_plan, ctx=ctx, resolver=compiler.resolver)
+            plan = plan_compiler.compile(
+                compiled.rel_plan,
+                ctx=ctx,
+                resolver=compiler.resolver,
+            )
         else:
-            table = compiled.execute(ctx=ctx, resolver=compiler.resolver, compiler=plan_compiler)
+            table = compiled.execute(
+                ctx=ctx,
+                resolver=compiler.resolver,
+                compiler=plan_compiler,
+                options=RuleExecutionOptions(
+                    params=execution.params,
+                    plan_executor=_plan_executor,
+                    adapter_mode=execution.adapter_mode,
+                    execution_policy=execution.execution_policy,
+                    ibis_backend=execution.ibis_backend,
+                ),
+            )
             plan = IbisPlan(expr=ibis.memtable(table), ordering=Ordering.unordered())
         outputs.setdefault(rule.output_dataset, []).append(plan)
-        work.register(rule.output_dataset, plan.expr.schema().to_pyarrow())
+        work.register(rule.output_dataset, plan_schema(plan, ctx=ctx))
     merged: dict[str, IbisPlan] = {}
     for output, plans in outputs.items():
         if len(plans) == 1:
@@ -274,4 +330,11 @@ def _central_evidence(
     )
 
 
-__all__ = ["EvidenceCatalog", "GraphPlan", "RuleNode", "compile_graph_plan", "order_rules"]
+__all__ = [
+    "EvidenceCatalog",
+    "GraphExecutionOptions",
+    "GraphPlan",
+    "RuleNode",
+    "compile_graph_plan",
+    "order_rules",
+]

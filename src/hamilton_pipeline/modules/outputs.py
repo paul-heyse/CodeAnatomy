@@ -29,6 +29,7 @@ from arrowdsl.plan.metrics import (
 from arrowdsl.plan.query import open_dataset
 from arrowdsl.plan.scan_builder import ScanBuildSpec
 from arrowdsl.plan.scan_telemetry import ScanTelemetry, fragment_telemetry
+from arrowdsl.plan.schema_utils import plan_schema
 from arrowdsl.schema.schema import EncodingPolicy
 from core_types import JsonDict, JsonValue
 from cpg.constants import CpgBuildArtifacts
@@ -44,7 +45,11 @@ from hamilton_pipeline.pipeline_types import (
     RelspecSnapshots,
     RepoScanConfig,
 )
-from ibis_engine.io_bridge import write_ibis_named_datasets_parquet
+from ibis_engine.execution import IbisAdapterExecution
+from ibis_engine.io_bridge import (
+    IbisNamedDatasetWriteOptions,
+    write_ibis_named_datasets_parquet,
+)
 from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
 from ibis_engine.plan import IbisPlan
 from ibis_engine.registry import registry_snapshot
@@ -294,6 +299,7 @@ def write_normalized_inputs_parquet(
     relspec_input_datasets: dict[str, TableLike | RecordBatchReaderLike | IbisPlan],
     output_dir: str | None,
     work_dir: str | None,
+    ibis_execution: IbisAdapterExecution,
 ) -> JsonDict | None:
     """Write relationship-input normalized datasets for debugging.
 
@@ -319,7 +325,11 @@ def write_normalized_inputs_parquet(
     for name, table in relspec_input_datasets.items():
         if isinstance(table, RecordBatchReaderLike):
             continue
-        schema = table.expr.schema().to_pyarrow() if isinstance(table, IbisPlan) else table.schema
+        schema = (
+            plan_schema(table, ctx=ibis_execution.ctx)
+            if isinstance(table, IbisPlan)
+            else table.schema
+        )
         schemas[name] = schema
         encoding_policies[name] = encoding_policy_from_schema(schema)
     config = NamedDatasetWriteConfig(
@@ -332,7 +342,10 @@ def write_normalized_inputs_parquet(
         paths = write_ibis_named_datasets_parquet(
             relspec_input_datasets,
             str(out_dir),
-            config=config,
+            options=IbisNamedDatasetWriteOptions(
+                config=config,
+                execution=ibis_execution,
+            ),
         )
     else:
         paths = write_named_datasets_parquet(
@@ -351,7 +364,8 @@ def write_normalized_inputs_parquet(
             columns = len(t.schema.names)
         elif isinstance(t, IbisPlan):
             rows = int(ds.dataset(path, format="parquet").count_rows()) if path else None
-            columns = len(t.expr.schema())
+            schema = plan_schema(t, ctx=ibis_execution.ctx)
+            columns = len(schema.names)
         else:
             rows = int(t.num_rows)
             columns = len(t.column_names)
@@ -878,6 +892,13 @@ def _datafusion_notes(ctx: ExecutionContext) -> JsonDict:
         fallback_entries = fallback_collector.snapshot()
         if fallback_entries:
             notes["datafusion_fallbacks"] = cast("JsonValue", fallback_entries)
+    if runtime.labeled_explains:
+        notes["datafusion_rule_explain"] = cast("JsonValue", list(runtime.labeled_explains))
+    if runtime.labeled_fallbacks:
+        notes["datafusion_rule_fallbacks"] = cast(
+            "JsonValue",
+            list(runtime.labeled_fallbacks),
+        )
     return notes
 
 

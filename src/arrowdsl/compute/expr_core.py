@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 import pyarrow.compute as pc
 
@@ -18,13 +19,13 @@ from arrowdsl.compute.ids import (
     masked_hash_expr,
     prefixed_hash_id,
 )
-from arrowdsl.compute.macros import (
-    CoalesceStringExprSpec,
-    ComputeExprSpec,
-    DefUseKindExprSpec,
-    TrimExprSpec,
-    coalesce_string_expr,
-    trimmed_non_empty_expr,
+from arrowdsl.compute.position_encoding import (
+    DEFAULT_POSITION_ENCODING,
+    ENC_UTF8,
+    ENC_UTF16,
+    ENC_UTF32,
+    VALID_POSITION_ENCODINGS,
+    normalize_position_encoding,
 )
 from arrowdsl.core.interop import (
     ArrayLike,
@@ -34,6 +35,16 @@ from arrowdsl.core.interop import (
     TableLike,
     ensure_expression,
 )
+
+if TYPE_CHECKING:
+    from arrowdsl.compute.macros import (
+        CoalesceStringExprSpec,
+        ComputeExprSpec,
+        DefUseKindExprSpec,
+        TrimExprSpec,
+        coalesce_string_expr,
+        trimmed_non_empty_expr,
+    )
 
 type ScalarValue = bool | int | float | str | bytes | ScalarLike | None
 type PredicateKind = Literal["in_set", "is_null", "not"]
@@ -142,40 +153,6 @@ def scalar_aggregate_options_factory(
     """
     config = config or ScalarAggregateOptionsConfig()
     return pc.ScalarAggregateOptions(skip_nulls=config.skip_nulls, min_count=config.min_count)
-
-
-ENC_UTF8 = 1
-ENC_UTF16 = 2
-ENC_UTF32 = 3
-DEFAULT_POSITION_ENCODING = ENC_UTF32
-VALID_POSITION_ENCODINGS: frozenset[int] = frozenset((ENC_UTF8, ENC_UTF16, ENC_UTF32))
-
-
-def normalize_position_encoding(value: object | None) -> int:
-    """Normalize position encoding values to SCIP enum integers.
-
-    Returns
-    -------
-    int
-        Normalized encoding enum value.
-    """
-    encoding = DEFAULT_POSITION_ENCODING
-    if value is None:
-        return encoding
-    if isinstance(value, int):
-        return value if value in VALID_POSITION_ENCODINGS else encoding
-    if isinstance(value, str):
-        text = value.strip().upper()
-        if text.isdigit():
-            value_int = int(text)
-            return value_int if value_int in VALID_POSITION_ENCODINGS else encoding
-        if "UTF8" in text:
-            encoding = ENC_UTF8
-        elif "UTF16" in text:
-            encoding = ENC_UTF16
-        elif "UTF32" in text:
-            encoding = ENC_UTF32
-    return encoding
 
 
 @dataclass(frozen=True)
@@ -300,6 +277,30 @@ class HashFromExprsSpec:
             ``True`` for scalar-safe expressions.
         """
         return self is not None
+
+
+_MACRO_EXPORTS: frozenset[str] = frozenset(
+    (
+        "CoalesceStringExprSpec",
+        "ComputeExprSpec",
+        "DefUseKindExprSpec",
+        "TrimExprSpec",
+        "coalesce_string_expr",
+        "trimmed_non_empty_expr",
+    )
+)
+
+
+def __getattr__(name: str) -> object:
+    if name in _MACRO_EXPORTS:
+        macros = importlib.import_module("arrowdsl.compute.macros")
+        return getattr(macros, name)
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
+
+
+def __dir__() -> list[str]:
+    return sorted(__all__)
 
 
 __all__ = [

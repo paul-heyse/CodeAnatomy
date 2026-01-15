@@ -30,7 +30,6 @@ from arrowdsl.core.interop import (
     ensure_expression,
     pc,
 )
-from arrowdsl.schema.build import set_or_append_column
 
 
 def masked_hash_expr(
@@ -109,6 +108,13 @@ def prefixed_hash64(
     return prefixed_hash_id(arrays, prefix=prefix)
 
 
+def _set_or_append_column(table: TableLike, name: str, values: ArrayLike) -> TableLike:
+    if name in table.column_names:
+        idx = table.schema.get_field_index(name)
+        return table.set_column(idx, name, values)
+    return table.append_column(name, values)
+
+
 def apply_hash_column(
     table: TableLike,
     *,
@@ -125,7 +131,7 @@ def apply_hash_column(
     out_col = spec.out_col or f"{spec.prefix}_id"
     req = required or ()
     hashed = masked_hash_array(table, spec=spec, required=req)
-    return set_or_append_column(table, out_col, hashed)
+    return _set_or_append_column(table, out_col, hashed)
 
 
 def apply_hash_columns(

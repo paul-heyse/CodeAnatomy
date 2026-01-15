@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import pyarrow as pa
 
-from arrowdsl.compute.kernels import ChunkPolicy, apply_dedupe, canonical_sort_if_canonical
+from arrowdsl.compute.kernels import apply_dedupe, canonical_sort_if_canonical
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import HashSpec, hash_column_values, iter_array_values
 from arrowdsl.core.interop import ArrayLike, DataTypeLike, SchemaLike, TableLike, pc
+from arrowdsl.core.schema_constants import PROVENANCE_COLS
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.build import (
     ColumnDefaultsSpec,
@@ -20,12 +22,12 @@ from arrowdsl.schema.build import (
     build_struct,
     const_array,
 )
+from arrowdsl.schema.chunking import ChunkPolicy
 from arrowdsl.schema.encoding_policy import EncodingPolicy
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import AlignmentInfo, SchemaMetadataSpec
 from arrowdsl.schema.validation import ArrowValidationOptions
-from schema_spec.specs import PROVENANCE_COLS, NestedFieldSpec
-from schema_spec.system import table_spec_from_schema, validate_arrow_table
+from schema_spec.specs import NestedFieldSpec
 
 if TYPE_CHECKING:
     from arrowdsl.schema.policy import SchemaPolicy
@@ -33,6 +35,47 @@ if TYPE_CHECKING:
 
 
 type InvariantFn = Callable[[TableLike], tuple[ArrayLike, str]]
+
+class _TableSpecFromSchema(Protocol):
+    def __call__(
+        self,
+        name: str,
+        schema: SchemaLike,
+        *,
+        version: int | None = None,
+    ) -> TableSchemaSpec: ...
+
+
+class _ValidateArrowTable(Protocol):
+    def __call__(
+        self,
+        table: TableLike,
+        *,
+        spec: TableSchemaSpec,
+        options: ArrowValidationOptions,
+    ) -> TableLike: ...
+
+
+def _table_spec_from_schema(
+    name: str,
+    schema: SchemaLike,
+    *,
+    version: int | None = None,
+) -> TableSchemaSpec:
+    module = importlib.import_module("schema_spec.system")
+    table_spec_fn = cast("_TableSpecFromSchema", module.table_spec_from_schema)
+    return table_spec_fn(name, schema, version=version)
+
+
+def _validate_arrow_table(
+    table: TableLike,
+    *,
+    spec: TableSchemaSpec,
+    options: ArrowValidationOptions,
+) -> TableLike:
+    module = importlib.import_module("schema_spec.system")
+    validate_fn = cast("_ValidateArrowTable", module.validate_arrow_table)
+    return validate_fn(table, spec=spec, options=options)
 
 
 @dataclass(frozen=True)
@@ -423,7 +466,7 @@ def _maybe_validate_with_arrow(
         options = contract.validation
     if options is None:
         options = ArrowValidationOptions.from_policy(ctx.schema_validation)
-    return validate_arrow_table(table, spec=contract.schema_spec, options=options)
+    return _validate_arrow_table(table, spec=contract.schema_spec, options=options)
 
 
 def _aggregate_error_details(
@@ -539,7 +582,7 @@ def finalize(
     if schema_policy is None:
         schema_spec = contract.schema_spec
         if schema_spec is None:
-            schema_spec = table_spec_from_schema(
+            schema_spec = _table_spec_from_schema(
                 contract.name,
                 contract.schema,
                 version=contract.version,

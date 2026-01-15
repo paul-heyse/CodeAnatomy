@@ -10,11 +10,11 @@ import pyarrow.dataset as ds
 
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import ComputeExpression, SchemaLike, TableLike, pc
+from arrowdsl.core.schema_constants import PROVENANCE_SOURCE_FIELDS
 from arrowdsl.plan.builder import PlanBuilder
 from arrowdsl.plan.ops import scan_ordering_effect
 from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.build import rows_to_table as rows_to_table_factory
-from schema_spec import PROVENANCE_SOURCE_FIELDS
 from schema_spec.system import DatasetSpec
 
 
@@ -37,13 +37,7 @@ class DatasetSource:
     spec: DatasetSpec
 
 
-PlanSource = (
-    TableLike
-    | ds.Dataset
-    | ds.Scanner
-    | DatasetSource
-    | Plan
-)
+PlanSource = TableLike | ds.Dataset | ds.Scanner | DatasetSource | Plan
 
 
 def plan_from_dataset(

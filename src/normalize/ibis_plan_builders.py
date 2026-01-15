@@ -11,7 +11,7 @@ import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 
-from arrowdsl.compute.expr_core import ENC_UTF8, ENC_UTF16, ENC_UTF32
+from arrowdsl.compute.position_encoding import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.plan.scan_io import PlanSource, plan_from_source
 from arrowdsl.schema.build import empty_table

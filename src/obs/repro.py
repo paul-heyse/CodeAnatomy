@@ -25,7 +25,7 @@ from arrowdsl.core.interop import TableLike
 from arrowdsl.finalize.finalize import Contract
 from arrowdsl.json_factory import JsonPolicy, dump_path, dumps_bytes, json_default
 from arrowdsl.plan.ops import DedupeSpec, SortKey
-from arrowdsl.schema.schema import schema_fingerprint, schema_to_dict
+from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from arrowdsl.spec.io import write_spec_table
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec

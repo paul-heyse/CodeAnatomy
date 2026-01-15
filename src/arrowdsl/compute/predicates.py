@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_core import ExprSpec, PredicateKind
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
@@ -16,6 +16,9 @@ from arrowdsl.core.interop import (
     ensure_expression,
     pc,
 )
+
+if TYPE_CHECKING:
+    from arrowdsl.compute.expr_core import ExprSpec, PredicateKind
 
 
 def _false_mask(num_rows: int) -> ArrayLike:

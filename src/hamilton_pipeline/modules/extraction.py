@@ -343,7 +343,7 @@ def cst_bundle(
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
     extract_execution_context: ExtractExecutionContext,
-) -> Mapping[str, TableLike]:
+) -> dict[str, TableLike]:
     """Build the LibCST extraction bundle.
 
     The extractor should return a dict with keys:
@@ -393,7 +393,7 @@ def ast_bundle(
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
     extract_execution_context: ExtractExecutionContext,
-) -> Mapping[str, TableLike]:
+) -> dict[str, TableLike]:
     """Build the Python AST extraction bundle.
 
     Returns
@@ -429,7 +429,7 @@ def scip_bundle(
     repo_root: str,
     scip_parse_options: SCIPParseOptions,
     extract_execution_context: ExtractExecutionContext,
-) -> Mapping[str, TableLike]:
+) -> dict[str, TableLike]:
     """Build the SCIP extraction bundle.
 
     If scip_index_path is None, returns empty tables (extractor should handle).
@@ -653,7 +653,7 @@ def tree_sitter_bundle(
     repo_files: TableLike,
     file_contexts: Sequence[FileContext],
     extract_execution_context: ExtractExecutionContext,
-) -> Mapping[str, TableLike]:
+) -> dict[str, TableLike]:
     """Extract tree-sitter nodes and diagnostics when enabled.
 
     Returns

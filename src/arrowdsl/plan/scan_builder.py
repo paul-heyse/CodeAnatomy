@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from functools import cache
+from typing import TYPE_CHECKING, cast
 
 import pyarrow.dataset as ds
 
@@ -13,10 +15,16 @@ from arrowdsl.core.interop import DeclarationLike
 from arrowdsl.ops.catalog import OP_CATALOG
 from arrowdsl.plan.builder import PlanBuilder
 from arrowdsl.plan.ops import scan_ordering_effect
-from arrowdsl.plan.plan import Plan
 
 if TYPE_CHECKING:
+    from arrowdsl.plan.plan import Plan
     from arrowdsl.plan.query import ColumnsSpec, QuerySpec
+
+
+@cache
+def _plan_class() -> type[Plan]:
+    module = importlib.import_module("arrowdsl.plan.plan")
+    return cast("type[Plan]", module.Plan)
 
 
 @dataclass(frozen=True)
@@ -98,7 +106,8 @@ class ScanBuildSpec:
         if (predicate := self.query.predicate_expression()) is not None:
             builder.filter(predicate=predicate)
         plan_ir, ordering, pipeline_breakers = builder.build()
-        return Plan(
+        plan_cls = _plan_class()
+        return plan_cls(
             ir=plan_ir,
             label=label,
             ordering=ordering,

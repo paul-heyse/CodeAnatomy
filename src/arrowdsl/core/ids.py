@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import arrowdsl.core.interop as pa
-from arrowdsl.compute.filters import resolve_kernel
+from arrowdsl.compute.kernel_utils import resolve_kernel
 from arrowdsl.compute.registry import UdfSpec, ensure_udf
 from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
 

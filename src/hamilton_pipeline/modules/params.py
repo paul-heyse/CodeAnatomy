@@ -13,7 +13,7 @@ from ibis.backends import BaseBackend
 from ibis.expr.types import Table
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.schema.schema import schema_fingerprint
+from arrowdsl.schema.serialization import schema_fingerprint
 from core_types import JsonDict
 from hamilton_pipeline.pipeline_types import OutputConfig, ParamBundle
 from ibis_engine.param_tables import (

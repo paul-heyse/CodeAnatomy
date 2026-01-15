@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Literal, overload
+from typing import TYPE_CHECKING, Literal, overload
 
-from normalize.rule_model import AmbiguityPolicy as NormalizeAmbiguityPolicy
-from normalize.rule_model import ConfidencePolicy as NormalizeConfidencePolicy
 from relspec.model import AmbiguityPolicy as RelationshipAmbiguityPolicy
 from relspec.model import ConfidencePolicy as RelationshipConfidencePolicy
 from relspec.policy_registry import (
@@ -18,19 +17,29 @@ from relspec.policy_registry import (
 )
 from relspec.rules.definitions import RuleDomain
 
-NORMALIZE_CONFIDENCE_POLICIES: dict[str, NormalizeConfidencePolicy] = {
-    "bytecode": NormalizeConfidencePolicy(base=1.0),
-    "cst": NormalizeConfidencePolicy(base=1.0),
-    "diagnostic": NormalizeConfidencePolicy(base=1.0),
-    "evidence": NormalizeConfidencePolicy(base=1.0),
-    "scip": NormalizeConfidencePolicy(base=1.0),
-    "span": NormalizeConfidencePolicy(base=1.0),
-    "type": NormalizeConfidencePolicy(base=1.0),
-}
+if TYPE_CHECKING:
+    from normalize.rule_model import AmbiguityPolicy as NormalizeAmbiguityPolicy
+    from normalize.rule_model import ConfidencePolicy as NormalizeConfidencePolicy
 
-NORMALIZE_AMBIGUITY_POLICIES: dict[str, NormalizeAmbiguityPolicy] = {
-    "preserve": NormalizeAmbiguityPolicy(),
-}
+
+def _normalize_confidence_policies() -> Mapping[str, object]:
+    module = importlib.import_module("normalize.rule_model")
+    policy_cls = module.ConfidencePolicy
+    return {
+        "bytecode": policy_cls(base=1.0),
+        "cst": policy_cls(base=1.0),
+        "diagnostic": policy_cls(base=1.0),
+        "evidence": policy_cls(base=1.0),
+        "scip": policy_cls(base=1.0),
+        "span": policy_cls(base=1.0),
+        "type": policy_cls(base=1.0),
+    }
+
+
+def _normalize_ambiguity_policies() -> Mapping[str, object]:
+    module = importlib.import_module("normalize.rule_model")
+    policy_cls = module.AmbiguityPolicy
+    return {"preserve": policy_cls()}
 
 
 def _default_confidence_policies() -> Mapping[RuleDomain, Mapping[str, object]]:
@@ -43,7 +52,7 @@ def _default_confidence_policies() -> Mapping[RuleDomain, Mapping[str, object]]:
     """
     return {
         "cpg": RELSPEC_CONFIDENCE_POLICIES,
-        "normalize": NORMALIZE_CONFIDENCE_POLICIES,
+        "normalize": _normalize_confidence_policies(),
         "extract": {},
     }
 
@@ -58,7 +67,7 @@ def _default_ambiguity_policies() -> Mapping[RuleDomain, Mapping[str, object]]:
     """
     return {
         "cpg": RELSPEC_AMBIGUITY_POLICIES,
-        "normalize": NORMALIZE_AMBIGUITY_POLICIES,
+        "normalize": _normalize_ambiguity_policies(),
         "extract": {},
     }
 

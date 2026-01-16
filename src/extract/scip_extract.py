@@ -855,7 +855,11 @@ def _symbol_tables(index: object) -> tuple[TableLike, TableLike, TableLike]:
     sym = _SymbolInfoAccumulator()
     ext = _SymbolInfoAccumulator()
     rels = _RelationshipAccumulator()
-    for si in getattr(index, "symbol_information", []):
+    symbol_info = list(getattr(index, "symbol_information", []))
+    if not symbol_info:
+        for doc in getattr(index, "documents", []):
+            symbol_info.extend(getattr(doc, "symbols", []))
+    for si in symbol_info:
         sym.append(si)
         symbol = getattr(si, "symbol", None)
         for rel in getattr(si, "relationships", []):

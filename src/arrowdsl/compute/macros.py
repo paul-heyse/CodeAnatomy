@@ -21,12 +21,14 @@ from arrowdsl.compute.position_encoding import (
     VALID_POSITION_ENCODINGS,
 )
 from arrowdsl.compute.predicates import InSet, IsNull, Not, predicate_spec
+from arrowdsl.compute.udf_helpers import ensure_null_if_empty_or_zero_udf
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
     ComputeExpression,
     DataTypeLike,
     TableLike,
+    call_expression_function,
     ensure_expression,
     pc,
 )
@@ -631,15 +633,9 @@ def null_if_empty_or_zero(expr: ComputeExpression) -> ComputeExpression:
     ComputeExpression
         Expression with empty/zero strings mapped to null.
     """
-    empty = ensure_expression(pc.equal(expr, pc.scalar("")))
-    zero = ensure_expression(pc.equal(expr, pc.scalar("0")))
-    return ensure_expression(
-        pc.if_else(
-            or_expr(empty, zero),
-            cast_expr(pc.scalar(None), pa.string(), safe=False),
-            expr,
-        )
-    )
+    func_name = ensure_null_if_empty_or_zero_udf()
+    expr = ensure_expression(expr)
+    return call_expression_function(func_name, [expr])
 
 
 def zero_expr(values: ComputeExpression, *, dtype: DataTypeLike) -> ComputeExpression:

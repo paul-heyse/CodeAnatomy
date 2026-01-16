@@ -23,7 +23,7 @@ _KERNEL_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
 
 
 def _normalize_span(values: pa.Array | pa.ChunkedArray) -> pa.Array | pa.ChunkedArray:
-    text = pc.utf8_trim(pc.cast(values, pa.string(), safe=False))
+    text = pc.utf8_trim_whitespace(pc.cast(values, pa.string(), safe=False))
     mask = pc.match_substring_regex(text, _NUMERIC_REGEX)
     mask = pc.fill_null(mask, fill_value=False)
     sanitized = pc.if_else(mask, text, pa.scalar(None, type=pa.string()))

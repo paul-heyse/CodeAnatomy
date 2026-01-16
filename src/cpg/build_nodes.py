@@ -196,6 +196,13 @@ def _schemas_match(expected: pa.Schema, actual: pa.Schema) -> bool:
     return (expected.metadata or {}) == (actual.metadata or {})
 
 
+def _emit_quality_source(spec: NodePlanSpec) -> str:
+    id_cols = ",".join(spec.emit.id_cols)
+    if id_cols:
+        return f"{spec.name}:{spec.table_ref}[{id_cols}]"
+    return f"{spec.name}:{spec.table_ref}"
+
+
 def _assert_emit_schema(
     plan: Plan,
     *,
@@ -209,6 +216,38 @@ def _assert_emit_schema(
     diff = _schema_diff(expected, actual)
     msg = f"Node emit schema mismatch for {label}.\n{diff}"
     raise ValueError(msg)
+
+
+def _node_emitted_plans(
+    *,
+    ctx: ExecutionContext,
+    inputs: NodeInputTables,
+    options: NodeBuildOptions,
+    node_spec_table: pa.Table | None,
+    registry: CpgRegistry,
+) -> list[tuple[NodePlanSpec, Plan]]:
+    nodes_spec = registry.nodes_spec()
+    expected_schema = _raw_nodes_schema(nodes_spec.schema())
+    catalog = _node_tables(inputs, options=options, ctx=ctx)
+    emitted: list[tuple[NodePlanSpec, Plan]] = []
+    for spec in _node_plan_specs(node_spec_table, registry=registry):
+        enabled = getattr(options, spec.option_flag, None)
+        if enabled is None:
+            msg = f"Unknown option flag: {spec.option_flag}"
+            raise ValueError(msg)
+        if not enabled:
+            continue
+        plan_source = resolve_plan_source(catalog, spec.table_ref, ctx=ctx)
+        if plan_source is None:
+            continue
+        plan = ensure_plan(plan_source, label=spec.name, ctx=ctx)
+        preprocessor = resolve_preprocessor(spec.preprocessor_id)
+        if preprocessor is not None:
+            plan = preprocessor(plan)
+        plan = emit_node_plan(plan, spec=spec.emit, ctx=ctx)
+        _assert_emit_schema(plan, expected=expected_schema, ctx=ctx, label=spec.name)
+        emitted.append((spec, plan))
+    return emitted
 
 
 def _node_plan_specs(
@@ -347,36 +386,19 @@ def build_cpg_nodes_raw(
     -------
     Plan
         Plan producing the raw nodes table.
-
-    Raises
-    ------
-    ValueError
-        Raised when an option flag is missing.
     """
     registry = registry or default_cpg_registry()
     nodes_spec = registry.nodes_spec()
     nodes_schema = nodes_spec.schema()
-    expected_schema = _raw_nodes_schema(nodes_schema)
     options = options or NodeBuildOptions()
-    catalog = _node_tables(inputs or NodeInputTables(), options=options, ctx=ctx)
-    parts: list[Plan] = []
-    for spec in _node_plan_specs(node_spec_table, registry=registry):
-        enabled = getattr(options, spec.option_flag, None)
-        if enabled is None:
-            msg = f"Unknown option flag: {spec.option_flag}"
-            raise ValueError(msg)
-        if not enabled:
-            continue
-        plan_source = resolve_plan_source(catalog, spec.table_ref, ctx=ctx)
-        if plan_source is None:
-            continue
-        plan = ensure_plan(plan_source, label=spec.name, ctx=ctx)
-        preprocessor = resolve_preprocessor(spec.preprocessor_id)
-        if preprocessor is not None:
-            plan = preprocessor(plan)
-        emitted = emit_node_plan(plan, spec=spec.emit, ctx=ctx)
-        _assert_emit_schema(emitted, expected=expected_schema, ctx=ctx, label=spec.name)
-        parts.append(emitted)
+    emitted = _node_emitted_plans(
+        ctx=ctx,
+        inputs=inputs or NodeInputTables(),
+        options=options,
+        node_spec_table=node_spec_table,
+        registry=registry,
+    )
+    parts = [plan for _, plan in emitted]
 
     if not parts:
         return empty_plan(nodes_schema, label="cpg_nodes_raw")
@@ -401,23 +423,46 @@ def build_cpg_nodes(
     """
     registry = registry or default_cpg_registry()
     nodes_spec = registry.nodes_spec()
-    raw_plan = build_cpg_nodes_raw(
+    nodes_schema = nodes_spec.schema()
+    options = options or NodeBuildOptions()
+    emitted = _node_emitted_plans(
         ctx=ctx,
-        inputs=inputs,
+        inputs=inputs or NodeInputTables(),
         options=options,
         node_spec_table=node_spec_table,
         registry=registry,
     )
-    quality_plan = quality_plan_from_ids(
-        raw_plan,
-        spec=QualityPlanSpec(
-            id_col="node_id",
-            entity_kind="node",
-            issue="invalid_node_id",
-            source_table="cpg_nodes_raw",
-        ),
-        ctx=ctx,
-    )
+    parts = [plan for _, plan in emitted]
+    if not parts:
+        raw_plan = empty_plan(nodes_schema, label="cpg_nodes_raw")
+    else:
+        raw_plan = union_all_plans(parts, label="cpg_nodes_raw")
+    quality_plans = [
+        quality_plan_from_ids(
+            raw_plan,
+            spec=QualityPlanSpec(
+                id_col="node_id",
+                entity_kind="node",
+                issue="invalid_node_id",
+                source_table="cpg_nodes_raw",
+            ),
+            ctx=ctx,
+        )
+    ]
+    for spec, plan in emitted:
+        quality_plans.append(
+            quality_plan_from_ids(
+                plan,
+                spec=QualityPlanSpec(
+                    id_col="node_id",
+                    entity_kind="node",
+                    issue="invalid_node_id_emitter",
+                    source_table=_emit_quality_source(spec),
+                ),
+                ctx=ctx,
+            )
+        )
+    quality_plan = union_all_plans(quality_plans, label="cpg_nodes_quality")
     raw = finalize_plan(raw_plan, ctx=ctx)
     quality = finalize_plan(quality_plan, ctx=ctx)
     finalize_ctx = finalize_context_for_plan(

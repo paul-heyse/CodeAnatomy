@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
 import pytest
 
-from arrowdsl.core.context import ExecutionContext, execution_context_factory
+from arrowdsl.core.context import execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from config import AdapterMode
 from cpg.registry_specs import dataset_contract_spec
@@ -59,7 +58,7 @@ def _run_pipeline(
     scip_output_dir: Path,
 ) -> Mapping[str, TableOutput]:
     driver = build_driver(config={})
-    ctx = _single_thread_context()
+    ctx = execution_context_factory("default")
     overrides = {
         "adapter_mode": AdapterMode(
             use_ibis_bridge=True,
@@ -83,16 +82,6 @@ def _canonical_sort_keys(output_name: str) -> Sequence[tuple[str, str]]:
     dataset_name = _CPG_DATASETS[output_name]
     contract = dataset_contract_spec(dataset_name)
     return tuple((key.column, key.order) for key in contract.canonical_sort)
-
-
-def _single_thread_context() -> ExecutionContext:
-    ctx = execution_context_factory("default")
-    runtime = replace(
-        ctx.runtime,
-        plan_use_threads=False,
-        scan=replace(ctx.runtime.scan, use_threads=False),
-    )
-    return replace(ctx, runtime=runtime)
 
 
 def _fixture_repo_root() -> Path:

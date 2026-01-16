@@ -241,7 +241,7 @@ def compile_relation_plans(
                 ibis_backend=options.backend,
             ),
         )
-        table = align_table(table, schema=output_schema)
+        table = align_table(table, schema=output_schema, keep_extra_columns=True)
         plan = Plan.table_source(table, label=rule.name)
         if plan is None:
             msg = f"Failed to compile relation plan for rule {rule.name!r}."
@@ -566,7 +566,7 @@ def _compile_relation_plans_ibis(
                     ibis_backend=backend,
                 ),
             )
-            aligned = align_table(table, schema=context.output_schema)
+            aligned = align_table(table, schema=context.output_schema, keep_extra_columns=True)
             plan = table_to_ibis(
                 aligned,
                 backend=backend,
@@ -582,7 +582,7 @@ def _compile_relation_plans_ibis(
             if compiled.emit_rule_meta:
                 expr = _apply_rule_meta_ibis(expr, rule)
             expr = _apply_kernel_specs_ibis(expr, rule.post_kernels, registry=context.registry)
-            expr = align_table_to_schema(expr, schema=context.output_schema)
+            expr = align_table_to_schema(expr, schema=context.output_schema, keep_extra_columns=True)
             plan = IbisPlan(expr=expr, ordering=plan.ordering)
         if plan is None:
             msg = f"Failed to compile ibis relation plan for rule {rule.name!r}."
@@ -734,7 +734,7 @@ def _interval_align_plan_ibis(
     if rule.emit_rule_meta:
         expr = _apply_rule_meta_ibis(expr, rule)
     expr = _apply_kernel_specs_ibis(expr, rule.post_kernels, registry=context.registry)
-    expr = align_table_to_schema(expr, schema=context.output_schema)
+    expr = align_table_to_schema(expr, schema=context.output_schema, keep_extra_columns=True)
     plan = IbisPlan(expr=expr, ordering=Ordering.unordered())
     metrics_plan = (
         None if metrics is None else IbisPlan(expr=metrics, ordering=Ordering.unordered())
@@ -761,7 +761,7 @@ def _winner_select_plan_ibis(
     if rule.emit_rule_meta:
         expr = _apply_rule_meta_ibis(expr, rule)
     expr = _apply_kernel_specs_ibis(expr, rule.post_kernels, registry=context.registry)
-    expr = align_table_to_schema(expr, schema=context.output_schema)
+    expr = align_table_to_schema(expr, schema=context.output_schema, keep_extra_columns=True)
     plan = IbisPlan(expr=expr, ordering=Ordering.unordered())
     metrics_plan = (
         None if metrics is None else IbisPlan(expr=metrics, ordering=Ordering.unordered())

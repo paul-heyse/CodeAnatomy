@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import shutil
+import subprocess
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
@@ -32,6 +35,7 @@ def test_full_pipeline_repo() -> None:
     _assert_extract_errors(results)
     _assert_manifest_and_bundle(results)
     _assert_scip_index(repo_root)
+    _run_diagnostics_report(repo_root, output_dir)
 
 
 def _repo_root() -> Path:
@@ -80,3 +84,19 @@ def _assert_scip_index(repo_root: Path) -> None:
     index_path = repo_root / "build" / "scip" / "index.scip"
     assert index_path.exists()
     assert index_path.stat().st_size > 0
+
+
+def _run_diagnostics_report(repo_root: Path, output_dir: Path) -> None:
+    report_path = output_dir / "diagnostics_report.json"
+    command = [
+        sys.executable,
+        str(repo_root / "scripts" / "e2e_diagnostics_report.py"),
+        "--output-dir",
+        str(output_dir),
+        "--validate-parquet",
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert report_path.exists()
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload.get("status") == "ok"

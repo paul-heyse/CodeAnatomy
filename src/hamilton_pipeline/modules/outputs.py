@@ -415,6 +415,31 @@ def write_cpg_nodes_parquet(
     }
 
 
+@tag(layer="materialize", artifact="cpg_nodes_quality_parquet", kind="side_effect")
+def write_cpg_nodes_quality_parquet(
+    output_dir: str | None,
+    cpg_nodes_quality: TableLike,
+) -> JsonDict | None:
+    """Write CPG node quality diagnostics to Parquet.
+
+    Returns
+    -------
+    JsonDict | None
+        Report of the written file, or None when output is disabled.
+    """
+    if not output_dir:
+        return None
+    output_path = Path(output_dir)
+    _ensure_dir(output_path)
+    path = write_table_parquet(
+        cpg_nodes_quality,
+        output_path / "cpg_nodes_quality.parquet",
+        opts=ParquetWriteOptions(),
+        overwrite=True,
+    )
+    return {"path": path, "rows": int(cpg_nodes_quality.num_rows)}
+
+
 @tag(layer="materialize", artifact="cpg_edges_parquet", kind="side_effect")
 def write_cpg_edges_parquet(
     output_dir: str | None,
@@ -471,6 +496,31 @@ def write_cpg_props_parquet(
         "rows": int(cpg_props_finalize.finalize.good.num_rows),
         "error_rows": int(cpg_props_finalize.finalize.errors.num_rows),
     }
+
+
+@tag(layer="materialize", artifact="cpg_props_quality_parquet", kind="side_effect")
+def write_cpg_props_quality_parquet(
+    output_dir: str | None,
+    cpg_props_quality: TableLike,
+) -> JsonDict | None:
+    """Write CPG property quality diagnostics to Parquet.
+
+    Returns
+    -------
+    JsonDict | None
+        Report of the written file, or None when output is disabled.
+    """
+    if not output_dir:
+        return None
+    output_path = Path(output_dir)
+    _ensure_dir(output_path)
+    path = write_table_parquet(
+        cpg_props_quality,
+        output_path / "cpg_props_quality.parquet",
+        opts=ParquetWriteOptions(),
+        overwrite=True,
+    )
+    return {"path": path, "rows": int(cpg_props_quality.num_rows)}
 
 
 # -----------------------

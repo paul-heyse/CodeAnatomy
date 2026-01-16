@@ -126,6 +126,13 @@ def _updated_prop_spec(
     return replace(spec, fields=tuple(filtered_fields))
 
 
+def _emit_quality_source(spec: PropTableSpec) -> str:
+    id_cols = ",".join(spec.id_cols)
+    if id_cols:
+        return f"{spec.name}:{spec.table_ref}[{id_cols}]"
+    return f"{spec.name}:{spec.table_ref}"
+
+
 def _emit_prop_plans(
     plan_source: TableLike | DatasetSource | Plan,
     *,
@@ -168,6 +175,45 @@ def _finalize_props_raw_plan(
     return aligned.order_by(sort_keys, ctx=ctx, label="cpg_props_raw")
 
 
+def _prop_emitted_plans(
+    *,
+    ctx: ExecutionContext,
+    inputs: PropsInputTables,
+    options: PropsBuildOptions,
+    prop_spec_table: pa.Table | None,
+    registry: CpgRegistry,
+) -> list[tuple[PropTableSpec, list[Plan]]]:
+    props_spec = registry.props_spec()
+    props_schema = props_spec.schema()
+    schema_version = _props_schema_version(props_schema, props_spec)
+    catalog = _prop_tables(inputs)
+    emitted: list[tuple[PropTableSpec, list[Plan]]] = []
+    for spec in _prop_table_specs(prop_spec_table, registry=registry):
+        enabled = getattr(options, spec.option_flag, None)
+        if enabled is None:
+            msg = f"Unknown option flag: {spec.option_flag}"
+            raise ValueError(msg)
+        if not enabled:
+            continue
+        include_if = resolve_prop_include(spec.include_if_id)
+        if include_if is not None and not include_if(options):
+            continue
+        plan_source = resolve_plan_source(catalog, spec.table_ref, ctx=ctx)
+        if plan_source is None:
+            continue
+        spec_plans = _emit_prop_plans(
+            plan_source,
+            spec=spec,
+            options=options,
+            schema_version=schema_version,
+            ctx=ctx,
+        )
+        if not spec_plans:
+            continue
+        emitted.append((spec, spec_plans))
+    return emitted
+
+
 def build_cpg_props_raw(
     *,
     ctx: ExecutionContext,
@@ -182,41 +228,19 @@ def build_cpg_props_raw(
     -------
     Plan
         Plan producing the raw properties table.
-
-    Raises
-    ------
-    ValueError
-        Raised when an option flag is missing.
     """
     registry = registry or default_cpg_registry()
     props_spec = registry.props_spec()
     props_schema = props_spec.schema()
     options = options or PropsBuildOptions()
-    catalog = _prop_tables(inputs or PropsInputTables())
-    plans: list[Plan] = []
-    schema_version = _props_schema_version(props_schema, props_spec)
-    for spec in _prop_table_specs(prop_spec_table, registry=registry):
-        enabled = getattr(options, spec.option_flag, None)
-        if enabled is None:
-            msg = f"Unknown option flag: {spec.option_flag}"
-            raise ValueError(msg)
-        if not enabled:
-            continue
-        include_if = resolve_prop_include(spec.include_if_id)
-        if include_if is not None and not include_if(options):
-            continue
-        plan_source = resolve_plan_source(catalog, spec.table_ref, ctx=ctx)
-        if plan_source is None:
-            continue
-        plans.extend(
-            _emit_prop_plans(
-                plan_source,
-                spec=spec,
-                options=options,
-                schema_version=schema_version,
-                ctx=ctx,
-            )
-        )
+    emitted = _prop_emitted_plans(
+        ctx=ctx,
+        inputs=inputs or PropsInputTables(),
+        options=options,
+        prop_spec_table=prop_spec_table,
+        registry=registry,
+    )
+    plans = [plan for _, spec_plans in emitted for plan in spec_plans]
 
     return _finalize_props_raw_plan(
         plans,
@@ -243,23 +267,49 @@ def build_cpg_props(
     """
     registry = registry or default_cpg_registry()
     props_spec = registry.props_spec()
-    raw_plan = build_cpg_props_raw(
+    props_schema = props_spec.schema()
+    options = options or PropsBuildOptions()
+    emitted = _prop_emitted_plans(
         ctx=ctx,
-        inputs=inputs,
+        inputs=inputs or PropsInputTables(),
         options=options,
         prop_spec_table=prop_spec_table,
         registry=registry,
     )
-    quality_plan = quality_plan_from_ids(
-        raw_plan,
-        spec=QualityPlanSpec(
-            id_col="entity_id",
-            entity_kind="prop",
-            issue="invalid_entity_id",
-            source_table="cpg_props_raw",
-        ),
+    plans = [plan for _, spec_plans in emitted for plan in spec_plans]
+    raw_plan = _finalize_props_raw_plan(
+        plans,
+        props_schema=props_schema,
+        props_spec=props_spec,
         ctx=ctx,
     )
+    quality_plans = [
+        quality_plan_from_ids(
+            raw_plan,
+            spec=QualityPlanSpec(
+                id_col="entity_id",
+                entity_kind="prop",
+                issue="invalid_entity_id",
+                source_table="cpg_props_raw",
+            ),
+            ctx=ctx,
+        )
+    ]
+    for spec, spec_plans in emitted:
+        merged = union_all_plans(spec_plans, label=f"{spec.name}_props_raw")
+        quality_plans.append(
+            quality_plan_from_ids(
+                merged,
+                spec=QualityPlanSpec(
+                    id_col="entity_id",
+                    entity_kind="prop",
+                    issue="invalid_entity_id_emitter",
+                    source_table=_emit_quality_source(spec),
+                ),
+                ctx=ctx,
+            )
+        )
+    quality_plan = union_all_plans(quality_plans, label="cpg_props_quality")
     raw = finalize_plan(raw_plan, ctx=ctx)
     quality = finalize_plan(quality_plan, ctx=ctx)
     finalize_ctx = finalize_context_for_plan(

@@ -13,6 +13,7 @@ from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, ScalarLike
 type ValuesLike = ArrayLike | ChunkedArrayLike | ScalarLike
 
 _EXPR_CTX_FUNCTION = "expr_ctx_norm"
+_NULL_IF_EMPTY_OR_ZERO_FUNCTION = "null_if_empty_or_zero"
 _POSITION_ENCODING_FUNCTION = "position_encoding_norm"
 
 
@@ -34,6 +35,43 @@ def _expr_ctx_udf(ctx: pac.UdfContext, values: ValuesLike) -> ValuesLike:
     array_values = values.combine_chunks() if isinstance(values, ChunkedArrayLike) else values
     out = [_normalize_expr_ctx(value) for value in iter_array_values(array_values)]
     return pa.array(out, type=pa.string())
+
+
+def _normalize_empty_or_zero(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return None if value in {"", "0"} else value
+    text = str(value)
+    return None if text in {"", "0"} else text
+
+
+def _null_if_empty_or_zero_udf(ctx: pac.UdfContext, values: ValuesLike) -> ValuesLike:
+    _ = ctx
+    if isinstance(values, ScalarLike):
+        return pa.scalar(_normalize_empty_or_zero(values.as_py()), type=pa.string())
+    array_values = values.combine_chunks() if isinstance(values, ChunkedArrayLike) else values
+    out = [_normalize_empty_or_zero(value) for value in iter_array_values(array_values)]
+    return pa.array(out, type=pa.string())
+
+
+def ensure_null_if_empty_or_zero_udf() -> str:
+    """Ensure the empty/zero normalization UDF is registered.
+
+    Returns
+    -------
+    str
+        Registered function name.
+    """
+    spec = UdfSpec(
+        name=_NULL_IF_EMPTY_OR_ZERO_FUNCTION,
+        inputs={"value": pa.string()},
+        output=pa.string(),
+        fn=_null_if_empty_or_zero_udf,
+        summary="Normalize empty or zero strings",
+        description="Convert empty/zero string values to null.",
+    )
+    return ensure_udf(spec)
 
 
 def ensure_expr_context_udf() -> str:
@@ -86,5 +124,6 @@ def ensure_position_encoding_udf() -> str:
 
 __all__ = [
     "ensure_expr_context_udf",
+    "ensure_null_if_empty_or_zero_udf",
     "ensure_position_encoding_udf",
 ]

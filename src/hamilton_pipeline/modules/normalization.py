@@ -909,7 +909,10 @@ def scip_occurrences_norm_bundle(
     dict[str, TableLike]
         Bundle with normalized occurrences and span errors.
     """
-    if not _requires_any(evidence_plan, ("scip_occurrences_norm", "scip_span_errors")):
+    if not _requires_any(
+        evidence_plan,
+        ("scip_occurrences_norm", "scip_span_errors", "scip_occurrences"),
+    ):
         return {
             "scip_occurrences_norm": _empty_scip_occurrences_norm(scip_occurrences),
             "scip_span_errors": span_error_table([]),
@@ -941,7 +944,7 @@ def cst_imports_norm(
         Normalized CST imports table.
     """
     _ = ctx
-    if not _requires_output(evidence_plan, "cst_imports_norm"):
+    if not _requires_any(evidence_plan, ("cst_imports_norm", "cst_imports")):
         return empty_table(cst_imports.schema)
     return normalize_cst_imports_spans(py_cst_imports=cst_imports)
 
@@ -961,6 +964,6 @@ def cst_defs_norm(
         Normalized CST definitions table.
     """
     _ = ctx
-    if not _requires_output(evidence_plan, "cst_defs_norm"):
+    if not _requires_any(evidence_plan, ("cst_defs_norm", "cst_defs")):
         return empty_table(cst_defs.schema)
     return normalize_cst_defs_spans(py_cst_defs=cst_defs)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from collections.abc import Mapping, Sequence
@@ -40,6 +41,8 @@ _PLAN_SNAPSHOT_ENV = "ARROWDSL_PLAN_SNAPSHOT_PATH"
 _PLAN_SCHEMA_LOG_ENV = "ARROWDSL_PLAN_SCHEMA_LOG_PATH"
 _PLAN_SNAPSHOT_NODE_LIMIT = 200
 _PLAN_SNAPSHOT_OP_LIMIT = 200
+
+logger = logging.getLogger(__name__)
 
 
 type PlanKind = Literal["reader", "table"]
@@ -777,6 +780,8 @@ def execute_plan(
 
     Raises
     ------
+    pyarrow.ArrowIndexError
+        Raised when Acero execution fails even after a single-thread retry.
     ValueError
         Raised when the plan requires DataFusion execution.
     """
@@ -788,7 +793,29 @@ def execute_plan(
     if any(segment.lane == "datafusion" for segment in segmented.segments):
         msg = "DataFusion segments must be executed by the primary pipeline."
         raise ValueError(msg)
-    result = run_segments(segmented, ctx=plan_ctx)
+    try:
+        result = run_segments(segmented, ctx=plan_ctx)
+    except pa.ArrowIndexError as exc:
+        if not plan_ctx.use_threads:
+            raise
+        retry_runtime = replace(
+            plan_ctx.runtime,
+            plan_use_threads=False,
+            scan=replace(plan_ctx.runtime.scan, use_threads=False),
+        )
+        retry_ctx = replace(plan_ctx, runtime=retry_runtime)
+        logger.warning(
+            "Plan %s failed with threaded Acero execution (%s); retrying single-thread.",
+            plan.label,
+            exc,
+        )
+        _log_plan_snapshot(
+            plan,
+            ctx=retry_ctx,
+            segmented=segmented,
+            stage="execute_plan_retry_single_thread",
+        )
+        result = run_segments(segmented, ctx=retry_ctx)
     _log_plan_snapshot(plan, ctx=plan_ctx, segmented=segmented, stage="execute_plan_result")
     if isinstance(result, pa.RecordBatchReader) and prefer_reader:
         combined = metadata_spec

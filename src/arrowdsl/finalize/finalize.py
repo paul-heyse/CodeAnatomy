@@ -34,7 +34,7 @@ from arrowdsl.schema.build import (
 from arrowdsl.schema.chunking import ChunkPolicy
 from arrowdsl.schema.encoding_policy import EncodingPolicy
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
-from arrowdsl.schema.schema import AlignmentInfo, SchemaMetadataSpec
+from arrowdsl.schema.schema import AlignmentInfo, SchemaMetadataSpec, align_table
 from arrowdsl.schema.validation import ArrowValidationOptions
 from schema_spec.specs import NestedFieldSpec
 
@@ -804,7 +804,16 @@ def finalize(
     if not options.skip_canonical_sort:
         good = canonical_sort_if_canonical(good, sort_keys=contract.canonical_sort, ctx=ctx)
 
-    if ctx.provenance and provenance_cols:
+    keep_extras = bool(ctx.provenance and provenance_cols)
+    good = align_table(
+        good,
+        schema=schema,
+        safe_cast=schema_policy.safe_cast,
+        keep_extra_columns=keep_extras,
+        on_error=schema_policy.on_error,
+    )
+
+    if keep_extras:
         keep = list(schema.names) + [col for col in provenance_cols if col in good.column_names]
         good = good.select(keep)
     elif good.column_names != schema.names:

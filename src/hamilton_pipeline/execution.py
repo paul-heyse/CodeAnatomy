@@ -20,8 +20,10 @@ type PipelineFinalVar = str | HamiltonNode | Callable[..., object]
 
 FULL_PIPELINE_OUTPUTS: tuple[str, ...] = (
     "write_cpg_nodes_parquet",
+    "write_cpg_nodes_quality_parquet",
     "write_cpg_edges_parquet",
     "write_cpg_props_parquet",
+    "write_cpg_props_quality_parquet",
     "write_extract_error_artifacts_parquet",
     "write_run_manifest_json",
     "write_run_bundle_dir",

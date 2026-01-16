@@ -304,6 +304,8 @@ def evidence_plan(rule_registry: RuleRegistry) -> EvidencePlan:
         Evidence plan describing required datasets and operations.
     """
     extra_sources = (
+        "scip_occurrences",
+        "scip_symbol_information",
         "type_exprs_norm",
         "types_norm",
         "diagnostics_norm",

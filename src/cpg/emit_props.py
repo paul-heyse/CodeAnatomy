@@ -22,7 +22,6 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.json_factory import JsonPolicy, dumps_text
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.schema_utils import plan_output_columns
 from cpg.specs import (
     PropFieldSpec,
     PropOptions,
@@ -86,9 +85,6 @@ def _value_dtype(value_type: PropValueType) -> DataTypeLike:
 
 def _value_columns() -> tuple[str, ...]:
     return ("value_str", "value_int", "value_float", "value_bool", "value_json")
-
-
-VALUE_STRUCT_FIELD = "value_struct"
 
 
 def _null_value_exprs() -> dict[str, ComputeExpression]:
@@ -202,50 +198,6 @@ def _value_expr(
     )
 
 
-def _value_struct_expr(value_exprs: dict[str, ComputeExpression]) -> ComputeExpression:
-    names = list(value_exprs.keys())
-    exprs = [value_exprs[name] for name in names]
-    return ensure_expression(pc.make_struct(*exprs, field_names=names))
-
-
-def _expand_value_struct(
-    plan: Plan,
-    *,
-    ctx: ExecutionContext,
-    defer_json: bool,
-    json_dtype: DataTypeLike | None,
-) -> Plan:
-    value_struct = pc.field(VALUE_STRUCT_FIELD)
-    value_str = ensure_expression(pc.struct_field(value_struct, "value_str"))
-    value_int = ensure_expression(pc.struct_field(value_struct, "value_int"))
-    value_float = ensure_expression(pc.struct_field(value_struct, "value_float"))
-    value_bool = ensure_expression(pc.struct_field(value_struct, "value_bool"))
-    value_json = ensure_expression(pc.struct_field(value_struct, "value_json"))
-    if defer_json:
-        value_json = _serialize_json_expr(value_json, dtype=json_dtype, ctx=ctx)
-    else:
-        value_json = cast_expr(value_json, pa.string(), safe=False)
-
-    exprs: list[ComputeExpression] = [
-        pc.field("entity_kind"),
-        pc.field("entity_id"),
-        pc.field("prop_key"),
-        value_str,
-        value_int,
-        value_float,
-        value_bool,
-        value_json,
-    ]
-    names = ["entity_kind", "entity_id", "prop_key", *_value_columns()]
-    columns = plan_output_columns(plan)
-    if columns is None:
-        columns = plan.schema(ctx=ctx).names
-    if "schema_version" in columns:
-        exprs.append(pc.field("schema_version"))
-        names.append("schema_version")
-    return plan.project(exprs, names, ctx=ctx)
-
-
 def prop_field_plan(
     plan: Plan,
     *,
@@ -276,29 +228,31 @@ def prop_field_plan(
         "bool": "value_bool",
         "json": "value_json",
     }[value.value_type]
-    value_exprs[target_col] = value.expr
-    value_struct = _value_struct_expr(value_exprs)
+    raw_value_expr = value.expr
+    output_value_expr = raw_value_expr
+    if value.value_type == "json" and value.defer_json:
+        output_value_expr = _serialize_json_expr(
+            raw_value_expr,
+            dtype=value.json_dtype,
+            ctx=context.ctx,
+        )
+    value_exprs[target_col] = output_value_expr
 
     exprs: list[ComputeExpression] = [
         scalar_expr(context.entity_kind, dtype=pa.string()),
         context.entity_id,
         scalar_expr(field.prop_key, dtype=pa.string()),
-        value_struct,
+        *[value_exprs[name] for name in _value_columns()],
     ]
-    names = ["entity_kind", "entity_id", "prop_key", VALUE_STRUCT_FIELD]
+    names = ["entity_kind", "entity_id", "prop_key", *_value_columns()]
     if context.schema_version is not None:
         exprs.append(scalar_expr(context.schema_version, dtype=pa.int32()))
         names.append("schema_version")
-    out = plan.project(exprs, names, ctx=context.ctx)
     if field.skip_if_none:
-        value_expr = ensure_expression(pc.struct_field(pc.field(VALUE_STRUCT_FIELD), target_col))
-        out = out.filter(ensure_expression(pc.is_valid(value_expr)), ctx=context.ctx)
-    return _expand_value_struct(
-        out,
-        ctx=context.ctx,
-        defer_json=value.defer_json,
-        json_dtype=value.json_dtype,
-    )
+        out = plan.filter(ensure_expression(pc.is_valid(raw_value_expr)), ctx=context.ctx)
+    else:
+        out = plan
+    return out.project(exprs, names, ctx=context.ctx)
 
 
 def emit_props_plans(

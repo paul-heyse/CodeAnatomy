@@ -480,7 +480,7 @@ def _cst_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
             "feature_flag": "include_name_refs",
             "postprocess": None,
             "metadata_extra": None,
-            "evidence_required_columns": None,
+            "evidence_required_columns": ["name_ref_id", "span_id", "path"],
         },
         {
             **base,
@@ -510,7 +510,7 @@ def _cst_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
             "feature_flag": "include_imports",
             "postprocess": None,
             "metadata_extra": None,
-            "evidence_required_columns": None,
+            "evidence_required_columns": ["path"],
         },
         {
             **base,
@@ -538,7 +538,14 @@ def _cst_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
             "feature_flag": "include_callsites",
             "postprocess": None,
             "metadata_extra": None,
-            "evidence_required_columns": None,
+            "evidence_required_columns": [
+                "call_id",
+                "span_id",
+                "path",
+                "callee_bstart",
+                "callee_bend",
+                "callee_qnames",
+            ],
         },
         {
             **base,
@@ -1087,7 +1094,7 @@ def _scip_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
             "feature_flag": None,
             "postprocess": "scip_occurrences",
             "metadata_extra": None,
-            "evidence_required_columns": None,
+            "evidence_required_columns": ["path", "symbol", "symbol_roles"],
         },
         {
             **base,

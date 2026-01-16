@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import pyarrow as pa
 
+from arrowdsl.compute.expr_core import cast_expr
 from arrowdsl.compute.filters import bitmask_is_set_expr
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
+from arrowdsl.core.interop import ComputeExpression, pc
 from arrowdsl.plan import catalog as plan_catalog
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan_helpers import coalesce_expr
@@ -66,11 +67,11 @@ def derive_scip_role_flags(catalog: PlanCatalog, ctx: ExecutionContext) -> Plan 
     flag_names: list[str] = []
     for name, mask, _ in ROLE_FLAG_SPECS:
         hit = bitmask_is_set_expr(pc.field("symbol_roles"), mask=mask)
-        flag_exprs.append(ensure_expression(pc.cast(hit, pa.int32(), safe=False)))
+        flag_exprs.append(cast_expr(hit, pa.int32(), safe=False))
         flag_names.append(name)
 
     project_exprs = [
-        ensure_expression(pc.cast(pc.field("symbol"), pa.string(), safe=False)),
+        cast_expr(pc.field("symbol"), pa.string(), safe=False),
         *flag_exprs,
     ]
     project_names = ["symbol", *flag_names]

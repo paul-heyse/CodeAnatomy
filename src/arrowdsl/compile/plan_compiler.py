@@ -84,7 +84,13 @@ def _aggregate_declaration(
     aggs: Sequence[tuple[str, str]],
     input_decl: DeclarationLike,
 ) -> DeclarationLike:
-    agg_specs = [(col, fn, None, f"{col}_{fn}") for col, fn in aggs]
+    use_hash = bool(group_keys)
+    agg_specs: list[tuple[str, str, object | None, str]] = []
+    for col, fn in aggs:
+        agg_fn = fn
+        if use_hash and not fn.startswith("hash_"):
+            agg_fn = f"hash_{fn}"
+        agg_specs.append((col, agg_fn, None, f"{col}_{fn}"))
     keys = list(group_keys) if group_keys else None
     return acero.Declaration(
         "aggregate",

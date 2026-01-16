@@ -60,7 +60,8 @@ def stable_id_expr(
         Stable id expression.
     """
     hashed = stable_hash64_expr(*parts, prefix=prefix, null_sentinel=null_sentinel)
-    return _concat_values([ibis.literal(f"{prefix}:"), hashed.cast("string")])
+    prefix_expr = cast("StringValue", ibis.literal(f"{prefix}:"))
+    return _concat_values([prefix_expr, hashed.cast("string")])
 
 
 def stable_key_expr(
@@ -113,10 +114,10 @@ def _parts_with_prefix(
     *,
     prefix: str | None,
     null_sentinel: str,
-) -> list[Value]:
-    values: list[Value] = []
+) -> list[StringValue]:
+    values: list[StringValue] = []
     if prefix is not None:
-        values.append(ibis.literal(prefix))
+        values.append(cast("StringValue", ibis.literal(prefix)))
     values.extend(_stringify(part, null_sentinel=null_sentinel) for part in parts)
     if not values:
         msg = "stable hash expressions require at least one part or prefix."
@@ -124,7 +125,7 @@ def _parts_with_prefix(
     return values
 
 
-def _stringify(value: Value | str | None, *, null_sentinel: str) -> Value:
+def _stringify(value: Value | str | None, *, null_sentinel: str) -> StringValue:
     if isinstance(value, Value):
         expr = value.cast("string")
     elif value is None:
@@ -132,28 +133,28 @@ def _stringify(value: Value | str | None, *, null_sentinel: str) -> Value:
     else:
         expr = ibis.literal(str(value))
     sentinel = ibis.literal(null_sentinel)
-    return ibis.coalesce(expr, sentinel)
+    return cast("StringValue", ibis.coalesce(expr, sentinel))
 
 
-def _join_with_separator(parts: Sequence[Value]) -> Value:
+def _join_with_separator(parts: Sequence[StringValue]) -> StringValue:
     if len(parts) == 1:
         return parts[0]
     sep = ibis.literal(HASH_SEPARATOR)
-    pieces: list[Value] = []
+    pieces: list[StringValue] = []
     for idx, part in enumerate(parts):
         if idx:
-            pieces.append(sep)
+            pieces.append(cast("StringValue", sep))
         pieces.append(part)
     return _concat_values(pieces)
 
 
-def _concat_values(parts: Sequence[Value]) -> Value:
+def _concat_values(parts: Sequence[StringValue]) -> StringValue:
     if not parts:
         msg = "concat requires at least one part."
         raise ValueError(msg)
-    result = cast("StringValue", parts[0])
+    result = parts[0]
     for part in parts[1:]:
-        result = cast("StringValue", result.concat(part))
+        result = result.concat(part)
     return result
 
 

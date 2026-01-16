@@ -44,6 +44,7 @@ from extract.scip_extract import (
 )
 from extract.scip_identity import resolve_scip_identity
 from extract.scip_indexer import build_scip_index_options, ensure_scip_build_dir
+from extract.scip_proto_loader import ensure_scip_pb2
 from extract.spec_helpers import extractor_option_values
 from extract.symtable_extract import SymtableExtractOptions, extract_symtables_table
 from extract.tree_sitter_extract import TreeSitterExtractOptions, extract_ts_tables
@@ -506,6 +507,7 @@ def scip_index_path(
     overrides = scip_index_inputs.scip_identity_overrides
     build_dir = ensure_scip_build_dir(repo_root_path, config.output_dir)
     if config.index_path_override:
+        ensure_scip_pb2(repo_root=repo_root_path, build_dir=build_dir)
         override = Path(config.index_path_override)
         override_path = override if override.is_absolute() else repo_root_path / override
         target = build_dir / "index.scip"
@@ -526,6 +528,7 @@ def scip_index_path(
         identity=identity,
         config=config,
     )
+    ensure_scip_pb2(repo_root=repo_root_path, build_dir=build_dir)
     return str(run_scip_python_index(opts))
 
 

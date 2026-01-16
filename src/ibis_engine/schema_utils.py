@@ -65,16 +65,16 @@ def normalize_table_for_ibis(table: pa.Table) -> pa.Table:
 
 def _normalize_arrow_dtype(dtype: pa.DataType) -> pa.DataType:
     if pa.types.is_list_view(dtype):
-        return pa.list_(_normalize_arrow_dtype(dtype.value_type))
-    if pa.types.is_large_list_view(dtype):
-        return pa.large_list(_normalize_arrow_dtype(dtype.value_type))
-    if pa.types.is_fixed_size_list(dtype):
-        return pa.list_(_normalize_arrow_dtype(dtype.value_type), dtype.list_size)
-    if pa.types.is_list(dtype):
-        return pa.list_(_normalize_arrow_dtype(dtype.value_type))
-    if pa.types.is_large_list(dtype):
-        return pa.large_list(_normalize_arrow_dtype(dtype.value_type))
-    if pa.types.is_struct(dtype):
+        normalized = pa.list_(_normalize_arrow_dtype(dtype.value_type))
+    elif pa.types.is_large_list_view(dtype):
+        normalized = pa.large_list(_normalize_arrow_dtype(dtype.value_type))
+    elif pa.types.is_fixed_size_list(dtype):
+        normalized = pa.list_(_normalize_arrow_dtype(dtype.value_type), dtype.list_size)
+    elif pa.types.is_list(dtype):
+        normalized = pa.list_(_normalize_arrow_dtype(dtype.value_type))
+    elif pa.types.is_large_list(dtype):
+        normalized = pa.large_list(_normalize_arrow_dtype(dtype.value_type))
+    elif pa.types.is_struct(dtype):
         fields = [
             pa.field(
                 field.name,
@@ -84,16 +84,18 @@ def _normalize_arrow_dtype(dtype: pa.DataType) -> pa.DataType:
             )
             for field in dtype
         ]
-        return pa.struct(fields)
-    if pa.types.is_map(dtype):
-        return pa.map_(
+        normalized = pa.struct(fields)
+    elif pa.types.is_map(dtype):
+        normalized = pa.map_(
             _normalize_arrow_dtype(dtype.key_type),
             _normalize_arrow_dtype(dtype.item_type),
             keys_sorted=dtype.keys_sorted,
         )
-    if pa.types.is_dictionary(dtype):
-        return pa.dictionary(dtype.index_type, _normalize_arrow_dtype(dtype.value_type))
-    return dtype
+    elif pa.types.is_dictionary(dtype):
+        normalized = pa.dictionary(dtype.index_type, _normalize_arrow_dtype(dtype.value_type))
+    else:
+        normalized = dtype
+    return normalized
 
 
 def _normalize_arrow_schema(schema: pa.Schema) -> pa.Schema:

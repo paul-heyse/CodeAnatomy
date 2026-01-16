@@ -988,6 +988,7 @@ def relationship_tables(
         return cast("TableLike", result.value)
 
     out: dict[str, TableLike] = {}
+    dynamic_outputs: dict[str, TableLike] = {}
     exec_options = CompiledOutputExecutionOptions(
         contracts=relationship_contracts,
         params=relspec_param_bindings,
@@ -997,12 +998,21 @@ def relationship_tables(
         ibis_backend=ibis_backend,
     )
     for key, compiled in compiled_relationship_outputs.items():
+        resolver = relspec_resolver
+        if dynamic_outputs:
+            dynamic_resolver = InMemoryPlanResolver(dynamic_outputs, backend=ibis_backend)
+            resolver = _CompositePlanResolver(
+                primary=dynamic_resolver,
+                fallback=relspec_resolver,
+                primary_names=frozenset(dynamic_outputs),
+            )
         res = compiled.execute(
             ctx=exec_ctx,
-            resolver=relspec_resolver,
+            resolver=resolver,
             options=exec_options,
         )
         out[key] = res.good
+        dynamic_outputs[key] = res.good
 
     # Ensure expected keys exist for extract_fields
     out.setdefault(

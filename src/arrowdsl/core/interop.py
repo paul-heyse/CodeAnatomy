@@ -385,6 +385,47 @@ def ensure_expression(value: object) -> ComputeExpression:
     raise TypeError(msg)
 
 
+def call_expression_function(
+    function_name: str,
+    arguments: Sequence[ComputeExpression],
+    options: object | None = None,
+) -> ComputeExpression:
+    """Return a compute expression for a registered function call.
+
+    Parameters
+    ----------
+    function_name
+        Compute function name to invoke.
+    arguments
+        Compute expression arguments for the function.
+    options
+        Optional function options payload.
+
+    Returns
+    -------
+    ComputeExpression
+        Expression representing the function call.
+
+    Raises
+    ------
+    ValueError
+        Raised when no arguments are provided.
+    AttributeError
+        Raised when the expression does not support function calls.
+    """
+    if not arguments:
+        msg = "call_expression_function requires at least one argument."
+        raise ValueError(msg)
+    call = cast(
+        "Callable[[str, Sequence[ComputeExpression], object | None], ComputeExpression]",
+        getattr(arguments[0], "_call", None),
+    )
+    if call is None:
+        msg = "ComputeExpression does not support function calls."
+        raise AttributeError(msg)
+    return call(function_name, arguments, options)
+
+
 class ComputeModule(Protocol):
     """Protocol for the subset of pyarrow.compute used in this repo."""
 
@@ -416,16 +457,17 @@ class ComputeModule(Protocol):
     less_equal: Callable[..., ArrayLike]
     greater: Callable[..., ArrayLike]
     greater_equal: Callable[..., ArrayLike]
-    bit_wise_and: Callable[
-        [ArrayLike | ChunkedArrayLike | ScalarLike, ArrayLike | ChunkedArrayLike | ScalarLike],
-        ArrayLike,
-    ]
+    bit_wise_and: Callable[[ComputeOperand | ScalarLike, ComputeOperand | ScalarLike], ArrayLike]
     starts_with: Callable[[ComputeOperand, ScalarOperand], ArrayLike]
     ends_with: Callable[[ComputeOperand, ScalarOperand], ArrayLike]
     match_substring: Callable[[ComputeOperand, ScalarOperand], ArrayLike]
     match_substring_regex: Callable[[ComputeOperand, ScalarOperand], ArrayLike]
+    split_pattern: Callable[..., ArrayLike]
+    list_element: Callable[..., ArrayLike]
     utf8_trim: Callable[[ComputeOperand], ArrayLike]
-    match_substring_regex: Callable[[ComputeOperand, ScalarOperand], ArrayLike]
+    utf8_trim_whitespace: Callable[[ComputeOperand], ArrayLike]
+    utf8_length: Callable[[ComputeOperand], ArrayLike]
+    utf8_upper: Callable[[ComputeOperand], ArrayLike]
     is_in: Callable[..., ArrayLike]
     drop_null: Callable[[ArrayLike | ChunkedArrayLike], ArrayLike]
     invert: Callable[[ComputeOperand], ArrayLike]
@@ -443,6 +485,7 @@ class ComputeModule(Protocol):
     call_function: Callable[..., ArrayLike | ChunkedArrayLike | ScalarLike]
     get_function: Callable[[str], object]
     register_scalar_function: Callable[..., None]
+    SetLookupOptions: Callable[..., object]
 
 
 class AceroModule(Protocol):
@@ -548,6 +591,7 @@ __all__ = [
     "array",
     "binary",
     "bool_",
+    "call_expression_function",
     "concat_tables",
     "dictionary",
     "ensure_expression",

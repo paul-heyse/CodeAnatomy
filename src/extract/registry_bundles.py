@@ -154,6 +154,7 @@ _OUTPUT_BUNDLES: Mapping[str, OutputBundleSpec] = {
 
 _OUTPUT_TO_DATASET: dict[str, str] = {}
 _OUTPUT_SKIP: set[str] = set()
+_DATASET_NAMES: set[str] = {row.name for row in DATASET_ROWS}
 for _bundle in _OUTPUT_BUNDLES.values():
     for _output, _dataset in _bundle.dataset_map.items():
         if _dataset is None:
@@ -227,10 +228,12 @@ def dataset_name_for_output(output: str) -> str | None:
     if output in _OUTPUT_SKIP:
         return None
     dataset = _OUTPUT_TO_DATASET.get(output)
-    if dataset is None:
-        msg = f"Unknown extract output: {output!r}."
-        raise KeyError(msg)
-    return dataset
+    if dataset is not None:
+        return dataset
+    if output in _DATASET_NAMES:
+        return output
+    msg = f"Unknown extract output: {output!r}."
+    raise KeyError(msg)
 
 
 __all__ = [

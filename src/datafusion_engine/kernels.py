@@ -53,7 +53,24 @@ def _df_from_table(
     *,
     name: str,
 ) -> DataFrame:
-    return ctx.from_arrow(cast("pa.Table", table), name=name)
+    existing = _existing_table_names(ctx)
+    table_name = _temp_name(name, existing) if name in existing else name
+    return ctx.from_arrow(cast("pa.Table", table), name=table_name)
+
+
+def _existing_table_names(ctx: SessionContext) -> set[str]:
+    names: set[str] = set()
+    for catalog_name in ctx.catalog_names():
+        try:
+            catalog = ctx.catalog(catalog_name)
+        except KeyError:
+            continue
+        for schema_name in catalog.schema_names():
+            schema = catalog.schema(schema_name)
+            if schema is None:
+                continue
+            names.update(schema.table_names())
+    return names
 
 
 def _metadata_spec_from_tables(tables: Sequence[TableLike]) -> SchemaMetadataSpec | None:
@@ -357,7 +374,7 @@ def _interval_match_mask(
 
 
 def _normalize_span_expr(column: str) -> Expr:
-    return _NORMALIZE_SPAN_UDF(col(column).cast("string"))
+    return _NORMALIZE_SPAN_UDF(col(column).cast(pa.string()))
 
 
 def _interval_order_exprs(

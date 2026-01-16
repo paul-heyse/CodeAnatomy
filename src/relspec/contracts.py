@@ -31,6 +31,8 @@ RELATION_OUTPUT_SCHEMA = pa.schema(
         pa.field("symbol_roles", pa.int32(), nullable=True),
         pa.field("qname_source", pa.string(), nullable=True),
         pa.field("ambiguity_group_id", pa.string(), nullable=True),
+        pa.field("diag_source", pa.string(), nullable=True),
+        pa.field("severity", pa.string(), nullable=True),
         pa.field("rule_name", pa.string(), nullable=True),
         pa.field("rule_priority", pa.int32(), nullable=True),
     ],

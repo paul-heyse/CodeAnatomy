@@ -13,11 +13,14 @@ import pyarrow.types as patypes
 from arrowdsl.compile.expr_compiler import ExprCompiler
 from arrowdsl.compute.expr_core import ExprSpec, cast_expr
 from arrowdsl.compute.expr_ops import and_expr, or_expr
-from arrowdsl.compute.predicates import InSet, IsNull, Not, predicate_spec
-from arrowdsl.compute.udf_helpers import (
-    ensure_expr_context_udf,
-    ensure_position_encoding_udf,
+from arrowdsl.compute.position_encoding import (
+    DEFAULT_POSITION_ENCODING,
+    ENC_UTF8,
+    ENC_UTF16,
+    ENC_UTF32,
+    VALID_POSITION_ENCODINGS,
 )
+from arrowdsl.compute.predicates import InSet, IsNull, Not, predicate_spec
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
@@ -270,7 +273,7 @@ class TrimExprSpec:
         ComputeExpression
             Expression trimming UTF-8 whitespace.
         """
-        return ensure_expression(pc.call_function("utf8_trim_whitespace", [pc.field(self.column)]))
+        return ensure_expression(pc.utf8_trim_whitespace(pc.field(self.column)))
 
     def materialize(self, table: TableLike) -> ArrayLike:
         """Materialize the trim expression against a table.
@@ -420,14 +423,14 @@ def trimmed_non_empty_expr(col: str) -> tuple[ComputeExpression, ComputeExpressi
     tuple[ComputeExpression, ComputeExpression]
         Trimmed expression and non-empty predicate.
     """
-    trimmed = ensure_expression(pc.call_function("utf8_trim_whitespace", [pc.field(col)]))
+    trimmed = ensure_expression(pc.utf8_trim_whitespace(pc.field(col)))
     non_empty = and_expr(
         ensure_expression(cast("ComputeExpression", pc.is_valid(trimmed))),
         ensure_expression(
             cast(
                 "ComputeExpression",
                 pc.greater(
-                    ensure_expression(pc.call_function("utf8_length", [trimmed])),
+                    ensure_expression(pc.utf8_length(trimmed)),
                     pc.scalar(0),
                 ),
             )
@@ -511,8 +514,19 @@ def expr_context_expr(expr: ComputeExpression) -> ComputeExpression:
     ComputeExpression
         Expression normalizing expr-context values.
     """
-    func_name = ensure_expr_context_udf()
-    return ensure_expression(pc.call_function(func_name, [expr]))
+    base = cast_expr(ensure_expression(expr), pa.string(), safe=False)
+    trimmed = ensure_expression(pc.utf8_trim_whitespace(base))
+    parts = ensure_expression(pc.split_pattern(trimmed, ".", reverse=True))
+    last = ensure_expression(pc.list_element(parts, 0))
+    upper = ensure_expression(pc.utf8_upper(last))
+    empty = ensure_expression(pc.equal(pc.utf8_length(upper), pc.scalar(0)))
+    return ensure_expression(
+        pc.if_else(
+            empty,
+            cast_expr(pc.scalar(None), pa.string(), safe=False),
+            upper,
+        )
+    )
 
 
 def position_encoding_expr(expr: ComputeExpression) -> ComputeExpression:
@@ -523,9 +537,52 @@ def position_encoding_expr(expr: ComputeExpression) -> ComputeExpression:
     ComputeExpression
         Expression normalizing position encodings to SCIP enum values.
     """
-    func_name = ensure_position_encoding_udf()
-    casted = cast_expr(expr, pa.string(), safe=False)
-    return ensure_expression(pc.call_function(func_name, [casted]))
+    text = ensure_expression(
+        pc.utf8_upper(pc.utf8_trim_whitespace(cast_expr(expr, pa.string(), safe=False)))
+    )
+    is_digits = ensure_expression(pc.match_substring_regex(text, "^[0-9]+$"))
+    digits_text = ensure_expression(
+        pc.if_else(
+            is_digits,
+            text,
+            cast_expr(pc.scalar(None), pa.string(), safe=False),
+        )
+    )
+    digits_value = cast_expr(digits_text, pa.int32(), safe=False)
+    valid_values = pa.array(sorted(VALID_POSITION_ENCODINGS), type=pa.int32())
+    valid_options = pc.SetLookupOptions(value_set=valid_values)
+    false_scalar = pc.scalar(pa.scalar(value=False))
+    valid_digits = ensure_expression(
+        pc.coalesce(ensure_expression(pc.is_in(digits_value, options=valid_options)), false_scalar)
+    )
+    utf8_hit = ensure_expression(
+        pc.coalesce(ensure_expression(pc.match_substring(text, "UTF8")), false_scalar)
+    )
+    utf16_hit = ensure_expression(
+        pc.coalesce(ensure_expression(pc.match_substring(text, "UTF16")), false_scalar)
+    )
+    utf32_hit = ensure_expression(
+        pc.coalesce(ensure_expression(pc.match_substring(text, "UTF32")), false_scalar)
+    )
+    default_value = cast_expr(pc.scalar(DEFAULT_POSITION_ENCODING), pa.int32(), safe=False)
+    utf8_value = cast_expr(pc.scalar(ENC_UTF8), pa.int32(), safe=False)
+    utf16_value = cast_expr(pc.scalar(ENC_UTF16), pa.int32(), safe=False)
+    utf32_value = cast_expr(pc.scalar(ENC_UTF32), pa.int32(), safe=False)
+    return ensure_expression(
+        pc.if_else(
+            valid_digits,
+            digits_value,
+            pc.if_else(
+                utf8_hit,
+                utf8_value,
+                pc.if_else(
+                    utf16_hit,
+                    utf16_value,
+                    pc.if_else(utf32_hit, utf32_value, default_value),
+                ),
+            ),
+        )
+    )
 
 
 def flag_to_bool_expr(expr: ComputeExpression) -> ComputeExpression:
@@ -628,9 +685,11 @@ def bitmask_is_set_expr(values: ComputeExpression, *, mask: int) -> ComputeExpre
     ComputeExpression
         Expression indicating whether the mask bit is set.
     """
-    roles = pc.cast(values, pa.int64(), safe=False)
-    hit = pc.not_equal(pc.bit_wise_and(roles, pa.scalar(mask)), pa.scalar(0))
-    return ensure_expression(pc.coalesce(hit, pc.scalar(pa.scalar(value=False))))
+    roles = cast_expr(values, pa.int64(), safe=False)
+    masked = ensure_expression(pc.bit_wise_and(roles, pa.scalar(mask)))
+    hit = ensure_expression(pc.not_equal(masked, pa.scalar(0)))
+    false_expr = pc.scalar(pa.scalar(value=False))
+    return ensure_expression(pc.coalesce(hit, false_expr))
 
 
 def _compute_array(function_name: str, args: list[object]) -> ArrayLike | ChunkedArrayLike:

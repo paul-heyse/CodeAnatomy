@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import cast
 
@@ -172,21 +172,63 @@ def type_nodes_plan_ibis(
     IbisPlan | None
         Ibis plan for normalized type nodes.
     """
-    expr_schema = pa.schema(
+    type_node_columns = _type_node_columns(ctx)
+    expr_rows = _expr_type_rows(
+        catalog.resolve_expr(
+            "type_exprs_norm_v1",
+            ctx=ctx,
+            schema=_expr_type_schema(),
+        ),
+        ctx=ctx,
+        type_node_columns=type_node_columns,
+    )
+    scip_rows = _scip_type_rows(
+        catalog.resolve_expr(
+            "scip_symbol_information",
+            ctx=ctx,
+            schema=_scip_type_schema(),
+        ),
+        ctx=ctx,
+        type_node_columns=type_node_columns,
+    )
+    combined = _prefer_type_rows(expr_rows, scip_rows)
+    target_schema = dataset_schema(TYPE_NODES_NAME)
+    aligned = align_table_to_schema(
+        combined,
+        schema=target_schema,
+        keep_extra_columns=ctx.debug,
+    )
+    ordering_keys = ordering_keys_for_schema(target_schema)
+    ordering = Ordering.explicit(ordering_keys) if ordering_keys else Ordering.unordered()
+    return IbisPlan(expr=aligned, ordering=ordering)
+
+
+def _expr_type_schema() -> pa.Schema:
+    return pa.schema(
         [
             pa.field("type_id", pa.string()),
             pa.field("type_repr", pa.string()),
         ]
     )
-    scip_schema = pa.schema([pa.field("type_repr", pa.string())])
-    exprs = catalog.resolve_expr("type_exprs_norm_v1", ctx=ctx, schema=expr_schema)
-    scip = catalog.resolve_expr("scip_symbol_information", ctx=ctx, schema=scip_schema)
-    scip_has_type_repr = "type_repr" in scip.columns
 
-    type_node_columns = ["type_id", "type_repr", "type_form", "origin"]
+
+def _scip_type_schema() -> pa.Schema:
+    return pa.schema([pa.field("type_repr", pa.string())])
+
+
+def _type_node_columns(ctx: ExecutionContext) -> list[str]:
+    columns = ["type_id", "type_repr", "type_form", "origin"]
     if ctx.debug:
-        type_node_columns.append("type_id_key")
+        columns.append("type_id_key")
+    return columns
 
+
+def _expr_type_rows(
+    exprs: Table,
+    *,
+    ctx: ExecutionContext,
+    type_node_columns: Sequence[str],
+) -> Table:
     expr_trimmed = exprs.type_repr.cast("string").strip()
     expr_non_empty = expr_trimmed.notnull() & (expr_trimmed.length() > ibis.literal(0))
     expr_valid = expr_non_empty & exprs.type_id.notnull()
@@ -203,43 +245,44 @@ def type_nodes_plan_ibis(
                 null_sentinel=TYPE_ID_SPEC.null_sentinel,
             )
         )
-    expr_rows = expr_rows.select(*[expr_rows[name] for name in type_node_columns])
+    return expr_rows.select(*[expr_rows[name] for name in type_node_columns])
 
-    scip_rows: Table | None = None
-    if scip_has_type_repr:
-        scip = ensure_columns(scip, schema=scip_schema)
-        scip_trimmed = scip.type_repr.cast("string").strip()
-        scip_non_empty = scip_trimmed.notnull() & (scip_trimmed.length() > ibis.literal(0))
-        scip_rows = scip.filter(scip_non_empty).mutate(
-            type_repr=scip_trimmed,
-            type_id=stable_id_expr(TYPE_ID_SPEC.prefix, scip_trimmed),
-            type_form=ibis.literal("scip"),
-            origin=ibis.literal("inferred"),
-        )
-        if ctx.debug:
-            scip_rows = scip_rows.mutate(
-                type_id_key=stable_key_expr(
-                    scip_trimmed,
-                    prefix=TYPE_ID_SPEC.prefix,
-                    null_sentinel=TYPE_ID_SPEC.null_sentinel,
-                )
-            )
-        scip_rows = scip_rows.select(*[scip_rows[name] for name in type_node_columns])
 
-    combined = expr_rows
-    if scip_rows is not None:
-        scip_preview = scip_rows.limit(1).to_pyarrow()
-        if scip_preview.num_rows > 0:
-            combined = scip_rows
-    target_schema = dataset_schema(TYPE_NODES_NAME)
-    aligned = align_table_to_schema(
-        combined,
-        schema=target_schema,
-        keep_extra_columns=ctx.debug,
+def _scip_type_rows(
+    scip: Table,
+    *,
+    ctx: ExecutionContext,
+    type_node_columns: Sequence[str],
+) -> Table | None:
+    if "type_repr" not in scip.columns:
+        return None
+    scip = ensure_columns(scip, schema=_scip_type_schema())
+    scip_trimmed = scip.type_repr.cast("string").strip()
+    scip_non_empty = scip_trimmed.notnull() & (scip_trimmed.length() > ibis.literal(0))
+    scip_rows = scip.filter(scip_non_empty).mutate(
+        type_repr=scip_trimmed,
+        type_id=stable_id_expr(TYPE_ID_SPEC.prefix, scip_trimmed),
+        type_form=ibis.literal("scip"),
+        origin=ibis.literal("inferred"),
     )
-    ordering_keys = ordering_keys_for_schema(target_schema)
-    ordering = Ordering.explicit(ordering_keys) if ordering_keys else Ordering.unordered()
-    return IbisPlan(expr=aligned, ordering=ordering)
+    if ctx.debug:
+        scip_rows = scip_rows.mutate(
+            type_id_key=stable_key_expr(
+                scip_trimmed,
+                prefix=TYPE_ID_SPEC.prefix,
+                null_sentinel=TYPE_ID_SPEC.null_sentinel,
+            )
+        )
+    return scip_rows.select(*[scip_rows[name] for name in type_node_columns])
+
+
+def _prefer_type_rows(expr_rows: Table, scip_rows: Table | None) -> Table:
+    if scip_rows is None:
+        return expr_rows
+    scip_preview = scip_rows.limit(1).to_pyarrow()
+    if scip_preview.num_rows > 0:
+        return scip_rows
+    return expr_rows
 
 
 def cfg_blocks_plan_ibis(

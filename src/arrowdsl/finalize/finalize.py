@@ -17,6 +17,7 @@ from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
     DataTypeLike,
+    ListArrayLike,
     SchemaLike,
     TableLike,
     pc,
@@ -176,6 +177,20 @@ def _provenance_columns(table: TableLike, schema: SchemaLike) -> list[str]:
     return [col for col in cols if col not in schema.names]
 
 
+def _relax_nullable_schema(schema: SchemaLike) -> pa.Schema:
+    fields = [
+        pa.field(field.name, field.type, nullable=True, metadata=field.metadata)
+        for field in schema
+    ]
+    return pa.schema(fields, metadata=schema.metadata)
+
+
+def _relax_nullable_table(table: TableLike) -> TableLike:
+    relaxed_schema = _relax_nullable_schema(table.schema)
+    arrays = [table[name] for name in table.column_names]
+    return pa.Table.from_arrays(arrays, schema=relaxed_schema)
+
+
 @dataclass(frozen=True)
 class InvariantResult:
     """Invariant evaluation with metadata for error details."""
@@ -202,7 +217,12 @@ ERROR_DETAIL_STRUCT = pa.struct([(name, dtype) for name, dtype in ERROR_DETAIL_F
 
 
 def _build_error_detail_list(errors: TableLike) -> ArrayLike:
-    detail_fields = {name: errors[name] for name, _ in ERROR_DETAIL_FIELDS}
+    detail_fields: dict[str, ArrayLike] = {}
+    for name, _ in ERROR_DETAIL_FIELDS:
+        column = errors[name]
+        if isinstance(column, pa.ChunkedArray):
+            column = column.combine_chunks()
+        detail_fields[name] = column
     detail = build_struct(detail_fields, struct_type=ERROR_DETAIL_STRUCT)
     offsets = pa.array(range(errors.num_rows + 1), type=pa.int32())
     return build_list(offsets, detail)
@@ -266,9 +286,9 @@ class ErrorArtifactSpec:
             error_parts.append(bad_rows)
 
         if error_parts:
-            return pa.concat_tables(error_parts, promote=True)
+            return pa.concat_tables(error_parts, promote_options="default")
 
-        empty_arrays = [pa.array([], type=field.type) for field in table.schema]
+        empty_arrays = [pa.array([], type=schema_field.type) for schema_field in table.schema]
         empty_arrays.extend(pa.array([], type=field_type) for _, field_type in self.detail_fields)
         names = [*list(table.schema.names), *[name for name, _ in self.detail_fields]]
         return pa.Table.from_arrays(empty_arrays, names=names)
@@ -469,27 +489,35 @@ def _maybe_validate_with_arrow(
     return _validate_arrow_table(table, spec=contract.schema_spec, options=options)
 
 
-def _aggregate_error_details(
-    errors: TableLike,
+def _error_detail_key_cols(contract: Contract, schema: SchemaLike) -> list[str]:
+    return list(contract.key_fields) if contract.key_fields else list(schema.names)
+
+
+def _empty_error_details_table(
     *,
     contract: Contract,
     schema: SchemaLike,
-    provenance_cols: Sequence[str],
+    errors_schema: SchemaLike,
+    provenance: Sequence[str],
 ) -> TableLike:
-    provenance = [col for col in provenance_cols if col in errors.column_names]
-    if errors.num_rows == 0:
-        fields = [("row_id", pa.int64())]
-        key_cols = list(contract.key_fields) if contract.key_fields else list(schema.names)
-        fields.extend((col, schema.field(col).type) for col in key_cols if col in schema.names)
-        fields.extend((col, errors.schema.field(col).type) for col in provenance)
-        fields.append(("error_detail", ERROR_DETAIL_SPEC.dtype))
-        empty_schema = pa.schema(fields)
-        return pa.Table.from_arrays(
-            [pa.array([], type=field.type) for field in empty_schema],
-            schema=empty_schema,
-        )
+    key_cols = _error_detail_key_cols(contract, schema)
+    fields = [("row_id", pa.int64())]
+    fields.extend((col, schema.field(col).type) for col in key_cols if col in schema.names)
+    fields.extend((col, errors_schema.field(col).type) for col in provenance)
+    fields.append(("error_detail", ERROR_DETAIL_SPEC.dtype))
+    empty_schema = pa.schema(fields)
+    return pa.Table.from_arrays(
+        [pa.array([], type=schema_field.type) for schema_field in empty_schema],
+        schema=empty_schema,
+    )
 
-    key_cols = list(contract.key_fields) if contract.key_fields else list(schema.names)
+
+def _row_id_for_errors(
+    errors: TableLike,
+    *,
+    contract: Contract,
+    key_cols: Sequence[str],
+) -> ArrayLike:
     if key_cols:
         spec = HashSpec(
             prefix=f"{contract.name}:row",
@@ -497,16 +525,20 @@ def _aggregate_error_details(
             as_string=False,
             missing="null",
         )
-        row_id = hash_column_values(errors, spec=spec)
-    else:
-        row_id = pa.array(range(errors.num_rows), type=pa.int64())
-    errors = errors.append_column("row_id", row_id)
-    group_cols = ["row_id"] + [col for col in key_cols if col in errors.column_names] + provenance
-    detail_field_names = [name for name, _ in ERROR_DETAIL_FIELDS]
+        return hash_column_values(errors, spec=spec)
+    return pa.array(range(errors.num_rows), type=pa.int64())
+
+
+def _aggregate_error_detail_lists(
+    errors: TableLike,
+    *,
+    group_cols: Sequence[str],
+    detail_field_names: Sequence[str],
+) -> TableLike:
     aggregates = [(name, "list") for name in detail_field_names]
-    group_table = errors.select(list(group_cols) + detail_field_names)
+    group_table = errors.select(list(group_cols) + list(detail_field_names))
     group_table, dict_cols = _decode_dictionary_columns(group_table)
-    aggregated = group_table.group_by(group_cols, use_threads=True).aggregate(aggregates)
+    aggregated = group_table.group_by(list(group_cols), use_threads=True).aggregate(aggregates)
     list_columns = {name: aggregated[f"{name}_list"] for name in detail_field_names}
     error_detail = _build_error_detail_from_lists(list_columns)
     list_cols = [f"{name}_list" for name in detail_field_names]
@@ -516,26 +548,104 @@ def _aggregate_error_details(
     return aggregated
 
 
+def _aggregate_error_details(
+    errors: TableLike,
+    *,
+    contract: Contract,
+    schema: SchemaLike,
+    provenance_cols: Sequence[str],
+) -> TableLike:
+    provenance = [col for col in provenance_cols if col in errors.column_names]
+    if errors.num_rows == 0:
+        return _empty_error_details_table(
+            contract=contract,
+            schema=schema,
+            errors_schema=errors.schema,
+            provenance=provenance,
+        )
+    key_cols = _error_detail_key_cols(contract, schema)
+    row_id = _row_id_for_errors(errors, contract=contract, key_cols=key_cols)
+    errors = errors.append_column("row_id", row_id)
+    group_cols = ["row_id"] + [col for col in key_cols if col in errors.column_names] + provenance
+    detail_field_names = [name for name, _ in ERROR_DETAIL_FIELDS]
+    return _aggregate_error_detail_lists(
+        errors,
+        group_cols=group_cols,
+        detail_field_names=detail_field_names,
+    )
+
+
 def _build_error_detail_from_lists(
     list_columns: dict[str, ArrayLike | ChunkedArrayLike],
 ) -> ArrayLike:
     first = _combine_list_array(next(iter(list_columns.values())))
-    offsets = first.offsets
+    offsets = _list_offsets(first)
     struct_fields: dict[str, ArrayLike] = {}
     for name, list_col in list_columns.items():
         list_array = _combine_list_array(list_col)
         values = pc.list_flatten(list_array)
         struct_fields[name] = values
     detail_struct = build_struct(struct_fields, struct_type=ERROR_DETAIL_STRUCT)
-    return build_list(offsets, detail_struct)
+    return _build_list_from_offsets(offsets, detail_struct, template=first)
 
 
-def _combine_list_array(values: ArrayLike | ChunkedArrayLike) -> pa.ListArray:
-    combined = values.combine_chunks() if isinstance(values, pa.ChunkedArray) else values
-    if not isinstance(combined, pa.ListArray):
-        msg = "Expected list array for error detail aggregation."
-        raise TypeError(msg)
-    return combined
+def _build_list_from_offsets(
+    offsets: ArrayLike | ChunkedArrayLike,
+    values: ArrayLike | ChunkedArrayLike,
+    *,
+    template: ListArrayLike,
+) -> ListArrayLike:
+    if isinstance(template, pa.LargeListArray):
+        return pa.LargeListArray.from_arrays(offsets, values)
+    return build_list(offsets, values)
+
+
+def _list_offsets(list_array: ListArrayLike) -> ArrayLike:
+    if isinstance(list_array, pa.ListArray):
+        return cast("pa.ListArray", list_array).offsets
+    if isinstance(list_array, pa.LargeListArray):
+        return cast("pa.LargeListArray", list_array).offsets
+    msg = "Unsupported list array type for error detail aggregation."
+    raise TypeError(msg)
+
+
+def _is_list_like_type(dtype: DataTypeLike) -> bool:
+    return bool(
+        patypes.is_list(dtype)
+        or patypes.is_large_list(dtype)
+        or patypes.is_list_view(dtype)
+        or patypes.is_large_list_view(dtype)
+        or patypes.is_fixed_size_list(dtype)
+    )
+
+
+def _combine_list_array(values: ArrayLike | ChunkedArrayLike) -> ListArrayLike:
+    combined = values.combine_chunks() if isinstance(values, ChunkedArrayLike) else values
+    if isinstance(combined, pa.ListArray):
+        return cast("ListArrayLike", combined)
+    if isinstance(combined, pa.LargeListArray):
+        return cast("ListArrayLike", combined)
+    if isinstance(combined, pa.ListViewArray):
+        list_view_type = cast("pa.ListViewType", combined.type)
+        list_type = pa.list_(list_view_type.value_type)
+        return cast("ListArrayLike", pa.array(combined.to_pylist(), type=list_type))
+    if isinstance(combined, pa.LargeListViewArray):
+        list_view_type = cast("pa.LargeListViewType", combined.type)
+        list_type = pa.large_list(list_view_type.value_type)
+        return cast("ListArrayLike", pa.array(combined.to_pylist(), type=list_type))
+    combined_type = getattr(combined, "type", None)
+    if combined_type is not None and _is_list_like_type(combined_type):
+        value_type = getattr(combined_type, "value_type", None)
+        if value_type is not None:
+            list_type = (
+                pa.large_list(cast("pa.DataType", value_type))
+                if patypes.is_large_list(combined_type)
+                or patypes.is_large_list_view(combined_type)
+                else pa.list_(cast("pa.DataType", value_type))
+            )
+            return cast("ListArrayLike", pa.array(combined.to_pylist(), type=list_type))
+    msg = "Expected list array for error detail aggregation."
+    raise TypeError(msg)
 
 
 def _decode_dictionary_columns(
@@ -544,14 +654,14 @@ def _decode_dictionary_columns(
     dict_cols: dict[str, pa.DictionaryType] = {}
     columns: list[ChunkedArrayLike] = []
     names: list[str] = []
-    for field in table.schema:
-        col = cast("ChunkedArrayLike", table[field.name])
-        if patypes.is_dictionary(field.type):
-            dict_type = cast("pa.DictionaryType", field.type)
-            dict_cols[field.name] = dict_type
+    for schema_field in table.schema:
+        col = table[schema_field.name]
+        if patypes.is_dictionary(schema_field.type):
+            dict_type = cast("pa.DictionaryType", schema_field.type)
+            dict_cols[schema_field.name] = dict_type
             col = cast("ChunkedArrayLike", pc.cast(col, dict_type.value_type))
         columns.append(col)
-        names.append(field.name)
+        names.append(schema_field.name)
     if not dict_cols:
         return cast("pa.Table", table), {}
     return pa.table(columns, names=names), dict_cols
@@ -684,6 +794,7 @@ def finalize(
         schema=schema,
         provenance_cols=provenance_cols,
     )
+    errors = _relax_nullable_table(errors)
 
     _raise_on_errors_if_strict(raw_errors, ctx=ctx, contract=contract)
 

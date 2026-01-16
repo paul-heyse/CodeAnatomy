@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,14 @@ from urllib.request import urlopen
 DEFAULT_BUILD_SUBDIR = Path("build") / "scip"
 DEFAULT_SCIP_BIN = "scip"
 SCIP_PROTO_FILENAME = "scip.proto"
+
+
+class ScipVersionError(ValueError):
+    """Raised when the scip CLI version string cannot be parsed."""
+
+    def __init__(self, version_output: str) -> None:
+        msg = f"Unsupported scip version output: {version_output!r}"
+        super().__init__(msg)
 
 
 def scip_cli_version(scip_bin: str) -> str:
@@ -28,6 +37,11 @@ def scip_cli_version(scip_bin: str) -> str:
     -------
     str
         The CLI version string (e.g. "v0.6.1").
+
+    Raises
+    ------
+    ScipVersionError
+        Raised when the CLI output cannot be parsed.
     """
     proc = subprocess.run(
         [scip_bin, "--version"],
@@ -35,7 +49,14 @@ def scip_cli_version(scip_bin: str) -> str:
         text=True,
         check=True,
     )
-    return proc.stdout.strip()
+    version_output = proc.stdout.strip()
+    match = re.search(r"(v?\d+\.\d+\.\d+(?:[^\s]*)?)", version_output)
+    if not match:
+        raise ScipVersionError(version_output)
+    version = match.group(1)
+    if not version.startswith("v"):
+        version = f"v{version}"
+    return version
 
 
 def download_to(url: str, target: Path) -> None:

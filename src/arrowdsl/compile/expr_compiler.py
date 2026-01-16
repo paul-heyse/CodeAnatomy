@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Protocol, cast
 
 from arrowdsl.compute.options import deserialize_options
-from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
+from arrowdsl.core.interop import ComputeExpression, call_expression_function, pc
 from arrowdsl.ir.expr import ExprNode
 
 
@@ -53,7 +53,7 @@ class ExprCompiler:
                     name = cast("str", ensure(name))
             args = [self.to_compute_expr(arg) for arg in expr.args]
             opts = cast("_FunctionOptionsProto | None", deserialize_options(expr.options))
-            return ensure_expression(pc.call_function(name, args, options=opts))
+            return call_expression_function(name, args, options=opts)
         msg = f"Unsupported ExprNode op: {expr.op!r}."
         raise ValueError(msg)
 

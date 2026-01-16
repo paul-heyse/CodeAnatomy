@@ -13,9 +13,16 @@ from arrowdsl.compute.expr_core import cast_expr
 from arrowdsl.compute.filters import ensure_json_udf, null_if_empty_or_zero
 from arrowdsl.compute.macros import null_expr, scalar_expr
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import ComputeExpression, DataTypeLike, ensure_expression, pc
+from arrowdsl.core.interop import (
+    ComputeExpression,
+    DataTypeLike,
+    call_expression_function,
+    ensure_expression,
+    pc,
+)
 from arrowdsl.json_factory import JsonPolicy, dumps_text
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.schema_utils import plan_output_columns
 from cpg.specs import (
     PropFieldSpec,
     PropOptions,
@@ -113,7 +120,8 @@ def _serialize_json_expr(
     if dtype is None or patypes.is_string(dtype) or patypes.is_large_string(dtype):
         return cast_expr(expr, pa.string(), safe=False)
     func_name = ensure_json_udf(dtype)
-    return ensure_expression(pc.call_function(func_name, [expr]))
+    base = ensure_expression(expr)
+    return call_expression_function(func_name, [base])
 
 
 def _json_value_expr(
@@ -229,7 +237,10 @@ def _expand_value_struct(
         value_json,
     ]
     names = ["entity_kind", "entity_id", "prop_key", *_value_columns()]
-    if "schema_version" in plan.schema(ctx=ctx).names:
+    columns = plan_output_columns(plan)
+    if columns is None:
+        columns = plan.schema(ctx=ctx).names
+    if "schema_version" in columns:
         exprs.append(pc.field("schema_version"))
         names.append("schema_version")
     return plan.project(exprs, names, ctx=ctx)

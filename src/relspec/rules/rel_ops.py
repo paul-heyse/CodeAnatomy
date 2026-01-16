@@ -468,6 +468,15 @@ def _parse_columns(value: object) -> tuple[str, ...]:
     raise TypeError(msg)
 
 
+def _parse_optional_columns(value: object | None) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return tuple(str(item) for item in value)
+    msg = "Expected list of column names."
+    raise TypeError(msg)
+
+
 def _parse_join_type(value: object | None) -> JoinType:
     join_map: dict[str, JoinType] = {
         "inner": "inner",
@@ -487,12 +496,17 @@ def _parse_join_type(value: object | None) -> JoinType:
 
 
 def _join_payload(spec: HashJoinConfig) -> dict[str, object]:
+    def _output(value: tuple[str, ...] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return list(value)
+
     return {
         "join_type": spec.join_type,
         "left_keys": list(spec.left_keys),
         "right_keys": list(spec.right_keys),
-        "left_output": list(spec.left_output),
-        "right_output": list(spec.right_output),
+        "left_output": _output(spec.left_output),
+        "right_output": _output(spec.right_output),
         "output_suffix_for_left": spec.output_suffix_for_left,
         "output_suffix_for_right": spec.output_suffix_for_right,
     }
@@ -506,8 +520,8 @@ def _join_from_payload(payload: object | None) -> HashJoinConfig:
         join_type=join_type,
         left_keys=_parse_columns(payload.get("left_keys")),
         right_keys=_parse_columns(payload.get("right_keys")),
-        left_output=_parse_columns(payload.get("left_output")),
-        right_output=_parse_columns(payload.get("right_output")),
+        left_output=_parse_optional_columns(payload.get("left_output")),
+        right_output=_parse_optional_columns(payload.get("right_output")),
         output_suffix_for_left=str(payload.get("output_suffix_for_left", "")),
         output_suffix_for_right=str(payload.get("output_suffix_for_right", "")),
     )

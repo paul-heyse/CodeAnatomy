@@ -320,7 +320,7 @@ def _sort_table_for_keys(table: TableLike, sort_keys: Sequence[SortKey]) -> pa.T
     for key in sort_keys:
         name = key.column
         field = table.schema.field(name)
-        col = cast("ChunkedArrayLike", table[name])
+        col = table[name]
         if patypes.is_dictionary(field.type):
             dict_type = cast("pa.DictionaryType", field.type)
             col = cast("ChunkedArrayLike", pc.cast(col, dict_type.value_type))

@@ -9,7 +9,7 @@ from typing import Protocol, cast
 import ibis
 import ibis.expr.datatypes as dt
 import ibis.expr.operations as ops
-from ibis.expr.types import Table, Value
+from ibis.expr.types import BooleanValue, Scalar, StringValue, Table, Value
 
 from ibis_engine.builtin_udfs import (
     col_to_byte,
@@ -20,6 +20,34 @@ from ibis_engine.builtin_udfs import (
 )
 
 IbisExprFn = Callable[..., Value]
+
+
+def _fill_null_expr(value: Value, fill_value: Scalar) -> Value:
+    return value.fill_null(fill_value)
+
+
+def _if_else_expr(cond: Value, true_value: Value, false_value: Value) -> Value:
+    return ibis.ifelse(cond, true_value, false_value)
+
+
+def _equal_expr(left: Value, right: Value) -> Value:
+    return left == right
+
+
+def _not_equal_expr(left: Value, right: Value) -> Value:
+    return left != right
+
+
+def _invert_expr(value: BooleanValue) -> BooleanValue:
+    return ~value
+
+
+def _bitwise_and_expr(left: BooleanValue, right: BooleanValue) -> BooleanValue:
+    return left & right
+
+
+def _strip_expr(value: StringValue) -> StringValue:
+    return value.strip()
 
 
 class OperationSupportBackend(Protocol):
@@ -98,7 +126,13 @@ def default_expr_registry() -> IbisExprRegistry:
     """
     return IbisExprRegistry(
         functions={
-            "strip": lambda value: value.strip(),
+            "fill_null": _fill_null_expr,
+            "if_else": _if_else_expr,
+            "equal": _equal_expr,
+            "not_equal": _not_equal_expr,
+            "invert": _invert_expr,
+            "bit_wise_and": _bitwise_and_expr,
+            "strip": _strip_expr,
             "cpg_score": cpg_score,
             "stable_hash64": stable_hash64,
             "stable_hash128": stable_hash128,

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import cast
 
 import pyarrow as pa
 
@@ -49,41 +48,88 @@ def run_segments(
     """
     current: TableLike | RecordBatchReaderLike | None = None
     for segment in plan.segments:
-        if segment.lane == "datafusion":
-            if df_executor is None:
-                msg = "DataFusion execution must be provided by the primary pipeline."
-                raise ValueError(msg)
-            current = df_executor(segment, ctx)
-            continue
-        if segment.lane == "acero":
-            if _is_union_all_segment(segment):
-                current = _run_union_all(segment.ops[0], ctx=ctx, df_executor=df_executor)
-                continue
-            ops = segment.ops
-            if current is not None and _needs_input_source(ops):
-                ops = (_table_source_op(current),) + ops
-            decl = PlanCompiler(catalog=OP_CATALOG).to_acero(PlanIR(ops), ctx=ctx)
-            if streamable(plan, ctx=ctx):
-                current = decl.to_reader(use_threads=ctx.use_threads)
-            else:
-                current = decl.to_table(use_threads=ctx.use_threads)
-            continue
-        if segment.lane == "kernel":
-            if current is None or isinstance(current, RecordBatchReaderLike):
-                msg = "Kernel lane requires a materialized table."
-                raise ValueError(msg)
-            current = KernelCompiler(catalog=OP_CATALOG).apply(
-                PlanIR(segment.ops),
-                table=current,
-                ctx=ctx,
-            )
-            continue
-        msg = f"Unsupported lane: {segment.lane!r}."
-        raise ValueError(msg)
+        current = _run_segment(
+            segment,
+            ctx=ctx,
+            plan=plan,
+            current=current,
+            df_executor=df_executor,
+        )
     if current is None:
         msg = "No segments executed."
         raise ValueError(msg)
     return current
+
+
+def _run_segment(
+    segment: Segment,
+    *,
+    ctx: ExecutionContext,
+    plan: SegmentPlan,
+    current: TableLike | RecordBatchReaderLike | None,
+    df_executor: DefExecutor | None,
+) -> TableLike | RecordBatchReaderLike:
+    if segment.lane == "datafusion":
+        return _run_datafusion_segment(segment, ctx=ctx, df_executor=df_executor)
+    if segment.lane == "acero":
+        return _run_acero_segment(
+            segment,
+            ctx=ctx,
+            plan=plan,
+            current=current,
+            df_executor=df_executor,
+        )
+    if segment.lane == "kernel":
+        return _run_kernel_segment(segment, ctx=ctx, current=current)
+    msg = f"Unsupported lane: {segment.lane!r}."
+    raise ValueError(msg)
+
+
+def _run_datafusion_segment(
+    segment: Segment,
+    *,
+    ctx: ExecutionContext,
+    df_executor: DefExecutor | None,
+) -> TableLike | RecordBatchReaderLike:
+    if df_executor is None:
+        msg = "DataFusion execution must be provided by the primary pipeline."
+        raise ValueError(msg)
+    return df_executor(segment, ctx)
+
+
+def _run_acero_segment(
+    segment: Segment,
+    *,
+    ctx: ExecutionContext,
+    plan: SegmentPlan,
+    current: TableLike | RecordBatchReaderLike | None,
+    df_executor: DefExecutor | None,
+) -> TableLike | RecordBatchReaderLike:
+    if _is_union_all_segment(segment):
+        return _run_union_all(segment.ops[0], ctx=ctx, df_executor=df_executor)
+    ops = segment.ops
+    if current is not None and _needs_input_source(ops):
+        ops = (_table_source_op(current), *ops)
+    decl = PlanCompiler(catalog=OP_CATALOG).to_acero(PlanIR(ops), ctx=ctx)
+    if streamable(plan, ctx=ctx):
+        return decl.to_reader(use_threads=ctx.use_threads)
+    return decl.to_table(use_threads=ctx.use_threads)
+
+
+def _run_kernel_segment(
+    segment: Segment,
+    *,
+    ctx: ExecutionContext,
+    current: TableLike | RecordBatchReaderLike | None,
+) -> TableLike:
+    if current is None or isinstance(current, RecordBatchReaderLike):
+        msg = "Kernel lane requires a materialized table."
+        raise ValueError(msg)
+    return KernelCompiler(catalog=OP_CATALOG).apply(
+        PlanIR(segment.ops),
+        table=current,
+        ctx=ctx,
+    )
 
 
 def _is_union_all_segment(segment: Segment) -> bool:
@@ -107,7 +153,7 @@ def _run_union_all(
     ctx: ExecutionContext,
     df_executor: DefExecutor | None,
 ) -> TableLike:
-    inputs = cast("tuple[PlanIR, ...]", node.inputs)
+    inputs = node.inputs
     if not inputs:
         msg = "union_all requires at least one input plan."
         raise ValueError(msg)
@@ -115,11 +161,7 @@ def _run_union_all(
     for input_ir in inputs:
         segmented = segment_plan(input_ir, catalog=OP_CATALOG, ctx=ctx)
         result = run_segments(segmented, ctx=ctx, df_executor=df_executor)
-        if isinstance(result, RecordBatchReaderLike):
-            reader = cast("RecordBatchReaderLike", result)
-            table = reader.read_all()
-        else:
-            table = cast("TableLike", result)
+        table = result.read_all() if isinstance(result, RecordBatchReaderLike) else result
         tables.append(table)
     return pa.concat_tables(tables)
 

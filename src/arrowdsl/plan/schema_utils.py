@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.ir.plan import OpNode, PlanIR
 from arrowdsl.plan.ops import DedupeSpec, JoinSpec
 from arrowdsl.plan.plan import Plan
-from ibis_engine.plan import IbisPlan
+
+if TYPE_CHECKING:
+    from ibis_engine.plan import IbisPlan
 
 
 def plan_schema(plan: Plan | IbisPlan, *, ctx: ExecutionContext) -> SchemaLike:
@@ -20,10 +22,19 @@ def plan_schema(plan: Plan | IbisPlan, *, ctx: ExecutionContext) -> SchemaLike:
     -------
     SchemaLike
         Arrow schema representing the plan output.
+
+    Raises
+    ------
+    TypeError
+        Raised when the plan is not a Plan or IbisPlan-like object.
     """
-    if isinstance(plan, IbisPlan):
-        return plan.expr.schema().to_pyarrow()
-    return plan.schema(ctx=ctx)
+    if isinstance(plan, Plan):
+        return plan.schema(ctx=ctx)
+    expr = getattr(plan, "expr", None)
+    if expr is None or not hasattr(expr, "schema"):
+        msg = "plan_schema expected a Plan or IbisPlan-like object."
+        raise TypeError(msg)
+    return expr.schema().to_pyarrow()
 
 
 def plan_output_columns(plan: Plan) -> Sequence[str] | None:

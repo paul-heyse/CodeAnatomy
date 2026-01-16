@@ -289,42 +289,65 @@ def _union_children_arrays(
     return arrays
 
 
-def _default_value_for_type(dtype: DataTypeLike) -> object:
-    if patypes.is_string(dtype) or patypes.is_large_string(dtype):
-        return ""
-    if patypes.is_binary(dtype) or patypes.is_large_binary(dtype):
-        return b""
-    if patypes.is_boolean(dtype):
-        return False
-    if patypes.is_integer(dtype):
-        return 0
-    if patypes.is_floating(dtype):
-        return 0.0
-    if (
-        patypes.is_date(dtype)
-        or patypes.is_time(dtype)
-        or patypes.is_timestamp(dtype)
-        or patypes.is_duration(dtype)
-        or patypes.is_decimal(dtype)
-    ):
-        return pa.scalar(0, type=dtype).as_py()
-    if (
+class _MissingDefaultType:
+    """Sentinel for missing default values."""
+
+
+_MISSING_DEFAULT = _MissingDefaultType()
+
+
+def _default_scalar_value(dtype: DataTypeLike) -> object | _MissingDefaultType:
+    handlers: tuple[tuple[Callable[[DataTypeLike], bool], Callable[[DataTypeLike], object]], ...] = (
+        (patypes.is_string, lambda _dtype: ""),
+        (patypes.is_large_string, lambda _dtype: ""),
+        (patypes.is_binary, lambda _dtype: b""),
+        (patypes.is_large_binary, lambda _dtype: b""),
+        (patypes.is_boolean, lambda _dtype: False),
+        (patypes.is_integer, lambda _dtype: 0),
+        (patypes.is_floating, lambda _dtype: 0.0),
+        (
+            lambda _dtype: (
+                patypes.is_date(_dtype)
+                or patypes.is_time(_dtype)
+                or patypes.is_timestamp(_dtype)
+                or patypes.is_duration(_dtype)
+                or patypes.is_decimal(_dtype)
+            ),
+            lambda _dtype: pa.scalar(0, type=_dtype).as_py(),
+        ),
+    )
+    for predicate, builder in handlers:
+        if predicate(dtype):
+            return builder(dtype)
+    return _MISSING_DEFAULT
+
+
+def _is_list_like(dtype: DataTypeLike) -> bool:
+    return bool(
         patypes.is_list(dtype)
         or patypes.is_large_list(dtype)
         or patypes.is_list_view(dtype)
         or patypes.is_large_list_view(dtype)
-    ):
-        return []
-    if patypes.is_map(dtype):
+    )
+
+
+def _default_value_for_type(dtype: DataTypeLike) -> object:
+    scalar_default = _default_scalar_value(dtype)
+    if scalar_default is not _MISSING_DEFAULT:
+        return scalar_default
+    if _is_list_like(dtype) or patypes.is_map(dtype):
         return []
     if patypes.is_struct(dtype):
         struct_type = cast("_StructType", dtype)
-        return {field.name: _default_value_for_type(field.type) for field in struct_type}
+        return {
+            struct_field.name: _default_value_for_type(struct_field.type)
+            for struct_field in struct_type
+        }
     if patypes.is_union(dtype):
         union_type = cast("_UnionType", dtype)
-        for field in union_type:
-            if not patypes.is_null(field.type):
-                return _default_value_for_type(field.type)
+        for union_field in union_type:
+            if not patypes.is_null(union_field.type):
+                return _default_value_for_type(union_field.type)
         msg = "Union type has only null children; cannot build default value."
         raise ValueError(msg)
     if patypes.is_dictionary(dtype):
@@ -511,7 +534,36 @@ def struct_array_from_dicts(
     -------
     ArrayLike
         Struct array with inferred or explicit type.
+
+    Raises
+    ------
+    ValueError
+        Raised when a required field is missing from a non-null mapping.
     """
+    normalized, mask_values = _normalize_struct_values(values)
+    if struct_type is None:
+        return pa.array(normalized, type=None)
+    struct_type = cast("_StructType", struct_type)
+    required_fields = tuple(field.name for field in struct_type if not field.nullable)
+    if required_fields:
+        for row in normalized:
+            if row is None:
+                continue
+            missing = [name for name in required_fields if name not in row]
+            if missing:
+                msg = f"Missing required struct field(s): {missing!r}."
+                raise ValueError(msg)
+    fields: dict[str, ArrayLike] = {}
+    for struct_field in struct_type:
+        column_values = _struct_column_values(normalized, struct_field=struct_field)
+        fields[struct_field.name] = nested_array_factory(struct_field, column_values)
+    mask_array = pa.array(mask_values, type=pa.bool_()) if any(mask_values) else None
+    return build_struct(fields, mask=mask_array, struct_type=cast("DataTypeLike", struct_type))
+
+
+def _normalize_struct_values(
+    values: Sequence[object | None],
+) -> tuple[list[Mapping[str, object] | None], list[bool]]:
     normalized: list[Mapping[str, object] | None] = []
     mask_values: list[bool] = []
     for value in values:
@@ -524,29 +576,31 @@ def struct_array_from_dicts(
         else:
             normalized.append(None)
             mask_values.append(True)
-    if struct_type is None:
-        return pa.array(normalized, type=None)
-    struct_type = cast("_StructType", struct_type)
-    fields: dict[str, ArrayLike] = {}
-    for field in struct_type:
-        column_values: list[object | None] = []
-        for row, is_null in zip(normalized, mask_values, strict=True):
-            if row is None:
-                if field.nullable:
-                    column_values.append(None)
-                else:
-                    column_values.append(_default_value_for_type(field.type))
-                continue
-            if field.name in row:
-                column_values.append(row.get(field.name))
-            elif field.nullable:
+    return normalized, mask_values
+
+
+def _struct_column_values(
+    rows: Sequence[Mapping[str, object] | None],
+    *,
+    struct_field: FieldLike,
+) -> list[object | None]:
+    column_values: list[object | None] = []
+    for row in rows:
+        if row is None:
+            if struct_field.nullable:
                 column_values.append(None)
             else:
-                msg = f"Missing required struct field: {field.name!r}."
-                raise ValueError(msg)
-        fields[field.name] = nested_array_factory(field, column_values)
-    mask_array = pa.array(mask_values, type=pa.bool_()) if any(mask_values) else None
-    return build_struct(fields, mask=mask_array, struct_type=cast("DataTypeLike", struct_type))
+                column_values.append(_default_value_for_type(struct_field.type))
+            continue
+        if struct_field.name in row:
+            column_values.append(row.get(struct_field.name))
+            continue
+        if struct_field.nullable:
+            column_values.append(None)
+            continue
+        msg = f"Missing required struct field: {struct_field.name!r}."
+        raise ValueError(msg)
+    return column_values
 
 
 def dense_union_array(

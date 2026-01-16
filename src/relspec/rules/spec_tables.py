@@ -667,12 +667,18 @@ def _tagged_union_payload(tag: str, payload: Mapping[str, object] | None) -> dic
 def hash_join_row(config: HashJoinConfig | None) -> dict[str, object] | None:
     if config is None:
         return None
+
+    def _output(value: tuple[str, ...] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return list(value)
+
     return {
         "join_type": config.join_type,
         "left_keys": list(config.left_keys),
         "right_keys": list(config.right_keys) or None,
-        "left_output": list(config.left_output) or None,
-        "right_output": list(config.right_output) or None,
+        "left_output": _output(config.left_output),
+        "right_output": _output(config.right_output),
         "output_suffix_for_left": config.output_suffix_for_left,
         "output_suffix_for_right": config.output_suffix_for_right,
     }
@@ -1140,12 +1146,18 @@ def _hash_join_from_row(payload: Mapping[str, Any] | None) -> HashJoinConfig | N
     """
     if payload is None:
         return None
+
+    def _optional_string_tuple(value: object | None, *, label: str) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        return parse_string_tuple(value, label=label)
+
     return HashJoinConfig(
         join_type=_parse_join_type(payload.get("join_type")),
         left_keys=parse_string_tuple(payload.get("left_keys"), label="left_keys"),
         right_keys=parse_string_tuple(payload.get("right_keys"), label="right_keys"),
-        left_output=parse_string_tuple(payload.get("left_output"), label="left_output"),
-        right_output=parse_string_tuple(payload.get("right_output"), label="right_output"),
+        left_output=_optional_string_tuple(payload.get("left_output"), label="left_output"),
+        right_output=_optional_string_tuple(payload.get("right_output"), label="right_output"),
         output_suffix_for_left=str(payload.get("output_suffix_for_left", "")),
         output_suffix_for_right=str(payload.get("output_suffix_for_right", "")),
     )

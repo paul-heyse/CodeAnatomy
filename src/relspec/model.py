@@ -62,9 +62,9 @@ class HashJoinConfig:
     right_keys:
         Right-side join keys.
     left_output:
-        Output columns from the left side.
+        Output columns from the left side, or ``None`` for all columns.
     right_output:
-        Output columns from the right side.
+        Output columns from the right side, or ``None`` for all columns.
     output_suffix_for_left:
         Suffix for left output column collisions.
     output_suffix_for_right:
@@ -74,8 +74,8 @@ class HashJoinConfig:
     join_type: JoinType = "inner"
     left_keys: tuple[str, ...] = ()
     right_keys: tuple[str, ...] = ()
-    left_output: tuple[str, ...] = ()
-    right_output: tuple[str, ...] = ()
+    left_output: tuple[str, ...] | None = None
+    right_output: tuple[str, ...] | None = None
     output_suffix_for_left: str = ""
     output_suffix_for_right: str = ""
 

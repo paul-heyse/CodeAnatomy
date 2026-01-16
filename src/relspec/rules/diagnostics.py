@@ -22,6 +22,7 @@ from sqlglot_tools.bridge import (
 from sqlglot_tools.optimizer import plan_fingerprint
 
 RuleDiagnosticSeverity = Literal["error", "warning"]
+PAIR_LENGTH = 2
 
 RULE_DIAGNOSTIC_SCHEMA = pa.schema(
     [
@@ -351,6 +352,22 @@ def _metadata_from_row(value: object | None) -> dict[str, str]:
         return {}
     if isinstance(value, Mapping):
         return {str(key): str(val) for key, val in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        pairs: list[tuple[object, object]] = []
+        for item in value:
+            if isinstance(item, Mapping):
+                pairs.extend(item.items())
+                continue
+            if (
+                isinstance(item, Sequence)
+                and not isinstance(item, (str, bytes))
+                and len(item) == PAIR_LENGTH
+            ):
+                pairs.append((item[0], item[1]))
+                continue
+            msg = "Diagnostic metadata entries must be key/value pairs."
+            raise TypeError(msg)
+        return {str(key): str(val) for key, val in pairs}
     msg = "Diagnostic metadata must be a mapping."
     raise TypeError(msg)
 

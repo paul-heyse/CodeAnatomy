@@ -14,7 +14,11 @@ from ibis.expr.types import Value as IbisValue
 
 from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.plan.query import ScanTelemetry
-from ibis_engine.expr_compiler import IbisExprRegistry, expr_ir_to_ibis
+from ibis_engine.expr_compiler import (
+    IbisExprRegistry,
+    default_expr_registry,
+    expr_ir_to_ibis,
+)
 from ibis_engine.plan import IbisPlan
 from relspec.model import DatasetRef, HashJoinConfig
 from relspec.plan import (
@@ -85,7 +89,7 @@ class IbisRelPlanCompiler(RelPlanCompiler[IbisPlan]):
     plan_type = IbisPlan
 
     def __init__(self, *, registry: IbisExprRegistry | None = None) -> None:
-        self.registry = registry or IbisExprRegistry()
+        self.registry = registry or default_expr_registry()
 
     def compile(
         self,
@@ -456,8 +460,8 @@ def _select_join_output(
     ValueError
         Raised when join output selection is invalid.
     """
-    left_cols = config.left_output or tuple(left.columns)
-    right_cols = config.right_output or tuple(right.columns)
+    left_cols = tuple(left.columns) if config.left_output is None else config.left_output
+    right_cols = tuple(right.columns) if config.right_output is None else config.right_output
     collisions = set(left_cols) & set(right_cols)
     if collisions and not config.output_suffix_for_left and not config.output_suffix_for_right:
         msg = "HashJoinConfig output columns collide without suffixes."

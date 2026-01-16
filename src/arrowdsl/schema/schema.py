@@ -490,7 +490,7 @@ class SchemaEvolutionSpec:
                 keep_extra_columns=keep_extra_columns,
             )
             aligned.append(aligned_table)
-        return pa.concat_tables(aligned, promote=True)
+        return pa.concat_tables(aligned, promote_options=self.promote_options)
 
 
 @dataclass(frozen=True)
@@ -685,7 +685,7 @@ def unify_tables(
     for table in tables:
         aligned_table, _ = align_to_schema(table, schema=schema, safe_cast=True)
         aligned.append(aligned_table)
-    combined = pa.concat_tables(aligned, promote=True)
+    combined = pa.concat_tables(aligned, promote_options="default")
     return ChunkPolicy().apply(combined)
 
 

@@ -32,6 +32,7 @@ from arrowdsl.plan.runner_types import (
     plan_runner_module,
 )
 from arrowdsl.plan.scan_io import DatasetSource, PlanSource, plan_from_source
+from arrowdsl.plan.schema_utils import plan_output_columns
 from arrowdsl.schema.dictionary import normalize_dictionaries
 from arrowdsl.schema.schema import (
     CastErrorPolicy,
@@ -96,6 +97,16 @@ def _plan_run_result(
 ) -> PlanRunResultProto:
     module = plan_runner_module()
     return module.PlanRunResult(value=value, kind=kind)
+
+
+def _plan_columns(plan: Plan, *, ctx: ExecutionContext | None = None) -> Sequence[str]:
+    columns = plan_output_columns(plan)
+    if columns is not None:
+        return columns
+    if ctx is None:
+        msg = "plan columns require ctx when inference is unavailable."
+        raise ValueError(msg)
+    return list(plan.schema(ctx=ctx).names)
 
 
 @dataclass(frozen=True)
@@ -225,11 +236,11 @@ def apply_hash_projection(
     ValueError
         Raised when no available columns are provided and no context is supplied.
     """
+    if available is None and ctx is None:
+        msg = "apply_hash_projection requires available or ctx."
+        raise ValueError(msg)
     if available is None:
-        if ctx is None:
-            msg = "apply_hash_projection requires available or ctx."
-            raise ValueError(msg)
-        available = plan.schema(ctx=ctx).names
+        available = _plan_columns(plan, ctx=ctx)
     names = list(available)
     expr_map: dict[str, ComputeExpression] = {name: pc.field(name) for name in names}
     for spec in specs:
@@ -257,7 +268,7 @@ def project_to_schema(
     Plan
         Plan aligned to the schema.
     """
-    available = set(plan.schema(ctx=ctx).names)
+    available = set(_plan_columns(plan, ctx=ctx))
     names: list[str] = []
     exprs: list[ComputeExpression] = []
     for field in schema:
@@ -272,7 +283,7 @@ def project_to_schema(
             )
         )
     if keep_extra_columns:
-        for name in plan.schema(ctx=ctx).names:
+        for name in _plan_columns(plan, ctx=ctx):
             if name in names:
                 continue
             names.append(name)
@@ -295,7 +306,8 @@ def align_plan(
     Plan
         Plan projecting/casting to the schema.
     """
-    available = plan.schema(ctx=ctx).names if available is None else available
+    if available is None:
+        available = _plan_columns(plan, ctx=ctx)
     exprs, names = projection_for_schema(schema, available=available, safe_cast=ctx.safe_cast)
     if keep_extra_columns:
         extras = [name for name in available if name not in names]
@@ -313,7 +325,7 @@ def encode_plan(plan: Plan, *, columns: Sequence[str], ctx: ExecutionContext) ->
     Plan
         Plan with dictionary-encoded columns.
     """
-    exprs, names = encoding_projection(columns, available=plan.schema(ctx=ctx).names)
+    exprs, names = encoding_projection(columns, available=_plan_columns(plan, ctx=ctx))
     return plan.project(exprs, names, ctx=ctx)
 
 
@@ -375,7 +387,10 @@ def code_unit_meta_join(
     Plan
         Plan with code unit metadata columns appended.
     """
-    config = code_unit_meta_config(plan.schema(ctx=ctx).names, code_units.schema(ctx=ctx).names)
+    config = code_unit_meta_config(
+        _plan_columns(plan, ctx=ctx),
+        _plan_columns(code_units, ctx=ctx),
+    )
     if config is None:
         return plan
     joined = left_join(plan, code_units, config=config, ctx=ctx)
@@ -400,8 +415,8 @@ def path_meta_join(
         Plan with file_id metadata columns appended.
     """
     config = path_meta_config(
-        plan.schema(ctx=ctx).names,
-        repo_files.schema(ctx=ctx).names,
+        _plan_columns(plan, ctx=ctx),
+        _plan_columns(repo_files, ctx=ctx),
         key=path_key,
         output_suffix_for_right=output_suffix_for_right,
     )
@@ -413,7 +428,7 @@ def path_meta_join(
     right_col = (
         f"{file_id_key}{output_suffix_for_right}" if output_suffix_for_right else file_id_key
     )
-    available = set(out.schema(ctx=ctx).names)
+    available = set(_plan_columns(out, ctx=ctx))
     if right_col not in available:
         return out
     if file_id_key in available:
@@ -422,7 +437,7 @@ def path_meta_join(
         file_id_expr = pc.field(right_col)
     out = set_or_append_column(out, name=file_id_key, expr=file_id_expr, ctx=ctx)
     if right_col != file_id_key:
-        keep = [col for col in out.schema(ctx=ctx).names if col != right_col]
+        keep = [col for col in _plan_columns(out, ctx=ctx) if col != right_col]
         out = out.project([pc.field(col) for col in keep], keep, ctx=ctx)
     return out
 
@@ -483,7 +498,7 @@ def set_or_append_column(
     Plan
         Updated plan with the column set.
     """
-    names = list(plan.schema(ctx=ctx).names)
+    names = list(_plan_columns(plan, ctx=ctx))
     exprs = [pc.field(col) for col in names]
     if name in names:
         idx = names.index(name)

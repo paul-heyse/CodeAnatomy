@@ -39,6 +39,7 @@ def _parse_major_version(version: str) -> int | None:
 
 
 DATAFUSION_MAJOR_VERSION: int | None = _parse_major_version(datafusion.__version__)
+DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION: int = 51
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,8 @@ class DataFusionConfigPolicy:
             Session config with policy settings applied.
         """
         skip_runtime_settings = (
-            DATAFUSION_MAJOR_VERSION is not None and DATAFUSION_MAJOR_VERSION >= 51
+            DATAFUSION_MAJOR_VERSION is not None
+            and DATAFUSION_MAJOR_VERSION >= DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION
         )
         for key, value in self.settings.items():
             if skip_runtime_settings and key.startswith("datafusion.runtime."):

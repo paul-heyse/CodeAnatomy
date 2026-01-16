@@ -6,6 +6,8 @@ import hashlib
 from collections.abc import Sequence
 
 import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.types as patypes
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 
@@ -34,6 +36,7 @@ def table_digest(
     table = _ensure_table(value)
     if sort_keys:
         _validate_sort_keys(table.schema.names, sort_keys)
+        table = _coerce_sort_columns(table, sort_keys=sort_keys)
         table = table.sort_by(list(sort_keys))
     hasher = hashlib.sha256()
     for column in table.columns:
@@ -54,3 +57,16 @@ def _validate_sort_keys(column_names: Sequence[str], sort_keys: Sequence[SortKey
         return
     msg = f"Sort keys missing from table schema: {missing}"
     raise ValueError(msg)
+
+
+def _coerce_sort_columns(table: pa.Table, *, sort_keys: Sequence[SortKey]) -> pa.Table:
+    sort_names = {name for name, _ in sort_keys}
+    columns = []
+    names = []
+    for field in table.schema:
+        col = table[field.name]
+        if field.name in sort_names and patypes.is_dictionary(field.type):
+            col = pc.cast(col, field.type.value_type, safe=False)
+        columns.append(col)
+        names.append(field.name)
+    return pa.table(columns, names=names)

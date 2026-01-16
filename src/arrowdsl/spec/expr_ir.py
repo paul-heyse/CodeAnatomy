@@ -22,9 +22,10 @@ from arrowdsl.compute.options import (
 from arrowdsl.compute.registry import ComputeRegistry, UdfSpec, default_registry
 from arrowdsl.core.interop import (
     ArrayLike,
-    ChunkedArrayLike,
     ComputeExpression,
+    ScalarLike,
     TableLike,
+    call_expression_function,
     ensure_expression,
     pc,
 )
@@ -82,6 +83,35 @@ def _decode_options_text(payload: str | None) -> bytes | None:
 
 def _deserialize_options(payload: bytes | None) -> FunctionOptionsProto | None:
     return deserialize_options(payload)
+
+
+def _require_expr_name(name: str | None, *, op: str) -> str:
+    if name is None:
+        msg = f"ExprIR {op} op requires name."
+        raise ValueError(msg)
+    return name
+
+
+def _ensure_arg_count(name: str, args: Sequence[object], *, expected: int) -> None:
+    if len(args) != expected:
+        msg = f"ExprIR call op {name!r} expects {expected} arguments."
+        raise ValueError(msg)
+
+
+def _fill_null_expression(args: Sequence[ComputeExpression]) -> ComputeExpression:
+    _ensure_arg_count("fill_null", args, expected=2)
+    return ensure_expression(pc.if_else(pc.is_null(args[0]), args[1], args[0]))
+
+
+def _fill_null_array(values: Sequence[ArrayLike]) -> ArrayLike:
+    _ensure_arg_count("fill_null", values, expected=2)
+    return pc.if_else(pc.is_null(values[0]), values[1], values[0])
+
+
+def _scalar_to_array(value: ScalarLike, *, size: int) -> ArrayLike:
+    if size == 0:
+        return pa.array([], type=value.type)
+    return pa.array([value.as_py()] * size, type=value.type)
 
 
 @dataclass(frozen=True)
@@ -160,7 +190,9 @@ class ExprIR:
             args = [arg.to_expression(registry=registry) for arg in self.args]
             options = _options_bytes(self.options)
             opts = _deserialize_options(options)
-            return ensure_expression(pc.call_function(name, args, options=opts))
+            if name == "fill_null":
+                return _fill_null_expression(args)
+            return call_expression_function(name, args, options=opts)
         msg = f"Unsupported ExprIR op: {self.op}"
         raise ValueError(msg)
 
@@ -178,35 +210,48 @@ class ExprIR:
             Raised when the IR is missing required fields or has an unsupported op.
         """
         if self.op == "field":
-            if self.name is None:
-                msg = "ExprIR field op requires name."
-                raise ValueError(msg)
-            return FieldExpr(name=self.name)
+            return self._expr_spec_field()
         if self.op == "literal":
-            return ConstExpr(value=self.value)
+            return self._expr_spec_literal()
         if self.op == "call":
-            if self.name is None:
-                msg = "ExprIR call op requires name."
-                raise ValueError(msg)
-            args = tuple(arg.to_expr_spec(registry=registry) for arg in self.args)
-            name = registry.ensure(self.name) if registry is not None else self.name
-            options = _options_bytes(self.options)
-            opts = _deserialize_options(options)
-            node = expr_from_expr_ir(self)
-
-            def _materialize(table: TableLike) -> ArrayLike:
-                values = [arg.materialize(table) for arg in args]
-                result = pc.call_function(name, values, options=opts)
-                if isinstance(result, ChunkedArrayLike):
-                    return result.combine_chunks()
-                if isinstance(result, ArrayLike):
-                    return result
-                msg = "ExprIR call op materialization returned non-array output."
-                raise TypeError(msg)
-
-            return ComputeExprSpec(expr=node, materialize_fn=_materialize, registry=registry)
+            return self._expr_spec_call(registry=registry)
         msg = f"Unsupported ExprIR op: {self.op}"
         raise ValueError(msg)
+
+    def _expr_spec_field(self) -> ExprSpec:
+        name = _require_expr_name(self.name, op="field")
+        return FieldExpr(name=name)
+
+    def _expr_spec_literal(self) -> ExprSpec:
+        return ConstExpr(value=self.value)
+
+    def _expr_spec_call(self, *, registry: ExprRegistry | None) -> ExprSpec:
+        name = _require_expr_name(self.name, op="call")
+        args = tuple(arg.to_expr_spec(registry=registry) for arg in self.args)
+        resolved_name = registry.ensure(name) if registry is not None else name
+        options = _options_bytes(self.options)
+        opts = _deserialize_options(options)
+        node = expr_from_expr_ir(self)
+
+        def _materialize(table: TableLike) -> ArrayLike:
+            values = [arg.materialize(table) for arg in args]
+            if resolved_name == "fill_null":
+                result = _fill_null_array(values)
+            else:
+                result = pc.call_function(resolved_name, values, options=opts)
+            if isinstance(result, pa.ChunkedArray):
+                return cast("pa.ChunkedArray", result).combine_chunks()
+            if isinstance(result, pa.Array):
+                return cast("ArrayLike", result)
+            if isinstance(result, pa.Scalar):
+                return _scalar_to_array(cast("ScalarLike", result), size=table.num_rows)
+            msg = (
+                f"ExprIR call op {resolved_name!r} materialization returned "
+                f"{type(result).__name__}."
+            )
+            raise TypeError(msg)
+
+        return ComputeExprSpec(expr=node, materialize_fn=_materialize, registry=registry)
 
     def to_ibis_expr(
         self,

@@ -129,7 +129,7 @@ def _raw_nodes_schema(nodes_schema: SchemaLike) -> pa.Schema:
     return pa.schema(fields)
 
 
-def _schema_diff(expected: pa.Schema, actual: pa.Schema) -> str:
+def _schema_name_diff_lines(expected: pa.Schema, actual: pa.Schema) -> list[str]:
     lines: list[str] = []
     if expected.names != actual.names:
         lines.append(f"column_order: expected={expected.names}, actual={actual.names}")
@@ -139,6 +139,10 @@ def _schema_diff(expected: pa.Schema, actual: pa.Schema) -> str:
         lines.append(f"missing_fields: {missing}")
     if extra:
         lines.append(f"extra_fields: {extra}")
+    return lines
+
+
+def _schema_field_diff_lines(expected: pa.Schema, actual: pa.Schema) -> list[str]:
     type_mismatches: list[str] = []
     metadata_mismatches: list[str] = []
     nullability_mismatches: list[str] = []
@@ -157,6 +161,7 @@ def _schema_diff(expected: pa.Schema, actual: pa.Schema) -> str:
             nullability_mismatches.append(
                 f"{name}: expected={expected_field.nullable}, actual={actual_field.nullable}"
             )
+    lines: list[str] = []
     if type_mismatches:
         lines.append("type_mismatches:")
         lines.extend(type_mismatches)
@@ -166,6 +171,13 @@ def _schema_diff(expected: pa.Schema, actual: pa.Schema) -> str:
     if nullability_mismatches:
         lines.append("nullability_mismatches:")
         lines.extend(nullability_mismatches)
+    return lines
+
+
+def _schema_diff(expected: pa.Schema, actual: pa.Schema) -> str:
+    lines: list[str] = []
+    lines.extend(_schema_name_diff_lines(expected, actual))
+    lines.extend(_schema_field_diff_lines(expected, actual))
     if (expected.metadata or {}) != (actual.metadata or {}):
         lines.append(f"schema_metadata: expected={expected.metadata!r}, actual={actual.metadata!r}")
     return "\n".join(lines)
@@ -369,8 +381,7 @@ def build_cpg_nodes_raw(
     if not parts:
         return empty_plan(nodes_schema, label="cpg_nodes_raw")
 
-    combined = union_all_plans(parts, label="cpg_nodes_raw")
-    return combined
+    return union_all_plans(parts, label="cpg_nodes_raw")
 
 
 def build_cpg_nodes(

@@ -20,7 +20,12 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     psutil = None
 
-os.environ.setdefault("HAMILTON_TELEMETRY_ENABLED", "false")
+try:
+    from hamilton.execution import graph_functions as hamilton_graph_functions
+except ImportError:  # pragma: no cover - optional dependency
+    hamilton_graph_functions = None
+
+os.environ.setdefault("HAMILTON_TELEMETRY_ENABLED", "true")
 
 _DIAG_DIR = Path("build/test-results")
 _ENV_PATH = _DIAG_DIR / "diagnostics_env.json"
@@ -123,9 +128,8 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _patch_hamilton_input_string() -> None:
-    try:
-        from hamilton.execution import graph_functions
-    except Exception:
+    graph_functions = hamilton_graph_functions
+    if graph_functions is None:
         return
 
     def _safe_input_string(kwargs: dict[str, object]) -> str:
@@ -134,27 +138,11 @@ def _patch_hamilton_input_string() -> None:
 
     graph_functions.create_input_string = _safe_input_string
 
-    def _safe_exception(message: str, *args: object, **kwargs: object) -> None:
-        _ = (args, kwargs)
-        graph_functions.logger.error("%s", message)
-
-    graph_functions.logger.exception = _safe_exception
-
-
-def _disable_hamilton_telemetry() -> None:
-    try:
-        from hamilton import telemetry
-    except Exception:
-        return
-    telemetry.disable_telemetry()
-    telemetry.send_event_json = lambda *_: None
-    telemetry._send_event_json = lambda *_: None
-
 
 def pytest_sessionstart(session: object) -> None:
     """Initialize diagnostic capture for the pytest session."""
     _DIAG_DIR.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault("HAMILTON_TELEMETRY_ENABLED", "false")
+    os.environ.setdefault("HAMILTON_TELEMETRY_ENABLED", "true")
     _write_json(_ENV_PATH, _collect_env())
     _write_json(_VERSIONS_PATH, _collect_versions())
     _write_json(_RESOURCES_PATH, _collect_resources())
@@ -164,7 +152,6 @@ def pytest_sessionstart(session: object) -> None:
         os.environ["ARROWDSL_PLAN_SCHEMA_LOG_PATH"] = str(_PLAN_SCHEMA_LOG_PATH)
     _setup_faulthandler()
     _patch_hamilton_input_string()
-    _disable_hamilton_telemetry()
     _ = session
 
 

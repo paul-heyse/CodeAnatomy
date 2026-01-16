@@ -302,12 +302,17 @@ def _join_payload(spec: HashJoinConfig) -> dict[str, object]:
     dict[str, object]
         Serialized join configuration.
     """
+    def _output(value: tuple[str, ...] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return list(value)
+
     return {
         "join_type": spec.join_type,
         "left_keys": list(spec.left_keys),
         "right_keys": list(spec.right_keys),
-        "left_output": list(spec.left_output),
-        "right_output": list(spec.right_output),
+        "left_output": _output(spec.left_output),
+        "right_output": _output(spec.right_output),
         "output_suffix_for_left": spec.output_suffix_for_left,
         "output_suffix_for_right": spec.output_suffix_for_right,
     }

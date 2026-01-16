@@ -23,7 +23,8 @@ from cpg.plan_specs import (
 )
 from cpg.registry import CpgRegistry, default_cpg_registry
 from cpg.spec_tables import prop_table_specs_from_table
-from cpg.specs import PropTableSpec, resolve_prop_include
+from cpg.specs import PropFieldSpec, PropTableSpec, resolve_prop_include
+from schema_spec.system import DatasetSpec
 
 
 def _prop_table_specs(
@@ -109,6 +110,64 @@ def _prop_tables(
     return catalog
 
 
+def _props_schema_version(props_schema: pa.Schema, props_spec: DatasetSpec) -> int | None:
+    if "schema_version" in props_schema.names:
+        return props_spec.table_spec.version
+    return None
+
+
+def _updated_prop_spec(
+    spec: PropTableSpec,
+    *,
+    filtered_fields: list[PropFieldSpec],
+) -> PropTableSpec:
+    if filtered_fields == list(spec.fields):
+        return spec
+    return replace(spec, fields=tuple(filtered_fields))
+
+
+def _emit_prop_plans(
+    plan_source: TableLike | DatasetSource | Plan,
+    *,
+    spec: PropTableSpec,
+    options: PropsBuildOptions,
+    schema_version: int | None,
+    ctx: ExecutionContext,
+) -> list[Plan]:
+    plan = ensure_plan(plan_source, label=spec.name, ctx=ctx)
+    filtered_fields = filter_fields(spec.fields, options=options)
+    if not filtered_fields and spec.node_kind is None:
+        return []
+    updated_spec = _updated_prop_spec(spec, filtered_fields=filtered_fields)
+    return emit_props_plans(
+        plan,
+        spec=updated_spec,
+        schema_version=schema_version,
+        ctx=ctx,
+    )
+
+
+def _finalize_props_raw_plan(
+    plans: list[Plan],
+    *,
+    props_schema: pa.Schema,
+    props_spec: DatasetSpec,
+    ctx: ExecutionContext,
+) -> Plan:
+    if not plans:
+        return empty_plan(props_schema, label="cpg_props_raw")
+    aligned = align_plan(
+        union_all_plans(plans, label="cpg_props_raw"),
+        schema=props_schema,
+        ctx=ctx,
+    )
+    canonical_sort = props_spec.contract().canonical_sort
+    if not canonical_sort:
+        return aligned
+    sort_keys = tuple((key.column, key.order) for key in canonical_sort)
+    return aligned.order_by(sort_keys, ctx=ctx, label="cpg_props_raw")
+
+
 def build_cpg_props_raw(
     *,
     ctx: ExecutionContext,
@@ -135,8 +194,7 @@ def build_cpg_props_raw(
     options = options or PropsBuildOptions()
     catalog = _prop_tables(inputs or PropsInputTables())
     plans: list[Plan] = []
-    include_schema_version = "schema_version" in props_schema.names
-    schema_version = props_spec.table_spec.version if include_schema_version else None
+    schema_version = _props_schema_version(props_schema, props_spec)
     for spec in _prop_table_specs(prop_spec_table, registry=registry):
         enabled = getattr(options, spec.option_flag, None)
         if enabled is None:
@@ -150,29 +208,20 @@ def build_cpg_props_raw(
         plan_source = resolve_plan_source(catalog, spec.table_ref, ctx=ctx)
         if plan_source is None:
             continue
-        plan = ensure_plan(plan_source, label=spec.name, ctx=ctx)
-        filtered_fields = filter_fields(spec.fields, options=options)
-        if not filtered_fields and spec.node_kind is None:
-            continue
-        if filtered_fields != list(spec.fields):
-            updated_spec = replace(spec, fields=tuple(filtered_fields))
-        else:
-            updated_spec = spec
         plans.extend(
-            emit_props_plans(
-                plan,
-                spec=updated_spec,
+            _emit_prop_plans(
+                plan_source,
+                spec=spec,
+                options=options,
                 schema_version=schema_version,
                 ctx=ctx,
             )
         )
 
-    if not plans:
-        return empty_plan(props_schema, label="cpg_props_raw")
-
-    return align_plan(
-        union_all_plans(plans, label="cpg_props_raw"),
-        schema=props_schema,
+    return _finalize_props_raw_plan(
+        plans,
+        props_schema=props_schema,
+        props_spec=props_spec,
         ctx=ctx,
     )
 

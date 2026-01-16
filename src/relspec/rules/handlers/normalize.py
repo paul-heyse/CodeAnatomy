@@ -65,7 +65,7 @@ class NormalizeRuleHandler(RuleHandler):
             emit_rule_meta=rule.emit_rule_meta,
             execution_mode=rule.execution_mode,
         )
-        return apply_rule_defaults(base)
+        return apply_rule_defaults(base, registry=self.policies)
 
 
 def _normalize_query(payload: object | None, *, rel_ops: tuple[RelOpT, ...]) -> QuerySpec | None:

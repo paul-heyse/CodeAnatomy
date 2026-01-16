@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, cast
@@ -55,6 +56,8 @@ from relspec.policies import (
     evidence_spec_from_schema,
 )
 from relspec.registry import ContractCatalog, DatasetCatalog
+from relspec.rules.exec_events import RuleExecutionObserver, rule_execution_event_from_table
+from relspec.rules.policies import PolicyRegistry
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, dataset_spec_from_contract
 
 KernelFn = Callable[[TableLike, ExecutionContext], TableLike]
@@ -733,7 +736,12 @@ def _schema_for_rule(
     return None
 
 
-def apply_policy_defaults(rule: RelationshipRule, schema: SchemaLike) -> RelationshipRule:
+def apply_policy_defaults(
+    rule: RelationshipRule,
+    schema: SchemaLike,
+    *,
+    registry: PolicyRegistry | None = None,
+) -> RelationshipRule:
     """Apply schema-derived default policies to a rule.
 
     Parameters
@@ -742,14 +750,22 @@ def apply_policy_defaults(rule: RelationshipRule, schema: SchemaLike) -> Relatio
         Rule to update.
     schema:
         Schema providing policy metadata.
+    registry:
+        Optional policy registry for resolving named policies.
 
     Returns
     -------
     RelationshipRule
         Rule with policies populated when missing.
     """
-    confidence = rule.confidence_policy or confidence_policy_from_schema(schema)
-    ambiguity = rule.ambiguity_policy or ambiguity_policy_from_schema(schema)
+    confidence = rule.confidence_policy or confidence_policy_from_schema(
+        schema,
+        registry=registry,
+    )
+    ambiguity = rule.ambiguity_policy or ambiguity_policy_from_schema(
+        schema,
+        registry=registry,
+    )
     if confidence is rule.confidence_policy and ambiguity is rule.ambiguity_policy:
         return rule
     return replace(
@@ -960,6 +976,7 @@ class CompiledOutputExecutionOptions:
     adapter_mode: AdapterMode | None = None
     execution_policy: AdapterExecutionPolicy | None = None
     ibis_backend: BaseBackend | None = None
+    rule_exec_observer: RuleExecutionObserver | None = None
 
 
 @dataclass(frozen=True)
@@ -1014,15 +1031,37 @@ class CompiledOutput:
             execution_policy=options.execution_policy,
             ibis_backend=options.ibis_backend,
         )
-        table_parts = [
-            compiled.execute(
-                ctx=ctx_exec,
-                resolver=resolver,
-                compiler=plan_compiler,
-                options=rule_options,
+        table_parts: list[TableLike] = []
+        observer = options.rule_exec_observer
+        if observer is None:
+            table_parts.extend(
+                compiled.execute(
+                    ctx=ctx_exec,
+                    resolver=resolver,
+                    compiler=plan_compiler,
+                    options=rule_options,
+                )
+                for compiled in self.contributors
             )
-            for compiled in self.contributors
-        ]
+        else:
+            for compiled in self.contributors:
+                started = time.perf_counter()
+                table = compiled.execute(
+                    ctx=ctx_exec,
+                    resolver=resolver,
+                    compiler=plan_compiler,
+                    options=rule_options,
+                )
+                duration_ms = (time.perf_counter() - started) * 1000.0
+                observer.record(
+                    rule_execution_event_from_table(
+                        rule_name=compiled.rule.name,
+                        output_dataset=compiled.rule.output_dataset,
+                        table=table,
+                        duration_ms=duration_ms,
+                    )
+                )
+                table_parts.append(table)
         return _finalize_output_tables(
             output_dataset=self.output_dataset,
             contract_name=self.contract_name,
@@ -1391,6 +1430,7 @@ class RelationshipRuleCompiler:
         ctx: ExecutionContext,
         contract_catalog: ContractCatalog | None = None,
         edge_validation: EdgeContractValidationConfig | None = None,
+        policy_registry: PolicyRegistry | None = None,
     ) -> dict[str, CompiledOutput]:
         """Compile relationship rules into executable outputs.
 
@@ -1404,6 +1444,8 @@ class RelationshipRuleCompiler:
             Optional contract catalog for validation and finalization.
         edge_validation:
             Optional edge contract validation config.
+        policy_registry:
+            Optional policy registry for resolving named policies.
 
         Returns
         -------
@@ -1428,7 +1470,11 @@ class RelationshipRuleCompiler:
             schema = _schema_for_rule(rule, contracts=contract_catalog)
             resolved_rule = rule
             if schema is not None:
-                resolved_rule = apply_policy_defaults(rule, schema)
+                resolved_rule = apply_policy_defaults(
+                    rule,
+                    schema,
+                    registry=policy_registry,
+                )
                 if resolved_rule.evidence is None:
                     inferred = evidence_spec_from_schema(schema)
                     if inferred is not None:

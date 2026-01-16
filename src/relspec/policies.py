@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from collections.abc import Mapping
 from typing import Literal
 
@@ -44,36 +45,62 @@ def confidence_expr(policy: ConfidencePolicy, *, source_field: str | None = None
     return base_expr
 
 
-def confidence_policy_from_schema(schema: SchemaLike) -> ConfidencePolicy | None:
+def confidence_policy_from_schema(
+    schema: SchemaLike,
+    *,
+    registry: PolicyRegistry | None = None,
+) -> ConfidencePolicy | None:
     """Derive a confidence policy from schema metadata.
 
     Parameters
     ----------
     schema:
         Schema carrying policy metadata.
+    registry:
+        Optional registry for resolving named policies.
 
     Returns
     -------
     ConfidencePolicy | None
         Parsed confidence policy, or None when absent.
     """
-    return _confidence_policy_from_metadata(schema.metadata or {})
+    if registry is None:
+        warnings.warn(
+            "confidence_policy_from_schema default registry is deprecated; pass registry=.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        registry = _POLICY_REGISTRY
+    return _confidence_policy_from_metadata(schema.metadata or {}, registry=registry)
 
 
-def ambiguity_policy_from_schema(schema: SchemaLike) -> AmbiguityPolicy | None:
+def ambiguity_policy_from_schema(
+    schema: SchemaLike,
+    *,
+    registry: PolicyRegistry | None = None,
+) -> AmbiguityPolicy | None:
     """Derive an ambiguity policy from schema metadata.
 
     Parameters
     ----------
     schema:
         Schema carrying policy metadata.
+    registry:
+        Optional registry for resolving named policies.
 
     Returns
     -------
     AmbiguityPolicy | None
         Parsed ambiguity policy, or None when absent.
     """
-    return _ambiguity_policy_from_metadata(schema.metadata or {})
+    if registry is None:
+        warnings.warn(
+            "ambiguity_policy_from_schema default registry is deprecated; pass registry=.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        registry = _POLICY_REGISTRY
+    return _ambiguity_policy_from_metadata(schema.metadata or {}, registry=registry)
 
 
 def ambiguity_kernels(policy: AmbiguityPolicy | None) -> tuple[DedupeKernelSpec, ...]:
@@ -147,13 +174,19 @@ def default_tie_breakers(schema: SchemaLike) -> tuple[SortKey, ...]:
     return tuple(resolved)
 
 
-def _confidence_policy_from_metadata(meta: Mapping[bytes, bytes]) -> ConfidencePolicy | None:
+def _confidence_policy_from_metadata(
+    meta: Mapping[bytes, bytes],
+    *,
+    registry: PolicyRegistry,
+) -> ConfidencePolicy | None:
     """Build a confidence policy from schema metadata.
 
     Parameters
     ----------
     meta
         Schema metadata mapping.
+    registry
+        Registry used to resolve named policies.
 
     Returns
     -------
@@ -162,7 +195,7 @@ def _confidence_policy_from_metadata(meta: Mapping[bytes, bytes]) -> ConfidenceP
     """
     name = _meta_str(meta, CONFIDENCE_POLICY_META)
     if name:
-        return _POLICY_REGISTRY.resolve_confidence("cpg", name)
+        return registry.resolve_confidence("cpg", name)
     base = _meta_float(meta, CONFIDENCE_BASE_META)
     penalty = _meta_float(meta, CONFIDENCE_PENALTY_META)
     weights = _meta_json_map(meta, CONFIDENCE_SOURCE_WEIGHT_META)
@@ -178,13 +211,19 @@ def _confidence_policy_from_metadata(meta: Mapping[bytes, bytes]) -> ConfidenceP
     )
 
 
-def _ambiguity_policy_from_metadata(meta: Mapping[bytes, bytes]) -> AmbiguityPolicy | None:
+def _ambiguity_policy_from_metadata(
+    meta: Mapping[bytes, bytes],
+    *,
+    registry: PolicyRegistry,
+) -> AmbiguityPolicy | None:
     """Resolve an ambiguity policy from schema metadata.
 
     Parameters
     ----------
     meta
         Schema metadata mapping.
+    registry
+        Registry used to resolve named policies.
 
     Returns
     -------
@@ -193,7 +232,7 @@ def _ambiguity_policy_from_metadata(meta: Mapping[bytes, bytes]) -> AmbiguityPol
     """
     name = _meta_str(meta, AMBIGUITY_POLICY_META)
     if name:
-        return _POLICY_REGISTRY.resolve_ambiguity("cpg", name)
+        return registry.resolve_ambiguity("cpg", name)
     return None
 
 

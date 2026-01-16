@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import cast
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.finalize.finalize import Contract
@@ -29,6 +28,7 @@ from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from arrowdsl.spec.io import write_spec_table
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
+from obs.parquet_writers import write_obs_dataset
 from relspec.compiler import CompiledOutput
 from relspec.model import RelationshipRule
 from relspec.param_deps import RuleDependencyReport
@@ -329,6 +329,10 @@ class RunBundleContext:
     compiled_relationship_outputs: Mapping[str, CompiledOutput] | None = None
     datafusion_metrics: JsonDict | None = None
     datafusion_traces: JsonDict | None = None
+    datafusion_fallbacks: pa.Table | None = None
+    datafusion_explains: pa.Table | None = None
+    relspec_scan_telemetry: pa.Table | None = None
+    relspec_rule_exec_events: pa.Table | None = None
 
     relspec_input_locations: Mapping[str, DatasetLocation] | None = None
     relspec_input_tables: Mapping[str, TableLike] | None = None
@@ -403,6 +407,14 @@ def _write_relspec_snapshots(
         target = relspec_dir / "rule_diagnostics.arrow"
         write_spec_table(target, context.rule_diagnostics)
         files_written.append(str(target))
+        files_written.append(
+            write_obs_dataset(
+                relspec_dir,
+                name="rule_diagnostics",
+                table=context.rule_diagnostics,
+                overwrite=context.overwrite,
+            )
+        )
     if context.relationship_contracts is not None:
         snap = serialize_contract_catalog(context.relationship_contracts)
         files_written.append(_write_json(relspec_dir / "contracts.json", snap, overwrite=True))
@@ -435,6 +447,42 @@ def _write_runtime_artifacts(
                 relspec_dir / "datafusion_traces.json",
                 context.datafusion_traces,
                 overwrite=True,
+            )
+        )
+    if context.datafusion_fallbacks is not None:
+        files_written.append(
+            write_obs_dataset(
+                relspec_dir,
+                name="datafusion_fallbacks",
+                table=context.datafusion_fallbacks,
+                overwrite=context.overwrite,
+            )
+        )
+    if context.datafusion_explains is not None:
+        files_written.append(
+            write_obs_dataset(
+                relspec_dir,
+                name="datafusion_explains",
+                table=context.datafusion_explains,
+                overwrite=context.overwrite,
+            )
+        )
+    if context.relspec_scan_telemetry is not None:
+        files_written.append(
+            write_obs_dataset(
+                relspec_dir,
+                name="scan_telemetry",
+                table=context.relspec_scan_telemetry,
+                overwrite=context.overwrite,
+            )
+        )
+    if context.relspec_rule_exec_events is not None:
+        files_written.append(
+            write_obs_dataset(
+                relspec_dir,
+                name="rule_exec_events",
+                table=context.relspec_rule_exec_events,
+                overwrite=context.overwrite,
             )
         )
 
@@ -636,11 +684,14 @@ def _write_param_table_data(
     if not context.param_table_artifacts or not context.include_param_table_data:
         return
     for name, artifact in context.param_table_artifacts.items():
-        target_dir = params_dir / name
-        _ensure_dir(target_dir)
-        path = target_dir / "part-0.parquet"
-        pq.write_table(artifact.table, path)
-        files_written.append(str(path))
+        files_written.append(
+            write_obs_dataset(
+                params_dir,
+                name=name,
+                table=artifact.table,
+                overwrite=context.overwrite,
+            )
+        )
 
 
 def _write_param_dependency_reports(
@@ -705,10 +756,15 @@ def write_run_bundle(
         relspec/templates.arrow
         relspec/template_diagnostics.arrow
         relspec/rule_diagnostics.arrow
+        relspec/rule_diagnostics/
         relspec/datafusion_metrics.json
         relspec/datafusion_traces.json
+        relspec/datafusion_fallbacks/
+        relspec/datafusion_explains/
         relspec/contracts.json
         relspec/compiled_outputs.json
+        relspec/scan_telemetry/
+        relspec/rule_exec_events/
         relspec/substrait/*.substrait
         relspec/substrait_index.json
         schemas/*.schema.json
@@ -716,6 +772,7 @@ def write_run_bundle(
         params/signatures.json
         params/rule_param_deps.json
         params/param_rule_reverse_index.json
+        params/<table_name>/part-*.parquet
 
     Parameters
     ----------

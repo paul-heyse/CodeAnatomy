@@ -41,6 +41,7 @@ from relspec.list_filter_gate import (
 )
 from relspec.model import DatasetRef, DedupeKernelSpec, ExplodeListSpec, RelationshipRule
 from relspec.param_deps import RuleDependencyReport, dataset_table_names, infer_param_deps
+from relspec.pipeline_policy import KernelLanePolicy
 from relspec.rules.definitions import (
     ExtractPayload,
     NormalizePayload,
@@ -51,6 +52,7 @@ from relspec.rules.diagnostics import (
     KernelLaneDiagnosticOptions,
     MissingColumnsDiagnosticOptions,
     RuleDiagnostic,
+    RuleDiagnosticSeverity,
     SqlGlotMetadataDiagnosticOptions,
     kernel_lane_diagnostic,
     sqlglot_metadata_diagnostic,
@@ -296,6 +298,7 @@ class SqlGlotDiagnosticsConfig:
     param_table_specs: Sequence[ParamTableSpec] = ()
     param_table_policy: ParamTablePolicy | None = None
     list_filter_gate_policy: ListFilterGatePolicy | None = None
+    kernel_lane_policy: KernelLanePolicy | None = None
 
 
 @dataclass(frozen=True)
@@ -308,6 +311,7 @@ class SqlGlotDiagnosticsContext:
     param_specs: Mapping[str, ParamTableSpec]
     param_policy: ParamTablePolicy
     list_filter_gate_policy: ListFilterGatePolicy | None
+    kernel_lane_policy: KernelLanePolicy | None
 
 
 @dataclass(frozen=True)
@@ -406,6 +410,7 @@ def build_sqlglot_context(
         param_specs=spec_map,
         param_policy=param_policy,
         list_filter_gate_policy=config.list_filter_gate_policy,
+        kernel_lane_policy=config.kernel_lane_policy,
     )
 
 
@@ -433,7 +438,13 @@ def rule_sqlglot_diagnostics(
                 context=context,
             )
         )
-        diagnostics.extend(_kernel_lane_diagnostics_for_rule(rule, ctx=context.ctx))
+        diagnostics.extend(
+            _kernel_lane_diagnostics_for_rule(
+                rule,
+                ctx=context.ctx,
+                kernel_lane_policy=context.kernel_lane_policy,
+            )
+        )
     return tuple(diagnostics)
 
 
@@ -847,6 +858,7 @@ def _kernel_lane_diagnostics_for_rule(
     rule: RuleDefinition,
     *,
     ctx: ExecutionContext,
+    kernel_lane_policy: KernelLanePolicy | None,
 ) -> tuple[RuleDiagnostic, ...]:
     """Return kernel lane diagnostics for a relationship rule.
 
@@ -856,6 +868,8 @@ def _kernel_lane_diagnostics_for_rule(
         Rule definition to analyze.
     ctx
         Execution context used for kernel capability checks.
+    kernel_lane_policy
+        Optional kernel lane policy to enforce.
 
     Returns
     -------
@@ -869,13 +883,29 @@ def _kernel_lane_diagnostics_for_rule(
     if not kernel_names:
         return ()
     plan_signature = _plan_signature_for_rule(rule)
-    options = KernelLaneDiagnosticOptions(
-        rule_name=rule.name,
-        plan_signature=plan_signature,
-    )
+    base_metadata: dict[str, str] = {}
+    if kernel_lane_policy is not None:
+        allowed = ",".join(lane.value for lane in kernel_lane_policy.allowed)
+        base_metadata["policy_allowed_lanes"] = allowed
+        base_metadata["policy_action"] = kernel_lane_policy.on_violation
     diagnostics: list[RuleDiagnostic] = []
     for name in kernel_names:
         capability = kernel_capability(name, ctx=ctx)
+        violation = False
+        severity: RuleDiagnosticSeverity = "warning"
+        if kernel_lane_policy is not None:
+            violation = capability.lane not in kernel_lane_policy.allowed
+            if violation and kernel_lane_policy.on_violation == "error":
+                severity = "error"
+        extra_metadata = dict(base_metadata)
+        if kernel_lane_policy is not None:
+            extra_metadata["policy_violation"] = str(violation).lower()
+        options = KernelLaneDiagnosticOptions(
+            rule_name=rule.name,
+            plan_signature=plan_signature,
+            severity=severity,
+            extra_metadata=extra_metadata,
+        )
         diagnostics.append(
             kernel_lane_diagnostic(
                 capability,

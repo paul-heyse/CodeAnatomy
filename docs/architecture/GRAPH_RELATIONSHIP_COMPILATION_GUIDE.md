@@ -783,6 +783,10 @@ When making changes:
    - schema fingerprints
    - registry + contract snapshots
    - row counts per dataset
+   - rule diagnostics + Substrait plan snapshots
+   - DataFusion fallbacks/explains parquet diagnostics
+   - scan telemetry + rule execution events datasets
+   - param table specs, signatures, and dataset snapshots
 
 This gives reproducible diffs and lets you see where semantics changed.
 

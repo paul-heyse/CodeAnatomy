@@ -10,6 +10,7 @@ import pyarrow as pa
 
 from ibis_engine.param_tables import ParamTablePolicy, ParamTableSpec
 from relspec.list_filter_gate import ListFilterGatePolicy
+from relspec.pipeline_policy import KernelLanePolicy
 from relspec.rules.diagnostics import RuleDiagnostic, rule_diagnostic_table
 from relspec.rules.spec_tables import rule_definition_table
 from relspec.rules.templates import (
@@ -56,6 +57,7 @@ class RuleRegistry:
     param_table_specs: Sequence[ParamTableSpec] = ()
     param_table_policy: ParamTablePolicy | None = None
     list_filter_gate_policy: ListFilterGatePolicy | None = None
+    kernel_lane_policy: KernelLanePolicy | None = None
 
     def rule_definitions(self) -> tuple[RuleDefinition, ...]:
         """Return all rule definitions across adapters.
@@ -73,6 +75,7 @@ class RuleRegistry:
                 param_table_specs=self.param_table_specs,
                 param_table_policy=self.param_table_policy,
                 list_filter_gate_policy=self.list_filter_gate_policy,
+                kernel_lane_policy=self.kernel_lane_policy,
             ),
         )
         _raise_rule_errors(diagnostics)
@@ -172,6 +175,7 @@ class RuleRegistry:
                 param_table_specs=self.param_table_specs,
                 param_table_policy=self.param_table_policy,
                 list_filter_gate_policy=self.list_filter_gate_policy,
+                kernel_lane_policy=self.kernel_lane_policy,
             ),
         )
 

@@ -49,6 +49,7 @@ from normalize.runner import (
     run_normalize,
 )
 from relspec.adapters.normalize import NormalizeRuleAdapter
+from relspec.pipeline_policy import PipelinePolicy
 from relspec.rules.compiler import RuleCompiler
 from relspec.rules.handlers.normalize import NormalizeRuleHandler
 from relspec.rules.registry import RuleRegistry
@@ -354,6 +355,7 @@ def normalize_plan_catalog(
 def normalize_rule_compilation(
     normalize_plan_catalog: NormalizePlanCatalog,
     normalize_execution_context: NormalizeExecutionContext,
+    pipeline_policy: PipelinePolicy,
     evidence_plan: EvidencePlan | None = None,
     materialize_outputs: Sequence[str] | None = None,
 ) -> NormalizeRuleCompilation:
@@ -373,7 +375,7 @@ def normalize_rule_compilation(
     adapter_mode = normalize_execution_context.adapter_mode
     execution_policy = normalize_execution_context.execution_policy
     ibis_backend = normalize_execution_context.ibis_backend
-    rules = _normalize_rules(ctx=ctx)
+    rules = _normalize_rules(ctx=ctx, pipeline_policy=pipeline_policy)
     required_outputs = _required_rule_outputs(evidence_plan, rules)
     if required_outputs is not None and not required_outputs:
         return NormalizeRuleCompilation(rules=(), plans={}, catalog=normalize_plan_catalog)
@@ -424,8 +426,16 @@ def _normalize_rule_definitions() -> tuple[RuleDefinition, ...]:
     return registry.rules_for_domain("normalize")
 
 
-def _normalize_rules(ctx: ExecutionContext) -> tuple[NormalizeRule, ...]:
-    compiler = RuleCompiler(handlers={"normalize": NormalizeRuleHandler()})
+def _normalize_rules(
+    ctx: ExecutionContext,
+    *,
+    pipeline_policy: PipelinePolicy,
+) -> tuple[NormalizeRule, ...]:
+    compiler = RuleCompiler(
+        handlers={
+            "normalize": NormalizeRuleHandler(policies=pipeline_policy.policy_registry),
+        }
+    )
     compiled = compiler.compile_rules(_normalize_rule_definitions(), ctx=ctx)
     return cast("tuple[NormalizeRule, ...]", compiled)
 

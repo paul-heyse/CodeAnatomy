@@ -302,6 +302,7 @@ def _join_payload(spec: HashJoinConfig) -> dict[str, object]:
     dict[str, object]
         Serialized join configuration.
     """
+
     def _output(value: tuple[str, ...] | None) -> list[str] | None:
         if value is None:
             return None

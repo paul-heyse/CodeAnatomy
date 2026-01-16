@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import warnings
 from collections.abc import Mapping
 from functools import cache
 from typing import Literal, Protocol, cast
@@ -16,9 +17,13 @@ from normalize.rule_model import AmbiguityPolicy, ConfidencePolicy
 
 
 class _PolicyRegistry(Protocol):
-    def resolve_confidence(self, domain: str, name: str) -> ConfidencePolicy: ...
+    def resolve_confidence(
+        self, domain: Literal["normalize"], name: str | None
+    ) -> object | None: ...
 
-    def resolve_ambiguity(self, domain: str, name: str) -> AmbiguityPolicy: ...
+    def resolve_ambiguity(
+        self, domain: Literal["normalize"], name: str | None
+    ) -> object | None: ...
 
 
 CONFIDENCE_POLICY_META = b"confidence_policy"
@@ -71,36 +76,62 @@ def ambiguity_kernels(policy: AmbiguityPolicy | None) -> tuple[DedupeSpec, ...]:
     return (spec,)
 
 
-def confidence_policy_from_schema(schema: SchemaLike) -> ConfidencePolicy | None:
+def confidence_policy_from_schema(
+    schema: SchemaLike,
+    *,
+    registry: _PolicyRegistry | None = None,
+) -> ConfidencePolicy | None:
     """Derive a confidence policy from schema metadata.
 
     Parameters
     ----------
     schema:
         Schema carrying policy metadata.
+    registry:
+        Optional policy registry for resolving named policies.
 
     Returns
     -------
     ConfidencePolicy | None
         Parsed confidence policy, or None when absent.
     """
-    return _confidence_policy_from_metadata(schema.metadata or {})
+    if registry is None:
+        warnings.warn(
+            "confidence_policy_from_schema default registry is deprecated; pass registry=.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        registry = _policy_registry()
+    return _confidence_policy_from_metadata(schema.metadata or {}, registry=registry)
 
 
-def ambiguity_policy_from_schema(schema: SchemaLike) -> AmbiguityPolicy | None:
+def ambiguity_policy_from_schema(
+    schema: SchemaLike,
+    *,
+    registry: _PolicyRegistry | None = None,
+) -> AmbiguityPolicy | None:
     """Derive an ambiguity policy from schema metadata.
 
     Parameters
     ----------
     schema:
         Schema carrying policy metadata.
+    registry:
+        Optional policy registry for resolving named policies.
 
     Returns
     -------
     AmbiguityPolicy | None
         Parsed ambiguity policy, or None when absent.
     """
-    return _ambiguity_policy_from_metadata(schema.metadata or {})
+    if registry is None:
+        warnings.warn(
+            "ambiguity_policy_from_schema default registry is deprecated; pass registry=.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        registry = _policy_registry()
+    return _ambiguity_policy_from_metadata(schema.metadata or {}, registry=registry)
 
 
 def default_tie_breakers(schema: SchemaLike) -> tuple[SortKey, ...]:
@@ -126,11 +157,18 @@ def default_tie_breakers(schema: SchemaLike) -> tuple[SortKey, ...]:
     return tuple(resolved)
 
 
-def _confidence_policy_from_metadata(meta: Mapping[bytes, bytes]) -> ConfidencePolicy | None:
+def _confidence_policy_from_metadata(
+    meta: Mapping[bytes, bytes],
+    *,
+    registry: _PolicyRegistry,
+) -> ConfidencePolicy | None:
     name = _meta_str(meta, CONFIDENCE_POLICY_META)
     if name:
-        registry = _policy_registry()
-        return registry.resolve_confidence("normalize", name)
+        policy = registry.resolve_confidence("normalize", name)
+        if isinstance(policy, ConfidencePolicy):
+            return policy
+        msg = f"Expected ConfidencePolicy for policy {name!r}."
+        raise TypeError(msg)
     base = _meta_float(meta, CONFIDENCE_BASE_META)
     penalty = _meta_float(meta, CONFIDENCE_PENALTY_META)
     weights = _meta_json_map(meta, CONFIDENCE_SOURCE_WEIGHT_META)
@@ -143,11 +181,18 @@ def _confidence_policy_from_metadata(meta: Mapping[bytes, bytes]) -> ConfidenceP
     )
 
 
-def _ambiguity_policy_from_metadata(meta: Mapping[bytes, bytes]) -> AmbiguityPolicy | None:
+def _ambiguity_policy_from_metadata(
+    meta: Mapping[bytes, bytes],
+    *,
+    registry: _PolicyRegistry,
+) -> AmbiguityPolicy | None:
     name = _meta_str(meta, AMBIGUITY_POLICY_META)
     if name:
-        registry = _policy_registry()
-        return registry.resolve_ambiguity("normalize", name)
+        policy = registry.resolve_ambiguity("normalize", name)
+        if isinstance(policy, AmbiguityPolicy):
+            return policy
+        msg = f"Expected AmbiguityPolicy for policy {name!r}."
+        raise TypeError(msg)
     return None
 
 

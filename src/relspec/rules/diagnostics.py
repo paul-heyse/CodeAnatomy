@@ -100,6 +100,7 @@ class KernelLaneDiagnosticOptions:
     rule_name: str | None = None
     severity: RuleDiagnosticSeverity = "warning"
     plan_signature: str | None = None
+    extra_metadata: Mapping[str, str] = field(default_factory=dict)
 
 
 def rule_diagnostic_table(diagnostics: Sequence[RuleDiagnostic]) -> pa.Table:
@@ -223,6 +224,8 @@ def kernel_lane_diagnostic(
         "volatility": capability.volatility,
         "ordering_required": str(capability.requires_ordering).lower(),
     }
+    if options.extra_metadata:
+        metadata.update({str(key): str(value) for key, value in options.extra_metadata.items()})
     return RuleDiagnostic(
         domain=domain,
         template=options.template,

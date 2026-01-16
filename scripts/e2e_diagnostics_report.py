@@ -122,9 +122,7 @@ def _non_null_set(values: pa.Array | pa.ChunkedArray) -> set[object]:
 
 
 def _count_missing(values: pa.Array | pa.ChunkedArray, present: set[object]) -> int:
-    return sum(
-        1 for value in _iter_py_values(values) if value is not None and value not in present
-    )
+    return sum(1 for value in _iter_py_values(values) if value is not None and value not in present)
 
 
 def _count_invalid_span(
@@ -134,17 +132,13 @@ def _count_invalid_span(
     return sum(
         1
         for start, end in zip(_iter_py_values(bstart), _iter_py_values(bend), strict=True)
-        if isinstance(start, (int, float))
-        and isinstance(end, (int, float))
-        and start > end
+        if isinstance(start, (int, float)) and isinstance(end, (int, float)) and start > end
     )
 
 
 def _count_negative(values: pa.Array | pa.ChunkedArray) -> int:
     return sum(
-        1
-        for value in _iter_py_values(values)
-        if isinstance(value, (int, float)) and value < 0
+        1 for value in _iter_py_values(values) if isinstance(value, (int, float)) and value < 0
     )
 
 
@@ -316,6 +310,7 @@ def _write_summary(path: Path, report: Mapping[str, Any]) -> None:
     lines.append(f"Outputs checked: {summary['parquet_files']}")
     lines.append(f"Manifest outputs: {summary['manifest_outputs']}")
     lines.append(f"Extracts: {summary['extracts']} Rules: {summary['rules']}")
+    lines.append(f"Run bundle datasets: {summary['run_bundle_datasets']}")
     lines.append("")
     issues: list[dict[str, str]] = report["issues"]
     if not issues:
@@ -323,8 +318,7 @@ def _write_summary(path: Path, report: Mapping[str, Any]) -> None:
     else:
         lines.append("Issues:")
         lines.extend(
-            f"- [{issue['severity']}] {issue['check']}: {issue['detail']}"
-            for issue in issues
+            f"- [{issue['severity']}] {issue['check']}: {issue['detail']}" for issue in issues
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -382,6 +376,45 @@ def _load_manifest(
         )
         return None
     return _read_json(manifest_path)
+
+
+def _check_run_bundle_datasets(
+    run_bundle: Path | None,
+    *,
+    issues: list[Issue],
+) -> dict[str, bool]:
+    expected = {
+        "rule_diagnostics": Path("relspec") / "rule_diagnostics",
+        "datafusion_fallbacks": Path("relspec") / "datafusion_fallbacks",
+        "datafusion_explains": Path("relspec") / "datafusion_explains",
+        "scan_telemetry": Path("relspec") / "scan_telemetry",
+        "rule_exec_events": Path("relspec") / "rule_exec_events",
+    }
+    present: dict[str, bool] = {}
+    if run_bundle is None:
+        for name in expected:
+            present[name] = False
+        issues.append(
+            Issue(
+                severity="warn",
+                check="run_bundle",
+                detail="Run bundle directory not found for dataset checks.",
+            )
+        )
+        return present
+    for name, rel_path in expected.items():
+        path = run_bundle / rel_path
+        exists = path.exists()
+        present[name] = exists
+        if not exists:
+            issues.append(
+                Issue(
+                    severity="warn",
+                    check="run_bundle_dataset",
+                    detail=f"Missing {path}",
+                )
+            )
+    return present
 
 
 def _collect_parquet_summaries(
@@ -444,6 +477,7 @@ def _build_summary(
     manifest_summary: Mapping[str, Any],
     parquet_summaries: Mapping[str, Mapping[str, Any]],
     extract_error_dirs: Sequence[Path],
+    run_bundle_datasets: Mapping[str, bool],
 ) -> dict[str, Any]:
     return {
         "parquet_files": len(parquet_summaries),
@@ -451,6 +485,7 @@ def _build_summary(
         "extracts": manifest_summary.get("extracts_count", 0),
         "rules": manifest_summary.get("rules_count", 0),
         "extract_error_dirs": len(extract_error_dirs),
+        "run_bundle_datasets": sum(1 for present in run_bundle_datasets.values() if present),
     }
 
 
@@ -463,6 +498,7 @@ def _build_report(
     issues: list[Issue] = []
     required_files = _check_required_files(output_dir, issues=issues)
     manifest = _load_manifest(run_bundle, issues=issues)
+    run_bundle_datasets = _check_run_bundle_datasets(run_bundle, issues=issues)
     parquet_summaries = _collect_parquet_summaries(
         output_dir,
         validate_parquet=validate_parquet,
@@ -472,7 +508,12 @@ def _build_report(
     scip_info = _scip_index_info(output_dir, issues=issues)
     extract_error_dirs = _collect_extract_error_dirs(output_dir)
     manifest_summary = _summarize_manifest(manifest) if manifest is not None else {}
-    summary = _build_summary(manifest_summary, parquet_summaries, extract_error_dirs)
+    summary = _build_summary(
+        manifest_summary,
+        parquet_summaries,
+        extract_error_dirs,
+        run_bundle_datasets,
+    )
     status = _report_status(issues)
 
     return {
@@ -481,6 +522,7 @@ def _build_report(
         "run_bundle": str(run_bundle) if run_bundle is not None else None,
         "required_files": required_files,
         "manifest_summary": manifest_summary,
+        "run_bundle_datasets": run_bundle_datasets,
         "parquet_summaries": parquet_summaries,
         "scip_index": scip_info,
         "extract_errors": {

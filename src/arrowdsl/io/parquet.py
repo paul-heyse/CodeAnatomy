@@ -299,6 +299,7 @@ def write_dataset_parquet(
         format="parquet",
         basename_template=config.basename_template,
         max_rows_per_file=options.max_rows_per_file,
+        max_rows_per_group=options.max_rows_per_file,
         existing_data_behavior=(
             "overwrite_or_ignore" if not config.overwrite else "delete_matching"
         ),

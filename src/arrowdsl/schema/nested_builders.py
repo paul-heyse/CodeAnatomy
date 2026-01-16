@@ -297,7 +297,9 @@ _MISSING_DEFAULT = _MissingDefaultType()
 
 
 def _default_scalar_value(dtype: DataTypeLike) -> object | _MissingDefaultType:
-    handlers: tuple[tuple[Callable[[DataTypeLike], bool], Callable[[DataTypeLike], object]], ...] = (
+    handlers: tuple[
+        tuple[Callable[[DataTypeLike], bool], Callable[[DataTypeLike], object]], ...
+    ] = (
         (patypes.is_string, lambda _dtype: ""),
         (patypes.is_large_string, lambda _dtype: ""),
         (patypes.is_binary, lambda _dtype: b""),

@@ -14,9 +14,14 @@ from normalize.policies import (
 )
 from normalize.registry_specs import dataset_schema
 from normalize.rule_model import AmbiguityPolicy, EvidenceOutput, EvidenceSpec, NormalizeRule
+from relspec.rules.policies import PolicyRegistry
 
 
-def apply_rule_defaults(rule: NormalizeRule) -> NormalizeRule:
+def apply_rule_defaults(
+    rule: NormalizeRule,
+    *,
+    registry: PolicyRegistry | None = None,
+) -> NormalizeRule:
     """Apply policy and evidence defaults to a normalize rule.
 
     Returns
@@ -24,11 +29,15 @@ def apply_rule_defaults(rule: NormalizeRule) -> NormalizeRule:
     NormalizeRule
         Rule with policy and evidence defaults applied.
     """
-    updated = _apply_policy_defaults(rule)
+    updated = _apply_policy_defaults(rule, registry=registry)
     return _apply_evidence_defaults(updated)
 
 
-def apply_policy_defaults(rules: Sequence[NormalizeRule]) -> tuple[NormalizeRule, ...]:
+def apply_policy_defaults(
+    rules: Sequence[NormalizeRule],
+    *,
+    registry: PolicyRegistry | None = None,
+) -> tuple[NormalizeRule, ...]:
     """Apply policy defaults to a sequence of normalize rules.
 
     Returns
@@ -36,7 +45,7 @@ def apply_policy_defaults(rules: Sequence[NormalizeRule]) -> tuple[NormalizeRule
     tuple[NormalizeRule, ...]
         Rules with policy defaults applied.
     """
-    return tuple(_apply_policy_defaults(rule) for rule in rules)
+    return tuple(_apply_policy_defaults(rule, registry=registry) for rule in rules)
 
 
 def apply_evidence_defaults(rules: Sequence[NormalizeRule]) -> tuple[NormalizeRule, ...]:
@@ -50,10 +59,20 @@ def apply_evidence_defaults(rules: Sequence[NormalizeRule]) -> tuple[NormalizeRu
     return tuple(_apply_evidence_defaults(rule) for rule in rules)
 
 
-def _apply_policy_defaults(rule: NormalizeRule) -> NormalizeRule:
+def _apply_policy_defaults(
+    rule: NormalizeRule,
+    *,
+    registry: PolicyRegistry | None,
+) -> NormalizeRule:
     schema = dataset_schema(rule.output)
-    confidence = rule.confidence_policy or confidence_policy_from_schema(schema)
-    ambiguity = rule.ambiguity_policy or ambiguity_policy_from_schema(schema)
+    confidence = rule.confidence_policy or confidence_policy_from_schema(
+        schema,
+        registry=registry,
+    )
+    ambiguity = rule.ambiguity_policy or ambiguity_policy_from_schema(
+        schema,
+        registry=registry,
+    )
     if ambiguity is not None:
         ambiguity = _apply_default_tie_breakers(ambiguity, schema=schema)
     if confidence == rule.confidence_policy and ambiguity == rule.ambiguity_policy:

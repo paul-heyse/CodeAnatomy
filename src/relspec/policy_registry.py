@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 from relspec.model import AmbiguityPolicy, ConfidencePolicy, WinnerSelectConfig
 
 CONFIDENCE_POLICIES: dict[str, ConfidencePolicy] = {
@@ -40,6 +42,11 @@ def resolve_confidence_policy(name: str | None) -> ConfidencePolicy | None:
     """
     if name is None:
         return None
+    warnings.warn(
+        "relspec.policy_registry is deprecated; use PolicyRegistry instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     policy = CONFIDENCE_POLICIES.get(name)
     if policy is None:
         msg = f"Unknown confidence policy: {name!r}."
@@ -67,6 +74,11 @@ def resolve_ambiguity_policy(name: str | None) -> AmbiguityPolicy | None:
     """
     if name is None:
         return None
+    warnings.warn(
+        "relspec.policy_registry is deprecated; use PolicyRegistry instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     policy = AMBIGUITY_POLICIES.get(name)
     if policy is None:
         msg = f"Unknown ambiguity policy: {name!r}."

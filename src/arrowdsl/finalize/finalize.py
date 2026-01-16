@@ -36,7 +36,6 @@ from arrowdsl.schema.encoding_policy import EncodingPolicy
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import AlignmentInfo, SchemaMetadataSpec, align_table
 from arrowdsl.schema.validation import ArrowValidationOptions
-from schema_spec.specs import NestedFieldSpec
 
 if TYPE_CHECKING:
     from arrowdsl.schema.policy import SchemaPolicy
@@ -179,8 +178,7 @@ def _provenance_columns(table: TableLike, schema: SchemaLike) -> list[str]:
 
 def _relax_nullable_schema(schema: SchemaLike) -> pa.Schema:
     fields = [
-        pa.field(field.name, field.type, nullable=True, metadata=field.metadata)
-        for field in schema
+        pa.field(field.name, field.type, nullable=True, metadata=field.metadata) for field in schema
     ]
     return pa.schema(fields, metadata=schema.metadata)
 
@@ -214,6 +212,7 @@ ERROR_DETAIL_FIELDS: tuple[tuple[str, DataTypeLike], ...] = (
 )
 
 ERROR_DETAIL_STRUCT = pa.struct([(name, dtype) for name, dtype in ERROR_DETAIL_FIELDS])
+ERROR_DETAIL_LIST_DTYPE = pa.list_(ERROR_DETAIL_STRUCT)
 
 
 def _build_error_detail_list(errors: TableLike) -> ArrayLike:
@@ -226,13 +225,6 @@ def _build_error_detail_list(errors: TableLike) -> ArrayLike:
     detail = build_struct(detail_fields, struct_type=ERROR_DETAIL_STRUCT)
     offsets = pa.array(range(errors.num_rows + 1), type=pa.int32())
     return build_list(offsets, detail)
-
-
-ERROR_DETAIL_SPEC = NestedFieldSpec(
-    name="error_detail",
-    dtype=pa.list_(ERROR_DETAIL_STRUCT),
-    builder=_build_error_detail_list,
-)
 
 
 @dataclass(frozen=True)
@@ -504,7 +496,7 @@ def _empty_error_details_table(
     fields = [("row_id", pa.int64())]
     fields.extend((col, schema.field(col).type) for col in key_cols if col in schema.names)
     fields.extend((col, errors_schema.field(col).type) for col in provenance)
-    fields.append(("error_detail", ERROR_DETAIL_SPEC.dtype))
+    fields.append(("error_detail", ERROR_DETAIL_LIST_DTYPE))
     empty_schema = pa.schema(fields)
     return pa.Table.from_arrays(
         [pa.array([], type=schema_field.type) for schema_field in empty_schema],
@@ -639,8 +631,7 @@ def _combine_list_array(values: ArrayLike | ChunkedArrayLike) -> ListArrayLike:
         if value_type is not None:
             list_type = (
                 pa.large_list(cast("pa.DataType", value_type))
-                if patypes.is_large_list(combined_type)
-                or patypes.is_large_list_view(combined_type)
+                if patypes.is_large_list(combined_type) or patypes.is_large_list_view(combined_type)
                 else pa.list_(cast("pa.DataType", value_type))
             )
             return cast("ListArrayLike", pa.array(combined.to_pylist(), type=list_type))

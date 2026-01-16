@@ -51,14 +51,42 @@ def test_datafusion_bridge_parity(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.integration
+def test_pipeline_determinism_threading(tmp_path: Path) -> None:
+    """Ensure CPG outputs are deterministic across thread profiles."""
+    repo_root = _fixture_repo_root()
+    outputs_default = _run_pipeline(
+        repo_root,
+        use_datafusion_bridge=True,
+        scip_output_dir=tmp_path / "scip_default",
+        ctx_profile="default",
+    )
+    outputs_deterministic = _run_pipeline(
+        repo_root,
+        use_datafusion_bridge=True,
+        scip_output_dir=tmp_path / "scip_deterministic",
+        ctx_profile="deterministic",
+    )
+    for name in _CPG_OUTPUTS:
+        table_default = outputs_default[name]
+        table_deterministic = outputs_deterministic[name]
+        assert table_default.schema == table_deterministic.schema
+        sort_keys = _canonical_sort_keys(name)
+        assert table_digest(table_default, sort_keys=sort_keys) == table_digest(
+            table_deterministic,
+            sort_keys=sort_keys,
+        )
+
+
 def _run_pipeline(
     repo_root: Path,
     *,
     use_datafusion_bridge: bool,
     scip_output_dir: Path,
+    ctx_profile: str = "default",
 ) -> Mapping[str, TableOutput]:
     driver = build_driver(config={})
-    ctx = execution_context_factory("default")
+    ctx = execution_context_factory(ctx_profile)
     overrides = {
         "adapter_mode": AdapterMode(
             use_ibis_bridge=True,

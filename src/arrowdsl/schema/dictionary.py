@@ -22,6 +22,7 @@ def normalize_dictionaries(
     TableLike
         Table with unified dictionary columns.
     """
+
     def schema_with_metadata(
         names: list[str],
         columns: list[ChunkedArrayLike],

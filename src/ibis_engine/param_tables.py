@@ -6,9 +6,11 @@ import hashlib
 import json
 import re
 import uuid
-from collections.abc import Mapping, Sequence
+import warnings
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -96,12 +98,18 @@ class ParamTableRegistry:
         ------
         KeyError
             Raised when the logical name is not registered.
+        ValueError
+            Raised when the spec key column is missing from the schema.
         """
         spec = self.specs.get(logical_name)
         if spec is None:
             msg = f"Unknown param table spec: {logical_name!r}."
             raise KeyError(msg)
-        signature = param_signature(logical_name=logical_name, values=values)
+        if spec.key_col not in spec.schema.names:
+            msg = f"ParamTableSpec missing key column: {spec.key_col!r}."
+            raise ValueError(msg)
+        values_array = _param_values_array(spec, values)
+        signature = param_signature_from_array(logical_name=logical_name, values=values_array)
         schema_sig = schema_fingerprint(spec.schema)
         existing = self.artifacts.get(logical_name)
         if (
@@ -110,7 +118,7 @@ class ParamTableRegistry:
             and existing.schema_fingerprint == schema_sig
         ):
             return existing
-        table = build_param_table(spec, values)
+        table = pa.table({spec.key_col: values_array}, schema=spec.schema)
         artifact = ParamTableArtifact(
             logical_name=logical_name,
             table=table,
@@ -246,6 +254,40 @@ def qualified_param_table_name(
     return f"{policy.catalog}.{schema_name}.{table_name}"
 
 
+def _compute_array_fn(name: str) -> Callable[[pa.Array], pa.Array]:
+    fn = getattr(pc, name, None)
+    if fn is None:
+        msg = f"pyarrow.compute.{name} is unavailable."
+        raise RuntimeError(msg)
+    return cast("Callable[[pa.Array], pa.Array]", fn)
+
+
+def param_signature_from_array(
+    *,
+    logical_name: str,
+    values: pa.Array | pa.ChunkedArray,
+) -> str:
+    """Return a stable signature for a parameter list from Arrow values.
+
+    Returns
+    -------
+    str
+        Hex-encoded signature string.
+    """
+    normalized = values.combine_chunks() if isinstance(values, pa.ChunkedArray) else values
+    casted = pc.cast(normalized, pa.large_string(), safe=False)
+    sort_indices = _compute_array_fn("sort_indices")
+    hash_fn = _compute_array_fn("hash")
+    idx = sort_indices(casted)
+    sorted_vals = pc.take(casted, idx)
+    hashed = hash_fn(sorted_vals)
+    buf = hashed.buffers()[1]
+    digest = hashlib.sha256(logical_name.encode("utf-8"))
+    if buf is not None:
+        digest.update(buf.to_pybytes())
+    return digest.hexdigest()
+
+
 def param_signature(*, logical_name: str, values: Sequence[object]) -> str:
     """Return a stable signature for a parameter list.
 
@@ -254,10 +296,13 @@ def param_signature(*, logical_name: str, values: Sequence[object]) -> str:
     str
         Hex-encoded signature string.
     """
-    normalized = sorted(str(value) for value in values)
-    payload = {"name": logical_name, "values": normalized}
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    warnings.warn(
+        "param_signature is deprecated; use param_signature_from_array instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    values_array = pa.array(list(values))
+    return param_signature_from_array(logical_name=logical_name, values=values_array)
 
 
 def scalar_param_signature(values: Mapping[str, object]) -> str:
@@ -271,6 +316,17 @@ def scalar_param_signature(values: Mapping[str, object]) -> str:
     payload = {str(key): str(value) for key, value in values.items()}
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _param_values_array(
+    spec: ParamTableSpec,
+    values: Sequence[object],
+) -> pa.Array | pa.ChunkedArray:
+    field = spec.schema.field(spec.key_col)
+    array = pa.array(list(values), type=field.type)
+    if spec.distinct:
+        array = unique_values(array)
+    return array
 
 
 def build_param_table(spec: ParamTableSpec, values: Sequence[object]) -> pa.Table:
@@ -289,13 +345,8 @@ def build_param_table(spec: ParamTableSpec, values: Sequence[object]) -> pa.Tabl
     if spec.key_col not in spec.schema.names:
         msg = f"ParamTableSpec missing key column: {spec.key_col!r}."
         raise ValueError(msg)
-    field = spec.schema.field(spec.key_col)
-    array = pa.array(list(values), type=field.type)
-    table = pa.table({spec.key_col: array}, schema=spec.schema)
-    if spec.distinct:
-        unique = unique_values(table[spec.key_col])
-        table = pa.table({spec.key_col: unique}, schema=spec.schema)
-    return table
+    array = _param_values_array(spec, values)
+    return pa.table({spec.key_col: array}, schema=spec.schema)
 
 
 def unique_values(values: pa.Array | pa.ChunkedArray) -> pa.Array | pa.ChunkedArray:
@@ -342,6 +393,7 @@ __all__ = [
     "ParamTableSpec",
     "build_param_table",
     "param_signature",
+    "param_signature_from_array",
     "param_table_name",
     "param_table_schema",
     "qualified_param_table_name",

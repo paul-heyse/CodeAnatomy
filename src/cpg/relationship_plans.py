@@ -64,6 +64,7 @@ from relspec.policies import evidence_spec_from_schema
 from relspec.rules.cache import rule_definitions_cached
 from relspec.rules.compiler import RuleCompiler
 from relspec.rules.handlers.cpg import RelationshipRuleHandler
+from relspec.rules.policies import PolicyRegistry
 from relspec.rules.spec_tables import rule_definitions_from_table
 
 if TYPE_CHECKING:
@@ -91,6 +92,7 @@ class RelationPlanCompileOptions:
     param_bindings: Mapping[IbisValue, object] | None = None
     adapter_mode: AdapterMode | None = None
     execution_policy: AdapterExecutionPolicy | None = None
+    policy_registry: PolicyRegistry = field(default_factory=PolicyRegistry)
 
 
 IbisPlanSource = PlanSource | IbisPlan | Table
@@ -207,6 +209,7 @@ def compile_relation_plans(
         ctx,
         rule_table=options.rule_table,
         required_sources=options.required_sources,
+        policy_registry=options.policy_registry,
     )
     ctx_exec = (
         ctx
@@ -497,6 +500,7 @@ def _ibis_relation_context(
         ctx,
         rule_table=resolved.rule_table,
         required_sources=resolved.required_sources,
+        policy_registry=resolved.policy_registry,
     )
     ctx_exec = (
         ctx
@@ -582,7 +586,9 @@ def _compile_relation_plans_ibis(
             if compiled.emit_rule_meta:
                 expr = _apply_rule_meta_ibis(expr, rule)
             expr = _apply_kernel_specs_ibis(expr, rule.post_kernels, registry=context.registry)
-            expr = align_table_to_schema(expr, schema=context.output_schema, keep_extra_columns=True)
+            expr = align_table_to_schema(
+                expr, schema=context.output_schema, keep_extra_columns=True
+            )
             plan = IbisPlan(expr=expr, ordering=plan.ordering)
         if plan is None:
             msg = f"Failed to compile ibis relation plan for rule {rule.name!r}."
@@ -672,21 +678,26 @@ def _prepare_relation_rules(
     *,
     rule_table: pa.Table | None,
     required_sources: Sequence[str] | None,
+    policy_registry: PolicyRegistry,
 ) -> tuple[tuple[RelationshipRule, ...], pa.Schema]:
     rules = _resolve_relation_rules(ctx, rule_table=rule_table)
     if required_sources:
         required_set = set(required_sources)
         rules = tuple(rule for rule in rules if set(_rule_sources(rule)).issubset(required_set))
     output_schema = relation_output_schema()
-    rules = _apply_rule_policy_defaults(rules, output_schema)
+    rules = _apply_rule_policy_defaults(rules, output_schema, policy_registry=policy_registry)
     return rules, output_schema
 
 
 def _apply_rule_policy_defaults(
     rules: Sequence[RelationshipRule],
     output_schema: pa.Schema,
+    *,
+    policy_registry: PolicyRegistry,
 ) -> tuple[RelationshipRule, ...]:
-    rules = tuple(apply_policy_defaults(rule, output_schema) for rule in rules)
+    rules = tuple(
+        apply_policy_defaults(rule, output_schema, registry=policy_registry) for rule in rules
+    )
     inferred = evidence_spec_from_schema(output_schema)
     if inferred is not None:
         rules = tuple(

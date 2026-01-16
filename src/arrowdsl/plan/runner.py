@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import importlib
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, cast
+from functools import cache
+from typing import TYPE_CHECKING, Protocol, TypeGuard, cast
 
 import pyarrow as pa
-from datafusion import SessionContext
 
 from arrowdsl.core.context import DeterminismTier, ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
@@ -17,23 +18,26 @@ from arrowdsl.schema.metadata import merge_metadata_specs
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from config import AdapterMode
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
-from ibis_engine.plan import IbisPlan
-from ibis_engine.registry import datafusion_context
-from ibis_engine.runner import (
-    DataFusionExecutionOptions,
-    IbisPlanExecutionOptions,
-)
-from ibis_engine.runner import (
-    materialize_plan as ibis_materialize_plan,
-)
-from ibis_engine.runner import (
-    stream_plan as ibis_stream_plan,
-)
-from sqlglot_tools.bridge import IbisCompilerBackend
 
 if TYPE_CHECKING:
+    from datafusion import SessionContext
     from ibis.backends import BaseBackend
     from ibis.expr.types import Value as IbisValue
+
+    from ibis_engine.plan import IbisPlan
+    from ibis_engine.runner import DataFusionExecutionOptions, IbisPlanExecutionOptions
+    from sqlglot_tools.bridge import IbisCompilerBackend
+
+
+class _DatafusionContextFn(Protocol):
+    def __call__(self, backend: BaseBackend | None) -> SessionContext | None: ...
+
+
+class _IbisRunnerModule(Protocol):
+    DataFusionExecutionOptions: type[DataFusionExecutionOptions]
+    IbisPlanExecutionOptions: type[IbisPlanExecutionOptions]
+    materialize_plan: Callable[..., TableLike]
+    stream_plan: Callable[..., RecordBatchReaderLike]
 
 
 @dataclass(frozen=True)
@@ -49,6 +53,46 @@ class AdapterRunOptions:
     ibis_backend: BaseBackend | None = None
     ibis_params: Mapping[IbisValue, object] | None = None
     ibis_batch_size: int | None = None
+
+
+def _ibis_plan_type() -> type[IbisPlan]:
+    module = importlib.import_module("ibis_engine.plan")
+    return cast("type[IbisPlan]", module.IbisPlan)
+
+
+def _is_ibis_plan(plan: Plan | IbisPlan) -> TypeGuard[IbisPlan]:
+    return isinstance(plan, _ibis_plan_type())
+
+
+def _datafusion_context_fn() -> _DatafusionContextFn:
+    module = importlib.import_module("ibis_engine.registry")
+    return cast("_DatafusionContextFn", module.datafusion_context)
+
+
+def _ibis_runner_module() -> _IbisRunnerModule:
+    module = importlib.import_module("ibis_engine.runner")
+    return cast("_IbisRunnerModule", module)
+
+
+@dataclass(frozen=True)
+class _IbisRuntime:
+    datafusion_context: _DatafusionContextFn
+    datafusion_options_cls: type[DataFusionExecutionOptions]
+    ibis_options_cls: type[IbisPlanExecutionOptions]
+    ibis_materialize_plan: Callable[..., TableLike]
+    ibis_stream_plan: Callable[..., RecordBatchReaderLike]
+
+
+@cache
+def _ibis_runtime() -> _IbisRuntime:
+    runner_module = _ibis_runner_module()
+    return _IbisRuntime(
+        datafusion_context=_datafusion_context_fn(),
+        datafusion_options_cls=runner_module.DataFusionExecutionOptions,
+        ibis_options_cls=runner_module.IbisPlanExecutionOptions,
+        ibis_materialize_plan=runner_module.materialize_plan,
+        ibis_stream_plan=runner_module.stream_plan,
+    )
 
 
 def _apply_metadata_spec(
@@ -97,8 +141,9 @@ def _run_ibis_plan(
     ctx: ExecutionContext,
     options: AdapterRunOptions,
 ) -> PlanRunResult:
+    runtime = _ibis_runtime()
     adapter_mode = options.adapter_mode or AdapterMode()
-    execution: IbisPlanExecutionOptions | None = None
+    execution: object | None = None
     if (
         adapter_mode.use_datafusion_bridge
         and options.ibis_backend is not None
@@ -110,13 +155,14 @@ def _run_ibis_plan(
             else True
         )
         df_ctx = (
-            datafusion_context(options.ibis_backend) or ctx.runtime.datafusion.session_context()
+            runtime.datafusion_context(options.ibis_backend)
+            or ctx.runtime.datafusion.session_context()
         )
-        execution = IbisPlanExecutionOptions(
+        execution = runtime.ibis_options_cls(
             params=options.ibis_params,
-            datafusion=DataFusionExecutionOptions(
+            datafusion=runtime.datafusion_options_cls(
                 backend=cast("IbisCompilerBackend", options.ibis_backend),
-                ctx=cast("SessionContext", df_ctx),
+                ctx=df_ctx,
                 runtime_profile=ctx.runtime.datafusion,
                 options=None,
                 allow_fallback=allow_fallback,
@@ -126,7 +172,7 @@ def _run_ibis_plan(
         )
     if options.prefer_reader and ctx.determinism != DeterminismTier.CANONICAL:
         reader = (
-            ibis_stream_plan(plan, batch_size=options.ibis_batch_size, execution=execution)
+            runtime.ibis_stream_plan(plan, batch_size=options.ibis_batch_size, execution=execution)
             if execution is not None
             else plan.to_reader(batch_size=options.ibis_batch_size, params=options.ibis_params)
         )
@@ -147,7 +193,7 @@ def _run_ibis_plan(
             kind="reader",
         )
     table = (
-        ibis_materialize_plan(plan, execution=execution)
+        runtime.ibis_materialize_plan(plan, execution=execution)
         if execution is not None
         else plan.to_table(params=options.ibis_params)
     )
@@ -191,7 +237,7 @@ def run_plan_adapter(
     """
     options = options or AdapterRunOptions()
     adapter_mode = options.adapter_mode or AdapterMode()
-    if isinstance(plan, IbisPlan):
+    if _is_ibis_plan(plan):
         if not adapter_mode.use_ibis_bridge:
             msg = "AdapterMode.use_ibis_bridge is disabled for IbisPlan execution."
             raise ValueError(msg)
@@ -201,7 +247,7 @@ def run_plan_adapter(
             options=options,
         )
     return run_plan(
-        plan,
+        cast("Plan", plan),
         ctx=ctx,
         prefer_reader=options.prefer_reader,
         metadata_spec=options.metadata_spec,

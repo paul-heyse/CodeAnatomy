@@ -55,6 +55,7 @@ from ibis_engine.plan import IbisPlan
 from ibis_engine.registry import registry_snapshot
 from normalize.runner import NormalizeRuleCompilation
 from normalize.utils import encoding_policy_from_schema
+from obs.diagnostics_tables import datafusion_explains_table, datafusion_fallbacks_table
 from obs.manifest import ManifestContext, ManifestData, build_manifest, write_manifest_json
 from obs.repro import RunBundleContext, write_run_bundle
 from relspec.compiler import CompiledOutput
@@ -190,6 +191,34 @@ def _datafusion_runtime_artifacts(
     metrics = _json_mapping(profile.collect_metrics())
     traces = _json_mapping(profile.collect_traces())
     return metrics, traces
+
+
+def _datafusion_runtime_diag_tables(
+    ctx: ExecutionContext,
+) -> tuple[pa.Table | None, pa.Table | None]:
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        return None, None
+    fallback_events: list[dict[str, object]] = []
+    explain_events: list[dict[str, object]] = []
+    if profile.fallback_collector is not None:
+        fallback_events = profile.fallback_collector.snapshot()
+    if profile.explain_collector is not None:
+        for entry in profile.explain_collector.snapshot():
+            payload = dict(entry)
+            payload["explain_analyze"] = profile.explain_analyze
+            explain_events.append(payload)
+    fallback_table = (
+        datafusion_fallbacks_table(fallback_events)
+        if profile.fallback_collector is not None
+        else None
+    )
+    explain_table = (
+        datafusion_explains_table(explain_events)
+        if profile.explain_collector is not None
+        else None
+    )
+    return fallback_table, explain_table
 
 
 def _dataset_registry_snapshot(
@@ -1129,6 +1158,8 @@ def run_bundle_param_inputs(
 def run_bundle_context(
     run_bundle_inputs: RunBundleInputs,
     output_config: OutputConfig,
+    relspec_rule_exec_events: pa.Table | None,
+    relspec_scan_telemetry: TableLike,
     ctx: ExecutionContext | None = None,
 ) -> RunBundleContext | None:
     """Build the run bundle context when outputs are enabled.
@@ -1145,8 +1176,11 @@ def run_bundle_context(
     base_dir = Path(base) / "run_bundles"
     datafusion_metrics: JsonDict | None = None
     datafusion_traces: JsonDict | None = None
+    datafusion_fallbacks: pa.Table | None = None
+    datafusion_explains: pa.Table | None = None
     if ctx is not None:
         datafusion_metrics, datafusion_traces = _datafusion_runtime_artifacts(ctx)
+        datafusion_fallbacks, datafusion_explains = _datafusion_runtime_diag_tables(ctx)
     param_inputs = run_bundle_inputs.param_inputs
     param_specs = param_inputs.param_table_specs if param_inputs is not None else ()
     param_artifacts = param_inputs.param_table_artifacts if param_inputs is not None else None
@@ -1170,6 +1204,10 @@ def run_bundle_context(
         compiled_relationship_outputs=run_bundle_inputs.relspec_snapshots.compiled_outputs,
         datafusion_metrics=datafusion_metrics,
         datafusion_traces=datafusion_traces,
+        datafusion_fallbacks=datafusion_fallbacks,
+        datafusion_explains=datafusion_explains,
+        relspec_scan_telemetry=cast("pa.Table", relspec_scan_telemetry),
+        relspec_rule_exec_events=relspec_rule_exec_events,
         relspec_input_locations=run_bundle_inputs.tables.relspec_inputs.locations,
         relspec_input_tables=run_bundle_inputs.tables.relspec_inputs.tables,
         relationship_output_tables=run_bundle_inputs.tables.relationship_outputs.as_dict(),

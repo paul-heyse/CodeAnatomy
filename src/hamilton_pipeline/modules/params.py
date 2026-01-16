@@ -13,6 +13,7 @@ from ibis.backends import BaseBackend
 from ibis.expr.types import Table
 
 from arrowdsl.core.context import ExecutionContext
+from arrowdsl.io.parquet import write_dataset_parquet
 from arrowdsl.schema.serialization import schema_fingerprint
 from core_types import JsonDict
 from hamilton_pipeline.pipeline_types import OutputConfig, ParamBundle
@@ -23,17 +24,18 @@ from ibis_engine.param_tables import (
     ParamTableRegistry,
     ParamTableScope,
     ParamTableSpec,
-    param_signature,
+    param_signature_from_array,
     unique_values,
 )
 from ibis_engine.param_tables import (
     scalar_param_signature as build_scalar_param_signature,
 )
 from relspec.param_deps import ActiveParamSet, RuleDependencyReport
+from relspec.pipeline_policy import PipelinePolicy
 
 
 @tag(layer="params", artifact="param_table_policy", kind="object")
-def param_table_policy() -> ParamTablePolicy:
+def param_table_policy(pipeline_policy: PipelinePolicy) -> ParamTablePolicy:
     """Return the default parameter table policy.
 
     Returns
@@ -41,7 +43,7 @@ def param_table_policy() -> ParamTablePolicy:
     ParamTablePolicy
         Default parameter table policy.
     """
-    return ParamTablePolicy()
+    return pipeline_policy.param_table_policy
 
 
 @tag(layer="params", artifact="param_table_scope_key", kind="scalar")
@@ -265,8 +267,7 @@ def write_param_tables_parquet(
     for logical_name, artifact in param_table_artifacts.items():
         target_dir = base_dir / logical_name
         target_dir.mkdir(parents=True, exist_ok=True)
-        path = target_dir / "part-0.parquet"
-        pq.write_table(artifact.table, path)
+        write_dataset_parquet(artifact.table, target_dir)
         output[logical_name] = str(target_dir)
     return output
 
@@ -304,8 +305,10 @@ def _artifact_from_parquet(spec: ParamTableSpec, path: str) -> ParamTableArtifac
     if spec.distinct:
         unique = unique_values(table[spec.key_col])
         table = pa.table({spec.key_col: unique}, schema=spec.schema)
-    values = table[spec.key_col].to_pylist()
-    signature = param_signature(logical_name=spec.logical_name, values=values)
+    signature = param_signature_from_array(
+        logical_name=spec.logical_name,
+        values=table[spec.key_col],
+    )
     return ParamTableArtifact(
         logical_name=spec.logical_name,
         table=table,

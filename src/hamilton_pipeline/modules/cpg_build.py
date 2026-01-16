@@ -78,11 +78,14 @@ from relspec.edge_contract_validator import (
 )
 from relspec.model import DatasetRef, RelationshipRule
 from relspec.param_deps import RuleDependencyReport
+from relspec.pipeline_policy import PipelinePolicy
 from relspec.policies import evidence_spec_from_schema
 from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation
 from relspec.rules.compiler import RuleCompiler
 from relspec.rules.evidence import EvidenceCatalog
+from relspec.rules.exec_events import RuleExecutionEventCollector
 from relspec.rules.handlers.cpg import RelationshipRuleHandler
+from relspec.rules.policies import PolicyRegistry
 from relspec.rules.registry import RuleRegistry
 from relspec.rules.validation import SqlGlotDiagnosticsConfig, rule_dependency_reports
 from schema_spec.specs import ArrowFieldSpec, TableSchemaSpec, call_span_bundle, span_bundle
@@ -154,6 +157,18 @@ class RelationshipExecutionContext:
     execution_policy: AdapterExecutionPolicy
     ibis_backend: BaseBackend
     relspec_param_bindings: Mapping[IbisValue, object]
+
+
+@dataclass(frozen=True)
+class RelationshipCompilationInputs:
+    """Inputs required to compile relationship outputs."""
+
+    rule_registry: RuleRegistry
+    relspec_input_datasets: dict[str, TableLike]
+    relspec_resolver: PlanResolver[IbisPlan]
+    relationship_contracts: ContractCatalog
+    pipeline_policy: PipelinePolicy
+    ctx: ExecutionContext
 
 
 @tag(layer="relspec", artifact="relationship_execution_context", kind="object")
@@ -417,7 +432,7 @@ def schema_registry(
 @tag(layer="relspec", artifact="rule_registry", kind="registry")
 def rule_registry(
     param_table_specs: tuple[ParamTableSpec, ...],
-    param_table_policy: ParamTablePolicy,
+    pipeline_policy: PipelinePolicy,
 ) -> RuleRegistry:
     """Build the central rule registry.
 
@@ -434,8 +449,33 @@ def rule_registry(
             ExtractRuleAdapter(),
         ),
         param_table_specs=param_table_specs,
-        param_table_policy=param_table_policy,
+        param_table_policy=pipeline_policy.param_table_policy,
+        list_filter_gate_policy=pipeline_policy.list_filter_gate_policy,
+        kernel_lane_policy=pipeline_policy.kernel_lanes,
     )
+
+
+@dataclass(frozen=True)
+class RuleRegistryContext:
+    """Bundled inputs for relationship rule compilation."""
+
+    rule_registry: RuleRegistry
+    pipeline_policy: PipelinePolicy
+
+
+@tag(layer="relspec", artifact="rule_registry_context", kind="object")
+def rule_registry_context(
+    rule_registry: RuleRegistry,
+    pipeline_policy: PipelinePolicy,
+) -> RuleRegistryContext:
+    """Bundle rule registry and pipeline policy for compilation.
+
+    Returns
+    -------
+    RuleRegistryContext
+        Bundled registry and policy inputs.
+    """
+    return RuleRegistryContext(rule_registry=rule_registry, pipeline_policy=pipeline_policy)
 
 
 @tag(layer="relspec", artifact="relspec_param_registry", kind="object")
@@ -776,13 +816,14 @@ def _resolve_relationship_rules(
     rules: Sequence[RelationshipRule],
     *,
     contracts: ContractCatalog | None,
+    policy_registry: PolicyRegistry,
 ) -> tuple[RelationshipRule, ...]:
     resolved: list[RelationshipRule] = []
     for rule in rules:
         schema = _relationship_rule_schema(rule, contracts=contracts)
         updated = rule
         if schema is not None:
-            updated = apply_policy_defaults(rule, schema)
+            updated = apply_policy_defaults(rule, schema, registry=policy_registry)
             if updated.evidence is None:
                 inferred = evidence_spec_from_schema(schema)
                 if inferred is not None:
@@ -903,7 +944,7 @@ def _compile_relationship_outputs(
 @cache()
 @tag(layer="relspec", artifact="compiled_relationship_outputs", kind="object")
 def compiled_relationship_outputs(
-    rule_registry: RuleRegistry,
+    rule_registry_context: RuleRegistryContext,
     relspec_input_datasets: dict[str, TableLike],
     relspec_resolver: PlanResolver[IbisPlan],
     relationship_contracts: ContractCatalog,  # add dep
@@ -917,10 +958,23 @@ def compiled_relationship_outputs(
         Compiled relationship outputs.
     """
     compiler = RelationshipRuleCompiler(resolver=relspec_resolver)
-    rule_compiler = RuleCompiler(handlers={"cpg": RelationshipRuleHandler()})
-    compiled = rule_compiler.compile_rules(rule_registry.rules_for_domain("cpg"), ctx=ctx)
+    rule_compiler = RuleCompiler(
+        handlers={
+            "cpg": RelationshipRuleHandler(
+                policies=rule_registry_context.pipeline_policy.policy_registry
+            )
+        }
+    )
+    compiled = rule_compiler.compile_rules(
+        rule_registry_context.rule_registry.rules_for_domain("cpg"),
+        ctx=ctx,
+    )
     rules = cast("tuple[RelationshipRule, ...]", compiled)
-    resolved = _resolve_relationship_rules(rules, contracts=relationship_contracts)
+    resolved = _resolve_relationship_rules(
+        rules,
+        contracts=relationship_contracts,
+        policy_registry=rule_registry_context.pipeline_policy.policy_registry,
+    )
     contract_names = set(relationship_contracts.names())
     resolved = tuple(
         rule
@@ -945,6 +999,7 @@ def compiled_relationship_outputs(
         "rel_import_symbol": TableLike,
         "rel_callsite_symbol": TableLike,
         "rel_callsite_qname": TableLike,
+        "relspec_rule_exec_events": pa.Table,
     }
 )
 @tag(layer="relspec", artifact="relationship_tables", kind="bundle")
@@ -989,6 +1044,7 @@ def relationship_tables(
 
     out: dict[str, TableLike] = {}
     dynamic_outputs: dict[str, TableLike] = {}
+    event_collector = RuleExecutionEventCollector()
     exec_options = CompiledOutputExecutionOptions(
         contracts=relationship_contracts,
         params=relspec_param_bindings,
@@ -996,6 +1052,7 @@ def relationship_tables(
         adapter_mode=adapter_mode,
         execution_policy=execution_policy,
         ibis_backend=ibis_backend,
+        rule_exec_observer=event_collector,
     )
     for key, compiled in compiled_relationship_outputs.items():
         resolver = relspec_resolver
@@ -1031,6 +1088,7 @@ def relationship_tables(
         "rel_callsite_qname",
         empty_table(relationship_contracts.get("rel_callsite_qname_v1").schema),
     )
+    out["relspec_rule_exec_events"] = event_collector.table()
     return out
 
 

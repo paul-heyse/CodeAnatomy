@@ -28,6 +28,7 @@ from hamilton_pipeline.pipeline_types import (
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from ibis_engine.execution import IbisAdapterExecution
+from relspec.pipeline_policy import PipelinePolicy
 
 
 def _incremental_pipeline_enabled() -> bool:
@@ -172,6 +173,18 @@ def relspec_param_values() -> JsonDict:
         Mapping of parameter names to values.
     """
     return {}
+
+
+@tag(layer="inputs", kind="object")
+def pipeline_policy() -> PipelinePolicy:
+    """Return the pipeline policy for rule execution.
+
+    Returns
+    -------
+    PipelinePolicy
+        Policy bundle for rule execution and diagnostics.
+    """
+    return PipelinePolicy()
 
 
 @tag(layer="inputs", kind="object")

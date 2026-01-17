@@ -1297,7 +1297,7 @@ def _tree_sitter_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, .
 
 def _runtime_inspect_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
     version = _param_int(spec, "version", default=1)
-    base = {
+    base: dict[str, object] = {
         "version": version,
         "bundles": None,
         "template": spec.template,

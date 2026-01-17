@@ -461,9 +461,13 @@ def _evidence_from_row(payload: Mapping[str, Any] | None) -> EvidenceSpec | None
     if payload is None:
         return None
     required_types = payload.get("required_types")
-    required_types_map = dict(required_types) if isinstance(required_types, Mapping) else {}
+    required_types_map: dict[str, Any] = (
+        dict(required_types) if isinstance(required_types, Mapping) else {}
+    )
     required_metadata = payload.get("required_metadata")
-    metadata_map = dict(required_metadata) if isinstance(required_metadata, Mapping) else {}
+    metadata_map: dict[str, Any] = (
+        dict(required_metadata) if isinstance(required_metadata, Mapping) else {}
+    )
     return EvidenceSpec(
         sources=parse_string_tuple(payload.get("sources"), label="sources"),
         required_columns=parse_string_tuple(
@@ -518,7 +522,11 @@ def _evidence_output_from_row(payload: Mapping[str, Any] | None) -> EvidenceOutp
     if payload is None:
         return None
     raw_map = payload.get("column_map")
-    column_map = dict(raw_map) if isinstance(raw_map, Mapping) else {}
+    column_map: dict[str, str] = (
+        {str(key): str(val) for key, val in raw_map.items()}
+        if isinstance(raw_map, Mapping)
+        else {}
+    )
     provenance_columns = parse_string_tuple(
         payload.get("provenance_columns"),
         label="provenance_columns",
@@ -1247,7 +1255,7 @@ def _kernel_from_row(payload: Mapping[str, Any]) -> KernelSpecT:
     """
     kind = str(payload["kind"])
     raw_payload = payload.get("payload")
-    spec = raw_payload if isinstance(raw_payload, Mapping) else {}
+    spec: Mapping[str, Any] = raw_payload if isinstance(raw_payload, Mapping) else {}
     if kind == "add_literal":
         result: KernelSpecT = AddLiteralSpec(
             name=str(spec.get("name", "")),
@@ -1260,7 +1268,9 @@ def _kernel_from_row(payload: Mapping[str, Any]) -> KernelSpecT:
         result = DropColumnsSpec(columns=parse_string_tuple(spec.get("columns"), label="columns"))
     elif kind == "rename_columns":
         mapping_payload = spec.get("mapping")
-        mapping = mapping_payload if isinstance(mapping_payload, Mapping) else {}
+        mapping: Mapping[str, Any] = (
+            mapping_payload if isinstance(mapping_payload, Mapping) else {}
+        )
         result = RenameColumnsSpec(mapping={str(key): str(val) for key, val in mapping.items()})
     elif kind == "explode_list":
         result = ExplodeListSpec(

@@ -163,7 +163,12 @@ def parse_index_json(index_path: Path, scip_cli_bin: str) -> ScipJsonObject:
         JSON-backed index object.
     """
     metadata_items = _scip_json_items(index_path, scip_cli_bin, "metadata")
-    metadata = metadata_items[0] if metadata_items else {}
+    raw_metadata: dict[str, object] = {}
+    if metadata_items:
+        first_item = metadata_items[0]
+        if isinstance(first_item, dict):
+            raw_metadata = first_item
+    metadata = raw_metadata
 
     documents = _scip_json_items(index_path, scip_cli_bin, "documents.item")
     symbol_information = _first_non_empty(

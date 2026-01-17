@@ -77,7 +77,9 @@ def test_impacted_importers_from_changed_exports(tmp_path: Path) -> None:
                 "importer_path": pa.array(
                     ["src/import.py", "src/module.py", "src/star.py"], type=pa.string()
                 ),
-                "imported_module_fqn": pa.array(["pkg.mod", "pkg.mod", "pkg.mod"], type=pa.string()),
+                "imported_module_fqn": pa.array(
+                    ["pkg.mod", "pkg.mod", "pkg.mod"], type=pa.string()
+                ),
                 "imported_name": pa.array(["foo", None, None], type=pa.string()),
                 "is_star": pa.array([False, False, True], type=pa.bool_()),
             }

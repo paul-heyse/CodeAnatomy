@@ -353,7 +353,7 @@ def resolve_prop_specs(
         Raised when a key is not defined in the property catalog.
     """
     out: dict[str, PropSpec] = {}
-    override_map = dict(overrides) if overrides else {}
+    override_map: dict[str, PropSpec] = dict(overrides) if overrides else {}
     for key in keys:
         if key in override_map:
             out[key] = override_map[key]

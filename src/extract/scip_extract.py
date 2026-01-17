@@ -111,10 +111,11 @@ SIG_DOC_OCCURRENCE_KEYS = ("symbol", "symbol_roles", "range")
 
 def _signature_doc_occurrence_rows(sig_doc: object) -> list[dict[str, object]]:
     occurrences = getattr(sig_doc, "occurrences", None)
-    if occurrences is None:
-        occurrences = []
+    occurrences_list: list[object] = (
+        [] if occurrences is None else list(occurrences)
+    )
     rows: list[dict[str, object]] = []
-    for occ in occurrences:
+    for occ in occurrences_list:
         range_values: list[int] = []
         for value in getattr(occ, "range", []) or []:
             if isinstance(value, bool):
@@ -653,9 +654,11 @@ class _DiagnosticAccumulator:
         self.code.append(str(getattr(diag, "code", None)) if hasattr(diag, "code") else None)
         self.message.append(getattr(diag, "message", None))
         self.source.append(getattr(diag, "source", None))
-        tags = getattr(diag, "tags", []) if hasattr(diag, "tags") else []
-        if tags is None:
-            tags = []
+        tags: list[object] = []
+        if hasattr(diag, "tags"):
+            raw_tags = getattr(diag, "tags", None)
+            if raw_tags is not None:
+                tags = list(raw_tags)
         self.tags.append(normalize_string_items(tags))
         self.start_line.append(dsl)
         self.start_char.append(dsc)
@@ -732,9 +735,10 @@ class _SymbolInfoAccumulator:
 
     def _append_documentation(self, symbol_info: object) -> None:
         docs = getattr(symbol_info, "documentation", None)
-        if not hasattr(symbol_info, "documentation") or docs is None:
-            docs = []
-        self.documentation.append(normalize_string_items(docs))
+        docs_list: list[object] = []
+        if hasattr(symbol_info, "documentation") and docs is not None:
+            docs_list = list(docs)
+        self.documentation.append(normalize_string_items(docs_list))
 
     def to_table(self, *, schema: SchemaLike) -> TableLike:
         documentation = SYMBOL_DOC_SPEC.builder(self)

@@ -187,6 +187,11 @@ def datafusion_to_reader(
     pyarrow.RecordBatchReader
         Record batch reader for the DataFusion results.
     """
+    try:
+        reader = pa.RecordBatchReader.from_stream(df)
+        return _apply_ordering(reader, ordering=ordering)
+    except (TypeError, ValueError):
+        pass
     stream = getattr(df, "execute_stream", None)
     if callable(stream):
         reader = stream()

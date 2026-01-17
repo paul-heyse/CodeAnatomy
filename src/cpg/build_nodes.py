@@ -74,18 +74,23 @@ def _file_nodes_table(
     return set_or_append_column(table, "bend", bend)
 
 
-def _collect_symbols(table: TableLike | None) -> set[str]:
-    if table is None or "symbol" not in table.column_names:
+def _collect_symbols(table: TableLike | None, *, column: str = "symbol") -> set[str]:
+    if table is None or column not in table.column_names:
         return set()
-    return {str(sym) for sym in iter_array_values(table["symbol"]) if sym}
+    return {str(sym) for sym in iter_array_values(table[column]) if sym}
 
 
 def _symbol_nodes_table(
     scip_symbol_information: TableLike | None,
     scip_occurrences: TableLike | None,
+    scip_external_symbol_information: TableLike | None,
+    scip_symbol_relationships: TableLike | None,
 ) -> TableLike | None:
     symbols = _collect_symbols(scip_symbol_information)
     symbols.update(_collect_symbols(scip_occurrences))
+    symbols.update(_collect_symbols(scip_external_symbol_information))
+    symbols.update(_collect_symbols(scip_symbol_relationships))
+    symbols.update(_collect_symbols(scip_symbol_relationships, column="related_symbol"))
     if not symbols:
         return None
     uniq = sorted(symbols)
@@ -289,6 +294,8 @@ class NodeInputTables:
     dim_qualified_names: TableLike | DatasetSource | None = None
     scip_symbol_information: TableLike | DatasetSource | None = None
     scip_occurrences: TableLike | DatasetSource | None = None
+    scip_external_symbol_information: TableLike | DatasetSource | None = None
+    scip_symbol_relationships: TableLike | DatasetSource | None = None
     ts_nodes: TableLike | DatasetSource | None = None
     ts_errors: TableLike | DatasetSource | None = None
     ts_missing: TableLike | DatasetSource | None = None
@@ -354,6 +361,8 @@ def _node_tables(
     symbol_nodes = _symbol_nodes_table(
         _materialize_table(inputs.scip_symbol_information, ctx=ctx),
         _materialize_table(inputs.scip_occurrences, ctx=ctx),
+        _materialize_table(inputs.scip_external_symbol_information, ctx=ctx),
+        _materialize_table(inputs.scip_symbol_relationships, ctx=ctx),
     )
     catalog.add("scip_symbols", symbol_nodes)
     return catalog

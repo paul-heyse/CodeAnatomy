@@ -19,6 +19,7 @@ from arrowdsl.spec.codec import parse_string_tuple
 from arrowdsl.spec.expr_ir import ExprIR, ExprRegistry, ExprSpec, expr_spec_from_json
 from config import AdapterMode
 from extract.evidence_plan import EvidencePlan
+from extract.registry_fields import field_name
 from extract.registry_pipelines import pipeline_spec
 from extract.registry_specs import dataset_query, dataset_schema, query_expr_registry
 from extract.registry_specs import dataset_row as registry_row
@@ -314,12 +315,23 @@ def _projection_columns(name: str, *, evidence_plan: EvidencePlan | None) -> tup
     required = set(evidence_plan.required_columns_for(name))
     row = registry_row(name)
     required.update(row.join_keys)
+    required.update(spec.name for spec in row.derived)
     if row.evidence_required_columns:
         required.update(row.evidence_required_columns)
     if not required:
         return ()
     schema = dataset_schema(name)
-    return tuple(field.name for field in schema if field.name in required)
+    schema_names = {field.name for field in schema}
+    resolved: set[str] = set()
+    for key in required:
+        if key in schema_names:
+            resolved.add(key)
+            continue
+        try:
+            resolved.add(field_name(key))
+        except KeyError:
+            continue
+    return tuple(field.name for field in schema if field.name in resolved)
 
 
 def apply_evidence_projection(

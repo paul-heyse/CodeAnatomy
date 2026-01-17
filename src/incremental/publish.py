@@ -97,13 +97,9 @@ def publish_cpg_props(
     if by_file_table is not None:
         if "file_id" in by_file_table.column_names:
             by_file_table = by_file_table.drop(["file_id"])
-        parts.append(
-            align_table(by_file_table, schema=CPG_PROPS_SCHEMA, safe_cast=True)
-        )
+        parts.append(align_table(by_file_table, schema=CPG_PROPS_SCHEMA, safe_cast=True))
     if global_table is not None:
-        parts.append(
-            align_table(global_table, schema=CPG_PROPS_SCHEMA, safe_cast=True)
-        )
+        parts.append(align_table(global_table, schema=CPG_PROPS_SCHEMA, safe_cast=True))
 
     if not parts:
         if fallback is not None:

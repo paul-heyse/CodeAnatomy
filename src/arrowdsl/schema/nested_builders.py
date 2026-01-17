@@ -338,7 +338,8 @@ def _default_value_for_type(dtype: DataTypeLike) -> object:
     if scalar_default is not _MISSING_DEFAULT:
         return scalar_default
     if _is_list_like(dtype) or patypes.is_map(dtype):
-        return []
+        empty_list: list[object] = []
+        return empty_list
     if patypes.is_struct(dtype):
         struct_type = cast("_StructType", dtype)
         return {

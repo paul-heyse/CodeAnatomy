@@ -134,10 +134,7 @@ def _attach_file_id(
 ) -> tuple[pa.Table, pa.Table]:
     if props.num_rows == 0:
         return _empty_by_file(), _empty_global()
-    if (
-        mapping_id not in mapping.column_names
-        or mapping_file_id not in mapping.column_names
-    ):
+    if mapping_id not in mapping.column_names or mapping_file_id not in mapping.column_names:
         aligned = align_table(props, schema=CPG_PROPS_GLOBAL_SCHEMA, safe_cast=True)
         return _empty_by_file(), aligned
     mapping_table = mapping.select([mapping_id, mapping_file_id]).rename_columns(
@@ -166,10 +163,7 @@ def _concat_tables(
     *,
     schema: pa.Schema,
 ) -> pa.Table:
-    aligned = [
-        align_table(table, schema=schema, safe_cast=True)
-        for table in tables
-    ]
+    aligned = [align_table(table, schema=schema, safe_cast=True) for table in tables]
     non_empty = [table for table in aligned if table.num_rows > 0]
     if not non_empty:
         return table_from_schema(schema, columns={}, num_rows=0)

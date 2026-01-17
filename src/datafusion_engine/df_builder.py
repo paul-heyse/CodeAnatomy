@@ -343,10 +343,10 @@ def _has_aggregate(exprs: Sequence[Expression]) -> bool:
 
 def _apply_aggregate(df: DataFrame, select: exp.Select) -> DataFrame:
     group = select.args.get("group")
-    group_exprs = []
+    group_exprs: list[Expr] = []
     if group is not None:
         group_exprs = [_expr_to_df(expr) for expr in group.expressions]
-    agg_exprs = []
+    agg_exprs: list[Expr] = []
     for expr in select.expressions:
         if _is_group_expr(expr):
             continue
@@ -825,7 +825,7 @@ def _int_value(expr: Expression | None) -> int:
 
 def _default_agg_alias(expr: exp.AggFunc) -> str:
     name = expr.sql_name().lower()
-    args = list(expr.expressions)
+    args: list[Expression] = list(expr.expressions)
     if not args:
         if isinstance(expr.this, exp.Distinct):
             args = list(expr.this.expressions)

@@ -2580,7 +2580,7 @@ def validate_registry_completeness() -> None:
         k for k in EdgeKind if k not in EDGE_DERIVATIONS or not EDGE_DERIVATIONS[k]
     ]
 
-    errs = []
+    errs: list[str] = []
     if missing_node_contracts:
         errs.append(f"Missing NODE_KIND_CONTRACTS for: {[k.value for k in missing_node_contracts]}")
     if missing_edge_contracts:

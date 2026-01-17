@@ -232,12 +232,18 @@ def _scip_symbol_template(spec: RuleTemplateSpec) -> tuple[RuleDefinitionSpec, .
             kind=RuleKind.FILTER_PROJECT,
             inputs=(input_name,),
             predicate=_flag_predicate(flag_col),
-            project=ProjectConfig(select=("symbol", "related_symbol", flag_col)),
+            project=ProjectConfig(
+                select=(flag_col, "symbol", "related_symbol"),
+                exprs={
+                    "src": _field("symbol"),
+                    "dst": _field("related_symbol"),
+                },
+            ),
             confidence_policy=confidence_policy,
             edge=EdgeDefinitionSpec(
                 edge_kind=edge_kind,
-                src_cols=("symbol",),
-                dst_cols=("related_symbol",),
+                src_cols=("src", "symbol"),
+                dst_cols=("dst", "related_symbol"),
                 origin="scip",
                 resolution_method=resolution_method,
                 option_flag=option_flag,

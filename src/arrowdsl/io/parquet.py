@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,6 +61,8 @@ class DatasetWriteConfig:
     schema: SchemaLike | None = None
     encoding_policy: EncodingPolicy | None = None
     metadata: ParquetMetadataConfig | None = None
+    preserve_order: bool | None = None
+    file_visitor: Callable[[object], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,8 @@ class NamedDatasetWriteConfig:
     schemas: Mapping[str, SchemaLike] | None = None
     encoding_policies: Mapping[str, EncodingPolicy] | None = None
     metadata: ParquetMetadataConfig | None = None
+    preserve_order: bool | None = None
+    file_visitors: Mapping[str, Callable[[object], None]] | None = None
 
 
 def _ensure_dir(path: Path) -> None:
@@ -309,9 +313,11 @@ def write_dataset_parquet(
         basename_template=config.basename_template,
         max_rows_per_file=options.max_rows_per_file,
         max_rows_per_group=options.max_rows_per_file,
+        preserve_order=bool(config.preserve_order),
         existing_data_behavior=(
             "overwrite_or_ignore" if not config.overwrite else "delete_matching"
         ),
+        file_visitor=config.file_visitor,
         file_options=ds.ParquetFileFormat().make_write_options(
             compression=options.compression,
             use_dictionary=options.use_dictionary,
@@ -385,6 +391,7 @@ def upsert_dataset_partitions_parquet(
         max_rows_per_file=options.max_rows_per_file,
         max_rows_per_group=options.max_rows_per_file,
         existing_data_behavior="delete_matching",
+        file_visitor=config.file_visitor,
         file_options=ds.ParquetFileFormat().make_write_options(
             compression=options.compression,
             use_dictionary=options.use_dictionary,
@@ -451,6 +458,10 @@ def write_named_datasets_parquet(
                 schema=schema,
                 encoding_policy=encoding_policy,
                 metadata=config.metadata,
+                preserve_order=config.preserve_order,
+                file_visitor=(
+                    config.file_visitors.get(name) if config.file_visitors is not None else None
+                ),
             ),
         )
         out[name] = str(ds_dir)

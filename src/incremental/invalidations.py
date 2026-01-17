@@ -146,9 +146,7 @@ def diff_invalidation_snapshots(
             prefix="rule_signature",
         )
     )
-    reasons.extend(
-        _diff_schema_identities(previous.dataset_identities, current.dataset_identities)
-    )
+    reasons.extend(_diff_schema_identities(previous.dataset_identities, current.dataset_identities))
     return tuple(reasons)
 
 
@@ -253,11 +251,7 @@ def _diff_mapping(
     prefix: str,
 ) -> list[str]:
     keys = set(previous) | set(current)
-    return [
-        f"{prefix}:{key}"
-        for key in sorted(keys)
-        if previous.get(key) != current.get(key)
-    ]
+    return [f"{prefix}:{key}" for key in sorted(keys) if previous.get(key) != current.get(key)]
 
 
 def _diff_schema_identities(
@@ -266,9 +260,7 @@ def _diff_schema_identities(
 ) -> list[str]:
     keys = set(previous) | set(current)
     return [
-        f"schema_identity:{key}"
-        for key in sorted(keys)
-        if previous.get(key) != current.get(key)
+        f"schema_identity:{key}" for key in sorted(keys) if previous.get(key) != current.get(key)
     ]
 
 

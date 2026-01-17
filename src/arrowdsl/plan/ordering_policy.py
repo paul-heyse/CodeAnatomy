@@ -57,6 +57,7 @@ def ordering_metadata_for_plan(
     *,
     schema: SchemaLike,
     canonical_keys: Sequence[OrderingKey] | None = None,
+    determinism: DeterminismTier | None = None,
 ) -> SchemaMetadataSpec:
     """Return ordering metadata spec for a plan and output schema.
 
@@ -74,7 +75,10 @@ def ordering_metadata_for_plan(
         keys = ordering.keys
     elif ordering.level == OrderingLevel.IMPLICIT:
         keys = ordering_keys_for_schema(schema)
-    return ordering_metadata_spec(level, keys=keys)
+    extra: dict[bytes, bytes] | None = None
+    if determinism is not None:
+        extra = {b"determinism_tier": determinism.value.encode("utf-8")}
+    return ordering_metadata_spec(level, keys=keys, extra=extra)
 
 
 __all__ = ["apply_canonical_sort", "ordering_keys_for_schema", "ordering_metadata_for_plan"]

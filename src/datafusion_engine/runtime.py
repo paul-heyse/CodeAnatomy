@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, cast
@@ -18,6 +19,7 @@ from datafusion.object_store import LocalFileSystem
 from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionFallbackEvent
 from datafusion_engine.function_factory import install_function_factory
 from datafusion_engine.udf_registry import register_datafusion_udfs
+from obs.diagnostics import DiagnosticsCollector
 
 if TYPE_CHECKING:
     from ibis.expr.types import Value as IbisValue
@@ -36,6 +38,12 @@ def _parse_major_version(version: str) -> int | None:
     if major.isdigit():
         return int(major)
     return None
+
+
+def _supports_explain_analyze_level() -> bool:
+    if DATAFUSION_MAJOR_VERSION is None:
+        return False
+    return DATAFUSION_MAJOR_VERSION >= DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION
 
 
 DATAFUSION_MAJOR_VERSION: int | None = _parse_major_version(datafusion.__version__)
@@ -63,6 +71,60 @@ class DataFusionConfigPolicy:
         for key, value in self.settings.items():
             if skip_runtime_settings and key.startswith("datafusion.runtime."):
                 continue
+            config = config.set(key, value)
+        return config
+
+
+@dataclass(frozen=True)
+class DataFusionFeatureGates:
+    """Feature gate toggles for DataFusion optimizer behavior."""
+
+    enable_dynamic_filter_pushdown: bool = True
+    enable_join_dynamic_filter_pushdown: bool = True
+    enable_aggregate_dynamic_filter_pushdown: bool = True
+    enable_topk_dynamic_filter_pushdown: bool = True
+
+    def settings(self) -> dict[str, str]:
+        """Return DataFusion config settings for the feature gates.
+
+        Returns
+        -------
+        dict[str, str]
+            Mapping of DataFusion config keys to string values.
+        """
+        return {
+            "datafusion.optimizer.enable_dynamic_filter_pushdown": str(
+                self.enable_dynamic_filter_pushdown
+            ).lower(),
+            "datafusion.optimizer.enable_join_dynamic_filter_pushdown": str(
+                self.enable_join_dynamic_filter_pushdown
+            ).lower(),
+            "datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown": str(
+                self.enable_aggregate_dynamic_filter_pushdown
+            ).lower(),
+            "datafusion.optimizer.enable_topk_dynamic_filter_pushdown": str(
+                self.enable_topk_dynamic_filter_pushdown
+            ).lower(),
+        }
+
+
+@dataclass(frozen=True)
+class DataFusionSettingsContract:
+    """Settings contract for DataFusion session configuration."""
+
+    settings: Mapping[str, str]
+    feature_gates: DataFusionFeatureGates
+
+    def apply(self, config: SessionConfig) -> SessionConfig:
+        """Return a SessionConfig with settings and feature gates applied.
+
+        Returns
+        -------
+        datafusion.SessionConfig
+            Session config with settings applied.
+        """
+        merged = {**self.settings, **self.feature_gates.settings()}
+        for key, value in merged.items():
             config = config.set(key, value)
         return config
 
@@ -348,6 +410,65 @@ def labeled_explain_hook(
     return _hook
 
 
+def diagnostics_fallback_hook(
+    sink: DiagnosticsCollector,
+) -> Callable[[DataFusionFallbackEvent], None]:
+    """Return a fallback hook that records diagnostics rows.
+
+    Returns
+    -------
+    Callable[[DataFusionFallbackEvent], None]
+        Hook that records fallback rows in the diagnostics sink.
+    """
+
+    def _hook(event: DataFusionFallbackEvent) -> None:
+        sink.record_events(
+            "datafusion_fallbacks_v1",
+            [
+                {
+                    "event_time_unix_ms": int(time.time() * 1000),
+                    "reason": event.reason,
+                    "error": event.error,
+                    "expression_type": event.expression_type,
+                    "sql": event.sql,
+                    "dialect": event.dialect,
+                    "policy_violations": list(event.policy_violations),
+                }
+            ],
+        )
+
+    return _hook
+
+
+def diagnostics_explain_hook(
+    sink: DiagnosticsCollector,
+    *,
+    explain_analyze: bool,
+) -> Callable[[str, Sequence[Mapping[str, object]]], None]:
+    """Return an explain hook that records diagnostics rows.
+
+    Returns
+    -------
+    Callable[[str, Sequence[Mapping[str, object]]], None]
+        Hook that records explain rows in the diagnostics sink.
+    """
+
+    def _hook(sql: str, rows: Sequence[Mapping[str, object]]) -> None:
+        sink.record_events(
+            "datafusion_explains_v1",
+            [
+                {
+                    "event_time_unix_ms": int(time.time() * 1000),
+                    "sql": sql,
+                    "rows": [dict(row) for row in rows],
+                    "explain_analyze": explain_analyze,
+                }
+            ],
+        )
+
+    return _hook
+
+
 def _attach_cache_manager(
     builder: RuntimeEnvBuilder,
     *,
@@ -395,6 +516,7 @@ class DataFusionRuntimeProfile:
     tracing_collector: Callable[[], Mapping[str, object] | None] | None = None
     capture_explain: bool = False
     explain_analyze: bool = True
+    explain_analyze_level: str | None = None
     explain_collector: DataFusionExplainCollector | None = field(
         default_factory=DataFusionExplainCollector
     )
@@ -402,11 +524,14 @@ class DataFusionRuntimeProfile:
     fallback_collector: DataFusionFallbackCollector | None = field(
         default_factory=DataFusionFallbackCollector
     )
+    diagnostics_sink: DiagnosticsCollector | None = None
     labeled_fallbacks: list[dict[str, object]] = field(default_factory=list)
     labeled_explains: list[dict[str, object]] = field(default_factory=list)
     local_filesystem_root: str | None = None
     config_policy_name: str | None = "default"
     config_policy: DataFusionConfigPolicy | None = None
+    settings_overrides: Mapping[str, str] = field(default_factory=dict)
+    feature_gates: DataFusionFeatureGates = field(default_factory=DataFusionFeatureGates)
     share_context: bool = True
     session_context_key: str | None = None
     distributed: bool = False
@@ -446,6 +571,14 @@ class DataFusionRuntimeProfile:
         policy = self._resolved_config_policy()
         if policy is not None:
             config = policy.apply(config)
+        if self.settings_overrides:
+            for key, value in self.settings_overrides.items():
+                config = config.set(key, str(value))
+        if self.feature_gates is not None:
+            for key, value in self.feature_gates.settings().items():
+                config = config.set(key, value)
+        if self.explain_analyze_level is not None and _supports_explain_analyze_level():
+            config = config.set("datafusion.explain.analyze_level", self.explain_analyze_level)
         return config
 
     def runtime_env_builder(self) -> RuntimeEnvBuilder:
@@ -604,6 +737,19 @@ class DataFusionRuntimeProfile:
         fallback_hook = resolved.fallback_hook
         if fallback_hook is None and self.capture_fallbacks and self.fallback_collector is not None:
             fallback_hook = self.fallback_collector.hook
+        if self.diagnostics_sink is not None:
+            fallback_hook = _chain_fallback_hooks(
+                fallback_hook,
+                diagnostics_fallback_hook(self.diagnostics_sink),
+            )
+            if capture_explain or explain_hook is not None:
+                explain_hook = _chain_explain_hooks(
+                    explain_hook,
+                    diagnostics_explain_hook(
+                        self.diagnostics_sink,
+                        explain_analyze=explain_analyze,
+                    ),
+                )
         unchanged = (
             cache == resolved.cache,
             cache_max_columns == resolved.cache_max_columns,
@@ -667,6 +813,37 @@ class DataFusionRuntimeProfile:
         )
         return ctx.sql(query).to_arrow_table()
 
+    def settings_payload(self) -> dict[str, str]:
+        """Return resolved settings applied to DataFusion SessionConfig.
+
+        Returns
+        -------
+        dict[str, str]
+            Resolved DataFusion settings payload.
+        """
+        resolved_policy = self._resolved_config_policy()
+        payload: dict[str, str] = (
+            dict(resolved_policy.settings) if resolved_policy is not None else {}
+        )
+        if self.settings_overrides:
+            payload.update({str(key): str(value) for key, value in self.settings_overrides.items()})
+        payload.update(self.feature_gates.settings())
+        if self.explain_analyze_level is not None and _supports_explain_analyze_level():
+            payload["datafusion.explain.analyze_level"] = self.explain_analyze_level
+        return payload
+
+    def settings_hash(self) -> str:
+        """Return a stable hash for the SessionConfig settings payload.
+
+        Returns
+        -------
+        str
+            SHA-256 hash for the settings payload.
+        """
+        payload = self.settings_payload()
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
     def telemetry_payload(self) -> dict[str, object]:
         """Return a diagnostics-friendly payload for the runtime profile.
 
@@ -699,9 +876,11 @@ class DataFusionRuntimeProfile:
             "tracing_collector": bool(self.tracing_collector),
             "capture_explain": self.capture_explain,
             "explain_analyze": self.explain_analyze,
+            "explain_analyze_level": self.explain_analyze_level,
             "explain_collector": bool(self.explain_collector),
             "capture_fallbacks": self.capture_fallbacks,
             "fallback_collector": bool(self.fallback_collector),
+            "diagnostics_sink": bool(self.diagnostics_sink),
             "local_filesystem_root": self.local_filesystem_root,
             "distributed": self.distributed,
             "distributed_context_factory": bool(self.distributed_context_factory),
@@ -711,6 +890,9 @@ class DataFusionRuntimeProfile:
             "config_policy": dict(resolved_policy.settings)
             if resolved_policy is not None
             else None,
+            "settings_overrides": dict(self.settings_overrides),
+            "feature_gates": self.feature_gates.settings(),
+            "settings_hash": self.settings_hash(),
             "share_context": self.share_context,
             "session_context_key": self.session_context_key,
         }
@@ -861,7 +1043,9 @@ __all__ = [
     "DataFusionConfigPolicy",
     "DataFusionExplainCollector",
     "DataFusionFallbackCollector",
+    "DataFusionFeatureGates",
     "DataFusionRuntimeProfile",
+    "DataFusionSettingsContract",
     "ExecutionLabel",
     "MemoryPool",
     "apply_execution_label",

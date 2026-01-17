@@ -21,7 +21,6 @@ from arrowdsl.io.parquet import (
     write_named_datasets_parquet,
 )
 from arrowdsl.plan.query import ScanTelemetry
-from arrowdsl.plan.runner import AdapterRunOptions, run_plan_adapter
 from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.schema import align_table, empty_table
 from config import AdapterMode
@@ -30,7 +29,8 @@ from cpg.build_nodes import NodeInputTables, build_cpg_nodes
 from cpg.build_props import PropsInputTables, build_cpg_props
 from cpg.constants import CpgBuildArtifacts
 from cpg.schemas import register_cpg_specs
-from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
+from datafusion_engine.runtime import AdapterExecutionPolicy
+from engine.plan_policy import ExecutionSurfacePolicy
 from extract.registry_ids import repo_file_id_spec
 from hamilton_pipeline.pipeline_types import (
     CpgBaseInputs,
@@ -173,6 +173,18 @@ class RelationshipExecutionContext:
     execution_policy: AdapterExecutionPolicy
     ibis_backend: BaseBackend
     relspec_param_bindings: Mapping[IbisValue, object]
+    surface_policy: ExecutionSurfacePolicy
+
+
+@dataclass(frozen=True)
+class RelationshipExecutionInputs:
+    """Execution inputs for building relationship execution contexts."""
+
+    adapter_mode: AdapterMode
+    execution_policy: AdapterExecutionPolicy
+    ibis_backend: BaseBackend
+    relspec_param_bindings: Mapping[IbisValue, object]
+    surface_policy: ExecutionSurfacePolicy
 
 
 @dataclass(frozen=True)
@@ -219,10 +231,7 @@ class RelspecResolverSources:
 @tag(layer="relspec", artifact="relationship_execution_context", kind="object")
 def relationship_execution_context(
     ctx: ExecutionContext,
-    adapter_mode: AdapterMode,
-    adapter_execution_policy: AdapterExecutionPolicy,
-    ibis_backend: BaseBackend,
-    relspec_param_bindings: Mapping[IbisValue, object],
+    relationship_execution_inputs: RelationshipExecutionInputs,
 ) -> RelationshipExecutionContext:
     """Bundle execution settings for relationship table materialization.
 
@@ -233,10 +242,35 @@ def relationship_execution_context(
     """
     return RelationshipExecutionContext(
         ctx=ctx,
+        adapter_mode=relationship_execution_inputs.adapter_mode,
+        execution_policy=relationship_execution_inputs.execution_policy,
+        ibis_backend=relationship_execution_inputs.ibis_backend,
+        relspec_param_bindings=relationship_execution_inputs.relspec_param_bindings,
+        surface_policy=relationship_execution_inputs.surface_policy,
+    )
+
+
+@tag(layer="relspec", artifact="relationship_execution_inputs", kind="object")
+def relationship_execution_inputs(
+    adapter_mode: AdapterMode,
+    adapter_execution_policy: AdapterExecutionPolicy,
+    ibis_backend: BaseBackend,
+    relspec_param_bindings: Mapping[IbisValue, object],
+    execution_surface_policy: ExecutionSurfacePolicy,
+) -> RelationshipExecutionInputs:
+    """Bundle relationship execution inputs for materialization.
+
+    Returns
+    -------
+    RelationshipExecutionInputs
+        Bundled execution input values.
+    """
+    return RelationshipExecutionInputs(
         adapter_mode=adapter_mode,
         execution_policy=adapter_execution_policy,
         ibis_backend=ibis_backend,
         relspec_param_bindings=relspec_param_bindings,
+        surface_policy=execution_surface_policy,
     )
 
 
@@ -1231,37 +1265,17 @@ def relationship_tables(
     ibis_backend = relationship_execution_context.ibis_backend
     relspec_param_bindings = relationship_execution_context.relspec_param_bindings
 
-    def _executor(
-        plan: IbisPlan,
-        exec_ctx: ExecutionContext,
-        params: Mapping[IbisValue, object] | None,
-        execution_label: ExecutionLabel | None = None,
-    ) -> TableLike:
-        result = run_plan_adapter(
-            plan,
-            ctx=exec_ctx,
-            options=AdapterRunOptions(
-                adapter_mode=adapter_mode,
-                prefer_reader=False,
-                execution_policy=execution_policy,
-                execution_label=execution_label,
-                ibis_backend=ibis_backend,
-                ibis_params=params,
-            ),
-        )
-        return cast("TableLike", result.value)
-
     out: dict[str, TableLike] = {}
     dynamic_outputs: dict[str, TableLike] = {}
     event_collector = RuleExecutionEventCollector()
     exec_options = CompiledOutputExecutionOptions(
         contracts=relationship_contracts,
         params=relspec_param_bindings,
-        plan_executor=_executor,
         adapter_mode=adapter_mode,
         execution_policy=execution_policy,
         ibis_backend=ibis_backend,
         rule_exec_observer=event_collector,
+        surface_policy=relationship_execution_context.surface_policy,
     )
     for key, compiled in compiled_relationship_outputs.items():
         resolver = relspec_resolver
@@ -1525,6 +1539,10 @@ def cpg_node_inputs(
         dim_qualified_names=cpg_base_inputs.dim_qualified_names,
         scip_symbol_information=cpg_base_inputs.scip_build_inputs.scip_symbol_information,
         scip_occurrences=cpg_base_inputs.scip_build_inputs.scip_occurrences_norm,
+        scip_external_symbol_information=(
+            cpg_base_inputs.scip_build_inputs.scip_external_symbol_information
+        ),
+        scip_symbol_relationships=cpg_base_inputs.scip_build_inputs.scip_symbol_relationships,
         ts_nodes=cpg_extra_inputs.ts_nodes,
         ts_errors=cpg_extra_inputs.ts_errors,
         ts_missing=cpg_extra_inputs.ts_missing,

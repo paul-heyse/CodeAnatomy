@@ -22,7 +22,15 @@ def _default_datafusion_profile() -> DataFusionRuntimeProfile:
 
 
 type OrderingKey = tuple[str, str]
-type ExecutionProfileName = Literal["bulk", "default", "deterministic", "streaming"]
+type ExecutionProfileName = Literal[
+    "bulk",
+    "default",
+    "deterministic",
+    "streaming",
+    "dev_debug",
+    "memory_tight",
+    "prod_fast",
+]
 
 
 class DeterminismTier(StrEnum):
@@ -31,6 +39,8 @@ class DeterminismTier(StrEnum):
     CANONICAL = "canonical"
     STABLE_SET = "stable_set"
     BEST_EFFORT = "best_effort"
+    FAST = "best_effort"
+    STABLE = "stable_set"
 
 
 class OrderingLevel(StrEnum):
@@ -168,6 +178,7 @@ class RuntimeProfile:
 
     scan: ScanProfile = field(default_factory=lambda: ScanProfile(name="DEFAULT"))
     plan_use_threads: bool = True
+    ibis_fuse_selects: bool = True
 
     determinism: DeterminismTier = DeterminismTier.BEST_EFFORT
     datafusion: DataFusionRuntimeProfile | None = field(default_factory=_default_datafusion_profile)
@@ -193,7 +204,7 @@ class RuntimeProfile:
             Updated profile.
         """
         scan = self.scan
-        if tier == DeterminismTier.CANONICAL and (
+        if tier in {DeterminismTier.CANONICAL, DeterminismTier.STABLE_SET} and (
             not scan.implicit_ordering or not scan.require_sequenced_output
         ):
             scan = ScanProfile(
@@ -214,6 +225,7 @@ class RuntimeProfile:
             io_threads=self.io_threads,
             scan=scan,
             plan_use_threads=self.plan_use_threads,
+            ibis_fuse_selects=self.ibis_fuse_selects,
             determinism=tier,
             datafusion=self.datafusion,
         )
@@ -240,6 +252,7 @@ class RuntimeProfile:
             io_threads=self.io_threads,
             scan=self.scan,
             plan_use_threads=self.plan_use_threads,
+            ibis_fuse_selects=self.ibis_fuse_selects,
             determinism=self.determinism,
             datafusion=profile,
         )
@@ -397,16 +410,20 @@ def _normalize_profile(profile: str) -> ExecutionProfileName:
         Raised when the profile name is unknown.
     """
     key = profile.strip().lower()
-    if key == "default":
-        return "default"
-    if key == "streaming":
-        return "streaming"
-    if key == "bulk":
-        return "bulk"
-    if key == "deterministic":
-        return "deterministic"
-    msg = f"Unknown execution profile: {profile!r}."
-    raise ValueError(msg)
+    mapping: dict[str, ExecutionProfileName] = {
+        "default": "default",
+        "streaming": "streaming",
+        "bulk": "bulk",
+        "deterministic": "deterministic",
+        "dev_debug": "dev_debug",
+        "prod_fast": "prod_fast",
+        "memory_tight": "memory_tight",
+    }
+    resolved = mapping.get(key)
+    if resolved is None:
+        msg = f"Unknown execution profile: {profile!r}."
+        raise ValueError(msg)
+    return resolved
 
 
 def scan_profile_factory(profile: str) -> ScanProfile:
@@ -418,24 +435,22 @@ def scan_profile_factory(profile: str) -> ScanProfile:
         Scan profile matching the named profile.
     """
     profile_key = _normalize_profile(profile)
-    if profile_key == "streaming":
-        return ScanProfile(
+    profiles: dict[ExecutionProfileName, ScanProfile] = {
+        "streaming": ScanProfile(
             name="STREAM",
             batch_size=4096,
             batch_readahead=1,
             fragment_readahead=1,
             use_threads=True,
-        )
-    if profile_key == "bulk":
-        return ScanProfile(
+        ),
+        "bulk": ScanProfile(
             name="BULK",
             batch_size=16384,
             batch_readahead=4,
             fragment_readahead=2,
             use_threads=True,
-        )
-    if profile_key == "deterministic":
-        return ScanProfile(
+        ),
+        "deterministic": ScanProfile(
             name="DETERMINISTIC",
             batch_size=4096,
             batch_readahead=1,
@@ -443,8 +458,33 @@ def scan_profile_factory(profile: str) -> ScanProfile:
             use_threads=False,
             require_sequenced_output=True,
             implicit_ordering=True,
-        )
-    return ScanProfile(name="DEFAULT")
+        ),
+        "dev_debug": ScanProfile(
+            name="DEV_DEBUG",
+            batch_size=4096,
+            batch_readahead=1,
+            fragment_readahead=1,
+            use_threads=False,
+            require_sequenced_output=True,
+            implicit_ordering=True,
+        ),
+        "prod_fast": ScanProfile(
+            name="PROD_FAST",
+            batch_size=16384,
+            batch_readahead=4,
+            fragment_readahead=2,
+            use_threads=True,
+        ),
+        "memory_tight": ScanProfile(
+            name="MEMORY_TIGHT",
+            batch_size=4096,
+            batch_readahead=1,
+            fragment_readahead=1,
+            use_threads=True,
+        ),
+        "default": ScanProfile(name="DEFAULT"),
+    }
+    return profiles[profile_key]
 
 
 def runtime_profile_factory(profile: str) -> RuntimeProfile:
@@ -457,9 +497,11 @@ def runtime_profile_factory(profile: str) -> RuntimeProfile:
     """
     profile_key = _normalize_profile(profile)
     scan = scan_profile_factory(profile_key)
-    plan_use_threads = profile_key != "deterministic"
-    if profile_key == "deterministic":
+    plan_use_threads = profile_key not in {"deterministic", "dev_debug"}
+    if profile_key in {"deterministic", "dev_debug"}:
         determinism = DeterminismTier.CANONICAL
+    elif profile_key == "memory_tight":
+        determinism = DeterminismTier.STABLE_SET
     else:
         determinism = DeterminismTier.BEST_EFFORT
     name = scan.name
@@ -467,9 +509,10 @@ def runtime_profile_factory(profile: str) -> RuntimeProfile:
         name=name,
         scan=scan,
         plan_use_threads=plan_use_threads,
+        ibis_fuse_selects=profile_key != "dev_debug",
         determinism=determinism,
     )
-    if determinism == DeterminismTier.CANONICAL:
+    if determinism in {DeterminismTier.CANONICAL, DeterminismTier.STABLE_SET}:
         return runtime.with_determinism(determinism)
     return runtime
 

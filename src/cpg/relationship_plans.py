@@ -16,12 +16,14 @@ from arrowdsl.core.interop import Scalar, TableLike
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ScanTelemetry
-from arrowdsl.plan.runner import AdapterRunOptions, run_plan_adapter
+from arrowdsl.plan.runner import AdapterRunOptions
 from arrowdsl.schema.schema import align_table
 from config import AdapterMode
 from cpg.catalog import PlanCatalog, PlanSource, resolve_plan_source
 from cpg.plan_specs import ensure_plan
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
+from engine.materialize import build_plan_product
+from engine.plan_policy import ExecutionSurfacePolicy
 from ibis_engine.expr_compiler import (
     IbisExprRegistry,
     default_expr_registry,
@@ -169,19 +171,21 @@ def _plan_executor_factory(
         exec_params: Mapping[IbisValue, object] | None,
         execution_label: ExecutionLabel | None = None,
     ) -> TableLike:
-        result = run_plan_adapter(
+        policy = ExecutionSurfacePolicy(determinism_tier=exec_ctx.determinism)
+        product = build_plan_product(
             plan,
             ctx=exec_ctx,
+            policy=policy,
+            plan_id=None,
             options=AdapterRunOptions(
                 adapter_mode=resolved_adapter_mode,
-                prefer_reader=False,
                 execution_policy=execution_policy,
                 execution_label=execution_label,
                 ibis_backend=ibis_backend,
                 ibis_params=exec_params,
             ),
         )
-        return cast("TableLike", result.value)
+        return product.materialize_table()
 
     return _plan_executor
 

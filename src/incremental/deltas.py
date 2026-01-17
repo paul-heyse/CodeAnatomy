@@ -54,8 +54,7 @@ def compute_changed_exports(
     out: ibis.Table = ibis.union(added, removed, distinct=False)
     output_cols = ["delta_kind", "file_id", "path", "qname_id", "qname", "symbol"]
     select_exprs = [
-        out[col] if col in out.columns else ibis.literal(None).name(col)
-        for col in output_cols
+        out[col] if col in out.columns else ibis.literal(None).name(col) for col in output_cols
     ]
     result = cast("pa.Table", out.select(*select_exprs).to_pyarrow())
     schema = dataset_schema("inc_changed_exports_v1")

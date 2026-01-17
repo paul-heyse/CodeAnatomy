@@ -771,7 +771,9 @@ def finalize(
         ctx=ctx,
         schema_policy=schema_policy,
     )
-    provenance_cols = _provenance_columns(aligned, schema) if ctx.provenance else []
+    provenance_cols: list[str] = (
+        _provenance_columns(aligned, schema) if ctx.provenance else []
+    )
 
     results = _collect_invariant_results(aligned, contract)
     bad_any = _combine_masks([result.mask for result in results], aligned.num_rows)

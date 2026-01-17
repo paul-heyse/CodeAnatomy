@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -37,6 +37,7 @@ from arrowdsl.schema.schema import EncodingPolicy
 from core_types import JsonDict, JsonValue
 from cpg.constants import CpgBuildArtifacts
 from datafusion_engine.registry_bridge import cached_dataset_names
+from engine.plan_policy import WriterStrategy
 from extract.evidence_plan import EvidencePlan
 from hamilton_pipeline.modules.extraction import ExtractErrorArtifacts
 from hamilton_pipeline.pipeline_types import (
@@ -136,6 +137,16 @@ def _ensure_dir(path: Path) -> None:
     path.mkdir(exist_ok=True, parents=True)
 
 
+def _file_visitor_bucket() -> tuple[list[str], Callable[[object], None]]:
+    files: list[str] = []
+
+    def _visitor(written_file: object) -> None:
+        path = getattr(written_file, "path", None)
+        files.append(str(path) if path is not None else str(written_file))
+
+    return files, _visitor
+
+
 def _datafusion_settings_snapshot(
     ctx: ExecutionContext,
 ) -> list[dict[str, str]] | None:
@@ -152,6 +163,20 @@ def _datafusion_settings_snapshot(
             continue
         snapshot.append({"name": str(name), "value": str(value)})
     return snapshot or None
+
+
+def _datafusion_settings_hash(ctx: ExecutionContext) -> str | None:
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        return None
+    return profile.settings_hash()
+
+
+def _datafusion_feature_gates(ctx: ExecutionContext) -> dict[str, str] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        return None
+    return dict(profile.feature_gates.settings())
 
 
 def _datafusion_catalog_snapshot(
@@ -350,6 +375,7 @@ class ManifestInputs:
     param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None
     param_scalar_signature: str | None = None
     extract_inputs: ExtractManifestInputs | None = None
+    materialization_reports: JsonDict | None = None
 
 
 @dataclass(frozen=True)
@@ -369,6 +395,7 @@ class ManifestInputArtifacts:
     param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None
     param_scalar_signature: str | None = None
     extract_inputs: ExtractManifestInputs | None = None
+    materialization_reports: JsonDict | None = None
 
 
 @dataclass(frozen=True)
@@ -379,9 +406,152 @@ class ExtractManifestInputs:
     extract_error_counts: Mapping[str, int] | None = None
 
 
+@dataclass(frozen=True)
+class NormalizedInputsWriteContext:
+    """Bundle configuration for normalized input writes."""
+
+    config: NamedDatasetWriteConfig
+    file_lists: dict[str, list[str]]
+
+
+@dataclass(frozen=True)
+class NormalizedInputsReportContext:
+    """Context required to build normalized input reports."""
+
+    file_lists: Mapping[str, list[str]]
+    ibis_execution: IbisAdapterExecution
+    out_dir: Path
+    requested_strategy: WriterStrategy
+    effective_strategy: WriterStrategy
+
+
+@dataclass(frozen=True)
+class ManifestOptionalInputs:
+    """Optional manifest inputs bundled for simpler node signatures."""
+
+    param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None
+    param_scalar_signature: str | None = None
+    extract_manifest_inputs: ExtractManifestInputs | None = None
+    materialization_reports: JsonDict | None = None
+
+
 # -----------------------
 # Materializers: normalized datasets (relationship inputs)
 # -----------------------
+
+
+def _build_normalized_inputs_write_context(
+    input_datasets: Mapping[str, TableLike | RecordBatchReaderLike | IbisPlan],
+    ibis_execution: IbisAdapterExecution,
+) -> NormalizedInputsWriteContext:
+    schemas: dict[str, pa.Schema] = {}
+    encoding_policies: dict[str, EncodingPolicy] = {}
+    file_visitors: dict[str, Callable[[object], None]] = {}
+    file_lists: dict[str, list[str]] = {}
+    for name, table in input_datasets.items():
+        files, visitor = _file_visitor_bucket()
+        file_lists[name] = files
+        file_visitors[name] = visitor
+        if isinstance(table, RecordBatchReaderLike):
+            continue
+        schema = (
+            plan_schema(table, ctx=ibis_execution.ctx)
+            if isinstance(table, IbisPlan)
+            else table.schema
+        )
+        schemas[name] = schema
+        encoding_policies[name] = encoding_policy_from_schema(schema)
+    config = NamedDatasetWriteConfig(
+        opts=ParquetWriteOptions(),
+        overwrite=True,
+        schemas=schemas,
+        encoding_policies=encoding_policies,
+        file_visitors=file_visitors,
+    )
+    return NormalizedInputsWriteContext(config=config, file_lists=file_lists)
+
+
+def _write_normalized_inputs(
+    input_datasets: Mapping[str, TableLike | RecordBatchReaderLike | IbisPlan],
+    out_dir: Path,
+    *,
+    context: NormalizedInputsWriteContext,
+    ibis_execution: IbisAdapterExecution,
+    writer_strategy: WriterStrategy,
+) -> dict[str, str]:
+    if any(isinstance(table, IbisPlan) for table in input_datasets.values()):
+        return write_ibis_named_datasets_parquet(
+            input_datasets,
+            str(out_dir),
+            options=IbisNamedDatasetWriteOptions(
+                config=context.config,
+                execution=ibis_execution,
+                writer_strategy=writer_strategy,
+            ),
+        )
+    return write_named_datasets_parquet(
+        cast("dict[str, TableLike | RecordBatchReaderLike]", input_datasets),
+        str(out_dir),
+        config=context.config,
+    )
+
+
+def _normalized_input_row_count(path: str | None) -> int | None:
+    if not path:
+        return None
+    return int(ds.dataset(path, format="parquet").count_rows())
+
+
+def _normalized_input_metrics(
+    table: TableLike | RecordBatchReaderLike | IbisPlan,
+    *,
+    path: str | None,
+    context: NormalizedInputsReportContext,
+) -> tuple[int | None, int]:
+    if isinstance(table, RecordBatchReaderLike):
+        return _normalized_input_row_count(path), len(table.schema.names)
+    if isinstance(table, IbisPlan):
+        schema = plan_schema(table, ctx=context.ibis_execution.ctx)
+        return _normalized_input_row_count(path), len(schema.names)
+    return int(table.num_rows), len(table.column_names)
+
+
+def _normalized_input_entry(
+    name: str,
+    table: TableLike | RecordBatchReaderLike | IbisPlan,
+    *,
+    path: str | None,
+    context: NormalizedInputsReportContext,
+) -> JsonDict:
+    rows, columns = _normalized_input_metrics(table, path=path, context=context)
+    return {
+        "path": path,
+        "rows": rows,
+        "columns": columns,
+        "files": list(context.file_lists.get(name, ())),
+    }
+
+
+def _normalized_inputs_report(
+    input_datasets: Mapping[str, TableLike | RecordBatchReaderLike | IbisPlan],
+    paths: Mapping[str, str],
+    *,
+    context: NormalizedInputsReportContext,
+) -> JsonDict:
+    return {
+        "base_dir": str(context.out_dir),
+        "datasets": {
+            name: _normalized_input_entry(
+                name,
+                table,
+                path=paths.get(name),
+                context=context,
+            )
+            for name, table in input_datasets.items()
+        },
+        "writer_strategy_requested": context.requested_strategy,
+        "writer_strategy_effective": context.effective_strategy,
+    }
 
 
 @tag(layer="materialize", artifact="normalized_inputs_parquet", kind="side_effect")
@@ -390,6 +560,7 @@ def write_normalized_inputs_parquet(
     output_dir: str | None,
     work_dir: str | None,
     ibis_execution: IbisAdapterExecution,
+    output_config: OutputConfig,
 ) -> JsonDict | None:
     """Write relationship-input normalized datasets for debugging.
 
@@ -414,61 +585,28 @@ def write_normalized_inputs_parquet(
     out_dir = base / "normalized_inputs"
     _ensure_dir(out_dir)
 
-    schemas: dict[str, pa.Schema] = {}
-    encoding_policies: dict[str, EncodingPolicy] = {}
-    for name, table in input_datasets.items():
-        if isinstance(table, RecordBatchReaderLike):
-            continue
-        schema = (
-            plan_schema(table, ctx=ibis_execution.ctx)
-            if isinstance(table, IbisPlan)
-            else table.schema
-        )
-        schemas[name] = schema
-        encoding_policies[name] = encoding_policy_from_schema(schema)
-    config = NamedDatasetWriteConfig(
-        opts=ParquetWriteOptions(),
-        overwrite=True,
-        schemas=schemas,
-        encoding_policies=encoding_policies,
+    write_context = _build_normalized_inputs_write_context(input_datasets, ibis_execution)
+    requested_strategy = output_config.writer_strategy
+    effective_strategy = requested_strategy if requested_strategy == "arrow" else "arrow"
+    report_context = NormalizedInputsReportContext(
+        file_lists=write_context.file_lists,
+        ibis_execution=ibis_execution,
+        out_dir=out_dir,
+        requested_strategy=requested_strategy,
+        effective_strategy=effective_strategy,
     )
-    if any(isinstance(table, IbisPlan) for table in input_datasets.values()):
-        paths = write_ibis_named_datasets_parquet(
-            input_datasets,
-            str(out_dir),
-            options=IbisNamedDatasetWriteOptions(
-                config=config,
-                execution=ibis_execution,
-            ),
-        )
-    else:
-        paths = write_named_datasets_parquet(
-            cast("dict[str, TableLike | RecordBatchReaderLike]", input_datasets),
-            str(out_dir),
-            config=config,
-        )
-
-    # Provide lightweight report
-    datasets: dict[str, JsonDict] = {}
-    report: JsonDict = {"base_dir": str(out_dir), "datasets": datasets}
-    for name, t in input_datasets.items():
-        path = paths.get(name)
-        if isinstance(t, RecordBatchReaderLike):
-            rows = int(ds.dataset(path, format="parquet").count_rows()) if path else None
-            columns = len(t.schema.names)
-        elif isinstance(t, IbisPlan):
-            rows = int(ds.dataset(path, format="parquet").count_rows()) if path else None
-            schema = plan_schema(t, ctx=ibis_execution.ctx)
-            columns = len(schema.names)
-        else:
-            rows = int(t.num_rows)
-            columns = len(t.column_names)
-        datasets[name] = {
-            "path": path,
-            "rows": rows,
-            "columns": columns,
-        }
-    return report
+    paths = _write_normalized_inputs(
+        input_datasets,
+        out_dir,
+        context=write_context,
+        ibis_execution=ibis_execution,
+        writer_strategy=effective_strategy,
+    )
+    return _normalized_inputs_report(
+        input_datasets,
+        paths,
+        context=report_context,
+    )
 
 
 # -----------------------
@@ -638,6 +776,38 @@ def write_cpg_props_quality_parquet(
         overwrite=True,
     )
     return {"path": path, "rows": int(cpg_props_quality.num_rows)}
+
+
+@tag(layer="obs", artifact="materialization_reports", kind="object")
+def materialization_reports(
+    output_config: OutputConfig,
+    normalized_inputs_parquet: JsonDict | None,
+    cpg_nodes_parquet: JsonDict | None,
+    cpg_edges_parquet: JsonDict | None,
+    cpg_props_parquet: JsonDict | None,
+) -> JsonDict | None:
+    """Bundle materialization metadata for manifest notes.
+
+    Returns
+    -------
+    JsonDict | None
+        Materialization metadata when any reports are present.
+    """
+    artifacts: JsonDict = {}
+    if normalized_inputs_parquet is not None:
+        artifacts["normalized_inputs_parquet"] = normalized_inputs_parquet
+    if cpg_nodes_parquet is not None:
+        artifacts["cpg_nodes_parquet"] = cpg_nodes_parquet
+    if cpg_edges_parquet is not None:
+        artifacts["cpg_edges_parquet"] = cpg_edges_parquet
+    if cpg_props_parquet is not None:
+        artifacts["cpg_props_parquet"] = cpg_props_parquet
+    if not artifacts:
+        return None
+    return {
+        "writer_strategy": output_config.writer_strategy,
+        "artifacts": artifacts,
+    }
 
 
 # -----------------------
@@ -923,6 +1093,46 @@ def relspec_inputs_bundle(
     )
 
 
+@tag(layer="obs", artifact="manifest_input_tables", kind="object")
+def manifest_input_tables(run_bundle_tables: RunBundleTables) -> ManifestInputTables:
+    """Bundle tables required for manifest inputs.
+
+    Returns
+    -------
+    ManifestInputTables
+        Table inputs for manifest assembly.
+    """
+    return ManifestInputTables(
+        relspec_inputs_bundle=run_bundle_tables.relspec_inputs,
+        relationship_output_tables=run_bundle_tables.relationship_outputs,
+        cpg_output_tables=run_bundle_tables.cpg_outputs,
+    )
+
+
+@tag(layer="obs", artifact="manifest_input_artifacts", kind="object")
+def manifest_input_artifacts(
+    relspec_snapshots: RelspecSnapshots,
+    param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None,
+    param_scalar_signature: str | None = None,
+    extract_manifest_inputs: ExtractManifestInputs | None = None,
+    materialization_reports: JsonDict | None = None,
+) -> ManifestInputArtifacts:
+    """Bundle artifacts required for manifest inputs.
+
+    Returns
+    -------
+    ManifestInputArtifacts
+        Artifact inputs for manifest assembly.
+    """
+    return ManifestInputArtifacts(
+        relspec_snapshots=relspec_snapshots,
+        param_table_artifacts=param_table_artifacts,
+        param_scalar_signature=param_scalar_signature,
+        extract_inputs=extract_manifest_inputs,
+        materialization_reports=materialization_reports,
+    )
+
+
 @tag(layer="obs", artifact="cpg_output_tables", kind="bundle")
 def cpg_output_tables(
     cpg_nodes: TableLike,
@@ -964,11 +1174,8 @@ def relspec_snapshots(
 
 @tag(layer="obs", artifact="manifest_inputs", kind="object")
 def manifest_inputs(
-    run_bundle_tables: RunBundleTables,
-    relspec_snapshots: RelspecSnapshots,
-    param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None,
-    param_scalar_signature: str | None = None,
-    extract_manifest_inputs: ExtractManifestInputs | None = None,
+    manifest_input_tables: ManifestInputTables,
+    manifest_input_artifacts: ManifestInputArtifacts,
 ) -> ManifestInputs:
     """Bundle manifest inputs from pipeline outputs.
 
@@ -978,13 +1185,14 @@ def manifest_inputs(
         Manifest input bundle.
     """
     return ManifestInputs(
-        relspec_inputs_bundle=run_bundle_tables.relspec_inputs,
-        relationship_output_tables=run_bundle_tables.relationship_outputs,
-        cpg_output_tables=run_bundle_tables.cpg_outputs,
-        relspec_snapshots=relspec_snapshots,
-        param_table_artifacts=param_table_artifacts,
-        param_scalar_signature=param_scalar_signature,
-        extract_inputs=extract_manifest_inputs,
+        relspec_inputs_bundle=manifest_input_tables.relspec_inputs_bundle,
+        relationship_output_tables=manifest_input_tables.relationship_output_tables,
+        cpg_output_tables=manifest_input_tables.cpg_output_tables,
+        relspec_snapshots=manifest_input_artifacts.relspec_snapshots,
+        param_table_artifacts=manifest_input_artifacts.param_table_artifacts,
+        param_scalar_signature=manifest_input_artifacts.param_scalar_signature,
+        extract_inputs=manifest_input_artifacts.extract_inputs,
+        materialization_reports=manifest_input_artifacts.materialization_reports,
     )
 
 
@@ -1040,6 +1248,8 @@ def manifest_data(
     )
     scan_telemetry = _relspec_scan_telemetry(manifest_inputs)
     datafusion_settings = _datafusion_settings_snapshot(ctx)
+    datafusion_settings_hash = _datafusion_settings_hash(ctx)
+    datafusion_feature_gates = _datafusion_feature_gates(ctx)
     datafusion_metrics, datafusion_traces = _datafusion_runtime_artifacts(ctx)
     dataset_snapshot = _dataset_registry_snapshot(
         manifest_inputs.relspec_inputs_bundle.locations,
@@ -1064,9 +1274,13 @@ def manifest_data(
         normalize_output_lineage=normalize_lineage,
         relspec_scan_telemetry=scan_telemetry or None,
         datafusion_settings=datafusion_settings,
+        datafusion_settings_hash=datafusion_settings_hash,
+        datafusion_feature_gates=datafusion_feature_gates,
         datafusion_metrics=datafusion_metrics,
         datafusion_traces=datafusion_traces,
         dataset_registry_snapshot=dataset_snapshot,
+        runtime_profile_name=ctx.runtime.name,
+        determinism_tier=ctx.determinism.value,
         notes=notes,
     )
 
@@ -1107,6 +1321,8 @@ def _manifest_notes(
     notes.update(_normalize_notes(normalize_lineage, normalize_rule_compilation))
     notes.update(_runtime_telemetry_notes(manifest_inputs))
     notes.update(_datafusion_notes(ctx))
+    if manifest_inputs.materialization_reports:
+        notes["materialization_reports"] = manifest_inputs.materialization_reports
     return notes
 
 
@@ -1266,6 +1482,7 @@ def run_config(
         "output_dir": output_config.output_dir,
         "overwrite_intermediate_datasets": bool(output_config.overwrite_intermediate_datasets),
         "materialize_param_tables": bool(output_config.materialize_param_tables),
+        "writer_strategy": output_config.writer_strategy,
         "relspec_param_values": dict(relspec_param_values),
         "incremental_enabled": bool(incremental_config.enabled),
         "incremental_state_dir": (

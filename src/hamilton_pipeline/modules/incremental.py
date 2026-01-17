@@ -495,9 +495,7 @@ def incremental_file_changes(
     changes = file_changes_from_diff(incremental_diff)
     if not incremental_scip_changed_file_ids:
         return changes
-    combined = sorted(
-        set(changes.changed_file_ids) | set(incremental_scip_changed_file_ids)
-    )
+    combined = sorted(set(changes.changed_file_ids) | set(incremental_scip_changed_file_ids))
     return IncrementalFileChanges(
         changed_file_ids=tuple(combined),
         deleted_file_ids=changes.deleted_file_ids,
@@ -544,10 +542,7 @@ def incremental_module_index_updates(
     """
     if not incremental_config.enabled or incremental_state_store is None:
         return None
-    if not (
-        incremental_file_changes.changed_file_ids
-        or incremental_file_changes.deleted_file_ids
-    ):
+    if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
         return {}
     if incremental_module_index is None:
         return {}
@@ -576,10 +571,7 @@ def incremental_imports_resolved_updates(
     _ = incremental_module_index_updates
     if not incremental_config.enabled or incremental_state_store is None:
         return None
-    if not (
-        incremental_file_changes.changed_file_ids
-        or incremental_file_changes.deleted_file_ids
-    ):
+    if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
         return {}
     if incremental_imports_resolved is None:
         return {}
@@ -608,10 +600,7 @@ def incremental_exported_defs_updates(
     _ = incremental_changed_exports
     if not incremental_config.enabled or incremental_state_store is None:
         return None
-    if not (
-        incremental_file_changes.changed_file_ids
-        or incremental_file_changes.deleted_file_ids
-    ):
+    if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
         return {}
     if incremental_exported_defs is None:
         return {}
@@ -800,10 +789,7 @@ def incremental_extract_updates(
     """
     if not incremental_config.enabled or incremental_state_store is None:
         return None
-    if not (
-        incremental_file_changes.changed_file_ids
-        or incremental_file_changes.deleted_file_ids
-    ):
+    if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
         return {}
     return upsert_extract_outputs(
         extract_bundle_tables,
@@ -828,10 +814,7 @@ def incremental_normalize_updates(
     """
     if not incremental_config.enabled or incremental_state_store is None:
         return None
-    if not (
-        incremental_file_changes.changed_file_ids
-        or incremental_file_changes.deleted_file_ids
-    ):
+    if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
         return {}
     return upsert_normalize_outputs(
         normalize_outputs_bundle,
@@ -856,10 +839,7 @@ def incremental_relationship_updates(
     """
     if not incremental_config.enabled or incremental_state_store is None:
         return None
-    if not (
-        incremental_file_changes.changed_file_ids
-        or incremental_file_changes.deleted_file_ids
-    ):
+    if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
         return {}
     return upsert_relationship_outputs(
         relationship_output_tables.as_dict(),
@@ -884,10 +864,7 @@ def incremental_cpg_nodes_updates(
     """
     if not incremental_config.enabled or incremental_state_store is None:
         return None
-    if not (
-        incremental_file_changes.changed_file_ids
-        or incremental_file_changes.deleted_file_ids
-    ):
+    if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
         return {}
     return upsert_cpg_nodes(
         cpg_nodes_delta,
@@ -912,10 +889,7 @@ def incremental_cpg_edges_updates(
     """
     if not incremental_config.enabled or incremental_state_store is None:
         return None
-    if not (
-        incremental_file_changes.changed_file_ids
-        or incremental_file_changes.deleted_file_ids
-    ):
+    if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
         return {}
     return upsert_cpg_edges(
         cpg_edges_delta,
@@ -960,10 +934,7 @@ def incremental_cpg_props_updates(
     """
     if not incremental_config.enabled or incremental_state_store is None:
         return None
-    if not (
-        incremental_file_changes.changed_file_ids
-        or incremental_file_changes.deleted_file_ids
-    ):
+    if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
         return {}
     return upsert_cpg_props(
         incremental_cpg_delta_inputs.props,

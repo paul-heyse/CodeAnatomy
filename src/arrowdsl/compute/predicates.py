@@ -173,9 +173,7 @@ class InSet:
         ComputeExpression
             Expression representing the predicate.
         """
-        return ensure_expression(
-            pc.is_in(pc.field(self.col), value_set=_value_set(self.values))
-        )
+        return ensure_expression(pc.is_in(pc.field(self.col), value_set=_value_set(self.values)))
 
     def materialize(self, table: TableLike) -> ArrayLike:
         """Return the kernel-lane predicate mask.

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.ir.plan import OpNode, PlanIR
@@ -82,7 +81,7 @@ def segment_plan(
             if current_lane is None:
                 msg = "Segment lane missing during lane transition."
                 raise ValueError(msg)
-            segments.append(Segment(tuple(current_ops), cast("Lane", current_lane)))
+            segments.append(Segment(tuple(current_ops), current_lane))
             current_ops = []
             current_lane = lane
         current_ops.append(node)
@@ -90,7 +89,7 @@ def segment_plan(
             if current_lane is None:
                 msg = "Segment lane missing at pipeline breaker."
                 raise ValueError(msg)
-            segments.append(Segment(tuple(current_ops), cast("Lane", current_lane)))
+            segments.append(Segment(tuple(current_ops), current_lane))
             breakers.append(node.name)
             current_ops = []
             current_lane = None
@@ -99,7 +98,7 @@ def segment_plan(
         if current_lane is None:
             fallback_lane: Lane = "kernel"
         else:
-            fallback_lane = cast("Lane", current_lane)
+            fallback_lane = current_lane
         segments.append(Segment(tuple(current_ops), fallback_lane))
 
     return SegmentPlan(tuple(segments), tuple(breakers))

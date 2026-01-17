@@ -20,11 +20,13 @@ from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
 from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions, SortKey
 from arrowdsl.plan.query import ScanTelemetry
-from arrowdsl.plan.runner import AdapterRunOptions, run_plan_adapter
+from arrowdsl.plan.runner import AdapterRunOptions
 from arrowdsl.schema.build import const_array, set_or_append_column
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
 from config import AdapterMode
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
+from engine.materialize import build_plan_product
+from engine.plan_policy import ExecutionSurfacePolicy
 from ibis_engine.plan import IbisPlan
 from ibis_engine.plan_bridge import table_to_ibis
 from ibis_engine.query_compiler import apply_query_spec
@@ -112,26 +114,38 @@ def _adapter_plan_executor(
     adapter_mode: AdapterMode | None,
     execution_policy: AdapterExecutionPolicy | None,
     ibis_backend: BaseBackend | None,
+    surface_policy: ExecutionSurfacePolicy | None,
 ) -> PlanExecutor:
+    def _resolved_policy(exec_ctx: ExecutionContext) -> ExecutionSurfacePolicy:
+        if surface_policy is not None:
+            return surface_policy
+        return ExecutionSurfacePolicy(determinism_tier=exec_ctx.determinism)
+
+    def _plan_id(label: ExecutionLabel | None) -> str | None:
+        if label is None:
+            return None
+        return f"{label.rule_name}:{label.output_dataset}"
+
     def _executor(
         plan: IbisPlan,
         exec_ctx: ExecutionContext,
         exec_params: Mapping[IbisValue, object] | None,
         execution_label: ExecutionLabel | None = None,
     ) -> TableLike:
-        result = run_plan_adapter(
+        product = build_plan_product(
             plan,
             ctx=exec_ctx,
+            policy=_resolved_policy(exec_ctx),
+            plan_id=_plan_id(execution_label),
             options=AdapterRunOptions(
                 adapter_mode=adapter_mode,
-                prefer_reader=False,
                 execution_policy=execution_policy,
                 execution_label=execution_label,
                 ibis_backend=ibis_backend,
                 ibis_params=exec_params,
             ),
         )
-        return cast("TableLike", result.value)
+        return product.materialize_table()
 
     return _executor
 
@@ -145,6 +159,7 @@ class RuleExecutionOptions:
     adapter_mode: AdapterMode | None = None
     execution_policy: AdapterExecutionPolicy | None = None
     ibis_backend: BaseBackend | None = None
+    surface_policy: ExecutionSurfacePolicy | None = None
 
 
 class FilesystemPlanResolver:
@@ -936,6 +951,7 @@ class CompiledRule:
                 adapter_mode=options.adapter_mode,
                 execution_policy=options.execution_policy,
                 ibis_backend=resolved_backend,
+                surface_policy=options.surface_policy,
             )
         else:
             resolved_executor = options.plan_executor
@@ -977,6 +993,7 @@ class CompiledOutputExecutionOptions:
     execution_policy: AdapterExecutionPolicy | None = None
     ibis_backend: BaseBackend | None = None
     rule_exec_observer: RuleExecutionObserver | None = None
+    surface_policy: ExecutionSurfacePolicy | None = None
 
 
 @dataclass(frozen=True)
@@ -1030,6 +1047,7 @@ class CompiledOutput:
             adapter_mode=options.adapter_mode,
             execution_policy=options.execution_policy,
             ibis_backend=options.ibis_backend,
+            surface_policy=options.surface_policy,
         )
         table_parts: list[TableLike] = []
         observer = options.rule_exec_observer

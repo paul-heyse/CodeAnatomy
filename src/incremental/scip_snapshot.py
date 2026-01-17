@@ -298,9 +298,7 @@ def _row_hashes(
     columns: Sequence[tuple[str, pa.DataType]],
     prefix: str,
 ) -> pa.Array:
-    arrays = [
-        column_or_null(table, name, dtype) for name, dtype in columns
-    ]
+    arrays = [column_or_null(table, name, dtype) for name, dtype in columns]
     return cast(
         "pa.Array",
         hash64_from_arrays(arrays, prefix=prefix, null_sentinel=_HASH_NULL_SENTINEL),

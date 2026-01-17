@@ -16,6 +16,7 @@ from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from config import AdapterMode
 from core_types import JsonDict
 from datafusion_engine.runtime import AdapterExecutionPolicy
+from engine.plan_policy import ExecutionSurfacePolicy, WriterStrategy
 from extract.scip_extract import SCIPParseOptions
 from hamilton_pipeline.pipeline_types import (
     OutputConfig,
@@ -61,7 +62,10 @@ def ibis_backend_config(ctx: ExecutionContext) -> IbisBackendConfig:
     IbisBackendConfig
         Backend configuration for Ibis execution.
     """
-    return IbisBackendConfig(datafusion_profile=ctx.runtime.datafusion)
+    return IbisBackendConfig(
+        datafusion_profile=ctx.runtime.datafusion,
+        fuse_selects=ctx.runtime.ibis_fuse_selects,
+    )
 
 
 @tag(layer="inputs", kind="runtime")
@@ -495,6 +499,7 @@ def output_config(
     *,
     overwrite_intermediate_datasets: bool,
     materialize_param_tables: bool = False,
+    writer_strategy: WriterStrategy = "arrow",
 ) -> OutputConfig:
     """Bundle output configuration values.
 
@@ -508,6 +513,26 @@ def output_config(
         output_dir=output_dir,
         overwrite_intermediate_datasets=overwrite_intermediate_datasets,
         materialize_param_tables=materialize_param_tables,
+        writer_strategy=writer_strategy,
+    )
+
+
+@tag(layer="inputs", kind="object")
+def execution_surface_policy(
+    ctx: ExecutionContext,
+    output_config: OutputConfig,
+) -> ExecutionSurfacePolicy:
+    """Return the execution surface policy for plan materialization.
+
+    Returns
+    -------
+    ExecutionSurfacePolicy
+        Policy describing streaming and writer strategy preferences.
+    """
+    return ExecutionSurfacePolicy(
+        prefer_streaming=True,
+        determinism_tier=ctx.determinism,
+        writer_strategy=output_config.writer_strategy,
     )
 
 

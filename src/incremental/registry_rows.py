@@ -58,7 +58,12 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             ArrowFieldSpec(name="is_star", dtype=interop.bool_()),
         ),
         constraints=TableSpecConstraints(
-            required_non_null=("importer_file_id", "importer_path", "imported_module_fqn", "is_star"),
+            required_non_null=(
+                "importer_file_id",
+                "importer_path",
+                "imported_module_fqn",
+                "is_star",
+            ),
             key_fields=(
                 "importer_file_id",
                 "imported_module_fqn",

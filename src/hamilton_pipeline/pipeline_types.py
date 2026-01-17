@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Literal
 import pyarrow as pa
 
 from arrowdsl.core.interop import TableLike
+from engine.plan_policy import WriterStrategy
 from relspec.compiler import CompiledOutput
 from relspec.registry import ContractCatalog, DatasetLocation
 
@@ -42,6 +43,7 @@ class OutputConfig:
     output_dir: str | None
     overwrite_intermediate_datasets: bool
     materialize_param_tables: bool = False
+    writer_strategy: WriterStrategy = "arrow"
 
 
 @dataclass(frozen=True)

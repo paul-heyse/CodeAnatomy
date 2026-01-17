@@ -154,11 +154,15 @@ class ManifestData:
     normalize_output_lineage: Mapping[str, Sequence[str]] | None = None
     relspec_scan_telemetry: Mapping[str, Mapping[str, ScanTelemetry]] | None = None
     datafusion_settings: Sequence[Mapping[str, str]] | None = None
+    datafusion_settings_hash: str | None = None
+    datafusion_feature_gates: Mapping[str, str] | None = None
     datafusion_metrics: Mapping[str, object] | None = None
     datafusion_traces: Mapping[str, object] | None = None
     dataset_registry_snapshot: Sequence[Mapping[str, object]] | None = None
     param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None
     param_scalar_signature: str | None = None
+    runtime_profile_name: str | None = None
+    determinism_tier: str | None = None
     notes: JsonDict | None = None
 
 
@@ -423,6 +427,29 @@ def _param_tables_payload(data: ManifestData) -> JsonDict:
     return payload
 
 
+def _manifest_notes(data: ManifestData) -> JsonDict:
+    notes: JsonDict = dict(data.notes) if data.notes else {}
+    if data.relspec_scan_telemetry:
+        notes["relspec_scan_telemetry"] = _scan_telemetry_payload(data.relspec_scan_telemetry)
+    if data.datafusion_settings:
+        notes["datafusion_settings"] = list(data.datafusion_settings)
+    if data.datafusion_settings_hash:
+        notes["datafusion_settings_hash"] = data.datafusion_settings_hash
+    if data.datafusion_feature_gates:
+        notes["datafusion_feature_gates"] = dict(data.datafusion_feature_gates)
+    if data.datafusion_metrics:
+        notes["datafusion_metrics"] = cast("JsonValue", data.datafusion_metrics)
+    if data.datafusion_traces:
+        notes["datafusion_traces"] = cast("JsonValue", data.datafusion_traces)
+    if data.dataset_registry_snapshot:
+        notes["dataset_registry_snapshot"] = _json_dict_list(data.dataset_registry_snapshot)
+    if data.runtime_profile_name:
+        notes["runtime_profile_name"] = data.runtime_profile_name
+    if data.determinism_tier:
+        notes["determinism_tier"] = data.determinism_tier
+    return notes
+
+
 def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
     """Construct a run manifest with the required fields.
 
@@ -462,17 +489,7 @@ def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
         )
 
     repro = collect_repro_info(context.repo_root)
-    notes: JsonDict = dict(data.notes) if data.notes else {}
-    if data.relspec_scan_telemetry:
-        notes["relspec_scan_telemetry"] = _scan_telemetry_payload(data.relspec_scan_telemetry)
-    if data.datafusion_settings:
-        notes["datafusion_settings"] = list(data.datafusion_settings)
-    if data.datafusion_metrics:
-        notes["datafusion_metrics"] = cast("JsonValue", data.datafusion_metrics)
-    if data.datafusion_traces:
-        notes["datafusion_traces"] = cast("JsonValue", data.datafusion_traces)
-    if data.dataset_registry_snapshot:
-        notes["dataset_registry_snapshot"] = _json_dict_list(data.dataset_registry_snapshot)
+    notes = _manifest_notes(data)
     params_payload = _param_tables_payload(data)
 
     return Manifest(

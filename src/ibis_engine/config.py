@@ -12,3 +12,4 @@ class IbisBackendConfig:
     """Configuration for building an Ibis backend session."""
 
     datafusion_profile: DataFusionRuntimeProfile | None = None
+    fuse_selects: bool | None = None

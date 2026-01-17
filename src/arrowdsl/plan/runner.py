@@ -186,6 +186,7 @@ def _run_ibis_plan(
             ordering_spec = ordering_metadata_for_plan(
                 plan.ordering,
                 schema=schema_for_ordering,
+                determinism=ctx.determinism,
             )
             combined = merge_metadata_specs(options.metadata_spec, ordering_spec)
         return PlanRunResult(
@@ -209,6 +210,7 @@ def _run_ibis_plan(
             plan.ordering,
             schema=schema_for_ordering,
             canonical_keys=canonical_keys,
+            determinism=ctx.determinism,
         )
         combined = merge_metadata_specs(options.metadata_spec, ordering_spec)
     return PlanRunResult(

@@ -274,7 +274,7 @@ def emit_edges_plan(
     Plan
         Plan emitting edge columns.
     """
-    rel = align_plan(rel, schema=relation_output_schema(), ctx=ctx)
+    rel = align_plan(rel, schema=relation_output_schema(), ctx=ctx, keep_extra_columns=True)
     rel_norm = _normalized_relation_plan(rel, spec=spec, ctx=ctx)
     edge_id = _edge_id_expr(rel_norm, spec=spec, ctx=ctx)
     origin, resolution_method, confidence, score = _edge_scoring_exprs(

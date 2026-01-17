@@ -111,9 +111,7 @@ SIG_DOC_OCCURRENCE_KEYS = ("symbol", "symbol_roles", "range")
 
 def _signature_doc_occurrence_rows(sig_doc: object) -> list[dict[str, object]]:
     occurrences = getattr(sig_doc, "occurrences", None)
-    occurrences_list: list[object] = (
-        [] if occurrences is None else list(occurrences)
-    )
+    occurrences_list: list[object] = [] if occurrences is None else list(occurrences)
     rows: list[dict[str, object]] = []
     for occ in occurrences_list:
         range_values: list[int] = []

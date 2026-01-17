@@ -38,6 +38,7 @@ class CpgBuildArtifacts:
     quality: TableLike
     pipeline_breakers: tuple[str, ...] = ()
     relspec_scan_telemetry: Mapping[str, ScanTelemetry] = field(default_factory=dict)
+    extra_outputs: Mapping[str, TableLike] = field(default_factory=dict)
 
 
 EDGE_ID_BASE = hash_spec_factory(

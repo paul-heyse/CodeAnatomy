@@ -79,6 +79,17 @@ def df_from_sqlglot_or_sql(
     """
     resolved = options or DataFusionCompileOptions()
     bound_expr = expr
+    if resolved.force_sql:
+        df = _df_from_sql(
+            ctx,
+            bound_expr,
+            options=resolved,
+            reason="forced_sql",
+            emit_fallback=False,
+        )
+        if not (resolved.params and _contains_params(expr)):
+            _maybe_explain(ctx, bound_expr, options=resolved)
+        return df
     if resolved.params and _contains_params(expr):
         return _df_from_sql(ctx, bound_expr, options=resolved, reason="params")
     try:
@@ -315,6 +326,7 @@ def _df_from_sql(
     options: DataFusionCompileOptions,
     reason: str,
     error: TranslationError | None = None,
+    emit_fallback: bool = True,
 ) -> DataFrame:
     _ensure_dialect(options.dialect)
     sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
@@ -329,18 +341,19 @@ def _df_from_sql(
                 "DataFusion SQL policy violations detected: %s",
                 ", ".join(violations),
             )
-    event = DataFusionFallbackEvent(
-        reason=reason,
-        error=str(error) if error is not None else "",
-        expression_type=expr.__class__.__name__,
-        sql=sql,
-        dialect=options.dialect,
-        policy_violations=violations,
-    )
-    _emit_fallback_diagnostics(
-        event,
-        fallback_hook=options.fallback_hook,
-    )
+    if emit_fallback:
+        event = DataFusionFallbackEvent(
+            reason=reason,
+            error=str(error) if error is not None else "",
+            expression_type=expr.__class__.__name__,
+            sql=sql,
+            dialect=options.dialect,
+            policy_violations=violations,
+        )
+        _emit_fallback_diagnostics(
+            event,
+            fallback_hook=options.fallback_hook,
+        )
     return ctx.sql_with_options(sql, sql_options, param_values=bindings)
 
 

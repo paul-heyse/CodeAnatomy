@@ -154,6 +154,47 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         template="cpg",
     ),
     DatasetRow(
+        name="cpg_props_json_v1",
+        version=SCHEMA_VERSION,
+        bundles=(),
+        fields=(
+            "entity_kind",
+            "entity_id",
+            "prop_key",
+            "value_str",
+            "value_int",
+            "value_float",
+            "value_bool",
+            "value_json",
+        ),
+        constraints=TableSpecConstraints(
+            required_non_null=("entity_kind", "entity_id", "prop_key"),
+        ),
+        contract=ContractRow(
+            dedupe=DedupeSpecSpec(
+                keys=(
+                    "entity_kind",
+                    "entity_id",
+                    "prop_key",
+                    "value_str",
+                    "value_int",
+                    "value_float",
+                    "value_bool",
+                    "value_json",
+                ),
+                tie_breakers=(SortKeySpec(column="prop_key", order="ascending"),),
+                strategy="KEEP_FIRST_AFTER_SORT",
+            ),
+            canonical_sort=(
+                SortKeySpec(column="entity_kind", order="ascending"),
+                SortKeySpec(column="entity_id", order="ascending"),
+                SortKeySpec(column="prop_key", order="ascending"),
+            ),
+            version=SCHEMA_VERSION,
+        ),
+        template="cpg",
+    ),
+    DatasetRow(
         name="cpg_props_by_file_id_v1",
         version=SCHEMA_VERSION,
         bundles=(),

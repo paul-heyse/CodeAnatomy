@@ -21,11 +21,12 @@ from arrowdsl.plan_helpers import (
 )
 from arrowdsl.plan_helpers import encode_plan as plan_encode_plan
 from arrowdsl.schema.schema import EncodingSpec, unify_schema_with_metadata
-from cpg.schemas import CPG_EDGES_SPEC, CPG_NODES_SPEC, CPG_PROPS_SPEC
+from cpg.schemas import CPG_EDGES_SPEC, CPG_NODES_SPEC, CPG_PROPS_JSON_SPEC, CPG_PROPS_SPEC
 
 CPG_NODES_QUERY: QuerySpec = CPG_NODES_SPEC.query()
 CPG_EDGES_QUERY: QuerySpec = CPG_EDGES_SPEC.query()
 CPG_PROPS_QUERY: QuerySpec = CPG_PROPS_SPEC.query()
+CPG_PROPS_JSON_QUERY: QuerySpec = CPG_PROPS_JSON_SPEC.query()
 
 
 def encode_plan(
@@ -57,12 +58,14 @@ def cpg_query_specs() -> dict[str, QuerySpec]:
         "cpg_nodes": CPG_NODES_QUERY,
         "cpg_edges": CPG_EDGES_QUERY,
         "cpg_props": CPG_PROPS_QUERY,
+        "cpg_props_json": CPG_PROPS_JSON_QUERY,
     }
 
 
 __all__ = [
     "CPG_EDGES_QUERY",
     "CPG_NODES_QUERY",
+    "CPG_PROPS_JSON_QUERY",
     "CPG_PROPS_QUERY",
     "align_plan",
     "align_table_to_schema",

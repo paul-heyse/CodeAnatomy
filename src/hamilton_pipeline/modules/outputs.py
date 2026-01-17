@@ -116,7 +116,10 @@ def cpg_props(cpg_props_final: TableLike) -> TableLike:
 
 @tag(layer="outputs", artifact="cpg_bundle", kind="bundle")
 def cpg_bundle(
-    cpg_nodes: TableLike, cpg_edges: TableLike, cpg_props: TableLike
+    cpg_nodes: TableLike,
+    cpg_edges: TableLike,
+    cpg_props: TableLike,
+    cpg_props_json: TableLike | None,
 ) -> dict[str, TableLike]:
     """Bundle CPG tables into a dictionary.
 
@@ -125,7 +128,10 @@ def cpg_bundle(
     dict[str, TableLike]
         Bundle of CPG nodes, edges, and properties.
     """
-    return {"cpg_nodes": cpg_nodes, "cpg_edges": cpg_edges, "cpg_props": cpg_props}
+    bundle = {"cpg_nodes": cpg_nodes, "cpg_edges": cpg_edges, "cpg_props": cpg_props}
+    if cpg_props_json is not None:
+        bundle["cpg_props_json"] = cpg_props_json
+    return bundle
 
 
 # -----------------------
@@ -404,6 +410,17 @@ class ExtractManifestInputs:
 
     evidence_plan: EvidencePlan | None = None
     extract_error_counts: Mapping[str, int] | None = None
+
+
+@dataclass(frozen=True)
+class MaterializationReportInputs:
+    """Inputs required to assemble materialization reports."""
+
+    normalized_inputs_parquet: JsonDict | None = None
+    cpg_nodes_parquet: JsonDict | None = None
+    cpg_edges_parquet: JsonDict | None = None
+    cpg_props_parquet: JsonDict | None = None
+    cpg_props_json_parquet: JsonDict | None = None
 
 
 @dataclass(frozen=True)
@@ -753,6 +770,31 @@ def write_cpg_props_parquet(
     }
 
 
+@tag(layer="materialize", artifact="cpg_props_json_parquet", kind="side_effect")
+def write_cpg_props_json_parquet(
+    output_dir: str | None,
+    cpg_props_json: TableLike | None,
+) -> JsonDict | None:
+    """Write optional JSON-heavy CPG properties to Parquet.
+
+    Returns
+    -------
+    JsonDict | None
+        Report of the written file, or None when output is disabled or absent.
+    """
+    if not output_dir or cpg_props_json is None:
+        return None
+    output_path = Path(output_dir)
+    _ensure_dir(output_path)
+    path = write_table_parquet(
+        cpg_props_json,
+        output_path / "cpg_props_json.parquet",
+        opts=ParquetWriteOptions(),
+        overwrite=True,
+    )
+    return {"path": path, "rows": int(cpg_props_json.num_rows)}
+
+
 @tag(layer="materialize", artifact="cpg_props_quality_parquet", kind="side_effect")
 def write_cpg_props_quality_parquet(
     output_dir: str | None,
@@ -781,10 +823,7 @@ def write_cpg_props_quality_parquet(
 @tag(layer="obs", artifact="materialization_reports", kind="object")
 def materialization_reports(
     output_config: OutputConfig,
-    normalized_inputs_parquet: JsonDict | None,
-    cpg_nodes_parquet: JsonDict | None,
-    cpg_edges_parquet: JsonDict | None,
-    cpg_props_parquet: JsonDict | None,
+    report_inputs: MaterializationReportInputs,
 ) -> JsonDict | None:
     """Bundle materialization metadata for manifest notes.
 
@@ -794,20 +833,46 @@ def materialization_reports(
         Materialization metadata when any reports are present.
     """
     artifacts: JsonDict = {}
-    if normalized_inputs_parquet is not None:
-        artifacts["normalized_inputs_parquet"] = normalized_inputs_parquet
-    if cpg_nodes_parquet is not None:
-        artifacts["cpg_nodes_parquet"] = cpg_nodes_parquet
-    if cpg_edges_parquet is not None:
-        artifacts["cpg_edges_parquet"] = cpg_edges_parquet
-    if cpg_props_parquet is not None:
-        artifacts["cpg_props_parquet"] = cpg_props_parquet
+    if report_inputs.normalized_inputs_parquet is not None:
+        artifacts["normalized_inputs_parquet"] = report_inputs.normalized_inputs_parquet
+    if report_inputs.cpg_nodes_parquet is not None:
+        artifacts["cpg_nodes_parquet"] = report_inputs.cpg_nodes_parquet
+    if report_inputs.cpg_edges_parquet is not None:
+        artifacts["cpg_edges_parquet"] = report_inputs.cpg_edges_parquet
+    if report_inputs.cpg_props_parquet is not None:
+        artifacts["cpg_props_parquet"] = report_inputs.cpg_props_parquet
+    if report_inputs.cpg_props_json_parquet is not None:
+        artifacts["cpg_props_json_parquet"] = report_inputs.cpg_props_json_parquet
     if not artifacts:
         return None
     return {
         "writer_strategy": output_config.writer_strategy,
         "artifacts": artifacts,
     }
+
+
+@tag(layer="obs", artifact="materialization_report_inputs", kind="object")
+def materialization_report_inputs(
+    normalized_inputs_parquet: JsonDict | None,
+    cpg_nodes_parquet: JsonDict | None,
+    cpg_edges_parquet: JsonDict | None,
+    cpg_props_parquet: JsonDict | None,
+    cpg_props_json_parquet: JsonDict | None,
+) -> MaterializationReportInputs:
+    """Bundle materialization report inputs.
+
+    Returns
+    -------
+    MaterializationReportInputs
+        Bundled materialization report inputs.
+    """
+    return MaterializationReportInputs(
+        normalized_inputs_parquet=normalized_inputs_parquet,
+        cpg_nodes_parquet=cpg_nodes_parquet,
+        cpg_edges_parquet=cpg_edges_parquet,
+        cpg_props_parquet=cpg_props_parquet,
+        cpg_props_json_parquet=cpg_props_json_parquet,
+    )
 
 
 # -----------------------
@@ -1138,6 +1203,7 @@ def cpg_output_tables(
     cpg_nodes: TableLike,
     cpg_edges: TableLike,
     cpg_props: TableLike,
+    cpg_props_json: TableLike | None,
 ) -> CpgOutputTables:
     """Bundle CPG output tables.
 
@@ -1146,7 +1212,12 @@ def cpg_output_tables(
     CpgOutputTables
         CPG output bundle.
     """
-    return CpgOutputTables(cpg_nodes=cpg_nodes, cpg_edges=cpg_edges, cpg_props=cpg_props)
+    return CpgOutputTables(
+        cpg_nodes=cpg_nodes,
+        cpg_edges=cpg_edges,
+        cpg_props=cpg_props,
+        cpg_props_json=cpg_props_json,
+    )
 
 
 @tag(layer="obs", artifact="relspec_snapshots", kind="object")
@@ -1263,6 +1334,7 @@ def manifest_data(
         cpg_nodes=manifest_inputs.cpg_output_tables.cpg_nodes,
         cpg_edges=manifest_inputs.cpg_output_tables.cpg_edges,
         cpg_props=manifest_inputs.cpg_output_tables.cpg_props,
+        cpg_props_json=manifest_inputs.cpg_output_tables.cpg_props_json,
         param_table_artifacts=manifest_inputs.param_table_artifacts,
         param_scalar_signature=manifest_inputs.param_scalar_signature,
         extract_evidence_plan=extract_inputs.evidence_plan if extract_inputs else None,

@@ -145,6 +145,7 @@ class ManifestData:
     cpg_nodes: TableLike | None = None
     cpg_edges: TableLike | None = None
     cpg_props: TableLike | None = None
+    cpg_props_json: TableLike | None = None
     extract_evidence_plan: EvidencePlan | None = None
     extract_error_counts: Mapping[str, int] | None = None
     relationship_rules: Sequence[RelationshipRule] | None = None
@@ -258,6 +259,15 @@ def _collect_cpg_outputs(data: ManifestData) -> tuple[list[DatasetRecord], list[
             _dataset_record_from_table(name="cpg_props", kind="cpg_output", table=data.cpg_props)
         )
         outputs.append(_output_record_from_table("cpg_props", data.cpg_props))
+    if data.cpg_props_json is not None:
+        datasets.append(
+            _dataset_record_from_table(
+                name="cpg_props_json",
+                kind="cpg_output",
+                table=data.cpg_props_json,
+            )
+        )
+        outputs.append(_output_record_from_table("cpg_props_json", data.cpg_props_json))
     return datasets, outputs
 
 

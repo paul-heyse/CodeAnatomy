@@ -60,6 +60,8 @@ dependencies = [
     "pygithub>=2.8.1",
     "ibis-framework[datafusion]>=11.0.0",
     "ibis-substrait>=3.2.0",
+    "maturin>=1.11.5",
+    "rustup>=1.28.2.1",
 ]
 
 [tool.ruff]

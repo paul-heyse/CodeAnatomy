@@ -34,6 +34,7 @@ class CpgRegistry:
     NODES_DATASET: ClassVar[str] = "cpg_nodes_v1"
     EDGES_DATASET: ClassVar[str] = "cpg_edges_v1"
     PROPS_DATASET: ClassVar[str] = "cpg_props_v1"
+    PROPS_JSON_DATASET: ClassVar[str] = "cpg_props_json_v1"
 
     dataset_specs: Mapping[str, DatasetSpec]
     node_plan_spec_table: pa.Table
@@ -99,6 +100,16 @@ class CpgRegistry:
             Dataset specification for CPG props.
         """
         return self.dataset_spec(self.PROPS_DATASET)
+
+    def props_json_spec(self) -> DatasetSpec:
+        """Return the DatasetSpec for JSON-heavy CPG props.
+
+        Returns
+        -------
+        DatasetSpec
+            Dataset specification for JSON props.
+        """
+        return self.dataset_spec(self.PROPS_JSON_DATASET)
 
     def node_plan_specs(self) -> tuple[NodePlanSpec, ...]:
         """Return node plan specs decoded from the registry table.

@@ -80,9 +80,9 @@ Target files:
 - (update) `src/arrowdsl/io/parquet.py`
 
 Implementation checklist:
-- [ ] Define determinism tiers and make them a first-class policy input.
+- [x] Define determinism tiers and make them a first-class policy input.
 - [ ] Default all materialization paths to streaming unless policy requires a table.
-- [ ] Attach determinism tier to ordering metadata and write options.
+- [x] Attach determinism tier to ordering metadata and write options.
 - [ ] Add tests that validate Tier 1 vs Tier 2 ordering behavior.
 
 #### Scope 0.1: EngineSession substrate
@@ -128,7 +128,7 @@ Target files:
 - (update) `src/ibis_engine/backend.py`
 
 Implementation checklist:
-- [ ] Define `EngineSession` with runtime profile and policy fields.
+- [x] Define `EngineSession` with runtime profile and policy fields.
 - [ ] Replace ad-hoc backend or registry creation with session usage.
 - [ ] Thread the session through relspec and CPG entrypoints.
 - [ ] Add a smoke test that constructs a session and runs a trivial plan.
@@ -195,10 +195,10 @@ Target files:
 - (update) `src/engine/runtime_profile.py`
 
 Implementation checklist:
-- [ ] Extend `DataFusionConfigPolicy` to expose a stable settings snapshot and hash.
-- [ ] Apply settings and feature gates in `DataFusionRuntimeProfile.session_config`.
+- [x] Extend `DataFusionConfigPolicy` to expose a stable settings snapshot and hash.
+- [x] Apply settings and feature gates in `DataFusionRuntimeProfile.session_config`.
 - [ ] Set Arrow thread pools from the runtime profile.
-- [ ] Record settings, hashes, and gate state in `obs/manifest.py`.
+- [x] Record settings, hashes, and gate state in `obs/manifest.py`.
 
 #### Scope 0.3: Diagnostics sink baseline
 Goal: make diagnostics table capture a first-class service and route all rule and
@@ -226,10 +226,10 @@ Target files:
 - (update) `src/relspec/rules/exec_events.py`
 
 Implementation checklist:
-- [ ] Define a minimal collector interface with table and artifact hooks.
-- [ ] Hook DataFusion explain and fallback collectors into the sink.
+- [x] Define a minimal collector interface with table and artifact hooks.
+- [x] Hook DataFusion explain and fallback collectors into the sink.
 - [ ] Route rule execution events through the same sink.
-- [ ] Persist diagnostics tables into the run bundle.
+- [x] Persist diagnostics tables into the run bundle.
 
 #### Scope 0.4: Runtime profile presets and builder
 Goal: standardize runtime profiles and provide a builder that configures DataFusion,
@@ -279,9 +279,9 @@ Target files:
 - (update) `src/obs/manifest.py`
 
 Implementation checklist:
-- [ ] Define `dev_debug`, `prod_fast`, and `memory_tight` presets.
+- [x] Define `dev_debug`, `prod_fast`, and `memory_tight` presets.
 - [ ] Ensure spill runtime is configured for non-debug profiles.
-- [ ] Record profile name and settings hash in manifests and run bundles.
+- [x] Record profile name and settings hash in manifests and run bundles.
 - [ ] Expose profile selection through the graph product entrypoint.
 
 #### Scope 0.5: Failure-mode playbooks and feature state capture
@@ -314,7 +314,7 @@ Target files:
 - (update) `src/engine/runtime_profile.py`
 
 Implementation checklist:
-- [ ] Implement explicit toggles for dynamic filter pushdown features.
+- [x] Implement explicit toggles for dynamic filter pushdown features.
 - [ ] Record feature state snapshots in diagnostics tables.
 - [ ] Add run-time overrides to force Tier 2 ordering when requested.
 - [ ] Add regression tests that exercise the fallback paths.
@@ -355,9 +355,9 @@ Target files:
 - (update) `src/relspec/compiler.py`
 
 Implementation checklist:
-- [ ] Introduce `PlanProduct` and wire it into compiler outputs.
-- [ ] Add a path that returns `IbisPlan.to_reader` when streaming is requested.
-- [ ] Preserve ordering metadata on `RecordBatchReader` and tables.
+- [x] Introduce `PlanProduct` and wire it into compiler outputs.
+- [x] Add a path that returns `IbisPlan.to_reader` when streaming is requested.
+- [x] Preserve ordering metadata on `RecordBatchReader` and tables.
 - [ ] Update materializers to accept `PlanProduct`.
 
 #### Scope 1.2: Streaming surface policy (DataFusion + Ibis)
@@ -379,8 +379,8 @@ Target files:
 - (update) `src/arrowdsl/io/parquet.py`
 
 Implementation checklist:
-- [ ] Default DataFusion materialization to `RecordBatchReader.from_stream`.
-- [ ] Default Ibis materialization to `to_pyarrow_batches`.
+- [x] Default DataFusion materialization to `RecordBatchReader.from_stream`.
+- [x] Default Ibis materialization to `to_pyarrow_batches`.
 - [ ] Document and enforce the `requested_schema` projection-only restriction.
 - [ ] Add tests that stream from both DataFusion and Ibis into dataset writes.
 
@@ -422,10 +422,10 @@ Target files:
 - (update) `src/obs/manifest.py`
 
 Implementation checklist:
-- [ ] Add a writer strategy switch (DataFusion native vs PyArrow dataset writer).
-- [ ] Use `sort_by` for Tier 2 determinism in DataFusion writers.
+- [x] Add a writer strategy switch (DataFusion native vs PyArrow dataset writer).
+- [x] Use `sort_by` for Tier 2 determinism in DataFusion writers.
 - [ ] Capture `file_visitor` metadata for PyArrow writes.
-- [ ] Record writer strategy and options in the run manifest.
+- [x] Record writer strategy and options in the run manifest.
 
 #### Scope 1.4: Ordering policy and Acero scan knobs
 Goal: avoid global sorts when implicit ordering is sufficient and encode ordering in scan
@@ -449,9 +449,9 @@ Target files:
 - (update) `src/arrowdsl/schema/metadata.py`
 
 Implementation checklist:
-- [ ] Promote `implicit_ordering` into scan policy defaults for Tier 1.
-- [ ] Propagate ordering metadata through plan execution and IO.
-- [ ] Add a determinism tier decision that chooses sort vs implicit ordering.
+- [x] Promote `implicit_ordering` into scan policy defaults for Tier 1.
+- [x] Propagate ordering metadata through plan execution and IO.
+- [x] Add a determinism tier decision that chooses sort vs implicit ordering.
 - [ ] Validate ordering in a small end-to-end scan pipeline test.
 
 #### Scope 1.5: Partitioned streaming and parallel writers
@@ -504,10 +504,10 @@ Target files:
 - (update) `src/cpg/specs.py`
 
 Implementation checklist:
-- [ ] Implement `emit_nodes_ibis` with schema alignment.
-- [ ] Replace `_collect_symbols()` Python set path with Ibis `distinct`.
-- [ ] Make Ibis nodes the default when DataFusion is enabled.
-- [ ] Keep a fallback to legacy plan-lane nodes for no-DF mode.
+- [x] Implement `emit_nodes_ibis` with schema alignment.
+- [x] Replace `_collect_symbols()` Python set path with Ibis `distinct`.
+- [x] Make Ibis nodes the default when DataFusion is enabled.
+- [x] Keep a fallback to legacy plan-lane nodes for no-DF mode.
 
 #### Scope 2.2: Ibis props fast lane and heavy JSON lane
 Goal: keep most props in the fast lane and isolate JSON-heavy props as an optional dataset.
@@ -540,10 +540,10 @@ Target files:
 - (update) `src/hamilton_pipeline/modules/outputs.py`
 
 Implementation checklist:
-- [ ] Add fast lane props emission with no JSON serialization.
+- [x] Add fast lane props emission with no JSON serialization.
 - [ ] Add optional JSON props dataset and make it opt-in.
 - [ ] Update output assembly to union or view fast plus JSON on demand.
-- [ ] Ensure the manifest reports the optional JSON dataset separately.
+- [x] Ensure the manifest reports the optional JSON dataset separately.
 
 #### Scope 2.3: Ibis edges as the default execution lane
 Goal: route edges through Ibis and only use plan-lane edges as a fallback.
@@ -562,9 +562,9 @@ Target files:
 - (update) `src/relspec/compiler.py`
 
 Implementation checklist:
-- [ ] Make Ibis edges the default when a DF session is configured.
-- [ ] Remove materialize-at-compile behavior from the default path.
-- [ ] Keep plan-lane edges only for no-DF mode and debugging.
+- [x] Make Ibis edges the default when a DF session is configured.
+- [x] Remove materialize-at-compile behavior from the default path.
+- [x] Keep plan-lane edges only for no-DF mode and debugging.
 
 #### Scope 2.4: Ibis compilation policy and SQLGlot AST execution
 Goal: make SQLGlot AST the policy boundary and execute ASTs directly when possible.
@@ -586,7 +586,7 @@ Target files:
 - (update) `src/engine/runtime_profile.py`
 
 Implementation checklist:
-- [ ] Tie `ibis.options.sql.fuse_selects` to runtime profiles.
+- [x] Tie `ibis.options.sql.fuse_selects` to runtime profiles.
 - [ ] Add a SQLGlot AST execution path via `raw_sql`.
 - [ ] Use AST execution for policy-controlled compilation outputs.
 - [ ] Add a fallback path for AST incompatibilities.

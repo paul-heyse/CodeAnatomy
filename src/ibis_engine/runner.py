@@ -256,4 +256,4 @@ def _missing_ops(
 
 
 def _force_bridge(options: DataFusionCompileOptions) -> bool:
-    return options.capture_explain or options.explain_hook is not None
+    return options.force_sql or options.capture_explain or options.explain_hook is not None

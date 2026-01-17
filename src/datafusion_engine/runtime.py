@@ -189,6 +189,7 @@ class AdapterExecutionPolicy:
 
     allow_fallback: bool = True
     fail_on_fallback: bool = False
+    force_sql: bool = False
 
 
 @dataclass(frozen=True)
@@ -1024,14 +1025,17 @@ def apply_execution_policy(
     DataFusionCompileOptions
         Options updated with fallback policy enforcement when configured.
     """
+    force_sql = options.force_sql
+    if execution_policy is not None and execution_policy.force_sql:
+        force_sql = True
     fallback_hook = _apply_fallback_policy(
         policy=execution_policy,
         fallback_hook=options.fallback_hook,
         label=execution_label,
     )
-    if fallback_hook is options.fallback_hook:
+    if fallback_hook is options.fallback_hook and force_sql == options.force_sql:
         return options
-    return replace(options, fallback_hook=fallback_hook)
+    return replace(options, fallback_hook=fallback_hook, force_sql=force_sql)
 
 
 __all__ = [

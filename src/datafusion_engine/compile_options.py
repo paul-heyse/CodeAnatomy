@@ -65,6 +65,7 @@ class DataFusionCompileOptions:
     dialect: str = "datafusion_ext"
     enable_rewrites: bool = True
     rewrite_hook: Callable[[Expression], Expression] | None = None
+    force_sql: bool = False
     fallback_hook: Callable[[DataFusionFallbackEvent], None] | None = None
     capture_explain: bool = False
     explain_analyze: bool = False

@@ -523,9 +523,7 @@ def _evidence_output_from_row(payload: Mapping[str, Any] | None) -> EvidenceOutp
         return None
     raw_map = payload.get("column_map")
     column_map: dict[str, str] = (
-        {str(key): str(val) for key, val in raw_map.items()}
-        if isinstance(raw_map, Mapping)
-        else {}
+        {str(key): str(val) for key, val in raw_map.items()} if isinstance(raw_map, Mapping) else {}
     )
     provenance_columns = parse_string_tuple(
         payload.get("provenance_columns"),
@@ -1268,9 +1266,7 @@ def _kernel_from_row(payload: Mapping[str, Any]) -> KernelSpecT:
         result = DropColumnsSpec(columns=parse_string_tuple(spec.get("columns"), label="columns"))
     elif kind == "rename_columns":
         mapping_payload = spec.get("mapping")
-        mapping: Mapping[str, Any] = (
-            mapping_payload if isinstance(mapping_payload, Mapping) else {}
-        )
+        mapping: Mapping[str, Any] = mapping_payload if isinstance(mapping_payload, Mapping) else {}
         result = RenameColumnsSpec(mapping={str(key): str(val) for key, val in mapping.items()})
     elif kind == "explode_list":
         result = ExplodeListSpec(

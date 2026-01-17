@@ -262,6 +262,7 @@ class CpgOutputTables:
     cpg_nodes: TableLike
     cpg_edges: TableLike
     cpg_props: TableLike
+    cpg_props_json: TableLike | None = None
 
     def as_dict(self) -> dict[str, TableLike]:
         """Return the CPG outputs as a name->table mapping.
@@ -271,11 +272,14 @@ class CpgOutputTables:
         dict[str, TableLike]
             Mapping of CPG output names to tables.
         """
-        return {
+        tables = {
             "cpg_nodes": self.cpg_nodes,
             "cpg_edges": self.cpg_edges,
             "cpg_props": self.cpg_props,
         }
+        if self.cpg_props_json is not None:
+            tables["cpg_props_json"] = self.cpg_props_json
+        return tables
 
 
 @dataclass(frozen=True)

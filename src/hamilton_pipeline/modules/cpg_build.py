@@ -25,8 +25,8 @@ from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.schema import align_table, empty_table
 from config import AdapterMode
 from cpg.build_edges import EdgeBuildConfig, EdgeBuildInputs, build_cpg_edges
-from cpg.build_nodes import NodeInputTables, build_cpg_nodes
-from cpg.build_props import PropsInputTables, build_cpg_props
+from cpg.build_nodes import NodeBuildConfig, NodeInputTables, build_cpg_nodes
+from cpg.build_props import PropsBuildConfig, PropsInputTables, build_cpg_props
 from cpg.constants import CpgBuildArtifacts
 from cpg.schemas import register_cpg_specs
 from datafusion_engine.runtime import AdapterExecutionPolicy
@@ -1625,6 +1625,9 @@ def cpg_props_inputs(
 def cpg_nodes_finalize(
     ctx: ExecutionContext,
     cpg_node_inputs: NodeInputTables,
+    adapter_mode: AdapterMode,
+    adapter_execution_policy: AdapterExecutionPolicy,
+    ibis_backend: BaseBackend,
 ) -> CpgBuildArtifacts:
     """Build finalized CPG nodes with quality artifacts.
 
@@ -1633,7 +1636,15 @@ def cpg_nodes_finalize(
     CpgBuildArtifacts
         Finalized nodes bundle plus quality table.
     """
-    return build_cpg_nodes(ctx=ctx, inputs=cpg_node_inputs)
+    return build_cpg_nodes(
+        ctx=ctx,
+        config=NodeBuildConfig(
+            inputs=cpg_node_inputs,
+            adapter_mode=adapter_mode,
+            execution_policy=adapter_execution_policy,
+            ibis_backend=ibis_backend,
+        ),
+    )
 
 
 @cache(format="parquet")
@@ -1789,6 +1800,21 @@ def cpg_props_delta(
 
 
 @cache(format="parquet")
+@tag(layer="cpg", artifact="cpg_props_json", kind="table")
+def cpg_props_json(
+    cpg_props_finalize: CpgBuildArtifacts,
+) -> TableLike | None:
+    """Return optional JSON-heavy CPG property rows for the current run.
+
+    Returns
+    -------
+    TableLike | None
+        JSON-heavy property rows when enabled.
+    """
+    return cpg_props_finalize.extra_outputs.get("cpg_props_json")
+
+
+@cache(format="parquet")
 @tag(layer="cpg", artifact="cpg_props_final", kind="table")
 def cpg_props_final(
     cpg_props_finalize: CpgBuildArtifacts,
@@ -1819,6 +1845,9 @@ def cpg_props_final(
 def cpg_props_finalize(
     ctx: ExecutionContext,
     cpg_props_inputs: PropsInputTables,
+    adapter_mode: AdapterMode,
+    adapter_execution_policy: AdapterExecutionPolicy,
+    ibis_backend: BaseBackend,
 ) -> CpgBuildArtifacts:
     """Build finalized CPG properties with quality artifacts.
 
@@ -1827,7 +1856,15 @@ def cpg_props_finalize(
     CpgBuildArtifacts
         Finalized properties bundle plus quality table.
     """
-    return build_cpg_props(ctx=ctx, inputs=cpg_props_inputs)
+    return build_cpg_props(
+        ctx=ctx,
+        config=PropsBuildConfig(
+            inputs=cpg_props_inputs,
+            adapter_mode=adapter_mode,
+            execution_policy=adapter_execution_policy,
+            ibis_backend=ibis_backend,
+        ),
+    )
 
 
 @cache(format="parquet")

@@ -225,20 +225,24 @@ def _edge_relation_context(
     catalog = _edge_catalog(inputs or EdgeBuildInputs())
     spec_tables = config.spec_tables or EdgeSpecOverrides()
     relation_rule_table = spec_tables.relation_rule_table or registry.relation_rule_table
-    use_ibis = bool(config.adapter_mode and config.adapter_mode.use_ibis_bridge)
+    use_ibis = bool(
+        config.ibis_backend is not None
+        and (config.adapter_mode is None or config.adapter_mode.use_ibis_bridge)
+    )
     if use_ibis:
         if config.ibis_backend is None:
             msg = "Ibis backend is required when AdapterMode.use_ibis_bridge is enabled."
             raise ValueError(msg)
+        backend = config.ibis_backend
         relation_bundle = compile_relation_plans_ibis(
             catalog,
             ctx=ctx,
-            backend=config.ibis_backend,
+            backend=backend,
             options=RelationPlanCompileOptions(
                 rule_table=relation_rule_table,
                 materialize_debug=config.materialize_relation_outputs,
                 required_sources=config.required_relation_sources,
-                backend=config.ibis_backend,
+                backend=backend,
                 adapter_mode=config.adapter_mode,
                 execution_policy=config.execution_policy,
             ),
@@ -365,18 +369,11 @@ def build_cpg_edges_raw(
     EdgePlanBundle
         Raw plan plus scan telemetry.
 
-    Raises
-    ------
-    ValueError
-        Raised when AdapterMode.use_ibis_bridge is not enabled.
     """
     edge_context = _edge_relation_context(config, ctx=ctx)
-    if not edge_context.use_ibis:
-        msg = "Design-mode CPG edges require AdapterMode.use_ibis_bridge."
-        raise ValueError(msg)
     if edge_context.use_ibis:
         return _build_edges_raw_ibis(edge_context)
-    return _build_edges_raw_plan(edge_context, ctx=ctx)
+    return _build_edges_raw_plan(edge_context, ctx=edge_context.ctx)
 
 
 def build_cpg_edges(

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from hamilton import driver as hamilton_driver
 from hamilton.graph_types import HamiltonNode
@@ -30,6 +30,9 @@ FULL_PIPELINE_OUTPUTS: tuple[str, ...] = (
     "write_run_bundle_dir",
 )
 
+_IMPACT_STRATEGIES: frozenset[str] = frozenset({"hybrid", "symbol_closure", "import_closure"})
+ImpactStrategy = Literal["hybrid", "symbol_closure", "import_closure"]
+
 
 @dataclass(frozen=True)
 class PipelineExecutionOptions:
@@ -42,6 +45,7 @@ class PipelineExecutionOptions:
     adapter_mode: AdapterMode | None = None
     ctx: ExecutionContext | None = None
     incremental_config: IncrementalConfig | None = None
+    incremental_impact_strategy: str | None = None
     outputs: Sequence[str] | None = None
     config: Mapping[str, JsonValue] = field(default_factory=dict)
     pipeline_driver: hamilton_driver.Driver | None = None
@@ -67,20 +71,40 @@ def _default_state_dir(repo_root: Path, value: PathLike | None) -> Path:
     return resolved if resolved is not None else repo_root / "build" / "state"
 
 
-def execute_pipeline(
-    *,
-    repo_root: PathLike,
-    options: PipelineExecutionOptions | None = None,
-) -> Mapping[str, JsonDict | None]:
-    """Execute the full Hamilton pipeline for a repository.
+def _normalize_impact_strategy(impact_strategy: str | None) -> ImpactStrategy | None:
+    if impact_strategy is None:
+        return None
+    normalized = impact_strategy.lower()
+    if normalized not in _IMPACT_STRATEGIES:
+        msg = f"Unsupported incremental impact strategy {normalized!r}"
+        raise ValueError(msg)
+    return cast("ImpactStrategy", normalized)
 
-    Returns
-    -------
-    Mapping[str, JsonDict | None]
-        Mapping of output node names to their emitted metadata.
-    """
-    repo_root_path = ensure_path(repo_root).resolve()
-    options = options or PipelineExecutionOptions()
+
+def _apply_incremental_overrides(
+    execute_overrides: dict[str, object],
+    *,
+    options: PipelineExecutionOptions,
+    repo_root_path: Path,
+) -> None:
+    impact_strategy = _normalize_impact_strategy(options.incremental_impact_strategy)
+    if options.incremental_config is not None:
+        incremental = options.incremental_config
+        if impact_strategy is not None:
+            incremental = replace(incremental, impact_strategy=impact_strategy)
+        if incremental.enabled and incremental.state_dir is None:
+            incremental = replace(incremental, state_dir=_default_state_dir(repo_root_path, None))
+        execute_overrides["incremental_config"] = incremental
+        return
+    if impact_strategy is not None:
+        execute_overrides["incremental_impact_strategy"] = impact_strategy
+
+
+def _build_execute_overrides(
+    *,
+    repo_root_path: Path,
+    options: PipelineExecutionOptions,
+) -> dict[str, object]:
     resolved_output_dir = _default_output_dir(repo_root_path, options.output_dir)
     resolved_work_dir = _resolve_dir(repo_root_path, options.work_dir)
     execute_overrides: dict[str, object] = {
@@ -96,13 +120,35 @@ def execute_pipeline(
         execute_overrides["adapter_mode"] = options.adapter_mode
     if options.ctx is not None:
         execute_overrides["ctx"] = options.ctx
-    if options.incremental_config is not None:
-        incremental = options.incremental_config
-        if incremental.enabled and incremental.state_dir is None:
-            incremental = replace(incremental, state_dir=_default_state_dir(repo_root_path, None))
-        execute_overrides["incremental_config"] = incremental
+    _apply_incremental_overrides(
+        execute_overrides,
+        options=options,
+        repo_root_path=repo_root_path,
+    )
     if options.overrides:
         execute_overrides.update(options.overrides)
+    return execute_overrides
+
+
+def execute_pipeline(
+    *,
+    repo_root: PathLike,
+    options: PipelineExecutionOptions | None = None,
+) -> Mapping[str, JsonDict | None]:
+    """Execute the full Hamilton pipeline for a repository.
+
+    Returns
+    -------
+    Mapping[str, JsonDict | None]
+        Mapping of output node names to their emitted metadata.
+
+    """
+    repo_root_path = ensure_path(repo_root).resolve()
+    options = options or PipelineExecutionOptions()
+    execute_overrides = _build_execute_overrides(
+        repo_root_path=repo_root_path,
+        options=options,
+    )
 
     driver_instance = (
         options.pipeline_driver

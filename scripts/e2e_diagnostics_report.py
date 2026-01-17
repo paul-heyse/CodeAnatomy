@@ -28,6 +28,10 @@ dataset_schema = cast(
     "Callable[[str], pa.Schema]",
     import_module("cpg.registry_specs").dataset_schema,
 )
+incremental_dataset_schema = cast(
+    "Callable[[str], pa.Schema]",
+    import_module("incremental.registry_specs").dataset_schema,
+)
 
 
 @dataclass(frozen=True)
@@ -182,7 +186,10 @@ def _check_contract_schema(
     try:
         expected = dataset_schema(schema_name)
     except KeyError:
-        return
+        try:
+            expected = incremental_dataset_schema(schema_name)
+        except KeyError:
+            return
     actual_fp = schema_fingerprint(schema)
     expected_fp = schema_fingerprint(expected)
     if actual_fp != expected_fp:
@@ -513,19 +520,28 @@ def _check_incremental_state(
         )
 
     if run_bundle is not None:
-        diff_path = run_bundle / "incremental" / "incremental_diff"
-        info["incremental_diff"] = {
-            "path": str(diff_path),
-            "exists": diff_path.exists(),
-        }
-        if not diff_path.exists():
-            issues.append(
-                Issue(
-                    severity="warn",
-                    check="incremental_diff",
-                    detail=f"Missing incremental diff: {diff_path}",
+        incremental_dir = run_bundle / "incremental"
+        expected = (
+            "incremental_diff",
+            "inc_changed_exports_v1",
+            "inc_impacted_callers_v1",
+            "inc_impacted_importers_v1",
+            "inc_impacted_files_v2",
+        )
+        present: dict[str, bool] = {}
+        for name in expected:
+            path = incremental_dir / name
+            exists = path.exists()
+            present[name] = exists
+            if not exists:
+                issues.append(
+                    Issue(
+                        severity="warn",
+                        check="incremental_artifact",
+                        detail=f"Missing incremental artifact: {path}",
+                    )
                 )
-            )
+        info["incremental_artifacts"] = present
     return info
 
 

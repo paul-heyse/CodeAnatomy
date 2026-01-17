@@ -54,6 +54,26 @@ class IncrementalRunConfig:
 
 
 @dataclass(frozen=True)
+class IncrementalDatasetUpdates:
+    """Bundle incremental dataset update paths."""
+
+    extract_updates: Mapping[str, str] | None
+    normalize_updates: Mapping[str, str] | None
+    module_index_updates: Mapping[str, str] | None
+    imports_resolved_updates: Mapping[str, str] | None
+    exported_defs_updates: Mapping[str, str] | None
+
+
+@dataclass(frozen=True)
+class IncrementalImpactUpdates:
+    """Bundle incremental impact update paths."""
+
+    impacted_callers_updates: Mapping[str, str] | None
+    impacted_importers_updates: Mapping[str, str] | None
+    impacted_files_updates: Mapping[str, str] | None
+
+
+@dataclass(frozen=True)
 class TreeSitterConfig:
     """Configuration for tree-sitter extraction."""
 
@@ -99,6 +119,7 @@ class CstRelspecInputs:
     cst_name_refs: TableLike
     cst_imports_norm: TableLike
     cst_callsites: TableLike
+    cst_defs_norm: TableLike
 
 
 @dataclass(frozen=True)
@@ -213,6 +234,7 @@ class RelationshipOutputTables:
     rel_import_symbol: TableLike
     rel_callsite_symbol: TableLike
     rel_callsite_qname: TableLike
+    rel_def_symbol: TableLike
 
     def as_dict(self) -> dict[str, TableLike]:
         """Return the relationship outputs as a name->table mapping.
@@ -227,6 +249,7 @@ class RelationshipOutputTables:
             "rel_import_symbol": self.rel_import_symbol,
             "rel_callsite_symbol": self.rel_callsite_symbol,
             "rel_callsite_qname": self.rel_callsite_qname,
+            "rel_def_symbol": self.rel_def_symbol,
         }
 
 

@@ -43,6 +43,17 @@ def relationship_rule_definitions() -> tuple[RuleDefinition, ...]:
         ),
         _interval_align_rule(
             _IntervalAlignRuleSpec(
+                name="cst_defs__name_to__scip_occurrences",
+                output_dataset="rel_def_symbol",
+                contract_name="rel_def_symbol_v1",
+                inputs=("cst_defs", "scip_occurrences"),
+                left_start_col="bstart",
+                left_end_col="bend",
+                select_left=("def_id", "path", "bstart", "bend"),
+            )
+        ),
+        _interval_align_rule(
+            _IntervalAlignRuleSpec(
                 name="cst_callsites__callee_to__scip_occurrences",
                 output_dataset="rel_callsite_symbol",
                 contract_name="rel_callsite_symbol_v1",

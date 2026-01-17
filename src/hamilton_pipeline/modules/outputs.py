@@ -15,8 +15,10 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.io.parquet import (
+    DatasetWriteConfig,
     NamedDatasetWriteConfig,
     ParquetWriteOptions,
+    write_dataset_parquet,
     write_finalize_result_parquet,
     write_named_datasets_parquet,
     write_table_parquet,
@@ -54,6 +56,7 @@ from ibis_engine.io_bridge import (
 from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
 from ibis_engine.plan import IbisPlan
 from ibis_engine.registry import registry_snapshot
+from incremental.registry_specs import dataset_schema as incremental_dataset_schema
 from incremental.types import IncrementalConfig
 from normalize.runner import NormalizeRuleCompilation
 from normalize.utils import encoding_policy_from_schema
@@ -241,6 +244,40 @@ def _default_debug_dir(output_dir: str | None, work_dir: str | None) -> Path | N
     return debug_dir
 
 
+def _incremental_output_dir(output_dir: str | None, work_dir: str | None) -> Path | None:
+    base = output_dir or work_dir
+    if not base:
+        return None
+    incremental_dir = Path(base) / "incremental"
+    _ensure_dir(incremental_dir)
+    return incremental_dir
+
+
+def _write_incremental_dataset(
+    *,
+    name: str,
+    table: pa.Table | None,
+    output_dir: str | None,
+    work_dir: str | None,
+    incremental_config: IncrementalConfig,
+) -> str | None:
+    if not incremental_config.enabled or table is None:
+        return None
+    base = _incremental_output_dir(output_dir, work_dir)
+    if base is None:
+        return None
+    schema = incremental_dataset_schema(name)
+    return write_dataset_parquet(
+        table,
+        base_dir=base / name,
+        config=DatasetWriteConfig(
+            schema=schema,
+            encoding_policy=encoding_policy_from_schema(schema),
+            overwrite=True,
+        ),
+    )
+
+
 # -----------------------
 # Bundle helper types
 # -----------------------
@@ -264,6 +301,17 @@ class RunBundleMetadata:
 
 
 @dataclass(frozen=True)
+class RunBundleIncrementalTables:
+    """Incremental diagnostic tables for run bundles."""
+
+    incremental_diff: pa.Table | None
+    incremental_changed_exports: pa.Table | None
+    incremental_impacted_callers: pa.Table | None
+    incremental_impacted_importers: pa.Table | None
+    incremental_impacted_files: pa.Table | None
+
+
+@dataclass(frozen=True)
 class RunBundleInputs:
     """Inputs required to build a run bundle context."""
 
@@ -273,6 +321,10 @@ class RunBundleInputs:
     tables: RunBundleTables
     param_inputs: RunBundleParamInputs | None = None
     incremental_diff: pa.Table | None = None
+    incremental_changed_exports: pa.Table | None = None
+    incremental_impacted_callers: pa.Table | None = None
+    incremental_impacted_importers: pa.Table | None = None
+    incremental_impacted_files: pa.Table | None = None
 
 
 @dataclass(frozen=True)
@@ -646,6 +698,103 @@ def write_extract_error_artifacts_parquet(
             "alignment_rows": int(alignment.num_rows),
         }
     return {"base_dir": str(base), "datasets": datasets}
+
+
+# -----------------------
+# Incremental impact diagnostics
+# -----------------------
+
+
+@tag(layer="obs", artifact="write_inc_changed_exports_parquet", kind="table")
+def write_inc_changed_exports_parquet(
+    incremental_changed_exports: pa.Table | None,
+    output_dir: str | None,
+    work_dir: str | None,
+    incremental_config: IncrementalConfig,
+) -> str | None:
+    """Write incremental export deltas for diagnostics.
+
+    Returns
+    -------
+    str | None
+        Dataset path for the written export deltas.
+    """
+    return _write_incremental_dataset(
+        name="inc_changed_exports_v1",
+        table=incremental_changed_exports,
+        output_dir=output_dir,
+        work_dir=work_dir,
+        incremental_config=incremental_config,
+    )
+
+
+@tag(layer="obs", artifact="write_inc_impacted_callers_parquet", kind="table")
+def write_inc_impacted_callers_parquet(
+    incremental_impacted_callers: pa.Table | None,
+    output_dir: str | None,
+    work_dir: str | None,
+    incremental_config: IncrementalConfig,
+) -> str | None:
+    """Write impacted caller diagnostics.
+
+    Returns
+    -------
+    str | None
+        Dataset path for the written caller impacts.
+    """
+    return _write_incremental_dataset(
+        name="inc_impacted_callers_v1",
+        table=incremental_impacted_callers,
+        output_dir=output_dir,
+        work_dir=work_dir,
+        incremental_config=incremental_config,
+    )
+
+
+@tag(layer="obs", artifact="write_inc_impacted_importers_parquet", kind="table")
+def write_inc_impacted_importers_parquet(
+    incremental_impacted_importers: pa.Table | None,
+    output_dir: str | None,
+    work_dir: str | None,
+    incremental_config: IncrementalConfig,
+) -> str | None:
+    """Write impacted importer diagnostics.
+
+    Returns
+    -------
+    str | None
+        Dataset path for the written importer impacts.
+    """
+    return _write_incremental_dataset(
+        name="inc_impacted_importers_v1",
+        table=incremental_impacted_importers,
+        output_dir=output_dir,
+        work_dir=work_dir,
+        incremental_config=incremental_config,
+    )
+
+
+@tag(layer="obs", artifact="write_inc_impacted_files_parquet", kind="table")
+def write_inc_impacted_files_parquet(
+    incremental_impacted_files: pa.Table | None,
+    output_dir: str | None,
+    work_dir: str | None,
+    incremental_config: IncrementalConfig,
+) -> str | None:
+    """Write impacted file diagnostics.
+
+    Returns
+    -------
+    str | None
+        Dataset path for the written impacted files.
+    """
+    return _write_incremental_dataset(
+        name="inc_impacted_files_v2",
+        table=incremental_impacted_files,
+        output_dir=output_dir,
+        work_dir=work_dir,
+        incremental_config=incremental_config,
+    )
 
 
 # -----------------------
@@ -1123,6 +1272,7 @@ def run_config(
             str(incremental_config.state_dir) if incremental_config.state_dir else None
         ),
         "incremental_repo_id": incremental_config.repo_id,
+        "incremental_impact_strategy": incremental_config.impact_strategy,
     }
 
 
@@ -1160,13 +1310,37 @@ def run_bundle_tables(
     )
 
 
+@tag(layer="obs", artifact="run_bundle_incremental_tables", kind="object")
+def run_bundle_incremental_tables(
+    incremental_diff: pa.Table | None,
+    incremental_changed_exports: pa.Table | None,
+    incremental_impacted_callers: pa.Table | None,
+    incremental_impacted_importers: pa.Table | None,
+    incremental_impacted_files: pa.Table | None,
+) -> RunBundleIncrementalTables:
+    """Bundle incremental diagnostics for run bundle writing.
+
+    Returns
+    -------
+    RunBundleIncrementalTables
+        Incremental diagnostics for run bundles.
+    """
+    return RunBundleIncrementalTables(
+        incremental_diff=incremental_diff,
+        incremental_changed_exports=incremental_changed_exports,
+        incremental_impacted_callers=incremental_impacted_callers,
+        incremental_impacted_importers=incremental_impacted_importers,
+        incremental_impacted_files=incremental_impacted_files,
+    )
+
+
 @tag(layer="obs", artifact="run_bundle_inputs", kind="object")
 def run_bundle_inputs(
     run_bundle_metadata: RunBundleMetadata,
     relspec_snapshots: RelspecSnapshots,
     run_bundle_tables: RunBundleTables,
     run_bundle_param_inputs: RunBundleParamInputs | None,
-    incremental_diff: pa.Table | None,
+    run_bundle_incremental_tables: RunBundleIncrementalTables,
 ) -> RunBundleInputs:
     """Bundle inputs for run bundle context creation.
 
@@ -1181,7 +1355,11 @@ def run_bundle_inputs(
         relspec_snapshots=relspec_snapshots,
         tables=run_bundle_tables,
         param_inputs=run_bundle_param_inputs,
-        incremental_diff=incremental_diff,
+        incremental_diff=run_bundle_incremental_tables.incremental_diff,
+        incremental_changed_exports=run_bundle_incremental_tables.incremental_changed_exports,
+        incremental_impacted_callers=run_bundle_incremental_tables.incremental_impacted_callers,
+        incremental_impacted_importers=run_bundle_incremental_tables.incremental_impacted_importers,
+        incremental_impacted_files=run_bundle_incremental_tables.incremental_impacted_files,
     )
 
 
@@ -1270,6 +1448,10 @@ def run_bundle_context(
         relationship_output_tables=run_bundle_inputs.tables.relationship_outputs.as_dict(),
         cpg_output_tables=run_bundle_inputs.tables.cpg_outputs.as_dict(),
         incremental_diff=run_bundle_inputs.incremental_diff,
+        incremental_changed_exports=run_bundle_inputs.incremental_changed_exports,
+        incremental_impacted_callers=run_bundle_inputs.incremental_impacted_callers,
+        incremental_impacted_importers=run_bundle_inputs.incremental_impacted_importers,
+        incremental_impacted_files=run_bundle_inputs.incremental_impacted_files,
         param_table_specs=param_specs,
         param_table_artifacts=param_artifacts,
         param_scalar_signature=param_scalar_signature,

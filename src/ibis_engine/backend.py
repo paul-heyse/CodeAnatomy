@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from dataclasses import replace
 from typing import Protocol, cast
 
 import ibis
@@ -51,6 +52,8 @@ def build_backend(cfg: IbisBackendConfig) -> ibis.backends.BaseBackend:
     """
     ibis_datafusion = _load_ibis_datafusion()
     profile = cfg.datafusion_profile or DataFusionRuntimeProfile()
+    if profile.default_catalog != "datafusion":
+        profile = replace(profile, default_catalog="datafusion")
     ctx = profile.session_context()
     register_datafusion_udfs(ctx)
     return ibis_datafusion.connect(ctx)

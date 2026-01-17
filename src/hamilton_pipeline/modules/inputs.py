@@ -518,6 +518,7 @@ def incremental_config(
     incremental_enabled: bool = False,
     incremental_state_dir: str | None = None,
     incremental_repo_id: str | None = None,
+    incremental_impact_strategy: str | None = None,
 ) -> IncrementalConfig:
     """Bundle incremental configuration values.
 
@@ -525,10 +526,31 @@ def incremental_config(
     -------
     IncrementalConfig
         Incremental configuration bundle.
+
+    Raises
+    ------
+    ValueError
+        Raised when the impact strategy is unsupported.
     """
     enabled = bool(incremental_enabled) or _incremental_pipeline_enabled()
     state_dir = incremental_state_dir or os.environ.get("CODEANATOMY_STATE_DIR")
     repo_id = incremental_repo_id or os.environ.get("CODEANATOMY_REPO_ID")
+    impact_strategy = (
+        incremental_impact_strategy
+        or os.environ.get("CODEANATOMY_INCREMENTAL_IMPACT_STRATEGY")
+        or "hybrid"
+    )
+    impact_strategy = impact_strategy.lower()
+    if impact_strategy not in {"hybrid", "symbol_closure", "import_closure"}:
+        msg = f"Unsupported incremental impact strategy {impact_strategy!r}"
+        raise ValueError(msg)
+    impact_strategy_value: Literal["hybrid", "symbol_closure", "import_closure"]
+    if impact_strategy == "symbol_closure":
+        impact_strategy_value = "symbol_closure"
+    elif impact_strategy == "import_closure":
+        impact_strategy_value = "import_closure"
+    else:
+        impact_strategy_value = "hybrid"
     resolved_state_dir: Path | None = None
     if enabled:
         if state_dir:
@@ -539,6 +561,7 @@ def incremental_config(
         enabled=enabled,
         state_dir=resolved_state_dir,
         repo_id=repo_id,
+        impact_strategy=impact_strategy_value,
     )
 
 

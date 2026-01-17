@@ -1,0 +1,68 @@
+"""Unit tests for incremental exported definition indexing."""
+
+from __future__ import annotations
+
+import pyarrow as pa
+
+from arrowdsl.core.ids import prefixed_hash_id
+from incremental.exports import build_exported_defs_index
+
+_QNAME_TYPE = pa.list_(pa.struct([("name", pa.string()), ("source", pa.string())]))
+
+
+def test_build_exported_defs_index_hashes_qnames() -> None:
+    """Top-level defs should emit stable qname hashes."""
+    cst_defs = _cst_defs_table()
+    result = build_exported_defs_index(cst_defs)
+
+    expected_qnames = ["pkg.mod.foo", "pkg.mod.foo.Inner"]
+    assert result.num_rows == len(expected_qnames)
+    assert result["def_id"].to_pylist() == ["def_root", "def_root"]
+    assert result["qname"].to_pylist() == expected_qnames
+
+    expected_ids = prefixed_hash_id([pa.array(expected_qnames, type=pa.string())], prefix="qname")
+    assert result["qname_id"].to_pylist() == expected_ids.to_pylist()
+
+
+def test_build_exported_defs_index_attaches_symbols() -> None:
+    """Symbols from rel_def_symbol should attach to exported defs."""
+    cst_defs = _cst_defs_table()
+    rel_def_symbol = pa.table(
+        {
+            "def_id": pa.array(["def_root"], type=pa.string()),
+            "path": pa.array(["src/mod.py"], type=pa.string()),
+            "symbol": pa.array(["sym1"], type=pa.string()),
+            "symbol_roles": pa.array([1], type=pa.int32()),
+        }
+    )
+
+    result = build_exported_defs_index(cst_defs, rel_def_symbol=rel_def_symbol)
+
+    assert result["symbol"].to_pylist() == ["sym1", "sym1"]
+    assert result["symbol_roles"].to_pylist() == [1, 1]
+
+
+def _cst_defs_table() -> pa.Table:
+    qnames = pa.array(
+        [
+            [
+                {"name": "pkg.mod.foo", "source": "qualified"},
+                {"name": "pkg.mod.foo.Inner", "source": "qualified"},
+            ],
+            [
+                {"name": "pkg.mod.nested", "source": "qualified"},
+            ],
+        ],
+        type=_QNAME_TYPE,
+    )
+    return pa.table(
+        {
+            "file_id": pa.array(["file_1", "file_1"], type=pa.string()),
+            "path": pa.array(["src/mod.py", "src/mod.py"], type=pa.string()),
+            "def_id": pa.array(["def_root", "def_nested"], type=pa.string()),
+            "def_kind_norm": pa.array(["function", "function"], type=pa.string()),
+            "name": pa.array(["foo", "nested"], type=pa.string()),
+            "container_def_id": pa.array([None, "def_root"], type=pa.string()),
+            "qnames": qnames,
+        }
+    )

@@ -56,7 +56,7 @@ from hamilton_pipeline.pipeline_types import (
     ScipIndexConfig,
     ScipIndexInputs,
 )
-from incremental.types import IncrementalConfig, IncrementalFileChanges
+from incremental.types import IncrementalConfig, IncrementalImpact
 from relspec.rules.compiler import RuleCompiler
 from relspec.rules.handlers.extract import ExtractRuleCompilation, ExtractRuleHandler
 from relspec.rules.registry import RuleRegistry
@@ -193,18 +193,18 @@ def _filter_repo_files_by_ids(
 def repo_files_extract(
     repo_files: TableLike,
     incremental_config: IncrementalConfig,
-    incremental_file_changes: IncrementalFileChanges,
+    incremental_extract_impact: IncrementalImpact,
 ) -> TableLike:
-    """Return repo files scoped to changed file ids for extraction.
+    """Return repo files scoped to impacted file ids for extraction.
 
     Returns
     -------
     TableLike
-        Repo files filtered to changed file ids when incremental is enabled.
+        Repo files filtered to impacted file ids when incremental is enabled.
     """
     if not incremental_config.enabled:
         return repo_files
-    return _filter_repo_files_by_ids(repo_files, incremental_file_changes.changed_file_ids)
+    return _filter_repo_files_by_ids(repo_files, incremental_extract_impact.impacted_file_ids)
 
 
 @cache(format="parquet")

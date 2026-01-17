@@ -38,6 +38,8 @@ from hamilton_pipeline.pipeline_types import (
     CstBuildInputs,
     CstRelspecInputs,
     DiagnosticsInputs,
+    IncrementalDatasetUpdates,
+    IncrementalImpactUpdates,
     ParamBundle,
     QnameInputs,
     RelationshipOutputTables,
@@ -66,7 +68,7 @@ from incremental.relspec_update import (
     scoped_relspec_resolver,
 )
 from incremental.state_store import StateStore
-from incremental.types import IncrementalConfig, IncrementalFileChanges
+from incremental.types import IncrementalConfig, IncrementalFileChanges, IncrementalImpact
 from normalize.utils import encoding_policy_from_schema
 from relspec.adapters import (
     CpgRuleAdapter,
@@ -200,6 +202,7 @@ class RelspecIncrementalContext:
 
     state_store: StateStore | None
     file_changes: IncrementalFileChanges
+    impact: IncrementalImpact
     config: IncrementalConfig
     ctx: ExecutionContext
 
@@ -312,6 +315,29 @@ def relationship_contract_spec() -> ContractCatalogSpec:
         )
     )
 
+    rel_def_symbol_spec = GLOBAL_SCHEMA_REGISTRY.register_dataset(
+        make_dataset_spec(
+            table_spec=make_table_spec(
+                name="rel_def_symbol_v1",
+                version=SCHEMA_VERSION,
+                bundles=(span_bundle(),),
+                fields=[
+                    ArrowFieldSpec(name="def_id", dtype=pa.string()),
+                    ArrowFieldSpec(name="symbol", dtype=pa.string()),
+                    ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
+                    ArrowFieldSpec(name="path", dtype=pa.string()),
+                    ArrowFieldSpec(name="edge_owner_file_id", dtype=pa.string()),
+                    ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
+                    ArrowFieldSpec(name="confidence", dtype=pa.float32()),
+                    ArrowFieldSpec(name="score", dtype=pa.float32()),
+                    ArrowFieldSpec(name="rule_name", dtype=pa.string()),
+                    ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
+                ],
+                constraints=TableSpecConstraints(required_non_null=("def_id", "symbol")),
+            )
+        )
+    )
+
     rel_callsite_symbol_spec = GLOBAL_SCHEMA_REGISTRY.register_dataset(
         make_dataset_spec(
             table_spec=make_table_spec(
@@ -396,6 +422,25 @@ def relationship_contract_spec() -> ContractCatalogSpec:
                     SortKeySpec(column="path", order="ascending"),
                     SortKeySpec(column="bstart", order="ascending"),
                     SortKeySpec(column="import_alias_id", order="ascending"),
+                ),
+                version=SCHEMA_VERSION,
+            ),
+            "rel_def_symbol_v1": make_contract_spec(
+                table_spec=rel_def_symbol_spec.table_spec,
+                virtual=VirtualFieldSpec(fields=("origin",)),
+                dedupe=DedupeSpecSpec(
+                    keys=("def_id", "symbol", "path", "bstart", "bend"),
+                    tie_breakers=(
+                        SortKeySpec(column="score", order="descending"),
+                        SortKeySpec(column="confidence", order="descending"),
+                        SortKeySpec(column="rule_priority", order="ascending"),
+                    ),
+                    strategy="KEEP_FIRST_AFTER_SORT",
+                ),
+                canonical_sort=(
+                    SortKeySpec(column="path", order="ascending"),
+                    SortKeySpec(column="bstart", order="ascending"),
+                    SortKeySpec(column="def_id", order="ascending"),
                 ),
                 version=SCHEMA_VERSION,
             ),
@@ -626,6 +671,7 @@ def relspec_cst_inputs(
     cst_name_refs: TableLike,
     cst_imports_norm: TableLike,
     cst_callsites: TableLike,
+    cst_defs_norm: TableLike,
 ) -> CstRelspecInputs:
     """Bundle CST tables needed for relationship inputs.
 
@@ -638,6 +684,7 @@ def relspec_cst_inputs(
         cst_name_refs=cst_name_refs,
         cst_imports_norm=cst_imports_norm,
         cst_callsites=cst_callsites,
+        cst_defs_norm=cst_defs_norm,
     )
 
 
@@ -695,6 +742,7 @@ def relspec_input_bundles(
 def relspec_incremental_context(
     incremental_state_store: StateStore | None,
     incremental_file_changes: IncrementalFileChanges,
+    incremental_impact: IncrementalImpact,
     incremental_config: IncrementalConfig,
     ctx: ExecutionContext,
 ) -> RelspecIncrementalContext:
@@ -708,6 +756,7 @@ def relspec_incremental_context(
     return RelspecIncrementalContext(
         state_store=incremental_state_store,
         file_changes=incremental_file_changes,
+        impact=incremental_impact,
         config=incremental_config,
         ctx=ctx,
     )
@@ -715,12 +764,12 @@ def relspec_incremental_context(
 
 @tag(layer="relspec", artifact="relspec_incremental_gate", kind="object")
 def relspec_incremental_gate(
-    incremental_extract_updates: Mapping[str, str] | None,
-    incremental_normalize_updates: Mapping[str, str] | None,
+    incremental_dataset_updates: IncrementalDatasetUpdates,
+    incremental_impact_updates: IncrementalImpactUpdates,
 ) -> None:
     """Ensure incremental extract/normalize updates complete before relspec inputs."""
-    _ = incremental_extract_updates
-    _ = incremental_normalize_updates
+    _ = incremental_dataset_updates
+    _ = incremental_impact_updates
 
 
 def _require_table(name: str, value: TableLike | DatasetSource) -> TableLike:
@@ -752,6 +801,7 @@ def relspec_input_datasets(
         "cst_name_refs": relspec_input_bundles.cst_inputs.cst_name_refs,
         "cst_imports": relspec_input_bundles.cst_inputs.cst_imports_norm,
         "cst_callsites": relspec_input_bundles.cst_inputs.cst_callsites,
+        "cst_defs": relspec_input_bundles.cst_inputs.cst_defs_norm,
         "scip_occurrences": relspec_input_bundles.scip_inputs.scip_occurrences_norm,
         "scip_symbol_relationships": _require_table(
             "scip_symbol_relationships",
@@ -776,7 +826,7 @@ def relspec_input_datasets(
         or relspec_incremental_context.state_store is None
     ):
         return datasets
-    file_ids = impacted_file_ids(relspec_incremental_context.file_changes)
+    file_ids = impacted_file_ids(relspec_incremental_context.impact)
     return relspec_inputs_from_state(
         datasets,
         state_root=relspec_incremental_context.state_store.root,
@@ -926,7 +976,7 @@ def relspec_resolver(
             combined.setdefault(name, table)
         resolver = InMemoryPlanResolver(combined, backend=ibis_backend)
     if relspec_incremental_context.config.enabled:
-        file_ids = impacted_file_ids(relspec_incremental_context.file_changes)
+        file_ids = impacted_file_ids(relspec_incremental_context.impact)
         return scoped_relspec_resolver(resolver, file_ids=file_ids)
     return resolver
 
@@ -1135,6 +1185,7 @@ def _add_edge_owner_file_id(
     *,
     repo_id: str | None,
     ctx: ExecutionContext,
+    schema: SchemaLike,
 ) -> TableLike:
     if "edge_owner_file_id" in table.column_names:
         return table
@@ -1142,7 +1193,7 @@ def _add_edge_owner_file_id(
     updated = apply_hash_column(table, spec=spec, required=("path",))
     return align_table(
         updated,
-        schema=relation_output_schema(),
+        schema=schema,
         safe_cast=ctx.safe_cast,
         keep_extra_columns=ctx.provenance,
     )
@@ -1153,6 +1204,7 @@ def _add_edge_owner_file_id(
     {
         "rel_name_symbol": TableLike,
         "rel_import_symbol": TableLike,
+        "rel_def_symbol": TableLike,
         "rel_callsite_symbol": TableLike,
         "rel_callsite_qname": TableLike,
         "relspec_rule_exec_events": pa.Table,
@@ -1225,10 +1277,14 @@ def relationship_tables(
             resolver=resolver,
             options=exec_options,
         )
+        contract_schema = relation_output_schema()
+        if compiled.contract_name is not None:
+            contract_schema = relationship_contracts.get(compiled.contract_name).schema
         updated = _add_edge_owner_file_id(
             res.good,
             repo_id=incremental_config.repo_id,
             ctx=exec_ctx,
+            schema=contract_schema,
         )
         out[key] = updated
         dynamic_outputs[key] = updated
@@ -1241,6 +1297,10 @@ def relationship_tables(
     out.setdefault(
         "rel_import_symbol",
         empty_table(relationship_contracts.get("rel_import_symbol_v1").schema),
+    )
+    out.setdefault(
+        "rel_def_symbol",
+        empty_table(relationship_contracts.get("rel_def_symbol_v1").schema),
     )
     out.setdefault(
         "rel_callsite_symbol",
@@ -1258,6 +1318,7 @@ def relationship_tables(
 def relationship_output_tables(
     rel_name_symbol: TableLike,
     rel_import_symbol: TableLike,
+    rel_def_symbol: TableLike,
     rel_callsite_symbol: TableLike,
     rel_callsite_qname: TableLike,
 ) -> RelationshipOutputTables:
@@ -1271,6 +1332,7 @@ def relationship_output_tables(
     return RelationshipOutputTables(
         rel_name_symbol=rel_name_symbol,
         rel_import_symbol=rel_import_symbol,
+        rel_def_symbol=rel_def_symbol,
         rel_callsite_symbol=rel_callsite_symbol,
         rel_callsite_qname=rel_callsite_qname,
     )

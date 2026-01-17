@@ -73,6 +73,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Node.js memory cap for scip-python.",
     )
     parser.add_argument(
+        "--incremental-impact-strategy",
+        choices=("hybrid", "symbol_closure", "import_closure"),
+        default=None,
+        help="Impact strategy for incremental runs.",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         help="Logging level (DEBUG, INFO, WARNING, ERROR).",
@@ -117,6 +123,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         work_dir=args.work_dir,
         scip_index_config=scip_config,
         adapter_mode=adapter_mode,
+        incremental_impact_strategy=args.incremental_impact_strategy,
     )
     results = execute_pipeline(repo_root=args.repo_root, options=options)
     logger.info("Pipeline complete. Outputs: %s", sorted(results))

@@ -21,7 +21,7 @@ from arrowdsl.schema.schema import empty_table
 from extract.registry_bundles import dataset_name_for_output
 from ibis_engine.plan import IbisPlan
 from incremental.invalidations import validate_schema_identity
-from incremental.types import IncrementalFileChanges
+from incremental.types import IncrementalFileChanges, IncrementalImpact
 from normalize.registry_specs import dataset_name_from_alias
 from relspec.engine import PlanResolver
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
@@ -35,6 +35,7 @@ SCOPED_SITE_DATASETS: frozenset[str] = frozenset(
         "cst_name_refs",
         "cst_imports",
         "cst_callsites",
+        "cst_defs",
         "scip_occurrences",
         "scip_symbol_relationships",
         "callsite_qname_candidates",
@@ -47,19 +48,21 @@ SCOPED_SITE_DATASETS: frozenset[str] = frozenset(
 )
 
 _NORMALIZE_ALIAS_OVERRIDES: Mapping[str, str] = {
+    "cst_defs": "cst_defs_norm",
     "cst_imports": "cst_imports_norm",
     "scip_occurrences": "scip_occurrences_norm",
 }
 _RELATION_OUTPUT_DATASETS: Mapping[str, str] = {
     "rel_name_symbol": "rel_name_symbol_v1",
     "rel_import_symbol": "rel_import_symbol_v1",
+    "rel_def_symbol": "rel_def_symbol_v1",
     "rel_callsite_symbol": "rel_callsite_symbol_v1",
     "rel_callsite_qname": "rel_callsite_qname_v1",
 }
 
 
 def impacted_file_ids(
-    changes: IncrementalFileChanges,
+    impact: IncrementalImpact,
     *,
     extra_file_ids: Sequence[str] = (),
 ) -> tuple[str, ...]:
@@ -70,7 +73,8 @@ def impacted_file_ids(
     tuple[str, ...]
         Sorted impacted file ids.
     """
-    combined = set(changes.changed_file_ids)
+    combined = set(impact.impacted_file_ids)
+    combined.update(impact.changed_file_ids)
     combined.update(extra_file_ids)
     return tuple(sorted(combined))
 

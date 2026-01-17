@@ -334,6 +334,10 @@ class RunBundleContext:
     relspec_scan_telemetry: pa.Table | None = None
     relspec_rule_exec_events: pa.Table | None = None
     incremental_diff: pa.Table | None = None
+    incremental_changed_exports: pa.Table | None = None
+    incremental_impacted_callers: pa.Table | None = None
+    incremental_impacted_importers: pa.Table | None = None
+    incremental_impacted_files: pa.Table | None = None
 
     relspec_input_locations: Mapping[str, DatasetLocation] | None = None
     relspec_input_tables: Mapping[str, TableLike] | None = None
@@ -434,18 +438,28 @@ def _write_incremental_artifacts(
     context: RunBundleContext,
     files_written: list[str],
 ) -> None:
-    if context.incremental_diff is None:
-        return
     incremental_dir = bundle_dir / "incremental"
-    _ensure_dir(incremental_dir)
-    files_written.append(
-        write_obs_dataset(
-            incremental_dir,
-            name="incremental_diff",
-            table=context.incremental_diff,
-            overwrite=context.overwrite,
-        )
+    tables: tuple[tuple[str, pa.Table | None], ...] = (
+        ("incremental_diff", context.incremental_diff),
+        ("inc_changed_exports_v1", context.incremental_changed_exports),
+        ("inc_impacted_callers_v1", context.incremental_impacted_callers),
+        ("inc_impacted_importers_v1", context.incremental_impacted_importers),
+        ("inc_impacted_files_v2", context.incremental_impacted_files),
     )
+    if not any(table is not None for _, table in tables):
+        return
+    _ensure_dir(incremental_dir)
+    for name, table in tables:
+        if table is None:
+            continue
+        files_written.append(
+            write_obs_dataset(
+                incremental_dir,
+                name=name,
+                table=table,
+                overwrite=context.overwrite,
+            )
+        )
 
 
 def _write_runtime_artifacts(

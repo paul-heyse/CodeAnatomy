@@ -7,18 +7,46 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.dataset as ds
 from hamilton.function_modifiers import tag
+from ibis.backends import BaseBackend
 
 from arrowdsl.core.interop import TableLike
-from hamilton_pipeline.pipeline_types import RelationshipOutputTables
+from arrowdsl.schema.build import table_from_arrays
+from arrowdsl.schema.schema import empty_table
+from hamilton_pipeline.pipeline_types import (
+    IncrementalDatasetUpdates,
+    IncrementalImpactUpdates,
+    RelationshipOutputTables,
+    RepoScanConfig,
+)
 from incremental.changes import file_changes_from_diff
+from incremental.deltas import compute_changed_exports
 from incremental.diff import diff_snapshots, write_incremental_diff
 from incremental.edges_update import upsert_cpg_edges
+from incremental.exports import build_exported_defs_index
+from incremental.exports_update import upsert_exported_defs
 from incremental.extract_update import upsert_extract_outputs
+from incremental.impact import (
+    changed_file_impact_table,
+    impacted_callers_from_changed_exports,
+    impacted_importers_from_changed_exports,
+    import_closure_only_from_changed_exports,
+    merge_impacted_files,
+)
+from incremental.impact_update import (
+    write_impacted_callers,
+    write_impacted_files,
+    write_impacted_importers,
+)
+from incremental.imports_resolved import resolve_imports
+from incremental.index_update import upsert_imports_resolved, upsert_module_index
 from incremental.invalidations import InvalidationResult, check_state_store_invalidation
+from incremental.module_index import build_module_index
 from incremental.nodes_update import upsert_cpg_nodes
 from incremental.normalize_update import upsert_normalize_outputs
 from incremental.props_update import upsert_cpg_props
+from incremental.registry_specs import dataset_schema as incremental_dataset_schema
 from incremental.relspec_update import upsert_relationship_outputs
 from incremental.scip_snapshot import (
     build_scip_snapshot,
@@ -30,7 +58,7 @@ from incremental.scip_snapshot import (
 )
 from incremental.snapshot import build_repo_snapshot, read_repo_snapshot, write_repo_snapshot
 from incremental.state_store import StateStore
-from incremental.types import IncrementalConfig, IncrementalFileChanges
+from incremental.types import IncrementalConfig, IncrementalFileChanges, IncrementalImpact
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
 
 
@@ -41,6 +69,26 @@ class CpgDeltaInputs:
     props: TableLike
     nodes: TableLike
     edges: TableLike
+
+
+@dataclass(frozen=True)
+class IncrementalImpactBaseInputs:
+    """Base inputs for impacted file computation."""
+
+    file_changes: IncrementalFileChanges
+    incremental_diff: pa.Table | None
+    repo_snapshot: pa.Table | None
+    scip_changed_file_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class IncrementalImpactClosureInputs:
+    """Closure inputs for impacted file computation."""
+
+    changed_exports: pa.Table | None
+    impacted_callers: pa.Table | None
+    impacted_importers: pa.Table | None
+    state_store: StateStore | None
 
 
 @tag(layer="incremental", kind="object")
@@ -96,6 +144,246 @@ def incremental_repo_snapshot(
     if not incremental_config.enabled:
         return None
     return build_repo_snapshot(repo_files)
+
+
+@tag(layer="incremental", kind="table")
+def incremental_module_index(
+    repo_files_extract: TableLike,
+    repo_scan_config: RepoScanConfig,
+    incremental_config: IncrementalConfig,
+) -> pa.Table | None:
+    """Build the per-file module index when incremental mode is enabled.
+
+    Returns
+    -------
+    pa.Table | None
+        Module index table when incremental mode is enabled.
+    """
+    if not incremental_config.enabled:
+        return None
+    return build_module_index(
+        repo_files_extract,
+        repo_root=Path(repo_scan_config.repo_root),
+    )
+
+
+@tag(layer="incremental", kind="table")
+def incremental_imports_resolved(
+    cst_imports_norm: TableLike,
+    incremental_module_index: pa.Table | None,
+    incremental_config: IncrementalConfig,
+) -> pa.Table | None:
+    """Build the resolved imports table when incremental mode is enabled.
+
+    Returns
+    -------
+    pa.Table | None
+        Resolved imports table when incremental mode is enabled.
+    """
+    if not incremental_config.enabled or incremental_module_index is None:
+        return None
+    return resolve_imports(cst_imports_norm, incremental_module_index)
+
+
+@tag(layer="incremental", kind="table")
+def incremental_exported_defs(
+    cst_defs_norm: TableLike,
+    incremental_state_store: StateStore | None,
+    incremental_config: IncrementalConfig,
+) -> pa.Table | None:
+    """Build the exported definitions index when incremental mode is enabled.
+
+    Returns
+    -------
+    pa.Table | None
+        Exported definitions table when incremental mode is enabled.
+    """
+    if not incremental_config.enabled:
+        return None
+    rel_def_symbol: pa.Table | None = None
+    if incremental_state_store is not None:
+        rel_def_dir = incremental_state_store.dataset_dir("rel_def_symbol_v1")
+        if rel_def_dir.exists():
+            rel_def_symbol = ds.dataset(rel_def_dir, format="parquet").to_table()
+    return build_exported_defs_index(cst_defs_norm, rel_def_symbol=rel_def_symbol)
+
+
+@tag(layer="incremental", kind="table")
+def incremental_changed_exports(
+    incremental_exported_defs: pa.Table | None,
+    incremental_state_store: StateStore | None,
+    incremental_file_changes: IncrementalFileChanges,
+    ibis_backend: BaseBackend,
+    incremental_config: IncrementalConfig,
+) -> pa.Table | None:
+    """Compute export deltas for changed files.
+
+    Returns
+    -------
+    pa.Table | None
+        Export delta table when incremental mode is enabled.
+    """
+    if not incremental_config.enabled:
+        return None
+    if incremental_exported_defs is None or incremental_state_store is None:
+        return None
+    if not incremental_file_changes.changed_file_ids:
+        return None
+    prev_path = incremental_state_store.dataset_dir("dim_exported_defs_v1")
+    prev_exports = str(prev_path) if prev_path.exists() else None
+    return compute_changed_exports(
+        backend=ibis_backend,
+        prev_exports=prev_exports,
+        curr_exports=incremental_exported_defs,
+        changed_files=_changed_files_table(incremental_file_changes.changed_file_ids),
+    )
+
+
+@tag(layer="incremental", kind="table")
+def incremental_impacted_callers(
+    incremental_changed_exports: pa.Table | None,
+    incremental_state_store: StateStore | None,
+    ibis_backend: BaseBackend,
+    incremental_config: IncrementalConfig,
+) -> pa.Table | None:
+    """Compute impacted caller files from prior relationship outputs.
+
+    Returns
+    -------
+    pa.Table | None
+        Impacted caller table when incremental mode is enabled.
+    """
+    if not incremental_config.enabled or incremental_state_store is None:
+        return None
+    if incremental_changed_exports is None:
+        return empty_table(incremental_dataset_schema("inc_impacted_callers_v1"))
+    rel_qname_dir = incremental_state_store.dataset_dir("rel_callsite_qname_v1")
+    rel_symbol_dir = incremental_state_store.dataset_dir("rel_callsite_symbol_v1")
+    prev_qname = str(rel_qname_dir) if rel_qname_dir.exists() else None
+    prev_symbol = str(rel_symbol_dir) if rel_symbol_dir.exists() else None
+    return impacted_callers_from_changed_exports(
+        backend=ibis_backend,
+        changed_exports=incremental_changed_exports,
+        prev_rel_callsite_qname=prev_qname,
+        prev_rel_callsite_symbol=prev_symbol,
+    )
+
+
+@tag(layer="incremental", kind="table")
+def incremental_impacted_importers(
+    incremental_changed_exports: pa.Table | None,
+    incremental_state_store: StateStore | None,
+    ibis_backend: BaseBackend,
+    incremental_config: IncrementalConfig,
+) -> pa.Table | None:
+    """Compute impacted importers from resolved imports.
+
+    Returns
+    -------
+    pa.Table | None
+        Impacted importer table when incremental mode is enabled.
+    """
+    if not incremental_config.enabled or incremental_state_store is None:
+        return None
+    if incremental_changed_exports is None:
+        return empty_table(incremental_dataset_schema("inc_impacted_importers_v1"))
+    imports_dir = incremental_state_store.dataset_dir("py_imports_resolved_v1")
+    prev_imports = str(imports_dir) if imports_dir.exists() else None
+    return impacted_importers_from_changed_exports(
+        backend=ibis_backend,
+        changed_exports=incremental_changed_exports,
+        prev_imports_resolved=prev_imports,
+    )
+
+
+@tag(layer="incremental", kind="object")
+def incremental_impact_base_inputs(
+    incremental_file_changes: IncrementalFileChanges,
+    incremental_diff: pa.Table | None,
+    incremental_repo_snapshot: pa.Table | None,
+    incremental_scip_changed_file_ids: tuple[str, ...],
+) -> IncrementalImpactBaseInputs:
+    """Bundle base inputs for impact computation.
+
+    Returns
+    -------
+    IncrementalImpactBaseInputs
+        Base inputs for impacted file derivation.
+    """
+    return IncrementalImpactBaseInputs(
+        file_changes=incremental_file_changes,
+        incremental_diff=incremental_diff,
+        repo_snapshot=incremental_repo_snapshot,
+        scip_changed_file_ids=incremental_scip_changed_file_ids,
+    )
+
+
+@tag(layer="incremental", kind="object")
+def incremental_impact_closure_inputs(
+    incremental_changed_exports: pa.Table | None,
+    incremental_impacted_callers: pa.Table | None,
+    incremental_impacted_importers: pa.Table | None,
+    incremental_state_store: StateStore | None,
+) -> IncrementalImpactClosureInputs:
+    """Bundle closure inputs for impact computation.
+
+    Returns
+    -------
+    IncrementalImpactClosureInputs
+        Closure inputs for impacted file derivation.
+    """
+    return IncrementalImpactClosureInputs(
+        changed_exports=incremental_changed_exports,
+        impacted_callers=incremental_impacted_callers,
+        impacted_importers=incremental_impacted_importers,
+        state_store=incremental_state_store,
+    )
+
+
+@tag(layer="incremental", kind="table")
+def incremental_impacted_files(
+    incremental_impact_base_inputs: IncrementalImpactBaseInputs,
+    incremental_impact_closure_inputs: IncrementalImpactClosureInputs,
+    ibis_backend: BaseBackend,
+    incremental_config: IncrementalConfig,
+) -> pa.Table | None:
+    """Compute the final impacted file set for incremental runs.
+
+    Returns
+    -------
+    pa.Table | None
+        Impacted file diagnostics table when incremental mode is enabled.
+    """
+    if not incremental_config.enabled:
+        return None
+    changed_table = changed_file_impact_table(
+        file_changes=incremental_impact_base_inputs.file_changes,
+        incremental_diff=incremental_impact_base_inputs.incremental_diff,
+        repo_snapshot=incremental_impact_base_inputs.repo_snapshot,
+        scip_changed_file_ids=incremental_impact_base_inputs.scip_changed_file_ids,
+    )
+    import_closure_only: pa.Table | None = None
+    if (
+        incremental_impact_closure_inputs.state_store is not None
+        and incremental_impact_closure_inputs.changed_exports is not None
+        and incremental_config.impact_strategy in {"import_closure", "hybrid"}
+    ):
+        imports_dir = incremental_impact_closure_inputs.state_store.dataset_dir(
+            "py_imports_resolved_v1"
+        )
+        prev_imports = str(imports_dir) if imports_dir.exists() else None
+        import_closure_only = import_closure_only_from_changed_exports(
+            backend=ibis_backend,
+            changed_exports=incremental_impact_closure_inputs.changed_exports,
+            prev_imports_resolved=prev_imports,
+        )
+    return merge_impacted_files(
+        changed_table,
+        incremental_impact_closure_inputs.impacted_callers,
+        incremental_impact_closure_inputs.impacted_importers,
+        import_closure_only,
+        strategy=incremental_config.impact_strategy,
+    )
 
 
 @tag(layer="incremental", kind="table")
@@ -214,6 +502,285 @@ def incremental_file_changes(
         changed_file_ids=tuple(combined),
         deleted_file_ids=changes.deleted_file_ids,
         full_refresh=changes.full_refresh,
+    )
+
+
+def _changed_files_table(
+    changed_file_ids: tuple[str, ...],
+) -> pa.Table:
+    schema = pa.schema([("file_id", pa.string())])
+    if not changed_file_ids:
+        return table_from_arrays(schema, columns={}, num_rows=0)
+    return table_from_arrays(
+        schema,
+        columns={"file_id": pa.array(list(changed_file_ids), type=pa.string())},
+        num_rows=len(changed_file_ids),
+    )
+
+
+def _table_file_ids(table: pa.Table) -> tuple[str, ...]:
+    if "file_id" not in table.column_names:
+        return ()
+    values = table["file_id"]
+    if isinstance(values, pa.ChunkedArray):
+        values = values.combine_chunks()
+    cleaned = [value for value in values.to_pylist() if isinstance(value, str) and value]
+    return tuple(sorted(set(cleaned)))
+
+
+@tag(layer="incremental", kind="object")
+def incremental_module_index_updates(
+    incremental_module_index: pa.Table | None,
+    incremental_state_store: StateStore | None,
+    incremental_file_changes: IncrementalFileChanges,
+    incremental_config: IncrementalConfig,
+) -> Mapping[str, str] | None:
+    """Upsert module index outputs into the incremental state store.
+
+    Returns
+    -------
+    Mapping[str, str] | None
+        Updated dataset paths, or None when incremental is disabled.
+    """
+    if not incremental_config.enabled or incremental_state_store is None:
+        return None
+    if not (
+        incremental_file_changes.changed_file_ids
+        or incremental_file_changes.deleted_file_ids
+    ):
+        return {}
+    if incremental_module_index is None:
+        return {}
+    return upsert_module_index(
+        incremental_module_index,
+        state_store=incremental_state_store,
+        changes=incremental_file_changes,
+    )
+
+
+@tag(layer="incremental", kind="object")
+def incremental_imports_resolved_updates(
+    incremental_imports_resolved: pa.Table | None,
+    incremental_state_store: StateStore | None,
+    incremental_file_changes: IncrementalFileChanges,
+    incremental_config: IncrementalConfig,
+    incremental_module_index_updates: Mapping[str, str] | None,
+) -> Mapping[str, str] | None:
+    """Upsert resolved imports outputs into the incremental state store.
+
+    Returns
+    -------
+    Mapping[str, str] | None
+        Updated dataset paths, or None when incremental is disabled.
+    """
+    _ = incremental_module_index_updates
+    if not incremental_config.enabled or incremental_state_store is None:
+        return None
+    if not (
+        incremental_file_changes.changed_file_ids
+        or incremental_file_changes.deleted_file_ids
+    ):
+        return {}
+    if incremental_imports_resolved is None:
+        return {}
+    return upsert_imports_resolved(
+        incremental_imports_resolved,
+        state_store=incremental_state_store,
+        changes=incremental_file_changes,
+    )
+
+
+@tag(layer="incremental", kind="object")
+def incremental_exported_defs_updates(
+    incremental_exported_defs: pa.Table | None,
+    incremental_changed_exports: pa.Table | None,
+    incremental_state_store: StateStore | None,
+    incremental_file_changes: IncrementalFileChanges,
+    incremental_config: IncrementalConfig,
+) -> Mapping[str, str] | None:
+    """Upsert exported definitions into the incremental state store.
+
+    Returns
+    -------
+    Mapping[str, str] | None
+        Updated dataset paths, or None when incremental is disabled.
+    """
+    _ = incremental_changed_exports
+    if not incremental_config.enabled or incremental_state_store is None:
+        return None
+    if not (
+        incremental_file_changes.changed_file_ids
+        or incremental_file_changes.deleted_file_ids
+    ):
+        return {}
+    if incremental_exported_defs is None:
+        return {}
+    return upsert_exported_defs(
+        incremental_exported_defs,
+        state_store=incremental_state_store,
+        changes=incremental_file_changes,
+    )
+
+
+@tag(layer="incremental", kind="object")
+def incremental_dataset_updates(
+    incremental_extract_updates: Mapping[str, str] | None,
+    incremental_normalize_updates: Mapping[str, str] | None,
+    incremental_module_index_updates: Mapping[str, str] | None,
+    incremental_imports_resolved_updates: Mapping[str, str] | None,
+    incremental_exported_defs_updates: Mapping[str, str] | None,
+) -> IncrementalDatasetUpdates:
+    """Bundle dataset update paths for incremental gating.
+
+    Returns
+    -------
+    IncrementalDatasetUpdates
+        Dataset update paths grouped for gating.
+    """
+    return IncrementalDatasetUpdates(
+        extract_updates=incremental_extract_updates,
+        normalize_updates=incremental_normalize_updates,
+        module_index_updates=incremental_module_index_updates,
+        imports_resolved_updates=incremental_imports_resolved_updates,
+        exported_defs_updates=incremental_exported_defs_updates,
+    )
+
+
+@tag(layer="incremental", kind="object")
+def incremental_impacted_callers_updates(
+    incremental_impacted_callers: pa.Table | None,
+    incremental_state_store: StateStore | None,
+    incremental_config: IncrementalConfig,
+) -> Mapping[str, str] | None:
+    """Persist impacted caller diagnostics to the state store.
+
+    Returns
+    -------
+    Mapping[str, str] | None
+        Updated dataset paths, or None when incremental is disabled.
+    """
+    if not incremental_config.enabled or incremental_state_store is None:
+        return None
+    if incremental_impacted_callers is None:
+        return {}
+    return write_impacted_callers(
+        incremental_impacted_callers,
+        state_store=incremental_state_store,
+    )
+
+
+@tag(layer="incremental", kind="object")
+def incremental_impacted_importers_updates(
+    incremental_impacted_importers: pa.Table | None,
+    incremental_state_store: StateStore | None,
+    incremental_config: IncrementalConfig,
+) -> Mapping[str, str] | None:
+    """Persist impacted importer diagnostics to the state store.
+
+    Returns
+    -------
+    Mapping[str, str] | None
+        Updated dataset paths, or None when incremental is disabled.
+    """
+    if not incremental_config.enabled or incremental_state_store is None:
+        return None
+    if incremental_impacted_importers is None:
+        return {}
+    return write_impacted_importers(
+        incremental_impacted_importers,
+        state_store=incremental_state_store,
+    )
+
+
+@tag(layer="incremental", kind="object")
+def incremental_impacted_files_updates(
+    incremental_impacted_files: pa.Table | None,
+    incremental_state_store: StateStore | None,
+    incremental_config: IncrementalConfig,
+) -> Mapping[str, str] | None:
+    """Persist impacted file diagnostics to the state store.
+
+    Returns
+    -------
+    Mapping[str, str] | None
+        Updated dataset paths, or None when incremental is disabled.
+    """
+    if not incremental_config.enabled or incremental_state_store is None:
+        return None
+    if incremental_impacted_files is None:
+        return {}
+    return write_impacted_files(
+        incremental_impacted_files,
+        state_store=incremental_state_store,
+    )
+
+
+@tag(layer="incremental", kind="object")
+def incremental_impact_updates(
+    incremental_impacted_callers_updates: Mapping[str, str] | None,
+    incremental_impacted_importers_updates: Mapping[str, str] | None,
+    incremental_impacted_files_updates: Mapping[str, str] | None,
+) -> IncrementalImpactUpdates:
+    """Bundle impact update paths for incremental gating.
+
+    Returns
+    -------
+    IncrementalImpactUpdates
+        Impact update paths grouped for gating.
+    """
+    return IncrementalImpactUpdates(
+        impacted_callers_updates=incremental_impacted_callers_updates,
+        impacted_importers_updates=incremental_impacted_importers_updates,
+        impacted_files_updates=incremental_impacted_files_updates,
+    )
+
+
+@tag(layer="incremental", kind="object")
+def incremental_impact(
+    incremental_file_changes: IncrementalFileChanges,
+    incremental_impacted_files: pa.Table | None,
+    incremental_config: IncrementalConfig,
+) -> IncrementalImpact:
+    """Return the current incremental impact scope.
+
+    Returns
+    -------
+    IncrementalImpact
+        Impact scope derived from incremental diffs.
+    """
+    if not incremental_config.enabled:
+        return IncrementalImpact()
+    impacted = tuple(sorted(set(incremental_file_changes.changed_file_ids)))
+    if incremental_impacted_files is not None:
+        impacted = _table_file_ids(incremental_impacted_files)
+    return IncrementalImpact(
+        changed_file_ids=incremental_file_changes.changed_file_ids,
+        deleted_file_ids=incremental_file_changes.deleted_file_ids,
+        impacted_file_ids=impacted,
+        full_refresh=incremental_file_changes.full_refresh,
+    )
+
+
+@tag(layer="incremental", kind="object")
+def incremental_extract_impact(
+    incremental_file_changes: IncrementalFileChanges,
+    incremental_config: IncrementalConfig,
+) -> IncrementalImpact:
+    """Return impact scope for extraction inputs.
+
+    Returns
+    -------
+    IncrementalImpact
+        Impact scope derived from repo diffs for extraction.
+    """
+    if not incremental_config.enabled:
+        return IncrementalImpact()
+    impacted = tuple(sorted(set(incremental_file_changes.changed_file_ids)))
+    return IncrementalImpact(
+        changed_file_ids=incremental_file_changes.changed_file_ids,
+        deleted_file_ids=incremental_file_changes.deleted_file_ids,
+        impacted_file_ids=impacted,
+        full_refresh=incremental_file_changes.full_refresh,
     )
 
 
@@ -408,14 +975,23 @@ def incremental_cpg_props_updates(
 
 
 __all__ = [
+    "incremental_changed_exports",
     "incremental_cpg_delta_inputs",
     "incremental_cpg_edges_updates",
     "incremental_cpg_nodes_updates",
     "incremental_cpg_props_updates",
     "incremental_diff",
+    "incremental_exported_defs",
+    "incremental_exported_defs_updates",
+    "incremental_extract_impact",
     "incremental_extract_updates",
     "incremental_file_changes",
+    "incremental_impact",
+    "incremental_imports_resolved",
+    "incremental_imports_resolved_updates",
     "incremental_invalidation",
+    "incremental_module_index",
+    "incremental_module_index_updates",
     "incremental_normalize_updates",
     "incremental_relationship_updates",
     "incremental_repo_snapshot",

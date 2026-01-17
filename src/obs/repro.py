@@ -333,6 +333,7 @@ class RunBundleContext:
     datafusion_explains: pa.Table | None = None
     relspec_scan_telemetry: pa.Table | None = None
     relspec_rule_exec_events: pa.Table | None = None
+    incremental_diff: pa.Table | None = None
 
     relspec_input_locations: Mapping[str, DatasetLocation] | None = None
     relspec_input_tables: Mapping[str, TableLike] | None = None
@@ -426,6 +427,25 @@ def _write_relspec_snapshots(
     _write_runtime_artifacts(relspec_dir, context, files_written)
     if context.rule_diagnostics is not None:
         _write_substrait_artifacts(relspec_dir, context.rule_diagnostics, files_written)
+
+
+def _write_incremental_artifacts(
+    bundle_dir: Path,
+    context: RunBundleContext,
+    files_written: list[str],
+) -> None:
+    if context.incremental_diff is None:
+        return
+    incremental_dir = bundle_dir / "incremental"
+    _ensure_dir(incremental_dir)
+    files_written.append(
+        write_obs_dataset(
+            incremental_dir,
+            name="incremental_diff",
+            table=context.incremental_diff,
+            overwrite=context.overwrite,
+        )
+    )
 
 
 def _write_runtime_artifacts(
@@ -765,6 +785,7 @@ def write_run_bundle(
         relspec/compiled_outputs.json
         relspec/scan_telemetry/
         relspec/rule_exec_events/
+        incremental/incremental_diff/
         relspec/substrait/*.substrait
         relspec/substrait_index.json
         schemas/*.schema.json
@@ -796,6 +817,7 @@ def write_run_bundle(
     _write_manifest_files(bundle_dir, context, bundle_name=bundle_name, files_written=files_written)
     _write_dataset_locations(bundle_dir, context, files_written)
     _write_relspec_snapshots(bundle_dir, context, files_written)
+    _write_incremental_artifacts(bundle_dir, context, files_written)
     _write_schema_snapshots(bundle_dir, context, files_written)
     _write_param_tables(bundle_dir, context, files_written)
 

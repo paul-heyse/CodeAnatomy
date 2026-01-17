@@ -22,6 +22,7 @@ RELATION_OUTPUT_SCHEMA = pa.schema(
         pa.field("src", pa.string(), nullable=True),
         pa.field("dst", pa.string(), nullable=True),
         pa.field("path", pa.string(), nullable=True),
+        pa.field("edge_owner_file_id", pa.string(), nullable=True),
         pa.field("bstart", pa.int64(), nullable=True),
         pa.field("bend", pa.int64(), nullable=True),
         pa.field("origin", pa.string(), nullable=True),

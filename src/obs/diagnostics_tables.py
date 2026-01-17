@@ -49,9 +49,7 @@ def datafusion_fallbacks_table(events: Sequence[Mapping[str, object]]) -> pa.Tab
     now = _now_ms()
     rows = [
         {
-            "event_time_unix_ms": _coerce_event_time(
-                event.get("event_time_unix_ms"), default=now
-            ),
+            "event_time_unix_ms": _coerce_event_time(event.get("event_time_unix_ms"), default=now),
             "reason": str(event.get("reason") or ""),
             "error": str(event.get("error") or ""),
             "expression_type": str(event.get("expression_type") or ""),

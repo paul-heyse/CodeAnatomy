@@ -12,6 +12,7 @@ from ibis.expr.types import Table as IbisTable
 
 from arrowdsl.compute.ids import HashSpec, hash_projection
 from arrowdsl.compute.macros import CoalesceExpr, ColumnOrNullExpr
+from arrowdsl.compute.predicates import InSet
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, OrderingLevel
 from arrowdsl.core.interop import (
     ComputeExpression,
@@ -131,6 +132,46 @@ def query_for_schema(schema: SchemaLike) -> QuerySpec:
         QuerySpec with base columns set to the schema names.
     """
     return QuerySpec.simple(*schema.names)
+
+
+def dataset_query_for_file_ids(
+    file_ids: Sequence[str],
+    *,
+    schema: SchemaLike | None = None,
+    columns: Sequence[str] | None = None,
+) -> QuerySpec:
+    """Return a QuerySpec filtering to the provided file ids.
+
+    Parameters
+    ----------
+    file_ids:
+        File ids to include.
+    schema:
+        Optional schema used to build the projection.
+    columns:
+        Optional explicit projection columns.
+
+    Returns
+    -------
+    QuerySpec
+        QuerySpec with file_id predicates for plan and pushdown lanes.
+
+    Raises
+    ------
+    ValueError
+        Raised when neither columns nor schema are provided.
+    """
+    if columns is None:
+        if schema is None:
+            msg = "dataset_query_for_file_ids requires columns or schema."
+            raise ValueError(msg)
+        columns = list(schema.names)
+    predicate = InSet("file_id", tuple(file_ids))
+    return QuerySpec.simple(
+        *columns,
+        predicate=predicate,
+        pushdown_predicate=predicate,
+    )
 
 
 def column_or_null_expr(
@@ -735,6 +776,7 @@ __all__ = [
     "coalesce_expr",
     "code_unit_meta_join",
     "column_or_null_expr",
+    "dataset_query_for_file_ids",
     "empty_plan",
     "encode_plan",
     "encode_table",

@@ -6,6 +6,7 @@ import importlib
 import os
 from collections.abc import Mapping
 from dataclasses import replace
+from pathlib import Path
 from typing import Literal
 
 from hamilton.function_modifiers import tag
@@ -28,10 +29,13 @@ from hamilton_pipeline.pipeline_types import (
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from ibis_engine.execution import IbisAdapterExecution
+from incremental.types import IncrementalConfig
 from relspec.pipeline_policy import PipelinePolicy
 
 
-def _incremental_pipeline_enabled() -> bool:
+def _incremental_pipeline_enabled(config: IncrementalConfig | None = None) -> bool:
+    if config is not None:
+        return bool(config.enabled)
     mode = os.environ.get("CODEANATOMY_PIPELINE_MODE", "").strip().lower()
     return mode in {"incremental", "streaming"}
 
@@ -95,7 +99,7 @@ def ibis_execution(
 
 
 @tag(layer="inputs", kind="runtime")
-def streaming_table_provider() -> object | None:
+def streaming_table_provider(incremental_config: IncrementalConfig) -> object | None:
     """Return an optional streaming table provider (placeholder).
 
     This hook is reserved for Rust-backed StreamingTable providers. It is
@@ -106,7 +110,7 @@ def streaming_table_provider() -> object | None:
     object | None
         Provider instance or None when disabled.
     """
-    if not _incremental_pipeline_enabled():
+    if not _incremental_pipeline_enabled(incremental_config):
         return None
     flag = os.environ.get("CODEANATOMY_ENABLE_STREAMING_TABLES", "").strip().lower()
     if flag not in {"1", "true", "yes", "y"}:
@@ -504,6 +508,37 @@ def output_config(
         output_dir=output_dir,
         overwrite_intermediate_datasets=overwrite_intermediate_datasets,
         materialize_param_tables=materialize_param_tables,
+    )
+
+
+@tag(layer="inputs", kind="object")
+def incremental_config(
+    repo_root: str,
+    *,
+    incremental_enabled: bool = False,
+    incremental_state_dir: str | None = None,
+    incremental_repo_id: str | None = None,
+) -> IncrementalConfig:
+    """Bundle incremental configuration values.
+
+    Returns
+    -------
+    IncrementalConfig
+        Incremental configuration bundle.
+    """
+    enabled = bool(incremental_enabled) or _incremental_pipeline_enabled()
+    state_dir = incremental_state_dir or os.environ.get("CODEANATOMY_STATE_DIR")
+    repo_id = incremental_repo_id or os.environ.get("CODEANATOMY_REPO_ID")
+    resolved_state_dir: Path | None = None
+    if enabled:
+        if state_dir:
+            resolved_state_dir = Path(repo_root) / Path(state_dir)
+        else:
+            resolved_state_dir = Path(repo_root) / "build" / "state"
+    return IncrementalConfig(
+        enabled=enabled,
+        state_dir=resolved_state_dir,
+        repo_id=repo_id,
     )
 
 

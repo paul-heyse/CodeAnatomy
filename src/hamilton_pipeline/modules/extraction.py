@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.interop import TableLike, pc
 from arrowdsl.schema.schema import empty_table
 from extract.ast_extract import extract_ast_tables
 from extract.bytecode_extract import (
@@ -55,6 +56,7 @@ from hamilton_pipeline.pipeline_types import (
     ScipIndexConfig,
     ScipIndexInputs,
 )
+from incremental.types import IncrementalConfig, IncrementalFileChanges
 from relspec.rules.compiler import RuleCompiler
 from relspec.rules.handlers.extract import ExtractRuleCompilation, ExtractRuleHandler
 from relspec.rules.registry import RuleRegistry
@@ -174,10 +176,41 @@ def repo_files(
     return scan_repo(repo_root=repo_scan_config.repo_root, options=options, ctx=ctx)
 
 
+def _filter_repo_files_by_ids(
+    repo_files: TableLike,
+    file_ids: Sequence[str],
+) -> TableLike:
+    table = cast("pa.Table", repo_files)
+    if not file_ids:
+        return empty_table(table.schema)
+    value_set = pa.array(list(file_ids), type=pa.string())
+    mask = pc.is_in(table["file_id"], value_set=value_set)
+    return table.filter(mask)
+
+
+@cache(format="parquet")
+@tag(layer="extract", artifact="repo_files_extract", kind="table")
+def repo_files_extract(
+    repo_files: TableLike,
+    incremental_config: IncrementalConfig,
+    incremental_file_changes: IncrementalFileChanges,
+) -> TableLike:
+    """Return repo files scoped to changed file ids for extraction.
+
+    Returns
+    -------
+    TableLike
+        Repo files filtered to changed file ids when incremental is enabled.
+    """
+    if not incremental_config.enabled:
+        return repo_files
+    return _filter_repo_files_by_ids(repo_files, incremental_file_changes.changed_file_ids)
+
+
 @cache(format="parquet")
 @tag(layer="extract", artifact="file_line_index", kind="table")
 def file_line_index(
-    repo_files: TableLike,
+    repo_files_extract: TableLike,
     ctx: ExecutionContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
@@ -191,13 +224,13 @@ def file_line_index(
     _ = ctx
     if evidence_plan is not None and not evidence_plan.requires_dataset("file_line_index"):
         return empty_table(dataset_schema("file_line_index_v1"))
-    return build_line_index_table(repo_files, ctx=ctx)
+    return build_line_index_table(repo_files_extract, ctx=ctx)
 
 
 @cache()
 @tag(layer="extract", artifact="file_contexts", kind="object")
 def file_contexts(
-    repo_files: TableLike,
+    repo_files_extract: TableLike,
     cache_salt: str,
     ctx: ExecutionContext,
 ) -> Sequence[FileContext]:
@@ -210,7 +243,7 @@ def file_contexts(
     """
     _ = ctx
     _ = cache_salt
-    return tuple(iter_file_contexts(repo_files))
+    return tuple(iter_file_contexts(repo_files_extract))
 
 
 def _empty_registry_table(name: str) -> TableLike:
@@ -343,7 +376,7 @@ def extract_rule_compilations(
 @tag(layer="extract", artifact="cst_bundle", kind="bundle")
 def cst_bundle(
     repo_root: str,
-    repo_files: TableLike,
+    repo_files_extract: TableLike,
     file_contexts: Sequence[FileContext],
     extract_execution_context: ExtractExecutionContext,
 ) -> dict[str, TableLike]:
@@ -374,7 +407,7 @@ def cst_bundle(
         overrides={"repo_root": Path(repo_root)},
     )
     tables = extract_cst_tables(
-        repo_files=repo_files,
+        repo_files=repo_files_extract,
         options=options,
         file_contexts=file_contexts,
         evidence_plan=evidence_plan,
@@ -393,7 +426,7 @@ def cst_bundle(
 @tag(layer="extract", artifact="ast_bundle", kind="bundle")
 def ast_bundle(
     repo_root: str,
-    repo_files: TableLike,
+    repo_files_extract: TableLike,
     file_contexts: Sequence[FileContext],
     extract_execution_context: ExtractExecutionContext,
 ) -> dict[str, TableLike]:
@@ -411,7 +444,7 @@ def ast_bundle(
         empty["ast_defs"] = empty_table(dataset_schema("py_ast_nodes_v1"))
         return empty
     tables = extract_ast_tables(
-        repo_files=repo_files,
+        repo_files=repo_files_extract,
         file_contexts=file_contexts,
         evidence_plan=evidence_plan,
         ctx=extract_execution_context.ctx,
@@ -538,7 +571,7 @@ def scip_index_path(
 @tag(layer="extract", artifact="symtables", kind="table")
 def symtables(
     repo_root: str,
-    repo_files: TableLike,
+    repo_files_extract: TableLike,
     file_contexts: Sequence[FileContext],
     evidence_plan: EvidencePlan | None,
     ctx: ExecutionContext,
@@ -559,7 +592,7 @@ def symtables(
         factory=SymtableExtractOptions,
     )
     return extract_symtables_table(
-        repo_files=repo_files,
+        repo_files=repo_files_extract,
         file_contexts=file_contexts,
         options=options,
         evidence_plan=evidence_plan,
@@ -571,7 +604,7 @@ def symtables(
 @tag(layer="extract", artifact="bytecode", kind="table")
 def bytecode(
     repo_root: str,
-    repo_files: TableLike,
+    repo_files_extract: TableLike,
     file_contexts: Sequence[FileContext],
     evidence_plan: EvidencePlan | None,
     ctx: ExecutionContext,
@@ -587,7 +620,7 @@ def bytecode(
     if not template_outputs(evidence_plan, "bytecode"):
         return empty_table(dataset_schema("py_bc_instructions_v1"))
     return extract_bytecode_table(
-        repo_files=repo_files,
+        repo_files=repo_files_extract,
         file_contexts=file_contexts,
         options=_options_for_template(
             "bytecode",
@@ -604,7 +637,7 @@ def bytecode(
 @tag(layer="extract", artifact="bytecode_bundle", kind="bundle")
 def bytecode_bundle(
     repo_root: str,
-    repo_files: TableLike,
+    repo_files_extract: TableLike,
     file_contexts: Sequence[FileContext],
     extract_execution_context: ExtractExecutionContext,
 ) -> dict[str, TableLike]:
@@ -625,7 +658,7 @@ def bytecode_bundle(
         factory=BytecodeExtractOptions,
     )
     result = extract_bytecode(
-        repo_files,
+        repo_files_extract,
         options=options,
         context=ExtractRunContext(
             file_contexts=file_contexts,
@@ -655,7 +688,7 @@ def bytecode_bundle(
 def tree_sitter_bundle(
     *,
     enable_tree_sitter: bool,
-    repo_files: TableLike,
+    repo_files_extract: TableLike,
     file_contexts: Sequence[FileContext],
     extract_execution_context: ExtractExecutionContext,
 ) -> dict[str, TableLike]:
@@ -670,7 +703,7 @@ def tree_sitter_bundle(
     if not enable_tree_sitter or not template_outputs(evidence_plan, "tree_sitter"):
         return _empty_bundle(TREE_SITTER_BUNDLE_OUTPUTS)
     tables = extract_ts_tables(
-        repo_files=repo_files,
+        repo_files=repo_files_extract,
         file_contexts=file_contexts,
         options=_options_for_template(
             "tree_sitter",
@@ -740,7 +773,7 @@ def runtime_inspect_bundle(
 @cache()
 @tag(layer="extract", artifact="extract_bundle_group_a", kind="object")
 def extract_bundle_group_a(
-    repo_files: TableLike,
+    repo_files_extract: TableLike,
     file_line_index: TableLike,
     ast_bundle: Mapping[str, TableLike],
     cst_bundle: Mapping[str, TableLike],
@@ -753,7 +786,7 @@ def extract_bundle_group_a(
     Mapping[str, TableLike]
         Merged bundle tables.
     """
-    repo_bundle = {"repo_files": repo_files, "file_line_index": file_line_index}
+    repo_bundle = {"repo_files": repo_files_extract, "file_line_index": file_line_index}
     return _merge_bundles((repo_bundle, ast_bundle, cst_bundle, scip_bundle))
 
 
@@ -772,6 +805,22 @@ def extract_bundle_group_b(
         Merged bundle tables.
     """
     return _merge_bundles((bytecode_bundle, tree_sitter_bundle, runtime_inspect_bundle))
+
+
+@cache()
+@tag(layer="extract", artifact="extract_bundle_tables", kind="object")
+def extract_bundle_tables(
+    extract_bundle_group_a: Mapping[str, TableLike],
+    extract_bundle_group_b: Mapping[str, TableLike],
+) -> Mapping[str, TableLike]:
+    """Return a merged mapping of all extract output tables.
+
+    Returns
+    -------
+    Mapping[str, TableLike]
+        Merged extract output tables.
+    """
+    return _merge_bundles((extract_bundle_group_a, extract_bundle_group_b))
 
 
 @cache()

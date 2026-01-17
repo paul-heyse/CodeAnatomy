@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
@@ -95,6 +96,14 @@ def _rm_tree(path: Path) -> None:
     """
     if path.exists():
         shutil.rmtree(path)
+
+
+def _delete_partition_dir(base_dir: Path, partition: Mapping[str, str]) -> None:
+    parts = [f"{key}={value}" for key, value in partition.items()]
+    if not parts:
+        return
+    target = base_dir.joinpath(*parts)
+    _rm_tree(target)
 
 
 def write_table_parquet(
@@ -322,6 +331,79 @@ def write_dataset_parquet(
     return str(base_path)
 
 
+def upsert_dataset_partitions_parquet(
+    table: TableLike,
+    *,
+    base_dir: PathLike,
+    partition_cols: Sequence[str],
+    delete_partitions: Sequence[Mapping[str, str]] = (),
+    config: DatasetWriteConfig | None = None,
+) -> str:
+    """Upsert a partitioned Parquet dataset by deleting matching partitions.
+
+    Parameters
+    ----------
+    table:
+        Table to write.
+    base_dir:
+        Root dataset directory.
+    partition_cols:
+        Columns used for hive-style partitioning.
+    delete_partitions:
+        Explicit partitions to delete (e.g., removed file_ids).
+    config:
+        Optional dataset write configuration overrides.
+
+    Returns
+    -------
+    str
+        Dataset directory path.
+    """
+    config = config or DatasetWriteConfig()
+    options = config.opts or ParquetWriteOptions()
+    metadata_config = config.metadata or ParquetMetadataConfig()
+    base_path = ensure_path(base_dir)
+    _ensure_dir(base_path)
+    for partition in delete_partitions:
+        _delete_partition_dir(base_path, partition)
+
+    data = _apply_schema_and_encoding(
+        table,
+        schema=config.schema,
+        encoding_policy=config.encoding_policy,
+    )
+    partitioning = ds.partitioning(
+        pa.schema([pa.field(name, data.schema.field(name).type) for name in partition_cols]),
+        flavor="hive",
+    )
+    ds.write_dataset(
+        data=data,
+        base_dir=str(base_path),
+        format="parquet",
+        partitioning=partitioning,
+        basename_template=config.basename_template,
+        max_rows_per_file=options.max_rows_per_file,
+        max_rows_per_group=options.max_rows_per_file,
+        existing_data_behavior="delete_matching",
+        file_options=ds.ParquetFileFormat().make_write_options(
+            compression=options.compression,
+            use_dictionary=options.use_dictionary,
+            write_statistics=options.write_statistics,
+            data_page_size=options.data_page_size,
+        ),
+    )
+    if metadata_config.write_common_metadata or metadata_config.write_metadata:
+        dataset = ds.dataset(str(base_path), format="parquet", partitioning=partitioning)
+        metadata_spec = parquet_metadata_factory(dataset)
+        write_parquet_metadata_sidecars(
+            base_path,
+            schema=metadata_spec.schema,
+            metadata=metadata_spec.file_metadata if metadata_config.write_metadata else None,
+            config=metadata_config,
+        )
+    return str(base_path)
+
+
 def read_table_parquet(path: PathLike) -> TableLike:
     """Read a single Parquet file into a table.
 
@@ -382,6 +464,7 @@ __all__ = [
     "ParquetMetadataConfig",
     "ParquetWriteOptions",
     "read_table_parquet",
+    "upsert_dataset_partitions_parquet",
     "write_dataset_parquet",
     "write_finalize_result_parquet",
     "write_named_datasets_parquet",

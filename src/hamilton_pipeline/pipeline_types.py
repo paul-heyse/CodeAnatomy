@@ -45,6 +45,15 @@ class OutputConfig:
 
 
 @dataclass(frozen=True)
+class IncrementalRunConfig:
+    """Incremental run configuration snapshot for manifests."""
+
+    enabled: bool
+    state_dir: str | None
+    repo_id: str | None
+
+
+@dataclass(frozen=True)
 class TreeSitterConfig:
     """Configuration for tree-sitter extraction."""
 

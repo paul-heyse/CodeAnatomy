@@ -7,6 +7,7 @@ from types import ModuleType
 from hamilton_pipeline.modules import (
     cpg_build,
     extraction,
+    incremental,
     inputs,
     normalization,
     outputs,
@@ -19,6 +20,7 @@ ALL_MODULES: list[ModuleType] = [
     extraction,
     normalization,
     cpg_build,
+    incremental,
     outputs,
 ]
 
@@ -26,6 +28,7 @@ __all__ = [
     "ALL_MODULES",
     "cpg_build",
     "extraction",
+    "incremental",
     "inputs",
     "normalization",
     "outputs",

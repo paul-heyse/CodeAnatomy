@@ -39,11 +39,13 @@ def _dict_spec(name: str, *, nullable: bool = True) -> ArrowFieldSpec:
 _FIELD_CATALOG: dict[str, ArrowFieldSpec] = {
     "node_id": _spec("node_id", pa.string(), nullable=False),
     "node_kind": _dict_spec("node_kind", nullable=False),
+    "file_id": _spec("file_id", pa.string(), nullable=False),
     "edge_id": _spec("edge_id", pa.string(), nullable=False),
     "edge_kind": _dict_spec("edge_kind", nullable=False),
     "src_node_id": _spec("src_node_id", pa.string(), nullable=False),
     "dst_node_id": _spec("dst_node_id", pa.string(), nullable=False),
     "path": _spec("path", pa.string()),
+    "edge_owner_file_id": _spec("edge_owner_file_id", pa.string()),
     "origin": _dict_spec("origin"),
     "resolution_method": _dict_spec("resolution_method"),
     "confidence": _spec("confidence", pa.float32()),

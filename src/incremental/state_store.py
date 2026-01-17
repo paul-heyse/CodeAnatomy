@@ -1,0 +1,132 @@
+"""Persistent state store paths for incremental runs."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class StateStore:
+    """Filesystem layout for incremental datasets and snapshots."""
+
+    root: Path
+
+    def ensure_dirs(self) -> None:
+        """Ensure the state store directories exist."""
+        self.snapshots_dir().mkdir(parents=True, exist_ok=True)
+        self.datasets_dir().mkdir(parents=True, exist_ok=True)
+        self.metadata_dir().mkdir(parents=True, exist_ok=True)
+
+    def snapshots_dir(self) -> Path:
+        """Return the snapshots directory.
+
+        Returns
+        -------
+        Path
+            Snapshots directory path.
+        """
+        return self.root / "snapshots"
+
+    def datasets_dir(self) -> Path:
+        """Return the datasets directory.
+
+        Returns
+        -------
+        Path
+            Datasets directory path.
+        """
+        return self.root / "datasets"
+
+    def latest_snapshot_dir(self) -> Path:
+        """Return the directory for the latest snapshot.
+
+        Returns
+        -------
+        Path
+            Latest snapshot directory path.
+        """
+        return self.snapshots_dir() / "latest"
+
+    def repo_snapshot_path(self) -> Path:
+        """Return the path to the current repo snapshot parquet file.
+
+        Returns
+        -------
+        Path
+            Repo snapshot parquet path.
+        """
+        return self.latest_snapshot_dir() / "repo_snapshot.parquet"
+
+    def incremental_diff_path(self) -> Path:
+        """Return the path to the incremental diff parquet file.
+
+        Returns
+        -------
+        Path
+            Incremental diff parquet path.
+        """
+        return self.latest_snapshot_dir() / "incremental_diff.parquet"
+
+    def scip_snapshot_path(self) -> Path:
+        """Return the path to the SCIP snapshot parquet file.
+
+        Returns
+        -------
+        Path
+            SCIP snapshot parquet path.
+        """
+        return self.latest_snapshot_dir() / "scip_snapshot.parquet"
+
+    def scip_diff_path(self) -> Path:
+        """Return the path to the SCIP diff parquet file.
+
+        Returns
+        -------
+        Path
+            SCIP diff parquet path.
+        """
+        return self.latest_snapshot_dir() / "scip_diff.parquet"
+
+    def dataset_dir(self, dataset_name: str) -> Path:
+        """Return the dataset directory for a named dataset.
+
+        Returns
+        -------
+        Path
+            Dataset directory path.
+        """
+        return self.datasets_dir() / Path(dataset_name)
+
+    def metadata_dir(self) -> Path:
+        """Return the metadata directory.
+
+        Returns
+        -------
+        Path
+            Metadata directory path.
+        """
+        return self.root / "metadata"
+
+    def invalidation_snapshot_path(self) -> Path:
+        """Return the invalidation snapshot JSON path.
+
+        Returns
+        -------
+        Path
+            Invalidation snapshot path.
+        """
+        return self.metadata_dir() / "invalidation_snapshot.json"
+
+    def scip_fingerprint_path(self) -> Path:
+        """Return the SCIP index fingerprint path.
+
+        Returns
+        -------
+        Path
+            SCIP fingerprint path.
+        """
+        return self.metadata_dir() / "scip_index_fingerprint.txt"
+
+
+__all__ = ["StateStore"]

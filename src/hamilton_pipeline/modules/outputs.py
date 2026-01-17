@@ -13,6 +13,7 @@ from hamilton.function_modifiers import tag
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.io.parquet import (
     NamedDatasetWriteConfig,
     ParquetWriteOptions,
@@ -53,6 +54,7 @@ from ibis_engine.io_bridge import (
 from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
 from ibis_engine.plan import IbisPlan
 from ibis_engine.registry import registry_snapshot
+from incremental.types import IncrementalConfig
 from normalize.runner import NormalizeRuleCompilation
 from normalize.utils import encoding_policy_from_schema
 from obs.diagnostics_tables import datafusion_explains_table, datafusion_fallbacks_table
@@ -214,9 +216,7 @@ def _datafusion_runtime_diag_tables(
         else None
     )
     explain_table = (
-        datafusion_explains_table(explain_events)
-        if profile.explain_collector is not None
-        else None
+        datafusion_explains_table(explain_events) if profile.explain_collector is not None else None
     )
     return fallback_table, explain_table
 
@@ -256,6 +256,14 @@ class RunBundleTables:
 
 
 @dataclass(frozen=True)
+class RunBundleMetadata:
+    """Manifest and config bundle for run bundles."""
+
+    run_manifest: JsonDict
+    run_config: JsonDict
+
+
+@dataclass(frozen=True)
 class RunBundleInputs:
     """Inputs required to build a run bundle context."""
 
@@ -264,6 +272,7 @@ class RunBundleInputs:
     relspec_snapshots: RelspecSnapshots
     tables: RunBundleTables
     param_inputs: RunBundleParamInputs | None = None
+    incremental_diff: pa.Table | None = None
 
 
 @dataclass(frozen=True)
@@ -415,10 +424,27 @@ def write_normalized_inputs_parquet(
 # -----------------------
 
 
+def _override_finalize_good(
+    finalize: FinalizeResult,
+    *,
+    good: TableLike | None,
+) -> FinalizeResult:
+    if good is None:
+        return finalize
+    return FinalizeResult(
+        good=good,
+        errors=finalize.errors,
+        stats=finalize.stats,
+        alignment=finalize.alignment,
+    )
+
+
 @tag(layer="materialize", artifact="cpg_nodes_parquet", kind="side_effect")
 def write_cpg_nodes_parquet(
     output_dir: str | None,
     cpg_nodes_finalize: CpgBuildArtifacts,
+    cpg_nodes_final: TableLike,
+    incremental_config: IncrementalConfig,
 ) -> JsonDict | None:
     """Write CPG nodes and error artifacts to Parquet.
 
@@ -431,16 +457,18 @@ def write_cpg_nodes_parquet(
         return None
     output_path = Path(output_dir)
     _ensure_dir(output_path)
+    good_override = cpg_nodes_final if incremental_config.enabled else None
+    finalize = _override_finalize_good(cpg_nodes_finalize.finalize, good=good_override)
     paths = write_finalize_result_parquet(
-        cpg_nodes_finalize.finalize,
+        finalize,
         output_path / "cpg_nodes.parquet",
         opts=ParquetWriteOptions(),
         overwrite=True,
     )
     return {
         "paths": paths,
-        "rows": int(cpg_nodes_finalize.finalize.good.num_rows),
-        "error_rows": int(cpg_nodes_finalize.finalize.errors.num_rows),
+        "rows": int(finalize.good.num_rows),
+        "error_rows": int(finalize.errors.num_rows),
     }
 
 
@@ -473,6 +501,8 @@ def write_cpg_nodes_quality_parquet(
 def write_cpg_edges_parquet(
     output_dir: str | None,
     cpg_edges_finalize: CpgBuildArtifacts,
+    cpg_edges_final: TableLike,
+    incremental_config: IncrementalConfig,
 ) -> JsonDict | None:
     """Write CPG edges and error artifacts to Parquet.
 
@@ -485,16 +515,18 @@ def write_cpg_edges_parquet(
         return None
     output_path = Path(output_dir)
     _ensure_dir(output_path)
+    good_override = cpg_edges_final if incremental_config.enabled else None
+    finalize = _override_finalize_good(cpg_edges_finalize.finalize, good=good_override)
     paths = write_finalize_result_parquet(
-        cpg_edges_finalize.finalize,
+        finalize,
         output_path / "cpg_edges.parquet",
         opts=ParquetWriteOptions(),
         overwrite=True,
     )
     return {
         "paths": paths,
-        "rows": int(cpg_edges_finalize.finalize.good.num_rows),
-        "error_rows": int(cpg_edges_finalize.finalize.errors.num_rows),
+        "rows": int(finalize.good.num_rows),
+        "error_rows": int(finalize.errors.num_rows),
     }
 
 
@@ -502,6 +534,8 @@ def write_cpg_edges_parquet(
 def write_cpg_props_parquet(
     output_dir: str | None,
     cpg_props_finalize: CpgBuildArtifacts,
+    cpg_props_final: TableLike,
+    incremental_config: IncrementalConfig,
 ) -> JsonDict | None:
     """Write CPG properties and error artifacts to Parquet.
 
@@ -514,16 +548,18 @@ def write_cpg_props_parquet(
         return None
     output_path = Path(output_dir)
     _ensure_dir(output_path)
+    good_override = cpg_props_final if incremental_config.enabled else None
+    finalize = _override_finalize_good(cpg_props_finalize.finalize, good=good_override)
     paths = write_finalize_result_parquet(
-        cpg_props_finalize.finalize,
+        finalize,
         output_path / "cpg_props.parquet",
         opts=ParquetWriteOptions(),
         overwrite=True,
     )
     return {
         "paths": paths,
-        "rows": int(cpg_props_finalize.finalize.good.num_rows),
-        "error_rows": int(cpg_props_finalize.finalize.errors.num_rows),
+        "rows": int(finalize.good.num_rows),
+        "error_rows": int(finalize.errors.num_rows),
     }
 
 
@@ -1059,6 +1095,7 @@ def run_config(
     relspec_config: RelspecConfig,
     output_config: OutputConfig,
     relspec_param_values: JsonDict,
+    incremental_config: IncrementalConfig,
 ) -> JsonDict:
     """Return the execution-relevant config snapshot for this run.
 
@@ -1081,7 +1118,24 @@ def run_config(
         "overwrite_intermediate_datasets": bool(output_config.overwrite_intermediate_datasets),
         "materialize_param_tables": bool(output_config.materialize_param_tables),
         "relspec_param_values": dict(relspec_param_values),
+        "incremental_enabled": bool(incremental_config.enabled),
+        "incremental_state_dir": (
+            str(incremental_config.state_dir) if incremental_config.state_dir else None
+        ),
+        "incremental_repo_id": incremental_config.repo_id,
     }
+
+
+@tag(layer="obs", artifact="run_bundle_metadata", kind="object")
+def run_bundle_metadata(run_manifest: JsonDict, run_config: JsonDict) -> RunBundleMetadata:
+    """Bundle manifest and config inputs for run bundles.
+
+    Returns
+    -------
+    RunBundleMetadata
+        Manifest/config bundle for run bundle assembly.
+    """
+    return RunBundleMetadata(run_manifest=run_manifest, run_config=run_config)
 
 
 @tag(layer="obs", artifact="run_bundle_tables", kind="bundle")
@@ -1089,6 +1143,7 @@ def run_bundle_tables(
     relspec_inputs_bundle: RelspecInputsBundle,
     relationship_output_tables: RelationshipOutputTables,
     cpg_output_tables: CpgOutputTables,
+    incremental_relationship_updates: Mapping[str, str] | None,
 ) -> RunBundleTables:
     """Bundle tables for run bundle writing.
 
@@ -1097,6 +1152,7 @@ def run_bundle_tables(
     RunBundleTables
         Table bundle for run bundles.
     """
+    _ = incremental_relationship_updates
     return RunBundleTables(
         relspec_inputs=relspec_inputs_bundle,
         relationship_outputs=relationship_output_tables,
@@ -1106,11 +1162,11 @@ def run_bundle_tables(
 
 @tag(layer="obs", artifact="run_bundle_inputs", kind="object")
 def run_bundle_inputs(
-    run_manifest: JsonDict,
-    run_config: JsonDict,
+    run_bundle_metadata: RunBundleMetadata,
     relspec_snapshots: RelspecSnapshots,
     run_bundle_tables: RunBundleTables,
     run_bundle_param_inputs: RunBundleParamInputs | None,
+    incremental_diff: pa.Table | None,
 ) -> RunBundleInputs:
     """Bundle inputs for run bundle context creation.
 
@@ -1120,11 +1176,12 @@ def run_bundle_inputs(
         Inputs used to build a run bundle context.
     """
     return RunBundleInputs(
-        run_manifest=run_manifest,
-        run_config=run_config,
+        run_manifest=run_bundle_metadata.run_manifest,
+        run_config=run_bundle_metadata.run_config,
         relspec_snapshots=relspec_snapshots,
         tables=run_bundle_tables,
         param_inputs=run_bundle_param_inputs,
+        incremental_diff=incremental_diff,
     )
 
 
@@ -1212,6 +1269,7 @@ def run_bundle_context(
         relspec_input_tables=run_bundle_inputs.tables.relspec_inputs.tables,
         relationship_output_tables=run_bundle_inputs.tables.relationship_outputs.as_dict(),
         cpg_output_tables=run_bundle_inputs.tables.cpg_outputs.as_dict(),
+        incremental_diff=run_bundle_inputs.incremental_diff,
         param_table_specs=param_specs,
         param_table_artifacts=param_artifacts,
         param_scalar_signature=param_scalar_signature,

@@ -12,6 +12,7 @@ from hamilton.function_modifiers import cache, extract_fields, tag
 from ibis.backends import BaseBackend
 from ibis.expr.types import Value as IbisValue
 
+from arrowdsl.compute.ids import apply_hash_column
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.io.parquet import (
@@ -22,7 +23,7 @@ from arrowdsl.io.parquet import (
 from arrowdsl.plan.query import ScanTelemetry
 from arrowdsl.plan.runner import AdapterRunOptions, run_plan_adapter
 from arrowdsl.plan.scan_io import DatasetSource
-from arrowdsl.schema.schema import empty_table
+from arrowdsl.schema.schema import align_table, empty_table
 from config import AdapterMode
 from cpg.build_edges import EdgeBuildConfig, EdgeBuildInputs, build_cpg_edges
 from cpg.build_nodes import NodeInputTables, build_cpg_nodes
@@ -30,6 +31,7 @@ from cpg.build_props import PropsInputTables, build_cpg_props
 from cpg.constants import CpgBuildArtifacts
 from cpg.schemas import register_cpg_specs
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
+from extract.registry_ids import repo_file_id_spec
 from hamilton_pipeline.pipeline_types import (
     CpgBaseInputs,
     CpgExtraInputs,
@@ -53,6 +55,18 @@ from ibis_engine.param_tables import (
 )
 from ibis_engine.params_bridge import IbisParamRegistry, registry_from_specs, specs_from_rel_ops
 from ibis_engine.plan import IbisPlan
+from incremental.publish import (
+    publish_cpg_edges,
+    publish_cpg_nodes,
+    publish_cpg_props,
+)
+from incremental.relspec_update import (
+    impacted_file_ids,
+    relspec_inputs_from_state,
+    scoped_relspec_resolver,
+)
+from incremental.state_store import StateStore
+from incremental.types import IncrementalConfig, IncrementalFileChanges
 from normalize.utils import encoding_policy_from_schema
 from relspec.adapters import (
     CpgRuleAdapter,
@@ -71,7 +85,7 @@ from relspec.compiler import (
     validate_policy_requirements,
 )
 from relspec.compiler_graph import order_rules
-from relspec.contracts import relation_output_contract
+from relspec.contracts import relation_output_contract, relation_output_schema
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
@@ -171,6 +185,34 @@ class RelationshipCompilationInputs:
     ctx: ExecutionContext
 
 
+@dataclass(frozen=True)
+class RelspecInputBundles:
+    """Bundle relationship input groups for relspec compilation."""
+
+    cst_inputs: CstRelspecInputs
+    scip_inputs: ScipOccurrenceInputs
+    qname_inputs: QnameInputs
+
+
+@dataclass(frozen=True)
+class RelspecIncrementalContext:
+    """Incremental state required for relationship datasets."""
+
+    state_store: StateStore | None
+    file_changes: IncrementalFileChanges
+    config: IncrementalConfig
+    ctx: ExecutionContext
+
+
+@dataclass(frozen=True)
+class RelspecResolverSources:
+    """Resolver inputs for relationship plans."""
+
+    mode: Literal["memory", "filesystem"]
+    input_datasets: dict[str, TableLike]
+    persisted_inputs: dict[str, DatasetLocation]
+
+
 @tag(layer="relspec", artifact="relationship_execution_context", kind="object")
 def relationship_execution_context(
     ctx: ExecutionContext,
@@ -235,6 +277,7 @@ def relationship_contract_spec() -> ContractCatalogSpec:
                     ArrowFieldSpec(name="symbol", dtype=pa.string()),
                     ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
                     ArrowFieldSpec(name="path", dtype=pa.string()),
+                    ArrowFieldSpec(name="edge_owner_file_id", dtype=pa.string()),
                     ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
                     ArrowFieldSpec(name="confidence", dtype=pa.float32()),
                     ArrowFieldSpec(name="score", dtype=pa.float32()),
@@ -257,6 +300,7 @@ def relationship_contract_spec() -> ContractCatalogSpec:
                     ArrowFieldSpec(name="symbol", dtype=pa.string()),
                     ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
                     ArrowFieldSpec(name="path", dtype=pa.string()),
+                    ArrowFieldSpec(name="edge_owner_file_id", dtype=pa.string()),
                     ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
                     ArrowFieldSpec(name="confidence", dtype=pa.float32()),
                     ArrowFieldSpec(name="score", dtype=pa.float32()),
@@ -279,6 +323,7 @@ def relationship_contract_spec() -> ContractCatalogSpec:
                     ArrowFieldSpec(name="symbol", dtype=pa.string()),
                     ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
                     ArrowFieldSpec(name="path", dtype=pa.string()),
+                    ArrowFieldSpec(name="edge_owner_file_id", dtype=pa.string()),
                     *call_span_bundle().fields,
                     ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
                     ArrowFieldSpec(name="confidence", dtype=pa.float32()),
@@ -302,6 +347,7 @@ def relationship_contract_spec() -> ContractCatalogSpec:
                     ArrowFieldSpec(name="qname_id", dtype=pa.string()),
                     ArrowFieldSpec(name="qname_source", dtype=pa.string()),
                     ArrowFieldSpec(name="path", dtype=pa.string()),
+                    ArrowFieldSpec(name="edge_owner_file_id", dtype=pa.string()),
                     *call_span_bundle().fields,
                     ArrowFieldSpec(name="confidence", dtype=pa.float32()),
                     ArrowFieldSpec(name="score", dtype=pa.float32()),
@@ -625,6 +671,58 @@ def relspec_qname_inputs(
     )
 
 
+@tag(layer="relspec", artifact="relspec_input_bundles", kind="bundle")
+def relspec_input_bundles(
+    relspec_cst_inputs: CstRelspecInputs,
+    relspec_scip_inputs: ScipOccurrenceInputs,
+    relspec_qname_inputs: QnameInputs,
+) -> RelspecInputBundles:
+    """Bundle relationship input groups for relspec compilation.
+
+    Returns
+    -------
+    RelspecInputBundles
+        Bundled relationship inputs.
+    """
+    return RelspecInputBundles(
+        cst_inputs=relspec_cst_inputs,
+        scip_inputs=relspec_scip_inputs,
+        qname_inputs=relspec_qname_inputs,
+    )
+
+
+@tag(layer="incremental", artifact="relspec_incremental_context", kind="object")
+def relspec_incremental_context(
+    incremental_state_store: StateStore | None,
+    incremental_file_changes: IncrementalFileChanges,
+    incremental_config: IncrementalConfig,
+    ctx: ExecutionContext,
+) -> RelspecIncrementalContext:
+    """Bundle incremental context for relationship datasets.
+
+    Returns
+    -------
+    RelspecIncrementalContext
+        Incremental context for relspec inputs.
+    """
+    return RelspecIncrementalContext(
+        state_store=incremental_state_store,
+        file_changes=incremental_file_changes,
+        config=incremental_config,
+        ctx=ctx,
+    )
+
+
+@tag(layer="relspec", artifact="relspec_incremental_gate", kind="object")
+def relspec_incremental_gate(
+    incremental_extract_updates: Mapping[str, str] | None,
+    incremental_normalize_updates: Mapping[str, str] | None,
+) -> None:
+    """Ensure incremental extract/normalize updates complete before relspec inputs."""
+    _ = incremental_extract_updates
+    _ = incremental_normalize_updates
+
+
 def _require_table(name: str, value: TableLike | DatasetSource) -> TableLike:
     if isinstance(value, DatasetSource):
         msg = f"Relspec input {name!r} must be a table, not a dataset source."
@@ -634,11 +732,11 @@ def _require_table(name: str, value: TableLike | DatasetSource) -> TableLike:
 
 @tag(layer="relspec", artifact="relspec_input_datasets", kind="bundle")
 def relspec_input_datasets(
-    relspec_cst_inputs: CstRelspecInputs,
-    relspec_scip_inputs: ScipOccurrenceInputs,
-    relspec_qname_inputs: QnameInputs,
+    relspec_input_bundles: RelspecInputBundles,
     scip_build_inputs: ScipBuildInputs,
     cpg_extra_inputs: CpgExtraInputs,
+    relspec_incremental_context: RelspecIncrementalContext,
+    relspec_incremental_gate: object | None,
 ) -> dict[str, TableLike]:
     """Build the canonical dataset-name to table mapping.
 
@@ -649,17 +747,18 @@ def relspec_input_datasets(
     dict[str, TableLike]
         Mapping from dataset names to tables.
     """
-    return {
-        "cst_name_refs": relspec_cst_inputs.cst_name_refs,
-        "cst_imports": relspec_cst_inputs.cst_imports_norm,
-        "cst_callsites": relspec_cst_inputs.cst_callsites,
-        "scip_occurrences": relspec_scip_inputs.scip_occurrences_norm,
+    _ = relspec_incremental_gate
+    datasets = {
+        "cst_name_refs": relspec_input_bundles.cst_inputs.cst_name_refs,
+        "cst_imports": relspec_input_bundles.cst_inputs.cst_imports_norm,
+        "cst_callsites": relspec_input_bundles.cst_inputs.cst_callsites,
+        "scip_occurrences": relspec_input_bundles.scip_inputs.scip_occurrences_norm,
         "scip_symbol_relationships": _require_table(
             "scip_symbol_relationships",
             scip_build_inputs.scip_symbol_relationships,
         ),
-        "callsite_qname_candidates": relspec_qname_inputs.callsite_qname_candidates,
-        "dim_qualified_names": relspec_qname_inputs.dim_qualified_names,
+        "callsite_qname_candidates": relspec_input_bundles.qname_inputs.callsite_qname_candidates,
+        "dim_qualified_names": relspec_input_bundles.qname_inputs.dim_qualified_names,
         "type_exprs_norm": _require_table("type_exprs_norm", cpg_extra_inputs.type_exprs_norm),
         "diagnostics_norm": _require_table(
             "diagnostics_norm",
@@ -672,6 +771,18 @@ def relspec_input_datasets(
         ),
         "rt_members": _require_table("rt_members", cpg_extra_inputs.rt_members),
     }
+    if (
+        not relspec_incremental_context.config.enabled
+        or relspec_incremental_context.state_store is None
+    ):
+        return datasets
+    file_ids = impacted_file_ids(relspec_incremental_context.file_changes)
+    return relspec_inputs_from_state(
+        datasets,
+        state_root=relspec_incremental_context.state_store.root,
+        ctx=relspec_incremental_context.ctx,
+        file_ids=file_ids,
+    )
 
 
 @cache()
@@ -742,13 +853,32 @@ def persist_relspec_input_datasets(
     return out
 
 
-@tag(layer="relspec", artifact="relspec_resolver", kind="runtime")
-def relspec_resolver(
+@tag(layer="relspec", artifact="relspec_resolver_sources", kind="object")
+def relspec_resolver_sources(
     relspec_mode: Literal["memory", "filesystem"],
     relspec_input_datasets: dict[str, TableLike],
     persist_relspec_input_datasets: dict[str, DatasetLocation],
+) -> RelspecResolverSources:
+    """Bundle resolver inputs for relationship plans.
+
+    Returns
+    -------
+    RelspecResolverSources
+        Bundled resolver inputs.
+    """
+    return RelspecResolverSources(
+        mode=relspec_mode,
+        input_datasets=relspec_input_datasets,
+        persisted_inputs=persist_relspec_input_datasets,
+    )
+
+
+@tag(layer="relspec", artifact="relspec_resolver", kind="runtime")
+def relspec_resolver(
+    relspec_resolver_sources: RelspecResolverSources,
     ibis_backend: BaseBackend,
     relspec_resolver_context: RelspecResolverContext,
+    relspec_incremental_context: RelspecIncrementalContext,
 ) -> PlanResolver[IbisPlan]:
     """Select the relationship resolver implementation.
 
@@ -761,7 +891,7 @@ def relspec_resolver(
     PlanResolver[IbisPlan]
         Resolver instance for relationship rule compilation.
     """
-    mode = (relspec_mode or "memory").lower().strip()
+    mode = (relspec_resolver_sources.mode or "memory").lower().strip()
     if relspec_resolver_context.param_table_registry is None:
         param_tables: Mapping[str, IbisTable] = {}
         policy = ParamTablePolicy()
@@ -769,9 +899,10 @@ def relspec_resolver(
         param_tables = relspec_resolver_context.param_table_registry.ibis_tables(ibis_backend)
         policy = relspec_resolver_context.param_table_registry.policy
     param_aliases = _param_table_aliases(param_tables, policy=policy)
+    resolver: PlanResolver[IbisPlan]
     if mode == "filesystem":
         cat = DatasetCatalog()
-        for name, loc in persist_relspec_input_datasets.items():
+        for name, loc in relspec_resolver_sources.persisted_inputs.items():
             cat.register(name, loc)
         base = FilesystemPlanResolver(
             cat,
@@ -779,18 +910,25 @@ def relspec_resolver(
             runtime_profile=relspec_resolver_context.ctx.runtime.datafusion,
         )
         if not param_aliases:
-            return base
-        param_resolver = InMemoryPlanResolver(param_aliases, backend=ibis_backend)
-        return _CompositePlanResolver(
-            primary=param_resolver,
-            fallback=base,
-            primary_names=frozenset(param_aliases),
+            resolver = base
+        else:
+            param_resolver = InMemoryPlanResolver(param_aliases, backend=ibis_backend)
+            resolver = _CompositePlanResolver(
+                primary=param_resolver,
+                fallback=base,
+                primary_names=frozenset(param_aliases),
+            )
+    else:
+        combined: dict[str, TableLike | IbisPlan | IbisTable] = dict(
+            relspec_resolver_sources.input_datasets
         )
-
-    combined: dict[str, TableLike | IbisPlan | IbisTable] = dict(relspec_input_datasets)
-    for name, table in param_aliases.items():
-        combined.setdefault(name, table)
-    return InMemoryPlanResolver(combined, backend=ibis_backend)
+        for name, table in param_aliases.items():
+            combined.setdefault(name, table)
+        resolver = InMemoryPlanResolver(combined, backend=ibis_backend)
+    if relspec_incremental_context.config.enabled:
+        file_ids = impacted_file_ids(relspec_incremental_context.file_changes)
+        return scoped_relspec_resolver(resolver, file_ids=file_ids)
+    return resolver
 
 
 def _relationship_rule_schema(
@@ -992,6 +1130,24 @@ def compiled_relationship_outputs(
     )
 
 
+def _add_edge_owner_file_id(
+    table: TableLike,
+    *,
+    repo_id: str | None,
+    ctx: ExecutionContext,
+) -> TableLike:
+    if "edge_owner_file_id" in table.column_names:
+        return table
+    spec = replace(repo_file_id_spec(repo_id), out_col="edge_owner_file_id")
+    updated = apply_hash_column(table, spec=spec, required=("path",))
+    return align_table(
+        updated,
+        schema=relation_output_schema(),
+        safe_cast=ctx.safe_cast,
+        keep_extra_columns=ctx.provenance,
+    )
+
+
 @cache()
 @extract_fields(
     {
@@ -1008,6 +1164,7 @@ def relationship_tables(
     relspec_resolver: PlanResolver[IbisPlan],
     relationship_contracts: ContractCatalog,
     relationship_execution_context: RelationshipExecutionContext,
+    incremental_config: IncrementalConfig,
 ) -> dict[str, TableLike]:
     """Execute compiled relationship outputs into tables.
 
@@ -1068,8 +1225,13 @@ def relationship_tables(
             resolver=resolver,
             options=exec_options,
         )
-        out[key] = res.good
-        dynamic_outputs[key] = res.good
+        updated = _add_edge_owner_file_id(
+            res.good,
+            repo_id=incremental_config.repo_id,
+            ctx=exec_ctx,
+        )
+        out[key] = updated
+        dynamic_outputs[key] = updated
 
     # Ensure expected keys exist for extract_fields
     out.setdefault(
@@ -1343,7 +1505,7 @@ def cpg_edge_inputs(
 def cpg_props_inputs(
     cpg_base_inputs: CpgBaseInputs,
     cpg_extra_inputs: CpgExtraInputs,
-    cpg_edges_final: TableLike,
+    cpg_edges_delta: TableLike,
 ) -> PropsInputTables:
     """Build property input tables from base and optional inputs.
 
@@ -1374,23 +1536,8 @@ def cpg_props_inputs(
         rt_signatures=cpg_extra_inputs.rt_signatures,
         rt_signature_params=cpg_extra_inputs.rt_signature_params,
         rt_members=cpg_extra_inputs.rt_members,
-        cpg_edges=cpg_edges_final,
+        cpg_edges=cpg_edges_delta,
     )
-
-
-@cache(format="parquet")
-@tag(layer="cpg", artifact="cpg_nodes_final", kind="table")
-def cpg_nodes_final(
-    cpg_nodes_finalize: CpgBuildArtifacts,
-) -> TableLike:
-    """Build the final CPG nodes table.
-
-    Returns
-    -------
-    TableLike
-        Final CPG nodes table.
-    """
-    return cpg_nodes_finalize.finalize.good
 
 
 @cache()
@@ -1410,6 +1557,46 @@ def cpg_nodes_finalize(
 
 
 @cache(format="parquet")
+@tag(layer="cpg", artifact="cpg_nodes_delta", kind="table")
+def cpg_nodes_delta(
+    cpg_nodes_finalize: CpgBuildArtifacts,
+) -> TableLike:
+    """Return incremental CPG node updates for the current run.
+
+    Returns
+    -------
+    TableLike
+        Node rows produced for the current run.
+    """
+    return cpg_nodes_finalize.finalize.good
+
+
+@cache(format="parquet")
+@tag(layer="cpg", artifact="cpg_nodes_final", kind="table")
+def cpg_nodes_final(
+    cpg_nodes_finalize: CpgBuildArtifacts,
+    incremental_state_store: StateStore | None,
+    incremental_config: IncrementalConfig,
+    incremental_cpg_nodes_updates: Mapping[str, str] | None,
+) -> TableLike:
+    """Build the final CPG nodes table.
+
+    Returns
+    -------
+    TableLike
+        Final CPG nodes table.
+    """
+    if incremental_config.enabled and incremental_state_store is not None:
+        updates = incremental_cpg_nodes_updates or {}
+        return publish_cpg_nodes(
+            state_store=incremental_state_store,
+            dataset_path=updates.get("cpg_nodes_v1"),
+            fallback=cpg_nodes_finalize.finalize.good,
+        )
+    return cpg_nodes_finalize.finalize.good
+
+
+@cache(format="parquet")
 @tag(layer="cpg", artifact="cpg_nodes_quality", kind="table")
 def cpg_nodes_quality(
     cpg_nodes_finalize: CpgBuildArtifacts,
@@ -1425,9 +1612,27 @@ def cpg_nodes_quality(
 
 
 @cache(format="parquet")
+@tag(layer="cpg", artifact="cpg_edges_delta", kind="table")
+def cpg_edges_delta(
+    cpg_edges_finalize: CpgBuildArtifacts,
+) -> TableLike:
+    """Return incremental CPG edge updates for the current run.
+
+    Returns
+    -------
+    TableLike
+        Edge rows produced for the current run.
+    """
+    return cpg_edges_finalize.finalize.good
+
+
+@cache(format="parquet")
 @tag(layer="cpg", artifact="cpg_edges_final", kind="table")
 def cpg_edges_final(
     cpg_edges_finalize: CpgBuildArtifacts,
+    incremental_state_store: StateStore | None,
+    incremental_config: IncrementalConfig,
+    incremental_cpg_edges_updates: Mapping[str, str] | None,
 ) -> TableLike:
     """Build the final CPG edges table.
 
@@ -1436,6 +1641,13 @@ def cpg_edges_final(
     TableLike
         Final CPG edges table.
     """
+    if incremental_config.enabled and incremental_state_store is not None:
+        updates = incremental_cpg_edges_updates or {}
+        return publish_cpg_edges(
+            state_store=incremental_state_store,
+            dataset_path=updates.get("cpg_edges_v1"),
+            fallback=cpg_edges_finalize.finalize.good,
+        )
     return cpg_edges_finalize.finalize.good
 
 
@@ -1482,9 +1694,27 @@ def cpg_edges_quality(
 
 
 @cache(format="parquet")
+@tag(layer="cpg", artifact="cpg_props_delta", kind="table")
+def cpg_props_delta(
+    cpg_props_finalize: CpgBuildArtifacts,
+) -> TableLike:
+    """Return incremental CPG property updates for the current run.
+
+    Returns
+    -------
+    TableLike
+        Property rows produced for the current run.
+    """
+    return cpg_props_finalize.finalize.good
+
+
+@cache(format="parquet")
 @tag(layer="cpg", artifact="cpg_props_final", kind="table")
 def cpg_props_final(
     cpg_props_finalize: CpgBuildArtifacts,
+    incremental_state_store: StateStore | None,
+    incremental_config: IncrementalConfig,
+    incremental_cpg_props_updates: Mapping[str, str] | None,
 ) -> TableLike:
     """Build the final CPG properties table.
 
@@ -1493,6 +1723,14 @@ def cpg_props_final(
     TableLike
         Final CPG properties table.
     """
+    if incremental_config.enabled and incremental_state_store is not None:
+        updates = incremental_cpg_props_updates or {}
+        return publish_cpg_props(
+            state_store=incremental_state_store,
+            by_file_path=updates.get("cpg_props_by_file_id_v1"),
+            global_path=updates.get("cpg_props_global_v1"),
+            fallback=cpg_props_finalize.finalize.good,
+        )
     return cpg_props_finalize.finalize.good
 
 

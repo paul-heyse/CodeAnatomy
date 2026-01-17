@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import cast
 
@@ -15,6 +15,7 @@ from config import AdapterMode
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from hamilton_pipeline.driver_factory import build_driver
 from hamilton_pipeline.pipeline_types import ScipIdentityOverrides, ScipIndexConfig
+from incremental.types import IncrementalConfig
 
 type PipelineFinalVar = str | HamiltonNode | Callable[..., object]
 
@@ -40,6 +41,7 @@ class PipelineExecutionOptions:
     scip_identity_overrides: ScipIdentityOverrides | None = None
     adapter_mode: AdapterMode | None = None
     ctx: ExecutionContext | None = None
+    incremental_config: IncrementalConfig | None = None
     outputs: Sequence[str] | None = None
     config: Mapping[str, JsonValue] = field(default_factory=dict)
     pipeline_driver: hamilton_driver.Driver | None = None
@@ -58,6 +60,11 @@ def _resolve_dir(repo_root: Path, value: PathLike | None) -> Path | None:
 def _default_output_dir(repo_root: Path, output_dir: PathLike | None) -> Path:
     resolved = _resolve_dir(repo_root, output_dir)
     return resolved if resolved is not None else repo_root / "build"
+
+
+def _default_state_dir(repo_root: Path, value: PathLike | None) -> Path:
+    resolved = _resolve_dir(repo_root, value)
+    return resolved if resolved is not None else repo_root / "build" / "state"
 
 
 def execute_pipeline(
@@ -89,6 +96,11 @@ def execute_pipeline(
         execute_overrides["adapter_mode"] = options.adapter_mode
     if options.ctx is not None:
         execute_overrides["ctx"] = options.ctx
+    if options.incremental_config is not None:
+        incremental = options.incremental_config
+        if incremental.enabled and incremental.state_dir is None:
+            incremental = replace(incremental, state_dir=_default_state_dir(repo_root_path, None))
+        execute_overrides["incremental_config"] = incremental
     if options.overrides:
         execute_overrides.update(options.overrides)
 

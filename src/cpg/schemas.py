@@ -11,18 +11,26 @@ from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, SchemaRegistry
 CPG_NODES_SPEC = dataset_spec("cpg_nodes_v1")
 CPG_EDGES_SPEC = dataset_spec("cpg_edges_v1")
 CPG_PROPS_SPEC = dataset_spec("cpg_props_v1")
+CPG_PROPS_BY_FILE_ID_SPEC = dataset_spec("cpg_props_by_file_id_v1")
+CPG_PROPS_GLOBAL_SPEC = dataset_spec("cpg_props_global_v1")
 
 CPG_NODES_SCHEMA = dataset_schema("cpg_nodes_v1")
 CPG_EDGES_SCHEMA = dataset_schema("cpg_edges_v1")
 CPG_PROPS_SCHEMA = dataset_schema("cpg_props_v1")
+CPG_PROPS_BY_FILE_ID_SCHEMA = dataset_schema("cpg_props_by_file_id_v1")
+CPG_PROPS_GLOBAL_SCHEMA = dataset_schema("cpg_props_global_v1")
 
 CPG_NODES_CONTRACT_SPEC = dataset_contract_spec("cpg_nodes_v1")
 CPG_EDGES_CONTRACT_SPEC = dataset_contract_spec("cpg_edges_v1")
 CPG_PROPS_CONTRACT_SPEC = dataset_contract_spec("cpg_props_v1")
+CPG_PROPS_BY_FILE_ID_CONTRACT_SPEC = dataset_contract_spec("cpg_props_by_file_id_v1")
+CPG_PROPS_GLOBAL_CONTRACT_SPEC = dataset_contract_spec("cpg_props_global_v1")
 
 CPG_NODES_CONTRACT = CPG_NODES_CONTRACT_SPEC.to_contract()
 CPG_EDGES_CONTRACT = CPG_EDGES_CONTRACT_SPEC.to_contract()
 CPG_PROPS_CONTRACT = CPG_PROPS_CONTRACT_SPEC.to_contract()
+CPG_PROPS_BY_FILE_ID_CONTRACT = CPG_PROPS_BY_FILE_ID_CONTRACT_SPEC.to_contract()
+CPG_PROPS_GLOBAL_CONTRACT = CPG_PROPS_GLOBAL_CONTRACT_SPEC.to_contract()
 SCHEMA_VERSION = _SCHEMA_VERSION
 
 
@@ -37,6 +45,8 @@ def register_cpg_specs(registry: SchemaRegistry) -> SchemaRegistry:
     registry.register_dataset(CPG_NODES_SPEC)
     registry.register_dataset(CPG_EDGES_SPEC)
     registry.register_dataset(CPG_PROPS_SPEC)
+    registry.register_dataset(CPG_PROPS_BY_FILE_ID_SPEC)
+    registry.register_dataset(CPG_PROPS_GLOBAL_SPEC)
     return registry
 
 
@@ -74,3 +84,25 @@ def empty_props() -> TableLike:
         Empty props table.
     """
     return table_from_schema(CPG_PROPS_SCHEMA, columns={}, num_rows=0)
+
+
+def empty_props_by_file_id() -> TableLike:
+    """Return an empty props-by-file table with the canonical schema.
+
+    Returns
+    -------
+    pyarrow.Table
+        Empty props-by-file table.
+    """
+    return table_from_schema(CPG_PROPS_BY_FILE_ID_SCHEMA, columns={}, num_rows=0)
+
+
+def empty_props_global() -> TableLike:
+    """Return an empty global props table with the canonical schema.
+
+    Returns
+    -------
+    pyarrow.Table
+        Empty global props table.
+    """
+    return table_from_schema(CPG_PROPS_GLOBAL_SCHEMA, columns={}, num_rows=0)

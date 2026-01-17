@@ -115,6 +115,12 @@ def valid_mask_expr(
     return mask
 
 
+def _value_set(values: Sequence[object]) -> pa.Array:
+    if not values:
+        return pa.array([], type=pa.null())
+    return pa.array(list(values))
+
+
 @dataclass(frozen=True)
 class IsNull:
     """Predicate testing nulls in a column."""
@@ -167,7 +173,9 @@ class InSet:
         ComputeExpression
             Expression representing the predicate.
         """
-        return ensure_expression(pc.is_in(pc.field(self.col), value_set=list(self.values)))
+        return ensure_expression(
+            pc.is_in(pc.field(self.col), value_set=_value_set(self.values))
+        )
 
     def materialize(self, table: TableLike) -> ArrayLike:
         """Return the kernel-lane predicate mask.
@@ -177,7 +185,7 @@ class InSet:
         ArrayLike
             Boolean mask for the predicate.
         """
-        return pc.is_in(table[self.col], value_set=list(self.values))
+        return pc.is_in(table[self.col], value_set=_value_set(self.values))
 
     def is_scalar(self) -> bool:
         """Return whether this predicate is scalar-safe.

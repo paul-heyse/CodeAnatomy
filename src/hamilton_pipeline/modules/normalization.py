@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache as memoize
 from typing import TYPE_CHECKING, cast
@@ -879,7 +879,7 @@ def diagnostics_norm(
 @tag(layer="normalize", artifact="repo_text_index", kind="object")
 def repo_text_index(
     repo_root: str,
-    repo_files: TableLike,
+    repo_files_extract: TableLike,
     ctx: ExecutionContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> RepoTextIndex:
@@ -895,7 +895,7 @@ def repo_text_index(
         or evidence_plan.requires_dataset("diagnostics_norm")
     ):
         return RepoTextIndex(by_file_id={}, by_path={})
-    return build_repo_text_index(repo_root=repo_root, repo_files=repo_files, ctx=ctx)
+    return build_repo_text_index(repo_root=repo_root, repo_files=repo_files_extract, ctx=ctx)
 
 
 @cache()
@@ -977,3 +977,65 @@ def cst_defs_norm(
     if not _requires_any(evidence_plan, ("cst_defs_norm", "cst_defs")):
         return empty_table(cst_defs.schema)
     return normalize_cst_defs_spans(py_cst_defs=cst_defs)
+
+
+@cache()
+@tag(layer="normalize", artifact="normalize_outputs_group_a", kind="object")
+def normalize_outputs_group_a(
+    cst_imports_norm: TableLike,
+    cst_defs_norm: TableLike,
+    scip_occurrences_norm: TableLike,
+    callsite_qname_candidates: TableLike,
+) -> Mapping[str, TableLike]:
+    """Return group A normalized outputs used in incremental updates.
+
+    Returns
+    -------
+    Mapping[str, TableLike]
+        Group A normalized output tables.
+    """
+    return {
+        "cst_imports_norm": cst_imports_norm,
+        "cst_defs_norm": cst_defs_norm,
+        "scip_occurrences_norm": scip_occurrences_norm,
+        "callsite_qname_candidates": callsite_qname_candidates,
+    }
+
+
+@cache()
+@tag(layer="normalize", artifact="normalize_outputs_group_b", kind="object")
+def normalize_outputs_group_b(
+    dim_qualified_names: TableLike,
+    type_exprs_norm: TableLike,
+    types_norm: TableLike,
+    diagnostics_norm: TableLike,
+) -> Mapping[str, TableLike]:
+    """Return group B normalized outputs used in incremental updates.
+
+    Returns
+    -------
+    Mapping[str, TableLike]
+        Group B normalized output tables.
+    """
+    return {
+        "dim_qualified_names": dim_qualified_names,
+        "type_exprs_norm": type_exprs_norm,
+        "types_norm": types_norm,
+        "diagnostics_norm": diagnostics_norm,
+    }
+
+
+@cache()
+@tag(layer="normalize", artifact="normalize_outputs_bundle", kind="object")
+def normalize_outputs_bundle(
+    normalize_outputs_group_a: Mapping[str, TableLike],
+    normalize_outputs_group_b: Mapping[str, TableLike],
+) -> Mapping[str, TableLike]:
+    """Return a mapping of normalized outputs used in incremental updates.
+
+    Returns
+    -------
+    Mapping[str, TableLike]
+        All normalized output tables for incremental updates.
+    """
+    return {**normalize_outputs_group_a, **normalize_outputs_group_b}

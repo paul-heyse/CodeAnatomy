@@ -311,6 +311,8 @@ def _write_summary(path: Path, report: Mapping[str, Any]) -> None:
     lines.append(f"Manifest outputs: {summary['manifest_outputs']}")
     lines.append(f"Extracts: {summary['extracts']} Rules: {summary['rules']}")
     lines.append(f"Run bundle datasets: {summary['run_bundle_datasets']}")
+    lines.append(f"Incremental enabled: {summary['incremental_enabled']}")
+    lines.append(f"Incremental datasets: {summary['incremental_datasets']}")
     lines.append("")
     issues: list[dict[str, str]] = report["issues"]
     if not issues:
@@ -351,6 +353,17 @@ def _resolve_paths(
     return output_dir, run_bundle, report_path, summary_path
 
 
+def _resolve_state_dir(run_config: Mapping[str, Any]) -> Path | None:
+    value = run_config.get("incremental_state_dir")
+    repo_root = run_config.get("repo_root")
+    if not value and not repo_root:
+        return None
+    state_dir = Path(value) if value else Path(repo_root) / "build" / "state"
+    if not state_dir.is_absolute() and repo_root:
+        state_dir = Path(repo_root) / state_dir
+    return state_dir.resolve()
+
+
 def _load_manifest(
     run_bundle: Path | None,
     *,
@@ -376,6 +389,26 @@ def _load_manifest(
         )
         return None
     return _read_json(manifest_path)
+
+
+def _load_run_config(
+    run_bundle: Path | None,
+    *,
+    issues: list[Issue],
+) -> dict[str, Any] | None:
+    if run_bundle is None:
+        return None
+    config_path = run_bundle / "config.json"
+    if not config_path.exists():
+        issues.append(
+            Issue(
+                severity="warn",
+                check="run_config",
+                detail="Run bundle config.json not found.",
+            )
+        )
+        return None
+    return _read_json(config_path)
 
 
 def _check_run_bundle_datasets(
@@ -415,6 +448,85 @@ def _check_run_bundle_datasets(
                 )
             )
     return present
+
+
+def _check_incremental_state(
+    run_config: Mapping[str, Any] | None,
+    run_bundle: Path | None,
+    *,
+    issues: list[Issue],
+) -> dict[str, Any]:
+    info: dict[str, Any] = {"enabled": False}
+    if run_config is None:
+        return info
+    enabled = bool(run_config.get("incremental_enabled"))
+    info["enabled"] = enabled
+    if not enabled:
+        return info
+    state_dir = _resolve_state_dir(run_config)
+    info["state_dir"] = str(state_dir) if state_dir is not None else None
+    if state_dir is None:
+        issues.append(
+            Issue(
+                severity="error",
+                check="incremental_state",
+                detail="Incremental enabled but state dir is missing.",
+            )
+        )
+        return info
+    if not state_dir.exists():
+        issues.append(
+            Issue(
+                severity="error",
+                check="incremental_state",
+                detail=f"Incremental state dir missing: {state_dir}",
+            )
+        )
+        return info
+    datasets_dir = state_dir / "datasets"
+    info["datasets_dir"] = str(datasets_dir)
+    if datasets_dir.exists():
+        datasets = sorted(path.name for path in datasets_dir.iterdir() if path.is_dir())
+        info["datasets_present"] = datasets
+    else:
+        info["datasets_present"] = []
+        issues.append(
+            Issue(
+                severity="warn",
+                check="incremental_state",
+                detail=f"Incremental datasets dir missing: {datasets_dir}",
+            )
+        )
+
+    snapshot_path = state_dir / "metadata" / "invalidation_snapshot.json"
+    info["invalidation_snapshot"] = {
+        "path": str(snapshot_path),
+        "exists": snapshot_path.exists(),
+    }
+    if not snapshot_path.exists():
+        issues.append(
+            Issue(
+                severity="warn",
+                check="incremental_state",
+                detail=f"Invalidation snapshot missing: {snapshot_path}",
+            )
+        )
+
+    if run_bundle is not None:
+        diff_path = run_bundle / "incremental" / "incremental_diff"
+        info["incremental_diff"] = {
+            "path": str(diff_path),
+            "exists": diff_path.exists(),
+        }
+        if not diff_path.exists():
+            issues.append(
+                Issue(
+                    severity="warn",
+                    check="incremental_diff",
+                    detail=f"Missing incremental diff: {diff_path}",
+                )
+            )
+    return info
 
 
 def _collect_parquet_summaries(
@@ -478,6 +590,7 @@ def _build_summary(
     parquet_summaries: Mapping[str, Mapping[str, Any]],
     extract_error_dirs: Sequence[Path],
     run_bundle_datasets: Mapping[str, bool],
+    incremental_info: Mapping[str, Any],
 ) -> dict[str, Any]:
     return {
         "parquet_files": len(parquet_summaries),
@@ -486,6 +599,8 @@ def _build_summary(
         "rules": manifest_summary.get("rules_count", 0),
         "extract_error_dirs": len(extract_error_dirs),
         "run_bundle_datasets": sum(1 for present in run_bundle_datasets.values() if present),
+        "incremental_enabled": bool(incremental_info.get("enabled")),
+        "incremental_datasets": len(incremental_info.get("datasets_present", [])),
     }
 
 
@@ -498,7 +613,9 @@ def _build_report(
     issues: list[Issue] = []
     required_files = _check_required_files(output_dir, issues=issues)
     manifest = _load_manifest(run_bundle, issues=issues)
+    run_config = _load_run_config(run_bundle, issues=issues)
     run_bundle_datasets = _check_run_bundle_datasets(run_bundle, issues=issues)
+    incremental_state = _check_incremental_state(run_config, run_bundle, issues=issues)
     parquet_summaries = _collect_parquet_summaries(
         output_dir,
         validate_parquet=validate_parquet,
@@ -513,6 +630,7 @@ def _build_report(
         parquet_summaries,
         extract_error_dirs,
         run_bundle_datasets,
+        incremental_state,
     )
     status = _report_status(issues)
 
@@ -523,6 +641,7 @@ def _build_report(
         "required_files": required_files,
         "manifest_summary": manifest_summary,
         "run_bundle_datasets": run_bundle_datasets,
+        "incremental_state": incremental_state,
         "parquet_summaries": parquet_summaries,
         "scip_index": scip_info,
         "extract_errors": {

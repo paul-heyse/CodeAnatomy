@@ -363,7 +363,17 @@ def parquet_metadata_factory(
     """
     fragments = list_fragments(dataset, predicate=predicate)
     file_metadata = parquet_metadata_collector(fragments)
-    return ParquetMetadataSpec(schema=dataset.schema, file_metadata=file_metadata)
+    schema = _metadata_schema(dataset.schema, file_metadata)
+    return ParquetMetadataSpec(schema=schema, file_metadata=file_metadata)
+
+
+def _metadata_schema(
+    dataset_schema: pa.Schema,
+    file_metadata: Sequence[pq.FileMetaData],
+) -> pa.Schema:
+    if not file_metadata:
+        return dataset_schema
+    return file_metadata[0].schema.to_arrow_schema()
 
 
 def scan_task_count(scanner: ds.Scanner) -> int:

@@ -1,0 +1,249 @@
+"""Incremental relationship rule helpers."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import ibis
+import pyarrow.dataset as ds
+from ibis.backends import BaseBackend
+
+from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.interop import TableLike
+from arrowdsl.io.parquet import DatasetWriteConfig, upsert_dataset_partitions_parquet
+from arrowdsl.plan.query import open_dataset
+from arrowdsl.plan_helpers import dataset_query_for_file_ids
+from arrowdsl.schema.metadata import encoding_policy_from_schema
+from arrowdsl.schema.schema import empty_table
+from extract.registry_bundles import dataset_name_for_output
+from ibis_engine.plan import IbisPlan
+from incremental.invalidations import validate_schema_identity
+from incremental.types import IncrementalFileChanges
+from normalize.registry_specs import dataset_name_from_alias
+from relspec.engine import PlanResolver
+from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
+
+if TYPE_CHECKING:
+    from arrowdsl.plan.query import ScanTelemetry
+    from relspec.model import DatasetRef
+
+SCOPED_SITE_DATASETS: frozenset[str] = frozenset(
+    {
+        "cst_name_refs",
+        "cst_imports",
+        "cst_callsites",
+        "scip_occurrences",
+        "scip_symbol_relationships",
+        "callsite_qname_candidates",
+        "type_exprs_norm",
+        "diagnostics_norm",
+        "rt_signatures",
+        "rt_signature_params",
+        "rt_members",
+    }
+)
+
+_NORMALIZE_ALIAS_OVERRIDES: Mapping[str, str] = {
+    "cst_imports": "cst_imports_norm",
+    "scip_occurrences": "scip_occurrences_norm",
+}
+_RELATION_OUTPUT_DATASETS: Mapping[str, str] = {
+    "rel_name_symbol": "rel_name_symbol_v1",
+    "rel_import_symbol": "rel_import_symbol_v1",
+    "rel_callsite_symbol": "rel_callsite_symbol_v1",
+    "rel_callsite_qname": "rel_callsite_qname_v1",
+}
+
+
+def impacted_file_ids(
+    changes: IncrementalFileChanges,
+    *,
+    extra_file_ids: Sequence[str] = (),
+) -> tuple[str, ...]:
+    """Return the impacted file ids for incremental relationship runs.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted impacted file ids.
+    """
+    combined = set(changes.changed_file_ids)
+    combined.update(extra_file_ids)
+    return tuple(sorted(combined))
+
+
+def relspec_inputs_from_state(
+    fallback: Mapping[str, TableLike],
+    *,
+    state_root: Path,
+    ctx: ExecutionContext,
+    file_ids: Sequence[str],
+) -> dict[str, TableLike]:
+    """Load relationship input tables from the state store with file-id filtering.
+
+    Returns
+    -------
+    dict[str, TableLike]
+        Relationship input tables with scoped file ids when available.
+    """
+    out: dict[str, TableLike] = {}
+    for name, table in fallback.items():
+        dataset_name = _relspec_state_dataset_name(name)
+        if dataset_name is None:
+            out[name] = table
+            continue
+        dataset_dir = state_root / "datasets" / dataset_name
+        if not dataset_dir.exists():
+            out[name] = table
+            continue
+        out[name] = _read_state_dataset(
+            dataset_dir,
+            dataset_name=dataset_name,
+            ctx=ctx,
+            file_ids=file_ids,
+        )
+    return out
+
+
+def upsert_relationship_outputs(
+    outputs: Mapping[str, TableLike],
+    *,
+    state_root: Path,
+    changes: IncrementalFileChanges,
+) -> dict[str, str]:
+    """Upsert relationship outputs by edge_owner_file_id into the state store.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of dataset name to dataset path.
+    """
+    delete_partitions = _partition_specs("edge_owner_file_id", changes.deleted_file_ids)
+    updated: dict[str, str] = {}
+    for name, table_like in outputs.items():
+        dataset_name = _RELATION_OUTPUT_DATASETS.get(name)
+        if dataset_name is None:
+            continue
+        table = table_like
+        if "edge_owner_file_id" not in table.column_names:
+            continue
+        path = upsert_dataset_partitions_parquet(
+            table,
+            base_dir=state_root / "datasets" / dataset_name,
+            partition_cols=("edge_owner_file_id",),
+            delete_partitions=delete_partitions,
+            config=DatasetWriteConfig(
+                schema=table.schema,
+                encoding_policy=encoding_policy_from_schema(table.schema),
+            ),
+        )
+        updated[dataset_name] = path
+    return updated
+
+
+def scoped_relspec_resolver(
+    base: PlanResolver[IbisPlan],
+    *,
+    file_ids: Sequence[str],
+    scoped_datasets: frozenset[str] | None = None,
+) -> PlanResolver[IbisPlan]:
+    """Wrap a resolver to apply file-id predicates to scoped datasets.
+
+    Returns
+    -------
+    PlanResolver[IbisPlan]
+        Resolver scoped to file ids for selected datasets.
+    """
+    scoped = SCOPED_SITE_DATASETS if scoped_datasets is None else scoped_datasets
+    file_ids_tuple = tuple(file_ids)
+    return _ScopedResolver(base=base, scoped=scoped, file_ids=file_ids_tuple)
+
+
+@dataclass(frozen=True)
+class _ScopedResolver:
+    base: PlanResolver[IbisPlan]
+    scoped: frozenset[str]
+    file_ids: tuple[str, ...]
+
+    @property
+    def backend(self) -> BaseBackend | None:
+        return self.base.backend
+
+    def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
+        plan = self.base.resolve(ref, ctx=ctx)
+        if ref.name not in self.scoped:
+            return plan
+        expr = plan.expr
+        if "file_id" not in expr.columns:
+            return plan
+        values = [ibis.literal(value) for value in self.file_ids]
+        expr = expr.filter(expr["file_id"].isin(values))
+        return type(plan)(expr=expr, ordering=plan.ordering)
+
+    def telemetry(self, ref: DatasetRef, *, ctx: ExecutionContext) -> ScanTelemetry | None:
+        return self.base.telemetry(ref, ctx=ctx)
+
+
+def _partition_specs(
+    column: str,
+    values: Sequence[str],
+) -> tuple[dict[str, str], ...]:
+    return tuple({column: value} for value in values)
+
+
+def _relspec_state_dataset_name(name: str) -> str | None:
+    alias = _NORMALIZE_ALIAS_OVERRIDES.get(name)
+    if alias is not None:
+        try:
+            return dataset_name_from_alias(alias)
+        except KeyError:
+            return None
+    try:
+        dataset_name = dataset_name_for_output(name)
+    except KeyError:
+        dataset_name = None
+    if dataset_name is not None:
+        return dataset_name
+    try:
+        return dataset_name_from_alias(name)
+    except KeyError:
+        return None
+
+
+def _read_state_dataset(
+    dataset_dir: Path,
+    *,
+    dataset_name: str,
+    ctx: ExecutionContext,
+    file_ids: Sequence[str],
+) -> TableLike:
+    dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(dataset_name)
+    schema = dataset_spec.schema() if dataset_spec is not None else None
+    dataset = open_dataset(dataset_dir, schema=schema, partitioning="hive")
+    if schema is not None:
+        validate_schema_identity(
+            expected=schema,
+            actual=dataset.schema,
+            dataset_name=dataset_name,
+        )
+    if schema is not None and "file_id" in schema.names:
+        query = dataset_query_for_file_ids(file_ids, schema=schema)
+        plan = query.to_plan(dataset=dataset, ctx=ctx, label=dataset_name)
+        return plan.to_table(ctx=ctx)
+    if schema is None:
+        return dataset.to_table()
+    if isinstance(dataset, ds.Dataset):
+        return dataset.to_table()
+    return empty_table(schema)
+
+
+__all__ = [
+    "SCOPED_SITE_DATASETS",
+    "impacted_file_ids",
+    "relspec_inputs_from_state",
+    "scoped_relspec_resolver",
+    "upsert_relationship_outputs",
+]

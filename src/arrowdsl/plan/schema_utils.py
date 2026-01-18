@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, cast
 
+from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.ir.plan import OpNode, PlanIR
@@ -101,11 +102,14 @@ def _columns_for_winner_select(node: OpNode, columns: list[str] | None) -> list[
 
 
 def _columns_for_explode_list(node: OpNode, _columns: list[str] | None) -> list[str] | None:
+    spec = node.args.get("spec")
     out_parent = node.args.get("out_parent_col")
-    out_value = node.args.get("out_value_col")
-    if isinstance(out_parent, str) and isinstance(out_value, str):
-        return [out_parent, out_value]
-    return None
+    if not isinstance(spec, ExplodeSpec):
+        return None
+    parent_name = out_parent if isinstance(out_parent, str) else spec.parent_keys[0]
+    if spec.idx_col is not None:
+        return [parent_name, spec.value_col, spec.idx_col]
+    return [parent_name, spec.value_col]
 
 
 def _columns_for_union_all(node: OpNode, _columns: list[str] | None) -> list[str] | None:

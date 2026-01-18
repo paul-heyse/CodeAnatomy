@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
+import pyarrow as pa
 import pyarrow.dataset as ds
+import pyarrow.fs as pafs
 from datafusion import SessionContext
 from datafusion.catalog import Catalog, Schema
 from datafusion.dataframe import DataFrame
+from deltalake import DeltaTable
 
 from arrowdsl.core.interop import SchemaLike
+from arrowdsl.io.delta import DeltaCdfOptions, read_delta_cdf
+from arrowdsl.schema.serialization import schema_to_dict
 from core_types import ensure_path
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.registry import (
@@ -22,10 +27,15 @@ from ibis_engine.registry import (
     IbisDatasetRegistry,
     resolve_datafusion_scan_options,
     resolve_dataset_schema,
+    resolve_delta_scan_options,
 )
 from schema_spec.specs import ExternalTableConfig, TableSchemaSpec
-from schema_spec.system import DataFusionScanOptions
-from sqlglot_tools.optimizer import register_datafusion_dialect
+from schema_spec.system import DataFusionScanOptions, DeltaScanOptions
+from sqlglot_tools.optimizer import (
+    SqlGlotSurface,
+    register_datafusion_dialect,
+    sqlglot_surface_policy,
+)
 
 DEFAULT_CACHE_MAX_COLUMNS = 64
 _REGISTERED_OBJECT_STORES: dict[int, set[str]] = {}
@@ -145,15 +155,36 @@ def dataset_input_plugin(
     return _install
 
 
+def input_plugin_prefixes() -> tuple[str, ...]:
+    """Return the registered input plugin prefixes.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Supported input plugin prefixes.
+    """
+    return _INPUT_PLUGIN_PREFIXES
+
+
 @dataclass(frozen=True)
 class DataFusionRegistryOptions:
     """Resolved DataFusion registration options for a dataset."""
 
     scan: DataFusionScanOptions | None
+    delta_scan: DeltaScanOptions | None
     schema: SchemaLike | None
     read_options: Mapping[str, object]
     cache: bool
     provider: Literal["dataset", "listing", "parquet"] | None
+
+
+@dataclass(frozen=True)
+class DeltaCdfRegistrationOptions:
+    """Options for registering Delta CDF tables."""
+
+    cdf_options: DeltaCdfOptions | None = None
+    storage_options: Mapping[str, str] | None = None
+    runtime_profile: DataFusionRuntimeProfile | None = None
 
 
 @dataclass(frozen=True)
@@ -182,6 +213,7 @@ class DataFusionRegistrationContext:
     options: DataFusionRegistryOptions
     cache: DataFusionCacheSettings
     external_table_sql: str | None = None
+    runtime_profile: DataFusionRuntimeProfile | None = None
 
 
 def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOptions:
@@ -193,12 +225,14 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
         Registration options derived from the dataset location.
     """
     scan = resolve_datafusion_scan_options(location)
+    delta_scan = resolve_delta_scan_options(location)
     schema = resolve_dataset_schema(location)
     provider = location.datafusion_provider
     if provider is None and scan is not None and (scan.partition_cols or scan.file_sort_order):
         provider = "listing"
     return DataFusionRegistryOptions(
         scan=scan,
+        delta_scan=delta_scan,
         schema=schema,
         read_options=dict(location.read_options),
         cache=bool(scan.cache) if scan is not None else False,
@@ -210,7 +244,7 @@ def datafusion_external_table_sql(
     *,
     name: str,
     location: DatasetLocation,
-    dialect: str = "datafusion_ext",
+    dialect: str | None = None,
 ) -> str | None:
     """Return a CREATE EXTERNAL TABLE statement for a dataset location.
 
@@ -219,10 +253,15 @@ def datafusion_external_table_sql(
     str | None
         External table DDL when a schema is available, otherwise ``None``.
     """
+    if location.format == "delta":
+        return None
     table_spec = _resolve_table_spec(location)
     if table_spec is None:
         return None
-    if dialect == "datafusion_ext":
+    resolved_dialect = (
+        dialect or sqlglot_surface_policy(SqlGlotSurface.DATAFUSION_EXTERNAL_TABLE).dialect
+    )
+    if resolved_dialect == "datafusion_ext":
         register_datafusion_dialect()
     options, compression = _external_table_options(location.read_options)
     partitioned_by = _partitioned_by(location)
@@ -230,7 +269,7 @@ def datafusion_external_table_sql(
         location=str(location.path),
         file_format=location.format,
         table_name=name,
-        dialect=dialect,
+        dialect=resolved_dialect,
         options=options,
         partitioned_by=partitioned_by,
         compression=compression,
@@ -305,7 +344,10 @@ def register_dataset_df(
         options=options,
         cache=cache,
         external_table_sql=datafusion_external_table_sql(name=name, location=location),
+        runtime_profile=runtime_profile,
     )
+    if location.format == "delta":
+        return _register_delta(context)
     if options.provider == "dataset":
         return _register_dataset_provider(context)
     if location.format == "parquet":
@@ -333,10 +375,12 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
         "file_extension": file_extension,
         "table_partition_cols": table_partition_cols,
     }
+    skip_metadata = None
     if scan is not None:
         kwargs["file_sort_order"] = scan.file_sort_order or None
         kwargs["parquet_pruning"] = scan.parquet_pruning
-        kwargs["skip_metadata"] = _effective_skip_metadata(context.location, scan)
+        skip_metadata = _effective_skip_metadata(context.location, scan)
+        kwargs["skip_metadata"] = skip_metadata
     kwargs = _merge_kwargs(kwargs, context.options.read_options)
     if table_partition_cols or context.options.provider == "listing":
         _call_register(
@@ -346,6 +390,13 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
             kwargs,
         )
         df = context.ctx.table(context.name)
+        _record_listing_table_artifact(
+            context,
+            scan=scan,
+            file_extension=file_extension,
+            table_partition_cols=table_partition_cols,
+            skip_metadata=skip_metadata,
+        )
     else:
         _call_register(
             context.ctx.register_parquet,
@@ -355,6 +406,413 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
         )
         df = context.ctx.table(context.name)
     return _maybe_cache(context, df)
+
+
+def _register_delta(context: DataFusionRegistrationContext) -> DataFrame:
+    table = DeltaTable(
+        context.location.path,
+        storage_options=(
+            dict(context.location.storage_options) if context.location.storage_options else None
+        ),
+        version=context.location.delta_version,
+    )
+    if context.location.delta_timestamp is not None:
+        table.load_as_version(context.location.delta_timestamp)
+    delta_features = _delta_feature_payload(table)
+    delta_protocol = _delta_protocol_payload(table)
+    provider = "table"
+    if context.location.files:
+        dataset = _delta_dataset_from_files(context)
+        context.ctx.register_table(context.name, dataset)
+        provider = "dataset_files"
+    elif context.options.provider == "dataset":
+        dataset = _delta_dataset_from_table(context, table)
+        context.ctx.register_table(context.name, dataset)
+        provider = "dataset_forced"
+    else:
+        delta_provider = _delta_table_provider(table, delta_scan=context.options.delta_scan)
+        if delta_provider is not None:
+            context.ctx.register_table(context.name, delta_provider)
+            provider = "table_provider"
+        else:
+            try:
+                context.ctx.register_table(context.name, table)
+            except TypeError:
+                dataset = _delta_dataset_from_table(context, table)
+                context.ctx.register_table(context.name, dataset)
+                provider = "dataset"
+    df = context.ctx.table(context.name)
+    if context.location.delta_version is not None:
+        delta_version = context.location.delta_version
+    else:
+        delta_version = table.version()
+    _record_delta_table_artifact(
+        context,
+        provider=provider,
+        delta_version=delta_version,
+        delta_features=delta_features,
+        delta_protocol=delta_protocol,
+    )
+    return _maybe_cache(context, df)
+
+
+def _record_listing_table_artifact(
+    context: DataFusionRegistrationContext,
+    *,
+    scan: DataFusionScanOptions | None,
+    file_extension: str,
+    table_partition_cols: Sequence[tuple[str, str]] | None,
+    skip_metadata: bool | None,
+) -> None:
+    profile = context.runtime_profile
+    if profile is None or profile.diagnostics_sink is None:
+        return
+    schema_payload = (
+        schema_to_dict(context.options.schema) if context.options.schema is not None else None
+    )
+    payload: dict[str, object] = {
+        "name": context.name,
+        "path": str(context.location.path),
+        "format": context.location.format,
+        "provider": "listing",
+        "file_extension": file_extension,
+        "partition_cols": [
+            {"name": col, "dtype": dtype} for col, dtype in (table_partition_cols or ())
+        ],
+        "file_sort_order": list(scan.file_sort_order) if scan is not None else None,
+        "parquet_pruning": scan.parquet_pruning if scan is not None else None,
+        "skip_metadata": skip_metadata,
+        "schema": schema_payload,
+        "read_options": dict(context.options.read_options),
+    }
+    profile.diagnostics_sink.record_artifact("datafusion_listing_tables_v1", payload)
+
+
+def _record_delta_table_artifact(
+    context: DataFusionRegistrationContext,
+    *,
+    provider: str,
+    delta_version: int | None,
+    delta_features: Mapping[str, str] | None,
+    delta_protocol: Mapping[str, object] | None,
+) -> None:
+    profile = context.runtime_profile
+    if profile is None or profile.diagnostics_sink is None:
+        return
+    schema_payload = (
+        schema_to_dict(context.options.schema) if context.options.schema is not None else None
+    )
+    payload: dict[str, object] = {
+        "name": context.name,
+        "path": str(context.location.path),
+        "format": context.location.format,
+        "provider": provider,
+        "delta_version": delta_version,
+        "delta_timestamp": context.location.delta_timestamp,
+        "delta_features": dict(delta_features) if delta_features else None,
+        "delta_protocol": dict(delta_protocol) if delta_protocol else None,
+        "schema": schema_payload,
+        "delta_scan": _delta_scan_payload(context.options.delta_scan),
+        "read_options": dict(context.options.read_options),
+        "storage_options": dict(context.location.storage_options)
+        if context.location.storage_options
+        else None,
+    }
+    profile.diagnostics_sink.record_artifact("datafusion_delta_tables_v1", payload)
+
+
+def _delta_dataset_from_table(
+    context: DataFusionRegistrationContext,
+    table: DeltaTable,
+) -> ds.Dataset:
+    delta_scan = context.options.delta_scan
+    schema = (
+        delta_scan.schema
+        if delta_scan is not None and delta_scan.schema is not None
+        else context.options.schema
+    )
+    parquet_read_options = _parquet_read_options(context.options.read_options)
+    return table.to_pyarrow_dataset(
+        filesystem=_delta_bulk_filesystem(context.location),
+        parquet_read_options=parquet_read_options,
+        schema=schema,
+        as_large_types=bool(delta_scan.schema_force_view_types)
+        if delta_scan is not None
+        else False,
+    )
+
+
+def _delta_dataset_from_files(context: DataFusionRegistrationContext) -> ds.Dataset:
+    delta_scan = context.options.delta_scan
+    schema = (
+        delta_scan.schema
+        if delta_scan is not None and delta_scan.schema is not None
+        else context.options.schema
+    )
+    file_paths = _resolve_delta_file_paths(context.location)
+    parquet_format = ds.ParquetFileFormat(
+        read_options=_parquet_read_options(context.options.read_options)
+    )
+    return ds.dataset(
+        file_paths,
+        format=parquet_format,
+        filesystem=_delta_filesystem_override(context.location),
+        schema=schema,
+    )
+
+
+def _resolve_delta_file_paths(location: DatasetLocation) -> list[str]:
+    files = location.files or ()
+    if not files:
+        return []
+    if location.filesystem is not None:
+        return list(files)
+    base = str(location.path)
+    return [_join_delta_path(base, name) for name in files]
+
+
+def _join_delta_path(base: str, name: str) -> str:
+    if "://" in name:
+        return name
+    parsed = urlparse(base)
+    if parsed.scheme:
+        prefix = f"{parsed.scheme}://{parsed.netloc}"
+        base_path = parsed.path.rstrip("/")
+        return f"{prefix}{base_path}/{name.lstrip('/')}"
+    return str(Path(base) / name)
+
+
+def _delta_scan_payload(options: DeltaScanOptions | None) -> dict[str, object] | None:
+    if options is None:
+        return None
+    return {
+        "file_column_name": options.file_column_name,
+        "enable_parquet_pushdown": options.enable_parquet_pushdown,
+        "schema_force_view_types": options.schema_force_view_types,
+        "schema": schema_to_dict(options.schema) if options.schema is not None else None,
+    }
+
+
+def _delta_scan_config(options: DeltaScanOptions | None) -> dict[str, object] | None:
+    if options is None:
+        return None
+    config: dict[str, object] = {
+        "enable_parquet_pushdown": bool(options.enable_parquet_pushdown),
+        "schema_force_view_types": bool(options.schema_force_view_types),
+    }
+    if options.file_column_name is not None:
+        config["file_column_name"] = options.file_column_name
+    if options.schema is not None:
+        config["schema"] = options.schema
+    return config or None
+
+
+def _delta_table_provider(
+    table: DeltaTable,
+    *,
+    delta_scan: DeltaScanOptions | None,
+) -> object | None:
+    provider = getattr(table, "__datafusion_table_provider__", None)
+    if not callable(provider):
+        return None
+    config = _delta_scan_config(delta_scan)
+    if config is None:
+        try:
+            return provider()
+        except TypeError:
+            return None
+    try:
+        return provider(config)
+    except TypeError:
+        try:
+            return provider(**config)
+        except TypeError:
+            return None
+
+
+def _delta_feature_payload(table: DeltaTable) -> dict[str, str] | None:
+    metadata = table.metadata()
+    configuration = metadata.configuration or {}
+    features = {key: str(value) for key, value in configuration.items() if key.startswith("delta.")}
+    protocol = table.protocol()
+    if protocol.reader_features:
+        features["reader_features"] = ",".join(protocol.reader_features)
+    if protocol.writer_features:
+        features["writer_features"] = ",".join(protocol.writer_features)
+    return features or None
+
+
+def _delta_protocol_payload(table: DeltaTable) -> dict[str, object] | None:
+    protocol = table.protocol()
+    return {
+        "min_reader_version": protocol.min_reader_version,
+        "min_writer_version": protocol.min_writer_version,
+        "reader_features": list(protocol.reader_features) if protocol.reader_features else None,
+        "writer_features": list(protocol.writer_features) if protocol.writer_features else None,
+    }
+
+
+def _parquet_read_options(read_options: Mapping[str, object]) -> ds.ParquetReadOptions | None:
+    option = read_options.get("parquet_read_options")
+    if isinstance(option, ds.ParquetReadOptions):
+        return option
+    return None
+
+
+def _delta_bulk_filesystem(location: DatasetLocation) -> pafs.FileSystem | None:
+    if location.filesystem is not None:
+        return _normalize_filesystem(location.filesystem)
+    if not isinstance(location.path, str) or "://" not in location.path:
+        return None
+    raw_fs, normalized_path = pafs.FileSystem.from_uri(location.path)
+    return pafs.SubTreeFileSystem(normalized_path, raw_fs)
+
+
+def _delta_filesystem_override(location: DatasetLocation) -> pafs.FileSystem | None:
+    if location.filesystem is None:
+        return None
+    return _normalize_filesystem(location.filesystem)
+
+
+def _normalize_filesystem(filesystem: object) -> pafs.FileSystem | None:
+    if isinstance(filesystem, pafs.FileSystem):
+        return filesystem
+    handler = getattr(pafs, "FSSpecHandler", None)
+    if handler is not None:
+        try:
+            return pafs.PyFileSystem(handler(filesystem))
+        except (TypeError, ValueError):
+            return None
+    if isinstance(filesystem, pafs.FileSystemHandler):
+        return pafs.PyFileSystem(filesystem)
+    return None
+
+
+def register_delta_cdf_df(
+    ctx: SessionContext,
+    *,
+    name: str,
+    path: str,
+    options: DeltaCdfRegistrationOptions | None = None,
+) -> DataFrame:
+    """Register a Delta CDF snapshot as a DataFusion table.
+
+    Returns
+    -------
+    datafusion.dataframe.DataFrame
+        DataFusion DataFrame for the registered CDF dataset.
+    """
+    resolved = options or DeltaCdfRegistrationOptions()
+    cdf_options = resolved.cdf_options
+    storage_options = resolved.storage_options
+    runtime_profile = resolved.runtime_profile
+    table = DeltaTable(path, storage_options=dict(storage_options) if storage_options else None)
+    provider = _delta_cdf_provider(table, cdf_options)
+    provider_name = "arrow"
+    if provider is not None:
+        ctx.register_table(name, provider)
+        provider_name = "table_provider"
+    else:
+        cdf = read_delta_cdf(path, options=cdf_options, storage_options=storage_options)
+        arrow_table = _ensure_pyarrow_table(cdf)
+        ctx.register_record_batches(name, [arrow_table.to_batches()])
+    _record_delta_cdf_artifact(
+        runtime_profile,
+        name=name,
+        path=path,
+        provider=provider_name,
+        options=cdf_options,
+    )
+    return ctx.table(name)
+
+
+def _ensure_pyarrow_table(value: object) -> pa.Table:
+    if isinstance(value, pa.Table):
+        return value
+    msg = f"Delta CDF read expected pyarrow.Table, got {type(value)}"
+    raise TypeError(msg)
+
+
+def _call_cdf_provider(
+    provider: Callable[..., object],
+    *,
+    args: object | None = None,
+    kwargs: Mapping[str, object] | None = None,
+) -> object | None:
+    try:
+        if kwargs is not None:
+            return provider(**kwargs)
+        if args is None:
+            return provider()
+        return provider(args)
+    except TypeError:
+        return None
+
+
+def _delta_cdf_provider(
+    table: DeltaTable,
+    options: DeltaCdfOptions | None,
+) -> object | None:
+    provider = getattr(table, "cdf_table_provider", None)
+    if not callable(provider):
+        return None
+    result: object | None = None
+    if options is None:
+        return _call_cdf_provider(provider)
+    kwargs = _cdf_provider_kwargs(options)
+    if kwargs:
+        result = _call_cdf_provider(provider, kwargs=kwargs)
+    if result is None:
+        result = _call_cdf_provider(provider, args=options)
+    if result is None:
+        result = _call_cdf_provider(provider)
+    return result
+
+
+def _cdf_provider_kwargs(options: DeltaCdfOptions) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "starting_version": options.starting_version,
+        "ending_version": options.ending_version,
+        "starting_timestamp": options.starting_timestamp,
+        "ending_timestamp": options.ending_timestamp,
+        "columns": options.columns,
+        "predicate": options.predicate,
+        "allow_out_of_range": options.allow_out_of_range,
+    }
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def _record_delta_cdf_artifact(
+    runtime_profile: DataFusionRuntimeProfile | None,
+    *,
+    name: str,
+    path: str,
+    provider: str,
+    options: DeltaCdfOptions | None,
+) -> None:
+    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+        return
+    payload: dict[str, object] = {
+        "name": name,
+        "path": path,
+        "provider": provider,
+        "options": _cdf_options_payload(options),
+    }
+    runtime_profile.diagnostics_sink.record_artifact("datafusion_delta_cdf_v1", payload)
+
+
+def _cdf_options_payload(options: DeltaCdfOptions | None) -> dict[str, object] | None:
+    if options is None:
+        return None
+    return {
+        "starting_version": options.starting_version,
+        "ending_version": options.ending_version,
+        "starting_timestamp": options.starting_timestamp,
+        "ending_timestamp": options.ending_timestamp,
+        "columns": list(options.columns) if options.columns is not None else None,
+        "predicate": options.predicate,
+        "allow_out_of_range": options.allow_out_of_range,
+    }
 
 
 def _register_simple(context: DataFusionRegistrationContext, *, method: str) -> DataFrame:
@@ -534,6 +992,8 @@ __all__ = [
     "DatasetInputSource",
     "datafusion_external_table_sql",
     "dataset_input_plugin",
+    "input_plugin_prefixes",
     "register_dataset_df",
+    "register_delta_cdf_df",
     "resolve_registry_options",
 ]

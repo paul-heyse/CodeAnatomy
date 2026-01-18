@@ -237,6 +237,8 @@ class ExplodeListSpec(KernelSpec):
     list_col: str = "dst_ids"
     out_parent_col: str = "src_id"
     out_value_col: str = "dst_id"
+    idx_col: str | None = "idx"
+    keep_empty: bool = True
 
 
 @dataclass(frozen=True)

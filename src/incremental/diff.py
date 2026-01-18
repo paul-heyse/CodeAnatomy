@@ -7,8 +7,14 @@ from typing import cast
 import pyarrow as pa
 
 from arrowdsl.core.interop import pc
-from arrowdsl.io.parquet import write_table_parquet
+from arrowdsl.io.delta import (
+    DeltaWriteOptions,
+    DeltaWriteResult,
+    enable_delta_features,
+    write_table_delta,
+)
 from arrowdsl.schema.build import table_from_arrays
+from arrowdsl.schema.serialization import schema_fingerprint
 from incremental.state_store import StateStore
 
 
@@ -128,18 +134,60 @@ def diff_snapshots(prev: pa.Table | None, cur: pa.Table) -> pa.Table:
     )
 
 
-def write_incremental_diff(store: StateStore, diff: pa.Table) -> str:
-    """Persist the incremental diff to the state store.
+def diff_snapshots_with_cdf(
+    prev: pa.Table | None,
+    cur: pa.Table,
+    cdf: pa.Table,
+) -> pa.Table:
+    """Diff snapshots using CDF to limit the compared rows.
+
+    Returns
+    -------
+    pa.Table
+        Change records derived from the filtered snapshot diff.
+    """
+    if prev is None:
+        return diff_snapshots(None, cur)
+    cdf_ids = _cdf_file_ids(cdf)
+    if len(cdf_ids) == 0:
+        return diff_snapshots(prev[:0], cur[:0])
+    prev_filtered = prev.filter(pc.is_in(prev["file_id"], value_set=cdf_ids))
+    cur_filtered = cur.filter(pc.is_in(cur["file_id"], value_set=cdf_ids))
+    return diff_snapshots(prev_filtered, cur_filtered)
+
+
+def _cdf_file_ids(cdf: pa.Table) -> pa.Array:
+    values = cdf["file_id"]
+    if isinstance(values, pa.ChunkedArray):
+        values = values.combine_chunks()
+    return cast("pa.Array", pc.unique(values))
+
+
+def write_incremental_diff(store: StateStore, diff: pa.Table) -> DeltaWriteResult:
+    """Persist the incremental diff to the state store as Delta.
 
     Returns
     -------
     str
-        Path to the written diff parquet file.
+        Path to the written diff Delta table.
     """
     store.ensure_dirs()
     target = store.incremental_diff_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    return write_table_parquet(diff, target, overwrite=True)
+    result = write_table_delta(
+        diff,
+        str(target),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata={
+                "snapshot_kind": "incremental_diff",
+                "schema_fingerprint": schema_fingerprint(diff.schema),
+            },
+        ),
+    )
+    enable_delta_features(result.path)
+    return result
 
 
-__all__ = ["diff_snapshots", "write_incremental_diff"]
+__all__ = ["diff_snapshots", "diff_snapshots_with_cdf", "write_incremental_diff"]

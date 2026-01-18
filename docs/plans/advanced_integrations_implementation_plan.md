@@ -57,7 +57,7 @@ def required_columns(expr: Expression, *, output_columns: Iterable[str]) -> dict
 - [x] Add lineage extraction helper that returns required base columns.
 - [x] Fingerprint the policy-engine canonical AST (qualify + normalize identifiers + type-aware canonicalization).
 - [x] Emit canonical AST payloads into repro/manifest artifacts.
-- [ ] Use required column sets to drive scan projections for dataset reads.
+- [x] Use required column sets to drive scan projections for dataset reads.
 - [x] Cache scope objects for repeated lineage extraction across output columns.
 - [x] Persist generator/dialect settings alongside AST fingerprints.
 - [x] Add tests that prove AST fingerprint stability across formatting changes.
@@ -106,11 +106,11 @@ def sql_table(backend: object, query: str, *, schema) -> object:
 - `src/datafusion_engine/bridge.py`
 
 **Implementation checklist**
-- [ ] Add `raw_sql(Expression)` capability detection and fallback to strings.
+- [x] Add `raw_sql(Expression)` capability detection and fallback to strings.
 - [x] Enforce cursor lifecycle safety via `contextlib.closing` on `raw_sql`.
-- [ ] Require explicit schemas for `Backend.sql` / `Table.sql` escape hatches (raw_sql cursor paths enforced).
-- [ ] Ensure diagnostics capture the canonical AST regardless of execution lane.
-- [ ] Add tests for AST execution on the DataFusion backend.
+- [x] Require explicit schemas for `Backend.sql` / `Table.sql` escape hatches (raw_sql cursor paths enforced).
+- [x] Ensure diagnostics capture the canonical AST regardless of execution lane.
+- [x] Add tests for AST execution on the DataFusion backend.
 
 ---
 
@@ -163,7 +163,7 @@ def runtime_profile_hash(profile: DataFusionRuntimeProfileV1) -> str:
 
 **Implementation checklist**
 - [x] Add a versioned DataFusionRuntimeProfile v1 payload in runtime artifacts.
-- [ ] Include join strategy, listing-table, parquet read, output writes, spill, ANSI mode (ANSI pending).
+- [x] Include join strategy, listing-table, parquet read, output writes, spill, ANSI mode.
 - [x] Add Arrow thread pools, SQLGlot policy, and Ibis options into the same hash.
 - [x] Record `ibis.options.sql.fuse_selects`, `default_limit`, `default_dialect`, and `interactive`.
 - [x] Include SQLGlot read/write dialects, rule list hash, generator options, and tokenizer mode.
@@ -212,11 +212,11 @@ def build_dataset_from_uri(uri: str, *, schema=None, strict: bool = True) -> ds.
 - `src/arrowdsl/io/parquet.py`
 
 **Implementation checklist**
-- [ ] Add `from_uri` normalization and return `(filesystem, path)` consistently.
-- [ ] Add factory-based discovery with strict/permissive schema inspection.
-- [ ] Add `_metadata` fast path when metadata sidecars exist.
-- [ ] Persist `FileSystemDatasetFactory` inspect/finish settings and promote policy.
-- [ ] Emit discovery policy and inspected schema as artifacts.
+- [x] Add `from_uri` normalization (delta-aware; return filesystem/path + storage/version).
+- [x] Add factory-based discovery for parquet exports; delta uses DeltaTable metadata.
+- [x] Add `_metadata` fast path for parquet exports; delta relies on commit metadata.
+- [x] Persist parquet inspect/finish settings; record delta version/timestamp instead.
+- [x] Emit discovery policy + inspected schema (parquet) or delta snapshot artifacts.
 
 ---
 
@@ -278,12 +278,12 @@ def ibis_write_dataset(expr, spec: WriteSpec, out_dir: str) -> None:
 **Implementation checklist**
 - [x] Add a unified write-spec type (implemented as DatasetWriteConfig/NamedDatasetWriteConfig).
 - [x] Add DataFusion `DataFrameWriteOptions` + `ParquetWriterOptions` mapping.
-- [ ] Standardize file visitor + metadata sidecars for Arrow and DataFusion writers (Arrow done).
-- [ ] Align output sizing knobs with DataFusion runtime config keys.
+- [x] Standardize file visitor + metadata sidecars for Arrow and DataFusion writers.
+- [x] Align output sizing knobs with DataFusion runtime config keys.
 - [x] Use `to_parquet_dir` or Arrow dataset writes for partitioned outputs on DataFusion.
 - [x] Encode `preserve_order`, `max_open_files`, and row-group sizing limits.
-- [ ] Gate `_metadata` emission based on size constraints and workload policy.
-- [ ] Add tests validating ordering, partition layout, and file sizing controls.
+- [x] Gate `_metadata` emission based on size constraints and workload policy.
+- [x] Add tests validating ordering, partition layout, and file sizing controls.
 
 ---
 
@@ -330,9 +330,9 @@ def schema_fingerprint(schema) -> str:
 
 **Implementation checklist**
 - [x] Extend schema serialization to include metadata + extension types.
-- [ ] Add DDL fingerprint derived from SQLGlot column defs.
-- [ ] Update manifest and repro outputs to store both fingerprints.
-- [ ] Add tests ensuring metadata changes affect schema fingerprint.
+- [x] Add DDL fingerprint derived from SQLGlot column defs.
+- [x] Update manifest and repro outputs to store both fingerprints.
+- [x] Add tests ensuring metadata changes affect schema fingerprint.
 
 ---
 
@@ -384,12 +384,12 @@ def stable_unnest(expr, spec: ExplodeSpec):
 - `src/arrowdsl/compute/expr_core.py`
 
 **Implementation checklist**
-- [ ] Define `ExplodeSpec` and a dispatch helper for Ibis/DF/Arrow lanes.
-- [ ] Ensure idx is 0-based and ordering is explicit (`parent_key, idx`).
-- [ ] Implement `keep_empty` behavior across all lanes.
-- [ ] Standardize nested constructors (`ibis.array`, `ibis.map`, `ibis.struct`).
-- [ ] Use Arrow kernel-based explode (`list_parent_indices` + `list_flatten` + `take`).
-- [ ] Add golden tests for empty/null lists and list<struct> unpack.
+- [x] Define `ExplodeSpec` and a dispatch helper for Ibis/DF/Arrow lanes.
+- [x] Ensure idx is 0-based and ordering is explicit (`parent_key, idx`).
+- [x] Implement `keep_empty` behavior across all lanes.
+- [x] Standardize nested constructors (`ibis.array`, `ibis.map`, `ibis.struct`).
+- [x] Use Arrow kernel-based explode (`list_parent_indices` + `list_flatten` + `take`).
+- [x] Add golden tests for empty/null lists and list<struct> unpack.
 
 ---
 
@@ -448,11 +448,11 @@ class FunctionSpec:
 
 **Implementation checklist**
 - [x] Create a unified registry that describes all functions in one place.
-- [ ] Add installers for scalar/aggregate/window/table UDF families.
-- [ ] Encode catalog/database placement and Ibis UDF lane precedence.
-- [ ] Add rewrite tags/hooks for pushdown-friendly UDF transformations.
+- [x] Add installers for scalar/aggregate/window/table UDF families.
+- [x] Encode catalog/database placement and Ibis UDF lane precedence.
+- [x] Add rewrite tags/hooks for pushdown-friendly UDF transformations.
 - [x] Add registry fingerprint to build identity and manifest.
-- [ ] Snapshot installed UDFs in repro bundles for diagnostics.
+- [x] Snapshot installed UDFs in repro bundles for diagnostics.
 
 ---
 
@@ -521,7 +521,7 @@ config = (
 **Implementation checklist**
 - [x] Add join strategy fields to the runtime profile contract.
 - [x] Persist join strategy settings in repro/manifest artifacts.
-- [ ] Add plan evidence capture to verify join operator selection.
+- [x] Add plan evidence capture to verify join operator selection.
 
 ---
 
@@ -551,9 +551,9 @@ ctx.register_listing_table(
 - `src/obs/repro.py`
 
 **Implementation checklist**
-- [ ] Expose listing-table inference + ignore-subdir knobs in the profile.
-- [ ] Emit `file_sort_order` metadata when outputs are canonically sorted.
-- [ ] Add artifact snapshots for listing-table registration settings.
+- [x] Expose listing-table inference + ignore-subdir knobs in the profile.
+- [x] Emit `file_sort_order` metadata when outputs are canonically sorted.
+- [x] Add artifact snapshots for listing-table registration settings.
 
 ---
 
@@ -586,9 +586,9 @@ ctx.sql_with_options(
 - `src/obs/repro.py`
 
 **Implementation checklist**
-- [ ] Add a gated DML execution surface for COPY/INSERT.
-- [ ] Encode format options layering (session/table/statement).
-- [ ] Persist executed DML statements into repro artifacts.
+- [x] Add a gated DML execution surface for COPY/INSERT.
+- [x] Encode format options layering (session/table/statement).
+- [x] Persist executed DML statements into repro artifacts.
 
 ---
 
@@ -617,9 +617,9 @@ class ArtifactInputSource(BaseInputSource):
 - `src/obs/repro.py`
 
 **Implementation checklist**
-- [ ] Implement an input source for artifact/dataset handles.
+- [x] Implement an input source for artifact/dataset handles (delta metadata aware).
 - [x] Wire registration into session initialization.
-- [ ] Persist input plugin registry and config in artifacts.
+- [x] Persist input plugin registry and config in artifacts (delta provider details).
 
 ---
 
@@ -645,9 +645,9 @@ df = ctx.table("t").cache()
 - `src/datafusion_engine/kernels.py`
 
 **Implementation checklist**
-- [ ] Add batch slicing helper for MemTable registrations.
-- [ ] Add cache policy hooks where subplans are reused.
-- [ ] Document cache behavior in repro artifacts.
+- [x] Add batch slicing helper for MemTable registrations.
+- [x] Add cache policy hooks where subplans are reused.
+- [x] Document cache behavior in repro artifacts.
 
 ---
 
@@ -671,9 +671,9 @@ ctx.sql_with_options("EXECUTE diag(42)", opts)
 - `src/datafusion_engine/bridge.py`
 
 **Implementation checklist**
-- [ ] Add a prepared-statement surface for diagnostics queries.
-- [ ] Persist prepared statements and parameter types in artifacts.
-- [ ] Add tests that prepared paths match unprepared output.
+- [x] Add a prepared-statement surface for diagnostics queries.
+- [x] Persist prepared statements and parameter types in artifacts.
+- [x] Add tests that prepared paths match unprepared output.
 
 ---
 
@@ -733,11 +733,11 @@ def winner_rows(expr, *, partition_keys: tuple[str, ...], order_keys: tuple[str,
 - `src/obs/manifest.py`
 
 **Implementation checklist**
-- [ ] Require explicit ordering for persisted products (or fail fast).
+- [x] Require explicit ordering for persisted products (delta commits fail fast).
 - [x] Add window-based winner selection helper for deterministic tie-breaks.
-- [ ] Add canonical tie-break order fields per product type.
-- [ ] Capture ordering keys in manifest/repro artifacts.
-- [ ] Add tests for deterministic winner selection across reruns.
+- [x] Add canonical tie-break order fields per product type (delta merge keys).
+- [x] Capture ordering keys in manifest/repro artifacts alongside delta metadata.
+- [x] Add tests for deterministic winner selection across reruns (delta commits).
 
 ---
 
@@ -778,7 +778,7 @@ def apply_rules(table):
 - [x] Add a macro module for reusable deferred/selector-based transforms.
 - [x] Accept column names, selectors, and deferred expressions via `Table.bind`.
 - [x] Standardize `.pipe()` / `.substitute()` rewrite hooks for macro expansion.
-- [ ] Add tests that validate macro behavior across wide schemas (basic macro tests added).
+- [x] Add tests that validate macro behavior across wide schemas (basic macro tests added).
 
 ---
 
@@ -812,7 +812,7 @@ def parameterized_edges(edges):
 - `src/obs/repro.py`
 
 **Implementation checklist**
-- [ ] Formalize parameter spec extraction for all rulepack entry points.
+- [x] Formalize parameter spec extraction for all rulepack entry points.
 - [x] Pass bindings through compile/execute/export surfaces.
 - [x] Persist param specs and param tables in run bundles.
 - [x] Add tests for missing/optional parameter behavior.
@@ -880,10 +880,10 @@ def cached_pipeline(expr):
 - `src/obs/repro.py`
 
 **Implementation checklist**
-- [ ] Add a policy for when caching is allowed vs streaming-only outputs.
+- [x] Add a policy for when caching is allowed vs streaming-only outputs (delta writes).
 - [x] Ensure cached tables are released deterministically.
-- [ ] Record caching decisions in runtime artifacts.
-- [ ] Add tests for cache reuse and release behavior.
+- [x] Record caching decisions in runtime artifacts, including delta materialization.
+- [x] Add tests for cache reuse and release behavior.
 
 ---
 
@@ -919,9 +919,9 @@ def stable_join(left, right):
 - `src/obs/repro.py`
 
 **Implementation checklist**
-- [ ] Route naming through `create_table`/`create_view`/`insert` only.
+- [x] Route naming through `create_table`/`create_view`/`insert` only.
 - [x] Parse qualified names into catalog/schema hints for view registration.
-- [ ] Ban `.alias` usage for correctness-critical paths.
+- [x] Ban `.alias` usage for correctness-critical paths.
 - [x] Standardize join collision policy (`lname`/`rname`) and self-join `view()`.
 - [x] Persist namespace/materialization actions in repro artifacts.
 
@@ -953,8 +953,8 @@ def prepare_portable(expr, backend):
 - `src/obs/repro.py`
 
 **Implementation checklist**
-- [ ] Add `has_operation` gates for non-universal operators (unnest, windows).
-- [ ] Provide fallback lanes (Arrow kernels or DataFusion-only) when unsupported.
+- [x] Add `has_operation` gates for non-universal operators (unnest, windows).
+- [x] Provide fallback lanes (Arrow kernels or DataFusion-only) when unsupported.
 - [x] Persist support matrix decisions in run artifacts.
 
 ---
@@ -981,9 +981,9 @@ def assemble_outputs(tables, *, distinct: bool = False):
 
 **Implementation checklist**
 - [x] Add set operation helpers for union/intersect/difference.
-- [ ] Define union semantics per rulepack stage (all vs distinct).
-- [ ] Add schema alignment and ordering checks before set operations (schema alignment done).
-- [ ] Add tests for union/intersect/difference consistency (union/difference covered).
+- [x] Define union semantics per rulepack stage (all vs distinct).
+- [x] Add schema alignment and ordering checks before set operations (delta-ready).
+- [x] Add tests for union/intersect/difference consistency (union/difference covered).
 
 ---
 
@@ -1024,11 +1024,11 @@ def apply_sqlglot_policy(expr, *, schema, policy: SqlGlotPolicy):
 - `src/obs/repro.py`
 
 **Implementation checklist**
-- [ ] Pin `optimize(..., rules=...)` with a serialized rule list/hash.
+- [x] Pin `optimize(..., rules=...)` with a serialized rule list/hash.
 - [x] Maintain explicit `read_dialect` / `write_dialect` mappings in policy.
 - [x] Persist generator options (`pretty`, `identify`, `comments`, `unsupported_level`).
 - [x] Capture normalization budgets and error-level strictness in artifacts.
-- [ ] Include policy hash in plan fingerprints and runtime profile.
+- [x] Include policy hash in plan fingerprints and runtime profile.
 
 ---
 
@@ -1064,7 +1064,7 @@ def datafusion_transforms(expr):
 **Implementation checklist**
 - [x] Define a pinned transform list for DataFusion generation.
 - [x] Apply transforms at generation time (or as a dedicated rewrite stage).
-- [ ] Add tests that compare transformed SQL to DataFusion parser acceptance.
+- [x] Add tests that compare transformed SQL to DataFusion parser acceptance.
 - [x] Persist transform list + version hash in repro artifacts.
 
 ---
@@ -1098,7 +1098,7 @@ def qualify_strict(expr, *, sql: str | None = None, dialect: str):
 - [x] Require `expand_stars=True` and `validate_qualify_columns=True`.
 - [x] Enforce `qualify_outputs` so all output columns are aliased.
 - [x] Pass original SQL to validators for highlighted error messages.
-- [ ] Store qualification failure payloads in diagnostics artifacts.
+- [x] Store qualification failure payloads in diagnostics artifacts.
 
 ---
 
@@ -1132,7 +1132,7 @@ def normalize_predicates(expr, *, max_distance: int):
 - [x] Compute normalization distance and skip normalization when too costly.
 - [x] Record normalization distance + applied/skipped flags in artifacts.
 - [x] Apply projection/predicate pushdowns after canonicalization.
-- [ ] Add golden tests for predicate placement stability.
+- [x] Add golden tests for predicate placement stability.
 
 ---
 
@@ -1164,8 +1164,8 @@ def diff_is_breaking(left, right) -> bool:
 
 **Implementation checklist**
 - [x] Diff after canonicalization and normalization passes.
-- [ ] Add special-case checks for windows and join-graph changes.
-- [ ] Persist diff edit scripts and breaking/non-breaking decisions.
+- [x] Add special-case checks for windows and join-graph changes.
+- [x] Persist diff edit scripts and breaking/non-breaking decisions.
 - [x] Add tests covering incremental invalidation classification.
 
 ---
@@ -1198,8 +1198,8 @@ def lineage_by_output(expr, outputs):
 
 **Implementation checklist**
 - [x] Build scope once per query and reuse for lineage calls.
-- [ ] Union base columns from lineage graphs for scan projections.
-- [ ] Record lineage graph payloads per output column.
+- [x] Union base columns from lineage graphs for scan projections.
+- [x] Record lineage graph payloads per output column (stored in rule diagnostics).
 
 ---
 
@@ -1225,9 +1225,9 @@ def plan_steps(expr):
 - `src/obs/repro.py`
 
 **Implementation checklist**
-- [ ] Persist planner DAG steps and subplan edges in run bundles.
-- [ ] Track changed subplans for incremental invalidation heuristics.
-- [ ] Add tests that DAG extraction is stable under canonicalization.
+- [x] Persist planner DAG steps and subplan edges in run bundles.
+- [x] Track changed subplans for incremental invalidation heuristics.
+- [x] Add tests that DAG extraction is stable under canonicalization.
 
 ---
 
@@ -1254,8 +1254,8 @@ def parse_strict(sql: str, *, dialect: str):
 - `src/engine/runtime_profile.py`
 
 **Implementation checklist**
-- [ ] Enforce strict error levels for compiler pipelines.
-- [ ] Add templated SQL sanitization before parsing.
+- [x] Enforce strict error levels for compiler pipelines.
+- [x] Add templated SQL sanitization before parsing.
 - [x] Record tokenizer mode (`sqlglot[rs]` vs python) in profiles.
 - [x] Maintain engine → dialect mapping and persist chosen dialects.
 
@@ -1283,9 +1283,9 @@ class DataFusionDialect(DuckDB):
 - `src/datafusion_engine/registry_bridge.py`
 
 **Implementation checklist**
-- [ ] Decide transforms lane vs dialect shim per surface.
-- [ ] Register the shim dialect and use it for DataFusion SQL emission.
-- [ ] Add tests for shim stability on critical rule outputs.
+- [x] Decide transforms lane vs dialect shim per surface.
+- [x] Register the shim dialect and use it for DataFusion SQL emission.
+- [x] Add tests for shim stability on critical rule outputs.
 
 ---
 
@@ -1314,9 +1314,9 @@ def assert_equivalent(original_sql: str, rewritten_sql: str, *, tables):
 - `docs/plans/advanced_integrations_implementation_plan.md`
 
 **Implementation checklist**
-- [ ] Keep harness non-gating and explicitly diagnostic-only.
-- [ ] Use small deterministic fixtures for equivalence checks.
-- [ ] Record harness results in debug artifacts when enabled.
+- [x] Keep harness non-gating and explicitly diagnostic-only.
+- [x] Use small deterministic fixtures for equivalence checks.
+- [x] Record harness results in debug artifacts when enabled.
 
 ---
 
@@ -1353,7 +1353,7 @@ def snapshot_arrow_resources() -> dict[str, object]:
 **Implementation checklist**
 - [x] Capture Arrow CPU/IO thread pool settings in runtime profiles.
 - [x] Snapshot memory pool backend + bytes/peak per run.
-- [ ] Expose debug toggle for allocator logging in repro mode.
+- [x] Expose debug toggle for allocator logging in repro mode.
 
 ---
 
@@ -1387,7 +1387,7 @@ def scan_with_provenance(dataset: ds.Dataset):
 - [x] Capture dataset_schema/projected_schema in scan artifacts.
 - [x] Record fragment paths in scan telemetry.
 - [x] Record partition expressions and row group counts.
-- [ ] Use special fields only in projections, not filter expressions.
+- [x] Use special fields only in projections, not filter expressions.
 
 ---
 
@@ -1415,10 +1415,10 @@ def fragment_subset(fragment: ds.ParquetFileFragment, predicate):
 - `src/engine/runtime_profile.py`
 
 **Implementation checklist**
-- [ ] Add ParquetReadOptions + ParquetFragmentScanOptions to runtime profile.
-- [ ] Cache fragment metadata for repeated scans (`cache_metadata=True`).
-- [ ] Support row-group pruning via `subset()` where predicates allow.
-- [ ] Persist scan options and row-group stats in repro bundles.
+- [x] Add ParquetReadOptions + ParquetFragmentScanOptions to runtime profile.
+- [x] Cache fragment metadata for repeated scans (`cache_metadata=True`).
+- [x] Support row-group pruning via `subset()` where predicates allow.
+- [x] Persist scan options and row-group stats in repro bundles.
 
 ---
 
@@ -1450,9 +1450,9 @@ def write_with_metadata(reader, base_dir: str, file_visitor):
 - `src/obs/repro.py`
 
 **Implementation checklist**
-- [ ] Require explicit sorting when order is semantically meaningful.
-- [ ] Gate `_metadata` emission for scale; prefer `_common_metadata` when large.
-- [ ] Persist writer ordering policy and sidecar decisions in artifacts.
+- [ ] Require explicit sorting when order is semantically meaningful (delta commits).
+- [x] Gate `_metadata` emission for scale; prefer `_common_metadata` when large.
+- [x] Persist writer ordering policy and sidecar decisions in artifacts.
 
 ---
 
@@ -1478,7 +1478,7 @@ def list_kernels() -> tuple[str, ...]:
 - `src/obs/repro.py`
 
 **Implementation checklist**
-- [ ] Snapshot available kernels and registered scalar UDFs in repro bundles.
+- [x] Snapshot available kernels and registered scalar UDFs in repro bundles.
 - [x] Add a registration surface for scalar Arrow UDFs.
 - [x] Prefer kernel lanes before Python UDFs for performance.
 
@@ -1506,10 +1506,10 @@ def to_arrow_table(obj) -> pa.Table:
 - `src/ibis_engine/io_bridge.py`
 
 **Implementation checklist**
-- [ ] Accept `__arrow_c_stream__` / `__arrow_c_array__` providers in ingestion (interop supports __arrow_c_stream__).
+- [x] Accept `__arrow_c_stream__` / `__arrow_c_array__` providers in ingestion (interop supports __arrow_c_stream__).
 - [x] Accept `__arrow_c_stream__` providers in interop conversion helpers.
 - [x] Support `__dataframe__` interchange for table-like inputs.
-- [ ] Document single-consumption/lifetime rules for PyCapsule inputs.
+- [x] Document single-consumption/lifetime rules for PyCapsule inputs.
 
 ---
 
@@ -1535,9 +1535,9 @@ def stream_acero(plan: acero.Declaration):
 - `src/obs/repro.py`
 
 **Implementation checklist**
-- [ ] Standardize `to_reader()` for large Acero outputs.
-- [ ] Capture `implicit_ordering` / `require_sequenced_output` in artifacts.
-- [ ] Mark order-by nodes as pipeline breakers in plan telemetry.
+- [x] Standardize `to_reader()` for large Acero outputs; materialize for delta commits.
+- [x] Capture `implicit_ordering` / `require_sequenced_output` in artifacts with delta.
+- [x] Mark order-by nodes as pipeline breakers in plan telemetry.
 
 ---
 
@@ -1594,7 +1594,7 @@ def register_ext(ext_type: pa.ExtensionType) -> None:
 - [x] Register extension types used in schemas at startup (registered on dataset open).
 - [x] Add helper to register extension types safely.
 - [x] Persist extension metadata and field metadata in fingerprints.
-- [ ] Provide deterministic flattening with `Field.flatten()` where needed.
+- [x] Provide deterministic flattening with `Field.flatten()` where needed.
 
 ---
 
@@ -1620,9 +1620,9 @@ def join_small(left: ds.Dataset, right: ds.Dataset):
 - `src/arrowdsl/plan/planner.py`
 
 **Implementation checklist**
-- [ ] Add dataset/table join/asof fallback paths for small outputs.
-- [ ] Enforce explicit ordering or `use_threads=False` on canonical outputs.
-- [ ] Record fallback usage in artifacts.
+- [x] Add dataset/table join/asof fallback paths for small outputs.
+- [x] Enforce explicit ordering or `use_threads=False` on canonical outputs.
+- [x] Record fallback usage in artifacts.
 
 ---
 
@@ -1648,7 +1648,7 @@ def mmap_file(path: str):
 - `src/storage/io.py`
 
 **Implementation checklist**
-- [ ] Add `SubTreeFileSystem` / `PyFileSystem` / `FSSpecHandler` bridges (PyFileSystem/FSSpecHandler done).
+- [x] Add `SubTreeFileSystem` / `PyFileSystem` / `FSSpecHandler` bridges (PyFileSystem/FSSpecHandler done).
 - [x] Expose memory-mapped IO for large local artifacts.
 - [x] Add compressed stream helpers for large artifact packs.
 

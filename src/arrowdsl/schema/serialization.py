@@ -5,6 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from typing import cast
+
+import pyarrow.types as patypes
 
 from arrowdsl.core.interop import DataTypeLike, SchemaLike
 from core_types import JsonDict
@@ -26,13 +29,27 @@ def schema_to_dict(schema: SchemaLike) -> JsonDict:
 
 def _field_to_dict(field: object) -> JsonDict:
     dtype = getattr(field, "type", None)
-    return {
+    payload: JsonDict = {
         "name": getattr(field, "name", ""),
         "type": str(dtype),
         "nullable": bool(getattr(field, "nullable", True)),
         "metadata": _decode_metadata(getattr(field, "metadata", None)),
         "extension": _extension_info(dtype),
     }
+    flattened = _flattened_fields(field, dtype=dtype)
+    if flattened:
+        payload["flattened_fields"] = flattened
+    return payload
+
+
+def _flattened_fields(field: object, *, dtype: DataTypeLike | None) -> list[JsonDict] | None:
+    if dtype is None or not patypes.is_struct(dtype):
+        return None
+    flatten = getattr(field, "flatten", None)
+    if not callable(flatten):
+        return None
+    flattened = cast("Sequence[object]", flatten())
+    return [_field_to_dict(child) for child in flattened]
 
 
 def _decode_metadata(metadata: Mapping[bytes, bytes] | None) -> JsonDict:

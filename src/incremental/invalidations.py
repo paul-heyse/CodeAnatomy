@@ -13,7 +13,7 @@ import pyarrow as pa
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.metadata import schema_identity_from_metadata
-from ibis_engine.plan_diff import semantic_diff_sql
+from ibis_engine.plan_diff import DiffOpEntry, semantic_diff_sql
 from incremental.state_store import StateStore
 from relspec.rules.cache import (
     rule_graph_signature_cached,
@@ -303,6 +303,8 @@ def rule_plan_diff_table(
             ("rule_name", pa.string()),
             ("change_kind", pa.string()),
             ("diff_types", pa.string()),
+            ("diff_breaking", pa.bool_()),
+            ("diff_script", pa.string()),
             ("prev_plan_hash", pa.string()),
             ("cur_plan_hash", pa.string()),
         ]
@@ -314,6 +316,8 @@ def rule_plan_diff_table(
         return table_from_arrays(schema, columns={}, num_rows=0)
     change_kind: list[str] = []
     diff_types: list[str | None] = []
+    diff_breaking: list[bool | None] = []
+    diff_script: list[str | None] = []
     prev_hashes: list[str | None] = []
     cur_hashes: list[str | None] = []
     for name in names:
@@ -324,28 +328,40 @@ def rule_plan_diff_table(
         if prev is None and cur is not None:
             change_kind.append("added")
             diff_types.append(None)
+            diff_breaking.append(True)
+            diff_script.append(None)
             continue
         if prev is not None and cur is None:
             change_kind.append("removed")
             diff_types.append(None)
+            diff_breaking.append(True)
+            diff_script.append(None)
             continue
         if prev is None or cur is None:
             change_kind.append("changed")
             diff_types.append("missing")
+            diff_breaking.append(True)
+            diff_script.append(None)
             continue
         diff = semantic_diff_sql(prev, cur)
         if diff.changed:
             change_kind.append("changed")
             diff_types.append(",".join(diff.changes))
+            diff_breaking.append(diff.breaking)
+            diff_script.append(_edit_script_payload(diff.edit_script))
         else:
             change_kind.append("unchanged")
             diff_types.append(None)
+            diff_breaking.append(False)
+            diff_script.append(None)
     return table_from_arrays(
         schema,
         columns={
             "rule_name": pa.array(names, type=pa.string()),
             "change_kind": pa.array(change_kind, type=pa.string()),
             "diff_types": pa.array(diff_types, type=pa.string()),
+            "diff_breaking": pa.array(diff_breaking, type=pa.bool_()),
+            "diff_script": pa.array(diff_script, type=pa.string()),
             "prev_plan_hash": pa.array(prev_hashes, type=pa.string()),
             "cur_plan_hash": pa.array(cur_hashes, type=pa.string()),
         },
@@ -357,6 +373,13 @@ def _hash_sql(value: str | None) -> str | None:
     if not value:
         return None
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _edit_script_payload(script: tuple[DiffOpEntry, ...]) -> str | None:
+    if not script:
+        return None
+    payload = [entry.payload() for entry in script]
+    return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
 
 def _coerce_str_mapping(value: object) -> dict[str, str]:

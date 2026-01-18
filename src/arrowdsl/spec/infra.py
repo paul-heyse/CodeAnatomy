@@ -13,6 +13,7 @@ import pyarrow as pa
 from arrowdsl.compute.expr_core import ExprSpec, or_exprs
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, SchemaLike, TableLike, ensure_expression, pc
+from arrowdsl.io.delta_config import DeltaSchemaPolicy, DeltaWritePolicy
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec, SchemaTransform
 from arrowdsl.schema.validation import ArrowValidationOptions, ValidationReport, validate_table
@@ -229,6 +230,9 @@ class DatasetRegistration:
 
     query_spec: QuerySpec | None = None
     contract_spec: ContractSpec | None = None
+    delta_write_policy: DeltaWritePolicy | None = None
+    delta_schema_policy: DeltaSchemaPolicy | None = None
+    delta_constraints: Sequence[str] = ()
     derived_fields: Sequence[DerivedFieldSpec] = ()
     predicate: ExprSpec | None = None
     pushdown_predicate: ExprSpec | None = None
@@ -284,6 +288,9 @@ def register_dataset(
         table_spec=table_spec,
         query_spec=registration.query_spec,
         contract_spec=registration.contract_spec,
+        delta_write_policy=registration.delta_write_policy,
+        delta_schema_policy=registration.delta_schema_policy,
+        delta_constraints=registration.delta_constraints,
         derived_fields=registration.derived_fields,
         predicate=registration.predicate,
         pushdown_predicate=registration.pushdown_predicate,

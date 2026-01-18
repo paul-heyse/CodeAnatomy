@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
+import pyarrow as pa
 import pytest
+from datafusion import SessionContext
 from sqlglot import exp, parse_one
 
 from ibis_engine.plan_diff import semantic_diff_sql
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
+    SqlGlotQualificationError,
     canonical_ast_fingerprint,
     default_sqlglot_policy,
     normalize_expr,
     normalize_expr_with_stats,
     plan_fingerprint,
+    register_datafusion_dialect,
     sqlglot_policy_snapshot,
+    sqlglot_sql,
 )
+
+register_datafusion_dialect()
+register_datafusion_dialect("datafusion")
 
 
 def _column_tables(expr: exp.Expression) -> tuple[str | None, ...]:
@@ -70,6 +78,26 @@ def test_normalize_expr_reports_stats() -> None:
     assert isinstance(result.stats.distance, int)
 
 
+def test_normalize_expr_pushes_predicates() -> None:
+    """Push predicates into subqueries during normalization."""
+    policy = default_sqlglot_policy()
+    sql = "SELECT * FROM (SELECT a, b FROM t) WHERE a > 1"
+    expr = parse_one(sql, dialect=policy.read_dialect)
+    normalized = normalize_expr(
+        expr,
+        options=NormalizeExprOptions(
+            schema={"t": {"a": "int", "b": "int"}},
+            policy=policy,
+            sql=sql,
+        ),
+    )
+    expected = (
+        'SELECT "_0"."a" AS "a", "_0"."b" AS "b" FROM (SELECT "t"."a" AS "a", '
+        '"t"."b" AS "b" FROM "t" AS "t" WHERE "t"."a" > 1) AS "_0" WHERE TRUE'
+    )
+    assert sqlglot_sql(normalized, policy=policy) == expected
+
+
 @pytest.mark.parametrize(
     ("dialect_left", "dialect_right"),
     [
@@ -82,6 +110,14 @@ def test_plan_fingerprint_depends_on_dialect(dialect_left: str, dialect_right: s
     expr = parse_one("SELECT 1", dialect=dialect_left)
     left = plan_fingerprint(expr, dialect=dialect_left)
     right = plan_fingerprint(expr, dialect=dialect_right)
+    assert left != right
+
+
+def test_plan_fingerprint_depends_on_policy_hash() -> None:
+    """Include policy hash in plan fingerprints."""
+    expr = parse_one("SELECT 1", dialect="datafusion")
+    left = plan_fingerprint(expr, dialect="datafusion", policy_hash="policy-a")
+    right = plan_fingerprint(expr, dialect="datafusion", policy_hash="policy-b")
     assert left != right
 
 
@@ -105,8 +141,59 @@ def test_semantic_diff_breaking_flag(left_sql: str, right_sql: str, expected_bre
     assert diff.breaking is (expected_breaking == "breaking")
 
 
+def test_semantic_diff_records_edit_script() -> None:
+    """Capture edit script entries for semantic diffs."""
+    policy = default_sqlglot_policy()
+    diff = semantic_diff_sql(
+        "SELECT a FROM t",
+        "SELECT b FROM t",
+        policy=policy,
+        dialect=policy.read_dialect,
+    )
+    assert diff.changed is True
+    assert diff.edit_script
+
+
 def test_canonical_ast_fingerprint_is_stable() -> None:
     """Fingerprint a canonical SQLGlot AST payload."""
     expr = parse_one("SELECT a FROM t", dialect="datafusion")
     fingerprint = canonical_ast_fingerprint(expr)
     assert fingerprint == canonical_ast_fingerprint(expr)
+
+
+def test_transformed_sql_parses_in_datafusion() -> None:
+    """Ensure transformed SQL parses in DataFusion."""
+    policy = default_sqlglot_policy()
+    ctx = SessionContext()
+    table = pa.table({"a": [1, 2]})
+    ctx.register_record_batches("t", [table.to_batches()])
+    sql = "SELECT a FROM t QUALIFY ROW_NUMBER() OVER (PARTITION BY a ORDER BY a) = 1"
+    expr = parse_one(sql, dialect="duckdb")
+    normalized = normalize_expr(
+        expr,
+        options=NormalizeExprOptions(
+            schema={"t": {"a": "int64"}},
+            policy=policy,
+            sql=sql,
+        ),
+    )
+    df = ctx.sql(sqlglot_sql(normalized, policy=policy))
+    assert df is not None
+
+
+def test_qualification_failure_payload() -> None:
+    """Capture payload details on qualification failures."""
+    policy = default_sqlglot_policy()
+    expr = parse_one("SELECT missing FROM t", dialect=policy.read_dialect)
+    with pytest.raises(SqlGlotQualificationError) as excinfo:
+        normalize_expr(
+            expr,
+            options=NormalizeExprOptions(
+                schema={"t": {"a": "int64"}},
+                policy=policy,
+                sql="SELECT missing FROM t",
+            ),
+        )
+    payload = excinfo.value.payload
+    assert payload["dialect"] == policy.read_dialect
+    assert payload["schema"] == {"t": {"a": "int64"}}

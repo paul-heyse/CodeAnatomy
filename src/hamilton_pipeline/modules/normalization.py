@@ -538,7 +538,7 @@ def _join_callsite_qname_meta(base: TableLike, cst_callsites: TableLike) -> Tabl
     return joined.drop(["qname_source__meta"])
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="normalize", artifact="dim_qualified_names", kind="table")
 def dim_qualified_names(
     cst_callsites: TableLike,
@@ -581,7 +581,7 @@ def dim_qualified_names(
     return align_table_to_schema(out, schema)
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="normalize", artifact="callsite_qname_candidates", kind="table")
 def callsite_qname_candidates(
     cst_callsites: TableLike,
@@ -633,7 +633,7 @@ def callsite_qname_candidates(
     return align_table_to_schema(joined, schema)
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="normalize", artifact="ast_nodes_norm", kind="table")
 def ast_nodes_norm(
     ast_nodes: TableLike,
@@ -659,7 +659,7 @@ def ast_nodes_norm(
     return align_table_to_schema(table, schema, opts=SchemaInferOptions(keep_extra_columns=True))
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="normalize", artifact="py_bc_instructions_norm", kind="table")
 def py_bc_instructions_norm(
     py_bc_instructions: TableLike,
@@ -685,7 +685,7 @@ def py_bc_instructions_norm(
     return align_table_to_schema(table, schema, opts=SchemaInferOptions(keep_extra_columns=True))
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="normalize", artifact="py_bc_blocks_norm", kind="table")
 def py_bc_blocks_norm(
     normalize_rule_compilation: NormalizeRuleCompilation,
@@ -708,7 +708,7 @@ def py_bc_blocks_norm(
     )
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="normalize", artifact="py_bc_cfg_edges_norm", kind="table")
 def py_bc_cfg_edges_norm(
     normalize_rule_compilation: NormalizeRuleCompilation,
@@ -731,7 +731,7 @@ def py_bc_cfg_edges_norm(
     )
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="normalize", artifact="py_bc_def_use_events", kind="table")
 def py_bc_def_use_events(
     normalize_rule_compilation: NormalizeRuleCompilation,
@@ -754,7 +754,7 @@ def py_bc_def_use_events(
     )
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="normalize", artifact="py_bc_reaching_defs", kind="table")
 def py_bc_reaching_defs(
     normalize_rule_compilation: NormalizeRuleCompilation,
@@ -777,7 +777,7 @@ def py_bc_reaching_defs(
     )
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="normalize", artifact="type_exprs_norm", kind="table")
 def type_exprs_norm(
     normalize_rule_compilation: NormalizeRuleCompilation,
@@ -800,7 +800,7 @@ def type_exprs_norm(
     )
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="normalize", artifact="types_norm", kind="table")
 def types_norm(
     normalize_rule_compilation: NormalizeRuleCompilation,
@@ -848,7 +848,7 @@ def diagnostics_sources(
     )
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="normalize", artifact="diagnostics_norm", kind="table")
 def diagnostics_norm(
     normalize_rule_compilation: NormalizeRuleCompilation,
@@ -935,7 +935,7 @@ def scip_occurrences_norm_bundle(
     return {"scip_occurrences_norm": occ, "scip_span_errors": errs}
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="normalize", artifact="cst_imports_norm", kind="table")
 def cst_imports_norm(
     cst_imports: TableLike,
@@ -955,7 +955,7 @@ def cst_imports_norm(
     return normalize_cst_imports_spans(py_cst_imports=cst_imports)
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="normalize", artifact="cst_defs_norm", kind="table")
 def cst_defs_norm(
     cst_defs: TableLike,

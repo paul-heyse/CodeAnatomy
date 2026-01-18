@@ -3,26 +3,33 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
-import pyarrow.dataset as ds
 
-from arrowdsl.io.parquet import upsert_dataset_partitions_parquet
+from arrowdsl.io.delta import (
+    DeltaUpsertOptions,
+    read_table_delta,
+    upsert_dataset_partitions_delta,
+)
 
 
 def _read_partition(base_dir: Path, file_id: str) -> pa.Table:
-    dataset = ds.dataset(str(base_dir), format="parquet", partitioning="hive")
-    return dataset.to_table(filter=ds.field("file_id") == file_id)
+    table = cast("pa.Table", read_table_delta(str(base_dir)))
+    mask = table["file_id"] == pa.scalar(file_id)
+    return table.filter(mask)
 
 
-def test_upsert_dataset_partitions_parquet(tmp_path: Path) -> None:
+def test_upsert_dataset_partitions_delta(tmp_path: Path) -> None:
     """Verify that partition upserts replace only targeted partitions."""
     base_dir = tmp_path / "dataset"
     table = pa.table({"file_id": ["a", "b"], "value": [1, 2]})
-    upsert_dataset_partitions_parquet(
+    upsert_dataset_partitions_delta(
         table,
-        base_dir=base_dir,
-        partition_cols=("file_id",),
+        options=DeltaUpsertOptions(
+            base_dir=str(base_dir),
+            partition_cols=("file_id",),
+        ),
     )
 
     part_a = _read_partition(base_dir, "a")
@@ -31,10 +38,12 @@ def test_upsert_dataset_partitions_parquet(tmp_path: Path) -> None:
     assert part_b["value"].to_pylist() == [2]
 
     update = pa.table({"file_id": ["b"], "value": [3]})
-    upsert_dataset_partitions_parquet(
+    upsert_dataset_partitions_delta(
         update,
-        base_dir=base_dir,
-        partition_cols=("file_id",),
+        options=DeltaUpsertOptions(
+            base_dir=str(base_dir),
+            partition_cols=("file_id",),
+        ),
     )
 
     part_a = _read_partition(base_dir, "a")
@@ -43,11 +52,13 @@ def test_upsert_dataset_partitions_parquet(tmp_path: Path) -> None:
     assert part_b["value"].to_pylist() == [3]
 
     empty = table.slice(0, 0)
-    upsert_dataset_partitions_parquet(
+    upsert_dataset_partitions_delta(
         empty,
-        base_dir=base_dir,
-        partition_cols=("file_id",),
-        delete_partitions=({"file_id": "a"},),
+        options=DeltaUpsertOptions(
+            base_dir=str(base_dir),
+            partition_cols=("file_id",),
+            delete_partitions=({"file_id": "a"},),
+        ),
     )
 
     part_a = _read_partition(base_dir, "a")

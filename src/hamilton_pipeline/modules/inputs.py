@@ -12,6 +12,7 @@ from hamilton.function_modifiers import tag
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.context import DeterminismTier, ExecutionContext
+from arrowdsl.io.delta_config import DeltaSchemaPolicy, DeltaWritePolicy
 from arrowdsl.spec.io import IpcWriteConfig
 from core_types import JsonDict
 from datafusion_engine.runtime import AdapterExecutionPolicy
@@ -279,13 +280,13 @@ def pipeline_policy() -> PipelinePolicy:
 
 
 @tag(layer="inputs", kind="object")
-def param_table_parquet_paths() -> Mapping[str, str] | None:
-    """Return optional parquet paths for param table replay.
+def param_table_delta_paths() -> Mapping[str, str] | None:
+    """Return optional Delta table paths for param table replay.
 
     Returns
     -------
     Mapping[str, str] | None
-        Mapping of logical param names to parquet dataset paths.
+        Mapping of logical param names to Delta table paths.
     """
     return {}
 
@@ -581,8 +582,8 @@ def output_config_overrides(
     overwrite_intermediate_datasets: bool,
     materialize_param_tables: bool = False,
     writer_strategy: WriterStrategy = "arrow",
-    ipc_dump_enabled: bool = False,
-    ipc_write_config: IpcWriteConfig | None = None,
+    ipc: IpcConfigOverrides | None = None,
+    delta: DeltaOutputOverrides | None = None,
 ) -> OutputConfigOverrides:
     """Bundle output configuration overrides.
 
@@ -595,9 +596,26 @@ def output_config_overrides(
         overwrite_intermediate_datasets=overwrite_intermediate_datasets,
         materialize_param_tables=materialize_param_tables,
         writer_strategy=writer_strategy,
-        ipc_dump_enabled=ipc_dump_enabled,
-        ipc_write_config=ipc_write_config,
+        ipc=ipc,
+        delta=delta,
     )
+
+
+@dataclass(frozen=True)
+class IpcConfigOverrides:
+    """Overrides for IPC output configuration."""
+
+    dump_enabled: bool = False
+    write_config: IpcWriteConfig | None = None
+
+
+@dataclass(frozen=True)
+class DeltaOutputOverrides:
+    """Overrides for Delta output configuration."""
+
+    write_policy: DeltaWritePolicy | None = None
+    schema_policy: DeltaSchemaPolicy | None = None
+    storage_options: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -607,8 +625,8 @@ class OutputConfigOverrides:
     overwrite_intermediate_datasets: bool
     materialize_param_tables: bool = False
     writer_strategy: WriterStrategy = "arrow"
-    ipc_dump_enabled: bool = False
-    ipc_write_config: IpcWriteConfig | None = None
+    ipc: IpcConfigOverrides | None = None
+    delta: DeltaOutputOverrides | None = None
 
 
 @tag(layer="inputs", kind="object")
@@ -630,8 +648,13 @@ def output_config(
         overwrite_intermediate_datasets=overrides.overwrite_intermediate_datasets,
         materialize_param_tables=overrides.materialize_param_tables,
         writer_strategy=overrides.writer_strategy,
-        ipc_dump_enabled=overrides.ipc_dump_enabled,
-        ipc_write_config=overrides.ipc_write_config,
+        ipc_dump_enabled=overrides.ipc.dump_enabled if overrides.ipc is not None else False,
+        ipc_write_config=overrides.ipc.write_config if overrides.ipc is not None else None,
+        delta_write_policy=overrides.delta.write_policy if overrides.delta is not None else None,
+        delta_schema_policy=overrides.delta.schema_policy if overrides.delta is not None else None,
+        delta_storage_options=overrides.delta.storage_options
+        if overrides.delta is not None
+        else None,
     )
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Literal, cast
@@ -322,6 +324,23 @@ class TableSchemaSpec:
         """
         dialect_name = dialect or "datafusion"
         return self.to_ibis_schema().to_sqlglot_column_defs(dialect=dialect_name)
+
+    def ddl_fingerprint(self, *, dialect: str | None = None) -> str:
+        """Return a DDL fingerprint derived from SQLGlot column definitions.
+
+        Returns
+        -------
+        str
+            Stable fingerprint for the schema DDL representation.
+        """
+        dialect_name = dialect or "datafusion"
+        column_defs = self.to_sqlglot_column_defs(dialect=dialect_name)
+        payload = {
+            "dialect": dialect_name,
+            "columns": [column.sql(dialect=dialect_name) for column in column_defs],
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     def to_create_table_sql(
         self,

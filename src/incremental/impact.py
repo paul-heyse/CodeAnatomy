@@ -47,7 +47,7 @@ def impacted_callers_from_changed_exports(
     pieces: list[ibis.Table] = []
     changed_table = ibis.memtable(changed)
     if prev_rel_callsite_qname is not None:
-        rel_qname = backend.read_parquet(prev_rel_callsite_qname)
+        rel_qname = backend.read_delta(prev_rel_callsite_qname)
         changed_qname = changed_table.filter(changed_table.qname_id.notnull())
         qname_hits = rel_qname.inner_join(
             changed_qname,
@@ -62,7 +62,7 @@ def impacted_callers_from_changed_exports(
         pieces.append(qname_hits)
 
     if prev_rel_callsite_symbol is not None:
-        rel_symbol = backend.read_parquet(prev_rel_callsite_symbol)
+        rel_symbol = backend.read_delta(prev_rel_callsite_symbol)
         changed_symbol = changed_table.filter(changed_table.symbol.notnull())
         symbol_hits = rel_symbol.inner_join(
             changed_symbol,
@@ -106,7 +106,7 @@ def impacted_importers_from_changed_exports(
     if exports.num_rows == 0:
         return empty_table(schema)
 
-    imports_resolved = backend.read_parquet(prev_imports_resolved)
+    imports_resolved = backend.read_delta(prev_imports_resolved)
     exports_table = ibis.memtable(exports)
     by_name = imports_resolved.inner_join(
         exports_table,
@@ -162,7 +162,7 @@ def import_closure_only_from_changed_exports(
     if exports.num_rows == 0:
         return empty_table(schema)
 
-    imports_resolved = backend.read_parquet(prev_imports_resolved)
+    imports_resolved = backend.read_delta(prev_imports_resolved)
     exports_table = ibis.memtable(exports)
     module_imports = imports_resolved.filter(
         imports_resolved.imported_name.isnull()

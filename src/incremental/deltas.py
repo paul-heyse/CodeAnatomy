@@ -33,7 +33,7 @@ def compute_changed_exports(
         empty = table_from_arrays(dataset_schema("dim_exported_defs_v1"), columns={}, num_rows=0)
         prev = ibis.memtable(empty)
     else:
-        prev = backend.read_parquet(prev_exports)
+        prev = backend.read_delta(prev_exports)
     curr = ibis.memtable(curr_exports)
     changed = ibis.memtable(changed_files)
 

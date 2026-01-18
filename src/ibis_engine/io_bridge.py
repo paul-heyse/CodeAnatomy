@@ -5,13 +5,30 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import cast
+from typing import TypedDict, cast
 
+import pyarrow as pa
+import pyarrow.dataset as ds
 from datafusion import DataFrameWriteOptions, ParquetWriterOptions, col
 from ibis.expr.types import Table as IbisTable
 
 from arrowdsl.core.context import DeterminismTier
-from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
+from arrowdsl.core.interop import (
+    RecordBatchReaderLike,
+    SchemaLike,
+    TableLike,
+    coerce_table_like,
+)
+from arrowdsl.io.delta import (
+    DeltaWriteOptions,
+    DeltaWriteResult,
+    StorageOptions,
+    apply_delta_write_policies,
+    write_dataset_delta,
+    write_named_datasets_delta,
+    write_table_delta,
+)
+from arrowdsl.io.delta_config import DeltaSchemaPolicy, DeltaWritePolicy
 from arrowdsl.io.parquet import (
     DatasetWriteConfig,
     DatasetWriteInput,
@@ -21,11 +38,14 @@ from arrowdsl.io.parquet import (
     ParquetWriteOptions,
     write_dataset_parquet,
     write_named_datasets_parquet,
+    write_parquet_metadata_sidecars,
     write_partitioned_dataset_parquet,
     write_table_parquet,
 )
+from arrowdsl.plan.metrics import parquet_metadata_factory
 from arrowdsl.plan.ordering_policy import ordering_keys_for_schema
 from arrowdsl.plan.schema_utils import plan_schema
+from arrowdsl.schema.schema import schema_fingerprint
 from core_types import PathLike
 from datafusion_engine.bridge import (
     DataFusionDmlOptions,
@@ -73,7 +93,12 @@ class IbisDatasetWriteOptions:
     execution: IbisExecutionContext | None = None
     writer_strategy: WriterStrategy | None = None
     datafusion_write: DataFusionWriterConfig | None = None
-    reporter: Callable[[DatasetWriteReport], None] | None = None
+    parquet_reporter: Callable[[DatasetWriteReport], None] | None = None
+    delta_reporter: Callable[[DeltaWriteResult], None] | None = None
+    delta_options: DeltaWriteOptions | None = None
+    delta_write_policy: DeltaWritePolicy | None = None
+    delta_schema_policy: DeltaSchemaPolicy | None = None
+    storage_options: StorageOptions | None = None
 
 
 @dataclass(frozen=True)
@@ -85,7 +110,12 @@ class IbisNamedDatasetWriteOptions:
     prefer_reader: bool = True
     execution: IbisExecutionContext | None = None
     writer_strategy: WriterStrategy | None = None
-    reporter: Callable[[DatasetWriteReport], None] | None = None
+    parquet_reporter: Callable[[DatasetWriteReport], None] | None = None
+    delta_reporter: Callable[[DeltaWriteResult], None] | None = None
+    delta_options: DeltaWriteOptions | None = None
+    delta_write_policy: DeltaWritePolicy | None = None
+    delta_schema_policy: DeltaSchemaPolicy | None = None
+    storage_options: StorageOptions | None = None
 
 
 def ibis_plan_to_reader(
@@ -150,7 +180,7 @@ def _coerce_write_input(
     batch_size: int | None,
     prefer_reader: bool,
     execution: IbisExecutionContext | None,
-) -> DatasetWriteInput:
+) -> RecordBatchReaderLike | TableLike:
     if isinstance(value, PlanProduct):
         return value.value()
     if isinstance(value, IbisPlan):
@@ -165,7 +195,20 @@ def _coerce_write_input(
             if prefer_reader
             else value.to_pyarrow()
         )
+    if _is_arrow_table_like(value) or _has_arrow_capsule(value):
+        return coerce_table_like(value)
     return value
+
+
+def _is_arrow_table_like(value: object) -> bool:
+    return isinstance(value, (pa.Table, pa.RecordBatchReader))
+
+
+def _has_arrow_capsule(value: object) -> bool:
+    return any(
+        hasattr(value, attr)
+        for attr in ("__arrow_c_stream__", "__arrow_c_array__", "__dataframe__")
+    )
 
 
 def _resolve_writer_strategy(
@@ -274,13 +317,107 @@ def _write_datafusion_dataset(
         )
         if write_options is not None or parquet_options is not None:
             write_with_options(str(base_dir), parquet_options, write_options)
-            return str(base_dir)
+            return _finalize_datafusion_write(
+                value,
+                base_dir,
+                execution=execution,
+                dataset_config=dataset_config,
+            )
     write_parquet = getattr(df, "write_parquet", None)
     if callable(write_parquet):
         write_parquet(str(base_dir))
-        return str(base_dir)
+        return _finalize_datafusion_write(
+            value,
+            base_dir,
+            execution=execution,
+            dataset_config=dataset_config,
+        )
     msg = "DataFusion writer is unavailable for the configured backend."
     raise ValueError(msg)
+
+
+def _finalize_datafusion_write(
+    value: IbisPlan | IbisTable,
+    base_dir: PathLike,
+    *,
+    execution: IbisExecutionContext,
+    dataset_config: DatasetWriteConfig,
+) -> str:
+    dataset, files = _datafusion_dataset_snapshot(base_dir)
+    metadata_paths = _datafusion_metadata_sidecars(
+        base_dir,
+        dataset=dataset,
+        dataset_config=dataset_config,
+        file_count=len(files),
+    )
+    if dataset_config.reporter is not None:
+        schema = _schema_for_write(value, execution=execution)
+        report = DatasetWriteReport(
+            dataset_name=None,
+            base_dir=str(base_dir),
+            files=files,
+            metadata_paths=metadata_paths,
+            schema_fingerprint=schema_fingerprint(dataset.schema),
+            ordering_keys=_ordering_keys_payload(schema),
+            file_sort_order=_file_sort_order_payload(schema),
+            preserve_order=bool(dataset_config.preserve_order),
+            writer_strategy="datafusion",
+            row_group_size=(dataset_config.opts or ParquetWriteOptions()).row_group_size,
+            max_rows_per_file=(dataset_config.opts or ParquetWriteOptions()).max_rows_per_file,
+        )
+        dataset_config.reporter(report)
+    return str(base_dir)
+
+
+def _datafusion_dataset_snapshot(base_dir: PathLike) -> tuple[ds.Dataset, tuple[str, ...]]:
+    dataset = ds.dataset(str(base_dir), format="parquet")
+    files: list[str] = []
+    for fragment in dataset.get_fragments():
+        path = getattr(fragment, "path", None)
+        if path is None:
+            continue
+        files.append(str(path))
+    return dataset, tuple(sorted(set(files)))
+
+
+def _datafusion_metadata_sidecars(
+    base_dir: PathLike,
+    *,
+    dataset: ds.Dataset,
+    dataset_config: DatasetWriteConfig,
+    file_count: int | None,
+) -> Mapping[str, str] | None:
+    metadata_config = dataset_config.metadata or ParquetMetadataConfig()
+    if not (metadata_config.write_common_metadata or metadata_config.write_metadata):
+        return None
+    effective = _effective_metadata_config(metadata_config, file_count=file_count)
+    if not (effective.write_common_metadata or effective.write_metadata):
+        return None
+    if effective.write_metadata:
+        metadata_spec = parquet_metadata_factory(dataset)
+        schema = metadata_spec.schema
+        metadata = metadata_spec.file_metadata
+    else:
+        schema = dataset.schema
+        metadata = None
+    return write_parquet_metadata_sidecars(
+        base_dir,
+        schema=schema,
+        metadata=metadata,
+        config=effective,
+    )
+
+
+def _effective_metadata_config(
+    config: ParquetMetadataConfig,
+    *,
+    file_count: int | None,
+) -> ParquetMetadataConfig:
+    if file_count is None or config.max_metadata_files is None:
+        return config
+    if file_count <= config.max_metadata_files:
+        return config
+    return replace(config, write_metadata=False)
 
 
 def _register_temp_view(df: object, *, name: str) -> None:
@@ -357,9 +494,24 @@ def _build_parquet_write_options(
     return _create_parquet_options(opts)
 
 
+class _ParquetWriterOptionsKwargs(TypedDict, total=False):
+    compression: str | None
+    max_row_group_size: int
+    data_pagesize_limit: int
+    dictionary_enabled: bool | None
+    statistics_enabled: str | None
+
+
 def _create_parquet_options(options: ParquetWriteOptions) -> ParquetWriterOptions | None:
     try:
-        return ParquetWriterOptions(compression=options.compression)
+        kwargs: _ParquetWriterOptionsKwargs = {"compression": options.compression}
+        if options.row_group_size is not None:
+            kwargs["max_row_group_size"] = options.row_group_size
+        if options.data_page_size is not None:
+            kwargs["data_pagesize_limit"] = options.data_page_size
+        kwargs["dictionary_enabled"] = options.use_dictionary
+        kwargs["statistics_enabled"] = "page" if options.write_statistics else "none"
+        return ParquetWriterOptions(**kwargs)
     except TypeError:
         logger.warning("ParquetWriterOptions constructor mismatch; using DataFusion defaults.")
         return None
@@ -373,6 +525,21 @@ def _schema_for_write(
     if isinstance(value, IbisPlan):
         return plan_schema(value, ctx=execution.ctx)
     return value.schema().to_pyarrow()
+
+
+def _ordering_keys_payload(schema: SchemaLike | None) -> tuple[tuple[str, str], ...] | None:
+    if schema is None:
+        return None
+    return tuple((key[0], key[1]) for key in ordering_keys_for_schema(schema))
+
+
+def _file_sort_order_payload(schema: SchemaLike | None) -> tuple[str, ...] | None:
+    if schema is None:
+        return None
+    keys = ordering_keys_for_schema(schema)
+    if not keys:
+        return None
+    return tuple(key[0] for key in keys)
 
 
 def write_ibis_table_parquet(
@@ -429,7 +596,7 @@ def write_ibis_dataset_parquet(
     config = _resolve_metadata_policy(
         config,
         determinism=determinism,
-        reporter=options.reporter,
+        reporter=options.parquet_reporter,
     )
     writer_strategy = _resolve_writer_strategy(options=options, data=data)
     if writer_strategy == "datafusion":
@@ -450,6 +617,104 @@ def write_ibis_dataset_parquet(
         execution=options.execution,
     )
     return write_dataset_parquet(value, base_dir, config=config)
+
+
+def write_ibis_table_delta(
+    table: IbisPlan | IbisTable,
+    path: PathLike,
+    *,
+    options: DeltaWriteOptions | None = None,
+    storage_options: StorageOptions | None = None,
+    execution: IbisExecutionContext | None = None,
+) -> DeltaWriteResult:
+    """Write an Ibis plan/table as a Delta table.
+
+    Returns
+    -------
+    DeltaWriteResult
+        Metadata about the Delta write operation.
+    """
+    resolved = options or DeltaWriteOptions()
+    return write_table_delta(
+        ibis_to_table(table, execution=execution),
+        str(path),
+        options=resolved,
+        storage_options=storage_options,
+    )
+
+
+def write_ibis_dataset_delta(
+    data: IbisWriteInput,
+    base_dir: PathLike,
+    *,
+    options: IbisDatasetWriteOptions | None = None,
+) -> DeltaWriteResult:
+    """Write an Ibis plan/table or Arrow input as a Delta table.
+
+    Returns
+    -------
+    DeltaWriteResult
+        Metadata about the Delta write operation.
+
+    Raises
+    ------
+    ValueError
+        Raised when a DataFusion writer is requested without a compatible execution context.
+    ValueError
+        Raised when the DataFusion backend cannot produce an Arrow table.
+    """
+    options = options or IbisDatasetWriteOptions()
+    delta_options = options.delta_options or DeltaWriteOptions()
+    delta_options = apply_delta_write_policies(
+        delta_options,
+        write_policy=options.delta_write_policy,
+        schema_policy=options.delta_schema_policy,
+    )
+    writer_strategy = _resolve_writer_strategy(options=options, data=data)
+    if writer_strategy == "datafusion":
+        if options.execution is None or not isinstance(data, (IbisPlan, IbisTable)):
+            msg = "DataFusion writer requires an Ibis plan/table and execution context."
+            raise ValueError(msg)
+        runtime_profile = options.execution.ctx.runtime.datafusion
+        if runtime_profile is None or options.execution.ibis_backend is None:
+            msg = "DataFusion writer requires a runtime profile and Ibis backend."
+            raise ValueError(msg)
+        df_ctx = runtime_profile.session_context()
+        backend = cast("IbisCompilerBackend", options.execution.ibis_backend)
+        df = (
+            ibis_plan_to_datafusion(data, backend=backend, ctx=df_ctx)
+            if isinstance(data, IbisPlan)
+            else ibis_to_datafusion(data, backend=backend, ctx=df_ctx)
+        )
+        to_arrow = getattr(df, "to_arrow_table", None)
+        if not callable(to_arrow):
+            msg = "DataFusion DataFrame missing to_arrow_table."
+            raise ValueError(msg)
+        table = cast("TableLike", to_arrow())
+        result = write_table_delta(
+            table,
+            str(base_dir),
+            options=delta_options,
+            storage_options=options.storage_options,
+        )
+        if options.delta_reporter is not None:
+            options.delta_reporter(result)
+        return result
+    value = _coerce_write_input(
+        data,
+        batch_size=options.batch_size,
+        prefer_reader=options.prefer_reader,
+        execution=options.execution,
+    )
+    result = write_dataset_delta(
+        value,
+        str(base_dir),
+        options=delta_options,
+        storage_options=options.storage_options,
+    )
+    if options.delta_reporter is not None:
+        options.delta_reporter(result)
+    return result
 
 
 def write_ibis_named_datasets_parquet(
@@ -478,7 +743,7 @@ def write_ibis_named_datasets_parquet(
     config = _resolve_named_metadata_policy(
         config,
         determinism=options.execution.ctx.determinism if options.execution is not None else None,
-        reporter=options.reporter,
+        reporter=options.parquet_reporter,
     )
     writer_strategy = options.writer_strategy or "arrow"
     if writer_strategy != "arrow":
@@ -503,15 +768,77 @@ def write_ibis_named_datasets_parquet(
     return write_named_datasets_parquet(converted, base_dir, config=config)
 
 
+def write_ibis_named_datasets_delta(
+    datasets: Mapping[str, IbisWriteInput],
+    base_dir: PathLike,
+    *,
+    options: IbisNamedDatasetWriteOptions | None = None,
+) -> dict[str, DeltaWriteResult]:
+    """Write a mapping of Ibis/Arrow datasets to Delta tables.
+
+    Returns
+    -------
+    dict[str, DeltaWriteResult]
+        Mapping of dataset names to Delta write metadata.
+
+    Raises
+    ------
+    ValueError
+        Raised when a non-Arrow writer strategy is requested.
+    """
+    options = options or IbisNamedDatasetWriteOptions()
+    writer_strategy = options.writer_strategy or "arrow"
+    if writer_strategy != "arrow":
+        msg = "Named dataset writes only support the Arrow writer strategy."
+        raise ValueError(msg)
+    for name, value in datasets.items():
+        if isinstance(value, PlanProduct) and value.writer_strategy != "arrow":
+            msg = (
+                "Named dataset writes do not support non-Arrow PlanProduct writer strategy "
+                f"for dataset {name!r}."
+            )
+            raise ValueError(msg)
+    converted = {
+        name: _coerce_write_input(
+            value,
+            batch_size=options.batch_size,
+            prefer_reader=options.prefer_reader,
+            execution=options.execution,
+        )
+        for name, value in datasets.items()
+    }
+    delta_options = options.delta_options or DeltaWriteOptions()
+    delta_options = apply_delta_write_policies(
+        delta_options,
+        write_policy=options.delta_write_policy,
+        schema_policy=options.delta_schema_policy,
+    )
+    results = write_named_datasets_delta(
+        converted,
+        str(base_dir),
+        options=delta_options,
+        storage_options=options.storage_options,
+    )
+    if options.delta_reporter is not None:
+        for result in results.values():
+            options.delta_reporter(result)
+    return results
+
+
 __all__ = [
     "DataFusionWriterConfig",
+    "DeltaWriteOptions",
+    "DeltaWriteResult",
     "IbisDatasetWriteOptions",
     "IbisNamedDatasetWriteOptions",
     "IbisWriteInput",
     "ibis_plan_to_reader",
     "ibis_table_to_reader",
     "ibis_to_table",
+    "write_ibis_dataset_delta",
     "write_ibis_dataset_parquet",
+    "write_ibis_named_datasets_delta",
     "write_ibis_named_datasets_parquet",
+    "write_ibis_table_delta",
     "write_ibis_table_parquet",
 ]

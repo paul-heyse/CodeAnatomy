@@ -7,9 +7,12 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, TypeVar, cast
 
-from arrowdsl.core.interop import TableLike
+from sqlglot.serde import load as sqlglot_load
+
+from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.json_factory import JsonPolicy, dump_path, json_default
 from arrowdsl.plan.metrics import table_summary
+from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.serialization import dataset_fingerprint, schema_fingerprint
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from extract.evidence_specs import EvidenceSpec, evidence_spec, evidence_specs
@@ -18,6 +21,15 @@ from extract.registry_specs import dataset_schema
 from ibis_engine.param_tables import ParamTableArtifact
 from obs.diagnostics_schemas import DIAGNOSTICS_SCHEMA_VERSION
 from obs.repro import collect_repro_info
+from schema_spec.system import ddl_fingerprint_from_schema
+from sqlglot_tools.optimizer import planner_dag_snapshot
+from storage.io import (
+    delta_commit_metadata,
+    delta_history_snapshot,
+    delta_protocol_snapshot,
+    delta_table_features,
+    delta_table_version,
+)
 
 if TYPE_CHECKING:
     from arrowdsl.plan.query import ScanTelemetry
@@ -39,13 +51,40 @@ class DatasetRecord:
     kind: str  # "input" | "intermediate" | "relationship_output" | "cpg_output"
     path: str | None = None
     format: str | None = None
+    delta_version: int | None = None
+    delta_features: Mapping[str, str] | None = None
+    delta_commit_metadata: JsonDict | None = None
+    delta_protocol: JsonDict | None = None
+    delta_history: JsonDict | None = None
+    delta_write_policy: JsonDict | None = None
+    delta_schema_policy: JsonDict | None = None
+    delta_constraints: list[str] | None = None
 
     rows: int | None = None
     columns: int | None = None
     schema_fingerprint: str | None = None
+    ddl_fingerprint: str | None = None
+    ordering_level: str | None = None
+    ordering_keys: list[list[str]] | None = None
 
     # Optional: include a small schema description (safe for debugging)
     schema: list[JsonDict] | None = None
+
+
+@dataclass(frozen=True)
+class DatasetRecordMetadata:
+    """Metadata for dataset records."""
+
+    path: str | None = None
+    data_format: str | None = None
+    delta_version: int | None = None
+    delta_features: Mapping[str, str] | None = None
+    delta_commit_metadata: JsonDict | None = None
+    delta_protocol: JsonDict | None = None
+    delta_history: JsonDict | None = None
+    delta_write_policy: JsonDict | None = None
+    delta_schema_policy: JsonDict | None = None
+    delta_constraints: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +109,9 @@ class OutputRecord:
     name: str
     rows: int | None = None
     schema_fingerprint: str | None = None
+    ddl_fingerprint: str | None = None
+    ordering_level: str | None = None
+    ordering_keys: list[list[str]] | None = None
     plan_hash: str | None = None
     profile_hash: str | None = None
     writer_strategy: str | None = None
@@ -189,6 +231,7 @@ class ManifestData:
     dataset_registry_snapshot: Sequence[Mapping[str, object]] | None = None
     param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None
     param_scalar_signature: str | None = None
+    materialization_reports: JsonDict | None = None
     runtime_profile_name: str | None = None
     determinism_tier: str | None = None
     writer_strategy: str | None = None
@@ -200,21 +243,47 @@ def _dataset_record_from_table(
     name: str,
     kind: str,
     table: TableLike | None,
-    path: str | None = None,
-    data_format: str | None = None,
+    metadata: DatasetRecordMetadata | None = None,
 ) -> DatasetRecord:
+    metadata = metadata or DatasetRecordMetadata()
     if table is None:
-        return DatasetRecord(name=name, kind=kind, path=path, format=data_format)
+        return DatasetRecord(
+            name=name,
+            kind=kind,
+            path=metadata.path,
+            format=metadata.data_format,
+            delta_version=metadata.delta_version,
+            delta_features=metadata.delta_features,
+            delta_commit_metadata=metadata.delta_commit_metadata,
+            delta_protocol=metadata.delta_protocol,
+            delta_history=metadata.delta_history,
+            delta_write_policy=metadata.delta_write_policy,
+            delta_schema_policy=metadata.delta_schema_policy,
+            delta_constraints=metadata.delta_constraints,
+        )
 
     summ = table_summary(table)
+    ddl_fp = ddl_fingerprint_from_schema(name, table.schema)
+    ordering_level, ordering_keys = _ordering_payload(table.schema)
     return DatasetRecord(
         name=name,
         kind=kind,
-        path=path,
-        format=data_format,
+        path=metadata.path,
+        format=metadata.data_format,
+        delta_version=metadata.delta_version,
+        delta_features=metadata.delta_features,
+        delta_commit_metadata=metadata.delta_commit_metadata,
+        delta_protocol=metadata.delta_protocol,
+        delta_history=metadata.delta_history,
+        delta_write_policy=metadata.delta_write_policy,
+        delta_schema_policy=metadata.delta_schema_policy,
+        delta_constraints=metadata.delta_constraints,
         rows=summ["rows"],
         columns=summ["columns"],
         schema_fingerprint=summ["schema_fingerprint"],
+        ddl_fingerprint=ddl_fp,
+        ordering_level=ordering_level,
+        ordering_keys=ordering_keys,
         schema=summ["schema"],
     )
 
@@ -226,6 +295,10 @@ def _output_record_from_table(
     fingerprints: OutputFingerprintInputs | None = None,
 ) -> OutputRecord:
     schema_fp = schema_fingerprint(table.schema) if table is not None else None
+    ddl_fp = ddl_fingerprint_from_schema(name, table.schema) if table is not None else None
+    ordering_level, ordering_keys = (
+        _ordering_payload(table.schema) if table is not None else (None, None)
+    )
     normalized_inputs = (
         list(fingerprints.input_fingerprints)
         if fingerprints is not None and fingerprints.input_fingerprints is not None
@@ -250,12 +323,22 @@ def _output_record_from_table(
         name=name,
         rows=int(table.num_rows) if table is not None else None,
         schema_fingerprint=schema_fp,
+        ddl_fingerprint=ddl_fp,
+        ordering_level=ordering_level,
+        ordering_keys=ordering_keys,
         plan_hash=fingerprints.plan_hash if fingerprints is not None else None,
         profile_hash=fingerprints.profile_hash if fingerprints is not None else None,
         writer_strategy=fingerprints.writer_strategy if fingerprints is not None else None,
         input_fingerprints=normalized_inputs,
         dataset_fingerprint=output_fingerprint,
     )
+
+
+def _ordering_payload(schema: SchemaLike) -> tuple[str | None, list[list[str]] | None]:
+    ordering = ordering_from_schema(schema)
+    if not ordering.keys:
+        return ordering.level.value, None
+    return ordering.level.value, [list(key) for key in ordering.keys]
 
 
 def _input_fingerprint_values(
@@ -275,6 +358,130 @@ def _input_fingerprint_values(
     return values
 
 
+def _delta_metadata_from_path(
+    path: str | None,
+    *,
+    storage_options: Mapping[str, str] | None = None,
+) -> tuple[
+    int | None,
+    Mapping[str, str] | None,
+    JsonDict | None,
+    JsonDict | None,
+    JsonDict | None,
+]:
+    if path is None:
+        return None, None, None, None, None
+    version = delta_table_version(path, storage_options=storage_options)
+    if version is None:
+        return None, None, None, None, None
+    features = delta_table_features(path, storage_options=storage_options)
+    commit = delta_commit_metadata(path, storage_options=storage_options)
+    protocol = delta_protocol_snapshot(path, storage_options=storage_options)
+    history = delta_history_snapshot(path, storage_options=storage_options)
+    commit_payload = cast("JsonDict | None", commit)
+    protocol_payload = cast("JsonDict | None", protocol)
+    history_payload = cast("JsonDict | None", history)
+    return version, features, commit_payload, protocol_payload, history_payload
+
+
+def _materialization_artifacts(data: ManifestData) -> Mapping[str, object]:
+    if data.materialization_reports is None:
+        return {}
+    artifacts = data.materialization_reports.get("artifacts")
+    if not isinstance(artifacts, Mapping):
+        return {}
+    return artifacts
+
+
+def _materialized_delta_path(payload: Mapping[str, object]) -> str | None:
+    paths = payload.get("paths")
+    if not isinstance(paths, Mapping):
+        return None
+    data_path = paths.get("data")
+    return data_path if isinstance(data_path, str) else None
+
+
+def _materialized_delta_version(payload: Mapping[str, object]) -> int | None:
+    delta_versions = payload.get("delta_versions")
+    if not isinstance(delta_versions, Mapping):
+        return None
+    version_value = delta_versions.get("data")
+    return version_value if isinstance(version_value, int) else None
+
+
+@dataclass(frozen=True)
+class DeltaMaterializationMetadata:
+    """Delta metadata captured from materialization reports."""
+
+    path: str | None
+    version: int | None
+    features: Mapping[str, str] | None
+    commit_metadata: JsonDict | None
+    protocol: JsonDict | None
+    history: JsonDict | None
+    write_policy: JsonDict | None
+    schema_policy: JsonDict | None
+    constraints: list[str] | None
+
+
+def _materialized_delta_metadata(
+    data: ManifestData,
+    *,
+    key: str,
+) -> DeltaMaterializationMetadata | None:
+    payload = _materialization_artifacts(data).get(key)
+    if not isinstance(payload, Mapping):
+        return None
+    path = _materialized_delta_path(payload)
+    delta_version = _materialized_delta_version(payload)
+    version, features, commit, protocol, history = _delta_metadata_from_path(path)
+    resolved_version = delta_version if delta_version is not None else version
+    write_policy = payload.get("delta_write_policy")
+    schema_policy = payload.get("delta_schema_policy")
+    constraints = payload.get("delta_constraints")
+    return DeltaMaterializationMetadata(
+        path=path,
+        version=resolved_version,
+        features=features,
+        commit_metadata=commit,
+        protocol=protocol,
+        history=history,
+        write_policy=cast("JsonDict | None", write_policy),
+        schema_policy=cast("JsonDict | None", schema_policy),
+        constraints=list(constraints) if isinstance(constraints, Sequence) else None,
+    )
+
+
+def _location_metadata(loc: DatasetLocation | None) -> DatasetRecordMetadata:
+    path = str(loc.path) if loc is not None else None
+    fmt = loc.format if loc is not None else None
+    delta_version = loc.delta_version if loc is not None else None
+    delta_features: Mapping[str, str] | None = None
+    delta_commit: JsonDict | None = None
+    delta_protocol: JsonDict | None = None
+    delta_history: JsonDict | None = None
+    if loc is not None and fmt == "delta":
+        storage_options = dict(loc.storage_options) if loc.storage_options is not None else None
+        version, features, commit, protocol, history = _delta_metadata_from_path(
+            path, storage_options=storage_options
+        )
+        if delta_version is None:
+            delta_version = version
+        delta_features = features
+        delta_commit = commit
+        delta_protocol = protocol
+        delta_history = history
+    return DatasetRecordMetadata(
+        path=path,
+        data_format=fmt,
+        delta_version=delta_version,
+        delta_features=delta_features,
+        delta_commit_metadata=delta_commit,
+        delta_protocol=delta_protocol,
+        delta_history=delta_history,
+    )
+
+
 def _collect_relationship_inputs(data: ManifestData) -> list[DatasetRecord]:
     if not data.relspec_input_tables:
         return []
@@ -283,15 +490,13 @@ def _collect_relationship_inputs(data: ManifestData) -> list[DatasetRecord]:
     for name in sorted(data.relspec_input_tables):
         table = data.relspec_input_tables[name]
         loc = data.relspec_input_locations.get(name) if data.relspec_input_locations else None
-        path = str(loc.path) if loc is not None else None
-        fmt = loc.format if loc is not None else None
+        metadata = _location_metadata(loc)
         records.append(
             _dataset_record_from_table(
                 name=name,
                 kind="relationship_input",
                 table=table,
-                path=path,
-                data_format=fmt,
+                metadata=metadata,
             )
         )
     return records
@@ -371,8 +576,28 @@ def _collect_cpg_outputs(data: ManifestData) -> tuple[list[DatasetRecord], list[
     writer_strategy = data.writer_strategy
 
     if data.cpg_nodes is not None:
+        delta_meta = _materialized_delta_metadata(data, key="cpg_nodes_delta")
+        metadata = DatasetRecordMetadata()
+        if delta_meta is not None:
+            metadata = DatasetRecordMetadata(
+                path=delta_meta.path,
+                data_format="delta" if delta_meta.path is not None else None,
+                delta_version=delta_meta.version,
+                delta_features=delta_meta.features,
+                delta_commit_metadata=delta_meta.commit_metadata,
+                delta_protocol=delta_meta.protocol,
+                delta_history=delta_meta.history,
+                delta_write_policy=delta_meta.write_policy,
+                delta_schema_policy=delta_meta.schema_policy,
+                delta_constraints=delta_meta.constraints,
+            )
         datasets.append(
-            _dataset_record_from_table(name="cpg_nodes", kind="cpg_output", table=data.cpg_nodes)
+            _dataset_record_from_table(
+                name="cpg_nodes",
+                kind="cpg_output",
+                table=data.cpg_nodes,
+                metadata=metadata,
+            )
         )
         outputs.append(
             _output_record_from_table(
@@ -385,8 +610,28 @@ def _collect_cpg_outputs(data: ManifestData) -> tuple[list[DatasetRecord], list[
             )
         )
     if data.cpg_edges is not None:
+        delta_meta = _materialized_delta_metadata(data, key="cpg_edges_delta")
+        metadata = DatasetRecordMetadata()
+        if delta_meta is not None:
+            metadata = DatasetRecordMetadata(
+                path=delta_meta.path,
+                data_format="delta" if delta_meta.path is not None else None,
+                delta_version=delta_meta.version,
+                delta_features=delta_meta.features,
+                delta_commit_metadata=delta_meta.commit_metadata,
+                delta_protocol=delta_meta.protocol,
+                delta_history=delta_meta.history,
+                delta_write_policy=delta_meta.write_policy,
+                delta_schema_policy=delta_meta.schema_policy,
+                delta_constraints=delta_meta.constraints,
+            )
         datasets.append(
-            _dataset_record_from_table(name="cpg_edges", kind="cpg_output", table=data.cpg_edges)
+            _dataset_record_from_table(
+                name="cpg_edges",
+                kind="cpg_output",
+                table=data.cpg_edges,
+                metadata=metadata,
+            )
         )
         outputs.append(
             _output_record_from_table(
@@ -399,8 +644,28 @@ def _collect_cpg_outputs(data: ManifestData) -> tuple[list[DatasetRecord], list[
             )
         )
     if data.cpg_props is not None:
+        delta_meta = _materialized_delta_metadata(data, key="cpg_props_delta")
+        metadata = DatasetRecordMetadata()
+        if delta_meta is not None:
+            metadata = DatasetRecordMetadata(
+                path=delta_meta.path,
+                data_format="delta" if delta_meta.path is not None else None,
+                delta_version=delta_meta.version,
+                delta_features=delta_meta.features,
+                delta_commit_metadata=delta_meta.commit_metadata,
+                delta_protocol=delta_meta.protocol,
+                delta_history=delta_meta.history,
+                delta_write_policy=delta_meta.write_policy,
+                delta_schema_policy=delta_meta.schema_policy,
+                delta_constraints=delta_meta.constraints,
+            )
         datasets.append(
-            _dataset_record_from_table(name="cpg_props", kind="cpg_output", table=data.cpg_props)
+            _dataset_record_from_table(
+                name="cpg_props",
+                kind="cpg_output",
+                table=data.cpg_props,
+                metadata=metadata,
+            )
         )
         outputs.append(
             _output_record_from_table(
@@ -605,6 +870,48 @@ def _param_tables_payload(data: ManifestData) -> JsonDict:
     return payload
 
 
+def _sqlglot_planner_dag_hashes(
+    payloads: Sequence[Mapping[str, object]] | None,
+) -> list[JsonDict] | None:
+    if not payloads:
+        return None
+    results: list[JsonDict] = []
+    for payload in payloads:
+        optimized_ast = payload.get("optimized_ast")
+        if optimized_ast is None or not _is_sqlglot_payload(optimized_ast):
+            continue
+        try:
+            expr = sqlglot_load(cast("list[dict[str, object]]", optimized_ast))
+        except (TypeError, ValueError):
+            continue
+        dag = planner_dag_snapshot(expr)
+        subplan_hashes = [str(step["step_id"]) for step in dag.steps]
+        results.append(
+            {
+                "domain": _optional_str(payload.get("domain")),
+                "rule_name": _optional_str(payload.get("rule_name")),
+                "plan_signature": _optional_str(payload.get("plan_signature")),
+                "plan_fingerprint": _optional_str(payload.get("plan_fingerprint")),
+                "sqlglot_policy_hash": _optional_str(payload.get("sqlglot_policy_hash")),
+                "planner_dag_hash": dag.dag_hash,
+                "subplan_hashes": subplan_hashes,
+            }
+        )
+    return results or None
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _is_sqlglot_payload(payload: object) -> bool:
+    if not isinstance(payload, list):
+        return False
+    return all(isinstance(item, dict) for item in payload)
+
+
 def _optional_note(value: T | None, transform: Callable[[T], JsonValue]) -> JsonValue | None:
     if not value:
         return None
@@ -640,6 +947,10 @@ def _manifest_notes(data: ManifestData) -> JsonDict:
         ),
         "function_registry_hash": _optional_note(data.function_registry_hash, _to_json_value),
         "sqlglot_ast_payloads": _optional_note(data.sqlglot_ast_payloads, _to_json_value),
+        "sqlglot_planner_dag_hashes": _optional_note(
+            data.sqlglot_ast_payloads,
+            _sqlglot_planner_dag_hashes,
+        ),
         "dataset_registry_snapshot": _optional_note(
             data.dataset_registry_snapshot,
             _json_dict_list,

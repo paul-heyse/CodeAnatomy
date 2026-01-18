@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
@@ -15,10 +15,11 @@ from ibis.expr.types import Value as IbisValue
 from arrowdsl.compute.ids import apply_hash_column
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
-from arrowdsl.io.parquet import (
-    NamedDatasetWriteConfig,
-    ParquetWriteOptions,
-    write_named_datasets_parquet,
+from arrowdsl.io.delta import (
+    DeltaWriteOptions,
+    apply_delta_write_policies,
+    coerce_delta_table,
+    write_named_datasets_delta,
 )
 from arrowdsl.plan.query import ScanTelemetry
 from arrowdsl.plan.scan_io import DatasetSource
@@ -37,6 +38,7 @@ from hamilton_pipeline.pipeline_types import (
     DiagnosticsInputs,
     IncrementalDatasetUpdates,
     IncrementalImpactUpdates,
+    OutputConfig,
     ParamBundle,
     QnameInputs,
     RelationshipOutputTables,
@@ -625,7 +627,7 @@ def relspec_param_registry(rule_registry: RuleRegistry) -> IbisParamRegistry:
         Registry populated with parameter specs from rule rel_ops.
     """
     specs = []
-    for rule in rule_registry.rules_for_domain("cpg"):
+    for rule in rule_registry.rule_definitions():
         specs.extend(specs_from_rel_ops(rule.rel_ops))
     return registry_from_specs(specs)
 
@@ -888,6 +890,7 @@ def persist_relspec_input_datasets(
     relspec_input_dataset_dir: str,
     *,
     overwrite_intermediate_datasets: bool,
+    output_config: OutputConfig,
 ) -> dict[str, DatasetLocation]:
     """Write relationship input datasets to disk in filesystem mode.
 
@@ -903,7 +906,7 @@ def persist_relspec_input_datasets(
     if mode != "filesystem":
         return {}
 
-    # Write as Parquet dataset dirs so Acero scans can project/filter cheaply.
+    # Write as Delta tables for durable filesystem-backed resolvers.
     schemas = {name: table.schema for name, table in relspec_input_datasets.items()}
     dataset_specs = {
         name: GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(name) for name in relspec_input_datasets
@@ -913,37 +916,40 @@ def persist_relspec_input_datasets(
         spec = dataset_specs.get(name)
         policy = spec.encoding_policy() if spec is not None else None
         encoding_policies[name] = policy or encoding_policy_from_schema(table.schema)
-    file_visitors: dict[str, Callable[[object], None]] = {}
-    file_lists: dict[str, list[str]] = {}
-    for name in relspec_input_datasets:
-        files, visitor = _file_visitor_bucket()
-        file_lists[name] = files
-        file_visitors[name] = visitor
-    paths = write_named_datasets_parquet(
-        relspec_input_datasets,
+    delta_mode = "overwrite" if overwrite_intermediate_datasets else "error"
+    delta_options = apply_delta_write_policies(
+        DeltaWriteOptions(mode=delta_mode, schema_mode="overwrite"),
+        write_policy=output_config.delta_write_policy,
+        schema_policy=output_config.delta_schema_policy,
+    )
+    converted = {
+        name: coerce_delta_table(
+            table,
+            schema=schemas.get(name),
+            encoding_policy=encoding_policies.get(name),
+        )
+        for name, table in relspec_input_datasets.items()
+    }
+    results = write_named_datasets_delta(
+        converted,
         relspec_input_dataset_dir,
-        config=NamedDatasetWriteConfig(
-            opts=ParquetWriteOptions(),
-            overwrite=bool(overwrite_intermediate_datasets),
-            schemas=schemas,
-            encoding_policies=encoding_policies,
-            file_visitors=file_visitors,
-        ),
+        options=delta_options,
+        storage_options=output_config.delta_storage_options,
     )
 
     out: dict[str, DatasetLocation] = {}
-    for name, path in paths.items():
+    for name, result in results.items():
         table = relspec_input_datasets.get(name)
         table_spec = table_spec_from_schema(name, table.schema) if table is not None else None
         dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(name)
         if dataset_spec is None and table_spec is not None:
             dataset_spec = make_dataset_spec(table_spec=table_spec)
         out[name] = DatasetLocation(
-            path=path,
-            format="parquet",
+            path=result.path,
+            format="delta",
             partitioning="hive",
             filesystem=None,
-            files=tuple(file_lists.get(name, [])),
+            files=None,
             table_spec=table_spec,
             dataset_spec=dataset_spec,
             datafusion_scan=_datafusion_scan_options(
@@ -951,7 +957,8 @@ def persist_relspec_input_datasets(
                 table_spec=table_spec,
                 dataset_spec=dataset_spec,
             ),
-            datafusion_provider="listing",
+            datafusion_provider=None,
+            delta_version=result.version,
         )
     return out
 
@@ -1110,17 +1117,6 @@ def _param_table_aliases(
         for name in names:
             aliases.setdefault(name, table)
     return aliases
-
-
-def _file_visitor_bucket() -> tuple[list[str], Callable[[object], None]]:
-    files: list[str] = []
-
-    def _visitor(record: object) -> None:
-        path = getattr(record, "path", None)
-        if isinstance(path, str):
-            files.append(path)
-
-    return files, _visitor
 
 
 @dataclass(frozen=True)
@@ -1709,7 +1705,7 @@ def cpg_nodes_finalize(
     )
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="cpg", artifact="cpg_nodes_delta", kind="table")
 def cpg_nodes_delta(
     cpg_nodes_finalize: CpgBuildArtifacts,
@@ -1724,7 +1720,7 @@ def cpg_nodes_delta(
     return cpg_nodes_finalize.finalize.good
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="cpg", artifact="cpg_nodes_final", kind="table")
 def cpg_nodes_final(
     cpg_nodes_finalize: CpgBuildArtifacts,
@@ -1749,7 +1745,7 @@ def cpg_nodes_final(
     return cpg_nodes_finalize.finalize.good
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="cpg", artifact="cpg_nodes_quality", kind="table")
 def cpg_nodes_quality(
     cpg_nodes_finalize: CpgBuildArtifacts,
@@ -1764,7 +1760,7 @@ def cpg_nodes_quality(
     return cpg_nodes_finalize.quality
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="cpg", artifact="cpg_edges_delta", kind="table")
 def cpg_edges_delta(
     cpg_edges_finalize: CpgBuildArtifacts,
@@ -1779,7 +1775,7 @@ def cpg_edges_delta(
     return cpg_edges_finalize.finalize.good
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="cpg", artifact="cpg_edges_final", kind="table")
 def cpg_edges_final(
     cpg_edges_finalize: CpgBuildArtifacts,
@@ -1827,7 +1823,7 @@ def cpg_edges_finalize(
     )
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="cpg", artifact="cpg_edges_quality", kind="table")
 def cpg_edges_quality(
     cpg_edges_finalize: CpgBuildArtifacts,
@@ -1842,7 +1838,7 @@ def cpg_edges_quality(
     return cpg_edges_finalize.quality
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="cpg", artifact="cpg_props_delta", kind="table")
 def cpg_props_delta(
     cpg_props_finalize: CpgBuildArtifacts,
@@ -1857,7 +1853,7 @@ def cpg_props_delta(
     return cpg_props_finalize.finalize.good
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="cpg", artifact="cpg_props_json", kind="table")
 def cpg_props_json(
     cpg_props_finalize: CpgBuildArtifacts,
@@ -1872,7 +1868,7 @@ def cpg_props_json(
     return cpg_props_finalize.extra_outputs.get("cpg_props_json")
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="cpg", artifact="cpg_props_final", kind="table")
 def cpg_props_final(
     cpg_props_finalize: CpgBuildArtifacts,
@@ -1923,7 +1919,7 @@ def cpg_props_finalize(
     )
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="cpg", artifact="cpg_props_quality", kind="table")
 def cpg_props_quality(
     cpg_props_finalize: CpgBuildArtifacts,

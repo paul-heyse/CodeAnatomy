@@ -6,7 +6,11 @@ from collections.abc import Sequence
 
 from arrowdsl.core.context import DeterminismTier, Ordering, OrderingKey, OrderingLevel
 from arrowdsl.core.interop import SchemaLike, TableLike, pc
-from arrowdsl.schema.metadata import infer_ordering_keys, ordering_metadata_spec
+from arrowdsl.schema.metadata import (
+    infer_ordering_keys,
+    ordering_from_schema,
+    ordering_metadata_spec,
+)
 from arrowdsl.schema.schema import SchemaMetadataSpec
 
 
@@ -81,4 +85,36 @@ def ordering_metadata_for_plan(
     return ordering_metadata_spec(level, keys=keys, extra=extra)
 
 
-__all__ = ["apply_canonical_sort", "ordering_keys_for_schema", "ordering_metadata_for_plan"]
+def require_explicit_ordering(schema: SchemaLike, *, label: str) -> tuple[OrderingKey, ...]:
+    """Return ordering keys when explicit ordering metadata is present.
+
+    Parameters
+    ----------
+    schema:
+        Schema carrying ordering metadata.
+    label:
+        Label used in error messages when ordering metadata is missing.
+
+    Returns
+    -------
+    tuple[OrderingKey, ...]
+        Explicit ordering keys.
+
+    Raises
+    ------
+    ValueError
+        Raised when the schema lacks explicit ordering metadata.
+    """
+    ordering = ordering_from_schema(schema)
+    if ordering.level != OrderingLevel.EXPLICIT or not ordering.keys:
+        msg = f"{label} requires explicit ordering metadata."
+        raise ValueError(msg)
+    return ordering.keys
+
+
+__all__ = [
+    "apply_canonical_sort",
+    "ordering_keys_for_schema",
+    "ordering_metadata_for_plan",
+    "require_explicit_ordering",
+]

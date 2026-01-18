@@ -5,10 +5,19 @@ from __future__ import annotations
 from typing import cast
 
 import pyarrow as pa
+from deltalake import CommitProperties, DeltaTable
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.io.parquet import read_table_parquet, write_table_parquet
+from arrowdsl.io.delta import (
+    DeltaWriteOptions,
+    DeltaWriteResult,
+    delta_table_version,
+    enable_delta_features,
+    read_table_delta,
+    write_table_delta,
+)
 from arrowdsl.schema.build import column_or_null, table_from_arrays
+from arrowdsl.schema.serialization import schema_fingerprint
 from incremental.state_store import StateStore
 
 
@@ -59,23 +68,65 @@ def read_repo_snapshot(store: StateStore) -> pa.Table | None:
         Snapshot table if it exists.
     """
     path = store.repo_snapshot_path()
-    if not path.exists():
+    if not path.exists() or delta_table_version(str(path)) is None:
         return None
-    return cast("pa.Table", read_table_parquet(path))
+    return cast("pa.Table", read_table_delta(str(path)))
 
 
-def write_repo_snapshot(store: StateStore, snapshot: pa.Table) -> str:
-    """Persist the repo snapshot to the state store.
+def write_repo_snapshot(store: StateStore, snapshot: pa.Table) -> DeltaWriteResult:
+    """Persist the repo snapshot to the state store as Delta.
 
     Returns
     -------
     str
-        Path to the written snapshot parquet file.
+        Path to the written snapshot Delta table.
     """
     store.ensure_dirs()
     target = store.repo_snapshot_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    return write_table_parquet(snapshot, target, overwrite=True)
+    metadata = {
+        "snapshot_kind": "repo_snapshot",
+        "schema_fingerprint": schema_fingerprint(snapshot.schema),
+    }
+    existing_version = delta_table_version(str(target))
+    if existing_version is None:
+        result = write_table_delta(
+            snapshot,
+            str(target),
+            options=DeltaWriteOptions(
+                mode="overwrite",
+                schema_mode="overwrite",
+                commit_metadata=metadata,
+            ),
+        )
+        enable_delta_features(result.path)
+        return result
+    table = DeltaTable(str(target))
+    update_predicate = (
+        "source.file_sha256 <> target.file_sha256 OR "
+        "source.path <> target.path OR "
+        "source.size_bytes <> target.size_bytes OR "
+        "source.mtime_ns <> target.mtime_ns"
+    )
+    (
+        table.merge(
+            snapshot,
+            predicate="source.file_id = target.file_id",
+            source_alias="source",
+            target_alias="target",
+            merge_schema=True,
+            commit_properties=CommitProperties(custom_metadata=metadata),
+        )
+        .when_matched_update_all(predicate=update_predicate)
+        .when_not_matched_insert_all()
+        .when_not_matched_by_source_delete()
+        .execute()
+    )
+    enable_delta_features(str(target))
+    return DeltaWriteResult(
+        path=str(target),
+        version=delta_table_version(str(target)),
+    )
 
 
 __all__ = ["build_repo_snapshot", "read_repo_snapshot", "write_repo_snapshot"]

@@ -43,19 +43,19 @@ def _repo_root() -> Path:
 
 
 def _assert_cpg_outputs(results: Mapping[str, object], output_dir: Path) -> None:
-    for key in ("write_cpg_nodes_parquet", "write_cpg_edges_parquet", "write_cpg_props_parquet"):
+    for key in ("write_cpg_nodes_delta", "write_cpg_edges_delta", "write_cpg_props_delta"):
         report = cast("dict[str, object] | None", results.get(key))
         assert report is not None
         paths = cast("dict[str, str]", report.get("paths"))
         for path in paths.values():
             assert Path(path).exists()
-    assert (output_dir / "cpg_nodes.parquet").exists()
-    assert (output_dir / "cpg_edges.parquet").exists()
-    assert (output_dir / "cpg_props.parquet").exists()
+    assert (output_dir / "cpg_nodes").exists()
+    assert (output_dir / "cpg_edges").exists()
+    assert (output_dir / "cpg_props").exists()
 
 
 def _assert_extract_errors(results: Mapping[str, object]) -> None:
-    report = cast("dict[str, object] | None", results.get("write_extract_error_artifacts_parquet"))
+    report = cast("dict[str, object] | None", results.get("write_extract_error_artifacts_delta"))
     assert report is not None
     base_dir = Path(cast("str", report.get("base_dir")))
     assert base_dir.exists()
@@ -93,7 +93,7 @@ def _run_diagnostics_report(repo_root: Path, output_dir: Path) -> None:
         str(repo_root / "scripts" / "e2e_diagnostics_report.py"),
         "--output-dir",
         str(output_dir),
-        "--validate-parquet",
+        "--validate-delta",
     ]
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     assert completed.returncode == 0, completed.stderr or completed.stdout

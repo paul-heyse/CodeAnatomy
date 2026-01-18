@@ -6,10 +6,10 @@ from importlib import import_module
 from pathlib import Path
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 from ibis.backends import BaseBackend
 
+from arrowdsl.io.delta import DeltaWriteOptions, write_table_delta
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from incremental.impact import (
@@ -26,7 +26,7 @@ def test_impacted_callers_from_changed_exports(tmp_path: Path) -> None:
     changed_exports = _changed_exports()
 
     qname_path = _write_table(
-        tmp_path / "rel_callsite_qname.parquet",
+        tmp_path / "rel_callsite_qname",
         pa.table(
             {
                 "call_id": pa.array(["call_1"], type=pa.string()),
@@ -37,7 +37,7 @@ def test_impacted_callers_from_changed_exports(tmp_path: Path) -> None:
         ),
     )
     symbol_path = _write_table(
-        tmp_path / "rel_callsite_symbol.parquet",
+        tmp_path / "rel_callsite_symbol",
         pa.table(
             {
                 "call_id": pa.array(["call_2"], type=pa.string()),
@@ -68,7 +68,7 @@ def test_impacted_importers_from_changed_exports(tmp_path: Path) -> None:
     changed_exports = _changed_exports()
 
     imports_path = _write_table(
-        tmp_path / "imports_resolved.parquet",
+        tmp_path / "imports_resolved",
         pa.table(
             {
                 "importer_file_id": pa.array(
@@ -126,7 +126,11 @@ def _changed_exports() -> pa.Table:
 
 
 def _write_table(path: Path, table: pa.Table) -> str:
-    pq.write_table(table, path)
+    write_table_delta(
+        table,
+        str(path),
+        options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
+    )
     return str(path)
 
 

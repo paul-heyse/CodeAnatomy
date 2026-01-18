@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from itertools import repeat
+from typing import Literal
 from weakref import WeakSet
 
 import pyarrow as pa
 from datafusion import SessionContext, udf
+from datafusion.user_defined import ScalarUDF
 
 from arrowdsl.compute.position_encoding import (
     ENC_UTF8,
@@ -20,6 +23,50 @@ from arrowdsl.core.interop import pc
 
 _NUMERIC_REGEX = r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$"
 _KERNEL_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
+
+DataFusionUdfKind = Literal["scalar", "aggregate", "window", "table"]
+
+
+@dataclass(frozen=True)
+class DataFusionUdfSpec:
+    """Specification for a DataFusion UDF entry."""
+
+    func_id: str
+    engine_name: str
+    kind: DataFusionUdfKind
+    input_types: tuple[pa.DataType, ...]
+    return_type: pa.DataType
+    state_type: pa.DataType | None = None
+    volatility: str = "stable"
+    arg_names: tuple[str, ...] | None = None
+    catalog: str | None = None
+    database: str | None = None
+    rewrite_tags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DataFusionUdfSnapshot:
+    """Snapshot of UDF registrations for diagnostics."""
+
+    scalar: tuple[str, ...] = ()
+    aggregate: tuple[str, ...] = ()
+    window: tuple[str, ...] = ()
+    table: tuple[str, ...] = ()
+
+    def payload(self) -> dict[str, object]:
+        """Return a JSON-ready payload for diagnostics.
+
+        Returns
+        -------
+        dict[str, object]
+            JSON-ready payload with UDF names.
+        """
+        return {
+            "scalar": list(self.scalar),
+            "aggregate": list(self.aggregate),
+            "window": list(self.window),
+            "table": list(self.table),
+        }
 
 
 def _normalize_span(values: pa.Array | pa.ChunkedArray) -> pa.Array | pa.ChunkedArray:
@@ -243,25 +290,133 @@ _COL_TO_BYTE_UDF = udf(
     "col_to_byte",
 )
 
+_SCALAR_UDF_SPECS: tuple[tuple[DataFusionUdfSpec, ScalarUDF], ...] = (
+    (
+        DataFusionUdfSpec(
+            func_id="normalize_span",
+            engine_name="normalize_span",
+            kind="scalar",
+            input_types=(pa.string(),),
+            return_type=pa.int64(),
+            arg_names=("value",),
+            rewrite_tags=("normalize_span",),
+        ),
+        _NORMALIZE_SPAN_UDF,
+    ),
+    (
+        DataFusionUdfSpec(
+            func_id="stable_hash64",
+            engine_name="stable_hash64",
+            kind="scalar",
+            input_types=(pa.string(),),
+            return_type=pa.int64(),
+            arg_names=("value",),
+            rewrite_tags=("hash",),
+        ),
+        _STABLE_HASH64_UDF,
+    ),
+    (
+        DataFusionUdfSpec(
+            func_id="stable_hash128",
+            engine_name="stable_hash128",
+            kind="scalar",
+            input_types=(pa.string(),),
+            return_type=pa.string(),
+            arg_names=("value",),
+            rewrite_tags=("hash",),
+        ),
+        _STABLE_HASH128_UDF,
+    ),
+    (
+        DataFusionUdfSpec(
+            func_id="position_encoding_norm",
+            engine_name="position_encoding_norm",
+            kind="scalar",
+            input_types=(pa.string(),),
+            return_type=pa.int32(),
+            arg_names=("value",),
+            rewrite_tags=("position_encoding",),
+        ),
+        _POSITION_ENCODING_NORM_UDF,
+    ),
+    (
+        DataFusionUdfSpec(
+            func_id="col_to_byte",
+            engine_name="col_to_byte",
+            kind="scalar",
+            input_types=(pa.string(), pa.int64(), pa.string()),
+            return_type=pa.int64(),
+            arg_names=("line_text", "col", "col_unit"),
+            rewrite_tags=("position_encoding",),
+        ),
+        _COL_TO_BYTE_UDF,
+    ),
+)
+
+DATAFUSION_UDF_SPECS: tuple[DataFusionUdfSpec, ...] = tuple(spec for spec, _ in _SCALAR_UDF_SPECS)
+
+
+def datafusion_udf_specs() -> tuple[DataFusionUdfSpec, ...]:
+    """Return the canonical DataFusion UDF specs.
+
+    Returns
+    -------
+    tuple[DataFusionUdfSpec, ...]
+        Canonical DataFusion UDF specifications.
+    """
+    return DATAFUSION_UDF_SPECS
+
+
+def _register_scalar_udfs(ctx: SessionContext) -> tuple[str, ...]:
+    if ctx not in _KERNEL_UDF_CONTEXTS:
+        for _, udf_impl in _SCALAR_UDF_SPECS:
+            ctx.register_udf(udf_impl)
+        _KERNEL_UDF_CONTEXTS.add(ctx)
+    return tuple(spec.engine_name for spec, _ in _SCALAR_UDF_SPECS)
+
+
+def _register_aggregate_udfs(_ctx: SessionContext) -> tuple[str, ...]:
+    return ()
+
+
+def _register_window_udfs(_ctx: SessionContext) -> tuple[str, ...]:
+    return ()
+
+
+def _register_table_udfs(_ctx: SessionContext) -> tuple[str, ...]:
+    return ()
+
 
 def _register_kernel_udfs(ctx: SessionContext) -> None:
-    if ctx in _KERNEL_UDF_CONTEXTS:
-        return
-    ctx.register_udf(_NORMALIZE_SPAN_UDF)
-    ctx.register_udf(_STABLE_HASH64_UDF)
-    ctx.register_udf(_STABLE_HASH128_UDF)
-    ctx.register_udf(_POSITION_ENCODING_NORM_UDF)
-    ctx.register_udf(_COL_TO_BYTE_UDF)
-    _KERNEL_UDF_CONTEXTS.add(ctx)
+    _ = _register_scalar_udfs(ctx)
 
 
-def register_datafusion_udfs(ctx: SessionContext) -> None:
-    """Register shared DataFusion UDFs in the provided session context."""
-    _register_kernel_udfs(ctx)
+def register_datafusion_udfs(ctx: SessionContext) -> DataFusionUdfSnapshot:
+    """Register shared DataFusion UDFs in the provided session context.
+
+    Returns
+    -------
+    DataFusionUdfSnapshot
+        Snapshot of registered UDFs.
+    """
+    scalar = _register_scalar_udfs(ctx)
+    aggregate = _register_aggregate_udfs(ctx)
+    window = _register_window_udfs(ctx)
+    table = _register_table_udfs(ctx)
+    return DataFusionUdfSnapshot(
+        scalar=scalar,
+        aggregate=aggregate,
+        window=window,
+        table=table,
+    )
 
 
 __all__ = [
+    "DATAFUSION_UDF_SPECS",
     "_NORMALIZE_SPAN_UDF",
+    "DataFusionUdfSnapshot",
+    "DataFusionUdfSpec",
     "_register_kernel_udfs",
+    "datafusion_udf_specs",
     "register_datafusion_udfs",
 ]

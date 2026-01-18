@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 
 import pyarrow as pa
 
 from arrowdsl.compile.kernel_compiler import KernelCompiler
 from arrowdsl.compile.plan_compiler import PlanCompiler
+from arrowdsl.compute.kernels import apply_join
 from arrowdsl.core.context import DeterminismTier, ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.ir.plan import OpNode, PlanIR
 from arrowdsl.ops.catalog import OP_CATALOG
+from arrowdsl.plan.ops import JoinSpec
 from arrowdsl.plan.planner import Segment, SegmentPlan, segment_plan
+
+JOIN_FALLBACK_MAX_ROWS = 100_000
 
 DefExecutor = Callable[[Segment, ExecutionContext], TableLike]
 
@@ -107,11 +112,19 @@ def _run_acero_segment(
 ) -> TableLike | RecordBatchReaderLike:
     if _is_union_all_segment(segment):
         return _run_union_all(segment.ops[0], ctx=ctx, df_executor=df_executor)
+    fallback = _hash_join_fallback(
+        segment,
+        ctx=ctx,
+        current=current,
+        df_executor=df_executor,
+    )
+    if fallback is not None:
+        return fallback
     ops = segment.ops
     if current is not None and _needs_input_source(ops):
         ops = (_table_source_op(current), *ops)
     decl = PlanCompiler(catalog=OP_CATALOG).to_acero(PlanIR(ops), ctx=ctx)
-    if streamable(plan, ctx=ctx):
+    if _segment_streamable(segment, ctx=ctx):
         return decl.to_reader(use_threads=ctx.use_threads)
     return decl.to_table(use_threads=ctx.use_threads)
 
@@ -145,6 +158,68 @@ def _needs_input_source(ops: tuple[OpNode, ...]) -> bool:
         return False
     first = ops[0].name
     return first not in {"scan", "table_source", "union_all", "hash_join", "winner_select"}
+
+
+def _segment_streamable(segment: Segment, *, ctx: ExecutionContext) -> bool:
+    if ctx.determinism == DeterminismTier.CANONICAL:
+        return False
+    return not _segment_has_pipeline_breaker(segment)
+
+
+def _segment_has_pipeline_breaker(segment: Segment) -> bool:
+    return any(OP_CATALOG[node.name].pipeline_breaker for node in segment.ops)
+
+
+def _hash_join_fallback(
+    segment: Segment,
+    *,
+    ctx: ExecutionContext,
+    current: TableLike | RecordBatchReaderLike | None,
+    df_executor: DefExecutor | None,
+) -> TableLike | None:
+    if len(segment.ops) != 1:
+        return None
+    node = segment.ops[0]
+    if node.name != "hash_join":
+        return None
+    if current is None or isinstance(current, RecordBatchReaderLike):
+        return None
+    spec = node.args.get("spec")
+    if not isinstance(spec, JoinSpec):
+        return None
+    if not node.inputs:
+        msg = "hash_join requires a right-hand input plan."
+        raise ValueError(msg)
+    right_segmented = segment_plan(node.inputs[0], catalog=OP_CATALOG, ctx=ctx)
+    right_result = run_segments(right_segmented, ctx=ctx, df_executor=df_executor)
+    right_table = (
+        right_result.read_all() if isinstance(right_result, RecordBatchReaderLike) else right_result
+    )
+    if current.num_rows > JOIN_FALLBACK_MAX_ROWS or right_table.num_rows > JOIN_FALLBACK_MAX_ROWS:
+        return None
+    joined = apply_join(current, right_table, spec=spec, use_threads=ctx.use_threads)
+    _record_join_fallback(ctx, left_rows=current.num_rows, right_rows=right_table.num_rows)
+    return joined
+
+
+def _record_join_fallback(ctx: ExecutionContext, *, left_rows: int, right_rows: int) -> None:
+    runtime = ctx.runtime.datafusion
+    if runtime is None or runtime.diagnostics_sink is None:
+        return
+    runtime.diagnostics_sink.record_events(
+        "datafusion_fallbacks_v1",
+        [
+            {
+                "event_time_unix_ms": int(time.time() * 1000),
+                "reason": "arrowdsl_join_fallback",
+                "error": f"left_rows={left_rows} right_rows={right_rows}",
+                "expression_type": "hash_join",
+                "sql": "",
+                "dialect": "",
+                "policy_violations": [],
+            }
+        ],
+    )
 
 
 def _run_union_all(

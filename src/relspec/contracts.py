@@ -6,7 +6,10 @@ from functools import cache
 
 import pyarrow as pa
 
+from arrowdsl.core.context import OrderingLevel
 from arrowdsl.core.interop import SchemaLike
+from arrowdsl.schema.metadata import merge_metadata_specs, ordering_metadata_spec
+from arrowdsl.schema.schema import SchemaMetadataSpec
 from schema_spec.system import (
     GLOBAL_SCHEMA_REGISTRY,
     Contract,
@@ -17,7 +20,18 @@ from schema_spec.system import (
 
 RELATION_OUTPUT_NAME = "relation_output_v1"
 
-RELATION_OUTPUT_SCHEMA = pa.schema(
+RELATION_OUTPUT_ORDERING_KEYS: tuple[tuple[str, str], ...] = (
+    ("path", "ascending"),
+    ("bstart", "ascending"),
+    ("bend", "ascending"),
+    ("edge_owner_file_id", "ascending"),
+    ("src", "ascending"),
+    ("dst", "ascending"),
+    ("rule_priority", "ascending"),
+    ("rule_name", "ascending"),
+)
+
+_RELATION_OUTPUT_BASE_SCHEMA = pa.schema(
     [
         pa.field("src", pa.string(), nullable=True),
         pa.field("dst", pa.string(), nullable=True),
@@ -39,6 +53,10 @@ RELATION_OUTPUT_SCHEMA = pa.schema(
     ],
     metadata={b"spec_kind": b"relation_output"},
 )
+RELATION_OUTPUT_SCHEMA = merge_metadata_specs(
+    SchemaMetadataSpec(schema_metadata=_RELATION_OUTPUT_BASE_SCHEMA.metadata or {}),
+    ordering_metadata_spec(OrderingLevel.EXPLICIT, keys=RELATION_OUTPUT_ORDERING_KEYS),
+).apply(_RELATION_OUTPUT_BASE_SCHEMA)
 
 
 @cache

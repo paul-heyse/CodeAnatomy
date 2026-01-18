@@ -10,8 +10,16 @@ import pyarrow as pa
 
 from arrowdsl.core.ids import hash64_from_arrays
 from arrowdsl.core.interop import TableLike, pc
-from arrowdsl.io.parquet import read_table_parquet, write_table_parquet
+from arrowdsl.io.delta import (
+    DeltaWriteOptions,
+    DeltaWriteResult,
+    delta_table_version,
+    enable_delta_features,
+    read_table_delta,
+    write_table_delta,
+)
 from arrowdsl.schema.build import column_or_null, table_from_arrays
+from arrowdsl.schema.serialization import schema_fingerprint
 from incremental.state_store import StateStore
 
 _HASH_NULL_SENTINEL = "None"
@@ -259,37 +267,63 @@ def read_scip_snapshot(store: StateStore) -> pa.Table | None:
         Loaded snapshot table, or ``None`` when missing.
     """
     path = store.scip_snapshot_path()
-    if not path.exists():
+    if not path.exists() or delta_table_version(str(path)) is None:
         return None
-    return cast("pa.Table", read_table_parquet(path))
+    return cast("pa.Table", read_table_delta(str(path)))
 
 
-def write_scip_snapshot(store: StateStore, snapshot: pa.Table) -> str:
-    """Persist the SCIP snapshot to the state store.
+def write_scip_snapshot(store: StateStore, snapshot: pa.Table) -> DeltaWriteResult:
+    """Persist the SCIP snapshot to the state store as Delta.
 
     Returns
     -------
     str
-        Path to the persisted snapshot file.
+        Path to the persisted snapshot Delta table.
     """
     store.ensure_dirs()
     target = store.scip_snapshot_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    return write_table_parquet(snapshot, target, overwrite=True)
+    result = write_table_delta(
+        snapshot,
+        str(target),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata={
+                "snapshot_kind": "scip_snapshot",
+                "schema_fingerprint": schema_fingerprint(snapshot.schema),
+            },
+        ),
+    )
+    enable_delta_features(result.path)
+    return result
 
 
-def write_scip_diff(store: StateStore, diff: pa.Table) -> str:
-    """Persist the SCIP diff to the state store.
+def write_scip_diff(store: StateStore, diff: pa.Table) -> DeltaWriteResult:
+    """Persist the SCIP diff to the state store as Delta.
 
     Returns
     -------
     str
-        Path to the persisted diff file.
+        Path to the persisted diff Delta table.
     """
     store.ensure_dirs()
     target = store.scip_diff_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    return write_table_parquet(diff, target, overwrite=True)
+    result = write_table_delta(
+        diff,
+        str(target),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata={
+                "snapshot_kind": "scip_diff",
+                "schema_fingerprint": schema_fingerprint(diff.schema),
+            },
+        ),
+    )
+    enable_delta_features(result.path)
+    return result
 
 
 def _row_hashes(

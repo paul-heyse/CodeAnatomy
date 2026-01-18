@@ -17,8 +17,13 @@ from datafusion.dataframe import DataFrame
 from datafusion.object_store import LocalFileSystem
 
 from arrowdsl.core.context import DeterminismTier
-from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionFallbackEvent
+from datafusion_engine.compile_options import (
+    DataFusionCacheEvent,
+    DataFusionCompileOptions,
+    DataFusionFallbackEvent,
+)
 from datafusion_engine.function_factory import install_function_factory
+from datafusion_engine.udf_registry import DataFusionUdfSnapshot, register_datafusion_udfs
 from engine.plan_cache import PlanCache
 from obs.diagnostics import DiagnosticsCollector
 
@@ -39,6 +44,13 @@ def _parse_major_version(version: str) -> int | None:
     if major.isdigit():
         return int(major)
     return None
+
+
+def _ansi_mode(settings: Mapping[str, str]) -> bool | None:
+    dialect = settings.get("datafusion.sql_parser.dialect")
+    if dialect is None:
+        return None
+    return str(dialect).lower() == "ansi"
 
 
 def _supports_explain_analyze_level() -> bool:
@@ -568,6 +580,20 @@ def _chain_sql_ingest_hooks(
     return _hook
 
 
+def _chain_cache_hooks(
+    *hooks: Callable[[DataFusionCacheEvent], None] | None,
+) -> Callable[[DataFusionCacheEvent], None] | None:
+    active = [hook for hook in hooks if hook is not None]
+    if not active:
+        return None
+
+    def _hook(event: DataFusionCacheEvent) -> None:
+        for hook in active:
+            hook(event)
+
+    return _hook
+
+
 def labeled_fallback_hook(
     label: ExecutionLabel,
     sink: list[dict[str, object]],
@@ -645,6 +671,36 @@ def diagnostics_fallback_hook(
                     "sql": event.sql,
                     "dialect": event.dialect,
                     "policy_violations": list(event.policy_violations),
+                }
+            ],
+        )
+
+    return _hook
+
+
+def diagnostics_cache_hook(
+    sink: DiagnosticsCollector,
+) -> Callable[[DataFusionCacheEvent], None]:
+    """Return a cache hook that records diagnostics rows.
+
+    Returns
+    -------
+    Callable[[DataFusionCacheEvent], None]
+        Hook that records cache events in the diagnostics sink.
+    """
+
+    def _hook(event: DataFusionCacheEvent) -> None:
+        sink.record_events(
+            "datafusion_cache_events_v1",
+            [
+                {
+                    "event_time_unix_ms": int(time.time() * 1000),
+                    "cache_enabled": event.cache_enabled,
+                    "cache_max_columns": event.cache_max_columns,
+                    "column_count": event.column_count,
+                    "reason": event.reason,
+                    "plan_hash": event.plan_hash,
+                    "profile_hash": event.profile_hash,
                 }
             ],
         )
@@ -755,6 +811,10 @@ class DataFusionRuntimeProfile:
     cache_manager_factory: Callable[[], object] | None = None
     enable_function_factory: bool = True
     function_factory_hook: Callable[[SessionContext], None] | None = None
+    enable_udfs: bool = True
+    enable_delta_plan_codecs: bool = False
+    delta_plan_codec_physical: str = "delta_physical"
+    delta_plan_codec_logical: str = "delta_logical"
     enable_metrics: bool = False
     metrics_collector: Callable[[], Mapping[str, object] | None] | None = None
     enable_tracing: bool = False
@@ -884,7 +944,9 @@ class DataFusionRuntimeProfile:
         ctx = self._apply_url_table(ctx)
         self._register_local_filesystem(ctx)
         self._install_input_plugins(ctx)
+        self._install_udfs(ctx)
         self._prepare_statements(ctx)
+        self.ensure_delta_plan_codecs(ctx)
         self._install_function_factory(ctx)
         self._install_tracing()
         if self.session_context_hook is not None:
@@ -897,10 +959,70 @@ class DataFusionRuntimeProfile:
         for plugin in self.input_plugins:
             plugin(ctx)
 
+    def _install_udfs(self, ctx: SessionContext) -> None:
+        """Install registered UDFs on the session context."""
+        if not self.enable_udfs:
+            return
+        snapshot = register_datafusion_udfs(ctx)
+        self._record_udf_snapshot(snapshot)
+
     def _prepare_statements(self, ctx: SessionContext) -> None:
         """Prepare SQL statements when configured."""
         for statement in self.prepared_statements:
             ctx.sql(statement.sql)
+
+    def ensure_delta_plan_codecs(self, ctx: SessionContext) -> bool:
+        """Install Delta plan codecs when enabled.
+
+        Returns
+        -------
+        bool
+            True when codecs were installed, otherwise False.
+        """
+        if not self.enable_delta_plan_codecs:
+            return False
+        register = getattr(ctx, "register_extension_codecs", None)
+        available = callable(register)
+        installed = False
+        if available:
+            try:
+                register(self.delta_plan_codec_physical, self.delta_plan_codec_logical)
+            except TypeError:
+                try:
+                    register(self.delta_plan_codec_logical, self.delta_plan_codec_physical)
+                except TypeError:
+                    installed = False
+                else:
+                    installed = True
+            else:
+                installed = True
+        self._record_delta_plan_codecs(
+            available=available,
+            installed=installed,
+        )
+        return installed
+
+    def _record_udf_snapshot(self, snapshot: DataFusionUdfSnapshot) -> None:
+        if self.diagnostics_sink is None:
+            return
+        self.diagnostics_sink.record_artifact(
+            "datafusion_udf_registry_v1",
+            snapshot.payload(),
+        )
+
+    def _record_delta_plan_codecs(self, *, available: bool, installed: bool) -> None:
+        if self.diagnostics_sink is None:
+            return
+        self.diagnostics_sink.record_artifact(
+            "datafusion_delta_plan_codecs_v1",
+            {
+                "enabled": self.enable_delta_plan_codecs,
+                "available": available,
+                "installed": installed,
+                "physical_codec": self.delta_plan_codec_physical,
+                "logical_codec": self.delta_plan_codec_logical,
+            },
+        )
 
     def _build_session_context(self) -> SessionContext:
         """Create the SessionContext base for this runtime profile.
@@ -997,6 +1119,7 @@ class DataFusionRuntimeProfile:
         ):
             plan_artifacts_hook = self.plan_collector.hook
         sql_ingest_hook = resolved.sql_ingest_hook
+        cache_event_hook = resolved.cache_event_hook
         fallback_hook = resolved.fallback_hook
         if fallback_hook is None and self.capture_fallbacks and self.fallback_collector is not None:
             fallback_hook = self.fallback_collector.hook
@@ -1022,6 +1145,10 @@ class DataFusionRuntimeProfile:
                 sql_ingest_hook,
                 diagnostics_sql_ingest_hook(self.diagnostics_sink),
             )
+            cache_event_hook = _chain_cache_hooks(
+                cache_event_hook,
+                diagnostics_cache_hook(self.diagnostics_sink),
+            )
         unchanged = (
             cache == resolved.cache,
             cache_max_columns == resolved.cache_max_columns,
@@ -1033,6 +1160,7 @@ class DataFusionRuntimeProfile:
             plan_artifacts_hook == resolved.plan_artifacts_hook,
             sql_ingest_hook == resolved.sql_ingest_hook,
             fallback_hook == resolved.fallback_hook,
+            cache_event_hook == resolved.cache_event_hook,
         )
         if all(unchanged) and execution_policy is None and execution_label is None:
             return resolved
@@ -1048,6 +1176,7 @@ class DataFusionRuntimeProfile:
             plan_artifacts_hook=plan_artifacts_hook,
             sql_ingest_hook=sql_ingest_hook,
             fallback_hook=fallback_hook,
+            cache_event_hook=cache_event_hook,
         )
         if execution_label is not None:
             updated = apply_execution_label(
@@ -1149,6 +1278,9 @@ class DataFusionRuntimeProfile:
             "cache_manager_factory": bool(self.cache_manager_factory),
             "function_factory_enabled": self.enable_function_factory,
             "function_factory_hook": bool(self.function_factory_hook),
+            "delta_plan_codecs_enabled": self.enable_delta_plan_codecs,
+            "delta_plan_codec_physical": self.delta_plan_codec_physical,
+            "delta_plan_codec_logical": self.delta_plan_codec_logical,
             "metrics_enabled": self.enable_metrics,
             "metrics_collector": bool(self.metrics_collector),
             "tracing_enabled": self.enable_tracing,
@@ -1191,6 +1323,8 @@ class DataFusionRuntimeProfile:
             Versioned runtime payload with grouped settings.
         """
         settings = self.settings_payload()
+        ansi_mode = _ansi_mode(settings)
+        parser_dialect = settings.get("datafusion.sql_parser.dialect")
         return {
             "version": 1,
             "profile_name": self.config_policy_name,
@@ -1212,6 +1346,13 @@ class DataFusionRuntimeProfile:
             "sql_surfaces": {
                 "enable_information_schema": self.enable_information_schema,
                 "enable_url_table": self.enable_url_table,
+                "sql_parser_dialect": parser_dialect,
+                "ansi_mode": ansi_mode,
+            },
+            "extensions": {
+                "delta_plan_codecs_enabled": self.enable_delta_plan_codecs,
+                "delta_plan_codec_physical": self.delta_plan_codec_physical,
+                "delta_plan_codec_logical": self.delta_plan_codec_logical,
             },
             "output_writes": {
                 "cache_enabled": self.cache_enabled,

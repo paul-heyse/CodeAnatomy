@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.io.parquet import DatasetWriteConfig, write_dataset_parquet
+from arrowdsl.io.delta import (
+    DeltaWriteOptions,
+    coerce_delta_table,
+    write_dataset_delta,
+)
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from incremental.registry_specs import dataset_schema
 from incremental.state_store import StateStore
@@ -26,16 +30,17 @@ def write_impacted_callers(
         Mapping of dataset name to dataset path.
     """
     schema = dataset_schema(_IMPACTED_CALLERS_DATASET)
-    path = write_dataset_parquet(
+    data = coerce_delta_table(
         impacted_callers,
-        base_dir=state_store.dataset_dir(_IMPACTED_CALLERS_DATASET),
-        config=DatasetWriteConfig(
-            schema=schema,
-            encoding_policy=encoding_policy_from_schema(schema),
-            overwrite=True,
-        ),
+        schema=schema,
+        encoding_policy=encoding_policy_from_schema(schema),
     )
-    return {_IMPACTED_CALLERS_DATASET: path}
+    result = write_dataset_delta(
+        data,
+        str(state_store.dataset_dir(_IMPACTED_CALLERS_DATASET)),
+        options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
+    )
+    return {_IMPACTED_CALLERS_DATASET: result.path}
 
 
 def write_impacted_importers(
@@ -51,16 +56,17 @@ def write_impacted_importers(
         Mapping of dataset name to dataset path.
     """
     schema = dataset_schema(_IMPACTED_IMPORTERS_DATASET)
-    path = write_dataset_parquet(
+    data = coerce_delta_table(
         impacted_importers,
-        base_dir=state_store.dataset_dir(_IMPACTED_IMPORTERS_DATASET),
-        config=DatasetWriteConfig(
-            schema=schema,
-            encoding_policy=encoding_policy_from_schema(schema),
-            overwrite=True,
-        ),
+        schema=schema,
+        encoding_policy=encoding_policy_from_schema(schema),
     )
-    return {_IMPACTED_IMPORTERS_DATASET: path}
+    result = write_dataset_delta(
+        data,
+        str(state_store.dataset_dir(_IMPACTED_IMPORTERS_DATASET)),
+        options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
+    )
+    return {_IMPACTED_IMPORTERS_DATASET: result.path}
 
 
 def write_impacted_files(
@@ -76,16 +82,17 @@ def write_impacted_files(
         Mapping of dataset name to dataset path.
     """
     schema = dataset_schema(_IMPACTED_FILES_DATASET)
-    path = write_dataset_parquet(
+    data = coerce_delta_table(
         impacted_files,
-        base_dir=state_store.dataset_dir(_IMPACTED_FILES_DATASET),
-        config=DatasetWriteConfig(
-            schema=schema,
-            encoding_policy=encoding_policy_from_schema(schema),
-            overwrite=True,
-        ),
+        schema=schema,
+        encoding_policy=encoding_policy_from_schema(schema),
     )
-    return {_IMPACTED_FILES_DATASET: path}
+    result = write_dataset_delta(
+        data,
+        str(state_store.dataset_dir(_IMPACTED_FILES_DATASET)),
+        options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
+    )
+    return {_IMPACTED_FILES_DATASET: result.path}
 
 
 __all__ = ["write_impacted_callers", "write_impacted_files", "write_impacted_importers"]

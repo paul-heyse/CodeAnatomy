@@ -7,19 +7,19 @@ import json
 from collections.abc import Sequence
 from typing import Literal, Protocol, TypeVar, cast
 
-import ibis
 from ibis.backends import BaseBackend
-from ibis.expr.datatypes import DataType
 from ibis.expr.types import BooleanValue, Scalar
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
 
-from arrowdsl.core.context import ExecutionContext, Ordering
+from arrowdsl.core.context import ExecutionContext, Ordering, OrderingLevel
 from arrowdsl.plan.query import ScanTelemetry
 from ibis_engine.expr_compiler import (
     IbisExprRegistry,
+    align_set_op_tables,
     default_expr_registry,
     expr_ir_to_ibis,
+    union_tables,
 )
 from ibis_engine.plan import IbisPlan
 from relspec.model import DatasetRef, HashJoinConfig
@@ -380,16 +380,13 @@ def _compile_union_node(
     tuple[IbisTable, Ordering]
         Compiled union table and ordering metadata.
     """
-    inputs = [
-        _compile_node(item, ctx=ctx, resolver=resolver, registry=registry)[0]
-        for item in node.inputs
+    compiled = [
+        _compile_node(item, ctx=ctx, resolver=resolver, registry=registry) for item in node.inputs
     ]
-    aligned = _align_union_tables(inputs)
-    unioned = aligned[0]
-    for table in aligned[1:]:
-        unioned = unioned.union(table)
-    if node.distinct:
-        unioned = unioned.distinct()
+    orderings = [ordering for _table, ordering in compiled]
+    _validate_set_op_ordering(orderings, op_label="union")
+    tables = [table for table, _ordering in compiled]
+    unioned = union_tables(tables, distinct=node.distinct)
     return unioned, Ordering.unordered()
 
 
@@ -588,45 +585,25 @@ def _aggregate_expr(
 def _align_union_tables(tables: Sequence[IbisTable]) -> list[IbisTable]:
     """Align union inputs to a shared schema order.
 
-    Parameters
-    ----------
-    tables
-        Tables to align before union.
-
     Returns
     -------
-    list[IbisTable]
-        Tables with matching column order and types.
-
-    Raises
-    ------
-    ValueError
-        Raised when no union inputs are provided.
+    list[ibis.expr.types.Table]
+        Union inputs aligned to a shared schema order.
     """
-    if not tables:
-        msg = "Union requires at least one table."
+    return align_set_op_tables(tables)
+
+
+def _validate_set_op_ordering(orderings: Sequence[Ordering], *, op_label: str) -> None:
+    levels = {ordering.level for ordering in orderings}
+    if not levels or levels == {OrderingLevel.UNORDERED}:
+        return
+    if len(levels) != 1:
+        msg = f"Set op {op_label} requires consistent ordering levels."
         raise ValueError(msg)
-    names: list[str] = []
-    types: dict[str, DataType] = {}
-    for table in tables:
-        schema = table.schema()
-        schema_names = cast("Sequence[str]", schema.names)
-        schema_types = cast("Sequence[DataType]", schema.types)
-        for name, dtype in zip(schema_names, schema_types, strict=True):
-            if name in types:
-                continue
-            names.append(name)
-            types[name] = dtype
-    aligned: list[IbisTable] = []
-    for table in tables:
-        cols: list[IbisValue] = []
-        for name in names:
-            if name in table.columns:
-                cols.append(table[name])
-            else:
-                cols.append(ibis.literal(None, type=types[name]).name(name))
-        aligned.append(table.select(cols))
-    return aligned
+    reference = orderings[0]
+    if any(ordering != reference for ordering in orderings[1:]):
+        msg = f"Set op {op_label} requires consistent ordering keys."
+        raise ValueError(msg)
 
 
 __all__ = [

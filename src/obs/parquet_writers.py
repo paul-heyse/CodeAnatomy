@@ -1,4 +1,4 @@
-"""Parquet dataset writers for observability artifacts."""
+"""Delta dataset writers for observability artifacts."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from arrowdsl.io.parquet import DatasetWriteConfig, ParquetWriteOptions, write_dataset_parquet
+from arrowdsl.io.delta import DeltaWriteOptions, write_dataset_delta
 
 
 def write_obs_dataset(
@@ -15,7 +15,7 @@ def write_obs_dataset(
     name: str,
     table: pa.Table,
     overwrite: bool = True,
-    opts: ParquetWriteOptions | None = None,
+    options: DeltaWriteOptions | None = None,
 ) -> str:
     """Write an observability dataset directory.
 
@@ -26,8 +26,12 @@ def write_obs_dataset(
     """
     base = Path(base_dir)
     dataset_dir = base / name
-    config = DatasetWriteConfig(opts=opts, overwrite=overwrite)
-    return write_dataset_parquet(table, dataset_dir, config=config)
+    mode = "overwrite" if overwrite else "error"
+    resolved = options or DeltaWriteOptions(
+        mode=mode, schema_mode="overwrite" if overwrite else None
+    )
+    result = write_dataset_delta(table, str(dataset_dir), options=resolved)
+    return result.path
 
 
 __all__ = ["write_obs_dataset"]

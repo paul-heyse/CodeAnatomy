@@ -751,6 +751,8 @@ def kernel_spec_row(spec: KernelSpecT) -> dict[str, object]:
             "list_col": spec.list_col,
             "out_parent_col": spec.out_parent_col,
             "out_value_col": spec.out_value_col,
+            "idx_col": spec.idx_col,
+            "keep_empty": spec.keep_empty,
         }
     elif isinstance(spec, DedupeKernelSpec):
         payload = {
@@ -1269,11 +1271,14 @@ def _kernel_from_row(payload: Mapping[str, Any]) -> KernelSpecT:
         mapping: Mapping[str, Any] = mapping_payload if isinstance(mapping_payload, Mapping) else {}
         result = RenameColumnsSpec(mapping={str(key): str(val) for key, val in mapping.items()})
     elif kind == "explode_list":
+        idx_payload = spec.get("idx_col")
         result = ExplodeListSpec(
             parent_id_col=str(spec.get("parent_id_col", "src_id")),
             list_col=str(spec.get("list_col", "dst_ids")),
             out_parent_col=str(spec.get("out_parent_col", "src_id")),
             out_value_col=str(spec.get("out_value_col", "dst_id")),
+            idx_col=str(idx_payload) if idx_payload is not None else None,
+            keep_empty=bool(spec.get("keep_empty", True)),
         )
     elif kind == "dedupe":
         tie_breakers = _decode_sort_keys(spec.get("tie_breakers"))

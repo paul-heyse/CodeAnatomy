@@ -6,9 +6,10 @@ import json
 from collections.abc import Mapping
 from typing import Literal, Protocol
 
+from arrowdsl.core.context import OrderingLevel
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.plan.ops import DedupeSpec, SortKey
-from arrowdsl.schema.metadata import infer_ordering_keys
+from arrowdsl.schema.metadata import infer_ordering_keys, ordering_from_schema
 from arrowdsl.spec.expr_ir import ExprIR
 from normalize.rule_model import AmbiguityPolicy, ConfidencePolicy
 
@@ -130,7 +131,11 @@ def default_tie_breakers(schema: SchemaLike) -> tuple[SortKey, ...]:
     tuple[SortKey, ...]
         Default tie breakers derived from schema names.
     """
-    keys = infer_ordering_keys(schema.names)
+    ordering = ordering_from_schema(schema)
+    if ordering.level == OrderingLevel.EXPLICIT and ordering.keys:
+        keys = ordering.keys
+    else:
+        keys = infer_ordering_keys(schema.names)
     resolved: list[SortKey] = []
     for name, order in keys:
         sort_order: Literal["ascending", "descending"] = (

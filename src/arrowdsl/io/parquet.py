@@ -62,6 +62,7 @@ class ParquetMetadataConfig:
     write_metadata: bool = True
     common_filename: str = "_common_metadata"
     metadata_filename: str = "_metadata"
+    max_metadata_files: int | None = 10_000
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,7 @@ class DatasetWriteReport:
     metadata_paths: Mapping[str, str] | None
     schema_fingerprint: str | None
     ordering_keys: tuple[tuple[str, str], ...] | None
+    file_sort_order: tuple[str, ...] | None
     preserve_order: bool
     writer_strategy: str
     row_group_size: int | None
@@ -169,6 +171,54 @@ def _ordering_keys_payload(schema: SchemaLike | None) -> tuple[tuple[str, str], 
     if schema is None:
         return None
     return tuple((key[0], key[1]) for key in ordering_keys_for_schema(schema))
+
+
+def _file_sort_order_payload(schema: SchemaLike | None) -> tuple[str, ...] | None:
+    if schema is None:
+        return None
+    keys = ordering_keys_for_schema(schema)
+    if not keys:
+        return None
+    return tuple(key[0] for key in keys)
+
+
+def _effective_metadata_config(
+    config: ParquetMetadataConfig,
+    *,
+    file_count: int | None,
+) -> ParquetMetadataConfig:
+    if file_count is None or config.max_metadata_files is None:
+        return config
+    if file_count <= config.max_metadata_files:
+        return config
+    return replace(config, write_metadata=False)
+
+
+def _write_metadata_sidecars(
+    base_path: Path,
+    *,
+    dataset: ds.Dataset,
+    metadata_config: ParquetMetadataConfig,
+    file_count: int | None,
+) -> Mapping[str, str] | None:
+    if not (metadata_config.write_common_metadata or metadata_config.write_metadata):
+        return None
+    effective = _effective_metadata_config(metadata_config, file_count=file_count)
+    if not (effective.write_common_metadata or effective.write_metadata):
+        return None
+    if effective.write_metadata:
+        metadata_spec = parquet_metadata_factory(dataset)
+        schema = metadata_spec.schema
+        metadata = metadata_spec.file_metadata
+    else:
+        schema = dataset.schema
+        metadata = None
+    return write_parquet_metadata_sidecars(
+        base_path,
+        schema=schema,
+        metadata=metadata,
+        config=effective,
+    )
 
 
 def write_table_parquet(
@@ -459,15 +509,15 @@ def write_dataset_parquet(
     metadata_paths: Mapping[str, str] | None = None
     if metadata_config.write_common_metadata or metadata_config.write_metadata:
         dataset = ds.dataset(str(base_path), format="parquet")
-        metadata_spec = parquet_metadata_factory(dataset)
-        metadata_paths = write_parquet_metadata_sidecars(
+        metadata_paths = _write_metadata_sidecars(
             base_path,
-            schema=metadata_spec.schema,
-            metadata=metadata_spec.file_metadata if metadata_config.write_metadata else None,
-            config=metadata_config,
+            dataset=dataset,
+            metadata_config=metadata_config,
+            file_count=len(written_files),
         )
     if config.reporter is not None:
         ordering_keys = _ordering_keys_payload(data_schema)
+        file_sort_order = _file_sort_order_payload(data_schema)
         report = DatasetWriteReport(
             dataset_name=None,
             base_dir=str(base_path),
@@ -475,6 +525,7 @@ def write_dataset_parquet(
             metadata_paths=metadata_paths,
             schema_fingerprint=schema_fp,
             ordering_keys=ordering_keys,
+            file_sort_order=file_sort_order,
             preserve_order=bool(config.preserve_order),
             writer_strategy="arrow",
             row_group_size=options.row_group_size,
@@ -634,17 +685,15 @@ def write_partitioned_dataset_parquet(
         raise ValueError(msg)
     metadata_paths: Mapping[str, str] | None = None
     if context.metadata_config.write_common_metadata or context.metadata_config.write_metadata:
-        metadata_spec = parquet_metadata_factory(dataset)
-        metadata_paths = write_parquet_metadata_sidecars(
+        metadata_paths = _write_metadata_sidecars(
             context.base_path,
-            schema=metadata_spec.schema,
-            metadata=(
-                metadata_spec.file_metadata if context.metadata_config.write_metadata else None
-            ),
-            config=context.metadata_config,
+            dataset=dataset,
+            metadata_config=context.metadata_config,
+            file_count=len(context.written_files),
         )
     if context.config.reporter is not None:
         ordering_keys = _ordering_keys_payload(context.expected_schema)
+        file_sort_order = _file_sort_order_payload(context.expected_schema)
         report = DatasetWriteReport(
             dataset_name=None,
             base_dir=str(context.base_path),
@@ -652,6 +701,7 @@ def write_partitioned_dataset_parquet(
             metadata_paths=metadata_paths,
             schema_fingerprint=_schema_fingerprint_for_data(dataset),
             ordering_keys=ordering_keys,
+            file_sort_order=file_sort_order,
             preserve_order=bool(context.config.preserve_order),
             writer_strategy="arrow",
             row_group_size=context.options.row_group_size,
@@ -728,15 +778,15 @@ def upsert_dataset_partitions_parquet(
     metadata_paths: Mapping[str, str] | None = None
     if metadata_config.write_common_metadata or metadata_config.write_metadata:
         dataset = ds.dataset(str(base_path), format="parquet", partitioning=partitioning)
-        metadata_spec = parquet_metadata_factory(dataset)
-        metadata_paths = write_parquet_metadata_sidecars(
+        metadata_paths = _write_metadata_sidecars(
             base_path,
-            schema=metadata_spec.schema,
-            metadata=metadata_spec.file_metadata if metadata_config.write_metadata else None,
-            config=metadata_config,
+            dataset=dataset,
+            metadata_config=metadata_config,
+            file_count=len(written_files),
         )
     if config.reporter is not None:
         ordering_keys = _ordering_keys_payload(data.schema)
+        file_sort_order = _file_sort_order_payload(data.schema)
         report = DatasetWriteReport(
             dataset_name=None,
             base_dir=str(base_path),
@@ -744,6 +794,7 @@ def upsert_dataset_partitions_parquet(
             metadata_paths=metadata_paths,
             schema_fingerprint=_schema_fingerprint_for_data(data),
             ordering_keys=ordering_keys,
+            file_sort_order=file_sort_order,
             preserve_order=bool(config.preserve_order),
             writer_strategy="arrow",
             row_group_size=options.row_group_size,

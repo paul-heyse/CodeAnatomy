@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from datafusion import SQLOptions
+
+from sqlglot_tools.optimizer import SqlGlotSurface, sqlglot_surface_policy
 
 if TYPE_CHECKING:
     from ibis.expr.types import Value
@@ -55,12 +57,28 @@ class DataFusionFallbackEvent:
 
 
 @dataclass(frozen=True)
+class DataFusionCacheEvent:
+    """Diagnostics payload for DataFusion cache decisions."""
+
+    cache_enabled: bool
+    cache_max_columns: int | None
+    column_count: int
+    reason: str
+    plan_hash: str | None = None
+    profile_hash: str | None = None
+
+
+@dataclass(frozen=True)
 class DataFusionDmlOptions:
     """Options for DataFusion DML execution."""
 
     sql_options: SQLOptions | None = None
     sql_policy: DataFusionSqlPolicy | None = None
-    dialect: str = "datafusion_ext"
+    session_policy: DataFusionSqlPolicy | None = None
+    table_policy: DataFusionSqlPolicy | None = None
+    dialect: str = field(
+        default_factory=lambda: sqlglot_surface_policy(SqlGlotSurface.DATAFUSION_DML).dialect
+    )
     record_hook: Callable[[Mapping[str, object]], None] | None = None
 
 
@@ -72,10 +90,13 @@ class DataFusionCompileOptions:
     optimize: bool = True
     cache: bool | None = None
     cache_max_columns: int | None = 64
+    cache_event_hook: Callable[[DataFusionCacheEvent], None] | None = None
     params: Mapping[str, object] | Mapping[Value, object] | None = None
     sql_options: SQLOptions | None = None
     sql_policy: DataFusionSqlPolicy | None = None
-    dialect: str = "datafusion_ext"
+    dialect: str = field(
+        default_factory=lambda: sqlglot_surface_policy(SqlGlotSurface.DATAFUSION_COMPILE).dialect
+    )
     enable_rewrites: bool = True
     rewrite_hook: Callable[[Expression], Expression] | None = None
     force_sql: bool = False

@@ -58,6 +58,7 @@ def build_contract_spec(
         table_spec=table_spec,
         dedupe=contract.dedupe,
         canonical_sort=contract.canonical_sort,
+        constraints=contract.constraints,
         version=contract.version,
     )
 

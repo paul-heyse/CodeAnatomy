@@ -46,7 +46,12 @@ def _raw_sql_plan(
         raise ValueError(msg)
     sg_expr = compile_sqlglot_expr(plan.expr, backend=backend, options=options)
     sql = sg_expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
-    raw_expr = execute_raw_sql(backend, sql=sql, schema=plan.expr.schema())
+    raw_expr = execute_raw_sql(
+        backend,
+        sql=sql,
+        sqlglot_expr=sg_expr,
+        schema=plan.expr.schema(),
+    )
     if options.sql_ingest_hook is not None:
         options.sql_ingest_hook(
             sql_ingest_artifacts(
@@ -125,6 +130,7 @@ class IbisCachePolicy:
 
     enabled: bool = False
     reason: str | None = None
+    writer_strategy: str | None = None
     reporter: Callable[[Mapping[str, object]], None] | None = None
 
 
@@ -136,6 +142,7 @@ def _record_cache_event(policy: IbisCachePolicy, *, mode: str) -> None:
             "mode": mode,
             "enabled": policy.enabled,
             "reason": policy.reason,
+            "writer_strategy": policy.writer_strategy,
         }
     )
 

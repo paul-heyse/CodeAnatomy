@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from types import TracebackType
 from typing import Protocol, Self, cast, runtime_checkable
 
+import arro3.core as ac
 import pyarrow as pa
 import pyarrow.compute as _pc
 from pyarrow import acero as _acero
@@ -467,11 +468,96 @@ def reader_from_arrow_stream(obj: object) -> RecordBatchReaderLike:
     ------
     TypeError
         Raised when the object does not expose the Arrow C stream protocol.
+
+    Notes
+    -----
+    Arrow C stream providers are single-consumption objects. Keep the
+    provider alive for the duration of ingestion and do not reuse it after
+    conversion.
     """
     if not hasattr(obj, "__arrow_c_stream__"):
         msg = "Object does not expose __arrow_c_stream__."
         raise TypeError(msg)
+    # NOTE: Arrow C stream providers are single-consumption objects.
     return pa.RecordBatchReader.from_stream(obj)
+
+
+def table_from_arrow_c_array(obj: object, *, name: str = "value") -> TableLike:
+    """Return a table from an Arrow C array provider.
+
+    Parameters
+    ----------
+    obj
+        Object implementing the Arrow C array protocol.
+    name
+        Column name to assign to the imported array.
+
+    Returns
+    -------
+    TableLike
+        Single-column table built from the imported array.
+
+    Raises
+    ------
+    TypeError
+        Raised when the object does not expose the Arrow C array protocol.
+    ValueError
+        Raised when the Arrow C array schema capsule is missing.
+
+    Notes
+    -----
+    Arrow C array providers are single-consumption objects. Keep the provider
+    alive for the duration of ingestion and do not reuse it after conversion.
+    """
+    array_provider = getattr(obj, "__arrow_c_array__", None)
+    if not callable(array_provider):
+        msg = "Object does not expose __arrow_c_array__."
+        raise TypeError(msg)
+    capsule = array_provider()
+    schema_capsule = None
+    if isinstance(capsule, tuple) and len(capsule) == ARROW_C_ARRAY_TUPLE_LEN:
+        schema_capsule, array_capsule = capsule
+    else:
+        array_capsule = capsule
+        schema_provider = getattr(obj, "__arrow_c_schema__", None)
+        if callable(schema_provider):
+            schema_capsule = schema_provider()
+    if schema_capsule is None:
+        msg = "Arrow C array providers must supply a schema capsule."
+        raise ValueError(msg)
+    # NOTE: Arrow C array providers are single-consumption objects.
+    array = pa.array(ac.Array.from_arrow_pycapsule(schema_capsule, array_capsule))
+    return pa.table({name: array})
+
+
+def coerce_table_like(obj: object) -> TableLike | RecordBatchReaderLike:
+    """Coerce Arrow-like inputs into table or reader representations.
+
+    Parameters
+    ----------
+    obj
+        Input object to coerce.
+
+    Returns
+    -------
+    TableLike | RecordBatchReaderLike
+        Coerced table or reader instance.
+
+    Raises
+    ------
+    TypeError
+        Raised when the object cannot be coerced.
+    """
+    if isinstance(obj, (TableLike, RecordBatchReaderLike)):
+        return obj
+    if hasattr(obj, "__arrow_c_stream__"):
+        return reader_from_arrow_stream(obj)
+    if hasattr(obj, "__arrow_c_array__"):
+        return table_from_arrow_c_array(obj)
+    if hasattr(obj, "__dataframe__"):
+        return table_from_dataframe_protocol(obj)
+    msg = "Unsupported Arrow-like input; provide a Table or RecordBatchReader."
+    raise TypeError(msg)
 
 
 class ComputeModule(Protocol):
@@ -526,6 +612,10 @@ class ComputeModule(Protocol):
     sort_indices: Callable[..., ArrayLike]
     list_parent_indices: Callable[[ArrayLike | ChunkedArrayLike], ArrayLike]
     list_flatten: Callable[[ArrayLike | ChunkedArrayLike], ArrayLike]
+    list_value_length: Callable[[ArrayLike | ChunkedArrayLike], ArrayLike]
+    cumulative_sum: Callable[[ArrayLike | ChunkedArrayLike], ArrayLike]
+    subtract: Callable[[ComputeOperand, ComputeOperand], ArrayLike]
+    indices_nonzero: Callable[[ComputeOperand], ArrayLike]
     take: Callable[[ArrayLike | ChunkedArrayLike, ArrayLike], ArrayLike]
     any: Callable[[ComputeOperand], ScalarLike]
     make_struct: Callable[..., ArrayLike]
@@ -643,6 +733,7 @@ __all__ = [
     "binary",
     "bool_",
     "call_expression_function",
+    "coerce_table_like",
     "concat_tables",
     "dictionary",
     "ensure_expression",
@@ -668,6 +759,7 @@ __all__ = [
     "string",
     "struct",
     "table",
+    "table_from_arrow_c_array",
     "table_from_dataframe_protocol",
     "uint8",
     "uint16",
@@ -675,3 +767,4 @@ __all__ = [
     "uint64",
     "unify_schemas",
 ]
+ARROW_C_ARRAY_TUPLE_LEN = 2

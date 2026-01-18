@@ -3,28 +3,32 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 import pyarrow as pa
-import pyarrow.dataset as ds
 from hamilton.function_modifiers import tag
 
+from arrowdsl.compute.registry import registry_snapshot as kernel_registry_snapshot
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
-from arrowdsl.io.parquet import (
-    DatasetWriteConfig,
-    DatasetWriteReport,
-    NamedDatasetWriteConfig,
-    ParquetWriteOptions,
-    write_dataset_parquet,
-    write_finalize_result_parquet,
-    write_named_datasets_parquet,
-    write_table_parquet,
+from arrowdsl.io.delta import (
+    DeltaWriteOptions,
+    DeltaWriteResult,
+    apply_delta_write_policies,
+    coerce_delta_table,
+    delta_table_version,
+    read_table_delta,
+    write_dataset_delta,
+    write_finalize_result_delta,
+    write_named_datasets_delta,
+    write_table_delta,
 )
+from arrowdsl.io.delta_config import DeltaSchemaPolicy, DeltaWritePolicy
 from arrowdsl.json_factory import json_default
 from arrowdsl.plan.metrics import (
     column_stats_table,
@@ -32,13 +36,17 @@ from arrowdsl.plan.metrics import (
     empty_scan_telemetry_table,
     scan_telemetry_table,
 )
+from arrowdsl.plan.ordering_policy import require_explicit_ordering
 from arrowdsl.plan.query import DatasetDiscoveryOptions, DatasetSourceOptions, open_dataset
 from arrowdsl.plan.scan_builder import ScanBuildSpec
 from arrowdsl.plan.scan_telemetry import ScanTelemetry, ScanTelemetryOptions, fragment_telemetry
 from arrowdsl.plan.schema_utils import plan_schema
+from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.schema import EncodingPolicy
+from arrowdsl.schema.serialization import schema_fingerprint
 from core_types import JsonDict, JsonValue
 from cpg.constants import CpgBuildArtifacts
+from datafusion_engine.bridge import validate_table_constraints
 from datafusion_engine.registry_bridge import cached_dataset_names
 from engine.function_registry import default_function_registry
 from engine.plan_cache import PlanCacheEntry
@@ -58,9 +66,10 @@ from hamilton_pipeline.pipeline_types import (
 from ibis_engine.execution import IbisExecutionContext
 from ibis_engine.io_bridge import (
     IbisNamedDatasetWriteOptions,
-    write_ibis_named_datasets_parquet,
+    write_ibis_named_datasets_delta,
 )
 from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
+from ibis_engine.params_bridge import IbisParamRegistry, ScalarParamSpec
 from ibis_engine.plan import IbisPlan
 from ibis_engine.registry import registry_snapshot
 from incremental.fingerprint_changes import (
@@ -95,7 +104,12 @@ from relspec.rules.diagnostics import rule_diagnostics_from_table
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
 from relspec.rules.registry import RuleRegistry
 from relspec.rules.spec_tables import rule_definitions_from_table
-from schema_spec.system import dataset_spec_from_schema, make_dataset_spec
+from schema_spec.system import (
+    GLOBAL_SCHEMA_REGISTRY,
+    DatasetSpec,
+    dataset_spec_from_schema,
+    make_dataset_spec,
+)
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 
 # -----------------------
@@ -168,14 +182,179 @@ def _ensure_dir(path: Path) -> None:
     path.mkdir(exist_ok=True, parents=True)
 
 
-def _file_visitor_bucket() -> tuple[list[str], Callable[[object], None]]:
-    files: list[str] = []
+def _delta_commit_metadata(dataset_name: str, schema: pa.Schema) -> dict[str, str]:
+    ordering = ordering_from_schema(schema)
+    metadata = {
+        "dataset_name": dataset_name,
+        "schema_fingerprint": schema_fingerprint(schema),
+        "ordering_level": ordering.level.value,
+    }
+    if ordering.keys:
+        metadata["ordering_keys"] = json.dumps(
+            [list(key) for key in ordering.keys],
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+    return metadata
 
-    def _visitor(written_file: object) -> None:
-        path = getattr(written_file, "path", None)
-        files.append(str(path) if path is not None else str(written_file))
 
-    return files, _visitor
+@dataclass(frozen=True)
+class DeltaWriteContext:
+    """Resolved Delta policies and options for a dataset write."""
+
+    options: DeltaWriteOptions
+    write_policy: DeltaWritePolicy | None
+    schema_policy: DeltaSchemaPolicy | None
+    constraints: tuple[str, ...]
+    storage_options: Mapping[str, str] | None
+
+
+def _merge_delta_write_policy(
+    primary: DeltaWritePolicy | None,
+    fallback: DeltaWritePolicy | None,
+) -> DeltaWritePolicy | None:
+    if primary is None:
+        return fallback
+    if fallback is None:
+        return primary
+    target_file_size = primary.target_file_size
+    if target_file_size is None:
+        target_file_size = fallback.target_file_size
+    stats_columns = primary.stats_columns
+    if stats_columns is None:
+        stats_columns = fallback.stats_columns
+    return DeltaWritePolicy(
+        target_file_size=target_file_size,
+        stats_columns=stats_columns,
+    )
+
+
+def _merge_delta_schema_policy(
+    primary: DeltaSchemaPolicy | None,
+    fallback: DeltaSchemaPolicy | None,
+) -> DeltaSchemaPolicy | None:
+    if primary is None:
+        return fallback
+    if fallback is None:
+        return primary
+    schema_mode = primary.schema_mode
+    if schema_mode is None:
+        schema_mode = fallback.schema_mode
+    column_mapping_mode = primary.column_mapping_mode
+    if column_mapping_mode is None:
+        column_mapping_mode = fallback.column_mapping_mode
+    return DeltaSchemaPolicy(
+        schema_mode=schema_mode,
+        column_mapping_mode=column_mapping_mode,
+    )
+
+
+def _default_delta_write_policy(spec: DatasetSpec | None) -> DeltaWritePolicy | None:
+    if spec is None:
+        return None
+    if spec.table_spec.key_fields:
+        return DeltaWritePolicy(stats_columns=spec.table_spec.key_fields)
+    return None
+
+
+def _dataset_spec_for_name(name: str) -> DatasetSpec | None:
+    spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(name)
+    if spec is not None:
+        return spec
+    return GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(f"{name}_v1")
+
+
+def _resolve_delta_write_context(
+    dataset_name: str,
+    base_options: DeltaWriteOptions,
+    *,
+    output_config: OutputConfig | None,
+    dataset_spec: DatasetSpec | None = None,
+) -> DeltaWriteContext:
+    spec = dataset_spec or _dataset_spec_for_name(dataset_name)
+    base_write_policy = spec.delta_write_policy if spec is not None else None
+    base_schema_policy = spec.delta_schema_policy if spec is not None else None
+    fallback_write_policy = output_config.delta_write_policy if output_config is not None else None
+    fallback_schema_policy = (
+        output_config.delta_schema_policy if output_config is not None else None
+    )
+    write_policy = _merge_delta_write_policy(base_write_policy, fallback_write_policy)
+    if write_policy is None:
+        write_policy = _default_delta_write_policy(spec)
+    schema_policy = _merge_delta_schema_policy(base_schema_policy, fallback_schema_policy)
+    options = apply_delta_write_policies(
+        base_options,
+        write_policy=write_policy,
+        schema_policy=schema_policy,
+    )
+    constraints = spec.delta_constraints if spec is not None else ()
+    storage_options = output_config.delta_storage_options if output_config is not None else None
+    return DeltaWriteContext(
+        options=options,
+        write_policy=write_policy,
+        schema_policy=schema_policy,
+        constraints=constraints,
+        storage_options=storage_options,
+    )
+
+
+def _delta_write_policy_payload(policy: DeltaWritePolicy | None) -> JsonDict | None:
+    if policy is None:
+        return None
+    return {
+        "target_file_size": policy.target_file_size,
+        "stats_columns": list(policy.stats_columns) if policy.stats_columns is not None else None,
+    }
+
+
+def _delta_schema_policy_payload(policy: DeltaSchemaPolicy | None) -> JsonDict | None:
+    if policy is None:
+        return None
+    return {
+        "schema_mode": policy.schema_mode,
+        "column_mapping_mode": policy.column_mapping_mode,
+    }
+
+
+def _validate_delta_constraints(
+    dataset_name: str,
+    table: TableLike,
+    *,
+    constraints: Sequence[str],
+    ctx: ExecutionContext,
+) -> None:
+    if not constraints:
+        return
+    if not isinstance(table, pa.Table):
+        msg = f"Delta constraint validation expected pyarrow.Table, got {type(table)}"
+        raise TypeError(msg)
+    runtime = ctx.runtime.datafusion
+    if runtime is None:
+        msg = "Delta constraint validation requires a DataFusion runtime profile."
+        raise ValueError(msg)
+    temp_name = f"__delta_constraints_{dataset_name}_{uuid.uuid4().hex}"
+    violations = validate_table_constraints(
+        runtime.session_context(),
+        name=temp_name,
+        table=table,
+        constraints=constraints,
+    )
+    if not violations:
+        return
+    sink = runtime.diagnostics_sink
+    if sink is not None:
+        sink.record_artifact(
+            "delta_constraint_violations_v1",
+            {
+                "dataset": dataset_name,
+                "constraints": list(constraints),
+                "violations": list(violations),
+                "rows": int(table.num_rows),
+                "schema_fingerprint": schema_fingerprint(table.schema),
+            },
+        )
+    msg = f"Delta constraint validation failed for {dataset_name!r}: {violations}"
+    raise ValueError(msg)
 
 
 def _datafusion_settings_snapshot(
@@ -257,6 +436,8 @@ def _scan_profile_payload(ctx: ExecutionContext) -> JsonDict:
         "scan_provenance_columns": list(profile.scan_provenance_columns),
         "implicit_ordering": profile.implicit_ordering,
         "require_sequenced_output": profile.require_sequenced_output,
+        "parquet_read_options": _json_mapping(profile.parquet_read_payload()),
+        "parquet_fragment_scan_options": _json_mapping(profile.parquet_fragment_scan_payload()),
     }
 
 
@@ -304,6 +485,18 @@ def _ibis_cache_events(
     if diagnostics is None:
         return None
     events = diagnostics.events_snapshot().get("ibis_cache_events_v1", [])
+    return events or None
+
+
+def _datafusion_cache_events(
+    ctx: ExecutionContext | None,
+) -> Sequence[Mapping[str, object]] | None:
+    if ctx is None or ctx.runtime.datafusion is None:
+        return None
+    diagnostics = ctx.runtime.datafusion.diagnostics_sink
+    if diagnostics is None:
+        return None
+    events = diagnostics.events_snapshot().get("datafusion_cache_events_v1", [])
     return events or None
 
 
@@ -358,6 +551,19 @@ def _datafusion_input_plugins(
     return plugins or None
 
 
+def _datafusion_prepared_statements(
+    ctx: ExecutionContext,
+) -> Sequence[Mapping[str, object]] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return None
+    statements = profile.diagnostics_sink.artifacts_snapshot().get(
+        "datafusion_prepared_statements_v1",
+        [],
+    )
+    return statements or None
+
+
 def _datafusion_dml_statements(
     ctx: ExecutionContext,
 ) -> Sequence[Mapping[str, object]] | None:
@@ -369,6 +575,58 @@ def _datafusion_dml_statements(
         [],
     )
     return statements or None
+
+
+def _datafusion_listing_tables(
+    ctx: ExecutionContext,
+) -> Sequence[Mapping[str, object]] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return None
+    tables = profile.diagnostics_sink.artifacts_snapshot().get(
+        "datafusion_listing_tables_v1",
+        [],
+    )
+    return tables or None
+
+
+def _datafusion_delta_tables(
+    ctx: ExecutionContext,
+) -> Sequence[Mapping[str, object]] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return None
+    tables = profile.diagnostics_sink.artifacts_snapshot().get(
+        "datafusion_delta_tables_v1",
+        [],
+    )
+    return tables or None
+
+
+def _delta_maintenance_reports(
+    ctx: ExecutionContext,
+) -> Sequence[Mapping[str, object]] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return None
+    reports = profile.diagnostics_sink.artifacts_snapshot().get(
+        "delta_maintenance_v1",
+        [],
+    )
+    return reports or None
+
+
+def _datafusion_udf_registry(
+    ctx: ExecutionContext,
+) -> Sequence[Mapping[str, object]] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return None
+    registry = profile.diagnostics_sink.artifacts_snapshot().get(
+        "datafusion_udf_registry_v1",
+        [],
+    )
+    return registry or None
 
 
 def _datafusion_plan_artifacts_table(ctx: ExecutionContext) -> pa.Table | None:
@@ -460,29 +718,81 @@ def _incremental_output_dir(output_dir: str | None, work_dir: str | None) -> Pat
     return incremental_dir
 
 
+@dataclass(frozen=True)
+class IncrementalWriteContext:
+    """Context for incremental Delta writes."""
+
+    output_dir: str | None
+    work_dir: str | None
+    incremental_config: IncrementalConfig
+    output_config: OutputConfig | None = None
+
+
+@dataclass(frozen=True)
+class CpgDeltaWriteContext:
+    """Context for CPG Delta materialization."""
+
+    output_dir: str | None
+    output_config: OutputConfig
+    incremental_config: IncrementalConfig
+    ctx: ExecutionContext
+
+
+@tag(layer="materialize", artifact="cpg_delta_write_context", kind="object")
+def cpg_delta_write_context(
+    output_dir: str | None,
+    output_config: OutputConfig,
+    incremental_config: IncrementalConfig,
+    ctx: ExecutionContext,
+) -> CpgDeltaWriteContext:
+    """Bundle CPG Delta materialization inputs.
+
+    Returns
+    -------
+    CpgDeltaWriteContext
+        Context for CPG Delta materialization.
+    """
+    return CpgDeltaWriteContext(
+        output_dir=output_dir,
+        output_config=output_config,
+        incremental_config=incremental_config,
+        ctx=ctx,
+    )
+
+
 def _write_incremental_dataset(
     *,
     name: str,
     table: pa.Table | None,
-    output_dir: str | None,
-    work_dir: str | None,
-    incremental_config: IncrementalConfig,
+    context: IncrementalWriteContext,
 ) -> str | None:
-    if not incremental_config.enabled or table is None:
+    if not context.incremental_config.enabled or table is None:
         return None
-    base = _incremental_output_dir(output_dir, work_dir)
+    base = _incremental_output_dir(context.output_dir, context.work_dir)
     if base is None:
         return None
     schema = incremental_dataset_schema(name)
-    return write_dataset_parquet(
+    data = coerce_delta_table(
         table,
-        base_dir=base / name,
-        config=DatasetWriteConfig(
-            schema=schema,
-            encoding_policy=encoding_policy_from_schema(schema),
-            overwrite=True,
-        ),
+        schema=schema,
+        encoding_policy=encoding_policy_from_schema(schema),
     )
+    delta_context = _resolve_delta_write_context(
+        name,
+        DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata=_delta_commit_metadata(name, schema),
+        ),
+        output_config=context.output_config,
+    )
+    result = write_dataset_delta(
+        data,
+        str(base / name),
+        options=delta_context.options,
+        storage_options=delta_context.storage_options,
+    )
+    return result.path
 
 
 def _output_fingerprint_map(run_manifest: Mapping[str, JsonValue]) -> dict[str, str]:
@@ -613,11 +923,23 @@ class RunBundleParamInputs:
     """Parameter-table inputs for run bundle materialization."""
 
     param_table_specs: tuple[ParamTableSpec, ...]
+    param_scalar_specs: tuple[ScalarParamSpec, ...]
     param_table_artifacts: Mapping[str, ParamTableArtifact] | None
     param_scalar_signature: str | None = None
     param_dependency_reports: tuple[RuleDependencyReport, ...] = ()
     param_reverse_index: Mapping[str, tuple[str, ...]] | None = None
     include_param_table_data: bool = False
+
+
+@dataclass(frozen=True)
+class RunBundleParamInputsContext:
+    """Context inputs used to build run bundle param inputs."""
+
+    param_table_specs: tuple[ParamTableSpec, ...]
+    relspec_param_registry: IbisParamRegistry
+    param_table_artifacts: Mapping[str, ParamTableArtifact] | None
+    param_scalar_signature: str | None
+    relspec_param_dependency_reports: tuple[RuleDependencyReport, ...]
 
 
 @dataclass(frozen=True)
@@ -677,18 +999,18 @@ class ExtractManifestInputs:
 class CpgPropsReportInputs:
     """Artifacts for CPG props materialization."""
 
-    cpg_props_parquet: JsonDict | None = None
-    cpg_props_json_parquet: JsonDict | None = None
+    cpg_props_delta: JsonDict | None = None
+    cpg_props_json_delta: JsonDict | None = None
 
 
 @dataclass(frozen=True)
 class MaterializationReportInputs:
     """Inputs required to assemble materialization reports."""
 
-    normalized_inputs_parquet: JsonDict | None = None
-    param_table_parquet: Mapping[str, JsonDict] | None = None
-    cpg_nodes_parquet: JsonDict | None = None
-    cpg_edges_parquet: JsonDict | None = None
+    normalized_inputs_delta: JsonDict | None = None
+    param_table_delta: Mapping[str, JsonDict] | None = None
+    cpg_nodes_delta: JsonDict | None = None
+    cpg_edges_delta: JsonDict | None = None
     cpg_props: CpgPropsReportInputs | None = None
 
 
@@ -696,7 +1018,8 @@ class MaterializationReportInputs:
 class NormalizedInputsWriteContext:
     """Bundle configuration for normalized input writes."""
 
-    config: NamedDatasetWriteConfig
+    schemas: Mapping[str, pa.Schema]
+    encoding_policies: Mapping[str, EncodingPolicy]
     file_lists: dict[str, list[str]]
 
 
@@ -704,8 +1027,9 @@ class NormalizedInputsWriteContext:
 class NormalizedInputsReportContext:
     """Context required to build normalized input reports."""
 
+    schemas: Mapping[str, pa.Schema]
     file_lists: Mapping[str, list[str]]
-    write_reports: Mapping[str, DatasetWriteReport]
+    write_results: Mapping[str, DeltaWriteResult]
     ibis_execution: IbisExecutionContext
     out_dir: Path
     requested_strategy: WriterStrategy
@@ -719,7 +1043,8 @@ class NormalizedInputsWriteOptions:
     context: NormalizedInputsWriteContext
     ibis_execution: IbisExecutionContext
     writer_strategy: WriterStrategy
-    reporter: Callable[[DatasetWriteReport], None] | None
+    output_config: OutputConfig
+    reporter: Callable[[DeltaWriteResult], None] | None
 
 
 @dataclass(frozen=True)
@@ -743,12 +1068,9 @@ def _build_normalized_inputs_write_context(
 ) -> NormalizedInputsWriteContext:
     schemas: dict[str, pa.Schema] = {}
     encoding_policies: dict[str, EncodingPolicy] = {}
-    file_visitors: dict[str, Callable[[object], None]] = {}
     file_lists: dict[str, list[str]] = {}
     for name, table in input_datasets.items():
-        files, visitor = _file_visitor_bucket()
-        file_lists[name] = files
-        file_visitors[name] = visitor
+        file_lists[name] = []
         if isinstance(table, RecordBatchReaderLike):
             continue
         schema = (
@@ -758,14 +1080,11 @@ def _build_normalized_inputs_write_context(
         )
         schemas[name] = schema
         encoding_policies[name] = encoding_policy_from_schema(schema)
-    config = NamedDatasetWriteConfig(
-        opts=ParquetWriteOptions(),
-        overwrite=True,
+    return NormalizedInputsWriteContext(
         schemas=schemas,
         encoding_policies=encoding_policies,
-        file_visitors=file_visitors,
+        file_lists=file_lists,
     )
-    return NormalizedInputsWriteContext(config=config, file_lists=file_lists)
 
 
 def _write_normalized_inputs(
@@ -773,29 +1092,52 @@ def _write_normalized_inputs(
     out_dir: Path,
     *,
     options: NormalizedInputsWriteOptions,
-) -> dict[str, str]:
+) -> dict[str, DeltaWriteResult]:
+    delta_options = apply_delta_write_policies(
+        DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
+        write_policy=options.output_config.delta_write_policy,
+        schema_policy=options.output_config.delta_schema_policy,
+    )
+    storage_options = options.output_config.delta_storage_options
     if any(isinstance(table, IbisPlan) for table in input_datasets.values()):
-        return write_ibis_named_datasets_parquet(
+        return write_ibis_named_datasets_delta(
             input_datasets,
             str(out_dir),
             options=IbisNamedDatasetWriteOptions(
-                config=options.context.config,
                 execution=options.ibis_execution,
                 writer_strategy=options.writer_strategy,
-                reporter=options.reporter,
+                delta_reporter=options.reporter,
+                delta_options=delta_options,
+                delta_write_policy=options.output_config.delta_write_policy,
+                delta_schema_policy=options.output_config.delta_schema_policy,
+                storage_options=storage_options,
             ),
         )
-    return write_named_datasets_parquet(
-        cast("dict[str, TableLike | RecordBatchReaderLike]", input_datasets),
+    converted: dict[str, TableLike | RecordBatchReaderLike] = {}
+    for name, table in input_datasets.items():
+        if isinstance(table, IbisPlan):
+            msg = "Normalized input delta writes do not accept Ibis plans in Arrow mode."
+            raise TypeError(msg)
+        schema = options.context.schemas.get(name)
+        policy = options.context.encoding_policies.get(name)
+        converted[name] = coerce_delta_table(table, schema=schema, encoding_policy=policy)
+    results = write_named_datasets_delta(
+        converted,
         str(out_dir),
-        config=replace(options.context.config, reporter=options.reporter),
+        options=delta_options,
+        storage_options=storage_options,
     )
+    if options.reporter is not None:
+        for result in results.values():
+            options.reporter(result)
+    return results
 
 
 def _normalized_input_row_count(path: str | None) -> int | None:
     if not path:
         return None
-    return int(ds.dataset(path, format="parquet").count_rows())
+    table = read_table_delta(path)
+    return int(table.num_rows)
 
 
 def _normalized_input_metrics(
@@ -826,44 +1168,42 @@ def _normalized_input_entry(
         "columns": columns,
         "files": list(context.file_lists.get(name, ())),
     }
-    report = context.write_reports.get(name)
-    if report is not None:
-        entry["schema_fingerprint"] = report.schema_fingerprint
-        entry["ordering_keys"] = (
-            [list(key) for key in report.ordering_keys] if report.ordering_keys else None
-        )
-        entry["preserve_order"] = report.preserve_order
-        entry["writer_strategy"] = report.writer_strategy
-        entry["row_group_size"] = report.row_group_size
-        entry["max_rows_per_file"] = report.max_rows_per_file
-        entry["metadata_paths"] = dict(report.metadata_paths) if report.metadata_paths else None
+    schema = context.schemas.get(name)
+    if schema is not None:
+        ordering = ordering_from_schema(schema)
+        entry["ordering_level"] = ordering.level.value
+        entry["ordering_keys"] = [list(key) for key in ordering.keys] if ordering.keys else None
+    result = context.write_results.get(name)
+    if result is not None:
+        entry["delta_version"] = result.version
     return entry
 
 
 def _normalized_inputs_report(
     input_datasets: Mapping[str, TableLike | RecordBatchReaderLike | IbisPlan],
-    paths: Mapping[str, str],
+    results: Mapping[str, DeltaWriteResult],
     *,
     context: NormalizedInputsReportContext,
 ) -> JsonDict:
+    datasets: dict[str, JsonDict] = {}
+    for name, table in input_datasets.items():
+        result = results.get(name)
+        datasets[name] = _normalized_input_entry(
+            name,
+            table,
+            path=result.path if result is not None else None,
+            context=context,
+        )
     return {
         "base_dir": str(context.out_dir),
-        "datasets": {
-            name: _normalized_input_entry(
-                name,
-                table,
-                path=paths.get(name),
-                context=context,
-            )
-            for name, table in input_datasets.items()
-        },
+        "datasets": datasets,
         "writer_strategy_requested": context.requested_strategy,
         "writer_strategy_effective": context.effective_strategy,
     }
 
 
-@tag(layer="materialize", artifact="normalized_inputs_parquet", kind="side_effect")
-def write_normalized_inputs_parquet(
+@tag(layer="materialize", artifact="normalized_inputs_delta", kind="side_effect")
+def write_normalized_inputs_delta(
     relspec_input_datasets: dict[str, TableLike],
     output_dir: str | None,
     work_dir: str | None,
@@ -873,7 +1213,7 @@ def write_normalized_inputs_parquet(
     """Write relationship-input normalized datasets for debugging.
 
     Output structure:
-      <base>/debug/normalized_inputs/<dataset_name>/part-*.parquet
+      <base>/debug/normalized_inputs/<dataset_name>
 
     Request this node explicitly when you want to inspect intermediate tables.
 
@@ -894,42 +1234,37 @@ def write_normalized_inputs_parquet(
     _ensure_dir(out_dir)
 
     write_context = _build_normalized_inputs_write_context(input_datasets, ibis_execution)
-    write_reports: dict[str, DatasetWriteReport] = {}
-
-    def _record_report(report: DatasetWriteReport) -> None:
-        if report.dataset_name is None:
-            return
-        write_reports[report.dataset_name] = report
-
     requested_strategy = output_config.writer_strategy
     effective_strategy = requested_strategy if requested_strategy == "arrow" else "arrow"
-    report_context = NormalizedInputsReportContext(
-        file_lists=write_context.file_lists,
-        write_reports=write_reports,
-        ibis_execution=ibis_execution,
-        out_dir=out_dir,
-        requested_strategy=requested_strategy,
-        effective_strategy=effective_strategy,
-    )
-    paths = _write_normalized_inputs(
+    results = _write_normalized_inputs(
         input_datasets,
         out_dir,
         options=NormalizedInputsWriteOptions(
             context=write_context,
             ibis_execution=ibis_execution,
             writer_strategy=effective_strategy,
-            reporter=_record_report,
+            output_config=output_config,
+            reporter=None,
         ),
+    )
+    report_context = NormalizedInputsReportContext(
+        schemas=write_context.schemas,
+        file_lists=write_context.file_lists,
+        write_results=results,
+        ibis_execution=ibis_execution,
+        out_dir=out_dir,
+        requested_strategy=requested_strategy,
+        effective_strategy=effective_strategy,
     )
     return _normalized_inputs_report(
         input_datasets,
-        paths,
+        results,
         context=report_context,
     )
 
 
 # -----------------------
-# Materializers: final CPG tables (parquet files)
+# Materializers: final CPG tables (Delta tables)
 # -----------------------
 
 
@@ -948,46 +1283,67 @@ def _override_finalize_good(
     )
 
 
-@tag(layer="materialize", artifact="cpg_nodes_parquet", kind="side_effect")
-def write_cpg_nodes_parquet(
-    output_dir: str | None,
+@tag(layer="materialize", artifact="cpg_nodes_delta", kind="side_effect")
+def write_cpg_nodes_delta(
+    context: CpgDeltaWriteContext,
     cpg_nodes_finalize: CpgBuildArtifacts,
     cpg_nodes_final: TableLike,
-    incremental_config: IncrementalConfig,
 ) -> JsonDict | None:
-    """Write CPG nodes and error artifacts to Parquet.
+    """Write CPG nodes and error artifacts to Delta.
 
     Returns
     -------
     JsonDict | None
         Report of the written files, or None when output is disabled.
     """
-    if not output_dir:
+    if not context.output_dir:
         return None
-    output_path = Path(output_dir)
+    output_path = Path(context.output_dir)
     _ensure_dir(output_path)
-    good_override = cpg_nodes_final if incremental_config.enabled else None
+    good_override = cpg_nodes_final if context.incremental_config.enabled else None
     finalize = _override_finalize_good(cpg_nodes_finalize.finalize, good=good_override)
-    paths = write_finalize_result_parquet(
-        finalize,
-        output_path / "cpg_nodes.parquet",
-        opts=ParquetWriteOptions(),
-        overwrite=True,
+    require_explicit_ordering(finalize.good.schema, label="cpg_nodes_final")
+    delta_context = _resolve_delta_write_context(
+        "cpg_nodes",
+        DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata=_delta_commit_metadata("cpg_nodes", finalize.good.schema),
+        ),
+        output_config=context.output_config,
     )
+    _validate_delta_constraints(
+        "cpg_nodes",
+        finalize.good,
+        constraints=delta_context.constraints,
+        ctx=context.ctx,
+    )
+    paths = write_finalize_result_delta(
+        finalize,
+        str(output_path / "cpg_nodes"),
+        options=delta_context.options,
+        storage_options=delta_context.storage_options,
+    )
+    versions = {key: delta_table_version(path) for key, path in paths.items()}
     return {
         "paths": paths,
         "files": list(paths.values()),
         "rows": int(finalize.good.num_rows),
         "error_rows": int(finalize.errors.num_rows),
+        "delta_versions": versions,
+        "delta_write_policy": _delta_write_policy_payload(delta_context.write_policy),
+        "delta_schema_policy": _delta_schema_policy_payload(delta_context.schema_policy),
+        "delta_constraints": list(delta_context.constraints) if delta_context.constraints else None,
     }
 
 
-@tag(layer="materialize", artifact="cpg_nodes_quality_parquet", kind="side_effect")
-def write_cpg_nodes_quality_parquet(
+@tag(layer="materialize", artifact="cpg_nodes_quality_delta", kind="side_effect")
+def write_cpg_nodes_quality_delta(
     output_dir: str | None,
+    output_config: OutputConfig,
     cpg_nodes_quality: TableLike,
 ) -> JsonDict | None:
-    """Write CPG node quality diagnostics to Parquet.
+    """Write CPG node quality diagnostics to Delta.
 
     Returns
     -------
@@ -998,89 +1354,146 @@ def write_cpg_nodes_quality_parquet(
         return None
     output_path = Path(output_dir)
     _ensure_dir(output_path)
-    path = write_table_parquet(
-        cpg_nodes_quality,
-        output_path / "cpg_nodes_quality.parquet",
-        opts=ParquetWriteOptions(),
-        overwrite=True,
+    delta_context = _resolve_delta_write_context(
+        "cpg_nodes_quality",
+        DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata=_delta_commit_metadata("cpg_nodes_quality", cpg_nodes_quality.schema),
+        ),
+        output_config=output_config,
     )
-    return {"path": path, "files": [path], "rows": int(cpg_nodes_quality.num_rows)}
+    result = write_table_delta(
+        cpg_nodes_quality,
+        str(output_path / "cpg_nodes_quality"),
+        options=delta_context.options,
+        storage_options=delta_context.storage_options,
+    )
+    return {
+        "path": result.path,
+        "files": [result.path],
+        "rows": int(cpg_nodes_quality.num_rows),
+        "delta_version": result.version,
+        "delta_write_policy": _delta_write_policy_payload(delta_context.write_policy),
+        "delta_schema_policy": _delta_schema_policy_payload(delta_context.schema_policy),
+    }
 
 
-@tag(layer="materialize", artifact="cpg_edges_parquet", kind="side_effect")
-def write_cpg_edges_parquet(
-    output_dir: str | None,
+@tag(layer="materialize", artifact="cpg_edges_delta", kind="side_effect")
+def write_cpg_edges_delta(
+    context: CpgDeltaWriteContext,
     cpg_edges_finalize: CpgBuildArtifacts,
     cpg_edges_final: TableLike,
-    incremental_config: IncrementalConfig,
 ) -> JsonDict | None:
-    """Write CPG edges and error artifacts to Parquet.
+    """Write CPG edges and error artifacts to Delta.
 
     Returns
     -------
     JsonDict | None
         Report of the written files, or None when output is disabled.
     """
-    if not output_dir:
+    if not context.output_dir:
         return None
-    output_path = Path(output_dir)
+    output_path = Path(context.output_dir)
     _ensure_dir(output_path)
-    good_override = cpg_edges_final if incremental_config.enabled else None
+    good_override = cpg_edges_final if context.incremental_config.enabled else None
     finalize = _override_finalize_good(cpg_edges_finalize.finalize, good=good_override)
-    paths = write_finalize_result_parquet(
-        finalize,
-        output_path / "cpg_edges.parquet",
-        opts=ParquetWriteOptions(),
-        overwrite=True,
+    require_explicit_ordering(finalize.good.schema, label="cpg_edges_final")
+    delta_context = _resolve_delta_write_context(
+        "cpg_edges",
+        DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata=_delta_commit_metadata("cpg_edges", finalize.good.schema),
+        ),
+        output_config=context.output_config,
     )
+    _validate_delta_constraints(
+        "cpg_edges",
+        finalize.good,
+        constraints=delta_context.constraints,
+        ctx=context.ctx,
+    )
+    paths = write_finalize_result_delta(
+        finalize,
+        str(output_path / "cpg_edges"),
+        options=delta_context.options,
+        storage_options=delta_context.storage_options,
+    )
+    versions = {key: delta_table_version(path) for key, path in paths.items()}
     return {
         "paths": paths,
         "files": list(paths.values()),
         "rows": int(finalize.good.num_rows),
         "error_rows": int(finalize.errors.num_rows),
+        "delta_versions": versions,
+        "delta_write_policy": _delta_write_policy_payload(delta_context.write_policy),
+        "delta_schema_policy": _delta_schema_policy_payload(delta_context.schema_policy),
+        "delta_constraints": list(delta_context.constraints) if delta_context.constraints else None,
     }
 
 
-@tag(layer="materialize", artifact="cpg_props_parquet", kind="side_effect")
-def write_cpg_props_parquet(
-    output_dir: str | None,
+@tag(layer="materialize", artifact="cpg_props_delta", kind="side_effect")
+def write_cpg_props_delta(
+    context: CpgDeltaWriteContext,
     cpg_props_finalize: CpgBuildArtifacts,
     cpg_props_final: TableLike,
-    incremental_config: IncrementalConfig,
 ) -> JsonDict | None:
-    """Write CPG properties and error artifacts to Parquet.
+    """Write CPG properties and error artifacts to Delta.
 
     Returns
     -------
     JsonDict | None
         Report of the written files, or None when output is disabled.
     """
-    if not output_dir:
+    if not context.output_dir:
         return None
-    output_path = Path(output_dir)
+    output_path = Path(context.output_dir)
     _ensure_dir(output_path)
-    good_override = cpg_props_final if incremental_config.enabled else None
+    good_override = cpg_props_final if context.incremental_config.enabled else None
     finalize = _override_finalize_good(cpg_props_finalize.finalize, good=good_override)
-    paths = write_finalize_result_parquet(
-        finalize,
-        output_path / "cpg_props.parquet",
-        opts=ParquetWriteOptions(),
-        overwrite=True,
+    require_explicit_ordering(finalize.good.schema, label="cpg_props_final")
+    delta_context = _resolve_delta_write_context(
+        "cpg_props",
+        DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata=_delta_commit_metadata("cpg_props", finalize.good.schema),
+        ),
+        output_config=context.output_config,
     )
+    _validate_delta_constraints(
+        "cpg_props",
+        finalize.good,
+        constraints=delta_context.constraints,
+        ctx=context.ctx,
+    )
+    paths = write_finalize_result_delta(
+        finalize,
+        str(output_path / "cpg_props"),
+        options=delta_context.options,
+        storage_options=delta_context.storage_options,
+    )
+    versions = {key: delta_table_version(path) for key, path in paths.items()}
     return {
         "paths": paths,
         "files": list(paths.values()),
         "rows": int(finalize.good.num_rows),
         "error_rows": int(finalize.errors.num_rows),
+        "delta_versions": versions,
+        "delta_write_policy": _delta_write_policy_payload(delta_context.write_policy),
+        "delta_schema_policy": _delta_schema_policy_payload(delta_context.schema_policy),
+        "delta_constraints": list(delta_context.constraints) if delta_context.constraints else None,
     }
 
 
-@tag(layer="materialize", artifact="cpg_props_json_parquet", kind="side_effect")
-def write_cpg_props_json_parquet(
+@tag(layer="materialize", artifact="cpg_props_json_delta", kind="side_effect")
+def write_cpg_props_json_delta(
     output_dir: str | None,
+    output_config: OutputConfig,
     cpg_props_json: TableLike | None,
 ) -> JsonDict | None:
-    """Write optional JSON-heavy CPG properties to Parquet.
+    """Write optional JSON-heavy CPG properties to Delta.
 
     Returns
     -------
@@ -1091,21 +1504,38 @@ def write_cpg_props_json_parquet(
         return None
     output_path = Path(output_dir)
     _ensure_dir(output_path)
-    path = write_table_parquet(
-        cpg_props_json,
-        output_path / "cpg_props_json.parquet",
-        opts=ParquetWriteOptions(),
-        overwrite=True,
+    delta_context = _resolve_delta_write_context(
+        "cpg_props_json",
+        DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata=_delta_commit_metadata("cpg_props_json", cpg_props_json.schema),
+        ),
+        output_config=output_config,
     )
-    return {"path": path, "files": [path], "rows": int(cpg_props_json.num_rows)}
+    result = write_table_delta(
+        cpg_props_json,
+        str(output_path / "cpg_props_json"),
+        options=delta_context.options,
+        storage_options=delta_context.storage_options,
+    )
+    return {
+        "path": result.path,
+        "files": [result.path],
+        "rows": int(cpg_props_json.num_rows),
+        "delta_version": result.version,
+        "delta_write_policy": _delta_write_policy_payload(delta_context.write_policy),
+        "delta_schema_policy": _delta_schema_policy_payload(delta_context.schema_policy),
+    }
 
 
-@tag(layer="materialize", artifact="cpg_props_quality_parquet", kind="side_effect")
-def write_cpg_props_quality_parquet(
+@tag(layer="materialize", artifact="cpg_props_quality_delta", kind="side_effect")
+def write_cpg_props_quality_delta(
     output_dir: str | None,
+    output_config: OutputConfig,
     cpg_props_quality: TableLike,
 ) -> JsonDict | None:
-    """Write CPG property quality diagnostics to Parquet.
+    """Write CPG property quality diagnostics to Delta.
 
     Returns
     -------
@@ -1116,13 +1546,29 @@ def write_cpg_props_quality_parquet(
         return None
     output_path = Path(output_dir)
     _ensure_dir(output_path)
-    path = write_table_parquet(
-        cpg_props_quality,
-        output_path / "cpg_props_quality.parquet",
-        opts=ParquetWriteOptions(),
-        overwrite=True,
+    delta_context = _resolve_delta_write_context(
+        "cpg_props_quality",
+        DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata=_delta_commit_metadata("cpg_props_quality", cpg_props_quality.schema),
+        ),
+        output_config=output_config,
     )
-    return {"path": path, "files": [path], "rows": int(cpg_props_quality.num_rows)}
+    result = write_table_delta(
+        cpg_props_quality,
+        str(output_path / "cpg_props_quality"),
+        options=delta_context.options,
+        storage_options=delta_context.storage_options,
+    )
+    return {
+        "path": result.path,
+        "files": [result.path],
+        "rows": int(cpg_props_quality.num_rows),
+        "delta_version": result.version,
+        "delta_write_policy": _delta_write_policy_payload(delta_context.write_policy),
+        "delta_schema_policy": _delta_schema_policy_payload(delta_context.schema_policy),
+    }
 
 
 @tag(layer="obs", artifact="materialization_reports", kind="object")
@@ -1138,19 +1584,19 @@ def materialization_reports(
         Materialization metadata when any reports are present.
     """
     artifacts: JsonDict = {}
-    if report_inputs.normalized_inputs_parquet is not None:
-        artifacts["normalized_inputs_parquet"] = report_inputs.normalized_inputs_parquet
-    if report_inputs.param_table_parquet is not None:
-        artifacts["param_table_parquet"] = report_inputs.param_table_parquet
-    if report_inputs.cpg_nodes_parquet is not None:
-        artifacts["cpg_nodes_parquet"] = report_inputs.cpg_nodes_parquet
-    if report_inputs.cpg_edges_parquet is not None:
-        artifacts["cpg_edges_parquet"] = report_inputs.cpg_edges_parquet
+    if report_inputs.normalized_inputs_delta is not None:
+        artifacts["normalized_inputs_delta"] = report_inputs.normalized_inputs_delta
+    if report_inputs.param_table_delta is not None:
+        artifacts["param_table_delta"] = report_inputs.param_table_delta
+    if report_inputs.cpg_nodes_delta is not None:
+        artifacts["cpg_nodes_delta"] = report_inputs.cpg_nodes_delta
+    if report_inputs.cpg_edges_delta is not None:
+        artifacts["cpg_edges_delta"] = report_inputs.cpg_edges_delta
     if report_inputs.cpg_props is not None:
-        if report_inputs.cpg_props.cpg_props_parquet is not None:
-            artifacts["cpg_props_parquet"] = report_inputs.cpg_props.cpg_props_parquet
-        if report_inputs.cpg_props.cpg_props_json_parquet is not None:
-            artifacts["cpg_props_json_parquet"] = report_inputs.cpg_props.cpg_props_json_parquet
+        if report_inputs.cpg_props.cpg_props_delta is not None:
+            artifacts["cpg_props_delta"] = report_inputs.cpg_props.cpg_props_delta
+        if report_inputs.cpg_props.cpg_props_json_delta is not None:
+            artifacts["cpg_props_json_delta"] = report_inputs.cpg_props.cpg_props_json_delta
     if not artifacts:
         return None
     return {
@@ -1161,8 +1607,8 @@ def materialization_reports(
 
 @tag(layer="obs", artifact="cpg_props_report_inputs", kind="object")
 def cpg_props_report_inputs(
-    cpg_props_parquet: JsonDict | None,
-    cpg_props_json_parquet: JsonDict | None,
+    cpg_props_delta: JsonDict | None,
+    cpg_props_json_delta: JsonDict | None,
 ) -> CpgPropsReportInputs | None:
     """Bundle CPG props materialization artifacts.
 
@@ -1171,20 +1617,20 @@ def cpg_props_report_inputs(
     CpgPropsReportInputs | None
         CPG props report artifacts when any are present.
     """
-    if cpg_props_parquet is None and cpg_props_json_parquet is None:
+    if cpg_props_delta is None and cpg_props_json_delta is None:
         return None
     return CpgPropsReportInputs(
-        cpg_props_parquet=cpg_props_parquet,
-        cpg_props_json_parquet=cpg_props_json_parquet,
+        cpg_props_delta=cpg_props_delta,
+        cpg_props_json_delta=cpg_props_json_delta,
     )
 
 
 @tag(layer="obs", artifact="materialization_report_inputs", kind="object")
 def materialization_report_inputs(
-    normalized_inputs_parquet: JsonDict | None,
-    param_table_parquet: Mapping[str, JsonDict] | None,
-    cpg_nodes_parquet: JsonDict | None,
-    cpg_edges_parquet: JsonDict | None,
+    normalized_inputs_delta: JsonDict | None,
+    param_table_delta: Mapping[str, JsonDict] | None,
+    cpg_nodes_delta: JsonDict | None,
+    cpg_edges_delta: JsonDict | None,
     cpg_props: CpgPropsReportInputs | None,
 ) -> MaterializationReportInputs:
     """Bundle materialization report inputs.
@@ -1195,10 +1641,10 @@ def materialization_report_inputs(
         Bundled materialization report inputs.
     """
     return MaterializationReportInputs(
-        normalized_inputs_parquet=normalized_inputs_parquet,
-        param_table_parquet=param_table_parquet,
-        cpg_nodes_parquet=cpg_nodes_parquet,
-        cpg_edges_parquet=cpg_edges_parquet,
+        normalized_inputs_delta=normalized_inputs_delta,
+        param_table_delta=param_table_delta,
+        cpg_nodes_delta=cpg_nodes_delta,
+        cpg_edges_delta=cpg_edges_delta,
         cpg_props=cpg_props,
     )
 
@@ -1208,15 +1654,16 @@ def materialization_report_inputs(
 # -----------------------
 
 
-@tag(layer="materialize", artifact="extract_errors_parquet", kind="side_effect")
-def write_extract_error_artifacts_parquet(
+@tag(layer="materialize", artifact="extract_errors_delta", kind="side_effect")
+def write_extract_error_artifacts_delta(
     output_dir: str | None,
+    output_config: OutputConfig,
     extract_error_artifacts: ExtractErrorArtifacts,
 ) -> JsonDict | None:
-    """Write extract error artifacts to Parquet.
+    """Write extract error artifacts to Delta tables.
 
     Output structure:
-      <output_dir>/extract_errors/<output>/{errors,error_stats,alignment}.parquet
+      <output_dir>/extract_errors/<output>/{errors,error_stats,alignment}
 
     Returns
     -------
@@ -1227,7 +1674,6 @@ def write_extract_error_artifacts_parquet(
         return None
     base = Path(output_dir) / "extract_errors"
     _ensure_dir(base)
-    options = ParquetWriteOptions()
     datasets: dict[str, JsonDict] = {}
     for output in sorted(extract_error_artifacts.errors):
         errors = extract_error_artifacts.errors[output]
@@ -1235,35 +1681,72 @@ def write_extract_error_artifacts_parquet(
         alignment = extract_error_artifacts.alignment[output]
         dataset_dir = base / output
         _ensure_dir(dataset_dir)
+        error_context = _resolve_delta_write_context(
+            f"{output}.errors",
+            DeltaWriteOptions(
+                mode="overwrite",
+                schema_mode="overwrite",
+                commit_metadata=_delta_commit_metadata(f"{output}.errors", errors.schema),
+            ),
+            output_config=output_config,
+        )
+        stats_context = _resolve_delta_write_context(
+            f"{output}.error_stats",
+            DeltaWriteOptions(
+                mode="overwrite",
+                schema_mode="overwrite",
+                commit_metadata=_delta_commit_metadata(f"{output}.error_stats", stats.schema),
+            ),
+            output_config=output_config,
+        )
+        alignment_context = _resolve_delta_write_context(
+            f"{output}.alignment",
+            DeltaWriteOptions(
+                mode="overwrite",
+                schema_mode="overwrite",
+                commit_metadata=_delta_commit_metadata(f"{output}.alignment", alignment.schema),
+            ),
+            output_config=output_config,
+        )
+        error_result = write_table_delta(
+            errors,
+            str(dataset_dir / "errors"),
+            options=error_context.options,
+            storage_options=error_context.storage_options,
+        )
+        stats_result = write_table_delta(
+            stats,
+            str(dataset_dir / "error_stats"),
+            options=stats_context.options,
+            storage_options=stats_context.storage_options,
+        )
+        alignment_result = write_table_delta(
+            alignment,
+            str(dataset_dir / "alignment"),
+            options=alignment_context.options,
+            storage_options=alignment_context.storage_options,
+        )
         datasets[output] = {
             "paths": {
-                "errors": write_table_parquet(
-                    errors,
-                    dataset_dir / "errors.parquet",
-                    opts=options,
-                    overwrite=True,
-                ),
-                "stats": write_table_parquet(
-                    stats,
-                    dataset_dir / "error_stats.parquet",
-                    opts=options,
-                    overwrite=True,
-                ),
-                "alignment": write_table_parquet(
-                    alignment,
-                    dataset_dir / "alignment.parquet",
-                    opts=options,
-                    overwrite=True,
-                ),
+                "errors": error_result.path,
+                "stats": stats_result.path,
+                "alignment": alignment_result.path,
             },
             "files": [
-                str(dataset_dir / "errors.parquet"),
-                str(dataset_dir / "error_stats.parquet"),
-                str(dataset_dir / "alignment.parquet"),
+                error_result.path,
+                stats_result.path,
+                alignment_result.path,
             ],
+            "delta_versions": {
+                "errors": error_result.version,
+                "stats": stats_result.version,
+                "alignment": alignment_result.version,
+            },
             "error_rows": int(errors.num_rows),
             "stat_rows": int(stats.num_rows),
             "alignment_rows": int(alignment.num_rows),
+            "delta_write_policy": _delta_write_policy_payload(error_context.write_policy),
+            "delta_schema_policy": _delta_schema_policy_payload(error_context.schema_policy),
         }
     return {"base_dir": str(base), "datasets": datasets}
 
@@ -1273,8 +1756,8 @@ def write_extract_error_artifacts_parquet(
 # -----------------------
 
 
-@tag(layer="obs", artifact="write_inc_changed_exports_parquet", kind="table")
-def write_inc_changed_exports_parquet(
+@tag(layer="obs", artifact="write_inc_changed_exports_delta", kind="table")
+def write_inc_changed_exports_delta(
     incremental_changed_exports: pa.Table | None,
     output_dir: str | None,
     work_dir: str | None,
@@ -1287,17 +1770,20 @@ def write_inc_changed_exports_parquet(
     str | None
         Dataset path for the written export deltas.
     """
-    return _write_incremental_dataset(
-        name="inc_changed_exports_v1",
-        table=incremental_changed_exports,
+    context = IncrementalWriteContext(
         output_dir=output_dir,
         work_dir=work_dir,
         incremental_config=incremental_config,
     )
+    return _write_incremental_dataset(
+        name="inc_changed_exports_v1",
+        table=incremental_changed_exports,
+        context=context,
+    )
 
 
-@tag(layer="obs", artifact="write_inc_impacted_callers_parquet", kind="table")
-def write_inc_impacted_callers_parquet(
+@tag(layer="obs", artifact="write_inc_impacted_callers_delta", kind="table")
+def write_inc_impacted_callers_delta(
     incremental_impacted_callers: pa.Table | None,
     output_dir: str | None,
     work_dir: str | None,
@@ -1310,17 +1796,20 @@ def write_inc_impacted_callers_parquet(
     str | None
         Dataset path for the written caller impacts.
     """
-    return _write_incremental_dataset(
-        name="inc_impacted_callers_v1",
-        table=incremental_impacted_callers,
+    context = IncrementalWriteContext(
         output_dir=output_dir,
         work_dir=work_dir,
         incremental_config=incremental_config,
     )
+    return _write_incremental_dataset(
+        name="inc_impacted_callers_v1",
+        table=incremental_impacted_callers,
+        context=context,
+    )
 
 
-@tag(layer="obs", artifact="write_inc_impacted_importers_parquet", kind="table")
-def write_inc_impacted_importers_parquet(
+@tag(layer="obs", artifact="write_inc_impacted_importers_delta", kind="table")
+def write_inc_impacted_importers_delta(
     incremental_impacted_importers: pa.Table | None,
     output_dir: str | None,
     work_dir: str | None,
@@ -1333,17 +1822,20 @@ def write_inc_impacted_importers_parquet(
     str | None
         Dataset path for the written importer impacts.
     """
-    return _write_incremental_dataset(
-        name="inc_impacted_importers_v1",
-        table=incremental_impacted_importers,
+    context = IncrementalWriteContext(
         output_dir=output_dir,
         work_dir=work_dir,
         incremental_config=incremental_config,
     )
+    return _write_incremental_dataset(
+        name="inc_impacted_importers_v1",
+        table=incremental_impacted_importers,
+        context=context,
+    )
 
 
-@tag(layer="obs", artifact="write_inc_impacted_files_parquet", kind="table")
-def write_inc_impacted_files_parquet(
+@tag(layer="obs", artifact="write_inc_impacted_files_delta", kind="table")
+def write_inc_impacted_files_delta(
     incremental_impacted_files: pa.Table | None,
     output_dir: str | None,
     work_dir: str | None,
@@ -1356,17 +1848,20 @@ def write_inc_impacted_files_parquet(
     str | None
         Dataset path for the written impacted files.
     """
-    return _write_incremental_dataset(
-        name="inc_impacted_files_v2",
-        table=incremental_impacted_files,
+    context = IncrementalWriteContext(
         output_dir=output_dir,
         work_dir=work_dir,
         incremental_config=incremental_config,
     )
+    return _write_incremental_dataset(
+        name="inc_impacted_files_v2",
+        table=incremental_impacted_files,
+        context=context,
+    )
 
 
-@tag(layer="obs", artifact="write_inc_output_fingerprint_changes_parquet", kind="table")
-def write_inc_output_fingerprint_changes_parquet(
+@tag(layer="obs", artifact="write_inc_output_fingerprint_changes_delta", kind="table")
+def write_inc_output_fingerprint_changes_delta(
     incremental_output_fingerprint_changes: pa.Table | None,
     output_dir: str | None,
     work_dir: str | None,
@@ -1379,12 +1874,15 @@ def write_inc_output_fingerprint_changes_parquet(
     str | None
         Dataset path for the fingerprint change report.
     """
-    return _write_incremental_dataset(
-        name="inc_output_fingerprint_changes_v1",
-        table=incremental_output_fingerprint_changes,
+    context = IncrementalWriteContext(
         output_dir=output_dir,
         work_dir=work_dir,
         incremental_config=incremental_config,
+    )
+    return _write_incremental_dataset(
+        name="inc_output_fingerprint_changes_v1",
+        table=incremental_output_fingerprint_changes,
+        context=context,
     )
 
 
@@ -1438,6 +1936,10 @@ def relspec_scan_telemetry(
             dataset_format=loc.format,
             filesystem=loc.filesystem,
             partitioning=loc.partitioning,
+            parquet_read_options=ctx.runtime.scan.parquet_read_options,
+            storage_options=loc.storage_options,
+            delta_version=loc.delta_version,
+            delta_timestamp=loc.delta_timestamp,
             discovery=DatasetDiscoveryOptions(),
         )
         dataset = open_dataset(loc.path, options=dataset_options)
@@ -1458,9 +1960,7 @@ def relspec_scan_telemetry(
             predicate=query.pushdown_expression(),
             scanner=scanner,
             options=ScanTelemetryOptions(
-                discovery_policy=(
-                    dataset_options.discovery.payload() if dataset_options.discovery else None
-                ),
+                discovery_policy=dataset_options.discovery_payload(),
                 scan_profile=_scan_profile_payload(ctx),
             ),
         )
@@ -2206,11 +2706,32 @@ def run_bundle_inputs(
 
 
 @tag(layer="obs", artifact="run_bundle_param_inputs", kind="object")
-def run_bundle_param_inputs(
+def run_bundle_param_inputs_context(
     param_table_specs: tuple[ParamTableSpec, ...],
+    relspec_param_registry: IbisParamRegistry,
     param_table_artifacts: Mapping[str, ParamTableArtifact] | None,
     param_scalar_signature: str | None,
     relspec_param_dependency_reports: tuple[RuleDependencyReport, ...],
+) -> RunBundleParamInputsContext:
+    """Bundle param-table inputs for run bundle context creation.
+
+    Returns
+    -------
+    RunBundleParamInputsContext
+        Param-table inputs for run bundle context creation.
+    """
+    return RunBundleParamInputsContext(
+        param_table_specs=param_table_specs,
+        relspec_param_registry=relspec_param_registry,
+        param_table_artifacts=param_table_artifacts,
+        param_scalar_signature=param_scalar_signature,
+        relspec_param_dependency_reports=relspec_param_dependency_reports,
+    )
+
+
+@tag(layer="obs", artifact="run_bundle_param_inputs", kind="object")
+def run_bundle_param_inputs(
+    context: RunBundleParamInputsContext,
     output_config: OutputConfig,
 ) -> RunBundleParamInputs:
     """Bundle param-table inputs for run bundle context creation.
@@ -2220,12 +2741,16 @@ def run_bundle_param_inputs(
     RunBundleParamInputs
         Parameter-table inputs for run bundle context.
     """
-    reverse_index = build_param_reverse_index(relspec_param_dependency_reports)
+    reverse_index = build_param_reverse_index(context.relspec_param_dependency_reports)
+    param_scalar_specs = tuple(
+        sorted(context.relspec_param_registry.specs.values(), key=lambda spec: spec.name)
+    )
     return RunBundleParamInputs(
-        param_table_specs=param_table_specs,
-        param_table_artifacts=param_table_artifacts,
-        param_scalar_signature=param_scalar_signature,
-        param_dependency_reports=relspec_param_dependency_reports,
+        param_table_specs=context.param_table_specs,
+        param_scalar_specs=param_scalar_specs,
+        param_table_artifacts=context.param_table_artifacts,
+        param_scalar_signature=context.param_scalar_signature,
+        param_dependency_reports=context.relspec_param_dependency_reports,
         param_reverse_index=reverse_index or None,
         include_param_table_data=output_config.materialize_param_tables,
     )
@@ -2263,13 +2788,19 @@ class _RunBundleDatafusionArtifacts:
     explains: pa.Table | None
     plan_artifacts: pa.Table | None
     plan_cache: Sequence[PlanCacheEntry] | None
+    cache_events: Sequence[Mapping[str, object]] | None
+    prepared_statements: Sequence[Mapping[str, object]] | None
     input_plugins: Sequence[Mapping[str, object]] | None
     dml_statements: Sequence[Mapping[str, object]] | None
+    listing_tables: Sequence[Mapping[str, object]] | None
+    delta_tables: Sequence[Mapping[str, object]] | None
+    udf_registry: Sequence[Mapping[str, object]] | None
 
 
 @dataclass(frozen=True)
 class _RunBundleParamValues:
     param_specs: tuple[ParamTableSpec, ...]
+    param_scalar_specs: tuple[ScalarParamSpec, ...]
     param_artifacts: Mapping[str, ParamTableArtifact] | None
     param_scalar_signature: str | None
     param_reports: tuple[RuleDependencyReport, ...]
@@ -2288,15 +2819,25 @@ def _run_bundle_datafusion_artifacts(
             explains=None,
             plan_artifacts=None,
             plan_cache=None,
+            cache_events=None,
+            prepared_statements=None,
             input_plugins=None,
             dml_statements=None,
+            listing_tables=None,
+            delta_tables=None,
+            udf_registry=None,
         )
     metrics, traces = _datafusion_runtime_artifacts(ctx)
     fallbacks, explains = _datafusion_runtime_diag_tables(ctx)
     plan_artifacts = _datafusion_plan_artifacts_table(ctx)
     plan_cache = _datafusion_plan_cache_entries(ctx)
+    cache_events = _datafusion_cache_events(ctx)
+    prepared_statements = _datafusion_prepared_statements(ctx)
     input_plugins = _datafusion_input_plugins(ctx)
     dml_statements = _datafusion_dml_statements(ctx)
+    listing_tables = _datafusion_listing_tables(ctx)
+    delta_tables = _datafusion_delta_tables(ctx)
+    udf_registry = _datafusion_udf_registry(ctx)
     return _RunBundleDatafusionArtifacts(
         metrics=metrics,
         traces=traces,
@@ -2304,8 +2845,13 @@ def _run_bundle_datafusion_artifacts(
         explains=explains,
         plan_artifacts=plan_artifacts,
         plan_cache=plan_cache,
+        cache_events=cache_events,
+        prepared_statements=prepared_statements,
         input_plugins=input_plugins,
         dml_statements=dml_statements,
+        listing_tables=listing_tables,
+        delta_tables=delta_tables,
+        udf_registry=udf_registry,
     )
 
 
@@ -2315,6 +2861,7 @@ def _run_bundle_param_values(
     if param_inputs is None:
         return _RunBundleParamValues(
             param_specs=(),
+            param_scalar_specs=(),
             param_artifacts=None,
             param_scalar_signature=None,
             param_reports=(),
@@ -2323,6 +2870,7 @@ def _run_bundle_param_values(
         )
     return _RunBundleParamValues(
         param_specs=param_inputs.param_table_specs,
+        param_scalar_specs=param_inputs.param_scalar_specs,
         param_artifacts=param_inputs.param_table_artifacts,
         param_scalar_signature=param_inputs.param_scalar_signature,
         param_reports=param_inputs.param_dependency_reports,
@@ -2350,10 +2898,15 @@ def run_bundle_context(
 
     base_dir = Path(base) / "run_bundles"
     datafusion_artifacts = _run_bundle_datafusion_artifacts(context_inputs.ctx)
+    delta_maintenance_reports = (
+        _delta_maintenance_reports(context_inputs.ctx) if context_inputs.ctx is not None else None
+    )
     sql_ingest_artifacts = _ibis_sql_ingest_artifacts(context_inputs.ctx)
     namespace_actions = _ibis_namespace_actions(context_inputs.ctx)
     cache_events = _ibis_cache_events(context_inputs.ctx)
     support_matrix = _ibis_support_matrix(context_inputs.ctx)
+    allocator_debug = bool(context_inputs.ctx.debug) if context_inputs.ctx is not None else False
+    kernel_registry = kernel_registry_snapshot()
     param_values = _run_bundle_param_values(run_bundle_inputs.param_inputs)
     return RunBundleContext(
         base_dir=str(base_dir),
@@ -2371,8 +2924,15 @@ def run_bundle_context(
         datafusion_explains=datafusion_artifacts.explains,
         datafusion_plan_artifacts=datafusion_artifacts.plan_artifacts,
         datafusion_plan_cache=datafusion_artifacts.plan_cache,
+        datafusion_cache_events=datafusion_artifacts.cache_events,
+        datafusion_prepared_statements=datafusion_artifacts.prepared_statements,
         datafusion_input_plugins=datafusion_artifacts.input_plugins,
         datafusion_dml_statements=datafusion_artifacts.dml_statements,
+        datafusion_listing_tables=datafusion_artifacts.listing_tables,
+        datafusion_delta_tables=datafusion_artifacts.delta_tables,
+        delta_maintenance_reports=delta_maintenance_reports,
+        datafusion_udf_registry=datafusion_artifacts.udf_registry,
+        arrow_kernel_registry=kernel_registry,
         ibis_sql_ingest_artifacts=sql_ingest_artifacts,
         ibis_namespace_actions=namespace_actions,
         ibis_cache_events=cache_events,
@@ -2380,6 +2940,7 @@ def run_bundle_context(
         feature_state=context_inputs.feature_state_diagnostics_table,
         ipc_dump_enabled=output_config.ipc_dump_enabled,
         ipc_write_config=output_config.ipc_write_config,
+        allocator_debug=allocator_debug,
         relspec_scan_telemetry=cast("pa.Table", context_inputs.relspec_scan_telemetry),
         relspec_rule_exec_events=context_inputs.relspec_rule_exec_events,
         relspec_input_locations=run_bundle_inputs.tables.relspec_inputs.locations,
@@ -2396,6 +2957,7 @@ def run_bundle_context(
             run_bundle_inputs.incremental_output_fingerprint_changes
         ),
         param_table_specs=param_values.param_specs,
+        param_scalar_specs=param_values.param_scalar_specs,
         param_table_artifacts=param_values.param_artifacts,
         param_scalar_signature=param_values.param_scalar_signature,
         param_dependency_reports=param_values.param_reports,

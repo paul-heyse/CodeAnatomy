@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 
@@ -44,4 +44,44 @@ class DiagnosticsCollector:
         return {name: list(rows) for name, rows in self.artifacts.items()}
 
 
-__all__ = ["DiagnosticsCollector"]
+@dataclass(frozen=True)
+class PreparedStatementSpec:
+    """Prepared statement metadata for diagnostics reporting."""
+
+    name: str
+    sql: str
+    param_types: tuple[str, ...]
+
+    def payload(self) -> Mapping[str, object]:
+        """Return a JSON-ready payload for diagnostics sinks.
+
+        Returns
+        -------
+        Mapping[str, object]
+            JSON-ready payload describing the prepared statement.
+        """
+        return {
+            "name": self.name,
+            "sql": self.sql,
+            "param_types": list(self.param_types),
+        }
+
+
+def prepared_statement_hook(
+    sink: DiagnosticsCollector,
+) -> Callable[[PreparedStatementSpec], None]:
+    """Return a hook that records prepared statements in diagnostics.
+
+    Returns
+    -------
+    Callable[[PreparedStatementSpec], None]
+        Hook that records prepared statement metadata.
+    """
+
+    def _hook(spec: PreparedStatementSpec) -> None:
+        sink.record_artifact("datafusion_prepared_statements_v1", spec.payload())
+
+    return _hook
+
+
+__all__ = ["DiagnosticsCollector", "PreparedStatementSpec", "prepared_statement_hook"]

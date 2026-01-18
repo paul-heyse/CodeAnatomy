@@ -20,6 +20,11 @@ from ibis_engine.builtin_udfs import (
 )
 
 IbisExprFn = Callable[..., Value]
+PORTABILITY_GATE_OPS: tuple[type[ops.Node], ...] = (
+    ops.TableUnnest,
+    ops.Unnest,
+    ops.WindowFunction,
+)
 
 
 def _fill_null_expr(value: Value, fill_value: Scalar) -> Value:
@@ -61,7 +66,7 @@ def _is_null_expr(value: Value) -> BooleanValue:
 class OperationSupportBackend(Protocol):
     """Protocol for backends exposing operation support checks."""
 
-    def has_operation(self, operation: type[ops.Value[dt.DataType]], /) -> bool:
+    def has_operation(self, operation: type[ops.Node], /) -> bool:
         """Return whether the backend supports an operation type."""
         ...
 
@@ -134,13 +139,16 @@ def default_expr_registry() -> IbisExprRegistry:
     """
     return IbisExprRegistry(
         functions={
+            "array": ibis.array,
             "fill_null": _fill_null_expr,
             "if_else": _if_else_expr,
             "equal": _equal_expr,
+            "map": ibis.map,
             "not_equal": _not_equal_expr,
             "invert": _invert_expr,
             "bit_wise_and": _bitwise_and_expr,
             "strip": _strip_expr,
+            "struct": ibis.struct,
             "stringify": _stringify_expr,
             "is_null": _is_null_expr,
             "cpg_score": cpg_score,
@@ -197,32 +205,121 @@ def unsupported_operations(
     *,
     backend: OperationSupportBackend,
 ) -> tuple[str, ...]:
-    """Return unsupported operation names for a backend.
+    """Return unsupported portability-gated operations for a backend.
 
     Returns
     -------
     tuple[str, ...]
         Sorted operation class names not supported by the backend.
     """
-    has_op = getattr(backend, "has_operation", None)
-    if not callable(has_op):
-        return ()
     missing: set[str] = set()
     try:
-        nodes = expr.op().find(ops.Value)
+        nodes = list(expr.op().find(ops.Node))
     except AttributeError:
         return ()
+    has_op = getattr(backend, "has_operation", None)
+    if not callable(has_op):
+        return _missing_portability_ops(nodes)
     for node in nodes:
         op_type = type(node)
+        if op_type not in PORTABILITY_GATE_OPS:
+            continue
         try:
             supported = has_op(op_type)
         except NotImplementedError:
-            return ()
+            missing.add(op_type.__name__)
+            continue
         except (AttributeError, RuntimeError, TypeError, ValueError):
-            return ()
+            return _missing_portability_ops(nodes)
         if not supported:
             missing.add(op_type.__name__)
     return tuple(sorted(missing))
+
+
+def _missing_portability_ops(nodes: Sequence[object]) -> tuple[str, ...]:
+    missing = {type(node).__name__ for node in nodes if type(node) in PORTABILITY_GATE_OPS}
+    return tuple(sorted(missing))
+
+
+def align_set_op_tables(tables: Sequence[Table]) -> list[Table]:
+    """Align tables to a shared schema for set operations.
+
+    Returns
+    -------
+    list[ibis.expr.types.Table]
+        Tables aligned to a compatible schema order.
+
+    Raises
+    ------
+    ValueError
+        Raised when no tables are provided or column types conflict.
+    """
+    if not tables:
+        msg = "Set operations require at least one table."
+        raise ValueError(msg)
+    names: list[str] = []
+    types: dict[str, dt.DataType] = {}
+    for table in tables:
+        schema = table.schema()
+        schema_names = cast("Sequence[str]", schema.names)
+        schema_types = cast("Sequence[dt.DataType]", schema.types)
+        for name, dtype in zip(schema_names, schema_types, strict=True):
+            if name in types:
+                if types[name] != dtype:
+                    msg = f"Set operation type mismatch for column: {name}."
+                    raise ValueError(msg)
+                continue
+            names.append(name)
+            types[name] = dtype
+    aligned: list[Table] = []
+    for table in tables:
+        cols: list[Value] = []
+        for name in names:
+            if name in table.columns:
+                cols.append(table[name])
+            else:
+                cols.append(ibis.literal(None, type=types[name]).name(name))
+        aligned.append(table.select(cols))
+    return aligned
+
+
+def union_tables(tables: Sequence[Table], *, distinct: bool = False) -> Table:
+    """Union tables with explicit distinct semantics.
+
+    Returns
+    -------
+    ibis.expr.types.Table
+        Unioned table expression.
+    """
+    aligned = align_set_op_tables(tables)
+    head, *rest = aligned
+    return head.union(*rest, distinct=distinct)
+
+
+def intersect_tables(tables: Sequence[Table], *, distinct: bool = True) -> Table:
+    """Intersect tables with explicit distinct semantics.
+
+    Returns
+    -------
+    ibis.expr.types.Table
+        Intersected table expression.
+    """
+    aligned = align_set_op_tables(tables)
+    head, *rest = aligned
+    return head.intersect(*rest, distinct=distinct)
+
+
+def difference_tables(tables: Sequence[Table], *, distinct: bool = True) -> Table:
+    """Difference tables with explicit distinct semantics.
+
+    Returns
+    -------
+    ibis.expr.types.Table
+        Difference table expression.
+    """
+    aligned = align_set_op_tables(tables)
+    head, *rest = aligned
+    return head.difference(*rest, distinct=distinct)
 
 
 __all__ = [
@@ -230,7 +327,11 @@ __all__ = [
     "IbisExprFn",
     "IbisExprRegistry",
     "OperationSupportBackend",
+    "align_set_op_tables",
     "default_expr_registry",
+    "difference_tables",
     "expr_ir_to_ibis",
+    "intersect_tables",
+    "union_tables",
     "unsupported_operations",
 ]

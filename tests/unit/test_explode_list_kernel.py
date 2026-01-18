@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
+from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.compute.kernels import explode_list_column
 
 
@@ -15,16 +16,18 @@ def test_explode_list_kernel_preserves_parent_alignment() -> None:
             "children": [[1, 2], None, [3]],
         }
     )
-    result = explode_list_column(
-        table,
-        parent_id_col="parent_id",
+    spec = ExplodeSpec(
+        parent_keys=("parent_id",),
         list_col="children",
-        out_parent_col="parent",
-        out_value_col="child",
+        value_col="child",
+        idx_col="idx",
+        keep_empty=True,
     )
+    result = explode_list_column(table, spec=spec)
     data = result.to_pydict()
-    assert data.get("parent", []) == ["p1", "p1", "p3"]
-    assert data.get("child", []) == [1, 2, 3]
+    assert data.get("parent_id", []) == ["p1", "p1", "p2", "p3"]
+    assert data.get("child", []) == [1, 2, None, 3]
+    assert data.get("idx", []) == [0, 1, None, 0]
 
 
 def test_explode_list_kernel_keeps_list_ordering() -> None:
@@ -35,7 +38,15 @@ def test_explode_list_kernel_keeps_list_ordering() -> None:
             "children": [[3, 1, 2], [4]],
         }
     )
-    result = explode_list_column(table, parent_id_col="parent_id", list_col="children")
+    spec = ExplodeSpec(
+        parent_keys=("parent_id",),
+        list_col="children",
+        value_col="dst_id",
+        idx_col="idx",
+        keep_empty=True,
+    )
+    result = explode_list_column(table, spec=spec)
     data = result.to_pydict()
-    assert data.get("src_id", []) == [10, 10, 10, 20]
+    assert data.get("parent_id", []) == [10, 10, 10, 20]
     assert data.get("dst_id", []) == [3, 1, 2, 4]
+    assert data.get("idx", []) == [0, 1, 2, 0]

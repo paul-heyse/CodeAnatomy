@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Literal
 
 import ibis
@@ -20,10 +21,29 @@ from arrowdsl.compute.position_encoding import (
 from arrowdsl.core.ids import hash64_from_text, iter_array_values
 
 UdfVolatility = Literal["immutable", "stable", "volatile"]
+IbisUdfLane = Literal["ibis_builtin", "ibis_pyarrow", "ibis_pandas", "ibis_python"]
+IbisUdfKind = Literal["scalar", "aggregate", "window", "table"]
 
 BUILTIN_UDF_VOLATILITY: Mapping[str, UdfVolatility] = {
     "cpg_score": "stable",
 }
+
+
+@dataclass(frozen=True)
+class IbisUdfSpec:
+    """Specification for an Ibis UDF entry."""
+
+    func_id: str
+    engine_name: str
+    kind: IbisUdfKind
+    input_types: tuple[pa.DataType, ...]
+    return_type: pa.DataType
+    volatility: UdfVolatility = "stable"
+    arg_names: tuple[str, ...] | None = None
+    lanes: tuple[IbisUdfLane, ...] = ()
+    rewrite_tags: tuple[str, ...] = ()
+    catalog: str | None = None
+    database: str | None = None
 
 
 @ibis.udf.scalar.builtin
@@ -365,12 +385,81 @@ def _clamp_offset(offset: int, limit: int) -> int:
     return max(0, min(offset, limit))
 
 
+IBIS_UDF_SPECS: tuple[IbisUdfSpec, ...] = (
+    IbisUdfSpec(
+        func_id="cpg_score",
+        engine_name="cpg_score",
+        kind="scalar",
+        input_types=(pa.float64(),),
+        return_type=pa.float64(),
+        volatility=BUILTIN_UDF_VOLATILITY.get("cpg_score", "stable"),
+        arg_names=("value",),
+        lanes=("ibis_builtin",),
+        rewrite_tags=("score",),
+    ),
+    IbisUdfSpec(
+        func_id="stable_hash64",
+        engine_name="stable_hash64",
+        kind="scalar",
+        input_types=(pa.string(),),
+        return_type=pa.int64(),
+        arg_names=("value",),
+        lanes=("ibis_builtin", "ibis_pyarrow", "ibis_python"),
+        rewrite_tags=("hash",),
+    ),
+    IbisUdfSpec(
+        func_id="stable_hash128",
+        engine_name="stable_hash128",
+        kind="scalar",
+        input_types=(pa.string(),),
+        return_type=pa.string(),
+        arg_names=("value",),
+        lanes=("ibis_builtin", "ibis_pyarrow", "ibis_python"),
+        rewrite_tags=("hash",),
+    ),
+    IbisUdfSpec(
+        func_id="position_encoding_norm",
+        engine_name="position_encoding_norm",
+        kind="scalar",
+        input_types=(pa.string(),),
+        return_type=pa.int32(),
+        arg_names=("value",),
+        lanes=("ibis_builtin", "ibis_pyarrow", "ibis_python"),
+        rewrite_tags=("position_encoding",),
+    ),
+    IbisUdfSpec(
+        func_id="col_to_byte",
+        engine_name="col_to_byte",
+        kind="scalar",
+        input_types=(pa.string(), pa.int64(), pa.string()),
+        return_type=pa.int64(),
+        arg_names=("line_text", "col", "col_unit"),
+        lanes=("ibis_builtin", "ibis_pyarrow", "ibis_python"),
+        rewrite_tags=("position_encoding",),
+    ),
+)
+
+
+def ibis_udf_specs() -> tuple[IbisUdfSpec, ...]:
+    """Return the canonical Ibis UDF specs.
+
+    Returns
+    -------
+    tuple[IbisUdfSpec, ...]
+        Canonical Ibis UDF specifications.
+    """
+    return IBIS_UDF_SPECS
+
+
 __all__ = [
     "BUILTIN_UDF_VOLATILITY",
+    "IBIS_UDF_SPECS",
+    "IbisUdfSpec",
     "col_to_byte",
     "col_to_byte_pyarrow",
     "col_to_byte_python",
     "cpg_score",
+    "ibis_udf_specs",
     "position_encoding_norm",
     "position_encoding_norm_pyarrow",
     "position_encoding_norm_python",

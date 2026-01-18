@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 from hamilton.function_modifiers import tag
 from ibis.expr.types import Table
 
-from arrowdsl.io.parquet import DatasetWriteConfig, write_dataset_parquet
+from arrowdsl.io.delta import (
+    DeltaWriteOptions,
+    apply_delta_write_policies,
+    read_table_delta,
+    write_dataset_delta,
+)
+from arrowdsl.io.delta_config import DeltaSchemaPolicy, DeltaWritePolicy
 from arrowdsl.schema.serialization import schema_fingerprint
 from core_types import JsonDict
 from engine.session import EngineSession
@@ -31,17 +37,6 @@ from ibis_engine.param_tables import (
 )
 from relspec.param_deps import ActiveParamSet, RuleDependencyReport
 from relspec.pipeline_policy import PipelinePolicy
-
-
-def _file_visitor_bucket() -> tuple[list[str], Callable[[object], None]]:
-    files: list[str] = []
-
-    def _visitor(record: object) -> None:
-        path = getattr(record, "path", None)
-        if isinstance(path, str):
-            files.append(path)
-
-    return files, _visitor
 
 
 @tag(layer="params", artifact="param_table_policy", kind="object")
@@ -108,14 +103,14 @@ class ParamTableInputs:
     """Bundled inputs for param table registration."""
 
     scope_key: str | None = None
-    parquet_paths: Mapping[str, str] = field(default_factory=dict)
+    delta_paths: Mapping[str, str] = field(default_factory=dict)
     active_set: frozenset[str] | None = None
 
 
 @tag(layer="params", artifact="param_table_inputs", kind="object")
 def param_table_inputs(
     param_table_scope_key: str | None,
-    param_table_parquet_paths: Mapping[str, str] | None,
+    param_table_delta_paths: Mapping[str, str] | None,
     active_param_set: ActiveParamSet | None,
 ) -> ParamTableInputs:
     """Bundle inputs for param table registration.
@@ -126,14 +121,14 @@ def param_table_inputs(
         Normalized param table inputs for registration.
     """
     normalized_paths = (
-        {str(key): str(val) for key, val in param_table_parquet_paths.items()}
-        if param_table_parquet_paths
+        {str(key): str(val) for key, val in param_table_delta_paths.items()}
+        if param_table_delta_paths
         else {}
     )
     active_set = active_param_set.active if active_param_set is not None else None
     return ParamTableInputs(
         scope_key=param_table_scope_key,
-        parquet_paths=normalized_paths,
+        delta_paths=normalized_paths,
         active_set=active_set,
     )
 
@@ -196,13 +191,13 @@ def param_table_registry(
         policy=param_table_policy,
         scope_key=inputs.scope_key,
     )
-    paths = inputs.parquet_paths
+    paths = inputs.delta_paths
     active = inputs.active_set if inputs.active_set is not None else frozenset(specs.keys())
     for spec in param_table_specs:
         if spec.logical_name not in active:
             continue
         if spec.logical_name in paths:
-            artifact = _artifact_from_parquet(spec, paths[spec.logical_name])
+            artifact = _artifact_from_delta(spec, paths[spec.logical_name])
             registry.artifacts[spec.logical_name] = artifact
             continue
         values = param_bundle.list_values(spec.logical_name)
@@ -254,17 +249,17 @@ def param_tables_ibis(
     return param_table_registry.ibis_tables(engine_session.ibis_backend)
 
 
-@tag(layer="params", artifact="param_table_parquet", kind="side_effect")
-def write_param_tables_parquet(
+@tag(layer="params", artifact="param_table_delta", kind="side_effect")
+def write_param_tables_delta(
     param_table_artifacts: Mapping[str, ParamTableArtifact],
     output_config: OutputConfig,
 ) -> Mapping[str, JsonDict] | None:
-    """Write param tables to Parquet when enabled.
+    """Write param tables as Delta tables when enabled.
 
     Returns
     -------
     Mapping[str, JsonDict] | None
-        Mapping of logical names to Parquet dataset reports, or ``None`` when disabled.
+        Mapping of logical names to Delta table reports, or ``None`` when disabled.
     """
     if not output_config.materialize_param_tables:
         return None
@@ -273,22 +268,57 @@ def write_param_tables_parquet(
         return None
     base_dir = Path(base) / "params"
     base_dir.mkdir(parents=True, exist_ok=True)
+    write_policy = output_config.delta_write_policy
+    schema_policy = output_config.delta_schema_policy
+    storage_options = output_config.delta_storage_options
     output: dict[str, JsonDict] = {}
     for logical_name, artifact in param_table_artifacts.items():
         target_dir = base_dir / logical_name
         target_dir.mkdir(parents=True, exist_ok=True)
-        files, visitor = _file_visitor_bucket()
-        write_dataset_parquet(
+        delta_options = apply_delta_write_policies(
+            DeltaWriteOptions(
+                mode="overwrite",
+                schema_mode="overwrite",
+                commit_metadata={
+                    "dataset_name": logical_name,
+                    "schema_fingerprint": artifact.schema_fingerprint,
+                },
+            ),
+            write_policy=write_policy,
+            schema_policy=schema_policy,
+        )
+        result = write_dataset_delta(
             artifact.table,
-            target_dir,
-            config=DatasetWriteConfig(file_visitor=visitor),
+            str(target_dir),
+            options=delta_options,
+            storage_options=storage_options,
         )
         output[logical_name] = {
             "path": str(target_dir),
-            "files": list(files),
+            "delta_version": result.version,
             "rows": int(artifact.rows),
+            "delta_write_policy": _delta_write_policy_payload(write_policy),
+            "delta_schema_policy": _delta_schema_policy_payload(schema_policy),
         }
     return output
+
+
+def _delta_write_policy_payload(policy: DeltaWritePolicy | None) -> JsonDict | None:
+    if policy is None:
+        return None
+    return {
+        "target_file_size": policy.target_file_size,
+        "stats_columns": list(policy.stats_columns) if policy.stats_columns is not None else None,
+    }
+
+
+def _delta_schema_policy_payload(policy: DeltaSchemaPolicy | None) -> JsonDict | None:
+    if policy is None:
+        return None
+    return {
+        "schema_mode": policy.schema_mode,
+        "column_mapping_mode": policy.column_mapping_mode,
+    }
 
 
 @tag(layer="params", artifact="active_param_set", kind="object")
@@ -317,8 +347,8 @@ def _coerce_list_values(name: str, value: object) -> tuple[object, ...]:
     raise TypeError(msg)
 
 
-def _artifact_from_parquet(spec: ParamTableSpec, path: str) -> ParamTableArtifact:
-    table = pq.read_table(path)
+def _artifact_from_delta(spec: ParamTableSpec, path: str) -> ParamTableArtifact:
+    table = cast("pa.Table", read_table_delta(path))
     if table.schema != spec.schema:
         table = table.cast(spec.schema, safe=False)
     if spec.distinct:

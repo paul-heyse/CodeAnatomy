@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pyarrow as pa
-import pyarrow.parquet as pq
+from deltalake import DeltaTable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "src"
@@ -31,6 +31,10 @@ dataset_schema = cast(
 incremental_dataset_schema = cast(
     "Callable[[str], pa.Schema]",
     import_module("incremental.registry_specs").dataset_schema,
+)
+read_table_delta = cast(
+    "Callable[[str], pa.Table]",
+    import_module("arrowdsl.io.delta").read_table_delta,
 )
 
 
@@ -66,9 +70,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to write summary markdown (default: <output_dir>/diagnostics_report.md).",
     )
     parser.add_argument(
-        "--validate-parquet",
+        "--validate-delta",
         action="store_true",
-        help="Read parquet files and validate arrays (slower, more thorough).",
+        help="Read Delta tables and validate arrays (slower, more thorough).",
     )
     return parser
 
@@ -90,16 +94,16 @@ def _decode_metadata(schema: pa.Schema) -> dict[str, str]:
     return {key.decode("utf-8"): value.decode("utf-8") for key, value in schema.metadata.items()}
 
 
-def _parquet_summary(path: Path, *, validate: bool) -> dict[str, Any]:
+def _delta_summary(path: Path, *, validate: bool, table: pa.Table | None = None) -> dict[str, Any]:
     summary: dict[str, Any] = {"path": str(path)}
-    pf = pq.ParquetFile(path)
-    schema = pf.schema_arrow
-    summary["rows"] = pf.metadata.num_rows if pf.metadata is not None else None
+    resolved = table or read_table_delta(str(path))
+    table = resolved
+    schema = table.schema
+    summary["rows"] = int(table.num_rows)
     summary["columns"] = len(schema.names)
     summary["schema_fingerprint"] = schema_fingerprint(schema)
     summary["schema_metadata"] = _decode_metadata(schema)
     if validate:
-        table = pf.read()
         table.validate(full=True)
     return summary
 
@@ -161,7 +165,8 @@ def _check_required_non_null(
     required = _parse_required_non_null(metadata)
     if not required:
         return
-    table = pq.read_table(path, columns=required)
+    table = read_table_delta(str(path))
+    table = table.select(required)
     for name in required:
         nulls = _count_nulls(table, name)
         if nulls > 0:
@@ -208,10 +213,9 @@ def _check_edge_invariants(
     *,
     issues: list[Issue],
 ) -> None:
-    nodes = pq.read_table(nodes_path, columns=["node_id"])
-    edges = pq.read_table(
-        edges_path,
-        columns=["edge_id", "src_node_id", "dst_node_id", "bstart", "bend"],
+    nodes = read_table_delta(str(nodes_path)).select(["node_id"])
+    edges = read_table_delta(str(edges_path)).select(
+        ["edge_id", "src_node_id", "dst_node_id", "bstart", "bend"]
     )
     node_ids = nodes["node_id"]
     src_ids = edges["src_node_id"]
@@ -265,12 +269,12 @@ def _check_required_files(
     issues: list[Issue],
 ) -> dict[str, bool]:
     expected = [
-        "cpg_nodes.parquet",
-        "cpg_edges.parquet",
-        "cpg_props.parquet",
-        "cpg_nodes_quality.parquet",
-        "cpg_props_quality.parquet",
-        "cpg_edges_error_stats.parquet",
+        "cpg_nodes",
+        "cpg_edges",
+        "cpg_props",
+        "cpg_nodes_quality",
+        "cpg_props_quality",
+        "cpg_edges_error_stats",
         "manifest.json",
     ]
     present: dict[str, bool] = {}
@@ -314,7 +318,7 @@ def _write_summary(path: Path, report: Mapping[str, Any]) -> None:
     lines.append(f"Status: {report['status']}")
     lines.append("")
     summary = report["summary"]
-    lines.append(f"Outputs checked: {summary['parquet_files']}")
+    lines.append(f"Outputs checked: {summary['delta_tables']}")
     lines.append(f"Manifest outputs: {summary['manifest_outputs']}")
     lines.append(f"Extracts: {summary['extracts']} Rules: {summary['rules']}")
     lines.append(f"Run bundle datasets: {summary['run_bundle_datasets']}")
@@ -545,25 +549,30 @@ def _check_incremental_state(
     return info
 
 
-def _collect_parquet_summaries(
+def _collect_delta_summaries(
     output_dir: Path,
     *,
-    validate_parquet: bool,
+    validate_delta: bool,
     issues: list[Issue],
 ) -> dict[str, dict[str, Any]]:
     summaries: dict[str, dict[str, Any]] = {}
-    for path in output_dir.glob("*.parquet"):
-        summary = _parquet_summary(path, validate=validate_parquet)
+    for path in output_dir.iterdir():
+        if not path.is_dir():
+            continue
+        if not DeltaTable.is_deltatable(str(path)):
+            continue
+        table = read_table_delta(str(path))
+        summary = _delta_summary(path, validate=validate_delta, table=table)
         summaries[path.name] = summary
-        schema = pq.ParquetFile(path).schema_arrow
+        schema = table.schema
         _check_contract_schema(schema, issues=issues)
         _check_required_non_null(path, schema, issues=issues)
     return summaries
 
 
 def _maybe_check_edge_invariants(output_dir: Path, *, issues: list[Issue]) -> None:
-    nodes_path = output_dir / "cpg_nodes.parquet"
-    edges_path = output_dir / "cpg_edges.parquet"
+    nodes_path = output_dir / "cpg_nodes"
+    edges_path = output_dir / "cpg_edges"
     if nodes_path.exists() and edges_path.exists():
         _check_edge_invariants(nodes_path, edges_path, issues=issues)
 
@@ -603,13 +612,13 @@ def _report_status(issues: Sequence[Issue]) -> str:
 
 def _build_summary(
     manifest_summary: Mapping[str, Any],
-    parquet_summaries: Mapping[str, Mapping[str, Any]],
+    delta_summaries: Mapping[str, Mapping[str, Any]],
     extract_error_dirs: Sequence[Path],
     run_bundle_datasets: Mapping[str, bool],
     incremental_info: Mapping[str, Any],
 ) -> dict[str, Any]:
     return {
-        "parquet_files": len(parquet_summaries),
+        "delta_tables": len(delta_summaries),
         "manifest_outputs": manifest_summary.get("outputs_count", 0),
         "extracts": manifest_summary.get("extracts_count", 0),
         "rules": manifest_summary.get("rules_count", 0),
@@ -624,7 +633,7 @@ def _build_report(
     output_dir: Path,
     run_bundle: Path | None,
     *,
-    validate_parquet: bool,
+    validate_delta: bool,
 ) -> dict[str, Any]:
     issues: list[Issue] = []
     required_files = _check_required_files(output_dir, issues=issues)
@@ -632,9 +641,9 @@ def _build_report(
     run_config = _load_run_config(run_bundle, issues=issues)
     run_bundle_datasets = _check_run_bundle_datasets(run_bundle, issues=issues)
     incremental_state = _check_incremental_state(run_config, run_bundle, issues=issues)
-    parquet_summaries = _collect_parquet_summaries(
+    delta_summaries = _collect_delta_summaries(
         output_dir,
-        validate_parquet=validate_parquet,
+        validate_delta=validate_delta,
         issues=issues,
     )
     _maybe_check_edge_invariants(output_dir, issues=issues)
@@ -643,7 +652,7 @@ def _build_report(
     manifest_summary = _summarize_manifest(manifest) if manifest is not None else {}
     summary = _build_summary(
         manifest_summary,
-        parquet_summaries,
+        delta_summaries,
         extract_error_dirs,
         run_bundle_datasets,
         incremental_state,
@@ -658,7 +667,7 @@ def _build_report(
         "manifest_summary": manifest_summary,
         "run_bundle_datasets": run_bundle_datasets,
         "incremental_state": incremental_state,
-        "parquet_summaries": parquet_summaries,
+        "delta_summaries": delta_summaries,
         "scip_index": scip_info,
         "extract_errors": {
             "path": str(output_dir / "extract_errors"),
@@ -681,7 +690,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     output_dir, run_bundle, report_path, summary_path = _resolve_paths(args)
 
-    report = _build_report(output_dir, run_bundle, validate_parquet=args.validate_parquet)
+    report = _build_report(output_dir, run_bundle, validate_delta=args.validate_delta)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json(report_path, report)
     _write_summary(summary_path, report)

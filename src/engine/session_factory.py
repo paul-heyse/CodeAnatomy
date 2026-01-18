@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from arrowdsl.core.context import ExecutionContext
-from datafusion_engine.registry_bridge import dataset_input_plugin
+from datafusion_engine.registry_bridge import dataset_input_plugin, input_plugin_prefixes
 from datafusion_engine.runtime import DataFusionRuntimeProfile, feature_state_snapshot
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.runtime_profile import RuntimeProfileSpec, runtime_profile_snapshot
@@ -81,6 +81,7 @@ def build_engine_session(
             "datafusion_input_plugins_v1",
             {
                 "plugins": input_plugin_names,
+                "prefixes": list(input_plugin_prefixes()),
                 "dataset_registry": registry_snapshot(datasets.catalog),
             },
         )

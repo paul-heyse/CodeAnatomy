@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Literal
 import pyarrow as pa
 
 from arrowdsl.core.interop import TableLike
+from arrowdsl.io.delta_config import DeltaSchemaPolicy, DeltaWritePolicy
 from arrowdsl.spec.io import IpcWriteConfig
 from engine.plan_policy import WriterStrategy
 from relspec.compiler import CompiledOutput
@@ -47,6 +48,9 @@ class OutputConfig:
     writer_strategy: WriterStrategy = "arrow"
     ipc_dump_enabled: bool = False
     ipc_write_config: IpcWriteConfig | None = None
+    delta_write_policy: DeltaWritePolicy | None = None
+    delta_schema_policy: DeltaSchemaPolicy | None = None
+    delta_storage_options: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True)

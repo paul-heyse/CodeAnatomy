@@ -11,6 +11,7 @@ import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 
+from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.core.interop import Scalar, TableLike
 from arrowdsl.plan.ops import DedupeSpec, SortKey
@@ -333,13 +334,42 @@ def _apply_rename_columns_ibis(table: Table, spec: RenameColumnsSpec) -> Table:
 def _apply_explode_list_ibis(table: Table, spec: ExplodeListSpec) -> Table:
     if spec.list_col not in table.columns:
         return table
-    exploded = table.unnest(spec.list_col)
+    explode_spec = ExplodeSpec(
+        parent_keys=(spec.parent_id_col,),
+        list_col=spec.list_col,
+        value_col=spec.out_value_col,
+        idx_col=spec.idx_col,
+        keep_empty=spec.keep_empty,
+    )
+    exploded = _stable_unnest(table, explode_spec)
     renames: dict[str, str] = {}
     if spec.list_col != spec.out_value_col:
         renames[spec.list_col] = spec.out_value_col
     if spec.parent_id_col != spec.out_parent_col and spec.parent_id_col in exploded.columns:
         renames[spec.parent_id_col] = spec.out_parent_col
-    return exploded.rename(renames) if renames else exploded
+    if renames:
+        exploded = exploded.rename(renames)
+    output_cols = [spec.out_parent_col, spec.out_value_col]
+    if spec.idx_col is not None:
+        output_cols.append(spec.idx_col)
+    selected = [name for name in output_cols if name in exploded.columns]
+    return exploded.select(*selected) if selected else exploded
+
+
+def _stable_unnest(table: Table, spec: ExplodeSpec) -> Table:
+    row_number_col = _unique_name("row_number", set(table.columns))
+    indexed = table.mutate(**{row_number_col: ibis.row_number()})
+    exploded = indexed.unnest(
+        spec.list_col,
+        offset=spec.idx_col,
+        keep_empty=spec.keep_empty,
+    )
+    order_cols = [exploded[key] for key in spec.parent_keys if key in exploded.columns]
+    order_cols.append(exploded[row_number_col])
+    if spec.idx_col is not None and spec.idx_col in exploded.columns:
+        order_cols.append(exploded[spec.idx_col])
+    ordered = exploded.order_by(order_cols) if order_cols else exploded
+    return ordered.drop(row_number_col)
 
 
 def _apply_dedupe_ibis(table: Table, spec: DedupeKernelSpec) -> Table:

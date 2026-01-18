@@ -17,6 +17,7 @@ from arrowdsl.compute.expr_core import ExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel
 from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeContext
+from arrowdsl.io.delta_config import DeltaSchemaPolicy, DeltaWritePolicy
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import (
@@ -150,6 +151,16 @@ class DataFusionScanOptions:
     cache: bool = False
 
 
+@dataclass(frozen=True)
+class DeltaScanOptions:
+    """Delta-specific scan configuration."""
+
+    file_column_name: str | None = None
+    enable_parquet_pushdown: bool = True
+    schema_force_view_types: bool = False
+    schema: pa.Schema | None = None
+
+
 def _ordering_metadata_spec(
     contract_spec: ContractSpec | None,
     table_spec: TableSchemaSpec,
@@ -172,6 +183,7 @@ class ContractSpec:
 
     dedupe: DedupeSpecSpec | None = None
     canonical_sort: tuple[SortKeySpec, ...] = ()
+    constraints: tuple[str, ...] = ()
     version: int | None = None
 
     virtual_fields: tuple[str, ...] = ()
@@ -202,19 +214,21 @@ class ContractSpec:
             Runtime contract instance.
         """
         version = self.version if self.version is not None else self.table_schema.version
-        return Contract(
-            name=self.name,
-            schema=self.table_schema.to_arrow_schema(),
-            schema_spec=self.table_schema,
-            key_fields=self.table_schema.key_fields,
-            required_non_null=self.table_schema.required_non_null,
-            dedupe=self.dedupe.to_dedupe_spec() if self.dedupe is not None else None,
-            canonical_sort=tuple(sk.to_sort_key() for sk in self.canonical_sort),
-            version=version,
-            virtual_fields=self.virtual_fields,
-            virtual_field_docs=self.virtual_field_docs,
-            validation=self.validation,
-        )
+        contract_kwargs: ContractKwargs = {
+            "name": self.name,
+            "schema": self.table_schema.to_arrow_schema(),
+            "schema_spec": self.table_schema,
+            "key_fields": self.table_schema.key_fields,
+            "required_non_null": self.table_schema.required_non_null,
+            "dedupe": self.dedupe.to_dedupe_spec() if self.dedupe is not None else None,
+            "canonical_sort": tuple(sk.to_sort_key() for sk in self.canonical_sort),
+            "constraints": self.constraints,
+            "version": version,
+            "virtual_fields": self.virtual_fields,
+            "virtual_field_docs": self.virtual_field_docs,
+            "validation": self.validation,
+        }
+        return Contract(**contract_kwargs)
 
 
 @dataclass(frozen=True)
@@ -225,6 +239,10 @@ class DatasetSpec:
     contract_spec: ContractSpec | None = None
     query_spec: QuerySpec | None = None
     datafusion_scan: DataFusionScanOptions | None = None
+    delta_scan: DeltaScanOptions | None = None
+    delta_write_policy: DeltaWritePolicy | None = None
+    delta_schema_policy: DeltaSchemaPolicy | None = None
+    delta_constraints: tuple[str, ...] = ()
     derived_fields: tuple[DerivedFieldSpec, ...] = ()
     predicate: ExprSpec | None = None
     pushdown_predicate: ExprSpec | None = None
@@ -574,11 +592,16 @@ def _ibis_registry_module() -> _IbisRegistryModule:
 class DatasetOpenSpec:
     """Dataset open parameters for schema discovery."""
 
-    dataset_format: str = "parquet"
+    dataset_format: str = "delta"
     filesystem: object | None = None
+    files: tuple[str, ...] | None = None
     partitioning: str | None = "hive"
     schema: SchemaLike | None = None
+    parquet_read_options: ds.ParquetReadOptions | None = None
     read_options: Mapping[str, object] = field(default_factory=dict)
+    storage_options: Mapping[str, str] = field(default_factory=dict)
+    delta_version: int | None = None
+    delta_timestamp: str | None = None
     discovery: DatasetDiscoveryOptions | None = field(default_factory=DatasetDiscoveryOptions)
 
     def open(self, path: PathLike) -> ds.Dataset:
@@ -596,8 +619,13 @@ class DatasetOpenSpec:
             options=DatasetSourceOptions(
                 dataset_format=self.dataset_format,
                 filesystem=self.filesystem,
+                files=self.files,
                 partitioning=self.partitioning,
                 schema=self.schema,
+                parquet_read_options=self.parquet_read_options,
+                storage_options=self.storage_options,
+                delta_version=self.delta_version,
+                delta_timestamp=self.delta_timestamp,
                 discovery=self.discovery,
             ),
         )
@@ -621,6 +649,7 @@ class DatasetOpenSpec:
             path=path,
             dataset_format=self.dataset_format,
             read_options=self.read_options,
+            storage_options=self.storage_options,
             filesystem=self.filesystem,
             partitioning=self.partitioning,
             table_name=table_name,
@@ -649,8 +678,26 @@ class ContractSpecKwargs(TypedDict, total=False):
 
     dedupe: DedupeSpecSpec | None
     canonical_sort: Iterable[SortKeySpec]
+    constraints: Iterable[str]
     virtual: VirtualFieldSpec | None
     version: int | None
+    validation: ArrowValidationOptions | None
+
+
+class ContractKwargs(TypedDict):
+    """Keyword arguments for building runtime contracts."""
+
+    name: str
+    schema: SchemaLike
+    schema_spec: TableSchemaSpec | None
+    key_fields: tuple[str, ...]
+    required_non_null: tuple[str, ...]
+    dedupe: DedupeSpec | None
+    canonical_sort: tuple[SortKey, ...]
+    constraints: tuple[str, ...]
+    version: int | None
+    virtual_fields: tuple[str, ...]
+    virtual_field_docs: dict[str, str] | None
     validation: ArrowValidationOptions | None
 
 
@@ -660,6 +707,10 @@ class DatasetSpecKwargs(TypedDict, total=False):
     contract_spec: ContractSpec | None
     query_spec: QuerySpec | None
     datafusion_scan: DataFusionScanOptions | None
+    delta_scan: DeltaScanOptions | None
+    delta_write_policy: DeltaWritePolicy | None
+    delta_schema_policy: DeltaSchemaPolicy | None
+    delta_constraints: Sequence[str]
     derived_fields: Sequence[DerivedFieldSpec]
     predicate: ExprSpec | None
     pushdown_predicate: ExprSpec | None
@@ -733,6 +784,7 @@ def make_contract_spec(
     """
     dedupe = kwargs.get("dedupe")
     canonical_sort = kwargs.get("canonical_sort", ())
+    constraints = kwargs.get("constraints", ())
     virtual = kwargs.get("virtual")
     version = kwargs.get("version")
     validation = kwargs.get("validation")
@@ -743,6 +795,7 @@ def make_contract_spec(
         table_schema=table_spec,
         dedupe=dedupe,
         canonical_sort=tuple(canonical_sort),
+        constraints=tuple(constraints),
         version=version if version is not None else table_spec.version,
         virtual_fields=virtual_fields,
         virtual_field_docs=virtual_docs,
@@ -765,6 +818,10 @@ def make_dataset_spec(
     contract_spec = kwargs.get("contract_spec")
     query_spec = kwargs.get("query_spec")
     datafusion_scan = kwargs.get("datafusion_scan")
+    delta_scan = kwargs.get("delta_scan")
+    delta_write_policy = kwargs.get("delta_write_policy")
+    delta_schema_policy = kwargs.get("delta_schema_policy")
+    delta_constraints = tuple(kwargs["delta_constraints"]) if "delta_constraints" in kwargs else ()
     derived_fields = tuple(kwargs["derived_fields"]) if "derived_fields" in kwargs else ()
     predicate = kwargs.get("predicate")
     pushdown_predicate = kwargs.get("pushdown_predicate")
@@ -778,6 +835,10 @@ def make_dataset_spec(
         contract_spec=contract_spec,
         query_spec=query_spec,
         datafusion_scan=datafusion_scan,
+        delta_scan=delta_scan,
+        delta_write_policy=delta_write_policy,
+        delta_schema_policy=delta_schema_policy,
+        delta_constraints=delta_constraints,
         derived_fields=derived_fields,
         predicate=predicate,
         pushdown_predicate=pushdown_predicate,
@@ -844,17 +905,23 @@ def dataset_spec_from_contract(contract: Contract) -> DatasetSpec:
         Dataset spec derived from the contract.
     """
     table_spec = _table_spec_from_contract(contract)
+    constraints = cast("tuple[str, ...]", getattr(contract, "constraints", ()))
     contract_spec = ContractSpec(
         name=contract.name,
         table_schema=table_spec,
         dedupe=_dedupe_spec_spec(contract.dedupe),
         canonical_sort=_sort_key_specs(contract.canonical_sort),
+        constraints=constraints,
         version=contract.version,
         virtual_fields=contract.virtual_fields,
         virtual_field_docs=contract.virtual_field_docs,
         validation=contract.validation,
     )
-    return make_dataset_spec(table_spec=table_spec, contract_spec=contract_spec)
+    return make_dataset_spec(
+        table_spec=table_spec,
+        contract_spec=contract_spec,
+        delta_constraints=constraints,
+    )
 
 
 def _decode_metadata(metadata: Mapping[bytes, bytes] | None) -> dict[str, str]:
@@ -916,6 +983,23 @@ def table_spec_from_schema(
         required_non_null=required_non_null,
         key_fields=key_fields,
     )
+
+
+def ddl_fingerprint_from_schema(
+    name: str,
+    schema: SchemaLike,
+    *,
+    dialect: str | None = None,
+) -> str:
+    """Return a DDL fingerprint derived from a schema.
+
+    Returns
+    -------
+    str
+        Stable fingerprint for SQL DDL derived from the schema.
+    """
+    table_spec = table_spec_from_schema(name, schema)
+    return table_spec.ddl_fingerprint(dialect=dialect)
 
 
 def dataset_spec_from_schema(
@@ -1155,6 +1239,7 @@ __all__ = [
     "GLOBAL_SCHEMA_REGISTRY",
     "ArrowValidationOptions",
     "ContractCatalogSpec",
+    "ContractKwargs",
     "ContractSpec",
     "ContractSpecKwargs",
     "DataFusionScanOptions",
@@ -1162,6 +1247,9 @@ __all__ = [
     "DatasetSpec",
     "DatasetSpecKwargs",
     "DedupeSpecSpec",
+    "DeltaScanOptions",
+    "DeltaSchemaPolicy",
+    "DeltaWritePolicy",
     "SchemaRegistry",
     "SortKeySpec",
     "TableSpecConstraints",
@@ -1172,6 +1260,7 @@ __all__ = [
     "dataset_spec_from_dataset",
     "dataset_spec_from_path",
     "dataset_spec_from_schema",
+    "ddl_fingerprint_from_schema",
     "make_contract_spec",
     "make_dataset_spec",
     "make_table_spec",

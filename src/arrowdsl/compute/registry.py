@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from arrowdsl.compute.kernel_utils import list_kernels
 from arrowdsl.core.interop import DataTypeLike, pc
 
 if TYPE_CHECKING:
@@ -236,6 +237,22 @@ def resolve_function_capability(
     return FunctionCapability(name=name, lane="kernel")
 
 
+def registry_snapshot() -> dict[str, object]:
+    """Return a snapshot of available kernels and registered UDFs.
+
+    Returns
+    -------
+    dict[str, object]
+        Snapshot payload for kernel/UDF availability.
+    """
+    return {
+        "version": 1,
+        "available_kernels": list(list_kernels()),
+        "registered_udfs": sorted(default_registry().registered),
+        "registered_kernels": sorted(default_kernel_registry().registered),
+    }
+
+
 __all__ = [
     "ComputeRegistry",
     "FunctionCapability",
@@ -248,5 +265,6 @@ __all__ = [
     "ensure_kernels",
     "ensure_udf",
     "ensure_udfs",
+    "registry_snapshot",
     "resolve_function_capability",
 ]

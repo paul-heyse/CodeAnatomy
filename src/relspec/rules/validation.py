@@ -75,6 +75,7 @@ from sqlglot_tools.bridge import (
     sqlglot_diagnostics,
 )
 from sqlglot_tools.lineage import TableRef, extract_table_refs
+from sqlglot_tools.optimizer import SqlGlotQualificationError, sanitize_templated_sql
 
 
 def _rel_plan_for_rule(rule: RelationshipRule) -> object:
@@ -1029,16 +1030,19 @@ def _datafusion_diagnostics_metadata(
     profile = ctx.runtime.datafusion
     if profile is None:
         return {}
+    sanitized_sql = sanitize_templated_sql(sql)
     metadata: dict[str, str] = {
         "datafusion_profile": _json_payload(profile.telemetry_payload_v1()),
     }
+    if sanitized_sql != sql:
+        metadata["sql_sanitized"] = "true"
     if not ctx.debug:
         return metadata
     session = profile.session_context()
     if schema_map:
         try:
             _register_schema_tables(session, schema_map)
-            df = session.sql(sql)
+            df = session.sql(sanitized_sql)
             plans = snapshot_plans(df)
             metadata["df_logical_plan"] = str(plans["logical"])
             metadata["df_optimized_plan"] = str(plans["optimized"])
@@ -1051,7 +1055,7 @@ def _datafusion_diagnostics_metadata(
     except (RuntimeError, TypeError, ValueError) as exc:
         metadata["df_settings_error"] = str(exc)
     try:
-        substrait = Serde.serialize_bytes(sql, session)
+        substrait = Serde.serialize_bytes(sanitized_sql, session)
         metadata["substrait_plan_b64"] = base64.b64encode(substrait).decode("ascii")
     except (RuntimeError, TypeError, ValueError) as exc:
         metadata["substrait_error"] = str(exc)
@@ -1453,6 +1457,22 @@ def _sqlglot_failure_diagnostic(
     RuleDiagnostic
         Diagnostic describing the failure.
     """
+    metadata: dict[str, str] = {"error": str(error)}
+    if isinstance(error, SqlGlotQualificationError):
+        try:
+            metadata["qualification_payload"] = json.dumps(
+                error.payload,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        except TypeError:
+            metadata["qualification_payload"] = json.dumps(
+                {"error": "qualification payload not JSON-serializable"},
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
     return RuleDiagnostic(
         domain=rule.domain,
         template=None,
@@ -1460,7 +1480,7 @@ def _sqlglot_failure_diagnostic(
         severity="error",
         message="SQLGlot validation failed to compile the rule expression.",
         plan_signature=plan_signature,
-        metadata={"error": str(error)},
+        metadata=metadata,
     )
 
 

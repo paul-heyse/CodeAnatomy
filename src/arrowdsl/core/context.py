@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
 
 from datafusion_engine.runtime import DataFusionRuntimeProfile
+
+if TYPE_CHECKING:
+    import pyarrow.dataset as ds
 
 
 def _default_datafusion_profile() -> DataFusionRuntimeProfile:
@@ -124,8 +127,10 @@ class ScanProfile:
     batch_readahead: int | None = None
     fragment_readahead: int | None = None
     fragment_scan_options: object | None = None
-    cache_metadata: bool = False
+    cache_metadata: bool = True
     use_threads: bool = True
+    parquet_read_options: ds.ParquetReadOptions | None = None
+    parquet_fragment_scan_options: ds.ParquetFragmentScanOptions | None = None
 
     require_sequenced_output: bool = False
     implicit_ordering: bool = False
@@ -146,8 +151,9 @@ class ScanProfile:
             kw["batch_readahead"] = self.batch_readahead
         if self.fragment_readahead is not None:
             kw["fragment_readahead"] = self.fragment_readahead
-        if self.fragment_scan_options is not None:
-            kw["fragment_scan_options"] = self.fragment_scan_options
+        fragment_scan_options = self.parquet_fragment_scan_options or self.fragment_scan_options
+        if fragment_scan_options is not None:
+            kw["fragment_scan_options"] = fragment_scan_options
         if self.cache_metadata:
             kw["cache_metadata"] = True
         return kw
@@ -166,6 +172,45 @@ class ScanProfile:
         if self.implicit_ordering:
             kw["implicit_ordering"] = True
         return kw
+
+    def parquet_read_payload(self) -> dict[str, object] | None:
+        """Return JSON-ready payload for Parquet read options.
+
+        Returns
+        -------
+        dict[str, object] | None
+            Payload for Parquet read options when configured.
+        """
+        options = self.parquet_read_options
+        if options is None:
+            return None
+        return {
+            "dictionary_columns": sorted(options.dictionary_columns),
+            "coerce_int96_timestamp_unit": str(options.coerce_int96_timestamp_unit),
+            "binary_type": str(options.binary_type),
+            "list_type": str(options.list_type),
+        }
+
+    def parquet_fragment_scan_payload(self) -> dict[str, object] | None:
+        """Return JSON-ready payload for Parquet fragment scan options.
+
+        Returns
+        -------
+        dict[str, object] | None
+            Payload for Parquet fragment scan options when configured.
+        """
+        options = self.parquet_fragment_scan_options
+        if options is None:
+            return None
+        return {
+            "buffer_size": options.buffer_size,
+            "pre_buffer": options.pre_buffer,
+            "use_buffered_stream": options.use_buffered_stream,
+            "page_checksum_verification": options.page_checksum_verification,
+            "thrift_string_size_limit": options.thrift_string_size_limit,
+            "thrift_container_size_limit": options.thrift_container_size_limit,
+            "arrow_extensions_enabled": options.arrow_extensions_enabled,
+        }
 
 
 @dataclass(frozen=True)

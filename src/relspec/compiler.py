@@ -15,6 +15,7 @@ from ibis.backends import BaseBackend
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
 
+from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.compute.filters import FilterSpec
 from arrowdsl.compute.kernels import canonical_sort, resolve_kernel
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, Ordering
@@ -43,6 +44,7 @@ from relspec.edge_contract_validator import (
 from relspec.engine import IbisRelPlanCompiler, PlanResolver, RelPlanCompiler, output_plan_hash
 from relspec.model import (
     AddLiteralSpec,
+    AmbiguityPolicy,
     CanonicalSortKernelSpec,
     DatasetRef,
     DedupeKernelSpec,
@@ -674,13 +676,21 @@ def _build_explode_list_kernel(spec: ExplodeListSpec) -> KernelFn:
             Table with exploded list columns.
         """
         kernel = resolve_kernel("explode_list", ctx=ctx)
-        return kernel(
-            table,
-            parent_id_col=spec.parent_id_col,
+        explode_spec = ExplodeSpec(
+            parent_keys=(spec.parent_id_col,),
             list_col=spec.list_col,
-            out_parent_col=spec.out_parent_col,
-            out_value_col=spec.out_value_col,
+            value_col=spec.out_value_col,
+            idx_col=spec.idx_col,
+            keep_empty=spec.keep_empty,
         )
+        result = kernel(table, spec=explode_spec)
+        if spec.parent_id_col == spec.out_parent_col:
+            return result
+        names = [
+            spec.out_parent_col if name == spec.parent_id_col else name
+            for name in result.column_names
+        ]
+        return result.rename_columns(names)
 
     return _fn
 
@@ -898,6 +908,8 @@ def apply_policy_defaults(
         schema,
         registry=registry,
     )
+    if ambiguity is not None:
+        ambiguity = _apply_default_tie_breakers(ambiguity, schema=schema)
     if confidence is rule.confidence_policy and ambiguity is rule.ambiguity_policy:
         return rule
     return replace(
@@ -905,6 +917,35 @@ def apply_policy_defaults(
         confidence_policy=confidence,
         ambiguity_policy=ambiguity,
     )
+
+
+def _apply_default_tie_breakers(
+    policy: AmbiguityPolicy,
+    *,
+    schema: SchemaLike,
+) -> AmbiguityPolicy:
+    """Apply default tie breakers when ambiguity policy omits them.
+
+    Parameters
+    ----------
+    policy:
+        Ambiguity policy to update.
+    schema:
+        Schema used to derive default ordering keys.
+
+    Returns
+    -------
+    AmbiguityPolicy
+        Policy with default tie breakers applied when needed.
+    """
+    if policy.winner_select is None:
+        return policy
+    if policy.tie_breakers or policy.winner_select.tie_breakers:
+        return policy
+    defaults = default_tie_breakers(schema)
+    if not defaults:
+        return policy
+    return replace(policy, tie_breakers=defaults)
 
 
 def validate_policy_requirements(rule: RelationshipRule, schema: SchemaLike) -> None:

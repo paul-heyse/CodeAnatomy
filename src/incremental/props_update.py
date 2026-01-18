@@ -8,10 +8,12 @@ from typing import cast
 import pyarrow as pa
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, pc
-from arrowdsl.io.parquet import (
-    DatasetWriteConfig,
-    upsert_dataset_partitions_parquet,
-    write_dataset_parquet,
+from arrowdsl.io.delta import (
+    DeltaUpsertOptions,
+    DeltaWriteOptions,
+    coerce_delta_table,
+    upsert_dataset_partitions_delta,
+    write_dataset_delta,
 )
 from arrowdsl.schema.build import table_from_schema
 from arrowdsl.schema.metadata import encoding_policy_from_schema
@@ -51,28 +53,34 @@ def upsert_cpg_props(
     )
     delete_partitions = _partition_specs("file_id", changes.deleted_file_ids)
     updated: dict[str, str] = {}
-    path = upsert_dataset_partitions_parquet(
+    file_table = coerce_delta_table(
         props_by_file,
-        base_dir=state_store.dataset_dir(_PROPS_BY_FILE_DATASET),
-        partition_cols=("file_id",),
-        delete_partitions=delete_partitions,
-        config=DatasetWriteConfig(
-            schema=CPG_PROPS_BY_FILE_ID_SCHEMA,
-            encoding_policy=encoding_policy_from_schema(CPG_PROPS_BY_FILE_ID_SCHEMA),
+        schema=CPG_PROPS_BY_FILE_ID_SCHEMA,
+        encoding_policy=encoding_policy_from_schema(CPG_PROPS_BY_FILE_ID_SCHEMA),
+    )
+    file_result = upsert_dataset_partitions_delta(
+        file_table,
+        options=DeltaUpsertOptions(
+            base_dir=str(state_store.dataset_dir(_PROPS_BY_FILE_DATASET)),
+            partition_cols=("file_id",),
+            delete_partitions=delete_partitions,
+            options=DeltaWriteOptions(schema_mode="merge"),
         ),
     )
-    updated[_PROPS_BY_FILE_DATASET] = path
+    updated[_PROPS_BY_FILE_DATASET] = file_result.path
 
     if changes.full_refresh:
-        global_path = write_dataset_parquet(
+        global_table = coerce_delta_table(
             props_global,
-            state_store.dataset_dir(_PROPS_GLOBAL_DATASET),
-            config=DatasetWriteConfig(
-                schema=CPG_PROPS_GLOBAL_SCHEMA,
-                encoding_policy=encoding_policy_from_schema(CPG_PROPS_GLOBAL_SCHEMA),
-            ),
+            schema=CPG_PROPS_GLOBAL_SCHEMA,
+            encoding_policy=encoding_policy_from_schema(CPG_PROPS_GLOBAL_SCHEMA),
         )
-        updated[_PROPS_GLOBAL_DATASET] = global_path
+        global_result = write_dataset_delta(
+            global_table,
+            str(state_store.dataset_dir(_PROPS_GLOBAL_DATASET)),
+            options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
+        )
+        updated[_PROPS_GLOBAL_DATASET] = global_result.path
 
     return updated
 

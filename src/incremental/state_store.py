@@ -49,44 +49,44 @@ class StateStore:
         return self.snapshots_dir() / "latest"
 
     def repo_snapshot_path(self) -> Path:
-        """Return the path to the current repo snapshot parquet file.
+        """Return the path to the current repo snapshot Delta table.
 
         Returns
         -------
         Path
-            Repo snapshot parquet path.
+            Repo snapshot Delta table path.
         """
-        return self.latest_snapshot_dir() / "repo_snapshot.parquet"
+        return self.latest_snapshot_dir() / "repo_snapshot"
 
     def incremental_diff_path(self) -> Path:
-        """Return the path to the incremental diff parquet file.
+        """Return the path to the incremental diff Delta table.
 
         Returns
         -------
         Path
-            Incremental diff parquet path.
+            Incremental diff Delta table path.
         """
-        return self.latest_snapshot_dir() / "incremental_diff.parquet"
+        return self.latest_snapshot_dir() / "incremental_diff"
 
     def scip_snapshot_path(self) -> Path:
-        """Return the path to the SCIP snapshot parquet file.
+        """Return the path to the SCIP snapshot Delta table.
 
         Returns
         -------
         Path
-            SCIP snapshot parquet path.
+            SCIP snapshot Delta table path.
         """
-        return self.latest_snapshot_dir() / "scip_snapshot.parquet"
+        return self.latest_snapshot_dir() / "scip_snapshot"
 
     def scip_diff_path(self) -> Path:
-        """Return the path to the SCIP diff parquet file.
+        """Return the path to the SCIP diff Delta table.
 
         Returns
         -------
         Path
-            SCIP diff parquet path.
+            SCIP diff Delta table path.
         """
-        return self.latest_snapshot_dir() / "scip_diff.parquet"
+        return self.latest_snapshot_dir() / "scip_diff"
 
     def dataset_dir(self, dataset_name: str) -> Path:
         """Return the dataset directory for a named dataset.

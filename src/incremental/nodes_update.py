@@ -5,7 +5,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.io.parquet import DatasetWriteConfig, upsert_dataset_partitions_parquet
+from arrowdsl.io.delta import (
+    DeltaUpsertOptions,
+    DeltaWriteOptions,
+    coerce_delta_table,
+    upsert_dataset_partitions_delta,
+)
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from cpg.schemas import CPG_NODES_SCHEMA
 from incremental.state_store import StateStore
@@ -30,17 +35,21 @@ def upsert_cpg_nodes(
     if "file_id" not in nodes.column_names:
         return {}
     delete_partitions = _partition_specs("file_id", changes.deleted_file_ids)
-    path = upsert_dataset_partitions_parquet(
+    data = coerce_delta_table(
         nodes,
-        base_dir=state_store.dataset_dir(_CPG_NODES_DATASET),
-        partition_cols=("file_id",),
-        delete_partitions=delete_partitions,
-        config=DatasetWriteConfig(
-            schema=CPG_NODES_SCHEMA,
-            encoding_policy=encoding_policy_from_schema(CPG_NODES_SCHEMA),
+        schema=CPG_NODES_SCHEMA,
+        encoding_policy=encoding_policy_from_schema(CPG_NODES_SCHEMA),
+    )
+    result = upsert_dataset_partitions_delta(
+        data,
+        options=DeltaUpsertOptions(
+            base_dir=str(state_store.dataset_dir(_CPG_NODES_DATASET)),
+            partition_cols=("file_id",),
+            delete_partitions=delete_partitions,
+            options=DeltaWriteOptions(schema_mode="merge"),
         ),
     )
-    return {_CPG_NODES_DATASET: path}
+    return {_CPG_NODES_DATASET: result.path}
 
 
 def _partition_specs(

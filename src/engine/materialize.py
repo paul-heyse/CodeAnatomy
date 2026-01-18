@@ -56,13 +56,36 @@ def _resolve_cache_policy(
     policy: ExecutionSurfacePolicy,
     prefer_reader: bool,
 ) -> IbisCachePolicy:
+    writer_strategy = policy.writer_strategy
+    if writer_strategy != "arrow":
+        return IbisCachePolicy(
+            enabled=False,
+            reason=f"writer_strategy_{writer_strategy}",
+            writer_strategy=writer_strategy,
+        )
     if prefer_reader:
-        return IbisCachePolicy(enabled=False, reason="prefer_streaming")
+        return IbisCachePolicy(
+            enabled=False,
+            reason="prefer_streaming",
+            writer_strategy=writer_strategy,
+        )
     if ctx.determinism == DeterminismTier.BEST_EFFORT:
-        return IbisCachePolicy(enabled=False, reason="best_effort")
+        return IbisCachePolicy(
+            enabled=False,
+            reason="best_effort",
+            writer_strategy=writer_strategy,
+        )
     if policy.determinism_tier == DeterminismTier.BEST_EFFORT:
-        return IbisCachePolicy(enabled=False, reason="policy_best_effort")
-    return IbisCachePolicy(enabled=True, reason="materialize")
+        return IbisCachePolicy(
+            enabled=False,
+            reason="policy_best_effort",
+            writer_strategy=writer_strategy,
+        )
+    return IbisCachePolicy(
+        enabled=True,
+        reason="materialize",
+        writer_strategy=writer_strategy,
+    )
 
 
 def resolve_prefer_reader(*, ctx: ExecutionContext, policy: ExecutionSurfacePolicy) -> bool:

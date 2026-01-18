@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
@@ -14,12 +15,13 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
-from sqlglot import ErrorLevel, Expression, exp, parse_one
+from sqlglot import ErrorLevel, Expression, exp
 
 from arrowdsl.core.context import Ordering, OrderingLevel
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.metadata import ordering_metadata_spec
 from datafusion_engine.compile_options import (
+    DataFusionCacheEvent,
     DataFusionCompileOptions,
     DataFusionDmlOptions,
     DataFusionFallbackEvent,
@@ -29,17 +31,29 @@ from datafusion_engine.df_builder import TranslationError, df_from_sqlglot
 from engine.plan_cache import PlanCacheEntry, PlanCacheKey
 from ibis_engine.params_bridge import datafusion_param_bindings
 from ibis_engine.plan import IbisPlan
+from obs.diagnostics import PreparedStatementSpec
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
     default_sqlglot_policy,
     normalize_expr,
+    parse_sql_strict,
     plan_fingerprint,
     register_datafusion_dialect,
     rewrite_expr,
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PreparedStatementOptions:
+    """Options for preparing DataFusion SQL statements."""
+
+    param_types: Sequence[str]
+    sql_options: DataFusionSqlPolicy | None = None
+    record_hook: Callable[[PreparedStatementSpec], None] | None = None
+
 
 try:
     from datafusion.substrait import Consumer as SubstraitConsumer
@@ -53,13 +67,74 @@ if TYPE_CHECKING:
     from datafusion.substrait import Serde as SubstraitSerdeType
 
 
-def _should_cache_df(df: DataFrame, *, options: DataFusionCompileOptions) -> bool:
+def _emit_cache_event(
+    *,
+    options: DataFusionCompileOptions,
+    column_count: int,
+    cache_enabled: bool,
+    reason: str,
+) -> None:
+    hook = options.cache_event_hook
+    if hook is None:
+        return
+    hook(
+        DataFusionCacheEvent(
+            cache_enabled=cache_enabled,
+            cache_max_columns=options.cache_max_columns,
+            column_count=column_count,
+            reason=reason,
+            plan_hash=options.plan_hash,
+            profile_hash=options.profile_hash,
+        )
+    )
+
+
+def _should_cache_df(
+    df: DataFrame,
+    *,
+    options: DataFusionCompileOptions,
+    reason: str | None = None,
+) -> bool:
     if options.cache is not True:
+        _emit_cache_event(
+            options=options,
+            column_count=len(df.schema().names),
+            cache_enabled=False,
+            reason="cache_disabled",
+        )
         return False
-    if options.cache_max_columns is None:
-        return True
     column_count = len(df.schema().names)
-    return column_count <= options.cache_max_columns
+    if options.cache_max_columns is not None and column_count > options.cache_max_columns:
+        suffix = reason or "max_columns_exceeded"
+        _emit_cache_event(
+            options=options,
+            column_count=column_count,
+            cache_enabled=False,
+            reason=f"{suffix}_max_columns_exceeded",
+        )
+        return False
+    _emit_cache_event(
+        options=options,
+        column_count=column_count,
+        cache_enabled=True,
+        reason=reason or "cache_enabled",
+    )
+    return True
+
+
+def _resolve_cache_policy(
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+) -> tuple[DataFusionCompileOptions, str | None]:
+    if options.cache is not None:
+        return options, "cache_configured"
+    cache_key = _plan_cache_key(expr, options=options)
+    if cache_key is None or options.plan_cache is None:
+        return options, None
+    if options.plan_cache.contains(cache_key):
+        return replace(options, cache=True), "plan_cache_hit"
+    return options, None
 
 
 def _plan_cache_key(
@@ -71,7 +146,12 @@ def _plan_cache_key(
         return None
     if options.params is not None:
         return None
-    plan_hash = options.plan_hash or plan_fingerprint(expr, dialect=options.dialect)
+    policy_hash = options.sqlglot_policy_hash
+    plan_hash = options.plan_hash or plan_fingerprint(
+        expr,
+        dialect=options.dialect,
+        policy_hash=policy_hash,
+    )
     return PlanCacheKey(plan_hash=plan_hash, profile_hash=options.profile_hash)
 
 
@@ -134,6 +214,17 @@ def _maybe_store_substrait(
 
 def _default_sql_policy() -> DataFusionSqlPolicy:
     return DataFusionSqlPolicy()
+
+
+def _merge_sql_policies(*policies: DataFusionSqlPolicy | None) -> DataFusionSqlPolicy:
+    allow_ddl = any(policy.allow_ddl for policy in policies if policy is not None)
+    allow_dml = any(policy.allow_dml for policy in policies if policy is not None)
+    allow_statements = any(policy.allow_statements for policy in policies if policy is not None)
+    return DataFusionSqlPolicy(
+        allow_ddl=allow_ddl,
+        allow_dml=allow_dml,
+        allow_statements=allow_statements,
+    )
 
 
 def _ensure_dialect(name: str) -> None:
@@ -199,6 +290,36 @@ def df_from_sqlglot_or_sql(
     _maybe_explain(ctx, bound_expr, options=resolved)
     _maybe_collect_plan_artifacts(ctx, bound_expr, options=resolved, df=df)
     return df
+
+
+def validate_table_constraints(
+    ctx: SessionContext,
+    *,
+    name: str,
+    table: pa.Table,
+    constraints: Sequence[str],
+) -> list[str]:
+    """Return constraint expressions violated by the table.
+
+    Returns
+    -------
+    list[str]
+        Constraint expressions with at least one violating row.
+    """
+    if not constraints:
+        return []
+    ctx.register_record_batches(name, [table.to_batches()])
+    violations: list[str] = []
+    try:
+        for constraint in constraints:
+            if not constraint.strip():
+                continue
+            df = ctx.sql(f"SELECT 1 FROM {name} WHERE NOT ({constraint}) LIMIT 1")
+            if df.to_arrow_table().num_rows > 0:
+                violations.append(constraint)
+    finally:
+        ctx.deregister_table(name)
+    return violations
 
 
 def sqlglot_to_datafusion(
@@ -282,12 +403,13 @@ def ibis_to_datafusion(
     """
     resolved = options or DataFusionCompileOptions()
     sg_expr = compile_sqlglot_expr(expr, backend=backend, options=resolved)
+    resolved, cache_reason = _resolve_cache_policy(sg_expr, options=resolved)
     df = df_from_sqlglot_or_sql(
         ctx,
         sg_expr,
         options=resolved,
     )
-    return df.cache() if _should_cache_df(df, options=resolved) else df
+    return df.cache() if _should_cache_df(df, options=resolved, reason=cache_reason) else df
 
 
 def ibis_plan_to_datafusion(
@@ -510,6 +632,7 @@ class DataFusionPlanArtifacts:
     physical_plan: str | None = None
     graphviz: str | None = None
     partition_count: int | None = None
+    join_operators: tuple[str, ...] | None = None
 
     def payload(self) -> dict[str, object]:
         """Return a JSON-ready payload for plan artifacts.
@@ -537,6 +660,9 @@ class DataFusionPlanArtifacts:
             "physical_plan": self.physical_plan,
             "graphviz": self.graphviz,
             "partition_count": self.partition_count,
+            "join_operators": list(self.join_operators)
+            if self.join_operators is not None
+            else None,
         }
 
 
@@ -596,11 +722,16 @@ def execute_dml(
     """
     resolved = options or DataFusionDmlOptions()
     _ensure_dialect(resolved.dialect)
-    expr = parse_one(sql, dialect=resolved.dialect, error_level=ErrorLevel.RAISE)
+    expr = parse_sql_strict(sql, dialect=resolved.dialect)
     if not _contains_dml(expr):
         msg = "DML execution requires a DML statement."
         raise ValueError(msg)
-    policy = resolved.sql_policy or DataFusionSqlPolicy(allow_dml=True)
+    policy = _merge_sql_policies(
+        DataFusionSqlPolicy(allow_dml=True),
+        resolved.session_policy,
+        resolved.table_policy,
+        resolved.sql_policy,
+    )
     sql_options = resolved.sql_options or policy.to_sql_options()
     violations = _policy_violations(expr, policy)
     if violations:
@@ -616,6 +747,94 @@ def execute_dml(
             }
         )
     return df
+
+
+def prepare_statement(
+    ctx: SessionContext,
+    *,
+    name: str,
+    sql: str,
+    options: PreparedStatementOptions,
+) -> PreparedStatementSpec:
+    """Prepare a SQL statement for reuse with EXECUTE.
+
+    Parameters
+    ----------
+    ctx:
+        DataFusion session context.
+    name:
+        Prepared statement name.
+    sql:
+        SQL text containing positional parameters.
+    options:
+        Prepared statement options, including parameter types and policy overrides.
+
+    Returns
+    -------
+    PreparedStatementSpec
+        Prepared statement metadata for diagnostics.
+    """
+    policy = _merge_sql_policies(DataFusionSqlPolicy(allow_statements=True), options.sql_options)
+    opts = policy.to_sql_options()
+    spec = PreparedStatementSpec(
+        name=name,
+        sql=sql,
+        param_types=tuple(options.param_types),
+    )
+    prepare_sql = f"PREPARE {name}({', '.join(spec.param_types)}) AS {sql}"
+    ctx.sql_with_options(prepare_sql, opts)
+    if options.record_hook is not None:
+        options.record_hook(spec)
+    return spec
+
+
+def execute_prepared_statement(
+    ctx: SessionContext,
+    *,
+    name: str,
+    params: Sequence[object],
+    sql_options: DataFusionSqlPolicy | None = None,
+) -> DataFrame:
+    """Execute a prepared statement with literal parameters.
+
+    Parameters
+    ----------
+    ctx:
+        DataFusion session context.
+    name:
+        Prepared statement name.
+    params:
+        Parameter values for EXECUTE.
+    sql_options:
+        Optional SQL policy overrides for statement execution.
+
+    Returns
+    -------
+    datafusion.dataframe.DataFrame
+        DataFrame for the prepared statement execution.
+    """
+    policy = _merge_sql_policies(DataFusionSqlPolicy(allow_statements=True), sql_options)
+    opts = policy.to_sql_options()
+    arg_sql = ", ".join(_sql_literal(param) for param in params)
+    return ctx.sql_with_options(f"EXECUTE {name}({arg_sql})", opts)
+
+
+def _sql_literal(value: object) -> str:
+    """Return a SQL literal for the provided value.
+
+    Returns
+    -------
+    str
+        SQL literal representation of the value.
+    """
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        return str(value)
+    escaped = str(value).replace("'", "''")
+    return f"'{escaped}'"
 
 
 def df_from_sql(
@@ -713,12 +932,14 @@ def _df_plan_details(df: DataFrame) -> dict[str, object]:
     partition_count = _plan_partition_count(
         _df_plan(df, "execution_plan") or _df_plan(df, "physical_plan")
     )
+    join_operators = _join_operator_evidence(physical)
     return {
         "logical_plan": logical,
         "optimized_plan": optimized,
         "physical_plan": physical,
         "graphviz": graphviz,
         "partition_count": partition_count,
+        "join_operators": join_operators,
     }
 
 
@@ -774,6 +995,22 @@ def _plan_partition_count(plan: object | None) -> int | None:
         return None
 
 
+def _join_operator_evidence(plan: str | None) -> tuple[str, ...] | None:
+    if not plan:
+        return None
+    matches = re.findall(r"\b([A-Za-z]+Join)\b", plan)
+    if not matches:
+        return None
+    seen: set[str] = set()
+    operators: list[str] = []
+    for op in matches:
+        if op in seen:
+            continue
+        seen.add(op)
+        operators.append(op)
+    return tuple(operators)
+
+
 def collect_plan_artifacts(
     ctx: SessionContext,
     expr: Expression,
@@ -799,7 +1036,12 @@ def collect_plan_artifacts(
         analyze_rows = _collect_rows(ctx.sql(f"EXPLAIN ANALYZE {sql}"))
     substrait_plan = _substrait_bytes(ctx, sql)
     plan_details = _df_plan_details(plan_df)
-    plan_hash = options.plan_hash or plan_fingerprint(expr, dialect=options.dialect)
+    policy_hash = options.sqlglot_policy_hash
+    plan_hash = options.plan_hash or plan_fingerprint(
+        expr,
+        dialect=options.dialect,
+        policy_hash=policy_hash,
+    )
     return DataFusionPlanArtifacts(
         plan_hash=plan_hash,
         sql=sql,
@@ -811,6 +1053,7 @@ def collect_plan_artifacts(
         physical_plan=cast("str | None", plan_details.get("physical_plan")),
         graphviz=cast("str | None", plan_details.get("graphviz")),
         partition_count=cast("int | None", plan_details.get("partition_count")),
+        join_operators=cast("tuple[str, ...] | None", plan_details.get("join_operators")),
     )
 
 
@@ -863,6 +1106,46 @@ def register_memtable(
         return
     msg = "DataFusion SessionContext missing table registration methods."
     raise RuntimeError(msg)
+
+
+def slice_memtable_batches(
+    table: TableLike | RecordBatchReaderLike,
+    *,
+    batch_size: int | None,
+) -> list[pa.RecordBatch]:
+    """Slice a table into batches for MemTable registration.
+
+    Parameters
+    ----------
+    table:
+        Arrow table or record batch reader.
+    batch_size:
+        Optional max batch size for slicing.
+
+    Returns
+    -------
+    list[pyarrow.RecordBatch]
+        Record batches sized for registration.
+    """
+    if isinstance(table, RecordBatchReaderLike):
+        resolved_table = cast("pa.Table", table.read_all())
+    else:
+        resolved_table = cast("pa.Table", table)
+    if batch_size is None or batch_size <= 0:
+        return list(resolved_table.to_batches())
+    return list(resolved_table.to_batches(max_chunksize=batch_size))
+
+
+def register_memtable_from_table(
+    ctx: SessionContext,
+    *,
+    name: str,
+    table: TableLike | RecordBatchReaderLike,
+    batch_size: int | None = None,
+) -> None:
+    """Register a MemTable from a table-like input."""
+    batches = slice_memtable_batches(table, batch_size=batch_size)
+    register_memtable(ctx, name=name, batches=batches)
 
 
 def replay_substrait_bytes(ctx: SessionContext, plan_bytes: bytes) -> DataFrame:
@@ -934,13 +1217,18 @@ __all__ = [
     "datafusion_to_table",
     "df_from_sql",
     "execute_dml",
+    "execute_prepared_statement",
     "execute_sql",
     "ibis_plan_to_datafusion",
     "ibis_plan_to_reader",
     "ibis_plan_to_table",
     "ibis_to_datafusion",
+    "prepare_statement",
     "register_memtable",
+    "register_memtable_from_table",
     "rehydrate_plan_artifacts",
     "replay_substrait_bytes",
+    "slice_memtable_batches",
     "sqlglot_to_datafusion",
+    "validate_table_constraints",
 ]

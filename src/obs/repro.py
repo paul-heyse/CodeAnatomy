@@ -11,8 +11,8 @@ import re
 import shutil
 import sys
 import time
-from collections.abc import Mapping, Sequence
-from contextlib import suppress
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 from importlib.metadata import PackageNotFoundError
@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import cast
 
 import pyarrow as pa
+from sqlglot.serde import load as sqlglot_load
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.finalize.finalize import Contract
@@ -32,13 +33,15 @@ from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from engine.plan_cache import PlanCacheEntry
 from engine.plan_product import PlanProduct
 from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
+from ibis_engine.params_bridge import ScalarParamSpec
 from obs.parquet_writers import write_obs_dataset
 from relspec.compiler import CompiledOutput
 from relspec.model import RelationshipRule
 from relspec.param_deps import RuleDependencyReport
 from relspec.registry import ContractCatalog, DatasetLocation
 from relspec.rules.diagnostics import rule_diagnostics_from_table
-from schema_spec.system import table_spec_from_schema
+from schema_spec.system import ddl_fingerprint_from_schema, table_spec_from_schema
+from sqlglot_tools.optimizer import planner_dag_snapshot
 
 # -----------------------
 # Basic environment capture
@@ -175,6 +178,7 @@ def serialize_contract(contract: Contract) -> JsonDict:
         "required_non_null": list(contract.required_non_null),
         "key_fields": list(contract.key_fields),
         "schema_fingerprint": schema_fingerprint(contract.schema),
+        "ddl_fingerprint": ddl_fingerprint_from_schema(contract.name, contract.schema),
         "schema": cast("JsonValue", schema_to_dict(contract.schema)),
         "dedupe": dedupe_dict,
         "canonical_sort": _serialize_sort_keys(contract.canonical_sort),
@@ -348,8 +352,15 @@ class RunBundleContext:
     datafusion_explains: pa.Table | None = None
     datafusion_plan_artifacts: pa.Table | None = None
     datafusion_plan_cache: Sequence[PlanCacheEntry] | None = None
+    datafusion_cache_events: Sequence[Mapping[str, object]] | None = None
+    datafusion_prepared_statements: Sequence[Mapping[str, object]] | None = None
     datafusion_input_plugins: Sequence[Mapping[str, object]] | None = None
     datafusion_dml_statements: Sequence[Mapping[str, object]] | None = None
+    datafusion_listing_tables: Sequence[Mapping[str, object]] | None = None
+    datafusion_delta_tables: Sequence[Mapping[str, object]] | None = None
+    delta_maintenance_reports: Sequence[Mapping[str, object]] | None = None
+    datafusion_udf_registry: Sequence[Mapping[str, object]] | None = None
+    arrow_kernel_registry: Mapping[str, object] | None = None
     ibis_sql_ingest_artifacts: Sequence[Mapping[str, object]] | None = None
     ibis_namespace_actions: Sequence[Mapping[str, object]] | None = None
     ibis_cache_events: Sequence[Mapping[str, object]] | None = None
@@ -370,6 +381,7 @@ class RunBundleContext:
     relationship_output_tables: Mapping[str, TableLike] | None = None
     cpg_output_tables: Mapping[str, TableLike] | None = None
     param_table_specs: Sequence[ParamTableSpec] | None = None
+    param_scalar_specs: Sequence[ScalarParamSpec] | None = None
     param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None
     param_scalar_signature: str | None = None
     param_dependency_reports: Sequence[RuleDependencyReport] | None = None
@@ -380,6 +392,7 @@ class RunBundleContext:
     ipc_dump_enabled: bool = False
     ipc_write_config: IpcWriteConfig | None = None
     overwrite: bool = True
+    allocator_debug: bool = False
 
 
 def _ensure_bundle_dir(bundle_dir: Path, *, overwrite: bool) -> None:
@@ -387,6 +400,18 @@ def _ensure_bundle_dir(bundle_dir: Path, *, overwrite: bool) -> None:
         with suppress(OSError):
             shutil.rmtree(bundle_dir)
     _ensure_dir(bundle_dir)
+
+
+@contextmanager
+def _allocator_debug_context(*, enabled: bool) -> Iterator[None]:
+    if not enabled:
+        yield
+        return
+    pa.log_memory_allocations(enabled=True)
+    try:
+        yield
+    finally:
+        pa.log_memory_allocations(enabled=False)
 
 
 def _write_manifest_files(
@@ -404,7 +429,13 @@ def _write_manifest_files(
     )
     repo_root_value = context.run_config.get("repo_root")
     repo_root = repo_root_value if isinstance(repo_root_value, str) else None
-    repro = collect_repro_info(repo_root=repo_root, extra={"bundle_name": bundle_name})
+    repro = collect_repro_info(
+        repo_root=repo_root,
+        extra={
+            "bundle_name": bundle_name,
+            "allocator_debug": bool(context.allocator_debug),
+        },
+    )
     files_written.append(_write_json(bundle_dir / "repro.json", repro, overwrite=True))
 
 
@@ -449,6 +480,8 @@ def _write_relspec_snapshots(
             )
         )
         _write_sqlglot_ast_payloads(relspec_dir, context.rule_diagnostics, files_written)
+        _write_sqlglot_planner_dag(relspec_dir, context.rule_diagnostics, files_written)
+        _write_sqlglot_qualification_failures(relspec_dir, context.rule_diagnostics, files_written)
     if context.relationship_contracts is not None:
         snap = serialize_contract_catalog(context.relationship_contracts)
         files_written.append(_write_json(relspec_dir / "contracts.json", snap, overwrite=True))
@@ -517,6 +550,12 @@ def _write_runtime_artifacts(
     json_artifacts = [
         ("datafusion_metrics.json", context.datafusion_metrics),
         ("datafusion_traces.json", context.datafusion_traces),
+        (
+            "arrow_kernel_registry.json",
+            cast("JsonValue", json_default(context.arrow_kernel_registry))
+            if context.arrow_kernel_registry
+            else None,
+        ),
     ]
     list_artifacts: list[tuple[str, str, list[JsonValue] | None]] = [
         (
@@ -527,10 +566,52 @@ def _write_runtime_artifacts(
             else None,
         ),
         (
+            "datafusion_cache_events.json",
+            "events",
+            _json_list(context.datafusion_cache_events)
+            if context.datafusion_cache_events
+            else None,
+        ),
+        (
+            "datafusion_prepared_statements.json",
+            "statements",
+            _json_list(context.datafusion_prepared_statements)
+            if context.datafusion_prepared_statements
+            else None,
+        ),
+        (
             "datafusion_dml_statements.json",
             "statements",
             _json_list(context.datafusion_dml_statements)
             if context.datafusion_dml_statements
+            else None,
+        ),
+        (
+            "datafusion_listing_tables.json",
+            "registrations",
+            _json_list(context.datafusion_listing_tables)
+            if context.datafusion_listing_tables
+            else None,
+        ),
+        (
+            "datafusion_delta_tables.json",
+            "registrations",
+            _json_list(context.datafusion_delta_tables)
+            if context.datafusion_delta_tables
+            else None,
+        ),
+        (
+            "delta_maintenance_reports.json",
+            "reports",
+            _json_list(context.delta_maintenance_reports)
+            if context.delta_maintenance_reports
+            else None,
+        ),
+        (
+            "datafusion_udf_registry.json",
+            "udfs",
+            _json_list(context.datafusion_udf_registry)
+            if context.datafusion_udf_registry
             else None,
         ),
         (
@@ -543,9 +624,7 @@ def _write_runtime_artifacts(
         (
             "ibis_namespace_actions.json",
             "actions",
-            _json_list(context.ibis_namespace_actions)
-            if context.ibis_namespace_actions
-            else None,
+            _json_list(context.ibis_namespace_actions) if context.ibis_namespace_actions else None,
         ),
         (
             "ibis_cache_events.json",
@@ -787,6 +866,90 @@ def _write_sqlglot_ast_payloads(
         )
 
 
+def _write_sqlglot_planner_dag(
+    relspec_dir: Path,
+    diagnostics_table: pa.Table,
+    files_written: list[str],
+) -> None:
+    diagnostics = rule_diagnostics_from_table(diagnostics_table)
+    payloads: list[JsonDict] = []
+    for diagnostic in diagnostics:
+        metadata = diagnostic.metadata
+        optimized_payload = metadata.get("ast_payload_optimized")
+        if not optimized_payload:
+            continue
+        try:
+            optimized_ast = json.loads(optimized_payload)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        try:
+            expr = sqlglot_load(optimized_ast)
+        except (TypeError, ValueError):
+            continue
+        dag = planner_dag_snapshot(expr)
+        steps = [
+            {str(key): cast("JsonValue", json_default(value)) for key, value in row.items()}
+            for row in dag.steps
+        ]
+        edges = [
+            {str(key): cast("JsonValue", json_default(value)) for key, value in row.items()}
+            for row in dag.edges
+        ]
+        payloads.append(
+            {
+                "domain": str(diagnostic.domain),
+                "rule_name": diagnostic.rule_name,
+                "plan_signature": diagnostic.plan_signature,
+                "plan_fingerprint": metadata.get("plan_fingerprint"),
+                "sqlglot_policy_hash": metadata.get("sqlglot_policy_hash"),
+                "planner_dag_hash": dag.dag_hash,
+                "steps": steps,
+                "edges": edges,
+            }
+        )
+    if payloads:
+        files_written.append(
+            _write_json(
+                relspec_dir / "sqlglot_planner_dag.json",
+                {"payloads": payloads},
+                overwrite=True,
+            )
+        )
+
+
+def _write_sqlglot_qualification_failures(
+    relspec_dir: Path,
+    diagnostics_table: pa.Table,
+    files_written: list[str],
+) -> None:
+    diagnostics = rule_diagnostics_from_table(diagnostics_table)
+    payloads: list[JsonDict] = []
+    for diagnostic in diagnostics:
+        payload_raw = diagnostic.metadata.get("qualification_payload")
+        if not payload_raw:
+            continue
+        try:
+            payload = json.loads(payload_raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        payloads.append(
+            {
+                "domain": str(diagnostic.domain),
+                "rule_name": diagnostic.rule_name,
+                "plan_signature": diagnostic.plan_signature,
+                "payload": payload,
+            }
+        )
+    if payloads:
+        files_written.append(
+            _write_json(
+                relspec_dir / "sqlglot_qualification_failures.json",
+                {"payloads": payloads},
+                overwrite=True,
+            )
+        )
+
+
 def _write_schema_snapshot(
     schemas_dir: Path,
     *,
@@ -798,6 +961,7 @@ def _write_schema_snapshot(
         "name": name,
         "rows": int(table.num_rows),
         "schema_fingerprint": schema_fingerprint(table.schema),
+        "ddl_fingerprint": ddl_fingerprint_from_schema(name, table.schema),
         "schema": cast("JsonValue", schema_to_dict(table.schema)),
     }
     files_written.append(_write_json(schemas_dir / f"{name}.schema.json", doc, overwrite=True))
@@ -868,6 +1032,7 @@ def _ipc_metadata_payload(
         "name": name,
         "schema": schema_to_dict(schema),
         "schema_fingerprint": schema_fingerprint(schema),
+        "ddl_fingerprint": ddl_fingerprint_from_schema(name, schema),
         "ipc_options": ipc_write_config_payload(config),
     }
 
@@ -951,6 +1116,7 @@ def _write_param_tables(
 def _param_tables_present(context: RunBundleContext) -> bool:
     return bool(
         context.param_table_specs
+        or context.param_scalar_specs
         or context.param_table_artifacts
         or context.param_scalar_signature is not None
     )
@@ -962,9 +1128,14 @@ def _write_param_specs(
     context: RunBundleContext,
     files_written: list[str],
 ) -> None:
-    if not context.param_table_specs:
+    if not context.param_table_specs and not context.param_scalar_specs:
         return
-    specs_payload = {"specs": [_param_spec_payload(spec) for spec in context.param_table_specs]}
+    specs_payload = {
+        "specs": [_param_spec_payload(spec) for spec in context.param_table_specs or ()],
+        "scalar_specs": [
+            _scalar_param_spec_payload(spec) for spec in context.param_scalar_specs or ()
+        ],
+    }
     files_written.append(_write_json(params_dir / "specs.json", specs_payload, overwrite=True))
 
 
@@ -983,6 +1154,7 @@ def _write_param_signatures(
                 "rows": int(artifact.rows),
                 "signature": artifact.signature,
                 "schema_fingerprint": artifact.schema_fingerprint,
+                "ddl_fingerprint": ddl_fingerprint_from_schema(name, artifact.table.schema),
             }
     if not signatures:
         return
@@ -1052,6 +1224,15 @@ def _param_spec_payload(spec: ParamTableSpec) -> JsonDict:
     }
 
 
+def _scalar_param_spec_payload(spec: ScalarParamSpec) -> JsonDict:
+    return {
+        "name": spec.name,
+        "dtype": spec.dtype,
+        "default": cast("JsonValue", json_default(spec.default)),
+        "required": bool(spec.required),
+    }
+
+
 def write_run_bundle(
     *,
     context: RunBundleContext,
@@ -1077,11 +1258,21 @@ def write_run_bundle(
         relspec/datafusion_explains/
         relspec/datafusion_plan_artifacts_v1/
         relspec/datafusion_input_plugins.json
+        relspec/datafusion_cache_events.json
+        relspec/datafusion_prepared_statements.json
         relspec/datafusion_dml_statements.json
+        relspec/datafusion_listing_tables.json
+        relspec/datafusion_delta_tables.json
+        relspec/datafusion_udf_registry.json
+        relspec/arrow_kernel_registry.json
+        relspec/substrait_cache/
+        relspec/substrait_cache_index.json
         relspec/ibis_sql_ingest_artifacts.json
         relspec/ibis_namespace_actions.json
         relspec/ibis_cache_events.json
         relspec/ibis_support_matrix.json
+        relspec/sqlglot_planner_dag.json
+        relspec/sqlglot_qualification_failures.json
         relspec/contracts.json
         relspec/contracts_ddl.json
         relspec/compiled_outputs.json
@@ -1100,7 +1291,7 @@ def write_run_bundle(
         params/signatures.json
         params/rule_param_deps.json
         params/param_rule_reverse_index.json
-        params/<table_name>/part-*.parquet
+        params/<table_name>/
 
     Parameters
     ----------
@@ -1121,13 +1312,19 @@ def write_run_bundle(
 
     files_written: list[str] = []
 
-    _write_manifest_files(bundle_dir, context, bundle_name=bundle_name, files_written=files_written)
-    _write_dataset_locations(bundle_dir, context, files_written)
-    _write_relspec_snapshots(bundle_dir, context, files_written)
-    _write_incremental_artifacts(bundle_dir, context, files_written)
-    _write_schema_snapshots(bundle_dir, context, files_written)
-    _write_ipc_dumps(bundle_dir, context, files_written)
-    _write_param_tables(bundle_dir, context, files_written)
+    with _allocator_debug_context(enabled=context.allocator_debug):
+        _write_manifest_files(
+            bundle_dir,
+            context,
+            bundle_name=bundle_name,
+            files_written=files_written,
+        )
+        _write_dataset_locations(bundle_dir, context, files_written)
+        _write_relspec_snapshots(bundle_dir, context, files_written)
+        _write_incremental_artifacts(bundle_dir, context, files_written)
+        _write_schema_snapshots(bundle_dir, context, files_written)
+        _write_ipc_dumps(bundle_dir, context, files_written)
+        _write_param_tables(bundle_dir, context, files_written)
 
     return {
         "bundle_dir": str(bundle_dir),

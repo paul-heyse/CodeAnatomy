@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
-import pyarrow.dataset as ds
 from hamilton.function_modifiers import tag
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.interop import TableLike
+from arrowdsl.io.delta import DeltaCdfOptions, delta_table_version, read_delta_cdf, read_table_delta
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import empty_table
 from hamilton_pipeline.pipeline_types import (
@@ -22,7 +24,7 @@ from hamilton_pipeline.pipeline_types import (
 )
 from incremental.changes import file_changes_from_diff
 from incremental.deltas import compute_changed_exports
-from incremental.diff import diff_snapshots, write_incremental_diff
+from incremental.diff import diff_snapshots, diff_snapshots_with_cdf, write_incremental_diff
 from incremental.edges_update import upsert_cpg_edges
 from incremental.exports import build_exported_defs_index
 from incremental.exports_update import upsert_exported_defs
@@ -225,7 +227,7 @@ def incremental_exported_defs(
     if incremental_state_store is not None:
         rel_def_dir = incremental_state_store.dataset_dir("rel_def_symbol_v1")
         if rel_def_dir.exists():
-            rel_def_symbol = ds.dataset(rel_def_dir, format="parquet").to_table()
+            rel_def_symbol = read_table_delta(str(rel_def_dir))
     return build_exported_defs_index(cst_defs_norm, rel_def_symbol=rel_def_symbol)
 
 
@@ -488,12 +490,35 @@ def incremental_diff(
     """
     if incremental_state_store is None or incremental_repo_snapshot is None:
         return None
+    prev: pa.Table | None
+    prev_version: int | None = None
+    snapshot_path = incremental_state_store.repo_snapshot_path()
     if incremental_invalidation is not None and incremental_invalidation.result.full_refresh:
         prev = None
     else:
         prev = read_repo_snapshot(incremental_state_store)
+        if prev is not None:
+            prev_version = delta_table_version(str(snapshot_path))
+    write_result = write_repo_snapshot(incremental_state_store, incremental_repo_snapshot)
     diff = diff_snapshots(prev, incremental_repo_snapshot)
-    write_repo_snapshot(incremental_state_store, incremental_repo_snapshot)
+    if prev is not None and prev_version is not None and write_result.version is not None:
+        start_version = prev_version + 1
+        if start_version <= write_result.version:
+            cdf_table: pa.Table | None = None
+            with suppress(ValueError):
+                cdf_table = cast(
+                    "pa.Table",
+                    read_delta_cdf(
+                        str(snapshot_path),
+                        options=DeltaCdfOptions(
+                            starting_version=start_version,
+                            ending_version=write_result.version,
+                            allow_out_of_range=True,
+                        ),
+                    ),
+                )
+            if cdf_table is not None:
+                diff = diff_snapshots_with_cdf(prev, incremental_repo_snapshot, cdf_table)
     write_incremental_diff(incremental_state_store, diff)
     return diff
 

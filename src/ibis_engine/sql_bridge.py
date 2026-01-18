@@ -14,6 +14,8 @@ from ibis.expr.types import Table, Value
 from sqlglot import Expression
 from sqlglot.serde import dump
 
+from ibis_engine.schema_utils import ibis_schema_from_arrow, validate_expr_schema
+
 
 class _RawSqlResult(Protocol):
     def fetch_arrow_table(self) -> pa.Table:
@@ -79,8 +81,19 @@ def parse_sql_table(spec: SqlIngestSpec) -> Table:
     -------
     ibis.expr.types.Table
         Parsed Ibis table expression.
+
+    Raises
+    ------
+    ValueError
+        Raised when the SQL ingestion schema is missing.
     """
-    return ibis.parse_sql(spec.sql, spec.catalog, dialect=spec.dialect)
+    if spec.schema is None:
+        msg = "SqlIngestSpec.schema is required for SQL ingestion."
+        raise ValueError(msg)
+    expr = ibis.parse_sql(spec.sql, spec.catalog, dialect=spec.dialect)
+    expected = spec.schema.to_pyarrow()
+    validate_expr_schema(expr, expected=expected)
+    return expr
 
 
 def decompile_expr(expr: Table | Value) -> str:
@@ -127,9 +140,21 @@ def execute_raw_sql(
     backend: object,
     *,
     sql: str,
+    sqlglot_expr: Expression | None = None,
     schema: _SchemaProtocol | None = None,
 ) -> Table:
     """Execute raw SQL and return an Ibis table.
+
+    Parameters
+    ----------
+    backend:
+        Backend exposing ``raw_sql``.
+    sql:
+        SQL string used for fallback execution.
+    sqlglot_expr:
+        SQLGlot expression for raw execution when supported.
+    schema:
+        Required schema for cursor-based results.
 
     Returns
     -------
@@ -143,26 +168,52 @@ def execute_raw_sql(
     ValueError
         Raised when schema is required to materialize cursor results.
     """
+    if schema is None:
+        msg = "Schema is required for raw SQL execution."
+        raise ValueError(msg)
     raw_sql = getattr(backend, "raw_sql", None)
     if not callable(raw_sql):
         msg = "Backend does not expose raw_sql for SQL execution."
         raise TypeError(msg)
-    result = raw_sql(sql)
-    if hasattr(result, "schema") and hasattr(result, "to_pyarrow"):
-        return cast("Table", result)
+    if sqlglot_expr is not None:
+        try:
+            result = raw_sql(sqlglot_expr)
+        except TypeError:
+            result = raw_sql(sql)
+    else:
+        result = raw_sql(sql)
+    expected = schema.to_pyarrow()
+    if isinstance(result, Table):
+        validate_expr_schema(result, expected=expected)
+        return result
+    to_arrow_table = getattr(result, "to_arrow_table", None)
+    if callable(to_arrow_table):
+        table = cast("pa.Table", to_arrow_table())
+        _validate_table_schema(table, expected=expected)
+        return ibis.memtable(table, schema=ibis_schema_from_arrow(expected))
+    if isinstance(result, pa.Table):
+        _validate_table_schema(result, expected=expected)
+        return ibis.memtable(result, schema=ibis_schema_from_arrow(expected))
     if hasattr(result, "fetch_arrow_table"):
         table = cast("_RawSqlResult", result).fetch_arrow_table()
-        return ibis.memtable(table)
-    if schema is None:
-        msg = "Schema is required to materialize raw SQL cursor results."
-        raise ValueError(msg)
+        _validate_table_schema(table, expected=expected)
+        return ibis.memtable(table, schema=ibis_schema_from_arrow(expected))
     if hasattr(result, "fetchall"):
         with closing(cast("_RawSqlResult", result)) as cursor:
             rows = cursor.fetchall()
         payload = _rows_to_pylist(rows, schema)
-        return ibis.memtable(pa.Table.from_pylist(payload, schema=schema.to_pyarrow()))
+        table = pa.Table.from_pylist(payload, schema=expected)
+        _validate_table_schema(table, expected=expected)
+        return ibis.memtable(table, schema=ibis_schema_from_arrow(expected))
     msg = "Unsupported raw_sql return type."
     raise TypeError(msg)
+
+
+def _validate_table_schema(table: pa.Table, *, expected: pa.Schema) -> None:
+    if table.schema.equals(expected, check_metadata=False):
+        return
+    msg = "Raw SQL output schema does not match the declared schema."
+    raise ValueError(msg)
 
 
 def _rows_to_pylist(

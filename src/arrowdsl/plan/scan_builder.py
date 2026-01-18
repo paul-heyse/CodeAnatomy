@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING, cast
@@ -12,6 +14,7 @@ import pyarrow.dataset as ds
 from arrowdsl.compile.plan_compiler import PlanCompiler
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import DeclarationLike
+from arrowdsl.core.schema_constants import PROVENANCE_COLS
 from arrowdsl.ops.catalog import OP_CATALOG
 from arrowdsl.plan.builder import PlanBuilder
 from arrowdsl.plan.ops import scan_ordering_effect
@@ -62,9 +65,11 @@ class ScanBuildSpec:
         ds.Scanner
             Scanner configured with runtime scan options.
         """
+        predicate = self.query.pushdown_expression()
+        _validate_predicate_fields(predicate, scan_provenance=self.scan_provenance)
         return self.dataset.scanner(
             columns=self.scan_columns(),
-            filter=self.query.pushdown_expression(),
+            filter=predicate,
             **self.ctx.runtime.scan.scanner_kwargs(),
         )
 
@@ -77,10 +82,12 @@ class ScanBuildSpec:
             Acero declaration for the scan pipeline.
         """
         builder = PlanBuilder()
+        predicate = self.query.pushdown_expression()
+        _validate_predicate_fields(predicate, scan_provenance=self.scan_provenance)
         builder.scan(
             dataset=self.dataset,
             columns=self.scan_columns(),
-            predicate=self.query.pushdown_expression(),
+            predicate=predicate,
             ordering_effect=scan_ordering_effect(self.ctx),
         )
         if (predicate := self.query.predicate_expression()) is not None:
@@ -97,10 +104,12 @@ class ScanBuildSpec:
             Plan representing the scan/filter pipeline.
         """
         builder = PlanBuilder()
+        predicate = self.query.pushdown_expression()
+        _validate_predicate_fields(predicate, scan_provenance=self.scan_provenance)
         builder.scan(
             dataset=self.dataset,
             columns=self.scan_columns(),
-            predicate=self.query.pushdown_expression(),
+            predicate=predicate,
             ordering_effect=scan_ordering_effect(self.ctx),
         )
         if (predicate := self.query.predicate_expression()) is not None:
@@ -113,6 +122,23 @@ class ScanBuildSpec:
             ordering=ordering,
             pipeline_breakers=pipeline_breakers,
         )
+
+
+def _validate_predicate_fields(
+    predicate: object | None,
+    *,
+    scan_provenance: Sequence[str] | None,
+) -> None:
+    if predicate is None:
+        return
+    predicate_text = str(predicate)
+    forbidden = set(PROVENANCE_COLS)
+    if scan_provenance:
+        forbidden.update(scan_provenance)
+    for name in sorted(forbidden):
+        if re.search(rf"\\b{re.escape(name)}\\b", predicate_text):
+            msg = f"Scan predicates must not reference provenance field {name!r}."
+            raise ValueError(msg)
 
 
 __all__ = ["ScanBuildSpec"]

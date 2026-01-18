@@ -5,40 +5,52 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, TypeVar, cast
+
+import pyarrow as pa
 
 from datafusion_engine.function_factory import DEFAULT_RULE_PRIMITIVES, RulePrimitive
+from datafusion_engine.udf_registry import DataFusionUdfSpec, datafusion_udf_specs
+from ibis_engine.builtin_udfs import IbisUdfSpec, ibis_udf_specs
 
-ExecutionLane = Literal["kernel", "datafusion", "ibis", "acero"]
+ExecutionLane = Literal[
+    "ibis_builtin",
+    "ibis_pyarrow",
+    "ibis_pandas",
+    "ibis_python",
+    "df_udf",
+    "df_rust",
+    "kernel",
+]
+FunctionKind = Literal["scalar", "aggregate", "window", "table"]
 
+DEFAULT_LANE_PRECEDENCE: tuple[ExecutionLane, ...] = (
+    "ibis_builtin",
+    "ibis_pyarrow",
+    "ibis_pandas",
+    "ibis_python",
+    "df_udf",
+    "df_rust",
+    "kernel",
+)
 
-@dataclass(frozen=True)
-class FunctionParamSpec:
-    """Parameter specification for a registered function."""
-
-    name: str
-    dtype: str
-
-    def payload(self) -> dict[str, str]:
-        """Return a JSON-ready payload for the parameter.
-
-        Returns
-        -------
-        dict[str, str]
-            JSON-ready parameter payload.
-        """
-        return {"name": self.name, "dtype": self.dtype}
+LaneTupleT = TypeVar("LaneTupleT", bound=str)
 
 
 @dataclass(frozen=True)
 class FunctionSpec:
     """Cross-lane function specification."""
 
-    name: str
-    params: tuple[FunctionParamSpec, ...]
-    return_type: str
-    volatility: str
-    lanes: tuple[ExecutionLane, ...]
+    func_id: str
+    engine_name: str
+    kind: FunctionKind
+    input_types: tuple[pa.DataType, ...]
+    return_type: pa.DataType
+    state_type: pa.DataType | None = None
+    volatility: str = "stable"
+    arg_names: tuple[str, ...] | None = None
+    lanes: tuple[ExecutionLane, ...] = ()
+    lane_precedence: tuple[ExecutionLane, ...] = DEFAULT_LANE_PRECEDENCE
     rewrite_tags: tuple[str, ...] = ()
     catalog: str | None = None
     database: str | None = None
@@ -52,11 +64,16 @@ class FunctionSpec:
             JSON-serializable spec payload.
         """
         return {
-            "name": self.name,
-            "params": [param.payload() for param in self.params],
-            "return_type": self.return_type,
+            "func_id": self.func_id,
+            "engine_name": self.engine_name,
+            "kind": self.kind,
+            "input_types": [str(dtype) for dtype in self.input_types],
+            "return_type": str(self.return_type),
+            "state_type": str(self.state_type) if self.state_type is not None else None,
             "volatility": self.volatility,
+            "arg_names": list(self.arg_names) if self.arg_names is not None else None,
             "lanes": list(self.lanes),
+            "lane_precedence": list(self.lane_precedence),
             "rewrite_tags": list(self.rewrite_tags),
             "catalog": self.catalog,
             "database": self.database,
@@ -68,7 +85,7 @@ class FunctionRegistry:
     """Registry of available function specs by name."""
 
     specs: dict[str, FunctionSpec] = field(default_factory=dict)
-    lane_precedence: tuple[ExecutionLane, ...] = ("kernel", "datafusion", "ibis", "acero")
+    lane_precedence: tuple[ExecutionLane, ...] = DEFAULT_LANE_PRECEDENCE
 
     def resolve_lane(self, name: str) -> ExecutionLane | None:
         """Return the preferred execution lane for a function name.
@@ -81,7 +98,8 @@ class FunctionRegistry:
         spec = self.specs.get(name)
         if spec is None:
             return None
-        for lane in self.lane_precedence:
+        precedence = spec.lane_precedence or self.lane_precedence
+        for lane in precedence:
             if lane in spec.lanes:
                 return lane
         return None
@@ -115,7 +133,9 @@ class FunctionRegistry:
 def build_function_registry(
     *,
     primitives: tuple[RulePrimitive, ...] = DEFAULT_RULE_PRIMITIVES,
-    lane_precedence: tuple[ExecutionLane, ...] = ("kernel", "datafusion", "ibis", "acero"),
+    datafusion_specs: tuple[DataFusionUdfSpec, ...] | None = None,
+    ibis_specs: tuple[IbisUdfSpec, ...] | None = None,
+    lane_precedence: tuple[ExecutionLane, ...] = DEFAULT_LANE_PRECEDENCE,
 ) -> FunctionRegistry:
     """Build the default function registry.
 
@@ -124,22 +144,13 @@ def build_function_registry(
     FunctionRegistry
         Registry configured from the provided primitives.
     """
-    ibis_lane = {primitive.name for primitive in primitives}
-    kernel_lane = {"stable_hash64", "stable_hash128", "position_encoding_norm", "col_to_byte"}
     specs: dict[str, FunctionSpec] = {}
+    for spec in datafusion_specs or datafusion_udf_specs():
+        _merge_spec(specs, _spec_from_datafusion(spec, lane_precedence=lane_precedence))
+    for spec in ibis_specs or ibis_udf_specs():
+        _merge_spec(specs, _spec_from_ibis(spec, lane_precedence=lane_precedence))
     for primitive in primitives:
-        lanes: list[ExecutionLane] = ["datafusion"]
-        if primitive.name in ibis_lane:
-            lanes.append("ibis")
-        if primitive.name in kernel_lane:
-            lanes.append("kernel")
-        specs[primitive.name] = FunctionSpec(
-            name=primitive.name,
-            params=tuple(FunctionParamSpec(param.name, param.dtype) for param in primitive.params),
-            return_type=primitive.return_type,
-            volatility=primitive.volatility,
-            lanes=tuple(dict.fromkeys(lanes)),
-        )
+        _merge_spec(specs, _spec_from_primitive(primitive, lane_precedence=lane_precedence))
     return FunctionRegistry(specs=specs, lane_precedence=lane_precedence)
 
 
@@ -154,9 +165,140 @@ def default_function_registry() -> FunctionRegistry:
     return build_function_registry()
 
 
+def _spec_from_datafusion(
+    spec: DataFusionUdfSpec,
+    *,
+    lane_precedence: tuple[ExecutionLane, ...],
+) -> FunctionSpec:
+    return FunctionSpec(
+        func_id=spec.func_id,
+        engine_name=spec.engine_name,
+        kind=spec.kind,
+        input_types=spec.input_types,
+        return_type=spec.return_type,
+        state_type=spec.state_type,
+        volatility=spec.volatility,
+        arg_names=spec.arg_names,
+        lanes=("df_udf",),
+        lane_precedence=lane_precedence,
+        rewrite_tags=spec.rewrite_tags,
+        catalog=spec.catalog,
+        database=spec.database,
+    )
+
+
+def _spec_from_ibis(
+    spec: IbisUdfSpec,
+    *,
+    lane_precedence: tuple[ExecutionLane, ...],
+) -> FunctionSpec:
+    return FunctionSpec(
+        func_id=spec.func_id,
+        engine_name=spec.engine_name,
+        kind=spec.kind,
+        input_types=spec.input_types,
+        return_type=spec.return_type,
+        volatility=spec.volatility,
+        arg_names=spec.arg_names,
+        lanes=cast("tuple[ExecutionLane, ...]", spec.lanes),
+        lane_precedence=lane_precedence,
+        rewrite_tags=spec.rewrite_tags,
+        catalog=spec.catalog,
+        database=spec.database,
+    )
+
+
+def _spec_from_primitive(
+    primitive: RulePrimitive,
+    *,
+    lane_precedence: tuple[ExecutionLane, ...],
+) -> FunctionSpec:
+    input_types = tuple(_dtype_from_name(param.dtype) for param in primitive.params)
+    return FunctionSpec(
+        func_id=primitive.name,
+        engine_name=primitive.name,
+        kind="scalar",
+        input_types=input_types,
+        return_type=_dtype_from_name(primitive.return_type),
+        volatility=primitive.volatility,
+        arg_names=tuple(param.name for param in primitive.params) or None,
+        lanes=("df_rust",),
+        lane_precedence=lane_precedence,
+    )
+
+
+def _merge_spec(specs: dict[str, FunctionSpec], incoming: FunctionSpec) -> None:
+    existing = specs.get(incoming.func_id)
+    if existing is None:
+        specs[incoming.func_id] = incoming
+        return
+    if existing.kind != incoming.kind:
+        msg = f"Function kind mismatch for {incoming.func_id!r}."
+        raise ValueError(msg)
+    if existing.input_types != incoming.input_types:
+        msg = f"Input type mismatch for {incoming.func_id!r}."
+        raise ValueError(msg)
+    if existing.return_type != incoming.return_type:
+        msg = f"Return type mismatch for {incoming.func_id!r}."
+        raise ValueError(msg)
+    if existing.state_type != incoming.state_type:
+        msg = f"State type mismatch for {incoming.func_id!r}."
+        raise ValueError(msg)
+    merged = FunctionSpec(
+        func_id=existing.func_id,
+        engine_name=existing.engine_name,
+        kind=existing.kind,
+        input_types=existing.input_types,
+        return_type=existing.return_type,
+        state_type=existing.state_type,
+        volatility=_merge_volatility(existing.volatility, incoming.volatility),
+        arg_names=existing.arg_names or incoming.arg_names,
+        lanes=_merge_tuple(existing.lanes, incoming.lanes),
+        lane_precedence=existing.lane_precedence or incoming.lane_precedence,
+        rewrite_tags=_merge_tuple(existing.rewrite_tags, incoming.rewrite_tags),
+        catalog=existing.catalog or incoming.catalog,
+        database=existing.database or incoming.database,
+    )
+    specs[incoming.func_id] = merged
+
+
+def _merge_tuple(
+    values: tuple[LaneTupleT, ...], extra: tuple[LaneTupleT, ...]
+) -> tuple[LaneTupleT, ...]:
+    merged: dict[LaneTupleT, None] = {}
+    for value in values:
+        merged[value] = None
+    for value in extra:
+        merged[value] = None
+    return tuple(merged)
+
+
+def _merge_volatility(left: str, right: str) -> str:
+    ranking = {"immutable": 0, "stable": 1, "volatile": 2}
+    if ranking.get(right, 1) > ranking.get(left, 1):
+        return right
+    return left
+
+
+def _dtype_from_name(value: str) -> pa.DataType:
+    mapping: dict[str, pa.DataType] = {
+        "string": pa.string(),
+        "float64": pa.float64(),
+        "int64": pa.int64(),
+        "int32": pa.int32(),
+        "bool": pa.bool_(),
+    }
+    dtype = mapping.get(value)
+    if dtype is None:
+        msg = f"Unsupported dtype for function registry: {value!r}."
+        raise ValueError(msg)
+    return dtype
+
+
 __all__ = [
+    "DEFAULT_LANE_PRECEDENCE",
     "ExecutionLane",
-    "FunctionParamSpec",
+    "FunctionKind",
     "FunctionRegistry",
     "FunctionSpec",
     "build_function_registry",

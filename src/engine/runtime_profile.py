@@ -14,6 +14,7 @@ from arrowdsl.core.context import (
     ScanProfile,
     runtime_profile_factory,
 )
+from engine.function_registry import default_function_registry
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 
 
@@ -84,6 +85,7 @@ class RuntimeProfileSnapshot:
     arrow_resources: dict[str, object]
     sqlglot_policy: dict[str, object] | None
     datafusion: dict[str, object] | None
+    function_registry_hash: str
     profile_hash: str
 
     def payload(self) -> dict[str, object]:
@@ -104,6 +106,7 @@ class RuntimeProfileSnapshot:
             "arrow_resources": self.arrow_resources,
             "sqlglot_policy": self.sqlglot_policy,
             "datafusion": self.datafusion,
+            "function_registry_hash": self.function_registry_hash,
             "profile_hash": self.profile_hash,
         }
 
@@ -120,6 +123,8 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
     arrow_payload = runtime.arrow_resource_snapshot().to_payload()
     ibis_payload = runtime.ibis_options_payload()
     sqlglot_snapshot = sqlglot_policy_snapshot()
+    function_registry = default_function_registry()
+    function_registry_hash = function_registry.fingerprint()
     datafusion_payload = (
         runtime.datafusion.telemetry_payload_v1() if runtime.datafusion is not None else None
     )
@@ -132,6 +137,7 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
         "arrow_resources": arrow_payload,
         "sqlglot_policy": sqlglot_snapshot.payload() if sqlglot_snapshot is not None else None,
         "datafusion": datafusion_payload,
+        "function_registry_hash": function_registry_hash,
     }
     profile_hash = _hash_payload(payload)
     return RuntimeProfileSnapshot(
@@ -144,6 +150,7 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
         arrow_resources=arrow_payload,
         sqlglot_policy=payload["sqlglot_policy"],
         datafusion=datafusion_payload,
+        function_registry_hash=function_registry_hash,
         profile_hash=profile_hash,
     )
 
@@ -162,6 +169,8 @@ def _scan_profile_payload(scan: ScanProfile) -> dict[str, object]:
         "batch_readahead": scan.batch_readahead,
         "fragment_readahead": scan.fragment_readahead,
         "fragment_scan_options": scan.fragment_scan_options,
+        "parquet_read_options": scan.parquet_read_payload(),
+        "parquet_fragment_scan_options": scan.parquet_fragment_scan_payload(),
         "cache_metadata": scan.cache_metadata,
         "use_threads": scan.use_threads,
         "require_sequenced_output": scan.require_sequenced_output,

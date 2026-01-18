@@ -7,6 +7,17 @@ from collections.abc import Sequence
 import pyarrow.compute as pc
 
 
+def list_kernels() -> tuple[str, ...]:
+    """Return available Arrow compute kernel names.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted kernel names available in the runtime.
+    """
+    return tuple(sorted(pc.list_functions()))
+
+
 def resolve_kernel(
     name: str,
     *,
@@ -37,4 +48,4 @@ def resolve_kernel(
     return None
 
 
-__all__ = ["resolve_kernel"]
+__all__ = ["list_kernels", "resolve_kernel"]

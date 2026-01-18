@@ -11,6 +11,7 @@ from typing import Literal, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
+from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, Ordering, OrderingLevel
 from arrowdsl.core.interop import (
     ArrayLike,
@@ -92,6 +93,7 @@ def kernel_registry() -> dict[str, KernelFn]:
     """
     return {
         "interval_align": interval_align_table,
+        "canonical_sort": canonical_sort,
         "explode_list": explode_list_column,
         "dedupe": apply_dedupe,
         "winner_select": winner_select_by_score,
@@ -1237,37 +1239,133 @@ def interval_align_table(
     return pa.concat_tables([matched_out, left_only_out], promote=True)
 
 
+def _explode_list_indices(
+    list_values: ArrayLike | ChunkedArrayLike,
+    *,
+    parent_idx: ArrayLike | ChunkedArrayLike,
+    values_flat: ArrayLike | ChunkedArrayLike,
+) -> ArrayLike | ChunkedArrayLike:
+    lengths = pc.list_value_length(list_values)
+    lengths_filled = pc.fill_null(lengths, 0)
+    lengths_int = pc.cast(lengths_filled, pa.int64())
+    end_offsets = pc.cumulative_sum(lengths_int)
+    start_offsets = pc.subtract(end_offsets, lengths_int)
+    positions = pa.array(range(len(values_flat)), type=pa.int64())
+    parent_offsets = pc.take(start_offsets, parent_idx)
+    return pc.subtract(positions, parent_offsets)
+
+
+def _empty_list_indices(list_values: ArrayLike | ChunkedArrayLike) -> ArrayLike | ChunkedArrayLike:
+    lengths = pc.list_value_length(list_values)
+    lengths_filled = pc.fill_null(lengths, 0)
+    is_empty = pc.equal(lengths_filled, 0)
+    is_empty = pc.fill_null(is_empty, value=False)
+    is_null = pc.is_null(lengths)
+    empty_mask = pc.or_(is_empty, is_null)
+    return pc.indices_nonzero(empty_mask)
+
+
+def _explode_arrays(
+    table: TableLike,
+    *,
+    spec: ExplodeSpec,
+) -> tuple[list[ArrayLike | ChunkedArrayLike], list[str], ArrayLike | ChunkedArrayLike]:
+    parent_idx = pc.list_parent_indices(table[spec.list_col])
+    values_flat = pc.list_flatten(table[spec.list_col])
+    arrays: list[ArrayLike | ChunkedArrayLike] = [
+        pc.take(table[key], parent_idx) for key in spec.parent_keys
+    ]
+    names = list(spec.parent_keys)
+    arrays.append(values_flat)
+    names.append(spec.value_col)
+    if spec.idx_col is not None:
+        idx_values = _explode_list_indices(
+            table[spec.list_col],
+            parent_idx=parent_idx,
+            values_flat=values_flat,
+        )
+        arrays.append(idx_values)
+        names.append(spec.idx_col)
+    return arrays, names, parent_idx
+
+
+def _append_empty_rows(
+    table: TableLike,
+    *,
+    result: pa.Table,
+    spec: ExplodeSpec,
+    row_id_name: str,
+) -> pa.Table:
+    empty_indices = _empty_list_indices(table[spec.list_col])
+    empty_count = len(empty_indices)
+    if not empty_count:
+        return result
+    empty_arrays: list[ArrayLike | ChunkedArrayLike] = [
+        pc.take(table[key], empty_indices) for key in spec.parent_keys
+    ]
+    empty_names = list(spec.parent_keys)
+    empty_arrays.append(pa.nulls(empty_count, type=result[spec.value_col].type))
+    empty_names.append(spec.value_col)
+    if spec.idx_col is not None:
+        empty_arrays.append(pa.nulls(empty_count, type=pa.int64()))
+        empty_names.append(spec.idx_col)
+    empty_arrays.append(empty_indices)
+    empty_names.append(row_id_name)
+    empty_table = pa.Table.from_arrays(empty_arrays, names=empty_names)
+    return pa.concat_tables([result, empty_table], promote=True)
+
+
+def _sorted_explode_table(
+    result: pa.Table,
+    *,
+    row_id_name: str,
+    idx_col: str | None,
+) -> pa.Table:
+    order_keys = [(row_id_name, "ascending")]
+    if idx_col is not None:
+        order_keys.append((idx_col, "ascending"))
+    return result.sort_by(order_keys).drop([row_id_name])
+
+
 def explode_list_column(
     table: TableLike,
     *,
-    parent_id_col: str,
-    list_col: str,
-    out_parent_col: str = "src_id",
-    out_value_col: str = "dst_id",
+    spec: ExplodeSpec,
+    out_parent_col: str | None = None,
 ) -> TableLike:
-    """Explode a list column into parent/value pairs.
+    """Explode a list column into parent/value/index rows.
 
     Parameters
     ----------
     table:
         Input table.
-    parent_id_col:
-        Column containing parent IDs.
-    list_col:
-        Column containing list values.
+    spec:
+        Explode specification describing parent keys and output columns.
     out_parent_col:
         Output parent column name.
-    out_value_col:
-        Output value column name.
 
     Returns
     -------
     pyarrow.Table
-        Exploded table.
+        Exploded table with deterministic ordering.
     """
-    parent_ids = table[parent_id_col]
-    dst_lists = table[list_col]
-    parent_idx = pc.list_parent_indices(dst_lists)
-    dst_flat = pc.list_flatten(dst_lists)
-    parent_rep = pc.take(parent_ids, parent_idx)
-    return pa.Table.from_arrays([parent_rep, dst_flat], names=[out_parent_col, out_value_col])
+    parent_rename = (
+        out_parent_col
+        if out_parent_col is not None and out_parent_col != spec.parent_keys[0]
+        else None
+    )
+    if spec.list_col not in table.column_names:
+        return table
+    arrays, names, row_id = _explode_arrays(table, spec=spec)
+    row_id_name = _temp_name("__row_id", set(names))
+    arrays.append(row_id)
+    names.append(row_id_name)
+    result = pa.Table.from_arrays(arrays, names=names)
+
+    if spec.keep_empty:
+        result = _append_empty_rows(table, result=result, spec=spec, row_id_name=row_id_name)
+    result = _sorted_explode_table(result, row_id_name=row_id_name, idx_col=spec.idx_col)
+    if parent_rename is None:
+        return result
+    names = [parent_rename if name == spec.parent_keys[0] else name for name in result.column_names]
+    return result.rename_columns(names)

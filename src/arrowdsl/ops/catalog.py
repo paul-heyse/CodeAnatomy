@@ -72,8 +72,9 @@ OP_CATALOG: dict[str, OpDef] = {
         ordering_effect=OrderingEffect.EXPLICIT,
         pipeline_breaker=True,
         row_count_effect="preserve",
-        lanes=frozenset({"datafusion", "acero"}),
+        lanes=frozenset({"datafusion", "acero", "kernel"}),
         acero_node="order_by",
+        kernel_name="canonical_sort",
     ),
     "aggregate": OpDef(
         name="aggregate",

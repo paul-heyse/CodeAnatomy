@@ -17,6 +17,7 @@ class ContractRow:
 
     dedupe: DedupeSpecSpec | None = None
     canonical_sort: tuple[SortKeySpec, ...] = ()
+    constraints: tuple[str, ...] = ()
     version: int | None = None
 
 

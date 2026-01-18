@@ -13,7 +13,12 @@ from ibis.backends import BaseBackend
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
-from arrowdsl.io.parquet import DatasetWriteConfig, upsert_dataset_partitions_parquet
+from arrowdsl.io.delta import (
+    DeltaUpsertOptions,
+    DeltaWriteOptions,
+    coerce_delta_table,
+    upsert_dataset_partitions_delta,
+)
 from arrowdsl.plan.query import DatasetDiscoveryOptions, DatasetSourceOptions, open_dataset
 from arrowdsl.plan_utils import dataset_query_for_file_ids
 from arrowdsl.schema.metadata import encoding_policy_from_schema
@@ -134,17 +139,21 @@ def upsert_relationship_outputs(
         table = table_like
         if "edge_owner_file_id" not in table.column_names:
             continue
-        path = upsert_dataset_partitions_parquet(
+        data = coerce_delta_table(
             table,
-            base_dir=state_root / "datasets" / dataset_name,
-            partition_cols=("edge_owner_file_id",),
-            delete_partitions=delete_partitions,
-            config=DatasetWriteConfig(
-                schema=table.schema,
-                encoding_policy=encoding_policy_from_schema(table.schema),
+            schema=table.schema,
+            encoding_policy=encoding_policy_from_schema(table.schema),
+        )
+        result = upsert_dataset_partitions_delta(
+            data,
+            options=DeltaUpsertOptions(
+                base_dir=str(state_root / "datasets" / dataset_name),
+                partition_cols=("edge_owner_file_id",),
+                delete_partitions=delete_partitions,
+                options=DeltaWriteOptions(schema_mode="merge"),
             ),
         )
-        updated[dataset_name] = path
+        updated[dataset_name] = result.path
     return updated
 
 

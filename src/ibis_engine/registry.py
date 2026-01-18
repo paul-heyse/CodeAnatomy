@@ -23,7 +23,13 @@ except ImportError:  # pragma: no cover - optional dependency
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from schema_spec.specs import TableSchemaSpec
-from schema_spec.system import DataFusionScanOptions, DatasetSpec
+from schema_spec.system import (
+    DataFusionScanOptions,
+    DatasetSpec,
+    DeltaScanOptions,
+    DeltaSchemaPolicy,
+    DeltaWritePolicy,
+)
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -49,15 +55,22 @@ class DatasetLocation:
     """Location metadata for a dataset."""
 
     path: PathLike
-    format: DatasetFormat = "parquet"
+    format: DatasetFormat = "delta"
     partitioning: str | None = "hive"
     read_options: Mapping[str, object] = field(default_factory=dict)
+    storage_options: Mapping[str, str] = field(default_factory=dict)
+    delta_scan: DeltaScanOptions | None = None
+    delta_write_policy: DeltaWritePolicy | None = None
+    delta_schema_policy: DeltaSchemaPolicy | None = None
+    delta_constraints: tuple[str, ...] = ()
     filesystem: object | None = None
     files: tuple[str, ...] | None = None
     table_spec: TableSchemaSpec | None = None
     dataset_spec: DatasetSpec | None = None
     datafusion_scan: DataFusionScanOptions | None = None
     datafusion_provider: DataFusionProvider | None = None
+    delta_version: int | None = None
+    delta_timestamp: str | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +80,7 @@ class ReadDatasetParams:
     path: PathLike
     dataset_format: DatasetFormat
     read_options: Mapping[str, object] | None = None
+    storage_options: Mapping[str, str] | None = None
     filesystem: object | None = None
     partitioning: str | None = None
     table_name: str | None = None
@@ -171,6 +185,34 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "file_extension": loc.datafusion_scan.file_extension,
                 "cache": loc.datafusion_scan.cache,
             }
+        delta_scan = None
+        if loc.delta_scan is not None:
+            delta_scan = {
+                "file_column_name": loc.delta_scan.file_column_name,
+                "enable_parquet_pushdown": loc.delta_scan.enable_parquet_pushdown,
+                "schema_force_view_types": loc.delta_scan.schema_force_view_types,
+                "schema": (
+                    schema_to_dict(loc.delta_scan.schema)
+                    if loc.delta_scan.schema is not None
+                    else None
+                ),
+            }
+        delta_write_policy = None
+        if loc.delta_write_policy is not None:
+            delta_write_policy = {
+                "target_file_size": loc.delta_write_policy.target_file_size,
+                "stats_columns": (
+                    list(loc.delta_write_policy.stats_columns)
+                    if loc.delta_write_policy.stats_columns is not None
+                    else None
+                ),
+            }
+        delta_schema_policy = None
+        if loc.delta_schema_policy is not None:
+            delta_schema_policy = {
+                "schema_mode": loc.delta_schema_policy.schema_mode,
+                "column_mapping_mode": loc.delta_schema_policy.column_mapping_mode,
+            }
         snapshot.append(
             {
                 "name": name,
@@ -178,6 +220,13 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "format": loc.format,
                 "partitioning": loc.partitioning,
                 "datafusion_provider": loc.datafusion_provider,
+                "storage_options": dict(loc.storage_options) if loc.storage_options else None,
+                "delta_scan": delta_scan,
+                "delta_write_policy": delta_write_policy,
+                "delta_schema_policy": delta_schema_policy,
+                "delta_constraints": list(loc.delta_constraints) if loc.delta_constraints else None,
+                "delta_version": loc.delta_version,
+                "delta_timestamp": loc.delta_timestamp,
                 "scan": scan,
                 "schema_fingerprint": schema_fingerprint(schema) if schema is not None else None,
                 "schema": schema_to_dict(schema) if schema is not None else None,
@@ -203,6 +252,66 @@ def resolve_datafusion_scan_options(location: DatasetLocation) -> DataFusionScan
     if location.dataset_spec is not None:
         return location.dataset_spec.datafusion_scan
     return None
+
+
+def resolve_delta_scan_options(location: DatasetLocation) -> DeltaScanOptions | None:
+    """Return Delta scan options for a dataset location.
+
+    Returns
+    -------
+    DeltaScanOptions | None
+        Delta scan options derived from the dataset location, when present.
+    """
+    if location.delta_scan is not None:
+        return location.delta_scan
+    if location.dataset_spec is not None:
+        return location.dataset_spec.delta_scan
+    return None
+
+
+def resolve_delta_write_policy(location: DatasetLocation) -> DeltaWritePolicy | None:
+    """Return Delta write policy for a dataset location.
+
+    Returns
+    -------
+    DeltaWritePolicy | None
+        Delta write policy derived from the dataset location, when present.
+    """
+    if location.delta_write_policy is not None:
+        return location.delta_write_policy
+    if location.dataset_spec is not None:
+        return location.dataset_spec.delta_write_policy
+    return None
+
+
+def resolve_delta_schema_policy(location: DatasetLocation) -> DeltaSchemaPolicy | None:
+    """Return Delta schema policy for a dataset location.
+
+    Returns
+    -------
+    DeltaSchemaPolicy | None
+        Delta schema policy derived from the dataset location, when present.
+    """
+    if location.delta_schema_policy is not None:
+        return location.delta_schema_policy
+    if location.dataset_spec is not None:
+        return location.dataset_spec.delta_schema_policy
+    return None
+
+
+def resolve_delta_constraints(location: DatasetLocation) -> tuple[str, ...]:
+    """Return Delta constraint expressions for a dataset location.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Constraint expressions for the dataset.
+    """
+    if location.delta_constraints:
+        return location.delta_constraints
+    if location.dataset_spec is not None:
+        return location.dataset_spec.delta_constraints
+    return ()
 
 
 def resolve_dataset_schema(location: DatasetLocation) -> SchemaLike | None:
@@ -235,6 +344,8 @@ def read_dataset(
     options = dict(params.read_options or {})
     if params.table_name is not None:
         options.setdefault("table_name", params.table_name)
+    if params.storage_options:
+        options.setdefault("storage_options", dict(params.storage_options))
     if (
         params.dataset_format == "parquet"
         and params.partitioning
@@ -388,6 +499,7 @@ class IbisDatasetRegistry:
                     path=location.path,
                     dataset_format=location.format,
                     read_options=location.read_options,
+                    storage_options=location.storage_options,
                     filesystem=location.filesystem,
                     partitioning=location.partitioning,
                     table_name=name,
@@ -417,6 +529,9 @@ __all__ = [
     "DatasetCatalog",
     "DatasetFormat",
     "DatasetLocation",
+    "DeltaScanOptions",
+    "DeltaSchemaPolicy",
+    "DeltaWritePolicy",
     "IbisDatasetRegistry",
     "PathLike",
     "datafusion_context",
@@ -424,4 +539,8 @@ __all__ = [
     "registry_snapshot",
     "resolve_datafusion_scan_options",
     "resolve_dataset_schema",
+    "resolve_delta_constraints",
+    "resolve_delta_scan_options",
+    "resolve_delta_schema_policy",
+    "resolve_delta_write_policy",
 ]

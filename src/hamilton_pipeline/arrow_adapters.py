@@ -8,15 +8,19 @@ from functools import lru_cache
 
 import pyarrow as pa
 from hamilton.io.data_adapters import DataLoader, DataSaver
-from hamilton.io.utils import get_file_metadata
 from hamilton.registry import register_adapter
 
-from arrowdsl.io.parquet import read_table_parquet, write_table_parquet
+from arrowdsl.io.delta import (
+    DeltaWriteOptions,
+    delta_table_version,
+    read_table_delta,
+    write_table_delta,
+)
 
 
 @dataclass
-class ArrowParquetLoader(DataLoader):
-    """Load a pyarrow.Table from a Parquet file."""
+class ArrowDeltaLoader(DataLoader):
+    """Load a pyarrow.Table from a Delta table."""
 
     path: str
 
@@ -38,26 +42,38 @@ class ArrowParquetLoader(DataLoader):
         Returns
         -------
         str
-            Adapter name used for registration.
+            Adapter name for the loader.
         """
-        return "parquet"
+        return "delta"
 
     def load_data(self, type_: type) -> tuple[pa.Table, dict[str, object]]:
-        """Load a pyarrow.Table and file metadata from parquet.
+        """Load a pyarrow.Table and file metadata from Delta.
 
         Returns
         -------
         tuple[pyarrow.Table, dict[str, object]]
             Loaded table and metadata.
+
+        Raises
+        ------
+        TypeError
+            Raised when the Delta reader does not return a pyarrow.Table.
         """
         _ = type_
-        table = read_table_parquet(self.path)
-        return table, get_file_metadata(self.path)
+        table = read_table_delta(self.path)
+        if not isinstance(table, pa.Table):
+            msg = f"Delta load expected pyarrow.Table, got {type(table)}"
+            raise TypeError(msg)
+        metadata: dict[str, object] = {
+            "delta_version": delta_table_version(self.path),
+            "path": self.path,
+        }
+        return table, metadata
 
 
 @dataclass
-class ArrowParquetSaver(DataSaver):
-    """Save a pyarrow.Table to a Parquet file."""
+class ArrowDeltaSaver(DataSaver):
+    """Save a pyarrow.Table to a Delta table."""
 
     path: str
 
@@ -79,17 +95,17 @@ class ArrowParquetSaver(DataSaver):
         Returns
         -------
         str
-            Adapter name used for registration.
+            Adapter name for the saver.
         """
-        return "parquet"
+        return "delta"
 
     def save_data(self, data: pa.Table) -> dict[str, object]:
-        """Save the table to parquet and return file metadata.
+        """Save the table to Delta and return file metadata.
 
         Returns
         -------
         dict[str, object]
-            File metadata for the saved Parquet file.
+            File metadata for the saved Delta table.
 
         Raises
         ------
@@ -97,14 +113,18 @@ class ArrowParquetSaver(DataSaver):
             Raised when the input is not a pyarrow.Table.
         """
         if not isinstance(data, pa.Table):
-            msg = f"ArrowParquetSaver expected pyarrow.Table, got {type(data)}"
+            msg = f"ArrowDeltaSaver expected pyarrow.Table, got {type(data)}"
             raise TypeError(msg)
-        write_table_parquet(data, self.path)
-        return get_file_metadata(self.path)
+        result = write_table_delta(
+            data,
+            self.path,
+            options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
+        )
+        return {"delta_version": result.version, "path": result.path}
 
 
 @lru_cache(maxsize=1)
-def register_arrow_parquet_adapters() -> None:
-    """Register Arrow parquet adapters with the Hamilton registry."""
-    register_adapter(ArrowParquetLoader)
-    register_adapter(ArrowParquetSaver)
+def register_arrow_delta_adapters() -> None:
+    """Register Arrow delta adapters with the Hamilton registry."""
+    register_adapter(ArrowDeltaLoader)
+    register_adapter(ArrowDeltaSaver)

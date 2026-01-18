@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pyarrow as pa
-import pyarrow.dataset as ds
 import pytest
+from deltalake import DeltaTable
 
 from arrowdsl.core.context import (
     DeterminismTier,
@@ -14,9 +14,9 @@ from arrowdsl.core.context import (
     OrderingLevel,
     runtime_profile_factory,
 )
+from arrowdsl.io.delta import DeltaWriteOptions, write_dataset_delta
 from arrowdsl.plan.scan_io import plan_from_source
 from arrowdsl.schema.metadata import ordering_from_schema
-from storage.io import write_dataset_parquet
 
 
 @pytest.mark.integration
@@ -33,12 +33,16 @@ def test_scan_pipeline_ordering(
     expected_order: list[int],
     expected_level: OrderingLevel,
 ) -> None:
-    """Apply determinism tiers to Parquet-backed scan plans."""
+    """Apply determinism tiers to Delta-backed scan plans."""
     table = pa.table({"entity_id": [2, 1], "name": ["b", "a"]})
     dataset_dir = tmp_path / "scan_dataset"
-    write_dataset_parquet(table, dataset_dir)
+    write_dataset_delta(
+        table,
+        str(dataset_dir),
+        options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
+    )
 
-    dataset = ds.dataset(str(dataset_dir), format="parquet")
+    dataset = DeltaTable(str(dataset_dir)).to_pyarrow_dataset()
     runtime = runtime_profile_factory("default").with_determinism(tier)
     ctx = ExecutionContext(runtime=runtime)
     plan = plan_from_source(dataset, ctx=ctx, label="ordering_scan")

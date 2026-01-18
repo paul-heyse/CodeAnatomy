@@ -13,6 +13,7 @@ from typing import Any, Literal, cast
 
 import pyarrow as pa
 
+from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.core.context import (
     ExecutionContext,
     Ordering,
@@ -36,7 +37,6 @@ from arrowdsl.plan.planner import SegmentPlan, segment_plan
 from arrowdsl.schema.metadata import merge_metadata_specs
 from arrowdsl.schema.schema import SchemaMetadataSpec
 
-EXPLODE_OUT_COLS_LEN = 2
 _PLAN_SNAPSHOT_ENV = "ARROWDSL_PLAN_SNAPSHOT_PATH"
 _PLAN_SCHEMA_LOG_ENV = "ARROWDSL_PLAN_SCHEMA_LOG_PATH"
 _PLAN_SNAPSHOT_NODE_LIMIT = 200
@@ -415,9 +415,8 @@ class Plan:
     def explode_list(
         self,
         *,
-        parent_id_col: str,
-        list_col: str,
-        out_cols: tuple[str, str] = ("src_id", "dst_id"),
+        spec: ExplodeSpec,
+        out_parent_col: str | None = None,
         ctx: ExecutionContext,
         label: str = "",
     ) -> Plan:
@@ -425,12 +424,10 @@ class Plan:
 
         Parameters
         ----------
-        parent_id_col:
-            Column containing parent IDs.
-        list_col:
-            Column containing list values.
-        out_cols:
-            Output (parent, value) column names.
+        spec:
+            Explode specification for the list column.
+        out_parent_col:
+            Optional parent output column override.
         ctx:
             Execution context for plan materialization.
         label:
@@ -441,26 +438,16 @@ class Plan:
         Plan
             Plan that explodes the list column.
 
-        Raises
-        ------
-        ValueError
-            Raised when out_cols does not contain exactly two names.
         """
         _ = ctx
-        if len(out_cols) != EXPLODE_OUT_COLS_LEN:
-            msg = "explode_list out_cols must contain exactly two names."
-            raise ValueError(msg)
-        out_parent_col, out_value_col = out_cols
         builder = PlanBuilder.from_plan(
             ir=self.ir,
             ordering=self.ordering,
             pipeline_breakers=self.pipeline_breakers,
         )
         builder.explode_list(
-            parent_id_col=parent_id_col,
-            list_col=list_col,
-            out_parent_col=out_parent_col,
-            out_value_col=out_value_col,
+            spec=spec,
+            out_parent_col=out_parent_col or spec.parent_keys[0],
         )
         ir, ordering, pipeline_breakers = builder.build()
         return Plan(

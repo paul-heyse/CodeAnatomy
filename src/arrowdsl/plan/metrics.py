@@ -211,9 +211,31 @@ def list_fragments(
     list[ds.Fragment]
         Dataset fragments matching the predicate.
     """
-    if predicate is None:
-        return list(dataset.get_fragments())
-    return list(dataset.get_fragments(filter=predicate))
+    fragments = (
+        dataset.get_fragments(filter=predicate)
+        if predicate is not None
+        else dataset.get_fragments()
+    )
+    collected: list[ds.Fragment] = []
+    for fragment in fragments:
+        if predicate is None:
+            collected.append(fragment)
+            continue
+        subset = getattr(fragment, "subset", None)
+        if callable(subset):
+            try:
+                pruned = subset(predicate)
+            except (AttributeError, NotImplementedError, TypeError, ValueError):
+                pruned = fragment
+        else:
+            pruned = fragment
+        if pruned is None:
+            continue
+        if isinstance(pruned, ds.Fragment):
+            collected.append(pruned)
+            continue
+        collected.extend(list(cast("Iterable[ds.Fragment]", pruned)))
+    return collected
 
 
 def split_fragment_by_row_group(fragment: ds.Fragment) -> list[ds.Fragment]:

@@ -142,7 +142,7 @@ def extract_execution_context(
     )
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="extract", artifact="repo_files", kind="table")
 def repo_files(
     repo_scan_config: RepoScanConfig,
@@ -188,7 +188,7 @@ def _filter_repo_files_by_ids(
     return table.filter(mask)
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="extract", artifact="repo_files_extract", kind="table")
 def repo_files_extract(
     repo_files: TableLike,
@@ -207,7 +207,7 @@ def repo_files_extract(
     return _filter_repo_files_by_ids(repo_files, incremental_extract_impact.impacted_file_ids)
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="extract", artifact="file_line_index", kind="table")
 def file_line_index(
     repo_files_extract: TableLike,
@@ -567,7 +567,7 @@ def scip_index_path(
     return str(run_scip_python_index(opts))
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="extract", artifact="symtables", kind="table")
 def symtables(
     repo_root: str,
@@ -600,7 +600,7 @@ def symtables(
     )
 
 
-@cache(format="parquet")
+@cache(format="delta")
 @tag(layer="extract", artifact="bytecode", kind="table")
 def bytecode(
     repo_root: str,

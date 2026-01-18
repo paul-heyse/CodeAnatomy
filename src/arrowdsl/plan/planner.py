@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.context import DeterminismTier, ExecutionContext
 from arrowdsl.ir.plan import OpNode, PlanIR
 from arrowdsl.ops.catalog import Lane, OpDef
 
@@ -40,6 +40,12 @@ def select_lane(op_def: OpDef, *, ctx: ExecutionContext) -> Lane:
     ValueError
         Raised when no supported lane is available.
     """
+    if (
+        ctx.determinism in {DeterminismTier.CANONICAL, DeterminismTier.STABLE_SET}
+        and op_def.name == "order_by"
+        and op_def.supports("kernel")
+    ):
+        return "kernel"
     for lane in LANE_PRIORITY:
         if lane == "datafusion" and ctx.runtime.datafusion is None:
             continue

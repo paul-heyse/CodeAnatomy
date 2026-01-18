@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
+from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.compute.kernels import explode_list_column
 
 
@@ -15,10 +16,45 @@ def test_explode_list_column_alignment() -> None:
             "values": [[10, 11], [], [12]],
         }
     )
-    result = explode_list_column(
-        table,
-        parent_id_col="parent_id",
+    spec = ExplodeSpec(
+        parent_keys=("parent_id",),
         list_col="values",
+        value_col="dst_id",
+        idx_col="idx",
+        keep_empty=False,
     )
-    assert result["src_id"].to_pylist() == [1, 1, 3]
+    result = explode_list_column(table, spec=spec)
+    assert result["parent_id"].to_pylist() == [1, 1, 3]
     assert result["dst_id"].to_pylist() == [10, 11, 12]
+    assert result["idx"].to_pylist() == [0, 1, 0]
+
+
+def test_explode_list_column_struct_values() -> None:
+    """Explode list<struct> values while preserving order."""
+    struct_type = pa.struct([("id", pa.string()), ("score", pa.int64())])
+    table = pa.table(
+        {
+            "parent_id": [1],
+            "events": [[{"id": "a", "score": 1}, {"id": "b", "score": 2}]],
+        },
+        schema=pa.schema(
+            [
+                ("parent_id", pa.int64()),
+                ("events", pa.list_(struct_type)),
+            ]
+        ),
+    )
+    spec = ExplodeSpec(
+        parent_keys=("parent_id",),
+        list_col="events",
+        value_col="event",
+        idx_col="idx",
+        keep_empty=True,
+    )
+    result = explode_list_column(table, spec=spec)
+    assert result["parent_id"].to_pylist() == [1, 1]
+    assert result["idx"].to_pylist() == [0, 1]
+    assert result["event"].to_pylist() == [
+        {"id": "a", "score": 1},
+        {"id": "b", "score": 2},
+    ]

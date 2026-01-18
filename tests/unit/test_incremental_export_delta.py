@@ -6,10 +6,10 @@ from importlib import import_module
 from pathlib import Path
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 from ibis.backends import BaseBackend
 
+from arrowdsl.io.delta import DeltaWriteOptions, write_table_delta
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from incremental.deltas import compute_changed_exports
@@ -37,8 +37,12 @@ def test_compute_changed_exports_added_removed(tmp_path: Path) -> None:
             "symbol": pa.array(["sym2", "sym4", "sym3"], type=pa.string()),
         }
     )
-    prev_path = tmp_path / "prev_exports.parquet"
-    pq.write_table(prev_exports, prev_path)
+    prev_path = tmp_path / "prev_exports"
+    write_table_delta(
+        prev_exports,
+        str(prev_path),
+        options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
+    )
 
     changed_files = pa.table({"file_id": pa.array(["file_1"], type=pa.string())})
     result = compute_changed_exports(

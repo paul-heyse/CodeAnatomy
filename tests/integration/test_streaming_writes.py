@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import duckdb
 import ibis
 import pyarrow as pa
-import pyarrow.dataset as ds
 import pytest
 from datafusion import SessionContext
 
+from arrowdsl.io.delta import read_table_delta
 from datafusion_engine.bridge import datafusion_to_reader
-from ibis_engine.io_bridge import IbisDatasetWriteOptions, write_ibis_dataset_parquet
+from ibis_engine.io_bridge import IbisDatasetWriteOptions, write_ibis_dataset_delta
 from ibis_engine.plan import IbisPlan
 
 EXPECTED_ROW_COUNT = 2
@@ -26,7 +27,7 @@ def test_ibis_streaming_dataset_write(tmp_path: Path) -> None:
     backend.create_table("input_table", data, overwrite=True)
     plan = IbisPlan(expr=backend.table("input_table"))
     output_dir = tmp_path / "ibis_stream"
-    path = write_ibis_dataset_parquet(
+    result = write_ibis_dataset_delta(
         plan,
         output_dir,
         options=IbisDatasetWriteOptions(
@@ -34,8 +35,8 @@ def test_ibis_streaming_dataset_write(tmp_path: Path) -> None:
             prefer_reader=True,
         ),
     )
-    dataset = ds.dataset(path, format="parquet")
-    assert dataset.count_rows() == EXPECTED_ROW_COUNT
+    table = cast("pa.Table", read_table_delta(result.path))
+    assert table.num_rows == EXPECTED_ROW_COUNT
 
 
 @pytest.mark.integration
@@ -47,10 +48,10 @@ def test_datafusion_streaming_dataset_write(tmp_path: Path) -> None:
     df = ctx.sql("select * from input_table")
     reader = datafusion_to_reader(df)
     output_dir = tmp_path / "df_stream"
-    path = write_ibis_dataset_parquet(
+    result = write_ibis_dataset_delta(
         reader,
         output_dir,
         options=IbisDatasetWriteOptions(prefer_reader=True),
     )
-    dataset = ds.dataset(path, format="parquet")
-    assert dataset.count_rows() == EXPECTED_ROW_COUNT
+    table = cast("pa.Table", read_table_delta(result.path))
+    assert table.num_rows == EXPECTED_ROW_COUNT

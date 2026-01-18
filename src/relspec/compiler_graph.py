@@ -4,20 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import cast
 
 import ibis
 import pyarrow as pa
 from ibis.backends import BaseBackend
-from ibis.expr.datatypes import DataType
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
 
-from arrowdsl.core.context import ExecutionContext, Ordering
+from arrowdsl.core.context import ExecutionContext, Ordering, OrderingLevel
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.plan.schema_utils import plan_schema
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
+from ibis_engine.expr_compiler import align_set_op_tables, union_tables
 from ibis_engine.plan import IbisPlan
 from relspec.compiler import RelationshipRuleCompiler, RuleExecutionOptions
 from relspec.contracts import RELATION_OUTPUT_NAME, relation_output_schema
@@ -137,6 +136,17 @@ def compile_graph_plan(
     return GraphPlan(plan=union, outputs=merged)
 
 
+def union_plans(plans: Sequence[IbisPlan], *, label: str) -> IbisPlan:
+    """Union a sequence of Ibis plans into a single plan.
+
+    Returns
+    -------
+    IbisPlan
+        Unioned plan with unordered ordering metadata.
+    """
+    return _union_plans(plans, label=label)
+
+
 def _union_plans(plans: Sequence[IbisPlan], *, label: str) -> IbisPlan:
     """Union a sequence of Ibis plans into a single plan.
 
@@ -156,10 +166,8 @@ def _union_plans(plans: Sequence[IbisPlan], *, label: str) -> IbisPlan:
         _ = label
         empty = ibis.memtable(pa.table({}))
         return IbisPlan(expr=empty, ordering=Ordering.unordered())
-    aligned = _align_union_tables([plan.expr for plan in plans])
-    unioned = aligned[0]
-    for table in aligned[1:]:
-        unioned = unioned.union(table)
+    _validate_set_op_ordering([plan.ordering for plan in plans], op_label="union")
+    unioned = union_tables([plan.expr for plan in plans], distinct=False)
     return IbisPlan(expr=unioned, ordering=Ordering.unordered())
 
 
@@ -176,27 +184,20 @@ def _align_union_tables(tables: Sequence[IbisTable]) -> list[IbisTable]:
     list[IbisTable]
         Tables with matching column order and types.
     """
-    names: list[str] = []
-    types: dict[str, DataType] = {}
-    for table in tables:
-        schema = table.schema()
-        schema_names = cast("Sequence[str]", schema.names)
-        schema_types = cast("Sequence[DataType]", schema.types)
-        for name, dtype in zip(schema_names, schema_types, strict=True):
-            if name in types:
-                continue
-            names.append(name)
-            types[name] = dtype
-    aligned: list[IbisTable] = []
-    for table in tables:
-        cols: list[IbisValue] = []
-        for name in names:
-            if name in table.columns:
-                cols.append(table[name])
-            else:
-                cols.append(ibis.literal(None, type=types[name]).name(name))
-        aligned.append(table.select(cols))
-    return aligned
+    return align_set_op_tables(tables)
+
+
+def _validate_set_op_ordering(orderings: Sequence[Ordering], *, op_label: str) -> None:
+    levels = {ordering.level for ordering in orderings}
+    if not levels or levels == {OrderingLevel.UNORDERED}:
+        return
+    if len(levels) != 1:
+        msg = f"Set op {op_label} requires consistent ordering levels."
+        raise ValueError(msg)
+    reference = orderings[0]
+    if any(ordering != reference for ordering in orderings[1:]):
+        msg = f"Set op {op_label} requires consistent ordering keys."
+        raise ValueError(msg)
 
 
 def order_rules(
@@ -329,4 +330,5 @@ __all__ = [
     "RuleNode",
     "compile_graph_plan",
     "order_rules",
+    "union_plans",
 ]

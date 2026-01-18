@@ -117,6 +117,8 @@ def register_dataset(
     TranslationError
         Raised when the dataset format is not supported.
     """
+    if runtime_profile is not None:
+        runtime_profile.ensure_delta_plan_codecs(ctx)
     try:
         return register_dataset_df(
             ctx,

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
+from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.core.context import Ordering, OrderingEffect, OrderingKey, OrderingLevel
 from arrowdsl.core.interop import ComputeExpression
 from arrowdsl.ir.plan import OpNode, PlanIR
@@ -142,19 +143,15 @@ class PlanBuilder:
     def explode_list(
         self,
         *,
-        parent_id_col: str,
-        list_col: str,
+        spec: ExplodeSpec,
         out_parent_col: str,
-        out_value_col: str,
     ) -> None:
         """Append an explode_list operation."""
         self._append(
             name="explode_list",
             args={
-                "parent_id_col": parent_id_col,
-                "list_col": list_col,
+                "spec": spec,
                 "out_parent_col": out_parent_col,
-                "out_value_col": out_value_col,
             },
         )
 

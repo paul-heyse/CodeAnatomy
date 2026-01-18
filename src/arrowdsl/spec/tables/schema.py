@@ -57,6 +57,7 @@ CONTRACT_SPEC_SCHEMA = pa.schema(
         pa.field("version", pa.int64(), nullable=True),
         pa.field("dedupe", DEDUPE_STRUCT, nullable=True),
         pa.field("canonical_sort", pa.list_(SORT_KEY_STRUCT), nullable=True),
+        pa.field("constraints", pa.list_(pa.string()), nullable=True),
         pa.field("virtual_fields", pa.list_(pa.string()), nullable=True),
         pa.field("virtual_field_docs", pa.map_(pa.string(), pa.string()), nullable=True),
         pa.field("validation", VALIDATION_STRUCT, nullable=True),
@@ -91,6 +92,7 @@ class ContractRow(TypedDict, total=False):
     version: int | None
     dedupe: dict[str, object] | None
     canonical_sort: list[dict[str, object]] | None
+    constraints: list[str] | None
     virtual_fields: list[str] | None
     virtual_field_docs: dict[str, str] | None
     validation: dict[str, object] | None
@@ -186,6 +188,7 @@ def contract_spec_table(specs: Sequence[schema_system.ContractSpec]) -> pa.Table
             "version": spec.version,
             "dedupe": _dedupe_row(spec.dedupe),
             "canonical_sort": [_sort_key_row(sk) for sk in spec.canonical_sort] or None,
+            "constraints": list(spec.constraints) or None,
             "virtual_fields": list(spec.virtual_fields) or None,
             "virtual_field_docs": (
                 dict(spec.virtual_field_docs) if spec.virtual_field_docs else None
@@ -322,6 +325,7 @@ def contract_specs_from_table(
             table_schema=table_spec,
             dedupe=_dedupe_from_row(row.get("dedupe")),
             canonical_sort=canonical,
+            constraints=tuple(row.get("constraints") or ()),
             version=row.get("version"),
             virtual_fields=tuple(row.get("virtual_fields") or ()),
             virtual_field_docs=dict(virtual_docs) if virtual_docs else None,

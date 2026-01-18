@@ -98,6 +98,7 @@ class Contract:
     key_fields: tuple[str, ...] = ()
     required_non_null: tuple[str, ...] = ()
     invariants: tuple[InvariantFn, ...] = ()
+    constraints: tuple[str, ...] = ()
 
     dedupe: DedupeSpec | None = None
     canonical_sort: tuple[SortKey, ...] = ()

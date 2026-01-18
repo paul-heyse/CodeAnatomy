@@ -18,6 +18,7 @@ from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr, SortExpr
 from datafusion.expr import SortKey as DFSortKey
 
+from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.core.context import ExecutionContext, Ordering, OrderingLevel
 from arrowdsl.core.interop import SchemaLike, TableLike, pc
 from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions
@@ -28,6 +29,7 @@ from arrowdsl.schema.metadata import (
     ordering_from_schema,
 )
 from arrowdsl.schema.schema import SchemaMetadataSpec
+from datafusion_engine.bridge import register_memtable_from_table
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.udf_registry import (
     _NORMALIZE_SPAN_UDF,
@@ -52,10 +54,20 @@ def _df_from_table(
     table: TableLike,
     *,
     name: str,
+    batch_size: int | None = None,
 ) -> DataFrame:
     existing = _existing_table_names(ctx)
     table_name = _temp_name(name, existing) if name in existing else name
-    return ctx.from_arrow(cast("pa.Table", table), name=table_name)
+    if batch_size is None:
+        return ctx.from_arrow(cast("pa.Table", table), name=table_name)
+    register_memtable_from_table(ctx, name=table_name, table=table, batch_size=batch_size)
+    return ctx.table(table_name)
+
+
+def _batch_size_from_ctx(ctx: ExecutionContext | None) -> int | None:
+    if ctx is None or ctx.runtime.datafusion is None:
+        return None
+    return ctx.runtime.datafusion.batch_size
 
 
 def _existing_table_names(ctx: SessionContext) -> set[str]:
@@ -222,7 +234,12 @@ def dedupe_kernel(
     ctx = _session_context(_ctx)
     ordering = _require_explicit_ordering(table.schema, kernel="dedupe")
     resolved_spec = _dedupe_spec_with_ordering(spec, ordering)
-    df = _df_from_table(ctx, table, name="dedupe")
+    df = _df_from_table(
+        ctx,
+        table,
+        name="dedupe",
+        batch_size=_batch_size_from_ctx(_ctx),
+    )
     columns = list(table.schema.names)
     result_df = _dedupe_dataframe(df, spec=resolved_spec, columns=columns)
     out = result_df.to_arrow_table()
@@ -232,28 +249,74 @@ def dedupe_kernel(
 def explode_list_kernel(
     table: TableLike,
     *,
-    parent_id_col: str,
-    list_col: str,
-    out_parent_col: str = "src_id",
-    out_value_col: str = "dst_id",
+    spec: ExplodeSpec,
+    out_parent_col: str | None = None,
     _ctx: ExecutionContext | None = None,
 ) -> TableLike:
     """Explode a list column using DataFusion unnest support.
 
+    Parameters
+    ----------
+    table:
+        Input table.
+    spec:
+        Explode specification describing parent keys and output columns.
+    out_parent_col:
+        Optional parent output column override.
+
     Returns
     -------
     TableLike
-        Exploded table.
+        Exploded table with optional index column.
     """
-    ctx = _session_context(_ctx)
-    df = _df_from_table(ctx, table, name="explode_list")
-    exploded = df.unnest_columns(list_col)
-    selected = exploded.select(
-        col(parent_id_col).alias(out_parent_col),
-        col(list_col).alias(out_value_col),
+    parent_rename = (
+        out_parent_col
+        if out_parent_col is not None and out_parent_col != spec.parent_keys[0]
+        else None
     )
+    if spec.list_col not in table.column_names:
+        return table
+    ctx = _session_context(_ctx)
+    df = _df_from_table(
+        ctx,
+        table,
+        name="explode_list",
+        batch_size=_batch_size_from_ctx(_ctx),
+    )
+    idx_list_name = _temp_name("__idx_list", set(table.column_names))
+    df = df.with_column(
+        idx_list_name,
+        f.range(lit(0), f.cardinality(col(spec.list_col)), lit(1)),
+    )
+    exploded = df.unnest_columns(
+        spec.list_col,
+        idx_list_name,
+        preserve_nulls=spec.keep_empty,
+    )
+    selected_exprs: list[Expr] = []
+    for key in spec.parent_keys:
+        if parent_rename is not None and key == spec.parent_keys[0]:
+            selected_exprs.append(col(key).alias(parent_rename))
+        else:
+            selected_exprs.append(col(key))
+    selected_exprs.append(col(spec.list_col).alias(spec.value_col))
+    if spec.idx_col is not None:
+        selected_exprs.append(col(idx_list_name).alias(spec.idx_col))
+    selected = exploded.select(*selected_exprs)
+    order_keys = (parent_rename,) if parent_rename is not None else spec.parent_keys
+    order_exprs: list[SortExpr] = [
+        col(key).sort(ascending=True, nulls_first=True) for key in order_keys
+    ]
+    if spec.idx_col is not None:
+        order_exprs.append(col(spec.idx_col).sort(ascending=True, nulls_first=False))
+    if order_exprs:
+        selected = selected.sort(*order_exprs)
     out = selected.to_arrow_table()
-    return _apply_metadata(out, metadata=_metadata_spec_from_tables([table]))
+    result = _apply_metadata(out, metadata=_metadata_spec_from_tables([table]))
+    if parent_rename is None:
+        return result
+    names = [parent_rename if name == spec.parent_keys[0] else name for name in result.column_names]
+    return result.rename_columns(names)
 
 
 @dataclass(frozen=True)
@@ -427,9 +490,10 @@ def _interval_join_frames(
     prepared: _IntervalAlignPrepared,
     *,
     ctx: SessionContext,
+    batch_size: int | None = None,
 ) -> tuple[DataFrame, DataFrame, Mapping[str, str]]:
-    left_df = _df_from_table(ctx, prepared.left, name="interval_left")
-    right_df = _df_from_table(ctx, prepared.right, name="interval_right")
+    left_df = _df_from_table(ctx, prepared.left, name="interval_left", batch_size=batch_size)
+    right_df = _df_from_table(ctx, prepared.right, name="interval_right", batch_size=batch_size)
     right_df, right_name_map = _rename_right_columns(
         right_df,
         left_names=set(left_df.schema().names),

@@ -25,8 +25,8 @@ GraphProduct = Literal["cpg"]
 
 
 @dataclass(frozen=True)
-class FinalizeParquetPaths:
-    """Paths returned by write_finalize_result_parquet."""
+class FinalizeDeltaPaths:
+    """Paths returned by write_finalize_result_delta."""
 
     data: Path
     errors: Path
@@ -35,17 +35,17 @@ class FinalizeParquetPaths:
 
 
 @dataclass(frozen=True)
-class FinalizeParquetReport:
-    """Finalize parquet output plus row counts."""
+class FinalizeDeltaReport:
+    """Finalize Delta output plus row counts."""
 
-    paths: FinalizeParquetPaths
+    paths: FinalizeDeltaPaths
     rows: int
     error_rows: int
 
 
 @dataclass(frozen=True)
-class TableParquetReport:
-    """Single table parquet output plus row count."""
+class TableDeltaReport:
+    """Single table Delta output plus row count."""
 
     path: Path
     rows: int
@@ -62,12 +62,12 @@ class GraphProductBuildResult:
     repo_root: Path
     output_dir: Path
 
-    cpg_nodes: FinalizeParquetReport
-    cpg_edges: FinalizeParquetReport
-    cpg_props: FinalizeParquetReport
+    cpg_nodes: FinalizeDeltaReport
+    cpg_edges: FinalizeDeltaReport
+    cpg_props: FinalizeDeltaReport
 
-    cpg_nodes_quality: TableParquetReport | None = None
-    cpg_props_quality: TableParquetReport | None = None
+    cpg_nodes_quality: TableDeltaReport | None = None
+    cpg_props_quality: TableDeltaReport | None = None
 
     extract_error_artifacts: JsonDict | None = None
     manifest_path: Path | None = None
@@ -149,19 +149,19 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
 
 def _outputs_for_request(request: GraphProductBuildRequest) -> Sequence[str]:
     outputs: list[str] = [
-        "write_cpg_nodes_parquet",
-        "write_cpg_edges_parquet",
-        "write_cpg_props_parquet",
+        "write_cpg_nodes_delta",
+        "write_cpg_edges_delta",
+        "write_cpg_props_delta",
     ]
     if request.include_quality:
         outputs.extend(
             [
-                "write_cpg_nodes_quality_parquet",
-                "write_cpg_props_quality_parquet",
+                "write_cpg_nodes_quality_delta",
+                "write_cpg_props_quality_delta",
             ]
         )
     if request.include_extract_errors:
-        outputs.append("write_extract_error_artifacts_parquet")
+        outputs.append("write_extract_error_artifacts_delta")
     if request.include_manifest:
         outputs.append("write_run_manifest_json")
     if request.include_run_bundle:
@@ -197,10 +197,10 @@ def _int_field(report: JsonDict, key: str) -> int:
     return 0
 
 
-def _parse_finalize(report: JsonDict) -> FinalizeParquetReport:
+def _parse_finalize(report: JsonDict) -> FinalizeDeltaReport:
     paths = cast("dict[str, str]", report.get("paths") or {})
-    return FinalizeParquetReport(
-        paths=FinalizeParquetPaths(
+    return FinalizeDeltaReport(
+        paths=FinalizeDeltaPaths(
             data=Path(paths["data"]),
             errors=Path(paths["errors"]),
             stats=Path(paths["stats"]),
@@ -211,8 +211,8 @@ def _parse_finalize(report: JsonDict) -> FinalizeParquetReport:
     )
 
 
-def _parse_table(report: JsonDict) -> TableParquetReport:
-    return TableParquetReport(
+def _parse_table(report: JsonDict) -> TableDeltaReport:
+    return TableDeltaReport(
         path=Path(cast("str", report["path"])),
         rows=_int_field(report, "rows"),
     )
@@ -253,21 +253,21 @@ def _parse_result(
     repo_root: Path,
     pipeline_outputs: Mapping[str, JsonDict | None],
 ) -> GraphProductBuildResult:
-    nodes_report = _parse_finalize(_require(pipeline_outputs, "write_cpg_nodes_parquet"))
+    nodes_report = _parse_finalize(_require(pipeline_outputs, "write_cpg_nodes_delta"))
     output_dir = nodes_report.paths.data.parent
 
-    edges_report = _parse_finalize(_require(pipeline_outputs, "write_cpg_edges_parquet"))
-    props_report = _parse_finalize(_require(pipeline_outputs, "write_cpg_props_parquet"))
+    edges_report = _parse_finalize(_require(pipeline_outputs, "write_cpg_edges_delta"))
+    props_report = _parse_finalize(_require(pipeline_outputs, "write_cpg_props_delta"))
 
     nodes_quality = None
     if request.include_quality:
-        quality = _optional(pipeline_outputs, "write_cpg_nodes_quality_parquet")
+        quality = _optional(pipeline_outputs, "write_cpg_nodes_quality_delta")
         if quality is not None:
             nodes_quality = _parse_table(quality)
 
     props_quality = None
     if request.include_quality:
-        quality = _optional(pipeline_outputs, "write_cpg_props_quality_parquet")
+        quality = _optional(pipeline_outputs, "write_cpg_props_quality_delta")
         if quality is not None:
             props_quality = _parse_table(quality)
 
@@ -286,7 +286,7 @@ def _parse_result(
 
     extract_errors = None
     if request.include_extract_errors:
-        extract_errors = _optional(pipeline_outputs, "write_extract_error_artifacts_parquet")
+        extract_errors = _optional(pipeline_outputs, "write_extract_error_artifacts_delta")
 
     return GraphProductBuildResult(
         product=request.product,
@@ -308,10 +308,10 @@ def _parse_result(
 
 
 __all__ = [
-    "FinalizeParquetPaths",
-    "FinalizeParquetReport",
+    "FinalizeDeltaPaths",
+    "FinalizeDeltaReport",
     "GraphProductBuildRequest",
     "GraphProductBuildResult",
-    "TableParquetReport",
+    "TableDeltaReport",
     "build_graph_product",
 ]

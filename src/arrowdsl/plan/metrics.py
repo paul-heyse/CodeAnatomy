@@ -78,6 +78,8 @@ SCAN_TELEMETRY_SCHEMA = pa.schema(
         ("file_hints", pa.list_(pa.string())),
         ("fragment_paths", pa.list_(pa.string())),
         ("partition_expressions", pa.list_(pa.string())),
+        ("required_columns", pa.list_(pa.string())),
+        ("scan_columns", pa.list_(pa.string())),
         ("dataset_schema_json", pa.string()),
         ("projected_schema_json", pa.string()),
         ("discovery_policy_json", pa.string()),

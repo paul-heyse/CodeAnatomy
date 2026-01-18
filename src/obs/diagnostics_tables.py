@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 import pyarrow as pa
 
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.schema.serialization import schema_fingerprint
 from obs.diagnostics_schemas import (
     DATAFUSION_EXPLAINS_V1,
     DATAFUSION_FALLBACKS_V1,
@@ -75,21 +78,34 @@ def datafusion_explains_table(explains: Sequence[Mapping[str, object]]) -> pa.Ta
         Diagnostics table aligned to DATAFUSION_EXPLAINS_V1.
     """
     now = _now_ms()
-    rows = [
-        {
-            "event_time_unix_ms": _coerce_event_time(
-                explain.get("event_time_unix_ms"), default=now
-            ),
-            "sql": str(explain.get("sql") or ""),
-            "explain_rows_json": json.dumps(
-                explain.get("rows") or [],
-                ensure_ascii=True,
-                separators=(",", ":"),
-            ),
-            "explain_analyze": bool(explain.get("explain_analyze") or False),
-        }
-        for explain in explains
-    ]
+    rows: list[dict[str, object]] = []
+    for explain in explains:
+        raw_rows = explain.get("rows")
+        rows_payload: object
+        if isinstance(raw_rows, (RecordBatchReaderLike, TableLike)):
+            rows_payload = {
+                "artifact_path": None,
+                "format": "ipc_file",
+                "schema_fingerprint": schema_fingerprint(raw_rows.schema),
+            }
+        else:
+            rows_payload = (
+                raw_rows if raw_rows is not None else cast("list[object]", [])
+            )
+        rows.append(
+            {
+                "event_time_unix_ms": _coerce_event_time(
+                    explain.get("event_time_unix_ms"), default=now
+                ),
+                "sql": str(explain.get("sql") or ""),
+                "explain_rows_json": json.dumps(
+                    rows_payload,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ),
+                "explain_analyze": bool(explain.get("explain_analyze") or False),
+            }
+        )
     return pa.Table.from_pylist(rows, schema=DATAFUSION_EXPLAINS_V1)
 
 

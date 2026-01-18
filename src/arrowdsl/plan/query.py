@@ -193,6 +193,7 @@ class QuerySpec:
         ctx: ExecutionContext,
         label: str = "",
         scan_provenance: Sequence[str] = (),
+        required_columns: Sequence[str] | None = None,
     ) -> Plan:
         """Compile the query spec into an Acero-backed Plan.
 
@@ -206,6 +207,7 @@ class QuerySpec:
             query=self,
             ctx=ctx,
             scan_provenance=tuple(scan_provenance),
+            required_columns=required_columns,
         )
         return builder.to_plan(label=label)
 

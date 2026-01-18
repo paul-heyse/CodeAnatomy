@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import re
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
@@ -11,6 +12,20 @@ from typing import TYPE_CHECKING, cast
 
 import datafusion
 import pyarrow as pa
+import pyarrow.ipc as pa_ipc
+
+try:
+    import pyarrow.substrait as pa_substrait
+except ImportError:
+    pa_substrait = None
+try:
+    from datafusion.unparser import Unparser as DataFusionUnparser
+    from datafusion.unparser import Dialect as DataFusionDialect
+    from datafusion.unparser import LogicalPlan as DataFusionLogicalPlan
+except ImportError:
+    DataFusionUnparser = None
+    DataFusionDialect = None
+    DataFusionLogicalPlan = None
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 from ibis.expr.types import Table as IbisTable
@@ -19,6 +34,7 @@ from sqlglot import ErrorLevel, Expression, exp
 
 from arrowdsl.core.context import Ordering, OrderingLevel
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
+from arrowdsl.core.streaming import to_reader
 from arrowdsl.schema.metadata import ordering_metadata_spec
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
@@ -64,6 +80,18 @@ class CopyToOptions:
     table_options: Mapping[str, object] | None = None
     statement_overrides: Mapping[str, object] | None = None
     dml: DataFusionDmlOptions | None = None
+
+
+@dataclass(frozen=True)
+class ArrowIngestEvent:
+    """Arrow ingest event payload for diagnostics."""
+
+    name: str
+    method: str
+    partitioning: str | None
+    batch_size: int | None
+    batch_count: int | None
+    row_count: int | None
 
 
 try:
@@ -174,6 +202,78 @@ def _substrait_bytes(ctx: SessionContext, sql: str) -> bytes | None:
         return serde.serialize_bytes(sql, ctx)
     except (RuntimeError, TypeError, ValueError):  # pragma: no cover - defensive around FFI errors.
         return None
+
+
+def _reader_from_table_like(value: TableLike | RecordBatchReaderLike) -> pa.RecordBatchReader:
+    return to_reader(value)
+
+
+def _fingerprint_reader(reader: pa.RecordBatchReader) -> tuple[str, int]:
+    sink = pa.BufferOutputStream()
+    row_count = 0
+    with pa_ipc.new_stream(sink, reader.schema) as writer:
+        for batch in reader:
+            row_count += batch.num_rows
+            writer.write_batch(batch)
+    payload = sink.getvalue().to_pybytes()
+    return hashlib.sha256(payload).hexdigest(), row_count
+
+
+def _fingerprint_table(value: TableLike | RecordBatchReaderLike) -> tuple[str, int]:
+    reader = _reader_from_table_like(value)
+    return _fingerprint_reader(reader)
+
+
+def _substrait_validation_payload(
+    plan_bytes: bytes,
+    *,
+    df: DataFrame,
+) -> Mapping[str, object]:
+    if pa_substrait is None:
+        return {
+            "status": "unavailable",
+            "error": "pyarrow.substrait is unavailable",
+        }
+    try:
+        df_reader = datafusion_to_reader(df)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        return {
+            "status": "error",
+            "stage": "datafusion",
+            "error": str(exc),
+        }
+    try:
+        substrait_result = pa_substrait.run_query(plan_bytes, use_threads=True)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        return {
+            "status": "error",
+            "stage": "pyarrow_substrait",
+            "error": str(exc),
+        }
+    df_hash, df_rows = _fingerprint_table(df_reader)
+    substrait_hash, substrait_rows = _fingerprint_table(
+        cast("TableLike | RecordBatchReaderLike", substrait_result)
+    )
+    match = df_rows == substrait_rows and df_hash == substrait_hash
+    return {
+        "status": "match" if match else "mismatch",
+        "match": match,
+        "datafusion_rows": df_rows,
+        "datafusion_hash": df_hash,
+        "substrait_rows": substrait_rows,
+        "substrait_hash": substrait_hash,
+    }
+
+
+def validate_substrait_plan(plan_bytes: bytes, *, df: DataFrame) -> Mapping[str, object]:
+    """Validate a Substrait plan by comparing PyArrow and DataFusion outputs.
+
+    Returns
+    -------
+    Mapping[str, object]
+        Validation payload containing hashes, row counts, and status fields.
+    """
+    return _substrait_validation_payload(plan_bytes, df=df)
 
 
 def _try_replay_substrait(
@@ -535,6 +635,26 @@ async def datafusion_to_async_batches(
         yield batch
 
 
+def datafusion_view_sql(df: DataFrame) -> str | None:
+    """Return SQL text for a DataFusion DataFrame when available.
+
+    Returns
+    -------
+    str | None
+        SQL string when the DataFrame can emit it, otherwise ``None``.
+    """
+    to_sql = getattr(df, "to_sql", None)
+    if callable(to_sql):
+        try:
+            return str(to_sql())
+        except (RuntimeError, TypeError, ValueError):
+            return None
+    sql_attr = getattr(df, "sql", None)
+    if isinstance(sql_attr, str):
+        return sql_attr
+    return None
+
+
 def ibis_plan_to_table(
     plan: IbisPlan,
     *,
@@ -595,9 +715,7 @@ def _to_record_batch(value: object) -> pa.RecordBatch:
             batches = list(table.to_batches())
             if batches:
                 return batches[0]
-            empty_arrays = [
-                pa.array([], type=field.type) for field in table.schema
-            ]
+            empty_arrays = [pa.array([], type=field.type) for field in table.schema]
             return pa.RecordBatch.from_arrays(empty_arrays, schema=table.schema)
     msg = "Async DataFusion batch does not expose a pyarrow.RecordBatch."
     raise TypeError(msg)
@@ -678,9 +796,12 @@ class DataFusionPlanArtifacts:
 
     plan_hash: str | None
     sql: str
-    explain: list[Mapping[str, object]]
-    explain_analyze: list[Mapping[str, object]] | None
+    explain: TableLike | RecordBatchReaderLike
+    explain_analyze: TableLike | RecordBatchReaderLike | None
     substrait_plan: bytes | None
+    substrait_validation: Mapping[str, object] | None = None
+    unparsed_sql: str | None = None
+    unparse_error: str | None = None
     logical_plan: str | None = None
     optimized_plan: str | None = None
     physical_plan: str | None = None
@@ -689,12 +810,12 @@ class DataFusionPlanArtifacts:
     join_operators: tuple[str, ...] | None = None
 
     def payload(self) -> dict[str, object]:
-        """Return a JSON-ready payload for plan artifacts.
+        """Return a payload for plan artifacts.
 
         Returns
         -------
         dict[str, object]
-            JSON-ready payload for plan artifacts.
+            Payload for plan artifacts.
         """
         substrait_b64 = (
             base64.b64encode(self.substrait_plan).decode("utf-8")
@@ -704,11 +825,14 @@ class DataFusionPlanArtifacts:
         return {
             "plan_hash": self.plan_hash,
             "sql": self.sql,
-            "explain": [dict(row) for row in self.explain],
-            "explain_analyze": [dict(row) for row in self.explain_analyze]
-            if self.explain_analyze is not None
-            else None,
+            "explain": self.explain,
+            "explain_analyze": self.explain_analyze,
             "substrait_b64": substrait_b64,
+            "substrait_validation": (
+                dict(self.substrait_validation) if self.substrait_validation is not None else None
+            ),
+            "unparsed_sql": self.unparsed_sql,
+            "unparse_error": self.unparse_error,
             "logical_plan": self.logical_plan,
             "optimized_plan": self.optimized_plan,
             "physical_plan": self.physical_plan,
@@ -1030,7 +1154,7 @@ def _maybe_explain(
     sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
     prefix = "EXPLAIN ANALYZE" if options.explain_analyze else "EXPLAIN"
     explain_df = ctx.sql(f"{prefix} {sql}")
-    rows = _explain_rows(explain_df)
+    rows = _explain_reader(explain_df)
     if options.explain_hook is not None:
         options.explain_hook(sql, rows)
 
@@ -1042,7 +1166,11 @@ def _maybe_collect_plan_artifacts(
     options: DataFusionCompileOptions,
     df: DataFrame,
 ) -> None:
-    if not options.capture_plan_artifacts and options.plan_artifacts_hook is None:
+    if (
+        not options.capture_plan_artifacts
+        and options.plan_artifacts_hook is None
+        and not options.substrait_validation
+    ):
         return
     if options.params and _contains_params(expr):
         return
@@ -1054,20 +1182,12 @@ def _maybe_collect_plan_artifacts(
         options.plan_artifacts_hook(artifacts.payload())
 
 
-def _explain_rows(df: DataFrame) -> list[Mapping[str, object]]:
-    return _collect_rows(df)
+def _explain_reader(df: DataFrame) -> pa.RecordBatchReader:
+    return datafusion_to_reader(df)
 
 
-def _collect_rows(df: DataFrame) -> list[Mapping[str, object]]:
-    to_arrow = getattr(df, "to_arrow_table", None)
-    if callable(to_arrow):
-        table = cast("pa.Table", to_arrow())
-        return [dict(row) for row in table.to_pylist()]
-    collect = getattr(df, "collect", None)
-    if callable(collect):
-        rows = cast("Iterable[Mapping[str, object]]", collect())
-        return [dict(row) for row in rows]
-    return []
+def _collect_reader(df: DataFrame) -> pa.RecordBatchReader:
+    return datafusion_to_reader(df)
 
 
 def _df_plan_details(df: DataFrame) -> dict[str, object]:
@@ -1091,6 +1211,19 @@ def _df_plan_details(df: DataFrame) -> dict[str, object]:
         "partition_count": partition_count,
         "join_operators": join_operators,
     }
+
+
+def _unparse_plan(plan: object | None) -> tuple[str | None, str | None]:
+    if plan is None:
+        return None, "missing_plan"
+    if DataFusionUnparser is None or DataFusionDialect is None or DataFusionLogicalPlan is None:
+        return None, "unparser_unavailable"
+    try:
+        unparser = DataFusionUnparser(DataFusionDialect.default())
+        plan_obj = cast("DataFusionLogicalPlan", plan)
+        return str(unparser.plan_to_sql(plan_obj)), None
+    except (RuntimeError, TypeError, ValueError) as exc:
+        return None, str(exc)
 
 
 def _df_plan(df: DataFrame, method_name: str) -> object | None:
@@ -1180,12 +1313,23 @@ def collect_plan_artifacts(
     plan_df = df
     if plan_df is None:
         plan_df = ctx.sql(sql)
-    explain_rows = _collect_rows(ctx.sql(f"EXPLAIN {sql}"))
+    explain_rows = _collect_reader(ctx.sql(f"EXPLAIN {sql}"))
     analyze_rows = None
     if options.explain_analyze:
-        analyze_rows = _collect_rows(ctx.sql(f"EXPLAIN ANALYZE {sql}"))
+        analyze_rows = _collect_reader(ctx.sql(f"EXPLAIN ANALYZE {sql}"))
     substrait_plan = _substrait_bytes(ctx, sql)
+    substrait_validation: Mapping[str, object] | None = None
+    if substrait_plan is not None and options.substrait_validation and plan_df is not None:
+        substrait_validation = _substrait_validation_payload(
+            substrait_plan,
+            df=plan_df,
+        )
     plan_details = _df_plan_details(plan_df)
+    unparse_plan = _df_plan(plan_df, "optimized_logical_plan") or _df_plan(
+        plan_df,
+        "logical_plan",
+    )
+    unparsed_sql, unparse_error = _unparse_plan(unparse_plan)
     policy_hash = options.sqlglot_policy_hash
     plan_hash = options.plan_hash or plan_fingerprint(
         expr,
@@ -1198,6 +1342,9 @@ def collect_plan_artifacts(
         explain=explain_rows,
         explain_analyze=analyze_rows,
         substrait_plan=substrait_plan,
+        substrait_validation=substrait_validation,
+        unparsed_sql=unparsed_sql,
+        unparse_error=unparse_error,
         logical_plan=cast("str | None", plan_details.get("logical_plan")),
         optimized_plan=cast("str | None", plan_details.get("optimized_plan")),
         physical_plan=cast("str | None", plan_details.get("physical_plan")),
@@ -1212,20 +1359,20 @@ def execute_sql(
     *,
     sql: str,
     options: DataFusionCompileOptions,
-) -> list[Mapping[str, object]]:
-    """Execute SQL text with DataFusion and return row mappings.
+) -> pa.RecordBatchReader:
+    """Execute SQL text with DataFusion and return a record batch reader.
 
     Returns
     -------
-    list[Mapping[str, object]]
-        Result rows as dictionaries.
+    pyarrow.RecordBatchReader
+        Record batch reader over the SQL results.
     """
     _ensure_dialect(options.dialect)
     bindings = datafusion_param_bindings(options.params or {})
     policy = options.sql_policy or _default_sql_policy()
     sql_options = options.sql_options or policy.to_sql_options()
     df = ctx.sql_with_options(sql, sql_options, param_values=bindings)
-    return _collect_rows(df)
+    return _collect_reader(df)
 
 
 def register_memtable(
@@ -1294,16 +1441,75 @@ def register_memtable_from_table(
     batch_size: int | None = None,
 ) -> None:
     """Register a MemTable from a table-like input."""
+    if isinstance(table, RecordBatchReaderLike):
+        register_memtable_from_reader(ctx, name=name, reader=table, batch_size=batch_size)
+        return
     batches = slice_memtable_batches(table, batch_size=batch_size)
     register_memtable(ctx, name=name, batches=batches)
+
+
+def register_memtable_from_reader(
+    ctx: SessionContext,
+    *,
+    name: str,
+    reader: RecordBatchReaderLike,
+    batch_size: int | None = None,
+) -> None:
+    """Register a MemTable from a record batch reader when supported."""
+    from_arrow = getattr(ctx, "from_arrow", None)
+    if callable(from_arrow) and (batch_size is None or batch_size <= 0):
+        try:
+            from_arrow(reader, name=name)
+        except (TypeError, ValueError):
+            pass
+        else:
+            return
+    batches = slice_memtable_batches(reader, batch_size=batch_size)
+    register_memtable(ctx, name=name, batches=batches)
+
+
+def _is_pydict_input(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    if not value:
+        return True
+    return all(isinstance(key, str) for key in value)
+
+
+def _is_pylist_input(value: object) -> bool:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return False
+    if not value:
+        return True
+    sample = value[0]
+    return isinstance(sample, Mapping)
+
+
+def _emit_arrow_ingest(
+    ingest_hook: Callable[[Mapping[str, object]], None] | None,
+    event: ArrowIngestEvent,
+) -> None:
+    if ingest_hook is None:
+        return
+    ingest_hook(
+        {
+            "name": event.name,
+            "method": event.method,
+            "partitioning": event.partitioning,
+            "batch_size": event.batch_size,
+            "batch_count": event.batch_count,
+            "row_count": event.row_count,
+        }
+    )
 
 
 def datafusion_from_arrow(
     ctx: SessionContext,
     *,
     name: str,
-    value: TableLike | RecordBatchReaderLike | object,
+    value: object,
     batch_size: int | None = None,
+    ingest_hook: Callable[[Mapping[str, object]], None] | None = None,
 ) -> DataFrame:
     """Register Arrow-like input and return a DataFusion DataFrame.
 
@@ -1312,11 +1518,106 @@ def datafusion_from_arrow(
     datafusion.dataframe.DataFrame
         DataFrame for the registered table.
     """
+    if _is_pydict_input(value):
+        from_pydict = getattr(ctx, "from_pydict", None)
+        pydict = cast("Mapping[str, object]", value)
+        if callable(from_pydict) and batch_size is None:
+            df = cast("DataFrame", from_pydict(dict(pydict), name=name))
+            _emit_arrow_ingest(
+                ingest_hook,
+                ArrowIngestEvent(
+                    name=name,
+                    method="from_pydict",
+                    partitioning="datafusion_native",
+                    batch_size=None,
+                    batch_count=None,
+                    row_count=None,
+                ),
+            )
+            return df
+        table = pa.Table.from_pydict(dict(pydict))
+        batches = slice_memtable_batches(table, batch_size=batch_size)
+        register_memtable(ctx, name=name, batches=batches)
+        _emit_arrow_ingest(
+            ingest_hook,
+            ArrowIngestEvent(
+                name=name,
+                method="record_batches",
+                partitioning="record_batches",
+                batch_size=batch_size,
+                batch_count=len(batches),
+                row_count=table.num_rows,
+            ),
+        )
+        return ctx.table(name)
+    if _is_pylist_input(value):
+        from_pylist = getattr(ctx, "from_pylist", None)
+        if callable(from_pylist) and batch_size is None:
+            rows = cast("Sequence[Mapping[str, object]]", value)
+            df = cast("DataFrame", from_pylist(list(rows), name=name))
+            _emit_arrow_ingest(
+                ingest_hook,
+                ArrowIngestEvent(
+                    name=name,
+                    method="from_pylist",
+                    partitioning="datafusion_native",
+                    batch_size=None,
+                    batch_count=None,
+                    row_count=len(rows),
+                ),
+            )
+            return df
+        rows = cast("Sequence[Mapping[str, object]]", value)
+        table = pa.Table.from_pylist(list(rows))
+        batches = slice_memtable_batches(table, batch_size=batch_size)
+        register_memtable(ctx, name=name, batches=batches)
+        _emit_arrow_ingest(
+            ingest_hook,
+            ArrowIngestEvent(
+                name=name,
+                method="record_batches",
+                partitioning="record_batches",
+                batch_size=batch_size,
+                batch_count=len(batches),
+                row_count=table.num_rows,
+            ),
+        )
+        return ctx.table(name)
     table = coerce_table_like(value)
     from_arrow = getattr(ctx, "from_arrow", None)
-    if callable(from_arrow) and isinstance(table, pa.Table) and batch_size is None:
-        return cast("DataFrame", from_arrow(cast("pa.Table", table), name=name))
-    register_memtable_from_table(ctx, name=name, table=table, batch_size=batch_size)
+    if callable(from_arrow) and batch_size is None:
+        try:
+            df = cast("DataFrame", from_arrow(table, name=name))
+        except (TypeError, ValueError):
+            df = None
+        if df is not None:
+            row_count = cast("pa.Table", table).num_rows if isinstance(table, pa.Table) else None
+            _emit_arrow_ingest(
+                ingest_hook,
+                ArrowIngestEvent(
+                    name=name,
+                    method="from_arrow",
+                    partitioning="datafusion_native",
+                    batch_size=None,
+                    batch_count=None,
+                    row_count=row_count,
+                ),
+            )
+            return df
+    batches = slice_memtable_batches(table, batch_size=batch_size)
+    register_memtable(ctx, name=name, batches=batches)
+    row_count = sum(batch.num_rows for batch in batches)
+    _emit_arrow_ingest(
+        ingest_hook,
+        ArrowIngestEvent(
+            name=name,
+            method="record_batches",
+            partitioning="record_batches",
+            batch_size=batch_size,
+            batch_count=len(batches),
+            row_count=row_count,
+        ),
+    )
     return ctx.table(name)
 
 
@@ -1391,6 +1692,7 @@ __all__ = [
     "datafusion_to_async_batches",
     "datafusion_to_reader",
     "datafusion_to_table",
+    "datafusion_view_sql",
     "df_from_sql",
     "execute_dml",
     "execute_prepared_statement",
@@ -1402,10 +1704,12 @@ __all__ = [
     "merge_format_options",
     "prepare_statement",
     "register_memtable",
+    "register_memtable_from_reader",
     "register_memtable_from_table",
     "rehydrate_plan_artifacts",
     "replay_substrait_bytes",
     "slice_memtable_batches",
     "sqlglot_to_datafusion",
+    "validate_substrait_plan",
     "validate_table_constraints",
 ]

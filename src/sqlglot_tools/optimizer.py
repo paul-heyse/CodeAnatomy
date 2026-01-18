@@ -42,6 +42,18 @@ SchemaMapping = Mapping[str, Mapping[str, str]]
 SqlGlotRewriteLane = Literal["transforms", "dialect_shim"]
 
 
+def _schema_requires_quoting(schema: SchemaMapping | None) -> bool:
+    if not schema:
+        return False
+    for table_name, columns in schema.items():
+        if table_name != table_name.lower():
+            return True
+        for column_name in columns:
+            if column_name != column_name.lower():
+                return True
+    return False
+
+
 class SqlGlotSurface(StrEnum):
     """Surface identifiers for SQLGlot compilation."""
 
@@ -105,6 +117,7 @@ class SqlGlotPolicySnapshot:
     unsupported_level: str
     tokenizer_mode: str
     transforms: tuple[str, ...]
+    identify: bool
     policy_hash: str
 
     def payload(self) -> dict[str, object]:
@@ -126,6 +139,7 @@ class SqlGlotPolicySnapshot:
             "unsupported_level": self.unsupported_level,
             "tokenizer_mode": self.tokenizer_mode,
             "transforms": list(self.transforms),
+            "identify": self.identify,
             "policy_hash": self.policy_hash,
         }
 
@@ -329,6 +343,7 @@ def sqlglot_policy_snapshot() -> SqlGlotPolicySnapshot:
         "unsupported_level": policy.unsupported_level.name,
         "tokenizer_mode": _tokenizer_mode(),
         "transforms": [_rule_name(transform) for transform in policy.transforms],
+        "identify": policy.identify,
     }
     policy_hash = _hash_payload(payload)
     return SqlGlotPolicySnapshot(
@@ -342,6 +357,7 @@ def sqlglot_policy_snapshot() -> SqlGlotPolicySnapshot:
         unsupported_level=policy.unsupported_level.name,
         tokenizer_mode=_tokenizer_mode(),
         transforms=tuple(_rule_name(transform) for transform in policy.transforms),
+        identify=policy.identify,
         policy_hash=policy_hash,
     )
 
@@ -634,6 +650,7 @@ def normalize_expr_with_stats(
         enabled=options.enable_rewrites,
     )
     policy = options.policy or default_sqlglot_policy()
+    identify = policy.identify or _schema_requires_quoting(options.schema)
     transformed = apply_transforms(rewritten, transforms=policy.transforms)
     qualify_options = QualifyStrictOptions(
         schema=options.schema,
@@ -641,10 +658,15 @@ def normalize_expr_with_stats(
         sql=options.sql,
         expand_stars=policy.expand_stars,
         validate_columns=policy.validate_qualify_columns and options.schema is not None,
-        identify=policy.identify,
+        identify=identify,
     )
     qualified = qualify_strict(transformed, options=qualify_options)
-    normalized = normalize_identifiers(qualified, dialect=policy.read_dialect)
+    normalized = normalize_identifiers(
+        qualified,
+        dialect=policy.read_dialect,
+        store_original_column_identifiers=identify,
+    )
+    normalized = quote_identifiers(normalized, dialect=policy.read_dialect, identify=identify)
     annotated = annotate_types(
         normalized,
         schema=cast("dict[object, object]", options.schema) if options.schema else None,

@@ -39,3 +39,21 @@ def test_filename_partitioning_uses_schema(tmp_path: Path) -> None:
     partitioning = getattr(dataset, "partitioning", None)
     if partitioning is not None:
         assert isinstance(partitioning, ds.FilenamePartitioning)
+
+
+def test_filename_partitioning_extracts_keys(tmp_path: Path) -> None:
+    """Extract partition values from filename templates."""
+    schema = pa.schema([("run_id", pa.int64())])
+    table = pa.table({"value": ["alpha"]})
+    path = tmp_path / "run_id=42.parquet"
+    pq.write_table(table, str(path))
+    dataset = normalize_dataset_source(
+        tmp_path,
+        options=DatasetSourceOptions(
+            dataset_format="parquet",
+            partitioning="filename",
+            filename_partitioning_schema=schema,
+        ),
+    )
+    output = dataset.scanner().to_table()
+    assert output.column("run_id").to_pylist() == [42]

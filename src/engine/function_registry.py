@@ -54,6 +54,7 @@ class FunctionSpec:
     rewrite_tags: tuple[str, ...] = ()
     catalog: str | None = None
     database: str | None = None
+    capsule_id: str | None = None
 
     def payload(self) -> dict[str, object]:
         """Return a JSON-serializable payload for the spec.
@@ -77,6 +78,7 @@ class FunctionSpec:
             "rewrite_tags": list(self.rewrite_tags),
             "catalog": self.catalog,
             "database": self.database,
+            "capsule_id": self.capsule_id,
         }
 
 
@@ -184,6 +186,7 @@ def _spec_from_datafusion(
         rewrite_tags=spec.rewrite_tags,
         catalog=spec.catalog,
         database=spec.database,
+        capsule_id=spec.capsule_id,
     )
 
 

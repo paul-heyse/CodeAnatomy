@@ -29,6 +29,7 @@ from arrowdsl.io.delta import (
     write_table_delta,
 )
 from arrowdsl.io.delta_config import DeltaSchemaPolicy, DeltaWritePolicy
+from arrowdsl.io.ipc import write_table_ipc_file
 from arrowdsl.json_factory import json_default
 from arrowdsl.plan.metrics import (
     column_stats_table,
@@ -48,6 +49,7 @@ from core_types import JsonDict, JsonValue
 from cpg.constants import CpgBuildArtifacts
 from datafusion_engine.bridge import validate_table_constraints
 from datafusion_engine.registry_bridge import cached_dataset_names
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from engine.function_registry import default_function_registry
 from engine.plan_cache import PlanCacheEntry
 from engine.plan_policy import WriterStrategy
@@ -366,9 +368,10 @@ def _datafusion_settings_snapshot(
     session = profile.session_context()
     table = profile.settings_snapshot(session)
     snapshot: list[dict[str, str]] = []
-    for row in table.to_pylist():
-        name = row.get("name")
-        value = row.get("value")
+    columns = table.to_pydict()
+    names = columns.get("name", [])
+    values = columns.get("value", [])
+    for name, value in zip(names, values, strict=False):
         if name is None or value is None:
             continue
         snapshot.append({"name": str(name), "value": str(value)})
@@ -398,11 +401,14 @@ def _datafusion_catalog_snapshot(
     session = profile.session_context()
     table = profile.catalog_snapshot(session)
     snapshot: list[dict[str, str]] = []
-    for row in table.to_pylist():
-        catalog = row.get("table_catalog")
-        schema = row.get("table_schema")
-        name = row.get("table_name")
-        table_type = row.get("table_type")
+    columns = table.to_pydict()
+    catalogs = columns.get("table_catalog", [])
+    schemas = columns.get("table_schema", [])
+    names = columns.get("table_name", [])
+    table_types = columns.get("table_type", [])
+    for catalog, schema, name, table_type in zip(
+        catalogs, schemas, names, table_types, strict=False
+    ):
         if catalog is None or schema is None or name is None:
             continue
         snapshot.append(
@@ -514,6 +520,9 @@ def _ibis_support_matrix(
 
 def _datafusion_runtime_diag_tables(
     ctx: ExecutionContext,
+    *,
+    output_dir: str | None,
+    work_dir: str | None,
 ) -> tuple[pa.Table | None, pa.Table | None]:
     profile = ctx.runtime.datafusion
     if profile is None:
@@ -522,9 +531,18 @@ def _datafusion_runtime_diag_tables(
     explain_events: list[dict[str, object]] = []
     if profile.fallback_collector is not None:
         fallback_events = profile.fallback_collector.snapshot()
+    artifact_root = _diagnostics_artifact_root(output_dir, work_dir)
     if profile.explain_collector is not None:
-        for entry in profile.explain_collector.snapshot():
+        for idx, entry in enumerate(profile.explain_collector.snapshot()):
             payload = dict(entry)
+            name = f"explain_{idx}_{uuid.uuid4().hex}"
+            payload["rows"] = _diagnostics_rows_payload(
+                artifact_root,
+                group="datafusion_explains",
+                name=name,
+                suffix="rows",
+                rows=payload.get("rows"),
+            )
             payload["explain_analyze"] = profile.explain_analyze
             explain_events.append(payload)
     fallback_table = (
@@ -549,6 +567,19 @@ def _datafusion_input_plugins(
         [],
     )
     return plugins or None
+
+
+def _datafusion_arrow_ingest(
+    ctx: ExecutionContext,
+) -> Sequence[Mapping[str, object]] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return None
+    payloads = profile.diagnostics_sink.artifacts_snapshot().get(
+        "datafusion_arrow_ingest_v1",
+        [],
+    )
+    return payloads or None
 
 
 def _datafusion_prepared_statements(
@@ -629,29 +660,93 @@ def _datafusion_udf_registry(
     return registry or None
 
 
-def _datafusion_plan_artifacts_table(ctx: ExecutionContext) -> pa.Table | None:
+def _datafusion_table_providers(
+    ctx: ExecutionContext,
+) -> Sequence[Mapping[str, object]] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return None
+    providers = profile.diagnostics_sink.artifacts_snapshot().get(
+        "datafusion_table_providers_v1",
+        [],
+    )
+    return providers or None
+
+
+def _datafusion_view_registry(
+    ctx: ExecutionContext,
+) -> Sequence[Mapping[str, object]] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        return None
+    snapshot = profile.view_registry_snapshot()
+    return snapshot or None
+
+
+def _datafusion_plan_artifacts_table(
+    ctx: ExecutionContext,
+    *,
+    output_dir: str | None,
+    work_dir: str | None,
+) -> pa.Table | None:
     profile = ctx.runtime.datafusion
     if profile is None or profile.plan_collector is None:
         return None
     entries = profile.plan_collector.snapshot()
     if not entries:
         return None
+    artifact_root = _diagnostics_artifact_root(output_dir, work_dir)
     rows: list[dict[str, object]] = []
     for entry in entries:
-        explain_value = entry.get("explain")
-        explain: list[object] = list(explain_value) if isinstance(explain_value, list) else []
+        plan_hash = str(entry.get("plan_hash") or "")
+        plan_key = plan_hash or uuid.uuid4().hex
+        explain_payload = _diagnostics_rows_payload(
+            artifact_root,
+            group="datafusion_plan_artifacts_v1",
+            name=plan_key,
+            suffix="explain",
+            rows=entry.get("explain"),
+        )
         explain_analyze = entry.get("explain_analyze")
+        explain_analyze_payload = (
+            _diagnostics_rows_payload(
+                artifact_root,
+                group="datafusion_plan_artifacts_v1",
+                name=plan_key,
+                suffix="explain_analyze",
+                rows=explain_analyze,
+            )
+            if explain_analyze is not None
+            else None
+        )
+        validation_payload = entry.get("substrait_validation")
         rows.append(
             {
-                "plan_hash": str(entry.get("plan_hash") or ""),
+                "plan_hash": plan_hash,
                 "sql": str(entry.get("sql") or ""),
-                "explain_json": json.dumps(explain, ensure_ascii=True, separators=(",", ":")),
+                "explain_json": json.dumps(
+                    explain_payload or {"artifact_path": None, "format": "ipc_file"},
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ),
                 "explain_analyze_json": json.dumps(
-                    explain_analyze, ensure_ascii=True, separators=(",", ":")
+                    explain_analyze_payload,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
                 )
-                if explain_analyze is not None
+                if explain_analyze_payload is not None
                 else None,
                 "substrait_b64": str(entry.get("substrait_b64") or ""),
+                "unparsed_sql": entry.get("unparsed_sql"),
+                "unparse_error": entry.get("unparse_error"),
+                "substrait_validation_json": json.dumps(
+                    validation_payload,
+                    default=json_default,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                )
+                if validation_payload is not None
+                else None,
                 "logical_plan": entry.get("logical_plan"),
                 "optimized_plan": entry.get("optimized_plan"),
                 "physical_plan": entry.get("physical_plan"),
@@ -707,6 +802,52 @@ def _default_debug_dir(output_dir: str | None, work_dir: str | None) -> Path | N
     debug_dir = Path(base) / "debug"
     _ensure_dir(debug_dir)
     return debug_dir
+
+
+def _diagnostics_artifact_root(output_dir: str | None, work_dir: str | None) -> Path | None:
+    debug_dir = _default_debug_dir(output_dir, work_dir)
+    if debug_dir is None:
+        return None
+    root = debug_dir / "diagnostics"
+    _ensure_dir(root)
+    return root
+
+
+def _diagnostics_artifact_path(
+    root: Path,
+    *,
+    group: str,
+    name: str,
+    suffix: str,
+) -> Path:
+    base = root / group / name
+    _ensure_dir(base)
+    return base / f"{suffix}.arrow"
+
+
+def _diagnostics_rows_payload(
+    root: Path | None,
+    *,
+    group: str,
+    name: str,
+    suffix: str,
+    rows: object,
+) -> object | None:
+    if rows is None:
+        return None
+    if isinstance(rows, (RecordBatchReaderLike, TableLike)):
+        schema = rows.schema
+        payload: dict[str, object] = {
+            "artifact_path": None,
+            "format": "ipc_file",
+            "schema_fingerprint": schema_fingerprint(schema),
+        }
+        if root is None:
+            return payload
+        path = _diagnostics_artifact_path(root, group=group, name=name, suffix=suffix)
+        payload["artifact_path"] = write_table_ipc_file(rows, path, overwrite=True)
+        return payload
+    return rows
 
 
 def _incremental_output_dir(output_dir: str | None, work_dir: str | None) -> Path | None:
@@ -1949,12 +2090,24 @@ def relspec_scan_telemetry(
             dataset_spec = dataset_spec_from_schema(name=name, schema=dataset.schema)
         query = dataset_spec.query()
         scan_provenance = tuple(ctx.runtime.scan.scan_provenance_columns)
-        scanner = ScanBuildSpec(
+        scan_spec = ScanBuildSpec(
             dataset=dataset,
             query=query,
             ctx=ctx,
             scan_provenance=scan_provenance,
-        ).scanner()
+        )
+        scanner = scan_spec.scanner()
+        scan_columns = scan_spec.scan_columns()
+        scan_column_names = (
+            list(scan_columns.keys())
+            if isinstance(scan_columns, Mapping)
+            else list(scan_columns)
+        )
+        required_columns = (
+            list(scan_spec.required_columns)
+            if scan_spec.required_columns is not None
+            else list(scan_column_names)
+        )
         telemetry = fragment_telemetry(
             dataset,
             predicate=query.pushdown_expression(),
@@ -1962,6 +2115,8 @@ def relspec_scan_telemetry(
             options=ScanTelemetryOptions(
                 discovery_policy=dataset_options.discovery_payload(),
                 scan_profile=_scan_profile_payload(ctx),
+                required_columns=required_columns,
+                scan_columns=scan_column_names,
             ),
         )
         scan_profile_json = json.dumps(
@@ -1987,6 +2142,8 @@ def relspec_scan_telemetry(
                 "file_hints": list(telemetry.file_hints),
                 "fragment_paths": list(telemetry.fragment_paths),
                 "partition_expressions": list(telemetry.partition_expressions),
+                "required_columns": list(telemetry.required_columns),
+                "scan_columns": list(telemetry.scan_columns),
                 "dataset_schema_json": dataset_schema,
                 "projected_schema_json": projected_schema,
                 "discovery_policy_json": json.dumps(
@@ -2428,34 +2585,86 @@ def _runtime_telemetry_notes(manifest_inputs: ManifestInputs) -> JsonDict:
     return {"relspec_runtime_telemetry": cast("JsonValue", runtime_telemetry)}
 
 
-def _datafusion_notes(ctx: ExecutionContext) -> JsonDict:
-    runtime = ctx.runtime.datafusion
-    if runtime is None:
-        return {}
-    notes: JsonDict = {"datafusion_policy": cast("JsonValue", runtime.telemetry_payload_v1())}
+def _explain_note_payload(entry: Mapping[str, object]) -> JsonDict:
+    payload: JsonDict = {}
+    for key in ("rule", "output", "sql", "explain_analyze"):
+        if key in entry:
+            payload[key] = cast("JsonValue", entry.get(key))
+    rows = entry.get("rows")
+    if isinstance(rows, (RecordBatchReaderLike, TableLike)):
+        payload["rows_schema_fingerprint"] = schema_fingerprint(rows.schema)
+    elif rows is not None:
+        payload["rows"] = cast("JsonValue", rows)
+    return payload
+
+
+def _datafusion_diagnostics_notes(runtime: DataFusionRuntimeProfile) -> JsonDict:
+    notes: JsonDict = {}
+    diagnostics = runtime.diagnostics_sink
+    if diagnostics is None:
+        return notes
+    artifacts = diagnostics.artifacts_snapshot()
+    udf_registry = artifacts.get("datafusion_udf_registry_v1", [])
+    if udf_registry:
+        notes["datafusion_udf_registry"] = cast("JsonValue", udf_registry)
+    table_providers = artifacts.get("datafusion_table_providers_v1", [])
+    if table_providers:
+        notes["datafusion_table_providers"] = cast("JsonValue", table_providers)
+    return notes
+
+
+def _datafusion_catalog_notes(
+    ctx: ExecutionContext,
+    runtime: DataFusionRuntimeProfile,
+) -> JsonDict:
+    notes: JsonDict = {}
     catalog_snapshot = _datafusion_catalog_snapshot(ctx)
     if catalog_snapshot:
         notes["datafusion_catalog"] = cast("JsonValue", catalog_snapshot)
     cached = cached_dataset_names(runtime.session_context())
     if cached:
         notes["datafusion_cached_datasets"] = cast("JsonValue", list(cached))
+    return notes
+
+
+def _datafusion_explain_notes(runtime: DataFusionRuntimeProfile) -> JsonDict:
     explain_collector = runtime.explain_collector
-    if explain_collector is not None:
-        explain_entries = explain_collector.snapshot()
-        if explain_entries:
-            notes["datafusion_explain"] = cast("JsonValue", explain_entries)
+    if explain_collector is None:
+        return {}
+    explain_entries = explain_collector.snapshot()
+    if not explain_entries:
+        return {}
+    return {"datafusion_explain": [_explain_note_payload(entry) for entry in explain_entries]}
+
+
+def _datafusion_fallback_notes(runtime: DataFusionRuntimeProfile) -> JsonDict:
+    notes: JsonDict = {}
     fallback_collector = runtime.fallback_collector
     if fallback_collector is not None:
         fallback_entries = fallback_collector.snapshot()
         if fallback_entries:
             notes["datafusion_fallbacks"] = cast("JsonValue", fallback_entries)
     if runtime.labeled_explains:
-        notes["datafusion_rule_explain"] = cast("JsonValue", list(runtime.labeled_explains))
+        notes["datafusion_rule_explain"] = [
+            _explain_note_payload(entry) for entry in runtime.labeled_explains
+        ]
     if runtime.labeled_fallbacks:
         notes["datafusion_rule_fallbacks"] = cast(
             "JsonValue",
             list(runtime.labeled_fallbacks),
         )
+    return notes
+
+
+def _datafusion_notes(ctx: ExecutionContext) -> JsonDict:
+    runtime = ctx.runtime.datafusion
+    if runtime is None:
+        return {}
+    notes: JsonDict = {"datafusion_policy": cast("JsonValue", runtime.telemetry_payload_v1())}
+    notes.update(_datafusion_diagnostics_notes(runtime))
+    notes.update(_datafusion_catalog_notes(ctx, runtime))
+    notes.update(_datafusion_explain_notes(runtime))
+    notes.update(_datafusion_fallback_notes(runtime))
     return notes
 
 
@@ -2791,10 +3000,13 @@ class _RunBundleDatafusionArtifacts:
     cache_events: Sequence[Mapping[str, object]] | None
     prepared_statements: Sequence[Mapping[str, object]] | None
     input_plugins: Sequence[Mapping[str, object]] | None
+    arrow_ingest: Sequence[Mapping[str, object]] | None
+    view_registry: Sequence[Mapping[str, object]] | None
     dml_statements: Sequence[Mapping[str, object]] | None
     listing_tables: Sequence[Mapping[str, object]] | None
     delta_tables: Sequence[Mapping[str, object]] | None
     udf_registry: Sequence[Mapping[str, object]] | None
+    table_providers: Sequence[Mapping[str, object]] | None
 
 
 @dataclass(frozen=True)
@@ -2810,6 +3022,9 @@ class _RunBundleParamValues:
 
 def _run_bundle_datafusion_artifacts(
     ctx: ExecutionContext | None,
+    *,
+    output_dir: str | None,
+    work_dir: str | None,
 ) -> _RunBundleDatafusionArtifacts:
     if ctx is None:
         return _RunBundleDatafusionArtifacts(
@@ -2822,36 +3037,41 @@ def _run_bundle_datafusion_artifacts(
             cache_events=None,
             prepared_statements=None,
             input_plugins=None,
+            arrow_ingest=None,
+            view_registry=None,
             dml_statements=None,
             listing_tables=None,
             delta_tables=None,
             udf_registry=None,
+            table_providers=None,
         )
     metrics, traces = _datafusion_runtime_artifacts(ctx)
-    fallbacks, explains = _datafusion_runtime_diag_tables(ctx)
-    plan_artifacts = _datafusion_plan_artifacts_table(ctx)
-    plan_cache = _datafusion_plan_cache_entries(ctx)
-    cache_events = _datafusion_cache_events(ctx)
-    prepared_statements = _datafusion_prepared_statements(ctx)
-    input_plugins = _datafusion_input_plugins(ctx)
-    dml_statements = _datafusion_dml_statements(ctx)
-    listing_tables = _datafusion_listing_tables(ctx)
-    delta_tables = _datafusion_delta_tables(ctx)
-    udf_registry = _datafusion_udf_registry(ctx)
+    fallbacks, explains = _datafusion_runtime_diag_tables(
+        ctx,
+        output_dir=output_dir,
+        work_dir=work_dir,
+    )
     return _RunBundleDatafusionArtifacts(
         metrics=metrics,
         traces=traces,
         fallbacks=fallbacks,
         explains=explains,
-        plan_artifacts=plan_artifacts,
-        plan_cache=plan_cache,
-        cache_events=cache_events,
-        prepared_statements=prepared_statements,
-        input_plugins=input_plugins,
-        dml_statements=dml_statements,
-        listing_tables=listing_tables,
-        delta_tables=delta_tables,
-        udf_registry=udf_registry,
+        plan_artifacts=_datafusion_plan_artifacts_table(
+            ctx,
+            output_dir=output_dir,
+            work_dir=work_dir,
+        ),
+        plan_cache=_datafusion_plan_cache_entries(ctx),
+        cache_events=_datafusion_cache_events(ctx),
+        prepared_statements=_datafusion_prepared_statements(ctx),
+        input_plugins=_datafusion_input_plugins(ctx),
+        arrow_ingest=_datafusion_arrow_ingest(ctx),
+        view_registry=_datafusion_view_registry(ctx),
+        dml_statements=_datafusion_dml_statements(ctx),
+        listing_tables=_datafusion_listing_tables(ctx),
+        delta_tables=_datafusion_delta_tables(ctx),
+        udf_registry=_datafusion_udf_registry(ctx),
+        table_providers=_datafusion_table_providers(ctx),
     )
 
 
@@ -2897,7 +3117,11 @@ def run_bundle_context(
         return None
 
     base_dir = Path(base) / "run_bundles"
-    datafusion_artifacts = _run_bundle_datafusion_artifacts(context_inputs.ctx)
+    datafusion_artifacts = _run_bundle_datafusion_artifacts(
+        context_inputs.ctx,
+        output_dir=output_config.output_dir,
+        work_dir=output_config.work_dir,
+    )
     delta_maintenance_reports = (
         _delta_maintenance_reports(context_inputs.ctx) if context_inputs.ctx is not None else None
     )
@@ -2927,11 +3151,14 @@ def run_bundle_context(
         datafusion_cache_events=datafusion_artifacts.cache_events,
         datafusion_prepared_statements=datafusion_artifacts.prepared_statements,
         datafusion_input_plugins=datafusion_artifacts.input_plugins,
+        datafusion_arrow_ingest=datafusion_artifacts.arrow_ingest,
+        datafusion_view_registry=datafusion_artifacts.view_registry,
         datafusion_dml_statements=datafusion_artifacts.dml_statements,
         datafusion_listing_tables=datafusion_artifacts.listing_tables,
         datafusion_delta_tables=datafusion_artifacts.delta_tables,
         delta_maintenance_reports=delta_maintenance_reports,
         datafusion_udf_registry=datafusion_artifacts.udf_registry,
+        datafusion_table_providers=datafusion_artifacts.table_providers,
         arrow_kernel_registry=kernel_registry,
         ibis_sql_ingest_artifacts=sql_ingest_artifacts,
         ibis_namespace_actions=namespace_actions,

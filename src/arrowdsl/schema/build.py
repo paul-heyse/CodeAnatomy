@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -242,6 +242,60 @@ def table_from_rows(
     return pa.Table.from_arrays(arrays, schema=pa.schema(schema))
 
 
+def iter_rows_from_table(table: pa.Table) -> Iterator[Mapping[str, object]]:
+    """Yield row dictionaries from a table without using to_pylist.
+
+    Returns
+    -------
+    Iterator[Mapping[str, object]]
+        Iterator over row mappings.
+    """
+    struct_array = table.to_struct_array()
+    names = table.column_names
+    null_row = {name: None for name in names}
+    for item in struct_array:
+        row = item.as_py()
+        if row is None:
+            yield dict(null_row)
+        else:
+            yield dict(cast("Mapping[str, object]", row))
+
+
+def rows_from_table(table: pa.Table) -> list[dict[str, object]]:
+    """Return row dictionaries from a table without using to_pylist.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        Row dictionaries from the table.
+    """
+    return [dict(row) for row in iter_rows_from_table(table)]
+
+
+def table_from_row_dicts(rows: Sequence[Mapping[str, object]]) -> TableLike:
+    """Build a table from row mappings with inferred schema.
+
+    Returns
+    -------
+    TableLike
+        Table constructed from row mappings.
+    """
+    row_list = [dict(row) for row in rows]
+    if not row_list:
+        return pa.table({})
+    names: list[str] = []
+    seen: set[str] = set()
+    for row in row_list:
+        for key in row:
+            if key not in seen:
+                names.append(key)
+                seen.add(key)
+    columns: dict[str, ArrayLike] = {}
+    for name in names:
+        columns[name] = pa.array([row.get(name) for row in row_list])
+    return pa.table(columns)
+
+
 def table_from_arrays(
     schema: SchemaLike,
     *,
@@ -320,12 +374,15 @@ __all__ = [
     "pick_first",
     "resolve_float_col",
     "resolve_string_col",
+    "iter_rows_from_table",
+    "rows_from_table",
     "rows_to_table",
     "set_or_append_column",
     "sparse_union_array",
     "struct_array_from_dicts",
     "struct_type",
     "table_from_arrays",
+    "table_from_row_dicts",
     "table_from_rows",
     "table_from_schema",
     "union_array_from_tagged_values",

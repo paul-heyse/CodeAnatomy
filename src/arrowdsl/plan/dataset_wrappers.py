@@ -14,6 +14,7 @@ class OneShotDataset:
     """Wrap a dataset to enforce single-scan semantics."""
 
     dataset: ds.Dataset
+    reader: pa.RecordBatchReader | None = None
     _scanned: bool = field(default=False, init=False, repr=False)
 
     @property
@@ -25,7 +26,21 @@ class OneShotDataset:
         pyarrow.Schema
             Arrow schema for the dataset.
         """
+        if self.reader is not None:
+            return self.reader.schema
         return self.dataset.schema
+
+    @classmethod
+    def from_reader(cls, reader: pa.RecordBatchReader) -> OneShotDataset:
+        """Create a one-shot wrapper around a record batch reader.
+
+        Returns
+        -------
+        OneShotDataset
+            Wrapper that enforces single-scan semantics.
+        """
+        dataset = ds.dataset(reader, schema=reader.schema)
+        return cls(dataset=dataset, reader=reader)
 
     def consume(self) -> ds.Dataset:
         """Return the wrapped dataset, enforcing single-use semantics.
@@ -53,8 +68,19 @@ class OneShotDataset:
         -------
         pyarrow.dataset.Scanner
             Scanner for the wrapped dataset.
+
+        Raises
+        ------
+        ValueError
+            Raised when the dataset has already been scanned.
         """
-        return self.consume().scanner(*args, **kwargs)
+        if self._scanned:
+            msg = "One-shot dataset has already been scanned."
+            raise ValueError(msg)
+        self._scanned = True
+        if self.reader is None:
+            return self.dataset.scanner(*args, **kwargs)
+        return ds.Scanner.from_batches(self.reader, schema=self.schema, **kwargs)
 
     def __getattr__(self, name: str) -> object:
         """Delegate missing attributes to the underlying dataset.

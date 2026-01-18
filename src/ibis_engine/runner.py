@@ -297,6 +297,21 @@ async def async_stream_plan(
     effective_params = params
     if execution is not None and execution.params is not None:
         effective_params = execution.params
+    if execution is not None:
+        cache_policy = execution.cache_policy
+        if cache_policy is not None:
+            _record_cache_event(cache_policy, mode="async_stream")
+        if cache_policy is not None and cache_policy.enabled:
+            with plan.cache() as cached:
+                cached_execution = replace(execution, cache_policy=None)
+                async for batch in async_stream_plan(
+                    cached,
+                    batch_size=batch_size,
+                    params=effective_params,
+                    execution=cached_execution,
+                ):
+                    yield batch
+                return
     if execution is not None and execution.datafusion is not None:
         df = plan_to_datafusion(
             plan,

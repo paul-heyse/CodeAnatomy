@@ -612,6 +612,26 @@ def _is_list_like_type(dtype: DataTypeLike) -> bool:
     )
 
 
+def _list_view_to_list_array(
+    values: pa.ListViewArray | pa.LargeListViewArray,
+) -> ListArrayLike:
+    lengths = pc.list_value_length(values)
+    lengths = pc.fill_null(lengths, 0)
+    if isinstance(values, pa.LargeListViewArray):
+        if lengths.type != pa.int64():
+            lengths = pc.cast(lengths, pa.int64())
+    elif lengths.type != pa.int32():
+        lengths = pc.cast(lengths, pa.int32())
+    offsets = pc.cumulative_sum(lengths)
+    zero = pa.array([0], type=offsets.type)
+    offsets = pa.concat_arrays([zero, offsets])
+    flat = pc.list_flatten(values)
+    mask = pc.is_null(values)
+    if isinstance(values, pa.LargeListViewArray):
+        return cast("ListArrayLike", pa.LargeListArray.from_arrays(offsets, flat, mask=mask))
+    return cast("ListArrayLike", pa.ListArray.from_arrays(offsets, flat, mask=mask))
+
+
 def _combine_list_array(values: ArrayLike | ChunkedArrayLike) -> ListArrayLike:
     combined = values.combine_chunks() if isinstance(values, ChunkedArrayLike) else values
     if isinstance(combined, pa.ListArray):
@@ -619,13 +639,9 @@ def _combine_list_array(values: ArrayLike | ChunkedArrayLike) -> ListArrayLike:
     if isinstance(combined, pa.LargeListArray):
         return cast("ListArrayLike", combined)
     if isinstance(combined, pa.ListViewArray):
-        list_view_type = cast("pa.ListViewType", combined.type)
-        list_type = pa.list_(list_view_type.value_type)
-        return cast("ListArrayLike", pa.array(combined.to_pylist(), type=list_type))
+        return _list_view_to_list_array(combined)
     if isinstance(combined, pa.LargeListViewArray):
-        list_view_type = cast("pa.LargeListViewType", combined.type)
-        list_type = pa.large_list(list_view_type.value_type)
-        return cast("ListArrayLike", pa.array(combined.to_pylist(), type=list_type))
+        return _list_view_to_list_array(combined)
     combined_type = getattr(combined, "type", None)
     if combined_type is not None and _is_list_like_type(combined_type):
         value_type = getattr(combined_type, "value_type", None)
@@ -635,7 +651,9 @@ def _combine_list_array(values: ArrayLike | ChunkedArrayLike) -> ListArrayLike:
                 if patypes.is_large_list(combined_type) or patypes.is_large_list_view(combined_type)
                 else pa.list_(cast("pa.DataType", value_type))
             )
-            return cast("ListArrayLike", pa.array(combined.to_pylist(), type=list_type))
+            casted = pc.cast(combined, list_type)
+            if isinstance(casted, (pa.ListArray, pa.LargeListArray)):
+                return cast("ListArrayLike", casted)
     msg = "Expected list array for error detail aggregation."
     raise TypeError(msg)
 

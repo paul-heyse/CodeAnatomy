@@ -11,7 +11,8 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 from deltalake import DeltaTable
 
-from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, coerce_table_like
+from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
+from arrowdsl.core.streaming import to_reader
 from arrowdsl.plan.dataset_wrappers import (
     DatasetLike,
     OneShotDataset,
@@ -131,11 +132,11 @@ def normalize_dataset_source(
     elif isinstance(source, _DatasetFactory):
         builder = source
         dataset = builder.build(schema=resolved.schema)
-    elif isinstance(source, (TableLike, RecordBatchReaderLike)) or _has_arrow_capsule(source):
-        coerced = coerce_table_like(source)
-        dataset = ds.dataset(coerced, schema=resolved.schema)
-        if isinstance(coerced, RecordBatchReaderLike):
-            dataset = OneShotDataset(dataset)
+    elif isinstance(source, TableLike):
+        dataset = ds.dataset(source, schema=resolved.schema)
+    elif isinstance(source, RecordBatchReaderLike) or _has_arrow_capsule(source):
+        reader = to_reader(source, schema=resolved.schema)
+        dataset = OneShotDataset.from_reader(reader)
     else:
         path = _coerce_pathlike(source)
         if resolved.dataset_format == "delta":

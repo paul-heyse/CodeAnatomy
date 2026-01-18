@@ -33,3 +33,32 @@ def test_parquet_sorting_metadata_written(tmp_path: Path) -> None:
     assert sorting_columns is not None
     assert sorting_columns[0].column_index == 0
     assert sorting_columns[0].descending is False
+
+
+@pytest.mark.parametrize(
+    ("ordering_level", "keys"),
+    [
+        (None, ()),
+        (OrderingLevel.IMPLICIT, (("id", "ascending"),)),
+    ],
+)
+def test_parquet_sorting_metadata_absent_without_explicit_order(
+    tmp_path: Path,
+    ordering_level: OrderingLevel | None,
+    keys: tuple[tuple[str, str], ...],
+) -> None:
+    """Skip sorting metadata when ordering is missing or implicit."""
+    if not parquet_supports_sorting_columns():
+        pytest.skip("PyArrow sorting_columns not supported in this environment.")
+    schema = pa.schema([("id", pa.int64()), ("value", pa.string())])
+    if ordering_level is not None:
+        schema = ordering_metadata_spec(ordering_level, keys=keys).apply(schema)
+    table = pa.Table.from_pydict({"id": [1, 2], "value": ["a", "b"]}, schema=schema)
+    dataset_dir = tmp_path / "dataset"
+    write_dataset_parquet(table, dataset_dir)
+    files = list(dataset_dir.glob("*.parquet"))
+    assert files
+    metadata = pq.ParquetFile(str(files[0])).metadata
+    row_group = metadata.row_group(0)
+    sorting_columns = getattr(row_group, "sorting_columns", None)
+    assert not sorting_columns

@@ -355,9 +355,12 @@ class RunBundleContext:
     datafusion_cache_events: Sequence[Mapping[str, object]] | None = None
     datafusion_prepared_statements: Sequence[Mapping[str, object]] | None = None
     datafusion_input_plugins: Sequence[Mapping[str, object]] | None = None
+    datafusion_arrow_ingest: Sequence[Mapping[str, object]] | None = None
+    datafusion_view_registry: Sequence[Mapping[str, object]] | None = None
     datafusion_dml_statements: Sequence[Mapping[str, object]] | None = None
     datafusion_listing_tables: Sequence[Mapping[str, object]] | None = None
     datafusion_delta_tables: Sequence[Mapping[str, object]] | None = None
+    datafusion_table_providers: Sequence[Mapping[str, object]] | None = None
     delta_maintenance_reports: Sequence[Mapping[str, object]] | None = None
     datafusion_udf_registry: Sequence[Mapping[str, object]] | None = None
     arrow_kernel_registry: Mapping[str, object] | None = None
@@ -566,6 +569,20 @@ def _write_runtime_artifacts(
             else None,
         ),
         (
+            "datafusion_arrow_ingest.json",
+            "ingest",
+            _json_list(context.datafusion_arrow_ingest)
+            if context.datafusion_arrow_ingest
+            else None,
+        ),
+        (
+            "datafusion_view_registry.json",
+            "views",
+            _json_list(context.datafusion_view_registry)
+            if context.datafusion_view_registry
+            else None,
+        ),
+        (
             "datafusion_cache_events.json",
             "events",
             _json_list(context.datafusion_cache_events)
@@ -598,6 +615,13 @@ def _write_runtime_artifacts(
             "registrations",
             _json_list(context.datafusion_delta_tables)
             if context.datafusion_delta_tables
+            else None,
+        ),
+        (
+            "datafusion_table_providers.json",
+            "providers",
+            _json_list(context.datafusion_table_providers)
+            if context.datafusion_table_providers
             else None,
         ),
         (
@@ -1258,11 +1282,14 @@ def write_run_bundle(
         relspec/datafusion_explains/
         relspec/datafusion_plan_artifacts_v1/
         relspec/datafusion_input_plugins.json
+        relspec/datafusion_arrow_ingest.json
+        relspec/datafusion_view_registry.json
         relspec/datafusion_cache_events.json
         relspec/datafusion_prepared_statements.json
         relspec/datafusion_dml_statements.json
         relspec/datafusion_listing_tables.json
         relspec/datafusion_delta_tables.json
+        relspec/datafusion_table_providers.json
         relspec/datafusion_udf_registry.json
         relspec/arrow_kernel_registry.json
         relspec/substrait_cache/

@@ -13,6 +13,7 @@ from arrowdsl.io.parquet import (
     DatasetWriteConfig,
     DatasetWriteReport,
     ParquetMetadataConfig,
+    ParquetWriteOptions,
     write_dataset_parquet,
 )
 from arrowdsl.schema.metadata import ordering_metadata_spec
@@ -43,3 +44,31 @@ def test_manifest_row_group_stats(tmp_path: Path) -> None:
     assert report.row_group_stats is not None
     columns = cast("Mapping[str, object]", report.row_group_stats[0]["columns"])
     assert "id" in columns
+
+
+def test_manifest_row_group_stats_gated_by_file_count(tmp_path: Path) -> None:
+    """Skip row-group stats when the file count exceeds the cap."""
+    reports: list[DatasetWriteReport] = []
+
+    def _report(report: DatasetWriteReport) -> None:
+        reports.append(report)
+
+    schema = pa.schema([("id", pa.int64()), ("value", pa.string())])
+    schema = ordering_metadata_spec(
+        OrderingLevel.EXPLICIT,
+        keys=(("id", "ascending"),),
+    ).apply(schema)
+    table = pa.Table.from_pydict(
+        {"id": [1, 2, 3], "value": ["a", "b", "c"]},
+        schema=schema,
+    )
+    config = DatasetWriteConfig(
+        opts=ParquetWriteOptions(max_rows_per_file=1),
+        metadata=ParquetMetadataConfig(max_row_group_stats_files=1),
+        reporter=_report,
+    )
+    write_dataset_parquet(table, tmp_path / "dataset", config=config)
+    assert reports
+    report = reports[0]
+    assert len(report.files) > 1
+    assert report.row_group_stats is None

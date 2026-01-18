@@ -12,7 +12,10 @@ import pyarrow as pa
 from pyarrow import ipc
 
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.schema.build import table_from_rows as build_table_from_rows
+from arrowdsl.schema.build import (
+    rows_from_table as build_rows_from_table,
+    table_from_rows as build_table_from_rows,
+)
 
 if TYPE_CHECKING:
     from arrowdsl.spec.tables.base import SpecTableCodec
@@ -153,7 +156,7 @@ def rows_from_table(table: pa.Table) -> list[dict[str, Any]]:
     list[dict[str, Any]]
         Row dictionaries from the table.
     """
-    return table.to_pylist()
+    return build_rows_from_table(table)
 
 
 def table_from_json(

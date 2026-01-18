@@ -21,6 +21,16 @@ def test_union_dataset_normalizes_sources() -> None:
     assert unioned.count_rows() == EXPECTED_ROW_COUNT
 
 
+def test_union_dataset_aligns_schema_by_name() -> None:
+    """Align unioned schemas by field name ordering."""
+    left = ds.dataset(pa.table({"a": [1], "b": ["x"]}))
+    right = ds.dataset(pa.table({"b": ["y"], "a": [2]}))
+    unioned = unwrap_dataset(normalize_dataset_source([left, right]))
+    table = unioned.scanner().to_table()
+    assert table.column("a").to_pylist() == [1, 2]
+    assert table.column("b").to_pylist() == ["x", "y"]
+
+
 def test_one_shot_dataset_blocks_rescan() -> None:
     """Reject multiple scans of one-shot datasets."""
     batch = pa.record_batch([pa.array([1])], names=["a"])

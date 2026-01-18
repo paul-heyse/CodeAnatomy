@@ -30,7 +30,7 @@ from arrowdsl.schema.metadata import (
 )
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from datafusion_engine.bridge import datafusion_from_arrow
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.runtime import DataFusionRuntimeProfile, diagnostics_arrow_ingest_hook
 from datafusion_engine.udf_registry import (
     _NORMALIZE_SPAN_UDF,
     _register_kernel_udfs,
@@ -55,16 +55,34 @@ def _df_from_table(
     *,
     name: str,
     batch_size: int | None = None,
+    ingest_hook: Callable[[Mapping[str, object]], None] | None = None,
 ) -> DataFrame:
     existing = _existing_table_names(ctx)
     table_name = _temp_name(name, existing) if name in existing else name
-    return datafusion_from_arrow(ctx, name=table_name, value=table, batch_size=batch_size)
+    return datafusion_from_arrow(
+        ctx,
+        name=table_name,
+        value=table,
+        batch_size=batch_size,
+        ingest_hook=ingest_hook,
+    )
 
 
 def _batch_size_from_ctx(ctx: ExecutionContext | None) -> int | None:
     if ctx is None or ctx.runtime.datafusion is None:
         return None
     return ctx.runtime.datafusion.batch_size
+
+
+def _arrow_ingest_hook(
+    ctx: ExecutionContext | None,
+) -> Callable[[Mapping[str, object]], None] | None:
+    if ctx is None or ctx.runtime.datafusion is None:
+        return None
+    diagnostics = ctx.runtime.datafusion.diagnostics_sink
+    if diagnostics is None:
+        return None
+    return diagnostics_arrow_ingest_hook(diagnostics)
 
 
 def _existing_table_names(ctx: SessionContext) -> set[str]:
@@ -236,6 +254,7 @@ def dedupe_kernel(
         table,
         name="dedupe",
         batch_size=_batch_size_from_ctx(_ctx),
+        ingest_hook=_arrow_ingest_hook(_ctx),
     )
     columns = list(table.schema.names)
     result_df = _dedupe_dataframe(df, spec=resolved_spec, columns=columns)
@@ -279,6 +298,7 @@ def explode_list_kernel(
         table,
         name="explode_list",
         batch_size=_batch_size_from_ctx(_ctx),
+        ingest_hook=_arrow_ingest_hook(_ctx),
     )
     idx_list_name = _temp_name("__idx_list", set(table.column_names))
     df = df.with_column(
@@ -489,8 +509,20 @@ def _interval_join_frames(
     ctx: SessionContext,
     batch_size: int | None = None,
 ) -> tuple[DataFrame, DataFrame, Mapping[str, str]]:
-    left_df = _df_from_table(ctx, prepared.left, name="interval_left", batch_size=batch_size)
-    right_df = _df_from_table(ctx, prepared.right, name="interval_right", batch_size=batch_size)
+    left_df = _df_from_table(
+        ctx,
+        prepared.left,
+        name="interval_left",
+        batch_size=batch_size,
+        ingest_hook=None,
+    )
+    right_df = _df_from_table(
+        ctx,
+        prepared.right,
+        name="interval_right",
+        batch_size=batch_size,
+        ingest_hook=None,
+    )
     right_df, right_name_map = _rename_right_columns(
         right_df,
         left_names=set(left_df.schema().names),

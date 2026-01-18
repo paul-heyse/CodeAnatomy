@@ -7,6 +7,7 @@ from dataclasses import replace
 from typing import cast
 
 from ibis.expr.types import Table as IbisTable
+from sqlglot import exp
 from sqlglot.lineage import Node, lineage
 from sqlglot.optimizer import scope
 
@@ -50,6 +51,7 @@ def required_columns_by_table(
     )
     scoped = scope.build_scope(normalized)
     required: dict[str, set[str]] = {}
+    _collect_expression_columns(normalized, required)
     output_columns = tuple(cast("tuple[str, ...]", expr.schema().names))
     for column in output_columns:
         node = lineage(
@@ -63,6 +65,15 @@ def required_columns_by_table(
         )
         _collect_required_columns(node, required)
     return {table: tuple(sorted(cols)) for table, cols in required.items()}
+
+
+def _collect_expression_columns(expr: exp.Expression, required: dict[str, set[str]]) -> None:
+    for column in expr.find_all(exp.Column):
+        table = column.table
+        name = column.name
+        if not table or not name:
+            continue
+        required.setdefault(table, set()).add(name)
 
 
 def lineage_graph_by_output(

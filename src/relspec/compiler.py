@@ -1775,10 +1775,14 @@ class RelationshipRuleCompiler:
             )
         except (TypeError, ValueError):
             return {}
-        return required_columns_by_table(
+        required = required_columns_by_table(
             plan.expr,
             backend=cast("IbisCompilerBackend", backend),
         )
+        for ref in compiled.rule.inputs:
+            if ref.label and ref.name in required:
+                required.setdefault(ref.label, required[ref.name])
+        return required
 
     def collect_scan_telemetry(
         self,

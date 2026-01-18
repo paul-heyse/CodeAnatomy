@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import pyarrow.dataset as ds
@@ -28,6 +29,8 @@ class ScanTelemetry:
     file_hints: tuple[str, ...] = ()
     fragment_paths: tuple[str, ...] = ()
     partition_expressions: tuple[str, ...] = ()
+    required_columns: tuple[str, ...] = ()
+    scan_columns: tuple[str, ...] = ()
     dataset_schema: JsonDict | None = None
     projected_schema: JsonDict | None = None
     discovery_policy: JsonDict | None = None
@@ -41,6 +44,8 @@ class ScanTelemetryOptions:
     hint_limit: int | None = 5
     discovery_policy: JsonDict | None = None
     scan_profile: JsonDict | None = None
+    required_columns: Sequence[str] | None = None
+    scan_columns: Sequence[str] | None = None
 
 
 def fragment_telemetry(
@@ -59,33 +64,17 @@ def fragment_telemetry(
     """
     resolved = options or ScanTelemetryOptions()
     fragments = list_fragments(dataset, predicate=predicate)
-    fragment_paths: list[str] = []
-    partition_expressions: list[str] = []
-    for fragment in fragments:
-        path = getattr(fragment, "path", None)
-        if path is not None:
-            fragment_paths.append(str(path))
-        partition_expression = getattr(fragment, "partition_expression", None)
-        if partition_expression is not None:
-            partition_expressions.append(str(partition_expression))
     try:
         count_rows = dataset.count_rows(filter=predicate)
     except (AttributeError, NotImplementedError, TypeError, ValueError):
         count_rows = None
-    total_rows = 0
-    estimated_rows: int | None = 0
-    for fragment in fragments:
-        metadata = fragment.metadata
-        if metadata is None or metadata.num_rows is None or metadata.num_rows < 0:
-            estimated_rows = None
-            break
-        total_rows += int(metadata.num_rows)
-    if estimated_rows is not None:
-        estimated_rows = total_rows
+    fragment_paths, partition_expressions = _fragment_paths_and_partitions(fragments)
+    estimated_rows = _estimated_rows(fragments)
     if scanner is None:
         scanner = dataset.scanner(filter=predicate)
     dataset_schema = _schema_payload(getattr(dataset, "schema", None))
     projected_schema = _schema_payload(getattr(scanner, "schema", None))
+    required_columns, scan_columns = _scan_columns(scanner, resolved)
     try:
         task_count = scan_task_count(scanner)
     except (AttributeError, TypeError):
@@ -96,13 +85,55 @@ def fragment_telemetry(
         count_rows=int(count_rows) if count_rows is not None else None,
         estimated_rows=estimated_rows,
         file_hints=fragment_file_hints(fragments, limit=resolved.hint_limit),
-        fragment_paths=tuple(fragment_paths),
-        partition_expressions=tuple(partition_expressions),
+        fragment_paths=fragment_paths,
+        partition_expressions=partition_expressions,
+        required_columns=required_columns,
+        scan_columns=scan_columns,
         dataset_schema=dataset_schema,
         projected_schema=projected_schema,
         discovery_policy=resolved.discovery_policy,
         scan_profile=resolved.scan_profile,
     )
+
+
+def _fragment_paths_and_partitions(
+    fragments: Sequence[ds.Fragment],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    fragment_paths: list[str] = []
+    partition_expressions: list[str] = []
+    for fragment in fragments:
+        path = getattr(fragment, "path", None)
+        if path is not None:
+            fragment_paths.append(str(path))
+        partition_expression = getattr(fragment, "partition_expression", None)
+        if partition_expression is not None:
+            partition_expressions.append(str(partition_expression))
+    return tuple(fragment_paths), tuple(partition_expressions)
+
+
+def _estimated_rows(fragments: Sequence[ds.Fragment]) -> int | None:
+    total_rows = 0
+    for fragment in fragments:
+        metadata = fragment.metadata
+        if metadata is None or metadata.num_rows is None or metadata.num_rows < 0:
+            return None
+        total_rows += int(metadata.num_rows)
+    return total_rows
+
+
+def _scan_columns(
+    scanner: ds.Scanner,
+    resolved: ScanTelemetryOptions,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    required_columns = (
+        tuple(resolved.required_columns) if resolved.required_columns is not None else ()
+    )
+    scan_columns = (
+        tuple(resolved.scan_columns)
+        if resolved.scan_columns is not None
+        else tuple(scanner.schema.names)
+    )
+    return required_columns, scan_columns
 
 
 def _schema_payload(schema: object | None) -> JsonDict | None:

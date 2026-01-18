@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -32,6 +32,12 @@ from schema_spec.specs import DataFusionWritePolicy
 
 if TYPE_CHECKING:
     from ibis.expr.types import Value as IbisValue
+
+    from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+
+    ExplainRows = TableLike | RecordBatchReaderLike
+else:
+    ExplainRows = object
 
 MemoryPool = Literal["greedy", "fair", "unbounded"]
 
@@ -239,12 +245,9 @@ class DataFusionExplainCollector:
 
     entries: list[dict[str, object]] = field(default_factory=list)
 
-    def hook(self, sql: str, rows: Sequence[Mapping[str, object]]) -> None:
+    def hook(self, sql: str, rows: ExplainRows) -> None:
         """Collect an explain payload for a single statement."""
-        row_payload: list[dict[str, str]] = [
-            {str(key): str(value) for key, value in row.items()} for row in rows
-        ]
-        payload = {"sql": sql, "rows": row_payload}
+        payload = {"sql": sql, "rows": rows}
         self.entries.append(cast("dict[str, object]", payload))
 
     def snapshot(self) -> list[dict[str, object]]:
@@ -277,6 +280,30 @@ class DataFusionPlanCollector:
             Plan artifact payloads.
         """
         return list(self.entries)
+
+
+@dataclass
+class DataFusionViewRegistry:
+    """Record DataFusion view definitions for reproducibility."""
+
+    entries: dict[str, str | None] = field(default_factory=dict)
+
+    def record(self, *, name: str, sql: str | None) -> None:
+        """Record a view definition by name."""
+        self.entries[name] = sql
+
+    def snapshot(self) -> list[dict[str, object]]:
+        """Return a stable snapshot of registered views.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            Ordered view definitions with name and SQL entries.
+        """
+        return [
+            {"name": name, "sql": sql}
+            for name, sql in sorted(self.entries.items(), key=lambda item: item[0])
+        ]
 
 
 @dataclass
@@ -558,13 +585,13 @@ def _chain_fallback_hooks(
 
 
 def _chain_explain_hooks(
-    *hooks: Callable[[str, Sequence[Mapping[str, object]]], None] | None,
-) -> Callable[[str, Sequence[Mapping[str, object]]], None] | None:
+    *hooks: Callable[[str, ExplainRows], None] | None,
+) -> Callable[[str, ExplainRows], None] | None:
     active = [hook for hook in hooks if hook is not None]
     if not active:
         return None
 
-    def _hook(sql: str, rows: Sequence[Mapping[str, object]]) -> None:
+    def _hook(sql: str, rows: ExplainRows) -> None:
         for hook in active:
             hook(sql, rows)
 
@@ -645,22 +672,22 @@ def labeled_fallback_hook(
 def labeled_explain_hook(
     label: ExecutionLabel,
     sink: list[dict[str, object]],
-) -> Callable[[str, Sequence[Mapping[str, object]]], None]:
+) -> Callable[[str, ExplainRows], None]:
     """Return an explain hook that records rule-scoped diagnostics.
 
     Returns
     -------
-    Callable[[str, Sequence[Mapping[str, object]]], None]
+    Callable[[str, ExplainRows], None]
         Hook that appends labeled explain diagnostics to the sink.
     """
 
-    def _hook(sql: str, rows: Sequence[Mapping[str, object]]) -> None:
+    def _hook(sql: str, rows: ExplainRows) -> None:
         sink.append(
             {
                 "rule": label.rule_name,
                 "output": label.output_dataset,
                 "sql": sql,
-                "rows": [dict(row) for row in rows],
+                "rows": rows,
             }
         )
 
@@ -731,23 +758,23 @@ def diagnostics_explain_hook(
     sink: DiagnosticsCollector,
     *,
     explain_analyze: bool,
-) -> Callable[[str, Sequence[Mapping[str, object]]], None]:
+) -> Callable[[str, ExplainRows], None]:
     """Return an explain hook that records diagnostics rows.
 
     Returns
     -------
-    Callable[[str, Sequence[Mapping[str, object]]], None]
+    Callable[[str, ExplainRows], None]
         Hook that records explain rows in the diagnostics sink.
     """
 
-    def _hook(sql: str, rows: Sequence[Mapping[str, object]]) -> None:
+    def _hook(sql: str, rows: ExplainRows) -> None:
         sink.record_events(
             "datafusion_explains_v1",
             [
                 {
                     "event_time_unix_ms": int(time.time() * 1000),
                     "sql": sql,
-                    "rows": [dict(row) for row in rows],
+                    "rows": rows,
                     "explain_analyze": explain_analyze,
                 }
             ],
@@ -790,6 +817,23 @@ def diagnostics_sql_ingest_hook(
     return _hook
 
 
+def diagnostics_arrow_ingest_hook(
+    sink: DiagnosticsCollector,
+) -> Callable[[Mapping[str, object]], None]:
+    """Return an Arrow ingest hook that records diagnostics payloads.
+
+    Returns
+    -------
+    Callable[[Mapping[str, object]], None]
+        Hook that records Arrow ingestion artifacts in the diagnostics sink.
+    """
+
+    def _hook(payload: Mapping[str, object]) -> None:
+        sink.record_artifact("datafusion_arrow_ingest_v1", payload)
+
+    return _hook
+
+
 def _attach_cache_manager(
     builder: RuntimeEnvBuilder,
     *,
@@ -813,7 +857,7 @@ def _attach_cache_manager(
 
 @dataclass(frozen=True)
 class _ResolvedCompileHooks:
-    explain_hook: Callable[[str, Sequence[Mapping[str, object]]], None] | None
+    explain_hook: Callable[[str, ExplainRows], None] | None
     plan_artifacts_hook: Callable[[Mapping[str, object]], None] | None
     sql_ingest_hook: Callable[[Mapping[str, object]], None] | None
     fallback_hook: Callable[[DataFusionFallbackEvent], None] | None
@@ -856,6 +900,8 @@ class DataFusionRuntimeProfile:
     )
     capture_plan_artifacts: bool = False
     plan_collector: DataFusionPlanCollector | None = field(default_factory=DataFusionPlanCollector)
+    view_registry: DataFusionViewRegistry | None = field(default_factory=DataFusionViewRegistry)
+    substrait_validation: bool = False
     capture_fallbacks: bool = True
     fallback_collector: DataFusionFallbackCollector | None = field(
         default_factory=DataFusionFallbackCollector
@@ -1204,8 +1250,12 @@ class DataFusionRuntimeProfile:
         resolved_params = resolved.params if resolved.params is not None else params
         capture_explain = resolved.capture_explain or self.capture_explain
         explain_analyze = resolved.explain_analyze or self.explain_analyze
+        substrait_validation = resolved.substrait_validation or self.substrait_validation
         capture_plan_artifacts = (
-            resolved.capture_plan_artifacts or self.capture_plan_artifacts or capture_explain
+            resolved.capture_plan_artifacts
+            or self.capture_plan_artifacts
+            or capture_explain
+            or substrait_validation
         )
         hooks = self._resolve_compile_hooks(
             resolved,
@@ -1221,6 +1271,7 @@ class DataFusionRuntimeProfile:
             capture_explain == resolved.capture_explain,
             explain_analyze == resolved.explain_analyze,
             hooks.explain_hook == resolved.explain_hook,
+            substrait_validation == resolved.substrait_validation,
             capture_plan_artifacts == resolved.capture_plan_artifacts,
             hooks.plan_artifacts_hook == resolved.plan_artifacts_hook,
             hooks.sql_ingest_hook == resolved.sql_ingest_hook,
@@ -1238,6 +1289,7 @@ class DataFusionRuntimeProfile:
             capture_explain=capture_explain,
             explain_analyze=explain_analyze,
             explain_hook=hooks.explain_hook,
+            substrait_validation=substrait_validation,
             capture_plan_artifacts=capture_plan_artifacts,
             plan_artifacts_hook=hooks.plan_artifacts_hook,
             sql_ingest_hook=hooks.sql_ingest_hook,
@@ -1259,6 +1311,32 @@ class DataFusionRuntimeProfile:
             execution_policy=execution_policy,
             execution_label=execution_label,
         )
+
+    def record_view_definition(self, *, name: str, sql: str | None) -> None:
+        """Record a view definition for diagnostics snapshots.
+
+        Parameters
+        ----------
+        name:
+            Name of the view.
+        sql:
+            SQL definition for the view, when available.
+        """
+        if self.view_registry is None:
+            return
+        self.view_registry.record(name=name, sql=sql)
+
+    def view_registry_snapshot(self) -> list[dict[str, object]] | None:
+        """Return a stable snapshot of recorded view definitions.
+
+        Returns
+        -------
+        list[dict[str, object]] | None
+            Snapshot payload or ``None`` when registry tracking is disabled.
+        """
+        if self.view_registry is None:
+            return None
+        return self.view_registry.snapshot()
 
     @staticmethod
     def settings_snapshot(ctx: SessionContext) -> pa.Table:
@@ -1359,6 +1437,7 @@ class DataFusionRuntimeProfile:
             "explain_collector": bool(self.explain_collector),
             "capture_plan_artifacts": self.capture_plan_artifacts,
             "plan_collector": bool(self.plan_collector),
+            "substrait_validation": self.substrait_validation,
             "capture_fallbacks": self.capture_fallbacks,
             "fallback_collector": bool(self.fallback_collector),
             "diagnostics_sink": bool(self.diagnostics_sink),
@@ -1449,6 +1528,7 @@ class DataFusionRuntimeProfile:
                 "delta_plan_codec_physical": self.delta_plan_codec_physical,
                 "delta_plan_codec_logical": self.delta_plan_codec_logical,
             },
+            "substrait_validation": self.substrait_validation,
             "output_writes": {
                 "cache_enabled": self.cache_enabled,
                 "cache_max_columns": self.cache_max_columns,
@@ -1616,6 +1696,7 @@ __all__ = [
     "PreparedStatementSpec",
     "apply_execution_label",
     "apply_execution_policy",
+    "diagnostics_arrow_ingest_hook",
     "feature_state_snapshot",
     "snapshot_plans",
 ]

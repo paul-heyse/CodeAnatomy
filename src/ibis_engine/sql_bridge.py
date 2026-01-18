@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from typing import Protocol, cast
@@ -14,6 +14,7 @@ from ibis.expr.types import Table, Value
 from sqlglot import Expression
 from sqlglot.serde import dump
 
+from arrowdsl.core.interop import RecordBatchReaderLike
 from ibis_engine.schema_utils import ibis_schema_from_arrow, validate_expr_schema
 
 
@@ -186,27 +187,12 @@ def execute_raw_sql(
     if isinstance(result, Table):
         validate_expr_schema(result, expected=expected)
         return result
-    to_arrow_table = getattr(result, "to_arrow_table", None)
-    if callable(to_arrow_table):
-        table = cast("pa.Table", to_arrow_table())
-        _validate_table_schema(table, expected=expected)
-        return ibis.memtable(table, schema=ibis_schema_from_arrow(expected))
-    if isinstance(result, pa.Table):
-        _validate_table_schema(result, expected=expected)
-        return ibis.memtable(result, schema=ibis_schema_from_arrow(expected))
-    if hasattr(result, "fetch_arrow_table"):
-        table = cast("_RawSqlResult", result).fetch_arrow_table()
-        _validate_table_schema(table, expected=expected)
-        return ibis.memtable(table, schema=ibis_schema_from_arrow(expected))
-    if hasattr(result, "fetchall"):
-        with closing(cast("_RawSqlResult", result)) as cursor:
-            rows = cursor.fetchall()
-        payload = _rows_to_pylist(rows, schema)
-        table = pa.Table.from_pylist(payload, schema=expected)
-        _validate_table_schema(table, expected=expected)
-        return ibis.memtable(table, schema=ibis_schema_from_arrow(expected))
-    msg = "Unsupported raw_sql return type."
-    raise TypeError(msg)
+    table = _table_from_raw_result(result, schema)
+    if table is None:
+        msg = "Unsupported raw_sql return type."
+        raise TypeError(msg)
+    _validate_table_schema(table, expected=expected)
+    return ibis.memtable(table, schema=ibis_schema_from_arrow(expected))
 
 
 def _validate_table_schema(table: pa.Table, *, expected: pa.Schema) -> None:
@@ -216,12 +202,49 @@ def _validate_table_schema(table: pa.Table, *, expected: pa.Schema) -> None:
     raise ValueError(msg)
 
 
-def _rows_to_pylist(
-    rows: Iterable[tuple[object, ...]],
+def _table_from_raw_result(
+    result: object,
     schema: _SchemaProtocol,
-) -> list[dict[str, object]]:
-    names = list(schema.to_pyarrow().names)
-    return [dict(zip(names, row, strict=False)) for row in rows]
+) -> pa.Table | None:
+    to_arrow_table = getattr(result, "to_arrow_table", None)
+    table: pa.Table | None = None
+    if callable(to_arrow_table):
+        table = cast("pa.Table", to_arrow_table())
+    elif isinstance(result, RecordBatchReaderLike):
+        table = cast("pa.Table", result.read_all())
+    elif hasattr(result, "__arrow_c_stream__"):
+        table = pa.table(result)
+    elif isinstance(result, pa.Table):
+        table = result
+    elif hasattr(result, "fetch_arrow_table"):
+        table = cast("_RawSqlResult", result).fetch_arrow_table()
+    elif hasattr(result, "fetchall"):
+        with closing(cast("_RawSqlResult", result)) as cursor:
+            rows = cursor.fetchall()
+        table = _rows_to_table(rows, schema)
+    return table
+
+
+def _rows_to_table(
+    rows: Sequence[tuple[object, ...]],
+    schema: _SchemaProtocol,
+) -> pa.Table:
+    arrow_schema = schema.to_pyarrow()
+    column_count = len(arrow_schema)
+    if not rows:
+        arrays = [pa.array([], type=field.type) for field in arrow_schema]
+        return pa.Table.from_arrays(arrays, schema=arrow_schema)
+    columns: list[list[object]] = [[] for _ in range(column_count)]
+    for row in rows:
+        if len(row) != column_count:
+            msg = "Raw SQL row width does not match the declared schema."
+            raise ValueError(msg)
+        for idx, value in enumerate(row):
+            columns[idx].append(value)
+    arrays = [
+        pa.array(columns[idx], type=arrow_schema[idx].type) for idx in range(column_count)
+    ]
+    return pa.Table.from_arrays(arrays, schema=arrow_schema)
 
 
 __all__ = [

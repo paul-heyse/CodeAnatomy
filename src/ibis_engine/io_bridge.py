@@ -10,6 +10,7 @@ from typing import TypedDict, cast
 import pyarrow as pa
 import pyarrow.dataset as ds
 from datafusion import DataFrameWriteOptions, ParquetWriterOptions, col
+from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr, SortExpr
 from ibis.expr.types import Table as IbisTable
 
@@ -20,6 +21,7 @@ from arrowdsl.core.interop import (
     TableLike,
     coerce_table_like,
 )
+from arrowdsl.core.streaming import to_reader
 from arrowdsl.io.delta import (
     DeltaWriteOptions,
     DeltaWriteResult,
@@ -51,6 +53,7 @@ from core_types import PathLike
 from datafusion_engine.bridge import (
     DataFusionDmlOptions,
     datafusion_partitioned_readers,
+    datafusion_view_sql,
     execute_dml,
     ibis_plan_to_datafusion,
     ibis_to_datafusion,
@@ -83,6 +86,16 @@ class DataFusionWriterConfig:
     allow_non_deterministic_partitioned_streaming: bool = False
     dml_statement: str | None = None
     dml_options: DataFusionDmlOptions | None = None
+
+
+@dataclass(frozen=True)
+class _DataFusionWriteContext:
+    value: IbisPlan | IbisTable
+    base_dir: PathLike
+    execution: IbisExecutionContext
+    dataset_config: DatasetWriteConfig
+    write_config: DataFusionWriterConfig | None
+    write_policy: DataFusionWritePolicy | None
 
 
 @dataclass(frozen=True)
@@ -139,6 +152,8 @@ def ibis_plan_to_reader(
         if batch_size is not None and execution.batch_size != batch_size:
             execution = replace(execution, batch_size=batch_size)
         return stream_ibis_plan(plan, execution=execution)
+    if batch_size is None:
+        return to_reader(plan)
     return plan.to_reader(batch_size=batch_size)
 
 
@@ -155,7 +170,7 @@ def ibis_table_to_reader(
         Reader yielding batches from the table.
     """
     if batch_size is None:
-        return table.to_pyarrow_batches()
+        return to_reader(table)
     return table.to_pyarrow_batches(chunk_size=batch_size)
 
 
@@ -265,43 +280,35 @@ def _resolve_named_metadata_policy(
     return replace(updated, metadata=ParquetMetadataConfig())
 
 
-def _write_datafusion_dataset(
-    value: IbisPlan | IbisTable,
-    base_dir: PathLike,
-    *,
-    execution: IbisExecutionContext,
-    dataset_config: DatasetWriteConfig,
-    write_config: DataFusionWriterConfig | None,
-    write_policy: DataFusionWritePolicy | None,
-) -> str:
-    runtime_profile = execution.ctx.runtime.datafusion
-    if runtime_profile is None or execution.ibis_backend is None:
+def _write_datafusion_dataset(context: _DataFusionWriteContext) -> str:
+    runtime_profile = context.execution.ctx.runtime.datafusion
+    if runtime_profile is None or context.execution.ibis_backend is None:
         msg = "DataFusion writer requires a runtime profile and Ibis backend."
         raise ValueError(msg)
-    effective_write_policy = write_policy or runtime_profile.write_policy
+    effective_write_policy = context.write_policy or runtime_profile.write_policy
     df_ctx = runtime_profile.session_context()
-    backend = cast("IbisCompilerBackend", execution.ibis_backend)
+    backend = cast("IbisCompilerBackend", context.execution.ibis_backend)
     df = (
-        ibis_plan_to_datafusion(value, backend=backend, ctx=df_ctx)
-        if isinstance(value, IbisPlan)
-        else ibis_to_datafusion(value, backend=backend, ctx=df_ctx)
+        ibis_plan_to_datafusion(context.value, backend=backend, ctx=df_ctx)
+        if isinstance(context.value, IbisPlan)
+        else ibis_to_datafusion(context.value, backend=backend, ctx=df_ctx)
     )
-    if write_config is not None and write_config.dml_statement is not None:
+    if context.write_config is not None and context.write_config.dml_statement is not None:
         dml_statement = _format_dml_statement(
-            write_config.dml_statement,
-            base_dir=base_dir,
+            context.write_config.dml_statement,
+            base_dir=context.base_dir,
         )
-        _register_temp_view(df, name="write_source")
-        dml_options = write_config.dml_options or DataFusionDmlOptions()
+        _register_temp_view(df, name="write_source", runtime_profile=runtime_profile)
+        dml_options = context.write_config.dml_options or DataFusionDmlOptions()
         record_hook = _dml_record_hook(runtime_profile)
         if record_hook is not None and dml_options.record_hook is None:
             dml_options = replace(dml_options, record_hook=record_hook)
         execute_dml(df_ctx, dml_statement, options=dml_options)
-        return str(base_dir)
-    if write_config is not None and write_config.partitioned_streaming:
+        return str(context.base_dir)
+    if context.write_config is not None and context.write_config.partitioned_streaming:
         if (
-            execution.ctx.determinism != DeterminismTier.BEST_EFFORT
-            and not write_config.allow_non_deterministic_partitioned_streaming
+            context.execution.ctx.determinism != DeterminismTier.BEST_EFFORT
+            and not context.write_config.allow_non_deterministic_partitioned_streaming
         ):
             msg = "Partitioned streaming is restricted to Tier 0 determinism by default."
             raise ValueError(msg)
@@ -309,37 +316,41 @@ def _write_datafusion_dataset(
         if not readers:
             msg = "Partitioned streaming requested but DataFusion does not support it."
             raise ValueError(msg)
-        return write_partitioned_dataset_parquet(readers, base_dir, config=dataset_config)
+        return write_partitioned_dataset_parquet(
+            readers,
+            context.base_dir,
+            config=context.dataset_config,
+        )
     write_with_options = getattr(df, "write_parquet_with_options", None)
     if callable(write_with_options):
         write_options = _build_datafusion_write_options(
-            value,
-            execution=execution,
-            write_config=write_config,
+            context.value,
+            execution=context.execution,
+            write_config=context.write_config,
             write_policy=effective_write_policy,
         )
         parquet_options = _build_parquet_write_options(
-            dataset_config=dataset_config,
-            write_config=write_config,
+            dataset_config=context.dataset_config,
+            write_config=context.write_config,
             write_policy=effective_write_policy,
         )
         if write_options is not None or parquet_options is not None:
-            write_with_options(str(base_dir), parquet_options, write_options)
+            write_with_options(str(context.base_dir), parquet_options, write_options)
             return _finalize_datafusion_write(
-                value,
-                base_dir,
-                execution=execution,
-                dataset_config=dataset_config,
+                context.value,
+                context.base_dir,
+                execution=context.execution,
+                dataset_config=context.dataset_config,
                 write_policy=effective_write_policy,
             )
     write_parquet = getattr(df, "write_parquet", None)
     if callable(write_parquet):
-        write_parquet(str(base_dir))
+        write_parquet(str(context.base_dir))
         return _finalize_datafusion_write(
-            value,
-            base_dir,
-            execution=execution,
-            dataset_config=dataset_config,
+            context.value,
+            context.base_dir,
+            execution=context.execution,
+            dataset_config=context.dataset_config,
             write_policy=effective_write_policy,
         )
     msg = "DataFusion writer is unavailable for the configured backend."
@@ -432,14 +443,29 @@ def _effective_metadata_config(
     return replace(config, write_metadata=False)
 
 
-def _register_temp_view(df: object, *, name: str) -> None:
+def _register_temp_view(
+    df: object,
+    *,
+    name: str,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+) -> None:
     create_view = getattr(df, "create_or_replace_temp_view", None)
     if callable(create_view):
         create_view(name)
+        if runtime_profile is not None:
+            runtime_profile.record_view_definition(
+                name=name,
+                sql=datafusion_view_sql(cast("DataFrame", df)),
+            )
         return
     create_view = getattr(df, "create_temp_view", None)
     if callable(create_view):
         create_view(name)
+        if runtime_profile is not None:
+            runtime_profile.record_view_definition(
+                name=name,
+                sql=datafusion_view_sql(cast("DataFrame", df)),
+            )
         return
     msg = "DataFusion DataFrame does not support temp view registration."
     raise ValueError(msg)
@@ -693,12 +719,14 @@ def write_ibis_dataset_parquet(
             msg = "DataFusion writer requires an Ibis plan/table and execution context."
             raise ValueError(msg)
         return _write_datafusion_dataset(
-            data,
-            base_dir,
-            execution=options.execution,
-            dataset_config=config,
-            write_config=options.datafusion_write,
-            write_policy=options.datafusion_write_policy,
+            _DataFusionWriteContext(
+                value=data,
+                base_dir=base_dir,
+                execution=options.execution,
+                dataset_config=config,
+                write_config=options.datafusion_write,
+                write_policy=options.datafusion_write_policy,
+            )
         )
     value = _coerce_write_input(
         data,

@@ -17,7 +17,7 @@ from arrowdsl.core.interop import DeclarationLike
 from arrowdsl.core.schema_constants import PROVENANCE_COLS
 from arrowdsl.ops.catalog import OP_CATALOG
 from arrowdsl.plan.builder import PlanBuilder
-from arrowdsl.plan.dataset_wrappers import DatasetLike, unwrap_dataset
+from arrowdsl.plan.dataset_wrappers import DatasetLike
 from arrowdsl.plan.ops import scan_ordering_effect
 
 if TYPE_CHECKING:
@@ -39,6 +39,7 @@ class ScanBuildSpec:
     query: QuerySpec
     ctx: ExecutionContext
     scan_provenance: tuple[str, ...] | None = None
+    required_columns: Sequence[str] | None = None
 
     def scan_columns(self) -> ColumnsSpec:
         """Return the scan column spec for this build context.
@@ -56,6 +57,7 @@ class ScanBuildSpec:
         return self.query.scan_columns(
             provenance=self.ctx.provenance,
             scan_provenance=scan_provenance,
+            required_columns=self.required_columns,
         )
 
     def scanner(self) -> ds.Scanner:
@@ -68,8 +70,7 @@ class ScanBuildSpec:
         """
         predicate = self.query.pushdown_expression()
         _validate_predicate_fields(predicate, scan_provenance=self.scan_provenance)
-        dataset = unwrap_dataset(self.dataset)
-        return dataset.scanner(
+        return self.dataset.scanner(
             columns=self.scan_columns(),
             filter=predicate,
             **self.ctx.runtime.scan.scanner_kwargs(),

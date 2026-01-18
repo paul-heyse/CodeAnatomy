@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -14,8 +14,13 @@ if TYPE_CHECKING:
     from ibis.expr.types import Value
     from sqlglot import Expression
 
+    from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
     from engine.plan_cache import PlanCache
     from sqlglot_tools.optimizer import SqlGlotPolicy
+
+    ExplainRows = TableLike | RecordBatchReaderLike
+else:
+    ExplainRows = object
 
 SchemaMapping = Mapping[str, Mapping[str, str]]
 
@@ -147,9 +152,10 @@ class DataFusionCompileOptions:
     sql_ingest_hook: Callable[[Mapping[str, object]], None] | None = None
     capture_explain: bool = False
     explain_analyze: bool = False
-    explain_hook: Callable[[str, Sequence[Mapping[str, object]]], None] | None = None
+    explain_hook: Callable[[str, ExplainRows], None] | None = None
     capture_plan_artifacts: bool = False
     plan_artifacts_hook: Callable[[Mapping[str, object]], None] | None = None
+    substrait_validation: bool = False
     plan_cache: PlanCache | None = None
     plan_hash: str | None = None
     profile_hash: str | None = None

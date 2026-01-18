@@ -85,6 +85,7 @@ class DatasetInputSource:
         name = _dataset_name_from_input(input_item)
         return name is not None and self._registry.catalog.has(name)
 
+
     def build_table(
         self,
         input_item: object,
@@ -453,6 +454,112 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
     return _maybe_cache(context, df)
 
 
+def provider_capsule_id(provider: object) -> str:
+    """Return a stable identifier for a DataFusion table provider capsule.
+
+    Returns
+    -------
+    str
+        Capsule identifier string.
+
+    Raises
+    ------
+    AttributeError
+        Raised when the provider does not expose a capsule.
+    """
+    capsule = _table_provider_capsule(provider)
+    if capsule is None:
+        msg = "Provider does not expose a DataFusion table provider capsule."
+        raise AttributeError(msg)
+    return repr(capsule)
+
+
+def _table_provider_capsule(provider: object) -> object | None:
+    attr = getattr(provider, "__datafusion_table_provider__", None)
+    if callable(attr):
+        return attr()
+    attr = getattr(provider, "datafusion_table_provider", None)
+    if callable(attr):
+        return attr()
+    return None
+
+
+def _provider_capsule_id(
+    provider: object | None,
+    *,
+    source: object | None,
+) -> str | None:
+    if source is not None:
+        try:
+            return provider_capsule_id(source)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return None
+    if provider is None:
+        return None
+    return repr(provider)
+
+
+def _provider_pushdown_value(provider: object, *, names: Sequence[str]) -> str | bool | None:
+    for name in names:
+        attr = getattr(provider, name, None)
+        if isinstance(attr, bool):
+            return attr
+        if callable(attr):
+            try:
+                value = attr()
+            except TypeError:
+                continue
+            if isinstance(value, bool):
+                return value
+            if value is None:
+                return None
+            return str(value)
+    return None
+
+
+def _provider_pushdown_hints(provider: object) -> dict[str, object]:
+    return {
+        "projection_pushdown": _provider_pushdown_value(
+            provider,
+            names=("supports_projection_pushdown",),
+        ),
+        "predicate_pushdown": _provider_pushdown_value(
+            provider,
+            names=(
+                "supports_filter_pushdown",
+                "supports_filters_pushdown",
+                "supports_predicate_pushdown",
+            ),
+        ),
+        "limit_pushdown": _provider_pushdown_value(
+            provider,
+            names=("supports_limit_pushdown",),
+        ),
+    }
+
+
+def _record_table_provider_artifact(
+    runtime_profile: DataFusionRuntimeProfile | None,
+    *,
+    name: str,
+    provider: object | None,
+    provider_kind: str,
+    source: object | None = None,
+) -> None:
+    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+        return
+    capsule_id = _provider_capsule_id(provider, source=source)
+    payload: dict[str, object] = {
+        "name": name,
+        "provider": provider_kind,
+        "provider_type": type(provider).__name__ if provider is not None else None,
+        "capsule_id": capsule_id,
+    }
+    if provider is not None:
+        payload.update(_provider_pushdown_hints(provider))
+    runtime_profile.diagnostics_sink.record_artifact("datafusion_table_providers_v1", payload)
+
+
 def _register_delta(context: DataFusionRegistrationContext) -> DataFrame:
     table = DeltaTable(
         context.location.path,
@@ -479,6 +586,13 @@ def _register_delta(context: DataFusionRegistrationContext) -> DataFrame:
         if delta_provider is not None:
             context.ctx.register_table(context.name, delta_provider)
             provider = "table_provider"
+            _record_table_provider_artifact(
+                context.runtime_profile,
+                name=context.name,
+                provider=delta_provider,
+                provider_kind=provider,
+                source=table,
+            )
         else:
             try:
                 context.ctx.register_table(context.name, table)
@@ -802,6 +916,13 @@ def register_delta_cdf_df(
     if provider is not None:
         ctx.register_table(name, provider)
         provider_name = "table_provider"
+        _record_table_provider_artifact(
+            runtime_profile,
+            name=name,
+            provider=provider,
+            provider_kind="cdf_table_provider",
+            source=None,
+        )
     else:
         cdf = read_delta_cdf(path, options=cdf_options, storage_options=storage_options)
         arrow_table = _ensure_pyarrow_table(cdf)

@@ -17,6 +17,7 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.ir.plan import OpNode, PlanIR
 from arrowdsl.ops.catalog import OpDef
+from arrowdsl.plan.dataset_wrappers import OneShotDataset, unwrap_dataset
 from arrowdsl.plan.ops import DedupeSpec, JoinSpec
 
 type CompileFn = Callable[[PlanIR, ExecutionContext], DeclarationLike]
@@ -32,8 +33,9 @@ def _scan_declaration(
 ) -> DeclarationLike:
     scan_kwargs = ctx.runtime.scan.scanner_kwargs()
     scan_kwargs.update(ctx.runtime.scan.scan_node_kwargs())
+    resolved_dataset = unwrap_dataset(dataset) if isinstance(dataset, OneShotDataset) else dataset
     opts = acero.ScanNodeOptions(
-        dataset,
+        resolved_dataset,
         columns=columns,
         filter=predicate,
         **scan_kwargs,

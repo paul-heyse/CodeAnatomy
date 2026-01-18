@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import ibis
-import pyarrow.dataset as ds
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.context import ExecutionContext
@@ -19,6 +18,7 @@ from arrowdsl.io.delta import (
     coerce_delta_table,
     upsert_dataset_partitions_delta,
 )
+from arrowdsl.plan.dataset_wrappers import unwrap_dataset
 from arrowdsl.plan.query import DatasetDiscoveryOptions, DatasetSourceOptions, open_dataset
 from arrowdsl.plan_utils import dataset_query_for_file_ids
 from arrowdsl.schema.metadata import encoding_policy_from_schema
@@ -235,13 +235,15 @@ def _read_state_dataset(
 ) -> TableLike:
     dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(dataset_name)
     schema = dataset_spec.schema() if dataset_spec is not None else None
-    dataset = open_dataset(
-        dataset_dir,
-        options=DatasetSourceOptions(
-            schema=schema,
-            partitioning="hive",
-            discovery=DatasetDiscoveryOptions(),
-        ),
+    dataset = unwrap_dataset(
+        open_dataset(
+            dataset_dir,
+            options=DatasetSourceOptions(
+                schema=schema,
+                partitioning="hive",
+                discovery=DatasetDiscoveryOptions(),
+            ),
+        )
     )
     if schema is not None:
         validate_schema_identity(
@@ -254,8 +256,6 @@ def _read_state_dataset(
         plan = query.to_plan(dataset=dataset, ctx=ctx, label=dataset_name)
         return plan.to_table(ctx=ctx)
     if schema is None:
-        return dataset.to_table()
-    if isinstance(dataset, ds.Dataset):
         return dataset.to_table()
     return empty_table(schema)
 

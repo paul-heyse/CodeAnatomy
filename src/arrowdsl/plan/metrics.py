@@ -35,7 +35,7 @@ from arrowdsl.schema.build import (
 from arrowdsl.schema.encoding_policy import EncodingPolicy
 from arrowdsl.schema.normalize import NormalizePolicy
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
-from core_types import JsonDict, PathLike, ensure_path
+from core_types import JsonDict, JsonValue, PathLike, ensure_path
 
 type RowValue = str | int
 type Row = dict[str, RowValue]
@@ -285,6 +285,95 @@ def row_group_count(fragments: Sequence[ds.Fragment]) -> int:
             split = splitter()
             total += len(list(cast("Iterable[ds.Fragment]", split)))
     return total
+
+
+def _stat_value(value: object) -> JsonValue:
+    if value is None:
+        return None
+    if isinstance(value, (int, float, bool, str)):
+        return value
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return value.hex()
+    return str(value)
+
+
+def _sorting_columns_payload(
+    schema: SchemaLike, sorting_columns: Sequence[pq.SortingColumn] | None
+) -> list[JsonDict] | None:
+    if not sorting_columns:
+        return None
+    names = list(schema.names)
+    payload: list[JsonDict] = []
+    for col in sorting_columns:
+        name = names[col.column_index] if col.column_index < len(names) else str(col.column_index)
+        payload.append(
+            {
+                "column": name,
+                "order": "descending" if col.descending else "ascending",
+                "nulls_first": col.nulls_first,
+            }
+        )
+    return payload or None
+
+
+def row_group_stats(
+    fragments: Sequence[ds.Fragment],
+    *,
+    schema: SchemaLike,
+    columns: Sequence[str],
+    max_row_groups: int | None = None,
+) -> list[JsonDict]:
+    """Return row-group statistics for selected columns.
+
+    Returns
+    -------
+    list[JsonDict]
+        Row group statistics payloads.
+    """
+    if not columns:
+        return []
+    indices = {name: idx for idx, name in enumerate(schema.names)}
+    rows: list[JsonDict] = []
+    count = 0
+    for fragment in fragments:
+        metadata = fragment.metadata
+        if metadata is None:
+            continue
+        file_path = getattr(fragment, "path", None)
+        for idx in range(metadata.num_row_groups):
+            if max_row_groups is not None and count >= max_row_groups:
+                return rows
+            group = metadata.row_group(idx)
+            column_stats: dict[str, JsonDict] = {}
+            for name in columns:
+                col_index = indices.get(name)
+                if col_index is None:
+                    continue
+                column = group.column(col_index)
+                stats = column.statistics
+                if stats is None:
+                    continue
+                column_stats[name] = {
+                    "null_count": stats.null_count,
+                    "distinct_count": stats.distinct_count,
+                    "min": _stat_value(stats.min),
+                    "max": _stat_value(stats.max),
+                }
+            rows.append(
+                {
+                    "file": str(file_path) if file_path is not None else None,
+                    "row_group": idx,
+                    "num_rows": group.num_rows,
+                    "total_byte_size": group.total_byte_size,
+                    "columns": column_stats,
+                    "sorting_columns": _sorting_columns_payload(
+                        schema,
+                        getattr(group, "sorting_columns", None),
+                    ),
+                }
+            )
+            count += 1
+    return rows
 
 
 def fragment_file_hints(
@@ -599,6 +688,7 @@ __all__ = [
     "quality_plan_from_ids",
     "row_group_count",
     "row_group_fragments",
+    "row_group_stats",
     "scan_task_count",
     "scan_telemetry_table",
     "split_fragment_by_row_group",

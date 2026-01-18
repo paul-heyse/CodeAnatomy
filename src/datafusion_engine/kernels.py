@@ -29,7 +29,7 @@ from arrowdsl.schema.metadata import (
     ordering_from_schema,
 )
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from datafusion_engine.bridge import register_memtable_from_table
+from datafusion_engine.bridge import datafusion_from_arrow
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.udf_registry import (
     _NORMALIZE_SPAN_UDF,
@@ -58,10 +58,7 @@ def _df_from_table(
 ) -> DataFrame:
     existing = _existing_table_names(ctx)
     table_name = _temp_name(name, existing) if name in existing else name
-    if batch_size is None:
-        return ctx.from_arrow(cast("pa.Table", table), name=table_name)
-    register_memtable_from_table(ctx, name=table_name, table=table, batch_size=batch_size)
-    return ctx.table(table_name)
+    return datafusion_from_arrow(ctx, name=table_name, value=table, batch_size=batch_size)
 
 
 def _batch_size_from_ctx(ctx: ExecutionContext | None) -> int | None:

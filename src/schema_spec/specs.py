@@ -232,7 +232,21 @@ class ExternalTableConfig:
     dialect: str | None = None
     options: Mapping[str, object] | None = None
     partitioned_by: Sequence[str] | None = None
+    file_sort_order: Sequence[str] | None = None
     compression: str | None = None
+
+
+@dataclass(frozen=True)
+class DataFusionWritePolicy:
+    """Configuration for DataFusion write options."""
+
+    partition_by: Sequence[str] = ()
+    single_file_output: bool = False
+    sort_by: Sequence[str] = ()
+    compression: str | None = None
+    statistics_enabled: str | None = None
+    max_row_group_size: int | None = None
+    dictionary_enabled: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -380,6 +394,8 @@ class TableSchemaSpec:
         parts.append(f"LOCATION {_sql_literal(config.location)}")
         if config.partitioned_by:
             parts.append(f"PARTITIONED BY ({', '.join(config.partitioned_by)})")
+        if config.file_sort_order:
+            parts.append(f"WITH ORDER ({', '.join(config.file_sort_order)})")
         options_clause = _external_table_options_clause(config.options)
         if options_clause:
             parts.append(options_clause)

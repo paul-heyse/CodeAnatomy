@@ -11,7 +11,7 @@ def test_from_uri_wraps_uri_in_subtree_filesystem() -> None:
     """Wrap URI sources in SubTreeFileSystem for normalized paths."""
     fs, path = from_uri("file:///tmp/arrowdsl_test")
     assert isinstance(fs, pafs.SubTreeFileSystem)
-    assert path == ""
+    assert not path
 
 
 def test_from_uri_wraps_with_provided_filesystem() -> None:
@@ -19,4 +19,4 @@ def test_from_uri_wraps_with_provided_filesystem() -> None:
     base_fs = pafs.LocalFileSystem()
     fs, path = from_uri("file:///tmp/arrowdsl_test", filesystem=base_fs)
     assert isinstance(fs, pafs.SubTreeFileSystem)
-    assert path == ""
+    assert not path

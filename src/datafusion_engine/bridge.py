@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import logging
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
@@ -18,7 +18,7 @@ from ibis.expr.types import Value as IbisValue
 from sqlglot import ErrorLevel, Expression, exp
 
 from arrowdsl.core.context import Ordering, OrderingLevel
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
 from arrowdsl.schema.metadata import ordering_metadata_spec
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
@@ -26,6 +26,7 @@ from datafusion_engine.compile_options import (
     DataFusionDmlOptions,
     DataFusionFallbackEvent,
     DataFusionSqlPolicy,
+    resolve_sql_policy,
 )
 from datafusion_engine.df_builder import TranslationError, df_from_sqlglot
 from engine.plan_cache import PlanCacheEntry, PlanCacheKey
@@ -53,6 +54,16 @@ class PreparedStatementOptions:
     param_types: Sequence[str]
     sql_options: DataFusionSqlPolicy | None = None
     record_hook: Callable[[PreparedStatementSpec], None] | None = None
+
+
+@dataclass(frozen=True)
+class CopyToOptions:
+    """Options for COPY TO format precedence and DML execution."""
+
+    session_defaults: Mapping[str, object] | None = None
+    table_options: Mapping[str, object] | None = None
+    statement_overrides: Mapping[str, object] | None = None
+    dml: DataFusionDmlOptions | None = None
 
 
 try:
@@ -502,6 +513,28 @@ def datafusion_partitioned_readers(df: DataFrame) -> list[pa.RecordBatchReader]:
     return [cast("pa.RecordBatchReader", reader) for reader in readers]
 
 
+async def datafusion_to_async_batches(
+    df: DataFrame,
+    *,
+    ordering: Ordering | None = None,
+) -> AsyncIterator[pa.RecordBatch]:
+    """Yield RecordBatches asynchronously from a DataFusion DataFrame.
+
+    Yields
+    ------
+    pyarrow.RecordBatch
+        Record batches from the DataFusion result.
+    """
+    async_iter = getattr(df, "__aiter__", None)
+    if callable(async_iter):
+        async for batch in df:
+            yield _to_record_batch(batch)
+        return
+    reader = datafusion_to_reader(df, ordering=ordering)
+    for batch in reader:
+        yield batch
+
+
 def ibis_plan_to_table(
     plan: IbisPlan,
     *,
@@ -547,6 +580,27 @@ def _apply_ordering(
         return reader
     spec = ordering_metadata_spec(ordering.level, keys=ordering.keys)
     return pa.RecordBatchReader.from_batches(spec.apply(reader.schema), reader)
+
+
+def _to_record_batch(value: object) -> pa.RecordBatch:
+    if isinstance(value, pa.RecordBatch):
+        return value
+    to_pyarrow = getattr(value, "to_pyarrow", None)
+    if callable(to_pyarrow):
+        converted = to_pyarrow()
+        if isinstance(converted, pa.RecordBatch):
+            return converted
+        if isinstance(converted, pa.Table):
+            table = cast("pa.Table", converted)
+            batches = list(table.to_batches())
+            if batches:
+                return batches[0]
+            empty_arrays = [
+                pa.array([], type=field.type) for field in table.schema
+            ]
+            return pa.RecordBatch.from_arrays(empty_arrays, schema=table.schema)
+    msg = "Async DataFusion batch does not expose a pyarrow.RecordBatch."
+    raise TypeError(msg)
 
 
 def _apply_rewrite_hook(expr: Expression, *, options: DataFusionCompileOptions) -> Expression:
@@ -726,18 +780,30 @@ def execute_dml(
     if not _contains_dml(expr):
         msg = "DML execution requires a DML statement."
         raise ValueError(msg)
+    sql_policy = resolved.sql_policy or resolve_sql_policy(
+        resolved.sql_policy_name,
+        fallback=_default_sql_policy(),
+    )
     policy = _merge_sql_policies(
         DataFusionSqlPolicy(allow_dml=True),
         resolved.session_policy,
         resolved.table_policy,
-        resolved.sql_policy,
+        sql_policy,
     )
     sql_options = resolved.sql_options or policy.to_sql_options()
     violations = _policy_violations(expr, policy)
     if violations:
         msg = f"DataFusion DML policy violations: {', '.join(violations)}."
         raise ValueError(msg)
-    df = ctx.sql_with_options(sql, sql_options)
+    bindings = datafusion_param_bindings(resolved.params or {})
+    if bindings:
+        try:
+            df = ctx.sql_with_options(sql, sql_options, param_values=bindings)
+        except TypeError as exc:
+            msg = "DataFusion does not support param_values for DML execution."
+            raise ValueError(msg) from exc
+    else:
+        df = ctx.sql_with_options(sql, sql_options)
     if resolved.record_hook is not None:
         resolved.record_hook(
             {
@@ -747,6 +813,52 @@ def execute_dml(
             }
         )
     return df
+
+
+def merge_format_options(
+    *,
+    session_defaults: Mapping[str, object] | None = None,
+    table_options: Mapping[str, object] | None = None,
+    statement_overrides: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Merge format options using session < table < statement precedence.
+
+    Returns
+    -------
+    dict[str, object]
+        Merged format options with deterministic precedence.
+    """
+    merged: dict[str, object] = {}
+    for options in (session_defaults, table_options, statement_overrides):
+        if not options:
+            continue
+        merged.update({key: value for key, value in options.items() if value is not None})
+    return merged
+
+
+def copy_to_path(
+    ctx: SessionContext,
+    *,
+    sql: str,
+    path: str,
+    options: CopyToOptions | None = None,
+) -> DataFrame:
+    """Execute COPY TO with deterministic options precedence.
+
+    Returns
+    -------
+    datafusion.dataframe.DataFrame
+        DataFrame representing the COPY statement.
+    """
+    resolved = options or CopyToOptions()
+    merged = merge_format_options(
+        session_defaults=resolved.session_defaults,
+        table_options=resolved.table_options,
+        statement_overrides=resolved.statement_overrides,
+    )
+    clause = _copy_options_clause(merged)
+    statement = f"COPY ({sql}) TO {_sql_literal(path)}{clause}"
+    return execute_dml(ctx, statement, options=resolved.dml)
 
 
 def prepare_statement(
@@ -835,6 +947,44 @@ def _sql_literal(value: object) -> str:
         return str(value)
     escaped = str(value).replace("'", "''")
     return f"'{escaped}'"
+
+
+def _copy_options_clause(options: Mapping[str, object]) -> str:
+    """Return a COPY OPTIONS clause for provided key/value pairs.
+
+    Returns
+    -------
+    str
+        SQL OPTIONS clause or empty string.
+    """
+    if not options:
+        return ""
+    formatted: list[str] = []
+    for key, value in options.items():
+        literal = _option_literal(value)
+        if literal is None:
+            continue
+        formatted.append(f"{_sql_literal(str(key))} {literal}")
+    if not formatted:
+        return ""
+    return f" OPTIONS ({', '.join(formatted)})"
+
+
+def _option_literal(value: object) -> str | None:
+    """Return a SQL literal for supported option values.
+
+    Returns
+    -------
+    str | None
+        SQL literal or None when the value is unsupported.
+    """
+    if isinstance(value, bool):
+        return _sql_literal("true" if value else "false")
+    if isinstance(value, (int, float)):
+        return _sql_literal(str(value))
+    if isinstance(value, str):
+        return _sql_literal(value)
+    return None
 
 
 def df_from_sql(
@@ -1148,6 +1298,28 @@ def register_memtable_from_table(
     register_memtable(ctx, name=name, batches=batches)
 
 
+def datafusion_from_arrow(
+    ctx: SessionContext,
+    *,
+    name: str,
+    value: TableLike | RecordBatchReaderLike | object,
+    batch_size: int | None = None,
+) -> DataFrame:
+    """Register Arrow-like input and return a DataFusion DataFrame.
+
+    Returns
+    -------
+    datafusion.dataframe.DataFrame
+        DataFrame for the registered table.
+    """
+    table = coerce_table_like(value)
+    from_arrow = getattr(ctx, "from_arrow", None)
+    if callable(from_arrow) and isinstance(table, pa.Table) and batch_size is None:
+        return cast("DataFrame", from_arrow(cast("pa.Table", table), name=name))
+    register_memtable_from_table(ctx, name=name, table=table, batch_size=batch_size)
+    return ctx.table(name)
+
+
 def replay_substrait_bytes(ctx: SessionContext, plan_bytes: bytes) -> DataFrame:
     """Replay a Substrait plan into a DataFusion DataFrame.
 
@@ -1203,6 +1375,7 @@ def rehydrate_plan_artifacts(
 
 
 __all__ = [
+    "CopyToOptions",
     "DataFusionCompileOptions",
     "DataFusionDmlOptions",
     "DataFusionFallbackEvent",
@@ -1212,7 +1385,10 @@ __all__ = [
     "SqlFallbackContext",
     "collect_plan_artifacts",
     "compile_sqlglot_expr",
+    "copy_to_path",
+    "datafusion_from_arrow",
     "datafusion_partitioned_readers",
+    "datafusion_to_async_batches",
     "datafusion_to_reader",
     "datafusion_to_table",
     "df_from_sql",
@@ -1223,6 +1399,7 @@ __all__ = [
     "ibis_plan_to_reader",
     "ibis_plan_to_table",
     "ibis_to_datafusion",
+    "merge_format_options",
     "prepare_statement",
     "register_memtable",
     "register_memtable_from_table",

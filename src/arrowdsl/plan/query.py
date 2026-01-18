@@ -6,14 +6,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-import pyarrow.dataset as ds
-
 from arrowdsl.compute.expr_core import ExprSpec
 from arrowdsl.compute.filters import FilterSpec
 from arrowdsl.compute.macros import FieldExpr
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, DeclarationLike, pc
 from arrowdsl.core.schema_constants import PROVENANCE_COLS, PROVENANCE_SOURCE_FIELDS
+from arrowdsl.plan.dataset_wrappers import DatasetLike
 from arrowdsl.plan.scan_builder import ScanBuildSpec
 from arrowdsl.plan.scan_telemetry import ScanTelemetry, fragment_telemetry
 from arrowdsl.plan.source_normalize import (
@@ -23,7 +22,7 @@ from arrowdsl.plan.source_normalize import (
     normalize_dataset_source,
 )
 
-type DatasetSourceLike = PathLike | ds.Dataset
+type DatasetSourceLike = PathLike | DatasetLike
 type ColumnsSpec = Sequence[str] | Mapping[str, ComputeExpression]
 
 if TYPE_CHECKING:
@@ -190,7 +189,7 @@ class QuerySpec:
     def to_plan(
         self,
         *,
-        dataset: ds.Dataset,
+        dataset: DatasetLike,
         ctx: ExecutionContext,
         label: str = "",
         scan_provenance: Sequence[str] = (),
@@ -234,19 +233,19 @@ def open_dataset(
     source: DatasetSourceLike,
     *,
     options: DatasetSourceOptions | None = None,
-) -> ds.Dataset:
+) -> DatasetLike:
     """Open a dataset for scanning.
 
     Returns
     -------
-    ds.Dataset
+    DatasetLike
         Dataset instance for scanning.
     """
     return normalize_dataset_source(source, options=options)
 
 
 def compile_to_acero_scan(
-    dataset: ds.Dataset,
+    dataset: DatasetLike,
     *,
     spec: QuerySpec,
     ctx: ExecutionContext,

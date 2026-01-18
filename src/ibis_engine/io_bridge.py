@@ -10,6 +10,7 @@ from typing import TypedDict, cast
 import pyarrow as pa
 import pyarrow.dataset as ds
 from datafusion import DataFrameWriteOptions, ParquetWriterOptions, col
+from datafusion.expr import Expr, SortExpr
 from ibis.expr.types import Table as IbisTable
 
 from arrowdsl.core.context import DeterminismTier
@@ -63,6 +64,7 @@ from ibis_engine.execution import (
     stream_ibis_plan,
 )
 from ibis_engine.plan import IbisPlan
+from schema_spec.specs import DataFusionWritePolicy
 from sqlglot_tools.bridge import IbisCompilerBackend
 
 type IbisWriteInput = DatasetWriteInput | IbisPlan | IbisTable | PlanProduct
@@ -93,6 +95,7 @@ class IbisDatasetWriteOptions:
     execution: IbisExecutionContext | None = None
     writer_strategy: WriterStrategy | None = None
     datafusion_write: DataFusionWriterConfig | None = None
+    datafusion_write_policy: DataFusionWritePolicy | None = None
     parquet_reporter: Callable[[DatasetWriteReport], None] | None = None
     delta_reporter: Callable[[DeltaWriteResult], None] | None = None
     delta_options: DeltaWriteOptions | None = None
@@ -110,6 +113,7 @@ class IbisNamedDatasetWriteOptions:
     prefer_reader: bool = True
     execution: IbisExecutionContext | None = None
     writer_strategy: WriterStrategy | None = None
+    datafusion_write_policy: DataFusionWritePolicy | None = None
     parquet_reporter: Callable[[DatasetWriteReport], None] | None = None
     delta_reporter: Callable[[DeltaWriteResult], None] | None = None
     delta_options: DeltaWriteOptions | None = None
@@ -268,11 +272,13 @@ def _write_datafusion_dataset(
     execution: IbisExecutionContext,
     dataset_config: DatasetWriteConfig,
     write_config: DataFusionWriterConfig | None,
+    write_policy: DataFusionWritePolicy | None,
 ) -> str:
     runtime_profile = execution.ctx.runtime.datafusion
     if runtime_profile is None or execution.ibis_backend is None:
         msg = "DataFusion writer requires a runtime profile and Ibis backend."
         raise ValueError(msg)
+    effective_write_policy = write_policy or runtime_profile.write_policy
     df_ctx = runtime_profile.session_context()
     backend = cast("IbisCompilerBackend", execution.ibis_backend)
     df = (
@@ -310,10 +316,12 @@ def _write_datafusion_dataset(
             value,
             execution=execution,
             write_config=write_config,
+            write_policy=effective_write_policy,
         )
         parquet_options = _build_parquet_write_options(
             dataset_config=dataset_config,
             write_config=write_config,
+            write_policy=effective_write_policy,
         )
         if write_options is not None or parquet_options is not None:
             write_with_options(str(base_dir), parquet_options, write_options)
@@ -322,6 +330,7 @@ def _write_datafusion_dataset(
                 base_dir,
                 execution=execution,
                 dataset_config=dataset_config,
+                write_policy=effective_write_policy,
             )
     write_parquet = getattr(df, "write_parquet", None)
     if callable(write_parquet):
@@ -331,6 +340,7 @@ def _write_datafusion_dataset(
             base_dir,
             execution=execution,
             dataset_config=dataset_config,
+            write_policy=effective_write_policy,
         )
     msg = "DataFusion writer is unavailable for the configured backend."
     raise ValueError(msg)
@@ -342,6 +352,7 @@ def _finalize_datafusion_write(
     *,
     execution: IbisExecutionContext,
     dataset_config: DatasetWriteConfig,
+    write_policy: DataFusionWritePolicy | None,
 ) -> str:
     dataset, files = _datafusion_dataset_snapshot(base_dir)
     metadata_paths = _datafusion_metadata_sidecars(
@@ -364,6 +375,7 @@ def _finalize_datafusion_write(
             writer_strategy="datafusion",
             row_group_size=(dataset_config.opts or ParquetWriteOptions()).row_group_size,
             max_rows_per_file=(dataset_config.opts or ParquetWriteOptions()).max_rows_per_file,
+            datafusion_write_policy=_datafusion_write_policy_payload(write_policy),
         )
         dataset_config.reporter(report)
     return str(base_dir)
@@ -458,26 +470,57 @@ def _build_datafusion_write_options(
     *,
     execution: IbisExecutionContext,
     write_config: DataFusionWriterConfig | None,
+    write_policy: DataFusionWritePolicy | None,
 ) -> DataFrameWriteOptions | None:
     if write_config is not None and write_config.write_options is not None:
         return write_config.write_options
     sort_by = None
+    partition_by: Sequence[str] | None = None
+    single_file_output: bool | None = None
     if write_config is not None and write_config.sort_by is not None:
         sort_by = list(write_config.sort_by)
+    elif write_policy is not None and write_policy.sort_by:
+        sort_by = list(write_policy.sort_by)
     elif execution.ctx.determinism == DeterminismTier.CANONICAL:
         schema = _schema_for_write(value, execution=execution)
         sort_by = [col for col, _ in ordering_keys_for_schema(schema)]
-    if not sort_by:
-        return None
-    return _create_write_options(sort_by=sort_by)
+    if write_policy is not None:
+        partition_by = list(write_policy.partition_by) or None
+        single_file_output = write_policy.single_file_output
+    return _create_write_options_from_policy(
+        sort_by=sort_by,
+        partition_by=partition_by,
+        single_file_output=single_file_output,
+    )
 
 
 def _create_write_options(*, sort_by: Sequence[str]) -> DataFrameWriteOptions | None:
+    return _create_write_options_from_policy(
+        sort_by=list(sort_by),
+        partition_by=None,
+        single_file_output=None,
+    )
+
+
+def _create_write_options_from_policy(
+    *,
+    sort_by: Sequence[str] | None,
+    partition_by: Sequence[str] | None,
+    single_file_output: bool | None,
+) -> DataFrameWriteOptions | None:
     try:
-        sort_exprs = [col(name) for name in sort_by]
-        return DataFrameWriteOptions(sort_by=sort_exprs)
+        kwargs: _DataFrameWriteOptionsKwargs = {}
+        if sort_by:
+            kwargs["sort_by"] = [col(name) for name in sort_by]
+        if partition_by:
+            kwargs["partition_by"] = list(partition_by)
+        if single_file_output is not None:
+            kwargs["single_file_output"] = single_file_output
+        if not kwargs:
+            return None
+        return DataFrameWriteOptions(**kwargs)
     except TypeError:
-        logger.warning("DataFrameWriteOptions does not accept sort_by; skipping ordering.")
+        logger.warning("DataFrameWriteOptions constructor mismatch; using DataFusion defaults.")
         return None
 
 
@@ -485,9 +528,12 @@ def _build_parquet_write_options(
     *,
     dataset_config: DatasetWriteConfig,
     write_config: DataFusionWriterConfig | None,
+    write_policy: DataFusionWritePolicy | None,
 ) -> ParquetWriterOptions | None:
     if write_config is not None and write_config.parquet_options is not None:
         return write_config.parquet_options
+    if write_policy is not None:
+        return _create_parquet_options_from_policy(write_policy)
     opts = dataset_config.opts
     if opts is None:
         return None
@@ -502,6 +548,12 @@ class _ParquetWriterOptionsKwargs(TypedDict, total=False):
     statistics_enabled: str | None
 
 
+class _DataFrameWriteOptionsKwargs(TypedDict, total=False):
+    partition_by: Sequence[str] | str
+    single_file_output: bool
+    sort_by: Expr | Sequence[Expr] | Sequence[SortExpr] | SortExpr
+
+
 def _create_parquet_options(options: ParquetWriteOptions) -> ParquetWriterOptions | None:
     try:
         kwargs: _ParquetWriterOptionsKwargs = {"compression": options.compression}
@@ -511,6 +563,27 @@ def _create_parquet_options(options: ParquetWriteOptions) -> ParquetWriterOption
             kwargs["data_pagesize_limit"] = options.data_page_size
         kwargs["dictionary_enabled"] = options.use_dictionary
         kwargs["statistics_enabled"] = "page" if options.write_statistics else "none"
+        return ParquetWriterOptions(**kwargs)
+    except TypeError:
+        logger.warning("ParquetWriterOptions constructor mismatch; using DataFusion defaults.")
+        return None
+
+
+def _create_parquet_options_from_policy(
+    policy: DataFusionWritePolicy,
+) -> ParquetWriterOptions | None:
+    try:
+        kwargs: _ParquetWriterOptionsKwargs = {}
+        if policy.compression is not None:
+            kwargs["compression"] = policy.compression
+        if policy.max_row_group_size is not None:
+            kwargs["max_row_group_size"] = policy.max_row_group_size
+        if policy.dictionary_enabled is not None:
+            kwargs["dictionary_enabled"] = policy.dictionary_enabled
+        if policy.statistics_enabled is not None:
+            kwargs["statistics_enabled"] = policy.statistics_enabled
+        if not kwargs:
+            return None
         return ParquetWriterOptions(**kwargs)
     except TypeError:
         logger.warning("ParquetWriterOptions constructor mismatch; using DataFusion defaults.")
@@ -540,6 +613,22 @@ def _file_sort_order_payload(schema: SchemaLike | None) -> tuple[str, ...] | Non
     if not keys:
         return None
     return tuple(key[0] for key in keys)
+
+
+def _datafusion_write_policy_payload(
+    policy: DataFusionWritePolicy | None,
+) -> Mapping[str, object] | None:
+    if policy is None:
+        return None
+    return {
+        "partition_by": list(policy.partition_by),
+        "single_file_output": policy.single_file_output,
+        "sort_by": list(policy.sort_by),
+        "compression": policy.compression,
+        "statistics_enabled": policy.statistics_enabled,
+        "max_row_group_size": policy.max_row_group_size,
+        "dictionary_enabled": policy.dictionary_enabled,
+    }
 
 
 def write_ibis_table_parquet(
@@ -609,6 +698,7 @@ def write_ibis_dataset_parquet(
             execution=options.execution,
             dataset_config=config,
             write_config=options.datafusion_write,
+            write_policy=options.datafusion_write_policy,
         )
     value = _coerce_write_input(
         data,

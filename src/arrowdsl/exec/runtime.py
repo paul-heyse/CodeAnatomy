@@ -56,7 +56,6 @@ def run_segments(
         current = _run_segment(
             segment,
             ctx=ctx,
-            plan=plan,
             current=current,
             df_executor=df_executor,
         )
@@ -70,7 +69,6 @@ def _run_segment(
     segment: Segment,
     *,
     ctx: ExecutionContext,
-    plan: SegmentPlan,
     current: TableLike | RecordBatchReaderLike | None,
     df_executor: DefExecutor | None,
 ) -> TableLike | RecordBatchReaderLike:
@@ -80,7 +78,6 @@ def _run_segment(
         return _run_acero_segment(
             segment,
             ctx=ctx,
-            plan=plan,
             current=current,
             df_executor=df_executor,
         )
@@ -106,7 +103,6 @@ def _run_acero_segment(
     segment: Segment,
     *,
     ctx: ExecutionContext,
-    plan: SegmentPlan,
     current: TableLike | RecordBatchReaderLike | None,
     df_executor: DefExecutor | None,
 ) -> TableLike | RecordBatchReaderLike:

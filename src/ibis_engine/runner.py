@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import cast
 
+import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 from ibis.expr.types import Table, Value
@@ -16,6 +17,7 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.bridge import (
     IbisCompilerBackend,
     compile_sqlglot_expr,
+    datafusion_to_async_batches,
     ibis_plan_to_datafusion,
     ibis_plan_to_reader,
     ibis_plan_to_table,
@@ -276,6 +278,37 @@ def stream_plan(
             execution=execution.datafusion,
         )
     return plan.to_reader(batch_size=batch_size, params=effective_params)
+
+
+async def async_stream_plan(
+    plan: IbisPlan,
+    *,
+    batch_size: int | None = None,
+    params: Mapping[Value, object] | None = None,
+    execution: IbisPlanExecutionOptions | None = None,
+) -> AsyncIterator[pa.RecordBatch]:
+    """Return an async iterator over RecordBatches for an Ibis plan.
+
+    Yields
+    ------
+    pyarrow.RecordBatch
+        Record batches produced from the plan.
+    """
+    effective_params = params
+    if execution is not None and execution.params is not None:
+        effective_params = execution.params
+    if execution is not None and execution.datafusion is not None:
+        df = plan_to_datafusion(
+            plan,
+            execution=execution.datafusion,
+            params=effective_params,
+        )
+        async for batch in datafusion_to_async_batches(df, ordering=plan.ordering):
+            yield batch
+        return
+    reader = plan.to_reader(batch_size=batch_size, params=effective_params)
+    for batch in reader:
+        yield batch
 
 
 def _stream_plan_datafusion(

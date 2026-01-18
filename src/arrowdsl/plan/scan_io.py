@@ -12,6 +12,7 @@ from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import ComputeExpression, SchemaLike, TableLike, pc
 from arrowdsl.core.schema_constants import PROVENANCE_SOURCE_FIELDS
 from arrowdsl.plan.builder import PlanBuilder
+from arrowdsl.plan.dataset_wrappers import DatasetLike, is_one_shot_dataset
 from arrowdsl.plan.ops import scan_ordering_effect
 from arrowdsl.plan.plan import Plan
 from arrowdsl.schema.build import rows_to_table as rows_to_table_factory
@@ -33,15 +34,15 @@ def rows_to_table(rows: Sequence[Mapping[str, object]], schema: SchemaLike) -> T
 class DatasetSource:
     """Dataset + DatasetSpec pairing for plan compilation."""
 
-    dataset: ds.Dataset
+    dataset: DatasetLike
     spec: DatasetSpec
 
 
-PlanSource = TableLike | ds.Dataset | ds.Scanner | DatasetSource | Plan
+PlanSource = TableLike | DatasetLike | ds.Scanner | DatasetSource | Plan
 
 
 def plan_from_dataset(
-    dataset: ds.Dataset,
+    dataset: DatasetLike,
     *,
     spec: DatasetSpec,
     ctx: ExecutionContext,
@@ -86,7 +87,7 @@ def _plan_from_dataset_or_scanner(
     columns: Sequence[str] | None,
     label: str,
 ) -> Plan | None:
-    if isinstance(source, ds.Dataset):
+    if isinstance(source, ds.Dataset) or is_one_shot_dataset(source):
         return _plan_from_dataset_obj(source, ctx=ctx, columns=columns, label=label)
     if isinstance(source, ds.Scanner):
         scanner = cast("ds.Scanner", source)
@@ -95,7 +96,7 @@ def _plan_from_dataset_or_scanner(
 
 
 def _plan_from_dataset_obj(
-    dataset: ds.Dataset,
+    dataset: DatasetLike,
     *,
     ctx: ExecutionContext,
     columns: Sequence[str] | None,

@@ -17,6 +17,7 @@ from arrowdsl.core.interop import DeclarationLike
 from arrowdsl.core.schema_constants import PROVENANCE_COLS
 from arrowdsl.ops.catalog import OP_CATALOG
 from arrowdsl.plan.builder import PlanBuilder
+from arrowdsl.plan.dataset_wrappers import DatasetLike, unwrap_dataset
 from arrowdsl.plan.ops import scan_ordering_effect
 
 if TYPE_CHECKING:
@@ -34,7 +35,7 @@ def _plan_class() -> type[Plan]:
 class ScanBuildSpec:
     """Shared scan builder for scanners, Acero declarations, and plans."""
 
-    dataset: ds.Dataset
+    dataset: DatasetLike
     query: QuerySpec
     ctx: ExecutionContext
     scan_provenance: tuple[str, ...] | None = None
@@ -67,7 +68,8 @@ class ScanBuildSpec:
         """
         predicate = self.query.pushdown_expression()
         _validate_predicate_fields(predicate, scan_provenance=self.scan_provenance)
-        return self.dataset.scanner(
+        dataset = unwrap_dataset(self.dataset)
+        return dataset.scanner(
             columns=self.scan_columns(),
             filter=predicate,
             **self.ctx.runtime.scan.scanner_kwargs(),

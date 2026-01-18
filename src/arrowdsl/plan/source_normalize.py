@@ -5,13 +5,19 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Protocol, TypeGuard, runtime_checkable
 
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 from deltalake import DeltaTable
 
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, coerce_table_like
+from arrowdsl.plan.dataset_wrappers import (
+    DatasetLike,
+    OneShotDataset,
+    is_one_shot_dataset,
+    union_dataset,
+)
 from core_types import JsonDict
 
 type PathLike = str | Path
@@ -65,7 +71,8 @@ class DatasetSourceOptions:
     dataset_format: str = "delta"
     filesystem: object | None = None
     files: tuple[str, ...] | None = None
-    partitioning: str | None = "hive"
+    partitioning: str | ds.Partitioning | None = "hive"
+    filename_partitioning_schema: SchemaLike | None = None
     schema: SchemaLike | None = None
     parquet_read_options: ds.ParquetReadOptions | None = None
     storage_options: Mapping[str, str] | None = None
@@ -95,33 +102,54 @@ class DatasetSourceOptions:
 
 
 def normalize_dataset_source(
-    source: PathLike | ds.Dataset | _DatasetFactory | TableLike | RecordBatchReaderLike | object,
+    source: PathLike | DatasetLike | _DatasetFactory | TableLike | RecordBatchReaderLike | object,
     *,
     options: DatasetSourceOptions | None = None,
-) -> ds.Dataset:
+) -> DatasetLike:
     """Normalize dataset sources into a pyarrow Dataset.
 
     Returns
     -------
-    ds.Dataset
+    DatasetLike
         Normalized dataset instance.
+
+    Raises
+    ------
+    ValueError
+        Raised when a union dataset is requested with no inputs.
     """
     resolved = options or DatasetSourceOptions()
-    if isinstance(source, ds.Dataset):
-        return source
-    if isinstance(source, _DatasetFactory):
+    dataset: DatasetLike | None = None
+    if _is_dataset_sequence(source):
+        datasets = list(source)
+        if not datasets:
+            msg = "UnionDataset requires at least one dataset."
+            raise ValueError(msg)
+        dataset = union_dataset(datasets)
+    elif isinstance(source, ds.Dataset) or is_one_shot_dataset(source):
+        dataset = source
+    elif isinstance(source, _DatasetFactory):
         builder = source
-        return builder.build(schema=resolved.schema)
-    if isinstance(source, (TableLike, RecordBatchReaderLike)) or _has_arrow_capsule(source):
+        dataset = builder.build(schema=resolved.schema)
+    elif isinstance(source, (TableLike, RecordBatchReaderLike)) or _has_arrow_capsule(source):
         coerced = coerce_table_like(source)
-        return ds.dataset(coerced, schema=resolved.schema)
-    path = _coerce_pathlike(source)
-    if resolved.dataset_format == "delta":
-        if resolved.files:
-            return _delta_dataset_from_files(resolved.files, options=resolved)
-        return _delta_dataset_from_path(path, options=resolved)
-    file_format = _resolve_file_format(resolved)
-    return _dataset_from_path(path, options=resolved, file_format=file_format)
+        dataset = ds.dataset(coerced, schema=resolved.schema)
+        if isinstance(coerced, RecordBatchReaderLike):
+            dataset = OneShotDataset(dataset)
+    else:
+        path = _coerce_pathlike(source)
+        if resolved.dataset_format == "delta":
+            if resolved.files:
+                dataset = _delta_dataset_from_files(resolved.files, options=resolved)
+            else:
+                dataset = _delta_dataset_from_path(path, options=resolved)
+        else:
+            file_format = _resolve_file_format(resolved)
+            dataset = _dataset_from_path(path, options=resolved, file_format=file_format)
+    if dataset is None:
+        msg = "Failed to normalize dataset source."
+        raise ValueError(msg)
+    return dataset
 
 
 def _coerce_pathlike(source: object) -> PathLike:
@@ -135,6 +163,19 @@ def _resolve_file_format(options: DatasetSourceOptions) -> str | ds.FileFormat:
     if options.dataset_format == "parquet" and options.parquet_read_options is not None:
         return ds.ParquetFileFormat(read_options=options.parquet_read_options)
     return options.dataset_format
+
+
+def _resolve_partitioning(options: DatasetSourceOptions) -> str | ds.Partitioning | None:
+    partitioning = options.partitioning
+    if isinstance(partitioning, ds.Partitioning):
+        return partitioning
+    if partitioning == "filename":
+        schema = options.filename_partitioning_schema or options.schema
+        if schema is None:
+            msg = "Filename partitioning requires a schema for partition fields."
+            raise ValueError(msg)
+        return ds.FilenamePartitioning(schema)
+    return partitioning
 
 
 def _delta_dataset_from_path(source: PathLike, *, options: DatasetSourceOptions) -> ds.Dataset:
@@ -191,12 +232,13 @@ def _dataset_from_path(
     options: DatasetSourceOptions,
     file_format: str | ds.FileFormat,
 ) -> ds.Dataset:
+    partitioning = _resolve_partitioning(options)
     if options.discovery is None or options.dataset_format != "parquet":
         return ds.dataset(
             source,
             format=file_format,
             filesystem=options.filesystem,
-            partitioning=options.partitioning,
+            partitioning=partitioning,
             schema=options.schema,
         )
     resolved_fs, resolved_path = from_uri(source, filesystem=options.filesystem)
@@ -205,7 +247,7 @@ def _dataset_from_path(
             resolved_path,
             format=file_format,
             filesystem=resolved_fs,
-            partitioning=options.partitioning,
+            partitioning=partitioning,
             schema=options.schema,
         )
     if options.discovery.use_metadata:
@@ -213,7 +255,7 @@ def _dataset_from_path(
             resolved_fs,
             resolved_path,
             schema=options.schema,
-            partitioning=options.partitioning,
+            partitioning=partitioning,
             file_format=file_format if options.dataset_format == "parquet" else None,
         )
         if metadata_dataset is not None:
@@ -280,7 +322,7 @@ def _metadata_sidecar_dataset(
     base_path: str,
     *,
     schema: SchemaLike | None,
-    partitioning: str | None,
+    partitioning: str | ds.Partitioning | None,
     file_format: ds.FileFormat | None,
 ) -> ds.Dataset | None:
     if not _is_dir(filesystem, base_path):
@@ -327,6 +369,14 @@ def _has_arrow_capsule(value: object) -> bool:
         hasattr(value, attr)
         for attr in ("__arrow_c_stream__", "__arrow_c_array__", "__dataframe__")
     )
+
+
+def _is_dataset_sequence(value: object) -> TypeGuard[Sequence[ds.Dataset]]:
+    if isinstance(value, (str, Path)):
+        return False
+    if not isinstance(value, Sequence):
+        return False
+    return all(isinstance(item, ds.Dataset) for item in value)
 
 
 __all__ = [

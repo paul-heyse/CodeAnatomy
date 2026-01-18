@@ -21,11 +21,14 @@ from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
     DataFusionFallbackEvent,
+    DataFusionSqlPolicy,
+    resolve_sql_policy,
 )
 from datafusion_engine.function_factory import install_function_factory
 from datafusion_engine.udf_registry import DataFusionUdfSnapshot, register_datafusion_udfs
 from engine.plan_cache import PlanCache
 from obs.diagnostics import DiagnosticsCollector
+from schema_spec.specs import DataFusionWritePolicy
 
 if TYPE_CHECKING:
     from ibis.expr.types import Value as IbisValue
@@ -489,6 +492,22 @@ def _settings_by_prefix(payload: Mapping[str, str], prefix: str) -> dict[str, st
     return {key: value for key, value in payload.items() if key.startswith(prefix)}
 
 
+def _datafusion_write_policy_payload(
+    policy: DataFusionWritePolicy | None,
+) -> dict[str, object] | None:
+    if policy is None:
+        return None
+    return {
+        "partition_by": list(policy.partition_by),
+        "single_file_output": policy.single_file_output,
+        "sort_by": list(policy.sort_by),
+        "compression": policy.compression,
+        "statistics_enabled": policy.statistics_enabled,
+        "max_row_group_size": policy.max_row_group_size,
+        "dictionary_enabled": policy.dictionary_enabled,
+    }
+
+
 def _apply_builder(
     builder: RuntimeEnvBuilder,
     *,
@@ -793,6 +812,15 @@ def _attach_cache_manager(
 
 
 @dataclass(frozen=True)
+class _ResolvedCompileHooks:
+    explain_hook: Callable[[str, Sequence[Mapping[str, object]]], None] | None
+    plan_artifacts_hook: Callable[[Mapping[str, object]], None] | None
+    sql_ingest_hook: Callable[[Mapping[str, object]], None] | None
+    fallback_hook: Callable[[DataFusionFallbackEvent], None] | None
+    cache_event_hook: Callable[[DataFusionCacheEvent], None] | None
+
+
+@dataclass(frozen=True)
 class DataFusionRuntimeProfile:
     """DataFusion runtime configuration."""
 
@@ -841,6 +869,10 @@ class DataFusionRuntimeProfile:
     prepared_statements: tuple[PreparedStatementSpec, ...] = ()
     config_policy_name: str | None = "default"
     config_policy: DataFusionConfigPolicy | None = None
+    sql_policy_name: str | None = "read_only"
+    sql_policy: DataFusionSqlPolicy | None = None
+    external_table_options: Mapping[str, object] = field(default_factory=dict)
+    write_policy: DataFusionWritePolicy | None = None
     settings_overrides: Mapping[str, str] = field(default_factory=dict)
     feature_gates: DataFusionFeatureGates = field(default_factory=DataFusionFeatureGates)
     join_policy: DataFusionJoinPolicy | None = None
@@ -1080,37 +1112,17 @@ class DataFusionRuntimeProfile:
             raise ValueError(msg)
         self.tracing_hook()
 
-    def compile_options(
+    def _resolve_compile_hooks(
         self,
+        resolved: DataFusionCompileOptions,
         *,
-        options: DataFusionCompileOptions | None = None,
-        params: Mapping[str, object] | Mapping[IbisValue, object] | None = None,
-        execution_policy: AdapterExecutionPolicy | None = None,
-        execution_label: ExecutionLabel | None = None,
-    ) -> DataFusionCompileOptions:
-        """Return DataFusion compile options derived from the profile.
-
-        Returns
-        -------
-        DataFusionCompileOptions
-            Compile options aligned with this runtime profile.
-        """
-        resolved = options or DataFusionCompileOptions(cache=None, cache_max_columns=None)
-        cache = resolved.cache if resolved.cache is not None else self.cache_enabled
-        cache_max_columns = (
-            resolved.cache_max_columns
-            if resolved.cache_max_columns is not None
-            else self.cache_max_columns
-        )
-        resolved_params = resolved.params if resolved.params is not None else params
-        capture_explain = resolved.capture_explain or self.capture_explain
-        explain_analyze = resolved.explain_analyze or self.explain_analyze
+        capture_explain: bool,
+        explain_analyze: bool,
+        capture_plan_artifacts: bool,
+    ) -> _ResolvedCompileHooks:
         explain_hook = resolved.explain_hook
         if explain_hook is None and capture_explain and self.explain_collector is not None:
             explain_hook = self.explain_collector.hook
-        capture_plan_artifacts = (
-            resolved.capture_plan_artifacts or self.capture_plan_artifacts or capture_explain
-        )
         plan_artifacts_hook = resolved.plan_artifacts_hook
         if (
             plan_artifacts_hook is None
@@ -1149,18 +1161,72 @@ class DataFusionRuntimeProfile:
                 cache_event_hook,
                 diagnostics_cache_hook(self.diagnostics_sink),
             )
+        return _ResolvedCompileHooks(
+            explain_hook=explain_hook,
+            plan_artifacts_hook=plan_artifacts_hook,
+            sql_ingest_hook=sql_ingest_hook,
+            fallback_hook=fallback_hook,
+            cache_event_hook=cache_event_hook,
+        )
+
+    def _resolve_sql_policy(
+        self,
+        resolved: DataFusionCompileOptions,
+    ) -> DataFusionSqlPolicy | None:
+        if resolved.sql_policy is not None:
+            return resolved.sql_policy
+        if self.sql_policy is None and self.sql_policy_name is None:
+            return None
+        return self.sql_policy or resolve_sql_policy(self.sql_policy_name)
+
+    def compile_options(
+        self,
+        *,
+        options: DataFusionCompileOptions | None = None,
+        params: Mapping[str, object] | Mapping[IbisValue, object] | None = None,
+        execution_policy: AdapterExecutionPolicy | None = None,
+        execution_label: ExecutionLabel | None = None,
+    ) -> DataFusionCompileOptions:
+        """Return DataFusion compile options derived from the profile.
+
+        Returns
+        -------
+        DataFusionCompileOptions
+            Compile options aligned with this runtime profile.
+        """
+        resolved = options or DataFusionCompileOptions(cache=None, cache_max_columns=None)
+        cache = resolved.cache if resolved.cache is not None else self.cache_enabled
+        cache_max_columns = (
+            resolved.cache_max_columns
+            if resolved.cache_max_columns is not None
+            else self.cache_max_columns
+        )
+        resolved_params = resolved.params if resolved.params is not None else params
+        capture_explain = resolved.capture_explain or self.capture_explain
+        explain_analyze = resolved.explain_analyze or self.explain_analyze
+        capture_plan_artifacts = (
+            resolved.capture_plan_artifacts or self.capture_plan_artifacts or capture_explain
+        )
+        hooks = self._resolve_compile_hooks(
+            resolved,
+            capture_explain=capture_explain,
+            explain_analyze=explain_analyze,
+            capture_plan_artifacts=capture_plan_artifacts,
+        )
+        sql_policy = self._resolve_sql_policy(resolved)
         unchanged = (
             cache == resolved.cache,
             cache_max_columns == resolved.cache_max_columns,
             resolved_params == resolved.params,
             capture_explain == resolved.capture_explain,
             explain_analyze == resolved.explain_analyze,
-            explain_hook == resolved.explain_hook,
+            hooks.explain_hook == resolved.explain_hook,
             capture_plan_artifacts == resolved.capture_plan_artifacts,
-            plan_artifacts_hook == resolved.plan_artifacts_hook,
-            sql_ingest_hook == resolved.sql_ingest_hook,
-            fallback_hook == resolved.fallback_hook,
-            cache_event_hook == resolved.cache_event_hook,
+            hooks.plan_artifacts_hook == resolved.plan_artifacts_hook,
+            hooks.sql_ingest_hook == resolved.sql_ingest_hook,
+            hooks.fallback_hook == resolved.fallback_hook,
+            hooks.cache_event_hook == resolved.cache_event_hook,
+            sql_policy == resolved.sql_policy,
         )
         if all(unchanged) and execution_policy is None and execution_label is None:
             return resolved
@@ -1171,12 +1237,13 @@ class DataFusionRuntimeProfile:
             params=resolved_params,
             capture_explain=capture_explain,
             explain_analyze=explain_analyze,
-            explain_hook=explain_hook,
+            explain_hook=hooks.explain_hook,
             capture_plan_artifacts=capture_plan_artifacts,
-            plan_artifacts_hook=plan_artifacts_hook,
-            sql_ingest_hook=sql_ingest_hook,
-            fallback_hook=fallback_hook,
-            cache_event_hook=cache_event_hook,
+            plan_artifacts_hook=hooks.plan_artifacts_hook,
+            sql_ingest_hook=hooks.sql_ingest_hook,
+            fallback_hook=hooks.fallback_hook,
+            cache_event_hook=hooks.cache_event_hook,
+            sql_policy=sql_policy,
         )
         if execution_label is not None:
             updated = apply_execution_label(
@@ -1306,6 +1373,20 @@ class DataFusionRuntimeProfile:
             "config_policy": dict(resolved_policy.settings)
             if resolved_policy is not None
             else None,
+            "sql_policy_name": self.sql_policy_name,
+            "sql_policy": (
+                {
+                    "allow_ddl": self.sql_policy.allow_ddl,
+                    "allow_dml": self.sql_policy.allow_dml,
+                    "allow_statements": self.sql_policy.allow_statements,
+                }
+                if self.sql_policy is not None
+                else None
+            ),
+            "external_table_options": dict(self.external_table_options)
+            if self.external_table_options
+            else None,
+            "write_policy": _datafusion_write_policy_payload(self.write_policy),
             "settings_overrides": dict(self.settings_overrides),
             "feature_gates": self.feature_gates.settings(),
             "join_policy": self.join_policy.settings() if self.join_policy is not None else None,
@@ -1328,8 +1409,22 @@ class DataFusionRuntimeProfile:
         return {
             "version": 1,
             "profile_name": self.config_policy_name,
+            "sql_policy_name": self.sql_policy_name,
             "session_config": dict(settings),
             "settings_hash": self.settings_hash(),
+            "external_table_options": dict(self.external_table_options)
+            if self.external_table_options
+            else None,
+            "sql_policy": (
+                {
+                    "allow_ddl": self.sql_policy.allow_ddl,
+                    "allow_dml": self.sql_policy.allow_dml,
+                    "allow_statements": self.sql_policy.allow_statements,
+                }
+                if self.sql_policy is not None
+                else None
+            ),
+            "write_policy": _datafusion_write_policy_payload(self.write_policy),
             "feature_gates": dict(self.feature_gates.settings()),
             "join_policy": self.join_policy.settings() if self.join_policy is not None else None,
             "parquet_read": _settings_by_prefix(settings, "datafusion.execution.parquet."),
@@ -1357,6 +1452,7 @@ class DataFusionRuntimeProfile:
             "output_writes": {
                 "cache_enabled": self.cache_enabled,
                 "cache_max_columns": self.cache_max_columns,
+                "datafusion_write_policy": _datafusion_write_policy_payload(self.write_policy),
             },
         }
 

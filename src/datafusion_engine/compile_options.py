@@ -44,6 +44,47 @@ class DataFusionSqlPolicy:
         )
 
 
+SQL_POLICY_PRESETS: Mapping[str, DataFusionSqlPolicy] = {
+    "read_only": DataFusionSqlPolicy(),
+    "service": DataFusionSqlPolicy(
+        allow_ddl=False,
+        allow_dml=False,
+        allow_statements=False,
+    ),
+    "admin": DataFusionSqlPolicy(
+        allow_ddl=True,
+        allow_dml=True,
+        allow_statements=True,
+    ),
+}
+
+
+def resolve_sql_policy(
+    name: str | None,
+    *,
+    fallback: DataFusionSqlPolicy | None = None,
+) -> DataFusionSqlPolicy:
+    """Return a SQL policy from the preset matrix.
+
+    Returns
+    -------
+    DataFusionSqlPolicy
+        SQL policy resolved from presets or fallback.
+
+    Raises
+    ------
+    ValueError
+        Raised when the policy name is unknown.
+    """
+    if name is None:
+        return fallback or DataFusionSqlPolicy()
+    policy = SQL_POLICY_PRESETS.get(name)
+    if policy is None:
+        msg = f"Unknown SQL policy name: {name!r}."
+        raise ValueError(msg)
+    return policy
+
+
 @dataclass(frozen=True)
 class DataFusionFallbackEvent:
     """Diagnostics payload for SQL fallback execution."""
@@ -74,8 +115,10 @@ class DataFusionDmlOptions:
 
     sql_options: SQLOptions | None = None
     sql_policy: DataFusionSqlPolicy | None = None
+    sql_policy_name: str | None = None
     session_policy: DataFusionSqlPolicy | None = None
     table_policy: DataFusionSqlPolicy | None = None
+    params: Mapping[str, object] | None = None
     dialect: str = field(
         default_factory=lambda: sqlglot_surface_policy(SqlGlotSurface.DATAFUSION_DML).dialect
     )

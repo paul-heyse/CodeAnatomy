@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -245,6 +246,8 @@ def datafusion_external_table_sql(
     name: str,
     location: DatasetLocation,
     dialect: str | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+    options_override: Mapping[str, object] | None = None,
 ) -> str | None:
     """Return a CREATE EXTERNAL TABLE statement for a dataset location.
 
@@ -263,8 +266,14 @@ def datafusion_external_table_sql(
     )
     if resolved_dialect == "datafusion_ext":
         register_datafusion_dialect()
-    options, compression = _external_table_options(location.read_options)
+    merged_options = _merge_external_table_options(
+        runtime_profile.external_table_options if runtime_profile is not None else None,
+        location.read_options,
+        options_override,
+    )
+    options, compression = _external_table_options(merged_options)
     partitioned_by = _partitioned_by(location)
+    file_sort_order = _file_sort_order(location)
     config = ExternalTableConfig(
         location=str(location.path),
         file_format=location.format,
@@ -272,6 +281,7 @@ def datafusion_external_table_sql(
         dialect=resolved_dialect,
         options=options,
         partitioned_by=partitioned_by,
+        file_sort_order=file_sort_order,
         compression=compression,
     )
     return table_spec.to_create_external_table_sql(config)
@@ -290,6 +300,28 @@ def _partitioned_by(location: DatasetLocation) -> tuple[str, ...] | None:
     if scan is None or not scan.partition_cols:
         return None
     return tuple(col for col, _ in scan.partition_cols)
+
+
+def _file_sort_order(location: DatasetLocation) -> tuple[str, ...] | None:
+    spec = location.dataset_spec
+    if spec is not None and spec.contract_spec is not None and spec.contract_spec.canonical_sort:
+        return tuple(key.column for key in spec.contract_spec.canonical_sort)
+    if spec is not None and spec.table_spec.key_fields:
+        return tuple(spec.table_spec.key_fields)
+    if location.table_spec is not None and location.table_spec.key_fields:
+        return tuple(location.table_spec.key_fields)
+    return None
+
+
+def _merge_external_table_options(
+    *options: Mapping[str, object] | None,
+) -> dict[str, object]:
+    merged: dict[str, object] = {}
+    for mapping in options:
+        if not mapping:
+            continue
+        merged.update({key: value for key, value in mapping.items() if value is not None})
+    return merged
 
 
 def _external_table_options(
@@ -343,7 +375,11 @@ def register_dataset_df(
         location=location,
         options=options,
         cache=cache,
-        external_table_sql=datafusion_external_table_sql(name=name, location=location),
+        external_table_sql=datafusion_external_table_sql(
+            name=name,
+            location=location,
+            runtime_profile=runtime_profile,
+        ),
         runtime_profile=runtime_profile,
     )
     if location.format == "delta":
@@ -383,12 +419,20 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
         kwargs["skip_metadata"] = skip_metadata
     kwargs = _merge_kwargs(kwargs, context.options.read_options)
     if table_partition_cols or context.options.provider == "listing":
-        _call_register(
-            context.ctx.register_listing_table,
-            context.name,
-            context.location.path,
-            kwargs,
-        )
+        _apply_scan_settings(context.ctx, scan=scan)
+
+        def _register_listing() -> None:
+            _call_register(
+                context.ctx.register_listing_table,
+                context.name,
+                context.location.path,
+                kwargs,
+            )
+
+        if scan is not None and scan.listing_mutable:
+            _refresh_listing_table(context.ctx, name=context.name, register=_register_listing)
+        else:
+            _register_listing()
         df = context.ctx.table(context.name)
         _record_listing_table_artifact(
             context,
@@ -398,6 +442,7 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
             skip_metadata=skip_metadata,
         )
     else:
+        _apply_scan_settings(context.ctx, scan=scan)
         _call_register(
             context.ctx.register_parquet,
             context.name,
@@ -482,10 +527,55 @@ def _record_listing_table_artifact(
         "file_sort_order": list(scan.file_sort_order) if scan is not None else None,
         "parquet_pruning": scan.parquet_pruning if scan is not None else None,
         "skip_metadata": skip_metadata,
+        "collect_statistics": scan.collect_statistics if scan is not None else None,
+        "meta_fetch_concurrency": scan.meta_fetch_concurrency if scan is not None else None,
+        "list_files_cache_ttl": scan.list_files_cache_ttl if scan is not None else None,
+        "listing_mutable": scan.listing_mutable if scan is not None else None,
         "schema": schema_payload,
         "read_options": dict(context.options.read_options),
     }
     profile.diagnostics_sink.record_artifact("datafusion_listing_tables_v1", payload)
+
+
+def _apply_scan_settings(ctx: SessionContext, *, scan: DataFusionScanOptions | None) -> None:
+    """Apply per-table DataFusion scan settings via SET statements."""
+    if scan is None:
+        return
+    if scan.collect_statistics is not None:
+        _set_runtime_setting(
+            ctx,
+            key="datafusion.execution.collect_statistics",
+            value=str(scan.collect_statistics).lower(),
+        )
+    if scan.meta_fetch_concurrency is not None:
+        _set_runtime_setting(
+            ctx,
+            key="datafusion.execution.meta_fetch_concurrency",
+            value=str(scan.meta_fetch_concurrency),
+        )
+    if scan.list_files_cache_ttl is not None:
+        _set_runtime_setting(
+            ctx,
+            key="datafusion.runtime.list_files_cache_ttl",
+            value=str(scan.list_files_cache_ttl),
+        )
+
+
+def _set_runtime_setting(ctx: SessionContext, *, key: str, value: str) -> None:
+    """Apply a DataFusion session setting."""
+    ctx.sql(f"SET {key} = '{value}'").collect()
+
+
+def _refresh_listing_table(
+    ctx: SessionContext,
+    *,
+    name: str,
+    register: Callable[[], None],
+) -> None:
+    """Refresh a listing table registration by deregistering and re-registering."""
+    with suppress(KeyError, ValueError):
+        ctx.deregister_table(name)
+    register()
 
 
 def _record_delta_table_artifact(

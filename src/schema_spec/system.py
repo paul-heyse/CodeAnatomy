@@ -149,6 +149,10 @@ class DataFusionScanOptions:
     skip_metadata: bool = False
     file_extension: str | None = None
     cache: bool = False
+    collect_statistics: bool | None = None
+    meta_fetch_concurrency: int | None = None
+    list_files_cache_ttl: str | None = None
+    listing_mutable: bool = False
 
 
 @dataclass(frozen=True)

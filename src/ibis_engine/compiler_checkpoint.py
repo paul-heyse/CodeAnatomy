@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import cast
 
 from ibis.expr.types import Table as IbisTable
 from sqlglot import Expression
-from sqlglot.optimizer.normalize import normalization_distance, normalize
-from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
-from sqlglot.optimizer.qualify import qualify
 
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
+from sqlglot_tools.optimizer import (
+    NormalizeExprOptions,
+    canonical_ast_fingerprint,
+    default_sqlglot_policy,
+    normalize_expr,
+    sqlglot_policy_snapshot,
+    sqlglot_sql,
+)
 
 SchemaMapping = Mapping[str, Mapping[str, str]]
 
@@ -27,6 +31,7 @@ class CompilerCheckpoint:
     normalized: Expression
     plan_hash: str
     sql: str
+    policy_hash: str
 
 
 def compile_checkpoint(
@@ -46,18 +51,29 @@ def compile_checkpoint(
     """
     compiled = ibis_to_sqlglot(expr, backend=backend, params=None)
     schema = {name: dict(cols) for name, cols in schema_map.items()} if schema_map else None
-    qualified = qualify(compiled, schema=schema, dialect=dialect)
-    normalized = normalize_identifiers(qualified, dialect=dialect)
-    if normalization_distance(normalized, max_=normalization_budget) <= normalization_budget:
-        normalized = normalize(normalized)
-    sql = normalized.sql(dialect=dialect)
-    plan_hash = hashlib.sha256(sql.encode("utf-8")).hexdigest()
+    policy = default_sqlglot_policy()
+    if dialect:
+        policy = replace(policy, read_dialect=dialect, write_dialect=dialect)
+    if normalization_budget is not None:
+        policy = replace(policy, normalization_distance=normalization_budget)
+    qualified = normalize_expr(
+        compiled,
+        options=NormalizeExprOptions(
+            schema=schema,
+            policy=policy,
+        ),
+    )
+    normalized = qualified
+    sql = sqlglot_sql(normalized, policy=policy)
+    plan_hash = canonical_ast_fingerprint(normalized)
+    policy_hash = sqlglot_policy_snapshot().policy_hash
     return CompilerCheckpoint(
         expression=compiled,
         qualified=qualified,
         normalized=normalized,
         plan_hash=plan_hash,
         sql=sql,
+        policy_hash=policy_hash,
     )
 
 

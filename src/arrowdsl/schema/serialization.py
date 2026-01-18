@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
-from arrowdsl.core.interop import SchemaLike
+from arrowdsl.core.interop import DataTypeLike, SchemaLike
 from core_types import JsonDict
 
 
@@ -19,10 +19,41 @@ def schema_to_dict(schema: SchemaLike) -> JsonDict:
         JSON-serializable schema representation.
     """
     return {
-        "fields": [
-            {"name": field.name, "type": str(field.type), "nullable": bool(field.nullable)}
-            for field in schema
-        ]
+        "fields": [_field_to_dict(field) for field in schema],
+        "metadata": _decode_metadata(schema.metadata),
+    }
+
+
+def _field_to_dict(field: object) -> JsonDict:
+    dtype = getattr(field, "type", None)
+    return {
+        "name": getattr(field, "name", ""),
+        "type": str(dtype),
+        "nullable": bool(getattr(field, "nullable", True)),
+        "metadata": _decode_metadata(getattr(field, "metadata", None)),
+        "extension": _extension_info(dtype),
+    }
+
+
+def _decode_metadata(metadata: Mapping[bytes, bytes] | None) -> JsonDict:
+    if not metadata:
+        return {}
+    return {
+        key.decode("utf-8", errors="replace"): value.decode("utf-8", errors="replace")
+        for key, value in metadata.items()
+    }
+
+
+def _extension_info(dtype: DataTypeLike | None) -> JsonDict | None:
+    if dtype is None:
+        return None
+    extension_name = getattr(dtype, "extension_name", None)
+    storage_type = getattr(dtype, "storage_type", None)
+    if extension_name is None and storage_type is None:
+        return None
+    return {
+        "extension_name": str(extension_name) if extension_name is not None else None,
+        "storage_type": str(storage_type) if storage_type is not None else None,
     }
 
 

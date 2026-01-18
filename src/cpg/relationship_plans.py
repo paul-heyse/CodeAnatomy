@@ -31,6 +31,7 @@ from ibis_engine.query_compiler import apply_query_spec
 from ibis_engine.schema_utils import align_table_to_schema
 from ibis_engine.sources import (
     SourceToIbisOptions,
+    namespace_recorder_from_ctx,
     register_ibis_view,
     source_to_ibis,
     table_to_ibis,
@@ -152,7 +153,6 @@ class IbisPlanCatalog:
         TypeError
             Raised when a DatasetSource requires materialization.
         """
-        _ = ctx
         source = self.tables.get(name)
         if source is None:
             return None
@@ -169,6 +169,7 @@ class IbisPlanCatalog:
                 backend=self.backend,
                 name=label or name,
                 ordering=Ordering.unordered(),
+                namespace_recorder=namespace_recorder_from_ctx(ctx),
             ),
         )
         self.tables[name] = plan
@@ -453,8 +454,10 @@ def _compile_relation_plans_ibis(
             aligned = align_table(table, schema=context.output_schema, keep_extra_columns=True)
             plan = table_to_ibis(
                 aligned,
-                backend=backend,
-                name=f"{name_prefix}_{rule.name}",
+                options=SourceToIbisOptions(
+                    backend=backend,
+                    name=f"{name_prefix}_{rule.name}",
+                ),
             )
         if plan is None and compiled.rel_plan is not None:
             plan = context.plan_compiler.compile(
@@ -476,9 +479,11 @@ def _compile_relation_plans_ibis(
         view_name = f"{name_prefix}_{rule.output_dataset}" if name_prefix else rule.output_dataset
         plan = register_ibis_view(
             plan.expr,
-            backend=backend,
-            name=view_name,
-            ordering=plan.ordering,
+            options=SourceToIbisOptions(
+                backend=backend,
+                name=view_name,
+                ordering=plan.ordering,
+            ),
         )
         plans[rule.output_dataset] = plan
         context.ibis_catalog.tables[rule.output_dataset] = plan

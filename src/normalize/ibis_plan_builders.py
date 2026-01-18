@@ -27,7 +27,7 @@ from ibis_engine.schema_utils import (
     ensure_columns,
     ibis_null_literal,
 )
-from ibis_engine.sources import SourceToIbisOptions, source_to_ibis
+from ibis_engine.sources import SourceToIbisOptions, namespace_recorder_from_ctx, source_to_ibis
 from normalize.registry_fields import DIAG_DETAILS_TYPE
 from normalize.registry_ids import (
     DEF_USE_EVENT_ID_SPEC,
@@ -84,7 +84,6 @@ class IbisPlanCatalog:
         TypeError
             Raised when a DatasetSource must be materialized before use.
         """
-        _ = ctx
         source = self.tables.get(name)
         if source is None:
             empty = empty_table(schema)
@@ -102,6 +101,7 @@ class IbisPlanCatalog:
                 backend=self.backend,
                 name=name,
                 ordering=Ordering.unordered(),
+                namespace_recorder=namespace_recorder_from_ctx(ctx),
             ),
         )
         self.tables[name] = plan

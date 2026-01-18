@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol, cast
 
@@ -15,8 +16,12 @@ from arrowdsl.core.context import Ordering
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import ibis_schema_from_arrow, normalize_table_for_ibis
+from obs.diagnostics import DiagnosticsCollector
 
 DatabaseHint = tuple[str, str] | str | None
+_QUALIFIED_PARTS_SINGLE = 1
+_QUALIFIED_PARTS_DOUBLE = 2
+_QUALIFIED_PARTS_TRIPLE = 3
 
 
 class ViewBackend(Protocol):
@@ -42,15 +47,13 @@ class SourceToIbisOptions:
     name: str | None = None
     ordering: Ordering | None = None
     overwrite: bool = True
+    namespace_recorder: Callable[[Mapping[str, object]], None] | None = None
 
 
 def table_to_ibis(
     table: TableLike,
     *,
-    backend: BaseBackend,
-    name: str | None = None,
-    ordering: Ordering | None = None,
-    overwrite: bool = True,
+    options: SourceToIbisOptions,
 ) -> IbisPlan:
     """Register a table-like value as an Ibis view and return a plan.
 
@@ -66,20 +69,14 @@ def table_to_ibis(
         expr = ibis.memtable(table)
     return register_ibis_view(
         expr,
-        backend=backend,
-        name=name,
-        ordering=ordering,
-        overwrite=overwrite,
+        options=options,
     )
 
 
 def register_ibis_view(
     expr: IbisTable,
     *,
-    backend: BaseBackend,
-    name: str | None,
-    ordering: Ordering | None = None,
-    overwrite: bool = True,
+    options: SourceToIbisOptions,
 ) -> IbisPlan:
     """Register an Ibis expression as a backend view and return a plan.
 
@@ -88,18 +85,37 @@ def register_ibis_view(
     IbisPlan
         Ibis plan backed by the registered view.
     """
-    view_name = _resolve_name(name)
+    database_hint, view_name = _parse_database_hint(options.name)
     if view_name is None:
-        return IbisPlan(expr=expr, ordering=ordering or Ordering.unordered())
-    backend_view = cast("ViewBackend", backend)
-    database = _default_database_hint(backend)
+        return IbisPlan(expr=expr, ordering=options.ordering or Ordering.unordered())
+    backend_view = cast("ViewBackend", options.backend)
+    database = database_hint or _default_database_hint(options.backend)
     if database is None:
-        backend_view.create_view(view_name, expr, overwrite=overwrite)
-        registered = backend.table(view_name)
+        backend_view.create_view(view_name, expr, overwrite=options.overwrite)
+        _record_namespace_action(
+            options.namespace_recorder,
+            action="create_view",
+            name=view_name,
+            database=None,
+            overwrite=options.overwrite,
+        )
+        registered = options.backend.table(view_name)
     else:
-        backend_view.create_view(view_name, expr, database=database, overwrite=overwrite)
-        registered = backend.table(view_name, database=database)
-    return IbisPlan(expr=registered, ordering=ordering or Ordering.unordered())
+        backend_view.create_view(
+            view_name,
+            expr,
+            database=database,
+            overwrite=options.overwrite,
+        )
+        _record_namespace_action(
+            options.namespace_recorder,
+            action="create_view",
+            name=view_name,
+            database=database,
+            overwrite=options.overwrite,
+        )
+        registered = options.backend.table(view_name, database=database)
+    return IbisPlan(expr=registered, ordering=options.ordering or Ordering.unordered())
 
 
 def source_to_ibis(
@@ -120,19 +136,13 @@ def source_to_ibis(
         if options.name:
             return register_ibis_view(
                 source,
-                backend=options.backend,
-                name=options.name,
-                ordering=options.ordering,
-                overwrite=options.overwrite,
+                options=options,
             )
         return IbisPlan(expr=source, ordering=options.ordering or Ordering.unordered())
     table = _ensure_table(source)
     return table_to_ibis(
         table,
-        backend=options.backend,
-        name=options.name,
-        ordering=options.ordering,
-        overwrite=options.overwrite,
+        options=options,
     )
 
 
@@ -149,6 +159,25 @@ def _resolve_name(name: str | None) -> str | None:
     return sanitized or "view"
 
 
+def _parse_database_hint(name: str | None) -> tuple[DatabaseHint, str | None]:
+    if not name:
+        return None, None
+    parts = [part for part in name.split(".") if part]
+    if not parts:
+        return None, None
+    if len(parts) == _QUALIFIED_PARTS_SINGLE:
+        return None, _resolve_name(parts[0])
+    if len(parts) == _QUALIFIED_PARTS_DOUBLE:
+        return _resolve_name(parts[0]), _resolve_name(parts[1])
+    if len(parts) == _QUALIFIED_PARTS_TRIPLE:
+        catalog = _resolve_name(parts[0])
+        schema = _resolve_name(parts[1])
+        table = _resolve_name(parts[2])
+        return (cast("str", catalog), cast("str", schema)), table
+    msg = f"Unsupported qualified table name: {name!r}."
+    raise ValueError(msg)
+
+
 def _default_database_hint(backend: BaseBackend) -> tuple[str, str] | None:
     catalog = getattr(backend, "current_catalog", None)
     if callable(catalog):
@@ -161,8 +190,61 @@ def _default_database_hint(backend: BaseBackend) -> tuple[str, str] | None:
     return None
 
 
+def _database_payload(database: DatabaseHint) -> dict[str, object]:
+    if database is None:
+        return {"catalog": None, "schema": None, "database": None}
+    if isinstance(database, tuple):
+        return {"catalog": database[0], "schema": database[1], "database": None}
+    return {"catalog": None, "schema": database, "database": database}
+
+
+def _record_namespace_action(
+    recorder: Callable[[Mapping[str, object]], None] | None,
+    *,
+    action: str,
+    name: str,
+    database: DatabaseHint,
+    overwrite: bool,
+) -> None:
+    if recorder is None:
+        return
+    payload: dict[str, object] = {
+        "action": action,
+        "name": name,
+        "overwrite": overwrite,
+        **_database_payload(database),
+    }
+    recorder(payload)
+
+
+def namespace_recorder_from_ctx(
+    ctx: object | None,
+) -> Callable[[Mapping[str, object]], None] | None:
+    """Return a namespace recorder derived from an execution context.
+
+    Returns
+    -------
+    Callable[[Mapping[str, object]], None] | None
+        Recorder callback when diagnostics are enabled.
+    """
+    if ctx is None:
+        return None
+    runtime = getattr(ctx, "runtime", None)
+    datafusion = getattr(runtime, "datafusion", None)
+    diagnostics = getattr(datafusion, "diagnostics_sink", None)
+    if diagnostics is None:
+        return None
+    diagnostics_sink = cast("DiagnosticsCollector", diagnostics)
+
+    def _record(payload: Mapping[str, object]) -> None:
+        diagnostics_sink.record_artifact("ibis_namespace_actions_v1", payload)
+
+    return _record
+
+
 __all__ = [
     "SourceToIbisOptions",
+    "namespace_recorder_from_ctx",
     "register_ibis_view",
     "source_to_ibis",
     "table_to_ibis",

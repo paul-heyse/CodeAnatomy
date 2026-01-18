@@ -26,6 +26,7 @@ class EngineSession:
     diagnostics: DiagnosticsCollector | None = None
     surface_policy: ExecutionSurfacePolicy = field(default_factory=ExecutionSurfacePolicy)
     settings_hash: str | None = None
+    runtime_profile_hash: str | None = None
 
     def df_ctx(self) -> SessionContext | None:
         """Return the DataFusion SessionContext when configured.

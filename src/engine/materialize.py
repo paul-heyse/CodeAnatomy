@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+from dataclasses import replace
+
 import pyarrow as pa
 
 from arrowdsl.core.context import DeterminismTier, ExecutionContext
@@ -10,6 +13,7 @@ from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
 from ibis_engine.plan import IbisPlan
+from ibis_engine.runner import IbisCachePolicy
 
 
 def _default_plan_id(plan: IbisPlan) -> str:
@@ -27,6 +31,38 @@ def _resolve_prefer_reader(
     if ctx.determinism == DeterminismTier.CANONICAL:
         return False
     return policy.prefer_streaming
+
+
+def _cache_event_reporter(
+    ctx: ExecutionContext,
+) -> Callable[[Mapping[str, object]], None] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        return None
+    diagnostics = profile.diagnostics_sink
+    if diagnostics is None:
+        return None
+    record_events = diagnostics.record_events
+
+    def _record(event: Mapping[str, object]) -> None:
+        record_events("ibis_cache_events_v1", [event])
+
+    return _record
+
+
+def _resolve_cache_policy(
+    *,
+    ctx: ExecutionContext,
+    policy: ExecutionSurfacePolicy,
+    prefer_reader: bool,
+) -> IbisCachePolicy:
+    if prefer_reader:
+        return IbisCachePolicy(enabled=False, reason="prefer_streaming")
+    if ctx.determinism == DeterminismTier.BEST_EFFORT:
+        return IbisCachePolicy(enabled=False, reason="best_effort")
+    if policy.determinism_tier == DeterminismTier.BEST_EFFORT:
+        return IbisCachePolicy(enabled=False, reason="policy_best_effort")
+    return IbisCachePolicy(enabled=True, reason="materialize")
 
 
 def resolve_prefer_reader(*, ctx: ExecutionContext, policy: ExecutionSurfacePolicy) -> bool:
@@ -61,6 +97,15 @@ def build_plan_product(
     """
     ctx = execution.ctx
     prefer_reader = _resolve_prefer_reader(ctx=ctx, policy=policy)
+    cache_policy = _resolve_cache_policy(
+        ctx=ctx,
+        policy=policy,
+        prefer_reader=prefer_reader,
+    )
+    reporter = _cache_event_reporter(ctx)
+    if reporter is not None:
+        cache_policy = replace(cache_policy, reporter=reporter)
+    execution = replace(execution, cache_policy=cache_policy)
     stream: RecordBatchReaderLike | None = None
     table: TableLike | None = None
     if prefer_reader:

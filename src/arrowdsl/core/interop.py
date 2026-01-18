@@ -430,6 +430,50 @@ def call_expression_function(
     return call(function_name, arguments, options)
 
 
+def table_from_dataframe_protocol(obj: object) -> TableLike:
+    """Return a pyarrow.Table from the dataframe interchange protocol.
+
+    Returns
+    -------
+    TableLike
+        Arrow table constructed from the dataframe protocol.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when pyarrow interchange is unavailable.
+    TypeError
+        Raised when the object does not implement the protocol.
+    """
+    interchange = getattr(pa, "interchange", None)
+    if interchange is None:
+        msg = "pyarrow.interchange is unavailable."
+        raise RuntimeError(msg)
+    if not hasattr(obj, "__dataframe__"):
+        msg = "Object does not implement the dataframe interchange protocol."
+        raise TypeError(msg)
+    return interchange.from_dataframe(obj)
+
+
+def reader_from_arrow_stream(obj: object) -> RecordBatchReaderLike:
+    """Return a RecordBatchReader from an Arrow C stream provider.
+
+    Returns
+    -------
+    RecordBatchReaderLike
+        Record batch reader over the stream input.
+
+    Raises
+    ------
+    TypeError
+        Raised when the object does not expose the Arrow C stream protocol.
+    """
+    if not hasattr(obj, "__arrow_c_stream__"):
+        msg = "Object does not expose __arrow_c_stream__."
+        raise TypeError(msg)
+    return pa.RecordBatchReader.from_stream(obj)
+
+
 class ComputeModule(Protocol):
     """Protocol for the subset of pyarrow.compute used in this repo."""
 
@@ -616,6 +660,7 @@ __all__ = [
     "memory_map",
     "nulls",
     "pc",
+    "reader_from_arrow_stream",
     "scalar",
     "schema",
     "set_cpu_count",
@@ -623,6 +668,7 @@ __all__ = [
     "string",
     "struct",
     "table",
+    "table_from_dataframe_protocol",
     "uint8",
     "uint16",
     "uint32",

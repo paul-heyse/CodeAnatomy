@@ -52,6 +52,12 @@ def build_backend(cfg: IbisBackendConfig) -> ibis.backends.BaseBackend:
     ibis_datafusion = _load_ibis_datafusion()
     if cfg.fuse_selects is not None:
         ibis.options.sql.fuse_selects = cfg.fuse_selects
+    if cfg.default_limit is not None:
+        ibis.options.sql.default_limit = cfg.default_limit
+    if cfg.default_dialect is not None:
+        ibis.options.sql.default_dialect = cfg.default_dialect
+    if cfg.interactive is not None:
+        ibis.options.interactive = cfg.interactive
     profile = cfg.datafusion_profile or DataFusionRuntimeProfile()
     if profile.default_catalog != "datafusion":
         profile = replace(profile, default_catalog="datafusion")

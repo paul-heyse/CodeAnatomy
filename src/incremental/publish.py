@@ -8,7 +8,7 @@ from typing import cast
 import pyarrow as pa
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.plan.query import open_dataset
+from arrowdsl.plan.query import DatasetDiscoveryOptions, DatasetSourceOptions, open_dataset
 from arrowdsl.schema.schema import align_table, empty_table
 from cpg.schemas import (
     CPG_EDGES_SCHEMA,
@@ -125,7 +125,14 @@ def _dataset_path(
 def _read_state_dataset_optional(path: Path, *, schema: pa.Schema) -> pa.Table | None:
     if not path.exists():
         return None
-    dataset = open_dataset(path, schema=schema, partitioning="hive")
+    dataset = open_dataset(
+        path,
+        options=DatasetSourceOptions(
+            schema=schema,
+            partitioning="hive",
+            discovery=DatasetDiscoveryOptions(),
+        ),
+    )
     validate_schema_identity(
         expected=schema,
         actual=dataset.schema,

@@ -1,5 +1,6 @@
 """Engine execution surface helpers."""
 
+from engine.function_registry import FunctionRegistry, default_function_registry
 from engine.materialize import build_plan_product, resolve_prefer_reader
 from engine.plan_policy import ExecutionSurfacePolicy, WriterStrategy
 from engine.plan_product import PlanProduct
@@ -10,11 +11,13 @@ from engine.session_factory import build_engine_session
 __all__ = [
     "EngineSession",
     "ExecutionSurfacePolicy",
+    "FunctionRegistry",
     "PlanProduct",
     "RuntimeProfileSpec",
     "WriterStrategy",
     "build_engine_session",
     "build_plan_product",
+    "default_function_registry",
     "resolve_prefer_reader",
     "resolve_runtime_profile",
 ]

@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import pyarrow as pa
-from sqlglot import ErrorLevel
 
 from arrowdsl.compute.kernels import KernelCapability
 from arrowdsl.core.interop import SchemaLike
@@ -19,7 +18,12 @@ from sqlglot_tools.bridge import (
     SqlGlotRelationDiff,
     missing_schema_columns,
 )
-from sqlglot_tools.optimizer import plan_fingerprint
+from sqlglot_tools.optimizer import (
+    default_sqlglot_policy,
+    plan_fingerprint,
+    sqlglot_policy_snapshot,
+    sqlglot_sql,
+)
 
 RuleDiagnosticSeverity = Literal["error", "warning"]
 PAIR_LENGTH = 2
@@ -273,12 +277,22 @@ def _sqlglot_metadata_payload(diagnostics: SqlGlotDiagnostics) -> dict[str, str]
     dict[str, str]
         Metadata payload describing the SQLGlot expression.
     """
+    policy = default_sqlglot_policy()
     metadata: dict[str, str] = {
-        "raw_sql": diagnostics.expression.sql(unsupported_level=ErrorLevel.RAISE),
-        "optimized_sql": diagnostics.optimized.sql(unsupported_level=ErrorLevel.RAISE),
+        "raw_sql": sqlglot_sql(diagnostics.expression, policy=policy),
+        "optimized_sql": sqlglot_sql(diagnostics.optimized, policy=policy),
         "ast_repr": diagnostics.ast_repr,
-        "plan_fingerprint": plan_fingerprint(diagnostics.optimized),
+        "ast_payload_raw": diagnostics.ast_payload_raw,
+        "ast_payload_optimized": diagnostics.ast_payload_optimized,
+        "plan_fingerprint": plan_fingerprint(diagnostics.optimized, dialect=policy.write_dialect),
+        "sqlglot_policy_hash": sqlglot_policy_snapshot().policy_hash,
     }
+    if diagnostics.normalization_distance is not None:
+        metadata["normalization_distance"] = str(diagnostics.normalization_distance)
+    if diagnostics.normalization_max_distance is not None:
+        metadata["normalization_max_distance"] = str(diagnostics.normalization_max_distance)
+    if diagnostics.normalization_applied is not None:
+        metadata["normalization_applied"] = str(diagnostics.normalization_applied).lower()
     _set_joined(metadata, "tables", diagnostics.tables)
     _set_joined(metadata, "columns", diagnostics.columns)
     _set_joined(metadata, "identifiers", diagnostics.identifiers)

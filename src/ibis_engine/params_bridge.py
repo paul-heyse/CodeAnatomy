@@ -7,9 +7,23 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import ibis
-from ibis.expr.types import Table, Value
+from ibis.expr.types import BooleanValue, Table, Value
 
 from relspec.rules.rel_ops import ParamOp, RelOpT
+
+type JoinHow = Literal[
+    "anti",
+    "any_inner",
+    "any_left",
+    "asof",
+    "cross",
+    "inner",
+    "left",
+    "outer",
+    "positional",
+    "right",
+    "semi",
+]
 
 
 @dataclass(frozen=True)
@@ -202,7 +216,46 @@ def list_param_join(
         Filtered table constrained by param table membership.
     """
     key = right_col or left_col
-    return table.join(param_table, [table[left_col] == param_table[key]], how="semi")
+    return stable_join(
+        table,
+        param_table,
+        [table[left_col] == param_table[key]],
+        options=JoinOptions(how="semi"),
+    )
+
+
+@dataclass(frozen=True)
+class JoinOptions:
+    """Configuration for stable Ibis joins."""
+
+    how: JoinHow = "inner"
+    lname: str = ""
+    rname: str = "{name}_r"
+
+
+def stable_join(
+    left: Table,
+    right: Table,
+    predicates: Sequence[BooleanValue],
+    *,
+    options: JoinOptions | None = None,
+) -> Table:
+    """Return a join with standardized collision handling.
+
+    Returns
+    -------
+    ibis.expr.types.Table
+        Joined table with collision-safe suffixes applied.
+    """
+    resolved = options or JoinOptions()
+    right_view = right.view()
+    return left.join(
+        right_view,
+        predicates,
+        how=resolved.how,
+        lname=resolved.lname,
+        rname=resolved.rname,
+    )
 
 
 def _param_name(param: Value) -> str:
@@ -218,6 +271,7 @@ ParamSpec = ScalarParamSpec
 
 __all__ = [
     "IbisParamRegistry",
+    "JoinOptions",
     "ParamSpec",
     "ScalarParamSpec",
     "datafusion_param_bindings",
@@ -226,4 +280,5 @@ __all__ = [
     "registry_from_ops",
     "registry_from_specs",
     "specs_from_rel_ops",
+    "stable_join",
 ]

@@ -36,7 +36,7 @@ from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
 from ibis_engine.plan import IbisPlan
-from ibis_engine.sources import register_ibis_view
+from ibis_engine.sources import SourceToIbisOptions, register_ibis_view
 from relspec.rules.handlers.cpg_emit import EdgeEmitRuleHandler
 from schema_spec.system import DatasetSpec
 
@@ -334,9 +334,11 @@ def _finalize_edges_ibis(
     view_name = f"{edges_spec.name}_raw"
     registered = register_ibis_view(
         raw_plan.expr,
-        backend=config.ibis_backend,
-        name=view_name,
-        ordering=raw_plan.ordering,
+        options=SourceToIbisOptions(
+            backend=config.ibis_backend,
+            name=view_name,
+            ordering=raw_plan.ordering,
+        ),
     )
     execution = IbisExecutionContext(
         ctx=exec_ctx,

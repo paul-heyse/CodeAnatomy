@@ -30,7 +30,12 @@ from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
 from ibis_engine.plan import IbisPlan
-from ibis_engine.sources import SourceToIbisOptions, register_ibis_view, source_to_ibis
+from ibis_engine.sources import (
+    SourceToIbisOptions,
+    namespace_recorder_from_ctx,
+    register_ibis_view,
+    source_to_ibis,
+)
 from relspec.cpg.emit_props_ibis import (
     filter_prop_fields,
 )
@@ -207,6 +212,7 @@ def _source_to_ibis_plan(
             backend=backend,
             name=name,
             ordering=Ordering.unordered(),
+            namespace_recorder=namespace_recorder_from_ctx(_ctx),
         ),
     )
 
@@ -325,9 +331,11 @@ def _materialize_ibis_plan(
         raise ValueError(msg)
     registered = register_ibis_view(
         plan.expr,
-        backend=backend,
-        name=name,
-        ordering=plan.ordering,
+        options=SourceToIbisOptions(
+            backend=backend,
+            name=name,
+            ordering=plan.ordering,
+        ),
     )
     if context.prefer_reader:
         return _materialize_reader(stream_ibis_plan(registered, execution=context.execution))

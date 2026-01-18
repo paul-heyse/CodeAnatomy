@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -10,13 +11,19 @@ import sqlglot
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value
 from sqlglot import Expression
+from sqlglot.serde import dump
 
 from sqlglot_tools.lineage import (
     referenced_columns,
     referenced_identifiers,
     referenced_tables,
 )
-from sqlglot_tools.optimizer import CanonicalizationRules, normalize_expr
+from sqlglot_tools.optimizer import (
+    CanonicalizationRules,
+    NormalizeExprOptions,
+    SqlGlotPolicy,
+    normalize_expr_with_stats,
+)
 
 SchemaMapping = Mapping[str, Mapping[str, str]]
 
@@ -50,6 +57,11 @@ class SqlGlotDiagnostics:
     columns: tuple[str, ...]
     identifiers: tuple[str, ...]
     ast_repr: str
+    ast_payload_raw: str
+    ast_payload_optimized: str
+    normalization_distance: int | None
+    normalization_max_distance: int | None
+    normalization_applied: bool | None
 
 
 @dataclass(frozen=True)
@@ -69,8 +81,10 @@ class SqlGlotDiagnosticsOptions:
 
     schema_map: SchemaMapping | None = None
     rules: CanonicalizationRules | None = None
+    policy: SqlGlotPolicy | None = None
     normalize: bool = True
     params: Mapping[Value, object] | None = None
+    sql: str | None = None
 
 
 def ibis_to_sqlglot(
@@ -104,11 +118,21 @@ def sqlglot_diagnostics(
     """
     options = options or SqlGlotDiagnosticsOptions()
     compiled = ibis_to_sqlglot(expr, backend=backend, params=options.params)
-    optimized = (
-        normalize_expr(compiled, schema=options.schema_map, rules=options.rules)
-        if options.normalize
-        else compiled
-    )
+    stats = None
+    if options.normalize:
+        normalize_result = normalize_expr_with_stats(
+            compiled,
+            options=NormalizeExprOptions(
+                schema=options.schema_map,
+                rules=options.rules,
+                policy=options.policy,
+                sql=options.sql,
+            ),
+        )
+        optimized = normalize_result.expr
+        stats = normalize_result.stats
+    else:
+        optimized = compiled
     return SqlGlotDiagnostics(
         expression=compiled,
         optimized=optimized,
@@ -116,6 +140,11 @@ def sqlglot_diagnostics(
         columns=referenced_columns(optimized),
         identifiers=referenced_identifiers(optimized),
         ast_repr=repr(optimized),
+        ast_payload_raw=_ast_payload(compiled),
+        ast_payload_optimized=_ast_payload(optimized),
+        normalization_distance=stats.distance if stats is not None else None,
+        normalization_max_distance=stats.max_distance if stats is not None else None,
+        normalization_applied=stats.applied if stats is not None else None,
     )
 
 
@@ -142,6 +171,11 @@ def relation_diff(
         columns_removed=tuple(sorted(left_columns - right_columns)),
         ast_diff=ast_diff,
     )
+
+
+def _ast_payload(expr: Expression) -> str:
+    payload = dump(expr)
+    return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
 
 def _ast_diff_summary(left: Expression, right: Expression) -> dict[str, int]:

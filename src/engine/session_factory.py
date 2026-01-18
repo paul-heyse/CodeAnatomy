@@ -5,13 +5,14 @@ from __future__ import annotations
 from dataclasses import replace
 
 from arrowdsl.core.context import ExecutionContext
+from datafusion_engine.registry_bridge import dataset_input_plugin
 from datafusion_engine.runtime import DataFusionRuntimeProfile, feature_state_snapshot
 from engine.plan_policy import ExecutionSurfacePolicy
-from engine.runtime_profile import RuntimeProfileSpec
+from engine.runtime_profile import RuntimeProfileSpec, runtime_profile_snapshot
 from engine.session import EngineSession
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
-from ibis_engine.registry import IbisDatasetRegistry
+from ibis_engine.registry import IbisDatasetRegistry, registry_snapshot
 from obs.diagnostics import DiagnosticsCollector
 from relspec.pipeline_policy import DiagnosticsPolicy
 
@@ -31,12 +32,7 @@ def build_engine_session(
     EngineSession
         Engine session wired to the runtime surfaces.
     """
-    if runtime_spec is None:
-        runtime = ctx.runtime
-        ibis_fuse_selects = ctx.runtime.ibis_fuse_selects
-    else:
-        runtime = runtime_spec.runtime
-        ibis_fuse_selects = runtime_spec.ibis_fuse_selects
+    runtime = ctx.runtime if runtime_spec is None else runtime_spec.runtime
     runtime.apply_global_thread_pools()
     df_profile = runtime.datafusion
     if df_profile is not None and diagnostics_policy is not None:
@@ -62,11 +58,32 @@ def build_engine_session(
         diagnostics.record_events("feature_state_v1", [snapshot.to_row()])
     backend_cfg = IbisBackendConfig(
         datafusion_profile=df_profile,
-        fuse_selects=ibis_fuse_selects,
+        fuse_selects=runtime.ibis_fuse_selects,
+        default_limit=runtime.ibis_default_limit,
+        default_dialect=runtime.ibis_default_dialect,
+        interactive=runtime.ibis_interactive,
     )
     backend = build_backend(backend_cfg)
     datasets = IbisDatasetRegistry(backend=backend, runtime_profile=df_profile)
+    input_plugin_names: list[str] = []
+    if df_profile is not None:
+        plugin = dataset_input_plugin(datasets, runtime_profile=df_profile)
+        df_profile = replace(
+            df_profile,
+            input_plugins=(*df_profile.input_plugins, plugin),
+        )
+        runtime = runtime.with_datafusion(df_profile)
+        input_plugin_names = [plugin.__name__]
     settings_hash = df_profile.settings_hash() if df_profile is not None else None
+    runtime_snapshot = runtime_profile_snapshot(runtime)
+    if diagnostics is not None:
+        diagnostics.record_artifact(
+            "datafusion_input_plugins_v1",
+            {
+                "plugins": input_plugin_names,
+                "dataset_registry": registry_snapshot(datasets.catalog),
+            },
+        )
     return EngineSession(
         ctx=ctx,
         runtime_profile=runtime,
@@ -76,6 +93,7 @@ def build_engine_session(
         diagnostics=diagnostics,
         surface_policy=surface_policy or ExecutionSurfacePolicy(),
         settings_hash=settings_hash,
+        runtime_profile_hash=runtime_snapshot.profile_hash,
     )
 
 

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
@@ -16,6 +17,7 @@ from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.io.parquet import (
     DatasetWriteConfig,
+    DatasetWriteReport,
     NamedDatasetWriteConfig,
     ParquetWriteOptions,
     write_dataset_parquet,
@@ -23,22 +25,25 @@ from arrowdsl.io.parquet import (
     write_named_datasets_parquet,
     write_table_parquet,
 )
+from arrowdsl.json_factory import json_default
 from arrowdsl.plan.metrics import (
     column_stats_table,
     dataset_stats_table,
     empty_scan_telemetry_table,
     scan_telemetry_table,
 )
-from arrowdsl.plan.query import open_dataset
+from arrowdsl.plan.query import DatasetDiscoveryOptions, DatasetSourceOptions, open_dataset
 from arrowdsl.plan.scan_builder import ScanBuildSpec
-from arrowdsl.plan.scan_telemetry import ScanTelemetry, fragment_telemetry
+from arrowdsl.plan.scan_telemetry import ScanTelemetry, ScanTelemetryOptions, fragment_telemetry
 from arrowdsl.plan.schema_utils import plan_schema
 from arrowdsl.schema.schema import EncodingPolicy
 from core_types import JsonDict, JsonValue
 from cpg.constants import CpgBuildArtifacts
 from datafusion_engine.registry_bridge import cached_dataset_names
+from engine.function_registry import default_function_registry
 from engine.plan_cache import PlanCacheEntry
 from engine.plan_policy import WriterStrategy
+from engine.runtime_profile import RuntimeProfileSnapshot, runtime_profile_snapshot
 from extract.evidence_plan import EvidencePlan
 from hamilton_pipeline.modules.extraction import ExtractErrorArtifacts
 from hamilton_pipeline.pipeline_types import (
@@ -91,6 +96,7 @@ from relspec.rules.handlers.cpg import relationship_rule_from_definition
 from relspec.rules.registry import RuleRegistry
 from relspec.rules.spec_tables import rule_definitions_from_table
 from schema_spec.system import dataset_spec_from_schema, make_dataset_spec
+from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 
 # -----------------------
 # Public CPG outputs
@@ -237,6 +243,23 @@ def _json_mapping(payload: Mapping[str, object] | None) -> JsonDict | None:
     return cast("JsonDict", dict(payload))
 
 
+def _json_payload(payload: Mapping[str, object]) -> JsonDict:
+    encoded = json.dumps(payload, default=json_default)
+    return cast("JsonDict", json.loads(encoded))
+
+
+def _scan_profile_payload(ctx: ExecutionContext) -> JsonDict:
+    profile = ctx.runtime.scan
+    return {
+        "name": profile.name,
+        "scanner_kwargs": _json_payload(profile.scanner_kwargs()),
+        "scan_node_kwargs": _json_payload(profile.scan_node_kwargs()),
+        "scan_provenance_columns": list(profile.scan_provenance_columns),
+        "implicit_ordering": profile.implicit_ordering,
+        "require_sequenced_output": profile.require_sequenced_output,
+    }
+
+
 def _datafusion_runtime_artifacts(
     ctx: ExecutionContext,
 ) -> tuple[JsonDict | None, JsonDict | None]:
@@ -246,6 +269,54 @@ def _datafusion_runtime_artifacts(
     metrics = _json_mapping(profile.collect_metrics())
     traces = _json_mapping(profile.collect_traces())
     return metrics, traces
+
+
+def _ibis_sql_ingest_artifacts(
+    ctx: ExecutionContext | None,
+) -> Sequence[Mapping[str, object]] | None:
+    if ctx is None or ctx.runtime.datafusion is None:
+        return None
+    diagnostics = ctx.runtime.datafusion.diagnostics_sink
+    if diagnostics is None:
+        return None
+    artifacts = diagnostics.artifacts_snapshot().get("ibis_sql_ingest_v1", [])
+    return artifacts or None
+
+
+def _ibis_namespace_actions(
+    ctx: ExecutionContext | None,
+) -> Sequence[Mapping[str, object]] | None:
+    if ctx is None or ctx.runtime.datafusion is None:
+        return None
+    diagnostics = ctx.runtime.datafusion.diagnostics_sink
+    if diagnostics is None:
+        return None
+    actions = diagnostics.artifacts_snapshot().get("ibis_namespace_actions_v1", [])
+    return actions or None
+
+
+def _ibis_cache_events(
+    ctx: ExecutionContext | None,
+) -> Sequence[Mapping[str, object]] | None:
+    if ctx is None or ctx.runtime.datafusion is None:
+        return None
+    diagnostics = ctx.runtime.datafusion.diagnostics_sink
+    if diagnostics is None:
+        return None
+    events = diagnostics.events_snapshot().get("ibis_cache_events_v1", [])
+    return events or None
+
+
+def _ibis_support_matrix(
+    ctx: ExecutionContext | None,
+) -> Sequence[Mapping[str, object]] | None:
+    if ctx is None or ctx.runtime.datafusion is None:
+        return None
+    diagnostics = ctx.runtime.datafusion.diagnostics_sink
+    if diagnostics is None:
+        return None
+    entries = diagnostics.artifacts_snapshot().get("ibis_support_matrix_v1", [])
+    return entries or None
 
 
 def _datafusion_runtime_diag_tables(
@@ -272,6 +343,66 @@ def _datafusion_runtime_diag_tables(
         datafusion_explains_table(explain_events) if profile.explain_collector is not None else None
     )
     return fallback_table, explain_table
+
+
+def _datafusion_input_plugins(
+    ctx: ExecutionContext,
+) -> Sequence[Mapping[str, object]] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return None
+    plugins = profile.diagnostics_sink.artifacts_snapshot().get(
+        "datafusion_input_plugins_v1",
+        [],
+    )
+    return plugins or None
+
+
+def _datafusion_dml_statements(
+    ctx: ExecutionContext,
+) -> Sequence[Mapping[str, object]] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return None
+    statements = profile.diagnostics_sink.artifacts_snapshot().get(
+        "datafusion_dml_statements_v1",
+        [],
+    )
+    return statements or None
+
+
+def _datafusion_plan_artifacts_table(ctx: ExecutionContext) -> pa.Table | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.plan_collector is None:
+        return None
+    entries = profile.plan_collector.snapshot()
+    if not entries:
+        return None
+    rows: list[dict[str, object]] = []
+    for entry in entries:
+        explain_value = entry.get("explain")
+        explain: list[object] = list(explain_value) if isinstance(explain_value, list) else []
+        explain_analyze = entry.get("explain_analyze")
+        rows.append(
+            {
+                "plan_hash": str(entry.get("plan_hash") or ""),
+                "sql": str(entry.get("sql") or ""),
+                "explain_json": json.dumps(explain, ensure_ascii=True, separators=(",", ":")),
+                "explain_analyze_json": json.dumps(
+                    explain_analyze, ensure_ascii=True, separators=(",", ":")
+                )
+                if explain_analyze is not None
+                else None,
+                "substrait_b64": str(entry.get("substrait_b64") or ""),
+                "logical_plan": entry.get("logical_plan"),
+                "optimized_plan": entry.get("optimized_plan"),
+                "physical_plan": entry.get("physical_plan"),
+                "graphviz": entry.get("graphviz"),
+                "partition_count": entry.get("partition_count"),
+            }
+        )
+    schema = incremental_dataset_schema("datafusion_plan_artifacts_v1")
+    return pa.Table.from_pylist(rows, schema=schema)
 
 
 def _datafusion_plan_cache_entries(
@@ -574,10 +705,21 @@ class NormalizedInputsReportContext:
     """Context required to build normalized input reports."""
 
     file_lists: Mapping[str, list[str]]
+    write_reports: Mapping[str, DatasetWriteReport]
     ibis_execution: IbisExecutionContext
     out_dir: Path
     requested_strategy: WriterStrategy
     effective_strategy: WriterStrategy
+
+
+@dataclass(frozen=True)
+class NormalizedInputsWriteOptions:
+    """Execution options for normalized input writes."""
+
+    context: NormalizedInputsWriteContext
+    ibis_execution: IbisExecutionContext
+    writer_strategy: WriterStrategy
+    reporter: Callable[[DatasetWriteReport], None] | None
 
 
 @dataclass(frozen=True)
@@ -630,24 +772,23 @@ def _write_normalized_inputs(
     input_datasets: Mapping[str, TableLike | RecordBatchReaderLike | IbisPlan],
     out_dir: Path,
     *,
-    context: NormalizedInputsWriteContext,
-    ibis_execution: IbisExecutionContext,
-    writer_strategy: WriterStrategy,
+    options: NormalizedInputsWriteOptions,
 ) -> dict[str, str]:
     if any(isinstance(table, IbisPlan) for table in input_datasets.values()):
         return write_ibis_named_datasets_parquet(
             input_datasets,
             str(out_dir),
             options=IbisNamedDatasetWriteOptions(
-                config=context.config,
-                execution=ibis_execution,
-                writer_strategy=writer_strategy,
+                config=options.context.config,
+                execution=options.ibis_execution,
+                writer_strategy=options.writer_strategy,
+                reporter=options.reporter,
             ),
         )
     return write_named_datasets_parquet(
         cast("dict[str, TableLike | RecordBatchReaderLike]", input_datasets),
         str(out_dir),
-        config=context.config,
+        config=replace(options.context.config, reporter=options.reporter),
     )
 
 
@@ -679,12 +820,24 @@ def _normalized_input_entry(
     context: NormalizedInputsReportContext,
 ) -> JsonDict:
     rows, columns = _normalized_input_metrics(table, path=path, context=context)
-    return {
+    entry: JsonDict = {
         "path": path,
         "rows": rows,
         "columns": columns,
         "files": list(context.file_lists.get(name, ())),
     }
+    report = context.write_reports.get(name)
+    if report is not None:
+        entry["schema_fingerprint"] = report.schema_fingerprint
+        entry["ordering_keys"] = (
+            [list(key) for key in report.ordering_keys] if report.ordering_keys else None
+        )
+        entry["preserve_order"] = report.preserve_order
+        entry["writer_strategy"] = report.writer_strategy
+        entry["row_group_size"] = report.row_group_size
+        entry["max_rows_per_file"] = report.max_rows_per_file
+        entry["metadata_paths"] = dict(report.metadata_paths) if report.metadata_paths else None
+    return entry
 
 
 def _normalized_inputs_report(
@@ -741,10 +894,18 @@ def write_normalized_inputs_parquet(
     _ensure_dir(out_dir)
 
     write_context = _build_normalized_inputs_write_context(input_datasets, ibis_execution)
+    write_reports: dict[str, DatasetWriteReport] = {}
+
+    def _record_report(report: DatasetWriteReport) -> None:
+        if report.dataset_name is None:
+            return
+        write_reports[report.dataset_name] = report
+
     requested_strategy = output_config.writer_strategy
     effective_strategy = requested_strategy if requested_strategy == "arrow" else "arrow"
     report_context = NormalizedInputsReportContext(
         file_lists=write_context.file_lists,
+        write_reports=write_reports,
         ibis_execution=ibis_execution,
         out_dir=out_dir,
         requested_strategy=requested_strategy,
@@ -753,9 +914,12 @@ def write_normalized_inputs_parquet(
     paths = _write_normalized_inputs(
         input_datasets,
         out_dir,
-        context=write_context,
-        ibis_execution=ibis_execution,
-        writer_strategy=effective_strategy,
+        options=NormalizedInputsWriteOptions(
+            context=write_context,
+            ibis_execution=ibis_execution,
+            writer_strategy=effective_strategy,
+            reporter=_record_report,
+        ),
     )
     return _normalized_inputs_report(
         input_datasets,
@@ -1270,12 +1434,13 @@ def relspec_scan_telemetry(
 
     rows: list[dict[str, object]] = []
     for name, loc in persist_relspec_input_datasets.items():
-        dataset = open_dataset(
-            loc.path,
+        dataset_options = DatasetSourceOptions(
             dataset_format=loc.format,
             filesystem=loc.filesystem,
             partitioning=loc.partitioning,
+            discovery=DatasetDiscoveryOptions(),
         )
+        dataset = open_dataset(loc.path, options=dataset_options)
         if loc.table_spec is not None:
             dataset_spec = make_dataset_spec(table_spec=loc.table_spec)
         else:
@@ -1292,6 +1457,25 @@ def relspec_scan_telemetry(
             dataset,
             predicate=query.pushdown_expression(),
             scanner=scanner,
+            options=ScanTelemetryOptions(
+                discovery_policy=(
+                    dataset_options.discovery.payload() if dataset_options.discovery else None
+                ),
+                scan_profile=_scan_profile_payload(ctx),
+            ),
+        )
+        scan_profile_json = json.dumps(
+            telemetry.scan_profile, default=json_default, ensure_ascii=True, separators=(",", ":")
+        )
+        dataset_schema = (
+            json.dumps(telemetry.dataset_schema, ensure_ascii=True, separators=(",", ":"))
+            if telemetry.dataset_schema is not None
+            else None
+        )
+        projected_schema = (
+            json.dumps(telemetry.projected_schema, ensure_ascii=True, separators=(",", ":"))
+            if telemetry.projected_schema is not None
+            else None
         )
         rows.append(
             {
@@ -1301,6 +1485,16 @@ def relspec_scan_telemetry(
                 "count_rows": telemetry.count_rows,
                 "estimated_rows": telemetry.estimated_rows,
                 "file_hints": list(telemetry.file_hints),
+                "fragment_paths": list(telemetry.fragment_paths),
+                "partition_expressions": list(telemetry.partition_expressions),
+                "dataset_schema_json": dataset_schema,
+                "projected_schema_json": projected_schema,
+                "discovery_policy_json": json.dumps(
+                    telemetry.discovery_policy, ensure_ascii=True, separators=(",", ":")
+                )
+                if telemetry.discovery_policy is not None
+                else None,
+                "scan_profile_json": scan_profile_json,
             }
         )
     return scan_telemetry_table(rows)
@@ -1500,24 +1694,15 @@ def manifest_data(
     if ctx is None:
         msg = "manifest_data requires ExecutionContext."
         raise ValueError(msg)
-    produced_outputs = _produced_relationship_outputs(manifest_inputs)
-    lineage = _relationship_output_lineage(manifest_inputs)
-    normalize_lineage = _normalize_output_lineage(normalize_rule_compilation)
-    notes = _manifest_notes(
-        produced_outputs,
-        normalize_lineage=normalize_lineage,
-        normalize_rule_compilation=normalize_rule_compilation,
-        manifest_inputs=manifest_inputs,
-        ctx=ctx,
+    relationship_metadata = _manifest_relationship_metadata(
+        manifest_inputs,
+        normalize_rule_compilation,
+        ctx,
     )
-    scan_telemetry = _relspec_scan_telemetry(manifest_inputs)
-    datafusion_settings = _datafusion_settings_snapshot(ctx)
-    datafusion_settings_hash = _datafusion_settings_hash(ctx)
-    datafusion_feature_gates = _datafusion_feature_gates(ctx)
-    datafusion_metrics, datafusion_traces = _datafusion_runtime_artifacts(ctx)
-    dataset_snapshot = _dataset_registry_snapshot(
-        manifest_inputs.relspec_inputs_bundle.locations,
-    )
+    runtime_artifacts = _manifest_runtime_artifacts(ctx)
+    sqlglot_ast_payloads = _sqlglot_ast_payloads(manifest_inputs)
+    function_registry = default_function_registry()
+    dataset_snapshot = _dataset_registry_snapshot(manifest_inputs.relspec_inputs_bundle.locations)
     extract_inputs = manifest_inputs.extract_inputs
     relationship_rules = _relationship_rules_from_snapshots(manifest_inputs)
     return ManifestData(
@@ -1535,20 +1720,26 @@ def manifest_data(
         extract_error_counts=extract_inputs.extract_error_counts if extract_inputs else None,
         relationship_rules=relationship_rules,
         normalize_rules=normalize_rules,
-        produced_relationship_output_names=produced_outputs,
-        relationship_output_lineage=lineage,
-        normalize_output_lineage=normalize_lineage,
-        relspec_scan_telemetry=scan_telemetry or None,
-        datafusion_settings=datafusion_settings,
-        datafusion_settings_hash=datafusion_settings_hash,
-        datafusion_feature_gates=datafusion_feature_gates,
-        datafusion_metrics=datafusion_metrics,
-        datafusion_traces=datafusion_traces,
+        produced_relationship_output_names=relationship_metadata.produced_outputs,
+        relationship_output_lineage=relationship_metadata.lineage,
+        normalize_output_lineage=relationship_metadata.normalize_lineage,
+        relspec_scan_telemetry=_relspec_scan_telemetry(manifest_inputs) or None,
+        datafusion_settings=runtime_artifacts.datafusion_settings,
+        datafusion_settings_hash=runtime_artifacts.datafusion_settings_hash,
+        datafusion_feature_gates=runtime_artifacts.datafusion_feature_gates,
+        datafusion_metrics=runtime_artifacts.datafusion_metrics,
+        datafusion_traces=runtime_artifacts.datafusion_traces,
+        runtime_profile_snapshot=runtime_artifacts.runtime_snapshot.payload(),
+        runtime_profile_hash=runtime_artifacts.runtime_snapshot.profile_hash,
+        sqlglot_policy_snapshot=sqlglot_policy_snapshot().payload(),
+        function_registry_snapshot=function_registry.payload(),
+        function_registry_hash=function_registry.fingerprint(),
+        sqlglot_ast_payloads=sqlglot_ast_payloads,
         dataset_registry_snapshot=dataset_snapshot,
         runtime_profile_name=ctx.runtime.name,
         determinism_tier=ctx.determinism.value,
         writer_strategy=output_config.writer_strategy if output_config is not None else None,
-        notes=notes,
+        notes=relationship_metadata.notes,
     )
 
 
@@ -1588,6 +1779,94 @@ def _normalize_output_lineage(
     for rule in normalize_rule_compilation.rules:
         lineage.setdefault(rule.output, []).append(rule.name)
     return lineage
+
+
+@dataclass(frozen=True)
+class _ManifestRuntimeArtifacts:
+    datafusion_settings: list[dict[str, str]] | None
+    datafusion_settings_hash: str | None
+    datafusion_feature_gates: dict[str, str] | None
+    datafusion_metrics: Mapping[str, object] | None
+    datafusion_traces: Mapping[str, object] | None
+    runtime_snapshot: RuntimeProfileSnapshot
+
+
+@dataclass(frozen=True)
+class _ManifestRelationshipMetadata:
+    produced_outputs: list[str]
+    lineage: dict[str, list[str]]
+    normalize_lineage: dict[str, list[str]] | None
+    notes: JsonDict
+
+
+def _manifest_runtime_artifacts(ctx: ExecutionContext) -> _ManifestRuntimeArtifacts:
+    datafusion_settings = _datafusion_settings_snapshot(ctx)
+    datafusion_settings_hash = _datafusion_settings_hash(ctx)
+    datafusion_feature_gates = _datafusion_feature_gates(ctx)
+    datafusion_metrics, datafusion_traces = _datafusion_runtime_artifacts(ctx)
+    runtime_snapshot = runtime_profile_snapshot(ctx.runtime)
+    return _ManifestRuntimeArtifacts(
+        datafusion_settings=datafusion_settings,
+        datafusion_settings_hash=datafusion_settings_hash,
+        datafusion_feature_gates=datafusion_feature_gates,
+        datafusion_metrics=datafusion_metrics,
+        datafusion_traces=datafusion_traces,
+        runtime_snapshot=runtime_snapshot,
+    )
+
+
+def _manifest_relationship_metadata(
+    manifest_inputs: ManifestInputs,
+    normalize_rule_compilation: NormalizeRuleCompilation | None,
+    ctx: ExecutionContext,
+) -> _ManifestRelationshipMetadata:
+    produced_outputs = _produced_relationship_outputs(manifest_inputs)
+    lineage = _relationship_output_lineage(manifest_inputs)
+    normalize_lineage = _normalize_output_lineage(normalize_rule_compilation)
+    notes = _manifest_notes(
+        produced_outputs,
+        normalize_lineage=normalize_lineage,
+        normalize_rule_compilation=normalize_rule_compilation,
+        manifest_inputs=manifest_inputs,
+        ctx=ctx,
+    )
+    return _ManifestRelationshipMetadata(
+        produced_outputs=produced_outputs,
+        lineage=lineage,
+        normalize_lineage=normalize_lineage,
+        notes=notes,
+    )
+
+
+def _sqlglot_ast_payloads(manifest_inputs: ManifestInputs) -> list[JsonDict] | None:
+    diagnostics = rule_diagnostics_from_table(manifest_inputs.relspec_snapshots.rule_diagnostics)
+    payloads: list[JsonDict] = []
+    for diagnostic in diagnostics:
+        metadata = diagnostic.metadata
+        raw_payload = metadata.get("ast_payload_raw")
+        optimized_payload = metadata.get("ast_payload_optimized")
+        if not raw_payload or not optimized_payload:
+            continue
+        try:
+            raw_ast = json.loads(raw_payload)
+            optimized_ast = json.loads(optimized_payload)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        payloads.append(
+            {
+                "domain": str(diagnostic.domain),
+                "rule_name": diagnostic.rule_name,
+                "plan_signature": diagnostic.plan_signature,
+                "plan_fingerprint": metadata.get("plan_fingerprint"),
+                "sqlglot_policy_hash": metadata.get("sqlglot_policy_hash"),
+                "normalization_distance": metadata.get("normalization_distance"),
+                "normalization_max_distance": metadata.get("normalization_max_distance"),
+                "normalization_applied": metadata.get("normalization_applied"),
+                "raw_ast": raw_ast,
+                "optimized_ast": optimized_ast,
+            }
+        )
+    return payloads or None
 
 
 def _manifest_notes(
@@ -1653,7 +1932,7 @@ def _datafusion_notes(ctx: ExecutionContext) -> JsonDict:
     runtime = ctx.runtime.datafusion
     if runtime is None:
         return {}
-    notes: JsonDict = {"datafusion_policy": cast("JsonValue", runtime.telemetry_payload())}
+    notes: JsonDict = {"datafusion_policy": cast("JsonValue", runtime.telemetry_payload_v1())}
     catalog_snapshot = _datafusion_catalog_snapshot(ctx)
     if catalog_snapshot:
         notes["datafusion_catalog"] = cast("JsonValue", catalog_snapshot)
@@ -1976,6 +2255,82 @@ def run_bundle_context_inputs(
     )
 
 
+@dataclass(frozen=True)
+class _RunBundleDatafusionArtifacts:
+    metrics: JsonDict | None
+    traces: JsonDict | None
+    fallbacks: pa.Table | None
+    explains: pa.Table | None
+    plan_artifacts: pa.Table | None
+    plan_cache: Sequence[PlanCacheEntry] | None
+    input_plugins: Sequence[Mapping[str, object]] | None
+    dml_statements: Sequence[Mapping[str, object]] | None
+
+
+@dataclass(frozen=True)
+class _RunBundleParamValues:
+    param_specs: tuple[ParamTableSpec, ...]
+    param_artifacts: Mapping[str, ParamTableArtifact] | None
+    param_scalar_signature: str | None
+    param_reports: tuple[RuleDependencyReport, ...]
+    param_reverse_index: Mapping[str, Sequence[str]] | None
+    include_param_table_data: bool
+
+
+def _run_bundle_datafusion_artifacts(
+    ctx: ExecutionContext | None,
+) -> _RunBundleDatafusionArtifacts:
+    if ctx is None:
+        return _RunBundleDatafusionArtifacts(
+            metrics=None,
+            traces=None,
+            fallbacks=None,
+            explains=None,
+            plan_artifacts=None,
+            plan_cache=None,
+            input_plugins=None,
+            dml_statements=None,
+        )
+    metrics, traces = _datafusion_runtime_artifacts(ctx)
+    fallbacks, explains = _datafusion_runtime_diag_tables(ctx)
+    plan_artifacts = _datafusion_plan_artifacts_table(ctx)
+    plan_cache = _datafusion_plan_cache_entries(ctx)
+    input_plugins = _datafusion_input_plugins(ctx)
+    dml_statements = _datafusion_dml_statements(ctx)
+    return _RunBundleDatafusionArtifacts(
+        metrics=metrics,
+        traces=traces,
+        fallbacks=fallbacks,
+        explains=explains,
+        plan_artifacts=plan_artifacts,
+        plan_cache=plan_cache,
+        input_plugins=input_plugins,
+        dml_statements=dml_statements,
+    )
+
+
+def _run_bundle_param_values(
+    param_inputs: RunBundleParamInputs | None,
+) -> _RunBundleParamValues:
+    if param_inputs is None:
+        return _RunBundleParamValues(
+            param_specs=(),
+            param_artifacts=None,
+            param_scalar_signature=None,
+            param_reports=(),
+            param_reverse_index=None,
+            include_param_table_data=False,
+        )
+    return _RunBundleParamValues(
+        param_specs=param_inputs.param_table_specs,
+        param_artifacts=param_inputs.param_table_artifacts,
+        param_scalar_signature=param_inputs.param_scalar_signature,
+        param_reports=param_inputs.param_dependency_reports,
+        param_reverse_index=param_inputs.param_reverse_index,
+        include_param_table_data=param_inputs.include_param_table_data,
+    )
+
+
 @tag(layer="obs", artifact="run_bundle_context", kind="object")
 def run_bundle_context(
     run_bundle_inputs: RunBundleInputs,
@@ -1994,28 +2349,12 @@ def run_bundle_context(
         return None
 
     base_dir = Path(base) / "run_bundles"
-    datafusion_metrics: JsonDict | None = None
-    datafusion_traces: JsonDict | None = None
-    datafusion_fallbacks: pa.Table | None = None
-    datafusion_explains: pa.Table | None = None
-    datafusion_plan_cache: Sequence[PlanCacheEntry] | None = None
-    if context_inputs.ctx is not None:
-        datafusion_metrics, datafusion_traces = _datafusion_runtime_artifacts(context_inputs.ctx)
-        datafusion_fallbacks, datafusion_explains = _datafusion_runtime_diag_tables(
-            context_inputs.ctx
-        )
-        datafusion_plan_cache = _datafusion_plan_cache_entries(context_inputs.ctx)
-    param_inputs = run_bundle_inputs.param_inputs
-    param_specs = param_inputs.param_table_specs if param_inputs is not None else ()
-    param_artifacts = param_inputs.param_table_artifacts if param_inputs is not None else None
-    param_scalar_signature = (
-        param_inputs.param_scalar_signature if param_inputs is not None else None
-    )
-    param_reports = param_inputs.param_dependency_reports if param_inputs is not None else ()
-    param_reverse_index = param_inputs.param_reverse_index if param_inputs is not None else None
-    include_param_table_data = (
-        param_inputs.include_param_table_data if param_inputs is not None else False
-    )
+    datafusion_artifacts = _run_bundle_datafusion_artifacts(context_inputs.ctx)
+    sql_ingest_artifacts = _ibis_sql_ingest_artifacts(context_inputs.ctx)
+    namespace_actions = _ibis_namespace_actions(context_inputs.ctx)
+    cache_events = _ibis_cache_events(context_inputs.ctx)
+    support_matrix = _ibis_support_matrix(context_inputs.ctx)
+    param_values = _run_bundle_param_values(run_bundle_inputs.param_inputs)
     return RunBundleContext(
         base_dir=str(base_dir),
         run_manifest=run_bundle_inputs.run_manifest,
@@ -2026,12 +2365,21 @@ def run_bundle_context(
         rule_diagnostics=run_bundle_inputs.relspec_snapshots.rule_diagnostics,
         relationship_contracts=run_bundle_inputs.relspec_snapshots.contracts,
         compiled_relationship_outputs=run_bundle_inputs.relspec_snapshots.compiled_outputs,
-        datafusion_metrics=datafusion_metrics,
-        datafusion_traces=datafusion_traces,
-        datafusion_fallbacks=datafusion_fallbacks,
-        datafusion_explains=datafusion_explains,
-        datafusion_plan_cache=datafusion_plan_cache,
+        datafusion_metrics=datafusion_artifacts.metrics,
+        datafusion_traces=datafusion_artifacts.traces,
+        datafusion_fallbacks=datafusion_artifacts.fallbacks,
+        datafusion_explains=datafusion_artifacts.explains,
+        datafusion_plan_artifacts=datafusion_artifacts.plan_artifacts,
+        datafusion_plan_cache=datafusion_artifacts.plan_cache,
+        datafusion_input_plugins=datafusion_artifacts.input_plugins,
+        datafusion_dml_statements=datafusion_artifacts.dml_statements,
+        ibis_sql_ingest_artifacts=sql_ingest_artifacts,
+        ibis_namespace_actions=namespace_actions,
+        ibis_cache_events=cache_events,
+        ibis_support_matrix=support_matrix,
         feature_state=context_inputs.feature_state_diagnostics_table,
+        ipc_dump_enabled=output_config.ipc_dump_enabled,
+        ipc_write_config=output_config.ipc_write_config,
         relspec_scan_telemetry=cast("pa.Table", context_inputs.relspec_scan_telemetry),
         relspec_rule_exec_events=context_inputs.relspec_rule_exec_events,
         relspec_input_locations=run_bundle_inputs.tables.relspec_inputs.locations,
@@ -2047,12 +2395,12 @@ def run_bundle_context(
         incremental_output_fingerprint_changes=(
             run_bundle_inputs.incremental_output_fingerprint_changes
         ),
-        param_table_specs=param_specs,
-        param_table_artifacts=param_artifacts,
-        param_scalar_signature=param_scalar_signature,
-        param_dependency_reports=param_reports,
-        param_reverse_index=param_reverse_index,
-        include_param_table_data=include_param_table_data,
+        param_table_specs=param_values.param_specs,
+        param_table_artifacts=param_values.param_artifacts,
+        param_scalar_signature=param_values.param_scalar_signature,
+        param_dependency_reports=param_values.param_reports,
+        param_reverse_index=param_values.param_reverse_index,
+        include_param_table_data=param_values.include_param_table_data,
         include_schemas=True,
         overwrite=bool(output_config.overwrite_intermediate_datasets),
     )

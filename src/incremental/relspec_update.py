@@ -14,7 +14,7 @@ from ibis.backends import BaseBackend
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.io.parquet import DatasetWriteConfig, upsert_dataset_partitions_parquet
-from arrowdsl.plan.query import open_dataset
+from arrowdsl.plan.query import DatasetDiscoveryOptions, DatasetSourceOptions, open_dataset
 from arrowdsl.plan_utils import dataset_query_for_file_ids
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from arrowdsl.schema.schema import empty_table
@@ -226,7 +226,14 @@ def _read_state_dataset(
 ) -> TableLike:
     dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(dataset_name)
     schema = dataset_spec.schema() if dataset_spec is not None else None
-    dataset = open_dataset(dataset_dir, schema=schema, partitioning="hive")
+    dataset = open_dataset(
+        dataset_dir,
+        options=DatasetSourceOptions(
+            schema=schema,
+            partitioning="hive",
+            discovery=DatasetDiscoveryOptions(),
+        ),
+    )
     if schema is not None:
         validate_schema_identity(
             expected=schema,

@@ -48,7 +48,6 @@ from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
-from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
 from schema_spec.specs import NestedFieldSpec
 
@@ -85,9 +84,7 @@ class SCIPParseOptions:
     """Configure index.scip parsing."""
 
     prefer_protobuf: bool = True
-    allow_json_fallback: bool = False
     scip_pb2_import: str | None = None
-    scip_cli_bin: str = "scip"
     build_dir: Path | None = None
     health_check: bool = False
     log_counts: bool = False
@@ -351,10 +348,6 @@ def parse_index_scip(index_path: Path, parse_opts: SCIPParseOptions | None = Non
     if normalized_opts.build_dir is None:
         normalized_opts = replace(normalized_opts, build_dir=index_path.parent)
     scip_pb2 = _load_scip_pb2(normalized_opts)
-    if scip_pb2 is not None and hasattr(scip_pb2, "Index") and normalized_opts.prefer_protobuf:
-        return _parse_index_protobuf(index_path, scip_pb2)
-    if normalized_opts.allow_json_fallback:
-        return parse_index_json(index_path, normalized_opts.scip_cli_bin)
     if scip_pb2 is not None and hasattr(scip_pb2, "Index"):
         return _parse_index_protobuf(index_path, scip_pb2)
     msg = (
@@ -410,7 +403,6 @@ def _metadata_rows(index: object, *, parse_opts: SCIPParseOptions | None = None)
     meta: dict[str, str] = {}
     if parse_opts is not None:
         meta["prefer_protobuf"] = str(parse_opts.prefer_protobuf).lower()
-        meta["allow_json_fallback"] = str(parse_opts.allow_json_fallback).lower()
         if parse_opts.scip_pb2_import:
             meta["scip_pb2_import"] = parse_opts.scip_pb2_import
         if parse_opts.build_dir is not None:

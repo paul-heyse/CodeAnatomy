@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Literal, Protocol, TypedDict, Unpack, cast
 import ibis
 import pyarrow as pa
 import pyarrow.dataset as ds
-import pyarrow.fs as pafs
 import pyarrow.types as patypes
 from ibis.expr.types import Table
 
@@ -20,7 +19,14 @@ from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeContext
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.query import PathLike, ProjectionSpec, QuerySpec, open_dataset
+from arrowdsl.plan.query import (
+    DatasetDiscoveryOptions,
+    DatasetSourceOptions,
+    PathLike,
+    ProjectionSpec,
+    QuerySpec,
+    open_dataset,
+)
 from arrowdsl.plan.runner_types import PlanRunResultProto, plan_runner_module
 from arrowdsl.schema.metadata import (
     encoding_policy_from_spec,
@@ -36,6 +42,7 @@ from arrowdsl.schema.schema import (
     EncodingPolicy,
     SchemaEvolutionSpec,
     SchemaMetadataSpec,
+    register_schema_extensions,
 )
 from arrowdsl.schema.validation import (
     ArrowValidationOptions,
@@ -568,10 +575,11 @@ class DatasetOpenSpec:
     """Dataset open parameters for schema discovery."""
 
     dataset_format: str = "parquet"
-    filesystem: pafs.FileSystem | None = None
+    filesystem: object | None = None
     partitioning: str | None = "hive"
     schema: SchemaLike | None = None
     read_options: Mapping[str, object] = field(default_factory=dict)
+    discovery: DatasetDiscoveryOptions | None = field(default_factory=DatasetDiscoveryOptions)
 
     def open(self, path: PathLike) -> ds.Dataset:
         """Open a dataset using the stored options.
@@ -581,12 +589,17 @@ class DatasetOpenSpec:
         ds.Dataset
             Opened dataset instance.
         """
+        if self.schema is not None:
+            register_schema_extensions(self.schema)
         return open_dataset(
             path,
-            dataset_format=self.dataset_format,
-            filesystem=self.filesystem,
-            partitioning=self.partitioning,
-            schema=self.schema,
+            options=DatasetSourceOptions(
+                dataset_format=self.dataset_format,
+                filesystem=self.filesystem,
+                partitioning=self.partitioning,
+                schema=self.schema,
+                discovery=self.discovery,
+            ),
         )
 
     def read_ibis_table(

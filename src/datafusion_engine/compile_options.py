@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from sqlglot import Expression
 
     from engine.plan_cache import PlanCache
+    from sqlglot_tools.optimizer import SqlGlotPolicy
 
 SchemaMapping = Mapping[str, Mapping[str, str]]
 
@@ -54,6 +55,16 @@ class DataFusionFallbackEvent:
 
 
 @dataclass(frozen=True)
+class DataFusionDmlOptions:
+    """Options for DataFusion DML execution."""
+
+    sql_options: SQLOptions | None = None
+    sql_policy: DataFusionSqlPolicy | None = None
+    dialect: str = "datafusion_ext"
+    record_hook: Callable[[Mapping[str, object]], None] | None = None
+
+
+@dataclass(frozen=True)
 class DataFusionCompileOptions:
     """Compilation options for DataFusion bridge execution."""
 
@@ -69,9 +80,14 @@ class DataFusionCompileOptions:
     rewrite_hook: Callable[[Expression], Expression] | None = None
     force_sql: bool = False
     fallback_hook: Callable[[DataFusionFallbackEvent], None] | None = None
+    sql_ingest_hook: Callable[[Mapping[str, object]], None] | None = None
     capture_explain: bool = False
     explain_analyze: bool = False
     explain_hook: Callable[[str, Sequence[Mapping[str, object]]], None] | None = None
+    capture_plan_artifacts: bool = False
+    plan_artifacts_hook: Callable[[Mapping[str, object]], None] | None = None
     plan_cache: PlanCache | None = None
     plan_hash: str | None = None
     profile_hash: str | None = None
+    sqlglot_policy: SqlGlotPolicy | None = None
+    sqlglot_policy_hash: str | None = None

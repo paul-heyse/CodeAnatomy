@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from typing import cast, overload
 
@@ -91,3 +92,19 @@ class IbisPlan:
         else:
             reader = self.expr.to_pyarrow_batches(chunk_size=batch_size, params=params)
         return _apply_metadata_spec(reader, metadata_spec=_ordering_spec(self.ordering))
+
+    @contextmanager
+    def cache(self) -> Iterator[IbisPlan]:
+        """Yield a cached plan scoped to the context.
+
+        Yields
+        ------
+        IbisPlan
+            Cached plan context for repeated evaluation.
+        """
+        cached = self.expr.cache()
+        if hasattr(cached, "__enter__") and hasattr(cached, "__exit__"):
+            with cast("AbstractContextManager[Table]", cached) as cached_table:
+                yield IbisPlan(expr=cached_table, ordering=self.ordering)
+        else:
+            yield IbisPlan(expr=cached, ordering=self.ordering)

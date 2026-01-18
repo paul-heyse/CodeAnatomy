@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.json_factory import JsonPolicy, dump_path, json_default
@@ -26,6 +26,9 @@ if TYPE_CHECKING:
     from relspec.compiler import CompiledOutput
     from relspec.model import RelationshipRule
     from relspec.registry import DatasetLocation
+
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -177,6 +180,12 @@ class ManifestData:
     datafusion_feature_gates: Mapping[str, str] | None = None
     datafusion_metrics: Mapping[str, object] | None = None
     datafusion_traces: Mapping[str, object] | None = None
+    runtime_profile_snapshot: Mapping[str, object] | None = None
+    runtime_profile_hash: str | None = None
+    sqlglot_policy_snapshot: Mapping[str, object] | None = None
+    function_registry_snapshot: Mapping[str, object] | None = None
+    function_registry_hash: str | None = None
+    sqlglot_ast_payloads: Sequence[Mapping[str, object]] | None = None
     dataset_registry_snapshot: Sequence[Mapping[str, object]] | None = None
     param_table_artifacts: Mapping[str, ParamTableArtifact] | None = None
     param_scalar_signature: str | None = None
@@ -300,7 +309,7 @@ def _collect_relationship_outputs(
             input_schema_fps[name] = schema_fingerprint(table.schema)
 
     compiled_outputs = data.compiled_relationship_outputs or {}
-    profile_hash = data.datafusion_settings_hash
+    profile_hash = data.runtime_profile_hash or data.datafusion_settings_hash
     writer_strategy = data.writer_strategy
     output_fingerprints: dict[str, str] = {}
 
@@ -358,7 +367,7 @@ def relationship_output_fingerprints(data: ManifestData) -> dict[str, str]:
 def _collect_cpg_outputs(data: ManifestData) -> tuple[list[DatasetRecord], list[OutputRecord]]:
     datasets: list[DatasetRecord] = []
     outputs: list[OutputRecord] = []
-    profile_hash = data.datafusion_settings_hash
+    profile_hash = data.runtime_profile_hash or data.datafusion_settings_hash
     writer_strategy = data.writer_strategy
 
     if data.cpg_nodes is not None:
@@ -559,6 +568,12 @@ def _scan_telemetry_payload(
                 "count_rows": entry.count_rows,
                 "estimated_rows": entry.estimated_rows,
                 "file_hints": list(entry.file_hints),
+                "fragment_paths": list(entry.fragment_paths),
+                "partition_expressions": list(entry.partition_expressions),
+                "dataset_schema": entry.dataset_schema,
+                "projected_schema": entry.projected_schema,
+                "discovery_policy": entry.discovery_policy,
+                "scan_profile": entry.scan_profile,
             }
             for dataset_name, entry in entries.items()
         }
@@ -590,27 +605,51 @@ def _param_tables_payload(data: ManifestData) -> JsonDict:
     return payload
 
 
+def _optional_note(value: T | None, transform: Callable[[T], JsonValue]) -> JsonValue | None:
+    if not value:
+        return None
+    return transform(value)
+
+
+def _to_json_value(value: object) -> JsonValue:
+    return cast("JsonValue", value)
+
+
 def _manifest_notes(data: ManifestData) -> JsonDict:
     notes: JsonDict = dict(data.notes) if data.notes else {}
     notes["diagnostics_schema_version"] = DIAGNOSTICS_SCHEMA_VERSION
-    if data.relspec_scan_telemetry:
-        notes["relspec_scan_telemetry"] = _scan_telemetry_payload(data.relspec_scan_telemetry)
-    if data.datafusion_settings:
-        notes["datafusion_settings"] = list(data.datafusion_settings)
-    if data.datafusion_settings_hash:
-        notes["datafusion_settings_hash"] = data.datafusion_settings_hash
-    if data.datafusion_feature_gates:
-        notes["datafusion_feature_gates"] = dict(data.datafusion_feature_gates)
-    if data.datafusion_metrics:
-        notes["datafusion_metrics"] = cast("JsonValue", data.datafusion_metrics)
-    if data.datafusion_traces:
-        notes["datafusion_traces"] = cast("JsonValue", data.datafusion_traces)
-    if data.dataset_registry_snapshot:
-        notes["dataset_registry_snapshot"] = _json_dict_list(data.dataset_registry_snapshot)
-    if data.runtime_profile_name:
-        notes["runtime_profile_name"] = data.runtime_profile_name
-    if data.determinism_tier:
-        notes["determinism_tier"] = data.determinism_tier
+    optional_notes: dict[str, JsonValue | None] = {
+        "relspec_scan_telemetry": _optional_note(
+            data.relspec_scan_telemetry,
+            _scan_telemetry_payload,
+        ),
+        "datafusion_settings": _optional_note(data.datafusion_settings, list),
+        "datafusion_settings_hash": _optional_note(data.datafusion_settings_hash, _to_json_value),
+        "datafusion_feature_gates": _optional_note(data.datafusion_feature_gates, dict),
+        "datafusion_metrics": _optional_note(data.datafusion_metrics, _to_json_value),
+        "datafusion_traces": _optional_note(data.datafusion_traces, _to_json_value),
+        "runtime_profile_snapshot": _optional_note(
+            data.runtime_profile_snapshot,
+            _to_json_value,
+        ),
+        "runtime_profile_hash": _optional_note(data.runtime_profile_hash, _to_json_value),
+        "sqlglot_policy_snapshot": _optional_note(data.sqlglot_policy_snapshot, _to_json_value),
+        "function_registry_snapshot": _optional_note(
+            data.function_registry_snapshot,
+            _to_json_value,
+        ),
+        "function_registry_hash": _optional_note(data.function_registry_hash, _to_json_value),
+        "sqlglot_ast_payloads": _optional_note(data.sqlglot_ast_payloads, _to_json_value),
+        "dataset_registry_snapshot": _optional_note(
+            data.dataset_registry_snapshot,
+            _json_dict_list,
+        ),
+        "runtime_profile_name": _optional_note(data.runtime_profile_name, _to_json_value),
+        "determinism_tier": _optional_note(data.determinism_tier, _to_json_value),
+    }
+    for key, value in optional_notes.items():
+        if value is not None:
+            notes[key] = value
     return notes
 
 
@@ -652,7 +691,20 @@ def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
             )
         )
 
-    repro = collect_repro_info(context.repo_root)
+    repro_extra: JsonDict = {}
+    if data.runtime_profile_snapshot:
+        repro_extra["runtime_profile_snapshot"] = cast("JsonValue", data.runtime_profile_snapshot)
+    if data.runtime_profile_hash:
+        repro_extra["runtime_profile_hash"] = data.runtime_profile_hash
+    if data.sqlglot_policy_snapshot:
+        repro_extra["sqlglot_policy_snapshot"] = cast("JsonValue", data.sqlglot_policy_snapshot)
+    if data.function_registry_hash:
+        repro_extra["function_registry_hash"] = data.function_registry_hash
+    if data.function_registry_snapshot:
+        repro_extra["function_registry_snapshot"] = cast(
+            "JsonValue", data.function_registry_snapshot
+        )
+    repro = collect_repro_info(context.repo_root, extra=repro_extra or None)
     notes = _manifest_notes(data)
     params_payload = _param_tables_payload(data)
 

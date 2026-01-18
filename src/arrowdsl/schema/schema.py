@@ -778,6 +778,58 @@ def unify_schemas_core(
         return pa.unify_schemas(list(schemas))
 
 
+def register_extension_types(types: Sequence[pa.ExtensionType]) -> None:
+    """Register extension types with pyarrow.
+
+    Parameters
+    ----------
+    types
+        Sequence of extension types to register.
+    """
+    for extension_type in types:
+        try:
+            pa.register_extension_type(extension_type)
+        except (ValueError, pa.ArrowKeyError):
+            continue
+
+
+def extension_types_from_schema(schema: SchemaLike) -> tuple[pa.ExtensionType, ...]:
+    """Collect extension types from a schema.
+
+    Returns
+    -------
+    tuple[pa.ExtensionType, ...]
+        Extension types referenced by the schema.
+    """
+    collected: list[pa.ExtensionType] = []
+
+    def _collect(data_type: pa.DataType) -> None:
+        if isinstance(data_type, pa.ExtensionType):
+            collected.append(cast("pa.ExtensionType", data_type))
+            return
+        if pa.types.is_struct(data_type):
+            for field in data_type:
+                _collect(field.type)
+            return
+        if pa.types.is_list(data_type) or pa.types.is_large_list(data_type):
+            _collect(data_type.value_type)
+            return
+        if pa.types.is_map(data_type):
+            _collect(data_type.key_type)
+            _collect(data_type.item_type)
+
+    for schema_field in schema:
+        _collect(schema_field.type)
+    return tuple(collected)
+
+
+def register_schema_extensions(schema: SchemaLike) -> None:
+    """Register extension types referenced by a schema."""
+    extensions = extension_types_from_schema(schema)
+    if extensions:
+        register_extension_types(extensions)
+
+
 __all__ = [
     "AlignmentInfo",
     "CastErrorPolicy",
@@ -795,9 +847,12 @@ __all__ = [
     "encode_table",
     "encoding_columns_from_metadata",
     "encoding_projection",
+    "extension_types_from_schema",
     "infer_schema_from_tables",
     "missing_key_fields",
     "projection_for_schema",
+    "register_extension_types",
+    "register_schema_extensions",
     "required_field_names",
     "required_non_null_mask",
     "schema_fingerprint",

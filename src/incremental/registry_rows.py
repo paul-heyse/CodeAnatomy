@@ -164,6 +164,63 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             key_fields=("dataset_name",),
         ),
     ),
+    DatasetRow(
+        name="runtime_profile_snapshots_v1",
+        version=SCHEMA_VERSION,
+        fields=(
+            ArrowFieldSpec(name="profile_name", dtype=interop.string()),
+            ArrowFieldSpec(name="profile_hash", dtype=interop.string()),
+            ArrowFieldSpec(name="snapshot_json", dtype=interop.string()),
+        ),
+        constraints=TableSpecConstraints(
+            required_non_null=("profile_name", "profile_hash", "snapshot_json"),
+            key_fields=("profile_hash",),
+        ),
+    ),
+    DatasetRow(
+        name="sqlglot_policy_snapshots_v1",
+        version=SCHEMA_VERSION,
+        fields=(
+            ArrowFieldSpec(name="policy_hash", dtype=interop.string()),
+            ArrowFieldSpec(name="snapshot_json", dtype=interop.string()),
+        ),
+        constraints=TableSpecConstraints(
+            required_non_null=("policy_hash", "snapshot_json"),
+            key_fields=("policy_hash",),
+        ),
+    ),
+    DatasetRow(
+        name="function_registry_snapshots_v1",
+        version=SCHEMA_VERSION,
+        fields=(
+            ArrowFieldSpec(name="registry_hash", dtype=interop.string()),
+            ArrowFieldSpec(name="snapshot_json", dtype=interop.string()),
+        ),
+        constraints=TableSpecConstraints(
+            required_non_null=("registry_hash", "snapshot_json"),
+            key_fields=("registry_hash",),
+        ),
+    ),
+    DatasetRow(
+        name="datafusion_plan_artifacts_v1",
+        version=SCHEMA_VERSION,
+        fields=(
+            ArrowFieldSpec(name="plan_hash", dtype=interop.string()),
+            ArrowFieldSpec(name="sql", dtype=interop.string()),
+            ArrowFieldSpec(name="explain_json", dtype=interop.string()),
+            ArrowFieldSpec(name="explain_analyze_json", dtype=interop.string()),
+            ArrowFieldSpec(name="substrait_b64", dtype=interop.string()),
+            ArrowFieldSpec(name="logical_plan", dtype=interop.string()),
+            ArrowFieldSpec(name="optimized_plan", dtype=interop.string()),
+            ArrowFieldSpec(name="physical_plan", dtype=interop.string()),
+            ArrowFieldSpec(name="graphviz", dtype=interop.string()),
+            ArrowFieldSpec(name="partition_count", dtype=interop.int64()),
+        ),
+        constraints=TableSpecConstraints(
+            required_non_null=("plan_hash", "sql", "explain_json"),
+            key_fields=("plan_hash",),
+        ),
+    ),
 )
 
 

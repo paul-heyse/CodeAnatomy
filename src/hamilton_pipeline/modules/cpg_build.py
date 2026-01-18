@@ -1090,7 +1090,7 @@ def _runtime_telemetry(ctx: ExecutionContext) -> Mapping[str, object]:
     profile = ctx.runtime.datafusion
     if profile is None:
         return {}
-    return {"datafusion": profile.telemetry_payload()}
+    return {"datafusion": profile.telemetry_payload_v1()}
 
 
 def _param_table_aliases(

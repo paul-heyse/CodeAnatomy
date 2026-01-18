@@ -10,7 +10,7 @@ import pyarrow.ipc as pa_ipc
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from arrowdsl.spec.io import IpcWriteConfig, ipc_read_options_factory, ipc_write_options_factory
-from core_types import PathLike, ensure_path
+from core_types import JsonDict, PathLike, ensure_path
 from engine.plan_product import PlanProduct
 
 type IpcWriteInput = TableLike | RecordBatchReaderLike | PlanProduct
@@ -114,6 +114,61 @@ def write_table_ipc_stream(
     return str(target)
 
 
+def write_ipc_bundle(
+    table: IpcWriteInput,
+    base_path: PathLike,
+    *,
+    overwrite: bool = True,
+    schema_metadata: dict[bytes, bytes] | None = None,
+    config: IpcWriteConfig | None = None,
+) -> dict[str, str]:
+    """Write IPC file and stream artifacts for repro bundles.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping with ``file`` and ``stream`` artifact paths.
+    """
+    base = ensure_path(base_path)
+    file_path = base.with_suffix(".arrow")
+    stream_path = base.with_suffix(".arrows")
+    return {
+        "file": write_table_ipc_file(
+            table,
+            file_path,
+            overwrite=overwrite,
+            schema_metadata=schema_metadata,
+            config=config,
+        ),
+        "stream": write_table_ipc_stream(
+            table,
+            stream_path,
+            overwrite=overwrite,
+            schema_metadata=schema_metadata,
+            config=config,
+        ),
+    }
+
+
+def ipc_write_config_payload(config: IpcWriteConfig | None) -> JsonDict:
+    """Return a JSON-friendly payload for IPC write options.
+
+    Returns
+    -------
+    JsonDict
+        JSON-ready IPC write configuration payload.
+    """
+    resolved = config or IpcWriteConfig()
+    return {
+        "compression": resolved.compression,
+        "use_threads": resolved.use_threads,
+        "unify_dictionaries": resolved.unify_dictionaries,
+        "emit_dictionary_deltas": resolved.emit_dictionary_deltas,
+        "allow_64bit": resolved.allow_64bit,
+        "metadata_version": str(resolved.metadata_version),
+    }
+
+
 def read_table_ipc_file(path: PathLike) -> TableLike:
     """Read an Arrow IPC file.
 
@@ -129,8 +184,26 @@ def read_table_ipc_file(path: PathLike) -> TableLike:
         return reader.read_all()
 
 
+def read_table_ipc_stream(path: PathLike) -> TableLike:
+    """Read an Arrow IPC stream.
+
+    Returns
+    -------
+    TableLike
+        Loaded table.
+    """
+    target = ensure_path(path)
+    options = ipc_read_options_factory()
+    with pa.memory_map(str(target), "r") as source:
+        reader = pa_ipc.open_stream(source, options=options)
+        return reader.read_all()
+
+
 __all__ = [
+    "ipc_write_config_payload",
     "read_table_ipc_file",
+    "read_table_ipc_stream",
+    "write_ipc_bundle",
     "write_table_ipc_file",
     "write_table_ipc_stream",
 ]

@@ -35,7 +35,7 @@ from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 from ibis_engine.registry import IbisDatasetRegistry
 from ibis_engine.schema_utils import validate_expr_schema
-from ibis_engine.sources import table_to_ibis
+from ibis_engine.sources import SourceToIbisOptions, table_to_ibis
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
@@ -117,7 +117,7 @@ def runtime_telemetry_for_ctx(ctx: ExecutionContext) -> Mapping[str, object]:
     profile = ctx.runtime.datafusion
     if profile is None:
         return {}
-    return {"datafusion": profile.telemetry_payload()}
+    return {"datafusion": profile.telemetry_payload_v1()}
 
 
 def _rule_signature_for_output(rule: RelationshipRule) -> str:
@@ -423,7 +423,14 @@ def _ibis_plan_from_table_like(
     """
     table = _ensure_table(value)
     if backend is not None:
-        return table_to_ibis(table, backend=backend, name=name, ordering=ordering)
+        return table_to_ibis(
+            table,
+            options=SourceToIbisOptions(
+                backend=backend,
+                name=name,
+                ordering=ordering,
+            ),
+        )
     expr = ibis.memtable(table)
     return IbisPlan(expr=expr, ordering=ordering)
 

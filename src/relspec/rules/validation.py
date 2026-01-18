@@ -33,7 +33,7 @@ from ibis_engine.param_tables import (
 from ibis_engine.params_bridge import list_param_names_from_rel_ops
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
-from ibis_engine.sources import table_to_ibis
+from ibis_engine.sources import SourceToIbisOptions, table_to_ibis
 from relspec.list_filter_gate import (
     ListFilterGateError,
     ListFilterGatePolicy,
@@ -1030,7 +1030,7 @@ def _datafusion_diagnostics_metadata(
     if profile is None:
         return {}
     metadata: dict[str, str] = {
-        "datafusion_profile": _json_payload(profile.telemetry_payload()),
+        "datafusion_profile": _json_payload(profile.telemetry_payload_v1()),
     }
     if not ctx.debug:
         return metadata
@@ -1365,7 +1365,13 @@ def _ibis_plan_from_schema(
     arrow_schema = cast("pa.Schema", schema)
     arrays = [pa.array([], type=field.type) for field in arrow_schema]
     table = pa.Table.from_arrays(arrays, schema=arrow_schema)
-    return table_to_ibis(table, backend=cast("BaseBackend", backend), name=name)
+    return table_to_ibis(
+        table,
+        options=SourceToIbisOptions(
+            backend=cast("BaseBackend", backend),
+            name=name,
+        ),
+    )
 
 
 def _plan_signature_for_rule(rule: RuleDefinition) -> str | None:

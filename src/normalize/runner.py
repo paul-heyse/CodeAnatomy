@@ -31,6 +31,7 @@ from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
 from ibis_engine.sources import (
     SourceToIbisOptions,
+    namespace_recorder_from_ctx,
     register_ibis_view,
     source_to_ibis,
     table_to_ibis,
@@ -383,18 +384,22 @@ def compile_normalize_plans_ibis(
         view_name = f"{options.name_prefix}_{rule.output}" if options.name_prefix else rule.output
         plan = register_ibis_view(
             plan.expr,
-            backend=options.backend,
-            name=view_name,
-            ordering=plan.ordering,
+            options=SourceToIbisOptions(
+                backend=options.backend,
+                name=view_name,
+                ordering=plan.ordering,
+            ),
         )
         if rule.output in materialize:
             materialized = materialize_ibis_plan(plan, execution=context.execution)
             plan = table_to_ibis(
                 materialized,
-                backend=options.backend,
-                name=view_name,
-                ordering=plan.ordering,
-                overwrite=True,
+                options=SourceToIbisOptions(
+                    backend=options.backend,
+                    name=view_name,
+                    ordering=plan.ordering,
+                    overwrite=True,
+                ),
             )
         plans[rule.output] = plan
         context.ibis_catalog.add(rule.output, plan)
@@ -426,6 +431,7 @@ def _resolve_rule_plan_ibis(
             options=SourceToIbisOptions(
                 backend=backend,
                 name=rule.inputs[0],
+                namespace_recorder=namespace_recorder_from_ctx(ctx),
             ),
         )
     builder = resolve_plan_builder_ibis(rule.ibis_builder)

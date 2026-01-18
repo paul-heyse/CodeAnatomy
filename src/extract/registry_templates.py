@@ -242,9 +242,7 @@ CONFIGS: dict[str, ExtractorConfigSpec] = {
         extractor_name="scip",
         defaults={
             "prefer_protobuf": True,
-            "allow_json_fallback": False,
             "scip_pb2_import": None,
-            "scip_cli_bin": "scip",
             "build_dir": None,
             "health_check": False,
             "log_counts": False,

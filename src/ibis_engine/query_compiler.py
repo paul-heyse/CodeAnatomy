@@ -14,6 +14,7 @@ from ibis_engine.expr_compiler import (
     default_expr_registry,
     expr_ir_to_ibis,
 )
+from ibis_engine.macros import IbisMacroSpec, apply_macros
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,7 @@ class IbisQuerySpec:
     projection: IbisProjectionSpec
     predicate: ExprIRLike | None = None
     pushdown_predicate: ExprIRLike | None = None
+    macros: tuple[IbisMacroSpec, ...] = ()
 
     @staticmethod
     def simple(*cols: str) -> IbisQuerySpec:
@@ -58,6 +60,8 @@ def apply_query_spec(
         Ibis table with filters and projections applied.
     """
     registry = registry or default_expr_registry()
+    if spec.macros:
+        table = apply_macros(table, macros=spec.macros)
     table = _apply_derived(table, spec.projection.derived, registry=registry)
     cols = _projection_columns(table, spec.projection.base, spec.projection.derived)
     if cols:

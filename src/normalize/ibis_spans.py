@@ -13,7 +13,7 @@ from arrowdsl.compute.position_encoding import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from arrowdsl.core.interop import TableLike
 from ibis_engine.builtin_udfs import col_to_byte, position_encoding_norm
 from ibis_engine.ids import masked_stable_id_expr
-from ibis_engine.sources import table_to_ibis
+from ibis_engine.sources import SourceToIbisOptions, table_to_ibis
 from normalize.span_pipeline import span_error_table
 
 
@@ -322,7 +322,7 @@ def _line_index_view(line_index: Table, *, prefix: str) -> Table:
 
 
 def _table_expr(table: TableLike, *, backend: BaseBackend, name: str) -> Table:
-    plan = table_to_ibis(table, backend=backend, name=name)
+    plan = table_to_ibis(table, options=SourceToIbisOptions(backend=backend, name=name))
     return plan.expr
 
 

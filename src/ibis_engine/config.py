@@ -13,3 +13,6 @@ class IbisBackendConfig:
 
     datafusion_profile: DataFusionRuntimeProfile | None = None
     fuse_selects: bool | None = None
+    default_limit: int | None = None
+    default_dialect: str | None = None
+    interactive: bool | None = None

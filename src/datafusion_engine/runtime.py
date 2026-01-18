@@ -110,6 +110,33 @@ class DataFusionFeatureGates:
 
 
 @dataclass(frozen=True)
+class DataFusionJoinPolicy:
+    """Join algorithm preferences for DataFusion."""
+
+    enable_hash_join: bool = True
+    enable_sort_merge_join: bool = True
+    enable_nested_loop_join: bool = True
+    repartition_joins: bool = True
+
+    def settings(self) -> dict[str, str]:
+        """Return DataFusion config settings for join preferences.
+
+        Returns
+        -------
+        dict[str, str]
+            Mapping of DataFusion config keys to string values.
+        """
+        return {
+            "datafusion.optimizer.enable_hash_join": str(self.enable_hash_join).lower(),
+            "datafusion.optimizer.enable_sort_merge_join": str(self.enable_sort_merge_join).lower(),
+            "datafusion.optimizer.enable_nested_loop_join": str(
+                self.enable_nested_loop_join
+            ).lower(),
+            "datafusion.optimizer.repartition_joins": str(self.repartition_joins).lower(),
+        }
+
+
+@dataclass(frozen=True)
 class DataFusionSettingsContract:
     """Settings contract for DataFusion session configuration."""
 
@@ -217,6 +244,27 @@ class DataFusionExplainCollector:
 
 
 @dataclass
+class DataFusionPlanCollector:
+    """Collect DataFusion plan artifacts."""
+
+    entries: list[dict[str, object]] = field(default_factory=list)
+
+    def hook(self, payload: Mapping[str, object]) -> None:
+        """Collect a plan artifact payload."""
+        self.entries.append(dict(payload))
+
+    def snapshot(self) -> list[dict[str, object]]:
+        """Return a snapshot of plan artifacts.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            Plan artifact payloads.
+        """
+        return list(self.entries)
+
+
+@dataclass
 class DataFusionFallbackCollector:
     """Collect SQL fallback events for diagnostics."""
 
@@ -243,6 +291,14 @@ class DataFusionFallbackCollector:
             Collected fallback artifacts.
         """
         return list(self.entries)
+
+
+@dataclass(frozen=True)
+class PreparedStatementSpec:
+    """Prepared statement specification for DataFusion."""
+
+    name: str
+    sql: str
 
 
 @dataclass(frozen=True)
@@ -356,6 +412,71 @@ def _apply_config_int(
     return config
 
 
+def _apply_optional_int_config(
+    config: SessionConfig,
+    *,
+    method: str,
+    key: str,
+    value: int | None,
+) -> SessionConfig:
+    if value is None:
+        return config
+    return _apply_config_int(config, method=method, key=key, value=int(value))
+
+
+def _apply_config_policy(
+    config: SessionConfig,
+    policy: DataFusionConfigPolicy | None,
+) -> SessionConfig:
+    if policy is None:
+        return config
+    return policy.apply(config)
+
+
+def _apply_settings_overrides(
+    config: SessionConfig,
+    overrides: Mapping[str, str],
+) -> SessionConfig:
+    for key, value in overrides.items():
+        config = config.set(key, str(value))
+    return config
+
+
+def _apply_feature_settings(
+    config: SessionConfig,
+    feature_gates: DataFusionFeatureGates | None,
+) -> SessionConfig:
+    if feature_gates is None:
+        return config
+    for key, value in feature_gates.settings().items():
+        config = config.set(key, value)
+    return config
+
+
+def _apply_join_settings(
+    config: SessionConfig,
+    join_policy: DataFusionJoinPolicy | None,
+) -> SessionConfig:
+    if join_policy is None:
+        return config
+    for key, value in join_policy.settings().items():
+        config = config.set(key, value)
+    return config
+
+
+def _apply_explain_analyze_level(
+    config: SessionConfig,
+    level: str | None,
+) -> SessionConfig:
+    if level is None or not _supports_explain_analyze_level():
+        return config
+    return config.set("datafusion.explain.analyze_level", level)
+
+
+def _settings_by_prefix(payload: Mapping[str, str], prefix: str) -> dict[str, str]:
+    return {key: value for key, value in payload.items() if key.startswith(prefix)}
+
+
 def _apply_builder(
     builder: RuntimeEnvBuilder,
     *,
@@ -415,6 +536,34 @@ def _chain_explain_hooks(
     def _hook(sql: str, rows: Sequence[Mapping[str, object]]) -> None:
         for hook in active:
             hook(sql, rows)
+
+    return _hook
+
+
+def _chain_plan_artifacts_hooks(
+    *hooks: Callable[[Mapping[str, object]], None] | None,
+) -> Callable[[Mapping[str, object]], None] | None:
+    active = [hook for hook in hooks if hook is not None]
+    if not active:
+        return None
+
+    def _hook(payload: Mapping[str, object]) -> None:
+        for hook in active:
+            hook(payload)
+
+    return _hook
+
+
+def _chain_sql_ingest_hooks(
+    *hooks: Callable[[Mapping[str, object]], None] | None,
+) -> Callable[[Mapping[str, object]], None] | None:
+    active = [hook for hook in hooks if hook is not None]
+    if not active:
+        return None
+
+    def _hook(payload: Mapping[str, object]) -> None:
+        for hook in active:
+            hook(payload)
 
     return _hook
 
@@ -532,6 +681,40 @@ def diagnostics_explain_hook(
     return _hook
 
 
+def diagnostics_plan_artifacts_hook(
+    sink: DiagnosticsCollector,
+) -> Callable[[Mapping[str, object]], None]:
+    """Return a plan artifacts hook that records diagnostics payloads.
+
+    Returns
+    -------
+    Callable[[Mapping[str, object]], None]
+        Hook that records plan artifacts in the diagnostics sink.
+    """
+
+    def _hook(payload: Mapping[str, object]) -> None:
+        sink.record_artifact("datafusion_plan_artifacts_v1", payload)
+
+    return _hook
+
+
+def diagnostics_sql_ingest_hook(
+    sink: DiagnosticsCollector,
+) -> Callable[[Mapping[str, object]], None]:
+    """Return a SQL ingest hook that records diagnostics payloads.
+
+    Returns
+    -------
+    Callable[[Mapping[str, object]], None]
+        Hook that records SQL ingest artifacts in the diagnostics sink.
+    """
+
+    def _hook(payload: Mapping[str, object]) -> None:
+        sink.record_artifact("ibis_sql_ingest_v1", payload)
+
+    return _hook
+
+
 def _attach_cache_manager(
     builder: RuntimeEnvBuilder,
     *,
@@ -583,6 +766,8 @@ class DataFusionRuntimeProfile:
     explain_collector: DataFusionExplainCollector | None = field(
         default_factory=DataFusionExplainCollector
     )
+    capture_plan_artifacts: bool = False
+    plan_collector: DataFusionPlanCollector | None = field(default_factory=DataFusionPlanCollector)
     capture_fallbacks: bool = True
     fallback_collector: DataFusionFallbackCollector | None = field(
         default_factory=DataFusionFallbackCollector
@@ -592,10 +777,13 @@ class DataFusionRuntimeProfile:
     labeled_explains: list[dict[str, object]] = field(default_factory=list)
     plan_cache: PlanCache | None = field(default_factory=PlanCache)
     local_filesystem_root: str | None = None
+    input_plugins: tuple[Callable[[SessionContext], None], ...] = ()
+    prepared_statements: tuple[PreparedStatementSpec, ...] = ()
     config_policy_name: str | None = "default"
     config_policy: DataFusionConfigPolicy | None = None
     settings_overrides: Mapping[str, str] = field(default_factory=dict)
     feature_gates: DataFusionFeatureGates = field(default_factory=DataFusionFeatureGates)
+    join_policy: DataFusionJoinPolicy | None = None
     share_context: bool = True
     session_context_key: str | None = None
     distributed: bool = False
@@ -618,32 +806,23 @@ class DataFusionRuntimeProfile:
         )
         config = config.with_create_default_catalog_and_schema(enabled=True)
         config = config.with_information_schema(self.enable_information_schema)
-        if self.target_partitions is not None:
-            config = _apply_config_int(
-                config,
-                method="with_target_partitions",
-                key="datafusion.execution.target_partitions",
-                value=int(self.target_partitions),
-            )
-        if self.batch_size is not None:
-            config = _apply_config_int(
-                config,
-                method="with_batch_size",
-                key="datafusion.execution.batch_size",
-                value=int(self.batch_size),
-            )
-        policy = self._resolved_config_policy()
-        if policy is not None:
-            config = policy.apply(config)
-        if self.settings_overrides:
-            for key, value in self.settings_overrides.items():
-                config = config.set(key, str(value))
-        if self.feature_gates is not None:
-            for key, value in self.feature_gates.settings().items():
-                config = config.set(key, value)
-        if self.explain_analyze_level is not None and _supports_explain_analyze_level():
-            config = config.set("datafusion.explain.analyze_level", self.explain_analyze_level)
-        return config
+        config = _apply_optional_int_config(
+            config,
+            method="with_target_partitions",
+            key="datafusion.execution.target_partitions",
+            value=self.target_partitions,
+        )
+        config = _apply_optional_int_config(
+            config,
+            method="with_batch_size",
+            key="datafusion.execution.batch_size",
+            value=self.batch_size,
+        )
+        config = _apply_config_policy(config, self._resolved_config_policy())
+        config = _apply_settings_overrides(config, self.settings_overrides)
+        config = _apply_feature_settings(config, self.feature_gates)
+        config = _apply_join_settings(config, self.join_policy)
+        return _apply_explain_analyze_level(config, self.explain_analyze_level)
 
     def runtime_env_builder(self) -> RuntimeEnvBuilder:
         """Return a RuntimeEnvBuilder configured from the profile.
@@ -704,12 +883,24 @@ class DataFusionRuntimeProfile:
         ctx = self._build_session_context()
         ctx = self._apply_url_table(ctx)
         self._register_local_filesystem(ctx)
+        self._install_input_plugins(ctx)
+        self._prepare_statements(ctx)
         self._install_function_factory(ctx)
         self._install_tracing()
         if self.session_context_hook is not None:
             ctx = self.session_context_hook(ctx)
         self._cache_context(ctx)
         return ctx
+
+    def _install_input_plugins(self, ctx: SessionContext) -> None:
+        """Install input plugins on the session context."""
+        for plugin in self.input_plugins:
+            plugin(ctx)
+
+    def _prepare_statements(self, ctx: SessionContext) -> None:
+        """Prepare SQL statements when configured."""
+        for statement in self.prepared_statements:
+            ctx.sql(statement.sql)
 
     def _build_session_context(self) -> SessionContext:
         """Create the SessionContext base for this runtime profile.
@@ -795,6 +986,17 @@ class DataFusionRuntimeProfile:
         explain_hook = resolved.explain_hook
         if explain_hook is None and capture_explain and self.explain_collector is not None:
             explain_hook = self.explain_collector.hook
+        capture_plan_artifacts = (
+            resolved.capture_plan_artifacts or self.capture_plan_artifacts or capture_explain
+        )
+        plan_artifacts_hook = resolved.plan_artifacts_hook
+        if (
+            plan_artifacts_hook is None
+            and capture_plan_artifacts
+            and self.plan_collector is not None
+        ):
+            plan_artifacts_hook = self.plan_collector.hook
+        sql_ingest_hook = resolved.sql_ingest_hook
         fallback_hook = resolved.fallback_hook
         if fallback_hook is None and self.capture_fallbacks and self.fallback_collector is not None:
             fallback_hook = self.fallback_collector.hook
@@ -811,6 +1013,15 @@ class DataFusionRuntimeProfile:
                         explain_analyze=explain_analyze,
                     ),
                 )
+            if capture_plan_artifacts or plan_artifacts_hook is not None:
+                plan_artifacts_hook = _chain_plan_artifacts_hooks(
+                    plan_artifacts_hook,
+                    diagnostics_plan_artifacts_hook(self.diagnostics_sink),
+                )
+            sql_ingest_hook = _chain_sql_ingest_hooks(
+                sql_ingest_hook,
+                diagnostics_sql_ingest_hook(self.diagnostics_sink),
+            )
         unchanged = (
             cache == resolved.cache,
             cache_max_columns == resolved.cache_max_columns,
@@ -818,6 +1029,9 @@ class DataFusionRuntimeProfile:
             capture_explain == resolved.capture_explain,
             explain_analyze == resolved.explain_analyze,
             explain_hook == resolved.explain_hook,
+            capture_plan_artifacts == resolved.capture_plan_artifacts,
+            plan_artifacts_hook == resolved.plan_artifacts_hook,
+            sql_ingest_hook == resolved.sql_ingest_hook,
             fallback_hook == resolved.fallback_hook,
         )
         if all(unchanged) and execution_policy is None and execution_label is None:
@@ -830,6 +1044,9 @@ class DataFusionRuntimeProfile:
             capture_explain=capture_explain,
             explain_analyze=explain_analyze,
             explain_hook=explain_hook,
+            capture_plan_artifacts=capture_plan_artifacts,
+            plan_artifacts_hook=plan_artifacts_hook,
+            sql_ingest_hook=sql_ingest_hook,
             fallback_hook=fallback_hook,
         )
         if execution_label is not None:
@@ -889,6 +1106,8 @@ class DataFusionRuntimeProfile:
         if self.settings_overrides:
             payload.update({str(key): str(value) for key, value in self.settings_overrides.items()})
         payload.update(self.feature_gates.settings())
+        if self.join_policy is not None:
+            payload.update(self.join_policy.settings())
         if self.explain_analyze_level is not None and _supports_explain_analyze_level():
             payload["datafusion.explain.analyze_level"] = self.explain_analyze_level
         return payload
@@ -939,10 +1158,14 @@ class DataFusionRuntimeProfile:
             "explain_analyze": self.explain_analyze,
             "explain_analyze_level": self.explain_analyze_level,
             "explain_collector": bool(self.explain_collector),
+            "capture_plan_artifacts": self.capture_plan_artifacts,
+            "plan_collector": bool(self.plan_collector),
             "capture_fallbacks": self.capture_fallbacks,
             "fallback_collector": bool(self.fallback_collector),
             "diagnostics_sink": bool(self.diagnostics_sink),
             "local_filesystem_root": self.local_filesystem_root,
+            "input_plugins": len(self.input_plugins),
+            "prepared_statements": [stmt.name for stmt in self.prepared_statements],
             "distributed": self.distributed,
             "distributed_context_factory": bool(self.distributed_context_factory),
             "runtime_env_hook": bool(self.runtime_env_hook),
@@ -953,9 +1176,47 @@ class DataFusionRuntimeProfile:
             else None,
             "settings_overrides": dict(self.settings_overrides),
             "feature_gates": self.feature_gates.settings(),
+            "join_policy": self.join_policy.settings() if self.join_policy is not None else None,
             "settings_hash": self.settings_hash(),
             "share_context": self.share_context,
             "session_context_key": self.session_context_key,
+        }
+
+    def telemetry_payload_v1(self) -> dict[str, object]:
+        """Return a versioned runtime payload for diagnostics.
+
+        Returns
+        -------
+        dict[str, object]
+            Versioned runtime payload with grouped settings.
+        """
+        settings = self.settings_payload()
+        return {
+            "version": 1,
+            "profile_name": self.config_policy_name,
+            "session_config": dict(settings),
+            "settings_hash": self.settings_hash(),
+            "feature_gates": dict(self.feature_gates.settings()),
+            "join_policy": self.join_policy.settings() if self.join_policy is not None else None,
+            "parquet_read": _settings_by_prefix(settings, "datafusion.execution.parquet."),
+            "listing_table": _settings_by_prefix(settings, "datafusion.runtime.list_files_"),
+            "spill": {
+                "spill_dir": self.spill_dir,
+                "memory_pool": self.memory_pool,
+                "memory_limit_bytes": self.memory_limit_bytes,
+            },
+            "execution": {
+                "target_partitions": self.target_partitions,
+                "batch_size": self.batch_size,
+            },
+            "sql_surfaces": {
+                "enable_information_schema": self.enable_information_schema,
+                "enable_url_table": self.enable_url_table,
+            },
+            "output_writes": {
+                "cache_enabled": self.cache_enabled,
+                "cache_max_columns": self.cache_max_columns,
+            },
         }
 
     def collect_metrics(self) -> Mapping[str, object] | None:
@@ -1108,11 +1369,14 @@ __all__ = [
     "DataFusionExplainCollector",
     "DataFusionFallbackCollector",
     "DataFusionFeatureGates",
+    "DataFusionJoinPolicy",
+    "DataFusionPlanCollector",
     "DataFusionRuntimeProfile",
     "DataFusionSettingsContract",
     "ExecutionLabel",
     "FeatureStateSnapshot",
     "MemoryPool",
+    "PreparedStatementSpec",
     "apply_execution_label",
     "apply_execution_policy",
     "feature_state_snapshot",

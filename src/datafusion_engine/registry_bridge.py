@@ -19,6 +19,7 @@ from core_types import ensure_path
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.registry import (
     DatasetLocation,
+    IbisDatasetRegistry,
     resolve_datafusion_scan_options,
     resolve_dataset_schema,
 )
@@ -31,6 +32,117 @@ _REGISTERED_OBJECT_STORES: dict[int, set[str]] = {}
 _CACHED_DATASETS: dict[int, set[str]] = {}
 _REGISTERED_CATALOGS: dict[int, set[str]] = {}
 _REGISTERED_SCHEMAS: dict[int, set[tuple[str, str]]] = {}
+_INPUT_PLUGIN_PREFIXES = ("artifact://", "dataset://")
+
+try:
+    from datafusion.input.base import BaseInputSource as _BaseInputSource
+except ImportError:  # pragma: no cover - optional dependency
+    _BaseInputSource = None
+    _INPUT_PLUGIN_AVAILABLE = False
+else:
+    _INPUT_PLUGIN_AVAILABLE = True
+
+
+class DatasetInputSource:
+    """Resolve dataset handles into registered tables."""
+
+    def __init__(
+        self,
+        ctx: SessionContext,
+        *,
+        registry: IbisDatasetRegistry,
+        runtime_profile: DataFusionRuntimeProfile | None,
+    ) -> None:
+        self._ctx = ctx
+        self._registry = registry
+        self._runtime_profile = runtime_profile
+
+    def is_correct_input(
+        self,
+        input_item: object,
+        table_name: str,
+        **kwargs: object,
+    ) -> bool:
+        """Return True when the input matches a dataset registry handle.
+
+        Returns
+        -------
+        bool
+            ``True`` when the dataset handle is recognized.
+        """
+        _ = table_name, kwargs
+        name = _dataset_name_from_input(input_item)
+        return name is not None and self._registry.catalog.has(name)
+
+    def build_table(
+        self,
+        input_item: object,
+        table_name: str,
+        **kwargs: object,
+    ) -> DataFrame:
+        """Build a DataFusion DataFrame for a dataset registry handle.
+
+        Returns
+        -------
+        datafusion.dataframe.DataFrame
+            DataFrame registered for the dataset handle.
+
+        Raises
+        ------
+        ValueError
+            Raised when the dataset handle is not recognized.
+        """
+        _ = kwargs
+        name = _dataset_name_from_input(input_item)
+        if name is None:
+            msg = f"Unsupported dataset handle: {input_item!r}."
+            raise ValueError(msg)
+        location = self._registry.catalog.get(name)
+        return register_dataset_df(
+            self._ctx,
+            name=table_name,
+            location=location,
+            runtime_profile=self._runtime_profile,
+        )
+
+
+def _dataset_name_from_input(value: object) -> str | None:
+    handle = str(value)
+    for prefix in _INPUT_PLUGIN_PREFIXES:
+        if handle.startswith(prefix):
+            name = handle.removeprefix(prefix)
+            return name if name else None
+    return None
+
+
+def dataset_input_plugin(
+    registry: IbisDatasetRegistry,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+) -> Callable[[SessionContext], None]:
+    """Return a SessionContext installer for dataset input sources.
+
+    Returns
+    -------
+    Callable[[SessionContext], None]
+        Installer that registers the dataset input source.
+    """
+
+    def _install(ctx: SessionContext) -> None:
+        if not _INPUT_PLUGIN_AVAILABLE:
+            return
+        register = getattr(ctx, "register_input_source", None)
+        if not callable(register):
+            return
+        register(
+            DatasetInputSource(
+                ctx,
+                registry=registry,
+                runtime_profile=runtime_profile,
+            )
+        )
+
+    return _install
 
 
 @dataclass(frozen=True)
@@ -419,7 +531,9 @@ __all__ = [
     "DataFusionCachePolicy",
     "DataFusionCacheSettings",
     "DataFusionRegistryOptions",
+    "DatasetInputSource",
     "datafusion_external_table_sql",
+    "dataset_input_plugin",
     "register_dataset_df",
     "resolve_registry_options",
 ]

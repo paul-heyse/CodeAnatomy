@@ -6,13 +6,15 @@ from dataclasses import dataclass
 
 import pyarrow.dataset as ds
 
-from arrowdsl.core.interop import ComputeExpression
+from arrowdsl.core.interop import ComputeExpression, SchemaLike
 from arrowdsl.plan.metrics import (
     fragment_file_hints,
     list_fragments,
     row_group_count,
     scan_task_count,
 )
+from arrowdsl.schema.serialization import schema_to_dict
+from core_types import JsonDict
 
 
 @dataclass(frozen=True)
@@ -24,6 +26,21 @@ class ScanTelemetry:
     count_rows: int | None
     estimated_rows: int | None
     file_hints: tuple[str, ...] = ()
+    fragment_paths: tuple[str, ...] = ()
+    partition_expressions: tuple[str, ...] = ()
+    dataset_schema: JsonDict | None = None
+    projected_schema: JsonDict | None = None
+    discovery_policy: JsonDict | None = None
+    scan_profile: JsonDict | None = None
+
+
+@dataclass(frozen=True)
+class ScanTelemetryOptions:
+    """Options for fragment scan telemetry."""
+
+    hint_limit: int | None = 5
+    discovery_policy: JsonDict | None = None
+    scan_profile: JsonDict | None = None
 
 
 def fragment_telemetry(
@@ -31,7 +48,7 @@ def fragment_telemetry(
     *,
     predicate: ComputeExpression | None = None,
     scanner: ds.Scanner | None = None,
-    hint_limit: int | None = 5,
+    options: ScanTelemetryOptions | None = None,
 ) -> ScanTelemetry:
     """Return telemetry for dataset fragments.
 
@@ -40,7 +57,17 @@ def fragment_telemetry(
     ScanTelemetry
         Fragment counts and estimated row totals (when available).
     """
+    resolved = options or ScanTelemetryOptions()
     fragments = list_fragments(dataset, predicate=predicate)
+    fragment_paths: list[str] = []
+    partition_expressions: list[str] = []
+    for fragment in fragments:
+        path = getattr(fragment, "path", None)
+        if path is not None:
+            fragment_paths.append(str(path))
+        partition_expression = getattr(fragment, "partition_expression", None)
+        if partition_expression is not None:
+            partition_expressions.append(str(partition_expression))
     try:
         count_rows = dataset.count_rows(filter=predicate)
     except (AttributeError, NotImplementedError, TypeError, ValueError):
@@ -57,6 +84,8 @@ def fragment_telemetry(
         estimated_rows = total_rows
     if scanner is None:
         scanner = dataset.scanner(filter=predicate)
+    dataset_schema = _schema_payload(getattr(dataset, "schema", None))
+    projected_schema = _schema_payload(getattr(scanner, "schema", None))
     try:
         task_count = scan_task_count(scanner)
     except (AttributeError, TypeError):
@@ -66,8 +95,22 @@ def fragment_telemetry(
         row_group_count=task_count,
         count_rows=int(count_rows) if count_rows is not None else None,
         estimated_rows=estimated_rows,
-        file_hints=fragment_file_hints(fragments, limit=hint_limit),
+        file_hints=fragment_file_hints(fragments, limit=resolved.hint_limit),
+        fragment_paths=tuple(fragment_paths),
+        partition_expressions=tuple(partition_expressions),
+        dataset_schema=dataset_schema,
+        projected_schema=projected_schema,
+        discovery_policy=resolved.discovery_policy,
+        scan_profile=resolved.scan_profile,
     )
 
 
-__all__ = ["ScanTelemetry", "fragment_telemetry"]
+def _schema_payload(schema: object | None) -> JsonDict | None:
+    if schema is None:
+        return None
+    if isinstance(schema, SchemaLike):
+        return schema_to_dict(schema)
+    return None
+
+
+__all__ = ["ScanTelemetry", "ScanTelemetryOptions", "fragment_telemetry"]

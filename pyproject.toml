@@ -62,6 +62,7 @@ dependencies = [
     "ibis-substrait>=3.2.0",
     "maturin>=1.11.5",
     "rustup>=1.28.2.1",
+    "substrait>=0.26.0",
 ]
 
 [tool.ruff]

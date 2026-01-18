@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import json
 import platform
 import re
 import shutil
@@ -20,14 +21,16 @@ from typing import cast
 
 import pyarrow as pa
 
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.finalize.finalize import Contract
+from arrowdsl.io.ipc import IpcWriteInput, ipc_write_config_payload, write_ipc_bundle
 from arrowdsl.json_factory import JsonPolicy, dump_path, dumps_bytes, json_default
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
-from arrowdsl.spec.io import write_spec_table
+from arrowdsl.spec.io import IpcWriteConfig, write_spec_table
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from engine.plan_cache import PlanCacheEntry
+from engine.plan_product import PlanProduct
 from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
 from obs.parquet_writers import write_obs_dataset
 from relspec.compiler import CompiledOutput
@@ -110,6 +113,9 @@ def collect_repro_info(
         },
         "packages": {
             "pyarrow": _pkg_version("pyarrow"),
+            "datafusion": _pkg_version("datafusion"),
+            "ibis-framework": _pkg_version("ibis-framework"),
+            "sqlglot": _pkg_version("sqlglot"),
             "sf-hamilton": _pkg_version("sf-hamilton") or _pkg_version("hamilton"),
             "libcst": _pkg_version("libcst"),
         },
@@ -340,7 +346,14 @@ class RunBundleContext:
     datafusion_traces: JsonDict | None = None
     datafusion_fallbacks: pa.Table | None = None
     datafusion_explains: pa.Table | None = None
+    datafusion_plan_artifacts: pa.Table | None = None
     datafusion_plan_cache: Sequence[PlanCacheEntry] | None = None
+    datafusion_input_plugins: Sequence[Mapping[str, object]] | None = None
+    datafusion_dml_statements: Sequence[Mapping[str, object]] | None = None
+    ibis_sql_ingest_artifacts: Sequence[Mapping[str, object]] | None = None
+    ibis_namespace_actions: Sequence[Mapping[str, object]] | None = None
+    ibis_cache_events: Sequence[Mapping[str, object]] | None = None
+    ibis_support_matrix: Sequence[Mapping[str, object]] | None = None
     feature_state: pa.Table | None = None
     relspec_scan_telemetry: pa.Table | None = None
     relspec_rule_exec_events: pa.Table | None = None
@@ -364,6 +377,8 @@ class RunBundleContext:
     include_param_table_data: bool = False
 
     include_schemas: bool = True
+    ipc_dump_enabled: bool = False
+    ipc_write_config: IpcWriteConfig | None = None
     overwrite: bool = True
 
 
@@ -433,6 +448,7 @@ def _write_relspec_snapshots(
                 overwrite=context.overwrite,
             )
         )
+        _write_sqlglot_ast_payloads(relspec_dir, context.rule_diagnostics, files_written)
     if context.relationship_contracts is not None:
         snap = serialize_contract_catalog(context.relationship_contracts)
         files_written.append(_write_json(relspec_dir / "contracts.json", snap, overwrite=True))
@@ -495,37 +511,83 @@ def _write_runtime_artifacts(
     context: RunBundleContext,
     files_written: list[str],
 ) -> None:
-    if context.datafusion_metrics is not None:
+    def _json_list(entries: Sequence[object]) -> list[JsonValue]:
+        return [cast("JsonValue", json_default(entry)) for entry in entries]
+
+    json_artifacts = [
+        ("datafusion_metrics.json", context.datafusion_metrics),
+        ("datafusion_traces.json", context.datafusion_traces),
+    ]
+    list_artifacts: list[tuple[str, str, list[JsonValue] | None]] = [
+        (
+            "datafusion_input_plugins.json",
+            "plugins",
+            _json_list(context.datafusion_input_plugins)
+            if context.datafusion_input_plugins
+            else None,
+        ),
+        (
+            "datafusion_dml_statements.json",
+            "statements",
+            _json_list(context.datafusion_dml_statements)
+            if context.datafusion_dml_statements
+            else None,
+        ),
+        (
+            "ibis_sql_ingest_artifacts.json",
+            "artifacts",
+            _json_list(context.ibis_sql_ingest_artifacts)
+            if context.ibis_sql_ingest_artifacts
+            else None,
+        ),
+        (
+            "ibis_namespace_actions.json",
+            "actions",
+            _json_list(context.ibis_namespace_actions)
+            if context.ibis_namespace_actions
+            else None,
+        ),
+        (
+            "ibis_cache_events.json",
+            "events",
+            _json_list(context.ibis_cache_events) if context.ibis_cache_events else None,
+        ),
+        (
+            "ibis_support_matrix.json",
+            "entries",
+            _json_list(context.ibis_support_matrix) if context.ibis_support_matrix else None,
+        ),
+    ]
+    table_artifacts = [
+        ("datafusion_fallbacks", context.datafusion_fallbacks),
+        ("datafusion_explains", context.datafusion_explains),
+        ("datafusion_plan_artifacts_v1", context.datafusion_plan_artifacts),
+        ("feature_state", context.feature_state),
+        ("scan_telemetry", context.relspec_scan_telemetry),
+        ("rule_exec_events", context.relspec_rule_exec_events),
+    ]
+    for filename, payload in json_artifacts:
+        if payload is None:
+            continue
+        files_written.append(_write_json(relspec_dir / filename, payload, overwrite=True))
+    for filename, key, entries in list_artifacts:
+        if not entries:
+            continue
         files_written.append(
             _write_json(
-                relspec_dir / "datafusion_metrics.json",
-                context.datafusion_metrics,
+                relspec_dir / filename,
+                {key: entries},
                 overwrite=True,
             )
         )
-    if context.datafusion_traces is not None:
-        files_written.append(
-            _write_json(
-                relspec_dir / "datafusion_traces.json",
-                context.datafusion_traces,
-                overwrite=True,
-            )
-        )
-    if context.datafusion_fallbacks is not None:
+    for name, table in table_artifacts:
+        if table is None:
+            continue
         files_written.append(
             write_obs_dataset(
                 relspec_dir,
-                name="datafusion_fallbacks",
-                table=context.datafusion_fallbacks,
-                overwrite=context.overwrite,
-            )
-        )
-    if context.datafusion_explains is not None:
-        files_written.append(
-            write_obs_dataset(
-                relspec_dir,
-                name="datafusion_explains",
-                table=context.datafusion_explains,
+                name=name,
+                table=table,
                 overwrite=context.overwrite,
             )
         )
@@ -534,33 +596,6 @@ def _write_runtime_artifacts(
             relspec_dir,
             entries=context.datafusion_plan_cache,
             files_written=files_written,
-        )
-    if context.feature_state is not None:
-        files_written.append(
-            write_obs_dataset(
-                relspec_dir,
-                name="feature_state",
-                table=context.feature_state,
-                overwrite=context.overwrite,
-            )
-        )
-    if context.relspec_scan_telemetry is not None:
-        files_written.append(
-            write_obs_dataset(
-                relspec_dir,
-                name="scan_telemetry",
-                table=context.relspec_scan_telemetry,
-                overwrite=context.overwrite,
-            )
-        )
-    if context.relspec_rule_exec_events is not None:
-        files_written.append(
-            write_obs_dataset(
-                relspec_dir,
-                name="rule_exec_events",
-                table=context.relspec_rule_exec_events,
-                overwrite=context.overwrite,
-            )
         )
 
 
@@ -710,6 +745,48 @@ def _write_substrait_artifacts(
         )
 
 
+def _write_sqlglot_ast_payloads(
+    relspec_dir: Path,
+    diagnostics_table: pa.Table,
+    files_written: list[str],
+) -> None:
+    diagnostics = rule_diagnostics_from_table(diagnostics_table)
+    payloads: list[JsonDict] = []
+    for diagnostic in diagnostics:
+        metadata = diagnostic.metadata
+        raw_payload = metadata.get("ast_payload_raw")
+        optimized_payload = metadata.get("ast_payload_optimized")
+        if not raw_payload or not optimized_payload:
+            continue
+        try:
+            raw_ast = json.loads(raw_payload)
+            optimized_ast = json.loads(optimized_payload)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        payloads.append(
+            {
+                "domain": str(diagnostic.domain),
+                "rule_name": diagnostic.rule_name,
+                "plan_signature": diagnostic.plan_signature,
+                "plan_fingerprint": metadata.get("plan_fingerprint"),
+                "sqlglot_policy_hash": metadata.get("sqlglot_policy_hash"),
+                "normalization_distance": metadata.get("normalization_distance"),
+                "normalization_max_distance": metadata.get("normalization_max_distance"),
+                "normalization_applied": metadata.get("normalization_applied"),
+                "raw_ast": raw_ast,
+                "optimized_ast": optimized_ast,
+            }
+        )
+    if payloads:
+        files_written.append(
+            _write_json(
+                relspec_dir / "sqlglot_ast_payloads.json",
+                {"payloads": payloads},
+                overwrite=True,
+            )
+        )
+
+
 def _write_schema_snapshot(
     schemas_dir: Path,
     *,
@@ -769,6 +846,88 @@ def _write_schema_snapshots(
         schemas_dir,
         prefix="cpg_output__",
         tables=context.cpg_output_tables,
+        files_written=files_written,
+    )
+
+
+def _ipc_schema(table: IpcWriteInput) -> pa.Schema:
+    data = table.value() if isinstance(table, PlanProduct) else table
+    if isinstance(data, RecordBatchReaderLike):
+        return data.schema
+    return data.schema
+
+
+def _ipc_metadata_payload(
+    name: str,
+    *,
+    table: IpcWriteInput,
+    config: IpcWriteConfig | None,
+) -> JsonDict:
+    schema = _ipc_schema(table)
+    return {
+        "name": name,
+        "schema": schema_to_dict(schema),
+        "schema_fingerprint": schema_fingerprint(schema),
+        "ipc_options": ipc_write_config_payload(config),
+    }
+
+
+def _write_ipc_group(
+    bundle_dir: Path,
+    *,
+    prefix: str,
+    tables: Mapping[str, IpcWriteInput] | None,
+    context: RunBundleContext,
+    files_written: list[str],
+) -> None:
+    if not context.ipc_dump_enabled or not tables:
+        return
+    ipc_dir = bundle_dir / "ipc" / prefix
+    _ensure_dir(ipc_dir)
+    for name, table in tables.items():
+        if table is None:
+            continue
+        base_path = ipc_dir / name
+        artifacts = write_ipc_bundle(
+            table,
+            base_path,
+            overwrite=context.overwrite,
+            config=context.ipc_write_config,
+        )
+        payload = _ipc_metadata_payload(
+            name,
+            table=table,
+            config=context.ipc_write_config,
+        )
+        payload["artifacts"] = artifacts
+        files_written.append(_write_json(base_path.with_suffix(".json"), payload, overwrite=True))
+        files_written.extend(artifacts.values())
+
+
+def _write_ipc_dumps(
+    bundle_dir: Path,
+    context: RunBundleContext,
+    files_written: list[str],
+) -> None:
+    _write_ipc_group(
+        bundle_dir,
+        prefix="relspec_input",
+        tables=context.relspec_input_tables,
+        context=context,
+        files_written=files_written,
+    )
+    _write_ipc_group(
+        bundle_dir,
+        prefix="relationship_output",
+        tables=context.relationship_output_tables,
+        context=context,
+        files_written=files_written,
+    )
+    _write_ipc_group(
+        bundle_dir,
+        prefix="cpg_output",
+        tables=context.cpg_output_tables,
+        context=context,
         files_written=files_written,
     )
 
@@ -916,6 +1075,13 @@ def write_run_bundle(
         relspec/datafusion_traces.json
         relspec/datafusion_fallbacks/
         relspec/datafusion_explains/
+        relspec/datafusion_plan_artifacts_v1/
+        relspec/datafusion_input_plugins.json
+        relspec/datafusion_dml_statements.json
+        relspec/ibis_sql_ingest_artifacts.json
+        relspec/ibis_namespace_actions.json
+        relspec/ibis_cache_events.json
+        relspec/ibis_support_matrix.json
         relspec/contracts.json
         relspec/contracts_ddl.json
         relspec/compiled_outputs.json
@@ -927,6 +1093,9 @@ def write_run_bundle(
         relspec/substrait/*.substrait
         relspec/substrait_index.json
         schemas/*.schema.json
+        ipc/<group>/<name>.arrow
+        ipc/<group>/<name>.arrows
+        ipc/<group>/<name>.json
         params/specs.json
         params/signatures.json
         params/rule_param_deps.json
@@ -957,6 +1126,7 @@ def write_run_bundle(
     _write_relspec_snapshots(bundle_dir, context, files_written)
     _write_incremental_artifacts(bundle_dir, context, files_written)
     _write_schema_snapshots(bundle_dir, context, files_written)
+    _write_ipc_dumps(bundle_dir, context, files_written)
     _write_param_tables(bundle_dir, context, files_written)
 
     return {

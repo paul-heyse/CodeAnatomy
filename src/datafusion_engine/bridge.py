@@ -2,22 +2,26 @@
 
 from __future__ import annotations
 
+import base64
 import logging
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
+import datafusion
 import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 from ibis.expr.types import Table as IbisTable
-from sqlglot import ErrorLevel, Expression, exp
+from ibis.expr.types import Value as IbisValue
+from sqlglot import ErrorLevel, Expression, exp, parse_one
 
 from arrowdsl.core.context import Ordering, OrderingLevel
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.metadata import ordering_metadata_spec
 from datafusion_engine.compile_options import (
     DataFusionCompileOptions,
+    DataFusionDmlOptions,
     DataFusionFallbackEvent,
     DataFusionSqlPolicy,
 )
@@ -27,6 +31,8 @@ from ibis_engine.params_bridge import datafusion_param_bindings
 from ibis_engine.plan import IbisPlan
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
 from sqlglot_tools.optimizer import (
+    NormalizeExprOptions,
+    default_sqlglot_policy,
     normalize_expr,
     plan_fingerprint,
     register_datafusion_dialect,
@@ -156,6 +162,7 @@ def df_from_sqlglot_or_sql(
     if replayed is not None:
         if not (resolved.params and _contains_params(expr)):
             _maybe_explain(ctx, bound_expr, options=resolved)
+        _maybe_collect_plan_artifacts(ctx, bound_expr, options=resolved, df=replayed)
         return replayed
     if resolved.force_sql:
         df = _df_from_sql(
@@ -167,14 +174,17 @@ def df_from_sqlglot_or_sql(
         _maybe_store_substrait(ctx, bound_expr, options=resolved)
         if not (resolved.params and _contains_params(expr)):
             _maybe_explain(ctx, bound_expr, options=resolved)
+        _maybe_collect_plan_artifacts(ctx, bound_expr, options=resolved, df=df)
         return df
     if resolved.params and _contains_params(expr):
-        return _df_from_sql(
+        df = _df_from_sql(
             ctx,
             bound_expr,
             options=resolved,
             fallback=SqlFallbackContext(reason="params"),
         )
+        _maybe_collect_plan_artifacts(ctx, bound_expr, options=resolved, df=df)
+        return df
     try:
         df = df_from_sqlglot(ctx, bound_expr)
     except TranslationError as exc:
@@ -187,6 +197,7 @@ def df_from_sqlglot_or_sql(
         )
     _maybe_store_substrait(ctx, bound_expr, options=resolved)
     _maybe_explain(ctx, bound_expr, options=resolved)
+    _maybe_collect_plan_artifacts(ctx, bound_expr, options=resolved, df=df)
     return df
 
 
@@ -235,10 +246,23 @@ def compile_sqlglot_expr(
         SQLGlot expression for the Ibis input.
     """
     resolved = options or DataFusionCompileOptions()
-    sg_expr = ibis_to_sqlglot(expr, backend=backend, params=None)
+    policy = resolved.sqlglot_policy or default_sqlglot_policy()
+    if resolved.dialect:
+        policy = replace(policy, write_dialect=resolved.dialect)
+    sg_expr = ibis_to_sqlglot(
+        expr,
+        backend=backend,
+        params=_ibis_param_bindings(resolved.params),
+    )
     sg_expr = _apply_rewrite_hook(sg_expr, options=resolved)
     if resolved.optimize:
-        sg_expr = normalize_expr(sg_expr, schema=resolved.schema_map)
+        sg_expr = normalize_expr(
+            sg_expr,
+            options=NormalizeExprOptions(
+                schema=resolved.schema_map,
+                policy=policy,
+            ),
+        )
     return sg_expr
 
 
@@ -452,6 +476,17 @@ def _contains_params(expr: Expression) -> bool:
     return bool(expr.find(exp.Parameter))
 
 
+def _ibis_param_bindings(
+    values: Mapping[str, object] | Mapping[IbisValue, object] | None,
+) -> Mapping[IbisValue, object] | None:
+    if not values:
+        return None
+    keys = list(values.keys())
+    if all(isinstance(key, IbisValue) for key in keys):
+        return cast("Mapping[IbisValue, object]", values)
+    return None
+
+
 @dataclass(frozen=True)
 class SqlFallbackContext:
     """Parameters controlling SQL fallback diagnostics."""
@@ -459,6 +494,50 @@ class SqlFallbackContext:
     reason: str
     error: TranslationError | None = None
     emit_fallback: bool = True
+
+
+@dataclass(frozen=True)
+class DataFusionPlanArtifacts:
+    """Captured DataFusion plan artifacts for diagnostics."""
+
+    plan_hash: str | None
+    sql: str
+    explain: list[Mapping[str, object]]
+    explain_analyze: list[Mapping[str, object]] | None
+    substrait_plan: bytes | None
+    logical_plan: str | None = None
+    optimized_plan: str | None = None
+    physical_plan: str | None = None
+    graphviz: str | None = None
+    partition_count: int | None = None
+
+    def payload(self) -> dict[str, object]:
+        """Return a JSON-ready payload for plan artifacts.
+
+        Returns
+        -------
+        dict[str, object]
+            JSON-ready payload for plan artifacts.
+        """
+        substrait_b64 = (
+            base64.b64encode(self.substrait_plan).decode("utf-8")
+            if self.substrait_plan is not None
+            else None
+        )
+        return {
+            "plan_hash": self.plan_hash,
+            "sql": self.sql,
+            "explain": [dict(row) for row in self.explain],
+            "explain_analyze": [dict(row) for row in self.explain_analyze]
+            if self.explain_analyze is not None
+            else None,
+            "substrait_b64": substrait_b64,
+            "logical_plan": self.logical_plan,
+            "optimized_plan": self.optimized_plan,
+            "physical_plan": self.physical_plan,
+            "graphviz": self.graphviz,
+            "partition_count": self.partition_count,
+        }
 
 
 def _df_from_sql(
@@ -495,6 +574,48 @@ def _df_from_sql(
             fallback_hook=options.fallback_hook,
         )
     return ctx.sql_with_options(sql, sql_options, param_values=bindings)
+
+
+def execute_dml(
+    ctx: SessionContext,
+    sql: str,
+    *,
+    options: DataFusionDmlOptions | None = None,
+) -> DataFrame:
+    """Execute a DML SQL statement using DataFusion.
+
+    Returns
+    -------
+    datafusion.dataframe.DataFrame
+        DataFusion DataFrame representing the statement.
+
+    Raises
+    ------
+    ValueError
+        Raised when the SQL statement is not DML or violates policy.
+    """
+    resolved = options or DataFusionDmlOptions()
+    _ensure_dialect(resolved.dialect)
+    expr = parse_one(sql, dialect=resolved.dialect, error_level=ErrorLevel.RAISE)
+    if not _contains_dml(expr):
+        msg = "DML execution requires a DML statement."
+        raise ValueError(msg)
+    policy = resolved.sql_policy or DataFusionSqlPolicy(allow_dml=True)
+    sql_options = resolved.sql_options or policy.to_sql_options()
+    violations = _policy_violations(expr, policy)
+    if violations:
+        msg = f"DataFusion DML policy violations: {', '.join(violations)}."
+        raise ValueError(msg)
+    df = ctx.sql_with_options(sql, sql_options)
+    if resolved.record_hook is not None:
+        resolved.record_hook(
+            {
+                "sql": sql,
+                "dialect": resolved.dialect,
+                "policy_violations": list(violations),
+            }
+        )
+    return df
 
 
 def df_from_sql(
@@ -545,7 +666,30 @@ def _maybe_explain(
         options.explain_hook(sql, rows)
 
 
+def _maybe_collect_plan_artifacts(
+    ctx: SessionContext,
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+    df: DataFrame,
+) -> None:
+    if not options.capture_plan_artifacts and options.plan_artifacts_hook is None:
+        return
+    if options.params and _contains_params(expr):
+        return
+    try:
+        artifacts = collect_plan_artifacts(ctx, expr, options=options, df=df)
+    except (RuntimeError, TypeError, ValueError):
+        return
+    if options.plan_artifacts_hook is not None:
+        options.plan_artifacts_hook(artifacts.payload())
+
+
 def _explain_rows(df: DataFrame) -> list[Mapping[str, object]]:
+    return _collect_rows(df)
+
+
+def _collect_rows(df: DataFrame) -> list[Mapping[str, object]]:
     to_arrow = getattr(df, "to_arrow_table", None)
     if callable(to_arrow):
         table = cast("pa.Table", to_arrow())
@@ -555,6 +699,170 @@ def _explain_rows(df: DataFrame) -> list[Mapping[str, object]]:
         rows = cast("Iterable[Mapping[str, object]]", collect())
         return [dict(row) for row in rows]
     return []
+
+
+def _df_plan_details(df: DataFrame) -> dict[str, object]:
+    logical = _plan_display(_df_plan(df, "logical_plan"), display_method="display_indent_schema")
+    optimized = _plan_display(
+        _df_plan(df, "optimized_logical_plan"), display_method="display_indent_schema"
+    )
+    physical = _plan_display(_df_plan(df, "execution_plan"), display_method="display_indent")
+    if physical is None:
+        physical = _plan_display(_df_plan(df, "physical_plan"), display_method="display_indent")
+    graphviz = _plan_graphviz(_df_plan(df, "optimized_logical_plan"))
+    partition_count = _plan_partition_count(
+        _df_plan(df, "execution_plan") or _df_plan(df, "physical_plan")
+    )
+    return {
+        "logical_plan": logical,
+        "optimized_plan": optimized,
+        "physical_plan": physical,
+        "graphviz": graphviz,
+        "partition_count": partition_count,
+    }
+
+
+def _df_plan(df: DataFrame, method_name: str) -> object | None:
+    method = getattr(df, method_name, None)
+    if not callable(method):
+        return None
+    try:
+        return method()
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _plan_display(plan: object | None, *, display_method: str) -> str | None:
+    if plan is None:
+        return None
+    if isinstance(plan, str):
+        return plan
+    method = getattr(plan, display_method, None)
+    if callable(method):
+        try:
+            return str(method())
+        except (RuntimeError, TypeError, ValueError):
+            return None
+    return str(plan)
+
+
+def _plan_graphviz(plan: object | None) -> str | None:
+    if plan is None:
+        return None
+    method = getattr(plan, "display_graphviz", None)
+    if not callable(method):
+        return None
+    try:
+        return str(method())
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _plan_partition_count(plan: object | None) -> int | None:
+    if plan is None:
+        return None
+    count = getattr(plan, "partition_count", None)
+    if count is None:
+        return None
+    if isinstance(count, bool):
+        return None
+    if isinstance(count, (int, float)):
+        return int(count)
+    try:
+        return int(count)
+    except (TypeError, ValueError):
+        return None
+
+
+def collect_plan_artifacts(
+    ctx: SessionContext,
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+    df: DataFrame | None = None,
+) -> DataFusionPlanArtifacts:
+    """Collect plan artifacts for diagnostics.
+
+    Returns
+    -------
+    DataFusionPlanArtifacts
+        Plan artifacts derived from EXPLAIN and Substrait serialization.
+    """
+    _ensure_dialect(options.dialect)
+    sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
+    plan_df = df
+    if plan_df is None:
+        plan_df = ctx.sql(sql)
+    explain_rows = _collect_rows(ctx.sql(f"EXPLAIN {sql}"))
+    analyze_rows = None
+    if options.explain_analyze:
+        analyze_rows = _collect_rows(ctx.sql(f"EXPLAIN ANALYZE {sql}"))
+    substrait_plan = _substrait_bytes(ctx, sql)
+    plan_details = _df_plan_details(plan_df)
+    plan_hash = options.plan_hash or plan_fingerprint(expr, dialect=options.dialect)
+    return DataFusionPlanArtifacts(
+        plan_hash=plan_hash,
+        sql=sql,
+        explain=explain_rows,
+        explain_analyze=analyze_rows,
+        substrait_plan=substrait_plan,
+        logical_plan=cast("str | None", plan_details.get("logical_plan")),
+        optimized_plan=cast("str | None", plan_details.get("optimized_plan")),
+        physical_plan=cast("str | None", plan_details.get("physical_plan")),
+        graphviz=cast("str | None", plan_details.get("graphviz")),
+        partition_count=cast("int | None", plan_details.get("partition_count")),
+    )
+
+
+def execute_sql(
+    ctx: SessionContext,
+    *,
+    sql: str,
+    options: DataFusionCompileOptions,
+) -> list[Mapping[str, object]]:
+    """Execute SQL text with DataFusion and return row mappings.
+
+    Returns
+    -------
+    list[Mapping[str, object]]
+        Result rows as dictionaries.
+    """
+    _ensure_dialect(options.dialect)
+    bindings = datafusion_param_bindings(options.params or {})
+    policy = options.sql_policy or _default_sql_policy()
+    sql_options = options.sql_options or policy.to_sql_options()
+    df = ctx.sql_with_options(sql, sql_options, param_values=bindings)
+    return _collect_rows(df)
+
+
+def register_memtable(
+    ctx: SessionContext,
+    *,
+    name: str,
+    batches: Sequence[pa.RecordBatch],
+) -> None:
+    """Register a MemTable with DataFusion using best-available APIs.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when MemTable registration is unavailable.
+    """
+    register_batches = getattr(ctx, "register_record_batches", None)
+    if callable(register_batches):
+        register_batches(name, list(batches))
+        return
+    memtable_cls = getattr(datafusion, "MemTable", None)
+    if memtable_cls is None:
+        msg = "DataFusion MemTable registration is unavailable."
+        raise RuntimeError(msg)
+    table = memtable_cls.from_batches(list(batches))
+    register_table = getattr(ctx, "register_table", None)
+    if callable(register_table):
+        register_table(name, table)
+        return
+    msg = "DataFusion SessionContext missing table registration methods."
+    raise RuntimeError(msg)
 
 
 def replay_substrait_bytes(ctx: SessionContext, plan_bytes: bytes) -> DataFrame:
@@ -580,21 +888,59 @@ def replay_substrait_bytes(ctx: SessionContext, plan_bytes: bytes) -> DataFrame:
     return ctx.create_dataframe_from_logical_plan(logical_plan)
 
 
+def rehydrate_plan_artifacts(
+    ctx: SessionContext, *, payload: Mapping[str, object]
+) -> DataFrame | None:
+    """Rehydrate a DataFusion DataFrame from plan artifact payloads.
+
+    Returns
+    -------
+    datafusion.dataframe.DataFrame | None
+        DataFrame reconstructed from Substrait artifacts, or ``None`` when missing.
+
+    Raises
+    ------
+    TypeError
+        Raised when the payload does not contain a base64 string.
+    ValueError
+        Raised when the Substrait payload cannot be decoded.
+    """
+    substrait_b64 = payload.get("substrait_b64")
+    if not substrait_b64:
+        return None
+    if not isinstance(substrait_b64, str):
+        msg = "Substrait payload must be base64-encoded string."
+        raise TypeError(msg)
+    try:
+        plan_bytes = base64.b64decode(substrait_b64)
+    except (ValueError, TypeError) as exc:
+        msg = "Invalid base64 payload for Substrait artifacts."
+        raise ValueError(msg) from exc
+    return replay_substrait_bytes(ctx, plan_bytes)
+
+
 __all__ = [
     "DataFusionCompileOptions",
+    "DataFusionDmlOptions",
     "DataFusionFallbackEvent",
+    "DataFusionPlanArtifacts",
     "DataFusionSqlPolicy",
     "IbisCompilerBackend",
     "SqlFallbackContext",
+    "collect_plan_artifacts",
     "compile_sqlglot_expr",
     "datafusion_partitioned_readers",
     "datafusion_to_reader",
     "datafusion_to_table",
     "df_from_sql",
+    "execute_dml",
+    "execute_sql",
     "ibis_plan_to_datafusion",
     "ibis_plan_to_reader",
     "ibis_plan_to_table",
     "ibis_to_datafusion",
+    "register_memtable",
+    "rehydrate_plan_artifacts",
     "replay_substrait_bytes",
     "sqlglot_to_datafusion",
 ]

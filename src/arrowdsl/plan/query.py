@@ -7,17 +7,21 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import pyarrow.dataset as ds
-import pyarrow.fs as pafs
 
 from arrowdsl.compute.expr_core import ExprSpec
 from arrowdsl.compute.filters import FilterSpec
 from arrowdsl.compute.macros import FieldExpr
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import ComputeExpression, DeclarationLike, SchemaLike, pc
+from arrowdsl.core.interop import ComputeExpression, DeclarationLike, pc
 from arrowdsl.core.schema_constants import PROVENANCE_COLS, PROVENANCE_SOURCE_FIELDS
 from arrowdsl.plan.scan_builder import ScanBuildSpec
 from arrowdsl.plan.scan_telemetry import ScanTelemetry, fragment_telemetry
-from arrowdsl.plan.source_normalize import PathLike, normalize_dataset_source
+from arrowdsl.plan.source_normalize import (
+    DatasetDiscoveryOptions,
+    DatasetSourceOptions,
+    PathLike,
+    normalize_dataset_source,
+)
 
 type DatasetSourceLike = PathLike | ds.Dataset
 type ColumnsSpec = Sequence[str] | Mapping[str, ComputeExpression]
@@ -229,10 +233,7 @@ class QuerySpec:
 def open_dataset(
     source: DatasetSourceLike,
     *,
-    dataset_format: str = "parquet",
-    filesystem: pafs.FileSystem | None = None,
-    partitioning: str | None = "hive",
-    schema: SchemaLike | None = None,
+    options: DatasetSourceOptions | None = None,
 ) -> ds.Dataset:
     """Open a dataset for scanning.
 
@@ -241,13 +242,7 @@ def open_dataset(
     ds.Dataset
         Dataset instance for scanning.
     """
-    return normalize_dataset_source(
-        source,
-        dataset_format=dataset_format,
-        filesystem=filesystem,
-        partitioning=partitioning,
-        schema=schema,
-    )
+    return normalize_dataset_source(source, options=options)
 
 
 def compile_to_acero_scan(
@@ -275,7 +270,9 @@ def compile_to_acero_scan(
 
 __all__ = [
     "ColumnsSpec",
+    "DatasetDiscoveryOptions",
     "DatasetSourceLike",
+    "DatasetSourceOptions",
     "PathLike",
     "ProjectionSpec",
     "QuerySpec",

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import cast
 
@@ -15,7 +15,9 @@ from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.io.parquet import (
     DatasetWriteConfig,
     DatasetWriteInput,
+    DatasetWriteReport,
     NamedDatasetWriteConfig,
+    ParquetMetadataConfig,
     ParquetWriteOptions,
     write_dataset_parquet,
     write_named_datasets_parquet,
@@ -26,10 +28,13 @@ from arrowdsl.plan.ordering_policy import ordering_keys_for_schema
 from arrowdsl.plan.schema_utils import plan_schema
 from core_types import PathLike
 from datafusion_engine.bridge import (
+    DataFusionDmlOptions,
     datafusion_partitioned_readers,
+    execute_dml,
     ibis_plan_to_datafusion,
     ibis_to_datafusion,
 )
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from engine.plan_policy import WriterStrategy
 from engine.plan_product import PlanProduct
 from ibis_engine.execution import (
@@ -54,6 +59,8 @@ class DataFusionWriterConfig:
     sort_by: Sequence[str] | None = None
     partitioned_streaming: bool = False
     allow_non_deterministic_partitioned_streaming: bool = False
+    dml_statement: str | None = None
+    dml_options: DataFusionDmlOptions | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +73,7 @@ class IbisDatasetWriteOptions:
     execution: IbisExecutionContext | None = None
     writer_strategy: WriterStrategy | None = None
     datafusion_write: DataFusionWriterConfig | None = None
+    reporter: Callable[[DatasetWriteReport], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +85,7 @@ class IbisNamedDatasetWriteOptions:
     prefer_reader: bool = True
     execution: IbisExecutionContext | None = None
     writer_strategy: WriterStrategy | None = None
+    reporter: Callable[[DatasetWriteReport], None] | None = None
 
 
 def ibis_plan_to_reader(
@@ -171,6 +180,44 @@ def _resolve_writer_strategy(
     return "arrow"
 
 
+def _resolve_metadata_policy(
+    config: DatasetWriteConfig,
+    *,
+    determinism: DeterminismTier | None,
+    reporter: Callable[[DatasetWriteReport], None] | None,
+) -> DatasetWriteConfig:
+    updated = config
+    if reporter is not None and updated.reporter is None:
+        updated = replace(updated, reporter=reporter)
+    if determinism is None or updated.metadata is not None:
+        return updated
+    if determinism == DeterminismTier.BEST_EFFORT:
+        return replace(
+            updated,
+            metadata=ParquetMetadataConfig(write_common_metadata=False, write_metadata=False),
+        )
+    return replace(updated, metadata=ParquetMetadataConfig())
+
+
+def _resolve_named_metadata_policy(
+    config: NamedDatasetWriteConfig,
+    *,
+    determinism: DeterminismTier | None,
+    reporter: Callable[[DatasetWriteReport], None] | None,
+) -> NamedDatasetWriteConfig:
+    updated = config
+    if reporter is not None and updated.reporter is None:
+        updated = replace(updated, reporter=reporter)
+    if determinism is None or updated.metadata is not None:
+        return updated
+    if determinism == DeterminismTier.BEST_EFFORT:
+        return replace(
+            updated,
+            metadata=ParquetMetadataConfig(write_common_metadata=False, write_metadata=False),
+        )
+    return replace(updated, metadata=ParquetMetadataConfig())
+
+
 def _write_datafusion_dataset(
     value: IbisPlan | IbisTable,
     base_dir: PathLike,
@@ -190,6 +237,18 @@ def _write_datafusion_dataset(
         if isinstance(value, IbisPlan)
         else ibis_to_datafusion(value, backend=backend, ctx=df_ctx)
     )
+    if write_config is not None and write_config.dml_statement is not None:
+        dml_statement = _format_dml_statement(
+            write_config.dml_statement,
+            base_dir=base_dir,
+        )
+        _register_temp_view(df, name="write_source")
+        dml_options = write_config.dml_options or DataFusionDmlOptions()
+        record_hook = _dml_record_hook(runtime_profile)
+        if record_hook is not None and dml_options.record_hook is None:
+            dml_options = replace(dml_options, record_hook=record_hook)
+        execute_dml(df_ctx, dml_statement, options=dml_options)
+        return str(base_dir)
     if write_config is not None and write_config.partitioned_streaming:
         if (
             execution.ctx.determinism != DeterminismTier.BEST_EFFORT
@@ -222,6 +281,39 @@ def _write_datafusion_dataset(
         return str(base_dir)
     msg = "DataFusion writer is unavailable for the configured backend."
     raise ValueError(msg)
+
+
+def _register_temp_view(df: object, *, name: str) -> None:
+    create_view = getattr(df, "create_or_replace_temp_view", None)
+    if callable(create_view):
+        create_view(name)
+        return
+    create_view = getattr(df, "create_temp_view", None)
+    if callable(create_view):
+        create_view(name)
+        return
+    msg = "DataFusion DataFrame does not support temp view registration."
+    raise ValueError(msg)
+
+
+def _format_dml_statement(statement: str, *, base_dir: PathLike) -> str:
+    if "{table}" in statement or "{path}" in statement:
+        return statement.format(table="write_source", path=str(base_dir))
+    return statement
+
+
+def _dml_record_hook(
+    runtime_profile: DataFusionRuntimeProfile,
+) -> Callable[[Mapping[str, object]], None] | None:
+    diagnostics = runtime_profile.diagnostics_sink
+    if diagnostics is None:
+        return None
+    record_artifact = diagnostics.record_artifact
+
+    def _record(payload: Mapping[str, object]) -> None:
+        record_artifact("datafusion_dml_statements_v1", payload)
+
+    return _record
 
 
 def _build_datafusion_write_options(
@@ -334,6 +426,11 @@ def write_ibis_dataset_parquet(
     if determinism is not None and config.preserve_order is None:
         preserve = determinism != DeterminismTier.BEST_EFFORT
         config = replace(config, preserve_order=preserve)
+    config = _resolve_metadata_policy(
+        config,
+        determinism=determinism,
+        reporter=options.reporter,
+    )
     writer_strategy = _resolve_writer_strategy(options=options, data=data)
     if writer_strategy == "datafusion":
         if options.execution is None or not isinstance(data, (IbisPlan, IbisTable)):
@@ -378,6 +475,11 @@ def write_ibis_named_datasets_parquet(
     if options.execution is not None and config.preserve_order is None:
         preserve = options.execution.ctx.determinism != DeterminismTier.BEST_EFFORT
         config = replace(config, preserve_order=preserve)
+    config = _resolve_named_metadata_policy(
+        config,
+        determinism=options.execution.ctx.determinism if options.execution is not None else None,
+        reporter=options.reporter,
+    )
     writer_strategy = options.writer_strategy or "arrow"
     if writer_strategy != "arrow":
         msg = "Named dataset writes only support the Arrow writer strategy."

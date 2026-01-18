@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -12,6 +12,7 @@ from hamilton.function_modifiers import tag
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.context import DeterminismTier, ExecutionContext
+from arrowdsl.spec.io import IpcWriteConfig
 from core_types import JsonDict
 from datafusion_engine.runtime import AdapterExecutionPolicy
 from engine.plan_policy import ExecutionSurfacePolicy, WriterStrategy
@@ -158,6 +159,9 @@ def ibis_backend_config(engine_session: EngineSession) -> IbisBackendConfig:
     return IbisBackendConfig(
         datafusion_profile=engine_session.df_profile,
         fuse_selects=engine_session.runtime_profile.ibis_fuse_selects,
+        default_limit=engine_session.runtime_profile.ibis_default_limit,
+        default_dialect=engine_session.runtime_profile.ibis_default_dialect,
+        interactive=engine_session.runtime_profile.ibis_interactive,
     )
 
 
@@ -572,13 +576,46 @@ def relspec_config(
 
 
 @tag(layer="inputs", kind="object")
-def output_config(
-    work_dir: str | None,
-    output_dir: str | None,
+def output_config_overrides(
     *,
     overwrite_intermediate_datasets: bool,
     materialize_param_tables: bool = False,
     writer_strategy: WriterStrategy = "arrow",
+    ipc_dump_enabled: bool = False,
+    ipc_write_config: IpcWriteConfig | None = None,
+) -> OutputConfigOverrides:
+    """Bundle output configuration overrides.
+
+    Returns
+    -------
+    OutputConfigOverrides
+        Output configuration overrides bundle.
+    """
+    return OutputConfigOverrides(
+        overwrite_intermediate_datasets=overwrite_intermediate_datasets,
+        materialize_param_tables=materialize_param_tables,
+        writer_strategy=writer_strategy,
+        ipc_dump_enabled=ipc_dump_enabled,
+        ipc_write_config=ipc_write_config,
+    )
+
+
+@dataclass(frozen=True)
+class OutputConfigOverrides:
+    """Overrides for output configuration values."""
+
+    overwrite_intermediate_datasets: bool
+    materialize_param_tables: bool = False
+    writer_strategy: WriterStrategy = "arrow"
+    ipc_dump_enabled: bool = False
+    ipc_write_config: IpcWriteConfig | None = None
+
+
+@tag(layer="inputs", kind="object")
+def output_config(
+    work_dir: str | None,
+    output_dir: str | None,
+    overrides: OutputConfigOverrides,
 ) -> OutputConfig:
     """Bundle output configuration values.
 
@@ -590,9 +627,11 @@ def output_config(
     return OutputConfig(
         work_dir=work_dir,
         output_dir=output_dir,
-        overwrite_intermediate_datasets=overwrite_intermediate_datasets,
-        materialize_param_tables=materialize_param_tables,
-        writer_strategy=writer_strategy,
+        overwrite_intermediate_datasets=overrides.overwrite_intermediate_datasets,
+        materialize_param_tables=overrides.materialize_param_tables,
+        writer_strategy=overrides.writer_strategy,
+        ipc_dump_enabled=overrides.ipc_dump_enabled,
+        ipc_write_config=overrides.ipc_write_config,
     )
 
 

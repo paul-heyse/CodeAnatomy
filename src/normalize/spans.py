@@ -39,6 +39,7 @@ SCIP_ENC_RANGE_FIELDS = tuple(
     field.name for field in scip_range_bundle(prefix="enc_", include_len=True).fields
 )
 
+
 @dataclass(frozen=True)
 class AstSpanColumns:
     """Column names used for AST span normalization."""

@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import cast
 
 from ibis.expr.types import Table as IbisTable
 from sqlglot.lineage import Node, lineage
+from sqlglot.optimizer import scope
 
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
+from sqlglot_tools.optimizer import (
+    NormalizeExprOptions,
+    SqlGlotPolicy,
+    default_sqlglot_policy,
+    normalize_expr,
+)
 
 SchemaMapping = Mapping[str, Mapping[str, str]]
 
@@ -19,6 +27,7 @@ def required_columns_by_table(
     backend: IbisCompilerBackend,
     schema_map: SchemaMapping | None = None,
     dialect: str = "datafusion",
+    policy: SqlGlotPolicy | None = None,
 ) -> dict[str, tuple[str, ...]]:
     """Return required source columns per table for an expression.
 
@@ -29,10 +38,29 @@ def required_columns_by_table(
     """
     sg_expr = ibis_to_sqlglot(expr, backend=backend, params=None)
     schema = {name: dict(cols) for name, cols in schema_map.items()} if schema_map else None
+    policy = policy or default_sqlglot_policy()
+    if dialect:
+        policy = replace(policy, read_dialect=dialect, write_dialect=dialect)
+    normalized = normalize_expr(
+        sg_expr,
+        options=NormalizeExprOptions(
+            schema=schema,
+            policy=policy,
+        ),
+    )
+    scoped = scope.build_scope(normalized)
     required: dict[str, set[str]] = {}
     output_columns = tuple(cast("tuple[str, ...]", expr.schema().names))
     for column in output_columns:
-        node = lineage(column, sg_expr, schema=schema, dialect=dialect)
+        node = lineage(
+            column,
+            normalized,
+            schema=schema,
+            dialect=dialect,
+            scope=scoped,
+            trim_selects=True,
+            copy=False,
+        )
         _collect_required_columns(node, required)
     return {table: tuple(sorted(cols)) for table, cols in required.items()}
 
@@ -43,6 +71,7 @@ def lineage_graph_by_output(
     backend: IbisCompilerBackend,
     schema_map: SchemaMapping | None = None,
     dialect: str = "datafusion",
+    policy: SqlGlotPolicy | None = None,
 ) -> dict[str, tuple[str, ...]]:
     """Return output-to-source lineage entries for an expression.
 
@@ -53,9 +82,28 @@ def lineage_graph_by_output(
     """
     sg_expr = ibis_to_sqlglot(expr, backend=backend, params=None)
     schema = {name: dict(cols) for name, cols in schema_map.items()} if schema_map else None
+    policy = policy or default_sqlglot_policy()
+    if dialect:
+        policy = replace(policy, read_dialect=dialect, write_dialect=dialect)
+    normalized = normalize_expr(
+        sg_expr,
+        options=NormalizeExprOptions(
+            schema=schema,
+            policy=policy,
+        ),
+    )
+    scoped = scope.build_scope(normalized)
     lineage_map: dict[str, tuple[str, ...]] = {}
     for column in tuple(cast("tuple[str, ...]", expr.schema().names)):
-        node = lineage(column, sg_expr, schema=schema, dialect=dialect)
+        node = lineage(
+            column,
+            normalized,
+            schema=schema,
+            dialect=dialect,
+            scope=scoped,
+            trim_selects=True,
+            copy=False,
+        )
         sources = sorted(_collect_leaf_names(node))
         if sources:
             lineage_map[column] = tuple(sources)

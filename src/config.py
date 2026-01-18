@@ -12,14 +12,6 @@ from ibis_engine.config import IbisBackendConfig
 
 
 @dataclass(frozen=True)
-class AdapterMode:
-    """Adapter selection flags for plan execution."""
-
-    use_ibis_bridge: bool = True
-    use_datafusion_bridge: bool = False
-
-
-@dataclass(frozen=True)
 class CodeIntelCPGConfig:
     """Define top-level configuration for building CPG artifacts."""
 
@@ -31,7 +23,6 @@ class CodeIntelCPGConfig:
     provenance: bool = False
 
     mode: Literal["strict", "tolerant"] = "tolerant"
-    adapter_mode: AdapterMode = field(default_factory=AdapterMode)
     execution_policy: AdapterExecutionPolicy = field(default_factory=AdapterExecutionPolicy)
 
     def resolved_runtime(self) -> RuntimeProfile:

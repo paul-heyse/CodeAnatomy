@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+import pyarrow as pa
+
 from arrowdsl.core.interop import SchemaLike
+from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.metadata import schema_identity_from_metadata
+from ibis_engine.plan_diff import semantic_diff_sql
 from incremental.state_store import StateStore
-from relspec.rules.cache import rule_graph_signature_cached, rule_plan_signatures_cached
+from relspec.rules.cache import (
+    rule_graph_signature_cached,
+    rule_plan_signatures_cached,
+    rule_plan_sql_cached,
+)
 from schema_spec.system import SchemaRegistry
 
 
@@ -27,6 +36,7 @@ class InvalidationSnapshot:
     """Persisted signatures for invalidation checks."""
 
     rule_plan_signatures: dict[str, str]
+    rule_plan_sql: dict[str, str]
     rule_graph_signature: str
     dataset_identities: dict[str, SchemaIdentity]
 
@@ -40,6 +50,7 @@ class InvalidationSnapshot:
         """
         return {
             "rule_plan_signatures": dict(self.rule_plan_signatures),
+            "rule_plan_sql": dict(self.rule_plan_sql),
             "rule_graph_signature": self.rule_graph_signature,
             "dataset_identities": {
                 name: {"name": identity.name, "version": identity.version}
@@ -56,6 +67,14 @@ class InvalidationResult:
     reasons: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class InvalidationOutcome:
+    """Outcome plus plan diff for invalidation checks."""
+
+    result: InvalidationResult
+    plan_diff: pa.Table
+
+
 def build_invalidation_snapshot(registry: SchemaRegistry) -> InvalidationSnapshot:
     """Build the current invalidation signature snapshot.
 
@@ -66,6 +85,7 @@ def build_invalidation_snapshot(registry: SchemaRegistry) -> InvalidationSnapsho
     """
     return InvalidationSnapshot(
         rule_plan_signatures=rule_plan_signatures_cached(),
+        rule_plan_sql=rule_plan_sql_cached(),
         rule_graph_signature=rule_graph_signature_cached(),
         dataset_identities=_dataset_identities(registry),
     )
@@ -125,6 +145,40 @@ def check_state_store_invalidation(
     return InvalidationResult(full_refresh=False, reasons=())
 
 
+def check_state_store_invalidation_with_diff(
+    *,
+    state_store: StateStore,
+    registry: SchemaRegistry,
+) -> InvalidationOutcome:
+    """Check invalidation signatures and return plan diff details.
+
+    Returns
+    -------
+    InvalidationOutcome
+        Outcome containing invalidation result and plan diff table.
+    """
+    current = build_invalidation_snapshot(registry)
+    previous = read_invalidation_snapshot(state_store)
+    diff_table = rule_plan_diff_table(previous, current)
+    if previous is None:
+        write_invalidation_snapshot(state_store, current)
+        result = InvalidationResult(full_refresh=False, reasons=("missing_snapshot",))
+        return InvalidationOutcome(result=result, plan_diff=diff_table)
+    reasons = diff_invalidation_snapshots(previous, current)
+    if reasons:
+        reset_state_store(state_store)
+        write_invalidation_snapshot(state_store, current)
+        return InvalidationOutcome(
+            result=InvalidationResult(full_refresh=True, reasons=reasons),
+            plan_diff=diff_table,
+        )
+    write_invalidation_snapshot(state_store, current)
+    return InvalidationOutcome(
+        result=InvalidationResult(full_refresh=False, reasons=()),
+        plan_diff=diff_table,
+    )
+
+
 def diff_invalidation_snapshots(
     previous: InvalidationSnapshot,
     current: InvalidationSnapshot,
@@ -139,13 +193,15 @@ def diff_invalidation_snapshots(
     reasons: list[str] = []
     if previous.rule_graph_signature != current.rule_graph_signature:
         reasons.append("rule_graph_signature")
-    reasons.extend(
-        _diff_mapping(
-            previous.rule_plan_signatures,
-            current.rule_plan_signatures,
-            prefix="rule_signature",
+    reasons.extend(_diff_rule_plan_sql(previous.rule_plan_sql, current.rule_plan_sql))
+    if not previous.rule_plan_sql or not current.rule_plan_sql:
+        reasons.extend(
+            _diff_mapping(
+                previous.rule_plan_signatures,
+                current.rule_plan_signatures,
+                prefix="rule_signature",
+            )
         )
-    )
     reasons.extend(_diff_schema_identities(previous.dataset_identities, current.dataset_identities))
     return tuple(reasons)
 
@@ -201,14 +257,106 @@ def _snapshot_from_payload(payload: object) -> InvalidationSnapshot:
         msg = "Invalid invalidation snapshot payload."
         raise TypeError(msg)
     rule_signatures = _coerce_str_mapping(payload.get("rule_plan_signatures"))
+    rule_plan_sql = _coerce_str_mapping(payload.get("rule_plan_sql"))
     rule_graph_signature = str(payload.get("rule_graph_signature", ""))
     dataset_payload = payload.get("dataset_identities")
     dataset_identities = _coerce_schema_identities(dataset_payload)
     return InvalidationSnapshot(
         rule_plan_signatures=rule_signatures,
+        rule_plan_sql=rule_plan_sql,
         rule_graph_signature=rule_graph_signature,
         dataset_identities=dataset_identities,
     )
+
+
+def _diff_rule_plan_sql(
+    previous: Mapping[str, str],
+    current: Mapping[str, str],
+) -> list[str]:
+    reasons: list[str] = []
+    all_rules = sorted(set(previous) | set(current))
+    for name in all_rules:
+        prev_sql = previous.get(name)
+        next_sql = current.get(name)
+        if not prev_sql or not next_sql:
+            reasons.append(f"rule_plan_sql:{name}")
+            continue
+        diff = semantic_diff_sql(prev_sql, next_sql)
+        if diff.changed:
+            reasons.append(f"rule_plan_sql:{name}")
+    return reasons
+
+
+def rule_plan_diff_table(
+    previous: InvalidationSnapshot | None,
+    current: InvalidationSnapshot,
+) -> pa.Table:
+    """Return a table describing rule plan SQL changes.
+
+    Returns
+    -------
+    pyarrow.Table
+        Table of plan diff details per rule.
+    """
+    schema = pa.schema(
+        [
+            ("rule_name", pa.string()),
+            ("change_kind", pa.string()),
+            ("diff_types", pa.string()),
+            ("prev_plan_hash", pa.string()),
+            ("cur_plan_hash", pa.string()),
+        ]
+    )
+    prev_sql: dict[str, str] = dict(previous.rule_plan_sql) if previous is not None else {}
+    cur_sql = current.rule_plan_sql
+    names = sorted(set(prev_sql) | set(cur_sql))
+    if not names:
+        return table_from_arrays(schema, columns={}, num_rows=0)
+    change_kind: list[str] = []
+    diff_types: list[str | None] = []
+    prev_hashes: list[str | None] = []
+    cur_hashes: list[str | None] = []
+    for name in names:
+        prev = prev_sql.get(name)
+        cur = cur_sql.get(name)
+        prev_hashes.append(_hash_sql(prev))
+        cur_hashes.append(_hash_sql(cur))
+        if prev is None and cur is not None:
+            change_kind.append("added")
+            diff_types.append(None)
+            continue
+        if prev is not None and cur is None:
+            change_kind.append("removed")
+            diff_types.append(None)
+            continue
+        if prev is None or cur is None:
+            change_kind.append("changed")
+            diff_types.append("missing")
+            continue
+        diff = semantic_diff_sql(prev, cur)
+        if diff.changed:
+            change_kind.append("changed")
+            diff_types.append(",".join(diff.changes))
+        else:
+            change_kind.append("unchanged")
+            diff_types.append(None)
+    return table_from_arrays(
+        schema,
+        columns={
+            "rule_name": pa.array(names, type=pa.string()),
+            "change_kind": pa.array(change_kind, type=pa.string()),
+            "diff_types": pa.array(diff_types, type=pa.string()),
+            "prev_plan_hash": pa.array(prev_hashes, type=pa.string()),
+            "cur_plan_hash": pa.array(cur_hashes, type=pa.string()),
+        },
+        num_rows=len(names),
+    )
+
+
+def _hash_sql(value: str | None) -> str | None:
+    if not value:
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _coerce_str_mapping(value: object) -> dict[str, str]:
@@ -265,14 +413,17 @@ def _diff_schema_identities(
 
 
 __all__ = [
+    "InvalidationOutcome",
     "InvalidationResult",
     "InvalidationSnapshot",
     "SchemaIdentity",
     "build_invalidation_snapshot",
     "check_state_store_invalidation",
+    "check_state_store_invalidation_with_diff",
     "diff_invalidation_snapshots",
     "read_invalidation_snapshot",
     "reset_state_store",
+    "rule_plan_diff_table",
     "validate_schema_identity",
     "write_invalidation_snapshot",
 ]

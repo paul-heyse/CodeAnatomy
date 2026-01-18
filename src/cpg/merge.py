@@ -6,7 +6,8 @@ from collections.abc import Sequence
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
-from cpg.plan_specs import align_table_to_schema, unify_schema_with_metadata
+from arrowdsl.schema.schema import unify_schema_with_metadata
+from cpg.table_utils import align_table_to_schema
 from schema_spec.system import DatasetSpec
 
 

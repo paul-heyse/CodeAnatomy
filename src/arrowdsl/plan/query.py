@@ -47,6 +47,7 @@ class QuerySpec:
         *,
         provenance: bool,
         scan_provenance: Sequence[str] = (),
+        required_columns: Sequence[str] | None = None,
     ) -> ColumnsSpec:
         """Return the scan column spec for Arrow scanners.
 
@@ -65,11 +66,15 @@ class QuerySpec:
                 if not expr.is_scalar():
                     msg = f"QuerySpec.scan_columns: derived column {name!r} is not scalar-safe."
                     raise ValueError(msg)
+        base_cols = list(self.projection.base)
+        if required_columns is not None:
+            required = set(required_columns)
+            base_cols = [name for name in base_cols if name in required]
         if not provenance and not self.projection.derived and not scan_provenance:
-            return list(self.projection.base)
+            return list(base_cols)
 
         cols: dict[str, ComputeExpression] = {
-            col: FieldExpr(col).to_expression() for col in self.projection.base
+            col: FieldExpr(col).to_expression() for col in base_cols
         }
         cols.update({name: expr.to_expression() for name, expr in self.projection.derived.items()})
         for name in scan_provenance:
@@ -140,6 +145,7 @@ class QuerySpec:
         *,
         ctx: ExecutionContext,
         scan_provenance: Sequence[str] | None = None,
+        required_columns: Sequence[str] | None = None,
     ) -> Plan:
         """Apply filters and projections to a plan.
 
@@ -154,7 +160,11 @@ class QuerySpec:
         scan_provenance = (
             ctx.runtime.scan.scan_provenance_columns if scan_provenance is None else scan_provenance
         )
-        cols = self.scan_columns(provenance=ctx.provenance, scan_provenance=scan_provenance)
+        cols = self.scan_columns(
+            provenance=ctx.provenance,
+            scan_provenance=scan_provenance,
+            required_columns=required_columns,
+        )
         available = set(plan.schema(ctx=ctx).names)
         if isinstance(cols, Mapping):
             derived_names = set(self.projection.derived)

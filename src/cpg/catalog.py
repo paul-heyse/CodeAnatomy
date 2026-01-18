@@ -10,7 +10,7 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, pc
 from arrowdsl.plan import catalog as plan_catalog
 from arrowdsl.plan.plan import Plan
-from arrowdsl.plan_helpers import coalesce_expr
+from arrowdsl.plan_utils import coalesce_expr
 from cpg.constants import ROLE_FLAG_SPECS
 from cpg.plan_specs import set_or_append_column
 

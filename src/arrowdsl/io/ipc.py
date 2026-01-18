@@ -7,10 +7,22 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.ipc as pa_ipc
 
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from arrowdsl.spec.io import IpcWriteConfig, ipc_read_options_factory, ipc_write_options_factory
 from core_types import PathLike, ensure_path
+from engine.plan_product import PlanProduct
+
+type IpcWriteInput = TableLike | RecordBatchReaderLike | PlanProduct
+
+
+def _coerce_plan_product(value: IpcWriteInput) -> TableLike | RecordBatchReaderLike:
+    if isinstance(value, PlanProduct):
+        if value.writer_strategy != "arrow":
+            msg = "IPC writes require an Arrow writer strategy."
+            raise ValueError(msg)
+        return value.value()
+    return value
 
 
 def _ensure_dir(path: Path) -> None:
@@ -25,7 +37,7 @@ def _ensure_dir(path: Path) -> None:
 
 
 def write_table_ipc_file(
-    table: TableLike,
+    table: IpcWriteInput,
     path: PathLike,
     *,
     overwrite: bool = True,
@@ -44,22 +56,27 @@ def write_table_ipc_file(
     if overwrite and target.exists():
         target.unlink()
 
-    schema = table.schema
+    data = _coerce_plan_product(table)
+    schema = data.schema
     if schema_metadata:
         schema = SchemaMetadataSpec(schema_metadata=schema_metadata).apply(schema)
-        table = table.cast(schema, safe=False)
 
     options = ipc_write_options_factory(config)
     with (
         pa.OSFile(str(target), "wb") as sink,
         pa_ipc.new_file(sink, schema, options=options) as writer,
     ):
-        writer.write_table(table)
+        if isinstance(data, RecordBatchReaderLike):
+            for batch in data:
+                writer.write_batch(batch)
+        else:
+            table_value = data.cast(schema, safe=False)
+            writer.write_table(table_value)
     return str(target)
 
 
 def write_table_ipc_stream(
-    table: TableLike,
+    table: IpcWriteInput,
     path: PathLike,
     *,
     overwrite: bool = True,
@@ -78,17 +95,22 @@ def write_table_ipc_stream(
     if overwrite and target.exists():
         target.unlink()
 
-    schema = table.schema
+    data = _coerce_plan_product(table)
+    schema = data.schema
     if schema_metadata:
         schema = SchemaMetadataSpec(schema_metadata=schema_metadata).apply(schema)
-        table = table.cast(schema, safe=False)
 
     options = ipc_write_options_factory(config)
     with (
         pa.OSFile(str(target), "wb") as sink,
         pa_ipc.new_stream(sink, schema, options=options) as writer,
     ):
-        writer.write_table(table)
+        if isinstance(data, RecordBatchReaderLike):
+            for batch in data:
+                writer.write_batch(batch)
+        else:
+            table_value = data.cast(schema, safe=False)
+            writer.write_table(table_value)
     return str(target)
 
 

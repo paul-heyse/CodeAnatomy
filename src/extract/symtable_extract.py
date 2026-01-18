@@ -3,38 +3,32 @@
 from __future__ import annotations
 
 import symtable
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
+import ibis
 import pyarrow as pa
 
-from arrowdsl.compute.expr_core import MaskedHashExprSpec
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
-from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike, pc
-from arrowdsl.plan.joins import join_config_for_output, left_join
-from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
+from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.metadata import normalize_dictionaries
 from arrowdsl.schema.nested_builders import LargeListViewAccumulator
-from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.helpers import (
     ExtractExecutionContext,
+    ExtractMaterializeOptions,
     FileContext,
+    apply_query_and_project,
     file_identity_row,
+    ibis_plan_from_rows,
     iter_contexts,
-    project_columns,
+    materialize_extract_plan,
     text_from_file_ctx,
 )
-from extract.plan_helpers import apply_query_and_normalize, plan_from_rows
-from extract.registry_ids import hash_spec
-from extract.registry_specs import (
-    dataset_row_schema,
-    dataset_schema,
-    normalize_options,
-)
-from extract.schema_ops import metadata_spec_for_dataset
+from extract.registry_specs import dataset_row_schema, normalize_options
+from extract.schema_ops import ExtractNormalizeOptions
+from ibis_engine.plan import IbisPlan
 from schema_spec.specs import NestedFieldSpec
 
 if TYPE_CHECKING:
@@ -109,39 +103,11 @@ class SymtableContext:
         return file_identity_row(self.file_ctx)
 
 
-SYM_SCOPE_ID_SPEC = hash_spec("sym_scope_id")
-SYM_SYMBOL_ROW_ID_SPEC = hash_spec("sym_symbol_row_id")
-SYM_SCOPE_EDGE_ID_SPEC = hash_spec("sym_scope_edge_id")
-SYM_NS_SYMBOL_ROW_ID_SPEC = hash_spec("sym_ns_symbol_row_id")
-SYM_NS_EDGE_ID_SPEC = hash_spec("sym_ns_edge_id")
-
-SCOPES_SCHEMA = dataset_schema("py_sym_scopes_v1")
-SYMBOLS_SCHEMA = dataset_schema("py_sym_symbols_v1")
-SCOPE_EDGES_SCHEMA = dataset_schema("py_sym_scope_edges_v1")
-NAMESPACE_EDGES_SCHEMA = dataset_schema("py_sym_namespace_edges_v1")
-FUNC_PARTS_SCHEMA = dataset_schema("py_sym_function_partitions_v1")
-
 SCOPES_ROW_SCHEMA = dataset_row_schema("py_sym_scopes_v1")
 SYMBOLS_ROW_SCHEMA = dataset_row_schema("py_sym_symbols_v1")
 SCOPE_EDGES_ROW_SCHEMA = dataset_row_schema("py_sym_scope_edges_v1")
 NAMESPACE_EDGES_ROW_SCHEMA = dataset_row_schema("py_sym_namespace_edges_v1")
 FUNC_PARTS_ROW_SCHEMA = dataset_row_schema("py_sym_function_partitions_v1")
-
-
-def _symtable_metadata_specs(
-    options: SymtableExtractOptions,
-) -> dict[str, SchemaMetadataSpec]:
-    return {
-        "py_sym_scopes": metadata_spec_for_dataset("py_sym_scopes_v1", options=options),
-        "py_sym_symbols": metadata_spec_for_dataset("py_sym_symbols_v1", options=options),
-        "py_sym_scope_edges": metadata_spec_for_dataset("py_sym_scope_edges_v1", options=options),
-        "py_sym_namespace_edges": metadata_spec_for_dataset(
-            "py_sym_namespace_edges_v1", options=options
-        ),
-        "py_sym_function_partitions": metadata_spec_for_dataset(
-            "py_sym_function_partitions_v1", options=options
-        ),
-    }
 
 
 def _scope_type_str(tbl: symtable.SymbolTable) -> str:
@@ -507,18 +473,64 @@ def extract_symtable(
     normalized_options = normalize_options("symtable", options, SymtableExtractOptions)
     exec_context = context or ExtractExecutionContext()
     ctx = exec_context.ensure_ctx()
-    metadata_specs = _symtable_metadata_specs(normalized_options)
+    normalize = ExtractNormalizeOptions(options=normalized_options)
 
     rows = _collect_symtable_rows(
         repo_files,
         exec_context.file_contexts,
         compile_type=normalized_options.compile_type,
     )
-    return _build_symtable_result(
+    plans = _build_symtable_plans(
         rows,
-        ctx=ctx,
-        metadata_specs=metadata_specs,
+        normalize=normalize,
         evidence_plan=exec_context.evidence_plan,
+    )
+    return SymtableExtractResult(
+        py_sym_scopes=materialize_extract_plan(
+            "py_sym_scopes_v1",
+            plans["py_sym_scopes"],
+            ctx=ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
+            ),
+        ),
+        py_sym_symbols=materialize_extract_plan(
+            "py_sym_symbols_v1",
+            plans["py_sym_symbols"],
+            ctx=ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
+            ),
+        ),
+        py_sym_scope_edges=materialize_extract_plan(
+            "py_sym_scope_edges_v1",
+            plans["py_sym_scope_edges"],
+            ctx=ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
+            ),
+        ),
+        py_sym_namespace_edges=materialize_extract_plan(
+            "py_sym_namespace_edges_v1",
+            plans["py_sym_namespace_edges"],
+            ctx=ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
+            ),
+        ),
+        py_sym_function_partitions=materialize_extract_plan(
+            "py_sym_function_partitions_v1",
+            plans["py_sym_function_partitions"],
+            ctx=ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
+            ),
+        ),
     )
 
 
@@ -527,400 +539,251 @@ def extract_symtable_plans(
     options: SymtableExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> dict[str, Plan]:
+) -> dict[str, IbisPlan]:
     """Extract symbol table plans from repository files.
 
     Returns
     -------
-    dict[str, Plan]
-        Plan bundle keyed by symtable outputs.
+    dict[str, IbisPlan]
+        Ibis plan bundle keyed by symtable outputs.
     """
     normalized_options = normalize_options("symtable", options, SymtableExtractOptions)
     exec_context = context or ExtractExecutionContext()
-    ctx = exec_context.ensure_ctx()
+    normalize = ExtractNormalizeOptions(options=normalized_options)
     evidence_plan = exec_context.evidence_plan
     rows = _collect_symtable_rows(
         repo_files,
         exec_context.file_contexts,
         compile_type=normalized_options.compile_type,
     )
-    return _build_symtable_plans(rows, ctx=ctx, evidence_plan=evidence_plan)
+    return _build_symtable_plans(rows, normalize=normalize, evidence_plan=evidence_plan)
 
 
 def _build_scopes(
     scope_rows: list[dict[str, object]],
     *,
-    ctx: ExecutionContext,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> tuple[Plan, Plan]:
-    scopes_plan = plan_from_rows(scope_rows, schema=SCOPES_ROW_SCHEMA, label="sym_scopes")
-    scopes_base = [name for name in SCOPES_ROW_SCHEMA.names if name != "scope_id"]
-    scopes_plan = project_columns(
-        scopes_plan,
-        base=scopes_base,
-        extras=[
-            (
-                MaskedHashExprSpec(
-                    spec=SYM_SCOPE_ID_SPEC,
-                    required=("file_id", "table_id", "scope_type", "scope_name", "lineno"),
-                ).to_expression(),
-                "scope_id",
-            )
-        ],
-        ctx=ctx,
-    )
-    scope_key_plan = scopes_plan.project(
-        [pc.field("file_id"), pc.field("table_id"), pc.field("scope_id")],
-        ["file_id", "table_id", "scope_id"],
-        ctx=ctx,
-    )
-    scopes_plan = apply_query_and_normalize(
+) -> tuple[IbisPlan, IbisPlan]:
+    raw_plan = ibis_plan_from_rows(
         "py_sym_scopes_v1",
-        scopes_plan,
-        ctx=ctx,
-        evidence_plan=evidence_plan,
+        scope_rows,
+        row_schema=SCOPES_ROW_SCHEMA,
     )
+    scopes_plan = apply_query_and_project(
+        "py_sym_scopes_v1",
+        raw_plan.expr,
+        normalize=normalize,
+        evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
+    )
+    scopes_table = scopes_plan.expr
+    scope_keys = scopes_table.select(
+        scopes_table["file_id"],
+        scopes_table["table_id"],
+        scopes_table["scope_id"],
+    )
+    scope_key_plan = IbisPlan(expr=scope_keys, ordering=scopes_plan.ordering)
     return scopes_plan, scope_key_plan
 
 
 def _build_symbols(
     symbol_rows: list[dict[str, object]],
     *,
-    scope_key_plan: Plan,
-    ctx: ExecutionContext,
+    scope_key_plan: IbisPlan,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> Plan:
-    if not symbol_rows:
-        return Plan.table_source(empty_table(SYMBOLS_SCHEMA))
-    symbols_plan = plan_from_rows(symbol_rows, schema=SYMBOLS_ROW_SCHEMA, label="sym_symbols_raw")
-    symbols_cols = list(SYMBOLS_ROW_SCHEMA.names)
-    join_config = join_config_for_output(
-        left_columns=SYMBOLS_ROW_SCHEMA.names,
-        right_columns=scope_key_plan.schema(ctx=ctx).names,
-        key_pairs=(("file_id", "file_id"), ("scope_table_id", "table_id")),
-        right_output=("scope_id",),
-    )
-    if join_config is not None:
-        symbols_plan = left_join(
-            symbols_plan,
-            scope_key_plan,
-            config=join_config,
-            use_threads=ctx.use_threads,
-            ctx=ctx,
-        )
-        symbols_cols = list(join_config.left_output) + list(join_config.right_output)
-    symbols_base = [name for name in symbols_cols if name != "symbol_row_id"]
-    symbols_plan = project_columns(
-        symbols_plan,
-        base=symbols_base,
-        extras=[
-            (
-                MaskedHashExprSpec(
-                    spec=SYM_SYMBOL_ROW_ID_SPEC,
-                    required=("scope_id", "name"),
-                ).to_expression(),
-                "symbol_row_id",
-            )
-        ],
-        ctx=ctx,
-    )
-    return apply_query_and_normalize(
+) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
         "py_sym_symbols_v1",
-        symbols_plan,
-        ctx=ctx,
+        symbol_rows,
+        row_schema=SYMBOLS_ROW_SCHEMA,
+    )
+    symbols_table = raw_plan.expr
+    scope_keys = scope_key_plan.expr
+    joined = symbols_table.left_join(
+        scope_keys,
+        predicates=[
+            symbols_table["file_id"] == scope_keys["file_id"],
+            symbols_table["scope_table_id"] == scope_keys["table_id"],
+        ],
+    )
+    selected = joined.select(
+        [symbols_table[col] for col in symbols_table.columns] + [scope_keys["scope_id"]]
+    )
+    return apply_query_and_project(
+        "py_sym_symbols_v1",
+        selected,
+        normalize=normalize,
         evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
     )
 
 
 def _build_scope_edges(
     scope_edge_rows: list[dict[str, object]],
     *,
-    scope_key_plan: Plan,
-    ctx: ExecutionContext,
+    scope_key_plan: IbisPlan,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> Plan:
-    if not scope_edge_rows:
-        return Plan.table_source(empty_table(SCOPE_EDGES_SCHEMA))
-    scope_edges_plan = plan_from_rows(
-        scope_edge_rows,
-        schema=SCOPE_EDGES_ROW_SCHEMA,
-        label="sym_scope_edges_raw",
-    )
-    join_parent = join_config_for_output(
-        left_columns=SCOPE_EDGES_ROW_SCHEMA.names,
-        right_columns=scope_key_plan.schema(ctx=ctx).names,
-        key_pairs=(("file_id", "file_id"), ("parent_table_id", "table_id")),
-        right_output=("scope_id",),
-    )
-    if join_parent is None:
-        msg = "Scope edge rows missing required join keys."
-        raise ValueError(msg)
-    scope_edges_plan = left_join(
-        scope_edges_plan,
-        scope_key_plan,
-        config=join_parent,
-        use_threads=ctx.use_threads,
-        ctx=ctx,
-    )
-    parent_cols = list(join_parent.left_output) + list(join_parent.right_output)
-    scope_edges_plan = project_columns(
-        scope_edges_plan,
-        base=parent_cols,
-        rename={"scope_id": "parent_scope_id"},
-        ctx=ctx,
-    )
-    rename_parent_cols = ["parent_scope_id" if name == "scope_id" else name for name in parent_cols]
-    join_child = join_config_for_output(
-        left_columns=rename_parent_cols,
-        right_columns=scope_key_plan.schema(ctx=ctx).names,
-        key_pairs=(("file_id", "file_id"), ("child_table_id", "table_id")),
-        right_output=("scope_id",),
-    )
-    if join_child is None:
-        msg = "Scope edge rows missing required child join keys."
-        raise ValueError(msg)
-    scope_edges_plan = left_join(
-        scope_edges_plan,
-        scope_key_plan,
-        config=join_child,
-        use_threads=ctx.use_threads,
-        ctx=ctx,
-    )
-    child_cols = list(join_child.left_output) + list(join_child.right_output)
-    scope_edges_plan = project_columns(
-        scope_edges_plan,
-        base=child_cols,
-        rename={"scope_id": "child_scope_id"},
-        ctx=ctx,
-    )
-    rename_child_cols = ["child_scope_id" if name == "scope_id" else name for name in child_cols]
-    scope_edges_base = [name for name in rename_child_cols if name != "edge_id"]
-    scope_edges_plan = project_columns(
-        scope_edges_plan,
-        base=scope_edges_base,
-        extras=[
-            (
-                MaskedHashExprSpec(
-                    spec=SYM_SCOPE_EDGE_ID_SPEC,
-                    required=("parent_scope_id", "child_scope_id"),
-                ).to_expression(),
-                "edge_id",
-            )
-        ],
-        ctx=ctx,
-    )
-    return apply_query_and_normalize(
+) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
         "py_sym_scope_edges_v1",
-        scope_edges_plan,
-        ctx=ctx,
+        scope_edge_rows,
+        row_schema=SCOPE_EDGES_ROW_SCHEMA,
+    )
+    edges_table = raw_plan.expr
+    scope_keys_parent = scope_key_plan.expr
+    parent_join = edges_table.left_join(
+        scope_keys_parent,
+        predicates=[
+            edges_table["file_id"] == scope_keys_parent["file_id"],
+            edges_table["parent_table_id"] == scope_keys_parent["table_id"],
+        ],
+    )
+    parent_selected = parent_join.select(
+        [edges_table[col] for col in edges_table.columns]
+        + [scope_keys_parent["scope_id"].name("parent_scope_id")]
+    )
+    scope_keys_child = scope_key_plan.expr.view()
+    child_join = parent_selected.left_join(
+        scope_keys_child,
+        predicates=[
+            parent_selected["file_id"] == scope_keys_child["file_id"],
+            parent_selected["child_table_id"] == scope_keys_child["table_id"],
+        ],
+    )
+    child_selected = child_join.select(
+        [parent_selected[col] for col in parent_selected.columns]
+        + [scope_keys_child["scope_id"].name("child_scope_id")]
+    )
+    return apply_query_and_project(
+        "py_sym_scope_edges_v1",
+        child_selected,
+        normalize=normalize,
         evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
     )
 
 
 def _build_namespace_edges(
     ns_edge_rows: list[dict[str, object]],
     *,
-    scope_key_plan: Plan,
-    ctx: ExecutionContext,
+    scope_key_plan: IbisPlan,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> Plan:
-    if not ns_edge_rows:
-        return Plan.table_source(empty_table(NAMESPACE_EDGES_SCHEMA))
-    ns_edges_plan = plan_from_rows(
-        ns_edge_rows,
-        schema=NAMESPACE_EDGES_ROW_SCHEMA,
-        label="sym_namespace_edges_raw",
-    )
-    join_scope = join_config_for_output(
-        left_columns=NAMESPACE_EDGES_ROW_SCHEMA.names,
-        right_columns=scope_key_plan.schema(ctx=ctx).names,
-        key_pairs=(("file_id", "file_id"), ("scope_table_id", "table_id")),
-        right_output=("scope_id",),
-    )
-    if join_scope is None:
-        msg = "Namespace edge rows missing required scope join keys."
-        raise ValueError(msg)
-    ns_edges_plan = left_join(
-        ns_edges_plan,
-        scope_key_plan,
-        config=join_scope,
-        use_threads=ctx.use_threads,
-        ctx=ctx,
-    )
-    scope_cols = list(join_scope.left_output) + list(join_scope.right_output)
-    join_child = join_config_for_output(
-        left_columns=scope_cols,
-        right_columns=scope_key_plan.schema(ctx=ctx).names,
-        key_pairs=(("file_id", "file_id"), ("child_table_id", "table_id")),
-        right_output=("scope_id",),
-        output_suffix_for_right="_child",
-    )
-    if join_child is None:
-        msg = "Namespace edge rows missing required child join keys."
-        raise ValueError(msg)
-    ns_edges_plan = left_join(
-        ns_edges_plan,
-        scope_key_plan,
-        config=join_child,
-        use_threads=ctx.use_threads,
-        ctx=ctx,
-    )
-    child_cols = list(join_child.left_output) + [
-        f"{name}{join_child.output_suffix_for_right}" for name in join_child.right_output
-    ]
-    ns_edges_plan = project_columns(
-        ns_edges_plan,
-        base=child_cols,
-        rename={"scope_id_child": "child_scope_id"},
-        ctx=ctx,
-    )
-    rename_child_cols = [
-        "child_scope_id" if name == "scope_id_child" else name for name in child_cols
-    ]
-    ns_base = [name for name in rename_child_cols if name != "symbol_row_id"]
-    ns_edges_plan = project_columns(
-        ns_edges_plan,
-        base=ns_base,
-        extras=[
-            (
-                MaskedHashExprSpec(
-                    spec=SYM_NS_SYMBOL_ROW_ID_SPEC,
-                    required=("scope_id", "symbol_name"),
-                ).to_expression(),
-                "symbol_row_id",
-            )
-        ],
-        ctx=ctx,
-    )
-    return apply_query_and_normalize(
+) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
         "py_sym_namespace_edges_v1",
-        ns_edges_plan,
-        ctx=ctx,
+        ns_edge_rows,
+        row_schema=NAMESPACE_EDGES_ROW_SCHEMA,
+    )
+    ns_table = raw_plan.expr
+    scope_keys = scope_key_plan.expr
+    scope_join = ns_table.left_join(
+        scope_keys,
+        predicates=[
+            ns_table["file_id"] == scope_keys["file_id"],
+            ns_table["scope_table_id"] == scope_keys["table_id"],
+        ],
+    )
+    scope_selected = scope_join.select(
+        [ns_table[col] for col in ns_table.columns] + [scope_keys["scope_id"]]
+    )
+    child_keys = scope_key_plan.expr.view()
+    child_join = scope_selected.left_join(
+        child_keys,
+        predicates=[
+            scope_selected["file_id"] == child_keys["file_id"],
+            scope_selected["child_table_id"] == child_keys["table_id"],
+        ],
+    )
+    child_selected = child_join.select(
+        [scope_selected[col] for col in scope_selected.columns]
+        + [child_keys["scope_id"].name("child_scope_id")]
+    )
+    return apply_query_and_project(
+        "py_sym_namespace_edges_v1",
+        child_selected,
+        normalize=normalize,
         evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
     )
 
 
 def _build_func_parts(
     func_parts_acc: _FuncPartsAccumulator,
     *,
-    scope_key_plan: Plan,
-    ctx: ExecutionContext,
+    scope_key_plan: IbisPlan,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> Plan:
+) -> IbisPlan:
     func_parts_table = func_parts_acc.to_table()
-    if func_parts_table.num_rows == 0:
-        return Plan.table_source(empty_table(FUNC_PARTS_SCHEMA))
-    if not {"file_id", "scope_table_id"} <= set(func_parts_table.column_names):
-        return Plan.table_source(empty_table(FUNC_PARTS_SCHEMA))
-    func_parts_plan = Plan.table_source(func_parts_table)
-    join_config = join_config_for_output(
-        left_columns=func_parts_table.column_names,
-        right_columns=scope_key_plan.schema(ctx=ctx).names,
-        key_pairs=(("file_id", "file_id"), ("scope_table_id", "table_id")),
-        right_output=("scope_id",),
+    if func_parts_table.num_rows == 0 or not {
+        "file_id",
+        "scope_table_id",
+    } <= set(func_parts_table.column_names):
+        raw_plan = ibis_plan_from_rows(
+            "py_sym_function_partitions_v1",
+            [],
+            row_schema=FUNC_PARTS_ROW_SCHEMA,
+        )
+    else:
+        raw_plan = IbisPlan(expr=ibis.memtable(func_parts_table), ordering=scope_key_plan.ordering)
+    func_table = raw_plan.expr
+    scope_keys = scope_key_plan.expr
+    joined = func_table.left_join(
+        scope_keys,
+        predicates=[
+            func_table["file_id"] == scope_keys["file_id"],
+            func_table["scope_table_id"] == scope_keys["table_id"],
+        ],
     )
-    if join_config is None:
-        msg = "Func parts rows missing required join keys."
-        raise ValueError(msg)
-    func_parts_plan = left_join(
-        func_parts_plan,
-        scope_key_plan,
-        config=join_config,
-        use_threads=ctx.use_threads,
-        ctx=ctx,
+    selected = joined.select(
+        [func_table[col] for col in func_table.columns] + [scope_keys["scope_id"]]
     )
-    return apply_query_and_normalize(
+    return apply_query_and_project(
         "py_sym_function_partitions_v1",
-        func_parts_plan,
-        ctx=ctx,
+        selected,
+        normalize=normalize,
         evidence_plan=evidence_plan,
-    )
-
-
-def _build_symtable_result(
-    rows: _SymtableRows,
-    *,
-    ctx: ExecutionContext,
-    metadata_specs: Mapping[str, SchemaMetadataSpec],
-    evidence_plan: EvidencePlan | None = None,
-) -> SymtableExtractResult:
-    plans = _build_symtable_plans(rows, ctx=ctx, evidence_plan=evidence_plan)
-    return SymtableExtractResult(
-        py_sym_scopes=materialize_plan(
-            plans["py_sym_scopes"],
-            ctx=ctx,
-            metadata_spec=metadata_specs["py_sym_scopes"],
-            attach_ordering_metadata=True,
-        ),
-        py_sym_symbols=materialize_plan(
-            plans["py_sym_symbols"],
-            ctx=ctx,
-            metadata_spec=metadata_specs["py_sym_symbols"],
-            attach_ordering_metadata=True,
-        ),
-        py_sym_scope_edges=materialize_plan(
-            plans["py_sym_scope_edges"],
-            ctx=ctx,
-            metadata_spec=metadata_specs["py_sym_scope_edges"],
-            attach_ordering_metadata=True,
-        ),
-        py_sym_namespace_edges=materialize_plan(
-            plans["py_sym_namespace_edges"],
-            ctx=ctx,
-            metadata_spec=metadata_specs["py_sym_namespace_edges"],
-            attach_ordering_metadata=True,
-        ),
-        py_sym_function_partitions=materialize_plan(
-            plans["py_sym_function_partitions"],
-            ctx=ctx,
-            metadata_spec=metadata_specs["py_sym_function_partitions"],
-            attach_ordering_metadata=True,
-        ),
+        repo_id=normalize.repo_id,
     )
 
 
 def _build_symtable_plans(
     rows: _SymtableRows,
     *,
-    ctx: ExecutionContext,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> dict[str, Plan]:
-    if not rows.scope_rows:
-        return {
-            "py_sym_scopes": Plan.table_source(empty_table(SCOPES_SCHEMA)),
-            "py_sym_symbols": Plan.table_source(empty_table(SYMBOLS_SCHEMA)),
-            "py_sym_scope_edges": Plan.table_source(empty_table(SCOPE_EDGES_SCHEMA)),
-            "py_sym_namespace_edges": Plan.table_source(empty_table(NAMESPACE_EDGES_SCHEMA)),
-            "py_sym_function_partitions": Plan.table_source(empty_table(FUNC_PARTS_SCHEMA)),
-        }
-
+) -> dict[str, IbisPlan]:
     scopes_plan, scope_key_plan = _build_scopes(
         rows.scope_rows,
-        ctx=ctx,
+        normalize=normalize,
         evidence_plan=evidence_plan,
     )
     symbols_plan = _build_symbols(
         rows.symbol_rows,
         scope_key_plan=scope_key_plan,
-        ctx=ctx,
+        normalize=normalize,
         evidence_plan=evidence_plan,
     )
     scope_edges_plan = _build_scope_edges(
         rows.scope_edge_rows,
         scope_key_plan=scope_key_plan,
-        ctx=ctx,
+        normalize=normalize,
         evidence_plan=evidence_plan,
     )
     ns_edges_plan = _build_namespace_edges(
         rows.ns_edge_rows,
         scope_key_plan=scope_key_plan,
-        ctx=ctx,
+        normalize=normalize,
         evidence_plan=evidence_plan,
     )
     func_parts_plan = _build_func_parts(
         rows.func_parts_acc,
         scope_key_plan=scope_key_plan,
-        ctx=ctx,
+        normalize=normalize,
         evidence_plan=evidence_plan,
     )
 
@@ -1002,6 +865,7 @@ def extract_symtables_table(
     profile = kwargs.get("profile", "default")
     exec_ctx = kwargs.get("ctx") or execution_context_factory(profile)
     prefer_reader = kwargs.get("prefer_reader", False)
+    normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_symtable_plans(
         repo_files,
         options=normalized_options,
@@ -1012,11 +876,13 @@ def extract_symtables_table(
             profile=profile,
         ),
     )
-    metadata_specs = _symtable_metadata_specs(normalized_options)
-    return run_plan_bundle(
-        {"py_sym_scopes": plans["py_sym_scopes"]},
+    return materialize_extract_plan(
+        "py_sym_scopes_v1",
+        plans["py_sym_scopes"],
         ctx=exec_ctx,
-        prefer_reader=prefer_reader,
-        metadata_specs={"py_sym_scopes": metadata_specs["py_sym_scopes"]},
-        attach_ordering_metadata=True,
-    )["py_sym_scopes"]
+        options=ExtractMaterializeOptions(
+            normalize=normalize,
+            prefer_reader=prefer_reader,
+            apply_post_kernels=True,
+        ),
+    )

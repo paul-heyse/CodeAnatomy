@@ -28,12 +28,15 @@ if TYPE_CHECKING:
     from incremental.imports_resolved import resolve_imports
     from incremental.index_update import upsert_imports_resolved, upsert_module_index
     from incremental.invalidations import (
+        InvalidationOutcome,
         InvalidationResult,
         build_invalidation_snapshot,
         check_state_store_invalidation,
+        check_state_store_invalidation_with_diff,
         diff_invalidation_snapshots,
         read_invalidation_snapshot,
         reset_state_store,
+        rule_plan_diff_table,
         write_invalidation_snapshot,
     )
     from incremental.module_index import build_module_index
@@ -71,6 +74,7 @@ __all__ = [
     "IncrementalConfig",
     "IncrementalFileChanges",
     "IncrementalImpact",
+    "InvalidationOutcome",
     "InvalidationResult",
     "StateStore",
     "build_exported_defs_index",
@@ -80,6 +84,7 @@ __all__ = [
     "build_scip_snapshot",
     "changed_file_impact_table",
     "check_state_store_invalidation",
+    "check_state_store_invalidation_with_diff",
     "compute_changed_exports",
     "diff_invalidation_snapshots",
     "diff_scip_snapshots",
@@ -100,6 +105,7 @@ __all__ = [
     "relspec_inputs_from_state",
     "reset_state_store",
     "resolve_imports",
+    "rule_plan_diff_table",
     "scip_changed_file_ids",
     "scip_fingerprint_changed",
     "scip_index_fingerprint",

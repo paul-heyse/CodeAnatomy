@@ -6,7 +6,6 @@ import hashlib
 import json
 import re
 import uuid
-import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -288,23 +287,6 @@ def param_signature_from_array(
     return digest.hexdigest()
 
 
-def param_signature(*, logical_name: str, values: Sequence[object]) -> str:
-    """Return a stable signature for a parameter list.
-
-    Returns
-    -------
-    str
-        Hex-encoded signature string.
-    """
-    warnings.warn(
-        "param_signature is deprecated; use param_signature_from_array instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    values_array = pa.array(list(values))
-    return param_signature_from_array(logical_name=logical_name, values=values_array)
-
-
 def scalar_param_signature(values: Mapping[str, object]) -> str:
     """Return a stable signature for scalar parameter values.
 
@@ -392,7 +374,6 @@ __all__ = [
     "ParamTableScope",
     "ParamTableSpec",
     "build_param_table",
-    "param_signature",
     "param_signature_from_array",
     "param_table_name",
     "param_table_schema",

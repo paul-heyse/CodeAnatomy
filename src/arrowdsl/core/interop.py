@@ -119,11 +119,15 @@ class RecordBatchReaderLike(Protocol):
         """
         if cls is not RecordBatchReaderLike:
             return NotImplemented
-        required = ("schema", "read_all")
+        required = ("schema", "read_all", "__iter__")
         return all(hasattr(subclass, name) for name in required)
 
     def read_all(self) -> TableLike:
         """Read all batches into a table."""
+        ...
+
+    def __iter__(self) -> Iterator[pa.RecordBatch]:
+        """Iterate over record batches."""
         ...
 
 

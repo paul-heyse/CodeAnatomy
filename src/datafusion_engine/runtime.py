@@ -16,9 +16,10 @@ from datafusion import RuntimeEnvBuilder, SessionConfig, SessionContext
 from datafusion.dataframe import DataFrame
 from datafusion.object_store import LocalFileSystem
 
+from arrowdsl.core.context import DeterminismTier
 from datafusion_engine.compile_options import DataFusionCompileOptions, DataFusionFallbackEvent
 from datafusion_engine.function_factory import install_function_factory
-from datafusion_engine.udf_registry import register_datafusion_udfs
+from engine.plan_cache import PlanCache
 from obs.diagnostics import DiagnosticsCollector
 
 if TYPE_CHECKING:
@@ -127,6 +128,67 @@ class DataFusionSettingsContract:
         for key, value in merged.items():
             config = config.set(key, value)
         return config
+
+
+@dataclass(frozen=True)
+class FeatureStateSnapshot:
+    """Snapshot of runtime feature gates and determinism tier."""
+
+    profile_name: str
+    determinism_tier: DeterminismTier
+    dynamic_filters_enabled: bool
+    spill_enabled: bool
+
+    def to_row(self) -> dict[str, object]:
+        """Return a row mapping for diagnostics sinks.
+
+        Returns
+        -------
+        dict[str, object]
+            Row mapping for diagnostics table ingestion.
+        """
+        return {
+            "profile_name": self.profile_name,
+            "determinism_tier": self.determinism_tier.value,
+            "dynamic_filters_enabled": self.dynamic_filters_enabled,
+            "spill_enabled": self.spill_enabled,
+        }
+
+
+def feature_state_snapshot(
+    *,
+    profile_name: str,
+    determinism_tier: DeterminismTier,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> FeatureStateSnapshot:
+    """Build a feature state snapshot for diagnostics.
+
+    Returns
+    -------
+    FeatureStateSnapshot
+        Snapshot describing runtime feature state.
+    """
+    if runtime_profile is None:
+        return FeatureStateSnapshot(
+            profile_name=profile_name,
+            determinism_tier=determinism_tier,
+            dynamic_filters_enabled=False,
+            spill_enabled=False,
+        )
+    gates = runtime_profile.feature_gates
+    dynamic_filters_enabled = (
+        gates.enable_dynamic_filter_pushdown
+        and gates.enable_join_dynamic_filter_pushdown
+        and gates.enable_aggregate_dynamic_filter_pushdown
+        and gates.enable_topk_dynamic_filter_pushdown
+    )
+    spill_enabled = runtime_profile.spill_dir is not None
+    return FeatureStateSnapshot(
+        profile_name=profile_name,
+        determinism_tier=determinism_tier,
+        dynamic_filters_enabled=dynamic_filters_enabled,
+        spill_enabled=spill_enabled,
+    )
 
 
 @dataclass
@@ -508,7 +570,7 @@ class DataFusionRuntimeProfile:
     cache_max_columns: int | None = 64
     enable_cache_manager: bool = False
     cache_manager_factory: Callable[[], object] | None = None
-    enable_function_factory: bool = False
+    enable_function_factory: bool = True
     function_factory_hook: Callable[[SessionContext], None] | None = None
     enable_metrics: bool = False
     metrics_collector: Callable[[], Mapping[str, object] | None] | None = None
@@ -528,6 +590,7 @@ class DataFusionRuntimeProfile:
     diagnostics_sink: DiagnosticsCollector | None = None
     labeled_fallbacks: list[dict[str, object]] = field(default_factory=list)
     labeled_explains: list[dict[str, object]] = field(default_factory=list)
+    plan_cache: PlanCache | None = field(default_factory=PlanCache)
     local_filesystem_root: str | None = None
     config_policy_name: str | None = "default"
     config_policy: DataFusionConfigPolicy | None = None
@@ -686,11 +749,8 @@ class DataFusionRuntimeProfile:
             else:
                 self.function_factory_hook(ctx)
         except (ImportError, RuntimeError, TypeError) as exc:
-            logger.warning(
-                "FunctionFactory unavailable; falling back to DataFusion UDFs: %s",
-                exc,
-            )
-            register_datafusion_udfs(ctx)
+            msg = "FunctionFactory installation failed; native extension is required."
+            raise RuntimeError(msg) from exc
 
     def _install_tracing(self) -> None:
         """Enable tracing when configured.
@@ -1051,8 +1111,10 @@ __all__ = [
     "DataFusionRuntimeProfile",
     "DataFusionSettingsContract",
     "ExecutionLabel",
+    "FeatureStateSnapshot",
     "MemoryPool",
     "apply_execution_label",
     "apply_execution_policy",
+    "feature_state_snapshot",
     "snapshot_plans",
 ]

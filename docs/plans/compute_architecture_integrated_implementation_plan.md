@@ -81,9 +81,14 @@ Target files:
 
 Implementation checklist:
 - [x] Define determinism tiers and make them a first-class policy input.
-- [ ] Default all materialization paths to streaming unless policy requires a table.
+- [x] Default all materialization paths to streaming unless policy requires a table.
 - [x] Attach determinism tier to ordering metadata and write options.
-- [ ] Add tests that validate Tier 1 vs Tier 2 ordering behavior.
+- [x] Add tests that validate Tier 1 vs Tier 2 ordering behavior.
+
+Notes:
+- Streaming defaults now flow through `AdapterRunOptions`, Parquet/IPC writers,
+  and projection-only dataset writes. Finalize paths and quality helpers still
+  materialize tables as part of contract enforcement.
 
 #### Scope 0.1: EngineSession substrate
 Goal: unify execution context, runtime profile, DataFusion runtime, Ibis backend,
@@ -129,9 +134,13 @@ Target files:
 
 Implementation checklist:
 - [x] Define `EngineSession` with runtime profile and policy fields.
-- [ ] Replace ad-hoc backend or registry creation with session usage.
-- [ ] Thread the session through relspec and CPG entrypoints.
-- [ ] Add a smoke test that constructs a session and runs a trivial plan.
+- [x] Replace ad-hoc backend or registry creation with session usage.
+- [x] Thread the session through relspec and CPG entrypoints.
+- [x] Add a smoke test that constructs a session and runs a trivial plan.
+
+Notes:
+- CPG build entrypoints and pipeline wiring now accept `EngineSession`; other
+  subsystems still create ad-hoc backends and registries.
 
 #### Scope 0.2: DataFusion settings contract and feature gates
 Goal: treat runtime settings as a contract, apply them consistently, and record
@@ -197,7 +206,7 @@ Target files:
 Implementation checklist:
 - [x] Extend `DataFusionConfigPolicy` to expose a stable settings snapshot and hash.
 - [x] Apply settings and feature gates in `DataFusionRuntimeProfile.session_config`.
-- [ ] Set Arrow thread pools from the runtime profile.
+- [x] Set Arrow thread pools from the runtime profile.
 - [x] Record settings, hashes, and gate state in `obs/manifest.py`.
 
 #### Scope 0.3: Diagnostics sink baseline
@@ -228,7 +237,7 @@ Target files:
 Implementation checklist:
 - [x] Define a minimal collector interface with table and artifact hooks.
 - [x] Hook DataFusion explain and fallback collectors into the sink.
-- [ ] Route rule execution events through the same sink.
+- [x] Route rule execution events through the same sink.
 - [x] Persist diagnostics tables into the run bundle.
 
 #### Scope 0.4: Runtime profile presets and builder
@@ -280,9 +289,9 @@ Target files:
 
 Implementation checklist:
 - [x] Define `dev_debug`, `prod_fast`, and `memory_tight` presets.
-- [ ] Ensure spill runtime is configured for non-debug profiles.
+- [x] Ensure spill runtime is configured for non-debug profiles.
 - [x] Record profile name and settings hash in manifests and run bundles.
-- [ ] Expose profile selection through the graph product entrypoint.
+- [x] Expose profile selection through the graph product entrypoint.
 
 #### Scope 0.5: Failure-mode playbooks and feature state capture
 Goal: provide explicit, tested fallback paths and record feature gate state in
@@ -315,9 +324,13 @@ Target files:
 
 Implementation checklist:
 - [x] Implement explicit toggles for dynamic filter pushdown features.
-- [ ] Record feature state snapshots in diagnostics tables.
-- [ ] Add run-time overrides to force Tier 2 ordering when requested.
-- [ ] Add regression tests that exercise the fallback paths.
+- [x] Record feature state snapshots in diagnostics tables.
+- [x] Add run-time overrides to force Tier 2 ordering when requested.
+- [x] Add regression tests that exercise the fallback paths.
+
+Notes:
+- Determinism overrides are now exposed via the graph product entrypoint and
+  the compatibility CLI.
 
 ### Phase 1 - Streaming materialization and writer backends
 
@@ -358,7 +371,12 @@ Implementation checklist:
 - [x] Introduce `PlanProduct` and wire it into compiler outputs.
 - [x] Add a path that returns `IbisPlan.to_reader` when streaming is requested.
 - [x] Preserve ordering metadata on `RecordBatchReader` and tables.
-- [ ] Update materializers to accept `PlanProduct`.
+- [x] Update materializers to accept `PlanProduct`.
+
+Notes:
+- `PlanProduct` is accepted by Parquet dataset writes, single-file Parquet writes,
+  and IPC writers; plan/table-only call sites are now limited to contract-heavy
+  materializers that require full tables.
 
 #### Scope 1.2: Streaming surface policy (DataFusion + Ibis)
 Goal: make streaming the default execution surface for both DataFusion and Ibis,
@@ -381,8 +399,8 @@ Target files:
 Implementation checklist:
 - [x] Default DataFusion materialization to `RecordBatchReader.from_stream`.
 - [x] Default Ibis materialization to `to_pyarrow_batches`.
-- [ ] Document and enforce the `requested_schema` projection-only restriction.
-- [ ] Add tests that stream from both DataFusion and Ibis into dataset writes.
+- [x] Document and enforce the `requested_schema` projection-only restriction.
+- [x] Add tests that stream from both DataFusion and Ibis into dataset writes.
 
 #### Scope 1.3: Writer backend selection and determinism integration
 Goal: select DataFusion or PyArrow writers per dataset, and align writer options
@@ -424,8 +442,12 @@ Target files:
 Implementation checklist:
 - [x] Add a writer strategy switch (DataFusion native vs PyArrow dataset writer).
 - [x] Use `sort_by` for Tier 2 determinism in DataFusion writers.
-- [ ] Capture `file_visitor` metadata for PyArrow writes.
+- [x] Capture `file_visitor` metadata for PyArrow writes.
 - [x] Record writer strategy and options in the run manifest.
+
+Notes:
+- File visitor capture now spans normalized inputs and param table dataset writes,
+  and file lists are surfaced in materialization reports for core Parquet outputs.
 
 #### Scope 1.4: Ordering policy and Acero scan knobs
 Goal: avoid global sorts when implicit ordering is sufficient and encode ordering in scan
@@ -452,7 +474,7 @@ Implementation checklist:
 - [x] Promote `implicit_ordering` into scan policy defaults for Tier 1.
 - [x] Propagate ordering metadata through plan execution and IO.
 - [x] Add a determinism tier decision that chooses sort vs implicit ordering.
-- [ ] Validate ordering in a small end-to-end scan pipeline test.
+- [x] Validate ordering in a small end-to-end scan pipeline test.
 
 #### Scope 1.5: Partitioned streaming and parallel writers
 Goal: support partitioned streaming outputs for large outputs while preserving
@@ -470,9 +492,9 @@ Target files:
 - (update) `src/ibis_engine/io_bridge.py`
 
 Implementation checklist:
-- [ ] Add an optional partitioned streaming path for large outputs.
-- [ ] Restrict partitioned streaming to Tier 0 determinism by default.
-- [ ] Add row-count and schema validation after parallel writes.
+- [x] Add an optional partitioned streaming path for large outputs.
+- [x] Restrict partitioned streaming to Tier 0 determinism by default.
+- [x] Add row-count and schema validation after parallel writes.
 
 ### Phase 2 - Ibis-first CPG nodes, props, edges
 
@@ -500,7 +522,7 @@ def emit_nodes_ibis(rel: IbisPlan | Table, *, spec: NodeEmitSpec) -> IbisPlan:
 
 Target files:
 - (new) `src/relspec/cpg/emit_nodes_ibis.py`
-- (update) `src/cpg/build_nodes.py`
+- (update) `src/relspec/cpg/build_nodes.py`
 - (update) `src/cpg/specs.py`
 
 Implementation checklist:
@@ -535,14 +557,14 @@ def emit_props_json(rel: IbisPlan, *, spec: PropEmitSpec) -> IbisPlan:
 
 Target files:
 - (new) `src/relspec/cpg/emit_props_ibis.py`
-- (update) `src/cpg/build_props.py`
+- (update) `src/relspec/cpg/build_props.py`
 - (update) `src/cpg/specs.py`
 - (update) `src/hamilton_pipeline/modules/outputs.py`
 
 Implementation checklist:
 - [x] Add fast lane props emission with no JSON serialization.
-- [ ] Add optional JSON props dataset and make it opt-in.
-- [ ] Update output assembly to union or view fast plus JSON on demand.
+- [x] Add optional JSON props dataset and make it opt-in.
+- [x] Update output assembly to union or view fast plus JSON on demand.
 - [x] Ensure the manifest reports the optional JSON dataset separately.
 
 #### Scope 2.3: Ibis edges as the default execution lane
@@ -557,7 +579,7 @@ return emit_edges_plan_lane(...)
 ```
 
 Target files:
-- (update) `src/cpg/build_edges.py`
+- (update) `src/relspec/cpg/build_edges.py`
 - (update) `src/cpg/emit_edges_ibis.py`
 - (update) `src/relspec/compiler.py`
 
@@ -587,9 +609,9 @@ Target files:
 
 Implementation checklist:
 - [x] Tie `ibis.options.sql.fuse_selects` to runtime profiles.
-- [ ] Add a SQLGlot AST execution path via `raw_sql`.
-- [ ] Use AST execution for policy-controlled compilation outputs.
-- [ ] Add a fallback path for AST incompatibilities.
+- [x] Add a SQLGlot AST execution path via `raw_sql`.
+- [x] Use AST execution for policy-controlled compilation outputs.
+- [x] Add a fallback path for AST incompatibilities.
 
 ### Phase 3 - Primitive acceleration and UDF ladder
 
@@ -629,10 +651,10 @@ Target files:
 - (update) `src/arrowdsl/core/ids.py`
 
 Implementation checklist:
-- [ ] Promote builtin UDFs as the default path for core primitives.
-- [ ] Implement pyarrow vectorized fallbacks for stable hash and col_to_byte.
-- [ ] Keep scalar Python fallbacks as last resort only.
-- [ ] Add conformance tests that compare builtin and fallback outputs.
+- [x] Promote builtin UDFs as the default path for core primitives.
+- [x] Implement pyarrow vectorized fallbacks for stable hash and col_to_byte.
+- [x] Keep scalar Python fallbacks as last resort only.
+- [x] Add conformance tests that compare builtin and fallback outputs.
 
 #### Scope 3.2: DataFusion FunctionFactory extension (Rust-backed)
 Goal: implement core primitives in a native extension and register them with named
@@ -661,10 +683,10 @@ Target files:
 - (update) `rust/datafusion_ext/Cargo.toml`
 
 Implementation checklist:
-- [ ] Implement stable_hash64, stable_hash128, col_to_byte, position_encoding_norm.
-- [ ] Expose parameter names for named arguments (DataFusion 51).
-- [ ] Register primitives via FunctionFactory policy JSON.
-- [ ] Replace default Python UDF registration with the native extension.
+- [x] Implement stable_hash64, stable_hash128, col_to_byte, position_encoding_norm.
+- [x] Expose parameter names for named arguments (DataFusion 51).
+- [x] Register primitives via FunctionFactory policy JSON.
+- [x] Replace default Python UDF registration with the native extension.
 
 #### Scope 3.3: Arrow kernel fallback for list explode
 Goal: provide a non-Python fallback for explode operations using Arrow kernels.
@@ -681,12 +703,12 @@ parents = pc.take(parent_ids, parent_idx)
 Target files:
 - (update) `src/arrowdsl/compute/filters.py`
 - (update) `src/arrowdsl/compute/explode.py`
-- (update) `src/cpg/build_edges.py`
+- (update) `src/relspec/cpg/build_edges.py`
 
 Implementation checklist:
-- [ ] Add a kernel-only explode helper using list_parent_indices and list_flatten.
-- [ ] Replace Python loops in explode-related code paths.
-- [ ] Add tests that validate ordering and parent alignment.
+- [x] Add a kernel-only explode helper using list_parent_indices and list_flatten.
+- [x] Replace Python loops in explode-related code paths.
+- [x] Add tests that validate ordering and parent alignment.
 
 ### Phase 4 - Compiler analysis and plan identity
 
@@ -718,10 +740,10 @@ Target files:
 - (update) `src/obs/manifest.py`
 
 Implementation checklist:
-- [ ] Add a compiler checkpoint that returns SQLGlot AST and plan hash.
-- [ ] Require qualification and identifier normalization in the pipeline.
-- [ ] Gate CNF/DNF normalization with `normalization_distance`.
-- [ ] Record plan hash in rule diagnostics and run manifests.
+- [x] Add a compiler checkpoint that returns SQLGlot AST and plan hash.
+- [x] Require qualification and identifier normalization in the pipeline.
+- [x] Gate CNF/DNF normalization with `normalization_distance`.
+- [x] Record plan hash in rule diagnostics and run manifests.
 
 #### Scope 4.2: Column lineage extraction and projection pushdown
 Goal: use SQLGlot lineage to minimize input columns and improve performance.
@@ -740,9 +762,9 @@ Target files:
 - (update) `src/arrowdsl/plan/query.py`
 
 Implementation checklist:
-- [ ] Extract lineage graphs per rule output.
-- [ ] Push required columns into scan or select nodes.
-- [ ] Persist required column sets in diagnostics tables.
+- [x] Extract lineage graphs per rule output.
+- [x] Push required columns into scan or select nodes.
+- [x] Persist required column sets in diagnostics tables.
 
 #### Scope 4.3: Semantic diff for incremental invalidation
 Goal: use semantic SQL diffs to decide whether to invalidate caches.
@@ -762,9 +784,9 @@ Target files:
 - (update) `src/relspec/engine.py`
 
 Implementation checklist:
-- [ ] Compute semantic diffs for rule plan revisions.
-- [ ] Tie invalidation to semantic changes instead of source edits alone.
-- [ ] Emit diff artifacts into run bundles.
+- [x] Compute semantic diffs for rule plan revisions.
+- [x] Tie invalidation to semantic changes instead of source edits alone.
+- [x] Emit diff artifacts into run bundles.
 
 #### Scope 4.4: Schema contract validation via Ibis Schema and SQLGlot
 Goal: validate compiled outputs against explicit schema contracts.
@@ -787,9 +809,13 @@ Target files:
 - (update) `src/relspec/compiler.py`
 
 Implementation checklist:
-- [ ] Generate expected schema from contracts.
-- [ ] Validate compiled schema before execution.
-- [ ] Persist expected schema AST in repro bundles.
+- [x] Generate expected schema from contracts.
+- [x] Validate compiled schema before execution.
+- [x] Persist expected schema AST in repro bundles.
+
+Notes:
+- Run bundles persist both contract DDL (`contracts_ddl.json`) and SQLGlot
+  column-def ASTs (`contracts_ast.json`).
 
 ### Phase 5 - Rule unification and product entrypoints
 
@@ -803,27 +829,20 @@ class NodeEmitRuleHandler(RuleHandler):
         return emit_nodes_ibis(spec.source, spec=spec)
 
 
-def build_cpg_nodes(**kwargs):
-    warnings.warn(
-        "cpg.build_nodes.build_cpg_nodes is deprecated; use relspec.cpg.build_nodes",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return relspec.cpg.build_nodes.build_cpg_nodes(**kwargs)
+from relspec.cpg.build_nodes import build_cpg_nodes
 ```
 
 Target files:
 - (new) `src/relspec/cpg/build_nodes.py`
 - (new) `src/relspec/cpg/build_edges.py`
 - (new) `src/relspec/cpg/build_props.py`
-- (update) `src/cpg/build_nodes.py`
-- (update) `src/cpg/build_edges.py`
-- (update) `src/cpg/build_props.py`
+- (delete) `src/cpg/build_nodes.py`
+- (delete) `src/cpg/build_edges.py`
+- (delete) `src/cpg/build_props.py`
 
 Implementation checklist:
-- [ ] Add relspec rule handlers for nodes, props, and edges.
-- [ ] Convert `cpg/build_*` into compatibility wrappers with warnings.
-- [ ] Update Hamilton modules to import from `relspec.cpg`.
+- [x] Add relspec rule handlers for nodes, props, and edges.
+- [x] Remove `cpg/build_*` legacy modules and migrate imports to `relspec.cpg`.
 
 #### Scope 5.2: Graph product build entrypoint
 Goal: provide a single entrypoint for building graph products with typed outputs,
@@ -838,9 +857,8 @@ result = build_graph_product(
     GraphProductBuildRequest(
         repo_root=repo_root,
         output_dir=output_dir,
-        runtime_profile="prod_fast",
-        determinism_tier=DeterminismTier.CANONICAL,
-        writer_strategy="datafusion",
+        runtime_profile_name="prod_fast",
+        determinism_override=DeterminismTier.CANONICAL,
     )
 )
 ```
@@ -851,10 +869,15 @@ Target files:
 - (update) `scripts/run_full_pipeline.py`
 
 Implementation checklist:
-- [ ] Add a typed request and response API for graph product builds.
-- [ ] Accept runtime profile and determinism tier in the request.
-- [ ] Choose pipeline outputs automatically based on flags.
-- [ ] Update CLI entrypoints to call the new API.
+- [x] Add a typed request and response API for graph product builds.
+- [x] Accept runtime profile and determinism tier in the request.
+- [x] Choose pipeline outputs automatically based on flags.
+- [x] Update CLI entrypoints to call the new API.
+- [x] Expose writer strategy selection in the request.
+
+Notes:
+- The graph product entrypoint now returns `product_version`, `engine_versions`,
+  and `run_id` for stable build identity.
 
 #### Scope 5.3: Observability tables and metrics capture
 Goal: capture plan metrics, fallbacks, feature state, and rule execution artifacts
@@ -878,10 +901,10 @@ Target files:
 - (update) `src/datafusion_engine/runtime.py`
 
 Implementation checklist:
-- [ ] Capture EXPLAIN ANALYZE metrics at a configurable verbosity level.
-- [ ] Persist fallback events and explain summaries for every ruleset run.
-- [ ] Add a stable diagnostics schema version and record it in the manifest.
-- [ ] Store feature state snapshots alongside diagnostics outputs.
+- [x] Capture EXPLAIN ANALYZE metrics at a configurable verbosity level.
+- [x] Persist fallback events and explain summaries for every ruleset run.
+- [x] Add a stable diagnostics schema version and record it in the manifest.
+- [x] Store feature state snapshots alongside diagnostics outputs.
 
 ### Phase 6 - Caching and replay
 
@@ -903,9 +926,9 @@ Target files:
 - (new) `src/engine/plan_cache.py`
 
 Implementation checklist:
-- [ ] Store Substrait bytes alongside plan hashes and profile hashes.
-- [ ] Add a replay path that bypasses Ibis or SQL compilation.
-- [ ] Fall back to normal compilation when Substrait is unavailable.
+- [x] Store Substrait bytes alongside plan hashes and profile hashes.
+- [x] Add a replay path that bypasses Ibis or SQL compilation.
+- [x] Fall back to normal compilation when Substrait is unavailable.
 
 #### Scope 6.2: Dataset fingerprints and plan identity in manifests
 Goal: tie output datasets to plan hashes, runtime profile hashes, writer strategy,
@@ -926,6 +949,6 @@ Target files:
 - (update) `src/relspec/engine.py`
 
 Implementation checklist:
-- [ ] Extend manifest records to include plan hash, profile hash, and writer strategy.
-- [ ] Use fingerprints to skip materialization when unchanged.
-- [ ] Emit fingerprint changes into incremental impact reports.
+- [x] Extend manifest records to include plan hash, profile hash, and writer strategy.
+- [x] Use fingerprints to skip materialization when unchanged.
+- [x] Emit fingerprint changes into incremental impact reports.

@@ -154,11 +154,44 @@ def _policy_payload(policy: FunctionFactoryPolicy) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
-def _load_extension() -> object | None:
+def _load_extension() -> object:
+    """Import the native DataFusion extension module.
+
+    Returns
+    -------
+    object
+        Imported datafusion_ext module.
+
+    Raises
+    ------
+    ImportError
+        Raised when the extension module cannot be imported.
+    ModuleNotFoundError
+        Raised when a nested dependency import fails.
+    """
     try:
         return importlib.import_module("datafusion_ext")
-    except ImportError:
-        return None
+    except ModuleNotFoundError as exc:
+        if exc.name != "datafusion_ext":
+            raise
+        msg = "datafusion_ext is required for native FunctionFactory installation."
+        raise ImportError(msg) from exc
+
+
+def _install_native_function_factory(ctx: SessionContext, *, payload: str) -> None:
+    """Install the native FunctionFactory into the session.
+
+    Raises
+    ------
+    TypeError
+        Raised when the extension does not expose an install hook.
+    """
+    module = _load_extension()
+    install = getattr(module, "install_function_factory", None)
+    if not callable(install):
+        msg = "datafusion_ext.install_function_factory is unavailable."
+        raise TypeError(msg)
+    install(ctx, payload)
 
 
 def install_function_factory(
@@ -175,29 +208,9 @@ def install_function_factory(
     policy:
         Optional policy for primitive registration.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the extension is unavailable or refuses registration.
-    TypeError
-        Raised when the extension installer is missing or not callable.
     """
-    _ = ctx
-    module = _load_extension()
-    if module is None:
-        msg = "FunctionFactory extension is unavailable."
-        raise RuntimeError(msg)
-    installer = getattr(module, "install_function_factory", None)
-    if not callable(installer):
-        msg = "FunctionFactory installer is unavailable in the extension module."
-        raise TypeError(msg)
-    installed = installer()
-    if not installed:
-        msg = "FunctionFactory extension refused to install."
-        raise RuntimeError(msg)
-    registrar = getattr(module, "register_rule_primitives_json", None)
-    if callable(registrar):
-        registrar(_policy_payload(policy or default_function_factory_policy()))
+    payload = _policy_payload(policy or default_function_factory_policy())
+    _install_native_function_factory(ctx, payload=payload)
 
 
 def function_factory_payloads(

@@ -58,9 +58,8 @@ def apply_query_spec(
         Ibis table with filters and projections applied.
     """
     registry = registry or default_expr_registry()
-    cols: list[Value] = [table[name] for name in spec.projection.base if name in table.columns]
-    for name, expr in spec.projection.derived.items():
-        cols.append(expr_ir_to_ibis(expr, table, registry=registry).name(name))
+    table = _apply_derived(table, spec.projection.derived, registry=registry)
+    cols = _projection_columns(table, spec.projection.base, spec.projection.derived)
     if cols:
         table = table.select(cols)
     if spec.pushdown_predicate is not None:
@@ -88,9 +87,30 @@ def apply_projection(
     """
     derived = derived or {}
     registry = registry or default_expr_registry()
-    cols: list[Value] = [table[name] for name in base if name in table.columns]
-    for name, expr in derived.items():
-        cols.append(expr_ir_to_ibis(expr, table, registry=registry).name(name))
+    table = _apply_derived(table, derived, registry=registry)
+    cols = _projection_columns(table, base, derived)
     if not cols:
         return table
     return table.select(cols)
+
+
+def _apply_derived(
+    table: Table,
+    derived: Mapping[str, ExprIRLike],
+    *,
+    registry: IbisExprRegistry,
+) -> Table:
+    out = table
+    for name, expr in derived.items():
+        out = out.mutate(**{name: expr_ir_to_ibis(expr, out, registry=registry)})
+    return out
+
+
+def _projection_columns(
+    table: Table,
+    base: Sequence[str],
+    derived: Mapping[str, ExprIRLike],
+) -> list[Value]:
+    cols: list[Value] = [table[name] for name in base if name in table.columns]
+    cols.extend(table[name] for name in derived if name in table.columns)
+    return cols

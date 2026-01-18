@@ -8,7 +8,6 @@ from typing import Protocol, cast
 
 import ibis
 
-from datafusion_engine.kernels import register_datafusion_udfs
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.config import IbisBackendConfig
 
@@ -57,5 +56,4 @@ def build_backend(cfg: IbisBackendConfig) -> ibis.backends.BaseBackend:
     if profile.default_catalog != "datafusion":
         profile = replace(profile, default_catalog="datafusion")
     ctx = profile.session_context()
-    register_datafusion_udfs(ctx)
     return ibis_datafusion.connect(ctx)

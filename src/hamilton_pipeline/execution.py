@@ -11,7 +11,6 @@ from hamilton import driver as hamilton_driver
 from hamilton.graph_types import HamiltonNode
 
 from arrowdsl.core.context import ExecutionContext
-from config import AdapterMode
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from hamilton_pipeline.driver_factory import build_driver
 from hamilton_pipeline.pipeline_types import ScipIdentityOverrides, ScipIndexConfig
@@ -43,7 +42,6 @@ class PipelineExecutionOptions:
     work_dir: PathLike | None = None
     scip_index_config: ScipIndexConfig | None = None
     scip_identity_overrides: ScipIdentityOverrides | None = None
-    adapter_mode: AdapterMode | None = None
     ctx: ExecutionContext | None = None
     incremental_config: IncrementalConfig | None = None
     incremental_impact_strategy: str | None = None
@@ -117,8 +115,6 @@ def _build_execute_overrides(
         execute_overrides["scip_index_config"] = options.scip_index_config
     if options.scip_identity_overrides is not None:
         execute_overrides["scip_identity_overrides"] = options.scip_identity_overrides
-    if options.adapter_mode is not None:
-        execute_overrides["adapter_mode"] = options.adapter_mode
     if options.ctx is not None:
         execute_overrides["ctx"] = options.ctx
     _apply_incremental_overrides(

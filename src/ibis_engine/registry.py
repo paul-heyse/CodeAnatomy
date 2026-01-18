@@ -53,6 +53,7 @@ class DatasetLocation:
     partitioning: str | None = "hive"
     read_options: Mapping[str, object] = field(default_factory=dict)
     filesystem: object | None = None
+    files: tuple[str, ...] | None = None
     table_spec: TableSchemaSpec | None = None
     dataset_spec: DatasetSpec | None = None
     datafusion_scan: DataFusionScanOptions | None = None

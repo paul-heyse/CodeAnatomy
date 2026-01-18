@@ -48,6 +48,8 @@
     - `uv run pyrefly check` (additional type and contract validation).
     - `uv run pyright --warnings --pythonversion=3.13` (strict type checking with warnings).
 
+4) For all python code run via the terminal you must use "uv run". Failing to use "uv run" when running python commands will result in error messages about missing module imports due to failure to properly utilize the uv based environment
+
 
 
 4) **Git protocol**

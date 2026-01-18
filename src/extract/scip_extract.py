@@ -12,6 +12,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Literal, overload
 
+import ibis
 import pyarrow as pa
 
 from arrowdsl.compute.macros import normalize_string_items
@@ -24,28 +25,28 @@ from arrowdsl.core.interop import (
     SchemaLike,
     TableLike,
 )
-from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.query import QuerySpec
-from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
 from arrowdsl.schema.build import struct_array_from_dicts, table_from_arrays
 from arrowdsl.schema.nested_builders import LargeListAccumulator
-from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table, unify_tables
-from extract.plan_helpers import apply_evidence_projection, plan_from_rows
+from arrowdsl.schema.schema import empty_table, unify_tables
+from extract.helpers import (
+    ExtractMaterializeOptions,
+    apply_query_and_project,
+    ibis_plan_from_rows,
+    materialize_extract_plan,
+)
 from extract.registry_fields import (
     SCIP_SIGNATURE_DOCUMENTATION_TYPE,
 )
 from extract.registry_specs import (
-    dataset_query,
     dataset_row_schema,
     dataset_schema,
-    dataset_schema_policy,
     normalize_options,
     postprocess_table,
 )
-from extract.schema_ops import metadata_spec_for_dataset, normalize_plan_with_policy
+from extract.schema_ops import ExtractNormalizeOptions
+from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
-    from arrowdsl.schema.policy import SchemaPolicy
     from extract.evidence_plan import EvidencePlan
 from extract.scip_parse_json import parse_index_json
 from extract.scip_proto_loader import load_scip_pb2_from_build
@@ -150,14 +151,6 @@ def _signature_doc_entry(sig_doc: object | None) -> dict[str, object] | None:
     }
 
 
-SCIP_METADATA_QUERY = dataset_query("scip_metadata_v1")
-SCIP_DOCUMENTS_QUERY = dataset_query("scip_documents_v1")
-SCIP_OCCURRENCES_QUERY = dataset_query("scip_occurrences_v1")
-SCIP_SYMBOL_INFO_QUERY = dataset_query("scip_symbol_info_v1")
-SCIP_SYMBOL_RELATIONSHIPS_QUERY = dataset_query("scip_symbol_relationships_v1")
-SCIP_EXTERNAL_SYMBOL_INFO_QUERY = dataset_query("scip_external_symbol_info_v1")
-SCIP_DIAGNOSTICS_QUERY = dataset_query("scip_diagnostics_v1")
-
 SCIP_METADATA_SCHEMA = dataset_schema("scip_metadata_v1")
 SCIP_DOCUMENTS_SCHEMA = dataset_schema("scip_documents_v1")
 SCIP_OCCURRENCES_SCHEMA = dataset_schema("scip_occurrences_v1")
@@ -167,26 +160,6 @@ SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA = dataset_schema("scip_external_symbol_info_v1"
 SCIP_DIAGNOSTICS_SCHEMA = dataset_schema("scip_diagnostics_v1")
 
 SCIP_METADATA_ROW_SCHEMA = dataset_row_schema("scip_metadata_v1")
-
-
-def _scip_metadata_specs(
-    parse_opts: SCIPParseOptions,
-) -> dict[str, SchemaMetadataSpec]:
-    return {
-        "scip_metadata": metadata_spec_for_dataset("scip_metadata_v1", options=parse_opts),
-        "scip_documents": metadata_spec_for_dataset("scip_documents_v1", options=parse_opts),
-        "scip_occurrences": metadata_spec_for_dataset("scip_occurrences_v1", options=parse_opts),
-        "scip_symbol_information": metadata_spec_for_dataset(
-            "scip_symbol_info_v1", options=parse_opts
-        ),
-        "scip_symbol_relationships": metadata_spec_for_dataset(
-            "scip_symbol_relationships_v1", options=parse_opts
-        ),
-        "scip_external_symbol_information": metadata_spec_for_dataset(
-            "scip_external_symbol_info_v1", options=parse_opts
-        ),
-        "scip_diagnostics": metadata_spec_for_dataset("scip_diagnostics_v1", options=parse_opts),
-    }
 
 
 def _scip_index_command(
@@ -875,172 +848,16 @@ def _symbol_tables(index: object) -> tuple[TableLike, TableLike, TableLike]:
     )
 
 
-@dataclass(frozen=True)
-class _ScipFinalizeSpec:
-    dataset_name: str
-    policy: SchemaPolicy
-    query: QuerySpec
-
-
-def _finalize_plan(
-    plan: Plan,
-    *,
-    spec: _ScipFinalizeSpec,
-    exec_ctx: ExecutionContext,
-    evidence_plan: EvidencePlan | None = None,
-) -> Plan:
-    plan = spec.query.apply_to_plan(plan, ctx=exec_ctx)
-    plan = apply_evidence_projection(
-        spec.dataset_name,
-        plan,
-        ctx=exec_ctx,
-        evidence_plan=evidence_plan,
-    )
-    return normalize_plan_with_policy(plan, policy=spec.policy, ctx=exec_ctx)
-
-
-def _finalize_table(
-    table: TableLike,
-    *,
-    spec: _ScipFinalizeSpec,
-    exec_ctx: ExecutionContext,
-    evidence_plan: EvidencePlan | None = None,
-) -> TableLike:
-    plan = _finalize_plan(
-        Plan.table_source(table),
-        spec=spec,
-        exec_ctx=exec_ctx,
-        evidence_plan=evidence_plan,
-    )
-    return materialize_plan(plan, ctx=exec_ctx)
-
-
-def _extract_tables_from_index(
-    index: object,
-    *,
-    parse_opts: SCIPParseOptions,
-    exec_ctx: ExecutionContext,
-    evidence_plan: EvidencePlan | None = None,
-) -> SCIPExtractResult:
-    plans = _extract_plan_bundle_from_index(
-        index,
-        parse_opts=parse_opts,
-        exec_ctx=exec_ctx,
-        evidence_plan=evidence_plan,
-    )
-    metadata_specs = _scip_metadata_specs(parse_opts)
-    return SCIPExtractResult(
-        scip_metadata=materialize_plan(
-            plans["scip_metadata"],
-            ctx=exec_ctx,
-            metadata_spec=metadata_specs["scip_metadata"],
-            attach_ordering_metadata=True,
-        ),
-        scip_documents=materialize_plan(
-            plans["scip_documents"],
-            ctx=exec_ctx,
-            metadata_spec=metadata_specs["scip_documents"],
-            attach_ordering_metadata=True,
-        ),
-        scip_occurrences=materialize_plan(
-            plans["scip_occurrences"],
-            ctx=exec_ctx,
-            metadata_spec=metadata_specs["scip_occurrences"],
-            attach_ordering_metadata=True,
-        ),
-        scip_symbol_information=materialize_plan(
-            plans["scip_symbol_information"],
-            ctx=exec_ctx,
-            metadata_spec=metadata_specs["scip_symbol_information"],
-            attach_ordering_metadata=True,
-        ),
-        scip_symbol_relationships=materialize_plan(
-            plans["scip_symbol_relationships"],
-            ctx=exec_ctx,
-            metadata_spec=metadata_specs["scip_symbol_relationships"],
-            attach_ordering_metadata=True,
-        ),
-        scip_external_symbol_information=materialize_plan(
-            plans["scip_external_symbol_information"],
-            ctx=exec_ctx,
-            metadata_spec=metadata_specs["scip_external_symbol_information"],
-            attach_ordering_metadata=True,
-        ),
-        scip_diagnostics=materialize_plan(
-            plans["scip_diagnostics"],
-            ctx=exec_ctx,
-            metadata_spec=metadata_specs["scip_diagnostics"],
-            attach_ordering_metadata=True,
-        ),
-    )
-
-
-def _scip_policies(
-    parse_opts: SCIPParseOptions,
-    exec_ctx: ExecutionContext,
-) -> dict[str, SchemaPolicy]:
-    encode = parse_opts.dictionary_encode_strings
-    return {
-        "scip_metadata_v1": dataset_schema_policy(
-            "scip_metadata_v1",
-            ctx=exec_ctx,
-            options=parse_opts,
-            enable_encoding=encode,
-        ),
-        "scip_documents_v1": dataset_schema_policy(
-            "scip_documents_v1",
-            ctx=exec_ctx,
-            options=parse_opts,
-            enable_encoding=encode,
-        ),
-        "scip_occurrences_v1": dataset_schema_policy(
-            "scip_occurrences_v1",
-            ctx=exec_ctx,
-            options=parse_opts,
-            enable_encoding=encode,
-        ),
-        "scip_symbol_info_v1": dataset_schema_policy(
-            "scip_symbol_info_v1",
-            ctx=exec_ctx,
-            options=parse_opts,
-            enable_encoding=encode,
-        ),
-        "scip_symbol_relationships_v1": dataset_schema_policy(
-            "scip_symbol_relationships_v1",
-            ctx=exec_ctx,
-            options=parse_opts,
-            enable_encoding=encode,
-        ),
-        "scip_external_symbol_info_v1": dataset_schema_policy(
-            "scip_external_symbol_info_v1",
-            ctx=exec_ctx,
-            options=parse_opts,
-            enable_encoding=encode,
-        ),
-        "scip_diagnostics_v1": dataset_schema_policy(
-            "scip_diagnostics_v1",
-            ctx=exec_ctx,
-            options=parse_opts,
-            enable_encoding=encode,
-        ),
-    }
-
-
 def _extract_plan_bundle_from_index(
     index: object,
     *,
     parse_opts: SCIPParseOptions,
-    exec_ctx: ExecutionContext,
     evidence_plan: EvidencePlan | None = None,
-) -> dict[str, Plan]:
+) -> dict[str, IbisPlan]:
+    normalize = ExtractNormalizeOptions(options=parse_opts)
     meta_rows = _metadata_rows(index, parse_opts=parse_opts)
     t_docs, t_occs, t_diags = _document_tables(index)
 
-    t_meta_plan = plan_from_rows(
-        meta_rows,
-        schema=SCIP_METADATA_ROW_SCHEMA,
-        label="scip_metadata",
-    )
     t_syms, t_rels, t_ext = _symbol_tables(index)
 
     t_docs = postprocess_table("scip_documents_v1", t_docs)
@@ -1049,57 +866,59 @@ def _extract_plan_bundle_from_index(
     t_syms = postprocess_table("scip_symbol_info_v1", t_syms)
     t_rels = postprocess_table("scip_symbol_relationships_v1", t_rels)
     t_ext = postprocess_table("scip_external_symbol_info_v1", t_ext)
-    policies = _scip_policies(parse_opts, exec_ctx=exec_ctx)
-
-    def _spec(name: str, query: QuerySpec) -> _ScipFinalizeSpec:
-        return _ScipFinalizeSpec(
-            dataset_name=name,
-            policy=policies[name],
-            query=query,
-        )
-
     return {
-        "scip_metadata": _finalize_plan(
-            t_meta_plan,
-            spec=_spec("scip_metadata_v1", SCIP_METADATA_QUERY),
-            exec_ctx=exec_ctx,
+        "scip_metadata": apply_query_and_project(
+            "scip_metadata_v1",
+            ibis_plan_from_rows(
+                "scip_metadata_v1",
+                meta_rows,
+                row_schema=SCIP_METADATA_ROW_SCHEMA,
+            ).expr,
+            normalize=normalize,
             evidence_plan=evidence_plan,
+            repo_id=normalize.repo_id,
         ),
-        "scip_documents": _finalize_plan(
-            Plan.table_source(t_docs),
-            spec=_spec("scip_documents_v1", SCIP_DOCUMENTS_QUERY),
-            exec_ctx=exec_ctx,
+        "scip_documents": apply_query_and_project(
+            "scip_documents_v1",
+            ibis.memtable(t_docs),
+            normalize=normalize,
             evidence_plan=evidence_plan,
+            repo_id=normalize.repo_id,
         ),
-        "scip_occurrences": _finalize_plan(
-            Plan.table_source(t_occs),
-            spec=_spec("scip_occurrences_v1", SCIP_OCCURRENCES_QUERY),
-            exec_ctx=exec_ctx,
+        "scip_occurrences": apply_query_and_project(
+            "scip_occurrences_v1",
+            ibis.memtable(t_occs),
+            normalize=normalize,
             evidence_plan=evidence_plan,
+            repo_id=normalize.repo_id,
         ),
-        "scip_symbol_information": _finalize_plan(
-            Plan.table_source(t_syms),
-            spec=_spec("scip_symbol_info_v1", SCIP_SYMBOL_INFO_QUERY),
-            exec_ctx=exec_ctx,
+        "scip_symbol_information": apply_query_and_project(
+            "scip_symbol_info_v1",
+            ibis.memtable(t_syms),
+            normalize=normalize,
             evidence_plan=evidence_plan,
+            repo_id=normalize.repo_id,
         ),
-        "scip_symbol_relationships": _finalize_plan(
-            Plan.table_source(t_rels),
-            spec=_spec("scip_symbol_relationships_v1", SCIP_SYMBOL_RELATIONSHIPS_QUERY),
-            exec_ctx=exec_ctx,
+        "scip_symbol_relationships": apply_query_and_project(
+            "scip_symbol_relationships_v1",
+            ibis.memtable(t_rels),
+            normalize=normalize,
             evidence_plan=evidence_plan,
+            repo_id=normalize.repo_id,
         ),
-        "scip_external_symbol_information": _finalize_plan(
-            Plan.table_source(t_ext),
-            spec=_spec("scip_external_symbol_info_v1", SCIP_EXTERNAL_SYMBOL_INFO_QUERY),
-            exec_ctx=exec_ctx,
+        "scip_external_symbol_information": apply_query_and_project(
+            "scip_external_symbol_info_v1",
+            ibis.memtable(t_ext),
+            normalize=normalize,
             evidence_plan=evidence_plan,
+            repo_id=normalize.repo_id,
         ),
-        "scip_diagnostics": _finalize_plan(
-            Plan.table_source(t_diags),
-            spec=_spec("scip_diagnostics_v1", SCIP_DIAGNOSTICS_QUERY),
-            exec_ctx=exec_ctx,
+        "scip_diagnostics": apply_query_and_project(
+            "scip_diagnostics_v1",
+            ibis.memtable(t_diags),
+            normalize=normalize,
             evidence_plan=evidence_plan,
+            repo_id=normalize.repo_id,
         ),
     }
 
@@ -1181,20 +1000,44 @@ def extract_scip_tables(
     exec_ctx = context.ensure_ctx()
     scip_index_path = context.scip_index_path
     repo_root = context.repo_root
-    metadata_specs = _scip_metadata_specs(normalized_opts)
+    normalize = ExtractNormalizeOptions(options=normalized_opts)
     if scip_index_path is None:
         plans = {
-            "scip_metadata": Plan.table_source(empty_table(SCIP_METADATA_SCHEMA)),
-            "scip_documents": Plan.table_source(empty_table(SCIP_DOCUMENTS_SCHEMA)),
-            "scip_occurrences": Plan.table_source(empty_table(SCIP_OCCURRENCES_SCHEMA)),
-            "scip_symbol_information": Plan.table_source(empty_table(SCIP_SYMBOL_INFO_SCHEMA)),
-            "scip_symbol_relationships": Plan.table_source(
-                empty_table(SCIP_SYMBOL_RELATIONSHIPS_SCHEMA)
+            "scip_metadata": ibis_plan_from_rows(
+                "scip_metadata_v1",
+                [],
+                row_schema=dataset_row_schema("scip_metadata_v1"),
             ),
-            "scip_external_symbol_information": Plan.table_source(
-                empty_table(SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA)
+            "scip_documents": ibis_plan_from_rows(
+                "scip_documents_v1",
+                [],
+                row_schema=dataset_row_schema("scip_documents_v1"),
             ),
-            "scip_diagnostics": Plan.table_source(empty_table(SCIP_DIAGNOSTICS_SCHEMA)),
+            "scip_occurrences": ibis_plan_from_rows(
+                "scip_occurrences_v1",
+                [],
+                row_schema=dataset_row_schema("scip_occurrences_v1"),
+            ),
+            "scip_symbol_information": ibis_plan_from_rows(
+                "scip_symbol_info_v1",
+                [],
+                row_schema=dataset_row_schema("scip_symbol_info_v1"),
+            ),
+            "scip_symbol_relationships": ibis_plan_from_rows(
+                "scip_symbol_relationships_v1",
+                [],
+                row_schema=dataset_row_schema("scip_symbol_relationships_v1"),
+            ),
+            "scip_external_symbol_information": ibis_plan_from_rows(
+                "scip_external_symbol_info_v1",
+                [],
+                row_schema=dataset_row_schema("scip_external_symbol_info_v1"),
+            ),
+            "scip_diagnostics": ibis_plan_from_rows(
+                "scip_diagnostics_v1",
+                [],
+                row_schema=dataset_row_schema("scip_diagnostics_v1"),
+            ),
         }
     else:
         index_path = Path(scip_index_path)
@@ -1217,14 +1060,78 @@ def extract_scip_tables(
         plans = _extract_plan_bundle_from_index(
             index,
             parse_opts=normalized_opts,
-            exec_ctx=exec_ctx,
             evidence_plan=evidence_plan,
         )
 
-    return run_plan_bundle(
-        plans,
-        ctx=exec_ctx,
-        prefer_reader=prefer_reader,
-        metadata_specs=metadata_specs,
-        attach_ordering_metadata=True,
-    )
+    return {
+        "scip_metadata": materialize_extract_plan(
+            "scip_metadata_v1",
+            plans["scip_metadata"],
+            ctx=exec_ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=False,
+            ),
+        ),
+        "scip_documents": materialize_extract_plan(
+            "scip_documents_v1",
+            plans["scip_documents"],
+            ctx=exec_ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=False,
+            ),
+        ),
+        "scip_occurrences": materialize_extract_plan(
+            "scip_occurrences_v1",
+            plans["scip_occurrences"],
+            ctx=exec_ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=False,
+            ),
+        ),
+        "scip_symbol_information": materialize_extract_plan(
+            "scip_symbol_info_v1",
+            plans["scip_symbol_information"],
+            ctx=exec_ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=False,
+            ),
+        ),
+        "scip_symbol_relationships": materialize_extract_plan(
+            "scip_symbol_relationships_v1",
+            plans["scip_symbol_relationships"],
+            ctx=exec_ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=False,
+            ),
+        ),
+        "scip_external_symbol_information": materialize_extract_plan(
+            "scip_external_symbol_info_v1",
+            plans["scip_external_symbol_information"],
+            ctx=exec_ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=False,
+            ),
+        ),
+        "scip_diagnostics": materialize_extract_plan(
+            "scip_diagnostics_v1",
+            plans["scip_diagnostics"],
+            ctx=exec_ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=False,
+            ),
+        ),
+    }

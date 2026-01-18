@@ -2,40 +2,19 @@
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import ibis
-from ibis.backends import BaseBackend
+import pyarrow as pa
 
 from arrowdsl.compute.filters import FilterSpec, predicate_spec
-from arrowdsl.compute.ids import (
-    HashSpec,
-    apply_hash_column,
-    apply_hash_columns,
-    hash_projection,
-    masked_hash_array,
-    masked_hash_expr,
-)
-from arrowdsl.core.context import ExecutionContext, execution_context_factory
+from arrowdsl.core.context import ExecutionContext, Ordering, execution_context_factory
 from arrowdsl.core.ids import iter_table_rows
 from arrowdsl.core.interop import SchemaLike, TableLike
-from arrowdsl.plan.plan import Plan
-from arrowdsl.schema.metadata import (
-    extractor_metadata_spec,
-    infer_ordering_keys,
-    merge_metadata_specs,
-    options_hash,
-    options_metadata_spec,
-    ordering_metadata_spec,
-)
-from arrowdsl.schema.schema import SchemaTransform, projection_for_schema
-from arrowdsl.spec.infra import DatasetRegistration, register_dataset
-from config import AdapterMode
-from datafusion_engine.runtime import AdapterExecutionPolicy
+from arrowdsl.schema.build import empty_table, rows_to_table
 from extract.evidence_plan import EvidencePlan
 from extract.registry_extractors import (
     ExtractorSpec,
@@ -43,15 +22,17 @@ from extract.registry_extractors import (
     outputs_for_template,
     select_extractors_for_outputs,
 )
+from extract.registry_fields import field_name
+from extract.registry_specs import dataset_query, dataset_schema
+from extract.registry_specs import dataset_row as registry_row
+from extract.schema_ops import ExtractNormalizeOptions, normalize_extract_output
+from extract.spec_helpers import plan_requires_row, rule_execution_options
 from ibis_engine.plan import IbisPlan
+from ibis_engine.query_compiler import apply_query_spec
+from relspec.rules.definitions import RuleStage, stage_enabled
 
 if TYPE_CHECKING:
-    from arrowdsl.plan_helpers import (
-        apply_hash_projection,
-        flatten_struct_field,
-        project_columns,
-        query_for_schema,
-    )
+    from ibis.expr.types import Table as IbisTable
 
 
 @dataclass(frozen=True)
@@ -114,9 +95,6 @@ class ExtractExecutionContext:
     file_contexts: Iterable[FileContext] | None = None
     evidence_plan: EvidencePlan | None = None
     ctx: ExecutionContext | None = None
-    adapter_mode: AdapterMode | None = None
-    execution_policy: AdapterExecutionPolicy | None = None
-    ibis_backend: BaseBackend | None = None
     profile: str = "default"
 
     def ensure_ctx(self) -> ExecutionContext:
@@ -224,39 +202,109 @@ def iter_contexts(
     yield from file_contexts
 
 
-def align_table(table: TableLike, *, schema: SchemaLike) -> TableLike:
-    """Align a table to a target schema.
+def empty_ibis_plan(name: str) -> IbisPlan:
+    """Return an empty Ibis plan for a dataset name.
 
     Returns
     -------
-    TableLike
-        Aligned table.
+    IbisPlan
+        Empty Ibis plan backed by an empty table.
     """
-    return SchemaTransform(schema=schema).apply(table)
+    table = empty_table(dataset_schema(name))
+    expr = ibis.memtable(table)
+    return IbisPlan(expr=expr, ordering=Ordering.unordered())
 
 
-def align_plan(
-    plan: Plan,
+def ibis_plan_from_rows(
+    _name: str,
+    rows: Iterable[Mapping[str, object]],
     *,
-    schema: SchemaLike,
-    available: Sequence[str] | None = None,
-    ctx: ExecutionContext | None = None,
-) -> Plan:
-    """Return a plan aligned to the target schema via projection.
+    row_schema: SchemaLike,
+) -> IbisPlan:
+    """Return an Ibis plan for row data.
 
     Returns
     -------
-    Plan
-        Plan projecting/casting columns to the schema.
+    IbisPlan
+        Ibis plan backed by a memtable of the provided rows.
     """
-    if ctx is None:
-        if available is None:
-            available = schema.names
-        exprs, names = projection_for_schema(schema, available=available, safe_cast=True)
-        return plan.project(exprs, names)
-    module = importlib.import_module("arrowdsl.plan_helpers")
-    align_plan_to_schema = module.align_plan
-    return align_plan_to_schema(plan, schema=schema, ctx=ctx, available=available)
+    row_sequence = rows if isinstance(rows, Sequence) else list(rows)
+    table = rows_to_table(row_sequence, row_schema)
+    expr = ibis.memtable(table)
+    return IbisPlan(expr=expr, ordering=Ordering.unordered())
+
+
+def apply_query_and_project(
+    name: str,
+    table: IbisTable,
+    *,
+    normalize: ExtractNormalizeOptions | None = None,
+    evidence_plan: EvidencePlan | None = None,
+    repo_id: str | None = None,
+) -> IbisPlan:
+    """Apply registry query and evidence projection to an Ibis table.
+
+    Returns
+    -------
+    IbisPlan
+        Ibis plan with query and evidence projection applied.
+    """
+    row = registry_row(name)
+    if evidence_plan is not None and not plan_requires_row(evidence_plan, row):
+        return empty_ibis_plan(name)
+    overrides = _options_overrides(normalize.options if normalize else None)
+    execution = rule_execution_options(row.template or name, evidence_plan, overrides=overrides)
+    if row.enabled_when is not None:
+        stage = RuleStage(name=name, mode="source", enabled_when=row.enabled_when)
+        if not stage_enabled(stage, execution.as_mapping()):
+            return empty_ibis_plan(name)
+    spec = dataset_query(name, repo_id=repo_id)
+    expr = apply_query_spec(table, spec=spec)
+    expr = apply_evidence_projection(name, expr, evidence_plan=evidence_plan)
+    return IbisPlan(expr=expr, ordering=Ordering.unordered())
+
+
+@dataclass(frozen=True)
+class ExtractMaterializeOptions:
+    """Options for materializing Ibis extract plans."""
+
+    normalize: ExtractNormalizeOptions | None = None
+    prefer_reader: bool = False
+    apply_post_kernels: bool = False
+
+
+def materialize_extract_plan(
+    name: str,
+    plan: IbisPlan,
+    *,
+    ctx: ExecutionContext,
+    options: ExtractMaterializeOptions | None = None,
+) -> TableLike | pa.RecordBatchReader:
+    """Materialize an extract Ibis plan and normalize at the Arrow boundary.
+
+    Returns
+    -------
+    TableLike | pyarrow.RecordBatchReader
+        Materialized and normalized extract output.
+    """
+    resolved = options or ExtractMaterializeOptions()
+    table = plan.to_table()
+    normalized = normalize_extract_output(
+        name,
+        table,
+        ctx=ctx,
+        normalize=resolved.normalize,
+        apply_post_kernels=resolved.apply_post_kernels,
+    )
+    if resolved.prefer_reader:
+        if isinstance(normalized, pa.Table):
+            table = cast("pa.Table", normalized)
+            return pa.RecordBatchReader.from_batches(
+                table.schema,
+                table.to_batches(),
+            )
+        return normalized
+    return normalized
 
 
 def ast_def_nodes(nodes: TableLike) -> TableLike:
@@ -331,80 +379,102 @@ def template_outputs(plan: EvidencePlan | None, template: str) -> tuple[str, ...
     return outputs_for_template(template)
 
 
-def ast_def_nodes_plan(plan: Plan | IbisPlan) -> Plan | IbisPlan:
-    """Return a plan filtered to AST definition nodes.
+def _projection_columns(name: str, *, evidence_plan: EvidencePlan | None) -> tuple[str, ...]:
+    if evidence_plan is None:
+        return ()
+    required = set(evidence_plan.required_columns_for(name))
+    row = registry_row(name)
+    required.update(row.join_keys)
+    required.update(spec.name for spec in row.derived)
+    if row.evidence_required_columns:
+        required.update(row.evidence_required_columns)
+    if not required:
+        return ()
+    schema = dataset_schema(name)
+    schema_names = {field.name for field in schema}
+    resolved: set[str] = set()
+    for key in required:
+        if key in schema_names:
+            resolved.add(key)
+            continue
+        try:
+            resolved.add(field_name(key))
+        except KeyError:
+            continue
+    return tuple(field.name for field in schema if field.name in resolved)
+
+
+def apply_evidence_projection(
+    name: str,
+    table: IbisTable,
+    *,
+    evidence_plan: EvidencePlan | None,
+) -> IbisTable:
+    """Apply evidence-minimized projection to an Ibis table.
 
     Returns
     -------
-    Plan | IbisPlan
-        Plan filtered to function/class definitions.
+    ibis.expr.types.Table
+        Ibis table projected to evidence-required columns.
     """
-    predicate = predicate_spec(
-        "in_set",
-        col="kind",
-        values=("FunctionDef", "AsyncFunctionDef", "ClassDef"),
-    )
-    if isinstance(plan, IbisPlan):
-        expr = plan.expr
-        values = [
-            ibis.literal("FunctionDef"),
-            ibis.literal("AsyncFunctionDef"),
-            ibis.literal("ClassDef"),
-        ]
-        filtered = expr.filter(expr["kind"].isin(values))
-        return IbisPlan(expr=filtered, ordering=plan.ordering)
-    return FilterSpec(predicate).apply_plan(plan)
+    columns = _projection_columns(name, evidence_plan=evidence_plan)
+    if not columns:
+        return table
+    schema = dataset_schema(name)
+    field_types = {field.name: field.type for field in schema}
+    exprs = []
+    for column in columns:
+        if column in table.columns:
+            exprs.append(table[column])
+            continue
+        dtype = ibis.dtype(field_types[column])
+        exprs.append(ibis.literal(None, type=dtype).name(column))
+    return table.select(exprs)
 
 
-_PLAN_HELPERS_EXPORTS: set[str] = {
-    "apply_hash_projection",
-    "flatten_struct_field",
-    "project_columns",
-    "query_for_schema",
-}
+def ast_def_nodes_plan(plan: IbisPlan) -> IbisPlan:
+    """Return an Ibis plan filtered to AST definition nodes.
+
+    Returns
+    -------
+    IbisPlan
+        Ibis plan filtered to function/class definitions.
+    """
+    expr = plan.expr
+    values = [
+        ibis.literal("FunctionDef"),
+        ibis.literal("AsyncFunctionDef"),
+        ibis.literal("ClassDef"),
+    ]
+    filtered = expr.filter(expr["kind"].isin(values))
+    return IbisPlan(expr=filtered, ordering=plan.ordering)
 
 
-def __getattr__(name: str) -> object:
-    if name in _PLAN_HELPERS_EXPORTS:
-        module = importlib.import_module("arrowdsl.plan_helpers")
-        return getattr(module, name)
-    msg = f"module {__name__!r} has no attribute {name!r}"
-    raise AttributeError(msg)
-
-
-def __dir__() -> list[str]:
-    return sorted(list(globals()) + list(_PLAN_HELPERS_EXPORTS))
+def _options_overrides(options: object | None) -> Mapping[str, object]:
+    if options is None:
+        return {}
+    if is_dataclass(options) and not isinstance(options, type):
+        return asdict(options)
+    if isinstance(options, Mapping):
+        return dict(options)
+    return {}
 
 
 __all__ = [
-    "DatasetRegistration",
+    "ExtractExecutionContext",
+    "ExtractMaterializeOptions",
     "FileContext",
-    "HashSpec",
-    "align_plan",
-    "align_table",
-    "apply_hash_column",
-    "apply_hash_columns",
-    "apply_hash_projection",
+    "apply_evidence_projection",
+    "apply_query_and_project",
     "ast_def_nodes",
     "ast_def_nodes_plan",
     "bytes_from_file_ctx",
-    "extractor_metadata_spec",
+    "empty_ibis_plan",
     "file_identity_row",
-    "flatten_struct_field",
-    "hash_projection",
-    "infer_ordering_keys",
+    "ibis_plan_from_rows",
     "iter_contexts",
     "iter_file_contexts",
-    "masked_hash_array",
-    "masked_hash_expr",
-    "merge_metadata_specs",
-    "options_hash",
-    "options_metadata_spec",
-    "ordering_metadata_spec",
-    "predicate_spec",
-    "project_columns",
-    "query_for_schema",
-    "register_dataset",
+    "materialize_extract_plan",
     "required_extractors",
     "requires_evidence",
     "requires_evidence_template",

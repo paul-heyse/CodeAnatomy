@@ -2,21 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-from typing import cast
-
 import pyarrow as pa
 
 from arrowdsl.core.context import DeterminismTier, ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.runner import AdapterRunOptions, run_plan_adapter
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct
+from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
 from ibis_engine.plan import IbisPlan
 
 
-def _default_plan_id(plan: Plan | IbisPlan) -> str:
+def _default_plan_id(plan: IbisPlan) -> str:
     label = getattr(plan, "label", "")
     if isinstance(label, str) and label:
         return label
@@ -33,13 +29,23 @@ def _resolve_prefer_reader(
     return policy.prefer_streaming
 
 
+def resolve_prefer_reader(*, ctx: ExecutionContext, policy: ExecutionSurfacePolicy) -> bool:
+    """Return the prefer_reader flag for plan execution.
+
+    Returns
+    -------
+    bool
+        ``True`` when plan execution should prefer streaming readers.
+    """
+    return _resolve_prefer_reader(ctx=ctx, policy=policy)
+
+
 def build_plan_product(
-    plan: Plan | IbisPlan,
+    plan: IbisPlan,
     *,
-    ctx: ExecutionContext,
+    execution: IbisExecutionContext,
     policy: ExecutionSurfacePolicy,
     plan_id: str | None = None,
-    options: AdapterRunOptions | None = None,
 ) -> PlanProduct:
     """Execute a plan and return a PlanProduct wrapper.
 
@@ -53,24 +59,19 @@ def build_plan_product(
     ValueError
         Raised when a reader materialization is missing the expected stream.
     """
+    ctx = execution.ctx
     prefer_reader = _resolve_prefer_reader(ctx=ctx, policy=policy)
-    resolved = options or AdapterRunOptions()
-    resolved = replace(resolved, prefer_reader=prefer_reader)
-    result = run_plan_adapter(plan, ctx=ctx, options=resolved)
-    value = result.value
-    schema = value.schema
     stream: RecordBatchReaderLike | None = None
     table: TableLike | None = None
-    if result.kind == "reader":
-        stream = cast("RecordBatchReaderLike", value)
+    if prefer_reader:
+        stream = stream_ibis_plan(plan, execution=execution)
         if not isinstance(stream, pa.RecordBatchReader):
             msg = "Expected RecordBatchReader for reader materialization."
             raise ValueError(msg)
-    elif isinstance(value, pa.RecordBatchReader):
-        reader = cast("pa.RecordBatchReader", value)
-        table = cast("TableLike", reader.read_all())
+        schema = stream.schema
     else:
-        table = cast("TableLike", value)
+        table = materialize_ibis_plan(plan, execution=execution)
+        schema = table.schema
     return PlanProduct(
         plan_id=plan_id or _default_plan_id(plan),
         schema=schema,
@@ -81,4 +82,4 @@ def build_plan_product(
     )
 
 
-__all__ = ["build_plan_product"]
+__all__ = ["build_plan_product", "resolve_prefer_reader"]

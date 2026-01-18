@@ -14,30 +14,27 @@ from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.core.interop import Scalar, TableLike
 from arrowdsl.plan.ops import DedupeSpec, SortKey
-from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ScanTelemetry
-from arrowdsl.plan.runner import AdapterRunOptions
+from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.schema import align_table
-from config import AdapterMode
-from cpg.catalog import PlanCatalog, PlanSource, resolve_plan_source
-from cpg.plan_specs import ensure_plan
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from engine.materialize import build_plan_product
 from engine.plan_policy import ExecutionSurfacePolicy
+from ibis_engine.execution import IbisExecutionContext
 from ibis_engine.expr_compiler import (
     IbisExprRegistry,
     default_expr_registry,
     expr_ir_to_ibis,
 )
 from ibis_engine.plan import IbisPlan
-from ibis_engine.plan_bridge import (
+from ibis_engine.query_compiler import apply_query_spec
+from ibis_engine.schema_utils import align_table_to_schema
+from ibis_engine.sources import (
     SourceToIbisOptions,
     register_ibis_view,
     source_to_ibis,
     table_to_ibis,
 )
-from ibis_engine.query_compiler import apply_query_spec
-from ibis_engine.schema_utils import align_table_to_schema
 from relspec.compiler import (
     PlanExecutor,
     RelationshipRuleCompiler,
@@ -78,7 +75,7 @@ if TYPE_CHECKING:
 class RelationPlanBundle:
     """Compiled relation plans plus scan telemetry."""
 
-    plans: Mapping[str, Plan | IbisPlan]
+    plans: Mapping[str, IbisPlan]
     telemetry: Mapping[str, ScanTelemetry] = field(default_factory=dict)
     coverage: Mapping[str, IbisPlan] = field(default_factory=dict)
 
@@ -92,79 +89,18 @@ class RelationPlanCompileOptions:
     required_sources: Sequence[str] | None = None
     backend: BaseBackend | None = None
     param_bindings: Mapping[IbisValue, object] | None = None
-    adapter_mode: AdapterMode | None = None
     execution_policy: AdapterExecutionPolicy | None = None
     policy_registry: PolicyRegistry = field(default_factory=PolicyRegistry)
 
 
-IbisPlanSource = PlanSource | IbisPlan | Table
-
-
-class CatalogPlanResolver:
-    """Resolve dataset refs using the CPG plan catalog."""
-
-    def __init__(self, catalog: PlanCatalog, *, backend: BaseBackend | None = None) -> None:
-        self._catalog = catalog
-        self.backend: BaseBackend | None = backend
-
-    def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
-        """Resolve a DatasetRef into an Ibis plan.
-
-        Returns
-        -------
-        IbisPlan
-            Ibis plan for the dataset reference.
-
-        Raises
-        ------
-        KeyError
-            Raised when the dataset reference is not found in the catalog.
-        """
-        source = resolve_plan_source(self._catalog, ref.name, ctx=ctx)
-        if source is None:
-            msg = f"Unknown dataset reference: {ref.name!r}."
-            raise KeyError(msg)
-        plan = ensure_plan(source, label=ref.label or ref.name, ctx=ctx)
-        table = plan.to_table(ctx=ctx)
-        if self.backend is None:
-            expr = ibis.memtable(table)
-            ibis_plan = IbisPlan(expr=expr, ordering=plan.ordering)
-        else:
-            ibis_plan = table_to_ibis(
-                table,
-                backend=self.backend,
-                name=ref.label or ref.name,
-                ordering=plan.ordering,
-            )
-        if ref.query is None:
-            return ibis_plan
-        expr = apply_query_spec(ibis_plan.expr, spec=ref.query)
-        return IbisPlan(expr=expr, ordering=ibis_plan.ordering)
-
-    @staticmethod
-    def telemetry(ref: DatasetRef, *, ctx: ExecutionContext) -> ScanTelemetry | None:
-        """Return scan telemetry for catalog-resolved plans (unavailable).
-
-        Returns
-        -------
-        ScanTelemetry | None
-            ``None`` because catalog-resolved plans do not expose telemetry.
-        """
-        _ = ref
-        _ = ctx
-        return None
+IbisPlanSource = IbisPlan | Table | TableLike | DatasetSource
 
 
 def _plan_executor_factory(
     *,
-    adapter_mode: AdapterMode | None,
     execution_policy: AdapterExecutionPolicy | None,
     ibis_backend: BaseBackend | None,
 ) -> PlanExecutor:
-    resolved_adapter_mode = (
-        adapter_mode if adapter_mode is None or adapter_mode.use_ibis_bridge else None
-    )
-
     def _plan_executor(
         plan: IbisPlan,
         exec_ctx: ExecutionContext,
@@ -172,91 +108,22 @@ def _plan_executor_factory(
         execution_label: ExecutionLabel | None = None,
     ) -> TableLike:
         policy = ExecutionSurfacePolicy(determinism_tier=exec_ctx.determinism)
+        execution = IbisExecutionContext(
+            ctx=exec_ctx,
+            execution_policy=execution_policy,
+            execution_label=execution_label,
+            ibis_backend=ibis_backend,
+            params=exec_params,
+        )
         product = build_plan_product(
             plan,
-            ctx=exec_ctx,
+            execution=execution,
             policy=policy,
             plan_id=None,
-            options=AdapterRunOptions(
-                adapter_mode=resolved_adapter_mode,
-                execution_policy=execution_policy,
-                execution_label=execution_label,
-                ibis_backend=ibis_backend,
-                ibis_params=exec_params,
-            ),
         )
         return product.materialize_table()
 
     return _plan_executor
-
-
-def compile_relation_plans(
-    catalog: PlanCatalog,
-    *,
-    ctx: ExecutionContext,
-    options: RelationPlanCompileOptions | None = None,
-) -> RelationPlanBundle:
-    """Compile relationship rules into plans keyed by output dataset name.
-
-    Returns
-    -------
-    RelationPlanBundle
-        Plan bundle with output plans and scan telemetry.
-
-    Raises
-    ------
-    ValueError
-        Raised when a relation plan cannot be compiled.
-    """
-    options = options or RelationPlanCompileOptions()
-    rules, output_schema = _prepare_relation_rules(
-        ctx,
-        rule_table=options.rule_table,
-        required_sources=options.required_sources,
-        policy_registry=options.policy_registry,
-    )
-    ctx_exec = (
-        ctx
-        if options.materialize_debug is None
-        else replace(
-            ctx,
-            debug=options.materialize_debug,
-        )
-    )
-    work_catalog = PlanCatalog(catalog.snapshot())
-    evidence = EvidenceCatalog.from_plan_catalog(work_catalog, ctx=ctx)
-    resolver = CatalogPlanResolver(work_catalog, backend=options.backend)
-    compiler = RelationshipRuleCompiler(resolver=resolver)
-    plan_executor = _plan_executor_factory(
-        adapter_mode=options.adapter_mode,
-        execution_policy=options.execution_policy,
-        ibis_backend=options.backend,
-    )
-    plans: dict[str, Plan | IbisPlan] = {}
-    telemetry = compiler.collect_scan_telemetry(rules, ctx=ctx)
-    for rule in order_rules(rules, evidence=evidence):
-        compiled = compiler.compile_rule(rule, ctx=ctx_exec)
-        table = compiled.execute(
-            ctx=ctx_exec,
-            resolver=resolver,
-            compiler=compiler.plan_compiler,
-            options=RuleExecutionOptions(
-                params=options.param_bindings,
-                plan_executor=plan_executor,
-                adapter_mode=options.adapter_mode,
-                execution_policy=options.execution_policy,
-                ibis_backend=options.backend,
-            ),
-        )
-        table = align_table(table, schema=output_schema, keep_extra_columns=True)
-        plan = Plan.table_source(table, label=rule.name)
-        if plan is None:
-            msg = f"Failed to compile relation plan for rule {rule.name!r}."
-            raise ValueError(msg)
-        plans[rule.output_dataset] = plan
-        work_catalog.add(rule.output_dataset, plan)
-        evidence.register(rule.output_dataset, table.schema)
-    return RelationPlanBundle(plans=plans, telemetry=telemetry)
 
 
 @dataclass
@@ -273,6 +140,19 @@ class IbisPlanCatalog:
         ctx: ExecutionContext,
         label: str | None = None,
     ) -> IbisPlan | None:
+        """Resolve a catalog entry into an Ibis plan.
+
+        Returns
+        -------
+        IbisPlan | None
+            Ibis plan for the named entry when available.
+
+        Raises
+        ------
+        TypeError
+            Raised when a DatasetSource requires materialization.
+        """
+        _ = ctx
         source = self.tables.get(name)
         if source is None:
             return None
@@ -280,13 +160,15 @@ class IbisPlanCatalog:
             return source
         if isinstance(source, Table):
             return IbisPlan(expr=source, ordering=Ordering.unordered())
-        plan_source = ensure_plan(cast("PlanSource", source), label=label or name, ctx=ctx)
+        if isinstance(source, DatasetSource):
+            msg = f"DatasetSource {name!r} must be materialized before Ibis compilation."
+            raise TypeError(msg)
         plan = source_to_ibis(
-            plan_source,
+            cast("TableLike", source),
             options=SourceToIbisOptions(
-                ctx=ctx,
                 backend=self.backend,
                 name=label or name,
+                ordering=Ordering.unordered(),
             ),
         )
         self.tables[name] = plan
@@ -330,7 +212,6 @@ class _IbisRelationContext:
     compiler: RelationshipRuleCompiler
     telemetry: Mapping[str, ScanTelemetry]
     param_bindings: Mapping[IbisValue, object] | None
-    adapter_mode: AdapterMode | None
     execution_policy: AdapterExecutionPolicy | None
 
 
@@ -491,7 +372,7 @@ def _apply_canonical_sort_ibis(table: Table, spec: CanonicalSortKernelSpec) -> T
 
 
 def _ibis_relation_context(
-    catalog: PlanCatalog,
+    catalog: IbisPlanCatalog,
     *,
     ctx: ExecutionContext,
     backend: BaseBackend,
@@ -514,10 +395,8 @@ def _ibis_relation_context(
             debug=resolved.materialize_debug,
         )
     )
-    work_catalog = PlanCatalog(catalog.snapshot())
-    evidence = EvidenceCatalog.from_plan_catalog(work_catalog, ctx=ctx)
-    tables: dict[str, IbisPlanSource] = {}
-    tables.update(work_catalog.snapshot())
+    tables: dict[str, IbisPlanSource] = dict(catalog.tables)
+    evidence = EvidenceCatalog.from_sources(tables, ctx=ctx)
     ibis_catalog = IbisPlanCatalog(backend=backend, tables=tables)
     resolver = CatalogIbisResolver(ibis_catalog)
     registry = default_expr_registry()
@@ -536,7 +415,6 @@ def _ibis_relation_context(
         compiler=compiler,
         telemetry=telemetry,
         param_bindings=resolved.param_bindings,
-        adapter_mode=resolved.adapter_mode,
         execution_policy=resolved.execution_policy,
     )
 
@@ -550,7 +428,6 @@ def _compile_relation_plans_ibis(
     plans: dict[str, IbisPlan] = {}
     coverage: dict[str, IbisPlan] = {}
     plan_executor = _plan_executor_factory(
-        adapter_mode=context.adapter_mode,
         execution_policy=context.execution_policy,
         ibis_backend=backend,
     )
@@ -569,7 +446,6 @@ def _compile_relation_plans_ibis(
                 options=RuleExecutionOptions(
                     params=context.param_bindings,
                     plan_executor=plan_executor,
-                    adapter_mode=context.adapter_mode,
                     execution_policy=context.execution_policy,
                     ibis_backend=backend,
                 ),
@@ -630,7 +506,7 @@ def _sort_expr(table: Table, key: SortKey) -> IbisValue:
 
 
 def compile_relation_plans_ibis(
-    catalog: PlanCatalog,
+    catalog: IbisPlanCatalog,
     *,
     ctx: ExecutionContext,
     backend: BaseBackend,
@@ -1204,9 +1080,8 @@ def _value_or_null(table: Table, name: str) -> Value:
 
 
 __all__ = [
-    "CatalogPlanResolver",
+    "IbisPlanCatalog",
     "RelationPlanBundle",
     "RelationPlanCompileOptions",
-    "compile_relation_plans",
     "compile_relation_plans_ibis",
 ]

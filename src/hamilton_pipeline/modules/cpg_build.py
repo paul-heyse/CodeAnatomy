@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
@@ -23,14 +23,11 @@ from arrowdsl.io.parquet import (
 from arrowdsl.plan.query import ScanTelemetry
 from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.schema import align_table, empty_table
-from config import AdapterMode
-from cpg.build_edges import EdgeBuildConfig, EdgeBuildInputs, build_cpg_edges
-from cpg.build_nodes import NodeBuildConfig, NodeInputTables, build_cpg_nodes
-from cpg.build_props import PropsBuildConfig, PropsInputTables, build_cpg_props
 from cpg.constants import CpgBuildArtifacts
 from cpg.schemas import register_cpg_specs
 from datafusion_engine.runtime import AdapterExecutionPolicy
 from engine.plan_policy import ExecutionSurfacePolicy
+from engine.session import EngineSession
 from extract.registry_ids import repo_file_id_spec
 from hamilton_pipeline.pipeline_types import (
     CpgBaseInputs,
@@ -88,6 +85,14 @@ from relspec.compiler import (
 )
 from relspec.compiler_graph import order_rules
 from relspec.contracts import relation_output_contract, relation_output_schema
+from relspec.cpg.build_edges import EdgeBuildConfig, EdgeBuildInputs, build_cpg_edges
+from relspec.cpg.build_nodes import NodeBuildConfig, NodeInputTables, build_cpg_nodes
+from relspec.cpg.build_props import (
+    PropsBuildConfig,
+    PropsBuildOptions,
+    PropsInputTables,
+    build_cpg_props,
+)
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
@@ -96,7 +101,7 @@ from relspec.model import DatasetRef, RelationshipRule
 from relspec.param_deps import RuleDependencyReport
 from relspec.pipeline_policy import PipelinePolicy
 from relspec.policies import evidence_spec_from_schema
-from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation
+from relspec.registry import ContractCatalog, DatasetLocation
 from relspec.rules.compiler import RuleCompiler
 from relspec.rules.evidence import EvidenceCatalog
 from relspec.rules.exec_events import RuleExecutionEventCollector
@@ -169,7 +174,6 @@ class RelationshipExecutionContext:
     """Execution settings for relationship table materialization."""
 
     ctx: ExecutionContext
-    adapter_mode: AdapterMode
     execution_policy: AdapterExecutionPolicy
     ibis_backend: BaseBackend
     relspec_param_bindings: Mapping[IbisValue, object]
@@ -177,10 +181,20 @@ class RelationshipExecutionContext:
 
 
 @dataclass(frozen=True)
+class RelationshipTableInputs:
+    """Inputs required to build relationship tables."""
+
+    compiled_relationship_outputs: dict[str, CompiledOutput]
+    relspec_resolver: PlanResolver[IbisPlan]
+    relationship_contracts: ContractCatalog
+    engine_session: EngineSession
+    incremental_config: IncrementalConfig
+
+
+@dataclass(frozen=True)
 class RelationshipExecutionInputs:
     """Execution inputs for building relationship execution contexts."""
 
-    adapter_mode: AdapterMode
     execution_policy: AdapterExecutionPolicy
     ibis_backend: BaseBackend
     relspec_param_bindings: Mapping[IbisValue, object]
@@ -230,7 +244,7 @@ class RelspecResolverSources:
 
 @tag(layer="relspec", artifact="relationship_execution_context", kind="object")
 def relationship_execution_context(
-    ctx: ExecutionContext,
+    engine_session: EngineSession,
     relationship_execution_inputs: RelationshipExecutionInputs,
 ) -> RelationshipExecutionContext:
     """Bundle execution settings for relationship table materialization.
@@ -241,8 +255,7 @@ def relationship_execution_context(
         Execution settings for relationship output execution.
     """
     return RelationshipExecutionContext(
-        ctx=ctx,
-        adapter_mode=relationship_execution_inputs.adapter_mode,
+        ctx=engine_session.ctx,
         execution_policy=relationship_execution_inputs.execution_policy,
         ibis_backend=relationship_execution_inputs.ibis_backend,
         relspec_param_bindings=relationship_execution_inputs.relspec_param_bindings,
@@ -252,11 +265,9 @@ def relationship_execution_context(
 
 @tag(layer="relspec", artifact="relationship_execution_inputs", kind="object")
 def relationship_execution_inputs(
-    adapter_mode: AdapterMode,
     adapter_execution_policy: AdapterExecutionPolicy,
-    ibis_backend: BaseBackend,
+    engine_session: EngineSession,
     relspec_param_bindings: Mapping[IbisValue, object],
-    execution_surface_policy: ExecutionSurfacePolicy,
 ) -> RelationshipExecutionInputs:
     """Bundle relationship execution inputs for materialization.
 
@@ -266,11 +277,10 @@ def relationship_execution_inputs(
         Bundled execution input values.
     """
     return RelationshipExecutionInputs(
-        adapter_mode=adapter_mode,
         execution_policy=adapter_execution_policy,
-        ibis_backend=ibis_backend,
+        ibis_backend=engine_session.ibis_backend,
         relspec_param_bindings=relspec_param_bindings,
-        surface_policy=execution_surface_policy,
+        surface_policy=engine_session.surface_policy,
     )
 
 
@@ -558,6 +568,7 @@ def schema_registry(
 def rule_registry(
     param_table_specs: tuple[ParamTableSpec, ...],
     pipeline_policy: PipelinePolicy,
+    engine_session: EngineSession,
 ) -> RuleRegistry:
     """Build the central rule registry.
 
@@ -577,6 +588,7 @@ def rule_registry(
         param_table_policy=pipeline_policy.param_table_policy,
         list_filter_gate_policy=pipeline_policy.list_filter_gate_policy,
         kernel_lane_policy=pipeline_policy.kernel_lanes,
+        engine_session=engine_session,
     )
 
 
@@ -621,10 +633,9 @@ def relspec_param_registry(rule_registry: RuleRegistry) -> IbisParamRegistry:
 @tag(layer="relspec", artifact="relspec_param_dependency_reports", kind="object")
 def relspec_param_dependency_reports(
     rule_registry: RuleRegistry,
-    ibis_backend: BaseBackend,
+    engine_session: EngineSession,
     param_table_specs: tuple[ParamTableSpec, ...],
     param_table_policy: ParamTablePolicy,
-    ctx: ExecutionContext,
 ) -> tuple[RuleDependencyReport, ...]:
     """Return inferred param dependency reports for relspec rules.
 
@@ -637,9 +648,9 @@ def relspec_param_dependency_reports(
     return rule_dependency_reports(
         rules,
         config=SqlGlotDiagnosticsConfig(
-            backend=cast("IbisCompilerBackend", ibis_backend),
+            backend=cast("IbisCompilerBackend", engine_session.ibis_backend),
             registry=GLOBAL_SCHEMA_REGISTRY,
-            ctx=ctx,
+            ctx=engine_session.ctx,
             param_table_specs=param_table_specs,
             param_table_policy=param_table_policy,
         ),
@@ -902,6 +913,12 @@ def persist_relspec_input_datasets(
         spec = dataset_specs.get(name)
         policy = spec.encoding_policy() if spec is not None else None
         encoding_policies[name] = policy or encoding_policy_from_schema(table.schema)
+    file_visitors: dict[str, Callable[[object], None]] = {}
+    file_lists: dict[str, list[str]] = {}
+    for name in relspec_input_datasets:
+        files, visitor = _file_visitor_bucket()
+        file_lists[name] = files
+        file_visitors[name] = visitor
     paths = write_named_datasets_parquet(
         relspec_input_datasets,
         relspec_input_dataset_dir,
@@ -910,6 +927,7 @@ def persist_relspec_input_datasets(
             overwrite=bool(overwrite_intermediate_datasets),
             schemas=schemas,
             encoding_policies=encoding_policies,
+            file_visitors=file_visitors,
         ),
     )
 
@@ -925,6 +943,7 @@ def persist_relspec_input_datasets(
             format="parquet",
             partitioning="hive",
             filesystem=None,
+            files=tuple(file_lists.get(name, [])),
             table_spec=table_spec,
             dataset_spec=dataset_spec,
             datafusion_scan=_datafusion_scan_options(
@@ -960,7 +979,7 @@ def relspec_resolver_sources(
 @tag(layer="relspec", artifact="relspec_resolver", kind="runtime")
 def relspec_resolver(
     relspec_resolver_sources: RelspecResolverSources,
-    ibis_backend: BaseBackend,
+    engine_session: EngineSession,
     relspec_resolver_context: RelspecResolverContext,
     relspec_incremental_context: RelspecIncrementalContext,
 ) -> PlanResolver[IbisPlan]:
@@ -980,23 +999,26 @@ def relspec_resolver(
         param_tables: Mapping[str, IbisTable] = {}
         policy = ParamTablePolicy()
     else:
-        param_tables = relspec_resolver_context.param_table_registry.ibis_tables(ibis_backend)
+        param_tables = relspec_resolver_context.param_table_registry.ibis_tables(
+            engine_session.ibis_backend
+        )
         policy = relspec_resolver_context.param_table_registry.policy
     param_aliases = _param_table_aliases(param_tables, policy=policy)
     resolver: PlanResolver[IbisPlan]
     if mode == "filesystem":
-        cat = DatasetCatalog()
+        cat = engine_session.datasets.catalog
         for name, loc in relspec_resolver_sources.persisted_inputs.items():
             cat.register(name, loc)
         base = FilesystemPlanResolver(
             cat,
-            backend=ibis_backend,
-            runtime_profile=relspec_resolver_context.ctx.runtime.datafusion,
+            registry=engine_session.datasets,
         )
         if not param_aliases:
             resolver = base
         else:
-            param_resolver = InMemoryPlanResolver(param_aliases, backend=ibis_backend)
+            param_resolver = InMemoryPlanResolver(
+                param_aliases, backend=engine_session.ibis_backend
+            )
             resolver = _CompositePlanResolver(
                 primary=param_resolver,
                 fallback=base,
@@ -1008,7 +1030,7 @@ def relspec_resolver(
         )
         for name, table in param_aliases.items():
             combined.setdefault(name, table)
-        resolver = InMemoryPlanResolver(combined, backend=ibis_backend)
+        resolver = InMemoryPlanResolver(combined, backend=engine_session.ibis_backend)
     if relspec_incremental_context.config.enabled:
         file_ids = impacted_file_ids(relspec_incremental_context.impact)
         return scoped_relspec_resolver(resolver, file_ids=file_ids)
@@ -1088,6 +1110,17 @@ def _param_table_aliases(
         for name in names:
             aliases.setdefault(name, table)
     return aliases
+
+
+def _file_visitor_bucket() -> tuple[list[str], Callable[[object], None]]:
+    files: list[str] = []
+
+    def _visitor(record: object) -> None:
+        path = getattr(record, "path", None)
+        if isinstance(path, str):
+            files.append(path)
+
+    return files, _visitor
 
 
 @dataclass(frozen=True)
@@ -1233,6 +1266,30 @@ def _add_edge_owner_file_id(
     )
 
 
+@tag(layer="relspec", artifact="relationship_table_inputs", kind="object")
+def relationship_table_inputs(
+    compiled_relationship_outputs: dict[str, CompiledOutput],
+    relspec_resolver: PlanResolver[IbisPlan],
+    relationship_contracts: ContractCatalog,
+    engine_session: EngineSession,
+    incremental_config: IncrementalConfig,
+) -> RelationshipTableInputs:
+    """Bundle inputs required to materialize relationship tables.
+
+    Returns
+    -------
+    RelationshipTableInputs
+        Inputs for relationship table execution.
+    """
+    return RelationshipTableInputs(
+        compiled_relationship_outputs=compiled_relationship_outputs,
+        relspec_resolver=relspec_resolver,
+        relationship_contracts=relationship_contracts,
+        engine_session=engine_session,
+        incremental_config=incremental_config,
+    )
+
+
 @cache()
 @extract_fields(
     {
@@ -1246,11 +1303,8 @@ def _add_edge_owner_file_id(
 )
 @tag(layer="relspec", artifact="relationship_tables", kind="bundle")
 def relationship_tables(
-    compiled_relationship_outputs: dict[str, CompiledOutput],
-    relspec_resolver: PlanResolver[IbisPlan],
-    relationship_contracts: ContractCatalog,
     relationship_execution_context: RelationshipExecutionContext,
-    incremental_config: IncrementalConfig,
+    relationship_table_inputs: RelationshipTableInputs,
 ) -> dict[str, TableLike]:
     """Execute compiled relationship outputs into tables.
 
@@ -1260,30 +1314,30 @@ def relationship_tables(
         Relationship tables keyed by output dataset.
     """
     exec_ctx = relationship_execution_context.ctx
-    adapter_mode = relationship_execution_context.adapter_mode
     execution_policy = relationship_execution_context.execution_policy
     ibis_backend = relationship_execution_context.ibis_backend
     relspec_param_bindings = relationship_execution_context.relspec_param_bindings
 
     out: dict[str, TableLike] = {}
     dynamic_outputs: dict[str, TableLike] = {}
-    event_collector = RuleExecutionEventCollector()
+    event_collector = RuleExecutionEventCollector(
+        diagnostics=relationship_table_inputs.engine_session.diagnostics
+    )
     exec_options = CompiledOutputExecutionOptions(
-        contracts=relationship_contracts,
+        contracts=relationship_table_inputs.relationship_contracts,
         params=relspec_param_bindings,
-        adapter_mode=adapter_mode,
         execution_policy=execution_policy,
         ibis_backend=ibis_backend,
         rule_exec_observer=event_collector,
         surface_policy=relationship_execution_context.surface_policy,
     )
-    for key, compiled in compiled_relationship_outputs.items():
-        resolver = relspec_resolver
+    for key, compiled in relationship_table_inputs.compiled_relationship_outputs.items():
+        resolver = relationship_table_inputs.relspec_resolver
         if dynamic_outputs:
             dynamic_resolver = InMemoryPlanResolver(dynamic_outputs, backend=ibis_backend)
             resolver = _CompositePlanResolver(
                 primary=dynamic_resolver,
-                fallback=relspec_resolver,
+                fallback=relationship_table_inputs.relspec_resolver,
                 primary_names=frozenset(dynamic_outputs),
             )
         res = compiled.execute(
@@ -1293,10 +1347,12 @@ def relationship_tables(
         )
         contract_schema = relation_output_schema()
         if compiled.contract_name is not None:
-            contract_schema = relationship_contracts.get(compiled.contract_name).schema
+            contract_schema = relationship_table_inputs.relationship_contracts.get(
+                compiled.contract_name
+            ).schema
         updated = _add_edge_owner_file_id(
             res.good,
-            repo_id=incremental_config.repo_id,
+            repo_id=relationship_table_inputs.incremental_config.repo_id,
             ctx=exec_ctx,
             schema=contract_schema,
         )
@@ -1306,23 +1362,33 @@ def relationship_tables(
     # Ensure expected keys exist for extract_fields
     out.setdefault(
         "rel_name_symbol",
-        empty_table(relationship_contracts.get("rel_name_symbol_v1").schema),
+        empty_table(
+            relationship_table_inputs.relationship_contracts.get("rel_name_symbol_v1").schema
+        ),
     )
     out.setdefault(
         "rel_import_symbol",
-        empty_table(relationship_contracts.get("rel_import_symbol_v1").schema),
+        empty_table(
+            relationship_table_inputs.relationship_contracts.get("rel_import_symbol_v1").schema
+        ),
     )
     out.setdefault(
         "rel_def_symbol",
-        empty_table(relationship_contracts.get("rel_def_symbol_v1").schema),
+        empty_table(
+            relationship_table_inputs.relationship_contracts.get("rel_def_symbol_v1").schema
+        ),
     )
     out.setdefault(
         "rel_callsite_symbol",
-        empty_table(relationship_contracts.get("rel_callsite_symbol_v1").schema),
+        empty_table(
+            relationship_table_inputs.relationship_contracts.get("rel_callsite_symbol_v1").schema
+        ),
     )
     out.setdefault(
         "rel_callsite_qname",
-        empty_table(relationship_contracts.get("rel_callsite_qname_v1").schema),
+        empty_table(
+            relationship_table_inputs.relationship_contracts.get("rel_callsite_qname_v1").schema
+        ),
     )
     out["relspec_rule_exec_events"] = event_collector.table()
     return out
@@ -1623,11 +1689,9 @@ def cpg_props_inputs(
 @cache()
 @tag(layer="cpg", artifact="cpg_nodes_finalize", kind="object")
 def cpg_nodes_finalize(
-    ctx: ExecutionContext,
+    engine_session: EngineSession,
     cpg_node_inputs: NodeInputTables,
-    adapter_mode: AdapterMode,
     adapter_execution_policy: AdapterExecutionPolicy,
-    ibis_backend: BaseBackend,
 ) -> CpgBuildArtifacts:
     """Build finalized CPG nodes with quality artifacts.
 
@@ -1637,12 +1701,10 @@ def cpg_nodes_finalize(
         Finalized nodes bundle plus quality table.
     """
     return build_cpg_nodes(
-        ctx=ctx,
+        session=engine_session,
         config=NodeBuildConfig(
             inputs=cpg_node_inputs,
-            adapter_mode=adapter_mode,
             execution_policy=adapter_execution_policy,
-            ibis_backend=ibis_backend,
         ),
     )
 
@@ -1745,11 +1807,9 @@ def cpg_edges_final(
 @cache()
 @tag(layer="cpg", artifact="cpg_edges_finalize", kind="object")
 def cpg_edges_finalize(
-    ctx: ExecutionContext,
+    engine_session: EngineSession,
     cpg_edge_inputs: EdgeBuildInputs,
-    adapter_mode: AdapterMode,
     adapter_execution_policy: AdapterExecutionPolicy,
-    ibis_backend: BaseBackend,
 ) -> CpgBuildArtifacts:
     """Build finalized CPG edges with quality artifacts.
 
@@ -1759,12 +1819,10 @@ def cpg_edges_finalize(
         Finalized edges bundle plus quality table.
     """
     return build_cpg_edges(
-        ctx=ctx,
+        session=engine_session,
         config=EdgeBuildConfig(
             inputs=cpg_edge_inputs,
-            adapter_mode=adapter_mode,
             execution_policy=adapter_execution_policy,
-            ibis_backend=ibis_backend,
         ),
     )
 
@@ -1843,11 +1901,10 @@ def cpg_props_final(
 @cache()
 @tag(layer="cpg", artifact="cpg_props_finalize", kind="object")
 def cpg_props_finalize(
-    ctx: ExecutionContext,
+    engine_session: EngineSession,
     cpg_props_inputs: PropsInputTables,
-    adapter_mode: AdapterMode,
+    cpg_props_options: PropsBuildOptions,
     adapter_execution_policy: AdapterExecutionPolicy,
-    ibis_backend: BaseBackend,
 ) -> CpgBuildArtifacts:
     """Build finalized CPG properties with quality artifacts.
 
@@ -1857,12 +1914,11 @@ def cpg_props_finalize(
         Finalized properties bundle plus quality table.
     """
     return build_cpg_props(
-        ctx=ctx,
+        session=engine_session,
         config=PropsBuildConfig(
             inputs=cpg_props_inputs,
-            adapter_mode=adapter_mode,
+            options=cpg_props_options,
             execution_policy=adapter_execution_policy,
-            ibis_backend=ibis_backend,
         ),
     )
 

@@ -27,6 +27,7 @@ from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from arrowdsl.spec.io import write_spec_table
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
+from engine.plan_cache import PlanCacheEntry
 from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
 from obs.parquet_writers import write_obs_dataset
 from relspec.compiler import CompiledOutput
@@ -34,6 +35,7 @@ from relspec.model import RelationshipRule
 from relspec.param_deps import RuleDependencyReport
 from relspec.registry import ContractCatalog, DatasetLocation
 from relspec.rules.diagnostics import rule_diagnostics_from_table
+from schema_spec.system import table_spec_from_schema
 
 # -----------------------
 # Basic environment capture
@@ -228,11 +230,14 @@ def serialize_dataset_locations(locations: Mapping[str, DatasetLocation]) -> Jso
     """
     out: JsonDict = {}
     for name, loc in locations.items():
-        out[name] = {
+        record: JsonDict = {
             "path": str(loc.path),
             "format": loc.format,
             "partitioning": loc.partitioning,
         }
+        if loc.files is not None:
+            record["files"] = list(loc.files)
+        out[name] = record
     return out
 
 
@@ -272,6 +277,10 @@ def serialize_compiled_outputs(compiled: Mapping[str, CompiledOutput]) -> JsonDi
             "contract_name": obj.contract_name,
             "contributors": contributors,
         }
+        if obj.plan_hash is not None:
+            payload["plan_hash"] = obj.plan_hash
+        if obj.input_datasets:
+            payload["input_datasets"] = list(obj.input_datasets)
         if telemetry:
             payload["telemetry"] = telemetry
         outputs[key] = payload
@@ -331,13 +340,17 @@ class RunBundleContext:
     datafusion_traces: JsonDict | None = None
     datafusion_fallbacks: pa.Table | None = None
     datafusion_explains: pa.Table | None = None
+    datafusion_plan_cache: Sequence[PlanCacheEntry] | None = None
+    feature_state: pa.Table | None = None
     relspec_scan_telemetry: pa.Table | None = None
     relspec_rule_exec_events: pa.Table | None = None
     incremental_diff: pa.Table | None = None
+    incremental_plan_diff: pa.Table | None = None
     incremental_changed_exports: pa.Table | None = None
     incremental_impacted_callers: pa.Table | None = None
     incremental_impacted_importers: pa.Table | None = None
     incremental_impacted_files: pa.Table | None = None
+    incremental_output_fingerprint_changes: pa.Table | None = None
 
     relspec_input_locations: Mapping[str, DatasetLocation] | None = None
     relspec_input_tables: Mapping[str, TableLike] | None = None
@@ -423,6 +436,16 @@ def _write_relspec_snapshots(
     if context.relationship_contracts is not None:
         snap = serialize_contract_catalog(context.relationship_contracts)
         files_written.append(_write_json(relspec_dir / "contracts.json", snap, overwrite=True))
+        ddl = _contract_schema_ddls(context.relationship_contracts)
+        if ddl:
+            files_written.append(
+                _write_json(relspec_dir / "contracts_ddl.json", ddl, overwrite=True)
+            )
+        asts = _contract_schema_asts(context.relationship_contracts)
+        if asts:
+            files_written.append(
+                _write_json(relspec_dir / "contracts_ast.json", asts, overwrite=True)
+            )
     if context.compiled_relationship_outputs is not None:
         snap = serialize_compiled_outputs(context.compiled_relationship_outputs)
         files_written.append(
@@ -441,10 +464,15 @@ def _write_incremental_artifacts(
     incremental_dir = bundle_dir / "incremental"
     tables: tuple[tuple[str, pa.Table | None], ...] = (
         ("incremental_diff", context.incremental_diff),
+        ("incremental_plan_diff", context.incremental_plan_diff),
         ("inc_changed_exports_v1", context.incremental_changed_exports),
         ("inc_impacted_callers_v1", context.incremental_impacted_callers),
         ("inc_impacted_importers_v1", context.incremental_impacted_importers),
         ("inc_impacted_files_v2", context.incremental_impacted_files),
+        (
+            "inc_output_fingerprint_changes_v1",
+            context.incremental_output_fingerprint_changes,
+        ),
     )
     if not any(table is not None for _, table in tables):
         return
@@ -501,6 +529,21 @@ def _write_runtime_artifacts(
                 overwrite=context.overwrite,
             )
         )
+    if context.datafusion_plan_cache:
+        _write_plan_cache_artifacts(
+            relspec_dir,
+            entries=context.datafusion_plan_cache,
+            files_written=files_written,
+        )
+    if context.feature_state is not None:
+        files_written.append(
+            write_obs_dataset(
+                relspec_dir,
+                name="feature_state",
+                table=context.feature_state,
+                overwrite=context.overwrite,
+            )
+        )
     if context.relspec_scan_telemetry is not None:
         files_written.append(
             write_obs_dataset(
@@ -519,6 +562,39 @@ def _write_runtime_artifacts(
                 overwrite=context.overwrite,
             )
         )
+
+
+def _contract_schema_ddls(contracts: ContractCatalog) -> JsonDict:
+    """Return SQL DDL statements for contract schemas.
+
+    Returns
+    -------
+    JsonDict
+        Mapping of contract names to CREATE TABLE statements.
+    """
+    payload: JsonDict = {}
+    for name in contracts.names():
+        contract = contracts.get(name)
+        spec = table_spec_from_schema(name, contract.schema)
+        payload[name] = spec.to_create_table_sql(dialect="datafusion")
+    return payload
+
+
+def _contract_schema_asts(contracts: ContractCatalog) -> JsonDict:
+    """Return SQLGlot column-def ASTs for contract schemas.
+
+    Returns
+    -------
+    JsonDict
+        Mapping of contract names to SQLGlot column definitions.
+    """
+    payload: JsonDict = {}
+    for name in contracts.names():
+        contract = contracts.get(name)
+        spec = table_spec_from_schema(name, contract.schema)
+        column_defs = spec.to_sqlglot_column_defs(dialect="datafusion")
+        payload[name] = [repr(column) for column in column_defs]
+    return payload
 
 
 def _safe_label(value: str) -> str:
@@ -544,6 +620,51 @@ def _substrait_filename(
         idx += 1
     used.add(f"{candidate}_{idx}")
     return f"{candidate}_{idx}.substrait"
+
+
+def _plan_cache_filename(entry: PlanCacheEntry) -> str:
+    base = _safe_label(f"{entry.plan_hash}__{entry.profile_hash}")
+    return f"{base}.substrait"
+
+
+def _write_plan_cache_artifacts(
+    relspec_dir: Path,
+    *,
+    entries: Sequence[PlanCacheEntry],
+    files_written: list[str],
+) -> None:
+    if not entries:
+        return
+    cache_dir = relspec_dir / "substrait_cache"
+    _ensure_dir(cache_dir)
+    used: set[str] = set()
+    index: list[JsonDict] = []
+    for entry in entries:
+        base = _plan_cache_filename(entry)
+        filename = base
+        if filename in used:
+            idx = 1
+            while f"{base}_{idx}" in used:
+                idx += 1
+            filename = f"{base}_{idx}"
+        used.add(filename)
+        target = cache_dir / filename
+        target.write_bytes(entry.plan_bytes)
+        files_written.append(str(target))
+        index.append(
+            {
+                "plan_hash": entry.plan_hash,
+                "profile_hash": entry.profile_hash,
+                "file": str(target.relative_to(relspec_dir)),
+            }
+        )
+    files_written.append(
+        _write_json(
+            relspec_dir / "substrait_cache_index.json",
+            {"plans": index},
+            overwrite=True,
+        )
+    )
 
 
 def _write_substrait_artifacts(
@@ -796,10 +917,13 @@ def write_run_bundle(
         relspec/datafusion_fallbacks/
         relspec/datafusion_explains/
         relspec/contracts.json
+        relspec/contracts_ddl.json
         relspec/compiled_outputs.json
         relspec/scan_telemetry/
         relspec/rule_exec_events/
         incremental/incremental_diff/
+        incremental/incremental_plan_diff/
+        incremental/inc_output_fingerprint_changes_v1/
         relspec/substrait/*.substrait
         relspec/substrait_index.json
         schemas/*.schema.json

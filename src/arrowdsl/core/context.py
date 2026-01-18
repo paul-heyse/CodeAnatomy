@@ -530,6 +530,7 @@ def execution_context_factory(
         Execution context with profile defaults applied.
     """
     runtime = runtime_profile_factory(profile)
+    runtime.apply_global_thread_pools()
     options = options or ExecutionContextOptions()
     if options.debug and runtime.datafusion is not None:
         datafusion_profile = replace(runtime.datafusion, capture_explain=True)

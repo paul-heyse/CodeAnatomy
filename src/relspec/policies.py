@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import warnings
 from collections.abc import Mapping
 from typing import Literal
 
@@ -13,8 +12,6 @@ from arrowdsl.schema.metadata import infer_ordering_keys
 from arrowdsl.spec.expr_ir import ExprIR
 from relspec.model import AmbiguityPolicy, ConfidencePolicy, DedupeKernelSpec, EvidenceSpec
 from relspec.rules.policies import PolicyRegistry
-
-_POLICY_REGISTRY = PolicyRegistry()
 
 CONFIDENCE_POLICY_META = b"confidence_policy"
 CONFIDENCE_BASE_META = b"confidence_base"
@@ -48,7 +45,7 @@ def confidence_expr(policy: ConfidencePolicy, *, source_field: str | None = None
 def confidence_policy_from_schema(
     schema: SchemaLike,
     *,
-    registry: PolicyRegistry | None = None,
+    registry: PolicyRegistry,
 ) -> ConfidencePolicy | None:
     """Derive a confidence policy from schema metadata.
 
@@ -64,20 +61,13 @@ def confidence_policy_from_schema(
     ConfidencePolicy | None
         Parsed confidence policy, or None when absent.
     """
-    if registry is None:
-        warnings.warn(
-            "confidence_policy_from_schema default registry is deprecated; pass registry=.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        registry = _POLICY_REGISTRY
     return _confidence_policy_from_metadata(schema.metadata or {}, registry=registry)
 
 
 def ambiguity_policy_from_schema(
     schema: SchemaLike,
     *,
-    registry: PolicyRegistry | None = None,
+    registry: PolicyRegistry,
 ) -> AmbiguityPolicy | None:
     """Derive an ambiguity policy from schema metadata.
 
@@ -93,13 +83,6 @@ def ambiguity_policy_from_schema(
     AmbiguityPolicy | None
         Parsed ambiguity policy, or None when absent.
     """
-    if registry is None:
-        warnings.warn(
-            "ambiguity_policy_from_schema default registry is deprecated; pass registry=.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        registry = _POLICY_REGISTRY
     return _ambiguity_policy_from_metadata(schema.metadata or {}, registry=registry)
 
 

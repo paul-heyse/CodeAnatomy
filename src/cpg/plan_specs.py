@@ -8,7 +8,7 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.plan.scan_io import plan_from_dataset
-from arrowdsl.plan_helpers import (
+from arrowdsl.plan_utils import (
     align_plan,
     align_table_to_schema,
     assert_schema_metadata,
@@ -19,7 +19,7 @@ from arrowdsl.plan_helpers import (
     finalize_plan,
     set_or_append_column,
 )
-from arrowdsl.plan_helpers import encode_plan as plan_encode_plan
+from arrowdsl.plan_utils import encode_plan as plan_encode_plan
 from arrowdsl.schema.schema import EncodingSpec, unify_schema_with_metadata
 from cpg.schemas import CPG_EDGES_SPEC, CPG_NODES_SPEC, CPG_PROPS_JSON_SPEC, CPG_PROPS_SPEC
 

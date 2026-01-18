@@ -15,10 +15,9 @@ from ibis.expr.types import Value as IbisValue
 
 from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.core.interop import SchemaLike, TableLike
-from arrowdsl.plan.runner import AdapterRunOptions, run_plan_adapter
 from arrowdsl.plan.schema_utils import plan_schema
-from config import AdapterMode
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
+from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
 from ibis_engine.plan import IbisPlan
 from relspec.compiler import RelationshipRuleCompiler, RuleExecutionOptions
 from relspec.contracts import RELATION_OUTPUT_NAME, relation_output_schema
@@ -51,7 +50,6 @@ class GraphPlan:
 class GraphExecutionOptions:
     """Execution options for graph-level plan materialization."""
 
-    adapter_mode: AdapterMode | None = None
     execution_policy: AdapterExecutionPolicy | None = None
     ibis_backend: BaseBackend | None = None
     params: Mapping[IbisValue, object] | None = None
@@ -96,19 +94,14 @@ def compile_graph_plan(
         execution_label: ExecutionLabel | None = None,
     ) -> TableLike:
         resolved_params = exec_params if exec_params is not None else execution.params
-        result = run_plan_adapter(
-            plan,
+        ibis_execution = IbisExecutionContext(
             ctx=exec_ctx,
-            options=AdapterRunOptions(
-                adapter_mode=execution.adapter_mode,
-                prefer_reader=False,
-                execution_policy=execution.execution_policy,
-                execution_label=execution_label,
-                ibis_backend=execution.ibis_backend,
-                ibis_params=resolved_params,
-            ),
+            execution_policy=execution.execution_policy,
+            execution_label=execution_label,
+            ibis_backend=execution.ibis_backend,
+            params=resolved_params,
         )
-        return cast("TableLike", result.value)
+        return materialize_ibis_plan(plan, execution=ibis_execution)
 
     outputs: dict[str, list[IbisPlan]] = {}
     for rule in order_rules(rules, evidence=work):
@@ -127,7 +120,6 @@ def compile_graph_plan(
                 options=RuleExecutionOptions(
                     params=execution.params,
                     plan_executor=_plan_executor,
-                    adapter_mode=execution.adapter_mode,
                     execution_policy=execution.execution_policy,
                     ibis_backend=execution.ibis_backend,
                 ),

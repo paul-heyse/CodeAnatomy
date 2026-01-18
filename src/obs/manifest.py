@@ -10,18 +10,20 @@ from typing import TYPE_CHECKING, cast
 from arrowdsl.core.interop import TableLike
 from arrowdsl.json_factory import JsonPolicy, dump_path, json_default
 from arrowdsl.plan.metrics import table_summary
-from arrowdsl.schema.serialization import schema_fingerprint
+from arrowdsl.schema.serialization import dataset_fingerprint, schema_fingerprint
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from extract.evidence_specs import EvidenceSpec, evidence_spec, evidence_specs
 from extract.registry_extractors import extractor_spec
 from extract.registry_specs import dataset_schema
 from ibis_engine.param_tables import ParamTableArtifact
+from obs.diagnostics_schemas import DIAGNOSTICS_SCHEMA_VERSION
 from obs.repro import collect_repro_info
 
 if TYPE_CHECKING:
     from arrowdsl.plan.query import ScanTelemetry
     from extract.evidence_plan import EvidencePlan
     from normalize.rule_model import NormalizeRule
+    from relspec.compiler import CompiledOutput
     from relspec.model import RelationshipRule
     from relspec.registry import DatasetLocation
 
@@ -65,6 +67,21 @@ class OutputRecord:
     name: str
     rows: int | None = None
     schema_fingerprint: str | None = None
+    plan_hash: str | None = None
+    profile_hash: str | None = None
+    writer_strategy: str | None = None
+    input_fingerprints: list[str] | None = None
+    dataset_fingerprint: str | None = None
+
+
+@dataclass(frozen=True)
+class OutputFingerprintInputs:
+    """Inputs required to compute output dataset fingerprints."""
+
+    plan_hash: str | None = None
+    profile_hash: str | None = None
+    writer_strategy: str | None = None
+    input_fingerprints: Sequence[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -142,6 +159,7 @@ class ManifestData:
     relspec_input_tables: Mapping[str, TableLike] | None = None
     relspec_input_locations: Mapping[str, DatasetLocation] | None = None
     relationship_outputs: Mapping[str, TableLike] | None = None
+    compiled_relationship_outputs: Mapping[str, CompiledOutput] | None = None
     cpg_nodes: TableLike | None = None
     cpg_edges: TableLike | None = None
     cpg_props: TableLike | None = None
@@ -164,6 +182,7 @@ class ManifestData:
     param_scalar_signature: str | None = None
     runtime_profile_name: str | None = None
     determinism_tier: str | None = None
+    writer_strategy: str | None = None
     notes: JsonDict | None = None
 
 
@@ -191,14 +210,60 @@ def _dataset_record_from_table(
     )
 
 
-def _output_record_from_table(name: str, table: TableLike | None) -> OutputRecord:
-    if table is None:
-        return OutputRecord(name=name)
+def _output_record_from_table(
+    *,
+    name: str,
+    table: TableLike | None,
+    fingerprints: OutputFingerprintInputs | None = None,
+) -> OutputRecord:
+    schema_fp = schema_fingerprint(table.schema) if table is not None else None
+    normalized_inputs = (
+        list(fingerprints.input_fingerprints)
+        if fingerprints is not None and fingerprints.input_fingerprints is not None
+        else None
+    )
+    output_fingerprint = None
+    if (
+        fingerprints is not None
+        and fingerprints.plan_hash is not None
+        and schema_fp is not None
+        and fingerprints.profile_hash is not None
+        and fingerprints.writer_strategy is not None
+    ):
+        output_fingerprint = dataset_fingerprint(
+            plan_hash=fingerprints.plan_hash,
+            schema_fingerprint=schema_fp,
+            profile_hash=fingerprints.profile_hash,
+            writer_strategy=fingerprints.writer_strategy,
+            input_fingerprints=fingerprints.input_fingerprints or (),
+        )
     return OutputRecord(
         name=name,
-        rows=int(table.num_rows),
-        schema_fingerprint=schema_fingerprint(table.schema),
+        rows=int(table.num_rows) if table is not None else None,
+        schema_fingerprint=schema_fp,
+        plan_hash=fingerprints.plan_hash if fingerprints is not None else None,
+        profile_hash=fingerprints.profile_hash if fingerprints is not None else None,
+        writer_strategy=fingerprints.writer_strategy if fingerprints is not None else None,
+        input_fingerprints=normalized_inputs,
+        dataset_fingerprint=output_fingerprint,
     )
+
+
+def _input_fingerprint_values(
+    input_names: Sequence[str],
+    *,
+    known_fingerprints: Mapping[str, str],
+    schema_fingerprints: Mapping[str, str],
+) -> list[str]:
+    values: list[str] = []
+    for name in input_names:
+        if name in known_fingerprints:
+            values.append(known_fingerprints[name])
+            continue
+        schema_fp = schema_fingerprints.get(name)
+        if schema_fp is not None:
+            values.append(schema_fp)
+    return values
 
 
 def _collect_relationship_inputs(data: ManifestData) -> list[DatasetRecord]:
@@ -229,6 +294,16 @@ def _collect_relationship_outputs(
     if not data.relationship_outputs:
         return [], []
 
+    input_schema_fps: dict[str, str] = {}
+    if data.relspec_input_tables:
+        for name, table in data.relspec_input_tables.items():
+            input_schema_fps[name] = schema_fingerprint(table.schema)
+
+    compiled_outputs = data.compiled_relationship_outputs or {}
+    profile_hash = data.datafusion_settings_hash
+    writer_strategy = data.writer_strategy
+    output_fingerprints: dict[str, str] = {}
+
     datasets: list[DatasetRecord] = []
     outputs: list[OutputRecord] = []
     for name in sorted(data.relationship_outputs):
@@ -236,29 +311,98 @@ def _collect_relationship_outputs(
         datasets.append(
             _dataset_record_from_table(name=name, kind="relationship_output", table=table)
         )
-        outputs.append(_output_record_from_table(name=name, table=table))
+        compiled = compiled_outputs.get(name)
+        plan_hash = compiled.plan_hash if compiled is not None else None
+        input_fps = None
+        if compiled is not None and compiled.input_datasets:
+            input_fps = _input_fingerprint_values(
+                compiled.input_datasets,
+                known_fingerprints=output_fingerprints,
+                schema_fingerprints=input_schema_fps,
+            )
+        fingerprints = OutputFingerprintInputs(
+            plan_hash=plan_hash,
+            profile_hash=profile_hash,
+            writer_strategy=writer_strategy,
+            input_fingerprints=input_fps,
+        )
+        record = _output_record_from_table(
+            name=name,
+            table=table,
+            fingerprints=fingerprints,
+        )
+        outputs.append(record)
+        if record.dataset_fingerprint is not None:
+            output_fingerprints[name] = record.dataset_fingerprint
+        elif record.schema_fingerprint is not None:
+            output_fingerprints[name] = record.schema_fingerprint
     return datasets, outputs
+
+
+def relationship_output_fingerprints(data: ManifestData) -> dict[str, str]:
+    """Return dataset fingerprints for relationship outputs.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of output dataset name to dataset fingerprint.
+    """
+    _, outputs = _collect_relationship_outputs(data)
+    return {
+        record.name: record.dataset_fingerprint
+        for record in outputs
+        if record.dataset_fingerprint is not None
+    }
 
 
 def _collect_cpg_outputs(data: ManifestData) -> tuple[list[DatasetRecord], list[OutputRecord]]:
     datasets: list[DatasetRecord] = []
     outputs: list[OutputRecord] = []
+    profile_hash = data.datafusion_settings_hash
+    writer_strategy = data.writer_strategy
 
     if data.cpg_nodes is not None:
         datasets.append(
             _dataset_record_from_table(name="cpg_nodes", kind="cpg_output", table=data.cpg_nodes)
         )
-        outputs.append(_output_record_from_table("cpg_nodes", data.cpg_nodes))
+        outputs.append(
+            _output_record_from_table(
+                name="cpg_nodes",
+                table=data.cpg_nodes,
+                fingerprints=OutputFingerprintInputs(
+                    profile_hash=profile_hash,
+                    writer_strategy=writer_strategy,
+                ),
+            )
+        )
     if data.cpg_edges is not None:
         datasets.append(
             _dataset_record_from_table(name="cpg_edges", kind="cpg_output", table=data.cpg_edges)
         )
-        outputs.append(_output_record_from_table("cpg_edges", data.cpg_edges))
+        outputs.append(
+            _output_record_from_table(
+                name="cpg_edges",
+                table=data.cpg_edges,
+                fingerprints=OutputFingerprintInputs(
+                    profile_hash=profile_hash,
+                    writer_strategy=writer_strategy,
+                ),
+            )
+        )
     if data.cpg_props is not None:
         datasets.append(
             _dataset_record_from_table(name="cpg_props", kind="cpg_output", table=data.cpg_props)
         )
-        outputs.append(_output_record_from_table("cpg_props", data.cpg_props))
+        outputs.append(
+            _output_record_from_table(
+                name="cpg_props",
+                table=data.cpg_props,
+                fingerprints=OutputFingerprintInputs(
+                    profile_hash=profile_hash,
+                    writer_strategy=writer_strategy,
+                ),
+            )
+        )
     if data.cpg_props_json is not None:
         datasets.append(
             _dataset_record_from_table(
@@ -267,7 +411,16 @@ def _collect_cpg_outputs(data: ManifestData) -> tuple[list[DatasetRecord], list[
                 table=data.cpg_props_json,
             )
         )
-        outputs.append(_output_record_from_table("cpg_props_json", data.cpg_props_json))
+        outputs.append(
+            _output_record_from_table(
+                name="cpg_props_json",
+                table=data.cpg_props_json,
+                fingerprints=OutputFingerprintInputs(
+                    profile_hash=profile_hash,
+                    writer_strategy=writer_strategy,
+                ),
+            )
+        )
     return datasets, outputs
 
 
@@ -439,6 +592,7 @@ def _param_tables_payload(data: ManifestData) -> JsonDict:
 
 def _manifest_notes(data: ManifestData) -> JsonDict:
     notes: JsonDict = dict(data.notes) if data.notes else {}
+    notes["diagnostics_schema_version"] = DIAGNOSTICS_SCHEMA_VERSION
     if data.relspec_scan_telemetry:
         notes["relspec_scan_telemetry"] = _scan_telemetry_payload(data.relspec_scan_telemetry)
     if data.datafusion_settings:

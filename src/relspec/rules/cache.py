@@ -136,6 +136,26 @@ def rule_plan_signatures_cached(domain: RuleDomain | None = None) -> dict[str, s
 
 
 @cache
+def rule_plan_sql_cached(domain: RuleDomain | None = None) -> dict[str, str]:
+    """Return optimized SQL strings for rule definitions.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of rule names to optimized SQL strings.
+    """
+    diagnostics = rule_diagnostics_cached(domain)
+    plan_sql: dict[str, str] = {}
+    for diag in diagnostics:
+        if diag.rule_name is None:
+            continue
+        optimized_sql = diag.metadata.get("optimized_sql")
+        if optimized_sql and diag.rule_name not in plan_sql:
+            plan_sql[diag.rule_name] = optimized_sql
+    return plan_sql
+
+
+@cache
 def rule_graph_signature_cached(domain: RuleDomain | None = None) -> str:
     """Return a stable graph signature for rules, optionally filtered by domain.
 
@@ -193,6 +213,7 @@ __all__ = [
     "rule_diagnostics_table_cached",
     "rule_graph_signature_cached",
     "rule_plan_signatures_cached",
+    "rule_plan_sql_cached",
     "rule_registry_cached",
     "rule_table_cached",
     "template_diagnostics_table_cached",

@@ -16,7 +16,6 @@ from arrowdsl.plan.ordering_policy import apply_canonical_sort, ordering_metadat
 from arrowdsl.plan.plan import Plan, PlanRunResult, execute_plan
 from arrowdsl.schema.metadata import merge_metadata_specs
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from config import AdapterMode
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 
 if TYPE_CHECKING:
@@ -44,8 +43,7 @@ class _IbisRunnerModule(Protocol):
 class AdapterRunOptions:
     """Options for running plan adapters."""
 
-    adapter_mode: AdapterMode | None = None
-    prefer_reader: bool = False
+    prefer_reader: bool | None = None
     metadata_spec: SchemaMetadataSpec | None = None
     attach_ordering_metadata: bool = True
     execution_policy: AdapterExecutionPolicy | None = None
@@ -135,20 +133,22 @@ def run_plan(
     )
 
 
+def _resolve_prefer_reader(*, ctx: ExecutionContext, prefer_reader: bool | None) -> bool:
+    if prefer_reader is not None:
+        return prefer_reader
+    return ctx.determinism != DeterminismTier.CANONICAL
+
+
 def _run_ibis_plan(
     plan: IbisPlan,
     *,
     ctx: ExecutionContext,
     options: AdapterRunOptions,
+    prefer_reader: bool,
 ) -> PlanRunResult:
     runtime = _ibis_runtime()
-    adapter_mode = options.adapter_mode or AdapterMode()
     execution: object | None = None
-    if (
-        adapter_mode.use_datafusion_bridge
-        and options.ibis_backend is not None
-        and ctx.runtime.datafusion is not None
-    ):
+    if options.ibis_backend is not None and ctx.runtime.datafusion is not None:
         allow_fallback = (
             options.execution_policy.allow_fallback
             if options.execution_policy is not None
@@ -170,7 +170,7 @@ def _run_ibis_plan(
                 execution_label=options.execution_label,
             ),
         )
-    if options.prefer_reader and ctx.determinism != DeterminismTier.CANONICAL:
+    if prefer_reader:
         reader = (
             runtime.ibis_stream_plan(plan, batch_size=options.ibis_batch_size, execution=execution)
             if execution is not None
@@ -232,26 +232,20 @@ def run_plan_adapter(
     PlanRunResult
         Materialized plan result.
 
-    Raises
-    ------
-    ValueError
-        Raised when the Ibis adapter is disabled for an Ibis plan.
     """
     options = options or AdapterRunOptions()
-    adapter_mode = options.adapter_mode or AdapterMode()
+    prefer_reader = _resolve_prefer_reader(ctx=ctx, prefer_reader=options.prefer_reader)
     if _is_ibis_plan(plan):
-        if not adapter_mode.use_ibis_bridge:
-            msg = "AdapterMode.use_ibis_bridge is disabled for IbisPlan execution."
-            raise ValueError(msg)
         return _run_ibis_plan(
             plan,
             ctx=ctx,
             options=options,
+            prefer_reader=prefer_reader,
         )
     return run_plan(
         cast("Plan", plan),
         ctx=ctx,
-        prefer_reader=options.prefer_reader,
+        prefer_reader=prefer_reader,
         metadata_spec=options.metadata_spec,
         attach_ordering_metadata=options.attach_ordering_metadata,
     )

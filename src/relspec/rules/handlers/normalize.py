@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.plan.catalog import PlanDeriver
-from arrowdsl.plan.query import ProjectionSpec, QuerySpec
-from arrowdsl.spec.expr_ir import ExprIR
 from ibis_engine.query_compiler import IbisQuerySpec
-from normalize.plan_builders import resolve_plan_builder
 from normalize.rule_defaults import apply_rule_defaults
 from normalize.rule_model import (
     EvidenceOutput as NormalizeEvidenceOutput,
@@ -46,12 +42,11 @@ class NormalizeRuleHandler(RuleHandler):
         """
         payload = rule.payload
         query = _normalize_query(payload, rel_ops=rule.rel_ops)
-        derive = _normalize_derive(payload)
         base = NormalizeRule(
             name=rule.name,
             output=rule.output,
             inputs=rule.inputs,
-            derive=derive,
+            ibis_builder=payload.plan_builder if isinstance(payload, NormalizePayload) else None,
             query=query,
             evidence=_normalize_evidence(rule.evidence),
             evidence_output=_normalize_evidence_output(rule.evidence_output, ctx=ctx),
@@ -68,41 +63,15 @@ class NormalizeRuleHandler(RuleHandler):
         return apply_rule_defaults(base, registry=self.policies)
 
 
-def _normalize_query(payload: object | None, *, rel_ops: tuple[RelOpT, ...]) -> QuerySpec | None:
+def _normalize_query(
+    payload: object | None,
+    *,
+    rel_ops: tuple[RelOpT, ...],
+) -> IbisQuerySpec | None:
     if isinstance(payload, NormalizePayload) and payload.query is not None:
-        return _query_spec_for_plan(payload.query)
+        return payload.query
     if rel_ops:
-        query = query_spec_from_rel_ops(rel_ops)
-        return _query_spec_for_plan(query) if query is not None else None
-    return None
-
-
-def _query_spec_for_plan(spec: IbisQuerySpec) -> QuerySpec:
-    projection = ProjectionSpec(
-        base=spec.projection.base,
-        derived={
-            name: cast("ExprIR", expr).to_expr_spec()
-            for name, expr in spec.projection.derived.items()
-        },
-    )
-    predicate = (
-        cast("ExprIR", spec.predicate).to_expr_spec() if spec.predicate is not None else None
-    )
-    pushdown = (
-        cast("ExprIR", spec.pushdown_predicate).to_expr_spec()
-        if spec.pushdown_predicate is not None
-        else None
-    )
-    return QuerySpec(
-        projection=projection,
-        predicate=predicate,
-        pushdown_predicate=pushdown,
-    )
-
-
-def _normalize_derive(payload: object | None) -> PlanDeriver | None:
-    if isinstance(payload, NormalizePayload) and payload.plan_builder:
-        return resolve_plan_builder(payload.plan_builder)
+        return query_spec_from_rel_ops(rel_ops)
     return None
 
 

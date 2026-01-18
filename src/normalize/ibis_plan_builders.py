@@ -13,20 +13,21 @@ from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 
 from arrowdsl.compute.position_encoding import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from arrowdsl.core.context import ExecutionContext, Ordering
+from arrowdsl.core.interop import TableLike
 from arrowdsl.plan.ordering_policy import ordering_keys_for_schema
-from arrowdsl.plan.scan_io import PlanSource, plan_from_source
+from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.build import empty_table
 from extract.registry_specs import dataset_schema as extract_dataset_schema
 from ibis_engine.builtin_udfs import col_to_byte, position_encoding_norm
 from ibis_engine.ids import masked_stable_id_expr, stable_id_expr, stable_key_expr
 from ibis_engine.plan import IbisPlan
-from ibis_engine.plan_bridge import SourceToIbisOptions, source_to_ibis
 from ibis_engine.schema_utils import (
     align_table_to_schema,
     coalesce_columns,
     ensure_columns,
     ibis_null_literal,
 )
+from ibis_engine.sources import SourceToIbisOptions, source_to_ibis
 from normalize.registry_fields import DIAG_DETAILS_TYPE
 from normalize.registry_ids import (
     DEF_USE_EVENT_ID_SPEC,
@@ -53,7 +54,7 @@ _DEF_USE_OPS: tuple[str, ...] = ("IMPORT_NAME", "IMPORT_FROM")
 _DEF_USE_PREFIXES: tuple[str, ...] = ("STORE_", "DELETE_")
 _USE_PREFIXES: tuple[str, ...] = ("LOAD_",)
 
-IbisPlanSource = PlanSource | IbisPlan | Table
+IbisPlanSource = IbisPlan | Table | TableLike
 
 
 @dataclass
@@ -77,7 +78,13 @@ class IbisPlanCatalog:
         -------
         ibis.expr.types.Table
             Ibis table expression for the named input.
+
+        Raises
+        ------
+        TypeError
+            Raised when a DatasetSource must be materialized before use.
         """
+        _ = ctx
         source = self.tables.get(name)
         if source is None:
             empty = empty_table(schema)
@@ -86,13 +93,15 @@ class IbisPlanCatalog:
             return source.expr
         if isinstance(source, Table):
             return source
-        plan_source = plan_from_source(cast("PlanSource", source), ctx=ctx, label=name)
+        if isinstance(source, DatasetSource):
+            msg = f"DatasetSource {name!r} must be materialized before normalize builds."
+            raise TypeError(msg)
         plan = source_to_ibis(
-            plan_source,
+            cast("TableLike", source),
             options=SourceToIbisOptions(
-                ctx=ctx,
                 backend=self.backend,
                 name=name,
+                ordering=Ordering.unordered(),
             ),
         )
         self.tables[name] = plan

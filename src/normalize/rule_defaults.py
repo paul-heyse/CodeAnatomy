@@ -20,7 +20,7 @@ from relspec.rules.policies import PolicyRegistry
 def apply_rule_defaults(
     rule: NormalizeRule,
     *,
-    registry: PolicyRegistry | None = None,
+    registry: PolicyRegistry,
 ) -> NormalizeRule:
     """Apply policy and evidence defaults to a normalize rule.
 
@@ -36,7 +36,7 @@ def apply_rule_defaults(
 def apply_policy_defaults(
     rules: Sequence[NormalizeRule],
     *,
-    registry: PolicyRegistry | None = None,
+    registry: PolicyRegistry,
 ) -> tuple[NormalizeRule, ...]:
     """Apply policy defaults to a sequence of normalize rules.
 
@@ -62,7 +62,7 @@ def apply_evidence_defaults(rules: Sequence[NormalizeRule]) -> tuple[NormalizeRu
 def _apply_policy_defaults(
     rule: NormalizeRule,
     *,
-    registry: PolicyRegistry | None,
+    registry: PolicyRegistry,
 ) -> NormalizeRule:
     schema = dataset_schema(rule.output)
     confidence = rule.confidence_policy or confidence_policy_from_schema(

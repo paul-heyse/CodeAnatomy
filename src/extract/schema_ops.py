@@ -8,11 +8,8 @@ from dataclasses import dataclass
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.finalize.finalize import FinalizeContext, FinalizeResult
-from arrowdsl.plan.plan import Plan
-from arrowdsl.plan_helpers import align_plan as align_plan_to_schema
-from arrowdsl.plan_helpers import encode_plan
 from arrowdsl.schema.policy import SchemaPolicy
-from arrowdsl.schema.schema import SchemaMetadataSpec
+from arrowdsl.schema.schema import SchemaMetadataSpec, align_table, encode_table
 from extract.registry_pipelines import pipeline_spec
 from extract.registry_specs import (
     dataset_metadata_with_options,
@@ -88,69 +85,6 @@ def metadata_specs_for_datasets(
     }
 
 
-def normalize_extract_plan(
-    name: str,
-    plan: Plan,
-    *,
-    ctx: ExecutionContext,
-    normalize: ExtractNormalizeOptions | None = None,
-) -> Plan:
-    """Align and encode a plan using the dataset schema policy.
-
-    Returns
-    -------
-    Plan
-        Normalized plan aligned to the dataset schema policy.
-    """
-    normalize = normalize or ExtractNormalizeOptions()
-    policy = schema_policy_for_dataset(
-        name,
-        ctx=ctx,
-        options=normalize.options,
-        repo_id=normalize.repo_id,
-        enable_encoding=normalize.enable_encoding,
-    )
-    plan = align_plan_to_schema(
-        plan,
-        schema=policy.resolved_schema(),
-        ctx=ctx,
-        keep_extra_columns=policy.keep_extra_columns,
-    )
-    if policy.encoding is None:
-        return plan
-    columns = tuple(spec.column for spec in policy.encoding.specs)
-    if not columns:
-        return plan
-    return encode_plan(plan, columns=columns, ctx=ctx)
-
-
-def normalize_plan_with_policy(
-    plan: Plan,
-    *,
-    policy: SchemaPolicy,
-    ctx: ExecutionContext,
-) -> Plan:
-    """Align and encode a plan using a precomputed schema policy.
-
-    Returns
-    -------
-    Plan
-        Normalized plan aligned to the provided schema policy.
-    """
-    plan = align_plan_to_schema(
-        plan,
-        schema=policy.resolved_schema(),
-        ctx=ctx,
-        keep_extra_columns=policy.keep_extra_columns,
-    )
-    if policy.encoding is None:
-        return plan
-    columns = tuple(spec.column for spec in policy.encoding.specs)
-    if not columns:
-        return plan
-    return encode_plan(plan, columns=columns, ctx=ctx)
-
-
 def normalize_extract_output(
     name: str,
     table: TableLike,
@@ -175,7 +109,18 @@ def normalize_extract_output(
         repo_id=normalize.repo_id,
         enable_encoding=normalize.enable_encoding,
     )
-    return policy.apply(processed)
+    schema = policy.resolved_schema()
+    aligned = align_table(
+        processed,
+        schema=schema,
+        safe_cast=policy.safe_cast,
+        keep_extra_columns=policy.keep_extra_columns,
+        on_error=policy.on_error,
+    )
+    if policy.encoding is None or not policy.encoding.dictionary_cols:
+        return aligned
+    columns = [field.name for field in schema if field.name in policy.encoding.dictionary_cols]
+    return encode_table(aligned, columns=columns)
 
 
 def apply_pipeline_kernels(name: str, table: TableLike) -> TableLike:
@@ -245,8 +190,6 @@ __all__ = [
     "metadata_spec_for_dataset",
     "metadata_specs_for_datasets",
     "normalize_extract_output",
-    "normalize_extract_plan",
-    "normalize_plan_with_policy",
     "schema_policy_for_dataset",
     "validate_extract_output",
 ]

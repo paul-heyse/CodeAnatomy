@@ -22,26 +22,22 @@ from libcst.metadata import (
 from arrowdsl.compute.macros import normalize_string_items
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
-from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from arrowdsl.schema.structs import flatten_struct_field
 from extract.helpers import (
     ExtractExecutionContext,
+    ExtractMaterializeOptions,
     FileContext,
+    apply_query_and_project,
     bytes_from_file_ctx,
     file_identity_row,
+    ibis_plan_from_rows,
     iter_contexts,
+    materialize_extract_plan,
 )
-from extract.plan_helpers import apply_query_and_normalize, plan_from_rows
 from extract.registry_fields import QNAME_STRUCT
-from extract.registry_specs import (
-    dataset_enabled,
-    dataset_row_schema,
-    dataset_schema,
-    normalize_options,
-)
-from extract.schema_ops import ExtractNormalizeOptions, metadata_spec_for_dataset
+from extract.registry_specs import dataset_enabled, dataset_row_schema, normalize_options
+from extract.schema_ops import ExtractNormalizeOptions
+from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
@@ -87,14 +83,6 @@ class CSTExtractResult:
 _QNAME_FLAT_FIELDS = flatten_struct_field(pa.field("qname", QNAME_STRUCT))
 QNAME_KEYS = tuple(field.name.split(".", 1)[1] for field in _QNAME_FLAT_FIELDS)
 
-PARSE_MANIFEST_SCHEMA = dataset_schema("py_cst_parse_manifest_v1")
-PARSE_ERRORS_SCHEMA = dataset_schema("py_cst_parse_errors_v1")
-NAME_REFS_SCHEMA = dataset_schema("py_cst_name_refs_v1")
-IMPORTS_SCHEMA = dataset_schema("py_cst_imports_v1")
-CALLSITES_SCHEMA = dataset_schema("py_cst_callsites_v1")
-DEFS_SCHEMA = dataset_schema("py_cst_defs_v1")
-TYPE_EXPRS_SCHEMA = dataset_schema("py_cst_type_exprs_v1")
-
 PARSE_MANIFEST_ROW_SCHEMA = dataset_row_schema("py_cst_parse_manifest_v1")
 PARSE_ERRORS_ROW_SCHEMA = dataset_row_schema("py_cst_parse_errors_v1")
 NAME_REFS_ROW_SCHEMA = dataset_row_schema("py_cst_name_refs_v1")
@@ -102,47 +90,6 @@ IMPORTS_ROW_SCHEMA = dataset_row_schema("py_cst_imports_v1")
 CALLSITES_ROW_SCHEMA = dataset_row_schema("py_cst_callsites_v1")
 DEFS_ROW_SCHEMA = dataset_row_schema("py_cst_defs_v1")
 TYPE_EXPRS_ROW_SCHEMA = dataset_row_schema("py_cst_type_exprs_v1")
-
-
-def _cst_metadata_specs(options: CSTExtractOptions) -> dict[str, SchemaMetadataSpec]:
-    repo_id = options.repo_id
-    return {
-        "cst_parse_manifest": metadata_spec_for_dataset(
-            "py_cst_parse_manifest_v1",
-            options=options,
-            repo_id=repo_id,
-        ),
-        "cst_parse_errors": metadata_spec_for_dataset(
-            "py_cst_parse_errors_v1",
-            options=options,
-            repo_id=repo_id,
-        ),
-        "cst_name_refs": metadata_spec_for_dataset(
-            "py_cst_name_refs_v1",
-            options=options,
-            repo_id=repo_id,
-        ),
-        "cst_imports": metadata_spec_for_dataset(
-            "py_cst_imports_v1",
-            options=options,
-            repo_id=repo_id,
-        ),
-        "cst_callsites": metadata_spec_for_dataset(
-            "py_cst_callsites_v1",
-            options=options,
-            repo_id=repo_id,
-        ),
-        "cst_defs": metadata_spec_for_dataset(
-            "py_cst_defs_v1",
-            options=options,
-            repo_id=repo_id,
-        ),
-        "cst_type_exprs": metadata_spec_for_dataset(
-            "py_cst_type_exprs_v1",
-            options=options,
-            repo_id=repo_id,
-        ),
-    }
 
 
 @dataclass(frozen=True)
@@ -839,288 +786,200 @@ def extract_cst(
         normalized_options,
         evidence_plan=exec_context.evidence_plan,
     )
-    metadata_specs = _cst_metadata_specs(normalized_options)
+    normalize = ExtractNormalizeOptions(
+        options=normalized_options,
+        repo_id=normalized_options.repo_id,
+    )
 
     for file_ctx in iter_contexts(repo_files, exec_context.file_contexts):
         _extract_cst_for_context(file_ctx, extract_ctx)
 
-    return _build_cst_result(extract_ctx, exec_ctx, metadata_specs)
-
-
-def _build_manifest_table(
-    ctx: CSTExtractContext,
-    exec_ctx: ExecutionContext,
-) -> TableLike:
-    return materialize_plan(
-        _build_manifest_plan(ctx, exec_ctx),
-        ctx=exec_ctx,
-        attach_ordering_metadata=True,
-    )
-
-
-def _build_manifest_plan(
-    ctx: CSTExtractContext,
-    exec_ctx: ExecutionContext,
-) -> Plan:
-    if not ctx.manifest_rows:
-        return Plan.table_source(empty_table(PARSE_MANIFEST_SCHEMA))
-    plan = plan_from_rows(ctx.manifest_rows, schema=PARSE_MANIFEST_ROW_SCHEMA, label="cst_manifest")
-    return apply_query_and_normalize(
-        "py_cst_parse_manifest_v1",
-        plan,
-        ctx=exec_ctx,
-        normalize=ExtractNormalizeOptions(
-            options=ctx.options,
-            repo_id=ctx.options.repo_id,
-        ),
-        evidence_plan=ctx.evidence_plan,
-    )
-
-
-def _build_errors_table(
-    ctx: CSTExtractContext,
-    exec_ctx: ExecutionContext,
-) -> TableLike:
-    return materialize_plan(
-        _build_errors_plan(ctx, exec_ctx),
-        ctx=exec_ctx,
-        attach_ordering_metadata=True,
-    )
-
-
-def _build_errors_plan(
-    ctx: CSTExtractContext,
-    exec_ctx: ExecutionContext,
-) -> Plan:
-    if not ctx.error_rows:
-        return Plan.table_source(empty_table(PARSE_ERRORS_SCHEMA))
-    plan = plan_from_rows(ctx.error_rows, schema=PARSE_ERRORS_ROW_SCHEMA, label="cst_parse_errors")
-    return apply_query_and_normalize(
-        "py_cst_parse_errors_v1",
-        plan,
-        ctx=exec_ctx,
-        normalize=ExtractNormalizeOptions(
-            options=ctx.options,
-            repo_id=ctx.options.repo_id,
-        ),
-        evidence_plan=ctx.evidence_plan,
-    )
-
-
-def _build_name_refs_table(
-    ctx: CSTExtractContext,
-    exec_ctx: ExecutionContext,
-) -> TableLike:
-    return materialize_plan(
-        _build_name_refs_plan(ctx, exec_ctx),
-        ctx=exec_ctx,
-        attach_ordering_metadata=True,
-    )
-
-
-def _build_name_refs_plan(
-    ctx: CSTExtractContext,
-    exec_ctx: ExecutionContext,
-) -> Plan:
-    if not ctx.name_ref_rows:
-        return Plan.table_source(empty_table(NAME_REFS_SCHEMA))
-    plan = plan_from_rows(ctx.name_ref_rows, schema=NAME_REFS_ROW_SCHEMA, label="cst_name_refs")
-    return apply_query_and_normalize(
-        "py_cst_name_refs_v1",
-        plan,
-        ctx=exec_ctx,
-        normalize=ExtractNormalizeOptions(
-            options=ctx.options,
-            repo_id=ctx.options.repo_id,
-        ),
-        evidence_plan=ctx.evidence_plan,
-    )
-
-
-def _build_imports_table(
-    ctx: CSTExtractContext,
-    exec_ctx: ExecutionContext,
-) -> TableLike:
-    return materialize_plan(
-        _build_imports_plan(ctx, exec_ctx),
-        ctx=exec_ctx,
-        attach_ordering_metadata=True,
-    )
-
-
-def _build_imports_plan(
-    ctx: CSTExtractContext,
-    exec_ctx: ExecutionContext,
-) -> Plan:
-    if not ctx.import_rows:
-        return Plan.table_source(empty_table(IMPORTS_SCHEMA))
-    plan = plan_from_rows(ctx.import_rows, schema=IMPORTS_ROW_SCHEMA, label="cst_imports")
-    return apply_query_and_normalize(
-        "py_cst_imports_v1",
-        plan,
-        ctx=exec_ctx,
-        normalize=ExtractNormalizeOptions(
-            options=ctx.options,
-            repo_id=ctx.options.repo_id,
-        ),
-        evidence_plan=ctx.evidence_plan,
-    )
-
-
-def _build_callsites_table(
-    ctx: CSTExtractContext,
-    exec_ctx: ExecutionContext,
-) -> TableLike:
-    return materialize_plan(
-        _build_callsites_plan(ctx, exec_ctx),
-        ctx=exec_ctx,
-        attach_ordering_metadata=True,
-    )
-
-
-def _build_callsites_plan(
-    ctx: CSTExtractContext,
-    exec_ctx: ExecutionContext,
-) -> Plan:
-    if not ctx.call_rows:
-        return Plan.table_source(empty_table(CALLSITES_SCHEMA))
-    plan = plan_from_rows(ctx.call_rows, schema=CALLSITES_ROW_SCHEMA, label="cst_callsites")
-    return apply_query_and_normalize(
-        "py_cst_callsites_v1",
-        plan,
-        ctx=exec_ctx,
-        normalize=ExtractNormalizeOptions(
-            options=ctx.options,
-            repo_id=ctx.options.repo_id,
-        ),
-        evidence_plan=ctx.evidence_plan,
-    )
-
-
-def _build_defs_table(
-    ctx: CSTExtractContext,
-    exec_ctx: ExecutionContext,
-) -> TableLike:
-    return materialize_plan(
-        _build_defs_plan(ctx, exec_ctx),
-        ctx=exec_ctx,
-        attach_ordering_metadata=True,
-    )
-
-
-def _build_defs_plan(
-    ctx: CSTExtractContext,
-    exec_ctx: ExecutionContext,
-) -> Plan:
-    if not ctx.def_rows:
-        return Plan.table_source(empty_table(DEFS_SCHEMA))
-    plan = plan_from_rows(ctx.def_rows, schema=DEFS_ROW_SCHEMA, label="cst_defs")
-    return apply_query_and_normalize(
-        "py_cst_defs_v1",
-        plan,
-        ctx=exec_ctx,
-        normalize=ExtractNormalizeOptions(
-            options=ctx.options,
-            repo_id=ctx.options.repo_id,
-        ),
-        evidence_plan=ctx.evidence_plan,
-    )
-
-
-def _build_type_exprs_table(
-    ctx: CSTExtractContext,
-    exec_ctx: ExecutionContext,
-) -> TableLike:
-    return materialize_plan(
-        _build_type_exprs_plan(ctx, exec_ctx),
-        ctx=exec_ctx,
-        attach_ordering_metadata=True,
-    )
-
-
-def _build_type_exprs_plan(
-    ctx: CSTExtractContext,
-    exec_ctx: ExecutionContext,
-) -> Plan:
-    if not ctx.type_expr_rows:
-        return Plan.table_source(empty_table(TYPE_EXPRS_SCHEMA))
-    plan = plan_from_rows(ctx.type_expr_rows, schema=TYPE_EXPRS_ROW_SCHEMA, label="cst_type_exprs")
-    return apply_query_and_normalize(
-        "py_cst_type_exprs_v1",
-        plan,
-        ctx=exec_ctx,
-        normalize=ExtractNormalizeOptions(
-            options=ctx.options,
-            repo_id=ctx.options.repo_id,
-        ),
-        evidence_plan=ctx.evidence_plan,
-    )
-
-
-def _build_cst_result(
-    ctx: CSTExtractContext,
-    exec_ctx: ExecutionContext,
-    metadata_specs: Mapping[str, SchemaMetadataSpec],
-) -> CSTExtractResult:
-    plans = _build_cst_plans(ctx, exec_ctx)
+    plans = _build_cst_plans(extract_ctx)
     return CSTExtractResult(
-        py_cst_parse_manifest=materialize_plan(
+        py_cst_parse_manifest=materialize_extract_plan(
+            "py_cst_parse_manifest_v1",
             plans["cst_parse_manifest"],
             ctx=exec_ctx,
-            metadata_spec=metadata_specs["cst_parse_manifest"],
-            attach_ordering_metadata=True,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
+            ),
         ),
-        py_cst_parse_errors=materialize_plan(
+        py_cst_parse_errors=materialize_extract_plan(
+            "py_cst_parse_errors_v1",
             plans["cst_parse_errors"],
             ctx=exec_ctx,
-            metadata_spec=metadata_specs["cst_parse_errors"],
-            attach_ordering_metadata=True,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
+            ),
         ),
-        py_cst_name_refs=materialize_plan(
+        py_cst_name_refs=materialize_extract_plan(
+            "py_cst_name_refs_v1",
             plans["cst_name_refs"],
             ctx=exec_ctx,
-            metadata_spec=metadata_specs["cst_name_refs"],
-            attach_ordering_metadata=True,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
+            ),
         ),
-        py_cst_imports=materialize_plan(
+        py_cst_imports=materialize_extract_plan(
+            "py_cst_imports_v1",
             plans["cst_imports"],
             ctx=exec_ctx,
-            metadata_spec=metadata_specs["cst_imports"],
-            attach_ordering_metadata=True,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
+            ),
         ),
-        py_cst_callsites=materialize_plan(
+        py_cst_callsites=materialize_extract_plan(
+            "py_cst_callsites_v1",
             plans["cst_callsites"],
             ctx=exec_ctx,
-            metadata_spec=metadata_specs["cst_callsites"],
-            attach_ordering_metadata=True,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
+            ),
         ),
-        py_cst_defs=materialize_plan(
+        py_cst_defs=materialize_extract_plan(
+            "py_cst_defs_v1",
             plans["cst_defs"],
             ctx=exec_ctx,
-            metadata_spec=metadata_specs["cst_defs"],
-            attach_ordering_metadata=True,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
+            ),
         ),
-        py_cst_type_exprs=materialize_plan(
+        py_cst_type_exprs=materialize_extract_plan(
+            "py_cst_type_exprs_v1",
             plans["cst_type_exprs"],
             ctx=exec_ctx,
-            metadata_spec=metadata_specs["cst_type_exprs"],
-            attach_ordering_metadata=True,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
+            ),
         ),
     )
 
 
-def _build_cst_plans(
-    ctx: CSTExtractContext,
-    exec_ctx: ExecutionContext,
-) -> dict[str, Plan]:
+def _normalize_ctx(ctx: CSTExtractContext) -> ExtractNormalizeOptions:
+    return ExtractNormalizeOptions(options=ctx.options, repo_id=ctx.options.repo_id)
+
+
+def _build_manifest_plan(ctx: CSTExtractContext) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
+        "py_cst_parse_manifest_v1",
+        ctx.manifest_rows,
+        row_schema=PARSE_MANIFEST_ROW_SCHEMA,
+    )
+    return apply_query_and_project(
+        "py_cst_parse_manifest_v1",
+        raw_plan.expr,
+        normalize=_normalize_ctx(ctx),
+        evidence_plan=ctx.evidence_plan,
+        repo_id=ctx.options.repo_id,
+    )
+
+
+def _build_errors_plan(ctx: CSTExtractContext) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
+        "py_cst_parse_errors_v1",
+        ctx.error_rows,
+        row_schema=PARSE_ERRORS_ROW_SCHEMA,
+    )
+    return apply_query_and_project(
+        "py_cst_parse_errors_v1",
+        raw_plan.expr,
+        normalize=_normalize_ctx(ctx),
+        evidence_plan=ctx.evidence_plan,
+        repo_id=ctx.options.repo_id,
+    )
+
+
+def _build_name_refs_plan(ctx: CSTExtractContext) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
+        "py_cst_name_refs_v1",
+        ctx.name_ref_rows,
+        row_schema=NAME_REFS_ROW_SCHEMA,
+    )
+    return apply_query_and_project(
+        "py_cst_name_refs_v1",
+        raw_plan.expr,
+        normalize=_normalize_ctx(ctx),
+        evidence_plan=ctx.evidence_plan,
+        repo_id=ctx.options.repo_id,
+    )
+
+
+def _build_imports_plan(ctx: CSTExtractContext) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
+        "py_cst_imports_v1",
+        ctx.import_rows,
+        row_schema=IMPORTS_ROW_SCHEMA,
+    )
+    return apply_query_and_project(
+        "py_cst_imports_v1",
+        raw_plan.expr,
+        normalize=_normalize_ctx(ctx),
+        evidence_plan=ctx.evidence_plan,
+        repo_id=ctx.options.repo_id,
+    )
+
+
+def _build_callsites_plan(ctx: CSTExtractContext) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
+        "py_cst_callsites_v1",
+        ctx.call_rows,
+        row_schema=CALLSITES_ROW_SCHEMA,
+    )
+    return apply_query_and_project(
+        "py_cst_callsites_v1",
+        raw_plan.expr,
+        normalize=_normalize_ctx(ctx),
+        evidence_plan=ctx.evidence_plan,
+        repo_id=ctx.options.repo_id,
+    )
+
+
+def _build_defs_plan(ctx: CSTExtractContext) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
+        "py_cst_defs_v1",
+        ctx.def_rows,
+        row_schema=DEFS_ROW_SCHEMA,
+    )
+    return apply_query_and_project(
+        "py_cst_defs_v1",
+        raw_plan.expr,
+        normalize=_normalize_ctx(ctx),
+        evidence_plan=ctx.evidence_plan,
+        repo_id=ctx.options.repo_id,
+    )
+
+
+def _build_type_exprs_plan(ctx: CSTExtractContext) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
+        "py_cst_type_exprs_v1",
+        ctx.type_expr_rows,
+        row_schema=TYPE_EXPRS_ROW_SCHEMA,
+    )
+    return apply_query_and_project(
+        "py_cst_type_exprs_v1",
+        raw_plan.expr,
+        normalize=_normalize_ctx(ctx),
+        evidence_plan=ctx.evidence_plan,
+        repo_id=ctx.options.repo_id,
+    )
+
+
+def _build_cst_plans(ctx: CSTExtractContext) -> dict[str, IbisPlan]:
     return {
-        "cst_parse_manifest": _build_manifest_plan(ctx, exec_ctx),
-        "cst_parse_errors": _build_errors_plan(ctx, exec_ctx),
-        "cst_name_refs": _build_name_refs_plan(ctx, exec_ctx),
-        "cst_imports": _build_imports_plan(ctx, exec_ctx),
-        "cst_callsites": _build_callsites_plan(ctx, exec_ctx),
-        "cst_defs": _build_defs_plan(ctx, exec_ctx),
-        "cst_type_exprs": _build_type_exprs_plan(ctx, exec_ctx),
+        "cst_parse_manifest": _build_manifest_plan(ctx),
+        "cst_parse_errors": _build_errors_plan(ctx),
+        "cst_name_refs": _build_name_refs_plan(ctx),
+        "cst_imports": _build_imports_plan(ctx),
+        "cst_callsites": _build_callsites_plan(ctx),
+        "cst_defs": _build_defs_plan(ctx),
+        "cst_type_exprs": _build_type_exprs_plan(ctx),
     }
 
 
@@ -1190,13 +1049,59 @@ def extract_cst_tables(
     exec_ctx = kwargs.get("ctx") or execution_context_factory(profile)
     prefer_reader = kwargs.get("prefer_reader", False)
     extract_ctx = CSTExtractContext.build(normalized_options, evidence_plan=evidence_plan)
-    metadata_specs = _cst_metadata_specs(normalized_options)
+    normalize = ExtractNormalizeOptions(
+        options=normalized_options,
+        repo_id=normalized_options.repo_id,
+    )
     for file_ctx in iter_contexts(repo_files, file_contexts):
         _extract_cst_for_context(file_ctx, extract_ctx)
-    return run_plan_bundle(
-        _build_cst_plans(extract_ctx, exec_ctx),
-        ctx=exec_ctx,
+    plans = _build_cst_plans(extract_ctx)
+    options = ExtractMaterializeOptions(
+        normalize=normalize,
         prefer_reader=prefer_reader,
-        metadata_specs=metadata_specs,
-        attach_ordering_metadata=True,
+        apply_post_kernels=True,
     )
+    return {
+        "cst_parse_manifest": materialize_extract_plan(
+            "py_cst_parse_manifest_v1",
+            plans["cst_parse_manifest"],
+            ctx=exec_ctx,
+            options=options,
+        ),
+        "cst_parse_errors": materialize_extract_plan(
+            "py_cst_parse_errors_v1",
+            plans["cst_parse_errors"],
+            ctx=exec_ctx,
+            options=options,
+        ),
+        "cst_name_refs": materialize_extract_plan(
+            "py_cst_name_refs_v1",
+            plans["cst_name_refs"],
+            ctx=exec_ctx,
+            options=options,
+        ),
+        "cst_imports": materialize_extract_plan(
+            "py_cst_imports_v1",
+            plans["cst_imports"],
+            ctx=exec_ctx,
+            options=options,
+        ),
+        "cst_callsites": materialize_extract_plan(
+            "py_cst_callsites_v1",
+            plans["cst_callsites"],
+            ctx=exec_ctx,
+            options=options,
+        ),
+        "cst_defs": materialize_extract_plan(
+            "py_cst_defs_v1",
+            plans["cst_defs"],
+            ctx=exec_ctx,
+            options=options,
+        ),
+        "cst_type_exprs": materialize_extract_plan(
+            "py_cst_type_exprs_v1",
+            plans["cst_type_exprs"],
+            ctx=exec_ctx,
+            options=options,
+        ),
+    }

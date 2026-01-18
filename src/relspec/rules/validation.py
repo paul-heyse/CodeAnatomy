@@ -7,7 +7,6 @@ import importlib
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import cache
 from typing import Protocol, cast
 
 import pyarrow as pa
@@ -18,13 +17,14 @@ from ibis.expr.types import Table as IbisTable
 from sqlglot import ErrorLevel
 
 from arrowdsl.compute.kernels import kernel_capability
-from arrowdsl.core.context import ExecutionContext, execution_context_factory
+from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from datafusion_engine.runtime import snapshot_plans
+from engine.session import EngineSession
 from extract.registry_bundles import bundle
 from extract.registry_pipelines import post_kernels_for_postprocess
-from ibis_engine.backend import build_backend
-from ibis_engine.config import IbisBackendConfig
+from ibis_engine.compiler_checkpoint import compile_checkpoint
+from ibis_engine.lineage import lineage_graph_by_output, required_columns_by_table
 from ibis_engine.param_tables import (
     ParamTablePolicy,
     ParamTableSpec,
@@ -32,8 +32,8 @@ from ibis_engine.param_tables import (
 )
 from ibis_engine.params_bridge import list_param_names_from_rel_ops
 from ibis_engine.plan import IbisPlan
-from ibis_engine.plan_bridge import table_to_ibis
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
+from ibis_engine.sources import table_to_ibis
 from relspec.list_filter_gate import (
     ListFilterGateError,
     ListFilterGatePolicy,
@@ -295,6 +295,7 @@ class SqlGlotDiagnosticsConfig:
     backend: IbisCompilerBackend | None = None
     registry: SchemaRegistry | None = None
     ctx: ExecutionContext | None = None
+    engine_session: EngineSession | None = None
     param_table_specs: Sequence[ParamTableSpec] = ()
     param_table_policy: ParamTablePolicy | None = None
     list_filter_gate_policy: ListFilterGatePolicy | None = None
@@ -375,18 +376,6 @@ class _SchemaPlanResolver:
         _ = ctx
 
 
-@cache
-def _default_sqlglot_backend() -> IbisCompilerBackend:
-    """Return the default SQLGlot compiler backend.
-
-    Returns
-    -------
-    IbisCompilerBackend
-        Backend instance for SQLGlot compilation.
-    """
-    return cast("IbisCompilerBackend", build_backend(IbisBackendConfig()))
-
-
 def build_sqlglot_context(
     config: SqlGlotDiagnosticsConfig | None = None,
 ) -> SqlGlotDiagnosticsContext:
@@ -396,11 +385,25 @@ def build_sqlglot_context(
     -------
     SqlGlotDiagnosticsContext
         Resolved diagnostics context.
+
+    Raises
+    ------
+    ValueError
+        Raised when no engine session or execution context is available.
     """
     config = config or SqlGlotDiagnosticsConfig()
-    backend = config.backend or _default_sqlglot_backend()
+    if config.backend is not None:
+        backend = config.backend
+    elif config.engine_session is not None:
+        backend = cast("IbisCompilerBackend", config.engine_session.ibis_backend)
+    else:
+        msg = "SQLGlot diagnostics require an EngineSession or compiler backend."
+        raise ValueError(msg)
     registry = config.registry or GLOBAL_SCHEMA_REGISTRY
-    ctx = config.ctx or execution_context_factory("default")
+    ctx = config.ctx or (config.engine_session.ctx if config.engine_session is not None else None)
+    if ctx is None:
+        msg = "SQLGlot diagnostics require an execution context."
+        raise ValueError(msg)
     spec_map = {spec.logical_name: spec for spec in config.param_table_specs}
     param_policy = config.param_table_policy or ParamTablePolicy()
     return SqlGlotDiagnosticsContext(
@@ -428,7 +431,7 @@ def rule_sqlglot_diagnostics(
     """
     try:
         context = build_sqlglot_context(config)
-    except ImportError:
+    except (ImportError, ValueError):
         return ()
     diagnostics: list[RuleDiagnostic] = []
     for rule in rules:
@@ -631,6 +634,11 @@ def _build_rule_diagnostics(
         table_refs=table_refs,
         param_policy=context.param_policy,
     )
+    metadata.update(_required_columns_metadata(rule_ctx, context=context))
+    if (lineage_payload := _lineage_graph_metadata(rule_ctx, context=context)) is not None:
+        metadata["lineage_graph"] = lineage_payload
+    if (plan_hash := _plan_hash_metadata(rule_ctx, context=context)) is not None:
+        metadata["plan_hash"] = plan_hash
     diagnostics.append(
         sqlglot_metadata_diagnostic(
             optimized,
@@ -658,6 +666,60 @@ def _build_rule_diagnostics(
         if missing is not None:
             diagnostics.append(missing)
     return tuple(diagnostics)
+
+
+def _required_columns_metadata(
+    rule_ctx: SqlGlotRuleContext,
+    *,
+    context: SqlGlotDiagnosticsContext,
+) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    try:
+        required = required_columns_by_table(
+            rule_ctx.source.expr,
+            backend=context.backend,
+            schema_map=rule_ctx.schema_map,
+        )
+    except (TypeError, ValueError):
+        return metadata
+    for table, columns in sorted(required.items()):
+        if columns:
+            metadata[f"required_columns:{table}"] = ",".join(columns)
+    return metadata
+
+
+def _plan_hash_metadata(
+    rule_ctx: SqlGlotRuleContext,
+    *,
+    context: SqlGlotDiagnosticsContext,
+) -> str | None:
+    try:
+        checkpoint = compile_checkpoint(
+            rule_ctx.source.expr,
+            backend=context.backend,
+            schema_map=rule_ctx.schema_map,
+        )
+    except (TypeError, ValueError):
+        return None
+    return checkpoint.plan_hash
+
+
+def _lineage_graph_metadata(
+    rule_ctx: SqlGlotRuleContext,
+    *,
+    context: SqlGlotDiagnosticsContext,
+) -> str | None:
+    try:
+        lineage = lineage_graph_by_output(
+            rule_ctx.source.expr,
+            backend=context.backend,
+            schema_map=rule_ctx.schema_map,
+        )
+    except (TypeError, ValueError):
+        return None
+    if not lineage:
+        return None
+    return json.dumps(lineage, ensure_ascii=True, sort_keys=True)
 
 
 def _list_filter_gate_diagnostics(
@@ -802,7 +864,7 @@ def rule_dependency_reports(
     """
     try:
         context = build_sqlglot_context(config)
-    except ImportError:
+    except (ImportError, ValueError):
         return ()
     reports: list[RuleDependencyReport] = []
     for rule in rules:

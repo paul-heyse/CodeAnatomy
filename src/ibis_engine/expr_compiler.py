@@ -50,6 +50,14 @@ def _strip_expr(value: StringValue) -> StringValue:
     return value.strip()
 
 
+def _stringify_expr(value: Value) -> StringValue:
+    return value.cast("string")
+
+
+def _is_null_expr(value: Value) -> BooleanValue:
+    return value.isnull()
+
+
 class OperationSupportBackend(Protocol):
     """Protocol for backends exposing operation support checks."""
 
@@ -133,6 +141,8 @@ def default_expr_registry() -> IbisExprRegistry:
             "invert": _invert_expr,
             "bit_wise_and": _bitwise_and_expr,
             "strip": _strip_expr,
+            "stringify": _stringify_expr,
+            "is_null": _is_null_expr,
             "cpg_score": cpg_score,
             "stable_hash64": stable_hash64,
             "stable_hash128": stable_hash128,

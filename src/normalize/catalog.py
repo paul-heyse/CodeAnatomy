@@ -1,67 +1,41 @@
-"""Plan catalog helpers for normalize pipelines."""
+"""Catalog helpers for Ibis-backed normalize pipelines."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from arrowdsl.core.context import ExecutionContext
-from arrowdsl.plan.catalog import PlanCatalog, PlanDeriver, PlanRef, PlanSource
-from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.scan_io import plan_from_source
+from ibis.backends import BaseBackend
+
+from normalize.ibis_plan_builders import IbisPlanCatalog, IbisPlanSource
 from normalize.text_index import RepoTextIndex
-
-
-@dataclass
-class NormalizePlanCatalog(PlanCatalog):
-    """Plan catalog that avoids caching derived entries."""
-
-    repo_text_index: RepoTextIndex | None = None
-
-    def resolve(self, ref: PlanRef, *, ctx: ExecutionContext) -> Plan | None:
-        """Resolve a plan without caching derived results.
-
-        Returns
-        -------
-        Plan | None
-            Resolved plan or ``None`` when unavailable.
-        """
-        value = self.tables.get(ref.name)
-        if value is not None:
-            return plan_from_source(value, ctx=ctx, label=ref.name)
-        if ref.derive is None:
-            return None
-        derived = ref.derive(self, ctx)
-        if derived is None:
-            return None
-        return plan_from_source(derived, ctx=ctx, label=ref.name)
 
 
 @dataclass(frozen=True)
 class NormalizeCatalogInputs:
-    """Source tables for normalize-derived plan catalogs."""
+    """Source tables for normalize-derived Ibis catalogs."""
 
-    cst_type_exprs: PlanSource | None = None
-    scip_symbol_information: PlanSource | None = None
-    file_line_index: PlanSource | None = None
-    cst_parse_errors: PlanSource | None = None
-    ts_errors: PlanSource | None = None
-    ts_missing: PlanSource | None = None
-    scip_diagnostics: PlanSource | None = None
-    scip_documents: PlanSource | None = None
-    py_bc_blocks: PlanSource | None = None
-    py_bc_cfg_edges: PlanSource | None = None
-    py_bc_code_units: PlanSource | None = None
-    py_bc_instructions: PlanSource | None = None
-    span_errors: PlanSource | None = None
+    cst_type_exprs: IbisPlanSource | None = None
+    scip_symbol_information: IbisPlanSource | None = None
+    file_line_index: IbisPlanSource | None = None
+    cst_parse_errors: IbisPlanSource | None = None
+    ts_errors: IbisPlanSource | None = None
+    ts_missing: IbisPlanSource | None = None
+    scip_diagnostics: IbisPlanSource | None = None
+    scip_documents: IbisPlanSource | None = None
+    py_bc_blocks: IbisPlanSource | None = None
+    py_bc_cfg_edges: IbisPlanSource | None = None
+    py_bc_code_units: IbisPlanSource | None = None
+    py_bc_instructions: IbisPlanSource | None = None
+    span_errors: IbisPlanSource | None = None
     repo_text_index: RepoTextIndex | None = None
 
-    def as_tables(self) -> Mapping[str, PlanSource | None]:
+    def as_tables(self) -> Mapping[str, IbisPlanSource | None]:
         """Return catalog tables keyed by dataset name.
 
         Returns
         -------
-        Mapping[str, PlanSource | None]
+        Mapping[str, IbisPlanSource | None]
             Catalog tables keyed by dataset name.
         """
         return {
@@ -81,23 +55,29 @@ class NormalizeCatalogInputs:
         }
 
 
-def normalize_plan_catalog(inputs: NormalizeCatalogInputs) -> NormalizePlanCatalog:
-    """Build a normalize plan catalog from source inputs.
+def normalize_plan_catalog(
+    inputs: NormalizeCatalogInputs,
+    *,
+    backend: BaseBackend,
+) -> IbisPlanCatalog:
+    """Build a normalize Ibis catalog from source inputs.
 
     Returns
     -------
-    NormalizePlanCatalog
+    IbisPlanCatalog
         Catalog with base sources wired for derived plans.
     """
     tables = {name: value for name, value in inputs.as_tables().items() if value is not None}
-    return NormalizePlanCatalog(tables=tables, repo_text_index=inputs.repo_text_index)
+    return IbisPlanCatalog(
+        backend=backend,
+        tables=tables,
+        repo_text_index=inputs.repo_text_index,
+    )
 
 
 __all__ = [
+    "IbisPlanCatalog",
+    "IbisPlanSource",
     "NormalizeCatalogInputs",
-    "NormalizePlanCatalog",
-    "PlanDeriver",
-    "PlanRef",
-    "PlanSource",
     "normalize_plan_catalog",
 ]

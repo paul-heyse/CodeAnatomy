@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
@@ -21,11 +22,13 @@ from datafusion_engine.compile_options import (
     DataFusionSqlPolicy,
 )
 from datafusion_engine.df_builder import TranslationError, df_from_sqlglot
+from engine.plan_cache import PlanCacheEntry, PlanCacheKey
 from ibis_engine.params_bridge import datafusion_param_bindings
 from ibis_engine.plan import IbisPlan
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
 from sqlglot_tools.optimizer import (
     normalize_expr,
+    plan_fingerprint,
     register_datafusion_dialect,
     rewrite_expr,
 )
@@ -51,6 +54,76 @@ def _should_cache_df(df: DataFrame, *, options: DataFusionCompileOptions) -> boo
         return True
     column_count = len(df.schema().names)
     return column_count <= options.cache_max_columns
+
+
+def _plan_cache_key(
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+) -> PlanCacheKey | None:
+    if options.plan_cache is None or options.profile_hash is None:
+        return None
+    if options.params is not None:
+        return None
+    plan_hash = options.plan_hash or plan_fingerprint(expr, dialect=options.dialect)
+    return PlanCacheKey(plan_hash=plan_hash, profile_hash=options.profile_hash)
+
+
+def _substrait_bytes(ctx: SessionContext, sql: str) -> bytes | None:
+    if SubstraitSerde is None:
+        return None
+    serde = cast("SubstraitSerdeType", SubstraitSerde)
+    try:
+        return serde.serialize_bytes(sql, ctx)
+    except (RuntimeError, TypeError, ValueError):  # pragma: no cover - defensive around FFI errors.
+        return None
+
+
+def _try_replay_substrait(
+    ctx: SessionContext,
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+) -> DataFrame | None:
+    cache_key = _plan_cache_key(expr, options=options)
+    if cache_key is None or options.plan_cache is None:
+        return None
+    cached = options.plan_cache.get(cache_key)
+    if cached is None:
+        return None
+    try:
+        return replay_substrait_bytes(ctx, cached)
+    except (
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:  # pragma: no cover - defensive around FFI errors.
+        logger.warning("Substrait replay failed; recompiling. error=%s", exc)
+        return None
+
+
+def _maybe_store_substrait(
+    ctx: SessionContext,
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+) -> None:
+    cache_key = _plan_cache_key(expr, options=options)
+    if cache_key is None or options.plan_cache is None:
+        return
+    if options.plan_cache.contains(cache_key):
+        return
+    _ensure_dialect(options.dialect)
+    sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
+    plan_bytes = _substrait_bytes(ctx, sql)
+    if plan_bytes is None:
+        return
+    entry = PlanCacheEntry(
+        plan_hash=cache_key.plan_hash,
+        profile_hash=cache_key.profile_hash,
+        plan_bytes=plan_bytes,
+    )
+    options.plan_cache.put(entry)
 
 
 def _default_sql_policy() -> DataFusionSqlPolicy:
@@ -79,24 +152,40 @@ def df_from_sqlglot_or_sql(
     """
     resolved = options or DataFusionCompileOptions()
     bound_expr = expr
+    replayed = _try_replay_substrait(ctx, bound_expr, options=resolved)
+    if replayed is not None:
+        if not (resolved.params and _contains_params(expr)):
+            _maybe_explain(ctx, bound_expr, options=resolved)
+        return replayed
     if resolved.force_sql:
         df = _df_from_sql(
             ctx,
             bound_expr,
             options=resolved,
-            reason="forced_sql",
-            emit_fallback=False,
+            fallback=SqlFallbackContext(reason="forced_sql", emit_fallback=False),
         )
+        _maybe_store_substrait(ctx, bound_expr, options=resolved)
         if not (resolved.params and _contains_params(expr)):
             _maybe_explain(ctx, bound_expr, options=resolved)
         return df
     if resolved.params and _contains_params(expr):
-        return _df_from_sql(ctx, bound_expr, options=resolved, reason="params")
+        return _df_from_sql(
+            ctx,
+            bound_expr,
+            options=resolved,
+            fallback=SqlFallbackContext(reason="params"),
+        )
     try:
         df = df_from_sqlglot(ctx, bound_expr)
     except TranslationError as exc:
         _ensure_dialect(resolved.dialect)
-        df = _df_from_sql(ctx, bound_expr, options=resolved, reason="translation_error", error=exc)
+        df = _df_from_sql(
+            ctx,
+            bound_expr,
+            options=resolved,
+            fallback=SqlFallbackContext(reason="translation_error", error=exc),
+        )
+    _maybe_store_substrait(ctx, bound_expr, options=resolved)
     _maybe_explain(ctx, bound_expr, options=resolved)
     return df
 
@@ -123,6 +212,36 @@ def sqlglot_to_datafusion(
     )
 
 
+def compile_sqlglot_expr(
+    expr: IbisTable,
+    *,
+    backend: IbisCompilerBackend,
+    options: DataFusionCompileOptions | None = None,
+) -> Expression:
+    """Compile an Ibis expression into a SQLGlot expression.
+
+    Parameters
+    ----------
+    expr:
+        Ibis expression to compile.
+    backend:
+        Backend providing SQLGlot compilation support.
+    options:
+        Optional compilation options controlling rewrites and normalization.
+
+    Returns
+    -------
+    sqlglot.Expression
+        SQLGlot expression for the Ibis input.
+    """
+    resolved = options or DataFusionCompileOptions()
+    sg_expr = ibis_to_sqlglot(expr, backend=backend, params=None)
+    sg_expr = _apply_rewrite_hook(sg_expr, options=resolved)
+    if resolved.optimize:
+        sg_expr = normalize_expr(sg_expr, schema=resolved.schema_map)
+    return sg_expr
+
+
 def ibis_to_datafusion(
     expr: IbisTable,
     *,
@@ -137,17 +256,14 @@ def ibis_to_datafusion(
     datafusion.dataframe.DataFrame
         DataFusion DataFrame for the Ibis expression.
     """
-    options = options or DataFusionCompileOptions()
-    sg_expr = ibis_to_sqlglot(expr, backend=backend, params=None)
-    sg_expr = _apply_rewrite_hook(sg_expr, options=options)
-    if options.optimize:
-        sg_expr = normalize_expr(sg_expr, schema=options.schema_map)
+    resolved = options or DataFusionCompileOptions()
+    sg_expr = compile_sqlglot_expr(expr, backend=backend, options=resolved)
     df = df_from_sqlglot_or_sql(
         ctx,
         sg_expr,
-        options=options,
+        options=resolved,
     )
-    return df.cache() if _should_cache_df(df, options=options) else df
+    return df.cache() if _should_cache_df(df, options=resolved) else df
 
 
 def ibis_plan_to_datafusion(
@@ -221,6 +337,23 @@ def datafusion_to_reader(
         return _apply_ordering(reader, ordering=ordering)
     reader = pa.RecordBatchReader.from_batches(df.schema(), [])
     return _apply_ordering(reader, ordering=ordering)
+
+
+def datafusion_partitioned_readers(df: DataFrame) -> list[pa.RecordBatchReader]:
+    """Return partitioned stream readers when supported by DataFusion.
+
+    Returns
+    -------
+    list[pyarrow.RecordBatchReader]
+        Partitioned readers when supported, otherwise an empty list.
+    """
+    stream_partitions = getattr(df, "execute_stream_partitioned", None)
+    if not callable(stream_partitions):
+        return []
+    readers = stream_partitions()
+    if not isinstance(readers, Iterable):
+        return []
+    return [cast("pa.RecordBatchReader", reader) for reader in readers]
 
 
 def ibis_plan_to_table(
@@ -319,14 +452,21 @@ def _contains_params(expr: Expression) -> bool:
     return bool(expr.find(exp.Parameter))
 
 
+@dataclass(frozen=True)
+class SqlFallbackContext:
+    """Parameters controlling SQL fallback diagnostics."""
+
+    reason: str
+    error: TranslationError | None = None
+    emit_fallback: bool = True
+
+
 def _df_from_sql(
     ctx: SessionContext,
     expr: Expression,
     *,
     options: DataFusionCompileOptions,
-    reason: str,
-    error: TranslationError | None = None,
-    emit_fallback: bool = True,
+    fallback: SqlFallbackContext,
 ) -> DataFrame:
     _ensure_dialect(options.dialect)
     sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
@@ -341,10 +481,10 @@ def _df_from_sql(
                 "DataFusion SQL policy violations detected: %s",
                 ", ".join(violations),
             )
-    if emit_fallback:
+    if fallback.emit_fallback:
         event = DataFusionFallbackEvent(
-            reason=reason,
-            error=str(error) if error is not None else "",
+            reason=fallback.reason,
+            error=str(fallback.error) if fallback.error is not None else "",
             expression_type=expr.__class__.__name__,
             sql=sql,
             dialect=options.dialect,
@@ -355,6 +495,23 @@ def _df_from_sql(
             fallback_hook=options.fallback_hook,
         )
     return ctx.sql_with_options(sql, sql_options, param_values=bindings)
+
+
+def df_from_sql(
+    ctx: SessionContext,
+    expr: Expression,
+    *,
+    options: DataFusionCompileOptions,
+    fallback: SqlFallbackContext,
+) -> DataFrame:
+    """Execute a SQLGlot expression using DataFusion SQL execution.
+
+    Returns
+    -------
+    datafusion.dataframe.DataFrame
+        DataFusion DataFrame representing the expression.
+    """
+    return _df_from_sql(ctx, expr, options=options, fallback=fallback)
 
 
 def _emit_fallback_diagnostics(
@@ -428,8 +585,12 @@ __all__ = [
     "DataFusionFallbackEvent",
     "DataFusionSqlPolicy",
     "IbisCompilerBackend",
+    "SqlFallbackContext",
+    "compile_sqlglot_expr",
+    "datafusion_partitioned_readers",
     "datafusion_to_reader",
     "datafusion_to_table",
+    "df_from_sql",
     "ibis_plan_to_datafusion",
     "ibis_plan_to_reader",
     "ibis_plan_to_table",

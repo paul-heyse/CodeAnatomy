@@ -13,23 +13,18 @@ from typing import Literal, overload
 
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.query import QuerySpec
-from arrowdsl.plan.runner import run_plan
-from arrowdsl.schema.schema import empty_table
 from core_types import PathLike, ensure_path
-from extract.plan_helpers import plan_from_rows
-from extract.registry_specs import (
-    dataset_query,
-    dataset_row_schema,
-    dataset_schema,
-    normalize_options,
+from extract.helpers import (
+    ExtractMaterializeOptions,
+    apply_query_and_project,
+    empty_ibis_plan,
+    ibis_plan_from_rows,
+    materialize_extract_plan,
 )
-from extract.schema_ops import (
-    ExtractNormalizeOptions,
-    metadata_spec_for_dataset,
-    normalize_extract_plan,
-)
+from extract.registry_specs import dataset_query, dataset_row_schema, normalize_options
+from extract.schema_ops import ExtractNormalizeOptions
+from ibis_engine.plan import IbisPlan
+from ibis_engine.query_compiler import IbisQuerySpec
 
 SCHEMA_VERSION = 1
 
@@ -59,18 +54,17 @@ class RepoScanOptions:
     max_files: int | None = None
 
 
-def repo_files_query(repo_id: str | None) -> QuerySpec:
-    """Return the QuerySpec for repo file scanning.
+def repo_files_query(repo_id: str | None) -> IbisQuerySpec:
+    """Return the IbisQuerySpec for repo file scanning.
 
     Returns
     -------
-    QuerySpec
-        QuerySpec for repo file projection.
+    IbisQuerySpec
+        IbisQuerySpec for repo file projection.
     """
     return dataset_query("repo_files_v1", repo_id=repo_id)
 
 
-REPO_FILES_SCHEMA = dataset_schema("repo_files_v1")
 REPO_FILES_ROW_SCHEMA = dataset_row_schema("repo_files_v1")
 
 
@@ -237,46 +231,51 @@ def scan_repo(
     """
     normalized_options = normalize_options("repo_scan", options, RepoScanOptions)
     ctx = ctx or execution_context_factory(profile)
-    metadata_spec = metadata_spec_for_dataset(
-        "repo_files_v1",
+    normalize = ExtractNormalizeOptions(
         options=normalized_options,
         repo_id=normalized_options.repo_id,
     )
     max_files = normalized_options.max_files
     if max_files is not None and max_files <= 0:
-        empty_plan = Plan.table_source(empty_table(REPO_FILES_SCHEMA))
-        return run_plan(
+        empty_plan = empty_ibis_plan("repo_files_v1")
+        return materialize_extract_plan(
+            "repo_files_v1",
             empty_plan,
             ctx=ctx,
-            prefer_reader=prefer_reader,
-            metadata_spec=metadata_spec,
-            attach_ordering_metadata=True,
-        ).value
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=True,
+            ),
+        )
 
-    plan = scan_repo_plan(repo_root, options=normalized_options, ctx=ctx)
-    return run_plan(
+    plan = scan_repo_plan(repo_root, options=normalized_options)
+    return materialize_extract_plan(
+        "repo_files_v1",
         plan,
         ctx=ctx,
-        prefer_reader=prefer_reader,
-        metadata_spec=metadata_spec,
-        attach_ordering_metadata=True,
-    ).value
+        options=ExtractMaterializeOptions(
+            normalize=normalize,
+            prefer_reader=prefer_reader,
+            apply_post_kernels=True,
+        ),
+    )
 
 
 def scan_repo_plan(
     repo_root: PathLike,
     *,
     options: RepoScanOptions,
-    ctx: ExecutionContext,
-) -> Plan:
+) -> IbisPlan:
     """Build the plan for repository scanning.
 
     Returns
     -------
-    Plan
-        Plan emitting repo file metadata.
+    IbisPlan
+        Ibis plan emitting repo file metadata.
     """
     repo_root_path = ensure_path(repo_root).resolve()
+    normalize = ExtractNormalizeOptions(options=options, repo_id=options.repo_id)
 
     def iter_rows() -> Iterator[dict[str, object]]:
         count = 0
@@ -289,14 +288,15 @@ def scan_repo_plan(
             if options.max_files is not None and count >= options.max_files:
                 break
 
-    plan = plan_from_rows(iter_rows(), schema=REPO_FILES_ROW_SCHEMA, label="repo_files")
-    plan = repo_files_query(options.repo_id).apply_to_plan(plan, ctx=ctx)
-    return normalize_extract_plan(
+    raw_plan = ibis_plan_from_rows(
         "repo_files_v1",
-        plan,
-        ctx=ctx,
-        normalize=ExtractNormalizeOptions(
-            options=options,
-            repo_id=options.repo_id,
-        ),
+        iter_rows(),
+        row_schema=REPO_FILES_ROW_SCHEMA,
+    )
+    return apply_query_and_project(
+        "repo_files_v1",
+        raw_plan.expr,
+        normalize=normalize,
+        evidence_plan=None,
+        repo_id=normalize.repo_id,
     )

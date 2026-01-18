@@ -8,76 +8,25 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.runner_types import (
-    AdapterRunOptionsProto,
-    PlanRunResultProto,
-    plan_runner_module,
-)
+from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from extract.helpers import (
     ExtractExecutionContext,
+    ExtractMaterializeOptions,
     FileContext,
+    apply_query_and_project,
     ast_def_nodes_plan,
     file_identity_row,
+    ibis_plan_from_rows,
     iter_contexts,
+    materialize_extract_plan,
     text_from_file_ctx,
 )
-from extract.plan_helpers import (
-    ExtractPlanAdapterOptions,
-    ExtractPlanBuildOptions,
-    plan_from_rows_for_dataset_adapter,
-)
 from extract.registry_specs import dataset_row_schema, normalize_options
-from extract.schema_ops import ExtractNormalizeOptions, metadata_spec_for_dataset
+from extract.schema_ops import ExtractNormalizeOptions
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
-    from arrowdsl.schema.schema import SchemaMetadataSpec
     from extract.evidence_plan import EvidencePlan
-
-
-def _adapter_run_options(
-    context: ExtractExecutionContext,
-    *,
-    metadata_spec: SchemaMetadataSpec | None = None,
-    prefer_reader: bool = False,
-) -> AdapterRunOptionsProto:
-    module = plan_runner_module()
-    return module.AdapterRunOptions(
-        adapter_mode=context.adapter_mode,
-        prefer_reader=prefer_reader,
-        metadata_spec=metadata_spec,
-        attach_ordering_metadata=True,
-        execution_policy=context.execution_policy,
-        ibis_backend=context.ibis_backend,
-    )
-
-
-def _run_plan_adapter(
-    plan: Plan | IbisPlan,
-    *,
-    ctx: ExecutionContext,
-    options: AdapterRunOptionsProto | None,
-) -> PlanRunResultProto:
-    module = plan_runner_module()
-    return module.run_plan_adapter(plan, ctx=ctx, options=options)
-
-
-def _run_plan_bundle_adapter(
-    plans: Mapping[str, Plan | IbisPlan],
-    *,
-    ctx: ExecutionContext,
-    options: AdapterRunOptionsProto | None,
-    metadata_specs: Mapping[str, SchemaMetadataSpec] | None = None,
-) -> Mapping[str, TableLike | RecordBatchReaderLike]:
-    module = plan_runner_module()
-    return module.run_plan_bundle_adapter(
-        plans,
-        ctx=ctx,
-        options=options,
-        metadata_specs=metadata_specs,
-    )
 
 
 @dataclass(frozen=True)
@@ -330,38 +279,48 @@ def extract_ast(
     normalized_options = normalize_options("ast", options, ASTExtractOptions)
     exec_context = context or ExtractExecutionContext()
     ctx = exec_context.ensure_ctx()
+    normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_ast_plans(
         repo_files,
         options=normalized_options,
         context=exec_context,
     )
-    nodes_meta = metadata_spec_for_dataset("py_ast_nodes_v1", options=normalized_options)
-    edges_meta = metadata_spec_for_dataset("py_ast_edges_v1", options=normalized_options)
-    errors_meta = metadata_spec_for_dataset("py_ast_errors_v1", options=normalized_options)
     return ASTExtractResult(
         py_ast_nodes=cast(
             "TableLike",
-            _run_plan_adapter(
+            materialize_extract_plan(
+                "py_ast_nodes_v1",
                 plans["ast_nodes"],
                 ctx=ctx,
-                options=_adapter_run_options(exec_context, metadata_spec=nodes_meta),
-            ).value,
+                options=ExtractMaterializeOptions(
+                    normalize=normalize,
+                    apply_post_kernels=True,
+                ),
+            ),
         ),
         py_ast_edges=cast(
             "TableLike",
-            _run_plan_adapter(
+            materialize_extract_plan(
+                "py_ast_edges_v1",
                 plans["ast_edges"],
                 ctx=ctx,
-                options=_adapter_run_options(exec_context, metadata_spec=edges_meta),
-            ).value,
+                options=ExtractMaterializeOptions(
+                    normalize=normalize,
+                    apply_post_kernels=True,
+                ),
+            ),
         ),
         py_ast_errors=cast(
             "TableLike",
-            _run_plan_adapter(
+            materialize_extract_plan(
+                "py_ast_errors_v1",
                 plans["ast_errors"],
                 ctx=ctx,
-                options=_adapter_run_options(exec_context, metadata_spec=errors_meta),
-            ).value,
+                options=ExtractMaterializeOptions(
+                    normalize=normalize,
+                    apply_post_kernels=True,
+                ),
+            ),
         ),
     )
 
@@ -371,80 +330,81 @@ def extract_ast_plans(
     options: ASTExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> dict[str, Plan | IbisPlan]:
+) -> dict[str, IbisPlan]:
     """Extract AST plans for nodes, edges, and errors.
 
     Returns
     -------
-    dict[str, Plan | IbisPlan]
-        Plan bundle keyed by ``ast_nodes``, ``ast_edges``, and ``ast_errors``.
+    dict[str, IbisPlan]
+        Ibis plan bundle keyed by ``ast_nodes``, ``ast_edges``, and ``ast_errors``.
     """
     normalized_options = normalize_options("ast", options, ASTExtractOptions)
     exec_context = context or ExtractExecutionContext()
-    ctx = exec_context.ensure_ctx()
-    file_contexts = exec_context.file_contexts
+    normalize = ExtractNormalizeOptions(options=normalized_options)
+    nodes_rows, edges_rows, err_rows = _collect_ast_rows(
+        repo_files,
+        file_contexts=exec_context.file_contexts,
+        options=normalized_options,
+    )
     evidence_plan = exec_context.evidence_plan
+    return {
+        "ast_nodes": _build_ast_plan(
+            "py_ast_nodes_v1",
+            nodes_rows,
+            row_schema=AST_NODES_ROW_SCHEMA,
+            normalize=normalize,
+            evidence_plan=evidence_plan,
+        ),
+        "ast_edges": _build_ast_plan(
+            "py_ast_edges_v1",
+            edges_rows,
+            row_schema=AST_EDGES_ROW_SCHEMA,
+            normalize=normalize,
+            evidence_plan=evidence_plan,
+        ),
+        "ast_errors": _build_ast_plan(
+            "py_ast_errors_v1",
+            err_rows,
+            row_schema=AST_ERRORS_ROW_SCHEMA,
+            normalize=normalize,
+            evidence_plan=evidence_plan,
+        ),
+    }
 
+
+def _collect_ast_rows(
+    repo_files: TableLike,
+    *,
+    file_contexts: Iterable[FileContext] | None,
+    options: ASTExtractOptions,
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
     nodes_rows: list[dict[str, object]] = []
     edges_rows: list[dict[str, object]] = []
     err_rows: list[dict[str, object]] = []
-
     for file_ctx in iter_contexts(repo_files, file_contexts):
-        nodes, edges, errs = _extract_ast_for_context(file_ctx, options=normalized_options)
+        nodes, edges, errs = _extract_ast_for_context(file_ctx, options=options)
         nodes_rows.extend(nodes)
         edges_rows.extend(edges)
         err_rows.extend(errs)
+    return nodes_rows, edges_rows, err_rows
 
-    nodes_plan = plan_from_rows_for_dataset_adapter(
-        "py_ast_nodes_v1",
-        nodes_rows,
-        row_schema=AST_NODES_ROW_SCHEMA,
-        ctx=ctx,
-        options=ExtractPlanAdapterOptions(
-            adapter_mode=exec_context.adapter_mode,
-            ibis_backend=exec_context.ibis_backend,
-            plan_options=ExtractPlanBuildOptions(
-                normalize=ExtractNormalizeOptions(options=normalized_options),
-                evidence_plan=evidence_plan,
-            ),
-        ),
+
+def _build_ast_plan(
+    name: str,
+    rows: list[dict[str, object]],
+    *,
+    row_schema: SchemaLike,
+    normalize: ExtractNormalizeOptions,
+    evidence_plan: EvidencePlan | None,
+) -> IbisPlan:
+    raw = ibis_plan_from_rows(name, rows, row_schema=row_schema)
+    return apply_query_and_project(
+        name,
+        raw.expr,
+        normalize=normalize,
+        evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
     )
-
-    edges_plan = plan_from_rows_for_dataset_adapter(
-        "py_ast_edges_v1",
-        edges_rows,
-        row_schema=AST_EDGES_ROW_SCHEMA,
-        ctx=ctx,
-        options=ExtractPlanAdapterOptions(
-            adapter_mode=exec_context.adapter_mode,
-            ibis_backend=exec_context.ibis_backend,
-            plan_options=ExtractPlanBuildOptions(
-                normalize=ExtractNormalizeOptions(options=normalized_options),
-                evidence_plan=evidence_plan,
-            ),
-        ),
-    )
-
-    errs_plan = plan_from_rows_for_dataset_adapter(
-        "py_ast_errors_v1",
-        err_rows,
-        row_schema=AST_ERRORS_ROW_SCHEMA,
-        ctx=ctx,
-        options=ExtractPlanAdapterOptions(
-            adapter_mode=exec_context.adapter_mode,
-            ibis_backend=exec_context.ibis_backend,
-            plan_options=ExtractPlanBuildOptions(
-                normalize=ExtractNormalizeOptions(options=normalized_options),
-                evidence_plan=evidence_plan,
-            ),
-        ),
-    )
-
-    return {
-        "ast_nodes": nodes_plan,
-        "ast_edges": edges_plan,
-        "ast_errors": errs_plan,
-    }
 
 
 class _AstTablesKwargs(TypedDict, total=False):
@@ -518,26 +478,42 @@ def extract_ast_tables(
         ctx=ctx,
         profile=profile,
     )
+    normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_ast_plans(
         repo_files,
         options=normalized_options,
         context=exec_context,
     )
     defs_plan = ast_def_nodes_plan(plan=plans["ast_nodes"])
-    nodes_meta = metadata_spec_for_dataset("py_ast_nodes_v1", options=normalized_options)
-    edges_meta = metadata_spec_for_dataset("py_ast_edges_v1", options=normalized_options)
-
-    return _run_plan_bundle_adapter(
-        {
-            "ast_nodes": plans["ast_nodes"],
-            "ast_edges": plans["ast_edges"],
-            "ast_defs": defs_plan,
-        },
-        ctx=ctx,
-        options=_adapter_run_options(exec_context, prefer_reader=prefer_reader),
-        metadata_specs={
-            "ast_nodes": nodes_meta,
-            "ast_edges": edges_meta,
-            "ast_defs": nodes_meta,
-        },
-    )
+    return {
+        "ast_nodes": materialize_extract_plan(
+            "py_ast_nodes_v1",
+            plans["ast_nodes"],
+            ctx=ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=True,
+            ),
+        ),
+        "ast_edges": materialize_extract_plan(
+            "py_ast_edges_v1",
+            plans["ast_edges"],
+            ctx=ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=True,
+            ),
+        ),
+        "ast_defs": materialize_extract_plan(
+            "py_ast_nodes_v1",
+            defs_plan,
+            ctx=ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=True,
+            ),
+        ),
+    }

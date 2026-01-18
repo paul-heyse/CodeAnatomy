@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from hamilton.function_modifiers import tag
-from ibis.backends import BaseBackend
 from ibis.expr.types import Table
 
-from arrowdsl.core.context import ExecutionContext
-from arrowdsl.io.parquet import write_dataset_parquet
+from arrowdsl.io.parquet import DatasetWriteConfig, write_dataset_parquet
 from arrowdsl.schema.serialization import schema_fingerprint
 from core_types import JsonDict
+from engine.session import EngineSession
 from hamilton_pipeline.pipeline_types import OutputConfig, ParamBundle
 from ibis_engine.param_tables import (
     ListParamSpec,
@@ -34,6 +33,17 @@ from relspec.param_deps import ActiveParamSet, RuleDependencyReport
 from relspec.pipeline_policy import PipelinePolicy
 
 
+def _file_visitor_bucket() -> tuple[list[str], Callable[[object], None]]:
+    files: list[str] = []
+
+    def _visitor(record: object) -> None:
+        path = getattr(record, "path", None)
+        if isinstance(path, str):
+            files.append(path)
+
+    return files, _visitor
+
+
 @tag(layer="params", artifact="param_table_policy", kind="object")
 def param_table_policy(pipeline_policy: PipelinePolicy) -> ParamTablePolicy:
     """Return the default parameter table policy.
@@ -49,7 +59,7 @@ def param_table_policy(pipeline_policy: PipelinePolicy) -> ParamTablePolicy:
 @tag(layer="params", artifact="param_table_scope_key", kind="scalar")
 def param_table_scope_key(
     param_table_policy: ParamTablePolicy,
-    ctx: ExecutionContext | None = None,
+    engine_session: EngineSession | None = None,
 ) -> str | None:
     """Return an optional scope key for parameter table registration.
 
@@ -59,9 +69,9 @@ def param_table_scope_key(
         Scope key for schema/table scoping when configured.
     """
     if param_table_policy.scope == ParamTableScope.PER_SESSION:
-        if ctx is None or ctx.runtime.datafusion is None:
+        if engine_session is None or engine_session.df_profile is None:
             return None
-        return ctx.runtime.datafusion.context_cache_key()
+        return engine_session.df_profile.context_cache_key()
     return None
 
 
@@ -217,7 +227,7 @@ def param_table_artifacts(
 @tag(layer="params", artifact="param_table_name_map", kind="object")
 def param_table_name_map(
     param_table_registry: ParamTableRegistry,
-    ibis_backend: BaseBackend,
+    engine_session: EngineSession,
 ) -> dict[str, str]:
     """Register param tables into the backend and return name mapping.
 
@@ -226,13 +236,13 @@ def param_table_name_map(
     dict[str, str]
         Mapping of logical param names to qualified table names.
     """
-    return param_table_registry.register_into_backend(ibis_backend)
+    return param_table_registry.register_into_backend(engine_session.ibis_backend)
 
 
 @tag(layer="params", artifact="param_tables_ibis", kind="object")
 def param_tables_ibis(
     param_table_registry: ParamTableRegistry,
-    ibis_backend: BaseBackend,
+    engine_session: EngineSession,
 ) -> dict[str, Table]:
     """Return Ibis table handles for registered param tables.
 
@@ -241,20 +251,20 @@ def param_tables_ibis(
     dict[str, ibis.expr.types.Table]
         Ibis table handles keyed by logical name.
     """
-    return param_table_registry.ibis_tables(ibis_backend)
+    return param_table_registry.ibis_tables(engine_session.ibis_backend)
 
 
 @tag(layer="params", artifact="param_table_parquet", kind="side_effect")
 def write_param_tables_parquet(
     param_table_artifacts: Mapping[str, ParamTableArtifact],
     output_config: OutputConfig,
-) -> Mapping[str, str] | None:
+) -> Mapping[str, JsonDict] | None:
     """Write param tables to Parquet when enabled.
 
     Returns
     -------
-    Mapping[str, str] | None
-        Mapping of logical names to Parquet dataset directories, or ``None`` when disabled.
+    Mapping[str, JsonDict] | None
+        Mapping of logical names to Parquet dataset reports, or ``None`` when disabled.
     """
     if not output_config.materialize_param_tables:
         return None
@@ -263,12 +273,21 @@ def write_param_tables_parquet(
         return None
     base_dir = Path(base) / "params"
     base_dir.mkdir(parents=True, exist_ok=True)
-    output: dict[str, str] = {}
+    output: dict[str, JsonDict] = {}
     for logical_name, artifact in param_table_artifacts.items():
         target_dir = base_dir / logical_name
         target_dir.mkdir(parents=True, exist_ok=True)
-        write_dataset_parquet(artifact.table, target_dir)
-        output[logical_name] = str(target_dir)
+        files, visitor = _file_visitor_bucket()
+        write_dataset_parquet(
+            artifact.table,
+            target_dir,
+            config=DatasetWriteConfig(file_visitor=visitor),
+        )
+        output[logical_name] = {
+            "path": str(target_dir),
+            "files": list(files),
+            "rows": int(artifact.rows),
+        }
     return output
 
 

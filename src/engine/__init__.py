@@ -1,6 +1,6 @@
 """Engine execution surface helpers."""
 
-from engine.materialize import build_plan_product
+from engine.materialize import build_plan_product, resolve_prefer_reader
 from engine.plan_policy import ExecutionSurfacePolicy, WriterStrategy
 from engine.plan_product import PlanProduct
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
@@ -15,5 +15,6 @@ __all__ = [
     "WriterStrategy",
     "build_engine_session",
     "build_plan_product",
+    "resolve_prefer_reader",
     "resolve_runtime_profile",
 ]

@@ -30,7 +30,9 @@ class DiagnosticsPolicy:
     capture_datafusion_metrics: bool = True
     capture_datafusion_traces: bool = True
     capture_datafusion_fallbacks: bool = True
-    capture_datafusion_explains: bool = False
+    capture_datafusion_explains: bool = True
+    explain_analyze: bool = True
+    explain_analyze_level: str | None = "summary"
     emit_kernel_lane_diagnostics: bool = True
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,8 +17,18 @@ from arrowdsl.plan.metrics import ParquetMetadataSpec, parquet_metadata_factory
 from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
 from arrowdsl.schema.schema import SchemaTransform
 from core_types import PathLike, ensure_path
+from engine.plan_product import PlanProduct
 
-type DatasetWriteInput = TableLike | RecordBatchReaderLike
+type DatasetWriteInput = TableLike | RecordBatchReaderLike | PlanProduct
+
+
+def _coerce_plan_product(value: DatasetWriteInput) -> TableLike | RecordBatchReaderLike:
+    if isinstance(value, PlanProduct):
+        if value.writer_strategy != "arrow":
+            msg = "Parquet dataset writes require an Arrow writer strategy."
+            raise ValueError(msg)
+        return value.value()
+    return value
 
 
 @dataclass(frozen=True)
@@ -111,7 +121,7 @@ def _delete_partition_dir(base_dir: Path, partition: Mapping[str, str]) -> None:
 
 
 def write_table_parquet(
-    table: TableLike,
+    table: DatasetWriteInput,
     path: PathLike,
     *,
     opts: ParquetWriteOptions | None = None,
@@ -130,8 +140,24 @@ def write_table_parquet(
     if overwrite and target.exists():
         target.unlink()
 
+    data = _coerce_plan_product(table)
+    if isinstance(data, RecordBatchReaderLike):
+        writer = pq.ParquetWriter(
+            str(target),
+            data.schema,
+            compression=options.compression,
+            use_dictionary=options.use_dictionary,
+            write_statistics=options.write_statistics,
+            data_page_size=options.data_page_size,
+            allow_truncated_timestamps=options.allow_truncated_timestamps,
+        )
+        with writer:
+            for batch in data:
+                writer.write_batch(batch)
+        return str(target)
+
     pq.write_table(
-        table,
+        data,
         str(target),
         compression=options.compression,
         use_dictionary=options.use_dictionary,
@@ -160,6 +186,45 @@ def _artifact_path(base: Path, suffix: str) -> Path:
     return base.with_name(f"{base.stem}_{suffix}{base.suffix}")
 
 
+def _validate_projection_schema(
+    schema: SchemaLike,
+    *,
+    source_schema: SchemaLike,
+) -> None:
+    """Ensure the requested schema is a projection of the source schema.
+
+    Parameters
+    ----------
+    schema
+        Requested output schema.
+    source_schema
+        Source schema for the data being written.
+
+    Raises
+    ------
+    ValueError
+        Raised when the requested schema is not a pure projection.
+    """
+    requested = set(schema.names)
+    available = set(source_schema.names)
+    missing = sorted(requested - available)
+    mismatched = sorted(
+        name
+        for name in requested
+        if name in available and schema.field(name).type != source_schema.field(name).type
+    )
+    if not missing and not mismatched:
+        return
+    msg = "Requested schema must be a projection-only subset of the input schema."
+    details: list[str] = []
+    if missing:
+        details.append(f"missing={missing}")
+    if mismatched:
+        details.append(f"mismatched_types={mismatched}")
+    msg_full = "{} ({})".format(msg, ", ".join(details))
+    raise ValueError(msg_full)
+
+
 def _apply_schema_and_encoding(
     data: DatasetWriteInput,
     *,
@@ -184,8 +249,16 @@ def _apply_schema_and_encoding(
     """
     if schema is None and encoding_policy is None:
         return data
-    table = data.read_all() if isinstance(data, RecordBatchReaderLike) else data
+    data = _coerce_plan_product(data)
+    if isinstance(data, RecordBatchReaderLike):
+        if schema is not None and encoding_policy is None:
+            _validate_projection_schema(schema, source_schema=data.schema)
+            return _project_reader(data, schema=schema)
+        table = data.read_all()
+    else:
+        table = data
     if schema is not None:
+        _validate_projection_schema(schema, source_schema=table.schema)
         transform = SchemaTransform(
             schema=schema,
             safe_cast=True,
@@ -282,7 +355,8 @@ def write_dataset_parquet(
     """Write a Parquet dataset directory to base_dir.
 
     Accepts tables or RecordBatchReader inputs; readers are streamed when no schema or
-    encoding policy is provided.
+    encoding policy is provided. When ``config.schema`` is set it must be a projection-only
+    subset of the input schema (no new fields or type changes).
 
     This is the preferred storage form when you intend to scan with:
       pyarrow.dataset.dataset(base_dir, format="parquet")
@@ -301,7 +375,7 @@ def write_dataset_parquet(
     _ensure_dir(base_path)
 
     data = _apply_schema_and_encoding(
-        table,
+        _coerce_plan_product(table),
         schema=config.schema,
         encoding_policy=config.encoding_policy,
     )
@@ -327,6 +401,121 @@ def write_dataset_parquet(
     )
     if metadata_config.write_common_metadata or metadata_config.write_metadata:
         dataset = ds.dataset(str(base_path), format="parquet")
+        metadata_spec = parquet_metadata_factory(dataset)
+        write_parquet_metadata_sidecars(
+            base_path,
+            schema=metadata_spec.schema,
+            metadata=metadata_spec.file_metadata if metadata_config.write_metadata else None,
+            config=metadata_config,
+        )
+    return str(base_path)
+
+
+@dataclass
+class _RowCountTracker:
+    count: int = 0
+
+
+def _counted_reader(
+    reader: RecordBatchReaderLike,
+) -> tuple[RecordBatchReaderLike, Callable[[], int]]:
+    tracker = _RowCountTracker()
+
+    def _batches() -> Iterable[pa.RecordBatch]:
+        for batch in reader:
+            tracker.count += batch.num_rows
+            yield batch
+
+    counted = pa.RecordBatchReader.from_batches(reader.schema, _batches())
+    return counted, lambda: tracker.count
+
+
+def _project_reader(
+    reader: RecordBatchReaderLike,
+    *,
+    schema: SchemaLike,
+) -> RecordBatchReaderLike:
+    if list(reader.schema.names) == list(schema.names):
+        return reader
+    _validate_projection_schema(schema, source_schema=reader.schema)
+    columns = list(schema.names)
+
+    def _batches() -> Iterable[pa.RecordBatch]:
+        for batch in reader:
+            yield batch.select(columns)
+
+    return pa.RecordBatchReader.from_batches(schema, _batches())
+
+
+def write_partitioned_dataset_parquet(
+    readers: Iterable[RecordBatchReaderLike],
+    base_dir: PathLike,
+    *,
+    config: DatasetWriteConfig | None = None,
+) -> str:
+    """Write a Parquet dataset from partitioned readers.
+
+    Returns
+    -------
+    str
+        Dataset directory path.
+
+    Raises
+    ------
+    ValueError
+        Raised when partitioned writes are misconfigured.
+    """
+    config = config or DatasetWriteConfig()
+    options = config.opts or ParquetWriteOptions()
+    metadata_config = config.metadata or ParquetMetadataConfig()
+    base_path = ensure_path(base_dir)
+    if config.overwrite:
+        _rm_tree(base_path)
+    _ensure_dir(base_path)
+    if config.encoding_policy is not None:
+        msg = "Partitioned streaming does not support encoding policies."
+        raise ValueError(msg)
+    reader_list = list(readers)
+    if not reader_list:
+        msg = "Partitioned dataset write requires at least one reader."
+        raise ValueError(msg)
+    expected_schema = config.schema or reader_list[0].schema
+    total_rows = 0
+    for reader in reader_list:
+        if config.schema is None and reader.schema != expected_schema:
+            msg = "Partitioned write requires consistent reader schemas."
+            raise ValueError(msg)
+        resolved_reader = (
+            _project_reader(reader, schema=expected_schema) if config.schema is not None else reader
+        )
+        counted, rows_fn = _counted_reader(resolved_reader)
+        ds.write_dataset(
+            data=counted,
+            base_dir=str(base_path),
+            format="parquet",
+            basename_template=config.basename_template,
+            max_rows_per_file=options.max_rows_per_file,
+            max_rows_per_group=options.max_rows_per_file,
+            preserve_order=bool(config.preserve_order),
+            existing_data_behavior="overwrite_or_ignore",
+            file_visitor=config.file_visitor,
+            file_options=ds.ParquetFileFormat().make_write_options(
+                compression=options.compression,
+                use_dictionary=options.use_dictionary,
+                write_statistics=options.write_statistics,
+                data_page_size=options.data_page_size,
+            ),
+        )
+        total_rows += rows_fn()
+    dataset = ds.dataset(str(base_path), format="parquet")
+    if expected_schema is not None and dataset.schema != expected_schema:
+        msg = "Partitioned write schema mismatch detected."
+        raise ValueError(msg)
+    row_count = dataset.count_rows()
+    if int(row_count) != total_rows:
+        msg = f"Partitioned write row-count mismatch (expected={total_rows}, got={row_count})."
+        raise ValueError(msg)
+    if metadata_config.write_common_metadata or metadata_config.write_metadata:
         metadata_spec = parquet_metadata_factory(dataset)
         write_parquet_metadata_sidecars(
             base_path,
@@ -432,6 +621,9 @@ def write_named_datasets_parquet(
 
       base_dir/<dataset_name>/part-*.parquet
 
+    When per-dataset schemas are provided, each schema must be a projection-only subset
+    of the corresponding input schema.
+
     Returns
     -------
     dict[str, str]
@@ -449,7 +641,7 @@ def write_named_datasets_parquet(
             config.encoding_policies.get(name) if config.encoding_policies is not None else None
         )
         write_dataset_parquet(
-            table,
+            _coerce_plan_product(table),
             ds_dir,
             config=DatasetWriteConfig(
                 opts=options,
@@ -480,5 +672,6 @@ __all__ = [
     "write_finalize_result_parquet",
     "write_named_datasets_parquet",
     "write_parquet_metadata_sidecars",
+    "write_partitioned_dataset_parquet",
     "write_table_parquet",
 ]

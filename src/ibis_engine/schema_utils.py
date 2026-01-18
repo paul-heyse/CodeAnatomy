@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import cast
 
 import ibis
 import ibis.expr.datatypes as dt
 import pyarrow as pa
 from ibis.expr.types import Table, Value
+from sqlglot import Expression
 
 
 def ibis_dtype_from_arrow(dtype: pa.DataType) -> dt.DataType:
@@ -47,6 +49,51 @@ def ibis_schema_from_arrow(schema: pa.Schema) -> ibis.Schema:
     """
     fields = {field.name: ibis_dtype_from_arrow(field.type) for field in schema}
     return ibis.schema(fields)
+
+
+def sqlglot_column_defs(schema: pa.Schema, *, dialect: str = "datafusion") -> list[Expression]:
+    """Return SQLGlot column defs for an Arrow schema.
+
+    Returns
+    -------
+    list[sqlglot.Expression]
+        SQLGlot column definition expressions.
+    """
+    ibis_schema = ibis_schema_from_arrow(schema)
+    return list(ibis_schema.to_sqlglot_column_defs(dialect=dialect))
+
+
+def validate_expr_schema(expr: Table, *, expected: pa.Schema) -> None:
+    """Validate that an Ibis expression matches the expected schema.
+
+    Raises
+    ------
+    ValueError
+        Raised when the expression schema differs from the expected schema.
+    """
+    expected_ibis = ibis_schema_from_arrow(expected)
+    actual = expr.schema()
+    expected_names = cast("tuple[str, ...]", expected_ibis.names)
+    actual_names = cast("tuple[str, ...]", actual.names)
+    missing = [name for name in expected_names if name not in actual_names]
+    extra = [name for name in actual_names if name not in expected_names]
+    mismatched = [
+        name
+        for name in expected_names
+        if name in actual_names and actual[name] != expected_ibis[name]
+    ]
+    if not missing and not extra and not mismatched:
+        return
+    details: list[str] = []
+    if missing:
+        details.append(f"missing={missing}")
+    if extra:
+        details.append(f"extra={extra}")
+    if mismatched:
+        details.append(f"mismatched={mismatched}")
+    msg = "Ibis expression schema does not match expected contract."
+    msg_full = "{} ({})".format(msg, ", ".join(details))
+    raise ValueError(msg_full)
 
 
 def normalize_table_for_ibis(table: pa.Table) -> pa.Table:
@@ -191,4 +238,6 @@ __all__ = [
     "ibis_null_literal",
     "ibis_schema_from_arrow",
     "normalize_table_for_ibis",
+    "sqlglot_column_defs",
+    "validate_expr_schema",
 ]

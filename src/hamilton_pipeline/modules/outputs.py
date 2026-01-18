@@ -37,6 +37,7 @@ from arrowdsl.schema.schema import EncodingPolicy
 from core_types import JsonDict, JsonValue
 from cpg.constants import CpgBuildArtifacts
 from datafusion_engine.registry_bridge import cached_dataset_names
+from engine.plan_cache import PlanCacheEntry
 from engine.plan_policy import WriterStrategy
 from extract.evidence_plan import EvidencePlan
 from hamilton_pipeline.modules.extraction import ExtractErrorArtifacts
@@ -49,7 +50,7 @@ from hamilton_pipeline.pipeline_types import (
     RelspecSnapshots,
     RepoScanConfig,
 )
-from ibis_engine.execution import IbisAdapterExecution
+from ibis_engine.execution import IbisExecutionContext
 from ibis_engine.io_bridge import (
     IbisNamedDatasetWriteOptions,
     write_ibis_named_datasets_parquet,
@@ -57,17 +58,35 @@ from ibis_engine.io_bridge import (
 from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
 from ibis_engine.plan import IbisPlan
 from ibis_engine.registry import registry_snapshot
+from incremental.fingerprint_changes import (
+    output_fingerprint_change_table,
+    read_dataset_fingerprints,
+    write_dataset_fingerprints,
+)
 from incremental.registry_specs import dataset_schema as incremental_dataset_schema
+from incremental.state_store import StateStore
 from incremental.types import IncrementalConfig
 from normalize.runner import NormalizeRuleCompilation
 from normalize.utils import encoding_policy_from_schema
-from obs.diagnostics_tables import datafusion_explains_table, datafusion_fallbacks_table
-from obs.manifest import ManifestContext, ManifestData, build_manifest, write_manifest_json
+from obs.diagnostics import DiagnosticsCollector
+from obs.diagnostics_tables import (
+    datafusion_explains_table,
+    datafusion_fallbacks_table,
+    feature_state_table,
+)
+from obs.manifest import (
+    ManifestContext,
+    ManifestData,
+    build_manifest,
+    relationship_output_fingerprints,
+    write_manifest_json,
+)
 from obs.repro import RunBundleContext, write_run_bundle
 from relspec.compiler import CompiledOutput
 from relspec.model import RelationshipRule
 from relspec.param_deps import RuleDependencyReport, build_param_reverse_index
 from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation
+from relspec.rules.diagnostics import rule_diagnostics_from_table
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
 from relspec.rules.registry import RuleRegistry
 from relspec.rules.spec_tables import rule_definitions_from_table
@@ -255,6 +274,32 @@ def _datafusion_runtime_diag_tables(
     return fallback_table, explain_table
 
 
+def _datafusion_plan_cache_entries(
+    ctx: ExecutionContext,
+) -> Sequence[PlanCacheEntry] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.plan_cache is None:
+        return None
+    return profile.plan_cache.snapshot()
+
+
+@tag(layer="obs", artifact="feature_state_table", kind="table")
+def feature_state_diagnostics_table(
+    diagnostics_collector: DiagnosticsCollector,
+) -> pa.Table | None:
+    """Return feature state diagnostics table when available.
+
+    Returns
+    -------
+    pa.Table | None
+        Feature state table or ``None`` when no events exist.
+    """
+    events = diagnostics_collector.events_snapshot().get("feature_state_v1", [])
+    if not events:
+        return None
+    return feature_state_table(events)
+
+
 def _dataset_registry_snapshot(
     locations: Mapping[str, DatasetLocation],
 ) -> list[dict[str, object]] | None:
@@ -309,6 +354,50 @@ def _write_incremental_dataset(
     )
 
 
+def _output_fingerprint_map(run_manifest: Mapping[str, JsonValue]) -> dict[str, str]:
+    outputs = run_manifest.get("outputs")
+    if not isinstance(outputs, Sequence) or isinstance(outputs, (str, bytes)):
+        return {}
+    fingerprints: dict[str, str] = {}
+    for record in outputs:
+        if not isinstance(record, Mapping):
+            continue
+        name = record.get("name")
+        fingerprint = record.get("dataset_fingerprint")
+        if isinstance(name, str) and isinstance(fingerprint, str) and fingerprint:
+            fingerprints[name] = fingerprint
+    return fingerprints
+
+
+# -----------------------
+# Incremental fingerprint diagnostics
+# -----------------------
+
+
+@tag(layer="incremental", kind="table")
+def incremental_output_fingerprint_changes(
+    run_manifest: JsonDict,
+    incremental_relationship_updates: Mapping[str, str] | None,
+    incremental_state_store: StateStore | None,
+    incremental_config: IncrementalConfig,
+) -> pa.Table | None:
+    """Return output fingerprint change diagnostics for incremental runs.
+
+    Returns
+    -------
+    pa.Table | None
+        Change table aligned to ``inc_output_fingerprint_changes_v1``.
+    """
+    _ = incremental_relationship_updates
+    if not incremental_config.enabled or incremental_state_store is None:
+        return None
+    current = _output_fingerprint_map(run_manifest)
+    previous = read_dataset_fingerprints(incremental_state_store)
+    table = output_fingerprint_change_table(previous, current)
+    write_dataset_fingerprints(incremental_state_store, current)
+    return table
+
+
 # -----------------------
 # Bundle helper types
 # -----------------------
@@ -336,10 +425,38 @@ class RunBundleIncrementalTables:
     """Incremental diagnostic tables for run bundles."""
 
     incremental_diff: pa.Table | None
+    incremental_plan_diff: pa.Table | None
     incremental_changed_exports: pa.Table | None
     incremental_impacted_callers: pa.Table | None
     incremental_impacted_importers: pa.Table | None
     incremental_impacted_files: pa.Table | None
+    incremental_output_fingerprint_changes: pa.Table | None
+
+
+@dataclass(frozen=True)
+class RunBundleIncrementalInputs:
+    """Inputs required to bundle incremental diagnostics."""
+
+    incremental_diff: pa.Table | None
+    incremental_plan_diff: pa.Table | None
+    incremental_changed_exports: pa.Table | None
+    incremental_impacted_callers: pa.Table | None
+    incremental_impacted_importers: pa.Table | None
+    incremental_impacted_files: pa.Table | None
+    incremental_output_fingerprint_changes: pa.Table | None
+
+
+@dataclass(frozen=True)
+class RunBundleIncrementalTablesBundle:
+    """Bundle of incremental tables for easier wiring."""
+
+    incremental_diff: pa.Table | None
+    incremental_plan_diff: pa.Table | None
+    incremental_changed_exports: pa.Table | None
+    incremental_impacted_callers: pa.Table | None
+    incremental_impacted_importers: pa.Table | None
+    incremental_impacted_files: pa.Table | None
+    incremental_output_fingerprint_changes: pa.Table | None
 
 
 @dataclass(frozen=True)
@@ -352,10 +469,12 @@ class RunBundleInputs:
     tables: RunBundleTables
     param_inputs: RunBundleParamInputs | None = None
     incremental_diff: pa.Table | None = None
+    incremental_plan_diff: pa.Table | None = None
     incremental_changed_exports: pa.Table | None = None
     incremental_impacted_callers: pa.Table | None = None
     incremental_impacted_importers: pa.Table | None = None
     incremental_impacted_files: pa.Table | None = None
+    incremental_output_fingerprint_changes: pa.Table | None = None
 
 
 @dataclass(frozen=True)
@@ -368,6 +487,17 @@ class RunBundleParamInputs:
     param_dependency_reports: tuple[RuleDependencyReport, ...] = ()
     param_reverse_index: Mapping[str, tuple[str, ...]] | None = None
     include_param_table_data: bool = False
+
+
+@dataclass(frozen=True)
+class RunBundleContextInputs:
+    """Inputs required to build a run bundle context."""
+
+    output_config: OutputConfig
+    relspec_rule_exec_events: pa.Table | None
+    relspec_scan_telemetry: TableLike
+    feature_state_diagnostics_table: pa.Table | None
+    ctx: ExecutionContext | None = None
 
 
 @dataclass(frozen=True)
@@ -413,14 +543,22 @@ class ExtractManifestInputs:
 
 
 @dataclass(frozen=True)
+class CpgPropsReportInputs:
+    """Artifacts for CPG props materialization."""
+
+    cpg_props_parquet: JsonDict | None = None
+    cpg_props_json_parquet: JsonDict | None = None
+
+
+@dataclass(frozen=True)
 class MaterializationReportInputs:
     """Inputs required to assemble materialization reports."""
 
     normalized_inputs_parquet: JsonDict | None = None
+    param_table_parquet: Mapping[str, JsonDict] | None = None
     cpg_nodes_parquet: JsonDict | None = None
     cpg_edges_parquet: JsonDict | None = None
-    cpg_props_parquet: JsonDict | None = None
-    cpg_props_json_parquet: JsonDict | None = None
+    cpg_props: CpgPropsReportInputs | None = None
 
 
 @dataclass(frozen=True)
@@ -436,7 +574,7 @@ class NormalizedInputsReportContext:
     """Context required to build normalized input reports."""
 
     file_lists: Mapping[str, list[str]]
-    ibis_execution: IbisAdapterExecution
+    ibis_execution: IbisExecutionContext
     out_dir: Path
     requested_strategy: WriterStrategy
     effective_strategy: WriterStrategy
@@ -459,7 +597,7 @@ class ManifestOptionalInputs:
 
 def _build_normalized_inputs_write_context(
     input_datasets: Mapping[str, TableLike | RecordBatchReaderLike | IbisPlan],
-    ibis_execution: IbisAdapterExecution,
+    ibis_execution: IbisExecutionContext,
 ) -> NormalizedInputsWriteContext:
     schemas: dict[str, pa.Schema] = {}
     encoding_policies: dict[str, EncodingPolicy] = {}
@@ -493,7 +631,7 @@ def _write_normalized_inputs(
     out_dir: Path,
     *,
     context: NormalizedInputsWriteContext,
-    ibis_execution: IbisAdapterExecution,
+    ibis_execution: IbisExecutionContext,
     writer_strategy: WriterStrategy,
 ) -> dict[str, str]:
     if any(isinstance(table, IbisPlan) for table in input_datasets.values()):
@@ -576,7 +714,7 @@ def write_normalized_inputs_parquet(
     relspec_input_datasets: dict[str, TableLike],
     output_dir: str | None,
     work_dir: str | None,
-    ibis_execution: IbisAdapterExecution,
+    ibis_execution: IbisExecutionContext,
     output_config: OutputConfig,
 ) -> JsonDict | None:
     """Write relationship-input normalized datasets for debugging.
@@ -674,6 +812,7 @@ def write_cpg_nodes_parquet(
     )
     return {
         "paths": paths,
+        "files": list(paths.values()),
         "rows": int(finalize.good.num_rows),
         "error_rows": int(finalize.errors.num_rows),
     }
@@ -701,7 +840,7 @@ def write_cpg_nodes_quality_parquet(
         opts=ParquetWriteOptions(),
         overwrite=True,
     )
-    return {"path": path, "rows": int(cpg_nodes_quality.num_rows)}
+    return {"path": path, "files": [path], "rows": int(cpg_nodes_quality.num_rows)}
 
 
 @tag(layer="materialize", artifact="cpg_edges_parquet", kind="side_effect")
@@ -732,6 +871,7 @@ def write_cpg_edges_parquet(
     )
     return {
         "paths": paths,
+        "files": list(paths.values()),
         "rows": int(finalize.good.num_rows),
         "error_rows": int(finalize.errors.num_rows),
     }
@@ -765,6 +905,7 @@ def write_cpg_props_parquet(
     )
     return {
         "paths": paths,
+        "files": list(paths.values()),
         "rows": int(finalize.good.num_rows),
         "error_rows": int(finalize.errors.num_rows),
     }
@@ -792,7 +933,7 @@ def write_cpg_props_json_parquet(
         opts=ParquetWriteOptions(),
         overwrite=True,
     )
-    return {"path": path, "rows": int(cpg_props_json.num_rows)}
+    return {"path": path, "files": [path], "rows": int(cpg_props_json.num_rows)}
 
 
 @tag(layer="materialize", artifact="cpg_props_quality_parquet", kind="side_effect")
@@ -817,7 +958,7 @@ def write_cpg_props_quality_parquet(
         opts=ParquetWriteOptions(),
         overwrite=True,
     )
-    return {"path": path, "rows": int(cpg_props_quality.num_rows)}
+    return {"path": path, "files": [path], "rows": int(cpg_props_quality.num_rows)}
 
 
 @tag(layer="obs", artifact="materialization_reports", kind="object")
@@ -835,14 +976,17 @@ def materialization_reports(
     artifacts: JsonDict = {}
     if report_inputs.normalized_inputs_parquet is not None:
         artifacts["normalized_inputs_parquet"] = report_inputs.normalized_inputs_parquet
+    if report_inputs.param_table_parquet is not None:
+        artifacts["param_table_parquet"] = report_inputs.param_table_parquet
     if report_inputs.cpg_nodes_parquet is not None:
         artifacts["cpg_nodes_parquet"] = report_inputs.cpg_nodes_parquet
     if report_inputs.cpg_edges_parquet is not None:
         artifacts["cpg_edges_parquet"] = report_inputs.cpg_edges_parquet
-    if report_inputs.cpg_props_parquet is not None:
-        artifacts["cpg_props_parquet"] = report_inputs.cpg_props_parquet
-    if report_inputs.cpg_props_json_parquet is not None:
-        artifacts["cpg_props_json_parquet"] = report_inputs.cpg_props_json_parquet
+    if report_inputs.cpg_props is not None:
+        if report_inputs.cpg_props.cpg_props_parquet is not None:
+            artifacts["cpg_props_parquet"] = report_inputs.cpg_props.cpg_props_parquet
+        if report_inputs.cpg_props.cpg_props_json_parquet is not None:
+            artifacts["cpg_props_json_parquet"] = report_inputs.cpg_props.cpg_props_json_parquet
     if not artifacts:
         return None
     return {
@@ -851,13 +995,33 @@ def materialization_reports(
     }
 
 
+@tag(layer="obs", artifact="cpg_props_report_inputs", kind="object")
+def cpg_props_report_inputs(
+    cpg_props_parquet: JsonDict | None,
+    cpg_props_json_parquet: JsonDict | None,
+) -> CpgPropsReportInputs | None:
+    """Bundle CPG props materialization artifacts.
+
+    Returns
+    -------
+    CpgPropsReportInputs | None
+        CPG props report artifacts when any are present.
+    """
+    if cpg_props_parquet is None and cpg_props_json_parquet is None:
+        return None
+    return CpgPropsReportInputs(
+        cpg_props_parquet=cpg_props_parquet,
+        cpg_props_json_parquet=cpg_props_json_parquet,
+    )
+
+
 @tag(layer="obs", artifact="materialization_report_inputs", kind="object")
 def materialization_report_inputs(
     normalized_inputs_parquet: JsonDict | None,
+    param_table_parquet: Mapping[str, JsonDict] | None,
     cpg_nodes_parquet: JsonDict | None,
     cpg_edges_parquet: JsonDict | None,
-    cpg_props_parquet: JsonDict | None,
-    cpg_props_json_parquet: JsonDict | None,
+    cpg_props: CpgPropsReportInputs | None,
 ) -> MaterializationReportInputs:
     """Bundle materialization report inputs.
 
@@ -868,10 +1032,10 @@ def materialization_report_inputs(
     """
     return MaterializationReportInputs(
         normalized_inputs_parquet=normalized_inputs_parquet,
+        param_table_parquet=param_table_parquet,
         cpg_nodes_parquet=cpg_nodes_parquet,
         cpg_edges_parquet=cpg_edges_parquet,
-        cpg_props_parquet=cpg_props_parquet,
-        cpg_props_json_parquet=cpg_props_json_parquet,
+        cpg_props=cpg_props,
     )
 
 
@@ -928,6 +1092,11 @@ def write_extract_error_artifacts_parquet(
                     overwrite=True,
                 ),
             },
+            "files": [
+                str(dataset_dir / "errors.parquet"),
+                str(dataset_dir / "error_stats.parquet"),
+                str(dataset_dir / "alignment.parquet"),
+            ],
             "error_rows": int(errors.num_rows),
             "stat_rows": int(stats.num_rows),
             "alignment_rows": int(alignment.num_rows),
@@ -1026,6 +1195,29 @@ def write_inc_impacted_files_parquet(
     return _write_incremental_dataset(
         name="inc_impacted_files_v2",
         table=incremental_impacted_files,
+        output_dir=output_dir,
+        work_dir=work_dir,
+        incremental_config=incremental_config,
+    )
+
+
+@tag(layer="obs", artifact="write_inc_output_fingerprint_changes_parquet", kind="table")
+def write_inc_output_fingerprint_changes_parquet(
+    incremental_output_fingerprint_changes: pa.Table | None,
+    output_dir: str | None,
+    work_dir: str | None,
+    incremental_config: IncrementalConfig,
+) -> str | None:
+    """Write output fingerprint change diagnostics.
+
+    Returns
+    -------
+    str | None
+        Dataset path for the fingerprint change report.
+    """
+    return _write_incremental_dataset(
+        name="inc_output_fingerprint_changes_v1",
+        table=incremental_output_fingerprint_changes,
         output_dir=output_dir,
         work_dir=work_dir,
         incremental_config=incremental_config,
@@ -1289,6 +1481,7 @@ def extract_manifest_inputs(
 def manifest_data(
     manifest_inputs: ManifestInputs,
     normalize_rule_compilation: NormalizeRuleCompilation | None = None,
+    output_config: OutputConfig | None = None,
     ctx: ExecutionContext | None = None,
 ) -> ManifestData:
     """Assemble manifest data inputs from pipeline outputs.
@@ -1331,6 +1524,7 @@ def manifest_data(
         relspec_input_tables=manifest_inputs.relspec_inputs_bundle.tables,
         relspec_input_locations=manifest_inputs.relspec_inputs_bundle.locations,
         relationship_outputs=manifest_inputs.relationship_output_tables.as_dict(),
+        compiled_relationship_outputs=manifest_inputs.relspec_snapshots.compiled_outputs,
         cpg_nodes=manifest_inputs.cpg_output_tables.cpg_nodes,
         cpg_edges=manifest_inputs.cpg_output_tables.cpg_edges,
         cpg_props=manifest_inputs.cpg_output_tables.cpg_props,
@@ -1353,8 +1547,23 @@ def manifest_data(
         dataset_registry_snapshot=dataset_snapshot,
         runtime_profile_name=ctx.runtime.name,
         determinism_tier=ctx.determinism.value,
+        writer_strategy=output_config.writer_strategy if output_config is not None else None,
         notes=notes,
     )
+
+
+@tag(layer="obs", artifact="relationship_output_fingerprints", kind="object")
+def relationship_output_fingerprints_map(
+    manifest_data: ManifestData,
+) -> Mapping[str, str]:
+    """Return dataset fingerprints for relationship outputs.
+
+    Returns
+    -------
+    Mapping[str, str]
+        Mapping of output dataset names to fingerprint hashes.
+    """
+    return relationship_output_fingerprints(manifest_data)
 
 
 def _produced_relationship_outputs(manifest_inputs: ManifestInputs) -> list[str]:
@@ -1393,9 +1602,22 @@ def _manifest_notes(
     notes.update(_normalize_notes(normalize_lineage, normalize_rule_compilation))
     notes.update(_runtime_telemetry_notes(manifest_inputs))
     notes.update(_datafusion_notes(ctx))
+    notes.update(_rule_plan_hash_notes(manifest_inputs))
     if manifest_inputs.materialization_reports:
         notes["materialization_reports"] = manifest_inputs.materialization_reports
     return notes
+
+
+def _rule_plan_hash_notes(manifest_inputs: ManifestInputs) -> JsonDict:
+    rule_diagnostics = manifest_inputs.relspec_snapshots.rule_diagnostics
+    hashes: dict[str, str] = {}
+    for diagnostic in rule_diagnostics_from_table(rule_diagnostics):
+        if diagnostic.rule_name is None:
+            continue
+        plan_hash = diagnostic.metadata.get("plan_hash")
+        if plan_hash:
+            hashes[diagnostic.rule_name] = plan_hash
+    return {"rule_plan_hashes": hashes} if hashes else {}
 
 
 def _normalize_notes(
@@ -1601,11 +1823,7 @@ def run_bundle_tables(
 
 @tag(layer="obs", artifact="run_bundle_incremental_tables", kind="object")
 def run_bundle_incremental_tables(
-    incremental_diff: pa.Table | None,
-    incremental_changed_exports: pa.Table | None,
-    incremental_impacted_callers: pa.Table | None,
-    incremental_impacted_importers: pa.Table | None,
-    incremental_impacted_files: pa.Table | None,
+    incremental_inputs: RunBundleIncrementalInputs,
 ) -> RunBundleIncrementalTables:
     """Bundle incremental diagnostics for run bundle writing.
 
@@ -1615,11 +1833,63 @@ def run_bundle_incremental_tables(
         Incremental diagnostics for run bundles.
     """
     return RunBundleIncrementalTables(
-        incremental_diff=incremental_diff,
-        incremental_changed_exports=incremental_changed_exports,
-        incremental_impacted_callers=incremental_impacted_callers,
-        incremental_impacted_importers=incremental_impacted_importers,
-        incremental_impacted_files=incremental_impacted_files,
+        incremental_diff=incremental_inputs.incremental_diff,
+        incremental_plan_diff=incremental_inputs.incremental_plan_diff,
+        incremental_changed_exports=incremental_inputs.incremental_changed_exports,
+        incremental_impacted_callers=incremental_inputs.incremental_impacted_callers,
+        incremental_impacted_importers=incremental_inputs.incremental_impacted_importers,
+        incremental_impacted_files=incremental_inputs.incremental_impacted_files,
+        incremental_output_fingerprint_changes=(
+            incremental_inputs.incremental_output_fingerprint_changes
+        ),
+    )
+
+
+@tag(layer="obs", artifact="run_bundle_incremental_inputs", kind="object")
+def run_bundle_incremental_inputs(
+    incremental_tables: RunBundleIncrementalTablesBundle,
+) -> RunBundleIncrementalInputs:
+    """Bundle inputs required for incremental diagnostics.
+
+    Returns
+    -------
+    RunBundleIncrementalInputs
+        Bundled incremental diagnostic inputs.
+    """
+    return RunBundleIncrementalInputs(
+        incremental_diff=incremental_tables.incremental_diff,
+        incremental_plan_diff=incremental_tables.incremental_plan_diff,
+        incremental_changed_exports=incremental_tables.incremental_changed_exports,
+        incremental_impacted_callers=incremental_tables.incremental_impacted_callers,
+        incremental_impacted_importers=incremental_tables.incremental_impacted_importers,
+        incremental_impacted_files=incremental_tables.incremental_impacted_files,
+        incremental_output_fingerprint_changes=(
+            incremental_tables.incremental_output_fingerprint_changes
+        ),
+    )
+
+
+@tag(layer="obs", artifact="run_bundle_incremental_tables_bundle", kind="object")
+def run_bundle_incremental_tables_bundle(
+    incremental_tables: RunBundleIncrementalTables,
+) -> RunBundleIncrementalTablesBundle:
+    """Bundle incremental tables for input wiring.
+
+    Returns
+    -------
+    RunBundleIncrementalTablesBundle
+        Bundle of incremental tables for run bundle wiring.
+    """
+    return RunBundleIncrementalTablesBundle(
+        incremental_diff=incremental_tables.incremental_diff,
+        incremental_plan_diff=incremental_tables.incremental_plan_diff,
+        incremental_changed_exports=incremental_tables.incremental_changed_exports,
+        incremental_impacted_callers=incremental_tables.incremental_impacted_callers,
+        incremental_impacted_importers=incremental_tables.incremental_impacted_importers,
+        incremental_impacted_files=incremental_tables.incremental_impacted_files,
+        incremental_output_fingerprint_changes=(
+            incremental_tables.incremental_output_fingerprint_changes
+        ),
     )
 
 
@@ -1645,10 +1915,14 @@ def run_bundle_inputs(
         tables=run_bundle_tables,
         param_inputs=run_bundle_param_inputs,
         incremental_diff=run_bundle_incremental_tables.incremental_diff,
+        incremental_plan_diff=run_bundle_incremental_tables.incremental_plan_diff,
         incremental_changed_exports=run_bundle_incremental_tables.incremental_changed_exports,
         incremental_impacted_callers=run_bundle_incremental_tables.incremental_impacted_callers,
         incremental_impacted_importers=run_bundle_incremental_tables.incremental_impacted_importers,
         incremental_impacted_files=run_bundle_incremental_tables.incremental_impacted_files,
+        incremental_output_fingerprint_changes=(
+            run_bundle_incremental_tables.incremental_output_fingerprint_changes
+        ),
     )
 
 
@@ -1678,13 +1952,34 @@ def run_bundle_param_inputs(
     )
 
 
-@tag(layer="obs", artifact="run_bundle_context", kind="object")
-def run_bundle_context(
-    run_bundle_inputs: RunBundleInputs,
+@tag(layer="obs", artifact="run_bundle_context_inputs", kind="object")
+def run_bundle_context_inputs(
     output_config: OutputConfig,
     relspec_rule_exec_events: pa.Table | None,
     relspec_scan_telemetry: TableLike,
+    feature_state_diagnostics_table: pa.Table | None,
     ctx: ExecutionContext | None = None,
+) -> RunBundleContextInputs:
+    """Bundle inputs required for run bundle context creation.
+
+    Returns
+    -------
+    RunBundleContextInputs
+        Run bundle context inputs.
+    """
+    return RunBundleContextInputs(
+        output_config=output_config,
+        relspec_rule_exec_events=relspec_rule_exec_events,
+        relspec_scan_telemetry=relspec_scan_telemetry,
+        feature_state_diagnostics_table=feature_state_diagnostics_table,
+        ctx=ctx,
+    )
+
+
+@tag(layer="obs", artifact="run_bundle_context", kind="object")
+def run_bundle_context(
+    run_bundle_inputs: RunBundleInputs,
+    context_inputs: RunBundleContextInputs,
 ) -> RunBundleContext | None:
     """Build the run bundle context when outputs are enabled.
 
@@ -1693,6 +1988,7 @@ def run_bundle_context(
     RunBundleContext | None
         Run bundle context, or None if outputs are disabled.
     """
+    output_config = context_inputs.output_config
     base = output_config.output_dir or output_config.work_dir
     if not base:
         return None
@@ -1702,9 +1998,13 @@ def run_bundle_context(
     datafusion_traces: JsonDict | None = None
     datafusion_fallbacks: pa.Table | None = None
     datafusion_explains: pa.Table | None = None
-    if ctx is not None:
-        datafusion_metrics, datafusion_traces = _datafusion_runtime_artifacts(ctx)
-        datafusion_fallbacks, datafusion_explains = _datafusion_runtime_diag_tables(ctx)
+    datafusion_plan_cache: Sequence[PlanCacheEntry] | None = None
+    if context_inputs.ctx is not None:
+        datafusion_metrics, datafusion_traces = _datafusion_runtime_artifacts(context_inputs.ctx)
+        datafusion_fallbacks, datafusion_explains = _datafusion_runtime_diag_tables(
+            context_inputs.ctx
+        )
+        datafusion_plan_cache = _datafusion_plan_cache_entries(context_inputs.ctx)
     param_inputs = run_bundle_inputs.param_inputs
     param_specs = param_inputs.param_table_specs if param_inputs is not None else ()
     param_artifacts = param_inputs.param_table_artifacts if param_inputs is not None else None
@@ -1730,17 +2030,23 @@ def run_bundle_context(
         datafusion_traces=datafusion_traces,
         datafusion_fallbacks=datafusion_fallbacks,
         datafusion_explains=datafusion_explains,
-        relspec_scan_telemetry=cast("pa.Table", relspec_scan_telemetry),
-        relspec_rule_exec_events=relspec_rule_exec_events,
+        datafusion_plan_cache=datafusion_plan_cache,
+        feature_state=context_inputs.feature_state_diagnostics_table,
+        relspec_scan_telemetry=cast("pa.Table", context_inputs.relspec_scan_telemetry),
+        relspec_rule_exec_events=context_inputs.relspec_rule_exec_events,
         relspec_input_locations=run_bundle_inputs.tables.relspec_inputs.locations,
         relspec_input_tables=run_bundle_inputs.tables.relspec_inputs.tables,
         relationship_output_tables=run_bundle_inputs.tables.relationship_outputs.as_dict(),
         cpg_output_tables=run_bundle_inputs.tables.cpg_outputs.as_dict(),
         incremental_diff=run_bundle_inputs.incremental_diff,
+        incremental_plan_diff=run_bundle_inputs.incremental_plan_diff,
         incremental_changed_exports=run_bundle_inputs.incremental_changed_exports,
         incremental_impacted_callers=run_bundle_inputs.incremental_impacted_callers,
         incremental_impacted_importers=run_bundle_inputs.incremental_impacted_importers,
         incremental_impacted_files=run_bundle_inputs.incremental_impacted_files,
+        incremental_output_fingerprint_changes=(
+            run_bundle_inputs.incremental_output_fingerprint_changes
+        ),
         param_table_specs=param_specs,
         param_table_artifacts=param_artifacts,
         param_scalar_signature=param_scalar_signature,

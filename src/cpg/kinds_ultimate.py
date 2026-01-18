@@ -1375,12 +1375,12 @@ DERIV_T_SYMTABLE = DerivationTemplate(
     ambiguity_policy="none",
 )
 DERIV_T_CPG_EDGES = DerivationTemplate(
-    extractor="cpg.build_edges:build_cpg_edges_raw",
+    extractor="relspec.cpg.build_edges:build_cpg_edges_raw",
     confidence_policy="confidence=1.0",
     ambiguity_policy="none",
 )
 DERIV_T_CPG_NODES = DerivationTemplate(
-    extractor="cpg.build_nodes:build_cpg_nodes_raw",
+    extractor="relspec.cpg.build_nodes:build_cpg_nodes_raw",
     confidence_policy="confidence=1.0",
     ambiguity_policy="none",
 )
@@ -1516,7 +1516,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         id_recipe="block_id = f'{code_unit_id}:B:{start_off}'",
         confidence_policy="confidence=0.95",
         ambiguity_policy="none",
-        extractor="normalize.bytecode_cfg:build_cfg_blocks",
+        extractor="normalize.ibis_api:build_cfg_blocks",
         status="planned",
     ),
     DerivationRow(
@@ -1527,7 +1527,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         confidence_policy="confidence=1.0",
         ambiguity_policy="none",
         status="planned",
-        extractor="normalize.bytecode_cfg:build_cfg",
+        extractor="normalize.ibis_api:build_cfg_edges",
     ),
     DerivationRow(
         kind=NodeKind.CST_ARG,
@@ -1709,7 +1709,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         id_recipe="df_id = sha('DEF:'+code_unit_id+':'+instr_id+':'+binding_id)[:16]",
         confidence_policy="confidence=0.8-0.95 depending on opcode coverage",
         ambiguity_policy="if binding ambiguous, emit multiple DF_DEF candidates with scores",
-        extractor="normalize.bytecode_dfg:build_def_use_events",
+        extractor="normalize.ibis_api:build_def_use_events",
         status="planned",
     ),
     DerivationRow(
@@ -1723,7 +1723,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         id_recipe="df_id = sha('USE:'+code_unit_id+':'+instr_id+':'+binding_id)[:16]",
         confidence_policy="confidence=0.8-0.95 depending on opcode coverage",
         ambiguity_policy="if binding ambiguous, emit multiple DF_USE candidates with scores",
-        extractor="normalize.bytecode_dfg:build_def_use_events",
+        extractor="normalize.ibis_api:build_def_use_events",
         status="planned",
     ),
     DerivationRow(
@@ -1739,7 +1739,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         id_recipe=stable_span_id("diag_id", "DIAG"),
         confidence_policy="confidence=1.0 for source diag; 0.7 for derived diag",
         ambiguity_policy="none",
-        extractor="normalize.diagnostics:collect_diags",
+        extractor="normalize.ibis_api:collect_diags",
         status="planned",
     ),
     DerivationRow(
@@ -1954,7 +1954,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
             "confidence=1.0 for symbol+roles; 0.9 for byte span mapping when encoding tricky"
         ),
         ambiguity_policy="none",
-        extractor="normalize.spans:add_scip_occurrence_byte_spans",
+        extractor="normalize.ibis_api:add_scip_occurrence_byte_spans",
         status="planned",
     ),
     DerivationRow(
@@ -2029,7 +2029,7 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         ambiguity_policy=(
             "multi-valued types allowed (union/overload); store multiple TYPE nodes/edges"
         ),
-        extractor="normalize.types:normalize_types",
+        extractor="normalize.ibis_api:normalize_types",
         status="planned",
     ),
     DerivationRow(
@@ -2116,7 +2116,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         id_recipe="edge_id = sha('BYTECODE_ANCHOR:'+instr_id+':'+anchor_id)[:16]",
         confidence_policy="line_table=0.9, offset_span=0.8, heuristic=0.6",
         ambiguity_policy="if multiple anchors, keep all with scores; winner selection by score",
-        extractor="normalize.bytecode_anchor:anchor_instructions",
+        extractor="normalize.ibis_api:anchor_instructions",
         status="planned",
     ),
     DerivationRow(
@@ -2139,7 +2139,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         id_recipe="edge_id = sha('CFG_BRANCH:'+src_block+':'+dst_block)[:16]",
         confidence_policy="confidence=0.9",
         ambiguity_policy="none",
-        extractor="normalize.bytecode_cfg:build_cfg_edges",
+        extractor="normalize.ibis_api:build_cfg_edges",
         status="planned",
     ),
     DerivationRow(
@@ -2149,7 +2149,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         id_recipe="edge_id = sha('CFG_BRANCH_FALSE:'+src_block+':'+dst_block)[:16]",
         confidence_policy="confidence=0.95",
         ambiguity_policy="none",
-        extractor="normalize.bytecode_cfg:build_cfg_edges",
+        extractor="normalize.ibis_api:build_cfg_edges",
         status="planned",
     ),
     DerivationRow(
@@ -2159,7 +2159,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         id_recipe="edge_id = sha('CFG_BRANCH_TRUE:'+src_block+':'+dst_block)[:16]",
         confidence_policy="confidence=0.95",
         ambiguity_policy="none",
-        extractor="normalize.bytecode_cfg:build_cfg_edges",
+        extractor="normalize.ibis_api:build_cfg_edges",
         status="planned",
     ),
     DerivationRow(
@@ -2169,7 +2169,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         id_recipe="edge_id = sha('CFG_EXC:'+src_block+':'+handler_block+':'+exc_entry_index)[:16]",
         confidence_policy="confidence=0.9-0.95",
         ambiguity_policy="none",
-        extractor="normalize.bytecode_cfg:build_cfg_edges",
+        extractor="normalize.ibis_api:build_cfg_edges",
         status="planned",
     ),
     DerivationRow(
@@ -2179,7 +2179,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         id_recipe="edge_id = sha('CFG_JUMP:'+src_block+':'+dst_block)[:16]",
         confidence_policy="confidence=0.95",
         ambiguity_policy="none",
-        extractor="normalize.bytecode_cfg:build_cfg_edges",
+        extractor="normalize.ibis_api:build_cfg_edges",
         status="planned",
     ),
     DerivationRow(
@@ -2189,7 +2189,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         id_recipe="edge_id = sha('CFG_NEXT:'+src_block+':'+dst_block)[:16]",
         confidence_policy="confidence=0.95",
         ambiguity_policy="none",
-        extractor="normalize.bytecode_cfg:build_cfg_edges",
+        extractor="normalize.ibis_api:build_cfg_edges",
         status="planned",
     ),
     DerivationRow(
@@ -2377,7 +2377,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         id_recipe="edge_id = sha('REACHES:'+def_id+':'+use_id)[:16]",
         confidence_policy="confidence=0.8-0.95",
         ambiguity_policy="none",
-        extractor="normalize.bytecode_dfg:run_reaching_defs",
+        extractor="normalize.ibis_api:run_reaching_defs",
         status="planned",
     ),
     DerivationRow(
@@ -2503,7 +2503,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         id_recipe="edge_id = sha('STEP_DEF:'+instr_id+':'+binding_id)[:16]",
         confidence_policy="confidence=0.8-0.95",
         ambiguity_policy="if binding ambiguous, keep multiple with scores",
-        extractor="normalize.bytecode_dfg:build_def_use_events",
+        extractor="normalize.ibis_api:build_def_use_events",
         status="planned",
     ),
     DerivationRow(
@@ -2516,7 +2516,7 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         id_recipe="edge_id = sha('STEP_USE:'+instr_id+':'+binding_id)[:16]",
         confidence_policy="confidence=0.8-0.95",
         ambiguity_policy="if binding ambiguous, keep multiple with scores",
-        extractor="normalize.bytecode_dfg:build_def_use_events",
+        extractor="normalize.ibis_api:build_def_use_events",
         status="planned",
     ),
     DerivationRow(

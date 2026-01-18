@@ -8,8 +8,7 @@ from typing import Literal
 
 from arrowdsl.compute.expr_core import ScalarValue
 from arrowdsl.plan.ops import SortKey
-from arrowdsl.plan.query import QuerySpec
-from normalize.catalog import PlanDeriver
+from ibis_engine.query_compiler import IbisQuerySpec
 
 
 @dataclass(frozen=True)
@@ -65,8 +64,8 @@ class NormalizeRule:
     name: str
     output: str
     inputs: tuple[str, ...] = ()
-    derive: PlanDeriver | None = None
-    query: QuerySpec | None = None
+    ibis_builder: str | None = None
+    query: IbisQuerySpec | None = None
     evidence: EvidenceSpec | None = None
     evidence_output: EvidenceOutput | None = None
     confidence_policy: ConfidencePolicy | None = None

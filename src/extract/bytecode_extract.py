@@ -8,45 +8,28 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
-from arrowdsl.compute.expr_core import MaskedHashExprSpec
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
-from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table
 from extract.helpers import (
     ExtractExecutionContext,
+    ExtractMaterializeOptions,
     FileContext,
+    apply_query_and_project,
     file_identity_row,
+    ibis_plan_from_rows,
     iter_contexts,
-    project_columns,
+    materialize_extract_plan,
     text_from_file_ctx,
 )
-from extract.plan_helpers import apply_query_and_normalize, plan_from_rows
-from extract.registry_ids import hash_spec
-from extract.registry_specs import (
-    dataset_enabled,
-    dataset_row_schema,
-    dataset_schema,
-    normalize_options,
-)
-from extract.schema_ops import metadata_spec_for_dataset
+from extract.registry_specs import dataset_enabled, dataset_row_schema, normalize_options
+from extract.schema_ops import ExtractNormalizeOptions
+from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
 
 type RowValue = str | int | bool | None
 type Row = dict[str, RowValue]
-
-BC_CODE_UNIT_ID_SPEC = hash_spec("bc_code_unit_id")
-BC_PARENT_CODE_UNIT_ID_SPEC = hash_spec("bc_parent_code_unit_id")
-BC_INSTR_ID_SPEC = hash_spec("bc_instr_id")
-BC_EXC_ENTRY_ID_SPEC = hash_spec("bc_exc_entry_id")
-BC_BLOCK_ID_SPEC = hash_spec("bc_block_id")
-BC_SRC_BLOCK_ID_SPEC = hash_spec("bc_src_block_id")
-BC_DST_BLOCK_ID_SPEC = hash_spec("bc_dst_block_id")
-BC_COND_INSTR_ID_SPEC = hash_spec("bc_cond_instr_id")
-BC_EDGE_ID_SPEC = hash_spec("bc_edge_id")
 
 BC_LINE_BASE = 1
 BC_COL_UNIT = "utf32"
@@ -217,50 +200,12 @@ class BytecodeRowBuffers:
     error_rows: list[Row]
 
 
-CODE_UNITS_SCHEMA = dataset_schema("py_bc_code_units_v1")
-INSTR_SCHEMA = dataset_schema("py_bc_instructions_v1")
-EXC_SCHEMA = dataset_schema("py_bc_exception_table_v1")
-BLOCKS_SCHEMA = dataset_schema("py_bc_blocks_v1")
-CFG_EDGES_SCHEMA = dataset_schema("py_bc_cfg_edges_v1")
-ERRORS_SCHEMA = dataset_schema("py_bc_errors_v1")
-
 CODE_UNITS_ROW_SCHEMA = dataset_row_schema("py_bc_code_units_v1")
 INSTR_ROW_SCHEMA = dataset_row_schema("py_bc_instructions_v1")
 EXC_ROW_SCHEMA = dataset_row_schema("py_bc_exception_table_v1")
 BLOCKS_ROW_SCHEMA = dataset_row_schema("py_bc_blocks_v1")
 CFG_EDGES_ROW_SCHEMA = dataset_row_schema("py_bc_cfg_edges_v1")
 ERRORS_ROW_SCHEMA = dataset_row_schema("py_bc_errors_v1")
-
-
-def _bytecode_metadata_specs(
-    options: BytecodeExtractOptions,
-) -> dict[str, SchemaMetadataSpec]:
-    return {
-        "py_bc_code_units": metadata_spec_for_dataset(
-            "py_bc_code_units_v1",
-            options=options,
-        ),
-        "py_bc_instructions": metadata_spec_for_dataset(
-            "py_bc_instructions_v1",
-            options=options,
-        ),
-        "py_bc_exception_table": metadata_spec_for_dataset(
-            "py_bc_exception_table_v1",
-            options=options,
-        ),
-        "py_bc_blocks": metadata_spec_for_dataset(
-            "py_bc_blocks_v1",
-            options=options,
-        ),
-        "py_bc_cfg_edges": metadata_spec_for_dataset(
-            "py_bc_cfg_edges_v1",
-            options=options,
-        ),
-        "py_bc_errors": metadata_spec_for_dataset(
-            "py_bc_errors_v1",
-            options=options,
-        ),
-    }
 
 
 def _context_from_file_ctx(
@@ -279,244 +224,103 @@ def _row_context(
     return _context_from_file_ctx(file_ctx, options)
 
 
-def _build_code_units_table(
-    rows: list[Row],
-    *,
-    exec_ctx: ExecutionContext,
-) -> TableLike:
-    return materialize_plan(
-        _build_code_units_plan(rows, exec_ctx=exec_ctx),
-        ctx=exec_ctx,
-        attach_ordering_metadata=True,
-    )
-
-
 def _build_code_units_plan(
     rows: list[Row],
     *,
-    exec_ctx: ExecutionContext,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> Plan:
-    if not rows:
-        return Plan.table_source(empty_table(CODE_UNITS_SCHEMA))
-    plan = plan_from_rows(rows, schema=CODE_UNITS_ROW_SCHEMA, label="bc_code_units_raw")
-    plan = project_columns(
-        plan,
-        base=CODE_UNITS_ROW_SCHEMA.names,
-        extras=[
-            (
-                MaskedHashExprSpec(
-                    spec=BC_CODE_UNIT_ID_SPEC,
-                    required=("file_id", "qualpath", "firstlineno", "co_name"),
-                ).to_expression(),
-                "code_unit_id",
-            ),
-            (
-                MaskedHashExprSpec(
-                    spec=BC_PARENT_CODE_UNIT_ID_SPEC,
-                    required=(
-                        "file_id",
-                        "parent_qualpath",
-                        "parent_firstlineno",
-                        "parent_co_name",
-                    ),
-                ).to_expression(),
-                "parent_code_unit_id",
-            ),
-        ],
-        ctx=exec_ctx,
-    )
-    return apply_query_and_normalize(
+) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
         "py_bc_code_units_v1",
-        plan,
-        ctx=exec_ctx,
-        evidence_plan=evidence_plan,
+        rows,
+        row_schema=CODE_UNITS_ROW_SCHEMA,
     )
-
-
-def _build_instructions_table(
-    rows: list[Row],
-    *,
-    exec_ctx: ExecutionContext,
-) -> TableLike:
-    return materialize_plan(
-        _build_instructions_plan(rows, exec_ctx=exec_ctx),
-        ctx=exec_ctx,
-        attach_ordering_metadata=True,
+    return apply_query_and_project(
+        "py_bc_code_units_v1",
+        raw_plan.expr,
+        normalize=normalize,
+        evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
     )
 
 
 def _build_instructions_plan(
     rows: list[Row],
     *,
-    exec_ctx: ExecutionContext,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> Plan:
-    if not rows:
-        return Plan.table_source(empty_table(INSTR_SCHEMA))
-    plan = plan_from_rows(rows, schema=INSTR_ROW_SCHEMA, label="bc_instructions_raw")
-    plan = project_columns(
-        plan,
-        base=INSTR_ROW_SCHEMA.names,
-        extras=[
-            (
-                MaskedHashExprSpec(
-                    spec=BC_CODE_UNIT_ID_SPEC,
-                    required=("file_id", "qualpath", "firstlineno", "co_name"),
-                ).to_expression(),
-                "code_unit_id",
-            )
-        ],
-        ctx=exec_ctx,
-    )
-    return apply_query_and_normalize(
+) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
         "py_bc_instructions_v1",
-        plan,
-        ctx=exec_ctx,
-        evidence_plan=evidence_plan,
+        rows,
+        row_schema=INSTR_ROW_SCHEMA,
     )
-
-
-def _build_exceptions_table(
-    rows: list[Row],
-    *,
-    exec_ctx: ExecutionContext,
-) -> TableLike:
-    return materialize_plan(
-        _build_exceptions_plan(rows, exec_ctx=exec_ctx),
-        ctx=exec_ctx,
-        attach_ordering_metadata=True,
+    return apply_query_and_project(
+        "py_bc_instructions_v1",
+        raw_plan.expr,
+        normalize=normalize,
+        evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
     )
 
 
 def _build_exceptions_plan(
     rows: list[Row],
     *,
-    exec_ctx: ExecutionContext,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> Plan:
-    if not rows:
-        return Plan.table_source(empty_table(EXC_SCHEMA))
-    plan = plan_from_rows(rows, schema=EXC_ROW_SCHEMA, label="bc_exceptions_raw")
-    plan = project_columns(
-        plan,
-        base=EXC_ROW_SCHEMA.names,
-        extras=[
-            (
-                MaskedHashExprSpec(
-                    spec=BC_CODE_UNIT_ID_SPEC,
-                    required=("file_id", "qualpath", "firstlineno", "co_name"),
-                ).to_expression(),
-                "code_unit_id",
-            )
-        ],
-        ctx=exec_ctx,
-    )
-    return apply_query_and_normalize(
+) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
         "py_bc_exception_table_v1",
-        plan,
-        ctx=exec_ctx,
-        evidence_plan=evidence_plan,
+        rows,
+        row_schema=EXC_ROW_SCHEMA,
     )
-
-
-def _build_blocks_table(
-    rows: list[Row],
-    *,
-    exec_ctx: ExecutionContext,
-) -> TableLike:
-    return materialize_plan(
-        _build_blocks_plan(rows, exec_ctx=exec_ctx),
-        ctx=exec_ctx,
-        attach_ordering_metadata=True,
+    return apply_query_and_project(
+        "py_bc_exception_table_v1",
+        raw_plan.expr,
+        normalize=normalize,
+        evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
     )
 
 
 def _build_blocks_plan(
     rows: list[Row],
     *,
-    exec_ctx: ExecutionContext,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> Plan:
-    if not rows:
-        return Plan.table_source(empty_table(BLOCKS_SCHEMA))
-    plan = plan_from_rows(rows, schema=BLOCKS_ROW_SCHEMA, label="bc_blocks_raw")
-    plan = project_columns(
-        plan,
-        base=BLOCKS_ROW_SCHEMA.names,
-        extras=[
-            (
-                MaskedHashExprSpec(
-                    spec=BC_CODE_UNIT_ID_SPEC,
-                    required=("file_id", "qualpath", "firstlineno", "co_name"),
-                ).to_expression(),
-                "code_unit_id",
-            )
-        ],
-        ctx=exec_ctx,
-    )
-    return apply_query_and_normalize(
+) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
         "py_bc_blocks_v1",
-        plan,
-        ctx=exec_ctx,
-        evidence_plan=evidence_plan,
+        rows,
+        row_schema=BLOCKS_ROW_SCHEMA,
     )
-
-
-def _build_cfg_edges_table(
-    rows: list[Row],
-    *,
-    exec_ctx: ExecutionContext,
-) -> TableLike:
-    return materialize_plan(
-        _build_cfg_edges_plan(rows, exec_ctx=exec_ctx),
-        ctx=exec_ctx,
-        attach_ordering_metadata=True,
+    return apply_query_and_project(
+        "py_bc_blocks_v1",
+        raw_plan.expr,
+        normalize=normalize,
+        evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
     )
 
 
 def _build_cfg_edges_plan(
     rows: list[Row],
     *,
-    exec_ctx: ExecutionContext,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> Plan:
-    if not rows:
-        return Plan.table_source(empty_table(CFG_EDGES_SCHEMA))
-    plan = plan_from_rows(rows, schema=CFG_EDGES_ROW_SCHEMA, label="bc_cfg_edges_raw")
-    plan = project_columns(
-        plan,
-        base=CFG_EDGES_ROW_SCHEMA.names,
-        extras=[
-            (
-                MaskedHashExprSpec(
-                    spec=BC_CODE_UNIT_ID_SPEC,
-                    required=("file_id", "qualpath", "firstlineno", "co_name"),
-                ).to_expression(),
-                "code_unit_id",
-            ),
-            (
-                MaskedHashExprSpec(
-                    spec=BC_SRC_BLOCK_ID_SPEC,
-                    required=("code_unit_id", "src_block_start", "src_block_end"),
-                ).to_expression(),
-                "src_block_id",
-            ),
-            (
-                MaskedHashExprSpec(
-                    spec=BC_DST_BLOCK_ID_SPEC,
-                    required=("code_unit_id", "dst_block_start", "dst_block_end"),
-                ).to_expression(),
-                "dst_block_id",
-            ),
-        ],
-        ctx=exec_ctx,
-    )
-    return apply_query_and_normalize(
+) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
         "py_bc_cfg_edges_v1",
-        plan,
-        ctx=exec_ctx,
+        rows,
+        row_schema=CFG_EDGES_ROW_SCHEMA,
+    )
+    return apply_query_and_project(
+        "py_bc_cfg_edges_v1",
+        raw_plan.expr,
+        normalize=normalize,
         evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
     )
 
 
@@ -961,88 +765,48 @@ def _extract_code_unit_rows(
             _append_cfg_rows(unit_ctx, buffers.block_rows, buffers.edge_rows)
 
 
-def _build_bytecode_result(
-    buffers: BytecodeRowBuffers,
-    *,
-    exec_ctx: ExecutionContext,
-    evidence_plan: EvidencePlan | None = None,
-) -> BytecodeExtractResult:
-    plans = _build_bytecode_plans(
-        buffers,
-        exec_ctx=exec_ctx,
-        evidence_plan=evidence_plan,
-    )
-    return BytecodeExtractResult(
-        py_bc_code_units=materialize_plan(
-            plans["py_bc_code_units"],
-            ctx=exec_ctx,
-            attach_ordering_metadata=True,
-        ),
-        py_bc_instructions=materialize_plan(
-            plans["py_bc_instructions"],
-            ctx=exec_ctx,
-            attach_ordering_metadata=True,
-        ),
-        py_bc_exception_table=materialize_plan(
-            plans["py_bc_exception_table"],
-            ctx=exec_ctx,
-            attach_ordering_metadata=True,
-        ),
-        py_bc_blocks=materialize_plan(
-            plans["py_bc_blocks"],
-            ctx=exec_ctx,
-            attach_ordering_metadata=True,
-        ),
-        py_bc_cfg_edges=materialize_plan(
-            plans["py_bc_cfg_edges"],
-            ctx=exec_ctx,
-            attach_ordering_metadata=True,
-        ),
-        py_bc_errors=materialize_plan(
-            plans["py_bc_errors"],
-            ctx=exec_ctx,
-            attach_ordering_metadata=True,
-        ),
-    )
-
-
 def _build_bytecode_plans(
     buffers: BytecodeRowBuffers,
     *,
-    exec_ctx: ExecutionContext,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> dict[str, Plan]:
+) -> dict[str, IbisPlan]:
     code_units = _build_code_units_plan(
         buffers.code_unit_rows,
-        exec_ctx=exec_ctx,
+        normalize=normalize,
         evidence_plan=evidence_plan,
     )
     instructions = _build_instructions_plan(
         buffers.instruction_rows,
-        exec_ctx=exec_ctx,
+        normalize=normalize,
         evidence_plan=evidence_plan,
     )
     exceptions = _build_exceptions_plan(
         buffers.exception_rows,
-        exec_ctx=exec_ctx,
+        normalize=normalize,
         evidence_plan=evidence_plan,
     )
     blocks = _build_blocks_plan(
         buffers.block_rows,
-        exec_ctx=exec_ctx,
+        normalize=normalize,
         evidence_plan=evidence_plan,
     )
     edges = _build_cfg_edges_plan(
         buffers.edge_rows,
-        exec_ctx=exec_ctx,
+        normalize=normalize,
         evidence_plan=evidence_plan,
     )
-    errors_plan = plan_from_rows(buffers.error_rows, schema=ERRORS_ROW_SCHEMA, label="bc_errors")
-    errors_plan = apply_query_and_normalize(
+    errors_raw = ibis_plan_from_rows(
         "py_bc_errors_v1",
-        errors_plan,
-        ctx=exec_ctx,
+        buffers.error_rows,
+        row_schema=ERRORS_ROW_SCHEMA,
+    )
+    errors_plan = apply_query_and_project(
+        "py_bc_errors_v1",
+        errors_raw.expr,
+        normalize=normalize,
         evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
     )
     return {
         "py_bc_code_units": code_units,
@@ -1098,48 +862,52 @@ def extract_bytecode(
     normalized_options = normalize_options("bytecode", options, BytecodeExtractOptions)
     exec_context = context or ExtractExecutionContext()
     exec_ctx = exec_context.ensure_ctx()
+    normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_bytecode_plans(
         repo_files,
         options=normalized_options,
         context=exec_context,
     )
-    metadata_specs = _bytecode_metadata_specs(normalized_options)
+    materialize_options = ExtractMaterializeOptions(
+        normalize=normalize,
+        apply_post_kernels=True,
+    )
     return BytecodeExtractResult(
-        py_bc_code_units=materialize_plan(
+        py_bc_code_units=materialize_extract_plan(
+            "py_bc_code_units_v1",
             plans["py_bc_code_units"],
             ctx=exec_ctx,
-            metadata_spec=metadata_specs["py_bc_code_units"],
-            attach_ordering_metadata=True,
+            options=materialize_options,
         ),
-        py_bc_instructions=materialize_plan(
+        py_bc_instructions=materialize_extract_plan(
+            "py_bc_instructions_v1",
             plans["py_bc_instructions"],
             ctx=exec_ctx,
-            metadata_spec=metadata_specs["py_bc_instructions"],
-            attach_ordering_metadata=True,
+            options=materialize_options,
         ),
-        py_bc_exception_table=materialize_plan(
+        py_bc_exception_table=materialize_extract_plan(
+            "py_bc_exception_table_v1",
             plans["py_bc_exception_table"],
             ctx=exec_ctx,
-            metadata_spec=metadata_specs["py_bc_exception_table"],
-            attach_ordering_metadata=True,
+            options=materialize_options,
         ),
-        py_bc_blocks=materialize_plan(
+        py_bc_blocks=materialize_extract_plan(
+            "py_bc_blocks_v1",
             plans["py_bc_blocks"],
             ctx=exec_ctx,
-            metadata_spec=metadata_specs["py_bc_blocks"],
-            attach_ordering_metadata=True,
+            options=materialize_options,
         ),
-        py_bc_cfg_edges=materialize_plan(
+        py_bc_cfg_edges=materialize_extract_plan(
+            "py_bc_cfg_edges_v1",
             plans["py_bc_cfg_edges"],
             ctx=exec_ctx,
-            metadata_spec=metadata_specs["py_bc_cfg_edges"],
-            attach_ordering_metadata=True,
+            options=materialize_options,
         ),
-        py_bc_errors=materialize_plan(
+        py_bc_errors=materialize_extract_plan(
+            "py_bc_errors_v1",
             plans["py_bc_errors"],
             ctx=exec_ctx,
-            metadata_spec=metadata_specs["py_bc_errors"],
-            attach_ordering_metadata=True,
+            options=materialize_options,
         ),
     )
 
@@ -1149,17 +917,17 @@ def extract_bytecode_plans(
     options: BytecodeExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> dict[str, Plan]:
+) -> dict[str, IbisPlan]:
     """Extract bytecode plans from repository files.
 
     Returns
     -------
-    dict[str, Plan]
-        Plan bundle keyed by bytecode output name.
+    dict[str, IbisPlan]
+        Ibis plan bundle keyed by bytecode output name.
     """
     normalized_options = normalize_options("bytecode", options, BytecodeExtractOptions)
     exec_context = context or ExtractExecutionContext()
-    exec_ctx = exec_context.ensure_ctx()
+    normalize = ExtractNormalizeOptions(options=normalized_options)
     file_contexts = exec_context.file_contexts
     evidence_plan = exec_context.evidence_plan
 
@@ -1190,7 +958,7 @@ def extract_bytecode_plans(
 
     return _build_bytecode_plans(
         buffers,
-        exec_ctx=exec_ctx,
+        normalize=normalize,
         evidence_plan=evidence_plan,
     )
 
@@ -1264,6 +1032,7 @@ def extract_bytecode_table(
     profile = kwargs.get("profile", "default")
     exec_ctx = kwargs.get("ctx") or execution_context_factory(profile)
     prefer_reader = kwargs.get("prefer_reader", False)
+    normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_bytecode_plans(
         repo_files,
         options=normalized_options,
@@ -1274,11 +1043,13 @@ def extract_bytecode_table(
             profile=profile,
         ),
     )
-    metadata_specs = _bytecode_metadata_specs(normalized_options)
-    return run_plan_bundle(
-        {"py_bc_instructions": plans["py_bc_instructions"]},
+    return materialize_extract_plan(
+        "py_bc_instructions_v1",
+        plans["py_bc_instructions"],
         ctx=exec_ctx,
-        prefer_reader=prefer_reader,
-        metadata_specs={"py_bc_instructions": metadata_specs["py_bc_instructions"]},
-        attach_ordering_metadata=True,
-    )["py_bc_instructions"]
+        options=ExtractMaterializeOptions(
+            normalize=normalize,
+            prefer_reader=prefer_reader,
+            apply_post_kernels=True,
+        ),
+    )

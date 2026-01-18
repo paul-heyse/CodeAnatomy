@@ -150,6 +150,20 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             key_fields=("file_id", "reason_kind", "reason_ref"),
         ),
     ),
+    DatasetRow(
+        name="inc_output_fingerprint_changes_v1",
+        version=SCHEMA_VERSION,
+        fields=(
+            ArrowFieldSpec(name="dataset_name", dtype=interop.string()),
+            ArrowFieldSpec(name="change_kind", dtype=interop.string()),
+            ArrowFieldSpec(name="prev_fingerprint", dtype=interop.string()),
+            ArrowFieldSpec(name="cur_fingerprint", dtype=interop.string()),
+        ),
+        constraints=TableSpecConstraints(
+            required_non_null=("dataset_name", "change_kind"),
+            key_fields=("dataset_name",),
+        ),
+    ),
 )
 
 

@@ -4,13 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
-from arrowdsl.compute.expr_core import HashExprSpec, MaskedHashExprSpec
-from arrowdsl.compute.macros import CoalesceExpr, ConstExpr, FieldExpr
 from arrowdsl.core.context import OrderingLevel
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.schema.metadata import (
     extractor_metadata_spec,
     extractor_option_defaults_spec,
@@ -19,17 +15,17 @@ from arrowdsl.schema.metadata import (
     ordering_metadata_spec,
 )
 from arrowdsl.schema.schema import SchemaMetadataSpec
+from arrowdsl.spec.expr_ir import ExprIR
 from arrowdsl.spec.infra import DatasetRegistration, register_dataset
 from extract.registry_bundles import bundle
-from extract.registry_fields import field, field_name, fields
+from extract.registry_fields import field_name, fields
 from extract.registry_ids import hash_spec
 from extract.registry_rows import DatasetRow, DerivedIdSpec
 from extract.registry_templates import config as extractor_config
 from extract.registry_templates import template
+from ibis_engine.hashing import hash_expr_ir, masked_hash_expr_ir
+from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
 from schema_spec.system import DatasetSpec, make_table_spec
-
-if TYPE_CHECKING:
-    from arrowdsl.compute.expr_core import ExprSpec
 
 
 @dataclass(frozen=True)
@@ -73,24 +69,28 @@ def _template_extra_fields(row: DatasetRow) -> tuple[str, ...]:
     return tuple(extras)
 
 
-def _default_exprs(row: DatasetRow) -> dict[str, CoalesceExpr]:
+def _default_exprs(row: DatasetRow) -> dict[str, ExprIR]:
     if row.template is None:
         return {}
     templ = template(row.template)
-    defaults: dict[str, CoalesceExpr] = {}
+    defaults: dict[str, ExprIR] = {}
     if templ.evidence_rank is not None:
-        defaults["evidence_rank"] = CoalesceExpr(
-            (
-                FieldExpr("evidence_rank"),
-                ConstExpr(templ.evidence_rank, dtype=field("evidence_rank").dtype),
-            )
+        defaults["evidence_rank"] = ExprIR(
+            op="call",
+            name="coalesce",
+            args=(
+                ExprIR(op="field", name="evidence_rank"),
+                ExprIR(op="literal", value=templ.evidence_rank),
+            ),
         )
     if templ.confidence is not None:
-        defaults["confidence"] = CoalesceExpr(
-            (
-                FieldExpr("confidence"),
-                ConstExpr(templ.confidence, dtype=field("confidence").dtype),
-            )
+        defaults["confidence"] = ExprIR(
+            op="call",
+            name="coalesce",
+            args=(
+                ExprIR(op="field", name="confidence"),
+                ExprIR(op="literal", value=templ.confidence),
+            ),
         )
     return defaults
 
@@ -102,12 +102,12 @@ def _bundle_field_keys(bundle_names: Sequence[str]) -> list[str]:
     return keys
 
 
-def _derived_expr(spec: DerivedIdSpec, *, ctx: QueryContext) -> HashExprSpec | MaskedHashExprSpec:
+def _derived_expr(spec: DerivedIdSpec, *, ctx: QueryContext) -> ExprIR:
     hash_spec_obj = hash_spec(spec.spec, repo_id=ctx.repo_id)
     if spec.kind == "hash":
-        return HashExprSpec(spec=hash_spec_obj)
+        return hash_expr_ir(spec=hash_spec_obj)
     required = spec.required or hash_spec_obj.cols
-    return MaskedHashExprSpec(spec=hash_spec_obj, required=required)
+    return masked_hash_expr_ir(spec=hash_spec_obj, required=required)
 
 
 def _normalize_ordering_key(key: str) -> str:
@@ -117,22 +117,22 @@ def _normalize_ordering_key(key: str) -> str:
         return key
 
 
-def build_query_spec(row: DatasetRow, *, ctx: QueryContext) -> QuerySpec:
-    """Build the QuerySpec for a dataset row.
+def build_query_spec(row: DatasetRow, *, ctx: QueryContext) -> IbisQuerySpec:
+    """Build the IbisQuerySpec for a dataset row.
 
     Returns
     -------
-    QuerySpec
-        Query specification for the dataset.
+    IbisQuerySpec
+        Ibis query specification for the dataset.
     """
     base_cols = _dedupe(_bundle_field_keys(row.bundles) + [field_name(key) for key in row.fields])
-    derived_map: dict[str, ExprSpec] = {
+    derived_map: dict[str, ExprIR] = {
         spec.name: _derived_expr(spec, ctx=ctx) for spec in row.derived
     }
     derived_map.update(_default_exprs(row))
     if not derived_map:
-        return QuerySpec.simple(*base_cols)
-    return QuerySpec(projection=ProjectionSpec(base=tuple(base_cols), derived=derived_map))
+        return IbisQuerySpec.simple(*base_cols)
+    return IbisQuerySpec(projection=IbisProjectionSpec(base=tuple(base_cols), derived=derived_map))
 
 
 def build_metadata_spec(row: DatasetRow, *, base_columns: Sequence[str]) -> SchemaMetadataSpec:
@@ -196,7 +196,7 @@ def build_row_schema(row: DatasetRow) -> SchemaLike:
     ).to_arrow_schema()
 
 
-def build_dataset_spec(row: DatasetRow, *, ctx: QueryContext) -> DatasetSpec:
+def build_dataset_spec(row: DatasetRow) -> DatasetSpec:
     """Build the DatasetSpec for a dataset row.
 
     Returns
@@ -217,7 +217,6 @@ def build_dataset_spec(row: DatasetRow, *, ctx: QueryContext) -> DatasetSpec:
     )
     metadata_spec = build_metadata_spec(row, base_columns=base_columns)
     registration = DatasetRegistration(
-        query_spec=build_query_spec(row, ctx=ctx),
         metadata_spec=metadata_spec,
     )
     return register_dataset(table_spec=table_spec, registration=registration)

@@ -8,7 +8,11 @@ from collections.abc import Mapping, Sequence
 
 import pyarrow as pa
 
-from obs.diagnostics_schemas import DATAFUSION_EXPLAINS_V1, DATAFUSION_FALLBACKS_V1
+from obs.diagnostics_schemas import (
+    DATAFUSION_EXPLAINS_V1,
+    DATAFUSION_FALLBACKS_V1,
+    FEATURE_STATE_V1,
+)
 
 
 def _now_ms() -> int:
@@ -89,4 +93,24 @@ def datafusion_explains_table(explains: Sequence[Mapping[str, object]]) -> pa.Ta
     return pa.Table.from_pylist(rows, schema=DATAFUSION_EXPLAINS_V1)
 
 
-__all__ = ["datafusion_explains_table", "datafusion_fallbacks_table"]
+def feature_state_table(events: Sequence[Mapping[str, object]]) -> pa.Table:
+    """Build a feature state diagnostics table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Diagnostics table aligned to FEATURE_STATE_V1.
+    """
+    rows = [
+        {
+            "profile_name": str(event.get("profile_name") or ""),
+            "determinism_tier": str(event.get("determinism_tier") or ""),
+            "dynamic_filters_enabled": bool(event.get("dynamic_filters_enabled") or False),
+            "spill_enabled": bool(event.get("spill_enabled") or False),
+        }
+        for event in events
+    ]
+    return pa.Table.from_pylist(rows, schema=FEATURE_STATE_V1)
+
+
+__all__ = ["datafusion_explains_table", "datafusion_fallbacks_table", "feature_state_table"]

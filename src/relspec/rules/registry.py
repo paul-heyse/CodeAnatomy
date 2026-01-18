@@ -25,6 +25,7 @@ from relspec.rules.validation import (
 )
 
 if TYPE_CHECKING:
+    from engine.session import EngineSession
     from relspec.rules.definitions import RuleDefinition, RuleDomain
 
 
@@ -58,6 +59,7 @@ class RuleRegistry:
     param_table_policy: ParamTablePolicy | None = None
     list_filter_gate_policy: ListFilterGatePolicy | None = None
     kernel_lane_policy: KernelLanePolicy | None = None
+    engine_session: EngineSession | None = None
 
     def rule_definitions(self) -> tuple[RuleDefinition, ...]:
         """Return all rule definitions across adapters.
@@ -76,6 +78,7 @@ class RuleRegistry:
                 param_table_policy=self.param_table_policy,
                 list_filter_gate_policy=self.list_filter_gate_policy,
                 kernel_lane_policy=self.kernel_lane_policy,
+                engine_session=self.engine_session,
             ),
         )
         _raise_rule_errors(diagnostics)
@@ -176,6 +179,7 @@ class RuleRegistry:
                 param_table_policy=self.param_table_policy,
                 list_filter_gate_policy=self.list_filter_gate_policy,
                 kernel_lane_policy=self.kernel_lane_policy,
+                engine_session=self.engine_session,
             ),
         )
 

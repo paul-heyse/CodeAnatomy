@@ -11,8 +11,6 @@ from ibis_engine.param_tables import (
     ParamTableSpec,
 )
 from ibis_engine.plan import IbisPlan
-from ibis_engine.plan_bridge import plan_to_ibis, source_to_ibis, table_to_ibis
-from ibis_engine.query_bridge import queryspec_to_ibis
 
 __all__ = [
     "IbisBackendConfig",
@@ -24,8 +22,4 @@ __all__ = [
     "ParamTableScope",
     "ParamTableSpec",
     "build_backend",
-    "plan_to_ibis",
-    "queryspec_to_ibis",
-    "source_to_ibis",
-    "table_to_ibis",
 ]

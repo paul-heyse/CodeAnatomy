@@ -15,6 +15,7 @@ from arrowdsl.io.parquet import (
     write_finalize_result_parquet,
     write_named_datasets_parquet,
     write_parquet_metadata_sidecars,
+    write_partitioned_dataset_parquet,
     write_table_parquet,
 )
 from ibis_engine.io_bridge import (
@@ -47,6 +48,7 @@ __all__ = [
     "write_ibis_table_parquet",
     "write_named_datasets_parquet",
     "write_parquet_metadata_sidecars",
+    "write_partitioned_dataset_parquet",
     "write_table_ipc_file",
     "write_table_ipc_stream",
     "write_table_parquet",

@@ -10,29 +10,20 @@ import tree_sitter_python
 from tree_sitter import Language, Parser
 
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.runner import AdapterRunOptions, run_plan_adapter, run_plan_bundle_adapter
-from arrowdsl.schema.schema import SchemaMetadataSpec
+from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from extract.helpers import (
     ExtractExecutionContext,
+    ExtractMaterializeOptions,
     FileContext,
+    apply_query_and_project,
     bytes_from_file_ctx,
     file_identity_row,
+    ibis_plan_from_rows,
     iter_contexts,
+    materialize_extract_plan,
 )
-from extract.plan_helpers import (
-    ExtractPlanAdapterOptions,
-    ExtractPlanBuildOptions,
-    plan_from_rows_for_dataset_adapter,
-)
-from extract.registry_specs import (
-    dataset_enabled,
-    dataset_row_schema,
-    dataset_schema,
-    normalize_options,
-)
-from extract.schema_ops import ExtractNormalizeOptions, metadata_spec_for_dataset
+from extract.registry_specs import dataset_enabled, dataset_row_schema, normalize_options
+from extract.schema_ops import ExtractNormalizeOptions
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
@@ -68,23 +59,9 @@ class TreeSitterRowBuffers:
     missing_rows: list[Row]
 
 
-TS_NODES_SCHEMA = dataset_schema("ts_nodes_v1")
-TS_ERRORS_SCHEMA = dataset_schema("ts_errors_v1")
-TS_MISSING_SCHEMA = dataset_schema("ts_missing_v1")
-
 TS_NODES_ROW_SCHEMA = dataset_row_schema("ts_nodes_v1")
 TS_ERRORS_ROW_SCHEMA = dataset_row_schema("ts_errors_v1")
 TS_MISSING_ROW_SCHEMA = dataset_row_schema("ts_missing_v1")
-
-
-def _ts_metadata_specs(
-    options: TreeSitterExtractOptions,
-) -> dict[str, SchemaMetadataSpec]:
-    return {
-        "ts_nodes": metadata_spec_for_dataset("ts_nodes_v1", options=options),
-        "ts_errors": metadata_spec_for_dataset("ts_errors_v1", options=options),
-        "ts_missing": metadata_spec_for_dataset("ts_missing_v1", options=options),
-    }
 
 
 def _parser() -> Parser:
@@ -177,54 +154,48 @@ def extract_ts(
     normalized_options = normalize_options("tree_sitter", options, TreeSitterExtractOptions)
     exec_context = context or ExtractExecutionContext()
     exec_ctx = exec_context.ensure_ctx()
+    normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_ts_plans(
         repo_files,
         options=normalized_options,
         context=exec_context,
     )
-    metadata_specs = _ts_metadata_specs(normalized_options)
     return TreeSitterExtractResult(
         ts_nodes=cast(
             "TableLike",
-            run_plan_adapter(
+            materialize_extract_plan(
+                "ts_nodes_v1",
                 plans["ts_nodes"],
                 ctx=exec_ctx,
-                options=AdapterRunOptions(
-                    adapter_mode=exec_context.adapter_mode,
-                    metadata_spec=metadata_specs["ts_nodes"],
-                    attach_ordering_metadata=True,
-                    execution_policy=exec_context.execution_policy,
-                    ibis_backend=exec_context.ibis_backend,
+                options=ExtractMaterializeOptions(
+                    normalize=normalize,
+                    apply_post_kernels=True,
                 ),
-            ).value,
+            ),
         ),
         ts_errors=cast(
             "TableLike",
-            run_plan_adapter(
+            materialize_extract_plan(
+                "ts_errors_v1",
                 plans["ts_errors"],
                 ctx=exec_ctx,
-                options=AdapterRunOptions(
-                    adapter_mode=exec_context.adapter_mode,
-                    metadata_spec=metadata_specs["ts_errors"],
-                    attach_ordering_metadata=True,
-                    execution_policy=exec_context.execution_policy,
-                    ibis_backend=exec_context.ibis_backend,
+                options=ExtractMaterializeOptions(
+                    normalize=normalize,
+                    apply_post_kernels=True,
                 ),
-            ).value,
+            ),
         ),
         ts_missing=cast(
             "TableLike",
-            run_plan_adapter(
+            materialize_extract_plan(
+                "ts_missing_v1",
                 plans["ts_missing"],
                 ctx=exec_ctx,
-                options=AdapterRunOptions(
-                    adapter_mode=exec_context.adapter_mode,
-                    metadata_spec=metadata_specs["ts_missing"],
-                    attach_ordering_metadata=True,
-                    execution_policy=exec_context.execution_policy,
-                    ibis_backend=exec_context.ibis_backend,
+                options=ExtractMaterializeOptions(
+                    normalize=normalize,
+                    apply_post_kernels=True,
                 ),
-            ).value,
+            ),
         ),
     )
 
@@ -234,87 +205,86 @@ def extract_ts_plans(
     *,
     options: TreeSitterExtractOptions | None = None,
     context: ExtractExecutionContext | None = None,
-) -> dict[str, Plan | IbisPlan]:
+) -> dict[str, IbisPlan]:
     """Extract tree-sitter plans for nodes and diagnostics.
 
     Returns
     -------
-    dict[str, Plan | IbisPlan]
-        Plan bundle keyed by ``ts_nodes``, ``ts_errors``, and ``ts_missing``.
+    dict[str, IbisPlan]
+        Ibis plan bundle keyed by ``ts_nodes``, ``ts_errors``, and ``ts_missing``.
     """
     normalized_options = normalize_options("tree_sitter", options, TreeSitterExtractOptions)
     exec_context = context or ExtractExecutionContext()
-    exec_ctx = exec_context.ensure_ctx()
-    file_contexts = exec_context.file_contexts
-    evidence_plan = exec_context.evidence_plan
-    parser = _parser()
-
-    node_rows: list[Row] = []
-    error_rows: list[Row] = []
-    missing_rows: list[Row] = []
-    buffers = TreeSitterRowBuffers(
-        node_rows=node_rows,
-        error_rows=error_rows,
-        missing_rows=missing_rows,
+    normalize = ExtractNormalizeOptions(options=normalized_options)
+    buffers = _collect_ts_buffers(
+        repo_files,
+        options=normalized_options,
+        file_contexts=exec_context.file_contexts,
     )
+    evidence_plan = exec_context.evidence_plan
+    return {
+        "ts_nodes": _build_ts_plan(
+            "ts_nodes_v1",
+            buffers.node_rows,
+            row_schema=TS_NODES_ROW_SCHEMA,
+            normalize=normalize,
+            evidence_plan=evidence_plan,
+        ),
+        "ts_errors": _build_ts_plan(
+            "ts_errors_v1",
+            buffers.error_rows,
+            row_schema=TS_ERRORS_ROW_SCHEMA,
+            normalize=normalize,
+            evidence_plan=evidence_plan,
+        ),
+        "ts_missing": _build_ts_plan(
+            "ts_missing_v1",
+            buffers.missing_rows,
+            row_schema=TS_MISSING_ROW_SCHEMA,
+            normalize=normalize,
+            evidence_plan=evidence_plan,
+        ),
+    }
 
+
+def _collect_ts_buffers(
+    repo_files: TableLike,
+    *,
+    options: TreeSitterExtractOptions,
+    file_contexts: Iterable[FileContext] | None,
+) -> TreeSitterRowBuffers:
+    parser = _parser()
+    buffers = TreeSitterRowBuffers(
+        node_rows=[],
+        error_rows=[],
+        missing_rows=[],
+    )
     for file_ctx in iter_contexts(repo_files, file_contexts):
         _extract_ts_for_row(
             file_ctx,
             parser=parser,
-            options=normalized_options,
+            options=options,
             buffers=buffers,
         )
+    return buffers
 
-    nodes_plan = plan_from_rows_for_dataset_adapter(
-        "ts_nodes_v1",
-        node_rows,
-        row_schema=TS_NODES_ROW_SCHEMA,
-        ctx=exec_ctx,
-        options=ExtractPlanAdapterOptions(
-            adapter_mode=exec_context.adapter_mode,
-            ibis_backend=exec_context.ibis_backend,
-            plan_options=ExtractPlanBuildOptions(
-                normalize=ExtractNormalizeOptions(options=normalized_options),
-                evidence_plan=evidence_plan,
-            ),
-        ),
-    )
 
-    errors_plan = plan_from_rows_for_dataset_adapter(
-        "ts_errors_v1",
-        error_rows,
-        row_schema=TS_ERRORS_ROW_SCHEMA,
-        ctx=exec_ctx,
-        options=ExtractPlanAdapterOptions(
-            adapter_mode=exec_context.adapter_mode,
-            ibis_backend=exec_context.ibis_backend,
-            plan_options=ExtractPlanBuildOptions(
-                normalize=ExtractNormalizeOptions(options=normalized_options),
-                evidence_plan=evidence_plan,
-            ),
-        ),
+def _build_ts_plan(
+    name: str,
+    rows: list[Row],
+    *,
+    row_schema: SchemaLike,
+    normalize: ExtractNormalizeOptions,
+    evidence_plan: EvidencePlan | None,
+) -> IbisPlan:
+    raw = ibis_plan_from_rows(name, rows, row_schema=row_schema)
+    return apply_query_and_project(
+        name,
+        raw.expr,
+        normalize=normalize,
+        evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
     )
-
-    missing_plan = plan_from_rows_for_dataset_adapter(
-        "ts_missing_v1",
-        missing_rows,
-        row_schema=TS_MISSING_ROW_SCHEMA,
-        ctx=exec_ctx,
-        options=ExtractPlanAdapterOptions(
-            adapter_mode=exec_context.adapter_mode,
-            ibis_backend=exec_context.ibis_backend,
-            plan_options=ExtractPlanBuildOptions(
-                normalize=ExtractNormalizeOptions(options=normalized_options),
-                evidence_plan=evidence_plan,
-            ),
-        ),
-    )
-    return {
-        "ts_nodes": nodes_plan,
-        "ts_errors": errors_plan,
-        "ts_missing": missing_plan,
-    }
 
 
 def _extract_ts_for_row(
@@ -425,20 +395,41 @@ def extract_ts_tables(
         )
     exec_ctx = context.ensure_ctx()
     prefer_reader = kwargs.get("prefer_reader", False)
+    normalize = ExtractNormalizeOptions(options=normalized_options)
     plans = extract_ts_plans(
         repo_files,
         options=normalized_options,
         context=context,
     )
-    return run_plan_bundle_adapter(
-        plans,
-        ctx=exec_ctx,
-        options=AdapterRunOptions(
-            adapter_mode=context.adapter_mode,
-            prefer_reader=prefer_reader,
-            attach_ordering_metadata=True,
-            execution_policy=context.execution_policy,
-            ibis_backend=context.ibis_backend,
+    return {
+        "ts_nodes": materialize_extract_plan(
+            "ts_nodes_v1",
+            plans["ts_nodes"],
+            ctx=exec_ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=True,
+            ),
         ),
-        metadata_specs=_ts_metadata_specs(normalized_options),
-    )
+        "ts_errors": materialize_extract_plan(
+            "ts_errors_v1",
+            plans["ts_errors"],
+            ctx=exec_ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=True,
+            ),
+        ),
+        "ts_missing": materialize_extract_plan(
+            "ts_missing_v1",
+            plans["ts_missing"],
+            ctx=exec_ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=True,
+            ),
+        ),
+    }

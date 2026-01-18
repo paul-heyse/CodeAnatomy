@@ -13,6 +13,15 @@ def _cpu_count() -> int:
     return count if count is not None and count > 0 else 1
 
 
+def _settings_int(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 @dataclass(frozen=True)
 class RuntimeProfileSpec:
     """Runtime profile plus compiler/engine preferences."""
@@ -33,6 +42,7 @@ def _apply_profile_overrides(name: str, runtime: RuntimeProfile) -> RuntimeProfi
     df_profile = runtime.datafusion
     if df_profile is None:
         return runtime
+    settings = df_profile.settings_payload()
     if name == "dev_debug":
         runtime = replace(
             runtime,
@@ -49,6 +59,11 @@ def _apply_profile_overrides(name: str, runtime: RuntimeProfile) -> RuntimeProfi
             explain_analyze_level="dev",
         )
     elif name == "prod_fast":
+        runtime = replace(
+            runtime,
+            cpu_threads=_cpu_count(),
+            io_threads=_cpu_count() * 2,
+        )
         df_profile = replace(
             df_profile,
             config_policy_name="prod",
@@ -70,6 +85,20 @@ def _apply_profile_overrides(name: str, runtime: RuntimeProfile) -> RuntimeProfi
             capture_explain=False,
             explain_analyze=False,
             explain_analyze_level="summary",
+        )
+    if name != "dev_debug":
+        spill_dir = df_profile.spill_dir or settings.get("datafusion.runtime.temp_directory")
+        memory_limit = df_profile.memory_limit_bytes or _settings_int(
+            settings.get("datafusion.runtime.memory_limit")
+        )
+        memory_pool = df_profile.memory_pool
+        if memory_limit is not None and memory_pool == "greedy":
+            memory_pool = "fair"
+        df_profile = replace(
+            df_profile,
+            spill_dir=spill_dir,
+            memory_limit_bytes=memory_limit,
+            memory_pool=memory_pool,
         )
     return runtime.with_datafusion(df_profile)
 

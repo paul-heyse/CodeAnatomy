@@ -8,7 +8,6 @@ from functools import cache
 from typing import TYPE_CHECKING
 
 from arrowdsl.core.interop import SchemaLike, TableLike
-from arrowdsl.plan.query import QuerySpec
 from arrowdsl.schema.metadata import (
     extractor_option_defaults_from_metadata,
     extractor_option_defaults_spec,
@@ -17,7 +16,6 @@ from arrowdsl.schema.metadata import (
 )
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import EncodingPolicy, SchemaMetadataSpec
-from arrowdsl.spec.expr_ir import ExprRegistry
 from extract.evidence_specs import evidence_metadata_spec as extract_evidence_metadata_spec
 from extract.registry_builders import (
     QueryContext,
@@ -30,6 +28,7 @@ from extract.registry_policies import policy_row, template_policy_row
 from extract.registry_rows import DATASET_ROWS, DatasetRow
 from extract.registry_templates import config as extractor_config
 from extract.registry_validation import validate_dataset_rows
+from ibis_engine.query_compiler import IbisQuerySpec
 from relspec.rules.definitions import RuleStage, stage_enabled
 from relspec.rules.options import RuleExecutionOptions
 from schema_spec.system import DatasetSpec
@@ -72,7 +71,7 @@ def dataset_spec(name: str) -> DatasetSpec:
         Dataset specification for the name.
     """
     row = dataset_row(name)
-    return build_dataset_spec(row, ctx=QueryContext())
+    return build_dataset_spec(row)
 
 
 @cache
@@ -100,28 +99,16 @@ def dataset_row_schema(name: str) -> SchemaLike:
     return build_row_schema(row)
 
 
-def dataset_query(name: str, *, repo_id: str | None = None) -> QuerySpec:
-    """Return the QuerySpec for the dataset name.
+def dataset_query(name: str, *, repo_id: str | None = None) -> IbisQuerySpec:
+    """Return the IbisQuerySpec for the dataset name.
 
     Returns
     -------
-    QuerySpec
-        QuerySpec for the dataset name.
+    IbisQuerySpec
+        IbisQuerySpec for the dataset name.
     """
     row = dataset_row(name)
     return build_query_spec(row, ctx=QueryContext(repo_id=repo_id))
-
-
-@cache
-def query_expr_registry() -> ExprRegistry:
-    """Return the shared ExprRegistry for extract query ops.
-
-    Returns
-    -------
-    ExprRegistry
-        Registry used when decoding ExprIR query ops.
-    """
-    return ExprRegistry()
 
 
 def dataset_metadata_spec(name: str) -> SchemaMetadataSpec:

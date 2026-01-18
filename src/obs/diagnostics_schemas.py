@@ -27,4 +27,21 @@ DATAFUSION_EXPLAINS_V1 = pa.schema(
     metadata={b"schema_name": b"datafusion_explains_v1"},
 )
 
-__all__ = ["DATAFUSION_EXPLAINS_V1", "DATAFUSION_FALLBACKS_V1"]
+FEATURE_STATE_V1 = pa.schema(
+    [
+        pa.field("profile_name", pa.string(), nullable=False),
+        pa.field("determinism_tier", pa.string(), nullable=False),
+        pa.field("dynamic_filters_enabled", pa.bool_(), nullable=False),
+        pa.field("spill_enabled", pa.bool_(), nullable=False),
+    ],
+    metadata={b"schema_name": b"feature_state_v1"},
+)
+
+DIAGNOSTICS_SCHEMA_VERSION = "v1"
+
+__all__ = [
+    "DATAFUSION_EXPLAINS_V1",
+    "DATAFUSION_FALLBACKS_V1",
+    "DIAGNOSTICS_SCHEMA_VERSION",
+    "FEATURE_STATE_V1",
+]

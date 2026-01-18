@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import ibis
 import pyarrow as pa
@@ -18,24 +20,27 @@ from arrowdsl.compute.kernels import canonical_sort, resolve_kernel
 from arrowdsl.core.context import DeterminismTier, ExecutionContext, Ordering
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
+from arrowdsl.json_factory import json_default
 from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions, SortKey
 from arrowdsl.plan.query import ScanTelemetry
-from arrowdsl.plan.runner import AdapterRunOptions
 from arrowdsl.schema.build import const_array, set_or_append_column
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
-from config import AdapterMode
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from engine.materialize import build_plan_product
 from engine.plan_policy import ExecutionSurfacePolicy
+from ibis_engine.compiler_checkpoint import try_plan_hash
+from ibis_engine.execution import IbisExecutionContext
+from ibis_engine.lineage import required_columns_by_table
 from ibis_engine.plan import IbisPlan
-from ibis_engine.plan_bridge import table_to_ibis
-from ibis_engine.query_compiler import apply_query_spec
+from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 from ibis_engine.registry import IbisDatasetRegistry
+from ibis_engine.schema_utils import validate_expr_schema
+from ibis_engine.sources import table_to_ibis
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
 )
-from relspec.engine import IbisRelPlanCompiler, PlanResolver, RelPlanCompiler
+from relspec.engine import IbisRelPlanCompiler, PlanResolver, RelPlanCompiler, output_plan_hash
 from relspec.model import (
     AddLiteralSpec,
     CanonicalSortKernelSpec,
@@ -50,7 +55,15 @@ from relspec.model import (
     RenameColumnsSpec,
     RuleKind,
 )
-from relspec.plan import RelJoin, RelNode, RelPlan, RelProject, RelSource, RelUnion
+from relspec.plan import (
+    RelJoin,
+    RelNode,
+    RelPlan,
+    RelProject,
+    RelSource,
+    RelUnion,
+    rel_plan_signature,
+)
 from relspec.policies import (
     ambiguity_policy_from_schema,
     confidence_policy_from_schema,
@@ -61,15 +74,13 @@ from relspec.registry import ContractCatalog, DatasetCatalog
 from relspec.rules.exec_events import RuleExecutionObserver, rule_execution_event_from_table
 from relspec.rules.policies import PolicyRegistry
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, dataset_spec_from_contract
+from sqlglot_tools.bridge import IbisCompilerBackend
 
 KernelFn = Callable[[TableLike, ExecutionContext], TableLike]
 PlanExecutor = Callable[
     [IbisPlan, ExecutionContext, Mapping[IbisValue, object] | None, ExecutionLabel | None],
     TableLike,
 ]
-
-if TYPE_CHECKING:
-    from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 
 def _scan_ordering_for_ctx(ctx: ExecutionContext) -> Ordering:
@@ -109,9 +120,61 @@ def runtime_telemetry_for_ctx(ctx: ExecutionContext) -> Mapping[str, object]:
     return {"datafusion": profile.telemetry_payload()}
 
 
+def _rule_signature_for_output(rule: RelationshipRule) -> str:
+    """Return a stable signature hash for a relationship rule.
+
+    Parameters
+    ----------
+    rule
+        Rule definition to hash.
+
+    Returns
+    -------
+    str
+        Deterministic hash for the rule configuration payload.
+    """
+    payload = json_default(rule)
+    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _compiled_rule_signature(compiled: CompiledRule) -> str:
+    """Return a stable signature hash for a compiled rule.
+
+    Parameters
+    ----------
+    compiled
+        Compiled rule instance.
+
+    Returns
+    -------
+    str
+        Deterministic signature hash for the rule plan.
+    """
+    if compiled.rel_plan is not None:
+        return rel_plan_signature(compiled.rel_plan)
+    return _rule_signature_for_output(compiled.rule)
+
+
+def _input_dataset_names(rules: Sequence[RelationshipRule]) -> tuple[str, ...]:
+    """Return sorted input dataset names for a rule set.
+
+    Parameters
+    ----------
+    rules
+        Relationship rules contributing to an output.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted input dataset names.
+    """
+    names = {ref.name for rule in rules for ref in rule.inputs}
+    return tuple(sorted(names))
+
+
 def _adapter_plan_executor(
     *,
-    adapter_mode: AdapterMode | None,
     execution_policy: AdapterExecutionPolicy | None,
     ibis_backend: BaseBackend | None,
     surface_policy: ExecutionSurfacePolicy | None,
@@ -132,18 +195,18 @@ def _adapter_plan_executor(
         exec_params: Mapping[IbisValue, object] | None,
         execution_label: ExecutionLabel | None = None,
     ) -> TableLike:
+        execution = IbisExecutionContext(
+            ctx=exec_ctx,
+            execution_policy=execution_policy,
+            execution_label=execution_label,
+            ibis_backend=ibis_backend,
+            params=exec_params,
+        )
         product = build_plan_product(
             plan,
-            ctx=exec_ctx,
+            execution=execution,
             policy=_resolved_policy(exec_ctx),
             plan_id=_plan_id(execution_label),
-            options=AdapterRunOptions(
-                adapter_mode=adapter_mode,
-                execution_policy=execution_policy,
-                execution_label=execution_label,
-                ibis_backend=ibis_backend,
-                ibis_params=exec_params,
-            ),
         )
         return product.materialize_table()
 
@@ -156,35 +219,31 @@ class RuleExecutionOptions:
 
     params: Mapping[IbisValue, object] | None = None
     plan_executor: PlanExecutor | None = None
-    adapter_mode: AdapterMode | None = None
     execution_policy: AdapterExecutionPolicy | None = None
     ibis_backend: BaseBackend | None = None
     surface_policy: ExecutionSurfacePolicy | None = None
 
 
-class FilesystemPlanResolver:
+class FilesystemPlanResolver(PlanResolver[IbisPlan]):
     """Resolve dataset names to filesystem-backed Ibis tables."""
 
     def __init__(
         self,
         catalog: DatasetCatalog,
         *,
-        backend: ibis.backends.BaseBackend | None = None,
-        runtime_profile: DataFusionRuntimeProfile | None = None,
-        registry: IbisDatasetRegistry | None = None,
+        registry: IbisDatasetRegistry,
     ) -> None:
         self.catalog = catalog
-        if registry is None:
-            if backend is None:
-                msg = "FilesystemPlanResolver requires backend or registry."
-                raise ValueError(msg)
-            registry = IbisDatasetRegistry(
-                backend,
-                catalog=catalog,
-                runtime_profile=runtime_profile,
-            )
+        if registry.catalog is not catalog:
+            for name in catalog.names():
+                registry.catalog.register(name, catalog.get(name))
         self.registry = registry
-        self.backend: BaseBackend | None = registry.backend
+        self._backend: BaseBackend | None = registry.backend
+
+    @property
+    def backend(self) -> BaseBackend | None:
+        """Return the backend associated with this resolver."""
+        return self._backend
 
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
         """Resolve a dataset reference into a filesystem-backed plan.
@@ -220,7 +279,53 @@ class FilesystemPlanResolver:
         return None
 
 
-class InMemoryPlanResolver:
+@dataclass(frozen=True)
+class RequiredColumnResolver:
+    """Plan resolver wrapper that applies required column projections."""
+
+    base: PlanResolver[IbisPlan]
+    required_columns: Mapping[str, Sequence[str]]
+
+    @property
+    def backend(self) -> BaseBackend | None:
+        """Return the backend associated with this resolver.
+
+        Returns
+        -------
+        ibis.backends.BaseBackend | None
+            Backend used by the underlying resolver.
+        """
+        return self.base.backend
+
+    def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
+        """Resolve a dataset reference with required column projection.
+
+        Returns
+        -------
+        IbisPlan
+            Plan with required column projection applied when available.
+        """
+        plan = self.base.resolve(ref, ctx=ctx)
+        required = self.required_columns.get(ref.name)
+        if not required and ref.label:
+            required = self.required_columns.get(ref.label)
+        if not required:
+            return plan
+        projected = apply_query_spec(plan.expr, spec=IbisQuerySpec.simple(*required))
+        return IbisPlan(expr=projected, ordering=plan.ordering)
+
+    def telemetry(self, ref: DatasetRef, *, ctx: ExecutionContext) -> ScanTelemetry | None:
+        """Return scan telemetry for the dataset reference.
+
+        Returns
+        -------
+        ScanTelemetry | None
+            Telemetry data when available.
+        """
+        return self.base.telemetry(ref, ctx=ctx)
+
+
+class InMemoryPlanResolver(PlanResolver[IbisPlan]):
     """Resolve dataset names to in-memory tables or plans."""
 
     def __init__(
@@ -230,7 +335,12 @@ class InMemoryPlanResolver:
         backend: BaseBackend | None = None,
     ) -> None:
         self.mapping = dict(mapping)
-        self.backend: BaseBackend | None = backend
+        self._backend: BaseBackend | None = backend
+
+    @property
+    def backend(self) -> BaseBackend | None:
+        """Return the backend associated with this resolver."""
+        return self._backend
 
     def resolve(self, ref: DatasetRef, *, ctx: ExecutionContext) -> IbisPlan:
         """Resolve a dataset reference into an in-memory plan.
@@ -755,7 +865,7 @@ def apply_policy_defaults(
     rule: RelationshipRule,
     schema: SchemaLike,
     *,
-    registry: PolicyRegistry | None = None,
+    registry: PolicyRegistry,
 ) -> RelationshipRule:
     """Apply schema-derived default policies to a rule.
 
@@ -766,7 +876,7 @@ def apply_policy_defaults(
     schema:
         Schema providing policy metadata.
     registry:
-        Optional policy registry for resolving named policies.
+        Policy registry for resolving named policies.
 
     Returns
     -------
@@ -908,6 +1018,7 @@ class CompiledRule:
     execute_fn: Callable[[ExecutionContext, PlanResolver[IbisPlan], PlanExecutor], TableLike] | None
     post_kernels: tuple[KernelFn, ...] = ()
     emit_rule_meta: bool = True
+    required_columns: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     def execute(
         self,
@@ -948,7 +1059,6 @@ class CompiledRule:
         if options.plan_executor is None:
             resolved_backend = options.ibis_backend or resolver.backend
             resolved_executor = _adapter_plan_executor(
-                adapter_mode=options.adapter_mode,
                 execution_policy=options.execution_policy,
                 ibis_backend=resolved_backend,
                 surface_policy=options.surface_policy,
@@ -966,10 +1076,16 @@ class CompiledRule:
             effective_label = execution_label or label
             return resolved_executor(plan, exec_ctx, resolved_params, effective_label)
 
+        effective_resolver: PlanResolver[IbisPlan] = resolver
+        if self.required_columns:
+            effective_resolver = RequiredColumnResolver(
+                base=resolver,
+                required_columns=self.required_columns,
+            )
         if self.execute_fn is not None:
-            table = self.execute_fn(ctx, resolver, _execute_plan)
+            table = self.execute_fn(ctx, effective_resolver, _execute_plan)
         elif self.rel_plan is not None:
-            plan = compiler.compile(self.rel_plan, ctx=ctx, resolver=resolver)
+            plan = compiler.compile(self.rel_plan, ctx=ctx, resolver=effective_resolver)
             table = resolved_executor(plan, ctx, options.params, label)
         else:
             msg = "CompiledRule has neither rel_plan nor execute_fn."
@@ -989,7 +1105,6 @@ class CompiledOutputExecutionOptions:
     compiler: RelPlanCompiler[IbisPlan] | None = None
     params: Mapping[IbisValue, object] | None = None
     plan_executor: PlanExecutor | None = None
-    adapter_mode: AdapterMode | None = None
     execution_policy: AdapterExecutionPolicy | None = None
     ibis_backend: BaseBackend | None = None
     rule_exec_observer: RuleExecutionObserver | None = None
@@ -1002,6 +1117,8 @@ class CompiledOutput:
 
     output_dataset: str
     contract_name: str | None
+    plan_hash: str | None = None
+    input_datasets: tuple[str, ...] = ()
     contributors: tuple[CompiledRule, ...] = ()
     telemetry: Mapping[str, ScanTelemetry] = field(default_factory=dict)
     runtime_telemetry: Mapping[str, object] = field(default_factory=dict)
@@ -1041,14 +1158,25 @@ class CompiledOutput:
             msg = f"CompiledOutput {self.output_dataset!r} has no contributors."
             raise ValueError(msg)
         plan_compiler = options.compiler or IbisRelPlanCompiler()
+        expected_schema = None
+        if self.contract_name is not None:
+            expected_schema = options.contracts.get(self.contract_name).schema
         rule_options = RuleExecutionOptions(
             params=options.params,
             plan_executor=options.plan_executor,
-            adapter_mode=options.adapter_mode,
             execution_policy=options.execution_policy,
             ibis_backend=options.ibis_backend,
             surface_policy=options.surface_policy,
         )
+        if expected_schema is not None:
+            for compiled in self.contributors:
+                _validate_compiled_rule_schema(
+                    compiled,
+                    expected_schema=expected_schema,
+                    compiler=plan_compiler,
+                    ctx=ctx_exec,
+                    resolver=resolver,
+                )
         table_parts: list[TableLike] = []
         observer = options.rule_exec_observer
         if observer is None:
@@ -1070,6 +1198,20 @@ class CompiledOutput:
                     compiler=plan_compiler,
                     options=rule_options,
                 )
+                plan_hash = None
+                if compiled.rel_plan is not None:
+                    try:
+                        plan = plan_compiler.compile(
+                            compiled.rel_plan,
+                            ctx=ctx_exec,
+                            resolver=resolver,
+                        )
+                        plan_hash = try_plan_hash(
+                            plan.expr,
+                            backend=rule_options.ibis_backend or resolver.backend,
+                        )
+                    except (TypeError, ValueError):
+                        plan_hash = None
                 duration_ms = (time.perf_counter() - started) * 1000.0
                 observer.record(
                     rule_execution_event_from_table(
@@ -1077,6 +1219,7 @@ class CompiledOutput:
                         output_dataset=compiled.rule.output_dataset,
                         table=table,
                         duration_ms=duration_ms,
+                        plan_hash=plan_hash,
                     )
                 )
                 table_parts.append(table)
@@ -1087,6 +1230,20 @@ class CompiledOutput:
             ctx=ctx_exec,
             contracts=options.contracts,
         )
+
+
+def _validate_compiled_rule_schema(
+    compiled: CompiledRule,
+    *,
+    expected_schema: pa.Schema | None,
+    compiler: RelPlanCompiler[IbisPlan],
+    ctx: ExecutionContext,
+    resolver: PlanResolver[IbisPlan],
+) -> None:
+    if expected_schema is None or compiled.rel_plan is None:
+        return
+    plan = compiler.compile(compiled.rel_plan, ctx=ctx, resolver=resolver)
+    validate_expr_schema(plan.expr, expected=expected_schema)
 
 
 class RelationshipRuleCompiler:
@@ -1470,12 +1627,9 @@ class RelationshipRuleCompiler:
         dict[str, CompiledOutput]
             Compiled outputs keyed by output dataset name.
 
-        Raises
-        ------
-        ValueError
-            Raised when output rules disagree on contract_name.
         """
         rules = list(registry_rules)
+        resolved_policy_registry = policy_registry or PolicyRegistry()
         if contract_catalog is not None:
             validate_relationship_output_contracts_for_edge_kinds(
                 rules=rules,
@@ -1491,7 +1645,7 @@ class RelationshipRuleCompiler:
                 resolved_rule = apply_policy_defaults(
                     rule,
                     schema,
-                    registry=policy_registry,
+                    registry=resolved_policy_registry,
                 )
                 if resolved_rule.evidence is None:
                     inferred = evidence_spec_from_schema(schema)
@@ -1506,27 +1660,77 @@ class RelationshipRuleCompiler:
 
         compiled: dict[str, CompiledOutput] = {}
         for out_name in sorted(by_out):
-            rules = by_out[out_name]
-            rules_sorted = sorted(rules, key=lambda rr: (rr.priority, rr.name))
-            contract_names = {rr.contract_name for rr in rules_sorted}
-            if len(contract_names) > 1:
-                msg = (
-                    f"Output {out_name!r} has inconsistent contract_name across rules: "
-                    f"{contract_names}."
-                )
-                raise ValueError(msg)
-
-            contributors = tuple(self.compile_rule(rule, ctx=ctx) for rule in rules_sorted)
-            telemetry = self.collect_scan_telemetry(rules_sorted, ctx=ctx)
-            runtime_telemetry = runtime_telemetry_for_ctx(ctx)
-            compiled[out_name] = CompiledOutput(
-                output_dataset=out_name,
-                contract_name=rules_sorted[0].contract_name,
-                contributors=contributors,
-                telemetry=telemetry,
-                runtime_telemetry=runtime_telemetry,
-            )
+            compiled[out_name] = self._compile_output(out_name, by_out[out_name], ctx=ctx)
         return compiled
+
+    def _compile_output(
+        self,
+        out_name: str,
+        rules: Sequence[RelationshipRule],
+        *,
+        ctx: ExecutionContext,
+    ) -> CompiledOutput:
+        rules_sorted = sorted(rules, key=lambda rr: (rr.priority, rr.name))
+        contract_names = {rr.contract_name for rr in rules_sorted}
+        if len(contract_names) > 1:
+            msg = (
+                f"Output {out_name!r} has inconsistent contract_name across rules: "
+                f"{contract_names}."
+            )
+            raise ValueError(msg)
+
+        contributors = tuple(
+            replace(
+                compiled_rule,
+                required_columns=self._required_columns_for_rule(
+                    compiled_rule,
+                    ctx=ctx,
+                ),
+            )
+            for compiled_rule in (self.compile_rule(rule, ctx=ctx) for rule in rules_sorted)
+        )
+        input_datasets = _input_dataset_names(rules_sorted)
+        rule_signatures = tuple(_compiled_rule_signature(rule) for rule in contributors)
+        plan_hash = output_plan_hash(
+            output_dataset=out_name,
+            rule_signatures=rule_signatures,
+            input_datasets=input_datasets,
+        )
+        telemetry = self.collect_scan_telemetry(rules_sorted, ctx=ctx)
+        runtime_telemetry = runtime_telemetry_for_ctx(ctx)
+        return CompiledOutput(
+            output_dataset=out_name,
+            contract_name=rules_sorted[0].contract_name,
+            plan_hash=plan_hash,
+            input_datasets=input_datasets,
+            contributors=contributors,
+            telemetry=telemetry,
+            runtime_telemetry=runtime_telemetry,
+        )
+
+    def _required_columns_for_rule(
+        self,
+        compiled: CompiledRule,
+        *,
+        ctx: ExecutionContext,
+    ) -> Mapping[str, tuple[str, ...]]:
+        if compiled.rel_plan is None:
+            return {}
+        backend = self.resolver.backend
+        if backend is None or not hasattr(backend, "compiler"):
+            return {}
+        try:
+            plan = (self.plan_compiler or IbisRelPlanCompiler()).compile(
+                compiled.rel_plan,
+                ctx=ctx,
+                resolver=self.resolver,
+            )
+        except (TypeError, ValueError):
+            return {}
+        return required_columns_by_table(
+            plan.expr,
+            backend=cast("IbisCompilerBackend", backend),
+        )
 
     def collect_scan_telemetry(
         self,

@@ -7,31 +7,26 @@ import os
 import subprocess
 import sys
 import textwrap
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
-import pyarrow as pa
-
-from arrowdsl.compute.expr_core import MaskedHashExprSpec
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
-from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, pc
-from arrowdsl.plan.joins import join_config_for_output, left_join
-from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.runner import materialize_plan, run_plan_bundle
-from arrowdsl.plan.scan_io import rows_to_table
-from arrowdsl.schema.schema import SchemaMetadataSpec, empty_table, unify_tables
-from extract.helpers import project_columns
-from extract.plan_helpers import apply_query_and_normalize
-from extract.registry_ids import hash_spec
-from extract.registry_specs import (
-    dataset_row_schema,
-    dataset_schema,
-    normalize_options,
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from extract.helpers import (
+    ExtractMaterializeOptions,
+    apply_query_and_project,
+    ibis_plan_from_rows,
+    materialize_extract_plan,
 )
-from extract.schema_ops import metadata_spec_for_dataset
+from extract.registry_specs import dataset_query, dataset_row_schema, normalize_options
+from extract.schema_ops import ExtractNormalizeOptions
+from ibis_engine.plan import IbisPlan
+from ibis_engine.query_compiler import apply_projection
 
 if TYPE_CHECKING:
+    from ibis.expr.types import Table as IbisTable
+
     from extract.evidence_plan import EvidencePlan
 
 type Row = dict[str, object]
@@ -75,42 +70,10 @@ class RuntimeRows:
     member_rows: list[Row]
 
 
-RT_OBJECT_ID_SPEC = hash_spec("rt_object_id")
-RT_SIGNATURE_ID_SPEC = hash_spec("rt_signature_id")
-RT_PARAM_ID_SPEC = hash_spec("rt_param_id")
-RT_MEMBER_ID_SPEC = hash_spec("rt_member_id")
-
-RT_OBJECTS_SCHEMA = dataset_schema("rt_objects_v1")
-RT_SIGNATURES_SCHEMA = dataset_schema("rt_signatures_v1")
-RT_SIGNATURE_PARAMS_SCHEMA = dataset_schema("rt_signature_params_v1")
-RT_MEMBERS_SCHEMA = dataset_schema("rt_members_v1")
-
 RT_OBJECTS_ROW_SCHEMA = dataset_row_schema("rt_objects_v1")
 RT_SIGNATURES_ROW_SCHEMA = dataset_row_schema("rt_signatures_v1")
 RT_PARAMS_ROW_SCHEMA = dataset_row_schema("rt_signature_params_v1")
 RT_MEMBERS_ROW_SCHEMA = dataset_row_schema("rt_members_v1")
-
-
-def _runtime_metadata_specs(
-    options: RuntimeInspectOptions,
-) -> dict[str, SchemaMetadataSpec]:
-    return {
-        "rt_objects": metadata_spec_for_dataset("rt_objects_v1", options=options),
-        "rt_signatures": metadata_spec_for_dataset("rt_signatures_v1", options=options),
-        "rt_signature_params": metadata_spec_for_dataset("rt_signature_params_v1", options=options),
-        "rt_members": metadata_spec_for_dataset("rt_members_v1", options=options),
-    }
-
-
-def _record_batches_from_rows(
-    rows: Iterable[Mapping[str, object]],
-    *,
-    schema: SchemaLike,
-    batch_size: int,
-) -> Iterable[pa.RecordBatch]:
-    row_sequence = rows if isinstance(rows, Sequence) else list(rows)
-    table = rows_to_table(row_sequence, schema)
-    return cast("pa.Table", table).to_batches(max_chunksize=batch_size)
 
 
 def _inspect_script() -> str:
@@ -288,6 +251,17 @@ def _inspect_script() -> str:
     ).strip()
 
 
+def _with_derived_columns(table: IbisTable, *, dataset: str) -> IbisTable:
+    spec = dataset_query(dataset)
+    if not spec.projection.derived:
+        return table
+    return apply_projection(
+        table,
+        base=table.columns,
+        derived=spec.projection.derived,
+    )
+
+
 def _run_inspect_subprocess(
     repo_root: str,
     *,
@@ -454,74 +428,27 @@ def _parse_runtime_members(members_raw: object) -> list[Row]:
     return member_rows
 
 
-def _empty_runtime_result(
-    metadata_specs: Mapping[str, SchemaMetadataSpec] | None = None,
-) -> RuntimeInspectResult:
-    def _empty(schema: SchemaLike, key: str) -> TableLike:
-        if metadata_specs is None:
-            return empty_table(schema)
-        return empty_table(metadata_specs[key].apply(schema))
-
-    return RuntimeInspectResult(
-        rt_objects=_empty(RT_OBJECTS_SCHEMA, "rt_objects"),
-        rt_signatures=_empty(RT_SIGNATURES_SCHEMA, "rt_signatures"),
-        rt_signature_params=_empty(RT_SIGNATURE_PARAMS_SCHEMA, "rt_signature_params"),
-        rt_members=_empty(RT_MEMBERS_SCHEMA, "rt_members"),
-    )
-
-
-def _plan_from_row_fragments(
-    rows: Sequence[Row],
-    *,
-    schema: SchemaLike,
-    label: str,
-    batch_size: int = 4096,
-) -> Plan:
-    if not rows:
-        return Plan.table_source(empty_table(schema), label=label)
-    tables = [
-        pa.Table.from_batches([batch], schema=schema)
-        for batch in _record_batches_from_rows(rows, schema=schema, batch_size=batch_size)
-    ]
-    table = unify_tables(tables)
-    return Plan.table_source(table, label=label)
-
-
 def _build_rt_objects(
     obj_rows: list[Row],
     *,
-    exec_ctx: ExecutionContext,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> tuple[Plan, Plan]:
-    rt_objects_plan = _plan_from_row_fragments(
-        obj_rows,
-        schema=RT_OBJECTS_ROW_SCHEMA,
-        label="rt_objects_raw",
-    )
-    rt_objects_plan = project_columns(
-        rt_objects_plan,
-        base=RT_OBJECTS_ROW_SCHEMA.names,
-        extras=[
-            (
-                MaskedHashExprSpec(
-                    spec=RT_OBJECT_ID_SPEC,
-                    required=("module", "qualname"),
-                ).to_expression(),
-                "rt_id",
-            )
-        ],
-        ctx=exec_ctx,
-    )
-    rt_objects_key_plan = rt_objects_plan.project(
-        [pc.field("object_key"), pc.field("rt_id")],
-        ["object_key", "rt_id"],
-        ctx=exec_ctx,
-    )
-    rt_objects_plan = apply_query_and_normalize(
+) -> tuple[IbisPlan, IbisPlan]:
+    raw_plan = ibis_plan_from_rows(
         "rt_objects_v1",
-        rt_objects_plan,
-        ctx=exec_ctx,
+        obj_rows,
+        row_schema=RT_OBJECTS_ROW_SCHEMA,
+    )
+    raw_table = raw_plan.expr
+    with_rt_id = _with_derived_columns(raw_table, dataset="rt_objects_v1")
+    rt_keys = with_rt_id.select(with_rt_id["object_key"], with_rt_id["rt_id"])
+    rt_objects_key_plan = IbisPlan(expr=rt_keys, ordering=raw_plan.ordering)
+    rt_objects_plan = apply_query_and_project(
+        "rt_objects_v1",
+        raw_table,
+        normalize=normalize,
         evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
     )
     return rt_objects_plan, rt_objects_key_plan
 
@@ -529,60 +456,46 @@ def _build_rt_objects(
 def _build_rt_signatures(
     sig_rows: list[Row],
     *,
-    rt_objects_key_plan: Plan,
-    exec_ctx: ExecutionContext,
+    rt_objects_key_plan: IbisPlan,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> tuple[Plan, Plan | None]:
-    if not sig_rows:
-        empty_plan = Plan.table_source(empty_table(RT_SIGNATURES_SCHEMA))
-        return empty_plan, None
-    sig_plan = _plan_from_row_fragments(
-        sig_rows,
-        schema=RT_SIGNATURES_ROW_SCHEMA,
-        label="rt_signatures_raw",
-    )
-    sig_cols = list(RT_SIGNATURES_ROW_SCHEMA.names)
-    join_config = join_config_for_output(
-        left_columns=RT_SIGNATURES_ROW_SCHEMA.names,
-        right_columns=rt_objects_key_plan.schema(ctx=exec_ctx).names,
-        key_pairs=(("object_key", "object_key"),),
-        right_output=("rt_id",),
-    )
-    if join_config is not None:
-        sig_plan = left_join(
-            sig_plan,
-            rt_objects_key_plan,
-            config=join_config,
-            use_threads=exec_ctx.use_threads,
-            ctx=exec_ctx,
-        )
-        sig_cols = list(join_config.left_output) + list(join_config.right_output)
-    sig_plan = project_columns(
-        sig_plan,
-        base=sig_cols,
-        extras=[
-            (
-                MaskedHashExprSpec(
-                    spec=RT_SIGNATURE_ID_SPEC,
-                    required=("rt_id", "signature"),
-                ).to_expression(),
-                "sig_id",
-            )
-        ],
-        ctx=exec_ctx,
-    )
-    sig_meta_plan = None
-    if {"object_key", "signature"} <= set(sig_cols):
-        sig_meta_plan = sig_plan.project(
-            [pc.field("object_key"), pc.field("signature"), pc.field("sig_id")],
-            ["object_key", "signature", "sig_id"],
-            ctx=exec_ctx,
-        )
-    sig_plan = apply_query_and_normalize(
+) -> tuple[IbisPlan, IbisPlan | None]:
+    raw_plan = ibis_plan_from_rows(
         "rt_signatures_v1",
-        sig_plan,
-        ctx=exec_ctx,
+        sig_rows,
+        row_schema=RT_SIGNATURES_ROW_SCHEMA,
+    )
+    sig_table = raw_plan.expr
+    if not sig_rows:
+        empty_plan = apply_query_and_project(
+            "rt_signatures_v1",
+            sig_table,
+            normalize=normalize,
+            evidence_plan=evidence_plan,
+            repo_id=normalize.repo_id,
+        )
+        return empty_plan, None
+    obj_keys = rt_objects_key_plan.expr
+    joined = sig_table.left_join(
+        obj_keys,
+        predicates=[sig_table["object_key"] == obj_keys["object_key"]],
+    )
+    joined_table = joined.select(
+        [sig_table[col] for col in sig_table.columns] + [obj_keys["rt_id"]]
+    )
+    with_sig_id = _with_derived_columns(joined_table, dataset="rt_signatures_v1")
+    sig_meta_table = with_sig_id.select(
+        with_sig_id["object_key"],
+        with_sig_id["signature"],
+        with_sig_id["sig_id"],
+    )
+    sig_meta_plan = IbisPlan(expr=sig_meta_table, ordering=raw_plan.ordering)
+    sig_plan = apply_query_and_project(
+        "rt_signatures_v1",
+        joined_table,
+        normalize=normalize,
         evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
     )
     return sig_plan, sig_meta_plan
 
@@ -590,204 +503,109 @@ def _build_rt_signatures(
 def _build_rt_params(
     param_rows: list[Row],
     *,
-    sig_meta_plan: Plan | None,
-    exec_ctx: ExecutionContext,
+    sig_meta_plan: IbisPlan | None,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> Plan:
-    if not param_rows or sig_meta_plan is None:
-        return Plan.table_source(empty_table(RT_SIGNATURE_PARAMS_SCHEMA))
-    param_plan = _plan_from_row_fragments(
-        param_rows,
-        schema=RT_PARAMS_ROW_SCHEMA,
-        label="rt_params_raw",
-    )
-    param_cols = list(RT_PARAMS_ROW_SCHEMA.names)
-    join_config = join_config_for_output(
-        left_columns=RT_PARAMS_ROW_SCHEMA.names,
-        right_columns=sig_meta_plan.schema(ctx=exec_ctx).names,
-        key_pairs=(("object_key", "object_key"), ("signature", "signature")),
-        right_output=("sig_id",),
-    )
-    if join_config is not None:
-        param_plan = left_join(
-            param_plan,
-            sig_meta_plan,
-            config=join_config,
-            use_threads=exec_ctx.use_threads,
-            ctx=exec_ctx,
-        )
-        param_cols = list(join_config.left_output) + list(join_config.right_output)
-    param_plan = project_columns(
-        param_plan,
-        base=param_cols,
-        extras=[
-            (
-                MaskedHashExprSpec(
-                    spec=RT_PARAM_ID_SPEC,
-                    required=("sig_id", "name"),
-                ).to_expression(),
-                "param_id",
-            )
-        ],
-        ctx=exec_ctx,
-    )
-    return apply_query_and_normalize(
+) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
         "rt_signature_params_v1",
-        param_plan,
-        ctx=exec_ctx,
+        param_rows,
+        row_schema=RT_PARAMS_ROW_SCHEMA,
+    )
+    params_table = raw_plan.expr
+    if not param_rows or sig_meta_plan is None:
+        return apply_query_and_project(
+            "rt_signature_params_v1",
+            params_table,
+            normalize=normalize,
+            evidence_plan=evidence_plan,
+            repo_id=normalize.repo_id,
+        )
+    sig_meta = sig_meta_plan.expr
+    joined = params_table.left_join(
+        sig_meta,
+        predicates=[
+            params_table["object_key"] == sig_meta["object_key"],
+            params_table["signature"] == sig_meta["signature"],
+        ],
+    )
+    selected = joined.select(
+        [params_table[col] for col in params_table.columns] + [sig_meta["sig_id"]]
+    )
+    return apply_query_and_project(
+        "rt_signature_params_v1",
+        selected,
+        normalize=normalize,
         evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
     )
 
 
 def _build_rt_members(
     member_rows: list[Row],
     *,
-    rt_objects_key_plan: Plan,
-    exec_ctx: ExecutionContext,
+    rt_objects_key_plan: IbisPlan,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> Plan:
-    if not member_rows:
-        return Plan.table_source(empty_table(RT_MEMBERS_SCHEMA))
-    member_plan = _plan_from_row_fragments(
-        member_rows,
-        schema=RT_MEMBERS_ROW_SCHEMA,
-        label="rt_members_raw",
-    )
-    member_cols = list(RT_MEMBERS_ROW_SCHEMA.names)
-    join_config = join_config_for_output(
-        left_columns=RT_MEMBERS_ROW_SCHEMA.names,
-        right_columns=rt_objects_key_plan.schema(ctx=exec_ctx).names,
-        key_pairs=(("object_key", "object_key"),),
-        right_output=("rt_id",),
-    )
-    if join_config is not None:
-        member_plan = left_join(
-            member_plan,
-            rt_objects_key_plan,
-            config=join_config,
-            use_threads=exec_ctx.use_threads,
-            ctx=exec_ctx,
-        )
-        member_cols = list(join_config.left_output) + list(join_config.right_output)
-    member_plan = project_columns(
-        member_plan,
-        base=member_cols,
-        extras=[
-            (
-                MaskedHashExprSpec(
-                    spec=RT_MEMBER_ID_SPEC,
-                    required=("rt_id", "name"),
-                ).to_expression(),
-                "member_id",
-            )
-        ],
-        ctx=exec_ctx,
-    )
-    return apply_query_and_normalize(
+) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows(
         "rt_members_v1",
-        member_plan,
-        ctx=exec_ctx,
-        evidence_plan=evidence_plan,
+        member_rows,
+        row_schema=RT_MEMBERS_ROW_SCHEMA,
     )
-
-
-def _runtime_tables_from_rows(
-    *,
-    rows: RuntimeRows,
-    exec_ctx: ExecutionContext,
-    metadata_specs: Mapping[str, SchemaMetadataSpec],
-    evidence_plan: EvidencePlan | None = None,
-) -> RuntimeInspectResult:
-    if not rows.obj_rows:
-        return _empty_runtime_result(metadata_specs)
-
-    rt_objects_plan, rt_objects_key_plan = _build_rt_objects(
-        rows.obj_rows,
-        exec_ctx=exec_ctx,
-        evidence_plan=evidence_plan,
+    member_table = raw_plan.expr
+    if not member_rows:
+        return apply_query_and_project(
+            "rt_members_v1",
+            member_table,
+            normalize=normalize,
+            evidence_plan=evidence_plan,
+            repo_id=normalize.repo_id,
+        )
+    obj_keys = rt_objects_key_plan.expr
+    joined = member_table.left_join(
+        obj_keys,
+        predicates=[member_table["object_key"] == obj_keys["object_key"]],
     )
-    rt_signatures_plan, sig_meta_plan = _build_rt_signatures(
-        rows.sig_rows,
-        rt_objects_key_plan=rt_objects_key_plan,
-        exec_ctx=exec_ctx,
-        evidence_plan=evidence_plan,
+    selected = joined.select(
+        [member_table[col] for col in member_table.columns] + [obj_keys["rt_id"]]
     )
-    rt_params_plan = _build_rt_params(
-        rows.param_rows,
-        sig_meta_plan=sig_meta_plan,
-        exec_ctx=exec_ctx,
+    return apply_query_and_project(
+        "rt_members_v1",
+        selected,
+        normalize=normalize,
         evidence_plan=evidence_plan,
-    )
-    rt_members_plan = _build_rt_members(
-        rows.member_rows,
-        rt_objects_key_plan=rt_objects_key_plan,
-        exec_ctx=exec_ctx,
-        evidence_plan=evidence_plan,
-    )
-
-    return RuntimeInspectResult(
-        rt_objects=materialize_plan(
-            rt_objects_plan,
-            ctx=exec_ctx,
-            metadata_spec=metadata_specs["rt_objects"],
-            attach_ordering_metadata=True,
-        ),
-        rt_signatures=materialize_plan(
-            rt_signatures_plan,
-            ctx=exec_ctx,
-            metadata_spec=metadata_specs["rt_signatures"],
-            attach_ordering_metadata=True,
-        ),
-        rt_signature_params=materialize_plan(
-            rt_params_plan,
-            ctx=exec_ctx,
-            metadata_spec=metadata_specs["rt_signature_params"],
-            attach_ordering_metadata=True,
-        ),
-        rt_members=materialize_plan(
-            rt_members_plan,
-            ctx=exec_ctx,
-            metadata_spec=metadata_specs["rt_members"],
-            attach_ordering_metadata=True,
-        ),
+        repo_id=normalize.repo_id,
     )
 
 
 def _runtime_plans_from_rows(
     *,
     rows: RuntimeRows,
-    exec_ctx: ExecutionContext,
+    normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> dict[str, Plan]:
-    if not rows.obj_rows:
-        empty = Plan.table_source(empty_table(RT_OBJECTS_SCHEMA))
-        return {
-            "rt_objects": empty,
-            "rt_signatures": Plan.table_source(empty_table(RT_SIGNATURES_SCHEMA)),
-            "rt_signature_params": Plan.table_source(empty_table(RT_SIGNATURE_PARAMS_SCHEMA)),
-            "rt_members": Plan.table_source(empty_table(RT_MEMBERS_SCHEMA)),
-        }
+) -> dict[str, IbisPlan]:
     rt_objects_plan, rt_objects_key_plan = _build_rt_objects(
         rows.obj_rows,
-        exec_ctx=exec_ctx,
+        normalize=normalize,
         evidence_plan=evidence_plan,
     )
     rt_signatures_plan, sig_meta_plan = _build_rt_signatures(
         rows.sig_rows,
         rt_objects_key_plan=rt_objects_key_plan,
-        exec_ctx=exec_ctx,
+        normalize=normalize,
         evidence_plan=evidence_plan,
     )
     rt_params_plan = _build_rt_params(
         rows.param_rows,
         sig_meta_plan=sig_meta_plan,
-        exec_ctx=exec_ctx,
+        normalize=normalize,
         evidence_plan=evidence_plan,
     )
     rt_members_plan = _build_rt_members(
         rows.member_rows,
         rt_objects_key_plan=rt_objects_key_plan,
-        exec_ctx=exec_ctx,
+        normalize=normalize,
         evidence_plan=evidence_plan,
     )
     return {
@@ -827,10 +645,53 @@ def extract_runtime_tables(
         Extracted runtime inspection tables.
     """
     normalized_options = normalize_options("runtime_inspect", options, RuntimeInspectOptions)
-    exec_ctx = ctx or execution_context_factory(profile)
+    ctx = ctx or execution_context_factory(profile)
+    normalize = ExtractNormalizeOptions(options=normalized_options)
     if not normalized_options.module_allowlist:
-        return _empty_runtime_result(_runtime_metadata_specs(normalized_options))
-    metadata_specs = _runtime_metadata_specs(normalized_options)
+        empty_rows = RuntimeRows(obj_rows=[], sig_rows=[], param_rows=[], member_rows=[])
+        plans = _runtime_plans_from_rows(
+            rows=empty_rows,
+            normalize=normalize,
+            evidence_plan=evidence_plan,
+        )
+        return RuntimeInspectResult(
+            rt_objects=materialize_extract_plan(
+                "rt_objects_v1",
+                plans["rt_objects"],
+                ctx=ctx,
+                options=ExtractMaterializeOptions(
+                    normalize=normalize,
+                    apply_post_kernels=True,
+                ),
+            ),
+            rt_signatures=materialize_extract_plan(
+                "rt_signatures_v1",
+                plans["rt_signatures"],
+                ctx=ctx,
+                options=ExtractMaterializeOptions(
+                    normalize=normalize,
+                    apply_post_kernels=True,
+                ),
+            ),
+            rt_signature_params=materialize_extract_plan(
+                "rt_signature_params_v1",
+                plans["rt_signature_params"],
+                ctx=ctx,
+                options=ExtractMaterializeOptions(
+                    normalize=normalize,
+                    apply_post_kernels=True,
+                ),
+            ),
+            rt_members=materialize_extract_plan(
+                "rt_members_v1",
+                plans["rt_members"],
+                ctx=ctx,
+                options=ExtractMaterializeOptions(
+                    normalize=normalize,
+                    apply_post_kernels=True,
+                ),
+            ),
+        )
 
     payload = _run_inspect_subprocess(
         repo_root,
@@ -847,11 +708,48 @@ def extract_runtime_tables(
         param_rows=param_rows,
         member_rows=member_rows,
     )
-    return _runtime_tables_from_rows(
+    plans = _runtime_plans_from_rows(
         rows=rows,
-        exec_ctx=exec_ctx,
-        metadata_specs=metadata_specs,
+        normalize=normalize,
         evidence_plan=evidence_plan,
+    )
+    return RuntimeInspectResult(
+        rt_objects=materialize_extract_plan(
+            "rt_objects_v1",
+            plans["rt_objects"],
+            ctx=ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
+            ),
+        ),
+        rt_signatures=materialize_extract_plan(
+            "rt_signatures_v1",
+            plans["rt_signatures"],
+            ctx=ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
+            ),
+        ),
+        rt_signature_params=materialize_extract_plan(
+            "rt_signature_params_v1",
+            plans["rt_signature_params"],
+            ctx=ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
+            ),
+        ),
+        rt_members=materialize_extract_plan(
+            "rt_members_v1",
+            plans["rt_members"],
+            ctx=ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                apply_post_kernels=True,
+            ),
+        ),
     )
 
 
@@ -860,25 +758,23 @@ def extract_runtime_plans(
     *,
     options: RuntimeInspectOptions,
     evidence_plan: EvidencePlan | None = None,
-    ctx: ExecutionContext | None = None,
-    profile: str = "default",
-) -> dict[str, Plan]:
+) -> dict[str, IbisPlan]:
     """Extract runtime inspection plans via subprocess.
 
     Returns
     -------
-    dict[str, Plan]
-        Plan bundle keyed by runtime inspection table name.
+    dict[str, IbisPlan]
+        Ibis plan bundle keyed by runtime inspection table name.
     """
     normalized_options = normalize_options("runtime_inspect", options, RuntimeInspectOptions)
-    exec_ctx = ctx or execution_context_factory(profile)
+    normalize = ExtractNormalizeOptions(options=normalized_options)
     if not normalized_options.module_allowlist:
-        return {
-            "rt_objects": Plan.table_source(empty_table(RT_OBJECTS_SCHEMA)),
-            "rt_signatures": Plan.table_source(empty_table(RT_SIGNATURES_SCHEMA)),
-            "rt_signature_params": Plan.table_source(empty_table(RT_SIGNATURE_PARAMS_SCHEMA)),
-            "rt_members": Plan.table_source(empty_table(RT_MEMBERS_SCHEMA)),
-        }
+        rows = RuntimeRows(obj_rows=[], sig_rows=[], param_rows=[], member_rows=[])
+        return _runtime_plans_from_rows(
+            rows=rows,
+            normalize=normalize,
+            evidence_plan=evidence_plan,
+        )
 
     payload = _run_inspect_subprocess(
         repo_root,
@@ -897,7 +793,7 @@ def extract_runtime_plans(
     )
     return _runtime_plans_from_rows(
         rows=rows,
-        exec_ctx=exec_ctx,
+        normalize=normalize,
         evidence_plan=evidence_plan,
     )
 
@@ -926,16 +822,19 @@ def extract_runtime_objects(
     plans = extract_runtime_plans(
         repo_root,
         options=options,
-        profile=profile,
     )
-    metadata_specs = _runtime_metadata_specs(options)
-    return run_plan_bundle(
-        {"rt_objects": plans["rt_objects"]},
-        ctx=execution_context_factory(profile),
-        prefer_reader=prefer_reader,
-        metadata_specs={"rt_objects": metadata_specs["rt_objects"]},
-        attach_ordering_metadata=True,
-    )["rt_objects"]
+    exec_ctx = execution_context_factory(profile)
+    normalize = ExtractNormalizeOptions(options=options)
+    return materialize_extract_plan(
+        "rt_objects_v1",
+        plans["rt_objects"],
+        ctx=exec_ctx,
+        options=ExtractMaterializeOptions(
+            normalize=normalize,
+            prefer_reader=prefer_reader,
+            apply_post_kernels=True,
+        ),
+    )
 
 
 def extract_runtime_signatures(
@@ -962,22 +861,31 @@ def extract_runtime_signatures(
     plans = extract_runtime_plans(
         repo_root,
         options=options,
-        profile=profile,
     )
-    metadata_specs = _runtime_metadata_specs(options)
-    return run_plan_bundle(
-        {
-            "rt_signatures": plans["rt_signatures"],
-            "rt_signature_params": plans["rt_signature_params"],
-        },
-        ctx=execution_context_factory(profile),
-        prefer_reader=prefer_reader,
-        metadata_specs={
-            "rt_signatures": metadata_specs["rt_signatures"],
-            "rt_signature_params": metadata_specs["rt_signature_params"],
-        },
-        attach_ordering_metadata=True,
-    )
+    exec_ctx = execution_context_factory(profile)
+    normalize = ExtractNormalizeOptions(options=options)
+    return {
+        "rt_signatures": materialize_extract_plan(
+            "rt_signatures_v1",
+            plans["rt_signatures"],
+            ctx=exec_ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=True,
+            ),
+        ),
+        "rt_signature_params": materialize_extract_plan(
+            "rt_signature_params_v1",
+            plans["rt_signature_params"],
+            ctx=exec_ctx,
+            options=ExtractMaterializeOptions(
+                normalize=normalize,
+                prefer_reader=prefer_reader,
+                apply_post_kernels=True,
+            ),
+        ),
+    }
 
 
 def extract_runtime_members(
@@ -1004,13 +912,16 @@ def extract_runtime_members(
     plans = extract_runtime_plans(
         repo_root,
         options=options,
-        profile=profile,
     )
-    metadata_specs = _runtime_metadata_specs(options)
-    return run_plan_bundle(
-        {"rt_members": plans["rt_members"]},
-        ctx=execution_context_factory(profile),
-        prefer_reader=prefer_reader,
-        metadata_specs={"rt_members": metadata_specs["rt_members"]},
-        attach_ordering_metadata=True,
-    )["rt_members"]
+    exec_ctx = execution_context_factory(profile)
+    normalize = ExtractNormalizeOptions(options=options)
+    return materialize_extract_plan(
+        "rt_members_v1",
+        plans["rt_members"],
+        ctx=exec_ctx,
+        options=ExtractMaterializeOptions(
+            normalize=normalize,
+            prefer_reader=prefer_reader,
+            apply_post_kernels=True,
+        ),
+    )

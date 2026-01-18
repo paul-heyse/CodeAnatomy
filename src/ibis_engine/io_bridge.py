@@ -19,22 +19,28 @@ from arrowdsl.io.parquet import (
     ParquetWriteOptions,
     write_dataset_parquet,
     write_named_datasets_parquet,
+    write_partitioned_dataset_parquet,
     write_table_parquet,
 )
 from arrowdsl.plan.ordering_policy import ordering_keys_for_schema
 from arrowdsl.plan.schema_utils import plan_schema
 from core_types import PathLike
-from datafusion_engine.bridge import ibis_plan_to_datafusion, ibis_to_datafusion
+from datafusion_engine.bridge import (
+    datafusion_partitioned_readers,
+    ibis_plan_to_datafusion,
+    ibis_to_datafusion,
+)
 from engine.plan_policy import WriterStrategy
+from engine.plan_product import PlanProduct
 from ibis_engine.execution import (
-    IbisAdapterExecution,
+    IbisExecutionContext,
     materialize_ibis_plan,
     stream_ibis_plan,
 )
 from ibis_engine.plan import IbisPlan
 from sqlglot_tools.bridge import IbisCompilerBackend
 
-type IbisWriteInput = DatasetWriteInput | IbisPlan | IbisTable
+type IbisWriteInput = DatasetWriteInput | IbisPlan | IbisTable | PlanProduct
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +52,8 @@ class DataFusionWriterConfig:
     write_options: DataFrameWriteOptions | None = None
     parquet_options: ParquetWriterOptions | None = None
     sort_by: Sequence[str] | None = None
+    partitioned_streaming: bool = False
+    allow_non_deterministic_partitioned_streaming: bool = False
 
 
 @dataclass(frozen=True)
@@ -55,8 +63,8 @@ class IbisDatasetWriteOptions:
     config: DatasetWriteConfig | None = None
     batch_size: int | None = None
     prefer_reader: bool = True
-    execution: IbisAdapterExecution | None = None
-    writer_strategy: WriterStrategy = "arrow"
+    execution: IbisExecutionContext | None = None
+    writer_strategy: WriterStrategy | None = None
     datafusion_write: DataFusionWriterConfig | None = None
 
 
@@ -67,15 +75,15 @@ class IbisNamedDatasetWriteOptions:
     config: NamedDatasetWriteConfig | None = None
     batch_size: int | None = None
     prefer_reader: bool = True
-    execution: IbisAdapterExecution | None = None
-    writer_strategy: WriterStrategy = "arrow"
+    execution: IbisExecutionContext | None = None
+    writer_strategy: WriterStrategy | None = None
 
 
 def ibis_plan_to_reader(
     plan: IbisPlan,
     *,
     batch_size: int | None = None,
-    execution: IbisAdapterExecution | None = None,
+    execution: IbisExecutionContext | None = None,
 ) -> RecordBatchReaderLike:
     """Return a RecordBatchReader for an Ibis plan.
 
@@ -111,7 +119,7 @@ def ibis_table_to_reader(
 def ibis_to_table(
     value: IbisPlan | IbisTable,
     *,
-    execution: IbisAdapterExecution | None = None,
+    execution: IbisExecutionContext | None = None,
 ) -> TableLike:
     """Materialize an Ibis plan or table to an Arrow table.
 
@@ -132,8 +140,10 @@ def _coerce_write_input(
     *,
     batch_size: int | None,
     prefer_reader: bool,
-    execution: IbisAdapterExecution | None,
+    execution: IbisExecutionContext | None,
 ) -> DatasetWriteInput:
+    if isinstance(value, PlanProduct):
+        return value.value()
     if isinstance(value, IbisPlan):
         return (
             ibis_plan_to_reader(value, batch_size=batch_size, execution=execution)
@@ -149,11 +159,23 @@ def _coerce_write_input(
     return value
 
 
+def _resolve_writer_strategy(
+    *,
+    options: IbisDatasetWriteOptions,
+    data: IbisWriteInput,
+) -> WriterStrategy:
+    if options.writer_strategy is not None:
+        return options.writer_strategy
+    if isinstance(data, PlanProduct):
+        return data.writer_strategy
+    return "arrow"
+
+
 def _write_datafusion_dataset(
     value: IbisPlan | IbisTable,
     base_dir: PathLike,
     *,
-    execution: IbisAdapterExecution,
+    execution: IbisExecutionContext,
     dataset_config: DatasetWriteConfig,
     write_config: DataFusionWriterConfig | None,
 ) -> str:
@@ -168,6 +190,18 @@ def _write_datafusion_dataset(
         if isinstance(value, IbisPlan)
         else ibis_to_datafusion(value, backend=backend, ctx=df_ctx)
     )
+    if write_config is not None and write_config.partitioned_streaming:
+        if (
+            execution.ctx.determinism != DeterminismTier.BEST_EFFORT
+            and not write_config.allow_non_deterministic_partitioned_streaming
+        ):
+            msg = "Partitioned streaming is restricted to Tier 0 determinism by default."
+            raise ValueError(msg)
+        readers = datafusion_partitioned_readers(df)
+        if not readers:
+            msg = "Partitioned streaming requested but DataFusion does not support it."
+            raise ValueError(msg)
+        return write_partitioned_dataset_parquet(readers, base_dir, config=dataset_config)
     write_with_options = getattr(df, "write_parquet_with_options", None)
     if callable(write_with_options):
         write_options = _build_datafusion_write_options(
@@ -193,7 +227,7 @@ def _write_datafusion_dataset(
 def _build_datafusion_write_options(
     value: IbisPlan | IbisTable,
     *,
-    execution: IbisAdapterExecution,
+    execution: IbisExecutionContext,
     write_config: DataFusionWriterConfig | None,
 ) -> DataFrameWriteOptions | None:
     if write_config is not None and write_config.write_options is not None:
@@ -242,7 +276,7 @@ def _create_parquet_options(options: ParquetWriteOptions) -> ParquetWriterOption
 def _schema_for_write(
     value: IbisPlan | IbisTable,
     *,
-    execution: IbisAdapterExecution,
+    execution: IbisExecutionContext,
 ) -> SchemaLike:
     if isinstance(value, IbisPlan):
         return plan_schema(value, ctx=execution.ctx)
@@ -255,7 +289,7 @@ def write_ibis_table_parquet(
     *,
     opts: ParquetWriteOptions | None = None,
     overwrite: bool = True,
-    execution: IbisAdapterExecution | None = None,
+    execution: IbisExecutionContext | None = None,
 ) -> str:
     """Write an Ibis plan/table as a single Parquet file.
 
@@ -284,17 +318,27 @@ def write_ibis_dataset_parquet(
     -------
     str
         Output dataset directory.
+
+    Raises
+    ------
+    ValueError
+        Raised when a DataFusion writer is requested without required inputs.
     """
     options = options or IbisDatasetWriteOptions()
     config = options.config or DatasetWriteConfig()
-    if options.execution is not None and config.preserve_order is None:
-        preserve = options.execution.ctx.determinism != DeterminismTier.BEST_EFFORT
+    determinism = None
+    if isinstance(data, PlanProduct):
+        determinism = data.determinism_tier
+    elif options.execution is not None:
+        determinism = options.execution.ctx.determinism
+    if determinism is not None and config.preserve_order is None:
+        preserve = determinism != DeterminismTier.BEST_EFFORT
         config = replace(config, preserve_order=preserve)
-    if (
-        options.writer_strategy == "datafusion"
-        and options.execution is not None
-        and isinstance(data, (IbisPlan, IbisTable))
-    ):
+    writer_strategy = _resolve_writer_strategy(options=options, data=data)
+    if writer_strategy == "datafusion":
+        if options.execution is None or not isinstance(data, (IbisPlan, IbisTable)):
+            msg = "DataFusion writer requires an Ibis plan/table and execution context."
+            raise ValueError(msg)
         return _write_datafusion_dataset(
             data,
             base_dir,
@@ -334,9 +378,17 @@ def write_ibis_named_datasets_parquet(
     if options.execution is not None and config.preserve_order is None:
         preserve = options.execution.ctx.determinism != DeterminismTier.BEST_EFFORT
         config = replace(config, preserve_order=preserve)
-    if options.writer_strategy != "arrow":
+    writer_strategy = options.writer_strategy or "arrow"
+    if writer_strategy != "arrow":
         msg = "Named dataset writes only support the Arrow writer strategy."
         raise ValueError(msg)
+    for name, value in datasets.items():
+        if isinstance(value, PlanProduct) and value.writer_strategy != "arrow":
+            msg = (
+                "Named dataset writes do not support non-Arrow PlanProduct writer strategy "
+                f"for dataset {name!r}."
+            )
+            raise ValueError(msg)
     converted = {
         name: _coerce_write_input(
             value,

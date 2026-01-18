@@ -27,6 +27,7 @@ from incremental.edges_update import upsert_cpg_edges
 from incremental.exports import build_exported_defs_index
 from incremental.exports_update import upsert_exported_defs
 from incremental.extract_update import upsert_extract_outputs
+from incremental.fingerprint_changes import read_dataset_fingerprints
 from incremental.impact import (
     changed_file_impact_table,
     impacted_callers_from_changed_exports,
@@ -41,7 +42,10 @@ from incremental.impact_update import (
 )
 from incremental.imports_resolved import resolve_imports
 from incremental.index_update import upsert_imports_resolved, upsert_module_index
-from incremental.invalidations import InvalidationResult, check_state_store_invalidation
+from incremental.invalidations import (
+    InvalidationOutcome,
+    check_state_store_invalidation_with_diff,
+)
 from incremental.module_index import build_module_index
 from incremental.nodes_update import upsert_cpg_nodes
 from incremental.normalize_update import upsert_normalize_outputs
@@ -113,20 +117,37 @@ def incremental_state_store(
 def incremental_invalidation(
     incremental_state_store: StateStore | None,
     incremental_config: IncrementalConfig,
-) -> InvalidationResult | None:
+) -> InvalidationOutcome | None:
     """Validate incremental state signatures and reset on mismatch.
 
     Returns
     -------
-    InvalidationResult | None
-        Invalidation outcome, or None when incremental is disabled.
+    InvalidationOutcome | None
+        Invalidation outcome with diff payload, or None when disabled.
     """
     if not incremental_config.enabled or incremental_state_store is None:
         return None
-    return check_state_store_invalidation(
+    return check_state_store_invalidation_with_diff(
         state_store=incremental_state_store,
         registry=GLOBAL_SCHEMA_REGISTRY,
     )
+
+
+@tag(layer="incremental", kind="table")
+def incremental_plan_diff(
+    incremental_invalidation: InvalidationOutcome | None,
+    incremental_config: IncrementalConfig,
+) -> pa.Table | None:
+    """Return rule plan diff diagnostics when incremental is enabled.
+
+    Returns
+    -------
+    pa.Table | None
+        Diff table when incremental mode is enabled.
+    """
+    if not incremental_config.enabled or incremental_invalidation is None:
+        return None
+    return incremental_invalidation.plan_diff
 
 
 @tag(layer="incremental", kind="table")
@@ -413,7 +434,7 @@ def incremental_scip_snapshot(
 def incremental_scip_diff(
     incremental_scip_snapshot: pa.Table | None,
     incremental_state_store: StateStore | None,
-    incremental_invalidation: InvalidationResult | None,
+    incremental_invalidation: InvalidationOutcome | None,
 ) -> pa.Table | None:
     """Compute and persist the SCIP diff for the latest snapshot.
 
@@ -424,7 +445,7 @@ def incremental_scip_diff(
     """
     if incremental_state_store is None or incremental_scip_snapshot is None:
         return None
-    if incremental_invalidation is not None and incremental_invalidation.full_refresh:
+    if incremental_invalidation is not None and incremental_invalidation.result.full_refresh:
         prev = None
     else:
         prev = read_scip_snapshot(incremental_state_store)
@@ -456,7 +477,7 @@ def incremental_scip_changed_file_ids(
 def incremental_diff(
     incremental_repo_snapshot: pa.Table | None,
     incremental_state_store: StateStore | None,
-    incremental_invalidation: InvalidationResult | None,
+    incremental_invalidation: InvalidationOutcome | None,
 ) -> pa.Table | None:
     """Compute and persist the incremental diff for the latest snapshot.
 
@@ -467,7 +488,7 @@ def incremental_diff(
     """
     if incremental_state_store is None or incremental_repo_snapshot is None:
         return None
-    if incremental_invalidation is not None and incremental_invalidation.full_refresh:
+    if incremental_invalidation is not None and incremental_invalidation.result.full_refresh:
         prev = None
     else:
         prev = read_repo_snapshot(incremental_state_store)
@@ -826,6 +847,7 @@ def incremental_normalize_updates(
 @tag(layer="incremental", kind="object")
 def incremental_relationship_updates(
     relationship_output_tables: RelationshipOutputTables,
+    relationship_output_fingerprints_map: Mapping[str, str] | None,
     incremental_state_store: StateStore | None,
     incremental_file_changes: IncrementalFileChanges,
     incremental_config: IncrementalConfig,
@@ -841,8 +863,20 @@ def incremental_relationship_updates(
         return None
     if not (incremental_file_changes.changed_file_ids or incremental_file_changes.deleted_file_ids):
         return {}
+    outputs = relationship_output_tables.as_dict()
+    if relationship_output_fingerprints_map and not incremental_file_changes.full_refresh:
+        previous = read_dataset_fingerprints(incremental_state_store)
+        unchanged = {
+            name
+            for name, fingerprint in relationship_output_fingerprints_map.items()
+            if fingerprint and previous.get(name) == fingerprint
+        }
+        if unchanged:
+            outputs = {name: table for name, table in outputs.items() if name not in unchanged}
+            if not outputs:
+                return {}
     return upsert_relationship_outputs(
-        relationship_output_tables.as_dict(),
+        outputs,
         state_root=incremental_state_store.root,
         changes=incremental_file_changes,
     )
@@ -964,6 +998,7 @@ __all__ = [
     "incremental_module_index",
     "incremental_module_index_updates",
     "incremental_normalize_updates",
+    "incremental_plan_diff",
     "incremental_relationship_updates",
     "incremental_repo_snapshot",
     "incremental_scip_changed_file_ids",

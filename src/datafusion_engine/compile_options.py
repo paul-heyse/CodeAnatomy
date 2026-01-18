@@ -12,6 +12,8 @@ if TYPE_CHECKING:
     from ibis.expr.types import Value
     from sqlglot import Expression
 
+    from engine.plan_cache import PlanCache
+
 SchemaMapping = Mapping[str, Mapping[str, str]]
 
 
@@ -70,3 +72,6 @@ class DataFusionCompileOptions:
     capture_explain: bool = False
     explain_analyze: bool = False
     explain_hook: Callable[[str, Sequence[Mapping[str, object]]], None] | None = None
+    plan_cache: PlanCache | None = None
+    plan_hash: str | None = None
+    profile_hash: str | None = None

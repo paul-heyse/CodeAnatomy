@@ -21,17 +21,11 @@ from arrowdsl.core.ids import prefixed_hash_id
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
 from arrowdsl.plan.joins import JoinConfig, left_join
 from arrowdsl.schema.build import empty_table, set_or_append_column, table_from_arrays
-from config import AdapterMode
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from extract.evidence_plan import EvidencePlan
-from normalize.catalog import (
-    NormalizeCatalogInputs,
-    NormalizePlanCatalog,
-)
-from normalize.catalog import (
-    normalize_plan_catalog as build_normalize_plan_catalog,
-)
-from normalize.diagnostics import DiagnosticsSources
+from normalize.catalog import IbisPlanCatalog, NormalizeCatalogInputs
+from normalize.catalog import normalize_plan_catalog as build_normalize_plan_catalog
+from normalize.ibis_api import DiagnosticsSources
 from normalize.registry_specs import (
     dataset_alias,
     dataset_contract,
@@ -181,7 +175,6 @@ class NormalizeExecutionContext:
     """Execution settings for normalize compilation and execution."""
 
     ctx: ExecutionContext
-    adapter_mode: AdapterMode
     execution_policy: AdapterExecutionPolicy
     ibis_backend: BaseBackend
 
@@ -190,7 +183,6 @@ class NormalizeExecutionContext:
 @tag(layer="normalize", artifact="normalize_execution_context", kind="object")
 def normalize_execution_context(
     ctx: ExecutionContext,
-    adapter_mode: AdapterMode,
     adapter_execution_policy: AdapterExecutionPolicy,
     ibis_backend: BaseBackend,
 ) -> NormalizeExecutionContext:
@@ -203,7 +195,6 @@ def normalize_execution_context(
     """
     return NormalizeExecutionContext(
         ctx=ctx,
-        adapter_mode=adapter_mode,
         execution_policy=adapter_execution_policy,
         ibis_backend=ibis_backend,
     )
@@ -339,21 +330,31 @@ def normalize_catalog_inputs(
 @tag(layer="normalize", artifact="normalize_plan_catalog", kind="object")
 def normalize_plan_catalog(
     normalize_catalog_inputs: NormalizeCatalogInputs,
-) -> NormalizePlanCatalog:
+    normalize_execution_context: NormalizeExecutionContext,
+) -> IbisPlanCatalog:
     """Build a normalize plan catalog from pipeline inputs.
 
     Returns
     -------
-    NormalizePlanCatalog
-        Plan catalog seeded with normalize inputs.
+    IbisPlanCatalog
+        Ibis-backed plan catalog seeded with normalize inputs.
+
+    Raises
+    ------
+    ValueError
+        Raised when the Ibis backend is unavailable.
     """
-    return build_normalize_plan_catalog(normalize_catalog_inputs)
+    ibis_backend = normalize_execution_context.ibis_backend
+    if ibis_backend is None:
+        msg = "Normalize catalog requires an Ibis backend."
+        raise ValueError(msg)
+    return build_normalize_plan_catalog(normalize_catalog_inputs, backend=ibis_backend)
 
 
 @cache()
 @tag(layer="normalize", artifact="normalize_rule_compilation", kind="object")
 def normalize_rule_compilation(
-    normalize_plan_catalog: NormalizePlanCatalog,
+    normalize_plan_catalog: IbisPlanCatalog,
     normalize_execution_context: NormalizeExecutionContext,
     pipeline_policy: PipelinePolicy,
     evidence_plan: EvidencePlan | None = None,
@@ -372,42 +373,38 @@ def normalize_rule_compilation(
         Raised when Ibis-backed normalization is required but not enabled.
     """
     ctx = normalize_execution_context.ctx
-    adapter_mode = normalize_execution_context.adapter_mode
     execution_policy = normalize_execution_context.execution_policy
     ibis_backend = normalize_execution_context.ibis_backend
     rules = _normalize_rules(ctx=ctx, pipeline_policy=pipeline_policy)
     required_outputs = _required_rule_outputs(evidence_plan, rules)
     if required_outputs is not None and not required_outputs:
-        return NormalizeRuleCompilation(rules=(), plans={}, catalog=normalize_plan_catalog)
-    if adapter_mode.use_ibis_bridge:
-        materialize = (
-            tuple(materialize_outputs)
-            if materialize_outputs is not None
-            else DEFAULT_MATERIALIZE_OUTPUTS
-        )
-        plans = compile_normalize_plans_ibis(
-            normalize_plan_catalog,
-            ctx=ctx,
-            options=NormalizeIbisPlanOptions(
-                backend=ibis_backend,
-                rules=rules,
-                required_outputs=required_outputs,
-                materialize_outputs=materialize,
-                adapter_mode=adapter_mode,
-                execution_policy=execution_policy,
-            ),
-        )
-        output_storage = {
-            name: ("materialized" if name in materialize else "view") for name in plans
-        }
-        return NormalizeRuleCompilation(
+        return NormalizeRuleCompilation(rules=(), plans={}, ibis_catalog=normalize_plan_catalog)
+    if ibis_backend is None:
+        msg = "Normalize compilation requires an Ibis backend."
+        raise ValueError(msg)
+    materialize = (
+        tuple(materialize_outputs)
+        if materialize_outputs is not None
+        else DEFAULT_MATERIALIZE_OUTPUTS
+    )
+    plans = compile_normalize_plans_ibis(
+        normalize_plan_catalog,
+        ctx=ctx,
+        options=NormalizeIbisPlanOptions(
+            backend=ibis_backend,
             rules=rules,
-            plans=plans,
-            catalog=normalize_plan_catalog,
-            output_storage=output_storage,
-        )
-    msg = "Design-mode normalize compilation requires AdapterMode.use_ibis_bridge."
-    raise ValueError(msg)
+            required_outputs=required_outputs,
+            materialize_outputs=materialize,
+            execution_policy=execution_policy,
+        ),
+    )
+    output_storage = {name: ("materialized" if name in materialize else "view") for name in plans}
+    return NormalizeRuleCompilation(
+        rules=rules,
+        plans=plans,
+        ibis_catalog=normalize_plan_catalog,
+        output_storage=output_storage,
+    )
 
 
 def _required_rule_outputs(
@@ -466,7 +463,6 @@ def _normalize_rule_output(
         ctx=ctx,
         options=NormalizeRunOptions(
             finalize_spec=finalize_spec,
-            adapter_mode=normalize_execution_context.adapter_mode,
             execution_policy=normalize_execution_context.execution_policy,
             execution_label=execution_label,
             ibis_backend=normalize_execution_context.ibis_backend,

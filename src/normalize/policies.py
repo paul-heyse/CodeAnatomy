@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import importlib
 import json
-import warnings
 from collections.abc import Mapping
-from functools import cache
-from typing import Literal, Protocol, cast
+from typing import Literal, Protocol
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.plan.ops import DedupeSpec, SortKey
@@ -79,7 +76,7 @@ def ambiguity_kernels(policy: AmbiguityPolicy | None) -> tuple[DedupeSpec, ...]:
 def confidence_policy_from_schema(
     schema: SchemaLike,
     *,
-    registry: _PolicyRegistry | None = None,
+    registry: _PolicyRegistry,
 ) -> ConfidencePolicy | None:
     """Derive a confidence policy from schema metadata.
 
@@ -95,20 +92,13 @@ def confidence_policy_from_schema(
     ConfidencePolicy | None
         Parsed confidence policy, or None when absent.
     """
-    if registry is None:
-        warnings.warn(
-            "confidence_policy_from_schema default registry is deprecated; pass registry=.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        registry = _policy_registry()
     return _confidence_policy_from_metadata(schema.metadata or {}, registry=registry)
 
 
 def ambiguity_policy_from_schema(
     schema: SchemaLike,
     *,
-    registry: _PolicyRegistry | None = None,
+    registry: _PolicyRegistry,
 ) -> AmbiguityPolicy | None:
     """Derive an ambiguity policy from schema metadata.
 
@@ -124,13 +114,6 @@ def ambiguity_policy_from_schema(
     AmbiguityPolicy | None
         Parsed ambiguity policy, or None when absent.
     """
-    if registry is None:
-        warnings.warn(
-            "ambiguity_policy_from_schema default registry is deprecated; pass registry=.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        registry = _policy_registry()
     return _ambiguity_policy_from_metadata(schema.metadata or {}, registry=registry)
 
 
@@ -194,13 +177,6 @@ def _ambiguity_policy_from_metadata(
         msg = f"Expected AmbiguityPolicy for policy {name!r}."
         raise TypeError(msg)
     return None
-
-
-@cache
-def _policy_registry() -> _PolicyRegistry:
-    module = importlib.import_module("relspec.rules.policies")
-    registry_cls = cast("type[_PolicyRegistry]", module.PolicyRegistry)
-    return registry_cls()
 
 
 def _meta_str(meta: Mapping[bytes, bytes], key: bytes) -> str | None:

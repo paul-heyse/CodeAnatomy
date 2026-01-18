@@ -1,4 +1,4 @@
-"""Parity checks for DataFusion bridge execution."""
+"""Integration checks for pipeline determinism."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import pytest
 
 from arrowdsl.core.context import execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from config import AdapterMode
 from cpg.registry_specs import dataset_contract_spec
 from hamilton_pipeline import build_driver
 from hamilton_pipeline.pipeline_types import ScipIndexConfig
@@ -27,43 +26,16 @@ _CPG_DATASETS: dict[str, str] = {
 
 
 @pytest.mark.integration
-def test_datafusion_bridge_parity(tmp_path: Path) -> None:
-    """Ensure bridge on/off outputs are schema- and digest-equal."""
-    repo_root = _fixture_repo_root()
-    outputs_off = _run_pipeline(
-        repo_root,
-        use_datafusion_bridge=False,
-        scip_output_dir=tmp_path / "scip_off",
-    )
-    outputs_on = _run_pipeline(
-        repo_root,
-        use_datafusion_bridge=True,
-        scip_output_dir=tmp_path / "scip_on",
-    )
-    for name in _CPG_OUTPUTS:
-        table_off = outputs_off[name]
-        table_on = outputs_on[name]
-        assert table_off.schema == table_on.schema
-        sort_keys = _canonical_sort_keys(name)
-        assert table_digest(table_off, sort_keys=sort_keys) == table_digest(
-            table_on,
-            sort_keys=sort_keys,
-        )
-
-
-@pytest.mark.integration
 def test_pipeline_determinism_threading(tmp_path: Path) -> None:
     """Ensure CPG outputs are deterministic across thread profiles."""
     repo_root = _fixture_repo_root()
     outputs_default = _run_pipeline(
         repo_root,
-        use_datafusion_bridge=True,
         scip_output_dir=tmp_path / "scip_default",
         ctx_profile="default",
     )
     outputs_deterministic = _run_pipeline(
         repo_root,
-        use_datafusion_bridge=True,
         scip_output_dir=tmp_path / "scip_deterministic",
         ctx_profile="deterministic",
     )
@@ -81,17 +53,12 @@ def test_pipeline_determinism_threading(tmp_path: Path) -> None:
 def _run_pipeline(
     repo_root: Path,
     *,
-    use_datafusion_bridge: bool,
     scip_output_dir: Path,
     ctx_profile: str = "default",
 ) -> Mapping[str, TableOutput]:
     driver = build_driver(config={})
     ctx = execution_context_factory(ctx_profile)
     overrides = {
-        "adapter_mode": AdapterMode(
-            use_ibis_bridge=True,
-            use_datafusion_bridge=use_datafusion_bridge,
-        ),
         "ctx": ctx,
         "scip_index_config": ScipIndexConfig(
             enabled=False,

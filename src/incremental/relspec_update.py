@@ -15,7 +15,7 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.io.parquet import DatasetWriteConfig, upsert_dataset_partitions_parquet
 from arrowdsl.plan.query import open_dataset
-from arrowdsl.plan_helpers import dataset_query_for_file_ids
+from arrowdsl.plan_utils import dataset_query_for_file_ids
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from arrowdsl.schema.schema import empty_table
 from extract.registry_bundles import dataset_name_for_output

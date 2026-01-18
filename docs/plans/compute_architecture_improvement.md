@@ -51,16 +51,17 @@ This is the right direction.
 
 ### A) You’re still carrying two “plan worlds” for core CPG emission
 
-Edges already have an Ibis path (`cpg/emit_edges_ibis.py` and the `use_ibis` branch in `cpg/build_edges.py`), but:
+Edges already have an Ibis path (`cpg/emit_edges_ibis.py` and the `use_ibis` branch in
+`relspec/cpg/build_edges.py`), but:
 
 * **Nodes** are plan-lane only
 
-  * `cpg/build_nodes.py`
+  * `relspec/cpg/build_nodes.py`
   * `cpg/emit_nodes.py`
 
 * **Props** are plan-lane only
 
-  * `cpg/build_props.py`
+  * `relspec/cpg/build_props.py`
   * `cpg/emit_props.py`
 
 This prevents you from having one unified “rules → ibis → datafusion” world. It also forces you to keep `PlanCatalog` (ArrowDSL plan catalog) as a CPG build dependency, while `relspec` is living in a different universe.
@@ -73,7 +74,8 @@ A few things are still implemented via Python iteration over Arrow values (which
 
 * `datafusion_engine/udf_registry.py`: stable hashing + other UDF helpers do Python-level iteration
 * `arrowdsl/core/ids.py`: hash fallback path iterates
-* `cpg/build_nodes.py`: `_collect_symbols()` uses Python `set(...)` over `iter_array_values(...)`
+* `relspec/cpg/build_nodes.py`: `_collect_symbols()` uses Python `set(...)` over
+  `iter_array_values(...)`
 * `arrowdsl/compute/filters.py`: JSON stringify UDF iterates to build lists
 
 For small tables this is fine; for “ubiquitous repo-scale tool used by agents” it’s the wrong place to be doing Python loops.
@@ -233,7 +235,8 @@ def build_engine_session(*, ctx: ExecutionContext, diagnostics=None) -> EngineSe
 Add:
 
 * `src/cpg/emit_nodes_ibis.py`
-* update `cpg/build_nodes.py` to support an Ibis mode and make it default when DataFusion is enabled.
+* update `relspec/cpg/build_nodes.py` to support an Ibis mode and make it default when
+  DataFusion is enabled.
 
 Sketch:
 
@@ -270,7 +273,7 @@ def emit_nodes_ibis(rel: IbisPlan | Table, *, spec: NodeEmitSpec) -> IbisPlan:
     return IbisPlan(expr=out, ordering=Ordering.unordered())
 ```
 
-Then in `cpg/build_nodes.py`:
+Then in `relspec/cpg/build_nodes.py`:
 
 * Replace `_symbol_nodes_table()` python-set logic with an Ibis union/distinct plan:
 
@@ -281,7 +284,7 @@ Then in `cpg/build_nodes.py`:
 **Deprecate:**
 
 * `cpg/emit_nodes.py` as “legacy plan-lane emission”
-* `_collect_symbols()` path in `cpg/build_nodes.py` (python set)
+* `_collect_symbols()` path in `relspec/cpg/build_nodes.py` (python set)
 
 ---
 
@@ -330,7 +333,7 @@ and optionally provide a view:
 
 ---
 
-### PR-D: Make “Ibis everywhere” the default in `cpg/build_edges.py` too
+### PR-D: Make “Ibis everywhere” the default in `relspec/cpg/build_edges.py` too
 
 You already have the split path; now make the architecture choice explicit:
 
@@ -479,10 +482,10 @@ If I were driving this to an end-state without destabilizing your functioning pi
 * Plan-lane CPG emission:
 
   * `cpg/emit_nodes.py`
-  * `cpg/build_nodes.py` (plan-only path)
+  * `relspec/cpg/build_nodes.py` (plan-only path)
   * `cpg/emit_props.py`
-  * `cpg/build_props.py` (plan-only path)
-  * plan-lane branch in `cpg/build_edges.py`
+  * `relspec/cpg/build_props.py` (plan-only path)
+  * plan-lane branch in `relspec/cpg/build_edges.py`
 * Materializing relation outputs at compile time:
 
   * `cpg/relationship_plans.compile_relation_plans()` (keep only for debugging / no-DF mode)
@@ -532,14 +535,6 @@ from relspec.cpg import (
 )
 ```
 
-### What legacy callers can still do (compat)
-
-```python
-from cpg.build_nodes import build_cpg_nodes      # works, warns
-from cpg.build_edges import build_cpg_edges      # works, warns
-from cpg.build_props import build_cpg_props      # works, warns
-```
-
 ### Architectural invariant at the end
 
 * `relspec/cpg/*` contains **all real implementation** of:
@@ -548,41 +543,14 @@ from cpg.build_props import build_cpg_props      # works, warns
   * plan compilation
   * execution + finalize
   * edge/node/prop emission
-* `cpg/build_nodes.py`, `cpg/build_edges.py`, `cpg/build_props.py` contain **no real logic**, only wrappers.
+* `cpg/build_nodes.py`, `cpg/build_edges.py`, `cpg/build_props.py` are removed.
 
 ---
 
-## Deprecation policy you should implement immediately
+## Deprecation policy
 
-You want deprecations to be **mechanically enforced**, but not noisy on import.
-
-Use **call-time** warnings, not import-time warnings.
-
-```python
-# in cpg/build_nodes.py
-import warnings
-from relspec.cpg.build_nodes import build_cpg_nodes as _impl_build_cpg_nodes
-
-def build_cpg_nodes(*, ctx, inputs=None, options=None, node_spec_table=None, registry=None):
-    warnings.warn(
-        "cpg.build_nodes.build_cpg_nodes is deprecated; use relspec.cpg.build_nodes.build_cpg_nodes",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _impl_build_cpg_nodes(
-        ctx=ctx,
-        inputs=inputs,
-        options=options,
-        node_spec_table=node_spec_table,
-        registry=registry,
-    )
-```
-
-Do the same for:
-
-* `build_cpg_nodes_raw`
-* `build_cpg_edges`, `build_cpg_edges_raw`
-* `build_cpg_props`, `build_cpg_props_raw`
+Deprecated compatibility wrappers are removed. Update all callers to import
+from `relspec.cpg`.
 
 ---
 
@@ -719,7 +687,7 @@ None yet.
 
 ---
 
-## PR25 — Move node build to `relspec.cpg` and make `cpg/build_nodes.py` a wrapper
+## PR25 — Move node build to `relspec.cpg` and delete `cpg/build_nodes.py`
 
 **Goal:** First “real” public surface swap: nodes.
 
@@ -727,7 +695,7 @@ None yet.
 
 1. Copy/move implementation: `emit_nodes` + `build_nodes`
 2. Update internal imports to `relspec.cpg.*`
-3. Replace `cpg/build_nodes.py` with wrapper
+3. Delete legacy `cpg/build_nodes.py`
 4. Update `relspec.cpg.__init__` exports
 
 ### File checklist
@@ -736,7 +704,7 @@ None yet.
 
 * **NEW** `src/relspec/cpg/build_nodes.py` (from `src/cpg/build_nodes.py`)
 
-* **MOD** `src/cpg/build_nodes.py` becomes wrapper
+* **DEL** `src/cpg/build_nodes.py`
 
   * Must re-export:
 
@@ -764,7 +732,7 @@ Keep the function signatures byte-for-byte identical so no downstream breakages:
 
 ---
 
-## PR26 — Move props build to `relspec.cpg` and make `cpg/build_props.py` a wrapper
+## PR26 — Move props build to `relspec.cpg` and delete `cpg/build_props.py`
 
 Same structure as PR25.
 
@@ -774,7 +742,7 @@ Same structure as PR25.
 
 * **NEW** `src/relspec/cpg/build_props.py` (from `src/cpg/build_props.py`)
 
-* **MOD** `src/cpg/build_props.py` → wrapper
+* **DEL** `src/cpg/build_props.py`
 
 * **MOD** `src/cpg/__init__.py` export map updated
 
@@ -785,7 +753,7 @@ Same structure as PR25.
 
 ---
 
-## PR27 — Move edges build to `relspec.cpg` and make `cpg/build_edges.py` a wrapper
+## PR27 — Move edges build to `relspec.cpg` and delete `cpg/build_edges.py`
 
 Edges is the biggest one because it crosses:
 
@@ -797,7 +765,7 @@ Edges is the biggest one because it crosses:
 
 1. Copy/move emitters + builder
 2. Update internal imports to `relspec.cpg.*`
-3. Replace `cpg/build_edges.py` with wrapper
+3. Delete legacy `cpg/build_edges.py`
 4. Update `cpg.__init__` export map
 
 ### File checklist
@@ -808,14 +776,14 @@ Edges is the biggest one because it crosses:
 
 * **NEW** `src/relspec/cpg/build_edges.py` (from `src/cpg/build_edges.py`)
 
-* **MOD** `src/cpg/build_edges.py` → wrapper
+* **DEL** `src/cpg/build_edges.py`
 
 * **MOD** `src/cpg/__init__.py` export map updated
 
 ### Deprecations introduced here
 
-* `cpg.build_edges.*` (warnings)
-* (do **not** deprecate `cpg.emit_edges*` yet unless you move them too; deprecating too early is noisy)
+None. Legacy `cpg.build_edges` wrappers are removed; update callers to
+`relspec.cpg.build_edges`.
 
 ### Acceptance tests
 
@@ -829,7 +797,8 @@ Edges is the biggest one because it crosses:
 This is the **architectural “win” PR** for Path 2, because right now:
 
 * Relationship outputs are already compiled/executed in `hamilton_pipeline/modules/cpg_build.py` (`compiled_relationship_outputs` + `relationship_tables`),
-* but `cpg/build_edges.py` still calls `compile_relation_plans*()` and essentially re-enters relationship rule compilation again.
+* but `relspec/cpg/build_edges.py` still calls `compile_relation_plans*()` and essentially
+  re-enters relationship rule compilation again.
 
 ### Goal
 
@@ -945,9 +914,9 @@ This is the “where everything lands” map, focused on **nodes/edges/props bui
 
 **These become wrappers (hard requirement):**
 
-* `src/cpg/build_nodes.py` → wrapper to `relspec.cpg.build_nodes`
-* `src/cpg/build_edges.py` → wrapper to `relspec.cpg.build_edges`
-* `src/cpg/build_props.py` → wrapper to `relspec.cpg.build_props`
+* `src/cpg/build_nodes.py` removed
+* `src/cpg/build_edges.py` removed
+* `src/cpg/build_props.py` removed
 
 **These become wrappers too (recommended for consistency):**
 

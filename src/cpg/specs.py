@@ -13,7 +13,6 @@ from arrowdsl.compute.macros import (
     flag_to_bool_expr,
 )
 from arrowdsl.core.interop import ComputeExpression, TableLike
-from arrowdsl.plan.plan import Plan
 from cpg.kinds_ultimate import EdgeKind, EntityKind, NodeKind
 
 type TableFilter = Callable[[TableLike], TableLike]
@@ -21,7 +20,6 @@ type PropValueType = Literal["string", "int", "float", "bool", "json"]
 type PropTransformFn = Callable[[object | None], object | None]
 type PropTransformExprFn = Callable[[ComputeExpression], ComputeExpression]
 type PropIncludeFn = Callable[[PropOptions], bool]
-type PlanPreprocessor = Callable[[Plan], Plan]
 
 TRANSFORM_EXPR_CONTEXT = "expr_context"
 TRANSFORM_FLAG_TO_BOOL = "flag_to_bool"
@@ -66,7 +64,6 @@ PROP_INCLUDES: dict[str, PropIncludeFn] = {
 }
 
 
-PLAN_PREPROCESSORS: dict[str, PlanPreprocessor] = {}
 EDGE_FILTERS: dict[str, TableFilter] = {}
 
 
@@ -114,26 +111,25 @@ def resolve_prop_include(include_id: str | None) -> PropIncludeFn | None:
     return fn
 
 
-def resolve_preprocessor(preprocessor_id: str | None) -> PlanPreprocessor | None:
-    """Return the plan preprocessor for a preprocessor id.
+def filter_fields(
+    fields: tuple[PropFieldSpec, ...] | list[PropFieldSpec],
+    *,
+    options: PropOptions,
+) -> list[PropFieldSpec]:
+    """Return property fields filtered by include-if rules.
 
     Returns
     -------
-    PlanPreprocessor | None
-        Preprocessor for the id, if registered.
-
-    Raises
-    ------
-    ValueError
-        Raised when the preprocessor id is not registered.
+    list[PropFieldSpec]
+        Fields that pass include-if filtering.
     """
-    if preprocessor_id is None:
-        return None
-    fn = PLAN_PREPROCESSORS.get(preprocessor_id)
-    if fn is None:
-        msg = f"Unknown preprocessor id: {preprocessor_id!r}"
-        raise ValueError(msg)
-    return fn
+    selected: list[PropFieldSpec] = []
+    for prop_field in fields:
+        include_if = resolve_prop_include(prop_field.include_if_id)
+        if include_if is not None and not include_if(options):
+            continue
+        selected.append(prop_field)
+    return selected
 
 
 def resolve_edge_filter(filter_id: str | None) -> TableFilter | None:

@@ -9,17 +9,27 @@ from typing import TYPE_CHECKING, Literal, overload
 
 from relspec.model import AmbiguityPolicy as RelationshipAmbiguityPolicy
 from relspec.model import ConfidencePolicy as RelationshipConfidencePolicy
-from relspec.policy_registry import (
-    AMBIGUITY_POLICIES as RELSPEC_AMBIGUITY_POLICIES,
-)
-from relspec.policy_registry import (
-    CONFIDENCE_POLICIES as RELSPEC_CONFIDENCE_POLICIES,
-)
+from relspec.model import WinnerSelectConfig
 from relspec.rules.definitions import RuleDomain
 
 if TYPE_CHECKING:
     from normalize.rule_model import AmbiguityPolicy as NormalizeAmbiguityPolicy
     from normalize.rule_model import ConfidencePolicy as NormalizeConfidencePolicy
+
+RELSPEC_CONFIDENCE_POLICIES: Mapping[str, RelationshipConfidencePolicy] = {
+    "scip": RelationshipConfidencePolicy(base=1.0),
+    "qname_fallback": RelationshipConfidencePolicy(base=0.4, penalty=0.1),
+    "runtime": RelationshipConfidencePolicy(base=1.0),
+    "type": RelationshipConfidencePolicy(base=1.0),
+}
+
+RELSPEC_AMBIGUITY_POLICIES: Mapping[str, RelationshipAmbiguityPolicy] = {
+    "qname_fallback": RelationshipAmbiguityPolicy(
+        winner_select=WinnerSelectConfig(
+            keys=("call_id",), score_col="score", score_order="descending"
+        )
+    ),
+}
 
 
 def _normalize_confidence_policies() -> Mapping[str, object]:

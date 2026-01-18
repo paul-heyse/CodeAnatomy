@@ -6,12 +6,16 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
+import pyarrow as pa
+from ibis.expr.types import Table as IbisTable
+
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.plan.catalog import PlanCatalog
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import ScanTelemetry
 from arrowdsl.plan.scan_io import DatasetSource
+from ibis_engine.plan import IbisPlan
 from relspec.rules.definitions import EvidenceSpec, RuleDefinition
 
 
@@ -301,13 +305,30 @@ class EvidenceCatalog:
         EvidenceCatalog
             Evidence catalog populated from the catalog.
         """
-        evidence = cls(sources=set(catalog.tables))
-        for name, source in catalog.tables.items():
+        return cls.from_sources(catalog.tables, ctx=ctx)
+
+    @classmethod
+    def from_sources(
+        cls,
+        sources: Mapping[str, object],
+        *,
+        ctx: ExecutionContext,
+    ) -> EvidenceCatalog:
+        """Build an evidence catalog from arbitrary schema-bearing sources.
+
+        Returns
+        -------
+        EvidenceCatalog
+            Evidence catalog populated from the sources mapping.
+        """
+        evidence = cls(sources=set(sources))
+        for name, source in sources.items():
             schema = _schema_from_source(source, ctx=ctx)
-            if schema is not None:
-                evidence.columns_by_dataset[name] = set(schema.names)
-                evidence.types_by_dataset[name] = _schema_types(schema)
-                evidence.metadata_by_dataset[name] = _schema_metadata(schema)
+            if schema is None:
+                continue
+            evidence.columns_by_dataset[name] = set(_schema_names(schema))
+            evidence.types_by_dataset[name] = _schema_types(schema)
+            evidence.metadata_by_dataset[name] = _schema_metadata(schema)
         return evidence
 
     def register(self, name: str, schema: SchemaLike) -> None:
@@ -461,10 +482,21 @@ def _schema_from_source(source: object, *, ctx: ExecutionContext) -> SchemaLike 
         return source.schema(ctx=ctx)
     if isinstance(source, DatasetSource):
         return source.dataset.schema
+    if isinstance(source, IbisPlan):
+        return pa.schema(source.expr.schema().to_pyarrow())
+    if isinstance(source, IbisTable):
+        return pa.schema(source.schema().to_pyarrow())
     schema = getattr(source, "schema", None)
     if schema is not None and hasattr(schema, "names"):
         return schema
     return None
+
+
+def _schema_names(schema: SchemaLike) -> tuple[str, ...]:
+    names = getattr(schema, "names", None)
+    if names is not None:
+        return tuple(names)
+    return tuple(field.name for field in schema)
 
 
 def _schema_types(schema: SchemaLike) -> dict[str, str]:
@@ -480,7 +512,11 @@ def _schema_types(schema: SchemaLike) -> dict[str, str]:
     dict[str, str]
         Column type mapping.
     """
-    return {field.name: str(field.type) for field in schema}
+    names = _schema_names(schema)
+    types = getattr(schema, "types", None)
+    if types is None:
+        return {field.name: str(field.type) for field in schema}
+    return {name: str(dtype) for name, dtype in zip(names, types, strict=True)}
 
 
 def _schema_metadata(schema: SchemaLike) -> dict[bytes, bytes]:
@@ -496,7 +532,10 @@ def _schema_metadata(schema: SchemaLike) -> dict[bytes, bytes]:
     dict[bytes, bytes]
         Metadata mapping.
     """
-    return dict(schema.metadata or {})
+    metadata = getattr(schema, "metadata", None)
+    if metadata is None:
+        return {}
+    return dict(metadata)
 
 
 __all__ = [

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Sequence
 from typing import Literal, Protocol, TypeVar, cast
 
@@ -48,6 +50,37 @@ JoinKind = Literal[
     "right",
     "semi",
 ]
+
+
+def output_plan_hash(
+    *,
+    output_dataset: str,
+    rule_signatures: Sequence[str],
+    input_datasets: Sequence[str] = (),
+) -> str:
+    """Compute a stable hash for a relationship output plan.
+
+    Parameters
+    ----------
+    output_dataset
+        Output dataset name for the plan.
+    rule_signatures
+        Ordered contributor plan signatures.
+    input_datasets
+        Input dataset names referenced by the output.
+
+    Returns
+    -------
+    str
+        SHA-256 hash of the output plan identity payload.
+    """
+    payload = {
+        "output_dataset": output_dataset,
+        "rule_signatures": list(rule_signatures),
+        "input_datasets": list(input_datasets),
+    }
+    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 class PlanResolver(Protocol[PlanT_co]):
@@ -600,4 +633,5 @@ __all__ = [
     "IbisRelPlanCompiler",
     "PlanResolver",
     "RelPlanCompiler",
+    "output_plan_hash",
 ]

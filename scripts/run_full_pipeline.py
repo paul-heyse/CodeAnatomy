@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the full Hamilton pipeline against a repo."""
+"""Run the graph product build against a repo."""
 
 from __future__ import annotations
 
@@ -7,13 +7,13 @@ import argparse
 import logging
 from collections.abc import Sequence
 
-from config import AdapterMode
-from hamilton_pipeline import PipelineExecutionOptions, execute_pipeline
+from arrowdsl.core.context import DeterminismTier
+from graph import GraphProductBuildRequest, build_graph_product
 from hamilton_pipeline.pipeline_types import ScipIndexConfig
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the CodeAnatomy Hamilton pipeline.")
+    parser = argparse.ArgumentParser(description="Run the CodeAnatomy graph product build.")
     parser.add_argument("--repo-root", default=".", help="Repository root to scan.")
     parser.add_argument(
         "--output-dir",
@@ -24,11 +24,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "--work-dir",
         default=None,
         help="Working directory for intermediates (default: unset).",
-    )
-    parser.add_argument(
-        "--use-datafusion-bridge",
-        action="store_true",
-        help="Enable DataFusion bridge execution.",
     )
     parser.add_argument(
         "--disable-scip",
@@ -73,6 +68,32 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Node.js memory cap for scip-python.",
     )
     parser.add_argument(
+        "--runtime-profile",
+        default=None,
+        help="Runtime profile name (default: from environment).",
+    )
+    parser.add_argument(
+        "--determinism-tier",
+        default=None,
+        choices=(
+            "tier2",
+            "canonical",
+            "tier1",
+            "stable",
+            "stable_set",
+            "tier0",
+            "fast",
+            "best_effort",
+        ),
+        help="Determinism tier override (default: from environment).",
+    )
+    parser.add_argument(
+        "--writer-strategy",
+        default=None,
+        choices=("arrow", "datafusion"),
+        help="Writer strategy override for materialization.",
+    )
+    parser.add_argument(
         "--incremental-impact-strategy",
         choices=("hybrid", "symbol_closure", "import_closure"),
         default=None,
@@ -84,6 +105,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Logging level (DEBUG, INFO, WARNING, ERROR).",
     )
     return parser
+
+
+def _parse_determinism_tier(value: str | None) -> DeterminismTier | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    mapping: dict[str, DeterminismTier] = {
+        "tier2": DeterminismTier.CANONICAL,
+        "canonical": DeterminismTier.CANONICAL,
+        "tier1": DeterminismTier.STABLE_SET,
+        "stable": DeterminismTier.STABLE_SET,
+        "stable_set": DeterminismTier.STABLE_SET,
+        "tier0": DeterminismTier.BEST_EFFORT,
+        "fast": DeterminismTier.BEST_EFFORT,
+        "best_effort": DeterminismTier.BEST_EFFORT,
+    }
+    return mapping.get(normalized)
 
 
 def _build_scip_config(args: argparse.Namespace) -> ScipIndexConfig:
@@ -101,7 +139,7 @@ def _build_scip_config(args: argparse.Namespace) -> ScipIndexConfig:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the pipeline with CLI-provided options.
+    """Run the graph product build with CLI-provided options.
 
     Returns
     -------
@@ -114,19 +152,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     logger = logging.getLogger("codeanatomy.pipeline")
 
     scip_config = _build_scip_config(args)
-    adapter_mode = AdapterMode(
-        use_ibis_bridge=True,
-        use_datafusion_bridge=args.use_datafusion_bridge,
+    determinism_override = _parse_determinism_tier(args.determinism_tier)
+    result = build_graph_product(
+        GraphProductBuildRequest(
+            repo_root=args.repo_root,
+            output_dir=args.output_dir,
+            work_dir=args.work_dir,
+            runtime_profile_name=args.runtime_profile,
+            determinism_override=determinism_override,
+            writer_strategy=args.writer_strategy,
+            scip_index_config=scip_config,
+            incremental_impact_strategy=args.incremental_impact_strategy,
+            include_quality=True,
+            include_extract_errors=True,
+            include_manifest=True,
+            include_run_bundle=True,
+            config={},
+        )
     )
-    options = PipelineExecutionOptions(
-        output_dir=args.output_dir,
-        work_dir=args.work_dir,
-        scip_index_config=scip_config,
-        adapter_mode=adapter_mode,
-        incremental_impact_strategy=args.incremental_impact_strategy,
+    logger.info(
+        "Build complete. Output dir=%s bundle=%s",
+        result.output_dir,
+        result.run_bundle_dir,
     )
-    results = execute_pipeline(repo_root=args.repo_root, options=options)
-    logger.info("Pipeline complete. Outputs: %s", sorted(results))
+    logger.info("Pipeline outputs: %s", sorted(result.pipeline_outputs))
     return 0
 
 

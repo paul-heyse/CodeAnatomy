@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import os
 from collections.abc import Mapping
 from dataclasses import replace
@@ -12,11 +11,13 @@ from typing import Literal
 from hamilton.function_modifiers import tag
 from ibis.backends import BaseBackend
 
-from arrowdsl.core.context import ExecutionContext, execution_context_factory
-from config import AdapterMode
+from arrowdsl.core.context import DeterminismTier, ExecutionContext
 from core_types import JsonDict
 from datafusion_engine.runtime import AdapterExecutionPolicy
 from engine.plan_policy import ExecutionSurfacePolicy, WriterStrategy
+from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
+from engine.session import EngineSession
+from engine.session_factory import build_engine_session
 from extract.scip_extract import SCIPParseOptions
 from hamilton_pipeline.pipeline_types import (
     OutputConfig,
@@ -27,10 +28,11 @@ from hamilton_pipeline.pipeline_types import (
     ScipIndexConfig,
     TreeSitterConfig,
 )
-from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
-from ibis_engine.execution import IbisAdapterExecution
+from ibis_engine.execution import IbisExecutionContext
 from incremental.types import IncrementalConfig
+from obs.diagnostics import DiagnosticsCollector
+from relspec.cpg.build_props import PropsBuildOptions
 from relspec.pipeline_policy import PipelinePolicy
 
 
@@ -42,7 +44,60 @@ def _incremental_pipeline_enabled(config: IncrementalConfig | None = None) -> bo
 
 
 @tag(layer="inputs", kind="runtime")
-def ctx() -> ExecutionContext:
+def runtime_profile_name() -> str:
+    """Return the runtime profile name for execution.
+
+    Returns
+    -------
+    str
+        Runtime profile name (defaults to "default").
+    """
+    return os.environ.get("CODEANATOMY_RUNTIME_PROFILE", "").strip() or "default"
+
+
+@tag(layer="inputs", kind="runtime")
+def determinism_override() -> DeterminismTier | None:
+    """Return an optional determinism tier override.
+
+    Returns
+    -------
+    DeterminismTier | None
+        Override tier when requested, otherwise ``None``.
+    """
+    force_flag = os.environ.get("CODEANATOMY_FORCE_TIER2", "").strip().lower()
+    if force_flag in {"1", "true", "yes", "y"}:
+        return DeterminismTier.CANONICAL
+    tier = os.environ.get("CODEANATOMY_DETERMINISM_TIER", "").strip().lower()
+    mapping: dict[str, DeterminismTier] = {
+        "tier2": DeterminismTier.CANONICAL,
+        "canonical": DeterminismTier.CANONICAL,
+        "tier1": DeterminismTier.STABLE_SET,
+        "stable": DeterminismTier.STABLE_SET,
+        "stable_set": DeterminismTier.STABLE_SET,
+        "tier0": DeterminismTier.BEST_EFFORT,
+        "fast": DeterminismTier.BEST_EFFORT,
+        "best_effort": DeterminismTier.BEST_EFFORT,
+    }
+    return mapping.get(tier)
+
+
+@tag(layer="inputs", kind="runtime")
+def runtime_profile_spec(
+    runtime_profile_name: str,
+    determinism_override: DeterminismTier | None,
+) -> RuntimeProfileSpec:
+    """Return a resolved runtime profile spec.
+
+    Returns
+    -------
+    RuntimeProfileSpec
+        Runtime profile spec with determinism overrides applied.
+    """
+    return resolve_runtime_profile(runtime_profile_name, determinism=determinism_override)
+
+
+@tag(layer="inputs", kind="runtime")
+def ctx(runtime_profile_spec: RuntimeProfileSpec) -> ExecutionContext:
     """Build the execution context for Arrow DSL execution.
 
     Returns
@@ -50,11 +105,49 @@ def ctx() -> ExecutionContext:
     ExecutionContext
         Default execution context instance.
     """
-    return execution_context_factory("default")
+    runtime = runtime_profile_spec.runtime
+    runtime.apply_global_thread_pools()
+    return ExecutionContext(runtime=runtime)
 
 
 @tag(layer="inputs", kind="runtime")
-def ibis_backend_config(ctx: ExecutionContext) -> IbisBackendConfig:
+def diagnostics_collector() -> DiagnosticsCollector:
+    """Return a diagnostics collector for the run.
+
+    Returns
+    -------
+    DiagnosticsCollector
+        Collector for diagnostics events and artifacts.
+    """
+    return DiagnosticsCollector()
+
+
+@tag(layer="inputs", kind="runtime")
+def engine_session(
+    ctx: ExecutionContext,
+    runtime_profile_spec: RuntimeProfileSpec,
+    diagnostics_collector: DiagnosticsCollector,
+    execution_surface_policy: ExecutionSurfacePolicy,
+    pipeline_policy: PipelinePolicy,
+) -> EngineSession:
+    """Build an engine session for downstream execution surfaces.
+
+    Returns
+    -------
+    EngineSession
+        Session containing runtime surfaces and diagnostics wiring.
+    """
+    return build_engine_session(
+        ctx=ctx,
+        runtime_spec=runtime_profile_spec,
+        diagnostics=diagnostics_collector,
+        surface_policy=execution_surface_policy,
+        diagnostics_policy=pipeline_policy.diagnostics,
+    )
+
+
+@tag(layer="inputs", kind="runtime")
+def ibis_backend_config(engine_session: EngineSession) -> IbisBackendConfig:
     """Return the default Ibis backend configuration.
 
     Returns
@@ -63,13 +156,13 @@ def ibis_backend_config(ctx: ExecutionContext) -> IbisBackendConfig:
         Backend configuration for Ibis execution.
     """
     return IbisBackendConfig(
-        datafusion_profile=ctx.runtime.datafusion,
-        fuse_selects=ctx.runtime.ibis_fuse_selects,
+        datafusion_profile=engine_session.df_profile,
+        fuse_selects=engine_session.runtime_profile.ibis_fuse_selects,
     )
 
 
 @tag(layer="inputs", kind="runtime")
-def ibis_backend(ibis_backend_config: IbisBackendConfig) -> BaseBackend:
+def ibis_backend(engine_session: EngineSession) -> BaseBackend:
     """Return a configured Ibis backend for pipeline execution.
 
     Returns
@@ -77,28 +170,25 @@ def ibis_backend(ibis_backend_config: IbisBackendConfig) -> BaseBackend:
     ibis.backends.BaseBackend
         Backend instance for Ibis execution.
     """
-    return build_backend(ibis_backend_config)
+    return engine_session.ibis_backend
 
 
 @tag(layer="inputs", kind="runtime")
 def ibis_execution(
-    ctx: ExecutionContext,
-    adapter_mode: AdapterMode,
+    engine_session: EngineSession,
     adapter_execution_policy: AdapterExecutionPolicy,
-    ibis_backend: BaseBackend,
-) -> IbisAdapterExecution:
-    """Bundle adapter execution settings for Ibis plans.
+) -> IbisExecutionContext:
+    """Bundle execution settings for Ibis plans.
 
     Returns
     -------
-    IbisAdapterExecution
-        Execution context used by adapterized Ibis materialization.
+    IbisExecutionContext
+        Execution context used for Ibis materialization.
     """
-    return IbisAdapterExecution(
-        ctx=ctx,
-        adapter_mode=adapter_mode,
+    return IbisExecutionContext(
+        ctx=engine_session.ctx,
         execution_policy=adapter_execution_policy,
-        ibis_backend=ibis_backend,
+        ibis_backend=engine_session.ibis_backend,
     )
 
 
@@ -119,35 +209,24 @@ def streaming_table_provider(incremental_config: IncrementalConfig) -> object | 
     flag = os.environ.get("CODEANATOMY_ENABLE_STREAMING_TABLES", "").strip().lower()
     if flag not in {"1", "true", "yes", "y"}:
         return None
-    try:
-        module = importlib.import_module("datafusion_ext")
-    except ImportError:
-        return None
-    factory = getattr(module, "streaming_table_provider", None)
-    if callable(factory):
-        provider = factory()
-        if isinstance(provider, bool):
-            return None
-        return provider
     return None
 
 
-@tag(layer="inputs", kind="runtime")
-def adapter_mode(ctx: ExecutionContext) -> AdapterMode:
-    """Return the adapter mode flags for plan execution.
+@tag(layer="inputs", kind="cpg")
+def cpg_props_options() -> PropsBuildOptions:
+    """Return CPG properties build options.
 
     Returns
     -------
-    AdapterMode
-        Adapter mode configuration bundle.
+    PropsBuildOptions
+        Options controlling CPG property emission.
     """
-    mode = AdapterMode()
-    if ctx.debug:
-        return replace(mode, use_datafusion_bridge=True)
-    flag = os.environ.get("CODEANATOMY_USE_DATAFUSION_BRIDGE", "").strip().lower()
-    if flag in {"1", "true", "yes", "y"}:
-        return replace(mode, use_datafusion_bridge=True)
-    return mode
+    include_json = os.environ.get("CODEANATOMY_INCLUDE_JSON_PROPS", "").strip().lower()
+    merge_json = os.environ.get("CODEANATOMY_MERGE_JSON_PROPS", "").strip().lower()
+    return PropsBuildOptions(
+        include_heavy_json_props=include_json in {"1", "true", "yes", "y"},
+        merge_json_props=merge_json in {"1", "true", "yes", "y"},
+    )
 
 
 @tag(layer="inputs", kind="runtime")

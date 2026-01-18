@@ -10,7 +10,7 @@ import pyarrow as pa
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.context import ExecutionContext, Ordering
-from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, Table, TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.plan.query import ScanTelemetry
 from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.schema import EncodingSpec, empty_table, encode_table
@@ -170,13 +170,14 @@ def _edge_relation_context(
     edges_schema = registry.edges_spec().schema()
     options = config.options or EdgeBuildOptions()
     inputs = config.inputs
-    if inputs is None and config.legacy:
-        inputs = _edge_inputs_from_legacy(config.legacy)
+    if inputs is None:
+        msg = "EdgeBuildConfig.inputs is required for CPG edge compilation."
+        raise ValueError(msg)
     backend = config.ibis_backend
     if backend is None:
         msg = "Ibis backend is required for CPG edge compilation."
         raise ValueError(msg)
-    catalog = _edge_catalog(inputs or EdgeBuildInputs(), backend=backend)
+    catalog = _edge_catalog(inputs, backend=backend)
     spec_tables = config.spec_tables or EdgeSpecOverrides()
     relation_rule_table = spec_tables.relation_rule_table or registry.relation_rule_table
     relation_bundle = compile_relation_plans_ibis(
@@ -209,7 +210,6 @@ class EdgeBuildConfig:
     options: EdgeBuildOptions | None = None
     spec_tables: EdgeSpecOverrides | None = None
     registry: CpgRegistry | None = None
-    legacy: Mapping[str, object] | None = None
     materialize_relation_outputs: bool | None = None
     required_relation_sources: tuple[str, ...] | None = None
     execution_policy: AdapterExecutionPolicy | None = None
@@ -226,7 +226,6 @@ def _resolve_edge_config(config: EdgeBuildConfig | None) -> EdgeBuildConfig:
         options=resolved.options,
         spec_tables=resolved.spec_tables,
         registry=default_cpg_registry(),
-        legacy=resolved.legacy,
         materialize_relation_outputs=resolved.materialize_relation_outputs,
         required_relation_sources=resolved.required_relation_sources,
         execution_policy=resolved.execution_policy,
@@ -262,34 +261,6 @@ def _merge_edge_config(
     if resolved.surface_policy is None:
         resolved = replace(resolved, surface_policy=session.surface_policy)
     return resolved
-
-
-def _edge_inputs_from_legacy(legacy: Mapping[str, object]) -> EdgeBuildInputs:
-    def _maybe_table(value: object) -> TableLike | None:
-        if isinstance(value, Table):
-            return value
-        return None
-
-    relationship_outputs = legacy.get("relationship_outputs")
-    scip_symbol_relationships = legacy.get("scip_symbol_relationships")
-    diagnostics_norm = legacy.get("diagnostics_norm")
-    repo_files = legacy.get("repo_files")
-    type_exprs_norm = legacy.get("type_exprs_norm")
-    rt_signatures = legacy.get("rt_signatures")
-    rt_signature_params = legacy.get("rt_signature_params")
-    rt_members = legacy.get("rt_members")
-    return EdgeBuildInputs(
-        relationship_outputs=relationship_outputs
-        if isinstance(relationship_outputs, Mapping)
-        else None,
-        scip_symbol_relationships=_maybe_table(scip_symbol_relationships),
-        diagnostics_norm=_maybe_table(diagnostics_norm),
-        repo_files=_maybe_table(repo_files),
-        type_exprs_norm=_maybe_table(type_exprs_norm),
-        rt_signatures=_maybe_table(rt_signatures),
-        rt_signature_params=_maybe_table(rt_signature_params),
-        rt_members=_maybe_table(rt_members),
-    )
 
 
 def _edge_catalog(

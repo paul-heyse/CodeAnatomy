@@ -11,20 +11,13 @@ import ibis
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.types as patypes
-from ibis.expr.types import Table
+from ibis.backends import BaseBackend
+from ibis.expr.types import BooleanValue, Table
 
-from arrowdsl.core.context import ExecutionContext, OrderingLevel
+from arrowdsl.core.context import ExecutionContext, Ordering, OrderingLevel
 from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeContext
 from arrowdsl.plan.ops import DedupeSpec, SortKey
-from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.query import (
-    DatasetDiscoveryOptions,
-    DatasetSourceOptions,
-    PathLike,
-    open_dataset,
-)
-from arrowdsl.plan.runner_types import PlanRunResultProto, plan_runner_module
 from arrowdsl.schema.metadata import (
     encoding_policy_from_spec,
     merge_metadata_specs,
@@ -39,16 +32,18 @@ from arrowdsl.schema.schema import (
     EncodingPolicy,
     SchemaEvolutionSpec,
     SchemaMetadataSpec,
+    missing_key_fields,
     register_schema_extensions,
+    required_field_names,
 )
-from arrowdsl.schema.validation import (
-    ArrowValidationOptions,
-    duplicate_key_rows_plan,
-    invalid_rows_plan,
-    validate_table,
-)
+from arrowdsl.schema.validation import ArrowValidationOptions, validate_table
 from arrowdsl.spec.io import read_spec_table
+from ibis_engine.backend import build_backend
+from ibis_engine.config import IbisBackendConfig
+from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
+from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
+from ibis_engine.scan_io import DatasetSource, PlanSource, plan_from_dataset, plan_from_source
 from schema_spec.specs import (
     ENCODING_DICTIONARY,
     ENCODING_META,
@@ -58,10 +53,15 @@ from schema_spec.specs import (
     FieldBundle,
     TableSchemaSpec,
 )
+from storage.dataset_sources import (
+    DatasetDiscoveryOptions,
+    DatasetSourceOptions,
+    PathLike,
+    normalize_dataset_source,
+)
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
-    from arrowdsl.plan.scan_io import DatasetSource, PlanSource
     from arrowdsl.spec.expr_ir import ExprIR
     from arrowdsl.spec.tables.schema import SchemaSpecTables
 
@@ -277,6 +277,21 @@ class DatasetSpec:
         merged = merge_metadata_specs(self.metadata_spec, ordering)
         return merged.apply(self.table_spec.to_arrow_schema())
 
+    def ordering(self) -> Ordering:
+        """Return ordering metadata derived from the dataset spec.
+
+        Returns
+        -------
+        Ordering
+            Ordering metadata inferred from contract and schema settings.
+        """
+        if self.contract_spec is not None and self.contract_spec.canonical_sort:
+            keys = tuple((key.column, key.order) for key in self.contract_spec.canonical_sort)
+            return Ordering.explicit(keys)
+        if self.table_spec.key_fields:
+            return Ordering.implicit()
+        return Ordering.unordered()
+
     def query(self) -> IbisQuerySpec:
         """Return the query spec, deriving it from the table spec if needed.
 
@@ -334,12 +349,27 @@ class DatasetSpec:
         """
         return self.table_spec.to_create_external_table_sql(config)
 
-    def _plan_for_validation(self, source: PlanSource, *, ctx: ExecutionContext) -> Plan:
-        if isinstance(source, ds.Dataset):
-            return _plan_from_dataset(source, spec=self, ctx=ctx)
-        if isinstance(source, _dataset_source_class()):
-            return _plan_from_dataset(source.dataset, spec=self, ctx=ctx)
-        return _plan_from_source(source, ctx=ctx, label=f"{self.name}_validate")
+    def _plan_for_validation(
+        self,
+        source: PlanSource,
+        *,
+        ctx: ExecutionContext,
+        backend: BaseBackend,
+    ) -> IbisPlan:
+        if isinstance(source, DatasetSource):
+            return plan_from_dataset(
+                source.dataset,
+                spec=self,
+                ctx=ctx,
+                backend=backend,
+                name=self.name,
+            )
+        return plan_from_source(
+            source,
+            ctx=ctx,
+            backend=backend,
+            name=f"{self.name}_validate",
+        )
 
     def validation_plans(self, source: PlanSource, *, ctx: ExecutionContext) -> ValidationPlans:
         """Return plan-lane validation pipelines for invalid rows and duplicate keys.
@@ -349,9 +379,10 @@ class DatasetSpec:
         ValidationPlans
             Plans for invalid rows and duplicate keys.
         """
-        plan = self._plan_for_validation(source, ctx=ctx)
-        invalid = invalid_rows_plan(plan, spec=self.table_spec, ctx=ctx)
-        dupes = duplicate_key_rows_plan(plan, keys=self.table_spec.key_fields, ctx=ctx)
+        backend = _ibis_backend_for_ctx(ctx)
+        plan = self._plan_for_validation(source, ctx=ctx, backend=backend)
+        invalid = _invalid_rows_plan(plan, spec=self.table_spec)
+        dupes = _duplicate_key_rows_plan(plan, keys=self.table_spec.key_fields)
         return ValidationPlans(invalid_rows=invalid, duplicate_keys=dupes)
 
     def finalize_context(self, ctx: ExecutionContext) -> FinalizeContext:
@@ -421,8 +452,8 @@ class DatasetSpec:
 class ValidationPlans:
     """Plan-lane validation outputs for a dataset."""
 
-    invalid_rows: Plan
-    duplicate_keys: Plan
+    invalid_rows: IbisPlan
+    duplicate_keys: IbisPlan
 
     def to_tables(self, *, ctx: ExecutionContext) -> tuple[TableLike, TableLike]:
         """Materialize validation plans into Arrow tables.
@@ -432,81 +463,52 @@ class ValidationPlans:
         tuple[TableLike, TableLike]
             Invalid rows and duplicate key tables.
         """
-        invalid = _run_plan(
-            self.invalid_rows,
-            ctx=ctx,
-            prefer_reader=False,
-            attach_ordering_metadata=True,
-        ).value
-        dupes = _run_plan(
-            self.duplicate_keys,
-            ctx=ctx,
-            prefer_reader=False,
-            attach_ordering_metadata=True,
-        ).value
-        return cast("TableLike", invalid), cast("TableLike", dupes)
+        execution = _ibis_execution_for_ctx(ctx)
+        invalid = materialize_ibis_plan(self.invalid_rows, execution=execution)
+        dupes = materialize_ibis_plan(self.duplicate_keys, execution=execution)
+        return invalid, dupes
 
 
-def _run_plan(
-    plan: Plan,
-    *,
-    ctx: ExecutionContext,
-    prefer_reader: bool,
-    attach_ordering_metadata: bool,
-) -> PlanRunResultProto:
-    module = plan_runner_module()
-    return module.run_plan(
-        plan,
-        ctx=ctx,
-        prefer_reader=prefer_reader,
-        attach_ordering_metadata=attach_ordering_metadata,
+def _ibis_backend_for_ctx(ctx: ExecutionContext) -> BaseBackend:
+    return build_backend(IbisBackendConfig(datafusion_profile=ctx.runtime.datafusion))
+
+
+def _ibis_execution_for_ctx(ctx: ExecutionContext) -> IbisExecutionContext:
+    return IbisExecutionContext(ctx=ctx, ibis_backend=_ibis_backend_for_ctx(ctx))
+
+
+def _empty_validation_plan() -> IbisPlan:
+    empty = ibis.memtable(pa.table({}))
+    return IbisPlan(expr=empty, ordering=Ordering.unordered())
+
+
+def _invalid_rows_plan(plan: IbisPlan, *, spec: TableSchemaSpec) -> IbisPlan:
+    required = required_field_names(spec)
+    available = set(plan.expr.columns)
+    predicates = [plan.expr[name].isnull() for name in required if name in available]
+    if not predicates:
+        filtered = plan.expr.filter(cast("BooleanValue", ibis.literal(value=False)))
+        return IbisPlan(expr=filtered, ordering=Ordering.unordered())
+    predicate = predicates[0]
+    for part in predicates[1:]:
+        predicate |= part
+    filtered = plan.expr.filter(predicate)
+    return IbisPlan(expr=filtered, ordering=Ordering.unordered())
+
+
+def _duplicate_key_rows_plan(plan: IbisPlan, *, keys: Sequence[str]) -> IbisPlan:
+    if not keys:
+        return _empty_validation_plan()
+    available = set(plan.expr.columns)
+    missing = missing_key_fields(keys, missing_cols=[key for key in keys if key not in available])
+    if missing:
+        return _empty_validation_plan()
+    count_col = f"{keys[0]}_count"
+    grouped = plan.expr.group_by([plan.expr[key] for key in keys]).aggregate(
+        **{count_col: plan.expr[keys[0]].count()}
     )
-
-
-class _ScanIOModule(Protocol):
-    DatasetSource: type[DatasetSource]
-
-    def plan_from_dataset(
-        self,
-        dataset: ds.Dataset,
-        *,
-        spec: DatasetSpec,
-        ctx: ExecutionContext,
-    ) -> Plan: ...
-
-    def plan_from_source(
-        self,
-        source: PlanSource,
-        *,
-        ctx: ExecutionContext,
-        label: str,
-    ) -> Plan: ...
-
-
-def _scan_io_module() -> _ScanIOModule:
-    return cast("_ScanIOModule", importlib.import_module("arrowdsl.plan.scan_io"))
-
-
-def _dataset_source_class() -> type[DatasetSource]:
-    return _scan_io_module().DatasetSource
-
-
-def _plan_from_dataset(
-    dataset: ds.Dataset,
-    *,
-    spec: DatasetSpec,
-    ctx: ExecutionContext,
-) -> Plan:
-    return _scan_io_module().plan_from_dataset(dataset, spec=spec, ctx=ctx)
-
-
-def _plan_from_source(
-    source: PlanSource,
-    *,
-    ctx: ExecutionContext,
-    label: str,
-) -> Plan:
-    return _scan_io_module().plan_from_source(source, ctx=ctx, label=label)
+    filtered = grouped.filter(grouped[count_col] > ibis.literal(1))
+    return IbisPlan(expr=filtered, ordering=Ordering.unordered())
 
 
 class _SpecTablesModule(Protocol):
@@ -618,7 +620,7 @@ class DatasetOpenSpec:
         """
         if self.schema is not None:
             register_schema_extensions(self.schema)
-        return open_dataset(
+        return normalize_dataset_source(
             path,
             options=DatasetSourceOptions(
                 dataset_format=self.dataset_format,

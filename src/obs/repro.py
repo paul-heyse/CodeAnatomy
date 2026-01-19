@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import hashlib
 import json
 import platform
 import re
@@ -20,12 +19,12 @@ from pathlib import Path
 from typing import cast
 
 import pyarrow as pa
-from sqlglot.serde import load as sqlglot_load
+from sqlglot import parse_one
+from sqlglot.errors import ParseError
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.finalize.finalize import Contract
 from arrowdsl.io.ipc import IpcWriteInput, ipc_write_config_payload, write_ipc_bundle
-from arrowdsl.json_factory import JsonPolicy, dump_path, dumps_bytes, json_default
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from arrowdsl.spec.io import IpcWriteConfig, write_spec_table
@@ -35,6 +34,7 @@ from engine.plan_product import PlanProduct
 from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
 from ibis_engine.params_bridge import ScalarParamSpec
 from obs.parquet_writers import write_obs_dataset
+from registry_common.arrow_payloads import payload_hash
 from relspec.compiler import CompiledOutput
 from relspec.model import RelationshipRule
 from relspec.param_deps import RuleDependencyReport
@@ -140,8 +140,42 @@ def _ensure_dir(path: Path) -> None:
 
 def _write_json(path: PathLike, data: JsonValue, *, overwrite: bool = True) -> str:
     target = ensure_path(path)
-    policy = JsonPolicy(pretty=True, sort_keys=True)
-    return dump_path(target, data, policy=policy, overwrite=overwrite)
+    if target.exists() and not overwrite:
+        msg = f"Target already exists at {target}."
+        raise FileExistsError(msg)
+    _ensure_dir(target.parent)
+    with target.open("w", encoding="utf-8") as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=2, sort_keys=True)
+    return str(target)
+
+
+def _normalize_value(value: object) -> object:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, bytes):
+        return value.hex()
+    if isinstance(value, Mapping):
+        return {str(key): _normalize_value(val) for key, val in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_normalize_value(item) for item in value]
+    return _stable_repr(value)
+
+
+def _stable_repr(value: object) -> str:
+    if isinstance(value, Mapping):
+        items = ", ".join(
+            f"{_stable_repr(key)}:{_stable_repr(val)}"
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+        return f"{{{items}}}"
+    if isinstance(value, (list, tuple, set)):
+        rendered = [_stable_repr(item) for item in value]
+        if isinstance(value, set):
+            rendered = sorted(rendered)
+        items = ", ".join(rendered)
+        bracket = "()" if isinstance(value, tuple) else "[]"
+        return f"{bracket[0]}{items}{bracket[1]}"
+    return repr(value)
 
 
 # -----------------------
@@ -214,19 +248,19 @@ def serialize_relationship_rule(rule: RelationshipRule) -> JsonDict:
         "priority": int(rule.priority),
         "emit_rule_meta": bool(rule.emit_rule_meta),
         "inputs": inputs,
-        "hash_join": cast("JsonValue", json_default(rule.hash_join))
+        "hash_join": cast("JsonValue", _normalize_value(rule.hash_join))
         if rule.hash_join is not None
         else None,
-        "interval_align": cast("JsonValue", json_default(rule.interval_align))
+        "interval_align": cast("JsonValue", _normalize_value(rule.interval_align))
         if rule.interval_align is not None
         else None,
-        "winner_select": cast("JsonValue", json_default(rule.winner_select))
+        "winner_select": cast("JsonValue", _normalize_value(rule.winner_select))
         if rule.winner_select is not None
         else None,
-        "project": cast("JsonValue", json_default(rule.project))
+        "project": cast("JsonValue", _normalize_value(rule.project))
         if rule.project is not None
         else None,
-        "post_kernels": [cast("JsonValue", json_default(k)) for k in rule.post_kernels],
+        "post_kernels": [cast("JsonValue", _normalize_value(k)) for k in rule.post_kernels],
     }
 
 
@@ -326,9 +360,19 @@ def make_run_bundle_name(
         ts = int(created_value)
     else:
         ts = int(time.time())
-    policy = JsonPolicy(sort_keys=True)
-    payload = dumps_bytes({"manifest": run_manifest, "config": run_config}, policy=policy)
-    h = hashlib.sha256(payload).hexdigest()[:10]
+    payload = {
+        "version": 1,
+        "manifest_repr": _stable_repr(run_manifest),
+        "config_repr": _stable_repr(run_config),
+    }
+    schema = pa.schema(
+        [
+            pa.field("version", pa.int32(), nullable=False),
+            pa.field("manifest_repr", pa.string(), nullable=False),
+            pa.field("config_repr", pa.string(), nullable=False),
+        ]
+    )
+    h = payload_hash(payload, schema)[:10]
     return f"run_{ts}_{h}"
 
 
@@ -556,7 +600,7 @@ def _write_runtime_artifacts(
     files_written: list[str],
 ) -> None:
     def _json_list(entries: Sequence[object]) -> list[JsonValue]:
-        return [cast("JsonValue", json_default(entry)) for entry in entries]
+        return [cast("JsonValue", _normalize_value(entry)) for entry in entries]
 
     json_artifacts = [
         ("datafusion_metrics.json", context.datafusion_metrics),
@@ -565,7 +609,7 @@ def _write_runtime_artifacts(
             "datafusion_function_catalog.json",
             cast(
                 "JsonValue",
-                json_default(
+                _normalize_value(
                     {
                         "functions": context.datafusion_function_catalog,
                         "hash": context.datafusion_function_catalog_hash,
@@ -577,7 +621,7 @@ def _write_runtime_artifacts(
         ),
         (
             "datafusion_write_policy.json",
-            cast("JsonValue", json_default(context.datafusion_write_policy))
+            cast("JsonValue", _normalize_value(context.datafusion_write_policy))
             if context.datafusion_write_policy
             else None,
         ),
@@ -585,7 +629,7 @@ def _write_runtime_artifacts(
             "function_registry_snapshot.json",
             cast(
                 "JsonValue",
-                json_default(
+                _normalize_value(
                     {
                         "snapshot": context.function_registry_snapshot,
                         "hash": context.function_registry_hash,
@@ -597,7 +641,7 @@ def _write_runtime_artifacts(
         ),
         (
             "arrow_kernel_registry.json",
-            cast("JsonValue", json_default(context.arrow_kernel_registry))
+            cast("JsonValue", _normalize_value(context.arrow_kernel_registry))
             if context.arrow_kernel_registry
             else None,
         ),
@@ -920,14 +964,9 @@ def _write_sqlglot_ast_payloads(
     payloads: list[JsonDict] = []
     for diagnostic in diagnostics:
         metadata = diagnostic.metadata
-        raw_payload = metadata.get("ast_payload_raw")
-        optimized_payload = metadata.get("ast_payload_optimized")
-        if not raw_payload or not optimized_payload:
-            continue
-        try:
-            raw_ast = json.loads(raw_payload)
-            optimized_ast = json.loads(optimized_payload)
-        except (json.JSONDecodeError, TypeError):
+        raw_sql = metadata.get("raw_sql")
+        optimized_sql = metadata.get("optimized_sql")
+        if not raw_sql or not optimized_sql:
             continue
         payloads.append(
             {
@@ -936,11 +975,13 @@ def _write_sqlglot_ast_payloads(
                 "plan_signature": diagnostic.plan_signature,
                 "plan_fingerprint": metadata.get("plan_fingerprint"),
                 "sqlglot_policy_hash": metadata.get("sqlglot_policy_hash"),
+                "sql_dialect": metadata.get("sql_dialect"),
                 "normalization_distance": metadata.get("normalization_distance"),
                 "normalization_max_distance": metadata.get("normalization_max_distance"),
                 "normalization_applied": metadata.get("normalization_applied"),
-                "raw_ast": raw_ast,
-                "optimized_ast": optimized_ast,
+                "raw_sql": raw_sql,
+                "optimized_sql": optimized_sql,
+                "ast_repr": metadata.get("ast_repr"),
             }
         )
     if payloads:
@@ -962,24 +1003,21 @@ def _write_sqlglot_planner_dag(
     payloads: list[JsonDict] = []
     for diagnostic in diagnostics:
         metadata = diagnostic.metadata
-        optimized_payload = metadata.get("ast_payload_optimized")
-        if not optimized_payload:
+        optimized_sql = metadata.get("optimized_sql")
+        if not optimized_sql:
             continue
+        dialect = metadata.get("sql_dialect") or "datafusion_ext"
         try:
-            optimized_ast = json.loads(optimized_payload)
-        except (json.JSONDecodeError, TypeError):
+            expr = parse_one(optimized_sql, read=dialect)
+        except (TypeError, ValueError, ParseError):
             continue
-        try:
-            expr = sqlglot_load(optimized_ast)
-        except (TypeError, ValueError):
-            continue
-        dag = planner_dag_snapshot(expr)
+        dag = planner_dag_snapshot(expr, dialect=dialect)
         steps = [
-            {str(key): cast("JsonValue", json_default(value)) for key, value in row.items()}
+            {str(key): cast("JsonValue", _normalize_value(value)) for key, value in row.items()}
             for row in dag.steps
         ]
         edges = [
-            {str(key): cast("JsonValue", json_default(value)) for key, value in row.items()}
+            {str(key): cast("JsonValue", _normalize_value(value)) for key, value in row.items()}
             for row in dag.edges
         ]
         payloads.append(
@@ -989,6 +1027,7 @@ def _write_sqlglot_planner_dag(
                 "plan_signature": diagnostic.plan_signature,
                 "plan_fingerprint": metadata.get("plan_fingerprint"),
                 "sqlglot_policy_hash": metadata.get("sqlglot_policy_hash"),
+                "sql_dialect": dialect,
                 "planner_dag_hash": dag.dag_hash,
                 "steps": steps,
                 "edges": edges,
@@ -1015,16 +1054,12 @@ def _write_sqlglot_qualification_failures(
         payload_raw = diagnostic.metadata.get("qualification_payload")
         if not payload_raw:
             continue
-        try:
-            payload = json.loads(payload_raw)
-        except (json.JSONDecodeError, TypeError):
-            continue
         payloads.append(
             {
                 "domain": str(diagnostic.domain),
                 "rule_name": diagnostic.rule_name,
                 "plan_signature": diagnostic.plan_signature,
-                "payload": payload,
+                "payload": payload_raw,
             }
         )
     if payloads:
@@ -1315,7 +1350,7 @@ def _scalar_param_spec_payload(spec: ScalarParamSpec) -> JsonDict:
     return {
         "name": spec.name,
         "dtype": spec.dtype,
-        "default": cast("JsonValue", json_default(spec.default)),
+        "default": cast("JsonValue", _normalize_value(spec.default)),
         "required": bool(spec.required),
     }
 

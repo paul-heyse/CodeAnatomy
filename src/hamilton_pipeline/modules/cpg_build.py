@@ -15,8 +15,7 @@ from ibis.expr.types import Value as IbisValue
 from arrowdsl.compute.ids import apply_hash_column
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
-from arrowdsl.plan.query import ScanTelemetry
-from arrowdsl.plan.scan_io import DatasetSource
+from arrowdsl.plan.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import align_table, empty_table
 from cpg.constants import CpgBuildArtifacts
 from cpg.schemas import register_cpg_specs
@@ -50,6 +49,7 @@ from ibis_engine.param_tables import (
 )
 from ibis_engine.params_bridge import IbisParamRegistry, registry_from_specs, specs_from_rel_ops
 from ibis_engine.plan import IbisPlan
+from ibis_engine.scan_io import DatasetSource
 from incremental.publish import (
     publish_cpg_edges,
     publish_cpg_nodes,

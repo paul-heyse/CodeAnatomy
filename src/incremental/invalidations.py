@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import cast
 
 import pyarrow as pa
 
@@ -15,12 +14,55 @@ from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.metadata import schema_identity_from_metadata
 from ibis_engine.plan_diff import DiffOpEntry, semantic_diff_sql
 from incremental.state_store import StateStore
+from registry_common.arrow_payloads import payload_hash
 from relspec.rules.cache import (
     rule_graph_signature_cached,
     rule_plan_signatures_cached,
     rule_plan_sql_cached,
 )
 from schema_spec.system import SchemaRegistry
+from storage.deltalake import (
+    DeltaWriteOptions,
+    enable_delta_features,
+    read_table_delta,
+    write_table_delta,
+)
+
+INVALIDATION_SNAPSHOT_VERSION = 1
+_RULE_SIGNATURE_ENTRY = pa.struct(
+    [
+        pa.field("rule_name", pa.string(), nullable=False),
+        pa.field("signature", pa.string(), nullable=False),
+    ]
+)
+_RULE_SQL_ENTRY = pa.struct(
+    [
+        pa.field("rule_name", pa.string(), nullable=False),
+        pa.field("sql", pa.string(), nullable=False),
+    ]
+)
+_DATASET_IDENTITY_ENTRY = pa.struct(
+    [
+        pa.field("dataset_name", pa.string(), nullable=False),
+        pa.field("schema_name", pa.string(), nullable=True),
+        pa.field("schema_version", pa.int64(), nullable=True),
+    ]
+)
+_INVALIDATION_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32(), nullable=False),
+        pa.field("rule_graph_signature", pa.string(), nullable=False),
+        pa.field("rule_plan_signatures", pa.list_(_RULE_SIGNATURE_ENTRY), nullable=False),
+        pa.field("rule_plan_sql", pa.list_(_RULE_SQL_ENTRY), nullable=False),
+        pa.field("dataset_identities", pa.list_(_DATASET_IDENTITY_ENTRY), nullable=False),
+    ]
+)
+_SQL_HASH_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32(), nullable=False),
+        pa.field("sql", pa.string(), nullable=False),
+    ]
+)
 
 
 @dataclass(frozen=True)
@@ -41,21 +83,19 @@ class InvalidationSnapshot:
     dataset_identities: dict[str, SchemaIdentity]
 
     def to_payload(self) -> dict[str, object]:
-        """Return a JSON-serializable payload for the snapshot.
+        """Return an Arrow-friendly payload for the snapshot.
 
         Returns
         -------
         dict[str, object]
-            Payload suitable for JSON serialization.
+            Payload suitable for IPC serialization.
         """
         return {
-            "rule_plan_signatures": dict(self.rule_plan_signatures),
-            "rule_plan_sql": dict(self.rule_plan_sql),
+            "version": INVALIDATION_SNAPSHOT_VERSION,
             "rule_graph_signature": self.rule_graph_signature,
-            "dataset_identities": {
-                name: {"name": identity.name, "version": identity.version}
-                for name, identity in self.dataset_identities.items()
-            },
+            "rule_plan_signatures": _rule_entries(self.rule_plan_signatures),
+            "rule_plan_sql": _rule_sql_entries(self.rule_plan_sql),
+            "dataset_identities": _dataset_entries(self.dataset_identities),
         }
 
 
@@ -98,13 +138,24 @@ def read_invalidation_snapshot(state_store: StateStore) -> InvalidationSnapshot 
     -------
     InvalidationSnapshot | None
         Snapshot when present, otherwise None.
+
+    Raises
+    ------
+    TypeError
+        Raised when the snapshot payload is not a mapping.
     """
     path = state_store.invalidation_snapshot_path()
     if not path.exists():
         return None
-    with path.open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-    return _snapshot_from_payload(payload)
+    table = cast("pa.Table", read_table_delta(str(path)))
+    rows = table.to_pylist()
+    if not rows:
+        return None
+    row = rows[0]
+    if not isinstance(row, Mapping):
+        msg = "Invalid invalidation snapshot payload."
+        raise TypeError(msg)
+    return _snapshot_from_row(row)
 
 
 def write_invalidation_snapshot(
@@ -116,8 +167,17 @@ def write_invalidation_snapshot(
     path = state_store.invalidation_snapshot_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = snapshot.to_payload()
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=True, sort_keys=True, indent=2)
+    table = pa.Table.from_pylist([payload], schema=_INVALIDATION_SCHEMA)
+    result = write_table_delta(
+        table,
+        str(path),
+        options=DeltaWriteOptions(
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_metadata={"snapshot_kind": "invalidation_snapshot"},
+        ),
+    )
+    enable_delta_features(result.path)
 
 
 def check_state_store_invalidation(
@@ -252,15 +312,23 @@ def _dataset_identities(registry: SchemaRegistry) -> dict[str, SchemaIdentity]:
     return identities
 
 
-def _snapshot_from_payload(payload: object) -> InvalidationSnapshot:
-    if not isinstance(payload, Mapping):
-        msg = "Invalid invalidation snapshot payload."
-        raise TypeError(msg)
-    rule_signatures = _coerce_str_mapping(payload.get("rule_plan_signatures"))
-    rule_plan_sql = _coerce_str_mapping(payload.get("rule_plan_sql"))
-    rule_graph_signature = str(payload.get("rule_graph_signature", ""))
-    dataset_payload = payload.get("dataset_identities")
-    dataset_identities = _coerce_schema_identities(dataset_payload)
+def _snapshot_from_row(row: Mapping[str, object]) -> InvalidationSnapshot:
+    version = row.get("version")
+    if version is not None:
+        if isinstance(version, int) and not isinstance(version, bool):
+            version_value = version
+        elif isinstance(version, (str, bytes, bytearray)):
+            version_value = int(version)
+        else:
+            msg = "Invalid invalidation snapshot version."
+            raise TypeError(msg)
+        if version_value != INVALIDATION_SNAPSHOT_VERSION:
+            msg = "Invalid invalidation snapshot version."
+            raise ValueError(msg)
+    rule_signatures = _coerce_rule_entries(row.get("rule_plan_signatures"))
+    rule_plan_sql = _coerce_rule_sql_entries(row.get("rule_plan_sql"))
+    rule_graph_signature = str(row.get("rule_graph_signature", ""))
+    dataset_identities = _coerce_dataset_entries(row.get("dataset_identities"))
     return InvalidationSnapshot(
         rule_plan_signatures=rule_signatures,
         rule_plan_sql=rule_plan_sql,
@@ -372,36 +440,110 @@ def rule_plan_diff_table(
 def _hash_sql(value: str | None) -> str | None:
     if not value:
         return None
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    payload = {"version": INVALIDATION_SNAPSHOT_VERSION, "sql": value}
+    return payload_hash(payload, _SQL_HASH_SCHEMA)
 
 
 def _edit_script_payload(script: tuple[DiffOpEntry, ...]) -> str | None:
     if not script:
         return None
     payload = [entry.payload() for entry in script]
-    return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    return _stable_repr(payload)
 
 
-def _coerce_str_mapping(value: object) -> dict[str, str]:
-    if not isinstance(value, Mapping):
-        return {}
-    return {str(key): str(item) for key, item in value.items()}
+def _rule_entries(values: Mapping[str, str]) -> list[dict[str, str]]:
+    return [
+        {"rule_name": name, "signature": signature}
+        for name, signature in sorted(values.items())
+    ]
 
 
-def _coerce_schema_identities(value: object) -> dict[str, SchemaIdentity]:
-    if not isinstance(value, Mapping):
-        return {}
-    identities: dict[str, SchemaIdentity] = {}
-    for key, item in value.items():
-        if not isinstance(item, Mapping):
+def _rule_sql_entries(values: Mapping[str, str]) -> list[dict[str, str]]:
+    return [{"rule_name": name, "sql": sql} for name, sql in sorted(values.items())]
+
+
+def _dataset_entries(values: Mapping[str, SchemaIdentity]) -> list[dict[str, object]]:
+    return [
+        {
+            "dataset_name": name,
+            "schema_name": identity.name,
+            "schema_version": identity.version,
+        }
+        for name, identity in sorted(values.items(), key=lambda item: item[0])
+    ]
+
+
+def _coerce_rule_entries(value: object) -> dict[str, str]:
+    entries = _coerce_entry_list(value, label="rule_plan_signatures")
+    resolved: dict[str, str] = {}
+    for entry in entries:
+        name = entry.get("rule_name")
+        signature = entry.get("signature")
+        if name is None or signature is None:
             continue
-        name = item.get("name")
-        version = _coerce_optional_int(item.get("version"))
-        identities[str(key)] = SchemaIdentity(
+        resolved[str(name)] = str(signature)
+    return resolved
+
+
+def _coerce_rule_sql_entries(value: object) -> dict[str, str]:
+    entries = _coerce_entry_list(value, label="rule_plan_sql")
+    resolved: dict[str, str] = {}
+    for entry in entries:
+        name = entry.get("rule_name")
+        sql = entry.get("sql")
+        if name is None or sql is None:
+            continue
+        resolved[str(name)] = str(sql)
+    return resolved
+
+
+def _coerce_dataset_entries(value: object) -> dict[str, SchemaIdentity]:
+    entries = _coerce_entry_list(value, label="dataset_identities")
+    resolved: dict[str, SchemaIdentity] = {}
+    for entry in entries:
+        dataset_name = entry.get("dataset_name")
+        if dataset_name is None:
+            continue
+        name = entry.get("schema_name")
+        version = _coerce_optional_int(entry.get("schema_version"))
+        resolved[str(dataset_name)] = SchemaIdentity(
             name=str(name) if name is not None else None,
             version=version,
         )
-    return identities
+    return resolved
+
+
+def _coerce_entry_list(value: object, *, label: str) -> list[Mapping[str, object]]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        entries: list[Mapping[str, object]] = []
+        for item in value:
+            if isinstance(item, Mapping):
+                entries.append(item)
+            else:
+                msg = f"{label} entries must be mappings."
+                raise TypeError(msg)
+        return entries
+    msg = f"{label} must be a list of mappings."
+    raise TypeError(msg)
+
+
+def _stable_repr(value: object) -> str:
+    if isinstance(value, Mapping):
+        items = ", ".join(
+            f"{_stable_repr(key)}:{_stable_repr(val)}"
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+        return f"{{{items}}}"
+    if isinstance(value, (list, tuple, set)):
+        rendered = [_stable_repr(item) for item in value]
+        if isinstance(value, set):
+            rendered = sorted(rendered)
+        items = ", ".join(rendered)
+        bracket = "()" if isinstance(value, tuple) else "[]"
+        return f"{bracket[0]}{items}{bracket[1]}"
+    return repr(value)
 
 
 def _coerce_optional_int(value: object) -> int | None:

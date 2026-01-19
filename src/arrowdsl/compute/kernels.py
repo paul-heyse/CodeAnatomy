@@ -11,9 +11,9 @@ from typing import Literal, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.core.context import ExecutionContext, Ordering, OrderingLevel
 from arrowdsl.core.determinism import DeterminismTier
+from arrowdsl.core.expr_types import ExplodeSpec
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import base64
 import importlib
-import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pyarrow as pa
 from ibis.expr.types import Table, Value
 
-from arrowdsl.compute.expr_core import ComputeExprSpec, ExprSpec, ScalarValue
+from arrowdsl.compute.expr_core import ComputeExprSpec, ExprSpec
 from arrowdsl.compute.macros import ConstExpr, FieldExpr
 from arrowdsl.compute.options import (
     FunctionOptionsPayload,
@@ -20,6 +20,7 @@ from arrowdsl.compute.options import (
     serialize_options,
 )
 from arrowdsl.compute.registry import ComputeRegistry, UdfSpec, default_registry
+from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.core.interop import (
     ArrayLike,
     ComputeExpression,
@@ -30,7 +31,6 @@ from arrowdsl.core.interop import (
     pc,
 )
 from arrowdsl.ir.expr import expr_from_expr_ir
-from arrowdsl.json_factory import JsonPolicy, dumps_text
 from arrowdsl.schema.build import (
     dictionary_array_from_indices,
     rows_from_table,
@@ -38,16 +38,15 @@ from arrowdsl.schema.build import (
 )
 from arrowdsl.schema.dictionary import normalize_dictionaries
 from arrowdsl.spec.codec import (
-    decode_json_text,
     decode_options_payload,
     decode_scalar_payload,
     decode_scalar_union,
-    encode_json_text,
     encode_options_payload,
     encode_scalar_payload,
     encode_scalar_union,
 )
 from arrowdsl.spec.infra import SCALAR_UNION_TYPE
+from registry_common.arrow_payloads import ipc_table, payload_ipc_bytes
 
 if TYPE_CHECKING:
     from ibis_engine.expr_compiler import IbisExprRegistry
@@ -67,22 +66,6 @@ def _encode_options(options: FunctionOptionsPayload | None) -> object | None:
 
 def _decode_options(payload: object | None) -> bytes | None:
     return decode_options_payload(payload)
-
-
-def _encode_options_text(options: FunctionOptionsPayload | None) -> str | None:
-    return encode_json_text(_options_bytes(options))
-
-
-def _decode_options_text(payload: str | None) -> bytes | None:
-    decoded = decode_json_text(payload)
-    if decoded is None:
-        return None
-    if isinstance(decoded, bytearray):
-        return bytes(decoded)
-    if isinstance(decoded, bytes):
-        return decoded
-    msg = "ExprIR options JSON must decode to bytes."
-    raise TypeError(msg)
 
 
 def _coerce_int(value: object, *, label: str) -> int:
@@ -163,15 +146,33 @@ EXPR_NODE_SCHEMA = pa.schema(
         pa.field("name", pa.string(), nullable=True),
         pa.field("value_union", SCALAR_UNION_TYPE, nullable=True),
         pa.field("args", pa.list_(pa.int64()), nullable=True),
-        pa.field("options_json", pa.string(), nullable=True),
+        pa.field("options_ipc", pa.binary(), nullable=True),
     ],
     metadata={b"spec_kind": b"expr_ir_nodes"},
+)
+EXPR_IR_PAYLOAD_VERSION = 1
+_EXPR_IR_NODE_STRUCT = pa.struct(
+    [
+        pa.field("expr_id", pa.int64(), nullable=False),
+        pa.field("op", pa.string(), nullable=False),
+        pa.field("name", pa.string(), nullable=True),
+        pa.field("value_union", SCALAR_UNION_TYPE, nullable=True),
+        pa.field("args", pa.list_(pa.int64()), nullable=True),
+        pa.field("options_ipc", pa.binary(), nullable=True),
+    ]
+)
+_EXPR_IR_PAYLOAD_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32(), nullable=False),
+        pa.field("root_ids", pa.list_(pa.int64()), nullable=False),
+        pa.field("nodes", pa.list_(_EXPR_IR_NODE_STRUCT), nullable=False),
+    ]
 )
 
 
 @dataclass(frozen=True)
 class ExprIR:
-    """Minimal JSON-serializable expression IR."""
+    """Minimal IPC-serializable expression IR."""
 
     op: str
     name: str | None = None
@@ -314,19 +315,24 @@ class ExprIR:
         return expr_ir_to_ibis(self, table, registry=registry)
 
     def to_json(self) -> str:
-        """Serialize the IR to JSON.
+        """Serialize the IR to IPC base64 text.
 
         Returns
         -------
         str
-            JSON representation of the expression.
+            IPC base64 representation of the expression.
         """
-        payload = self.to_dict()
-        policy = JsonPolicy(ascii_only=True)
-        return dumps_text(payload, policy=policy)
+        table_payload = expr_ir_table((self,))
+        payload = {
+            "version": EXPR_IR_PAYLOAD_VERSION,
+            "root_ids": list(table_payload.root_ids),
+            "nodes": rows_from_table(table_payload.table),
+        }
+        payload_bytes = payload_ipc_bytes(payload, _EXPR_IR_PAYLOAD_SCHEMA)
+        return base64.b64encode(payload_bytes).decode("ascii")
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-serializable dictionary.
+        """Return an IPC-friendly dictionary.
 
         Returns
         -------
@@ -375,7 +381,7 @@ class ExprIR:
 
     @staticmethod
     def from_json(text: str) -> ExprIR:
-        """Parse ExprIR from JSON.
+        """Parse ExprIR from IPC base64 text.
 
         Returns
         -------
@@ -385,13 +391,31 @@ class ExprIR:
         Raises
         ------
         TypeError
-            Raised when the decoded JSON is not a mapping.
+            Raised when the decoded payload is not a mapping.
+        ValueError
+            Raised when the payload version is unsupported.
         """
-        payload = json.loads(text)
-        if not isinstance(payload, dict):
-            msg = "ExprIR JSON must decode to a dict."
+        raw = base64.b64decode(text.encode("ascii"))
+        table = ipc_table(raw)
+        rows = table.to_pylist()
+        if not rows or not isinstance(rows[0], dict):
+            msg = "ExprIR payload must decode to a dict."
             raise TypeError(msg)
-        return ExprIR.from_dict(payload)
+        payload = rows[0]
+        version = payload.get("version")
+        if version is not None and int(version) != EXPR_IR_PAYLOAD_VERSION:
+            msg = "ExprIR payload version mismatch."
+            raise ValueError(msg)
+        nodes = payload.get("nodes")
+        if not isinstance(nodes, list):
+            msg = "ExprIR payload nodes must be a list."
+            raise TypeError(msg)
+        root_ids = payload.get("root_ids")
+        if not isinstance(root_ids, list):
+            msg = "ExprIR payload root_ids must be a list."
+            raise TypeError(msg)
+        table = pa.Table.from_pylist(nodes, schema=EXPR_NODE_SCHEMA)
+        return expr_ir_from_table(table, root_ids=root_ids)[0]
 
 
 def _coerce_materialized(
@@ -463,7 +487,7 @@ def expr_ir_table(exprs: Sequence[ExprIR]) -> ExprIRTable:
     names = [expr.name for expr in nodes]
     values = [encode_scalar_union(expr.value) for expr in nodes]
     args = [[id_map[id(arg)] for arg in expr.args] or None for expr in nodes]
-    options_json = [_encode_options_text(expr.options) for expr in nodes]
+    options_ipc = [_options_bytes(expr.options) for expr in nodes]
     table = pa.Table.from_arrays(
         [
             pa.array(expr_ids, type=pa.int64()),
@@ -471,7 +495,7 @@ def expr_ir_table(exprs: Sequence[ExprIR]) -> ExprIRTable:
             pa.array(names, type=pa.string()),
             union_array_from_values(values, union_type=SCALAR_UNION_TYPE),
             pa.array(args, type=pa.list_(pa.int64())),
-            pa.array(options_json, type=pa.string()),
+            pa.array(options_ipc, type=pa.binary()),
         ],
         schema=EXPR_NODE_SCHEMA,
     )
@@ -551,13 +575,13 @@ def _build_expr_ir(
         name = row.get("name")
         name_value = str(name) if name is not None else None
         value = decode_scalar_union(row.get("value_union"))
-        options_payload = row.get("options_json")
+        options_payload = row.get("options_ipc")
         if options_payload is None:
             options = None
-        elif isinstance(options_payload, str):
-            options = _decode_options_text(options_payload)
+        elif isinstance(options_payload, (bytes, bytearray)):
+            options = _decode_options(options_payload)
         else:
-            msg = "ExprIR options_json must be a string."
+            msg = "ExprIR options_ipc must be bytes."
             raise TypeError(msg)
         expr = ExprIR(
             op=str(row.get("op", "")),
@@ -573,7 +597,7 @@ def _build_expr_ir(
 
 
 def expr_spec_from_json(text: str, *, registry: ExprRegistry | None = None) -> ExprSpec:
-    """Compile ExprSpec from JSON IR.
+    """Compile ExprSpec from IPC IR.
 
     Returns
     -------

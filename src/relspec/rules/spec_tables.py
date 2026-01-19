@@ -7,8 +7,8 @@ from typing import Any, Literal, cast
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_core import ScalarValue
 from arrowdsl.core.context import OrderingKey
+from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.plan.ops import JoinType, SortKey
 from arrowdsl.schema.build import list_view_type
 from arrowdsl.schema.schema import EncodingPolicy, EncodingSpec

@@ -24,11 +24,11 @@ from extract.registry_builders import (
     build_row_schema,
 )
 from extract.registry_pipelines import pipeline_spec
-from relspec.extract.registry_policies import policy_row, template_policy_row
 from extract.registry_rows import DATASET_ROWS, DatasetRow
 from extract.registry_templates import config as extractor_config
 from extract.registry_validation import validate_dataset_rows
 from ibis_engine.query_compiler import IbisQuerySpec
+from relspec.extract.registry_policies import policy_row, template_policy_row
 from relspec.rules.definitions import RuleStage, stage_enabled
 from relspec.rules.options import RuleExecutionOptions
 from schema_spec.system import DatasetSpec

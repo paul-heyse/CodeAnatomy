@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_core import ScalarValue
+from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.spec.expr_ir import ExprIR
 from cpg.kinds_ultimate import (
     SCIP_ROLE_DEFINITION,

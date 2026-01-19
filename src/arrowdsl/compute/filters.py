@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -44,7 +45,6 @@ from arrowdsl.core.interop import (
     ScalarLike,
     TableLike,
 )
-from arrowdsl.json_factory import JsonPolicy, dumps_text
 
 if TYPE_CHECKING:
     from arrowdsl.compute.expr_core import ExprSpec
@@ -101,7 +101,7 @@ class FilterSpec:
 
 
 def _json_stringify(value: object) -> str | None:
-    """Serialize a Python value to a stable JSON string.
+    """Serialize a Python value to a stable string.
 
     Parameters
     ----------
@@ -111,15 +111,28 @@ def _json_stringify(value: object) -> str | None:
     Returns
     -------
     str | None
-        JSON string or ``None`` for null values.
+        Stable string or ``None`` for null values.
     """
     if value is None:
         return None
-    try:
-        policy = JsonPolicy(sort_keys=True)
-        return dumps_text(value, policy=policy)
-    except (TypeError, ValueError):
-        return dumps_text(str(value))
+    return _stable_repr(value)
+
+
+def _stable_repr(value: object) -> str:
+    if isinstance(value, Mapping):
+        items = ", ".join(
+            f"{_stable_repr(key)}:{_stable_repr(val)}"
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+        return f"{{{items}}}"
+    if isinstance(value, (list, tuple, set)):
+        rendered = [_stable_repr(item) for item in value]
+        if isinstance(value, set):
+            rendered = sorted(rendered)
+        items = ", ".join(rendered)
+        bracket = "()" if isinstance(value, tuple) else "[]"
+        return f"{bracket[0]}{items}{bracket[1]}"
+    return repr(value)
 
 
 def _json_udf(ctx: pac.UdfContext, values: ValuesLike) -> ValuesLike:

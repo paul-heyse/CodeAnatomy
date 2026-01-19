@@ -11,6 +11,7 @@ import pyarrow as pa
 from ibis.expr.types import StringValue, Table, Value
 
 from arrowdsl.core.context import Ordering
+from cpg.prop_transforms import expr_context_expr, flag_to_bool_expr
 from cpg.schemas import CPG_PROPS_SCHEMA
 from cpg.specs import (
     TRANSFORM_EXPR_CONTEXT,
@@ -221,26 +222,11 @@ def _apply_transform(expr: Value, *, transform_id: str | None) -> Value:
     if transform_id is None:
         return expr
     if transform_id == TRANSFORM_EXPR_CONTEXT:
-        return _expr_context_expr(expr)
+        return expr_context_expr(expr)
     if transform_id == TRANSFORM_FLAG_TO_BOOL:
-        return _flag_to_bool_expr(expr)
+        return flag_to_bool_expr(expr)
     msg = f"Unknown prop transform id: {transform_id!r}"
     raise ValueError(msg)
-
-
-def _expr_context_expr(expr: Value) -> Value:
-    text: StringValue = expr.cast("string").strip()
-    parts = text.split(".")
-    last = parts[-1].cast("string")
-    upper = last.upper()
-    empty = upper.length() == 0
-    return ibis.ifelse(empty, ibis_null_literal(pa.string()), upper)
-
-
-def _flag_to_bool_expr(expr: Value) -> Value:
-    casted = expr.cast("int64")
-    hit = casted == ibis.literal(1)
-    return ibis.ifelse(hit, ibis.literal(value=True), ibis_null_literal(pa.bool_()))
 
 
 def _json_value_expr(expr: Value) -> Value:

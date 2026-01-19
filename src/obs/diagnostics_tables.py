@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Mapping, Sequence
-from typing import cast
 
 import pyarrow as pa
 
@@ -90,30 +88,35 @@ def datafusion_explains_table(explains: Sequence[Mapping[str, object]]) -> pa.Ta
     rows: list[dict[str, object]] = []
     for explain in explains:
         raw_rows = explain.get("rows")
-        rows_payload: object
-        if isinstance(raw_rows, (RecordBatchReaderLike, TableLike)):
-            rows_payload = {
-                "artifact_path": None,
-                "format": "ipc_file",
-                "schema_fingerprint": schema_fingerprint(raw_rows.schema),
-            }
-        else:
-            rows_payload = raw_rows if raw_rows is not None else cast("list[object]", [])
+        artifact_path, artifact_format, schema_fp = _explain_rows_metadata(raw_rows)
         rows.append(
             {
                 "event_time_unix_ms": _coerce_event_time(
                     explain.get("event_time_unix_ms"), default=now
                 ),
                 "sql": str(explain.get("sql") or ""),
-                "explain_rows_json": json.dumps(
-                    rows_payload,
-                    ensure_ascii=True,
-                    separators=(",", ":"),
-                ),
+                "explain_rows_artifact_path": artifact_path,
+                "explain_rows_artifact_format": artifact_format,
+                "explain_rows_schema_fingerprint": schema_fp,
                 "explain_analyze": bool(explain.get("explain_analyze") or False),
             }
         )
     return table_from_rows(DATAFUSION_EXPLAINS_V1, rows)
+
+
+def _explain_rows_metadata(rows: object) -> tuple[str | None, str | None, str | None]:
+    if isinstance(rows, (RecordBatchReaderLike, TableLike)):
+        return None, "ipc_file", schema_fingerprint(rows.schema)
+    if isinstance(rows, Mapping):
+        artifact_path = rows.get("artifact_path")
+        artifact_format = rows.get("artifact_format")
+        schema_fp = rows.get("schema_fingerprint")
+        return (
+            str(artifact_path) if artifact_path is not None else None,
+            str(artifact_format) if artifact_format is not None else None,
+            str(schema_fp) if schema_fp is not None else None,
+        )
+    return None, None, None
 
 
 def feature_state_table(events: Sequence[Mapping[str, object]]) -> pa.Table:

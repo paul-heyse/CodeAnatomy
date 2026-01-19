@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -18,7 +16,6 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.io.ipc import write_table_ipc_file
-from arrowdsl.json_factory import json_default
 from arrowdsl.plan.metrics import (
     column_stats_table,
     dataset_stats_table,
@@ -26,15 +23,12 @@ from arrowdsl.plan.metrics import (
     scan_telemetry_table,
 )
 from arrowdsl.plan.ordering_policy import require_explicit_ordering
-from arrowdsl.plan.query import DatasetDiscoveryOptions, DatasetSourceOptions, open_dataset
-from arrowdsl.plan.query_adapter import ibis_query_to_plan_query
-from arrowdsl.plan.scan_builder import ScanBuildSpec
 from arrowdsl.plan.scan_telemetry import ScanTelemetry, ScanTelemetryOptions, fragment_telemetry
-from arrowdsl.plan.schema_utils import plan_schema
 from arrowdsl.schema.build import table_from_rows
 from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.schema import EncodingPolicy
 from arrowdsl.schema.serialization import schema_fingerprint
+from arrowdsl.spec.expr_ir import ExprIR
 from core_types import JsonDict, JsonValue
 from cpg.constants import CpgBuildArtifacts
 from datafusion_engine.bridge import validate_table_constraints
@@ -88,6 +82,7 @@ from obs.manifest import (
     write_manifest_json,
 )
 from obs.repro import RunBundleContext, write_run_bundle
+from registry_common.arrow_payloads import payload_hash
 from relspec.compiler import CompiledOutput
 from relspec.model import RelationshipRule
 from relspec.param_deps import RuleDependencyReport, build_param_reverse_index
@@ -103,6 +98,11 @@ from schema_spec.system import (
     make_dataset_spec,
 )
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
+from storage.dataset_sources import (
+    DatasetDiscoveryOptions,
+    DatasetSourceOptions,
+    normalize_dataset_source,
+)
 from storage.deltalake import (
     DeltaWriteOptions,
     DeltaWriteResult,
@@ -195,11 +195,7 @@ def _delta_commit_metadata(dataset_name: str, schema: pa.Schema) -> dict[str, st
         "ordering_level": ordering.level.value,
     }
     if ordering.keys:
-        metadata["ordering_keys"] = json.dumps(
-            [list(key) for key in ordering.keys],
-            ensure_ascii=True,
-            separators=(",", ":"),
-        )
+        metadata["ordering_keys"] = _stable_repr([list(key) for key in ordering.keys])
     return metadata
 
 
@@ -438,14 +434,17 @@ def _datafusion_function_catalog_snapshot(
     )
     if not snapshot:
         return None, None
-    encoded = json.dumps(
-        snapshot,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        default=json_default,
+    payload = {
+        "version": 1,
+        "snapshot_repr": _stable_repr(snapshot),
+    }
+    schema = pa.schema(
+        [
+            pa.field("version", pa.int32(), nullable=False),
+            pa.field("snapshot_repr", pa.string(), nullable=False),
+        ]
     )
-    return snapshot, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return snapshot, payload_hash(payload, schema)
 
 
 def _datafusion_write_policy_snapshot(ctx: ExecutionContext) -> Mapping[str, object] | None:
@@ -458,12 +457,44 @@ def _datafusion_write_policy_snapshot(ctx: ExecutionContext) -> Mapping[str, obj
 def _json_mapping(payload: Mapping[str, object] | None) -> JsonDict | None:
     if payload is None:
         return None
-    return cast("JsonDict", dict(payload))
+    return cast("JsonDict", _normalized_payload(payload))
 
 
 def _json_payload(payload: Mapping[str, object]) -> JsonDict:
-    encoded = json.dumps(payload, default=json_default)
-    return cast("JsonDict", json.loads(encoded))
+    return cast("JsonDict", _normalized_payload(payload))
+
+
+def _normalized_payload(payload: Mapping[str, object]) -> dict[str, object]:
+    return {str(key): _normalize_value(value) for key, value in payload.items()}
+
+
+def _normalize_value(value: object) -> object:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, bytes):
+        return value.hex()
+    if isinstance(value, Mapping):
+        return _normalized_payload(value)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_normalize_value(item) for item in value]
+    return _stable_repr(value)
+
+
+def _stable_repr(value: object) -> str:
+    if isinstance(value, Mapping):
+        items = ", ".join(
+            f"{_stable_repr(key)}:{_stable_repr(val)}"
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+        return f"{{{items}}}"
+    if isinstance(value, (list, tuple, set)):
+        rendered = [_stable_repr(item) for item in value]
+        if isinstance(value, set):
+            rendered = sorted(rendered)
+        items = ", ".join(rendered)
+        bracket = "()" if isinstance(value, tuple) else "[]"
+        return f"{bracket[0]}{items}{bracket[1]}"
+    return repr(value)
 
 
 def _scan_profile_payload(ctx: ExecutionContext) -> JsonDict:
@@ -768,64 +799,9 @@ def _datafusion_plan_artifacts_table(
     if not entries:
         return None
     artifact_root = _diagnostics_artifact_root(output_dir, work_dir)
-    rows: list[dict[str, object]] = []
-    for entry in entries:
-        plan_hash = str(entry.get("plan_hash") or "")
-        plan_key = plan_hash or uuid.uuid4().hex
-        explain_payload = _diagnostics_rows_payload(
-            artifact_root,
-            group="datafusion_plan_artifacts_v1",
-            name=plan_key,
-            suffix="explain",
-            rows=entry.get("explain"),
-        )
-        explain_analyze = entry.get("explain_analyze")
-        explain_analyze_payload = (
-            _diagnostics_rows_payload(
-                artifact_root,
-                group="datafusion_plan_artifacts_v1",
-                name=plan_key,
-                suffix="explain_analyze",
-                rows=explain_analyze,
-            )
-            if explain_analyze is not None
-            else None
-        )
-        validation_payload = entry.get("substrait_validation")
-        rows.append(
-            {
-                "plan_hash": plan_hash,
-                "sql": str(entry.get("sql") or ""),
-                "explain_json": json.dumps(
-                    explain_payload or {"artifact_path": None, "format": "ipc_file"},
-                    ensure_ascii=True,
-                    separators=(",", ":"),
-                ),
-                "explain_analyze_json": json.dumps(
-                    explain_analyze_payload,
-                    ensure_ascii=True,
-                    separators=(",", ":"),
-                )
-                if explain_analyze_payload is not None
-                else None,
-                "substrait_b64": str(entry.get("substrait_b64") or ""),
-                "unparsed_sql": entry.get("unparsed_sql"),
-                "unparse_error": entry.get("unparse_error"),
-                "substrait_validation_json": json.dumps(
-                    validation_payload,
-                    default=json_default,
-                    ensure_ascii=True,
-                    separators=(",", ":"),
-                )
-                if validation_payload is not None
-                else None,
-                "logical_plan": entry.get("logical_plan"),
-                "optimized_plan": entry.get("optimized_plan"),
-                "physical_plan": entry.get("physical_plan"),
-                "graphviz": entry.get("graphviz"),
-                "partition_count": entry.get("partition_count"),
-            }
-        )
+    rows = [
+        _datafusion_plan_row(entry, artifact_root=artifact_root) for entry in entries
+    ]
     schema = incremental_dataset_schema("datafusion_plan_artifacts_v1")
     return table_from_rows(schema, rows)
 
@@ -897,6 +873,22 @@ def _diagnostics_artifact_path(
     return base / f"{suffix}.arrow"
 
 
+def _artifact_fields(payload: object | None) -> tuple[str | None, str | None, str | None]:
+    if isinstance(payload, Mapping):
+        return (
+            _optional_str(payload.get("artifact_path")),
+            _optional_str(payload.get("artifact_format")),
+            _optional_str(payload.get("schema_fingerprint")),
+        )
+    return None, None, None
+
+
+def _optional_str(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
 def _diagnostics_rows_payload(
     root: Path | None,
     *,
@@ -911,7 +903,7 @@ def _diagnostics_rows_payload(
         schema = rows.schema
         payload: dict[str, object] = {
             "artifact_path": None,
-            "format": "ipc_file",
+            "artifact_format": "ipc_file",
             "schema_fingerprint": schema_fingerprint(schema),
         }
         if root is None:
@@ -920,6 +912,112 @@ def _diagnostics_rows_payload(
         payload["artifact_path"] = write_table_ipc_file(rows, path, overwrite=True)
         return payload
     return rows
+
+
+def _substrait_validation_fields(payload: object | None) -> dict[str, object]:
+    fields: dict[str, object] = {
+        "status": None,
+        "stage": None,
+        "error": None,
+        "match": None,
+        "datafusion_rows": None,
+        "datafusion_hash": None,
+        "substrait_rows": None,
+        "substrait_hash": None,
+    }
+    if not isinstance(payload, Mapping):
+        return fields
+    status = payload.get("status")
+    stage = payload.get("stage")
+    error = payload.get("error")
+    match = payload.get("match")
+    datafusion_rows = payload.get("datafusion_rows")
+    datafusion_hash = payload.get("datafusion_hash")
+    substrait_rows = payload.get("substrait_rows")
+    substrait_hash = payload.get("substrait_hash")
+    fields["status"] = str(status) if status is not None else None
+    fields["stage"] = str(stage) if stage is not None else None
+    fields["error"] = str(error) if error is not None else None
+    fields["match"] = match if isinstance(match, bool) else None
+    fields["datafusion_rows"] = int(datafusion_rows) if isinstance(datafusion_rows, int) else None
+    fields["datafusion_hash"] = (
+        str(datafusion_hash) if datafusion_hash is not None else None
+    )
+    fields["substrait_rows"] = int(substrait_rows) if isinstance(substrait_rows, int) else None
+    fields["substrait_hash"] = str(substrait_hash) if substrait_hash is not None else None
+    return fields
+
+
+def _datafusion_plan_row(
+    entry: Mapping[str, object],
+    *,
+    artifact_root: Path | None,
+) -> dict[str, object]:
+    plan_hash = str(entry.get("plan_hash") or "")
+    plan_key = plan_hash or uuid.uuid4().hex
+    explain_payload = _diagnostics_rows_payload(
+        artifact_root,
+        group="datafusion_plan_artifacts_v1",
+        name=plan_key,
+        suffix="explain",
+        rows=entry.get("explain"),
+    )
+    explain_analyze_payload = _explain_analyze_payload(
+        entry,
+        artifact_root=artifact_root,
+        plan_key=plan_key,
+    )
+    validation_fields = _substrait_validation_fields(entry.get("substrait_validation"))
+    explain_path, explain_format, explain_schema_fp = _artifact_fields(explain_payload)
+    (
+        explain_analyze_path,
+        explain_analyze_format,
+        explain_analyze_schema_fp,
+    ) = _artifact_fields(explain_analyze_payload)
+    return {
+        "plan_hash": plan_hash,
+        "sql": str(entry.get("sql") or ""),
+        "explain_artifact_path": explain_path,
+        "explain_artifact_format": explain_format,
+        "explain_schema_fingerprint": explain_schema_fp,
+        "explain_analyze_artifact_path": explain_analyze_path,
+        "explain_analyze_artifact_format": explain_analyze_format,
+        "explain_analyze_schema_fingerprint": explain_analyze_schema_fp,
+        "substrait_b64": str(entry.get("substrait_b64") or ""),
+        "substrait_validation_status": validation_fields["status"],
+        "substrait_validation_stage": validation_fields["stage"],
+        "substrait_validation_error": validation_fields["error"],
+        "substrait_validation_match": validation_fields["match"],
+        "substrait_validation_datafusion_rows": validation_fields["datafusion_rows"],
+        "substrait_validation_datafusion_hash": validation_fields["datafusion_hash"],
+        "substrait_validation_substrait_rows": validation_fields["substrait_rows"],
+        "substrait_validation_substrait_hash": validation_fields["substrait_hash"],
+        "unparsed_sql": entry.get("unparsed_sql"),
+        "unparse_error": entry.get("unparse_error"),
+        "logical_plan": entry.get("logical_plan"),
+        "optimized_plan": entry.get("optimized_plan"),
+        "physical_plan": entry.get("physical_plan"),
+        "graphviz": entry.get("graphviz"),
+        "partition_count": entry.get("partition_count"),
+    }
+
+
+def _explain_analyze_payload(
+    entry: Mapping[str, object],
+    *,
+    artifact_root: Path | None,
+    plan_key: str,
+) -> object | None:
+    explain_analyze = entry.get("explain_analyze")
+    if explain_analyze is None:
+        return None
+    return _diagnostics_rows_payload(
+        artifact_root,
+        group="datafusion_plan_artifacts_v1",
+        name=plan_key,
+        suffix="explain_analyze",
+        rows=explain_analyze,
+    )
 
 
 def _incremental_output_dir(output_dir: str | None, work_dir: str | None) -> Path | None:
@@ -1277,7 +1375,6 @@ class ManifestOptionalInputs:
 
 def _build_normalized_inputs_write_context(
     input_datasets: Mapping[str, TableLike | RecordBatchReaderLike | IbisPlan],
-    ibis_execution: IbisExecutionContext,
 ) -> NormalizedInputsWriteContext:
     schemas: dict[str, pa.Schema] = {}
     encoding_policies: dict[str, EncodingPolicy] = {}
@@ -1286,11 +1383,7 @@ def _build_normalized_inputs_write_context(
         file_lists[name] = []
         if isinstance(table, RecordBatchReaderLike):
             continue
-        schema = (
-            plan_schema(table, ctx=ibis_execution.ctx)
-            if isinstance(table, IbisPlan)
-            else table.schema
-        )
+        schema = table.expr.schema().to_pyarrow() if isinstance(table, IbisPlan) else table.schema
         schemas[name] = schema
         encoding_policies[name] = encoding_policy_from_schema(schema)
     return NormalizedInputsWriteContext(
@@ -1357,12 +1450,11 @@ def _normalized_input_metrics(
     table: TableLike | RecordBatchReaderLike | IbisPlan,
     *,
     path: str | None,
-    context: NormalizedInputsReportContext,
 ) -> tuple[int | None, int]:
     if isinstance(table, RecordBatchReaderLike):
         return _normalized_input_row_count(path), len(table.schema.names)
     if isinstance(table, IbisPlan):
-        schema = plan_schema(table, ctx=context.ibis_execution.ctx)
+        schema = table.expr.schema().to_pyarrow()
         return _normalized_input_row_count(path), len(schema.names)
     return int(table.num_rows), len(table.column_names)
 
@@ -1374,7 +1466,7 @@ def _normalized_input_entry(
     path: str | None,
     context: NormalizedInputsReportContext,
 ) -> JsonDict:
-    rows, columns = _normalized_input_metrics(table, path=path, context=context)
+    rows, columns = _normalized_input_metrics(table, path=path)
     entry: JsonDict = {
         "path": path,
         "rows": rows,
@@ -1446,7 +1538,7 @@ def write_normalized_inputs_delta(
     out_dir = base / "normalized_inputs"
     _ensure_dir(out_dir)
 
-    write_context = _build_normalized_inputs_write_context(input_datasets, ibis_execution)
+    write_context = _build_normalized_inputs_write_context(input_datasets)
     requested_strategy = output_config.writer_strategy
     effective_strategy = requested_strategy if requested_strategy == "arrow" else "arrow"
     results = _write_normalized_inputs(
@@ -2155,33 +2247,30 @@ def relspec_scan_telemetry(
             delta_timestamp=loc.delta_timestamp,
             discovery=DatasetDiscoveryOptions(),
         )
-        dataset = open_dataset(loc.path, options=dataset_options)
+        dataset = normalize_dataset_source(loc.path, options=dataset_options)
         if loc.table_spec is not None:
             dataset_spec = make_dataset_spec(table_spec=loc.table_spec)
         else:
             dataset_spec = dataset_spec_from_schema(name=name, schema=dataset.schema)
         query = dataset_spec.query()
-        plan_query = ibis_query_to_plan_query(query)
         scan_provenance = tuple(ctx.runtime.scan.scan_provenance_columns)
-        scan_spec = ScanBuildSpec(
-            dataset=dataset,
-            query=query,
-            ctx=ctx,
-            scan_provenance=scan_provenance,
-        )
-        scanner = scan_spec.scanner()
-        scan_columns = scan_spec.scan_columns()
-        scan_column_names = (
-            list(scan_columns.keys()) if isinstance(scan_columns, Mapping) else list(scan_columns)
-        )
-        required_columns = (
-            list(scan_spec.required_columns)
-            if scan_spec.required_columns is not None
-            else list(scan_column_names)
+        scan_column_names = list(query.projection.base)
+        for col_name in scan_provenance:
+            if col_name not in scan_column_names:
+                scan_column_names.append(col_name)
+        scan_columns = scan_column_names or None
+        required_columns = list(scan_column_names)
+        predicate = None
+        if isinstance(query.pushdown_predicate, ExprIR):
+            predicate = query.pushdown_predicate.to_expression()
+        scanner = dataset.scanner(
+            columns=scan_columns,
+            filter=predicate,
+            **ctx.runtime.scan.scanner_kwargs(),
         )
         telemetry = fragment_telemetry(
             dataset,
-            predicate=plan_query.pushdown_expression(),
+            predicate=predicate,
             scanner=scanner,
             options=ScanTelemetryOptions(
                 discovery_policy=dataset_options.discovery_payload(),
@@ -2190,16 +2279,14 @@ def relspec_scan_telemetry(
                 scan_columns=scan_column_names,
             ),
         )
-        scan_profile_json = json.dumps(
-            telemetry.scan_profile, default=json_default, ensure_ascii=True, separators=(",", ":")
-        )
+        scan_profile_text = _stable_repr(_normalize_value(telemetry.scan_profile))
         dataset_schema = (
-            json.dumps(telemetry.dataset_schema, ensure_ascii=True, separators=(",", ":"))
+            _stable_repr(_normalize_value(telemetry.dataset_schema))
             if telemetry.dataset_schema is not None
             else None
         )
         projected_schema = (
-            json.dumps(telemetry.projected_schema, ensure_ascii=True, separators=(",", ":"))
+            _stable_repr(_normalize_value(telemetry.projected_schema))
             if telemetry.projected_schema is not None
             else None
         )
@@ -2217,12 +2304,12 @@ def relspec_scan_telemetry(
                 "scan_columns": list(telemetry.scan_columns),
                 "dataset_schema_json": dataset_schema,
                 "projected_schema_json": projected_schema,
-                "discovery_policy_json": json.dumps(
-                    telemetry.discovery_policy, ensure_ascii=True, separators=(",", ":")
+                "discovery_policy_json": _stable_repr(
+                    _normalize_value(telemetry.discovery_policy)
                 )
                 if telemetry.discovery_policy is not None
                 else None,
-                "scan_profile_json": scan_profile_json,
+                "scan_profile_json": scan_profile_text,
             }
         )
     return scan_telemetry_table(rows)
@@ -2578,14 +2665,9 @@ def _sqlglot_ast_payloads(manifest_inputs: ManifestInputs) -> list[JsonDict] | N
     payloads: list[JsonDict] = []
     for diagnostic in diagnostics:
         metadata = diagnostic.metadata
-        raw_payload = metadata.get("ast_payload_raw")
-        optimized_payload = metadata.get("ast_payload_optimized")
-        if not raw_payload or not optimized_payload:
-            continue
-        try:
-            raw_ast = json.loads(raw_payload)
-            optimized_ast = json.loads(optimized_payload)
-        except (json.JSONDecodeError, TypeError):
+        raw_sql = metadata.get("raw_sql")
+        optimized_sql = metadata.get("optimized_sql")
+        if not raw_sql or not optimized_sql:
             continue
         payloads.append(
             {
@@ -2594,11 +2676,13 @@ def _sqlglot_ast_payloads(manifest_inputs: ManifestInputs) -> list[JsonDict] | N
                 "plan_signature": diagnostic.plan_signature,
                 "plan_fingerprint": metadata.get("plan_fingerprint"),
                 "sqlglot_policy_hash": metadata.get("sqlglot_policy_hash"),
+                "sql_dialect": metadata.get("sql_dialect"),
                 "normalization_distance": metadata.get("normalization_distance"),
                 "normalization_max_distance": metadata.get("normalization_max_distance"),
                 "normalization_applied": metadata.get("normalization_applied"),
-                "raw_ast": raw_ast,
-                "optimized_ast": optimized_ast,
+                "raw_sql": raw_sql,
+                "optimized_sql": optimized_sql,
+                "ast_repr": metadata.get("ast_repr"),
             }
         )
     return payloads or None

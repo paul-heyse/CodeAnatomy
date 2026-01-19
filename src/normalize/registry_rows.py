@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from arrowdsl.compute.expr_core import ScalarValue
+from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.schema.validation import ArrowValidationOptions
 from arrowdsl.spec.expr_ir import ExprIR
 from ibis_engine.hashing import hash_expr_ir, hash_expr_ir_from_parts, masked_hash_expr_ir
@@ -18,6 +17,7 @@ from normalize.registry_ids import (
     TYPE_EXPR_ID_SPEC,
     TYPE_ID_SPEC,
 )
+from registry_common.metadata import metadata_map_bytes, metadata_scalar_map_bytes
 from schema_spec.specs import DerivedFieldSpec
 from schema_spec.system import DedupeSpecSpec, SortKeySpec
 
@@ -25,10 +25,6 @@ SCHEMA_VERSION = 1
 _DEF_USE_PREFIXES = ("STORE_", "DELETE_")
 _USE_PREFIXES = ("LOAD_",)
 _DEF_USE_OPS = ("IMPORT_NAME", "IMPORT_FROM")
-
-
-def _json_bytes(payload: object) -> bytes:
-    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def _field_expr(name: str) -> ExprIR:
@@ -215,10 +211,10 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         ),
         template="normalize_bytecode",
         metadata_extra={
-            EVIDENCE_OUTPUT_MAP_META: _json_bytes(
+            EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes(
                 {"bstart": "start_offset", "bend": "end_offset", "role": "kind"}
             ),
-            EVIDENCE_OUTPUT_LITERALS_META: _json_bytes({"source": "py_bc_blocks"}),
+            EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes({"source": "py_bc_blocks"}),
         },
     ),
     DatasetRow(
@@ -243,8 +239,8 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         ),
         template="normalize_bytecode",
         metadata_extra={
-            EVIDENCE_OUTPUT_MAP_META: _json_bytes({"role": "kind"}),
-            EVIDENCE_OUTPUT_LITERALS_META: _json_bytes({"source": "py_bc_cfg_edges"}),
+            EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes({"role": "kind"}),
+            EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes({"source": "py_bc_cfg_edges"}),
         },
     ),
     DatasetRow(
@@ -283,10 +279,12 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         ),
         template="normalize_bytecode",
         metadata_extra={
-            EVIDENCE_OUTPUT_MAP_META: _json_bytes(
+            EVIDENCE_OUTPUT_MAP_META: metadata_map_bytes(
                 {"bstart": "offset", "bend": "offset", "role": "kind"}
             ),
-            EVIDENCE_OUTPUT_LITERALS_META: _json_bytes({"source": "py_bc_instructions"}),
+            EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes(
+                {"source": "py_bc_instructions"}
+            ),
         },
     ),
     DatasetRow(
@@ -306,7 +304,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         ),
         template="normalize_bytecode",
         metadata_extra={
-            EVIDENCE_OUTPUT_LITERALS_META: _json_bytes({"source": "py_bc_reaches"}),
+            EVIDENCE_OUTPUT_LITERALS_META: metadata_scalar_map_bytes({"source": "py_bc_reaches"}),
         },
     ),
     DatasetRow(

@@ -13,7 +13,12 @@ from normalize.policies import (
     default_tie_breakers,
 )
 from normalize.registry_specs import dataset_schema
-from relspec.normalize.rule_model import AmbiguityPolicy, EvidenceOutput, EvidenceSpec, NormalizeRule
+from relspec.normalize.rule_model import (
+    AmbiguityPolicy,
+    EvidenceOutput,
+    EvidenceSpec,
+    NormalizeRule,
+)
 from relspec.rules.policies import PolicyRegistry
 
 

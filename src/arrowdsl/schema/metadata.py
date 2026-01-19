@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import importlib
-import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
@@ -22,13 +20,14 @@ from arrowdsl.core.schema_constants import (
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
 )
-from arrowdsl.json_factory import JsonPolicy, dumps_bytes, loads
 from arrowdsl.schema.dictionary import normalize_dictionaries
 from arrowdsl.schema.encoding_policy import EncodingPolicy, EncodingSpec
 from arrowdsl.schema.nested_builders import (
     dictionary_array_from_indices as _dictionary_from_indices,
 )
 from arrowdsl.schema.schema import SchemaMetadataSpec
+from registry_common.arrow_payloads import ipc_table, payload_hash, payload_ipc_bytes
+from registry_common.metadata import metadata_list_bytes, metadata_map_bytes
 
 if TYPE_CHECKING:
     from schema_spec.specs import TableSchemaSpec
@@ -88,6 +87,31 @@ ENCODING_DICTIONARY = "dictionary"
 DICT_INDEX_META = "dictionary_index_type"
 DICT_ORDERED_META = "dictionary_ordered"
 EXTRACTOR_DEFAULTS_META = b"extractor_option_defaults"
+EXTRACTOR_DEFAULTS_VERSION = 1
+_EXTRACTOR_DEFAULTS_ENTRY = pa.struct(
+    [
+        pa.field("key", pa.string(), nullable=False),
+        pa.field("value_kind", pa.string(), nullable=False),
+        pa.field("value_bool", pa.bool_(), nullable=True),
+        pa.field("value_int", pa.int64(), nullable=True),
+        pa.field("value_float", pa.float64(), nullable=True),
+        pa.field("value_string", pa.string(), nullable=True),
+        pa.field("value_strings", pa.list_(pa.string()), nullable=True),
+    ]
+)
+_EXTRACTOR_DEFAULTS_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32(), nullable=False),
+        pa.field("entries", pa.list_(_EXTRACTOR_DEFAULTS_ENTRY), nullable=False),
+    ]
+)
+OPTIONS_HASH_VERSION = 1
+_OPTIONS_HASH_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32(), nullable=False),
+        pa.field("options_repr", pa.string(), nullable=False),
+    ]
+)
 
 _ORDERED_TRUE = {"1", "true", "yes", "y", "t"}
 _INDEX_TYPES: Mapping[str, pa.DataType] = {
@@ -116,6 +140,23 @@ def _normalize_option_value(value: object) -> object:
     return value
 
 
+def _stable_repr(value: object) -> str:
+    if isinstance(value, Mapping):
+        items = ", ".join(
+            f"{_stable_repr(key)}:{_stable_repr(val)}"
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+        return f"{{{items}}}"
+    if isinstance(value, (list, tuple, set)):
+        rendered = [_stable_repr(item) for item in value]
+        if isinstance(value, set):
+            rendered = sorted(rendered)
+        items = ", ".join(rendered)
+        bracket = "()" if isinstance(value, tuple) else "[]"
+        return f"{bracket[0]}{items}{bracket[1]}"
+    return repr(value)
+
+
 def options_hash(options: object) -> str:
     """Return a stable hash for options objects.
 
@@ -125,13 +166,8 @@ def options_hash(options: object) -> str:
         SHA-256 hex digest of the normalized options payload.
     """
     normalized = _normalize_option_value(options)
-    payload = json.dumps(
-        normalized,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+    payload = {"version": OPTIONS_HASH_VERSION, "options_repr": _stable_repr(normalized)}
+    return payload_hash(payload, _OPTIONS_HASH_SCHEMA)
 
 
 def options_metadata_spec(
@@ -165,11 +201,14 @@ def extractor_option_defaults_spec(
     Returns
     -------
     SchemaMetadataSpec
-        Metadata spec storing JSON-encoded option defaults.
+        Metadata spec storing IPC-encoded option defaults.
     """
     if not defaults:
         return SchemaMetadataSpec()
-    payload = dumps_bytes(defaults, policy=JsonPolicy.canonical_ascii())
+    payload = payload_ipc_bytes(
+        _extractor_defaults_payload(defaults),
+        _EXTRACTOR_DEFAULTS_SCHEMA,
+    )
     return SchemaMetadataSpec(schema_metadata={EXTRACTOR_DEFAULTS_META: payload})
 
 
@@ -186,17 +225,130 @@ def extractor_option_defaults_from_metadata(
     Raises
     ------
     TypeError
-        Raised when metadata is not a JSON object.
+        Raised when metadata is not an IPC mapping payload.
     """
     metadata = source if isinstance(source, Mapping) else (source.metadata or {})
     payload = metadata.get(EXTRACTOR_DEFAULTS_META)
     if not payload:
         return {}
-    parsed = loads(payload)
-    if isinstance(parsed, Mapping):
-        return {str(key): value for key, value in parsed.items()}
-    msg = "extractor_option_defaults metadata must be a JSON object."
-    raise TypeError(msg)
+    table = ipc_table(payload)
+    rows = table.to_pylist()
+    if not rows:
+        return {}
+    row = rows[0]
+    if not isinstance(row, Mapping):
+        msg = "extractor_option_defaults metadata must be a mapping payload."
+        raise TypeError(msg)
+    return _extractor_defaults_from_row(row)
+
+
+def _extractor_defaults_payload(defaults: Mapping[str, object]) -> dict[str, object]:
+    normalized = _normalize_option_value(defaults)
+    if not isinstance(normalized, Mapping):
+        msg = "Extractor defaults must be a mapping."
+        raise TypeError(msg)
+    return {
+        "version": EXTRACTOR_DEFAULTS_VERSION,
+        "entries": [
+            _extractor_defaults_entry(str(key), value)
+            for key, value in sorted(normalized.items(), key=lambda item: str(item[0]))
+        ],
+    }
+
+
+def _extractor_defaults_entry(key: str, value: object) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "key": key,
+        "value_kind": "null",
+        "value_bool": None,
+        "value_int": None,
+        "value_float": None,
+        "value_string": None,
+        "value_strings": None,
+    }
+    if value is None:
+        return entry
+    if isinstance(value, bool):
+        entry["value_kind"] = "bool"
+        entry["value_bool"] = value
+    elif isinstance(value, int) and not isinstance(value, bool):
+        entry["value_kind"] = "int64"
+        entry["value_int"] = value
+    elif isinstance(value, float):
+        entry["value_kind"] = "float64"
+        entry["value_float"] = value
+    elif isinstance(value, str):
+        entry["value_kind"] = "string"
+        entry["value_string"] = value
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        entry["value_kind"] = "string_list"
+        entry["value_strings"] = [str(item) for item in value]
+    else:
+        entry["value_kind"] = "string"
+        entry["value_string"] = _stable_repr(value)
+    return entry
+
+
+def _extractor_defaults_from_row(row: Mapping[str, object]) -> dict[str, object]:
+    version = row.get("version")
+    if version is not None:
+        if isinstance(version, int) and not isinstance(version, bool):
+            version_value = version
+        elif isinstance(version, (str, bytes, bytearray)):
+            version_value = int(version)
+        else:
+            msg = "extractor_option_defaults version must be an int."
+            raise TypeError(msg)
+        if version_value != EXTRACTOR_DEFAULTS_VERSION:
+            msg = "extractor_option_defaults metadata version mismatch."
+            raise ValueError(msg)
+    entries = row.get("entries")
+    if entries is None:
+        return {}
+    if not isinstance(entries, list):
+        msg = "extractor_option_defaults entries must be a list."
+        raise TypeError(msg)
+    results: dict[str, object] = {}
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            msg = "extractor_option_defaults entry must be a mapping."
+            raise TypeError(msg)
+        key = entry.get("key")
+        if key is None:
+            continue
+        results[str(key)] = _extractor_default_value(entry)
+    return results
+
+
+def _extractor_default_value(entry: Mapping[str, object]) -> object:
+    kind = entry.get("value_kind")
+    if kind in {None, "null"}:
+        result: object = None
+    elif kind == "bool":
+        value = entry.get("value_bool")
+        result = bool(value) if isinstance(value, bool) else None
+    elif kind == "int64":
+        value = entry.get("value_int")
+        result = int(value) if isinstance(value, int) else None
+    elif kind == "float64":
+        value = entry.get("value_float")
+        result = float(value) if isinstance(value, (int, float)) else None
+    elif kind == "string":
+        value = entry.get("value_string")
+        result = str(value) if value is not None else None
+    elif kind == "string_list":
+        values = entry.get("value_strings")
+        if values is None:
+            result = ()
+        else:
+            if not isinstance(values, list):
+                msg = "extractor_option_defaults string list must be a list."
+                raise TypeError(msg)
+            result = tuple(str(item) for item in values)
+    else:
+        msg = f"Unsupported extractor_option_defaults kind: {kind!r}."
+        raise TypeError(msg)
+    return result
 
 
 def merge_metadata_specs(*specs: SchemaMetadataSpec | None) -> SchemaMetadataSpec:
@@ -338,10 +490,9 @@ def evidence_metadata_spec(metadata: EvidenceMetadata) -> SchemaMetadataSpec:
     if metadata.evidence_rank is not None:
         meta[b"evidence_rank"] = str(metadata.evidence_rank).encode("utf-8")
     if metadata.required_columns:
-        meta[b"evidence_required_columns"] = ",".join(metadata.required_columns).encode("utf-8")
+        meta[b"evidence_required_columns"] = metadata_list_bytes(metadata.required_columns)
     if metadata.required_types:
-        payload = json.dumps(metadata.required_types, sort_keys=True, separators=(",", ":"))
-        meta[b"evidence_required_types"] = payload.encode("utf-8")
+        meta[b"evidence_required_types"] = metadata_map_bytes(metadata.required_types)
     return SchemaMetadataSpec(schema_metadata=meta)
 
 

@@ -2,15 +2,62 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
+import base64
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, cast
 
+import pyarrow as pa
+
 from arrowdsl.spec.expr_ir import ExprIR
 from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
+from registry_common.arrow_payloads import ipc_table, payload_hash, payload_ipc_bytes
 from relspec.model import HashJoinConfig, JoinType
+
+REL_OP_SIGNATURE_VERSION = 1
+_REL_OP_SIGNATURE_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32(), nullable=False),
+        pa.field("payload_repr", pa.string(), nullable=False),
+    ]
+)
+_JOIN_PAYLOAD_SCHEMA = pa.schema(
+    [
+        pa.field("join_type", pa.string(), nullable=False),
+        pa.field("left_keys", pa.list_(pa.string()), nullable=False),
+        pa.field("right_keys", pa.list_(pa.string()), nullable=False),
+        pa.field("left_output", pa.list_(pa.string()), nullable=True),
+        pa.field("right_output", pa.list_(pa.string()), nullable=True),
+        pa.field("output_suffix_for_left", pa.string(), nullable=True),
+        pa.field("output_suffix_for_right", pa.string(), nullable=True),
+    ]
+)
+_AGGREGATE_EXPR_STRUCT = pa.struct(
+    [
+        pa.field("name", pa.string(), nullable=False),
+        pa.field("func", pa.string(), nullable=False),
+        pa.field("distinct", pa.bool_(), nullable=False),
+        pa.field("args", pa.list_(pa.string()), nullable=False),
+    ]
+)
+_AGGREGATE_PAYLOAD_SCHEMA = pa.schema(
+    [
+        pa.field("group_by", pa.list_(pa.string()), nullable=False),
+        pa.field("aggregates", pa.list_(_AGGREGATE_EXPR_STRUCT), nullable=False),
+    ]
+)
+_UNION_PAYLOAD_SCHEMA = pa.schema(
+    [
+        pa.field("inputs", pa.list_(pa.string()), nullable=False),
+        pa.field("distinct", pa.bool_(), nullable=False),
+    ]
+)
+_PARAM_PAYLOAD_SCHEMA = pa.schema(
+    [
+        pa.field("name", pa.string(), nullable=False),
+        pa.field("dtype", pa.string(), nullable=False),
+    ]
+)
 
 RelOpKind = Literal[
     "scan",
@@ -277,8 +324,11 @@ def rel_ops_signature(ops: Sequence[RelOpT]) -> str:
         Stable hash signature of the relational ops.
     """
     rows = rel_ops_to_rows(ops) or []
-    payload = json.dumps(rows, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    signature_payload = {
+        "version": REL_OP_SIGNATURE_VERSION,
+        "payload_repr": _stable_repr(rows),
+    }
+    return payload_hash(signature_payload, _REL_OP_SIGNATURE_SCHEMA)
 
 
 def _encode_scan(op: RelOpT) -> dict[str, object]:
@@ -309,8 +359,9 @@ def _encode_pushdown(op: RelOpT) -> dict[str, object]:
 def _encode_join(op: RelOpT) -> dict[str, object]:
     join = cast("JoinOp", op)
     return {
-        "payload_json": _payload_json(
-            {"left": join.left, "right": join.right, "join": _join_payload(join.join)}
+        "payload_json": _payload_ipc_text(
+            {"left": join.left, "right": join.right, "join": _join_payload(join.join)},
+            schema=_JOIN_PAYLOAD_SCHEMA,
         )
     }
 
@@ -318,11 +369,12 @@ def _encode_join(op: RelOpT) -> dict[str, object]:
 def _encode_aggregate(op: RelOpT) -> dict[str, object]:
     agg = cast("AggregateOp", op)
     return {
-        "payload_json": _payload_json(
+        "payload_json": _payload_ipc_text(
             {
                 "group_by": list(agg.group_by),
                 "aggregates": [_aggregate_payload(spec) for spec in agg.aggregates],
-            }
+            },
+            schema=_AGGREGATE_PAYLOAD_SCHEMA,
         )
     }
 
@@ -330,13 +382,21 @@ def _encode_aggregate(op: RelOpT) -> dict[str, object]:
 def _encode_union(op: RelOpT) -> dict[str, object]:
     union = cast("UnionOp", op)
     return {
-        "payload_json": _payload_json({"inputs": list(union.inputs), "distinct": union.distinct})
+        "payload_json": _payload_ipc_text(
+            {"inputs": list(union.inputs), "distinct": union.distinct},
+            schema=_UNION_PAYLOAD_SCHEMA,
+        )
     }
 
 
 def _encode_param(op: RelOpT) -> dict[str, object]:
     param = cast("ParamOp", op)
-    return {"payload_json": _payload_json({"name": param.name, "dtype": param.dtype})}
+    return {
+        "payload_json": _payload_ipc_text(
+            {"name": param.name, "dtype": param.dtype},
+            schema=_PARAM_PAYLOAD_SCHEMA,
+        )
+    }
 
 
 _REL_OP_ENCODERS: dict[RelOpKind, Callable[[RelOpT], dict[str, object]]] = {
@@ -394,7 +454,7 @@ def _decode_pushdown(row: Mapping[str, object]) -> RelOpT:
 
 
 def _decode_join(row: Mapping[str, object]) -> RelOpT:
-    payload = _payload_from_row(row)
+    payload = _payload_from_row(row, schema=_JOIN_PAYLOAD_SCHEMA)
     return JoinOp(
         left=str(payload.get("left", "")),
         right=str(payload.get("right", "")),
@@ -403,7 +463,7 @@ def _decode_join(row: Mapping[str, object]) -> RelOpT:
 
 
 def _decode_aggregate(row: Mapping[str, object]) -> RelOpT:
-    payload = _payload_from_row(row)
+    payload = _payload_from_row(row, schema=_AGGREGATE_PAYLOAD_SCHEMA)
     return AggregateOp(
         group_by=_parse_columns(payload.get("group_by")),
         aggregates=_aggregates_from_payload(payload.get("aggregates")),
@@ -411,7 +471,7 @@ def _decode_aggregate(row: Mapping[str, object]) -> RelOpT:
 
 
 def _decode_union(row: Mapping[str, object]) -> RelOpT:
-    payload = _payload_from_row(row)
+    payload = _payload_from_row(row, schema=_UNION_PAYLOAD_SCHEMA)
     return UnionOp(
         inputs=_parse_columns(payload.get("inputs")),
         distinct=bool(payload.get("distinct", False)),
@@ -419,7 +479,7 @@ def _decode_union(row: Mapping[str, object]) -> RelOpT:
 
 
 def _decode_param(row: Mapping[str, object]) -> RelOpT:
-    payload = _payload_from_row(row)
+    payload = _payload_from_row(row, schema=_PARAM_PAYLOAD_SCHEMA)
     return ParamOp(name=str(payload.get("name", "")), dtype=str(payload.get("dtype", "")))
 
 
@@ -445,18 +505,48 @@ def _rel_op_from_row(row: Mapping[str, object]) -> RelOpT:
     return decoder(row)
 
 
-def _payload_json(payload: Mapping[str, object]) -> str:
-    return json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+def _payload_ipc_text(payload: Mapping[str, object], *, schema: pa.Schema) -> str:
+    payload_bytes = payload_ipc_bytes(payload, schema)
+    return base64.b64encode(payload_bytes).decode("ascii")
 
 
-def _payload_from_row(row: Mapping[str, object]) -> dict[str, object]:
-    payload_json = row.get("payload_json")
-    if payload_json is None:
+def _payload_from_row(row: Mapping[str, object], *, schema: pa.Schema) -> dict[str, object]:
+    payload_text = row.get("payload_json")
+    if payload_text is None:
         return {}
-    if isinstance(payload_json, str):
-        return json.loads(payload_json)
+    if isinstance(payload_text, str):
+        raw = base64.b64decode(payload_text.encode("ascii"))
+        table = ipc_table(raw)
+        if not table.schema.equals(schema, check_metadata=False):
+            msg = "Rel op payload schema mismatch."
+            raise ValueError(msg)
+        rows = table.to_pylist()
+        if not rows:
+            return {}
+        payload = rows[0]
+        if not isinstance(payload, Mapping):
+            msg = "Rel op payload_json must decode to a mapping."
+            raise TypeError(msg)
+        return dict(payload)
     msg = "Rel op payload_json must be a string."
     raise TypeError(msg)
+
+
+def _stable_repr(value: object) -> str:
+    if isinstance(value, Mapping):
+        items = ", ".join(
+            f"{_stable_repr(key)}:{_stable_repr(val)}"
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+        return f"{{{items}}}"
+    if isinstance(value, (list, tuple, set)):
+        rendered = [_stable_repr(item) for item in value]
+        if isinstance(value, set):
+            rendered = sorted(rendered)
+        items = ", ".join(rendered)
+        bracket = "()" if isinstance(value, tuple) else "[]"
+        return f"{bracket[0]}{items}{bracket[1]}"
+    return repr(value)
 
 
 def _parse_columns(value: object) -> tuple[str, ...]:
@@ -532,7 +622,7 @@ def _aggregate_payload(spec: AggregateExpr) -> dict[str, object]:
         "name": spec.name,
         "func": spec.func,
         "distinct": spec.distinct,
-        "args": [arg.to_dict() for arg in spec.args],
+        "args": [arg.to_json() for arg in spec.args],
     }
 
 
@@ -556,12 +646,7 @@ def _aggregates_from_payload(payload: object | None) -> tuple[AggregateExpr, ...
                 name=str(item.get("name", "")),
                 func=str(item.get("func", "")),
                 distinct=bool(item.get("distinct", False)),
-                args=tuple(
-                    ExprIR.from_dict(dict(arg))
-                    if isinstance(arg, Mapping)
-                    else ExprIR.from_dict({})
-                    for arg in args_payload
-                ),
+                args=tuple(ExprIR.from_json(str(arg)) for arg in args_payload if arg is not None),
             )
         )
     return tuple(specs)

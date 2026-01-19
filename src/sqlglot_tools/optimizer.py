@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import importlib
-import json
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -12,6 +10,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal, TypedDict, Unpack, cast
 
+import pyarrow as pa
 from sqlglot import Dialect, ErrorLevel, Expression, exp, parse_one
 from sqlglot.generator import Generator as SqlGlotGenerator
 from sqlglot.optimizer import RULES, optimize
@@ -40,6 +39,8 @@ from sqlglot.transforms import (
     move_ctes_to_top_level,
     unnest_to_explode,
 )
+
+from registry_common.arrow_payloads import payload_hash
 
 SchemaMapping = Mapping[str, Mapping[str, str]]
 SqlGlotRewriteLane = Literal["transforms", "dialect_shim"]
@@ -81,6 +82,72 @@ _TEMPLATE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\$\{.*?\}", flags=re.DOTALL),
 )
 _PARAM_PATTERN = re.compile(r":[A-Za-z_][A-Za-z0-9_]*")
+
+HASH_PAYLOAD_VERSION: int = 1
+
+_MAP_ENTRY_SCHEMA = pa.struct(
+    [
+        pa.field("key", pa.string()),
+        pa.field("value_kind", pa.string()),
+        pa.field("value", pa.string()),
+    ]
+)
+_RULES_HASH_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32()),
+        pa.field("rules", pa.list_(pa.string())),
+    ]
+)
+_POLICY_HASH_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32()),
+        pa.field("read_dialect", pa.string()),
+        pa.field("write_dialect", pa.string()),
+        pa.field("rules", pa.list_(pa.string())),
+        pa.field("rules_hash", pa.string()),
+        pa.field("generator", pa.list_(_MAP_ENTRY_SCHEMA)),
+        pa.field("normalization_distance", pa.int64()),
+        pa.field("error_level", pa.string()),
+        pa.field("unsupported_level", pa.string()),
+        pa.field("tokenizer_mode", pa.string()),
+        pa.field("transforms", pa.list_(pa.string())),
+        pa.field("identify", pa.bool_()),
+    ]
+)
+_AST_HASH_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32()),
+        pa.field("dialect", pa.string()),
+        pa.field("sql", pa.string()),
+    ]
+)
+_PLAN_HASH_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32()),
+        pa.field("dialect", pa.string()),
+        pa.field("sql", pa.string()),
+        pa.field("policy_hash", pa.string()),
+    ]
+)
+_STEP_HASH_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32()),
+        pa.field("entries", pa.list_(_MAP_ENTRY_SCHEMA)),
+    ]
+)
+_EDGE_SCHEMA = pa.struct(
+    [
+        pa.field("source", pa.string()),
+        pa.field("target", pa.string()),
+    ]
+)
+_DAG_HASH_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32()),
+        pa.field("steps", pa.list_(pa.string())),
+        pa.field("edges", pa.list_(_EDGE_SCHEMA)),
+    ]
+)
 
 
 class GeneratorInitKwargs(TypedDict, total=False):
@@ -362,14 +429,18 @@ def sqlglot_policy_snapshot() -> SqlGlotPolicySnapshot:
     """
     policy = default_sqlglot_policy()
     rules = tuple(_rule_name(rule) for rule in policy.rules)
-    rules_hash = _hash_payload({"rules": rules})
+    rules_hash = payload_hash(
+        {"version": HASH_PAYLOAD_VERSION, "rules": list(rules)},
+        _RULES_HASH_SCHEMA,
+    )
     generator = dict(policy.generator)
     payload = {
+        "version": HASH_PAYLOAD_VERSION,
         "read_dialect": policy.read_dialect,
         "write_dialect": policy.write_dialect,
         "rules": list(rules),
         "rules_hash": rules_hash,
-        "generator": dict(generator),
+        "generator": _map_entries(generator),
         "normalization_distance": policy.normalization_distance,
         "error_level": policy.error_level.name,
         "unsupported_level": policy.unsupported_level.name,
@@ -377,7 +448,7 @@ def sqlglot_policy_snapshot() -> SqlGlotPolicySnapshot:
         "transforms": [_rule_name(transform) for transform in policy.transforms],
         "identify": policy.identify,
     }
-    policy_hash = _hash_payload(payload)
+    policy_hash = payload_hash(payload, _POLICY_HASH_SCHEMA)
     return SqlGlotPolicySnapshot(
         read_dialect=policy.read_dialect,
         write_dialect=policy.write_dialect,
@@ -410,9 +481,63 @@ def _tokenizer_mode() -> str:
         return "rust"
 
 
-def _hash_payload(payload: Mapping[str, object]) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+def _map_entries(payload: Mapping[str, object]) -> list[dict[str, object]]:
+    return [
+        _map_entry(key, value)
+        for key, value in sorted(payload.items(), key=lambda item: str(item[0]))
+    ]
+
+
+def _map_entry(key: object, value: object) -> dict[str, object]:
+    return {
+        "key": str(key),
+        "value_kind": _value_kind(value),
+        "value": _value_text(value),
+    }
+
+
+def _value_kind(value: object) -> str:
+    kind = "string"
+    if value is None:
+        kind = "null"
+    elif isinstance(value, bool):
+        kind = "bool"
+    elif isinstance(value, int):
+        kind = "int64"
+    elif isinstance(value, float):
+        kind = "float64"
+    elif isinstance(value, bytes):
+        kind = "binary"
+    return kind
+
+
+def _value_text(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.hex()
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (bool, int, float)):
+        return str(value)
+    return _stable_repr(value)
+
+
+def _stable_repr(value: object) -> str:
+    if isinstance(value, Mapping):
+        items = ", ".join(
+            f"{_stable_repr(key)}:{_stable_repr(val)}"
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+        return f"{{{items}}}"
+    if isinstance(value, (list, tuple, set)):
+        rendered = [_stable_repr(item) for item in value]
+        if isinstance(value, set):
+            rendered = sorted(rendered)
+        items = ", ".join(rendered)
+        bracket = "()" if isinstance(value, tuple) else "[]"
+        return f"{bracket[0]}{items}{bracket[1]}"
+    return repr(value)
 
 
 def _generator_kwargs(policy: SqlGlotPolicy) -> GeneratorInitKwargs:
@@ -422,15 +547,20 @@ def _generator_kwargs(policy: SqlGlotPolicy) -> GeneratorInitKwargs:
 
 
 def canonical_ast_fingerprint(expr: Expression) -> str:
-    """Return a stable fingerprint for a SQLGlot expression AST.
+    """Return a stable fingerprint for a SQLGlot expression.
 
     Returns
     -------
     str
-        SHA-256 fingerprint for the serialized AST payload.
+        SHA-256 fingerprint for the canonical SQL text payload.
     """
-    payload = dump(expr)
-    return _hash_payload({"ast": payload})
+    sql_text = expr.sql(dialect=DEFAULT_WRITE_DIALECT)
+    payload = {
+        "version": HASH_PAYLOAD_VERSION,
+        "dialect": DEFAULT_WRITE_DIALECT,
+        "sql": sql_text,
+    }
+    return payload_hash(payload, _AST_HASH_SCHEMA)
 
 
 def apply_transforms(
@@ -833,8 +963,14 @@ def plan_fingerprint(
     """
     if policy_hash is None:
         policy_hash = sqlglot_policy_snapshot().policy_hash
-    payload = {"dialect": dialect, "ast": dump(expr), "policy_hash": policy_hash}
-    return _hash_payload(payload)
+    sql_text = expr.sql(dialect=dialect)
+    payload = {
+        "version": HASH_PAYLOAD_VERSION,
+        "dialect": dialect,
+        "sql": sql_text,
+        "policy_hash": policy_hash,
+    }
+    return payload_hash(payload, _PLAN_HASH_SCHEMA)
 
 
 def planner_dag_snapshot(
@@ -862,7 +998,13 @@ def planner_dag_snapshot(
     step_payloads: dict[Step, dict[str, object]] = {
         step: _planner_step_payload(step) for step in steps
     }
-    step_ids = {step: _hash_payload(payload) for step, payload in step_payloads.items()}
+    step_ids = {
+        step: payload_hash(
+            {"version": HASH_PAYLOAD_VERSION, "entries": _map_entries(payload)},
+            _STEP_HASH_SCHEMA,
+        )
+        for step, payload in step_payloads.items()
+    }
     step_rows = [
         {
             "step_id": step_ids[step],
@@ -880,7 +1022,14 @@ def planner_dag_snapshot(
     ]
     step_rows_sorted = tuple(sorted(step_rows, key=lambda row: str(row["step_id"])))
     edge_rows_sorted = tuple(sorted(edge_rows, key=lambda row: (row["source"], row["target"])))
-    dag_hash = _hash_payload({"steps": step_rows_sorted, "edges": edge_rows_sorted})
+    dag_hash = payload_hash(
+        {
+            "version": HASH_PAYLOAD_VERSION,
+            "steps": [str(row["step_id"]) for row in step_rows_sorted],
+            "edges": edge_rows_sorted,
+        },
+        _DAG_HASH_SCHEMA,
+    )
     return PlannerDagSnapshot(
         steps=step_rows_sorted,
         edges=edge_rows_sorted,
@@ -927,15 +1076,7 @@ def _normalize_planner_value(value: object) -> object:
 
 
 def _planner_value_sort_key(value: object) -> str:
-    try:
-        return json.dumps(
-            value,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-    except TypeError:
-        return str(value)
+    return _stable_repr(value)
 
 
 def _qualification_failure_payload(
@@ -958,7 +1099,7 @@ def _qualification_failure_payload(
         "expand_stars": options.expand_stars,
         "validate_columns": options.validate_columns,
         "identify": options.identify,
-        "ast_payload": dump(expr),
+        "sql_text": expr.sql(dialect=options.dialect),
     }
 
 

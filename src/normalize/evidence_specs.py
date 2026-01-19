@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.spec.codec import parse_scalar_value
+from registry_common.metadata import (
+    decode_metadata_list,
+    decode_metadata_map,
+    decode_metadata_scalar_map,
+)
 from relspec.normalize.rule_model import EvidenceOutput, EvidenceSpec
 
 if TYPE_CHECKING:
-    from arrowdsl.compute.expr_core import ScalarValue
+    from arrowdsl.core.expr_types import ScalarValue
 
 EVIDENCE_REQUIRED_COLUMNS_META = b"evidence_required_columns"
 EVIDENCE_REQUIRED_TYPES_META = b"evidence_required_types"
@@ -67,35 +71,22 @@ def _meta_list(meta: Mapping[bytes, bytes], key: bytes) -> list[str]:
     raw = meta.get(key)
     if raw is None:
         return []
-    text = raw.decode("utf-8").strip()
-    if not text:
-        return []
-    if text.startswith("["):
-        payload = json.loads(text)
-        if not isinstance(payload, list):
-            msg = f"Expected list for metadata {key!r}."
-            raise TypeError(msg)
-        return [str(item) for item in payload if str(item)]
-    return [item.strip() for item in text.split(",") if item.strip()]
+    return [str(item) for item in decode_metadata_list(raw) if str(item)]
 
 
 def _meta_map(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, str]:
-    payload = _meta_json(meta, key)
-    if payload is None:
+    raw = meta.get(key)
+    if raw is None:
         return {}
-    if not isinstance(payload, Mapping):
-        msg = f"Expected mapping for metadata {key!r}."
-        raise TypeError(msg)
+    payload = decode_metadata_map(raw)
     return {str(k): str(v) for k, v in payload.items()}
 
 
 def _meta_scalar_map(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, ScalarValue]:
-    payload = _meta_json(meta, key)
-    if payload is None:
+    raw = meta.get(key)
+    if raw is None:
         return {}
-    if not isinstance(payload, Mapping):
-        msg = f"Expected mapping for metadata {key!r}."
-        raise TypeError(msg)
+    payload = decode_metadata_scalar_map(raw)
     parsed: dict[str, ScalarValue] = {}
     for name, value in payload.items():
         parsed[str(name)] = parse_scalar_value(value)
@@ -103,23 +94,11 @@ def _meta_scalar_map(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, Scala
 
 
 def _meta_metadata_map(meta: Mapping[bytes, bytes], key: bytes) -> dict[bytes, bytes]:
-    payload = _meta_json(meta, key)
-    if payload is None:
-        return {}
-    if not isinstance(payload, Mapping):
-        msg = f"Expected mapping for metadata {key!r}."
-        raise TypeError(msg)
-    return {str(k).encode("utf-8"): str(v).encode("utf-8") for k, v in payload.items()}
-
-
-def _meta_json(meta: Mapping[bytes, bytes], key: bytes) -> object | None:
     raw = meta.get(key)
     if raw is None:
-        return None
-    text = raw.decode("utf-8").strip()
-    if not text:
-        return None
-    return json.loads(text)
+        return {}
+    payload = decode_metadata_map(raw)
+    return {str(k).encode("utf-8"): str(v).encode("utf-8") for k, v in payload.items()}
 
 
 __all__ = [

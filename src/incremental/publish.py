@@ -7,8 +7,6 @@ from pathlib import Path
 import pyarrow as pa
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.plan.dataset_wrappers import unwrap_dataset
-from arrowdsl.plan.query import DatasetDiscoveryOptions, DatasetSourceOptions, open_dataset
 from arrowdsl.schema.schema import align_table, empty_table
 from cpg.schemas import (
     CPG_EDGES_SCHEMA,
@@ -19,6 +17,12 @@ from cpg.schemas import (
 )
 from incremental.invalidations import validate_schema_identity
 from incremental.state_store import StateStore
+from storage.dataset_sources import (
+    DatasetDiscoveryOptions,
+    DatasetSourceOptions,
+    normalize_dataset_source,
+    unwrap_dataset,
+)
 
 _CPG_NODES_DATASET = "cpg_nodes_v1"
 _CPG_EDGES_DATASET = "cpg_edges_v1"
@@ -123,7 +127,7 @@ def _read_state_dataset_optional(path: Path, *, schema: pa.Schema) -> pa.Table |
     if not path.exists():
         return None
     dataset = unwrap_dataset(
-        open_dataset(
+        normalize_dataset_source(
             path,
             options=DatasetSourceOptions(
                 schema=schema,

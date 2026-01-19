@@ -22,7 +22,6 @@ from sqlglot_tools.optimizer import (
     default_sqlglot_policy,
     plan_fingerprint,
     sqlglot_policy_snapshot,
-    sqlglot_sql,
 )
 
 RuleDiagnosticSeverity = Literal["error", "warning"]
@@ -279,11 +278,10 @@ def _sqlglot_metadata_payload(diagnostics: SqlGlotDiagnostics) -> dict[str, str]
     """
     policy = default_sqlglot_policy()
     metadata: dict[str, str] = {
-        "raw_sql": sqlglot_sql(diagnostics.expression, policy=policy),
-        "optimized_sql": sqlglot_sql(diagnostics.optimized, policy=policy),
+        "raw_sql": diagnostics.sql_text_raw,
+        "optimized_sql": diagnostics.sql_text_optimized,
+        "sql_dialect": diagnostics.sql_dialect,
         "ast_repr": diagnostics.ast_repr,
-        "ast_payload_raw": diagnostics.ast_payload_raw,
-        "ast_payload_optimized": diagnostics.ast_payload_optimized,
         "plan_fingerprint": plan_fingerprint(diagnostics.optimized, dialect=policy.write_dialect),
         "sqlglot_policy_hash": sqlglot_policy_snapshot().policy_hash,
     }

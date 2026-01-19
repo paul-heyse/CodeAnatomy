@@ -9,9 +9,9 @@ from typing import cast
 import ibis
 from ibis.expr.types import Table as IbisTable
 
-from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.compute.kernels import resolve_kernel
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
+from arrowdsl.core.expr_types import ExplodeSpec
 from arrowdsl.core.interop import TableLike, coerce_table_like
 
 try:

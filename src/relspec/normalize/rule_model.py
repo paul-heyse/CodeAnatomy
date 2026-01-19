@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from arrowdsl.compute.expr_core import ScalarValue
+from arrowdsl.core.expr_types import ScalarValue
 from ibis_engine.query_compiler import IbisQuerySpec
 from relspec.model import (
     AmbiguityPolicy,

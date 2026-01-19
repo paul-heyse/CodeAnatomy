@@ -17,6 +17,13 @@ from cpg.registry_tables import (
 )
 from cpg.spec_tables import node_plan_spec_table, prop_table_spec_table
 from storage.deltalake.delta import DeltaWriteOptions, write_named_datasets_delta
+from storage.deltalake.registry_freshness import (
+    REGISTRY_SIGNATURE_TABLE,
+    read_registry_signature,
+    registry_signature_from_tables,
+    registry_signature_table,
+    should_regenerate,
+)
 from storage.deltalake.registry_models import (
     REGISTRY_DIAGNOSTIC_SCHEMA,
     RegistryBuildResult,
@@ -162,11 +169,26 @@ def write_registry_delta(
         validate_extractors=resolved.validate_extractors,
         allow_planned=resolved.allow_planned,
     )
-    tables = dict(build.tables)
     diagnostics_table = build.diagnostics_table()
+    tables = encode_registry_tables_for_delta(dict(build.tables))
+    signature = registry_signature_from_tables("cpg", tables)
+    existing = read_registry_signature(
+        base_dir,
+        registry=signature.registry,
+        storage_options=resolved.storage_options,
+    )
+    if resolved.skip_if_unchanged and not should_regenerate(
+        current=existing.signature if existing is not None else None,
+        next_signature=signature.signature,
+        force=resolved.force,
+    ):
+        return RegistryWriteResult(results={}, diagnostics=diagnostics_table)
+    extra_tables = {
+        REGISTRY_SIGNATURE_TABLE: registry_signature_table((signature,)),
+    }
     if resolved.include_diagnostics:
-        tables["registry_diagnostics"] = diagnostics_table
-    tables = encode_registry_tables_for_delta(tables)
+        extra_tables["registry_diagnostics"] = diagnostics_table
+    tables.update(encode_registry_tables_for_delta(extra_tables))
     delta_options = resolved.delta_options or DeltaWriteOptions(mode="overwrite")
     results = write_named_datasets_delta(
         tables,

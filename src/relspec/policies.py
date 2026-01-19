@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from typing import Literal
 
@@ -11,6 +10,11 @@ from arrowdsl.core.interop import SchemaLike
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.metadata import infer_ordering_keys, ordering_from_schema
 from arrowdsl.spec.expr_ir import ExprIR
+from registry_common.metadata import (
+    decode_metadata_list,
+    decode_metadata_map,
+    decode_metadata_scalar_map,
+)
 from relspec.model import AmbiguityPolicy, ConfidencePolicy, DedupeKernelSpec, EvidenceSpec
 from relspec.rules.policies import PolicyRegistry
 
@@ -126,7 +130,7 @@ def evidence_spec_from_schema(schema: SchemaLike) -> EvidenceSpec | None:
     """
     meta = schema.metadata or {}
     required_columns = _meta_list(meta, EVIDENCE_REQUIRED_COLS_META)
-    required_types = _meta_json_map_str(meta, EVIDENCE_REQUIRED_TYPES_META)
+    required_types = _meta_map(meta, EVIDENCE_REQUIRED_TYPES_META)
     if not required_columns and not required_types:
         return None
     return EvidenceSpec(
@@ -186,7 +190,7 @@ def _confidence_policy_from_metadata(
         return registry.resolve_confidence("cpg", name)
     base = _meta_float(meta, CONFIDENCE_BASE_META)
     penalty = _meta_float(meta, CONFIDENCE_PENALTY_META)
-    weights = _meta_json_map(meta, CONFIDENCE_SOURCE_WEIGHT_META)
+    weights = _meta_scalar_map(meta, CONFIDENCE_SOURCE_WEIGHT_META)
     if base is None and penalty is None and not weights:
         rank = _meta_int(meta, EVIDENCE_RANK_META)
         if rank is None:
@@ -305,8 +309,8 @@ def _rank_confidence(rank: int) -> float:
     return max(0.1, min(1.0, score))
 
 
-def _meta_json_map(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, float]:
-    """Decode a JSON metadata mapping to float values.
+def _meta_scalar_map(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, float]:
+    """Decode IPC metadata mapping to float values.
 
     Parameters
     ----------
@@ -318,7 +322,7 @@ def _meta_json_map(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, float]:
     Returns
     -------
     dict[str, float]
-        Parsed JSON mapping.
+        Parsed mapping.
 
     Raises
     ------
@@ -328,15 +332,26 @@ def _meta_json_map(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, float]:
     raw = meta.get(key)
     if raw is None:
         return {}
-    payload = json.loads(raw.decode("utf-8"))
-    if not isinstance(payload, Mapping):
-        msg = f"Expected mapping for metadata {key!r}."
+    payload = decode_metadata_scalar_map(raw)
+    parsed: dict[str, float] = {}
+    for name, value in payload.items():
+        if isinstance(value, (float, int)):
+            parsed[str(name)] = float(value)
+            continue
+        if isinstance(value, str):
+            try:
+                parsed[str(name)] = float(value)
+            except ValueError as exc:
+                msg = f"Expected scalar float for metadata {key!r}."
+                raise TypeError(msg) from exc
+            continue
+        msg = f"Expected scalar float for metadata {key!r}."
         raise TypeError(msg)
-    return {str(k): float(v) for k, v in payload.items()}
+    return parsed
 
 
-def _meta_json_map_str(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, str]:
-    """Decode a JSON metadata mapping to string values.
+def _meta_map(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, str]:
+    """Decode IPC metadata mapping to string values.
 
     Parameters
     ----------
@@ -348,25 +363,17 @@ def _meta_json_map_str(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, str
     Returns
     -------
     dict[str, str]
-        Parsed JSON mapping.
-
-    Raises
-    ------
-    TypeError
-        Raised when the metadata payload is not a mapping.
+        Parsed mapping.
     """
     raw = meta.get(key)
     if raw is None:
         return {}
-    payload = json.loads(raw.decode("utf-8"))
-    if not isinstance(payload, Mapping):
-        msg = f"Expected mapping for metadata {key!r}."
-        raise TypeError(msg)
+    payload = decode_metadata_map(raw)
     return {str(k): str(v) for k, v in payload.items()}
 
 
 def _meta_list(meta: Mapping[bytes, bytes], key: bytes) -> tuple[str, ...]:
-    """Decode a comma-separated metadata value to a tuple.
+    """Decode IPC metadata list into a tuple of strings.
 
     Parameters
     ----------
@@ -383,10 +390,8 @@ def _meta_list(meta: Mapping[bytes, bytes], key: bytes) -> tuple[str, ...]:
     raw = meta.get(key)
     if raw is None:
         return ()
-    text = raw.decode("utf-8").strip()
-    if not text:
-        return ()
-    return tuple(item.strip() for item in text.split(",") if item.strip())
+    payload = decode_metadata_list(raw)
+    return tuple(str(item) for item in payload if str(item))
 
 
 def _source_weight_expr(source_expr: ExprIR, weights: Mapping[str, float]) -> ExprIR:

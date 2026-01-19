@@ -16,8 +16,6 @@ from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.core.schema_constants import PROVENANCE_COLS
 from arrowdsl.finalize.finalize import Contract, FinalizeOptions, FinalizeResult, finalize
-from arrowdsl.plan.scan_io import DatasetSource
-from arrowdsl.plan.schema_utils import plan_schema
 from arrowdsl.schema.metadata import encoding_policy_from_schema, merge_metadata_specs
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec
@@ -25,6 +23,7 @@ from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
+from ibis_engine.scan_io import DatasetSource
 from ibis_engine.sources import (
     SourceToIbisOptions,
     namespace_recorder_from_ctx,
@@ -128,7 +127,7 @@ def _normalize_ibis_context(
         rule_set = tuple(rule for rule in rule_set if rule.output in required_set)
     for rule in rule_set:
         _validate_rule_policies(rule)
-    evidence = EvidenceCatalog.from_sources(catalog.tables, ctx=ctx)
+    evidence = EvidenceCatalog.from_sources(catalog.tables)
     selectors = RuleSelectors(
         inputs_for=lambda rule: rule.inputs,
         output_for=lambda rule: rule.output,
@@ -212,7 +211,7 @@ def _should_skip_canonical_sort(
         return False
     expected = tuple((key.column, key.order) for key in contract.canonical_sort)
     if ctx.provenance:
-        schema = plan_schema(plan, ctx=ctx)
+        schema = plan.expr.schema().to_pyarrow()
         for col in PROVENANCE_COLS:
             if col in schema.names:
                 expected = (*expected, (col, "ascending"))

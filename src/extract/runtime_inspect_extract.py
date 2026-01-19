@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -10,6 +9,9 @@ import textwrap
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+import pyarrow as pa
+from pyarrow import ipc
 
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
@@ -32,7 +34,7 @@ if TYPE_CHECKING:
 type Row = dict[str, object]
 
 
-INVALID_PAYLOAD_TYPE = "Runtime inspect output is not a JSON object."
+INVALID_PAYLOAD_TYPE = "Runtime inspect output is not a valid IPC payload."
 
 
 class RuntimeInspectPayloadTypeError(TypeError):
@@ -81,11 +83,18 @@ def _inspect_script() -> str:
         """
         import importlib
         import inspect
-        import json
         import os
         import sys
+        import pyarrow as pa
+        from pyarrow import ipc
 
-        allowlist = json.loads(os.environ.get("CODEANATOMY_ALLOWLIST", "[]"))
+        raw_allowlist = os.environ.get("CODEANATOMY_ALLOWLIST", "")
+        allowlist = [
+            item.strip()
+            for line in raw_allowlist.replace(",", "\\n").splitlines()
+            for item in [line]
+            if item.strip()
+        ]
         repo_root = os.environ.get("CODEANATOMY_REPO_ROOT")
         if repo_root:
             sys.path.insert(0, repo_root)
@@ -241,12 +250,71 @@ def _inspect_script() -> str:
                     )
 
         payload = {
+            "version": 1,
             "objects": objects,
             "signatures": signatures,
             "members": members,
             "errors": errors,
         }
-        print(json.dumps(payload))
+        param_struct = pa.struct(
+            [
+                pa.field("name", pa.string()),
+                pa.field("kind", pa.string()),
+                pa.field("default", pa.string()),
+                pa.field("annotation", pa.string()),
+                pa.field("position", pa.int64()),
+            ]
+        )
+        signature_struct = pa.struct(
+            [
+                pa.field("object_key", pa.string()),
+                pa.field("signature", pa.string()),
+                pa.field("return_annotation", pa.string()),
+                pa.field("parameters", pa.list_(param_struct)),
+            ]
+        )
+        object_struct = pa.struct(
+            [
+                pa.field("object_key", pa.string()),
+                pa.field("module", pa.string()),
+                pa.field("qualname", pa.string()),
+                pa.field("name", pa.string()),
+                pa.field("obj_type", pa.string()),
+                pa.field("source_path", pa.string()),
+                pa.field("source_line", pa.int64()),
+            ]
+        )
+        member_struct = pa.struct(
+            [
+                pa.field("owner_key", pa.string()),
+                pa.field("name", pa.string()),
+                pa.field("member_kind", pa.string()),
+                pa.field("value_repr", pa.string()),
+                pa.field("value_module", pa.string()),
+                pa.field("value_qualname", pa.string()),
+            ]
+        )
+        error_struct = pa.struct(
+            [
+                pa.field("module", pa.string()),
+                pa.field("stage", pa.string()),
+                pa.field("error", pa.string()),
+            ]
+        )
+        schema = pa.schema(
+            [
+                pa.field("version", pa.int32()),
+                pa.field("objects", pa.list_(object_struct)),
+                pa.field("signatures", pa.list_(signature_struct)),
+                pa.field("members", pa.list_(member_struct)),
+                pa.field("errors", pa.list_(error_struct)),
+            ]
+        )
+        table = pa.Table.from_pylist([payload], schema=schema)
+        sink = pa.BufferOutputStream()
+        with ipc.new_stream(sink, table.schema) as writer:
+            writer.write_table(table)
+        sys.stdout.buffer.write(sink.getvalue().to_pybytes())
         """
     ).strip()
 
@@ -270,12 +338,12 @@ def _run_inspect_subprocess(
 ) -> dict[str, object]:
     env = os.environ.copy()
     env["CODEANATOMY_REPO_ROOT"] = repo_root
-    env["CODEANATOMY_ALLOWLIST"] = json.dumps([str(m) for m in module_allowlist])
+    env["CODEANATOMY_ALLOWLIST"] = "\n".join(str(m) for m in module_allowlist)
 
     result = subprocess.run(
         [sys.executable, "-c", _inspect_script()],
         capture_output=True,
-        text=True,
+        text=False,
         timeout=timeout_s,
         check=False,
         env=env,
@@ -283,18 +351,28 @@ def _run_inspect_subprocess(
     )
 
     if result.returncode != 0:
-        msg = result.stderr.strip() or result.stdout.strip() or "runtime inspect failed"
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        stdout = result.stdout.decode("utf-8", errors="replace").strip()
+        msg = stderr or stdout or "runtime inspect failed"
         raise RuntimeError(msg)
 
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        msg = f"Failed to parse runtime inspect output: {exc}"
-        raise RuntimeError(msg) from exc
+    return _decode_runtime_payload(result.stdout)
 
-    if not isinstance(payload, dict):
+
+def _decode_runtime_payload(payload: bytes) -> dict[str, object]:
+    if not payload:
         raise RuntimeInspectPayloadTypeError
-    return payload
+    reader = ipc.open_stream(pa.BufferReader(payload))
+    table = reader.read_all()
+    rows = table.to_pylist()
+    if not rows or not isinstance(rows[0], dict):
+        raise RuntimeInspectPayloadTypeError
+    row = rows[0]
+    version = row.get("version")
+    if version is not None and int(version) != 1:
+        msg = "Runtime inspect payload version mismatch."
+        raise ValueError(msg)
+    return row
 
 
 def _parse_runtime_objects(objects_raw: object) -> list[Row]:

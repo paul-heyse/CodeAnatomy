@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, cast
@@ -25,8 +23,18 @@ from arrowdsl.core.schema_constants import (
 from arrowdsl.schema.build import list_view_type
 from arrowdsl.schema.metadata import ENCODING_DICTIONARY, ENCODING_META, dict_field_metadata
 from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTransform
+from registry_common.arrow_payloads import payload_hash
 
 DICT_STRING = interop.dictionary(interop.int32(), interop.string())
+
+DDL_FINGERPRINT_VERSION: int = 1
+_DDL_FINGERPRINT_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32()),
+        pa.field("dialect", pa.string()),
+        pa.field("columns", pa.list_(pa.string())),
+    ]
+)
 
 if TYPE_CHECKING:
     from arrowdsl.spec.expr_ir import ExprIR
@@ -340,11 +348,11 @@ class TableSchemaSpec:
         dialect_name = dialect or "datafusion"
         column_defs = self.to_sqlglot_column_defs(dialect=dialect_name)
         payload = {
+            "version": DDL_FINGERPRINT_VERSION,
             "dialect": dialect_name,
             "columns": [column.sql(dialect=dialect_name) for column in column_defs],
         }
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()
+        return payload_hash(payload, _DDL_FINGERPRINT_SCHEMA)
 
     def to_create_table_sql(
         self,

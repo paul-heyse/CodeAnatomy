@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, cast
 
-from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.expr_types import ExplodeSpec
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.ir.plan import OpNode, PlanIR
 from arrowdsl.plan.ops import DedupeSpec, JoinSpec

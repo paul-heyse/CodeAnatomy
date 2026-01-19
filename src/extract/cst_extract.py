@@ -19,7 +19,6 @@ from libcst.metadata import (
     QualifiedNameProvider,
 )
 
-from arrowdsl.compute.macros import normalize_string_items
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.structs import flatten_struct_field
@@ -37,6 +36,7 @@ from extract.helpers import (
 from extract.registry_fields import QNAME_STRUCT
 from extract.registry_specs import dataset_enabled, dataset_row_schema, normalize_options
 from extract.schema_ops import ExtractNormalizeOptions
+from extract.string_utils import normalize_string_items
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:

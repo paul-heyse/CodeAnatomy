@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import importlib
-import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Protocol, cast
@@ -731,7 +730,7 @@ def _lineage_graph_metadata(
         return None
     if not lineage:
         return None
-    return json.dumps(lineage, ensure_ascii=True, sort_keys=True)
+    return _stable_repr(lineage)
 
 
 def _list_filter_gate_diagnostics(
@@ -1143,7 +1142,7 @@ def _register_schema_tables(
 
 
 def _json_payload(payload: Mapping[str, object]) -> str:
-    """Serialize a payload mapping to JSON.
+    """Serialize a payload mapping to stable text.
 
     Parameters
     ----------
@@ -1153,13 +1152,13 @@ def _json_payload(payload: Mapping[str, object]) -> str:
     Returns
     -------
     str
-        JSON string payload.
+        Stable string payload.
     """
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return _stable_repr(payload)
 
 
 def _settings_snapshot_payload(table: pa.Table) -> str:
-    """Serialize DataFusion settings snapshot table to JSON.
+    """Serialize DataFusion settings snapshot table to text.
 
     Parameters
     ----------
@@ -1169,7 +1168,7 @@ def _settings_snapshot_payload(table: pa.Table) -> str:
     Returns
     -------
     str
-        JSON string payload.
+        Stable string payload.
     """
     rows: list[dict[str, str]] = []
     for row in iter_rows_from_table(table):
@@ -1178,7 +1177,24 @@ def _settings_snapshot_payload(table: pa.Table) -> str:
         if name is None or value is None:
             continue
         rows.append({"name": str(name), "value": str(value)})
-    return json.dumps(rows, sort_keys=True, separators=(",", ":"))
+    return _stable_repr(rows)
+
+
+def _stable_repr(value: object) -> str:
+    if isinstance(value, Mapping):
+        items = ", ".join(
+            f"{_stable_repr(key)}:{_stable_repr(val)}"
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+        return f"{{{items}}}"
+    if isinstance(value, (list, tuple, set)):
+        rendered = [_stable_repr(item) for item in value]
+        if isinstance(value, set):
+            rendered = sorted(rendered)
+        items = ", ".join(rendered)
+        bracket = "()" if isinstance(value, tuple) else "[]"
+        return f"{bracket[0]}{items}{bracket[1]}"
+    return repr(value)
 
 
 def _rule_sqlglot_source(
@@ -1517,20 +1533,7 @@ def _sqlglot_failure_diagnostic(
     """
     metadata: dict[str, str] = {"error": str(error)}
     if isinstance(error, SqlGlotQualificationError):
-        try:
-            metadata["qualification_payload"] = json.dumps(
-                error.payload,
-                ensure_ascii=True,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
-        except TypeError:
-            metadata["qualification_payload"] = json.dumps(
-                {"error": "qualification payload not JSON-serializable"},
-                ensure_ascii=True,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
+        metadata["qualification_payload"] = _stable_payload_text(error.payload)
     return RuleDiagnostic(
         domain=rule.domain,
         template=None,
@@ -1540,6 +1543,23 @@ def _sqlglot_failure_diagnostic(
         plan_signature=plan_signature,
         metadata=metadata,
     )
+
+
+def _stable_payload_text(payload: object) -> str:
+    if isinstance(payload, Mapping):
+        items = ", ".join(
+            f"{_stable_payload_text(key)}:{_stable_payload_text(value)}"
+            for key, value in sorted(payload.items(), key=lambda item: str(item[0]))
+        )
+        return f"{{{items}}}"
+    if isinstance(payload, (list, tuple, set)):
+        rendered = [_stable_payload_text(item) for item in payload]
+        if isinstance(payload, set):
+            rendered = sorted(rendered)
+        items = ", ".join(rendered)
+        bracket = "()" if isinstance(payload, tuple) else "[]"
+        return f"{bracket[0]}{items}{bracket[1]}"
+    return str(payload)
 
 
 __all__ = [

@@ -2,38 +2,35 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from typing import cast
 
 import ibis
 import pyarrow as pa
 from ibis.backends import BaseBackend
+from ibis.expr.types import BooleanValue
+from ibis.expr.types import Column as IbisColumn
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
 
-from arrowdsl.compute.explode_dispatch import explode_list_dispatch
-from arrowdsl.compute.expr_core import ExplodeSpec
-from arrowdsl.compute.filters import FilterSpec
-from arrowdsl.compute.kernels import canonical_sort, resolve_kernel
+from arrowdsl.compute.kernels import resolve_kernel
 from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.core.determinism import DeterminismTier
-from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
+from arrowdsl.core.expr_types import ExplodeSpec, ScalarValue
+from arrowdsl.core.interop import RecordBatchReaderLike, ScalarLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
-from arrowdsl.json_factory import json_default
 from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions, SortKey
 from arrowdsl.plan.ordering_policy import require_explicit_ordering
-from arrowdsl.plan.query import ScanTelemetry
-from arrowdsl.schema.build import const_array, set_or_append_column
+from arrowdsl.plan.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from engine.materialize import build_plan_product
 from engine.plan_policy import ExecutionSurfacePolicy
 from ibis_engine.compiler_checkpoint import try_plan_hash
 from ibis_engine.execution import IbisExecutionContext
+from ibis_engine.expr_compiler import IbisExprRegistry, default_expr_registry, expr_ir_to_ibis
 from ibis_engine.io_bridge import IbisMaterializeOptions, materialize_table
 from ibis_engine.lineage import required_columns_by_table
 from ibis_engine.plan import IbisPlan
@@ -41,6 +38,7 @@ from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 from ibis_engine.registry import IbisDatasetRegistry
 from ibis_engine.schema_utils import validate_expr_schema
 from ibis_engine.sources import SourceToIbisOptions, namespace_recorder_from_ctx, table_to_ibis
+from registry_common.arrow_payloads import payload_hash
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
@@ -82,7 +80,15 @@ from relspec.rules.policies import PolicyRegistry
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, dataset_spec_from_contract
 from sqlglot_tools.bridge import IbisCompilerBackend
 
-KernelFn = Callable[[TableLike, ExecutionContext], TableLike]
+RULE_SIGNATURE_VERSION = 1
+_RULE_SIGNATURE_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32(), nullable=False),
+        pa.field("rule_repr", pa.string(), nullable=False),
+    ]
+)
+
+PlanTransform = Callable[[IbisTable, ExecutionContext], IbisTable]
 PlanExecutor = Callable[
     [IbisPlan, ExecutionContext, Mapping[IbisValue, object] | None, ExecutionLabel | None],
     TableLike,
@@ -139,9 +145,34 @@ def _rule_signature_for_output(rule: RelationshipRule) -> str:
     str
         Deterministic hash for the rule configuration payload.
     """
-    payload = json_default(rule)
-    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    payload = {
+        "version": RULE_SIGNATURE_VERSION,
+        "rule_repr": _stable_repr(_rule_payload(rule)),
+    }
+    return payload_hash(payload, _RULE_SIGNATURE_SCHEMA)
+
+
+def _rule_payload(rule: RelationshipRule) -> object:
+    if is_dataclass(rule) and not isinstance(rule, type):
+        return asdict(rule)
+    return rule
+
+
+def _stable_repr(value: object) -> str:
+    if isinstance(value, Mapping):
+        items = ", ".join(
+            f"{_stable_repr(key)}:{_stable_repr(val)}"
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+        return f"{{{items}}}"
+    if isinstance(value, (list, tuple, set)):
+        rendered = [_stable_repr(item) for item in value]
+        if isinstance(value, set):
+            rendered = sorted(rendered)
+        items = ", ".join(rendered)
+        bracket = "()" if isinstance(value, tuple) else "[]"
+        return f"{bracket[0]}{items}{bracket[1]}"
+    return repr(value)
 
 
 def _compiled_rule_signature(compiled: CompiledRule) -> str:
@@ -461,46 +492,6 @@ def _ensure_table(value: TableLike | RecordBatchReaderLike) -> pa.Table:
     return cast("pa.Table", value)
 
 
-def _build_rule_meta_kernel(rule: RelationshipRule) -> KernelFn:
-    """Build a kernel that injects rule metadata columns.
-
-    Parameters
-    ----------
-    rule
-        Relationship rule providing metadata values.
-
-    Returns
-    -------
-    KernelFn
-        Kernel that adds rule name and priority columns.
-    """
-
-    def _add_rule_meta(table: TableLike, _ctx: ExecutionContext) -> TableLike:
-        """Append rule metadata columns when missing.
-
-        Returns
-        -------
-        TableLike
-            Table with rule metadata columns applied.
-        """
-        count = table.num_rows
-        if rule.rule_name_col not in table.column_names:
-            table = set_or_append_column(
-                table,
-                rule.rule_name_col,
-                const_array(count, rule.name, dtype=pa.string()),
-            )
-        if rule.rule_priority_col not in table.column_names:
-            table = set_or_append_column(
-                table,
-                rule.rule_priority_col,
-                const_array(count, int(rule.priority), dtype=pa.int32()),
-            )
-        return table
-
-    return _add_rule_meta
-
-
 def _rule_metadata_spec(rule: RelationshipRule) -> SchemaMetadataSpec:
     """Build schema metadata spec containing rule metadata.
 
@@ -541,259 +532,251 @@ def _apply_rule_metadata(table: TableLike, *, rule: RelationshipRule) -> TableLi
     return table.cast(schema)
 
 
-def _build_add_literal_kernel(spec: AddLiteralSpec) -> KernelFn:
-    """Build a kernel that adds a literal column when missing.
-
-    Parameters
-    ----------
-    spec
-        Literal column specification.
+def _rule_meta_transform(rule: RelationshipRule) -> PlanTransform:
+    """Return a plan transform that injects rule metadata columns.
 
     Returns
     -------
-    KernelFn
-        Kernel that adds the literal column.
+    PlanTransform
+        Transform function that injects rule metadata columns.
     """
 
-    def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
-        """Add the literal column if it does not exist.
-
-        Returns
-        -------
-        TableLike
-            Table with the literal column added when missing.
-        """
-        if spec.name in table.column_names:
+    def _fn(table: IbisTable, _ctx: ExecutionContext) -> IbisTable:
+        updates: dict[str, IbisValue] = {}
+        if rule.rule_name_col not in table.columns:
+            updates[rule.rule_name_col] = ibis.literal(rule.name)
+        if rule.rule_priority_col not in table.columns:
+            updates[rule.rule_priority_col] = ibis.literal(int(rule.priority))
+        if not updates:
             return table
-        return set_or_append_column(table, spec.name, const_array(table.num_rows, spec.value))
+        return table.mutate(**updates)
 
     return _fn
 
 
-def _build_drop_columns_kernel(spec: DropColumnsSpec) -> KernelFn:
-    """Build a kernel that drops specified columns.
-
-    Parameters
-    ----------
-    spec
-        Drop-columns specification.
-
-    Returns
-    -------
-    KernelFn
-        Kernel that drops columns from the table.
-    """
-
-    def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
-        """Drop requested columns when present.
-
-        Returns
-        -------
-        TableLike
-            Table with requested columns removed when present.
-        """
-        cols = [col for col in spec.columns if col in table.column_names]
-        return table.drop(cols) if cols else table
-
-    return _fn
+def _literal_value(value: ScalarValue | None) -> object:
+    if isinstance(value, ScalarLike):
+        return value.as_py()
+    return value
 
 
-def _build_filter_kernel(spec: FilterKernelSpec) -> KernelFn:
-    """Build a kernel that filters rows using a predicate.
-
-    Parameters
-    ----------
-    spec
-        Filter specification.
-
-    Returns
-    -------
-    KernelFn
-        Kernel that filters a table.
-    """
-
-    def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
-        """Filter rows using the configured predicate.
-
-        Returns
-        -------
-        TableLike
-            Filtered table.
-        """
-        predicate = FilterSpec(spec.predicate.to_expr_spec()).mask(table)
-        return table.filter(predicate)
-
-    return _fn
+def _unique_name(base: str, existing: set[str]) -> str:
+    name = base
+    counter = 1
+    while name in existing:
+        name = f"{base}_{counter}"
+        counter += 1
+    return name
 
 
-def _build_rename_columns_kernel(spec: RenameColumnsSpec) -> KernelFn:
-    """Build a kernel that renames columns per mapping.
-
-    Parameters
-    ----------
-    spec
-        Rename-columns specification.
-
-    Returns
-    -------
-    KernelFn
-        Kernel that renames columns.
-    """
-
-    def _fn(table: TableLike, _ctx: ExecutionContext) -> TableLike:
-        """Rename columns when a mapping is provided.
-
-        Returns
-        -------
-        TableLike
-            Table with renamed columns when a mapping is provided.
-        """
-        if not spec.mapping:
-            return table
-        names = list(table.column_names)
-        new_names = [spec.mapping.get(name, name) for name in names]
-        return table.rename_columns(new_names)
-
-    return _fn
+def _sort_expr(table: IbisTable, key: SortKey) -> IbisColumn:
+    column = table[key.column]
+    if key.order == "descending":
+        return column.desc()
+    return column.asc()
 
 
-def _build_explode_list_kernel(spec: ExplodeListSpec) -> KernelFn:
-    """Build a kernel that explodes list columns into parent/value pairs.
-
-    Parameters
-    ----------
-    spec
-        Explode-list kernel specification.
-
-    Returns
-    -------
-    KernelFn
-        Kernel that explodes list columns.
-    """
-
-    def _fn(table: TableLike, ctx: ExecutionContext) -> TableLike:
-        """Explode list values using the configured kernel.
-
-        Returns
-        -------
-        TableLike
-            Table with exploded list columns.
-        """
-        explode_spec = ExplodeSpec(
-            parent_keys=(spec.parent_id_col,),
-            list_col=spec.list_col,
-            value_col=spec.out_value_col,
-            idx_col=spec.idx_col,
-            keep_empty=spec.keep_empty,
-        )
-        result = cast(
-            "TableLike",
-            explode_list_dispatch(table, spec=explode_spec, ctx=ctx).output,
-        )
-        if spec.parent_id_col == spec.out_parent_col:
-            return result
-        names = [
-            spec.out_parent_col if name == spec.parent_id_col else name
-            for name in result.column_names
-        ]
-        return result.rename_columns(names)
-
-    return _fn
+def _dedupe_order_by(table: IbisTable, *, spec: DedupeSpec) -> list[IbisValue]:
+    if spec.tie_breakers:
+        return [_sort_expr(table, key) for key in spec.tie_breakers if key.column in table.columns]
+    return [table[key].asc() for key in spec.keys if key in table.columns]
 
 
-def _build_dedupe_kernel(spec: DedupeKernelSpec) -> KernelFn:
-    """Build a kernel that deduplicates rows using default tie breakers.
-
-    Parameters
-    ----------
-    spec
-        Dedupe kernel specification.
-
-    Returns
-    -------
-    KernelFn
-        Kernel that deduplicates a table.
-    """
-
-    def _fn(table: TableLike, ctx: ExecutionContext) -> TableLike:
-        """Apply dedupe kernel with schema-derived defaults.
-
-        Returns
-        -------
-        TableLike
-            Table with deduplication applied.
-        """
-        resolved = _dedupe_spec_with_defaults(spec.spec, schema=table.schema)
-        kernel = resolve_kernel("dedupe", ctx=ctx)
-        return kernel(table, spec=resolved)
-
-    return _fn
+def _stable_unnest(table: IbisTable, spec: ExplodeSpec) -> IbisTable:
+    row_number_col = _unique_name("row_number", set(table.columns))
+    indexed = table.mutate(**{row_number_col: ibis.row_number()})
+    exploded = indexed.unnest(
+        spec.list_col,
+        offset=spec.idx_col,
+        keep_empty=spec.keep_empty,
+    )
+    order_cols = [exploded[key] for key in spec.parent_keys if key in exploded.columns]
+    order_cols.append(exploded[row_number_col])
+    if spec.idx_col is not None and spec.idx_col in exploded.columns:
+        order_cols.append(exploded[spec.idx_col])
+    ordered = exploded.order_by(order_cols) if order_cols else exploded
+    return ordered.drop(row_number_col)
 
 
-def _build_canonical_sort_kernel(spec: CanonicalSortKernelSpec) -> KernelFn:
-    def _fn(table: TableLike, ctx: ExecutionContext) -> TableLike:
-        _ = ctx
-        if not spec.sort_keys:
-            return table
-        return canonical_sort(table, sort_keys=spec.sort_keys)
-
-    return _fn
+def _apply_add_literal_ibis(table: IbisTable, spec: AddLiteralSpec) -> IbisTable:
+    if spec.name in table.columns:
+        return table
+    return table.mutate(**{spec.name: ibis.literal(_literal_value(spec.value))})
 
 
-_KERNEL_BUILDERS: tuple[tuple[type[object], Callable[[object], KernelFn]], ...] = (
-    (AddLiteralSpec, cast("Callable[[object], KernelFn]", _build_add_literal_kernel)),
-    (DropColumnsSpec, cast("Callable[[object], KernelFn]", _build_drop_columns_kernel)),
-    (FilterKernelSpec, cast("Callable[[object], KernelFn]", _build_filter_kernel)),
-    (RenameColumnsSpec, cast("Callable[[object], KernelFn]", _build_rename_columns_kernel)),
-    (ExplodeListSpec, cast("Callable[[object], KernelFn]", _build_explode_list_kernel)),
-    (DedupeKernelSpec, cast("Callable[[object], KernelFn]", _build_dedupe_kernel)),
-    (CanonicalSortKernelSpec, cast("Callable[[object], KernelFn]", _build_canonical_sort_kernel)),
-)
+def _apply_drop_columns_ibis(table: IbisTable, spec: DropColumnsSpec) -> IbisTable:
+    cols = [col for col in spec.columns if col in table.columns]
+    return table.drop(*cols) if cols else table
 
 
-def _kernel_from_spec(spec: object) -> KernelFn:
-    """Resolve a kernel function from a kernel spec.
+def _apply_filter_ibis(
+    table: IbisTable,
+    spec: FilterKernelSpec,
+    *,
+    registry: IbisExprRegistry,
+) -> IbisTable:
+    predicate = expr_ir_to_ibis(spec.predicate, table, registry=registry)
+    return table.filter(cast("BooleanValue", predicate))
 
-    Parameters
-    ----------
-    spec
-        Kernel specification to resolve.
 
-    Returns
-    -------
-    KernelFn
-        Resolved kernel function.
+def _apply_rename_columns_ibis(table: IbisTable, spec: RenameColumnsSpec) -> IbisTable:
+    mapping = {key: val for key, val in spec.mapping.items() if key in table.columns}
+    if not mapping:
+        return table
+    return table.rename(mapping)
 
-    Raises
-    ------
-    ValueError
-        Raised when the kernel spec type is unknown.
-    """
-    handler: Callable[[object], KernelFn] | None = None
-    for spec_type, builder in _KERNEL_BUILDERS:
-        if isinstance(spec, spec_type):
-            handler = builder
-            break
-    if handler is None:
-        msg = f"Unknown KernelSpec type: {type(spec).__name__}."
+
+def _apply_explode_list_ibis(table: IbisTable, spec: ExplodeListSpec) -> IbisTable:
+    if spec.list_col not in table.columns:
+        return table
+    explode_spec = ExplodeSpec(
+        parent_keys=(spec.parent_id_col,),
+        list_col=spec.list_col,
+        value_col=spec.out_value_col,
+        idx_col=spec.idx_col,
+        keep_empty=spec.keep_empty,
+    )
+    exploded = _stable_unnest(table, explode_spec)
+    renames: dict[str, str] = {}
+    if spec.list_col != spec.out_value_col:
+        renames[spec.list_col] = spec.out_value_col
+    if spec.parent_id_col != spec.out_parent_col and spec.parent_id_col in exploded.columns:
+        renames[spec.parent_id_col] = spec.out_parent_col
+    if renames:
+        exploded = exploded.rename(renames)
+    output_cols = [spec.out_parent_col, spec.out_value_col]
+    if spec.idx_col is not None:
+        output_cols.append(spec.idx_col)
+    selected = [name for name in output_cols if name in exploded.columns]
+    return exploded.select(*selected) if selected else exploded
+
+
+def _apply_dedupe_ibis(table: IbisTable, spec: DedupeKernelSpec) -> IbisTable:
+    dedupe = spec.spec
+    if not dedupe.keys:
+        return table
+    if dedupe.strategy not in {
+        "KEEP_FIRST_AFTER_SORT",
+        "KEEP_BEST_BY_SCORE",
+        "KEEP_ARBITRARY",
+    }:
+        msg = f"Unsupported dedupe strategy for Ibis: {dedupe.strategy!r}."
         raise ValueError(msg)
-    return handler(spec)
+    resolved = _dedupe_spec_with_defaults(dedupe, schema=table.schema().to_pyarrow())
+    order_by = _dedupe_order_by(table, spec=resolved)
+    window = ibis.window(
+        group_by=[table[key] for key in resolved.keys if key in table.columns],
+        order_by=order_by,
+    )
+    row_number_col = _unique_name("row_number", set(table.columns))
+    ranked = table.mutate(**{row_number_col: ibis.row_number().over(window)})
+    keep_first = ranked[row_number_col] == ibis.literal(1)
+    return ranked.filter(keep_first).drop(row_number_col)
 
 
-def _compile_post_kernels(specs: Sequence[KernelSpecT]) -> tuple[KernelFn, ...]:
-    """Compile kernel specs into executable kernel functions.
+def _apply_canonical_sort_ibis(table: IbisTable, spec: CanonicalSortKernelSpec) -> IbisTable:
+    order_by = [_sort_expr(table, key) for key in spec.sort_keys if key.column in table.columns]
+    return table.order_by(*order_by) if order_by else table
 
-    Parameters
-    ----------
-    specs
-        Kernel specifications to compile.
 
-    Returns
-    -------
-    tuple[KernelFn, ...]
-        Kernel functions in spec order.
-    """
-    return tuple(_kernel_from_spec(spec) for spec in specs)
+def _build_add_literal_kernel(spec: AddLiteralSpec) -> PlanTransform:
+    def _fn(table: IbisTable, _ctx: ExecutionContext) -> IbisTable:
+        return _apply_add_literal_ibis(table, spec)
+
+    return _fn
+
+
+def _build_drop_columns_kernel(spec: DropColumnsSpec) -> PlanTransform:
+    def _fn(table: IbisTable, _ctx: ExecutionContext) -> IbisTable:
+        return _apply_drop_columns_ibis(table, spec)
+
+    return _fn
+
+
+def _build_filter_kernel(spec: FilterKernelSpec, *, registry: IbisExprRegistry) -> PlanTransform:
+    def _fn(table: IbisTable, _ctx: ExecutionContext) -> IbisTable:
+        return _apply_filter_ibis(table, spec, registry=registry)
+
+    return _fn
+
+
+def _build_rename_columns_kernel(spec: RenameColumnsSpec) -> PlanTransform:
+    def _fn(table: IbisTable, _ctx: ExecutionContext) -> IbisTable:
+        return _apply_rename_columns_ibis(table, spec)
+
+    return _fn
+
+
+def _build_explode_list_kernel(spec: ExplodeListSpec) -> PlanTransform:
+    def _fn(table: IbisTable, _ctx: ExecutionContext) -> IbisTable:
+        return _apply_explode_list_ibis(table, spec)
+
+    return _fn
+
+
+def _build_dedupe_kernel(spec: DedupeKernelSpec) -> PlanTransform:
+    def _fn(table: IbisTable, _ctx: ExecutionContext) -> IbisTable:
+        return _apply_dedupe_ibis(table, spec)
+
+    return _fn
+
+
+def _build_canonical_sort_kernel(spec: CanonicalSortKernelSpec) -> PlanTransform:
+    def _fn(table: IbisTable, _ctx: ExecutionContext) -> IbisTable:
+        return _apply_canonical_sort_ibis(table, spec)
+
+    return _fn
+
+
+def _kernel_transform_from_spec(
+    spec: KernelSpecT,
+    *,
+    registry: IbisExprRegistry,
+) -> PlanTransform:
+    if isinstance(spec, FilterKernelSpec):
+        return _build_filter_kernel(spec, registry=registry)
+    builder: Callable[[KernelSpecT], PlanTransform] | None = None
+    if isinstance(spec, AddLiteralSpec):
+        builder = cast("Callable[[KernelSpecT], PlanTransform]", _build_add_literal_kernel)
+    elif isinstance(spec, DropColumnsSpec):
+        builder = cast("Callable[[KernelSpecT], PlanTransform]", _build_drop_columns_kernel)
+    elif isinstance(spec, RenameColumnsSpec):
+        builder = cast("Callable[[KernelSpecT], PlanTransform]", _build_rename_columns_kernel)
+    elif isinstance(spec, ExplodeListSpec):
+        builder = cast("Callable[[KernelSpecT], PlanTransform]", _build_explode_list_kernel)
+    elif isinstance(spec, DedupeKernelSpec):
+        builder = cast("Callable[[KernelSpecT], PlanTransform]", _build_dedupe_kernel)
+    elif isinstance(spec, CanonicalSortKernelSpec):
+        builder = cast(
+            "Callable[[KernelSpecT], PlanTransform]",
+            _build_canonical_sort_kernel,
+        )
+    if builder is not None:
+        return builder(spec)
+    msg = f"Unknown KernelSpec type: {type(spec).__name__}."
+    raise ValueError(msg)
+
+
+def _compile_post_kernels(
+    specs: Sequence[KernelSpecT],
+    *,
+    registry: IbisExprRegistry,
+) -> tuple[PlanTransform, ...]:
+    return tuple(_kernel_transform_from_spec(spec, registry=registry) for spec in specs)
+
+
+def _apply_plan_transforms(
+    plan: IbisPlan,
+    *,
+    ctx: ExecutionContext,
+    transforms: Sequence[PlanTransform],
+) -> IbisPlan:
+    if not transforms:
+        return plan
+    expr = plan.expr
+    for fn in transforms:
+        expr = fn(expr, ctx)
+    return IbisPlan(expr=expr, ordering=plan.ordering)
 
 
 def _dedupe_spec_with_defaults(spec: DedupeSpec, *, schema: SchemaLike) -> DedupeSpec:
@@ -1070,9 +1053,22 @@ class CompiledRule:
     rule: RelationshipRule
     rel_plan: RelPlan | None
     execute_fn: Callable[[ExecutionContext, PlanResolver[IbisPlan], PlanExecutor], TableLike] | None
-    post_kernels: tuple[KernelFn, ...] = ()
+    post_kernels: tuple[PlanTransform, ...] = ()
     emit_rule_meta: bool = True
     required_columns: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+
+    def apply_plan_transforms(self, plan: IbisPlan, *, ctx: ExecutionContext) -> IbisPlan:
+        """Apply rule metadata and post-kernel transforms to a plan.
+
+        Returns
+        -------
+        IbisPlan
+            Plan with metadata and post-kernel transforms applied.
+        """
+        transforms = list(self.post_kernels)
+        if self.emit_rule_meta:
+            transforms.insert(0, _rule_meta_transform(self.rule))
+        return _apply_plan_transforms(plan, ctx=ctx, transforms=transforms)
 
     def execute(
         self,
@@ -1110,8 +1106,8 @@ class CompiledRule:
             rule_name=self.rule.name,
             output_dataset=self.rule.output_dataset,
         )
+        resolved_backend = options.ibis_backend or resolver.backend
         if options.plan_executor is None:
-            resolved_backend = options.ibis_backend or resolver.backend
             resolved_executor = _adapter_plan_executor(
                 execution_policy=options.execution_policy,
                 ibis_backend=resolved_backend,
@@ -1138,16 +1134,22 @@ class CompiledRule:
             )
         if self.execute_fn is not None:
             table = self.execute_fn(ctx, effective_resolver, _execute_plan)
+            if self.emit_rule_meta or self.post_kernels:
+                plan = _ibis_plan_from_table_like(
+                    table,
+                    ordering=Ordering.unordered(),
+                    backend=resolved_backend,
+                    name=f"{label.rule_name}_{label.output_dataset}_post",
+                )
+                plan = self.apply_plan_transforms(plan, ctx=ctx)
+                table = resolved_executor(plan, ctx, options.params, label)
         elif self.rel_plan is not None:
             plan = compiler.compile(self.rel_plan, ctx=ctx, resolver=effective_resolver)
+            plan = self.apply_plan_transforms(plan, ctx=ctx)
             table = resolved_executor(plan, ctx, options.params, label)
         else:
             msg = "CompiledRule has neither rel_plan nor execute_fn."
             raise RuntimeError(msg)
-        if self.emit_rule_meta:
-            table = _build_rule_meta_kernel(self.rule)(table, ctx)
-        for fn in self.post_kernels:
-            table = fn(table, ctx)
         return _apply_rule_metadata(table, rule=self.rule)
 
 
@@ -1307,6 +1309,14 @@ def _validate_compiled_rule_schema(
     validate_expr_schema(plan.expr, expected=expected_schema)
 
 
+def _expr_registry_for_compiler(
+    compiler: RelPlanCompiler[IbisPlan],
+) -> IbisExprRegistry:
+    if isinstance(compiler, IbisRelPlanCompiler):
+        return compiler.registry
+    return default_expr_registry()
+
+
 class RelationshipRuleCompiler:
     """Compile ``RelationshipRule`` instances into executable units."""
 
@@ -1318,9 +1328,10 @@ class RelationshipRuleCompiler:
     ) -> None:
         self.resolver = resolver
         self.plan_compiler = plan_compiler or IbisRelPlanCompiler()
+        self.expr_registry = _expr_registry_for_compiler(self.plan_compiler)
 
-    @staticmethod
     def _compile_filter_project(
+        self,
         rule: RelationshipRule,
         *,
         post_kernels: tuple[KernelSpecT, ...],
@@ -1346,12 +1357,12 @@ class RelationshipRuleCompiler:
             rule=rule,
             rel_plan=plan,
             execute_fn=None,
-            post_kernels=_compile_post_kernels(post_kernels),
+            post_kernels=_compile_post_kernels(post_kernels, registry=self.expr_registry),
             emit_rule_meta=rule.emit_rule_meta,
         )
 
-    @staticmethod
     def _compile_hash_join(
+        self,
         rule: RelationshipRule,
         *,
         post_kernels: tuple[KernelSpecT, ...],
@@ -1389,12 +1400,12 @@ class RelationshipRuleCompiler:
             rule=rule,
             rel_plan=plan,
             execute_fn=None,
-            post_kernels=_compile_post_kernels(post_kernels),
+            post_kernels=_compile_post_kernels(post_kernels, registry=self.expr_registry),
             emit_rule_meta=rule.emit_rule_meta,
         )
 
-    @staticmethod
     def _compile_passthrough(
+        self,
         rule: RelationshipRule,
         *,
         post_kernels: tuple[KernelSpecT, ...],
@@ -1419,12 +1430,12 @@ class RelationshipRuleCompiler:
             rule=rule,
             rel_plan=plan,
             execute_fn=None,
-            post_kernels=_compile_post_kernels(post_kernels),
+            post_kernels=_compile_post_kernels(post_kernels, registry=self.expr_registry),
             emit_rule_meta=rule.emit_rule_meta,
         )
 
-    @staticmethod
     def _compile_union_all(
+        self,
         rule: RelationshipRule,
         *,
         post_kernels: tuple[KernelSpecT, ...],
@@ -1451,12 +1462,12 @@ class RelationshipRuleCompiler:
             rule=rule,
             rel_plan=plan,
             execute_fn=None,
-            post_kernels=_compile_post_kernels(post_kernels),
+            post_kernels=_compile_post_kernels(post_kernels, registry=self.expr_registry),
             emit_rule_meta=rule.emit_rule_meta,
         )
 
-    @staticmethod
     def _compile_interval_align(
+        self,
         rule: RelationshipRule,
         *,
         post_kernels: tuple[KernelSpecT, ...],
@@ -1529,12 +1540,12 @@ class RelationshipRuleCompiler:
             rule=rule,
             rel_plan=None,
             execute_fn=_exec,
-            post_kernels=_compile_post_kernels(post_kernels),
+            post_kernels=_compile_post_kernels(post_kernels, registry=self.expr_registry),
             emit_rule_meta=rule.emit_rule_meta,
         )
 
-    @staticmethod
     def _compile_winner_select(
+        self,
         rule: RelationshipRule,
         *,
         post_kernels: tuple[KernelSpecT, ...],
@@ -1596,7 +1607,7 @@ class RelationshipRuleCompiler:
             rule=rule,
             rel_plan=None,
             execute_fn=_exec,
-            post_kernels=_compile_post_kernels(post_kernels),
+            post_kernels=_compile_post_kernels(post_kernels, registry=self.expr_registry),
             emit_rule_meta=rule.emit_rule_meta,
         )
 
@@ -1655,7 +1666,7 @@ class RelationshipRuleCompiler:
         """
         if rule.execution_mode != "plan":
             return
-        if compiled.rel_plan is None or compiled.post_kernels:
+        if compiled.rel_plan is None:
             msg = f"Rule {rule.name!r} requires plan execution."
             raise ValueError(msg)
 

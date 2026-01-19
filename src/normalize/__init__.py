@@ -53,13 +53,6 @@ if TYPE_CHECKING:
         dataset_specs,
         dataset_table_spec,
     )
-    from relspec.normalize.rule_model import (
-        AmbiguityPolicy,
-        ConfidencePolicy,
-        EvidenceSpec,
-        ExecutionMode,
-        NormalizeRule,
-    )
     from normalize.runner import (
         NormalizeFinalizeSpec,
         NormalizeIbisPlanOptions,
@@ -93,6 +86,13 @@ if TYPE_CHECKING:
     )
     from normalize.text_index import FileTextIndex, RepoTextIndex
     from normalize.utils import add_span_id_column, span_id
+    from relspec.normalize.rule_model import (
+        AmbiguityPolicy,
+        ConfidencePolicy,
+        EvidenceSpec,
+        ExecutionMode,
+        NormalizeRule,
+    )
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "CONSTRAINTS_TABLE": ("normalize.spec_tables", "CONSTRAINTS_TABLE"),

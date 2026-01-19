@@ -16,5 +16,3 @@ datafusion-expr = "50.1.0"
 datafusion-python = "50.1.0"
 hex = "0.4"
 pyo3 = { version = "0.23", features = ["extension-module"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"

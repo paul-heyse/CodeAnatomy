@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -11,7 +10,6 @@ import sqlglot
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value
 from sqlglot import Expression
-from sqlglot.serde import dump
 
 from sqlglot_tools.lineage import (
     referenced_columns,
@@ -19,6 +17,7 @@ from sqlglot_tools.lineage import (
     referenced_tables,
 )
 from sqlglot_tools.optimizer import (
+    DEFAULT_WRITE_DIALECT,
     CanonicalizationRules,
     NormalizeExprOptions,
     SqlGlotPolicy,
@@ -49,7 +48,7 @@ class IbisCompilerBackend(Protocol):
 
 @dataclass(frozen=True)
 class SqlGlotDiagnostics:
-    """AST-derived metadata for SQLGlot diagnostics."""
+    """AST and SQL metadata for SQLGlot diagnostics."""
 
     expression: Expression
     optimized: Expression
@@ -57,8 +56,9 @@ class SqlGlotDiagnostics:
     columns: tuple[str, ...]
     identifiers: tuple[str, ...]
     ast_repr: str
-    ast_payload_raw: str
-    ast_payload_optimized: str
+    sql_dialect: str
+    sql_text_raw: str
+    sql_text_optimized: str
     normalization_distance: int | None
     normalization_max_distance: int | None
     normalization_applied: bool | None
@@ -118,6 +118,7 @@ def sqlglot_diagnostics(
     """
     options = options or SqlGlotDiagnosticsOptions()
     compiled = ibis_to_sqlglot(expr, backend=backend, params=options.params)
+    dialect = _resolved_dialect(options.policy)
     stats = None
     if options.normalize:
         normalize_result = normalize_expr_with_stats(
@@ -140,8 +141,9 @@ def sqlglot_diagnostics(
         columns=referenced_columns(optimized),
         identifiers=referenced_identifiers(optimized),
         ast_repr=repr(optimized),
-        ast_payload_raw=_ast_payload(compiled),
-        ast_payload_optimized=_ast_payload(optimized),
+        sql_dialect=dialect,
+        sql_text_raw=_sql_text(compiled, dialect=dialect),
+        sql_text_optimized=_sql_text(optimized, dialect=dialect),
         normalization_distance=stats.distance if stats is not None else None,
         normalization_max_distance=stats.max_distance if stats is not None else None,
         normalization_applied=stats.applied if stats is not None else None,
@@ -173,9 +175,12 @@ def relation_diff(
     )
 
 
-def _ast_payload(expr: Expression) -> str:
-    payload = dump(expr)
-    return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+def _resolved_dialect(policy: SqlGlotPolicy | None) -> str:
+    return policy.write_dialect if policy is not None else DEFAULT_WRITE_DIALECT
+
+
+def _sql_text(expr: Expression, *, dialect: str) -> str:
+    return expr.sql(dialect=dialect)
 
 
 def _ast_diff_summary(left: Expression, right: Expression) -> dict[str, int]:

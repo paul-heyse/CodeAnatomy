@@ -12,7 +12,6 @@ from ibis.expr.types import IntegerValue, Value
 
 from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, concat_tables
-from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.schema import empty_table
 from cpg.constants import (
     ROLE_FLAG_SPECS,
@@ -30,6 +29,7 @@ from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
 from ibis_engine.plan import IbisPlan
+from ibis_engine.scan_io import DatasetSource
 from ibis_engine.sources import (
     SourceToIbisOptions,
     namespace_recorder_from_ctx,

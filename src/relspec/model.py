@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
 
-from arrowdsl.compute.expr_core import ScalarValue
+from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.plan.ops import DedupeSpec, JoinType, SortKey
 from arrowdsl.spec.expr_ir import ExprIR
 from ibis_engine.query_compiler import IbisQuerySpec

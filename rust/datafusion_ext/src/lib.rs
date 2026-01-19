@@ -1,17 +1,22 @@
 //! DataFusion extension for native function registration.
 
 use std::any::Any;
+use std::io::Cursor;
 use std::sync::Arc;
 
 use arrow::array::{
     ArrayRef,
     Int32Builder,
+    Int32Array,
     Int64Array,
     Int64Builder,
+    ListArray,
     StringArray,
     StringBuilder,
+    StructArray,
 };
 use arrow::datatypes::DataType;
+use arrow::ipc::reader::StreamReader;
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 use datafusion::execution::context::SessionContext;
@@ -27,36 +32,248 @@ use datafusion_expr::{
 use datafusion_python::context::PySessionContext;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use serde::Deserialize;
+use pyo3::types::PyBytes;
 
 const ENC_UTF8: i32 = 1;
 const ENC_UTF16: i32 = 2;
 const ENC_UTF32: i32 = 3;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct FunctionParameter {
     name: String,
     dtype: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct RulePrimitive {
     name: String,
     params: Vec<FunctionParameter>,
     return_type: String,
     volatility: String,
+    description: Option<String>,
     supports_named_args: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct FunctionFactoryPolicy {
     primitives: Vec<RulePrimitive>,
     prefer_named_arguments: bool,
+    allow_async: bool,
+    domain_operator_hooks: Vec<String>,
+}
+
+const POLICY_SCHEMA_VERSION: i32 = 1;
+
+fn policy_from_ipc(payload: &[u8]) -> Result<FunctionFactoryPolicy> {
+    let mut reader = StreamReader::try_new(Cursor::new(payload), None).map_err(|err| {
+        DataFusionError::Plan(format!("Failed to open policy IPC stream: {err}"))
+    })?;
+    let batch = reader
+        .next()
+        .ok_or_else(|| DataFusionError::Plan("Policy IPC stream is empty.".into()))?
+        .map_err(|err| DataFusionError::Plan(format!("Failed to read policy IPC batch: {err}")))?;
+    if batch.num_rows() != 1 {
+        return Err(DataFusionError::Plan(
+            "Policy IPC payload must contain exactly one row.".into(),
+        ));
+    }
+    let version = read_int32(&batch, "version")?;
+    if version != POLICY_SCHEMA_VERSION {
+        return Err(DataFusionError::Plan(format!(
+            "Unsupported policy payload version: {version}."
+        )));
+    }
+    let prefer_named_arguments = read_bool(&batch, "prefer_named_arguments")?;
+    let allow_async = read_bool(&batch, "allow_async")?;
+    let domain_operator_hooks = read_string_list(&batch, "domain_operator_hooks")?;
+    let primitives = read_primitives(&batch, "primitives")?;
+    Ok(FunctionFactoryPolicy {
+        primitives,
+        prefer_named_arguments,
+        allow_async,
+        domain_operator_hooks,
+    })
+}
+
+fn read_int32(batch: &arrow::record_batch::RecordBatch, name: &str) -> Result<i32> {
+    let array = batch
+        .column_by_name(name)
+        .ok_or_else(|| DataFusionError::Plan(format!("Missing {name} column.")))?;
+    let array = array
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .ok_or_else(|| DataFusionError::Plan(format!("Invalid {name} column type.")))?;
+    if array.is_null(0) {
+        return Err(DataFusionError::Plan(format!("{name} cannot be null.")));
+    }
+    Ok(array.value(0))
+}
+
+fn read_bool(batch: &arrow::record_batch::RecordBatch, name: &str) -> Result<bool> {
+    let array = batch
+        .column_by_name(name)
+        .ok_or_else(|| DataFusionError::Plan(format!("Missing {name} column.")))?;
+    let array = array
+        .as_any()
+        .downcast_ref::<arrow::array::BooleanArray>()
+        .ok_or_else(|| DataFusionError::Plan(format!("Invalid {name} column type.")))?;
+    if array.is_null(0) {
+        return Err(DataFusionError::Plan(format!("{name} cannot be null.")));
+    }
+    Ok(array.value(0))
+}
+
+fn read_string_list(batch: &arrow::record_batch::RecordBatch, name: &str) -> Result<Vec<String>> {
+    let array = batch
+        .column_by_name(name)
+        .ok_or_else(|| DataFusionError::Plan(format!("Missing {name} column.")))?;
+    let array = array
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| DataFusionError::Plan(format!("Invalid {name} column type.")))?;
+    if array.is_null(0) {
+        return Ok(Vec::new());
+    }
+    let values = array.value(0);
+    let strings = values
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| DataFusionError::Plan(format!("Invalid {name} list type.")))?;
+    let mut output = Vec::with_capacity(strings.len());
+    for index in 0..strings.len() {
+        if strings.is_null(index) {
+            continue;
+        }
+        output.push(strings.value(index).to_string());
+    }
+    Ok(output)
+}
+
+fn read_primitives(
+    batch: &arrow::record_batch::RecordBatch,
+    name: &str,
+) -> Result<Vec<RulePrimitive>> {
+    let array = batch
+        .column_by_name(name)
+        .ok_or_else(|| DataFusionError::Plan(format!("Missing {name} column.")))?;
+    let array = array
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| DataFusionError::Plan(format!("Invalid {name} column type.")))?;
+    if array.is_null(0) {
+        return Ok(Vec::new());
+    }
+    let values = array.value(0);
+    let structs = values
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .ok_or_else(|| DataFusionError::Plan("Invalid primitives list type.".into()))?;
+    let names = string_field(structs, "name")?;
+    let params = list_field(structs, "params")?;
+    let return_types = string_field(structs, "return_type")?;
+    let volatilities = string_field(structs, "volatility")?;
+    let descriptions = string_field(structs, "description")?;
+    let supports_named = bool_field(structs, "supports_named_args")?;
+    let mut output = Vec::with_capacity(structs.len());
+    for index in 0..structs.len() {
+        if structs.is_null(index) {
+            continue;
+        }
+        let primitive = RulePrimitive {
+            name: read_string_value(&names, index)?,
+            params: read_params(&params, index)?,
+            return_type: read_string_value(&return_types, index)?,
+            volatility: read_string_value(&volatilities, index)?,
+            description: read_optional_string(&descriptions, index),
+            supports_named_args: read_bool_value(&supports_named, index)?,
+        };
+        output.push(primitive);
+    }
+    Ok(output)
+}
+
+fn read_params(array: &ListArray, index: usize) -> Result<Vec<FunctionParameter>> {
+    if array.is_null(index) {
+        return Ok(Vec::new());
+    }
+    let values = array.value(index);
+    let structs = values
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .ok_or_else(|| DataFusionError::Plan("Invalid params list type.".into()))?;
+    let names = string_field(structs, "name")?;
+    let dtypes = string_field(structs, "dtype")?;
+    let mut output = Vec::with_capacity(structs.len());
+    for row in 0..structs.len() {
+        if structs.is_null(row) {
+            continue;
+        }
+        output.push(FunctionParameter {
+            name: read_string_value(&names, row)?,
+            dtype: read_string_value(&dtypes, row)?,
+        });
+    }
+    Ok(output)
+}
+
+fn string_field<'a>(array: &'a StructArray, name: &str) -> Result<&'a StringArray> {
+    let column = array
+        .column_by_name(name)
+        .ok_or_else(|| DataFusionError::Plan(format!("Missing {name} field.")))?;
+    column
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| DataFusionError::Plan(format!("Invalid {name} field type.")))
+}
+
+fn list_field<'a>(array: &'a StructArray, name: &str) -> Result<&'a ListArray> {
+    let column = array
+        .column_by_name(name)
+        .ok_or_else(|| DataFusionError::Plan(format!("Missing {name} field.")))?;
+    column
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| DataFusionError::Plan(format!("Invalid {name} field type.")))
+}
+
+fn bool_field<'a>(
+    array: &'a StructArray,
+    name: &str,
+) -> Result<&'a arrow::array::BooleanArray> {
+    let column = array
+        .column_by_name(name)
+        .ok_or_else(|| DataFusionError::Plan(format!("Missing {name} field.")))?;
+    column
+        .as_any()
+        .downcast_ref::<arrow::array::BooleanArray>()
+        .ok_or_else(|| DataFusionError::Plan(format!("Invalid {name} field type.")))
+}
+
+fn read_string_value(array: &StringArray, index: usize) -> Result<String> {
+    if array.is_null(index) {
+        return Err(DataFusionError::Plan("String value cannot be null.".into()));
+    }
+    Ok(array.value(index).to_string())
+}
+
+fn read_optional_string(array: &StringArray, index: usize) -> Option<String> {
+    if array.is_null(index) {
+        None
+    } else {
+        Some(array.value(index).to_string())
+    }
+}
+
+fn read_bool_value(array: &arrow::array::BooleanArray, index: usize) -> Result<bool> {
+    if array.is_null(index) {
+        return Err(DataFusionError::Plan("Boolean value cannot be null.".into()));
+    }
+    Ok(array.value(index))
 }
 
 #[pyfunction]
-fn install_function_factory(ctx: PyRef<PySessionContext>, policy_json: &str) -> PyResult<()> {
-    let policy: FunctionFactoryPolicy = serde_json::from_str(policy_json)
+fn install_function_factory(ctx: PyRef<PySessionContext>, policy_ipc: &PyBytes) -> PyResult<()> {
+    let policy = policy_from_ipc(policy_ipc.as_bytes())
         .map_err(|err| PyValueError::new_err(format!("Invalid policy payload: {err}")))?;
     register_primitives(&ctx.ctx, &policy)
         .map_err(|err| PyRuntimeError::new_err(format!("FunctionFactory install failed: {err}")))?;

@@ -19,7 +19,6 @@ from arrowdsl.core.interop import (
     SchemaLike,
     TableLike,
 )
-from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.build import const_array, set_or_append_column, table_from_arrays
 from arrowdsl.schema.metadata import normalize_dictionaries
 from arrowdsl.schema.schema import empty_table
@@ -34,6 +33,7 @@ from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
 from ibis_engine.plan import IbisPlan
+from ibis_engine.scan_io import DatasetSource
 from ibis_engine.schema_utils import ibis_null_literal
 from ibis_engine.sources import (
     SourceToIbisOptions,

@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import base64
-import json
 from collections.abc import Mapping
 from typing import Literal, cast
 
-from arrowdsl.compute.expr_core import ScalarValue
+from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.core.interop import ScalarLike
-from arrowdsl.json_factory import JsonPolicy, dumps_text
 from arrowdsl.plan.ops import DedupeStrategy
-
-ASCII_POLICY = JsonPolicy(ascii_only=True)
+from registry_common.metadata import decode_metadata_scalar_map, metadata_scalar_map_bytes
 
 
 def parse_sort_order(value: object) -> Literal["ascending", "descending"]:
@@ -183,62 +180,50 @@ def parse_scalar_value(value: object) -> ScalarValue | None:
 
 
 def encode_json_payload(value: object | None) -> object | None:
-    """Encode a JSON payload with bytes handling.
+    """Encode a scalar payload for IPC metadata.
 
     Returns
     -------
     object | None
-        Encoded payload with a discriminator.
+        Encoded scalar payload.
     """
     if value is None:
         return None
     if isinstance(value, ScalarLike):
-        value = value.as_py()
-    if isinstance(value, bytes):
-        return {"type": "bytes", "value": base64.b64encode(value).decode("ascii")}
-    return {"type": "json", "value": value}
+        return value.as_py()
+    return parse_scalar_value(value)
 
 
 def decode_json_payload(payload: object | None) -> object | None:
-    """Decode a JSON payload with bytes handling.
+    """Decode a scalar payload from IPC metadata.
 
     Returns
     -------
     object | None
         Decoded payload value.
-
-    Raises
-    ------
-    ValueError
-        Raised when the bytes payload is not base64 encoded.
     """
     if payload is None:
         return None
-    if isinstance(payload, dict) and payload.get("type") == "bytes":
-        value = payload.get("value", "")
-        if not isinstance(value, str):
-            msg = "Encoded bytes payload must contain a base64 string."
-            raise ValueError(msg)
-        return base64.b64decode(value.encode("ascii"))
-    if isinstance(payload, dict) and "value" in payload:
-        return payload.get("value")
-    return payload
+    return parse_scalar_value(payload)
 
 
 def encode_json_text(value: object | None) -> str | None:
-    """Encode a JSON payload as text.
+    """Encode a scalar payload as IPC base64 text.
 
     Returns
     -------
     str | None
-        JSON text payload.
+        IPC base64 payload.
     """
     payload = encode_json_payload(value)
-    return None if payload is None else dumps_text(payload, policy=ASCII_POLICY)
+    if payload is None:
+        return None
+    payload_bytes = metadata_scalar_map_bytes({"value": cast("ScalarValue", payload)})
+    return base64.b64encode(payload_bytes).decode("ascii")
 
 
 def decode_json_text(payload: str | None) -> object | None:
-    """Decode a JSON payload from text.
+    """Decode a scalar payload from IPC base64 text.
 
     Returns
     -------
@@ -247,7 +232,9 @@ def decode_json_text(payload: str | None) -> object | None:
     """
     if payload is None:
         return None
-    return decode_json_payload(json.loads(payload))
+    raw = base64.b64decode(payload.encode("ascii"))
+    decoded = decode_metadata_scalar_map(raw)
+    return decoded.get("value")
 
 
 def encode_options_payload(value: bytes | bytearray | None) -> object | None:
@@ -260,7 +247,7 @@ def encode_options_payload(value: bytes | bytearray | None) -> object | None:
     """
     if value is None:
         return None
-    return encode_json_payload(bytes(value))
+    return bytes(value)
 
 
 def decode_options_payload(payload: object | None) -> bytes | None:
@@ -276,13 +263,12 @@ def decode_options_payload(payload: object | None) -> bytes | None:
     TypeError
         Raised when the payload does not decode to bytes.
     """
-    decoded = decode_json_payload(payload)
-    if decoded is None:
+    if payload is None:
         return None
-    if isinstance(decoded, bytearray):
-        return bytes(decoded)
-    if isinstance(decoded, bytes):
-        return decoded
+    if isinstance(payload, bytearray):
+        return bytes(payload)
+    if isinstance(payload, bytes):
+        return payload
     msg = "Options payload must decode to bytes."
     raise TypeError(msg)
 
@@ -298,8 +284,7 @@ def encode_scalar_payload(value: ScalarValue | None) -> object | None:
     if value is None:
         return None
     py_value = value.as_py() if isinstance(value, ScalarLike) else value
-    parsed = parse_scalar_value(py_value)
-    return encode_json_payload(parsed)
+    return parse_scalar_value(py_value)
 
 
 def decode_scalar_payload(payload: object | None) -> ScalarValue | None:
@@ -310,8 +295,7 @@ def decode_scalar_payload(payload: object | None) -> ScalarValue | None:
     ScalarValue | None
         Decoded scalar payload.
     """
-    decoded = decode_json_payload(payload)
-    return parse_scalar_value(decoded)
+    return parse_scalar_value(payload)
 
 
 def encode_scalar_union(value: ScalarValue | None) -> ScalarValue | None:
@@ -337,19 +321,18 @@ def decode_scalar_union(payload: object | None) -> ScalarValue | None:
 
 
 def encode_scalar_json(value: ScalarValue | None) -> str | None:
-    """Encode a scalar payload as JSON text.
+    """Encode a scalar payload as IPC base64 text.
 
     Returns
     -------
     str | None
-        JSON text payload.
+        IPC base64 payload.
     """
-    payload = encode_scalar_payload(value)
-    return None if payload is None else dumps_text(payload, policy=ASCII_POLICY)
+    return encode_json_text(value)
 
 
 def decode_scalar_json(payload: str | None) -> ScalarValue | None:
-    """Decode a scalar payload from JSON text.
+    """Decode a scalar payload from IPC base64 text.
 
     Returns
     -------
@@ -358,7 +341,7 @@ def decode_scalar_json(payload: str | None) -> ScalarValue | None:
     """
     if payload is None:
         return None
-    return decode_scalar_payload(json.loads(payload))
+    return decode_scalar_payload(decode_json_text(payload))
 
 
 __all__ = [

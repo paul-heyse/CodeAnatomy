@@ -12,19 +12,27 @@ from ibis.backends import BaseBackend
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
-from arrowdsl.plan.dataset_wrappers import unwrap_dataset
-from arrowdsl.plan.query import DatasetDiscoveryOptions, DatasetSourceOptions, open_dataset
-from arrowdsl.plan.query_adapter import ibis_query_to_plan_query
 from arrowdsl.plan_utils import dataset_query_for_file_ids
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from arrowdsl.schema.schema import empty_table
 from extract.registry_bundles import dataset_name_for_output
+from ibis_engine.backend import build_backend
+from ibis_engine.config import IbisBackendConfig
+from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
 from ibis_engine.plan import IbisPlan
+from ibis_engine.query_compiler import apply_query_spec
+from ibis_engine.scan_io import plan_from_source
 from incremental.invalidations import validate_schema_identity
 from incremental.types import IncrementalFileChanges, IncrementalImpact
 from normalize.registry_specs import dataset_name_from_alias
 from relspec.engine import PlanResolver
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
+from storage.dataset_sources import (
+    DatasetDiscoveryOptions,
+    DatasetSourceOptions,
+    normalize_dataset_source,
+    unwrap_dataset,
+)
 from storage.deltalake import (
     DeltaUpsertOptions,
     DeltaWriteOptions,
@@ -33,7 +41,7 @@ from storage.deltalake import (
 )
 
 if TYPE_CHECKING:
-    from arrowdsl.plan.query import ScanTelemetry
+    from arrowdsl.plan.scan_telemetry import ScanTelemetry
     from relspec.model import DatasetRef
 
 SCOPED_SITE_DATASETS: frozenset[str] = frozenset(
@@ -237,7 +245,7 @@ def _read_state_dataset(
     dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(dataset_name)
     schema = dataset_spec.schema() if dataset_spec is not None else None
     dataset = unwrap_dataset(
-        open_dataset(
+        normalize_dataset_source(
             dataset_dir,
             options=DatasetSourceOptions(
                 schema=schema,
@@ -253,9 +261,17 @@ def _read_state_dataset(
             dataset_name=dataset_name,
         )
     if schema is not None and "file_id" in schema.names:
-        query = ibis_query_to_plan_query(dataset_query_for_file_ids(file_ids, schema=schema))
-        plan = query.to_plan(dataset=dataset, ctx=ctx, label=dataset_name)
-        return plan.to_table(ctx=ctx)
+        query = dataset_query_for_file_ids(file_ids, schema=schema)
+        backend = build_backend(IbisBackendConfig(datafusion_profile=ctx.runtime.datafusion))
+        plan = plan_from_source(
+            dataset.to_table(),
+            ctx=ctx,
+            backend=backend,
+            name=dataset_name,
+        )
+        plan = IbisPlan(expr=apply_query_spec(plan.expr, spec=query), ordering=plan.ordering)
+        execution = IbisExecutionContext(ctx=ctx, ibis_backend=backend)
+        return materialize_ibis_plan(plan, execution=execution)
     if schema is None:
         return dataset.to_table()
     return empty_table(schema)

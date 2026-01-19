@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Sequence
 from typing import Literal, Protocol, TypeVar, cast
 
+import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, Scalar
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
 
 from arrowdsl.core.context import ExecutionContext, Ordering, OrderingLevel
-from arrowdsl.plan.query import ScanTelemetry
+from arrowdsl.plan.scan_telemetry import ScanTelemetry
 from ibis_engine.expr_compiler import (
     IbisExprRegistry,
     align_set_op_tables,
@@ -22,6 +21,7 @@ from ibis_engine.expr_compiler import (
     union_tables,
 )
 from ibis_engine.plan import IbisPlan
+from registry_common.arrow_payloads import payload_hash
 from relspec.model import DatasetRef, HashJoinConfig
 from relspec.plan import (
     RelAggregate,
@@ -51,6 +51,16 @@ JoinKind = Literal[
     "semi",
 ]
 
+OUTPUT_PLAN_HASH_VERSION = 1
+_OUTPUT_PLAN_HASH_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32()),
+        pa.field("output_dataset", pa.string()),
+        pa.field("rule_signatures", pa.list_(pa.string())),
+        pa.field("input_datasets", pa.list_(pa.string())),
+    ]
+)
+
 
 def output_plan_hash(
     *,
@@ -75,12 +85,12 @@ def output_plan_hash(
         SHA-256 hash of the output plan identity payload.
     """
     payload = {
+        "version": OUTPUT_PLAN_HASH_VERSION,
         "output_dataset": output_dataset,
         "rule_signatures": list(rule_signatures),
         "input_datasets": list(input_datasets),
     }
-    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return payload_hash(payload, _OUTPUT_PLAN_HASH_SCHEMA)
 
 
 class PlanResolver(Protocol[PlanT_co]):

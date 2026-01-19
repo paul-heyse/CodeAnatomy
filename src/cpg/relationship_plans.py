@@ -11,12 +11,11 @@ import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 
-from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.core.context import ExecutionContext, Ordering
+from arrowdsl.core.expr_types import ExplodeSpec
 from arrowdsl.core.interop import Scalar, TableLike
 from arrowdsl.plan.ops import DedupeSpec, SortKey
-from arrowdsl.plan.query import ScanTelemetry
-from arrowdsl.plan.scan_io import DatasetSource
+from arrowdsl.plan.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import align_table
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from engine.materialize import build_plan_product
@@ -29,6 +28,7 @@ from ibis_engine.expr_compiler import (
 )
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
+from ibis_engine.scan_io import DatasetSource
 from ibis_engine.schema_utils import align_table_to_schema
 from ibis_engine.sources import (
     SourceToIbisOptions,
@@ -427,7 +427,7 @@ def _ibis_relation_context(
         )
     )
     tables: dict[str, IbisPlanSource] = dict(catalog.tables)
-    evidence = EvidenceCatalog.from_sources(tables, ctx=ctx)
+    evidence = EvidenceCatalog.from_sources(tables)
     ibis_catalog = IbisPlanCatalog(backend=backend, tables=tables)
     resolver = CatalogIbisResolver(ibis_catalog)
     registry = default_expr_registry()

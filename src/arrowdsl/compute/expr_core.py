@@ -28,11 +28,11 @@ from arrowdsl.compute.position_encoding import (
     VALID_POSITION_ENCODINGS,
     normalize_position_encoding,
 )
+from arrowdsl.core.expr_types import ExplodeSpec, ScalarValue
 from arrowdsl.core.interop import (
     ArrayLike,
     ComputeExpression,
     DataTypeLike,
-    ScalarLike,
     TableLike,
     ensure_expression,
 )
@@ -47,7 +47,6 @@ if TYPE_CHECKING:
         trimmed_non_empty_expr,
     )
 
-type ScalarValue = bool | int | float | str | bytes | ScalarLike | None
 type PredicateKind = Literal["in_set", "is_null", "not"]
 
 
@@ -83,36 +82,6 @@ class ExprSpec(Protocol):
             ``True`` when the expression is scalar-safe.
         """
         ...
-
-
-@dataclass(frozen=True)
-class ExplodeSpec:
-    """Configuration for exploding list columns with stable offsets."""
-
-    parent_keys: tuple[str, ...]
-    list_col: str
-    value_col: str
-    idx_col: str | None = "idx"
-    keep_empty: bool = True
-
-    def rename_parent(self, *, parent: str, value: str) -> tuple[str, str] | None:
-        """Return rename columns when defaults were used.
-
-        Parameters
-        ----------
-        parent:
-            Desired parent column name.
-        value:
-            Desired value column name.
-
-        Returns
-        -------
-        tuple[str, str] | None
-            Tuple of (parent, value) rename values when a rename is needed.
-        """
-        if self.parent_keys != (parent,) or self.value_col != value:
-            return None
-        return parent, value
 
 
 @dataclass(frozen=True)

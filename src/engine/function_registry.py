@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, TypeVar, cast
@@ -20,6 +18,7 @@ from datafusion_engine.builtin_registry import (
 from datafusion_engine.function_factory import DEFAULT_RULE_PRIMITIVES, RulePrimitive
 from datafusion_engine.udf_registry import DataFusionUdfSpec, UdfTier, datafusion_udf_specs
 from ibis_engine.builtin_udfs import IbisUdfSpec, ibis_udf_specs
+from registry_common.arrow_payloads import payload_hash
 
 ExecutionLane = Literal[
     "ibis_builtin",
@@ -52,6 +51,37 @@ LANE_UDF_TIER: Mapping[ExecutionLane, UdfTier] = {
 
 LaneTupleT = TypeVar("LaneTupleT", bound=str)
 
+REGISTRY_PAYLOAD_VERSION: int = 1
+
+_FUNCTION_SPEC_SCHEMA = pa.struct(
+    [
+        pa.field("func_id", pa.string()),
+        pa.field("engine_name", pa.string()),
+        pa.field("kind", pa.string()),
+        pa.field("input_types", pa.list_(pa.string())),
+        pa.field("return_type", pa.string()),
+        pa.field("state_type", pa.string()),
+        pa.field("volatility", pa.string()),
+        pa.field("arg_names", pa.list_(pa.string())),
+        pa.field("lanes", pa.list_(pa.string())),
+        pa.field("lane_precedence", pa.list_(pa.string())),
+        pa.field("rewrite_tags", pa.list_(pa.string())),
+        pa.field("catalog", pa.string()),
+        pa.field("database", pa.string()),
+        pa.field("capsule_id", pa.string()),
+        pa.field("udf_tier", pa.string()),
+    ]
+)
+_FUNCTION_REGISTRY_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32()),
+        pa.field("lane_precedence", pa.list_(pa.string())),
+        pa.field("pyarrow_compute", pa.list_(pa.string())),
+        pa.field("pycapsule_ids", pa.list_(pa.string())),
+        pa.field("specs", pa.list_(_FUNCTION_SPEC_SCHEMA)),
+    ]
+)
+
 
 @dataclass(frozen=True)
 class FunctionSpec:
@@ -74,12 +104,12 @@ class FunctionSpec:
     udf_tier: UdfTier | None = None
 
     def payload(self) -> dict[str, object]:
-        """Return a JSON-serializable payload for the spec.
+        """Return a payload mapping for the spec.
 
         Returns
         -------
         dict[str, object]
-            JSON-serializable spec payload.
+            Spec payload mapping.
         """
         return {
             "func_id": self.func_id,
@@ -127,12 +157,12 @@ class FunctionRegistry:
         return None
 
     def payload(self) -> dict[str, object]:
-        """Return a JSON-ready payload for the registry.
+        """Return a payload for the registry.
 
         Returns
         -------
         dict[str, object]
-            JSON-ready registry payload.
+            Registry payload mapping.
         """
         return {
             "specs": {name: spec.payload() for name, spec in sorted(self.specs.items())},
@@ -149,9 +179,17 @@ class FunctionRegistry:
         str
             SHA-256 fingerprint of the registry payload.
         """
-        payload = self.payload()
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()
+        payload = {
+            "version": REGISTRY_PAYLOAD_VERSION,
+            "lane_precedence": list(self.lane_precedence),
+            "pyarrow_compute": list(self.pyarrow_compute),
+            "pycapsule_ids": list(self.pycapsule_ids),
+            "specs": [
+                _spec_payload(spec)
+                for _, spec in sorted(self.specs.items(), key=lambda item: item[0])
+            ],
+        }
+        return payload_hash(payload, _FUNCTION_REGISTRY_SCHEMA)
 
 
 def build_function_registry(
@@ -387,6 +425,26 @@ def _dtype_from_name(value: str) -> pa.DataType:
         msg = f"Unsupported dtype for function registry: {value!r}."
         raise ValueError(msg)
     return dtype
+
+
+def _spec_payload(spec: FunctionSpec) -> dict[str, object]:
+    return {
+        "func_id": spec.func_id,
+        "engine_name": spec.engine_name,
+        "kind": spec.kind,
+        "input_types": [str(dtype) for dtype in spec.input_types],
+        "return_type": str(spec.return_type),
+        "state_type": str(spec.state_type) if spec.state_type is not None else None,
+        "volatility": spec.volatility,
+        "arg_names": list(spec.arg_names) if spec.arg_names is not None else None,
+        "lanes": list(spec.lanes),
+        "lane_precedence": list(spec.lane_precedence),
+        "rewrite_tags": list(spec.rewrite_tags),
+        "catalog": spec.catalog,
+        "database": spec.database,
+        "capsule_id": spec.capsule_id,
+        "udf_tier": spec.udf_tier,
+    }
 
 
 __all__ = [

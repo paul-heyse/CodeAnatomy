@@ -3,14 +3,27 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Mapping, Sequence
 from typing import cast
 
+import pyarrow as pa
 import pyarrow.types as patypes
 
 from arrowdsl.core.interop import DataTypeLike, SchemaLike
 from core_types import JsonDict
+from registry_common.arrow_payloads import payload_hash
+
+DATASET_FINGERPRINT_VERSION = 1
+_DATASET_FINGERPRINT_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32(), nullable=False),
+        pa.field("plan_hash", pa.string(), nullable=False),
+        pa.field("schema_fingerprint", pa.string(), nullable=False),
+        pa.field("profile_hash", pa.string(), nullable=False),
+        pa.field("writer_strategy", pa.string(), nullable=False),
+        pa.field("input_fingerprints", pa.list_(pa.string()), nullable=False),
+    ]
+)
 
 
 def schema_to_dict(schema: SchemaLike) -> JsonDict:
@@ -82,8 +95,9 @@ def schema_fingerprint(schema: SchemaLike) -> str:
     str
         SHA-256 fingerprint of the schema.
     """
-    payload = json.dumps(schema_to_dict(schema), sort_keys=True).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+    resolved = schema if isinstance(schema, pa.Schema) else pa.schema(schema)
+    payload = cast("pa.Schema", resolved).serialize()
+    return hashlib.sha256(payload.to_pybytes()).hexdigest()
 
 
 def dataset_fingerprint(
@@ -102,14 +116,14 @@ def dataset_fingerprint(
         SHA-256 fingerprint for the dataset identity payload.
     """
     payload = {
+        "version": DATASET_FINGERPRINT_VERSION,
         "plan_hash": plan_hash,
         "schema_fingerprint": schema_fingerprint,
         "profile_hash": profile_hash,
         "writer_strategy": writer_strategy,
         "input_fingerprints": sorted(input_fingerprints),
     }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return payload_hash(payload, _DATASET_FINGERPRINT_SCHEMA)
 
 
 __all__ = ["dataset_fingerprint", "schema_fingerprint", "schema_to_dict"]

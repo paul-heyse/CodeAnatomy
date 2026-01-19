@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.core.context import Ordering, OrderingEffect, OrderingKey, OrderingLevel
+from arrowdsl.core.expr_types import ExplodeSpec
 from arrowdsl.core.interop import ComputeExpression
 from arrowdsl.ir.plan import OpNode, PlanIR
 from arrowdsl.ops.catalog import OP_CATALOG

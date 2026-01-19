@@ -18,8 +18,8 @@ from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr, SortExpr
 from datafusion.expr import SortKey as DFSortKey
 
-from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.core.context import ExecutionContext, Ordering, OrderingLevel
+from arrowdsl.core.expr_types import ExplodeSpec
 from arrowdsl.core.interop import SchemaLike, TableLike, pc
 from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions
 from arrowdsl.plan.ops import SortKey as PlanSortKey

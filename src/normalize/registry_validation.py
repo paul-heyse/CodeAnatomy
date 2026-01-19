@@ -9,10 +9,15 @@ from arrowdsl.core.interop import SchemaLike
 from normalize.contracts import normalize_evidence_schema
 from normalize.evidence_specs import evidence_output_from_schema, evidence_spec_from_schema
 from normalize.registry_specs import dataset_names, dataset_schema
-from relspec.normalize.rule_model import AmbiguityPolicy, EvidenceOutput, EvidenceSpec, NormalizeRule
+from relspec.normalize.rule_model import (
+    AmbiguityPolicy,
+    EvidenceOutput,
+    EvidenceSpec,
+    NormalizeRule,
+)
 
 if TYPE_CHECKING:
-    from arrowdsl.compute.expr_core import ScalarValue
+    from arrowdsl.core.expr_types import ScalarValue
 
 
 def validate_rule_specs(rules: Sequence[NormalizeRule]) -> None:

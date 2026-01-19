@@ -6,8 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from arrowdsl.compute.expr_core import ScalarValue
 from arrowdsl.core.context import OrderingKey
+from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.spec.expr_ir import ExprIR
 from extract.spec_tables import ExtractDerivedIdSpec
 from ibis_engine.query_compiler import IbisQuerySpec

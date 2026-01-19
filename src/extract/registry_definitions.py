@@ -8,7 +8,6 @@ from functools import cache
 from typing import TYPE_CHECKING, Protocol, cast
 
 from arrowdsl.core.context import OrderingKey
-from relspec.extract.registry_template_specs import DATASET_TEMPLATE_SPECS
 from extract.registry_templates import expand_dataset_templates
 from extract.spec_tables import (
     ExtractDatasetRowSpec,
@@ -16,6 +15,7 @@ from extract.spec_tables import (
     dataset_rows_from_table,
     extract_dataset_table_from_rows,
 )
+from relspec.extract.registry_template_specs import DATASET_TEMPLATE_SPECS
 
 if TYPE_CHECKING:
     from relspec.rules.definitions import ExtractPayload, RuleDefinition, RuleStage

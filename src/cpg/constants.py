@@ -17,7 +17,7 @@ from arrowdsl.plan.metrics import (
     quality_from_ids,
     quality_plan_from_ids,
 )
-from arrowdsl.plan.query import ScanTelemetry
+from arrowdsl.plan.scan_telemetry import ScanTelemetry
 from cpg.kinds_ultimate import (
     SCIP_ROLE_FORWARD_DEFINITION,
     SCIP_ROLE_GENERATED,

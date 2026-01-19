@@ -3,14 +3,44 @@
 from __future__ import annotations
 
 import importlib
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+import pyarrow as pa
 from datafusion import SessionContext
 
+from registry_common.arrow_payloads import payload_ipc_bytes
+
 UdfVolatility = Literal["immutable", "stable", "volatile"]
+
+POLICY_PAYLOAD_VERSION: int = 1
+
+_PARAMETER_SCHEMA = pa.struct(
+    [
+        pa.field("name", pa.string()),
+        pa.field("dtype", pa.string()),
+    ]
+)
+_PRIMITIVE_SCHEMA = pa.struct(
+    [
+        pa.field("name", pa.string()),
+        pa.field("params", pa.list_(_PARAMETER_SCHEMA)),
+        pa.field("return_type", pa.string()),
+        pa.field("volatility", pa.string()),
+        pa.field("description", pa.string()),
+        pa.field("supports_named_args", pa.bool_()),
+    ]
+)
+_POLICY_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32()),
+        pa.field("prefer_named_arguments", pa.bool_()),
+        pa.field("allow_async", pa.bool_()),
+        pa.field("domain_operator_hooks", pa.list_(pa.string())),
+        pa.field("primitives", pa.list_(_PRIMITIVE_SCHEMA)),
+    ]
+)
 
 
 @dataclass(frozen=True)
@@ -21,12 +51,12 @@ class FunctionParameter:
     dtype: str
 
     def to_payload(self) -> dict[str, str]:
-        """Return a JSON-serializable representation.
+        """Return a payload representation.
 
         Returns
         -------
         dict[str, str]
-            JSON-serializable function parameter payload.
+            Function parameter payload.
         """
         return {"name": self.name, "dtype": self.dtype}
 
@@ -43,12 +73,12 @@ class RulePrimitive:
     supports_named_args: bool = True
 
     def to_payload(self) -> dict[str, object]:
-        """Return a JSON-serializable representation.
+        """Return a payload representation.
 
         Returns
         -------
         dict[str, object]
-            JSON-serializable rule primitive payload.
+            Rule primitive payload.
         """
         return {
             "name": self.name,
@@ -70,12 +100,12 @@ class FunctionFactoryPolicy:
     domain_operator_hooks: tuple[str, ...] = ()
 
     def to_payload(self) -> dict[str, object]:
-        """Return a JSON-serializable policy payload.
+        """Return a payload mapping for the policy.
 
         Returns
         -------
         dict[str, object]
-            JSON-serializable policy payload.
+            Policy payload mapping.
         """
         return {
             "primitives": [primitive.to_payload() for primitive in self.primitives],
@@ -149,9 +179,16 @@ def default_function_factory_policy() -> FunctionFactoryPolicy:
     )
 
 
-def _policy_payload(policy: FunctionFactoryPolicy) -> str:
+def _policy_payload(policy: FunctionFactoryPolicy) -> bytes:
     payload = policy.to_payload()
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    row = {
+        "version": POLICY_PAYLOAD_VERSION,
+        "prefer_named_arguments": payload["prefer_named_arguments"],
+        "allow_async": payload["allow_async"],
+        "domain_operator_hooks": payload["domain_operator_hooks"],
+        "primitives": payload["primitives"],
+    }
+    return payload_ipc_bytes(row, _POLICY_SCHEMA)
 
 
 def _load_extension() -> object:
@@ -178,7 +215,7 @@ def _load_extension() -> object:
         raise ImportError(msg) from exc
 
 
-def _install_native_function_factory(ctx: SessionContext, *, payload: str) -> None:
+def _install_native_function_factory(ctx: SessionContext, *, payload: bytes) -> None:
     """Install the native FunctionFactory into the session.
 
     Raises

@@ -8,11 +8,11 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.dataset as ds
 
-from arrowdsl.compute.expr_core import ScalarValue
 from arrowdsl.compute.ids import HashSpec, hash_projection
 from arrowdsl.compute.macros import CoalesceExpr, ColumnOrNullExpr
 from arrowdsl.core.context import ExecutionContext, OrderingLevel
 from arrowdsl.core.determinism import DeterminismTier
+from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.core.interop import (
     ComputeExpression,
     DataTypeLike,

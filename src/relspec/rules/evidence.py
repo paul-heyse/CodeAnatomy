@@ -4,18 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, cast
 
 import pyarrow as pa
 from ibis.expr.types import Table as IbisTable
 
-from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.plan.catalog import PlanCatalog
-from arrowdsl.plan.plan import Plan
-from arrowdsl.plan.query import ScanTelemetry
-from arrowdsl.plan.scan_io import DatasetSource
+from arrowdsl.plan.scan_telemetry import ScanTelemetry
 from ibis_engine.plan import IbisPlan
+from ibis_engine.scan_io import DatasetSource
 from relspec.rules.definitions import EvidenceSpec, RuleDefinition
 
 
@@ -297,22 +294,9 @@ class EvidenceCatalog:
     metadata_by_dataset: dict[str, dict[bytes, bytes]] = field(default_factory=dict)
 
     @classmethod
-    def from_plan_catalog(cls, catalog: PlanCatalog, *, ctx: ExecutionContext) -> EvidenceCatalog:
-        """Build an evidence catalog from a plan catalog.
-
-        Returns
-        -------
-        EvidenceCatalog
-            Evidence catalog populated from the catalog.
-        """
-        return cls.from_sources(catalog.tables, ctx=ctx)
-
-    @classmethod
     def from_sources(
         cls,
         sources: Mapping[str, object],
-        *,
-        ctx: ExecutionContext,
     ) -> EvidenceCatalog:
         """Build an evidence catalog from arbitrary schema-bearing sources.
 
@@ -323,7 +307,7 @@ class EvidenceCatalog:
         """
         evidence = cls(sources=set(sources))
         for name, source in sources.items():
-            schema = _schema_from_source(source, ctx=ctx)
+            schema = _schema_from_source(source)
             if schema is None:
                 continue
             evidence.columns_by_dataset[name] = set(_schema_names(schema))
@@ -463,33 +447,35 @@ class EvidenceCatalog:
         return True
 
 
-def _schema_from_source(source: object, *, ctx: ExecutionContext) -> SchemaLike | None:
-    """Extract a schema from a plan or dataset source.
+def _schema_from_source(source: object) -> SchemaLike | None:
+    """Extract a schema from a dataset source.
 
     Parameters
     ----------
     source
-        Plan, dataset source, or schema-bearing object.
-    ctx
-        Execution context for plan schema evaluation.
+        Dataset source, Ibis plan, or schema-bearing object.
 
     Returns
     -------
     SchemaLike | None
         Schema when available.
     """
-    if isinstance(source, Plan):
-        return source.schema(ctx=ctx)
+    schema: SchemaLike | None = None
     if isinstance(source, DatasetSource):
-        return source.dataset.schema
-    if isinstance(source, IbisPlan):
-        return pa.schema(source.expr.schema().to_pyarrow())
-    if isinstance(source, IbisTable):
-        return pa.schema(source.schema().to_pyarrow())
-    schema = getattr(source, "schema", None)
-    if schema is not None and hasattr(schema, "names"):
-        return schema
-    return None
+        dataset_schema = getattr(source.dataset, "schema", None)
+        if callable(dataset_schema):
+            dataset_schema = dataset_schema()
+        if dataset_schema is not None and hasattr(dataset_schema, "names"):
+            schema = cast("SchemaLike", dataset_schema)
+    elif isinstance(source, IbisPlan):
+        schema = pa.schema(source.expr.schema().to_pyarrow())
+    elif isinstance(source, IbisTable):
+        schema = pa.schema(source.schema().to_pyarrow())
+    else:
+        candidate = getattr(source, "schema", None)
+        if candidate is not None and hasattr(candidate, "names"):
+            schema = cast("SchemaLike", candidate)
+    return schema
 
 
 def _schema_names(schema: SchemaLike) -> tuple[str, ...]:

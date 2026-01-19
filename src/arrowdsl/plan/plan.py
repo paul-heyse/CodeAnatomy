@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import time
@@ -13,13 +12,13 @@ from typing import Any, Literal, cast
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.core.context import (
     ExecutionContext,
     Ordering,
     OrderingKey,
     OrderingLevel,
 )
+from arrowdsl.core.expr_types import ExplodeSpec
 from arrowdsl.core.interop import (
     ComputeExpression,
     RecordBatchReaderLike,
@@ -712,7 +711,7 @@ def _log_plan_snapshot(
         }
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, default=str) + "\n")
+            handle.write(_stable_repr(payload) + "\n")
     except OSError:
         return
 
@@ -745,9 +744,26 @@ def _log_plan_schema(plan: Plan, *, value: object, ctx: ExecutionContext) -> Non
         }
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, default=str) + "\n")
+            handle.write(_stable_repr(payload) + "\n")
     except OSError:
         return
+
+
+def _stable_repr(value: object) -> str:
+    if isinstance(value, Mapping):
+        items = ", ".join(
+            f"{_stable_repr(key)}:{_stable_repr(val)}"
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+        return f"{{{items}}}"
+    if isinstance(value, (list, tuple, set)):
+        rendered = [_stable_repr(item) for item in value]
+        if isinstance(value, set):
+            rendered = sorted(rendered)
+        items = ", ".join(rendered)
+        bracket = "()" if isinstance(value, tuple) else "[]"
+        return f"{bracket[0]}{items}{bracket[1]}"
+    return repr(value)
 
 
 def execute_plan(

@@ -10,10 +10,9 @@ from typing import TYPE_CHECKING, cast
 import ibis
 import pyarrow as pa
 
-from arrowdsl.compute.filters import FilterSpec, predicate_spec
 from arrowdsl.core.context import ExecutionContext, Ordering, execution_context_factory
 from arrowdsl.core.ids import iter_table_rows
-from arrowdsl.core.interop import SchemaLike, TableLike
+from arrowdsl.core.interop import ScalarLike, SchemaLike, TableLike
 from arrowdsl.schema.build import empty_table, rows_to_table
 from extract.evidence_plan import EvidencePlan
 from extract.registry_extractors import (
@@ -317,12 +316,18 @@ def ast_def_nodes(nodes: TableLike) -> TableLike:
     """
     if nodes.num_rows == 0:
         return nodes
-    predicate = predicate_spec(
-        "in_set",
-        col="kind",
-        values=("FunctionDef", "AsyncFunctionDef", "ClassDef"),
-    )
-    return FilterSpec(predicate).apply_kernel(nodes)
+    allowed = {"FunctionDef", "AsyncFunctionDef", "ClassDef"}
+    values = list(nodes["kind"])
+
+    def _as_text(item: object | None) -> str | None:
+        if item is None:
+            return None
+        if hasattr(item, "as_py"):
+            return cast("str | None", cast("ScalarLike", item).as_py())
+        return str(item)
+
+    mask = pa.array([_as_text(item) in allowed for item in values])
+    return nodes.filter(mask)
 
 
 def requires_evidence(plan: EvidencePlan | None, name: str) -> bool:

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -28,6 +26,7 @@ from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_p
 from datafusion_engine.function_factory import function_factory_payloads, install_function_factory
 from datafusion_engine.udf_registry import DataFusionUdfSnapshot, register_datafusion_udfs
 from engine.plan_cache import PlanCache
+from registry_common.arrow_payloads import payload_hash
 from schema_spec.policies import DataFusionWritePolicy
 
 if TYPE_CHECKING:
@@ -67,6 +66,103 @@ logger = logging.getLogger(__name__)
 KIB: int = 1024
 MIB: int = 1024 * KIB
 GIB: int = 1024 * MIB
+
+SETTINGS_HASH_VERSION: int = 1
+TELEMETRY_PAYLOAD_VERSION: int = 1
+
+_MAP_ENTRY_SCHEMA = pa.struct(
+    [
+        pa.field("key", pa.string()),
+        pa.field("value_kind", pa.string()),
+        pa.field("value", pa.string()),
+    ]
+)
+_SETTINGS_HASH_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32()),
+        pa.field("entries", pa.list_(_MAP_ENTRY_SCHEMA)),
+    ]
+)
+_SQL_POLICY_SCHEMA = pa.struct(
+    [
+        pa.field("allow_ddl", pa.bool_()),
+        pa.field("allow_dml", pa.bool_()),
+        pa.field("allow_statements", pa.bool_()),
+    ]
+)
+_WRITE_POLICY_SCHEMA = pa.struct(
+    [
+        pa.field("partition_by", pa.list_(pa.string())),
+        pa.field("single_file_output", pa.bool_()),
+        pa.field("sort_by", pa.list_(pa.string())),
+        pa.field("parquet_compression", pa.string()),
+        pa.field("parquet_statistics_enabled", pa.string()),
+        pa.field("parquet_row_group_size", pa.int64()),
+    ]
+)
+_SPILL_SCHEMA = pa.struct(
+    [
+        pa.field("spill_dir", pa.string()),
+        pa.field("memory_pool", pa.string()),
+        pa.field("memory_limit_bytes", pa.int64()),
+    ]
+)
+_EXECUTION_SCHEMA = pa.struct(
+    [
+        pa.field("target_partitions", pa.int64()),
+        pa.field("batch_size", pa.int64()),
+    ]
+)
+_SQL_SURFACES_SCHEMA = pa.struct(
+    [
+        pa.field("enable_information_schema", pa.bool_()),
+        pa.field("enable_url_table", pa.bool_()),
+        pa.field("sql_parser_dialect", pa.string()),
+        pa.field("ansi_mode", pa.bool_()),
+    ]
+)
+_EXTENSIONS_SCHEMA = pa.struct(
+    [
+        pa.field("delta_plan_codecs_enabled", pa.bool_()),
+        pa.field("delta_plan_codec_physical", pa.string()),
+        pa.field("delta_plan_codec_logical", pa.string()),
+        pa.field("expr_planners_enabled", pa.bool_()),
+        pa.field("expr_planner_names", pa.list_(pa.string())),
+        pa.field("named_args_supported", pa.bool_()),
+        pa.field("distributed", pa.bool_()),
+        pa.field("distributed_context_factory", pa.bool_()),
+    ]
+)
+_OUTPUT_WRITES_SCHEMA = pa.struct(
+    [
+        pa.field("cache_enabled", pa.bool_()),
+        pa.field("cache_max_columns", pa.int64()),
+        pa.field("datafusion_write_policy", _WRITE_POLICY_SCHEMA),
+    ]
+)
+_TELEMETRY_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32()),
+        pa.field("profile_name", pa.string()),
+        pa.field("sql_policy_name", pa.string()),
+        pa.field("session_config", pa.list_(_MAP_ENTRY_SCHEMA)),
+        pa.field("settings_hash", pa.string()),
+        pa.field("external_table_options", pa.list_(_MAP_ENTRY_SCHEMA)),
+        pa.field("sql_policy", _SQL_POLICY_SCHEMA),
+        pa.field("param_identifier_allowlist", pa.list_(pa.string())),
+        pa.field("write_policy", _WRITE_POLICY_SCHEMA),
+        pa.field("feature_gates", pa.list_(_MAP_ENTRY_SCHEMA)),
+        pa.field("join_policy", pa.list_(_MAP_ENTRY_SCHEMA)),
+        pa.field("parquet_read", pa.list_(_MAP_ENTRY_SCHEMA)),
+        pa.field("listing_table", pa.list_(_MAP_ENTRY_SCHEMA)),
+        pa.field("spill", _SPILL_SCHEMA),
+        pa.field("execution", _EXECUTION_SCHEMA),
+        pa.field("sql_surfaces", _SQL_SURFACES_SCHEMA),
+        pa.field("extensions", _EXTENSIONS_SCHEMA),
+        pa.field("substrait_validation", pa.bool_()),
+        pa.field("output_writes", _OUTPUT_WRITES_SCHEMA),
+    ]
+)
 
 
 def _parse_major_version(version: str) -> int | None:
@@ -544,6 +640,65 @@ def _apply_explain_analyze_level(
 
 def _settings_by_prefix(payload: Mapping[str, str], prefix: str) -> dict[str, str]:
     return {key: value for key, value in payload.items() if key.startswith(prefix)}
+
+
+def _map_entries(payload: Mapping[str, object]) -> list[dict[str, object]]:
+    return [
+        _map_entry(key, value)
+        for key, value in sorted(payload.items(), key=lambda item: str(item[0]))
+    ]
+
+
+def _map_entry(key: object, value: object) -> dict[str, object]:
+    return {
+        "key": str(key),
+        "value_kind": _value_kind(value),
+        "value": _value_text(value),
+    }
+
+
+def _value_kind(value: object) -> str:
+    kind = "string"
+    if value is None:
+        kind = "null"
+    elif isinstance(value, bool):
+        kind = "bool"
+    elif isinstance(value, int):
+        kind = "int64"
+    elif isinstance(value, float):
+        kind = "float64"
+    elif isinstance(value, bytes):
+        kind = "binary"
+    return kind
+
+
+def _value_text(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.hex()
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (bool, int, float)):
+        return str(value)
+    return _stable_repr(value)
+
+
+def _stable_repr(value: object) -> str:
+    if isinstance(value, Mapping):
+        items = ", ".join(
+            f"{_stable_repr(key)}:{_stable_repr(val)}"
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+        return f"{{{items}}}"
+    if isinstance(value, (list, tuple, set)):
+        rendered = [_stable_repr(item) for item in value]
+        if isinstance(value, set):
+            rendered = sorted(rendered)
+        items = ", ".join(rendered)
+        bracket = "()" if isinstance(value, tuple) else "[]"
+        return f"{bracket[0]}{items}{bracket[1]}"
+    return repr(value)
 
 
 def _function_catalog_sort_key(row: Mapping[str, object]) -> tuple[str, str]:
@@ -1585,9 +1740,11 @@ class DataFusionRuntimeProfile:
         str
             SHA-256 hash for the settings payload.
         """
-        payload = self.settings_payload()
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        payload = {
+            "version": SETTINGS_HASH_VERSION,
+            "entries": _map_entries(self.settings_payload()),
+        }
+        return payload_hash(payload, _SETTINGS_HASH_SCHEMA)
 
     def telemetry_payload(self) -> dict[str, object]:
         """Return a diagnostics-friendly payload for the runtime profile.
@@ -1741,6 +1898,16 @@ class DataFusionRuntimeProfile:
             },
         }
 
+    def telemetry_payload_hash(self) -> str:
+        """Return a stable hash for the versioned telemetry payload.
+
+        Returns
+        -------
+        str
+            SHA-256 hash of the telemetry payload.
+        """
+        return payload_hash(self._telemetry_payload_row(), _TELEMETRY_SCHEMA)
+
     def collect_metrics(self) -> Mapping[str, object] | None:
         """Return optional DataFusion metrics payload.
 
@@ -1772,12 +1939,77 @@ class DataFusionRuntimeProfile:
             return DEFAULT_DF_POLICY
         return DATAFUSION_POLICY_PRESETS.get(self.config_policy_name, DEFAULT_DF_POLICY)
 
+    def _telemetry_payload_row(self) -> dict[str, object]:
+        settings = self.settings_payload()
+        sql_policy_payload = None
+        if self.sql_policy is not None:
+            sql_policy_payload = {
+                "allow_ddl": self.sql_policy.allow_ddl,
+                "allow_dml": self.sql_policy.allow_dml,
+                "allow_statements": self.sql_policy.allow_statements,
+            }
+        write_policy_payload = _datafusion_write_policy_payload(self.write_policy)
+        parquet_read = _settings_by_prefix(settings, "datafusion.execution.parquet.")
+        listing_table = _settings_by_prefix(settings, "datafusion.runtime.list_files_")
+        parser_dialect = settings.get("datafusion.sql_parser.dialect")
+        ansi_mode = _ansi_mode(settings)
+        return {
+            "version": TELEMETRY_PAYLOAD_VERSION,
+            "profile_name": self.config_policy_name,
+            "sql_policy_name": self.sql_policy_name,
+            "session_config": _map_entries(settings),
+            "settings_hash": self.settings_hash(),
+            "external_table_options": (
+                _map_entries(self.external_table_options) if self.external_table_options else None
+            ),
+            "sql_policy": sql_policy_payload,
+            "param_identifier_allowlist": (
+                list(self.param_identifier_allowlist) if self.param_identifier_allowlist else None
+            ),
+            "write_policy": write_policy_payload,
+            "feature_gates": _map_entries(self.feature_gates.settings()),
+            "join_policy": (
+                _map_entries(self.join_policy.settings()) if self.join_policy is not None else None
+            ),
+            "parquet_read": _map_entries(parquet_read),
+            "listing_table": _map_entries(listing_table),
+            "spill": {
+                "spill_dir": self.spill_dir,
+                "memory_pool": self.memory_pool,
+                "memory_limit_bytes": self.memory_limit_bytes,
+            },
+            "execution": {
+                "target_partitions": self.target_partitions,
+                "batch_size": self.batch_size,
+            },
+            "sql_surfaces": {
+                "enable_information_schema": self.enable_information_schema,
+                "enable_url_table": self.enable_url_table,
+                "sql_parser_dialect": parser_dialect,
+                "ansi_mode": ansi_mode,
+            },
+            "extensions": {
+                "delta_plan_codecs_enabled": self.enable_delta_plan_codecs,
+                "delta_plan_codec_physical": self.delta_plan_codec_physical,
+                "delta_plan_codec_logical": self.delta_plan_codec_logical,
+                "expr_planners_enabled": self.enable_expr_planners,
+                "expr_planner_names": list(self.expr_planner_names),
+                "named_args_supported": self.named_args_supported(),
+                "distributed": self.distributed,
+                "distributed_context_factory": bool(self.distributed_context_factory),
+            },
+            "substrait_validation": self.substrait_validation,
+            "output_writes": {
+                "cache_enabled": self.cache_enabled,
+                "cache_max_columns": self.cache_max_columns,
+                "datafusion_write_policy": write_policy_payload,
+            },
+        }
+
     def _cache_key(self) -> str:
         if self.session_context_key:
             return self.session_context_key
-        payload = self.telemetry_payload()
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        return self.telemetry_payload_hash()
 
     def context_cache_key(self) -> str:
         """Return a stable cache key for the session context.

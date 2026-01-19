@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 
-from arrowdsl.plan.query import ScanTelemetry
+from arrowdsl.plan.scan_telemetry import ScanTelemetry
 from extract.evidence_specs import EvidenceSpec as ExtractEvidenceSpec
 from extract.evidence_specs import evidence_spec
 from extract.normalize_ops import normalize_ops_for_output

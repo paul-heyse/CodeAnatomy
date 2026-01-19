@@ -6,19 +6,21 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
-from arrowdsl.compute.macros import (
+from ibis.expr.types import Value
+
+from arrowdsl.core.interop import TableLike
+from cpg.kinds_ultimate import EdgeKind, EntityKind, NodeKind
+from cpg.prop_transforms import (
     expr_context_expr,
     expr_context_value,
     flag_to_bool,
     flag_to_bool_expr,
 )
-from arrowdsl.core.interop import ComputeExpression, TableLike
-from cpg.kinds_ultimate import EdgeKind, EntityKind, NodeKind
 
 type TableFilter = Callable[[TableLike], TableLike]
 type PropValueType = Literal["string", "int", "float", "bool", "json"]
 type PropTransformFn = Callable[[object | None], object | None]
-type PropTransformExprFn = Callable[[ComputeExpression], ComputeExpression]
+type PropTransformExprFn = Callable[[Value], Value]
 type PropIncludeFn = Callable[[PropOptions], bool]
 
 TRANSFORM_EXPR_CONTEXT = "expr_context"

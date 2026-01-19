@@ -109,14 +109,14 @@ class StateStore:
         return self.root / "metadata"
 
     def invalidation_snapshot_path(self) -> Path:
-        """Return the invalidation snapshot JSON path.
+        """Return the invalidation snapshot Delta path.
 
         Returns
         -------
         Path
-            Invalidation snapshot path.
+            Invalidation snapshot Delta table path.
         """
-        return self.metadata_dir() / "invalidation_snapshot.json"
+        return self.metadata_dir() / "invalidation_snapshot"
 
     def scip_fingerprint_path(self) -> Path:
         """Return the SCIP index fingerprint path.

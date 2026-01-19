@@ -2,23 +2,41 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+import pyarrow as pa
+
+from arrowdsl.core.context import Ordering
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.plan.plan import Plan, union_all_plans
+from ibis_engine.expr_compiler import union_tables
+from ibis_engine.plan import IbisPlan
+from registry_common.arrow_payloads import payload_hash
 from relspec.rules.definitions import EvidenceSpec
 from relspec.rules.evidence import EvidenceCatalog
+
+RULE_GRAPH_SIGNATURE_VERSION = 1
+_RULE_GRAPH_RULE_SCHEMA = pa.struct(
+    [
+        pa.field("name", pa.string()),
+        pa.field("signature", pa.string()),
+    ]
+)
+_RULE_GRAPH_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32()),
+        pa.field("label", pa.string()),
+        pa.field("rules", pa.list_(_RULE_GRAPH_RULE_SCHEMA)),
+    ]
+)
 
 
 @dataclass(frozen=True)
 class GraphPlan:
     """Graph-level plan with per-output subplans."""
 
-    plan: Plan
-    outputs: dict[str, Plan]
+    plan: IbisPlan
+    outputs: dict[str, IbisPlan]
 
 
 @dataclass(frozen=True)
@@ -36,7 +54,7 @@ class RuleSelectors[RuleT]:
 def compile_graph_plan[RuleT](
     rules: Sequence[RuleT],
     *,
-    plans: dict[str, Plan],
+    plans: dict[str, IbisPlan],
     output_for: Callable[[RuleT], str],
     label: str,
 ) -> GraphPlan:
@@ -46,10 +64,19 @@ def compile_graph_plan[RuleT](
     -------
     GraphPlan
         Graph-level plan with per-output subplans.
+
+    Raises
+    ------
+    ValueError
+        Raised when there are no output plans available.
     """
     ordered_outputs = [output_for(rule) for rule in rules if output_for(rule) in plans]
     outputs = {name: plans[name] for name in ordered_outputs}
-    union = union_all_plans(tuple(outputs.values()), label=label)
+    if not outputs:
+        msg = f"{label} requires at least one output plan."
+        raise ValueError(msg)
+    expr = union_tables([plan.expr for plan in outputs.values()], distinct=False)
+    union = IbisPlan(expr=expr, ordering=Ordering.unordered())
     return GraphPlan(plan=union, outputs=outputs)
 
 
@@ -133,10 +160,16 @@ def rule_graph_signature[RuleT](
     str
         Deterministic hash for the rule graph.
     """
-    entries = sorted((name_for(rule), signature_for(rule)) for rule in rules)
-    payload = {"label": label, "rules": entries}
-    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    entries = [
+        {"name": name, "signature": signature}
+        for name, signature in sorted((name_for(rule), signature_for(rule)) for rule in rules)
+    ]
+    payload = {
+        "version": RULE_GRAPH_SIGNATURE_VERSION,
+        "label": label,
+        "rules": entries,
+    }
+    return payload_hash(payload, _RULE_GRAPH_SCHEMA)
 
 
 def _register_output(evidence: EvidenceCatalog, name: str, schema: SchemaLike | None) -> None:

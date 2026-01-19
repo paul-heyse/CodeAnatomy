@@ -19,8 +19,6 @@ from arrowdsl.spec.io import (
     read_spec_table,
     rows_from_table,
     sort_spec_table,
-    table_from_json,
-    table_from_json_file,
     table_from_rows,
     write_spec_table,
 )
@@ -62,63 +60,6 @@ class SpecTableCodec[SpecT]:
             Spec values decoded from the table.
         """
         return tuple(self.decode_row(row) for row in rows_from_table(table))
-
-    def to_json_payload(self, values: Sequence[SpecT]) -> list[dict[str, object]]:
-        """Encode spec values into JSON-ready rows.
-
-        Returns
-        -------
-        list[dict[str, object]]
-            JSON-ready payload rows.
-        """
-        return [self.encode_row(value) for value in values]
-
-    def table_from_json_payload(
-        self,
-        payload: Sequence[Mapping[str, object]],
-    ) -> pa.Table:
-        """Build a spec table from JSON-ready rows.
-
-        Returns
-        -------
-        pa.Table
-            Table built from JSON-ready rows.
-        """
-        rows = [dict(item) for item in payload]
-        return table_from_json(self.schema, rows)
-
-    def table_from_json_file(self, path: str | Path) -> pa.Table:
-        """Build a spec table from a JSON file.
-
-        Returns
-        -------
-        pa.Table
-            Table built from a JSON file.
-        """
-        return table_from_json_file(self.schema, path)
-
-    def from_json_payload(
-        self,
-        payload: Sequence[Mapping[str, object]],
-    ) -> tuple[SpecT, ...]:
-        """Decode spec values from JSON-ready rows.
-
-        Returns
-        -------
-        tuple[SpecT, ...]
-            Spec values decoded from JSON-ready rows.
-        """
-        return self.from_table(self.table_from_json_payload(payload))
-
-    def from_json_file(self, path: str | Path) -> tuple[SpecT, ...]:
-        """Decode spec values from a JSON file.
-
-        Returns
-        -------
-        tuple[SpecT, ...]
-            Spec values decoded from the JSON file.
-        """
-        return self.from_table(self.table_from_json_file(path))
 
     @staticmethod
     def write_table(

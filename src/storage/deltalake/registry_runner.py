@@ -11,12 +11,18 @@ from core_types import PathLike, ensure_path
 from storage.deltalake.cpg_registry import (
     write_registry_delta as write_cpg_registry_delta,
 )
+from storage.deltalake.extract_registry import (
+    write_registry_delta as write_extract_registry_delta,
+)
+from storage.deltalake.normalize_registry import (
+    write_registry_delta as write_normalize_registry_delta,
+)
 from storage.deltalake.registry_models import RegistryWriteOptions, RegistryWriteResult
 from storage.deltalake.relspec_registry import (
     write_registry_delta as write_relspec_registry_delta,
 )
 
-RegistryTarget = Literal["cpg", "relspec"]
+RegistryTarget = Literal["cpg", "extract", "normalize", "relspec"]
 
 
 class RegistryWriter(Protocol):
@@ -30,6 +36,8 @@ class RegistryWriter(Protocol):
 
 REGISTRY_WRITERS: Mapping[RegistryTarget, RegistryWriter] = {
     "cpg": write_cpg_registry_delta,
+    "extract": write_extract_registry_delta,
+    "normalize": write_normalize_registry_delta,
     "relspec": write_relspec_registry_delta,
 }
 

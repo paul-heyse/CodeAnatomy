@@ -77,6 +77,8 @@ class RegistryWriteOptions:
     include_diagnostics: bool = True
     validate_extractors: bool = False
     allow_planned: bool = False
+    skip_if_unchanged: bool = True
+    force: bool = False
 
 
 @dataclass(frozen=True)

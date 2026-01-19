@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Literal, overload
 import ibis
 import pyarrow as pa
 
-from arrowdsl.compute.macros import normalize_string_items
 from arrowdsl.compute.position_encoding import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from arrowdsl.core.context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import (
@@ -44,6 +43,7 @@ from extract.registry_specs import (
     postprocess_table,
 )
 from extract.schema_ops import ExtractNormalizeOptions
+from extract.string_utils import normalize_string_items
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:

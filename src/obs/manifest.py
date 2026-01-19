@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, TypeVar, cast
 
-from sqlglot.serde import load as sqlglot_load
+from sqlglot import parse_one
+from sqlglot.errors import ParseError
 
 from arrowdsl.core.interop import SchemaLike, TableLike
-from arrowdsl.json_factory import JsonPolicy, dump_path, json_default
 from arrowdsl.plan.metrics import table_summary
 from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.serialization import dataset_fingerprint, schema_fingerprint
@@ -32,11 +33,11 @@ from storage.io import (
 )
 
 if TYPE_CHECKING:
-    from arrowdsl.plan.query import ScanTelemetry
+    from arrowdsl.plan.scan_telemetry import ScanTelemetry
     from extract.evidence_plan import EvidencePlan
-    from relspec.normalize.rule_model import NormalizeRule
     from relspec.compiler import CompiledOutput
     from relspec.model import RelationshipRule
+    from relspec.normalize.rule_model import NormalizeRule
     from relspec.registry import DatasetLocation
 
 
@@ -852,7 +853,7 @@ def _json_dict_list(rows: Sequence[Mapping[str, object]]) -> list[JsonDict]:
     for row in rows:
         record: JsonDict = {}
         for key, value in row.items():
-            record[str(key)] = cast("JsonValue", json_default(value))
+            record[str(key)] = cast("JsonValue", _normalize_value(value))
         payload.append(record)
     return payload
 
@@ -879,12 +880,13 @@ def _sqlglot_planner_dag_hashes(
         return None
     results: list[JsonDict] = []
     for payload in payloads:
-        optimized_ast = payload.get("optimized_ast")
-        if optimized_ast is None or not _is_sqlglot_payload(optimized_ast):
+        optimized_sql = payload.get("optimized_sql")
+        if not isinstance(optimized_sql, str) or not optimized_sql:
             continue
         try:
-            expr = sqlglot_load(cast("list[dict[str, object]]", optimized_ast))
-        except (TypeError, ValueError):
+            dialect = payload.get("sql_dialect") or "datafusion_ext"
+            expr = parse_one(optimized_sql, read=str(dialect))
+        except (TypeError, ValueError, ParseError):
             continue
         dag = planner_dag_snapshot(expr)
         subplan_hashes = [str(step["step_id"]) for step in dag.steps]
@@ -895,6 +897,7 @@ def _sqlglot_planner_dag_hashes(
                 "plan_signature": _optional_str(payload.get("plan_signature")),
                 "plan_fingerprint": _optional_str(payload.get("plan_fingerprint")),
                 "sqlglot_policy_hash": _optional_str(payload.get("sqlglot_policy_hash")),
+                "sql_dialect": _optional_str(payload.get("sql_dialect")),
                 "planner_dag_hash": dag.dag_hash,
                 "subplan_hashes": subplan_hashes,
             }
@@ -906,12 +909,6 @@ def _optional_str(value: object) -> str | None:
     if value is None:
         return None
     return str(value)
-
-
-def _is_sqlglot_payload(payload: object) -> bool:
-    if not isinstance(payload, list):
-        return False
-    return all(isinstance(item, dict) for item in payload)
 
 
 def _optional_note(value: T | None, transform: Callable[[T], JsonValue]) -> JsonValue | None:
@@ -1056,7 +1053,47 @@ def write_manifest_json(
     -------
     str
         Path to the written JSON file.
+
+    Raises
+    ------
+    FileExistsError
+        Raised when the manifest already exists and overwrite is False.
     """
     payload = manifest.to_dict() if isinstance(manifest, Manifest) else manifest
-    policy = JsonPolicy(pretty=True, sort_keys=True)
-    return dump_path(ensure_path(path), payload, policy=policy, overwrite=overwrite)
+    target = ensure_path(path)
+    if target.exists() and not overwrite:
+        msg = f"Manifest already exists at {target}."
+        raise FileExistsError(msg)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+    return str(target)
+
+
+def _normalize_value(value: object) -> object:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, bytes):
+        return value.hex()
+    if isinstance(value, Mapping):
+        return {str(key): _normalize_value(val) for key, val in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_normalize_value(item) for item in value]
+    return _stable_repr(value)
+
+
+def _stable_repr(value: object) -> str:
+    if isinstance(value, Mapping):
+        items = ", ".join(
+            f"{_stable_repr(key)}:{_stable_repr(val)}"
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+        return f"{{{items}}}"
+    if isinstance(value, (list, tuple, set)):
+        rendered = [_stable_repr(item) for item in value]
+        if isinstance(value, set):
+            rendered = sorted(rendered)
+        items = ", ".join(rendered)
+        bracket = "()" if isinstance(value, tuple) else "[]"
+        return f"{bracket[0]}{items}{bracket[1]}"
+    return repr(value)

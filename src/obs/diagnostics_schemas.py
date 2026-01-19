@@ -23,7 +23,9 @@ DATAFUSION_EXPLAINS_V1 = pa.schema(
     [
         pa.field("event_time_unix_ms", pa.int64(), nullable=False),
         pa.field("sql", pa.string(), nullable=False),
-        pa.field("explain_rows_json", pa.string(), nullable=False),
+        pa.field("explain_rows_artifact_path", pa.string(), nullable=True),
+        pa.field("explain_rows_artifact_format", pa.string(), nullable=True),
+        pa.field("explain_rows_schema_fingerprint", pa.string(), nullable=True),
         pa.field("explain_analyze", pa.bool_(), nullable=False),
     ],
     metadata={b"schema_name": b"datafusion_explains_v1"},

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from typing import Literal, Protocol
 
@@ -11,6 +10,7 @@ from arrowdsl.core.interop import SchemaLike
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.metadata import infer_ordering_keys, ordering_from_schema
 from arrowdsl.spec.expr_ir import ExprIR
+from registry_common.metadata import decode_metadata_scalar_map
 from relspec.normalize.rule_model import AmbiguityPolicy, ConfidencePolicy
 
 
@@ -159,7 +159,7 @@ def _confidence_policy_from_metadata(
         raise TypeError(msg)
     base = _meta_float(meta, CONFIDENCE_BASE_META)
     penalty = _meta_float(meta, CONFIDENCE_PENALTY_META)
-    weights = _meta_json_map(meta, CONFIDENCE_SOURCE_WEIGHT_META)
+    weights = _meta_scalar_map(meta, CONFIDENCE_SOURCE_WEIGHT_META)
     if base is None and penalty is None and not weights:
         return None
     return ConfidencePolicy(
@@ -198,15 +198,26 @@ def _meta_float(meta: Mapping[bytes, bytes], key: bytes) -> float | None:
     return float(raw.decode("utf-8"))
 
 
-def _meta_json_map(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, float]:
+def _meta_scalar_map(meta: Mapping[bytes, bytes], key: bytes) -> dict[str, float]:
     raw = meta.get(key)
     if raw is None:
         return {}
-    payload = json.loads(raw.decode("utf-8"))
-    if not isinstance(payload, Mapping):
-        msg = f"Expected mapping for metadata {key!r}."
+    payload = decode_metadata_scalar_map(raw)
+    parsed: dict[str, float] = {}
+    for name, value in payload.items():
+        if isinstance(value, (float, int)):
+            parsed[str(name)] = float(value)
+            continue
+        if isinstance(value, str):
+            try:
+                parsed[str(name)] = float(value)
+            except ValueError as exc:
+                msg = f"Expected scalar float for metadata {key!r}."
+                raise TypeError(msg) from exc
+            continue
+        msg = f"Expected scalar float for metadata {key!r}."
         raise TypeError(msg)
-    return {str(k): float(v) for k, v in payload.items()}
+    return parsed
 
 
 def _source_weight_expr(

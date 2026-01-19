@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -161,41 +160,6 @@ def rows_from_table(table: pa.Table) -> list[dict[str, Any]]:
     return build_rows_from_table(table)
 
 
-def table_from_json(
-    schema: SchemaLike,
-    payload: list[dict[str, Any]],
-) -> pa.Table:
-    """Build a spec table from JSON records.
-
-    Returns
-    -------
-    pa.Table
-        Table built from JSON payload.
-    """
-    return table_from_rows(schema, payload)
-
-
-def table_from_json_file(schema: SchemaLike, path: str | Path) -> pa.Table:
-    """Build a spec table from a JSON file.
-
-    Returns
-    -------
-    pa.Table
-        Table built from JSON payload.
-
-    Raises
-    ------
-    TypeError
-        Raised when the JSON payload is not a list of objects.
-    """
-    with Path(path).open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    if not isinstance(data, list):
-        msg = "Spec JSON payload must be a list of objects."
-        raise TypeError(msg)
-    return table_from_json(schema, data)
-
-
 def sort_spec_table(table: pa.Table, *, keys: Sequence[str]) -> pa.Table:
     """Return a deterministically sorted copy of a spec table.
 
@@ -227,8 +191,6 @@ __all__ = [
     "read_spec_values",
     "rows_from_table",
     "sort_spec_table",
-    "table_from_json",
-    "table_from_json_file",
     "table_from_rows",
     "write_spec_table",
     "write_spec_values",

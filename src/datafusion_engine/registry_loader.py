@@ -180,7 +180,8 @@ def _delta_schema_has_union_encoding(
     schema = table.schema().to_arrow()
     if isinstance(schema, pa.Schema):
         return schema_has_union_encoding(schema)
-    return "arrowdsl.union_encoding" in table.schema().to_json()
+    msg = "Delta schema must resolve to a pyarrow.Schema."
+    raise TypeError(msg)
 
 
 def _read_union_encoded_table(

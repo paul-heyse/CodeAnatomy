@@ -7,9 +7,9 @@ from functools import cache
 from typing import TYPE_CHECKING
 
 from extract.registry_definitions import extract_rule_definitions
-from relspec.extract.registry_template_specs import DATASET_TEMPLATE_SPECS
 from extract.registry_templates import config as extractor_config
 from extract.registry_templates import expand_dataset_templates
+from relspec.extract.registry_template_specs import DATASET_TEMPLATE_SPECS
 from relspec.rules.definitions import RuleDefinition
 from relspec.rules.diagnostics import RuleDiagnostic
 from relspec.rules.registry import RuleAdapter

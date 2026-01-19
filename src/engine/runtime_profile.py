@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
+import pyarrow as pa
+
 from arrowdsl.core.context import RuntimeProfile, ScanProfile, runtime_profile_factory
 from arrowdsl.core.determinism import DeterminismTier
 from engine.function_registry import default_function_registry
+from registry_common.arrow_payloads import payload_hash
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 
 
@@ -107,6 +108,76 @@ class RuntimeProfileSnapshot:
         }
 
 
+PROFILE_HASH_VERSION: int = 1
+_PARQUET_READ_SCHEMA = pa.struct(
+    [
+        pa.field("dictionary_columns", pa.list_(pa.string())),
+        pa.field("coerce_int96_timestamp_unit", pa.string()),
+        pa.field("binary_type", pa.string()),
+        pa.field("list_type", pa.string()),
+    ]
+)
+_PARQUET_FRAGMENT_SCAN_SCHEMA = pa.struct(
+    [
+        pa.field("buffer_size", pa.int64()),
+        pa.field("pre_buffer", pa.bool_()),
+        pa.field("use_buffered_stream", pa.bool_()),
+        pa.field("page_checksum_verification", pa.bool_()),
+        pa.field("thrift_string_size_limit", pa.int64()),
+        pa.field("thrift_container_size_limit", pa.int64()),
+        pa.field("arrow_extensions_enabled", pa.bool_()),
+    ]
+)
+_SCAN_PROFILE_SCHEMA = pa.struct(
+    [
+        pa.field("name", pa.string()),
+        pa.field("batch_size", pa.int64()),
+        pa.field("batch_readahead", pa.int64()),
+        pa.field("fragment_readahead", pa.int64()),
+        pa.field("fragment_scan_options", pa.string()),
+        pa.field("parquet_read_options", _PARQUET_READ_SCHEMA),
+        pa.field("parquet_fragment_scan_options", _PARQUET_FRAGMENT_SCAN_SCHEMA),
+        pa.field("cache_metadata", pa.bool_()),
+        pa.field("use_threads", pa.bool_()),
+        pa.field("require_sequenced_output", pa.bool_()),
+        pa.field("implicit_ordering", pa.bool_()),
+        pa.field("scan_provenance_columns", pa.list_(pa.string())),
+    ]
+)
+_IBIS_OPTIONS_SCHEMA = pa.struct(
+    [
+        pa.field("fuse_selects", pa.bool_()),
+        pa.field("default_limit", pa.int64()),
+        pa.field("default_dialect", pa.string()),
+        pa.field("interactive", pa.bool_()),
+    ]
+)
+_ARROW_RESOURCES_SCHEMA = pa.struct(
+    [
+        pa.field("pyarrow_version", pa.string()),
+        pa.field("cpu_threads", pa.int64()),
+        pa.field("io_threads", pa.int64()),
+        pa.field("memory_pool", pa.string()),
+        pa.field("bytes_allocated", pa.int64()),
+        pa.field("max_memory", pa.int64()),
+    ]
+)
+_PROFILE_HASH_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32()),
+        pa.field("name", pa.string()),
+        pa.field("determinism_tier", pa.string()),
+        pa.field("scan_profile", _SCAN_PROFILE_SCHEMA),
+        pa.field("plan_use_threads", pa.bool_()),
+        pa.field("ibis_options", _IBIS_OPTIONS_SCHEMA),
+        pa.field("arrow_resources", _ARROW_RESOURCES_SCHEMA),
+        pa.field("sqlglot_policy_hash", pa.string()),
+        pa.field("datafusion_hash", pa.string()),
+        pa.field("function_registry_hash", pa.string()),
+    ]
+)
+
+
 def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
     """Return a unified runtime profile snapshot.
 
@@ -124,7 +195,10 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
     datafusion_payload = (
         runtime.datafusion.telemetry_payload_v1() if runtime.datafusion is not None else None
     )
-    payload = {
+    datafusion_hash = (
+        runtime.datafusion.telemetry_payload_hash() if runtime.datafusion is not None else None
+    )
+    snapshot_payload = {
         "name": runtime.name,
         "determinism_tier": runtime.determinism.value,
         "scan_profile": scan_payload,
@@ -135,7 +209,21 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
         "datafusion": datafusion_payload,
         "function_registry_hash": function_registry_hash,
     }
-    profile_hash = _hash_payload(payload)
+    hash_payload = {
+        "version": PROFILE_HASH_VERSION,
+        "name": runtime.name,
+        "determinism_tier": runtime.determinism.value,
+        "scan_profile": scan_payload,
+        "plan_use_threads": runtime.plan_use_threads,
+        "ibis_options": ibis_payload,
+        "arrow_resources": arrow_payload,
+        "sqlglot_policy_hash": sqlglot_snapshot.policy_hash
+        if sqlglot_snapshot is not None
+        else None,
+        "datafusion_hash": datafusion_hash,
+        "function_registry_hash": function_registry_hash,
+    }
+    profile_hash = payload_hash(hash_payload, _PROFILE_HASH_SCHEMA)
     return RuntimeProfileSnapshot(
         version=1,
         name=runtime.name,
@@ -144,7 +232,7 @@ def runtime_profile_snapshot(runtime: RuntimeProfile) -> RuntimeProfileSnapshot:
         plan_use_threads=runtime.plan_use_threads,
         ibis_options=ibis_payload,
         arrow_resources=arrow_payload,
-        sqlglot_policy=payload["sqlglot_policy"],
+        sqlglot_policy=snapshot_payload["sqlglot_policy"],
         datafusion=datafusion_payload,
         function_registry_hash=function_registry_hash,
         profile_hash=profile_hash,
@@ -164,7 +252,7 @@ def _scan_profile_payload(scan: ScanProfile) -> dict[str, object]:
         "batch_size": scan.batch_size,
         "batch_readahead": scan.batch_readahead,
         "fragment_readahead": scan.fragment_readahead,
-        "fragment_scan_options": scan.fragment_scan_options,
+        "fragment_scan_options": _stable_repr(scan.fragment_scan_options),
         "parquet_read_options": scan.parquet_read_payload(),
         "parquet_fragment_scan_options": scan.parquet_fragment_scan_payload(),
         "cache_metadata": scan.cache_metadata,
@@ -175,16 +263,23 @@ def _scan_profile_payload(scan: ScanProfile) -> dict[str, object]:
     }
 
 
-def _hash_payload(payload: Mapping[str, object]) -> str:
-    """Return a stable hash for a runtime profile payload.
-
-    Returns
-    -------
-    str
-        SHA-256 hash of the payload.
-    """
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+def _stable_repr(value: object | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        items = ", ".join(
+            f"{_stable_repr(key)}:{_stable_repr(val)}"
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+        return f"{{{items}}}"
+    if isinstance(value, (list, tuple, set)):
+        rendered = [_stable_repr(item) for item in value]
+        if isinstance(value, set):
+            rendered = sorted(item for item in rendered if item is not None)
+        items = ", ".join(item for item in rendered if item is not None)
+        bracket = "()" if isinstance(value, tuple) else "[]"
+        return f"{bracket[0]}{items}{bracket[1]}"
+    return repr(value)
 
 
 def _apply_profile_overrides(name: str, runtime: RuntimeProfile) -> RuntimeProfile:

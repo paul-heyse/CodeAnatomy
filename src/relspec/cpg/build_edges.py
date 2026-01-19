@@ -11,8 +11,7 @@ from ibis.backends import BaseBackend
 
 from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
-from arrowdsl.plan.query import ScanTelemetry
-from arrowdsl.plan.scan_io import DatasetSource
+from arrowdsl.plan.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import EncodingSpec, empty_table, encode_table
 from cpg.constants import CpgBuildArtifacts, quality_from_ids
 from cpg.edge_specs import edge_plan_specs_from_table
@@ -36,6 +35,7 @@ from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
 from ibis_engine.plan import IbisPlan
+from ibis_engine.scan_io import DatasetSource
 from ibis_engine.sources import SourceToIbisOptions, register_ibis_view
 from relspec.rules.handlers.cpg_emit import EdgeEmitRuleHandler
 from schema_spec.system import DatasetSpec

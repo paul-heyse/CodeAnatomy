@@ -9,8 +9,10 @@ import pyarrow as pa
 import pytest
 from datafusion import SessionContext
 
+from arrowdsl.schema.build import rows_from_table
 from datafusion_engine.udf_registry import register_datafusion_udfs
 from ibis_engine.builtin_udfs import col_to_byte_python, stable_hash64_python
+from tests.utils import values_as_list
 
 
 def _wrapped(fn: Callable[..., object]) -> Callable[..., object]:
@@ -38,7 +40,7 @@ def test_datafusion_udf_conformance() -> None:
         "select stable_hash64(value) as h, col_to_byte(line, offset, unit) as b from input_table"
     )
     df = ctx.sql(query)
-    result = df.to_arrow_table().to_pylist()
+    result = rows_from_table(df.to_arrow_table())
     hash_fn = _wrapped(stable_hash64_python)
     col_fn = _wrapped(col_to_byte_python)
     expected = [
@@ -47,10 +49,10 @@ def test_datafusion_udf_conformance() -> None:
             "b": col_fn(line, offset, unit),
         }
         for value, line, offset, unit in zip(
-            table.column("value").to_pylist(),
-            table.column("line").to_pylist(),
-            table.column("offset").to_pylist(),
-            table.column("unit").to_pylist(),
+            values_as_list(table.column("value")),
+            values_as_list(table.column("line")),
+            values_as_list(table.column("offset")),
+            values_as_list(table.column("unit")),
             strict=True,
         )
     ]

@@ -2,26 +2,22 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import ibis
-from ibis.expr.types import Table
+from ibis.expr.types import Table, Value
 
 try:
     from datafusion import SessionContext
 except ImportError:  # pragma: no cover - optional dependency
     SessionContext = None
 
-try:
-    from datafusion_engine.registry_bridge import register_dataset_df
-except ImportError:  # pragma: no cover - optional dependency
-    register_dataset_df = None
-
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
+from ibis_engine.sources import record_namespace_action
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import (
     DataFusionScanOptions,
@@ -30,6 +26,11 @@ from schema_spec.system import (
     DeltaSchemaPolicy,
     DeltaWritePolicy,
 )
+
+try:
+    from datafusion_engine.registry_bridge import register_dataset_df
+except ImportError:  # pragma: no cover - optional dependency
+    register_dataset_df = None
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -184,6 +185,7 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "skip_metadata": loc.datafusion_scan.skip_metadata,
                 "file_extension": loc.datafusion_scan.file_extension,
                 "cache": loc.datafusion_scan.cache,
+                "unbounded": loc.datafusion_scan.unbounded,
             }
         delta_scan = None
         if loc.delta_scan is not None:
@@ -233,6 +235,39 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
             }
         )
     return snapshot
+
+
+def ibis_array(values: Sequence[Value]) -> Value:
+    """Return an Ibis array literal from values.
+
+    Returns
+    -------
+    ibis.expr.types.Value
+        Array expression constructed from the provided values.
+    """
+    return ibis.array(values)
+
+
+def ibis_struct(fields: Mapping[str, Value]) -> Value:
+    """Return an Ibis struct literal from named fields.
+
+    Returns
+    -------
+    ibis.expr.types.Value
+        Struct expression constructed from the provided fields.
+    """
+    return ibis.struct(fields)
+
+
+def ibis_map(keys: Value, values: Value) -> Value:
+    """Return an Ibis map literal from key and value expressions.
+
+    Returns
+    -------
+    ibis.expr.types.Value
+        Map expression constructed from the provided keys and values.
+    """
+    return ibis.map(keys, values)
 
 
 def resolve_datafusion_scan_options(location: DatasetLocation) -> DataFusionScanOptions | None:
@@ -493,6 +528,17 @@ class IbisDatasetRegistry:
         ):
             ctx = None
         if ctx is None:
+            recorder = None
+            if (
+                self._runtime_profile is not None
+                and self._runtime_profile.diagnostics_sink is not None
+            ):
+                diagnostics = self._runtime_profile.diagnostics_sink
+
+                def _record(payload: Mapping[str, object]) -> None:
+                    diagnostics.record_artifact("ibis_namespace_actions_v1", payload)
+
+                recorder = _record
             table = read_dataset(
                 self.backend,
                 params=ReadDatasetParams(
@@ -506,6 +552,13 @@ class IbisDatasetRegistry:
                 ),
             )
             self.backend.create_view(name, table, overwrite=True)
+            record_namespace_action(
+                recorder,
+                action="create_view",
+                name=name,
+                database=None,
+                overwrite=True,
+            )
         registered = self.backend.table(name)
         self._tables[name] = registered
         return registered
@@ -535,6 +588,9 @@ __all__ = [
     "IbisDatasetRegistry",
     "PathLike",
     "datafusion_context",
+    "ibis_array",
+    "ibis_map",
+    "ibis_struct",
     "read_dataset",
     "registry_snapshot",
     "resolve_datafusion_scan_options",

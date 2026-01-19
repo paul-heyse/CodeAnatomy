@@ -32,8 +32,11 @@ from sqlglot.optimizer.simplify import simplify
 from sqlglot.planner import Step
 from sqlglot.serde import dump
 from sqlglot.transforms import (
+    eliminate_full_outer_join,
     eliminate_qualify,
+    eliminate_semi_and_anti_joins,
     ensure_bools,
+    explode_projection_to_unnest,
     move_ctes_to_top_level,
     unnest_to_explode,
 )
@@ -267,6 +270,31 @@ DEFAULT_GENERATOR_KWARGS: GeneratorInitKwargs = {
 }
 
 
+def _rewrite_full_outer_join(expr: Expression) -> Expression:
+    return eliminate_full_outer_join(expr)
+
+
+def _rewrite_semi_anti_join(expr: Expression) -> Expression:
+    return eliminate_semi_and_anti_joins(expr)
+
+
+def _rewrite_explode_projection(expr: Expression) -> Expression:
+    return explode_projection_to_unnest()(expr)
+
+
+def _normalize_table_aliases(expr: Expression) -> Expression:
+    def _rewrite(node: Expression) -> Expression:
+        if isinstance(node, exp.Table):
+            alias = node.args.get("alias")
+            if isinstance(alias, exp.Identifier):
+                node.set("alias", exp.TableAlias(this=alias))
+            elif isinstance(alias, str):
+                node.set("alias", exp.TableAlias(this=exp.to_identifier(alias)))
+        return node
+
+    return expr.transform(_rewrite)
+
+
 def default_sqlglot_policy() -> SqlGlotPolicy:
     """Return the default SQLGlot policy configuration.
 
@@ -275,6 +303,7 @@ def default_sqlglot_policy() -> SqlGlotPolicy:
     SqlGlotPolicy
         Default policy definition.
     """
+    register_datafusion_dialect()
     return SqlGlotPolicy(
         read_dialect=DEFAULT_READ_DIALECT,
         write_dialect=DEFAULT_WRITE_DIALECT,
@@ -284,8 +313,11 @@ def default_sqlglot_policy() -> SqlGlotPolicy:
         error_level=DEFAULT_ERROR_LEVEL,
         unsupported_level=DEFAULT_UNSUPPORTED_LEVEL,
         transforms=(
+            _rewrite_full_outer_join,
+            _rewrite_semi_anti_join,
             eliminate_qualify,
             move_ctes_to_top_level,
+            _rewrite_explode_projection,
             unnest_to_explode,
             ensure_bools,
         ),
@@ -417,7 +449,12 @@ def apply_transforms(
     return transformed
 
 
-def sqlglot_sql(expr: Expression, *, policy: SqlGlotPolicy | None = None) -> str:
+def sqlglot_sql(
+    expr: Expression,
+    *,
+    policy: SqlGlotPolicy | None = None,
+    pretty: bool | None = None,
+) -> str:
     """Return SQL text for an expression under a policy.
 
     Returns
@@ -427,6 +464,8 @@ def sqlglot_sql(expr: Expression, *, policy: SqlGlotPolicy | None = None) -> str
     """
     policy = policy or default_sqlglot_policy()
     generator = dict(_generator_kwargs(policy))
+    if pretty is not None:
+        generator["pretty"] = pretty
     generator["dialect"] = policy.write_dialect
     generator["unsupported_level"] = policy.unsupported_level
     return expr.sql(**cast("GeneratorInitKwargs", generator))
@@ -526,6 +565,7 @@ class DataFusionDialect(Dialect):
 def register_datafusion_dialect(name: str = "datafusion_ext") -> None:
     """Register the DataFusion dialect overrides under a custom name."""
     Dialect.classes[name] = DataFusionDialect
+    Dialect.classes.setdefault("datafusion", DataFusionDialect)
 
 
 def sanitize_templated_sql(sql: str) -> str:
@@ -652,6 +692,7 @@ def normalize_expr_with_stats(
     policy = options.policy or default_sqlglot_policy()
     identify = policy.identify or _schema_requires_quoting(options.schema)
     transformed = apply_transforms(rewritten, transforms=policy.transforms)
+    transformed = _normalize_table_aliases(transformed)
     qualify_options = QualifyStrictOptions(
         schema=options.schema,
         dialect=policy.read_dialect,

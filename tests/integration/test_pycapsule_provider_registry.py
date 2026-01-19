@@ -12,7 +12,7 @@ from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.registry import DatasetLocation
 from obs.diagnostics import DiagnosticsCollector
 
-datafusion = pytest.importorskip("datafusion")
+pytest.importorskip("datafusion")
 deltalake = pytest.importorskip("deltalake")
 
 EXPECTED_ROW_COUNT = 2

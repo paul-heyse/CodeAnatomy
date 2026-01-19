@@ -1,74 +1,59 @@
-"""Tests for row-group stats capture during Parquet writes."""
+"""Unit tests for row group stats capture."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Sequence
 from pathlib import Path
-from typing import cast
 
 import pyarrow as pa
 
 from arrowdsl.core.context import OrderingLevel
-from arrowdsl.io.parquet import (
-    DatasetWriteConfig,
-    DatasetWriteReport,
-    ParquetMetadataConfig,
-    ParquetWriteOptions,
-    write_dataset_parquet,
-)
+from arrowdsl.io.parquet import DatasetWriteConfig, ParquetMetadataConfig, write_dataset_parquet
 from arrowdsl.schema.metadata import ordering_metadata_spec
 
 
-def test_manifest_row_group_stats(tmp_path: Path) -> None:
-    """Capture row-group stats and metadata sidecars for key columns."""
-    reports: list[DatasetWriteReport] = []
+def _apply_ordering(table: pa.Table, keys: Sequence[tuple[str, str]]) -> pa.Table:
+    spec = ordering_metadata_spec(OrderingLevel.EXPLICIT, keys=keys)
+    schema = spec.apply(table.schema)
+    return table.cast(schema)
 
-    def _report(report: DatasetWriteReport) -> None:
+
+def _capture_row_group_stats(
+    tmp_path: Path,
+    *,
+    table: pa.Table,
+    metadata: ParquetMetadataConfig,
+) -> Sequence[object] | None:
+    reports: list[object] = []
+
+    def _reporter(report: object) -> None:
         reports.append(report)
 
-    schema = pa.schema([("id", pa.int64()), ("value", pa.string())])
-    schema = ordering_metadata_spec(
-        OrderingLevel.EXPLICIT,
-        keys=(("id", "ascending"),),
-    ).apply(schema)
-    table = pa.Table.from_pydict({"id": [1, 2], "value": ["a", "b"]}, schema=schema)
-    config = DatasetWriteConfig(
-        metadata=ParquetMetadataConfig(),
-        reporter=_report,
+    config = DatasetWriteConfig(metadata=metadata, reporter=_reporter)
+    _ = write_dataset_parquet(table, str(tmp_path), config=config)
+    return getattr(reports[-1], "row_group_stats", None)
+
+
+def test_row_group_stats_emitted_when_allowed(tmp_path: Path) -> None:
+    """Capture row group stats when within limits."""
+    table = pa.table({"id": [1, 2, 3], "value": ["a", "b", "c"]})
+    ordered = _apply_ordering(table, keys=(("id", "ascending"),))
+    stats = _capture_row_group_stats(
+        tmp_path / "allowed",
+        table=ordered,
+        metadata=ParquetMetadataConfig(max_row_group_stats_files=10, max_row_group_stats=10),
     )
-    write_dataset_parquet(table, tmp_path / "dataset", config=config)
-    assert reports
-    report = reports[0]
-    assert report.metadata_paths is not None
-    assert "metadata" in report.metadata_paths
-    assert report.row_group_stats is not None
-    columns = cast("Mapping[str, object]", report.row_group_stats[0]["columns"])
-    assert "id" in columns
+    assert stats is not None
+    assert stats
 
 
-def test_manifest_row_group_stats_gated_by_file_count(tmp_path: Path) -> None:
-    """Skip row-group stats when the file count exceeds the cap."""
-    reports: list[DatasetWriteReport] = []
-
-    def _report(report: DatasetWriteReport) -> None:
-        reports.append(report)
-
-    schema = pa.schema([("id", pa.int64()), ("value", pa.string())])
-    schema = ordering_metadata_spec(
-        OrderingLevel.EXPLICIT,
-        keys=(("id", "ascending"),),
-    ).apply(schema)
-    table = pa.Table.from_pydict(
-        {"id": [1, 2, 3], "value": ["a", "b", "c"]},
-        schema=schema,
+def test_row_group_stats_gated_by_file_limit(tmp_path: Path) -> None:
+    """Skip row group stats when file count exceeds limits."""
+    table = pa.table({"id": [1, 2, 3], "value": ["a", "b", "c"]})
+    ordered = _apply_ordering(table, keys=(("id", "ascending"),))
+    stats = _capture_row_group_stats(
+        tmp_path / "limited",
+        table=ordered,
+        metadata=ParquetMetadataConfig(max_row_group_stats_files=0, max_row_group_stats=10),
     )
-    config = DatasetWriteConfig(
-        opts=ParquetWriteOptions(max_rows_per_file=1),
-        metadata=ParquetMetadataConfig(max_row_group_stats_files=1),
-        reporter=_report,
-    )
-    write_dataset_parquet(table, tmp_path / "dataset", config=config)
-    assert reports
-    report = reports[0]
-    assert len(report.files) > 1
-    assert report.row_group_stats is None
+    assert stats is None

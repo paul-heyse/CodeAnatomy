@@ -1,0 +1,165 @@
+"""Delta Lake storage utilities and registry exports."""
+
+from __future__ import annotations
+
+import importlib
+from typing import TYPE_CHECKING
+
+__all__ = (
+    "REGISTRY_DIAGNOSTIC_SCHEMA",
+    "REGISTRY_TABLE_SPECS",
+    "DeltaCdfOptions",
+    "DeltaSchemaMode",
+    "DeltaSchemaPolicy",
+    "DeltaUpsertOptions",
+    "DeltaVacuumOptions",
+    "DeltaWriteInput",
+    "DeltaWriteMode",
+    "DeltaWriteOptions",
+    "DeltaWritePolicy",
+    "DeltaWriteResult",
+    "DeltaWriteRetryPolicy",
+    "EncodingPolicy",
+    "RegistryBuildResult",
+    "RegistryDiagnostic",
+    "RegistryTableSpec",
+    "RegistryWriteOptions",
+    "RegistryWriteResult",
+    "StorageOptions",
+    "apply_delta_write_policies",
+    "build_registry_tables",
+    "cleanup_delta_log",
+    "coerce_delta_table",
+    "create_delta_checkpoint",
+    "delta_commit_metadata",
+    "delta_history_snapshot",
+    "delta_protocol_snapshot",
+    "delta_schema_configuration",
+    "delta_table_features",
+    "delta_table_version",
+    "delta_write_configuration",
+    "enable_delta_features",
+    "open_delta_table",
+    "read_delta_cdf",
+    "read_table_delta",
+    "registry_diagnostic_table",
+    "upsert_dataset_partitions_delta",
+    "vacuum_delta",
+    "validate_registry",
+    "write_dataset_delta",
+    "write_finalize_result_delta",
+    "write_named_datasets_delta",
+    "write_registry_delta",
+    "write_table_delta",
+)
+
+_EXPORT_MAP: dict[str, tuple[str, str]] = {
+    "DeltaSchemaPolicy": ("storage.deltalake.config", "DeltaSchemaPolicy"),
+    "DeltaWritePolicy": ("storage.deltalake.config", "DeltaWritePolicy"),
+    "delta_schema_configuration": ("storage.deltalake.config", "delta_schema_configuration"),
+    "delta_write_configuration": ("storage.deltalake.config", "delta_write_configuration"),
+    "DeltaCdfOptions": ("storage.deltalake.delta", "DeltaCdfOptions"),
+    "DeltaSchemaMode": ("storage.deltalake.delta", "DeltaSchemaMode"),
+    "DeltaUpsertOptions": ("storage.deltalake.delta", "DeltaUpsertOptions"),
+    "DeltaVacuumOptions": ("storage.deltalake.delta", "DeltaVacuumOptions"),
+    "DeltaWriteInput": ("storage.deltalake.delta", "DeltaWriteInput"),
+    "DeltaWriteMode": ("storage.deltalake.delta", "DeltaWriteMode"),
+    "DeltaWriteOptions": ("storage.deltalake.delta", "DeltaWriteOptions"),
+    "DeltaWriteResult": ("storage.deltalake.delta", "DeltaWriteResult"),
+    "DeltaWriteRetryPolicy": ("storage.deltalake.delta", "DeltaWriteRetryPolicy"),
+    "EncodingPolicy": ("storage.deltalake.delta", "EncodingPolicy"),
+    "StorageOptions": ("storage.deltalake.delta", "StorageOptions"),
+    "apply_delta_write_policies": ("storage.deltalake.delta", "apply_delta_write_policies"),
+    "cleanup_delta_log": ("storage.deltalake.delta", "cleanup_delta_log"),
+    "coerce_delta_table": ("storage.deltalake.delta", "coerce_delta_table"),
+    "create_delta_checkpoint": ("storage.deltalake.delta", "create_delta_checkpoint"),
+    "delta_commit_metadata": ("storage.deltalake.delta", "delta_commit_metadata"),
+    "delta_history_snapshot": ("storage.deltalake.delta", "delta_history_snapshot"),
+    "delta_protocol_snapshot": ("storage.deltalake.delta", "delta_protocol_snapshot"),
+    "delta_table_features": ("storage.deltalake.delta", "delta_table_features"),
+    "delta_table_version": ("storage.deltalake.delta", "delta_table_version"),
+    "enable_delta_features": ("storage.deltalake.delta", "enable_delta_features"),
+    "open_delta_table": ("storage.deltalake.delta", "open_delta_table"),
+    "read_delta_cdf": ("storage.deltalake.delta", "read_delta_cdf"),
+    "read_table_delta": ("storage.deltalake.delta", "read_table_delta"),
+    "upsert_dataset_partitions_delta": ("storage.deltalake.delta", "upsert_dataset_partitions_delta"),
+    "vacuum_delta": ("storage.deltalake.delta", "vacuum_delta"),
+    "write_dataset_delta": ("storage.deltalake.delta", "write_dataset_delta"),
+    "write_finalize_result_delta": ("storage.deltalake.delta", "write_finalize_result_delta"),
+    "write_named_datasets_delta": ("storage.deltalake.delta", "write_named_datasets_delta"),
+    "write_table_delta": ("storage.deltalake.delta", "write_table_delta"),
+    "REGISTRY_DIAGNOSTIC_SCHEMA": ("storage.deltalake.registry", "REGISTRY_DIAGNOSTIC_SCHEMA"),
+    "REGISTRY_TABLE_SPECS": ("storage.deltalake.registry", "REGISTRY_TABLE_SPECS"),
+    "RegistryBuildResult": ("storage.deltalake.registry", "RegistryBuildResult"),
+    "RegistryDiagnostic": ("storage.deltalake.registry", "RegistryDiagnostic"),
+    "RegistryTableSpec": ("storage.deltalake.registry", "RegistryTableSpec"),
+    "RegistryWriteOptions": ("storage.deltalake.registry", "RegistryWriteOptions"),
+    "RegistryWriteResult": ("storage.deltalake.registry", "RegistryWriteResult"),
+    "build_registry_tables": ("storage.deltalake.registry", "build_registry_tables"),
+    "registry_diagnostic_table": ("storage.deltalake.registry", "registry_diagnostic_table"),
+    "validate_registry": ("storage.deltalake.registry", "validate_registry"),
+    "write_registry_delta": ("storage.deltalake.registry", "write_registry_delta"),
+}
+
+if TYPE_CHECKING:
+    from storage.deltalake import config as _delta_config
+    from storage.deltalake import delta as _delta_io
+    from storage.deltalake import registry as _delta_registry
+
+    DeltaSchemaPolicy = _delta_config.DeltaSchemaPolicy
+    DeltaWritePolicy = _delta_config.DeltaWritePolicy
+    delta_schema_configuration = _delta_config.delta_schema_configuration
+    delta_write_configuration = _delta_config.delta_write_configuration
+    DeltaCdfOptions = _delta_io.DeltaCdfOptions
+    DeltaSchemaMode = _delta_io.DeltaSchemaMode
+    DeltaUpsertOptions = _delta_io.DeltaUpsertOptions
+    DeltaVacuumOptions = _delta_io.DeltaVacuumOptions
+    DeltaWriteInput = _delta_io.DeltaWriteInput
+    DeltaWriteMode = _delta_io.DeltaWriteMode
+    DeltaWriteOptions = _delta_io.DeltaWriteOptions
+    DeltaWriteResult = _delta_io.DeltaWriteResult
+    DeltaWriteRetryPolicy = _delta_io.DeltaWriteRetryPolicy
+    EncodingPolicy = _delta_io.EncodingPolicy
+    StorageOptions = _delta_io.StorageOptions
+    apply_delta_write_policies = _delta_io.apply_delta_write_policies
+    cleanup_delta_log = _delta_io.cleanup_delta_log
+    coerce_delta_table = _delta_io.coerce_delta_table
+    create_delta_checkpoint = _delta_io.create_delta_checkpoint
+    delta_commit_metadata = _delta_io.delta_commit_metadata
+    delta_history_snapshot = _delta_io.delta_history_snapshot
+    delta_protocol_snapshot = _delta_io.delta_protocol_snapshot
+    delta_table_features = _delta_io.delta_table_features
+    delta_table_version = _delta_io.delta_table_version
+    enable_delta_features = _delta_io.enable_delta_features
+    open_delta_table = _delta_io.open_delta_table
+    read_delta_cdf = _delta_io.read_delta_cdf
+    read_table_delta = _delta_io.read_table_delta
+    upsert_dataset_partitions_delta = _delta_io.upsert_dataset_partitions_delta
+    vacuum_delta = _delta_io.vacuum_delta
+    write_dataset_delta = _delta_io.write_dataset_delta
+    write_finalize_result_delta = _delta_io.write_finalize_result_delta
+    write_named_datasets_delta = _delta_io.write_named_datasets_delta
+    write_table_delta = _delta_io.write_table_delta
+    REGISTRY_DIAGNOSTIC_SCHEMA = _delta_registry.REGISTRY_DIAGNOSTIC_SCHEMA
+    REGISTRY_TABLE_SPECS = _delta_registry.REGISTRY_TABLE_SPECS
+    RegistryBuildResult = _delta_registry.RegistryBuildResult
+    RegistryDiagnostic = _delta_registry.RegistryDiagnostic
+    RegistryTableSpec = _delta_registry.RegistryTableSpec
+    RegistryWriteOptions = _delta_registry.RegistryWriteOptions
+    RegistryWriteResult = _delta_registry.RegistryWriteResult
+    build_registry_tables = _delta_registry.build_registry_tables
+    registry_diagnostic_table = _delta_registry.registry_diagnostic_table
+    validate_registry = _delta_registry.validate_registry
+    write_registry_delta = _delta_registry.write_registry_delta
+
+
+def __getattr__(name: str) -> object:
+    export = _EXPORT_MAP.get(name)
+    if export is None:
+        msg = f"module {__name__!r} has no attribute {name!r}"
+        raise AttributeError(msg)
+    module_name, attr = export
+    module = importlib.import_module(module_name)
+    value = getattr(module, attr)
+    globals()[name] = value
+    return value

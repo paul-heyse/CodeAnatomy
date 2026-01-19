@@ -8,12 +8,14 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-import pyarrow as pa
 from datafusion import SessionContext
 
 from arrowdsl.json_factory import json_default
+from arrowdsl.schema.build import table_from_row_dicts
 from datafusion_engine.bridge import collect_plan_artifacts
 from datafusion_engine.compile_options import DataFusionCompileOptions
+from datafusion_engine.registry_bridge import register_dataset_df
+from ibis_engine.registry import DatasetLocation
 from sqlglot_tools.optimizer import parse_sql_strict
 
 
@@ -36,9 +38,21 @@ def _register_input(
     ctx: SessionContext,
     *,
     table_name: str,
+    delta_path: Path | None,
     parquet_path: Path | None,
     rows_path: Path | None,
 ) -> None:
+    sources = [delta_path is not None, parquet_path is not None, rows_path is not None]
+    if sum(sources) > 1:
+        msg = "Provide only one of --delta, --parquet, or --rows-json."
+        raise ValueError(msg)
+    if delta_path is not None:
+        if not delta_path.exists():
+            msg = f"Delta path does not exist: {delta_path}"
+            raise FileNotFoundError(msg)
+        location = DatasetLocation(path=str(delta_path), format="delta")
+        register_dataset_df(ctx, name=table_name, location=location)
+        return
     if parquet_path is not None:
         if not parquet_path.exists():
             msg = f"Parquet path does not exist: {parquet_path}"
@@ -49,7 +63,7 @@ def _register_input(
         rows = _load_rows(rows_path)
     else:
         rows = [{"id": 1, "label": "alpha"}, {"id": 2, "label": "beta"}]
-    table = pa.Table.from_pylist(rows)
+    table = table_from_row_dicts(rows)
     ctx.register_record_batches(table_name, [table.to_batches()])
 
 
@@ -60,6 +74,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sql", default=None, help="SQL statement to validate.")
     parser.add_argument("--sql-file", default=None, help="File containing SQL to validate.")
     parser.add_argument("--table-name", default="input_table", help="Table name to register.")
+    parser.add_argument("--delta", default=None, help="Delta table path for input data.")
     parser.add_argument("--parquet", default=None, help="Parquet path for input data.")
     parser.add_argument("--rows-json", default=None, help="JSON file of row mappings.")
     parser.add_argument("--output-json", default=None, help="Write results to JSON file.")
@@ -110,6 +125,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     _register_input(
         ctx,
         table_name=args.table_name,
+        delta_path=Path(args.delta) if args.delta is not None else None,
         parquet_path=Path(args.parquet) if args.parquet is not None else None,
         rows_path=Path(args.rows_json) if args.rows_json is not None else None,
     )

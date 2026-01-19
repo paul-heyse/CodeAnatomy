@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import cast
 
 import pyarrow as pa
@@ -28,14 +27,7 @@ def _reader_from_table(table: TableLike, *, schema: pa.Schema | None) -> pa.Reco
     if schema is not None and table.schema != schema:
         msg = "Schema negotiation is not supported for table-backed readers."
         raise ValueError(msg)
-    reader = cast(
-        "pa.RecordBatchReader",
-        pa.RecordBatchReader.from_batches(
-            table.schema,
-            cast("Iterable[pa.RecordBatch]", table.to_batches()),
-        ),
-    )
-    return reader
+    return cast("pa.RecordBatchReader", table.to_reader())
 
 
 def _reader_from_object(
@@ -50,7 +42,8 @@ def _reader_from_object(
         if schema is not None:
             msg = "Schema negotiation is not supported for dataset scanners."
             raise ValueError(msg)
-        reader = obj.to_reader()
+        scanner = cast("ds.Scanner", obj)
+        reader = scanner.to_reader()
     elif hasattr(obj, "__arrow_c_stream__"):
         reader = _ensure_reader_schema(
             pa.RecordBatchReader.from_stream(obj, schema=schema),
@@ -112,7 +105,7 @@ def to_reader(obj: object, *, schema: pa.Schema | None = None) -> pa.RecordBatch
     if isinstance(coerced, RecordBatchReaderLike):
         reader = cast("pa.RecordBatchReader", coerced)
         return _ensure_reader_schema(reader, schema=schema)
-    return _reader_from_table(cast("TableLike", coerced), schema=schema)
+    return _reader_from_table(coerced, schema=schema)
 
 
 __all__ = ["to_reader"]

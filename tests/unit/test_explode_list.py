@@ -6,6 +6,7 @@ import pyarrow as pa
 
 from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.compute.kernels import explode_list_column
+from tests.utils import values_as_list
 
 
 def test_explode_list_column_alignment() -> None:
@@ -24,9 +25,9 @@ def test_explode_list_column_alignment() -> None:
         keep_empty=False,
     )
     result = explode_list_column(table, spec=spec)
-    assert result["parent_id"].to_pylist() == [1, 1, 3]
-    assert result["dst_id"].to_pylist() == [10, 11, 12]
-    assert result["idx"].to_pylist() == [0, 1, 0]
+    assert values_as_list(result["parent_id"]) == [1, 1, 3]
+    assert values_as_list(result["dst_id"]) == [10, 11, 12]
+    assert values_as_list(result["idx"]) == [0, 1, 0]
 
 
 def test_explode_list_column_struct_values() -> None:
@@ -52,9 +53,9 @@ def test_explode_list_column_struct_values() -> None:
         keep_empty=True,
     )
     result = explode_list_column(table, spec=spec)
-    assert result["parent_id"].to_pylist() == [1, 1]
-    assert result["idx"].to_pylist() == [0, 1]
-    assert result["event"].to_pylist() == [
+    assert values_as_list(result["parent_id"]) == [1, 1]
+    assert values_as_list(result["idx"]) == [0, 1]
+    assert values_as_list(result["event"]) == [
         {"id": "a", "score": 1},
         {"id": "b", "score": 2},
     ]

@@ -13,6 +13,11 @@ _CHANGED_KIND_SET = pa.array(list(_CHANGED_KINDS), type=pa.string())
 _DELETED_KIND_SET = pa.array(list(_DELETED_KINDS), type=pa.string())
 
 
+def _as_py_value(value: object) -> object:
+    as_py = getattr(value, "as_py", None)
+    return as_py() if callable(as_py) else value
+
+
 def file_changes_from_diff(diff: pa.Table | None) -> IncrementalFileChanges:
     """Derive file change sets from the incremental diff table.
 
@@ -55,10 +60,7 @@ def _unique_file_ids(
 
 
 def _values_as_list(values: pa.Array | pa.ChunkedArray) -> list[object]:
-    if isinstance(values, pa.ChunkedArray):
-        combined = values.combine_chunks()
-        return combined.to_pylist()
-    return values.to_pylist()
+    return [_as_py_value(value) for value in values]
 
 
 __all__ = ["file_changes_from_diff"]

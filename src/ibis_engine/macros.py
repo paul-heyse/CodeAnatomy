@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import cast
 
 from ibis.expr.types import Table, Value
@@ -63,4 +63,76 @@ def bind_columns(table: Table, *selectors: object) -> tuple[Value, ...]:
     return cast("tuple[Value, ...]", tuple(bound))
 
 
-__all__ = ["IbisMacro", "IbisMacroRewrite", "IbisMacroSpec", "apply_macros", "bind_columns"]
+@dataclass
+class MacroLibrary:
+    """Registry for reusable Ibis macros."""
+
+    macros: dict[str, IbisMacroSpec] = field(default_factory=dict)
+
+    def register(self, name: str, macro: IbisMacroSpec) -> None:
+        """Register a macro by name.
+
+        Parameters
+        ----------
+        name:
+            Macro name.
+        macro:
+            Macro specification to register.
+
+        Raises
+        ------
+        ValueError
+            Raised when the name is empty.
+        """
+        if not name:
+            msg = "MacroLibrary.register requires a non-empty name."
+            raise ValueError(msg)
+        self.macros[name] = macro
+
+    def resolve(self, name: str) -> IbisMacroSpec:
+        """Return a registered macro by name.
+
+        Parameters
+        ----------
+        name:
+            Macro name.
+
+        Returns
+        -------
+        IbisMacroSpec
+            Registered macro specification.
+
+        Raises
+        ------
+        KeyError
+            Raised when the macro name is unknown.
+        """
+        if name not in self.macros:
+            msg = f"MacroLibrary: unknown macro {name!r}."
+            raise KeyError(msg)
+        return self.macros[name]
+
+
+_DEFAULT_MACRO_LIBRARY = MacroLibrary()
+
+
+def macro_library() -> MacroLibrary:
+    """Return the shared macro library.
+
+    Returns
+    -------
+    MacroLibrary
+        Shared macro library instance.
+    """
+    return _DEFAULT_MACRO_LIBRARY
+
+
+__all__ = [
+    "IbisMacro",
+    "IbisMacroRewrite",
+    "IbisMacroSpec",
+    "MacroLibrary",
+    "apply_macros",
+    "bind_columns",
+    "macro_library",
+]

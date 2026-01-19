@@ -14,9 +14,9 @@ from arrowdsl.core.context import (
     OrderingLevel,
     runtime_profile_factory,
 )
-from arrowdsl.io.delta import DeltaWriteOptions, write_dataset_delta
 from arrowdsl.plan.scan_io import plan_from_source
 from arrowdsl.schema.metadata import ordering_from_schema
+from storage.deltalake import DeltaWriteOptions, write_dataset_delta
 
 
 @pytest.mark.integration

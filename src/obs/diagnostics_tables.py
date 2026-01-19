@@ -10,6 +10,7 @@ from typing import cast
 import pyarrow as pa
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.schema.build import table_from_rows
 from arrowdsl.schema.serialization import schema_fingerprint
 from obs.diagnostics_schemas import (
     DATAFUSION_EXPLAINS_V1,
@@ -63,10 +64,18 @@ def datafusion_fallbacks_table(events: Sequence[Mapping[str, object]]) -> pa.Tab
             "sql": str(event.get("sql") or ""),
             "dialect": str(event.get("dialect") or ""),
             "policy_violations": _coerce_str_list(event.get("policy_violations")),
+            "sql_policy_name": (
+                str(event.get("sql_policy_name"))
+                if event.get("sql_policy_name") is not None
+                else None
+            ),
+            "param_mode": (
+                str(event.get("param_mode")) if event.get("param_mode") is not None else None
+            ),
         }
         for event in events
     ]
-    return pa.Table.from_pylist(rows, schema=DATAFUSION_FALLBACKS_V1)
+    return table_from_rows(DATAFUSION_FALLBACKS_V1, rows)
 
 
 def datafusion_explains_table(explains: Sequence[Mapping[str, object]]) -> pa.Table:
@@ -89,9 +98,7 @@ def datafusion_explains_table(explains: Sequence[Mapping[str, object]]) -> pa.Ta
                 "schema_fingerprint": schema_fingerprint(raw_rows.schema),
             }
         else:
-            rows_payload = (
-                raw_rows if raw_rows is not None else cast("list[object]", [])
-            )
+            rows_payload = raw_rows if raw_rows is not None else cast("list[object]", [])
         rows.append(
             {
                 "event_time_unix_ms": _coerce_event_time(
@@ -106,7 +113,7 @@ def datafusion_explains_table(explains: Sequence[Mapping[str, object]]) -> pa.Ta
                 "explain_analyze": bool(explain.get("explain_analyze") or False),
             }
         )
-    return pa.Table.from_pylist(rows, schema=DATAFUSION_EXPLAINS_V1)
+    return table_from_rows(DATAFUSION_EXPLAINS_V1, rows)
 
 
 def feature_state_table(events: Sequence[Mapping[str, object]]) -> pa.Table:
@@ -123,10 +130,11 @@ def feature_state_table(events: Sequence[Mapping[str, object]]) -> pa.Table:
             "determinism_tier": str(event.get("determinism_tier") or ""),
             "dynamic_filters_enabled": bool(event.get("dynamic_filters_enabled") or False),
             "spill_enabled": bool(event.get("spill_enabled") or False),
+            "named_args_supported": bool(event.get("named_args_supported") or False),
         }
         for event in events
     ]
-    return pa.Table.from_pylist(rows, schema=FEATURE_STATE_V1)
+    return table_from_rows(FEATURE_STATE_V1, rows)
 
 
 __all__ = ["datafusion_explains_table", "datafusion_fallbacks_table", "feature_state_table"]

@@ -12,12 +12,6 @@ from ibis.backends import BaseBackend
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
-from arrowdsl.io.delta import (
-    DeltaUpsertOptions,
-    DeltaWriteOptions,
-    coerce_delta_table,
-    upsert_dataset_partitions_delta,
-)
 from arrowdsl.plan.dataset_wrappers import unwrap_dataset
 from arrowdsl.plan.query import DatasetDiscoveryOptions, DatasetSourceOptions, open_dataset
 from arrowdsl.plan_utils import dataset_query_for_file_ids
@@ -30,6 +24,12 @@ from incremental.types import IncrementalFileChanges, IncrementalImpact
 from normalize.registry_specs import dataset_name_from_alias
 from relspec.engine import PlanResolver
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
+from storage.deltalake import (
+    DeltaUpsertOptions,
+    DeltaWriteOptions,
+    coerce_delta_table,
+    upsert_dataset_partitions_delta,
+)
 
 if TYPE_CHECKING:
     from arrowdsl.plan.query import ScanTelemetry

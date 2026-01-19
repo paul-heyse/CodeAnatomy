@@ -242,10 +242,61 @@ def namespace_recorder_from_ctx(
     return _record
 
 
+def record_namespace_action(
+    recorder: Callable[[Mapping[str, object]], None] | None,
+    *,
+    action: str,
+    name: str,
+    database: DatabaseHint,
+    overwrite: bool,
+) -> None:
+    """Record a namespace action for diagnostics.
+
+    Parameters
+    ----------
+    recorder:
+        Recorder callback to emit diagnostics.
+    action:
+        Action name (create_view, create_table, insert, etc.).
+    name:
+        Target object name.
+    database:
+        Optional database/catalog hint.
+    overwrite:
+        Whether the action overwrites existing namespace entries.
+    """
+    _record_namespace_action(
+        recorder,
+        action=action,
+        name=name,
+        database=database,
+        overwrite=overwrite,
+    )
+
+
+def resolve_database_hint(name: str | None) -> tuple[DatabaseHint, str | None]:
+    """Resolve a database hint and sanitized name from a qualified string.
+
+    Parameters
+    ----------
+    name:
+        Qualified name to parse.
+
+    Returns
+    -------
+    tuple[DatabaseHint, str | None]
+        Database hint and sanitized name.
+    """
+    return _parse_database_hint(name)
+
+
 __all__ = [
+    "DatabaseHint",
     "SourceToIbisOptions",
     "namespace_recorder_from_ctx",
+    "record_namespace_action",
     "register_ibis_view",
+    "resolve_database_hint",
     "source_to_ibis",
     "table_to_ibis",
 ]

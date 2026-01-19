@@ -45,13 +45,39 @@ class RepoScanOptions:
         "build",
         ".mypy_cache",
         ".pytest_cache",
+        ".ruff_cache",
     )
     exclude_globs: Sequence[str] = ()
     follow_symlinks: bool = False
     include_bytes: bool = True
     include_text: bool = True
     max_file_bytes: int | None = None
-    max_files: int | None = None
+    max_files: int | None = 200_000
+
+
+def default_repo_scan_options() -> RepoScanOptions:
+    """Return default RepoScanOptions for repo scanning.
+
+    Returns
+    -------
+    RepoScanOptions
+        Default repo scan options.
+    """
+    return RepoScanOptions()
+
+
+def repo_scan_globs_from_options(options: RepoScanOptions) -> tuple[list[str], list[str]]:
+    """Return include/exclude globs derived from RepoScanOptions.
+
+    Returns
+    -------
+    tuple[list[str], list[str]]
+        Include and exclude globs.
+    """
+    include_globs = list(options.include_globs)
+    exclude_globs = [f"**/{name}/**" for name in options.exclude_dirs]
+    exclude_globs.extend(options.exclude_globs)
+    return include_globs, exclude_globs
 
 
 def repo_files_query(repo_id: str | None) -> IbisQuerySpec:

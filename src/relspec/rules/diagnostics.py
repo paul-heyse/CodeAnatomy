@@ -11,7 +11,7 @@ import pyarrow as pa
 
 from arrowdsl.compute.kernels import KernelCapability
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.spec.io import table_from_rows
+from arrowdsl.spec.io import rows_from_table, table_from_rows
 from relspec.rules.definitions import RuleDomain
 from sqlglot_tools.bridge import (
     SqlGlotDiagnostics,
@@ -138,7 +138,7 @@ def rule_diagnostics_from_table(table: pa.Table) -> tuple[RuleDiagnostic, ...]:
             message=str(row.get("message")),
             metadata=_metadata_from_row(row.get("metadata")),
         )
-        for row in table.to_pylist()
+        for row in rows_from_table(table)
     )
 
 

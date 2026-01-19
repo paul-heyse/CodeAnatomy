@@ -8,7 +8,7 @@ import logging
 import re
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypedDict, cast
 
 import datafusion
 import pyarrow as pa
@@ -19,15 +19,18 @@ try:
 except ImportError:
     pa_substrait = None
 try:
-    from datafusion.unparser import Unparser as DataFusionUnparser
     from datafusion.unparser import Dialect as DataFusionDialect
-    from datafusion.unparser import LogicalPlan as DataFusionLogicalPlan
+    from datafusion.unparser import Unparser as DataFusionUnparser
 except ImportError:
     DataFusionUnparser = None
     DataFusionDialect = None
+try:
+    from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
+except ImportError:
     DataFusionLogicalPlan = None
-from datafusion import SessionContext
+from datafusion import DataFrameWriteOptions, ParquetWriterOptions, SessionContext, col
 from datafusion.dataframe import DataFrame
+from datafusion.expr import SortExpr
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
 from sqlglot import ErrorLevel, Expression, exp
@@ -35,6 +38,7 @@ from sqlglot import ErrorLevel, Expression, exp
 from arrowdsl.core.context import Ordering, OrderingLevel
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
 from arrowdsl.core.streaming import to_reader
+from arrowdsl.schema.build import table_from_row_dicts
 from arrowdsl.schema.metadata import ordering_metadata_spec
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
@@ -49,6 +53,7 @@ from engine.plan_cache import PlanCacheEntry, PlanCacheKey
 from ibis_engine.params_bridge import datafusion_param_bindings
 from ibis_engine.plan import IbisPlan
 from obs.diagnostics import PreparedStatementSpec
+from schema_spec.policies import DataFusionWritePolicy
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
@@ -80,6 +85,7 @@ class CopyToOptions:
     table_options: Mapping[str, object] | None = None
     statement_overrides: Mapping[str, object] | None = None
     dml: DataFusionDmlOptions | None = None
+    allow_file_output: bool = False
 
 
 @dataclass(frozen=True)
@@ -102,8 +108,11 @@ except ImportError:
     SubstraitSerde = None
 
 if TYPE_CHECKING:
+    from datafusion.plan import LogicalPlan as DataFusionLogicalPlanType
     from datafusion.substrait import Consumer as SubstraitConsumerType
     from datafusion.substrait import Serde as SubstraitSerdeType
+else:
+    DataFusionLogicalPlanType = object
 
 
 def _emit_cache_event(
@@ -781,6 +790,37 @@ def _ibis_param_bindings(
     return None
 
 
+def _param_mode(values: Mapping[str, object] | Mapping[IbisValue, object] | None) -> str:
+    if not values:
+        return "none"
+    keys = list(values.keys())
+    if all(isinstance(key, str) for key in keys):
+        return "named"
+    if all(isinstance(key, IbisValue) for key in keys):
+        return "ibis"
+    return "mixed"
+
+
+def _validated_param_bindings(
+    values: Mapping[str, object] | Mapping[IbisValue, object] | None,
+    *,
+    allowlist: Sequence[str] | None,
+) -> dict[str, object]:
+    bindings = datafusion_param_bindings(values or {})
+    for name in bindings:
+        if not name.isidentifier():
+            msg = f"SQL parameter name {name!r} is not a valid identifier."
+            raise ValueError(msg)
+    if not allowlist:
+        return bindings
+    allowed = set(allowlist)
+    unknown = sorted(name for name in bindings if name not in allowed)
+    if unknown:
+        msg = f"SQL parameter names not allowlisted: {', '.join(unknown)}."
+        raise ValueError(msg)
+    return bindings
+
+
 @dataclass(frozen=True)
 class SqlFallbackContext:
     """Parameters controlling SQL fallback diagnostics."""
@@ -853,7 +893,11 @@ def _df_from_sql(
 ) -> DataFrame:
     _ensure_dialect(options.dialect)
     sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
-    bindings = datafusion_param_bindings(options.params or {})
+    bindings = _validated_param_bindings(
+        options.params,
+        allowlist=options.param_identifier_allowlist,
+    )
+    param_mode = _param_mode(options.params)
     policy = options.sql_policy or _default_sql_policy()
     sql_options = options.sql_options or policy.to_sql_options()
     violations = ()
@@ -872,6 +916,8 @@ def _df_from_sql(
             sql=sql,
             dialect=options.dialect,
             policy_violations=violations,
+            sql_policy_name=options.sql_policy_name,
+            param_mode=param_mode,
         )
         _emit_fallback_diagnostics(
             event,
@@ -919,7 +965,11 @@ def execute_dml(
     if violations:
         msg = f"DataFusion DML policy violations: {', '.join(violations)}."
         raise ValueError(msg)
-    bindings = datafusion_param_bindings(resolved.params or {})
+    bindings = _validated_param_bindings(
+        resolved.params,
+        allowlist=resolved.param_identifier_allowlist,
+    )
+    param_mode = _param_mode(resolved.params)
     if bindings:
         try:
             df = ctx.sql_with_options(sql, sql_options, param_values=bindings)
@@ -934,6 +984,8 @@ def execute_dml(
                 "sql": sql,
                 "dialect": resolved.dialect,
                 "policy_violations": list(violations),
+                "sql_policy_name": resolved.sql_policy_name,
+                "param_mode": param_mode,
             }
         )
     return df
@@ -973,8 +1025,16 @@ def copy_to_path(
     -------
     datafusion.dataframe.DataFrame
         DataFrame representing the COPY statement.
+
+    Raises
+    ------
+    ValueError
+        Raised when file outputs are disabled.
     """
     resolved = options or CopyToOptions()
+    if not resolved.allow_file_output:
+        msg = "COPY TO file outputs are disabled; use Delta writes instead."
+        raise ValueError(msg)
     merged = merge_format_options(
         session_defaults=resolved.session_defaults,
         table_options=resolved.table_options,
@@ -1216,11 +1276,11 @@ def _df_plan_details(df: DataFrame) -> dict[str, object]:
 def _unparse_plan(plan: object | None) -> tuple[str | None, str | None]:
     if plan is None:
         return None, "missing_plan"
-    if DataFusionUnparser is None or DataFusionDialect is None or DataFusionLogicalPlan is None:
+    if DataFusionUnparser is None or DataFusionDialect is None:
         return None, "unparser_unavailable"
     try:
         unparser = DataFusionUnparser(DataFusionDialect.default())
-        plan_obj = cast("DataFusionLogicalPlan", plan)
+        plan_obj = cast("DataFusionLogicalPlanType", plan)
         return str(unparser.plan_to_sql(plan_obj)), None
     except (RuntimeError, TypeError, ValueError) as exc:
         return None, str(exc)
@@ -1368,11 +1428,90 @@ def execute_sql(
         Record batch reader over the SQL results.
     """
     _ensure_dialect(options.dialect)
-    bindings = datafusion_param_bindings(options.params or {})
+    bindings = _validated_param_bindings(
+        options.params,
+        allowlist=options.param_identifier_allowlist,
+    )
     policy = options.sql_policy or _default_sql_policy()
     sql_options = options.sql_options or policy.to_sql_options()
     df = ctx.sql_with_options(sql, sql_options, param_values=bindings)
     return _collect_reader(df)
+
+
+def datafusion_write_options(
+    policy: DataFusionWritePolicy | None,
+) -> tuple[DataFrameWriteOptions | None, ParquetWriterOptions | None]:
+    """Return DataFusion write options for a write policy.
+
+    Returns
+    -------
+    tuple[DataFrameWriteOptions | None, ParquetWriterOptions | None]
+        DataFrame + Parquet writer option instances.
+    """
+    if policy is None:
+        return None, None
+    sort_exprs = _datafusion_sort_exprs(policy.sort_by)
+    write_options = DataFrameWriteOptions(
+        partition_by=list(policy.partition_by) if policy.partition_by else None,
+        single_file_output=policy.single_file_output,
+        sort_by=sort_exprs or None,
+    )
+    parquet_kwargs: _ParquetWriterOptionsKwargs = {}
+    if policy.parquet_compression is not None:
+        parquet_kwargs["compression"] = policy.parquet_compression
+    if policy.parquet_statistics_enabled is not None:
+        parquet_kwargs["statistics_enabled"] = policy.parquet_statistics_enabled
+    if policy.parquet_row_group_size is not None:
+        parquet_kwargs["max_row_group_size"] = int(policy.parquet_row_group_size)
+    parquet_options = (
+        ParquetWriterOptions(**parquet_kwargs) if parquet_kwargs else ParquetWriterOptions()
+    )
+    return write_options, parquet_options
+
+
+def datafusion_write_parquet(
+    df: DataFrame,
+    *,
+    path: str,
+    policy: DataFusionWritePolicy | None = None,
+) -> dict[str, object]:
+    """Write a DataFusion DataFrame to Parquet using policy options.
+
+    Returns
+    -------
+    dict[str, object]
+        Payload describing the write policy applied.
+    """
+    write_options, parquet_options = datafusion_write_options(policy)
+    if parquet_options is None:
+        df.write_parquet(path, write_options=write_options)
+    else:
+        df.write_parquet_with_options(path, parquet_options, write_options=write_options)
+    return {
+        "path": str(path),
+        "write_policy": policy.payload() if policy is not None else None,
+        "parquet_options": _parquet_options_payload(parquet_options),
+    }
+
+
+def _datafusion_sort_exprs(sort_by: Sequence[str]) -> list[SortExpr]:
+    return [col(name).sort(ascending=True, nulls_first=True) for name in sort_by]
+
+
+def _parquet_options_payload(options: ParquetWriterOptions | None) -> dict[str, object] | None:
+    if options is None:
+        return None
+    return {
+        "compression": getattr(options, "compression", None),
+        "statistics_enabled": getattr(options, "statistics_enabled", None),
+        "max_row_group_size": getattr(options, "max_row_group_size", None),
+    }
+
+
+class _ParquetWriterOptionsKwargs(TypedDict, total=False):
+    compression: str | None
+    statistics_enabled: str | None
+    max_row_group_size: int
 
 
 def register_memtable(
@@ -1476,7 +1615,7 @@ def _is_pydict_input(value: object) -> bool:
     return all(isinstance(key, str) for key in value)
 
 
-def _is_pylist_input(value: object) -> bool:
+def _is_row_mapping_sequence(value: object) -> bool:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         return False
     if not value:
@@ -1550,39 +1689,9 @@ def datafusion_from_arrow(
             ),
         )
         return ctx.table(name)
-    if _is_pylist_input(value):
-        from_pylist = getattr(ctx, "from_pylist", None)
-        if callable(from_pylist) and batch_size is None:
-            rows = cast("Sequence[Mapping[str, object]]", value)
-            df = cast("DataFrame", from_pylist(list(rows), name=name))
-            _emit_arrow_ingest(
-                ingest_hook,
-                ArrowIngestEvent(
-                    name=name,
-                    method="from_pylist",
-                    partitioning="datafusion_native",
-                    batch_size=None,
-                    batch_count=None,
-                    row_count=len(rows),
-                ),
-            )
-            return df
+    if _is_row_mapping_sequence(value):
         rows = cast("Sequence[Mapping[str, object]]", value)
-        table = pa.Table.from_pylist(list(rows))
-        batches = slice_memtable_batches(table, batch_size=batch_size)
-        register_memtable(ctx, name=name, batches=batches)
-        _emit_arrow_ingest(
-            ingest_hook,
-            ArrowIngestEvent(
-                name=name,
-                method="record_batches",
-                partitioning="record_batches",
-                batch_size=batch_size,
-                batch_count=len(batches),
-                row_count=table.num_rows,
-            ),
-        )
-        return ctx.table(name)
+        value = table_from_row_dicts(rows)
     table = coerce_table_like(value)
     from_arrow = getattr(ctx, "from_arrow", None)
     if callable(from_arrow) and batch_size is None:
@@ -1693,6 +1802,8 @@ __all__ = [
     "datafusion_to_reader",
     "datafusion_to_table",
     "datafusion_view_sql",
+    "datafusion_write_options",
+    "datafusion_write_parquet",
     "df_from_sql",
     "execute_dml",
     "execute_prepared_statement",

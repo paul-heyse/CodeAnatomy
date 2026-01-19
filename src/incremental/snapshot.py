@@ -8,7 +8,10 @@ import pyarrow as pa
 from deltalake import CommitProperties, DeltaTable
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.io.delta import (
+from arrowdsl.schema.build import column_or_null, table_from_arrays
+from arrowdsl.schema.serialization import schema_fingerprint
+from incremental.state_store import StateStore
+from storage.deltalake import (
     DeltaWriteOptions,
     DeltaWriteResult,
     delta_table_version,
@@ -16,9 +19,6 @@ from arrowdsl.io.delta import (
     read_table_delta,
     write_table_delta,
 )
-from arrowdsl.schema.build import column_or_null, table_from_arrays
-from arrowdsl.schema.serialization import schema_fingerprint
-from incremental.state_store import StateStore
 
 
 def build_repo_snapshot(repo_files: TableLike) -> pa.Table:

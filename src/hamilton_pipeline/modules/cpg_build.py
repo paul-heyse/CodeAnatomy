@@ -15,12 +15,6 @@ from ibis.expr.types import Value as IbisValue
 from arrowdsl.compute.ids import apply_hash_column
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
-from arrowdsl.io.delta import (
-    DeltaWriteOptions,
-    apply_delta_write_policies,
-    coerce_delta_table,
-    write_named_datasets_delta,
-)
 from arrowdsl.plan.query import ScanTelemetry
 from arrowdsl.plan.scan_io import DatasetSource
 from arrowdsl.schema.schema import align_table, empty_table
@@ -128,6 +122,12 @@ from schema_spec.system import (
     table_spec_from_schema,
 )
 from sqlglot_tools.bridge import IbisCompilerBackend
+from storage.deltalake import (
+    DeltaWriteOptions,
+    apply_delta_write_policies,
+    coerce_delta_table,
+    write_named_datasets_delta,
+)
 
 if TYPE_CHECKING:
     from ibis.expr.types import Table as IbisTable

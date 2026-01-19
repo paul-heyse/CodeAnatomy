@@ -83,6 +83,7 @@ def df_from_sqlglot(ctx: SessionContext, expr: Expression) -> DataFrame:
     TranslationError
         Raised when the expression cannot be translated.
     """
+    expr = _resolve_table_aliases(expr)
     if isinstance(expr, exp.Subquery):
         return df_from_sqlglot(ctx, expr.this)
     if isinstance(expr, exp.Select):
@@ -95,6 +96,34 @@ def df_from_sqlglot(ctx: SessionContext, expr: Expression) -> DataFrame:
         return left.union_distinct(right)
     msg = f"Unsupported SQLGlot root expression: {expr.__class__.__name__}."
     raise TranslationError(msg)
+
+
+def _resolve_table_aliases(expr: Expression) -> Expression:
+    alias_map: dict[str, str] = {}
+    for table in expr.find_all(exp.Table):
+        alias = table.args.get("alias")
+        alias_name = _table_alias_name(alias)
+        if alias_name:
+            alias_map[alias_name] = table.name
+    if not alias_map:
+        return expr
+
+    def _rewrite(node: Expression) -> Expression:
+        if isinstance(node, exp.Column) and node.table in alias_map:
+            return exp.column(node.name, table=alias_map[node.table])
+        return node
+
+    return expr.transform(_rewrite)
+
+
+def _table_alias_name(alias: Expression | str | None) -> str | None:
+    if isinstance(alias, exp.TableAlias):
+        alias = alias.this
+    if isinstance(alias, exp.Identifier):
+        return alias.this
+    if isinstance(alias, str):
+        return alias
+    return None
 
 
 def register_dataset(
@@ -132,7 +161,8 @@ def register_dataset(
 
 
 def _select_to_df(ctx: SessionContext, select: exp.Select) -> DataFrame:
-    source = _from_expr(ctx, select.args.get("from"))
+    from_expr = select.args.get("from") or select.args.get("from_")
+    source = _from_expr(ctx, from_expr)
     df = _apply_joins(ctx, source, select.args.get("joins"))
     if select.args.get("where") is not None:
         df = df.filter(_expr_to_df(select.args["where"].this))
@@ -155,10 +185,16 @@ def _select_to_df(ctx: SessionContext, select: exp.Select) -> DataFrame:
 
 
 def _from_expr(ctx: SessionContext, from_expr: exp.From | None) -> DataFrame:
-    if from_expr is None or not from_expr.expressions:
+    if from_expr is None:
         msg = "SELECT without FROM is not supported."
         raise TranslationError(msg)
-    source = from_expr.expressions[0]
+    sources = list(from_expr.expressions)
+    if not sources and from_expr.this is not None:
+        sources.append(from_expr.this)
+    if not sources:
+        msg = "SELECT without FROM is not supported."
+        raise TranslationError(msg)
+    source = sources[0]
     if isinstance(source, exp.Table):
         return ctx.table(source.name)
     if isinstance(source, exp.Subquery):
@@ -578,6 +614,15 @@ def _coalesce_expr(expr: exp.Coalesce) -> Expr:
     return f.coalesce(*args)
 
 
+def _if_expr(expr: exp.If) -> Expr:
+    condition = _expr_to_df(expr.this)
+    true_expr = _expr_to_df(expr.args["true"])
+    false_expr = expr.args.get("false")
+    if false_expr is None:
+        return f.when(condition, true_expr).otherwise(lit(None))
+    return f.when(condition, true_expr).otherwise(_expr_to_df(false_expr))
+
+
 def _case_expr(expr: exp.Case) -> Expr:
     clauses = list(expr.args.get("ifs") or [])
     if not clauses:
@@ -730,6 +775,7 @@ _EXPR_DISPATCH: dict[type[Expression], Callable[[Expression], Expr]] = {
     exp.Div: cast("Callable[[Expression], Expr]", _div_expr),
     exp.Neg: cast("Callable[[Expression], Expr]", _neg_expr),
     exp.Coalesce: cast("Callable[[Expression], Expr]", _coalesce_expr),
+    exp.If: cast("Callable[[Expression], Expr]", _if_expr),
     exp.Case: cast("Callable[[Expression], Expr]", _case_expr),
     exp.Concat: cast("Callable[[Expression], Expr]", _concat_expr),
     exp.DPipe: cast("Callable[[Expression], Expr]", _pipe_concat_expr),

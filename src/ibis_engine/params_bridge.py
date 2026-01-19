@@ -9,6 +9,7 @@ from typing import Literal
 import ibis
 from ibis.expr.types import BooleanValue, Table, Value
 
+from ibis_engine.param_tables import scalar_param_signature
 from relspec.rules.rel_ops import ParamOp, RelOpT
 
 type JoinHow = Literal[
@@ -201,6 +202,56 @@ def datafusion_param_bindings(
     return bindings
 
 
+def param_binding_signature(
+    values: Mapping[str, object] | Mapping[Value, object] | None,
+) -> str | None:
+    """Return a signature for parameter bindings when available.
+
+    Parameters
+    ----------
+    values:
+        Parameter bindings keyed by name or Ibis values.
+
+    Returns
+    -------
+    str | None
+        Hex-encoded signature for parameter values, or ``None`` when missing.
+    """
+    if not values:
+        return None
+    try:
+        bindings = datafusion_param_bindings(values)
+    except ValueError:
+        return None
+    if not bindings:
+        return None
+    return scalar_param_signature(bindings)
+
+
+def param_binding_mode(values: Mapping[str, object] | Mapping[Value, object] | None) -> str:
+    """Return the parameter binding mode for diagnostics.
+
+    Parameters
+    ----------
+    values:
+        Parameter bindings keyed by name or Ibis values.
+
+    Returns
+    -------
+    str
+        ``"none"`` when no parameters are provided, otherwise ``"named"``,
+        ``"typed"``, or ``"mixed"`` based on the binding keys.
+    """
+    if not values:
+        return "none"
+    keys = list(values.keys())
+    if all(isinstance(key, str) for key in keys):
+        return "named"
+    if all(isinstance(key, Value) for key in keys):
+        return "typed"
+    return "mixed"
+
+
 def list_param_join(
     table: Table,
     *,
@@ -277,6 +328,8 @@ __all__ = [
     "datafusion_param_bindings",
     "list_param_join",
     "list_param_names_from_rel_ops",
+    "param_binding_mode",
+    "param_binding_signature",
     "registry_from_ops",
     "registry_from_specs",
     "specs_from_rel_ops",

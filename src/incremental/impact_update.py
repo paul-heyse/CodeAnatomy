@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.io.delta import (
+from arrowdsl.schema.metadata import encoding_policy_from_schema
+from incremental.registry_specs import dataset_schema
+from incremental.state_store import StateStore
+from storage.deltalake import (
     DeltaWriteOptions,
     coerce_delta_table,
     write_dataset_delta,
 )
-from arrowdsl.schema.metadata import encoding_policy_from_schema
-from incremental.registry_specs import dataset_schema
-from incremental.state_store import StateStore
 
 _IMPACTED_CALLERS_DATASET = "inc_impacted_callers_v1"
 _IMPACTED_IMPORTERS_DATASET = "inc_impacted_importers_v1"

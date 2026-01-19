@@ -10,7 +10,7 @@ import pyarrow as pa
 from hamilton.io.data_adapters import DataLoader, DataSaver
 from hamilton.registry import register_adapter
 
-from arrowdsl.io.delta import (
+from storage.deltalake import (
     DeltaWriteOptions,
     delta_table_version,
     read_table_delta,

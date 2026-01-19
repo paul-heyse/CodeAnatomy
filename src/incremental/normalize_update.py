@@ -5,16 +5,16 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.io.delta import (
+from arrowdsl.schema.metadata import encoding_policy_from_schema
+from incremental.state_store import StateStore
+from incremental.types import IncrementalFileChanges
+from normalize.registry_specs import dataset_name_from_alias
+from storage.deltalake import (
     DeltaUpsertOptions,
     DeltaWriteOptions,
     coerce_delta_table,
     upsert_dataset_partitions_delta,
 )
-from arrowdsl.schema.metadata import encoding_policy_from_schema
-from incremental.state_store import StateStore
-from incremental.types import IncrementalFileChanges
-from normalize.registry_specs import dataset_name_from_alias
 
 
 def upsert_normalize_outputs(

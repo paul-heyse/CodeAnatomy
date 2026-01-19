@@ -6,17 +6,22 @@ import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from itertools import repeat
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, Protocol
 from weakref import WeakSet
 
 import pyarrow as pa
 from datafusion import SessionContext, udf
 from datafusion.user_defined import ScalarUDF
 
-try:
+if TYPE_CHECKING:
     from datafusion.user_defined import ScalarUDFExportable
-except ImportError:
-    ScalarUDFExportable = object
+else:
+
+    class ScalarUDFExportable(Protocol):
+        """Protocol for DataFusion PyCapsule exportable UDFs."""
+
+        __datafusion_scalar_udf__: object
+
 
 from arrowdsl.compute.position_encoding import (
     ENC_UTF8,
@@ -33,6 +38,8 @@ _PYCAPSULE_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
 _PYCAPSULE_UDF_SPECS: dict[str, DataFusionPycapsuleUdfEntry] = {}
 
 DataFusionUdfKind = Literal["scalar", "aggregate", "window", "table"]
+UdfTier = Literal["builtin", "pyarrow", "pandas", "python"]
+UDF_TIER_PRIORITY: tuple[UdfTier, ...] = ("builtin", "pyarrow", "pandas", "python")
 
 
 def _pycapsule_entries() -> tuple[DataFusionPycapsuleUdfEntry, ...]:
@@ -54,7 +61,20 @@ class DataFusionUdfSpec:
     catalog: str | None = None
     database: str | None = None
     capsule_id: str | None = None
+    udf_tier: UdfTier = "python"
     rewrite_tags: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Validate UDF tier values.
+
+        Raises
+        ------
+        ValueError
+            Raised when the tier is not supported.
+        """
+        if self.udf_tier not in UDF_TIER_PRIORITY:
+            msg = f"Unsupported UDF tier: {self.udf_tier!r}."
+            raise ValueError(msg)
 
 
 @dataclass(frozen=True)
@@ -91,6 +111,7 @@ class DataFusionUdfCapsuleEntry:
     name: str
     kind: DataFusionUdfKind
     capsule_id: str
+    udf_tier: UdfTier
 
     def payload(self) -> Mapping[str, object]:
         """Return a JSON-ready payload for the entry.
@@ -104,6 +125,7 @@ class DataFusionUdfCapsuleEntry:
             "name": self.name,
             "kind": self.kind,
             "capsule_id": self.capsule_id,
+            "udf_tier": self.udf_tier,
         }
 
 
@@ -112,7 +134,7 @@ class DataFusionPycapsuleUdfEntry:
     """Registration metadata for PyCapsule-backed UDFs."""
 
     spec: DataFusionUdfSpec
-    capsule: object
+    capsule: ScalarUDFExportable
 
     def capsule_id(self) -> str:
         """Return the capsule identifier for diagnostics.
@@ -123,6 +145,7 @@ class DataFusionPycapsuleUdfEntry:
             Capsule identifier.
         """
         return self.spec.capsule_id or udf_capsule_id(self.capsule)
+
 
 def _normalize_span(values: pa.Array | pa.ChunkedArray) -> pa.Array | pa.ChunkedArray:
     text = pc.utf8_trim_whitespace(pc.cast(values, pa.string(), safe=False))
@@ -178,7 +201,7 @@ def _position_encoding_norm(
     return pa.array(out, type=pa.int32())
 
 
-def load_udf_from_capsule(capsule: object) -> ScalarUDF:
+def load_udf_from_capsule(capsule: ScalarUDFExportable) -> ScalarUDF:
     """Load a DataFusion UDF from a PyCapsule value.
 
     Returns
@@ -186,7 +209,7 @@ def load_udf_from_capsule(capsule: object) -> ScalarUDF:
     datafusion.user_defined.ScalarUDF
         UDF loaded from the capsule.
     """
-    return ScalarUDF.from_pycapsule(cast("ScalarUDFExportable", capsule))
+    return ScalarUDF.from_pycapsule(capsule)
 
 
 def udf_capsule_id(capsule: object) -> str:
@@ -448,7 +471,7 @@ def datafusion_udf_specs() -> tuple[DataFusionUdfSpec, ...]:
 def register_pycapsule_udf_spec(
     spec: DataFusionUdfSpec,
     *,
-    capsule: object,
+    capsule: ScalarUDFExportable,
 ) -> DataFusionUdfSpec:
     """Register a PyCapsule-backed UDF spec for diagnostics and registries.
 
@@ -487,6 +510,7 @@ def _register_pycapsule_udfs(ctx: SessionContext) -> tuple[DataFusionUdfCapsuleE
             name=entry.spec.engine_name,
             kind=entry.spec.kind,
             capsule_id=entry.capsule_id(),
+            udf_tier=entry.spec.udf_tier,
         )
         for entry in _pycapsule_entries()
     )
@@ -537,6 +561,7 @@ __all__ = [
     "DataFusionUdfCapsuleEntry",
     "DataFusionUdfSnapshot",
     "DataFusionUdfSpec",
+    "UdfTier",
     "_register_kernel_udfs",
     "datafusion_udf_specs",
     "load_udf_from_capsule",

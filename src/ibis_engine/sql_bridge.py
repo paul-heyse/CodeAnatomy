@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from typing import Protocol, cast
 
 import ibis
 import pyarrow as pa
+import sqlglot
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table, Value
 from sqlglot import Expression
+from sqlglot.errors import ParseError
 from sqlglot.serde import dump
 
 from arrowdsl.core.interop import RecordBatchReaderLike
@@ -43,9 +45,10 @@ class SqlIngestSpec:
     """Specification for SQL ingestion into Ibis."""
 
     sql: str
-    catalog: BaseBackend
+    catalog: BaseBackend | Mapping[str, _SchemaProtocol]
     schema: _SchemaProtocol | None = None
     dialect: str | None = None
+    artifacts_hook: Callable[[Mapping[str, object]], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -91,10 +94,74 @@ def parse_sql_table(spec: SqlIngestSpec) -> Table:
     if spec.schema is None:
         msg = "SqlIngestSpec.schema is required for SQL ingestion."
         raise ValueError(msg)
-    expr = ibis.parse_sql(spec.sql, spec.catalog, dialect=spec.dialect)
+    sqlglot_expr = _parse_sqlglot_expr(spec)
+    catalog = _catalog_schemas(spec.catalog)
+    try:
+        expr = ibis.parse_sql(spec.sql, catalog, dialect=spec.dialect)
+    except (TypeError, ValueError) as exc:
+        _emit_sql_ingest_failure(spec, error=exc, sqlglot_expr=sqlglot_expr)
+        msg = f"SQL ingestion failed: {exc}"
+        raise ValueError(msg) from exc
     expected = spec.schema.to_pyarrow()
-    validate_expr_schema(expr, expected=expected)
+    try:
+        validate_expr_schema(expr, expected=expected)
+    except ValueError as exc:
+        _emit_sql_ingest_failure(spec, error=exc, sqlglot_expr=sqlglot_expr)
+        msg = f"SQL ingestion schema mismatch: {exc}"
+        raise ValueError(msg) from exc
+    if spec.artifacts_hook is not None:
+        spec.artifacts_hook(
+            sql_ingest_artifacts(
+                spec.sql,
+                expr=expr,
+                sqlglot_expr=sqlglot_expr,
+                dialect=spec.dialect,
+            ).payload()
+        )
     return expr
+
+
+def _catalog_schemas(
+    catalog: BaseBackend | Mapping[str, _SchemaProtocol],
+) -> Mapping[str, _SchemaProtocol]:
+    if isinstance(catalog, Mapping):
+        return catalog
+    if not isinstance(catalog, BaseBackend):
+        msg = "SQL ingestion catalog must be an Ibis backend or schema mapping."
+        raise TypeError(msg)
+    schemas: dict[str, _SchemaProtocol] = {}
+    for name in catalog.list_tables():
+        table = catalog.table(name)
+        schemas[name] = table.schema()
+    return schemas
+
+
+def _parse_sqlglot_expr(spec: SqlIngestSpec) -> Expression | None:
+    if spec.artifacts_hook is None:
+        return None
+    try:
+        return sqlglot.parse_one(spec.sql, read=spec.dialect)
+    except (ParseError, ValueError, TypeError) as exc:
+        _emit_sql_ingest_failure(spec, error=exc, sqlglot_expr=None)
+        msg = f"SQLGlot parse failed: {exc}"
+        raise ValueError(msg) from exc
+
+
+def _emit_sql_ingest_failure(
+    spec: SqlIngestSpec,
+    *,
+    error: Exception,
+    sqlglot_expr: Expression | None,
+) -> None:
+    if spec.artifacts_hook is None:
+        return
+    payload = {
+        "sql": spec.sql,
+        "dialect": spec.dialect,
+        "error": str(error),
+        "sqlglot_ast": dump(sqlglot_expr) if sqlglot_expr is not None else None,
+    }
+    spec.artifacts_hook(payload)
 
 
 def decompile_expr(expr: Table | Value) -> str:
@@ -241,9 +308,7 @@ def _rows_to_table(
             raise ValueError(msg)
         for idx, value in enumerate(row):
             columns[idx].append(value)
-    arrays = [
-        pa.array(columns[idx], type=arrow_schema[idx].type) for idx in range(column_count)
-    ]
+    arrays = [pa.array(columns[idx], type=arrow_schema[idx].type) for idx in range(column_count)]
     return pa.Table.from_arrays(arrays, schema=arrow_schema)
 
 

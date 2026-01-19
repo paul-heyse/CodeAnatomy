@@ -10,7 +10,7 @@ import pyarrow as pa
 from arrowdsl.schema.build import list_view_type
 from arrowdsl.schema.schema import EncodingPolicy, EncodingSpec
 from arrowdsl.spec.codec import parse_string_tuple
-from arrowdsl.spec.io import table_from_rows
+from arrowdsl.spec.io import rows_from_table, table_from_rows
 
 DERIVED_ID_STRUCT = pa.struct(
     [
@@ -168,6 +168,13 @@ def _ordering_specs(value: object | None) -> tuple[ExtractOrderingKeySpec, ...]:
     return tuple(items)
 
 
+def _coerce_int(value: object | None, *, label: str) -> int:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    msg = f"{label} must be an int."
+    raise TypeError(msg)
+
+
 def dataset_rows_from_table(table: pa.Table) -> tuple[ExtractDatasetRowSpec, ...]:
     """Decode extract dataset rows from a spec table.
 
@@ -179,7 +186,7 @@ def dataset_rows_from_table(table: pa.Table) -> tuple[ExtractDatasetRowSpec, ...
     return tuple(
         ExtractDatasetRowSpec(
             name=str(record.get("name")),
-            version=int(record.get("version")),
+            version=_coerce_int(record.get("version"), label="version"),
             bundles=_string_tuple(record.get("bundles"), label="bundles"),
             fields=_string_tuple(record.get("fields"), label="fields"),
             derived=_derived_specs(record.get("derived")),
@@ -198,7 +205,7 @@ def dataset_rows_from_table(table: pa.Table) -> tuple[ExtractDatasetRowSpec, ...
             ),
             pipeline_name=str(record.get("pipeline_name")) if record.get("pipeline_name") else None,
         )
-        for record in table.to_pylist()
+        for record in rows_from_table(table)
     )
 
 

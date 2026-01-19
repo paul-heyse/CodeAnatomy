@@ -11,7 +11,8 @@ import pyarrow.dataset as ds
 from arrowdsl.compute.ids import HashSpec, hash_projection
 from arrowdsl.compute.macros import CoalesceExpr, ColumnOrNullExpr
 from arrowdsl.compute.predicates import InSet
-from arrowdsl.core.context import DeterminismTier, ExecutionContext, OrderingLevel
+from arrowdsl.core.context import ExecutionContext, OrderingLevel
+from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.interop import (
     ComputeExpression,
     DataTypeLike,

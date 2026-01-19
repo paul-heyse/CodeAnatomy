@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
-from schema_spec.specs import FieldBundle, file_identity_bundle, span_bundle
+from registry_common.bundles import base_bundle_catalog
 
-_BUNDLE_CATALOG: dict[str, FieldBundle] = {
-    "file_identity": file_identity_bundle(include_sha256=False),
-    "span": span_bundle(),
-}
+if TYPE_CHECKING:
+    from schema_spec.specs import FieldBundle
+
+_BUNDLE_CATALOG: dict[str, FieldBundle] = base_bundle_catalog(include_sha256=False)
 
 
 def bundle(name: str) -> FieldBundle:

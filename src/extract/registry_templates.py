@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from arrowdsl.core.context import OrderingLevel
 from extract.registry_template_specs import DatasetTemplateSpec
+from registry_common.metadata import EvidenceMetadataSpec, evidence_metadata
 
 
 @dataclass(frozen=True)
@@ -47,98 +48,114 @@ TEMPLATES: dict[str, ExtractorTemplate] = {
     "ast": ExtractorTemplate(
         extractor_name="ast",
         evidence_rank=4,
-        metadata_extra={
-            b"evidence_family": b"ast",
-            b"coordinate_system": b"line_col",
-            b"ambiguity_policy": b"preserve",
-            b"superior_rank": b"4",
-            b"streaming_safe": b"true",
-            b"pipeline_breaker": b"false",
-        },
+        metadata_extra=evidence_metadata(
+            spec=EvidenceMetadataSpec(
+                evidence_family="ast",
+                coordinate_system="line_col",
+                ambiguity_policy="preserve",
+                superior_rank=4,
+                streaming_safe=True,
+                pipeline_breaker=False,
+            ),
+        ),
     ),
     "cst": ExtractorTemplate(
         extractor_name="cst",
         evidence_rank=3,
-        metadata_extra={
-            b"evidence_family": b"cst",
-            b"coordinate_system": b"bytes",
-            b"ambiguity_policy": b"preserve",
-            b"superior_rank": b"3",
-            b"streaming_safe": b"true",
-            b"pipeline_breaker": b"false",
-        },
+        metadata_extra=evidence_metadata(
+            spec=EvidenceMetadataSpec(
+                evidence_family="cst",
+                coordinate_system="bytes",
+                ambiguity_policy="preserve",
+                superior_rank=3,
+                streaming_safe=True,
+                pipeline_breaker=False,
+            ),
+        ),
     ),
     "tree_sitter": ExtractorTemplate(
         extractor_name="tree_sitter",
         evidence_rank=6,
-        metadata_extra={
-            b"evidence_family": b"tree_sitter",
-            b"coordinate_system": b"bytes",
-            b"ambiguity_policy": b"preserve",
-            b"superior_rank": b"6",
-            b"streaming_safe": b"true",
-            b"pipeline_breaker": b"false",
-        },
+        metadata_extra=evidence_metadata(
+            spec=EvidenceMetadataSpec(
+                evidence_family="tree_sitter",
+                coordinate_system="bytes",
+                ambiguity_policy="preserve",
+                superior_rank=6,
+                streaming_safe=True,
+                pipeline_breaker=False,
+            ),
+        ),
     ),
     "bytecode": ExtractorTemplate(
         extractor_name="bytecode",
         evidence_rank=5,
-        metadata_extra={
-            b"evidence_family": b"bytecode",
-            b"coordinate_system": b"offsets",
-            b"ambiguity_policy": b"preserve",
-            b"superior_rank": b"5",
-            b"streaming_safe": b"true",
-            b"pipeline_breaker": b"false",
-        },
+        metadata_extra=evidence_metadata(
+            spec=EvidenceMetadataSpec(
+                evidence_family="bytecode",
+                coordinate_system="offsets",
+                ambiguity_policy="preserve",
+                superior_rank=5,
+                streaming_safe=True,
+                pipeline_breaker=False,
+            ),
+        ),
     ),
     "symtable": ExtractorTemplate(
         extractor_name="symtable",
         evidence_rank=2,
-        metadata_extra={
-            b"evidence_family": b"symtable",
-            b"coordinate_system": b"line",
-            b"ambiguity_policy": b"preserve",
-            b"superior_rank": b"2",
-            b"streaming_safe": b"true",
-            b"pipeline_breaker": b"false",
-        },
+        metadata_extra=evidence_metadata(
+            spec=EvidenceMetadataSpec(
+                evidence_family="symtable",
+                coordinate_system="line",
+                ambiguity_policy="preserve",
+                superior_rank=2,
+                streaming_safe=True,
+                pipeline_breaker=False,
+            ),
+        ),
     ),
     "repo_scan": ExtractorTemplate(
         extractor_name="repo_scan",
         evidence_rank=8,
-        metadata_extra={
-            b"evidence_family": b"repo_scan",
-            b"coordinate_system": b"path",
-            b"ambiguity_policy": b"preserve",
-            b"superior_rank": b"8",
-            b"streaming_safe": b"true",
-            b"pipeline_breaker": b"false",
-        },
+        metadata_extra=evidence_metadata(
+            spec=EvidenceMetadataSpec(
+                evidence_family="repo_scan",
+                coordinate_system="path",
+                ambiguity_policy="preserve",
+                superior_rank=8,
+                streaming_safe=True,
+                pipeline_breaker=False,
+            ),
+        ),
     ),
     "runtime_inspect": ExtractorTemplate(
         extractor_name="runtime_inspect",
         evidence_rank=7,
-        metadata_extra={
-            b"evidence_family": b"runtime_inspect",
-            b"coordinate_system": b"none",
-            b"ambiguity_policy": b"preserve",
-            b"superior_rank": b"7",
-            b"streaming_safe": b"true",
-            b"pipeline_breaker": b"false",
-        },
+        metadata_extra=evidence_metadata(
+            spec=EvidenceMetadataSpec(
+                evidence_family="runtime_inspect",
+                coordinate_system="none",
+                ambiguity_policy="preserve",
+                superior_rank=7,
+                streaming_safe=True,
+                pipeline_breaker=False,
+            ),
+        ),
     ),
     "scip": ExtractorTemplate(
         extractor_name="scip",
         evidence_rank=1,
-        metadata_extra={
-            b"evidence_family": b"scip",
-            b"coordinate_system": b"line_col",
-            b"ambiguity_policy": b"preserve",
-            b"superior_rank": b"1",
-            b"streaming_safe": b"true",
-            b"pipeline_breaker": b"false",
-        },
+        metadata_extra=evidence_metadata(
+            spec=EvidenceMetadataSpec(
+                evidence_family="scip",
+                coordinate_system="line_col",
+                ambiguity_policy="preserve",
+                superior_rank=1,
+                streaming_safe=True,
+                pipeline_breaker=False,
+            ),
+        ),
     ),
 }
 

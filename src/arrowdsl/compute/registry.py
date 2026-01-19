@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from arrowdsl.compute.kernel_utils import list_kernels
 from arrowdsl.core.interop import DataTypeLike, pc
@@ -250,7 +250,29 @@ def registry_snapshot() -> dict[str, object]:
         "available_kernels": list(list_kernels()),
         "registered_udfs": sorted(default_registry().registered),
         "registered_kernels": sorted(default_kernel_registry().registered),
+        "pyarrow_compute": list(pyarrow_compute_functions()),
     }
+
+
+def pyarrow_compute_functions() -> tuple[str, ...]:
+    """Return sorted PyArrow compute function names.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted function names from ``pyarrow.compute``.
+
+    Raises
+    ------
+    TypeError
+        Raised when ``pyarrow.compute.list_functions`` is unavailable.
+    """
+    list_functions = getattr(pc, "list_functions", None)
+    if not callable(list_functions):
+        msg = "pyarrow.compute.list_functions is unavailable."
+        raise TypeError(msg)
+    callable_list = cast("Callable[[], Sequence[str]]", list_functions)
+    return tuple(sorted(callable_list()))
 
 
 __all__ = [
@@ -265,6 +287,7 @@ __all__ = [
     "ensure_kernels",
     "ensure_udf",
     "ensure_udfs",
+    "pyarrow_compute_functions",
     "registry_snapshot",
     "resolve_function_capability",
 ]

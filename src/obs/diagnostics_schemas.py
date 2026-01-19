@@ -13,6 +13,8 @@ DATAFUSION_FALLBACKS_V1 = pa.schema(
         pa.field("sql", pa.string(), nullable=False),
         pa.field("dialect", pa.string(), nullable=False),
         pa.field("policy_violations", pa.list_(pa.string()), nullable=True),
+        pa.field("sql_policy_name", pa.string(), nullable=True),
+        pa.field("param_mode", pa.string(), nullable=True),
     ],
     metadata={b"schema_name": b"datafusion_fallbacks_v1"},
 )
@@ -33,6 +35,7 @@ FEATURE_STATE_V1 = pa.schema(
         pa.field("determinism_tier", pa.string(), nullable=False),
         pa.field("dynamic_filters_enabled", pa.bool_(), nullable=False),
         pa.field("spill_enabled", pa.bool_(), nullable=False),
+        pa.field("named_args_supported", pa.bool_(), nullable=False),
     ],
     metadata={b"schema_name": b"feature_state_v1"},
 )

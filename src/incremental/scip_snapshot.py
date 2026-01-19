@@ -10,7 +10,10 @@ import pyarrow as pa
 
 from arrowdsl.core.ids import hash64_from_arrays
 from arrowdsl.core.interop import TableLike, pc
-from arrowdsl.io.delta import (
+from arrowdsl.schema.build import column_or_null, table_from_arrays
+from arrowdsl.schema.serialization import schema_fingerprint
+from incremental.state_store import StateStore
+from storage.deltalake import (
     DeltaWriteOptions,
     DeltaWriteResult,
     delta_table_version,
@@ -18,9 +21,6 @@ from arrowdsl.io.delta import (
     read_table_delta,
     write_table_delta,
 )
-from arrowdsl.schema.build import column_or_null, table_from_arrays
-from arrowdsl.schema.serialization import schema_fingerprint
-from incremental.state_store import StateStore
 
 _HASH_NULL_SENTINEL = "None"
 
@@ -68,6 +68,11 @@ _DIAGNOSTIC_HASH_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
 )
 
 
+def _as_py_value(value: object) -> object:
+    as_py = getattr(value, "as_py", None)
+    return as_py() if callable(as_py) else value
+
+
 def build_scip_snapshot(
     scip_documents: TableLike,
     scip_occurrences: TableLike,
@@ -81,62 +86,14 @@ def build_scip_snapshot(
         Snapshot table keyed by document_id with fingerprints and counts.
     """
     docs = cast("pa.Table", scip_documents)
-    doc_ids = column_or_null(docs, "document_id", pa.string())
-    paths = column_or_null(docs, "path", pa.string())
-    doc_hashes = _row_hashes(
-        docs,
-        columns=_DOC_HASH_COLUMNS,
-        prefix="scip_doc",
-    )
-
-    doc_paths: dict[str, str | None] = {}
-    doc_fingerprint_inputs: dict[str, list[int]] = {}
-    occ_counts: dict[str, int] = {}
-    diag_counts: dict[str, int] = {}
-
-    _accumulate_hashes(
-        doc_ids,
-        doc_hashes,
+    doc_paths, doc_fingerprint_inputs = _document_inputs(docs)
+    occ_counts, diag_counts = _occurrence_and_diagnostic_counts(
+        cast("pa.Table", scip_occurrences),
+        cast("pa.Table", scip_diagnostics),
         doc_fingerprint_inputs,
-        counts=None,
     )
-    for doc_id, path in zip(doc_ids.to_pylist(), paths.to_pylist(), strict=False):
-        if not isinstance(doc_id, str) or not doc_id:
-            continue
-        if doc_id in doc_paths:
-            continue
-        doc_paths[doc_id] = path if isinstance(path, str) else None
-
-    occs = cast("pa.Table", scip_occurrences)
-    if occs.num_rows:
-        occ_hashes = _row_hashes(occs, columns=_OCCURRENCE_HASH_COLUMNS, prefix="scip_occ")
-        _accumulate_hashes(
-            column_or_null(occs, "document_id", pa.string()),
-            occ_hashes,
-            doc_fingerprint_inputs,
-            counts=occ_counts,
-        )
-
-    diags = cast("pa.Table", scip_diagnostics)
-    if diags.num_rows:
-        diag_hashes = _row_hashes(diags, columns=_DIAGNOSTIC_HASH_COLUMNS, prefix="scip_diag")
-        _accumulate_hashes(
-            column_or_null(diags, "document_id", pa.string()),
-            diag_hashes,
-            doc_fingerprint_inputs,
-            counts=diag_counts,
-        )
-
     doc_id_list = sorted(doc_paths)
-    schema = pa.schema(
-        [
-            pa.field("document_id", pa.string()),
-            pa.field("path", pa.string()),
-            pa.field("fingerprint", pa.string()),
-            pa.field("occurrence_count", pa.int64()),
-            pa.field("diagnostic_count", pa.int64()),
-        ]
-    )
+    schema = _snapshot_schema()
     return table_from_arrays(
         schema,
         columns={
@@ -154,6 +111,69 @@ def build_scip_snapshot(
             ),
         },
         num_rows=len(doc_id_list),
+    )
+
+
+def _document_inputs(
+    docs: pa.Table,
+) -> tuple[dict[str, str | None], dict[str, list[int]]]:
+    doc_ids = column_or_null(docs, "document_id", pa.string())
+    paths = column_or_null(docs, "path", pa.string())
+    doc_hashes = _row_hashes(docs, columns=_DOC_HASH_COLUMNS, prefix="scip_doc")
+    doc_paths: dict[str, str | None] = {}
+    doc_fingerprint_inputs: dict[str, list[int]] = {}
+    _accumulate_hashes(
+        doc_ids,
+        doc_hashes,
+        doc_fingerprint_inputs,
+        counts=None,
+    )
+    for doc_id_value, path_value in zip(doc_ids, paths, strict=False):
+        doc_id = _as_py_value(doc_id_value)
+        path = _as_py_value(path_value)
+        if not isinstance(doc_id, str) or not doc_id:
+            continue
+        if doc_id in doc_paths:
+            continue
+        doc_paths[doc_id] = path if isinstance(path, str) else None
+    return doc_paths, doc_fingerprint_inputs
+
+
+def _occurrence_and_diagnostic_counts(
+    occs: pa.Table,
+    diags: pa.Table,
+    doc_fingerprint_inputs: dict[str, list[int]],
+) -> tuple[dict[str, int], dict[str, int]]:
+    occ_counts: dict[str, int] = {}
+    diag_counts: dict[str, int] = {}
+    if occs.num_rows:
+        occ_hashes = _row_hashes(occs, columns=_OCCURRENCE_HASH_COLUMNS, prefix="scip_occ")
+        _accumulate_hashes(
+            column_or_null(occs, "document_id", pa.string()),
+            occ_hashes,
+            doc_fingerprint_inputs,
+            counts=occ_counts,
+        )
+    if diags.num_rows:
+        diag_hashes = _row_hashes(diags, columns=_DIAGNOSTIC_HASH_COLUMNS, prefix="scip_diag")
+        _accumulate_hashes(
+            column_or_null(diags, "document_id", pa.string()),
+            diag_hashes,
+            doc_fingerprint_inputs,
+            counts=diag_counts,
+        )
+    return occ_counts, diag_counts
+
+
+def _snapshot_schema() -> pa.Schema:
+    return pa.schema(
+        [
+            pa.field("document_id", pa.string()),
+            pa.field("path", pa.string()),
+            pa.field("fingerprint", pa.string()),
+            pa.field("occurrence_count", pa.int64()),
+            pa.field("diagnostic_count", pa.int64()),
+        ]
     )
 
 
@@ -346,12 +366,23 @@ def _accumulate_hashes(
     *,
     counts: dict[str, int] | None,
 ) -> None:
-    for doc_id, value in zip(doc_ids.to_pylist(), hashes.to_pylist(), strict=False):
+    for doc_id_value, hash_value in zip(doc_ids, hashes, strict=False):
+        doc_id = _as_py_value(doc_id_value)
+        value = _as_py_value(hash_value)
         if not isinstance(doc_id, str) or not doc_id:
             continue
         if value is None:
             continue
-        out.setdefault(doc_id, []).append(int(value))
+        if isinstance(value, int) and not isinstance(value, bool):
+            value_int = value
+        elif isinstance(value, (str, bytes, bytearray, float)):
+            try:
+                value_int = int(value)
+            except (TypeError, ValueError):
+                continue
+        else:
+            continue
+        out.setdefault(doc_id, []).append(value_int)
         if counts is not None:
             counts[doc_id] = counts.get(doc_id, 0) + 1
 
@@ -371,15 +402,19 @@ def _changed_paths(diff: pa.Table) -> list[str]:
     paths = diff["path"]
     mask = pc.not_equal(change_kind, pa.scalar("unchanged", type=pa.string()))
     filtered = pc.filter(paths, mask)
-    values = filtered.to_pylist()
+    values = [_as_py_value(value) for value in filtered]
     return [value for value in values if isinstance(value, str) and value]
 
 
 def _path_to_file_id(snapshot: pa.Table) -> Mapping[str, str]:
-    paths = snapshot["path"].to_pylist()
-    file_ids = snapshot["file_id"].to_pylist()
     mapping: dict[str, str] = {}
-    for path, file_id in zip(paths, file_ids, strict=False):
+    for path_value, file_id_value in zip(
+        snapshot["path"],
+        snapshot["file_id"],
+        strict=False,
+    ):
+        path = _as_py_value(path_value)
+        file_id = _as_py_value(file_id_value)
         if isinstance(path, str) and path and isinstance(file_id, str) and file_id:
             mapping.setdefault(path, file_id)
     return mapping

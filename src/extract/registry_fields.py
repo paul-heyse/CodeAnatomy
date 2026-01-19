@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 
 import pyarrow as pa
 
+from registry_common.field_catalog import FieldCatalog
 from schema_spec.specs import ArrowFieldSpec
 
 ENCODING_META: dict[str, str] = {"encoding": "dictionary"}
@@ -48,20 +49,15 @@ def _dict_string(name: str) -> ArrowFieldSpec:
     return _spec(name, pa.string(), metadata=ENCODING_META)
 
 
-_FIELD_CATALOG: dict[str, ArrowFieldSpec] = {}
+_FIELD_CATALOG = FieldCatalog()
 
 
 def _register(key: str, spec: ArrowFieldSpec) -> None:
-    existing = _FIELD_CATALOG.get(key)
-    if existing is not None and existing != spec:
-        msg = f"Field spec conflict for key {key!r}: {existing} vs {spec}"
-        raise ValueError(msg)
-    _FIELD_CATALOG[key] = spec
+    _FIELD_CATALOG.register(key, spec)
 
 
 def _register_many(entries: Mapping[str, ArrowFieldSpec]) -> None:
-    for key, spec in entries.items():
-        _register(key, spec)
+    _FIELD_CATALOG.register_many(entries)
 
 
 _register_many(
@@ -307,7 +303,7 @@ def field(key: str) -> ArrowFieldSpec:
     ArrowFieldSpec
         Field specification for the key.
     """
-    return _FIELD_CATALOG[key]
+    return _FIELD_CATALOG.field(key)
 
 
 def fields(keys: Sequence[str]) -> list[ArrowFieldSpec]:
@@ -318,7 +314,7 @@ def fields(keys: Sequence[str]) -> list[ArrowFieldSpec]:
     list[ArrowFieldSpec]
         Field specifications for the keys.
     """
-    return [field(key) for key in keys]
+    return _FIELD_CATALOG.fields_for(keys)
 
 
 def field_name(key: str) -> str:

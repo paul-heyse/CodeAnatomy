@@ -11,10 +11,10 @@ import pyarrow as pa
 import pytest
 from datafusion import SessionContext
 
-from arrowdsl.io.delta import read_table_delta
 from datafusion_engine.bridge import datafusion_to_reader
 from ibis_engine.io_bridge import IbisDatasetWriteOptions, write_ibis_dataset_delta
 from ibis_engine.plan import IbisPlan
+from storage.deltalake import read_table_delta
 
 EXPECTED_ROW_COUNT = 2
 

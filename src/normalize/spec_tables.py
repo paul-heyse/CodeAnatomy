@@ -7,7 +7,7 @@ from functools import cache
 
 import pyarrow as pa
 
-from arrowdsl.schema.build import list_view_type, table_from_rows
+from arrowdsl.schema.build import iter_rows_from_table, list_view_type, table_from_rows
 from arrowdsl.schema.schema import EncodingPolicy, EncodingSpec
 from arrowdsl.spec.codec import parse_string_tuple
 from arrowdsl.spec.tables.schema import SchemaSpecTables, schema_spec_tables_from_dataset_specs
@@ -80,14 +80,20 @@ def normalize_rule_family_specs_from_table(
             name=str(row["name"]),
             factory=str(row["factory"]),
             inputs=parse_string_tuple(row.get("inputs"), label="inputs"),
-            output=row.get("output"),
-            confidence_policy=row.get("confidence_policy"),
-            ambiguity_policy=row.get("ambiguity_policy"),
-            option_flag=row.get("option_flag"),
-            execution_mode=row.get("execution_mode"),
+            output=_coerce_optional_str(row.get("output")),
+            confidence_policy=_coerce_optional_str(row.get("confidence_policy")),
+            ambiguity_policy=_coerce_optional_str(row.get("ambiguity_policy")),
+            option_flag=_coerce_optional_str(row.get("option_flag")),
+            execution_mode=_coerce_optional_str(row.get("execution_mode")),
         )
-        for row in table.to_pylist()
+        for row in iter_rows_from_table(table)
     )
+
+
+def _coerce_optional_str(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return str(value)
 
 
 SCHEMA_TABLES: SchemaSpecTables = schema_spec_tables_from_dataset_specs(dataset_specs())

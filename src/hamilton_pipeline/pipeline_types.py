@@ -9,11 +9,12 @@ from typing import TYPE_CHECKING, Literal
 import pyarrow as pa
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.io.delta_config import DeltaSchemaPolicy, DeltaWritePolicy
 from arrowdsl.spec.io import IpcWriteConfig
 from engine.plan_policy import WriterStrategy
+from registry_common.settings import ScipIndexSettings
 from relspec.compiler import CompiledOutput
 from relspec.registry import ContractCatalog, DatasetLocation
+from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
     from arrowdsl.plan.scan_io import DatasetSource
@@ -37,6 +38,17 @@ class RelspecConfig:
     scip_index_path: str | None
 
 
+OutputStorageFormat = Literal["delta"]
+
+
+@dataclass(frozen=True)
+class OutputStoragePolicy:
+    """Configuration for output storage format enforcement."""
+
+    format: OutputStorageFormat = "delta"
+    allow_parquet_exports: bool = False
+
+
 @dataclass(frozen=True)
 class OutputConfig:
     """Configuration for output and intermediate materialization."""
@@ -48,6 +60,7 @@ class OutputConfig:
     writer_strategy: WriterStrategy = "arrow"
     ipc_dump_enabled: bool = False
     ipc_write_config: IpcWriteConfig | None = None
+    output_storage_policy: OutputStoragePolicy = field(default_factory=OutputStoragePolicy)
     delta_write_policy: DeltaWritePolicy | None = None
     delta_schema_policy: DeltaSchemaPolicy | None = None
     delta_storage_options: Mapping[str, str] | None = None
@@ -89,18 +102,7 @@ class TreeSitterConfig:
     enable_tree_sitter: bool
 
 
-@dataclass(frozen=True)
-class ScipIndexConfig:
-    """Configuration for scip-python indexing inside the pipeline."""
-
-    enabled: bool = True
-    index_path_override: str | None = None
-    output_dir: str = "build/scip"
-    env_json_path: str | None = None
-    scip_python_bin: str = "scip-python"
-    target_only: str | None = None
-    node_max_old_space_mb: int | None = 8192
-    timeout_s: int | None = None
+ScipIndexConfig = ScipIndexSettings
 
 
 @dataclass(frozen=True)

@@ -9,7 +9,7 @@ import pyarrow as pa
 import pytest
 from ibis.backends import BaseBackend
 
-from arrowdsl.io.delta import DeltaWriteOptions, write_table_delta
+from arrowdsl.schema.build import rows_from_table
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from incremental.impact import (
@@ -18,6 +18,8 @@ from incremental.impact import (
     import_closure_only_from_changed_exports,
 )
 from incremental.registry_specs import dataset_schema
+from storage.deltalake import DeltaWriteOptions, write_table_delta
+from tests.utils import values_as_list
 
 
 def test_impacted_callers_from_changed_exports(tmp_path: Path) -> None:
@@ -136,14 +138,12 @@ def _write_table(path: Path, table: pa.Table) -> str:
 
 def _result_files(result: pa.Table) -> set[str]:
     values = result["file_id"]
-    if isinstance(values, pa.ChunkedArray):
-        values = values.combine_chunks()
-    return {value for value in values.to_pylist() if isinstance(value, str)}
+    return {value for value in values_as_list(values) if isinstance(value, str)}
 
 
 def _reason_kinds(result: pa.Table) -> set[tuple[str, str]]:
     rows = []
-    for row in result.to_pylist():
+    for row in rows_from_table(result):
         file_id = row.get("file_id")
         reason_kind = row.get("reason_kind")
         if isinstance(file_id, str) and isinstance(reason_kind, str):

@@ -6,12 +6,15 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 
 import pyarrow as pa
+from ibis.expr.types import Value as IbisValue
 
-from arrowdsl.core.context import DeterminismTier, ExecutionContext
+from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
+from ibis_engine.params_bridge import param_binding_mode, param_binding_signature
 from ibis_engine.plan import IbisPlan
 from ibis_engine.runner import IbisCachePolicy
 
@@ -55,36 +58,79 @@ def _resolve_cache_policy(
     ctx: ExecutionContext,
     policy: ExecutionSurfacePolicy,
     prefer_reader: bool,
+    params: Mapping[IbisValue, object] | Mapping[str, object] | None,
 ) -> IbisCachePolicy:
     writer_strategy = policy.writer_strategy
+    param_mode = param_binding_mode(params)
+    param_signature = param_binding_signature(params)
+    if param_mode != "none":
+        return IbisCachePolicy(
+            enabled=False,
+            reason="params",
+            writer_strategy=writer_strategy,
+            param_mode=param_mode,
+            param_signature=param_signature,
+        )
     if writer_strategy != "arrow":
         return IbisCachePolicy(
             enabled=False,
             reason=f"writer_strategy_{writer_strategy}",
             writer_strategy=writer_strategy,
+            param_mode=param_mode,
+            param_signature=param_signature,
         )
     if prefer_reader:
         return IbisCachePolicy(
             enabled=False,
             reason="prefer_streaming",
             writer_strategy=writer_strategy,
+            param_mode=param_mode,
+            param_signature=param_signature,
         )
     if ctx.determinism == DeterminismTier.BEST_EFFORT:
         return IbisCachePolicy(
             enabled=False,
             reason="best_effort",
             writer_strategy=writer_strategy,
+            param_mode=param_mode,
+            param_signature=param_signature,
         )
     if policy.determinism_tier == DeterminismTier.BEST_EFFORT:
         return IbisCachePolicy(
             enabled=False,
             reason="policy_best_effort",
             writer_strategy=writer_strategy,
+            param_mode=param_mode,
+            param_signature=param_signature,
         )
     return IbisCachePolicy(
         enabled=True,
         reason="materialize",
         writer_strategy=writer_strategy,
+        param_mode=param_mode,
+        param_signature=param_signature,
+    )
+
+
+def resolve_cache_policy(
+    *,
+    ctx: ExecutionContext,
+    policy: ExecutionSurfacePolicy,
+    prefer_reader: bool,
+    params: Mapping[IbisValue, object] | Mapping[str, object] | None,
+) -> IbisCachePolicy:
+    """Return the resolved cache policy for plan materialization.
+
+    Returns
+    -------
+    IbisCachePolicy
+        Cache policy for the materialization.
+    """
+    return _resolve_cache_policy(
+        ctx=ctx,
+        policy=policy,
+        prefer_reader=prefer_reader,
+        params=params,
     )
 
 
@@ -124,6 +170,7 @@ def build_plan_product(
         ctx=ctx,
         policy=policy,
         prefer_reader=prefer_reader,
+        params=execution.params,
     )
     reporter = _cache_event_reporter(ctx)
     if reporter is not None:

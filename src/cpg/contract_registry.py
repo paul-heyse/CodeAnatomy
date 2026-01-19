@@ -7,6 +7,7 @@ from functools import cache
 
 import pyarrow as pa
 
+from arrowdsl.schema.build import iter_rows_from_table
 from cpg.kinds_registry_enums import EdgeKind, NodeKind, SourceKind
 from cpg.kinds_registry_models import (
     DerivationSpec,
@@ -88,7 +89,7 @@ def node_contracts_from_table(table: pa.Table) -> dict[NodeKind, NodeKindContrac
         Node kind contracts keyed by kind.
     """
     contracts: dict[NodeKind, NodeKindContract] = {}
-    for row in table.to_pylist():
+    for row in iter_rows_from_table(table):
         kind = NodeKind(str(row["kind"]))
         required_keys = tuple(_as_str_list(row.get("required_props")))
         optional_keys = tuple(_as_str_list(row.get("optional_props")))
@@ -112,7 +113,7 @@ def edge_contracts_from_table(table: pa.Table) -> dict[EdgeKind, EdgeKindContrac
         Edge kind contracts keyed by kind.
     """
     contracts: dict[EdgeKind, EdgeKindContract] = {}
-    for row in table.to_pylist():
+    for row in iter_rows_from_table(table):
         kind = EdgeKind(str(row["kind"]))
         required_keys = tuple(_as_str_list(row.get("required_props")))
         optional_keys = tuple(_as_str_list(row.get("optional_props")))
@@ -138,7 +139,7 @@ def derivations_from_table(
         Derivation specs keyed by kind.
     """
     out: dict[NodeKind | EdgeKind, list[DerivationSpec]] = {}
-    for row in table.to_pylist():
+    for row in iter_rows_from_table(table):
         entity_kind = str(row.get("entity_kind", ""))
         kind_value = str(row.get("kind", ""))
         kind: NodeKind | EdgeKind = (

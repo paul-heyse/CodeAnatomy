@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from arrowdsl.io.delta import (
+from storage.deltalake import (
     DeltaCdfOptions,
     DeltaWriteOptions,
     delta_commit_metadata,

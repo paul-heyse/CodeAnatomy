@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from arrowdsl.io.delta import read_table_delta
 from arrowdsl.schema.serialization import schema_fingerprint
 from hamilton_pipeline import PipelineExecutionOptions, execute_pipeline
 from hamilton_pipeline.pipeline_types import ScipIndexConfig
 from incremental.types import IncrementalConfig
+from storage.deltalake import read_table_delta
 
 
 @pytest.mark.e2e

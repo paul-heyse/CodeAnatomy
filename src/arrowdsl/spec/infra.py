@@ -13,7 +13,6 @@ import pyarrow as pa
 from arrowdsl.compute.expr_core import ExprSpec, or_exprs
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, SchemaLike, TableLike, ensure_expression, pc
-from arrowdsl.io.delta_config import DeltaSchemaPolicy, DeltaWritePolicy
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec, SchemaTransform
 from arrowdsl.schema.validation import ArrowValidationOptions, ValidationReport, validate_table
@@ -28,6 +27,7 @@ from schema_spec.system import (
     register_dataset_spec,
     table_spec_from_schema,
 )
+from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
     from arrowdsl.plan.plan import Plan

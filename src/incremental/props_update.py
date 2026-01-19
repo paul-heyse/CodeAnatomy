@@ -8,13 +8,6 @@ from typing import cast
 import pyarrow as pa
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, pc
-from arrowdsl.io.delta import (
-    DeltaUpsertOptions,
-    DeltaWriteOptions,
-    coerce_delta_table,
-    upsert_dataset_partitions_delta,
-    write_dataset_delta,
-)
 from arrowdsl.schema.build import table_from_schema
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from arrowdsl.schema.schema import align_table
@@ -24,6 +17,13 @@ from cpg.schemas import (
 )
 from incremental.state_store import StateStore
 from incremental.types import IncrementalFileChanges
+from storage.deltalake import (
+    DeltaUpsertOptions,
+    DeltaWriteOptions,
+    coerce_delta_table,
+    upsert_dataset_partitions_delta,
+    write_dataset_delta,
+)
 
 _PROPS_BY_FILE_DATASET = "cpg_props_by_file_id_v1"
 _PROPS_GLOBAL_DATASET = "cpg_props_global_v1"

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
 
+from arrowdsl.core.determinism import DeterminismTier
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 if TYPE_CHECKING:
@@ -35,16 +36,6 @@ type ExecutionProfileName = Literal[
     "memory_tight",
     "prod_fast",
 ]
-
-
-class DeterminismTier(StrEnum):
-    """Determinism budgets for the pipeline."""
-
-    CANONICAL = "canonical"
-    STABLE_SET = "stable_set"
-    BEST_EFFORT = "best_effort"
-    FAST = "best_effort"
-    STABLE = "stable_set"
 
 
 class OrderingLevel(StrEnum):

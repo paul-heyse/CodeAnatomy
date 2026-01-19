@@ -3,18 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Literal
 
+from registry_common.settings import IncrementalSettings
 
-@dataclass(frozen=True)
-class IncrementalConfig:
-    """Configuration flags for incremental pipeline runs."""
-
-    enabled: bool = False
-    state_dir: Path | None = None
-    repo_id: str | None = None
-    impact_strategy: Literal["hybrid", "symbol_closure", "import_closure"] = "hybrid"
+IncrementalConfig = IncrementalSettings
 
 
 @dataclass(frozen=True)

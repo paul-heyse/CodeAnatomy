@@ -11,13 +11,6 @@ import pyarrow as pa
 from hamilton.function_modifiers import tag
 from ibis.expr.types import Table
 
-from arrowdsl.io.delta import (
-    DeltaWriteOptions,
-    apply_delta_write_policies,
-    read_table_delta,
-    write_dataset_delta,
-)
-from arrowdsl.io.delta_config import DeltaSchemaPolicy, DeltaWritePolicy
 from arrowdsl.schema.serialization import schema_fingerprint
 from core_types import JsonDict
 from engine.session import EngineSession
@@ -37,6 +30,13 @@ from ibis_engine.param_tables import (
 )
 from relspec.param_deps import ActiveParamSet, RuleDependencyReport
 from relspec.pipeline_policy import PipelinePolicy
+from storage.deltalake import (
+    DeltaWriteOptions,
+    apply_delta_write_policies,
+    read_table_delta,
+    write_dataset_delta,
+)
+from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 
 @tag(layer="params", artifact="param_table_policy", kind="object")

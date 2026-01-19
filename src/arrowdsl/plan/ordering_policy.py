@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from arrowdsl.core.context import DeterminismTier, Ordering, OrderingKey, OrderingLevel
+from arrowdsl.core.context import Ordering, OrderingKey, OrderingLevel
+from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.interop import SchemaLike, TableLike, pc
 from arrowdsl.schema.metadata import (
     infer_ordering_keys,

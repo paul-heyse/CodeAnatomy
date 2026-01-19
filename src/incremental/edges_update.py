@@ -5,16 +5,16 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.io.delta import (
+from arrowdsl.schema.metadata import encoding_policy_from_schema
+from cpg.schemas import CPG_EDGES_SCHEMA
+from incremental.state_store import StateStore
+from incremental.types import IncrementalFileChanges
+from storage.deltalake import (
     DeltaUpsertOptions,
     DeltaWriteOptions,
     coerce_delta_table,
     upsert_dataset_partitions_delta,
 )
-from arrowdsl.schema.metadata import encoding_policy_from_schema
-from cpg.schemas import CPG_EDGES_SCHEMA
-from incremental.state_store import StateStore
-from incremental.types import IncrementalFileChanges
 
 _CPG_EDGES_DATASET = "cpg_edges_v1"
 

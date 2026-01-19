@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import Literal, TypedDict, cast
 
 import pyarrow as pa
 from pyarrow import ipc
 
 import schema_spec.system as schema_system
 from arrowdsl.core.interop import DataTypeLike
+from arrowdsl.schema.build import iter_rows_from_table, table_from_rows
 from arrowdsl.schema.validation import ArrowValidationOptions
 from arrowdsl.spec.codec import (
     decode_strict,
@@ -86,6 +87,42 @@ def _decode_dtype(payload: bytes) -> pa.DataType:
     return schema.field(0).type
 
 
+def _coerce_bytes(value: object) -> bytes:
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    msg = "field_type must be bytes."
+    raise TypeError(msg)
+
+
+def _coerce_str_mapping(value: object | None) -> dict[str, str]:
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        return {str(key): str(item) for key, item in value.items()}
+    msg = "metadata must be a mapping."
+    raise TypeError(msg)
+
+
+def _coerce_version(value: object | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    msg = "table_version must be an int or None."
+    raise TypeError(msg)
+
+
+def _coerce_encoding(value: object | None) -> str | None:
+    if value is None:
+        return None
+    if str(value) == "dictionary":
+        return "dictionary"
+    msg = "encoding must be 'dictionary' or None."
+    raise TypeError(msg)
+
+
 class ContractRow(TypedDict, total=False):
     name: str
     table_name: str
@@ -122,7 +159,7 @@ def field_spec_table(specs: Sequence[TableSchemaSpec]) -> pa.Table:
                 for field_spec in spec.fields
             ]
         )
-    return pa.Table.from_pylist(rows, schema=FIELD_SPEC_SCHEMA)
+    return table_from_rows(FIELD_SPEC_SCHEMA, rows)
 
 
 def table_constraints_table(specs: Sequence[TableSchemaSpec]) -> pa.Table:
@@ -142,7 +179,7 @@ def table_constraints_table(specs: Sequence[TableSchemaSpec]) -> pa.Table:
         }
         for spec in specs
     ]
-    return pa.Table.from_pylist(rows, schema=TABLE_CONSTRAINTS_SCHEMA)
+    return table_from_rows(TABLE_CONSTRAINTS_SCHEMA, rows)
 
 
 def _sort_key_row(spec: schema_system.SortKeySpec) -> dict[str, object]:
@@ -197,7 +234,7 @@ def contract_spec_table(specs: Sequence[schema_system.ContractSpec]) -> pa.Table
         }
         for spec in specs
     ]
-    return pa.Table.from_pylist(rows, schema=CONTRACT_SPEC_SCHEMA)
+    return table_from_rows(CONTRACT_SPEC_SCHEMA, rows)
 
 
 def table_specs_from_tables(
@@ -213,27 +250,32 @@ def table_specs_from_tables(
     """
     fields_by_table: dict[str, list[ArrowFieldSpec]] = {}
     versions: dict[str, int | None] = {}
-    for row in field_table.to_pylist():
+    for row in iter_rows_from_table(field_table):
         name = str(row["table_name"])
+        field_type = _coerce_bytes(row.get("field_type"))
+        metadata = _coerce_str_mapping(row.get("metadata"))
+        encoding = cast("Literal['dictionary'] | None", _coerce_encoding(row.get("encoding")))
         field_spec = ArrowFieldSpec(
             name=str(row["field_name"]),
-            dtype=_decode_dtype(row["field_type"]),
+            dtype=_decode_dtype(field_type),
             nullable=bool(row["nullable"]),
-            metadata=dict(row["metadata"] or {}),
-            encoding=row.get("encoding"),
+            metadata=metadata,
+            encoding=encoding,
         )
         fields_by_table.setdefault(name, []).append(field_spec)
         if name not in versions:
-            versions[name] = row.get("table_version")
+            versions[name] = _coerce_version(row.get("table_version"))
 
     constraints: dict[str, dict[str, Iterable[str]]] = {}
     if constraints_table is not None:
-        for row in constraints_table.to_pylist():
+        for row in iter_rows_from_table(constraints_table):
             name = str(row["table_name"])
-            versions[name] = row.get("table_version")
+            versions[name] = _coerce_version(row.get("table_version"))
             constraints[name] = {
-                "required_non_null": tuple(row.get("required_non_null") or ()),
-                "key_fields": tuple(row.get("key_fields") or ()),
+                "required_non_null": parse_string_tuple(
+                    row.get("required_non_null"), label="required_non_null"
+                ),
+                "key_fields": parse_string_tuple(row.get("key_fields"), label="key_fields"),
             }
 
     specs: dict[str, TableSchemaSpec] = {}
@@ -311,25 +353,35 @@ def contract_specs_from_table(
         Raised when a contract references an unknown table spec.
     """
     specs: dict[str, schema_system.ContractSpec] = {}
-    for row in table.to_pylist():
+    for row in iter_rows_from_table(table):
         name = str(row["name"])
         table_name = str(row["table_name"])
         table_spec = table_specs.get(table_name)
         if table_spec is None:
             msg = f"Unknown table spec for contract {name!r}: {table_name!r}."
             raise ValueError(msg)
-        canonical = tuple(_sort_key_from_row(item) for item in row.get("canonical_sort") or ())
-        virtual_docs = row.get("virtual_field_docs")
+        canonical_payload = parse_mapping_sequence(
+            row.get("canonical_sort"), label="canonical_sort"
+        )
+        canonical = tuple(_sort_key_from_row(item) for item in canonical_payload)
+        dedupe_payload = row.get("dedupe")
+        dedupe_mapping = dedupe_payload if isinstance(dedupe_payload, Mapping) else None
+        validation_payload = row.get("validation")
+        validation_mapping = validation_payload if isinstance(validation_payload, Mapping) else None
+        virtual_docs_payload = row.get("virtual_field_docs")
+        virtual_docs = (
+            dict(virtual_docs_payload) if isinstance(virtual_docs_payload, Mapping) else None
+        )
         specs[name] = schema_system.ContractSpec(
             name=name,
             table_schema=table_spec,
-            dedupe=_dedupe_from_row(row.get("dedupe")),
+            dedupe=_dedupe_from_row(dedupe_mapping),
             canonical_sort=canonical,
-            constraints=tuple(row.get("constraints") or ()),
-            version=row.get("version"),
-            virtual_fields=tuple(row.get("virtual_fields") or ()),
-            virtual_field_docs=dict(virtual_docs) if virtual_docs else None,
-            validation=_validation_from_row(row.get("validation")),
+            constraints=parse_string_tuple(row.get("constraints"), label="constraints"),
+            version=_coerce_version(row.get("version")),
+            virtual_fields=parse_string_tuple(row.get("virtual_fields"), label="virtual_fields"),
+            virtual_field_docs=virtual_docs,
+            validation=_validation_from_row(validation_mapping),
         )
     return specs
 

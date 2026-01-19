@@ -1,0 +1,433 @@
+{
+  "aggregate_coverage": {},
+  "demands": {
+    "aggregate_funcs": {},
+    "expr_calls": {
+      "bit_wise_and": [
+        "import_edges",
+        "py_bc_blocks_v1",
+        "py_bc_cfg_edges_v1",
+        "py_bc_code_units_v1",
+        "py_bc_exception_table_v1",
+        "py_bc_instructions_v1",
+        "py_cst_callsites_v1",
+        "py_cst_defs_v1",
+        "py_cst_imports_v1",
+        "py_cst_name_refs_v1",
+        "py_cst_type_exprs_v1",
+        "py_sym_namespace_edges_v1",
+        "py_sym_scope_edges_v1",
+        "py_sym_scopes_v1",
+        "py_sym_symbols_v1",
+        "rt_members_v1",
+        "rt_objects_v1",
+        "rt_signature_params_v1",
+        "rt_signatures_v1",
+        "symbol_role_defines",
+        "symbol_role_reads",
+        "symbol_role_references",
+        "symbol_role_writes",
+        "ts_errors_v1",
+        "ts_missing_v1",
+        "ts_nodes_v1"
+      ],
+      "coalesce": [
+        "file_line_index_v1",
+        "py_ast_edges_v1",
+        "py_ast_errors_v1",
+        "py_ast_nodes_v1",
+        "py_bc_blocks_v1",
+        "py_bc_cfg_edges_v1",
+        "py_bc_code_units_v1",
+        "py_bc_errors_v1",
+        "py_bc_exception_table_v1",
+        "py_bc_instructions_v1",
+        "py_cst_callsites_v1",
+        "py_cst_defs_v1",
+        "py_cst_imports_v1",
+        "py_cst_name_refs_v1",
+        "py_cst_parse_errors_v1",
+        "py_cst_parse_manifest_v1",
+        "py_cst_type_exprs_v1",
+        "py_sym_function_partitions_v1",
+        "py_sym_namespace_edges_v1",
+        "py_sym_scope_edges_v1",
+        "py_sym_scopes_v1",
+        "py_sym_symbols_v1",
+        "repo_files_v1",
+        "rt_members_v1",
+        "rt_objects_v1",
+        "rt_signature_params_v1",
+        "rt_signatures_v1",
+        "scip_diagnostics_v1",
+        "scip_documents_v1",
+        "scip_external_symbol_info_v1",
+        "scip_metadata_v1",
+        "scip_occurrences_v1",
+        "scip_symbol_info_v1",
+        "scip_symbol_relationships_v1",
+        "ts_errors_v1",
+        "ts_missing_v1",
+        "ts_nodes_v1"
+      ],
+      "concat": [
+        "py_bc_blocks_v1",
+        "py_bc_cfg_edges_v1",
+        "py_bc_code_units_v1",
+        "py_bc_exception_table_v1",
+        "py_bc_instructions_v1",
+        "py_cst_callsites_v1",
+        "py_cst_defs_v1",
+        "py_cst_imports_v1",
+        "py_cst_name_refs_v1",
+        "py_cst_type_exprs_v1",
+        "py_sym_namespace_edges_v1",
+        "py_sym_scope_edges_v1",
+        "py_sym_scopes_v1",
+        "py_sym_symbols_v1",
+        "repo_files_v1",
+        "rt_members_v1",
+        "rt_objects_v1",
+        "rt_signature_params_v1",
+        "rt_signatures_v1",
+        "ts_errors_v1",
+        "ts_missing_v1",
+        "ts_nodes_v1"
+      ],
+      "equal": [
+        "diagnostic_edges"
+      ],
+      "fill_null": [
+        "diagnostic_edges",
+        "import_edges",
+        "scip_symbol_definition",
+        "scip_symbol_implementation",
+        "scip_symbol_reference",
+        "scip_symbol_type_definition",
+        "symbol_role_defines",
+        "symbol_role_reads",
+        "symbol_role_references",
+        "symbol_role_writes"
+      ],
+      "if_else": [
+        "diagnostic_edges",
+        "py_bc_blocks_v1",
+        "py_bc_cfg_edges_v1",
+        "py_bc_code_units_v1",
+        "py_bc_exception_table_v1",
+        "py_bc_instructions_v1",
+        "py_cst_callsites_v1",
+        "py_cst_defs_v1",
+        "py_cst_imports_v1",
+        "py_cst_name_refs_v1",
+        "py_cst_type_exprs_v1",
+        "py_sym_namespace_edges_v1",
+        "py_sym_scope_edges_v1",
+        "py_sym_scopes_v1",
+        "py_sym_symbols_v1",
+        "rt_members_v1",
+        "rt_objects_v1",
+        "rt_signature_params_v1",
+        "rt_signatures_v1",
+        "ts_errors_v1",
+        "ts_missing_v1",
+        "ts_nodes_v1"
+      ],
+      "invert": [
+        "py_bc_blocks_v1",
+        "py_bc_cfg_edges_v1",
+        "py_bc_code_units_v1",
+        "py_bc_exception_table_v1",
+        "py_bc_instructions_v1",
+        "py_cst_callsites_v1",
+        "py_cst_defs_v1",
+        "py_cst_imports_v1",
+        "py_cst_name_refs_v1",
+        "py_cst_type_exprs_v1",
+        "py_sym_namespace_edges_v1",
+        "py_sym_scope_edges_v1",
+        "py_sym_scopes_v1",
+        "py_sym_symbols_v1",
+        "rt_members_v1",
+        "rt_objects_v1",
+        "rt_signature_params_v1",
+        "rt_signatures_v1",
+        "symbol_role_references",
+        "ts_errors_v1",
+        "ts_missing_v1",
+        "ts_nodes_v1"
+      ],
+      "is_null": [
+        "py_bc_blocks_v1",
+        "py_bc_cfg_edges_v1",
+        "py_bc_code_units_v1",
+        "py_bc_exception_table_v1",
+        "py_bc_instructions_v1",
+        "py_cst_callsites_v1",
+        "py_cst_defs_v1",
+        "py_cst_imports_v1",
+        "py_cst_name_refs_v1",
+        "py_cst_type_exprs_v1",
+        "py_sym_namespace_edges_v1",
+        "py_sym_scope_edges_v1",
+        "py_sym_scopes_v1",
+        "py_sym_symbols_v1",
+        "rt_members_v1",
+        "rt_objects_v1",
+        "rt_signature_params_v1",
+        "rt_signatures_v1",
+        "ts_errors_v1",
+        "ts_missing_v1",
+        "ts_nodes_v1"
+      ],
+      "not_equal": [
+        "import_edges",
+        "symbol_role_defines",
+        "symbol_role_reads",
+        "symbol_role_references",
+        "symbol_role_writes"
+      ],
+      "stable_hash128": [
+        "py_bc_blocks_v1",
+        "py_bc_cfg_edges_v1",
+        "py_bc_code_units_v1",
+        "py_bc_exception_table_v1",
+        "py_bc_instructions_v1",
+        "py_cst_callsites_v1",
+        "py_cst_defs_v1",
+        "py_cst_imports_v1",
+        "py_cst_name_refs_v1",
+        "py_cst_type_exprs_v1",
+        "py_sym_namespace_edges_v1",
+        "py_sym_scope_edges_v1",
+        "py_sym_scopes_v1",
+        "py_sym_symbols_v1",
+        "repo_files_v1",
+        "rt_members_v1",
+        "rt_objects_v1",
+        "rt_signature_params_v1",
+        "rt_signatures_v1",
+        "ts_errors_v1",
+        "ts_missing_v1",
+        "ts_nodes_v1"
+      ],
+      "stringify": [
+        "py_bc_blocks_v1",
+        "py_bc_cfg_edges_v1",
+        "py_bc_code_units_v1",
+        "py_bc_exception_table_v1",
+        "py_bc_instructions_v1",
+        "py_cst_callsites_v1",
+        "py_cst_defs_v1",
+        "py_cst_imports_v1",
+        "py_cst_name_refs_v1",
+        "py_cst_type_exprs_v1",
+        "py_sym_namespace_edges_v1",
+        "py_sym_scope_edges_v1",
+        "py_sym_scopes_v1",
+        "py_sym_symbols_v1",
+        "repo_files_v1",
+        "rt_members_v1",
+        "rt_objects_v1",
+        "rt_signature_params_v1",
+        "rt_signatures_v1",
+        "ts_errors_v1",
+        "ts_missing_v1",
+        "ts_nodes_v1"
+      ]
+    },
+    "extract_postprocess": {
+      "scip_diagnostics": [
+        "scip_diagnostics_v1"
+      ],
+      "scip_documents": [
+        "scip_documents_v1"
+      ],
+      "scip_external_symbol_info": [
+        "scip_external_symbol_info_v1"
+      ],
+      "scip_occurrences": [
+        "scip_occurrences_v1"
+      ],
+      "scip_symbol_info": [
+        "scip_symbol_info_v1"
+      ],
+      "scip_symbol_relationships": [
+        "scip_symbol_relationships_v1"
+      ]
+    },
+    "kernel_names": {
+      "interval_align": [
+        "cst_callsites__callee_to__scip_occurrences",
+        "cst_defs__name_to__scip_occurrences",
+        "cst_imports__to__scip_occurrences",
+        "cst_name_refs__to__scip_occurrences"
+      ]
+    },
+    "plan_builders": {
+      "cfg_blocks": [
+        "cfg_blocks_norm"
+      ],
+      "cfg_edges": [
+        "cfg_edges_norm"
+      ],
+      "def_use_events": [
+        "def_use_events"
+      ],
+      "diagnostics": [
+        "diagnostics_norm"
+      ],
+      "reaching_defs": [
+        "reaching_defs"
+      ],
+      "span_errors": [
+        "span_errors"
+      ],
+      "type_exprs": [
+        "type_exprs_norm"
+      ],
+      "type_nodes": [
+        "type_nodes"
+      ]
+    },
+    "post_kernel_kinds": {
+      "add_literal": [
+        "inferred_type_edges",
+        "runtime_members",
+        "runtime_params",
+        "runtime_signatures",
+        "type_annotation_edges"
+      ]
+    }
+  },
+  "expr_call_coverage": {
+    "bit_wise_and": {
+      "ibis_supported": true,
+      "kind": null,
+      "lanes": [],
+      "pyarrow_supported": true,
+      "registry_supported": false
+    },
+    "coalesce": {
+      "ibis_supported": true,
+      "kind": null,
+      "lanes": [],
+      "pyarrow_supported": true,
+      "registry_supported": false
+    },
+    "concat": {
+      "ibis_supported": false,
+      "kind": null,
+      "lanes": [],
+      "pyarrow_supported": false,
+      "registry_supported": false
+    },
+    "equal": {
+      "ibis_supported": true,
+      "kind": null,
+      "lanes": [],
+      "pyarrow_supported": true,
+      "registry_supported": false
+    },
+    "fill_null": {
+      "ibis_supported": true,
+      "kind": null,
+      "lanes": [],
+      "pyarrow_supported": false,
+      "registry_supported": false
+    },
+    "if_else": {
+      "ibis_supported": true,
+      "kind": null,
+      "lanes": [],
+      "pyarrow_supported": true,
+      "registry_supported": false
+    },
+    "invert": {
+      "ibis_supported": true,
+      "kind": null,
+      "lanes": [],
+      "pyarrow_supported": true,
+      "registry_supported": false
+    },
+    "is_null": {
+      "ibis_supported": true,
+      "kind": null,
+      "lanes": [],
+      "pyarrow_supported": true,
+      "registry_supported": false
+    },
+    "not_equal": {
+      "ibis_supported": true,
+      "kind": null,
+      "lanes": [],
+      "pyarrow_supported": true,
+      "registry_supported": false
+    },
+    "stable_hash128": {
+      "ibis_supported": true,
+      "kind": "scalar",
+      "lanes": [
+        "df_udf",
+        "ibis_builtin",
+        "ibis_pyarrow",
+        "ibis_python",
+        "df_rust"
+      ],
+      "pyarrow_supported": false,
+      "registry_supported": true
+    },
+    "stringify": {
+      "ibis_supported": true,
+      "kind": null,
+      "lanes": [],
+      "pyarrow_supported": false,
+      "registry_supported": false
+    }
+  },
+  "extract_postprocess_coverage": {
+    "scip_diagnostics": true,
+    "scip_documents": true,
+    "scip_external_symbol_info": true,
+    "scip_occurrences": true,
+    "scip_symbol_info": true,
+    "scip_symbol_relationships": true
+  },
+  "kernel_coverage": {
+    "interval_align": {
+      "lane": "df_udf",
+      "registered": true
+    }
+  },
+  "plan_builder_coverage": {
+    "cfg_blocks": true,
+    "cfg_edges": true,
+    "def_use_events": true,
+    "diagnostics": true,
+    "reaching_defs": true,
+    "span_errors": true,
+    "type_exprs": true,
+    "type_nodes": true
+  },
+  "post_kernel_coverage": {
+    "add_literal": true
+  },
+  "summary": {
+    "aggregate_funcs": 0,
+    "aggregate_funcs_missing_ibis": 0,
+    "aggregate_funcs_missing_pyarrow": 0,
+    "aggregate_funcs_missing_registry": 0,
+    "expr_calls": 11,
+    "expr_calls_missing_ibis": 1,
+    "expr_calls_missing_pyarrow": 4,
+    "expr_calls_missing_registry": 10,
+    "extract_postprocess": 6,
+    "extract_postprocess_missing": 0,
+    "kernel_names": 1,
+    "kernel_names_missing_registry": 0,
+    "plan_builders": 8,
+    "plan_builders_missing": 0,
+    "post_kernel_kinds": 1,
+    "post_kernel_kinds_missing": 0
+  }
+}

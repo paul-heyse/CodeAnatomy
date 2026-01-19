@@ -11,8 +11,8 @@ from typing import Literal
 from hamilton.function_modifiers import tag
 from ibis.backends import BaseBackend
 
-from arrowdsl.core.context import DeterminismTier, ExecutionContext
-from arrowdsl.io.delta_config import DeltaSchemaPolicy, DeltaWritePolicy
+from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.spec.io import IpcWriteConfig
 from core_types import JsonDict
 from datafusion_engine.runtime import AdapterExecutionPolicy
@@ -20,9 +20,11 @@ from engine.plan_policy import ExecutionSurfacePolicy, WriterStrategy
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from engine.session import EngineSession
 from engine.session_factory import build_engine_session
+from extract.repo_scan import default_repo_scan_options, repo_scan_globs_from_options
 from extract.scip_extract import SCIPParseOptions
 from hamilton_pipeline.pipeline_types import (
     OutputConfig,
+    OutputStoragePolicy,
     RelspecConfig,
     RepoScanConfig,
     RuntimeInspectConfig,
@@ -36,6 +38,7 @@ from incremental.types import IncrementalConfig
 from obs.diagnostics import DiagnosticsCollector
 from relspec.cpg.build_props import PropsBuildOptions
 from relspec.pipeline_policy import PipelinePolicy
+from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 
 def _incremental_pipeline_enabled(config: IncrementalConfig | None = None) -> bool:
@@ -302,7 +305,8 @@ def include_globs() -> list[str]:
     list[str]
         Glob patterns to include.
     """
-    return ["**/*.py"]
+    include, _ = repo_scan_globs_from_options(default_repo_scan_options())
+    return include
 
 
 @tag(layer="inputs", kind="scalar")
@@ -316,18 +320,8 @@ def exclude_globs() -> list[str]:
     list[str]
         Glob patterns to exclude.
     """
-    return [
-        "**/.git/**",
-        "**/.venv/**",
-        "**/venv/**",
-        "**/__pycache__/**",
-        "**/node_modules/**",
-        "**/.mypy_cache/**",
-        "**/.pytest_cache/**",
-        "**/.ruff_cache/**",
-        "**/build/**",
-        "**/dist/**",
-    ]
+    _, exclude = repo_scan_globs_from_options(default_repo_scan_options())
+    return exclude
 
 
 @tag(layer="inputs", kind="scalar")
@@ -339,7 +333,10 @@ def max_files() -> int:
     int
         Maximum file count for repository scanning.
     """
-    return 200_000
+    max_files_opt = default_repo_scan_options().max_files
+    if max_files_opt is None:
+        return 200_000
+    return int(max_files_opt)
 
 
 @tag(layer="inputs", kind="scalar")
@@ -351,7 +348,7 @@ def repo_include_text() -> bool:
     bool
         True to include text payloads in repo scan output.
     """
-    return True
+    return default_repo_scan_options().include_text
 
 
 @tag(layer="inputs", kind="scalar")
@@ -363,7 +360,7 @@ def repo_include_bytes() -> bool:
     bool
         True to include bytes payloads in repo scan output.
     """
-    return True
+    return default_repo_scan_options().include_bytes
 
 
 @tag(layer="inputs", kind="scalar")
@@ -582,8 +579,7 @@ def output_config_overrides(
     overwrite_intermediate_datasets: bool,
     materialize_param_tables: bool = False,
     writer_strategy: WriterStrategy = "arrow",
-    ipc: IpcConfigOverrides | None = None,
-    delta: DeltaOutputOverrides | None = None,
+    options: OutputConfigOverrideOptions | None = None,
 ) -> OutputConfigOverrides:
     """Bundle output configuration overrides.
 
@@ -592,12 +588,14 @@ def output_config_overrides(
     OutputConfigOverrides
         Output configuration overrides bundle.
     """
+    resolved = options or OutputConfigOverrideOptions()
     return OutputConfigOverrides(
         overwrite_intermediate_datasets=overwrite_intermediate_datasets,
         materialize_param_tables=materialize_param_tables,
         writer_strategy=writer_strategy,
-        ipc=ipc,
-        delta=delta,
+        ipc=resolved.ipc,
+        delta=resolved.delta,
+        output_storage_policy=resolved.output_storage_policy,
     )
 
 
@@ -619,6 +617,15 @@ class DeltaOutputOverrides:
 
 
 @dataclass(frozen=True)
+class OutputConfigOverrideOptions:
+    """Grouped overrides for output configuration values."""
+
+    ipc: IpcConfigOverrides | None = None
+    delta: DeltaOutputOverrides | None = None
+    output_storage_policy: OutputStoragePolicy | None = None
+
+
+@dataclass(frozen=True)
 class OutputConfigOverrides:
     """Overrides for output configuration values."""
 
@@ -627,6 +634,7 @@ class OutputConfigOverrides:
     writer_strategy: WriterStrategy = "arrow"
     ipc: IpcConfigOverrides | None = None
     delta: DeltaOutputOverrides | None = None
+    output_storage_policy: OutputStoragePolicy | None = None
 
 
 @tag(layer="inputs", kind="object")
@@ -641,7 +649,16 @@ def output_config(
     -------
     OutputConfig
         Output configuration bundle.
+
+    Raises
+    ------
+    ValueError
+        Raised when the output storage policy is not Delta.
     """
+    storage_policy = overrides.output_storage_policy or OutputStoragePolicy()
+    if storage_policy.format != "delta":
+        msg = f"Output storage policy requires Delta, got {storage_policy.format!r}."
+        raise ValueError(msg)
     return OutputConfig(
         work_dir=work_dir,
         output_dir=output_dir,
@@ -650,6 +667,7 @@ def output_config(
         writer_strategy=overrides.writer_strategy,
         ipc_dump_enabled=overrides.ipc.dump_enabled if overrides.ipc is not None else False,
         ipc_write_config=overrides.ipc.write_config if overrides.ipc is not None else None,
+        output_storage_policy=storage_policy,
         delta_write_policy=overrides.delta.write_policy if overrides.delta is not None else None,
         delta_schema_policy=overrides.delta.schema_policy if overrides.delta is not None else None,
         delta_storage_options=overrides.delta.storage_options

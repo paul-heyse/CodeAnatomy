@@ -8,7 +8,6 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from arrowdsl.io.delta import DeltaWriteOptions, write_dataset_delta
 from arrowdsl.schema.build import table_from_arrays
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.backend import build_backend
@@ -23,6 +22,8 @@ from incremental.impact import (
 from incremental.registry_specs import dataset_schema
 from incremental.state_store import StateStore
 from incremental.types import IncrementalFileChanges
+from storage.deltalake import DeltaWriteOptions, write_dataset_delta
+from tests.utils import values_as_list
 
 
 @dataclass(frozen=True)
@@ -178,4 +179,4 @@ def _file_ids(table: pa.Table) -> set[str]:
     values = table["file_id"]
     if isinstance(values, pa.ChunkedArray):
         values = values.combine_chunks()
-    return {value for value in values.to_pylist() if isinstance(value, str)}
+    return {value for value in values_as_list(values) if isinstance(value, str)}

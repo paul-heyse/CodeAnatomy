@@ -8,9 +8,9 @@ from typing import cast
 import pyarrow as pa
 import pytest
 
-from arrowdsl.io.delta import DeltaWriteOptions, write_table_delta
 from datafusion_engine.registry_bridge import register_dataset_df
 from ibis_engine.registry import DatasetLocation
+from storage.deltalake import DeltaWriteOptions, write_table_delta
 
 datafusion = pytest.importorskip("datafusion")
 SessionContext = datafusion.SessionContext

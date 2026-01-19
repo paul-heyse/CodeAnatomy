@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from arrowdsl.io.delta import (
+from storage.deltalake import (
     DeltaVacuumOptions,
     cleanup_delta_log,
     create_delta_checkpoint,

@@ -11,13 +11,13 @@ from pathlib import Path
 
 import pyarrow.dataset as ds
 
-from arrowdsl.io.delta import (
+from arrowdsl.schema.serialization import schema_fingerprint
+from storage.deltalake import (
     DeltaWriteOptions,
     delta_table_version,
     read_table_delta,
     write_table_delta,
 )
-from arrowdsl.schema.serialization import schema_fingerprint
 
 
 @dataclass(frozen=True)

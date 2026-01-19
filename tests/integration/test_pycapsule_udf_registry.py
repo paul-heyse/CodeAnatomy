@@ -7,7 +7,7 @@ import pytest
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from obs.diagnostics import DiagnosticsCollector
 
-datafusion = pytest.importorskip("datafusion")
+pytest.importorskip("datafusion")
 
 
 @pytest.mark.integration
@@ -22,5 +22,8 @@ def test_udf_registry_snapshot_includes_capsule_payload() -> None:
     artifacts = sink.artifacts_snapshot().get("datafusion_udf_registry_v1", [])
     assert artifacts
     payload = artifacts[-1]
-    assert "stable_hash64" in payload.get("scalar", [])
+    scalar_names = payload.get("scalar", [])
+    assert isinstance(scalar_names, list)
+    scalar_strings = [name for name in scalar_names if isinstance(name, str)]
+    assert "stable_hash64" in scalar_strings
     assert "pycapsule_udfs" in payload

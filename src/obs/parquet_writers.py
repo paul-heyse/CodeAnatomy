@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from arrowdsl.io.delta import DeltaWriteOptions, write_dataset_delta
+from storage.deltalake import DeltaWriteOptions, write_dataset_delta
 
 
 def write_obs_dataset(

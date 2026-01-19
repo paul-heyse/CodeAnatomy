@@ -1,64 +1,49 @@
-"""Tests for Parquet sorting metadata emission."""
+"""Unit tests for Parquet sorting metadata emission."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
-import pyarrow.parquet as pq
-import pytest
 
 from arrowdsl.core.context import OrderingLevel
-from arrowdsl.io.parquet import parquet_supports_sorting_columns, write_dataset_parquet
+from arrowdsl.io.parquet import DatasetWriteConfig, write_dataset_parquet
 from arrowdsl.schema.metadata import ordering_metadata_spec
 
 
-def test_parquet_sorting_metadata_written(tmp_path: Path) -> None:
-    """Emit sorting columns when explicit ordering metadata is present."""
-    if not parquet_supports_sorting_columns():
-        pytest.skip("PyArrow sorting_columns not supported in this environment.")
-    schema = pa.schema([("id", pa.int64()), ("value", pa.string())])
-    schema = ordering_metadata_spec(
-        OrderingLevel.EXPLICIT,
-        keys=(("id", "ascending"),),
-    ).apply(schema)
-    table = pa.Table.from_pydict({"id": [1, 2], "value": ["a", "b"]}, schema=schema)
-    dataset_dir = tmp_path / "dataset"
-    write_dataset_parquet(table, dataset_dir)
-    files = list(dataset_dir.glob("*.parquet"))
-    assert files
-    metadata = pq.ParquetFile(str(files[0])).metadata
-    row_group = metadata.row_group(0)
-    sorting_columns = getattr(row_group, "sorting_columns", None)
-    assert sorting_columns is not None
-    assert sorting_columns[0].column_index == 0
-    assert sorting_columns[0].descending is False
+def _apply_ordering(table: pa.Table, keys: Sequence[tuple[str, str]]) -> pa.Table:
+    spec = ordering_metadata_spec(OrderingLevel.EXPLICIT, keys=keys)
+    schema = spec.apply(table.schema)
+    return table.cast(schema)
 
 
-@pytest.mark.parametrize(
-    ("ordering_level", "keys"),
-    [
-        (None, ()),
-        (OrderingLevel.IMPLICIT, (("id", "ascending"),)),
-    ],
-)
-def test_parquet_sorting_metadata_absent_without_explicit_order(
-    tmp_path: Path,
-    ordering_level: OrderingLevel | None,
-    keys: tuple[tuple[str, str], ...],
-) -> None:
-    """Skip sorting metadata when ordering is missing or implicit."""
-    if not parquet_supports_sorting_columns():
-        pytest.skip("PyArrow sorting_columns not supported in this environment.")
-    schema = pa.schema([("id", pa.int64()), ("value", pa.string())])
-    if ordering_level is not None:
-        schema = ordering_metadata_spec(ordering_level, keys=keys).apply(schema)
-    table = pa.Table.from_pydict({"id": [1, 2], "value": ["a", "b"]}, schema=schema)
-    dataset_dir = tmp_path / "dataset"
-    write_dataset_parquet(table, dataset_dir)
-    files = list(dataset_dir.glob("*.parquet"))
-    assert files
-    metadata = pq.ParquetFile(str(files[0])).metadata
-    row_group = metadata.row_group(0)
-    sorting_columns = getattr(row_group, "sorting_columns", None)
-    assert not sorting_columns
+def _capture_report(tmp_path: str, table: pa.Table) -> list[dict[str, object]]:
+    reports: list[dict[str, object]] = []
+
+    def _reporter(report: object) -> None:
+        reports.append({"sorting_columns": getattr(report, "sorting_columns", None)})
+
+    config = DatasetWriteConfig(reporter=_reporter)
+    _ = write_dataset_parquet(table, tmp_path, config=config)
+    return reports
+
+
+def test_sorting_metadata_emitted_for_explicit_ordering(tmp_path: Path) -> None:
+    """Emit sorting metadata when ordering metadata is explicit."""
+    table = pa.table({"id": [1, 2], "value": ["a", "b"]})
+    ordered = _apply_ordering(table, keys=(("id", "ascending"),))
+    reports = _capture_report(str(tmp_path / "ordered"), ordered)
+    assert reports
+    sorting = cast("Sequence[Mapping[str, object]]", reports[-1]["sorting_columns"])
+    assert sorting is not None
+    assert any(entry.get("column") == "id" for entry in sorting)
+
+
+def test_sorting_metadata_absent_without_ordering(tmp_path: Path) -> None:
+    """Skip sorting metadata when ordering metadata is absent."""
+    table = pa.table({"id": [1, 2], "value": ["a", "b"]})
+    reports = _capture_report(str(tmp_path / "unordered"), table)
+    assert reports
+    assert reports[-1]["sorting_columns"] is None

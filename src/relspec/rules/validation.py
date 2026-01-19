@@ -6,7 +6,7 @@ import base64
 import importlib
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol, cast
 
 import pyarrow as pa
@@ -19,6 +19,7 @@ from sqlglot import ErrorLevel
 from arrowdsl.compute.kernels import kernel_capability
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
+from arrowdsl.schema.build import iter_rows_from_table
 from datafusion_engine.runtime import snapshot_plans
 from engine.session import EngineSession
 from extract.registry_bundles import bundle
@@ -34,6 +35,7 @@ from ibis_engine.params_bridge import list_param_names_from_rel_ops
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 from ibis_engine.sources import SourceToIbisOptions, table_to_ibis
+from ibis_engine.sql_bridge import decompile_expr
 from relspec.list_filter_gate import (
     ListFilterGateError,
     ListFilterGatePolicy,
@@ -75,7 +77,12 @@ from sqlglot_tools.bridge import (
     sqlglot_diagnostics,
 )
 from sqlglot_tools.lineage import TableRef, extract_table_refs
-from sqlglot_tools.optimizer import SqlGlotQualificationError, sanitize_templated_sql
+from sqlglot_tools.optimizer import (
+    SqlGlotQualificationError,
+    default_sqlglot_policy,
+    sanitize_templated_sql,
+    sqlglot_sql,
+)
 
 
 def _rel_plan_for_rule(rule: RelationshipRule) -> object:
@@ -287,6 +294,9 @@ class _RuleSqlGlotSource:
     expr: IbisTable
     input_names: tuple[str, ...]
     plan_signature: str | None
+
+
+RuleSqlGlotSource = _RuleSqlGlotSource
 
 
 @dataclass(frozen=True)
@@ -629,6 +639,7 @@ def _build_rule_diagnostics(
         schema_map=rule_ctx.schema_map,
         ctx=context.ctx,
     )
+    extra_metadata.update(_rule_ir_metadata(rule_ctx, context=context))
     metadata = _final_sqlglot_metadata(
         extra_metadata,
         param_names=param_names,
@@ -849,6 +860,53 @@ def _final_sqlglot_metadata(
     if non_param_tables:
         metadata["dataset_tables"] = ",".join(non_param_tables)
     return metadata
+
+
+def _rule_ir_metadata(
+    rule_ctx: SqlGlotRuleContext,
+    *,
+    context: SqlGlotDiagnosticsContext,
+) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    try:
+        metadata["ibis_decompile"] = decompile_expr(rule_ctx.source.expr)
+    except (TypeError, ValueError):
+        return metadata
+    try:
+        checkpoint = compile_checkpoint(
+            rule_ctx.source.expr,
+            backend=context.backend,
+            schema_map=rule_ctx.schema_map,
+            dialect="datafusion",
+        )
+    except (TypeError, ValueError):
+        return metadata
+    policy = default_sqlglot_policy()
+    policy = replace(policy, read_dialect="datafusion", write_dialect="datafusion")
+    metadata["ibis_sql"] = checkpoint.sql
+    metadata["ibis_sql_pretty"] = sqlglot_sql(
+        checkpoint.normalized,
+        policy=policy,
+        pretty=True,
+    )
+    metadata["sqlglot_plan_hash"] = checkpoint.plan_hash
+    metadata["sqlglot_policy_hash"] = checkpoint.policy_hash
+    return metadata
+
+
+def rule_ir_metadata(
+    rule_ctx: SqlGlotRuleContext,
+    *,
+    context: SqlGlotDiagnosticsContext,
+) -> dict[str, str]:
+    """Return IR metadata for a SQLGlot rule context.
+
+    Returns
+    -------
+    dict[str, str]
+        Rule IR metadata payload.
+    """
+    return _rule_ir_metadata(rule_ctx, context=context)
 
 
 def rule_dependency_reports(
@@ -1114,7 +1172,7 @@ def _settings_snapshot_payload(table: pa.Table) -> str:
         JSON string payload.
     """
     rows: list[dict[str, str]] = []
-    for row in table.to_pylist():
+    for row in iter_rows_from_table(table):
         name = row.get("name")
         value = row.get("value")
         if name is None or value is None:
@@ -1485,7 +1543,9 @@ def _sqlglot_failure_diagnostic(
 
 
 __all__ = [
+    "RuleSqlGlotSource",
     "rule_dependency_reports",
+    "rule_ir_metadata",
     "rule_sqlglot_diagnostics",
     "validate_rule_definitions",
     "validate_sqlglot_columns",

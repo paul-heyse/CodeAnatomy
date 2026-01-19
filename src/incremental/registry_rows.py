@@ -5,20 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from arrowdsl.core import interop
+from registry_common.registry_rows import ContractRow
 from schema_spec.specs import ArrowFieldSpec
-from schema_spec.system import DedupeSpecSpec, SortKeySpec, TableSpecConstraints
+from schema_spec.system import TableSpecConstraints
 
 SCHEMA_VERSION = 1
-
-
-@dataclass(frozen=True)
-class ContractRow:
-    """Row configuration for a dataset contract."""
-
-    dedupe: DedupeSpecSpec | None = None
-    canonical_sort: tuple[SortKeySpec, ...] = ()
-    constraints: tuple[str, ...] = ()
-    version: int | None = None
 
 
 @dataclass(frozen=True)

@@ -14,14 +14,14 @@ from deltalake.exceptions import CommitFailedError, DeltaError
 
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
-from arrowdsl.io.delta_config import (
+from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
+from arrowdsl.schema.schema import SchemaTransform
+from storage.deltalake.config import (
     DeltaSchemaPolicy,
     DeltaWritePolicy,
     delta_schema_configuration,
     delta_write_configuration,
 )
-from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
-from arrowdsl.schema.schema import SchemaTransform
 
 type DeltaWriteMode = Literal["error", "append", "overwrite", "ignore"]
 type DeltaSchemaMode = Literal["merge", "overwrite"]

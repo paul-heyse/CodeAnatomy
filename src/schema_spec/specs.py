@@ -234,19 +234,7 @@ class ExternalTableConfig:
     partitioned_by: Sequence[str] | None = None
     file_sort_order: Sequence[str] | None = None
     compression: str | None = None
-
-
-@dataclass(frozen=True)
-class DataFusionWritePolicy:
-    """Configuration for DataFusion write options."""
-
-    partition_by: Sequence[str] = ()
-    single_file_output: bool = False
-    sort_by: Sequence[str] = ()
-    compression: str | None = None
-    statistics_enabled: str | None = None
-    max_row_group_size: int | None = None
-    dictionary_enabled: bool | None = None
+    unbounded: bool = False
 
 
 @dataclass(frozen=True)
@@ -387,7 +375,10 @@ class TableSchemaSpec:
         dialect_name = config.dialect or "datafusion"
         column_defs = self.to_sqlglot_column_defs(dialect=dialect_name)
         columns_sql = ", ".join(col.sql(dialect=dialect_name) for col in column_defs)
-        parts = [f"CREATE EXTERNAL TABLE {name} ({columns_sql})"]
+        create_keyword = (
+            "CREATE UNBOUNDED EXTERNAL TABLE" if config.unbounded else "CREATE EXTERNAL TABLE"
+        )
+        parts = [f"{create_keyword} {name} ({columns_sql})"]
         parts.append(f"STORED AS {config.file_format.upper()}")
         if config.compression:
             parts.append(f"COMPRESSION TYPE {config.compression}")

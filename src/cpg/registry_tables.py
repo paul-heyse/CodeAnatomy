@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
+from arrowdsl.schema.build import table_from_rows
 from cpg.kinds_ultimate import (
     EDGE_DERIVATIONS,
     EDGE_KIND_CONTRACTS,
@@ -71,7 +72,7 @@ def node_contract_table() -> pa.Table:
         }
         for kind, contract in NODE_KIND_CONTRACTS.items()
     ]
-    return pa.Table.from_pylist(rows, schema=NODE_CONTRACT_SCHEMA)
+    return table_from_rows(NODE_CONTRACT_SCHEMA, rows)
 
 
 def edge_contract_table() -> pa.Table:
@@ -93,7 +94,7 @@ def edge_contract_table() -> pa.Table:
         }
         for kind, contract in EDGE_KIND_CONTRACTS.items()
     ]
-    return pa.Table.from_pylist(rows, schema=EDGE_CONTRACT_SCHEMA)
+    return table_from_rows(EDGE_CONTRACT_SCHEMA, rows)
 
 
 def derivation_table() -> pa.Table:
@@ -137,7 +138,7 @@ def derivation_table() -> pa.Table:
         for kind, derivations in EDGE_DERIVATIONS.items()
         for spec in derivations
     )
-    return pa.Table.from_pylist(rows, schema=DERIVATION_SCHEMA)
+    return table_from_rows(DERIVATION_SCHEMA, rows)
 
 
 __all__ = [

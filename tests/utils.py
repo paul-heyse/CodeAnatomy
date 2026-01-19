@@ -40,7 +40,8 @@ def table_digest(
         table = table.sort_by(list(sort_keys))
     hasher = hashlib.sha256()
     for column in table.columns:
-        hasher.update(repr(column.to_pylist()).encode("utf-8"))
+        values = [_as_py_value(value) for value in column]
+        hasher.update(repr(values).encode("utf-8"))
     return hasher.hexdigest()
 
 
@@ -48,7 +49,23 @@ def _ensure_table(value: TableLike | RecordBatchReaderLike) -> pa.Table:
     table = value.read_all() if isinstance(value, RecordBatchReaderLike) else value
     if isinstance(table, pa.Table):
         return table
-    return pa.Table.from_pylist(table.to_pylist())
+    return pa.table(table.to_pydict())
+
+
+def _as_py_value(value: object) -> object:
+    as_py = getattr(value, "as_py", None)
+    return as_py() if callable(as_py) else value
+
+
+def values_as_list(values: pa.Array | pa.ChunkedArray) -> list[object]:
+    """Return Python values from an Arrow array or chunked array.
+
+    Returns
+    -------
+    list[object]
+        Python-native values from the array.
+    """
+    return [_as_py_value(value) for value in values]
 
 
 def _validate_sort_keys(column_names: Sequence[str], sort_keys: Sequence[SortKey]) -> None:

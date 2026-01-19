@@ -34,7 +34,7 @@ incremental_dataset_schema = cast(
 )
 read_table_delta = cast(
     "Callable[[str], pa.Table]",
-    import_module("arrowdsl.io.delta").read_table_delta,
+    import_module("storage.deltalake").read_table_delta,
 )
 
 
@@ -116,13 +116,11 @@ def _parse_required_non_null(metadata: Mapping[str, str]) -> list[str]:
 
 
 def _iter_py_values(values: pa.Array | pa.ChunkedArray) -> Iterable[object]:
-    if isinstance(values, pa.ChunkedArray):
-        for chunk in values.chunks:
-            for value in chunk.to_pylist():
-                yield value
-        return
-    for value in values.to_pylist():
-        yield value
+    for value in values:
+        if isinstance(value, pa.Scalar):
+            yield value.as_py()
+        else:
+            yield value
 
 
 def _non_null_set(values: pa.Array | pa.ChunkedArray) -> set[object]:

@@ -11,12 +11,8 @@ from typing import Protocol, cast
 from ibis.backends import BaseBackend
 from ibis.expr.types import Value
 
-from arrowdsl.core.context import (
-    DeterminismTier,
-    ExecutionContext,
-    OrderingLevel,
-    execution_context_factory,
-)
+from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
+from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.core.schema_constants import PROVENANCE_COLS
 from arrowdsl.finalize.finalize import Contract, FinalizeOptions, FinalizeResult, finalize

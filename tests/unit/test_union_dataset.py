@@ -8,6 +8,7 @@ import pytest
 
 from arrowdsl.plan.dataset_wrappers import OneShotDataset, unwrap_dataset
 from arrowdsl.plan.source_normalize import normalize_dataset_source
+from tests.utils import values_as_list
 
 EXPECTED_ROW_COUNT = 3
 
@@ -27,8 +28,8 @@ def test_union_dataset_aligns_schema_by_name() -> None:
     right = ds.dataset(pa.table({"b": ["y"], "a": [2]}))
     unioned = unwrap_dataset(normalize_dataset_source([left, right]))
     table = unioned.scanner().to_table()
-    assert table.column("a").to_pylist() == [1, 2]
-    assert table.column("b").to_pylist() == ["x", "y"]
+    assert values_as_list(table.column("a")) == [1, 2]
+    assert values_as_list(table.column("b")) == ["x", "y"]
 
 
 def test_one_shot_dataset_blocks_rescan() -> None:

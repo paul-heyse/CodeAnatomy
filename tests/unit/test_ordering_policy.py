@@ -13,6 +13,7 @@ from arrowdsl.core.context import (
 )
 from arrowdsl.plan.query import QuerySpec
 from arrowdsl.schema.metadata import ordering_from_schema
+from tests.utils import values_as_list
 
 
 def _scan_plan(table: pa.Table, *, ctx: ExecutionContext) -> pa.Table:
@@ -30,7 +31,7 @@ def test_stable_tier_implicit_ordering() -> None:
     result = _scan_plan(table, ctx=ctx)
     ordering = ordering_from_schema(result.schema)
     assert ordering.level == OrderingLevel.IMPLICIT
-    assert result.column("entity_id").to_pylist() == [2, 1]
+    assert values_as_list(result.column("entity_id")) == [2, 1]
 
 
 def test_canonical_tier_explicit_ordering() -> None:
@@ -41,4 +42,4 @@ def test_canonical_tier_explicit_ordering() -> None:
     result = _scan_plan(table, ctx=ctx)
     ordering = ordering_from_schema(result.schema)
     assert ordering.level == OrderingLevel.EXPLICIT
-    assert result.column("entity_id").to_pylist() == [1, 2]
+    assert values_as_list(result.column("entity_id")) == [1, 2]

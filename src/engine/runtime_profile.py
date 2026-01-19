@@ -8,12 +8,8 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
-from arrowdsl.core.context import (
-    DeterminismTier,
-    RuntimeProfile,
-    ScanProfile,
-    runtime_profile_factory,
-)
+from arrowdsl.core.context import RuntimeProfile, ScanProfile, runtime_profile_factory
+from arrowdsl.core.determinism import DeterminismTier
 from engine.function_registry import default_function_registry
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 

@@ -222,6 +222,8 @@ class ManifestData:
     datafusion_feature_gates: Mapping[str, str] | None = None
     datafusion_metrics: Mapping[str, object] | None = None
     datafusion_traces: Mapping[str, object] | None = None
+    datafusion_function_catalog: Sequence[Mapping[str, object]] | None = None
+    datafusion_function_catalog_hash: str | None = None
     runtime_profile_snapshot: Mapping[str, object] | None = None
     runtime_profile_hash: str | None = None
     sqlglot_policy_snapshot: Mapping[str, object] | None = None
@@ -935,6 +937,14 @@ def _manifest_notes(data: ManifestData) -> JsonDict:
         "datafusion_feature_gates": _optional_note(data.datafusion_feature_gates, dict),
         "datafusion_metrics": _optional_note(data.datafusion_metrics, _to_json_value),
         "datafusion_traces": _optional_note(data.datafusion_traces, _to_json_value),
+        "datafusion_function_catalog": _optional_note(
+            data.datafusion_function_catalog,
+            _json_dict_list,
+        ),
+        "datafusion_function_catalog_hash": _optional_note(
+            data.datafusion_function_catalog_hash,
+            _to_json_value,
+        ),
         "runtime_profile_snapshot": _optional_note(
             data.runtime_profile_snapshot,
             _to_json_value,

@@ -31,7 +31,11 @@ from arrowdsl.core.interop import (
 )
 from arrowdsl.ir.expr import expr_from_expr_ir
 from arrowdsl.json_factory import JsonPolicy, dumps_text
-from arrowdsl.schema.build import dictionary_array_from_indices, union_array_from_values
+from arrowdsl.schema.build import (
+    dictionary_array_from_indices,
+    rows_from_table,
+    union_array_from_values,
+)
 from arrowdsl.schema.dictionary import normalize_dictionaries
 from arrowdsl.spec.codec import (
     decode_json_text,
@@ -78,6 +82,19 @@ def _decode_options_text(payload: str | None) -> bytes | None:
     if isinstance(decoded, bytes):
         return decoded
     msg = "ExprIR options JSON must decode to bytes."
+    raise TypeError(msg)
+
+
+def _coerce_int(value: object, *, label: str) -> int:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, (str, bytes, bytearray, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            msg = f"{label} must be an int."
+            raise TypeError(msg) from exc
+    msg = f"{label} must be an int."
     raise TypeError(msg)
 
 
@@ -433,30 +450,52 @@ def expr_ir_from_table(
     -------
     tuple[ExprIR, ...]
         Reconstructed expression IR roots.
-
-    Raises
-    ------
-    ValueError
-        Raised when duplicate expr_id entries are found.
     """
-    rows = table.to_pylist()
+    rows = rows_from_table(table)
+    nodes_by_id = _expr_nodes_by_id(rows)
+    root_ids = _expr_root_ids(rows, nodes_by_id, root_ids)
+    return _build_expr_ir(nodes_by_id, root_ids)
+
+
+def _expr_nodes_by_id(rows: Sequence[Mapping[str, object]]) -> dict[int, dict[str, Any]]:
     nodes_by_id: dict[int, dict[str, Any]] = {}
     for row in rows:
-        expr_id = int(row["expr_id"])
+        expr_id_value = row.get("expr_id")
+        if not isinstance(expr_id_value, int):
+            msg = "ExprIR row missing expr_id."
+            raise TypeError(msg)
+        expr_id = expr_id_value
         if expr_id in nodes_by_id:
             msg = f"Duplicate expr_id in ExprIR table: {expr_id}."
             raise ValueError(msg)
-        nodes_by_id[expr_id] = row
+        nodes_by_id[expr_id] = dict(row)
+    return nodes_by_id
 
-    if root_ids is None:
-        referenced: set[int] = set()
-        for row in rows:
-            for arg in row.get("args") or ():
-                referenced.add(int(arg))
-        root_ids = tuple(sorted(set(nodes_by_id) - referenced))
-    else:
-        root_ids = tuple(int(expr_id) for expr_id in root_ids)
 
+def _expr_root_ids(
+    rows: Sequence[Mapping[str, object]],
+    nodes_by_id: Mapping[int, Mapping[str, object]],
+    root_ids: Sequence[int] | None,
+) -> tuple[int, ...]:
+    if root_ids is not None:
+        return tuple(int(expr_id) for expr_id in root_ids)
+    referenced: set[int] = set()
+    for row in rows:
+        for arg in _expr_args_payload(row.get("args")):
+            referenced.add(_coerce_int(arg, label="arg"))
+    return tuple(sorted(set(nodes_by_id) - referenced))
+
+
+def _expr_args_payload(payload: object) -> Sequence[object]:
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray)):
+        return payload
+    return ()
+
+
+def _build_expr_ir(
+    nodes_by_id: Mapping[int, Mapping[str, object]],
+    root_ids: Sequence[int],
+) -> tuple[ExprIR, ...]:
     cache: dict[int, ExprIR] = {}
 
     def _build(expr_id: int) -> ExprIR:
@@ -466,11 +505,20 @@ def expr_ir_from_table(
         if row is None:
             msg = f"ExprIR table missing expr_id: {expr_id}."
             raise ValueError(msg)
-        args = tuple(_build(int(arg)) for arg in row.get("args") or ())
+        args = tuple(
+            _build(_coerce_int(arg, label="arg")) for arg in _expr_args_payload(row.get("args"))
+        )
         name = row.get("name")
         name_value = str(name) if name is not None else None
         value = decode_scalar_union(row.get("value_union"))
-        options = _decode_options_text(row.get("options_json"))
+        options_payload = row.get("options_json")
+        if options_payload is None:
+            options = None
+        elif isinstance(options_payload, str):
+            options = _decode_options_text(options_payload)
+        else:
+            msg = "ExprIR options_json must be a string."
+            raise TypeError(msg)
         expr = ExprIR(
             op=str(row.get("op", "")),
             name=name_value,

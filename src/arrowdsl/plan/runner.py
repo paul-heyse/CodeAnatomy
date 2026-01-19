@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING, Protocol, TypeGuard, cast
 
 import pyarrow as pa
 
-from arrowdsl.core.context import DeterminismTier, ExecutionContext
+from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.plan.ordering_policy import apply_canonical_sort, ordering_metadata_for_plan
 from arrowdsl.plan.plan import Plan, PlanRunResult, execute_plan

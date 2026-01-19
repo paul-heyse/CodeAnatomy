@@ -26,7 +26,7 @@ from arrowdsl.spec.infra import (
     SCALAR_UNION_TYPE,
     SORT_KEY_STRUCT,
 )
-from arrowdsl.spec.io import table_from_rows
+from arrowdsl.spec.io import rows_from_table, table_from_rows
 from cpg.spec_tables import EDGE_EMIT_STRUCT
 from extract.spec_tables import (
     DERIVED_ID_STRUCT,
@@ -386,7 +386,7 @@ def rule_definitions_from_table(table: pa.Table) -> tuple[RuleDefinition, ...]:
         Rule definitions decoded from the table.
     """
     definitions: list[RuleDefinition] = []
-    for row in table.to_pylist():
+    for row in rows_from_table(table):
         domain = _parse_domain(row.get("domain"))
         execution_mode = row.get("execution_mode")
         priority = row.get("priority")

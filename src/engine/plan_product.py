@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from arrowdsl.core.context import DeterminismTier
+from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from engine.plan_policy import WriterStrategy
 

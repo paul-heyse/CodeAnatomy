@@ -243,16 +243,16 @@ def table_from_rows(
 
 
 def iter_rows_from_table(table: pa.Table) -> Iterator[Mapping[str, object]]:
-    """Yield row dictionaries from a table without using to_pylist.
+    """Yield row dictionaries from a table without row-wise list materialization.
 
-    Returns
-    -------
-    Iterator[Mapping[str, object]]
-        Iterator over row mappings.
+    Yields
+    ------
+    Mapping[str, object]
+        Row mappings from the table.
     """
     struct_array = table.to_struct_array()
     names = table.column_names
-    null_row = {name: None for name in names}
+    null_row = dict.fromkeys(names)
     for item in struct_array:
         row = item.as_py()
         if row is None:
@@ -262,7 +262,7 @@ def iter_rows_from_table(table: pa.Table) -> Iterator[Mapping[str, object]]:
 
 
 def rows_from_table(table: pa.Table) -> list[dict[str, object]]:
-    """Return row dictionaries from a table without using to_pylist.
+    """Return row dictionaries from a table without row-wise list materialization.
 
     Returns
     -------
@@ -364,6 +364,7 @@ __all__ = [
     "dictionary_array_from_indices",
     "dictionary_array_from_values",
     "empty_table",
+    "iter_rows_from_table",
     "list_array_from_lists",
     "list_view_array_from_lists",
     "list_view_type",
@@ -374,7 +375,6 @@ __all__ = [
     "pick_first",
     "resolve_float_col",
     "resolve_string_col",
-    "iter_rows_from_table",
     "rows_from_table",
     "rows_to_table",
     "set_or_append_column",

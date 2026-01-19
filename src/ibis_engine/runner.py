@@ -133,6 +133,8 @@ class IbisCachePolicy:
     enabled: bool = False
     reason: str | None = None
     writer_strategy: str | None = None
+    param_mode: str | None = None
+    param_signature: str | None = None
     reporter: Callable[[Mapping[str, object]], None] | None = None
 
 
@@ -145,6 +147,8 @@ def _record_cache_event(policy: IbisCachePolicy, *, mode: str) -> None:
             "enabled": policy.enabled,
             "reason": policy.reason,
             "writer_strategy": policy.writer_strategy,
+            "param_mode": policy.param_mode,
+            "param_signature": policy.param_signature,
         }
     )
 
@@ -176,7 +180,7 @@ def materialize_plan(
                 execution=execution.datafusion,
                 params=execution.params,
             )
-    params = execution.params if execution is not None else None
+    params = _validate_plan_params(execution.params) if execution is not None else None
     return plan.to_table(params=params)
 
 
@@ -277,7 +281,39 @@ def stream_plan(
             params=effective_params,
             execution=execution.datafusion,
         )
-    return plan.to_reader(batch_size=batch_size, params=effective_params)
+    validated_params = _validate_plan_params(effective_params)
+    return plan.to_reader(batch_size=batch_size, params=validated_params)
+
+
+def _validate_plan_params(
+    params: Mapping[Value, object] | Mapping[str, object] | None,
+) -> Mapping[Value, object] | None:
+    if params is None:
+        return None
+    if not params:
+        return {}
+    if all(isinstance(key, Value) for key in params):
+        return cast("Mapping[Value, object]", params)
+    msg = "Plan execution expects parameter bindings keyed by Ibis values."
+    raise ValueError(msg)
+
+
+def validate_plan_params(
+    params: Mapping[Value, object] | Mapping[str, object] | None,
+) -> Mapping[Value, object] | None:
+    """Return validated parameter bindings for plan execution.
+
+    Parameters
+    ----------
+    params:
+        Parameter bindings keyed by Ibis values or names.
+
+    Returns
+    -------
+    Mapping[Value, object] | None
+        Validated parameter bindings or None.
+    """
+    return _validate_plan_params(params)
 
 
 async def async_stream_plan(
@@ -321,7 +357,8 @@ async def async_stream_plan(
         async for batch in datafusion_to_async_batches(df, ordering=plan.ordering):
             yield batch
         return
-    reader = plan.to_reader(batch_size=batch_size, params=effective_params)
+    validated_params = _validate_plan_params(effective_params)
+    reader = plan.to_reader(batch_size=batch_size, params=validated_params)
     for batch in reader:
         yield batch
 

@@ -10,6 +10,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from arrowdsl.plan.source_normalize import DatasetSourceOptions, normalize_dataset_source
+from tests.utils import values_as_list
 
 
 def test_filename_partitioning_requires_schema(tmp_path: Path) -> None:
@@ -56,4 +57,4 @@ def test_filename_partitioning_extracts_keys(tmp_path: Path) -> None:
         ),
     )
     output = dataset.scanner().to_table()
-    assert output.column("run_id").to_pylist() == [42]
+    assert values_as_list(output.column("run_id")) == [42]

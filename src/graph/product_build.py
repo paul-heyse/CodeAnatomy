@@ -12,7 +12,8 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Literal, cast
 
-from arrowdsl.core.context import DeterminismTier, ExecutionContext
+from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.determinism import DeterminismTier
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from cpg.schemas import SCHEMA_VERSION
 from engine.plan_policy import WriterStrategy
@@ -20,6 +21,7 @@ from hamilton_pipeline import PipelineExecutionOptions, execute_pipeline
 from hamilton_pipeline.execution import ImpactStrategy
 from hamilton_pipeline.pipeline_types import ScipIdentityOverrides, ScipIndexConfig
 from incremental.types import IncrementalConfig
+from storage.deltalake import write_registry_delta
 
 GraphProduct = Literal["cpg"]
 
@@ -116,6 +118,8 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
         Typed outputs for the requested graph product.
     """
     repo_root_path = ensure_path(request.repo_root).resolve()
+    registry_dir = _registry_output_dir(repo_root_path, request.output_dir)
+    write_registry_delta(str(registry_dir))
 
     overrides: dict[str, object] = dict(request.overrides or {})
     if request.runtime_profile_name is not None:
@@ -167,6 +171,33 @@ def _outputs_for_request(request: GraphProductBuildRequest) -> Sequence[str]:
     if request.include_run_bundle:
         outputs.append("write_run_bundle_dir")
     return outputs
+
+
+def _resolve_output_dir(repo_root: Path, output_dir: PathLike | None) -> Path:
+    """Resolve the output directory for registry exports.
+
+    Returns
+    -------
+    Path
+        Absolute output directory path.
+    """
+    if output_dir is None:
+        return repo_root / "build"
+    if isinstance(output_dir, str) and not output_dir:
+        return repo_root / "build"
+    resolved = ensure_path(output_dir)
+    return resolved if resolved.is_absolute() else repo_root / resolved
+
+
+def _registry_output_dir(repo_root: Path, output_dir: PathLike | None) -> Path:
+    """Return the registry export directory path.
+
+    Returns
+    -------
+    Path
+        Registry output directory path.
+    """
+    return _resolve_output_dir(repo_root, output_dir) / "registry"
 
 
 def _require(outputs: Mapping[str, JsonDict | None], key: str) -> JsonDict:

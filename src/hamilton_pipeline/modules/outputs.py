@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -16,19 +17,6 @@ from arrowdsl.compute.registry import registry_snapshot as kernel_registry_snaps
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
-from arrowdsl.io.delta import (
-    DeltaWriteOptions,
-    DeltaWriteResult,
-    apply_delta_write_policies,
-    coerce_delta_table,
-    delta_table_version,
-    read_table_delta,
-    write_dataset_delta,
-    write_finalize_result_delta,
-    write_named_datasets_delta,
-    write_table_delta,
-)
-from arrowdsl.io.delta_config import DeltaSchemaPolicy, DeltaWritePolicy
 from arrowdsl.io.ipc import write_table_ipc_file
 from arrowdsl.json_factory import json_default
 from arrowdsl.plan.metrics import (
@@ -42,6 +30,7 @@ from arrowdsl.plan.query import DatasetDiscoveryOptions, DatasetSourceOptions, o
 from arrowdsl.plan.scan_builder import ScanBuildSpec
 from arrowdsl.plan.scan_telemetry import ScanTelemetry, ScanTelemetryOptions, fragment_telemetry
 from arrowdsl.plan.schema_utils import plan_schema
+from arrowdsl.schema.build import table_from_rows
 from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.schema import EncodingPolicy
 from arrowdsl.schema.serialization import schema_fingerprint
@@ -113,6 +102,19 @@ from schema_spec.system import (
     make_dataset_spec,
 )
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
+from storage.deltalake import (
+    DeltaWriteOptions,
+    DeltaWriteResult,
+    apply_delta_write_policies,
+    coerce_delta_table,
+    delta_table_version,
+    read_table_delta,
+    write_dataset_delta,
+    write_finalize_result_delta,
+    write_named_datasets_delta,
+    write_table_delta,
+)
+from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 # -----------------------
 # Public CPG outputs
@@ -422,6 +424,36 @@ def _datafusion_catalog_snapshot(
     return snapshot or None
 
 
+def _datafusion_function_catalog_snapshot(
+    ctx: ExecutionContext,
+) -> tuple[list[dict[str, object]] | None, str | None]:
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        return None, None
+    session = profile.session_context()
+    snapshot = profile.function_catalog_snapshot(
+        session,
+        include_routines=profile.enable_information_schema,
+    )
+    if not snapshot:
+        return None, None
+    encoded = json.dumps(
+        snapshot,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        default=json_default,
+    )
+    return snapshot, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _datafusion_write_policy_snapshot(ctx: ExecutionContext) -> Mapping[str, object] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.write_policy is None:
+        return None
+    return profile.write_policy.payload()
+
+
 def _json_mapping(payload: Mapping[str, object] | None) -> JsonDict | None:
     if payload is None:
         return None
@@ -608,6 +640,32 @@ def _datafusion_dml_statements(
     return statements or None
 
 
+def _datafusion_function_factory(
+    ctx: ExecutionContext,
+) -> Sequence[Mapping[str, object]] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return None
+    entries = profile.diagnostics_sink.artifacts_snapshot().get(
+        "datafusion_function_factory_v1",
+        [],
+    )
+    return entries or None
+
+
+def _datafusion_expr_planners(
+    ctx: ExecutionContext,
+) -> Sequence[Mapping[str, object]] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return None
+    entries = profile.diagnostics_sink.artifacts_snapshot().get(
+        "datafusion_expr_planners_v1",
+        [],
+    )
+    return entries or None
+
+
 def _datafusion_listing_tables(
     ctx: ExecutionContext,
 ) -> Sequence[Mapping[str, object]] | None:
@@ -619,6 +677,19 @@ def _datafusion_listing_tables(
         [],
     )
     return tables or None
+
+
+def _datafusion_listing_refresh_events(
+    ctx: ExecutionContext,
+) -> Sequence[Mapping[str, object]] | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return None
+    events = profile.diagnostics_sink.artifacts_snapshot().get(
+        "datafusion_listing_refresh_v1",
+        [],
+    )
+    return events or None
 
 
 def _datafusion_delta_tables(
@@ -755,7 +826,7 @@ def _datafusion_plan_artifacts_table(
             }
         )
     schema = incremental_dataset_schema("datafusion_plan_artifacts_v1")
-    return pa.Table.from_pylist(rows, schema=schema)
+    return table_from_rows(schema, rows)
 
 
 def _datafusion_plan_cache_entries(
@@ -2099,9 +2170,7 @@ def relspec_scan_telemetry(
         scanner = scan_spec.scanner()
         scan_columns = scan_spec.scan_columns()
         scan_column_names = (
-            list(scan_columns.keys())
-            if isinstance(scan_columns, Mapping)
-            else list(scan_columns)
+            list(scan_columns.keys()) if isinstance(scan_columns, Mapping) else list(scan_columns)
         )
         required_columns = (
             list(scan_spec.required_columns)
@@ -2386,6 +2455,8 @@ def manifest_data(
         datafusion_feature_gates=runtime_artifacts.datafusion_feature_gates,
         datafusion_metrics=runtime_artifacts.datafusion_metrics,
         datafusion_traces=runtime_artifacts.datafusion_traces,
+        datafusion_function_catalog=runtime_artifacts.datafusion_function_catalog,
+        datafusion_function_catalog_hash=runtime_artifacts.datafusion_function_catalog_hash,
         runtime_profile_snapshot=runtime_artifacts.runtime_snapshot.payload(),
         runtime_profile_hash=runtime_artifacts.runtime_snapshot.profile_hash,
         sqlglot_policy_snapshot=sqlglot_policy_snapshot().payload(),
@@ -2445,6 +2516,8 @@ class _ManifestRuntimeArtifacts:
     datafusion_feature_gates: dict[str, str] | None
     datafusion_metrics: Mapping[str, object] | None
     datafusion_traces: Mapping[str, object] | None
+    datafusion_function_catalog: list[dict[str, object]] | None
+    datafusion_function_catalog_hash: str | None
     runtime_snapshot: RuntimeProfileSnapshot
 
 
@@ -2461,6 +2534,7 @@ def _manifest_runtime_artifacts(ctx: ExecutionContext) -> _ManifestRuntimeArtifa
     datafusion_settings_hash = _datafusion_settings_hash(ctx)
     datafusion_feature_gates = _datafusion_feature_gates(ctx)
     datafusion_metrics, datafusion_traces = _datafusion_runtime_artifacts(ctx)
+    function_catalog, function_catalog_hash = _datafusion_function_catalog_snapshot(ctx)
     runtime_snapshot = runtime_profile_snapshot(ctx.runtime)
     return _ManifestRuntimeArtifacts(
         datafusion_settings=datafusion_settings,
@@ -2468,6 +2542,8 @@ def _manifest_runtime_artifacts(ctx: ExecutionContext) -> _ManifestRuntimeArtifa
         datafusion_feature_gates=datafusion_feature_gates,
         datafusion_metrics=datafusion_metrics,
         datafusion_traces=datafusion_traces,
+        datafusion_function_catalog=function_catalog,
+        datafusion_function_catalog_hash=function_catalog_hash,
         runtime_snapshot=runtime_snapshot,
     )
 
@@ -3003,10 +3079,15 @@ class _RunBundleDatafusionArtifacts:
     arrow_ingest: Sequence[Mapping[str, object]] | None
     view_registry: Sequence[Mapping[str, object]] | None
     dml_statements: Sequence[Mapping[str, object]] | None
+    function_factory: Sequence[Mapping[str, object]] | None
+    expr_planners: Sequence[Mapping[str, object]] | None
     listing_tables: Sequence[Mapping[str, object]] | None
+    listing_refresh_events: Sequence[Mapping[str, object]] | None
     delta_tables: Sequence[Mapping[str, object]] | None
     udf_registry: Sequence[Mapping[str, object]] | None
     table_providers: Sequence[Mapping[str, object]] | None
+    function_catalog: Sequence[Mapping[str, object]] | None
+    function_catalog_hash: str | None
 
 
 @dataclass(frozen=True)
@@ -3040,10 +3121,15 @@ def _run_bundle_datafusion_artifacts(
             arrow_ingest=None,
             view_registry=None,
             dml_statements=None,
+            function_factory=None,
+            expr_planners=None,
             listing_tables=None,
+            listing_refresh_events=None,
             delta_tables=None,
             udf_registry=None,
             table_providers=None,
+            function_catalog=None,
+            function_catalog_hash=None,
         )
     metrics, traces = _datafusion_runtime_artifacts(ctx)
     fallbacks, explains = _datafusion_runtime_diag_tables(
@@ -3051,6 +3137,7 @@ def _run_bundle_datafusion_artifacts(
         output_dir=output_dir,
         work_dir=work_dir,
     )
+    function_catalog, function_catalog_hash = _datafusion_function_catalog_snapshot(ctx)
     return _RunBundleDatafusionArtifacts(
         metrics=metrics,
         traces=traces,
@@ -3068,10 +3155,15 @@ def _run_bundle_datafusion_artifacts(
         arrow_ingest=_datafusion_arrow_ingest(ctx),
         view_registry=_datafusion_view_registry(ctx),
         dml_statements=_datafusion_dml_statements(ctx),
+        function_factory=_datafusion_function_factory(ctx),
+        expr_planners=_datafusion_expr_planners(ctx),
         listing_tables=_datafusion_listing_tables(ctx),
+        listing_refresh_events=_datafusion_listing_refresh_events(ctx),
         delta_tables=_datafusion_delta_tables(ctx),
         udf_registry=_datafusion_udf_registry(ctx),
         table_providers=_datafusion_table_providers(ctx),
+        function_catalog=function_catalog,
+        function_catalog_hash=function_catalog_hash,
     )
 
 
@@ -3130,7 +3222,13 @@ def run_bundle_context(
     cache_events = _ibis_cache_events(context_inputs.ctx)
     support_matrix = _ibis_support_matrix(context_inputs.ctx)
     allocator_debug = bool(context_inputs.ctx.debug) if context_inputs.ctx is not None else False
+    function_registry = default_function_registry()
     kernel_registry = kernel_registry_snapshot()
+    datafusion_write_policy = (
+        _datafusion_write_policy_snapshot(context_inputs.ctx)
+        if context_inputs.ctx is not None
+        else None
+    )
     param_values = _run_bundle_param_values(run_bundle_inputs.param_inputs)
     return RunBundleContext(
         base_dir=str(base_dir),
@@ -3154,11 +3252,19 @@ def run_bundle_context(
         datafusion_arrow_ingest=datafusion_artifacts.arrow_ingest,
         datafusion_view_registry=datafusion_artifacts.view_registry,
         datafusion_dml_statements=datafusion_artifacts.dml_statements,
+        datafusion_function_factory=datafusion_artifacts.function_factory,
+        datafusion_expr_planners=datafusion_artifacts.expr_planners,
         datafusion_listing_tables=datafusion_artifacts.listing_tables,
+        datafusion_listing_refreshes=datafusion_artifacts.listing_refresh_events,
         datafusion_delta_tables=datafusion_artifacts.delta_tables,
         delta_maintenance_reports=delta_maintenance_reports,
         datafusion_udf_registry=datafusion_artifacts.udf_registry,
         datafusion_table_providers=datafusion_artifacts.table_providers,
+        datafusion_function_catalog=datafusion_artifacts.function_catalog,
+        datafusion_function_catalog_hash=datafusion_artifacts.function_catalog_hash,
+        datafusion_write_policy=datafusion_write_policy,
+        function_registry_snapshot=function_registry.payload(),
+        function_registry_hash=function_registry.fingerprint(),
         arrow_kernel_registry=kernel_registry,
         ibis_sql_ingest_artifacts=sql_ingest_artifacts,
         ibis_namespace_actions=namespace_actions,

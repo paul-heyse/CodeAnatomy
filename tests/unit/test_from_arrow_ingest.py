@@ -57,21 +57,21 @@ def test_datafusion_from_arrow_pydict() -> None:
         assert method == "record_batches"
 
 
-def test_datafusion_from_arrow_pylist() -> None:
+def test_datafusion_from_arrow_row_mappings() -> None:
     """Ingest row-wise dicts via the unified helper."""
     ctx = SessionContext()
     payloads, hook = _ingest_payloads()
     df = datafusion_from_arrow(
         ctx,
-        name="pylist_table",
+        name="row_table",
         value=[{"id": 1, "label": "x"}, {"id": 2, "label": "y"}],
         ingest_hook=hook,
     )
     assert df.to_arrow_table().num_rows == TWO_ROWS
     assert payloads
     method = payloads[0].get("method")
-    if callable(getattr(ctx, "from_pylist", None)):
-        assert method == "from_pylist"
+    if callable(getattr(ctx, "from_arrow", None)):
+        assert method == "from_arrow"
     else:
         assert method == "record_batches"
 

@@ -6,10 +6,11 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from arrowdsl.io.delta import DeltaCdfOptions, read_delta_cdf
+from arrowdsl.schema.build import rows_from_table
 from incremental.diff import diff_snapshots_with_cdf
 from incremental.snapshot import write_repo_snapshot
 from incremental.state_store import StateStore
+from storage.deltalake import DeltaCdfOptions, read_delta_cdf
 
 
 def _snapshot_table(rows: list[tuple[str, str, str, int, int]]) -> pa.Table:
@@ -53,7 +54,7 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
         ),
     )
     diff = diff_snapshots_with_cdf(snapshot_one, snapshot_two, cdf)
-    change_map = {row["file_id"]: row["change_kind"] for row in diff.to_pylist()}
+    change_map = {row["file_id"]: row["change_kind"] for row in rows_from_table(diff)}
     assert change_map["file_a"] == "modified"
     assert change_map["file_b"] == "deleted"
     assert change_map["file_c"] == "added"

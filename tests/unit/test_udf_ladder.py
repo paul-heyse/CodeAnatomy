@@ -13,6 +13,7 @@ from ibis_engine.builtin_udfs import (
     stable_hash64_pyarrow,
     stable_hash64_python,
 )
+from tests.utils import values_as_list
 
 
 def _wrapped(fn: Callable[..., object]) -> Callable[..., object]:
@@ -28,8 +29,8 @@ def test_stable_hash64_fallbacks_match() -> None:
     pyarrow_fn = _wrapped(stable_hash64_pyarrow)
     python_fn = _wrapped(stable_hash64_python)
     pyarrow_out = cast("pa.Array", pyarrow_fn(values))
-    expected = [python_fn(value) for value in values.to_pylist()]
-    assert pyarrow_out.to_pylist() == expected
+    expected = [python_fn(value) for value in values_as_list(values)]
+    assert values_as_list(pyarrow_out) == expected
 
 
 def test_col_to_byte_fallbacks_match() -> None:
@@ -43,10 +44,10 @@ def test_col_to_byte_fallbacks_match() -> None:
     expected = [
         python_fn(line, offset, unit)
         for line, offset, unit in zip(
-            lines.to_pylist(),
-            offsets.to_pylist(),
-            units.to_pylist(),
+            values_as_list(lines),
+            values_as_list(offsets),
+            values_as_list(units),
             strict=True,
         )
     ]
-    assert pyarrow_out.to_pylist() == expected
+    assert values_as_list(pyarrow_out) == expected

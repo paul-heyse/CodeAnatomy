@@ -13,7 +13,6 @@ from hamilton.function_modifiers import tag
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.io.delta import DeltaCdfOptions, delta_table_version, read_delta_cdf, read_table_delta
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import empty_table
 from hamilton_pipeline.pipeline_types import (
@@ -66,6 +65,7 @@ from incremental.snapshot import build_repo_snapshot, read_repo_snapshot, write_
 from incremental.state_store import StateStore
 from incremental.types import IncrementalConfig, IncrementalFileChanges, IncrementalImpact
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
+from storage.deltalake import DeltaCdfOptions, delta_table_version, read_delta_cdf, read_table_delta
 
 
 @dataclass(frozen=True)
@@ -566,9 +566,8 @@ def _table_file_ids(table: pa.Table) -> tuple[str, ...]:
     if "file_id" not in table.column_names:
         return ()
     values = table["file_id"]
-    if isinstance(values, pa.ChunkedArray):
-        values = values.combine_chunks()
-    cleaned = [value for value in values.to_pylist() if isinstance(value, str) and value]
+    cleaned = [value.as_py() if isinstance(value, pa.Scalar) else value for value in values]
+    cleaned = [value for value in cleaned if isinstance(value, str) and value]
     return tuple(sorted(set(cleaned)))
 
 

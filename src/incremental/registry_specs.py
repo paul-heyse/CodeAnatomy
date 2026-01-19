@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-from functools import cache
+from typing import TYPE_CHECKING
 
-from arrowdsl.core.interop import SchemaLike
 from incremental.registry_builders import build_dataset_spec
 from incremental.registry_rows import DATASET_ROWS, DatasetRow
-from schema_spec.system import ContractSpec, DatasetSpec
+from registry_common.dataset_registry import DatasetAccessors, DatasetRegistry
 
-_ROWS_BY_NAME: dict[str, DatasetRow] = {row.name: row for row in DATASET_ROWS}
+if TYPE_CHECKING:
+    from arrowdsl.core.interop import SchemaLike
+    from schema_spec.system import ContractSpec, DatasetSpec
+
+_REGISTRY = DatasetRegistry(rows=DATASET_ROWS, build_dataset_spec=build_dataset_spec)
+_ACCESSORS = DatasetAccessors(_REGISTRY)
 
 
 def dataset_row(name: str) -> DatasetRow:
@@ -20,10 +24,9 @@ def dataset_row(name: str) -> DatasetRow:
     DatasetRow
         Row specification for the dataset.
     """
-    return _ROWS_BY_NAME[name]
+    return _ACCESSORS.dataset_row(name)
 
 
-@cache
 def dataset_spec(name: str) -> DatasetSpec:
     """Return the DatasetSpec for the dataset name.
 
@@ -32,11 +35,9 @@ def dataset_spec(name: str) -> DatasetSpec:
     DatasetSpec
         Dataset specification for the name.
     """
-    row = dataset_row(name)
-    return build_dataset_spec(row)
+    return _ACCESSORS.dataset_spec(name)
 
 
-@cache
 def dataset_schema(name: str) -> SchemaLike:
     """Return the Arrow schema for the dataset name.
 
@@ -45,10 +46,9 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Arrow schema for the dataset.
     """
-    return dataset_spec(name).schema()
+    return _ACCESSORS.dataset_schema(name)
 
 
-@cache
 def dataset_contract_spec(name: str) -> ContractSpec:
     """Return the ContractSpec for the dataset name.
 
@@ -57,7 +57,7 @@ def dataset_contract_spec(name: str) -> ContractSpec:
     ContractSpec
         Contract specification for the dataset.
     """
-    return dataset_spec(name).contract_spec_or_default()
+    return _ACCESSORS.dataset_contract_spec(name)
 
 
 __all__ = [

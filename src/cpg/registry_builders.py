@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from arrowdsl.spec.infra import DatasetRegistration, register_dataset
 from cpg.registry_bundles import bundle
 from cpg.registry_fields import field
 from cpg.registry_rows import ContractRow, DatasetRow
 from cpg.registry_templates import template
-from schema_spec.system import (
-    ContractSpec,
-    DatasetSpec,
-    TableSchemaSpec,
-    make_contract_spec,
-    make_table_spec,
-)
+from registry_common.registry_builders import build_contract_spec as shared_build_contract_spec
+from schema_spec.system import make_table_spec
+
+if TYPE_CHECKING:
+    from schema_spec.system import ContractSpec, DatasetSpec, TableSchemaSpec
 
 
 def _metadata_spec(row: DatasetRow) -> SchemaMetadataSpec:
@@ -61,15 +61,7 @@ def build_contract_spec(
     ContractSpec | None
         Contract spec or ``None`` when no contract row is provided.
     """
-    if contract is None:
-        return None
-    return make_contract_spec(
-        table_spec=table_spec,
-        dedupe=contract.dedupe,
-        canonical_sort=contract.canonical_sort,
-        constraints=contract.constraints,
-        version=contract.version,
-    )
+    return shared_build_contract_spec(contract, table_spec=table_spec)
 
 
 def build_dataset_spec(row: DatasetRow) -> DatasetSpec:

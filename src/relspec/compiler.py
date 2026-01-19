@@ -15,14 +15,17 @@ from ibis.backends import BaseBackend
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
 
+from arrowdsl.compute.explode_dispatch import explode_list_dispatch
 from arrowdsl.compute.expr_core import ExplodeSpec
 from arrowdsl.compute.filters import FilterSpec
 from arrowdsl.compute.kernels import canonical_sort, resolve_kernel
-from arrowdsl.core.context import DeterminismTier, ExecutionContext, Ordering
+from arrowdsl.core.context import ExecutionContext, Ordering
+from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
 from arrowdsl.json_factory import json_default
 from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions, SortKey
+from arrowdsl.plan.ordering_policy import require_explicit_ordering
 from arrowdsl.plan.query import ScanTelemetry
 from arrowdsl.schema.build import const_array, set_or_append_column
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
@@ -31,12 +34,13 @@ from engine.materialize import build_plan_product
 from engine.plan_policy import ExecutionSurfacePolicy
 from ibis_engine.compiler_checkpoint import try_plan_hash
 from ibis_engine.execution import IbisExecutionContext
+from ibis_engine.io_bridge import IbisMaterializeOptions, materialize_table
 from ibis_engine.lineage import required_columns_by_table
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 from ibis_engine.registry import IbisDatasetRegistry
 from ibis_engine.schema_utils import validate_expr_schema
-from ibis_engine.sources import SourceToIbisOptions, table_to_ibis
+from ibis_engine.sources import SourceToIbisOptions, namespace_recorder_from_ctx, table_to_ibis
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
@@ -675,7 +679,6 @@ def _build_explode_list_kernel(spec: ExplodeListSpec) -> KernelFn:
         TableLike
             Table with exploded list columns.
         """
-        kernel = resolve_kernel("explode_list", ctx=ctx)
         explode_spec = ExplodeSpec(
             parent_keys=(spec.parent_id_col,),
             list_col=spec.list_col,
@@ -683,7 +686,10 @@ def _build_explode_list_kernel(spec: ExplodeListSpec) -> KernelFn:
             idx_col=spec.idx_col,
             keep_empty=spec.keep_empty,
         )
-        result = kernel(table, spec=explode_spec)
+        result = cast(
+            "TableLike",
+            explode_list_dispatch(table, spec=explode_spec, ctx=ctx).output,
+        )
         if spec.parent_id_col == spec.out_parent_col:
             return result
         names = [
@@ -1271,13 +1277,20 @@ class CompiledOutput:
                     )
                 )
                 table_parts.append(table)
-        return _finalize_output_tables(
+        result = _finalize_output_tables(
             output_dataset=self.output_dataset,
             contract_name=self.contract_name,
             table_parts=table_parts,
             ctx=ctx_exec,
             contracts=options.contracts,
         )
+        _materialize_output_table(
+            result,
+            output_dataset=self.output_dataset,
+            ctx=ctx_exec,
+            options=options,
+        )
+        return result
 
 
 def _validate_compiled_rule_schema(
@@ -1846,14 +1859,78 @@ def _finalize_output_tables(
         )
         dummy = Contract(name=f"{output_dataset}_NO_CONTRACT", schema=unioned.schema)
         finalize_ctx = dataset_spec_from_contract(dummy).finalize_context(ctx)
-        return finalize_ctx.run(unioned, ctx=ctx)
+        result = finalize_ctx.run(unioned, ctx=ctx)
+        _enforce_output_ordering(result.good.schema, ctx=ctx, label=output_dataset)
+        return result
 
     contract = contracts.get(contract_name)
     dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(contract.name)
     if dataset_spec is None:
         dataset_spec = dataset_spec_from_contract(contract)
     unioned = dataset_spec.unify_tables(table_parts, ctx=ctx)
-    return dataset_spec.finalize_context(ctx).run(unioned, ctx=ctx)
+    result = dataset_spec.finalize_context(ctx).run(unioned, ctx=ctx)
+    _enforce_output_ordering(result.good.schema, ctx=ctx, label=output_dataset)
+    return result
+
+
+def finalize_output_tables(
+    *,
+    output_dataset: str,
+    contract_name: str | None,
+    table_parts: Sequence[TableLike],
+    ctx: ExecutionContext,
+    contracts: ContractCatalog,
+) -> FinalizeResult:
+    """Finalize output tables against the resolved contract.
+
+    Returns
+    -------
+    FinalizeResult
+        Finalized output tables and artifacts.
+    """
+    return _finalize_output_tables(
+        output_dataset=output_dataset,
+        contract_name=contract_name,
+        table_parts=table_parts,
+        ctx=ctx,
+        contracts=contracts,
+    )
+
+
+def _materialize_output_table(
+    result: FinalizeResult,
+    *,
+    output_dataset: str,
+    ctx: ExecutionContext,
+    options: CompiledOutputExecutionOptions,
+) -> None:
+    """Materialize finalized outputs into the backend catalog."""
+    backend = options.ibis_backend
+    if backend is None:
+        return
+    require_explicit_ordering(result.good.schema, label=output_dataset)
+    recorder = namespace_recorder_from_ctx(ctx)
+    expr = ibis.memtable(result.good)
+    _ = materialize_table(
+        expr,
+        options=IbisMaterializeOptions(
+            backend=backend,
+            name=output_dataset,
+            overwrite=True,
+            namespace_recorder=recorder,
+        ),
+    )
+
+
+def _enforce_output_ordering(
+    schema: SchemaLike,
+    *,
+    ctx: ExecutionContext,
+    label: str,
+) -> None:
+    if ctx.determinism != DeterminismTier.CANONICAL:
+        return
+    require_explicit_ordering(schema, label=label)
 
 
 __all__ = [
@@ -1866,5 +1943,6 @@ __all__ = [
     "RelationshipRuleCompiler",
     "RuleExecutionOptions",
     "apply_policy_defaults",
+    "finalize_output_tables",
     "validate_policy_requirements",
 ]

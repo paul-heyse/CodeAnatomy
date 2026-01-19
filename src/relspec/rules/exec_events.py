@@ -9,6 +9,7 @@ from typing import Protocol
 import pyarrow as pa
 
 from arrowdsl.core.interop import TableLike
+from arrowdsl.schema.build import table_from_rows
 from arrowdsl.schema.serialization import schema_fingerprint
 from obs.diagnostics import DiagnosticsCollector
 
@@ -87,7 +88,7 @@ def rule_execution_events_table(events: Sequence[RuleExecutionEvent]) -> pa.Tabl
     pyarrow.Table
         Arrow table of rule execution events.
     """
-    return pa.Table.from_pylist([event.to_row() for event in events], schema=RULE_EXEC_EVENTS_V1)
+    return table_from_rows(RULE_EXEC_EVENTS_V1, [event.to_row() for event in events])
 
 
 class RuleExecutionObserver(Protocol):

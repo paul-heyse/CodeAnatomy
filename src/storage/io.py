@@ -1,4 +1,4 @@
-"""Arrow IPC, Delta Lake, and Parquet read/write helpers."""
+"""Arrow IPC, Delta Lake, and Parquet read helpers."""
 
 from __future__ import annotations
 
@@ -6,7 +6,19 @@ from typing import Literal
 
 import pyarrow as pa
 
-from arrowdsl.io.delta import (
+from arrowdsl.io.ipc import read_table_ipc_file, write_table_ipc_file, write_table_ipc_stream
+from arrowdsl.io.parquet import read_table_parquet
+from core_types import PathLike, ensure_path
+from ibis_engine.io_bridge import (
+    IbisWriteInput,
+    ibis_plan_to_reader,
+    ibis_table_to_reader,
+    ibis_to_table,
+    write_ibis_dataset_delta,
+    write_ibis_named_datasets_delta,
+    write_ibis_table_delta,
+)
+from storage.deltalake import (
     DeltaCdfOptions,
     DeltaSchemaMode,
     DeltaUpsertOptions,
@@ -36,36 +48,7 @@ from arrowdsl.io.delta import (
     write_named_datasets_delta,
     write_table_delta,
 )
-from arrowdsl.io.delta_config import DeltaSchemaPolicy, DeltaWritePolicy
-from arrowdsl.io.ipc import read_table_ipc_file, write_table_ipc_file, write_table_ipc_stream
-from arrowdsl.io.parquet import (
-    DatasetWriteConfig,
-    DatasetWriteInput,
-    NamedDatasetWriteConfig,
-    ParquetMetadataConfig,
-    ParquetWriteOptions,
-    read_table_parquet,
-    upsert_dataset_partitions_parquet,
-    write_dataset_parquet,
-    write_finalize_result_parquet,
-    write_named_datasets_parquet,
-    write_parquet_metadata_sidecars,
-    write_partitioned_dataset_parquet,
-    write_table_parquet,
-)
-from core_types import PathLike, ensure_path
-from ibis_engine.io_bridge import (
-    IbisWriteInput,
-    ibis_plan_to_reader,
-    ibis_table_to_reader,
-    ibis_to_table,
-    write_ibis_dataset_delta,
-    write_ibis_dataset_parquet,
-    write_ibis_named_datasets_delta,
-    write_ibis_named_datasets_parquet,
-    write_ibis_table_delta,
-    write_ibis_table_parquet,
-)
+from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 
 def mmap_file(path: PathLike, *, mode: Literal["r", "r+", "w+", "a+"] = "r") -> pa.MemoryMappedFile:
@@ -113,8 +96,6 @@ def open_compressed_output(
 
 
 __all__ = [
-    "DatasetWriteConfig",
-    "DatasetWriteInput",
     "DeltaCdfOptions",
     "DeltaSchemaMode",
     "DeltaSchemaPolicy",
@@ -126,9 +107,6 @@ __all__ = [
     "DeltaWriteResult",
     "DeltaWriteRetryPolicy",
     "IbisWriteInput",
-    "NamedDatasetWriteConfig",
-    "ParquetMetadataConfig",
-    "ParquetWriteOptions",
     "StorageOptions",
     "apply_delta_write_policies",
     "cleanup_delta_log",
@@ -152,24 +130,14 @@ __all__ = [
     "read_table_ipc_file",
     "read_table_parquet",
     "upsert_dataset_partitions_delta",
-    "upsert_dataset_partitions_parquet",
     "vacuum_delta",
     "write_dataset_delta",
-    "write_dataset_parquet",
     "write_finalize_result_delta",
-    "write_finalize_result_parquet",
     "write_ibis_dataset_delta",
-    "write_ibis_dataset_parquet",
     "write_ibis_named_datasets_delta",
-    "write_ibis_named_datasets_parquet",
     "write_ibis_table_delta",
-    "write_ibis_table_parquet",
     "write_named_datasets_delta",
-    "write_named_datasets_parquet",
-    "write_parquet_metadata_sidecars",
-    "write_partitioned_dataset_parquet",
     "write_table_delta",
     "write_table_ipc_file",
     "write_table_ipc_stream",
-    "write_table_parquet",
 ]

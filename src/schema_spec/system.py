@@ -17,7 +17,6 @@ from arrowdsl.compute.expr_core import ExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel
 from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeContext
-from arrowdsl.io.delta_config import DeltaSchemaPolicy, DeltaWritePolicy
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.plan.plan import Plan
 from arrowdsl.plan.query import (
@@ -61,6 +60,7 @@ from schema_spec.specs import (
     FieldBundle,
     TableSchemaSpec,
 )
+from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
     from arrowdsl.plan.scan_io import DatasetSource, PlanSource
@@ -153,6 +153,7 @@ class DataFusionScanOptions:
     meta_fetch_concurrency: int | None = None
     list_files_cache_ttl: str | None = None
     listing_mutable: bool = False
+    unbounded: bool = False
 
 
 @dataclass(frozen=True)

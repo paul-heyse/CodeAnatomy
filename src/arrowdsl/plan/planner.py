@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from arrowdsl.core.context import DeterminismTier, ExecutionContext
+from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.ir.plan import OpNode, PlanIR
 from arrowdsl.ops.catalog import Lane, OpDef
 

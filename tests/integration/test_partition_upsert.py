@@ -7,11 +7,12 @@ from typing import cast
 
 import pyarrow as pa
 
-from arrowdsl.io.delta import (
+from storage.deltalake import (
     DeltaUpsertOptions,
     read_table_delta,
     upsert_dataset_partitions_delta,
 )
+from tests.utils import values_as_list
 
 
 def _read_partition(base_dir: Path, file_id: str) -> pa.Table:
@@ -34,8 +35,8 @@ def test_upsert_dataset_partitions_delta(tmp_path: Path) -> None:
 
     part_a = _read_partition(base_dir, "a")
     part_b = _read_partition(base_dir, "b")
-    assert part_a["value"].to_pylist() == [1]
-    assert part_b["value"].to_pylist() == [2]
+    assert values_as_list(part_a["value"]) == [1]
+    assert values_as_list(part_b["value"]) == [2]
 
     update = pa.table({"file_id": ["b"], "value": [3]})
     upsert_dataset_partitions_delta(
@@ -48,8 +49,8 @@ def test_upsert_dataset_partitions_delta(tmp_path: Path) -> None:
 
     part_a = _read_partition(base_dir, "a")
     part_b = _read_partition(base_dir, "b")
-    assert part_a["value"].to_pylist() == [1]
-    assert part_b["value"].to_pylist() == [3]
+    assert values_as_list(part_a["value"]) == [1]
+    assert values_as_list(part_b["value"]) == [3]
 
     empty = table.slice(0, 0)
     upsert_dataset_partitions_delta(
@@ -64,4 +65,4 @@ def test_upsert_dataset_partitions_delta(tmp_path: Path) -> None:
     part_a = _read_partition(base_dir, "a")
     part_b = _read_partition(base_dir, "b")
     assert part_a.num_rows == 0
-    assert part_b["value"].to_pylist() == [3]
+    assert values_as_list(part_b["value"]) == [3]

@@ -4,21 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Literal
 
 from arrowdsl.compute.expr_core import ScalarValue
-from arrowdsl.plan.ops import SortKey
 from ibis_engine.query_compiler import IbisQuerySpec
-
-
-@dataclass(frozen=True)
-class EvidenceSpec:
-    """Evidence requirements for normalize rules."""
-
-    sources: tuple[str, ...] = ()
-    required_columns: tuple[str, ...] = ()
-    required_types: Mapping[str, str] = field(default_factory=dict)
-    required_metadata: Mapping[bytes, bytes] = field(default_factory=dict)
+from relspec.model import (
+    AmbiguityPolicy,
+    ConfidencePolicy,
+    EvidenceSpec,
+    ExecutionMode,
+    WinnerSelectConfig,
+)
 
 
 @dataclass(frozen=True)
@@ -28,33 +23,6 @@ class EvidenceOutput:
     column_map: Mapping[str, str] = field(default_factory=dict)
     literals: Mapping[str, ScalarValue] = field(default_factory=dict)
     provenance_columns: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class ConfidencePolicy:
-    """Policy for computing confidence scores."""
-
-    base: float = 0.5
-    source_weight: Mapping[str, float] = field(default_factory=dict)
-    penalty: float = 0.0
-
-
-@dataclass(frozen=True)
-class WinnerSelectConfig:
-    """Configuration for selecting winners among ambiguous groups."""
-
-    keys: tuple[str, ...] = ()
-    score_col: str = "confidence"
-    score_order: Literal["ascending", "descending"] = "descending"
-    tie_breakers: tuple[SortKey, ...] = ()
-
-
-@dataclass(frozen=True)
-class AmbiguityPolicy:
-    """Policy for ambiguity resolution."""
-
-    winner_select: WinnerSelectConfig | None = None
-    tie_breakers: tuple[SortKey, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -106,4 +74,3 @@ __all__ = [
     "NormalizeRule",
     "WinnerSelectConfig",
 ]
-ExecutionMode = Literal["auto", "plan", "table", "external", "hybrid"]

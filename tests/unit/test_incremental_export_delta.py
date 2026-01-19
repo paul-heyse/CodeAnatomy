@@ -9,11 +9,13 @@ import pyarrow as pa
 import pytest
 from ibis.backends import BaseBackend
 
-from arrowdsl.io.delta import DeltaWriteOptions, write_table_delta
+from arrowdsl.schema.build import rows_from_table
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from incremental.deltas import compute_changed_exports
 from incremental.registry_specs import dataset_schema
+from storage.deltalake import DeltaWriteOptions, write_table_delta
+from tests.utils import values_as_list
 
 
 def test_compute_changed_exports_added_removed(tmp_path: Path) -> None:
@@ -52,7 +54,7 @@ def test_compute_changed_exports_added_removed(tmp_path: Path) -> None:
         changed_files=changed_files,
     )
 
-    rows = {(row["delta_kind"], row["qname_id"]) for row in result.to_pylist()}
+    rows = {(row["delta_kind"], row["qname_id"]) for row in rows_from_table(result)}
     assert rows == {("added", "q4"), ("removed", "q1")}
     assert _result_files(result) == {"file_1"}
     assert result.schema == dataset_schema("inc_changed_exports_v1")
@@ -69,6 +71,4 @@ def _build_backend_or_skip() -> BaseBackend:
 
 def _result_files(result: pa.Table) -> set[str]:
     values = result["file_id"]
-    if isinstance(values, pa.ChunkedArray):
-        values = values.combine_chunks()
-    return {value for value in values.to_pylist() if isinstance(value, str)}
+    return {value for value in values_as_list(values) if isinstance(value, str)}

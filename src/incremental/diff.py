@@ -7,15 +7,15 @@ from typing import cast
 import pyarrow as pa
 
 from arrowdsl.core.interop import pc
-from arrowdsl.io.delta import (
+from arrowdsl.schema.build import table_from_arrays
+from arrowdsl.schema.serialization import schema_fingerprint
+from incremental.state_store import StateStore
+from storage.deltalake import (
     DeltaWriteOptions,
     DeltaWriteResult,
     enable_delta_features,
     write_table_delta,
 )
-from arrowdsl.schema.build import table_from_arrays
-from arrowdsl.schema.serialization import schema_fingerprint
-from incremental.state_store import StateStore
 
 
 def _coalesce_str(left: pa.Array, right: pa.Array) -> pa.Array:

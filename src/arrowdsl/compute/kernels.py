@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import functools
 import importlib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
 
@@ -12,7 +12,8 @@ import pyarrow as pa
 import pyarrow.types as patypes
 
 from arrowdsl.compute.expr_core import ExplodeSpec
-from arrowdsl.core.context import DeterminismTier, ExecutionContext, Ordering, OrderingLevel
+from arrowdsl.core.context import ExecutionContext, Ordering, OrderingLevel
+from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
@@ -98,6 +99,47 @@ def kernel_registry() -> dict[str, KernelFn]:
         "dedupe": apply_dedupe,
         "winner_select": winner_select_by_score,
     }
+
+
+def make_struct_column(fields: Mapping[str, ArrayLike]) -> ArrayLike:
+    """Return a struct array constructed from named fields.
+
+    Returns
+    -------
+    ArrayLike
+        Struct array with the provided field values.
+    """
+    names = list(fields)
+    arrays = [fields[name] for name in names]
+    return pc.make_struct(*arrays, field_names=names)
+
+
+def make_list_column(values: Sequence[Sequence[object]]) -> ArrayLike:
+    """Return a list array constructed from nested Python values.
+
+    Returns
+    -------
+    ArrayLike
+        List array with values for each row.
+    """
+    return pa.array(values)
+
+
+def make_map_column(
+    entries: Sequence[Mapping[object, object]],
+    *,
+    key_type: pa.DataType,
+    item_type: pa.DataType,
+) -> ArrayLike:
+    """Return a map array constructed from entry dictionaries.
+
+    Returns
+    -------
+    ArrayLike
+        Map array with the provided key/value entries.
+    """
+    map_type = pa.map_(key_type, item_type)
+    return pa.array(entries, type=map_type)
 
 
 def kernel_capability(name: str, *, ctx: ExecutionContext) -> KernelCapability:

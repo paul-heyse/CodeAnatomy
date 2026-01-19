@@ -14,6 +14,8 @@ from pyarrow import ipc
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.build import (
     rows_from_table as build_rows_from_table,
+)
+from arrowdsl.schema.build import (
     table_from_rows as build_table_from_rows,
 )
 

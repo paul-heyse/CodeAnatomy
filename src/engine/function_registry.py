@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, TypeVar, cast
 
 import pyarrow as pa
 
+from arrowdsl.compute.registry import pyarrow_compute_functions
 from datafusion_engine.function_factory import DEFAULT_RULE_PRIMITIVES, RulePrimitive
-from datafusion_engine.udf_registry import DataFusionUdfSpec, datafusion_udf_specs
+from datafusion_engine.udf_registry import DataFusionUdfSpec, UdfTier, datafusion_udf_specs
 from ibis_engine.builtin_udfs import IbisUdfSpec, ibis_udf_specs
 
 ExecutionLane = Literal[
@@ -33,6 +35,14 @@ DEFAULT_LANE_PRECEDENCE: tuple[ExecutionLane, ...] = (
     "df_rust",
     "kernel",
 )
+UDF_TIER_PRIORITY: tuple[UdfTier, ...] = ("builtin", "pyarrow", "pandas", "python")
+LANE_UDF_TIER: Mapping[ExecutionLane, UdfTier] = {
+    "ibis_builtin": "builtin",
+    "ibis_pyarrow": "pyarrow",
+    "ibis_pandas": "pandas",
+    "ibis_python": "python",
+    "df_udf": "python",
+}
 
 LaneTupleT = TypeVar("LaneTupleT", bound=str)
 
@@ -55,6 +65,7 @@ class FunctionSpec:
     catalog: str | None = None
     database: str | None = None
     capsule_id: str | None = None
+    udf_tier: UdfTier | None = None
 
     def payload(self) -> dict[str, object]:
         """Return a JSON-serializable payload for the spec.
@@ -79,6 +90,7 @@ class FunctionSpec:
             "catalog": self.catalog,
             "database": self.database,
             "capsule_id": self.capsule_id,
+            "udf_tier": self.udf_tier,
         }
 
 
@@ -88,6 +100,8 @@ class FunctionRegistry:
 
     specs: dict[str, FunctionSpec] = field(default_factory=dict)
     lane_precedence: tuple[ExecutionLane, ...] = DEFAULT_LANE_PRECEDENCE
+    pyarrow_compute: tuple[str, ...] = ()
+    pycapsule_ids: tuple[str, ...] = ()
 
     def resolve_lane(self, name: str) -> ExecutionLane | None:
         """Return the preferred execution lane for a function name.
@@ -117,6 +131,8 @@ class FunctionRegistry:
         return {
             "specs": {name: spec.payload() for name, spec in sorted(self.specs.items())},
             "lane_precedence": list(self.lane_precedence),
+            "pyarrow_compute": list(self.pyarrow_compute),
+            "pycapsule_ids": list(self.pycapsule_ids),
         }
 
     def fingerprint(self) -> str:
@@ -153,7 +169,12 @@ def build_function_registry(
         _merge_spec(specs, _spec_from_ibis(spec, lane_precedence=lane_precedence))
     for primitive in primitives:
         _merge_spec(specs, _spec_from_primitive(primitive, lane_precedence=lane_precedence))
-    return FunctionRegistry(specs=specs, lane_precedence=lane_precedence)
+    return FunctionRegistry(
+        specs=specs,
+        lane_precedence=lane_precedence,
+        pyarrow_compute=pyarrow_compute_functions(),
+        pycapsule_ids=_pycapsule_ids(specs),
+    )
 
 
 def default_function_registry() -> FunctionRegistry:
@@ -165,6 +186,25 @@ def default_function_registry() -> FunctionRegistry:
         Default cross-lane registry instance.
     """
     return build_function_registry()
+
+
+def _pycapsule_ids(specs: Mapping[str, FunctionSpec]) -> tuple[str, ...]:
+    ids = {spec.capsule_id for spec in specs.values() if spec.capsule_id}
+    return tuple(sorted(ids))
+
+
+def _udf_tier_for_lanes(
+    lanes: Sequence[ExecutionLane],
+    *,
+    lane_precedence: Sequence[ExecutionLane],
+) -> UdfTier | None:
+    for lane in lane_precedence:
+        if lane not in lanes:
+            continue
+        tier = LANE_UDF_TIER.get(lane)
+        if tier is not None:
+            return tier
+    return None
 
 
 def _spec_from_datafusion(
@@ -187,6 +227,7 @@ def _spec_from_datafusion(
         catalog=spec.catalog,
         database=spec.database,
         capsule_id=spec.capsule_id,
+        udf_tier=spec.udf_tier,
     )
 
 
@@ -208,6 +249,7 @@ def _spec_from_ibis(
         rewrite_tags=spec.rewrite_tags,
         catalog=spec.catalog,
         database=spec.database,
+        udf_tier=_udf_tier_for_lanes(spec.lanes, lane_precedence=lane_precedence),
     )
 
 
@@ -227,6 +269,7 @@ def _spec_from_primitive(
         arg_names=tuple(param.name for param in primitive.params) or None,
         lanes=("df_rust",),
         lane_precedence=lane_precedence,
+        udf_tier=None,
     )
 
 

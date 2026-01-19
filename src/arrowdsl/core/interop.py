@@ -46,10 +46,6 @@ class ArrayLike(Protocol):
         """Return a field from a struct-like array."""
         ...
 
-    def to_pylist(self) -> list[object]:
-        """Return the array as a Python list."""
-        ...
-
     def __iter__(self) -> Iterator[object]:
         """Iterate over array elements."""
         ...
@@ -182,20 +178,12 @@ class TableLike(Protocol):
             "schema",
             "column_names",
             "num_rows",
-            "to_pylist",
             "to_pydict",
             "filter",
             "take",
             "select",
         )
         return all(hasattr(subclass, name) for name in required)
-
-    @classmethod
-    def from_pylist(
-        cls, data: Sequence[Mapping[str, object]], schema: SchemaLike | None = None
-    ) -> TableLike:
-        """Build a table from row-wise dicts."""
-        ...
 
     @classmethod
     def from_arrays(
@@ -217,10 +205,6 @@ class TableLike(Protocol):
 
     def rename_columns(self, names: Sequence[str]) -> TableLike:
         """Return a table with renamed columns."""
-        ...
-
-    def to_pylist(self) -> list[dict[str, object]]:
-        """Return the table as row-wise dicts."""
         ...
 
     def to_pydict(self) -> dict[str, list[object]]:

@@ -19,7 +19,6 @@ from datafusion.dataframe import DataFrame
 from deltalake import DeltaTable
 
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.io.delta import DeltaCdfOptions, read_delta_cdf
 from arrowdsl.schema.serialization import schema_to_dict
 from core_types import ensure_path
 from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -37,6 +36,7 @@ from sqlglot_tools.optimizer import (
     register_datafusion_dialect,
     sqlglot_surface_policy,
 )
+from storage.deltalake import DeltaCdfOptions, read_delta_cdf
 
 DEFAULT_CACHE_MAX_COLUMNS = 64
 _REGISTERED_OBJECT_STORES: dict[int, set[str]] = {}
@@ -84,7 +84,6 @@ class DatasetInputSource:
         _ = table_name, kwargs
         name = _dataset_name_from_input(input_item)
         return name is not None and self._registry.catalog.has(name)
-
 
     def build_table(
         self,
@@ -262,6 +261,7 @@ def datafusion_external_table_sql(
     table_spec = _resolve_table_spec(location)
     if table_spec is None:
         return None
+    scan = resolve_datafusion_scan_options(location)
     resolved_dialect = (
         dialect or sqlglot_surface_policy(SqlGlotSurface.DATAFUSION_EXTERNAL_TABLE).dialect
     )
@@ -275,6 +275,7 @@ def datafusion_external_table_sql(
     options, compression = _external_table_options(merged_options)
     partitioned_by = _partitioned_by(location)
     file_sort_order = _file_sort_order(location)
+    unbounded = scan.unbounded if scan is not None else False
     config = ExternalTableConfig(
         location=str(location.path),
         file_format=location.format,
@@ -284,6 +285,7 @@ def datafusion_external_table_sql(
         partitioned_by=partitioned_by,
         file_sort_order=file_sort_order,
         compression=compression,
+        unbounded=unbounded,
     )
     return table_spec.to_create_external_table_sql(config)
 
@@ -384,19 +386,23 @@ def register_dataset_df(
         runtime_profile=runtime_profile,
     )
     if location.format == "delta":
-        return _register_delta(context)
-    if options.provider == "dataset":
-        return _register_dataset_provider(context)
-    if location.format == "parquet":
-        return _register_parquet(context)
-    if location.format == "csv":
-        return _register_simple(context, method="register_csv")
-    if location.format == "json":
-        return _register_simple(context, method="register_json")
-    if location.format == "avro":
-        return _register_simple(context, method="register_avro")
-    msg = f"Unsupported DataFusion dataset format: {location.format!r}."
-    raise ValueError(msg)
+        df = _register_delta(context)
+    elif options.scan is not None and options.scan.unbounded:
+        df = _register_unbounded_external_table(context)
+    elif options.provider == "dataset":
+        df = _register_dataset_provider(context)
+    elif location.format == "parquet":
+        df = _register_parquet(context)
+    elif location.format == "csv":
+        df = _register_simple(context, method="register_csv")
+    elif location.format == "json":
+        df = _register_simple(context, method="register_json")
+    elif location.format == "avro":
+        df = _register_simple(context, method="register_avro")
+    else:
+        msg = f"Unsupported DataFusion dataset format: {location.format!r}."
+        raise ValueError(msg)
+    return df
 
 
 def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
@@ -431,7 +437,12 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
             )
 
         if scan is not None and scan.listing_mutable:
-            _refresh_listing_table(context.ctx, name=context.name, register=_register_listing)
+            _refresh_listing_table(
+                context.ctx,
+                name=context.name,
+                register=_register_listing,
+                runtime_profile=context.runtime_profile,
+            )
         else:
             _register_listing()
         df = context.ctx.table(context.name)
@@ -451,6 +462,39 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
             kwargs,
         )
         df = context.ctx.table(context.name)
+    return _maybe_cache(context, df)
+
+
+def _register_unbounded_external_table(
+    context: DataFusionRegistrationContext,
+) -> DataFrame:
+    scan = context.options.scan
+    if context.external_table_sql is None:
+        msg = "Unbounded external tables require a schema-backed DDL statement."
+        raise ValueError(msg)
+    file_extension = scan.file_extension if scan and scan.file_extension else ".parquet"
+    table_partition_cols = (
+        [(col, str(dtype)) for col, dtype in scan.partition_cols]
+        if scan and scan.partition_cols
+        else None
+    )
+    skip_metadata = None
+    if scan is not None:
+        skip_metadata = _effective_skip_metadata(context.location, scan)
+    _apply_scan_settings(context.ctx, scan=scan)
+    try:
+        context.ctx.sql(context.external_table_sql).collect()
+    except (RuntimeError, TypeError, ValueError) as exc:
+        msg = f"Failed to register unbounded external table: {exc}"
+        raise ValueError(msg) from exc
+    df = context.ctx.table(context.name)
+    _record_listing_table_artifact(
+        context,
+        scan=scan,
+        file_extension=file_extension,
+        table_partition_cols=table_partition_cols,
+        skip_metadata=skip_metadata,
+    )
     return _maybe_cache(context, df)
 
 
@@ -577,10 +621,24 @@ def _register_delta(context: DataFusionRegistrationContext) -> DataFrame:
         dataset = _delta_dataset_from_files(context)
         context.ctx.register_table(context.name, dataset)
         provider = "dataset_files"
+        _record_table_provider_artifact(
+            context.runtime_profile,
+            name=context.name,
+            provider=dataset,
+            provider_kind=provider,
+            source=table,
+        )
     elif context.options.provider == "dataset":
         dataset = _delta_dataset_from_table(context, table)
         context.ctx.register_table(context.name, dataset)
         provider = "dataset_forced"
+        _record_table_provider_artifact(
+            context.runtime_profile,
+            name=context.name,
+            provider=dataset,
+            provider_kind=provider,
+            source=table,
+        )
     else:
         delta_provider = _delta_table_provider(table, delta_scan=context.options.delta_scan)
         if delta_provider is not None:
@@ -600,6 +658,21 @@ def _register_delta(context: DataFusionRegistrationContext) -> DataFrame:
                 dataset = _delta_dataset_from_table(context, table)
                 context.ctx.register_table(context.name, dataset)
                 provider = "dataset"
+                _record_table_provider_artifact(
+                    context.runtime_profile,
+                    name=context.name,
+                    provider=dataset,
+                    provider_kind=provider,
+                    source=table,
+                )
+            else:
+                _record_table_provider_artifact(
+                    context.runtime_profile,
+                    name=context.name,
+                    provider=table,
+                    provider_kind=provider,
+                    source=table,
+                )
     df = context.ctx.table(context.name)
     if context.location.delta_version is not None:
         delta_version = context.location.delta_version
@@ -645,6 +718,7 @@ def _record_listing_table_artifact(
         "meta_fetch_concurrency": scan.meta_fetch_concurrency if scan is not None else None,
         "list_files_cache_ttl": scan.list_files_cache_ttl if scan is not None else None,
         "listing_mutable": scan.listing_mutable if scan is not None else None,
+        "unbounded": scan.unbounded if scan is not None else None,
         "schema": schema_payload,
         "read_options": dict(context.options.read_options),
     }
@@ -685,11 +759,18 @@ def _refresh_listing_table(
     *,
     name: str,
     register: Callable[[], None],
+    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> None:
     """Refresh a listing table registration by deregistering and re-registering."""
     with suppress(KeyError, ValueError):
         ctx.deregister_table(name)
     register()
+    if runtime_profile is None or runtime_profile.diagnostics_sink is None:
+        return
+    runtime_profile.diagnostics_sink.record_artifact(
+        "datafusion_listing_refresh_v1",
+        {"name": name},
+    )
 
 
 def _record_delta_table_artifact(

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from functools import cache
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 
-from arrowdsl.schema.build import list_view_type, table_from_rows
+from arrowdsl.schema.build import iter_rows_from_table, list_view_type, table_from_rows
 from arrowdsl.schema.schema import EncodingPolicy, EncodingSpec
 from arrowdsl.spec.codec import decode_json_text, encode_json_text
 from cpg.kinds_ultimate import EdgeKind, EntityKind, NodeKind
@@ -25,6 +25,7 @@ from cpg.specs import (
     NodePlanSpec,
     PropFieldSpec,
     PropTableSpec,
+    PropValueType,
 )
 
 NODE_EMIT_STRUCT = pa.struct(
@@ -265,13 +266,44 @@ def _edge_emit_from_row(payload: dict[str, Any]) -> EdgeEmitSpec:
 def _prop_field_from_row(payload: dict[str, Any]) -> PropFieldSpec:
     return PropFieldSpec(
         prop_key=str(payload["prop_key"]),
-        source_col=payload.get("source_col"),
+        source_col=_coerce_optional_str(payload.get("source_col")),
         literal=_decode_literal(payload.get("literal_json")),
-        transform_id=payload.get("transform_id"),
-        include_if_id=payload.get("include_if_id"),
+        transform_id=_coerce_optional_str(payload.get("transform_id")),
+        include_if_id=_coerce_optional_str(payload.get("include_if_id")),
         skip_if_none=bool(payload.get("skip_if_none")),
-        value_type=payload.get("value_type"),
+        value_type=_coerce_prop_value_type(payload.get("value_type")),
     )
+
+
+def _coerce_optional_str(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _coerce_str_tuple(value: object | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return tuple(str(item) for item in value)
+    return (str(value),)
+
+
+def _coerce_prop_value_type(value: object | None) -> PropValueType | None:
+    if value is None:
+        return None
+    text = str(value)
+    if text in {"string", "int", "float", "bool", "json"}:
+        return cast("PropValueType", text)
+    msg = "value_type must be one of: string, int, float, bool, json."
+    raise TypeError(msg)
+
+
+def _require_mapping(value: object, *, label: str) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    msg = f"{label} must be a mapping."
+    raise TypeError(msg)
 
 
 def node_plan_specs_from_table(table: pa.Table) -> tuple[NodePlanSpec, ...]:
@@ -282,16 +314,18 @@ def node_plan_specs_from_table(table: pa.Table) -> tuple[NodePlanSpec, ...]:
     tuple[NodePlanSpec, ...]
         Node plan specs parsed from the table.
     """
-    specs = [
-        NodePlanSpec(
-            name=str(row["name"]),
-            option_flag=str(row["option_flag"]),
-            table_ref=str(row["table_ref"]),
-            emit=_node_emit_from_row(row["emit"]),
-            preprocessor_id=row.get("preprocessor_id"),
+    specs = []
+    for row in iter_rows_from_table(table):
+        emit_payload = _require_mapping(row.get("emit"), label="emit")
+        specs.append(
+            NodePlanSpec(
+                name=str(row["name"]),
+                option_flag=str(row["option_flag"]),
+                table_ref=str(row["table_ref"]),
+                emit=_node_emit_from_row(emit_payload),
+                preprocessor_id=_coerce_optional_str(row.get("preprocessor_id")),
+            )
         )
-        for row in table.to_pylist()
-    ]
     return tuple(specs)
 
 
@@ -303,16 +337,18 @@ def edge_plan_specs_from_table(table: pa.Table) -> tuple[EdgePlanSpec, ...]:
     tuple[EdgePlanSpec, ...]
         Edge plan specs parsed from the table.
     """
-    specs = [
-        EdgePlanSpec(
-            name=str(row["name"]),
-            option_flag=str(row["option_flag"]),
-            relation_ref=str(row["relation_ref"]),
-            emit=_edge_emit_from_row(row["emit"]),
-            filter_id=row.get("filter_id"),
+    specs = []
+    for row in iter_rows_from_table(table):
+        emit_payload = _require_mapping(row.get("emit"), label="emit")
+        specs.append(
+            EdgePlanSpec(
+                name=str(row["name"]),
+                option_flag=str(row["option_flag"]),
+                relation_ref=str(row["relation_ref"]),
+                emit=_edge_emit_from_row(emit_payload),
+                filter_id=_coerce_optional_str(row.get("filter_id")),
+            )
         )
-        for row in table.to_pylist()
-    ]
     return tuple(specs)
 
 
@@ -323,10 +359,25 @@ def prop_table_specs_from_table(table: pa.Table) -> tuple[PropTableSpec, ...]:
     -------
     tuple[PropTableSpec, ...]
         Property table specs parsed from the table.
+
+    Raises
+    ------
+    TypeError
+        Raised when fields payloads are not mappings.
     """
     specs: list[PropTableSpec] = []
-    for row in table.to_pylist():
-        fields = tuple(_prop_field_from_row(item) for item in row.get("fields") or ())
+    for row in iter_rows_from_table(table):
+        fields_payload = row.get("fields")
+        fields_items: list[PropFieldSpec] = []
+        if isinstance(fields_payload, Sequence) and not isinstance(
+            fields_payload, (str, bytes, bytearray)
+        ):
+            for item in fields_payload:
+                if not isinstance(item, Mapping):
+                    msg = "fields must be a sequence of mappings."
+                    raise TypeError(msg)
+                fields_items.append(_prop_field_from_row(dict(item)))
+        fields = tuple(fields_items)
         node_kind = row.get("node_kind")
         specs.append(
             PropTableSpec(
@@ -334,10 +385,10 @@ def prop_table_specs_from_table(table: pa.Table) -> tuple[PropTableSpec, ...]:
                 option_flag=str(row["option_flag"]),
                 table_ref=str(row["table_ref"]),
                 entity_kind=EntityKind(str(row["entity_kind"])),
-                id_cols=tuple(row.get("id_cols") or ()),
+                id_cols=_coerce_str_tuple(row.get("id_cols")),
                 node_kind=NodeKind(str(node_kind)) if node_kind is not None else None,
                 fields=fields,
-                include_if_id=row.get("include_if_id"),
+                include_if_id=_coerce_optional_str(row.get("include_if_id")),
             )
         )
     return tuple(specs)

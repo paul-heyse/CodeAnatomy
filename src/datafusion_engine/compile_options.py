@@ -100,6 +100,8 @@ class DataFusionFallbackEvent:
     sql: str
     dialect: str
     policy_violations: tuple[str, ...] = ()
+    sql_policy_name: str | None = None
+    param_mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -123,6 +125,7 @@ class DataFusionDmlOptions:
     sql_policy_name: str | None = None
     session_policy: DataFusionSqlPolicy | None = None
     table_policy: DataFusionSqlPolicy | None = None
+    param_identifier_allowlist: tuple[str, ...] | None = None
     params: Mapping[str, object] | None = None
     dialect: str = field(
         default_factory=lambda: sqlglot_surface_policy(SqlGlotSurface.DATAFUSION_DML).dialect
@@ -140,8 +143,10 @@ class DataFusionCompileOptions:
     cache_max_columns: int | None = 64
     cache_event_hook: Callable[[DataFusionCacheEvent], None] | None = None
     params: Mapping[str, object] | Mapping[Value, object] | None = None
+    param_identifier_allowlist: tuple[str, ...] | None = None
     sql_options: SQLOptions | None = None
     sql_policy: DataFusionSqlPolicy | None = None
+    sql_policy_name: str | None = None
     dialect: str = field(
         default_factory=lambda: sqlglot_surface_policy(SqlGlotSurface.DATAFUSION_COMPILE).dialect
     )

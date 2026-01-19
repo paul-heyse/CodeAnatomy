@@ -9,7 +9,7 @@ from typing import Protocol, cast
 import ibis
 import ibis.expr.datatypes as dt
 import ibis.expr.operations as ops
-from ibis.expr.types import BooleanValue, Scalar, StringValue, Table, Value
+from ibis.expr.types import ArrayValue, BooleanValue, Scalar, StringValue, Table, Value
 
 from ibis_engine.builtin_udfs import (
     col_to_byte,
@@ -49,6 +49,24 @@ def _invert_expr(value: BooleanValue) -> BooleanValue:
 
 def _bitwise_and_expr(left: BooleanValue, right: BooleanValue) -> BooleanValue:
     return left & right
+
+
+def _concat_expr(*values: Value) -> Value:
+    if not values:
+        msg = "concat requires at least one input."
+        raise ValueError(msg)
+    if all(value.type().is_string() for value in values):
+        result = cast("StringValue", values[0])
+        for part in values[1:]:
+            result = result.concat(cast("StringValue", part))
+        return result
+    if all(value.type().is_array() for value in values):
+        result = cast("ArrayValue", values[0])
+        for part in values[1:]:
+            result = result.concat(cast("ArrayValue", part))
+        return result
+    msg = "concat requires all string or all array inputs."
+    raise ValueError(msg)
 
 
 def _strip_expr(value: StringValue) -> StringValue:
@@ -141,6 +159,7 @@ def default_expr_registry() -> IbisExprRegistry:
         functions={
             "array": ibis.array,
             "fill_null": _fill_null_expr,
+            "concat": _concat_expr,
             "if_else": _if_else_expr,
             "equal": _equal_expr,
             "map": ibis.map,

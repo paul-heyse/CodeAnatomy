@@ -115,6 +115,14 @@ def _projection_columns(
     base: Sequence[str],
     derived: Mapping[str, ExprIRLike],
 ) -> list[Value]:
-    cols: list[Value] = [table[name] for name in base if name in table.columns]
-    cols.extend(table[name] for name in derived if name in table.columns)
+    cols: list[Value] = []
+    seen: set[str] = set()
+    for name in base:
+        if name in table.columns and name not in seen:
+            cols.append(table[name])
+            seen.add(name)
+    for name in derived:
+        if name in table.columns and name not in seen:
+            cols.append(table[name])
+            seen.add(name)
     return cols

@@ -6,9 +6,9 @@ import hashlib
 import json
 import logging
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import datafusion
 import pyarrow as pa
@@ -16,7 +16,7 @@ from datafusion import RuntimeEnvBuilder, SessionConfig, SessionContext
 from datafusion.dataframe import DataFrame
 from datafusion.object_store import LocalFileSystem
 
-from arrowdsl.core.context import DeterminismTier
+from arrowdsl.core.determinism import DeterminismTier
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
@@ -24,11 +24,11 @@ from datafusion_engine.compile_options import (
     DataFusionSqlPolicy,
     resolve_sql_policy,
 )
-from datafusion_engine.function_factory import install_function_factory
+from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_planners
+from datafusion_engine.function_factory import function_factory_payloads, install_function_factory
 from datafusion_engine.udf_registry import DataFusionUdfSnapshot, register_datafusion_udfs
 from engine.plan_cache import PlanCache
-from obs.diagnostics import DiagnosticsCollector
-from schema_spec.specs import DataFusionWritePolicy
+from schema_spec.policies import DataFusionWritePolicy
 
 if TYPE_CHECKING:
     from ibis.expr.types import Value as IbisValue
@@ -38,6 +38,26 @@ if TYPE_CHECKING:
     ExplainRows = TableLike | RecordBatchReaderLike
 else:
     ExplainRows = object
+
+
+class DiagnosticsSink(Protocol):
+    """Protocol for diagnostics sinks used by DataFusion runtime."""
+
+    def record_events(self, name: str, rows: Sequence[Mapping[str, object]]) -> None:
+        """Record event rows for a named diagnostics table."""
+        ...
+
+    def record_artifact(self, name: str, payload: Mapping[str, object]) -> None:
+        """Record an artifact payload for diagnostics sinks."""
+        ...
+
+    def events_snapshot(self) -> dict[str, list[Mapping[str, object]]]:
+        """Return collected event rows."""
+        ...
+
+    def artifacts_snapshot(self) -> dict[str, list[Mapping[str, object]]]:
+        """Return collected artifact payloads."""
+        ...
 
 MemoryPool = Literal["greedy", "fair", "unbounded"]
 
@@ -186,6 +206,7 @@ class FeatureStateSnapshot:
     determinism_tier: DeterminismTier
     dynamic_filters_enabled: bool
     spill_enabled: bool
+    named_args_supported: bool
 
     def to_row(self) -> dict[str, object]:
         """Return a row mapping for diagnostics sinks.
@@ -200,6 +221,7 @@ class FeatureStateSnapshot:
             "determinism_tier": self.determinism_tier.value,
             "dynamic_filters_enabled": self.dynamic_filters_enabled,
             "spill_enabled": self.spill_enabled,
+            "named_args_supported": self.named_args_supported,
         }
 
 
@@ -222,6 +244,7 @@ def feature_state_snapshot(
             determinism_tier=determinism_tier,
             dynamic_filters_enabled=False,
             spill_enabled=False,
+            named_args_supported=False,
         )
     gates = runtime_profile.feature_gates
     dynamic_filters_enabled = (
@@ -236,6 +259,7 @@ def feature_state_snapshot(
         determinism_tier=determinism_tier,
         dynamic_filters_enabled=dynamic_filters_enabled,
         spill_enabled=spill_enabled,
+        named_args_supported=runtime_profile.named_args_supported(),
     )
 
 
@@ -321,6 +345,8 @@ class DataFusionFallbackCollector:
             "sql": event.sql,
             "dialect": event.dialect,
             "policy_violations": list(event.policy_violations),
+            "sql_policy_name": event.sql_policy_name,
+            "param_mode": event.param_mode,
         }
         self.entries.append(cast("dict[str, object]", payload))
 
@@ -519,20 +545,36 @@ def _settings_by_prefix(payload: Mapping[str, str], prefix: str) -> dict[str, st
     return {key: value for key, value in payload.items() if key.startswith(prefix)}
 
 
+def _function_catalog_sort_key(row: Mapping[str, object]) -> tuple[str, str]:
+    name = row.get("function_name")
+    func_name = str(name) if name is not None else ""
+    func_type = row.get("function_type")
+    return func_name, str(func_type) if func_type is not None else ""
+
+
+def _information_schema_routines(ctx: SessionContext) -> list[dict[str, object]]:
+    try:
+        table = ctx.sql("SELECT * FROM information_schema.routines").to_arrow_table()
+    except (RuntimeError, TypeError, ValueError):
+        return []
+    rows: list[dict[str, object]] = []
+    for row in table.to_pylist():
+        payload = dict(row)
+        if "routine_name" in payload and "function_name" not in payload:
+            payload["function_name"] = payload["routine_name"]
+        if "routine_type" in payload and "function_type" not in payload:
+            payload["function_type"] = payload["routine_type"]
+        payload.setdefault("source", "information_schema")
+        rows.append(payload)
+    return rows
+
+
 def _datafusion_write_policy_payload(
     policy: DataFusionWritePolicy | None,
 ) -> dict[str, object] | None:
     if policy is None:
         return None
-    return {
-        "partition_by": list(policy.partition_by),
-        "single_file_output": policy.single_file_output,
-        "sort_by": list(policy.sort_by),
-        "compression": policy.compression,
-        "statistics_enabled": policy.statistics_enabled,
-        "max_row_group_size": policy.max_row_group_size,
-        "dictionary_enabled": policy.dictionary_enabled,
-    }
+    return policy.payload()
 
 
 def _apply_builder(
@@ -695,7 +737,7 @@ def labeled_explain_hook(
 
 
 def diagnostics_fallback_hook(
-    sink: DiagnosticsCollector,
+    sink: DiagnosticsSink,
 ) -> Callable[[DataFusionFallbackEvent], None]:
     """Return a fallback hook that records diagnostics rows.
 
@@ -725,7 +767,7 @@ def diagnostics_fallback_hook(
 
 
 def diagnostics_cache_hook(
-    sink: DiagnosticsCollector,
+    sink: DiagnosticsSink,
 ) -> Callable[[DataFusionCacheEvent], None]:
     """Return a cache hook that records diagnostics rows.
 
@@ -755,7 +797,7 @@ def diagnostics_cache_hook(
 
 
 def diagnostics_explain_hook(
-    sink: DiagnosticsCollector,
+    sink: DiagnosticsSink,
     *,
     explain_analyze: bool,
 ) -> Callable[[str, ExplainRows], None]:
@@ -784,7 +826,7 @@ def diagnostics_explain_hook(
 
 
 def diagnostics_plan_artifacts_hook(
-    sink: DiagnosticsCollector,
+    sink: DiagnosticsSink,
 ) -> Callable[[Mapping[str, object]], None]:
     """Return a plan artifacts hook that records diagnostics payloads.
 
@@ -801,7 +843,7 @@ def diagnostics_plan_artifacts_hook(
 
 
 def diagnostics_sql_ingest_hook(
-    sink: DiagnosticsCollector,
+    sink: DiagnosticsSink,
 ) -> Callable[[Mapping[str, object]], None]:
     """Return a SQL ingest hook that records diagnostics payloads.
 
@@ -818,7 +860,7 @@ def diagnostics_sql_ingest_hook(
 
 
 def diagnostics_arrow_ingest_hook(
-    sink: DiagnosticsCollector,
+    sink: DiagnosticsSink,
 ) -> Callable[[Mapping[str, object]], None]:
     """Return an Arrow ingest hook that records diagnostics payloads.
 
@@ -883,6 +925,9 @@ class DataFusionRuntimeProfile:
     cache_manager_factory: Callable[[], object] | None = None
     enable_function_factory: bool = True
     function_factory_hook: Callable[[SessionContext], None] | None = None
+    enable_expr_planners: bool = False
+    expr_planner_names: tuple[str, ...] = ()
+    expr_planner_hook: Callable[[SessionContext], None] | None = None
     enable_udfs: bool = True
     enable_delta_plan_codecs: bool = False
     delta_plan_codec_physical: str = "delta_physical"
@@ -906,7 +951,7 @@ class DataFusionRuntimeProfile:
     fallback_collector: DataFusionFallbackCollector | None = field(
         default_factory=DataFusionFallbackCollector
     )
-    diagnostics_sink: DiagnosticsCollector | None = None
+    diagnostics_sink: DiagnosticsSink | None = None
     labeled_fallbacks: list[dict[str, object]] = field(default_factory=list)
     labeled_explains: list[dict[str, object]] = field(default_factory=list)
     plan_cache: PlanCache | None = field(default_factory=PlanCache)
@@ -917,6 +962,7 @@ class DataFusionRuntimeProfile:
     config_policy: DataFusionConfigPolicy | None = None
     sql_policy_name: str | None = "read_only"
     sql_policy: DataFusionSqlPolicy | None = None
+    param_identifier_allowlist: tuple[str, ...] = ()
     external_table_options: Mapping[str, object] = field(default_factory=dict)
     write_policy: DataFusionWritePolicy | None = None
     settings_overrides: Mapping[str, str] = field(default_factory=dict)
@@ -1026,11 +1072,26 @@ class DataFusionRuntimeProfile:
         self._prepare_statements(ctx)
         self.ensure_delta_plan_codecs(ctx)
         self._install_function_factory(ctx)
+        self._install_expr_planners(ctx)
         self._install_tracing()
         if self.session_context_hook is not None:
             ctx = self.session_context_hook(ctx)
         self._cache_context(ctx)
         return ctx
+
+    def named_args_supported(self) -> bool:
+        """Return whether named arguments are enabled for SQL execution.
+
+        Returns
+        -------
+        bool
+            ``True`` when named arguments should be supported.
+        """
+        if not self.enable_expr_planners:
+            return False
+        if self.expr_planner_hook is not None:
+            return True
+        return bool(self.expr_planner_names)
 
     def _install_input_plugins(self, ctx: SessionContext) -> None:
         """Install input plugins on the session context."""
@@ -1134,14 +1195,103 @@ class DataFusionRuntimeProfile:
     def _install_function_factory(self, ctx: SessionContext) -> None:
         if not self.enable_function_factory:
             return
+        available = True
+        installed = False
+        error: str | None = None
+        cause: Exception | None = None
         try:
             if self.function_factory_hook is None:
                 install_function_factory(ctx)
             else:
                 self.function_factory_hook(ctx)
-        except (ImportError, RuntimeError, TypeError) as exc:
+            installed = True
+        except ImportError as exc:
+            available = False
+            error = str(exc)
+            cause = exc
+        except (RuntimeError, TypeError) as exc:
+            error = str(exc)
+            cause = exc
+        self._record_function_factory(
+            available=available,
+            installed=installed,
+            error=error,
+        )
+        if error is not None:
             msg = "FunctionFactory installation failed; native extension is required."
-            raise RuntimeError(msg) from exc
+            raise RuntimeError(msg) from cause
+
+    def _install_expr_planners(self, ctx: SessionContext) -> None:
+        if not self.enable_expr_planners:
+            return
+        available = True
+        installed = False
+        error: str | None = None
+        cause: Exception | None = None
+        try:
+            if self.expr_planner_hook is None:
+                install_expr_planners(ctx, planner_names=self.expr_planner_names)
+            else:
+                self.expr_planner_hook(ctx)
+            installed = True
+        except ImportError as exc:
+            available = False
+            error = str(exc)
+            cause = exc
+        except (RuntimeError, TypeError, ValueError) as exc:
+            error = str(exc)
+            cause = exc
+        self._record_expr_planners(
+            available=available,
+            installed=installed,
+            error=error,
+        )
+        if error is not None:
+            msg = "ExprPlanner installation failed; native extension is required."
+            raise RuntimeError(msg) from cause
+
+    def _record_expr_planners(
+        self,
+        *,
+        available: bool,
+        installed: bool,
+        error: str | None,
+    ) -> None:
+        if self.diagnostics_sink is None:
+            return
+        self.diagnostics_sink.record_artifact(
+            "datafusion_expr_planners_v1",
+            {
+                "enabled": self.enable_expr_planners,
+                "available": available,
+                "installed": installed,
+                "hook_enabled": bool(self.expr_planner_hook),
+                "planner_names": list(self.expr_planner_names),
+                "policy": expr_planner_payloads(self.expr_planner_names),
+                "error": error,
+            },
+        )
+
+    def _record_function_factory(
+        self,
+        *,
+        available: bool,
+        installed: bool,
+        error: str | None,
+    ) -> None:
+        if self.diagnostics_sink is None:
+            return
+        self.diagnostics_sink.record_artifact(
+            "datafusion_function_factory_v1",
+            {
+                "enabled": self.enable_function_factory,
+                "available": available,
+                "installed": installed,
+                "hook_enabled": bool(self.function_factory_hook),
+                "policy": function_factory_payloads(),
+                "error": error,
+            },
+        )
 
     def _install_tracing(self) -> None:
         """Enable tracing when configured.
@@ -1248,6 +1398,11 @@ class DataFusionRuntimeProfile:
             else self.cache_max_columns
         )
         resolved_params = resolved.params if resolved.params is not None else params
+        param_allowlist = (
+            resolved.param_identifier_allowlist
+            if resolved.param_identifier_allowlist is not None
+            else tuple(self.param_identifier_allowlist) or None
+        )
         capture_explain = resolved.capture_explain or self.capture_explain
         explain_analyze = resolved.explain_analyze or self.explain_analyze
         substrait_validation = resolved.substrait_validation or self.substrait_validation
@@ -1264,6 +1419,11 @@ class DataFusionRuntimeProfile:
             capture_plan_artifacts=capture_plan_artifacts,
         )
         sql_policy = self._resolve_sql_policy(resolved)
+        sql_policy_name = (
+            resolved.sql_policy_name
+            if resolved.sql_policy_name is not None
+            else self.sql_policy_name
+        )
         unchanged = (
             cache == resolved.cache,
             cache_max_columns == resolved.cache_max_columns,
@@ -1278,6 +1438,8 @@ class DataFusionRuntimeProfile:
             hooks.fallback_hook == resolved.fallback_hook,
             hooks.cache_event_hook == resolved.cache_event_hook,
             sql_policy == resolved.sql_policy,
+            sql_policy_name == resolved.sql_policy_name,
+            param_allowlist == resolved.param_identifier_allowlist,
         )
         if all(unchanged) and execution_policy is None and execution_label is None:
             return resolved
@@ -1286,6 +1448,7 @@ class DataFusionRuntimeProfile:
             cache=cache,
             cache_max_columns=cache_max_columns,
             params=resolved_params,
+            param_identifier_allowlist=param_allowlist,
             capture_explain=capture_explain,
             explain_analyze=explain_analyze,
             explain_hook=hooks.explain_hook,
@@ -1296,6 +1459,7 @@ class DataFusionRuntimeProfile:
             fallback_hook=hooks.fallback_hook,
             cache_event_hook=hooks.cache_event_hook,
             sql_policy=sql_policy,
+            sql_policy_name=sql_policy_name,
         )
         if execution_label is not None:
             updated = apply_execution_label(
@@ -1365,6 +1529,32 @@ class DataFusionRuntimeProfile:
         )
         return ctx.sql(query).to_arrow_table()
 
+    @staticmethod
+    def function_catalog_snapshot(
+        ctx: SessionContext,
+        *,
+        include_routines: bool = False,
+    ) -> list[dict[str, object]]:
+        """Return a stable snapshot of available DataFusion functions.
+
+        Parameters
+        ----------
+        ctx:
+            Session context to query.
+        include_routines:
+            Whether to include information_schema routines metadata.
+
+        Returns
+        -------
+        list[dict[str, object]]
+            Sorted function catalog entries from ``SHOW FUNCTIONS``.
+        """
+        table = ctx.sql("SHOW FUNCTIONS").to_arrow_table()
+        rows = table.to_pylist()
+        if include_routines:
+            rows.extend(_information_schema_routines(ctx))
+        return sorted(rows, key=_function_catalog_sort_key)
+
     def settings_payload(self) -> dict[str, str]:
         """Return resolved settings applied to DataFusion SessionConfig.
 
@@ -1423,6 +1613,9 @@ class DataFusionRuntimeProfile:
             "cache_manager_factory": bool(self.cache_manager_factory),
             "function_factory_enabled": self.enable_function_factory,
             "function_factory_hook": bool(self.function_factory_hook),
+            "expr_planners_enabled": self.enable_expr_planners,
+            "expr_planner_hook": bool(self.expr_planner_hook),
+            "expr_planner_names": list(self.expr_planner_names),
             "delta_plan_codecs_enabled": self.enable_delta_plan_codecs,
             "delta_plan_codec_physical": self.delta_plan_codec_physical,
             "delta_plan_codec_logical": self.delta_plan_codec_logical,
@@ -1461,6 +1654,9 @@ class DataFusionRuntimeProfile:
                 }
                 if self.sql_policy is not None
                 else None
+            ),
+            "param_identifier_allowlist": (
+                list(self.param_identifier_allowlist) if self.param_identifier_allowlist else None
             ),
             "external_table_options": dict(self.external_table_options)
             if self.external_table_options
@@ -1503,6 +1699,9 @@ class DataFusionRuntimeProfile:
                 if self.sql_policy is not None
                 else None
             ),
+            "param_identifier_allowlist": (
+                list(self.param_identifier_allowlist) if self.param_identifier_allowlist else None
+            ),
             "write_policy": _datafusion_write_policy_payload(self.write_policy),
             "feature_gates": dict(self.feature_gates.settings()),
             "join_policy": self.join_policy.settings() if self.join_policy is not None else None,
@@ -1527,6 +1726,11 @@ class DataFusionRuntimeProfile:
                 "delta_plan_codecs_enabled": self.enable_delta_plan_codecs,
                 "delta_plan_codec_physical": self.delta_plan_codec_physical,
                 "delta_plan_codec_logical": self.delta_plan_codec_logical,
+                "expr_planners_enabled": self.enable_expr_planners,
+                "expr_planner_names": list(self.expr_planner_names),
+                "named_args_supported": self.named_args_supported(),
+                "distributed": self.distributed,
+                "distributed_context_factory": bool(self.distributed_context_factory),
             },
             "substrait_validation": self.substrait_validation,
             "output_writes": {

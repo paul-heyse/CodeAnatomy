@@ -132,6 +132,7 @@ class EvidenceSpec:
     sources: tuple[str, ...] = ()
     required_columns: tuple[str, ...] = ()
     required_types: Mapping[str, str] = field(default_factory=dict)
+    required_metadata: Mapping[bytes, bytes] = field(default_factory=dict)
 
     def resolved_sources(self, inputs: Sequence[DatasetRef]) -> tuple[str, ...]:
         """Return evidence sources or fall back to rule inputs.

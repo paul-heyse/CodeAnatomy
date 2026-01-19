@@ -6,6 +6,7 @@ import pyarrow as pa
 
 from arrowdsl.compute.kernels import winner_select_by_score
 from arrowdsl.core.context import OrderingLevel
+from arrowdsl.schema.build import rows_from_table, table_from_rows
 from arrowdsl.schema.metadata import ordering_metadata_spec
 
 
@@ -25,7 +26,11 @@ def _ordered_schema() -> pa.Schema:
 
 
 def _winner_map(table: pa.Table) -> dict[str, str]:
-    return {row["group"]: row["path"] for row in table.to_pylist()}
+    return {
+        str(row["group"]): str(row["path"])
+        for row in rows_from_table(table)
+        if row.get("group") is not None and row.get("path") is not None
+    }
 
 
 def test_winner_select_deterministic_across_reruns() -> None:
@@ -37,7 +42,7 @@ def test_winner_select_deterministic_across_reruns() -> None:
         {"group": "g2", "score": 2.0, "path": "a", "bstart": 1},
     ]
     schema = _ordered_schema()
-    table = pa.Table.from_pylist(rows, schema=schema)
+    table = table_from_rows(schema, rows)
     reversed_table = table.take(pa.array(list(reversed(range(table.num_rows)))))
 
     winners = winner_select_by_score(table, keys=("group",), score_col="score")

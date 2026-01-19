@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 import pyarrow as pa
 
 from arrowdsl.spec.codec import parse_string_tuple
-from arrowdsl.spec.io import table_from_rows
+from arrowdsl.spec.io import rows_from_table, table_from_rows
 from relspec.rules.definitions import RuleDomain
 from relspec.rules.diagnostics import RuleDiagnostic
 
@@ -82,7 +82,7 @@ def template_specs_from_table(table: pa.Table) -> tuple[RuleTemplateSpec, ...]:
             feature_flags=parse_string_tuple(row.get("feature_flags"), label="feature_flags"),
             metadata=_metadata_from_row(row.get("metadata")),
         )
-        for row in table.to_pylist()
+        for row in rows_from_table(table)
     )
 
 

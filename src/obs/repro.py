@@ -358,11 +358,19 @@ class RunBundleContext:
     datafusion_arrow_ingest: Sequence[Mapping[str, object]] | None = None
     datafusion_view_registry: Sequence[Mapping[str, object]] | None = None
     datafusion_dml_statements: Sequence[Mapping[str, object]] | None = None
+    datafusion_function_factory: Sequence[Mapping[str, object]] | None = None
+    datafusion_expr_planners: Sequence[Mapping[str, object]] | None = None
     datafusion_listing_tables: Sequence[Mapping[str, object]] | None = None
+    datafusion_listing_refreshes: Sequence[Mapping[str, object]] | None = None
     datafusion_delta_tables: Sequence[Mapping[str, object]] | None = None
     datafusion_table_providers: Sequence[Mapping[str, object]] | None = None
     delta_maintenance_reports: Sequence[Mapping[str, object]] | None = None
     datafusion_udf_registry: Sequence[Mapping[str, object]] | None = None
+    datafusion_function_catalog: Sequence[Mapping[str, object]] | None = None
+    datafusion_function_catalog_hash: str | None = None
+    datafusion_write_policy: Mapping[str, object] | None = None
+    function_registry_snapshot: Mapping[str, object] | None = None
+    function_registry_hash: str | None = None
     arrow_kernel_registry: Mapping[str, object] | None = None
     ibis_sql_ingest_artifacts: Sequence[Mapping[str, object]] | None = None
     ibis_namespace_actions: Sequence[Mapping[str, object]] | None = None
@@ -554,6 +562,40 @@ def _write_runtime_artifacts(
         ("datafusion_metrics.json", context.datafusion_metrics),
         ("datafusion_traces.json", context.datafusion_traces),
         (
+            "datafusion_function_catalog.json",
+            cast(
+                "JsonValue",
+                json_default(
+                    {
+                        "functions": context.datafusion_function_catalog,
+                        "hash": context.datafusion_function_catalog_hash,
+                    }
+                ),
+            )
+            if context.datafusion_function_catalog
+            else None,
+        ),
+        (
+            "datafusion_write_policy.json",
+            cast("JsonValue", json_default(context.datafusion_write_policy))
+            if context.datafusion_write_policy
+            else None,
+        ),
+        (
+            "function_registry_snapshot.json",
+            cast(
+                "JsonValue",
+                json_default(
+                    {
+                        "snapshot": context.function_registry_snapshot,
+                        "hash": context.function_registry_hash,
+                    }
+                ),
+            )
+            if context.function_registry_snapshot
+            else None,
+        ),
+        (
             "arrow_kernel_registry.json",
             cast("JsonValue", json_default(context.arrow_kernel_registry))
             if context.arrow_kernel_registry
@@ -604,10 +646,31 @@ def _write_runtime_artifacts(
             else None,
         ),
         (
+            "datafusion_function_factory.json",
+            "factories",
+            _json_list(context.datafusion_function_factory)
+            if context.datafusion_function_factory
+            else None,
+        ),
+        (
+            "datafusion_expr_planners.json",
+            "planners",
+            _json_list(context.datafusion_expr_planners)
+            if context.datafusion_expr_planners
+            else None,
+        ),
+        (
             "datafusion_listing_tables.json",
             "registrations",
             _json_list(context.datafusion_listing_tables)
             if context.datafusion_listing_tables
+            else None,
+        ),
+        (
+            "datafusion_listing_refreshes.json",
+            "refreshes",
+            _json_list(context.datafusion_listing_refreshes)
+            if context.datafusion_listing_refreshes
             else None,
         ),
         (
@@ -1278,6 +1341,8 @@ def write_run_bundle(
         relspec/rule_diagnostics/
         relspec/datafusion_metrics.json
         relspec/datafusion_traces.json
+        relspec/datafusion_function_catalog.json
+        relspec/datafusion_write_policy.json
         relspec/datafusion_fallbacks/
         relspec/datafusion_explains/
         relspec/datafusion_plan_artifacts_v1/
@@ -1287,10 +1352,14 @@ def write_run_bundle(
         relspec/datafusion_cache_events.json
         relspec/datafusion_prepared_statements.json
         relspec/datafusion_dml_statements.json
+        relspec/datafusion_function_factory.json
+        relspec/datafusion_expr_planners.json
         relspec/datafusion_listing_tables.json
+        relspec/datafusion_listing_refreshes.json
         relspec/datafusion_delta_tables.json
         relspec/datafusion_table_providers.json
         relspec/datafusion_udf_registry.json
+        relspec/function_registry_snapshot.json
         relspec/arrow_kernel_registry.json
         relspec/substrait_cache/
         relspec/substrait_cache_index.json

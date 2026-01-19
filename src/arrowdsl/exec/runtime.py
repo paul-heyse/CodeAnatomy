@@ -10,7 +10,8 @@ import pyarrow as pa
 from arrowdsl.compile.kernel_compiler import KernelCompiler
 from arrowdsl.compile.plan_compiler import PlanCompiler
 from arrowdsl.compute.kernels import apply_join
-from arrowdsl.core.context import DeterminismTier, ExecutionContext
+from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.ir.plan import OpNode, PlanIR
 from arrowdsl.ops.catalog import OP_CATALOG

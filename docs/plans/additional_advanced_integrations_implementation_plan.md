@@ -44,10 +44,10 @@ def sorting_columns_for_schema(schema) -> list[pq.SortingColumn]:
 
 **Implementation checklist**
 - [x] Derive `sorting_columns` from explicit ordering keys at write time.
-- [ ] Emit sorting metadata only when order is canonical or explicitly provided.
+- [x] Emit sorting metadata only when order is canonical or explicitly provided.
 - [x] Capture row group `sorting_columns()` in write artifacts.
 - [x] Add tests validating that metadata appears when keys are present.
-- [ ] Add tests that no metadata is written when keys are absent.
+- [x] Add tests that no metadata is written when keys are absent.
 
 ---
 
@@ -88,8 +88,8 @@ def external_table_sql(spec: TableSchemaSpec, *, location: str) -> str:
 - [x] Encode “session defaults” in runtime profile settings.
 - [x] Encode “table defaults” via DDL `OPTIONS`.
 - [x] Encode “statement overrides” via `COPY ... OPTIONS(...)`.
-- [ ] Add tests that DDL contains expected clauses.
-- [ ] Add tests that options precedence is deterministic.
+- [x] Add tests that DDL contains expected clauses.
+- [x] Add tests that options precedence is deterministic.
 
 ---
 
@@ -124,7 +124,7 @@ def row_group_stats(path: str) -> list[dict[str, object]]:
 - [x] Extend `file_visitor` to collect per‑file stats (bounded).
 - [x] Persist row‑group metadata for key columns only.
 - [x] Record `_metadata`/`_common_metadata` emission in artifacts.
-- [ ] Add tests for stats capture and scale gating.
+- [x] Add tests for stats capture and scale gating.
 
 ---
 
@@ -149,8 +149,8 @@ async def iter_batches(df):
 
 **Implementation checklist**
 - [x] Add async generator helper for DataFusion DataFrame.
-- [ ] Wire async batch streaming into writer surfaces (optional).
-- [ ] Add tests that async iteration yields batches.
+- [x] Wire async batch streaming into writer surfaces (optional).
+- [x] Add tests that async iteration yields batches.
 
 ---
 
@@ -177,10 +177,10 @@ def run_substrait(plan_bytes: bytes):
 - `tests/integration/test_substrait_cross_validation.py`
 
 **Implementation checklist**
-- [ ] Emit Substrait bytes for logical plans.
-- [ ] Run PyArrow Substrait engine on fixtures (non‑gating).
-- [ ] Compare output tables (row count + hash).
-- [ ] Record failures to repro artifacts.
+- [x] Emit Substrait bytes for logical plans.
+- [x] Run PyArrow Substrait engine on fixtures (non‑gating).
+- [x] Compare output tables (row count + hash).
+- [x] Record failures to repro artifacts.
 
 ---
 
@@ -219,10 +219,10 @@ def normalize_case(
 - `tests/unit/test_identifier_quoting.py`
 
 **Implementation checklist**
-- [ ] Detect mixed‑case schemas and force quoting.
-- [ ] Preserve original identifiers for diagnostics artifacts.
-- [ ] Persist quoting policy in runtime profile artifacts.
-- [ ] Add CI test for capitalized field lookup.
+- [x] Detect mixed‑case schemas and force quoting.
+- [x] Preserve original identifiers for diagnostics artifacts.
+- [x] Persist quoting policy in runtime profile artifacts.
+- [x] Add CI test for capitalized field lookup.
 
 ---
 
@@ -250,7 +250,7 @@ def union_dataset(datasets: list[ds.Dataset]) -> ds.Dataset:
 **Implementation checklist**
 - [x] Add helper to create UnionDataset from multiple sources.
 - [x] Detect one‑shot InMemoryDataset sources and guard re‑scan.
-- [ ] Add tests for union schema alignment and one‑shot behavior.
+- [x] Add tests for union schema alignment and one‑shot behavior.
 
 ---
 
@@ -278,7 +278,7 @@ def filename_partitioning(schema):
 **Implementation checklist**
 - [x] Add filename partitioning support to read paths.
 - [x] Align basename template tokens with schema fields.
-- [ ] Add test verifying extracted partition keys.
+- [x] Add test verifying extracted partition keys.
 
 ---
 
@@ -305,9 +305,9 @@ def from_arrow_any(ctx: SessionContext, obj, *, name: str):
 - `tests/unit/test_from_arrow_ingest.py`
 
 **Implementation checklist**
-- [ ] Add a single ingestion helper for `from_arrow`/`from_pydict`/`from_pylist`.
-- [ ] Record partitioning strategy for record batch ingestion.
-- [ ] Add tests for each ingestion method.
+- [x] Add a single ingestion helper for `from_arrow`/`from_pydict`/`from_pylist`.
+- [x] Record partitioning strategy for record batch ingestion.
+- [x] Add tests for each ingestion method.
 
 ---
 
@@ -331,9 +331,9 @@ def record_view(registry: dict[str, str], name: str, sql: str) -> None:
 - `tests/unit/test_view_registry_snapshot.py`
 
 **Implementation checklist**
-- [ ] Capture view names and definition SQL.
-- [ ] Persist registry snapshot in run bundles.
-- [ ] Add test asserting snapshot stability for repeated registration.
+- [x] Capture view names and definition SQL.
+- [x] Persist registry snapshot in run bundles.
+- [x] Add test asserting snapshot stability for repeated registration.
 
 ---
 
@@ -373,11 +373,11 @@ def provider_capsule_id(provider: TableProviderCapsule) -> str:
 - `tests/integration/test_pycapsule_provider_registry.py`
 
 **Implementation checklist**
-- [ ] Add registry hooks for PyCapsule UDFs and TableProviders.
-- [ ] Capture provider capability hints (projection/predicate/limit pushdown).
-- [ ] Include capsule identifiers in function registry fingerprints.
-- [ ] Persist snapshots in run bundles and manifest notes.
-- [ ] Add minimal query tests for UDFs and providers.
+- [x] Add registry hooks for PyCapsule UDFs and TableProviders.
+- [x] Capture provider capability hints (projection/predicate/limit pushdown).
+- [x] Include capsule identifiers in function registry fingerprints.
+- [x] Persist snapshots in run bundles and manifest notes.
+- [x] Add minimal query tests for UDFs and providers.
 
 ---
 
@@ -416,10 +416,10 @@ def to_reader(obj: object, *, schema: pa.Schema | None = None) -> pa.RecordBatch
 - `tests/unit/test_streaming_adapter.py`
 
 **Implementation checklist**
-- [ ] Introduce a single `to_reader` adapter with explicit one‑shot semantics.
-- [ ] Update DataFusion/Ibis/Arrow ingestion surfaces to call `to_reader`.
-- [ ] Enforce schema negotiation only when supported (no reshaping).
-- [ ] Add tests for DataFusion DF, Ibis expr, Scanner, and capsule sources.
+- [x] Introduce a single `to_reader` adapter with explicit one‑shot semantics.
+- [x] Update DataFusion/Ibis/Arrow ingestion surfaces to call `to_reader`.
+- [x] Enforce schema negotiation only when supported (no reshaping).
+- [x] Add tests for DataFusion DF, Ibis expr, Scanner, and capsule sources.
 
 ---
 
@@ -452,9 +452,9 @@ def scanner_from_reader(
 - `tests/unit/test_scan_from_batches.py`
 
 **Implementation checklist**
-- [ ] Wrap one‑shot streams in `Scanner.from_batches` when scan policy is needed.
-- [ ] Prevent re‑scans of one‑shot sources (explicit guard/error).
-- [ ] Add tests that scan policy applies to streaming sources without materialization.
+- [x] Wrap one‑shot streams in `Scanner.from_batches` when scan policy is needed.
+- [x] Prevent re‑scans of one‑shot sources (explicit guard/error).
+- [x] Add tests that scan policy applies to streaming sources without materialization.
 
 ---
 
@@ -483,10 +483,10 @@ def required_scan_columns(expr, *, backend, dataset: str) -> tuple[str, ...]:
 - `tests/unit/test_required_columns_scan.py`
 
 **Implementation checklist**
-- [ ] Thread `required_columns` into `QuerySpec.scan_columns`.
-- [ ] Ensure filter‑only columns are included in scan projections.
-- [ ] Persist required vs scanned columns in telemetry artifacts.
-- [ ] Add tests verifying projection shrinkage and evidence payloads.
+- [x] Thread `required_columns` into `QuerySpec.scan_columns`.
+- [x] Ensure filter‑only columns are included in scan projections.
+- [x] Persist required vs scanned columns in telemetry artifacts.
+- [x] Add tests verifying projection shrinkage and evidence payloads.
 
 ---
 
@@ -512,9 +512,9 @@ def plan_to_sql(plan) -> str:
 - `tests/unit/test_datafusion_unparser_artifacts.py`
 
 **Implementation checklist**
-- [ ] Capture unparsed SQL when plan artifacts are collected.
-- [ ] Store unparser output (or error) in run bundle artifacts.
-- [ ] Add tests for deterministic unparser payloads.
+- [x] Capture unparsed SQL when plan artifacts are collected.
+- [x] Store unparser output (or error) in run bundle artifacts.
+- [x] Add tests for deterministic unparser payloads.
 
 ---
 
@@ -542,10 +542,10 @@ def function_registry_snapshot() -> dict[str, object]:
 - `tests/unit/test_function_registry_snapshot.py`
 
 **Implementation checklist**
-- [ ] Extend registry payload with PyArrow compute + PyCapsule identifiers.
-- [ ] Incorporate new fields into registry fingerprint.
-- [ ] Persist registry snapshot in run bundles.
-- [ ] Add tests for sorted, stable snapshots.
+- [x] Extend registry payload with PyArrow compute + PyCapsule identifiers.
+- [x] Incorporate new fields into registry fingerprint.
+- [x] Persist registry snapshot in run bundles.
+- [x] Add tests for sorted, stable snapshots.
 
 ---
 
@@ -575,10 +575,10 @@ def explode_ibis(table: ibis.Table, *, spec: ExplodeSpec) -> ibis.Table:
 - `tests/unit/test_explode_dispatch.py`
 
 **Implementation checklist**
-- [ ] Add a dispatcher that chooses Ibis, DataFusion, or kernel lane per spec.
-- [ ] Enforce deterministic ordering (`parent_key`, `idx`) after explode.
-- [ ] Expose array/map/struct constructors for nested payload normalization.
-- [ ] Add tests for empty/null lists, list<struct> + unpack, and map entries.
+- [x] Add a dispatcher that chooses Ibis, DataFusion, or kernel lane per spec.
+- [x] Enforce deterministic ordering (`parent_key`, `idx`) after explode.
+- [x] Expose array/map/struct constructors for nested payload normalization.
+- [x] Add tests for empty/null lists, list<struct> + unpack, and map entries.
 
 ---
 
@@ -632,9 +632,9 @@ def execute_safe_sql(ctx, sql: str, *, policy_name: str, params: dict[str, objec
 **Implementation checklist**
 - [x] Add read‑only/service/admin SQL policy presets.
 - [x] Enforce `param_values` for user‑provided scalar inputs.
-- [ ] Restrict named‑param identifier substitution to allowlisted identifiers.
-- [ ] Record policy name and parameter mode in artifacts.
-- [ ] Add tests for policy enforcement and parameter safety.
+- [x] Restrict named‑param identifier substitution to allowlisted identifiers.
+- [x] Record policy name and parameter mode in artifacts.
+- [x] Add tests for policy enforcement and parameter safety.
 
 ---
 
@@ -663,10 +663,10 @@ def function_catalog_snapshot(ctx: SessionContext) -> list[dict[str, object]]:
 - `tests/unit/test_function_catalog_snapshot.py`
 
 **Implementation checklist**
-- [ ] Capture `SHOW FUNCTIONS` output as a stable snapshot.
-- [ ] Optionally enrich with `information_schema.routines` when enabled.
-- [ ] Persist snapshot and hash in run bundle artifacts.
-- [ ] Add tests for snapshot stability and ordering.
+- [x] Capture `SHOW FUNCTIONS` output as a stable snapshot.
+- [x] Optionally enrich with `information_schema.routines` when enabled.
+- [x] Persist snapshot and hash in run bundle artifacts.
+- [x] Add tests for snapshot stability and ordering.
 
 ---
 
@@ -707,7 +707,7 @@ def apply_stats_policy(
 - [x] Add `collect_statistics` and `meta_fetch_concurrency` to scan options.
 - [x] Apply stats settings before external table registration.
 - [x] Record stats policy in registry/scan telemetry artifacts.
-- [ ] Add tests for per‑dataset stats policy application.
+- [x] Add tests for per‑dataset stats policy application.
 
 ---
 
@@ -739,8 +739,8 @@ def refresh_listing_table(ctx, *, name: str, register: Callable[[], None]) -> No
 - [x] Add dataset mutability flag (immutable vs mutable prefixes).
 - [x] Configure `list_files_cache_ttl` via profile for mutable datasets.
 - [x] Force provider refresh when mutable datasets are re‑registered.
-- [ ] Record listing cache policy + refresh events in artifacts.
-- [ ] Add integration tests covering refresh behavior.
+- [x] Record listing cache policy + refresh events in artifacts.
+- [x] Add integration tests covering refresh behavior.
 
 ---
 
@@ -780,7 +780,7 @@ def default_write_policy():
 - [x] Add a write‑policy model for DataFusion outputs.
 - [x] Map write policy to `DataFrameWriteOptions` and `ParquetWriterOptions`.
 - [x] Record output layout + writer settings in run bundle artifacts.
-- [ ] Add tests for write policy serialization and defaults.
+- [x] Add tests for write policy serialization and defaults.
 
 ---
 
@@ -814,9 +814,9 @@ profile = DataFusionRuntimeProfile(
 - `tests/integration/test_create_function_factory.py`
 
 **Implementation checklist**
-- [ ] Ensure a FunctionFactory hook is installed when enabled.
-- [ ] Record FunctionFactory availability and failures in artifacts.
-- [ ] Add tests for `CREATE FUNCTION` success or structured failure.
+- [x] Ensure a FunctionFactory hook is installed when enabled.
+- [x] Record FunctionFactory availability and failures in artifacts.
+- [x] Add tests for `CREATE FUNCTION` success or structured failure.
 
 ---
 
@@ -847,9 +847,9 @@ profile = DataFusionRuntimeProfile(session_context_hook=install_planners)
 - `tests/integration/test_expr_planner_hooks.py`
 
 **Implementation checklist**
-- [ ] Provide an extension hook to register ExprPlanner instances.
-- [ ] Record named‑argument capability in feature gates artifacts.
-- [ ] Add tests for named‑argument UDF calls and planner hooks.
+- [x] Provide an extension hook to register ExprPlanner instances.
+- [x] Record named‑argument capability in feature gates artifacts.
+- [x] Add tests for named‑argument UDF calls and planner hooks.
 
 ---
 
@@ -878,10 +878,10 @@ def create_unbounded_table(ctx, *, name: str, location: str) -> None:
 - `tests/integration/test_unbounded_table.py`
 
 **Implementation checklist**
-- [ ] Add a dataset flag for unbounded/streaming sources.
-- [ ] Register unbounded tables via DDL or provider abstraction.
-- [ ] Record unbounded source policies in artifacts.
-- [ ] Add integration tests covering basic unbounded reads.
+- [x] Add a dataset flag for unbounded/streaming sources.
+- [x] Register unbounded tables via DDL or provider abstraction.
+- [x] Record unbounded source policies in artifacts.
+- [x] Add integration tests covering basic unbounded reads.
 
 ---
 
@@ -916,9 +916,9 @@ profile = DataFusionRuntimeProfile(
 - `tests/integration/test_ballista_smoke.py`
 
 **Implementation checklist**
-- [ ] Wire `distributed_context_factory` into session creation.
-- [ ] Record distributed runtime mode in runtime artifacts.
-- [ ] Add a smoke test for Ballista context creation (gated by marker).
+- [x] Wire `distributed_context_factory` into session creation.
+- [x] Record distributed runtime mode in runtime artifacts.
+- [x] Add a smoke test for Ballista context creation (gated by marker).
 
 ---
 
@@ -953,10 +953,10 @@ def apply_rule_macro(table: Table) -> Table:
 - `tests/unit/test_ibis_macros.py`
 
 **Implementation checklist**
-- [ ] Add deferred/selector helpers for rule macros.
-- [ ] Extend macro binding to accept selectors and deferred exprs.
-- [ ] Add macro library entrypoints for rulepacks.
-- [ ] Add tests for selector‑based macro expansion.
+- [x] Add deferred/selector helpers for rule macros.
+- [x] Extend macro binding to accept selectors and deferred exprs.
+- [x] Add macro library entrypoints for rulepacks.
+- [x] Add tests for selector‑based macro expansion.
 
 ---
 
@@ -987,10 +987,14 @@ def execution_with_params(params: dict[str, object]) -> IbisPlanExecutionOptions
 - `tests/unit/test_param_cache_policy.py`
 
 **Implementation checklist**
-- [ ] Enforce parameter bindings for plan execution and SQL emission.
-- [ ] Record parameter mode (named/typed) in artifacts.
-- [ ] Disable caching when params are non‑deterministic or missing defaults.
-- [ ] Add tests for param bindings + cache policy behavior.
+- [x] Enforce parameter bindings for plan execution and SQL emission.
+- [x] Record parameter mode (named/typed) in artifacts.
+- [x] Disable caching when params are non‑deterministic or missing defaults.
+- [x] Add tests for param bindings + cache policy behavior.
+
+**Notes**
+- Caching is disabled for any parameter bindings (stricter than the original guard) to
+  avoid incorrect reuse when parameter determinism is unclear.
 
 ---
 
@@ -1018,10 +1022,10 @@ def ingest_sql(sql: str, *, backend, schema) -> None:
 - `tests/unit/test_sql_ingest_guardrails.py`
 
 **Implementation checklist**
-- [ ] Require explicit schemas for SQL ingestion.
-- [ ] Preserve SQLGlot AST checkpoints for ingested SQL.
-- [ ] Add golden tests for supported SQL shapes.
-- [ ] Fail fast on parse/qualification errors with repro artifacts.
+- [x] Require explicit schemas for SQL ingestion.
+- [x] Preserve SQLGlot AST checkpoints for ingested SQL.
+- [x] Add golden tests for supported SQL shapes.
+- [x] Fail fast on parse/qualification errors with repro artifacts.
 
 ---
 
@@ -1056,10 +1060,10 @@ def rule_ir_artifacts(expr, *, backend) -> dict[str, object]:
 - `tests/unit/test_rule_ir_artifacts.py`
 
 **Implementation checklist**
-- [ ] Emit decompiled Ibis expressions for rule outputs.
-- [ ] Persist rendered SQL (pretty + canonical) alongside SQLGlot AST.
-- [ ] Add plan hash + policy hash to artifacts for reproducibility.
-- [ ] Add tests for artifact stability.
+- [x] Emit decompiled Ibis expressions for rule outputs.
+- [x] Persist rendered SQL (pretty + canonical) alongside SQLGlot AST.
+- [x] Add plan hash + policy hash to artifacts for reproducibility.
+- [x] Add tests for artifact stability.
 
 ---
 
@@ -1088,10 +1092,13 @@ def materialize_output(backend, *, name: str, expr: Table) -> None:
 - `tests/integration/test_materialization_surfaces.py`
 
 **Implementation checklist**
-- [ ] Use `create_table` for named, durable intermediates.
-- [ ] Use `create_view` for reusable IR‑level views.
-- [ ] Use `insert` for rule outputs into cataloged tables.
-- [ ] Record namespace actions in artifacts.
+- [x] Use `create_table` for named, durable intermediates.
+- [x] Use `create_view` for reusable IR‑level views.
+- [x] Use `insert` for rule outputs into cataloged tables.
+- [x] Record namespace actions in artifacts.
+
+**Notes**
+- Rule outputs now materialize via `create_table` + `insert` into backend catalogs.
 
 ---
 
@@ -1118,10 +1125,13 @@ def ensure_canonical_order(expr: ibis.expr.types.Table, *, keys: list[str]) -> i
 - `tests/unit/test_ordering_contract.py`
 
 **Implementation checklist**
-- [ ] Require explicit `order_by` for persisted rule outputs.
-- [ ] For explode/unnest, enforce `row_number` + `order_by` canonical patterns.
-- [ ] Record ordering keys in artifacts and manifests.
-- [ ] Add tests for ordering enforcement across outputs.
+- [x] Require explicit `order_by` for persisted rule outputs.
+- [x] For explode/unnest, enforce `row_number` + `order_by` canonical patterns.
+- [x] Record ordering keys in artifacts and manifests.
+- [x] Add tests for ordering enforcement across outputs.
+
+**Notes**
+- Ordering enforcement covers persisted outputs and explode/unnest canonical ordering.
 
 ---
 
@@ -1155,10 +1165,10 @@ def rewrite_and_check(sql: str, *, tables: dict[str, object]) -> None:
 - `tests/unit/test_sqlglot_transforms_lane.py`
 
 **Implementation checklist**
-- [ ] Add EXPLODE/UNNEST and join‑rewrite transforms to policy lane.
-- [ ] Add semantic equivalence tests using SQLGlot executor.
-- [ ] Record rewrite lane + transform list in artifacts.
-- [ ] Gate DataFusion SQL emission on strict unsupported‑level settings.
+- [x] Add EXPLODE/UNNEST and join‑rewrite transforms to policy lane.
+- [x] Add semantic equivalence tests using SQLGlot executor.
+- [x] Record rewrite lane + transform list in artifacts.
+- [x] Gate DataFusion SQL emission on strict unsupported‑level settings.
 
 ---
 
@@ -1187,9 +1197,9 @@ def apply_sql_options() -> None:
 - `tests/unit/test_ibis_sql_options.py`
 
 **Implementation checklist**
-- [ ] Apply SQL options via runtime profile hooks.
-- [ ] Record SQL option settings in runtime artifacts.
-- [ ] Add tests for deterministic SQL output with options pinned.
+- [x] Apply SQL options via runtime profile hooks.
+- [x] Record SQL option settings in runtime artifacts.
+- [x] Add tests for deterministic SQL output with options pinned.
 
 ---
 
@@ -1220,10 +1230,10 @@ UDF_TIER_PRIORITY = ("builtin", "pyarrow", "pandas", "python")
 - `tests/unit/test_udf_ladder_policy.py`
 
 **Implementation checklist**
-- [ ] Tag UDFs by tier when registered.
-- [ ] Enforce tier priority for new UDF definitions.
-- [ ] Persist tier metadata in registry fingerprints.
-- [ ] Add tests for tier ordering and registry payloads.
+- [x] Tag UDFs by tier when registered.
+- [x] Enforce tier priority for new UDF definitions.
+- [x] Persist tier metadata in registry fingerprints.
+- [x] Add tests for tier ordering and registry payloads.
 
 ---
 

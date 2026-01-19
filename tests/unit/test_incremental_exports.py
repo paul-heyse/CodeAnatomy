@@ -6,6 +6,7 @@ import pyarrow as pa
 
 from arrowdsl.core.ids import prefixed_hash_id
 from incremental.exports import build_exported_defs_index
+from tests.utils import values_as_list
 
 _QNAME_TYPE = pa.list_(pa.struct([("name", pa.string()), ("source", pa.string())]))
 
@@ -17,11 +18,11 @@ def test_build_exported_defs_index_hashes_qnames() -> None:
 
     expected_qnames = ["pkg.mod.foo", "pkg.mod.foo.Inner"]
     assert result.num_rows == len(expected_qnames)
-    assert result["def_id"].to_pylist() == ["def_root", "def_root"]
-    assert result["qname"].to_pylist() == expected_qnames
+    assert values_as_list(result["def_id"]) == ["def_root", "def_root"]
+    assert values_as_list(result["qname"]) == expected_qnames
 
     expected_ids = prefixed_hash_id([pa.array(expected_qnames, type=pa.string())], prefix="qname")
-    assert result["qname_id"].to_pylist() == expected_ids.to_pylist()
+    assert values_as_list(result["qname_id"]) == values_as_list(expected_ids)
 
 
 def test_build_exported_defs_index_attaches_symbols() -> None:
@@ -38,8 +39,8 @@ def test_build_exported_defs_index_attaches_symbols() -> None:
 
     result = build_exported_defs_index(cst_defs, rel_def_symbol=rel_def_symbol)
 
-    assert result["symbol"].to_pylist() == ["sym1", "sym1"]
-    assert result["symbol_roles"].to_pylist() == [1, 1]
+    assert values_as_list(result["symbol"]) == ["sym1", "sym1"]
+    assert values_as_list(result["symbol_roles"]) == [1, 1]
 
 
 def _cst_defs_table() -> pa.Table:

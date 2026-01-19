@@ -21,8 +21,8 @@ from datafusion.expr import SortKey as DFSortKey
 from arrowdsl.core.context import ExecutionContext, Ordering, OrderingLevel
 from arrowdsl.core.expr_types import ExplodeSpec
 from arrowdsl.core.interop import SchemaLike, TableLike, pc
-from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions
-from arrowdsl.plan.ops import SortKey as PlanSortKey
+from arrowdsl.core.plan_ops import DedupeSpec, IntervalAlignOptions
+from arrowdsl.core.plan_ops import SortKey as PlanSortKey
 from arrowdsl.schema.metadata import (
     merge_metadata_specs,
     metadata_spec_from_schema,

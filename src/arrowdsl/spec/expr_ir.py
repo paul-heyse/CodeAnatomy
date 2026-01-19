@@ -11,8 +11,6 @@ from typing import TYPE_CHECKING, Any, cast
 import pyarrow as pa
 from ibis.expr.types import Table, Value
 
-from arrowdsl.compute.expr_core import ComputeExprSpec, ExprSpec
-from arrowdsl.compute.macros import ConstExpr, FieldExpr
 from arrowdsl.compute.options import (
     FunctionOptionsPayload,
     FunctionOptionsProto,
@@ -25,12 +23,10 @@ from arrowdsl.core.interop import (
     ArrayLike,
     ComputeExpression,
     ScalarLike,
-    TableLike,
     call_expression_function,
     ensure_expression,
     pc,
 )
-from arrowdsl.ir.expr import expr_from_expr_ir
 from arrowdsl.schema.build import (
     dictionary_array_from_indices,
     rows_from_table,
@@ -45,7 +41,7 @@ from arrowdsl.spec.codec import (
     encode_scalar_payload,
     encode_scalar_union,
 )
-from arrowdsl.spec.infra import SCALAR_UNION_TYPE
+from arrowdsl.spec.scalar_union import SCALAR_UNION_TYPE
 from registry_common.arrow_payloads import ipc_table, payload_ipc_bytes
 
 if TYPE_CHECKING:
@@ -216,84 +212,6 @@ class ExprIR:
             return call_expression_function(name, args, options=opts)
         msg = f"Unsupported ExprIR op: {self.op}"
         raise ValueError(msg)
-
-    def to_expr_spec(self, *, registry: ExprRegistry | None = None) -> ExprSpec:
-        """Compile the IR into an ExprSpec.
-
-        Returns
-        -------
-        ExprSpec
-            Expression spec wrapper.
-
-        Raises
-        ------
-        ValueError
-            Raised when the IR is missing required fields or has an unsupported op.
-        """
-        if self.op == "field":
-            return self._expr_spec_field()
-        if self.op == "literal":
-            return self._expr_spec_literal()
-        if self.op == "call":
-            return self._expr_spec_call(registry=registry)
-        msg = f"Unsupported ExprIR op: {self.op}"
-        raise ValueError(msg)
-
-    def _expr_spec_field(self) -> ExprSpec:
-        name = _require_expr_name(self.name, op="field")
-        return FieldExpr(name=name)
-
-    def _expr_spec_literal(self) -> ExprSpec:
-        return ConstExpr(value=self.value)
-
-    def _expr_spec_call(self, *, registry: ExprRegistry | None) -> ExprSpec:
-        name = _require_expr_name(self.name, op="call")
-        args = tuple(arg.to_expr_spec(registry=registry) for arg in self.args)
-        resolved_name = registry.ensure(name) if registry is not None else name
-        options = _options_bytes(self.options)
-        opts = _deserialize_options(options)
-        if resolved_name == "stringify":
-            return self._expr_spec_stringify(args, registry=registry)
-        return self._expr_spec_generic_call(args, resolved_name, opts, registry=registry)
-
-    @staticmethod
-    def _expr_spec_stringify(
-        args: tuple[ExprSpec, ...],
-        *,
-        registry: ExprRegistry | None,
-    ) -> ExprSpec:
-        if not args:
-            msg = "ExprIR call op stringify expects at least one argument."
-            raise ValueError(msg)
-
-        def _materialize(table: TableLike) -> ArrayLike:
-            values = args[0].materialize(table)
-            result = pc.cast(values, pa.string())
-            return _coerce_materialized(result, table_rows=table.num_rows, op="stringify")
-
-        expr = ensure_expression(pc.cast(args[0].to_expression(), pa.string()))
-        return ComputeExprSpec(expr=expr, materialize_fn=_materialize, registry=registry)
-
-    def _expr_spec_generic_call(
-        self,
-        args: tuple[ExprSpec, ...],
-        resolved_name: str,
-        opts: FunctionOptionsProto | None,
-        *,
-        registry: ExprRegistry | None,
-    ) -> ExprSpec:
-        node = expr_from_expr_ir(self)
-
-        def _materialize(table: TableLike) -> ArrayLike:
-            values = [arg.materialize(table) for arg in args]
-            result = (
-                _fill_null_array(values)
-                if resolved_name == "fill_null"
-                else pc.call_function(resolved_name, values, options=opts)
-            )
-            return _coerce_materialized(result, table_rows=table.num_rows, op=resolved_name)
-
-        return ComputeExprSpec(expr=node, materialize_fn=_materialize, registry=registry)
 
     def to_ibis_expr(
         self,
@@ -596,17 +514,6 @@ def _build_expr_ir(
     return tuple(_build(expr_id) for expr_id in root_ids)
 
 
-def expr_spec_from_json(text: str, *, registry: ExprRegistry | None = None) -> ExprSpec:
-    """Compile ExprSpec from IPC IR.
-
-    Returns
-    -------
-    ExprSpec
-        Compiled expression spec.
-    """
-    return ExprIR.from_json(text).to_expr_spec(registry=registry)
-
-
 __all__ = [
     "EXPR_NODE_SCHEMA",
     "ExprIR",
@@ -614,5 +521,4 @@ __all__ = [
     "ExprRegistry",
     "expr_ir_from_table",
     "expr_ir_table",
-    "expr_spec_from_json",
 ]

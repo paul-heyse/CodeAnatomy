@@ -13,6 +13,12 @@ External export of JSON remains allowed at the boundary.
   (e.g., Delta log JSON written by deltalake itself).
 - Keep stable, deterministic serialization with explicit Arrow schemas.
 
+## Status (2026-01-19)
+- **Completed**: Scopes 1, 2, 3, 5, 6, 7, 8, 9, 11.
+- **In progress**: Scope 4 (diagnostics tables fully structured), Scope 10 (tests/fixtures beyond
+  SQL ingest).
+- **Boundary JSON**: `src/obs/manifest.py` and `src/obs/repro.py` remain JSON writers by design.
+
 ## Non-goals
 - Do not modify Delta log semantics (`_delta_log/*.json`) or third-party formats.
 - Do not change external APIs that accept/emit JSON unless explicitly required.
@@ -59,9 +65,9 @@ Target files:
 - `src/datafusion_engine/runtime.py`
 
 Implementation checklist:
-- [ ] Add Arrow payload helper module with IPC + hash utilities.
-- [ ] Standardize payload schemas for hashing in each caller.
-- [ ] Replace JSON-based hashing/fingerprints with IPC hashes.
+- [x] Add Arrow payload helper module with IPC + hash utilities.
+- [x] Standardize payload schemas for hashing in each caller.
+- [x] Replace JSON-based hashing/fingerprints with IPC hashes.
 
 ### Scope 2: Registry and runtime fingerprints
 Goal: remove JSON fingerprints for registry/runtime profiles.
@@ -90,9 +96,9 @@ Target files:
 - `src/registry_common/metadata.py`
 
 Implementation checklist:
-- [ ] Define per-payload schemas for runtime and registry snapshots.
-- [ ] Replace `json.dumps(...).encode(...)` with IPC hashing.
-- [ ] Update any callers relying on JSON payload bytes.
+- [x] Define per-payload schemas for runtime and registry snapshots.
+- [x] Replace `json.dumps(...).encode(...)` with IPC hashing.
+- [x] Update any callers relying on JSON payload bytes.
 
 ### Scope 3: Metadata bytes and schema annotations
 Goal: replace JSON metadata blobs with Arrow IPC bytes.
@@ -109,9 +115,9 @@ Target files:
 - `src/arrowdsl/schema/metadata.py` (remove once ArrowDSL removed)
 
 Implementation checklist:
-- [ ] Replace metadata JSON bytes with IPC bytes.
-- [ ] Update schema metadata readers to decode IPC.
-- [ ] Ensure metadata payload schemas are versioned.
+- [x] Replace metadata JSON bytes with IPC bytes.
+- [x] Update schema metadata readers to decode IPC.
+- [x] Ensure metadata payload schemas are versioned.
 
 ### Scope 4: Diagnostics tables (Arrow-native)
 Goal: remove JSON columns and store structured diagnostics as Arrow tables.
@@ -131,9 +137,11 @@ Target files:
 - `src/hamilton_pipeline/modules/outputs.py`
 
 Implementation checklist:
-- [ ] Replace JSON columns (e.g., `explain_rows_json`) with structured fields.
-- [ ] Persist row payloads as IPC artifacts or Delta tables.
-- [ ] Update diagnostics schemas to include IPC metadata columns.
+- [x] Replace JSON columns (e.g., `explain_rows_json`) with structured fields where artifacts
+  are persisted (DataFusion plan artifacts).
+- [x] Persist row payloads as IPC artifacts or Delta tables for plan diagnostics.
+- [ ] Replace remaining `*_json` telemetry columns with structured fields or IPC blobs
+  (e.g., scan telemetry schema currently uses string columns).
 
 ### Scope 5: Policy and cache payloads
 Goal: replace JSON policy blobs and cache entries with Arrow payloads.
@@ -153,9 +161,9 @@ Target files:
 - `src/relspec/engine.py`
 
 Implementation checklist:
-- [ ] Replace JSON payload reads with IPC decode.
-- [ ] Store policies/cache entries as IPC bytes or Delta rows.
-- [ ] Version payload schemas and maintain compatibility.
+- [x] Replace JSON payload reads with IPC decode.
+- [x] Store policies/cache entries as IPC bytes or Delta rows.
+- [x] Version payload schemas and maintain compatibility.
 
 ### Scope 6: SQLGlot AST and SQL diagnostics
 Goal: remove JSON AST dumps and store SQL/textual forms or Arrow-structured AST.
@@ -172,9 +180,9 @@ Target files:
 - `src/sqlglot_tools/optimizer.py`
 
 Implementation checklist:
-- [ ] Replace JSON AST payloads with SQL strings + metadata.
+- [x] Replace JSON AST payloads with SQL strings + metadata (SQL ingest + diagnostics).
 - [ ] If AST structure is required, define a structured Arrow schema for nodes.
-- [ ] Keep JSON only for external export (optional).
+- [x] Keep JSON only for external export (optional).
 
 ### Scope 7: Incremental state and fingerprints
 Goal: replace JSON state files with Delta or IPC datasets.
@@ -192,9 +200,9 @@ Target files:
 - `src/incremental/diff.py`
 
 Implementation checklist:
-- [ ] Define Arrow schemas for incremental state artifacts.
-- [ ] Store state in Delta tables instead of JSON files.
-- [ ] Update readers to load Arrow/Delta tables.
+- [x] Define Arrow schemas for incremental state artifacts.
+- [x] Store state in Delta tables instead of JSON files.
+- [x] Update readers to load Arrow/Delta tables.
 
 ### Scope 8: Runtime inspection and env payloads
 Goal: replace JSON env payloads with non-JSON encodings.
@@ -209,8 +217,8 @@ Target files:
 - `src/extract/runtime_inspect_extract.py`
 
 Implementation checklist:
-- [ ] Replace JSON allowlist env parsing with CSV/line-based parsing.
-- [ ] Ensure outputs remain Arrow-native (no JSON payloads).
+- [x] Replace JSON allowlist env parsing with CSV/line-based parsing.
+- [x] Ensure outputs remain Arrow-native (no JSON payloads).
 
 ### Scope 9: ArrowDSL JSON removal (coordinated with decommission)
 Goal: remove ArrowDSL JSON helpers and codec usage.
@@ -223,8 +231,8 @@ Target files:
 - `src/arrowdsl/plan/plan.py`
 
 Implementation checklist:
-- [ ] Delete ArrowDSL JSON utilities with ArrowDSL removal.
-- [ ] Replace any lingering JSON codecs with Arrow IPC.
+- [x] Delete ArrowDSL JSON utilities and JSON codecs.
+- [x] Replace lingering JSON codecs with Arrow IPC.
 
 ### Scope 10: Tests and fixtures
 Goal: update tests to validate Arrow payloads instead of JSON strings.
@@ -236,8 +244,8 @@ Target files:
 - `tests/e2e/test_full_pipeline_repo.py`
 
 Implementation checklist:
-- [ ] Replace JSON fixtures with Arrow IPC/Delta fixtures.
-- [ ] Update assertions to use Arrow schema + data checks.
+- [ ] Replace JSON fixtures with Arrow IPC/Delta fixtures (beyond SQL ingest).
+- [ ] Update assertions to use Arrow schema + data checks where fixtures changed.
 - [ ] Add targeted unit tests for IPC hashing stability.
 
 ### Scope 11: Guardrails (optional)
@@ -252,8 +260,8 @@ Target files:
 - `scripts/validate_no_json.sh` (optional)
 
 Implementation checklist:
-- [ ] Add a dev-only script to detect JSON usage in `src`.
-- [ ] Define an allowlist for boundary-only modules.
+- [x] Add a dev-only script to detect JSON usage in `src`.
+- [x] Define an allowlist for boundary-only modules.
 
 ## Acceptance checklist
 - [ ] No JSON usage in core `src` code paths (except defined boundaries).

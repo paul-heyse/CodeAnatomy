@@ -15,14 +15,14 @@ import pyarrow.parquet as pq
 
 from arrowdsl.core.context import OrderingLevel
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
-from arrowdsl.finalize.finalize import FinalizeResult
-from arrowdsl.plan.metrics import (
+from arrowdsl.core.metrics import (
     ParquetMetadataSpec,
     list_fragments,
     parquet_metadata_factory,
     row_group_stats,
 )
-from arrowdsl.plan.ordering_policy import ordering_keys_for_schema
+from arrowdsl.core.ordering_policy import ordering_keys_for_schema
+from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
 from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.schema import SchemaTransform

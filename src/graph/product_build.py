@@ -167,7 +167,7 @@ def _outputs_for_request(request: GraphProductBuildRequest) -> Sequence[str]:
     if request.include_extract_errors:
         outputs.append("write_extract_error_artifacts_delta")
     if request.include_manifest:
-        outputs.append("write_run_manifest_json")
+        outputs.append("write_run_manifest_delta")
     if request.include_run_bundle:
         outputs.append("write_run_bundle_dir")
     return outputs
@@ -293,7 +293,7 @@ def _parse_result(
 
     manifest_path = None
     if request.include_manifest:
-        manifest = _optional(pipeline_outputs, "write_run_manifest_json")
+        manifest = _optional(pipeline_outputs, "write_run_manifest_delta")
         if manifest is not None and manifest.get("path"):
             manifest_path = Path(cast("str", manifest["path"]))
 

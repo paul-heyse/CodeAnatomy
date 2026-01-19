@@ -24,23 +24,16 @@ shim remains; ArrowDSL plan execution is deleted outright.
 
 ## Progress update (current)
 Completed:
-- Ibis-native schema validation in `src/schema_spec/system.py`.
-- Plan schema resolution via `plan.expr.schema().to_pyarrow()` in
-  `src/normalize/runner.py` and `src/hamilton_pipeline/modules/outputs.py`.
+- SessionContext ownership centralized in runtime profiles; no ad-hoc contexts remain.
+- ArrowDSL plan/IR/compile/exec removed; scan/query surfaces are Ibis-native.
+- Ibis execution applies ordering metadata + canonical sort for tables/readers.
+- Streaming-first Delta writes (DataFusion reader fallback) + streamed constraint checks.
+- SQLGlot AST boundary enforced for validation/execute_sql; capability gating added.
+- Listing tables default for parquet directory scans; ArrowDSL lane fallback removed.
 
 In progress:
-- Rule compiler post-kernel transforms expressed as Ibis plan transforms in
-  `src/relspec/compiler.py`.
-- Compile graph/schema helpers now use Ibis plan schema in
-  `src/relspec/compiler_graph.py`.
-- Rule graph union uses Ibis in `src/relspec/rules/graph.py`.
-- Evidence planning removed PlanCatalog/ExecutionContext in
-  `src/relspec/rules/evidence.py`.
-- Incremental relspec updates materialize via Ibis in
-  `src/incremental/relspec_update.py`.
-
-Not started:
-- All remaining scopes and checklist items not explicitly marked completed below.
+- Delta-first storage contract alignment (Delta log asset tracking + CDF policy).
+- Docs refresh beyond fallback coverage artifacts.
 
 ## Universal practices (apply everywhere)
 - **Single SessionContext**: all execution paths use the runtime-profiled context and
@@ -83,11 +76,11 @@ Target files:
 - `tests/unit/test_from_arrow_ingest.py`
 
 Implementation checklist:
-- [ ] Centralize `SessionContext` creation via runtime profiles.
-- [ ] Ensure Ibis backend uses `ibis.datafusion.connect(ctx)` everywhere.
-- [ ] Remove ad-hoc SessionContext instantiation outside runtime profile helpers.
+- [x] Centralize `SessionContext` creation via runtime profiles.
+- [x] Ensure Ibis backend uses `ibis.datafusion.connect(ctx)` everywhere.
+- [x] Remove ad-hoc SessionContext instantiation outside runtime profile helpers.
 
-Status (current): not started.
+Status (current): completed.
 
 ### Scope 2: Ibis-native scan and query surface
 Goal: replace `Plan` and `PlanSource` with Ibis-backed scan/query helpers.
@@ -124,13 +117,12 @@ Target files:
 - `src/normalize/runner.py`
 
 Implementation checklist:
-- [ ] Replace `PlanSource` with an Ibis plan source union.
-- [ ] Route dataset/table sources through `ibis_engine.sources.source_to_ibis`.
-- [ ] Update `QuerySpec.to_plan` to return `IbisPlan`.
-- [ ] Remove any `PlanBuilder` or `PlanIR` references from scan/query paths.
+- [x] Replace `PlanSource` with an Ibis plan source union.
+- [x] Route dataset/table sources through `ibis_engine.sources.source_to_ibis`.
+- [x] Update `QuerySpec.to_plan` to return `IbisPlan`.
+- [x] Remove any `PlanBuilder` or `PlanIR` references from scan/query paths.
 
-Status (current): in progress (schema validation and incremental relspec update
-paths now use Ibis scan helpers; core `arrowdsl.plan.*` surfaces still pending).
+Status (current): completed.
 
 ### Scope 3: ExprSpec/FilterSpec migration to Ibis expressions
 Goal: eliminate ArrowDSL IR/macros by compiling expression specs directly to
@@ -156,12 +148,12 @@ Target files:
 - `src/arrowdsl/compile/expr_compiler.py`
 
 Implementation checklist:
-- [ ] Replace `ExprSpec.to_expression()` with Ibis expression compilation.
-- [ ] Remove `ExprCompiler`, `ExprNode`, and `expr_from_expr_ir` usage.
-- [ ] Update `FilterSpec.apply_plan` to operate on `IbisPlan`.
-- [ ] Ensure ExprIR options route through `ibis_engine.expr_compiler`.
+- [x] Replace `ExprSpec.to_expression()` with Ibis expression compilation.
+- [x] Remove `ExprCompiler`, `ExprNode`, and `expr_from_expr_ir` usage.
+- [x] Update `FilterSpec.apply_plan` to operate on `IbisPlan`.
+- [x] Ensure ExprIR options route through `ibis_engine.expr_compiler`.
 
-Status (current): not started.
+Status (current): completed (ExprSpec retained for compute-only helpers).
 
 ### Scope 4: Replace Plan ops with Ibis equivalents
 Goal: remove ArrowDSL `Plan` operators and re-express operations as Ibis transforms.
@@ -189,12 +181,11 @@ Target files:
 - `src/arrowdsl/plan/runner.py`
 
 Implementation checklist:
-- [ ] Replace filter/project/order/aggregate/join/union/explode/winner_select with Ibis ops.
-- [ ] Remove `PlanIR` construction and segmentation logic.
-- [ ] Move any ordering metadata handling to `ibis_engine.plan` utilities.
+- [x] Replace filter/project/order/aggregate/join/union/explode/winner_select with Ibis ops.
+- [x] Remove `PlanIR` construction and segmentation logic.
+- [x] Move any ordering metadata handling to `ibis_engine.plan` utilities.
 
-Status (current): in progress (post-kernel transforms moved to Ibis in
-`src/relspec/compiler.py`; union now Ibis in `src/relspec/rules/graph.py`).
+Status (current): completed.
 
 ### Scope 5: Remove ArrowDSL runtime and compiler
 Goal: delete the fallback execution pipeline and Acero runtime logic.
@@ -215,11 +206,11 @@ Target files:
 - `src/arrowdsl/compile/expr_compiler.py`
 
 Implementation checklist:
-- [ ] Delete `PlanIR` compiler and runtime execution.
-- [ ] Remove Acero-specific runtime policies and plan segmentation.
-- [ ] Update callers to use `ibis_engine.runner` or `datafusion_engine.bridge`.
+- [x] Delete `PlanIR` compiler and runtime execution.
+- [x] Remove Acero-specific runtime policies and plan segmentation.
+- [x] Update callers to use `ibis_engine.runner` or `datafusion_engine.bridge`.
 
-Status (current): not started.
+Status (current): completed.
 
 ### Scope 6: Streaming-first output contract
 Goal: make batch streaming the default output surface.
@@ -242,11 +233,11 @@ Target files:
 - `src/incremental/impact.py`
 
 Implementation checklist:
-- [ ] Replace large-path `.to_arrow_table()` calls with streaming where possible.
-- [ ] Reserve eager materialization for diagnostics and tiny samples.
-- [ ] Ensure downstream writers accept `RecordBatchReader` inputs.
+- [x] Replace large-path `.to_arrow_table()` calls with streaming where possible.
+- [x] Reserve eager materialization for diagnostics and tiny samples.
+- [x] Ensure downstream writers accept `RecordBatchReader` inputs.
 
-Status (current): not started.
+Status (current): completed.
 
 ### Scope 7: Plan artifacts + Substrait snapshots
 Goal: capture optimized logical plan, physical plan, and Substrait bytes per run.
@@ -267,11 +258,11 @@ Target files:
 - `tests/integration/test_substrait_cross_validation.py`
 
 Implementation checklist:
-- [ ] Add plan artifact capture in execution diagnostics.
-- [ ] Persist Substrait bytes when SQL is available and tables are registered.
-- [ ] Record policy hashes alongside plan artifacts.
+- [x] Add plan artifact capture in execution diagnostics.
+- [x] Persist Substrait bytes when SQL is available and tables are registered.
+- [x] Record policy hashes alongside plan artifacts.
 
-Status (current): not started.
+Status (current): completed.
 
 ### Scope 8: Listing tables + object store policy
 Goal: standardize listing-table registration and object store setup.
@@ -294,11 +285,11 @@ Target files:
 - `tests/integration/test_listing_cache_lifecycle.py`
 
 Implementation checklist:
-- [ ] Route all directory dataset scans through listing tables.
-- [ ] Expose partition columns + pruning + file sort order via policy.
-- [ ] Ensure object stores are registered before dataset registration.
+- [x] Route all directory dataset scans through listing tables.
+- [x] Expose partition columns + pruning + file sort order via policy.
+- [x] Ensure object stores are registered before dataset registration.
 
-Status (current): not started.
+Status (current): completed.
 
 ### Scope 9: SQLGlot AST boundary + policy enforcement
 Goal: standardize SQLGlot AST use for compilation and policy rewrites.
@@ -316,11 +307,11 @@ Target files:
 - `src/relspec/rules/validation.py`
 
 Implementation checklist:
-- [ ] Always compile through SQLGlot before DataFusion execution.
-- [ ] Apply SQLGlot policy rewrites consistently across rules and ad-hoc SQL.
-- [ ] Emit SQLGlot AST artifacts for diagnostics.
+- [x] Always compile through SQLGlot before DataFusion execution.
+- [x] Apply SQLGlot policy rewrites consistently across rules and ad-hoc SQL.
+- [x] Emit SQLGlot AST artifacts for diagnostics.
 
-Status (current): not started.
+Status (current): completed.
 
 ### Scope 10: Capability gating via `has_operation`
 Goal: prevent unsupported ops from entering plans.
@@ -337,10 +328,10 @@ Target files:
 - `src/relspec/rules/coverage.py`
 
 Implementation checklist:
-- [ ] Add capability checks for ops known to be backend-limited.
-- [ ] Fail fast during rule validation rather than during execution.
+- [x] Add capability checks for ops known to be backend-limited.
+- [x] Fail fast during rule validation rather than during execution.
 
-Status (current): not started.
+Status (current): completed.
 
 ### Scope 11: Update schema/validation/evidence consumers
 Goal: make downstream systems accept `IbisPlan` only.
@@ -360,12 +351,11 @@ Target files:
 - `src/relspec/rules/evidence.py`
 
 Implementation checklist:
-- [ ] Replace `Plan` types with `IbisPlan` in schema validation outputs.
-- [ ] Remove ArrowDSL plan schema helpers or rewrite to Ibis.
-- [ ] Update evidence plan compilation to Ibis-only surfaces.
+- [x] Replace `Plan` types with `IbisPlan` in schema validation outputs.
+- [x] Remove ArrowDSL plan schema helpers or rewrite to Ibis.
+- [x] Update evidence plan compilation to Ibis-only surfaces.
 
-Status (current): in progress (schema validation now Ibis; evidence plan partially
-updated; ArrowDSL schema helpers still present).
+Status (current): completed.
 
 ### Scope 12: Remove ArrowDSL fallback artifacts and tests
 Goal: delete unused modules/tests and update test coverage to DataFusion/Ibis.
@@ -387,11 +377,11 @@ Target files:
 - `tests/unit/test_required_columns_scan.py`
 
 Implementation checklist:
-- [ ] Delete ArrowDSL IR and fallback plan modules.
-- [ ] Remove Acero/Plan-specific tests and replace with Ibis/DataFusion equivalents.
-- [ ] Ensure remaining tests use `IbisPlan` and DataFusion execution.
+- [x] Delete ArrowDSL IR and fallback plan modules.
+- [x] Remove Acero/Plan-specific tests and replace with Ibis/DataFusion equivalents.
+- [x] Ensure remaining tests use `IbisPlan` and DataFusion execution.
 
-Status (current): not started.
+Status (current): completed.
 
 ### Scope 13: Docs and diagnostics cleanup
 Goal: remove ArrowDSL fallback references in documentation and diagnostics.
@@ -410,11 +400,11 @@ Target files:
 - `docs/python_library_reference/datafusion_addendum.md`
 
 Implementation checklist:
-- [ ] Remove ArrowDSL fallback references from planning docs.
-- [ ] Update diagnostics payloads to indicate DataFusion/Ibis only.
+- [x] Remove ArrowDSL fallback references from planning docs.
+- [x] Update diagnostics payloads to indicate DataFusion/Ibis only.
 - [ ] Regenerate coverage artifacts after removal.
 
-Status (current): not started.
+Status (current): in progress (report regeneration blocked by import cycle).
 
 ### Scope 14: Delta Lake storage standardization
 Goal: ensure persistent tables are Delta-first, with DataFusion reading via Delta
@@ -449,16 +439,16 @@ Target files:
 - `src/schema_spec/system.py`
 
 Implementation checklist:
-- [ ] Register Delta tables via `DeltaTable` or table provider; avoid `register_dataset`
+- [x] Register Delta tables via `DeltaTable` or table provider; avoid `register_dataset`
       for Delta paths unless explicitly forced by policy.
 - [ ] Treat `_delta_log` artifacts as part of the table contract (commit JSON, checkpoints,
       `_last_checkpoint`, sidecars, optional `.crc`), and ensure these are preserved alongside
       data files.
 - [ ] Preserve `_change_data/` and deletion vector files when CDF/DV features are enabled.
-- [ ] Prefer DataFusion Delta CDF table provider when available; avoid Arrow fallback CDF.
-- [ ] Record Delta snapshot/version metadata in diagnostics for reproducibility.
+- [x] Prefer DataFusion Delta CDF table provider when available; avoid Arrow fallback CDF.
+- [x] Record Delta snapshot/version metadata in diagnostics for reproducibility.
 
-Status (current): not started.
+Status (current): in progress (Delta log asset tracking pending).
 
 ## Universal practice audit targets
 SessionContext ownership:
@@ -505,10 +495,10 @@ Delta-first storage:
 - `src/arrowdsl/plan/runner_types.py`
 
 ## Acceptance checklist
-- [ ] All ArrowDSL fallback modules removed from the codebase.
-- [ ] No remaining imports of `arrowdsl.ir`, `arrowdsl.compile`, or `arrowdsl.exec`.
-- [ ] All plan/query paths return `IbisPlan`.
-- [ ] DataFusion execution passes via `ibis_engine.runner` or `datafusion_engine.bridge`.
-- [ ] Streaming outputs are the default for non-trivial results.
-- [ ] Plan artifacts (logical/physical/Substrait) are persisted per run.
-- [ ] Ruff, Pyrefly, and Pyright clean.
+- [x] All ArrowDSL fallback modules removed from the codebase.
+- [x] No remaining imports of `arrowdsl.ir`, `arrowdsl.compile`, or `arrowdsl.exec`.
+- [x] All plan/query paths return `IbisPlan`.
+- [x] DataFusion execution passes via `ibis_engine.runner` or `datafusion_engine.bridge`.
+- [x] Streaming outputs are the default for non-trivial results.
+- [x] Plan artifacts (logical/physical/Substrait) are persisted per run.
+- [x] Ruff, Pyrefly, and Pyright clean.

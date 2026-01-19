@@ -12,7 +12,6 @@ from ibis.backends import BaseBackend
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
-from arrowdsl.plan_utils import dataset_query_for_file_ids
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from arrowdsl.schema.schema import empty_table
 from extract.registry_bundles import dataset_name_for_output
@@ -20,7 +19,7 @@ from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
 from ibis_engine.plan import IbisPlan
-from ibis_engine.query_compiler import apply_query_spec
+from ibis_engine.query_compiler import apply_query_spec, dataset_query_for_file_ids
 from ibis_engine.scan_io import plan_from_source
 from incremental.invalidations import validate_schema_identity
 from incremental.types import IncrementalFileChanges, IncrementalImpact
@@ -41,7 +40,7 @@ from storage.deltalake import (
 )
 
 if TYPE_CHECKING:
-    from arrowdsl.plan.scan_telemetry import ScanTelemetry
+    from arrowdsl.core.scan_telemetry import ScanTelemetry
     from relspec.model import DatasetRef
 
 SCOPED_SITE_DATASETS: frozenset[str] = frozenset(

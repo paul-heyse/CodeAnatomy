@@ -6,6 +6,7 @@ import pytest
 
 from datafusion_engine.bridge import execute_dml
 from datafusion_engine.compile_options import DataFusionDmlOptions, resolve_sql_policy
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 pytest.importorskip("datafusion")
 
@@ -28,7 +29,7 @@ def test_dml_policy_enforces_read_only() -> None:
     options = DataFusionDmlOptions(sql_policy_name="read_only")
     with pytest.raises(ValueError, match="policy violations"):
         execute_dml(
-            pytest.importorskip("datafusion").SessionContext(),
+            DataFusionRuntimeProfile().session_context(),
             "INSERT INTO missing_table VALUES (1)",
             options=options,
         )

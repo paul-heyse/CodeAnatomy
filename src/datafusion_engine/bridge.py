@@ -435,11 +435,18 @@ def validate_table_constraints(
             if not constraint.strip():
                 continue
             df = ctx.sql(f"SELECT 1 FROM {name} WHERE NOT ({constraint}) LIMIT 1")
-            if df.to_arrow_table().num_rows > 0:
+            if _df_has_rows(df):
                 violations.append(constraint)
     finally:
         ctx.deregister_table(name)
     return violations
+
+
+def _df_has_rows(df: DataFrame) -> bool:
+    reader = datafusion_to_reader(df)
+    for batch in reader:
+        return batch.num_rows > 0
+    return False
 
 
 def sqlglot_to_datafusion(
@@ -1428,13 +1435,13 @@ def execute_sql(
         Record batch reader over the SQL results.
     """
     _ensure_dialect(options.dialect)
-    bindings = _validated_param_bindings(
-        options.params,
-        allowlist=options.param_identifier_allowlist,
+    expr = parse_sql_strict(sql, dialect=options.dialect)
+    df = _df_from_sql(
+        ctx,
+        expr,
+        options=options,
+        fallback=SqlFallbackContext(reason="execute_sql", emit_fallback=False),
     )
-    policy = options.sql_policy or _default_sql_policy()
-    sql_options = options.sql_options or policy.to_sql_options()
-    df = ctx.sql_with_options(sql, sql_options, param_values=bindings)
     return _collect_reader(df)
 
 

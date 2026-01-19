@@ -11,7 +11,7 @@ from ibis.backends import BaseBackend
 
 from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
-from arrowdsl.plan.scan_telemetry import ScanTelemetry
+from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import EncodingSpec, empty_table, encode_table
 from cpg.constants import CpgBuildArtifacts, quality_from_ids
 from cpg.edge_specs import edge_plan_specs_from_table

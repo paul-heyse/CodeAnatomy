@@ -14,7 +14,7 @@ from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 from arrowdsl.compute.position_encoding import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.core.interop import TableLike
-from arrowdsl.plan.ordering_policy import ordering_keys_for_schema
+from arrowdsl.core.ordering_policy import ordering_keys_for_schema
 from arrowdsl.schema.build import empty_table
 from extract.registry_specs import dataset_schema as extract_dataset_schema
 from ibis_engine.builtin_udfs import col_to_byte, position_encoding_norm

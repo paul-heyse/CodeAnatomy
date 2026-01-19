@@ -2,20 +2,26 @@
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from functools import cache
 from typing import TYPE_CHECKING, TypedDict, Unpack, cast
 
 import pyarrow as pa
 
 from arrowdsl.compute.expr_core import or_exprs
 from arrowdsl.core.context import ExecutionContext
-from arrowdsl.core.interop import ComputeExpression, SchemaLike, TableLike, ensure_expression, pc
+from arrowdsl.core.interop import (
+    ArrayLike,
+    ComputeExpression,
+    SchemaLike,
+    TableLike,
+    ensure_expression,
+    pc,
+)
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec, SchemaTransform
 from arrowdsl.schema.validation import ArrowValidationOptions, ValidationReport, validate_table
 from arrowdsl.spec.expr_ir import ExprIR
+from arrowdsl.spec.scalar_union import SCALAR_UNION_FIELDS, SCALAR_UNION_TYPE
 from arrowdsl.spec.tables.base import SpecTableCodec
 from ibis_engine.query_compiler import IbisQuerySpec
 from schema_spec.system import (
@@ -30,14 +36,7 @@ from schema_spec.system import (
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
-    from arrowdsl.plan.plan import Plan
     from schema_spec.specs import ArrowFieldSpec, DerivedFieldSpec, FieldBundle, TableSchemaSpec
-
-
-@cache
-def _plan_class() -> type[Plan]:
-    module = importlib.import_module("arrowdsl.plan.plan")
-    return cast("type[Plan]", module.Plan)
 
 
 SORT_KEY_STRUCT = pa.struct(
@@ -64,17 +63,6 @@ VALIDATION_STRUCT = pa.struct(
         pa.field("emit_error_table", pa.bool_(), nullable=False),
     ]
 )
-
-SCALAR_UNION_FIELDS = (
-    pa.field("null", pa.null()),
-    pa.field("bool", pa.bool_()),
-    pa.field("int", pa.int64()),
-    pa.field("float", pa.float64()),
-    pa.field("string", pa.string()),
-    pa.field("binary", pa.binary()),
-)
-
-SCALAR_UNION_TYPE = pa.union(list(SCALAR_UNION_FIELDS), mode="dense")
 
 DATASET_REF_STRUCT = pa.struct(
     [
@@ -202,17 +190,7 @@ class SpecValidationSuite:
         exprs = [rule.predicate for rule in self.rules]
         return or_exprs(exprs)
 
-    def invalid_rows_plan(self, plan: Plan, *, ctx: ExecutionContext) -> Plan:
-        """Return a plan filtering invalid rows.
-
-        Returns
-        -------
-        Plan
-            Plan yielding invalid rows.
-        """
-        return plan.filter(self.invalid_mask(), ctx=ctx)
-
-    def invalid_rows_table(self, table: TableLike, *, ctx: ExecutionContext) -> TableLike:
+    def invalid_rows_table(self, table: TableLike) -> TableLike:
         """Return invalid rows from a table.
 
         Returns
@@ -220,9 +198,8 @@ class SpecValidationSuite:
         TableLike
             Invalid rows table.
         """
-        plan_cls = _plan_class()
-        plan = plan_cls.table_source(table, label="spec_validate")
-        return self.invalid_rows_plan(plan, ctx=ctx).to_table(ctx=ctx)
+        mask = cast("ArrayLike", self.invalid_mask())
+        return table.filter(mask)
 
 
 @dataclass(frozen=True)

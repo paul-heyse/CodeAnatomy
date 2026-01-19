@@ -221,4 +221,8 @@ def _stage_enabled_when(payload: ExtractPayload) -> str | None:
     return payload.enabled_when
 
 
-__all__ = ["EXTRACT_DATASET_TABLE", "dataset_row_specs", "extract_rule_definitions"]
+__all__ = [
+    "EXTRACT_DATASET_TABLE",
+    "dataset_row_specs",
+    "extract_rule_definitions",
+]

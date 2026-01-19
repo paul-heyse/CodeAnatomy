@@ -10,7 +10,6 @@ from typing import Protocol, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.compile.expr_compiler import ExprCompiler
 from arrowdsl.compute.expr_core import ExprSpec, cast_expr
 from arrowdsl.compute.expr_ops import and_expr, or_expr
 from arrowdsl.compute.position_encoding import (
@@ -32,7 +31,6 @@ from arrowdsl.core.interop import (
     ensure_expression,
     pc,
 )
-from arrowdsl.ir.expr import ExprNode
 
 
 class ColumnExpr(ExprSpec, Protocol):
@@ -51,7 +49,7 @@ def _def_use_kind_array_fn() -> _DefUseFn:
 class ComputeExprSpec:
     """ExprSpec backed by a compute expression and a materializer."""
 
-    expr: ComputeExpression | ExprNode
+    expr: ComputeExpression
     materialize_fn: Callable[[TableLike], ArrayLike]
     scalar_safe: bool = True
     registry: object | None = None
@@ -64,9 +62,6 @@ class ComputeExprSpec:
         ComputeExpression
             Plan-lane compute expression.
         """
-        if isinstance(self.expr, ExprNode):
-            compiler = ExprCompiler(registry=self.registry)
-            return compiler.to_compute_expr(self.expr)
         return self.expr
 
     def materialize(self, table: TableLike) -> ArrayLike:

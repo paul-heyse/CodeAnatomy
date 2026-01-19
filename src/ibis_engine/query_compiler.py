@@ -8,6 +8,9 @@ from typing import cast
 
 from ibis.expr.types import BooleanValue, Table, Value
 
+from arrowdsl.core.expr_types import ScalarValue
+from arrowdsl.core.interop import SchemaLike
+from arrowdsl.spec.expr_ir import ExprIR
 from ibis_engine.expr_compiler import (
     ExprIRLike,
     IbisExprRegistry,
@@ -44,6 +47,57 @@ class IbisQuerySpec:
             Query spec with base columns only.
         """
         return IbisQuerySpec(projection=IbisProjectionSpec(base=tuple(cols)))
+
+
+def query_for_schema(schema: SchemaLike) -> IbisQuerySpec:
+    """Return an IbisQuerySpec projecting the schema columns.
+
+    Returns
+    -------
+    IbisQuerySpec
+        Query spec with base columns set to the schema names.
+    """
+    return IbisQuerySpec(projection=IbisProjectionSpec(base=tuple(schema.names)))
+
+
+def dataset_query_for_file_ids(
+    file_ids: Sequence[str],
+    *,
+    schema: SchemaLike | None = None,
+    columns: Sequence[str] | None = None,
+) -> IbisQuerySpec:
+    """Return an IbisQuerySpec filtering to the provided file ids.
+
+    Parameters
+    ----------
+    file_ids:
+        File ids to include.
+    schema:
+        Optional schema used to build the projection.
+    columns:
+        Optional explicit projection columns.
+
+    Returns
+    -------
+    IbisQuerySpec
+        Query spec with file_id predicates for plan and pushdown lanes.
+
+    Raises
+    ------
+    ValueError
+        Raised when neither columns nor schema are provided.
+    """
+    if columns is None:
+        if schema is None:
+            msg = "dataset_query_for_file_ids requires columns or schema."
+            raise ValueError(msg)
+        columns = list(schema.names)
+    predicate = _in_set_expr("file_id", tuple(file_ids))
+    return IbisQuerySpec(
+        projection=IbisProjectionSpec(base=tuple(columns)),
+        predicate=predicate,
+        pushdown_predicate=predicate,
+    )
 
 
 def apply_query_spec(
@@ -126,3 +180,29 @@ def _projection_columns(
             cols.append(table[name])
             seen.add(name)
     return cols
+
+
+def _field_expr(name: str) -> ExprIR:
+    return ExprIR(op="field", name=name)
+
+
+def _literal_expr(value: ScalarValue) -> ExprIR:
+    return ExprIR(op="literal", value=value)
+
+
+def _call_expr(name: str, *args: ExprIR) -> ExprIR:
+    return ExprIR(op="call", name=name, args=tuple(args))
+
+
+def _or_exprs(exprs: Sequence[ExprIR]) -> ExprIR:
+    if not exprs:
+        return _literal_expr(value=False)
+    out = exprs[0]
+    for expr in exprs[1:]:
+        out = _call_expr("bit_wise_or", out, expr)
+    return out
+
+
+def _in_set_expr(name: str, values: Sequence[str]) -> ExprIR:
+    exprs = [_call_expr("equal", _field_expr(name), _literal_expr(value)) for value in values]
+    return _or_exprs(exprs)

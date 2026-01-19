@@ -6,8 +6,7 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pytest
 
-from arrowdsl.plan.dataset_wrappers import OneShotDataset, unwrap_dataset
-from arrowdsl.plan.source_normalize import normalize_dataset_source
+from storage.dataset_sources import OneShotDataset, normalize_dataset_source, unwrap_dataset
 from tests.utils import values_as_list
 
 EXPECTED_ROW_COUNT = 3

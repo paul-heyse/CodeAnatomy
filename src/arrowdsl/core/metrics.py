@@ -1,30 +1,24 @@
-"""Plan statistics, quality, and dataset fragment utilities."""
+"""Dataset statistics, quality, and fragment utilities."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypedDict, cast
+from typing import TypedDict, cast
 
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import pyarrow.types as patypes
 
-from arrowdsl.compute.expr_core import cast_expr
-from arrowdsl.compute.filters import invalid_id_expr
-from arrowdsl.compute.macros import null_expr, scalar_expr
-from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
     ComputeExpression,
     SchemaLike,
     TableLike,
-    ensure_expression,
     pc,
 )
-from arrowdsl.plan.schema_utils import plan_output_columns
 from arrowdsl.schema.build import (
     const_array,
     empty_table,
@@ -40,9 +34,6 @@ from core_types import JsonDict, JsonValue, PathLike, ensure_path
 type RowValue = str | int
 type Row = dict[str, RowValue]
 type ValuesLike = ArrayLike | ChunkedArrayLike
-
-if TYPE_CHECKING:
-    from arrowdsl.plan.plan import Plan
 
 DATASET_STATS_ENCODING_POLICY = EncodingPolicy(dictionary_cols=frozenset({"dataset_name"}))
 
@@ -634,39 +625,6 @@ def concat_quality_tables(tables: Sequence[TableLike]) -> TableLike:
     return pa.concat_tables(parts)
 
 
-def quality_plan_from_ids(
-    plan: Plan,
-    *,
-    spec: QualityPlanSpec,
-    ctx: ExecutionContext,
-) -> Plan:
-    """Return a plan producing quality rows for invalid IDs.
-
-    Returns
-    -------
-    Plan
-        Plan emitting quality rows for invalid identifiers.
-    """
-    available = plan_output_columns(plan)
-    if available is None or spec.id_col in available:
-        id_expr = ensure_expression(pc.field(spec.id_col))
-    else:
-        id_expr = null_expr(pa.string())
-
-    id_str_expr = cast_expr(id_expr, pa.string(), safe=False)
-    invalid = invalid_id_expr(id_str_expr, dtype=pa.string())
-    issue_expr = scalar_expr(spec.issue, dtype=pa.string())
-    kind_expr = scalar_expr(spec.entity_kind, dtype=pa.string())
-    if spec.source_table is None:
-        source_expr = null_expr(pa.string())
-    else:
-        source_expr = scalar_expr(spec.source_table, dtype=pa.string())
-    filtered = plan.filter(invalid, ctx=ctx)
-    exprs = [kind_expr, id_str_expr, issue_expr, source_expr]
-    names = ["entity_kind", "entity_id", "issue", "source_table"]
-    return filtered.project(exprs, names, ctx=ctx)
-
-
 __all__ = [
     "COLUMN_STATS_ENCODING_POLICY",
     "COLUMN_STATS_SCHEMA",
@@ -687,7 +645,6 @@ __all__ = [
     "parquet_metadata_collector",
     "parquet_metadata_factory",
     "quality_from_ids",
-    "quality_plan_from_ids",
     "row_group_count",
     "row_group_fragments",
     "row_group_stats",

@@ -22,6 +22,7 @@ from arrowdsl.core.interop import (
 from arrowdsl.core.streaming import to_reader
 from core_types import PathLike
 from datafusion_engine.bridge import (
+    datafusion_to_reader,
     ibis_plan_to_datafusion,
     ibis_to_datafusion,
 )
@@ -421,13 +422,9 @@ def write_ibis_dataset_delta(
             if options.delta_reporter is not None:
                 options.delta_reporter(datafusion_result)
             return datafusion_result
-        to_arrow = getattr(df, "to_arrow_table", None)
-        if not callable(to_arrow):
-            msg = "DataFusion DataFrame missing to_arrow_table."
-            raise ValueError(msg)
-        table = cast("TableLike", to_arrow())
+        reader = datafusion_to_reader(df)
         result = write_table_delta(
-            table,
+            reader,
             str(base_dir),
             options=delta_options,
             storage_options=options.storage_options,

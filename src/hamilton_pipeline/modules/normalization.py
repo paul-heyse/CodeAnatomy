@@ -19,7 +19,7 @@ from arrowdsl.compute.kernels import (
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.ids import prefixed_hash_id
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
-from arrowdsl.plan.joins import JoinConfig, left_join
+from arrowdsl.core.joins import JoinConfig, left_join
 from arrowdsl.schema.build import empty_table, set_or_append_column, table_from_arrays
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from extract.evidence_plan import EvidencePlan

@@ -229,7 +229,7 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
     delta_scan = resolve_delta_scan_options(location)
     schema = resolve_dataset_schema(location)
     provider = location.datafusion_provider
-    if provider is None and scan is not None and (scan.partition_cols or scan.file_sort_order):
+    if provider is None and _prefers_listing_table(location, scan=scan):
         provider = "listing"
     return DataFusionRegistryOptions(
         scan=scan,
@@ -239,6 +239,32 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
         cache=bool(scan.cache) if scan is not None else False,
         provider=provider,
     )
+
+
+def _prefers_listing_table(
+    location: DatasetLocation,
+    *,
+    scan: DataFusionScanOptions | None,
+) -> bool:
+    if location.format != "parquet":
+        return False
+    if location.files:
+        return False
+    if scan is not None and (scan.partition_cols or scan.file_sort_order):
+        return True
+    return _path_is_directory(location.path)
+
+
+def _path_is_directory(path: str | Path) -> bool:
+    if isinstance(path, str) and "://" in path:
+        parsed = urlparse(path)
+        if parsed.path.endswith("/"):
+            return True
+        return not Path(parsed.path).suffix
+    resolved = ensure_path(path)
+    if resolved.exists():
+        return resolved.is_dir()
+    return not resolved.suffix
 
 
 def datafusion_external_table_sql(
@@ -425,7 +451,8 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
         skip_metadata = _effective_skip_metadata(context.location, scan)
         kwargs["skip_metadata"] = skip_metadata
     kwargs = _merge_kwargs(kwargs, context.options.read_options)
-    if table_partition_cols or context.options.provider == "listing":
+    use_listing = context.options.provider == "listing"
+    if use_listing:
         _apply_scan_settings(context.ctx, scan=scan)
 
         def _register_listing() -> None:

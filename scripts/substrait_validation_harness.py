@@ -8,13 +8,14 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from arrowdsl.json_factory import json_default
 from datafusion import SessionContext
 
-from arrowdsl.json_factory import json_default
 from arrowdsl.schema.build import table_from_row_dicts
-from datafusion_engine.bridge import collect_plan_artifacts
+from datafusion_engine.bridge import collect_plan_artifacts, sqlglot_to_datafusion
 from datafusion_engine.compile_options import DataFusionCompileOptions
 from datafusion_engine.registry_bridge import register_dataset_df
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.registry import DatasetLocation
 from sqlglot_tools.optimizer import parse_sql_strict
 
@@ -57,7 +58,8 @@ def _register_input(
         if not parquet_path.exists():
             msg = f"Parquet path does not exist: {parquet_path}"
             raise FileNotFoundError(msg)
-        ctx.register_parquet(table_name, str(parquet_path))
+        location = DatasetLocation(path=str(parquet_path), format="parquet")
+        register_dataset_df(ctx, name=table_name, location=location)
         return
     if rows_path is not None:
         rows = _load_rows(rows_path)
@@ -121,7 +123,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     sql = _resolve_sql(args.sql, args.sql_file)
-    ctx = SessionContext()
+    ctx = DataFusionRuntimeProfile().session_context()
     _register_input(
         ctx,
         table_name=args.table_name,
@@ -129,9 +131,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         parquet_path=Path(args.parquet) if args.parquet is not None else None,
         rows_path=Path(args.rows_json) if args.rows_json is not None else None,
     )
-    df = ctx.sql(sql)
     options = DataFusionCompileOptions(substrait_validation=True)
     expr = parse_sql_strict(sql, dialect=options.dialect)
+    df = sqlglot_to_datafusion(expr, ctx=ctx, options=options)
     artifacts = collect_plan_artifacts(ctx, expr, options=options, df=df)
     payload = artifacts.payload()
     _write_output(Path(args.output_json) if args.output_json is not None else None, payload)

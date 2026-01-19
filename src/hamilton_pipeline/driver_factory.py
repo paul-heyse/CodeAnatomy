@@ -16,7 +16,7 @@ from core_types import JsonValue
 from cpg.kinds_ultimate import validate_derivation_extractors, validate_registry_completeness
 from hamilton_pipeline.arrow_adapters import register_arrow_delta_adapters
 from hamilton_pipeline.modules import ALL_MODULES
-from registry_common.arrow_payloads import payload_hash
+from registry_common.arrow_payloads import ipc_hash
 
 try:
     from hamilton_sdk import adapters as hamilton_adapters
@@ -47,17 +47,9 @@ def config_fingerprint(config: Mapping[str, JsonValue]) -> str:
     str
         SHA-256 fingerprint for the config.
     """
-    payload = {
-        "version": 1,
-        "config_repr": _stable_repr(config),
-    }
-    schema = pa.schema(
-        [
-            pa.field("version", pa.int32(), nullable=False),
-            pa.field("config_repr", pa.string(), nullable=False),
-        ]
-    )
-    return payload_hash(payload, schema)
+    payload = {"version": 1, "config": dict(config)}
+    table = pa.Table.from_pylist([payload])
+    return ipc_hash(table)
 
 
 def _maybe_build_tracker_adapter(
@@ -127,23 +119,6 @@ def _maybe_build_tracker_adapter(
 
     tracker = hamilton_adapters.HamiltonTracker(**tracker_kwargs)
     return cast("lifecycle_base.LifecycleAdapter", tracker)
-
-
-def _stable_repr(value: object) -> str:
-    if isinstance(value, Mapping):
-        items = ", ".join(
-            f"{_stable_repr(key)}:{_stable_repr(val)}"
-            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
-        )
-        return f"{{{items}}}"
-    if isinstance(value, (list, tuple, set)):
-        rendered = [_stable_repr(item) for item in value]
-        if isinstance(value, set):
-            rendered = sorted(rendered)
-        items = ", ".join(rendered)
-        bracket = "()" if isinstance(value, tuple) else "[]"
-        return f"{bracket[0]}{items}{bracket[1]}"
-    return repr(value)
 
 
 def build_driver(

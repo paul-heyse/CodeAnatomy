@@ -1,28 +1,18 @@
-"""Join helpers for plan and kernel lanes."""
+"""Join helpers for table-based normalization paths."""
 
 from __future__ import annotations
 
 import importlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from functools import cache
-from typing import TYPE_CHECKING, cast, overload
+from typing import cast
 
-from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
-from arrowdsl.plan.ops import AsofJoinSpec, JoinSpec, JoinType
-
-if TYPE_CHECKING:
-    from arrowdsl.plan.plan import Plan
-
-    type JoinInput = TableLike | Plan
-    type JoinOutput = TableLike | Plan
-else:
-    type JoinInput = TableLike | object
-    type JoinOutput = TableLike | object
+from arrowdsl.core.plan_ops import AsofJoinSpec, JoinSpec, JoinType
 
 CODE_UNIT_META_COLUMNS: tuple[str, ...] = ("code_unit_id", "file_id", "path")
 PATH_META_COLUMNS: tuple[str, ...] = ("path", "file_id")
+
 
 type _JoinFn = Callable[..., TableLike]
 
@@ -35,18 +25,6 @@ def _apply_join_fn() -> _JoinFn:
 def _apply_asof_join_fn() -> _JoinFn:
     module = importlib.import_module("arrowdsl.compute.kernels")
     return cast("_JoinFn", module.apply_asof_join)
-
-
-@cache
-def _plan_class() -> type[Plan]:
-    module = importlib.import_module("arrowdsl.plan.plan")
-    return cast("type[Plan]", module.Plan)
-
-
-def _as_plan(value: JoinInput, plan_cls: type[Plan]) -> Plan | None:
-    if isinstance(value, plan_cls):
-        return value
-    return None
 
 
 @dataclass(frozen=True)
@@ -355,58 +333,13 @@ class JoinConfig:
         )
 
 
-@overload
-def left_join(
-    left: Plan,
-    right: Plan,
-    *,
-    config: JoinConfig,
-    use_threads: bool = True,
-    ctx: ExecutionContext | None = None,
-) -> Plan: ...
-
-
-@overload
-def left_join(
-    left: Plan,
-    right: TableLike,
-    *,
-    config: JoinConfig,
-    use_threads: bool = True,
-    ctx: ExecutionContext | None = None,
-) -> Plan: ...
-
-
-@overload
-def left_join(
-    left: TableLike,
-    right: Plan,
-    *,
-    config: JoinConfig,
-    use_threads: bool = True,
-    ctx: ExecutionContext | None = None,
-) -> Plan: ...
-
-
-@overload
 def left_join(
     left: TableLike,
     right: TableLike,
     *,
     config: JoinConfig,
     use_threads: bool = True,
-    ctx: ExecutionContext | None = None,
-) -> TableLike: ...
-
-
-def left_join(
-    left: JoinInput,
-    right: JoinInput,
-    *,
-    config: JoinConfig,
-    use_threads: bool = True,
-    ctx: ExecutionContext | None = None,
-) -> JoinOutput:
+) -> TableLike:
     """Perform a left outer join in the kernel lane.
 
     Returns
@@ -415,13 +348,8 @@ def left_join(
         Joined table.
     """
     spec = config.to_spec(join_type="left outer")
-    return _join_any(
-        left,
-        right,
-        spec=spec,
-        use_threads=use_threads,
-        ctx=ctx,
-    )
+    apply_join = _apply_join_fn()
+    return apply_join(left, right, spec=spec, use_threads=use_threads)
 
 
 def interval_join_candidates(
@@ -462,49 +390,6 @@ def asof_join(
     return apply_asof_join(left, right, spec=spec, use_threads=use_threads)
 
 
-def join_plan(
-    left: JoinInput,
-    right: JoinInput,
-    *,
-    spec: JoinSpec,
-    use_threads: bool = True,
-    ctx: ExecutionContext | None = None,
-) -> JoinOutput:
-    """Join tables or plans using a shared JoinSpec.
-
-    Returns
-    -------
-    TableLike | Plan
-        Joined output, plan-backed when inputs are plan-backed.
-    """
-    return _join_any(
-        left,
-        right,
-        spec=spec,
-        use_threads=use_threads,
-        ctx=ctx,
-    )
-
-
-def _join_any(
-    left: JoinInput,
-    right: JoinInput,
-    *,
-    spec: JoinSpec,
-    use_threads: bool,
-    ctx: ExecutionContext | None,
-) -> JoinOutput:
-    plan_cls = _plan_class()
-    left_plan = _as_plan(left, plan_cls)
-    right_plan = _as_plan(right, plan_cls)
-    if left_plan is not None or right_plan is not None:
-        resolved_left = left_plan or plan_cls.table_source(cast("TableLike", left))
-        resolved_right = right_plan or plan_cls.table_source(cast("TableLike", right))
-        return resolved_left.join(resolved_right, spec=spec, ctx=ctx)
-    apply_join = _apply_join_fn()
-    return apply_join(left, right, spec=spec, use_threads=use_threads)
-
-
 __all__ = [
     "CODE_UNIT_META_COLUMNS",
     "PATH_META_COLUMNS",
@@ -516,7 +401,6 @@ __all__ = [
     "code_unit_meta_config",
     "interval_join_candidates",
     "join_config_for_output",
-    "join_plan",
     "join_spec",
     "join_spec_for_keys",
     "left_join",

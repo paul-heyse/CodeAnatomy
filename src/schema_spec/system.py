@@ -16,8 +16,8 @@ from ibis.expr.types import BooleanValue, Table
 
 from arrowdsl.core.context import ExecutionContext, Ordering, OrderingLevel
 from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
+from arrowdsl.core.plan_ops import DedupeSpec, SortKey
 from arrowdsl.finalize.finalize import Contract, FinalizeContext
-from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.metadata import (
     encoding_policy_from_spec,
     merge_metadata_specs,
@@ -40,7 +40,6 @@ from arrowdsl.schema.validation import ArrowValidationOptions, validate_table
 from arrowdsl.spec.io import read_spec_table
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
-from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
 from ibis_engine.scan_io import DatasetSource, PlanSource, plan_from_dataset, plan_from_source
@@ -64,6 +63,7 @@ from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 if TYPE_CHECKING:
     from arrowdsl.spec.expr_ir import ExprIR
     from arrowdsl.spec.tables.schema import SchemaSpecTables
+    from ibis_engine.execution import IbisExecutionContext
 
 
 def validate_arrow_table(
@@ -464,8 +464,10 @@ class ValidationPlans:
             Invalid rows and duplicate key tables.
         """
         execution = _ibis_execution_for_ctx(ctx)
-        invalid = materialize_ibis_plan(self.invalid_rows, execution=execution)
-        dupes = materialize_ibis_plan(self.duplicate_keys, execution=execution)
+        module = importlib.import_module("ibis_engine.execution")
+        materialize = module.materialize_ibis_plan
+        invalid = materialize(self.invalid_rows, execution=execution)
+        dupes = materialize(self.duplicate_keys, execution=execution)
         return invalid, dupes
 
 
@@ -474,7 +476,12 @@ def _ibis_backend_for_ctx(ctx: ExecutionContext) -> BaseBackend:
 
 
 def _ibis_execution_for_ctx(ctx: ExecutionContext) -> IbisExecutionContext:
-    return IbisExecutionContext(ctx=ctx, ibis_backend=_ibis_backend_for_ctx(ctx))
+    module = importlib.import_module("ibis_engine.execution")
+    execution_cls = cast("type[IbisExecutionContext]", module.IbisExecutionContext)
+    return execution_cls(
+        ctx=ctx,
+        ibis_backend=_ibis_backend_for_ctx(ctx),
+    )
 
 
 def _empty_validation_plan() -> IbisPlan:
@@ -911,7 +918,7 @@ def dataset_spec_from_contract(contract: Contract) -> DatasetSpec:
         Dataset spec derived from the contract.
     """
     table_spec = _table_spec_from_contract(contract)
-    constraints = cast("tuple[str, ...]", getattr(contract, "constraints", ()))
+    constraints = contract.constraints if hasattr(contract, "constraints") else ()
     contract_spec = ContractSpec(
         name=contract.name,
         table_schema=table_spec,

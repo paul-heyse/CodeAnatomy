@@ -7,6 +7,7 @@ import pyarrow.dataset as ds
 import pytest
 
 from arrowdsl.core.streaming import to_reader
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 datafusion = pytest.importorskip("datafusion")
 ibis = pytest.importorskip("ibis")
@@ -28,7 +29,7 @@ def _simple_table() -> pa.Table:
 
 def test_to_reader_datafusion_dataframe() -> None:
     """Convert DataFusion DataFrames into a RecordBatchReader."""
-    ctx = datafusion.SessionContext()
+    ctx = DataFusionRuntimeProfile().session_context()
     table = _simple_table()
     ctx.register_record_batches("input_table", [table.to_batches()])
     df = ctx.table("input_table")

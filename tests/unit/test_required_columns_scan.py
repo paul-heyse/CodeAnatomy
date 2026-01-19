@@ -6,11 +6,8 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pytest
 
-from arrowdsl.core.context import execution_context_factory
-from arrowdsl.plan.scan_builder import ScanBuildSpec
-from arrowdsl.plan.scan_telemetry import ScanTelemetryOptions, fragment_telemetry
+from arrowdsl.core.scan_telemetry import ScanTelemetryOptions, fragment_telemetry
 from ibis_engine.lineage import required_columns_by_table
-from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
 
 ibis = pytest.importorskip("ibis")
 
@@ -26,25 +23,17 @@ def test_required_columns_include_filter_fields() -> None:
 
 def test_scan_telemetry_records_required_vs_scanned() -> None:
     """Record required vs scanned columns for scan telemetry."""
-    ctx = execution_context_factory("default")
     table = pa.table({"a": [1, 2], "b": [3, 4], "c": [5, 6]})
     dataset = ds.dataset(table)
-    query = IbisQuerySpec(projection=IbisProjectionSpec(base=("a", "b", "c")))
-    scan_spec = ScanBuildSpec(
-        dataset=dataset,
-        query=query,
-        ctx=ctx,
-        required_columns=("a",),
-    )
-    scan_columns = scan_spec.scan_columns()
-    assert list(scan_columns) == ["a"]
+    scan_columns = ("a",)
+    scanner = dataset.scanner(columns=scan_columns)
     telemetry = fragment_telemetry(
         dataset,
-        scanner=scan_spec.scanner(),
+        scanner=scanner,
         options=ScanTelemetryOptions(
             required_columns=("a",),
-            scan_columns=("a",),
+            scan_columns=scan_columns,
         ),
     )
     assert telemetry.required_columns == ("a",)
-    assert telemetry.scan_columns == ("a",)
+    assert telemetry.scan_columns == scan_columns

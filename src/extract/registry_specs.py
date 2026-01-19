@@ -304,7 +304,6 @@ __all__ = [
     "dataset_schema_policy",
     "dataset_spec",
     "enabled_datasets",
-    "extractor_config",
     "extractor_defaults",
     "normalize_options",
     "postprocess_table",

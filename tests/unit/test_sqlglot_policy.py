@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pyarrow as pa
 import pytest
-from datafusion import SessionContext
 from sqlglot import exp, parse_one
 
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.plan_diff import semantic_diff_sql
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
@@ -164,7 +164,7 @@ def test_canonical_ast_fingerprint_is_stable() -> None:
 def test_transformed_sql_parses_in_datafusion() -> None:
     """Ensure transformed SQL parses in DataFusion."""
     policy = default_sqlglot_policy()
-    ctx = SessionContext()
+    ctx = DataFusionRuntimeProfile().session_context()
     table = pa.table({"a": [1, 2]})
     ctx.register_record_batches("t", [table.to_batches()])
     sql = "SELECT a FROM t QUALIFY ROW_NUMBER() OVER (PARTITION BY a ORDER BY a) = 1"

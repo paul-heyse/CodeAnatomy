@@ -162,10 +162,10 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         fields=(
             ArrowFieldSpec(name="profile_name", dtype=interop.string()),
             ArrowFieldSpec(name="profile_hash", dtype=interop.string()),
-            ArrowFieldSpec(name="snapshot_json", dtype=interop.string()),
+            ArrowFieldSpec(name="snapshot_ipc", dtype=interop.binary()),
         ),
         constraints=TableSpecConstraints(
-            required_non_null=("profile_name", "profile_hash", "snapshot_json"),
+            required_non_null=("profile_name", "profile_hash", "snapshot_ipc"),
             key_fields=("profile_hash",),
         ),
     ),
@@ -174,10 +174,10 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         version=SCHEMA_VERSION,
         fields=(
             ArrowFieldSpec(name="policy_hash", dtype=interop.string()),
-            ArrowFieldSpec(name="snapshot_json", dtype=interop.string()),
+            ArrowFieldSpec(name="snapshot_ipc", dtype=interop.binary()),
         ),
         constraints=TableSpecConstraints(
-            required_non_null=("policy_hash", "snapshot_json"),
+            required_non_null=("policy_hash", "snapshot_ipc"),
             key_fields=("policy_hash",),
         ),
     ),
@@ -186,10 +186,10 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         version=SCHEMA_VERSION,
         fields=(
             ArrowFieldSpec(name="registry_hash", dtype=interop.string()),
-            ArrowFieldSpec(name="snapshot_json", dtype=interop.string()),
+            ArrowFieldSpec(name="snapshot_ipc", dtype=interop.binary()),
         ),
         constraints=TableSpecConstraints(
-            required_non_null=("registry_hash", "snapshot_json"),
+            required_non_null=("registry_hash", "snapshot_ipc"),
             key_fields=("registry_hash",),
         ),
     ),

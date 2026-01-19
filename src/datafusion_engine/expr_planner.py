@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
+import base64
 import importlib
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+import pyarrow as pa
 from datafusion import SessionContext
+
+from registry_common.arrow_payloads import payload_ipc_bytes
+
+EXPR_PLANNER_PAYLOAD_VERSION = 1
+_EXPR_PLANNER_PAYLOAD_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32(), nullable=False),
+        pa.field("planner_names", pa.list_(pa.string()), nullable=False),
+    ]
+)
 
 
 @dataclass(frozen=True)
@@ -17,12 +28,12 @@ class ExprPlannerPolicy:
     planner_names: tuple[str, ...]
 
     def to_payload(self) -> dict[str, object]:
-        """Return a JSON-serializable policy payload.
+        """Return a policy payload for IPC serialization.
 
         Returns
         -------
         dict[str, object]
-            JSON-serializable policy payload.
+            Policy payload for IPC serialization.
         """
         return {"planner_names": list(self.planner_names)}
 
@@ -41,8 +52,9 @@ def default_expr_planner_policy(
 
 
 def _policy_payload(policy: ExprPlannerPolicy) -> str:
-    payload = policy.to_payload()
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    payload = {"version": EXPR_PLANNER_PAYLOAD_VERSION, **policy.to_payload()}
+    payload_bytes = payload_ipc_bytes(payload, _EXPR_PLANNER_PAYLOAD_SCHEMA)
+    return base64.b64encode(payload_bytes).decode("ascii")
 
 
 def _load_extension() -> object:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -17,6 +16,21 @@ from ibis.backends import BaseBackend
 from ibis.expr.types import Table
 
 from arrowdsl.schema.serialization import schema_fingerprint
+from registry_common.arrow_payloads import payload_hash
+
+SCALAR_PARAM_SIGNATURE_VERSION = 1
+_SCALAR_PARAM_SIGNATURE_ENTRY = pa.struct(
+    [
+        pa.field("key", pa.string(), nullable=False),
+        pa.field("value", pa.string(), nullable=False),
+    ]
+)
+_SCALAR_PARAM_SIGNATURE_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32(), nullable=False),
+        pa.field("entries", pa.list_(_SCALAR_PARAM_SIGNATURE_ENTRY), nullable=False),
+    ]
+)
 
 
 class ParamTableScope(Enum):
@@ -295,9 +309,11 @@ def scalar_param_signature(values: Mapping[str, object]) -> str:
     str
         Hex-encoded signature string.
     """
-    payload = {str(key): str(value) for key, value in values.items()}
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    entries = [
+        {"key": str(key), "value": str(value)} for key, value in sorted(values.items())
+    ]
+    payload = {"version": SCALAR_PARAM_SIGNATURE_VERSION, "entries": entries}
+    return payload_hash(payload, _SCALAR_PARAM_SIGNATURE_SCHEMA)
 
 
 def _param_values_array(

@@ -15,7 +15,7 @@ from ibis_engine.sql_bridge import (
 
 
 def test_sql_ingest_artifacts_payload() -> None:
-    """Capture SQL and AST artifacts for ingestion."""
+    """Capture SQL and SQLGlot artifacts for ingestion."""
     expr = ibis.memtable({"a": [1, 2]})
     artifacts = sql_ingest_artifacts(
         "select 1 as a",
@@ -26,7 +26,7 @@ def test_sql_ingest_artifacts_payload() -> None:
     payload = artifacts.payload()
     assert payload["sql"]
     assert payload["decompiled_sql"]
-    assert payload["sqlglot_ast"] is not None
+    assert payload["sqlglot_sql"] is not None
 
 
 def test_execute_raw_sql_accepts_sqlglot_expr() -> None:

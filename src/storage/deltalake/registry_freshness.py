@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -12,13 +10,26 @@ import pyarrow as pa
 
 from arrowdsl.spec.io import table_from_rows
 from core_types import PathLike, ensure_path
-from registry_common.arrow_payloads import ipc_hash
+from registry_common.arrow_payloads import ipc_hash, payload_hash
 from storage.deltalake.delta import read_table_delta
 
 if TYPE_CHECKING:
     from storage.deltalake.delta import StorageOptions
 
 REGISTRY_SIGNATURE_TABLE = "registry_signatures"
+REGISTRY_SIGNATURE_VERSION = 1
+_REGISTRY_SIGNATURE_ENTRY = pa.struct(
+    [
+        pa.field("name", pa.string(), nullable=False),
+        pa.field("hash", pa.string(), nullable=False),
+    ]
+)
+_REGISTRY_SIGNATURE_PAYLOAD_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32(), nullable=False),
+        pa.field("entries", pa.list_(_REGISTRY_SIGNATURE_ENTRY), nullable=False),
+    ]
+)
 
 REGISTRY_SIGNATURE_SCHEMA = pa.schema(
     [
@@ -78,9 +89,12 @@ def registry_signature_from_tables(
     RegistrySignature
         Registry signature derived from table IPC hashes.
     """
-    ordered = {name: ipc_hash(table) for name, table in sorted(tables.items())}
-    payload = json.dumps(ordered, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    digest = hashlib.sha256(payload).hexdigest()
+    entries = [
+        {"name": name, "hash": ipc_hash(table)}
+        for name, table in sorted(tables.items())
+    ]
+    payload = {"version": REGISTRY_SIGNATURE_VERSION, "entries": entries}
+    digest = payload_hash(payload, _REGISTRY_SIGNATURE_PAYLOAD_SCHEMA)
     return RegistrySignature(registry=registry, signature=digest, source=source)
 
 

@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from functools import cache
-from typing import TYPE_CHECKING, Literal, Protocol, TypeGuard, cast
+from typing import Literal, Protocol, cast
 
 import arrowdsl.core.interop as pa
 from arrowdsl.core.context import (
@@ -20,7 +18,6 @@ from arrowdsl.core.interop import (
     ScalarLike,
     SchemaLike,
     TableLike,
-    ensure_expression,
     pc,
 )
 from arrowdsl.schema.encoding_policy import EncodingPolicy
@@ -31,9 +28,6 @@ from arrowdsl.schema.schema import (
     required_field_names,
     required_non_null_mask,
 )
-
-if TYPE_CHECKING:
-    from arrowdsl.plan.plan import Plan
 
 
 class _ArrowFieldSpec(Protocol):
@@ -67,16 +61,6 @@ class _TableSchemaSpec(Protocol):
     def required_non_null(self) -> Sequence[str]: ...
 
     def to_arrow_schema(self) -> SchemaLike: ...
-
-
-@cache
-def _plan_class() -> type[Plan]:
-    module = importlib.import_module("arrowdsl.plan.plan")
-    return cast("type[Plan]", module.Plan)
-
-
-def _is_plan(value: TableLike | Plan, plan_cls: type[Plan]) -> TypeGuard[Plan]:
-    return isinstance(value, plan_cls)
 
 
 @dataclass(frozen=True)
@@ -323,82 +307,6 @@ def _empty_error_table() -> TableLike:
     )
 
 
-def invalid_rows_plan(
-    source: TableLike | Plan,
-    *,
-    spec: _TableSchemaSpec,
-    ctx: ExecutionContext,
-) -> Plan:
-    """Return a plan that filters rows failing required non-null checks.
-
-    Returns
-    -------
-    Plan
-        Plan yielding invalid rows.
-    """
-    required = required_field_names(spec)
-    plan_cls = _plan_class()
-    if _is_plan(source, plan_cls):
-        plan = source
-        available = set(plan.schema(ctx=ctx).names)
-        mask = required_non_null_mask(required, available=available)
-        return plan.filter(mask, ctx=ctx)
-    table = cast("TableLike", source)
-    available = set(table.column_names)
-    mask = required_non_null_mask(required, available=available)
-    plan = plan_cls.table_source(table, label=f"{spec.name}_validate")
-    return plan.filter(mask, ctx=ctx)
-
-
-def duplicate_key_rows_plan(
-    source: Plan,
-    *,
-    keys: Sequence[str],
-    ctx: ExecutionContext,
-) -> Plan:
-    """Return a plan for rows grouped by keys with duplicate counts.
-
-    Returns
-    -------
-    Plan
-        Plan yielding duplicate key rows.
-    """
-    plan_cls = _plan_class()
-    if not keys:
-        return plan_cls.table_source(pa.table({}), label="validate_keys_empty")
-    available = set(source.schema(ctx=ctx).names)
-    missing = missing_key_fields(keys, missing_cols=[key for key in keys if key not in available])
-    if missing:
-        return plan_cls.table_source(pa.table({}), label="validate_keys_missing")
-    count_col = f"{keys[0]}_count"
-    plan = source.aggregate(
-        group_keys=keys,
-        aggs=[(keys[0], "count")],
-        ctx=ctx,
-    )
-    return plan.filter(
-        ensure_expression(pc.greater(pc.field(count_col), pc.scalar(1))),
-        ctx=ctx,
-    )
-
-
-def duplicate_key_rows(
-    table: TableLike,
-    *,
-    keys: Sequence[str],
-    ctx: ExecutionContext,
-) -> TableLike:
-    """Return rows grouped by keys with duplicate counts.
-
-    Returns
-    -------
-    TableLike
-        Table containing duplicate key counts.
-    """
-    plan = _plan_class().table_source(table, label="validate_keys")
-    return duplicate_key_rows_plan(plan, keys=keys, ctx=ctx).to_table(ctx=ctx)
-
-
 def _build_validation_report(
     *,
     validated: TableLike,
@@ -491,9 +399,6 @@ def validate_table(
 __all__ = [
     "ArrowValidationOptions",
     "ValidationReport",
-    "duplicate_key_rows",
-    "duplicate_key_rows_plan",
-    "invalid_rows_plan",
     "required_non_null_mask",
     "validate_table",
 ]

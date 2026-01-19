@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import json
 import platform
 import re
 import shutil
@@ -16,25 +15,24 @@ from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
 from sqlglot import parse_one
 from sqlglot.errors import ParseError
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.core.plan_ops import DedupeSpec, SortKey
 from arrowdsl.finalize.finalize import Contract
-from arrowdsl.io.ipc import IpcWriteInput, ipc_write_config_payload, write_ipc_bundle
-from arrowdsl.plan.ops import DedupeSpec, SortKey
+from arrowdsl.io.ipc import IpcWriteInput
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
-from arrowdsl.spec.io import IpcWriteConfig, write_spec_table
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from engine.plan_cache import PlanCacheEntry
 from engine.plan_product import PlanProduct
 from ibis_engine.param_tables import ParamTableArtifact, ParamTableSpec
 from ibis_engine.params_bridge import ScalarParamSpec
 from obs.parquet_writers import write_obs_dataset
-from registry_common.arrow_payloads import payload_hash
+from registry_common.arrow_payloads import ipc_hash
 from relspec.compiler import CompiledOutput
 from relspec.model import RelationshipRule
 from relspec.param_deps import RuleDependencyReport
@@ -42,6 +40,10 @@ from relspec.registry import ContractCatalog, DatasetLocation
 from relspec.rules.diagnostics import rule_diagnostics_from_table
 from schema_spec.system import ddl_fingerprint_from_schema, table_spec_from_schema
 from sqlglot_tools.optimizer import planner_dag_snapshot
+from storage.deltalake import DeltaWriteOptions, write_dataset_delta
+
+if TYPE_CHECKING:
+    from arrowdsl.spec.io import IpcWriteConfig
 
 # -----------------------
 # Basic environment capture
@@ -130,7 +132,7 @@ def collect_repro_info(
 
 
 # -----------------------
-# JSON serialization helpers
+# IPC + Delta serialization helpers
 # -----------------------
 
 
@@ -138,15 +140,45 @@ def _ensure_dir(path: Path) -> None:
     path.mkdir(exist_ok=True, parents=True)
 
 
-def _write_json(path: PathLike, data: JsonValue, *, overwrite: bool = True) -> str:
+def _payload_table(payload: JsonValue) -> pa.Table:
+    if isinstance(payload, Mapping):
+        return pa.Table.from_pylist([dict(payload)])
+    mapping_list = _mapping_list(payload)
+    if mapping_list is not None:
+        return pa.Table.from_pylist([dict(item) for item in mapping_list])
+    if isinstance(payload, list):
+        return pa.table({"value": payload})
+    return pa.table({"value": [payload]})
+
+
+def _mapping_list(value: JsonValue) -> list[Mapping[str, JsonValue]] | None:
+    if not isinstance(value, list):
+        return None
+    if not value:
+        return None
+    if all(isinstance(item, Mapping) for item in value):
+        return cast("list[Mapping[str, JsonValue]]", value)
+    return None
+
+
+def _write_delta_payload(
+    path: PathLike,
+    payload: JsonValue,
+    *,
+    overwrite: bool = True,
+) -> str:
     target = ensure_path(path)
     if target.exists() and not overwrite:
         msg = f"Target already exists at {target}."
         raise FileExistsError(msg)
     _ensure_dir(target.parent)
-    with target.open("w", encoding="utf-8") as handle:
-        json.dump(data, handle, ensure_ascii=False, indent=2, sort_keys=True)
-    return str(target)
+    table = _payload_table(payload)
+    options = DeltaWriteOptions(
+        mode="overwrite" if overwrite else "error",
+        schema_mode="overwrite" if overwrite else None,
+    )
+    result = write_dataset_delta(table, str(target), options=options)
+    return result.path
 
 
 def _normalize_value(value: object) -> object:
@@ -360,19 +392,9 @@ def make_run_bundle_name(
         ts = int(created_value)
     else:
         ts = int(time.time())
-    payload = {
-        "version": 1,
-        "manifest_repr": _stable_repr(run_manifest),
-        "config_repr": _stable_repr(run_config),
-    }
-    schema = pa.schema(
-        [
-            pa.field("version", pa.int32(), nullable=False),
-            pa.field("manifest_repr", pa.string(), nullable=False),
-            pa.field("config_repr", pa.string(), nullable=False),
-        ]
-    )
-    h = payload_hash(payload, schema)[:10]
+    payload = {"version": 1, "manifest": dict(run_manifest), "config": dict(run_config)}
+    table = pa.Table.from_pylist([payload])
+    h = ipc_hash(table)[:10]
     return f"run_{ts}_{h}"
 
 
@@ -477,10 +499,18 @@ def _write_manifest_files(
     files_written: list[str],
 ) -> None:
     files_written.append(
-        _write_json(bundle_dir / "manifest.json", dict(context.run_manifest), overwrite=True)
+        _write_delta_payload(
+            bundle_dir / "manifest.delta",
+            dict(context.run_manifest),
+            overwrite=True,
+        )
     )
     files_written.append(
-        _write_json(bundle_dir / "config.json", dict(context.run_config), overwrite=True)
+        _write_delta_payload(
+            bundle_dir / "config.delta",
+            dict(context.run_config),
+            overwrite=True,
+        )
     )
     repo_root_value = context.run_config.get("repo_root")
     repo_root = repo_root_value if isinstance(repo_root_value, str) else None
@@ -491,7 +521,13 @@ def _write_manifest_files(
             "allocator_debug": bool(context.allocator_debug),
         },
     )
-    files_written.append(_write_json(bundle_dir / "repro.json", repro, overwrite=True))
+    files_written.append(
+        _write_delta_payload(
+            bundle_dir / "repro.delta",
+            repro,
+            overwrite=True,
+        )
+    )
 
 
 def _write_dataset_locations(
@@ -502,7 +538,13 @@ def _write_dataset_locations(
     ds_dir = bundle_dir / "datasets"
     _ensure_dir(ds_dir)
     locs = serialize_dataset_locations(context.relspec_input_locations)
-    files_written.append(_write_json(ds_dir / "locations.json", locs, overwrite=True))
+    files_written.append(
+        _write_delta_payload(
+            ds_dir / "locations.delta",
+            locs,
+            overwrite=True,
+        )
+    )
 
 
 def _write_relspec_snapshots(
@@ -511,21 +553,33 @@ def _write_relspec_snapshots(
     relspec_dir = bundle_dir / "relspec"
     _ensure_dir(relspec_dir)
     if context.rule_table is not None:
-        target = relspec_dir / "rules.arrow"
-        write_spec_table(target, context.rule_table)
-        files_written.append(str(target))
+        files_written.append(
+            write_obs_dataset(
+                relspec_dir,
+                name="rules",
+                table=context.rule_table,
+                overwrite=context.overwrite,
+            )
+        )
     if context.template_table is not None:
-        target = relspec_dir / "templates.arrow"
-        write_spec_table(target, context.template_table)
-        files_written.append(str(target))
+        files_written.append(
+            write_obs_dataset(
+                relspec_dir,
+                name="templates",
+                table=context.template_table,
+                overwrite=context.overwrite,
+            )
+        )
     if context.template_diagnostics is not None:
-        target = relspec_dir / "template_diagnostics.arrow"
-        write_spec_table(target, context.template_diagnostics)
-        files_written.append(str(target))
+        files_written.append(
+            write_obs_dataset(
+                relspec_dir,
+                name="template_diagnostics",
+                table=context.template_diagnostics,
+                overwrite=context.overwrite,
+            )
+        )
     if context.rule_diagnostics is not None:
-        target = relspec_dir / "rule_diagnostics.arrow"
-        write_spec_table(target, context.rule_diagnostics)
-        files_written.append(str(target))
         files_written.append(
             write_obs_dataset(
                 relspec_dir,
@@ -534,30 +588,64 @@ def _write_relspec_snapshots(
                 overwrite=context.overwrite,
             )
         )
-        _write_sqlglot_ast_payloads(relspec_dir, context.rule_diagnostics, files_written)
-        _write_sqlglot_planner_dag(relspec_dir, context.rule_diagnostics, files_written)
-        _write_sqlglot_qualification_failures(relspec_dir, context.rule_diagnostics, files_written)
+        _write_sqlglot_ast_payloads(
+            relspec_dir,
+            context.rule_diagnostics,
+            files_written,
+        )
+        _write_sqlglot_planner_dag(
+            relspec_dir,
+            context.rule_diagnostics,
+            files_written,
+        )
+        _write_sqlglot_qualification_failures(
+            relspec_dir,
+            context.rule_diagnostics,
+            files_written,
+        )
     if context.relationship_contracts is not None:
         snap = serialize_contract_catalog(context.relationship_contracts)
-        files_written.append(_write_json(relspec_dir / "contracts.json", snap, overwrite=True))
+        files_written.append(
+            _write_delta_payload(
+                relspec_dir / "contracts.delta",
+                snap,
+                overwrite=True,
+            )
+        )
         ddl = _contract_schema_ddls(context.relationship_contracts)
         if ddl:
             files_written.append(
-                _write_json(relspec_dir / "contracts_ddl.json", ddl, overwrite=True)
+                _write_delta_payload(
+                    relspec_dir / "contracts_ddl.delta",
+                    ddl,
+                    overwrite=True,
+                )
             )
         asts = _contract_schema_asts(context.relationship_contracts)
         if asts:
             files_written.append(
-                _write_json(relspec_dir / "contracts_ast.json", asts, overwrite=True)
+                _write_delta_payload(
+                    relspec_dir / "contracts_ast.delta",
+                    asts,
+                    overwrite=True,
+                )
             )
     if context.compiled_relationship_outputs is not None:
         snap = serialize_compiled_outputs(context.compiled_relationship_outputs)
         files_written.append(
-            _write_json(relspec_dir / "compiled_outputs.json", snap, overwrite=True)
+            _write_delta_payload(
+                relspec_dir / "compiled_outputs.delta",
+                snap,
+                overwrite=True,
+            )
         )
     _write_runtime_artifacts(relspec_dir, context, files_written)
     if context.rule_diagnostics is not None:
-        _write_substrait_artifacts(relspec_dir, context.rule_diagnostics, files_written)
+        _write_substrait_artifacts(
+            relspec_dir,
+            context.rule_diagnostics,
+            files_written,
+        )
 
 
 def _write_incremental_artifacts(
@@ -603,10 +691,10 @@ def _write_runtime_artifacts(
         return [cast("JsonValue", _normalize_value(entry)) for entry in entries]
 
     json_artifacts = [
-        ("datafusion_metrics.json", context.datafusion_metrics),
-        ("datafusion_traces.json", context.datafusion_traces),
+        ("datafusion_metrics.delta", context.datafusion_metrics),
+        ("datafusion_traces.delta", context.datafusion_traces),
         (
-            "datafusion_function_catalog.json",
+            "datafusion_function_catalog.delta",
             cast(
                 "JsonValue",
                 _normalize_value(
@@ -620,13 +708,13 @@ def _write_runtime_artifacts(
             else None,
         ),
         (
-            "datafusion_write_policy.json",
+            "datafusion_write_policy.delta",
             cast("JsonValue", _normalize_value(context.datafusion_write_policy))
             if context.datafusion_write_policy
             else None,
         ),
         (
-            "function_registry_snapshot.json",
+            "function_registry_snapshot.delta",
             cast(
                 "JsonValue",
                 _normalize_value(
@@ -640,7 +728,7 @@ def _write_runtime_artifacts(
             else None,
         ),
         (
-            "arrow_kernel_registry.json",
+            "arrow_kernel_registry.delta",
             cast("JsonValue", _normalize_value(context.arrow_kernel_registry))
             if context.arrow_kernel_registry
             else None,
@@ -648,122 +736,122 @@ def _write_runtime_artifacts(
     ]
     list_artifacts: list[tuple[str, str, list[JsonValue] | None]] = [
         (
-            "datafusion_input_plugins.json",
+            "datafusion_input_plugins.delta",
             "plugins",
             _json_list(context.datafusion_input_plugins)
             if context.datafusion_input_plugins
             else None,
         ),
         (
-            "datafusion_arrow_ingest.json",
+            "datafusion_arrow_ingest.delta",
             "ingest",
             _json_list(context.datafusion_arrow_ingest)
             if context.datafusion_arrow_ingest
             else None,
         ),
         (
-            "datafusion_view_registry.json",
+            "datafusion_view_registry.delta",
             "views",
             _json_list(context.datafusion_view_registry)
             if context.datafusion_view_registry
             else None,
         ),
         (
-            "datafusion_cache_events.json",
+            "datafusion_cache_events.delta",
             "events",
             _json_list(context.datafusion_cache_events)
             if context.datafusion_cache_events
             else None,
         ),
         (
-            "datafusion_prepared_statements.json",
+            "datafusion_prepared_statements.delta",
             "statements",
             _json_list(context.datafusion_prepared_statements)
             if context.datafusion_prepared_statements
             else None,
         ),
         (
-            "datafusion_dml_statements.json",
+            "datafusion_dml_statements.delta",
             "statements",
             _json_list(context.datafusion_dml_statements)
             if context.datafusion_dml_statements
             else None,
         ),
         (
-            "datafusion_function_factory.json",
+            "datafusion_function_factory.delta",
             "factories",
             _json_list(context.datafusion_function_factory)
             if context.datafusion_function_factory
             else None,
         ),
         (
-            "datafusion_expr_planners.json",
+            "datafusion_expr_planners.delta",
             "planners",
             _json_list(context.datafusion_expr_planners)
             if context.datafusion_expr_planners
             else None,
         ),
         (
-            "datafusion_listing_tables.json",
+            "datafusion_listing_tables.delta",
             "registrations",
             _json_list(context.datafusion_listing_tables)
             if context.datafusion_listing_tables
             else None,
         ),
         (
-            "datafusion_listing_refreshes.json",
+            "datafusion_listing_refreshes.delta",
             "refreshes",
             _json_list(context.datafusion_listing_refreshes)
             if context.datafusion_listing_refreshes
             else None,
         ),
         (
-            "datafusion_delta_tables.json",
+            "datafusion_delta_tables.delta",
             "registrations",
             _json_list(context.datafusion_delta_tables)
             if context.datafusion_delta_tables
             else None,
         ),
         (
-            "datafusion_table_providers.json",
+            "datafusion_table_providers.delta",
             "providers",
             _json_list(context.datafusion_table_providers)
             if context.datafusion_table_providers
             else None,
         ),
         (
-            "delta_maintenance_reports.json",
+            "delta_maintenance_reports.delta",
             "reports",
             _json_list(context.delta_maintenance_reports)
             if context.delta_maintenance_reports
             else None,
         ),
         (
-            "datafusion_udf_registry.json",
+            "datafusion_udf_registry.delta",
             "udfs",
             _json_list(context.datafusion_udf_registry)
             if context.datafusion_udf_registry
             else None,
         ),
         (
-            "ibis_sql_ingest_artifacts.json",
+            "ibis_sql_ingest_artifacts.delta",
             "artifacts",
             _json_list(context.ibis_sql_ingest_artifacts)
             if context.ibis_sql_ingest_artifacts
             else None,
         ),
         (
-            "ibis_namespace_actions.json",
+            "ibis_namespace_actions.delta",
             "actions",
             _json_list(context.ibis_namespace_actions) if context.ibis_namespace_actions else None,
         ),
         (
-            "ibis_cache_events.json",
+            "ibis_cache_events.delta",
             "events",
             _json_list(context.ibis_cache_events) if context.ibis_cache_events else None,
         ),
         (
-            "ibis_support_matrix.json",
+            "ibis_support_matrix.delta",
             "entries",
             _json_list(context.ibis_support_matrix) if context.ibis_support_matrix else None,
         ),
@@ -779,14 +867,20 @@ def _write_runtime_artifacts(
     for filename, payload in json_artifacts:
         if payload is None:
             continue
-        files_written.append(_write_json(relspec_dir / filename, payload, overwrite=True))
+        files_written.append(
+            _write_delta_payload(
+                relspec_dir / filename,
+                payload,
+                overwrite=True,
+            )
+        )
     for filename, key, entries in list_artifacts:
         if not entries:
             continue
         files_written.append(
-            _write_json(
+            _write_delta_payload(
                 relspec_dir / filename,
-                {key: entries},
+                cast("JsonValue", {key: entries}),
                 overwrite=True,
             )
         )
@@ -904,8 +998,8 @@ def _write_plan_cache_artifacts(
             }
         )
     files_written.append(
-        _write_json(
-            relspec_dir / "substrait_cache_index.json",
+        _write_delta_payload(
+            relspec_dir / "substrait_cache_index.delta",
             {"plans": index},
             overwrite=True,
         )
@@ -947,8 +1041,8 @@ def _write_substrait_artifacts(
         )
     if index:
         files_written.append(
-            _write_json(
-                relspec_dir / "substrait_index.json",
+            _write_delta_payload(
+                relspec_dir / "substrait_index.delta",
                 {"plans": index},
                 overwrite=True,
             )
@@ -986,8 +1080,8 @@ def _write_sqlglot_ast_payloads(
         )
     if payloads:
         files_written.append(
-            _write_json(
-                relspec_dir / "sqlglot_ast_payloads.json",
+            _write_delta_payload(
+                relspec_dir / "sqlglot_ast_payloads.delta",
                 {"payloads": payloads},
                 overwrite=True,
             )
@@ -1035,8 +1129,8 @@ def _write_sqlglot_planner_dag(
         )
     if payloads:
         files_written.append(
-            _write_json(
-                relspec_dir / "sqlglot_planner_dag.json",
+            _write_delta_payload(
+                relspec_dir / "sqlglot_planner_dag.delta",
                 {"payloads": payloads},
                 overwrite=True,
             )
@@ -1064,8 +1158,8 @@ def _write_sqlglot_qualification_failures(
         )
     if payloads:
         files_written.append(
-            _write_json(
-                relspec_dir / "sqlglot_qualification_failures.json",
+            _write_delta_payload(
+                relspec_dir / "sqlglot_qualification_failures.delta",
                 {"payloads": payloads},
                 overwrite=True,
             )
@@ -1086,7 +1180,13 @@ def _write_schema_snapshot(
         "ddl_fingerprint": ddl_fingerprint_from_schema(name, table.schema),
         "schema": cast("JsonValue", schema_to_dict(table.schema)),
     }
-    files_written.append(_write_json(schemas_dir / f"{name}.schema.json", doc, overwrite=True))
+    files_written.append(
+        _write_delta_payload(
+            schemas_dir / f"{name}.schema.delta",
+            doc,
+            overwrite=True,
+        )
+    )
 
 
 def _write_schema_group(
@@ -1143,11 +1243,10 @@ def _ipc_schema(table: IpcWriteInput) -> pa.Schema:
     return data.schema
 
 
-def _ipc_metadata_payload(
+def _delta_metadata_payload(
     name: str,
     *,
     table: IpcWriteInput,
-    config: IpcWriteConfig | None,
 ) -> JsonDict:
     schema = _ipc_schema(table)
     return {
@@ -1155,11 +1254,10 @@ def _ipc_metadata_payload(
         "schema": schema_to_dict(schema),
         "schema_fingerprint": schema_fingerprint(schema),
         "ddl_fingerprint": ddl_fingerprint_from_schema(name, schema),
-        "ipc_options": ipc_write_config_payload(config),
     }
 
 
-def _write_ipc_group(
+def _write_delta_group(
     bundle_dir: Path,
     *,
     prefix: str,
@@ -1169,48 +1267,55 @@ def _write_ipc_group(
 ) -> None:
     if not context.ipc_dump_enabled or not tables:
         return
-    ipc_dir = bundle_dir / "ipc" / prefix
-    _ensure_dir(ipc_dir)
+    delta_dir = bundle_dir / "delta" / prefix
+    _ensure_dir(delta_dir)
+    options = DeltaWriteOptions(
+        mode="overwrite" if context.overwrite else "error",
+        schema_mode="overwrite" if context.overwrite else None,
+    )
     for name, table in tables.items():
         if table is None:
             continue
-        base_path = ipc_dir / name
-        artifacts = write_ipc_bundle(
-            table,
-            base_path,
-            overwrite=context.overwrite,
-            config=context.ipc_write_config,
-        )
-        payload = _ipc_metadata_payload(
+        base_path = delta_dir / name
+        delta_path = base_path.with_suffix(".delta")
+        delta_input = table.value() if isinstance(table, PlanProduct) else table
+        result = write_dataset_delta(delta_input, str(delta_path), options=options)
+        payload = _delta_metadata_payload(
             name,
             table=table,
-            config=context.ipc_write_config,
         )
-        payload["artifacts"] = artifacts
-        files_written.append(_write_json(base_path.with_suffix(".json"), payload, overwrite=True))
-        files_written.extend(artifacts.values())
+        payload["artifact_path"] = result.path
+        payload["artifact_format"] = "delta"
+        files_written.append(
+            _write_delta_payload(
+                base_path.with_suffix(".delta_meta.delta"),
+                payload,
+                overwrite=True,
+            )
+        )
+        files_written.append(result.path)
 
 
-def _write_ipc_dumps(
+def _write_delta_dumps(
     bundle_dir: Path,
     context: RunBundleContext,
     files_written: list[str],
 ) -> None:
-    _write_ipc_group(
+    _write_delta_group(
         bundle_dir,
         prefix="relspec_input",
         tables=context.relspec_input_tables,
         context=context,
         files_written=files_written,
     )
-    _write_ipc_group(
+    _write_delta_group(
         bundle_dir,
         prefix="relationship_output",
         tables=context.relationship_output_tables,
         context=context,
         files_written=files_written,
     )
-    _write_ipc_group(
+    _write_delta_group(
         bundle_dir,
         prefix="cpg_output",
         tables=context.cpg_output_tables,
@@ -1258,7 +1363,13 @@ def _write_param_specs(
             _scalar_param_spec_payload(spec) for spec in context.param_scalar_specs or ()
         ],
     }
-    files_written.append(_write_json(params_dir / "specs.json", specs_payload, overwrite=True))
+    files_written.append(
+        _write_delta_payload(
+            params_dir / "specs.delta",
+            specs_payload,
+            overwrite=True,
+        )
+    )
 
 
 def _write_param_signatures(
@@ -1280,7 +1391,13 @@ def _write_param_signatures(
             }
     if not signatures:
         return
-    files_written.append(_write_json(params_dir / "signatures.json", signatures, overwrite=True))
+    files_written.append(
+        _write_delta_payload(
+            params_dir / "signatures.delta",
+            signatures,
+            overwrite=True,
+        )
+    )
 
 
 def _write_param_table_data(
@@ -1318,7 +1435,11 @@ def _write_param_dependency_reports(
         for report in context.param_dependency_reports
     }
     files_written.append(
-        _write_json(params_dir / "rule_param_deps.json", deps_payload, overwrite=True)
+        _write_delta_payload(
+            params_dir / "rule_param_deps.delta",
+            deps_payload,
+            overwrite=True,
+        )
     )
 
 
@@ -1332,7 +1453,11 @@ def _write_param_reverse_index(
         return
     reverse_payload = {name: list(rules) for name, rules in context.param_reverse_index.items()}
     files_written.append(
-        _write_json(params_dir / "param_rule_reverse_index.json", reverse_payload, overwrite=True)
+        _write_delta_payload(
+            params_dir / "param_rule_reverse_index.delta",
+            reverse_payload,
+            overwrite=True,
+        )
     )
 
 
@@ -1365,63 +1490,63 @@ def write_run_bundle(
 
     Directory layout:
       <base_dir>/<bundle_name>/
-        manifest.json
-        config.json
-        repro.json
-        datasets/locations.json
-        relspec/rules.arrow
-        relspec/templates.arrow
-        relspec/template_diagnostics.arrow
-        relspec/rule_diagnostics.arrow
+        manifest.delta
+        config.delta
+        repro.delta
+        datasets/locations.delta
+        relspec/rules/
+        relspec/templates/
+        relspec/template_diagnostics/
         relspec/rule_diagnostics/
-        relspec/datafusion_metrics.json
-        relspec/datafusion_traces.json
-        relspec/datafusion_function_catalog.json
-        relspec/datafusion_write_policy.json
+        relspec/rule_diagnostics/
+        relspec/datafusion_metrics.delta
+        relspec/datafusion_traces.delta
+        relspec/datafusion_function_catalog.delta
+        relspec/datafusion_write_policy.delta
         relspec/datafusion_fallbacks/
         relspec/datafusion_explains/
         relspec/datafusion_plan_artifacts_v1/
-        relspec/datafusion_input_plugins.json
-        relspec/datafusion_arrow_ingest.json
-        relspec/datafusion_view_registry.json
-        relspec/datafusion_cache_events.json
-        relspec/datafusion_prepared_statements.json
-        relspec/datafusion_dml_statements.json
-        relspec/datafusion_function_factory.json
-        relspec/datafusion_expr_planners.json
-        relspec/datafusion_listing_tables.json
-        relspec/datafusion_listing_refreshes.json
-        relspec/datafusion_delta_tables.json
-        relspec/datafusion_table_providers.json
-        relspec/datafusion_udf_registry.json
-        relspec/function_registry_snapshot.json
-        relspec/arrow_kernel_registry.json
+        relspec/datafusion_input_plugins.delta
+        relspec/datafusion_arrow_ingest.delta
+        relspec/datafusion_view_registry.delta
+        relspec/datafusion_cache_events.delta
+        relspec/datafusion_prepared_statements.delta
+        relspec/datafusion_dml_statements.delta
+        relspec/datafusion_function_factory.delta
+        relspec/datafusion_expr_planners.delta
+        relspec/datafusion_listing_tables.delta
+        relspec/datafusion_listing_refreshes.delta
+        relspec/datafusion_delta_tables.delta
+        relspec/datafusion_table_providers.delta
+        relspec/datafusion_udf_registry.delta
+        relspec/function_registry_snapshot.delta
+        relspec/arrow_kernel_registry.delta
         relspec/substrait_cache/
-        relspec/substrait_cache_index.json
-        relspec/ibis_sql_ingest_artifacts.json
-        relspec/ibis_namespace_actions.json
-        relspec/ibis_cache_events.json
-        relspec/ibis_support_matrix.json
-        relspec/sqlglot_planner_dag.json
-        relspec/sqlglot_qualification_failures.json
-        relspec/contracts.json
-        relspec/contracts_ddl.json
-        relspec/compiled_outputs.json
+        relspec/substrait_cache_index.delta
+        relspec/ibis_sql_ingest_artifacts.delta
+        relspec/ibis_namespace_actions.delta
+        relspec/ibis_cache_events.delta
+        relspec/ibis_support_matrix.delta
+        relspec/sqlglot_planner_dag.delta
+        relspec/sqlglot_qualification_failures.delta
+        relspec/contracts.delta
+        relspec/contracts_ddl.delta
+        relspec/contracts_ast.delta
+        relspec/compiled_outputs.delta
         relspec/scan_telemetry/
         relspec/rule_exec_events/
         incremental/incremental_diff/
         incremental/incremental_plan_diff/
         incremental/inc_output_fingerprint_changes_v1/
         relspec/substrait/*.substrait
-        relspec/substrait_index.json
-        schemas/*.schema.json
-        ipc/<group>/<name>.arrow
-        ipc/<group>/<name>.arrows
-        ipc/<group>/<name>.json
-        params/specs.json
-        params/signatures.json
-        params/rule_param_deps.json
-        params/param_rule_reverse_index.json
+        relspec/substrait_index.delta
+        schemas/*.schema.delta
+        delta/<group>/<name>.delta
+        delta/<group>/<name>.delta_meta.delta
+        params/specs.delta
+        params/signatures.delta
+        params/rule_param_deps.delta
+        params/param_rule_reverse_index.delta
         params/<table_name>/
 
     Parameters
@@ -1454,7 +1579,7 @@ def write_run_bundle(
         _write_relspec_snapshots(bundle_dir, context, files_written)
         _write_incremental_artifacts(bundle_dir, context, files_written)
         _write_schema_snapshots(bundle_dir, context, files_written)
-        _write_ipc_dumps(bundle_dir, context, files_written)
+        _write_delta_dumps(bundle_dir, context, files_written)
         _write_param_tables(bundle_dir, context, files_written)
 
     return {

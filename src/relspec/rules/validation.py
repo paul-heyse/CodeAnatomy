@@ -19,11 +19,14 @@ from arrowdsl.compute.kernels import kernel_capability
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.build import iter_rows_from_table
+from datafusion_engine.bridge import sqlglot_to_datafusion
+from datafusion_engine.compile_options import DataFusionCompileOptions
 from datafusion_engine.runtime import snapshot_plans
 from engine.session import EngineSession
 from extract.registry_bundles import bundle
 from extract.registry_pipelines import post_kernels_for_postprocess
 from ibis_engine.compiler_checkpoint import compile_checkpoint
+from ibis_engine.expr_compiler import OperationSupportBackend, unsupported_operations
 from ibis_engine.lineage import lineage_graph_by_output, required_columns_by_table
 from ibis_engine.param_tables import (
     ParamTablePolicy,
@@ -79,6 +82,7 @@ from sqlglot_tools.lineage import TableRef, extract_table_refs
 from sqlglot_tools.optimizer import (
     SqlGlotQualificationError,
     default_sqlglot_policy,
+    parse_sql_strict,
     sanitize_templated_sql,
     sqlglot_sql,
 )
@@ -540,6 +544,17 @@ def _prepare_sqlglot_rule_context(
     )
     if source is None:
         return None, ()
+    missing_ops = unsupported_operations(
+        source.expr,
+        backend=cast("OperationSupportBackend", context.backend),
+    )
+    if missing_ops:
+        diagnostic = _unsupported_ops_diagnostic(
+            rule,
+            plan_signature=plan_signature,
+            missing_ops=missing_ops,
+        )
+        return None, (diagnostic,)
     return (
         SqlGlotRuleContext(
             rule=rule,
@@ -1099,7 +1114,9 @@ def _datafusion_diagnostics_metadata(
     if schema_map:
         try:
             _register_schema_tables(session, schema_map)
-            df = session.sql(sanitized_sql)
+            options = profile.compile_options(options=DataFusionCompileOptions())
+            expr = parse_sql_strict(sanitized_sql, dialect=options.dialect)
+            df = sqlglot_to_datafusion(expr, ctx=session, options=options)
             plans = snapshot_plans(df)
             metadata["df_logical_plan"] = str(plans["logical"])
             metadata["df_optimized_plan"] = str(plans["optimized"])
@@ -1506,6 +1523,23 @@ def _schema_missing_diagnostic(
         message="SQLGlot validation skipped; missing input schemas.",
         plan_signature=plan_signature,
         metadata={"missing_inputs": ",".join(missing_inputs)},
+    )
+
+
+def _unsupported_ops_diagnostic(
+    rule: RuleDefinition,
+    *,
+    plan_signature: str | None,
+    missing_ops: Sequence[str],
+) -> RuleDiagnostic:
+    return RuleDiagnostic(
+        domain=rule.domain,
+        template=None,
+        rule_name=rule.name,
+        severity="error",
+        message="Ibis backend missing operations required by this rule.",
+        plan_signature=plan_signature,
+        metadata={"missing_ops": ",".join(missing_ops)},
     )
 
 

@@ -1,4 +1,4 @@
-"""Plan specs and shared operation metadata for ArrowDSL."""
+"""Shared plan operation specs and ordering helpers."""
 
 from __future__ import annotations
 

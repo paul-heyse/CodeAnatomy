@@ -6,17 +6,17 @@ from collections.abc import Mapping
 
 import pyarrow as pa
 import pytest
-from datafusion import SessionContext
 
 from datafusion_engine.bridge import collect_plan_artifacts
 from datafusion_engine.compile_options import DataFusionCompileOptions
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from sqlglot_tools.optimizer import parse_sql_strict
 
 
 @pytest.mark.integration
 def test_substrait_cross_validation_match() -> None:
     """Compare PyArrow Substrait output to DataFusion results."""
-    ctx = SessionContext()
+    ctx = DataFusionRuntimeProfile().session_context()
     table = pa.table({"id": [1, 2, 3], "label": ["alpha", "beta", "gamma"]})
     ctx.register_record_batches("input_table", [table.to_batches()])
     sql = "SELECT * FROM input_table"

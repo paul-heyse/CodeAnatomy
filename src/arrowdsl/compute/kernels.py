@@ -22,16 +22,16 @@ from arrowdsl.core.interop import (
     TableLike,
     pc,
 )
-from arrowdsl.core.schema_constants import PROVENANCE_COLS
-from arrowdsl.kernel.registry import KernelLane, kernel_def
-from arrowdsl.plan.joins import (
+from arrowdsl.core.joins import (
     JoinConfig,
     JoinOutputSpec,
     interval_join_candidates,
     join_spec,
     resolve_join_outputs,
 )
-from arrowdsl.plan.ops import AsofJoinSpec, DedupeSpec, IntervalAlignOptions, JoinSpec, SortKey
+from arrowdsl.core.plan_ops import AsofJoinSpec, DedupeSpec, IntervalAlignOptions, JoinSpec, SortKey
+from arrowdsl.core.schema_constants import PROVENANCE_COLS
+from arrowdsl.kernel.registry import KernelLane, kernel_def
 from arrowdsl.schema.chunking import ChunkPolicy
 from arrowdsl.schema.metadata import metadata_spec_from_schema, ordering_from_schema
 from arrowdsl.schema.schema import SchemaMetadataSpec

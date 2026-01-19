@@ -14,8 +14,8 @@ from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.core.expr_types import ExplodeSpec
 from arrowdsl.core.interop import Scalar, TableLike
-from arrowdsl.plan.ops import DedupeSpec, SortKey
-from arrowdsl.plan.scan_telemetry import ScanTelemetry
+from arrowdsl.core.plan_ops import DedupeSpec, SortKey
+from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import align_table
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from engine.materialize import build_plan_product

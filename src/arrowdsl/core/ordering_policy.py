@@ -1,4 +1,4 @@
-"""Shared ordering policy for ArrowDSL execution."""
+"""Ordering policy helpers shared across execution surfaces."""
 
 from __future__ import annotations
 
@@ -23,16 +23,9 @@ def ordering_keys_for_schema(schema: SchemaLike) -> tuple[OrderingKey, ...]:
     tuple[OrderingKey, ...]
         Ordering keys inferred for the schema.
     """
-    metadata = schema.metadata or {}
-    raw = metadata.get(b"ordering_keys")
-    if raw:
-        decoded = raw.decode("utf-8")
-        parts = [part.strip() for part in decoded.split(",") if part.strip()]
-        keys: list[OrderingKey] = []
-        for part in parts:
-            col, order = ([*part.split(":", maxsplit=1), "ascending"])[:2]
-            keys.append((col.strip(), order.strip()))
-        return tuple(keys)
+    ordering = ordering_from_schema(schema)
+    if ordering.keys:
+        return ordering.keys
     return infer_ordering_keys(schema.names)
 
 

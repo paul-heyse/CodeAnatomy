@@ -11,17 +11,11 @@ import pyarrow as pa
 
 from arrowdsl.spec.expr_ir import ExprIR
 from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
-from registry_common.arrow_payloads import ipc_table, payload_hash, payload_ipc_bytes
+from registry_common.arrow_payloads import ipc_hash, ipc_table, payload_ipc_bytes
 from relspec.model import HashJoinConfig, JoinType
 
 REL_OP_SIGNATURE_VERSION = 1
-_REL_OP_SIGNATURE_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32(), nullable=False),
-        pa.field("payload_repr", pa.string(), nullable=False),
-    ]
-)
-_JOIN_PAYLOAD_SCHEMA = pa.schema(
+_JOIN_CONFIG_STRUCT = pa.struct(
     [
         pa.field("join_type", pa.string(), nullable=False),
         pa.field("left_keys", pa.list_(pa.string()), nullable=False),
@@ -30,6 +24,13 @@ _JOIN_PAYLOAD_SCHEMA = pa.schema(
         pa.field("right_output", pa.list_(pa.string()), nullable=True),
         pa.field("output_suffix_for_left", pa.string(), nullable=True),
         pa.field("output_suffix_for_right", pa.string(), nullable=True),
+    ]
+)
+_JOIN_PAYLOAD_SCHEMA = pa.schema(
+    [
+        pa.field("left", pa.string(), nullable=False),
+        pa.field("right", pa.string(), nullable=False),
+        pa.field("join", _JOIN_CONFIG_STRUCT, nullable=False),
     ]
 )
 _AGGREGATE_EXPR_STRUCT = pa.struct(
@@ -324,11 +325,8 @@ def rel_ops_signature(ops: Sequence[RelOpT]) -> str:
         Stable hash signature of the relational ops.
     """
     rows = rel_ops_to_rows(ops) or []
-    signature_payload = {
-        "version": REL_OP_SIGNATURE_VERSION,
-        "payload_repr": _stable_repr(rows),
-    }
-    return payload_hash(signature_payload, _REL_OP_SIGNATURE_SCHEMA)
+    table = pa.Table.from_pylist([{"version": REL_OP_SIGNATURE_VERSION, "ops": rows}])
+    return ipc_hash(table)
 
 
 def _encode_scan(op: RelOpT) -> dict[str, object]:
@@ -530,23 +528,6 @@ def _payload_from_row(row: Mapping[str, object], *, schema: pa.Schema) -> dict[s
         return dict(payload)
     msg = "Rel op payload_json must be a string."
     raise TypeError(msg)
-
-
-def _stable_repr(value: object) -> str:
-    if isinstance(value, Mapping):
-        items = ", ".join(
-            f"{_stable_repr(key)}:{_stable_repr(val)}"
-            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
-        )
-        return f"{{{items}}}"
-    if isinstance(value, (list, tuple, set)):
-        rendered = [_stable_repr(item) for item in value]
-        if isinstance(value, set):
-            rendered = sorted(rendered)
-        items = ", ".join(rendered)
-        bracket = "()" if isinstance(value, tuple) else "[]"
-        return f"{bracket[0]}{items}{bracket[1]}"
-    return repr(value)
 
 
 def _parse_columns(value: object) -> tuple[str, ...]:

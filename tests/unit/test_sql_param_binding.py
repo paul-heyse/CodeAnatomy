@@ -6,13 +6,14 @@ import pytest
 
 from datafusion_engine.bridge import execute_sql
 from datafusion_engine.compile_options import DataFusionCompileOptions
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 datafusion = pytest.importorskip("datafusion")
 
 
 def test_param_allowlist_blocks_unknown_names() -> None:
     """Reject parameter bindings that are not allowlisted."""
-    ctx = datafusion.SessionContext()
+    ctx = DataFusionRuntimeProfile().session_context()
     options = DataFusionCompileOptions(
         params={"val": 1},
         param_identifier_allowlist=("other",),
@@ -23,7 +24,7 @@ def test_param_allowlist_blocks_unknown_names() -> None:
 
 def test_param_allowlist_allows_named_params() -> None:
     """Execute SQL when parameters are allowlisted."""
-    ctx = datafusion.SessionContext()
+    ctx = DataFusionRuntimeProfile().session_context()
     options = DataFusionCompileOptions(
         params={"val": 1},
         param_identifier_allowlist=("val",),

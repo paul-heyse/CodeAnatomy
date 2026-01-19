@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import pyarrow.dataset as ds
 
 from arrowdsl.core.interop import ComputeExpression, SchemaLike
-from arrowdsl.plan.metrics import (
+from arrowdsl.core.metrics import (
     fragment_file_hints,
     list_fragments,
     row_group_count,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, is_dataclass, replace
 
 import pyarrow as pa
 
@@ -134,7 +134,7 @@ _SCAN_PROFILE_SCHEMA = pa.struct(
         pa.field("batch_size", pa.int64()),
         pa.field("batch_readahead", pa.int64()),
         pa.field("fragment_readahead", pa.int64()),
-        pa.field("fragment_scan_options", pa.string()),
+        pa.field("fragment_scan_options", pa.map_(pa.string(), pa.string())),
         pa.field("parquet_read_options", _PARQUET_READ_SCHEMA),
         pa.field("parquet_fragment_scan_options", _PARQUET_FRAGMENT_SCAN_SCHEMA),
         pa.field("cache_metadata", pa.bool_()),
@@ -252,7 +252,7 @@ def _scan_profile_payload(scan: ScanProfile) -> dict[str, object]:
         "batch_size": scan.batch_size,
         "batch_readahead": scan.batch_readahead,
         "fragment_readahead": scan.fragment_readahead,
-        "fragment_scan_options": _stable_repr(scan.fragment_scan_options),
+        "fragment_scan_options": _fragment_scan_options(scan.fragment_scan_options),
         "parquet_read_options": scan.parquet_read_payload(),
         "parquet_fragment_scan_options": scan.parquet_fragment_scan_payload(),
         "cache_metadata": scan.cache_metadata,
@@ -263,23 +263,18 @@ def _scan_profile_payload(scan: ScanProfile) -> dict[str, object]:
     }
 
 
-def _stable_repr(value: object | None) -> str | None:
-    if value is None:
+def _fragment_scan_options(options: object | None) -> dict[str, str] | None:
+    if options is None:
         return None
-    if isinstance(value, Mapping):
-        items = ", ".join(
-            f"{_stable_repr(key)}:{_stable_repr(val)}"
-            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
-        )
-        return f"{{{items}}}"
-    if isinstance(value, (list, tuple, set)):
-        rendered = [_stable_repr(item) for item in value]
-        if isinstance(value, set):
-            rendered = sorted(item for item in rendered if item is not None)
-        items = ", ".join(item for item in rendered if item is not None)
-        bracket = "()" if isinstance(value, tuple) else "[]"
-        return f"{bracket[0]}{items}{bracket[1]}"
-    return repr(value)
+    if is_dataclass(options) and not isinstance(options, type):
+        payload = asdict(options)
+        return {str(key): str(value) for key, value in payload.items()}
+    if isinstance(options, Mapping):
+        return {str(key): str(value) for key, value in options.items()}
+    if hasattr(options, "__dict__"):
+        payload = vars(options)
+        return {str(key): str(value) for key, value in payload.items()}
+    return {"value": str(options)}
 
 
 def _apply_profile_overrides(name: str, runtime: RuntimeProfile) -> RuntimeProfile:

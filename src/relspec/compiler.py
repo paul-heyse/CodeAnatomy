@@ -20,10 +20,10 @@ from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.expr_types import ExplodeSpec, ScalarValue
 from arrowdsl.core.interop import RecordBatchReaderLike, ScalarLike, SchemaLike, TableLike
+from arrowdsl.core.ordering_policy import require_explicit_ordering
+from arrowdsl.core.plan_ops import DedupeSpec, IntervalAlignOptions, SortKey
+from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
-from arrowdsl.plan.ops import DedupeSpec, IntervalAlignOptions, SortKey
-from arrowdsl.plan.ordering_policy import require_explicit_ordering
-from arrowdsl.plan.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from engine.materialize import build_plan_product
@@ -38,7 +38,7 @@ from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 from ibis_engine.registry import IbisDatasetRegistry
 from ibis_engine.schema_utils import validate_expr_schema
 from ibis_engine.sources import SourceToIbisOptions, namespace_recorder_from_ctx, table_to_ibis
-from registry_common.arrow_payloads import payload_hash
+from registry_common.arrow_payloads import ipc_hash
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
@@ -79,14 +79,6 @@ from relspec.rules.exec_events import RuleExecutionObserver, rule_execution_even
 from relspec.rules.policies import PolicyRegistry
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, dataset_spec_from_contract
 from sqlglot_tools.bridge import IbisCompilerBackend
-
-RULE_SIGNATURE_VERSION = 1
-_RULE_SIGNATURE_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32(), nullable=False),
-        pa.field("rule_repr", pa.string(), nullable=False),
-    ]
-)
 
 PlanTransform = Callable[[IbisTable, ExecutionContext], IbisTable]
 PlanExecutor = Callable[
@@ -145,34 +137,14 @@ def _rule_signature_for_output(rule: RelationshipRule) -> str:
     str
         Deterministic hash for the rule configuration payload.
     """
-    payload = {
-        "version": RULE_SIGNATURE_VERSION,
-        "rule_repr": _stable_repr(_rule_payload(rule)),
-    }
-    return payload_hash(payload, _RULE_SIGNATURE_SCHEMA)
+    table = pa.Table.from_pylist([_rule_payload(rule)])
+    return ipc_hash(table)
 
 
 def _rule_payload(rule: RelationshipRule) -> object:
     if is_dataclass(rule) and not isinstance(rule, type):
         return asdict(rule)
     return rule
-
-
-def _stable_repr(value: object) -> str:
-    if isinstance(value, Mapping):
-        items = ", ".join(
-            f"{_stable_repr(key)}:{_stable_repr(val)}"
-            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
-        )
-        return f"{{{items}}}"
-    if isinstance(value, (list, tuple, set)):
-        rendered = [_stable_repr(item) for item in value]
-        if isinstance(value, set):
-            rendered = sorted(rendered)
-        items = ", ".join(rendered)
-        bracket = "()" if isinstance(value, tuple) else "[]"
-        return f"{bracket[0]}{items}{bracket[1]}"
-    return repr(value)
 
 
 def _compiled_rule_signature(compiled: CompiledRule) -> str:

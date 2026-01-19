@@ -26,7 +26,7 @@ FULL_PIPELINE_OUTPUTS: tuple[str, ...] = (
     "write_cpg_props_json_delta",
     "write_cpg_props_quality_delta",
     "write_extract_error_artifacts_delta",
-    "write_run_manifest_json",
+    "write_run_manifest_delta",
     "write_run_bundle_dir",
 )
 

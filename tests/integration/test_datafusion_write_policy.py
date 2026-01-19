@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from datafusion_engine.bridge import datafusion_write_options, datafusion_write_parquet
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from schema_spec.policies import DataFusionWritePolicy
 
 datafusion = pytest.importorskip("datafusion")
@@ -25,7 +26,7 @@ def test_datafusion_write_policy_defaults() -> None:
 @pytest.mark.integration
 def test_datafusion_write_parquet_payload(tmp_path: Path) -> None:
     """Write DataFusion outputs using the write policy."""
-    ctx = datafusion.SessionContext()
+    ctx = DataFusionRuntimeProfile().session_context()
     df = ctx.sql("SELECT 1 AS id")
     policy = DataFusionWritePolicy(
         partition_by=("id",),

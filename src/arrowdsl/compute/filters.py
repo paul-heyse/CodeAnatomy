@@ -48,14 +48,13 @@ from arrowdsl.core.interop import (
 
 if TYPE_CHECKING:
     from arrowdsl.compute.expr_core import ExprSpec
-    from arrowdsl.plan.plan import Plan
 
 type ValuesLike = ArrayLike | ChunkedArrayLike | ScalarLike
 
 
 @dataclass(frozen=True)
 class FilterSpec:
-    """Filter specification usable in plan or kernel lanes."""
+    """Filter specification usable in kernel lanes."""
 
     predicate: ExprSpec
 
@@ -78,16 +77,6 @@ class FilterSpec:
             Boolean mask for the predicate.
         """
         return self.predicate.materialize(table)
-
-    def apply_plan(self, plan: Plan) -> Plan:
-        """Apply the filter to a plan.
-
-        Returns
-        -------
-        Plan
-            Filtered plan.
-        """
-        return plan.filter(self.to_expression())
 
     def apply_kernel(self, table: TableLike) -> TableLike:
         """Apply the filter to a table.

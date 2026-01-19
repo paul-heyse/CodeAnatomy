@@ -7,10 +7,10 @@ from collections.abc import Sequence
 
 import pyarrow as pa
 import pytest
-from datafusion import SessionContext
 
 from arrowdsl.core.ids import hash64_from_text
 from arrowdsl.schema.build import rows_from_table
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.udf_registry import register_datafusion_udfs
 from tests.utils import values_as_list
 
@@ -69,7 +69,7 @@ def _col_to_byte_reference(line: str | None, offset: int | None, unit: str | Non
 @pytest.mark.integration
 def test_datafusion_udf_conformance() -> None:
     """Match DataFusion UDF outputs to reference implementations."""
-    ctx = SessionContext()
+    ctx = DataFusionRuntimeProfile().session_context()
     register_datafusion_udfs(ctx)
     table = pa.table(
         {

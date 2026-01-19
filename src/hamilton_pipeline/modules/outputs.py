@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -14,16 +15,15 @@ from hamilton.function_modifiers import tag
 from arrowdsl.compute.registry import registry_snapshot as kernel_registry_snapshot
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from arrowdsl.finalize.finalize import FinalizeResult
-from arrowdsl.io.ipc import write_table_ipc_file
-from arrowdsl.plan.metrics import (
+from arrowdsl.core.metrics import (
     column_stats_table,
     dataset_stats_table,
     empty_scan_telemetry_table,
     scan_telemetry_table,
 )
-from arrowdsl.plan.ordering_policy import require_explicit_ordering
-from arrowdsl.plan.scan_telemetry import ScanTelemetry, ScanTelemetryOptions, fragment_telemetry
+from arrowdsl.core.ordering_policy import require_explicit_ordering
+from arrowdsl.core.scan_telemetry import ScanTelemetry, ScanTelemetryOptions, fragment_telemetry
+from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.schema.build import table_from_rows
 from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.schema import EncodingPolicy
@@ -32,7 +32,7 @@ from arrowdsl.spec.expr_ir import ExprIR
 from core_types import JsonDict, JsonValue
 from cpg.constants import CpgBuildArtifacts
 from datafusion_engine.bridge import validate_table_constraints
-from datafusion_engine.registry_bridge import cached_dataset_names
+from datafusion_engine.registry_bridge import cached_dataset_names, register_dataset_df
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from engine.function_registry import default_function_registry
 from engine.plan_cache import PlanCacheEntry
@@ -79,10 +79,10 @@ from obs.manifest import (
     ManifestData,
     build_manifest,
     relationship_output_fingerprints,
-    write_manifest_json,
+    write_manifest_delta,
 )
 from obs.repro import RunBundleContext, write_run_bundle
-from registry_common.arrow_payloads import payload_hash
+from registry_common.arrow_payloads import ipc_hash
 from relspec.compiler import CompiledOutput
 from relspec.model import RelationshipRule
 from relspec.param_deps import RuleDependencyReport, build_param_reverse_index
@@ -434,17 +434,8 @@ def _datafusion_function_catalog_snapshot(
     )
     if not snapshot:
         return None, None
-    payload = {
-        "version": 1,
-        "snapshot_repr": _stable_repr(snapshot),
-    }
-    schema = pa.schema(
-        [
-            pa.field("version", pa.int32(), nullable=False),
-            pa.field("snapshot_repr", pa.string(), nullable=False),
-        ]
-    )
-    return snapshot, payload_hash(payload, schema)
+    table = pa.Table.from_pylist(snapshot)
+    return snapshot, ipc_hash(table)
 
 
 def _datafusion_write_policy_snapshot(ctx: ExecutionContext) -> Mapping[str, object] | None:
@@ -601,11 +592,14 @@ def _datafusion_runtime_diag_tables(
             payload = dict(entry)
             name = f"explain_{idx}_{uuid.uuid4().hex}"
             payload["rows"] = _diagnostics_rows_payload(
-                artifact_root,
-                group="datafusion_explains",
-                name=name,
-                suffix="rows",
-                rows=payload.get("rows"),
+                payload.get("rows"),
+                spec=DiagnosticsPayloadSpec(
+                    root=artifact_root,
+                    group="datafusion_explains",
+                    name=name,
+                    suffix="rows",
+                    runtime_profile=profile,
+                ),
             )
             payload["explain_analyze"] = profile.explain_analyze
             explain_events.append(payload)
@@ -800,7 +794,12 @@ def _datafusion_plan_artifacts_table(
         return None
     artifact_root = _diagnostics_artifact_root(output_dir, work_dir)
     rows = [
-        _datafusion_plan_row(entry, artifact_root=artifact_root) for entry in entries
+        _datafusion_plan_row(
+            entry,
+            artifact_root=artifact_root,
+            runtime_profile=profile,
+        )
+        for entry in entries
     ]
     schema = incremental_dataset_schema("datafusion_plan_artifacts_v1")
     return table_from_rows(schema, rows)
@@ -870,7 +869,35 @@ def _diagnostics_artifact_path(
 ) -> Path:
     base = root / group / name
     _ensure_dir(base)
-    return base / f"{suffix}.arrow"
+    return base / f"{suffix}.delta"
+
+
+def _artifact_table_name(group: str, name: str, suffix: str) -> str:
+    parts = [group, name, suffix]
+    return "__".join(part.replace("/", "_") for part in parts if part)
+
+
+def _register_delta_artifact(
+    runtime_profile: DataFusionRuntimeProfile | None,
+    *,
+    name: str,
+    path: Path,
+    storage_options: Mapping[str, str] | None,
+) -> None:
+    if runtime_profile is None:
+        return
+    location = DatasetLocation(
+        path=str(path),
+        format="delta",
+        storage_options=dict(storage_options) if storage_options else {},
+    )
+    with suppress(ValueError, KeyError):
+        register_dataset_df(
+            runtime_profile.session_context(),
+            name=name,
+            location=location,
+            runtime_profile=runtime_profile,
+        )
 
 
 def _artifact_fields(payload: object | None) -> tuple[str | None, str | None, str | None]:
@@ -889,27 +916,50 @@ def _optional_str(value: object | None) -> str | None:
     return str(value)
 
 
-def _diagnostics_rows_payload(
-    root: Path | None,
-    *,
-    group: str,
-    name: str,
-    suffix: str,
-    rows: object,
-) -> object | None:
+@dataclass(frozen=True)
+class DiagnosticsPayloadSpec:
+    """Diagnostics payload configuration for row artifacts."""
+
+    root: Path | None
+    group: str
+    name: str
+    suffix: str
+    runtime_profile: DataFusionRuntimeProfile | None = None
+    storage_options: Mapping[str, str] | None = None
+
+
+def _diagnostics_rows_payload(rows: object, *, spec: DiagnosticsPayloadSpec) -> object | None:
     if rows is None:
         return None
     if isinstance(rows, (RecordBatchReaderLike, TableLike)):
         schema = rows.schema
         payload: dict[str, object] = {
             "artifact_path": None,
-            "artifact_format": "ipc_file",
+            "artifact_format": "delta",
             "schema_fingerprint": schema_fingerprint(schema),
         }
-        if root is None:
+        if spec.root is None:
             return payload
-        path = _diagnostics_artifact_path(root, group=group, name=name, suffix=suffix)
-        payload["artifact_path"] = write_table_ipc_file(rows, path, overwrite=True)
+        path = _diagnostics_artifact_path(
+            spec.root,
+            group=spec.group,
+            name=spec.name,
+            suffix=spec.suffix,
+        )
+        delta_options = DeltaWriteOptions(mode="overwrite", schema_mode="overwrite")
+        result = write_dataset_delta(
+            rows,
+            str(path),
+            options=delta_options,
+            storage_options=spec.storage_options,
+        )
+        payload["artifact_path"] = result.path
+        _register_delta_artifact(
+            spec.runtime_profile,
+            name=_artifact_table_name(spec.group, spec.name, spec.suffix),
+            path=Path(result.path),
+            storage_options=spec.storage_options,
+        )
         return payload
     return rows
 
@@ -952,20 +1002,25 @@ def _datafusion_plan_row(
     entry: Mapping[str, object],
     *,
     artifact_root: Path | None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> dict[str, object]:
     plan_hash = str(entry.get("plan_hash") or "")
     plan_key = plan_hash or uuid.uuid4().hex
     explain_payload = _diagnostics_rows_payload(
-        artifact_root,
-        group="datafusion_plan_artifacts_v1",
-        name=plan_key,
-        suffix="explain",
-        rows=entry.get("explain"),
+        entry.get("explain"),
+        spec=DiagnosticsPayloadSpec(
+            root=artifact_root,
+            group="datafusion_plan_artifacts_v1",
+            name=plan_key,
+            suffix="explain",
+            runtime_profile=runtime_profile,
+        ),
     )
     explain_analyze_payload = _explain_analyze_payload(
         entry,
         artifact_root=artifact_root,
         plan_key=plan_key,
+        runtime_profile=runtime_profile,
     )
     validation_fields = _substrait_validation_fields(entry.get("substrait_validation"))
     explain_path, explain_format, explain_schema_fp = _artifact_fields(explain_payload)
@@ -1007,16 +1062,20 @@ def _explain_analyze_payload(
     *,
     artifact_root: Path | None,
     plan_key: str,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> object | None:
     explain_analyze = entry.get("explain_analyze")
     if explain_analyze is None:
         return None
     return _diagnostics_rows_payload(
-        artifact_root,
-        group="datafusion_plan_artifacts_v1",
-        name=plan_key,
-        suffix="explain_analyze",
-        rows=explain_analyze,
+        explain_analyze,
+        spec=DiagnosticsPayloadSpec(
+            root=artifact_root,
+            group="datafusion_plan_artifacts_v1",
+            name=plan_key,
+            suffix="explain_analyze",
+            runtime_profile=runtime_profile,
+        ),
     )
 
 
@@ -2870,17 +2929,17 @@ def run_manifest(
     return manifest.to_dict()
 
 
-@tag(layer="obs", artifact="run_manifest_json", kind="side_effect")
-def write_run_manifest_json(
+@tag(layer="obs", artifact="run_manifest_delta", kind="side_effect")
+def write_run_manifest_delta(
     run_manifest: JsonDict,
     output_dir: str | None,
     work_dir: str | None,
 ) -> JsonDict | None:
-    """Write run manifest JSON.
+    """Write run manifest Delta table.
 
     Output location:
-      - if output_dir set: <output_dir>/manifest.json
-      - else if work_dir set: <work_dir>/manifest.json
+      - if output_dir set: <output_dir>/manifest.delta
+      - else if work_dir set: <work_dir>/manifest.delta
       - else: None (no-op)
 
     Returns
@@ -2893,8 +2952,8 @@ def write_run_manifest_json(
         return None
     base_path = Path(base)
     _ensure_dir(base_path)
-    path = base_path / "manifest.json"
-    write_manifest_json(run_manifest, str(path), overwrite=True)
+    path = base_path / "manifest.delta"
+    write_manifest_delta(run_manifest, str(path), overwrite=True)
     return {"path": str(path)}
 
 

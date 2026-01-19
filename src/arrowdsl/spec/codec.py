@@ -8,7 +8,7 @@ from typing import Literal, cast
 
 from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.core.interop import ScalarLike
-from arrowdsl.plan.ops import DedupeStrategy
+from arrowdsl.core.plan_ops import DedupeStrategy
 from registry_common.metadata import decode_metadata_scalar_map, metadata_scalar_map_bytes
 
 

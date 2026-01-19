@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pyarrow.fs as pafs
 
-from arrowdsl.plan.source_normalize import from_uri
+from storage.dataset_sources import from_uri
 
 
 def test_from_uri_wraps_uri_in_subtree_filesystem() -> None:

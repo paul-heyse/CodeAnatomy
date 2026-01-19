@@ -8,7 +8,7 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 
 from arrowdsl.core.interop import coerce_table_like, table_from_arrow_c_array
-from arrowdsl.plan.source_normalize import DatasetSourceOptions, normalize_dataset_source
+from storage.dataset_sources import DatasetSourceOptions, normalize_dataset_source
 
 
 def test_table_from_arrow_c_array_imports_pyarrow_array() -> None:

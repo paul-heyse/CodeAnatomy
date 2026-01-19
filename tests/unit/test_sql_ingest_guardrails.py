@@ -19,8 +19,8 @@ def test_sql_ingest_requires_schema() -> None:
         _ = parse_sql_table(spec)
 
 
-def test_sql_ingest_records_sqlglot_ast() -> None:
-    """Capture SQLGlot AST payloads for SQL ingestion."""
+def test_sql_ingest_records_sqlglot_sql() -> None:
+    """Capture SQLGlot SQL payloads for SQL ingestion."""
     events_schema = ibis.schema({"id": "int64", "value": "string"})
     spec_schema = ibis.schema({"id": "int64"})
     payloads: list[Mapping[str, object]] = []
@@ -36,7 +36,7 @@ def test_sql_ingest_records_sqlglot_ast() -> None:
     )
     _ = parse_sql_table(spec)
     assert payloads
-    assert payloads[-1].get("sqlglot_ast") is not None
+    assert payloads[-1].get("sqlglot_sql") is not None
 
 
 def test_sql_ingest_reports_parse_errors() -> None:

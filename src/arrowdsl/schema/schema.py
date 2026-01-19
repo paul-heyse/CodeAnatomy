@@ -26,7 +26,6 @@ from arrowdsl.schema.build import empty_table
 from arrowdsl.schema.chunking import ChunkPolicy
 from arrowdsl.schema.encoding_policy import EncodingPolicy, EncodingSpec, apply_encoding
 from arrowdsl.schema.normalize import NormalizePolicy
-from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
 
@@ -828,6 +827,29 @@ def register_schema_extensions(schema: SchemaLike) -> None:
     extensions = extension_types_from_schema(schema)
     if extensions:
         register_extension_types(extensions)
+
+def schema_fingerprint(schema: SchemaLike) -> str:
+    """Return a stable fingerprint for the provided schema.
+
+    Returns
+    -------
+    str
+        Schema fingerprint hash.
+    """
+    module = importlib.import_module("arrowdsl.schema.serialization")
+    return cast("str", module.schema_fingerprint(schema))
+
+
+def schema_to_dict(schema: SchemaLike) -> dict[str, object]:
+    """Return a JSON-ready schema payload.
+
+    Returns
+    -------
+    dict[str, object]
+        Schema payload dictionary.
+    """
+    module = importlib.import_module("arrowdsl.schema.serialization")
+    return cast("dict[str, object]", module.schema_to_dict(schema))
 
 
 __all__ = [

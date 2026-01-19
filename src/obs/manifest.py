@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, TypeVar, cast
 
+import pyarrow as pa
 from sqlglot import parse_one
 from sqlglot.errors import ParseError
 
 from arrowdsl.core.interop import SchemaLike, TableLike
-from arrowdsl.plan.metrics import table_summary
+from arrowdsl.core.metrics import table_summary
 from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.serialization import dataset_fingerprint, schema_fingerprint
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
@@ -24,6 +24,7 @@ from obs.diagnostics_schemas import DIAGNOSTICS_SCHEMA_VERSION
 from obs.repro import collect_repro_info
 from schema_spec.system import ddl_fingerprint_from_schema
 from sqlglot_tools.optimizer import planner_dag_snapshot
+from storage.deltalake import DeltaWriteOptions, write_dataset_delta
 from storage.io import (
     delta_commit_metadata,
     delta_history_snapshot,
@@ -33,7 +34,7 @@ from storage.io import (
 )
 
 if TYPE_CHECKING:
-    from arrowdsl.plan.scan_telemetry import ScanTelemetry
+    from arrowdsl.core.scan_telemetry import ScanTelemetry
     from extract.evidence_plan import EvidencePlan
     from relspec.compiler import CompiledOutput
     from relspec.model import RelationshipRule
@@ -1044,15 +1045,18 @@ def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
     )
 
 
-def write_manifest_json(
-    manifest: Manifest | JsonDict, path: PathLike, *, overwrite: bool = True
+def write_manifest_delta(
+    manifest: Manifest | JsonDict,
+    path: PathLike,
+    *,
+    overwrite: bool = True,
 ) -> str:
-    """Write manifest JSON to the provided path.
+    """Write manifest Delta table to the provided path.
 
     Returns
     -------
     str
-        Path to the written JSON file.
+        Path to the written Delta table.
 
     Raises
     ------
@@ -1064,10 +1068,13 @@ def write_manifest_json(
     if target.exists() and not overwrite:
         msg = f"Manifest already exists at {target}."
         raise FileExistsError(msg)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-    return str(target)
+    table = pa.Table.from_pylist([dict(payload)])
+    options = DeltaWriteOptions(
+        mode="overwrite" if overwrite else "error",
+        schema_mode="overwrite" if overwrite else None,
+    )
+    result = write_dataset_delta(table, str(target), options=options)
+    return result.path
 
 
 def _normalize_value(value: object) -> object:

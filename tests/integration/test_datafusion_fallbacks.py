@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import pytest
-from datafusion import SessionContext
 from sqlglot import parse_one
 
 from datafusion_engine.bridge import SqlFallbackContext, df_from_sql
 from datafusion_engine.compile_options import DataFusionCompileOptions
-from datafusion_engine.runtime import AdapterExecutionPolicy, apply_execution_policy
+from datafusion_engine.runtime import (
+    AdapterExecutionPolicy,
+    DataFusionRuntimeProfile,
+    apply_execution_policy,
+)
 
 
 @pytest.mark.integration
 def test_datafusion_fallback_event_emitted() -> None:
     """Emit a fallback event when SQL execution is chosen."""
-    ctx = SessionContext()
+    ctx = DataFusionRuntimeProfile().session_context()
     expr = parse_one("select 1 as value")
     events = []
 
@@ -29,7 +32,7 @@ def test_datafusion_fallback_event_emitted() -> None:
 @pytest.mark.integration
 def test_datafusion_fallback_policy_blocks() -> None:
     """Raise when fallback execution is blocked."""
-    ctx = SessionContext()
+    ctx = DataFusionRuntimeProfile().session_context()
     expr = parse_one("select 1 as value")
     events = []
 

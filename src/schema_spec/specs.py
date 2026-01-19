@@ -21,9 +21,14 @@ from arrowdsl.core.schema_constants import (
     SCHEMA_META_VERSION,
 )
 from arrowdsl.schema.build import list_view_type
-from arrowdsl.schema.metadata import ENCODING_DICTIONARY, ENCODING_META, dict_field_metadata
+from arrowdsl.schema.encoding_metadata import (
+    ENCODING_DICTIONARY,
+    ENCODING_META,
+    dict_field_metadata,
+)
 from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTransform
 from registry_common.arrow_payloads import payload_hash
+from registry_common.metadata import metadata_list_bytes
 
 DICT_STRING = interop.dictionary(interop.int32(), interop.string())
 
@@ -64,9 +69,9 @@ def schema_metadata_for_spec(spec: TableSchemaSpec) -> dict[bytes, bytes]:
     """
     meta = schema_metadata(spec.name, spec.version)
     if spec.required_non_null:
-        meta[REQUIRED_NON_NULL_META] = ",".join(spec.required_non_null).encode("utf-8")
+        meta[REQUIRED_NON_NULL_META] = metadata_list_bytes(spec.required_non_null)
     if spec.key_fields:
-        meta[KEY_FIELDS_META] = ",".join(spec.key_fields).encode("utf-8")
+        meta[KEY_FIELDS_META] = metadata_list_bytes(spec.key_fields)
     return meta
 
 

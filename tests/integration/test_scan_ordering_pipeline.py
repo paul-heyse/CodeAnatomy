@@ -14,8 +14,11 @@ from arrowdsl.core.context import (
     OrderingLevel,
     runtime_profile_factory,
 )
-from arrowdsl.plan.scan_io import plan_from_source
 from arrowdsl.schema.metadata import ordering_from_schema
+from ibis_engine.backend import build_backend
+from ibis_engine.config import IbisBackendConfig
+from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
+from ibis_engine.scan_io import plan_from_source
 from storage.deltalake import DeltaWriteOptions, write_dataset_delta
 
 
@@ -42,11 +45,21 @@ def test_scan_pipeline_ordering(
         options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
     )
 
-    dataset = DeltaTable(str(dataset_dir)).to_pyarrow_dataset()
     runtime = runtime_profile_factory("default").with_determinism(tier)
     ctx = ExecutionContext(runtime=runtime)
-    plan = plan_from_source(dataset, ctx=ctx, label="ordering_scan")
-    result = plan.to_table(ctx=ctx)
+    table = DeltaTable(str(dataset_dir)).to_pyarrow_dataset().to_table()
+    backend = build_backend(
+        IbisBackendConfig(
+            datafusion_profile=runtime.datafusion,
+            fuse_selects=runtime.ibis_fuse_selects,
+            default_limit=runtime.ibis_default_limit,
+            default_dialect=runtime.ibis_default_dialect,
+            interactive=runtime.ibis_interactive,
+        )
+    )
+    plan = plan_from_source(table, ctx=ctx, backend=backend, name="ordering_scan")
+    execution = IbisExecutionContext(ctx=ctx, ibis_backend=backend)
+    result = materialize_ibis_plan(plan, execution=execution)
 
     ordering = ordering_from_schema(result.schema)
     assert ordering.level == expected_level

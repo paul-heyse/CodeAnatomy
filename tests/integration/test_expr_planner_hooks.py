@@ -39,7 +39,7 @@ def test_expr_planner_install_records_event() -> None:
 @pytest.mark.integration
 def test_named_argument_sql_is_gated() -> None:
     """Gate named-argument SQL calls when planners are unavailable."""
-    ctx = datafusion.SessionContext()
+    ctx = DataFusionRuntimeProfile().session_context()
     expected_errors: tuple[type[Exception], ...] = (RuntimeError, TypeError, ValueError)
     with pytest.raises(expected_errors, match="named arguments"):
         ctx.sql("SELECT rpad(str => 'a', n => 3, padding_str => 'x')").to_arrow_table()

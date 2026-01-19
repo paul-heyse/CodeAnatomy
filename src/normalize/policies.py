@@ -7,7 +7,7 @@ from typing import Literal, Protocol
 
 from arrowdsl.core.context import OrderingLevel
 from arrowdsl.core.interop import SchemaLike
-from arrowdsl.plan.ops import DedupeSpec, SortKey
+from arrowdsl.core.plan_ops import DedupeSpec, SortKey
 from arrowdsl.schema.metadata import infer_ordering_keys, ordering_from_schema
 from arrowdsl.spec.expr_ir import ExprIR
 from registry_common.metadata import decode_metadata_scalar_map

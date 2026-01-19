@@ -22,8 +22,8 @@ from arrowdsl.core.interop import (
     TableLike,
     pc,
 )
+from arrowdsl.core.plan_ops import DedupeSpec, SortKey
 from arrowdsl.core.schema_constants import PROVENANCE_COLS
-from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.build import (
     ColumnDefaultsSpec,
     ConstExpr,

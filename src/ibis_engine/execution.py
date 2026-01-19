@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
+from typing import cast, overload
 
+import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import Value as IbisValue
 
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.core.ordering_policy import apply_canonical_sort, ordering_metadata_for_plan
+from arrowdsl.schema.metadata import merge_metadata_specs
+from arrowdsl.schema.schema import SchemaMetadataSpec
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from engine.runtime_profile import runtime_profile_snapshot
 from ibis_engine.plan import IbisPlan
@@ -75,7 +79,8 @@ def materialize_ibis_plan(plan: IbisPlan, *, execution: IbisExecutionContext) ->
     TableLike
         Materialized Arrow table.
     """
-    return materialize_plan(plan, execution=execution.plan_options())
+    table = materialize_plan(plan, execution=execution.plan_options())
+    return _apply_ordering_metadata(table, plan=plan, ctx=execution.ctx)
 
 
 def stream_ibis_plan(
@@ -90,11 +95,87 @@ def stream_ibis_plan(
     RecordBatchReaderLike
         Streamed reader for the plan results.
     """
-    return stream_plan(
+    reader = stream_plan(
         plan,
         batch_size=execution.batch_size,
         execution=execution.plan_options(),
     )
+    return _apply_ordering_metadata(reader, plan=plan, ctx=execution.ctx)
+
+
+@overload
+def _apply_ordering_metadata(
+    result: TableLike,
+    *,
+    plan: IbisPlan,
+    ctx: ExecutionContext,
+) -> TableLike: ...
+
+
+@overload
+def _apply_ordering_metadata(
+    result: RecordBatchReaderLike,
+    *,
+    plan: IbisPlan,
+    ctx: ExecutionContext,
+) -> RecordBatchReaderLike: ...
+
+
+def _apply_ordering_metadata(
+    result: TableLike | RecordBatchReaderLike,
+    *,
+    plan: IbisPlan,
+    ctx: ExecutionContext,
+) -> TableLike | RecordBatchReaderLike:
+    if isinstance(result, RecordBatchReaderLike):
+        ordering_spec = ordering_metadata_for_plan(
+            plan.ordering,
+            schema=result.schema,
+            determinism=ctx.determinism,
+        )
+        combined = merge_metadata_specs(ordering_spec)
+        return _apply_metadata_spec(result, metadata_spec=combined)
+    table, canonical_keys = apply_canonical_sort(result, determinism=ctx.determinism)
+    ordering_spec = ordering_metadata_for_plan(
+        plan.ordering,
+        schema=table.schema,
+        canonical_keys=canonical_keys,
+        determinism=ctx.determinism,
+    )
+    combined = merge_metadata_specs(ordering_spec)
+    return _apply_metadata_spec(table, metadata_spec=combined)
+
+
+@overload
+def _apply_metadata_spec(
+    result: TableLike,
+    *,
+    metadata_spec: SchemaMetadataSpec | None,
+) -> TableLike: ...
+
+
+@overload
+def _apply_metadata_spec(
+    result: RecordBatchReaderLike,
+    *,
+    metadata_spec: SchemaMetadataSpec | None,
+) -> RecordBatchReaderLike: ...
+
+
+def _apply_metadata_spec(
+    result: TableLike | RecordBatchReaderLike,
+    *,
+    metadata_spec: SchemaMetadataSpec | None,
+) -> TableLike | RecordBatchReaderLike:
+    if metadata_spec is None:
+        return result
+    if not metadata_spec.schema_metadata and not metadata_spec.field_metadata:
+        return result
+    schema = metadata_spec.apply(result.schema)
+    if isinstance(result, pa.RecordBatchReader):
+        return pa.RecordBatchReader.from_batches(schema, result)
+    table = cast("TableLike", result)
+    return table.cast(schema)
 
 
 __all__ = ["IbisExecutionContext", "materialize_ibis_plan", "stream_ibis_plan"]

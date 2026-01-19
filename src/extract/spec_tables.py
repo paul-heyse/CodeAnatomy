@@ -50,6 +50,7 @@ EXTRACT_DATASET_SCHEMA = pa.schema(
     metadata={b"spec_kind": b"extract_datasets"},
 )
 
+
 EXTRACT_DATASET_ENCODING = EncodingPolicy(
     specs=(
         EncodingSpec(column="name"),
@@ -57,6 +58,7 @@ EXTRACT_DATASET_ENCODING = EncodingPolicy(
         EncodingSpec(column="pipeline_name"),
     )
 )
+
 
 
 @dataclass(frozen=True)

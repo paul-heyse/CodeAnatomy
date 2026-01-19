@@ -21,13 +21,24 @@ from arrowdsl.core.schema_constants import (
     SCHEMA_META_VERSION,
 )
 from arrowdsl.schema.dictionary import normalize_dictionaries
+from arrowdsl.schema.encoding_metadata import (
+    DICT_INDEX_META,
+    DICT_ORDERED_META,
+    ENCODING_DICTIONARY,
+    ENCODING_META,
+    dict_field_metadata,
+)
 from arrowdsl.schema.encoding_policy import EncodingPolicy, EncodingSpec
 from arrowdsl.schema.nested_builders import (
     dictionary_array_from_indices as _dictionary_from_indices,
 )
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from registry_common.arrow_payloads import ipc_table, payload_hash, payload_ipc_bytes
-from registry_common.metadata import metadata_list_bytes, metadata_map_bytes
+from registry_common.arrow_payloads import ipc_hash, ipc_table, payload_ipc_bytes
+from registry_common.metadata import (
+    decode_metadata_list,
+    metadata_list_bytes,
+    metadata_map_bytes,
+)
 
 if TYPE_CHECKING:
     from schema_spec.specs import TableSchemaSpec
@@ -82,10 +93,6 @@ class _TableSchemaSpec(Protocol):
     def fields(self) -> Sequence[_ArrowFieldSpec]: ...
 
 
-ENCODING_META = "encoding"
-ENCODING_DICTIONARY = "dictionary"
-DICT_INDEX_META = "dictionary_index_type"
-DICT_ORDERED_META = "dictionary_ordered"
 EXTRACTOR_DEFAULTS_META = b"extractor_option_defaults"
 EXTRACTOR_DEFAULTS_VERSION = 1
 _EXTRACTOR_DEFAULTS_ENTRY = pa.struct(
@@ -106,12 +113,6 @@ _EXTRACTOR_DEFAULTS_SCHEMA = pa.schema(
     ]
 )
 OPTIONS_HASH_VERSION = 1
-_OPTIONS_HASH_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32(), nullable=False),
-        pa.field("options_repr", pa.string(), nullable=False),
-    ]
-)
 
 _ORDERED_TRUE = {"1", "true", "yes", "y", "t"}
 _INDEX_TYPES: Mapping[str, pa.DataType] = {
@@ -120,6 +121,19 @@ _INDEX_TYPES: Mapping[str, pa.DataType] = {
     "int32": pa.int32(),
     "int64": pa.int64(),
 }
+ORDERING_KEYS_VERSION = 1
+_ORDERING_KEYS_ENTRY = pa.struct(
+    [
+        pa.field("column", pa.string(), nullable=False),
+        pa.field("order", pa.string(), nullable=False),
+    ]
+)
+_ORDERING_KEYS_SCHEMA = pa.schema(
+    [
+        pa.field("version", pa.int32(), nullable=False),
+        pa.field("entries", pa.list_(_ORDERING_KEYS_ENTRY), nullable=False),
+    ]
+)
 
 
 def _normalize_option_value(value: object) -> object:
@@ -166,8 +180,9 @@ def options_hash(options: object) -> str:
         SHA-256 hex digest of the normalized options payload.
     """
     normalized = _normalize_option_value(options)
-    payload = {"version": OPTIONS_HASH_VERSION, "options_repr": _stable_repr(normalized)}
-    return payload_hash(payload, _OPTIONS_HASH_SCHEMA)
+    payload = {"version": OPTIONS_HASH_VERSION, "options": normalized}
+    table = pa.Table.from_pylist([payload])
+    return ipc_hash(table)
 
 
 def options_metadata_spec(
@@ -326,7 +341,7 @@ def _extractor_default_value(entry: Mapping[str, object]) -> object:
         result: object = None
     elif kind == "bool":
         value = entry.get("value_bool")
-        result = bool(value) if isinstance(value, bool) else None
+        result = value if isinstance(value, bool) else None
     elif kind == "int64":
         value = entry.get("value_int")
         result = int(value) if isinstance(value, int) else None
@@ -349,6 +364,8 @@ def _extractor_default_value(entry: Mapping[str, object]) -> object:
         msg = f"Unsupported extractor_option_defaults kind: {kind!r}."
         raise TypeError(msg)
     return result
+
+
 
 
 def merge_metadata_specs(*specs: SchemaMetadataSpec | None) -> SchemaMetadataSpec:
@@ -407,8 +424,10 @@ def ordering_metadata_spec(
     """
     meta = {b"ordering_level": level.value.encode("utf-8")}
     if keys:
-        key_text = ",".join(f"{col}:{order}" for col, order in keys)
-        meta[b"ordering_keys"] = key_text.encode("utf-8")
+        meta[b"ordering_keys"] = payload_ipc_bytes(
+            _ordering_keys_payload(keys),
+            _ORDERING_KEYS_SCHEMA,
+        )
     if extra:
         meta.update(extra)
     return SchemaMetadataSpec(schema_metadata=meta)
@@ -433,14 +452,7 @@ def ordering_from_schema(schema: SchemaLike) -> Ordering:
     raw_keys = metadata.get(b"ordering_keys")
     if raw_keys is None:
         return Ordering(level, ())
-    text = raw_keys.decode("utf-8")
-    keys: list[OrderingKey] = []
-    for entry in text.split(","):
-        col, _, order = entry.partition(":")
-        if not col:
-            continue
-        keys.append((col, order or "ascending"))
-    return Ordering(level, tuple(keys))
+    return Ordering(level, _ordering_keys_from_payload(raw_keys))
 
 
 def extractor_metadata_spec(
@@ -588,30 +600,6 @@ def _ordered_from_meta(meta: Mapping[bytes, bytes] | None) -> bool:
     return raw.strip().lower() in _ORDERED_TRUE
 
 
-def dict_field_metadata(
-    *,
-    index_type: pa.DataType | None = None,
-    ordered: bool = False,
-    metadata: Mapping[str, str] | None = None,
-) -> dict[str, str]:
-    """Return metadata for dictionary-encoded field specs.
-
-    Returns
-    -------
-    dict[str, str]
-        Metadata mapping for dictionary encoding.
-    """
-    idx_type = index_type or pa.int32()
-    meta = {
-        ENCODING_META: ENCODING_DICTIONARY,
-        DICT_INDEX_META: str(idx_type),
-        DICT_ORDERED_META: "1" if ordered else "0",
-    }
-    if metadata is not None:
-        meta.update(metadata)
-    return meta
-
-
 def _encoding_hint(field: _ArrowFieldSpec) -> str | None:
     if field.encoding is not None:
         return field.encoding
@@ -735,11 +723,13 @@ def dictionary_array_from_indices(
     )
 
 
-def _split_names(raw: bytes | None) -> tuple[str, ...]:
-    if raw is None:
-        return ()
-    text = raw.decode("utf-8", errors="replace")
-    return tuple(name for name in text.split(",") if name)
+def _ordering_keys_payload(keys: Sequence[OrderingKey]) -> dict[str, object]:
+    return {
+        "version": ORDERING_KEYS_VERSION,
+        "entries": [
+            {"column": str(column), "order": str(order)} for column, order in keys
+        ],
+    }
 
 
 def schema_metadata_for_spec(spec: TableSchemaSpec) -> dict[bytes, bytes]:
@@ -805,9 +795,47 @@ def schema_constraints_from_metadata(
     """
     if not metadata:
         return (), ()
-    required = _split_names(metadata.get(REQUIRED_NON_NULL_META))
-    key_fields = _split_names(metadata.get(KEY_FIELDS_META))
+    required = _metadata_names(metadata.get(REQUIRED_NON_NULL_META))
+    key_fields = _metadata_names(metadata.get(KEY_FIELDS_META))
     return required, key_fields
+
+
+def _ordering_keys_from_payload(payload: bytes) -> tuple[OrderingKey, ...]:
+    table = ipc_table(payload)
+    rows = table.to_pylist()
+    if not rows:
+        return ()
+    row = rows[0]
+    if not isinstance(row, Mapping):
+        msg = "ordering_keys metadata must be a mapping payload."
+        raise TypeError(msg)
+    version = row.get("version")
+    if version is not None and int(version) != ORDERING_KEYS_VERSION:
+        msg = "ordering_keys metadata version mismatch."
+        raise ValueError(msg)
+    entries = row.get("entries")
+    if entries is None:
+        return ()
+    if not isinstance(entries, list):
+        msg = "ordering_keys metadata entries must be a list."
+        raise TypeError(msg)
+    keys: list[OrderingKey] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            msg = "ordering_keys metadata entry must be a mapping."
+            raise TypeError(msg)
+        column = entry.get("column")
+        order = entry.get("order")
+        if column is None:
+            continue
+        keys.append((str(column), str(order) if order is not None else "ascending"))
+    return tuple(keys)
+
+
+def _metadata_names(payload: bytes | None) -> tuple[str, ...]:
+    if payload is None:
+        return ()
+    return tuple(str(item) for item in decode_metadata_list(payload) if str(item))
 
 
 def __getattr__(name: str) -> object:

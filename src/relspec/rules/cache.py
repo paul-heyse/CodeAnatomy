@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from functools import cache
 
 import pyarrow as pa
 
-from registry_common.arrow_payloads import payload_hash
+from registry_common.arrow_payloads import ipc_hash
 from relspec.adapters import CpgRuleAdapter, ExtractRuleAdapter, NormalizeRuleAdapter
 from relspec.compiler import rel_plan_for_rule
 from relspec.plan import rel_plan_signature
@@ -18,20 +17,6 @@ from relspec.rules.handlers.cpg import relationship_rule_from_definition
 from relspec.rules.registry import RuleRegistry
 from relspec.rules.rel_ops import rel_ops_signature
 from relspec.rules.spec_tables import rule_definition_table
-
-RULE_SIGNATURE_VERSION = 1
-_RULE_SIGNATURE_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32()),
-        pa.field("name", pa.string()),
-        pa.field("domain", pa.string()),
-        pa.field("kind", pa.string()),
-        pa.field("inputs", pa.list_(pa.string())),
-        pa.field("output", pa.string()),
-        pa.field("payload_repr", pa.string()),
-        pa.field("execution_mode", pa.string()),
-    ]
-)
 
 
 @cache
@@ -208,34 +193,8 @@ def _rule_signature(rule: RuleDefinition) -> str:
             return rel_plan_signature(plan)
     if rule.rel_ops:
         return rel_ops_signature(rule.rel_ops)
-    payload = {
-        "version": RULE_SIGNATURE_VERSION,
-        "name": rule.name,
-        "domain": rule.domain,
-        "kind": str(rule.kind) if rule.kind is not None else None,
-        "inputs": list(rule.inputs),
-        "output": rule.output,
-        "payload_repr": _stable_repr(rule.payload),
-        "execution_mode": rule.execution_mode,
-    }
-    return payload_hash(payload, _RULE_SIGNATURE_SCHEMA)
-
-
-def _stable_repr(value: object) -> str:
-    if isinstance(value, Mapping):
-        items = ", ".join(
-            f"{_stable_repr(key)}:{_stable_repr(val)}"
-            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
-        )
-        return f"{{{items}}}"
-    if isinstance(value, (list, tuple, set)):
-        rendered = [_stable_repr(item) for item in value]
-        if isinstance(value, set):
-            rendered = sorted(rendered)
-        items = ", ".join(rendered)
-        bracket = "()" if isinstance(value, tuple) else "[]"
-        return f"{bracket[0]}{items}{bracket[1]}"
-    return repr(value)
+    table = rule_definition_table((rule,))
+    return ipc_hash(table)
 
 
 __all__ = [

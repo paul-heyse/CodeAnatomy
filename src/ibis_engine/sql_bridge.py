@@ -14,7 +14,6 @@ from ibis.backends import BaseBackend
 from ibis.expr.types import Table, Value
 from sqlglot import Expression
 from sqlglot.errors import ParseError
-from sqlglot.serde import dump
 
 from arrowdsl.core.interop import RecordBatchReaderLike
 from ibis_engine.schema_utils import ibis_schema_from_arrow, validate_expr_schema
@@ -59,10 +58,10 @@ class SqlIngestArtifacts:
     decompiled_sql: str
     schema: Mapping[str, str] | None
     dialect: str | None = None
-    sqlglot_ast: Sequence[Mapping[str, object]] | None = None
+    sqlglot_sql: str | None = None
 
     def payload(self) -> dict[str, object]:
-        """Return a JSON-friendly payload for diagnostics.
+        """Return a payload for diagnostics.
 
         Returns
         -------
@@ -74,7 +73,7 @@ class SqlIngestArtifacts:
             "decompiled_sql": self.decompiled_sql,
             "schema": dict(self.schema) if self.schema is not None else None,
             "dialect": self.dialect,
-            "sqlglot_ast": list(self.sqlglot_ast) if self.sqlglot_ast is not None else None,
+            "sqlglot_sql": self.sqlglot_sql,
         }
 
 
@@ -159,7 +158,7 @@ def _emit_sql_ingest_failure(
         "sql": spec.sql,
         "dialect": spec.dialect,
         "error": str(error),
-        "sqlglot_ast": dump(sqlglot_expr) if sqlglot_expr is not None else None,
+        "sqlglot_sql": _sql_text(sqlglot_expr, dialect=spec.dialect),
     }
     spec.artifacts_hook(payload)
 
@@ -194,14 +193,22 @@ def sql_ingest_artifacts(
     if isinstance(expr, Table):
         expr_schema = expr.schema().to_pyarrow()
         schema = {field.name: str(field.type) for field in expr_schema}
-    sqlglot_ast = dump(sqlglot_expr) if sqlglot_expr is not None else None
     return SqlIngestArtifacts(
         sql=sql,
         decompiled_sql=decompiled_sql,
         schema=schema,
         dialect=dialect,
-        sqlglot_ast=sqlglot_ast,
+        sqlglot_sql=_sql_text(sqlglot_expr, dialect=dialect),
     )
+
+
+def _sql_text(expr: Expression | None, *, dialect: str | None) -> str | None:
+    if expr is None:
+        return None
+    try:
+        return expr.sql(dialect=dialect)
+    except (TypeError, ValueError):
+        return str(expr)
 
 
 def execute_raw_sql(

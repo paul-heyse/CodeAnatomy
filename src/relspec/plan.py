@@ -11,17 +11,11 @@ from arrowdsl.core.context import Ordering
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.spec.expr_ir import ExprIR
 from ibis_engine.query_compiler import IbisQuerySpec
-from registry_common.arrow_payloads import payload_hash
+from registry_common.arrow_payloads import ipc_hash
 from relspec.model import DatasetRef, HashJoinConfig
 from relspec.rules.rel_ops import AggregateExpr
 
 REL_PLAN_SIGNATURE_VERSION = 1
-_REL_PLAN_SIGNATURE_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32(), nullable=False),
-        pa.field("payload_repr", pa.string(), nullable=False),
-    ]
-)
 
 
 @dataclass(frozen=True)
@@ -104,11 +98,9 @@ def rel_plan_signature(plan: RelPlan) -> str:
         Deterministic hash of the relational plan payload.
     """
     payload = _rel_plan_payload(plan)
-    signature_payload = {
-        "version": REL_PLAN_SIGNATURE_VERSION,
-        "payload_repr": _stable_repr(payload),
-    }
-    return payload_hash(signature_payload, _REL_PLAN_SIGNATURE_SCHEMA)
+    payload["version"] = REL_PLAN_SIGNATURE_VERSION
+    table = pa.Table.from_pylist([payload])
+    return ipc_hash(table)
 
 
 def _rel_plan_payload(plan: RelPlan) -> dict[str, object]:
@@ -169,7 +161,7 @@ def _schema_payload(schema: SchemaLike | None) -> dict[str, object] | None:
     }
 
 
-def _metadata_payload(metadata: Mapping[bytes, bytes] | None) -> dict[str, str]:
+def _metadata_payload(metadata: Mapping[bytes, bytes] | None) -> list[dict[str, bytes]]:
     """Serialize schema metadata to string key/value pairs.
 
     Parameters
@@ -179,29 +171,14 @@ def _metadata_payload(metadata: Mapping[bytes, bytes] | None) -> dict[str, str]:
 
     Returns
     -------
-    dict[str, str]
-        UTF-8 decoded metadata mapping.
+    list[dict[str, bytes]]
+        Metadata entries serialized as key/value pairs.
     """
     if not metadata:
-        return {}
-    return {key.decode("utf-8"): value.decode("utf-8") for key, value in metadata.items()}
-
-
-def _stable_repr(value: object) -> str:
-    if isinstance(value, Mapping):
-        items = ", ".join(
-            f"{_stable_repr(key)}:{_stable_repr(val)}"
-            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
-        )
-        return f"{{{items}}}"
-    if isinstance(value, (list, tuple, set)):
-        rendered = [_stable_repr(item) for item in value]
-        if isinstance(value, set):
-            rendered = sorted(rendered)
-        items = ", ".join(rendered)
-        bracket = "()" if isinstance(value, tuple) else "[]"
-        return f"{bracket[0]}{items}{bracket[1]}"
-    return repr(value)
+        return []
+    return [
+        {"key": key, "value": value} for key, value in sorted(metadata.items(), key=lambda i: i[0])
+    ]
 
 
 def _node_payload(node: RelNode) -> dict[str, object]:

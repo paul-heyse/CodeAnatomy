@@ -13,7 +13,7 @@ from arrowdsl.compute.ids import (
     span_id,
 )
 from arrowdsl.core.interop import TableLike
-from arrowdsl.plan.joins import code_unit_meta_config, left_join
+from arrowdsl.core.joins import code_unit_meta_config, left_join
 from arrowdsl.schema.metadata import (
     DICT_INDEX_META,
     DICT_ORDERED_META,

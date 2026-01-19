@@ -187,6 +187,7 @@ def _supports_explain_analyze_level() -> bool:
 
 DATAFUSION_MAJOR_VERSION: int | None = _parse_major_version(datafusion.__version__)
 DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION: int = 51
+DATAFUSION_OPTIMIZER_DYNAMIC_FILTER_SKIP_VERSION: int = 51
 
 
 @dataclass(frozen=True)
@@ -231,7 +232,7 @@ class DataFusionFeatureGates:
         dict[str, str]
             Mapping of DataFusion config keys to string values.
         """
-        return {
+        settings = {
             "datafusion.optimizer.enable_dynamic_filter_pushdown": str(
                 self.enable_dynamic_filter_pushdown
             ).lower(),
@@ -245,6 +246,12 @@ class DataFusionFeatureGates:
                 self.enable_topk_dynamic_filter_pushdown
             ).lower(),
         }
+        if (
+            DATAFUSION_MAJOR_VERSION is not None
+            and DATAFUSION_MAJOR_VERSION >= DATAFUSION_OPTIMIZER_DYNAMIC_FILTER_SKIP_VERSION
+        ):
+            settings.pop("datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown", None)
+        return settings
 
 
 @dataclass(frozen=True)
@@ -614,7 +621,13 @@ def _apply_feature_settings(
     if feature_gates is None:
         return config
     for key, value in feature_gates.settings().items():
-        config = config.set(key, value)
+        try:
+            config = config.set(key, value)
+        except Exception as exc:  # pragma: no cover - defensive against FFI config panics.
+            message = str(exc)
+            if "Config value" in message and "not found" in message:
+                continue
+            raise
     return config
 
 
@@ -1099,7 +1112,7 @@ class DataFusionRuntimeProfile:
     explain_collector: DataFusionExplainCollector | None = field(
         default_factory=DataFusionExplainCollector
     )
-    capture_plan_artifacts: bool = False
+    capture_plan_artifacts: bool = True
     plan_collector: DataFusionPlanCollector | None = field(default_factory=DataFusionPlanCollector)
     view_registry: DataFusionViewRegistry | None = field(default_factory=DataFusionViewRegistry)
     substrait_validation: bool = False

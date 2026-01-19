@@ -17,7 +17,6 @@ from arrowdsl.compute.kernels import kernel_capability
 from arrowdsl.core.context import ExecutionContext, RuntimeProfile
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.kernel.registry import KernelLane
-from arrowdsl.ops.catalog import OP_CATALOG, Lane
 from cpg.registry_rows import DATASET_ROWS as CPG_DATASET_ROWS
 from cpg.registry_specs import dataset_spec as cpg_dataset_spec
 from datafusion_engine.bridge import ibis_plan_to_datafusion
@@ -47,7 +46,6 @@ from incremental.registry_rows import DATASET_ROWS as INCREMENTAL_DATASET_ROWS
 from incremental.registry_specs import dataset_spec as incremental_dataset_spec
 from normalize.registry_rows import DATASET_ROWS as NORMALIZE_DATASET_ROWS
 from normalize.registry_specs import dataset_spec as normalize_dataset_spec
-from relspec.model import RuleKind
 from relspec.rules.coverage import (
     RuleDemandIndex,
     collect_rule_demands,
@@ -61,21 +59,11 @@ from sqlglot_tools.bridge import IbisCompilerBackend
 LayerName = Literal[
     "datafusion_sql_fallback",
     "datafusion_policy_hooks",
-    "arrowdsl_lane_fallback",
     "ibis_backend_fallback",
     "udf_kernel_fallback",
     "incremental_data_fallback",
     "policy_driven_fallback",
 ]
-
-RULE_KIND_TO_OPS: Mapping[str, tuple[str, ...]] = {
-    RuleKind.FILTER_PROJECT.value: ("filter", "project"),
-    RuleKind.HASH_JOIN.value: ("hash_join",),
-    RuleKind.UNION_ALL.value: ("union_all",),
-    RuleKind.INTERVAL_ALIGN.value: (),
-    RuleKind.EXPLODE_LIST.value: ("explode_list",),
-    RuleKind.WINNER_SELECT.value: ("winner_select",),
-}
 
 INCREMENTAL_FALLBACK_SITES: tuple[str, ...] = (
     "incremental.publish.publish_cpg_nodes",
@@ -213,7 +201,6 @@ def build_fallback_coverage_report(
     )
     context = _build_context()
     layers = _build_layers(
-        rules,
         demands=demands,
         query_demands=query_demands,
         query_skipped=query_skipped,
@@ -223,7 +210,6 @@ def build_fallback_coverage_report(
 
 
 def _build_layers(
-    rules: Sequence[RuleDefinition],
     *,
     demands: RuleDemandIndex,
     query_demands: Sequence[RuleQueryDemand],
@@ -237,7 +223,6 @@ def _build_layers(
             context=context,
         ),
         "datafusion_policy_hooks": _datafusion_policy_layer(),
-        "arrowdsl_lane_fallback": _arrowdsl_lane_layer(rules, ctx=context.ctx),
         "ibis_backend_fallback": _ibis_backend_layer(
             query_demands,
             context=context,
@@ -354,14 +339,14 @@ def _build_schema_registry() -> SchemaRegistry:
 
 
 def _build_context() -> CoverageContext:
-    df_profile = DataFusionRuntimeProfile()
+    df_profile = DataFusionRuntimeProfile(enable_function_factory=False)
     runtime = RuntimeProfile(
         name="fallback_coverage",
         determinism=DeterminismTier.BEST_EFFORT,
         datafusion=df_profile,
     )
     ctx = ExecutionContext(runtime=runtime)
-    session_ctx = SessionContext()
+    session_ctx = df_profile.session_context()
     backend = _ibis_datafusion_connect(session_ctx)
     return CoverageContext(
         registry=default_function_registry(),
@@ -548,46 +533,6 @@ def _ibis_backend_layer(
     return LayerReport(static=static, failures=tuple(failures))
 
 
-def _arrowdsl_lane_layer(rules: Sequence[RuleDefinition], *, ctx: ExecutionContext) -> LayerReport:
-    failures: list[DynamicFailure] = []
-    ops_by_rule: dict[str, set[str]] = {}
-    for rule in rules:
-        for op_name in RULE_KIND_TO_OPS.get(rule.kind, ()):
-            ops_by_rule.setdefault(op_name, set()).add(rule.name)
-    for op_name, rule_names in ops_by_rule.items():
-        op_def = OP_CATALOG.get(op_name)
-        if op_def is None:
-            failures.extend(
-                DynamicFailure(
-                    layer="arrowdsl_lane_fallback",
-                    rule_name=rule_name,
-                    dataset_name=None,
-                    source=op_name,
-                    detail="op missing from catalog",
-                )
-                for rule_name in sorted(rule_names)
-            )
-            continue
-        lane = _select_lane(op_def.lanes, ctx=ctx, op_name=op_name)
-        if lane != "datafusion":
-            failures.extend(
-                DynamicFailure(
-                    layer="arrowdsl_lane_fallback",
-                    rule_name=rule_name,
-                    dataset_name=None,
-                    source=op_name,
-                    detail=f"selected lane: {lane}",
-                )
-                for rule_name in sorted(rule_names)
-            )
-    static = {
-        "op_lanes": {
-            name: sorted(op_def.lanes) for name, op_def in OP_CATALOG.items() if name in ops_by_rule
-        },
-        "rules_by_op": _payload_mapping(ops_by_rule),
-    }
-    return LayerReport(static=static, failures=tuple(failures))
-
 
 def _kernel_layer(
     demands: Mapping[str, set[str]],
@@ -627,7 +572,6 @@ def _policy_layer() -> LayerReport:
         "graph_allow_fallback_default": True,
         "ibis_allow_fallback_default": True,
         "datafusion_allow_fallback_default": True,
-        "arrowdsl_allow_fallback_default": True,
     }
     return LayerReport(static=static)
 
@@ -783,28 +727,6 @@ def _collect_expr_calls(expr: object, names: set[str]) -> None:
     if isinstance(args, Sequence):
         for arg in args:
             _collect_expr_calls(arg, names)
-
-
-def _select_lane(
-    lanes: Iterable[Lane],
-    *,
-    ctx: ExecutionContext,
-    op_name: str,
-) -> Lane:
-    if (
-        ctx.determinism in {DeterminismTier.CANONICAL, DeterminismTier.STABLE_SET}
-        and op_name == "order_by"
-        and "kernel" in lanes
-    ):
-        return "kernel"
-    if ctx.runtime.datafusion is not None and "datafusion" in lanes:
-        return "datafusion"
-    if "acero" in lanes:
-        return "acero"
-    if "kernel" in lanes:
-        return "kernel"
-    msg = f"No supported lane for op {op_name!r}."
-    raise ValueError(msg)
 
 
 def _ibis_datafusion_connect(ctx: SessionContext) -> BaseBackend:

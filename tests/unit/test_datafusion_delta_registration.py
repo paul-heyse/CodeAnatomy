@@ -9,11 +9,11 @@ import pyarrow as pa
 import pytest
 
 from datafusion_engine.registry_bridge import register_dataset_df
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.registry import DatasetLocation
 from storage.deltalake import DeltaWriteOptions, write_table_delta
 
 datafusion = pytest.importorskip("datafusion")
-SessionContext = datafusion.SessionContext
 
 
 @pytest.mark.unit
@@ -27,7 +27,7 @@ def test_register_delta_dataset(tmp_path: Path) -> None:
         options=DeltaWriteOptions(mode="overwrite", schema_mode="overwrite"),
     )
 
-    ctx = SessionContext()
+    ctx = DataFusionRuntimeProfile().session_context()
     df = register_dataset_df(
         ctx,
         name="delta_tbl",

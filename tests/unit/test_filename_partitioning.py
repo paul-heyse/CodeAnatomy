@@ -9,7 +9,7 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import pytest
 
-from arrowdsl.plan.source_normalize import DatasetSourceOptions, normalize_dataset_source
+from storage.dataset_sources import DatasetSourceOptions, normalize_dataset_source
 from tests.utils import values_as_list
 
 

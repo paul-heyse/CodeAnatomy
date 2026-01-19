@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pyarrow as pa
-from datafusion import SessionContext
 
 from arrowdsl.schema.build import rows_from_table
 from datafusion_engine.bridge import (
@@ -11,12 +10,13 @@ from datafusion_engine.bridge import (
     execute_prepared_statement,
     prepare_statement,
 )
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from obs.diagnostics import DiagnosticsCollector, prepared_statement_hook
 
 
 def test_prepared_statement_matches_unprepared() -> None:
     """Match prepared execution output to direct SQL."""
-    ctx = SessionContext()
+    ctx = DataFusionRuntimeProfile().session_context()
     table = pa.table({"id": [1, 2], "name": ["a", "b"]})
     ctx.from_arrow(table, name="t")
 

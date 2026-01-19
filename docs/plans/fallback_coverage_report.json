@@ -1,82 +1,6 @@
 {
-  "created_at": "2026-01-19T06:42:21.770976+00:00",
+  "created_at": "2026-01-19T12:44:04.610784+00:00",
   "layers": {
-    "arrowdsl_lane_fallback": {
-      "dynamic_failures": [
-        {
-          "dataset_name": null,
-          "detail": "selected lane: acero",
-          "layer": "arrowdsl_lane_fallback",
-          "rule_name": "callsite_qname_candidates__join__dim_qualified_names",
-          "source": "hash_join"
-        },
-        {
-          "dataset_name": null,
-          "detail": "selected lane: acero",
-          "layer": "arrowdsl_lane_fallback",
-          "rule_name": "qname_fallback_calls",
-          "source": "hash_join"
-        }
-      ],
-      "dynamic_skipped": [],
-      "static": {
-        "op_lanes": {
-          "filter": [
-            "acero",
-            "datafusion"
-          ],
-          "hash_join": [
-            "acero"
-          ],
-          "project": [
-            "acero",
-            "datafusion"
-          ]
-        },
-        "rules_by_op": {
-          "filter": [
-            "call_edges",
-            "diagnostic_edges",
-            "import_edges",
-            "inferred_type_edges",
-            "runtime_members",
-            "runtime_params",
-            "runtime_signatures",
-            "scip_symbol_definition",
-            "scip_symbol_implementation",
-            "scip_symbol_reference",
-            "scip_symbol_type_definition",
-            "symbol_role_defines",
-            "symbol_role_reads",
-            "symbol_role_references",
-            "symbol_role_writes",
-            "type_annotation_edges"
-          ],
-          "hash_join": [
-            "callsite_qname_candidates__join__dim_qualified_names",
-            "qname_fallback_calls"
-          ],
-          "project": [
-            "call_edges",
-            "diagnostic_edges",
-            "import_edges",
-            "inferred_type_edges",
-            "runtime_members",
-            "runtime_params",
-            "runtime_signatures",
-            "scip_symbol_definition",
-            "scip_symbol_implementation",
-            "scip_symbol_reference",
-            "scip_symbol_type_definition",
-            "symbol_role_defines",
-            "symbol_role_reads",
-            "symbol_role_references",
-            "symbol_role_writes",
-            "type_annotation_edges"
-          ]
-        }
-      }
-    },
     "datafusion_policy_hooks": {
       "dynamic_failures": [],
       "dynamic_skipped": [],
@@ -121,26 +45,20 @@
       "dynamic_skipped": [],
       "static": {
         "dataset_schema_missing": {},
-        "expr_calls_ibis_fallback": {
-          "coalesce": [
-            "file_line_index_v1",
-            "py_ast_edges_v1",
-            "py_ast_errors_v1",
-            "py_ast_nodes_v1",
+        "expr_calls_ibis_fallback": {},
+        "expr_calls_missing_ibis": {},
+        "expr_calls_missing_registry": {
+          "binary_join_element_wise": [
             "py_bc_blocks_v1",
             "py_bc_cfg_edges_v1",
             "py_bc_code_units_v1",
-            "py_bc_errors_v1",
             "py_bc_exception_table_v1",
             "py_bc_instructions_v1",
             "py_cst_callsites_v1",
             "py_cst_defs_v1",
             "py_cst_imports_v1",
             "py_cst_name_refs_v1",
-            "py_cst_parse_errors_v1",
-            "py_cst_parse_manifest_v1",
             "py_cst_type_exprs_v1",
-            "py_sym_function_partitions_v1",
             "py_sym_namespace_edges_v1",
             "py_sym_scope_edges_v1",
             "py_sym_scopes_v1",
@@ -150,20 +68,11 @@
             "rt_objects_v1",
             "rt_signature_params_v1",
             "rt_signatures_v1",
-            "scip_diagnostics_v1",
-            "scip_documents_v1",
-            "scip_external_symbol_info_v1",
-            "scip_metadata_v1",
-            "scip_occurrences_v1",
-            "scip_symbol_info_v1",
-            "scip_symbol_relationships_v1",
             "ts_errors_v1",
             "ts_missing_v1",
             "ts_nodes_v1"
           ]
-        },
-        "expr_calls_missing_ibis": {},
-        "expr_calls_missing_registry": {}
+        }
       }
     },
     "incremental_data_fallback": {
@@ -184,7 +93,6 @@
       "dynamic_failures": [],
       "dynamic_skipped": [],
       "static": {
-        "arrowdsl_allow_fallback_default": true,
         "datafusion_allow_fallback_default": true,
         "graph_allow_fallback_default": true,
         "ibis_allow_fallback_default": true
@@ -211,13 +119,12 @@
     }
   },
   "summary": {
-    "arrowdsl_lane_fallback_failures": 2,
     "datafusion_policy_hooks_failures": 0,
     "datafusion_sql_fallback_failures": 0,
     "ibis_backend_fallback_failures": 0,
     "incremental_data_fallback_failures": 0,
     "policy_driven_fallback_failures": 0,
-    "total_failures": 2,
+    "total_failures": 0,
     "udf_kernel_fallback_failures": 0
   }
 }

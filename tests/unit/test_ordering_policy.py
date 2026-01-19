@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pyarrow as pa
-import pyarrow.dataset as ds
 
 from arrowdsl.core.context import (
     DeterminismTier,
@@ -11,17 +10,28 @@ from arrowdsl.core.context import (
     OrderingLevel,
     runtime_profile_factory,
 )
-from arrowdsl.plan.scan_builder import ScanBuildSpec
 from arrowdsl.schema.metadata import ordering_from_schema
-from ibis_engine.query_compiler import IbisQuerySpec
+from ibis_engine.backend import build_backend
+from ibis_engine.config import IbisBackendConfig
+from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
+from ibis_engine.scan_io import plan_from_source
 from tests.utils import values_as_list
 
 
 def _scan_plan(table: pa.Table, *, ctx: ExecutionContext) -> pa.Table:
-    dataset = ds.dataset(table)
-    spec = IbisQuerySpec.simple(*table.column_names)
-    plan = ScanBuildSpec(dataset=dataset, query=spec, ctx=ctx).to_plan(label="ordering_scan")
-    return plan.to_table(ctx=ctx)
+    runtime = ctx.runtime
+    backend = build_backend(
+        IbisBackendConfig(
+            datafusion_profile=runtime.datafusion,
+            fuse_selects=runtime.ibis_fuse_selects,
+            default_limit=runtime.ibis_default_limit,
+            default_dialect=runtime.ibis_default_dialect,
+            interactive=runtime.ibis_interactive,
+        )
+    )
+    plan = plan_from_source(table, ctx=ctx, backend=backend, name="ordering_scan")
+    execution = IbisExecutionContext(ctx=ctx, ibis_backend=backend)
+    return materialize_ibis_plan(plan, execution=execution)
 
 
 def test_stable_tier_implicit_ordering() -> None:

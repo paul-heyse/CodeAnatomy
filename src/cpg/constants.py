@@ -8,16 +8,15 @@ from typing import TYPE_CHECKING
 
 from arrowdsl.compute.ids import hash_spec_factory
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
-from arrowdsl.finalize.finalize import FinalizeResult
-from arrowdsl.plan.metrics import (
+from arrowdsl.core.metrics import (
     QUALITY_SCHEMA,
     QualityPlanSpec,
     concat_quality_tables,
     empty_quality_table,
     quality_from_ids,
-    quality_plan_from_ids,
 )
-from arrowdsl.plan.scan_telemetry import ScanTelemetry
+from arrowdsl.core.scan_telemetry import ScanTelemetry
+from arrowdsl.finalize.finalize import FinalizeResult
 from cpg.kinds_ultimate import (
     SCIP_ROLE_FORWARD_DEFINITION,
     SCIP_ROLE_GENERATED,
@@ -123,5 +122,4 @@ __all__ = [
     "fill_nulls_float",
     "fill_nulls_string",
     "quality_from_ids",
-    "quality_plan_from_ids",
 ]

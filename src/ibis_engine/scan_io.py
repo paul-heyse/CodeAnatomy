@@ -95,17 +95,24 @@ def _plan_from_source(
     backend: BaseBackend,
     name: str | None,
 ) -> IbisPlan:
+    ordering = _ordering_for_ctx(ctx)
     if isinstance(source, IbisPlan):
         return source
     if isinstance(source, IbisTable):
-        return IbisPlan(expr=source, ordering=Ordering.unordered())
+        return IbisPlan(expr=source, ordering=ordering)
     options = SourceToIbisOptions(
         backend=backend,
         name=name,
-        ordering=Ordering.unordered(),
+        ordering=ordering,
         namespace_recorder=namespace_recorder_from_ctx(ctx),
     )
     return source_to_ibis(cast("TableLike | RecordBatchReaderLike", source), options=options)
+
+
+def _ordering_for_ctx(ctx: ExecutionContext) -> Ordering:
+    if ctx.runtime.scan.implicit_ordering:
+        return Ordering.implicit()
+    return Ordering.unordered()
 
 
 __all__ = [

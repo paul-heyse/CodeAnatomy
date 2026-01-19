@@ -7,6 +7,7 @@ import pytest
 
 from datafusion_engine.bridge import collect_plan_artifacts
 from datafusion_engine.compile_options import DataFusionCompileOptions
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from sqlglot_tools.optimizer import parse_sql_strict
 
 datafusion = pytest.importorskip("datafusion")
@@ -14,7 +15,7 @@ datafusion = pytest.importorskip("datafusion")
 
 def test_datafusion_unparser_payload_is_deterministic() -> None:
     """Capture deterministic SQL unparser payloads for plan artifacts."""
-    ctx = datafusion.SessionContext()
+    ctx = DataFusionRuntimeProfile().session_context()
     ctx.register_record_batches(
         "events",
         [pa.table({"id": [1, 2], "label": ["a", "b"]}).to_batches()],

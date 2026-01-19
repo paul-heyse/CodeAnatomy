@@ -7,10 +7,10 @@ from collections.abc import Sequence
 
 import pyarrow as pa
 import pytest
-from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from datafusion_engine.bridge import datafusion_to_async_batches
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 
 async def _collect_batches(df: DataFrame) -> Sequence[pa.RecordBatch]:
@@ -20,7 +20,7 @@ async def _collect_batches(df: DataFrame) -> Sequence[pa.RecordBatch]:
 @pytest.mark.integration
 def test_datafusion_async_streaming_batches() -> None:
     """Yield RecordBatches asynchronously from DataFusion results."""
-    ctx = SessionContext()
+    ctx = DataFusionRuntimeProfile().session_context()
     table = pa.table({"entity_id": [1, 2, 3], "name": ["a", "b", "c"]})
     ctx.register_record_batches("input_table", [table.to_batches()])
     df = ctx.sql("select * from input_table")

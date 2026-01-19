@@ -108,7 +108,10 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "ValidationPlans": ("schema_spec.system", "ValidationPlans"),
     "VirtualFieldSpec": ("schema_spec.system", "VirtualFieldSpec"),
     "call_span_bundle": ("schema_spec.specs", "call_span_bundle"),
-    "contract_catalog_spec_from_tables": ("schema_spec.system", "contract_catalog_spec_from_tables"),
+    "contract_catalog_spec_from_tables": (
+        "schema_spec.system",
+        "contract_catalog_spec_from_tables",
+    ),
     "contract_spec_table": ("arrowdsl.spec.tables.schema", "contract_spec_table"),
     "contract_specs_from_table": ("arrowdsl.spec.tables.schema", "contract_specs_from_table"),
     "dataset_spec_from_contract": ("schema_spec.system", "dataset_spec_from_contract"),

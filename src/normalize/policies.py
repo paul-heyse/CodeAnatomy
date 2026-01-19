@@ -11,7 +11,7 @@ from arrowdsl.core.interop import SchemaLike
 from arrowdsl.plan.ops import DedupeSpec, SortKey
 from arrowdsl.schema.metadata import infer_ordering_keys, ordering_from_schema
 from arrowdsl.spec.expr_ir import ExprIR
-from normalize.rule_model import AmbiguityPolicy, ConfidencePolicy
+from relspec.normalize.rule_model import AmbiguityPolicy, ConfidencePolicy
 
 
 class _PolicyRegistry(Protocol):

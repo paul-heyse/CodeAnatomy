@@ -19,10 +19,18 @@ from arrowdsl.ops.catalog import OP_CATALOG
 from arrowdsl.plan.builder import PlanBuilder
 from arrowdsl.plan.dataset_wrappers import DatasetLike
 from arrowdsl.plan.ops import scan_ordering_effect
+from arrowdsl.plan.query_adapter import ibis_query_to_plan_query
+from ibis_engine.query_compiler import IbisQuerySpec
 
 if TYPE_CHECKING:
     from arrowdsl.plan.plan import Plan
     from arrowdsl.plan.query import ColumnsSpec, QuerySpec
+
+
+def _plan_query(query: QuerySpec | IbisQuerySpec) -> QuerySpec:
+    if isinstance(query, IbisQuerySpec):
+        return ibis_query_to_plan_query(query)
+    return query
 
 
 @cache
@@ -36,7 +44,7 @@ class ScanBuildSpec:
     """Shared scan builder for scanners, Acero declarations, and plans."""
 
     dataset: DatasetLike
-    query: QuerySpec
+    query: QuerySpec | IbisQuerySpec
     ctx: ExecutionContext
     scan_provenance: tuple[str, ...] | None = None
     required_columns: Sequence[str] | None = None
@@ -49,12 +57,13 @@ class ScanBuildSpec:
         ColumnsSpec
             Scan column spec for scanners and scan nodes.
         """
+        plan_query = _plan_query(self.query)
         scan_provenance = (
             self.scan_provenance
             if self.scan_provenance is not None
             else self.ctx.runtime.scan.scan_provenance_columns
         )
-        return self.query.scan_columns(
+        return plan_query.scan_columns(
             provenance=self.ctx.provenance,
             scan_provenance=scan_provenance,
             required_columns=self.required_columns,
@@ -68,7 +77,8 @@ class ScanBuildSpec:
         ds.Scanner
             Scanner configured with runtime scan options.
         """
-        predicate = self.query.pushdown_expression()
+        plan_query = _plan_query(self.query)
+        predicate = plan_query.pushdown_expression()
         _validate_predicate_fields(predicate, scan_provenance=self.scan_provenance)
         return self.dataset.scanner(
             columns=self.scan_columns(),
@@ -85,7 +95,8 @@ class ScanBuildSpec:
             Acero declaration for the scan pipeline.
         """
         builder = PlanBuilder()
-        predicate = self.query.pushdown_expression()
+        plan_query = _plan_query(self.query)
+        predicate = plan_query.pushdown_expression()
         _validate_predicate_fields(predicate, scan_provenance=self.scan_provenance)
         builder.scan(
             dataset=self.dataset,
@@ -93,7 +104,7 @@ class ScanBuildSpec:
             predicate=predicate,
             ordering_effect=scan_ordering_effect(self.ctx),
         )
-        if (predicate := self.query.predicate_expression()) is not None:
+        if (predicate := plan_query.predicate_expression()) is not None:
             builder.filter(predicate=predicate)
         plan_ir, _, _ = builder.build()
         return PlanCompiler(catalog=OP_CATALOG).to_acero(plan_ir, ctx=self.ctx)
@@ -107,7 +118,8 @@ class ScanBuildSpec:
             Plan representing the scan/filter pipeline.
         """
         builder = PlanBuilder()
-        predicate = self.query.pushdown_expression()
+        plan_query = _plan_query(self.query)
+        predicate = plan_query.pushdown_expression()
         _validate_predicate_fields(predicate, scan_provenance=self.scan_provenance)
         builder.scan(
             dataset=self.dataset,
@@ -115,7 +127,7 @@ class ScanBuildSpec:
             predicate=predicate,
             ordering_effect=scan_ordering_effect(self.ctx),
         )
-        if (predicate := self.query.predicate_expression()) is not None:
+        if (predicate := plan_query.predicate_expression()) is not None:
             builder.filter(predicate=predicate)
         plan_ir, ordering, pipeline_breakers = builder.build()
         plan_cls = _plan_class()

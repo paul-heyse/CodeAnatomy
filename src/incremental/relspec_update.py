@@ -14,6 +14,7 @@ from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.plan.dataset_wrappers import unwrap_dataset
 from arrowdsl.plan.query import DatasetDiscoveryOptions, DatasetSourceOptions, open_dataset
+from arrowdsl.plan.query_adapter import ibis_query_to_plan_query
 from arrowdsl.plan_utils import dataset_query_for_file_ids
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from arrowdsl.schema.schema import empty_table
@@ -252,7 +253,7 @@ def _read_state_dataset(
             dataset_name=dataset_name,
         )
     if schema is not None and "file_id" in schema.names:
-        query = dataset_query_for_file_ids(file_ids, schema=schema)
+        query = ibis_query_to_plan_query(dataset_query_for_file_ids(file_ids, schema=schema))
         plan = query.to_plan(dataset=dataset, ctx=ctx, label=dataset_name)
         return plan.to_table(ctx=ctx)
     if schema is None:

@@ -49,7 +49,7 @@ from relspec.rules.handlers.normalize import NormalizeRuleHandler
 from relspec.rules.registry import RuleRegistry
 
 if TYPE_CHECKING:
-    from normalize.rule_model import NormalizeRule
+    from relspec.normalize.rule_model import NormalizeRule
     from relspec.rules.definitions import RuleDefinition
 from normalize.ibis_spans import (
     add_ast_byte_spans_ibis,

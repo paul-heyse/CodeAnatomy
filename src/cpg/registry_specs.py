@@ -2,17 +2,26 @@
 
 from __future__ import annotations
 
+from functools import cache
 from typing import TYPE_CHECKING
 
 from cpg.registry_builders import build_dataset_spec
-from cpg.registry_rows import DATASET_ROWS, DatasetRow
+from cpg.registry_readers import dataset_rows_from_table
+from cpg.registry_rows import DatasetRow
+from cpg.registry_tables import dataset_rows_table
 from registry_common.dataset_registry import DatasetAccessors, DatasetRegistry
 
 if TYPE_CHECKING:
     from arrowdsl.core.interop import SchemaLike
     from schema_spec.system import ContractSpec, DatasetSpec
 
-_REGISTRY = DatasetRegistry(rows=DATASET_ROWS, build_dataset_spec=build_dataset_spec)
+
+@cache
+def _dataset_rows() -> tuple[DatasetRow, ...]:
+    return dataset_rows_from_table(dataset_rows_table())
+
+
+_REGISTRY = DatasetRegistry(rows=_dataset_rows(), build_dataset_spec=build_dataset_spec)
 _ACCESSORS = DatasetAccessors(_REGISTRY)
 
 

@@ -11,6 +11,12 @@ from typing import Literal, TypeVar, cast
 import pyarrow as pa
 
 from arrowdsl.compute.registry import pyarrow_compute_functions
+from datafusion_engine.builtin_registry import (
+    DataFusionBuiltinSpec,
+    DataFusionSqlExpressionSpec,
+    datafusion_builtin_specs,
+    datafusion_sql_expression_specs,
+)
 from datafusion_engine.function_factory import DEFAULT_RULE_PRIMITIVES, RulePrimitive
 from datafusion_engine.udf_registry import DataFusionUdfSpec, UdfTier, datafusion_udf_specs
 from ibis_engine.builtin_udfs import IbisUdfSpec, ibis_udf_specs
@@ -163,6 +169,10 @@ def build_function_registry(
         Registry configured from the provided primitives.
     """
     specs: dict[str, FunctionSpec] = {}
+    for spec in datafusion_builtin_specs():
+        _merge_spec(specs, _spec_from_datafusion_builtin(spec, lane_precedence=lane_precedence))
+    for spec in datafusion_sql_expression_specs():
+        _merge_spec(specs, _spec_from_sql_expression(spec, lane_precedence=lane_precedence))
     for spec in datafusion_specs or datafusion_udf_specs():
         _merge_spec(specs, _spec_from_datafusion(spec, lane_precedence=lane_precedence))
     for spec in ibis_specs or ibis_udf_specs():
@@ -228,6 +238,44 @@ def _spec_from_datafusion(
         database=spec.database,
         capsule_id=spec.capsule_id,
         udf_tier=spec.udf_tier,
+    )
+
+
+def _spec_from_datafusion_builtin(
+    spec: DataFusionBuiltinSpec,
+    *,
+    lane_precedence: tuple[ExecutionLane, ...],
+) -> FunctionSpec:
+    return FunctionSpec(
+        func_id=spec.func_id,
+        engine_name=spec.engine_name,
+        kind=spec.kind,
+        input_types=spec.input_types,
+        return_type=spec.return_type,
+        volatility=spec.volatility,
+        arg_names=spec.arg_names,
+        lanes=("df_rust",),
+        lane_precedence=lane_precedence,
+        udf_tier=None,
+    )
+
+
+def _spec_from_sql_expression(
+    spec: DataFusionSqlExpressionSpec,
+    *,
+    lane_precedence: tuple[ExecutionLane, ...],
+) -> FunctionSpec:
+    return FunctionSpec(
+        func_id=spec.func_id,
+        engine_name=spec.func_id,
+        kind=spec.kind,
+        input_types=spec.input_types,
+        return_type=spec.return_type,
+        volatility=spec.volatility,
+        arg_names=spec.arg_names,
+        lanes=("df_rust",),
+        lane_precedence=lane_precedence,
+        udf_tier=None,
     )
 
 

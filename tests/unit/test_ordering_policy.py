@@ -11,15 +11,16 @@ from arrowdsl.core.context import (
     OrderingLevel,
     runtime_profile_factory,
 )
-from arrowdsl.plan.query import QuerySpec
+from arrowdsl.plan.scan_builder import ScanBuildSpec
 from arrowdsl.schema.metadata import ordering_from_schema
+from ibis_engine.query_compiler import IbisQuerySpec
 from tests.utils import values_as_list
 
 
 def _scan_plan(table: pa.Table, *, ctx: ExecutionContext) -> pa.Table:
     dataset = ds.dataset(table)
-    spec = QuerySpec.simple(*table.column_names)
-    plan = spec.to_plan(dataset=dataset, ctx=ctx, label="ordering_scan")
+    spec = IbisQuerySpec.simple(*table.column_names)
+    plan = ScanBuildSpec(dataset=dataset, query=spec, ctx=ctx).to_plan(label="ordering_scan")
     return plan.to_table(ctx=ctx)
 
 

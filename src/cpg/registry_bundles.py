@@ -23,4 +23,15 @@ def bundle(name: str) -> FieldBundle:
     return _BUNDLE_CATALOG[name]
 
 
-__all__ = ["bundle"]
+def bundle_catalog() -> dict[str, FieldBundle]:
+    """Return the full bundle catalog mapping.
+
+    Returns
+    -------
+    dict[str, FieldBundle]
+        Mapping of bundle name to bundle spec.
+    """
+    return dict(_BUNDLE_CATALOG)
+
+
+__all__ = ["bundle", "bundle_catalog"]

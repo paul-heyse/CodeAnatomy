@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from normalize.rule_factories import build_rule_definitions_from_specs
-from normalize.rule_registry_specs import rule_family_specs
+from relspec.normalize.rule_registry_specs import rule_family_specs
 from relspec.rules.definitions import RuleDefinition
 from relspec.rules.diagnostics import RuleDiagnostic
 from relspec.rules.registry import RuleAdapter

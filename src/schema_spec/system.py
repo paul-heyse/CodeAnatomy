@@ -13,7 +13,6 @@ import pyarrow.dataset as ds
 import pyarrow.types as patypes
 from ibis.expr.types import Table
 
-from arrowdsl.compute.expr_core import ExprSpec
 from arrowdsl.core.context import ExecutionContext, OrderingLevel
 from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import Contract, FinalizeContext
@@ -23,8 +22,6 @@ from arrowdsl.plan.query import (
     DatasetDiscoveryOptions,
     DatasetSourceOptions,
     PathLike,
-    ProjectionSpec,
-    QuerySpec,
     open_dataset,
 )
 from arrowdsl.plan.runner_types import PlanRunResultProto, plan_runner_module
@@ -51,6 +48,7 @@ from arrowdsl.schema.validation import (
     validate_table,
 )
 from arrowdsl.spec.io import read_spec_table
+from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
 from schema_spec.specs import (
     ENCODING_DICTIONARY,
     ENCODING_META,
@@ -64,6 +62,7 @@ from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
     from arrowdsl.plan.scan_io import DatasetSource, PlanSource
+    from arrowdsl.spec.expr_ir import ExprIR
     from arrowdsl.spec.tables.schema import SchemaSpecTables
 
 
@@ -242,15 +241,15 @@ class DatasetSpec:
 
     table_spec: TableSchemaSpec
     contract_spec: ContractSpec | None = None
-    query_spec: QuerySpec | None = None
+    query_spec: IbisQuerySpec | None = None
     datafusion_scan: DataFusionScanOptions | None = None
     delta_scan: DeltaScanOptions | None = None
     delta_write_policy: DeltaWritePolicy | None = None
     delta_schema_policy: DeltaSchemaPolicy | None = None
     delta_constraints: tuple[str, ...] = ()
     derived_fields: tuple[DerivedFieldSpec, ...] = ()
-    predicate: ExprSpec | None = None
-    pushdown_predicate: ExprSpec | None = None
+    predicate: ExprIR | None = None
+    pushdown_predicate: ExprIR | None = None
     evolution_spec: SchemaEvolutionSpec = field(default_factory=SchemaEvolutionSpec)
     metadata_spec: SchemaMetadataSpec = field(default_factory=SchemaMetadataSpec)
     validation: ArrowValidationOptions | None = None
@@ -278,20 +277,20 @@ class DatasetSpec:
         merged = merge_metadata_specs(self.metadata_spec, ordering)
         return merged.apply(self.table_spec.to_arrow_schema())
 
-    def query(self) -> QuerySpec:
+    def query(self) -> IbisQuerySpec:
         """Return the query spec, deriving it from the table spec if needed.
 
         Returns
         -------
-        QuerySpec
+        IbisQuerySpec
             Query spec for scanning.
         """
         if self.query_spec is not None:
             return self.query_spec
         cols = tuple(field.name for field in self.table_spec.fields)
         derived = {spec.name: spec.expr for spec in self.derived_fields}
-        return QuerySpec(
-            projection=ProjectionSpec(base=cols, derived=derived),
+        return IbisQuerySpec(
+            projection=IbisProjectionSpec(base=cols, derived=derived),
             predicate=self.predicate,
             pushdown_predicate=self.pushdown_predicate,
         )
@@ -710,15 +709,15 @@ class DatasetSpecKwargs(TypedDict, total=False):
     """Keyword arguments supported by make_dataset_spec."""
 
     contract_spec: ContractSpec | None
-    query_spec: QuerySpec | None
+    query_spec: IbisQuerySpec | None
     datafusion_scan: DataFusionScanOptions | None
     delta_scan: DeltaScanOptions | None
     delta_write_policy: DeltaWritePolicy | None
     delta_schema_policy: DeltaSchemaPolicy | None
     delta_constraints: Sequence[str]
     derived_fields: Sequence[DerivedFieldSpec]
-    predicate: ExprSpec | None
-    pushdown_predicate: ExprSpec | None
+    predicate: ExprIR | None
+    pushdown_predicate: ExprIR | None
     evolution_spec: SchemaEvolutionSpec | None
     metadata_spec: SchemaMetadataSpec | None
     validation: ArrowValidationOptions | None

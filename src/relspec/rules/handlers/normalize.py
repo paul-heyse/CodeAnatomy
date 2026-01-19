@@ -8,13 +8,13 @@ from typing import TYPE_CHECKING
 from arrowdsl.core.context import ExecutionContext
 from ibis_engine.query_compiler import IbisQuerySpec
 from normalize.rule_defaults import apply_rule_defaults
-from normalize.rule_model import (
+from relspec.normalize.rule_model import (
     EvidenceOutput as NormalizeEvidenceOutput,
 )
-from normalize.rule_model import (
+from relspec.normalize.rule_model import (
     EvidenceSpec as NormalizeEvidenceSpec,
 )
-from normalize.rule_model import NormalizeRule
+from relspec.normalize.rule_model import NormalizeRule
 from relspec.rules.compiler import RuleHandler
 from relspec.rules.definitions import NormalizePayload
 from relspec.rules.policies import PolicyRegistry

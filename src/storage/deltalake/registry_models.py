@@ -1,36 +1,18 @@
-"""Registry table generators and validators for Delta Lake exports."""
+"""Shared models and helpers for Delta Lake registry exports."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
 
+from arrowdsl.schema.union_codec import encode_union_table
 from arrowdsl.spec.io import table_from_rows
-from cpg.kinds_ultimate import (
-    validate_derivation_extractors,
-    validate_registry_completeness,
-)
-from cpg.registry_tables import (
-    derivation_table,
-    edge_contract_table,
-    node_contract_table,
-)
-from cpg.spec_tables import node_plan_spec_table, prop_table_spec_table
-from relspec.rules.cache import (
-    rule_diagnostics_table_cached,
-    rule_table_cached,
-    template_diagnostics_table_cached,
-    template_table_cached,
-)
-from storage.deltalake.delta import (
-    DeltaWriteOptions,
-    DeltaWriteResult,
-    StorageOptions,
-    write_named_datasets_delta,
-)
+
+if TYPE_CHECKING:
+    from storage.deltalake.delta import DeltaWriteOptions, DeltaWriteResult, StorageOptions
 
 RegistrySeverity = Literal["error", "warning"]
 
@@ -117,56 +99,7 @@ REGISTRY_DIAGNOSTIC_SCHEMA = pa.schema(
 )
 
 
-REGISTRY_TABLE_SPECS: tuple[RegistryTableSpec, ...] = (
-    RegistryTableSpec(
-        name="cpg_node_contracts",
-        builder=node_contract_table,
-        description="CPG node contracts.",
-    ),
-    RegistryTableSpec(
-        name="cpg_edge_contracts",
-        builder=edge_contract_table,
-        description="CPG edge contracts.",
-    ),
-    RegistryTableSpec(
-        name="cpg_kind_derivations",
-        builder=derivation_table,
-        description="CPG kind derivations.",
-    ),
-    RegistryTableSpec(
-        name="cpg_node_specs",
-        builder=node_plan_spec_table,
-        description="CPG node plan specs.",
-    ),
-    RegistryTableSpec(
-        name="cpg_prop_specs",
-        builder=prop_table_spec_table,
-        description="CPG property table specs.",
-    ),
-    RegistryTableSpec(
-        name="relspec_rule_definitions",
-        builder=rule_table_cached,
-        description="Centralized rule definitions.",
-    ),
-    RegistryTableSpec(
-        name="relspec_rule_templates",
-        builder=template_table_cached,
-        description="Centralized rule templates.",
-    ),
-    RegistryTableSpec(
-        name="relspec_rule_diagnostics",
-        builder=rule_diagnostics_table_cached,
-        description="Diagnostics for rule definitions.",
-    ),
-    RegistryTableSpec(
-        name="relspec_template_diagnostics",
-        builder=template_diagnostics_table_cached,
-        description="Diagnostics for rule templates.",
-    ),
-)
-
-
-def registry_diagnostic_table(diagnostics: tuple[RegistryDiagnostic, ...]) -> pa.Table:
+def registry_diagnostic_table(diagnostics: Sequence[RegistryDiagnostic]) -> pa.Table:
     """Return a diagnostics table for registry checks.
 
     Returns
@@ -178,50 +111,27 @@ def registry_diagnostic_table(diagnostics: tuple[RegistryDiagnostic, ...]) -> pa
     return table_from_rows(REGISTRY_DIAGNOSTIC_SCHEMA, rows)
 
 
-def validate_registry(
-    *,
-    validate_extractors: bool = False,
-    allow_planned: bool = False,
-) -> tuple[RegistryDiagnostic, ...]:
-    """Run registry validations and return diagnostics.
+RegistryDiagnosticsBuilder = Callable[[], Sequence[RegistryDiagnostic]]
+
+
+def encode_registry_tables_for_delta(
+    tables: Mapping[str, pa.Table],
+) -> dict[str, pa.Table]:
+    """Return registry tables encoded for Delta-safe storage.
 
     Returns
     -------
-    tuple[RegistryDiagnostic, ...]
-        Diagnostics emitted during validation.
+    dict[str, pyarrow.Table]
+        Mapping of table names to Delta-safe Arrow tables.
     """
-    diagnostics: list[RegistryDiagnostic] = []
-    try:
-        validate_registry_completeness()
-    except ValueError as exc:
-        diagnostics.append(
-            RegistryDiagnostic(
-                registry="cpg_kind_registry",
-                severity="error",
-                message=str(exc),
-                context={"check": "validate_registry_completeness"},
-            )
-        )
-    if validate_extractors:
-        try:
-            validate_derivation_extractors(allow_planned=allow_planned)
-        except ValueError as exc:
-            diagnostics.append(
-                RegistryDiagnostic(
-                    registry="cpg_kind_registry",
-                    severity="error",
-                    message=str(exc),
-                    context={"check": "validate_derivation_extractors"},
-                )
-            )
-    return tuple(diagnostics)
+    return {name: encode_union_table(table) for name, table in tables.items()}
 
 
-def build_registry_tables(
+def build_registry_tables_from_specs(
+    specs: Sequence[RegistryTableSpec],
     *,
     strict: bool = False,
-    validate_extractors: bool = False,
-    allow_planned: bool = False,
+    validate: RegistryDiagnosticsBuilder | None = None,
 ) -> RegistryBuildResult:
     """Build registry tables and collect diagnostics.
 
@@ -247,7 +157,7 @@ def build_registry_tables(
     """
     tables: dict[str, pa.Table] = {}
     diagnostics: list[RegistryDiagnostic] = []
-    for spec in REGISTRY_TABLE_SPECS:
+    for spec in specs:
         try:
             table = spec.builder()
         except (
@@ -271,45 +181,9 @@ def build_registry_tables(
             continue
         registry_name = _registry_table_name(spec.name, table, diagnostics=diagnostics)
         tables[registry_name] = table
-    diagnostics.extend(
-        validate_registry(
-            validate_extractors=validate_extractors,
-            allow_planned=allow_planned,
-        )
-    )
+    if validate is not None:
+        diagnostics.extend(validate())
     return RegistryBuildResult(tables=tables, diagnostics=tuple(diagnostics))
-
-
-def write_registry_delta(
-    base_dir: str,
-    *,
-    write_options: RegistryWriteOptions | None = None,
-) -> RegistryWriteResult:
-    """Write registry tables to Delta Lake and return write results.
-
-    Returns
-    -------
-    RegistryWriteResult
-        Delta write results plus diagnostics table.
-    """
-    resolved = write_options or RegistryWriteOptions()
-    build = build_registry_tables(
-        strict=False,
-        validate_extractors=resolved.validate_extractors,
-        allow_planned=resolved.allow_planned,
-    )
-    tables = dict(build.tables)
-    diagnostics_table = build.diagnostics_table()
-    if resolved.include_diagnostics:
-        tables["registry_diagnostics"] = diagnostics_table
-    delta_options = resolved.delta_options or DeltaWriteOptions(mode="overwrite")
-    results = write_named_datasets_delta(
-        tables,
-        base_dir,
-        options=delta_options,
-        storage_options=resolved.storage_options,
-    )
-    return RegistryWriteResult(results=results, diagnostics=diagnostics_table)
 
 
 def _registry_table_name(
@@ -345,14 +219,14 @@ def _registry_table_name(
 
 __all__ = [
     "REGISTRY_DIAGNOSTIC_SCHEMA",
-    "REGISTRY_TABLE_SPECS",
     "RegistryBuildResult",
     "RegistryDiagnostic",
+    "RegistryDiagnosticsBuilder",
+    "RegistrySeverity",
     "RegistryTableSpec",
     "RegistryWriteOptions",
     "RegistryWriteResult",
-    "build_registry_tables",
+    "build_registry_tables_from_specs",
+    "encode_registry_tables_for_delta",
     "registry_diagnostic_table",
-    "validate_registry",
-    "write_registry_delta",
 ]

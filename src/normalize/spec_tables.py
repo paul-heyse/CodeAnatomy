@@ -12,8 +12,8 @@ from arrowdsl.schema.schema import EncodingPolicy, EncodingSpec
 from arrowdsl.spec.codec import parse_string_tuple
 from arrowdsl.spec.tables.schema import SchemaSpecTables, schema_spec_tables_from_dataset_specs
 from normalize.registry_specs import dataset_specs
-from normalize.rule_registry_specs import rule_family_specs
-from normalize.rule_specs import NormalizeRuleFamilySpec
+from relspec.normalize.rule_registry_specs import rule_family_specs
+from relspec.normalize.rule_specs import NormalizeRuleFamilySpec
 
 RULE_FAMILY_SCHEMA = pa.schema(
     [

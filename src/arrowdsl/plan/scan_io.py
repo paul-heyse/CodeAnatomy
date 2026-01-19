@@ -15,6 +15,7 @@ from arrowdsl.plan.builder import PlanBuilder
 from arrowdsl.plan.dataset_wrappers import DatasetLike, is_one_shot_dataset
 from arrowdsl.plan.ops import scan_ordering_effect
 from arrowdsl.plan.plan import Plan
+from arrowdsl.plan.query_adapter import ibis_query_to_plan_query
 from arrowdsl.schema.build import rows_to_table as rows_to_table_factory
 from schema_spec.system import DatasetSpec
 
@@ -54,7 +55,7 @@ def plan_from_dataset(
     Plan
         Plan representing the dataset scan and projection.
     """
-    query = spec.query()
+    query = ibis_query_to_plan_query(spec.query())
     return query.to_plan(
         dataset=dataset,
         ctx=ctx,

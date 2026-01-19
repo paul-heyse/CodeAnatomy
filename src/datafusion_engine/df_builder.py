@@ -16,6 +16,7 @@ from sqlglot import Expression, exp
 
 from datafusion_engine.registry_bridge import DataFusionCachePolicy, register_dataset_df
 from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.udf_registry import datafusion_scalar_udf_map
 from ibis_engine.registry import DatasetLocation
 
 
@@ -69,6 +70,8 @@ _SQLGLOT_CAST_TYPES: dict[exp.DataType.Type, pa.DataType] = {
     exp.DataType.Type.TIMESTAMP_NS: pa.timestamp("ns"),
 }
 
+_UDF_FUNC_MAP = datafusion_scalar_udf_map()
+
 
 def df_from_sqlglot(ctx: SessionContext, expr: Expression) -> DataFrame:
     """Translate a SQLGlot expression into a DataFusion DataFrame.
@@ -99,18 +102,26 @@ def df_from_sqlglot(ctx: SessionContext, expr: Expression) -> DataFrame:
 
 
 def _resolve_table_aliases(expr: Expression) -> Expression:
-    alias_map: dict[str, str] = {}
+    alias_map: dict[str, str | None] = {}
     for table in expr.find_all(exp.Table):
         alias = table.args.get("alias")
         alias_name = _table_alias_name(alias)
         if alias_name:
             alias_map[alias_name] = table.name
+    for subquery in expr.find_all(exp.Subquery):
+        alias = subquery.args.get("alias")
+        alias_name = _table_alias_name(alias)
+        if alias_name:
+            alias_map.setdefault(alias_name, None)
     if not alias_map:
         return expr
 
     def _rewrite(node: Expression) -> Expression:
         if isinstance(node, exp.Column) and node.table in alias_map:
-            return exp.column(node.name, table=alias_map[node.table])
+            mapped = alias_map[node.table]
+            if mapped:
+                return exp.column(node.name, table=mapped)
+            return exp.column(node.name)
         return node
 
     return expr.transform(_rewrite)
@@ -789,13 +800,17 @@ _EXPR_DISPATCH: dict[type[Expression], Callable[[Expression], Expr]] = {
 
 
 def _func_expr(expr: exp.Func) -> Expr:
-    name = expr.sql_name().lower()
-    func = getattr(f, name, None)
-    if func is None:
-        msg = f"Unsupported function: {name!r}."
-        raise TranslationError(msg)
+    name = _func_name(expr)
     args = _function_args(expr)
-    result = func(*args)
+    func = getattr(f, name, None)
+    if func is not None:
+        result = func(*args)
+    else:
+        udf_impl = _UDF_FUNC_MAP.get(name)
+        if udf_impl is None:
+            msg = f"Unsupported function: {name!r}."
+            raise TranslationError(msg)
+        result = udf_impl(*args)
     alias = expr.alias_or_name
     if alias:
         return result.alias(alias)
@@ -813,6 +828,15 @@ def _function_args(expr: exp.Func) -> list[Expr]:
     if isinstance(extra, Expression):
         resolved.append(_expr_to_df(extra))
     return resolved
+
+
+def _func_name(expr: exp.Func) -> str:
+    if isinstance(expr, exp.Anonymous):
+        name = expr.this
+        if isinstance(name, str):
+            return name.lower()
+        return str(name).lower()
+    return expr.sql_name().lower()
 
 
 def _aggregate_func(expr: exp.AggFunc) -> Expr:

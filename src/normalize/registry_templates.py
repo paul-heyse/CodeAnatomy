@@ -87,9 +87,7 @@ _TEMPLATES: dict[str, RegistryTemplate] = {
             ),
             extra={
                 b"confidence_policy": b"diagnostic",
-                EVIDENCE_OUTPUT_MAP_META: json_bytes(
-                    {"role": "severity", "source": "diag_source"}
-                ),
+                EVIDENCE_OUTPUT_MAP_META: json_bytes({"role": "severity", "source": "diag_source"}),
             },
         ),
     ),

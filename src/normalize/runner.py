@@ -39,9 +39,9 @@ from normalize.registry_specs import dataset_schema
 from normalize.registry_validation import validate_rule_specs
 from normalize.rule_defaults import apply_evidence_defaults, apply_policy_defaults
 from normalize.rule_factories import build_rule_definitions_from_specs
-from normalize.rule_model import EvidenceSpec as NormalizeEvidenceSpec
-from normalize.rule_model import NormalizeRule
-from normalize.rule_registry_specs import rule_family_specs
+from relspec.normalize.rule_model import EvidenceSpec as NormalizeEvidenceSpec
+from relspec.normalize.rule_model import NormalizeRule
+from relspec.normalize.rule_registry_specs import rule_family_specs
 from relspec.rules.compiler import RuleCompiler, RuleHandler
 from relspec.rules.definitions import EvidenceSpec as CentralEvidenceSpec
 from relspec.rules.definitions import RuleDefinition

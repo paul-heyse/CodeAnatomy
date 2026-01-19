@@ -7,9 +7,9 @@ import pytest
 
 from arrowdsl.core.context import execution_context_factory
 from arrowdsl.plan.dataset_wrappers import is_one_shot_dataset
-from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.plan.scan_builder import ScanBuildSpec
 from arrowdsl.plan.source_normalize import normalize_dataset_source
+from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
 
 
 def test_scan_from_batches_enforces_one_shot_and_projection() -> None:
@@ -19,7 +19,7 @@ def test_scan_from_batches_enforces_one_shot_and_projection() -> None:
     dataset = normalize_dataset_source(reader)
     assert is_one_shot_dataset(dataset)
     ctx = execution_context_factory("default")
-    query = QuerySpec(projection=ProjectionSpec(base=("a",)))
+    query = IbisQuerySpec(projection=IbisProjectionSpec(base=("a",)))
     scan_spec = ScanBuildSpec(dataset=dataset, query=query, ctx=ctx)
     scanner = scan_spec.scanner()
     result = scanner.to_reader().read_all()

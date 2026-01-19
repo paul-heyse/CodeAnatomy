@@ -12,7 +12,8 @@ import pyarrow as pa
 from arrowdsl.core.interop import SchemaLike
 from cpg.edge_specs import edge_plan_specs_from_table
 from cpg.registry_builders import build_dataset_spec
-from cpg.registry_rows import DATASET_ROWS
+from cpg.registry_readers import dataset_rows_from_table
+from cpg.registry_tables import dataset_rows_table
 from cpg.spec_tables import (
     node_plan_spec_table,
     node_plan_specs_from_table,
@@ -164,7 +165,8 @@ def default_cpg_registry() -> CpgRegistry:
     CpgRegistry
         Default registry instance.
     """
-    dataset_specs = {row.name: build_dataset_spec(row) for row in DATASET_ROWS}
+    rows = dataset_rows_from_table(dataset_rows_table())
+    dataset_specs = {row.name: build_dataset_spec(row) for row in rows}
     return CpgRegistry(
         dataset_specs=dataset_specs,
         node_plan_spec_table=node_plan_spec_table(),

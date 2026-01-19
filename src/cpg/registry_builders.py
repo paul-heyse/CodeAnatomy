@@ -2,23 +2,51 @@
 
 from __future__ import annotations
 
+from functools import cache
 from typing import TYPE_CHECKING
 
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from arrowdsl.spec.infra import DatasetRegistration, register_dataset
-from cpg.registry_bundles import bundle
-from cpg.registry_fields import field
+from cpg.registry_readers import (
+    bundle_catalog_from_table,
+    field_catalog_from_table,
+    registry_templates_from_table,
+)
 from cpg.registry_rows import ContractRow, DatasetRow
-from cpg.registry_templates import template
+from cpg.registry_tables import (
+    bundle_catalog_table,
+    field_catalog_table,
+    registry_templates_table,
+)
 from registry_common.registry_builders import build_contract_spec as shared_build_contract_spec
 from schema_spec.system import make_table_spec
 
 if TYPE_CHECKING:
+    from cpg.registry_templates import RegistryTemplate
+    from schema_spec.specs import ArrowFieldSpec, FieldBundle
     from schema_spec.system import ContractSpec, DatasetSpec, TableSchemaSpec
 
 
+@cache
+def _field_catalog() -> dict[str, ArrowFieldSpec]:
+    return field_catalog_from_table(field_catalog_table())
+
+
+@cache
+def _bundle_catalog() -> dict[str, FieldBundle]:
+    return bundle_catalog_from_table(
+        bundle_catalog_table(),
+        field_catalog=_field_catalog(),
+    )
+
+
+@cache
+def _registry_templates() -> dict[str, RegistryTemplate]:
+    return registry_templates_from_table(registry_templates_table())
+
+
 def _metadata_spec(row: DatasetRow) -> SchemaMetadataSpec:
-    templ = template(row.template) if row.template is not None else None
+    templ = None if row.template is None else _registry_templates()[row.template]
     if templ is None:
         return SchemaMetadataSpec()
     contract_name = row.contract_name or row.name
@@ -40,11 +68,13 @@ def build_table_spec(row: DatasetRow) -> TableSchemaSpec:
     TableSchemaSpec
         Table schema specification for the dataset row.
     """
+    bundle_map = _bundle_catalog()
+    field_map = _field_catalog()
     return make_table_spec(
         name=row.name,
         version=row.version,
-        bundles=(bundle(name) for name in row.bundles),
-        fields=(field(name) for name in row.fields),
+        bundles=(bundle_map[name] for name in row.bundles),
+        fields=(field_map[name] for name in row.fields),
         constraints=row.constraints,
     )
 

@@ -26,6 +26,13 @@ if TYPE_CHECKING:
         register_param_tables_df,
     )
     from datafusion_engine.registry_bridge import register_dataset_df
+    from datafusion_engine.registry_loader import (
+        RegistryTarget,
+        register_registry_delta_tables,
+        register_registry_exports,
+        registry_delta_table_paths,
+        registry_output_dir,
+    )
     from datafusion_engine.runtime import (
         DEFAULT_DF_POLICY,
         AdapterExecutionPolicy,
@@ -48,6 +55,7 @@ __all__ = [
     "DataFusionSqlPolicy",
     "ExecutionLabel",
     "MemoryPool",
+    "RegistryTarget",
     "apply_execution_label",
     "apply_execution_policy",
     "datafusion_to_table",
@@ -60,6 +68,10 @@ __all__ = [
     "register_dataset_df",
     "register_param_arrow_table",
     "register_param_tables_df",
+    "register_registry_delta_tables",
+    "register_registry_exports",
+    "registry_delta_table_paths",
+    "registry_output_dir",
     "replay_substrait_bytes",
     "snapshot_plans",
     "sqlglot_to_datafusion",
@@ -88,6 +100,20 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "register_dataset_df": ("datafusion_engine.registry_bridge", "register_dataset_df"),
     "register_param_arrow_table": ("datafusion_engine.param_tables", "register_param_arrow_table"),
     "register_param_tables_df": ("datafusion_engine.param_tables", "register_param_tables_df"),
+    "register_registry_delta_tables": (
+        "datafusion_engine.registry_loader",
+        "register_registry_delta_tables",
+    ),
+    "register_registry_exports": (
+        "datafusion_engine.registry_loader",
+        "register_registry_exports",
+    ),
+    "registry_delta_table_paths": (
+        "datafusion_engine.registry_loader",
+        "registry_delta_table_paths",
+    ),
+    "registry_output_dir": ("datafusion_engine.registry_loader", "registry_output_dir"),
+    "RegistryTarget": ("datafusion_engine.registry_loader", "RegistryTarget"),
     "snapshot_plans": ("datafusion_engine.runtime", "snapshot_plans"),
     "sqlglot_to_datafusion": ("datafusion_engine.bridge", "sqlglot_to_datafusion"),
 }

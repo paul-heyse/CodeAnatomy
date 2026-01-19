@@ -456,6 +456,17 @@ _SCALAR_UDF_SPECS: tuple[tuple[DataFusionUdfSpec, ScalarUDF], ...] = (
 DATAFUSION_UDF_SPECS: tuple[DataFusionUdfSpec, ...] = tuple(spec for spec, _ in _SCALAR_UDF_SPECS)
 
 
+def datafusion_scalar_udf_map() -> dict[str, ScalarUDF]:
+    """Return a mapping of scalar UDF names to implementations.
+
+    Returns
+    -------
+    dict[str, datafusion.user_defined.ScalarUDF]
+        Mapping of engine UDF names to ScalarUDF instances.
+    """
+    return {spec.engine_name: udf_impl for spec, udf_impl in _SCALAR_UDF_SPECS}
+
+
 def datafusion_udf_specs() -> tuple[DataFusionUdfSpec, ...]:
     """Return the canonical DataFusion UDF specs.
 
@@ -563,6 +574,7 @@ __all__ = [
     "DataFusionUdfSpec",
     "UdfTier",
     "_register_kernel_udfs",
+    "datafusion_scalar_udf_map",
     "datafusion_udf_specs",
     "load_udf_from_capsule",
     "register_datafusion_udfs",

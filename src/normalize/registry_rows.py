@@ -3,18 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from arrowdsl.compute.expr_core import (
-    CoalesceStringExprSpec,
-    DefUseKindExprSpec,
-    HashExprSpec,
-    HashFromExprsSpec,
-    MaskedHashExprSpec,
-    TrimExprSpec,
-)
-from arrowdsl.schema.build import FieldExpr
+from arrowdsl.compute.expr_core import ScalarValue
 from arrowdsl.schema.validation import ArrowValidationOptions
+from arrowdsl.spec.expr_ir import ExprIR
+from ibis_engine.hashing import hash_expr_ir, hash_expr_ir_from_parts, masked_hash_expr_ir
 from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
 from normalize.registry_ids import (
     DEF_USE_EVENT_ID_SPEC,
@@ -34,6 +29,47 @@ _DEF_USE_OPS = ("IMPORT_NAME", "IMPORT_FROM")
 
 def _json_bytes(payload: object) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _field_expr(name: str) -> ExprIR:
+    return ExprIR(op="field", name=name)
+
+
+def _literal_expr(value: ScalarValue) -> ExprIR:
+    return ExprIR(op="literal", value=value)
+
+
+def _call_expr(name: str, *args: ExprIR) -> ExprIR:
+    return ExprIR(op="call", name=name, args=tuple(args))
+
+
+def _stringify_expr(expr: ExprIR) -> ExprIR:
+    return _call_expr("stringify", expr)
+
+
+def _trim_expr(column: str) -> ExprIR:
+    return _call_expr("utf8_trim_whitespace", _field_expr(column))
+
+
+def _coalesce_expr(exprs: Sequence[ExprIR]) -> ExprIR:
+    if not exprs:
+        return _literal_expr(None)
+    if len(exprs) == 1:
+        return exprs[0]
+    return _call_expr("coalesce", *exprs)
+
+
+def _coalesce_string_expr(columns: Sequence[str]) -> ExprIR:
+    return _coalesce_expr([_field_expr(name) for name in columns])
+
+
+def _or_exprs(exprs: Sequence[ExprIR]) -> ExprIR:
+    if not exprs:
+        return _literal_expr(value=False)
+    out = exprs[0]
+    for expr in exprs[1:]:
+        out = _call_expr("bit_wise_or", out, expr)
+    return out
 
 
 @dataclass(frozen=True)
@@ -64,12 +100,19 @@ class DatasetRow:
     metadata_extra: dict[bytes, bytes] = field(default_factory=dict)
 
 
-def _def_use_kind_expr() -> DefUseKindExprSpec:
-    return DefUseKindExprSpec(
-        column="opname",
-        def_ops=_DEF_USE_OPS,
-        def_prefixes=_DEF_USE_PREFIXES,
-        use_prefixes=_USE_PREFIXES,
+def _def_use_kind_expr() -> ExprIR:
+    opname = _stringify_expr(_field_expr("opname"))
+    def_ops = tuple(_call_expr("equal", opname, _literal_expr(value)) for value in _DEF_USE_OPS)
+    def_prefixes = tuple(
+        _call_expr("starts_with", opname, _literal_expr(prefix)) for prefix in _DEF_USE_PREFIXES
+    )
+    is_def = _or_exprs((*def_ops, *def_prefixes))
+    is_use = _call_expr("starts_with", opname, _literal_expr(_USE_PREFIXES[0]))
+    return _call_expr(
+        "if_else",
+        is_def,
+        _literal_expr("def"),
+        _call_expr("if_else", is_use, _literal_expr("use"), _literal_expr(None)),
     )
 
 
@@ -114,21 +157,21 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             "end_exclusive",
         ),
         derived=(
-            DerivedFieldSpec(name="type_repr", expr=TrimExprSpec("expr_text")),
+            DerivedFieldSpec(name="type_repr", expr=_trim_expr("expr_text")),
             DerivedFieldSpec(
                 name="type_expr_id",
-                expr=MaskedHashExprSpec(
+                expr=masked_hash_expr_ir(
                     spec=TYPE_EXPR_ID_SPEC,
                     required=("path", "bstart", "bend"),
                 ),
             ),
             DerivedFieldSpec(
                 name="type_id",
-                expr=HashFromExprsSpec(
+                expr=hash_expr_ir_from_parts(
                     prefix=TYPE_ID_SPEC.prefix,
                     as_string=TYPE_ID_SPEC.as_string,
                     null_sentinel=TYPE_ID_SPEC.null_sentinel,
-                    parts=(TrimExprSpec("expr_text"),),
+                    parts=(_trim_expr("expr_text"),),
                 ),
             ),
         ),
@@ -212,20 +255,20 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         derived=(
             DerivedFieldSpec(
                 name="symbol",
-                expr=CoalesceStringExprSpec(columns=("argval_str", "argrepr")),
+                expr=_coalesce_string_expr(("argval_str", "argrepr")),
             ),
             DerivedFieldSpec(name="kind", expr=_def_use_kind_expr()),
             DerivedFieldSpec(
                 name="event_id",
-                expr=HashFromExprsSpec(
+                expr=hash_expr_ir_from_parts(
                     prefix=DEF_USE_EVENT_ID_SPEC.prefix,
                     as_string=DEF_USE_EVENT_ID_SPEC.as_string,
                     null_sentinel=DEF_USE_EVENT_ID_SPEC.null_sentinel,
                     parts=(
-                        FieldExpr("code_unit_id"),
-                        FieldExpr("instr_id"),
+                        _field_expr("code_unit_id"),
+                        _field_expr("instr_id"),
                         _def_use_kind_expr(),
-                        CoalesceStringExprSpec(columns=("argval_str", "argrepr")),
+                        _coalesce_string_expr(("argval_str", "argrepr")),
                     ),
                 ),
             ),
@@ -251,7 +294,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         version=SCHEMA_VERSION,
         bundles=("file_identity",),
         fields=("edge_id", "code_unit_id", "def_event_id", "use_event_id", "symbol"),
-        derived=(DerivedFieldSpec(name="edge_id", expr=HashExprSpec(spec=REACH_EDGE_ID_SPEC)),),
+        derived=(DerivedFieldSpec(name="edge_id", expr=hash_expr_ir(spec=REACH_EDGE_ID_SPEC)),),
         join_keys=("code_unit_id", "symbol", "def_event_id", "use_event_id"),
         contract=ContractRow(
             canonical_sort=(
@@ -288,7 +331,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
             "col_unit",
             "end_exclusive",
         ),
-        derived=(DerivedFieldSpec(name="diag_id", expr=HashExprSpec(spec=DIAG_ID_SPEC)),),
+        derived=(DerivedFieldSpec(name="diag_id", expr=hash_expr_ir(spec=DIAG_ID_SPEC)),),
         join_keys=("diag_id",),
         contract=ContractRow(
             canonical_sort=(SortKeySpec(column="diag_id", order="ascending"),),

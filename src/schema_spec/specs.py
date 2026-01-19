@@ -6,13 +6,12 @@ import hashlib
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import ibis
 import pyarrow as pa
 from sqlglot import exp
 
-from arrowdsl.compute.expr_core import ExprSpec
 from arrowdsl.core import interop
 from arrowdsl.core.interop import DataTypeLike, FieldLike, SchemaLike
 from arrowdsl.core.schema_constants import (
@@ -28,6 +27,9 @@ from arrowdsl.schema.metadata import ENCODING_DICTIONARY, ENCODING_META, dict_fi
 from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTransform
 
 DICT_STRING = interop.dictionary(interop.int32(), interop.string())
+
+if TYPE_CHECKING:
+    from arrowdsl.spec.expr_ir import ExprIR
 
 
 def schema_metadata(name: str, version: int | None) -> dict[bytes, bytes]:
@@ -219,7 +221,7 @@ class DerivedFieldSpec:
     """Specification for a derived column."""
 
     name: str
-    expr: ExprSpec
+    expr: ExprIR
 
 
 @dataclass(frozen=True)

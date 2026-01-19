@@ -6,13 +6,13 @@ from functools import cache
 
 from arrowdsl.spec.expr_ir import ExprIR
 from cpg.kinds_ultimate import EdgeKind
-from cpg.relation_template_specs import (
+from relspec.model import HashJoinConfig, ProjectConfig, RuleKind
+from relspec.rules.cpg_relationship_templates import (
     EdgeDefinitionSpec,
     RuleDefinitionSpec,
     RuleTemplateSpec,
     expand_rule_templates,
 )
-from relspec.model import HashJoinConfig, ProjectConfig, RuleKind
 
 RULE_TEMPLATE_SPECS: tuple[RuleTemplateSpec, ...] = (
     RuleTemplateSpec(

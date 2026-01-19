@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
-from normalize.rule_specs import NormalizeRuleFamilySpec
+from relspec.normalize.rule_specs import NormalizeRuleFamilySpec
 
 
 @dataclass(frozen=True)

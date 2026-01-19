@@ -312,9 +312,8 @@ def _append_normalize_demands(
 
 def _append_relationship_skips(rule: RuleDefinition, skipped: list[str]) -> None:
     payload = rule.payload
-    if (
-        isinstance(payload, RelationshipPayload)
-        and (payload.predicate is not None or payload.project is not None)
+    if isinstance(payload, RelationshipPayload) and (
+        payload.predicate is not None or payload.project is not None
     ):
         skipped.append(f"relationship_expr:{rule.name}:not_query_spec")
 
@@ -451,15 +450,15 @@ def _datafusion_sql_layer(
                 options=options,
             )
         except (RuntimeError, TypeError, ValueError, OSError) as exc:
-                failures.append(
-                    DynamicFailure(
-                        layer="datafusion_sql_fallback",
-                        rule_name=demand.rule_name,
-                        dataset_name=dataset_name,
-                        source=demand.source,
-                        detail=str(exc),
-                    )
+            failures.append(
+                DynamicFailure(
+                    layer="datafusion_sql_fallback",
+                    rule_name=demand.rule_name,
+                    dataset_name=dataset_name,
+                    source=demand.source,
+                    detail=str(exc),
                 )
+            )
     static = {"demand_count": len(demands)}
     return LayerReport(static=static, failures=tuple(failures), skipped=tuple(skipped))
 
@@ -876,9 +875,7 @@ def render_fallback_coverage_markdown(report: FallbackCoverageReport) -> str:
                 rule = failure.rule_name or "unknown_rule"
                 dataset = failure.dataset_name or "unknown_dataset"
                 source = failure.source or "unknown_source"
-                lines.append(
-                    f"  - {rule} | {dataset} | {source} | {failure.detail}"
-                )
+                lines.append(f"  - {rule} | {dataset} | {source} | {failure.detail}")
         lines.append("")
     return "\n".join(lines)
 

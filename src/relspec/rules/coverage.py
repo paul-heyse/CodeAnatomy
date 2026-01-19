@@ -10,8 +10,6 @@ import ibis
 
 from arrowdsl.compute.registry import pyarrow_compute_functions
 from arrowdsl.kernel.registry import KERNEL_REGISTRY, KernelDef
-from cpg.relation_registry_specs import rule_definition_specs
-from cpg.relation_template_specs import EdgeDefinitionSpec, RuleDefinitionSpec
 from engine.function_registry import FunctionRegistry, FunctionSpec, default_function_registry
 from extract.registry_builders import QueryContext, build_query_spec
 from extract.registry_definitions import extract_rule_definitions
@@ -20,7 +18,9 @@ from extract.registry_rows import DATASET_ROWS
 from ibis_engine.expr_compiler import IbisExprRegistry, default_expr_registry
 from ibis_engine.query_compiler import IbisQuerySpec
 from normalize.rule_factories import build_rule_definitions_from_specs
-from normalize.rule_registry_specs import rule_family_specs
+from relspec.normalize.rule_registry_specs import rule_family_specs
+from relspec.rules.cpg_relationship_specs import rule_definition_specs
+from relspec.rules.cpg_relationship_templates import EdgeDefinitionSpec, RuleDefinitionSpec
 from relspec.rules.definitions import (
     EdgeEmitPayload,
     EvidenceSpec,
@@ -52,6 +52,7 @@ class ExprIRLike(Protocol):
     def args(self) -> Sequence[ExprIRLike]:
         """Return child expression nodes."""
         ...
+
 
 _POST_KERNEL_KINDS: tuple[str, ...] = (
     "add_literal",
@@ -136,6 +137,7 @@ class KernelCoverage:
 
     registered: bool
     lane: str | None = None
+
     def payload(self) -> dict[str, object]:
         """Return a JSON-ready payload for kernel coverage.
 

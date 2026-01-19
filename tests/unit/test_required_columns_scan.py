@@ -7,10 +7,10 @@ import pyarrow.dataset as ds
 import pytest
 
 from arrowdsl.core.context import execution_context_factory
-from arrowdsl.plan.query import ProjectionSpec, QuerySpec
 from arrowdsl.plan.scan_builder import ScanBuildSpec
 from arrowdsl.plan.scan_telemetry import ScanTelemetryOptions, fragment_telemetry
 from ibis_engine.lineage import required_columns_by_table
+from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
 
 ibis = pytest.importorskip("ibis")
 
@@ -29,7 +29,7 @@ def test_scan_telemetry_records_required_vs_scanned() -> None:
     ctx = execution_context_factory("default")
     table = pa.table({"a": [1, 2], "b": [3, 4], "c": [5, 6]})
     dataset = ds.dataset(table)
-    query = QuerySpec(projection=ProjectionSpec(base=("a", "b", "c")))
+    query = IbisQuerySpec(projection=IbisProjectionSpec(base=("a", "b", "c")))
     scan_spec = ScanBuildSpec(
         dataset=dataset,
         query=query,

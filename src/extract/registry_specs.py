@@ -24,7 +24,7 @@ from extract.registry_builders import (
     build_row_schema,
 )
 from extract.registry_pipelines import pipeline_spec
-from extract.registry_policies import policy_row, template_policy_row
+from relspec.extract.registry_policies import policy_row, template_policy_row
 from extract.registry_rows import DATASET_ROWS, DatasetRow
 from extract.registry_templates import config as extractor_config
 from extract.registry_validation import validate_dataset_rows

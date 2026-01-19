@@ -8,9 +8,9 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.dataset as ds
 
+from arrowdsl.compute.expr_core import ScalarValue
 from arrowdsl.compute.ids import HashSpec, hash_projection
 from arrowdsl.compute.macros import CoalesceExpr, ColumnOrNullExpr
-from arrowdsl.compute.predicates import InSet
 from arrowdsl.core.context import ExecutionContext, OrderingLevel
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.interop import (
@@ -25,7 +25,6 @@ from arrowdsl.core.interop import (
 from arrowdsl.finalize.finalize import Contract
 from arrowdsl.plan.joins import code_unit_meta_config, left_join, path_meta_config
 from arrowdsl.plan.plan import Plan, PlanRunResult
-from arrowdsl.plan.query import QuerySpec
 from arrowdsl.plan.scan_io import DatasetSource, PlanSource, plan_from_source
 from arrowdsl.plan.schema_utils import plan_output_columns
 from arrowdsl.schema.dictionary import normalize_dictionaries
@@ -38,6 +37,8 @@ from arrowdsl.schema.schema import (
     projection_for_schema,
 )
 from arrowdsl.schema.structs import flatten_struct_field
+from arrowdsl.spec.expr_ir import ExprIR
+from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
 
 
 def _plan_columns(plan: Plan, *, ctx: ExecutionContext | None = None) -> Sequence[str]:
@@ -50,15 +51,41 @@ def _plan_columns(plan: Plan, *, ctx: ExecutionContext | None = None) -> Sequenc
     return list(plan.schema(ctx=ctx).names)
 
 
-def query_for_schema(schema: SchemaLike) -> QuerySpec:
-    """Return a QuerySpec projecting the schema columns.
+def _field_expr(name: str) -> ExprIR:
+    return ExprIR(op="field", name=name)
+
+
+def _literal_expr(value: ScalarValue) -> ExprIR:
+    return ExprIR(op="literal", value=value)
+
+
+def _call_expr(name: str, *args: ExprIR) -> ExprIR:
+    return ExprIR(op="call", name=name, args=tuple(args))
+
+
+def _or_exprs(exprs: Sequence[ExprIR]) -> ExprIR:
+    if not exprs:
+        return _literal_expr(value=False)
+    out = exprs[0]
+    for expr in exprs[1:]:
+        out = _call_expr("bit_wise_or", out, expr)
+    return out
+
+
+def _in_set_expr(name: str, values: Sequence[str]) -> ExprIR:
+    exprs = [_call_expr("equal", _field_expr(name), _literal_expr(value)) for value in values]
+    return _or_exprs(exprs)
+
+
+def query_for_schema(schema: SchemaLike) -> IbisQuerySpec:
+    """Return an IbisQuerySpec projecting the schema columns.
 
     Returns
     -------
-    QuerySpec
-        QuerySpec with base columns set to the schema names.
+    IbisQuerySpec
+        Query spec with base columns set to the schema names.
     """
-    return QuerySpec.simple(*schema.names)
+    return IbisQuerySpec(projection=IbisProjectionSpec(base=tuple(schema.names)))
 
 
 def dataset_query_for_file_ids(
@@ -66,8 +93,8 @@ def dataset_query_for_file_ids(
     *,
     schema: SchemaLike | None = None,
     columns: Sequence[str] | None = None,
-) -> QuerySpec:
-    """Return a QuerySpec filtering to the provided file ids.
+) -> IbisQuerySpec:
+    """Return an IbisQuerySpec filtering to the provided file ids.
 
     Parameters
     ----------
@@ -80,8 +107,8 @@ def dataset_query_for_file_ids(
 
     Returns
     -------
-    QuerySpec
-        QuerySpec with file_id predicates for plan and pushdown lanes.
+    IbisQuerySpec
+        Query spec with file_id predicates for plan and pushdown lanes.
 
     Raises
     ------
@@ -93,9 +120,9 @@ def dataset_query_for_file_ids(
             msg = "dataset_query_for_file_ids requires columns or schema."
             raise ValueError(msg)
         columns = list(schema.names)
-    predicate = InSet("file_id", tuple(file_ids))
-    return QuerySpec.simple(
-        *columns,
+    predicate = _in_set_expr("file_id", tuple(file_ids))
+    return IbisQuerySpec(
+        projection=IbisProjectionSpec(base=tuple(columns)),
         predicate=predicate,
         pushdown_predicate=predicate,
     )

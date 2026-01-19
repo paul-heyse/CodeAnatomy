@@ -43,7 +43,7 @@ _FIELD_CATALOG.register_many(
     {
         "node_id": _spec("node_id", pa.string(), nullable=False),
         "node_kind": _dict_spec("node_kind", nullable=False),
-        "file_id": _spec("file_id", pa.string(), nullable=False),
+        "file_id": _spec("file_id", pa.string()),
         "edge_id": _spec("edge_id", pa.string(), nullable=False),
         "edge_kind": _dict_spec("edge_kind", nullable=False),
         "src_node_id": _spec("src_node_id", pa.string(), nullable=False),
@@ -54,6 +54,8 @@ _FIELD_CATALOG.register_many(
         "resolution_method": _dict_spec("resolution_method"),
         "confidence": _spec("confidence", pa.float32()),
         "score": _spec("score", pa.float32()),
+        "bstart": _spec("bstart", pa.int64()),
+        "bend": _spec("bend", pa.int64()),
         "symbol_roles": _spec("symbol_roles", pa.int32()),
         "qname_source": _dict_spec("qname_source"),
         "ambiguity_group_id": _spec("ambiguity_group_id", pa.string()),
@@ -82,4 +84,15 @@ def field(name: str) -> ArrowFieldSpec:
     return _FIELD_CATALOG.field(name)
 
 
-__all__ = ["field"]
+def field_catalog() -> Mapping[str, ArrowFieldSpec]:
+    """Return the full field catalog mapping.
+
+    Returns
+    -------
+    Mapping[str, ArrowFieldSpec]
+        Mapping of field name to spec.
+    """
+    return dict(_FIELD_CATALOG.fields)
+
+
+__all__ = ["field", "field_catalog"]

@@ -13,8 +13,8 @@ from relspec.model import WinnerSelectConfig
 from relspec.rules.definitions import RuleDomain
 
 if TYPE_CHECKING:
-    from normalize.rule_model import AmbiguityPolicy as NormalizeAmbiguityPolicy
-    from normalize.rule_model import ConfidencePolicy as NormalizeConfidencePolicy
+    from relspec.normalize.rule_model import AmbiguityPolicy as NormalizeAmbiguityPolicy
+    from relspec.normalize.rule_model import ConfidencePolicy as NormalizeConfidencePolicy
 
 RELSPEC_CONFIDENCE_POLICIES: Mapping[str, RelationshipConfidencePolicy] = {
     "scip": RelationshipConfidencePolicy(base=1.0),
@@ -33,7 +33,7 @@ RELSPEC_AMBIGUITY_POLICIES: Mapping[str, RelationshipAmbiguityPolicy] = {
 
 
 def _normalize_confidence_policies() -> Mapping[str, object]:
-    module = importlib.import_module("normalize.rule_model")
+    module = importlib.import_module("relspec.normalize.rule_model")
     policy_cls = module.ConfidencePolicy
     return {
         "bytecode": policy_cls(base=1.0),
@@ -47,7 +47,7 @@ def _normalize_confidence_policies() -> Mapping[str, object]:
 
 
 def _normalize_ambiguity_policies() -> Mapping[str, object]:
-    module = importlib.import_module("normalize.rule_model")
+    module = importlib.import_module("relspec.normalize.rule_model")
     policy_cls = module.AmbiguityPolicy
     return {"preserve": policy_cls()}
 

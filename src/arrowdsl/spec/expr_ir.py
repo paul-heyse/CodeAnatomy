@@ -209,6 +209,9 @@ class ExprIR:
             opts = _deserialize_options(options)
             if name == "fill_null":
                 return _fill_null_expression(args)
+            if name == "stringify":
+                _ensure_arg_count("stringify", args, expected=1)
+                return ensure_expression(pc.cast(args[0], pa.string()))
             return call_expression_function(name, args, options=opts)
         msg = f"Unsupported ExprIR op: {self.op}"
         raise ValueError(msg)
@@ -248,25 +251,46 @@ class ExprIR:
         resolved_name = registry.ensure(name) if registry is not None else name
         options = _options_bytes(self.options)
         opts = _deserialize_options(options)
+        if resolved_name == "stringify":
+            return self._expr_spec_stringify(args, registry=registry)
+        return self._expr_spec_generic_call(args, resolved_name, opts, registry=registry)
+
+    @staticmethod
+    def _expr_spec_stringify(
+        args: tuple[ExprSpec, ...],
+        *,
+        registry: ExprRegistry | None,
+    ) -> ExprSpec:
+        if not args:
+            msg = "ExprIR call op stringify expects at least one argument."
+            raise ValueError(msg)
+
+        def _materialize(table: TableLike) -> ArrayLike:
+            values = args[0].materialize(table)
+            result = pc.cast(values, pa.string())
+            return _coerce_materialized(result, table_rows=table.num_rows, op="stringify")
+
+        expr = ensure_expression(pc.cast(args[0].to_expression(), pa.string()))
+        return ComputeExprSpec(expr=expr, materialize_fn=_materialize, registry=registry)
+
+    def _expr_spec_generic_call(
+        self,
+        args: tuple[ExprSpec, ...],
+        resolved_name: str,
+        opts: FunctionOptionsProto | None,
+        *,
+        registry: ExprRegistry | None,
+    ) -> ExprSpec:
         node = expr_from_expr_ir(self)
 
         def _materialize(table: TableLike) -> ArrayLike:
             values = [arg.materialize(table) for arg in args]
-            if resolved_name == "fill_null":
-                result = _fill_null_array(values)
-            else:
-                result = pc.call_function(resolved_name, values, options=opts)
-            if isinstance(result, pa.ChunkedArray):
-                return cast("pa.ChunkedArray", result).combine_chunks()
-            if isinstance(result, pa.Array):
-                return cast("ArrayLike", result)
-            if isinstance(result, pa.Scalar):
-                return _scalar_to_array(cast("ScalarLike", result), size=table.num_rows)
-            msg = (
-                f"ExprIR call op {resolved_name!r} materialization returned "
-                f"{type(result).__name__}."
+            result = (
+                _fill_null_array(values)
+                if resolved_name == "fill_null"
+                else pc.call_function(resolved_name, values, options=opts)
             )
-            raise TypeError(msg)
+            return _coerce_materialized(result, table_rows=table.num_rows, op=resolved_name)
 
         return ComputeExprSpec(expr=node, materialize_fn=_materialize, registry=registry)
 
@@ -368,6 +392,22 @@ class ExprIR:
             msg = "ExprIR JSON must decode to a dict."
             raise TypeError(msg)
         return ExprIR.from_dict(payload)
+
+
+def _coerce_materialized(
+    result: ArrayLike | pa.Scalar,
+    *,
+    table_rows: int,
+    op: str,
+) -> ArrayLike:
+    if isinstance(result, pa.ChunkedArray):
+        return cast("pa.ChunkedArray", result).combine_chunks()
+    if isinstance(result, pa.Array):
+        return cast("ArrayLike", result)
+    if isinstance(result, pa.Scalar):
+        return _scalar_to_array(cast("ScalarLike", result), size=table_rows)
+    msg = f"ExprIR call op {op!r} materialization returned {type(result).__name__}."
+    raise TypeError(msg)
 
 
 @dataclass(frozen=True)

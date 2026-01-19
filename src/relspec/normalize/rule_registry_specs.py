@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from functools import cache
 
-from normalize.rule_specs import NormalizeRuleFamilySpec
-from normalize.rule_template_specs import expand_rule_templates, rule_template_specs
+from relspec.normalize.rule_specs import NormalizeRuleFamilySpec
+from relspec.normalize.rule_template_specs import expand_rule_templates, rule_template_specs
 
 RULE_FAMILY_SPECS: tuple[NormalizeRuleFamilySpec, ...] = expand_rule_templates(
     rule_template_specs()

@@ -108,7 +108,10 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "rel_ops_from_rows": ("relspec.rules.rel_ops", "rel_ops_from_rows"),
     "rel_ops_signature": ("relspec.rules.rel_ops", "rel_ops_signature"),
     "rel_ops_to_rows": ("relspec.rules.rel_ops", "rel_ops_to_rows"),
-    "relationship_rule_definitions": ("relspec.rules.relationship_specs", "relationship_rule_definitions"),
+    "relationship_rule_definitions": (
+        "relspec.rules.relationship_specs",
+        "relationship_rule_definitions",
+    ),
     "rule_definition_table": ("relspec.rules.spec_tables", "rule_definition_table"),
     "rule_definitions_from_table": ("relspec.rules.spec_tables", "rule_definitions_from_table"),
     "rule_diagnostic_table": ("relspec.rules.diagnostics", "rule_diagnostic_table"),

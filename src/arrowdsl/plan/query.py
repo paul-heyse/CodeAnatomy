@@ -39,7 +39,7 @@ class ProjectionSpec:
 
 @dataclass(frozen=True)
 class QuerySpec:
-    """Declarative scan spec for a dataset."""
+    """Plan-lane scan spec for a dataset (prefer IbisQuerySpec elsewhere)."""
 
     projection: ProjectionSpec
     predicate: ExprSpec | None = None

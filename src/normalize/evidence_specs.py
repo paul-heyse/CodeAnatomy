@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.spec.codec import parse_scalar_value
-from normalize.rule_model import EvidenceOutput, EvidenceSpec
+from relspec.normalize.rule_model import EvidenceOutput, EvidenceSpec
 
 if TYPE_CHECKING:
     from arrowdsl.compute.expr_core import ScalarValue

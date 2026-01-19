@@ -27,6 +27,7 @@ from arrowdsl.plan.metrics import (
 )
 from arrowdsl.plan.ordering_policy import require_explicit_ordering
 from arrowdsl.plan.query import DatasetDiscoveryOptions, DatasetSourceOptions, open_dataset
+from arrowdsl.plan.query_adapter import ibis_query_to_plan_query
 from arrowdsl.plan.scan_builder import ScanBuildSpec
 from arrowdsl.plan.scan_telemetry import ScanTelemetry, ScanTelemetryOptions, fragment_telemetry
 from arrowdsl.plan.schema_utils import plan_schema
@@ -2160,6 +2161,7 @@ def relspec_scan_telemetry(
         else:
             dataset_spec = dataset_spec_from_schema(name=name, schema=dataset.schema)
         query = dataset_spec.query()
+        plan_query = ibis_query_to_plan_query(query)
         scan_provenance = tuple(ctx.runtime.scan.scan_provenance_columns)
         scan_spec = ScanBuildSpec(
             dataset=dataset,
@@ -2179,7 +2181,7 @@ def relspec_scan_telemetry(
         )
         telemetry = fragment_telemetry(
             dataset,
-            predicate=query.pushdown_expression(),
+            predicate=plan_query.pushdown_expression(),
             scanner=scanner,
             options=ScanTelemetryOptions(
                 discovery_policy=dataset_options.discovery_payload(),

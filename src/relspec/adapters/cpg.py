@@ -6,13 +6,13 @@ from collections.abc import Mapping, Sequence
 from functools import cache
 from typing import TYPE_CHECKING
 
-from cpg.relation_registry_specs import RULE_TEMPLATE_SPECS, rule_definition_specs
-from cpg.relation_template_specs import (
+from relspec.rules.cpg_relationship_specs import RULE_TEMPLATE_SPECS, rule_definition_specs
+from relspec.rules.cpg_relationship_templates import (
     EdgeDefinitionSpec,
     RuleDefinitionSpec,
     expand_rule_templates,
 )
-from cpg.relation_template_specs import (
+from relspec.rules.cpg_relationship_templates import (
     RuleTemplateSpec as CpgRuleTemplateSpec,
 )
 from relspec.rules.definitions import (

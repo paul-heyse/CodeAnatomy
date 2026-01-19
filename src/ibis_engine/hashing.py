@@ -50,9 +50,41 @@ def masked_hash_expr_ir(
     )
 
 
+def hash_expr_ir_from_parts(
+    *,
+    prefix: str,
+    parts: Sequence[ExprIR],
+    null_sentinel: str,
+    as_string: bool,
+    use_128: bool | None = None,
+) -> ExprIR:
+    """Return an ExprIR hash expression for expression parts.
+
+    Returns
+    -------
+    ExprIR
+        ExprIR call tree that hashes expression parts with a prefix.
+    """
+    prepared: list[ExprIR] = [_coalesced_expr(part, null_sentinel) for part in parts]
+    if prefix:
+        prepared.insert(0, ExprIR(op="literal", value=prefix))
+    joined = _join_parts(prepared)
+    hash_name = _hash_name_from_flags(as_string=as_string, use_128=use_128)
+    hashed = ExprIR(op="call", name=hash_name, args=(joined,))
+    if not as_string:
+        return hashed
+    return _prefixed_hash(hashed, prefix=prefix)
+
+
 def _hash_name(spec: HashSpec, *, use_128: bool | None) -> str:
     if use_128 is None:
         use_128 = spec.as_string
+    return "stable_hash128" if use_128 else "stable_hash64"
+
+
+def _hash_name_from_flags(*, as_string: bool, use_128: bool | None) -> str:
+    if use_128 is None:
+        use_128 = as_string
     return "stable_hash128" if use_128 else "stable_hash64"
 
 
@@ -67,7 +99,11 @@ def _hash_parts(spec: HashSpec) -> list[ExprIR]:
 
 def _coalesced_field_expr(name: str, null_sentinel: str) -> ExprIR:
     field = ExprIR(op="field", name=name)
-    stringified = ExprIR(op="call", name="stringify", args=(field,))
+    return _coalesced_expr(field, null_sentinel)
+
+
+def _coalesced_expr(expr: ExprIR, null_sentinel: str) -> ExprIR:
+    stringified = ExprIR(op="call", name="stringify", args=(expr,))
     return ExprIR(
         op="call",
         name="coalesce",
@@ -80,12 +116,8 @@ def _join_parts(parts: Sequence[ExprIR]) -> ExprIR:
         return ExprIR(op="literal", value="")
     if len(parts) == 1:
         return parts[0]
-    args: list[ExprIR] = []
-    for idx, part in enumerate(parts):
-        if idx:
-            args.append(ExprIR(op="literal", value=_NULL_SEPARATOR))
-        args.append(part)
-    return ExprIR(op="call", name="concat", args=tuple(args))
+    args = (*parts, ExprIR(op="literal", value=_NULL_SEPARATOR))
+    return ExprIR(op="call", name="binary_join_element_wise", args=args)
 
 
 def _prefixed_hash(hashed: ExprIR, *, prefix: str) -> ExprIR:
@@ -94,11 +126,11 @@ def _prefixed_hash(hashed: ExprIR, *, prefix: str) -> ExprIR:
     hashed_str = ExprIR(op="call", name="stringify", args=(hashed,))
     return ExprIR(
         op="call",
-        name="concat",
+        name="binary_join_element_wise",
         args=(
             ExprIR(op="literal", value=prefix),
-            ExprIR(op="literal", value=":"),
             hashed_str,
+            ExprIR(op="literal", value=":"),
         ),
     )
 
@@ -117,4 +149,4 @@ def _required_mask(required: Sequence[str]) -> ExprIR:
     return mask
 
 
-__all__ = ["hash_expr_ir", "masked_hash_expr_ir"]
+__all__ = ["hash_expr_ir", "hash_expr_ir_from_parts", "masked_hash_expr_ir"]

@@ -21,7 +21,7 @@ from hamilton_pipeline import PipelineExecutionOptions, execute_pipeline
 from hamilton_pipeline.execution import ImpactStrategy
 from hamilton_pipeline.pipeline_types import ScipIdentityOverrides, ScipIndexConfig
 from incremental.types import IncrementalConfig
-from storage.deltalake import write_registry_delta
+from storage.deltalake.registry_runner import run_registry_exports
 
 GraphProduct = Literal["cpg"]
 
@@ -118,8 +118,8 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
         Typed outputs for the requested graph product.
     """
     repo_root_path = ensure_path(request.repo_root).resolve()
-    registry_dir = _registry_output_dir(repo_root_path, request.output_dir)
-    write_registry_delta(str(registry_dir))
+    registry_output_dir = _resolve_output_dir(repo_root_path, request.output_dir)
+    run_registry_exports(registry_output_dir)
 
     overrides: dict[str, object] = dict(request.overrides or {})
     if request.runtime_profile_name is not None:
@@ -187,17 +187,6 @@ def _resolve_output_dir(repo_root: Path, output_dir: PathLike | None) -> Path:
         return repo_root / "build"
     resolved = ensure_path(output_dir)
     return resolved if resolved.is_absolute() else repo_root / resolved
-
-
-def _registry_output_dir(repo_root: Path, output_dir: PathLike | None) -> Path:
-    """Return the registry export directory path.
-
-    Returns
-    -------
-    Path
-        Registry output directory path.
-    """
-    return _resolve_output_dir(repo_root, output_dir) / "registry"
 
 
 def _require(outputs: Mapping[str, JsonDict | None], key: str) -> JsonDict:

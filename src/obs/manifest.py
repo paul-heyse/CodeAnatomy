@@ -34,7 +34,7 @@ from storage.io import (
 if TYPE_CHECKING:
     from arrowdsl.plan.query import ScanTelemetry
     from extract.evidence_plan import EvidencePlan
-    from normalize.rule_model import NormalizeRule
+    from relspec.normalize.rule_model import NormalizeRule
     from relspec.compiler import CompiledOutput
     from relspec.model import RelationshipRule
     from relspec.registry import DatasetLocation

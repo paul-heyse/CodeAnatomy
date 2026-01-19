@@ -9,7 +9,15 @@ from typing import Protocol, cast
 import ibis
 import ibis.expr.datatypes as dt
 import ibis.expr.operations as ops
-from ibis.expr.types import ArrayValue, BooleanValue, Scalar, StringValue, Table, Value
+from ibis.expr.types import (
+    ArrayValue,
+    BooleanValue,
+    NumericValue,
+    Scalar,
+    StringValue,
+    Table,
+    Value,
+)
 
 from ibis_engine.builtin_udfs import (
     col_to_byte,
@@ -51,6 +59,18 @@ def _bitwise_and_expr(left: BooleanValue, right: BooleanValue) -> BooleanValue:
     return left & right
 
 
+def _bitwise_or_expr(left: BooleanValue, right: BooleanValue) -> BooleanValue:
+    return left | right
+
+
+def _add_expr(left: NumericValue, right: NumericValue) -> NumericValue:
+    return left + right
+
+
+def _subtract_expr(left: NumericValue, right: NumericValue) -> NumericValue:
+    return left - right
+
+
 def _concat_expr(*values: Value) -> Value:
     if not values:
         msg = "concat requires at least one input."
@@ -79,6 +99,33 @@ def _stringify_expr(value: Value) -> StringValue:
 
 def _is_null_expr(value: Value) -> BooleanValue:
     return value.isnull()
+
+
+def _coalesce_expr(*values: Value) -> Value:
+    if not values:
+        msg = "coalesce requires at least one input."
+        raise ValueError(msg)
+    result = values[0]
+    for value in values[1:]:
+        result = ibis.ifelse(result.isnull(), value, result)
+    return result
+
+
+def _starts_with_expr(value: StringValue, prefix: Value) -> BooleanValue:
+    return value.startswith(cast("StringValue | str", prefix))
+
+
+def _binary_join_element_wise_expr(*values: Value) -> Value:
+    min_inputs = 2
+    if len(values) < min_inputs:
+        msg = "binary_join_element_wise requires at least two inputs."
+        raise ValueError(msg)
+    *parts, sep = values
+    result = cast("StringValue", parts[0])
+    separator = cast("StringValue", sep)
+    for part in parts[1:]:
+        result = result.concat(separator).concat(cast("StringValue", part))
+    return result
 
 
 class OperationSupportBackend(Protocol):
@@ -157,7 +204,11 @@ def default_expr_registry() -> IbisExprRegistry:
     """
     return IbisExprRegistry(
         functions={
+            "add": _add_expr,
             "array": ibis.array,
+            "binary_join_element_wise": _binary_join_element_wise_expr,
+            "bit_wise_or": _bitwise_or_expr,
+            "coalesce": _coalesce_expr,
             "fill_null": _fill_null_expr,
             "concat": _concat_expr,
             "if_else": _if_else_expr,
@@ -168,8 +219,11 @@ def default_expr_registry() -> IbisExprRegistry:
             "bit_wise_and": _bitwise_and_expr,
             "strip": _strip_expr,
             "struct": ibis.struct,
+            "starts_with": _starts_with_expr,
+            "subtract": _subtract_expr,
             "stringify": _stringify_expr,
             "is_null": _is_null_expr,
+            "utf8_trim_whitespace": _strip_expr,
             "cpg_score": cpg_score,
             "stable_hash64": stable_hash64,
             "stable_hash128": stable_hash128,

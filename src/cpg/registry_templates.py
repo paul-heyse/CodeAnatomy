@@ -29,4 +29,15 @@ def template(name: str) -> RegistryTemplate:
     return _TEMPLATES[name]
 
 
-__all__ = ["RegistryTemplate", "template"]
+def registry_templates() -> dict[str, RegistryTemplate]:
+    """Return the full registry template mapping.
+
+    Returns
+    -------
+    dict[str, RegistryTemplate]
+        Mapping of template name to template settings.
+    """
+    return dict(_TEMPLATES)
+
+
+__all__ = ["RegistryTemplate", "registry_templates", "template"]

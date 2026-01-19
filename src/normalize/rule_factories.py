@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from normalize.rule_specs import NormalizeRuleFamilySpec
+from relspec.normalize.rule_specs import NormalizeRuleFamilySpec
 from relspec.rules.definitions import (
     EvidenceOutput,
     EvidenceSpec,

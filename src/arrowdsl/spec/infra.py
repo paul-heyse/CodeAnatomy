@@ -10,14 +10,14 @@ from typing import TYPE_CHECKING, TypedDict, Unpack, cast
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_core import ExprSpec, or_exprs
+from arrowdsl.compute.expr_core import or_exprs
 from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.interop import ComputeExpression, SchemaLike, TableLike, ensure_expression, pc
-from arrowdsl.plan.query import QuerySpec
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec, SchemaTransform
 from arrowdsl.schema.validation import ArrowValidationOptions, ValidationReport, validate_table
+from arrowdsl.spec.expr_ir import ExprIR
 from arrowdsl.spec.tables.base import SpecTableCodec
-from schema_spec.specs import ArrowFieldSpec, DerivedFieldSpec, FieldBundle, TableSchemaSpec
+from ibis_engine.query_compiler import IbisQuerySpec
 from schema_spec.system import (
     ContractSpec,
     DatasetSpec,
@@ -31,6 +31,7 @@ from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
     from arrowdsl.plan.plan import Plan
+    from schema_spec.specs import ArrowFieldSpec, DerivedFieldSpec, FieldBundle, TableSchemaSpec
 
 
 @cache
@@ -228,14 +229,14 @@ class SpecValidationSuite:
 class DatasetRegistration:
     """Optional registration settings for dataset specs."""
 
-    query_spec: QuerySpec | None = None
+    query_spec: IbisQuerySpec | None = None
     contract_spec: ContractSpec | None = None
     delta_write_policy: DeltaWritePolicy | None = None
     delta_schema_policy: DeltaSchemaPolicy | None = None
     delta_constraints: Sequence[str] = ()
     derived_fields: Sequence[DerivedFieldSpec] = ()
-    predicate: ExprSpec | None = None
-    pushdown_predicate: ExprSpec | None = None
+    predicate: ExprIR | None = None
+    pushdown_predicate: ExprIR | None = None
     evolution_spec: SchemaEvolutionSpec | None = None
     metadata_spec: SchemaMetadataSpec | None = None
     validation: ArrowValidationOptions | None = None

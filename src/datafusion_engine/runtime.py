@@ -59,6 +59,7 @@ class DiagnosticsSink(Protocol):
         """Return collected artifact payloads."""
         ...
 
+
 MemoryPool = Literal["greedy", "fair", "unbounded"]
 
 logger = logging.getLogger(__name__)

@@ -63,4 +63,7 @@ def edge_plan_specs_from_table(table: pa.Table) -> tuple[EdgePlanSpec, ...]:
     return edge_plan_specs_from_definitions(definitions)
 
 
-__all__ = ["edge_plan_specs_from_definitions", "edge_plan_specs_from_table"]
+__all__ = [
+    "edge_plan_specs_from_definitions",
+    "edge_plan_specs_from_table",
+]

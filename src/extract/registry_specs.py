@@ -34,7 +34,7 @@ from relspec.rules.options import RuleExecutionOptions
 from schema_spec.system import DatasetSpec
 
 if TYPE_CHECKING:
-    from arrowdsl.core.context import ExecutionContext
+    from arrowdsl.core.execution_context import ExecutionContext
     from arrowdsl.schema.policy import SchemaPolicy
 
 _ROWS_BY_NAME: dict[str, DatasetRow] = {row.name: row for row in DATASET_ROWS}

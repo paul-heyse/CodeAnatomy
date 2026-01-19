@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
-from arrowdsl.compute.ids import hash_spec_factory
+from arrowdsl.core.ids_registry import hash_spec_factory
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
 from arrowdsl.core.metrics import (
     QUALITY_SCHEMA,

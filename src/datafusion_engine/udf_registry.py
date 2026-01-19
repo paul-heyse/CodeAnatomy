@@ -23,14 +23,14 @@ else:
         __datafusion_scalar_udf__: object
 
 
-from arrowdsl.compute.position_encoding import (
+from arrowdsl.core.ids import hash64_from_text, iter_array_values
+from arrowdsl.core.interop import pc
+from arrowdsl.core.position_encoding import (
     ENC_UTF8,
     ENC_UTF16,
     ENC_UTF32,
     normalize_position_encoding,
 )
-from arrowdsl.core.ids import hash64_from_text, iter_array_values
-from arrowdsl.core.interop import pc
 
 _NUMERIC_REGEX = r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$"
 _KERNEL_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
@@ -154,6 +154,14 @@ def _normalize_span(values: pa.Array | pa.ChunkedArray) -> pa.Array | pa.Chunked
     sanitized = pc.if_else(mask, text, pa.scalar(None, type=pa.string()))
     numeric = pc.cast(sanitized, pa.float64(), safe=False)
     return pc.cast(numeric, pa.int64(), safe=False)
+
+
+def _cpg_score(
+    values: pa.Array | pa.ChunkedArray | pa.Scalar,
+) -> pa.Array | pa.Scalar:
+    if isinstance(values, pa.Scalar):
+        return pa.scalar(values.as_py(), type=pa.float64())
+    return pc.cast(values, pa.float64(), safe=False)
 
 
 def _stable_hash64(
@@ -361,6 +369,13 @@ _NORMALIZE_SPAN_UDF = udf(
     "stable",
     "normalize_span",
 )
+_CPG_SCORE_UDF = udf(
+    _cpg_score,
+    [pa.float64()],
+    pa.float64(),
+    "stable",
+    "cpg_score",
+)
 _STABLE_HASH64_UDF = udf(
     _stable_hash64,
     [pa.string()],
@@ -391,6 +406,18 @@ _COL_TO_BYTE_UDF = udf(
 )
 
 _SCALAR_UDF_SPECS: tuple[tuple[DataFusionUdfSpec, ScalarUDF], ...] = (
+    (
+        DataFusionUdfSpec(
+            func_id="cpg_score",
+            engine_name="cpg_score",
+            kind="scalar",
+            input_types=(pa.float64(),),
+            return_type=pa.float64(),
+            arg_names=("value",),
+            rewrite_tags=("score",),
+        ),
+        _CPG_SCORE_UDF,
+    ),
     (
         DataFusionUdfSpec(
             func_id="normalize_span",

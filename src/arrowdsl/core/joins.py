@@ -2,29 +2,77 @@
 
 from __future__ import annotations
 
-import importlib
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import cast
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.core.plan_ops import AsofJoinSpec, JoinSpec, JoinType
+from arrowdsl.schema.chunking import ChunkPolicy
 
 CODE_UNIT_META_COLUMNS: tuple[str, ...] = ("code_unit_id", "file_id", "path")
 PATH_META_COLUMNS: tuple[str, ...] = ("path", "file_id")
 
 
-type _JoinFn = Callable[..., TableLike]
+def _apply_join(
+    left: TableLike,
+    right: TableLike,
+    *,
+    spec: JoinSpec,
+    use_threads: bool = True,
+    chunk_policy: ChunkPolicy | None = None,
+) -> TableLike:
+    if not spec.left_keys:
+        msg = "JoinSpec.left_keys must be provided for table joins."
+        raise ValueError(msg)
+    policy = chunk_policy or ChunkPolicy()
+    left = policy.apply(left)
+    right = policy.apply(right)
+    right_keys = list(spec.right_keys) if spec.right_keys else list(spec.left_keys)
+    join_type = spec.join_type.replace("_", " ")
+    joined = left.join(
+        right,
+        keys=list(spec.left_keys),
+        right_keys=right_keys,
+        join_type=join_type,
+        left_suffix=spec.output_suffix_for_left,
+        right_suffix=spec.output_suffix_for_right,
+        use_threads=use_threads,
+    )
+    return _select_join_outputs(joined, spec=spec)
 
 
-def _apply_join_fn() -> _JoinFn:
-    module = importlib.import_module("arrowdsl.compute.kernels")
-    return cast("_JoinFn", module.apply_join)
+def _select_join_outputs(joined: TableLike, *, spec: JoinSpec) -> TableLike:
+    plan = resolve_join_outputs(joined.column_names, spec=spec)
+    if plan.output_names == tuple(joined.column_names):
+        return joined
+    if not plan.output_names:
+        msg = "JoinSpec output selection resolved to no columns."
+        raise ValueError(msg)
+    return joined.select(plan.output_names)
 
 
-def _apply_asof_join_fn() -> _JoinFn:
-    module = importlib.import_module("arrowdsl.compute.kernels")
-    return cast("_JoinFn", module.apply_asof_join)
+def _apply_asof_join(
+    left: TableLike,
+    right: TableLike,
+    *,
+    spec: AsofJoinSpec,
+    use_threads: bool = True,
+    chunk_policy: ChunkPolicy | None = None,
+) -> TableLike:
+    _ = use_threads
+    policy = chunk_policy or ChunkPolicy()
+    left = policy.apply(left)
+    right = policy.apply(right)
+    by = list(spec.by) if spec.by else None
+    right_by = list(spec.right_by) if spec.right_by else None
+    return left.join_asof(
+        right,
+        on=spec.on,
+        by=by,
+        tolerance=spec.tolerance,
+        right_on=spec.right_on,
+        right_by=right_by,
+    )
 
 
 @dataclass(frozen=True)
@@ -348,8 +396,7 @@ def left_join(
         Joined table.
     """
     spec = config.to_spec(join_type="left outer")
-    apply_join = _apply_join_fn()
-    return apply_join(left, right, spec=spec, use_threads=use_threads)
+    return _apply_join(left, right, spec=spec, use_threads=use_threads)
 
 
 def interval_join_candidates(
@@ -368,8 +415,7 @@ def interval_join_candidates(
         Joined table with left/right output selections.
     """
     spec = config.to_spec(join_type=join_type)
-    apply_join = _apply_join_fn()
-    return apply_join(left, right, spec=spec, use_threads=use_threads)
+    return _apply_join(left, right, spec=spec, use_threads=use_threads)
 
 
 def asof_join(
@@ -386,8 +432,7 @@ def asof_join(
     TableLike
         As-of joined table.
     """
-    apply_asof_join = _apply_asof_join_fn()
-    return apply_asof_join(left, right, spec=spec, use_threads=use_threads)
+    return _apply_asof_join(left, right, spec=spec, use_threads=use_threads)
 
 
 __all__ = [

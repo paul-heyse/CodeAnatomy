@@ -7,8 +7,9 @@ from dataclasses import dataclass, field
 import ibis
 from ibis.backends import BaseBackend
 
-from arrowdsl.core.context import ExecutionContext, Ordering
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
+from arrowdsl.core.ordering import Ordering
 from arrowdsl.schema.build import empty_table
 from ibis_engine.plan import IbisPlan
 from normalize.ibis_plan_builders import (

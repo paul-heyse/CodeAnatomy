@@ -8,7 +8,6 @@ from typing import Literal, TypeVar, cast
 
 import pyarrow as pa
 
-from arrowdsl.compute.registry import pyarrow_compute_functions
 from datafusion_engine.builtin_registry import (
     DataFusionBuiltinSpec,
     DataFusionSqlExpressionSpec,
@@ -17,6 +16,7 @@ from datafusion_engine.builtin_registry import (
 )
 from datafusion_engine.function_factory import DEFAULT_RULE_PRIMITIVES, RulePrimitive
 from datafusion_engine.udf_registry import DataFusionUdfSpec, UdfTier, datafusion_udf_specs
+from engine.pyarrow_registry import pyarrow_compute_functions
 from ibis_engine.builtin_udfs import IbisUdfSpec, ibis_udf_specs
 from registry_common.arrow_payloads import payload_hash
 
@@ -27,7 +27,6 @@ ExecutionLane = Literal[
     "ibis_python",
     "df_udf",
     "df_rust",
-    "kernel",
 ]
 FunctionKind = Literal["scalar", "aggregate", "window", "table"]
 
@@ -38,7 +37,6 @@ DEFAULT_LANE_PRECEDENCE: tuple[ExecutionLane, ...] = (
     "ibis_python",
     "df_udf",
     "df_rust",
-    "kernel",
 )
 UDF_TIER_PRIORITY: tuple[UdfTier, ...] = ("builtin", "pyarrow", "pandas", "python")
 LANE_UDF_TIER: Mapping[ExecutionLane, UdfTier] = {

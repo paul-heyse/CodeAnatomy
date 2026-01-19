@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING, Protocol, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.core.context import Ordering, OrderingKey, OrderingLevel
 from arrowdsl.core.interop import ArrayLike, DataTypeLike, FieldLike, SchemaLike, TableLike
+from arrowdsl.core.ordering import Ordering, OrderingKey, OrderingLevel
 from arrowdsl.core.schema_constants import (
     KEY_FIELDS_META,
     PROVENANCE_COLS,

@@ -15,8 +15,7 @@ from typing import TYPE_CHECKING, Literal, overload
 import ibis
 import pyarrow as pa
 
-from arrowdsl.compute.position_encoding import ENC_UTF8, ENC_UTF16, ENC_UTF32
-from arrowdsl.core.context import ExecutionContext, execution_context_factory
+from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import (
     ArrayLike,
     DataTypeLike,
@@ -24,6 +23,7 @@ from arrowdsl.core.interop import (
     SchemaLike,
     TableLike,
 )
+from arrowdsl.core.position_encoding import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from arrowdsl.schema.build import struct_array_from_dicts, table_from_arrays
 from arrowdsl.schema.nested_builders import LargeListAccumulator
 from arrowdsl.schema.schema import empty_table, unify_tables

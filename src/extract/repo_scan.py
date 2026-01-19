@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, overload
 
-from arrowdsl.core.context import ExecutionContext, execution_context_factory
+from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from core_types import PathLike, ensure_path
 from extract.helpers import (

@@ -12,8 +12,8 @@ from hamilton.function_modifiers import cache, extract_fields, tag
 from ibis.backends import BaseBackend
 from ibis.expr.types import Value as IbisValue
 
-from arrowdsl.compute.ids import apply_hash_column
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.core.ids import apply_hash_column
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import align_table, empty_table

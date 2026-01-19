@@ -10,9 +10,10 @@ from typing import TYPE_CHECKING, cast
 import ibis
 import pyarrow as pa
 
-from arrowdsl.core.context import ExecutionContext, Ordering, execution_context_factory
+from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.ids import iter_table_rows
 from arrowdsl.core.interop import ScalarLike, SchemaLike, TableLike
+from arrowdsl.core.ordering import Ordering
 from arrowdsl.schema.build import empty_table, rows_to_table
 from extract.evidence_plan import EvidencePlan
 from extract.registry_extractors import (

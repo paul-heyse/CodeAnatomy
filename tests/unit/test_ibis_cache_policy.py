@@ -6,7 +6,9 @@ from collections.abc import Mapping
 
 import ibis
 
-from arrowdsl.core.context import DeterminismTier, ExecutionContext, RuntimeProfile
+from arrowdsl.core.determinism import DeterminismTier
+from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.core.runtime_profiles import RuntimeProfile
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from engine.materialize import build_plan_product
 from engine.plan_policy import ExecutionSurfacePolicy

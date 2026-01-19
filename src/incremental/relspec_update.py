@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import ibis
 from ibis.backends import BaseBackend
 
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from arrowdsl.schema.schema import empty_table

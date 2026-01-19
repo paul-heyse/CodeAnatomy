@@ -5,7 +5,8 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from arrowdsl.core.context import DeterminismTier, execution_context_factory
+from arrowdsl.core.determinism import DeterminismTier
+from arrowdsl.core.execution_context import execution_context_factory
 from relspec.compiler import finalize_output_tables
 from relspec.registry import ContractCatalog
 

@@ -14,8 +14,9 @@ import pyarrow.types as patypes
 from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, Table
 
-from arrowdsl.core.context import ExecutionContext, Ordering, OrderingLevel
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
+from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.core.plan_ops import DedupeSpec, SortKey
 from arrowdsl.finalize.finalize import Contract, FinalizeContext
 from arrowdsl.schema.metadata import (

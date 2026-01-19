@@ -8,8 +8,9 @@ from dataclasses import asdict, dataclass, is_dataclass, replace
 
 import pyarrow as pa
 
-from arrowdsl.core.context import RuntimeProfile, ScanProfile, runtime_profile_factory
 from arrowdsl.core.determinism import DeterminismTier
+from arrowdsl.core.runtime_profiles import RuntimeProfile, runtime_profile_factory
+from arrowdsl.core.runtime_profiles import ScanProfile
 from engine.function_registry import default_function_registry
 from registry_common.arrow_payloads import payload_hash
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot

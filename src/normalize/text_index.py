@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from arrowdsl.compute.position_encoding import (
+from arrowdsl.core.position_encoding import (
     DEFAULT_POSITION_ENCODING,
     ENC_UTF8,
     ENC_UTF16,

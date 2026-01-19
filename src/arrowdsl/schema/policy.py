@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
 from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
 from arrowdsl.schema.metadata import encoding_policy_from_spec

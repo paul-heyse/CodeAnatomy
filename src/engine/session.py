@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 from datafusion import SessionContext
 from ibis.backends import BaseBackend
 
-from arrowdsl.core.context import ExecutionContext, RuntimeProfile
+from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.core.runtime_profiles import RuntimeProfile
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from engine.plan_policy import ExecutionSurfacePolicy
 from ibis_engine.registry import IbisDatasetRegistry

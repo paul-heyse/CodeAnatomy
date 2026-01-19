@@ -8,8 +8,9 @@ from typing import Protocol, cast
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table as IbisTable
 
-from arrowdsl.core.context import ExecutionContext, Ordering
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.core.ordering import Ordering
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 from ibis_engine.sources import SourceToIbisOptions, namespace_recorder_from_ctx, source_to_ibis

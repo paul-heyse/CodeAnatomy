@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_core import ExplodeSpec
-from arrowdsl.compute.kernels import explode_list_column
+from arrowdsl.core.expr_types import ExplodeSpec
+from datafusion_engine.kernels import explode_list_kernel
 
 
 def test_explode_list_kernel_preserves_parent_alignment() -> None:
@@ -23,7 +23,7 @@ def test_explode_list_kernel_preserves_parent_alignment() -> None:
         idx_col="idx",
         keep_empty=True,
     )
-    result = explode_list_column(table, spec=spec)
+    result = explode_list_kernel(table, spec=spec)
     data = result.to_pydict()
     assert data.get("parent_id", []) == ["p1", "p1", "p2", "p3"]
     assert data.get("child", []) == [1, 2, None, 3]
@@ -45,7 +45,7 @@ def test_explode_list_kernel_keeps_list_ordering() -> None:
         idx_col="idx",
         keep_empty=True,
     )
-    result = explode_list_column(table, spec=spec)
+    result = explode_list_kernel(table, spec=spec)
     data = result.to_pydict()
     assert data.get("parent_id", []) == [10, 10, 10, 20]
     assert data.get("dst_id", []) == [3, 1, 2, 4]

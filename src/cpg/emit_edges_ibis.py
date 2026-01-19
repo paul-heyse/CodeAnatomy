@@ -6,7 +6,7 @@ import ibis
 import pyarrow as pa
 from ibis.expr.types import Table, Value
 
-from arrowdsl.core.context import Ordering
+from arrowdsl.core.ordering import Ordering
 from cpg.schemas import CPG_EDGES_SCHEMA
 from cpg.specs import EdgeEmitSpec
 from ibis_engine.ids import stable_id_expr, stable_key_expr

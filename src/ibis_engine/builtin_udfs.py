@@ -32,7 +32,7 @@ class IbisUdfSpec:
     database: str | None = None
 
 
-@ibis.udf.scalar.builtin
+@ibis.udf.scalar.builtin(name="cpg_score")
 def cpg_score(value: dt.Float64) -> dt.Float64:
     """Return a placeholder scoring value for backend-native execution.
 
@@ -46,7 +46,7 @@ def cpg_score(value: dt.Float64) -> dt.Float64:
     return value
 
 
-@ibis.udf.scalar.builtin(signature=((dt.string,), dt.int64))
+@ibis.udf.scalar.builtin(signature=((dt.string,), dt.int64), name="stable_hash64")
 def stable_hash64(value: Value) -> Value:
     """Return a stable 64-bit hash for string inputs.
 
@@ -58,7 +58,7 @@ def stable_hash64(value: Value) -> Value:
     return value.cast("int64")
 
 
-@ibis.udf.scalar.builtin(signature=((dt.string,), dt.string))
+@ibis.udf.scalar.builtin(signature=((dt.string,), dt.string), name="stable_hash128")
 def stable_hash128(value: Value) -> Value:
     """Return a stable 128-bit hash for string inputs.
 
@@ -70,7 +70,7 @@ def stable_hash128(value: Value) -> Value:
     return value.cast("string")
 
 
-@ibis.udf.scalar.builtin(signature=((dt.string,), dt.int32))
+@ibis.udf.scalar.builtin(signature=((dt.string,), dt.int32), name="position_encoding_norm")
 def position_encoding_norm(value: Value) -> Value:
     """Normalize position encoding values to enum integers.
 
@@ -82,7 +82,7 @@ def position_encoding_norm(value: Value) -> Value:
     return value.cast("int32")
 
 
-@ibis.udf.scalar.builtin(signature=((dt.string, dt.int64, dt.string), dt.int64))
+@ibis.udf.scalar.builtin(signature=((dt.string, dt.int64, dt.string), dt.int64), name="col_to_byte")
 def col_to_byte(_line: Value, offset: Value, _col_unit: Value) -> Value:
     """Convert a line/offset pair into a UTF-8 byte offset.
 

@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
+import pyarrow as pa
+
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, ScalarLike
+
 ENC_UTF8 = 1
 ENC_UTF16 = 2
 ENC_UTF32 = 3
@@ -36,6 +42,39 @@ def normalize_position_encoding(value: object | None) -> int:
     return encoding
 
 
+def normalize_position_encoding_array(
+    values: ArrayLike | ChunkedArrayLike,
+) -> ArrayLike:
+    """Normalize position encoding array values to enum integers.
+
+    Returns
+    -------
+    ArrayLike
+        Array of normalized encoding integers.
+    """
+    if isinstance(values, ChunkedArrayLike):
+        values = values.combine_chunks()
+    normalized = [_normalize_value(value) for value in values]
+    return pa.array(normalized, type=pa.int32())
+
+
+def _normalize_value(value: object) -> int:
+    if isinstance(value, ScalarLike):
+        return normalize_position_encoding(value.as_py())
+    return normalize_position_encoding(value)
+
+
+def normalize_position_encoding_values(values: Iterable[object]) -> list[int]:
+    """Normalize a sequence of encoding values.
+
+    Returns
+    -------
+    list[int]
+        Normalized encoding values.
+    """
+    return [normalize_position_encoding(value) for value in values]
+
+
 __all__ = [
     "DEFAULT_POSITION_ENCODING",
     "ENC_UTF8",
@@ -43,4 +82,6 @@ __all__ = [
     "ENC_UTF32",
     "VALID_POSITION_ENCODINGS",
     "normalize_position_encoding",
+    "normalize_position_encoding_array",
+    "normalize_position_encoding_values",
 ]

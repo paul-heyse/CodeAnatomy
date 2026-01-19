@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from arrowdsl.core.context import OrderingLevel
 from arrowdsl.core.determinism import DeterminismTier
+from arrowdsl.core.ordering import OrderingLevel
 from normalize.evidence_specs import EVIDENCE_OUTPUT_LITERALS_META, EVIDENCE_OUTPUT_MAP_META
 from registry_common.metadata import (
     EvidenceMetadataSpec,

@@ -13,14 +13,14 @@ import pyarrow as pa
 from datafusion import SessionContext
 from ibis.backends import BaseBackend
 
-from arrowdsl.compute.kernels import kernel_capability
-from arrowdsl.core.context import ExecutionContext, RuntimeProfile
 from arrowdsl.core.determinism import DeterminismTier
-from arrowdsl.kernel.registry import KernelLane
+from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.core.runtime_profiles import RuntimeProfile
 from cpg.registry_rows import DATASET_ROWS as CPG_DATASET_ROWS
 from cpg.registry_specs import dataset_spec as cpg_dataset_spec
 from datafusion_engine.bridge import ibis_plan_to_datafusion
 from datafusion_engine.compile_options import DataFusionCompileOptions
+from datafusion_engine.kernel_registry import kernel_capability
 from datafusion_engine.kernels import datafusion_kernel_registry
 from datafusion_engine.runtime import (
     AdapterExecutionPolicy,
@@ -543,14 +543,14 @@ def _kernel_layer(
     failures: list[DynamicFailure] = []
     for name, rule_names in demands.items():
         capability = kernel_capability(name, ctx=ctx)
-        if capability.lane == KernelLane.ARROW_FALLBACK:
+        if not capability.available:
             failures.extend(
                 DynamicFailure(
                     layer="udf_kernel_fallback",
                     rule_name=rule_name,
                     dataset_name=None,
                     source=name,
-                    detail=f"kernel lane: {capability.lane.value}",
+                    detail=f"kernel unavailable: {capability.lane.value}",
                 )
                 for rule_name in sorted(rule_names)
             )

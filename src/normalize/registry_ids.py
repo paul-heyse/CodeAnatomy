@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from arrowdsl.compute.ids import HashSpec, hash_spec_factory
+from arrowdsl.core.ids import HashSpec
+from arrowdsl.core.ids_registry import hash_spec_factory
 
 TYPE_EXPR_ID_SPEC = hash_spec_factory(
     prefix="cst_type_expr",

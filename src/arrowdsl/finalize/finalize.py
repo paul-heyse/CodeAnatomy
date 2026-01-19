@@ -10,8 +10,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.compute.kernels import apply_dedupe, canonical_sort_if_canonical
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.ids import HashSpec, hash_column_values, iter_array_values
 from arrowdsl.core.interop import (
     ArrayLike,
@@ -36,6 +35,7 @@ from arrowdsl.schema.encoding_policy import EncodingPolicy
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import AlignmentInfo, SchemaMetadataSpec, align_table
 from arrowdsl.schema.validation import ArrowValidationOptions
+from datafusion_engine.kernels import canonical_sort_if_canonical, dedupe_kernel
 
 if TYPE_CHECKING:
     from arrowdsl.schema.policy import SchemaPolicy
@@ -809,7 +809,7 @@ def finalize(
     _raise_on_errors_if_strict(raw_errors, ctx=ctx, contract=contract)
 
     if contract.dedupe is not None:
-        good = apply_dedupe(good, spec=contract.dedupe, _ctx=ctx)
+        good = dedupe_kernel(good, spec=contract.dedupe, _ctx=ctx)
 
     if not options.skip_canonical_sort:
         good = canonical_sort_if_canonical(good, sort_keys=contract.canonical_sort, ctx=ctx)

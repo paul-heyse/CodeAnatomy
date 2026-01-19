@@ -12,7 +12,7 @@ from relspec.rules.compiler import RuleHandler
 from relspec.rules.definitions import ExtractPayload, RuleStage
 
 if TYPE_CHECKING:
-    from arrowdsl.core.context import ExecutionContext
+    from arrowdsl.core.execution_context import ExecutionContext
     from relspec.rules.definitions import RuleDefinition, RuleDomain
     from relspec.rules.rel_ops import RelOpT
 

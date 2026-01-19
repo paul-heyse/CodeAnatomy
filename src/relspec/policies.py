@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Literal
 
-from arrowdsl.core.context import OrderingLevel
 from arrowdsl.core.interop import SchemaLike
+from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.core.plan_ops import DedupeSpec, SortKey
 from arrowdsl.schema.metadata import infer_ordering_keys, ordering_from_schema
 from arrowdsl.spec.expr_ir import ExprIR

@@ -11,8 +11,8 @@ from typing import Literal
 from hamilton.function_modifiers import tag
 from ibis.backends import BaseBackend
 
-from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.determinism import DeterminismTier
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.spec.io import IpcWriteConfig
 from core_types import JsonDict
 from datafusion_engine.runtime import AdapterExecutionPolicy

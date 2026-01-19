@@ -6,8 +6,8 @@ from functools import cache
 
 import pyarrow as pa
 
-from arrowdsl.core.context import OrderingLevel
 from arrowdsl.core.interop import SchemaLike
+from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.metadata import merge_metadata_specs, ordering_metadata_spec
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from schema_spec.system import (

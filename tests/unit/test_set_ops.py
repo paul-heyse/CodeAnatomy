@@ -5,7 +5,7 @@ from __future__ import annotations
 import ibis
 import pytest
 
-from arrowdsl.core.context import Ordering
+from arrowdsl.core.ordering import Ordering
 from ibis_engine.expr_compiler import (
     align_set_op_tables,
     difference_tables,

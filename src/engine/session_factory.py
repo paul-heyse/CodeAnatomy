@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
 from datafusion_engine.registry_bridge import dataset_input_plugin, input_plugin_prefixes
 from datafusion_engine.runtime import DataFusionRuntimeProfile, feature_state_snapshot
 from engine.plan_policy import ExecutionSurfacePolicy

@@ -6,18 +6,11 @@ import base64
 import importlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 import pyarrow as pa
 from ibis.expr.types import Table, Value
 
-from arrowdsl.compute.options import (
-    FunctionOptionsPayload,
-    FunctionOptionsProto,
-    deserialize_options,
-    serialize_options,
-)
-from arrowdsl.compute.registry import ComputeRegistry, UdfSpec, default_registry
 from arrowdsl.core.expr_types import ScalarValue
 from arrowdsl.core.interop import (
     ArrayLike,
@@ -48,12 +41,34 @@ if TYPE_CHECKING:
     from ibis_engine.expr_compiler import IbisExprRegistry
 
 
+@runtime_checkable
+class FunctionOptionsProto(Protocol):
+    """Protocol for Arrow compute function options."""
+
+    def serialize(self) -> bytes:
+        """Serialize options to bytes."""
+        ...
+
+    @classmethod
+    def deserialize(cls, payload: bytes) -> FunctionOptionsProto:
+        """Deserialize options from bytes."""
+        ...
+
+
+type FunctionOptionsPayload = bytes | bytearray | FunctionOptionsProto
+
+
 def _options_bytes(options: FunctionOptionsPayload | None) -> bytes | None:
-    try:
-        return serialize_options(options)
-    except TypeError as exc:
-        msg = "ExprIR options must be FunctionOptions or serialized bytes."
-        raise TypeError(msg) from exc
+    if options is None:
+        return None
+    if isinstance(options, bytearray):
+        return bytes(options)
+    if isinstance(options, bytes):
+        return options
+    if isinstance(options, FunctionOptionsProto):
+        return options.serialize()
+    msg = "ExprIR options must be FunctionOptions or serialized bytes."
+    raise TypeError(msg)
 
 
 def _encode_options(options: FunctionOptionsPayload | None) -> object | None:
@@ -78,7 +93,16 @@ def _coerce_int(value: object, *, label: str) -> int:
 
 
 def _deserialize_options(payload: bytes | None) -> FunctionOptionsProto | None:
-    return deserialize_options(payload)
+    if payload is None:
+        return None
+    options_type = cast(
+        "type[FunctionOptionsProto] | None",
+        getattr(pc, "FunctionOptions", None),
+    )
+    if options_type is None:
+        msg = "Arrow compute FunctionOptions is unavailable."
+        raise TypeError(msg)
+    return options_type.deserialize(payload)
 
 
 def _require_expr_name(name: str | None, *, op: str) -> str:
@@ -112,23 +136,19 @@ def _scalar_to_array(value: ScalarLike, *, size: int) -> ArrayLike:
 
 @dataclass(frozen=True)
 class ExprRegistry:
-    """Registry of compute UDFs for expression compilation."""
+    """Registry of compute function aliases for expression compilation."""
 
-    compute_registry: ComputeRegistry = field(default_factory=default_registry)
-    udfs: Mapping[str, UdfSpec] = field(default_factory=dict)
+    udfs: Mapping[str, str] = field(default_factory=dict)
 
     def ensure(self, name: str) -> str:
-        """Ensure the compute function is registered.
+        """Return the registered name for the compute function.
 
         Returns
         -------
         str
             Registered function name.
         """
-        spec = self.udfs.get(name)
-        if spec is None:
-            return name
-        return self.compute_registry.ensure(spec)
+        return self.udfs.get(name, name)
 
 
 EXPR_OP_VALUES: tuple[str, ...] = ("field", "literal", "call")

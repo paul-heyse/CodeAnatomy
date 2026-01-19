@@ -10,7 +10,7 @@ from typing import cast
 import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
 
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike, pc
 from arrowdsl.schema.schema import empty_table
 from extract.ast_extract import extract_ast_tables

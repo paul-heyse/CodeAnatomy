@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrowdsl.core.context import (
-    DeterminismTier,
-    ExecutionContext,
-    OrderingLevel,
-    runtime_profile_factory,
-)
+from arrowdsl.core.determinism import DeterminismTier
+from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.core.ordering import OrderingLevel
+from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from arrowdsl.schema.metadata import ordering_from_schema
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig

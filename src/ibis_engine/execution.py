@@ -10,7 +10,7 @@ import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import Value as IbisValue
 
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.core.ordering_policy import apply_canonical_sort, ordering_metadata_for_plan
 from arrowdsl.schema.metadata import merge_metadata_specs

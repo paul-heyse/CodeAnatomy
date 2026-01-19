@@ -9,9 +9,9 @@ from typing import Literal
 
 import pyarrow as pa
 
-from arrowdsl.compute.kernels import KernelCapability
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.spec.io import rows_from_table, table_from_rows
+from datafusion_engine.kernel_registry import KernelCapability
 from relspec.rules.definitions import RuleDomain
 from sqlglot_tools.bridge import (
     SqlGlotDiagnostics,
@@ -226,6 +226,7 @@ def kernel_lane_diagnostic(
         "lane": capability.lane.value,
         "volatility": capability.volatility,
         "ordering_required": str(capability.requires_ordering).lower(),
+        "available": str(getattr(capability, "available", True)).lower(),
     }
     if options.extra_metadata:
         metadata.update({str(key): str(value) for key, value in options.extra_metadata.items()})

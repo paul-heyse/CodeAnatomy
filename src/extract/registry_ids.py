@@ -6,8 +6,8 @@ from collections.abc import Mapping, Sequence
 
 import pyarrow as pa
 
-from arrowdsl.compute.ids import hash_spec_factory
 from arrowdsl.core.ids import HashSpec, prefixed_hash_id
+from arrowdsl.core.ids_registry import hash_spec_factory
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike
 from arrowdsl.schema.build import set_or_append_column
 

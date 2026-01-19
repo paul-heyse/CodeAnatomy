@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, TypedDict, Unpack, cast
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_core import or_exprs
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.core.expr_ops import or_exprs
 from arrowdsl.core.interop import (
     ArrayLike,
     ComputeExpression,

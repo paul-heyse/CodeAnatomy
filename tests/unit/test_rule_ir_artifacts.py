@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ibis
 
-from arrowdsl.core.context import execution_context_factory
+from arrowdsl.core.execution_context import execution_context_factory
 from ibis_engine.param_tables import ParamTablePolicy
 from relspec.rules.definitions import RuleDefinition
 from relspec.rules.validation import (

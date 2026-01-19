@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, ov
 import ibis
 import pyarrow as pa
 
-from arrowdsl.core.context import ExecutionContext, execution_context_factory
+from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import ArrayLike, RecordBatchReaderLike, TableLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.metadata import normalize_dictionaries

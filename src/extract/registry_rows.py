@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from arrowdsl.core.context import OrderingKey
+from arrowdsl.core.ordering import OrderingKey
 from extract.registry_definitions import extract_rule_definitions
 from relspec.rules.definitions import ExtractPayload, RuleDefinition
 

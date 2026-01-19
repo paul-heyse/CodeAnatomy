@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import Protocol, cast
 
 import pyarrow as pa
 import pyarrow.types as patypes
@@ -13,10 +12,12 @@ import pyarrow.types as patypes
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
+    ComputeExpression,
     DataTypeLike,
     FieldLike,
     SchemaLike,
     TableLike,
+    ensure_expression,
     pc,
 )
 from arrowdsl.schema.nested_builders import (
@@ -38,29 +39,111 @@ from arrowdsl.schema.nested_builders import (
 )
 from arrowdsl.schema.types import list_view_type, map_type
 
-if TYPE_CHECKING:
-    from arrowdsl.compute.macros import (
-        CoalesceExpr,
-        ColumnExpr,
-        ColumnOrNullExpr,
-        ConstExpr,
-        FieldExpr,
-    )
 
-_MACRO_EXPORTS: frozenset[str] = frozenset(
-    (
-        "CoalesceExpr",
-        "ColumnExpr",
-        "ColumnOrNullExpr",
-        "ConstExpr",
-        "FieldExpr",
-    )
-)
+class ColumnExpr(Protocol):
+    """Protocol for column expressions used by defaults."""
+
+    def materialize(self, table: TableLike) -> ArrayLike:
+        """Return a concrete array for the provided table."""
+        ...
 
 
-def _column_or_null_expr() -> type[ColumnOrNullExpr]:
-    macros = importlib.import_module("arrowdsl.compute.macros")
-    return cast("type[ColumnOrNullExpr]", macros.ColumnOrNullExpr)
+@dataclass(frozen=True)
+class ConstExpr:
+    """Column expression representing a constant literal."""
+
+    value: object
+    dtype: DataTypeLike | None = None
+
+    def to_expression(self) -> ComputeExpression:
+        """Return the compute expression for the constant value.
+
+        Returns
+        -------
+        ComputeExpression
+            Expression representing the constant value.
+        """
+        scalar = self.value if self.dtype is None else pa.scalar(self.value, type=self.dtype)
+        return ensure_expression(pc.scalar(scalar))
+
+    def materialize(self, table: TableLike) -> ArrayLike:
+        """Materialize the constant as a full-length array.
+
+        Returns
+        -------
+        ArrayLike
+            Array filled with the constant value.
+        """
+        values = [self.value] * table.num_rows
+        scalar_type = pa.scalar(self.value, type=self.dtype).type
+        return pa.array(values, type=scalar_type)
+
+
+@dataclass(frozen=True)
+class FieldExpr:
+    """Column expression referencing an existing column."""
+
+    name: str
+
+    def to_expression(self) -> ComputeExpression:
+        """Return the compute expression for the column reference.
+
+        Returns
+        -------
+        ComputeExpression
+            Expression referencing the column.
+        """
+        return pc.field(self.name)
+
+    def materialize(self, table: TableLike) -> ArrayLike:
+        """Materialize the column values from the table.
+
+        Returns
+        -------
+        ArrayLike
+            Column values from the table.
+        """
+        return table[self.name]
+
+
+@dataclass(frozen=True)
+class ColumnOrNullExpr:
+    """Column expression that falls back to typed nulls when missing."""
+
+    name: str
+    dtype: DataTypeLike
+
+    def materialize(self, table: TableLike) -> ArrayLike:
+        """Materialize the column values or typed nulls.
+
+        Returns
+        -------
+        ArrayLike
+            Column values or typed nulls when missing.
+        """
+        if self.name not in table.column_names:
+            return pa.nulls(table.num_rows, type=self.dtype)
+        return pc.cast(table[self.name], self.dtype, safe=False)
+
+
+@dataclass(frozen=True)
+class CoalesceExpr:
+    """Column expression that coalesces multiple expressions."""
+
+    exprs: tuple[ColumnExpr, ...]
+
+    def materialize(self, table: TableLike) -> ArrayLike:
+        """Materialize the expression against a table.
+
+        Returns
+        -------
+        ArrayLike
+            Coalesced array result.
+        """
+        if not self.exprs:
+            return pa.nulls(table.num_rows, type=pa.null())
+        arrays = [expr.materialize(table) for expr in self.exprs]
+        return pc.coalesce(*arrays)
 
 
 def const_array(n: int, value: object, *, dtype: DataTypeLike | None = None) -> ArrayLike:
@@ -138,8 +221,7 @@ def column_or_null(
     ArrayLike
         Column array or a typed null array.
     """
-    expr_cls = _column_or_null_expr()
-    return expr_cls(name=col, dtype=dtype).materialize(table)
+    return ColumnOrNullExpr(name=col, dtype=dtype).materialize(table)
 
 
 def maybe_dictionary(
@@ -334,18 +416,6 @@ def rows_to_table(rows: Sequence[Mapping[str, object]], schema: SchemaLike) -> T
     if not rows:
         return empty_table(schema)
     return table_from_rows(schema, rows)
-
-
-def __getattr__(name: str) -> object:
-    if name in _MACRO_EXPORTS:
-        macros = importlib.import_module("arrowdsl.compute.macros")
-        return getattr(macros, name)
-    msg = f"module {__name__!r} has no attribute {name!r}"
-    raise AttributeError(msg)
-
-
-def __dir__() -> list[str]:
-    return sorted(__all__)
 
 
 __all__ = [

@@ -12,8 +12,8 @@ import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table as IbisTable
 
-from arrowdsl.core.context import Ordering
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.core.ordering import Ordering
 from ibis_engine.plan import IbisPlan
 from ibis_engine.schema_utils import ibis_schema_from_arrow, normalize_table_for_ibis
 from obs.diagnostics import DiagnosticsCollector

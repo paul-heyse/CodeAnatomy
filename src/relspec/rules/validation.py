@@ -15,12 +15,12 @@ from ibis.backends import BaseBackend
 from ibis.expr.types import Table as IbisTable
 from sqlglot import ErrorLevel
 
-from arrowdsl.compute.kernels import kernel_capability
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.build import iter_rows_from_table
 from datafusion_engine.bridge import sqlglot_to_datafusion
 from datafusion_engine.compile_options import DataFusionCompileOptions
+from datafusion_engine.kernel_registry import kernel_capability
 from datafusion_engine.runtime import snapshot_plans
 from engine.session import EngineSession
 from extract.registry_bundles import bundle
@@ -1028,13 +1028,17 @@ def _kernel_lane_diagnostics_for_rule(
         capability = kernel_capability(name, ctx=ctx)
         violation = False
         severity: RuleDiagnosticSeverity = "warning"
-        if kernel_lane_policy is not None:
+        if not capability.available:
+            violation = True
+            severity = "error"
+        elif kernel_lane_policy is not None:
             violation = capability.lane not in kernel_lane_policy.allowed
             if violation and kernel_lane_policy.on_violation == "error":
                 severity = "error"
         extra_metadata = dict(base_metadata)
         if kernel_lane_policy is not None:
             extra_metadata["policy_violation"] = str(violation).lower()
+        extra_metadata["available"] = str(capability.available).lower()
         options = KernelLaneDiagnosticOptions(
             rule_name=rule.name,
             plan_signature=plan_signature,

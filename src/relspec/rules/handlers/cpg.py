@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
 from relspec.model import DatasetRef, FilterKernelSpec, RelationshipRule, RuleKind
 from relspec.model import EvidenceSpec as RelationshipEvidenceSpec
 from relspec.rules.compiler import RuleHandler

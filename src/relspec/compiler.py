@@ -15,16 +15,17 @@ from ibis.expr.types import Column as IbisColumn
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
 
-from arrowdsl.compute.kernels import resolve_kernel
-from arrowdsl.core.context import ExecutionContext, Ordering
 from arrowdsl.core.determinism import DeterminismTier
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.expr_types import ExplodeSpec, ScalarValue
 from arrowdsl.core.interop import RecordBatchReaderLike, ScalarLike, SchemaLike, TableLike
+from arrowdsl.core.ordering import Ordering
 from arrowdsl.core.ordering_policy import require_explicit_ordering
 from arrowdsl.core.plan_ops import DedupeSpec, IntervalAlignOptions, SortKey
 from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
+from datafusion_engine.kernel_registry import resolve_kernel
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from engine.materialize import build_plan_product
 from engine.plan_policy import ExecutionSurfacePolicy

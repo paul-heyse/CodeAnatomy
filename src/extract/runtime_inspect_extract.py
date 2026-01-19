@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 from pyarrow import ipc
 
-from arrowdsl.core.context import ExecutionContext, execution_context_factory
+from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from extract.helpers import (
     ExtractMaterializeOptions,

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from arrowdsl.compute.registry import registry_snapshot
+from engine.pyarrow_registry import pyarrow_registry_snapshot
 
 
 def test_registry_snapshot_payload_sorted() -> None:
     """Return sorted kernel/udf lists for repro bundles."""
-    snapshot = registry_snapshot()
+    snapshot = pyarrow_registry_snapshot()
     assert snapshot["version"] == 1
     kernels = snapshot["available_kernels"]
     registered_udfs = snapshot["registered_udfs"]

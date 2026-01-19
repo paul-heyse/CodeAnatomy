@@ -8,10 +8,10 @@ from typing import Literal
 
 import pyarrow as pa
 
-from arrowdsl.compute.filters import position_encoding_array
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.ids import iter_arrays
 from arrowdsl.core.interop import ArrayLike, TableLike
+from arrowdsl.core.position_encoding import normalize_position_encoding_array
 from arrowdsl.schema.build import column_or_null, set_or_append_column
 from normalize.runner import PostFn
 from normalize.span_pipeline import (
@@ -644,7 +644,7 @@ def _build_doc_posenc_map(
     """
     doc_posenc: dict[str, int] = {}
     doc_ids = column_or_null(scip_documents, columns.document_id, pa.string())
-    enc_values = position_encoding_array(
+    enc_values = normalize_position_encoding_array(
         column_or_null(scip_documents, columns.doc_posenc, pa.string())
     )
     for did, posenc in iter_arrays([doc_ids, enc_values]):

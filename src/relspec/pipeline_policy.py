@@ -18,7 +18,6 @@ class KernelLanePolicy:
     allowed: tuple[KernelLane, ...] = (
         KernelLane.DF_UDF,
         KernelLane.BUILTIN,
-        KernelLane.ARROW_FALLBACK,
     )
     on_violation: str = "warn"
 

@@ -8,9 +8,9 @@ from typing import Protocol, TypeGuard, runtime_checkable
 
 import ibis
 
-from arrowdsl.compute.registry import pyarrow_compute_functions
 from arrowdsl.kernel.registry import KERNEL_REGISTRY, KernelDef
 from engine.function_registry import FunctionRegistry, FunctionSpec, default_function_registry
+from engine.pyarrow_registry import pyarrow_compute_functions
 from extract.registry_builders import QueryContext, build_query_spec
 from extract.registry_definitions import extract_rule_definitions
 from extract.registry_pipelines import post_kernels_for_postprocess

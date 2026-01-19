@@ -10,8 +10,9 @@ import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import IntegerValue, Value
 
-from arrowdsl.core.context import ExecutionContext, Ordering
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, concat_tables
+from arrowdsl.core.ordering import Ordering
 from arrowdsl.schema.schema import empty_table
 from cpg.constants import (
     ROLE_FLAG_SPECS,

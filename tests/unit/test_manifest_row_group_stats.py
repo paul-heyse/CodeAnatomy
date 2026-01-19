@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from arrowdsl.core.context import OrderingLevel
+from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.io.parquet import DatasetWriteConfig, ParquetMetadataConfig, write_dataset_parquet
 from arrowdsl.schema.metadata import ordering_metadata_spec
 

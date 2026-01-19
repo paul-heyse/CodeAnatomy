@@ -10,8 +10,8 @@ from typing import cast, overload
 import pyarrow as pa
 from ibis.expr.types import Scalar, Table, Value
 
-from arrowdsl.core.context import Ordering, OrderingLevel
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.schema.metadata import ordering_metadata_spec
 from arrowdsl.schema.schema import SchemaMetadataSpec
 

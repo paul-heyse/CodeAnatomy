@@ -19,7 +19,7 @@ from libcst.metadata import (
     QualifiedNameProvider,
 )
 
-from arrowdsl.core.context import ExecutionContext, execution_context_factory
+from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.structs import flatten_struct_field
 from extract.helpers import (

@@ -6,7 +6,9 @@ import ibis
 import pyarrow as pa
 import pytest
 
-from arrowdsl.core.context import ExecutionContext, Ordering, runtime_profile_factory
+from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.core.ordering import Ordering
+from arrowdsl.core.runtime_profiles import runtime_profile_factory
 from engine.materialize import build_plan_product
 from engine.session_factory import build_engine_session
 from ibis_engine.execution import IbisExecutionContext

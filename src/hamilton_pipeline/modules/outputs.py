@@ -12,8 +12,7 @@ from typing import cast
 import pyarrow as pa
 from hamilton.function_modifiers import tag
 
-from arrowdsl.compute.registry import registry_snapshot as kernel_registry_snapshot
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.core.metrics import (
     column_stats_table,
@@ -37,6 +36,7 @@ from datafusion_engine.runtime import DataFusionRuntimeProfile
 from engine.function_registry import default_function_registry
 from engine.plan_cache import PlanCacheEntry
 from engine.plan_policy import WriterStrategy
+from engine.pyarrow_registry import pyarrow_registry_snapshot as kernel_registry_snapshot
 from engine.runtime_profile import RuntimeProfileSnapshot, runtime_profile_snapshot
 from extract.evidence_plan import EvidencePlan
 from hamilton_pipeline.modules.extraction import ExtractErrorArtifacts

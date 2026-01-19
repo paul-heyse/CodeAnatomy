@@ -18,11 +18,14 @@ from datafusion.dataframe import DataFrame
 from datafusion.expr import Expr, SortExpr
 from datafusion.expr import SortKey as DFSortKey
 
-from arrowdsl.core.context import ExecutionContext, Ordering, OrderingLevel
+from arrowdsl.core.determinism import DeterminismTier
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.expr_types import ExplodeSpec
 from arrowdsl.core.interop import SchemaLike, TableLike, pc
-from arrowdsl.core.plan_ops import DedupeSpec, IntervalAlignOptions
+from arrowdsl.core.ordering import Ordering, OrderingLevel
+from arrowdsl.core.plan_ops import DedupeSpec, IntervalAlignOptions, SortKey
 from arrowdsl.core.plan_ops import SortKey as PlanSortKey
+from arrowdsl.core.schema_constants import PROVENANCE_COLS
 from arrowdsl.schema.metadata import (
     merge_metadata_specs,
     metadata_spec_from_schema,
@@ -132,6 +135,19 @@ def _dedupe_spec_with_ordering(spec: DedupeSpec, ordering: Ordering) -> DedupeSp
         strategy=spec.strategy,
         tie_breakers=tuple(spec.tie_breakers) + tuple(extras),
     )
+
+
+def _append_provenance_keys(
+    table: TableLike,
+    sort_keys: Sequence[SortKey],
+) -> list[SortKey]:
+    existing = {sk.column for sk in sort_keys}
+    extras = [
+        SortKey(col, "ascending")
+        for col in PROVENANCE_COLS
+        if col in table.column_names and col not in existing
+    ]
+    return [*sort_keys, *extras]
 
 
 def _normalize_sort_order(order: str) -> Literal["ascending", "descending"]:
@@ -259,6 +275,65 @@ def dedupe_kernel(
     columns = list(table.schema.names)
     result_df = _dedupe_dataframe(df, spec=resolved_spec, columns=columns)
     out = result_df.to_arrow_table()
+    return _apply_metadata(out, metadata=_metadata_spec_from_tables([table]))
+
+
+def winner_select_kernel(
+    table: TableLike,
+    *,
+    keys: Sequence[str],
+    score_col: str = "score",
+    score_order: Literal["ascending", "descending"] = "descending",
+    tie_breakers: Sequence[SortKey] = (),
+    _ctx: ExecutionContext | None = None,
+) -> TableLike:
+    """Select a single winner per key group based on score and tie breakers.
+
+    Returns
+    -------
+    TableLike
+        Winner-selected table.
+    """
+    spec = DedupeSpec(
+        keys=tuple(keys),
+        strategy="KEEP_BEST_BY_SCORE",
+        tie_breakers=(SortKey(score_col, score_order), *tuple(tie_breakers)),
+    )
+    return dedupe_kernel(table, spec=spec, _ctx=_ctx)
+
+
+def canonical_sort_if_canonical(
+    table: TableLike,
+    *,
+    sort_keys: Sequence[SortKey],
+    ctx: ExecutionContext,
+) -> TableLike:
+    """Sort only when determinism is canonical.
+
+    Returns
+    -------
+    TableLike
+        Sorted table when canonical; otherwise unchanged.
+    """
+    if ctx.determinism != DeterminismTier.CANONICAL or not sort_keys:
+        return table
+    keys = _append_provenance_keys(table, sort_keys)
+    df = _df_from_table(
+        _session_context(ctx),
+        table,
+        name="canonical_sort",
+        batch_size=_batch_size_from_ctx(ctx),
+        ingest_hook=_arrow_ingest_hook(ctx),
+    )
+    order_exprs = [
+        col(key.column).sort(
+            ascending=key.order != "descending",
+            nulls_first=False,
+        )
+        for key in keys
+    ]
+    sorted_df = df.sort(*order_exprs) if order_exprs else df
+    out = sorted_df.to_arrow_table()
     return _apply_metadata(out, metadata=_metadata_spec_from_tables([table]))
 
 
@@ -709,13 +784,16 @@ def datafusion_kernel_registry() -> dict[str, KernelFn]:
         "interval_align": interval_align_kernel,
         "explode_list": explode_list_kernel,
         "dedupe": dedupe_kernel,
+        "winner_select": winner_select_kernel,
     }
 
 
 __all__ = [
+    "canonical_sort_if_canonical",
     "datafusion_kernel_registry",
     "dedupe_kernel",
     "explode_list_kernel",
     "interval_align_kernel",
     "register_datafusion_udfs",
+    "winner_select_kernel",
 ]

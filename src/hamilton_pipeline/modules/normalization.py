@@ -11,21 +11,24 @@ import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
 from ibis.backends import BaseBackend
 
-from arrowdsl.compute.kernels import (
-    distinct_sorted,
-    flatten_list_struct_field,
-    resolve_kernel,
-)
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.core.expr_types import ExplodeSpec
 from arrowdsl.core.ids import prefixed_hash_id
 from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
 from arrowdsl.core.joins import JoinConfig, left_join
+from arrowdsl.core.pyarrow_ops import distinct_sorted, flatten_list_struct_field
 from arrowdsl.schema.build import empty_table, set_or_append_column, table_from_arrays
+from datafusion_engine.kernel_registry import resolve_kernel
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from extract.evidence_plan import EvidencePlan
 from normalize.catalog import IbisPlanCatalog, NormalizeCatalogInputs
 from normalize.catalog import normalize_plan_catalog as build_normalize_plan_catalog
 from normalize.ibis_api import DiagnosticsSources
+from normalize.ibis_spans import (
+    add_ast_byte_spans_ibis,
+    add_scip_occurrence_byte_spans_ibis,
+    anchor_instructions_ibis,
+)
 from normalize.registry_specs import (
     dataset_alias,
     dataset_contract,
@@ -42,20 +45,6 @@ from normalize.runner import (
     compile_normalize_plans_ibis,
     run_normalize,
 )
-from relspec.adapters.normalize import NormalizeRuleAdapter
-from relspec.pipeline_policy import PipelinePolicy
-from relspec.rules.compiler import RuleCompiler
-from relspec.rules.handlers.normalize import NormalizeRuleHandler
-from relspec.rules.registry import RuleRegistry
-
-if TYPE_CHECKING:
-    from relspec.normalize.rule_model import NormalizeRule
-    from relspec.rules.definitions import RuleDefinition
-from normalize.ibis_spans import (
-    add_ast_byte_spans_ibis,
-    add_scip_occurrence_byte_spans_ibis,
-    anchor_instructions_ibis,
-)
 from normalize.schema_infer import (
     SchemaInferOptions,
     align_table_to_schema,
@@ -68,8 +57,17 @@ from normalize.spans import (
     normalize_cst_defs_spans,
     normalize_cst_imports_spans,
 )
+from relspec.adapters.normalize import NormalizeRuleAdapter
+from relspec.pipeline_policy import PipelinePolicy
+from relspec.rules.compiler import RuleCompiler
+from relspec.rules.handlers.normalize import NormalizeRuleHandler
+from relspec.rules.registry import RuleRegistry
 from schema_spec.specs import ArrowFieldSpec, call_span_bundle
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
+
+if TYPE_CHECKING:
+    from relspec.normalize.rule_model import NormalizeRule
+    from relspec.rules.definitions import RuleDefinition
 
 SCHEMA_VERSION = 1
 DEFAULT_MATERIALIZE_OUTPUTS: tuple[str, ...] = ()
@@ -615,13 +613,14 @@ def callsite_qname_candidates(
         return empty_table(schema)
 
     kernel = resolve_kernel("explode_list", ctx=ctx)
-    exploded = kernel(
-        cst_callsites,
-        parent_id_col="call_id",
+    spec = ExplodeSpec(
+        parent_keys=("call_id",),
         list_col="callee_qnames",
-        out_parent_col="call_id",
-        out_value_col="qname_struct",
+        value_col="qname_struct",
+        idx_col=None,
+        keep_empty=True,
     )
+    exploded = kernel(cst_callsites, spec=spec, out_parent_col="call_id")
     base = _callsite_qname_base_table(exploded)
     joined = _join_callsite_qname_meta(base, cst_callsites)
 

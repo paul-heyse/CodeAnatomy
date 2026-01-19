@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from arrowdsl.compute.ids import (
+from arrowdsl.core.ids import (
     HashSpec,
     SpanIdSpec,
     add_span_id_column,

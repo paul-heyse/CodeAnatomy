@@ -10,7 +10,7 @@ from typing import Literal, cast
 from hamilton import driver as hamilton_driver
 from hamilton.graph_types import HamiltonNode
 
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from hamilton_pipeline.driver_factory import build_driver
 from hamilton_pipeline.pipeline_types import ScipIdentityOverrides, ScipIndexConfig

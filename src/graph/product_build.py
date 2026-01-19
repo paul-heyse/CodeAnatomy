@@ -12,8 +12,8 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Literal, cast
 
-from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.determinism import DeterminismTier
+from arrowdsl.core.execution_context import ExecutionContext
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from cpg.schemas import SCHEMA_VERSION
 from engine.plan_policy import WriterStrategy

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, ov
 import tree_sitter_python
 from tree_sitter import Language, Parser
 
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from extract.helpers import (
     ExtractExecutionContext,

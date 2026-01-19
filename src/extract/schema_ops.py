@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.finalize.finalize import FinalizeContext, FinalizeResult
 from arrowdsl.schema.policy import SchemaPolicy

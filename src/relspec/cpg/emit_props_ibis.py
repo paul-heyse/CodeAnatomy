@@ -10,7 +10,7 @@ import ibis
 import pyarrow as pa
 from ibis.expr.types import StringValue, Table, Value
 
-from arrowdsl.core.context import Ordering
+from arrowdsl.core.ordering import Ordering
 from cpg.prop_transforms import expr_context_expr, flag_to_bool_expr
 from cpg.schemas import CPG_PROPS_SCHEMA
 from cpg.specs import (

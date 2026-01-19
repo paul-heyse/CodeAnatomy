@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from arrowdsl.core.context import ExecutionContext, OrderingEffect
+from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.core.ordering import OrderingEffect
 
 
 def scan_ordering_effect(ctx: ExecutionContext) -> OrderingEffect:

@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
 
 import arrowdsl.core.interop as pa
-from arrowdsl.compute.expr_ops import and_expr
-from arrowdsl.compute.kernel_utils import resolve_kernel
-from arrowdsl.compute.registry import UdfSpec, ensure_udf
+from arrowdsl.core.expr_ops import and_expr
 from arrowdsl.core.interop import ComputeExpression, ensure_expression, pc
+from arrowdsl.core.validity import valid_mask_array
 
 type MissingPolicy = Literal["raise", "null"]
 
@@ -50,6 +49,16 @@ class HashSpec:
 
 _HASH64_FUNCTION = "hash64_udf"
 _NULL_SEPARATOR = "\x1f"
+
+
+def _resolve_compute_kernel(name: str, *, fallbacks: Sequence[str] = ()) -> str | None:
+    for candidate in (name, *fallbacks):
+        try:
+            pa.pc.get_function(candidate)
+        except KeyError:
+            continue
+        return candidate
+    return None
 
 
 def iter_array_values(array: pa.ArrayLike) -> Iterator[object | None]:
@@ -172,15 +181,16 @@ def _hash64_udf(
 
 def _ensure_hash64_udf() -> None:
     """Register the hash64 UDF when the built-in kernel is unavailable."""
-    spec = UdfSpec(
-        name=_HASH64_FUNCTION,
-        inputs={"value": pa.string()},
-        output=pa.int64(),
-        fn=_hash64_udf,
-        summary="hash64 udf",
-        description="Deterministic 64-bit hash for strings.",
-    )
-    ensure_udf(spec)
+    try:
+        pa.pc.get_function(_HASH64_FUNCTION)
+    except KeyError:
+        pa.pc.register_scalar_function(
+            _hash64_udf,
+            _HASH64_FUNCTION,
+            {"summary": "hash64 udf", "description": "Deterministic 64-bit hash for strings."},
+            {"value": pa.string()},
+            pa.int64(),
+        )
 
 
 def _hash64(values: pa.ArrayLike) -> pa.ArrayLike:
@@ -196,7 +206,7 @@ def _hash64(values: pa.ArrayLike) -> pa.ArrayLike:
     pa.ArrayLike
         Int64 hash array.
     """
-    func = resolve_kernel("hash64", fallbacks=("hash",))
+    func = _resolve_compute_kernel("hash64", fallbacks=("hash",))
     if func is not None:
         result = pa.pc.call_function(func, [values])
     else:
@@ -503,7 +513,7 @@ def hash_expression(
     if spec.prefix:
         parts.insert(0, pc.scalar(spec.prefix))
     joined = ensure_expression(pc.binary_join_element_wise(*parts, _NULL_SEPARATOR))
-    func = resolve_kernel("hash64", fallbacks=("hash",))
+    func = _resolve_compute_kernel("hash64", fallbacks=("hash",))
     if func is not None:
         hashed = _call_expr(joined, func, (joined,))
     else:
@@ -537,7 +547,7 @@ def hash_expression_from_parts(
     if prefix:
         exprs.insert(0, pc.scalar(prefix))
     joined = ensure_expression(pc.binary_join_element_wise(*exprs, _NULL_SEPARATOR))
-    func = resolve_kernel("hash64", fallbacks=("hash",))
+    func = _resolve_compute_kernel("hash64", fallbacks=("hash",))
     if func is not None:
         hashed = _call_expr(joined, func, (joined,))
     else:
@@ -606,9 +616,198 @@ def masked_hash_array(
     return pc.if_else(mask, hashed, null_value)
 
 
+def masked_hash_expr(
+    spec: HashSpec,
+    *,
+    required: Sequence[str],
+    available: Sequence[str] | None = None,
+) -> ComputeExpression:
+    """Return a hash expression masked by required column validity.
+
+    Returns
+    -------
+    ComputeExpression
+        Masked compute expression for hash IDs.
+    """
+    return masked_hash_expression(spec=spec, required=required, available=available)
+
+
+def masked_prefixed_hash(
+    prefix: str,
+    arrays: Sequence[pa.ArrayLike | pa.ChunkedArrayLike],
+    *,
+    required: Sequence[pa.ArrayLike | pa.ChunkedArrayLike],
+) -> pa.ArrayLike | pa.ChunkedArrayLike:
+    """Return prefixed hash IDs masked by required validity arrays.
+
+    Returns
+    -------
+    ArrayLike | ChunkedArrayLike
+        Prefixed hash IDs masked by required validity.
+    """
+    hashed = prefixed_hash_id(arrays, prefix=prefix)
+    if not required:
+        return hashed
+    mask = valid_mask_array(required)
+    return pc.if_else(mask, hashed, pa.scalar(None, type=pa.string()))
+
+
+def prefixed_hash64(
+    prefix: str,
+    arrays: Sequence[pa.ArrayLike | pa.ChunkedArrayLike],
+) -> pa.ArrayLike | pa.ChunkedArrayLike:
+    """Return prefixed hash IDs for the provided arrays.
+
+    Returns
+    -------
+    ArrayLike | ChunkedArrayLike
+        Prefixed hash identifiers.
+    """
+    return prefixed_hash_id(arrays, prefix=prefix)
+
+
+def apply_hash_column(
+    table: pa.TableLike,
+    *,
+    spec: HashSpec,
+    required: Sequence[str] | None = None,
+) -> pa.TableLike:
+    """Hash columns into a new id column.
+
+    Returns
+    -------
+    TableLike
+        Updated table with hashed id column.
+    """
+    out_col = spec.out_col or f"{spec.prefix}_id"
+    req = required or ()
+    hashed = masked_hash_array(table, spec=spec, required=req)
+    if out_col in table.column_names:
+        idx = table.schema.get_field_index(out_col)
+        return table.set_column(idx, out_col, hashed)
+    return table.append_column(out_col, hashed)
+
+
+def apply_hash_columns(
+    table: pa.TableLike,
+    *,
+    specs: Sequence[HashSpec],
+    required: Mapping[str, Sequence[str]] | None = None,
+) -> pa.TableLike:
+    """Apply multiple hash specs to a table.
+
+    Returns
+    -------
+    TableLike
+        Updated table with hashed id columns.
+    """
+    out = table
+    for spec in specs:
+        out_col = spec.out_col or f"{spec.prefix}_id"
+        req = required.get(out_col) if required else None
+        out = apply_hash_column(out, spec=spec, required=req)
+    return out
+
+
+def stable_id(prefix: str, *parts: str | None) -> str:
+    """Build a deterministic string ID.
+
+    Returns
+    -------
+    str
+        Stable identifier with the requested prefix.
+    """
+    hashed = hash64_from_parts(*parts, prefix=prefix)
+    return f"{prefix}:{hashed}"
+
+
+def stable_int64(*parts: str | None) -> int:
+    """Build a deterministic signed int64 from parts.
+
+    Returns
+    -------
+    int
+        Deterministic signed 64-bit integer.
+    """
+    return hash64_from_parts(*parts)
+
+
+def span_id(path: str, bstart: int, bend: int, kind: str | None = None) -> str:
+    """Build a stable ID for a source span.
+
+    Returns
+    -------
+    str
+        Stable span identifier.
+    """
+    if kind:
+        return stable_id("span", kind, path, str(bstart), str(bend))
+    return stable_id("span", path, str(bstart), str(bend))
+
+
+@dataclass(frozen=True)
+class SpanIdSpec:
+    """Specification for span_id column generation."""
+
+    path_col: str = "path"
+    bstart_col: str = "bstart"
+    bend_col: str = "bend"
+    kind: str | None = None
+    out_col: str = "span_id"
+
+
+def add_span_id_column(table: pa.TableLike, spec: SpanIdSpec | None = None) -> pa.TableLike:
+    """Add a span_id column computed with Arrow hash kernels.
+
+    Returns
+    -------
+    TableLike
+        Table with the span_id column appended.
+    """
+    spec = spec or SpanIdSpec()
+    path_col = spec.path_col
+    bstart_col = spec.bstart_col
+    bend_col = spec.bend_col
+    kind = spec.kind
+    out_col = spec.out_col
+
+    if out_col in table.column_names:
+        return table
+    if path_col in table.column_names:
+        path_arr = table[path_col]
+    else:
+        path_arr = pa.nulls(table.num_rows, type=pa.string())
+    if bstart_col in table.column_names:
+        bstart_arr = table[bstart_col]
+    else:
+        bstart_arr = pa.nulls(table.num_rows, type=pa.int64())
+    if bend_col in table.column_names:
+        bend_arr = table[bend_col]
+    else:
+        bend_arr = pa.nulls(table.num_rows, type=pa.int64())
+
+    hash_cols = (path_col, bstart_col, bend_col)
+    extra = (kind,) if kind is not None else ()
+    hash_spec = HashSpec(
+        prefix="span",
+        cols=hash_cols,
+        as_string=True,
+        null_sentinel="None",
+        extra_literals=extra,
+    )
+    prefixed = hash_column_values(table, spec=hash_spec)
+    valid = valid_mask_array([path_arr, bstart_arr, bend_arr])
+    span_ids = pc.if_else(valid, prefixed, pa.scalar(None, type=pa.string()))
+    return table.append_column(out_col, span_ids)
+
+
 __all__ = [
     "HashSpec",
     "MissingPolicy",
+    "SpanIdSpec",
+    "add_span_id_column",
+    "apply_hash_column",
+    "apply_hash_columns",
     "hash64_from_arrays",
     "hash64_from_columns",
     "hash64_from_parts",
@@ -620,6 +819,12 @@ __all__ = [
     "iter_arrays",
     "iter_table_rows",
     "masked_hash_array",
+    "masked_hash_expr",
     "masked_hash_expression",
+    "masked_prefixed_hash",
+    "prefixed_hash64",
     "prefixed_hash_id",
+    "span_id",
+    "stable_id",
+    "stable_int64",
 ]

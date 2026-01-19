@@ -12,7 +12,6 @@ class KernelLane(StrEnum):
 
     BUILTIN = "builtin"
     DF_UDF = "df_udf"
-    ARROW_FALLBACK = "arrow_fallback"
 
 
 @dataclass(frozen=True)
@@ -52,7 +51,7 @@ KERNEL_REGISTRY: dict[str, KernelDef] = {
     ),
     "winner_select": KernelDef(
         name="winner_select",
-        lane=KernelLane.ARROW_FALLBACK,
+        lane=KernelLane.BUILTIN,
         volatility="stable",
         requires_ordering=True,
     ),

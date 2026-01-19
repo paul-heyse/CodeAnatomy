@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrowdsl.compute.kernels import winner_select_by_score
-from arrowdsl.core.context import OrderingLevel
+from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.build import rows_from_table, table_from_rows
 from arrowdsl.schema.metadata import ordering_metadata_spec
+from datafusion_engine.kernels import winner_select_kernel
 
 
 def _ordered_schema() -> pa.Schema:
@@ -45,8 +45,8 @@ def test_winner_select_deterministic_across_reruns() -> None:
     table = table_from_rows(schema, rows)
     reversed_table = table.take(pa.array(list(reversed(range(table.num_rows)))))
 
-    winners = winner_select_by_score(table, keys=("group",), score_col="score")
-    winners_reordered = winner_select_by_score(
+    winners = winner_select_kernel(table, keys=("group",), score_col="score")
+    winners_reordered = winner_select_kernel(
         reversed_table,
         keys=("group",),
         score_col="score",

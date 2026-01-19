@@ -35,8 +35,8 @@ from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
 from sqlglot import ErrorLevel, Expression, exp
 
-from arrowdsl.core.context import Ordering, OrderingLevel
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, coerce_table_like
+from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.core.streaming import to_reader
 from arrowdsl.schema.build import table_from_row_dicts
 from arrowdsl.schema.metadata import ordering_metadata_spec

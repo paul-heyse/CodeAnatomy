@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 
 from arrowdsl.core.determinism import DeterminismTier
-from arrowdsl.core.scan_profiles import ScanProfile, normalize_profile_name, scan_profile_factory
+from arrowdsl.core.runtime_profiles import ScanProfile, normalize_profile_name, scan_profile_factory
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile

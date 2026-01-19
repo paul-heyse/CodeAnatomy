@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
 from ibis_engine.query_compiler import IbisQuerySpec
 from normalize.rule_defaults import apply_rule_defaults
 from relspec.normalize.rule_model import (

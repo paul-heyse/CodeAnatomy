@@ -9,8 +9,9 @@ import ibis
 import pyarrow as pa
 from ibis.backends import BaseBackend
 
-from arrowdsl.core.context import ExecutionContext, Ordering
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
+from arrowdsl.core.ordering import Ordering
 from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import EncodingSpec, empty_table, encode_table
 from cpg.constants import CpgBuildArtifacts, quality_from_ids

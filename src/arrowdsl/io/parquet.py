@@ -13,7 +13,6 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
-from arrowdsl.core.context import OrderingLevel
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.core.metrics import (
     ParquetMetadataSpec,
@@ -21,6 +20,7 @@ from arrowdsl.core.metrics import (
     parquet_metadata_factory,
     row_group_stats,
 )
+from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.core.ordering_policy import ordering_keys_for_schema
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding

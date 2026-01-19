@@ -8,7 +8,8 @@ import ibis
 import pyarrow as pa
 import pytest
 
-from arrowdsl.core.context import ExecutionContext, OrderingLevel, execution_context_factory
+from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
+from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.metadata import ordering_metadata_spec
 from ibis_engine.plan import IbisPlan
 from relspec.compiler import (

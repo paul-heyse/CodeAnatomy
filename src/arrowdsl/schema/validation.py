@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Literal, Protocol, cast
 
 import arrowdsl.core.interop as pa
-from arrowdsl.core.context import (
+from arrowdsl.core.execution_context import (
     ExecutionContext,
     SchemaValidationPolicy,
     execution_context_factory,

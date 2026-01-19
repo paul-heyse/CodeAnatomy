@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 from pyarrow import ipc
 
-from arrowdsl.core.context import ExecutionContext
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.validation import ArrowValidationOptions, ValidationReport
 from arrowdsl.spec.io import (

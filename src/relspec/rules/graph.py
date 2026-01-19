@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from arrowdsl.core.context import Ordering
 from arrowdsl.core.interop import SchemaLike
+from arrowdsl.core.ordering import Ordering
 from ibis_engine.expr_compiler import union_tables
 from ibis_engine.plan import IbisPlan
 from registry_common.arrow_payloads import payload_hash

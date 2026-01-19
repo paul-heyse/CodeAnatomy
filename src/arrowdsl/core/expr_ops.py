@@ -1,10 +1,21 @@
-"""Expression combinators for plan-lane predicates."""
+"""Compute expression helpers for Arrow-backed plans."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from arrowdsl.core.interop import ComputeExpression, ensure_expression
+from arrowdsl.core.interop import ComputeExpression, DataTypeLike, ensure_expression, pc
+
+
+def cast_expr(expr: ComputeExpression, dtype: DataTypeLike, *, safe: bool = True) -> ComputeExpression:
+    """Return a cast expression for the requested dtype.
+
+    Returns
+    -------
+    ComputeExpression
+        Cast expression for the provided dtype.
+    """
+    return ensure_expression(pc.cast(expr, dtype, safe=safe))
 
 
 def and_expr(left: ComputeExpression, right: ComputeExpression) -> ComputeExpression:
@@ -73,4 +84,10 @@ def or_exprs(exprs: Sequence[ComputeExpression]) -> ComputeExpression:
     return combined
 
 
-__all__ = ["and_expr", "and_exprs", "or_expr", "or_exprs"]
+__all__ = [
+    "and_expr",
+    "and_exprs",
+    "cast_expr",
+    "or_expr",
+    "or_exprs",
+]

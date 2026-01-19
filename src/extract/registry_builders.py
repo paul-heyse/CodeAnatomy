@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
-from arrowdsl.core.context import OrderingLevel
 from arrowdsl.core.interop import SchemaLike
+from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.metadata import (
     extractor_metadata_spec,
     extractor_option_defaults_spec,

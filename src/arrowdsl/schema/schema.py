@@ -10,7 +10,7 @@ from typing import Literal, Protocol, TypedDict, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.compute.expr_core import cast_expr, or_exprs
+from arrowdsl.core.expr_ops import cast_expr, or_exprs
 from arrowdsl.core.interop import (
     ArrayLike,
     ComputeExpression,

@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 
-from arrowdsl.core.context import execution_context_factory
+from arrowdsl.core.execution_context import execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from cpg.registry_specs import dataset_contract_spec
 from hamilton_pipeline import build_driver

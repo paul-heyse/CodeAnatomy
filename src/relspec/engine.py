@@ -11,7 +11,8 @@ from ibis.expr.types import BooleanValue, Scalar
 from ibis.expr.types import Table as IbisTable
 from ibis.expr.types import Value as IbisValue
 
-from arrowdsl.core.context import ExecutionContext, Ordering, OrderingLevel
+from arrowdsl.core.execution_context import ExecutionContext
+from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.core.scan_telemetry import ScanTelemetry
 from ibis_engine.expr_compiler import (
     IbisExprRegistry,

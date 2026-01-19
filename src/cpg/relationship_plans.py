@@ -11,9 +11,10 @@ import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 
-from arrowdsl.core.context import ExecutionContext, Ordering
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.expr_types import ExplodeSpec
 from arrowdsl.core.interop import Scalar, TableLike
+from arrowdsl.core.ordering import Ordering
 from arrowdsl.core.plan_ops import DedupeSpec, SortKey
 from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import align_table

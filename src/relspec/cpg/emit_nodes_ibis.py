@@ -9,7 +9,7 @@ import pyarrow as pa
 import pyarrow.types as patypes
 from ibis.expr.types import Table, Value
 
-from arrowdsl.core.context import Ordering
+from arrowdsl.core.ordering import Ordering
 from cpg.schemas import CPG_NODES_SCHEMA
 from cpg.specs import NodeEmitSpec
 from ibis_engine.plan import IbisPlan

@@ -10,7 +10,7 @@ import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import StringValue, Table
 
-from arrowdsl.core.context import ExecutionContext, Ordering
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.ids import iter_array_values
 from arrowdsl.core.interop import (
     ArrayLike,
@@ -19,6 +19,7 @@ from arrowdsl.core.interop import (
     SchemaLike,
     TableLike,
 )
+from arrowdsl.core.ordering import Ordering
 from arrowdsl.schema.build import const_array, set_or_append_column, table_from_arrays
 from arrowdsl.schema.metadata import normalize_dictionaries
 from arrowdsl.schema.schema import empty_table

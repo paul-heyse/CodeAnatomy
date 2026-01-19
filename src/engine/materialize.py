@@ -8,8 +8,8 @@ from dataclasses import replace
 import pyarrow as pa
 from ibis.expr.types import Value as IbisValue
 
-from arrowdsl.core.context import ExecutionContext
 from arrowdsl.core.determinism import DeterminismTier
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.plan_product import PlanProduct

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrowdsl.compute.expr_core import ExplodeSpec
-from arrowdsl.compute.kernels import explode_list_column
+from arrowdsl.core.expr_types import ExplodeSpec
+from datafusion_engine.kernels import explode_list_kernel
 from tests.utils import values_as_list
 
 
@@ -24,7 +24,7 @@ def test_explode_list_column_alignment() -> None:
         idx_col="idx",
         keep_empty=False,
     )
-    result = explode_list_column(table, spec=spec)
+    result = explode_list_kernel(table, spec=spec)
     assert values_as_list(result["parent_id"]) == [1, 1, 3]
     assert values_as_list(result["dst_id"]) == [10, 11, 12]
     assert values_as_list(result["idx"]) == [0, 1, 0]
@@ -52,7 +52,7 @@ def test_explode_list_column_struct_values() -> None:
         idx_col="idx",
         keep_empty=True,
     )
-    result = explode_list_column(table, spec=spec)
+    result = explode_list_kernel(table, spec=spec)
     assert values_as_list(result["parent_id"]) == [1, 1]
     assert values_as_list(result["idx"]) == [0, 1]
     assert values_as_list(result["event"]) == [

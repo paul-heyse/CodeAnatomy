@@ -15,9 +15,12 @@ from arrowdsl.schema.metadata import schema_identity_from_metadata
 from ibis_engine.plan_diff import DiffOpEntry, semantic_diff_sql
 from incremental.state_store import StateStore
 from registry_common.arrow_payloads import payload_hash
+from relspec.graph import rule_graph_signature
+from relspec.registry.snapshot import RelspecSnapshot
 from relspec.rules.cache import (
+    relspec_snapshot_cached,
+    rule_definitions_cached,
     rule_graph_signature_cached,
-    rule_plan_signatures_cached,
     rule_plan_sql_cached,
 )
 from schema_spec.system import SchemaRegistry
@@ -115,7 +118,11 @@ class InvalidationOutcome:
     plan_diff: pa.Table
 
 
-def build_invalidation_snapshot(registry: SchemaRegistry) -> InvalidationSnapshot:
+def build_invalidation_snapshot(
+    registry: SchemaRegistry,
+    *,
+    relspec_snapshot: RelspecSnapshot | None = None,
+) -> InvalidationSnapshot:
     """Build the current invalidation signature snapshot.
 
     Returns
@@ -123,10 +130,15 @@ def build_invalidation_snapshot(registry: SchemaRegistry) -> InvalidationSnapsho
     InvalidationSnapshot
         Snapshot of current signatures and schema identities.
     """
+    snapshot = relspec_snapshot or relspec_snapshot_cached()
+    if relspec_snapshot is None:
+        rule_graph_signature = rule_graph_signature_cached()
+    else:
+        rule_graph_signature = _rule_graph_signature_for_snapshot(snapshot)
     return InvalidationSnapshot(
-        rule_plan_signatures=rule_plan_signatures_cached(),
+        rule_plan_signatures=dict(snapshot.plan_signatures),
         rule_plan_sql=rule_plan_sql_cached(),
-        rule_graph_signature=rule_graph_signature_cached(),
+        rule_graph_signature=rule_graph_signature,
         dataset_identities=_dataset_identities(registry),
     )
 
@@ -184,6 +196,7 @@ def check_state_store_invalidation(
     *,
     state_store: StateStore,
     registry: SchemaRegistry,
+    relspec_snapshot: RelspecSnapshot | None = None,
 ) -> InvalidationResult:
     """Check invalidation signatures and reset state store on mismatch.
 
@@ -192,7 +205,7 @@ def check_state_store_invalidation(
     InvalidationResult
         Outcome indicating whether a full refresh is required.
     """
-    current = build_invalidation_snapshot(registry)
+    current = build_invalidation_snapshot(registry, relspec_snapshot=relspec_snapshot)
     previous = read_invalidation_snapshot(state_store)
     if previous is None:
         write_invalidation_snapshot(state_store, current)
@@ -209,6 +222,7 @@ def check_state_store_invalidation_with_diff(
     *,
     state_store: StateStore,
     registry: SchemaRegistry,
+    relspec_snapshot: RelspecSnapshot | None = None,
 ) -> InvalidationOutcome:
     """Check invalidation signatures and return plan diff details.
 
@@ -217,7 +231,7 @@ def check_state_store_invalidation_with_diff(
     InvalidationOutcome
         Outcome containing invalidation result and plan diff table.
     """
-    current = build_invalidation_snapshot(registry)
+    current = build_invalidation_snapshot(registry, relspec_snapshot=relspec_snapshot)
     previous = read_invalidation_snapshot(state_store)
     diff_table = rule_plan_diff_table(previous, current)
     if previous is None:
@@ -310,6 +324,16 @@ def _dataset_identities(registry: SchemaRegistry) -> dict[str, SchemaIdentity]:
             version=resolved_version,
         )
     return identities
+
+
+def _rule_graph_signature_for_snapshot(snapshot: RelspecSnapshot) -> str:
+    rules = rule_definitions_cached()
+    return rule_graph_signature(
+        rules,
+        name_for=lambda rule: rule.name,
+        signature_for=lambda rule: snapshot.plan_signatures.get(rule.name, ""),
+        label="all",
+    )
 
 
 def _snapshot_from_row(row: Mapping[str, object]) -> InvalidationSnapshot:

@@ -65,6 +65,7 @@ def dataset_query_for_file_ids(
     *,
     schema: SchemaLike | None = None,
     columns: Sequence[str] | None = None,
+    file_id_column: str = "file_id",
 ) -> IbisQuerySpec:
     """Return an IbisQuerySpec filtering to the provided file ids.
 
@@ -76,6 +77,8 @@ def dataset_query_for_file_ids(
         Optional schema used to build the projection.
     columns:
         Optional explicit projection columns.
+    file_id_column:
+        Column name to filter by file ids.
 
     Returns
     -------
@@ -92,7 +95,7 @@ def dataset_query_for_file_ids(
             msg = "dataset_query_for_file_ids requires columns or schema."
             raise ValueError(msg)
         columns = list(schema.names)
-    predicate = _in_set_expr("file_id", tuple(file_ids))
+    predicate = _in_set_expr(file_id_column, tuple(file_ids))
     return IbisQuerySpec(
         projection=IbisProjectionSpec(base=tuple(columns)),
         predicate=predicate,

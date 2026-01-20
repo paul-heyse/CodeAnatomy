@@ -23,8 +23,11 @@ from ibis_engine.builtin_udfs import (
     col_to_byte,
     cpg_score,
     position_encoding_norm,
+    prefixed_hash64,
     stable_hash64,
     stable_hash128,
+    stable_id,
+    valid_mask,
 )
 
 IbisExprFn = Callable[..., Value]
@@ -227,6 +230,9 @@ def default_expr_registry() -> IbisExprRegistry:
             "cpg_score": cpg_score,
             "stable_hash64": stable_hash64,
             "stable_hash128": stable_hash128,
+            "prefixed_hash64": prefixed_hash64,
+            "stable_id": stable_id,
+            "valid_mask": valid_mask,
             "position_encoding_norm": position_encoding_norm,
             "col_to_byte": col_to_byte,
         }

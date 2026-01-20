@@ -366,8 +366,6 @@ def _extractor_default_value(entry: Mapping[str, object]) -> object:
     return result
 
 
-
-
 def merge_metadata_specs(*specs: SchemaMetadataSpec | None) -> SchemaMetadataSpec:
     """Merge multiple metadata specs into a single spec.
 
@@ -726,9 +724,7 @@ def dictionary_array_from_indices(
 def _ordering_keys_payload(keys: Sequence[OrderingKey]) -> dict[str, object]:
     return {
         "version": ORDERING_KEYS_VERSION,
-        "entries": [
-            {"column": str(column), "order": str(order)} for column, order in keys
-        ],
+        "entries": [{"column": str(column), "order": str(order)} for column, order in keys],
     }
 
 

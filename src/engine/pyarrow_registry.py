@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import cast
 
-from arrowdsl.core.interop import pc
+from datafusion_engine.compute_ops import list_functions
 
 
 def pyarrow_compute_functions() -> tuple[str, ...]:
@@ -21,12 +21,10 @@ def pyarrow_compute_functions() -> tuple[str, ...]:
     TypeError
         Raised when ``pyarrow.compute.list_functions`` is unavailable.
     """
-    list_functions = getattr(pc, "list_functions", None)
     if not callable(list_functions):
         msg = "pyarrow.compute.list_functions is unavailable."
         raise TypeError(msg)
-    callable_list = cast("Callable[[], Sequence[str]]", list_functions)
-    return tuple(sorted(callable_list()))
+    return tuple(sorted(cast("Callable[[], Sequence[str]]", list_functions)()))
 
 
 def pyarrow_registry_snapshot() -> dict[str, object]:

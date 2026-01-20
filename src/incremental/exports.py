@@ -7,9 +7,17 @@ from typing import cast
 import pyarrow as pa
 
 from arrowdsl.core.ids import prefixed_hash_id
-from arrowdsl.core.interop import TableLike, pc
+from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table
+from datafusion_engine.compute_ops import (
+    cast_values,
+    is_null,
+    list_flatten,
+    list_parent_indices,
+    struct_field,
+    take,
+)
 from incremental.registry_specs import dataset_schema
 
 
@@ -47,7 +55,7 @@ def _build_exported_defs_base(
     if table.num_rows == 0 or "qnames" not in table.column_names:
         return None
     top = (
-        table.filter(pc.is_null(table["container_def_id"]))
+        table.filter(is_null(table["container_def_id"]))
         if "container_def_id" in table.column_names
         else table
     )
@@ -56,18 +64,18 @@ def _build_exported_defs_base(
     qnames = top["qnames"]
     if len(qnames) == 0:
         return None
-    parent_idx = pc.list_parent_indices(qnames)
-    flat = pc.list_flatten(qnames)
+    parent_idx = list_parent_indices(qnames)
+    flat = list_flatten(qnames)
     if len(flat) == 0:
         return None
 
-    def_id = pc.take(_column_or_null(top, "def_id", pa.string()), parent_idx)
-    file_id = pc.take(_column_or_null(top, "file_id", pa.string()), parent_idx)
-    path = pc.take(_column_or_null(top, "path", pa.string()), parent_idx)
-    name = pc.take(_column_or_null(top, "name", pa.string()), parent_idx)
+    def_id = take(_column_or_null(top, "def_id", pa.string()), parent_idx)
+    file_id = take(_column_or_null(top, "file_id", pa.string()), parent_idx)
+    path = take(_column_or_null(top, "path", pa.string()), parent_idx)
+    name = take(_column_or_null(top, "name", pa.string()), parent_idx)
     def_kind = _resolve_def_kind(top, parent_idx)
-    qname = pc.cast(pc.struct_field(flat, "name"), pa.string())
-    qname_source = pc.cast(pc.struct_field(flat, "source"), pa.string())
+    qname = cast_values(struct_field(flat, "name"), pa.string())
+    qname_source = cast_values(struct_field(flat, "source"), pa.string())
     qname_id = prefixed_hash_id([qname], prefix="qname")
 
     return table_from_arrays(
@@ -109,7 +117,7 @@ def _resolve_def_kind(top: pa.Table, parent_idx: pa.Array) -> pa.Array:
     def_kind = _column_or_null(top, "def_kind_norm", pa.string())
     if def_kind.null_count == top.num_rows:
         def_kind = _column_or_null(top, "kind", pa.string())
-    return pc.take(def_kind, parent_idx)
+    return take(def_kind, parent_idx)
 
 
 def _empty_exported_defs(schema: pa.Schema) -> pa.Table:

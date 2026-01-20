@@ -15,8 +15,8 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.core.ordering import Ordering
 from arrowdsl.core.ordering_policy import ordering_keys_for_schema
-from arrowdsl.core.position_encoding import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from arrowdsl.schema.build import empty_table
+from datafusion_engine.query_fragments import SqlFragment
 from extract.registry_specs import dataset_schema as extract_dataset_schema
 from ibis_engine.builtin_udfs import col_to_byte, position_encoding_norm
 from ibis_engine.ids import masked_stable_id_expr, stable_id_expr, stable_key_expr
@@ -41,7 +41,7 @@ from normalize.registry_specs import (
     dataset_input_schema,
     dataset_schema,
 )
-from normalize.text_index import RepoTextIndex
+from normalize.text_index import ENC_UTF8, ENC_UTF16, ENC_UTF32, RepoTextIndex
 
 TYPE_EXPRS_NAME = "type_exprs_norm_v1"
 TYPE_NODES_NAME = "type_nodes_v1"
@@ -55,7 +55,7 @@ _DEF_USE_OPS: tuple[str, ...] = ("IMPORT_NAME", "IMPORT_FROM")
 _DEF_USE_PREFIXES: tuple[str, ...] = ("STORE_", "DELETE_")
 _USE_PREFIXES: tuple[str, ...] = ("LOAD_",)
 
-IbisPlanSource = IbisPlan | Table | TableLike
+IbisPlanSource = IbisPlan | Table | TableLike | SqlFragment
 
 
 @dataclass
@@ -91,6 +91,10 @@ class IbisPlanCatalog:
             return ibis.memtable(empty)
         if isinstance(source, IbisPlan):
             return source.expr
+        if isinstance(source, SqlFragment):
+            expr = _sql_fragment_expr(self.backend, source)
+            self.tables[name] = expr
+            return expr
         if isinstance(source, Table):
             return source
         if isinstance(source, DatasetSource):
@@ -168,6 +172,14 @@ def type_exprs_plan_ibis(
         keep_extra_columns=ctx.debug,
     )
     return IbisPlan(expr=aligned, ordering=Ordering.unordered())
+
+
+def _sql_fragment_expr(backend: BaseBackend, fragment: SqlFragment) -> Table:
+    sql_method = getattr(backend, "sql", None)
+    if not callable(sql_method):
+        msg = "Ibis backend does not support raw SQL fragments."
+        raise TypeError(msg)
+    return cast("Table", sql_method(fragment.sql))
 
 
 def type_nodes_plan_ibis(

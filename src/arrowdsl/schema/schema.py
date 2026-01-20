@@ -10,7 +10,6 @@ from typing import Literal, Protocol, TypedDict, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.core.expr_ops import cast_expr, or_exprs
 from arrowdsl.core.interop import (
     ArrayLike,
     ComputeExpression,
@@ -20,14 +19,40 @@ from arrowdsl.core.interop import (
     SchemaLike,
     TableLike,
     ensure_expression,
-    pc,
 )
 from arrowdsl.schema.build import empty_table
 from arrowdsl.schema.chunking import ChunkPolicy
 from arrowdsl.schema.encoding_policy import EncodingPolicy, EncodingSpec, apply_encoding
 from arrowdsl.schema.normalize import NormalizePolicy
+from datafusion_engine.compute_ops import (
+    call_function,
+    cast_values,
+    dictionary_encode,
+    invert,
+    is_valid,
+    scalar,
+)
+from datafusion_engine.compute_ops import (
+    field as expr_field,
+)
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
+
+
+def _cast_expr(
+    expr: ComputeExpression, dtype: DataTypeLike, *, safe: bool = True
+) -> ComputeExpression:
+    return ensure_expression(cast_values(expr, dtype, safe=safe))
+
+
+def _or_exprs(exprs: Sequence[ComputeExpression]) -> ComputeExpression:
+    if not exprs:
+        msg = "or_exprs requires at least one expression."
+        raise ValueError(msg)
+    combined = exprs[0]
+    for expr in exprs[1:]:
+        combined = ensure_expression(combined | expr)
+    return combined
 
 
 class _StructType(Protocol):
@@ -125,10 +150,10 @@ def _cast_column(
     if col.type == field.type:
         return col, False
     try:
-        return pc.cast(col, field.type, safe=safe_cast), True
+        return cast_values(col, field.type, safe=safe_cast), True
     except (pa.ArrowInvalid, pa.ArrowTypeError):
         if on_error == "unsafe":
-            return pc.cast(col, field.type, safe=False), True
+            return cast_values(col, field.type, safe=False), True
         if on_error == "keep":
             return col, False
         raise
@@ -518,8 +543,8 @@ def encode_expression(column: str) -> ComputeExpression:
     ComputeExpression
         Expression applying dictionary encoding.
     """
-    expr = pc.field(column)
-    encoded = pc.dictionary_encode(cast("ArrayLike", expr))
+    expr = expr_field(column)
+    encoded = dictionary_encode(cast("ArrayLike", expr))
     return ensure_expression(encoded)
 
 
@@ -542,13 +567,13 @@ def projection_for_schema(
     for schema_field in schema:
         if patypes.is_list_view(schema_field.type) or patypes.is_large_list_view(schema_field.type):
             if schema_field.name in available_set:
-                expr = ensure_expression(pc.field(schema_field.name))
+                expr = ensure_expression(expr_field(schema_field.name))
             else:
-                expr = ensure_expression(pc.scalar(pa.scalar(None, type=schema_field.type)))
+                expr = ensure_expression(scalar(pa.scalar(None, type=schema_field.type)))
         elif schema_field.name in available_set:
-            expr = cast_expr(pc.field(schema_field.name), schema_field.type, safe=safe_cast)
+            expr = _cast_expr(expr_field(schema_field.name), schema_field.type, safe=safe_cast)
         else:
-            expr = cast_expr(pc.scalar(None), schema_field.type, safe=safe_cast)
+            expr = _cast_expr(scalar(None), schema_field.type, safe=safe_cast)
         expressions.append(ensure_expression(expr))
         names.append(schema_field.name)
     return expressions, names
@@ -570,7 +595,7 @@ def encoding_projection(
     expressions: list[ComputeExpression] = []
     names: list[str] = []
     for name in available:
-        expr = encode_expression(name) if name in encode_set else pc.field(name)
+        expr = encode_expression(name) if name in encode_set else expr_field(name)
         expressions.append(expr)
         names.append(name)
     return expressions, names
@@ -616,9 +641,9 @@ def best_fit_type(array: ArrayLike, candidates: Sequence[DataTypeLike]) -> DataT
     """
     total_rows = len(array)
     for dtype in candidates:
-        casted = pc.cast(array, dtype, safe=False)
-        valid = pc.is_valid(casted)
-        total = pc.call_function("sum", [pc.cast(valid, pa.int64())])
+        casted = cast_values(array, dtype, safe=False)
+        valid = is_valid(casted)
+        total = call_function("sum", [cast_values(valid, pa.int64())])
         value = cast("int | float | bool | None", cast("ScalarLike", total).as_py())
         if value is None:
             continue
@@ -736,13 +761,13 @@ def required_non_null_mask(
         Boolean expression for invalid rows.
     """
     exprs = [
-        ensure_expression(pc.invert(pc.is_valid(pc.field(name))))
+        ensure_expression(invert(is_valid(expr_field(name))))
         for name in required
         if name in available
     ]
     if not exprs:
-        return ensure_expression(pc.scalar(pa.scalar(value=False)))
-    return or_exprs(exprs)
+        return ensure_expression(scalar(pa.scalar(value=False)))
+    return _or_exprs(exprs)
 
 
 def missing_key_fields(keys: Sequence[str], *, missing_cols: Sequence[str]) -> tuple[str, ...]:
@@ -827,6 +852,7 @@ def register_schema_extensions(schema: SchemaLike) -> None:
     extensions = extension_types_from_schema(schema)
     if extensions:
         register_extension_types(extensions)
+
 
 def schema_fingerprint(schema: SchemaLike) -> str:
     """Return a stable fingerprint for the provided schema.

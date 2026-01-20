@@ -990,9 +990,7 @@ def _substrait_validation_fields(payload: object | None) -> dict[str, object]:
     fields["error"] = str(error) if error is not None else None
     fields["match"] = match if isinstance(match, bool) else None
     fields["datafusion_rows"] = int(datafusion_rows) if isinstance(datafusion_rows, int) else None
-    fields["datafusion_hash"] = (
-        str(datafusion_hash) if datafusion_hash is not None else None
-    )
+    fields["datafusion_hash"] = str(datafusion_hash) if datafusion_hash is not None else None
     fields["substrait_rows"] = int(substrait_rows) if isinstance(substrait_rows, int) else None
     fields["substrait_hash"] = str(substrait_hash) if substrait_hash is not None else None
     return fields
@@ -2363,9 +2361,7 @@ def relspec_scan_telemetry(
                 "scan_columns": list(telemetry.scan_columns),
                 "dataset_schema_json": dataset_schema,
                 "projected_schema_json": projected_schema,
-                "discovery_policy_json": _stable_repr(
-                    _normalize_value(telemetry.discovery_policy)
-                )
+                "discovery_policy_json": _stable_repr(_normalize_value(telemetry.discovery_policy))
                 if telemetry.discovery_policy is not None
                 else None,
                 "scan_profile_json": scan_profile_text,

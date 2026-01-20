@@ -9,20 +9,19 @@ from typing import TYPE_CHECKING, TypedDict, Unpack, cast
 import pyarrow as pa
 
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.expr_ops import or_exprs
 from arrowdsl.core.interop import (
     ArrayLike,
     ComputeExpression,
     SchemaLike,
     TableLike,
     ensure_expression,
-    pc,
 )
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec, SchemaTransform
 from arrowdsl.schema.validation import ArrowValidationOptions, ValidationReport, validate_table
 from arrowdsl.spec.expr_ir import ExprIR
 from arrowdsl.spec.scalar_union import SCALAR_UNION_FIELDS, SCALAR_UNION_TYPE
 from arrowdsl.spec.tables.base import SpecTableCodec
+from datafusion_engine.compute_ops import scalar
 from ibis_engine.query_compiler import IbisQuerySpec
 from schema_spec.system import (
     ContractSpec,
@@ -37,6 +36,16 @@ from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
     from schema_spec.specs import ArrowFieldSpec, DerivedFieldSpec, FieldBundle, TableSchemaSpec
+
+
+def _or_exprs(exprs: Sequence[ComputeExpression]) -> ComputeExpression:
+    if not exprs:
+        msg = "or_exprs requires at least one expression."
+        raise ValueError(msg)
+    combined = exprs[0]
+    for expr in exprs[1:]:
+        combined = ensure_expression(combined | expr)
+    return combined
 
 
 SORT_KEY_STRUCT = pa.struct(
@@ -186,9 +195,9 @@ class SpecValidationSuite:
             Boolean expression marking invalid rows.
         """
         if not self.rules:
-            return ensure_expression(pc.scalar(pa.scalar(value=False)))
+            return ensure_expression(scalar(pa.scalar(value=False)))
         exprs = [rule.predicate for rule in self.rules]
-        return or_exprs(exprs)
+        return _or_exprs(exprs)
 
     def invalid_rows_table(self, table: TableLike) -> TableLike:
         """Return invalid rows from a table.

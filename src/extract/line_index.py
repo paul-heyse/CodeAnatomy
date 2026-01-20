@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrowdsl.core.ids import iter_arrays
+from arrowdsl.core.array_iter import iter_arrays
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import column_or_null, table_from_arrays
 from extract.registry_specs import dataset_schema

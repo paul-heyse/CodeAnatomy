@@ -1,4 +1,4 @@
-"""Extract SCIP metadata and occurrences into Arrow tables using shared helpers."""
+"""Extract SCIP index data into nested Arrow tables using shared helpers."""
 
 from __future__ import annotations
 
@@ -7,41 +7,24 @@ import logging
 import os
 import subprocess
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Literal, overload
 
-import ibis
-import pyarrow as pa
-
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
-from arrowdsl.core.interop import (
-    ArrayLike,
-    DataTypeLike,
-    RecordBatchReaderLike,
-    SchemaLike,
-    TableLike,
-)
-from arrowdsl.core.position_encoding import ENC_UTF8, ENC_UTF16, ENC_UTF32
-from arrowdsl.schema.build import struct_array_from_dicts, table_from_arrays
-from arrowdsl.schema.nested_builders import LargeListAccumulator
-from arrowdsl.schema.schema import empty_table, unify_tables
+from arrowdsl.core.ids import stable_id
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from extract.helpers import (
     ExtractMaterializeOptions,
+    SpanSpec,
     apply_query_and_project,
+    attrs_map,
     ibis_plan_from_rows,
     materialize_extract_plan,
+    span_dict,
 )
-from extract.registry_fields import (
-    SCIP_SIGNATURE_DOCUMENTATION_TYPE,
-)
-from extract.registry_specs import (
-    dataset_row_schema,
-    dataset_schema,
-    normalize_options,
-    postprocess_table,
-)
+from extract.registry_specs import dataset_schema, normalize_options
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.string_utils import normalize_string_items
 from ibis_engine.plan import IbisPlan
@@ -49,7 +32,10 @@ from ibis_engine.plan import IbisPlan
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
 from extract.scip_proto_loader import load_scip_pb2_from_build
-from schema_spec.specs import NestedFieldSpec
+
+ENC_UTF8 = 1
+ENC_UTF16 = 2
+ENC_UTF32 = 3
 
 RANGE_LEN_SHORT = 3
 RANGE_LEN_FULL = 4
@@ -93,15 +79,9 @@ class SCIPParseOptions:
 
 @dataclass(frozen=True)
 class SCIPExtractResult:
-    """Hold extracted SCIP tables for metadata, documents, and symbols."""
+    """Hold extracted SCIP index table."""
 
-    scip_metadata: TableLike
-    scip_documents: TableLike
-    scip_occurrences: TableLike
-    scip_symbol_information: TableLike
-    scip_symbol_relationships: TableLike
-    scip_external_symbol_information: TableLike
-    scip_diagnostics: TableLike
+    scip_index: TableLike
 
 
 SIG_DOC_OCCURRENCE_KEYS = ("symbol", "symbol_roles", "range")
@@ -148,15 +128,7 @@ def _signature_doc_entry(sig_doc: object | None) -> dict[str, object] | None:
     }
 
 
-SCIP_METADATA_SCHEMA = dataset_schema("scip_metadata_v1")
-SCIP_DOCUMENTS_SCHEMA = dataset_schema("scip_documents_v1")
-SCIP_OCCURRENCES_SCHEMA = dataset_schema("scip_occurrences_v1")
-SCIP_SYMBOL_INFO_SCHEMA = dataset_schema("scip_symbol_info_v1")
-SCIP_SYMBOL_RELATIONSHIPS_SCHEMA = dataset_schema("scip_symbol_relationships_v1")
-SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA = dataset_schema("scip_external_symbol_info_v1")
-SCIP_DIAGNOSTICS_SCHEMA = dataset_schema("scip_diagnostics_v1")
-
-SCIP_METADATA_ROW_SCHEMA = dataset_row_schema("scip_metadata_v1")
+SCIP_INDEX_SCHEMA = dataset_schema("scip_index_v1")
 
 
 def _scip_index_command(
@@ -294,10 +266,6 @@ def _encoding_from_text(value: str) -> str:
     return "utf32"
 
 
-def _string_list_accumulator() -> LargeListAccumulator[str | None]:
-    return LargeListAccumulator()
-
-
 def _load_scip_pb2(parse_opts: SCIPParseOptions) -> ModuleType | None:
     if parse_opts.scip_pb2_import:
         try:
@@ -392,527 +360,204 @@ def assert_scip_index_health(index: object) -> None:
         raise ValueError(msg)
 
 
-def _metadata_rows(index: object, *, parse_opts: SCIPParseOptions | None = None) -> list[Row]:
+def _int_or_none(value: object | None) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _int_value(value: object | None, *, default: int = 0) -> int:
+    parsed = _int_or_none(value)
+    return default if parsed is None else parsed
+
+
+def _string_value(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _int_list(values: Sequence[object]) -> list[int]:
+    out: list[int] = []
+    for value in values:
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            out.append(value)
+            continue
+        if isinstance(value, str):
+            try:
+                out.append(int(value))
+            except ValueError:
+                continue
+    return out
+
+
+def _metadata_entry(index: object) -> dict[str, object] | None:
     metadata = getattr(index, "metadata", None)
+    if metadata is None:
+        return None
     tool_info = getattr(metadata, "tool_info", None)
-    tool_name = getattr(tool_info, "name", None)
-    tool_version = getattr(tool_info, "version", None)
-    project_root = getattr(metadata, "project_root", None)
-    protocol_version = getattr(metadata, "protocol_version", None)
-    text_document_encoding = getattr(metadata, "text_document_encoding", None)
-    meta: dict[str, str] = {}
-    if parse_opts is not None:
-        meta["prefer_protobuf"] = str(parse_opts.prefer_protobuf).lower()
-        if parse_opts.scip_pb2_import:
-            meta["scip_pb2_import"] = parse_opts.scip_pb2_import
-        if parse_opts.build_dir is not None:
-            meta["build_dir"] = str(parse_opts.build_dir)
-    return [
-        {
-            "tool_name": tool_name,
-            "tool_version": tool_version,
-            "project_root": project_root,
-            "text_document_encoding": str(text_document_encoding)
-            if text_document_encoding is not None
-            else None,
-            "protocol_version": str(protocol_version) if protocol_version is not None else None,
-            "meta": meta or None,
+    tool_args: list[str | None] = []
+    if tool_info is not None:
+        raw_args = getattr(tool_info, "arguments", []) or []
+        tool_args = normalize_string_items(list(raw_args))
+    tool_entry = None
+    if tool_info is not None:
+        tool_entry = {
+            "name": _string_value(getattr(tool_info, "name", None)),
+            "version": _string_value(getattr(tool_info, "version", None)),
+            "arguments": tool_args,
         }
-    ]
-
-
-def _array(values: Sequence[object], data_type: DataTypeLike) -> ArrayLike:
-    return pa.array(values, type=data_type)
-
-
-@dataclass
-class _DocAccumulator:
-    document_ids: list[str | None] = field(default_factory=list)
-    paths: list[str | None] = field(default_factory=list)
-    languages: list[str | None] = field(default_factory=list)
-    position_encodings: list[str | None] = field(default_factory=list)
-
-    def append(
-        self,
-        rel_path: str | None,
-        language: object,
-        position_encoding: object,
-    ) -> None:
-        self.document_ids.append(None)
-        self.paths.append(rel_path)
-        self.languages.append(str(language) if language is not None else None)
-        self.position_encodings.append(
-            str(position_encoding) if position_encoding is not None else None
-        )
-
-    def to_table(self) -> TableLike:
-        columns = {
-            "document_id": _array(self.document_ids, pa.string()),
-            "path": _array(self.paths, pa.string()),
-            "language": _array(self.languages, pa.string()),
-            "position_encoding": _array(self.position_encodings, pa.string()),
-        }
-        return table_from_arrays(SCIP_DOCUMENTS_SCHEMA, columns=columns, num_rows=len(self.paths))
-
-
-@dataclass
-class _OccurrenceAccumulator:
-    occurrence_ids: list[str | None] = field(default_factory=list)
-    document_ids: list[str | None] = field(default_factory=list)
-    paths: list[str | None] = field(default_factory=list)
-    symbols: list[str | None] = field(default_factory=list)
-    symbol_roles: list[int] = field(default_factory=list)
-    syntax_kind: list[str | None] = field(default_factory=list)
-    override_docs: LargeListAccumulator[str | None] = field(
-        default_factory=_string_list_accumulator
-    )
-    start_line: list[int | None] = field(default_factory=list)
-    start_char: list[int | None] = field(default_factory=list)
-    end_line: list[int | None] = field(default_factory=list)
-    end_char: list[int | None] = field(default_factory=list)
-    range_len: list[int] = field(default_factory=list)
-    enc_start_line: list[int | None] = field(default_factory=list)
-    enc_start_char: list[int | None] = field(default_factory=list)
-    enc_end_line: list[int | None] = field(default_factory=list)
-    enc_end_char: list[int | None] = field(default_factory=list)
-    enc_range_len: list[int | None] = field(default_factory=list)
-    line_base: list[int] = field(default_factory=list)
-    col_unit: list[str] = field(default_factory=list)
-    end_exclusive: list[bool] = field(default_factory=list)
-
-    def append_from_occurrence(
-        self,
-        occurrence: object,
-        rel_path: str | None,
-        *,
-        col_unit: str,
-    ) -> tuple[int, int, int, int] | None:
-        norm = _normalize_range(list(getattr(occurrence, "range", [])))
-        if norm is None:
-            sl = sc = el = ec = None
-            rlen = 0
-            default_range = None
-        else:
-            sl, sc, el, ec, rlen = norm
-            default_range = (sl, sc, el, ec)
-
-        enc_norm = _normalize_range(list(getattr(occurrence, "enclosing_range", [])))
-        if enc_norm is None:
-            esl = esc = eel = eec = None
-            elen = None
-        else:
-            esl, esc, eel, eec, elen = enc_norm
-
-        self.occurrence_ids.append(None)
-        self.document_ids.append(None)
-        self.paths.append(rel_path)
-        self.symbols.append(getattr(occurrence, "symbol", None))
-        self.symbol_roles.append(int(getattr(occurrence, "symbol_roles", 0) or 0))
-        self.syntax_kind.append(
-            str(getattr(occurrence, "syntax_kind", None))
-            if hasattr(occurrence, "syntax_kind")
-            else None
-        )
-        override_docs = getattr(occurrence, "override_documentation", []) or []
-        self.override_docs.append(normalize_string_items(override_docs))
-        self.start_line.append(sl)
-        self.start_char.append(sc)
-        self.end_line.append(el)
-        self.end_char.append(ec)
-        self.range_len.append(rlen)
-        self.enc_start_line.append(esl if elen else None)
-        self.enc_start_char.append(esc if elen else None)
-        self.enc_end_line.append(eel if elen else None)
-        self.enc_end_char.append(eec if elen else None)
-        self.enc_range_len.append(elen if elen else None)
-        self.line_base.append(SCIP_LINE_BASE)
-        self.col_unit.append(col_unit)
-        self.end_exclusive.append(SCIP_END_EXCLUSIVE)
-        return default_range
-
-    def to_table(self) -> TableLike:
-        override_doc = OVERRIDE_DOC_SPEC.builder(self)
-        columns = {
-            "occurrence_id": _array(self.occurrence_ids, pa.string()),
-            "document_id": _array(self.document_ids, pa.string()),
-            "path": _array(self.paths, pa.string()),
-            "symbol": _array(self.symbols, pa.string()),
-            "symbol_roles": _array(self.symbol_roles, pa.int32()),
-            "syntax_kind": _array(self.syntax_kind, pa.string()),
-            "override_documentation": override_doc,
-            "start_line": _array(self.start_line, pa.int32()),
-            "start_char": _array(self.start_char, pa.int32()),
-            "end_line": _array(self.end_line, pa.int32()),
-            "end_char": _array(self.end_char, pa.int32()),
-            "range_len": _array(self.range_len, pa.int32()),
-            "enc_start_line": _array(self.enc_start_line, pa.int32()),
-            "enc_start_char": _array(self.enc_start_char, pa.int32()),
-            "enc_end_line": _array(self.enc_end_line, pa.int32()),
-            "enc_end_char": _array(self.enc_end_char, pa.int32()),
-            "enc_range_len": _array(self.enc_range_len, pa.int32()),
-            "line_base": _array(self.line_base, pa.int32()),
-            "col_unit": _array(self.col_unit, pa.string()),
-            "end_exclusive": _array(self.end_exclusive, pa.bool_()),
-        }
-        return table_from_arrays(
-            SCIP_OCCURRENCES_SCHEMA,
-            columns=columns,
-            num_rows=len(self.paths),
-        )
-
-
-def _build_override_docs(acc: _OccurrenceAccumulator) -> ArrayLike:
-    return acc.override_docs.build(value_type=pa.string())
-
-
-OVERRIDE_DOC_SPEC = NestedFieldSpec(
-    name="override_documentation",
-    dtype=pa.large_list(pa.string()),
-    builder=_build_override_docs,
-)
-
-
-@dataclass
-class _DiagnosticAccumulator:
-    diagnostic_ids: list[str | None] = field(default_factory=list)
-    document_ids: list[str | None] = field(default_factory=list)
-    paths: list[str | None] = field(default_factory=list)
-    severity: list[str | None] = field(default_factory=list)
-    code: list[str | None] = field(default_factory=list)
-    message: list[str | None] = field(default_factory=list)
-    source: list[str | None] = field(default_factory=list)
-    tags: LargeListAccumulator[str | None] = field(default_factory=_string_list_accumulator)
-    start_line: list[int | None] = field(default_factory=list)
-    start_char: list[int | None] = field(default_factory=list)
-    end_line: list[int | None] = field(default_factory=list)
-    end_char: list[int | None] = field(default_factory=list)
-    line_base: list[int] = field(default_factory=list)
-    col_unit: list[str] = field(default_factory=list)
-    end_exclusive: list[bool] = field(default_factory=list)
-
-    def append_from_diag(
-        self,
-        diag: object,
-        rel_path: str | None,
-        default_range: tuple[int, int, int, int] | None,
-        *,
-        col_unit: str,
-    ) -> None:
-        drng = list(getattr(diag, "range", []))
-        norm = _normalize_range(drng) if drng else None
-        if norm is None:
-            if default_range is None:
-                dsl = dsc = del_ = dec_ = None
-            else:
-                dsl, dsc, del_, dec_ = default_range
-        else:
-            dsl, dsc, del_, dec_, _ = norm
-
-        self.diagnostic_ids.append(None)
-        self.document_ids.append(None)
-        self.paths.append(rel_path)
-        self.severity.append(
-            str(getattr(diag, "severity", None)) if hasattr(diag, "severity") else None
-        )
-        self.code.append(str(getattr(diag, "code", None)) if hasattr(diag, "code") else None)
-        self.message.append(getattr(diag, "message", None))
-        self.source.append(getattr(diag, "source", None))
-        tags: list[object] = []
-        if hasattr(diag, "tags"):
-            raw_tags = getattr(diag, "tags", None)
-            if raw_tags is not None:
-                tags = list(raw_tags)
-        self.tags.append(normalize_string_items(tags))
-        self.start_line.append(dsl)
-        self.start_char.append(dsc)
-        self.end_line.append(del_)
-        self.end_char.append(dec_)
-        self.line_base.append(SCIP_LINE_BASE)
-        self.col_unit.append(col_unit)
-        self.end_exclusive.append(SCIP_END_EXCLUSIVE)
-
-    def to_table(self) -> TableLike:
-        tags = DIAG_TAGS_SPEC.builder(self)
-        columns = {
-            "diagnostic_id": _array(self.diagnostic_ids, pa.string()),
-            "document_id": _array(self.document_ids, pa.string()),
-            "path": _array(self.paths, pa.string()),
-            "severity": _array(self.severity, pa.string()),
-            "code": _array(self.code, pa.string()),
-            "message": _array(self.message, pa.string()),
-            "source": _array(self.source, pa.string()),
-            "tags": tags,
-            "start_line": _array(self.start_line, pa.int32()),
-            "start_char": _array(self.start_char, pa.int32()),
-            "end_line": _array(self.end_line, pa.int32()),
-            "end_char": _array(self.end_char, pa.int32()),
-            "line_base": _array(self.line_base, pa.int32()),
-            "col_unit": _array(self.col_unit, pa.string()),
-            "end_exclusive": _array(self.end_exclusive, pa.bool_()),
-        }
-        return table_from_arrays(
-            SCIP_DIAGNOSTICS_SCHEMA,
-            columns=columns,
-            num_rows=len(self.paths),
-        )
-
-
-def _build_diag_tags(acc: _DiagnosticAccumulator) -> ArrayLike:
-    return acc.tags.build(value_type=pa.string())
-
-
-DIAG_TAGS_SPEC = NestedFieldSpec(
-    name="tags",
-    dtype=pa.large_list(pa.string()),
-    builder=_build_diag_tags,
-)
-
-
-@dataclass
-class _SymbolInfoAccumulator:
-    symbol_info_ids: list[str | None] = field(default_factory=list)
-    symbols: list[str | None] = field(default_factory=list)
-    display_names: list[str | None] = field(default_factory=list)
-    kinds: list[str | None] = field(default_factory=list)
-    enclosing_symbols: list[str | None] = field(default_factory=list)
-    documentation: LargeListAccumulator[str | None] = field(
-        default_factory=_string_list_accumulator
-    )
-    sig_doc_entries: list[dict[str, object] | None] = field(default_factory=list)
-
-    def append(self, symbol_info: object) -> None:
-        self.symbol_info_ids.append(None)
-        self.symbols.append(getattr(symbol_info, "symbol", None))
-        self.display_names.append(getattr(symbol_info, "display_name", None))
-        self.kinds.append(
-            str(getattr(symbol_info, "kind", None)) if hasattr(symbol_info, "kind") else None
-        )
-        self.enclosing_symbols.append(
-            getattr(symbol_info, "enclosing_symbol", None)
-            if hasattr(symbol_info, "enclosing_symbol")
-            else None
-        )
-        self._append_documentation(symbol_info)
-        sig_doc = getattr(symbol_info, "signature_documentation", None)
-        self.sig_doc_entries.append(_signature_doc_entry(sig_doc))
-
-    def _append_documentation(self, symbol_info: object) -> None:
-        docs = getattr(symbol_info, "documentation", None)
-        docs_list: list[object] = []
-        if hasattr(symbol_info, "documentation") and docs is not None:
-            docs_list = list(docs)
-        self.documentation.append(normalize_string_items(docs_list))
-
-    def to_table(self, *, schema: SchemaLike) -> TableLike:
-        documentation = SYMBOL_DOC_SPEC.builder(self)
-        sig_doc = SIG_DOC_SPEC.builder(self)
-        columns = {
-            "symbol_info_id": _array(self.symbol_info_ids, pa.string()),
-            "symbol": _array(self.symbols, pa.string()),
-            "display_name": _array(self.display_names, pa.string()),
-            "kind": _array(self.kinds, pa.string()),
-            "enclosing_symbol": _array(self.enclosing_symbols, pa.string()),
-            "documentation": documentation,
-            "signature_documentation": sig_doc,
-        }
-        return table_from_arrays(schema, columns=columns, num_rows=len(self.symbols))
-
-
-def _build_symbol_docs(acc: _SymbolInfoAccumulator) -> ArrayLike:
-    return acc.documentation.build(value_type=pa.string())
-
-
-def _build_signature_doc(acc: _SymbolInfoAccumulator) -> ArrayLike:
-    return struct_array_from_dicts(
-        acc.sig_doc_entries,
-        struct_type=SCIP_SIGNATURE_DOCUMENTATION_TYPE,
-    )
-
-
-SYMBOL_DOC_SPEC = NestedFieldSpec(
-    name="documentation",
-    dtype=pa.large_list(pa.string()),
-    builder=_build_symbol_docs,
-)
-
-SIG_DOC_SPEC = NestedFieldSpec(
-    name="signature_documentation",
-    dtype=SCIP_SIGNATURE_DOCUMENTATION_TYPE,
-    builder=_build_signature_doc,
-)
-
-
-@dataclass
-class _RelationshipAccumulator:
-    relationship_ids: list[str | None] = field(default_factory=list)
-    symbols: list[str | None] = field(default_factory=list)
-    related_symbols: list[str | None] = field(default_factory=list)
-    is_reference: list[bool] = field(default_factory=list)
-    is_implementation: list[bool] = field(default_factory=list)
-    is_type_definition: list[bool] = field(default_factory=list)
-    is_definition: list[bool] = field(default_factory=list)
-
-    def append(self, symbol: str | None, relationship: object) -> None:
-        related = getattr(relationship, "symbol", None)
-        if symbol is None or related is None:
-            return
-        self.relationship_ids.append(None)
-        self.symbols.append(symbol)
-        self.related_symbols.append(related)
-        self.is_reference.append(bool(getattr(relationship, "is_reference", False)))
-        self.is_implementation.append(bool(getattr(relationship, "is_implementation", False)))
-        self.is_type_definition.append(bool(getattr(relationship, "is_type_definition", False)))
-        self.is_definition.append(bool(getattr(relationship, "is_definition", False)))
-
-    def to_table(self) -> TableLike:
-        columns = {
-            "relationship_id": _array(self.relationship_ids, pa.string()),
-            "symbol": _array(self.symbols, pa.string()),
-            "related_symbol": _array(self.related_symbols, pa.string()),
-            "is_reference": _array(self.is_reference, pa.bool_()),
-            "is_implementation": _array(self.is_implementation, pa.bool_()),
-            "is_type_definition": _array(self.is_type_definition, pa.bool_()),
-            "is_definition": _array(self.is_definition, pa.bool_()),
-        }
-        return table_from_arrays(
-            SCIP_SYMBOL_RELATIONSHIPS_SCHEMA,
-            columns=columns,
-            num_rows=len(self.symbols),
-        )
-
-
-def _document_tables(index: object) -> tuple[TableLike, TableLike, TableLike]:
-    doc_tables: list[TableLike] = []
-    occ_tables: list[TableLike] = []
-    diag_tables: list[TableLike] = []
-
-    for doc in getattr(index, "documents", []):
-        docs = _DocAccumulator()
-        occs = _OccurrenceAccumulator()
-        diags = _DiagnosticAccumulator()
-
-        rel_path = getattr(doc, "relative_path", None)
-        position_encoding = getattr(doc, "position_encoding", None)
-        docs.append(rel_path, getattr(doc, "language", None), position_encoding)
-        col_unit = _col_unit_from_position_encoding(position_encoding)
-
-        for occ in getattr(doc, "occurrences", []):
-            default_range = occs.append_from_occurrence(occ, rel_path, col_unit=col_unit)
-            for diag in getattr(occ, "diagnostics", []):
-                diags.append_from_diag(diag, rel_path, default_range, col_unit=col_unit)
-
-        doc_tables.append(docs.to_table())
-        occ_tables.append(occs.to_table())
-        diag_tables.append(diags.to_table())
-
-    if not doc_tables:
-        return (
-            empty_table(SCIP_DOCUMENTS_SCHEMA),
-            empty_table(SCIP_OCCURRENCES_SCHEMA),
-            empty_table(SCIP_DIAGNOSTICS_SCHEMA),
-        )
-    return (
-        unify_tables(doc_tables),
-        unify_tables(occ_tables),
-        unify_tables(diag_tables),
-    )
-
-
-def _symbol_tables(index: object) -> tuple[TableLike, TableLike, TableLike]:
-    sym = _SymbolInfoAccumulator()
-    ext = _SymbolInfoAccumulator()
-    rels = _RelationshipAccumulator()
-    symbol_info = list(getattr(index, "symbol_information", []))
-    if not symbol_info:
-        for doc in getattr(index, "documents", []):
-            symbol_info.extend(getattr(doc, "symbols", []))
-    for si in symbol_info:
-        sym.append(si)
-        symbol = getattr(si, "symbol", None)
-        for rel in getattr(si, "relationships", []):
-            rels.append(symbol, rel)
-    for si in getattr(index, "external_symbols", []):
-        ext.append(si)
-    return (
-        sym.to_table(schema=SCIP_SYMBOL_INFO_SCHEMA),
-        rels.to_table(),
-        ext.to_table(schema=SCIP_EXTERNAL_SYMBOL_INFO_SCHEMA),
-    )
-
-
-def _extract_plan_bundle_from_index(
-    index: object,
-    *,
-    parse_opts: SCIPParseOptions,
-    evidence_plan: EvidencePlan | None = None,
-) -> dict[str, IbisPlan]:
-    normalize = ExtractNormalizeOptions(options=parse_opts)
-    meta_rows = _metadata_rows(index, parse_opts=parse_opts)
-    t_docs, t_occs, t_diags = _document_tables(index)
-
-    t_syms, t_rels, t_ext = _symbol_tables(index)
-
-    t_docs = postprocess_table("scip_documents_v1", t_docs)
-    t_occs = postprocess_table("scip_occurrences_v1", t_occs)
-    t_diags = postprocess_table("scip_diagnostics_v1", t_diags)
-    t_syms = postprocess_table("scip_symbol_info_v1", t_syms)
-    t_rels = postprocess_table("scip_symbol_relationships_v1", t_rels)
-    t_ext = postprocess_table("scip_external_symbol_info_v1", t_ext)
     return {
-        "scip_metadata": apply_query_and_project(
-            "scip_metadata_v1",
-            ibis_plan_from_rows(
-                "scip_metadata_v1",
-                meta_rows,
-                row_schema=SCIP_METADATA_ROW_SCHEMA,
-            ).expr,
-            normalize=normalize,
-            evidence_plan=evidence_plan,
-            repo_id=normalize.repo_id,
-        ),
-        "scip_documents": apply_query_and_project(
-            "scip_documents_v1",
-            ibis.memtable(t_docs),
-            normalize=normalize,
-            evidence_plan=evidence_plan,
-            repo_id=normalize.repo_id,
-        ),
-        "scip_occurrences": apply_query_and_project(
-            "scip_occurrences_v1",
-            ibis.memtable(t_occs),
-            normalize=normalize,
-            evidence_plan=evidence_plan,
-            repo_id=normalize.repo_id,
-        ),
-        "scip_symbol_information": apply_query_and_project(
-            "scip_symbol_info_v1",
-            ibis.memtable(t_syms),
-            normalize=normalize,
-            evidence_plan=evidence_plan,
-            repo_id=normalize.repo_id,
-        ),
-        "scip_symbol_relationships": apply_query_and_project(
-            "scip_symbol_relationships_v1",
-            ibis.memtable(t_rels),
-            normalize=normalize,
-            evidence_plan=evidence_plan,
-            repo_id=normalize.repo_id,
-        ),
-        "scip_external_symbol_information": apply_query_and_project(
-            "scip_external_symbol_info_v1",
-            ibis.memtable(t_ext),
-            normalize=normalize,
-            evidence_plan=evidence_plan,
-            repo_id=normalize.repo_id,
-        ),
-        "scip_diagnostics": apply_query_and_project(
-            "scip_diagnostics_v1",
-            ibis.memtable(t_diags),
-            normalize=normalize,
-            evidence_plan=evidence_plan,
-            repo_id=normalize.repo_id,
-        ),
+        "protocol_version": _int_or_none(getattr(metadata, "protocol_version", None)),
+        "tool_info": tool_entry,
+        "project_root": _string_value(getattr(metadata, "project_root", None)),
+        "text_document_encoding": _int_or_none(getattr(metadata, "text_document_encoding", None)),
     }
+
+
+def _diagnostic_entry(diag: object) -> dict[str, object]:
+    tags_raw = getattr(diag, "tags", []) or []
+    return {
+        "severity": _int_or_none(getattr(diag, "severity", None)),
+        "code": _string_value(getattr(diag, "code", None)),
+        "message": _string_value(getattr(diag, "message", None)),
+        "source": _string_value(getattr(diag, "source", None)),
+        "tags": _int_list(list(tags_raw)),
+    }
+
+
+def _range_span(range_raw: Sequence[int], *, col_unit: str) -> dict[str, object] | None:
+    norm = _normalize_range(range_raw)
+    if norm is None:
+        return None
+    start_line, start_col, end_line, end_col, _ = norm
+    return span_dict(
+        SpanSpec(
+            start_line0=start_line,
+            start_col=start_col,
+            end_line0=end_line,
+            end_col=end_col,
+            end_exclusive=SCIP_END_EXCLUSIVE,
+            col_unit=col_unit,
+        )
+    )
+
+
+def _occurrence_entry(occurrence: object, *, col_unit: str) -> dict[str, object]:
+    range_raw = _int_list(list(getattr(occurrence, "range", []) or []))
+    enclosing_raw = _int_list(list(getattr(occurrence, "enclosing_range", []) or []))
+    diagnostics = [
+        _diagnostic_entry(diag) for diag in list(getattr(occurrence, "diagnostics", []) or [])
+    ]
+    override_docs = list(getattr(occurrence, "override_documentation", []) or [])
+    return {
+        "range_raw": range_raw,
+        "range": _range_span(range_raw, col_unit=col_unit),
+        "symbol": _string_value(getattr(occurrence, "symbol", None)),
+        "symbol_roles": _int_value(getattr(occurrence, "symbol_roles", None)),
+        "override_documentation": normalize_string_items(override_docs),
+        "syntax_kind": _int_value(getattr(occurrence, "syntax_kind", None)),
+        "diagnostics": diagnostics,
+        "enclosing_range_raw": enclosing_raw,
+        "enclosing_range": _range_span(enclosing_raw, col_unit=col_unit),
+        "attrs": attrs_map({}),
+    }
+
+
+def _relationship_entry(relationship: object) -> dict[str, object] | None:
+    related = getattr(relationship, "symbol", None)
+    if related is None:
+        return None
+    return {
+        "symbol": related,
+        "is_reference": bool(getattr(relationship, "is_reference", False)),
+        "is_implementation": bool(getattr(relationship, "is_implementation", False)),
+        "is_type_definition": bool(getattr(relationship, "is_type_definition", False)),
+        "is_definition": bool(getattr(relationship, "is_definition", False)),
+    }
+
+
+def _symbol_info_entry(symbol_info: object) -> dict[str, object]:
+    docs_raw = getattr(symbol_info, "documentation", None) or []
+    relationships_raw = getattr(symbol_info, "relationships", None) or []
+    relationships = [
+        entry for rel in list(relationships_raw) if (entry := _relationship_entry(rel)) is not None
+    ]
+    sig_doc = _signature_doc_entry(getattr(symbol_info, "signature_documentation", None))
+    return {
+        "symbol": _string_value(getattr(symbol_info, "symbol", None)),
+        "documentation": normalize_string_items(list(docs_raw)),
+        "signature_documentation": sig_doc,
+        "relationships": relationships,
+        "kind": _int_value(getattr(symbol_info, "kind", None)),
+        "display_name": _string_value(getattr(symbol_info, "display_name", None)),
+        "enclosing_symbol": _string_value(getattr(symbol_info, "enclosing_symbol", None)),
+        "attrs": attrs_map({}),
+    }
+
+
+def _document_entry(doc: object) -> dict[str, object]:
+    rel_path = _string_value(getattr(doc, "relative_path", None))
+    position_encoding = getattr(doc, "position_encoding", None)
+    col_unit = _col_unit_from_position_encoding(position_encoding)
+    occurrences = [
+        _occurrence_entry(occ, col_unit=col_unit)
+        for occ in list(getattr(doc, "occurrences", []) or [])
+    ]
+    symbols = [_symbol_info_entry(symbol) for symbol in list(getattr(doc, "symbols", []) or [])]
+    return {
+        "relative_path": rel_path,
+        "language": _string_value(getattr(doc, "language", None)),
+        "text": _string_value(getattr(doc, "text", None)),
+        "position_encoding": _int_or_none(position_encoding),
+        "occurrences": occurrences,
+        "symbols": symbols,
+        "attrs": attrs_map({}),
+    }
+
+
+def _index_row(index: object, *, index_id: str) -> dict[str, object]:
+    documents = [_document_entry(doc) for doc in list(getattr(index, "documents", []) or [])]
+    symbol_info = list(getattr(index, "symbol_information", []) or [])
+    if not symbol_info:
+        for doc in list(getattr(index, "documents", []) or []):
+            symbol_info.extend(list(getattr(doc, "symbols", []) or []))
+    symbols = [_symbol_info_entry(si) for si in symbol_info]
+    external_symbols = [
+        _symbol_info_entry(si) for si in list(getattr(index, "external_symbols", []) or [])
+    ]
+    return {
+        "index_id": index_id,
+        "metadata": _metadata_entry(index),
+        "documents": documents,
+        "symbols": symbols,
+        "external_symbols": external_symbols,
+    }
+
+
+def _build_scip_index_plan(
+    rows: list[Row],
+    *,
+    normalize: ExtractNormalizeOptions,
+    evidence_plan: EvidencePlan | None,
+) -> IbisPlan:
+    raw = ibis_plan_from_rows("scip_index_v1", rows, row_schema=SCIP_INDEX_SCHEMA)
+    return apply_query_and_project(
+        "scip_index_v1",
+        raw.expr,
+        normalize=normalize,
+        evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
+    )
 
 
 @dataclass(frozen=True)
@@ -970,7 +615,7 @@ def extract_scip_tables(
     options: ScipExtractOptions | None = None,
     prefer_reader: bool = False,
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]:
-    """Extract SCIP tables as a name-keyed bundle.
+    """Extract the SCIP index table as a name-keyed bundle.
 
     Parameters
     ----------
@@ -993,45 +638,8 @@ def extract_scip_tables(
     scip_index_path = context.scip_index_path
     repo_root = context.repo_root
     normalize = ExtractNormalizeOptions(options=normalized_opts)
-    if scip_index_path is None:
-        plans = {
-            "scip_metadata": ibis_plan_from_rows(
-                "scip_metadata_v1",
-                [],
-                row_schema=dataset_row_schema("scip_metadata_v1"),
-            ),
-            "scip_documents": ibis_plan_from_rows(
-                "scip_documents_v1",
-                [],
-                row_schema=dataset_row_schema("scip_documents_v1"),
-            ),
-            "scip_occurrences": ibis_plan_from_rows(
-                "scip_occurrences_v1",
-                [],
-                row_schema=dataset_row_schema("scip_occurrences_v1"),
-            ),
-            "scip_symbol_information": ibis_plan_from_rows(
-                "scip_symbol_info_v1",
-                [],
-                row_schema=dataset_row_schema("scip_symbol_info_v1"),
-            ),
-            "scip_symbol_relationships": ibis_plan_from_rows(
-                "scip_symbol_relationships_v1",
-                [],
-                row_schema=dataset_row_schema("scip_symbol_relationships_v1"),
-            ),
-            "scip_external_symbol_information": ibis_plan_from_rows(
-                "scip_external_symbol_info_v1",
-                [],
-                row_schema=dataset_row_schema("scip_external_symbol_info_v1"),
-            ),
-            "scip_diagnostics": ibis_plan_from_rows(
-                "scip_diagnostics_v1",
-                [],
-                row_schema=dataset_row_schema("scip_diagnostics_v1"),
-            ),
-        }
-    else:
+    rows: list[Row] = []
+    if scip_index_path is not None:
         index_path = Path(scip_index_path)
         if repo_root is not None and not index_path.is_absolute():
             index_path = Path(repo_root) / index_path
@@ -1049,81 +657,23 @@ def extract_scip_tables(
             )
         if normalized_opts.health_check:
             assert_scip_index_health(index)
-        plans = _extract_plan_bundle_from_index(
-            index,
-            parse_opts=normalized_opts,
-            evidence_plan=evidence_plan,
-        )
+        index_id = stable_id("scip_index", str(index_path.resolve()))
+        rows.append(_index_row(index, index_id=index_id))
 
+    plan = _build_scip_index_plan(
+        rows,
+        normalize=normalize,
+        evidence_plan=evidence_plan,
+    )
     return {
-        "scip_metadata": materialize_extract_plan(
-            "scip_metadata_v1",
-            plans["scip_metadata"],
+        "scip_index": materialize_extract_plan(
+            "scip_index_v1",
+            plan,
             ctx=exec_ctx,
             options=ExtractMaterializeOptions(
                 normalize=normalize,
                 prefer_reader=prefer_reader,
                 apply_post_kernels=False,
             ),
-        ),
-        "scip_documents": materialize_extract_plan(
-            "scip_documents_v1",
-            plans["scip_documents"],
-            ctx=exec_ctx,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                prefer_reader=prefer_reader,
-                apply_post_kernels=False,
-            ),
-        ),
-        "scip_occurrences": materialize_extract_plan(
-            "scip_occurrences_v1",
-            plans["scip_occurrences"],
-            ctx=exec_ctx,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                prefer_reader=prefer_reader,
-                apply_post_kernels=False,
-            ),
-        ),
-        "scip_symbol_information": materialize_extract_plan(
-            "scip_symbol_info_v1",
-            plans["scip_symbol_information"],
-            ctx=exec_ctx,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                prefer_reader=prefer_reader,
-                apply_post_kernels=False,
-            ),
-        ),
-        "scip_symbol_relationships": materialize_extract_plan(
-            "scip_symbol_relationships_v1",
-            plans["scip_symbol_relationships"],
-            ctx=exec_ctx,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                prefer_reader=prefer_reader,
-                apply_post_kernels=False,
-            ),
-        ),
-        "scip_external_symbol_information": materialize_extract_plan(
-            "scip_external_symbol_info_v1",
-            plans["scip_external_symbol_information"],
-            ctx=exec_ctx,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                prefer_reader=prefer_reader,
-                apply_post_kernels=False,
-            ),
-        ),
-        "scip_diagnostics": materialize_extract_plan(
-            "scip_diagnostics_v1",
-            plans["scip_diagnostics"],
-            ctx=exec_ctx,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                prefer_reader=prefer_reader,
-                apply_post_kernels=False,
-            ),
-        ),
+        )
     }

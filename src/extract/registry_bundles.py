@@ -51,42 +51,14 @@ class OutputBundleSpec:
         return _OUTPUT_TO_DATASET.get(output)
 
 
-_OUTPUT_ALIAS_OVERRIDES: dict[str, str] = {
-    "scip_symbol_info_v1": "scip_symbol_information",
-    "scip_external_symbol_info_v1": "scip_external_symbol_information",
-}
-_DERIVED_OUTPUTS_BY_BUNDLE: dict[str, tuple[str, ...]] = {
-    "ast_bundle": ("ast_defs",),
-}
+_OUTPUT_ALIAS_OVERRIDES: dict[str, str] = {}
+_DERIVED_OUTPUTS_BY_BUNDLE: dict[str, tuple[str, ...]] = {}
 _BUNDLE_ORDER_OVERRIDES: dict[str, tuple[str, ...]] = {
-    "ast_bundle": ("ast_nodes", "ast_edges", "ast_defs"),
-    "cst_bundle": (
-        "cst_parse_manifest",
-        "cst_parse_errors",
-        "cst_name_refs",
-        "cst_imports",
-        "cst_callsites",
-        "cst_defs",
-        "cst_type_exprs",
-    ),
-    "scip_bundle": (
-        "scip_metadata",
-        "scip_documents",
-        "scip_occurrences",
-        "scip_symbol_information",
-        "scip_symbol_relationships",
-        "scip_external_symbol_information",
-        "scip_diagnostics",
-    ),
-    "bytecode_bundle": (
-        "py_bc_code_units",
-        "py_bc_instructions",
-        "py_bc_exception_table",
-        "py_bc_blocks",
-        "py_bc_cfg_edges",
-        "py_bc_errors",
-    ),
-    "tree_sitter_bundle": ("ts_nodes", "ts_errors", "ts_missing"),
+    "ast_bundle": ("ast_files",),
+    "bytecode_bundle": ("bytecode_files",),
+    "cst_bundle": ("libcst_files",),
+    "scip_bundle": ("scip_index",),
+    "tree_sitter_bundle": ("tree_sitter_files",),
     "runtime_inspect_bundle": ("rt_objects", "rt_signatures", "rt_signature_params", "rt_members"),
 }
 

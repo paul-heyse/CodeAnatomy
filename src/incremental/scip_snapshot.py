@@ -9,9 +9,18 @@ from typing import cast
 import pyarrow as pa
 
 from arrowdsl.core.ids import hash64_from_arrays
-from arrowdsl.core.interop import TableLike, pc
+from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import column_or_null, table_from_arrays
 from arrowdsl.schema.serialization import schema_fingerprint
+from datafusion_engine.compute_ops import (
+    and_,
+    case_when,
+    filter_values,
+    if_else,
+    is_null,
+    is_valid,
+    not_equal,
+)
 from incremental.state_store import StateStore
 from storage.deltalake import (
     DeltaWriteOptions,
@@ -223,16 +232,16 @@ def diff_scip_snapshots(prev: pa.Table | None, cur: pa.Table) -> pa.Table:
     prev_path = cast("pa.Array", joined["path_prev"])
     cur_fingerprint = cast("pa.Array", joined["fingerprint_cur"])
     prev_fingerprint = cast("pa.Array", joined["fingerprint_prev"])
-    missing_cur = pc.is_null(cur_path)
-    missing_prev = pc.is_null(prev_path)
-    modified = pc.and_(
-        pc.is_valid(cur_path),
-        pc.and_(
-            pc.is_valid(prev_path),
-            pc.not_equal(cur_fingerprint, prev_fingerprint),
+    missing_cur = is_null(cur_path)
+    missing_prev = is_null(prev_path)
+    modified = and_(
+        is_valid(cur_path),
+        and_(
+            is_valid(prev_path),
+            not_equal(cur_fingerprint, prev_fingerprint),
         ),
     )
-    change_kind = pc.case_when(
+    change_kind = case_when(
         [
             (missing_cur, "deleted"),
             (missing_prev, "added"),
@@ -400,8 +409,8 @@ def _changed_paths(diff: pa.Table) -> list[str]:
         return []
     change_kind = diff["change_kind"]
     paths = diff["path"]
-    mask = pc.not_equal(change_kind, pa.scalar("unchanged", type=pa.string()))
-    filtered = pc.filter(paths, mask)
+    mask = not_equal(change_kind, pa.scalar("unchanged", type=pa.string()))
+    filtered = filter_values(paths, mask)
     values = [_as_py_value(value) for value in filtered]
     return [value for value in values if isinstance(value, str) and value]
 
@@ -421,7 +430,7 @@ def _path_to_file_id(snapshot: pa.Table) -> Mapping[str, str]:
 
 
 def _coalesce_str(left: pa.Array, right: pa.Array) -> pa.Array:
-    return cast("pa.Array", pc.if_else(pc.is_valid(left), left, right))
+    return cast("pa.Array", if_else(is_valid(left), left, right))
 
 
 __all__ = [

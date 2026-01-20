@@ -6,9 +6,19 @@ from typing import cast
 
 import pyarrow as pa
 
-from arrowdsl.core.interop import pc
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.serialization import schema_fingerprint
+from datafusion_engine.compute_ops import (
+    and_,
+    case_when,
+    equal,
+    if_else,
+    is_in,
+    is_null,
+    is_valid,
+    not_equal,
+    unique,
+)
 from incremental.state_store import StateStore
 from storage.deltalake import (
     DeltaWriteOptions,
@@ -19,7 +29,7 @@ from storage.deltalake import (
 
 
 def _coalesce_str(left: pa.Array, right: pa.Array) -> pa.Array:
-    return cast("pa.Array", pc.if_else(pc.is_valid(left), left, right))
+    return cast("pa.Array", if_else(is_valid(left), left, right))
 
 
 def _joined_columns(joined: pa.Table) -> dict[str, pa.Array]:
@@ -86,26 +96,26 @@ def diff_snapshots(prev: pa.Table | None, cur: pa.Table) -> pa.Table:
         coalesce_keys=True,
     )
     cols = _joined_columns(joined)
-    missing_cur = pc.is_null(cols["cur_path"])
-    missing_prev = pc.is_null(cols["prev_path"])
-    renamed = pc.and_(
-        pc.is_valid(cols["cur_path"]),
-        pc.and_(
-            pc.is_valid(cols["prev_path"]),
-            pc.and_(
-                pc.equal(cols["cur_sha"], cols["prev_sha"]),
-                pc.not_equal(cols["cur_path"], cols["prev_path"]),
+    missing_cur = is_null(cols["cur_path"])
+    missing_prev = is_null(cols["prev_path"])
+    renamed = and_(
+        is_valid(cols["cur_path"]),
+        and_(
+            is_valid(cols["prev_path"]),
+            and_(
+                equal(cols["cur_sha"], cols["prev_sha"]),
+                not_equal(cols["cur_path"], cols["prev_path"]),
             ),
         ),
     )
-    modified = pc.and_(
-        pc.is_valid(cols["cur_path"]),
-        pc.and_(
-            pc.is_valid(cols["prev_path"]),
-            pc.not_equal(cols["cur_sha"], cols["prev_sha"]),
+    modified = and_(
+        is_valid(cols["cur_path"]),
+        and_(
+            is_valid(cols["prev_path"]),
+            not_equal(cols["cur_sha"], cols["prev_sha"]),
         ),
     )
-    change_kind = pc.case_when(
+    change_kind = case_when(
         [
             (missing_cur, "deleted"),
             (missing_prev, "added"),
@@ -151,8 +161,8 @@ def diff_snapshots_with_cdf(
     cdf_ids = _cdf_file_ids(cdf)
     if len(cdf_ids) == 0:
         return diff_snapshots(prev[:0], cur[:0])
-    prev_filtered = prev.filter(pc.is_in(prev["file_id"], value_set=cdf_ids))
-    cur_filtered = cur.filter(pc.is_in(cur["file_id"], value_set=cdf_ids))
+    prev_filtered = prev.filter(is_in(prev["file_id"], value_set=cdf_ids))
+    cur_filtered = cur.filter(is_in(cur["file_id"], value_set=cdf_ids))
     return diff_snapshots(prev_filtered, cur_filtered)
 
 
@@ -160,7 +170,7 @@ def _cdf_file_ids(cdf: pa.Table) -> pa.Array:
     values = cdf["file_id"]
     if isinstance(values, pa.ChunkedArray):
         values = values.combine_chunks()
-    return cast("pa.Array", pc.unique(values))
+    return cast("pa.Array", unique(values))
 
 
 def write_incremental_diff(store: StateStore, diff: pa.Table) -> DeltaWriteResult:

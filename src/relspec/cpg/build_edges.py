@@ -30,6 +30,7 @@ from cpg.table_utils import (
     assert_schema_metadata,
     encoding_columns_from_metadata,
 )
+from datafusion_engine.query_fragments import SqlFragment
 from datafusion_engine.runtime import AdapterExecutionPolicy
 from engine.materialize import resolve_prefer_reader
 from engine.plan_policy import ExecutionSurfacePolicy
@@ -124,14 +125,14 @@ class EdgeBuildOptions:
 class EdgeBuildInputs:
     """Input tables for edge construction."""
 
-    relationship_outputs: Mapping[str, TableLike | DatasetSource] | None = None
-    scip_symbol_relationships: TableLike | DatasetSource | None = None
-    diagnostics_norm: TableLike | DatasetSource | None = None
-    repo_files: TableLike | DatasetSource | None = None
-    type_exprs_norm: TableLike | DatasetSource | None = None
-    rt_signatures: TableLike | DatasetSource | None = None
-    rt_signature_params: TableLike | DatasetSource | None = None
-    rt_members: TableLike | DatasetSource | None = None
+    relationship_outputs: Mapping[str, TableLike | DatasetSource | SqlFragment] | None = None
+    scip_symbol_relationships: TableLike | DatasetSource | SqlFragment | None = None
+    diagnostics_norm: TableLike | DatasetSource | SqlFragment | None = None
+    repo_files: TableLike | DatasetSource | SqlFragment | None = None
+    type_exprs_norm: TableLike | DatasetSource | SqlFragment | None = None
+    rt_signatures: TableLike | DatasetSource | SqlFragment | None = None
+    rt_signature_params: TableLike | DatasetSource | SqlFragment | None = None
+    rt_members: TableLike | DatasetSource | SqlFragment | None = None
 
 
 @dataclass(frozen=True)

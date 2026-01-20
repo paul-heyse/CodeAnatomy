@@ -141,6 +141,36 @@ DEFAULT_RULE_PRIMITIVES: tuple[RulePrimitive, ...] = (
         supports_named_args=True,
     ),
     RulePrimitive(
+        name="prefixed_hash64",
+        params=(
+            FunctionParameter(name="prefix", dtype="string"),
+            FunctionParameter(name="value", dtype="string"),
+        ),
+        return_type="string",
+        volatility="stable",
+        description="Prefix + stable 64-bit hash for string inputs.",
+        supports_named_args=True,
+    ),
+    RulePrimitive(
+        name="stable_id",
+        params=(
+            FunctionParameter(name="prefix", dtype="string"),
+            FunctionParameter(name="value", dtype="string"),
+        ),
+        return_type="string",
+        volatility="stable",
+        description="Prefix + stable 128-bit hash for string inputs.",
+        supports_named_args=True,
+    ),
+    RulePrimitive(
+        name="valid_mask",
+        params=(FunctionParameter(name="values", dtype="list<string>"),),
+        return_type="bool",
+        volatility="stable",
+        description="Return True when all list values are non-null.",
+        supports_named_args=True,
+    ),
+    RulePrimitive(
         name="position_encoding_norm",
         params=(FunctionParameter(name="value", dtype="string"),),
         return_type="int32",

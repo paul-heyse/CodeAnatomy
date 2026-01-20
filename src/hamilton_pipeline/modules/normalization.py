@@ -14,16 +14,50 @@ from ibis.backends import BaseBackend
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.expr_types import ExplodeSpec
 from arrowdsl.core.ids import prefixed_hash_id
-from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, RecordBatchReaderLike, TableLike
 from arrowdsl.core.joins import JoinConfig, left_join
-from arrowdsl.core.pyarrow_ops import distinct_sorted, flatten_list_struct_field
 from arrowdsl.schema.build import empty_table, set_or_append_column, table_from_arrays
+from datafusion_engine.compute_ops import (
+    and_,
+    cast_values,
+    coalesce,
+    distinct_sorted,
+    drop_null,
+    equal,
+    fill_null,
+    flatten_list_struct_field,
+    if_else,
+    is_valid,
+    struct_field,
+)
 from datafusion_engine.kernel_registry import resolve_kernel
+from datafusion_engine.nested_tables import materialize_sql_fragment, register_nested_table
+from datafusion_engine.query_fragments import (
+    SqlFragment,
+    ast_nodes_sql,
+    bytecode_blocks_sql,
+    bytecode_cfg_edges_sql,
+    bytecode_code_units_sql,
+    bytecode_instructions_sql,
+    libcst_callsites_sql,
+    libcst_defs_sql,
+    libcst_imports_sql,
+    libcst_parse_errors_sql,
+    libcst_type_exprs_sql,
+    scip_diagnostics_sql,
+    scip_documents_sql,
+    scip_occurrences_sql,
+    scip_symbol_information_sql,
+    tree_sitter_errors_sql,
+    tree_sitter_missing_sql,
+)
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from extract.evidence_plan import EvidencePlan
+from ibis_engine.registry import datafusion_context
 from normalize.catalog import IbisPlanCatalog, NormalizeCatalogInputs
 from normalize.catalog import normalize_plan_catalog as build_normalize_plan_catalog
 from normalize.ibis_api import DiagnosticsSources
+from normalize.ibis_plan_builders import IbisPlanSource
 from normalize.ibis_spans import (
     add_ast_byte_spans_ibis,
     add_scip_occurrence_byte_spans_ibis,
@@ -105,9 +139,9 @@ CALLSITE_QNAME_CANDIDATES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
 
 
 def _string_or_null(values: ArrayLike | ChunkedArrayLike) -> ArrayLike:
-    casted = pc.cast(values, pa.string())
-    empty = pc.equal(casted, pa.scalar(""))
-    return pc.if_else(empty, pa.scalar(None, type=pa.string()), casted)
+    casted = cast_values(values, pa.string())
+    empty = equal(casted, pa.scalar(""))
+    return if_else(empty, pa.scalar(None, type=pa.string()), casted)
 
 
 def _requires_output(plan: EvidencePlan | None, name: str) -> bool:
@@ -132,22 +166,57 @@ def _require_datafusion_backend(backend: BaseBackend) -> None:
     raise ValueError(msg)
 
 
+def _materialize_fragment(
+    backend: BaseBackend | None,
+    source: TableLike | SqlFragment,
+) -> TableLike:
+    if not isinstance(source, SqlFragment):
+        return source
+    return materialize_sql_fragment(backend, source)
+
+
+def _schema_from_source(
+    source: TableLike | SqlFragment | None,
+    *,
+    backend: BaseBackend | None,
+    fallback: str,
+) -> pa.Schema:
+    fallback_schema = infer_schema_or_registry(fallback, [])
+    if source is None:
+        return fallback_schema
+    if isinstance(source, SqlFragment):
+        if backend is None:
+            return fallback_schema
+        ctx = datafusion_context(backend)
+        if ctx is None:
+            return fallback_schema
+        fragment_sql = f"SELECT * FROM ({source.sql}) AS fragment LIMIT 0"
+        schema = ctx.sql(fragment_sql).schema()
+        if isinstance(schema, pa.Schema):
+            return schema
+        to_pyarrow = getattr(schema, "to_pyarrow", None)
+        if callable(to_pyarrow):
+            return to_pyarrow()
+        return fallback_schema
+    return source.schema
+
+
 @dataclass(frozen=True)
 class NormalizeTypeSources:
     """Normalize sources for type rules."""
 
-    cst_type_exprs: TableLike | None = None
-    scip_symbol_information: TableLike | None = None
+    cst_type_exprs: IbisPlanSource | None = None
+    scip_symbol_information: IbisPlanSource | None = None
 
 
 @dataclass(frozen=True)
 class NormalizeBytecodeSources:
     """Normalize sources for bytecode rules."""
 
-    py_bc_blocks: TableLike | None = None
-    py_bc_cfg_edges: TableLike | None = None
-    py_bc_code_units: TableLike | None = None
-    py_bc_instructions: TableLike | None = None
+    py_bc_blocks: IbisPlanSource | None = None
+    py_bc_cfg_edges: IbisPlanSource | None = None
+    py_bc_code_units: IbisPlanSource | None = None
+    py_bc_instructions: IbisPlanSource | None = None
 
 
 @dataclass(frozen=True)
@@ -155,7 +224,7 @@ class NormalizeSpanSources:
     """Normalize sources for span/diagnostic rules."""
 
     repo_text_index: RepoTextIndex | None = None
-    span_errors: TableLike | None = None
+    span_errors: IbisPlanSource | None = None
 
 
 @dataclass(frozen=True)
@@ -201,8 +270,11 @@ def normalize_execution_context(
 @cache()
 @tag(layer="normalize", artifact="normalize_type_sources", kind="object")
 def normalize_type_sources(
-    cst_type_exprs: TableLike | None = None,
-    scip_symbol_information: TableLike | None = None,
+    cst_type_exprs: IbisPlanSource | None = None,
+    scip_symbol_information: IbisPlanSource | None = None,
+    libcst_files: TableLike | RecordBatchReaderLike | None = None,
+    scip_index: TableLike | RecordBatchReaderLike | None = None,
+    normalize_execution_context: NormalizeExecutionContext | None = None,
 ) -> NormalizeTypeSources:
     """Bundle type-related normalize inputs.
 
@@ -211,6 +283,16 @@ def normalize_type_sources(
     NormalizeTypeSources
         Type-related inputs for normalize rule compilation.
     """
+    backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
+    register_nested_table(backend, name="libcst_files_v1", table=libcst_files)
+    register_nested_table(backend, name="scip_index_v1", table=scip_index)
+    if cst_type_exprs is None and libcst_files is not None:
+        cst_type_exprs = SqlFragment("cst_type_exprs", libcst_type_exprs_sql())
+    if scip_symbol_information is None and scip_index is not None:
+        scip_symbol_information = SqlFragment(
+            "scip_symbol_information",
+            scip_symbol_information_sql(),
+        )
     return NormalizeTypeSources(
         cst_type_exprs=cst_type_exprs,
         scip_symbol_information=scip_symbol_information,
@@ -220,10 +302,12 @@ def normalize_type_sources(
 @cache()
 @tag(layer="normalize", artifact="normalize_bytecode_sources", kind="object")
 def normalize_bytecode_sources(
-    py_bc_blocks: TableLike | None = None,
-    py_bc_cfg_edges: TableLike | None = None,
-    py_bc_code_units: TableLike | None = None,
-    py_bc_instructions: TableLike | None = None,
+    py_bc_blocks: IbisPlanSource | None = None,
+    py_bc_cfg_edges: IbisPlanSource | None = None,
+    py_bc_code_units: IbisPlanSource | None = None,
+    py_bc_instructions: IbisPlanSource | None = None,
+    bytecode_files: TableLike | RecordBatchReaderLike | None = None,
+    normalize_execution_context: NormalizeExecutionContext | None = None,
 ) -> NormalizeBytecodeSources:
     """Bundle bytecode normalize inputs.
 
@@ -232,6 +316,16 @@ def normalize_bytecode_sources(
     NormalizeBytecodeSources
         Bytecode inputs for normalize rule compilation.
     """
+    backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
+    register_nested_table(backend, name="bytecode_files_v1", table=bytecode_files)
+    if py_bc_blocks is None and bytecode_files is not None:
+        py_bc_blocks = SqlFragment("py_bc_blocks", bytecode_blocks_sql())
+    if py_bc_cfg_edges is None and bytecode_files is not None:
+        py_bc_cfg_edges = SqlFragment("py_bc_cfg_edges", bytecode_cfg_edges_sql())
+    if py_bc_code_units is None and bytecode_files is not None:
+        py_bc_code_units = SqlFragment("py_bc_code_units", bytecode_code_units_sql())
+    if py_bc_instructions is None and bytecode_files is not None:
+        py_bc_instructions = SqlFragment("py_bc_instructions", bytecode_instructions_sql())
     return NormalizeBytecodeSources(
         py_bc_blocks=py_bc_blocks,
         py_bc_cfg_edges=py_bc_cfg_edges,
@@ -468,8 +562,8 @@ def _normalize_rule_output(
     ).good
 
 
-def _empty_scip_occurrences_norm(scip_occurrences: TableLike) -> TableLike:
-    table = empty_table(scip_occurrences.schema)
+def _empty_scip_occurrences_norm(schema: pa.Schema) -> TableLike:
+    table = empty_table(schema)
     table = set_or_append_column(table, "bstart", pa.array([], type=pa.int64()))
     table = set_or_append_column(table, "bend", pa.array([], type=pa.int64()))
     table = set_or_append_column(table, "span_ok", pa.array([], type=pa.bool_()))
@@ -482,14 +576,14 @@ def _flatten_qname_names(table: TableLike | None, column: str) -> ArrayLike:
     if table is None or column not in table.column_names:
         return pa.array([], type=pa.string())
     flattened = flatten_list_struct_field(table, list_col=column, field="name")
-    return pc.drop_null(_string_or_null(flattened))
+    return drop_null(_string_or_null(flattened))
 
 
 def _callsite_qname_base_table(exploded: TableLike) -> TableLike:
     call_ids = _string_or_null(exploded["call_id"])
     qname_struct = exploded["qname_struct"]
-    qname_vals = _string_or_null(pc.struct_field(qname_struct, "name"))
-    qname_sources = _string_or_null(pc.struct_field(qname_struct, "source"))
+    qname_vals = _string_or_null(struct_field(qname_struct, "name"))
+    qname_sources = _string_or_null(struct_field(qname_struct, "source"))
     schema = pa.schema(
         [
             ("call_id", pa.string()),
@@ -502,8 +596,8 @@ def _callsite_qname_base_table(exploded: TableLike) -> TableLike:
         columns={"call_id": call_ids, "qname": qname_vals, "qname_source": qname_sources},
         num_rows=len(call_ids),
     )
-    mask = pc.and_(pc.is_valid(base["call_id"]), pc.is_valid(base["qname"]))
-    mask = pc.fill_null(mask, fill_value=False)
+    mask = and_(is_valid(base["call_id"]), is_valid(base["qname"]))
+    mask = fill_null(mask, fill_value=False)
     return base.filter(mask)
 
 
@@ -531,7 +625,7 @@ def _join_callsite_qname_meta(base: TableLike, cst_callsites: TableLike) -> Tabl
         return joined
     primary = _string_or_null(joined["qname_source"])
     meta_source = _string_or_null(joined["qname_source__meta"])
-    merged = pc.coalesce(primary, meta_source)
+    merged = coalesce(primary, meta_source)
     joined = set_or_append_column(joined, "qname_source", merged)
     return joined.drop(["qname_source__meta"])
 
@@ -539,8 +633,11 @@ def _join_callsite_qname_meta(base: TableLike, cst_callsites: TableLike) -> Tabl
 @cache(format="delta")
 @tag(layer="normalize", artifact="dim_qualified_names", kind="table")
 def dim_qualified_names(
-    cst_callsites: TableLike,
-    cst_defs: TableLike,
+    cst_callsites: TableLike | SqlFragment | None = None,
+    cst_defs: TableLike | SqlFragment | None = None,
+    normalize_execution_context: NormalizeExecutionContext | None = None,
+    libcst_files: TableLike | RecordBatchReaderLike | None = None,
+    *,
     ctx: ExecutionContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
@@ -556,11 +653,22 @@ def dim_qualified_names(
         Qualified name dimension table.
     """
     _ = ctx
+    backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
+    register_nested_table(backend, name="libcst_files_v1", table=libcst_files)
+    if cst_callsites is None and libcst_files is not None:
+        cst_callsites = SqlFragment("cst_callsites", libcst_callsites_sql())
+    if cst_defs is None and libcst_files is not None:
+        cst_defs = SqlFragment("cst_defs", libcst_defs_sql())
     if not _requires_output(evidence_plan, "dim_qualified_names"):
         schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name, [])
         return empty_table(schema)
-    callsite_qnames = _flatten_qname_names(cst_callsites, "callee_qnames")
-    def_qnames = _flatten_qname_names(cst_defs, "qnames")
+    if cst_callsites is None or cst_defs is None:
+        schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name, [])
+        return empty_table(schema)
+    cst_callsites_table = _materialize_fragment(backend, cst_callsites)
+    cst_defs_table = _materialize_fragment(backend, cst_defs)
+    callsite_qnames = _flatten_qname_names(cst_callsites_table, "callee_qnames")
+    def_qnames = _flatten_qname_names(cst_defs_table, "qnames")
     combined = pa.chunked_array([callsite_qnames, def_qnames])
     if len(combined) == 0:
         schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name, [])
@@ -582,7 +690,10 @@ def dim_qualified_names(
 @cache(format="delta")
 @tag(layer="normalize", artifact="callsite_qname_candidates", kind="table")
 def callsite_qname_candidates(
-    cst_callsites: TableLike,
+    cst_callsites: TableLike | SqlFragment | None = None,
+    normalize_execution_context: NormalizeExecutionContext | None = None,
+    libcst_files: TableLike | RecordBatchReaderLike | None = None,
+    *,
     ctx: ExecutionContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
@@ -604,11 +715,15 @@ def callsite_qname_candidates(
     if not _requires_output(evidence_plan, "callsite_qname_candidates"):
         schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
         return empty_table(schema)
-    if (
-        cst_callsites is None
-        or cst_callsites.num_rows == 0
-        or "callee_qnames" not in cst_callsites.column_names
-    ):
+    backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
+    register_nested_table(backend, name="libcst_files_v1", table=libcst_files)
+    if cst_callsites is None and libcst_files is not None:
+        cst_callsites = SqlFragment("cst_callsites", libcst_callsites_sql())
+    if cst_callsites is None:
+        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
+        return empty_table(schema)
+    cst_callsites_table = _materialize_fragment(backend, cst_callsites)
+    if cst_callsites_table.num_rows == 0 or "callee_qnames" not in cst_callsites_table.column_names:
         schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
         return empty_table(schema)
 
@@ -620,9 +735,9 @@ def callsite_qname_candidates(
         idx_col=None,
         keep_empty=True,
     )
-    exploded = kernel(cst_callsites, spec=spec, out_parent_col="call_id")
+    exploded = kernel(cst_callsites_table, spec=spec, out_parent_col="call_id")
     base = _callsite_qname_base_table(exploded)
-    joined = _join_callsite_qname_meta(base, cst_callsites)
+    joined = _join_callsite_qname_meta(base, cst_callsites_table)
 
     tables = [joined] if joined.num_rows > 0 else []
     schema = infer_schema_or_registry(
@@ -635,8 +750,9 @@ def callsite_qname_candidates(
 @cache(format="delta")
 @tag(layer="normalize", artifact="ast_nodes_norm", kind="table")
 def ast_nodes_norm(
-    ast_nodes: TableLike,
     span_normalize_context: SpanNormalizeContext,
+    ast_nodes: TableLike | SqlFragment | None = None,
+    ast_files: TableLike | RecordBatchReaderLike | None = None,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Add byte-span columns to AST nodes for join-ready alignment.
@@ -646,23 +762,40 @@ def ast_nodes_norm(
     TableLike
         AST nodes with bstart/bend/span_ok columns appended.
     """
+    backend = span_normalize_context.ibis_backend
+    register_nested_table(backend, name="ast_files_v1", table=ast_files)
+    if ast_nodes is None and ast_files is not None:
+        ast_nodes = SqlFragment("ast_nodes", ast_nodes_sql())
     if not _requires_output(evidence_plan, "ast_nodes_norm"):
-        return empty_table(ast_nodes.schema)
-    _require_datafusion_backend(span_normalize_context.ibis_backend)
+        schema = _schema_from_source(
+            ast_nodes,
+            backend=backend,
+            fallback="py_ast_nodes_v1",
+        )
+        return empty_table(schema)
+    if ast_nodes is None:
+        schema = _schema_from_source(
+            ast_nodes,
+            backend=backend,
+            fallback="py_ast_nodes_v1",
+        )
+        return empty_table(schema)
+    _require_datafusion_backend(backend)
     table = add_ast_byte_spans_ibis(
         span_normalize_context.file_line_index,
         ast_nodes,
-        backend=span_normalize_context.ibis_backend,
+        backend=backend,
     )
-    schema = infer_schema_or_registry("py_ast_nodes_v1", [ast_nodes])
+    schema = infer_schema_or_registry("py_ast_nodes_v1", [table])
     return align_table_to_schema(table, schema, opts=SchemaInferOptions(keep_extra_columns=True))
 
 
 @cache(format="delta")
 @tag(layer="normalize", artifact="py_bc_instructions_norm", kind="table")
 def py_bc_instructions_norm(
-    py_bc_instructions: TableLike,
     span_normalize_context: SpanNormalizeContext,
+    py_bc_instructions: TableLike | SqlFragment | None = None,
+    bytecode_files: TableLike | RecordBatchReaderLike | None = None,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Anchor bytecode instructions to source byte spans.
@@ -672,15 +805,34 @@ def py_bc_instructions_norm(
     TableLike
         Bytecode instruction table with bstart/bend/span_ok columns.
     """
+    backend = span_normalize_context.ibis_backend
+    register_nested_table(backend, name="bytecode_files_v1", table=bytecode_files)
+    if py_bc_instructions is None and bytecode_files is not None:
+        py_bc_instructions = SqlFragment(
+            "py_bc_instructions",
+            bytecode_instructions_sql(),
+        )
     if not _requires_output(evidence_plan, "py_bc_instructions_norm"):
-        return empty_table(py_bc_instructions.schema)
-    _require_datafusion_backend(span_normalize_context.ibis_backend)
+        schema = _schema_from_source(
+            py_bc_instructions,
+            backend=backend,
+            fallback="py_bc_instructions_v1",
+        )
+        return empty_table(schema)
+    if py_bc_instructions is None:
+        schema = _schema_from_source(
+            py_bc_instructions,
+            backend=backend,
+            fallback="py_bc_instructions_v1",
+        )
+        return empty_table(schema)
+    _require_datafusion_backend(backend)
     table = anchor_instructions_ibis(
         span_normalize_context.file_line_index,
         py_bc_instructions,
-        backend=span_normalize_context.ibis_backend,
+        backend=backend,
     )
-    schema = infer_schema_or_registry("py_bc_instructions_v1", [py_bc_instructions])
+    schema = infer_schema_or_registry("py_bc_instructions_v1", [table])
     return align_table_to_schema(table, schema, opts=SchemaInferOptions(keep_extra_columns=True))
 
 
@@ -825,11 +977,15 @@ def types_norm(
 @cache()
 @tag(layer="normalize", artifact="diagnostics_sources", kind="object")
 def diagnostics_sources(
-    cst_parse_errors: TableLike,
-    ts_errors: TableLike,
-    ts_missing: TableLike,
-    scip_diagnostics: TableLike,
-    scip_documents: TableLike,
+    cst_parse_errors: IbisPlanSource | None = None,
+    ts_errors: IbisPlanSource | None = None,
+    ts_missing: IbisPlanSource | None = None,
+    scip_diagnostics: IbisPlanSource | None = None,
+    scip_documents: IbisPlanSource | None = None,
+    libcst_files: TableLike | RecordBatchReaderLike | None = None,
+    tree_sitter_files: TableLike | RecordBatchReaderLike | None = None,
+    scip_index: TableLike | RecordBatchReaderLike | None = None,
+    normalize_execution_context: NormalizeExecutionContext | None = None,
 ) -> DiagnosticsSources:
     """Bundle diagnostic source tables.
 
@@ -838,6 +994,20 @@ def diagnostics_sources(
     DiagnosticsSources
         Diagnostic source tables bundle.
     """
+    backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
+    register_nested_table(backend, name="libcst_files_v1", table=libcst_files)
+    register_nested_table(backend, name="tree_sitter_files_v1", table=tree_sitter_files)
+    register_nested_table(backend, name="scip_index_v1", table=scip_index)
+    if cst_parse_errors is None and libcst_files is not None:
+        cst_parse_errors = SqlFragment("cst_parse_errors", libcst_parse_errors_sql())
+    if ts_errors is None and tree_sitter_files is not None:
+        ts_errors = SqlFragment("ts_errors", tree_sitter_errors_sql())
+    if ts_missing is None and tree_sitter_files is not None:
+        ts_missing = SqlFragment("ts_missing", tree_sitter_missing_sql())
+    if scip_diagnostics is None and scip_index is not None:
+        scip_diagnostics = SqlFragment("scip_diagnostics", scip_diagnostics_sql())
+    if scip_documents is None and scip_index is not None:
+        scip_documents = SqlFragment("scip_documents", scip_documents_sql())
     return DiagnosticsSources(
         cst_parse_errors=cst_parse_errors,
         ts_errors=ts_errors,
@@ -902,9 +1072,10 @@ def repo_text_index(
 )
 @tag(layer="normalize", artifact="scip_occurrences_norm_bundle", kind="bundle")
 def scip_occurrences_norm_bundle(
-    scip_documents: TableLike,
-    scip_occurrences: TableLike,
     span_normalize_context: SpanNormalizeContext,
+    scip_documents: TableLike | SqlFragment | None = None,
+    scip_occurrences: TableLike | SqlFragment | None = None,
+    scip_index: TableLike | RecordBatchReaderLike | None = None,
     evidence_plan: EvidencePlan | None = None,
 ) -> dict[str, TableLike]:
     """Convert SCIP occurrences into byte offsets.
@@ -914,22 +1085,38 @@ def scip_occurrences_norm_bundle(
     dict[str, TableLike]
         Bundle with normalized occurrences and span errors.
     """
+    backend = span_normalize_context.ibis_backend
+    register_nested_table(backend, name="scip_index_v1", table=scip_index)
+    if scip_documents is None and scip_index is not None:
+        scip_documents = SqlFragment("scip_documents", scip_documents_sql())
+    if scip_occurrences is None and scip_index is not None:
+        scip_occurrences = SqlFragment("scip_occurrences", scip_occurrences_sql())
+    fallback_schema = _schema_from_source(
+        scip_occurrences,
+        backend=backend,
+        fallback="scip_occurrences_v1",
+    )
     if not _requires_any(
         evidence_plan,
         ("scip_occurrences_norm", "scip_span_errors", "scip_occurrences"),
     ):
         return {
-            "scip_occurrences_norm": _empty_scip_occurrences_norm(scip_occurrences),
+            "scip_occurrences_norm": _empty_scip_occurrences_norm(fallback_schema),
             "scip_span_errors": span_error_table([]),
         }
-    _require_datafusion_backend(span_normalize_context.ibis_backend)
+    if scip_documents is None or scip_occurrences is None:
+        return {
+            "scip_occurrences_norm": _empty_scip_occurrences_norm(fallback_schema),
+            "scip_span_errors": span_error_table([]),
+        }
+    _require_datafusion_backend(backend)
     occ, errs = add_scip_occurrence_byte_spans_ibis(
         span_normalize_context.file_line_index,
         scip_documents,
         scip_occurrences,
-        backend=span_normalize_context.ibis_backend,
+        backend=backend,
     )
-    schema = infer_schema_or_registry("scip_occurrences_v1", [scip_occurrences])
+    schema = infer_schema_or_registry("scip_occurrences_v1", [occ])
     occ = align_table_to_schema(occ, schema, opts=SchemaInferOptions(keep_extra_columns=True))
     return {"scip_occurrences_norm": occ, "scip_span_errors": errs}
 
@@ -937,7 +1124,10 @@ def scip_occurrences_norm_bundle(
 @cache(format="delta")
 @tag(layer="normalize", artifact="cst_imports_norm", kind="table")
 def cst_imports_norm(
-    cst_imports: TableLike,
+    cst_imports: TableLike | SqlFragment | None = None,
+    normalize_execution_context: NormalizeExecutionContext | None = None,
+    libcst_files: TableLike | RecordBatchReaderLike | None = None,
+    *,
     ctx: ExecutionContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
@@ -949,15 +1139,30 @@ def cst_imports_norm(
         Normalized CST imports table.
     """
     _ = ctx
+    backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
+    register_nested_table(backend, name="libcst_files_v1", table=libcst_files)
+    if cst_imports is None and libcst_files is not None:
+        cst_imports = SqlFragment("cst_imports", libcst_imports_sql())
+    if cst_imports is None:
+        return empty_table(dataset_schema(dataset_name_from_alias("cst_imports_norm")))
     if not _requires_any(evidence_plan, ("cst_imports_norm", "cst_imports")):
-        return empty_table(cst_imports.schema)
-    return normalize_cst_imports_spans(py_cst_imports=cst_imports)
+        schema = _schema_from_source(
+            cst_imports,
+            backend=backend,
+            fallback="py_cst_imports_v1",
+        )
+        return empty_table(schema)
+    table = _materialize_fragment(backend, cst_imports)
+    return normalize_cst_imports_spans(py_cst_imports=table)
 
 
 @cache(format="delta")
 @tag(layer="normalize", artifact="cst_defs_norm", kind="table")
 def cst_defs_norm(
-    cst_defs: TableLike,
+    cst_defs: TableLike | SqlFragment | None = None,
+    normalize_execution_context: NormalizeExecutionContext | None = None,
+    libcst_files: TableLike | RecordBatchReaderLike | None = None,
+    *,
     ctx: ExecutionContext,
     evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
@@ -969,9 +1174,21 @@ def cst_defs_norm(
         Normalized CST definitions table.
     """
     _ = ctx
+    backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
+    register_nested_table(backend, name="libcst_files_v1", table=libcst_files)
+    if cst_defs is None and libcst_files is not None:
+        cst_defs = SqlFragment("cst_defs", libcst_defs_sql())
+    if cst_defs is None:
+        return empty_table(dataset_schema(dataset_name_from_alias("cst_defs_norm")))
     if not _requires_any(evidence_plan, ("cst_defs_norm", "cst_defs")):
-        return empty_table(cst_defs.schema)
-    return normalize_cst_defs_spans(py_cst_defs=cst_defs)
+        schema = _schema_from_source(
+            cst_defs,
+            backend=backend,
+            fallback="py_cst_defs_v1",
+        )
+        return empty_table(schema)
+    table = _materialize_fragment(backend, cst_defs)
+    return normalize_cst_defs_spans(py_cst_defs=table)
 
 
 @cache()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from arrowdsl.core.interop import pc
+from datafusion_engine.compute_ops import any_values, equal, filter_values, is_in
 from incremental.types import IncrementalFileChanges
 
 _CHANGED_KINDS: tuple[str, ...] = ("added", "modified", "renamed")
@@ -35,12 +35,12 @@ def file_changes_from_diff(diff: pa.Table | None) -> IncrementalFileChanges:
         return IncrementalFileChanges()
     change_kind = diff["change_kind"]
     file_ids = diff["file_id"]
-    changed_mask = pc.is_in(change_kind, value_set=_CHANGED_KIND_SET)
-    deleted_mask = pc.is_in(change_kind, value_set=_DELETED_KIND_SET)
+    changed_mask = is_in(change_kind, value_set=_CHANGED_KIND_SET)
+    deleted_mask = is_in(change_kind, value_set=_DELETED_KIND_SET)
     changed = _unique_file_ids(file_ids, changed_mask)
     deleted = _unique_file_ids(file_ids, deleted_mask)
-    unchanged_mask = pc.equal(change_kind, pa.scalar("unchanged", type=pa.string()))
-    unchanged_any = pc.any(unchanged_mask).as_py()
+    unchanged_mask = equal(change_kind, pa.scalar("unchanged", type=pa.string()))
+    unchanged_any = any_values(unchanged_mask).as_py()
     full_refresh = not bool(unchanged_any)
     return IncrementalFileChanges(
         changed_file_ids=changed,
@@ -53,7 +53,7 @@ def _unique_file_ids(
     file_ids: pa.Array | pa.ChunkedArray,
     mask: pa.Array | pa.ChunkedArray,
 ) -> tuple[str, ...]:
-    filtered = pc.filter(file_ids, mask)
+    filtered = filter_values(file_ids, mask)
     values = _values_as_list(filtered)
     cleaned = [value for value in values if isinstance(value, str) and value]
     return tuple(sorted(set(cleaned)))

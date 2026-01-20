@@ -44,6 +44,14 @@ if TYPE_CHECKING:
         apply_execution_policy,
         snapshot_plans,
     )
+    from datafusion_engine.schema_registry import (
+        has_schema,
+        register_all_schemas,
+        register_schema,
+        schema_for,
+        schema_names,
+        schema_registry,
+    )
 
 __all__ = [
     "DEFAULT_DF_POLICY",
@@ -61,18 +69,24 @@ __all__ = [
     "datafusion_to_table",
     "df_from_sqlglot",
     "ensure_param_schema",
+    "has_schema",
     "ibis_plan_to_datafusion",
     "ibis_plan_to_table",
     "ibis_to_datafusion",
+    "register_all_schemas",
     "register_dataset",
     "register_dataset_df",
     "register_param_arrow_table",
     "register_param_tables_df",
     "register_registry_delta_tables",
     "register_registry_exports",
+    "register_schema",
     "registry_delta_table_paths",
     "registry_output_dir",
     "replay_substrait_bytes",
+    "schema_for",
+    "schema_names",
+    "schema_registry",
     "snapshot_plans",
     "sqlglot_to_datafusion",
 ]
@@ -96,10 +110,13 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "ibis_plan_to_table": ("datafusion_engine.bridge", "ibis_plan_to_table"),
     "ibis_to_datafusion": ("datafusion_engine.bridge", "ibis_to_datafusion"),
     "replay_substrait_bytes": ("datafusion_engine.bridge", "replay_substrait_bytes"),
+    "has_schema": ("datafusion_engine.schema_registry", "has_schema"),
     "register_dataset": ("datafusion_engine.df_builder", "register_dataset"),
     "register_dataset_df": ("datafusion_engine.registry_bridge", "register_dataset_df"),
     "register_param_arrow_table": ("datafusion_engine.param_tables", "register_param_arrow_table"),
     "register_param_tables_df": ("datafusion_engine.param_tables", "register_param_tables_df"),
+    "register_schema": ("datafusion_engine.schema_registry", "register_schema"),
+    "register_all_schemas": ("datafusion_engine.schema_registry", "register_all_schemas"),
     "register_registry_delta_tables": (
         "datafusion_engine.registry_loader",
         "register_registry_delta_tables",
@@ -114,6 +131,9 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     ),
     "registry_output_dir": ("datafusion_engine.registry_loader", "registry_output_dir"),
     "RegistryTarget": ("datafusion_engine.registry_loader", "RegistryTarget"),
+    "schema_for": ("datafusion_engine.schema_registry", "schema_for"),
+    "schema_names": ("datafusion_engine.schema_registry", "schema_names"),
+    "schema_registry": ("datafusion_engine.schema_registry", "schema_registry"),
     "snapshot_plans": ("datafusion_engine.runtime", "snapshot_plans"),
     "sqlglot_to_datafusion": ("datafusion_engine.bridge", "sqlglot_to_datafusion"),
 }

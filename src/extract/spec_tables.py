@@ -60,7 +60,6 @@ EXTRACT_DATASET_ENCODING = EncodingPolicy(
 )
 
 
-
 @dataclass(frozen=True)
 class ExtractDerivedIdSpec:
     """Derived identifier specification for extract datasets."""

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from arrowdsl.core.ids_registry import hash_spec_factory
-from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike
 from arrowdsl.core.metrics import (
     QUALITY_SCHEMA,
     QualityPlanSpec,
@@ -22,6 +22,7 @@ from cpg.kinds_ultimate import (
     SCIP_ROLE_GENERATED,
     SCIP_ROLE_TEST,
 )
+from datafusion_engine.compute_ops import fill_null
 
 if TYPE_CHECKING:
     from arrowdsl.core.ids import HashSpec
@@ -82,7 +83,7 @@ def fill_nulls(values: ValuesLike, *, default: object) -> ValuesLike:
     """
     if values.null_count == 0:
         return values
-    return pc.fill_null(values, fill_value=default)
+    return fill_null(values, fill_value=default)
 
 
 def fill_nulls_float(values: ValuesLike, *, default: float) -> ValuesLike:

@@ -2,6 +2,12 @@ Below is the **DataFusion UDF surface area** (focused on the **`datafusion` Pyth
 
 ---
 
+## Project policy (DataFusion-first compute)
+
+- All expression-level compute should route through DataFusion UDFs or built-ins.
+- Any remaining PyArrow compute usage must be centralized under
+  `datafusion_engine.compute_ops` and treated as an internal implementation detail.
+
 ## 0) The 4 UDF families DataFusion exposes (Python)
 
 DataFusion Python supports:

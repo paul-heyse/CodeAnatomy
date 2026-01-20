@@ -24,6 +24,7 @@ from datafusion_engine.compile_options import (
 )
 from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_planners
 from datafusion_engine.function_factory import function_factory_payloads, install_function_factory
+from datafusion_engine.schema_registry import register_all_schemas
 from datafusion_engine.udf_registry import DataFusionUdfSnapshot, register_datafusion_udfs
 from engine.plan_cache import PlanCache
 from registry_common.arrow_payloads import payload_hash
@@ -1094,6 +1095,7 @@ class DataFusionRuntimeProfile:
     cache_manager_factory: Callable[[], object] | None = None
     enable_function_factory: bool = True
     function_factory_hook: Callable[[SessionContext], None] | None = None
+    enable_schema_registry: bool = True
     enable_expr_planners: bool = False
     expr_planner_names: tuple[str, ...] = ()
     expr_planner_hook: Callable[[SessionContext], None] | None = None
@@ -1237,6 +1239,7 @@ class DataFusionRuntimeProfile:
         ctx = self._apply_url_table(ctx)
         self._register_local_filesystem(ctx)
         self._install_input_plugins(ctx)
+        self._install_schema_registry(ctx)
         self._install_udfs(ctx)
         self._prepare_statements(ctx)
         self.ensure_delta_plan_codecs(ctx)
@@ -1273,6 +1276,12 @@ class DataFusionRuntimeProfile:
             return
         snapshot = register_datafusion_udfs(ctx)
         self._record_udf_snapshot(snapshot)
+
+    def _install_schema_registry(self, ctx: SessionContext) -> None:
+        """Register canonical nested schemas on the session context."""
+        if not self.enable_schema_registry:
+            return
+        register_all_schemas(ctx)
 
     def _prepare_statements(self, ctx: SessionContext) -> None:
         """Prepare SQL statements when configured."""

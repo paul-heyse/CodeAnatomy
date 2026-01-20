@@ -6,11 +6,12 @@ specification.
 
 Exports:
 - repo scanning -> repo_files table
-- AST extraction -> py_ast_nodes, py_ast_edges, py_ast_errors
-- CST extraction (LibCST) -> parse manifest/errors + name refs/imports/calls/defs
-- SCIP extraction -> documents/occurrences/symbol_information tables (protobuf)
-- symtable extraction -> scopes/symbols/scope edges/namespace edges/function partitions
-- bytecode extraction -> code units/instructions/exception table (+ optional blocks/CFG)
+- AST extraction -> ast_files
+- CST extraction (LibCST) -> libcst_files
+- SCIP extraction -> scip_index
+- symtable extraction -> symtable_files
+- bytecode extraction -> bytecode_files
+- tree-sitter extraction -> tree_sitter_files
 """
 
 from __future__ import annotations

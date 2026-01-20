@@ -70,6 +70,44 @@ def stable_hash128(value: Value) -> Value:
     return value.cast("string")
 
 
+@ibis.udf.scalar.builtin(signature=((dt.string, dt.string), dt.string), name="prefixed_hash64")
+def prefixed_hash64(_prefix: Value, value: Value) -> Value:
+    """Return a prefixed stable 64-bit hash for string inputs.
+
+    Returns
+    -------
+    ibis.expr.types.Value
+        Prefixed hash expression.
+    """
+    return value.cast("string")
+
+
+@ibis.udf.scalar.builtin(signature=((dt.string, dt.string), dt.string), name="stable_id")
+def stable_id(_prefix: Value, value: Value) -> Value:
+    """Return a prefixed stable 128-bit hash for string inputs.
+
+    Returns
+    -------
+    ibis.expr.types.Value
+        Prefixed hash expression.
+    """
+    return value.cast("string")
+
+
+@ibis.udf.scalar.builtin(
+    signature=((dt.Array(value_type=dt.string),), dt.boolean), name="valid_mask"
+)
+def valid_mask(_values: Value) -> Value:
+    """Return True when all list values are non-null.
+
+    Returns
+    -------
+    ibis.expr.types.Value
+        Validity mask expression.
+    """
+    return ibis.literal(value=True).cast("boolean")
+
+
 @ibis.udf.scalar.builtin(signature=((dt.string,), dt.int32), name="position_encoding_norm")
 def position_encoding_norm(value: Value) -> Value:
     """Normalize position encoding values to enum integers.
@@ -115,6 +153,9 @@ __all__ = [
     "cpg_score",
     "ibis_udf_specs",
     "position_encoding_norm",
+    "prefixed_hash64",
     "stable_hash64",
     "stable_hash128",
+    "stable_id",
+    "valid_mask",
 ]

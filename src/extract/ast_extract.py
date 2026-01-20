@@ -13,15 +13,16 @@ from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
     FileContext,
+    SpanSpec,
     apply_query_and_project,
-    ast_def_nodes_plan,
-    file_identity_row,
+    attrs_map,
     ibis_plan_from_rows,
     iter_contexts,
     materialize_extract_plan,
+    span_dict,
     text_from_file_ctx,
 )
-from extract.registry_specs import dataset_row_schema, normalize_options
+from extract.registry_specs import dataset_schema, normalize_options
 from extract.schema_ops import ExtractNormalizeOptions
 from ibis_engine.plan import IbisPlan
 
@@ -35,20 +36,17 @@ class ASTExtractOptions:
 
     type_comments: bool = True
     feature_version: int | None = None
+    repo_id: str | None = None
 
 
 @dataclass(frozen=True)
 class ASTExtractResult:
     """Hold extracted AST tables for nodes, edges, and errors."""
 
-    py_ast_nodes: TableLike
-    py_ast_edges: TableLike
-    py_ast_errors: TableLike
+    ast_files: TableLike
 
 
-AST_NODES_ROW_SCHEMA = dataset_row_schema("py_ast_nodes_v1")
-AST_EDGES_ROW_SCHEMA = dataset_row_schema("py_ast_edges_v1")
-AST_ERRORS_ROW_SCHEMA = dataset_row_schema("py_ast_errors_v1")
+AST_FILES_SCHEMA = dataset_schema("ast_files_v1")
 
 AST_LINE_BASE = 1
 AST_COL_UNIT = "utf32"
@@ -84,63 +82,48 @@ def _node_value_repr(node: ast.AST) -> str | None:
     return None
 
 
-def _syntax_error_row(
-    file_id: object,
-    path: object,
-    file_sha256: object,
-    exc: SyntaxError,
-) -> dict[str, object]:
+def _syntax_error_row(exc: SyntaxError) -> dict[str, object]:
+    lineno = _maybe_int(getattr(exc, "lineno", None))
+    offset = _maybe_int(getattr(exc, "offset", None))
+    end_lineno = _maybe_int(getattr(exc, "end_lineno", None))
+    end_offset = _maybe_int(getattr(exc, "end_offset", None))
     return {
-        "file_id": file_id,
-        "path": path,
-        "file_sha256": file_sha256,
         "error_type": "SyntaxError",
         "message": str(exc),
-        "lineno": _maybe_int(getattr(exc, "lineno", None)),
-        "offset": _maybe_int(getattr(exc, "offset", None)),
-        "end_lineno": _maybe_int(getattr(exc, "end_lineno", None)),
-        "end_offset": _maybe_int(getattr(exc, "end_offset", None)),
-        "line_base": AST_LINE_BASE,
-        "col_unit": AST_COL_UNIT,
-        "end_exclusive": AST_END_EXCLUSIVE,
+        "span": span_dict(
+            SpanSpec(
+                start_line0=lineno - AST_LINE_BASE if lineno is not None else None,
+                start_col=offset,
+                end_line0=end_lineno - AST_LINE_BASE if end_lineno is not None else None,
+                end_col=end_offset,
+                end_exclusive=AST_END_EXCLUSIVE,
+                col_unit=AST_COL_UNIT,
+            )
+        ),
+        "attrs": attrs_map({}),
     }
 
 
-def _exception_error_row(
-    file_id: object,
-    path: object,
-    file_sha256: object,
-    exc: Exception,
-) -> dict[str, object]:
+def _exception_error_row(exc: Exception) -> dict[str, object]:
     return {
-        "file_id": file_id,
-        "path": path,
-        "file_sha256": file_sha256,
         "error_type": type(exc).__name__,
         "message": str(exc),
-        "lineno": None,
-        "offset": None,
-        "end_lineno": None,
-        "end_offset": None,
-        "line_base": AST_LINE_BASE,
-        "col_unit": AST_COL_UNIT,
-        "end_exclusive": AST_END_EXCLUSIVE,
+        "span": None,
+        "attrs": attrs_map({}),
     }
 
 
 def _parse_ast_text(
     text: str,
     *,
-    path: object,
-    file_id: object,
-    file_sha256: object,
+    filename: str,
     options: ASTExtractOptions,
 ) -> tuple[ast.AST | None, dict[str, object] | None]:
     try:
         return (
             ast.parse(
                 text,
-                filename=str(path),
+                filename=filename,
                 mode="exec",
                 type_comments=options.type_comments,
                 feature_version=options.feature_version,
@@ -148,9 +131,9 @@ def _parse_ast_text(
             None,
         )
     except SyntaxError as exc:
-        return None, _syntax_error_row(file_id, path, file_sha256, exc)
+        return None, _syntax_error_row(exc)
     except (TypeError, ValueError) as exc:
-        return None, _exception_error_row(file_id, path, file_sha256, exc)
+        return None, _exception_error_row(exc)
 
 
 def _iter_child_items(node: ast.AST) -> list[tuple[ast.AST, str, int]]:
@@ -167,59 +150,66 @@ def _iter_child_items(node: ast.AST) -> list[tuple[ast.AST, str, int]]:
 
 def _walk_ast(
     root: ast.AST,
-    *,
-    file_ctx: FileContext,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     nodes_rows: list[dict[str, object]] = []
     edges_rows: list[dict[str, object]] = []
     stack: list[tuple[ast.AST, int | None, str | None, int | None]] = [(root, None, None, None)]
     idx_map: dict[int, int] = {}
-    identity = file_identity_row(file_ctx)
 
     while stack:
         node, parent_idx, field_name, field_pos = stack.pop()
         node_id = id(node)
-        ast_idx = idx_map.get(node_id)
-        if ast_idx is None:
-            ast_idx = len(idx_map)
-            idx_map[node_id] = ast_idx
+        ast_id = idx_map.get(node_id)
+        if ast_id is None:
+            ast_id = len(idx_map)
+            idx_map[node_id] = ast_id
 
-        nodes_rows.append(
+        lineno = _maybe_int(getattr(node, "lineno", None))
+        col_offset = _maybe_int(getattr(node, "col_offset", None))
+        end_lineno = _maybe_int(getattr(node, "end_lineno", None))
+        end_col_offset = _maybe_int(getattr(node, "end_col_offset", None))
+        node_attrs = attrs_map(
             {
-                **identity,
-                "ast_idx": ast_idx,
-                "parent_ast_idx": parent_idx,
                 "field_name": field_name,
                 "field_pos": field_pos,
-                "kind": type(node).__name__,
-                "name": _node_name(node),
-                "value_repr": _node_value_repr(node),
-                "lineno": _maybe_int(getattr(node, "lineno", None)),
-                "col_offset": _maybe_int(getattr(node, "col_offset", None)),
-                "end_lineno": _maybe_int(getattr(node, "end_lineno", None)),
-                "end_col_offset": _maybe_int(getattr(node, "end_col_offset", None)),
-                "line_base": AST_LINE_BASE,
-                "col_unit": AST_COL_UNIT,
-                "end_exclusive": AST_END_EXCLUSIVE,
             }
         )
 
-        for child, field, pos in reversed(_iter_child_items(node)):
-            child_id = id(child)
-            child_idx = idx_map.get(child_id)
-            if child_idx is None:
-                child_idx = len(idx_map)
-                idx_map[child_id] = child_idx
+        nodes_rows.append(
+            {
+                "ast_id": ast_id,
+                "parent_ast_id": parent_idx,
+                "kind": type(node).__name__,
+                "name": _node_name(node),
+                "value": _node_value_repr(node),
+                "span": span_dict(
+                    SpanSpec(
+                        start_line0=lineno - AST_LINE_BASE if lineno is not None else None,
+                        start_col=col_offset,
+                        end_line0=end_lineno - AST_LINE_BASE if end_lineno is not None else None,
+                        end_col=end_col_offset,
+                        end_exclusive=AST_END_EXCLUSIVE,
+                        col_unit=AST_COL_UNIT,
+                    )
+                ),
+                "attrs": node_attrs,
+            }
+        )
+
+        if parent_idx is not None:
             edges_rows.append(
                 {
-                    **identity,
-                    "parent_ast_idx": ast_idx,
-                    "child_ast_idx": child_idx,
-                    "field_name": field,
-                    "field_pos": pos,
+                    "src": parent_idx,
+                    "dst": ast_id,
+                    "kind": "CHILD",
+                    "slot": field_name,
+                    "idx": field_pos,
+                    "attrs": attrs_map({}),
                 }
             )
-            stack.append((child, ast_idx, field, pos))
+
+        for child, field, pos in reversed(_iter_child_items(node)):
+            stack.append((child, ast_id, field, pos))
 
     return nodes_rows, edges_rows
 
@@ -228,37 +218,42 @@ def _extract_ast_for_context(
     file_ctx: FileContext,
     *,
     options: ASTExtractOptions,
-) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+) -> dict[str, object] | None:
     if not file_ctx.file_id or not file_ctx.path:
-        return [], [], []
+        return None
     text = text_from_file_ctx(file_ctx)
     if not text:
-        return [], [], []
+        return None
 
     root, err = _parse_ast_text(
         text,
-        path=file_ctx.path,
-        file_id=file_ctx.file_id,
-        file_sha256=file_ctx.file_sha256,
+        filename=str(file_ctx.path),
         options=options,
     )
+    nodes_rows: list[dict[str, object]] = []
+    edges_rows: list[dict[str, object]] = []
+    error_rows: list[dict[str, object]] = []
     if err is not None:
-        return [], [], [err]
-    if root is None:
-        return [], [], []
+        error_rows.append(err)
+    if root is not None:
+        nodes_rows, edges_rows = _walk_ast(root)
 
-    nodes_rows, edges_rows = _walk_ast(
-        root,
-        file_ctx=file_ctx,
-    )
-    return nodes_rows, edges_rows, []
+    return {
+        "repo": options.repo_id,
+        "path": file_ctx.path,
+        "file_id": file_ctx.file_id,
+        "nodes": nodes_rows,
+        "edges": edges_rows,
+        "errors": error_rows,
+        "attrs": attrs_map({"file_sha256": file_ctx.file_sha256}),
+    }
 
 
 def _extract_ast_for_row(
     row: dict[str, object],
     *,
     options: ASTExtractOptions,
-) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+) -> dict[str, object] | None:
     file_ctx = FileContext.from_repo_row(row)
     return _extract_ast_for_context(file_ctx, options=options)
 
@@ -286,35 +281,11 @@ def extract_ast(
         context=exec_context,
     )
     return ASTExtractResult(
-        py_ast_nodes=cast(
+        ast_files=cast(
             "TableLike",
             materialize_extract_plan(
-                "py_ast_nodes_v1",
-                plans["ast_nodes"],
-                ctx=ctx,
-                options=ExtractMaterializeOptions(
-                    normalize=normalize,
-                    apply_post_kernels=True,
-                ),
-            ),
-        ),
-        py_ast_edges=cast(
-            "TableLike",
-            materialize_extract_plan(
-                "py_ast_edges_v1",
-                plans["ast_edges"],
-                ctx=ctx,
-                options=ExtractMaterializeOptions(
-                    normalize=normalize,
-                    apply_post_kernels=True,
-                ),
-            ),
-        ),
-        py_ast_errors=cast(
-            "TableLike",
-            materialize_extract_plan(
-                "py_ast_errors_v1",
-                plans["ast_errors"],
+                "ast_files_v1",
+                plans["ast_files"],
                 ctx=ctx,
                 options=ExtractMaterializeOptions(
                     normalize=normalize,
@@ -331,41 +302,27 @@ def extract_ast_plans(
     *,
     context: ExtractExecutionContext | None = None,
 ) -> dict[str, IbisPlan]:
-    """Extract AST plans for nodes, edges, and errors.
+    """Extract AST plans for nested file records.
 
     Returns
     -------
     dict[str, IbisPlan]
-        Ibis plan bundle keyed by ``ast_nodes``, ``ast_edges``, and ``ast_errors``.
+        Ibis plan bundle keyed by ``ast_files``.
     """
     normalized_options = normalize_options("ast", options, ASTExtractOptions)
     exec_context = context or ExtractExecutionContext()
     normalize = ExtractNormalizeOptions(options=normalized_options)
-    nodes_rows, edges_rows, err_rows = _collect_ast_rows(
+    rows = _collect_ast_rows(
         repo_files,
         file_contexts=exec_context.file_contexts,
         options=normalized_options,
     )
     evidence_plan = exec_context.evidence_plan
     return {
-        "ast_nodes": _build_ast_plan(
-            "py_ast_nodes_v1",
-            nodes_rows,
-            row_schema=AST_NODES_ROW_SCHEMA,
-            normalize=normalize,
-            evidence_plan=evidence_plan,
-        ),
-        "ast_edges": _build_ast_plan(
-            "py_ast_edges_v1",
-            edges_rows,
-            row_schema=AST_EDGES_ROW_SCHEMA,
-            normalize=normalize,
-            evidence_plan=evidence_plan,
-        ),
-        "ast_errors": _build_ast_plan(
-            "py_ast_errors_v1",
-            err_rows,
-            row_schema=AST_ERRORS_ROW_SCHEMA,
+        "ast_files": _build_ast_plan(
+            "ast_files_v1",
+            rows,
+            row_schema=AST_FILES_SCHEMA,
             normalize=normalize,
             evidence_plan=evidence_plan,
         ),
@@ -377,16 +334,13 @@ def _collect_ast_rows(
     *,
     file_contexts: Iterable[FileContext] | None,
     options: ASTExtractOptions,
-) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
-    nodes_rows: list[dict[str, object]] = []
-    edges_rows: list[dict[str, object]] = []
-    err_rows: list[dict[str, object]] = []
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
     for file_ctx in iter_contexts(repo_files, file_contexts):
-        nodes, edges, errs = _extract_ast_for_context(file_ctx, options=options)
-        nodes_rows.extend(nodes)
-        edges_rows.extend(edges)
-        err_rows.extend(errs)
-    return nodes_rows, edges_rows, err_rows
+        row = _extract_ast_for_context(file_ctx, options=options)
+        if row is not None:
+            rows.append(row)
+    return rows
 
 
 def _build_ast_plan(
@@ -484,31 +438,10 @@ def extract_ast_tables(
         options=normalized_options,
         context=exec_context,
     )
-    defs_plan = ast_def_nodes_plan(plan=plans["ast_nodes"])
     return {
-        "ast_nodes": materialize_extract_plan(
-            "py_ast_nodes_v1",
-            plans["ast_nodes"],
-            ctx=ctx,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                prefer_reader=prefer_reader,
-                apply_post_kernels=True,
-            ),
-        ),
-        "ast_edges": materialize_extract_plan(
-            "py_ast_edges_v1",
-            plans["ast_edges"],
-            ctx=ctx,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                prefer_reader=prefer_reader,
-                apply_post_kernels=True,
-            ),
-        ),
-        "ast_defs": materialize_extract_plan(
-            "py_ast_nodes_v1",
-            defs_plan,
+        "ast_files": materialize_extract_plan(
+            "ast_files_v1",
+            plans["ast_files"],
             ctx=ctx,
             options=ExtractMaterializeOptions(
                 normalize=normalize,

@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from arrowdsl.core.runtime_profiles import RuntimeProfile
-from arrowdsl.core.runtime_profiles import ScanProfile
+from arrowdsl.core.runtime_profiles import RuntimeProfile, ScanProfile
 from datafusion_engine.runtime import DataFusionJoinPolicy, DataFusionRuntimeProfile
 from engine.runtime_profile import runtime_profile_snapshot
 

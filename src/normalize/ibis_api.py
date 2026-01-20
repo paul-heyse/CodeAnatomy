@@ -48,23 +48,25 @@ from normalize.runner import (
     run_normalize,
 )
 
+NormalizeSource = IbisPlanSource | None
+
 
 @dataclass(frozen=True)
 class DiagnosticsSources:
     """Source tables for diagnostics aggregation."""
 
-    cst_parse_errors: TableLike | None = None
-    ts_errors: TableLike | None = None
-    ts_missing: TableLike | None = None
-    scip_diagnostics: TableLike | None = None
-    scip_documents: TableLike | None = None
+    cst_parse_errors: NormalizeSource = None
+    ts_errors: NormalizeSource = None
+    ts_missing: NormalizeSource = None
+    scip_diagnostics: NormalizeSource = None
+    scip_documents: NormalizeSource = None
 
 
 @dataclass(frozen=True)
 class DiagnosticsInputs:
     """Inputs for diagnostics normalization."""
 
-    file_line_index: TableLike | None = None
+    file_line_index: NormalizeSource = None
     sources: DiagnosticsSources = field(default_factory=DiagnosticsSources)
 
 
@@ -118,8 +120,8 @@ def _finalize_plan(
 
 
 def build_cfg_blocks(
-    py_bc_blocks: TableLike | None,
-    py_bc_code_units: TableLike | None,
+    py_bc_blocks: NormalizeSource,
+    py_bc_code_units: NormalizeSource,
     *,
     ctx: ExecutionContext | None = None,
     backend: BaseBackend | None = None,
@@ -146,8 +148,8 @@ def build_cfg_blocks(
 
 
 def build_cfg_edges(
-    py_bc_code_units: TableLike | None,
-    py_bc_cfg_edges: TableLike | None,
+    py_bc_code_units: NormalizeSource,
+    py_bc_cfg_edges: NormalizeSource,
     *,
     ctx: ExecutionContext | None = None,
     backend: BaseBackend | None = None,
@@ -174,7 +176,7 @@ def build_cfg_edges(
 
 
 def build_def_use_events(
-    py_bc_instructions: TableLike | None,
+    py_bc_instructions: NormalizeSource,
     *,
     ctx: ExecutionContext | None = None,
     backend: BaseBackend | None = None,
@@ -198,7 +200,7 @@ def build_def_use_events(
 
 
 def run_reaching_defs(
-    def_use_events: TableLike | None,
+    def_use_events: NormalizeSource,
     *,
     ctx: ExecutionContext | None = None,
     backend: BaseBackend | None = None,
@@ -222,7 +224,7 @@ def run_reaching_defs(
 
 
 def normalize_type_exprs(
-    cst_type_exprs: TableLike | None,
+    cst_type_exprs: NormalizeSource,
     *,
     ctx: ExecutionContext | None = None,
     backend: BaseBackend | None = None,
@@ -246,8 +248,8 @@ def normalize_type_exprs(
 
 
 def normalize_types(
-    cst_type_exprs: TableLike | None,
-    scip_symbol_information: TableLike | None = None,
+    cst_type_exprs: NormalizeSource,
+    scip_symbol_information: NormalizeSource = None,
     *,
     ctx: ExecutionContext | None = None,
     backend: BaseBackend | None = None,
@@ -309,9 +311,9 @@ def collect_diags(
 
 
 def add_scip_occurrence_byte_spans(
-    file_line_index: TableLike,
-    scip_documents: TableLike,
-    scip_occurrences: TableLike,
+    file_line_index: NormalizeSource,
+    scip_documents: NormalizeSource,
+    scip_occurrences: NormalizeSource,
     *,
     backend: BaseBackend | None = None,
 ) -> tuple[TableLike, TableLike]:
@@ -332,8 +334,8 @@ def add_scip_occurrence_byte_spans(
 
 
 def anchor_instructions(
-    file_line_index: TableLike,
-    py_bc_instructions: TableLike,
+    file_line_index: NormalizeSource,
+    py_bc_instructions: NormalizeSource,
     *,
     backend: BaseBackend | None = None,
 ) -> TableLike:
@@ -353,8 +355,8 @@ def anchor_instructions(
 
 
 def add_ast_byte_spans(
-    file_line_index: TableLike,
-    py_ast_nodes: TableLike,
+    file_line_index: NormalizeSource,
+    py_ast_nodes: NormalizeSource,
     *,
     backend: BaseBackend | None = None,
 ) -> TableLike:

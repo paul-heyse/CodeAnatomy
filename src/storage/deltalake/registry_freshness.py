@@ -89,10 +89,7 @@ def registry_signature_from_tables(
     RegistrySignature
         Registry signature derived from table IPC hashes.
     """
-    entries = [
-        {"name": name, "hash": ipc_hash(table)}
-        for name, table in sorted(tables.items())
-    ]
+    entries = [{"name": name, "hash": ipc_hash(table)} for name, table in sorted(tables.items())]
     payload = {"version": REGISTRY_SIGNATURE_VERSION, "entries": entries}
     digest = payload_hash(payload, _REGISTRY_SIGNATURE_PAYLOAD_SCHEMA)
     return RegistrySignature(registry=registry, signature=digest, source=source)

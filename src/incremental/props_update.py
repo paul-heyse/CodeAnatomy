@@ -7,7 +7,7 @@ from typing import cast
 
 import pyarrow as pa
 
-from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, pc
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.build import table_from_schema
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from arrowdsl.schema.schema import align_table
@@ -15,6 +15,7 @@ from cpg.schemas import (
     CPG_PROPS_BY_FILE_ID_SCHEMA,
     CPG_PROPS_GLOBAL_SCHEMA,
 )
+from datafusion_engine.compute_ops import equal, invert, is_in, is_valid
 from incremental.state_store import StateStore
 from incremental.types import IncrementalFileChanges
 from storage.deltalake import (
@@ -149,21 +150,21 @@ def _attach_file_id(
         ["entity_id", "file_id"]
     )
     joined = props.join(mapping_table, keys=["entity_id"], join_type="left outer")
-    file_mask = pc.is_valid(joined["file_id"])
+    file_mask = is_valid(joined["file_id"])
     file_props = joined.filter(file_mask)
-    global_props = joined.filter(pc.invert(file_mask)).drop(["file_id"])
+    global_props = joined.filter(invert(file_mask)).drop(["file_id"])
     return file_props, global_props
 
 
 def _filter_props_kind(props: pa.Table, kind: str) -> pa.Table:
-    mask = pc.equal(props["entity_kind"], kind)
+    mask = equal(props["entity_kind"], kind)
     return props.filter(mask)
 
 
 def _filter_props_other(props: pa.Table) -> pa.Table:
     value_set = pa.array([_NODE_KIND, _EDGE_KIND], type=pa.string())
-    mask = pc.is_in(props["entity_kind"], value_set=value_set)
-    return props.filter(pc.invert(mask))
+    mask = is_in(props["entity_kind"], value_set=value_set)
+    return props.filter(invert(mask))
 
 
 def _concat_tables(

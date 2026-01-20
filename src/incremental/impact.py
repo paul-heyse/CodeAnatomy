@@ -9,7 +9,7 @@ import ibis
 import pyarrow as pa
 from ibis.backends import BaseBackend
 
-from arrowdsl.core.ids import iter_table_rows
+from arrowdsl.core.array_iter import iter_table_rows
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table, empty_table

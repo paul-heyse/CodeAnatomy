@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.core.interop import DataTypeLike, TableLike, pc
+from arrowdsl.core.interop import DataTypeLike, TableLike
+from datafusion_engine.compute_ops import cast_values, dictionary_encode
 
 DEFAULT_DICTIONARY_INDEX_TYPE = pa.int32()
 
@@ -78,13 +79,13 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
             continue
         index_type = policy.dictionary_index_types.get(name, policy.dictionary_index_type)
         ordered = policy.dictionary_ordered_flags.get(name, policy.dictionary_ordered)
-        encoded = pc.dictionary_encode(arr)
+        encoded = dictionary_encode(arr)
         target_type = pa.dictionary(
             index_type,
             arr.type,
             ordered=ordered,
         )
-        encoded = pc.cast(encoded, target_type)
+        encoded = cast_values(encoded, target_type)
         idx = out.schema.get_field_index(name)
         out = out.set_column(idx, name, encoded)
     return out

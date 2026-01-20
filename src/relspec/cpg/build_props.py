@@ -8,7 +8,7 @@ from typing import cast
 import ibis
 import pyarrow as pa
 from ibis.backends import BaseBackend
-from ibis.expr.types import IntegerValue, Value
+from ibis.expr.types import IntegerValue, Table, Value
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike, concat_tables
@@ -24,6 +24,7 @@ from cpg.registry import CpgRegistry, default_cpg_registry
 from cpg.spec_tables import prop_table_specs_from_table
 from cpg.specs import PropFieldSpec, PropTableSpec, filter_fields, resolve_prop_include
 from cpg.table_utils import align_table_to_schema, assert_schema_metadata
+from datafusion_engine.query_fragments import SqlFragment
 from datafusion_engine.runtime import AdapterExecutionPolicy
 from engine.materialize import resolve_prefer_reader
 from engine.plan_policy import ExecutionSurfacePolicy
@@ -168,26 +169,26 @@ class IbisMaterializeContext:
 class PropsInputTables:
     """Bundle of input tables for property extraction."""
 
-    repo_files: TableLike | DatasetSource | None = None
-    cst_name_refs: TableLike | DatasetSource | None = None
-    cst_imports: TableLike | DatasetSource | None = None
-    cst_callsites: TableLike | DatasetSource | None = None
-    cst_defs: TableLike | DatasetSource | None = None
-    dim_qualified_names: TableLike | DatasetSource | None = None
-    scip_symbol_information: TableLike | DatasetSource | None = None
-    scip_occurrences: TableLike | DatasetSource | None = None
-    scip_external_symbol_information: TableLike | DatasetSource | None = None
-    ts_nodes: TableLike | DatasetSource | None = None
-    ts_errors: TableLike | DatasetSource | None = None
-    ts_missing: TableLike | DatasetSource | None = None
-    type_exprs_norm: TableLike | DatasetSource | None = None
-    types_norm: TableLike | DatasetSource | None = None
-    diagnostics_norm: TableLike | DatasetSource | None = None
-    rt_objects: TableLike | DatasetSource | None = None
-    rt_signatures: TableLike | DatasetSource | None = None
-    rt_signature_params: TableLike | DatasetSource | None = None
-    rt_members: TableLike | DatasetSource | None = None
-    cpg_edges: TableLike | DatasetSource | None = None
+    repo_files: TableLike | DatasetSource | SqlFragment | None = None
+    cst_name_refs: TableLike | DatasetSource | SqlFragment | None = None
+    cst_imports: TableLike | DatasetSource | SqlFragment | None = None
+    cst_callsites: TableLike | DatasetSource | SqlFragment | None = None
+    cst_defs: TableLike | DatasetSource | SqlFragment | None = None
+    dim_qualified_names: TableLike | DatasetSource | SqlFragment | None = None
+    scip_symbol_information: TableLike | DatasetSource | SqlFragment | None = None
+    scip_occurrences: TableLike | DatasetSource | SqlFragment | None = None
+    scip_external_symbol_information: TableLike | DatasetSource | SqlFragment | None = None
+    ts_nodes: TableLike | DatasetSource | SqlFragment | None = None
+    ts_errors: TableLike | DatasetSource | SqlFragment | None = None
+    ts_missing: TableLike | DatasetSource | SqlFragment | None = None
+    type_exprs_norm: TableLike | DatasetSource | SqlFragment | None = None
+    types_norm: TableLike | DatasetSource | SqlFragment | None = None
+    diagnostics_norm: TableLike | DatasetSource | SqlFragment | None = None
+    rt_objects: TableLike | DatasetSource | SqlFragment | None = None
+    rt_signatures: TableLike | DatasetSource | SqlFragment | None = None
+    rt_signature_params: TableLike | DatasetSource | SqlFragment | None = None
+    rt_members: TableLike | DatasetSource | SqlFragment | None = None
+    cpg_edges: TableLike | DatasetSource | SqlFragment | None = None
 
 
 def _materialize_reader(value: TableLike | RecordBatchReaderLike) -> TableLike:
@@ -197,12 +198,15 @@ def _materialize_reader(value: TableLike | RecordBatchReaderLike) -> TableLike:
 
 
 def _source_to_ibis_plan(
-    source: TableLike | DatasetSource,
+    source: TableLike | DatasetSource | SqlFragment,
     *,
     _ctx: ExecutionContext,
     backend: BaseBackend,
     name: str,
 ) -> IbisPlan:
+    if isinstance(source, SqlFragment):
+        expr = _sql_fragment_expr(backend, fragment=source)
+        return IbisPlan(expr=expr, ordering=Ordering.unordered())
     if isinstance(source, DatasetSource):
         msg = f"DatasetSource {name!r} must be materialized before CPG property builds."
         raise TypeError(msg)
@@ -216,6 +220,14 @@ def _source_to_ibis_plan(
             namespace_recorder=namespace_recorder_from_ctx(_ctx),
         ),
     )
+
+
+def _sql_fragment_expr(backend: BaseBackend, *, fragment: SqlFragment) -> Table:
+    sql_method = getattr(backend, "sql", None)
+    if not callable(sql_method):
+        msg = "Ibis backend does not support raw SQL fragments."
+        raise TypeError(msg)
+    return cast("Table", sql_method(fragment.sql))
 
 
 def _cst_defs_norm_ibis(cst_defs: IbisPlan) -> IbisPlan:

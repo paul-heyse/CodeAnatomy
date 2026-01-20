@@ -10,8 +10,9 @@ from typing import TYPE_CHECKING, Literal, Protocol, cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
+from arrowdsl.core.array_iter import iter_array_values
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.ids import HashSpec, hash_column_values, iter_array_values
+from arrowdsl.core.ids import HashSpec, hash_column_values
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
@@ -19,7 +20,6 @@ from arrowdsl.core.interop import (
     ListArrayLike,
     SchemaLike,
     TableLike,
-    pc,
 )
 from arrowdsl.core.plan_ops import DedupeSpec, SortKey
 from arrowdsl.core.schema_constants import PROVENANCE_COLS
@@ -35,6 +35,18 @@ from arrowdsl.schema.encoding_policy import EncodingPolicy
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import AlignmentInfo, SchemaMetadataSpec, align_table
 from arrowdsl.schema.validation import ArrowValidationOptions
+from datafusion_engine.compute_ops import (
+    cast_values,
+    cumulative_sum,
+    dictionary_encode,
+    fill_null,
+    invert,
+    is_null,
+    list_flatten,
+    list_value_length,
+    or_,
+    value_counts,
+)
 from datafusion_engine.kernels import canonical_sort_if_canonical, dedupe_kernel
 
 if TYPE_CHECKING:
@@ -301,7 +313,7 @@ class ErrorArtifactSpec:
                 names=["error_code", "count"],
             )
 
-        vc = pc.value_counts(errors["error_code"])
+        vc = value_counts(errors["error_code"])
         return pa.Table.from_arrays(
             [vc.field("values"), vc.field("counts")],
             names=["error_code", "count"],
@@ -341,7 +353,7 @@ def _required_non_null_results(
     """
     results: list[InvariantResult] = []
     for col in cols:
-        mask = pc.fill_null(pc.is_null(table[col]), fill_value=False)
+        mask = fill_null(is_null(table[col]), fill_value=False)
         results.append(
             InvariantResult(
                 mask=mask,
@@ -379,7 +391,7 @@ def _collect_invariant_results(
         bad_mask, code = inv(table)
         results.append(
             InvariantResult(
-                mask=pc.fill_null(bad_mask, fill_value=False),
+                mask=fill_null(bad_mask, fill_value=False),
                 code=code,
                 message=code,
                 column=None,
@@ -409,8 +421,8 @@ def _combine_masks(masks: Sequence[ArrayLike], length: int) -> ArrayLike:
         return const_array(length, value=False, dtype=pa.bool_())
     combined = masks[0]
     for mask in masks[1:]:
-        combined = pc.or_(combined, mask)
-    return pc.fill_null(combined, fill_value=False)
+        combined = or_(combined, mask)
+    return fill_null(combined, fill_value=False)
 
 
 def _build_error_table(
@@ -448,7 +460,7 @@ def _raise_on_errors_if_strict(
 ) -> None:
     if ctx.mode != "strict" or errors.num_rows == 0:
         return
-    vc = pc.value_counts(errors["error_code"])
+    vc = value_counts(errors["error_code"])
     pairs = [
         (value, count)
         for value, count in zip(
@@ -576,7 +588,7 @@ def _build_error_detail_from_lists(
     struct_fields: dict[str, ArrayLike] = {}
     for name, list_col in list_columns.items():
         list_array = _combine_list_array(list_col)
-        values = pc.list_flatten(list_array)
+        values = list_flatten(list_array)
         struct_fields[name] = values
     detail_struct = build_struct(struct_fields, struct_type=ERROR_DETAIL_STRUCT)
     return _build_list_from_offsets(offsets, detail_struct, template=first)
@@ -615,18 +627,18 @@ def _is_list_like_type(dtype: DataTypeLike) -> bool:
 def _list_view_to_list_array(
     values: pa.ListViewArray | pa.LargeListViewArray,
 ) -> ListArrayLike:
-    lengths = pc.list_value_length(values)
-    lengths = pc.fill_null(lengths, 0)
+    lengths = list_value_length(values)
+    lengths = fill_null(lengths, fill_value=0)
     if isinstance(values, pa.LargeListViewArray):
         if lengths.type != pa.int64():
-            lengths = pc.cast(lengths, pa.int64())
+            lengths = cast_values(lengths, pa.int64())
     elif lengths.type != pa.int32():
-        lengths = pc.cast(lengths, pa.int32())
-    offsets = pc.cumulative_sum(lengths)
+        lengths = cast_values(lengths, pa.int32())
+    offsets = cumulative_sum(lengths)
     zero = pa.array([0], type=offsets.type)
     offsets = pa.concat_arrays([zero, offsets])
-    flat = pc.list_flatten(values)
-    mask = pc.is_null(values)
+    flat = list_flatten(values)
+    mask = is_null(values)
     if isinstance(values, pa.LargeListViewArray):
         return cast("ListArrayLike", pa.LargeListArray.from_arrays(offsets, flat, mask=mask))
     return cast("ListArrayLike", pa.ListArray.from_arrays(offsets, flat, mask=mask))
@@ -651,7 +663,7 @@ def _combine_list_array(values: ArrayLike | ChunkedArrayLike) -> ListArrayLike:
                 if patypes.is_large_list(combined_type) or patypes.is_large_list_view(combined_type)
                 else pa.list_(cast("pa.DataType", value_type))
             )
-            casted = pc.cast(combined, list_type)
+            casted = cast_values(combined, list_type)
             if isinstance(casted, (pa.ListArray, pa.LargeListArray)):
                 return cast("ListArrayLike", casted)
     msg = "Expected list array for error detail aggregation."
@@ -669,7 +681,7 @@ def _decode_dictionary_columns(
         if patypes.is_dictionary(schema_field.type):
             dict_type = cast("pa.DictionaryType", schema_field.type)
             dict_cols[schema_field.name] = dict_type
-            col = cast("ChunkedArrayLike", pc.cast(col, dict_type.value_type))
+            col = cast("ChunkedArrayLike", cast_values(col, dict_type.value_type))
         columns.append(col)
         names.append(schema_field.name)
     if not dict_cols:
@@ -689,8 +701,8 @@ def _reencode_dictionary_columns(
         col = table[name]
         dict_type = dict_cols.get(name)
         if dict_type is not None:
-            encoded = pc.dictionary_encode(col)
-            col = cast("ChunkedArrayLike", pc.cast(encoded, dict_type))
+            encoded = dictionary_encode(col)
+            col = cast("ChunkedArrayLike", cast_values(encoded, dict_type))
         columns.append(col)
         names.append(name)
     return pa.table(columns, names=names)
@@ -795,7 +807,7 @@ def finalize(
     results = _collect_invariant_results(aligned, contract)
     bad_any = _combine_masks([result.mask for result in results], aligned.num_rows)
 
-    good = aligned.filter(pc.invert(bad_any))
+    good = aligned.filter(invert(bad_any))
 
     raw_errors = _build_error_table(aligned, results, error_spec=options.error_spec)
     errors = _aggregate_error_details(

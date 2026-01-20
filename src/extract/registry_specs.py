@@ -16,6 +16,7 @@ from arrowdsl.schema.metadata import (
 )
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import EncodingPolicy, SchemaMetadataSpec
+from datafusion_engine.schema_registry import schema_for
 from extract.evidence_specs import evidence_metadata_spec as extract_evidence_metadata_spec
 from extract.registry_builders import (
     QueryContext,
@@ -83,7 +84,10 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Arrow schema for the dataset.
     """
-    return dataset_spec(name).schema()
+    try:
+        return schema_for(name)
+    except KeyError:
+        return dataset_spec(name).schema()
 
 
 @cache
@@ -259,6 +263,7 @@ def dataset_schema_policy(
     if on_error is None and template_row is not None:
         on_error = template_row.on_error
     policy_options = SchemaPolicyOptions(
+        schema=dataset_schema(name),
         metadata=dataset_metadata_with_options(name, options=options, repo_id=repo_id),
         safe_cast=safe_cast,
         keep_extra_columns=keep_extra_columns,

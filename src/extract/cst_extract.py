@@ -15,8 +15,10 @@ from libcst.metadata import (
     ByteSpanPositionProvider,
     ExpressionContextProvider,
     MetadataWrapper,
+    PositionProvider,
     QualifiedName,
     QualifiedNameProvider,
+    WhitespaceInclusivePositionProvider,
 )
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
@@ -26,15 +28,18 @@ from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
     FileContext,
+    SpanSpec,
     apply_query_and_project,
+    attrs_map,
     bytes_from_file_ctx,
     file_identity_row,
     ibis_plan_from_rows,
     iter_contexts,
     materialize_extract_plan,
+    span_dict,
 )
 from extract.registry_fields import QNAME_STRUCT
-from extract.registry_specs import dataset_enabled, dataset_row_schema, normalize_options
+from extract.registry_specs import dataset_schema, normalize_options
 from extract.schema_ops import ExtractNormalizeOptions
 from extract.string_utils import normalize_string_items
 from ibis_engine.plan import IbisPlan
@@ -69,27 +74,15 @@ class CSTExtractOptions:
 
 @dataclass(frozen=True)
 class CSTExtractResult:
-    """Hold extracted CST tables for manifests, errors, names, imports, and calls."""
+    """Hold extracted CST nested file table."""
 
-    py_cst_parse_manifest: TableLike
-    py_cst_parse_errors: TableLike
-    py_cst_name_refs: TableLike
-    py_cst_imports: TableLike
-    py_cst_callsites: TableLike
-    py_cst_defs: TableLike
-    py_cst_type_exprs: TableLike
+    libcst_files: TableLike
 
 
 _QNAME_FLAT_FIELDS = flatten_struct_field(pa.field("qname", QNAME_STRUCT))
 QNAME_KEYS = tuple(field.name.split(".", 1)[1] for field in _QNAME_FLAT_FIELDS)
 
-PARSE_MANIFEST_ROW_SCHEMA = dataset_row_schema("py_cst_parse_manifest_v1")
-PARSE_ERRORS_ROW_SCHEMA = dataset_row_schema("py_cst_parse_errors_v1")
-NAME_REFS_ROW_SCHEMA = dataset_row_schema("py_cst_name_refs_v1")
-IMPORTS_ROW_SCHEMA = dataset_row_schema("py_cst_imports_v1")
-CALLSITES_ROW_SCHEMA = dataset_row_schema("py_cst_callsites_v1")
-DEFS_ROW_SCHEMA = dataset_row_schema("py_cst_defs_v1")
-TYPE_EXPRS_ROW_SCHEMA = dataset_row_schema("py_cst_type_exprs_v1")
+LIBCST_FILES_SCHEMA = dataset_schema("libcst_files_v1")
 
 
 @dataclass(frozen=True)
@@ -273,7 +266,7 @@ def _parse_or_record_error(
 ) -> cst.Module | None:
     module, err = _parse_module(data, file_ctx=file_ctx)
     if module is None:
-        if err is not None and dataset_enabled("py_cst_parse_errors_v1", ctx.options):
+        if err is not None and ctx.options.include_parse_errors:
             ctx.error_rows.append(err)
         return None
     return module
@@ -308,10 +301,10 @@ def _resolve_metadata_maps(
     Mapping[cst.CSTNode, QualifiedNameSet],
 ]:
     providers: set[type[BaseMetadataProvider[object]]] = {ByteSpanPositionProvider}
-    if options.compute_expr_context and dataset_enabled("py_cst_name_refs_v1", options):
+    if options.compute_expr_context and options.include_name_refs:
         providers.add(ExpressionContextProvider)
-    include_callsites = dataset_enabled("py_cst_callsites_v1", options)
-    include_defs = dataset_enabled("py_cst_defs_v1", options)
+    include_callsites = options.include_callsites
+    include_defs = options.include_defs
     if options.compute_qualified_names and (include_callsites or include_defs):
         providers.add(QualifiedNameProvider)
 
@@ -321,6 +314,119 @@ def _resolve_metadata_maps(
         resolved.get(ExpressionContextProvider, {}),
         cast("Mapping[cst.CSTNode, QualifiedNameSet]", resolved.get(QualifiedNameProvider, {})),
     )
+
+
+def _row_map(row: Mapping[str, object]) -> dict[str, object]:
+    return dict(row)
+
+
+def _iter_cst_children(
+    node: cst.CSTNode,
+) -> Iterable[tuple[str, int | None, cst.CSTNode]]:
+    for field_name in getattr(node, "__dataclass_fields__", {}):
+        if field_name == "__slots__":
+            continue
+        value = getattr(node, field_name, None)
+        if isinstance(value, cst.CSTNode):
+            yield field_name, None, value
+            continue
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            for idx, item in enumerate(value):
+                if isinstance(item, cst.CSTNode):
+                    yield field_name, idx, item
+
+
+def _span_from_positions(
+    *,
+    pos: object | None,
+    byte_span: object | None,
+    col_unit: str,
+) -> dict[str, object] | None:
+    start_line0 = start_col = end_line0 = end_col = None
+    if pos is not None:
+        start = getattr(pos, "start", None)
+        end = getattr(pos, "end", None)
+        if start is not None:
+            start_line0 = int(getattr(start, "line", 0)) - CST_LINE_BASE
+            start_col = int(getattr(start, "column", 0))
+        if end is not None:
+            end_line0 = int(getattr(end, "line", 0)) - CST_LINE_BASE
+            end_col = int(getattr(end, "column", 0))
+    byte_start = byte_len = None
+    if byte_span is not None:
+        byte_start = int(getattr(byte_span, "start", 0))
+        byte_len = int(getattr(byte_span, "length", 0))
+    return span_dict(
+        SpanSpec(
+            start_line0=start_line0,
+            start_col=start_col,
+            end_line0=end_line0,
+            end_col=end_col,
+            end_exclusive=CST_END_EXCLUSIVE,
+            col_unit=col_unit,
+            byte_start=byte_start,
+            byte_len=byte_len,
+        )
+    )
+
+
+def _collect_cst_nodes_edges(
+    module: cst.Module,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    wrapper = MetadataWrapper(module, unsafe_skip_copy=True)
+    byte_map = wrapper.resolve(ByteSpanPositionProvider)
+    pos_map = wrapper.resolve(PositionProvider)
+    ws_map = wrapper.resolve(WhitespaceInclusivePositionProvider)
+    nodes: list[dict[str, object]] = []
+    edges: list[dict[str, object]] = []
+    node_ids: dict[int, int] = {}
+    next_id = 1
+
+    def _visit(
+        node: cst.CSTNode, *, parent_id: int | None, slot: str | None, idx: int | None
+    ) -> None:
+        nonlocal next_id
+        node_key = id(node)
+        node_id = node_ids.get(node_key)
+        if node_id is None:
+            node_id = next_id
+            next_id += 1
+            node_ids[node_key] = node_id
+            span = _span_from_positions(
+                pos=pos_map.get(node),
+                byte_span=byte_map.get(node),
+                col_unit=CST_COL_UNIT,
+            )
+            span_ws = _span_from_positions(
+                pos=ws_map.get(node),
+                byte_span=byte_map.get(node),
+                col_unit=CST_COL_UNIT,
+            )
+            nodes.append(
+                {
+                    "cst_id": node_id,
+                    "kind": f"libcst.{type(node).__name__}",
+                    "span": span,
+                    "span_ws": span_ws,
+                    "attrs": attrs_map({}),
+                }
+            )
+        if parent_id is not None:
+            edges.append(
+                {
+                    "src": parent_id,
+                    "dst": node_id,
+                    "kind": "CHILD",
+                    "slot": slot,
+                    "idx": idx,
+                    "attrs": attrs_map({}),
+                }
+            )
+        for child_slot, child_idx, child in _iter_cst_children(node):
+            _visit(child, parent_id=node_id, slot=child_slot, idx=child_idx)
+
+    _visit(module, parent_id=None, slot=None, idx=None)
+    return nodes, edges
 
 
 @dataclass(frozen=True)
@@ -409,7 +515,7 @@ class CSTCollector(cst.CSTVisitor):
         *,
         owner: TypeExprOwner,
     ) -> None:
-        if not dataset_enabled("py_cst_type_exprs_v1", self._options):
+        if not self._options.include_type_exprs:
             return
         expr = annotation.annotation
         bstart, bend = self._span(expr)
@@ -439,7 +545,7 @@ class CSTCollector(cst.CSTVisitor):
         bool | None
             True to continue CST traversal.
         """
-        if not dataset_enabled("py_cst_defs_v1", self._options):
+        if not self._options.include_defs:
             return True
         def_bstart, def_bend = self._span(node)
         name_bstart, name_bend = self._span(node.name)
@@ -499,7 +605,7 @@ class CSTCollector(cst.CSTVisitor):
     def leave_FunctionDef(self, original_node: cst.FunctionDef) -> None:
         """Finalize function definition collection."""
         _ = original_node
-        if dataset_enabled("py_cst_defs_v1", self._options) and self._def_stack:
+        if self._options.include_defs and self._def_stack:
             self._def_stack.pop()
 
     def visit_ClassDef(self, node: cst.ClassDef) -> bool | None:
@@ -510,7 +616,7 @@ class CSTCollector(cst.CSTVisitor):
         bool | None
             True to continue CST traversal.
         """
-        if not dataset_enabled("py_cst_defs_v1", self._options):
+        if not self._options.include_defs:
             return True
         def_bstart, def_bend = self._span(node)
         name_bstart, name_bend = self._span(node.name)
@@ -547,7 +653,7 @@ class CSTCollector(cst.CSTVisitor):
     def leave_ClassDef(self, original_node: cst.ClassDef) -> None:
         """Finalize class definition collection."""
         _ = original_node
-        if dataset_enabled("py_cst_defs_v1", self._options) and self._def_stack:
+        if self._options.include_defs and self._def_stack:
             self._def_stack.pop()
 
     def visit_Name(self, node: cst.Name) -> bool | None:
@@ -558,7 +664,7 @@ class CSTCollector(cst.CSTVisitor):
         bool | None
             True to continue CST traversal.
         """
-        if not dataset_enabled("py_cst_name_refs_v1", self._options):
+        if not self._options.include_name_refs:
             return True
         if node in self._skip_name_nodes:
             return True
@@ -587,7 +693,7 @@ class CSTCollector(cst.CSTVisitor):
         bool | None
             True to continue CST traversal.
         """
-        if not dataset_enabled("py_cst_imports_v1", self._options):
+        if not self._options.include_imports:
             return True
         stmt_bstart, stmt_bend = self._span(node)
         for alias in node.names:
@@ -625,7 +731,7 @@ class CSTCollector(cst.CSTVisitor):
         bool | None
             True to continue CST traversal.
         """
-        if not dataset_enabled("py_cst_imports_v1", self._options):
+        if not self._options.include_imports:
             return True
         stmt_bstart, stmt_bend = self._span(node)
 
@@ -692,7 +798,7 @@ class CSTCollector(cst.CSTVisitor):
         bool | None
             True to continue CST traversal.
         """
-        if not dataset_enabled("py_cst_callsites_v1", self._options):
+        if not self._options.include_callsites:
             return True
         call_bstart, call_bend = self._span(node)
         callee_bstart, callee_bend = self._span(node.func)
@@ -723,13 +829,16 @@ class CSTCollector(cst.CSTVisitor):
         return True
 
 
-def _extract_cst_for_context(file_ctx: FileContext, ctx: CSTExtractContext) -> None:
+def _extract_cst_for_context(
+    file_ctx: FileContext,
+    ctx: CSTExtractContext,
+) -> cst.Module | None:
     if not file_ctx.file_id or not file_ctx.path:
-        return
+        return None
 
     data = bytes_from_file_ctx(file_ctx)
     if data is None:
-        return
+        return None
 
     module = _parse_or_record_error(
         data,
@@ -737,7 +846,7 @@ def _extract_cst_for_context(file_ctx: FileContext, ctx: CSTExtractContext) -> N
         ctx=ctx,
     )
     if module is None:
-        return
+        return None
 
     module_name, package_name = _module_package_names(
         abs_path=file_ctx.abs_path,
@@ -745,7 +854,7 @@ def _extract_cst_for_context(file_ctx: FileContext, ctx: CSTExtractContext) -> N
         path=file_ctx.path,
     )
     cst_file_ctx = CSTFileContext(file_ctx=file_ctx, options=ctx.options)
-    if dataset_enabled("py_cst_parse_manifest_v1", ctx.options):
+    if ctx.options.include_parse_manifest:
         future_imports = getattr(module, "future_imports", []) or []
         normalized_future_imports = normalize_string_items(future_imports)
         ctx.manifest_rows.append(
@@ -759,11 +868,71 @@ def _extract_cst_for_context(file_ctx: FileContext, ctx: CSTExtractContext) -> N
         )
 
     _visit_with_collector(module, file_ctx=cst_file_ctx, ctx=ctx)
+    return module
 
 
-def _extract_cst_for_row(rf: dict[str, object], ctx: CSTExtractContext) -> None:
-    file_ctx = FileContext.from_repo_row(rf)
-    _extract_cst_for_context(file_ctx, ctx)
+def _cst_file_row(
+    file_ctx: FileContext,
+    *,
+    options: CSTExtractOptions,
+    evidence_plan: EvidencePlan | None,
+) -> dict[str, object] | None:
+    if not file_ctx.file_id or not file_ctx.path:
+        return None
+    ctx = CSTExtractContext.build(options, evidence_plan=evidence_plan)
+    module = _extract_cst_for_context(file_ctx, ctx)
+    if module is None and not ctx.error_rows:
+        return None
+    nodes: list[dict[str, object]] = []
+    edges: list[dict[str, object]] = []
+    if module is not None:
+        nodes, edges = _collect_cst_nodes_edges(module)
+    return {
+        "repo": options.repo_id,
+        "path": file_ctx.path,
+        "file_id": file_ctx.file_id,
+        "nodes": nodes,
+        "edges": edges,
+        "parse_manifest": [_row_map(row) for row in ctx.manifest_rows],
+        "parse_errors": [_row_map(row) for row in ctx.error_rows],
+        "name_refs": [_row_map(row) for row in ctx.name_ref_rows],
+        "imports": [_row_map(row) for row in ctx.import_rows],
+        "callsites": [_row_map(row) for row in ctx.call_rows],
+        "defs": [_row_map(row) for row in ctx.def_rows],
+        "type_exprs": [_row_map(row) for row in ctx.type_expr_rows],
+        "attrs": attrs_map({"file_sha256": file_ctx.file_sha256}),
+    }
+
+
+def _collect_cst_file_rows(
+    repo_files: TableLike,
+    file_contexts: Iterable[FileContext] | None,
+    *,
+    options: CSTExtractOptions,
+    evidence_plan: EvidencePlan | None,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for file_ctx in iter_contexts(repo_files, file_contexts):
+        row = _cst_file_row(file_ctx, options=options, evidence_plan=evidence_plan)
+        if row is not None:
+            rows.append(row)
+    return rows
+
+
+def _build_cst_file_plan(
+    rows: list[dict[str, object]],
+    *,
+    normalize: ExtractNormalizeOptions,
+    evidence_plan: EvidencePlan | None,
+) -> IbisPlan:
+    raw = ibis_plan_from_rows("libcst_files_v1", rows, row_schema=LIBCST_FILES_SCHEMA)
+    return apply_query_and_project(
+        "libcst_files_v1",
+        raw.expr,
+        normalize=normalize,
+        evidence_plan=evidence_plan,
+        repo_id=normalize.repo_id,
+    )
 
 
 def extract_cst(
@@ -782,204 +951,65 @@ def extract_cst(
     normalized_options = normalize_options("cst", options, CSTExtractOptions)
     exec_context = context or ExtractExecutionContext()
     exec_ctx = exec_context.ensure_ctx()
-    extract_ctx = CSTExtractContext.build(
-        normalized_options,
-        evidence_plan=exec_context.evidence_plan,
-    )
     normalize = ExtractNormalizeOptions(
         options=normalized_options,
         repo_id=normalized_options.repo_id,
     )
-
-    for file_ctx in iter_contexts(repo_files, exec_context.file_contexts):
-        _extract_cst_for_context(file_ctx, extract_ctx)
-
-    plans = _build_cst_plans(extract_ctx)
+    rows = _collect_cst_file_rows(
+        repo_files,
+        exec_context.file_contexts,
+        options=normalized_options,
+        evidence_plan=exec_context.evidence_plan,
+    )
+    plan = _build_cst_file_plan(
+        rows,
+        normalize=normalize,
+        evidence_plan=exec_context.evidence_plan,
+    )
     return CSTExtractResult(
-        py_cst_parse_manifest=materialize_extract_plan(
-            "py_cst_parse_manifest_v1",
-            plans["cst_parse_manifest"],
+        libcst_files=materialize_extract_plan(
+            "libcst_files_v1",
+            plan,
             ctx=exec_ctx,
             options=ExtractMaterializeOptions(
                 normalize=normalize,
                 apply_post_kernels=True,
             ),
-        ),
-        py_cst_parse_errors=materialize_extract_plan(
-            "py_cst_parse_errors_v1",
-            plans["cst_parse_errors"],
-            ctx=exec_ctx,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                apply_post_kernels=True,
-            ),
-        ),
-        py_cst_name_refs=materialize_extract_plan(
-            "py_cst_name_refs_v1",
-            plans["cst_name_refs"],
-            ctx=exec_ctx,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                apply_post_kernels=True,
-            ),
-        ),
-        py_cst_imports=materialize_extract_plan(
-            "py_cst_imports_v1",
-            plans["cst_imports"],
-            ctx=exec_ctx,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                apply_post_kernels=True,
-            ),
-        ),
-        py_cst_callsites=materialize_extract_plan(
-            "py_cst_callsites_v1",
-            plans["cst_callsites"],
-            ctx=exec_ctx,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                apply_post_kernels=True,
-            ),
-        ),
-        py_cst_defs=materialize_extract_plan(
-            "py_cst_defs_v1",
-            plans["cst_defs"],
-            ctx=exec_ctx,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                apply_post_kernels=True,
-            ),
-        ),
-        py_cst_type_exprs=materialize_extract_plan(
-            "py_cst_type_exprs_v1",
-            plans["cst_type_exprs"],
-            ctx=exec_ctx,
-            options=ExtractMaterializeOptions(
-                normalize=normalize,
-                apply_post_kernels=True,
-            ),
-        ),
+        )
     )
 
 
-def _normalize_ctx(ctx: CSTExtractContext) -> ExtractNormalizeOptions:
-    return ExtractNormalizeOptions(options=ctx.options, repo_id=ctx.options.repo_id)
+def extract_cst_plans(
+    repo_files: TableLike,
+    options: CSTExtractOptions | None = None,
+    *,
+    context: ExtractExecutionContext | None = None,
+) -> dict[str, IbisPlan]:
+    """Extract CST plans for nested file records.
 
-
-def _build_manifest_plan(ctx: CSTExtractContext) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows(
-        "py_cst_parse_manifest_v1",
-        ctx.manifest_rows,
-        row_schema=PARSE_MANIFEST_ROW_SCHEMA,
+    Returns
+    -------
+    dict[str, IbisPlan]
+        Ibis plan bundle keyed by ``libcst_files``.
+    """
+    normalized_options = normalize_options("cst", options, CSTExtractOptions)
+    exec_context = context or ExtractExecutionContext()
+    normalize = ExtractNormalizeOptions(
+        options=normalized_options,
+        repo_id=normalized_options.repo_id,
     )
-    return apply_query_and_project(
-        "py_cst_parse_manifest_v1",
-        raw_plan.expr,
-        normalize=_normalize_ctx(ctx),
-        evidence_plan=ctx.evidence_plan,
-        repo_id=ctx.options.repo_id,
+    rows = _collect_cst_file_rows(
+        repo_files,
+        exec_context.file_contexts,
+        options=normalized_options,
+        evidence_plan=exec_context.evidence_plan,
     )
-
-
-def _build_errors_plan(ctx: CSTExtractContext) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows(
-        "py_cst_parse_errors_v1",
-        ctx.error_rows,
-        row_schema=PARSE_ERRORS_ROW_SCHEMA,
-    )
-    return apply_query_and_project(
-        "py_cst_parse_errors_v1",
-        raw_plan.expr,
-        normalize=_normalize_ctx(ctx),
-        evidence_plan=ctx.evidence_plan,
-        repo_id=ctx.options.repo_id,
-    )
-
-
-def _build_name_refs_plan(ctx: CSTExtractContext) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows(
-        "py_cst_name_refs_v1",
-        ctx.name_ref_rows,
-        row_schema=NAME_REFS_ROW_SCHEMA,
-    )
-    return apply_query_and_project(
-        "py_cst_name_refs_v1",
-        raw_plan.expr,
-        normalize=_normalize_ctx(ctx),
-        evidence_plan=ctx.evidence_plan,
-        repo_id=ctx.options.repo_id,
-    )
-
-
-def _build_imports_plan(ctx: CSTExtractContext) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows(
-        "py_cst_imports_v1",
-        ctx.import_rows,
-        row_schema=IMPORTS_ROW_SCHEMA,
-    )
-    return apply_query_and_project(
-        "py_cst_imports_v1",
-        raw_plan.expr,
-        normalize=_normalize_ctx(ctx),
-        evidence_plan=ctx.evidence_plan,
-        repo_id=ctx.options.repo_id,
-    )
-
-
-def _build_callsites_plan(ctx: CSTExtractContext) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows(
-        "py_cst_callsites_v1",
-        ctx.call_rows,
-        row_schema=CALLSITES_ROW_SCHEMA,
-    )
-    return apply_query_and_project(
-        "py_cst_callsites_v1",
-        raw_plan.expr,
-        normalize=_normalize_ctx(ctx),
-        evidence_plan=ctx.evidence_plan,
-        repo_id=ctx.options.repo_id,
-    )
-
-
-def _build_defs_plan(ctx: CSTExtractContext) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows(
-        "py_cst_defs_v1",
-        ctx.def_rows,
-        row_schema=DEFS_ROW_SCHEMA,
-    )
-    return apply_query_and_project(
-        "py_cst_defs_v1",
-        raw_plan.expr,
-        normalize=_normalize_ctx(ctx),
-        evidence_plan=ctx.evidence_plan,
-        repo_id=ctx.options.repo_id,
-    )
-
-
-def _build_type_exprs_plan(ctx: CSTExtractContext) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows(
-        "py_cst_type_exprs_v1",
-        ctx.type_expr_rows,
-        row_schema=TYPE_EXPRS_ROW_SCHEMA,
-    )
-    return apply_query_and_project(
-        "py_cst_type_exprs_v1",
-        raw_plan.expr,
-        normalize=_normalize_ctx(ctx),
-        evidence_plan=ctx.evidence_plan,
-        repo_id=ctx.options.repo_id,
-    )
-
-
-def _build_cst_plans(ctx: CSTExtractContext) -> dict[str, IbisPlan]:
     return {
-        "cst_parse_manifest": _build_manifest_plan(ctx),
-        "cst_parse_errors": _build_errors_plan(ctx),
-        "cst_name_refs": _build_name_refs_plan(ctx),
-        "cst_imports": _build_imports_plan(ctx),
-        "cst_callsites": _build_callsites_plan(ctx),
-        "cst_defs": _build_defs_plan(ctx),
-        "cst_type_exprs": _build_type_exprs_plan(ctx),
+        "libcst_files": _build_cst_file_plan(
+            rows,
+            normalize=normalize,
+            evidence_plan=exec_context.evidence_plan,
+        ),
     }
 
 
@@ -1048,60 +1078,30 @@ def extract_cst_tables(
     profile = kwargs.get("profile", "default")
     exec_ctx = kwargs.get("ctx") or execution_context_factory(profile)
     prefer_reader = kwargs.get("prefer_reader", False)
-    extract_ctx = CSTExtractContext.build(normalized_options, evidence_plan=evidence_plan)
     normalize = ExtractNormalizeOptions(
         options=normalized_options,
         repo_id=normalized_options.repo_id,
     )
-    for file_ctx in iter_contexts(repo_files, file_contexts):
-        _extract_cst_for_context(file_ctx, extract_ctx)
-    plans = _build_cst_plans(extract_ctx)
     options = ExtractMaterializeOptions(
         normalize=normalize,
         prefer_reader=prefer_reader,
         apply_post_kernels=True,
     )
+    plans = extract_cst_plans(
+        repo_files,
+        options=normalized_options,
+        context=ExtractExecutionContext(
+            file_contexts=file_contexts,
+            evidence_plan=evidence_plan,
+            ctx=exec_ctx,
+            profile=profile,
+        ),
+    )
     return {
-        "cst_parse_manifest": materialize_extract_plan(
-            "py_cst_parse_manifest_v1",
-            plans["cst_parse_manifest"],
+        "libcst_files": materialize_extract_plan(
+            "libcst_files_v1",
+            plans["libcst_files"],
             ctx=exec_ctx,
             options=options,
-        ),
-        "cst_parse_errors": materialize_extract_plan(
-            "py_cst_parse_errors_v1",
-            plans["cst_parse_errors"],
-            ctx=exec_ctx,
-            options=options,
-        ),
-        "cst_name_refs": materialize_extract_plan(
-            "py_cst_name_refs_v1",
-            plans["cst_name_refs"],
-            ctx=exec_ctx,
-            options=options,
-        ),
-        "cst_imports": materialize_extract_plan(
-            "py_cst_imports_v1",
-            plans["cst_imports"],
-            ctx=exec_ctx,
-            options=options,
-        ),
-        "cst_callsites": materialize_extract_plan(
-            "py_cst_callsites_v1",
-            plans["cst_callsites"],
-            ctx=exec_ctx,
-            options=options,
-        ),
-        "cst_defs": materialize_extract_plan(
-            "py_cst_defs_v1",
-            plans["cst_defs"],
-            ctx=exec_ctx,
-            options=options,
-        ),
-        "cst_type_exprs": materialize_extract_plan(
-            "py_cst_type_exprs_v1",
-            plans["cst_type_exprs"],
-            ctx=exec_ctx,
-            options=options,
-        ),
+        )
     }

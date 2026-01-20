@@ -14,11 +14,23 @@ from ibis.expr.types import Value as IbisValue
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.ids import apply_hash_column
-from arrowdsl.core.interop import SchemaLike, TableLike
+from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import align_table, empty_table
 from cpg.constants import CpgBuildArtifacts
 from cpg.schemas import register_cpg_specs
+from datafusion_engine.nested_tables import materialize_sql_fragment, register_nested_table
+from datafusion_engine.query_fragments import (
+    SqlFragment,
+    libcst_callsites_sql,
+    libcst_name_refs_sql,
+    scip_external_symbol_information_sql,
+    scip_symbol_information_sql,
+    scip_symbol_relationships_sql,
+    tree_sitter_errors_sql,
+    tree_sitter_missing_sql,
+    tree_sitter_nodes_sql,
+)
 from datafusion_engine.runtime import AdapterExecutionPolicy
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
@@ -713,12 +725,140 @@ def relspec_input_dataset_dir(relspec_work_dir: str) -> str:
     return str(dataset_dir)
 
 
+# -----------------------------
+# Nested table fragments
+# -----------------------------
+
+
+@cache()
+@tag(layer="extract", artifact="cst_name_refs", kind="object")
+def cst_name_refs(
+    libcst_files: TableLike | RecordBatchReaderLike,
+    engine_session: EngineSession,
+) -> SqlFragment:
+    """Return the CST name refs projection from nested LibCST files."""
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="libcst_files_v1",
+        table=libcst_files,
+    )
+    return SqlFragment("cst_name_refs", libcst_name_refs_sql())
+
+
+@cache()
+@tag(layer="extract", artifact="cst_callsites", kind="object")
+def cst_callsites(
+    libcst_files: TableLike | RecordBatchReaderLike,
+    engine_session: EngineSession,
+) -> SqlFragment:
+    """Return the CST callsites projection from nested LibCST files."""
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="libcst_files_v1",
+        table=libcst_files,
+    )
+    return SqlFragment("cst_callsites", libcst_callsites_sql())
+
+
+@cache()
+@tag(layer="extract", artifact="scip_symbol_information", kind="object")
+def scip_symbol_information(
+    scip_index: TableLike | RecordBatchReaderLike,
+    engine_session: EngineSession,
+) -> SqlFragment:
+    """Return SCIP symbol info projection from nested SCIP index."""
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="scip_index_v1",
+        table=scip_index,
+    )
+    return SqlFragment("scip_symbol_information", scip_symbol_information_sql())
+
+
+@cache()
+@tag(layer="extract", artifact="scip_symbol_relationships", kind="object")
+def scip_symbol_relationships(
+    scip_index: TableLike | RecordBatchReaderLike,
+    engine_session: EngineSession,
+) -> SqlFragment:
+    """Return SCIP symbol relationships projection from nested SCIP index."""
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="scip_index_v1",
+        table=scip_index,
+    )
+    return SqlFragment("scip_symbol_relationships", scip_symbol_relationships_sql())
+
+
+@cache()
+@tag(layer="extract", artifact="scip_external_symbol_information", kind="object")
+def scip_external_symbol_information(
+    scip_index: TableLike | RecordBatchReaderLike,
+    engine_session: EngineSession,
+) -> SqlFragment:
+    """Return SCIP external symbol info projection from nested SCIP index."""
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="scip_index_v1",
+        table=scip_index,
+    )
+    return SqlFragment(
+        "scip_external_symbol_information",
+        scip_external_symbol_information_sql(),
+    )
+
+
+@cache()
+@tag(layer="extract", artifact="ts_nodes", kind="object")
+def ts_nodes(
+    tree_sitter_files: TableLike | RecordBatchReaderLike,
+    engine_session: EngineSession,
+) -> SqlFragment:
+    """Return tree-sitter node projection from nested tree-sitter files."""
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="tree_sitter_files_v1",
+        table=tree_sitter_files,
+    )
+    return SqlFragment("ts_nodes", tree_sitter_nodes_sql())
+
+
+@cache()
+@tag(layer="extract", artifact="ts_errors", kind="object")
+def ts_errors(
+    tree_sitter_files: TableLike | RecordBatchReaderLike,
+    engine_session: EngineSession,
+) -> SqlFragment:
+    """Return tree-sitter error projection from nested tree-sitter files."""
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="tree_sitter_files_v1",
+        table=tree_sitter_files,
+    )
+    return SqlFragment("ts_errors", tree_sitter_errors_sql())
+
+
+@cache()
+@tag(layer="extract", artifact="ts_missing", kind="object")
+def ts_missing(
+    tree_sitter_files: TableLike | RecordBatchReaderLike,
+    engine_session: EngineSession,
+) -> SqlFragment:
+    """Return tree-sitter missing projection from nested tree-sitter files."""
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="tree_sitter_files_v1",
+        table=tree_sitter_files,
+    )
+    return SqlFragment("ts_missing", tree_sitter_missing_sql())
+
+
 @tag(layer="relspec", artifact="relspec_cst_inputs", kind="bundle")
 def relspec_cst_inputs(
-    cst_name_refs: TableLike,
-    cst_imports_norm: TableLike,
-    cst_callsites: TableLike,
-    cst_defs_norm: TableLike,
+    cst_name_refs: TableLike | SqlFragment,
+    cst_imports_norm: TableLike | SqlFragment,
+    cst_callsites: TableLike | SqlFragment,
+    cst_defs_norm: TableLike | SqlFragment,
 ) -> CstRelspecInputs:
     """Bundle CST tables needed for relationship inputs.
 
@@ -819,10 +959,17 @@ def relspec_incremental_gate(
     _ = incremental_impact_updates
 
 
-def _require_table(name: str, value: TableLike | DatasetSource) -> TableLike:
+def _require_table(
+    name: str,
+    value: TableLike | DatasetSource | SqlFragment,
+    *,
+    backend: BaseBackend,
+) -> TableLike:
     if isinstance(value, DatasetSource):
         msg = f"Relspec input {name!r} must be a table, not a dataset source."
         raise TypeError(msg)
+    if isinstance(value, SqlFragment):
+        return materialize_sql_fragment(backend, value)
     return value
 
 
@@ -831,6 +978,7 @@ def relspec_input_datasets(
     relspec_input_bundles: RelspecInputBundles,
     scip_build_inputs: ScipBuildInputs,
     cpg_extra_inputs: CpgExtraInputs,
+    engine_session: EngineSession,
     relspec_incremental_context: RelspecIncrementalContext,
     relspec_incremental_gate: object | None,
 ) -> dict[str, TableLike]:
@@ -844,29 +992,73 @@ def relspec_input_datasets(
         Mapping from dataset names to tables.
     """
     _ = relspec_incremental_gate
+    backend = engine_session.ibis_backend
     datasets = {
-        "cst_name_refs": relspec_input_bundles.cst_inputs.cst_name_refs,
-        "cst_imports": relspec_input_bundles.cst_inputs.cst_imports_norm,
-        "cst_callsites": relspec_input_bundles.cst_inputs.cst_callsites,
-        "cst_defs": relspec_input_bundles.cst_inputs.cst_defs_norm,
-        "scip_occurrences": relspec_input_bundles.scip_inputs.scip_occurrences_norm,
+        "cst_name_refs": _require_table(
+            "cst_name_refs",
+            relspec_input_bundles.cst_inputs.cst_name_refs,
+            backend=backend,
+        ),
+        "cst_imports": _require_table(
+            "cst_imports",
+            relspec_input_bundles.cst_inputs.cst_imports_norm,
+            backend=backend,
+        ),
+        "cst_callsites": _require_table(
+            "cst_callsites",
+            relspec_input_bundles.cst_inputs.cst_callsites,
+            backend=backend,
+        ),
+        "cst_defs": _require_table(
+            "cst_defs",
+            relspec_input_bundles.cst_inputs.cst_defs_norm,
+            backend=backend,
+        ),
+        "scip_occurrences": _require_table(
+            "scip_occurrences",
+            relspec_input_bundles.scip_inputs.scip_occurrences_norm,
+            backend=backend,
+        ),
         "scip_symbol_relationships": _require_table(
             "scip_symbol_relationships",
             scip_build_inputs.scip_symbol_relationships,
+            backend=backend,
         ),
-        "callsite_qname_candidates": relspec_input_bundles.qname_inputs.callsite_qname_candidates,
-        "dim_qualified_names": relspec_input_bundles.qname_inputs.dim_qualified_names,
-        "type_exprs_norm": _require_table("type_exprs_norm", cpg_extra_inputs.type_exprs_norm),
+        "callsite_qname_candidates": _require_table(
+            "callsite_qname_candidates",
+            relspec_input_bundles.qname_inputs.callsite_qname_candidates,
+            backend=backend,
+        ),
+        "dim_qualified_names": _require_table(
+            "dim_qualified_names",
+            relspec_input_bundles.qname_inputs.dim_qualified_names,
+            backend=backend,
+        ),
+        "type_exprs_norm": _require_table(
+            "type_exprs_norm",
+            cpg_extra_inputs.type_exprs_norm,
+            backend=backend,
+        ),
         "diagnostics_norm": _require_table(
             "diagnostics_norm",
             cpg_extra_inputs.diagnostics_norm,
+            backend=backend,
         ),
-        "rt_signatures": _require_table("rt_signatures", cpg_extra_inputs.rt_signatures),
+        "rt_signatures": _require_table(
+            "rt_signatures",
+            cpg_extra_inputs.rt_signatures,
+            backend=backend,
+        ),
         "rt_signature_params": _require_table(
             "rt_signature_params",
             cpg_extra_inputs.rt_signature_params,
+            backend=backend,
         ),
-        "rt_members": _require_table("rt_members", cpg_extra_inputs.rt_members),
+        "rt_members": _require_table(
+            "rt_members",
+            cpg_extra_inputs.rt_members,
+            backend=backend,
+        ),
     }
     if (
         not relspec_incremental_context.config.enabled
@@ -1421,10 +1613,10 @@ def relationship_output_tables(
 
 @tag(layer="cpg", artifact="cst_build_inputs", kind="bundle")
 def cst_build_inputs(
-    cst_name_refs: TableLike | DatasetSource,
-    cst_imports_norm: TableLike | DatasetSource,
-    cst_callsites: TableLike | DatasetSource,
-    cst_defs_norm: TableLike | DatasetSource,
+    cst_name_refs: TableLike | DatasetSource | SqlFragment,
+    cst_imports_norm: TableLike | DatasetSource | SqlFragment,
+    cst_callsites: TableLike | DatasetSource | SqlFragment,
+    cst_defs_norm: TableLike | DatasetSource | SqlFragment,
 ) -> CstBuildInputs:
     """Bundle CST inputs for CPG builds.
 
@@ -1443,10 +1635,10 @@ def cst_build_inputs(
 
 @tag(layer="cpg", artifact="scip_build_inputs", kind="bundle")
 def scip_build_inputs(
-    scip_symbol_information: TableLike | DatasetSource,
-    scip_occurrences_norm: TableLike | DatasetSource,
-    scip_symbol_relationships: TableLike | DatasetSource,
-    scip_external_symbol_information: TableLike | DatasetSource,
+    scip_symbol_information: TableLike | DatasetSource | SqlFragment,
+    scip_occurrences_norm: TableLike | DatasetSource | SqlFragment,
+    scip_symbol_relationships: TableLike | DatasetSource | SqlFragment,
+    scip_external_symbol_information: TableLike | DatasetSource | SqlFragment,
 ) -> ScipBuildInputs:
     """Bundle SCIP inputs for CPG builds.
 
@@ -1465,8 +1657,8 @@ def scip_build_inputs(
 
 @tag(layer="cpg", artifact="cpg_base_inputs", kind="bundle")
 def cpg_base_inputs(
-    repo_files: TableLike | DatasetSource,
-    dim_qualified_names: TableLike | DatasetSource,
+    repo_files: TableLike | DatasetSource | SqlFragment,
+    dim_qualified_names: TableLike | DatasetSource | SqlFragment,
     cst_build_inputs: CstBuildInputs,
     scip_build_inputs: ScipBuildInputs,
 ) -> CpgBaseInputs:
@@ -1487,9 +1679,9 @@ def cpg_base_inputs(
 
 @tag(layer="cpg", artifact="tree_sitter_inputs", kind="bundle")
 def tree_sitter_inputs(
-    ts_nodes: TableLike | DatasetSource,
-    ts_errors: TableLike | DatasetSource,
-    ts_missing: TableLike | DatasetSource,
+    ts_nodes: TableLike | DatasetSource | SqlFragment,
+    ts_errors: TableLike | DatasetSource | SqlFragment,
+    ts_missing: TableLike | DatasetSource | SqlFragment,
 ) -> TreeSitterInputs:
     """Bundle tree-sitter inputs for CPG construction.
 
@@ -1503,8 +1695,8 @@ def tree_sitter_inputs(
 
 @tag(layer="cpg", artifact="type_inputs", kind="bundle")
 def type_inputs(
-    type_exprs_norm: TableLike | DatasetSource,
-    types_norm: TableLike | DatasetSource,
+    type_exprs_norm: TableLike | DatasetSource | SqlFragment,
+    types_norm: TableLike | DatasetSource | SqlFragment,
 ) -> TypeInputs:
     """Bundle type inputs for CPG construction.
 
@@ -1518,7 +1710,7 @@ def type_inputs(
 
 @tag(layer="cpg", artifact="diagnostics_inputs", kind="bundle")
 def diagnostics_inputs(
-    diagnostics_norm: TableLike | DatasetSource,
+    diagnostics_norm: TableLike | DatasetSource | SqlFragment,
 ) -> DiagnosticsInputs:
     """Bundle diagnostics inputs for CPG construction.
 
@@ -1532,10 +1724,10 @@ def diagnostics_inputs(
 
 @tag(layer="cpg", artifact="runtime_inputs", kind="bundle")
 def runtime_inputs(
-    rt_objects: TableLike | DatasetSource,
-    rt_signatures: TableLike | DatasetSource,
-    rt_signature_params: TableLike | DatasetSource,
-    rt_members: TableLike | DatasetSource,
+    rt_objects: TableLike | DatasetSource | SqlFragment,
+    rt_signatures: TableLike | DatasetSource | SqlFragment,
+    rt_signature_params: TableLike | DatasetSource | SqlFragment,
+    rt_members: TableLike | DatasetSource | SqlFragment,
 ) -> RuntimeInputs:
     """Bundle runtime inspection inputs for CPG construction.
 

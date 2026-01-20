@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from itertools import repeat
@@ -23,14 +22,9 @@ else:
         __datafusion_scalar_udf__: object
 
 
-from arrowdsl.core.ids import hash64_from_text, iter_array_values
+from arrowdsl.core.array_iter import iter_array_values
 from arrowdsl.core.interop import pc
-from arrowdsl.core.position_encoding import (
-    ENC_UTF8,
-    ENC_UTF16,
-    ENC_UTF32,
-    normalize_position_encoding,
-)
+from datafusion_engine.hash_utils import hash64_from_text, hash128_from_text
 
 _NUMERIC_REGEX = r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$"
 _KERNEL_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
@@ -40,6 +34,32 @@ _PYCAPSULE_UDF_SPECS: dict[str, DataFusionPycapsuleUdfEntry] = {}
 DataFusionUdfKind = Literal["scalar", "aggregate", "window", "table"]
 UdfTier = Literal["builtin", "pyarrow", "pandas", "python"]
 UDF_TIER_PRIORITY: tuple[UdfTier, ...] = ("builtin", "pyarrow", "pandas", "python")
+
+ENC_UTF8 = 1
+ENC_UTF16 = 2
+ENC_UTF32 = 3
+DEFAULT_POSITION_ENCODING = ENC_UTF32
+VALID_POSITION_ENCODINGS: frozenset[int] = frozenset((ENC_UTF8, ENC_UTF16, ENC_UTF32))
+
+
+def normalize_position_encoding(value: object | None) -> int:
+    encoding = DEFAULT_POSITION_ENCODING
+    if value is None:
+        return encoding
+    if isinstance(value, int):
+        return value if value in VALID_POSITION_ENCODINGS else encoding
+    if isinstance(value, str):
+        text = value.strip().upper()
+        if text.isdigit():
+            value_int = int(text)
+            return value_int if value_int in VALID_POSITION_ENCODINGS else encoding
+        if "UTF8" in text:
+            encoding = ENC_UTF8
+        elif "UTF16" in text:
+            encoding = ENC_UTF16
+        elif "UTF32" in text:
+            encoding = ENC_UTF32
+    return encoding
 
 
 def _pycapsule_entries() -> tuple[DataFusionPycapsuleUdfEntry, ...]:
@@ -180,10 +200,6 @@ def _stable_hash64(
     return pa.array(out, type=pa.int64())
 
 
-def _hash128_text(value: str) -> str:
-    return hashlib.blake2b(value.encode("utf-8"), digest_size=16).hexdigest()
-
-
 def _stable_hash128(
     values: pa.Array | pa.ChunkedArray | pa.Scalar,
 ) -> pa.Array | pa.Scalar:
@@ -191,12 +207,124 @@ def _stable_hash128(
         value = values.as_py()
         if value is None:
             return pa.scalar(None, type=pa.string())
-        return pa.scalar(_hash128_text(str(value)), type=pa.string())
+        hashed = hash128_from_text(str(value))
+        return pa.scalar(hashed, type=pa.string())
     out = [
-        _hash128_text(str(value)) if value is not None else None
+        hash128_from_text(str(value)) if value is not None else None
         for value in iter_array_values(values)
     ]
     return pa.array(out, type=pa.string())
+
+
+def _prefixed_hash64(
+    prefix_values: pa.Array | pa.ChunkedArray | pa.Scalar,
+    value_values: pa.Array | pa.ChunkedArray | pa.Scalar,
+) -> pa.Array | pa.Scalar:
+    if isinstance(prefix_values, pa.Scalar) and isinstance(value_values, pa.Scalar):
+        prefix = prefix_values.as_py()
+        value = value_values.as_py()
+        if prefix is None or value is None:
+            return pa.scalar(None, type=pa.string())
+        hashed = hash64_from_text(str(value))
+        return pa.scalar(f"{prefix}:{hashed}", type=pa.string())
+    length = len(prefix_values) if not isinstance(prefix_values, pa.Scalar) else len(value_values)
+    prefix_iter = (
+        repeat(prefix_values.as_py(), length)
+        if isinstance(prefix_values, pa.Scalar)
+        else iter_array_values(prefix_values)
+    )
+    value_iter = (
+        repeat(value_values.as_py(), length)
+        if isinstance(value_values, pa.Scalar)
+        else iter_array_values(value_values)
+    )
+    out: list[str | None] = []
+    for prefix, value in zip(prefix_iter, value_iter, strict=True):
+        if prefix is None or value is None:
+            out.append(None)
+            continue
+        hashed = hash64_from_text(str(value))
+        out.append(f"{prefix}:{hashed}")
+    return pa.array(out, type=pa.string())
+
+
+def _stable_id(
+    prefix_values: pa.Array | pa.ChunkedArray | pa.Scalar,
+    value_values: pa.Array | pa.ChunkedArray | pa.Scalar,
+) -> pa.Array | pa.Scalar:
+    if isinstance(prefix_values, pa.Scalar) and isinstance(value_values, pa.Scalar):
+        prefix = prefix_values.as_py()
+        value = value_values.as_py()
+        if prefix is None or value is None:
+            return pa.scalar(None, type=pa.string())
+        hashed = hash128_from_text(str(value))
+        return pa.scalar(f"{prefix}:{hashed}", type=pa.string())
+    length = len(prefix_values) if not isinstance(prefix_values, pa.Scalar) else len(value_values)
+    prefix_iter = (
+        repeat(prefix_values.as_py(), length)
+        if isinstance(prefix_values, pa.Scalar)
+        else iter_array_values(prefix_values)
+    )
+    value_iter = (
+        repeat(value_values.as_py(), length)
+        if isinstance(value_values, pa.Scalar)
+        else iter_array_values(value_values)
+    )
+    out: list[str | None] = []
+    for prefix, value in zip(prefix_iter, value_iter, strict=True):
+        if prefix is None or value is None:
+            out.append(None)
+            continue
+        hashed = hash128_from_text(str(value))
+        out.append(f"{prefix}:{hashed}")
+    return pa.array(out, type=pa.string())
+
+
+def _valid_mask(
+    values: pa.Array | pa.ChunkedArray | pa.Scalar,
+) -> pa.Array | pa.Scalar:
+    if isinstance(values, pa.Scalar):
+        value = values.as_py()
+        if value is None:
+            return pa.scalar(value=False, type=pa.bool_())
+        if isinstance(value, list):
+            return pa.scalar(value=all(item is not None for item in value), type=pa.bool_())
+        return pa.scalar(value=value is not None, type=pa.bool_())
+    out: list[bool] = []
+    for value in iter_array_values(values):
+        if value is None:
+            out.append(False)
+        elif isinstance(value, list):
+            out.append(all(item is not None for item in value))
+        else:
+            out.append(True)
+    return pa.array(out, type=pa.bool_())
+
+
+def stable_hash64_values(
+    values: pa.Array | pa.ChunkedArray | pa.Scalar,
+) -> pa.Array | pa.Scalar:
+    """Return stable hash64 values for Arrow inputs.
+
+    Returns
+    -------
+    pa.Array | pa.Scalar
+        Stable hash64 values.
+    """
+    return _stable_hash64(values)
+
+
+def stable_hash128_values(
+    values: pa.Array | pa.ChunkedArray | pa.Scalar,
+) -> pa.Array | pa.Scalar:
+    """Return stable hash128 values for Arrow inputs.
+
+    Returns
+    -------
+    pa.Array | pa.Scalar
+        Stable hash128 values.
+    """
+    return _stable_hash128(values)
 
 
 def _position_encoding_norm(
@@ -404,6 +532,27 @@ _COL_TO_BYTE_UDF = udf(
     "stable",
     "col_to_byte",
 )
+_PREFIXED_HASH64_UDF = udf(
+    _prefixed_hash64,
+    [pa.string(), pa.string()],
+    pa.string(),
+    "stable",
+    "prefixed_hash64",
+)
+_STABLE_ID_UDF = udf(
+    _stable_id,
+    [pa.string(), pa.string()],
+    pa.string(),
+    "stable",
+    "stable_id",
+)
+_VALID_MASK_UDF = udf(
+    _valid_mask,
+    [pa.list_(pa.string())],
+    pa.bool_(),
+    "stable",
+    "valid_mask",
+)
 
 _SCALAR_UDF_SPECS: tuple[tuple[DataFusionUdfSpec, ScalarUDF], ...] = (
     (
@@ -453,6 +602,42 @@ _SCALAR_UDF_SPECS: tuple[tuple[DataFusionUdfSpec, ScalarUDF], ...] = (
             rewrite_tags=("hash",),
         ),
         _STABLE_HASH128_UDF,
+    ),
+    (
+        DataFusionUdfSpec(
+            func_id="prefixed_hash64",
+            engine_name="prefixed_hash64",
+            kind="scalar",
+            input_types=(pa.string(), pa.string()),
+            return_type=pa.string(),
+            arg_names=("prefix", "value"),
+            rewrite_tags=("hash",),
+        ),
+        _PREFIXED_HASH64_UDF,
+    ),
+    (
+        DataFusionUdfSpec(
+            func_id="stable_id",
+            engine_name="stable_id",
+            kind="scalar",
+            input_types=(pa.string(), pa.string()),
+            return_type=pa.string(),
+            arg_names=("prefix", "value"),
+            rewrite_tags=("hash",),
+        ),
+        _STABLE_ID_UDF,
+    ),
+    (
+        DataFusionUdfSpec(
+            func_id="valid_mask",
+            engine_name="valid_mask",
+            kind="scalar",
+            input_types=(pa.list_(pa.string()),),
+            return_type=pa.bool_(),
+            arg_names=("values",),
+            rewrite_tags=("validity",),
+        ),
+        _VALID_MASK_UDF,
     ),
     (
         DataFusionUdfSpec(
@@ -606,5 +791,7 @@ __all__ = [
     "load_udf_from_capsule",
     "register_datafusion_udfs",
     "register_pycapsule_udf_spec",
+    "stable_hash64_values",
+    "stable_hash128_values",
     "udf_capsule_id",
 ]

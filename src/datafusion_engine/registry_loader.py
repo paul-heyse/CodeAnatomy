@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
@@ -90,6 +91,8 @@ def register_registry_delta_tables(
     registered: dict[str, DataFrame] = {}
     for table_name, path in locations.items():
         name = _registry_table_name(target, table_name)
+        with suppress(KeyError, ValueError):
+            ctx.deregister_table(name)
         if resolved.decode_unions and _delta_schema_has_union_encoding(
             path,
             resolved.storage_options,

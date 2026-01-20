@@ -18,7 +18,6 @@ from arrowdsl.core.interop import (
     ScalarLike,
     SchemaLike,
     TableLike,
-    pc,
 )
 from arrowdsl.schema.encoding_policy import EncodingPolicy
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
@@ -27,6 +26,15 @@ from arrowdsl.schema.schema import (
     missing_key_fields,
     required_field_names,
     required_non_null_mask,
+)
+from datafusion_engine.compute_ops import (
+    and_,
+    call_function,
+    cast_values,
+    greater,
+    invert,
+    is_valid,
+    or_,
 )
 
 
@@ -141,12 +149,12 @@ def _combine_masks(masks: Sequence[ArrayLike]) -> ArrayLike | None:
         return None
     combined = masks[0]
     for mask in masks[1:]:
-        combined = pc.or_(combined, mask)
+        combined = or_(combined, mask)
     return combined
 
 
 def _count_mask(mask: ArrayLike) -> int:
-    total = pc.call_function("sum", [pc.cast(mask, pa.int64())])
+    total = call_function("sum", [cast_values(mask, pa.int64())])
     value = cast("int | float | bool | None", cast("ScalarLike", total).as_py())
     if value is None:
         return 0
@@ -158,10 +166,10 @@ def _duplicate_row_count(table: TableLike, keys: Sequence[str]) -> int:
         return 0
     grouped = table.group_by(list(keys)).aggregate([(keys[0], "count")])
     count_col = f"{keys[0]}_count"
-    dupes = grouped.filter(pc.greater(grouped[count_col], pa.scalar(1)))
+    dupes = grouped.filter(greater(grouped[count_col], 1))
     if dupes.num_rows == 0:
         return 0
-    total = pc.call_function("sum", [dupes[count_col]])
+    total = call_function("sum", [dupes[count_col]])
     value = cast("int | float | bool | None", cast("ScalarLike", total).as_py())
     if value is None:
         return 0
@@ -203,10 +211,10 @@ def _coerce_type_mismatch_errors(
         if table.schema.field(field.name).type == field.dtype:
             continue
         col = table[field.name]
-        casted = pc.cast(col, field.dtype, safe=False)
-        valid = pc.is_valid(col)
-        cast_valid = pc.is_valid(casted)
-        failures = pc.and_(valid, pc.invert(cast_valid))
+        casted = cast_values(col, field.dtype, safe=False)
+        valid = is_valid(col)
+        cast_valid = is_valid(casted)
+        failures = and_(valid, invert(cast_valid))
         count = _count_mask(failures)
         if count:
             entries.append(_ValidationErrorEntry("type_mismatch", field.name, count))
@@ -220,7 +228,7 @@ def _null_violation_results(
     missing_cols: Sequence[str],
 ) -> tuple[list[_ValidationErrorEntry], list[ArrayLike]]:
     required_present = [name for name in required_fields if name not in missing_cols]
-    masks = [pc.invert(pc.is_valid(aligned[name])) for name in required_present]
+    masks = [invert(is_valid(aligned[name])) for name in required_present]
     entries = [
         _ValidationErrorEntry("null_violation", name, count)
         for name, mask in zip(required_present, masks, strict=True)
@@ -244,7 +252,7 @@ def _row_filter_results(
         invalid_rows = aligned.filter(invalid_mask)
     validated = aligned
     if options.strict == "filter":
-        validated = aligned.filter(pc.invert(invalid_mask))
+        validated = aligned.filter(invert(invalid_mask))
     return validated, invalid_rows, invalid_row_count
 
 

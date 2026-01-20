@@ -9,6 +9,7 @@ from cpg.registry_builders import build_dataset_spec
 from cpg.registry_readers import dataset_rows_from_table
 from cpg.registry_rows import DatasetRow
 from cpg.registry_tables import dataset_rows_table
+from datafusion_engine.schema_registry import schema_for
 from registry_common.dataset_registry import DatasetAccessors, DatasetRegistry
 
 if TYPE_CHECKING:
@@ -55,7 +56,10 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Arrow schema for the dataset.
     """
-    return _ACCESSORS.dataset_schema(name)
+    try:
+        return schema_for(name)
+    except KeyError:
+        return _ACCESSORS.dataset_schema(name)
 
 
 def dataset_contract_spec(name: str) -> ContractSpec:

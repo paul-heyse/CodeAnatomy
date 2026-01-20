@@ -10,6 +10,7 @@ import pyarrow as pa
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.spec.io import IpcWriteConfig
+from datafusion_engine.query_fragments import SqlFragment
 from engine.plan_policy import WriterStrategy
 from registry_common.settings import ScipIndexSettings
 from relspec.compiler import CompiledOutput
@@ -127,10 +128,10 @@ class RuntimeInspectConfig:
 class CstRelspecInputs:
     """CST inputs required for relationship-spec datasets."""
 
-    cst_name_refs: TableLike
-    cst_imports_norm: TableLike
-    cst_callsites: TableLike
-    cst_defs_norm: TableLike
+    cst_name_refs: TableLike | SqlFragment
+    cst_imports_norm: TableLike | SqlFragment
+    cst_callsites: TableLike | SqlFragment
+    cst_defs_norm: TableLike | SqlFragment
 
 
 @dataclass(frozen=True)
@@ -161,28 +162,28 @@ class ScipIdentityOverrides:
 class CstBuildInputs:
     """CST inputs required for CPG node/property building."""
 
-    cst_name_refs: TableLike | DatasetSource
-    cst_imports_norm: TableLike | DatasetSource
-    cst_callsites: TableLike | DatasetSource
-    cst_defs_norm: TableLike | DatasetSource
+    cst_name_refs: TableLike | DatasetSource | SqlFragment
+    cst_imports_norm: TableLike | DatasetSource | SqlFragment
+    cst_callsites: TableLike | DatasetSource | SqlFragment
+    cst_defs_norm: TableLike | DatasetSource | SqlFragment
 
 
 @dataclass(frozen=True)
 class ScipBuildInputs:
     """SCIP inputs required for CPG node/property building."""
 
-    scip_symbol_information: TableLike | DatasetSource
-    scip_occurrences_norm: TableLike | DatasetSource
-    scip_symbol_relationships: TableLike | DatasetSource
-    scip_external_symbol_information: TableLike | DatasetSource
+    scip_symbol_information: TableLike | DatasetSource | SqlFragment
+    scip_occurrences_norm: TableLike | DatasetSource | SqlFragment
+    scip_symbol_relationships: TableLike | DatasetSource | SqlFragment
+    scip_external_symbol_information: TableLike | DatasetSource | SqlFragment
 
 
 @dataclass(frozen=True)
 class CpgBaseInputs:
     """Shared inputs for CPG nodes and properties."""
 
-    repo_files: TableLike | DatasetSource
-    dim_qualified_names: TableLike | DatasetSource
+    repo_files: TableLike | DatasetSource | SqlFragment
+    dim_qualified_names: TableLike | DatasetSource | SqlFragment
     cst_build_inputs: CstBuildInputs
     scip_build_inputs: ScipBuildInputs
 
@@ -191,50 +192,50 @@ class CpgBaseInputs:
 class TreeSitterInputs:
     """Tree-sitter tables used in CPG build steps."""
 
-    ts_nodes: TableLike | DatasetSource
-    ts_errors: TableLike | DatasetSource
-    ts_missing: TableLike | DatasetSource
+    ts_nodes: TableLike | DatasetSource | SqlFragment
+    ts_errors: TableLike | DatasetSource | SqlFragment
+    ts_missing: TableLike | DatasetSource | SqlFragment
 
 
 @dataclass(frozen=True)
 class TypeInputs:
     """Type tables used in CPG build steps."""
 
-    type_exprs_norm: TableLike | DatasetSource
-    types_norm: TableLike | DatasetSource
+    type_exprs_norm: TableLike | DatasetSource | SqlFragment
+    types_norm: TableLike | DatasetSource | SqlFragment
 
 
 @dataclass(frozen=True)
 class DiagnosticsInputs:
     """Diagnostics tables used in CPG build steps."""
 
-    diagnostics_norm: TableLike | DatasetSource
+    diagnostics_norm: TableLike | DatasetSource | SqlFragment
 
 
 @dataclass(frozen=True)
 class RuntimeInputs:
     """Runtime inspection tables used in CPG build steps."""
 
-    rt_objects: TableLike | DatasetSource
-    rt_signatures: TableLike | DatasetSource
-    rt_signature_params: TableLike | DatasetSource
-    rt_members: TableLike | DatasetSource
+    rt_objects: TableLike | DatasetSource | SqlFragment
+    rt_signatures: TableLike | DatasetSource | SqlFragment
+    rt_signature_params: TableLike | DatasetSource | SqlFragment
+    rt_members: TableLike | DatasetSource | SqlFragment
 
 
 @dataclass(frozen=True)
 class CpgExtraInputs:
     """Optional inputs for CPG nodes/props/edges."""
 
-    ts_nodes: TableLike | DatasetSource
-    ts_errors: TableLike | DatasetSource
-    ts_missing: TableLike | DatasetSource
-    type_exprs_norm: TableLike | DatasetSource
-    types_norm: TableLike | DatasetSource
-    diagnostics_norm: TableLike | DatasetSource
-    rt_objects: TableLike | DatasetSource
-    rt_signatures: TableLike | DatasetSource
-    rt_signature_params: TableLike | DatasetSource
-    rt_members: TableLike | DatasetSource
+    ts_nodes: TableLike | DatasetSource | SqlFragment
+    ts_errors: TableLike | DatasetSource | SqlFragment
+    ts_missing: TableLike | DatasetSource | SqlFragment
+    type_exprs_norm: TableLike | DatasetSource | SqlFragment
+    types_norm: TableLike | DatasetSource | SqlFragment
+    diagnostics_norm: TableLike | DatasetSource | SqlFragment
+    rt_objects: TableLike | DatasetSource | SqlFragment
+    rt_signatures: TableLike | DatasetSource | SqlFragment
+    rt_signature_params: TableLike | DatasetSource | SqlFragment
+    rt_members: TableLike | DatasetSource | SqlFragment
 
 
 @dataclass(frozen=True)

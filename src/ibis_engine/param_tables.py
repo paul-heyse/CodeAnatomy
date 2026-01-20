@@ -11,11 +11,11 @@ from enum import Enum
 from typing import cast
 
 import pyarrow as pa
-import pyarrow.compute as pc
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table
 
 from arrowdsl.schema.serialization import schema_fingerprint
+from datafusion_engine.compute_ops import call_function, cast_values, sort_indices, take, unique
 from registry_common.arrow_payloads import payload_hash
 
 SCALAR_PARAM_SIGNATURE_VERSION = 1
@@ -268,11 +268,12 @@ def qualified_param_table_name(
 
 
 def _compute_array_fn(name: str) -> Callable[[pa.Array], pa.Array]:
-    fn = getattr(pc, name, None)
-    if fn is None:
-        msg = f"pyarrow.compute.{name} is unavailable."
-        raise RuntimeError(msg)
-    return cast("Callable[[pa.Array], pa.Array]", fn)
+    if name == "sort_indices":
+        return cast("Callable[[pa.Array], pa.Array]", sort_indices)
+    if name == "hash":
+        return lambda values: cast("pa.Array", call_function("hash", [values]))
+    msg = f"Unsupported compute function: {name!r}."
+    raise ValueError(msg)
 
 
 def param_signature_from_array(
@@ -288,11 +289,11 @@ def param_signature_from_array(
         Hex-encoded signature string.
     """
     normalized = values.combine_chunks() if isinstance(values, pa.ChunkedArray) else values
-    casted = pc.cast(normalized, pa.large_string(), safe=False)
+    casted = cast_values(normalized, pa.large_string(), safe=False)
     sort_indices = _compute_array_fn("sort_indices")
     hash_fn = _compute_array_fn("hash")
     idx = sort_indices(casted)
-    sorted_vals = pc.take(casted, idx)
+    sorted_vals = take(casted, idx)
     hashed = hash_fn(sorted_vals)
     buf = hashed.buffers()[1]
     digest = hashlib.sha256(logical_name.encode("utf-8"))
@@ -309,9 +310,7 @@ def scalar_param_signature(values: Mapping[str, object]) -> str:
     str
         Hex-encoded signature string.
     """
-    entries = [
-        {"key": str(key), "value": str(value)} for key, value in sorted(values.items())
-    ]
+    entries = [{"key": str(key), "value": str(value)} for key, value in sorted(values.items())]
     payload = {"version": SCALAR_PARAM_SIGNATURE_VERSION, "entries": entries}
     return payload_hash(payload, _SCALAR_PARAM_SIGNATURE_SCHEMA)
 
@@ -354,17 +353,8 @@ def unique_values(values: pa.Array | pa.ChunkedArray) -> pa.Array | pa.ChunkedAr
     -------
     pyarrow.Array | pyarrow.ChunkedArray
         Unique values for the input array-like.
-
-    Raises
-    ------
-    RuntimeError
-        Raised when pyarrow.compute.unique is unavailable.
     """
-    unique_fn = getattr(pc, "unique", None)
-    if unique_fn is None:
-        msg = "pyarrow.compute.unique is unavailable."
-        raise RuntimeError(msg)
-    return unique_fn(values)
+    return unique(values)
 
 
 def _new_scope_key() -> str:

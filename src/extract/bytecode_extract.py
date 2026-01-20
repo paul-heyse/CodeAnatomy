@@ -3,32 +3,37 @@
 from __future__ import annotations
 
 import dis
+import json
 import types as pytypes
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
+from arrowdsl.core.ids import stable_id
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from extract.helpers import (
     ExtractExecutionContext,
     ExtractMaterializeOptions,
     FileContext,
+    SpanSpec,
     apply_query_and_project,
+    attrs_map,
     file_identity_row,
     ibis_plan_from_rows,
     iter_contexts,
     materialize_extract_plan,
+    span_dict,
     text_from_file_ctx,
 )
-from extract.registry_specs import dataset_enabled, dataset_row_schema, normalize_options
+from extract.registry_specs import dataset_schema, normalize_options
 from extract.schema_ops import ExtractNormalizeOptions
 from ibis_engine.plan import IbisPlan
 
 if TYPE_CHECKING:
     from extract.evidence_plan import EvidencePlan
 
-type RowValue = str | int | bool | None
+type RowValue = str | int | bool | list[str] | None
 type Row = dict[str, RowValue]
 
 BC_LINE_BASE = 1
@@ -57,18 +62,14 @@ class BytecodeExtractOptions:
         "RAISE_VARARGS",
         "RERAISE",
     )
+    repo_id: str | None = None
 
 
 @dataclass(frozen=True)
 class BytecodeExtractResult:
     """Extracted bytecode tables for code units, instructions, and edges."""
 
-    py_bc_code_units: TableLike
-    py_bc_instructions: TableLike
-    py_bc_exception_table: TableLike
-    py_bc_blocks: TableLike
-    py_bc_cfg_edges: TableLike
-    py_bc_errors: TableLike
+    bytecode_files: TableLike
 
 
 @dataclass(frozen=True)
@@ -200,12 +201,112 @@ class BytecodeRowBuffers:
     error_rows: list[Row]
 
 
-CODE_UNITS_ROW_SCHEMA = dataset_row_schema("py_bc_code_units_v1")
-INSTR_ROW_SCHEMA = dataset_row_schema("py_bc_instructions_v1")
-EXC_ROW_SCHEMA = dataset_row_schema("py_bc_exception_table_v1")
-BLOCKS_ROW_SCHEMA = dataset_row_schema("py_bc_blocks_v1")
-CFG_EDGES_ROW_SCHEMA = dataset_row_schema("py_bc_cfg_edges_v1")
-ERRORS_ROW_SCHEMA = dataset_row_schema("py_bc_errors_v1")
+BYTECODE_FILES_SCHEMA = dataset_schema("bytecode_files_v1")
+
+
+def _consts_json(values: Sequence[object]) -> str | None:
+    try:
+        return json.dumps(values, default=str)
+    except (TypeError, ValueError):
+        return None
+
+
+def _code_unit_key(row: Mapping[str, RowValue]) -> tuple[str, str, int]:
+    qualpath = row.get("qualpath")
+    co_name = row.get("co_name")
+    firstlineno = row.get("firstlineno")
+    qualpath_str = str(qualpath) if qualpath is not None else ""
+    co_name_str = str(co_name) if co_name is not None else ""
+    firstlineno_int = int(firstlineno) if isinstance(firstlineno, int) else 0
+    return qualpath_str, co_name_str, firstlineno_int
+
+
+def _instruction_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
+    line_base = row.get("line_base")
+    line_base_int = int(line_base) if isinstance(line_base, int) else BC_LINE_BASE
+    start_line = row.get("pos_start_line")
+    end_line = row.get("pos_end_line")
+    start_col = row.get("pos_start_col")
+    end_col = row.get("pos_end_col")
+    start_line0 = int(start_line) - line_base_int if isinstance(start_line, int) else None
+    end_line0 = int(end_line) - line_base_int if isinstance(end_line, int) else None
+    col_unit = str(row.get("col_unit")) if row.get("col_unit") is not None else BC_COL_UNIT
+    return {
+        "offset": row.get("offset"),
+        "opname": row.get("opname"),
+        "opcode": row.get("opcode"),
+        "arg": row.get("arg"),
+        "argrepr": row.get("argrepr"),
+        "is_jump_target": row.get("is_jump_target"),
+        "jump_target": row.get("jump_target_offset"),
+        "span": span_dict(
+            SpanSpec(
+                start_line0=start_line0,
+                start_col=int(start_col) if isinstance(start_col, int) else None,
+                end_line0=end_line0,
+                end_col=int(end_col) if isinstance(end_col, int) else None,
+                end_exclusive=bool(row.get("end_exclusive", BC_END_EXCLUSIVE)),
+                col_unit=col_unit,
+            )
+        ),
+        "attrs": attrs_map(
+            {
+                "argval_str": row.get("argval_str"),
+                "starts_line": row.get("starts_line"),
+                "instr_index": row.get("instr_index"),
+            }
+        ),
+    }
+
+
+def _string_list(value: object | None) -> list[str]:
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value]
+    return []
+
+
+def _exception_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
+    return {
+        "exc_index": row.get("exc_index"),
+        "start_offset": row.get("start_offset"),
+        "end_offset": row.get("end_offset"),
+        "target_offset": row.get("target_offset"),
+        "depth": row.get("depth"),
+        "lasti": row.get("lasti"),
+        "attrs": attrs_map({}),
+    }
+
+
+def _block_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
+    return {
+        "start_offset": row.get("start_offset"),
+        "end_offset": row.get("end_offset"),
+        "kind": row.get("kind"),
+        "attrs": attrs_map({}),
+    }
+
+
+def _cfg_edge_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
+    return {
+        "src_block_start": row.get("src_block_start"),
+        "src_block_end": row.get("src_block_end"),
+        "dst_block_start": row.get("dst_block_start"),
+        "dst_block_end": row.get("dst_block_end"),
+        "kind": row.get("kind"),
+        "edge_key": row.get("edge_key"),
+        "cond_instr_index": row.get("cond_instr_index"),
+        "cond_instr_offset": row.get("cond_instr_offset"),
+        "exc_index": row.get("exc_index"),
+        "attrs": attrs_map({}),
+    }
+
+
+def _error_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
+    return {
+        "error_type": row.get("error_type"),
+        "message": row.get("message"),
+        "attrs": attrs_map({}),
+    }
 
 
 def _context_from_file_ctx(
@@ -222,106 +323,6 @@ def _row_context(
 ) -> BytecodeFileContext | None:
     file_ctx = FileContext.from_repo_row(rf)
     return _context_from_file_ctx(file_ctx, options)
-
-
-def _build_code_units_plan(
-    rows: list[Row],
-    *,
-    normalize: ExtractNormalizeOptions,
-    evidence_plan: EvidencePlan | None = None,
-) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows(
-        "py_bc_code_units_v1",
-        rows,
-        row_schema=CODE_UNITS_ROW_SCHEMA,
-    )
-    return apply_query_and_project(
-        "py_bc_code_units_v1",
-        raw_plan.expr,
-        normalize=normalize,
-        evidence_plan=evidence_plan,
-        repo_id=normalize.repo_id,
-    )
-
-
-def _build_instructions_plan(
-    rows: list[Row],
-    *,
-    normalize: ExtractNormalizeOptions,
-    evidence_plan: EvidencePlan | None = None,
-) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows(
-        "py_bc_instructions_v1",
-        rows,
-        row_schema=INSTR_ROW_SCHEMA,
-    )
-    return apply_query_and_project(
-        "py_bc_instructions_v1",
-        raw_plan.expr,
-        normalize=normalize,
-        evidence_plan=evidence_plan,
-        repo_id=normalize.repo_id,
-    )
-
-
-def _build_exceptions_plan(
-    rows: list[Row],
-    *,
-    normalize: ExtractNormalizeOptions,
-    evidence_plan: EvidencePlan | None = None,
-) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows(
-        "py_bc_exception_table_v1",
-        rows,
-        row_schema=EXC_ROW_SCHEMA,
-    )
-    return apply_query_and_project(
-        "py_bc_exception_table_v1",
-        raw_plan.expr,
-        normalize=normalize,
-        evidence_plan=evidence_plan,
-        repo_id=normalize.repo_id,
-    )
-
-
-def _build_blocks_plan(
-    rows: list[Row],
-    *,
-    normalize: ExtractNormalizeOptions,
-    evidence_plan: EvidencePlan | None = None,
-) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows(
-        "py_bc_blocks_v1",
-        rows,
-        row_schema=BLOCKS_ROW_SCHEMA,
-    )
-    return apply_query_and_project(
-        "py_bc_blocks_v1",
-        raw_plan.expr,
-        normalize=normalize,
-        evidence_plan=evidence_plan,
-        repo_id=normalize.repo_id,
-    )
-
-
-def _build_cfg_edges_plan(
-    rows: list[Row],
-    *,
-    normalize: ExtractNormalizeOptions,
-    evidence_plan: EvidencePlan | None = None,
-) -> IbisPlan:
-    raw_plan = ibis_plan_from_rows(
-        "py_bc_cfg_edges_v1",
-        rows,
-        row_schema=CFG_EDGES_ROW_SCHEMA,
-    )
-    return apply_query_and_project(
-        "py_bc_cfg_edges_v1",
-        raw_plan.expr,
-        normalize=normalize,
-        evidence_plan=evidence_plan,
-        repo_id=normalize.repo_id,
-    )
 
 
 def _compile_text(
@@ -389,6 +390,11 @@ def _assign_code_units(
                 "flags": int(getattr(co, "co_flags", 0)),
                 "stacksize": int(getattr(co, "co_stacksize", 0)),
                 "code_len": len(co.co_code),
+                "varnames": list(getattr(co, "co_varnames", ())),
+                "freevars": list(getattr(co, "co_freevars", ())),
+                "cellvars": list(getattr(co, "co_cellvars", ())),
+                "names": list(getattr(co, "co_names", ())),
+                "consts_json": _consts_json(getattr(co, "co_consts", ())),
             }
         )
 
@@ -753,7 +759,7 @@ def _extract_code_unit_rows(
     code_unit_keys: Mapping[int, CodeUnitKey],
     buffers: BytecodeRowBuffers,
 ) -> None:
-    include_cfg = dataset_enabled("py_bc_blocks_v1", ctx.options)
+    include_cfg = ctx.options.include_cfg_derivations
     for co, _parent in _iter_code_objects(top):
         key = code_unit_keys.get(id(co))
         if key is None:
@@ -765,57 +771,153 @@ def _extract_code_unit_rows(
             _append_cfg_rows(unit_ctx, buffers.block_rows, buffers.edge_rows)
 
 
-def _build_bytecode_plans(
-    buffers: BytecodeRowBuffers,
+def _sorted_rows(rows: Sequence[Row], *, key: str) -> list[Row]:
+    def _key(row: Row) -> int:
+        value = row.get(key)
+        return int(value) if isinstance(value, int) else 0
+
+    return sorted(rows, key=_key)
+
+
+def _code_objects_from_buffers(buffers: BytecodeRowBuffers) -> list[dict[str, object]]:
+    instructions_by_key: dict[tuple[str, str, int], list[Row]] = {}
+    exceptions_by_key: dict[tuple[str, str, int], list[Row]] = {}
+    blocks_by_key: dict[tuple[str, str, int], list[Row]] = {}
+    edges_by_key: dict[tuple[str, str, int], list[Row]] = {}
+
+    for row in buffers.instruction_rows:
+        instructions_by_key.setdefault(_code_unit_key(row), []).append(row)
+    for row in buffers.exception_rows:
+        exceptions_by_key.setdefault(_code_unit_key(row), []).append(row)
+    for row in buffers.block_rows:
+        blocks_by_key.setdefault(_code_unit_key(row), []).append(row)
+    for row in buffers.edge_rows:
+        edges_by_key.setdefault(_code_unit_key(row), []).append(row)
+
+    code_objects: list[dict[str, object]] = []
+    for row in buffers.code_unit_rows:
+        qualpath = row.get("qualpath")
+        co_name = row.get("co_name")
+        firstlineno = row.get("firstlineno")
+        code_id = stable_id(
+            "code",
+            str(qualpath) if qualpath is not None else None,
+            str(co_name) if co_name is not None else None,
+            str(firstlineno) if firstlineno is not None else None,
+        )
+        key = _code_unit_key(row)
+        instructions = [
+            _instruction_entry(item)
+            for item in _sorted_rows(instructions_by_key.get(key, []), key="instr_index")
+        ]
+        exceptions = [
+            _exception_entry(item)
+            for item in _sorted_rows(exceptions_by_key.get(key, []), key="exc_index")
+        ]
+        blocks = [
+            _block_entry(item)
+            for item in _sorted_rows(blocks_by_key.get(key, []), key="start_offset")
+        ]
+        edges = [_cfg_edge_entry(item) for item in edges_by_key.get(key, [])]
+        code_objects.append(
+            {
+                "code_id": code_id,
+                "qualname": qualpath,
+                "name": co_name,
+                "firstlineno1": firstlineno,
+                "argcount": row.get("argcount"),
+                "posonlyargcount": row.get("posonlyargcount"),
+                "kwonlyargcount": row.get("kwonlyargcount"),
+                "nlocals": row.get("nlocals"),
+                "flags": row.get("flags"),
+                "stacksize": row.get("stacksize"),
+                "code_len": row.get("code_len"),
+                "varnames": _string_list(row.get("varnames")),
+                "freevars": _string_list(row.get("freevars")),
+                "cellvars": _string_list(row.get("cellvars")),
+                "names": _string_list(row.get("names")),
+                "consts_json": row.get("consts_json"),
+                "instructions": instructions,
+                "exception_table": exceptions,
+                "blocks": blocks,
+                "cfg_edges": edges,
+                "attrs": attrs_map(
+                    {
+                        "parent_qualpath": row.get("parent_qualpath"),
+                        "parent_co_name": row.get("parent_co_name"),
+                        "parent_firstlineno": row.get("parent_firstlineno"),
+                    }
+                ),
+            }
+        )
+    return code_objects
+
+
+def _bytecode_file_row(
+    file_ctx: FileContext,
+    *,
+    options: BytecodeExtractOptions,
+) -> dict[str, object] | None:
+    bc_ctx = _context_from_file_ctx(file_ctx, options)
+    if bc_ctx is None:
+        return None
+    text = text_from_file_ctx(bc_ctx.file_ctx)
+    if text is None:
+        return None
+    buffers = BytecodeRowBuffers(
+        code_unit_rows=[],
+        instruction_rows=[],
+        exception_rows=[],
+        block_rows=[],
+        edge_rows=[],
+        error_rows=[],
+    )
+    top, err = _compile_text(text, bc_ctx)
+    if err is not None:
+        buffers.error_rows.append(err)
+    if top is not None:
+        code_unit_keys = _assign_code_units(top, bc_ctx, buffers.code_unit_rows)
+        _extract_code_unit_rows(top, bc_ctx, code_unit_keys, buffers)
+    code_objects = _code_objects_from_buffers(buffers)
+    errors = [_error_entry(row) for row in buffers.error_rows]
+    return {
+        "repo": options.repo_id,
+        "path": file_ctx.path,
+        "file_id": file_ctx.file_id,
+        "code_objects": code_objects,
+        "errors": errors,
+        "attrs": attrs_map({"file_sha256": file_ctx.file_sha256}),
+    }
+
+
+def _collect_bytecode_file_rows(
+    repo_files: TableLike,
+    file_contexts: Iterable[FileContext] | None,
+    *,
+    options: BytecodeExtractOptions,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for file_ctx in iter_contexts(repo_files, file_contexts):
+        row = _bytecode_file_row(file_ctx, options=options)
+        if row is not None:
+            rows.append(row)
+    return rows
+
+
+def _build_bytecode_file_plan(
+    rows: list[dict[str, object]],
     *,
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None = None,
-) -> dict[str, IbisPlan]:
-    code_units = _build_code_units_plan(
-        buffers.code_unit_rows,
-        normalize=normalize,
-        evidence_plan=evidence_plan,
-    )
-    instructions = _build_instructions_plan(
-        buffers.instruction_rows,
-        normalize=normalize,
-        evidence_plan=evidence_plan,
-    )
-    exceptions = _build_exceptions_plan(
-        buffers.exception_rows,
-        normalize=normalize,
-        evidence_plan=evidence_plan,
-    )
-    blocks = _build_blocks_plan(
-        buffers.block_rows,
-        normalize=normalize,
-        evidence_plan=evidence_plan,
-    )
-    edges = _build_cfg_edges_plan(
-        buffers.edge_rows,
-        normalize=normalize,
-        evidence_plan=evidence_plan,
-    )
-    errors_raw = ibis_plan_from_rows(
-        "py_bc_errors_v1",
-        buffers.error_rows,
-        row_schema=ERRORS_ROW_SCHEMA,
-    )
-    errors_plan = apply_query_and_project(
-        "py_bc_errors_v1",
-        errors_raw.expr,
+) -> IbisPlan:
+    raw_plan = ibis_plan_from_rows("bytecode_files_v1", rows, row_schema=BYTECODE_FILES_SCHEMA)
+    return apply_query_and_project(
+        "bytecode_files_v1",
+        raw_plan.expr,
         normalize=normalize,
         evidence_plan=evidence_plan,
         repo_id=normalize.repo_id,
     )
-    return {
-        "py_bc_code_units": code_units,
-        "py_bc_instructions": instructions,
-        "py_bc_exception_table": exceptions,
-        "py_bc_blocks": blocks,
-        "py_bc_cfg_edges": edges,
-        "py_bc_errors": errors_plan,
-    }
 
 
 def _jump_target(ins: dis.Instruction) -> int | None:
@@ -857,58 +959,33 @@ def extract_bytecode(
     Returns
     -------
     BytecodeExtractResult
-        Tables for bytecode code units, instructions, exception data, and edges.
+        Nested bytecode file table.
     """
     normalized_options = normalize_options("bytecode", options, BytecodeExtractOptions)
     exec_context = context or ExtractExecutionContext()
     exec_ctx = exec_context.ensure_ctx()
     normalize = ExtractNormalizeOptions(options=normalized_options)
-    plans = extract_bytecode_plans(
+    rows = _collect_bytecode_file_rows(
         repo_files,
+        exec_context.file_contexts,
         options=normalized_options,
-        context=exec_context,
+    )
+    plan = _build_bytecode_file_plan(
+        rows,
+        normalize=normalize,
+        evidence_plan=exec_context.evidence_plan,
     )
     materialize_options = ExtractMaterializeOptions(
         normalize=normalize,
         apply_post_kernels=True,
     )
     return BytecodeExtractResult(
-        py_bc_code_units=materialize_extract_plan(
-            "py_bc_code_units_v1",
-            plans["py_bc_code_units"],
+        bytecode_files=materialize_extract_plan(
+            "bytecode_files_v1",
+            plan,
             ctx=exec_ctx,
             options=materialize_options,
-        ),
-        py_bc_instructions=materialize_extract_plan(
-            "py_bc_instructions_v1",
-            plans["py_bc_instructions"],
-            ctx=exec_ctx,
-            options=materialize_options,
-        ),
-        py_bc_exception_table=materialize_extract_plan(
-            "py_bc_exception_table_v1",
-            plans["py_bc_exception_table"],
-            ctx=exec_ctx,
-            options=materialize_options,
-        ),
-        py_bc_blocks=materialize_extract_plan(
-            "py_bc_blocks_v1",
-            plans["py_bc_blocks"],
-            ctx=exec_ctx,
-            options=materialize_options,
-        ),
-        py_bc_cfg_edges=materialize_extract_plan(
-            "py_bc_cfg_edges_v1",
-            plans["py_bc_cfg_edges"],
-            ctx=exec_ctx,
-            options=materialize_options,
-        ),
-        py_bc_errors=materialize_extract_plan(
-            "py_bc_errors_v1",
-            plans["py_bc_errors"],
-            ctx=exec_ctx,
-            options=materialize_options,
-        ),
+        )
     )
 
 
@@ -928,39 +1005,19 @@ def extract_bytecode_plans(
     normalized_options = normalize_options("bytecode", options, BytecodeExtractOptions)
     exec_context = context or ExtractExecutionContext()
     normalize = ExtractNormalizeOptions(options=normalized_options)
-    file_contexts = exec_context.file_contexts
     evidence_plan = exec_context.evidence_plan
-
-    buffers = BytecodeRowBuffers(
-        code_unit_rows=[],
-        instruction_rows=[],
-        exception_rows=[],
-        block_rows=[],
-        edge_rows=[],
-        error_rows=[],
+    rows = _collect_bytecode_file_rows(
+        repo_files,
+        exec_context.file_contexts,
+        options=normalized_options,
     )
-
-    for file_ctx in iter_contexts(repo_files, file_contexts):
-        bc_ctx = _context_from_file_ctx(file_ctx, normalized_options)
-        if bc_ctx is None:
-            continue
-        text = text_from_file_ctx(bc_ctx.file_ctx)
-        if text is None:
-            continue
-        top, err = _compile_text(text, bc_ctx)
-        if err is not None:
-            buffers.error_rows.append(err)
-            continue
-        if top is None:
-            continue
-        code_unit_keys = _assign_code_units(top, bc_ctx, buffers.code_unit_rows)
-        _extract_code_unit_rows(top, bc_ctx, code_unit_keys, buffers)
-
-    return _build_bytecode_plans(
-        buffers,
-        normalize=normalize,
-        evidence_plan=evidence_plan,
-    )
+    return {
+        "bytecode_files": _build_bytecode_file_plan(
+            rows,
+            normalize=normalize,
+            evidence_plan=evidence_plan,
+        )
+    }
 
 
 class _BytecodeTableKwargs(TypedDict, total=False):
@@ -1044,8 +1101,8 @@ def extract_bytecode_table(
         ),
     )
     return materialize_extract_plan(
-        "py_bc_instructions_v1",
-        plans["py_bc_instructions"],
+        "bytecode_files_v1",
+        plans["bytecode_files"],
         ctx=exec_ctx,
         options=ExtractMaterializeOptions(
             normalize=normalize,

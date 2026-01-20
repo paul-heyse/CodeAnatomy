@@ -6,13 +6,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from arrowdsl.core.interop import TableLike
-from extract.registry_ids import (
-    add_scip_diagnostic_ids,
-    add_scip_document_ids,
-    add_scip_occurrence_ids,
-    add_scip_relationship_ids,
-    add_scip_symbol_ids,
-)
 from extract.registry_rows import DATASET_ROWS, DatasetRow
 
 KernelFn = Callable[[TableLike], TableLike]
@@ -27,18 +20,7 @@ class ExtractPipelineSpec:
     post_kernels: tuple[KernelFn, ...] = ()
 
 
-_POST_KERNELS: Mapping[str, KernelFn] = {
-    "scip_documents": lambda table: add_scip_document_ids(table, path_col="path"),
-    "scip_occurrences": lambda table: add_scip_occurrence_ids(
-        add_scip_document_ids(table, path_col="path")
-    ),
-    "scip_diagnostics": lambda table: add_scip_diagnostic_ids(
-        add_scip_document_ids(table, path_col="path")
-    ),
-    "scip_symbol_info": lambda table: add_scip_symbol_ids(table, prefix="scip_sym"),
-    "scip_external_symbol_info": lambda table: add_scip_symbol_ids(table, prefix="scip_ext_sym"),
-    "scip_symbol_relationships": add_scip_relationship_ids,
-}
+_POST_KERNELS: Mapping[str, KernelFn] = {}
 
 
 def _post_kernels_for_row(row: DatasetRow) -> tuple[KernelFn, ...]:

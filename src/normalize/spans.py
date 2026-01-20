@@ -8,10 +8,9 @@ from typing import Literal
 
 import pyarrow as pa
 
+from arrowdsl.core.array_iter import iter_arrays
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.ids import iter_arrays
-from arrowdsl.core.interop import ArrayLike, TableLike
-from arrowdsl.core.position_encoding import normalize_position_encoding_array
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike
 from arrowdsl.schema.build import column_or_null, set_or_append_column
 from normalize.runner import PostFn
 from normalize.span_pipeline import (
@@ -27,6 +26,7 @@ from normalize.text_index import (
     ENC_UTF32,
     FileTextIndex,
     RepoTextIndex,
+    normalize_position_encoding,
     row_value_int,
 )
 from normalize.utils import add_span_id_column
@@ -38,6 +38,22 @@ SCIP_RANGE_FIELDS = tuple(field.name for field in scip_range_bundle(include_len=
 SCIP_ENC_RANGE_FIELDS = tuple(
     field.name for field in scip_range_bundle(prefix="enc_", include_len=True).fields
 )
+
+
+def normalize_position_encoding_array(
+    values: ArrayLike | ChunkedArrayLike,
+) -> ArrayLike:
+    """Normalize position encoding array values to enum integers.
+
+    Returns
+    -------
+    ArrayLike
+        Array of normalized encoding integers.
+    """
+    if isinstance(values, ChunkedArrayLike):
+        values = values.combine_chunks()
+    normalized = [normalize_position_encoding(value) for value in values]
+    return pa.array(normalized, type=pa.int32())
 
 
 @dataclass(frozen=True)

@@ -10,16 +10,19 @@ from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 
 from arrowdsl.core.interop import TableLike
-from arrowdsl.core.position_encoding import ENC_UTF8, ENC_UTF16, ENC_UTF32
+from datafusion_engine.query_fragments import SqlFragment
 from ibis_engine.builtin_udfs import col_to_byte, position_encoding_norm
 from ibis_engine.ids import masked_stable_id_expr
 from ibis_engine.sources import SourceToIbisOptions, table_to_ibis
 from normalize.span_pipeline import span_error_table
+from normalize.text_index import ENC_UTF8, ENC_UTF16, ENC_UTF32
+
+SpanSource = TableLike | Table | SqlFragment
 
 
 def add_ast_byte_spans_ibis(
-    line_index: TableLike,
-    py_ast_nodes: TableLike,
+    line_index: SpanSource,
+    py_ast_nodes: SpanSource,
     *,
     backend: BaseBackend,
 ) -> TableLike:
@@ -73,8 +76,8 @@ def add_ast_byte_spans_ibis(
 
 
 def anchor_instructions_ibis(
-    line_index: TableLike,
-    py_bc_instructions: TableLike,
+    line_index: SpanSource,
+    py_bc_instructions: SpanSource,
     *,
     backend: BaseBackend,
 ) -> TableLike:
@@ -123,9 +126,9 @@ def anchor_instructions_ibis(
 
 
 def add_scip_occurrence_byte_spans_ibis(
-    line_index: TableLike,
-    scip_documents: TableLike,
-    scip_occurrences: TableLike,
+    line_index: SpanSource,
+    scip_documents: SpanSource,
+    scip_occurrences: SpanSource,
     *,
     backend: BaseBackend,
 ) -> tuple[TableLike, TableLike]:
@@ -321,9 +324,27 @@ def _line_index_view(line_index: Table, *, prefix: str) -> Table:
     )
 
 
-def _table_expr(table: TableLike, *, backend: BaseBackend, name: str) -> Table:
-    plan = table_to_ibis(table, options=SourceToIbisOptions(backend=backend, name=name))
+def _table_expr(source: SpanSource, *, backend: BaseBackend, name: str) -> Table:
+    if isinstance(source, SqlFragment):
+        return _sql_fragment_expr(backend, source)
+    if isinstance(source, Table):
+        return source
+    view_name = None if _is_datafusion_backend(backend) else name
+    plan = table_to_ibis(source, options=SourceToIbisOptions(backend=backend, name=view_name))
     return plan.expr
+
+
+def _is_datafusion_backend(backend: BaseBackend) -> bool:
+    name = getattr(backend, "name", "")
+    return str(name).lower() == "datafusion"
+
+
+def _sql_fragment_expr(backend: BaseBackend, fragment: SqlFragment) -> Table:
+    sql_method = getattr(backend, "sql", None)
+    if not callable(sql_method):
+        msg = "Ibis backend does not support raw SQL fragments."
+        raise TypeError(msg)
+    return cast("Table", sql_method(fragment.sql))
 
 
 @dataclass(frozen=True)

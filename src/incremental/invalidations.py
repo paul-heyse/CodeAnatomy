@@ -453,8 +453,7 @@ def _edit_script_payload(script: tuple[DiffOpEntry, ...]) -> str | None:
 
 def _rule_entries(values: Mapping[str, str]) -> list[dict[str, str]]:
     return [
-        {"rule_name": name, "signature": signature}
-        for name, signature in sorted(values.items())
+        {"rule_name": name, "signature": signature} for name, signature in sorted(values.items())
     ]
 
 

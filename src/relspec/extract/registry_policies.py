@@ -36,13 +36,7 @@ _TEMPLATE_POLICIES: dict[str, TemplatePolicyRow] = {
     "scip": TemplatePolicyRow(template="scip", keep_extra_columns=False),
 }
 _POLICY_ROWS: tuple[DatasetPolicyRow, ...] = (
-    DatasetPolicyRow(name="scip_metadata_v1", keep_extra_columns=False),
-    DatasetPolicyRow(name="scip_documents_v1", keep_extra_columns=False),
-    DatasetPolicyRow(name="scip_occurrences_v1", keep_extra_columns=False),
-    DatasetPolicyRow(name="scip_symbol_info_v1", keep_extra_columns=False),
-    DatasetPolicyRow(name="scip_symbol_relationships_v1", keep_extra_columns=False),
-    DatasetPolicyRow(name="scip_external_symbol_info_v1", keep_extra_columns=False),
-    DatasetPolicyRow(name="scip_diagnostics_v1", keep_extra_columns=False),
+    DatasetPolicyRow(name="scip_index_v1", keep_extra_columns=False),
 )
 _POLICY_BY_NAME: dict[str, DatasetPolicyRow] = {row.name: row for row in _POLICY_ROWS}
 

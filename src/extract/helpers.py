@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING, cast
 import ibis
 import pyarrow as pa
 
+from arrowdsl.core.array_iter import iter_table_rows
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
-from arrowdsl.core.ids import iter_table_rows
 from arrowdsl.core.interop import ScalarLike, SchemaLike, TableLike
 from arrowdsl.core.ordering import Ordering
 from arrowdsl.schema.build import empty_table, rows_to_table
@@ -134,13 +134,88 @@ def file_identity_row(file_ctx: FileContext) -> dict[str, str | None]:
 
     Returns
     -------
-    dict[str, object]
+    dict[str, str | None]
         Row fragment with file_id, path, and file_sha256.
     """
     return {
         "file_id": file_ctx.file_id,
         "path": file_ctx.path,
         "file_sha256": file_ctx.file_sha256,
+    }
+
+
+def attrs_map(values: Mapping[str, object] | None) -> list[tuple[str, str]]:
+    """Return map entries for nested Arrow map fields.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        List of key/value map entries.
+    """
+    if not values:
+        return []
+    return [(str(key), str(val)) for key, val in values.items() if val is not None]
+
+
+def pos_dict(line0: int | None, col: int | None) -> dict[str, int | None] | None:
+    """Return a position dict for nested span structs.
+
+    Returns
+    -------
+    dict[str, int | None] | None
+        Position mapping or ``None`` when empty.
+    """
+    if line0 is None and col is None:
+        return None
+    return {"line0": line0, "col": col}
+
+
+def byte_span_dict(byte_start: int | None, byte_len: int | None) -> dict[str, int | None] | None:
+    """Return a byte-span dict for nested span structs.
+
+    Returns
+    -------
+    dict[str, int | None] | None
+        Byte-span mapping or ``None`` when empty.
+    """
+    if byte_start is None and byte_len is None:
+        return None
+    return {"byte_start": byte_start, "byte_len": byte_len}
+
+
+@dataclass(frozen=True)
+class SpanSpec:
+    """Span specification for nested span structs."""
+
+    start_line0: int | None
+    start_col: int | None
+    end_line0: int | None
+    end_col: int | None
+    end_exclusive: bool | None
+    col_unit: str | None
+    byte_start: int | None = None
+    byte_len: int | None = None
+
+
+def span_dict(spec: SpanSpec) -> dict[str, object] | None:
+    """Return a span dict for nested span structs.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Span mapping or ``None`` when empty.
+    """
+    start = pos_dict(spec.start_line0, spec.start_col)
+    end = pos_dict(spec.end_line0, spec.end_col)
+    byte_span = byte_span_dict(spec.byte_start, spec.byte_len)
+    if start is None and end is None and byte_span is None and spec.col_unit is None:
+        return None
+    return {
+        "start": start,
+        "end": end,
+        "end_exclusive": spec.end_exclusive,
+        "col_unit": spec.col_unit,
+        "byte_span": byte_span,
     }
 
 
@@ -470,10 +545,13 @@ __all__ = [
     "ExtractExecutionContext",
     "ExtractMaterializeOptions",
     "FileContext",
+    "SpanSpec",
     "apply_evidence_projection",
     "apply_query_and_project",
     "ast_def_nodes",
     "ast_def_nodes_plan",
+    "attrs_map",
+    "byte_span_dict",
     "bytes_from_file_ctx",
     "empty_ibis_plan",
     "file_identity_row",
@@ -481,9 +559,11 @@ __all__ = [
     "iter_contexts",
     "iter_file_contexts",
     "materialize_extract_plan",
+    "pos_dict",
     "required_extractors",
     "requires_evidence",
     "requires_evidence_template",
+    "span_dict",
     "template_outputs",
     "text_from_file_ctx",
 ]

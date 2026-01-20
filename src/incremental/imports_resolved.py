@@ -7,7 +7,7 @@ from typing import cast
 
 import pyarrow as pa
 
-from arrowdsl.core.ids import iter_table_rows
+from arrowdsl.core.array_iter import iter_table_rows
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_arrays
 from incremental.registry_specs import dataset_schema

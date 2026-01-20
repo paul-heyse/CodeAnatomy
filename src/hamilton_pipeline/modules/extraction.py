@@ -11,8 +11,9 @@ import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
 
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import TableLike, pc
+from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.schema import empty_table
+from datafusion_engine.compute_ops import is_in
 from extract.ast_extract import extract_ast_tables
 from extract.bytecode_extract import (
     BytecodeExtractOptions,
@@ -184,7 +185,7 @@ def _filter_repo_files_by_ids(
     if not file_ids:
         return empty_table(table.schema)
     value_set = pa.array(list(file_ids), type=pa.string())
-    mask = pc.is_in(table["file_id"], value_set=value_set)
+    mask = is_in(table["file_id"], value_set=value_set)
     return table.filter(mask)
 
 
@@ -383,13 +384,7 @@ def cst_bundle(
     """Build the LibCST extraction bundle.
 
     The extractor should return a dict with keys:
-      - cst_parse_manifest
-      - cst_parse_errors
-      - cst_name_refs
-      - cst_imports
-      - cst_callsites
-      - cst_defs
-      - cst_type_exprs
+      - libcst_files
 
     Returns
     -------
@@ -440,9 +435,7 @@ def ast_bundle(
     _ = repo_root
     evidence_plan = extract_execution_context.evidence_plan
     if not template_outputs(evidence_plan, "ast"):
-        empty = _empty_bundle(tuple(name for name in AST_BUNDLE_OUTPUTS if name != "ast_defs"))
-        empty["ast_defs"] = empty_table(dataset_schema("py_ast_nodes_v1"))
-        return empty
+        return _empty_bundle(AST_BUNDLE_OUTPUTS)
     tables = extract_ast_tables(
         repo_files=repo_files_extract,
         file_contexts=file_contexts,
@@ -585,7 +578,7 @@ def symtables(
     """
     _ = repo_root
     if not template_outputs(evidence_plan, "symtable"):
-        return empty_table(dataset_schema("py_sym_scopes_v1"))
+        return empty_table(dataset_schema("symtable_files_v1"))
     options = _options_for_template(
         "symtable",
         plan=evidence_plan,
@@ -618,7 +611,7 @@ def bytecode(
     """
     _ = repo_root
     if not template_outputs(evidence_plan, "bytecode"):
-        return empty_table(dataset_schema("py_bc_instructions_v1"))
+        return empty_table(dataset_schema("bytecode_files_v1"))
     return extract_bytecode_table(
         repo_files=repo_files_extract,
         file_contexts=file_contexts,
@@ -667,12 +660,7 @@ def bytecode_bundle(
         ),
     )
     tables = {
-        "py_bc_code_units": result.py_bc_code_units,
-        "py_bc_instructions": result.py_bc_instructions,
-        "py_bc_exception_table": result.py_bc_exception_table,
-        "py_bc_blocks": result.py_bc_blocks,
-        "py_bc_cfg_edges": result.py_bc_cfg_edges,
-        "py_bc_errors": result.py_bc_errors,
+        "bytecode_files": result.bytecode_files,
     }
     return dict(
         _apply_extract_post_kernels(

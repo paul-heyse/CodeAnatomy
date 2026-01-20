@@ -24,7 +24,13 @@ from datafusion_engine.compile_options import (
 )
 from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_planners
 from datafusion_engine.function_factory import function_factory_payloads, install_function_factory
-from datafusion_engine.schema_registry import register_all_schemas
+from datafusion_engine.schema_registry import (
+    missing_schema_names,
+    nested_schema_names,
+    register_all_schemas,
+    schema_names,
+    validate_nested_types,
+)
 from datafusion_engine.udf_registry import DataFusionUdfSnapshot, register_datafusion_udfs
 from engine.plan_cache import PlanCache
 from registry_common.arrow_payloads import payload_hash
@@ -1277,11 +1283,35 @@ class DataFusionRuntimeProfile:
         snapshot = register_datafusion_udfs(ctx)
         self._record_udf_snapshot(snapshot)
 
+    def _record_schema_registry_validation(self, ctx: SessionContext) -> None:
+        if self.diagnostics_sink is None:
+            return
+        if not self.enable_information_schema:
+            return
+        missing = missing_schema_names(ctx, expected=schema_names())
+        type_errors: dict[str, str] = {}
+        for name in nested_schema_names():
+            try:
+                validate_nested_types(ctx, name)
+            except (RuntimeError, TypeError, ValueError) as exc:
+                type_errors[name] = str(exc)
+        if not missing and not type_errors:
+            return
+        self.diagnostics_sink.record_artifact(
+            "datafusion_schema_registry_validation_v1",
+            {
+                "event_time_unix_ms": int(time.time() * 1000),
+                "missing": list(missing),
+                "type_errors": type_errors,
+            },
+        )
+
     def _install_schema_registry(self, ctx: SessionContext) -> None:
         """Register canonical nested schemas on the session context."""
         if not self.enable_schema_registry:
             return
         register_all_schemas(ctx)
+        self._record_schema_registry_validation(ctx)
 
     def _prepare_statements(self, ctx: SessionContext) -> None:
         """Prepare SQL statements when configured."""

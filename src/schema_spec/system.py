@@ -39,6 +39,7 @@ from arrowdsl.schema.schema import (
 )
 from arrowdsl.schema.validation import ArrowValidationOptions, validate_table
 from arrowdsl.spec.io import read_spec_table
+from datafusion_engine.schema_registry import is_nested_dataset
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from ibis_engine.plan import IbisPlan
@@ -1104,6 +1105,8 @@ class SchemaRegistry:
         DatasetSpec
             Registered dataset spec.
         """
+        if self is GLOBAL_SCHEMA_REGISTRY and is_nested_dataset(spec.name):
+            return spec
         existing = self.dataset_specs.get(spec.name)
         if existing is not None:
             return existing
@@ -1160,6 +1163,8 @@ class SchemaRegistry:
         )
         for spec in dataset_specs.values():
             self.register_dataset(spec)
+        if self is GLOBAL_SCHEMA_REGISTRY:
+            prune_nested_dataset_specs(self)
         return dataset_specs
 
     def register_from_paths(
@@ -1203,6 +1208,20 @@ def register_dataset_spec(
     """
     target = registry or GLOBAL_SCHEMA_REGISTRY
     return target.register_dataset(spec)
+
+
+def prune_nested_dataset_specs(registry: SchemaRegistry) -> SchemaRegistry:
+    """Remove nested dataset specs from a registry.
+
+    Returns
+    -------
+    SchemaRegistry
+        Registry with nested dataset specs removed.
+    """
+    names = [name for name in registry.dataset_specs if is_nested_dataset(name)]
+    for name in names:
+        registry.dataset_specs.pop(name, None)
+    return registry
 
 
 @dataclass(frozen=True)
@@ -1278,6 +1297,7 @@ __all__ = [
     "make_contract_spec",
     "make_dataset_spec",
     "make_table_spec",
+    "prune_nested_dataset_specs",
     "register_dataset_spec",
     "table_spec_from_schema",
     "validate_arrow_table",

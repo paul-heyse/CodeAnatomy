@@ -9,7 +9,7 @@ from cpg.registry_builders import build_dataset_spec
 from cpg.registry_readers import dataset_rows_from_table
 from cpg.registry_rows import DatasetRow
 from cpg.registry_tables import dataset_rows_table
-from datafusion_engine.schema_registry import schema_for
+from datafusion_engine.schema_registry import is_nested_dataset, nested_schema_for, schema_for
 from registry_common.dataset_registry import DatasetAccessors, DatasetRegistry
 
 if TYPE_CHECKING:
@@ -56,6 +56,8 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Arrow schema for the dataset.
     """
+    if is_nested_dataset(name):
+        return nested_schema_for(name, allow_derived=True)
     try:
         return schema_for(name)
     except KeyError:

@@ -10,65 +10,177 @@ Make all 1:1 nested datasets intrinsic to their root complex schemas so schema a
 - Do not introduce a new nested schema model class; use plain dicts and helper functions.
 
 ## Scope Item 1: Inventory and classify intrinsic vs derived outputs
+Status: Completed
 Create a single index that captures dataset name, root schema, nested path, and whether the dataset
 is intrinsic (direct projection) or derived (adds computed columns).
 
 Representative code pattern:
 ```python
-NESTED_DATASET_INDEX: dict[str, dict[str, str]] = {
-    "cst_parse_manifest": {"root": "libcst_files_v1", "path": "parse_manifest", "role": "intrinsic"},
-    "cst_parse_errors": {"root": "libcst_files_v1", "path": "parse_errors", "role": "intrinsic"},
-    "cst_name_refs": {"root": "libcst_files_v1", "path": "name_refs", "role": "intrinsic"},
-    "cst_imports": {"root": "libcst_files_v1", "path": "imports", "role": "intrinsic"},
-    "cst_callsites": {"root": "libcst_files_v1", "path": "callsites", "role": "intrinsic"},
-    "cst_defs": {"root": "libcst_files_v1", "path": "defs", "role": "intrinsic"},
-    "cst_type_exprs": {"root": "libcst_files_v1", "path": "type_exprs", "role": "intrinsic"},
-    "ast_nodes": {"root": "ast_files_v1", "path": "nodes", "role": "intrinsic"},
-    "ast_edges": {"root": "ast_files_v1", "path": "edges", "role": "intrinsic"},
-    "ast_errors": {"root": "ast_files_v1", "path": "errors", "role": "intrinsic"},
-    "ts_nodes": {"root": "tree_sitter_files_v1", "path": "nodes", "role": "intrinsic"},
-    "ts_errors": {"root": "tree_sitter_files_v1", "path": "errors", "role": "intrinsic"},
-    "ts_missing": {"root": "tree_sitter_files_v1", "path": "missing", "role": "intrinsic"},
-    "symtable_scopes": {"root": "symtable_files_v1", "path": "blocks", "role": "derived"},
-    "symtable_symbols": {"root": "symtable_files_v1", "path": "blocks.symbols", "role": "derived"},
-    "symtable_scope_edges": {"root": "symtable_files_v1", "path": "blocks", "role": "derived"},
-    "scip_metadata": {"root": "scip_index_v1", "path": "metadata", "role": "intrinsic"},
-    "scip_documents": {"root": "scip_index_v1", "path": "documents", "role": "intrinsic"},
-    "scip_occurrences": {"root": "scip_index_v1", "path": "documents.occurrences", "role": "derived"},
-    "scip_symbol_information": {"root": "scip_index_v1", "path": "symbols", "role": "intrinsic"},
+NESTED_DATASET_INDEX: dict[str, dict[str, object]] = {
+    "cst_nodes": {
+        "root": "libcst_files_v1",
+        "path": "nodes",
+        "role": "intrinsic",
+        "context": {},
+    },
+    "cst_edges": {
+        "root": "libcst_files_v1",
+        "path": "edges",
+        "role": "intrinsic",
+        "context": {},
+    },
+    "cst_parse_manifest": {
+        "root": "libcst_files_v1",
+        "path": "parse_manifest",
+        "role": "intrinsic",
+        "context": {},
+    },
+    "cst_parse_errors": {
+        "root": "libcst_files_v1",
+        "path": "parse_errors",
+        "role": "derived",
+        "context": {},
+    },
+    "cst_name_refs": {
+        "root": "libcst_files_v1",
+        "path": "name_refs",
+        "role": "derived",
+        "context": {},
+    },
+    "cst_imports": {
+        "root": "libcst_files_v1",
+        "path": "imports",
+        "role": "derived",
+        "context": {},
+    },
+    "cst_callsites": {
+        "root": "libcst_files_v1",
+        "path": "callsites",
+        "role": "derived",
+        "context": {},
+    },
+    "cst_defs": {
+        "root": "libcst_files_v1",
+        "path": "defs",
+        "role": "derived",
+        "context": {},
+    },
+    "cst_type_exprs": {
+        "root": "libcst_files_v1",
+        "path": "type_exprs",
+        "role": "derived",
+        "context": {},
+    },
+    "ast_nodes": {"root": "ast_files_v1", "path": "nodes", "role": "derived", "context": {}},
+    "ast_edges": {"root": "ast_files_v1", "path": "edges", "role": "derived", "context": {}},
+    "ast_errors": {"root": "ast_files_v1", "path": "errors", "role": "derived", "context": {}},
+    "ts_nodes": {"root": "tree_sitter_files_v1", "path": "nodes", "role": "derived", "context": {}},
+    "ts_errors": {
+        "root": "tree_sitter_files_v1",
+        "path": "errors",
+        "role": "derived",
+        "context": {},
+    },
+    "ts_missing": {
+        "root": "tree_sitter_files_v1",
+        "path": "missing",
+        "role": "derived",
+        "context": {},
+    },
+    "symtable_scopes": {
+        "root": "symtable_files_v1",
+        "path": "blocks",
+        "role": "derived",
+        "context": {},
+    },
+    "symtable_symbols": {
+        "root": "symtable_files_v1",
+        "path": "blocks.symbols",
+        "role": "derived",
+        "context": {"block_id": "blocks.block_id"},
+    },
+    "symtable_scope_edges": {
+        "root": "symtable_files_v1",
+        "path": "blocks",
+        "role": "derived",
+        "context": {},
+    },
+    "scip_metadata": {"root": "scip_index_v1", "path": "metadata", "role": "derived", "context": {}},
+    "scip_documents": {
+        "root": "scip_index_v1",
+        "path": "documents",
+        "role": "derived",
+        "context": {},
+    },
+    "scip_occurrences": {
+        "root": "scip_index_v1",
+        "path": "documents.occurrences",
+        "role": "derived",
+        "context": {"relative_path": "documents.relative_path"},
+    },
+    "scip_symbol_information": {
+        "root": "scip_index_v1",
+        "path": "symbols",
+        "role": "derived",
+        "context": {},
+    },
     "scip_external_symbol_information": {
         "root": "scip_index_v1",
         "path": "external_symbols",
-        "role": "intrinsic",
+        "role": "derived",
+        "context": {},
     },
     "scip_symbol_relationships": {
         "root": "scip_index_v1",
         "path": "symbols.relationships",
         "role": "derived",
+        "context": {"parent_symbol": "symbols.symbol"},
     },
     "scip_diagnostics": {
         "root": "scip_index_v1",
         "path": "documents.occurrences.diagnostics",
         "role": "derived",
+        "context": {
+            "relative_path": "documents.relative_path",
+            "occ_range": "documents.occurrences.range",
+        },
     },
-    "py_bc_code_units": {"root": "bytecode_files_v1", "path": "code_objects", "role": "intrinsic"},
+    "py_bc_code_units": {
+        "root": "bytecode_files_v1",
+        "path": "code_objects",
+        "role": "derived",
+        "context": {},
+    },
     "py_bc_instructions": {
         "root": "bytecode_files_v1",
         "path": "code_objects.instructions",
         "role": "derived",
+        "context": {"code_id": "code_objects.code_id"},
     },
-    "py_bc_blocks": {"root": "bytecode_files_v1", "path": "code_objects.blocks", "role": "derived"},
+    "py_bc_blocks": {
+        "root": "bytecode_files_v1",
+        "path": "code_objects.blocks",
+        "role": "derived",
+        "context": {"code_id": "code_objects.code_id"},
+    },
     "py_bc_cfg_edges": {
         "root": "bytecode_files_v1",
         "path": "code_objects.cfg_edges",
         "role": "derived",
+        "context": {"code_id": "code_objects.code_id"},
     },
     "bytecode_exception_table": {
         "root": "bytecode_files_v1",
         "path": "code_objects.exception_table",
         "role": "derived",
+        "context": {"code_id": "code_objects.code_id"},
     },
-    "bytecode_errors": {"root": "bytecode_files_v1", "path": "errors", "role": "intrinsic"},
+    "bytecode_errors": {
+        "root": "bytecode_files_v1",
+        "path": "errors",
+        "role": "derived",
+        "context": {},
+    },
 }
 ```
 
@@ -78,11 +190,12 @@ Target file list:
 - `docs/plans/datafusion_nested_schema_integration_plan.md`
 
 Implementation checklist:
-- [ ] Enumerate all nested list/struct fields per root schema.
-- [ ] Tag each dataset as intrinsic or derived overlay.
-- [ ] Capture multi-level paths (SCIP occurrences/diagnostics, symtable symbols, bytecode code objects).
+- [x] Enumerate all nested list/struct fields per root schema.
+- [x] Tag each dataset as intrinsic or derived overlay.
+- [x] Capture multi-level paths (SCIP occurrences/diagnostics, symtable symbols, bytecode code objects).
 
 ## Scope Item 2: Add a nested registry with naming rules
+Status: Completed
 Introduce a minimal registry that preserves existing dataset names and allows multiple outputs per
 path (e.g., `symtable_scopes` and `symtable_scope_edges` both derive from `blocks`).
 
@@ -98,9 +211,11 @@ def nested_dataset_names() -> tuple[str, ...]:
 
 def datasets_for_path(root: str, path: str) -> tuple[str, ...]:
     return tuple(
-        name
-        for name, spec in NESTED_DATASET_INDEX.items()
-        if spec["root"] == root and spec["path"] == path
+        sorted(
+            name
+            for name, spec in NESTED_DATASET_INDEX.items()
+            if spec["root"] == root and spec["path"] == path
+        )
     )
 ```
 
@@ -108,11 +223,13 @@ Target file list:
 - `src/datafusion_engine/schema_registry.py` or `src/datafusion_engine/nested_registry.py`
 
 Implementation checklist:
-- [ ] Preserve existing dataset names from `query_fragments.py` and pipeline call sites.
-- [ ] Provide lookup helpers for dataset name -> (root, path).
-- [ ] Allow multiple dataset names per nested path.
+- [x] Preserve existing dataset names from `query_fragments.py` and pipeline call sites.
+- [x] Provide lookup helpers for dataset name -> (root, path).
+- [x] Allow multiple dataset names per nested path.
+- [x] Add a reverse lookup helper for root/path -> dataset names.
 
 ## Scope Item 3: Derive child schemas from root structs
+Status: Completed
 Generate child schemas by projecting the nested struct fields and inheriting identity columns.
 
 Representative code pattern:
@@ -132,11 +249,13 @@ Target file list:
 - `src/normalize/registry_specs.py` (schema resolution)
 
 Implementation checklist:
-- [ ] Implement `struct_for_path` to traverse list<struct> paths.
-- [ ] Define identity columns per dataset (e.g., file_id/path for file-backed roots, index_id/path for SCIP).
-- [ ] Make `schema_for` resolve nested names via `nested_schema_for`.
+- [x] Implement `struct_for_path` to traverse list<struct> paths.
+- [x] Define identity columns per dataset (e.g., file_id/path for file-backed roots, index_id/path for SCIP).
+- [x] Make `schema_for` resolve nested names via `nested_schema_for`.
+- [x] Expand intrinsic dataset coverage for nested schema registration beyond `cst_parse_manifest`.
 
 ## Scope Item 4: Build base SQL for intrinsic nested datasets
+Status: Completed
 Create a single `nested_base_sql` builder to unnest the root path and project base columns.
 
 Representative code pattern:
@@ -164,11 +283,12 @@ Target file list:
 - `src/datafusion_engine/query_fragments.py`
 
 Implementation checklist:
-- [ ] Generate base SQL for list paths and struct-only paths (e.g., `scip_metadata`).
-- [ ] Support multi-level list paths (documents.occurrences, blocks.symbols, code_objects.*).
-- [ ] Prefer identity columns derived from the registry when row structs lack them.
+- [x] Generate base SQL for list paths and struct-only paths (e.g., `scip_metadata`).
+- [x] Support multi-level list paths (documents.occurrences, blocks.symbols, code_objects.*).
+- [x] Prefer identity columns derived from the registry when row structs lack them.
 
 ## Scope Item 5: Refactor query fragments to layer on base SQL
+Status: Completed
 Keep derived columns (hash ids, span conversions) but express them in terms of the base nested SQL.
 
 Representative code pattern:
@@ -200,11 +320,12 @@ Target file list:
 - `src/datafusion_engine/query_fragments.py`
 
 Implementation checklist:
-- [ ] Replace direct unnest SQL with base SQL CTEs.
-- [ ] Keep existing derived columns and hashes intact.
-- [ ] Confirm no dataset name drift (names remain identical at call sites).
+- [x] Replace direct unnest SQL with base SQL CTEs.
+- [x] Keep existing derived columns and hashes intact.
+- [x] Confirm no dataset name drift (names remain identical at call sites).
 
 ## Scope Item 6: Integrate nested schema lookup across the code base
+Status: Completed
 Ensure all schema lookups and checks can resolve nested datasets without a static mapping list.
 
 Representative code pattern:
@@ -223,12 +344,13 @@ Target file list:
 - `src/extract/*_extract.py` (schema resolution paths)
 
 Implementation checklist:
-- [ ] Route nested dataset names through the nested registry.
-- [ ] Keep root registration behavior unchanged.
-- [ ] Update any schema_name listings to include derived nested names.
-- [ ] Preserve `register_nested_table` usage for root table registration prior to fragment execution.
+- [x] Route nested dataset names through the nested registry.
+- [x] Keep root registration behavior unchanged.
+- [x] Update schema name listings to include intrinsic nested names.
+- [x] Preserve `register_nested_table` usage for root table registration prior to fragment execution.
 
 ## Scope Item 7: Tests and verification
+Status: Completed
 Add unit tests to validate schema derivation and base SQL generation for representative datasets.
 
 Representative code pattern:
@@ -254,12 +376,13 @@ Target file list:
 - `tests/unit/test_datafusion_nested_registry.py`
 
 Implementation checklist:
-- [ ] Validate nested schema field presence and ordering.
-- [ ] Validate SQL contains expected unnest paths.
-- [ ] Add one multi-level path test (scip occurrences or symtable symbols).
-- [ ] Add one struct-only path test (scip metadata).
+- [x] Validate nested schema field presence and ordering.
+- [x] Validate SQL contains expected unnest paths.
+- [x] Add one multi-level path test (scip occurrences or symtable symbols).
+- [x] Add one struct-only path test (scip metadata).
 
 ## Scope Item 8: Catalog + schema provider integration
+Status: Completed
 Extend the existing runtime schema registry install path so nested datasets are registered alongside
 root schemas when `enable_schema_registry` is enabled.
 
@@ -280,11 +403,12 @@ Target file list:
 - `src/datafusion_engine/schema_registry.py`
 
 Implementation checklist:
-- [ ] Extend `register_all_schemas` to register nested dataset schemas.
-- [ ] Wire nested registration into `DataFusionRuntimeProfile._install_schema_registry`.
-- [ ] Rely on existing `enable_information_schema` for introspection.
+- [x] Extend `register_all_schemas` to register intrinsic nested dataset schemas.
+- [x] Wire nested registration into `DataFusionRuntimeProfile._install_schema_registry`.
+- [x] Rely on existing `enable_information_schema` for introspection.
 
 ## Scope Item 9: Schema metadata + type introspection guardrails
+Status: Completed (metadata + arrow_cast guardrails added; may expand per new drift cases)
 Use Arrow metadata and DataFusion `arrow_typeof`/`arrow_cast` to enforce schema consistency and detect
 drift in nested projections.
 
@@ -307,54 +431,78 @@ Target file list:
 - `src/arrowdsl/core/schema_constants.py`
 
 Implementation checklist:
-- [ ] Encode schema name/version metadata on root schemas using `SCHEMA_META_NAME`/`SCHEMA_META_VERSION`.
-- [ ] Add a type-check hook for nested datasets in debug/diagnostic runs.
-- [ ] Use `arrow_cast` in fragments when types can drift (e.g., map attr values).
+- [x] Encode schema name/version metadata on root schemas using `SCHEMA_META_NAME`/`SCHEMA_META_VERSION`.
+- [x] Add a type-check hook for nested datasets in debug/diagnostic runs.
+- [x] Use `arrow_cast` in fragments where types can drift (map attr values in bytecode).
 
 ## Scope Item 10: External table DDL for root schemas
+Status: Completed
 Register root nested schemas using explicit `CREATE EXTERNAL TABLE` statements to codify partitions,
 ordering, and unbounded semantics where applicable.
 
 Representative code pattern:
 ```python
-def register_root_external_table(
+def register_dataset_df(
     ctx: SessionContext,
-    spec: DatasetSpec,
     *,
+    name: str,
     location: DatasetLocation,
-) -> None:
-    ddl = spec.table_spec.to_create_external_table_sql(
-        ExternalTableConfig(
-            location=str(location.path),
-            file_format="PARQUET",
-            partitioned_by=spec.table_spec.key_fields,
-            dialect="datafusion",
-        ),
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+) -> DataFrame:
+    ddl = datafusion_external_table_sql(
+        name=name,
+        location=location,
+        runtime_profile=runtime_profile,
     )
-    ctx.sql(ddl).collect()
+    if ddl is not None and name in SCHEMA_REGISTRY:
+        ctx.sql(ddl).collect()
+        return ctx.table(name)
+    return _fallback_registration(ctx, name=name, location=location)
 ```
 
 Target file list:
-- `src/datafusion_engine/runtime.py`
-- `src/schema_spec/system.py`
+- `src/datafusion_engine/registry_bridge.py`
 
 Implementation checklist:
-- [ ] Translate ordering/partitioning metadata into DDL.
-- [ ] Add optional unbounded registration for streaming-safe sources.
-- [ ] Use dataset locations from the registry/manifest, not table names.
-- [ ] Preserve current registration paths for in-memory tables.
+- [x] Translate ordering/partitioning metadata into DDL.
+- [x] Add optional unbounded registration for streaming-safe sources.
+- [x] Use dataset locations from the registry/manifest, not table names.
+- [x] Preserve current registration paths for in-memory tables.
 
 ## Scope Item 11: Structured construction utilities for nested outputs
+Status: Completed
 Use `named_struct`, `struct`, and map helpers in SQL fragments to standardize nested output
 construction and reduce ad-hoc JSON/string encodings.
 
 Representative code pattern:
 ```python
-def build_span_struct(prefix: str) -> str:
-    return (
-        \"named_struct('start', named_struct('line0', {p}.start_line, 'col', {p}.start_col), \"
-        \"'end', named_struct('line0', {p}.end_line, 'col', {p}.end_col))\".format(p=prefix)
+def _named_struct(fields: Sequence[tuple[str, str]]) -> str:
+    parts = \", \".join(f\"'{name}', {expr}\" for name, expr in fields)
+    return f\"named_struct({parts})\"
+
+
+def bytecode_instructions_sql(table: str = \"bytecode_files_v1\") -> str:
+    base = nested_base_sql(\"py_bc_instructions\", table=table)
+    attrs_struct = _named_struct(
+        (
+            (\"instr_index\", _map_cast(\"base.attrs\", \"instr_index\", \"INT\")),
+            (\"argval_str\", _map_value(\"base.attrs\", \"argval_str\")),
+            (\"starts_line\", _map_cast(\"base.attrs\", \"starts_line\", \"INT\")),
+        )
     )
+    return f\"\"\"
+    WITH base AS ({base}),
+    decorated AS (
+      SELECT
+        base.*,
+        {attrs_struct} AS attrs_struct
+      FROM base
+    )
+    SELECT
+      decorated.attrs_struct['instr_index'] AS instr_index,
+      decorated.attrs_struct['argval_str'] AS argval_str
+    FROM decorated
+    \"\"\"
 ```
 
 Target file list:
@@ -362,19 +510,29 @@ Target file list:
 - `src/datafusion_engine/nested_registry.py` (if introduced)
 
 Implementation checklist:
-- [ ] Add helper functions to build struct/map expressions in SQL fragments.
-- [ ] Refactor fragments that currently inline nested struct access.
-- [ ] Keep derived ids and hashes unchanged.
+- [x] Add helper functions to build struct/map expressions in SQL fragments.
+- [x] Refactor fragments that currently inline nested struct access.
+- [x] Keep derived ids and hashes unchanged.
 
 ## Scope Item 12: Introspection-based validation for nested datasets
+Status: Completed
 Use `information_schema` to validate that derived nested datasets resolve correctly.
 
 Representative code pattern:
 ```python
-def assert_nested_dataset_registered(ctx: SessionContext, name: str) -> None:
-    rows = ctx.sql(\"SELECT table_name FROM information_schema.tables\").collect()
-    if name not in {row[0].as_py() for row in rows}:
-        raise ValueError(f\"Missing nested dataset: {name}\")
+def datafusion_schema_registry_validation_table(
+    records: Sequence[Mapping[str, object]],
+) -> pa.Table:
+    rows = []
+    for record in records:
+        for name in record.get(\"missing\", []):
+            rows.append(
+                {
+                    \"schema_name\": name,
+                    \"issue_type\": \"missing\",
+                }
+            )
+    return table_from_rows(DATAFUSION_SCHEMA_REGISTRY_VALIDATION_V1, rows)
 ```
 
 Target file list:
@@ -382,13 +540,13 @@ Target file list:
 - `src/hamilton_pipeline/modules/outputs.py`
 
 Implementation checklist:
-- [ ] Add a diagnostic step that enumerates nested datasets.
-- [ ] Emit a single report table with missing or mismatched schemas.
-- [ ] Wire diagnostics into existing output reporting.
+- [x] Add a diagnostic step that enumerates nested datasets.
+- [x] Emit a single report table with missing or mismatched schemas.
+- [x] Wire diagnostics into existing output reporting.
 
 ## Deliverables
-- Central nested dataset index aligned with `query_fragments.py`.
-- Nested schema derivation helpers and identity column resolution.
+- Central nested dataset index aligned with `query_fragments.py` (LibCST nodes/edges included).
+- Nested schema derivation helpers and identity column resolution with intrinsic registrations expanded.
 - Base SQL builder for intrinsic nested datasets.
 - Query fragments refactored to use base SQL.
 - Schema resolution integrated for nested dataset names and runtime registration.

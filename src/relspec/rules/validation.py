@@ -22,6 +22,7 @@ from datafusion_engine.bridge import sqlglot_to_datafusion
 from datafusion_engine.compile_options import DataFusionCompileOptions
 from datafusion_engine.kernel_registry import kernel_capability
 from datafusion_engine.runtime import snapshot_plans
+from datafusion_engine.schema_registry import is_nested_dataset, nested_schema_for
 from engine.session import EngineSession
 from extract.registry_bundles import bundle
 from extract.registry_pipelines import post_kernels_for_postprocess
@@ -1380,6 +1381,15 @@ def _schema_map_for_inputs(
     schema_map: dict[str, dict[str, str]] = {}
     missing: list[str] = []
     for name in dict.fromkeys(inputs):
+        if is_nested_dataset(name):
+            schema = nested_schema_for(name, allow_derived=True)
+            schema_map[name] = {field.name: str(field.type) for field in schema}
+            for field in schema:
+                if field.name in seen:
+                    continue
+                seen.add(field.name)
+                fields.append(field)
+            continue
         spec = registry.dataset_specs.get(name)
         if spec is None:
             missing.append(name)
@@ -1433,6 +1443,8 @@ def _schema_for_dataset(
     SchemaLike | None
         Schema for the dataset when available.
     """
+    if is_nested_dataset(name):
+        return nested_schema_for(name, allow_derived=True)
     spec = registry.dataset_specs.get(name)
     if spec is None:
         return None

@@ -11,6 +11,7 @@ from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.schema.schema import SchemaTransform
 from arrowdsl.schema.schema import infer_schema_from_tables as arrowdsl_infer_tables
 from arrowdsl.schema.schema import unify_schemas as arrowdsl_unify_schemas
+from datafusion_engine.schema_registry import is_nested_dataset, nested_schema_for
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
 
 
@@ -86,6 +87,8 @@ def infer_schema_or_registry(
     present = [table for table in tables if table is not None and table.column_names]
     if present:
         return infer_schema_from_tables(present, opts=opts)
+    if is_nested_dataset(name):
+        return nested_schema_for(name, allow_derived=True)
     spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(name)
     if spec is not None:
         return spec.table_spec.to_arrow_schema()

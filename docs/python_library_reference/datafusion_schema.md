@@ -2191,3 +2191,1616 @@ If you want, I can also sketch a concrete “CPG registry table provider” inte
 [7]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html "TableProvider in datafusion::datasource - Rust"
 [8]: https://github.com/apache/arrow-datafusion/issues/2848?utm_source=chatgpt.com "Implement \"SHOW CREATE TABLE\" for external tables"
 [9]: https://datafusion.apache.org/library-user-guide/custom-table-providers.html "Custom Table Provider — Apache DataFusion  documentation"
+
+Below are *additional* schema-centric capabilities in Apache DataFusion (Rust + datafusion-python) that are easy to miss, organized exactly along your 5 areas.
+
+---
+
+## 1) Schema inference capabilities you may not be exploiting yet
+
+### A. SQL-level schema inference is more configurable than it looks
+
+* **`CREATE EXTERNAL TABLE ... STORED AS CSV`**: DataFusion can infer the schema by scanning a subset of the file (you don’t have to provide column definitions). ([Apache DataFusion][1])
+* **Inference scan depth is tunable** via CSV “format options”: there’s an option to control **the maximum number of records scanned** to infer schema; if set to **0**, inference is disabled and everything comes in as **Utf8/string**. ([Apache DataFusion][2])
+
+Why this matters for “inferential systems”:
+
+* You can run “fast-but-loose” inference in dev and “slow-but-stable” inference in prod by toggling a single setting.
+* You can deliberately disable inference to force a “contract-first” pipeline (everything strings → explicit casts / validation rules later).
+
+### B. Python APIs expose inference knobs directly (CSV/JSON/Listing tables)
+
+In **datafusion-python**, the `SessionContext` registration APIs expose:
+
+* `register_csv(..., schema: pyarrow.Schema | None = None, schema_infer_max_records=...)` (schema optional → infer if None). ([Apache DataFusion][3])
+* `register_json(..., schema: pyarrow.Schema | None = None, schema_infer_max_records=...)`. ([Apache DataFusion][3])
+* `register_listing_table(..., schema: pyarrow.Schema | None = None, ...)` for multi-file datasets. ([Apache DataFusion][3])
+
+This is significant for your nested `LIST<STRUCT>` CPG datasets:
+
+* You can choose **(a)** “infer from files” vs **(b)** “use a canonical Arrow schema object” without changing how queries are written—only how tables are registered.
+
+### C. Parquet-specific “schema inference/compat” behaviors (metadata gotchas)
+
+DataFusion has multiple “schema-ish” behaviors around Parquet:
+
+* A documented configuration option: **`datafusion.execution.parquet.skip_metadata`** — skip optional embedded metadata in the Parquet schema to help avoid schema conflicts when reading multiple files whose *types* are compatible but metadata differs. ([Apache DataFusion][4])
+* datafusion-python’s `register_parquet` includes `skip_metadata` for the same purpose. ([Apache DataFusion][3])
+
+If you store rich metadata in Arrow field metadata (common in “schema as object model” designs), this knob becomes an intentional lever:
+
+* In strict mode: keep metadata and treat mismatches as contract violations
+* In tolerant mode: skip metadata and treat it as non-binding “hints”
+
+### D. Partition inference is (literally) schema inference
+
+If you rely on Hive-style directory partitioning, DataFusion can infer partition columns and represent them in the table schema:
+
+* `datafusion.execution.listing_table_factory_infer_partitions = true` by default, and inferred partition columns “will be represented in the table schema.” ([Apache DataFusion][4])
+
+Related: `ListingOptions.validate_partitions` will infer partitions and compare them to your declared `PARTITIONED BY` columns to prevent corruption / mismatches. ([Docs.rs][5])
+
+### E. Concurrency controls for schema/stat inference at scale
+
+DataFusion exposes **`datafusion.execution.meta_fetch_concurrency`**: “Number of files to read in parallel when inferring schema and statistics.” ([Apache DataFusion][4])
+This is a big deal for “registry-backed” catalogs where table registration might touch many files.
+
+### F. “Schema inference” from non-file inputs (programmatic plans)
+
+A subtle but powerful inference surface:
+
+* `LogicalPlanBuilder::values(...)` **infers** the resulting schema from the provided values, and there’s also `values_with_schema` to force a schema. ([Docs.rs][6])
+
+This matters if you generate “derived tables” or “validation tables” programmatically.
+
+---
+
+## 2) Programmatic schema generation beyond “write a PyArrow schema”
+
+### A. DataFusion can generate schemas from in-memory Python objects (fast prototyping)
+
+In datafusion-python, `SessionContext` supports building DataFrames from Python-native structures:
+
+* `from_pydict(...)`, `from_pylist(...)` for constructing DataFrames (schema implied by the data). ([Apache DataFusion][3])
+  And registration of in-memory batches:
+* `register_record_batches(name, partitions=[...RecordBatch...])` → schema is whatever the batches carry. ([Apache DataFusion][3])
+
+This gives you a clean “schema generator” path:
+
+* parse LibCST/SCIP → produce Arrow `RecordBatch` with nested fields → register immediately (no intermediate files)
+
+### B. Dynamic table creation at runtime via factories (schema created “on demand”)
+
+DataFusion has a first-class trait for **creating `TableProvider`s at runtime from a URL**:
+
+* `TableProviderFactory`: “creates TableProviders at runtime given a URL… create a table ‘on the fly’ from a directory of files only when that name is referenced.” ([Docs.rs][7])
+
+There’s also a “dynamic file schema” module:
+
+* `datafusion::datasource::dynamic_file` includes an **`UrlTableFactory`** that can create a `ListingTable` from a URL. ([Docs.rs][8])
+
+This is extremely aligned with your “object-oriented schema” goal:
+
+* treat **table names as resolvable objects** (`repo://.../path@rev`) → factory creates provider → provider declares schema (inferred or registry-driven)
+
+### C. UDTFs / Table Functions generate table providers (and therefore schemas)
+
+In datafusion-python:
+
+* `TableFunction`: “Table functions generate new table providers based on the input expressions.” ([Apache DataFusion][9])
+
+In Rust docs:
+
+* Implementing a UDTF means implementing `TableFunctionImpl::call` returning `Arc<dyn TableProvider>`. ([Apache DataFusion][10])
+
+This is a “schema generation API” hiding in plain sight:
+
+* `udtf_parse_python(path, rev)` could return a provider whose schema depends on flags (e.g., include tokens? include whitespace spans?)
+
+### D. DDL as programmatic schema generation: “CREATE EXTERNAL TABLE … (explicit schema)”
+
+DataFusion supports providing schema explicitly in `CREATE EXTERNAL TABLE ...` (not only infer). ([Apache DataFusion][1])
+This gives you a declarative contract path you can generate automatically from your registry.
+
+---
+
+## 3) Schema hierarchy and metamapping capabilities you can leverage more
+
+### A. The real “metamapping” model: CatalogProviderList → CatalogProvider → SchemaProvider → TableProvider
+
+DataFusion explicitly defines the hierarchy:
+
+* `CatalogProviderList` contains `CatalogProvider`s
+* a `CatalogProvider` contains `SchemaProvider`s
+* a `SchemaProvider` contains `TableProvider`s ([Apache DataFusion][11])
+
+This is the core mapping surface for your registry/metastore design.
+
+### B. Asynchronous schema/table lookup (for remote metastores)
+
+DataFusion provides an **asynchronous `SchemaProvider` table method**, specifically because real providers often fetch metadata remotely. ([Apache DataFusion][11])
+If your registry lookup is a DB/network call, this is the intended hook.
+
+### C. Python has explicit Catalog/Schema provider abstractions
+
+datafusion-python exposes:
+
+* `CatalogProvider` and `SchemaProvider` as abstract base classes for Python-based providers ([Apache DataFusion][12])
+  and in-memory “default” implementations:
+* `Catalog.memory_catalog()` and `Schema.memory_schema()` ([Apache DataFusion][12])
+
+This is relevant because you can prototype the registry-backed catalog **entirely in Python**, then move performance-critical parts to Rust later.
+
+### D. Session defaults + information_schema: “metamapping introspection”
+
+datafusion-python `SessionConfig` includes:
+
+* creating default catalog / schema objects (`with_create_default_catalog_and_schema`) ([Apache DataFusion][3])
+* enabling/disabling `information_schema` (`with_information_schema`) ([Apache DataFusion][3])
+
+And DataFusion supports the ISO SQL `information_schema` views and `SHOW TABLES` / `SHOW COLUMNS`. ([Apache DataFusion][13])
+
+For dynamic, adaptive systems, this becomes your “reflection API”:
+
+* your orchestrator can query `information_schema.columns` to auto-build projections, validators, join keys, etc.
+
+---
+
+## 4) Creating rules and programmatic actions derived from schemas
+
+This is where DataFusion starts to look like a compiler framework (which matches your “schema drives behavior” thesis).
+
+### A. DFSchema is more than Arrow Schema (qualifiers + functional dependencies)
+
+DataFusion’s `DFSchema` extends Arrow’s `Schema` with:
+
+* **column qualifiers** (multi-part: table/schema/catalog)
+* **functional dependencies** (relationships between attributes) ([Apache DataFusion][14])
+
+This is “metamapping fuel”:
+
+* qualifiers let you build unambiguous resolution across many datasets
+* functional dependencies can support smarter rule-based optimizations / validations (even if you implement the rules yourself)
+
+### B. Expression rewriting + OptimizerRule hooks (schema-aware rewriting)
+
+DataFusion documents:
+
+* rewriting `Expr`s (transforming one expression tree into another) ([Apache DataFusion][14])
+* implementing an `OptimizerRule` to rewrite `Expr`s inside logical plans ([Apache DataFusion][14])
+  and the optimizer framework:
+* DataFusion has many `OptimizerRule`s and `PhysicalOptimizerRule`s, and can rewrite plans/expressions for performance. ([Apache DataFusion][15])
+
+How this connects to schema-derived actions:
+
+* “If query touches `nodes.attrs['name']`, rewrite to `nodes.attrs->>'name'`” (or your preferred canonical accessor)
+* “If span struct is present, automatically inject a projection that normalizes 1-based vs 0-based spans”
+* “If querying edges, automatically rewrite into an UNNEST + join pattern”
+
+### C. Provider-level schema metadata = hooks for defaults, provenance, constraints
+
+The `TableProvider` trait exposes schema-adjacent metadata methods:
+
+* `constraints()` (if supported) ([Docs.rs][16])
+* `get_column_default(column)` ([Docs.rs][16])
+* `get_table_definition()` (DDL provenance) ([Docs.rs][16])
+* `get_logical_plan()` (if the “table” is actually a view/logical plan) ([Docs.rs][16])
+
+These are exactly the surfaces you need for an “OO schema” layer:
+
+* **defaults**: your registry can specify default values for missing nested fields
+* **constraints**: enforce that `cst_id` unique within file, etc.
+* **DDL provenance**: persist how the table was created (or your “contract version”)
+* **logical plan**: treat computed datasets as first-class schema objects
+
+### D. Scan APIs encode schema-driven pushdowns (projection/filter/limit/ordering)
+
+The `scan(...)` signature explicitly takes:
+
+* `projection` (indexes into `Self::schema`) and documents projection pushdown ([Docs.rs][16])
+* `filters` and `supports_filters_pushdown` ([Docs.rs][16])
+* `limit` and describes “Limit Pushdown” ([Docs.rs][16])
+
+Additionally, `scan_with_args(...)` exists to pass structured scan params and mentions upcoming **ordering preferences**. ([Docs.rs][16])
+
+For your nested datasets, this matters because:
+
+* your provider can do *struct-field projection pushdown* (read only the nested fields used)
+* your provider can rewrite filters to exploit file-level indexes (or delta/iceberg stats) based on schema
+
+### E. Schema evolution + schema mismatch handling at file scan time
+
+DataFusion has a dedicated concept for adapting expressions across schema differences:
+
+* `PhysicalExprAdapter`: “rewriting physical expressions to match different schemas… used in file scans… handle differences between logical and physical schemas… common in schema evolution scenarios.” ([Docs.rs][17])
+* `FileScanConfig` has `expr_adapter_factory`: “adapt filters and projections … from the logical schema to the physical schema of the file.” ([Docs.rs][18])
+* Upgrade guide notes partition handling moved out of `PhysicalExprAdapter` to focus it on schema differences. ([Apache DataFusion][19])
+
+This is **the** mechanism you want if:
+
+* your CPG schema evolves (add nested fields, change types)
+* older Parquet files exist with an older struct layout
+* you want queries to still work without rewriting every dataset immediately
+
+### F. “Schema validation” style knobs (planner checks)
+
+There is a config:
+
+* `datafusion.execution.skip_physical_aggregate_schema_check`: if false, DataFusion verifies the schema produced by planning aggregate input matches exactly (including nullability/metadata), otherwise a planning error occurs. ([Apache DataFusion][4])
+
+Even though it’s framed as a workaround knob, it signals something important:
+
+* DataFusion has become stricter about schema equivalence at planning time; you can lean into that strictness for contract enforcement.
+
+---
+
+## 5) Other schema-related features that support an inferential, dynamic, “OO” implementation
+
+### A. `TableSchema`: a first-class object for “file schema + partition columns + cached full schema”
+
+DataFusion provides a `TableSchema` helper struct that explicitly models:
+
+* file schema vs partition columns vs full combined table schema,
+* and **caches** the combined schema for performance. ([Docs.rs][20])
+
+This aligns extremely well with your earlier “schema is a single column (struct) but goes far beyond” mental model:
+
+* partition columns are effectively schema augmentation derived from metadata (paths)
+* `TableSchema` formalizes that augmentation, and makes it cheap
+
+### B. Statistics as schema-adjacent metadata for inferential optimization
+
+When creating tables via DDL, DataFusion (by default) may gather statistics which can accelerate future queries; you can disable it via config. ([Apache DataFusion][1])
+And `TableProvider::statistics()` exists and even mentions downstream specialized optimizer rules (e.g., join reordering). ([Docs.rs][16])
+
+If you’re building a “best-in-class” system:
+
+* treat “schema contract + statistics contract” as one artifact in your registry (especially for graph-like workloads where selectivity matters)
+
+### C. Dynamic URL / directory-backed tables without pre-registration
+
+The combination of:
+
+* `TableProviderFactory` creating providers from URLs on demand ([Docs.rs][7])
+* `dynamic_file_schema` UrlTableFactory that can produce ListingTables from URLs ([Docs.rs][8])
+  means you can support “late binding” datasets:
+* tables appear when referenced, not when registered
+
+This is one of the cleanest ways to make DataFusion feel “object oriented”:
+
+* **name resolution** → **provider factory** → **schema contract** → **query plan**
+
+---
+
+# Practical synthesis: how I’d apply these capabilities to your nested CPG setup
+
+If your goal is: *inferential + programmatic + dynamically adaptive + OO*, I’d design around 3 concrete DataFusion hooks:
+
+1. **Catalog/Schema providers** as your “metastore adapter”
+   Map your registry objects to the DataFusion hierarchy (CatalogProvider → SchemaProvider → TableProvider). DataFusion explicitly intends this. ([Apache DataFusion][11])
+
+2. **Factories + UDTFs** as “computed schema objects”
+   Use `TableProviderFactory` (URL-resolved) and UDTFs (input-expression-resolved) to create datasets whose schemas are generated by code, not only by files. ([Docs.rs][7])
+
+3. **Schema evolution adapters + rule rewrites** as your “dynamic adaptation layer”
+
+   * Use `PhysicalExprAdapter` / `expr_adapter_factory` to keep queries working across schema drift. ([Docs.rs][17])
+   * Use `OptimizerRule` expression rewriting to enforce canonical access patterns / normalization transforms that depend on your schema model. ([Apache DataFusion][14])
+
+If you want, I can now turn this into a **concrete “schema-driven pipeline skeleton”** for your CPG world that shows:
+
+* a Python `SchemaProvider` that pulls your “canonical Arrow schema” from a registry row,
+* a `TableProviderFactory` pattern for `repo://…/path@rev` → provider,
+* and a minimal “schema enforcement rule” that rewrites queries touching `nodes/edges` into a canonical UNNEST + join form (so consumers query a single “graph object” but get relational execution).
+
+(That build-out will be mostly code + precise API touchpoints, not prose.)
+
+[1]: https://datafusion.apache.org/user-guide/sql/ddl.html "DDL — Apache DataFusion  documentation"
+[2]: https://datafusion.apache.org/user-guide/sql/format_options.html "Format Options — Apache DataFusion  documentation"
+[3]: https://datafusion.apache.org/python/autoapi/datafusion/context/index.html "datafusion.context — Apache Arrow DataFusion  documentation"
+[4]: https://datafusion.apache.org/user-guide/configs.html "Configuration Settings — Apache DataFusion  documentation"
+[5]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingOptions.html?utm_source=chatgpt.com "ListingOptions in datafusion::datasource::listing - Rust"
+[6]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.LogicalPlanBuilder.html?utm_source=chatgpt.com "LogicalPlanBuilder in datafusion::logical_expr - Rust"
+[7]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProviderFactory.html "TableProviderFactory in datafusion::catalog - Rust"
+[8]: https://docs.rs/datafusion/latest/datafusion/datasource/index.html "datafusion::datasource - Rust"
+[9]: https://datafusion.apache.org/python/autoapi/datafusion/index.html?utm_source=chatgpt.com "Apache Arrow DataFusion documentation"
+[10]: https://datafusion.apache.org/library-user-guide/functions/adding-udfs.html?utm_source=chatgpt.com "Adding User Defined Functions: Scalar/Window/Aggregate ..."
+[11]: https://datafusion.apache.org/library-user-guide/catalogs.html "Catalogs, Schemas, and Tables — Apache DataFusion  documentation"
+[12]: https://datafusion.apache.org/python/autoapi/datafusion/catalog/index.html "datafusion.catalog — Apache Arrow DataFusion  documentation"
+[13]: https://datafusion.apache.org/user-guide/sql/information_schema.html?utm_source=chatgpt.com "Information Schema — Apache DataFusion documentation"
+[14]: https://datafusion.apache.org/library-user-guide/working-with-exprs.html "Working with Exprs — Apache DataFusion  documentation"
+[15]: https://datafusion.apache.org/library-user-guide/query-optimizer.html "Query Optimizer — Apache DataFusion  documentation"
+[16]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html "TableProvider in datafusion::datasource - Rust"
+[17]: https://docs.rs/datafusion/latest/datafusion/physical_expr_adapter/trait.PhysicalExprAdapter.html?utm_source=chatgpt.com "PhysicalExprAdapter in datafusion::physical_expr_adapter - Rust"
+[18]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.FileScanConfig.html?utm_source=chatgpt.com "FileScanConfig in datafusion::datasource::physical_plan"
+[19]: https://datafusion.apache.org/library-user-guide/upgrading.html "Upgrade Guides — Apache DataFusion  documentation"
+[20]: https://docs.rs/datafusion/latest/datafusion/datasource/table_schema/struct.TableSchema.html "TableSchema in datafusion::datasource::table_schema - Rust"
+
+Below is a **highly technical “API + call-chain” deep dive** on DataFusion **schema inference** across **SQL**, **datafusion-python**, and **Rust**—covering **A–F** exactly as you listed, with the concrete knobs, structs, methods, and where they sit in the execution pipeline.
+
+---
+
+## 0) The unifying mental model: DataFusion schema inference is a `ReadOptions → ListingOptions → FileFormat::infer_schema` pipeline
+
+Across *SQL DDL*, *Python*, and *Rust*, DataFusion ultimately chooses a schema via the same core idea:
+
+1. **You register a table/data source** (CSV/JSON/Parquet or “listing table” for many files).
+2. If you did **not** provide an explicit schema, DataFusion invokes a schema inference path that:
+
+   * reads “just enough” bytes/rows/metadata to infer/merge,
+   * optionally also gathers statistics (often at the same time),
+   * and then returns an Arrow `SchemaRef` that becomes the table schema.
+
+Key building blocks:
+
+* `CsvReadOptions`, `NdJsonReadOptions`, `ParquetReadOptions` (each implements the `ReadOptions` trait with `get_resolved_schema` and `to_listing_options`). ([Docs.rs][1])
+* `ListingOptions::infer_schema`, which merges schemas across multiple files (and explicitly does **not** include partition columns). ([Docs.rs][2])
+
+---
+
+## A) SQL-level schema inference (CREATE EXTERNAL TABLE) — tunable via format OPTIONS
+
+### A1) `CREATE EXTERNAL TABLE` can omit `<column_definition>` and infer schema
+
+DataFusion’s DDL explicitly allows `CREATE EXTERNAL TABLE <name> STORED AS <type> LOCATION ...` **with optional column definitions**. ([Apache DataFusion][3])
+
+For **CSV**, the docs are explicit: *“The schema will be inferred based on scanning a subset of the file.”* ([Apache DataFusion][3])
+
+```sql
+CREATE EXTERNAL TABLE test
+STORED AS CSV
+LOCATION '/path/to/aggregate_simple.csv'
+OPTIONS ('has_header' 'true');
+```
+
+([Apache DataFusion][3])
+
+For **Parquet**, the docs are explicit the other way: *“It is not necessary to provide schema information for Parquet files.”* ([Apache DataFusion][3])
+
+### A2) `SCHEMA_INFER_MAX_REC` is the SQL knob (CSV)
+
+DataFusion’s SQL “Format Options” includes:
+
+* `SCHEMA_INFER_MAX_REC`: *“Sets the maximum number of records to scan to infer the schema.”*
+* If set to `0`: *“schema inference is disabled and all fields will be inferred as Utf8 (string) type.”* ([Apache DataFusion][4])
+
+Example:
+
+```sql
+CREATE EXTERNAL TABLE t
+STORED AS CSV
+LOCATION '/data/events/'
+OPTIONS(
+  'HAS_HEADER' 'true',
+  'SCHEMA_INFER_MAX_REC' '5000'
+);
+```
+
+Contract-first / all-strings mode:
+
+```sql
+CREATE EXTERNAL TABLE t
+STORED AS CSV
+LOCATION '/data/events/'
+OPTIONS(
+  'HAS_HEADER' 'true',
+  'SCHEMA_INFER_MAX_REC' '0'
+);
+```
+
+([Apache DataFusion][4])
+
+### A3) Other CSV format options that materially affect inference outcomes
+
+If you do inference, your inferred schema is heavily impacted by “what values are considered null” and “how date/time parsing is configured”. DataFusion exposes this as CSV format options including:
+
+* `NULL_VALUE`, `NULL_REGEX` (null detection)
+* `DATE_FORMAT`, `DATETIME_FORMAT`, `TIMESTAMP_FORMAT`, `TIMESTAMP_TZ_FORMAT`, `TIME_FORMAT` (how to parse time-like columns)
+* plus delimiter/quote/escape/newlines-in-values, etc. ([Apache DataFusion][4])
+
+### A4) Format options precedence (why your inferred schema might differ between runs)
+
+DataFusion format options can be specified in multiple places with a precedence order:
+
+1. `CREATE EXTERNAL TABLE ... OPTIONS(...)`
+2. `COPY ... OPTIONS(...)`
+3. Session-level config defaults (lowest precedence) ([Apache DataFusion][4])
+
+So a “mysteriously changed inferred schema” often ends up being “some session default changed.”
+
+---
+
+## B) datafusion-python schema inference knobs (CSV / JSON / Listing tables)
+
+datafusion-python exposes schema inference directly in the `SessionContext` read/register methods:
+
+### B1) `read_*` vs `register_*`
+
+* `read_csv/read_json/read_parquet` return a **DataFrame**
+* `register_csv/register_json/register_parquet/register_listing_table` create a **named table** you can use from SQL
+
+The inference knobs appear in both. ([Apache DataFusion][5])
+
+### B2) CSV: `schema` optional + `schema_infer_max_records`
+
+Python API:
+
+* `read_csv(..., schema: pyarrow.Schema | None = None, schema_infer_max_records: int = 1000, ...)`
+* `register_csv(..., schema: pyarrow.Schema | None = None, schema_infer_max_records: int = 1000, ...)` ([Apache DataFusion][5])
+
+If `schema` is `None`, DataFusion infers by reading up to `schema_infer_max_records`. ([Apache DataFusion][5])
+
+Example:
+
+```python
+import pyarrow as pa
+from datafusion import SessionContext
+
+ctx = SessionContext()
+
+# infer
+ctx.register_csv(
+    "raw_csv",
+    "/data/events.csv",
+    schema=None,
+    has_header=True,
+    delimiter=",",
+    schema_infer_max_records=2000,
+)
+
+# contract-first (explicit schema)
+schema = pa.schema([("a", pa.int64()), ("b", pa.string())])
+ctx.register_csv("typed_csv", "/data/events.csv", schema=schema)
+```
+
+([Apache DataFusion][5])
+
+### B3) JSON (NDJSON): same pattern
+
+* `read_json(..., schema=None, schema_infer_max_records=1000, ...)`
+* `register_json(..., schema=None, schema_infer_max_records=1000, ...)` ([Apache DataFusion][5])
+
+### B4) Listing tables: multi-file “schema merge” entrypoint
+
+* `register_listing_table(name, path, ..., schema: pyarrow.Schema | None = None, file_extension='.parquet', table_partition_cols=...)` ([Apache DataFusion][5])
+
+This is the clean way to do “infer from files” vs “use canonical Arrow schema” for large multi-file datasets without changing queries—only registration.
+
+---
+
+## C) Parquet schema inference & compatibility: metadata + `skip_metadata`
+
+### C1) Config knob: `datafusion.execution.parquet.skip_metadata`
+
+DataFusion’s config explicitly defines:
+
+* `datafusion.execution.parquet.skip_metadata` (default `true`): skip optional embedded metadata in the Parquet schema to avoid conflicts across files with compatible types but different metadata. ([Apache DataFusion][6])
+
+### C2) Rust `ParquetReadOptions`: the programmable surface
+
+`ParquetReadOptions` includes:
+
+* `skip_metadata: Option<bool>` (if None, uses SessionConfig)
+* `schema: Option<&Schema>` (if None, infer)
+  and builder methods:
+* `.skip_metadata(bool)`
+* `.schema(&Schema)` ([Docs.rs][7])
+
+It also implements `ReadOptions`, including:
+
+* `to_listing_options(...)`
+* `get_resolved_schema(...)` (“Infer and resolve the schema from the files/sources provided.”) ([Docs.rs][7])
+
+### C3) Python `read_parquet/register_parquet`
+
+Python surfaces the same behavior with `skip_metadata: bool = True` plus optional `schema`. ([Apache DataFusion][5])
+
+---
+
+## D) Partition inference is schema inference (Hive partition columns become table columns)
+
+### D1) SQL DDL: Hive partitions are “automatically detected and incorporated into the table’s schema”
+
+DataFusion DDL docs state that Hive-style directory partitioning (e.g. `a=1/b=200/file.parquet`) will have columns and values automatically detected and incorporated into schema/data. ([Apache DataFusion][3])
+
+### D2) Config: `datafusion.execution.listing_table_factory_infer_partitions`
+
+DataFusion config:
+
+* default `true`
+* when true: partitions are inferred and “will be represented in the table schema.” ([Apache DataFusion][6])
+
+### D3) Rust: `ListingOptions` is the partition schema control plane
+
+`ListingOptions` exposes:
+
+* `infer_schema(state, table_path)` → merges per-file schemas using `FileFormat::infer_schema`; **does not include partition columns**. ([Docs.rs][2])
+* `infer_partitions(state, table_path)` → best-effort partition discovery, may miss invalid partitioning because it doesn’t read all files. ([Docs.rs][2])
+* `validate_partitions(state, table_path)` → infer partitions and compare them to the declared `PARTITIONED BY` columns to prevent accidental corruption; allows partial partitions. ([Docs.rs][2])
+
+And for “explicit partition schema”:
+
+* `with_table_partition_cols(Vec<(String, DataType)>)` sets expected partition column names/types; notes:
+
+  * files not following scheme are ignored
+  * partition columns are **solely extracted from the file path** and are **NOT part of Parquet itself** ([Docs.rs][2])
+
+This is the exact lever you use when you want partition columns to be part of your schema contract (e.g., `run_id=.../file.parquet` adds a `run_id` column).
+
+---
+
+## E) Concurrency controls for schema/stat inference at scale
+
+### E1) `datafusion.execution.meta_fetch_concurrency`
+
+Config key:
+
+* default `32`
+* “Number of files to read in parallel when inferring schema and statistics.” ([Apache DataFusion][6])
+
+This matters specifically for:
+
+* multi-file table registration (ListingTable)
+* schema merge across many shards
+* statistics gathering during registration/first scan
+
+### E2) Statistics is often coupled with “inference-time I/O”
+
+DataFusion’s DDL docs: by default, when a table is created, it reads files to gather statistics; can be disabled via `SET datafusion.execution.collect_statistics = false`. ([Apache DataFusion][3])
+
+On the Rust API side, `SessionContext::read_parquet` also explicitly notes statistics are collected by default and points to `datafusion.execution.collect_statistics` for disabling. ([Docs.rs][8])
+
+On Listing tables, `ListingOptions.collect_stat` is an explicit knob:
+
+* “Set true to try to guess statistics from the files… can add a lot of overhead as it will usually require files to be opened and at least partially parsed.” ([Docs.rs][2])
+
+---
+
+## F) Schema inference from non-file inputs: `LogicalPlanBuilder::values` / `values_with_schema`
+
+DataFusion can infer schemas programmatically from literal values:
+
+* `LogicalPlanBuilder::values(values: Vec<Vec<Expr>>)`
+  “schema is inferred from data” ([Docs.rs][9])
+* `LogicalPlanBuilder::values_with_schema(values, schema: &Arc<DFSchema>)`
+  “schema is inferred from data itself or table schema if provided” ([Docs.rs][9])
+
+Two important sharp edges (also called out in docs):
+
+* Default output column names are `column1`, `column2`, … unless you alias/rename (SQL standard doesn’t specify names). ([Docs.rs][9])
+* If values include bind parameters like `$1`, `$2`, you must provide `param_data_types`. ([Docs.rs][9])
+
+This is the natural primitive for “programmatic schema generation” of small derived tables (validation tables, rule tables, etc.) that are still first-class in DataFusion’s optimizer.
+
+---
+
+## The “actual function call surfaces” you should standardize around
+
+### Rust surfaces (engine-native)
+
+* `SessionContext::{read_csv, register_csv}(paths, CsvReadOptions)` ([Docs.rs][8])
+* `SessionContext::{read_json, register_json}(paths, NdJsonReadOptions)` ([Docs.rs][8])
+* `SessionContext::{read_parquet, register_parquet}(paths, ParquetReadOptions)` (parquet feature) ([Docs.rs][8])
+* `CsvReadOptions::{schema, schema_infer_max_records, ...}` (plus `ReadOptions::get_resolved_schema/to_listing_options`) ([Docs.rs][1])
+* `NdJsonReadOptions::{schema, schema_infer_max_records, ...}` (plus `ReadOptions` methods) ([Docs.rs][10])
+* `ParquetReadOptions::{schema, skip_metadata, ...}` (plus `ReadOptions` methods) ([Docs.rs][7])
+* `ListingOptions::{infer_schema, infer_partitions, validate_partitions, with_table_partition_cols}` ([Docs.rs][2])
+* Config: `datafusion.execution.meta_fetch_concurrency`, `datafusion.execution.parquet.skip_metadata`, `datafusion.execution.listing_table_factory_infer_partitions`, `datafusion.execution.collect_statistics` ([Apache DataFusion][6])
+* `LogicalPlanBuilder::{values, values_with_schema}` ([Docs.rs][9])
+
+### Python surfaces (binding-native)
+
+* `SessionContext.register_csv/register_json/register_parquet/register_listing_table` with `schema` optional + inference knobs (`schema_infer_max_records`, `skip_metadata`) ([Apache DataFusion][5])
+
+---
+
+## Version hazard you *should* account for: “disable CSV inference by setting max records = 0”
+
+The SQL docs say `SCHEMA_INFER_MAX_REC = 0` disables inference and returns Utf8 for all fields. ([Apache DataFusion][4])
+But a very recent regression report says: in DataFusion v50, setting `CsvReadOptions::schema_infer_max_records = 0` produced Utf8; in v51 it produced **Null-typed columns** instead. ([GitHub][11])
+
+For a “best-in-class” system:
+
+* Treat “disable inference by setting max records to 0” as **version-sensitive**.
+* If you need “all-strings contract-first” robustly, prefer **explicit schema** (or add a quick validation step that asserts inferred types are not `Null` before proceeding).
+
+---
+
+If you want the next artifact in the same style, I can produce a **“schema inference harness”** pattern for your CPG pipeline: a small reusable routine that (1) registers with inference settings, (2) captures the resolved schema (Arrow + DFSchema view), (3) stores a stable schema hash + version in your registry, and (4) re-registers with that canonical schema for subsequent runs.
+
+[1]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/options/struct.CsvReadOptions.html "CsvReadOptions in datafusion::datasource::file_format::options - Rust"
+[2]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingOptions.html "ListingOptions in datafusion::datasource::listing - Rust"
+[3]: https://datafusion.apache.org/user-guide/sql/ddl.html "DDL — Apache DataFusion  documentation"
+[4]: https://datafusion.apache.org/user-guide/sql/format_options.html "Format Options — Apache DataFusion  documentation"
+[5]: https://datafusion.apache.org/python/autoapi/datafusion/context/index.html "datafusion.context — Apache Arrow DataFusion  documentation"
+[6]: https://datafusion.apache.org/user-guide/configs.html "Configuration Settings — Apache DataFusion  documentation"
+[7]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/options/struct.ParquetReadOptions.html "ParquetReadOptions in datafusion::datasource::file_format::options - Rust"
+[8]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html "SessionContext in datafusion::execution::context - Rust"
+[9]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.LogicalPlanBuilder.html "LogicalPlanBuilder in datafusion::logical_expr - Rust"
+[10]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/options/struct.NdJsonReadOptions.html "NdJsonReadOptions in datafusion::datasource::file_format::options - Rust"
+[11]: https://github.com/apache/datafusion/issues/19417 "[Regression] No longer possible to disable CSV schema inference · Issue #19417 · apache/datafusion · GitHub"
+
+Below is the **programmatic schema generation surface area in `datafusion-python`**, organized exactly by the A–D bullets you listed, with the **actual function calls / signatures**, what they accept, and how they “manufacture” a schema *without* you hand-authoring a `pyarrow.Schema`.
+
+---
+
+## A) Generate schemas from in-memory Python objects (fast prototyping / ingestion)
+
+### A1) Row/column-native constructors (schema implied by Python values)
+
+These constructors build a **DataFrame** and infer an Arrow schema from the Python data you pass.
+
+#### `SessionContext.from_pydict`
+
+```python
+from_pydict(data: dict[str, list[Any]], name: str | None = None) -> DataFrame
+```
+
+* **Input shape:** column-oriented `{"col": [v1, v2, ...], ...}`
+* **Schema generation:** Arrow types are inferred from the Python list elements per column.
+* **Name:** optional; used for the DataFrame name (useful when registering as a view/table later).
+  ([Apache DataFusion][1])
+
+#### `SessionContext.from_pylist`
+
+```python
+from_pylist(data: list[dict[str, Any]], name: str | None = None) -> DataFrame
+```
+
+* **Input shape:** row-oriented `[{"col": v, ...}, ...]`
+* **Schema generation:** Arrow types inferred across rows (think: unioning row dict keys + type unification).
+* This is often the easiest way to build nested structs/lists/maps if your values are naturally “JSON-like”.
+  ([Apache DataFusion][1])
+
+> DataFusion’s Python user guide explicitly calls out these two APIs (plus `create_dataframe`) as the “Create in-memory” entrypoints. ([Apache DataFusion][2])
+
+---
+
+### A2) Arrow-first constructors (schema implied by Arrow / Arrow FFI)
+
+These are the **most “best-in-class”** when you already have an Arrow table/batches or you’re importing from another Arrow-native library.
+
+#### `SessionContext.from_arrow`
+
+```python
+from_arrow(
+  data: ArrowStreamExportable | ArrowArrayExportable,
+  name: str | None = None
+) -> DataFrame
+```
+
+* Accepts any object implementing **`__arrow_c_stream__`** or **`__arrow_c_array__`**.
+* If using `__arrow_c_array__`, it **must return a struct array** (i.e., a record-batch-like “struct of columns”).
+* This is the canonical “zero-copy” interchange path from Polars/Pandas/PyArrow/etc.
+  ([Apache DataFusion][1])
+
+#### `SessionContext.from_arrow_table`
+
+```python
+from_arrow_table(data: pyarrow.Table, name: str | None = None) -> DataFrame
+```
+
+* Explicit alias of `from_arrow()` for `pyarrow.Table`. ([Apache DataFusion][1])
+
+#### Convenience imports
+
+```python
+from_pandas(data: pandas.DataFrame, name: str | None = None) -> DataFrame
+from_polars(data: polars.DataFrame, name: str | None = None) -> DataFrame
+```
+
+* These are “interop” conveniences; schema comes from the source library’s Arrow conversion. ([Apache DataFusion][1])
+
+---
+
+### A3) RecordBatch-first constructor (schema implied by batches; optionally override)
+
+#### `SessionContext.create_dataframe`
+
+```python
+create_dataframe(
+  partitions: list[list[pyarrow.RecordBatch]],
+  name: str | None = None,
+  schema: pyarrow.Schema | None = None
+) -> DataFrame
+```
+
+* **Input:** partitioned record batches (`[[batch1,batch2], [batch3], ...]`).
+* **Schema generation:**
+
+  * If `schema is None`, DataFusion uses the RecordBatch schema(s).
+  * If `schema` is provided, it becomes the schema contract for the partitions (you use this to “project/coerce” or to stabilize schema even if batches are empty).
+    ([Apache DataFusion][1])
+
+This method is the workhorse for “parse LibCST/SCIP → produce RecordBatches with nested `LIST<STRUCT>` → register”.
+
+---
+
+## A) (continued) Registering the in-memory data as a **named table** (schema rides along)
+
+### A4) Register RecordBatches as a table (schema = batch schema)
+
+#### `SessionContext.register_record_batches`
+
+```python
+register_record_batches(
+  name: str,
+  partitions: list[list[pyarrow.RecordBatch]]
+) -> None
+```
+
+* Converts partitions into an internal table and registers it under `name`.
+* **This is the simplest “register my nested schema as a table” operation**: if your batches carry `list<struct<...>>`, that becomes the table schema.
+  ([Apache DataFusion][1])
+
+### A5) “Register anything table-like” (DataFrame / Dataset / Table / TableProvider)
+
+#### `SessionContext.register_table`
+
+```python
+register_table(
+  name: str,
+  table: datafusion.catalog.Table
+       | TableProviderExportable
+       | datafusion.dataframe.DataFrame
+       | pyarrow.dataset.Dataset
+) -> None
+```
+
+* **Schema generation depends on the input:**
+
+  * `DataFrame` → becomes a view-like table with the DataFrame’s output schema
+  * `pyarrow.dataset.Dataset` → dataset schema becomes table schema
+  * `TableProviderExportable` (PyCapsule) → provider’s declared schema is authoritative
+    ([Apache DataFusion][1])
+
+### A6) Register a PyArrow Dataset explicitly
+
+#### `SessionContext.register_dataset`
+
+```python
+register_dataset(name: str, dataset: pyarrow.dataset.Dataset) -> None
+```
+
+* Lightweight wrapper for “dataset-as-table”; schema comes from the dataset. ([Apache DataFusion][1])
+
+### A7) Create a DataFrame from a “table-like” object (without registering)
+
+#### `SessionContext.read_table`
+
+```python
+read_table(
+  table: datafusion.catalog.Table
+       | TableProviderExportable
+       | datafusion.dataframe.DataFrame
+       | pyarrow.dataset.Dataset
+) -> DataFrame
+```
+
+* This is the non-catalog variant: you get a DataFrame directly from a table-like object. ([Apache DataFusion][1])
+
+### A8) The `Table` wrapper object (schema-carrying object)
+
+There is also `datafusion.Table(...)` which can wrap:
+
+* built-in DF tables (CSV/Parquet reads),
+* PyArrow datasets,
+* DataFusion DataFrames (converted into a view),
+* external FFI-provided tables.
+  It also exposes `Table.schema` as a `pyarrow.Schema`. ([Apache DataFusion][3])
+
+This is useful when you want a “schema-carrying object” you can pass around without committing it to the catalog yet.
+
+---
+
+## B) Dynamic table creation “on demand” (factory-like behavior) in Python
+
+### B1) URL tables (dynamic “path-as-table-name” resolution)
+
+#### `SessionContext.enable_url_table`
+
+```python
+enable_url_table() -> SessionContext
+```
+
+* Returns a new SessionContext with “URL tables” enabled.
+* Once enabled, you can reference a **local file path** as a “table name” and DataFusion will dynamically create the provider/schema. ([Apache DataFusion][1])
+
+Example (DataFusion Python blog):
+
+```python
+import datafusion
+ctx = datafusion.SessionContext().enable_url_table()
+df = ctx.table("./examples/tpch/data/customer.parquet")
+```
+
+([Apache DataFusion][4])
+
+Mechanically, this is “factory behavior”: name resolution triggers provider creation, schema is inferred/loaded from the file.
+
+### B2) The general “dynamic provider” story in Python is via FFI (PyCapsule)
+
+Python can *consume* Rust-implemented providers via a PyCapsule interface:
+
+* `TableProviderExportable` is the Python-side protocol: the object must have `__datafusion_table_provider__() -> capsule`. ([Apache DataFusion][1])
+* DataFusion’s Python docs describe implementing a custom TableProvider in Rust and exposing it via PyCapsule (requires DataFusion 43.0.0+). ([Apache DataFusion][5])
+
+This is how you build your own “repo://…/path@rev → provider → schema” system if URL tables aren’t enough.
+
+---
+
+## C) UDTFs / Table Functions generate **TableProviders** (and therefore schemas)
+
+### C1) The Python UDTF object model
+
+#### `datafusion.user_defined.TableFunction`
+
+```python
+TableFunction(name: str, func: Callable[[], Any])
+__call__(*args: datafusion.expr.Expr) -> Any
+```
+
+* It is explicitly described as: “Table functions generate new table providers based on the input expressions.” ([Apache DataFusion][6])
+
+#### Convenience constructor: `udtf`
+
+```python
+udtf(name: str) -> Callable[...]          # decorator form
+udtf(func: Callable[[], Any], name: str) -> TableFunction
+```
+
+([Apache DataFusion][6])
+
+### C2) Execution semantics and constraints (critical details)
+
+From the Python user guide:
+
+* UDTFs take any number of `Expr` arguments, **but only literal expressions are supported**.
+* UDTFs **must return a Table Provider**. ([Apache DataFusion][7])
+
+That “must return a Table Provider” is where schema generation lives:
+
+* Your UDTF returns a provider whose `schema()` is the table schema DataFusion plans against.
+
+### C3) Registering a UDTF
+
+#### `SessionContext.register_udtf`
+
+```python
+register_udtf(func: datafusion.user_defined.TableFunction) -> None
+```
+
+([Apache DataFusion][1])
+
+### C4) Rust-backed table functions via PyCapsule (consumed from Python)
+
+The Python docs show how a Rust table function is exported to Python:
+
+* implement `__datafusion_table_function__` returning a PyCapsule wrapping an `FFI_TableFunction`. ([Apache DataFusion][7])
+
+This matters because in practice:
+
+* Python-only UDTFs are great for orchestration / prototyping
+* Rust-backed UDTFs are how you get **pushdown** and high performance table-provider behavior.
+
+---
+
+## D) DDL as programmatic schema generation (Python drives SQL)
+
+### D1) Execute DDL from Python
+
+#### `SessionContext.sql`
+
+```python
+sql(
+  query: str,
+  options: SQLOptions | None = None,
+  param_values: dict[str, Any] | None = None,
+  **named_params: Any
+) -> DataFrame
+```
+
+* The API notes: it implements DDL such as `CREATE TABLE` and `CREATE VIEW`, plus DML like `INSERT INTO`, using in-memory default implementation. ([Apache DataFusion][1])
+
+So “programmatic schema generation” can be:
+
+1. your code generates a `CREATE EXTERNAL TABLE ... (col defs ...)` string
+2. `ctx.sql(the_string)` executes it and installs a provider + schema in the catalog.
+
+### D2) Explicit schema in `CREATE EXTERNAL TABLE` (contract-first DDL)
+
+DataFusion’s SQL DDL supports specifying schema manually for CSV external tables (with nullability). ([Apache DataFusion][8])
+
+```sql
+CREATE EXTERNAL TABLE test (
+  c1 VARCHAR NOT NULL,
+  c2 INT NOT NULL,
+  ...
+)
+STORED AS CSV
+LOCATION '/path/to/file.csv';
+```
+
+([Apache DataFusion][8])
+
+### D3) Inference-vs-contract in DDL is controlled by format `OPTIONS`
+
+Format options can be specified on `CREATE EXTERNAL TABLE` and have documented precedence rules. ([Apache DataFusion][9])
+
+---
+
+## Putting this into your CPG workflow (the “OO schema generator” pattern)
+
+For CPG bundles (`libcst_files`, `scip_index`, etc.) with nested `LIST<STRUCT>`:
+
+1. **Ingest/construct in Python**
+
+   * use `pyarrow.Table.from_pylist(...)` (for inferred nested types) then `ctx.from_arrow_table(...)` **or**
+   * emit `RecordBatch` partitions and `ctx.create_dataframe(...)` (optionally with an explicit schema) ([Apache DataFusion][1])
+
+2. **Register as stable named tables**
+
+   * `ctx.register_record_batches("libcst_files", partitions)` (schema follows batches) ([Apache DataFusion][1])
+
+3. **Expose “exploded” 2D views via SQL**
+
+   * `ctx.sql("CREATE VIEW libcst_nodes AS SELECT ... CROSS JOIN unnest(nodes) ...")` using `ctx.sql(...)` DDL support ([Apache DataFusion][1])
+
+4. **Optional: generate entire datasets from code**
+
+   * implement a UDTF returning a TableProvider whose schema depends on parameters (“include whitespace spans”, “include tokens”, etc.) and register via `register_udtf` ([Apache DataFusion][7])
+
+If you want, I can now write a **concrete UDTF example for CPG** that returns (a) a `MemTable`-like provider from in-memory Arrow batches for small runs, and (b) a Rust PyCapsule-backed provider for large runs with projection/filter pushdown—so you can choose between “prototype” and “production” without changing query code.
+
+[1]: https://datafusion.apache.org/python/autoapi/datafusion/context/index.html "datafusion.context — Apache Arrow DataFusion  documentation"
+[2]: https://datafusion.apache.org/python/user-guide/data-sources.html "Data Sources — Apache Arrow DataFusion  documentation"
+[3]: https://datafusion.apache.org/python/autoapi/datafusion/index.html "datafusion — Apache Arrow DataFusion  documentation"
+[4]: https://datafusion.apache.org/blog/2025/03/30/datafusion-python-46.0.0/ "Apache DataFusion Python 46.0.0 Released - Apache DataFusion Blog"
+[5]: https://datafusion.apache.org/python/user-guide/io/table_provider.html?utm_source=chatgpt.com "Custom Table Provider - Apache DataFusion"
+[6]: https://datafusion.apache.org/python/autoapi/datafusion/user_defined/index.html "datafusion.user_defined — Apache Arrow DataFusion  documentation"
+[7]: https://datafusion.apache.org/python/user-guide/common-operations/udf-and-udfa.html "User-Defined Functions — Apache Arrow DataFusion  documentation"
+[8]: https://datafusion.apache.org/user-guide/sql/ddl.html?utm_source=chatgpt.com "DDL — Apache DataFusion documentation"
+[9]: https://datafusion.apache.org/user-guide/sql/format_options.html?utm_source=chatgpt.com "Format Options — Apache DataFusion documentation"
+
+Below is a **Python-API–focused** deep dive on DataFusion’s **schema hierarchy / metamapping** surfaces—the concrete classes, method signatures, and the “how the pieces fit” patterns you’d use for a registry/metastore-driven system.
+
+---
+
+## 0) The hierarchy in Python: how you *actually* traverse it
+
+In the Python bindings, the “metamapping” model is realized as:
+
+**`SessionContext` → `Catalog` → `Schema` → `Table`**
+
+You traverse it via:
+
+* `SessionContext.catalog(name: str = 'datafusion') -> datafusion.catalog.Catalog` ([Apache DataFusion][1])
+* `SessionContext.catalog_names() -> set[str]` ([Apache DataFusion][1])
+* `Catalog.schema(name: str = 'public') -> Schema` (and `Catalog.database(...)` as an alias) ([Apache DataFusion][2])
+* `Schema.table(name: str) -> Table` ([Apache DataFusion][2])
+
+> **Default name caveat:** the Python user guide says the default catalog/schema are `datafusion` and `default` ([Apache DataFusion][3]), while core DataFusion config defaults are `datafusion` / `public` ([Apache DataFusion][4]). In “best practice” deployments, set defaults explicitly via `SessionConfig.with_default_catalog_and_schema(...)` ([Apache DataFusion][5]).
+
+---
+
+## 1) Core metamapping calls you use day-to-day
+
+### 1.1 `SessionContext`: catalog list + registration points
+
+**Introspect the catalog list**
+
+* `catalog(name: str = 'datafusion') -> Catalog` ([Apache DataFusion][1])
+* `catalog_names() -> set[str]` ([Apache DataFusion][1])
+
+**Register a catalog provider (the key injection point for metastores)**
+
+* `register_catalog_provider(name: str, provider: CatalogProviderExportable | datafusion.catalog.CatalogProvider | datafusion.catalog.Catalog) -> None` ([Apache DataFusion][1])
+
+This is the **Python binding’s “install a catalog” hook**.
+
+**Table-level convenience**
+
+* `table(name: str) -> DataFrame` (retrieve a previously registered table by name) ([Apache DataFusion][1])
+* `table_exist(name: str) -> bool` ([Apache DataFusion][1])
+* `deregister_table(name: str) -> None` ([Apache DataFusion][1])
+
+**Register tables into the session (bypasses per-schema manual wiring)**
+
+* `register_table(name: str, table: datafusion.catalog.Table | TableProviderExportable | DataFrame | pyarrow.dataset.Dataset) -> None` ([Apache DataFusion][1])
+* `register_record_batches(name: str, partitions: list[list[pyarrow.RecordBatch]]) -> None` ([Apache DataFusion][1])
+* `register_table_provider(...)` exists but is deprecated in favor of `register_table()` ([Apache DataFusion][1])
+
+---
+
+### 1.2 `Catalog`: schema namespace object
+
+**Create an in-memory catalog**
+
+* `Catalog.memory_catalog() -> Catalog` ([Apache DataFusion][2])
+
+**Look up schemas**
+
+* `schema(name: str = 'public') -> Schema` ([Apache DataFusion][2])
+* `database(name: str = 'public') -> Schema` (alias of `schema`) ([Apache DataFusion][2])
+
+**Enumerate schemas**
+
+* `schema_names() -> set[str]` ([Apache DataFusion][2])
+* `names() -> set[str]` (alias of `schema_names`) ([Apache DataFusion][2])
+
+**Register/deregister schemas**
+
+* `register_schema(name: str, schema: Schema | SchemaProvider | SchemaProviderExportable) -> Schema | None` ([Apache DataFusion][2])
+* `deregister_schema(name: str, cascade: bool = True) -> Schema | None` ([Apache DataFusion][2])
+
+---
+
+### 1.3 `Schema`: table namespace object
+
+**Create an in-memory schema**
+
+* `Schema.memory_schema() -> Schema` ([Apache DataFusion][2])
+
+**Enumerate tables**
+
+* `table_names() -> set[str]` ([Apache DataFusion][2])
+* `names() -> set[str]` (alias of `table_names`) ([Apache DataFusion][2])
+
+**Register/deregister tables within the schema**
+
+* `register_table(name: str, table: Table | TableProviderExportable | DataFrame | pyarrow.dataset.Dataset) -> None` ([Apache DataFusion][2])
+* `deregister_table(name: str) -> None` ([Apache DataFusion][2])
+
+**Resolve a table**
+
+* `table(name: str) -> Table` ([Apache DataFusion][2])
+
+---
+
+### 1.4 `Table`: schema-bearing wrapper (for OO-ish flows)
+
+* `Table.kind -> str` (introspect what “kind” of table it is) ([Apache DataFusion][2])
+* `Table.schema -> pyarrow.Schema` (pull Arrow schema directly) ([Apache DataFusion][2])
+* `Table.from_dataset(dataset: pyarrow.dataset.Dataset) -> Table` ([Apache DataFusion][2])
+
+This is useful when you want “schema as object metadata” and prefer to pass around a `Table` handle before deciding how to register it.
+
+---
+
+## 2) Python “provider” abstractions (custom catalogs/schemas)
+
+DataFusion Python exposes **ABCs** you can implement directly:
+
+### 2.1 `CatalogProvider` (Python ABC)
+
+Required:
+
+* `schema(name: str) -> Schema | None` ([Apache DataFusion][2])
+* `schema_names() -> set[str]` ([Apache DataFusion][2])
+
+Optional:
+
+* `register_schema(name: str, schema: SchemaProviderExportable | SchemaProvider | Schema) -> None` ([Apache DataFusion][2])
+* `deregister_schema(name: str, cascade: bool) -> None` ([Apache DataFusion][2])
+
+### 2.2 `SchemaProvider` (Python ABC)
+
+Required:
+
+* `table(name: str) -> Table | None` ([Apache DataFusion][2])
+* `table_exist(name: str) -> bool` ([Apache DataFusion][2])
+* `table_names() -> set[str]` ([Apache DataFusion][2])
+
+Optional:
+
+* `register_table(name: str, table: Table | TableProviderExportable | Any) -> None` ([Apache DataFusion][2])
+* `deregister_table(name: str, cascade: bool) -> None` ([Apache DataFusion][2])
+* `owner_name() -> str | None` ([Apache DataFusion][2])
+
+### 2.3 In-memory prototypes vs Rust for performance
+
+The Python user guide explicitly recommends:
+
+* in-memory catalogs/schemas are supported and easy to prototype (via `Catalog.memory_catalog()` and `Schema.memory_schema()`) ([Apache DataFusion][3])
+* if you need more, you can implement providers in **Rust** (via PyO3) for performance. ([Apache DataFusion][3])
+
+---
+
+## 3) “Async schema/table lookup” — what’s going on under the hood (and what that implies for Python)
+
+Even though you’re working in Python, the **core engine’s intent** matters for design:
+
+### 3.1 Core DataFusion planning is synchronous; remote metadata must be prefetched/cached
+
+The Rust `CatalogProvider` docs are very explicit:
+
+* planning APIs are **not async**, so doing network IO “lazily” during planning would lead to many RPCs per plan and very poor planning performance
+* remote catalogs should provide an **in-memory snapshot** (often fetched in batch) for planning ([Docs.rs][6])
+
+### 3.2 `SchemaProvider::table` is async in Rust “primarily for convenience”
+
+Core docs: `SchemaProvider::table` is async, but “it is not a good idea for this method to be slow” and the recommended pattern is: **resolve once, cache for planning**, then plan against the cached snapshot. ([Docs.rs][7])
+
+**Python implication:** your Python `SchemaProvider.table(...)` implementation should behave like a cache lookup, not a network call. If you must talk to a registry DB/network service, do it *outside* the provider call path (or implement the provider in Rust and expose via PyCapsule).
+
+---
+
+## 4) FFI exportables (PyCapsule): the “best-in-class” path for real metastores
+
+When you outgrow pure Python providers, DataFusion Python lets you pass Rust-implemented providers via PyCapsule.
+
+### 4.1 CatalogProviderExportable (FFI)
+
+Python protocol:
+
+* `__datafusion_catalog_provider__() -> object` ([Apache DataFusion][1])
+
+This is exactly what `register_catalog_provider(...)` accepts as `CatalogProviderExportable`. ([Apache DataFusion][1])
+
+### 4.2 TableProviderExportable (FFI)
+
+Python protocol:
+
+* `__datafusion_table_provider__() -> object` ([Apache DataFusion][1])
+
+This is accepted by:
+
+* `SessionContext.register_table(...)` ([Apache DataFusion][1])
+* `Schema.register_table(...)` ([Apache DataFusion][2])
+
+---
+
+## 5) Session defaults + information_schema as “reflection / metamapping introspection”
+
+### 5.1 Configure default catalog/schema + enable information_schema
+
+In Python, you set this via `SessionConfig`:
+
+```python
+from datafusion import SessionConfig, SessionContext
+
+cfg = (
+    SessionConfig()
+    .with_create_default_catalog_and_schema(True)
+    .with_default_catalog_and_schema("cpg", "public")
+    .with_information_schema(True)
+)
+ctx = SessionContext(cfg)
+```
+
+These are documented builder methods on `SessionConfig`. ([Apache DataFusion][5])
+
+Core config also documents:
+
+* `datafusion.catalog.information_schema` controls whether information_schema virtual tables are exposed ([Apache DataFusion][4])
+
+### 5.2 Use `information_schema` and SHOW commands as your “schema reflection API”
+
+DataFusion’s SQL docs spell out the canonical queries:
+
+* `SHOW TABLES` or `SELECT * FROM information_schema.tables` ([Apache DataFusion][8])
+* `SHOW COLUMNS FROM t` or query `information_schema.columns` including `data_type` and `is_nullable` ([Apache DataFusion][8])
+* `SHOW ALL` or `SELECT * FROM information_schema.df_settings` to reflect configuration (which often *affects schema*) ([Apache DataFusion][8])
+
+This is ideal for dynamic systems that want to derive behavior from registered schemas:
+
+* auto-build projections based on column existence
+* validate that inferred schemas match expected nested shapes
+* generate join keys and canonicalization rules from meta tables
+
+### 5.3 Drive it from Python with `SessionContext.sql(...)`
+
+`SessionContext.sql(query: str, ...) -> DataFrame` is the “run SQL (including DDL)” surface in Python. It explicitly supports DDL like `CREATE TABLE` / `CREATE VIEW`. ([Apache DataFusion][1])
+
+---
+
+## 6) Concrete “metamapping” pattern for a registry-backed system (Python prototype)
+
+### Prototype: build a catalog snapshot in memory per query/run
+
+1. Create memory catalog/schema:
+
+```python
+from datafusion import SessionContext
+from datafusion.catalog import Catalog, Schema
+
+ctx = SessionContext()
+
+cat = Catalog.memory_catalog()
+sch = Schema.memory_schema()
+cat.register_schema("public", sch)
+ctx.register_catalog_provider("cpg", cat)
+```
+
+This pattern is shown in the Python data-sources guide. ([Apache DataFusion][3])
+
+2. Register tables into that schema:
+
+```python
+sch.register_table("libcst_files", some_table_or_dataset_or_df)
+```
+
+`Schema.register_table` accepts `Table`, `TableProviderExportable`, `DataFrame`, or `pyarrow.dataset.Dataset`. ([Apache DataFusion][2])
+
+3. Query with fully-qualified names:
+
+```sql
+SELECT * FROM cpg.public.libcst_files;
+```
+
+The user guide notes you can access via `catalog.schema.table`. ([Apache DataFusion][3])
+
+### Production: replace Python provider calls with Rust + PyCapsule
+
+When you need remote lookups and performance:
+
+* implement providers in Rust (with caching / async resolve patterns per core docs) ([Docs.rs][6])
+* expose them as `CatalogProviderExportable` / `TableProviderExportable` via the PyCapsule hooks ([Apache DataFusion][1])
+* register them with `register_catalog_provider` / `register_table` ([Apache DataFusion][1])
+
+---
+
+
+[1]: https://datafusion.apache.org/python/autoapi/datafusion/context/index.html "datafusion.context — Apache Arrow DataFusion  documentation"
+[2]: https://datafusion.apache.org/python/autoapi/datafusion/catalog/index.html "datafusion.catalog — Apache Arrow DataFusion  documentation"
+[3]: https://datafusion.apache.org/python/user-guide/data-sources.html "Data Sources — Apache Arrow DataFusion  documentation"
+[4]: https://datafusion.apache.org/user-guide/configs.html "Configuration Settings — Apache DataFusion  documentation"
+[5]: https://datafusion.apache.org/python/user-guide/configuration.html "Configuration — Apache Arrow DataFusion  documentation"
+[6]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.CatalogProvider.html "CatalogProvider in datafusion::catalog - Rust"
+[7]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.AsyncSchemaProvider.html "AsyncSchemaProvider in datafusion::catalog - Rust"
+[8]: https://datafusion.apache.org/user-guide/sql/information_schema.html "Information Schema — Apache DataFusion  documentation"
+
+Below is the **“rules + programmatic actions derived from schemas”** surface area **as it actually exists in `datafusion-python` today**, with concrete **Python call signatures**, what they do, and how you compose them into a **schema-driven, compiler-ish rule system**.
+
+I’ll map directly to your A–E bullets, but I’ll be blunt where something is **Rust-only** (and therefore requires **PyCapsule/FFI** to bring into Python).
+
+---
+
+# A) DFSchema vs Arrow Schema in Python: what you can access and how
+
+### A1) What you can get directly in Python: Arrow `pyarrow.Schema`
+
+**`DataFrame.schema()`**
+
+```python
+DataFrame.schema() -> pyarrow.Schema
+```
+
+Returns the output schema (name, data type, nullability).
+
+This is your **“contract surface”** for Python-driven orchestration (validate shapes, generate projections, etc.).
+
+### A2) What DFSchema *is* (engine-level) and why you still care in Python
+
+DataFusion’s *engine* uses **DFSchema**, which extends Arrow schema with:
+
+* **column qualifiers** (catalog/schema/table qualifiers)
+* **functional dependencies** (FDs)
+
+Rust definition: DFSchema “wraps an Arrow schema and adds a relation (table) name,” and can hold fields across multiple tables (qualified/unqualified).
+
+**Python implication:** `df.schema()` won’t show qualifiers/FDs, but you can still *observe* DFSchema behavior via plan/schema printing and fully-qualified table names.
+
+### A3) How to view “qualified schema” and schema evolution through the plan objects
+
+`datafusion-python` exposes plan objects that can print schema structure:
+
+**Logical plans**
+
+```python
+DataFrame.logical_plan() -> datafusion.plan.LogicalPlan
+DataFrame.optimized_logical_plan() -> datafusion.plan.LogicalPlan
+```
+
+**LogicalPlan helpers**
+
+```python
+LogicalPlan.display_indent_schema() -> str
+LogicalPlan.display_indent() -> str
+LogicalPlan.to_variant() -> Any
+LogicalPlan.to_proto() -> bytes
+LogicalPlan.from_proto(ctx, data: bytes) -> LogicalPlan
+```
+
+`display_indent_schema()` prints an indented schema for the plan. `to_proto/from_proto` exist but note: **plans with in-memory tables from record batches are not supported**.
+
+**Execution plans**
+
+```python
+DataFrame.execution_plan() -> datafusion.plan.ExecutionPlan
+ExecutionPlan.display() -> str
+ExecutionPlan.display_indent() -> str
+ExecutionPlan.children() -> list[ExecutionPlan]
+ExecutionPlan.partition_count -> int
+ExecutionPlan.to_proto() -> bytes
+ExecutionPlan.from_proto(ctx, data: bytes) -> ExecutionPlan
+```
+
+`DataFrame.execution_plan()` returns the physical plan; the `ExecutionPlan` printer APIs are exposed, with the same “in-memory tables not supported for proto serialization” caveat.
+
+### A4) “Plan-based rule pipeline”: modify plan → rehydrate DataFrame
+
+Python exposes:
+
+```python
+SessionContext.create_dataframe_from_logical_plan(plan: LogicalPlan) -> DataFrame
+```
+
+So the “compiler loop” exists even in Python:
+
+1. build a DataFrame,
+2. get its `LogicalPlan`,
+3. (optionally) serialize / transform externally,
+4. `LogicalPlan.from_proto(...)`,
+5. `ctx.create_dataframe_from_logical_plan(plan)`.
+
+---
+
+# B) Expression rewriting & “optimizer-rule-like” hooks in Python
+
+**Reality check:** DataFusion’s real `OptimizerRule` extension points live in Rust (see the core Query Optimizer docs for how rules are applied), and DataFusion’s expression TreeNode rewrite API is also Rust-level.
+In Python, you do **schema-aware rewriting** by *building new plans* from schema introspection, not by injecting optimizer rules.
+
+### B1) Schema-aware parsing of SQL expressions into `Expr`
+
+```python
+DataFrame.parse_sql_expr(expr: str) -> datafusion.expr.Expr
+```
+
+Parses expression text **against the DataFrame’s current schema**.
+
+That makes it your core “rewrite boundary”:
+
+* parse user/authored expression text safely,
+* then replace with a canonical expression you generate.
+
+### B2) “Rules as functions”: DataFrame accepts SQL strings that are parsed against schema
+
+Several DataFrame APIs accept either `Expr` **or** a SQL string that is parsed against the DataFrame schema:
+
+* **Filtering**
+
+```python
+DataFrame.filter(*predicates: Expr | str) -> DataFrame
+```
+
+SQL strings are parsed against the DataFrame schema; multiple predicates are ANDed.
+
+* **Adding computed columns**
+
+```python
+DataFrame.with_column(name: str, expr: Expr | str) -> DataFrame
+DataFrame.with_columns(*exprs: Expr|str|Iterable[Expr|str], **named_exprs: Expr|str) -> DataFrame
+```
+
+Both allow SQL strings parsed against the DataFrame schema.
+
+This is the “Python optimizer rule” substitute:
+
+* introspect `df.schema()` (Arrow),
+* generate canonical SQL snippets / Exprs,
+* apply via `filter/select/with_columns`.
+
+### B3) Nested-schema-aware field access at the expression level
+
+`Expr.__getitem__` is a built-in schema-driven accessor:
+
+```python
+Expr.__getitem__(key: str | int) -> Expr
+```
+
+* string key → struct subfield
+* int key → array element (0-based)
+* slice → array slice (0-based)
+
+This is how you enforce canonical nested access in code:
+
+```python
+from datafusion import col
+
+# struct field access
+span_start = col("node")["span"]["start"]["line0"]
+```
+
+### B4) Chaining “rule passes” as a pipeline
+
+```python
+DataFrame.transform(func: Callable[..., DataFrame], *args) -> DataFrame
+```
+
+Applies a function to the current DataFrame and returns another DataFrame (explicitly designed for chaining).
+
+This is the ergonomic “multi-pass optimizer” in Python:
+
+```python
+def normalize_span(df):
+    # inspect df.schema(), decide if normalization is needed, add canonical columns
+    return df.with_column("start_line0", "span['start']['line0']")
+
+df = df.transform(normalize_span).transform(other_rule_pass)
+```
+
+### B5) Introspection + verification loops
+
+* **Explain/Analyze** (useful to see whether your rewriting enabled pushdowns)
+
+```python
+DataFrame.explain(verbose: bool=False, analyze: bool=False) -> None
+```
+
+If `analyze=True`, it runs the plan and reports metrics.
+
+* **Streaming execution** (for large datasets without materializing)
+
+```python
+DataFrame.execute_stream() -> RecordBatchStream
+DataFrame.execute_stream_partitioned() -> list[RecordBatchStream]
+```
+
+---
+
+# C) Provider-level schema metadata hooks (defaults, provenance, constraints)
+
+These capabilities exist **in DataFusion**, but **not as pure-Python overrides** today; you implement them in **Rust TableProvider** and expose via **PyCapsule**.
+
+### C1) Rust TableProvider metadata methods you can exploit
+
+From the DataFusion `TableProvider` trait:
+
+* `constraints(&self) -> Option<&Constraints>`
+* `get_column_default(&self, column: &str) -> Option<&Expr>`
+* `scan_with_args(...)` / `ScanArgs` (structured scan inputs for pushdowns)
+
+These are exactly the “OO schema” hooks:
+
+* **defaults**: `get_column_default`
+* **constraints**: `constraints`
+* **DDL provenance**: `get_table_definition` (also on the trait; see docs.rs page referenced in the Python FFI protocols)
+* **plan-backed tables/views**: `get_logical_plan` (trait-level; used by view-like providers)
+
+### C2) Python integration: register a Rust-backed provider
+
+Python supports custom table providers via PyCapsule:
+
+* “Implement the TableProvider interface in Rust… expose a `FFI_TableProvider` via PyCapsule” (DataFusion 43.0.0+)
+
+Registration path in Python:
+
+```python
+SessionContext.register_table(name: str, table: Table | TableProviderExportable | DataFrame | pyarrow.dataset.Dataset) -> None
+```
+
+The `TableProviderExportable` protocol is explicitly part of the Python API surface (PyCapsule hook).
+
+---
+
+# D) Scan APIs & pushdowns (projection/filter/limit/order) you can drive from schemas in Python
+
+You can influence pushdown behavior from Python in two ways:
+
+## D1) “Pure DataFusion” pushdowns (no custom provider)
+
+Use DataFrame operations that the engine can push down:
+
+* `select`, `filter`, `limit`, `sort` etc. build a logical plan; DataFusion optimizes before execution.
+
+Then **verify** via:
+
+* `df.execution_plan().display_indent()` (physical plan printer)
+* `df.explain(analyze=True)` for metrics
+
+## D2) Registration-time pushdown hints (file-backed tables)
+
+Key Python registration calls expose scan-related knobs:
+
+### `register_parquet`
+
+```python
+register_parquet(
+  name: str,
+  path: str|Path,
+  table_partition_cols: list[tuple[str, str|pyarrow.DataType]]|None = None,
+  parquet_pruning: bool = True,
+  file_extension: str = '.parquet',
+  skip_metadata: bool = True,
+  schema: pyarrow.Schema|None = None,
+  file_sort_order: Sequence[Sequence[SortKey]]|None = None
+) -> None
+```
+
+Includes `parquet_pruning` (row-group pruning), `skip_metadata` (schema-metadata conflict control), and `file_sort_order` (ordering contract).
+
+### `register_listing_table` (multi-file tables)
+
+```python
+register_listing_table(
+  name: str,
+  path: str|Path,
+  table_partition_cols: list[tuple[str, str|pyarrow.DataType]]|None = None,
+  file_extension: str = '.parquet',
+  schema: pyarrow.Schema|None = None,
+  file_sort_order: Sequence[Sequence[SortKey]]|None = None
+) -> None
+```
+
+Explicitly supports `schema` (canonical schema override), partitions, and file sort order hints.
+
+### Session-wide pruning toggle
+
+```python
+SessionConfig.with_parquet_pruning(enabled: bool = True) -> SessionConfig
+```
+
+Enables/disables pruning predicates for parquet readers.
+
+**Schema-derived action pattern:** if your table schema declares `span.start.line0`, your orchestrator can automatically:
+
+* push a projection to just those nested fields (via `select`)
+* add a filter on those fields (via `filter`)
+* and rely on Parquet pruning + partition columns (if present) to minimize IO.
+
+---
+
+# E) Schema evolution / mismatch handling (PhysicalExprAdapter) and how Python participates
+
+This is **Rust-first** today, but you can still structure your Python system to take advantage of it.
+
+### E1) The engine mechanism: PhysicalExprAdapter and pre-processing
+
+DataFusion’s upgrade guide documents that:
+
+* partition column replacement moved out of `PhysicalExprAdapter`
+* you now call `replace_columns_with_literals()` before rewriting expressions through `PhysicalExprAdapter`.
+
+And DataFusion has a long-term plan to prefer **PhysicalExprAdapter** over schema adapters, explicitly to support:
+
+* cheaper missing-column handling,
+* better projection pushdown into file scans,
+* reading **single fields in a struct** without reading the entire struct (important for your nested CPG bundles).
+
+### E2) What you can do in Python **without** writing Rust
+
+You can get most of the value by using these patterns:
+
+1. **Canonical schema override at registration**
+
+   * Provide `schema=...` to `register_listing_table` / `register_parquet` so DataFusion plans against your *logical schema contract* even if some files differ (then the engine’s scan layer adapts as supported).
+
+2. **Versioned datasets** (most robust)
+
+   * Store each run’s outputs in a new location (or new table name) so you don’t need mixed-version schema adaptation in the same scan.
+
+### E3) Full-control path: implement a Rust TableProvider + FileSource
+
+If you truly need “read old files as new schema” with deterministic casting/filling:
+
+* implement a Rust TableProvider/FileSource using `PhysicalExprAdapterFactory` / `replace_columns_with_literals` as the upgrade guide describes,
+* expose as PyCapsule, then register in Python (`register_table`).
+
+---
+
+# Practical “best-in-class” Python rule engine recipe (using only exposed APIs)
+
+If you want a concrete structure that feels “compiler-like” in Python:
+
+1. **Reflection**
+
+   * `schema = df.schema()`
+   * `plan = df.optimized_logical_plan()`
+   * `print(plan.display_indent_schema())`
+
+2. **Rule passes**
+
+   * Write passes as functions `f(df)->df` and chain with `df.transform(...)`
+   * Use schema-aware parsing (`df.parse_sql_expr`) and schema-aware SQL-string expressions (`filter`, `with_column(s)`)
+
+3. **Verify pushdowns**
+
+   * `df.execution_plan().display_indent()`
+   * `df.explain(analyze=True)`
+
+4. **Escalate to Rust only when needed**
+
+   * True optimizer-rule injection / PhysicalExprAdapter customization / provider metadata (defaults/constraints/DDL provenance) are TableProvider-level and belong in Rust, exposed via PyCapsule.
+
+

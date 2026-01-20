@@ -8,7 +8,7 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from datafusion_engine.schema_registry import schema_for
+from datafusion_engine.schema_registry import is_nested_dataset, nested_schema_for, schema_for
 from ibis_engine.query_compiler import IbisQuerySpec
 from normalize.registry_builders import build_dataset_spec, build_input_schema
 from normalize.registry_rows import DATASET_ROWS, DatasetRow
@@ -202,6 +202,8 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Dataset schema with metadata.
     """
+    if is_nested_dataset(name):
+        return nested_schema_for(name, allow_derived=True)
     try:
         return schema_for(name)
     except KeyError:

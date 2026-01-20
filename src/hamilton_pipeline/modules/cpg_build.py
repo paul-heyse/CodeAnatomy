@@ -127,6 +127,7 @@ from schema_spec.system import (
     make_contract_spec,
     make_dataset_spec,
     make_table_spec,
+    prune_nested_dataset_specs,
     table_spec_from_schema,
 )
 from sqlglot_tools.bridge import IbisCompilerBackend
@@ -575,7 +576,9 @@ def schema_registry(
     """
     registry = GLOBAL_SCHEMA_REGISTRY
     register_cpg_specs(registry)
-    return relationship_contract_spec.register_into(registry)
+    registry = relationship_contract_spec.register_into(registry)
+    prune_nested_dataset_specs(registry)
+    return registry
 
 
 # -----------------------------

@@ -22,6 +22,7 @@ from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.serialization import schema_to_dict
 from core_types import ensure_path
 from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.schema_registry import SCHEMA_REGISTRY
 from ibis_engine.registry import (
     DatasetLocation,
     IbisDatasetRegistry,
@@ -411,10 +412,11 @@ def register_dataset_df(
         ),
         runtime_profile=runtime_profile,
     )
-    if location.format == "delta":
+    scan = options.scan
+    if (scan is not None and scan.unbounded) or _should_register_external_table(context):
+        df = _register_external_table(context)
+    elif location.format == "delta":
         df = _register_delta(context)
-    elif options.scan is not None and options.scan.unbounded:
-        df = _register_unbounded_external_table(context)
     elif options.provider == "dataset":
         df = _register_dataset_provider(context)
     elif location.format == "parquet":
@@ -429,6 +431,12 @@ def register_dataset_df(
         msg = f"Unsupported DataFusion dataset format: {location.format!r}."
         raise ValueError(msg)
     return df
+
+
+def _should_register_external_table(context: DataFusionRegistrationContext) -> bool:
+    if context.external_table_sql is None:
+        return False
+    return context.name in SCHEMA_REGISTRY
 
 
 def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
@@ -492,12 +500,12 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
     return _maybe_cache(context, df)
 
 
-def _register_unbounded_external_table(
+def _register_external_table(
     context: DataFusionRegistrationContext,
 ) -> DataFrame:
     scan = context.options.scan
     if context.external_table_sql is None:
-        msg = "Unbounded external tables require a schema-backed DDL statement."
+        msg = "External table registration requires a schema-backed DDL statement."
         raise ValueError(msg)
     file_extension = scan.file_extension if scan and scan.file_extension else ".parquet"
     table_partition_cols = (

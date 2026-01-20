@@ -33,6 +33,7 @@ from cpg.constants import CpgBuildArtifacts
 from datafusion_engine.bridge import validate_table_constraints
 from datafusion_engine.registry_bridge import cached_dataset_names, register_dataset_df
 from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.schema_registry import is_nested_dataset
 from engine.function_registry import default_function_registry
 from engine.plan_cache import PlanCacheEntry
 from engine.plan_policy import WriterStrategy
@@ -72,6 +73,7 @@ from obs.diagnostics import DiagnosticsCollector
 from obs.diagnostics_tables import (
     datafusion_explains_table,
     datafusion_fallbacks_table,
+    datafusion_schema_registry_validation_table,
     feature_state_table,
 )
 from obs.manifest import (
@@ -264,6 +266,8 @@ def _default_delta_write_policy(spec: DatasetSpec | None) -> DeltaWritePolicy | 
 
 
 def _dataset_spec_for_name(name: str) -> DatasetSpec | None:
+    if is_nested_dataset(name):
+        return None
     spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(name)
     if spec is not None:
         return spec
@@ -760,6 +764,21 @@ def _datafusion_udf_registry(
         [],
     )
     return registry or None
+
+
+def _datafusion_schema_registry_validation(
+    ctx: ExecutionContext,
+) -> pa.Table | None:
+    profile = ctx.runtime.datafusion
+    if profile is None or profile.diagnostics_sink is None:
+        return None
+    entries = profile.diagnostics_sink.artifacts_snapshot().get(
+        "datafusion_schema_registry_validation_v1",
+        [],
+    )
+    if not entries:
+        return None
+    return datafusion_schema_registry_validation_table(entries)
 
 
 def _datafusion_table_providers(
@@ -3235,6 +3254,7 @@ class _RunBundleDatafusionArtifacts:
     listing_refresh_events: Sequence[Mapping[str, object]] | None
     delta_tables: Sequence[Mapping[str, object]] | None
     udf_registry: Sequence[Mapping[str, object]] | None
+    schema_registry_validation: pa.Table | None
     table_providers: Sequence[Mapping[str, object]] | None
     function_catalog: Sequence[Mapping[str, object]] | None
     function_catalog_hash: str | None
@@ -3277,6 +3297,7 @@ def _run_bundle_datafusion_artifacts(
             listing_refresh_events=None,
             delta_tables=None,
             udf_registry=None,
+            schema_registry_validation=None,
             table_providers=None,
             function_catalog=None,
             function_catalog_hash=None,
@@ -3311,6 +3332,7 @@ def _run_bundle_datafusion_artifacts(
         listing_refresh_events=_datafusion_listing_refresh_events(ctx),
         delta_tables=_datafusion_delta_tables(ctx),
         udf_registry=_datafusion_udf_registry(ctx),
+        schema_registry_validation=_datafusion_schema_registry_validation(ctx),
         table_providers=_datafusion_table_providers(ctx),
         function_catalog=function_catalog,
         function_catalog_hash=function_catalog_hash,
@@ -3410,6 +3432,7 @@ def run_bundle_context(
         datafusion_delta_tables=datafusion_artifacts.delta_tables,
         delta_maintenance_reports=delta_maintenance_reports,
         datafusion_udf_registry=datafusion_artifacts.udf_registry,
+        datafusion_schema_registry_validation=datafusion_artifacts.schema_registry_validation,
         datafusion_table_providers=datafusion_artifacts.table_providers,
         datafusion_function_catalog=datafusion_artifacts.function_catalog,
         datafusion_function_catalog_hash=datafusion_artifacts.function_catalog_hash,

@@ -13,6 +13,7 @@ from arrowdsl.schema.serialization import schema_fingerprint
 from obs.diagnostics_schemas import (
     DATAFUSION_EXPLAINS_V1,
     DATAFUSION_FALLBACKS_V1,
+    DATAFUSION_SCHEMA_REGISTRY_VALIDATION_V1,
     FEATURE_STATE_V1,
 )
 
@@ -104,6 +105,44 @@ def datafusion_explains_table(explains: Sequence[Mapping[str, object]]) -> pa.Ta
     return table_from_rows(DATAFUSION_EXPLAINS_V1, rows)
 
 
+def datafusion_schema_registry_validation_table(
+    records: Sequence[Mapping[str, object]],
+) -> pa.Table:
+    """Build a DataFusion schema registry validation diagnostics table.
+
+    Returns
+    -------
+    pyarrow.Table
+        Diagnostics table aligned to DATAFUSION_SCHEMA_REGISTRY_VALIDATION_V1.
+    """
+    now = _now_ms()
+    rows: list[dict[str, object]] = []
+    for record in records:
+        event_time = _coerce_event_time(record.get("event_time_unix_ms"), default=now)
+        missing = _coerce_str_list(record.get("missing"))
+        rows.extend(
+            {
+                "event_time_unix_ms": event_time,
+                "schema_name": name,
+                "issue_type": "missing",
+                "detail": None,
+            }
+            for name in missing
+        )
+        type_errors = record.get("type_errors")
+        if isinstance(type_errors, Mapping):
+            rows.extend(
+                {
+                    "event_time_unix_ms": event_time,
+                    "schema_name": str(name),
+                    "issue_type": "type_error",
+                    "detail": str(detail),
+                }
+                for name, detail in type_errors.items()
+            )
+    return table_from_rows(DATAFUSION_SCHEMA_REGISTRY_VALIDATION_V1, rows)
+
+
 def _explain_rows_metadata(rows: object) -> tuple[str | None, str | None, str | None]:
     if isinstance(rows, (RecordBatchReaderLike, TableLike)):
         return None, "ipc_file", schema_fingerprint(rows.schema)
@@ -140,4 +179,9 @@ def feature_state_table(events: Sequence[Mapping[str, object]]) -> pa.Table:
     return table_from_rows(FEATURE_STATE_V1, rows)
 
 
-__all__ = ["datafusion_explains_table", "datafusion_fallbacks_table", "feature_state_table"]
+__all__ = [
+    "datafusion_explains_table",
+    "datafusion_fallbacks_table",
+    "datafusion_schema_registry_validation_table",
+    "feature_state_table",
+]

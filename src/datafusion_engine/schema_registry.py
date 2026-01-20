@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Literal, TypedDict
 
 import pyarrow as pa
+
+from arrowdsl.core.schema_constants import SCHEMA_META_NAME, SCHEMA_META_VERSION
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -520,6 +522,37 @@ BYTECODE_FILES_SCHEMA = pa.schema(
     ]
 )
 
+
+class NestedDatasetSpec(TypedDict):
+    root: str
+    path: str
+    role: Literal["intrinsic", "derived"]
+    context: dict[str, str]
+
+
+def _schema_version_from_name(name: str) -> int | None:
+    _, sep, suffix = name.rpartition("_v")
+    if sep and suffix.isdigit():
+        return int(suffix)
+    return None
+
+
+def _schema_with_metadata(name: str, schema: pa.Schema) -> pa.Schema:
+    metadata = dict(schema.metadata or {})
+    metadata[SCHEMA_META_NAME] = name.encode("utf-8")
+    version = _schema_version_from_name(name)
+    if version is not None:
+        metadata[SCHEMA_META_VERSION] = str(version).encode("utf-8")
+    return schema.with_metadata(metadata)
+
+
+AST_FILES_SCHEMA = _schema_with_metadata("ast_files_v1", AST_FILES_SCHEMA)
+BYTECODE_FILES_SCHEMA = _schema_with_metadata("bytecode_files_v1", BYTECODE_FILES_SCHEMA)
+LIBCST_FILES_SCHEMA = _schema_with_metadata("libcst_files_v1", LIBCST_FILES_SCHEMA)
+SCIP_INDEX_SCHEMA = _schema_with_metadata("scip_index_v1", SCIP_INDEX_SCHEMA)
+SYMTABLE_FILES_SCHEMA = _schema_with_metadata("symtable_files_v1", SYMTABLE_FILES_SCHEMA)
+TREE_SITTER_FILES_SCHEMA = _schema_with_metadata("tree_sitter_files_v1", TREE_SITTER_FILES_SCHEMA)
+
 SCHEMA_REGISTRY: dict[str, pa.Schema] = {
     "ast_files_v1": AST_FILES_SCHEMA,
     "bytecode_files_v1": BYTECODE_FILES_SCHEMA,
@@ -528,6 +561,630 @@ SCHEMA_REGISTRY: dict[str, pa.Schema] = {
     "symtable_files_v1": SYMTABLE_FILES_SCHEMA,
     "tree_sitter_files_v1": TREE_SITTER_FILES_SCHEMA,
 }
+
+NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
+    "cst_nodes": {
+        "root": "libcst_files_v1",
+        "path": "nodes",
+        "role": "intrinsic",
+        "context": {},
+    },
+    "cst_edges": {
+        "root": "libcst_files_v1",
+        "path": "edges",
+        "role": "intrinsic",
+        "context": {},
+    },
+    "cst_parse_manifest": {
+        "root": "libcst_files_v1",
+        "path": "parse_manifest",
+        "role": "intrinsic",
+        "context": {},
+    },
+    "cst_parse_errors": {
+        "root": "libcst_files_v1",
+        "path": "parse_errors",
+        "role": "derived",
+        "context": {},
+    },
+    "cst_name_refs": {
+        "root": "libcst_files_v1",
+        "path": "name_refs",
+        "role": "derived",
+        "context": {},
+    },
+    "cst_imports": {
+        "root": "libcst_files_v1",
+        "path": "imports",
+        "role": "derived",
+        "context": {},
+    },
+    "cst_callsites": {
+        "root": "libcst_files_v1",
+        "path": "callsites",
+        "role": "derived",
+        "context": {},
+    },
+    "cst_defs": {
+        "root": "libcst_files_v1",
+        "path": "defs",
+        "role": "derived",
+        "context": {},
+    },
+    "cst_type_exprs": {
+        "root": "libcst_files_v1",
+        "path": "type_exprs",
+        "role": "derived",
+        "context": {},
+    },
+    "ast_nodes": {
+        "root": "ast_files_v1",
+        "path": "nodes",
+        "role": "derived",
+        "context": {},
+    },
+    "ast_edges": {
+        "root": "ast_files_v1",
+        "path": "edges",
+        "role": "derived",
+        "context": {},
+    },
+    "ast_errors": {
+        "root": "ast_files_v1",
+        "path": "errors",
+        "role": "derived",
+        "context": {},
+    },
+    "ts_nodes": {
+        "root": "tree_sitter_files_v1",
+        "path": "nodes",
+        "role": "derived",
+        "context": {},
+    },
+    "ts_errors": {
+        "root": "tree_sitter_files_v1",
+        "path": "errors",
+        "role": "derived",
+        "context": {},
+    },
+    "ts_missing": {
+        "root": "tree_sitter_files_v1",
+        "path": "missing",
+        "role": "derived",
+        "context": {},
+    },
+    "symtable_scopes": {
+        "root": "symtable_files_v1",
+        "path": "blocks",
+        "role": "derived",
+        "context": {},
+    },
+    "symtable_symbols": {
+        "root": "symtable_files_v1",
+        "path": "blocks.symbols",
+        "role": "derived",
+        "context": {"block_id": "blocks.block_id"},
+    },
+    "symtable_scope_edges": {
+        "root": "symtable_files_v1",
+        "path": "blocks",
+        "role": "derived",
+        "context": {},
+    },
+    "scip_metadata": {
+        "root": "scip_index_v1",
+        "path": "metadata",
+        "role": "derived",
+        "context": {},
+    },
+    "scip_documents": {
+        "root": "scip_index_v1",
+        "path": "documents",
+        "role": "derived",
+        "context": {},
+    },
+    "scip_occurrences": {
+        "root": "scip_index_v1",
+        "path": "documents.occurrences",
+        "role": "derived",
+        "context": {"relative_path": "documents.relative_path"},
+    },
+    "scip_symbol_information": {
+        "root": "scip_index_v1",
+        "path": "symbols",
+        "role": "derived",
+        "context": {},
+    },
+    "scip_external_symbol_information": {
+        "root": "scip_index_v1",
+        "path": "external_symbols",
+        "role": "derived",
+        "context": {},
+    },
+    "scip_symbol_relationships": {
+        "root": "scip_index_v1",
+        "path": "symbols.relationships",
+        "role": "derived",
+        "context": {"parent_symbol": "symbols.symbol"},
+    },
+    "scip_diagnostics": {
+        "root": "scip_index_v1",
+        "path": "documents.occurrences.diagnostics",
+        "role": "derived",
+        "context": {
+            "relative_path": "documents.relative_path",
+            "occ_range": "documents.occurrences.range",
+        },
+    },
+    "py_bc_code_units": {
+        "root": "bytecode_files_v1",
+        "path": "code_objects",
+        "role": "derived",
+        "context": {},
+    },
+    "py_bc_instructions": {
+        "root": "bytecode_files_v1",
+        "path": "code_objects.instructions",
+        "role": "derived",
+        "context": {"code_id": "code_objects.code_id"},
+    },
+    "py_bc_blocks": {
+        "root": "bytecode_files_v1",
+        "path": "code_objects.blocks",
+        "role": "derived",
+        "context": {"code_id": "code_objects.code_id"},
+    },
+    "py_bc_cfg_edges": {
+        "root": "bytecode_files_v1",
+        "path": "code_objects.cfg_edges",
+        "role": "derived",
+        "context": {"code_id": "code_objects.code_id"},
+    },
+    "bytecode_exception_table": {
+        "root": "bytecode_files_v1",
+        "path": "code_objects.exception_table",
+        "role": "derived",
+        "context": {"code_id": "code_objects.code_id"},
+    },
+    "bytecode_errors": {
+        "root": "bytecode_files_v1",
+        "path": "errors",
+        "role": "derived",
+        "context": {},
+    },
+}
+
+ROOT_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
+    "ast_files_v1": ("file_id", "path"),
+    "bytecode_files_v1": ("file_id", "path"),
+    "libcst_files_v1": ("file_id", "path"),
+    "scip_index_v1": ("index_id",),
+    "symtable_files_v1": ("file_id", "path"),
+    "tree_sitter_files_v1": ("file_id", "path"),
+}
+
+
+def nested_dataset_names() -> tuple[str, ...]:
+    """Return nested dataset names in sorted order.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted nested dataset name tuple.
+    """
+    return tuple(sorted(NESTED_DATASET_INDEX))
+
+
+def nested_schema_names() -> tuple[str, ...]:
+    """Return intrinsic nested dataset names in sorted order.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted intrinsic nested dataset name tuple.
+    """
+    return tuple(
+        sorted(name for name, spec in NESTED_DATASET_INDEX.items() if spec["role"] == "intrinsic")
+    )
+
+
+def nested_spec_for(name: str) -> NestedDatasetSpec:
+    """Return the nested dataset spec for a name.
+
+    Returns
+    -------
+    NestedDatasetSpec
+        Nested dataset specification mapping.
+
+    Raises
+    ------
+    KeyError
+        Raised when the dataset name is not registered.
+    """
+    spec = NESTED_DATASET_INDEX.get(name)
+    if spec is None:
+        msg = f"Unknown nested dataset: {name!r}."
+        raise KeyError(msg)
+    return spec
+
+
+def datasets_for_path(root: str, path: str) -> tuple[str, ...]:
+    """Return dataset names registered for a root/path pair.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted dataset name tuple for the path.
+    """
+    return tuple(
+        sorted(
+            name
+            for name, spec in NESTED_DATASET_INDEX.items()
+            if spec["root"] == root and spec["path"] == path
+        )
+    )
+
+
+def nested_path_for(name: str) -> tuple[str, str]:
+    """Return the root schema name and path for a nested dataset.
+
+    Returns
+    -------
+    tuple[str, str]
+        Root schema name and nested path.
+    """
+    spec = nested_spec_for(name)
+    return spec["root"], spec["path"]
+
+
+def nested_context_for(name: str) -> Mapping[str, str]:
+    """Return the context fields for a nested dataset.
+
+    Returns
+    -------
+    Mapping[str, str]
+        Mapping of output column name to nested context path.
+    """
+    return nested_spec_for(name)["context"]
+
+
+def nested_role_for(name: str) -> Literal["intrinsic", "derived"]:
+    """Return the nested dataset role for a name.
+
+    Returns
+    -------
+    Literal["intrinsic", "derived"]
+        Dataset role label.
+    """
+    return nested_spec_for(name)["role"]
+
+
+def is_nested_dataset(name: str) -> bool:
+    """Return whether a name is a known nested dataset.
+
+    Returns
+    -------
+    bool
+        ``True`` when the dataset name is registered.
+    """
+    return name in NESTED_DATASET_INDEX
+
+
+def is_intrinsic_nested_dataset(name: str) -> bool:
+    """Return whether a nested dataset is intrinsic.
+
+    Returns
+    -------
+    bool
+        ``True`` when the dataset is intrinsic.
+    """
+    spec = NESTED_DATASET_INDEX.get(name)
+    return spec is not None and spec["role"] == "intrinsic"
+
+
+def _is_list_type(dtype: pa.DataType) -> bool:
+    return pa.types.is_list(dtype) or pa.types.is_large_list(dtype)
+
+
+def _field_from_container(container: pa.Schema | pa.StructType, name: str) -> pa.Field:
+    try:
+        return container.field(name)
+    except KeyError as exc:
+        msg = f"Unknown nested field: {name!r}."
+        raise KeyError(msg) from exc
+
+
+def struct_for_path(schema: pa.Schema, path: str) -> pa.StructType:
+    """Resolve the struct type for a nested path.
+
+    Returns
+    -------
+    pyarrow.StructType
+        Struct type resolved at the nested path.
+
+    Raises
+    ------
+    TypeError
+        Raised when the path does not resolve to a struct.
+    ValueError
+        Raised when the path is empty.
+    """
+    if not path:
+        msg = "Nested schema path cannot be empty."
+        raise ValueError(msg)
+    current: pa.Schema | pa.StructType = schema
+    for step in path.split("."):
+        field = _field_from_container(current, step)
+        dtype = field.type
+        if _is_list_type(dtype):
+            dtype = dtype.value_type
+        if not pa.types.is_struct(dtype):
+            msg = f"Nested path {path!r} does not resolve to a struct at {step!r}."
+            raise TypeError(msg)
+        current = dtype
+    if isinstance(current, pa.StructType):
+        return current
+    msg = f"Nested path {path!r} did not resolve to a struct."
+    raise TypeError(msg)
+
+
+def _context_fields_for(name: str, root_schema: pa.Schema) -> tuple[pa.Field, ...]:
+    context = nested_context_for(name)
+    if not context:
+        return ()
+    fields: list[pa.Field] = []
+    for alias, path in context.items():
+        prefix, sep, field_name = path.rpartition(".")
+        if not sep:
+            field = root_schema.field(field_name)
+        else:
+            struct_type = struct_for_path(root_schema, prefix)
+            field = struct_type.field(field_name)
+        fields.append(pa.field(alias, field.type, field.nullable))
+    return tuple(fields)
+
+
+def identity_fields_for(
+    name: str,
+    root_schema: pa.Schema,
+    row_struct: pa.StructType,
+) -> tuple[str, ...]:
+    """Return identity column names for a nested dataset.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Identity column names for the dataset.
+    """
+    root, _ = nested_path_for(name)
+    identities = ROOT_IDENTITY_FIELDS.get(root, ())
+    row_fields = {field.name for field in row_struct}
+    resolved: list[str] = []
+    for field_name in identities:
+        if field_name in row_fields:
+            continue
+        root_schema.field(field_name)
+        resolved.append(field_name)
+    return tuple(resolved)
+
+
+def nested_schema_for(name: str, *, allow_derived: bool = False) -> pa.Schema:
+    """Return the schema for an intrinsic nested dataset.
+
+    Returns
+    -------
+    pyarrow.Schema
+        Derived nested schema for the dataset.
+
+    Raises
+    ------
+    KeyError
+        Raised when the dataset is not intrinsic unless allow_derived is True.
+    """
+    if not allow_derived and not is_intrinsic_nested_dataset(name):
+        msg = f"Nested schema {name!r} is derived; set allow_derived=True to resolve."
+        raise KeyError(msg)
+    root, path = nested_path_for(name)
+    root_schema = SCHEMA_REGISTRY[root]
+    row_struct = struct_for_path(root_schema, path)
+    identity_fields = identity_fields_for(name, root_schema, row_struct)
+    context_fields = _context_fields_for(name, root_schema)
+    fields: list[pa.Field] = []
+    seen: set[str] = set()
+    for field_name in identity_fields:
+        field = root_schema.field(field_name)
+        fields.append(pa.field(field.name, field.type, field.nullable))
+        seen.add(field.name)
+    for field in context_fields:
+        if field.name in seen:
+            continue
+        fields.append(field)
+        seen.add(field.name)
+    for field in row_struct:
+        if field.name in seen:
+            continue
+        fields.append(pa.field(field.name, field.type, field.nullable))
+        seen.add(field.name)
+    return pa.schema(fields)
+
+
+def _append_selection(
+    selections: list[str],
+    selected_names: set[str],
+    *,
+    name: str,
+    expr: str,
+) -> None:
+    if name in selected_names:
+        return
+    selections.append(f"{expr} AS {name}")
+    selected_names.add(name)
+
+
+def _context_expr(
+    *,
+    root_alias: str,
+    prefix_exprs: Mapping[str, str],
+    ctx_path: str,
+    dataset_name: str,
+) -> str:
+    prefix, sep, field_name = ctx_path.rpartition(".")
+    if not sep:
+        return f"{root_alias}.{field_name}"
+    prefix_expr = prefix_exprs.get(prefix)
+    if prefix_expr is None:
+        msg = f"Nested context path {ctx_path!r} not resolved for {dataset_name!r}."
+        raise KeyError(msg)
+    return f"{prefix_expr}['{field_name}']"
+
+
+def _resolve_nested_path(
+    *,
+    root_schema: pa.Schema,
+    path: str,
+    root_alias: str,
+    table: str,
+) -> tuple[str, str, pa.StructType, dict[str, str]]:
+    from_clause = f"FROM {table} AS {root_alias}"
+    current_expr = root_alias
+    current_is_root = True
+    current_struct: pa.Schema | pa.StructType = root_schema
+    prefix_exprs: dict[str, str] = {}
+    parts = path.split(".")
+    for idx, step in enumerate(parts):
+        field = _field_from_container(current_struct, step)
+        dtype = field.type
+        prefix = ".".join(parts[: idx + 1])
+        if _is_list_type(dtype):
+            list_expr = (
+                f"{current_expr}.{step}"
+                if current_is_root
+                else f"{current_expr}['{step}']"
+            )
+            alias = f"n{idx}"
+            from_clause += f"\nCROSS JOIN unnest({list_expr}) AS {alias}"
+            current_expr = alias
+            current_is_root = False
+            value_type = dtype.value_type
+            if not pa.types.is_struct(value_type):
+                msg = f"Nested path {path!r} does not resolve to a struct at {step!r}."
+                raise TypeError(msg)
+            current_struct = value_type
+            prefix_exprs[prefix] = alias
+            continue
+        if not pa.types.is_struct(dtype):
+            msg = f"Nested path {path!r} does not resolve to a struct at {step!r}."
+            raise TypeError(msg)
+        current_expr = f"{current_expr}.{step}" if current_is_root else f"{current_expr}['{step}']"
+        current_is_root = False
+        current_struct = dtype
+        prefix_exprs[prefix] = current_expr
+    if not isinstance(current_struct, pa.StructType):
+        msg = f"Nested path {path!r} did not resolve to a struct."
+        raise TypeError(msg)
+    return from_clause, current_expr, current_struct, prefix_exprs
+
+
+def nested_base_sql(name: str, *, table: str | None = None) -> str:
+    """Return base SQL for a nested dataset path.
+
+    Returns
+    -------
+    str
+        Base SQL query string.
+    """
+    root, path = nested_path_for(name)
+    root_schema = SCHEMA_REGISTRY[root]
+    root_alias = "root"
+    resolved_table = table or root
+    from_clause, row_expr, row_struct, prefix_exprs = _resolve_nested_path(
+        root_schema=root_schema,
+        path=path,
+        root_alias=root_alias,
+        table=resolved_table,
+    )
+    identity_fields = identity_fields_for(name, root_schema, row_struct)
+    context_fields = nested_context_for(name)
+    selections: list[str] = []
+    selected_names: set[str] = set()
+    for field_name in identity_fields:
+        _append_selection(
+            selections,
+            selected_names,
+            name=field_name,
+            expr=f"{root_alias}.{field_name}",
+        )
+    for alias, ctx_path in context_fields.items():
+        expr = _context_expr(
+            root_alias=root_alias,
+            prefix_exprs=prefix_exprs,
+            ctx_path=ctx_path,
+            dataset_name=name,
+        )
+        _append_selection(selections, selected_names, name=alias, expr=expr)
+    for field in row_struct:
+        _append_selection(
+            selections,
+            selected_names,
+            name=field.name,
+            expr=f"{row_expr}['{field.name}']",
+        )
+    select_sql = ",\n      ".join(selections)
+    return f"SELECT\n      {select_sql}\n{from_clause}"
+
+
+def validate_schema_metadata(schema: pa.Schema) -> None:
+    """Validate required schema metadata tags.
+
+    Raises
+    ------
+    ValueError
+        Raised when required schema metadata is missing.
+    """
+    meta = schema.metadata or {}
+    if SCHEMA_META_NAME not in meta:
+        msg = "Schema metadata missing schema_name."
+        raise ValueError(msg)
+    if SCHEMA_META_VERSION not in meta:
+        msg = "Schema metadata missing schema_version."
+        raise ValueError(msg)
+
+
+def validate_nested_types(ctx: SessionContext, name: str) -> None:
+    """Validate nested dataset types using DataFusion arrow_typeof."""
+    ctx.sql(f"SELECT arrow_typeof(*) AS row_type FROM {name} LIMIT 1").collect()
+
+
+def registered_table_names(ctx: SessionContext) -> set[str]:
+    """Return registered table names from information_schema.
+
+    Returns
+    -------
+    set[str]
+        Set of table names present in the session catalog.
+    """
+    table = ctx.sql("SELECT table_name FROM information_schema.tables").to_arrow_table()
+    if "table_name" not in table.column_names:
+        return set()
+    return {str(name) for name in table["table_name"].to_pylist() if name is not None}
+
+
+def missing_schema_names(
+    ctx: SessionContext,
+    *,
+    expected: Sequence[str] | None = None,
+) -> tuple[str, ...]:
+    """Return missing schema names from information_schema.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted tuple of missing schema names.
+    """
+    expected_names = set(expected or schema_names())
+    registered = registered_table_names(ctx)
+    missing = sorted(expected_names - registered)
+    return tuple(missing)
 
 
 def schema_registry() -> Mapping[str, pa.Schema]:
@@ -549,7 +1206,7 @@ def schema_names() -> tuple[str, ...]:
     tuple[str, ...]
         Sorted schema name tuple.
     """
-    return tuple(sorted(SCHEMA_REGISTRY))
+    return tuple(sorted({*SCHEMA_REGISTRY, *nested_schema_names()}))
 
 
 def has_schema(name: str) -> bool:
@@ -560,7 +1217,7 @@ def has_schema(name: str) -> bool:
     bool
         ``True`` when the schema name is registered.
     """
-    return name in SCHEMA_REGISTRY
+    return name in SCHEMA_REGISTRY or is_intrinsic_nested_dataset(name)
 
 
 def schema_for(name: str) -> pa.Schema:
@@ -577,10 +1234,12 @@ def schema_for(name: str) -> pa.Schema:
         Raised when the schema name is not registered.
     """
     schema = SCHEMA_REGISTRY.get(name)
-    if schema is None:
-        msg = f"Unknown DataFusion schema: {name!r}."
-        raise KeyError(msg)
-    return schema
+    if schema is not None:
+        return schema
+    if is_intrinsic_nested_dataset(name):
+        return nested_schema_for(name)
+    msg = f"Unknown DataFusion schema: {name!r}."
+    raise KeyError(msg)
 
 
 def register_schema(ctx: SessionContext, name: str, schema: pa.Schema) -> None:
@@ -593,21 +1252,41 @@ def register_schema(ctx: SessionContext, name: str, schema: pa.Schema) -> None:
 def register_all_schemas(ctx: SessionContext) -> None:
     """Register all canonical schemas in a DataFusion SessionContext."""
     for name, schema in SCHEMA_REGISTRY.items():
+        validate_schema_metadata(schema)
         register_schema(ctx, name, schema)
+    for name in nested_schema_names():
+        register_schema(ctx, name, nested_schema_for(name))
 
 
 __all__ = [
     "AST_FILES_SCHEMA",
     "BYTECODE_FILES_SCHEMA",
     "LIBCST_FILES_SCHEMA",
+    "NESTED_DATASET_INDEX",
     "SCHEMA_REGISTRY",
     "SCIP_INDEX_SCHEMA",
     "SYMTABLE_FILES_SCHEMA",
     "TREE_SITTER_FILES_SCHEMA",
+    "datasets_for_path",
     "has_schema",
+    "identity_fields_for",
+    "is_intrinsic_nested_dataset",
+    "is_nested_dataset",
+    "missing_schema_names",
+    "nested_base_sql",
+    "nested_context_for",
+    "nested_dataset_names",
+    "nested_path_for",
+    "nested_role_for",
+    "nested_schema_for",
+    "nested_schema_names",
     "register_all_schemas",
     "register_schema",
+    "registered_table_names",
     "schema_for",
     "schema_names",
     "schema_registry",
+    "struct_for_path",
+    "validate_nested_types",
+    "validate_schema_metadata",
 ]

@@ -16,7 +16,7 @@ from arrowdsl.schema.metadata import (
 )
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import EncodingPolicy, SchemaMetadataSpec
-from datafusion_engine.schema_registry import schema_for
+from datafusion_engine.schema_registry import is_nested_dataset, nested_schema_for, schema_for
 from extract.evidence_specs import evidence_metadata_spec as extract_evidence_metadata_spec
 from extract.registry_builders import (
     QueryContext,
@@ -84,6 +84,8 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Arrow schema for the dataset.
     """
+    if is_nested_dataset(name):
+        return nested_schema_for(name, allow_derived=True)
     try:
         return schema_for(name)
     except KeyError:

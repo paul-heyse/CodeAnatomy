@@ -31,6 +31,16 @@ DATAFUSION_EXPLAINS_V1 = pa.schema(
     metadata={b"schema_name": b"datafusion_explains_v1"},
 )
 
+DATAFUSION_SCHEMA_REGISTRY_VALIDATION_V1 = pa.schema(
+    [
+        pa.field("event_time_unix_ms", pa.int64(), nullable=False),
+        pa.field("schema_name", pa.string(), nullable=False),
+        pa.field("issue_type", pa.string(), nullable=False),
+        pa.field("detail", pa.string(), nullable=True),
+    ],
+    metadata={b"schema_name": b"datafusion_schema_registry_validation_v1"},
+)
+
 FEATURE_STATE_V1 = pa.schema(
     [
         pa.field("profile_name", pa.string(), nullable=False),
@@ -47,6 +57,7 @@ DIAGNOSTICS_SCHEMA_VERSION = "v1"
 __all__ = [
     "DATAFUSION_EXPLAINS_V1",
     "DATAFUSION_FALLBACKS_V1",
+    "DATAFUSION_SCHEMA_REGISTRY_VALIDATION_V1",
     "DIAGNOSTICS_SCHEMA_VERSION",
     "FEATURE_STATE_V1",
 ]

@@ -6,6 +6,7 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from relspec.registry.rules import RuleAdapter, RuleRegistry, collect_rule_definitions
     from relspec.rules.compiler import RuleCompiler, RuleHandler
     from relspec.rules.definitions import (
         EdgeEmitPayload,
@@ -30,7 +31,6 @@ if TYPE_CHECKING:
         RelationshipRuleHandler,
     )
     from relspec.rules.options import RuleExecutionOptions
-    from relspec.rules.registry import RuleAdapter, RuleRegistry, collect_rule_definitions
     from relspec.rules.rel_ops import (
         AggregateExpr,
         AggregateOp,
@@ -88,7 +88,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "RelOpT": ("relspec.rules.rel_ops", "RelOpT"),
     "RelationshipPayload": ("relspec.rules.definitions", "RelationshipPayload"),
     "RelationshipRuleHandler": ("relspec.rules.handlers", "RelationshipRuleHandler"),
-    "RuleAdapter": ("relspec.rules.registry", "RuleAdapter"),
+    "RuleAdapter": ("relspec.registry.rules", "RuleAdapter"),
     "RuleCompiler": ("relspec.rules.compiler", "RuleCompiler"),
     "RuleDefinition": ("relspec.rules.definitions", "RuleDefinition"),
     "RuleDiagnostic": ("relspec.rules.diagnostics", "RuleDiagnostic"),
@@ -97,13 +97,13 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "RuleExecutionOptions": ("relspec.rules.options", "RuleExecutionOptions"),
     "RuleHandler": ("relspec.rules.compiler", "RuleHandler"),
     "RulePayload": ("relspec.rules.definitions", "RulePayload"),
-    "RuleRegistry": ("relspec.rules.registry", "RuleRegistry"),
+    "RuleRegistry": ("relspec.registry.rules", "RuleRegistry"),
     "RuleStage": ("relspec.rules.definitions", "RuleStage"),
     "RuleStageMode": ("relspec.rules.definitions", "RuleStageMode"),
     "RuleTemplateSpec": ("relspec.rules.templates", "RuleTemplateSpec"),
     "ScanOp": ("relspec.rules.rel_ops", "ScanOp"),
     "UnionOp": ("relspec.rules.rel_ops", "UnionOp"),
-    "collect_rule_definitions": ("relspec.rules.registry", "collect_rule_definitions"),
+    "collect_rule_definitions": ("relspec.registry.rules", "collect_rule_definitions"),
     "query_spec_from_rel_ops": ("relspec.rules.rel_ops", "query_spec_from_rel_ops"),
     "rel_ops_from_rows": ("relspec.rules.rel_ops", "rel_ops_from_rows"),
     "rel_ops_signature": ("relspec.rules.rel_ops", "rel_ops_signature"),

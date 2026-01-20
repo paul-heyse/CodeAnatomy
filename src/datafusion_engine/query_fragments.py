@@ -37,6 +37,13 @@ def _hash_expr(prefix: str, *values: str) -> str:
 
 
 def libcst_parse_manifest_sql(table: str = "libcst_files_v1") -> str:
+    """Return SQL for LibCST parse manifest rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     row = "manifest"
     return f"""
     SELECT
@@ -56,6 +63,13 @@ def libcst_parse_manifest_sql(table: str = "libcst_files_v1") -> str:
 
 
 def libcst_parse_errors_sql(table: str = "libcst_files_v1") -> str:
+    """Return SQL for LibCST parse error rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     row = "err"
     return f"""
     SELECT
@@ -75,6 +89,13 @@ def libcst_parse_errors_sql(table: str = "libcst_files_v1") -> str:
 
 
 def libcst_name_refs_sql(table: str = "libcst_files_v1") -> str:
+    """Return SQL for LibCST name reference rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     row = "ref"
     file_id = f"{row}['file_id']"
     bstart = f"{row}['bstart']"
@@ -95,6 +116,13 @@ def libcst_name_refs_sql(table: str = "libcst_files_v1") -> str:
 
 
 def libcst_imports_sql(table: str = "libcst_files_v1") -> str:
+    """Return SQL for LibCST import rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     row = "imp"
     file_id = f"{row}['file_id']"
     alias_bstart = f"{row}['alias_bstart']"
@@ -123,6 +151,13 @@ def libcst_imports_sql(table: str = "libcst_files_v1") -> str:
 
 
 def libcst_callsites_sql(table: str = "libcst_files_v1") -> str:
+    """Return SQL for LibCST callsite rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     row = "call"
     file_id = f"{row}['file_id']"
     call_bstart = f"{row}['call_bstart']"
@@ -149,6 +184,13 @@ def libcst_callsites_sql(table: str = "libcst_files_v1") -> str:
 
 
 def libcst_defs_sql(table: str = "libcst_files_v1") -> str:
+    """Return SQL for LibCST definition rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     row = "defs"
     file_id = f"{row}['file_id']"
     def_bstart = f"{row}['def_bstart']"
@@ -185,6 +227,13 @@ def libcst_defs_sql(table: str = "libcst_files_v1") -> str:
 
 
 def libcst_type_exprs_sql(table: str = "libcst_files_v1") -> str:
+    """Return SQL for LibCST type expression rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     row = "expr"
     file_id = f"{row}['file_id']"
     bstart = f"{row}['bstart']"
@@ -214,6 +263,13 @@ def libcst_type_exprs_sql(table: str = "libcst_files_v1") -> str:
 
 
 def ast_nodes_sql(table: str = "ast_files_v1") -> str:
+    """Return SQL for AST node rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       files.file_id AS file_id,
@@ -238,6 +294,13 @@ def ast_nodes_sql(table: str = "ast_files_v1") -> str:
 
 
 def ast_edges_sql(table: str = "ast_files_v1") -> str:
+    """Return SQL for AST edge rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       files.file_id AS file_id,
@@ -253,6 +316,13 @@ def ast_edges_sql(table: str = "ast_files_v1") -> str:
 
 
 def ast_errors_sql(table: str = "ast_files_v1") -> str:
+    """Return SQL for AST parse error rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       files.file_id AS file_id,
@@ -272,6 +342,13 @@ def ast_errors_sql(table: str = "ast_files_v1") -> str:
 
 
 def tree_sitter_nodes_sql(table: str = "tree_sitter_files_v1") -> str:
+    """Return SQL for tree-sitter node rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       files.file_id AS file_id,
@@ -291,6 +368,13 @@ def tree_sitter_nodes_sql(table: str = "tree_sitter_files_v1") -> str:
 
 
 def tree_sitter_errors_sql(table: str = "tree_sitter_files_v1") -> str:
+    """Return SQL for tree-sitter parse error rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       files.file_id AS file_id,
@@ -306,6 +390,13 @@ def tree_sitter_errors_sql(table: str = "tree_sitter_files_v1") -> str:
 
 
 def tree_sitter_missing_sql(table: str = "tree_sitter_files_v1") -> str:
+    """Return SQL for tree-sitter missing node rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       files.file_id AS file_id,
@@ -321,6 +412,13 @@ def tree_sitter_missing_sql(table: str = "tree_sitter_files_v1") -> str:
 
 
 def symtable_scopes_sql(table: str = "symtable_files_v1") -> str:
+    """Return SQL for symtable scope rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       files.file_id AS file_id,
@@ -336,6 +434,13 @@ def symtable_scopes_sql(table: str = "symtable_files_v1") -> str:
 
 
 def symtable_symbols_sql(table: str = "symtable_files_v1") -> str:
+    """Return SQL for symtable symbol rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       files.file_id AS file_id,
@@ -361,6 +466,13 @@ def symtable_symbols_sql(table: str = "symtable_files_v1") -> str:
 
 
 def symtable_scope_edges_sql(table: str = "symtable_files_v1") -> str:
+    """Return SQL for symtable scope edge rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       files.file_id AS file_id,
@@ -373,6 +485,13 @@ def symtable_scope_edges_sql(table: str = "symtable_files_v1") -> str:
 
 
 def scip_metadata_sql(table: str = "scip_index_v1") -> str:
+    """Return SQL for SCIP metadata rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       idx.index_id AS index_id,
@@ -386,6 +505,13 @@ def scip_metadata_sql(table: str = "scip_index_v1") -> str:
 
 
 def scip_documents_sql(table: str = "scip_index_v1") -> str:
+    """Return SQL for SCIP document rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       idx.index_id AS index_id,
@@ -399,6 +525,13 @@ def scip_documents_sql(table: str = "scip_index_v1") -> str:
 
 
 def scip_occurrences_sql(table: str = "scip_index_v1") -> str:
+    """Return SQL for SCIP occurrence rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       prefixed_hash64('scip_doc', doc['relative_path']) AS document_id,
@@ -426,6 +559,13 @@ def scip_occurrences_sql(table: str = "scip_index_v1") -> str:
 
 
 def scip_symbol_information_sql(table: str = "scip_index_v1") -> str:
+    """Return SQL for SCIP symbol info rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       sym['symbol'] AS symbol,
@@ -440,6 +580,13 @@ def scip_symbol_information_sql(table: str = "scip_index_v1") -> str:
 
 
 def scip_external_symbol_information_sql(table: str = "scip_index_v1") -> str:
+    """Return SQL for SCIP external symbol info rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       sym['symbol'] AS symbol,
@@ -454,6 +601,13 @@ def scip_external_symbol_information_sql(table: str = "scip_index_v1") -> str:
 
 
 def scip_symbol_relationships_sql(table: str = "scip_index_v1") -> str:
+    """Return SQL for SCIP symbol relationship rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       sym['symbol'] AS symbol,
@@ -469,6 +623,13 @@ def scip_symbol_relationships_sql(table: str = "scip_index_v1") -> str:
 
 
 def scip_diagnostics_sql(table: str = "scip_index_v1") -> str:
+    """Return SQL for SCIP diagnostics rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       prefixed_hash64('scip_doc', doc['relative_path']) AS document_id,
@@ -493,6 +654,13 @@ def scip_diagnostics_sql(table: str = "scip_index_v1") -> str:
 
 
 def bytecode_code_units_sql(table: str = "bytecode_files_v1") -> str:
+    """Return SQL for bytecode code-unit rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return f"""
     SELECT
       files.file_id AS file_id,
@@ -518,6 +686,13 @@ def bytecode_code_units_sql(table: str = "bytecode_files_v1") -> str:
 
 
 def bytecode_instructions_sql(table: str = "bytecode_files_v1") -> str:
+    """Return SQL for bytecode instruction rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     instr = "instr"
     code_id = "code['code_id']"
     instr_index = _map_cast(f"{instr}['attrs']", "instr_index", "INT")
@@ -551,6 +726,13 @@ def bytecode_instructions_sql(table: str = "bytecode_files_v1") -> str:
 
 
 def bytecode_exception_table_sql(table: str = "bytecode_files_v1") -> str:
+    """Return SQL for bytecode exception table rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     exc = "exc"
     code_id = "code['code_id']"
     exc_index = f"{exc}['exc_index']"
@@ -577,6 +759,13 @@ def bytecode_exception_table_sql(table: str = "bytecode_files_v1") -> str:
 
 
 def bytecode_blocks_sql(table: str = "bytecode_files_v1") -> str:
+    """Return SQL for bytecode basic block rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     blk = "blk"
     code_id = "code['code_id']"
     start_offset = f"{blk}['start_offset']"
@@ -597,6 +786,13 @@ def bytecode_blocks_sql(table: str = "bytecode_files_v1") -> str:
 
 
 def bytecode_cfg_edges_sql(table: str = "bytecode_files_v1") -> str:
+    """Return SQL for bytecode CFG edge rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     edge = "edge"
     code_id = "code['code_id']"
     src_start = f"{edge}['src_block_start']"
@@ -638,6 +834,13 @@ def bytecode_cfg_edges_sql(table: str = "bytecode_files_v1") -> str:
 
 
 def bytecode_errors_sql(table: str = "bytecode_files_v1") -> str:
+    """Return SQL for bytecode parse error rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     err = "err"
     return f"""
     SELECT

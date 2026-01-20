@@ -12,7 +12,7 @@ from registry_common.metadata import (
     decode_metadata_map,
     decode_metadata_scalar_map,
 )
-from relspec.normalize.rule_model import EvidenceOutput, EvidenceSpec
+from relspec.rules.definitions import EvidenceOutput, EvidenceSpec
 
 if TYPE_CHECKING:
     from arrowdsl.core.expr_types import ScalarValue

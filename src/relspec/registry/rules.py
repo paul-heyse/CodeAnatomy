@@ -8,9 +8,8 @@ from typing import TYPE_CHECKING, Protocol
 
 import pyarrow as pa
 
-from ibis_engine.param_tables import ParamTablePolicy, ParamTableSpec
-from relspec.list_filter_gate import ListFilterGatePolicy
-from relspec.pipeline_policy import KernelLanePolicy
+from ibis_engine.param_tables import ParamTableSpec
+from relspec.config import RelspecConfig
 from relspec.rules.diagnostics import RuleDiagnostic, rule_diagnostic_table
 from relspec.rules.spec_tables import rule_definition_table
 from relspec.rules.templates import (
@@ -56,9 +55,7 @@ class RuleRegistry:
 
     adapters: Sequence[RuleAdapter]
     param_table_specs: Sequence[ParamTableSpec] = ()
-    param_table_policy: ParamTablePolicy | None = None
-    list_filter_gate_policy: ListFilterGatePolicy | None = None
-    kernel_lane_policy: KernelLanePolicy | None = None
+    config: RelspecConfig | None = None
     engine_session: EngineSession | None = None
 
     def rule_definitions(self) -> tuple[RuleDefinition, ...]:
@@ -71,13 +68,14 @@ class RuleRegistry:
         """
         rules = self._collect_rule_definitions()
         validate_rule_definitions(rules)
+        config = self._resolved_config()
         diagnostics = rule_sqlglot_diagnostics(
             rules,
             config=SqlGlotDiagnosticsConfig(
                 param_table_specs=self.param_table_specs,
-                param_table_policy=self.param_table_policy,
-                list_filter_gate_policy=self.list_filter_gate_policy,
-                kernel_lane_policy=self.kernel_lane_policy,
+                param_table_policy=config.param_table_policy,
+                list_filter_gate_policy=config.list_filter_gate_policy,
+                kernel_lane_policy=config.kernel_lane_policy,
                 engine_session=self.engine_session,
             ),
         )
@@ -172,16 +170,20 @@ class RuleRegistry:
         """
         rules = self._collect_rule_definitions()
         validate_rule_definitions(rules)
+        config = self._resolved_config()
         return rule_sqlglot_diagnostics(
             rules,
             config=SqlGlotDiagnosticsConfig(
                 param_table_specs=self.param_table_specs,
-                param_table_policy=self.param_table_policy,
-                list_filter_gate_policy=self.list_filter_gate_policy,
-                kernel_lane_policy=self.kernel_lane_policy,
+                param_table_policy=config.param_table_policy,
+                list_filter_gate_policy=config.list_filter_gate_policy,
+                kernel_lane_policy=config.kernel_lane_policy,
                 engine_session=self.engine_session,
             ),
         )
+
+    def _resolved_config(self) -> RelspecConfig:
+        return self.config or RelspecConfig()
 
     def rule_diagnostics_table(self) -> pa.Table:
         """Return a diagnostics table for rule validation.

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING
 
+from relspec.registry.rules import RuleAdapter
 from relspec.rules.cpg_relationship_specs import RULE_TEMPLATE_SPECS, rule_definition_specs
 from relspec.rules.cpg_relationship_templates import (
     EdgeDefinitionSpec,
@@ -23,17 +25,20 @@ from relspec.rules.definitions import (
     RuleDefinition,
 )
 from relspec.rules.diagnostics import RuleDiagnostic
-from relspec.rules.registry import RuleAdapter
 from relspec.rules.templates import RuleTemplateSpec
 
 if TYPE_CHECKING:
+    from relspec.adapters.factory import RuleFactoryRegistry
     from relspec.rules.definitions import RuleDomain
 
 
+@dataclass(frozen=True)
 class CpgRuleAdapter(RuleAdapter):
     """Adapter that exposes CPG relationship rules as central RuleDefinitions."""
 
+    registry: RuleFactoryRegistry
     domain: RuleDomain = "cpg"
+    factory_name: str = "cpg"
 
     def rule_definitions(self) -> Sequence[RuleDefinition]:
         """Return CPG rule definitions for the central registry.
@@ -51,7 +56,7 @@ class CpgRuleAdapter(RuleAdapter):
         if self.domain != "cpg":
             msg = f"Unexpected adapter domain: {self.domain!r}."
             raise ValueError(msg)
-        return tuple(_rule_from_spec(spec) for spec in rule_definition_specs())
+        return self.registry.rule_definitions(self.factory_name)
 
     def templates(self) -> Sequence[RuleTemplateSpec]:
         """Return template specs for the CPG adapter.
@@ -69,8 +74,7 @@ class CpgRuleAdapter(RuleAdapter):
         if self.domain != "cpg":
             msg = f"Unexpected adapter domain: {self.domain!r}."
             raise ValueError(msg)
-        specs, _ = _template_catalog()
-        return specs
+        return self.registry.templates(self.factory_name)
 
     def template_diagnostics(self) -> Sequence[RuleDiagnostic]:
         """Return template diagnostics for CPG templates.
@@ -88,8 +92,42 @@ class CpgRuleAdapter(RuleAdapter):
         if self.domain != "cpg":
             msg = f"Unexpected adapter domain: {self.domain!r}."
             raise ValueError(msg)
-        _, diagnostics = _template_catalog()
-        return diagnostics
+        return self.registry.template_diagnostics(self.factory_name)
+
+
+def cpg_rule_definitions() -> Sequence[RuleDefinition]:
+    """Return CPG rule definitions for factory registration.
+
+    Returns
+    -------
+    Sequence[RuleDefinition]
+        CPG rule definitions.
+    """
+    return tuple(_rule_from_spec(spec) for spec in rule_definition_specs())
+
+
+def cpg_template_specs() -> Sequence[RuleTemplateSpec]:
+    """Return CPG template specs for factory registration.
+
+    Returns
+    -------
+    Sequence[RuleTemplateSpec]
+        CPG template specs.
+    """
+    specs, _ = _template_catalog()
+    return specs
+
+
+def cpg_template_diagnostics() -> Sequence[RuleDiagnostic]:
+    """Return CPG template diagnostics for factory registration.
+
+    Returns
+    -------
+    Sequence[RuleDiagnostic]
+        Diagnostics emitted while building CPG templates.
+    """
+    _, diagnostics = _template_catalog()
+    return diagnostics
 
 
 @cache

@@ -394,7 +394,6 @@ diagnostics.record(
 ```
 
 Target files:
-- `docs/plans/fallback_coverage_report.md`
 - `docs/plans/datafusion_displacement_mapping.md`
 - `docs/python_library_reference/datafusion.md`
 - `docs/python_library_reference/datafusion_addendum.md`
@@ -453,7 +452,6 @@ Status (current): in progress (Delta log asset tracking pending).
 ## Universal practice audit targets
 SessionContext ownership:
 - `src/datafusion_engine/runtime.py:1181`
-- `src/relspec/rules/fallback_coverage.py:364`
 - `tests/unit/test_sql_policy_matrix.py`
 
 Streaming-first outputs:

@@ -6,15 +6,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-import pyarrow as pa
-
 from arrowdsl.core.interop import TableLike
 from arrowdsl.spec.io import IpcWriteConfig
 from datafusion_engine.query_fragments import SqlFragment
 from engine.plan_policy import WriterStrategy
 from registry_common.settings import ScipIndexSettings
 from relspec.compiler import CompiledOutput
-from relspec.registry import ContractCatalog, DatasetLocation
+from relspec.registry import ContractCatalog, DatasetLocation, RelspecSnapshot
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 if TYPE_CHECKING:
@@ -304,10 +302,7 @@ class RelspecInputsBundle:
 class RelspecSnapshots:
     """Snapshots required to reproduce relationship outputs."""
 
-    rule_table: pa.Table
-    template_table: pa.Table
-    template_diagnostics: pa.Table
-    rule_diagnostics: pa.Table
+    registry_snapshot: RelspecSnapshot
     contracts: ContractCatalog
     compiled_outputs: dict[str, CompiledOutput]
 

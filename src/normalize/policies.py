@@ -11,7 +11,7 @@ from arrowdsl.core.plan_ops import DedupeSpec, SortKey
 from arrowdsl.schema.metadata import infer_ordering_keys, ordering_from_schema
 from arrowdsl.spec.expr_ir import ExprIR
 from registry_common.metadata import decode_metadata_scalar_map
-from relspec.normalize.rule_model import AmbiguityPolicy, ConfidencePolicy
+from relspec.model import AmbiguityPolicy, ConfidencePolicy
 
 
 class _PolicyRegistry(Protocol):

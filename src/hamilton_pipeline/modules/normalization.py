@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache as memoize
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
@@ -77,6 +77,7 @@ from normalize.runner import (
     NormalizeRuleCompilation,
     NormalizeRunOptions,
     compile_normalize_plans_ibis,
+    resolve_normalize_rules,
     run_normalize,
 )
 from normalize.schema_infer import (
@@ -91,16 +92,13 @@ from normalize.spans import (
     normalize_cst_defs_spans,
     normalize_cst_imports_spans,
 )
-from relspec.adapters.normalize import NormalizeRuleAdapter
+from relspec.adapters import NormalizeRuleAdapter, default_rule_factory_registry
 from relspec.pipeline_policy import PipelinePolicy
-from relspec.rules.compiler import RuleCompiler
-from relspec.rules.handlers.normalize import NormalizeRuleHandler
-from relspec.rules.registry import RuleRegistry
+from relspec.registry.rules import RuleRegistry
 from schema_spec.specs import ArrowFieldSpec, call_span_bundle
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
 
 if TYPE_CHECKING:
-    from relspec.normalize.rule_model import NormalizeRule
     from relspec.rules.definitions import RuleDefinition
 
 SCHEMA_VERSION = 1
@@ -175,6 +173,31 @@ def _materialize_fragment(
     return materialize_sql_fragment(backend, source)
 
 
+class _DatafusionQuery(Protocol):
+    def schema(self) -> object:
+        ...
+
+
+class _DatafusionContext(Protocol):
+    def sql(self, query: str) -> _DatafusionQuery:
+        ...
+
+
+def _schema_from_fragment(
+    fragment: SqlFragment,
+    *,
+    backend: BaseBackend | None,
+) -> object | None:
+    if backend is None:
+        return None
+    ctx = datafusion_context(backend)
+    if ctx is None:
+        return None
+    fragment_sql = f"SELECT * FROM ({fragment.sql}) AS fragment LIMIT 0"
+    df_ctx = cast("_DatafusionContext", ctx)
+    return df_ctx.sql(fragment_sql).schema()
+
+
 def _schema_from_source(
     source: TableLike | SqlFragment | None,
     *,
@@ -185,20 +208,25 @@ def _schema_from_source(
     if source is None:
         return fallback_schema
     if isinstance(source, SqlFragment):
-        if backend is None:
-            return fallback_schema
-        ctx = datafusion_context(backend)
-        if ctx is None:
-            return fallback_schema
-        fragment_sql = f"SELECT * FROM ({source.sql}) AS fragment LIMIT 0"
-        schema = ctx.sql(fragment_sql).schema()
-        if isinstance(schema, pa.Schema):
-            return schema
-        to_pyarrow = getattr(schema, "to_pyarrow", None)
-        if callable(to_pyarrow):
-            return to_pyarrow()
-        return fallback_schema
-    return source.schema
+        schema = _schema_from_fragment(source, backend=backend)
+    else:
+        schema = source.schema
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_pyarrow = getattr(schema, "to_pyarrow", None)
+    if callable(to_pyarrow):
+        return to_pyarrow()
+    return fallback_schema
+
+
+@dataclass(frozen=True)
+class NormalizeTypeSourceInputs:
+    """Raw inputs for type normalization sources."""
+
+    cst_type_exprs: IbisPlanSource | None = None
+    scip_symbol_information: IbisPlanSource | None = None
+    libcst_files: TableLike | RecordBatchReaderLike | None = None
+    scip_index: TableLike | RecordBatchReaderLike | None = None
 
 
 @dataclass(frozen=True)
@@ -207,6 +235,17 @@ class NormalizeTypeSources:
 
     cst_type_exprs: IbisPlanSource | None = None
     scip_symbol_information: IbisPlanSource | None = None
+
+
+@dataclass(frozen=True)
+class NormalizeBytecodeSourceInputs:
+    """Raw inputs for bytecode normalization sources."""
+
+    py_bc_blocks: IbisPlanSource | None = None
+    py_bc_cfg_edges: IbisPlanSource | None = None
+    py_bc_code_units: IbisPlanSource | None = None
+    py_bc_instructions: IbisPlanSource | None = None
+    bytecode_files: TableLike | RecordBatchReaderLike | None = None
 
 
 @dataclass(frozen=True)
@@ -225,6 +264,36 @@ class NormalizeSpanSources:
 
     repo_text_index: RepoTextIndex | None = None
     span_errors: IbisPlanSource | None = None
+
+
+@dataclass(frozen=True)
+class NormalizeQnameContext:
+    """Context inputs for qualified name normalization."""
+
+    normalize_execution_context: NormalizeExecutionContext | None
+    libcst_files: TableLike | RecordBatchReaderLike | None
+    ctx: ExecutionContext
+    evidence_plan: EvidencePlan | None
+
+
+@dataclass(frozen=True)
+class DiagnosticsFragmentInputs:
+    """Optional diagnostic fragment inputs."""
+
+    cst_parse_errors: IbisPlanSource | None = None
+    ts_errors: IbisPlanSource | None = None
+    ts_missing: IbisPlanSource | None = None
+    scip_diagnostics: IbisPlanSource | None = None
+    scip_documents: IbisPlanSource | None = None
+
+
+@dataclass(frozen=True)
+class DiagnosticsTableInputs:
+    """Nested table inputs for diagnostics normalization."""
+
+    libcst_files: TableLike | RecordBatchReaderLike | None = None
+    tree_sitter_files: TableLike | RecordBatchReaderLike | None = None
+    scip_index: TableLike | RecordBatchReaderLike | None = None
 
 
 @dataclass(frozen=True)
@@ -268,12 +337,32 @@ def normalize_execution_context(
 
 
 @cache()
-@tag(layer="normalize", artifact="normalize_type_sources", kind="object")
-def normalize_type_sources(
+@tag(layer="normalize", artifact="normalize_type_source_inputs", kind="object")
+def normalize_type_source_inputs(
     cst_type_exprs: IbisPlanSource | None = None,
     scip_symbol_information: IbisPlanSource | None = None,
     libcst_files: TableLike | RecordBatchReaderLike | None = None,
     scip_index: TableLike | RecordBatchReaderLike | None = None,
+) -> NormalizeTypeSourceInputs:
+    """Bundle raw inputs for type normalization sources.
+
+    Returns
+    -------
+    NormalizeTypeSourceInputs
+        Raw inputs for type normalization.
+    """
+    return NormalizeTypeSourceInputs(
+        cst_type_exprs=cst_type_exprs,
+        scip_symbol_information=scip_symbol_information,
+        libcst_files=libcst_files,
+        scip_index=scip_index,
+    )
+
+
+@cache()
+@tag(layer="normalize", artifact="normalize_type_sources", kind="object")
+def normalize_type_sources(
+    normalize_type_source_inputs: NormalizeTypeSourceInputs,
     normalize_execution_context: NormalizeExecutionContext | None = None,
 ) -> NormalizeTypeSources:
     """Bundle type-related normalize inputs.
@@ -284,11 +373,21 @@ def normalize_type_sources(
         Type-related inputs for normalize rule compilation.
     """
     backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
-    register_nested_table(backend, name="libcst_files_v1", table=libcst_files)
-    register_nested_table(backend, name="scip_index_v1", table=scip_index)
-    if cst_type_exprs is None and libcst_files is not None:
+    register_nested_table(
+        backend,
+        name="libcst_files_v1",
+        table=normalize_type_source_inputs.libcst_files,
+    )
+    register_nested_table(
+        backend,
+        name="scip_index_v1",
+        table=normalize_type_source_inputs.scip_index,
+    )
+    cst_type_exprs = normalize_type_source_inputs.cst_type_exprs
+    scip_symbol_information = normalize_type_source_inputs.scip_symbol_information
+    if cst_type_exprs is None and normalize_type_source_inputs.libcst_files is not None:
         cst_type_exprs = SqlFragment("cst_type_exprs", libcst_type_exprs_sql())
-    if scip_symbol_information is None and scip_index is not None:
+    if scip_symbol_information is None and normalize_type_source_inputs.scip_index is not None:
         scip_symbol_information = SqlFragment(
             "scip_symbol_information",
             scip_symbol_information_sql(),
@@ -300,13 +399,34 @@ def normalize_type_sources(
 
 
 @cache()
-@tag(layer="normalize", artifact="normalize_bytecode_sources", kind="object")
-def normalize_bytecode_sources(
+@tag(layer="normalize", artifact="normalize_bytecode_source_inputs", kind="object")
+def normalize_bytecode_source_inputs(
     py_bc_blocks: IbisPlanSource | None = None,
     py_bc_cfg_edges: IbisPlanSource | None = None,
     py_bc_code_units: IbisPlanSource | None = None,
     py_bc_instructions: IbisPlanSource | None = None,
     bytecode_files: TableLike | RecordBatchReaderLike | None = None,
+) -> NormalizeBytecodeSourceInputs:
+    """Bundle raw inputs for bytecode normalization sources.
+
+    Returns
+    -------
+    NormalizeBytecodeSourceInputs
+        Raw inputs for bytecode normalization.
+    """
+    return NormalizeBytecodeSourceInputs(
+        py_bc_blocks=py_bc_blocks,
+        py_bc_cfg_edges=py_bc_cfg_edges,
+        py_bc_code_units=py_bc_code_units,
+        py_bc_instructions=py_bc_instructions,
+        bytecode_files=bytecode_files,
+    )
+
+
+@cache()
+@tag(layer="normalize", artifact="normalize_bytecode_sources", kind="object")
+def normalize_bytecode_sources(
+    normalize_bytecode_source_inputs: NormalizeBytecodeSourceInputs,
     normalize_execution_context: NormalizeExecutionContext | None = None,
 ) -> NormalizeBytecodeSources:
     """Bundle bytecode normalize inputs.
@@ -317,7 +437,16 @@ def normalize_bytecode_sources(
         Bytecode inputs for normalize rule compilation.
     """
     backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
-    register_nested_table(backend, name="bytecode_files_v1", table=bytecode_files)
+    register_nested_table(
+        backend,
+        name="bytecode_files_v1",
+        table=normalize_bytecode_source_inputs.bytecode_files,
+    )
+    py_bc_blocks = normalize_bytecode_source_inputs.py_bc_blocks
+    py_bc_cfg_edges = normalize_bytecode_source_inputs.py_bc_cfg_edges
+    py_bc_code_units = normalize_bytecode_source_inputs.py_bc_code_units
+    py_bc_instructions = normalize_bytecode_source_inputs.py_bc_instructions
+    bytecode_files = normalize_bytecode_source_inputs.bytecode_files
     if py_bc_blocks is None and bytecode_files is not None:
         py_bc_blocks = SqlFragment("py_bc_blocks", bytecode_blocks_sql())
     if py_bc_cfg_edges is None and bytecode_files is not None:
@@ -348,6 +477,30 @@ def normalize_span_sources(
         Span-related inputs for normalize rule compilation.
     """
     return NormalizeSpanSources(repo_text_index=repo_text_index, span_errors=span_errors)
+
+
+@cache()
+@tag(layer="normalize", artifact="normalize_qname_context", kind="object")
+def normalize_qname_context(
+    normalize_execution_context: NormalizeExecutionContext | None = None,
+    libcst_files: TableLike | RecordBatchReaderLike | None = None,
+    *,
+    ctx: ExecutionContext,
+    evidence_plan: EvidencePlan | None = None,
+) -> NormalizeQnameContext:
+    """Bundle execution context for qualified name normalization.
+
+    Returns
+    -------
+    NormalizeQnameContext
+        Context inputs for qualified name normalization.
+    """
+    return NormalizeQnameContext(
+        normalize_execution_context=normalize_execution_context,
+        libcst_files=libcst_files,
+        ctx=ctx,
+        evidence_plan=evidence_plan,
+    )
 
 
 @cache()
@@ -467,10 +620,20 @@ def normalize_rule_compilation(
     ctx = normalize_execution_context.ctx
     execution_policy = normalize_execution_context.execution_policy
     ibis_backend = normalize_execution_context.ibis_backend
-    rules = _normalize_rules(ctx=ctx, pipeline_policy=pipeline_policy)
-    required_outputs = _required_rule_outputs(evidence_plan, rules)
+    rule_definitions = _normalize_rule_definitions()
+    resolved_rules = resolve_normalize_rules(
+        rule_definitions,
+        policy_registry=pipeline_policy.policy_registry,
+        scan_provenance_columns=ctx.runtime.scan.scan_provenance_columns,
+    )
+    required_outputs = _required_rule_outputs(evidence_plan, rule_definitions)
     if required_outputs is not None and not required_outputs:
-        return NormalizeRuleCompilation(rules=(), plans={}, ibis_catalog=normalize_plan_catalog)
+        return NormalizeRuleCompilation(
+            rules=(),
+            resolved_rules=(),
+            plans={},
+            ibis_catalog=normalize_plan_catalog,
+        )
     if ibis_backend is None:
         msg = "Normalize compilation requires an Ibis backend."
         raise ValueError(msg)
@@ -484,15 +647,18 @@ def normalize_rule_compilation(
         ctx=ctx,
         options=NormalizeIbisPlanOptions(
             backend=ibis_backend,
-            rules=rules,
+            rules=rule_definitions,
             required_outputs=required_outputs,
             materialize_outputs=materialize,
             execution_policy=execution_policy,
+            policy_registry=pipeline_policy.policy_registry,
+            scan_provenance_columns=ctx.runtime.scan.scan_provenance_columns,
         ),
     )
     output_storage = {name: ("materialized" if name in materialize else "view") for name in plans}
     return NormalizeRuleCompilation(
-        rules=rules,
+        rules=rule_definitions,
+        resolved_rules=resolved_rules,
         plans=plans,
         ibis_catalog=normalize_plan_catalog,
         output_storage=output_storage,
@@ -501,7 +667,7 @@ def normalize_rule_compilation(
 
 def _required_rule_outputs(
     plan: EvidencePlan | None,
-    rules: Sequence[NormalizeRule],
+    rules: Sequence[RuleDefinition],
 ) -> tuple[str, ...] | None:
     if plan is None:
         return None
@@ -511,22 +677,9 @@ def _required_rule_outputs(
 
 @memoize
 def _normalize_rule_definitions() -> tuple[RuleDefinition, ...]:
-    registry = RuleRegistry(adapters=(NormalizeRuleAdapter(),))
+    factory_registry = default_rule_factory_registry()
+    registry = RuleRegistry(adapters=(NormalizeRuleAdapter(registry=factory_registry),))
     return registry.rules_for_domain("normalize")
-
-
-def _normalize_rules(
-    ctx: ExecutionContext,
-    *,
-    pipeline_policy: PipelinePolicy,
-) -> tuple[NormalizeRule, ...]:
-    compiler = RuleCompiler(
-        handlers={
-            "normalize": NormalizeRuleHandler(policies=pipeline_policy.policy_registry),
-        }
-    )
-    compiled = compiler.compile_rules(_normalize_rule_definitions(), ctx=ctx)
-    return cast("tuple[NormalizeRule, ...]", compiled)
 
 
 def _normalize_rule_output(
@@ -633,13 +786,9 @@ def _join_callsite_qname_meta(base: TableLike, cst_callsites: TableLike) -> Tabl
 @cache(format="delta")
 @tag(layer="normalize", artifact="dim_qualified_names", kind="table")
 def dim_qualified_names(
+    normalize_qname_context: NormalizeQnameContext,
     cst_callsites: TableLike | SqlFragment | None = None,
     cst_defs: TableLike | SqlFragment | None = None,
-    normalize_execution_context: NormalizeExecutionContext | None = None,
-    libcst_files: TableLike | RecordBatchReaderLike | None = None,
-    *,
-    ctx: ExecutionContext,
-    evidence_plan: EvidencePlan | None = None,
 ) -> TableLike:
     """Build a dimension table of qualified names from CST extraction.
 
@@ -652,14 +801,22 @@ def dim_qualified_names(
     TableLike
         Qualified name dimension table.
     """
-    _ = ctx
-    backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
-    register_nested_table(backend, name="libcst_files_v1", table=libcst_files)
-    if cst_callsites is None and libcst_files is not None:
+    _ = normalize_qname_context.ctx
+    backend = (
+        normalize_qname_context.normalize_execution_context.ibis_backend
+        if normalize_qname_context.normalize_execution_context
+        else None
+    )
+    register_nested_table(
+        backend,
+        name="libcst_files_v1",
+        table=normalize_qname_context.libcst_files,
+    )
+    if cst_callsites is None and normalize_qname_context.libcst_files is not None:
         cst_callsites = SqlFragment("cst_callsites", libcst_callsites_sql())
-    if cst_defs is None and libcst_files is not None:
+    if cst_defs is None and normalize_qname_context.libcst_files is not None:
         cst_defs = SqlFragment("cst_defs", libcst_defs_sql())
-    if not _requires_output(evidence_plan, "dim_qualified_names"):
+    if not _requires_output(normalize_qname_context.evidence_plan, "dim_qualified_names"):
         schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name, [])
         return empty_table(schema)
     if cst_callsites is None or cst_defs is None:
@@ -975,16 +1132,56 @@ def types_norm(
 
 
 @cache()
-@tag(layer="normalize", artifact="diagnostics_sources", kind="object")
-def diagnostics_sources(
+@tag(layer="normalize", artifact="diagnostics_fragment_inputs", kind="object")
+def diagnostics_fragment_inputs(
     cst_parse_errors: IbisPlanSource | None = None,
     ts_errors: IbisPlanSource | None = None,
     ts_missing: IbisPlanSource | None = None,
     scip_diagnostics: IbisPlanSource | None = None,
     scip_documents: IbisPlanSource | None = None,
+) -> DiagnosticsFragmentInputs:
+    """Bundle raw diagnostic fragment inputs.
+
+    Returns
+    -------
+    DiagnosticsFragmentInputs
+        Optional diagnostic fragments for normalization.
+    """
+    return DiagnosticsFragmentInputs(
+        cst_parse_errors=cst_parse_errors,
+        ts_errors=ts_errors,
+        ts_missing=ts_missing,
+        scip_diagnostics=scip_diagnostics,
+        scip_documents=scip_documents,
+    )
+
+
+@cache()
+@tag(layer="normalize", artifact="diagnostics_table_inputs", kind="object")
+def diagnostics_table_inputs(
     libcst_files: TableLike | RecordBatchReaderLike | None = None,
     tree_sitter_files: TableLike | RecordBatchReaderLike | None = None,
     scip_index: TableLike | RecordBatchReaderLike | None = None,
+) -> DiagnosticsTableInputs:
+    """Bundle nested table inputs for diagnostics normalization.
+
+    Returns
+    -------
+    DiagnosticsTableInputs
+        Nested tables required for diagnostics normalization.
+    """
+    return DiagnosticsTableInputs(
+        libcst_files=libcst_files,
+        tree_sitter_files=tree_sitter_files,
+        scip_index=scip_index,
+    )
+
+
+@cache()
+@tag(layer="normalize", artifact="diagnostics_sources", kind="object")
+def diagnostics_sources(
+    diagnostics_fragment_inputs: DiagnosticsFragmentInputs,
+    diagnostics_table_inputs: DiagnosticsTableInputs,
     normalize_execution_context: NormalizeExecutionContext | None = None,
 ) -> DiagnosticsSources:
     """Bundle diagnostic source tables.
@@ -995,18 +1192,35 @@ def diagnostics_sources(
         Diagnostic source tables bundle.
     """
     backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
-    register_nested_table(backend, name="libcst_files_v1", table=libcst_files)
-    register_nested_table(backend, name="tree_sitter_files_v1", table=tree_sitter_files)
-    register_nested_table(backend, name="scip_index_v1", table=scip_index)
-    if cst_parse_errors is None and libcst_files is not None:
+    register_nested_table(
+        backend,
+        name="libcst_files_v1",
+        table=diagnostics_table_inputs.libcst_files,
+    )
+    register_nested_table(
+        backend,
+        name="tree_sitter_files_v1",
+        table=diagnostics_table_inputs.tree_sitter_files,
+    )
+    register_nested_table(
+        backend,
+        name="scip_index_v1",
+        table=diagnostics_table_inputs.scip_index,
+    )
+    cst_parse_errors = diagnostics_fragment_inputs.cst_parse_errors
+    ts_errors = diagnostics_fragment_inputs.ts_errors
+    ts_missing = diagnostics_fragment_inputs.ts_missing
+    scip_diagnostics = diagnostics_fragment_inputs.scip_diagnostics
+    scip_documents = diagnostics_fragment_inputs.scip_documents
+    if cst_parse_errors is None and diagnostics_table_inputs.libcst_files is not None:
         cst_parse_errors = SqlFragment("cst_parse_errors", libcst_parse_errors_sql())
-    if ts_errors is None and tree_sitter_files is not None:
+    if ts_errors is None and diagnostics_table_inputs.tree_sitter_files is not None:
         ts_errors = SqlFragment("ts_errors", tree_sitter_errors_sql())
-    if ts_missing is None and tree_sitter_files is not None:
+    if ts_missing is None and diagnostics_table_inputs.tree_sitter_files is not None:
         ts_missing = SqlFragment("ts_missing", tree_sitter_missing_sql())
-    if scip_diagnostics is None and scip_index is not None:
+    if scip_diagnostics is None and diagnostics_table_inputs.scip_index is not None:
         scip_diagnostics = SqlFragment("scip_diagnostics", scip_diagnostics_sql())
-    if scip_documents is None and scip_index is not None:
+    if scip_documents is None and diagnostics_table_inputs.scip_index is not None:
         scip_documents = SqlFragment("scip_documents", scip_documents_sql())
     return DiagnosticsSources(
         cst_parse_errors=cst_parse_errors,

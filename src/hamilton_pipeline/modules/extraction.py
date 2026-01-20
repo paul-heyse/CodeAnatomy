@@ -58,9 +58,9 @@ from hamilton_pipeline.pipeline_types import (
     ScipIndexInputs,
 )
 from incremental.types import IncrementalConfig, IncrementalImpact
+from relspec.registry.rules import RuleRegistry
 from relspec.rules.compiler import RuleCompiler
 from relspec.rules.handlers.extract import ExtractRuleCompilation, ExtractRuleHandler
-from relspec.rules.registry import RuleRegistry
 
 AST_BUNDLE_OUTPUTS = output_bundle_outputs("ast_bundle")
 CST_BUNDLE_OUTPUTS = output_bundle_outputs("cst_bundle")

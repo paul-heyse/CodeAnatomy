@@ -211,7 +211,6 @@ def persist_plan_artifacts(df: DataFrame, base: Path) -> None:
 Target files:
 - `src/obs/repro.py`
 - `src/obs/outputs.py`
-- `docs/plans/fallback_coverage_report.md`
 
 Implementation checklist:
 - [ ] Persist optimized logical + physical plans for each rulepack.

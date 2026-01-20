@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING
 from arrowdsl.core.execution_context import ExecutionContext
 from relspec.model import DatasetRef, FilterKernelSpec, RelationshipRule, RuleKind
 from relspec.model import EvidenceSpec as RelationshipEvidenceSpec
+from relspec.policies import PolicyRegistry
 from relspec.rules.compiler import RuleHandler
 from relspec.rules.definitions import RelationshipPayload
-from relspec.rules.policies import PolicyRegistry
 
 if TYPE_CHECKING:
     from relspec.rules.definitions import EvidenceSpec, RuleDefinition, RuleDomain

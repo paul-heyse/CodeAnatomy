@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, overload
@@ -13,8 +12,8 @@ from relspec.model import WinnerSelectConfig
 from relspec.rules.definitions import RuleDomain
 
 if TYPE_CHECKING:
-    from relspec.normalize.rule_model import AmbiguityPolicy as NormalizeAmbiguityPolicy
-    from relspec.normalize.rule_model import ConfidencePolicy as NormalizeConfidencePolicy
+    from relspec.model import AmbiguityPolicy as NormalizeAmbiguityPolicy
+    from relspec.model import ConfidencePolicy as NormalizeConfidencePolicy
 
 RELSPEC_CONFIDENCE_POLICIES: Mapping[str, RelationshipConfidencePolicy] = {
     "scip": RelationshipConfidencePolicy(base=1.0),
@@ -33,23 +32,19 @@ RELSPEC_AMBIGUITY_POLICIES: Mapping[str, RelationshipAmbiguityPolicy] = {
 
 
 def _normalize_confidence_policies() -> Mapping[str, object]:
-    module = importlib.import_module("relspec.normalize.rule_model")
-    policy_cls = module.ConfidencePolicy
     return {
-        "bytecode": policy_cls(base=1.0),
-        "cst": policy_cls(base=1.0),
-        "diagnostic": policy_cls(base=1.0),
-        "evidence": policy_cls(base=1.0),
-        "scip": policy_cls(base=1.0),
-        "span": policy_cls(base=1.0),
-        "type": policy_cls(base=1.0),
+        "bytecode": RelationshipConfidencePolicy(base=1.0),
+        "cst": RelationshipConfidencePolicy(base=1.0),
+        "diagnostic": RelationshipConfidencePolicy(base=1.0),
+        "evidence": RelationshipConfidencePolicy(base=1.0),
+        "scip": RelationshipConfidencePolicy(base=1.0),
+        "span": RelationshipConfidencePolicy(base=1.0),
+        "type": RelationshipConfidencePolicy(base=1.0),
     }
 
 
 def _normalize_ambiguity_policies() -> Mapping[str, object]:
-    module = importlib.import_module("relspec.normalize.rule_model")
-    policy_cls = module.AmbiguityPolicy
-    return {"preserve": policy_cls()}
+    return {"preserve": RelationshipAmbiguityPolicy()}
 
 
 def _default_confidence_policies() -> Mapping[RuleDomain, Mapping[str, object]]:

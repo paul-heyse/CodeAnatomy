@@ -19,6 +19,7 @@ def _to_arrow_schema(value: object) -> pa.Schema:
 
 
 def test_register_all_schemas_roundtrip() -> None:
+    """Ensure schemas are registered and round-trip from the DataFusion context."""
     ctx = SessionContext()
     register_all_schemas(ctx)
     for name in schema_names():

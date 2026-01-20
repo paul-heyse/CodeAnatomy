@@ -16,7 +16,7 @@ from registry_common.metadata import (
     decode_metadata_scalar_map,
 )
 from relspec.model import AmbiguityPolicy, ConfidencePolicy, DedupeKernelSpec, EvidenceSpec
-from relspec.rules.policies import PolicyRegistry
+from relspec.policies.registry import PolicyRegistry
 
 CONFIDENCE_POLICY_META = b"confidence_policy"
 CONFIDENCE_BASE_META = b"confidence_base"

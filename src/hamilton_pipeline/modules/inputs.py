@@ -36,6 +36,7 @@ from ibis_engine.config import IbisBackendConfig
 from ibis_engine.execution import IbisExecutionContext
 from incremental.types import IncrementalConfig
 from obs.diagnostics import DiagnosticsCollector
+from relspec.config import RelspecConfig as RelspecRuleConfig
 from relspec.cpg.build_props import PropsBuildOptions
 from relspec.pipeline_policy import PipelinePolicy
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
@@ -280,6 +281,18 @@ def pipeline_policy() -> PipelinePolicy:
         Policy bundle for rule execution and diagnostics.
     """
     return PipelinePolicy()
+
+
+@tag(layer="inputs", kind="object")
+def relspec_rule_config(pipeline_policy: PipelinePolicy) -> RelspecRuleConfig:
+    """Return the relspec registry config derived from pipeline policy.
+
+    Returns
+    -------
+    RelspecRuleConfig
+        Relspec registry configuration bundle.
+    """
+    return pipeline_policy.relspec_config()
 
 
 @tag(layer="inputs", kind="object")

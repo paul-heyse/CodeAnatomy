@@ -46,9 +46,9 @@ from relspec.compiler import (
     apply_policy_defaults,
     validate_policy_requirements,
 )
-from relspec.compiler_graph import EvidenceCatalog, order_rules
 from relspec.contracts import relation_output_schema
 from relspec.engine import IbisRelPlanCompiler
+from relspec.graph import order_rules
 from relspec.model import (
     AddLiteralSpec,
     CanonicalSortKernelSpec,
@@ -63,11 +63,11 @@ from relspec.model import (
     RenameColumnsSpec,
     WinnerSelectConfig,
 )
-from relspec.policies import evidence_spec_from_schema
+from relspec.policies import PolicyRegistry, evidence_spec_from_schema
 from relspec.rules.cache import rule_definitions_cached
 from relspec.rules.compiler import RuleCompiler
+from relspec.rules.evidence import EvidenceCatalog
 from relspec.rules.handlers.cpg import RelationshipRuleHandler
-from relspec.rules.policies import PolicyRegistry
 from relspec.rules.spec_tables import rule_definitions_from_table
 
 if TYPE_CHECKING:
@@ -201,6 +201,12 @@ class CatalogIbisResolver:
             expr = apply_query_spec(expr, spec=ref.query)
         return IbisPlan(expr=expr, ordering=plan.ordering)
 
+    def telemetry(self, ref: DatasetRef, *, ctx: ExecutionContext) -> ScanTelemetry | None:
+        _ = self
+        _ = ref
+        _ = ctx
+        return None
+
 
 def _sql_fragment_expr(backend: BaseBackend, fragment: SqlFragment) -> Table:
     sql_method = getattr(backend, "sql", None)
@@ -208,12 +214,6 @@ def _sql_fragment_expr(backend: BaseBackend, fragment: SqlFragment) -> Table:
         msg = "Ibis backend does not support raw SQL fragments."
         raise TypeError(msg)
     return cast("Table", sql_method(fragment.sql))
-
-    @staticmethod
-    def telemetry(ref: DatasetRef, *, ctx: ExecutionContext) -> ScanTelemetry | None:
-        _ = ref
-        _ = ctx
-        return None
 
 
 @dataclass(frozen=True)

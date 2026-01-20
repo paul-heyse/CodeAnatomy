@@ -80,6 +80,7 @@ from relspec.adapters import (
     ExtractRuleAdapter,
     NormalizeRuleAdapter,
     RelspecRuleAdapter,
+    default_rule_factory_registry,
 )
 from relspec.compiler import (
     CompiledOutput,
@@ -91,7 +92,7 @@ from relspec.compiler import (
     apply_policy_defaults,
     validate_policy_requirements,
 )
-from relspec.compiler_graph import order_rules
+from relspec.config import RelspecConfig
 from relspec.contracts import relation_output_contract, relation_output_schema
 from relspec.cpg.build_edges import EdgeBuildConfig, EdgeBuildInputs, build_cpg_edges
 from relspec.cpg.build_nodes import NodeBuildConfig, NodeInputTables, build_cpg_nodes
@@ -105,17 +106,17 @@ from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
     validate_relationship_output_contracts_for_edge_kinds,
 )
+from relspec.graph import order_rules
 from relspec.model import DatasetRef, RelationshipRule
 from relspec.param_deps import RuleDependencyReport
 from relspec.pipeline_policy import PipelinePolicy
-from relspec.policies import evidence_spec_from_schema
+from relspec.policies import PolicyRegistry, evidence_spec_from_schema
 from relspec.registry import ContractCatalog, DatasetLocation
+from relspec.registry.rules import RuleRegistry
 from relspec.rules.compiler import RuleCompiler
 from relspec.rules.evidence import EvidenceCatalog
 from relspec.rules.exec_events import RuleExecutionEventCollector
 from relspec.rules.handlers.cpg import RelationshipRuleHandler
-from relspec.rules.policies import PolicyRegistry
-from relspec.rules.registry import RuleRegistry
 from relspec.rules.validation import SqlGlotDiagnosticsConfig, rule_dependency_reports
 from schema_spec.specs import ArrowFieldSpec, TableSchemaSpec, call_span_bundle, span_bundle
 from schema_spec.system import (
@@ -245,6 +246,15 @@ class RelspecIncrementalContext:
     impact: IncrementalImpact
     config: IncrementalConfig
     ctx: ExecutionContext
+
+
+@dataclass(frozen=True)
+class RelspecInputDatasetContext:
+    """Inputs required to assemble relspec input datasets."""
+
+    engine_session: EngineSession
+    incremental_context: RelspecIncrementalContext
+    incremental_gate: object | None
 
 
 @dataclass(frozen=True)
@@ -581,7 +591,7 @@ def schema_registry(
 @tag(layer="relspec", artifact="rule_registry", kind="registry")
 def rule_registry(
     param_table_specs: tuple[ParamTableSpec, ...],
-    pipeline_policy: PipelinePolicy,
+    relspec_rule_config: RelspecConfig,
     engine_session: EngineSession,
 ) -> RuleRegistry:
     """Build the central rule registry.
@@ -591,17 +601,16 @@ def rule_registry(
     RuleRegistry
         Centralized registry for CPG/normalize/extract rules.
     """
+    registry = default_rule_factory_registry()
     return RuleRegistry(
         adapters=(
-            CpgRuleAdapter(),
-            RelspecRuleAdapter(),
-            NormalizeRuleAdapter(),
-            ExtractRuleAdapter(),
+            CpgRuleAdapter(registry=registry),
+            RelspecRuleAdapter(registry=registry),
+            NormalizeRuleAdapter(registry=registry),
+            ExtractRuleAdapter(registry=registry),
         ),
         param_table_specs=param_table_specs,
-        param_table_policy=pipeline_policy.param_table_policy,
-        list_filter_gate_policy=pipeline_policy.list_filter_gate_policy,
-        kernel_lane_policy=pipeline_policy.kernel_lanes,
+        config=relspec_rule_config,
         engine_session=engine_session,
     )
 
@@ -736,7 +745,13 @@ def cst_name_refs(
     libcst_files: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
 ) -> SqlFragment:
-    """Return the CST name refs projection from nested LibCST files."""
+    """Return the CST name refs projection from nested LibCST files.
+
+    Returns
+    -------
+    SqlFragment
+        SQL fragment for CST name references.
+    """
     register_nested_table(
         engine_session.ibis_backend,
         name="libcst_files_v1",
@@ -751,7 +766,13 @@ def cst_callsites(
     libcst_files: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
 ) -> SqlFragment:
-    """Return the CST callsites projection from nested LibCST files."""
+    """Return the CST callsites projection from nested LibCST files.
+
+    Returns
+    -------
+    SqlFragment
+        SQL fragment for CST callsites.
+    """
     register_nested_table(
         engine_session.ibis_backend,
         name="libcst_files_v1",
@@ -766,7 +787,13 @@ def scip_symbol_information(
     scip_index: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
 ) -> SqlFragment:
-    """Return SCIP symbol info projection from nested SCIP index."""
+    """Return SCIP symbol info projection from nested SCIP index.
+
+    Returns
+    -------
+    SqlFragment
+        SQL fragment for SCIP symbol information.
+    """
     register_nested_table(
         engine_session.ibis_backend,
         name="scip_index_v1",
@@ -781,7 +808,13 @@ def scip_symbol_relationships(
     scip_index: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
 ) -> SqlFragment:
-    """Return SCIP symbol relationships projection from nested SCIP index."""
+    """Return SCIP symbol relationships projection from nested SCIP index.
+
+    Returns
+    -------
+    SqlFragment
+        SQL fragment for SCIP symbol relationships.
+    """
     register_nested_table(
         engine_session.ibis_backend,
         name="scip_index_v1",
@@ -796,7 +829,13 @@ def scip_external_symbol_information(
     scip_index: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
 ) -> SqlFragment:
-    """Return SCIP external symbol info projection from nested SCIP index."""
+    """Return SCIP external symbol info projection from nested SCIP index.
+
+    Returns
+    -------
+    SqlFragment
+        SQL fragment for SCIP external symbol information.
+    """
     register_nested_table(
         engine_session.ibis_backend,
         name="scip_index_v1",
@@ -814,7 +853,13 @@ def ts_nodes(
     tree_sitter_files: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
 ) -> SqlFragment:
-    """Return tree-sitter node projection from nested tree-sitter files."""
+    """Return tree-sitter node projection from nested tree-sitter files.
+
+    Returns
+    -------
+    SqlFragment
+        SQL fragment for tree-sitter nodes.
+    """
     register_nested_table(
         engine_session.ibis_backend,
         name="tree_sitter_files_v1",
@@ -829,7 +874,13 @@ def ts_errors(
     tree_sitter_files: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
 ) -> SqlFragment:
-    """Return tree-sitter error projection from nested tree-sitter files."""
+    """Return tree-sitter error projection from nested tree-sitter files.
+
+    Returns
+    -------
+    SqlFragment
+        SQL fragment for tree-sitter errors.
+    """
     register_nested_table(
         engine_session.ibis_backend,
         name="tree_sitter_files_v1",
@@ -844,7 +895,13 @@ def ts_missing(
     tree_sitter_files: TableLike | RecordBatchReaderLike,
     engine_session: EngineSession,
 ) -> SqlFragment:
-    """Return tree-sitter missing projection from nested tree-sitter files."""
+    """Return tree-sitter missing projection from nested tree-sitter files.
+
+    Returns
+    -------
+    SqlFragment
+        SQL fragment for tree-sitter missing nodes.
+    """
     register_nested_table(
         engine_session.ibis_backend,
         name="tree_sitter_files_v1",
@@ -959,6 +1016,26 @@ def relspec_incremental_gate(
     _ = incremental_impact_updates
 
 
+@tag(layer="relspec", artifact="relspec_input_dataset_context", kind="object")
+def relspec_input_dataset_context(
+    engine_session: EngineSession,
+    relspec_incremental_context: RelspecIncrementalContext,
+    relspec_incremental_gate: object | None,
+) -> RelspecInputDatasetContext:
+    """Bundle inputs for relspec dataset materialization.
+
+    Returns
+    -------
+    RelspecInputDatasetContext
+        Inputs for relspec dataset assembly.
+    """
+    return RelspecInputDatasetContext(
+        engine_session=engine_session,
+        incremental_context=relspec_incremental_context,
+        incremental_gate=relspec_incremental_gate,
+    )
+
+
 def _require_table(
     name: str,
     value: TableLike | DatasetSource | SqlFragment,
@@ -978,9 +1055,7 @@ def relspec_input_datasets(
     relspec_input_bundles: RelspecInputBundles,
     scip_build_inputs: ScipBuildInputs,
     cpg_extra_inputs: CpgExtraInputs,
-    engine_session: EngineSession,
-    relspec_incremental_context: RelspecIncrementalContext,
-    relspec_incremental_gate: object | None,
+    relspec_input_dataset_context: RelspecInputDatasetContext,
 ) -> dict[str, TableLike]:
     """Build the canonical dataset-name to table mapping.
 
@@ -991,8 +1066,9 @@ def relspec_input_datasets(
     dict[str, TableLike]
         Mapping from dataset names to tables.
     """
-    _ = relspec_incremental_gate
-    backend = engine_session.ibis_backend
+    _ = relspec_input_dataset_context.incremental_gate
+    _ = relspec_input_dataset_context.incremental_context
+    backend = relspec_input_dataset_context.engine_session.ibis_backend
     datasets = {
         "cst_name_refs": _require_table(
             "cst_name_refs",

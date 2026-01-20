@@ -6,16 +6,17 @@ from functools import cache
 
 import pyarrow as pa
 
-from registry_common.arrow_payloads import ipc_hash
-from relspec.adapters import CpgRuleAdapter, ExtractRuleAdapter, NormalizeRuleAdapter
-from relspec.compiler import rel_plan_for_rule
-from relspec.plan import rel_plan_signature
+from relspec.adapters import (
+    CpgRuleAdapter,
+    ExtractRuleAdapter,
+    NormalizeRuleAdapter,
+    default_rule_factory_registry,
+)
+from relspec.graph import rule_graph_signature
+from relspec.registry.rules import RuleRegistry
+from relspec.registry.snapshot import RelspecSnapshot, build_relspec_snapshot
 from relspec.rules.definitions import RuleDefinition, RuleDomain
 from relspec.rules.diagnostics import RuleDiagnostic, rule_diagnostic_table
-from relspec.rules.graph import rule_graph_signature
-from relspec.rules.handlers.cpg import relationship_rule_from_definition
-from relspec.rules.registry import RuleRegistry
-from relspec.rules.rel_ops import rel_ops_signature
 from relspec.rules.spec_tables import rule_definition_table
 
 
@@ -28,13 +29,26 @@ def rule_registry_cached() -> RuleRegistry:
     RuleRegistry
         Cached rule registry with centralized adapters.
     """
+    registry = default_rule_factory_registry()
     return RuleRegistry(
         adapters=(
-            CpgRuleAdapter(),
-            NormalizeRuleAdapter(),
-            ExtractRuleAdapter(),
+            CpgRuleAdapter(registry=registry),
+            NormalizeRuleAdapter(registry=registry),
+            ExtractRuleAdapter(registry=registry),
         )
     )
+
+
+@cache
+def relspec_snapshot_cached() -> RelspecSnapshot:
+    """Return the cached relspec snapshot.
+
+    Returns
+    -------
+    RelspecSnapshot
+        Snapshot of centralized rule tables and signatures.
+    """
+    return build_relspec_snapshot(rule_registry_cached())
 
 
 @cache
@@ -62,7 +76,7 @@ def rule_table_cached(domain: RuleDomain | None = None) -> pa.Table:
         Canonical rule definition table for the requested domain.
     """
     if domain is None:
-        return rule_registry_cached().rule_table()
+        return relspec_snapshot_cached().rule_table
     definitions = rule_definitions_cached(domain)
     return rule_definition_table(definitions)
 
@@ -76,7 +90,7 @@ def template_table_cached() -> pa.Table:
     pyarrow.Table
         Template catalog table from the centralized registry.
     """
-    return rule_registry_cached().template_table()
+    return relspec_snapshot_cached().template_table
 
 
 @cache
@@ -88,7 +102,7 @@ def template_diagnostics_table_cached() -> pa.Table:
     pyarrow.Table
         Template diagnostics table from the centralized registry.
     """
-    return rule_registry_cached().template_diagnostics_table()
+    return relspec_snapshot_cached().template_diagnostics
 
 
 @cache
@@ -116,7 +130,7 @@ def rule_diagnostics_table_cached(domain: RuleDomain | None = None) -> pa.Table:
         Diagnostics table for rules in the requested domain.
     """
     if domain is None:
-        return rule_registry_cached().rule_diagnostics_table()
+        return relspec_snapshot_cached().rule_diagnostics
     diagnostics = rule_diagnostics_cached(domain)
     return rule_diagnostic_table(diagnostics)
 
@@ -130,8 +144,11 @@ def rule_plan_signatures_cached(domain: RuleDomain | None = None) -> dict[str, s
     dict[str, str]
         Signature mapping keyed by rule name.
     """
+    signatures = relspec_snapshot_cached().plan_signatures
+    if domain is None:
+        return dict(signatures)
     rules = rule_definitions_cached(domain)
-    return {rule.name: _rule_signature(rule) for rule in rules}
+    return {rule.name: signatures.get(rule.name, "") for rule in rules}
 
 
 @cache
@@ -173,31 +190,8 @@ def rule_graph_signature_cached(domain: RuleDomain | None = None) -> str:
     )
 
 
-def _rule_signature(rule: RuleDefinition) -> str:
-    """Return a stable signature for a rule definition.
-
-    Parameters
-    ----------
-    rule
-        Rule definition to sign.
-
-    Returns
-    -------
-    str
-        Deterministic hash for the rule definition.
-    """
-    if rule.domain == "cpg":
-        rel_rule = relationship_rule_from_definition(rule)
-        plan = rel_plan_for_rule(rel_rule)
-        if plan is not None:
-            return rel_plan_signature(plan)
-    if rule.rel_ops:
-        return rel_ops_signature(rule.rel_ops)
-    table = rule_definition_table((rule,))
-    return ipc_hash(table)
-
-
 __all__ = [
+    "relspec_snapshot_cached",
     "rule_definitions_cached",
     "rule_diagnostics_cached",
     "rule_diagnostics_table_cached",

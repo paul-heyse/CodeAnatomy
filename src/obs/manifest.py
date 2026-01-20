@@ -36,9 +36,9 @@ from storage.io import (
 if TYPE_CHECKING:
     from arrowdsl.core.scan_telemetry import ScanTelemetry
     from extract.evidence_plan import EvidencePlan
+    from normalize.runner import ResolvedNormalizeRule
     from relspec.compiler import CompiledOutput
     from relspec.model import RelationshipRule
-    from relspec.normalize.rule_model import NormalizeRule
     from relspec.registry import DatasetLocation
 
 
@@ -214,7 +214,7 @@ class ManifestData:
     extract_evidence_plan: EvidencePlan | None = None
     extract_error_counts: Mapping[str, int] | None = None
     relationship_rules: Sequence[RelationshipRule] | None = None
-    normalize_rules: Sequence[NormalizeRule] | None = None
+    normalize_rules: Sequence[ResolvedNormalizeRule] | None = None
     produced_relationship_output_names: Sequence[str] | None = None
     relationship_output_lineage: Mapping[str, Sequence[str]] | None = None
     normalize_output_lineage: Mapping[str, Sequence[str]] | None = None

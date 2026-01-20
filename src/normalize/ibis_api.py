@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import cast
 
 import ibis
 from ibis.backends import BaseBackend
@@ -31,6 +32,7 @@ from normalize.ibis_plan_builders import (
     type_nodes_plan_ibis,
 )
 from normalize.ibis_spans import (
+    SpanSource,
     add_ast_byte_spans_ibis,
     add_scip_occurrence_byte_spans_ibis,
     anchor_instructions_ibis,
@@ -86,12 +88,21 @@ def _empty_plan(output: str) -> IbisPlan:
 def _catalog_from_tables(
     backend: BaseBackend,
     *,
-    tables: dict[str, TableLike | None],
+    tables: dict[str, IbisPlanSource | None],
 ) -> IbisPlanCatalog:
     filtered: dict[str, IbisPlanSource] = {
         name: table for name, table in tables.items() if table is not None
     }
     return IbisPlanCatalog(backend=backend, tables=filtered)
+
+
+def _span_source(name: str, source: NormalizeSource) -> SpanSource:
+    if source is None:
+        msg = f"{name} is required for span enrichment."
+        raise ValueError(msg)
+    if isinstance(source, IbisPlan):
+        return source.expr
+    return cast("SpanSource", source)
 
 
 def _finalize_plan(
@@ -326,9 +337,9 @@ def add_scip_occurrence_byte_spans(
     """
     ibis_backend = _require_backend(backend)
     return add_scip_occurrence_byte_spans_ibis(
-        file_line_index,
-        scip_documents,
-        scip_occurrences,
+        _span_source("file_line_index", file_line_index),
+        _span_source("scip_documents", scip_documents),
+        _span_source("scip_occurrences", scip_occurrences),
         backend=ibis_backend,
     )
 
@@ -348,8 +359,8 @@ def anchor_instructions(
     """
     ibis_backend = _require_backend(backend)
     return anchor_instructions_ibis(
-        file_line_index,
-        py_bc_instructions,
+        _span_source("file_line_index", file_line_index),
+        _span_source("py_bc_instructions", py_bc_instructions),
         backend=ibis_backend,
     )
 
@@ -369,8 +380,8 @@ def add_ast_byte_spans(
     """
     ibis_backend = _require_backend(backend)
     return add_ast_byte_spans_ibis(
-        file_line_index,
-        py_ast_nodes,
+        _span_source("file_line_index", file_line_index),
+        _span_source("py_ast_nodes", py_ast_nodes),
         backend=ibis_backend,
     )
 

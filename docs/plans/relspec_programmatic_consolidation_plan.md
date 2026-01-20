@@ -50,12 +50,12 @@ class RuleDefinition:
 - `src/normalize/rule_defaults.py`
 
 ### Implementation checklist
-- [ ] Replace NormalizeRule usages with RuleDefinition + NormalizePayload.
-- [ ] Convert NormalizeRuleFamilySpec expansion to emit RuleDefinition rows.
-- [ ] Remove or shim NormalizeRule class after adapters are updated.
-- [ ] Update normalize rule factories to return RuleDefinition instances.
-- [ ] Add unit tests for normalize RuleDefinition round-trips.
-- [ ] Run `uv run ruff check --fix`, `uv run pyrefly check`, `uv run pyright --warnings --pythonversion=3.13`.
+- [x] Replace NormalizeRule usages with RuleDefinition + NormalizePayload.
+- [x] Convert NormalizeRuleFamilySpec expansion to emit RuleDefinition rows.
+- [x] Remove or shim NormalizeRule class after adapters are updated.
+- [x] Update normalize rule factories to return RuleDefinition instances.
+- [x] Add unit tests for normalize RuleDefinition round-trips.
+- [x] Run `uv run ruff check --fix`, `uv run pyrefly check`, `uv run pyright --warnings --pythonversion=3.13`.
 
 ## Scope item 2: Consolidate registries into relspec/registry package
 ### Rationale
@@ -67,7 +67,7 @@ responsibilities. A single package makes registry wiring explicit and reusable.
 # src/relspec/registry/rules.py
 from dataclasses import dataclass
 
-from relspec.rules.registry import RuleRegistry
+from relspec.registry.rules import RuleRegistry
 
 
 @dataclass(frozen=True)
@@ -87,12 +87,12 @@ class RelspecRegistry:
 - `src/hamilton_pipeline/modules/outputs.py`
 
 ### Implementation checklist
-- [ ] Create `src/relspec/registry/__init__.py` with curated exports.
-- [ ] Move dataset/contract registry to `registry/datasets.py`.
-- [ ] Move rule registry to `registry/rules.py`.
-- [ ] Update all imports to the new registry paths.
-- [ ] Keep re-exports in `relspec/__init__.py` for compatibility.
-- [ ] Update documentation references to the new registry package.
+- [x] Create `src/relspec/registry/__init__.py` with curated exports.
+- [x] Move dataset/contract registry to `registry/datasets.py`.
+- [x] Move rule registry to `registry/rules.py`.
+- [x] Update all imports to the new registry paths.
+- [x] Keep re-exports in `relspec/__init__.py` for compatibility.
+- [x] Update documentation references to the new registry package.
 
 ## Scope item 3: Unify policy registry + schema policy helpers
 ### Rationale
@@ -123,10 +123,10 @@ class PolicyRegistry:
 - `src/normalize/policies.py`
 
 ### Implementation checklist
-- [ ] Create `src/relspec/policies/__init__.py` exporting registry + schema helpers.
-- [ ] Update policy resolution call sites to use the new policy registry.
-- [ ] Migrate schema metadata parsing into the new policy module.
-- [ ] Add tests for confidence/ambiguity resolution across domains.
+- [x] Create `src/relspec/policies/__init__.py` exporting registry + schema helpers.
+- [x] Update policy resolution call sites to use the new policy registry.
+- [x] Migrate schema metadata parsing into the new policy module.
+- [x] Add tests for confidence/ambiguity resolution across domains.
 
 ## Scope item 4: Merge relspec graph utilities
 ### Rationale
@@ -154,10 +154,10 @@ def rule_graph_signature(rules: "Sequence[RuleDefinition]", label: str) -> str:
 - `src/hamilton_pipeline/modules/cpg_build.py`
 
 ### Implementation checklist
-- [ ] Create `src/relspec/graph.py` with unified ordering + signature utilities.
-- [ ] Remove or alias `compiler_graph.py` and `rules/graph.py`.
-- [ ] Update all imports to `relspec.graph`.
-- [ ] Add tests for ordering and signature stability.
+- [x] Create `src/relspec/graph.py` with unified ordering + signature utilities.
+- [x] Remove or alias `compiler_graph.py` and `rules/graph.py`.
+- [x] Update all imports to `relspec.graph`.
+- [x] Add tests for ordering and signature stability.
 
 ## Scope item 5: Introduce a single Relspec registry snapshot API
 ### Rationale
@@ -188,10 +188,10 @@ class RelspecSnapshot:
 - `src/obs/manifest.py`
 
 ### Implementation checklist
-- [ ] Add a `build_relspec_snapshot` helper that uses the unified registries.
-- [ ] Replace direct cache/table helpers with snapshot usage.
-- [ ] Update delta registry exports to consume snapshot outputs.
-- [ ] Add snapshot parity tests against the existing cache helpers.
+- [x] Add a `build_relspec_snapshot` helper that uses the unified registries.
+- [x] Replace direct cache/table helpers with snapshot usage.
+- [x] Update delta registry exports to consume snapshot outputs.
+- [x] Add snapshot parity tests against the existing cache helpers.
 
 ## Scope item 6: Data-driven adapters and factory registry
 ### Rationale
@@ -221,10 +221,10 @@ class RuleFactoryRegistry:
 - `src/relspec/rules/cache.py`
 
 ### Implementation checklist
-- [ ] Introduce `RuleFactoryRegistry` and register domain factories.
-- [ ] Refactor adapters to be thin wrappers over the factory registry.
-- [ ] Update RuleRegistry construction to use factory-backed adapters.
-- [ ] Add unit tests to validate adapter output stability.
+- [x] Introduce `RuleFactoryRegistry` and register domain factories.
+- [x] Refactor adapters to be thin wrappers over the factory registry.
+- [x] Update RuleRegistry construction to use factory-backed adapters.
+- [x] Add unit tests to validate adapter output stability.
 
 ## Scope item 7: Centralize relspec configuration injection
 ### Rationale
@@ -252,9 +252,9 @@ class RelspecConfig:
 - `src/relspec/rules/registry.py`
 
 ### Implementation checklist
-- [ ] Define `RelspecConfig` and thread it through registry + compiler layers.
-- [ ] Update pipeline modules to pass the config explicitly.
-- [ ] Remove redundant policy parameters where RelspecConfig is available.
+- [x] Define `RelspecConfig` and thread it through registry + compiler layers.
+- [x] Update pipeline modules to pass the config explicitly.
+- [x] Remove redundant policy parameters where RelspecConfig is available.
 
 ## Scope item 8: Cleanup removed fallback coverage references
 ### Rationale
@@ -273,11 +273,9 @@ __all__ = [
 
 ### Target files
 - `src/relspec/rules/__init__.py`
-- `docs/plans/fallback_coverage_report.md`
-- `docs/plans/fallback_coverage_report.json`
 - `docs/plans/fallback_missing_expr_functions.json`
 
 ### Implementation checklist
-- [ ] Remove exports or imports referencing fallback coverage modules.
-- [ ] Delete or archive stale fallback coverage plan artifacts.
-- [ ] Run a repository search for `fallback_coverage` and update references.
+- [x] Remove exports or imports referencing fallback coverage modules.
+- [x] Delete or archive stale fallback coverage plan artifacts.
+- [x] Remove stale `fallback_coverage` references after cleanup.

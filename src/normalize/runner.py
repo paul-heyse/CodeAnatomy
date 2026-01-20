@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cache
-from typing import Protocol, cast
+from typing import TYPE_CHECKING
 
 from ibis.backends import BaseBackend
 from ibis.expr.types import Value
@@ -20,10 +19,12 @@ from arrowdsl.finalize.finalize import Contract, FinalizeOptions, FinalizeResult
 from arrowdsl.schema.metadata import encoding_policy_from_schema, merge_metadata_specs
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec
+from datafusion_engine.nested_tables import materialize_sql_fragment
+from datafusion_engine.query_fragments import SqlFragment
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
 from ibis_engine.plan import IbisPlan
-from ibis_engine.query_compiler import apply_query_spec
+from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 from ibis_engine.scan_io import DatasetSource
 from ibis_engine.sources import (
     SourceToIbisOptions,
@@ -32,24 +33,31 @@ from ibis_engine.sources import (
     source_to_ibis,
     table_to_ibis,
 )
-from normalize.contracts import normalize_evidence_schema
 from normalize.ibis_bridge import resolve_plan_builder_ibis
 from normalize.ibis_plan_builders import IbisPlanCatalog
 from normalize.registry_specs import dataset_schema
 from normalize.registry_validation import validate_rule_specs
-from normalize.rule_defaults import apply_evidence_defaults, apply_policy_defaults
+from normalize.rule_defaults import resolve_rule_defaults
 from normalize.rule_factories import build_rule_definitions_from_specs
-from relspec.normalize.rule_model import EvidenceSpec as NormalizeEvidenceSpec
-from relspec.normalize.rule_model import NormalizeRule
+from relspec.graph import RuleSelectors, order_rules_by_evidence
+from relspec.model import AmbiguityPolicy, ConfidencePolicy
 from relspec.normalize.rule_registry_specs import rule_family_specs
-from relspec.rules.compiler import RuleCompiler, RuleHandler
-from relspec.rules.definitions import EvidenceSpec as CentralEvidenceSpec
-from relspec.rules.definitions import RuleDefinition
+from relspec.policies import PolicyRegistry
+from relspec.rules.definitions import (
+    EvidenceOutput,
+    EvidenceSpec,
+    ExecutionMode,
+    NormalizePayload,
+    RuleDefinition,
+)
 from relspec.rules.evidence import EvidenceCatalog
-from relspec.rules.graph import RuleSelectors, order_rules_by_evidence
+from relspec.rules.rel_ops import query_spec_from_rel_ops
 from schema_spec.system import ContractSpec
 
 PostFn = Callable[[TableLike, ExecutionContext], TableLike]
+
+if TYPE_CHECKING:
+    from relspec.rules.rel_ops import RelOpT
 
 
 @dataclass(frozen=True)
@@ -58,18 +66,6 @@ class NormalizeFinalizeSpec:
 
     metadata_spec: SchemaMetadataSpec | None = None
     schema_policy: SchemaPolicy | None = None
-
-
-class _NormalizeHandlerModule(Protocol):
-    NormalizeRuleHandler: type[RuleHandler]
-
-
-def _normalize_rule_handler() -> RuleHandler:
-    module = cast(
-        "_NormalizeHandlerModule",
-        importlib.import_module("relspec.rules.handlers.normalize"),
-    )
-    return module.NormalizeRuleHandler()
 
 
 @dataclass(frozen=True)
@@ -84,10 +80,29 @@ class NormalizeRunOptions:
 
 
 @dataclass(frozen=True)
+class ResolvedNormalizeRule:
+    """Normalize rule with resolved policies and evidence defaults."""
+
+    name: str
+    output: str
+    inputs: tuple[str, ...]
+    ibis_builder: str | None
+    query: IbisQuerySpec | None
+    evidence: EvidenceSpec | None
+    evidence_output: EvidenceOutput | None
+    confidence_policy: ConfidencePolicy | None
+    ambiguity_policy: AmbiguityPolicy | None
+    priority: int
+    emit_rule_meta: bool
+    execution_mode: ExecutionMode
+
+
+@dataclass(frozen=True)
 class NormalizeRuleCompilation:
     """Compiled normalize rules and derived Ibis plans."""
 
-    rules: tuple[NormalizeRule, ...]
+    rules: tuple[RuleDefinition, ...]
+    resolved_rules: tuple[ResolvedNormalizeRule, ...]
     plans: Mapping[str, IbisPlan]
     ibis_catalog: IbisPlanCatalog
     output_storage: Mapping[str, str] = field(default_factory=dict)
@@ -98,16 +113,18 @@ class NormalizeIbisPlanOptions:
     """Options for compiling normalize plans into Ibis plans."""
 
     backend: BaseBackend
-    rules: Sequence[NormalizeRule] | None = None
+    rules: Sequence[RuleDefinition] | None = None
     required_outputs: Sequence[str] | None = None
     name_prefix: str = "normalize"
     materialize_outputs: Sequence[str] | None = None
     execution_policy: AdapterExecutionPolicy | None = None
+    policy_registry: PolicyRegistry = field(default_factory=PolicyRegistry)
+    scan_provenance_columns: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
 class _NormalizeIbisCompilationContext:
-    ordered: tuple[NormalizeRule, ...]
+    ordered: tuple[ResolvedNormalizeRule, ...]
     ibis_catalog: IbisPlanCatalog
     execution: IbisExecutionContext
     evidence: EvidenceCatalog
@@ -122,23 +139,26 @@ def _normalize_ibis_context(
     if catalog.backend is not options.backend:
         msg = "Normalize Ibis catalog backend does not match compile options backend."
         raise ValueError(msg)
-    rule_set = _default_normalize_rules(ctx) if options.rules is None else tuple(options.rules)
+    rule_set = _default_normalize_rules() if options.rules is None else tuple(options.rules)
     if options.required_outputs:
         required_set = _expand_required_outputs(rule_set, options.required_outputs)
         rule_set = tuple(rule for rule in rule_set if rule.output in required_set)
-    for rule in rule_set:
-        _validate_rule_policies(rule)
+    resolved_rules = resolve_normalize_rules(
+        rule_set,
+        policy_registry=options.policy_registry,
+        scan_provenance_columns=options.scan_provenance_columns,
+    )
     evidence = EvidenceCatalog.from_sources(catalog.tables)
     selectors = RuleSelectors(
         inputs_for=lambda rule: rule.inputs,
         output_for=lambda rule: rule.output,
         name_for=lambda rule: rule.name,
         priority_for=lambda rule: rule.priority,
-        evidence_for=lambda rule: _central_evidence(rule.evidence),
+        evidence_for=lambda rule: rule.evidence,
         output_schema_for=_normalize_output_schema,
     )
     ordered = order_rules_by_evidence(
-        rule_set,
+        resolved_rules,
         evidence=evidence,
         selectors=selectors,
         allow_fallback=True,
@@ -190,12 +210,77 @@ def _normalize_rule_definitions() -> tuple[RuleDefinition, ...]:
     return build_rule_definitions_from_specs(rule_family_specs())
 
 
-def _default_normalize_rules(ctx: ExecutionContext) -> tuple[NormalizeRule, ...]:
-    compiler = RuleCompiler(handlers={"normalize": _normalize_rule_handler()})
-    compiled = compiler.compile_rules(_normalize_rule_definitions(), ctx=ctx)
-    rules = cast("tuple[NormalizeRule, ...]", compiled)
-    validate_rule_specs(rules)
-    return rules
+def _default_normalize_rules() -> tuple[RuleDefinition, ...]:
+    return _normalize_rule_definitions()
+
+
+def resolve_normalize_rules(
+    rules: Sequence[RuleDefinition],
+    *,
+    policy_registry: PolicyRegistry,
+    scan_provenance_columns: Sequence[str] = (),
+) -> tuple[ResolvedNormalizeRule, ...]:
+    """Resolve normalize rules with defaults applied.
+
+    Returns
+    -------
+    tuple[ResolvedNormalizeRule, ...]
+        Rules with defaults applied.
+    """
+    validate_rule_specs(
+        rules,
+        registry=policy_registry,
+        scan_provenance_columns=scan_provenance_columns,
+    )
+    return tuple(
+        _resolved_rule_from_definition(
+            rule,
+            policy_registry=policy_registry,
+            scan_provenance_columns=scan_provenance_columns,
+        )
+        for rule in rules
+    )
+
+
+def _resolved_rule_from_definition(
+    rule: RuleDefinition,
+    *,
+    policy_registry: PolicyRegistry,
+    scan_provenance_columns: Sequence[str],
+) -> ResolvedNormalizeRule:
+    defaults = resolve_rule_defaults(
+        rule,
+        registry=policy_registry,
+        scan_provenance_columns=scan_provenance_columns,
+    )
+    payload = rule.payload if isinstance(rule.payload, NormalizePayload) else None
+    query = _normalize_query(payload, rel_ops=rule.rel_ops)
+    return ResolvedNormalizeRule(
+        name=rule.name,
+        output=rule.output,
+        inputs=rule.inputs,
+        ibis_builder=payload.plan_builder if payload is not None else None,
+        query=query,
+        evidence=defaults.evidence,
+        evidence_output=defaults.evidence_output,
+        confidence_policy=defaults.confidence_policy,
+        ambiguity_policy=defaults.ambiguity_policy,
+        priority=rule.priority,
+        emit_rule_meta=rule.emit_rule_meta,
+        execution_mode=rule.execution_mode,
+    )
+
+
+def _normalize_query(
+    payload: NormalizePayload | None,
+    *,
+    rel_ops: tuple[RelOpT, ...],
+) -> IbisQuerySpec | None:
+    if payload is not None and payload.query is not None:
+        return payload.query
+    if rel_ops:
+        return query_spec_from_rel_ops(rel_ops)
+    return None
 
 
 def _should_skip_canonical_sort(
@@ -286,7 +371,7 @@ def _merge_policy_metadata(
 
 
 def _expand_required_outputs(
-    rules: Sequence[NormalizeRule],
+    rules: Sequence[RuleDefinition],
     outputs: Sequence[str],
 ) -> set[str]:
     required = set(outputs)
@@ -304,37 +389,7 @@ def _expand_required_outputs(
     return required
 
 
-def _validate_rule_policies(rule: NormalizeRule) -> None:
-    policy = rule.ambiguity_policy
-    if policy is None or policy.winner_select is None:
-        return
-    schema = normalize_evidence_schema()
-    available = set(schema.names)
-    required: set[str] = set(policy.winner_select.keys)
-    required.add(policy.winner_select.score_col)
-    required.update(key.column for key in policy.winner_select.tie_breakers)
-    required.update(key.column for key in policy.tie_breakers)
-    missing = sorted(required - available)
-    if missing:
-        msg = (
-            "Normalize ambiguity policy references missing evidence columns "
-            f"for rule {rule.name!r}: {missing}"
-        )
-        raise ValueError(msg)
-
-
-def _central_evidence(spec: NormalizeEvidenceSpec | None) -> CentralEvidenceSpec | None:
-    if spec is None:
-        return None
-    return CentralEvidenceSpec(
-        sources=spec.sources,
-        required_columns=spec.required_columns,
-        required_types=spec.required_types,
-        required_metadata=spec.required_metadata,
-    )
-
-
-def _normalize_output_schema(rule: NormalizeRule) -> SchemaLike | None:
+def _normalize_output_schema(rule: ResolvedNormalizeRule) -> SchemaLike | None:
     try:
         return dataset_schema(rule.output)
     except KeyError:
@@ -407,7 +462,7 @@ def compile_normalize_plans_ibis(
 
 
 def _resolve_rule_plan_ibis(
-    rule: NormalizeRule,
+    rule: ResolvedNormalizeRule,
     catalog: IbisPlanCatalog,
     *,
     ctx: ExecutionContext,
@@ -422,6 +477,8 @@ def _resolve_rule_plan_ibis(
         if isinstance(source, DatasetSource):
             msg = f"DatasetSource {rule.inputs[0]!r} must be materialized for normalize."
             raise TypeError(msg)
+        if isinstance(source, SqlFragment):
+            source = materialize_sql_fragment(backend, source)
         return source_to_ibis(
             source,
             options=SourceToIbisOptions(
@@ -440,10 +497,10 @@ __all__ = [
     "NormalizeRuleCompilation",
     "NormalizeRunOptions",
     "PostFn",
-    "apply_evidence_defaults",
-    "apply_policy_defaults",
+    "ResolvedNormalizeRule",
     "compile_normalize_plans_ibis",
     "ensure_canonical",
     "ensure_execution_context",
+    "resolve_normalize_rules",
     "run_normalize",
 ]

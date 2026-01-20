@@ -86,10 +86,15 @@ from registry_common.arrow_payloads import ipc_hash
 from relspec.compiler import CompiledOutput
 from relspec.model import RelationshipRule
 from relspec.param_deps import RuleDependencyReport, build_param_reverse_index
-from relspec.registry import ContractCatalog, DatasetCatalog, DatasetLocation
+from relspec.registry import (
+    ContractCatalog,
+    DatasetCatalog,
+    DatasetLocation,
+    build_relspec_snapshot,
+)
+from relspec.registry.rules import RuleRegistry
 from relspec.rules.diagnostics import rule_diagnostics_from_table
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
-from relspec.rules.registry import RuleRegistry
 from relspec.rules.spec_tables import rule_definitions_from_table
 from schema_spec.system import (
     GLOBAL_SCHEMA_REGISTRY,
@@ -2489,11 +2494,9 @@ def relspec_snapshots(
     RelspecSnapshots
         Relationship snapshot bundle.
     """
+    snapshot = build_relspec_snapshot(rule_registry)
     return RelspecSnapshots(
-        rule_table=rule_registry.rule_table(),
-        template_table=rule_registry.template_table(),
-        template_diagnostics=rule_registry.template_diagnostics_table(),
-        rule_diagnostics=rule_registry.rule_diagnostics_table(),
+        registry_snapshot=snapshot,
         contracts=relationship_contracts,
         compiled_outputs=compiled_relationship_outputs,
     )
@@ -2560,7 +2563,9 @@ def manifest_data(
     ValueError
         Raised when ExecutionContext is not provided.
     """
-    normalize_rules = normalize_rule_compilation.rules if normalize_rule_compilation else None
+    normalize_rules = (
+        normalize_rule_compilation.resolved_rules if normalize_rule_compilation else None
+    )
     if ctx is None:
         msg = "manifest_data requires ExecutionContext."
         raise ValueError(msg)
@@ -2716,7 +2721,9 @@ def _manifest_relationship_metadata(
 
 
 def _sqlglot_ast_payloads(manifest_inputs: ManifestInputs) -> list[JsonDict] | None:
-    diagnostics = rule_diagnostics_from_table(manifest_inputs.relspec_snapshots.rule_diagnostics)
+    diagnostics = rule_diagnostics_from_table(
+        manifest_inputs.relspec_snapshots.registry_snapshot.rule_diagnostics
+    )
     payloads: list[JsonDict] = []
     for diagnostic in diagnostics:
         metadata = diagnostic.metadata
@@ -2762,7 +2769,7 @@ def _manifest_notes(
 
 
 def _rule_plan_hash_notes(manifest_inputs: ManifestInputs) -> JsonDict:
-    rule_diagnostics = manifest_inputs.relspec_snapshots.rule_diagnostics
+    rule_diagnostics = manifest_inputs.relspec_snapshots.registry_snapshot.rule_diagnostics
     hashes: dict[str, str] = {}
     for diagnostic in rule_diagnostics_from_table(rule_diagnostics):
         if diagnostic.rule_name is None:
@@ -2898,7 +2905,9 @@ def _relspec_scan_telemetry(
 def _relationship_rules_from_snapshots(
     manifest_inputs: ManifestInputs,
 ) -> tuple[RelationshipRule, ...]:
-    rule_definitions = rule_definitions_from_table(manifest_inputs.relspec_snapshots.rule_table)
+    rule_definitions = rule_definitions_from_table(
+        manifest_inputs.relspec_snapshots.registry_snapshot.rule_table
+    )
     return tuple(
         relationship_rule_from_definition(defn) for defn in rule_definitions if defn.domain == "cpg"
     )
@@ -3371,14 +3380,15 @@ def run_bundle_context(
         else None
     )
     param_values = _run_bundle_param_values(run_bundle_inputs.param_inputs)
+    snapshot = run_bundle_inputs.relspec_snapshots.registry_snapshot
     return RunBundleContext(
         base_dir=str(base_dir),
         run_manifest=run_bundle_inputs.run_manifest,
         run_config=run_bundle_inputs.run_config,
-        rule_table=run_bundle_inputs.relspec_snapshots.rule_table,
-        template_table=run_bundle_inputs.relspec_snapshots.template_table,
-        template_diagnostics=run_bundle_inputs.relspec_snapshots.template_diagnostics,
-        rule_diagnostics=run_bundle_inputs.relspec_snapshots.rule_diagnostics,
+        rule_table=snapshot.rule_table,
+        template_table=snapshot.template_table,
+        template_diagnostics=snapshot.template_diagnostics,
+        rule_diagnostics=snapshot.rule_diagnostics,
         relationship_contracts=run_bundle_inputs.relspec_snapshots.contracts,
         compiled_relationship_outputs=run_bundle_inputs.relspec_snapshots.compiled_outputs,
         datafusion_metrics=datafusion_artifacts.metrics,

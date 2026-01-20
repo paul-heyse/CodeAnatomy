@@ -3,38 +3,41 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING
 
 from arrowdsl.core.interop import SchemaLike
 from normalize.contracts import normalize_evidence_schema
-from normalize.evidence_specs import evidence_output_from_schema, evidence_spec_from_schema
 from normalize.registry_specs import dataset_names, dataset_schema
-from relspec.normalize.rule_model import (
-    AmbiguityPolicy,
-    EvidenceOutput,
-    EvidenceSpec,
-    NormalizeRule,
-)
-
-if TYPE_CHECKING:
-    from arrowdsl.core.expr_types import ScalarValue
+from normalize.rule_defaults import resolve_rule_defaults
+from relspec.model import AmbiguityPolicy
+from relspec.policies import PolicyRegistry
+from relspec.rules.definitions import EvidenceOutput, EvidenceSpec, RuleDefinition
 
 
-def validate_rule_specs(rules: Sequence[NormalizeRule]) -> None:
+def validate_rule_specs(
+    rules: Sequence[RuleDefinition],
+    *,
+    registry: PolicyRegistry,
+    scan_provenance_columns: Sequence[str] = (),
+) -> None:
     """Validate normalize rule specs against registry contracts."""
     registered = set(dataset_names())
     for rule in rules:
         output_schema = dataset_schema(rule.output)
-        _validate_evidence_output(rule, output_schema)
-        evidence = _merge_evidence(rule.evidence, evidence_spec_from_schema(output_schema))
-        _validate_evidence_requirements(rule, evidence, registered=registered)
-        _validate_ambiguity_policy(rule.name, rule.ambiguity_policy)
+        defaults = resolve_rule_defaults(
+            rule,
+            registry=registry,
+            scan_provenance_columns=scan_provenance_columns,
+        )
+        _validate_evidence_output(rule.name, defaults.evidence_output, output_schema)
+        _validate_evidence_requirements(rule, defaults.evidence, registered=registered)
+        _validate_ambiguity_policy(rule.name, defaults.ambiguity_policy)
 
 
-def _validate_evidence_output(rule: NormalizeRule, schema: SchemaLike) -> None:
-    evidence_output = _merge_evidence_output(
-        rule.evidence_output, evidence_output_from_schema(schema)
-    )
+def _validate_evidence_output(
+    rule_name: str,
+    evidence_output: EvidenceOutput | None,
+    schema: SchemaLike,
+) -> None:
     if evidence_output is None:
         return
     evidence_schema = normalize_evidence_schema()
@@ -46,7 +49,7 @@ def _validate_evidence_output(rule: NormalizeRule, schema: SchemaLike) -> None:
     if missing_targets:
         msg = (
             "Normalize rule evidence output references missing columns "
-            f"for rule {rule.name!r}: {missing_targets}"
+            f"for rule {rule_name!r}: {missing_targets}"
         )
         raise ValueError(msg)
     missing_keys = sorted(
@@ -61,14 +64,14 @@ def _validate_evidence_output(rule: NormalizeRule, schema: SchemaLike) -> None:
     if missing_keys or missing_literals or missing_provenance:
         msg = (
             "Normalize rule evidence output uses unknown evidence columns "
-            f"for rule {rule.name!r}: "
+            f"for rule {rule_name!r}: "
             f"{sorted(set(missing_keys + missing_literals + missing_provenance))}"
         )
         raise ValueError(msg)
 
 
 def _validate_evidence_requirements(
-    rule: NormalizeRule,
+    rule: RuleDefinition,
     evidence: EvidenceSpec | None,
     *,
     registered: set[str],
@@ -86,7 +89,7 @@ def _validate_evidence_requirements(
 
 
 def _validate_required_columns(
-    rule: NormalizeRule,
+    rule: RuleDefinition,
     source: str,
     schema: SchemaLike,
     required: Sequence[str],
@@ -103,7 +106,7 @@ def _validate_required_columns(
 
 
 def _validate_required_types(
-    rule: NormalizeRule,
+    rule: RuleDefinition,
     source: str,
     schema: SchemaLike,
     required: Mapping[str, str],
@@ -128,7 +131,7 @@ def _validate_required_types(
 
 
 def _validate_required_metadata(
-    rule: NormalizeRule,
+    rule: RuleDefinition,
     source: str,
     schema: SchemaLike,
     required: Mapping[bytes, bytes],
@@ -170,54 +173,6 @@ def _validate_ambiguity_policy(rule_name: str, policy: AmbiguityPolicy | None) -
             f"for rule {rule_name!r}: {missing}"
         )
         raise ValueError(msg)
-
-
-def _merge_evidence(
-    base: EvidenceSpec | None,
-    defaults: EvidenceSpec | None,
-) -> EvidenceSpec | None:
-    if base is None:
-        return defaults
-    if defaults is None:
-        return base
-    sources = base.sources or defaults.sources
-    required_columns = tuple(sorted(set(base.required_columns).union(defaults.required_columns)))
-    required_types = dict(defaults.required_types)
-    required_types.update(base.required_types)
-    required_metadata = dict(defaults.required_metadata)
-    required_metadata.update(base.required_metadata)
-    if not sources and not required_columns and not required_types and not required_metadata:
-        return None
-    return EvidenceSpec(
-        sources=sources,
-        required_columns=required_columns,
-        required_types=required_types,
-        required_metadata=required_metadata,
-    )
-
-
-def _merge_evidence_output(
-    base: EvidenceOutput | None,
-    defaults: EvidenceOutput | None,
-) -> EvidenceOutput | None:
-    if base is None:
-        return defaults
-    if defaults is None:
-        return base
-    column_map = dict(defaults.column_map)
-    column_map.update(base.column_map)
-    literals: dict[str, ScalarValue] = dict(defaults.literals)
-    literals.update(base.literals)
-    provenance_columns = tuple(
-        dict.fromkeys((*defaults.provenance_columns, *base.provenance_columns))
-    )
-    if not column_map and not literals and not provenance_columns:
-        return None
-    return EvidenceOutput(
-        column_map=column_map,
-        literals=literals,
-        provenance_columns=provenance_columns,
-    )
 
 
 __all__ = ["validate_rule_specs"]

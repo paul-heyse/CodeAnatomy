@@ -70,6 +70,7 @@ from relspec.plan import (
     rel_plan_signature,
 )
 from relspec.policies import (
+    PolicyRegistry,
     ambiguity_policy_from_schema,
     confidence_policy_from_schema,
     default_tie_breakers,
@@ -77,7 +78,6 @@ from relspec.policies import (
 )
 from relspec.registry import ContractCatalog, DatasetCatalog
 from relspec.rules.exec_events import RuleExecutionObserver, rule_execution_event_from_table
-from relspec.rules.policies import PolicyRegistry
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, dataset_spec_from_contract
 from sqlglot_tools.bridge import IbisCompilerBackend
 

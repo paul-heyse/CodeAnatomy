@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING
 
@@ -10,23 +11,26 @@ from extract.registry_definitions import extract_rule_definitions
 from extract.registry_templates import config as extractor_config
 from extract.registry_templates import expand_dataset_templates
 from relspec.extract.registry_template_specs import DATASET_TEMPLATE_SPECS
+from relspec.registry.rules import RuleAdapter
 from relspec.rules.definitions import RuleDefinition
 from relspec.rules.diagnostics import RuleDiagnostic
-from relspec.rules.registry import RuleAdapter
 from relspec.rules.templates import RuleTemplateSpec
 
 if TYPE_CHECKING:
+    from relspec.adapters.factory import RuleFactoryRegistry
     from relspec.extract.registry_template_specs import DatasetTemplateSpec
     from relspec.rules.definitions import RuleDomain
 
 
+@dataclass(frozen=True)
 class ExtractRuleAdapter(RuleAdapter):
     """Adapter that exposes extract dataset specs as rule definitions."""
 
+    registry: RuleFactoryRegistry
     domain: RuleDomain = "extract"
+    factory_name: str = "extract"
 
-    @staticmethod
-    def rule_definitions() -> Sequence[RuleDefinition]:
+    def rule_definitions(self) -> Sequence[RuleDefinition]:
         """Return extract rule definitions for the central registry.
 
         Returns
@@ -34,10 +38,9 @@ class ExtractRuleAdapter(RuleAdapter):
         Sequence[RuleDefinition]
             Extract rule definitions.
         """
-        return extract_rule_definitions()
+        return self.registry.rule_definitions(self.factory_name)
 
-    @staticmethod
-    def templates() -> Sequence[RuleTemplateSpec]:
+    def templates(self) -> Sequence[RuleTemplateSpec]:
         """Return extract dataset templates for expansion.
 
         Returns
@@ -45,11 +48,9 @@ class ExtractRuleAdapter(RuleAdapter):
         Sequence[RuleTemplateSpec]
             Centralized template specs.
         """
-        specs, _ = _template_catalog()
-        return specs
+        return self.registry.templates(self.factory_name)
 
-    @staticmethod
-    def template_diagnostics() -> Sequence[RuleDiagnostic]:
+    def template_diagnostics(self) -> Sequence[RuleDiagnostic]:
         """Return template diagnostics for extract templates.
 
         Returns
@@ -57,8 +58,42 @@ class ExtractRuleAdapter(RuleAdapter):
         Sequence[RuleDiagnostic]
             Template diagnostics for extract templates.
         """
-        _, diagnostics = _template_catalog()
-        return diagnostics
+        return self.registry.template_diagnostics(self.factory_name)
+
+
+def extract_rule_definitions_for_adapter() -> Sequence[RuleDefinition]:
+    """Return extract rule definitions for factory registration.
+
+    Returns
+    -------
+    Sequence[RuleDefinition]
+        Extract rule definitions.
+    """
+    return extract_rule_definitions()
+
+
+def extract_template_specs() -> Sequence[RuleTemplateSpec]:
+    """Return extract template specs for factory registration.
+
+    Returns
+    -------
+    Sequence[RuleTemplateSpec]
+        Extract template specs.
+    """
+    specs, _ = _template_catalog()
+    return specs
+
+
+def extract_template_diagnostics() -> Sequence[RuleDiagnostic]:
+    """Return extract template diagnostics for factory registration.
+
+    Returns
+    -------
+    Sequence[RuleDiagnostic]
+        Extract template diagnostics.
+    """
+    _, diagnostics = _template_catalog()
+    return diagnostics
 
 
 @cache

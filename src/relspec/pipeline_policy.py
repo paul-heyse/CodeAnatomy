@@ -7,8 +7,9 @@ from dataclasses import dataclass, field
 from arrowdsl.kernel.registry import KernelLane
 from datafusion_engine.compile_options import DataFusionSqlPolicy
 from ibis_engine.param_tables import ParamTablePolicy
+from relspec.config import RelspecConfig
 from relspec.list_filter_gate import ListFilterGatePolicy
-from relspec.rules.policies import PolicyRegistry
+from relspec.policies import PolicyRegistry
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,20 @@ class PipelinePolicy:
     datafusion_sql_policy: DataFusionSqlPolicy = field(default_factory=DataFusionSqlPolicy)
     kernel_lanes: KernelLanePolicy = field(default_factory=KernelLanePolicy)
     diagnostics: DiagnosticsPolicy = field(default_factory=DiagnosticsPolicy)
+
+    def relspec_config(self) -> RelspecConfig:
+        """Return the rule registry config derived from this policy.
+
+        Returns
+        -------
+        RelspecConfig
+            Configuration payload for relspec registry wiring.
+        """
+        return RelspecConfig(
+            param_table_policy=self.param_table_policy,
+            list_filter_gate_policy=self.list_filter_gate_policy,
+            kernel_lane_policy=self.kernel_lanes,
+        )
 
 
 __all__ = ["DiagnosticsPolicy", "KernelLanePolicy", "PipelinePolicy"]

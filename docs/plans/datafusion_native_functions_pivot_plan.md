@@ -185,7 +185,6 @@ def _function_coverage(..., datafusion_builtins: set[str], sql_exprs: set[str]) 
 
 Target files:
 - `src/relspec/rules/coverage.py`
-- `src/relspec/rules/fallback_coverage.py`
 - `docs/plans/datafusion_displacement_mapping.md`
 - `docs/plans/datafusion_displacement_mapping.json`
 

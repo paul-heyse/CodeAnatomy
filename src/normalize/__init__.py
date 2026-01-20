@@ -58,11 +58,11 @@ if TYPE_CHECKING:
         NormalizeIbisPlanOptions,
         NormalizeRuleCompilation,
         NormalizeRunOptions,
-        apply_evidence_defaults,
-        apply_policy_defaults,
+        ResolvedNormalizeRule,
         compile_normalize_plans_ibis,
         ensure_canonical,
         ensure_execution_context,
+        resolve_normalize_rules,
         run_normalize,
     )
     from normalize.schema_infer import (
@@ -86,13 +86,8 @@ if TYPE_CHECKING:
     )
     from normalize.text_index import FileTextIndex, RepoTextIndex
     from normalize.utils import add_span_id_column, span_id
-    from relspec.normalize.rule_model import (
-        AmbiguityPolicy,
-        ConfidencePolicy,
-        EvidenceSpec,
-        ExecutionMode,
-        NormalizeRule,
-    )
+    from relspec.model import AmbiguityPolicy, ConfidencePolicy
+    from relspec.rules.definitions import EvidenceSpec, ExecutionMode
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "CONSTRAINTS_TABLE": ("normalize.spec_tables", "CONSTRAINTS_TABLE"),
@@ -108,15 +103,15 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "SCHEMA_TABLES": ("normalize.spec_tables", "SCHEMA_TABLES"),
     "TYPE_EXPR_ID_SPEC": ("normalize.registry_ids", "TYPE_EXPR_ID_SPEC"),
     "TYPE_ID_SPEC": ("normalize.registry_ids", "TYPE_ID_SPEC"),
-    "AmbiguityPolicy": ("relspec.normalize.rule_model", "AmbiguityPolicy"),
-    "ConfidencePolicy": ("relspec.normalize.rule_model", "ConfidencePolicy"),
+    "AmbiguityPolicy": ("relspec.model", "AmbiguityPolicy"),
+    "ConfidencePolicy": ("relspec.model", "ConfidencePolicy"),
     "DiagnosticsSources": ("normalize.ibis_api", "DiagnosticsSources"),
-    "EvidenceSpec": ("relspec.normalize.rule_model", "EvidenceSpec"),
-    "ExecutionMode": ("relspec.normalize.rule_model", "ExecutionMode"),
+    "EvidenceSpec": ("relspec.rules.definitions", "EvidenceSpec"),
+    "ExecutionMode": ("relspec.rules.definitions", "ExecutionMode"),
     "FileTextIndex": ("normalize.text_index", "FileTextIndex"),
     "NormalizeFinalizeSpec": ("normalize.runner", "NormalizeFinalizeSpec"),
     "NormalizeIbisPlanOptions": ("normalize.runner", "NormalizeIbisPlanOptions"),
-    "NormalizeRule": ("relspec.normalize.rule_model", "NormalizeRule"),
+    "ResolvedNormalizeRule": ("normalize.runner", "ResolvedNormalizeRule"),
     "NormalizeRuleCompilation": ("normalize.runner", "NormalizeRuleCompilation"),
     "NormalizeRunOptions": ("normalize.runner", "NormalizeRunOptions"),
     "RepoTextIndex": ("normalize.text_index", "RepoTextIndex"),
@@ -130,8 +125,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
         "align_tables_to_unified_schema",
     ),
     "anchor_instructions": ("normalize.ibis_api", "anchor_instructions"),
-    "apply_evidence_defaults": ("normalize.runner", "apply_evidence_defaults"),
-    "apply_policy_defaults": ("normalize.runner", "apply_policy_defaults"),
     "build_cfg_blocks": ("normalize.ibis_api", "build_cfg_blocks"),
     "build_cfg_edges": ("normalize.ibis_api", "build_cfg_edges"),
     "build_def_use_events": ("normalize.ibis_api", "build_def_use_events"),
@@ -150,6 +143,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "dataset_table_spec": ("normalize.registry_specs", "dataset_table_spec"),
     "ensure_canonical": ("normalize.runner", "ensure_canonical"),
     "ensure_execution_context": ("normalize.runner", "ensure_execution_context"),
+    "resolve_normalize_rules": ("normalize.runner", "resolve_normalize_rules"),
     "field": ("normalize.registry_fields", "field"),
     "field_name": ("normalize.registry_fields", "field_name"),
     "fields": ("normalize.registry_fields", "fields"),
@@ -206,10 +200,10 @@ __all__ = [
     "FileTextIndex",
     "NormalizeFinalizeSpec",
     "NormalizeIbisPlanOptions",
-    "NormalizeRule",
     "NormalizeRuleCompilation",
     "NormalizeRunOptions",
     "RepoTextIndex",
+    "ResolvedNormalizeRule",
     "SchemaInferOptions",
     "add_ast_byte_spans",
     "add_scip_occurrence_byte_spans",
@@ -217,8 +211,6 @@ __all__ = [
     "align_table_to_schema",
     "align_tables_to_unified_schema",
     "anchor_instructions",
-    "apply_evidence_defaults",
-    "apply_policy_defaults",
     "build_cfg_blocks",
     "build_cfg_edges",
     "build_def_use_events",
@@ -250,6 +242,7 @@ __all__ = [
     "normalize_evidence_spec",
     "normalize_type_exprs",
     "normalize_types",
+    "resolve_normalize_rules",
     "run_normalize",
     "run_reaching_defs",
     "span_id",

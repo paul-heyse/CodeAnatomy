@@ -75,13 +75,6 @@ from incremental.relspec_update import (
 from incremental.state_store import StateStore
 from incremental.types import IncrementalConfig, IncrementalFileChanges, IncrementalImpact
 from normalize.utils import encoding_policy_from_schema
-from relspec.adapters import (
-    CpgRuleAdapter,
-    ExtractRuleAdapter,
-    NormalizeRuleAdapter,
-    RelspecRuleAdapter,
-    default_rule_factory_registry,
-)
 from relspec.compiler import (
     CompiledOutput,
     CompiledOutputExecutionOptions,
@@ -116,8 +109,10 @@ from relspec.registry.rules import RuleRegistry
 from relspec.rules.compiler import RuleCompiler
 from relspec.rules.evidence import EvidenceCatalog
 from relspec.rules.exec_events import RuleExecutionEventCollector
-from relspec.rules.handlers.cpg import RelationshipRuleHandler
+from relspec.rules.handlers import default_rule_handlers
 from relspec.rules.validation import SqlGlotDiagnosticsConfig, rule_dependency_reports
+from relspec.runtime import RelspecRuntime, RelspecRuntimeOptions, compose_relspec
+from relspec.validate import validate_registry
 from schema_spec.specs import ArrowFieldSpec, TableSchemaSpec, call_span_bundle, span_bundle
 from schema_spec.system import (
     GLOBAL_SCHEMA_REGISTRY,
@@ -588,11 +583,37 @@ def schema_registry(
 # -----------------------------
 
 
-@tag(layer="relspec", artifact="rule_registry", kind="registry")
-def rule_registry(
+@tag(layer="relspec", artifact="relspec_runtime", kind="object")
+def relspec_runtime(
     param_table_specs: tuple[ParamTableSpec, ...],
     relspec_rule_config: RelspecConfig,
     engine_session: EngineSession,
+    schema_registry: SchemaRegistry,
+    pipeline_policy: PipelinePolicy,
+) -> RelspecRuntime:
+    """Compose the relspec runtime bundle.
+
+    Returns
+    -------
+    RelspecRuntime
+        Runtime bundle with rule registry and compiler wiring.
+    """
+    runtime = compose_relspec(
+        config=relspec_rule_config,
+        options=RelspecRuntimeOptions(
+            policies=pipeline_policy.policy_registry,
+            param_table_specs=param_table_specs,
+            engine_session=engine_session,
+            schema_registry=schema_registry,
+        ),
+    )
+    validate_registry(runtime.registry).raise_for_errors()
+    return runtime
+
+
+@tag(layer="relspec", artifact="rule_registry", kind="registry")
+def rule_registry(
+    relspec_runtime: RelspecRuntime,
 ) -> RuleRegistry:
     """Build the central rule registry.
 
@@ -601,31 +622,25 @@ def rule_registry(
     RuleRegistry
         Centralized registry for CPG/normalize/extract rules.
     """
-    registry = default_rule_factory_registry()
-    return RuleRegistry(
-        adapters=(
-            CpgRuleAdapter(registry=registry),
-            RelspecRuleAdapter(registry=registry),
-            NormalizeRuleAdapter(registry=registry),
-            ExtractRuleAdapter(registry=registry),
-        ),
-        param_table_specs=param_table_specs,
-        config=relspec_rule_config,
-        engine_session=engine_session,
-    )
+    return relspec_runtime.registry
 
 
 @dataclass(frozen=True)
 class RuleRegistryContext:
     """Bundled inputs for relationship rule compilation."""
 
-    rule_registry: RuleRegistry
+    runtime: RelspecRuntime
     pipeline_policy: PipelinePolicy
+
+    @property
+    def rule_registry(self) -> RuleRegistry:
+        """Return the rule registry from the runtime bundle."""
+        return self.runtime.registry
 
 
 @tag(layer="relspec", artifact="rule_registry_context", kind="object")
 def rule_registry_context(
-    rule_registry: RuleRegistry,
+    relspec_runtime: RelspecRuntime,
     pipeline_policy: PipelinePolicy,
 ) -> RuleRegistryContext:
     """Bundle rule registry and pipeline policy for compilation.
@@ -635,11 +650,11 @@ def rule_registry_context(
     RuleRegistryContext
         Bundled registry and policy inputs.
     """
-    return RuleRegistryContext(rule_registry=rule_registry, pipeline_policy=pipeline_policy)
+    return RuleRegistryContext(runtime=relspec_runtime, pipeline_policy=pipeline_policy)
 
 
 @tag(layer="relspec", artifact="relspec_param_registry", kind="object")
-def relspec_param_registry(rule_registry: RuleRegistry) -> IbisParamRegistry:
+def relspec_param_registry(relspec_runtime: RelspecRuntime) -> IbisParamRegistry:
     """Build the relspec parameter registry from rule definitions.
 
     Returns
@@ -648,14 +663,14 @@ def relspec_param_registry(rule_registry: RuleRegistry) -> IbisParamRegistry:
         Registry populated with parameter specs from rule rel_ops.
     """
     specs = []
-    for rule in rule_registry.rule_definitions():
+    for rule in relspec_runtime.registry.rule_definitions():
         specs.extend(specs_from_rel_ops(rule.rel_ops))
     return registry_from_specs(specs)
 
 
 @tag(layer="relspec", artifact="relspec_param_dependency_reports", kind="object")
 def relspec_param_dependency_reports(
-    rule_registry: RuleRegistry,
+    relspec_runtime: RelspecRuntime,
     engine_session: EngineSession,
     param_table_specs: tuple[ParamTableSpec, ...],
     param_table_policy: ParamTablePolicy,
@@ -667,7 +682,7 @@ def relspec_param_dependency_reports(
     tuple[RuleDependencyReport, ...]
         Dependency reports for relspec rules.
     """
-    rules = rule_registry.rule_definitions()
+    rules = relspec_runtime.registry.rule_definitions()
     return rule_dependency_reports(
         rules,
         config=SqlGlotDiagnosticsConfig(
@@ -1478,11 +1493,9 @@ def compiled_relationship_outputs(
     """
     compiler = RelationshipRuleCompiler(resolver=relspec_resolver)
     rule_compiler = RuleCompiler(
-        handlers={
-            "cpg": RelationshipRuleHandler(
-                policies=rule_registry_context.pipeline_policy.policy_registry
-            )
-        }
+        handlers=default_rule_handlers(
+            policies=rule_registry_context.pipeline_policy.policy_registry
+        )
     )
     compiled = rule_compiler.compile_rules(
         rule_registry_context.rule_registry.rules_for_domain("cpg"),

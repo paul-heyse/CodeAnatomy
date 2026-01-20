@@ -67,7 +67,7 @@ from relspec.policies import PolicyRegistry, evidence_spec_from_schema
 from relspec.rules.cache import rule_definitions_cached
 from relspec.rules.compiler import RuleCompiler
 from relspec.rules.evidence import EvidenceCatalog
-from relspec.rules.handlers.cpg import RelationshipRuleHandler
+from relspec.rules.handlers import default_rule_handlers
 from relspec.rules.spec_tables import rule_definitions_from_table
 
 if TYPE_CHECKING:
@@ -593,12 +593,13 @@ def _resolve_relation_rules(
     ctx: ExecutionContext,
     *,
     rule_table: pa.Table | None,
+    policy_registry: PolicyRegistry,
 ) -> tuple[RelationshipRule, ...]:
     if rule_table is None:
         definitions = rule_definitions_cached("cpg")
     else:
         definitions = rule_definitions_from_table(rule_table)
-    compiler = RuleCompiler(handlers={"cpg": RelationshipRuleHandler()})
+    compiler = RuleCompiler(handlers=default_rule_handlers(policies=policy_registry))
     compiled = compiler.compile_rules(definitions, ctx=ctx)
     return cast("tuple[RelationshipRule, ...]", compiled)
 
@@ -610,7 +611,7 @@ def _prepare_relation_rules(
     required_sources: Sequence[str] | None,
     policy_registry: PolicyRegistry,
 ) -> tuple[tuple[RelationshipRule, ...], pa.Schema]:
-    rules = _resolve_relation_rules(ctx, rule_table=rule_table)
+    rules = _resolve_relation_rules(ctx, rule_table=rule_table, policy_registry=policy_registry)
     if required_sources:
         required_set = set(required_sources)
         rules = tuple(rule for rule in rules if set(_rule_sources(rule)).issubset(required_set))

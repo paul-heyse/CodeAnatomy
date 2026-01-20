@@ -92,9 +92,9 @@ from normalize.spans import (
     normalize_cst_defs_spans,
     normalize_cst_imports_spans,
 )
-from relspec.adapters import NormalizeRuleAdapter, default_rule_factory_registry
 from relspec.pipeline_policy import PipelinePolicy
 from relspec.registry.rules import RuleRegistry
+from relspec.rules.discovery import discover_bundles
 from schema_spec.specs import ArrowFieldSpec, call_span_bundle
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
 
@@ -174,13 +174,11 @@ def _materialize_fragment(
 
 
 class _DatafusionQuery(Protocol):
-    def schema(self) -> object:
-        ...
+    def schema(self) -> object: ...
 
 
 class _DatafusionContext(Protocol):
-    def sql(self, query: str) -> _DatafusionQuery:
-        ...
+    def sql(self, query: str) -> _DatafusionQuery: ...
 
 
 def _schema_from_fragment(
@@ -677,8 +675,8 @@ def _required_rule_outputs(
 
 @memoize
 def _normalize_rule_definitions() -> tuple[RuleDefinition, ...]:
-    factory_registry = default_rule_factory_registry()
-    registry = RuleRegistry(adapters=(NormalizeRuleAdapter(registry=factory_registry),))
+    bundles = tuple(bundle for bundle in discover_bundles() if bundle.domain == "normalize")
+    registry = RuleRegistry(bundles=bundles, include_contract_rules=False)
     return registry.rules_for_domain("normalize")
 
 

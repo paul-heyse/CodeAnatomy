@@ -58,9 +58,9 @@ from hamilton_pipeline.pipeline_types import (
     ScipIndexInputs,
 )
 from incremental.types import IncrementalConfig, IncrementalImpact
-from relspec.registry.rules import RuleRegistry
 from relspec.rules.compiler import RuleCompiler
-from relspec.rules.handlers.extract import ExtractRuleCompilation, ExtractRuleHandler
+from relspec.rules.handlers import ExtractRuleCompilation, default_rule_handlers
+from relspec.runtime import RelspecRuntime
 
 AST_BUNDLE_OUTPUTS = output_bundle_outputs("ast_bundle")
 CST_BUNDLE_OUTPUTS = output_bundle_outputs("cst_bundle")
@@ -329,7 +329,7 @@ def _options_for_template[T](
 
 @cache()
 @tag(layer="extract", artifact="evidence_plan", kind="object")
-def evidence_plan(rule_registry: RuleRegistry) -> EvidencePlan:
+def evidence_plan(relspec_runtime: RelspecRuntime) -> EvidencePlan:
     """Compile an evidence plan from relationship rules.
 
     Returns
@@ -349,7 +349,7 @@ def evidence_plan(rule_registry: RuleRegistry) -> EvidencePlan:
         "rt_members",
     )
     return compile_evidence_plan(
-        rule_registry.rules_for_domain("cpg"),
+        relspec_runtime.registry.rules_for_domain("cpg"),
         extra_sources=extra_sources,
     )
 
@@ -357,7 +357,7 @@ def evidence_plan(rule_registry: RuleRegistry) -> EvidencePlan:
 @cache()
 @tag(layer="extract", artifact="extract_rule_compilations", kind="object")
 def extract_rule_compilations(
-    rule_registry: RuleRegistry,
+    relspec_runtime: RelspecRuntime,
     ctx: ExecutionContext,
 ) -> Sequence[ExtractRuleCompilation]:
     """Compile extract rules via the centralized rule compiler.
@@ -367,8 +367,11 @@ def extract_rule_compilations(
     Sequence[ExtractRuleCompilation]
         Extract rule compilation metadata.
     """
-    compiler = RuleCompiler(handlers={"extract": ExtractRuleHandler()})
-    compiled = compiler.compile_rules(rule_registry.rules_for_domain("extract"), ctx=ctx)
+    compiler = RuleCompiler(handlers=default_rule_handlers())
+    compiled = compiler.compile_rules(
+        relspec_runtime.registry.rules_for_domain("extract"),
+        ctx=ctx,
+    )
     return cast("Sequence[ExtractRuleCompilation]", compiled)
 
 

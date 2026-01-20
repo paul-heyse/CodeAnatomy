@@ -6,9 +6,11 @@ from dataclasses import dataclass
 from functools import cache
 
 from relspec.model import HashJoinConfig, IntervalAlignConfig, RuleKind
+from relspec.rules.decorators import rule_bundle
 from relspec.rules.definitions import EvidenceSpec, RelationshipPayload, RuleDefinition
 
 
+@rule_bundle(name="relspec.relationships", domain="cpg")
 @cache
 def relationship_rule_definitions() -> tuple[RuleDefinition, ...]:
     """Return relationship rule definitions for relspec compilation.

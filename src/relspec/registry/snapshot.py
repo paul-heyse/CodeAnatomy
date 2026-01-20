@@ -8,12 +8,16 @@ import pyarrow as pa
 
 from registry_common.arrow_payloads import ipc_hash
 from relspec.compiler import rel_plan_for_rule
+from relspec.graph import rule_graph_signature
+from relspec.incremental import RelspecIncrementalSpec, build_incremental_spec
 from relspec.plan import rel_plan_signature
 from relspec.registry.rules import RuleRegistry
+from relspec.rules.coverage import RuleCoverageAssessment, assess_rule_coverage
 from relspec.rules.definitions import RuleDefinition
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
 from relspec.rules.rel_ops import rel_ops_signature
 from relspec.rules.spec_tables import rule_definition_table
+from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
 
 
 @dataclass(frozen=True)
@@ -25,6 +29,10 @@ class RelspecSnapshot:
     rule_diagnostics: pa.Table
     template_diagnostics: pa.Table
     plan_signatures: dict[str, str]
+    graph_signature: str
+    coverage: RuleCoverageAssessment
+    bundle_inventory: dict[str, str]
+    incremental_spec: RelspecIncrementalSpec
 
 
 def build_relspec_snapshot(registry: RuleRegistry) -> RelspecSnapshot:
@@ -42,6 +50,10 @@ def build_relspec_snapshot(registry: RuleRegistry) -> RelspecSnapshot:
         rule_diagnostics=registry.rule_diagnostics_table(),
         template_diagnostics=registry.template_diagnostics_table(),
         plan_signatures=_rule_plan_signatures(rules),
+        graph_signature=_graph_signature(rules),
+        coverage=assess_rule_coverage(rules),
+        bundle_inventory=_bundle_inventory(registry),
+        incremental_spec=_incremental_spec(registry, rules=rules),
     )
 
 
@@ -59,6 +71,28 @@ def _rule_signature(rule: RuleDefinition) -> str:
         return rel_ops_signature(rule.rel_ops)
     table = rule_definition_table((rule,))
     return ipc_hash(table)
+
+
+def _graph_signature(rules: tuple[RuleDefinition, ...]) -> str:
+    return rule_graph_signature(
+        rules,
+        name_for=lambda rule: rule.name,
+        signature_for=_rule_signature,
+        label="relspec",
+    )
+
+
+def _bundle_inventory(registry: RuleRegistry) -> dict[str, str]:
+    return {bundle.name: bundle.domain for bundle in registry.bundles}
+
+
+def _incremental_spec(
+    registry: RuleRegistry,
+    *,
+    rules: tuple[RuleDefinition, ...],
+) -> RelspecIncrementalSpec:
+    schema_registry = registry.schema_registry or GLOBAL_SCHEMA_REGISTRY
+    return build_incremental_spec(rules, registry=schema_registry)
 
 
 __all__ = ["RelspecSnapshot", "build_relspec_snapshot"]

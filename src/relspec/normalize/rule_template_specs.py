@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import cache
 
 from relspec.normalize.rule_specs import NormalizeRuleFamilySpec
 
@@ -136,39 +137,7 @@ def expand_rule_templates(
     return tuple(expanded)
 
 
-RULE_TEMPLATE_SPECS: tuple[RuleTemplateSpec, ...] = (
-    RuleTemplateSpec(
-        name="types",
-        factory="single_family",
-        inputs=("cst_type_exprs", "scip_symbol_information"),
-        params={"rule_factory": "types"},
-    ),
-    RuleTemplateSpec(
-        name="bytecode",
-        factory="bytecode",
-        params={},
-    ),
-    RuleTemplateSpec(
-        name="diagnostics",
-        factory="single_family",
-        inputs=(
-            "cst_parse_errors",
-            "ts_errors",
-            "ts_missing",
-            "scip_diagnostics",
-            "scip_documents",
-        ),
-        params={"rule_factory": "diagnostics"},
-    ),
-    RuleTemplateSpec(
-        name="span_errors",
-        factory="single_family",
-        inputs=("span_errors_v1",),
-        params={"rule_factory": "span_errors"},
-    ),
-)
-
-
+@cache
 def rule_template_specs() -> tuple[RuleTemplateSpec, ...]:
     """Return normalize rule template specs.
 
@@ -177,11 +146,40 @@ def rule_template_specs() -> tuple[RuleTemplateSpec, ...]:
     tuple[RuleTemplateSpec, ...]
         Template specs for normalize rule families.
     """
-    return RULE_TEMPLATE_SPECS
+    return (
+        RuleTemplateSpec(
+            name="types",
+            factory="single_family",
+            inputs=("cst_type_exprs", "scip_symbol_information"),
+            params={"rule_factory": "types"},
+        ),
+        RuleTemplateSpec(
+            name="bytecode",
+            factory="bytecode",
+            params={},
+        ),
+        RuleTemplateSpec(
+            name="diagnostics",
+            factory="single_family",
+            inputs=(
+                "cst_parse_errors",
+                "ts_errors",
+                "ts_missing",
+                "scip_diagnostics",
+                "scip_documents",
+            ),
+            params={"rule_factory": "diagnostics"},
+        ),
+        RuleTemplateSpec(
+            name="span_errors",
+            factory="single_family",
+            inputs=("span_errors_v1",),
+            params={"rule_factory": "span_errors"},
+        ),
+    )
 
 
 __all__ = [
-    "RULE_TEMPLATE_SPECS",
     "RuleTemplateSpec",
     "expand_rule_templates",
     "rule_template_specs",

@@ -15,7 +15,7 @@ from extract.spec_tables import (
     dataset_rows_from_table,
     extract_dataset_table_from_rows,
 )
-from relspec.extract.registry_template_specs import DATASET_TEMPLATE_SPECS
+from relspec.extract.registry_template_specs import dataset_template_specs
 
 if TYPE_CHECKING:
     from relspec.rules.definitions import ExtractPayload, RuleDefinition, RuleStage
@@ -33,7 +33,7 @@ class _ValidationModule(Protocol):
 
 DATASET_ROW_RECORDS: tuple[Mapping[str, object], ...] = ()
 
-_TEMPLATE_ROW_RECORDS = expand_dataset_templates(DATASET_TEMPLATE_SPECS)
+_TEMPLATE_ROW_RECORDS = expand_dataset_templates(dataset_template_specs())
 
 EXTRACT_DATASET_TABLE = extract_dataset_table_from_rows(
     (*DATASET_ROW_RECORDS, *_TEMPLATE_ROW_RECORDS)

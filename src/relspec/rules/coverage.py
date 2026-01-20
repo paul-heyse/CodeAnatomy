@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol, TypeGuard, runtime_checkable
+from functools import cache
+from typing import Protocol, TypeGuard, get_args, runtime_checkable
 
 import ibis
 
@@ -12,21 +13,17 @@ from arrowdsl.kernel.registry import KERNEL_REGISTRY, KernelDef
 from engine.function_registry import FunctionRegistry, FunctionSpec, default_function_registry
 from engine.pyarrow_registry import pyarrow_compute_functions
 from extract.registry_builders import QueryContext, build_query_spec
-from extract.registry_definitions import extract_rule_definitions
 from extract.registry_pipelines import post_kernels_for_postprocess
 from extract.registry_rows import DATASET_ROWS
 from ibis_engine.expr_compiler import IbisExprRegistry, default_expr_registry
 from ibis_engine.query_compiler import IbisQuerySpec
 from normalize.rule_factories import build_rule_definitions_from_specs
+from relspec.model import KernelSpecT
 from relspec.normalize.rule_registry_specs import rule_family_specs
-from relspec.rules.cpg_relationship_specs import rule_definition_specs
-from relspec.rules.cpg_relationship_templates import EdgeDefinitionSpec, RuleDefinitionSpec
+from relspec.rules.cache import rule_definitions_cached
 from relspec.rules.definitions import (
-    EdgeEmitPayload,
-    EvidenceSpec,
     ExtractPayload,
     NormalizePayload,
-    PolicyOverrides,
     RelationshipPayload,
     RuleDefinition,
 )
@@ -54,25 +51,24 @@ class ExprIRLike(Protocol):
         ...
 
 
-_POST_KERNEL_KINDS: tuple[str, ...] = (
-    "add_literal",
-    "drop_columns",
-    "filter",
-    "rename_columns",
-    "explode_list",
-    "dedupe",
-    "canonical_sort",
-)
-_NORMALIZE_PLAN_BUILDERS: tuple[str, ...] = (
-    "type_exprs",
-    "type_nodes",
-    "cfg_blocks",
-    "cfg_edges",
-    "def_use_events",
-    "reaching_defs",
-    "diagnostics",
-    "span_errors",
-)
+@cache
+def _post_kernel_kinds() -> tuple[str, ...]:
+    kinds: set[str] = set()
+    for spec_type in get_args(KernelSpecT):
+        instance = spec_type()
+        kinds.add(instance.kind)
+    return tuple(sorted(kinds))
+
+
+@cache
+def _normalize_plan_builders() -> tuple[str, ...]:
+    rules = build_rule_definitions_from_specs(rule_family_specs())
+    builders: set[str] = set()
+    for rule in rules:
+        payload = rule.payload
+        if isinstance(payload, NormalizePayload) and payload.plan_builder:
+            builders.add(payload.plan_builder)
+    return tuple(sorted(builders))
 
 
 @dataclass
@@ -200,14 +196,11 @@ def default_rule_definitions(
     tuple[RuleDefinition, ...]
         Aggregated rule definitions.
     """
-    rules: tuple[RuleDefinition, ...] = (
-        *_cpg_rule_definitions(),
-        *build_rule_definitions_from_specs(rule_family_specs()),
-        *extract_rule_definitions(),
-    )
+    rules = rule_definitions_cached()
     if include_relationship_rules:
-        rules = (*rules, *relationship_rule_definitions())
-    return rules
+        return rules
+    excluded = {rule.name for rule in relationship_rule_definitions()}
+    return tuple(rule for rule in rules if rule.name not in excluded)
 
 
 def assess_rule_coverage(
@@ -249,8 +242,9 @@ def assess_rule_coverage(
         pyarrow_functions=pyarrow_functions,
     )
     kernel_coverage = _kernel_coverage(demands.kernel_names)
+    supported_post_kernels = set(_post_kernel_kinds())
     post_kernel_coverage = {
-        name: name in _POST_KERNEL_KINDS for name in sorted(demands.post_kernel_kinds)
+        name: name in supported_post_kernels for name in sorted(demands.post_kernel_kinds)
     }
     plan_builder_coverage = _plan_builder_coverage(demands.plan_builders)
     extract_postprocess_coverage = _extract_postprocess_coverage(demands.extract_postprocess)
@@ -292,68 +286,6 @@ def collect_rule_demands(
     if include_extract_queries:
         _collect_extract_queries(demands)
     return demands
-
-
-def _cpg_rule_definitions() -> tuple[RuleDefinition, ...]:
-    return tuple(_cpg_rule_from_spec(spec) for spec in rule_definition_specs())
-
-
-def _cpg_rule_from_spec(spec: RuleDefinitionSpec) -> RuleDefinition:
-    payload = RelationshipPayload(
-        output_dataset=spec.output_dataset or spec.name,
-        contract_name=spec.contract_name,
-        hash_join=spec.hash_join,
-        interval_align=spec.interval_align,
-        winner_select=spec.winner_select,
-        predicate=spec.predicate,
-        project=spec.project,
-        rule_name_col=spec.rule_name_col,
-        rule_priority_col=spec.rule_priority_col,
-        edge_emit=_edge_emit_payload(spec.edge),
-    )
-    return RuleDefinition(
-        name=spec.name,
-        domain="cpg",
-        kind=spec.kind.value,
-        inputs=spec.inputs,
-        output=payload.output_dataset or spec.name,
-        execution_mode=spec.execution_mode,
-        priority=spec.priority,
-        evidence=_cpg_evidence_payload(spec),
-        policy_overrides=PolicyOverrides(
-            confidence_policy=spec.confidence_policy,
-            ambiguity_policy=spec.ambiguity_policy,
-        ),
-        emit_rule_meta=spec.emit_rule_meta,
-        post_kernels=spec.post_kernels,
-        payload=payload,
-    )
-
-
-def _cpg_evidence_payload(spec: RuleDefinitionSpec) -> EvidenceSpec | None:
-    if spec.evidence is None:
-        return None
-    return EvidenceSpec(
-        sources=spec.evidence.sources,
-        required_columns=spec.evidence.required_columns,
-        required_types=spec.evidence.required_types,
-    )
-
-
-def _edge_emit_payload(edge: EdgeDefinitionSpec | None) -> EdgeEmitPayload | None:
-    if edge is None:
-        return None
-    return EdgeEmitPayload(
-        edge_kind=edge.edge_kind.value,
-        src_cols=edge.src_cols,
-        dst_cols=edge.dst_cols,
-        origin=edge.origin,
-        resolution_method=edge.resolution_method,
-        option_flag=edge.option_flag,
-        path_cols=edge.path_cols,
-        bstart_cols=edge.bstart_cols,
-        bend_cols=edge.bend_cols,
-    )
 
 
 def _collect_rel_ops(ops: Sequence[RelOpT], rule_name: str, demands: RuleDemandIndex) -> None:
@@ -502,7 +434,8 @@ def _kernel_coverage(demands: Mapping[str, set[str]]) -> dict[str, KernelCoverag
 
 
 def _plan_builder_coverage(demands: Mapping[str, set[str]]) -> dict[str, bool]:
-    return {name: name in _NORMALIZE_PLAN_BUILDERS for name in sorted(demands)}
+    available = set(_normalize_plan_builders())
+    return {name: name in available for name in sorted(demands)}
 
 
 def _extract_postprocess_coverage(demands: Mapping[str, set[str]]) -> dict[str, bool]:

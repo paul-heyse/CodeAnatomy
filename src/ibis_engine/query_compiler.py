@@ -19,6 +19,30 @@ from ibis_engine.expr_compiler import (
 )
 from ibis_engine.macros import IbisMacroSpec, apply_macros
 
+FILE_ID_PARAM_THRESHOLD = 500
+
+
+@dataclass(frozen=True)
+class FileIdParamMacro:
+    """Macro that filters rows using a parameter table join."""
+
+    param_table: Table
+    file_id_column: str
+    param_key_column: str
+
+    def __call__(self, table: Table) -> Table:
+        """Apply a semi-join against the parameter table.
+
+        Returns
+        -------
+        ibis.expr.types.Table
+            Filtered table containing rows that match the parameter table.
+        """
+        return table.semi_join(
+            self.param_table,
+            (table[self.file_id_column] == self.param_table[self.param_key_column],),
+        )
+
 
 @dataclass(frozen=True)
 class IbisProjectionSpec:
@@ -60,12 +84,22 @@ def query_for_schema(schema: SchemaLike) -> IbisQuerySpec:
     return IbisQuerySpec(projection=IbisProjectionSpec(base=tuple(schema.names)))
 
 
+@dataclass(frozen=True)
+class FileIdQueryOptions:
+    """Options for file-id filtered query compilation."""
+
+    file_id_column: str = "file_id"
+    param_table: Table | None = None
+    param_key_column: str | None = None
+    param_table_threshold: int = FILE_ID_PARAM_THRESHOLD
+
+
 def dataset_query_for_file_ids(
     file_ids: Sequence[str],
     *,
     schema: SchemaLike | None = None,
     columns: Sequence[str] | None = None,
-    file_id_column: str = "file_id",
+    options: FileIdQueryOptions | None = None,
 ) -> IbisQuerySpec:
     """Return an IbisQuerySpec filtering to the provided file ids.
 
@@ -77,8 +111,8 @@ def dataset_query_for_file_ids(
         Optional schema used to build the projection.
     columns:
         Optional explicit projection columns.
-    file_id_column:
-        Column name to filter by file ids.
+    options:
+        Optional file-id query options including param-table tuning.
 
     Returns
     -------
@@ -90,12 +124,35 @@ def dataset_query_for_file_ids(
     ValueError
         Raised when neither columns nor schema are provided.
     """
+    resolved_options = options or FileIdQueryOptions()
     if columns is None:
         if schema is None:
             msg = "dataset_query_for_file_ids requires columns or schema."
             raise ValueError(msg)
         columns = list(schema.names)
-    predicate = _in_set_expr(file_id_column, tuple(file_ids))
+    if not file_ids:
+        predicate = _literal_expr(value=False)
+        return IbisQuerySpec(
+            projection=IbisProjectionSpec(base=tuple(columns)),
+            predicate=predicate,
+            pushdown_predicate=predicate,
+        )
+    if (
+        resolved_options.param_table is not None
+        and len(file_ids) >= resolved_options.param_table_threshold
+    ):
+        key_column = resolved_options.param_key_column or resolved_options.file_id_column
+        return IbisQuerySpec(
+            projection=IbisProjectionSpec(base=tuple(columns)),
+            macros=(
+                FileIdParamMacro(
+                    param_table=resolved_options.param_table,
+                    file_id_column=resolved_options.file_id_column,
+                    param_key_column=key_column,
+                ),
+            ),
+        )
+    predicate = _in_set_expr(resolved_options.file_id_column, tuple(file_ids))
     return IbisQuerySpec(
         projection=IbisProjectionSpec(base=tuple(columns)),
         predicate=predicate,

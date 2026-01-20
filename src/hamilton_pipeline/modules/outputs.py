@@ -92,10 +92,10 @@ from relspec.registry import (
     DatasetLocation,
     build_relspec_snapshot,
 )
-from relspec.registry.rules import RuleRegistry
 from relspec.rules.diagnostics import rule_diagnostics_from_table
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
 from relspec.rules.spec_tables import rule_definitions_from_table
+from relspec.runtime import RelspecRuntime
 from schema_spec.system import (
     GLOBAL_SCHEMA_REGISTRY,
     DatasetSpec,
@@ -2483,7 +2483,7 @@ def cpg_output_tables(
 
 @tag(layer="obs", artifact="relspec_snapshots", kind="object")
 def relspec_snapshots(
-    rule_registry: RuleRegistry,
+    relspec_runtime: RelspecRuntime,
     relationship_contracts: ContractCatalog,
     compiled_relationship_outputs: dict[str, CompiledOutput],
 ) -> RelspecSnapshots:
@@ -2494,7 +2494,7 @@ def relspec_snapshots(
     RelspecSnapshots
         Relationship snapshot bundle.
     """
-    snapshot = build_relspec_snapshot(rule_registry)
+    snapshot = build_relspec_snapshot(relspec_runtime.registry)
     return RelspecSnapshots(
         registry_snapshot=snapshot,
         contracts=relationship_contracts,

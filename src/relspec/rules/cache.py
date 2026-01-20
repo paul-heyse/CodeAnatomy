@@ -6,15 +6,11 @@ from functools import cache
 
 import pyarrow as pa
 
-from relspec.adapters import (
-    CpgRuleAdapter,
-    ExtractRuleAdapter,
-    NormalizeRuleAdapter,
-    default_rule_factory_registry,
-)
 from relspec.graph import rule_graph_signature
-from relspec.registry.rules import RuleRegistry
+from relspec.incremental import RelspecIncrementalSpec
+from relspec.registry.rules import RuleRegistry, default_rule_registry
 from relspec.registry.snapshot import RelspecSnapshot, build_relspec_snapshot
+from relspec.rules.coverage import RuleCoverageAssessment
 from relspec.rules.definitions import RuleDefinition, RuleDomain
 from relspec.rules.diagnostics import RuleDiagnostic, rule_diagnostic_table
 from relspec.rules.spec_tables import rule_definition_table
@@ -27,16 +23,9 @@ def rule_registry_cached() -> RuleRegistry:
     Returns
     -------
     RuleRegistry
-        Cached rule registry with centralized adapters.
+        Cached rule registry with discovered rule bundles.
     """
-    registry = default_rule_factory_registry()
-    return RuleRegistry(
-        adapters=(
-            CpgRuleAdapter(registry=registry),
-            NormalizeRuleAdapter(registry=registry),
-            ExtractRuleAdapter(registry=registry),
-        )
-    )
+    return default_rule_registry()
 
 
 @cache
@@ -152,6 +141,42 @@ def rule_plan_signatures_cached(domain: RuleDomain | None = None) -> dict[str, s
 
 
 @cache
+def rule_coverage_cached() -> RuleCoverageAssessment:
+    """Return the cached rule coverage assessment.
+
+    Returns
+    -------
+    RuleCoverageAssessment
+        Cached coverage assessment for relspec rules.
+    """
+    return relspec_snapshot_cached().coverage
+
+
+@cache
+def bundle_inventory_cached() -> dict[str, str]:
+    """Return the cached rule bundle inventory.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of bundle name to bundle hash.
+    """
+    return dict(relspec_snapshot_cached().bundle_inventory)
+
+
+@cache
+def incremental_spec_cached() -> RelspecIncrementalSpec:
+    """Return the cached incremental spec.
+
+    Returns
+    -------
+    RelspecIncrementalSpec
+        Cached incremental spec derived from the registry.
+    """
+    return relspec_snapshot_cached().incremental_spec
+
+
+@cache
 def rule_plan_sql_cached(domain: RuleDomain | None = None) -> dict[str, str]:
     """Return optimized SQL strings for rule definitions.
 
@@ -180,6 +205,8 @@ def rule_graph_signature_cached(domain: RuleDomain | None = None) -> str:
     str
         Deterministic graph signature for the requested domain.
     """
+    if domain is None:
+        return relspec_snapshot_cached().graph_signature
     rules = rule_definitions_cached(domain)
     signatures = rule_plan_signatures_cached(domain)
     return rule_graph_signature(
@@ -191,7 +218,10 @@ def rule_graph_signature_cached(domain: RuleDomain | None = None) -> str:
 
 
 __all__ = [
+    "bundle_inventory_cached",
+    "incremental_spec_cached",
     "relspec_snapshot_cached",
+    "rule_coverage_cached",
     "rule_definitions_cached",
     "rule_diagnostics_cached",
     "rule_diagnostics_table_cached",

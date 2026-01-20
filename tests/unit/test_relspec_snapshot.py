@@ -2,7 +2,11 @@
 
 from relspec.registry.snapshot import build_relspec_snapshot
 from relspec.rules.cache import (
+    bundle_inventory_cached,
+    incremental_spec_cached,
+    rule_coverage_cached,
     rule_diagnostics_table_cached,
+    rule_graph_signature_cached,
     rule_plan_signatures_cached,
     rule_registry_cached,
     rule_table_cached,
@@ -19,3 +23,7 @@ def test_relspec_snapshot_matches_cached_tables() -> None:
     assert snapshot.rule_diagnostics.equals(rule_diagnostics_table_cached())
     assert snapshot.template_diagnostics.equals(template_diagnostics_table_cached())
     assert snapshot.plan_signatures == rule_plan_signatures_cached()
+    assert snapshot.graph_signature == rule_graph_signature_cached()
+    assert snapshot.coverage == rule_coverage_cached()
+    assert snapshot.bundle_inventory == bundle_inventory_cached()
+    assert snapshot.incremental_spec == incremental_spec_cached()

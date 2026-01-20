@@ -10,7 +10,10 @@ import pyarrow as pa
 
 from ibis_engine.param_tables import ParamTableSpec
 from relspec.config import RelspecConfig
+from relspec.rules.bundles import RuleBundle
+from relspec.rules.contract_rules import rules_from_contracts
 from relspec.rules.diagnostics import RuleDiagnostic, rule_diagnostic_table
+from relspec.rules.discovery import discover_bundles
 from relspec.rules.spec_tables import rule_definition_table
 from relspec.rules.templates import (
     RuleTemplateSpec,
@@ -22,6 +25,7 @@ from relspec.rules.validation import (
     rule_sqlglot_diagnostics,
     validate_rule_definitions,
 )
+from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, SchemaRegistry
 
 if TYPE_CHECKING:
     from engine.session import EngineSession
@@ -51,15 +55,17 @@ class RuleAdapter(Protocol):
 
 @dataclass(frozen=True)
 class RuleRegistry:
-    """Aggregates rule definitions across adapters."""
+    """Aggregates rule definitions across bundles."""
 
-    adapters: Sequence[RuleAdapter]
+    bundles: Sequence[RuleBundle]
     param_table_specs: Sequence[ParamTableSpec] = ()
     config: RelspecConfig | None = None
     engine_session: EngineSession | None = None
+    schema_registry: SchemaRegistry | None = None
+    include_contract_rules: bool = True
 
     def rule_definitions(self) -> tuple[RuleDefinition, ...]:
-        """Return all rule definitions across adapters.
+        """Return all rule definitions across bundles.
 
         Returns
         -------
@@ -103,22 +109,22 @@ class RuleRegistry:
         return rule_definition_table(self.rule_definitions())
 
     def domains(self) -> tuple[RuleDomain, ...]:
-        """Return domains represented by adapters.
+        """Return domains represented by bundles.
 
         Returns
         -------
         tuple[RuleDomain, ...]
             Domains present in the registry.
         """
-        return tuple(adapter.domain for adapter in self.adapters)
+        return tuple(bundle.domain for bundle in self.bundles)
 
     def templates(self) -> tuple[RuleTemplateSpec, ...]:
-        """Return template specs across adapters.
+        """Return template specs across bundles.
 
         Returns
         -------
         tuple[RuleTemplateSpec, ...]
-            Template specs aggregated from adapters.
+            Template specs aggregated from bundles.
         """
         specs = self._collect_template_specs()
         diagnostics = self.template_diagnostics()
@@ -136,17 +142,17 @@ class RuleRegistry:
         return rule_template_table(self.templates())
 
     def template_diagnostics(self) -> tuple[RuleDiagnostic, ...]:
-        """Return template diagnostics across adapters.
+        """Return template diagnostics across bundles.
 
         Returns
         -------
         tuple[RuleDiagnostic, ...]
-            Template diagnostics for all adapters.
+            Template diagnostics for all bundles.
         """
         specs = self._collect_template_specs()
         diagnostics: list[RuleDiagnostic] = []
-        for adapter in self.adapters:
-            diagnostics.extend(adapter.template_diagnostics())
+        for bundle in self.bundles:
+            diagnostics.extend(bundle.build_diagnostics())
         diagnostics.extend(validate_template_specs(specs))
         return tuple(diagnostics)
 
@@ -185,6 +191,9 @@ class RuleRegistry:
     def _resolved_config(self) -> RelspecConfig:
         return self.config or RelspecConfig()
 
+    def _resolved_schema_registry(self) -> SchemaRegistry:
+        return self.schema_registry or GLOBAL_SCHEMA_REGISTRY
+
     def rule_diagnostics_table(self) -> pa.Table:
         """Return a diagnostics table for rule validation.
 
@@ -196,7 +205,7 @@ class RuleRegistry:
         return rule_diagnostic_table(self.rule_diagnostics())
 
     def _collect_rule_definitions(self) -> tuple[RuleDefinition, ...]:
-        """Collect rule definitions from all adapters.
+        """Collect rule definitions from all bundles.
 
         Returns
         -------
@@ -204,12 +213,14 @@ class RuleRegistry:
             Consolidated rule definitions.
         """
         collected: list[RuleDefinition] = []
-        for adapter in self.adapters:
-            collected.extend(adapter.rule_definitions())
+        for bundle in self.bundles:
+            collected.extend(bundle.build_rules())
+        if self.include_contract_rules:
+            collected.extend(rules_from_contracts(self._resolved_schema_registry()))
         return tuple(collected)
 
     def _collect_template_specs(self) -> tuple[RuleTemplateSpec, ...]:
-        """Collect template specs from all adapters.
+        """Collect template specs from all bundles.
 
         Returns
         -------
@@ -217,20 +228,46 @@ class RuleRegistry:
             Consolidated template specs.
         """
         collected: list[RuleTemplateSpec] = []
-        for adapter in self.adapters:
-            collected.extend(adapter.templates())
+        for bundle in self.bundles:
+            collected.extend(bundle.build_templates())
         return tuple(collected)
 
 
-def collect_rule_definitions(adapters: Iterable[RuleAdapter]) -> tuple[RuleDefinition, ...]:
-    """Collect rule definitions from a sequence of adapters.
+def collect_rule_definitions(bundles: Iterable[RuleBundle]) -> tuple[RuleDefinition, ...]:
+    """Collect rule definitions from a sequence of bundles.
 
     Returns
     -------
     tuple[RuleDefinition, ...]
         Consolidated rule definitions.
     """
-    return RuleRegistry(adapters=tuple(adapters)).rule_definitions()
+    return RuleRegistry(bundles=tuple(bundles)).rule_definitions()
+
+
+def default_rule_registry(
+    *,
+    param_table_specs: Sequence[ParamTableSpec] = (),
+    config: RelspecConfig | None = None,
+    engine_session: EngineSession | None = None,
+    schema_registry: SchemaRegistry | None = None,
+    include_contract_rules: bool = True,
+) -> RuleRegistry:
+    """Build the default rule registry using discovered bundles.
+
+    Returns
+    -------
+    RuleRegistry
+        Registry populated with discovered rule bundles.
+    """
+    bundles = discover_bundles()
+    return RuleRegistry(
+        bundles=bundles,
+        param_table_specs=param_table_specs,
+        config=config,
+        engine_session=engine_session,
+        schema_registry=schema_registry,
+        include_contract_rules=include_contract_rules,
+    )
 
 
 def _raise_template_errors(diagnostics: Sequence[RuleDiagnostic]) -> None:
@@ -280,4 +317,5 @@ __all__ = [
     "RuleRegistry",
     "RuleTemplateSpec",
     "collect_rule_definitions",
+    "default_rule_registry",
 ]

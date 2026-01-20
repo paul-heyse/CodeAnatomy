@@ -283,14 +283,14 @@ def _symtable_file_row(
         line0 = lineno_int - 1 if lineno_int is not None else None
         span_hint = (
             span_dict(
-                    SpanSpec(
-                        start_line0=line0,
-                        start_col=None,
-                        end_line0=None,
-                        end_col=None,
-                        end_exclusive=True,
-                        col_unit="utf32",
-                    )
+                SpanSpec(
+                    start_line0=line0,
+                    start_col=None,
+                    end_line0=None,
+                    end_col=None,
+                    end_exclusive=True,
+                    col_unit="utf32",
+                )
             )
             if line0 is not None
             else None

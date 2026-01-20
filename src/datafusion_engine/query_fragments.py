@@ -213,13 +213,15 @@ def libcst_defs_sql(table: str = "libcst_files_v1") -> str:
       {row}['name_bend'] AS name_bend,
       {row}['qnames'] AS qnames,
       {_hash_expr("cst_def", file_id, f"{row}['kind']", def_bstart, def_bend)} AS def_id,
-      {_hash_expr(
-        "cst_def",
-        file_id,
-        f"{row}['container_def_kind']",
-        container_bstart,
-        container_bend,
-      )} AS container_def_id,
+      {
+        _hash_expr(
+            "cst_def",
+            file_id,
+            f"{row}['container_def_kind']",
+            container_bstart,
+            container_bend,
+        )
+    } AS container_def_id,
       {_hash_expr("span", file_id, def_bstart, def_bend)} AS span_id
     FROM {table} AS files
     CROSS JOIN unnest(files.defs) AS {row}
@@ -818,15 +820,17 @@ def bytecode_cfg_edges_sql(table: str = "bytecode_files_v1") -> str:
       {_hash_expr("bc_block", code_id, src_start, src_end)} AS src_block_id,
       {_hash_expr("bc_block", code_id, dst_start, dst_end)} AS dst_block_id,
       {_hash_expr("bc_instr", code_id, cond_index, cond_offset)} AS cond_instr_id,
-      {_hash_expr(
-        "bc_edge",
-        code_id,
-        _hash_expr("bc_block", code_id, src_start, src_end),
-        _hash_expr("bc_block", code_id, dst_start, dst_end),
-        f"{edge}['kind']",
-        f"{edge}['edge_key']",
-        f"{edge}['exc_index']",
-      )} AS edge_id
+      {
+        _hash_expr(
+            "bc_edge",
+            code_id,
+            _hash_expr("bc_block", code_id, src_start, src_end),
+            _hash_expr("bc_block", code_id, dst_start, dst_end),
+            f"{edge}['kind']",
+            f"{edge}['edge_key']",
+            f"{edge}['exc_index']",
+        )
+    } AS edge_id
     FROM {table} AS files
     CROSS JOIN unnest(files.code_objects) AS code
     CROSS JOIN unnest(code['cfg_edges']) AS {edge}

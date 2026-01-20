@@ -68,6 +68,7 @@ from relspec.rules.rel_ops import (
     rel_ops_from_rows,
     rel_ops_to_rows,
 )
+from relspec.rules.spec_codec import SpecCodec
 
 IntervalMode = Literal["EXACT", "CONTAINED_BEST", "OVERLAP_BEST"]
 IntervalHow = Literal["inner", "left"]
@@ -412,6 +413,37 @@ def rule_definitions_from_table(table: pa.Table) -> tuple[RuleDefinition, ...]:
             )
         )
     return tuple(definitions)
+
+
+class RuleDefinitionCodec(SpecCodec[RuleDefinition]):
+    """Codec for rule definition spec tables."""
+
+    @property
+    def schema(self) -> pa.Schema:
+        """Return the Arrow schema for rule definitions."""
+        return RULE_DEF_SCHEMA
+
+    def encode_table(self, items: Sequence[RuleDefinition]) -> pa.Table:
+        """Encode rule definitions into an Arrow table.
+
+        Returns
+        -------
+        pyarrow.Table
+            Arrow table containing encoded rule definitions.
+        """
+        table = rule_definition_table(items)
+        return table.cast(self.schema)
+
+    def decode_table(self, table: pa.Table) -> tuple[RuleDefinition, ...]:
+        """Decode rule definitions from an Arrow table.
+
+        Returns
+        -------
+        tuple[RuleDefinition, ...]
+            Rule definitions decoded from the Arrow table.
+        """
+        coerced = table.cast(self.schema)
+        return rule_definitions_from_table(coerced)
 
 
 def _evidence_row(spec: EvidenceSpec | None) -> dict[str, object] | None:
@@ -1664,6 +1696,7 @@ __all__ = [
     "RULES_SCHEMA",
     "RULE_DEF_SCHEMA",
     "WINNER_SELECT_STRUCT",
+    "RuleDefinitionCodec",
     "rule_definition_table",
     "rule_definitions_from_table",
 ]

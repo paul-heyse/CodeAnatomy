@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -12,24 +11,27 @@ import ibis
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import SchemaLike, TableLike
+from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from arrowdsl.schema.schema import empty_table
 from extract.registry_bundles import dataset_name_for_output
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
+from ibis_engine.param_tables import ParamTableRegistry
 from ibis_engine.plan import IbisPlan
-from ibis_engine.query_compiler import apply_query_spec, dataset_query_for_file_ids
+from ibis_engine.query_compiler import (
+    FILE_ID_PARAM_THRESHOLD,
+    FileIdQueryOptions,
+    apply_query_spec,
+    dataset_query_for_file_ids,
+)
 from ibis_engine.scan_io import plan_from_source
 from incremental.invalidations import validate_schema_identity
 from incremental.types import IncrementalFileChanges, IncrementalImpact
-from normalize.op_specs import normalize_op_specs
 from normalize.registry_specs import dataset_name_from_alias
-from relspec.contracts import RELATION_OUTPUT_NAME
 from relspec.engine import PlanResolver
-from relspec.rules.cache import rule_definitions_cached
-from relspec.rules.definitions import RelationshipPayload
+from relspec.incremental import RelspecIncrementalSpec, incremental_spec
 from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
 from storage.dataset_sources import (
     DatasetDiscoveryOptions,
@@ -45,118 +47,21 @@ from storage.deltalake import (
 )
 
 if TYPE_CHECKING:
+    from ibis.expr.types import Table
+
     from arrowdsl.core.scan_telemetry import ScanTelemetry
     from relspec.model import DatasetRef
 
-_FILE_ID_COLUMNS: tuple[str, ...] = ("edge_owner_file_id", "file_id")
 
-
-def _file_id_column_from_columns(columns: Sequence[str]) -> str | None:
-    names = set(columns)
-    for candidate in _FILE_ID_COLUMNS:
-        if candidate in names:
-            return candidate
-    return None
-
-
-def _file_id_column_from_schema(schema: SchemaLike | None) -> str | None:
-    if schema is None:
-        return None
-    return _file_id_column_from_columns(schema.names)
-
-
-def _dataset_schema_for_name(name: str) -> SchemaLike | None:
-    spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(name)
-    if spec is not None:
-        return spec.schema()
-    resolved = _relspec_state_dataset_name(name)
-    if resolved is None or resolved == name:
-        return None
-    spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(resolved)
-    if spec is None:
-        return None
-    return spec.schema()
-
-
-def _file_id_column_for_dataset(
-    name: str,
-    *,
-    columns: Sequence[str] | None = None,
-) -> str | None:
-    column = _file_id_column_from_schema(_dataset_schema_for_name(name))
-    if column is not None:
-        return column
-    if columns is None:
-        return None
-    return _file_id_column_from_columns(columns)
-
-
-def _resolve_normalize_alias(name: str) -> str | None:
-    try:
-        dataset_name_from_alias(name)
-    except KeyError:
-        return None
-    return name
-
-
-def _canonical_normalize_output(spec_name: str, outputs: Sequence[str]) -> str | None:
-    resolved = [name for name in outputs if _resolve_normalize_alias(name) is not None]
-    if not resolved:
-        return None
-    if spec_name in resolved:
-        return spec_name
-    norm_aliases = sorted(name for name in resolved if name.endswith("_norm"))
-    if norm_aliases:
-        return norm_aliases[0]
-    return sorted(resolved)[0]
-
-
-@cache
-def _normalize_alias_overrides() -> Mapping[str, str]:
-    overrides: dict[str, str] = {}
-    specs = normalize_op_specs(rule_definitions_cached("normalize"))
-    for spec in specs:
-        canonical = _canonical_normalize_output(spec.name, spec.outputs)
-        if canonical is None:
-            continue
-        for output in spec.outputs:
-            if output == canonical:
-                continue
-            overrides.setdefault(output, canonical)
-    return overrides
-
-
-@cache
-def _relation_output_datasets() -> Mapping[str, str]:
-    mapping: dict[str, str] = {}
-    for rule in rule_definitions_cached("cpg"):
-        payload = rule.payload
-        if not isinstance(payload, RelationshipPayload):
-            continue
-        output_name = payload.output_dataset or rule.output
-        contract_name = payload.contract_name
-        if not output_name or not contract_name:
-            continue
-        if contract_name == RELATION_OUTPUT_NAME:
-            continue
-        existing = mapping.get(output_name)
-        if existing is not None and existing != contract_name:
-            msg = (
-                "Conflicting relationship output contracts for "
-                f"{output_name!r}: {existing!r} vs {contract_name!r}."
-            )
-            raise ValueError(msg)
-        mapping[output_name] = contract_name
-    return mapping
-
-
-@cache
 def scoped_site_datasets() -> frozenset[str]:
-    inputs = {name for rule in rule_definitions_cached("cpg") for name in rule.inputs}
-    scoped = {name for name in inputs if _file_id_column_for_dataset(name) is not None}
-    return frozenset(scoped or inputs)
+    """Return the datasets eligible for file-id scoping.
 
-
+    Returns
+    -------
+    frozenset[str]
+        Dataset names eligible for file-id scoping.
+    """
+    return incremental_spec().scoped_datasets
 
 
 def impacted_file_ids(
@@ -224,15 +129,13 @@ def upsert_relationship_outputs(
         Mapping of dataset name to dataset path.
     """
     updated: dict[str, str] = {}
+    spec = incremental_spec()
     for name, table_like in outputs.items():
-        dataset_name = _relation_output_datasets().get(name)
+        dataset_name = spec.relation_contract_for_output(name)
         if dataset_name is None:
             continue
         table = table_like
-        file_id_column = _file_id_column_for_dataset(
-            dataset_name,
-            columns=table.column_names,
-        )
+        file_id_column = spec.file_id_column_for(dataset_name, columns=table.column_names)
         if file_id_column is None or file_id_column not in table.column_names:
             continue
         delete_partitions = _partition_specs(file_id_column, changes.deleted_file_ids)
@@ -287,7 +190,7 @@ class _ScopedResolver:
         if ref.name not in self.scoped:
             return plan
         expr = plan.expr
-        file_id_column = _file_id_column_for_dataset(ref.name, columns=expr.columns)
+        file_id_column = incremental_spec().file_id_column_for(ref.name, columns=expr.columns)
         if file_id_column is None or file_id_column not in expr.columns:
             return plan
         values = [ibis.literal(value) for value in self.file_ids]
@@ -305,8 +208,24 @@ def _partition_specs(
     return tuple({column: value} for value in values)
 
 
+def _file_id_param_table(
+    file_ids: Sequence[str],
+    *,
+    backend: BaseBackend,
+    spec: RelspecIncrementalSpec,
+) -> tuple[Table, str] | None:
+    if len(file_ids) < FILE_ID_PARAM_THRESHOLD:
+        return None
+    param_spec = spec.file_id_param_spec()
+    registry = ParamTableRegistry(specs={param_spec.logical_name: param_spec})
+    registry.register_values(param_spec.logical_name, file_ids)
+    registry.register_into_backend(backend)
+    table = registry.ibis_tables(backend)[param_spec.logical_name]
+    return table, param_spec.key_col
+
+
 def _relspec_state_dataset_name(name: str) -> str | None:
-    alias = _normalize_alias_overrides().get(name)
+    alias = incremental_spec().normalize_alias(name)
     if alias is not None:
         try:
             return dataset_name_from_alias(alias)
@@ -350,14 +269,22 @@ def _read_state_dataset(
             actual=dataset.schema,
             dataset_name=dataset_name,
         )
-    file_id_column = _file_id_column_from_schema(dataset_schema)
+    spec = incremental_spec()
+    file_id_column = spec.file_id_column_for(dataset_name, columns=dataset_schema.names)
     if file_id_column is not None:
+        backend = build_backend(IbisBackendConfig(datafusion_profile=ctx.runtime.datafusion))
+        param_table = _file_id_param_table(file_ids, backend=backend, spec=spec)
+        param_key_column = param_table[1] if param_table is not None else None
         query = dataset_query_for_file_ids(
             file_ids,
             schema=dataset_schema,
-            file_id_column=file_id_column,
+            options=FileIdQueryOptions(
+                file_id_column=file_id_column,
+                param_table=param_table[0] if param_table is not None else None,
+                param_key_column=param_key_column,
+                param_table_threshold=FILE_ID_PARAM_THRESHOLD,
+            ),
         )
-        backend = build_backend(IbisBackendConfig(datafusion_profile=ctx.runtime.datafusion))
         plan = plan_from_source(
             dataset.to_table(),
             ctx=ctx,
@@ -372,11 +299,7 @@ def _read_state_dataset(
     return empty_table(schema)
 
 
-SCOPED_SITE_DATASETS: frozenset[str] = scoped_site_datasets()
-
-
 __all__ = [
-    "SCOPED_SITE_DATASETS",
     "impacted_file_ids",
     "relspec_inputs_from_state",
     "scoped_relspec_resolver",

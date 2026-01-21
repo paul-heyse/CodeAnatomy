@@ -40,14 +40,13 @@ from ibis_engine.registry import (
     resolve_dataset_schema,
     resolve_delta_scan_options,
 )
-from schema_spec.specs import ExternalTableConfigOverrides, TableSchemaSpec
+from schema_spec.specs import ExternalTableConfigOverrides
 from schema_spec.system import (
     DataFusionScanOptions,
     DeltaScanOptions,
     ParquetColumnOptions,
     TableSchemaContract,
     ddl_fingerprint_from_definition,
-    table_spec_from_schema,
 )
 from storage.deltalake import DeltaCdfOptions, read_delta_cdf
 
@@ -485,19 +484,12 @@ def _path_is_directory(path: str | Path) -> bool:
     return not resolved.suffix
 
 
-def _resolve_table_spec(location: DatasetLocation) -> TableSchemaSpec | None:
-    if location.table_spec is not None:
-        return location.table_spec
-    if location.dataset_spec is not None:
-        return location.dataset_spec.table_spec
-    return None
-
-
 def _table_key_fields(context: DataFusionRegistrationContext) -> tuple[str, ...]:
-    table_spec = _resolve_table_spec(context.location)
-    if table_spec is None and context.options.schema is not None:
-        table_spec = table_spec_from_schema(context.name, context.options.schema)
-    return tuple(table_spec.key_fields) if table_spec is not None else ()
+    schema = context.options.schema
+    if schema is None:
+        return ()
+    _required, key_fields = schema_constraints_from_metadata(schema.metadata)
+    return key_fields
 
 
 def _partitioned_by(location: DatasetLocation) -> tuple[str, ...] | None:
@@ -514,9 +506,12 @@ def _file_sort_order(location: DatasetLocation) -> tuple[str, ...] | None:
     spec = location.dataset_spec
     if spec is not None and spec.contract_spec is not None and spec.contract_spec.canonical_sort:
         return tuple(key.column for key in spec.contract_spec.canonical_sort)
-    table_spec = location.table_spec
-    if table_spec is not None and table_spec.key_fields:
-        return tuple(table_spec.key_fields)
+    schema = resolve_dataset_schema(location)
+    if schema is None:
+        return None
+    ordering = ordering_from_schema(schema)
+    if ordering.keys:
+        return tuple(key[0] for key in ordering.keys)
     return None
 
 
@@ -737,6 +732,7 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
         expr_adapter_factory = _resolve_expr_adapter_factory(
             scan,
             runtime_profile=context.runtime_profile,
+            dataset_name=context.name,
         )
         key_fields = _table_key_fields(context)
         listing_provider = parquet_listing_table_provider(
@@ -851,6 +847,7 @@ def _register_external_table(
     expr_adapter_factory = _resolve_expr_adapter_factory(
         scan,
         runtime_profile=context.runtime_profile,
+        dataset_name=context.name,
     )
     _record_listing_table_artifact(
         context,

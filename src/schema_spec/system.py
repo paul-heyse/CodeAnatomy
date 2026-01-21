@@ -1224,23 +1224,6 @@ def table_spec_from_schema(
     )
 
 
-def ddl_fingerprint_from_schema(
-    name: str,
-    schema: SchemaLike,
-    *,
-    dialect: str | None = None,
-) -> str:
-    """Return a DDL fingerprint derived from a schema.
-
-    Returns
-    -------
-    str
-        Stable fingerprint for SQL DDL derived from the schema.
-    """
-    table_spec = table_spec_from_schema(name, schema)
-    return table_spec.ddl_fingerprint(dialect=dialect)
-
-
 def ddl_fingerprint_from_definition(ddl: str) -> str:
     """Return a stable fingerprint for a CREATE TABLE statement.
 
@@ -1255,6 +1238,25 @@ def ddl_fingerprint_from_definition(ddl: str) -> str:
         Stable fingerprint of the DDL string.
     """
     return hashlib.sha256(ddl.encode("utf-8")).hexdigest()
+
+
+def dataset_table_ddl_fingerprint(name: str) -> str | None:
+    """Return the DDL fingerprint for a DataFusion-registered table.
+
+    Parameters
+    ----------
+    name
+        Dataset name registered in DataFusion.
+
+    Returns
+    -------
+    str | None
+        Stable DDL fingerprint when available.
+    """
+    ddl = dataset_table_definition(name)
+    if ddl is None:
+        return None
+    return ddl_fingerprint_from_definition(ddl)
 
 
 def dataset_spec_from_schema(
@@ -1484,10 +1486,10 @@ __all__ = [
     "dataset_spec_from_schema",
     "dataset_table_column_defaults",
     "dataset_table_constraints",
+    "dataset_table_ddl_fingerprint",
     "dataset_table_definition",
     "dataset_table_logical_plan",
     "ddl_fingerprint_from_definition",
-    "ddl_fingerprint_from_schema",
     "make_contract_spec",
     "make_dataset_spec",
     "make_table_spec",

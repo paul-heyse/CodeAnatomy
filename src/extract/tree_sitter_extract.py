@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import time
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
@@ -37,6 +37,7 @@ from extract.helpers import (
     materialize_extract_plan,
     span_dict,
 )
+from extract.schema_ops import ExtractNormalizeOptions
 from extract.tree_sitter_cache import TreeSitterCache, TreeSitterParseResult
 from extract.tree_sitter_queries import TreeSitterQueryPack, compile_query_pack
 from ibis_engine.plan import IbisPlan
@@ -111,6 +112,23 @@ class _NodeStats:
     named_count: int = 0
     error_count: int = 0
     missing_count: int = 0
+
+
+@dataclass(frozen=True)
+class _CaptureInfo:
+    query_name: str
+    capture_name: str
+    pattern_index: int
+
+
+@dataclass(frozen=True)
+class _ImportInfo:
+    kind: str
+    module: str | None
+    name: str | None
+    asname: str | None
+    alias_index: int | None
+    level: int | None
 
 
 def _assert_language_abi(lang: Language) -> None:
@@ -285,9 +303,7 @@ def _capture_entry(
     file_ctx: FileContext,
     data: bytes,
     options: TreeSitterExtractOptions,
-    query_name: str,
-    capture_name: str,
-    pattern_index: int,
+    info: _CaptureInfo,
 ) -> Row:
     start = int(node.start_byte)
     end = int(node.end_byte)
@@ -295,7 +311,7 @@ def _capture_entry(
         file_ctx.path,
         start,
         end,
-        kind=f"ts_capture:{query_name}:{capture_name}",
+        kind=f"ts_capture:{info.query_name}:{info.capture_name}",
     )
     text, truncated = _node_text(
         node,
@@ -310,9 +326,9 @@ def _capture_entry(
         attrs["text_truncated"] = True
     return {
         "capture_id": capture_id,
-        "query_name": query_name,
-        "capture_name": capture_name,
-        "pattern_index": pattern_index,
+        "query_name": info.query_name,
+        "capture_name": info.capture_name,
+        "pattern_index": info.pattern_index,
         "node_id": _node_id(file_ctx, node),
         "node_kind": node.type,
         "span": span_dict(_span_spec(node)),
@@ -365,22 +381,17 @@ def _import_row(
     node: Node,
     *,
     file_ctx: FileContext,
-    kind: str,
-    module: str | None,
-    name: str | None,
-    asname: str | None,
-    alias_index: int | None,
-    level: int | None,
+    info: _ImportInfo,
 ) -> Row:
     return {
         "node_id": _node_id(file_ctx, node),
         "parent_id": _node_id(file_ctx, node.parent) if node.parent is not None else None,
-        "kind": kind,
-        "module": module,
-        "name": name,
-        "asname": asname,
-        "alias_index": alias_index,
-        "level": level,
+        "kind": info.kind,
+        "module": info.module,
+        "name": info.name,
+        "asname": info.asname,
+        "alias_index": info.alias_index,
+        "level": info.level,
         "span": span_dict(_span_spec(node)),
         "attrs": attrs_map({}),
     }

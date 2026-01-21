@@ -21,13 +21,10 @@ from ibis.expr.types import (
 
 from ibis_engine.builtin_udfs import (
     col_to_byte,
-    cpg_score,
-    position_encoding_norm,
     prefixed_hash64,
     stable_hash64,
     stable_hash128,
     stable_id,
-    valid_mask,
 )
 
 IbisExprFn = Callable[..., Value]
@@ -124,6 +121,12 @@ def _binary_join_element_wise_expr(*values: Value) -> Value:
         msg = "binary_join_element_wise requires at least two inputs."
         raise ValueError(msg)
     *parts, sep = values
+    if all(part.type().is_string() for part in parts) and sep.type().is_string():
+        joined = ops.StringJoin(
+            arg=tuple(cast("StringValue", part) for part in parts),
+            sep=cast("StringValue", sep),
+        )
+        return joined.to_expr()
     result = cast("StringValue", parts[0])
     separator = cast("StringValue", sep)
     for part in parts[1:]:
@@ -227,13 +230,10 @@ def default_expr_registry() -> IbisExprRegistry:
             "stringify": _stringify_expr,
             "is_null": _is_null_expr,
             "utf8_trim_whitespace": _strip_expr,
-            "cpg_score": cpg_score,
             "stable_hash64": stable_hash64,
             "stable_hash128": stable_hash128,
             "prefixed_hash64": prefixed_hash64,
             "stable_id": stable_id,
-            "valid_mask": valid_mask,
-            "position_encoding_norm": position_encoding_norm,
             "col_to_byte": col_to_byte,
         }
     )

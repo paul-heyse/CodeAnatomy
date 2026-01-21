@@ -117,14 +117,6 @@ class FunctionFactoryPolicy:
 
 DEFAULT_RULE_PRIMITIVES: tuple[RulePrimitive, ...] = (
     RulePrimitive(
-        name="cpg_score",
-        params=(FunctionParameter(name="value", dtype="float64"),),
-        return_type="float64",
-        volatility="stable",
-        description="Placeholder scoring primitive for relationship planning.",
-        supports_named_args=True,
-    ),
-    RulePrimitive(
         name="stable_hash64",
         params=(FunctionParameter(name="value", dtype="string"),),
         return_type="int64",
@@ -160,22 +152,6 @@ DEFAULT_RULE_PRIMITIVES: tuple[RulePrimitive, ...] = (
         return_type="string",
         volatility="stable",
         description="Prefix + stable 128-bit hash for string inputs.",
-        supports_named_args=True,
-    ),
-    RulePrimitive(
-        name="valid_mask",
-        params=(FunctionParameter(name="values", dtype="list<string>"),),
-        return_type="bool",
-        volatility="stable",
-        description="Return True when all list values are non-null.",
-        supports_named_args=True,
-    ),
-    RulePrimitive(
-        name="position_encoding_norm",
-        params=(FunctionParameter(name="value", dtype="string"),),
-        return_type="int32",
-        volatility="stable",
-        description="Normalize position encoding values to enum integers.",
         supports_named_args=True,
     ),
     RulePrimitive(

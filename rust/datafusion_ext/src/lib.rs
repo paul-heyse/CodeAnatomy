@@ -38,7 +38,9 @@ use datafusion::physical_expr_adapter::{
     PhysicalExprAdapter,
     PhysicalExprAdapterFactory,
 };
-use datafusion_common::{Constraints, DFSchema, DataFusionError, Result, ScalarValue, Statistics};
+use datafusion_common::{
+    Constraint, Constraints, DFSchema, DataFusionError, Result, ScalarValue, Statistics,
+};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion_datasource::ListingTableUrl;
@@ -50,15 +52,16 @@ use datafusion_expr::{
     Expr,
     InsertOp,
     LogicalPlan,
+    SortExpr,
     ScalarFunctionArgs,
     ScalarUDF,
     ScalarUDFImpl,
     Signature,
-    Sort,
     TableProviderFilterPushDown,
     TableType,
     Volatility,
 };
+use datafusion_expr::expr_fn::col;
 use datafusion_physical_plan::ExecutionPlan;
 use deltalake::delta_datafusion::{DeltaScanConfigBuilder, DeltaTableProvider};
 use deltalake::{ensure_table_uri, DeltaTableBuilder};
@@ -124,6 +127,7 @@ struct CpgTableProvider {
     ddl: Option<String>,
     logical_plan: Option<LogicalPlan>,
     column_defaults: HashMap<String, Expr>,
+    constraints: Option<Constraints>,
 }
 
 impl CpgTableProvider {
@@ -133,12 +137,14 @@ impl CpgTableProvider {
         ddl: Option<String>,
         logical_plan: Option<LogicalPlan>,
         column_defaults: HashMap<String, Expr>,
+        constraints: Option<Constraints>,
     ) -> Self {
         Self {
             inner,
             ddl,
             logical_plan,
             column_defaults,
+            constraints,
         }
     }
 }
@@ -154,7 +160,7 @@ impl TableProvider for CpgTableProvider {
     }
 
     fn constraints(&self) -> Option<&Constraints> {
-        self.inner.constraints()
+        self.constraints.as_ref().or_else(|| self.inner.constraints())
     }
 
     fn table_type(&self) -> TableType {
@@ -256,6 +262,36 @@ fn column_default_exprs(schema: &SchemaRef) -> HashMap<String, Expr> {
     defaults
 }
 
+fn constraints_from_key_fields(
+    schema: &SchemaRef,
+    key_fields: &[String],
+) -> Result<Option<Constraints>> {
+    if key_fields.is_empty() {
+        return Ok(None);
+    }
+    let mut indices = Vec::with_capacity(key_fields.len());
+    for name in key_fields {
+        let index = schema.index_of(name).map_err(|_| {
+            DataFusionError::Plan(format!("Unknown key field in listing provider: {name}"))
+        })?;
+        indices.push(index);
+    }
+    Ok(Some(Constraints::new_unverified(vec![
+        Constraint::PrimaryKey(indices),
+    ])))
+}
+
+fn file_sort_order_from_columns(columns: &[String]) -> Vec<Vec<SortExpr>> {
+    if columns.is_empty() {
+        return Vec::new();
+    }
+    let sorts = columns
+        .iter()
+        .map(|name| SortExpr::new(col(name.as_str()), true, true))
+        .collect();
+    vec![sorts]
+}
+
 fn listing_table_plan(
     schema: SchemaRef,
     *,
@@ -264,6 +300,8 @@ fn listing_table_plan(
     table_partition_cols: Vec<String>,
     definition: Option<String>,
     column_defaults: HashMap<String, Expr>,
+    constraints: Constraints,
+    file_sort_order: Vec<Vec<SortExpr>>,
 ) -> Result<LogicalPlan> {
     let dfschema = DFSchema::try_from(schema)?;
     let create = CreateExternalTable {
@@ -276,10 +314,10 @@ fn listing_table_plan(
         or_replace: false,
         temporary: false,
         definition,
-        order_exprs: Vec::<Vec<Sort>>::new(),
+        order_exprs: file_sort_order,
         unbounded: false,
         options: HashMap::new(),
-        constraints: Constraints::empty(),
+        constraints,
         column_defaults,
     };
     Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(create)))
@@ -521,6 +559,8 @@ fn parquet_listing_table_provider(
     table_partition_cols: Option<Vec<(String, String)>>,
     schema_ipc: Option<Vec<u8>>,
     partition_schema_ipc: Option<Vec<u8>>,
+    file_sort_order: Option<Vec<String>>,
+    key_fields: Option<Vec<String>>,
     expr_adapter_factory: Option<PyObject>,
     parquet_pruning: Option<bool>,
     skip_metadata: Option<bool>,
@@ -561,6 +601,11 @@ fn parquet_listing_table_provider(
         }
         options = options.with_table_partition_cols(cols);
     }
+    let sort_columns = file_sort_order.unwrap_or_default();
+    let sort_exprs = file_sort_order_from_columns(&sort_columns);
+    if !sort_exprs.is_empty() {
+        options = options.with_file_sort_order(sort_exprs.clone());
+    }
     let table_path = ListingTableUrl::parse(path.as_str()).or_else(|_| {
         ListingTableUrl::parse(format!("file://{path}").as_str())
     });
@@ -587,6 +632,12 @@ fn parquet_listing_table_provider(
         PyRuntimeError::new_err(format!("ListingTable provider build failed: {err}"))
     })?;
     let defaults = column_default_exprs(&provider.schema());
+    let constraints = match key_fields {
+        Some(keys) => constraints_from_key_fields(&schema, &keys)
+            .map_err(|err| PyRuntimeError::new_err(format!("Invalid key fields: {err}")))?,
+        None => None,
+    };
+    let plan_constraints = constraints.clone().unwrap_or_default();
     let plan = listing_table_plan(
         provider.schema(),
         table_name: &table_name,
@@ -594,6 +645,8 @@ fn parquet_listing_table_provider(
         table_partition_cols: table_partition_names,
         definition: table_definition.clone(),
         column_defaults: defaults.clone(),
+        constraints: plan_constraints,
+        file_sort_order: sort_exprs,
     )
     .map_err(|err| PyRuntimeError::new_err(format!("ListingTable plan build failed: {err}")))?;
     let wrapped = CpgTableProvider::new(
@@ -601,6 +654,7 @@ fn parquet_listing_table_provider(
         ddl: table_definition,
         logical_plan: Some(plan),
         column_defaults: defaults,
+        constraints,
     );
     let ffi_provider = FFI_TableProvider::new(Arc::new(wrapped), true, None);
     let name = CString::new("datafusion_table_provider")

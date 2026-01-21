@@ -15,9 +15,36 @@ class TableProviderCapsule:
 
     capsule: object
 
-    def __datafusion_table_provider__(self) -> object:
-        """Return the wrapped provider capsule."""
+    def _datafusion_table_provider(self) -> object:
+        """Return the wrapped provider capsule.
+
+        Returns
+        -------
+        object
+            PyCapsule provider used by DataFusion.
+        """
         return self.capsule
+
+
+TableProviderCapsule.__datafusion_table_provider__ = TableProviderCapsule._datafusion_table_provider
+
+
+@dataclass(frozen=True)
+class ParquetListingTableConfig:
+    """Describe configuration for a parquet listing table provider."""
+
+    path: str
+    schema: object | None
+    file_extension: str
+    table_name: str
+    table_definition: str | None
+    table_partition_cols: Sequence[tuple[str, pa.DataType]] | None
+    file_sort_order: Sequence[str] | None
+    key_fields: Sequence[str] | None
+    expr_adapter_factory: object | None
+    parquet_pruning: bool | None
+    skip_metadata: bool | None
+    collect_statistics: bool | None
 
 
 def _schema_ipc_payload(schema: pa.Schema | None) -> bytes | None:
@@ -42,48 +69,14 @@ def _resolve_pyarrow_schema(schema: object | None) -> pa.Schema | None:
 
 
 def parquet_listing_table_provider(
-    *,
-    path: str,
-    schema: object | None,
-    file_extension: str,
-    table_name: str,
-    table_definition: str | None,
-    table_partition_cols: Sequence[tuple[str, pa.DataType]] | None,
-    file_sort_order: Sequence[str] | None,
-    key_fields: Sequence[str] | None,
-    expr_adapter_factory: object | None,
-    parquet_pruning: bool | None,
-    skip_metadata: bool | None,
-    collect_statistics: bool | None,
+    config: ParquetListingTableConfig,
 ) -> TableProviderCapsule | None:
     """Return a PyCapsule-backed Parquet ListingTable provider when available.
 
     Parameters
     ----------
-    path:
-        Root path for the listing table.
-    schema:
-        Optional schema to use for the listing table.
-    file_extension:
-        File extension for listing table discovery.
-    table_name:
-        Table name for provenance metadata.
-    table_definition:
-        Optional CREATE EXTERNAL TABLE statement.
-    table_partition_cols:
-        Optional partition columns expressed as (name, dtype) tuples.
-    file_sort_order:
-        Optional file sort order column names for listing metadata.
-    key_fields:
-        Optional key field names to surface as DataFusion constraints.
-    expr_adapter_factory:
-        Optional physical expression adapter factory capsule.
-    parquet_pruning:
-        Optional parquet pruning flag for the listing table provider.
-    skip_metadata:
-        Optional parquet metadata skipping flag for the listing table provider.
-    collect_statistics:
-        Optional statistics collection flag for the listing table provider.
+    config:
+        Listing table provider configuration.
 
     Returns
     -------
@@ -97,29 +90,33 @@ def parquet_listing_table_provider(
     factory = getattr(module, "parquet_listing_table_provider", None)
     if not callable(factory):
         return None
-    resolved_schema = _resolve_pyarrow_schema(schema)
+    resolved_schema = _resolve_pyarrow_schema(config.schema)
     if resolved_schema is None:
         return None
     partition_schema = None
-    if table_partition_cols:
+    if config.table_partition_cols:
         partition_schema = pa.schema(
-            [pa.field(name, dtype, nullable=False) for name, dtype in table_partition_cols]
+            [pa.field(name, dtype, nullable=False) for name, dtype in config.table_partition_cols]
         )
     capsule = factory(
-        path=path,
-        file_extension=file_extension,
-        table_name=table_name,
-        table_definition=table_definition,
+        path=config.path,
+        file_extension=config.file_extension,
+        table_name=config.table_name,
+        table_definition=config.table_definition,
         schema_ipc=_schema_ipc_payload(resolved_schema),
         partition_schema_ipc=_schema_ipc_payload(partition_schema),
-        file_sort_order=list(file_sort_order) if file_sort_order else None,
-        key_fields=list(key_fields) if key_fields else None,
-        expr_adapter_factory=expr_adapter_factory,
-        parquet_pruning=parquet_pruning,
-        skip_metadata=skip_metadata,
-        collect_statistics=collect_statistics,
+        file_sort_order=list(config.file_sort_order) if config.file_sort_order else None,
+        key_fields=list(config.key_fields) if config.key_fields else None,
+        expr_adapter_factory=config.expr_adapter_factory,
+        parquet_pruning=config.parquet_pruning,
+        skip_metadata=config.skip_metadata,
+        collect_statistics=config.collect_statistics,
     )
     return TableProviderCapsule(capsule)
 
 
-__all__ = ["TableProviderCapsule", "parquet_listing_table_provider"]
+__all__ = [
+    "ParquetListingTableConfig",
+    "TableProviderCapsule",
+    "parquet_listing_table_provider",
+]

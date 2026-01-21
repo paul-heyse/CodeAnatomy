@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Protocol, cast
 
 import ibis
 import pyarrow as pa
-from deltalake import DeltaTable
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table as IbisTable
 
@@ -46,7 +44,7 @@ from storage.deltalake import (
     DeltaWriteResult,
     StorageOptions,
     apply_delta_write_policies,
-    delta_table_version,
+    write_datafusion_delta,
     write_dataset_delta,
     write_named_datasets_delta,
     write_table_delta,
@@ -412,10 +410,10 @@ def write_ibis_dataset_delta(
             if isinstance(data, IbisPlan)
             else ibis_to_datafusion(data, backend=backend, ctx=df_ctx)
         )
-        datafusion_result = _write_datafusion_delta(
+        datafusion_result = write_datafusion_delta(
             df,
             base_dir=str(base_dir),
-            delta_options=delta_options,
+            options=delta_options,
             storage_options=options.storage_options,
         )
         if datafusion_result is not None:
@@ -448,84 +446,6 @@ def write_ibis_dataset_delta(
     if options.delta_reporter is not None:
         options.delta_reporter(result)
     return result
-
-
-def _write_datafusion_delta(
-    df: object,
-    *,
-    base_dir: str,
-    delta_options: DeltaWriteOptions,
-    storage_options: StorageOptions | None,
-) -> DeltaWriteResult | None:
-    if not _supports_datafusion_delta_insert(delta_options):
-        return None
-    if delta_table_version(base_dir, storage_options=storage_options) is None:
-        return None
-    write_table = getattr(df, "write_table", None)
-    if not callable(write_table):
-        return None
-    storage = dict(storage_options) if storage_options is not None else None
-    table = DeltaTable(base_dir, storage_options=storage)
-    name = f"__delta_sink_{uuid.uuid4().hex}"
-    try:
-        _register_datafusion_delta_table(df, name=name, table=table)
-    except ValueError:
-        return None
-    try:
-        write_table(name)
-    finally:
-        _deregister_datafusion_table(df, name=name)
-    version = delta_table_version(base_dir, storage_options=storage_options)
-    return DeltaWriteResult(path=base_dir, version=version)
-
-
-def _supports_datafusion_delta_insert(options: DeltaWriteOptions) -> bool:
-    disallowed = (
-        options.mode != "append",
-        options.schema_mode is not None,
-        options.predicate is not None,
-        bool(options.partition_by),
-        bool(options.configuration),
-        bool(options.commit_metadata),
-        options.target_file_size is not None,
-        options.writer_properties is not None,
-        options.retry_policy is not None,
-    )
-    return not any(disallowed)
-
-
-def _register_datafusion_delta_table(
-    df: object,
-    *,
-    name: str,
-    table: DeltaTable,
-) -> None:
-    ctx = None
-    for attr in ("_ctx", "_context", "context", "ctx", "session_context"):
-        ctx = getattr(df, attr, None)
-        if ctx is not None:
-            break
-    if ctx is None:
-        msg = "DataFusion DataFrame missing SessionContext."
-        raise ValueError(msg)
-    try:
-        ctx.register_table(name, table)
-    except TypeError as exc:
-        msg = "DataFusion failed to register Delta table provider."
-        raise ValueError(msg) from exc
-
-
-def _deregister_datafusion_table(df: object, *, name: str) -> None:
-    ctx = None
-    for attr in ("_ctx", "_context", "context", "ctx", "session_context"):
-        ctx = getattr(df, attr, None)
-        if ctx is not None:
-            break
-    if ctx is None:
-        return
-    deregister = getattr(ctx, "deregister_table", None)
-    if callable(deregister):
-        deregister(name)
 
 
 def write_ibis_named_datasets_delta(

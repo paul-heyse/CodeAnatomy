@@ -5,13 +5,13 @@ from __future__ import annotations
 import os
 import symtable
 from collections import defaultdict
+from dataclasses import dataclass
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
-from arrowdsl.core.ids import hash64_from_text
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract_registry import normalize_options
 from extract.helpers import (
@@ -197,34 +197,40 @@ def _class_methods(tbl: symtable.SymbolTable, *, scope_type: str) -> list[str] |
     return list(tbl.get_methods())
 
 
+@dataclass(frozen=True)
+class _ScopeContext:
+    table_id: int
+    scope_id: str
+    qualpath: str
+    scope_type: str
+    scope_type_value: int
+    function_partitions: Mapping[str, list[str]] | None
+    class_methods: list[str] | None
+    parent_table_id: int | None
+
+
 def _scope_row(
     ctx: SymtableContext,
     *,
     tbl: symtable.SymbolTable,
-    table_id: int,
-    scope_id: str,
-    qualpath: str,
-    scope_type: str,
-    scope_type_value: int,
-    function_partitions: Mapping[str, list[str]] | None,
-    class_methods: list[str] | None,
+    scope_ctx: _ScopeContext,
 ) -> dict[str, object]:
     return {
         **ctx.identity_row(),
-        "table_id": table_id,
-        "scope_id": scope_id,
-        "scope_local_id": table_id,
-        "scope_type": scope_type,
-        "scope_type_value": scope_type_value,
+        "table_id": scope_ctx.table_id,
+        "scope_id": scope_ctx.scope_id,
+        "scope_local_id": scope_ctx.table_id,
+        "scope_type": scope_ctx.scope_type,
+        "scope_type_value": scope_ctx.scope_type_value,
         "scope_name": tbl.get_name(),
-        "qualpath": qualpath,
+        "qualpath": scope_ctx.qualpath,
         "lineno": int(tbl.get_lineno() or 0),
         "is_nested": bool(tbl.is_nested()),
         "is_optimized": bool(tbl.is_optimized()),
         "has_children": bool(tbl.has_children()),
-        "scope_role": _scope_role(scope_type),
-        "function_partitions": function_partitions,
-        "class_methods": class_methods,
+        "scope_role": _scope_role(scope_ctx.scope_type),
+        "function_partitions": scope_ctx.function_partitions,
+        "class_methods": scope_ctx.class_methods,
     }
 
 
@@ -328,63 +334,77 @@ def _walk_symtable(
     stack: list[tuple[symtable.SymbolTable, symtable.SymbolTable | None, str]] = [(top, None, "")]
     while stack:
         tbl, parent_tbl, parent_qualpath = stack.pop()
-        scope_type = _scope_type_str(tbl)
-        scope_type_value = int(tbl.get_type().value)
-        lineno = int(tbl.get_lineno() or 0)
-        table_id = int(tbl.get_id())
-        parent_local_id = int(parent_tbl.get_id()) if parent_tbl is not None else None
-        ordinal = _next_ordinal(
-            sibling_counts,
-            parent_local_id=parent_local_id,
-            scope_type=scope_type,
-            scope_name=tbl.get_name(),
-            lineno=lineno,
+        scope_ctx = _build_scope_context(
+            tbl,
+            parent_tbl=parent_tbl,
+            parent_qualpath=parent_qualpath,
+            sibling_counts=sibling_counts,
+            ctx=ctx,
         )
-        component = _scope_component(scope_type, tbl.get_name(), ordinal)
-        qualpath = _join_qualpath(parent_qualpath, component)
-        scope_id = _stable_scope_id(
-            file_id=ctx.file_id,
-            qualpath=qualpath,
-            lineno=lineno,
-            scope_type=scope_type,
-            ordinal=ordinal,
-        )
-        function_partitions = _function_partitions(tbl, scope_type=scope_type)
-        class_methods = _class_methods(tbl, scope_type=scope_type)
-        scope_rows.append(
-            _scope_row(
-                ctx,
-                tbl=tbl,
-                table_id=table_id,
-                scope_id=scope_id,
-                qualpath=qualpath,
-                scope_type=scope_type,
-                scope_type_value=scope_type_value,
-                function_partitions=function_partitions,
-                class_methods=class_methods,
-            )
-        )
+        scope_rows.append(_scope_row(ctx, tbl=tbl, scope_ctx=scope_ctx))
 
-        if parent_tbl is not None:
-            parent_table_id = int(parent_tbl.get_id())
-            scope_edge_rows.append(_scope_edge_row(ctx, parent_table_id, table_id))
+        if scope_ctx.parent_table_id is not None:
+            scope_edge_rows.append(
+                _scope_edge_row(ctx, scope_ctx.parent_table_id, scope_ctx.table_id)
+            )
 
         sym_rows = _symbol_rows_for_scope(
             ctx,
             tbl=tbl,
-            scope_table_id=table_id,
-            scope_id=scope_id,
-            scope_type=scope_type,
+            scope_table_id=scope_ctx.table_id,
+            scope_id=scope_ctx.scope_id,
+            scope_type=scope_ctx.scope_type,
         )
         symbol_rows.extend(sym_rows)
 
-        stack.extend((child, tbl, qualpath) for child in _iter_children(tbl))
+        stack.extend((child, tbl, scope_ctx.qualpath) for child in _iter_children(tbl))
 
     return scope_rows, symbol_rows, scope_edge_rows
 
 
 def _iter_children(tbl: symtable.SymbolTable) -> list[symtable.SymbolTable]:
     return list(tbl.get_children())
+
+
+def _build_scope_context(
+    tbl: symtable.SymbolTable,
+    *,
+    parent_tbl: symtable.SymbolTable | None,
+    parent_qualpath: str,
+    sibling_counts: dict[int | None, dict[tuple[str, str, int], int]],
+    ctx: SymtableContext,
+) -> _ScopeContext:
+    scope_type = _scope_type_str(tbl)
+    scope_type_value = int(tbl.get_type().value)
+    lineno = int(tbl.get_lineno() or 0)
+    table_id = int(tbl.get_id())
+    parent_local_id = int(parent_tbl.get_id()) if parent_tbl is not None else None
+    ordinal = _next_ordinal(
+        sibling_counts,
+        parent_local_id=parent_local_id,
+        scope_type=scope_type,
+        scope_name=tbl.get_name(),
+        lineno=lineno,
+    )
+    component = _scope_component(scope_type, tbl.get_name(), ordinal)
+    qualpath = _join_qualpath(parent_qualpath, component)
+    scope_id = _stable_scope_id(
+        file_id=ctx.file_id,
+        qualpath=qualpath,
+        lineno=lineno,
+        scope_type=scope_type,
+        ordinal=ordinal,
+    )
+    return _ScopeContext(
+        table_id=table_id,
+        scope_id=scope_id,
+        qualpath=qualpath,
+        scope_type=scope_type,
+        scope_type_value=scope_type_value,
+        function_partitions=_function_partitions(tbl, scope_type=scope_type),
+        class_methods=_class_methods(tbl, scope_type=scope_type),
+        parent_table_id=parent_local_id,
+    )
 
 
 def _symbol_entry(row: Mapping[str, object]) -> dict[str, object]:
@@ -396,14 +416,9 @@ def _symbol_entry(row: Mapping[str, object]) -> dict[str, object]:
         block_ids = []
     namespace_count = row.get("namespace_count")
     count = int(namespace_count) if isinstance(namespace_count, int) else 0
-    scope_id = row.get("scope_id")
-    name = row.get("name")
-    scope_text = scope_id if isinstance(scope_id, str) else None
-    name_text = name if isinstance(name, str) else None
-    sym_symbol_id = _sym_symbol_id(scope_text, name_text)
     return {
         "name": row.get("name"),
-        "sym_symbol_id": sym_symbol_id,
+        "sym_symbol_id": None,
         "flags": {
             "is_referenced": bool(row.get("is_referenced")),
             "is_imported": bool(row.get("is_imported")),
@@ -422,15 +437,6 @@ def _symbol_entry(row: Mapping[str, object]) -> dict[str, object]:
         "namespace_block_ids": block_ids,
         "attrs": attrs_map({}),
     }
-
-
-def _sym_symbol_id(scope_id: str | None, name: str | None) -> str | None:
-    if scope_id is None or name is None:
-        return None
-    hashed = hash64_from_text(f"{scope_id}:{name}")
-    if hashed is None:
-        return None
-    return f"sym_symbol:{hashed}"
 
 
 def _symtable_file_row(
@@ -543,9 +549,7 @@ def _collect_symtable_file_rows(
         return _symtable_file_row(file_ctx, options=options)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for row in executor.map(_extract_row, contexts):
-            if row is not None:
-                rows.append(row)
+        rows = [row for row in executor.map(_extract_row, contexts) if row is not None]
     return rows
 
 

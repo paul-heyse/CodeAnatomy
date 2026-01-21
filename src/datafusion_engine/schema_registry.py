@@ -39,10 +39,23 @@ _DEFAULT_ATTRS_VALUE: dict[str, str] = cast(
     "dict[str, str]",
     json.loads(_DEFAULT_ATTRS_META[DEFAULT_VALUE_META].decode("utf-8")),
 )
+BYTECODE_ATTR_VALUE_T = pa.union(
+    [
+        pa.field("int_value", pa.int64()),
+        pa.field("bool_value", pa.bool_()),
+        pa.field("str_value", pa.string()),
+    ],
+    mode="sparse",
+)
+BYTECODE_ATTRS_T = pa.map_(pa.string(), BYTECODE_ATTR_VALUE_T)
 
 
 def _attrs_field(name: str = "attrs") -> pa.Field:
     return pa.field(name, ATTRS_T, metadata=_DEFAULT_ATTRS_META)
+
+
+def _bytecode_attrs_field(name: str = "attrs") -> pa.Field:
+    return pa.field(name, BYTECODE_ATTRS_T, metadata=_DEFAULT_ATTRS_META)
 
 
 def default_attrs_value() -> dict[str, str]:
@@ -441,6 +454,20 @@ LIBCST_FILES_SCHEMA = pa.schema(
     ]
 )
 
+AST_SPAN_META: dict[bytes, bytes] = {
+    b"line_base": b"0",
+    b"col_unit": b"byte",
+    b"end_exclusive": b"true",
+    SEMANTIC_TYPE_META: SPAN_TYPE_INFO.name.encode("utf-8"),
+}
+
+TREE_SITTER_SPAN_META: dict[bytes, bytes] = {
+    b"line_base": b"0",
+    b"col_unit": b"byte",
+    b"end_exclusive": b"true",
+    SEMANTIC_TYPE_META: SPAN_TYPE_INFO.name.encode("utf-8"),
+}
+
 AST_NODE_T = pa.struct(
     [
         ("ast_id", pa.int32()),
@@ -448,7 +475,7 @@ AST_NODE_T = pa.struct(
         ("kind", pa.string()),
         ("name", pa.string()),
         ("value", pa.string()),
-        ("span", SPAN_T),
+        pa.field("span", SPAN_T, metadata=AST_SPAN_META),
         ("attrs", ATTRS_T),
     ]
 )
@@ -468,7 +495,7 @@ AST_ERROR_T = pa.struct(
     [
         ("error_type", pa.string()),
         ("message", pa.string()),
-        ("span", SPAN_T),
+        pa.field("span", SPAN_T, metadata=AST_SPAN_META),
         ("attrs", ATTRS_T),
     ]
 )
@@ -479,7 +506,7 @@ AST_DOCSTRING_T = pa.struct(
         ("owner_kind", pa.string()),
         ("owner_name", pa.string()),
         ("docstring", pa.string()),
-        ("span", SPAN_T),
+        pa.field("span", SPAN_T, metadata=AST_SPAN_META),
         ("source", pa.string()),
         ("attrs", ATTRS_T),
     ]
@@ -495,7 +522,7 @@ AST_IMPORT_T = pa.struct(
         ("asname", pa.string()),
         ("alias_index", pa.int32()),
         ("level", pa.int32()),
-        ("span", SPAN_T),
+        pa.field("span", SPAN_T, metadata=AST_SPAN_META),
         ("attrs", ATTRS_T),
     ]
 )
@@ -506,7 +533,7 @@ AST_DEF_T = pa.struct(
         ("parent_ast_id", pa.int32()),
         ("kind", pa.string()),
         ("name", pa.string()),
-        ("span", SPAN_T),
+        pa.field("span", SPAN_T, metadata=AST_SPAN_META),
         ("attrs", ATTRS_T),
     ]
 )
@@ -517,7 +544,7 @@ AST_CALL_T = pa.struct(
         ("parent_ast_id", pa.int32()),
         ("func_kind", pa.string()),
         ("func_name", pa.string()),
-        ("span", SPAN_T),
+        pa.field("span", SPAN_T, metadata=AST_SPAN_META),
         ("attrs", ATTRS_T),
     ]
 )
@@ -526,7 +553,7 @@ AST_TYPE_IGNORE_T = pa.struct(
     [
         ("ast_id", pa.int32()),
         ("tag", pa.string()),
-        ("span", SPAN_T),
+        pa.field("span", SPAN_T, metadata=AST_SPAN_META),
         ("attrs", ATTRS_T),
     ]
 )
@@ -534,8 +561,8 @@ AST_TYPE_IGNORE_T = pa.struct(
 AST_FILES_SCHEMA = pa.schema(
     [
         ("repo", pa.string()),
-        ("path", pa.string()),
-        ("file_id", pa.string()),
+        pa.field("path", pa.string(), nullable=False),
+        pa.field("file_id", pa.string(), nullable=False),
         ("nodes", pa.list_(AST_NODE_T)),
         ("edges", pa.list_(AST_EDGE_T)),
         ("errors", pa.list_(AST_ERROR_T)),
@@ -568,7 +595,7 @@ TREE_SITTER_NODE_T = pa.struct(
         ("kind_id", pa.int32()),
         ("grammar_id", pa.int32()),
         ("grammar_name", pa.string()),
-        ("span", SPAN_T),
+        pa.field("span", SPAN_T, metadata=TREE_SITTER_SPAN_META),
         ("flags", TREE_SITTER_FLAGS_T),
         ("attrs", ATTRS_T),
     ]
@@ -588,7 +615,7 @@ TREE_SITTER_ERROR_T = pa.struct(
     [
         ("error_id", pa.string()),
         ("node_id", pa.string()),
-        ("span", SPAN_T),
+        pa.field("span", SPAN_T, metadata=TREE_SITTER_SPAN_META),
         ("attrs", ATTRS_T),
     ]
 )
@@ -597,7 +624,7 @@ TREE_SITTER_MISSING_T = pa.struct(
     [
         ("missing_id", pa.string()),
         ("node_id", pa.string()),
-        ("span", SPAN_T),
+        pa.field("span", SPAN_T, metadata=TREE_SITTER_SPAN_META),
         ("attrs", ATTRS_T),
     ]
 )
@@ -610,7 +637,7 @@ TREE_SITTER_CAPTURE_T = pa.struct(
         ("pattern_index", pa.int32()),
         ("node_id", pa.string()),
         ("node_kind", pa.string()),
-        ("span", SPAN_T),
+        pa.field("span", SPAN_T, metadata=TREE_SITTER_SPAN_META),
         ("attrs", ATTRS_T),
     ]
 )
@@ -621,7 +648,7 @@ TREE_SITTER_DEF_T = pa.struct(
         ("parent_id", pa.string()),
         ("kind", pa.string()),
         ("name", pa.string()),
-        ("span", SPAN_T),
+        pa.field("span", SPAN_T, metadata=TREE_SITTER_SPAN_META),
         ("attrs", ATTRS_T),
     ]
 )
@@ -633,7 +660,7 @@ TREE_SITTER_CALL_T = pa.struct(
         ("callee_kind", pa.string()),
         ("callee_text", pa.string()),
         ("callee_node_id", pa.string()),
-        ("span", SPAN_T),
+        pa.field("span", SPAN_T, metadata=TREE_SITTER_SPAN_META),
         ("attrs", ATTRS_T),
     ]
 )
@@ -648,7 +675,7 @@ TREE_SITTER_IMPORT_T = pa.struct(
         ("asname", pa.string()),
         ("alias_index", pa.int32()),
         ("level", pa.int32()),
-        ("span", SPAN_T),
+        pa.field("span", SPAN_T, metadata=TREE_SITTER_SPAN_META),
         ("attrs", ATTRS_T),
     ]
 )
@@ -661,7 +688,7 @@ TREE_SITTER_DOCSTRING_T = pa.struct(
         ("doc_node_id", pa.string()),
         ("docstring", pa.string()),
         ("source", pa.string()),
-        ("span", SPAN_T),
+        pa.field("span", SPAN_T, metadata=TREE_SITTER_SPAN_META),
         ("attrs", ATTRS_T),
     ]
 )
@@ -843,7 +870,7 @@ BYTECODE_INSTR_T = pa.struct(
         pa.field("jump_target", pa.int32()),
         pa.field("cache_info", pa.list_(BYTECODE_CACHE_ENTRY_T)),
         pa.field("span", SPAN_T, metadata=BYTECODE_SPAN_META),
-        pa.field("attrs", ATTRS_T),
+        _bytecode_attrs_field(),
     ]
 )
 
@@ -855,7 +882,7 @@ BYTECODE_EXCEPTION_T = pa.struct(
         pa.field("target_offset", pa.int32()),
         pa.field("depth", pa.int32()),
         pa.field("lasti", pa.bool_()),
-        pa.field("attrs", ATTRS_T),
+        _bytecode_attrs_field(),
     ]
 )
 
@@ -864,7 +891,7 @@ BYTECODE_BLOCK_T = pa.struct(
         pa.field("start_offset", pa.int32(), nullable=False),
         pa.field("end_offset", pa.int32(), nullable=False),
         pa.field("kind", pa.string(), nullable=False),
-        pa.field("attrs", ATTRS_T),
+        _bytecode_attrs_field(),
     ]
 )
 
@@ -879,7 +906,7 @@ BYTECODE_CFG_EDGE_T = pa.struct(
         pa.field("cond_instr_index", pa.int32()),
         pa.field("cond_instr_offset", pa.int32()),
         pa.field("exc_index", pa.int32()),
-        pa.field("attrs", ATTRS_T),
+        _bytecode_attrs_field(),
     ]
 )
 
@@ -887,7 +914,7 @@ BYTECODE_ERROR_T = pa.struct(
     [
         pa.field("error_type", pa.string(), nullable=False),
         pa.field("message", pa.string(), nullable=False),
-        pa.field("attrs", ATTRS_T),
+        _bytecode_attrs_field(),
     ]
 )
 
@@ -896,7 +923,7 @@ BYTECODE_LINE_T = pa.struct(
         pa.field("offset", pa.int32(), nullable=False),
         pa.field("line1", pa.int32(), metadata=BYTECODE_LINE_META),
         pa.field("line0", pa.int32()),
-        pa.field("attrs", ATTRS_T),
+        _bytecode_attrs_field(),
     ]
 )
 
@@ -905,7 +932,7 @@ BYTECODE_DFG_EDGE_T = pa.struct(
         pa.field("src_instr_index", pa.int32(), nullable=False),
         pa.field("dst_instr_index", pa.int32(), nullable=False),
         pa.field("kind", pa.string(), nullable=False),
-        pa.field("attrs", ATTRS_T),
+        _bytecode_attrs_field(),
     ]
 )
 
@@ -952,7 +979,7 @@ BYTECODE_CODE_OBJ_T = pa.struct(
         pa.field("blocks", pa.list_(BYTECODE_BLOCK_T)),
         pa.field("cfg_edges", pa.list_(BYTECODE_CFG_EDGE_T)),
         pa.field("dfg_edges", pa.list_(BYTECODE_DFG_EDGE_T)),
-        pa.field("attrs", ATTRS_T),
+        _bytecode_attrs_field(),
     ]
 )
 
@@ -963,7 +990,7 @@ BYTECODE_FILES_SCHEMA = pa.schema(
         pa.field("file_id", pa.string(), nullable=False),
         pa.field("code_objects", pa.list_(BYTECODE_CODE_OBJ_T)),
         pa.field("errors", pa.list_(BYTECODE_ERROR_T)),
-        pa.field("attrs", ATTRS_T),
+        _bytecode_attrs_field(),
     ]
 )
 
@@ -998,7 +1025,29 @@ def _schema_with_metadata(
     return schema.with_metadata(metadata)
 
 
-AST_FILES_SCHEMA = _schema_with_metadata("ast_files_v1", AST_FILES_SCHEMA)
+_AST_IDENTITY_FIELDS: tuple[str, ...] = ("file_id", "path")
+_AST_ORDERING_META = ordering_metadata_spec(
+    OrderingLevel.EXPLICIT,
+    keys=(("path", "ascending"), ("file_id", "ascending")),
+)
+_AST_CONSTRAINT_META = {
+    REQUIRED_NON_NULL_META: metadata_list_bytes(_AST_IDENTITY_FIELDS),
+    KEY_FIELDS_META: metadata_list_bytes(_AST_IDENTITY_FIELDS),
+}
+_AST_SCHEMA_META: dict[bytes, bytes] = dict(_AST_ORDERING_META.schema_metadata)
+_AST_SCHEMA_META.update(_AST_CONSTRAINT_META)
+_AST_SCHEMA_META.update(
+    {
+        b"ast_span_line_base": AST_SPAN_META[b"line_base"],
+        b"ast_span_col_unit": AST_SPAN_META[b"col_unit"],
+        b"ast_span_end_exclusive": AST_SPAN_META[b"end_exclusive"],
+    }
+)
+AST_FILES_SCHEMA = _schema_with_metadata(
+    "ast_files_v1",
+    AST_FILES_SCHEMA,
+    extra_metadata=_AST_SCHEMA_META,
+)
 BYTECODE_FILES_SCHEMA = _schema_with_metadata(
     "bytecode_files_v1",
     BYTECODE_FILES_SCHEMA,
@@ -1654,14 +1703,14 @@ NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
 }
 
 ROOT_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
-    "ast_files_v1": ("file_id", "path"),
+    "ast_files_v1": _AST_IDENTITY_FIELDS,
     "bytecode_files_v1": _BYTECODE_IDENTITY_FIELDS,
     "libcst_files_v1": _LIBCST_IDENTITY_FIELDS,
     "symtable_files_v1": _SYMTABLE_IDENTITY_FIELDS,
     "tree_sitter_files_v1": _TREE_SITTER_IDENTITY_FIELDS,
 }
 
-AST_VIEW_NAMES: tuple[str, ...] = (
+AST_CORE_VIEW_NAMES: tuple[str, ...] = (
     "ast_nodes",
     "ast_edges",
     "ast_errors",
@@ -1671,6 +1720,237 @@ AST_VIEW_NAMES: tuple[str, ...] = (
     "ast_calls",
     "ast_type_ignores",
 )
+AST_OPTIONAL_VIEW_NAMES: tuple[str, ...] = (
+    "ast_node_attrs",
+    "ast_def_attrs",
+    "ast_call_attrs",
+    "ast_edge_attrs",
+    "ast_span_metadata",
+)
+AST_ATTRS_VIEW_NAMES: tuple[str, ...] = (
+    "ast_node_attrs",
+    "ast_def_attrs",
+    "ast_call_attrs",
+    "ast_edge_attrs",
+)
+AST_VIEW_NAMES: tuple[str, ...] = AST_CORE_VIEW_NAMES + AST_OPTIONAL_VIEW_NAMES
+AST_VIEW_COLUMN_MAP: dict[str, tuple[str, ...]] = {
+    "ast_nodes": (
+        "file_id",
+        "path",
+        "ast_id",
+        "parent_ast_id",
+        "kind",
+        "name",
+        "value_repr",
+        "lineno",
+        "col_offset",
+        "end_lineno",
+        "end_col_offset",
+        "line_base",
+        "col_unit",
+        "end_exclusive",
+        "bstart",
+        "bend",
+        "span",
+        "attrs",
+        "ast_record",
+    ),
+    "ast_edges": (
+        "file_id",
+        "path",
+        "src",
+        "dst",
+        "kind",
+        "slot",
+        "idx",
+        "attrs",
+    ),
+    "ast_errors": (
+        "file_id",
+        "path",
+        "error_type",
+        "message",
+        "lineno",
+        "col_offset",
+        "end_lineno",
+        "end_col_offset",
+        "line_base",
+        "col_unit",
+        "end_exclusive",
+        "span",
+        "attrs",
+        "ast_record",
+    ),
+    "ast_docstrings": (
+        "file_id",
+        "path",
+        "owner_ast_id",
+        "owner_kind",
+        "owner_name",
+        "docstring",
+        "source",
+        "lineno",
+        "col_offset",
+        "end_lineno",
+        "end_col_offset",
+        "line_base",
+        "col_unit",
+        "end_exclusive",
+        "span",
+        "attrs",
+        "ast_record",
+    ),
+    "ast_imports": (
+        "file_id",
+        "path",
+        "ast_id",
+        "parent_ast_id",
+        "kind",
+        "module",
+        "name",
+        "asname",
+        "alias_index",
+        "level",
+        "lineno",
+        "col_offset",
+        "end_lineno",
+        "end_col_offset",
+        "line_base",
+        "col_unit",
+        "end_exclusive",
+        "span",
+        "attrs",
+        "ast_record",
+    ),
+    "ast_defs": (
+        "file_id",
+        "path",
+        "ast_id",
+        "parent_ast_id",
+        "kind",
+        "name",
+        "decorator_count",
+        "arg_count",
+        "posonly_count",
+        "kwonly_count",
+        "type_params_count",
+        "base_count",
+        "keyword_count",
+        "lineno",
+        "col_offset",
+        "end_lineno",
+        "end_col_offset",
+        "line_base",
+        "col_unit",
+        "end_exclusive",
+        "span",
+        "attrs",
+        "ast_record",
+    ),
+    "ast_calls": (
+        "file_id",
+        "path",
+        "ast_id",
+        "parent_ast_id",
+        "func_kind",
+        "func_name",
+        "arg_count",
+        "keyword_count",
+        "starred_count",
+        "kw_star_count",
+        "lineno",
+        "col_offset",
+        "end_lineno",
+        "end_col_offset",
+        "line_base",
+        "col_unit",
+        "end_exclusive",
+        "span",
+        "attrs",
+        "ast_record",
+    ),
+    "ast_type_ignores": (
+        "file_id",
+        "path",
+        "ast_id",
+        "tag",
+        "lineno",
+        "col_offset",
+        "end_lineno",
+        "end_col_offset",
+        "line_base",
+        "col_unit",
+        "end_exclusive",
+        "span",
+        "attrs",
+        "ast_record",
+    ),
+    "ast_node_attrs": (
+        "file_id",
+        "path",
+        "ast_id",
+        "parent_ast_id",
+        "kind",
+        "name",
+        "attr_key",
+        "attr_value",
+    ),
+    "ast_def_attrs": (
+        "file_id",
+        "path",
+        "ast_id",
+        "parent_ast_id",
+        "kind",
+        "name",
+        "attr_key",
+        "attr_value",
+    ),
+    "ast_call_attrs": (
+        "file_id",
+        "path",
+        "ast_id",
+        "parent_ast_id",
+        "func_kind",
+        "func_name",
+        "attr_key",
+        "attr_value",
+    ),
+    "ast_edge_attrs": (
+        "file_id",
+        "path",
+        "src",
+        "dst",
+        "kind",
+        "slot",
+        "idx",
+        "attr_key",
+        "attr_value",
+    ),
+    "ast_span_metadata": (
+        "nodes_line_base",
+        "nodes_col_unit",
+        "nodes_end_exclusive",
+        "errors_line_base",
+        "errors_col_unit",
+        "errors_end_exclusive",
+        "docstrings_line_base",
+        "docstrings_col_unit",
+        "docstrings_end_exclusive",
+        "imports_line_base",
+        "imports_col_unit",
+        "imports_end_exclusive",
+        "defs_line_base",
+        "defs_col_unit",
+        "defs_end_exclusive",
+        "calls_line_base",
+        "calls_col_unit",
+        "calls_end_exclusive",
+        "type_ignores_line_base",
+        "type_ignores_col_unit",
+        "type_ignores_end_exclusive",
+    ),
+}
 
 TREE_SITTER_VIEW_NAMES: tuple[str, ...] = (
     "ts_nodes",
@@ -1683,6 +1963,14 @@ TREE_SITTER_VIEW_NAMES: tuple[str, ...] = (
     "ts_imports",
     "ts_docstrings",
     "ts_stats",
+    "ts_span_metadata",
+    "ts_ast_defs_check",
+    "ts_ast_calls_check",
+    "ts_ast_imports_check",
+    "ts_cst_docstrings_check",
+)
+
+TREE_SITTER_CHECK_VIEWS: tuple[str, ...] = (
     "ts_ast_defs_check",
     "ts_ast_calls_check",
     "ts_ast_imports_check",
@@ -1737,6 +2025,40 @@ BYTECODE_VIEW_NAMES: tuple[str, ...] = (
     "bytecode_errors",
 )
 
+AST_REQUIRED_FUNCTIONS: tuple[str, ...] = (
+    "arrow_cast",
+    "arrow_metadata",
+    "arrow_typeof",
+    "list_extract",
+    "map_entries",
+    "map_extract",
+    "named_struct",
+    "unnest",
+)
+
+TREE_SITTER_REQUIRED_FUNCTIONS: tuple[str, ...] = (
+    "arrow_cast",
+    "arrow_metadata",
+    "arrow_typeof",
+)
+
+AST_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
+    "arrow_cast": 2,
+    "arrow_metadata": 1,
+    "arrow_typeof": 1,
+    "list_extract": 2,
+    "map_entries": 1,
+    "map_extract": 2,
+    "named_struct": 2,
+    "unnest": 1,
+}
+
+TREE_SITTER_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
+    "arrow_cast": 2,
+    "arrow_metadata": 1,
+    "arrow_typeof": 1,
+}
+
 BYTECODE_REQUIRED_FUNCTIONS: tuple[str, ...] = (
     "arrow_cast",
     "arrow_metadata",
@@ -1788,6 +2110,61 @@ _INT_TYPE_TOKENS = frozenset({"int", "integer", "bigint", "smallint", "tinyint",
 _LIST_TYPE_TOKENS = frozenset({"array", "list"})
 _MAP_TYPE_TOKENS = frozenset({"map"})
 
+AST_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
+    "arrow_cast": (None, _STRING_TYPE_TOKENS),
+    "arrow_metadata": (None, _STRING_TYPE_TOKENS),
+    "list_extract": (_LIST_TYPE_TOKENS, _INT_TYPE_TOKENS),
+    "map_entries": (_MAP_TYPE_TOKENS,),
+    "map_extract": (_MAP_TYPE_TOKENS, _STRING_TYPE_TOKENS),
+}
+
+
+def _ast_optional_functions(view_names: Sequence[str]) -> set[str]:
+    optional: set[str] = set()
+    if any(name in view_names for name in AST_ATTRS_VIEW_NAMES):
+        optional.add("map_entries")
+    if "ast_span_metadata" in view_names:
+        optional.add("arrow_metadata")
+    return optional
+
+
+def _ast_required_functions(view_names: Sequence[str]) -> tuple[str, ...]:
+    optional = _ast_optional_functions(view_names)
+    required: list[str] = []
+    for name in AST_REQUIRED_FUNCTIONS:
+        if name in {"map_entries", "arrow_metadata"} and name not in optional:
+            continue
+        required.append(name)
+    return tuple(required)
+
+
+def _ast_required_function_signatures(view_names: Sequence[str]) -> dict[str, int]:
+    optional = _ast_optional_functions(view_names)
+    required = dict(AST_REQUIRED_FUNCTION_SIGNATURES)
+    if "map_entries" not in optional:
+        required.pop("map_entries", None)
+    if "arrow_metadata" not in optional:
+        required.pop("arrow_metadata", None)
+    return required
+
+
+def _ast_required_function_signature_types(
+    view_names: Sequence[str],
+) -> dict[str, tuple[frozenset[str] | None, ...]]:
+    optional = _ast_optional_functions(view_names)
+    required = dict(AST_REQUIRED_FUNCTION_SIGNATURE_TYPES)
+    if "map_entries" not in optional:
+        required.pop("map_entries", None)
+    if "arrow_metadata" not in optional:
+        required.pop("arrow_metadata", None)
+    return required
+
+
+TREE_SITTER_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
+    "arrow_cast": (None, _STRING_TYPE_TOKENS),
+    "arrow_metadata": (None, _STRING_TYPE_TOKENS),
+}
+
 CST_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
     "arrow_cast": (None, _STRING_TYPE_TOKENS),
     "arrow_metadata": (None, _STRING_TYPE_TOKENS),
@@ -1805,6 +2182,7 @@ BYTECODE_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | Non
     "map_values": (_MAP_TYPE_TOKENS,),
 }
 
+AST_VIEW_REQUIRED_NON_NULL_FIELDS: tuple[str, ...] = ("file_id", "path")
 CST_VIEW_REQUIRED_NON_NULL_FIELDS: tuple[str, ...] = ("file_id", "path")
 
 SCIP_REQUIRED_FUNCTIONS: tuple[str, ...] = ()
@@ -2284,7 +2662,11 @@ def _require_semantic_type(
         raise ValueError(msg)
 
 
-def validate_ast_views(ctx: SessionContext) -> None:
+def validate_ast_views(
+    ctx: SessionContext,
+    *,
+    view_names: Sequence[str] | None = None,
+) -> None:
     """Validate AST view schemas using DataFusion introspection.
 
     Raises
@@ -2292,12 +2674,42 @@ def validate_ast_views(ctx: SessionContext) -> None:
     ValueError
         Raised when view schemas fail validation.
     """
+    resolved_views = tuple(dict.fromkeys(view_names)) if view_names is not None else AST_VIEW_NAMES
     errors: dict[str, str] = {}
-    for name in AST_VIEW_NAMES:
+    _validate_required_functions(
+        ctx,
+        required=_ast_required_functions(resolved_views),
+        errors=errors,
+    )
+    _validate_function_signatures(
+        ctx,
+        required=_ast_required_function_signatures(resolved_views),
+        errors=errors,
+    )
+    _validate_function_signature_types(
+        ctx,
+        required=_ast_required_function_signature_types(resolved_views),
+        errors=errors,
+    )
+    introspector = SchemaIntrospector(ctx)
+    for name in resolved_views:
+        _validate_ast_view_outputs(ctx, introspector=introspector, name=name, errors=errors)
+    for name in resolved_views:
+        expected = AST_VIEW_COLUMN_MAP.get(name)
+        if not expected:
+            continue
         try:
-            ctx.sql(f"DESCRIBE SELECT * FROM {name}").collect()
-        except (RuntimeError, TypeError, ValueError) as exc:
-            errors[name] = str(exc)
+            rows = ctx.sql(
+                f"SELECT column_name FROM information_schema.columns WHERE table_name = '{name}'"
+            ).to_arrow_table()
+            actual = {
+                str(row.get("column_name")) for row in rows.to_pylist() if row.get("column_name")
+            }
+            missing = sorted(set(expected) - actual)
+            if missing:
+                errors[f"{name}_information_schema"] = f"Missing columns: {missing}."
+        except (RuntimeError, TypeError, ValueError, KeyError) as exc:
+            errors[f"{name}_information_schema"] = str(exc)
     try:
         ctx.sql("SELECT arrow_typeof(nodes) AS nodes_type FROM ast_files_v1 LIMIT 1").collect()
         ctx.sql("SELECT arrow_typeof(edges) AS edges_type FROM ast_files_v1 LIMIT 1").collect()
@@ -2313,6 +2725,8 @@ def validate_ast_views(ctx: SessionContext) -> None:
         ).collect()
     except (RuntimeError, TypeError, ValueError) as exc:
         errors["ast_files_v1"] = str(exc)
+    if "ast_span_metadata" in resolved_views:
+        _validate_ast_span_metadata(ctx, errors)
     if errors:
         msg = f"AST view validation failed: {errors}."
         raise ValueError(msg)
@@ -2327,11 +2741,39 @@ def validate_ts_views(ctx: SessionContext) -> None:
         Raised when view schemas fail validation.
     """
     errors: dict[str, str] = {}
+    _validate_required_functions(ctx, required=TREE_SITTER_REQUIRED_FUNCTIONS, errors=errors)
+    _validate_function_signatures(
+        ctx,
+        required=TREE_SITTER_REQUIRED_FUNCTION_SIGNATURES,
+        errors=errors,
+    )
+    _validate_function_signature_types(
+        ctx,
+        required=TREE_SITTER_REQUIRED_FUNCTION_SIGNATURE_TYPES,
+        errors=errors,
+    )
+    introspector = SchemaIntrospector(ctx)
     for name in TREE_SITTER_VIEW_NAMES:
+        _validate_ts_view_outputs(ctx, introspector=introspector, name=name, errors=errors)
+    for table_name in (
+        "ts_nodes",
+        "ts_errors",
+        "ts_missing",
+        "ts_captures",
+        "ts_defs",
+        "ts_calls",
+        "ts_imports",
+        "ts_docstrings",
+    ):
         try:
-            ctx.sql(f"DESCRIBE SELECT * FROM {name}").collect()
+            _require_semantic_type(
+                ctx,
+                table_name=table_name,
+                column_name="span",
+                expected=SPAN_TYPE_INFO.name,
+            )
         except (RuntimeError, TypeError, ValueError) as exc:
-            errors[name] = str(exc)
+            errors[f"{table_name}_span_type"] = str(exc)
     try:
         ctx.sql(
             "SELECT arrow_typeof(nodes) AS nodes_type FROM tree_sitter_files_v1 LIMIT 1"
@@ -2365,6 +2807,7 @@ def validate_ts_views(ctx: SessionContext) -> None:
         ).collect()
     except (RuntimeError, TypeError, ValueError) as exc:
         errors["tree_sitter_files_v1"] = str(exc)
+    _validate_ts_span_metadata(ctx, errors)
     if errors:
         msg = f"Tree-sitter view validation failed: {errors}."
         raise ValueError(msg)
@@ -2663,6 +3106,191 @@ def _invalid_output_names(names: Sequence[str]) -> tuple[str, ...]:
         if any(token in name for token in (".", "(", ")", "{", "}", " ")):
             invalid.append(name)
     return tuple(invalid)
+
+
+def _normalize_meta_value(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _ast_span_expected_meta() -> dict[str, str]:
+    return {
+        "line_base": _normalize_meta_value(AST_SPAN_META[b"line_base"]) or "0",
+        "col_unit": _normalize_meta_value(AST_SPAN_META[b"col_unit"]) or "byte",
+        "end_exclusive": _normalize_meta_value(AST_SPAN_META[b"end_exclusive"]) or "true",
+    }
+
+
+def _ts_span_expected_meta() -> dict[str, str]:
+    return {
+        "line_base": _normalize_meta_value(TREE_SITTER_SPAN_META[b"line_base"]) or "0",
+        "col_unit": _normalize_meta_value(TREE_SITTER_SPAN_META[b"col_unit"]) or "byte",
+        "end_exclusive": _normalize_meta_value(TREE_SITTER_SPAN_META[b"end_exclusive"]) or "true",
+    }
+
+
+def _validate_ast_span_metadata(ctx: SessionContext, errors: dict[str, str]) -> None:
+    expected = _ast_span_expected_meta()
+    try:
+        table = ctx.sql("SELECT * FROM ast_span_metadata").to_arrow_table()
+    except (RuntimeError, TypeError, ValueError) as exc:
+        errors["ast_span_metadata"] = str(exc)
+        return
+    rows = table.to_pylist()
+    if not rows:
+        return
+    row = rows[0]
+    prefixes = (
+        "nodes",
+        "errors",
+        "docstrings",
+        "imports",
+        "defs",
+        "calls",
+        "type_ignores",
+    )
+    mismatches: dict[str, dict[str, str]] = {}
+    for prefix in prefixes:
+        for key, expected_value in expected.items():
+            column = f"{prefix}_{key}"
+            actual = _normalize_meta_value(row.get(column))
+            if actual is None:
+                mismatches.setdefault(prefix, {})[key] = "missing"
+                continue
+            if actual.lower() != expected_value.lower():
+                mismatches.setdefault(prefix, {})[key] = actual
+    if mismatches:
+        errors["ast_span_metadata_values"] = str(mismatches)
+
+
+def _validate_ts_span_metadata(ctx: SessionContext, errors: dict[str, str]) -> None:
+    expected = _ts_span_expected_meta()
+    try:
+        table = ctx.sql("SELECT * FROM ts_span_metadata").to_arrow_table()
+    except (RuntimeError, TypeError, ValueError) as exc:
+        errors["ts_span_metadata"] = str(exc)
+        return
+    rows = table.to_pylist()
+    if not rows:
+        return
+    row = rows[0]
+    prefixes = (
+        "nodes",
+        "errors",
+        "missing",
+        "captures",
+        "defs",
+        "calls",
+        "imports",
+        "docstrings",
+    )
+    mismatches: dict[str, dict[str, str]] = {}
+    for prefix in prefixes:
+        for key, expected_value in expected.items():
+            column = f"{prefix}_{key}"
+            actual = _normalize_meta_value(row.get(column))
+            if actual is None:
+                mismatches.setdefault(prefix, {})[key] = "missing"
+                continue
+            if actual.lower() != expected_value.lower():
+                mismatches.setdefault(prefix, {})[key] = actual
+    if mismatches:
+        errors["ts_span_metadata_values"] = str(mismatches)
+
+
+def _validate_ast_view_dfschema(
+    ctx: SessionContext,
+    *,
+    name: str,
+    errors: dict[str, str],
+) -> None:
+    try:
+        df_schema = ctx.table(name).schema()
+    except (RuntimeError, TypeError, ValueError, KeyError) as exc:
+        errors[f"{name}_dfschema"] = str(exc)
+        return
+    df_names = _dfschema_names(df_schema)
+    df_invalid = _invalid_output_names(df_names)
+    if df_invalid:
+        errors[f"{name}_dfschema_names"] = f"Invalid DFSchema names: {df_invalid}"
+    nullability = _dfschema_nullability(df_schema)
+    if not nullability:
+        return
+    nullable_required = [
+        field for field in AST_VIEW_REQUIRED_NON_NULL_FIELDS if nullability.get(field) is True
+    ]
+    if nullable_required:
+        errors[f"{name}_dfschema_nullability"] = (
+            f"Expected non-nullable fields are nullable: {sorted(nullable_required)}"
+        )
+
+
+def _validate_ast_view_outputs(
+    ctx: SessionContext,
+    *,
+    introspector: SchemaIntrospector,
+    name: str,
+    errors: dict[str, str],
+) -> None:
+    try:
+        rows = introspector.describe_query(f"SELECT * FROM {name}")
+    except (RuntimeError, TypeError, ValueError) as exc:
+        errors[name] = str(exc)
+        return
+    columns = _describe_column_names(rows)
+    invalid = _invalid_output_names(columns)
+    if invalid:
+        errors[f"{name}_output_names"] = f"Invalid output column names: {invalid}"
+    _validate_ast_view_dfschema(ctx, name=name, errors=errors)
+
+
+def _validate_ts_view_dfschema(
+    ctx: SessionContext,
+    *,
+    name: str,
+    errors: dict[str, str],
+) -> None:
+    try:
+        df_schema = ctx.table(name).schema()
+    except (RuntimeError, TypeError, ValueError, KeyError) as exc:
+        errors[f"{name}_dfschema"] = str(exc)
+        return
+    df_names = _dfschema_names(df_schema)
+    df_invalid = _invalid_output_names(df_names)
+    if df_invalid:
+        errors[f"{name}_dfschema_names"] = f"Invalid DFSchema names: {df_invalid}"
+
+
+def _validate_ts_view_outputs(
+    ctx: SessionContext,
+    *,
+    introspector: SchemaIntrospector,
+    name: str,
+    errors: dict[str, str],
+) -> None:
+    try:
+        rows = introspector.describe_query(f"SELECT * FROM {name}")
+    except (RuntimeError, TypeError, ValueError) as exc:
+        errors[name] = str(exc)
+        return
+    columns = _describe_column_names(rows)
+    invalid = _invalid_output_names(columns)
+    if invalid:
+        errors[f"{name}_output_names"] = f"Invalid output column names: {invalid}"
+    _validate_ts_view_dfschema(ctx, name=name, errors=errors)
+    try:
+        rows = ctx.sql(
+            f"SELECT column_name FROM information_schema.columns WHERE table_name = '{name}'"
+        ).to_arrow_table()
+        actual = {str(row.get("column_name")) for row in rows.to_pylist() if row.get("column_name")}
+        missing = sorted(set(columns) - actual)
+        if missing:
+            errors[f"{name}_information_schema"] = f"Missing columns: {missing}."
+    except (RuntimeError, TypeError, ValueError, KeyError) as exc:
+        errors[f"{name}_information_schema"] = str(exc)
 
 
 def _arrow_schema_from_dfschema(schema: object) -> pa.Schema | None:
@@ -3011,6 +3639,7 @@ __all__ = [
     "SCIP_VIEW_SCHEMA_MAP",
     "SYMTABLE_FILES_SCHEMA",
     "SYMTABLE_VIEW_NAMES",
+    "TREE_SITTER_CHECK_VIEWS",
     "TREE_SITTER_FILES_SCHEMA",
     "TREE_SITTER_VIEW_NAMES",
     "datasets_for_path",

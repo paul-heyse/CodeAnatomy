@@ -14,7 +14,7 @@
 ---
 
 ## Scope 1: DDL nullability and constraints in external table DDL
-Status: Planned
+Status: In progress
 
 ### Target file list
 - `src/schema_spec/specs.py`
@@ -37,14 +37,15 @@ def to_sqlglot_column_defs(self, *, dialect: str | None = None) -> list[exp.Colu
 ```
 
 ### Implementation checklist
-- [ ] Extend SQLGlot ColumnDef generation to include NOT NULL when field nullable=False.
-- [ ] Emit key/required constraints in DDL or constraint metadata where supported.
-- [ ] Update registry DDL fingerprints to reflect nullability changes.
+- [x] Extend SQLGlot ColumnDef generation to include NOT NULL when field nullable=False.
+- [x] Emit NOT NULL for key/required fields in DDL where supported.
+- [ ] Emit primary key/constraint metadata in DDL where supported.
+- [x] Update registry DDL fingerprints to reflect nullability changes.
 
 ---
 
 ## Scope 2: TableProvider constraints surface for bytecode tables
-Status: Planned
+Status: In progress
 
 ### Target file list
 - `src/datafusion_engine/registry_bridge.py`
@@ -59,8 +60,9 @@ ctx.register_table("bytecode_files_v1", provider)
 ```
 
 ### Implementation checklist
-- [ ] Implement a TableProvider wrapper that returns constraints().
-- [ ] Map TableSchemaSpec key/required fields into DataFusion constraints.
+- [x] Implement a TableProvider wrapper that returns constraints().
+- [x] Map TableSchemaSpec key fields into DataFusion constraints.
+- [ ] Map required_non_null fields into DataFusion constraints where supported.
 - [ ] Validate constraints are visible via information_schema.table_constraints.
 
 ---
@@ -92,7 +94,7 @@ copy_to_path(
 ---
 
 ## Scope 4: CatalogProvider-driven dynamic dataset discovery
-Status: Planned
+Status: In progress
 
 ### Target file list
 - `src/datafusion_engine/catalog_provider.py`
@@ -108,14 +110,14 @@ schema.register_table(
 ```
 
 ### Implementation checklist
-- [ ] Add lazy table loading that fetches metadata on first access.
+- [x] Add lazy table loading that fetches metadata on first access.
 - [ ] Enable dynamic partition discovery for bytecode datasets.
 - [ ] Record catalog discovery events in diagnostics.
 
 ---
 
 ## Scope 5: SQL-first nested access and map construction
-Status: Planned
+Status: In progress
 
 ### Target file list
 - `src/datafusion_engine/query_fragments.py`
@@ -130,14 +132,15 @@ FROM py_bc_instructions base;
 ```
 
 ### Implementation checklist
-- [ ] Prefer get_field(...) in SQL for nested access over Python-side projection.
+- [x] Switch bytecode instruction span projections to get_field(...).
+- [ ] Migrate remaining bytecode nested access to get_field(...) where applicable.
 - [ ] Build attrs maps via SQL map/make_map where possible.
 - [ ] Remove bespoke attrs shaping once SQL paths are canonical.
 
 ---
 
 ## Scope 6: Union-typed attrs for type fidelity
-Status: Planned
+Status: In progress
 
 ### Target file list
 - `src/datafusion_engine/schema_registry.py`
@@ -153,14 +156,15 @@ FROM py_bc_instruction_attrs;
 ```
 
 ### Implementation checklist
-- [ ] Introduce a union-typed attr value for bytecode attrs.
-- [ ] Emit union_tag/union_extract views for typed inspection.
+- [x] Introduce a union-typed attr value for bytecode attrs.
+- [ ] Convert extract output attrs maps into union-typed values (post-kernel).
+- [ ] Emit union_tag/union_extract views for typed inspection across all bytecode attrs.
 - [ ] Preserve legacy string rendering only for diagnostics.
 
 ---
 
 ## Scope 7: DDL partitioning and ordering contracts for bytecode tables
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/schema_spec/specs.py`
@@ -178,9 +182,9 @@ ExternalTableConfig(
 ```
 
 ### Implementation checklist
-- [ ] Emit PARTITIONED BY in DDL for bytecode tables when configured.
-- [ ] Ensure ordering contracts are validated against file ordering metadata.
-- [ ] Feed partition hints into scan defaults for pruning.
+- [x] Emit PARTITIONED BY in DDL for bytecode tables when configured.
+- [x] Ensure ordering contracts are validated against file ordering metadata.
+- [x] Feed partition hints into scan defaults for pruning.
 
 ---
 
@@ -202,5 +206,5 @@ register_dataset_df(ctx, name="bytecode_files_v1", location=location)
 ### Implementation checklist
 - [ ] Compare delta-log schema JSON vs provider schema vs expected schema.
 - [ ] Prefer DeltaTableProvider insert_into when available.
+- [x] Capture delta/provider/expected schema fingerprints in diagnostics artifacts.
 - [ ] Record schema contract mismatches as diagnostics artifacts.
-

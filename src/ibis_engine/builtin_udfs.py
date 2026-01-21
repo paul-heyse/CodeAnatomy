@@ -32,20 +32,6 @@ class IbisUdfSpec:
     database: str | None = None
 
 
-@ibis.udf.scalar.builtin(name="cpg_score")
-def cpg_score(value: dt.Float64) -> dt.Float64:
-    """Return a placeholder scoring value for backend-native execution.
-
-    Volatility: stable.
-
-    Returns
-    -------
-    ibis.expr.types.Value
-        Placeholder scoring expression.
-    """
-    return value
-
-
 @ibis.udf.scalar.builtin(signature=((dt.string,), dt.int64), name="stable_hash64")
 def stable_hash64(value: Value) -> Value:
     """Return a stable 64-bit hash for string inputs.
@@ -94,32 +80,6 @@ def stable_id(_prefix: Value, value: Value) -> Value:
     return value.cast("string")
 
 
-@ibis.udf.scalar.builtin(
-    signature=((dt.Array(value_type=dt.string),), dt.boolean), name="valid_mask"
-)
-def valid_mask(_values: Value) -> Value:
-    """Return True when all list values are non-null.
-
-    Returns
-    -------
-    ibis.expr.types.Value
-        Validity mask expression.
-    """
-    return ibis.literal(value=True).cast("boolean")
-
-
-@ibis.udf.scalar.builtin(signature=((dt.string,), dt.int32), name="position_encoding_norm")
-def position_encoding_norm(value: Value) -> Value:
-    """Normalize position encoding values to enum integers.
-
-    Returns
-    -------
-    ibis.expr.types.Value
-        Normalized position encoding expression.
-    """
-    return value.cast("int32")
-
-
 @ibis.udf.scalar.builtin(signature=((dt.string, dt.int64, dt.string), dt.int64), name="col_to_byte")
 def col_to_byte(_line: Value, offset: Value, _col_unit: Value) -> Value:
     """Convert a line/offset pair into a UTF-8 byte offset.
@@ -150,12 +110,9 @@ __all__ = [
     "IBIS_UDF_SPECS",
     "IbisUdfSpec",
     "col_to_byte",
-    "cpg_score",
     "ibis_udf_specs",
-    "position_encoding_norm",
     "prefixed_hash64",
     "stable_hash64",
     "stable_hash128",
     "stable_id",
-    "valid_mask",
 ]

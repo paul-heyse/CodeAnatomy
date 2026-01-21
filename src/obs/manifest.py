@@ -21,7 +21,7 @@ from datafusion_engine.extract_registry import dataset_schema
 from extract.evidence_specs import EvidenceSpec, evidence_spec, evidence_specs
 from ibis_engine.param_tables import ParamTableArtifact
 from obs.repro import collect_repro_info
-from schema_spec.system import ddl_fingerprint_from_schema
+from schema_spec.system import dataset_table_ddl_fingerprint
 from sqlglot_tools.optimizer import planner_dag_snapshot
 from storage.deltalake import DeltaWriteOptions, write_dataset_delta
 from storage.io import (
@@ -268,7 +268,7 @@ def _dataset_record_from_table(
         )
 
     summ = table_summary(table)
-    ddl_fp = ddl_fingerprint_from_schema(name, table.schema)
+    ddl_fp = dataset_table_ddl_fingerprint(name)
     ordering_level, ordering_keys = _ordering_payload(table.schema)
     return DatasetRecord(
         name=name,
@@ -300,7 +300,7 @@ def _output_record_from_table(
     fingerprints: OutputFingerprintInputs | None = None,
 ) -> OutputRecord:
     schema_fp = schema_fingerprint(table.schema) if table is not None else None
-    ddl_fp = ddl_fingerprint_from_schema(name, table.schema) if table is not None else None
+    ddl_fp = dataset_table_ddl_fingerprint(name) if table is not None else None
     ordering_level, ordering_keys = (
         _ordering_payload(table.schema) if table is not None else (None, None)
     )

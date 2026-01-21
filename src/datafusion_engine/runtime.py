@@ -16,6 +16,7 @@ import pyarrow as pa
 from datafusion import RuntimeEnvBuilder, SessionConfig, SessionContext
 from datafusion.dataframe import DataFrame
 from datafusion.object_store import LocalFileSystem
+from sqlglot.errors import ParseError
 
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
@@ -34,7 +35,12 @@ from datafusion_engine.query_fragments import fragment_view_specs
 from datafusion_engine.registry_bridge import register_dataset_df
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_registry import (
+    AST_CORE_VIEW_NAMES,
+    AST_OPTIONAL_VIEW_NAMES,
     CST_VIEW_NAMES,
+    SCIP_VIEW_SCHEMA_MAP,
+    TREE_SITTER_CHECK_VIEWS,
+    TREE_SITTER_VIEW_NAMES,
     missing_schema_names,
     nested_schema_names,
     nested_view_specs,
@@ -54,8 +60,13 @@ from engine.plan_cache import PlanCache
 from ibis_engine.registry import DatasetCatalog, DatasetLocation
 from registry_common.arrow_payloads import payload_hash
 from schema_spec.policies import DataFusionWritePolicy
-from schema_spec.system import DataFusionScanOptions, DeltaScanOptions, table_spec_from_schema
+from schema_spec.system import (
+    DataFusionScanOptions,
+    DeltaScanOptions,
+    TableSchemaContract,
+)
 from schema_spec.view_specs import ViewSpec
+from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
 
 if TYPE_CHECKING:
     from ibis.expr.types import Value as IbisValue
@@ -96,7 +107,7 @@ MIB: int = 1024 * KIB
 GIB: int = 1024 * MIB
 
 SETTINGS_HASH_VERSION: int = 1
-TELEMETRY_PAYLOAD_VERSION: int = 1
+TELEMETRY_PAYLOAD_VERSION: int = 2
 
 _MAP_ENTRY_SCHEMA = pa.struct(
     [
@@ -172,6 +183,7 @@ _TELEMETRY_SCHEMA = pa.schema(
     [
         pa.field("version", pa.int32()),
         pa.field("profile_name", pa.string()),
+        pa.field("datafusion_version", pa.string()),
         pa.field("sql_policy_name", pa.string()),
         pa.field("session_config", pa.list_(_MAP_ENTRY_SCHEMA)),
         pa.field("settings_hash", pa.string()),
@@ -227,6 +239,13 @@ def _supports_explain_analyze_level() -> bool:
 DATAFUSION_MAJOR_VERSION: int | None = _parse_major_version(datafusion.__version__)
 DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION: int = 51
 DATAFUSION_OPTIMIZER_DYNAMIC_FILTER_SKIP_VERSION: int = 51
+_AST_OPTIONAL_VIEW_FUNCTIONS: dict[str, tuple[str, ...]] = {
+    "ast_node_attrs": ("map_entries",),
+    "ast_def_attrs": ("map_entries",),
+    "ast_call_attrs": ("map_entries",),
+    "ast_edge_attrs": ("map_entries",),
+    "ast_span_metadata": ("arrow_metadata",),
+}
 
 
 @dataclass(frozen=True)
@@ -746,6 +765,60 @@ def _table_dfschema_tree(ctx: SessionContext, *, name: str) -> str:
     return str(schema)
 
 
+def _sql_parser_dialect(profile: DataFusionRuntimeProfile) -> str:
+    resolved = profile._resolved_schema_hardening()
+    if resolved is not None and resolved.parser_dialect:
+        return resolved.parser_dialect
+    return "datafusion"
+
+
+def _sql_parse_errors(sql: str, *, dialect: str) -> list[dict[str, object]] | None:
+    register_datafusion_dialect()
+    try:
+        parse_sql_strict(sql, dialect=dialect)
+    except ParseError as exc:
+        errors: list[dict[str, object]] = []
+        for item in exc.errors:
+            if not isinstance(item, Mapping):
+                continue
+            entry: dict[str, object] = {}
+            for key in (
+                "description",
+                "line",
+                "col",
+                "start_context",
+                "highlight",
+                "end_context",
+                "into_expression",
+            ):
+                value = item.get(key)
+                if value is not None:
+                    entry[key] = value
+            if entry:
+                errors.append(entry)
+        if not errors:
+            errors.append({"message": str(exc)})
+        return errors
+    except (RuntimeError, TypeError, ValueError) as exc:
+        return [{"message": str(exc)}]
+    return None
+
+
+def _collect_view_sql_parse_errors(
+    registry: DataFusionViewRegistry,
+    *,
+    dialect: str,
+) -> dict[str, list[dict[str, object]]] | None:
+    errors: dict[str, list[dict[str, object]]] = {}
+    for name, sql in registry.entries.items():
+        if not isinstance(sql, str) or not sql:
+            continue
+        parse_errors = _sql_parse_errors(sql, dialect=dialect)
+        if parse_errors:
+            errors[name] = parse_errors
+    return errors or None
+
+
 def register_view_specs(
     ctx: SessionContext,
     *,
@@ -1060,6 +1133,21 @@ def _datafusion_version(ctx: SessionContext) -> str | None:
     values = table["version"].to_pylist()
     value = values[0] if values else None
     return str(value) if value is not None else None
+
+
+def _datafusion_function_names(ctx: SessionContext) -> set[str]:
+    try:
+        table = ctx.sql("SHOW FUNCTIONS").to_arrow_table()
+    except (RuntimeError, TypeError, ValueError):
+        return set()
+    names: set[str] = set()
+    for row in table.to_pylist():
+        for key in ("function_name", "name"):
+            value = row.get(key)
+            if isinstance(value, str):
+                names.add(value.lower())
+                break
+    return names
 
 
 def _default_value_entries(schema: pa.Schema) -> list[dict[str, str]]:
@@ -1437,6 +1525,16 @@ class _ResolvedCompileHooks:
 
 
 @dataclass(frozen=True)
+class _ScipRegistrationSnapshot:
+    name: str
+    requested_name: str
+    location: DatasetLocation
+    expected_fingerprint: str
+    actual_fingerprint: str
+    schema_match: bool
+
+
+@dataclass(frozen=True)
 class DataFusionRuntimeProfile:
     """DataFusion runtime configuration."""
 
@@ -1496,6 +1594,7 @@ class DataFusionRuntimeProfile:
     bytecode_delta_timestamp: str | None = None
     bytecode_delta_constraints: tuple[str, ...] = ()
     bytecode_delta_scan: DeltaScanOptions | None = None
+    scip_dataset_locations: Mapping[str, DatasetLocation] = field(default_factory=dict)
     enable_information_schema: bool = True
     enable_url_table: bool = False  # Dev-only convenience for file-path queries.
     cache_enabled: bool = False
@@ -1727,6 +1826,7 @@ class DataFusionRuntimeProfile:
         ctx: SessionContext,
         *,
         view_errors: Mapping[str, str] | None = None,
+        tree_sitter_checks: Mapping[str, object] | None = None,
     ) -> None:
         if self.diagnostics_sink is None:
             return
@@ -1742,15 +1842,24 @@ class DataFusionRuntimeProfile:
                 type_errors[name] = str(exc)
         if not missing and not type_errors and not view_errors:
             return
-        self.diagnostics_sink.record_artifact(
-            "datafusion_schema_registry_validation_v1",
-            {
-                "event_time_unix_ms": int(time.time() * 1000),
-                "missing": list(missing),
-                "type_errors": type_errors,
-                "view_errors": dict(view_errors) if view_errors else None,
-            },
-        )
+        payload: dict[str, object] = {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "missing": list(missing),
+            "type_errors": type_errors,
+            "view_errors": dict(view_errors) if view_errors else None,
+        }
+        if tree_sitter_checks is not None:
+            payload["tree_sitter_checks"] = dict(tree_sitter_checks)
+        if view_errors and self.view_registry is not None:
+            parser_dialect = _sql_parser_dialect(self)
+            parse_errors = _collect_view_sql_parse_errors(
+                self.view_registry,
+                dialect=parser_dialect,
+            )
+            if parse_errors:
+                payload["sql_parse_errors"] = parse_errors
+                payload["sql_parser_dialect"] = parser_dialect
+        self.diagnostics_sink.record_artifact("datafusion_schema_registry_validation_v1", payload)
 
     def _record_catalog_autoload_snapshot(self, ctx: SessionContext) -> None:
         if self.diagnostics_sink is None:
@@ -1760,7 +1869,7 @@ class DataFusionRuntimeProfile:
         catalog_location, catalog_format = self._effective_catalog_autoload()
         if catalog_location is None and catalog_format is None:
             return
-        introspector = self.schema_introspector(ctx)
+        introspector = self._schema_introspector(ctx)
         payload: dict[str, object] = {
             "event_time_unix_ms": int(time.time() * 1000),
             "catalog_auto_load_location": catalog_location,
@@ -1780,6 +1889,73 @@ class DataFusionRuntimeProfile:
         except (RuntimeError, TypeError, ValueError) as exc:
             payload["error"] = str(exc)
         self.diagnostics_sink.record_artifact("datafusion_catalog_autoload_v1", payload)
+
+    @staticmethod
+    def _ast_feature_gates(
+        ctx: SessionContext,
+    ) -> tuple[tuple[str, ...], tuple[str, ...], dict[str, object]]:
+        version = _datafusion_version(ctx)
+        version_source = "sql"
+        if version is None:
+            version = datafusion.__version__
+            version_source = "package"
+        major = _parse_major_version(version) if version else None
+        functions = _datafusion_function_names(ctx)
+        function_support = {name: name in functions for name in ("map_entries", "arrow_metadata")}
+        enabled_optional: list[str] = []
+        blocked_by_version: list[str] = []
+        missing_functions: dict[str, list[str]] = {}
+        for view in AST_OPTIONAL_VIEW_NAMES:
+            required = _AST_OPTIONAL_VIEW_FUNCTIONS.get(view, ())
+            if major is None:
+                blocked_by_version.append(view)
+                continue
+            missing = [name for name in required if name not in functions]
+            if missing:
+                missing_functions[view] = missing
+                continue
+            enabled_optional.append(view)
+        view_names = AST_CORE_VIEW_NAMES + tuple(enabled_optional)
+        disabled_views = tuple(
+            view for view in AST_OPTIONAL_VIEW_NAMES if view not in enabled_optional
+        )
+        payload: dict[str, object] = {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "datafusion_version": version,
+            "datafusion_version_source": version_source,
+            "datafusion_version_major": major,
+            "required_functions": function_support,
+            "enabled_views": list(view_names),
+            "disabled_views": list(disabled_views) if disabled_views else None,
+            "blocked_by_version": blocked_by_version or None,
+            "missing_functions": missing_functions or None,
+        }
+        return view_names, disabled_views, payload
+
+    def _record_ast_feature_gates(self, payload: Mapping[str, object]) -> None:
+        if self.diagnostics_sink is None:
+            return
+        self.diagnostics_sink.record_artifact("datafusion_ast_feature_gates_v1", payload)
+
+    def _record_ast_span_metadata(self, ctx: SessionContext) -> None:
+        if self.diagnostics_sink is None:
+            return
+        payload: dict[str, object] = {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "dataset": "ast_files_v1",
+        }
+        try:
+            table = ctx.sql("SELECT * FROM ast_span_metadata").to_arrow_table()
+            rows = table.to_pylist()
+            schema = schema_for("ast_files_v1")
+            payload["schema_fingerprint"] = schema_fingerprint(schema)
+            payload["metadata"] = rows[0] if rows else None
+        except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+            payload["error"] = str(exc)
+        version = _datafusion_version(ctx)
+        if version is not None:
+            payload["datafusion_version"] = version
+        self.diagnostics_sink.record_artifact("datafusion_ast_span_metadata_v1", payload)
 
     def _ast_dataset_location(self) -> DatasetLocation | None:
         if self.ast_external_location and self.ast_delta_location:
@@ -1811,6 +1987,10 @@ class DataFusionRuntimeProfile:
                 unbounded=self.ast_external_unbounded,
                 schema_force_view_types=self.ast_external_schema_force_view_types,
                 skip_arrow_metadata=self.ast_external_skip_arrow_metadata,
+                table_schema_contract=TableSchemaContract(
+                    file_schema=expected_schema,
+                    partition_cols=self.ast_external_partition_cols,
+                ),
                 listing_table_factory_infer_partitions=(
                     self.ast_external_listing_table_factory_infer_partitions
                 ),
@@ -1827,9 +2007,18 @@ class DataFusionRuntimeProfile:
                 format=self.ast_external_format,
                 datafusion_provider=self.ast_external_provider,
                 datafusion_scan=scan,
-                table_spec=table_spec_from_schema("ast_files_v1", expected_schema),
             )
         return None
+
+    def ast_dataset_location(self) -> DatasetLocation | None:
+        """Return the configured AST dataset location, when available.
+
+        Returns
+        -------
+        DatasetLocation | None
+            DatasetLocation for AST outputs or ``None`` when not configured.
+        """
+        return self._ast_dataset_location()
 
     def _register_ast_dataset(self, ctx: SessionContext) -> None:
         location = self._ast_dataset_location()
@@ -1887,6 +2076,10 @@ class DataFusionRuntimeProfile:
                 unbounded=self.bytecode_external_unbounded,
                 schema_force_view_types=self.bytecode_external_schema_force_view_types,
                 skip_arrow_metadata=self.bytecode_external_skip_arrow_metadata,
+                table_schema_contract=TableSchemaContract(
+                    file_schema=expected_schema,
+                    partition_cols=self.bytecode_external_partition_cols,
+                ),
                 listing_table_factory_infer_partitions=(
                     self.bytecode_external_listing_table_factory_infer_partitions
                 ),
@@ -1903,7 +2096,6 @@ class DataFusionRuntimeProfile:
                 format=self.bytecode_external_format,
                 datafusion_provider=self.bytecode_external_provider,
                 datafusion_scan=scan,
-                table_spec=table_spec_from_schema("bytecode_files_v1", expected_schema),
             )
         return None
 
@@ -1932,6 +2124,70 @@ class DataFusionRuntimeProfile:
             )
             raise ValueError(msg)
         self._record_bytecode_registration(location=location)
+
+    def _register_scip_datasets(self, ctx: SessionContext) -> None:
+        if not self.scip_dataset_locations:
+            return
+        for name, location in sorted(self.scip_dataset_locations.items()):
+            schema_name = SCIP_VIEW_SCHEMA_MAP.get(name, name)
+            try:
+                expected_schema = schema_for(schema_name)
+            except KeyError as exc:
+                msg = f"Unknown SCIP dataset name: {name!r}."
+                raise ValueError(msg) from exc
+            resolved = location
+            scan = resolved.datafusion_scan
+            if scan is None:
+                scan = DataFusionScanOptions(
+                    table_schema_contract=TableSchemaContract(file_schema=expected_schema),
+                )
+            elif scan.table_schema_contract is None:
+                scan = replace(
+                    scan,
+                    table_schema_contract=TableSchemaContract(
+                        file_schema=expected_schema,
+                        partition_cols=scan.partition_cols,
+                    ),
+                )
+            resolved = replace(resolved, datafusion_scan=scan)
+            deregister = getattr(ctx, "deregister_table", None)
+            if callable(deregister):
+                with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+                    deregister(schema_name)
+            df = register_dataset_df(
+                ctx,
+                name=schema_name,
+                location=resolved,
+                runtime_profile=self,
+            )
+            expected = expected_schema.remove_metadata()
+            actual = df.schema().remove_metadata()
+            expected_fingerprint = schema_fingerprint(expected)
+            actual_fingerprint = schema_fingerprint(actual)
+            match = expected_fingerprint == actual_fingerprint
+            if not match and not self.enable_schema_evolution_adapter:
+                msg = (
+                    "SCIP dataset schema mismatch for "
+                    f"{schema_name!r}: expected {expected_fingerprint}, "
+                    f"observed {actual_fingerprint}."
+                )
+                raise ValueError(msg)
+            if not match:
+                logger.warning(
+                    "SCIP dataset schema mismatch: %s expected %s observed %s",
+                    schema_name,
+                    expected_fingerprint,
+                    actual_fingerprint,
+                )
+            snapshot = _ScipRegistrationSnapshot(
+                name=schema_name,
+                requested_name=name,
+                location=resolved,
+                expected_fingerprint=expected_fingerprint,
+                actual_fingerprint=actual_fingerprint,
+                schema_match=match,
+            )
+            self._record_scip_registration(snapshot=snapshot)
 
     def _record_ast_registration(self, *, location: DatasetLocation) -> None:
         if self.diagnostics_sink is None:
@@ -2000,6 +2256,49 @@ class DataFusionRuntimeProfile:
             "delta_constraints": list(location.delta_constraints),
         }
         self.diagnostics_sink.record_artifact("datafusion_bytecode_dataset_v1", payload)
+
+    def _record_scip_registration(
+        self,
+        *,
+        snapshot: _ScipRegistrationSnapshot,
+    ) -> None:
+        if self.diagnostics_sink is None:
+            return
+        location = snapshot.location
+        scan = location.datafusion_scan
+        payload = {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "name": snapshot.name,
+            "requested_name": snapshot.requested_name,
+            "location": str(location.path),
+            "format": location.format,
+            "datafusion_provider": location.datafusion_provider,
+            "file_sort_order": list(scan.file_sort_order) if scan is not None else None,
+            "partition_cols": [
+                {"name": col_name, "dtype": str(dtype)}
+                for col_name, dtype in (scan.partition_cols if scan is not None else ())
+            ],
+            "schema_force_view_types": scan.schema_force_view_types if scan is not None else None,
+            "skip_arrow_metadata": scan.skip_arrow_metadata if scan is not None else None,
+            "listing_table_factory_infer_partitions": (
+                scan.listing_table_factory_infer_partitions if scan is not None else None
+            ),
+            "listing_table_ignore_subdirectory": (
+                scan.listing_table_ignore_subdirectory if scan is not None else None
+            ),
+            "collect_statistics": scan.collect_statistics if scan is not None else None,
+            "meta_fetch_concurrency": scan.meta_fetch_concurrency if scan is not None else None,
+            "list_files_cache_limit": scan.list_files_cache_limit if scan is not None else None,
+            "list_files_cache_ttl": scan.list_files_cache_ttl if scan is not None else None,
+            "unbounded": scan.unbounded if scan is not None else None,
+            "delta_version": location.delta_version,
+            "delta_timestamp": location.delta_timestamp,
+            "delta_constraints": list(location.delta_constraints),
+            "expected_schema_fingerprint": snapshot.expected_fingerprint,
+            "observed_schema_fingerprint": snapshot.actual_fingerprint,
+            "schema_match": snapshot.schema_match,
+        }
+        self.diagnostics_sink.record_artifact("datafusion_scip_datasets_v1", payload)
 
     def _validate_ast_catalog_autoload(self, ctx: SessionContext) -> None:
         if self.ast_catalog_location is None and self.ast_catalog_format is None:
@@ -2085,6 +2384,97 @@ class DataFusionRuntimeProfile:
             payload["error"] = str(exc)
         self.diagnostics_sink.record_artifact("datafusion_tree_sitter_stats_v1", payload)
 
+    def _record_tree_sitter_view_schemas(self, ctx: SessionContext) -> None:
+        if self.diagnostics_sink is None:
+            return
+        views: list[dict[str, object]] = []
+        payload: dict[str, object] = {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "dataset": "tree_sitter_files_v1",
+            "views": views,
+        }
+        errors: dict[str, str] = {}
+        introspector = SchemaIntrospector(ctx)
+        for name in TREE_SITTER_VIEW_NAMES:
+            try:
+                plan = _table_logical_plan(ctx, name=name)
+                dfschema_tree = _table_dfschema_tree(ctx, name=name)
+            except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+                errors[name] = str(exc)
+                continue
+            views.append(
+                {
+                    "name": name,
+                    "logical_plan": plan,
+                    "dfschema_tree": dfschema_tree,
+                }
+            )
+        try:
+            payload["df_settings"] = introspector.settings_snapshot()
+        except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+            errors["df_settings"] = str(exc)
+        if errors:
+            payload["errors"] = errors
+        version = _datafusion_version(ctx)
+        if version is not None:
+            payload["datafusion_version"] = version
+        self.diagnostics_sink.record_artifact(
+            "datafusion_tree_sitter_plan_schema_v1",
+            payload,
+        )
+
+    def _record_tree_sitter_cross_checks(self, ctx: SessionContext) -> dict[str, object] | None:
+        if self.diagnostics_sink is None:
+            return None
+        views: list[dict[str, object]] = []
+        payload: dict[str, object] = {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "dataset": "tree_sitter_files_v1",
+            "views": views,
+        }
+        errors: dict[str, str] = {}
+        for name in TREE_SITTER_CHECK_VIEWS:
+            try:
+                summary_rows = (
+                    ctx.sql(
+                        "SELECT COUNT(*) AS row_count, "
+                        "SUM(CASE WHEN mismatch THEN 1 ELSE 0 END) AS mismatch_count "
+                        f"FROM {name}"
+                    )
+                    .to_arrow_table()
+                    .to_pylist()
+                )
+                summary: dict[str, object] = summary_rows[0] if summary_rows else {}
+                raw_row_count = summary.get("row_count")
+                row_count = (
+                    int(raw_row_count) if isinstance(raw_row_count, (float, int, str)) else 0
+                )
+                raw_mismatch_count = summary.get("mismatch_count")
+                mismatch_count = (
+                    int(raw_mismatch_count)
+                    if isinstance(raw_mismatch_count, (float, int, str))
+                    else 0
+                )
+                entry: dict[str, object] = {
+                    "name": name,
+                    "row_count": row_count,
+                    "mismatch_count": mismatch_count,
+                }
+                if mismatch_count:
+                    sample_rows = (
+                        ctx.sql(f"SELECT * FROM {name} WHERE mismatch LIMIT 25")
+                        .to_arrow_table()
+                        .to_pylist()
+                    )
+                    entry["sample"] = sample_rows or None
+                views.append(entry)
+            except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+                errors[name] = str(exc)
+        if errors:
+            payload["errors"] = errors
+        self.diagnostics_sink.record_artifact("datafusion_tree_sitter_cross_checks_v1", payload)
+        return payload
+
     def _record_cst_view_plans(self, ctx: SessionContext) -> None:
         if self.diagnostics_sink is None:
             return
@@ -2162,7 +2552,7 @@ class DataFusionRuntimeProfile:
             return
         if not self.enable_information_schema:
             return
-        introspector = self.schema_introspector(ctx)
+        introspector = self._schema_introspector(ctx)
         payload: dict[str, object] = {
             "event_time_unix_ms": int(time.time() * 1000),
         }
@@ -2191,29 +2581,12 @@ class DataFusionRuntimeProfile:
             payload,
         )
 
-    def _install_schema_registry(self, ctx: SessionContext) -> None:
-        """Register canonical nested schemas on the session context.
-
-        Raises
-        ------
-        ValueError
-            Raised when schema registration or validation fails.
-        """
-        if not self.enable_schema_registry:
-            return
-        self._record_catalog_autoload_snapshot(ctx)
-        register_all_schemas(ctx)
-        ast_registration = (
-            self.ast_external_location is not None or self.ast_delta_location is not None
-        )
-        if ast_registration:
-            self._register_ast_dataset(ctx)
-        bytecode_registration = (
-            self.bytecode_external_location is not None or self.bytecode_delta_location is not None
-        )
-        if bytecode_registration:
-            self._register_bytecode_dataset(ctx)
-        fragment_views = fragment_view_specs(ctx)
+    def _register_schema_views(
+        self,
+        ctx: SessionContext,
+        *,
+        fragment_views: Sequence[ViewSpec],
+    ) -> set[str]:
         fragment_names = {view.name for view in fragment_views}
         if fragment_views:
             register_view_specs(
@@ -2232,6 +2605,15 @@ class DataFusionRuntimeProfile:
                 runtime_profile=self,
                 validate=True,
             )
+        return fragment_names
+
+    def _validate_catalog_autoloads(
+        self,
+        ctx: SessionContext,
+        *,
+        ast_registration: bool,
+        bytecode_registration: bool,
+    ) -> None:
         if not ast_registration and (
             self.ast_catalog_location is not None or self.ast_catalog_format is not None
         ):
@@ -2248,14 +2630,36 @@ class DataFusionRuntimeProfile:
                 with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
                     deregister("bytecode_files_v1")
             self._validate_bytecode_catalog_autoload(ctx)
+
+    def _record_schema_diagnostics(
+        self,
+        ctx: SessionContext,
+        *,
+        ast_view_names: Sequence[str],
+    ) -> Mapping[str, object] | None:
         self._record_cst_schema_diagnostics(ctx)
         self._record_cst_view_plans(ctx)
         self._record_cst_dfschema_snapshots(ctx)
         self._record_tree_sitter_stats(ctx)
+        self._record_tree_sitter_view_schemas(ctx)
+        tree_sitter_checks = self._record_tree_sitter_cross_checks(ctx)
+        if "ast_span_metadata" in ast_view_names:
+            self._record_ast_span_metadata(ctx)
         self._record_bytecode_metadata(ctx)
+        return tree_sitter_checks
+
+    @staticmethod
+    def _validate_schema_views(
+        ctx: SessionContext,
+        *,
+        ast_view_names: Sequence[str],
+    ) -> dict[str, str]:
         view_errors: dict[str, str] = {}
+        try:
+            validate_ast_views(ctx, view_names=ast_view_names)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            view_errors["ast_views"] = str(exc)
         for label, validator in (
-            ("ast_views", validate_ast_views),
             ("cst_views", validate_cst_views),
             ("ts_views", validate_ts_views),
             ("scip_views", validate_scip_views),
@@ -2266,7 +2670,50 @@ class DataFusionRuntimeProfile:
                 validator(ctx)
             except (RuntimeError, TypeError, ValueError) as exc:
                 view_errors[label] = str(exc)
-        self._record_schema_registry_validation(ctx, view_errors=view_errors or None)
+        return view_errors
+
+    def _install_schema_registry(self, ctx: SessionContext) -> None:
+        """Register canonical nested schemas on the session context.
+
+        Raises
+        ------
+        ValueError
+            Raised when schema registration or validation fails.
+        """
+        if not self.enable_schema_registry:
+            return
+        self._record_catalog_autoload_snapshot(ctx)
+        register_all_schemas(ctx)
+        ast_view_names, ast_optional_disabled, ast_gate_payload = self._ast_feature_gates(ctx)
+        self._record_ast_feature_gates(ast_gate_payload)
+        ast_registration = (
+            self.ast_external_location is not None or self.ast_delta_location is not None
+        )
+        if ast_registration:
+            self._register_ast_dataset(ctx)
+        bytecode_registration = (
+            self.bytecode_external_location is not None or self.bytecode_delta_location is not None
+        )
+        if bytecode_registration:
+            self._register_bytecode_dataset(ctx)
+        self._register_scip_datasets(ctx)
+        fragment_views = fragment_view_specs(ctx, exclude=ast_optional_disabled)
+        self._register_schema_views(ctx, fragment_views=fragment_views)
+        self._validate_catalog_autoloads(
+            ctx,
+            ast_registration=ast_registration,
+            bytecode_registration=bytecode_registration,
+        )
+        tree_sitter_checks = self._record_schema_diagnostics(
+            ctx,
+            ast_view_names=ast_view_names,
+        )
+        view_errors = self._validate_schema_views(ctx, ast_view_names=ast_view_names)
+        self._record_schema_registry_validation(
+            ctx,
+            view_errors=view_errors or None,
+            tree_sitter_checks=tree_sitter_checks,
+        )
         if view_errors:
             msg = f"Schema view validation failed: {view_errors}."
             raise ValueError(msg)
@@ -2714,7 +3161,7 @@ class DataFusionRuntimeProfile:
         return self.view_registry.snapshot()
 
     @staticmethod
-    def schema_introspector(ctx: SessionContext) -> SchemaIntrospector:
+    def _schema_introspector(ctx: SessionContext) -> SchemaIntrospector:
         """Return a schema introspector for the session.
 
         Returns
@@ -2838,6 +3285,7 @@ class DataFusionRuntimeProfile:
             for name, dtype in self.bytecode_external_partition_cols
         ]
         return {
+            "datafusion_version": datafusion.__version__,
             "target_partitions": self.target_partitions,
             "batch_size": self.batch_size,
             "spill_dir": self.spill_dir,
@@ -2891,7 +3339,9 @@ class DataFusionRuntimeProfile:
                 self.bytecode_external_listing_table_ignore_subdirectory
             ),
             "bytecode_external_collect_statistics": self.bytecode_external_collect_statistics,
-            "bytecode_external_meta_fetch_concurrency": self.bytecode_external_meta_fetch_concurrency,
+            "bytecode_external_meta_fetch_concurrency": (
+                self.bytecode_external_meta_fetch_concurrency
+            ),
             "bytecode_external_list_files_cache_ttl": self.bytecode_external_list_files_cache_ttl,
             "bytecode_external_list_files_cache_limit": (
                 self.bytecode_external_list_files_cache_limit
@@ -2980,8 +3430,9 @@ class DataFusionRuntimeProfile:
         ansi_mode = _ansi_mode(settings)
         parser_dialect = settings.get("datafusion.sql_parser.dialect")
         return {
-            "version": 1,
+            "version": 2,
             "profile_name": self.config_policy_name,
+            "datafusion_version": datafusion.__version__,
             "schema_hardening_name": self.schema_hardening_name,
             "sql_policy_name": self.sql_policy_name,
             "session_config": dict(settings),
@@ -3109,6 +3560,7 @@ class DataFusionRuntimeProfile:
         return {
             "version": TELEMETRY_PAYLOAD_VERSION,
             "profile_name": self.config_policy_name,
+            "datafusion_version": datafusion.__version__,
             "sql_policy_name": self.sql_policy_name,
             "session_config": _map_entries(settings),
             "settings_hash": self.settings_hash(),

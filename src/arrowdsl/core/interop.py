@@ -461,6 +461,8 @@ def reader_from_arrow_stream(
 
     Raises
     ------
+    RuntimeError
+        Raised when schema projection requires unavailable C stream support.
     TypeError
         Raised when the object does not expose the Arrow C stream protocol.
 

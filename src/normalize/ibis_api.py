@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import cast
+from typing import Literal, cast
 
 import ibis
 from ibis.backends import BaseBackend
@@ -36,6 +36,9 @@ from normalize.ibis_spans import (
     add_ast_byte_spans_ibis,
     add_scip_occurrence_byte_spans_ibis,
     anchor_instructions_ibis,
+    normalize_cst_callsites_spans_ibis,
+    normalize_cst_defs_spans_ibis,
+    normalize_cst_imports_spans_ibis,
 )
 from normalize.registry_specs import (
     dataset_contract,
@@ -344,6 +347,69 @@ def add_scip_occurrence_byte_spans(
     )
 
 
+def normalize_cst_callsites_spans(
+    py_cst_callsites: NormalizeSource,
+    *,
+    backend: BaseBackend | None = None,
+    primary: Literal["callee", "call"] = "callee",
+) -> TableLike:
+    """Ensure callsites expose canonical bstart/bend aliases.
+
+    Returns
+    -------
+    TableLike
+        Callsites table with canonical span aliases.
+    """
+    ibis_backend = _require_backend(backend)
+    return normalize_cst_callsites_spans_ibis(
+        _span_source("py_cst_callsites", py_cst_callsites),
+        backend=ibis_backend,
+        primary=primary,
+    )
+
+
+def normalize_cst_imports_spans(
+    py_cst_imports: NormalizeSource,
+    *,
+    backend: BaseBackend | None = None,
+    primary: Literal["alias", "stmt"] = "alias",
+) -> TableLike:
+    """Ensure imports expose canonical bstart/bend aliases.
+
+    Returns
+    -------
+    TableLike
+        Imports table with canonical span aliases.
+    """
+    ibis_backend = _require_backend(backend)
+    return normalize_cst_imports_spans_ibis(
+        _span_source("py_cst_imports", py_cst_imports),
+        backend=ibis_backend,
+        primary=primary,
+    )
+
+
+def normalize_cst_defs_spans(
+    py_cst_defs: NormalizeSource,
+    *,
+    backend: BaseBackend | None = None,
+    primary: Literal["name", "def"] = "name",
+) -> TableLike:
+    """Ensure defs expose canonical bstart/bend aliases.
+
+    Returns
+    -------
+    TableLike
+        Definitions table with canonical span aliases.
+    """
+    ibis_backend = _require_backend(backend)
+    return normalize_cst_defs_spans_ibis(
+        _span_source("py_cst_defs", py_cst_defs),
+        backend=ibis_backend,
+        primary=primary,
+    )
+
+
 def anchor_instructions(
     file_line_index: NormalizeSource,
     py_bc_instructions: NormalizeSource,
@@ -396,6 +462,9 @@ __all__ = [
     "build_cfg_edges",
     "build_def_use_events",
     "collect_diags",
+    "normalize_cst_callsites_spans",
+    "normalize_cst_defs_spans",
+    "normalize_cst_imports_spans",
     "normalize_type_exprs",
     "normalize_types",
     "run_reaching_defs",

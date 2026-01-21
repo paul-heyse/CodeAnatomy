@@ -22,6 +22,7 @@ from datafusion_engine.extract_extractors import (
     select_extractors_for_outputs,
 )
 from datafusion_engine.extract_registry import dataset_query, dataset_schema, extract_metadata
+from engine.materialize import write_ast_outputs
 from extract.evidence_plan import EvidencePlan
 from extract.schema_ops import ExtractNormalizeOptions, normalize_extract_output
 from extract.spec_helpers import plan_requires_row, rule_execution_options
@@ -399,6 +400,7 @@ def materialize_extract_plan(
         normalize=resolved.normalize,
         apply_post_kernels=resolved.apply_post_kernels,
     )
+    write_ast_outputs(name, normalized, ctx=ctx)
     if resolved.prefer_reader:
         if isinstance(normalized, pa.Table):
             table = cast("pa.Table", normalized)

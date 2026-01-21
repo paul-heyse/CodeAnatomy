@@ -4,7 +4,7 @@
 - Keep `Document.position_encoding` as the source of truth for ranges (no fallback to metadata).
 - Preserve per-document symbol attribution (do not collapse all symbols into index-level only).
 - Expose `tool_info.arguments` and project identity values in scip metadata views.
-- Maintain compatibility with existing `scip_index_v1` nested schema outputs.
+- Fully migrate to flat `scip_*_v1` outputs (no nested `scip_index_v1` output).
 
 ## Workstream 1: Metadata + identity enrichment
 Goal: surface traceability fields in the scip metadata view and schema, including tool arguments and
@@ -49,55 +49,44 @@ FROM base
 ```
 
 Implementation checklist
-- [ ] Inspect `scip_pb2.Index` to confirm identity fields and exact names.
-- [ ] Extend `SCIP_METADATA_T` and `SCIP_INDEX_SCHEMA` to carry identity values.
-- [ ] Update `scip_metadata_sql` to project tool arguments and identity values.
-- [ ] Add schema introspection checks for new columns (information_schema validation).
+- [x] Inspect `scip_pb2.Index` to confirm identity fields and exact names.
+- [x] Extend `SCIP_METADATA_SCHEMA` to carry identity values.
+- [x] Update `scip_metadata_sql` to expose tool arguments and identity values (pass-through).
+- [x] Add schema introspection checks for new columns (information_schema validation).
 
 ## Workstream 2: Per-document symbol attribution + signature docs
 Goal: preserve `documents.symbols` lineage and surface signature documentation occurrences for
 analytics and joinability at the document level.
 
 Target files
+- `src/extract/scip_extract.py`
 - `src/datafusion_engine/schema_registry.py`
 - `src/datafusion_engine/query_fragments.py`
 - `tests/unit/test_datafusion_nested_registry.py`
 
 Representative code patterns
 ```python
-NESTED_DATASET_INDEX["scip_document_symbols"] = {
-    "root": "scip_index_v1",
-    "path": "documents.symbols",
-    "role": "derived",
-    "context": {"relative_path": "documents.relative_path"},
+row = {
+    "document_id": document_id,
+    "path": rel_path,
+    **_symbol_info_base(symbol_entry, scip_pb2=scip_pb2)[0],
 }
 ```
 
-```sql
-WITH base AS ({{ nested_base_sql("scip_document_symbols") }})
-SELECT
-  prefixed_hash64("scip_doc", base.relative_path) AS document_id,
-  base.relative_path AS path,
-  base.symbol AS symbol,
-  base.display_name AS display_name,
-  base.kind AS kind,
-  base.enclosing_symbol AS enclosing_symbol
-FROM base
-```
-
 Implementation checklist
-- [ ] Add nested dataset spec for `documents.symbols` (new dataset name).
-- [ ] Add new query fragment for document symbol rows with `document_id`.
-- [ ] Add nested dataset spec for `signature_documentation.occurrences` if used.
-- [ ] Add unit tests for nested SQL resolution of new datasets.
+- [x] Add `scip_document_symbols_v1` schema/output mapping with `document_id` + `path`.
+- [x] Emit per-document symbol rows in extraction.
+- [x] Add `scip_signature_occurrences_v1` dataset for signature doc occurrences.
+- [x] Add unit tests for schema expectations (document linkage + role flags).
 
 ## Workstream 3: Role/kind decoding + relationship analytics
 Goal: expose high-value analytic columns derived from `symbol_roles`, `syntax_kind`, and
 `relationships` without requiring consumers to re-implement bitset logic.
 
 Target files
-- `src/datafusion_engine/query_fragments.py`
+- `src/extract/scip_extract.py`
 - `src/datafusion_engine/schema_registry.py`
+- `src/datafusion_engine/query_fragments.py`
 - `docs/python_library_reference/scip_python_overview.md`
 
 Representative code patterns
@@ -118,10 +107,11 @@ FROM base
 ```
 
 Implementation checklist
-- [ ] Add decoded role columns in `scip_occurrences_sql`.
-- [ ] Add decoded relationship views (implementations, type definitions, references).
-- [ ] Add a small mapping helper or inline CASE for syntax kinds (keep open-ended).
-- [ ] Document the role/kind decoding contract in the SCIP reference doc.
+- [x] Add decoded role columns in `scip_occurrences_v1` output schema.
+- [x] Add relationship analytics via `scip_symbol_relationships_v1` flags.
+- [x] Add syntax kind + kind name decoding at extract time.
+- [ ] Document the role/kind decoding contract in the SCIP reference doc
+      (blocked: do not edit `docs/python_library_reference`).
 
 ## Workstream 4: Position encoding guardrails + diagnostics
 Goal: keep `Document.position_encoding` as the authoritative source while detecting missing or
@@ -129,6 +119,7 @@ inconsistent encodings early.
 
 Target files
 - `src/extract/scip_extract.py`
+- `src/hamilton_pipeline/modules/normalization.py`
 - `src/datafusion_engine/runtime.py`
 - `src/datafusion_engine/query_fragments.py`
 
@@ -146,12 +137,12 @@ WHERE position_encoding IS NULL
 ```
 
 Implementation checklist
-- [ ] Add diagnostics counters for missing `position_encoding`.
-- [ ] Surface a diagnostics view or payload via the diagnostics sink.
-- [ ] Add a normalization guard that logs when encodings are inconsistent.
+- [x] Add diagnostics counters for missing `position_encoding`.
+- [x] Surface diagnostics payloads via the diagnostics sink.
+- [x] Add a normalization guard that logs inconsistent encodings.
 
 ## Workstream 5: Document.text retention decision
-Goal: decide whether to retain `Document.text` in `scip_index_v1` or move to an optional dataset.
+Goal: decide whether to retain `Document.text` in a flat dataset or make it optional.
 
 Target files
 - `src/extract/scip_extract.py`
@@ -166,9 +157,9 @@ text = _string_value(getattr(doc, "text", None)) if include_text else None
 ```
 
 Implementation checklist
-- [ ] Add telemetry for total text size and row counts to inform the decision.
-- [ ] If retained, document its use cases and add a size cap option.
-- [ ] If removed or optional, add a `scip_document_texts` dataset or config gate.
+- [x] Add telemetry for total text size and row counts to inform the decision.
+- [ ] Add a size cap option for `include_document_text`.
+- [x] Keep `scip_document_texts_v1` as an optional dataset gate.
 
 ## Workstream 6: Scalable extraction path (streaming or flattened outputs)
 Goal: avoid full in-memory materialization of all documents/occurrences/symbols for large indexes.
@@ -191,10 +182,10 @@ reader = pa.RecordBatchReader.from_pylist(
 ```
 
 Implementation checklist
-- [ ] Add a fast path that emits flattened tables directly (documents/occurrences/symbols).
-- [ ] Keep the nested `scip_index_v1` output for compatibility (metadata-only if needed).
-- [ ] Support `prefer_reader=True` by returning RecordBatchReaders for large outputs.
-- [ ] Add a size-based switch to pick the streaming path automatically.
+- [x] Add a fast path that emits flattened tables directly (documents/occurrences/symbols).
+- [x] Remove nested `scip_index_v1` output in favor of flat tables.
+- [x] Support `prefer_reader=True` by returning RecordBatchReaders for large outputs.
+- [x] Add a size-based switch to pick the streaming path automatically.
 
 ## Workstream 7: SCIP CLI + environment tooling
 Goal: leverage scip-python and scip CLI capabilities to improve determinism and diagnostics.
@@ -227,9 +218,9 @@ scip test --check-documents index.scip
 ```
 
 Implementation checklist
-- [ ] Add `scripts/gen_scip_env.py` and document usage in the env config guide.
-- [ ] Add optional pipeline hooks to run `scip print`/`snapshot`/`test`.
-- [ ] Capture tool versions (`scip-python --version`, `scip --version`) in diagnostics.
+- [x] Add `scripts/gen_scip_env.py` and document usage in the env config guide.
+- [x] Add optional pipeline hooks to run `scip print`/`snapshot`/`test`.
+- [x] Capture tool versions (`scip-python --version`, `scip --version`) in diagnostics.
 
 ## Workstream 8: Incremental indexing + shard reuse
 Goal: use scip-python shard artifacts to avoid full re-indexing for large repos.
@@ -249,9 +240,9 @@ if config.use_incremental_shards:
 ```
 
 Implementation checklist
-- [ ] Add config flags for shard reuse (shards dir, manifest path).
-- [ ] Wire shard options into `build_scip_index_options`.
-- [ ] Add diagnostics for shard hit/miss counts.
+- [x] Add config flags for shard reuse (shards dir, manifest path).
+- [x] Wire shard options into `build_scip_index_options`.
+- [x] Add diagnostics for shard hit/miss counts.
 
 ## Workstream 9: DataFusion view validation + schema introspection for SCIP
 Goal: give SCIP views the same validation coverage as AST/CST/bytecode views.
@@ -273,9 +264,9 @@ def validate_scip_views(ctx: SessionContext) -> None:
 ```
 
 Implementation checklist
-- [ ] Define `SCIP_VIEW_NAMES` and `SCIP_REQUIRED_FUNCTIONS`.
-- [ ] Add view validation in runtime diagnostics (parallel to CST/bytecode).
-- [ ] Add information_schema checks for new columns (metadata, doc symbols, roles).
+- [x] Define `SCIP_VIEW_NAMES` and `SCIP_REQUIRED_FUNCTIONS`.
+- [x] Add view validation in runtime diagnostics (parallel to CST/bytecode).
+- [x] Add information_schema checks for new columns (metadata, doc symbols, roles).
 
 ## Workstream 10: DataFusion registration + schema evolution for persisted outputs
 Goal: register persisted scip outputs with explicit schemas and support schema evolution.
@@ -296,11 +287,12 @@ ctx.register_listing_table(
 ```
 
 Implementation checklist
-- [ ] Add dataset registration for flattened scip outputs (parquet/delta).
-- [ ] Enable schema evolution adapter for scip outputs when versions change.
+- [ ] Add pipeline wiring that populates `scip_dataset_locations` for persisted outputs.
+- [x] Enable schema evolution adapter for scip outputs when versions change.
 - [ ] Record information_schema snapshots after registration for audits.
 
 ## Cross-cutting tests
-- Unit tests for new nested dataset names and base SQL resolution.
-- Integration tests for scip metadata view columns and role decoding.
-- Optional golden tests for `scip snapshot` output stability.
+- [x] Unit tests for updated SCIP schemas (document linkage + role columns).
+- [ ] Integration tests for scip metadata view columns and role decoding.
+- [ ] Update `tests/fixtures/rule_signatures.json` once rule signature generation runs cleanly.
+- [ ] Optional golden tests for `scip snapshot` output stability.

@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from ibis.backends import BaseBackend
 
 from normalize.ibis_plan_builders import IbisPlanCatalog, IbisPlanSource
-from normalize.text_index import RepoTextIndex
 
 
 @dataclass(frozen=True)
@@ -28,7 +27,6 @@ class NormalizeCatalogInputs:
     py_bc_code_units: IbisPlanSource | None = None
     py_bc_instructions: IbisPlanSource | None = None
     span_errors: IbisPlanSource | None = None
-    repo_text_index: RepoTextIndex | None = None
 
     def as_tables(self) -> Mapping[str, IbisPlanSource | None]:
         """Return catalog tables keyed by dataset name.
@@ -68,11 +66,7 @@ def normalize_plan_catalog(
         Catalog with base sources wired for derived plans.
     """
     tables = {name: value for name, value in inputs.as_tables().items() if value is not None}
-    return IbisPlanCatalog(
-        backend=backend,
-        tables=tables,
-        repo_text_index=inputs.repo_text_index,
-    )
+    return IbisPlanCatalog(backend=backend, tables=tables)
 
 
 __all__ = [

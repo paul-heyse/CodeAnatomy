@@ -15,7 +15,7 @@
 ---
 
 ## Scope 0: Cross-repo CatalogProvider chain and dynamic lookup
-Status: Planned
+Status: Completed
 
 ### Objective
 Mount multiple repo catalogs under one SessionContext using CatalogProvider and
@@ -28,9 +28,9 @@ SchemaProvider chains with explicit defaults, so cross-repo queries are native.
 - `src/datafusion_engine/schema_introspection.py`
 
 ### Implementation checklist
-- [ ] Add a multi-catalog registry provider and mount it under a single SessionContext.
-- [ ] Add default catalog/schema selectors for cross-repo routing.
-- [ ] Record catalog snapshots in diagnostics for debugging.
+- [x] Add a multi-catalog registry provider and mount it under a single SessionContext.
+- [x] Add default catalog/schema selectors for cross-repo routing.
+- [x] Record catalog snapshots in diagnostics for debugging.
 
 ### Code pattern
 ```python
@@ -42,7 +42,7 @@ ctx.set_default_catalog_and_schema("codeintel", "public")
 ---
 
 ## Scope 1: TableSchema contract for partitioned datasets
-Status: Planned
+Status: Completed
 
 ### Objective
 Adopt TableSchema as the authoritative contract for file schema + partition
@@ -54,9 +54,9 @@ columns, and enforce the contract at registration time.
 - `src/schema_spec/system.py`
 
 ### Implementation checklist
-- [ ] Introduce a TableSchema contract object with file schema + partitions.
-- [ ] Enforce partition ordering/type invariants at registration.
-- [ ] Surface TableSchema payloads in diagnostics.
+- [x] Introduce a TableSchema contract object with file schema + partitions.
+- [x] Enforce partition ordering/type invariants at registration.
+- [x] Surface TableSchema payloads in diagnostics.
 
 ### Code pattern
 ```python
@@ -68,7 +68,7 @@ ctx.register_table(name, provider)
 ---
 
 ## Scope 2: Schema adapters and evolution hooks at scan boundary
-Status: Planned
+Status: Completed
 
 ### Objective
 Use schema adapter factories (PhysicalExprAdapterFactory) to align drifted
@@ -80,9 +80,9 @@ schemas at scan time instead of per-query casts.
 - `rust/datafusion_ext/src/lib.rs`
 
 ### Implementation checklist
-- [ ] Register schema adapter factories per dataset family.
-- [ ] Route dataset-specific evolution policy to scan registration.
-- [ ] Emit adapter decisions into diagnostics.
+- [x] Register schema adapter factories per dataset family.
+- [x] Route dataset-specific evolution policy to scan registration.
+- [x] Emit adapter decisions into diagnostics.
 
 ### Code pattern
 ```python
@@ -93,7 +93,7 @@ ctx.register_physical_expr_adapter_factory(factory)
 ---
 
 ## Scope 3: DFSchema invariants and ambiguity checks
-Status: Planned
+Status: Completed
 
 ### Objective
 Enforce DataFusion invariants on `(relation, name)` uniqueness and surface
@@ -105,9 +105,9 @@ DFSchema tree output for ambiguous joins across repos.
 - `src/datafusion_engine/runtime.py`
 
 ### Implementation checklist
-- [ ] Validate DFSchema uniqueness before execution.
-- [ ] Add DFSchema tree_string payloads to diagnostics.
-- [ ] Fail fast on ambiguous schemas.
+- [x] Validate DFSchema uniqueness before execution.
+- [x] Add DFSchema tree_string payloads to diagnostics.
+- [x] Fail fast on ambiguous schemas.
 
 ### Code pattern
 ```python
@@ -119,7 +119,7 @@ diagnostics["dfschema_tree"] = dfschema.tree_string()
 ---
 
 ## Scope 4: TableProvider metadata for defaults and logical plans
-Status: Planned
+Status: Completed
 
 ### Objective
 Use TableProvider metadata (`get_column_default`, `get_logical_plan`,
@@ -131,9 +131,9 @@ Use TableProvider metadata (`get_column_default`, `get_logical_plan`,
 - `src/relspec/contracts.py`
 
 ### Implementation checklist
-- [ ] Record provider defaults and logical plan metadata.
-- [ ] Surface defaults and constraints in contract diagnostics.
-- [ ] Replace Python-only defaults with provider metadata.
+- [x] Record provider defaults and logical plan metadata.
+- [x] Surface defaults and constraints in contract diagnostics.
+- [x] Replace Python-only defaults with provider metadata.
 
 ### Code pattern
 ```python
@@ -145,7 +145,7 @@ logical = provider.get_logical_plan() if provider else None
 ---
 
 ## Scope 5: Typed parameters via prepared statements
-Status: Planned
+Status: Completed
 
 ### Objective
 Use prepared statements and `information_schema.parameters` for schema-aware
@@ -157,9 +157,9 @@ param validation across repos.
 - `src/relspec/rules/validation.py`
 
 ### Implementation checklist
-- [ ] Register prepared statements for rule SQL.
-- [ ] Validate parameter types from information_schema parameters.
-- [ ] Align param table schemas with DataFusion typed parameters.
+- [x] Register prepared statements for rule SQL.
+- [x] Validate parameter types from information_schema parameters.
+- [x] Align param table schemas with DataFusion typed parameters.
 
 ### Code pattern
 ```python
@@ -170,7 +170,7 @@ params = introspector.parameters_snapshot()
 ---
 
 ## Scope 6: Schema-affecting configuration policy
-Status: Planned
+Status: Completed
 
 ### Objective
 Centralize schema-affecting config knobs (view types, parser typing, timezones)
@@ -181,9 +181,9 @@ into a single policy applied per runtime profile.
 - `src/schema_spec/system.py`
 
 ### Implementation checklist
-- [ ] Define policy profiles for view types and parser typing.
-- [ ] Enforce policy in SessionConfig and scan settings.
-- [ ] Emit policy snapshots for diagnostics.
+- [x] Define policy profiles for view types and parser typing.
+- [x] Enforce policy in SessionConfig and scan settings.
+- [x] Emit policy snapshots for diagnostics.
 
 ### Code pattern
 ```python
@@ -194,7 +194,7 @@ config = config.set("datafusion.optimizer.expand_views_at_output", "true")
 ---
 
 ## Scope 7: Arrow metadata and extension types as UDTs
-Status: Planned
+Status: Completed
 
 ### Objective
 Use Arrow field metadata and extension types to encode semantic types (spans,
@@ -206,9 +206,9 @@ goids, symbol refs) and preserve them across plans.
 - `src/arrowdsl/schema/serialization.py`
 
 ### Implementation checklist
-- [ ] Attach semantic metadata to nested fields for schema provenance.
-- [ ] Preserve metadata in custom UDFs and table providers.
-- [ ] Add validation that metadata survives registration and query planning.
+- [x] Attach semantic metadata to nested fields for schema provenance.
+- [x] Preserve metadata in custom UDFs and table providers.
+- [x] Add validation that metadata survives registration and query planning.
 
 ### Code pattern
 ```python
@@ -218,7 +218,7 @@ field = pa.field("span", span_type, metadata={"semantic_type": "Span"})
 ---
 
 ## Scope 8: Arrow boundary projection (requested_schema)
-Status: Planned
+Status: Completed
 
 ### Objective
 Use `__arrow_c_array__(requested_schema=...)` to enforce schema projection at
@@ -229,9 +229,9 @@ interop boundaries for zero-copy alignment.
 - `src/datafusion_engine/registry_bridge.py`
 
 ### Implementation checklist
-- [ ] Add schema-aware projection for RecordBatch interop.
-- [ ] Use requested_schema for external ingestion paths.
-- [ ] Validate that projection preserves ordering and metadata.
+- [x] Add schema-aware projection for RecordBatch interop.
+- [x] Use requested_schema for external ingestion paths.
+- [x] Validate that projection preserves ordering and metadata.
 
 ### Code pattern
 ```python
@@ -241,7 +241,7 @@ batch.__arrow_c_array__(requested_schema=expected_schema)
 ---
 
 ## Scope 9: Schema-aware optimizer and rewrite hooks
-Status: Planned
+Status: Partially complete
 
 ### Objective
 Replace bespoke SQL fragments with optimizer rules and schema-aware rewrite
@@ -253,9 +253,10 @@ hooks for nested attribute access and span normalization.
 - `src/datafusion_engine/query_fragments.py`
 
 ### Implementation checklist
-- [ ] Add rewrite hooks for attrs map access and span ABI normalization.
-- [ ] Ensure optimizer rules retain schema metadata.
-- [ ] Validate rewrites via EXPLAIN schema output.
+- [x] Add rewrite hooks for attrs map access and span ABI normalization.
+- [x] Ensure optimizer rules retain schema metadata.
+- [x] Validate rewrites via EXPLAIN schema output.
+- [ ] Migrate remaining `query_fragments` call sites to the new rewrites.
 
 ### Code pattern
 ```python
@@ -283,29 +284,29 @@ Remove these modules and bespoke paths once DataFusion-native replacements are
 fully wired and all call sites are migrated.
 
 ### Scope 0: CatalogProvider chain
-- `schema_spec/catalog_registry.py` (dataset discovery + registry façade).
-- `schema_spec/system.py` → `SchemaRegistry` class and registry mutation helpers.
-- `relspec/registry/datasets.py` (dataset/contract catalog assembly from spec tables).
+- ✅ `schema_spec/catalog_registry.py` (dataset discovery + registry façade).
+- ✅ `schema_spec/system.py` → `SchemaRegistry` class and registry mutation helpers.
+- ✅ `relspec/registry/datasets.py` (dataset/contract catalog assembly from spec tables).
 
 ### Scope 1–2: TableSchema + schema adapters
-- Runtime DDL synthesis in `schema_spec/system.py` (`table_spec_from_schema`,
+- ⏳ Runtime DDL synthesis in `schema_spec/system.py` (`table_spec_from_schema`,
   `ddl_fingerprint_from_schema`) for registration paths.
-- Registry‑side schema handshake helpers that depend on Python‑derived DDL.
+- ✅ Registry‑side schema handshake helpers that depend on Python‑derived DDL.
 
 ### Scope 3: DFSchema invariants
-- SQLGlot-only missing-column checks and union schema builders in
+- ⏳ SQLGlot-only missing-column checks and union schema builders in
   `relspec/rules/validation.py` when DFSchema/EXPLAIN coverage is complete.
 
 ### Scope 4: TableProvider metadata
-- Python defaults/constraints fallbacks in `relspec/contracts.py` and
+- ⏳ Python defaults/constraints fallbacks in `relspec/contracts.py` and
   `schema_spec/system.py` once provider metadata is authoritative.
 
 ### Scope 5: Typed parameters
-- Python param schema enforcement in `ibis_engine/param_tables.py` once DataFusion
+- ⏳ Python param schema enforcement in `ibis_engine/param_tables.py` once DataFusion
   typed parameters and prepared statements are the only validation path.
 
 ### Scope 7–9: Metadata, projection, rewrites
-- Bespoke attribute/span extraction SQL fragments in
+- ⏳ Bespoke attribute/span extraction SQL fragments in
   `datafusion_engine/query_fragments.py` that are replaced by optimizer rewrites.
-- Ad hoc interop projection code in `arrowdsl/core/interop.py` once
+- ⏳ Ad hoc interop projection code in `arrowdsl/core/interop.py` once
   `requested_schema` is the single boundary mechanism.

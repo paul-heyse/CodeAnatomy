@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, cast, overload
 import pyarrow as pa
 import pyarrow.compute as _pc
 
-from arrowdsl.core.array_iter import iter_array_values
 from arrowdsl.core.interop import ComputeModule
 
 if TYPE_CHECKING:
@@ -504,28 +503,6 @@ def function_options_type() -> type[object] | None:
     return getattr(pc, "FunctionOptions", None)
 
 
-def distinct_sorted(values: ArrayLike | ChunkedArrayLike) -> ArrayLike:
-    """Return distinct values sorted ascending.
-
-    Returns
-    -------
-    ArrayLike
-        Sorted unique values.
-    """
-    seen: set[object] = set()
-    has_null = False
-    for value in iter_array_values(values):
-        if value is None:
-            has_null = True
-            continue
-        seen.add(value)
-    sorted_values = sorted(seen, key=str)
-    if has_null:
-        sorted_values.append(None)
-    dtype = getattr(values, "type", None)
-    return pa.array(sorted_values, type=dtype)
-
-
 def flatten_list_struct_field(
     table: TableLike,
     *,
@@ -568,7 +545,6 @@ __all__ = [
     "coalesce",
     "cumulative_sum",
     "dictionary_encode",
-    "distinct_sorted",
     "drop_null",
     "equal",
     "field",

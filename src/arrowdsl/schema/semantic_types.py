@@ -52,13 +52,13 @@ class _SemanticExtensionType(pa.ExtensionType):
         super().__init__(info.storage_type, info.extension_name)
         self._info = info
 
-    def __arrow_ext_serialize__(self) -> bytes:
+    def _arrow_ext_serialize(self) -> bytes:
         return self._info.name.encode("utf-8")
 
     @classmethod
-    def __arrow_ext_deserialize__(
+    def _arrow_ext_deserialize(
         cls,
-        storage_type: pa.DataType,
+        _storage_type: pa.DataType,
         serialized: bytes,
     ) -> pa.ExtensionType:
         name = serialized.decode("utf-8")
@@ -70,6 +70,12 @@ class _SemanticExtensionType(pa.ExtensionType):
         raise ValueError(msg)
 
 
+_SemanticExtensionType.__arrow_ext_serialize__ = _SemanticExtensionType._arrow_ext_serialize
+_SemanticExtensionType.__arrow_ext_deserialize__ = classmethod(
+    _SemanticExtensionType._arrow_ext_deserialize
+)
+
+
 def register_semantic_extension_types() -> None:
     """Register semantic extension types with pyarrow."""
     for info in (SPAN_TYPE_INFO, BYTE_SPAN_TYPE_INFO):
@@ -78,13 +84,25 @@ def register_semantic_extension_types() -> None:
 
 
 def span_type() -> pa.DataType:
-    """Return the registered Span extension type."""
+    """Return the registered Span extension type.
+
+    Returns
+    -------
+    pyarrow.DataType
+        Extension data type for spans.
+    """
     register_semantic_extension_types()
     return pa.extension_type(SPAN_TYPE_INFO.extension_name)
 
 
 def byte_span_type() -> pa.DataType:
-    """Return the registered ByteSpan extension type."""
+    """Return the registered ByteSpan extension type.
+
+    Returns
+    -------
+    pyarrow.DataType
+        Extension data type for byte spans.
+    """
     register_semantic_extension_types()
     return pa.extension_type(BYTE_SPAN_TYPE_INFO.extension_name)
 

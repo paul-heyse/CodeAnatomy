@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Final
 
 import pyarrow as pa
@@ -41,11 +42,41 @@ def build_binding_resolution_table(
     scope_table = _to_table(scopes)
     edge_table = _to_table(scope_edges)
     binding_table = _to_table(bindings)
+    context = _build_resolution_context(scope_table, edge_table, binding_table)
+    rows = _build_binding_resolution_rows(binding_table, context)
+    return _rows_to_table(rows)
+
+
+@dataclass(frozen=True)
+class _ResolutionContext:
+    scope_parent: dict[str, str]
+    scope_type: dict[str, str]
+    module_scope_by_path: dict[str, str]
+    declared_bindings: dict[str, dict[str, str]]
+
+
+def _build_resolution_context(
+    scope_table: pa.Table,
+    edge_table: pa.Table,
+    binding_table: pa.Table,
+) -> _ResolutionContext:
     scope_parent = _scope_parent_map(edge_table)
     scope_type = _scope_type_map(scope_table)
     scope_path = _scope_path_map(scope_table)
     module_scope_by_path = _module_scope_by_path(scope_type, scope_path)
     declared_bindings = _declared_bindings(binding_table)
+    return _ResolutionContext(
+        scope_parent=scope_parent,
+        scope_type=scope_type,
+        module_scope_by_path=module_scope_by_path,
+        declared_bindings=declared_bindings,
+    )
+
+
+def _build_binding_resolution_rows(
+    binding_table: pa.Table,
+    context: _ResolutionContext,
+) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for row in iter_rows_from_table(binding_table):
         binding_kind = _safe_str(row.get("binding_kind"))
@@ -62,18 +93,15 @@ def build_binding_resolution_table(
             resolution_kind,
             scope_id=scope_id,
             name=name,
-            scope_parent=scope_parent,
-            scope_type=scope_type,
-            declared_bindings=declared_bindings,
-            module_scope_by_path=module_scope_by_path,
             path=path,
+            context=context,
         )
         if not candidates:
             continue
         ambiguity_group_id = f"{binding_id}:{resolution_kind}"
         confidence = _RESOLUTION_CONFIDENCE.get(resolution_kind, 0.7)
         for outer_scope_id in candidates:
-            outer_binding_id = declared_bindings.get(outer_scope_id, {}).get(name)
+            outer_binding_id = context.declared_bindings.get(outer_scope_id, {}).get(name)
             if outer_binding_id is None:
                 continue
             rows.append(
@@ -81,13 +109,17 @@ def build_binding_resolution_table(
                     "binding_id": binding_id,
                     "outer_binding_id": outer_binding_id,
                     "kind": resolution_kind,
-                    "reason": _resolution_reason(resolution_kind, outer_scope_id, scope_type),
+                    "reason": _resolution_reason(
+                        resolution_kind,
+                        outer_scope_id,
+                        context.scope_type,
+                    ),
                     "path": path,
                     "ambiguity_group_id": ambiguity_group_id,
                     "confidence": confidence,
                 }
             )
-    return _rows_to_table(rows)
+    return rows
 
 
 def _to_table(table: TableLike | RecordBatchReaderLike) -> pa.Table:
@@ -179,30 +211,34 @@ def _resolve_candidates(
     *,
     scope_id: str,
     name: str,
-    scope_parent: dict[str, str],
-    scope_type: dict[str, str],
-    declared_bindings: dict[str, dict[str, str]],
-    module_scope_by_path: dict[str, str],
     path: str,
+    context: _ResolutionContext,
 ) -> list[str]:
     if resolution_kind == "GLOBAL":
-        module_scope = module_scope_by_path.get(path)
+        module_scope = context.module_scope_by_path.get(path)
         if module_scope is None:
             return []
-        if name in declared_bindings.get(module_scope, {}):
+        if name in context.declared_bindings.get(module_scope, {}):
             return [module_scope]
         return []
     if resolution_kind in {"NONLOCAL", "FREE"}:
-        candidates = _walk_parent_chain(scope_id, scope_parent)
+        candidates = _walk_parent_chain(scope_id, context.scope_parent)
         matches = [
-            candidate for candidate in candidates if name in declared_bindings.get(candidate, {})
+            candidate
+            for candidate in candidates
+            if name in context.declared_bindings.get(candidate, {})
         ]
         if resolution_kind == "NONLOCAL":
-            return [candidate for candidate in matches if scope_type.get(candidate) != "MODULE"]
-        module_scope = module_scope_by_path.get(path)
-        if module_scope and name in declared_bindings.get(module_scope, {}):
-            if module_scope not in matches:
-                matches.append(module_scope)
+            return [
+                candidate for candidate in matches if context.scope_type.get(candidate) != "MODULE"
+            ]
+        module_scope = context.module_scope_by_path.get(path)
+        if (
+            module_scope
+            and name in context.declared_bindings.get(module_scope, {})
+            and module_scope not in matches
+        ):
+            matches.append(module_scope)
         return matches
     return []
 

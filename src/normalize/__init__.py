@@ -21,6 +21,9 @@ if TYPE_CHECKING:
         build_cfg_edges,
         build_def_use_events,
         collect_diags,
+        normalize_cst_callsites_spans,
+        normalize_cst_defs_spans,
+        normalize_cst_imports_spans,
         normalize_type_exprs,
         normalize_types,
         run_reaching_defs,
@@ -66,13 +69,6 @@ if TYPE_CHECKING:
         run_normalize,
     )
     from normalize.schema_infer import SchemaInferOptions, align_table_to_schema
-    from normalize.spans import (
-        build_repo_text_index,
-        normalize_cst_callsites_spans,
-        normalize_cst_defs_spans,
-        normalize_cst_imports_spans,
-    )
-    from normalize.text_index import FileTextIndex, RepoTextIndex
     from normalize.utils import add_span_id_column, span_id
     from relspec.model import AmbiguityPolicy, ConfidencePolicy
     from relspec.rules.definitions import EvidenceSpec, ExecutionMode
@@ -92,13 +88,11 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DiagnosticsSources": ("normalize.ibis_api", "DiagnosticsSources"),
     "EvidenceSpec": ("relspec.rules.definitions", "EvidenceSpec"),
     "ExecutionMode": ("relspec.rules.definitions", "ExecutionMode"),
-    "FileTextIndex": ("normalize.text_index", "FileTextIndex"),
     "NormalizeFinalizeSpec": ("normalize.runner", "NormalizeFinalizeSpec"),
     "NormalizeIbisPlanOptions": ("normalize.runner", "NormalizeIbisPlanOptions"),
     "ResolvedNormalizeRule": ("normalize.runner", "ResolvedNormalizeRule"),
     "NormalizeRuleCompilation": ("normalize.runner", "NormalizeRuleCompilation"),
     "NormalizeRunOptions": ("normalize.runner", "NormalizeRunOptions"),
-    "RepoTextIndex": ("normalize.text_index", "RepoTextIndex"),
     "SchemaInferOptions": ("normalize.schema_infer", "SchemaInferOptions"),
     "add_ast_byte_spans": ("normalize.ibis_api", "add_ast_byte_spans"),
     "add_scip_occurrence_byte_spans": ("normalize.ibis_api", "add_scip_occurrence_byte_spans"),
@@ -108,7 +102,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "build_cfg_blocks": ("normalize.ibis_api", "build_cfg_blocks"),
     "build_cfg_edges": ("normalize.ibis_api", "build_cfg_edges"),
     "build_def_use_events": ("normalize.ibis_api", "build_def_use_events"),
-    "build_repo_text_index": ("normalize.spans", "build_repo_text_index"),
     "collect_diags": ("normalize.ibis_api", "collect_diags"),
     "compile_normalize_plans_ibis": ("normalize.runner", "compile_normalize_plans_ibis"),
     "dataset_contract": ("normalize.registry_specs", "dataset_contract"),
@@ -128,9 +121,15 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "field_name": ("normalize.registry_fields", "field_name"),
     "fields": ("normalize.registry_fields", "fields"),
     "hash_spec": ("normalize.registry_ids", "hash_spec"),
-    "normalize_cst_callsites_spans": ("normalize.spans", "normalize_cst_callsites_spans"),
-    "normalize_cst_defs_spans": ("normalize.spans", "normalize_cst_defs_spans"),
-    "normalize_cst_imports_spans": ("normalize.spans", "normalize_cst_imports_spans"),
+    "normalize_cst_callsites_spans": (
+        "normalize.ibis_api",
+        "normalize_cst_callsites_spans",
+    ),
+    "normalize_cst_defs_spans": ("normalize.ibis_api", "normalize_cst_defs_spans"),
+    "normalize_cst_imports_spans": (
+        "normalize.ibis_api",
+        "normalize_cst_imports_spans",
+    ),
     "normalize_evidence_contract": ("normalize.contracts", "normalize_evidence_contract"),
     "normalize_evidence_schema": ("normalize.contracts", "normalize_evidence_schema"),
     "normalize_evidence_spec": ("normalize.contracts", "normalize_evidence_spec"),
@@ -171,12 +170,10 @@ __all__ = [
     "DiagnosticsSources",
     "EvidenceSpec",
     "ExecutionMode",
-    "FileTextIndex",
     "NormalizeFinalizeSpec",
     "NormalizeIbisPlanOptions",
     "NormalizeRuleCompilation",
     "NormalizeRunOptions",
-    "RepoTextIndex",
     "ResolvedNormalizeRule",
     "SchemaInferOptions",
     "add_ast_byte_spans",
@@ -187,7 +184,6 @@ __all__ = [
     "build_cfg_blocks",
     "build_cfg_edges",
     "build_def_use_events",
-    "build_repo_text_index",
     "collect_diags",
     "compile_normalize_plans_ibis",
     "dataset_contract",

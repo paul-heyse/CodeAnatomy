@@ -23,10 +23,8 @@ else:
 
 
 from arrowdsl.core.array_iter import iter_array_values
-from arrowdsl.core.interop import pc
 from datafusion_engine.hash_utils import hash64_from_text, hash128_from_text
 
-_NUMERIC_REGEX = r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$"
 _KERNEL_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
 _PYCAPSULE_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
 _PYCAPSULE_UDF_SPECS: dict[str, DataFusionPycapsuleUdfEntry] = {}
@@ -38,28 +36,6 @@ UDF_TIER_PRIORITY: tuple[UdfTier, ...] = ("builtin", "pyarrow", "pandas", "pytho
 ENC_UTF8 = 1
 ENC_UTF16 = 2
 ENC_UTF32 = 3
-DEFAULT_POSITION_ENCODING = ENC_UTF32
-VALID_POSITION_ENCODINGS: frozenset[int] = frozenset((ENC_UTF8, ENC_UTF16, ENC_UTF32))
-
-
-def normalize_position_encoding(value: object | None) -> int:
-    encoding = DEFAULT_POSITION_ENCODING
-    if value is None:
-        return encoding
-    if isinstance(value, int):
-        return value if value in VALID_POSITION_ENCODINGS else encoding
-    if isinstance(value, str):
-        text = value.strip().upper()
-        if text.isdigit():
-            value_int = int(text)
-            return value_int if value_int in VALID_POSITION_ENCODINGS else encoding
-        if "UTF8" in text:
-            encoding = ENC_UTF8
-        elif "UTF16" in text:
-            encoding = ENC_UTF16
-        elif "UTF32" in text:
-            encoding = ENC_UTF32
-    return encoding
 
 
 def _pycapsule_entries() -> tuple[DataFusionPycapsuleUdfEntry, ...]:
@@ -167,23 +143,6 @@ class DataFusionPycapsuleUdfEntry:
         return self.spec.capsule_id or udf_capsule_id(self.capsule)
 
 
-def _normalize_span(values: pa.Array | pa.ChunkedArray) -> pa.Array | pa.ChunkedArray:
-    text = pc.utf8_trim_whitespace(pc.cast(values, pa.string(), safe=False))
-    mask = pc.match_substring_regex(text, _NUMERIC_REGEX)
-    mask = pc.fill_null(mask, fill_value=False)
-    sanitized = pc.if_else(mask, text, pa.scalar(None, type=pa.string()))
-    numeric = pc.cast(sanitized, pa.float64(), safe=False)
-    return pc.cast(numeric, pa.int64(), safe=False)
-
-
-def _cpg_score(
-    values: pa.Array | pa.ChunkedArray | pa.Scalar,
-) -> pa.Array | pa.Scalar:
-    if isinstance(values, pa.Scalar):
-        return pa.scalar(values.as_py(), type=pa.float64())
-    return pc.cast(values, pa.float64(), safe=False)
-
-
 def _stable_hash64(
     values: pa.Array | pa.ChunkedArray | pa.Scalar,
 ) -> pa.Array | pa.Scalar:
@@ -280,27 +239,6 @@ def _stable_id(
     return pa.array(out, type=pa.string())
 
 
-def _valid_mask(
-    values: pa.Array | pa.ChunkedArray | pa.Scalar,
-) -> pa.Array | pa.Scalar:
-    if isinstance(values, pa.Scalar):
-        value = values.as_py()
-        if value is None:
-            return pa.scalar(value=False, type=pa.bool_())
-        if isinstance(value, list):
-            return pa.scalar(value=all(item is not None for item in value), type=pa.bool_())
-        return pa.scalar(value=value is not None, type=pa.bool_())
-    out: list[bool] = []
-    for value in iter_array_values(values):
-        if value is None:
-            out.append(False)
-        elif isinstance(value, list):
-            out.append(all(item is not None for item in value))
-        else:
-            out.append(True)
-    return pa.array(out, type=pa.bool_())
-
-
 def stable_hash64_values(
     values: pa.Array | pa.ChunkedArray | pa.Scalar,
 ) -> pa.Array | pa.Scalar:
@@ -325,16 +263,6 @@ def stable_hash128_values(
         Stable hash128 values.
     """
     return _stable_hash128(values)
-
-
-def _position_encoding_norm(
-    values: pa.Array | pa.ChunkedArray | pa.Scalar,
-) -> pa.Array | pa.Scalar:
-    if isinstance(values, pa.Scalar):
-        value = normalize_position_encoding(values.as_py())
-        return pa.scalar(value, type=pa.int32())
-    out = [normalize_position_encoding(value) for value in iter_array_values(values)]
-    return pa.array(out, type=pa.int32())
 
 
 def load_udf_from_capsule(capsule: ScalarUDFExportable) -> ScalarUDF:
@@ -490,20 +418,6 @@ def _col_to_byte(
     return pa.array(out, type=pa.int64())
 
 
-_NORMALIZE_SPAN_UDF = udf(
-    _normalize_span,
-    [pa.string()],
-    pa.int64(),
-    "stable",
-    "normalize_span",
-)
-_CPG_SCORE_UDF = udf(
-    _cpg_score,
-    [pa.float64()],
-    pa.float64(),
-    "stable",
-    "cpg_score",
-)
 _STABLE_HASH64_UDF = udf(
     _stable_hash64,
     [pa.string()],
@@ -517,13 +431,6 @@ _STABLE_HASH128_UDF = udf(
     pa.string(),
     "stable",
     "stable_hash128",
-)
-_POSITION_ENCODING_NORM_UDF = udf(
-    _position_encoding_norm,
-    [pa.string()],
-    pa.int32(),
-    "stable",
-    "position_encoding_norm",
 )
 _COL_TO_BYTE_UDF = udf(
     _col_to_byte,
@@ -546,39 +453,8 @@ _STABLE_ID_UDF = udf(
     "stable",
     "stable_id",
 )
-_VALID_MASK_UDF = udf(
-    _valid_mask,
-    [pa.list_(pa.string())],
-    pa.bool_(),
-    "stable",
-    "valid_mask",
-)
 
 _SCALAR_UDF_SPECS: tuple[tuple[DataFusionUdfSpec, ScalarUDF], ...] = (
-    (
-        DataFusionUdfSpec(
-            func_id="cpg_score",
-            engine_name="cpg_score",
-            kind="scalar",
-            input_types=(pa.float64(),),
-            return_type=pa.float64(),
-            arg_names=("value",),
-            rewrite_tags=("score",),
-        ),
-        _CPG_SCORE_UDF,
-    ),
-    (
-        DataFusionUdfSpec(
-            func_id="normalize_span",
-            engine_name="normalize_span",
-            kind="scalar",
-            input_types=(pa.string(),),
-            return_type=pa.int64(),
-            arg_names=("value",),
-            rewrite_tags=("normalize_span",),
-        ),
-        _NORMALIZE_SPAN_UDF,
-    ),
     (
         DataFusionUdfSpec(
             func_id="stable_hash64",
@@ -626,30 +502,6 @@ _SCALAR_UDF_SPECS: tuple[tuple[DataFusionUdfSpec, ScalarUDF], ...] = (
             rewrite_tags=("hash",),
         ),
         _STABLE_ID_UDF,
-    ),
-    (
-        DataFusionUdfSpec(
-            func_id="valid_mask",
-            engine_name="valid_mask",
-            kind="scalar",
-            input_types=(pa.list_(pa.string()),),
-            return_type=pa.bool_(),
-            arg_names=("values",),
-            rewrite_tags=("validity",),
-        ),
-        _VALID_MASK_UDF,
-    ),
-    (
-        DataFusionUdfSpec(
-            func_id="position_encoding_norm",
-            engine_name="position_encoding_norm",
-            kind="scalar",
-            input_types=(pa.string(),),
-            return_type=pa.int32(),
-            arg_names=("value",),
-            rewrite_tags=("position_encoding",),
-        ),
-        _POSITION_ENCODING_NORM_UDF,
     ),
     (
         DataFusionUdfSpec(
@@ -779,7 +631,6 @@ def register_datafusion_udfs(ctx: SessionContext) -> DataFusionUdfSnapshot:
 
 __all__ = [
     "DATAFUSION_UDF_SPECS",
-    "_NORMALIZE_SPAN_UDF",
     "DataFusionPycapsuleUdfEntry",
     "DataFusionUdfCapsuleEntry",
     "DataFusionUdfSnapshot",

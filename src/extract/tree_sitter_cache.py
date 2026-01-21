@@ -52,13 +52,20 @@ class TreeSitterCache:
         key: str,
         source: bytes,
     ) -> TreeSitterParseResult:
+        """Parse source bytes with incremental cache support.
+
+        Returns
+        -------
+        TreeSitterParseResult
+            Parsed tree, changed ranges, and incremental usage flag.
+        """
         entry = self._entries.get(key)
         if entry is None:
             tree = parser.parse(source)
-            if tree is None:
-                return TreeSitterParseResult(tree=None, changed_ranges=(), used_incremental=False)
-            self._store(key, tree=tree, source=source)
-            return TreeSitterParseResult(tree=tree, changed_ranges=(), used_incremental=False)
+            result = _parse_result(tree=tree, used_incremental=False)
+            if tree is not None:
+                self._store(key, tree=tree, source=source)
+            return result
         if source == entry.source:
             self._entries.move_to_end(key)
             return TreeSitterParseResult(
@@ -69,10 +76,10 @@ class TreeSitterCache:
         edit = _compute_edit(entry.source, source)
         if edit is None:
             tree = parser.parse(source)
-            if tree is None:
-                return TreeSitterParseResult(tree=None, changed_ranges=(), used_incremental=True)
-            self._store(key, tree=tree, source=source)
-            return TreeSitterParseResult(tree=tree, changed_ranges=(), used_incremental=True)
+            result = _parse_result(tree=tree, used_incremental=True)
+            if tree is not None:
+                self._store(key, tree=tree, source=source)
+            return result
         entry.tree.edit(
             edit.start_byte,
             edit.old_end_byte,
@@ -147,8 +154,13 @@ def _point_from_byte(data: bytes, byte_offset: int) -> Point:
     prefix = data[:offset]
     row = prefix.count(b"\n")
     last_newline = prefix.rfind(b"\n")
-    if last_newline == -1:
-        col = offset
-    else:
-        col = offset - last_newline - 1
+    col = offset if last_newline == -1 else offset - last_newline - 1
     return Point(row, col)
+
+
+def _parse_result(tree: Tree | None, *, used_incremental: bool) -> TreeSitterParseResult:
+    return TreeSitterParseResult(
+        tree=tree,
+        changed_ranges=(),
+        used_incremental=used_incremental,
+    )

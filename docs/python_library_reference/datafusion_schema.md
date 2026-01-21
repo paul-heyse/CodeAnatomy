@@ -3687,3 +3687,2544 @@ If you want a concrete structure that feels “compiler-like” in Python:
 4. **Escalate to Rust only when needed**
 
    * True optimizer-rule injection / PhysicalExprAdapter customization / provider metadata (defaults/constraints/DDL provenance) are TableProvider-level and belong in Rust, exposed via PyCapsule.
+
+Below is a **deep technical, end-to-end** view of **Arrow `Schema` vs DataFusion `DFSchema`**, what you can do in **datafusion-python** today, what exists in **Rust**, and the **cleanest ways to integrate Rust-level DFSchema/plan machinery into a Python implementation**.
+
+---
+
+## 1) Two schema layers in DataFusion: physical Arrow vs logical DFSchema
+
+### 1.1 Arrow `Schema` (physical / record batches)
+
+Arrow `Schema` is what’s attached to `RecordBatch` / `Table` and is the “shape of columns” (name, datatype, nullability) your execution engine reads/writes. In **datafusion-python**, this is what you get from:
+
+* `DataFrame.schema() -> pyarrow.Schema` (names, data types, nullability). ([Apache DataFusion][1])
+
+### 1.2 DFSchema (logical / planning)
+
+DataFusion’s optimizer and logical planner operate on **DFSchema**, which *wraps an Arrow schema and adds relation context*:
+
+* DFSchema “wraps an Arrow schema and adds a relation (table) name”
+* It can hold fields across multiple tables; fields can be qualified/unqualified
+* Unqualified fields must be unique and not collide with qualified names
+* DFSchema provides access to **functional dependencies** ([Docs.rs][2])
+
+This isn’t just metadata: it is what makes **multi-table queries correct** (disambiguation) and is what enables optimizer analyses to reason about key-like properties.
+
+---
+
+## 2) What you can do in Python today (and what you *can’t*)
+
+### 2.1 “Contract surface”: `pyarrow.Schema` from `DataFrame.schema()`
+
+**Python call**
+
+```python
+arrow_schema = df.schema()
+```
+
+This returns the output schema (name/type/nullability). ([Apache DataFusion][1])
+
+**Limitation:** It does **not** encode qualifiers (catalog/schema/table) or functional dependencies (FDs). Those live in DFSchema inside the Rust engine. ([Apache DataFusion][3])
+
+### 2.2 Observe qualified schema behavior via plan printers
+
+datafusion-python exposes logical/physical plan objects with schema-aware printers:
+
+**DataFrame → plans**
+
+* `df.logical_plan() -> datafusion.plan.LogicalPlan` ([Apache DataFusion][1])
+* `df.optimized_logical_plan() -> datafusion.plan.LogicalPlan` ([Apache DataFusion][1])
+
+**LogicalPlan printers / serializers**
+
+* `LogicalPlan.display_indent_schema() -> str` (schema per node) ([Apache DataFusion][4])
+* `LogicalPlan.display_indent() -> str`, `display_graphviz() -> str` ([Apache DataFusion][4])
+* `LogicalPlan.to_proto() -> bytes` / `LogicalPlan.from_proto(ctx, bytes)` ([Apache DataFusion][4])
+
+**ExecutionPlan printers / serializers**
+
+* `df.execution_plan() -> datafusion.plan.ExecutionPlan` (physical plan) ([Apache DataFusion][4])
+* `ExecutionPlan.display_indent() -> str`, `partition_count` ([Apache DataFusion][4])
+* `ExecutionPlan.to_proto() -> bytes` / `ExecutionPlan.from_proto(ctx, bytes)` ([Apache DataFusion][4])
+
+**Important caveat:** `to_proto/from_proto` explicitly note that *tables created in memory from record batches are currently not supported*. ([Apache DataFusion][4])
+So if you want plan-serde pipelines, use file-backed scans or providers that can be serialized.
+
+### 2.3 “Compiler loop” in Python: plan → modify → rehydrate DataFrame
+
+Python has the “reattach plan to context” hook:
+
+* `SessionContext.create_dataframe_from_logical_plan(plan: LogicalPlan) -> DataFrame` ([Apache DataFusion][5])
+
+So you can do:
+
+1. build a DF (SQL or DataFrame API)
+2. get a `LogicalPlan`
+3. serialize (proto/substrait) and transform externally
+4. re-create a `LogicalPlan` and then a new `DataFrame`
+
+This is the foundation for schema-driven rewriting in Python, even if your rewriting engine lives in Rust.
+
+---
+
+## 3) Rust: DFSchema / qualifiers / FDs — the full feature surface
+
+### 3.1 DFSchema constructors and qualifier management
+
+Key DFSchema constructors (docs.rs):
+
+* `DFSchema::try_from_qualified_schema(qualifier: impl Into<TableReference>, schema: &Schema)` ([Docs.rs][2])
+* `DFSchema::new_with_metadata(qualified_fields: Vec<(Option<TableReference>, Arc<Field>)>, metadata: HashMap<String,String>)` ([Docs.rs][2])
+* `DFSchema::from_field_specific_qualified_schema(qualifiers: Vec<Option<TableReference>>, schema: &Arc<Schema>)` ([Docs.rs][2])
+
+Qualifier utilities:
+
+* `strip_qualifiers(self) -> DFSchema` ([Docs.rs][2])
+* `replace_qualifier(self, qualifier: impl Into<TableReference>) -> DFSchema` ([Docs.rs][2])
+* `field_names(&self) -> Vec<String>` (fully qualified field names) ([Docs.rs][2])
+* `iter(&self) -> Iterator<Item=(Option<&TableReference>, &Arc<Field>)>` ([Docs.rs][2])
+* `tree_string(&self) -> impl Display` (tree-ish format) ([Docs.rs][2])
+* `functional_dependencies(&self) -> &FunctionalDependencies` ([Docs.rs][2])
+
+Field/column resolution:
+
+* `field_with_unqualified_name(name)` / `field_with_qualified_name(qualifier, name)` ([Docs.rs][2])
+* `qualified_fields_with_unqualified_name(name)` / `qualified_field_with_unqualified_name(name)` ([Docs.rs][2])
+* `columns()` / `columns_with_unqualified_name(name)` return `Column` references ([Docs.rs][2])
+
+### 3.2 `Column` and `TableReference`: the “qualifier calculus”
+
+DataFusion uses `Column` to refer to a specific field with an optional qualifier:
+
+* `Column { relation: Option<TableReference>, name: String, spans: Spans }` ([Docs.rs][6])
+* `Column::new(relation: Option<Into<TableReference>>, name)` parses and normalizes the qualifier ([Docs.rs][6])
+* `Column::from_qualified_name("t.c")` parses SQL identifier semantics (lowercases unquoted identifiers, preserves quoted) ([Docs.rs][6])
+
+`TableReference` is explicitly a three-shape namespace:
+
+* `Bare { table }`, `Partial { schema, table }`, `Full { catalog, schema, table }` ([Docs.rs][7])
+  It also documents the identifier normalization behavior when parsing from strings. ([Docs.rs][7])
+
+### 3.3 DataFrame and LogicalPlan schemas in Rust
+
+Rust DataFusion DataFrame exposes the *actual* DFSchema:
+
+* `datafusion::dataframe::DataFrame::schema(&self) -> &DFSchema` ([Docs.rs][8])
+* `DataFrame::logical_plan(&self) -> &LogicalPlan` and `into_optimized_plan()` exist ([Docs.rs][8])
+
+Rust `LogicalPlan` exposes schema and advanced rewriting tools:
+
+* `LogicalPlan::schema(&self) -> &DFSchemaRef` ([Docs.rs][9])
+* `LogicalPlan::display_indent_schema()` shows qualified columns and schema per node (example included in docs) ([Docs.rs][9])
+* `LogicalPlan::map_expressions(...)`, `rewrite_with_subqueries(...)`, `transform_with_subqueries(...)` etc for structured rewrites ([Docs.rs][9])
+* `LogicalPlan::recompute_schema(self) -> Result<Self>` to fix schema/type info after expression changes ([Docs.rs][9])
+* `LogicalPlan::check_invariants(...)` for structural correctness after mutations ([Docs.rs][9])
+
+This is the “compiler framework” core you were gesturing at: you can **walk**, **rewrite**, and **re-type** plans while keeping schema correct.
+
+### 3.4 Functional dependencies: how to access and why they matter
+
+DFSchema stores FunctionalDependencies and DataFusion exposes both the structs and helper functions:
+
+* `Functional Dependence` / `Functional Dependencies` are first-class types; docs describe determinant keys and dependent columns, including how FDs can “downgrade” through operations like joins ([Docs.rs][10])
+* Helper functions exist in `datafusion-common` like `aggregate_functional_dependencies`, `get_required_group_by_exprs_indices`, etc. (these are used to compute FD propagation for aggregates/group-by). ([Docs.rs][10])
+
+In practice, FDs are the basis for “schema-derived rules” such as:
+
+* minimizing group-by keys,
+* reasoning about uniqueness after joins,
+* safe projection pruning, etc.
+
+---
+
+## 4) Bridging Rust DFSchema/plan power into Python
+
+You essentially have **three integration lanes**:
+
+### Lane 1 — Use Python’s plan printers as your “qualified schema probe”
+
+If your rule engine only needs “what did the optimizer do to qualifiers/types,” you can often get away with:
+
+* `df.optimized_logical_plan().display_indent_schema()` (Python) ([Apache DataFusion][1])
+
+This is low effort and version stable, but you can’t programmatically access FDs/qualifiers as structured objects—only as rendered text.
+
+---
+
+### Lane 2 — DataFusion-proto bytes: Rust plan inspection/rewriting as a Python extension
+
+Python exposes `LogicalPlan.to_proto/from_proto` and `ExecutionPlan.to_proto/from_proto`, which align with the **DataFusion-specific protobuf serialization** pathway. ([Apache DataFusion][4])
+
+Rust side: `datafusion-proto` is the canonical crate for serializing/deserializing plans/exprs to bytes. ([Docs.rs][11])
+**Critical warning:** the crate explicitly says the serialized form is **not guaranteed compatible across DataFusion versions**; a plan serialized with one version may not deserialize with another. ([Docs.rs][11])
+It also explicitly points to **Substrait** for a more standard interchange format. ([Docs.rs][11])
+
+#### 4.2.1 Minimal Python ↔ Rust plan-bytes loop
+
+Python:
+
+```python
+plan = df.optimized_logical_plan()
+b = plan.to_proto()                      # bytes  :contentReference[oaicite:45]{index=45}
+b2 = my_rust_ext.rewrite_plan_bytes(b)   # your extension
+plan2 = datafusion.plan.LogicalPlan.from_proto(ctx, b2)  # :contentReference[oaicite:46]{index=46}
+df2 = ctx.create_dataframe_from_logical_plan(plan2)       # :contentReference[oaicite:47]{index=47}
+```
+
+Rust extension (conceptual outline):
+
+* Decode bytes into a proto node (`LogicalPlanNode`) using `AsLogicalPlan::try_decode`
+* Convert into `LogicalPlan` with `try_into_logical_plan(ctx.task_ctx(), extension_codec)` ([Docs.rs][12])
+* Use `plan.schema()` (DFSchemaRef) and DFSchema APIs (`field_names`, `iter`, `functional_dependencies`, `tree_string`) ([Docs.rs][9])
+* Perform rewrites using `map_expressions` / `rewrite_with_subqueries` / `transform_with_subqueries`
+* Call `recompute_schema()` if you changed expression counts/types
+* Encode back with `try_from_logical_plan` + `try_encode` ([Docs.rs][12])
+
+#### 4.2.2 Practical gotchas
+
+* Python `to_proto/from_proto` doesn’t support tables created in-memory from record batches. ([Apache DataFusion][4])
+  If you want this workflow, prefer file-backed scans or Rust-backed providers that support serde.
+* You need to handle extension codecs if you use custom logical nodes/UDF state; `AsLogicalPlan` explicitly takes a `LogicalExtensionCodec`. ([Docs.rs][12])
+
+---
+
+### Lane 3 — Substrait: cross-language plan interchange (often easier to keep stable)
+
+datafusion-python exposes Substrait producer/consumer:
+
+* `Producer.to_substrait_plan(logical_plan, ctx) -> Plan`
+* `Plan.encode() -> bytes`
+* `Serde.deserialize_bytes(bytes) -> Plan`
+* `Consumer.from_substrait_plan(ctx, plan) -> LogicalPlan` ([Apache DataFusion][13])
+
+Rust side: DataFusion’s own docs recommend `datafusion-substrait` as the standard alternative to DataFusion-proto for serializing plans. ([Docs.rs][11])
+
+Trade-off:
+
+* Substrait is more portable, but you may lose DataFusion-specific nuances (e.g., DFSchema functional dependencies are not a Substrait concept). Use it when you want portability; use DataFusion-proto when you want maximum fidelity.
+
+---
+
+## 5) Bringing DFSchema-level “object orientation” into Python via Rust providers (PyCapsule)
+
+If your goal is “schema drives behavior,” the highest leverage is often **not** plan rewriting—it’s **making providers and catalogs emit canonical schemas and metadata** so plans are already consistent.
+
+DataFusion’s recommended Python extension mechanism is **PyCapsule FFI**:
+
+* Wrap an `FFI_TableProvider` in a PyCapsule
+* Provide it on a Python object via `__datafusion_table_provider__` ([Apache DataFusion][14])
+
+This is the stable way to integrate Rust objects into datafusion-python (and is preferred over re-exporting datafusion-python with custom patches). ([Apache DataFusion][14])
+
+Why it matters for DFSchema:
+
+* Your Rust `TableProvider::schema()` returns a canonical Arrow schema (nested structs/maps included)
+* DataFusion wraps that into DFSchema with qualifiers via `TableReference` and resolution rules ([Docs.rs][2])
+* Your Python orchestrator then sees stable `df.schema()` and stable plan schemas.
+
+---
+
+## 6) Recommended architecture for your “schema-driven compiler loop” (CPG pipelines)
+
+If you want **best-in-class** ergonomics and correctness:
+
+1. **Python orchestrator uses Arrow schema as the contract surface**
+
+   * `df.schema()` to validate nested shapes quickly ([Apache DataFusion][1])
+
+2. **Rust extension provides structured DFSchema access (qualifiers + FDs)**
+
+   * consume plan bytes (DataFusion-proto or Substrait) and return:
+
+     * fully-qualified field list (`DFSchema.field_names`) ([Docs.rs][2])
+     * FD summary (`DFSchema.functional_dependencies`) ([Docs.rs][2])
+     * `tree_string()` for nested type audit output ([Docs.rs][2])
+
+3. **Optional: Rust plan rewrite passes for “schema normalization rules”**
+   Use `LogicalPlan` TreeNode rewrite + `recompute_schema()` for correctness. ([Docs.rs][9])
+
+4. **Use Rust TableProviders for high-scale, stable schema IO**
+   Export via PyCapsule (`__datafusion_table_provider__`) and register in Python. ([Apache DataFusion][14])
+
+---
+
+If you want, I can produce a concrete “starter kit” for this integration:
+
+* A **PyO3 Rust module** that exports:
+
+  1. `inspect_dfschema(plan_bytes) -> {field_names, qualifiers, fd_summary, tree_string}`
+  2. `rewrite_plan(plan_bytes, rules_json) -> plan_bytes`
+  3. (optional) `rewrite_substrait(bytes, rules_json) -> bytes`
+
+* And the matching Python glue that:
+
+  * uses `df.optimized_logical_plan().to_proto()` and `LogicalPlan.from_proto(...)` plus `create_dataframe_from_logical_plan(...)` ([Apache DataFusion][1])
+  * falls back to Substrait when you want portability ([Apache DataFusion][13])
+
+[1]: https://datafusion.apache.org/python/autoapi/datafusion/dataframe/index.html "datafusion.dataframe — Apache Arrow DataFusion  documentation"
+[2]: https://docs.rs/datafusion/latest/datafusion/common/struct.DFSchema.html "DFSchema in datafusion::common - Rust"
+[3]: https://datafusion.apache.org/library-user-guide/working-with-exprs.html "Working with Exprs — Apache DataFusion  documentation"
+[4]: https://datafusion.apache.org/python/autoapi/datafusion/plan/index.html "datafusion.plan — Apache Arrow DataFusion  documentation"
+[5]: https://datafusion.apache.org/python/autoapi/datafusion/context/index.html "datafusion.context — Apache Arrow DataFusion  documentation"
+[6]: https://docs.rs/datafusion/latest/datafusion/common/struct.Column.html "Column in datafusion::common - Rust"
+[7]: https://docs.rs/datafusion-common/latest/datafusion_common/enum.TableReference.html "TableReference in datafusion_common - Rust"
+[8]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html "DataFrame in datafusion::dataframe - Rust"
+[9]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/enum.LogicalPlan.html "LogicalPlan in datafusion_expr::logical_plan - Rust"
+[10]: https://docs.rs/datafusion-common "datafusion_common - Rust"
+[11]: https://docs.rs/datafusion-proto "datafusion_proto - Rust"
+[12]: https://docs.rs/datafusion-proto/latest/datafusion_proto/logical_plan/trait.AsLogicalPlan.html "AsLogicalPlan in datafusion_proto::logical_plan - Rust"
+[13]: https://datafusion.apache.org/python/autoapi/datafusion/substrait/index.html "datafusion.substrait — Apache Arrow DataFusion  documentation"
+[14]: https://datafusion.apache.org/python/contributor-guide/ffi.html "Python Extensions — Apache Arrow DataFusion  documentation"
+
+Below is a **heavy technical deep dive** on **expression rewriting and “optimizer-rule-like” hooks** across:
+
+* **datafusion-python** (what you can do today)
+* **DataFusion Rust** (the real extension points: TreeNode rewrites, `OptimizerRule`, analyzer rules, physical optimizer rules)
+* **Best integration patterns** to bring Rust-level rewriting into a Python implementation (without forking datafusion-python).
+
+---
+
+## 1) What “rewriting” means in DataFusion: three distinct layers
+
+1. **Python-side plan construction**: build a logical plan by calling DataFrame methods; “rewriting” is “build a different plan”.
+2. **Rust logical optimizer/analyzer**: rewrites `LogicalPlan` and `Expr` trees via **rules** (`OptimizerRule`, `AnalyzerRule`) and **TreeNode** transformations. DataFusion explicitly supports large sets of `OptimizerRule`s and `PhysicalOptimizerRule`s that rewrite plans/expressions for performance while preserving semantics. ([datafusion.apache.org][1])
+3. **Rust physical optimizer**: rewrites `ExecutionPlan` graphs (physical operators) via `PhysicalOptimizerRule`. ([datafusion.apache.org][1])
+
+A “best-in-class” system typically:
+
+* uses Python for orchestration and schema-driven composition,
+* uses Rust for **stateful and/or global rewrites** that need DFSchema qualifiers, expression identity preservation, and optimizer integration.
+
+---
+
+## 2) datafusion-python: the full rewriting toolkit you can use without Rust
+
+### 2.1 Schema-aware parsing: `DataFrame.parse_sql_expr`
+
+```python
+expr = df.parse_sql_expr("a > 1")
+```
+
+`parse_sql_expr(expr: str) -> datafusion.expr.Expr` “creates logical expression from SQL query text” and is processed against the **current schema**. ([datafusion.apache.org][2])
+
+**Why it matters:** this is your safe “front door” to accept user-authored expressions, then normalize or replace them.
+
+---
+
+### 2.2 “Rules as functions”: any `Expr | str` API is a rewrite boundary
+
+#### `DataFrame.filter(*predicates: Expr | str)`
+
+* Multiple predicates are combined as AND.
+* Each predicate can be an `Expr` **or** a SQL string parsed against the DataFrame schema. ([datafusion.apache.org][2])
+
+```python
+df2 = df.filter("node['kind'] = 'libcst.FunctionDef'", "start_line0 >= 0")
+```
+
+#### `DataFrame.with_column(name, expr: Expr | str)`
+
+Adds a computed column; `expr` can be `Expr` or SQL string parsed against the schema. ([datafusion.apache.org][2])
+
+#### `DataFrame.with_columns(*exprs, **named_exprs)`
+
+Accepts `Expr`, iterables of `Expr`, SQL strings, and named expressions; the SQL strings are parsed as expressions. ([datafusion.apache.org][2])
+
+This is the “Python optimizer-pass” pattern:
+
+1. introspect `df.schema()` (Arrow schema),
+2. decide what canonical derived columns should exist,
+3. use `with_columns` / `filter` to build a rewritten plan.
+
+---
+
+### 2.3 Nested access at the expression level: `Expr.__getitem__`
+
+In Python expressions:
+
+* `expr["field"]` → struct subfield
+* `expr[0]` → array element index **0-based**
+* `expr[0:10]` → array slice **0-based**
+  This is explicitly documented, including the note that it differs from SQL functions that are 1-based. ([datafusion.apache.org][3])
+
+So you can encode canonical nested access without string SQL:
+
+```python
+from datafusion import col
+
+start_line0 = col("span")["start"]["line0"]
+```
+
+This is huge for your `LIST<STRUCT>` CPG bundles because it lets you express rewrites over nested columns deterministically.
+
+---
+
+### 2.4 Multi-pass “optimizer” pipeline: `DataFrame.transform`
+
+`transform(func, *args)` calls a function with the DataFrame and returns another DataFrame; the docs explicitly position it for chaining. ([datafusion.apache.org][2])
+
+```python
+def normalize_span(df):
+    # rule: ensure start_line0 exists
+    return df.with_column("start_line0", "span['start']['line0']")
+
+df = df.transform(normalize_span).transform(other_pass)
+```
+
+This is how you implement a rule engine in Python: **each pass is `df -> df`**.
+
+---
+
+### 2.5 Verification / introspection loops (your “compiler diagnostics”)
+
+#### Execution-time diagnostics
+
+* `df.explain(verbose=False, analyze=False)` prints the plan; with `analyze=True` it runs and reports metrics. ([datafusion.apache.org][2])
+
+#### Streaming execution
+
+* `execute_stream() -> RecordBatchStream` (single partition stream) ([datafusion.apache.org][2])
+* `execute_stream_partitioned() -> list[RecordBatchStream]` (one stream per partition) ([datafusion.apache.org][2])
+
+These enable “rewrite → inspect physical plan / metrics” loops without materializing entire outputs.
+
+---
+
+### 2.6 Plan objects (Python) you can serialize / print (critical for Rust integration)
+
+Python exposes `LogicalPlan` / `ExecutionPlan` with:
+
+* `display_indent_schema()` (logical schema per node) ([datafusion.apache.org][4])
+* `to_proto()` / `from_proto(ctx, bytes)` for both logical and physical plans, with the explicit caveat: **in-memory tables from record batches are not supported**. ([datafusion.apache.org][4])
+* `SessionContext.create_dataframe_from_logical_plan(plan)` to rehydrate a DataFrame from a plan. ([datafusion.apache.org][5])
+
+That gives you an honest-to-god compiler pipeline in Python: **serialize → rewrite elsewhere → deserialize → execute**.
+
+---
+
+## 3) Rust: the real rewriting and optimizer extension points
+
+### 3.1 TreeNode: the unified walk/rewrite API (Expr + plans + physical expr)
+
+DataFusion’s `TreeNode` trait is the general mechanism for inspecting and rewriting trees; it is implemented for:
+
+* `Expr` (logical expressions)
+* `LogicalPlan` and `ExecutionPlan`
+* `PhysicalExpr`
+* plus plan/expr contexts
+  and it provides *inspecting* APIs and *transforming* APIs, including `transform_up`, `transform_down`, `transform_down_up`, and `rewrite`. ([Docs.rs][6])
+
+The docs explicitly note there is no in-place `&mut` mutation API, but the transforming APIs are optimized to avoid cloning. ([Docs.rs][6])
+
+### 3.2 `Expr` implements TreeNode: `apply` and `transform`
+
+Rust `Expr` documentation explicitly states:
+
+* `Expr` implements TreeNode
+* `TreeNode::apply` recursively visits
+* `TreeNode::transform` rewrites expressions ([Docs.rs][7])
+
+This is the fundamental primitive for expression normalization passes (casting, inlining, canonicalizing nested access, etc.).
+
+### 3.3 Stateful rewrites: `TreeNodeRewriter`
+
+For rewrites that need state (symbol tables, scope stacks, “current relation qualifier”), use `TreeNodeRewriter`:
+
+* It’s a visitor for recursively rewriting TreeNodes via `TreeNode::rewrite`
+* Implement `f_down` and/or `f_up`
+* Use it to rewrite `Expr` or `LogicalPlan` while tracking state ([Docs.rs][8])
+
+The docs explicitly say: if you don’t need state, use `transform_up` / `transform_down` instead. ([Docs.rs][8])
+
+---
+
+## 4) Rust optimizer rule system (the “real” optimizer hooks)
+
+### 4.1 `OptimizerRule`: rewrite `LogicalPlan` (and its expressions)
+
+DataFusion’s optimizer is a set of modular rules (`OptimizerRule`) and physical rules (`PhysicalOptimizerRule`) that may rewrite plans/expressions. ([datafusion.apache.org][1])
+
+The query optimizer guide shows the canonical `OptimizerRule` skeleton: implement `name()` and `rewrite(...) -> Transformed<LogicalPlan>`. ([datafusion.apache.org][1])
+
+### 4.2 Expression naming invariants (critical for any rewrite rule)
+
+DataFusion relies on **expression names** as column names through subqueries and internal plan boundaries. If your rewrite changes names, you can break column resolution; the docs explicitly recommend preserving names, typically by adding an alias. ([datafusion.apache.org][1])
+
+They also explicitly call out `Expr.display_name()` vs `Expr.canonical_name()` as the two naming utilities (display vs equivalence). ([datafusion.apache.org][1])
+
+### 4.3 Concrete example: rewrite expressions inside a LogicalPlan
+
+The “Working with Exprs” guide shows:
+
+* rewriting an `Expr` via `expr.transform(...)` and returning `Transformed::yes` / `Transformed::no` ([datafusion.apache.org][9])
+* implementing an `OptimizerRule` that maps over `plan.expressions()` and rebuilds the plan using `plan.with_new_exprs(new_exprs, inputs)` ([datafusion.apache.org][9])
+
+This is the exact pattern you’d use for schema-driven rewrites:
+
+* “normalize span struct”
+* “inline trivial UDF”
+* “canonicalize nested access”
+* “inject casts / fill defaults”
+
+### 4.4 Registering custom logical rules in Rust
+
+Rust `SessionContext` has:
+
+* `add_optimizer_rule(Arc<dyn OptimizerRule + Send + Sync>)`
+* `remove_optimizer_rule(name)`
+  and similarly `add_analyzer_rule(...)` for analyzer passes. ([Docs.rs][10])
+
+So in Rust you can run a “Python-like multi-pass pipeline” *inside the engine* by registering rules in order.
+
+---
+
+## 5) Rust physical optimizer rules (ExecutionPlan rewrites)
+
+The `PhysicalOptimizerRule` trait:
+
+* `optimize(plan: Arc<dyn ExecutionPlan>, config: &ConfigOptions) -> Result<Arc<dyn ExecutionPlan>>`
+* plus `schema_check()` flag indicating whether the planner should validate schema stability after rewrite ([Docs.rs][11])
+
+This is how you do:
+
+* physical projection pushdown tweaks
+* enforcing distribution/sorting rules
+* runtime instrumentation or plan simplification
+
+DataFusion’s documentation explicitly positions `PhysicalOptimizerRule` as the physical-plan equivalent of `OptimizerRule`. ([datafusion.apache.org][1])
+
+---
+
+## 6) Integrating Rust-level rewriting into a Python implementation
+
+There are three practical integration architectures, listed from “most ergonomic with current APIs” to “deep engine embedding”.
+
+### Option 1 — Pure Python “rule passes”
+
+Use:
+
+* `df.parse_sql_expr` for safe parsing ([datafusion.apache.org][2])
+* `df.filter`, `df.with_column(s)` with SQL strings or Exprs ([datafusion.apache.org][2])
+* `Expr.__getitem__` for nested access ([datafusion.apache.org][3])
+* `df.transform` for pass chaining ([datafusion.apache.org][2])
+* `df.explain(analyze=True)` and streaming execution for verification ([datafusion.apache.org][2])
+
+**Limit:** you can’t inject `OptimizerRule` into the internal Rust optimizer from Python directly.
+
+---
+
+### Option 2 — Recommended: “Plan rewrite plugin” (Rust as a compiler pass; Python as orchestrator)
+
+**Python side**
+
+1. Build a plan
+2. Serialize
+3. Call Rust extension to rewrite
+4. Deserialize
+5. Rehydrate DataFrame
+
+You have all the hooks:
+
+* `LogicalPlan.to_proto()` / `LogicalPlan.from_proto(ctx, bytes)` ([datafusion.apache.org][4])
+* `SessionContext.create_dataframe_from_logical_plan(plan)` ([datafusion.apache.org][5])
+
+**Caveat:** plan proto doesn’t support in-memory record-batch tables. ([datafusion.apache.org][4])
+
+**Rust extension side**
+
+* Decode plan bytes
+* Apply:
+
+  * TreeNode rewrites (`Expr`/`LogicalPlan`)
+  * or your own `OptimizerRule` execution
+* Ensure expression naming invariants (alias preservation) ([datafusion.apache.org][1])
+* Encode plan bytes back
+
+This gives you “real optimizer-rule-like behavior” without having to fork datafusion-python.
+
+---
+
+### Option 3 — Deep embedding: build a Rust-backed “SessionContext with custom rules”, expose to Python
+
+In Rust you can:
+
+* register optimizer/analyzer rules on `SessionContext` (`add_optimizer_rule`, `add_analyzer_rule`) ([Docs.rs][10])
+* and thus run your rule stack inside DataFusion proper.
+
+Then you expose that Rust component to Python via PyO3. DataFusion’s recommended Python extension mechanism for custom engine-adjacent components is the PyCapsule/FFI route used for custom providers. ([datafusion.apache.org][12])
+
+This is more engineering than Option 2, but gives you:
+
+* one “engine object” in Python whose optimizer is already customized,
+* and avoids per-plan serialization overhead.
+
+---
+
+## 7) What this looks like for your CPG use case (concretely)
+
+Your “schema-driven rewrite” passes usually fall into:
+
+1. **Normalization passes** (deterministic schema contracts)
+
+   * add `start_line0`, `end_line0`, etc. from nested span structs using `Expr.__getitem__` paths ([datafusion.apache.org][3])
+   * ensure consistent column naming (alias) in Rust rules to preserve name invariants ([datafusion.apache.org][1])
+
+2. **Canonicalization passes**
+
+   * rewrite “ad hoc nested access strings” into canonical `Expr` patterns
+   * in Rust: do this with TreeNode transforms across `Expr` trees ([Docs.rs][6])
+
+3. **Inlining / simplification passes**
+
+   * inline certain UDF-like patterns or expand them into primitive expressions (exactly like the `add_one` example) ([datafusion.apache.org][9])
+
+4. **Plan shaping passes**
+
+   * automatically convert a “graph object table” into exploded relational views (unnest + joins) in a deterministic way (Python `transform` chain or Rust optimizer rule)
+
+---
+
+If you want the next “artifact”: I can draft a **minimal Rust rewrite extension API** (functions + data structures) that fits perfectly with `LogicalPlan.to_proto/from_proto` + `create_dataframe_from_logical_plan`, including:
+
+* a rule DSL (`rules_json`) for canonical rewrites,
+* a DFSchema-aware rule pass that preserves expression display names via aliasing,
+* and a debug function that returns `display_indent_schema()` strings before/after so you can diff rewrites in Python.
+
+[1]: https://datafusion.apache.org/library-user-guide/query-optimizer.html "Query Optimizer — Apache DataFusion  documentation"
+[2]: https://datafusion.apache.org/python/autoapi/datafusion/dataframe/index.html "datafusion.dataframe — Apache Arrow DataFusion  documentation"
+[3]: https://datafusion.apache.org/python/autoapi/datafusion/expr/index.html "datafusion.expr — Apache Arrow DataFusion  documentation"
+[4]: https://datafusion.apache.org/python/autoapi/datafusion/plan/index.html "datafusion.plan — Apache Arrow DataFusion  documentation"
+[5]: https://datafusion.apache.org/python/autoapi/datafusion/context/index.html "datafusion.context — Apache Arrow DataFusion  documentation"
+[6]: https://docs.rs/datafusion/latest/datafusion/common/tree_node/trait.TreeNode.html "TreeNode in datafusion::common::tree_node - Rust"
+[7]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html "Expr in datafusion::logical_expr - Rust"
+[8]: https://docs.rs/datafusion/latest/datafusion/common/tree_node/trait.TreeNodeRewriter.html "TreeNodeRewriter in datafusion::common::tree_node - Rust"
+[9]: https://datafusion.apache.org/library-user-guide/working-with-exprs.html "Working with Exprs — Apache DataFusion  documentation"
+[10]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html "SessionContext in datafusion::execution::context - Rust"
+[11]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html?utm_source=chatgpt.com "PhysicalOptimizerRule in datafusion::physical_optimizer"
+[12]: https://datafusion.apache.org/python/user-guide/io/table_provider.html?utm_source=chatgpt.com "Custom Table Provider - Apache DataFusion"
+
+Below is a “provider-level schema metadata hooks” deep dive that covers:
+
+* what exists in **Rust** (`TableProvider` trait + related types),
+* what exists in **datafusion-python** today,
+* and the **clean integration path** (Rust provider → `FFI_TableProvider` → PyCapsule → Python `register_table`), including exactly what functions/methods get called on each side.
+
+---
+
+## 1) Rust: `TableProvider` is the schema/metadata authority for a “table object”
+
+In Rust, `TableProvider` is the core interface the planner uses to understand a table’s schema, constraints, defaults, provenance, and scan capabilities. The trait’s docs lay out:
+
+* required: `schema()`, `table_type()`, `scan(...)` (plus `as_any`), and
+* provided: `constraints()`, `get_table_definition()`, `get_logical_plan()`, `get_column_default()`, `scan_with_args(...)`, `supports_filters_pushdown(...)`, etc. ([Docs.rs][1])
+
+### 1.1 Required methods that drive *planning correctness*
+
+#### `schema(&self) -> Arc<Schema>`
+
+The Arrow schema used for planning (and later for physical execution contracts). ([Docs.rs][1])
+
+#### `table_type(&self) -> TableType`
+
+Used for metadata/catalog semantics (base vs view vs temporary). ([Docs.rs][1])
+
+#### `scan(&self, state, projection, filters, limit) -> Future<Result<Arc<dyn ExecutionPlan>>>`
+
+This is the “real” query interface. The signature is explicitly designed for pushdowns:
+
+* `projection` is `Option<&Vec<usize>>` indices into `Self::schema` (projection pushdown) ([Docs.rs][1])
+* `filters: &[Expr]` are boolean expressions; if you override `supports_filters_pushdown`, DataFusion may pass filters into the scan (filter pushdown) ([Docs.rs][1])
+* `limit: Option<usize>` (limit pushdown) with semantics around exact/inexact filters ([Docs.rs][1])
+
+**Important planner detail:** filters can reference columns *not present* in the projection (“filter-only columns”), so your scan must not assume every filter column is projected. ([Docs.rs][2])
+
+---
+
+## 2) Rust: provider-level “schema metadata hooks” you’re targeting
+
+These are the “OO schema” hooks you asked about.
+
+### 2.1 Constraints: `constraints(&self) -> Option<&Constraints>`
+
+This returns:
+
+* `None` if the provider doesn’t support constraints
+* `Some(&Constraints)` if it does (and `Constraints::empty()` indicates “supported but none declared”). ([Docs.rs][1])
+
+**What DataFusion does with constraints:** DataFusion does **not** enforce PK/UK/FK/CHECK constraints at runtime; they are informational and intended for custom providers / other systems to use. ([datafusion.apache.org][3])
+
+So constraints are perfect for your CPG “dataset contract” layer (e.g., uniqueness of `(file_id, node_id)`), but enforcement is on *you* (either in your provider’s scan/write path or in your ingestion pipeline).
+
+### 2.2 Column defaults: `get_column_default(&self, column: &str) -> Option<&Expr>`
+
+Returns a default `Expr` for a column if your provider supports it. ([Docs.rs][1])
+
+Where this becomes valuable for “schema evolution”:
+
+* you can add new columns to your canonical schema and supply a stable default expression (e.g., `''`, `NULL`, `'v1'`, `map()`), allowing old physical data to appear as the new logical schema without rewriting files.
+
+### 2.3 DDL provenance: `get_table_definition(&self) -> Option<&str>`
+
+Returns the create statement used to create the table, if available. ([Docs.rs][1])
+
+This is the easiest “auditable metastore” hook:
+
+* Your registry can store canonical `CREATE EXTERNAL TABLE ... OPTIONS (...)` text
+* Your provider can return that exact text so tooling can reproduce definitions (or implement `SHOW CREATE TABLE` semantics externally).
+
+### 2.4 Plan-backed datasets (views): `get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>>`
+
+Returns the logical plan if the table is plan-backed (view-like). ([Docs.rs][1])
+
+This is directly relevant to a CPG system where many “tables” are derived views:
+
+* `cpg_nodes` view = `UNNEST(libcst_files.nodes)` + `UNNEST(scip.documents.occurrences)` + joins
+* You can make that view a first-class provider that returns its plan via `get_logical_plan`.
+
+There’s even active discussion around improving this API for inlining (e.g., wanting cloned plans rather than shared references). ([GitHub][4])
+
+### 2.5 Structured scan inputs: `scan_with_args(state, args: ScanArgs) -> ScanResult`
+
+`scan_with_args` exists so providers can consume a structured set of scan parameters (projection, filters, limit, **and ordering preferences**) rather than relying on the older positional signature. ([Docs.rs][1])
+
+The docs explicitly note this method can expose “upcoming `preferred_ordering`” and other parameters not available through `scan`. ([Docs.rs][1])
+
+### 2.6 Filter pushdown contract: `supports_filters_pushdown(&self, filters: &[&Expr]) -> Result<Vec<TableProviderFilterPushDown>>`
+
+This is how you tell the optimizer which filters you can apply during scan:
+
+* `Exact` / `Inexact` / `Unsupported`, one per input filter
+* default is “Unsupported for all filters” ([Docs.rs][1])
+
+A provider that understands its schema deeply can:
+
+* push down predicates on partition columns (file path),
+* push down file-level stats checks,
+* push down index lookups, etc.
+
+---
+
+## 3) Python: what you can do *natively* vs what you must do via Rust/FFI
+
+### 3.1 Python cannot (today) implement a full `TableProvider` with these hooks
+
+datafusion-python can wrap Python objects as schemas/catalogs, but **the TableProvider-level metadata hooks (`constraints`, `get_column_default`, `get_table_definition`, `get_logical_plan`, `scan_with_args`) are Rust trait methods**. Practically, you implement them in Rust and expose via FFI.
+
+### 3.2 The Python integration contract: `__datafusion_table_provider__` + PyCapsule
+
+DataFusion Python expects an object to expose a `TableProvider` capsule via:
+
+* a method named `__datafusion_table_provider__`
+* returning a `PyCapsule` whose name is conventionally `"datafusion_table_provider"` ([datafusion.apache.org][5])
+
+The Python docs for custom providers are explicit: implement the TableProvider in Rust, expose an `FFI_TableProvider` via PyCapsule (requires DataFusion 43.0.0+), and register it in Python. ([datafusion.apache.org][6])
+
+### 3.3 Exactly what datafusion-python does when you register such an object
+
+When you call `Schema.register_table(...)` (or `ctx.register_table(...)` which routes similarly), the binding checks:
+
+1. Does the Python object have `__datafusion_table_provider__`?
+2. If yes:
+
+   * call it
+   * downcast to `PyCapsule`
+   * validate the capsule name `"datafusion_table_provider"`
+   * read the `FFI_TableProvider` via `capsule.reference::<FFI_TableProvider>()`
+   * convert to a `ForeignTableProvider`
+   * register it as `Arc<dyn TableProvider>` ([Apache Git Repositories][7])
+
+Those steps are visible directly in the `datafusion-python` source. ([Apache Git Repositories][7])
+
+---
+
+## 4) Rust → Python: end-to-end implementation pattern (what to write)
+
+### 4.1 Rust crate dependencies and the “FFI” bridge
+
+The core object you export is `FFI_TableProvider` (from DataFusion’s FFI support). DataFusion Python’s contributor guide documents creating a capsule named `"datafusion_table_provider"` and, on the receiving side, turning it into an `FFI_TableProvider` and then a `ForeignTableProvider`. ([datafusion.apache.org][5])
+
+There is also a dedicated `datafusion-ffi` crate published for “Apache DataFusion Foreign Function Interface,” which is the general packaging of this capability. ([Crates][8])
+
+### 4.2 Rust: implement `TableProvider` with schema metadata hooks
+
+At minimum you implement:
+
+* `schema`, `table_type`, `scan`
+  …and then override whichever metadata hooks you want.
+
+Skeleton (abridged to the relevant methods):
+
+```rust
+use std::sync::Arc;
+use datafusion::catalog::{TableProvider, TableType};
+use datafusion::common::{Result, Constraints};
+use datafusion::logical_expr::{Expr, LogicalPlan};
+use datafusion::execution::context::SessionState;
+use datafusion::physical_plan::ExecutionPlan;
+
+#[derive(Clone)]
+pub struct CpgProvider {
+    schema: Arc<arrow::datatypes::Schema>,
+    create_sql: String,
+    constraints: Constraints,
+    // maybe: default_exprs: HashMap<String, Expr>,
+    // maybe: view_plan: Option<LogicalPlan>,
+}
+
+#[async_trait::async_trait]
+impl TableProvider for CpgProvider {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn schema(&self) -> Arc<arrow::datatypes::Schema> { self.schema.clone() }
+    fn table_type(&self) -> TableType { TableType::Base }
+
+    async fn scan(
+        &self,
+        state: &dyn datafusion::catalog::Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // build an ExecutionPlan using your backing store
+        // use projection/filters/limit for pushdown
+        unimplemented!()
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        Some(&self.constraints)
+    }
+
+    fn get_table_definition(&self) -> Option<&str> {
+        Some(self.create_sql.as_str())
+    }
+
+    fn get_column_default(&self, col: &str) -> Option<&Expr> {
+        // return a stable default Expr for schema evolution
+        None
+    }
+
+    fn get_logical_plan(&self) -> Option<std::borrow::Cow<'_, LogicalPlan>> {
+        None
+    }
+}
+```
+
+The method set and semantics above are exactly as documented on the `TableProvider` trait: `constraints`, `get_table_definition`, `get_logical_plan`, `get_column_default`, and the pushdown-oriented `scan` signature. ([Docs.rs][1])
+
+### 4.3 Rust: expose `FFI_TableProvider` via PyCapsule (`__datafusion_table_provider__`)
+
+The DataFusion Python docs give the exact pattern (including the capsule name):
+
+```rust
+#[pymethods]
+impl MyTableProvider {
+    fn __datafusion_table_provider__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyCapsule>> {
+        let name = cr"datafusion_table_provider".into();
+        let provider = Arc::new(self.clone());
+        let provider = FFI_TableProvider::new(provider, false, None);
+        PyCapsule::new_bound(py, provider, Some(name.clone()))
+    }
+}
+```
+
+This is straight from the DataFusion Python “Custom Table Provider” guide. ([datafusion.apache.org][6])
+The contributor guide explains the receiving-side conversion (`capsule.reference::<FFI_TableProvider>()`). ([datafusion.apache.org][5])
+
+### 4.4 Python: register and use it
+
+From Python:
+
+```python
+from datafusion import SessionContext
+
+ctx = SessionContext()
+provider = MyTableProvider()     # your PyO3 extension class
+
+ctx.register_table("cpg", provider)
+ctx.sql("select * from cpg limit 10").show()
+```
+
+The custom provider doc shows that `ctx.register_table("capsule_table", provider)` works once the provider exposes `__datafusion_table_provider__`. ([datafusion.apache.org][6])
+
+---
+
+## 5) Making the metadata *useful* in Python (practical patterns)
+
+### 5.1 Constraints are “informational”: decide where enforcement lives
+
+Since DataFusion doesn’t enforce constraints at runtime ([datafusion.apache.org][3]), you typically enforce them by one of:
+
+* **Write-time enforcement** (best): your ingestion/writer path checks uniqueness, non-null invariants, etc.
+* **Scan-time enforcement** (optional): your provider can inject validation Exec nodes or fail fast when invariants break.
+* **Explicit validation queries**: provide a library of “contract check” queries that run after materialization.
+
+For CPG tables, a high-value set:
+
+* uniqueness on `(file_id, node_id)`
+* referential integrity: edge endpoints exist in nodes
+* span coordinate ABI validity
+
+### 5.2 Column defaults as schema evolution without rewriting files
+
+This is the highest ROI “OO schema” feature:
+
+* You evolve your canonical nested schema (add a field)
+* Old physical files don’t have it
+* Your provider supplies a default `Expr` for the missing logical column
+
+This is conceptually cleaner than storing “attrs maps” everywhere for evolution, and it preserves typed access.
+
+### 5.3 DDL provenance + view plans = registry-grade reproducibility
+
+* `get_table_definition` can return the canonical `CREATE …` string (including OPTIONS) ([Docs.rs][1])
+* `get_logical_plan` can make derived datasets (views) first-class and introspectable ([Docs.rs][1])
+
+In a registry system, you’d store both:
+
+* “how to reproduce” (DDL text)
+* “how it’s derived” (logical plan)
+
+---
+
+## 6) Bonus: scan/pushdown hooks matter even for “schema metadata”
+
+Your provider-level schema metadata is only half the story; the other half is “can you exploit it during scan?”
+
+* `supports_filters_pushdown` (Exact/Inexact/Unsupported) is the contract for predicate pushdown ([Docs.rs][1])
+* `scan_with_args` is how DataFusion will hand you richer, structured scan preferences (notably ordering) ([Docs.rs][1])
+
+For CPG workloads, this enables things like:
+
+* pushing down `file_id = …` and `span.start.line0 BETWEEN …` into your storage layer
+* pre-sorting / exploiting known orderings when you’re building “TopK” or streaming-friendly plans
+
+---
+
+### If you want the next step
+
+If you tell me what your **backing store** is for CPG datasets (Parquet directories? Delta? in-memory Arrow? DuckDB?), I can give you a concrete provider design that:
+
+* returns a canonical nested Arrow schema for nodes/edges,
+* implements `constraints()` for your contract,
+* uses `get_column_default()` for controlled schema evolution,
+* returns `get_table_definition()` for registry reproducibility,
+* uses `supports_filters_pushdown()` + `scan_with_args()` to push down the common CPG predicates.
+
+[1]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html "TableProvider in datafusion::catalog - Rust"
+[2]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html?utm_source=chatgpt.com "TableProvider in datafusion::datasource - Rust"
+[3]: https://datafusion.apache.org/library-user-guide/table-constraints.html?utm_source=chatgpt.com "Table Constraint Enforcement - Apache DataFusion"
+[4]: https://github.com/apache/datafusion/issues/12120?utm_source=chatgpt.com "Add the possibility to work with plan clones directly in ` ..."
+[5]: https://datafusion.apache.org/python/contributor-guide/ffi.html "Python Extensions — Apache Arrow DataFusion  documentation"
+[6]: https://datafusion.apache.org/python/user-guide/io/table_provider.html "Custom Table Provider — Apache Arrow DataFusion  documentation"
+[7]: https://apache.googlesource.com/datafusion-python/%2B/refs/tags/48.0.0/src/catalog.rs "src/catalog.rs - datafusion-python - Git at Google"
+[8]: https://crates.io/crates/datafusion-ffi?utm_source=chatgpt.com "datafusion-ffi - crates.io: Rust Package Registry"
+
+Below is a **scan & pushdown** deep dive that covers:
+
+* what you can do **purely in `datafusion-python`** (plan construction + verification),
+* what exists in **Rust** (provider/scan contracts + file-scan stack + Parquet pushdowns),
+* and how to **integrate Rust capabilities into Python** when you need deeper pushdowns than Python can express.
+
+---
+
+## 0) Pushdown taxonomy and where it lives
+
+DataFusion pushdowns happen at multiple layers:
+
+1. **Logical plan shaping** (projection/filter/limit/sort in your query plan)
+2. **TableProvider scan contract** (what the provider accepts as pushed-down: projection indices, filters, limit, ordering)
+3. **File scan stack** (ListingTable / FileSource / ParquetSource can push predicates into Parquet row groups/pages, and can do format-specific projection pushdown)
+
+You’ll typically combine **Python plan shaping** + **file-backed provider hints**, and only build a custom Rust provider when you need a non-standard pushdown (e.g., custom indexes, registry-managed manifests, or schema evolution adapters).
+
+---
+
+## 1) Python: “pure DataFusion” pushdowns via DataFrame plan construction
+
+### 1.1 The plan-building APIs that trigger pushdowns
+
+In Python, the following DataFrame methods are your primary pushdown levers:
+
+* `select(*args)`, `select_columns(*args)` (projection)
+* `filter(predicate)` (predicate)
+* `limit(count[, offset])` (limit)
+* `sort(*exprs)` (ordering requirement)
+* plus `execution_plan()` and `explain(verbose, analyze)` for verification. ([arrow.staged.apache.org][1])
+
+DataFrames are lazily evaluated; the engine optimizes and executes only on terminal ops like `collect()`, `show()`, `to_pandas()`. ([Apache DataFusion][2])
+
+### 1.2 Schema-driven projections for nested CPG bundles
+
+If you have nested columns (e.g., `nodes: LIST<STRUCT<...>>`), you typically:
+
+* `unnest(nodes)` (explode list → rows)
+* then project only required nested fields (minimize IO + CPU).
+
+Example (SQL from Python, but same idea via DataFrame API):
+
+```sql
+SELECT
+  file_id,
+  n['cst_id'] AS cst_id,
+  n['span']['start']['line0'] AS start_line0
+FROM libcst_files
+CROSS JOIN unnest(nodes) AS n
+WHERE n['kind'] = 'libcst.FunctionDef'
+LIMIT 100;
+```
+
+If the underlying scan can push down struct-field projection (version/format-dependent), this kind of query is the shape you want. DataFusion explicitly moved projection handling into `FileSource` implementations so formats like Parquet can do **format-specific projection pushdown (including struct field access)**. ([Apache DataFusion][3])
+
+### 1.3 Verifying pushdowns from Python
+
+You have two “compilers’ tools”:
+
+**(A) Physical plan inspection**
+
+```python
+plan = df.execution_plan()
+print(plan.display_indent())
+```
+
+`execution_plan()` is exposed on the DataFrame and ExecutionPlan has display helpers. ([arrow.staged.apache.org][1])
+
+**(B) Explain / Explain Analyze**
+
+```python
+df.explain(verbose=True, analyze=True)
+```
+
+`explain(analyze=True)` runs the plan and prints metrics. ([arrow.staged.apache.org][1])
+
+If predicate pushdown is enabled, DataFusion’s explain docs note `DataSourceExec` with `ParquetSource` reports pruning/pushdown metrics such as `page_index_rows_pruned`. ([Apache DataFusion][4])
+
+**(C) Streaming execution for large scans**
+
+* `execute_stream()`
+* `execute_stream_partitioned()` ([arrow.staged.apache.org][1])
+
+These let you validate pushdown behavior without materializing everything.
+
+---
+
+## 2) Python: registration-time knobs that materially affect scan pushdowns
+
+### 2.1 `read_parquet` / `register_parquet`: row-group pruning + schema/metadata behavior + ordering hints
+
+Python signature (read side shown, register side is analogous):
+
+```python
+read_parquet(
+  path,
+  table_partition_cols=None,
+  parquet_pruning=True,
+  file_extension=".parquet",
+  skip_metadata=True,
+  schema=None,
+  file_sort_order=None
+) -> DataFrame
+```
+
+Key knobs:
+
+* `parquet_pruning`: “use the predicate to prune row groups”
+* `skip_metadata`: “skip any metadata that may be in the file schema” to avoid schema conflicts
+* `schema`: optional schema override
+* `file_sort_order`: declare sort order for the file (each key can be a column name, Expr, or SortExpr) ([Apache DataFusion][5])
+
+Same parameters exist on `register_parquet(...)` (register as named table). ([Apache DataFusion][5])
+
+**What this buys you:**
+
+* Projection + predicate pushdowns become more effective when the reader has stable schema and can use row-group statistics.
+* `file_sort_order` is a *contract* that can allow order-based optimizations (avoid redundant sorts) when valid.
+
+### 2.2 `register_listing_table`: multi-file table scans + partition columns + canonical schema override
+
+Python docs describe `register_listing_table(...)` with:
+
+* `table_partition_cols`
+* `file_extension`
+* `schema` (canonical override)
+* `file_sort_order` ([Apache DataFusion][5])
+
+This is the right primitive when your dataset is “a directory/prefix of Parquet shards”.
+
+### 2.3 Session-wide pruning toggle: `SessionConfig.with_parquet_pruning`
+
+Python `SessionConfig` includes:
+
+```python
+SessionConfig.with_parquet_pruning(enabled: bool = True) -> SessionConfig
+```
+
+“Enable or disable the use of pruning predicate for parquet readers. Pruning predicates will enable the reader to skip row groups.” ([Apache DataFusion][6])
+
+Practical pattern:
+
+* Keep pruning on for analytics
+* Turn it off only when debugging correctness / diagnosing pruning-related issues
+
+---
+
+## 3) Rust: the provider scan contract that defines pushdowns
+
+If you implement a custom provider (or rely on built-ins like ListingTable/ParquetSource), everything ultimately routes through `TableProvider`.
+
+### 3.1 `TableProvider::scan`: projection + filters + limit (the core pushdown interface)
+
+`TableProvider::scan(...)` receives:
+
+* `projection: Option<&Vec<usize>>` — indices into `Self::schema()` (**projection pushdown**)
+* `filters: &[Expr]` — boolean predicates to evaluate during scan (**filter pushdown**)
+* `limit: Option<usize>` — “maximum number of records to return” (**limit pushdown**)
+
+Filters are ANDed together, and DataFusion only passes filters if you override `supports_filters_pushdown`; otherwise `filters` will be empty. ([Docs.rs][7])
+
+### 3.2 `supports_filters_pushdown`: exact vs inexact vs unsupported
+
+The custom table provider guide explains that `supports_filters_pushdown` returns a `Vec<TableProviderFilterPushDown>` with three variants:
+
+* `Unsupported`
+* `Inexact`
+* `Exact` ([Apache DataFusion][8])
+
+This is the formal contract that tells the optimizer whether it still needs a `FilterExec` above the scan.
+
+### 3.3 `scan_with_args` / `ScanArgs`: structured scan params (ordering and more)
+
+Rust `TableProvider` also has `scan_with_args(...)` (and `ScanArgs`) so scans can consume structured parameters beyond the legacy signature (including ordering preferences). This is where “sort pushdown / preferred ordering” is heading in the API surface. ([Docs.rs][7])
+
+---
+
+## 4) Rust file scan stack: where Parquet pushdowns actually happen
+
+When you use file-backed tables (ListingTable / register_parquet / register_listing_table), DataFusion typically builds:
+
+* `DataSourceExec` → `ParquetSource` (for Parquet)
+* with a `FileScanConfig` driving what gets pushed down.
+
+### 4.1 `FileScanConfig.expr_adapter_factory`: adapting pushed-down filters/projections to file schemas
+
+Rust `FileScanConfig` includes:
+
+* `expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>`
+  “adapt filters and projections that are pushed down into the scan from the logical schema to the physical schema of the file.” ([Docs.rs][9])
+
+This is central for:
+
+* schema evolution across files,
+* mapping logical columns to physical columns,
+* handling missing columns / type shifts.
+
+### 4.2 Projection pushdown moved into `FileSource` (format-specific projection)
+
+DataFusion’s upgrade guide explicitly states:
+
+* “Projection handling has been moved from `FileScanConfig` into `FileSource` implementations.”
+* This enables “format-specific projection pushdown (e.g., Parquet can push down struct field access …).” ([Apache DataFusion][3])
+
+For your nested CPG datasets, this is the critical capability: it’s what makes “select only `span.start.line0`” potentially cheaper than reading the full struct.
+
+### 4.3 Parquet-specific pushdown/pruning knobs (Rust config + SQL format OPTIONS)
+
+DataFusion documents Parquet format options including:
+
+* `pruning` (row group pruning based on min/max statistics)
+* `pushdown_filters` (filter pushdown during Parquet decoding)
+* `reorder_filters` (heuristic filter reorder during decoding)
+* `skip_metadata`
+* `metadata_size_hint`
+* plus others like view types, binary-as-string, etc. ([Apache DataFusion][10])
+
+These can be set:
+
+* via SQL `OPTIONS(...)` on `CREATE EXTERNAL TABLE`, or
+* via `SessionConfig` key-value (`datafusion.execution.parquet.pushdown_filters` etc.). The Rust `SessionConfig` docs explicitly describe how `datafusion.execution.parquet.pushdown_filters` maps into `ParquetOptions::pushdown_filters`. ([Docs.rs][11])
+
+### 4.4 What Parquet pruning/pushdown does under the hood
+
+DataFusion’s Parquet pruning blog describes a multi-step approach:
+
+* column projection,
+* row group statistics pruning,
+* page-level pruning,
+* potentially row-level filtering, depending on settings and file metadata. ([Apache DataFusion][12])
+
+The Explain guide notes that when predicate pushdown is enabled, `DataSourceExec`/`ParquetSource` exposes metrics such as `page_index_rows_pruned`. ([Apache DataFusion][4])
+
+**Takeaway:** “pushdown” isn’t one feature—it’s a ladder. The more metadata/indexes you can exploit (row group stats, page indexes, bloom filters, custom indexes), the less you read.
+
+---
+
+## 5) Ordering pushdown: how `file_sort_order` and ordering analysis fit together
+
+### 5.1 Python’s `file_sort_order` is your “ordering contract”
+
+Both `read_parquet/register_parquet` and `register_listing_table` accept `file_sort_order`, described as: “Sort order for the file… each sort key can be specified as a column name (`str`), an expression (`Expr`), or a `SortExpr`.” ([Apache DataFusion][5])
+
+If you assert that contract correctly, DataFusion’s order-aware optimizer can sometimes remove redundant sorts / merges (this is an active optimization area; see DataFusion’s ordering analysis work). ([Apache DataFusion][13])
+
+### 5.2 Rust’s direction: ordering preferences flowing into scan args
+
+As noted above, the `scan_with_args`/`ScanArgs` pathway is where “preferred ordering” is intended to propagate down into scans. ([Docs.rs][7])
+
+---
+
+## 6) How to integrate Rust pushdown power into a Python implementation
+
+### Approach A — Stay in Python; drive pushdowns via plan + registration knobs
+
+This is usually enough for Parquet-backed CPG datasets:
+
+1. Register tables with:
+
+   * `parquet_pruning=True`
+   * `table_partition_cols` where you have meaningful Hive partitions
+   * `schema=` for canonical schema (avoid drift surprises)
+   * `file_sort_order=` when you control file ordering ([Apache DataFusion][5])
+
+2. Write queries that:
+
+   * project only needed nested fields (`select`, `unnest`, nested access)
+   * filter early on partition columns / selective predicates (`filter`)
+   * limit early (`limit`) and avoid unnecessary sorts
+
+3. Verify:
+
+   * `df.execution_plan().display_indent()` + `df.explain(analyze=True)` ([arrow.staged.apache.org][1])
+
+### Approach B — Implement a custom Rust `TableProvider` / `FileSource` and expose via PyCapsule
+
+You do this when:
+
+* you have **non-Parquet indexes** (or user-defined Parquet indexes),
+* you want **registry-managed file manifests** (avoid object-store LIST / support snapshot semantics),
+* you want **custom predicate pushdown logic** beyond Parquet’s built-ins,
+* you want **schema evolution adaptation** that fills defaults/casts deterministically.
+
+Core Rust ingredients:
+
+* `supports_filters_pushdown` to classify filters as exact/inexact/unsupported ([Apache DataFusion][8])
+* `scan` / `scan_with_args` to consume projection/filters/limit/ordering ([Docs.rs][7])
+* `FileScanConfig.expr_adapter_factory` when you need logical→physical adaptation across schema drift ([Docs.rs][9])
+* `FileSource`-level projection pushdown for nested structs (where supported) ([Apache DataFusion][3])
+
+Python integration:
+
+* Build the provider in Rust, export as a PyCapsule (`__datafusion_table_provider__`), then `ctx.register_table("my_table", provider)` (this is the standard pattern for Rust-written catalogs/providers in DataFusion Python). ([Apache DataFusion][14])
+
+---
+
+## 7) “Schema-derived action” patterns for your CPG system (practical recipes)
+
+### 7.1 Automatically project only the fields your rule needs
+
+Given a canonical nested schema, your orchestrator can map high-level intent → minimal projection:
+
+* If a query needs `span.start.line0` and `kind`, build:
+
+  * projection for `kind`, `span.start.line0`
+  * filter on `kind` + span ranges
+  * and rely on Parquet row group pruning and/or partition pruning.
+    (Parquet pruning/pushdown is most effective when you keep projections small and filters selective.) ([Apache DataFusion][12])
+
+### 7.2 Partition columns: treat `run_id`, `repo`, `path_hash_prefix` as first-class pruning keys
+
+If you store data in Hive-style partitions (e.g., `run_id=.../repo=.../part-*.parquet`) and tell DataFusion via `table_partition_cols`, filters on those columns become file-level pruning (before Parquet metadata is even read). ([Apache DataFusion][5])
+
+### 7.3 Ordering: exploit `file_sort_order` only when you can guarantee it
+
+If you can guarantee files are sorted by (say) `(file_id, node_id)`, declare that order. It can unlock sort avoidance / better merge planning in order-aware optimizations. ([Apache DataFusion][5])
+
+---
+
+If you want, I can give you a **concrete “pushdown validation harness”** for your CPG datasets: a Python function that runs a query, prints the physical plan, and asserts the presence of expected scan-time behaviors (row group pruning on/off, filter pushdown enabled, page index metrics present, etc.) based on configuration and query shape.
+
+[1]: https://arrow.staged.apache.org/datafusion-python/generated/datafusion.DataFrame.html "datafusion.DataFrame — Apache Arrow DataFusion  documentation"
+[2]: https://datafusion.apache.org/python/user-guide/dataframe/index.html?utm_source=chatgpt.com "DataFrames — Apache Arrow DataFusion documentation"
+[3]: https://datafusion.apache.org/library-user-guide/upgrading.html?utm_source=chatgpt.com "Upgrade Guides — Apache DataFusion documentation"
+[4]: https://datafusion.apache.org/user-guide/explain-usage.html?utm_source=chatgpt.com "Reading Explain Plans — Apache DataFusion documentation"
+[5]: https://datafusion.apache.org/python/autoapi/datafusion/context/index.html "datafusion.context — Apache Arrow DataFusion  documentation"
+[6]: https://datafusion.apache.org/python/autoapi/datafusion/index.html?utm_source=chatgpt.com "Apache Arrow DataFusion documentation"
+[7]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html?utm_source=chatgpt.com "TableProvider in datafusion::datasource - Rust"
+[8]: https://datafusion.apache.org/library-user-guide/custom-table-providers.html?utm_source=chatgpt.com "Custom Table Provider — Apache DataFusion documentation"
+[9]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.FileScanConfig.html?utm_source=chatgpt.com "FileScanConfig in datafusion::datasource::physical_plan"
+[10]: https://datafusion.apache.org/user-guide/sql/format_options.html?utm_source=chatgpt.com "Format Options — Apache DataFusion documentation"
+[11]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionConfig.html?utm_source=chatgpt.com "SessionConfig in datafusion::execution::context - Rust"
+[12]: https://datafusion.apache.org/blog/2025/03/20/parquet-pruning/?utm_source=chatgpt.com "Parquet Pruning in DataFusion: Read Only What Matters"
+[13]: https://datafusion.apache.org/blog/2025/03/11/ordering-analysis/?utm_source=chatgpt.com "Using Ordering for Better Plans in Apache DataFusion"
+[14]: https://datafusion.apache.org/python/user-guide/data-sources.html?utm_source=chatgpt.com "Data Sources — Apache Arrow DataFusion documentation"
+
+Below is the *schema-evolution / mismatch handling* stack around **`PhysicalExprAdapter`**, with:
+
+* what exists in **Rust** (the real mechanism),
+* what you can do in **datafusion-python** today to participate,
+* and how to build a **Rust provider + FileScan** that uses adapters and then expose it back into Python via **PyCapsule**.
+
+---
+
+## 0) What problem this solves (and where it sits)
+
+In file-backed tables (Parquet/CSV/JSON, ListingTable, custom FileSource), you often have:
+
+* a **logical table schema** (what queries are written against), and
+* a **physical file schema** (what a specific file actually contains).
+
+Schema evolution means those diverge:
+
+* missing columns,
+* type changes,
+* nested struct fields appearing/disappearing,
+* partition columns “virtualized” from paths.
+
+DataFusion’s modern approach is:
+
+1. **Plan/optimize using the logical schema**
+2. When pushing filters/projections down into file scans, **rewrite the *physical expressions*** so they can be evaluated against the *physical file schema* (plus any “virtual” values like partition literals).
+
+That rewriting is the job of **`PhysicalExprAdapter`**: *“used in file scans to rewrite expressions so they can be evaluated against the physical schema … handling differences such as type mismatches or missing columns common in schema evolution scenarios.”* ([Docs.rs][1])
+
+---
+
+## 1) Rust: the core mechanism (`PhysicalExprAdapter` + factory + pre-processing)
+
+### 1.1 Trait contracts
+
+#### `PhysicalExprAdapterFactory`
+
+The factory is keyed by schemas:
+
+```rust
+fn create(
+  &self,
+  logical_file_schema: Arc<Schema>,
+  physical_file_schema: Arc<Schema>,
+) -> Arc<dyn PhysicalExprAdapter>;
+```
+
+This is the formal contract: file scan code creates an adapter per (logical schema, physical schema) pair. ([Docs.rs][2])
+
+#### `PhysicalExprAdapter`
+
+The adapter rewrites *physical* expressions:
+
+```rust
+fn rewrite(
+  &self,
+  expr: Arc<dyn PhysicalExpr>,
+) -> Result<Arc<dyn PhysicalExpr>, DataFusionError>;
+```
+
+The docs are explicit: this is used in file scans to rewrite expressions to match the physical schema. ([Docs.rs][1])
+
+---
+
+### 1.2 Default implementation behavior (what you get “for free”)
+
+The crate `datafusion_physical_expr_adapter` re-exports:
+
+* `DefaultPhysicalExprAdapter`
+* `DefaultPhysicalExprAdapterFactory`
+* `PhysicalExprAdapter`
+* `PhysicalExprAdapterFactory`
+* `replace_columns_with_literals` ([Docs.rs][3])
+
+**`DefaultPhysicalExprAdapter`** explicitly supports:
+
+* **Type casting:** wraps expressions with casts when logical vs physical types differ
+* **Missing columns:** replaces references with **null literals**
+* **Struct field access:** missing struct fields → rewritten to **null**
+* **Partition column values:** partition column references can be replaced with literal values (now done via `replace_columns_with_literals`) ([Docs.rs][4])
+
+This is the “good enough for many evolutions” baseline:
+
+* additive columns → missing columns become null
+* nested struct evolution → missing fields become null
+* some type drift → adapter inserts casts (not simplification; separate simplifiers handle that) ([Docs.rs][4])
+
+---
+
+### 1.3 Pre-processing step you *must* do now: `replace_columns_with_literals`
+
+DataFusion moved *partition column replacement* out of the adapter:
+
+> “Partition column replacement must now be done via `replace_columns_with_literals()` before expressions are passed to the adapter.” ([Apache DataFusion][5])
+
+The function signature:
+
+```rust
+pub fn replace_columns_with_literals<K, V>(
+  expr: Arc<dyn PhysicalExpr>,
+  replacements: &HashMap<K, V>,
+) -> Result<Arc<dyn PhysicalExpr>>
+where
+  K: Borrow<str> + Eq + Hash,
+  V: Borrow<ScalarValue>;
+```
+
+And the docs list key use cases:
+
+* partition pruning (replace partition cols with literal values for the partition)
+* constant folding
+* filling non-null defaults in a custom adapter ([Docs.rs][6])
+
+**Migration / call order (new canonical pattern):**
+
+1. `expr_with_literals = replace_columns_with_literals(expr, &partition_values)`
+2. `adapted = adapter.rewrite(expr_with_literals)` ([Apache DataFusion][5])
+
+---
+
+## 2) Rust: where adapters plug into file scans (`FileScanConfig.expr_adapter_factory`)
+
+File scans are driven by `FileScanConfig` (for `DataSourceExec`), which has:
+
+```rust
+pub expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+```
+
+as a first-class field. ([Docs.rs][7])
+
+So the execution path is typically:
+
+* build `FileScanConfig` with a `FileSource` (e.g., `ParquetSource`)
+* optionally set `expr_adapter_factory`
+* create `DataSourceExec` from that config
+* the scan path uses the adapter factory to rewrite pushed-down filters/projections to match each file’s schema ([Docs.rs][7])
+
+### 2.1 Why DataFusion is moving to PhysicalExprAdapter (vs SchemaAdapter)
+
+DataFusion is explicitly planning to deprecate SchemaAdapter in favor of `PhysicalExprAdapter` for predicate pushdown, noting it enables:
+
+* better access to the expression in Parquet scanning for advanced optimizations (including struct/shredded variants) ([GitHub][8])
+
+And downstream ecosystems already see this warning (example delta-rs issue):
+
+> “The SchemaAdapter API will be removed … Use PhysicalExprAdapterFactory API instead.” ([GitHub][9])
+
+---
+
+## 3) Rust: customizing evolution semantics (defaults, strictness, struct-field evolution)
+
+### 3.1 Custom adapter: replace missing columns with defaults instead of nulls
+
+The `PhysicalExprAdapter` docs include a full example of a custom adapter that detects missing columns and substitutes a **default literal** (rather than null). ([Docs.rs][10])
+
+The key idea:
+
+* walk the physical expression tree
+* when you see a `Column` expression that is absent from `physical_file_schema`, rewrite it to `lit(default_value)`
+* otherwise keep it unchanged ([Docs.rs][10])
+
+That’s exactly how you implement “OO schema evolution” policies:
+
+* defaults encoded in your registry
+* defaults encoded in Arrow Field metadata
+* defaults dependent on schema version
+
+### 3.2 Struct-field evolution is handled explicitly
+
+The default adapter explicitly rewrites missing struct-field access to null: `struct_column.missing_field → null`. ([Docs.rs][4])
+
+For nested CPG bundles, this is the “cheap additive evolution” lever:
+
+* adding `span.byte_span` later won’t break old files; access becomes null.
+
+---
+
+## 4) Python participation: what you can do *today* without Rust
+
+Python does not (currently) expose the adapter factory directly, but you can structure your system so the engine’s default behavior works for you.
+
+### 4.1 Canonical schema override at registration (logical schema contract)
+
+The key principle: **plan against your logical schema** even if some files differ.
+
+In datafusion-python you can supply `schema=` when reading Parquet (and the same concept applies when registering tables):
+
+`read_parquet(..., schema: pyarrow.Schema | None = None, skip_metadata: bool = True, table_partition_cols=..., parquet_pruning=True, file_sort_order=...)`
+
+* If `schema` is `None`, DataFusion infers from file contents.
+* `skip_metadata` helps avoid schema conflicts due to embedded metadata. ([Apache DataFusion][11])
+
+This is exactly how Python participates in schema-evolution workflows:
+
+* **canonical schema in the registry**
+* **register/listing table with schema override**
+* let the scan layer adapt as supported (missing columns → null; casts inserted; missing struct fields → null)
+
+### 4.2 Versioned datasets (avoid mixed-version scans)
+
+Operationally, the easiest way to avoid “per-file schema mismatch” is:
+
+* write each run / schema version to a new location (or new table name),
+* then queries always scan homogeneous schema files.
+
+This doesn’t require adapter customization and avoids the worst edge cases (e.g., conflicting nested struct layouts across shards).
+
+### 4.3 Choose your `skip_metadata` posture deliberately
+
+If you use Arrow field metadata to encode evolution semantics, leaving metadata enabled can help (and conflicts become “contract violations”). If you treat metadata as non-binding, `skip_metadata=True` reduces conflict failures. ([Apache DataFusion][11])
+
+(Practical note: there are known issues around Parquet metadata round-tripping in python bindings; treat this as something to test for your pipeline.) ([GitHub][12])
+
+---
+
+## 5) Full-control path: Rust TableProvider/FileSource using adapters, then expose to Python
+
+If you truly want “read old files as new schema” with deterministic behavior (defaults, casts, strictness), you implement the scan stack in Rust and export it.
+
+### 5.1 Rust-side: build a provider that uses `FileScanConfig.expr_adapter_factory`
+
+At a high level:
+
+1. Your provider’s **logical schema** is the canonical Arrow schema you want users to query against.
+2. For each file group (or per file), you obtain the **physical file schema** (from file metadata).
+3. You create an adapter:
+
+   ```rust
+   let adapter = factory.create(logical_file_schema.clone(), physical_file_schema.clone());
+   ```
+
+   ([Docs.rs][2])
+4. For each pushed-down filter/projection physical expression:
+
+   * call `replace_columns_with_literals(...)` with partition values (if any)
+   * then `adapter.rewrite(...)` to produce an expression valid for the physical schema ([Apache DataFusion][5])
+5. Build a `FileScanConfig` with `expr_adapter_factory: Some(factory)` so the scan pipeline consistently adapts expressions. ([Docs.rs][7])
+
+### 5.2 Pre-processing partition values is mandatory in new versions
+
+The upgrade guide explicitly calls out the new required preprocessing step and that `FilePruner` signatures changed accordingly. ([Apache DataFusion][5])
+So if you previously relied on “adapter handles partitions,” you now must implement:
+
+* partition literal substitution (`replace_columns_with_literals`)
+* schema adaptation (`adapter.rewrite`) as separate steps.
+
+### 5.3 Expose the provider to Python via PyCapsule (`FFI_TableProvider`)
+
+DataFusion Python’s official docs lay out the supported integration:
+
+* Implement `TableProvider` in Rust
+* Expose an `FFI_TableProvider` via PyCapsule (DataFusion 43.0.0+) ([Apache DataFusion][13])
+
+The Python-facing method name and capsule name are standardized:
+
+```rust
+fn __datafusion_table_provider__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyCapsule>> {
+    let name = cr"datafusion_table_provider".into();
+    let provider = Arc::new(self.clone());
+    let provider = FFI_TableProvider::new(provider, false, None);
+    PyCapsule::new_bound(py, provider, Some(name.clone()))
+}
+```
+
+And in Python:
+
+```python
+ctx = SessionContext()
+provider = MyTableProvider()
+ctx.register_table("capsule_table", provider)
+ctx.table("capsule_table").show()
+```
+
+([Apache DataFusion][13])
+
+The FFI contributor guide also explains why this is the recommended approach (stable ABI) and how FFI_ vs Foreign_* wrappers work on either side of the boundary. ([Apache DataFusion][14])
+
+---
+
+## 6) What this enables for your nested CPG bundles (practical “best-in-class” outcomes)
+
+With a logical canonical schema like:
+
+* `nodes: LIST<STRUCT<...>>`
+* `edges: LIST<STRUCT<...>>`
+* nested `span` structs evolving over time,
+
+you get:
+
+### Baseline (no custom adapter)
+
+* missing columns → nulls
+* missing struct fields → nulls
+* type mismatches → casts inserted
+* partition columns handled via literal substitution pre-step ([Docs.rs][4])
+
+### “OO schema evolution” (custom adapter)
+
+* missing columns → *default literals* (e.g., `0`, `''`, `map()`), using the custom rewrite pattern shown in the adapter docs ([Docs.rs][10])
+* strict policies: fail fast on certain mismatches (instead of returning nulls)
+* per-column policies derived from Arrow Field metadata or registry metadata
+
+### Performance wins the project is explicitly aiming for
+
+DataFusion’s direction (deprecating SchemaAdapter in favor of PhysicalExprAdapter) is motivated by enabling deeper scan-time optimizations (including better access to expression and struct/shredded variants in Parquet). ([GitHub][8])
+
+---
+
+If you want, I can produce a concrete “adapter policy matrix” for your CPG schemas (for each evolution type: added column, dropped column, type widen, nested-field add) showing: default adapter behavior, recommended custom adapter behavior, and exactly where in the scan pipeline you enforce it (literal substitution → rewrite → row-group pruning → row filter).
+
+[1]: https://docs.rs/datafusion/latest/datafusion/physical_expr_adapter/trait.PhysicalExprAdapter.html "PhysicalExprAdapter in datafusion::physical_expr_adapter - Rust"
+[2]: https://docs.rs/datafusion/latest/datafusion/physical_expr_adapter/trait.PhysicalExprAdapterFactory.html "PhysicalExprAdapterFactory in datafusion::physical_expr_adapter - Rust"
+[3]: https://docs.rs/datafusion-physical-expr-adapter "datafusion_physical_expr_adapter - Rust"
+[4]: https://docs.rs/datafusion-physical-expr-adapter/latest/datafusion_physical_expr_adapter/schema_rewriter/struct.DefaultPhysicalExprAdapter.html "DefaultPhysicalExprAdapter in datafusion_physical_expr_adapter::schema_rewriter - Rust"
+[5]: https://datafusion.apache.org/library-user-guide/upgrading.html "Upgrade Guides — Apache DataFusion  documentation"
+[6]: https://docs.rs/datafusion-physical-expr-adapter/latest/datafusion_physical_expr_adapter/schema_rewriter/fn.replace_columns_with_literals.html "replace_columns_with_literals in datafusion_physical_expr_adapter::schema_rewriter - Rust"
+[7]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.FileScanConfig.html "FileScanConfig in datafusion::datasource::physical_plan - Rust"
+[8]: https://github.com/apache/datafusion/issues/16800 "Plan to replace `SchemaAdapter` with `PhysicalExprAdapter` · Issue #16800 · apache/datafusion · GitHub"
+[9]: https://github.com/delta-io/delta-rs/issues/3709 "Warns during queryBuilder use · Issue #3709 · delta-io/delta-rs · GitHub"
+[10]: https://docs.rs/datafusion-physical-expr-adapter/latest/datafusion_physical_expr_adapter/schema_rewriter/trait.PhysicalExprAdapter.html "PhysicalExprAdapter in datafusion_physical_expr_adapter::schema_rewriter - Rust"
+[11]: https://datafusion.apache.org/python/autoapi/datafusion/io/index.html "datafusion.io — Apache Arrow DataFusion  documentation"
+[12]: https://github.com/apache/arrow-datafusion/issues/9081?utm_source=chatgpt.com "`ctx.read_parquet` and `ctx.register_parquet` don't load ..."
+[13]: https://datafusion.apache.org/python/user-guide/io/table_provider.html "Custom Table Provider — Apache Arrow DataFusion  documentation"
+[14]: https://datafusion.apache.org/python/contributor-guide/ffi.html "Python Extensions — Apache Arrow DataFusion  documentation"
+
+Below are **schema-utilization capabilities in DataFusion that we still hadn’t covered anywhere** in the conversation. I’m focusing on features that (a) materially change what schema/metadata the engine *uses* during planning/execution, or (b) give you new ways to *exploit* schema/metadata for performance, governance, or adaptive behavior.
+
+---
+
+## 1) Parquet metadata caching (distinct from list-files caching)
+
+**What it is:** DataFusion can cache **Parquet file metadata** (statistics, page indexes, etc.) so repeated queries don’t re-fetch/re-decode footers over slow storage. This is especially impactful for “point reads / small reads over large files,” and DataFusion reports large speedups when using the built-in `ListingTable`. ([Apache DataFusion][1])
+
+**How you control it (settings you hadn’t seen earlier):**
+
+* Runtime cache size: `datafusion.runtime.metadata_cache_limit` (“Maximum memory to use for file metadata cache such as Parquet metadata”). ([Apache DataFusion][2])
+* (Historically / in-flight) config knobs referenced in the Parquet metadata cache work include `datafusion.execution.parquet.cache_metadata` + a runtime limit setting; this appears in the project’s caching design discussions. ([GitHub][3])
+
+**Why it’s “schema utilization”:** metadata caching directly accelerates any plan that relies on schema-adjacent metadata (row group stats, page indexes, pruning decisions), and it changes the cost profile of “adaptive orchestration” patterns (many small queries against the same logical dataset). ([Apache DataFusion][1])
+
+---
+
+## 2) Cache introspection as a first-class SQL surface (CLI functions)
+
+DataFusion ships SQL functions (in the CLI docs) to inspect caches used by `ListingTable`:
+
+* `metadata_cache` (file metadata cache, e.g., Parquet metadata)
+* `statistics_cache` (file statistics cache; requires `datafusion.execution.collect_statistics`)
+* `list_files_cache` (directory listing cache) ([Apache DataFusion][4])
+
+This is a **schema/metadata observability layer** you can use to:
+
+* confirm your “schema-aware pruning” is actually being fed by cached metadata,
+* validate cache sizing/TTL choices in production-like workloads. ([Apache DataFusion][4])
+
+---
+
+## 3) “Full pruning ladder” details you hadn’t enumerated (page stats + row-level filter pushdown)
+
+You covered row-group pruning broadly, but DataFusion’s pruning pipeline is more explicit:
+
+* DataFusion implements **page-level pruning** when Parquet page stats are present. ([Apache DataFusion][5])
+* DataFusion also implements **row-level filter pushdown (late materialization)** in the Parquet reader, but (per the blog) it has **not been enabled by default** due to performance regressions; work is ongoing to enable it by default. ([Apache DataFusion][5])
+
+This matters for “schema-driven orchestration” because it changes how aggressive you can be about:
+
+* pushing selective predicates early,
+* relying on Parquet internals to avoid decoding data. ([Apache DataFusion][5])
+
+---
+
+## 4) External indexes + metadata stores for file pruning (schema-aware custom pruning)
+
+You discussed pushdowns generally, but not the “best practice” pattern for **file-level pruning using external indexes**:
+
+* DataFusion’s official guidance shows implementing a custom `TableProvider` that overrides `supports_filter_pushdown` and uses `scan` to consult an external index and return only candidate files. ([Apache DataFusion][6])
+
+This is a **schema-utilization superpower** for CPG-style datasets:
+
+* You can build an index keyed on schema fields (e.g., `file_id`, `symbol`, `span.start.line0`) and prune *before* object-store listing + Parquet metadata read.
+* The same blog also ties into reusing cached Parquet metadata when building/using the index (advanced example). ([Apache DataFusion][7])
+
+---
+
+## 5) Ordering + equivalence properties as schema-driven optimization inputs (beyond FDs)
+
+We talked about DFSchema and (some) functional dependencies, but not this parallel “schema property system” used heavily at the physical layer:
+
+* `ExecutionPlanProperties::equivalence_properties()` returns `EquivalenceProperties` describing which columns/expressions are known equal; the docs note this information is used during optimization and missing equivalence info can cause unnecessary resorts. ([Docs.rs][8])
+* DataFusion has dedicated ordering-analysis work explaining how order requirements are proven satisfied by inputs (key to sort-avoidance and order-based optimizations). ([Apache DataFusion][9])
+* DataFusion 49 highlights an “equivalence system upgrade” to improve planning performance and prepare for more sophisticated sort-based optimizations. ([Apache DataFusion][10])
+
+**Why this is “schema utilization”:** these properties are derived from schemas + expressions and drive plan rewrites (sort elimination, merge strategies, TopK optimizations).
+
+---
+
+## 6) Dynamic filters + TopK pushdown (schema + ordering aware adaptive execution)
+
+Not previously covered: DataFusion 49 describes **dynamic filters** that tighten during execution and **TopK pushdown** that can skip reading row groups/pages/files for `ORDER BY … LIMIT …` patterns by using evolving thresholds. ([Apache DataFusion][10])
+
+This is directly relevant to “inferential, dynamically adaptive” pipelines: it’s an engine-level mechanism that makes “query small top slices” dramatically cheaper when the engine knows ordering and can propagate those constraints. ([Apache DataFusion][10])
+
+---
+
+## 7) Parquet modular encryption (schema-addressable per-column crypto options)
+
+DataFusion supports reading/writing **encrypted Parquet** with **modular encryption**, including **different keys per column**, configured via `CREATE EXTERNAL TABLE … OPTIONS (…)` using column-specific option keys. ([Apache DataFusion][10])
+
+This is schema utilization because:
+
+* the configuration is explicitly **column-addressed** (per-field options),
+* and it enables “schema-governed access control” designs where sensitive columns require different keys/policies. ([Apache DataFusion][10])
+
+---
+
+## 8) File pushdown API evolution you hadn’t accounted for
+
+DataFusion 48 notes a pushdown-related API shift:
+
+* `FileFormat::supports_filters_pushdown` replaced with `FileSource::try_pushdown_filters` (to support dynamic filters and physical filter pushdown work). ([Apache DataFusion][11])
+
+If you write custom file formats / file sources, this changes where “schema-aware filter pushdown” logic lives and how you integrate with the engine’s evolving pushdown stack. ([Apache DataFusion][11])
+
+---
+
+## 9) Physical expression type/signature changes that affect schema-driven extensions
+
+Also in DataFusion 48:
+
+* UDF traits moved to `FieldRef` (not just `DataType`) to support metadata/extension types.
+* `PhysicalExpr` changed to return a `Field` rather than a `DataType`, affecting custom physical expressions. ([Apache DataFusion][11])
+
+If you build schema-aware extensions (custom UDFs, custom physical exprs) that propagate metadata or implement logical/physical typing, these changes are foundational. ([Apache DataFusion][11])
+
+---
+
+### If you want one more “best-in-class” deliverable
+
+I can turn the items above into a **practical checklist + recommended defaults** for a CPG pipeline (what to pin in config, what to rely on for pruning, when to invest in an external index provider, and what observability queries to run against `information_schema` + cache-introspection functions).
+
+[1]: https://datafusion.apache.org/blog/2025/09/29/datafusion-50.0.0/ "Apache DataFusion 50.0.0 Released - Apache DataFusion Blog"
+[2]: https://datafusion.apache.org/user-guide/configs.html?utm_source=chatgpt.com "Configuration Settings — Apache DataFusion documentation"
+[3]: https://github.com/apache/datafusion/issues/17047?utm_source=chatgpt.com "[Parquet Metadata Cache] remove datafusion.execution. ..."
+[4]: https://datafusion.apache.org/user-guide/cli/functions.html?utm_source=chatgpt.com "CLI Specific Functions — Apache DataFusion documentation"
+[5]: https://datafusion.apache.org/blog/2025/03/20/parquet-pruning/ "Parquet Pruning in DataFusion: Read Only What Matters - Apache DataFusion Blog"
+[6]: https://datafusion.apache.org/blog/2025/08/15/external-parquet-indexes/ "Using External Indexes, Metadata Stores, Catalogs and Caches to Accelerate Queries on Apache Parquet - Apache DataFusion Blog"
+[7]: https://datafusion.apache.org/blog/2025/08/15/external-parquet-indexes/?utm_source=chatgpt.com "Using External Indexes, Metadata Stores, Catalogs and ..."
+[8]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlanProperties.html?utm_source=chatgpt.com "ExecutionPlanProperties in datafusion::physical_plan - Rust"
+[9]: https://datafusion.apache.org/blog/2025/03/11/ordering-analysis/?utm_source=chatgpt.com "Using Ordering for Better Plans in Apache DataFusion"
+[10]: https://datafusion.apache.org/blog/2025/07/28/datafusion-49.0.0/ "Apache DataFusion 49.0.0 Released - Apache DataFusion Blog"
+[11]: https://datafusion.apache.org/blog/2025/07/16/datafusion-48.0.0/ "Apache DataFusion 48.0.0 Released - Apache DataFusion Blog"
+
+
+Below is a “from-the-metal up” view of **cache introspection as SQL** in DataFusion—covering:
+
+* what exists **today** in **datafusion-cli** (`metadata_cache()`, `statistics_cache()`, `list_files_cache()`),
+* the **Rust runtime/cache APIs** that back those table functions,
+* what you can do from **datafusion-python** (config + indirect validation),
+* and the **cleanest way to bring the same SQL surfaces into Python** (Rust UDTFs / embedded engine).
+
+---
+
+## 1) What caches are we talking about (and why they’re “schema/metadata observability”)
+
+These three caches sit in the **ListingTable / file-backed scan** pipeline:
+
+1. **File metadata cache**: per-file embedded metadata (Parquet footer + page index, etc.) used for pruning and decode planning. Exposed in SQL as `metadata_cache()`. The DataFusion 50 release notes describe this as “Parquet metadata caching” and show `metadata_load_time` collapsing from ~229ms to ~229µs when enabled, controlled by `datafusion.runtime.metadata_cache_limit`. ([Apache DataFusion][1])
+
+2. **File statistics cache**: per-file statistics (rows/bytes/columns, etc.) used by ListingTable planning. Exposed in SQL as `statistics_cache()`. It’s only populated if `datafusion.execution.collect_statistics` is enabled. ([Apache DataFusion][2])
+
+3. **List-files cache**: caches results of object-store `LIST` for a table location, so subsequent queries can avoid relisting and can prune partitions by filtering cached results. Exposed in SQL as `list_files_cache()`. ([Apache DataFusion][2])
+
+---
+
+## 2) The SQL introspection surface (datafusion-cli)
+
+These functions are documented as **CLI-specific table functions**. They behave like normal table references in SQL (“use it in most places you can use a table reference”). ([Apache DataFusion][2])
+
+### 2.1 `metadata_cache()` — schema + semantics
+
+From the CLI docs, `metadata_cache()` returns one row per cached file with:
+
+* `path` (Utf8)
+* `file_modified` (Timestamp)
+* `file_size_bytes` (UInt64)
+* `e_tag` (Utf8)
+* `version` (Utf8)
+* `metadata_size_bytes` (UInt64) — **in-memory** size
+* `hits` (UInt64) — access count
+* `extra` (Utf8) — e.g. whether page index is included ([Apache DataFusion][2])
+
+Example usage includes:
+
+```sql
+SELECT * FROM metadata_cache();
+SELECT sum(metadata_size_bytes) FROM metadata_cache();
+```
+
+([Apache DataFusion][2])
+
+### 2.2 `statistics_cache()` — schema + gating
+
+CLI docs describe `statistics_cache()` similarly, and explicitly note:
+
+> for statistics to be collected, `datafusion.execution.collect_statistics` must be enabled ([Apache DataFusion][2])
+
+Columns include:
+
+* `path`, `file_modified`, `file_size_bytes`, `e_tag`, `version`
+* `num_rows`
+* `num_columns`
+* `table_size_bytes`
+* `statistics_size_bytes` (UInt64; in-memory size of cached statistics) ([Apache DataFusion][2])
+
+### 2.3 `list_files_cache()` — *nested* return schema (`List(Struct)`) + table scoping
+
+This one is particularly relevant for your nested-type work, because its schema includes:
+
+* `table` (Utf8) — table name
+* `path` (Utf8) — base path
+* `metadata_size_bytes` (UInt64)
+* `expires_in` (Duration(ms))
+* `metadata_list` (**List(Struct)**) — one struct per file under the path ([Apache DataFusion][2])
+
+A `metadata_list` element has fields:
+`file_path`, `file_modified`, `file_size_bytes`, `e_tag`, `version`. ([Apache DataFusion][2])
+
+The docs show a canonical “explode” query:
+
+```sql
+SELECT
+  table,
+  path,
+  metadata_size_bytes,
+  expires_in,
+  unnest(metadata_list)['file_size_bytes'] as file_size_bytes,
+  unnest(metadata_list)['e_tag'] as e_tag
+FROM list_files_cache()
+LIMIT 10;
+```
+
+([Apache DataFusion][2])
+
+**Important behavior detail (recent):**
+A very recent upstream change notes: “A new datafusion-cli function and dropping a external table now clears the listing cache.” ([GitHub][3])
+That matters if you were relying on DROP/CREATE to force refresh.
+
+---
+
+## 3) Config knobs you must know (and can set from Python via SQL)
+
+DataFusion exposes runtime config keys (set via SQL `SET`) for the cache sizes / TTLs:
+
+* `datafusion.runtime.metadata_cache_limit` (default 50M) — metadata cache size ([Apache DataFusion][4])
+* `datafusion.runtime.list_files_cache_limit` (default 1M) — list-files cache size ([Apache DataFusion][4])
+* `datafusion.runtime.list_files_cache_ttl` (default NULL) — list-files cache TTL ([Apache DataFusion][4])
+
+And the statistics cache population is gated by:
+
+* `datafusion.execution.collect_statistics` (default true in core configs list; but in practice you should explicitly set it for your workload). ([Apache DataFusion][5])
+
+The DataFusion 50 blog explicitly shows disabling metadata cache by setting limit to 0M and enabling it by setting 50M. ([Apache DataFusion][1])
+
+---
+
+## 4) Rust internals: the actual cache APIs you can call (and that CLI uses)
+
+### 4.1 `CacheManager` is the central access point
+
+`CacheManager` exposes:
+
+* `get_file_metadata_cache() -> Arc<dyn FileMetadataCache>`
+* `get_file_statistic_cache() -> Option<Arc<dyn FileStatisticsCache>>`
+* `get_list_files_cache() -> Option<Arc<dyn ListFilesCache>>`
+* getters for list-files cache limit/ttl and metadata cache limit ([Docs.rs][6])
+
+This is what you want in a library setting when building introspection UDTFs or admin APIs.
+
+### 4.2 `CacheManagerConfig` determines which caches exist and their limits/TTL
+
+`CacheManagerConfig` has fields for:
+
+* `table_files_statistics_cache` (optional; default disabled)
+* `list_files_cache` (optional; default disabled)
+* `list_files_cache_limit`, `list_files_cache_ttl`
+* `file_metadata_cache` (optional; if not provided, CacheManager creates a `DefaultFilesMetadataCache`)
+* `metadata_cache_limit` ([Docs.rs][7])
+
+Key semantics called out in the docs:
+
+* list-files cache can hide storage updates until TTL expiry ([Docs.rs][7])
+* file metadata cache avoids rereading Parquet footers/page metadata ([Docs.rs][7])
+
+### 4.3 Trait surfaces (what makes introspection easy)
+
+#### `FileMetadataCache`
+
+Required methods:
+
+* `cache_limit()`, `update_cache_limit(limit: usize)`, `list_entries() -> HashMap<Path, FileMetadataCacheEntry>` ([Docs.rs][8])
+
+The 50.0 blog adds two critical facts:
+
+* default implementation uses **LRU eviction** up to 50MB
+* cache invalidates automatically if the underlying file changes ([Apache DataFusion][1])
+
+#### `FileStatisticsCache`
+
+It’s intentionally minimal: a stats cache with:
+
+* `list_entries() -> HashMap<Path, FileStatisticsCacheEntry>` ([Docs.rs][9])
+
+#### `ListFilesCache`
+
+This is the most “schema/partition-aware” cache. Required methods:
+
+* `cache_limit()`, `cache_ttl()`, `update_cache_limit`, `update_cache_ttl`
+* `list_entries() -> HashMap<TableScopedPath, ListFilesEntry>`
+* `drop_table_entries(table_ref)` ([Docs.rs][10])
+
+Key design point from the trait docs:
+
+* the cache key is the **table base path**
+* `get_with_extra(key, Some(prefix))` filters cached results without storage calls, enabling efficient partition pruning ([Docs.rs][10])
+
+---
+
+## 5) How the CLI table functions are implemented in Rust (so you can copy the pattern)
+
+These cache introspection functions are implemented as **table functions** (`TableFunctionImpl`) that return `Arc<dyn TableProvider>`.
+
+DataFusion’s own UDTF guide explains the contract:
+
+* implement `TableFunctionImpl`
+* `call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>>`
+* inside `call`, parse args, create a schema + `RecordBatch`, and return a `MemTable`/TableProvider ([Apache DataFusion][11])
+
+### 5.1 Concrete: `list_files_cache` implementation (recent upstream)
+
+The recent upstream commit shows exactly this pattern:
+
+* `ListFilesCacheFunc { cache_manager: Arc<CacheManager> }`
+* `impl TableFunctionImpl for ListFilesCacheFunc { fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> { ... } }`
+* it constructs a nested Arrow schema with `metadata_list` as a list of structs containing `file_path`, `file_modified`, etc. ([GitHub][3])
+
+That’s the blueprint to replicate in a library embedding (including for `metadata_cache` and `statistics_cache`).
+
+---
+
+## 6) Using this from Python
+
+### 6.1 What you can do immediately in datafusion-python (no Rust)
+
+**(A) Configure caches via SQL `SET`**
+Because runtime config is a SQL surface, you can run:
+
+```python
+ctx.sql("SET datafusion.runtime.metadata_cache_limit = '0M'")   # disable
+ctx.sql("SET datafusion.runtime.metadata_cache_limit = '50M'")  # enable
+ctx.sql("SET datafusion.runtime.list_files_cache_ttl = '30s'")
+```
+
+The runtime keys and their meanings are documented in the config guide. ([Apache DataFusion][4])
+
+**(B) Validate cache effectiveness via `EXPLAIN ANALYZE`**
+Even if you *don’t* have the CLI table functions, you can still “observe caching” via scan metrics. The DataFusion 50 blog shows `metadata_load_time` plummeting when metadata cache is enabled. ([Apache DataFusion][1])
+
+So in Python:
+
+```python
+ctx.sql("EXPLAIN ANALYZE SELECT * FROM 't.parquet' LIMIT 1").show()
+```
+
+…and check for `metadata_load_time` in the plan output.
+
+### 6.2 Getting the *same* table functions inside Python (the real integration story)
+
+**Key fact:** `metadata_cache()`, `statistics_cache()`, `list_files_cache()` are documented as **CLI-specific** functions. They are not guaranteed to be present in a vanilla `datafusion-python` session. ([Apache DataFusion][2])
+
+To get them in Python you have two realistic “best practice” choices:
+
+#### Option 1: Embed DataFusion in Rust and expose your own Python package
+
+* Build a PyO3 module that creates/owns a Rust `SessionContext`
+* Register your cache introspection UDTFs in that context (`register_udtf`)
+* Expose a thin Python wrapper that forwards `.sql(...)`
+
+Rust supports `SessionContext::register_udtf` and `SessionContext::runtime_env` for access to the runtime cache manager. ([Docs.rs][12])
+
+This option gives you maximum control (and avoids having to “reach into” datafusion-python’s internal SessionContext).
+
+#### Option 2: “Patch-in” the same UDTFs into the `datafusion-python` SessionContext
+
+This requires a tighter coupling to the exact wheel build/ABI. The datafusion-python contributor guide explicitly warns about Rust ABI instability and notes re-exporting/locking builds as the alternative approach (not generally recommended). ([Apache DataFusion][13])
+
+If you still do it (e.g., internal deployment), the implementation is straightforward:
+
+* your Rust extension (built against the same DataFusion version) takes the Python SessionContext wrapper,
+* grabs its runtime env / cache manager,
+* registers `TableFunctionImpl`s (as in the CLI code) into the same session.
+
+---
+
+## 7) What I’d do for your CPG pipeline (practical)
+
+For “schema-aware pruning is actually happening” you want a **two-level observability regimen**:
+
+1. **Always-on indirect checks** (works in Python today):
+
+   * `EXPLAIN ANALYZE` → watch `metadata_load_time`, row-group pruning stats, etc. ([Apache DataFusion][1])
+   * `SET datafusion.runtime.metadata_cache_limit / list_files_cache_ttl` to test sensitivity ([Apache DataFusion][4])
+
+2. **Direct cache introspection** (table functions):
+
+   * implement the three CLI table functions as UDTFs in Rust (copy the CLI pattern)
+   * use them to:
+
+     * compute total cache memory footprint (`sum(metadata_size_bytes)`) ([Apache DataFusion][2])
+     * detect staleness risk (entries nearing TTL expiry, `expires_in`) ([Apache DataFusion][2])
+     * correlate `hits` with query patterns (cache effectiveness) ([Apache DataFusion][2])
+
+If you want, I can sketch the exact Rust UDTF implementations for all three caches (each returns a `MemTable` built from `list_entries()` outputs) and show how to expose them behind a single `register_cache_introspection(ctx)` call.
+
+[1]: https://datafusion.apache.org/blog/2025/09/29/datafusion-50.0.0/ "Apache DataFusion 50.0.0 Released - Apache DataFusion Blog"
+[2]: https://datafusion.apache.org/user-guide/cli/functions.html "CLI Specific Functions — Apache DataFusion  documentation"
+[3]: https://github.com/apache/datafusion/commit/1ac18a3affa740051b7e0c6375a2aa1b42fce2d9 "https://github.com/apache/datafusion/commit/1ac18a3affa740051b7e0c6375a2aa1b42fce2d9"
+[4]: https://datafusion.apache.org/user-guide/configs.html "Configuration Settings — Apache DataFusion  documentation"
+[5]: https://datafusion.apache.org/_sources/user-guide/configs.md.txt "datafusion.apache.org"
+[6]: https://docs.rs/datafusion/latest/datafusion/execution/cache/cache_manager/struct.CacheManager.html "CacheManager in datafusion::execution::cache::cache_manager - Rust"
+[7]: https://docs.rs/datafusion/latest/datafusion/execution/cache/cache_manager/struct.CacheManagerConfig.html "CacheManagerConfig in datafusion::execution::cache::cache_manager - Rust"
+[8]: https://docs.rs/datafusion/latest/datafusion/execution/cache/cache_manager/trait.FileMetadataCache.html "FileMetadataCache in datafusion::execution::cache::cache_manager - Rust"
+[9]: https://docs.rs/datafusion/latest/datafusion/execution/cache/cache_manager/trait.FileStatisticsCache.html "FileStatisticsCache in datafusion::execution::cache::cache_manager - Rust"
+[10]: https://docs.rs/datafusion/latest/datafusion/execution/cache/cache_manager/trait.ListFilesCache.html "ListFilesCache in datafusion::execution::cache::cache_manager - Rust"
+[11]: https://datafusion.apache.org/library-user-guide/functions/adding-udfs.html?utm_source=chatgpt.com "Adding User Defined Functions: Scalar/Window/Aggregate ..."
+[12]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html "https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html"
+[13]: https://datafusion.apache.org/python/contributor-guide/ffi.html "https://datafusion.apache.org/python/contributor-guide/ffi.html"
+
+Below is the **full “pruning ladder”** in DataFusion—**row group → bloom → page index → (optional) row-level filter pushdown / late materialization**—with the **exact Python knobs**, the **Rust configuration + API surfaces**, and a practical “how to integrate” pattern for a Python-driven CPG pipeline.
+
+---
+
+## 1) The pruning ladder: what DataFusion does, in order
+
+DataFusion’s Parquet read path is explicitly a multi-stage pipeline. At a high level it:
+
+1. reads Parquet metadata (schema + row group layout + stats; optionally page-level stats and bloom filters)
+2. prunes by projection (read only needed columns)
+3. prunes by **row group** stats and bloom filters
+4. prunes by **page** stats (Page Index)
+5. builds an “access plan” of byte ranges and reads/decodes only those ranges
+6. optionally does **row-level** filtering via filter pushdown (late materialization) during decoding (not enabled by default) ([Apache DataFusion][1])
+
+### 1.1 Stage 1 — Metadata read (footer + optional page index + bloom filters)
+
+The pruning blog spells it out: Parquet metadata includes schema, row group/column chunk layout, min/max statistics, and can also include **page-level stats** and **Bloom filters**. DataFusion uses this metadata to prune **before reading actual data**. ([Apache DataFusion][1])
+
+**Cost/control knobs (Rust + Python via config):**
+
+* `datafusion.execution.parquet.metadata_size_hint` (default 512KiB) tries to fetch the last *N* bytes optimistically to reduce round trips; if metadata is larger, it falls back to two reads. ([Apache DataFusion][2])
+* `datafusion.execution.parquet.enable_page_index` controls whether DataFusion reads and uses page index metadata (default `true`). ([Apache DataFusion][2])
+
+### 1.2 Stage 2 — Projection pruning (column-level)
+
+DataFusion prunes by projection by only reading the columns actually needed. The pruning blog highlights this as “simple yet perhaps most effective” for wide tables. ([Apache DataFusion][1])
+
+**Why this matters for nested CPG bundles:** if you can express “read only `span.start.line0` and `kind`” you can avoid decoding large nested structs/maps. DataFusion has been actively moving projection handling into file-source implementations to enable **format-specific projection pushdown**, including **struct-field pushdown for Parquet**. ([Docs.rs][3])
+
+### 1.3 Stage 3 — Row group pruning (min/max stats + bloom filters)
+
+DataFusion uses row-group min/max stats to prune row groups, and uses Bloom filters “when available” for more selective equality predicates. ([Apache DataFusion][1])
+
+Controls:
+
+* `datafusion.execution.parquet.pruning` (default `true`): enable row-group pruning based on min/max stats. ([Apache DataFusion][2])
+* `datafusion.execution.parquet.bloom_filter_on_read` (default `true`): use bloom filters if present. ([Apache DataFusion][2])
+
+Writer side (if you control file generation): Parquet bloom filters and page statistics need to exist in the file. DataFusion’s format options include:
+
+* `statistics_enabled` (none/chunk/page) and supports `page` stats
+* `bloom_filter_enabled::col` to write bloom filters for specific columns ([Apache DataFusion][4])
+
+### 1.4 Stage 4 — Page-level pruning (Page Index / page stats)
+
+Parquet optionally supports page-level stats (more granular than row group stats). DataFusion implements page pruning when page stats are present. ([Apache DataFusion][1])
+
+Controls:
+
+* `datafusion.execution.parquet.enable_page_index` (default `true`) reduces I/O and decoding when page index is present. ([Apache DataFusion][2])
+* SQL/DDL option `OPTIONS('enable_page_index' 'true')` is the same capability (format option). ([Apache DataFusion][4])
+
+### 1.5 Stage 5 — Access plan and storage reads (byte-range IO)
+
+After pruning, DataFusion produces an “access plan” (ranges of bytes to fetch) and then fetches/decodes those bytes into Arrow RecordBatches. ([Apache DataFusion][1])
+
+This is where **remote object store** latency becomes dominant (hence metadata caching and metadata_size_hint).
+
+### 1.6 Stage 6 — Row-level filter pushdown (late materialization)
+
+This is the “final rung”: instead of pruning only at row group/page boundaries, the reader evaluates predicates **during decoding**, filtering out individual rows (row-level). The pruning blog calls it filter/predicate pushdown and notes it operates at the row level (unlike metadata pruning). ([Apache DataFusion][1])
+
+Status and why it’s not default:
+
+* DataFusion **implements filter pushdown** but it’s **not enabled by default** due to performance regressions; work is ongoing to enable it by default. ([Apache DataFusion][1])
+
+**Performance intuition (critical):** filter pushdown can be slower in some cases because columns used both in filters and output may be decompressed/decoded twice (once to build the filter mask, again to build the output). The filter pushdown blog shows decompress/decode dominating CPU and explains this double-work effect. ([Apache DataFusion][5])
+
+---
+
+## 2) The row-level pushdown mechanism in Rust (late materialization pipeline)
+
+DataFusion relies on the **arrow-rs Parquet reader** (the Arrow project’s Rust reader) for late materialization mechanics. The Arrow deep dive explains the core algorithm:
+
+1. read predicate column(s) → evaluate predicate(s) → build a `RowSelection` mask
+2. refine `RowSelection` by reading additional predicate columns
+3. read projection columns decoding only surviving rows ([Apache Arrow][6])
+
+This is exactly what DataFusion’s `pushdown_filters` option turns on:
+
+* `datafusion.execution.parquet.pushdown_filters` (default `false`): apply filters during Parquet decoding (“late materialization”). ([Apache DataFusion][2])
+
+Related control knobs (all in `configs.html`):
+
+* `datafusion.execution.parquet.reorder_filters` (default `false`): heuristically reorder filters during decoding to reduce evaluation cost. ([Apache DataFusion][2])
+* `datafusion.execution.parquet.force_filter_selections` (default `false`): force use of `RowSelection` rather than allowing the reader to choose between RowSelection/Bitmap. ([Apache DataFusion][2])
+* `datafusion.execution.parquet.max_predicate_cache_size` (default `NULL`): memory budget for caching predicate evaluation results between filter evaluation and output generation when pushdown is enabled (0 disables caching). ([Apache DataFusion][2])
+
+**Implication for nested CPG datasets:** late materialization is especially valuable when:
+
+* filters are selective, and
+* projected columns are “wide” (nested structs/maps/lists), and
+* filter columns are small (e.g., `file_id`, `kind`, `symbol`, `start_line0`).
+
+But if your filters reference columns that are also heavily projected, pushdown can cause more decoding work (the blog’s double decode point). ([Apache DataFusion][5])
+
+---
+
+## 3) Observability: how to *prove* which rung you’re using
+
+DataFusion’s explain-usage docs list the ParquetSource/DataSourceExec metrics you can use when predicate pushdown is enabled:
+
+* `page_index_rows_pruned`
+* `row_groups_pruned_bloom_filter`
+* `row_groups_pruned_statistics`
+* `limit_pruned_row_groups`
+* `pushdown_rows_matched` / `pushdown_rows_pruned`
+* `predicate_evaluation_errors`, `num_predicate_creation_errors`
+* `bloom_filter_eval_time` ([Apache DataFusion][7])
+
+In practice:
+
+* if `row_groups_pruned_statistics` increases → row group pruning is active
+* if `page_index_rows_pruned` appears/non-zero → page index pruning is active
+* if `pushdown_rows_pruned/matched` appear → row-level pushdown is active
+
+---
+
+## 4) Python control surface: what you can toggle and how
+
+### 4.1 Registration-time knobs (what Python exposes directly)
+
+`SessionContext.read_parquet(...)` and `register_parquet(...)` expose:
+
+* `parquet_pruning: bool` — “use predicate to prune row groups”
+* `skip_metadata: bool` — skip embedded schema metadata (helps avoid conflicts)
+* `schema: pyarrow.Schema | None` — optional schema override
+* `file_sort_order` — ordering contract
+* plus partition columns, file extension. ([Apache DataFusion][8])
+
+So in Python you can do:
+
+```python
+from datafusion import SessionContext
+ctx = SessionContext()
+
+ctx.register_parquet(
+    "cpg_nodes",
+    "/data/cpg_nodes/",
+    parquet_pruning=True,     # row-group min/max pruning
+    skip_metadata=True,       # reduce schema-metadata conflicts
+)
+```
+
+### 4.2 Session-level “full ladder” toggles from Python
+
+Python `SessionConfig` supports:
+
+* convenience toggles like `with_parquet_pruning(...)` (row-group pruning), and
+* arbitrary config keys via `.set(key, value)`.
+
+The Python configuration guide shows enabling pushdown filters via:
+
+```python
+SessionConfig().set("datafusion.execution.parquet.pushdown_filters", "true")
+```
+
+([Apache DataFusion][9])
+
+So you can toggle the higher rungs (page index + row-level pushdown) even if the read/register API doesn’t surface them as parameters:
+
+```python
+from datafusion import SessionConfig, SessionContext
+
+cfg = (
+    SessionConfig()
+    .with_parquet_pruning(True)  # row group pruning
+    .set("datafusion.execution.parquet.enable_page_index", "true")   # page pruning
+    .set("datafusion.execution.parquet.pushdown_filters", "true")    # row-level pushdown
+    .set("datafusion.execution.parquet.reorder_filters", "true")
+)
+ctx = SessionContext(cfg)
+```
+
+The config keys and semantics are documented in DataFusion’s configs list. ([Apache DataFusion][2])
+
+---
+
+## 5) Rust control surface: strongly-typed config + convenience helpers
+
+In Rust, the equivalent is `SessionConfig` / `ConfigOptions` / `ParquetOptions`. The docs.rs page shows:
+
+* config keys route into `ExecutionOptions::parquet` (`ParquetOptions`)
+* you can set options using `.set_bool("datafusion.execution.parquet.pushdown_filters", true)` or mutate `options_mut()` directly ([Docs.rs][10])
+
+It also lists convenience methods:
+
+* `with_parquet_pruning`
+* `with_parquet_page_index_pruning`
+* `with_parquet_bloom_filter_pruning` ([Docs.rs][10])
+
+So a canonical Rust setup:
+
+```rust
+use datafusion::execution::context::SessionConfig;
+
+let config = SessionConfig::new()
+    .with_parquet_pruning(true)
+    .with_parquet_page_index_pruning(true)
+    .with_parquet_bloom_filter_pruning(true)
+    .set_bool("datafusion.execution.parquet.pushdown_filters", true)
+    .set_bool("datafusion.execution.parquet.reorder_filters", true);
+```
+
+The mapping from config keys to `ParquetOptions` is explicitly documented. ([Docs.rs][10])
+
+---
+
+## 6) How to integrate Rust-level behavior into a Python implementation
+
+### Approach A (recommended first): Python orchestrator + config tuning
+
+For most CPG workloads, you can stay fully in Python and still exploit the full ladder:
+
+1. register Parquet / listing tables with `parquet_pruning=True` and schema overrides as needed ([Apache DataFusion][8])
+2. toggle `enable_page_index`, `bloom_filter_on_read`, and `pushdown_filters` via `SessionConfig.set(...)` or SQL `SET` ([Apache DataFusion][2])
+3. run `EXPLAIN ANALYZE` and confirm metrics are appearing (`row_groups_pruned_*`, `page_index_rows_pruned`, `pushdown_rows_*`) ([Apache DataFusion][7])
+4. optionally build a heuristic: enable row-level pushdown only for “highly selective” predicate patterns (the DataFusion blog explains why pushdown can be slower otherwise). ([Apache DataFusion][5])
+
+### Approach B: Rust wrapper engine exposed to Python (when you need per-query adaptive toggling + custom metrics)
+
+If you want **automatic per-query decisions** (“enable pushdown_filters only if projected columns are wide + filters selective”), you typically:
+
+* embed DataFusion in Rust,
+* implement a thin policy layer:
+
+  * inspect the logical plan (filters + projection shape)
+  * set ParquetOptions accordingly
+  * run the query
+* expose via PyO3 as a Python module (or as a custom provider).
+
+This is where Rust gives you a cleaner “adaptive engine” story than Python alone, because you can set options based on the actual plan structure before execution (and you can also hook into DataFusion metrics programmatically).
+
+---
+
+## 7) Practical guidance for your CPG nested datasets
+
+### When to rely on page index pruning (metadata-only, cheap)
+
+* Always keep `enable_page_index=true` unless you have a known compatibility reason not to. It reduces I/O/decoding when page index exists. ([Apache DataFusion][2])
+* Ensure your writer emits page-level stats (`statistics_enabled='page'`) if you control file generation. ([Apache DataFusion][4])
+
+### When to enable row-level filter pushdown (late materialization)
+
+* Enable `pushdown_filters=true` when:
+
+  * filters are selective, and
+  * filter columns are few/cheap to decode, and
+  * projected columns are wide (nested structs/maps), and
+  * filter columns are not heavily reused as projected output columns. ([Apache DataFusion][5])
+* Expect regressions when filters are not selective or when predicate columns are also projected (double decode costs). ([Apache DataFusion][5])
+* Use `reorder_filters=true` and tune `max_predicate_cache_size` if you see high CPU in predicate evaluation / mask handling. ([Apache DataFusion][2])
+
+### How to validate in practice
+
+Run representative queries with `EXPLAIN ANALYZE` and compare:
+
+* `row_groups_pruned_statistics` / `row_groups_pruned_bloom_filter` (row-group effectiveness) ([Apache DataFusion][7])
+* `page_index_rows_pruned` (page pruning effectiveness) ([Apache DataFusion][7])
+* `pushdown_rows_pruned/matched` (late materialization actually active and effective) ([Apache DataFusion][7])
+
+---
+
+If you want, tell me one representative “CPG query shape” (e.g., “find all occurrences of symbol X in repo Y, return node spans + a few attrs”), and I’ll give you a **config + query template** that maximizes the pruning ladder (including when to flip `pushdown_filters` on/off) and a checklist of which metrics should move if it’s working.
+
+[1]: https://datafusion.apache.org/blog/2025/03/20/parquet-pruning/ "Parquet Pruning in DataFusion: Read Only What Matters - Apache DataFusion Blog"
+[2]: https://datafusion.apache.org/user-guide/configs.html "Configuration Settings — Apache DataFusion  documentation"
+[3]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.Unnest.html "https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.Unnest.html"
+[4]: https://datafusion.apache.org/user-guide/sql/format_options.html "Format Options — Apache DataFusion  documentation"
+[5]: https://datafusion.apache.org/blog/2025/03/21/parquet-pushdown/ "Efficient Filter Pushdown in Parquet - Apache DataFusion Blog"
+[6]: https://arrow.apache.org/blog/2025/12/11/parquet-late-materialization-deep-dive/ "A Practical Dive Into Late Materialization in arrow-rs Parquet Reads | Apache Arrow"
+[7]: https://datafusion.apache.org/user-guide/explain-usage.html "Reading Explain Plans — Apache DataFusion  documentation"
+[8]: https://datafusion.apache.org/python/autoapi/datafusion/context/index.html "datafusion.context — Apache Arrow DataFusion  documentation"
+[9]: https://datafusion.apache.org/python/user-guide/configuration.html "Configuration — Apache Arrow DataFusion  documentation"
+[10]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionConfig.html "SessionConfig in datafusion::execution::context - Rust"
+
+Below is the “best practice” **DataFusion way** to do **file-level pruning with external indexes / metadata stores**, with **full Rust mechanics** (what you actually implement) and the **clean Python integration path** (PyCapsule / FFI provider registered into `datafusion-python`).
+
+---
+
+## 1) Where external indexes fit: “hierarchical pruning” with file-level skipping first
+
+DataFusion’s own guidance frames query acceleration as **hierarchical pruning**:
+
+1. **rule out entire files** quickly (external index / catalog / metadata store)
+2. then prune within remaining files (row groups / pages using Parquet metadata, and optionally row-level filtering)
+3. finally decode only what’s needed
+
+The “Using External Indexes…” blog explicitly calls out file-level pruning (skip whole files) as step 1 and says external indexes can skip per-file footer reads—especially important on remote object stores. ([Apache DataFusion][1])
+
+---
+
+## 2) Rust “golden pattern”: custom `TableProvider` + `supports_filters_pushdown` + `scan` returns a `DataSourceExec` over **only candidate files**
+
+### 2.1 The core contract: `TableProvider::scan` receives projection + filters + limit
+
+The `TableProvider` trait is explicitly designed for pushdowns:
+
+* `projection` is a `Vec<usize>` of indices into `Self::schema()` (**projection pushdown**)
+* `filters: &[Expr]` are passed only if you override `supports_filters_pushdown` (otherwise they’ll be empty)
+* `limit` is passed for **limit pushdown**
+  and there’s an explicit warning: **columns can appear only in filters** and might not be in the projection. ([Docs.rs][2])
+
+### 2.2 Tell DataFusion what you can push down: `supports_filters_pushdown`
+
+DataFusion expects you to classify each filter as:
+
+* `Unsupported`
+* `Exact` (you guarantee the filter is fully applied)
+* `Inexact` (you can prune based on it but might return extra rows; DataFusion will re-apply filter after scan) ([Apache DataFusion][3])
+
+This is how you safely integrate a “file-level” index: file-level pruning almost always yields **Inexact** (because it skips files but doesn’t guarantee row-level filtering inside selected files). The canonical parquet index example does exactly that. ([Apache Git Repositories][4])
+
+---
+
+## 3) Concrete Rust implementation: `parquet_index.rs` (file-level min/max index)
+
+This example is *the* reference for “external index → prune candidate files”.
+
+### 3.1 Build an external index as an Arrow `RecordBatch`
+
+The example represents the index as a `RecordBatch` containing `file_name`, `file_size`, `row_count`, and min/max stats for a target column (`value`). ([Apache Git Repositories][4])
+
+That design is deliberate because DataFusion already has the predicate evaluator you want: **`PruningPredicate`**.
+
+### 3.2 Convert DataFusion’s logical filters into a single physical predicate
+
+Inside `scan`:
+
+1. Convert schema to `DFSchema`
+2. `conjunction(filters.to_vec())` to AND the filters
+3. Compile to a **physical expression** with `state.create_physical_expr(predicate, &df_schema)`
+4. If no filters exist, use `lit(true)` so the index always has a predicate to evaluate ([Apache Git Repositories][4])
+
+### 3.3 Evaluate the predicate against the index using `PruningPredicate`
+
+The index implements `PruningStatistics` so `PruningPredicate` can ask for:
+
+* `min_values(column)` / `max_values(column)`
+* `row_counts(column)`
+* `contained(column, values)` for Bloom-filter-like membership (returns `None` in this example) ([Apache Git Repositories][4])
+
+Then the file selection step:
+
+* `PruningPredicate::try_new(predicate, file_schema)`
+* `pruning_predicate.prune(self)` returns a boolean mask: `true` means “file may match”; `false` means “file cannot match, skip it” ([Apache Git Repositories][4])
+
+### 3.4 Build a scan plan over only the candidate files
+
+After `get_files(predicate)` yields `(file_name, file_size)` pairs, the provider constructs a normal Parquet scan:
+
+* `ParquetSource::default().with_predicate(predicate)` (so Parquet can still do row-group/page pruning)
+* `FileScanConfigBuilder::new(object_store_url, schema, source)`
+* `.with_projection(projection.cloned())`
+* `.with_limit(limit)`
+* `.with_file(PartitionedFile::new(path, file_size))` for each candidate file
+* return `DataSourceExec::from_data_source(builder.build())` ([Apache Git Repositories][4])
+
+This is the key “composability win”: **you prune files externally, then let DataFusion/Parquet do the rest of the pruning ladder**.
+
+### 3.5 Pushdown classification
+
+The example marks all filters as `Inexact` with an explicit rationale: pruning isn’t row-level, so returned files may contain rows that don’t pass the filter; DataFusion will re-apply. ([Apache Git Repositories][4])
+
+---
+
+## 4) Beyond file-level: external indexes can also prune *within files* (row groups/pages) via `ParquetAccessPlan`
+
+The external-index blog shows the next rung:
+
+* your provider can produce a **`ParquetAccessPlan`** per file that specifies which row groups (and optionally row selections) to scan
+* store that plan as “extensions” on `PartitionedFile`
+* DataFusion’s Parquet reader can then **further refine** the access plan using built-in Parquet metadata during execution ([Apache DataFusion][1])
+
+The `advanced_parquet_index.rs` example shows this end-to-end:
+
+* create an access plan from the predicate,
+* attach it with `.with_extensions(Arc::new(access_plan) as _)`,
+* still pass the predicate into `ParquetSource` so DataFusion can prune internally,
+* build `FileScanConfigBuilder` and return `DataSourceExec` ([Apache Git Repositories][5])
+
+---
+
+## 5) “Metadata store” synergy: reuse cached Parquet metadata when building/using indexes
+
+External indexes often depend on Parquet metadata (schema, row group stats, page index). Reading/parsing footers repeatedly is expensive on object stores.
+
+DataFusion’s external-index blog explicitly notes the advanced example `advanced_parquet_index.rs` caches Parquet metadata when building the index and reuses it during query execution, using a custom `ParquetFileReaderFactory`. ([Apache DataFusion][1])
+
+### 5.1 Custom `ParquetFileReaderFactory` that returns cached metadata
+
+The blog shows the pattern:
+
+* inside `create_reader(...)`, look up pre-parsed `ParquetMetaData` from an in-memory cache keyed by filename
+* return an `AsyncFileReader` whose `get_metadata()` returns the cached metadata instead of reading the footer ([Apache DataFusion][1])
+
+Then in `scan`, plug it into the Parquet scan via:
+
+* `ParquetSource::default().with_parquet_file_reader_factory(Arc::new(reader_factory))` ([Apache Git Repositories][5])
+
+### 5.2 DataFusion 50+: built-in Parquet metadata cache (ListingTable)
+
+DataFusion 50 adds automatic Parquet metadata caching when using the built-in `ListingTable`, and documents:
+
+* it caches “statistics, page indexes, etc.”
+* configured by `datafusion.runtime.metadata_cache_limit`
+* default cache uses LRU eviction, invalidates when file changes
+* users can inspect entries via `FileMetadataCache::list_entries` or `metadata_cache()` in `datafusion-cli` ([Apache DataFusion][6])
+
+It also calls out: for custom providers, caching works automatically if you use `ParquetFormat`; otherwise you can supply a cached reader factory to `ParquetSource`. ([Apache DataFusion][6])
+
+---
+
+## 6) Designing the external index for CPG workloads
+
+The external index blog explicitly lists common index contents:
+
+* min/max stats
+* bloom filters
+* inverted / full-text indexes
+* “information needed to read the remote file” such as schema or footer metadata ([Apache DataFusion][1])
+
+…and places you can store the index:
+
+* separate JSON/Parquet files
+* transactional DBs (Postgres)
+* distributed KV stores (Redis/Cassandra)
+* in-memory hash maps ([Apache DataFusion][1])
+
+For a CPG system, a “best-in-class” tiering is:
+
+1. **Coarse partitioning** (Hive partitions for repo/run/file_id shard) — cheap directory pruning
+2. **File-level inverted index** (e.g., `symbol → [file_path]`, plus maybe `file_id`)
+3. **Optional row-group/page index** (attach `ParquetAccessPlan` / row selections for “needle” queries) — see advanced example ([Apache Git Repositories][5])
+
+---
+
+## 7) Python integration: using the Rust provider from `datafusion-python`
+
+### 7.1 What Python provides
+
+`datafusion-python` can register any object that exposes a **TableProvider PyCapsule**:
+
+* `SessionContext.register_table(name, table: Table | TableProviderExportable | DataFrame | pyarrow.dataset.Dataset)` ([Apache DataFusion][7])
+* A `TableProviderExportable` is any object with `__datafusion_table_provider__()` returning the capsule. ([Apache DataFusion][7])
+
+### 7.2 What you must implement in Rust (FFI contract)
+
+The Python docs are explicit:
+
+* implement `TableProvider` in Rust
+* expose an `FFI_TableProvider` via PyCapsule
+* requires DataFusion 43.0.0+ ([Apache DataFusion][8])
+
+The “Python Extensions / FFI” guide gives the canonical snippet:
+
+* `FFI_TableProvider::new(Arc::new(my_provider), false, None)`
+* wrap in a PyCapsule named `"datafusion_table_provider"`
+* expose it via a method named `__datafusion_table_provider__` ([Apache DataFusion][9])
+
+### 7.3 End-to-end usage pattern (Python)
+
+Once your Rust extension provides `CpgIndexTableProvider(...)`:
+
+```python
+from datafusion import SessionContext
+from cpg_index_provider import CpgIndexTableProvider
+
+ctx = SessionContext()
+
+# provider knows:
+#   - where the data parquet files live
+#   - how to consult the external index (sqlite/postgres/rocksdb/in-mem/etc)
+provider = CpgIndexTableProvider(
+    data_root="s3://bucket/cpg_nodes/",
+    index_uri="sqlite:///.../cpg_index.db",
+)
+
+ctx.register_table("cpg_nodes", provider)
+
+df = ctx.sql("""
+SELECT file_id, node_id, span
+FROM cpg_nodes
+WHERE symbol = 'scip:.../Foo#bar'
+  AND span['start']['line0'] BETWEEN 100 AND 200
+""")
+df.show()
+```
+
+At runtime, DataFusion will:
+
+* push down the filter expressions to your provider according to `supports_filters_pushdown`
+* your provider consults the index to pick candidate files
+* your provider returns a `DataSourceExec` scanning only those files (and still benefits from Parquet row-group/page pruning via `ParquetSource.with_predicate`) ([Apache DataFusion][1])
+
+---
+
+## 8) Practical “gotchas” that matter in real implementations
+
+### 8.1 Filters may reference non-projected columns
+
+DataFusion warns: filters can mention columns not in the projection; your scan must still be able to evaluate/prune with them. ([Docs.rs][2])
+
+### 8.2 `Inexact` vs `Exact` is your correctness lever
+
+If your index can only prune (skip files) but cannot guarantee row-level application, return `Inexact` so DataFusion re-checks filters above the scan. ([Apache DataFusion][3])
+
+### 8.3 “Index evaluation” can be done by DataFusion itself (recommended)
+
+Using `PruningPredicate` + implementing `PruningStatistics` is the “best-in-class” move because:
+
+* it reuses DataFusion’s predicate evaluation semantics,
+* it supports compound predicates (AND/OR),
+* and it’s directly what the official example uses. ([Apache Git Repositories][4])
+
+---
+
+### If you want the next artifact
+
+I can sketch a **CPG-focused provider design** that supports *both*:
+
+* file-level inverted index for `symbol` / `file_id`, and
+* row-group/page access-plan pruning for “span range” queries,
+  using exactly the DataFusion primitives above (`supports_filters_pushdown`, `scan`, `PruningPredicate`, `PartitionedFile` + optional `ParquetAccessPlan`, and optional cached Parquet metadata factory).
+
+[1]: https://datafusion.apache.org/blog/2025/08/15/external-parquet-indexes/ "Using External Indexes, Metadata Stores, Catalogs and Caches to Accelerate Queries on Apache Parquet - Apache DataFusion Blog"
+[2]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html "TableProvider in datafusion::datasource - Rust"
+[3]: https://datafusion.apache.org/_sources/library-user-guide/custom-table-providers.md.txt "datafusion.apache.org"
+[4]: https://apache.googlesource.com/datafusion/%2B/refs/tags/48.0.0/datafusion-examples/examples/parquet_index.rs "datafusion-examples/examples/parquet_index.rs - datafusion - Git at Google"
+[5]: https://apache.googlesource.com/datafusion/%2B/refs/tags/48.0.0-rc2/datafusion-examples/examples/advanced_parquet_index.rs "datafusion-examples/examples/advanced_parquet_index.rs - datafusion - Git at Google"
+[6]: https://datafusion.apache.org/blog/2025/09/29/datafusion-50.0.0/ "Apache DataFusion 50.0.0 Released - Apache DataFusion Blog"
+[7]: https://datafusion.apache.org/python/autoapi/datafusion/context/index.html "datafusion.context — Apache Arrow DataFusion  documentation"
+[8]: https://datafusion.apache.org/python/user-guide/io/table_provider.html "Custom Table Provider — Apache Arrow DataFusion  documentation"
+[9]: https://datafusion.apache.org/python/contributor-guide/ffi.html "Python Extensions — Apache Arrow DataFusion  documentation"

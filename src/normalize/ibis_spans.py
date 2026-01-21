@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
+from typing import Literal, cast
 
 import ibis
 from ibis.backends import BaseBackend
@@ -11,9 +11,10 @@ from ibis.expr.types import BooleanValue, NumericValue, Table, Value
 
 from arrowdsl.core.interop import TableLike
 from datafusion_engine.query_fragments import SqlFragment
-from ibis_engine.builtin_udfs import col_to_byte, position_encoding_norm
+from ibis_engine.builtin_udfs import col_to_byte
 from ibis_engine.ids import masked_stable_id_expr
 from ibis_engine.sources import SourceToIbisOptions, table_to_ibis
+from normalize.ibis_exprs import position_encoding_norm_expr
 from normalize.span_pipeline import span_error_table
 from normalize.text_index import ENC_UTF8, ENC_UTF16, ENC_UTF32
 
@@ -151,6 +152,108 @@ def add_scip_occurrence_byte_spans_ibis(
     return occ_table, errors_table
 
 
+def normalize_cst_callsites_spans_ibis(
+    py_cst_callsites: SpanSource,
+    *,
+    backend: BaseBackend,
+    primary: Literal["callee", "call"] = "callee",
+) -> TableLike:
+    """Ensure callsites expose canonical bstart/bend aliases.
+
+    Parameters
+    ----------
+    py_cst_callsites
+        Callsite table or SQL fragment input.
+    backend
+        Ibis backend to use for expression execution.
+    primary
+        Which span to alias as ``bstart``/``bend`` ("callee" or "call").
+
+    Returns
+    -------
+    TableLike
+        Callsites table with canonical span aliases.
+    """
+    callsites = _table_expr(py_cst_callsites, backend=backend, name="cst_callsites")
+    if primary == "call":
+        return callsites.mutate(
+            bstart=callsites.call_bstart,
+            bend=callsites.call_bend,
+        ).to_pyarrow()
+    return callsites.mutate(
+        bstart=callsites.callee_bstart,
+        bend=callsites.callee_bend,
+    ).to_pyarrow()
+
+
+def normalize_cst_imports_spans_ibis(
+    py_cst_imports: SpanSource,
+    *,
+    backend: BaseBackend,
+    primary: Literal["alias", "stmt"] = "alias",
+) -> TableLike:
+    """Ensure imports expose canonical bstart/bend aliases.
+
+    Parameters
+    ----------
+    py_cst_imports
+        Import table or SQL fragment input.
+    backend
+        Ibis backend to use for expression execution.
+    primary
+        Which span to alias as ``bstart``/``bend`` ("alias" or "stmt").
+
+    Returns
+    -------
+    TableLike
+        Imports table with canonical span aliases.
+    """
+    imports = _table_expr(py_cst_imports, backend=backend, name="cst_imports")
+    if primary == "stmt":
+        return imports.mutate(
+            bstart=imports.stmt_bstart,
+            bend=imports.stmt_bend,
+        ).to_pyarrow()
+    return imports.mutate(
+        bstart=imports.alias_bstart,
+        bend=imports.alias_bend,
+    ).to_pyarrow()
+
+
+def normalize_cst_defs_spans_ibis(
+    py_cst_defs: SpanSource,
+    *,
+    backend: BaseBackend,
+    primary: Literal["name", "def"] = "name",
+) -> TableLike:
+    """Ensure defs expose canonical bstart/bend aliases.
+
+    Parameters
+    ----------
+    py_cst_defs
+        Definition table or SQL fragment input.
+    backend
+        Ibis backend to use for expression execution.
+    primary
+        Which span to alias as ``bstart``/``bend`` ("name" or "def").
+
+    Returns
+    -------
+    TableLike
+        Definitions table with canonical span aliases.
+    """
+    defs = _table_expr(py_cst_defs, backend=backend, name="cst_defs")
+    if primary == "def":
+        return defs.mutate(
+            bstart=defs.def_bstart,
+            bend=defs.def_bend,
+        ).to_pyarrow()
+    return defs.mutate(
+        bstart=defs.name_bstart,
+        bend=defs.name_bend,
+    ).to_pyarrow()
+
+
 def _scip_occurrence_join(occ: Table, docs: Table, line_idx: Table) -> Table:
     docs_sel = docs.select(
         document_id=docs.document_id,
@@ -165,7 +268,7 @@ def _scip_occurrence_join(occ: Table, docs: Table, line_idx: Table) -> Table:
     path_expr = ibis.coalesce(occ_docs.path, occ_docs.doc_path)
     line_base = _line_base_value(occ_docs.line_base, default_base=0)
     end_exclusive = _end_exclusive_value(occ_docs.end_exclusive, default_exclusive=True)
-    posenc = position_encoding_norm(occ_docs.position_encoding.cast("string"))
+    posenc = position_encoding_norm_expr(occ_docs.position_encoding)
     occ_unit = occ_docs.col_unit.cast("string").lower()
     posenc_unit = _col_unit_from_encoding(posenc)
     col_unit = ibis.coalesce(occ_unit, posenc_unit)
@@ -476,4 +579,7 @@ __all__ = [
     "add_ast_byte_spans_ibis",
     "add_scip_occurrence_byte_spans_ibis",
     "anchor_instructions_ibis",
+    "normalize_cst_callsites_spans_ibis",
+    "normalize_cst_defs_spans_ibis",
+    "normalize_cst_imports_spans_ibis",
 ]

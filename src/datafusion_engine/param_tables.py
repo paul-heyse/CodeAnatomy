@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, MutableMapping, Sequence
+from dataclasses import dataclass
 
 import pyarrow as pa
 from datafusion import SessionContext
@@ -54,14 +55,21 @@ def register_param_arrow_table(
     schema_obj.register_table(table_name, table)
 
 
+@dataclass(frozen=True)
+class ParamTableRegistrationOptions:
+    """Capture optional parameter table registration settings."""
+
+    scope_key: str | None = None
+    signature_cache: MutableMapping[str, str] | None = None
+    parameters_snapshot: Sequence[Mapping[str, object]] | None = None
+
+
 def register_param_tables_df(
     ctx: SessionContext,
     *,
     artifacts: Mapping[str, ParamTableArtifact],
     policy: ParamTablePolicy,
-    scope_key: str | None = None,
-    signature_cache: MutableMapping[str, str] | None = None,
-    parameters_snapshot: Sequence[Mapping[str, object]] | None = None,
+    options: ParamTableRegistrationOptions | None = None,
 ) -> dict[str, str]:
     """Register param tables and return logical -> qualified name mapping.
 
@@ -73,12 +81,8 @@ def register_param_tables_df(
         Param table artifacts to register.
     policy
         Policy controlling catalog/schema/prefix naming.
-    scope_key
-        Optional scope key for schema naming.
-    signature_cache
-        Optional mapping of logical names to signatures for cache reuse.
-    parameters_snapshot
-        Optional parameter metadata rows for additional validation.
+    options
+        Optional registration settings controlling cache and validation.
 
     Returns
     -------
@@ -86,12 +90,13 @@ def register_param_tables_df(
         Mapping of logical param names to fully qualified table names.
     """
     mapping: dict[str, str] = {}
-    schema_name = param_table_schema(policy, scope_key=scope_key)
+    resolved_options = options or ParamTableRegistrationOptions()
+    schema_name = param_table_schema(policy, scope_key=resolved_options.scope_key)
     for logical_name, artifact in artifacts.items():
         table_name = param_table_name(policy, logical_name)
         qualified = f"{policy.catalog}.{schema_name}.{table_name}"
-        if signature_cache is not None:
-            cached = signature_cache.get(logical_name)
+        if resolved_options.signature_cache is not None:
+            cached = resolved_options.signature_cache.get(logical_name)
             if cached == artifact.signature:
                 mapping[logical_name] = qualified
                 continue
@@ -109,15 +114,15 @@ def register_param_tables_df(
             table_name=table_name,
             expected_schema=artifact.table.schema,
         )
-        if parameters_snapshot is not None:
+        if resolved_options.parameters_snapshot is not None:
             _validate_param_table_parameters(
-                parameters_snapshot,
+                resolved_options.parameters_snapshot,
                 table_name=table_name,
                 expected_schema=artifact.table.schema,
             )
         mapping[logical_name] = qualified
-        if signature_cache is not None:
-            signature_cache[logical_name] = artifact.signature
+        if resolved_options.signature_cache is not None:
+            resolved_options.signature_cache[logical_name] = artifact.signature
     return mapping
 
 
@@ -231,6 +236,7 @@ def _validate_param_table_parameters(
 
 
 __all__ = [
+    "ParamTableRegistrationOptions",
     "ensure_param_schema",
     "register_param_arrow_table",
     "register_param_tables_df",

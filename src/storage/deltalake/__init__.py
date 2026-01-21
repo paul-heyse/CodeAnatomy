@@ -36,6 +36,7 @@ __all__ = (
     "read_table_delta",
     "upsert_dataset_partitions_delta",
     "vacuum_delta",
+    "write_datafusion_delta",
     "write_dataset_delta",
     "write_finalize_result_delta",
     "write_named_datasets_delta",
@@ -77,6 +78,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     ),
     "vacuum_delta": ("storage.deltalake.delta", "vacuum_delta"),
     "write_dataset_delta": ("storage.deltalake.delta", "write_dataset_delta"),
+    "write_datafusion_delta": ("storage.deltalake.delta", "write_datafusion_delta"),
     "write_finalize_result_delta": ("storage.deltalake.delta", "write_finalize_result_delta"),
     "write_named_datasets_delta": ("storage.deltalake.delta", "write_named_datasets_delta"),
     "write_table_delta": ("storage.deltalake.delta", "write_table_delta"),
@@ -117,6 +119,7 @@ if TYPE_CHECKING:
     upsert_dataset_partitions_delta = _delta_io.upsert_dataset_partitions_delta
     vacuum_delta = _delta_io.vacuum_delta
     write_dataset_delta = _delta_io.write_dataset_delta
+    write_datafusion_delta = _delta_io.write_datafusion_delta
     write_finalize_result_delta = _delta_io.write_finalize_result_delta
     write_named_datasets_delta = _delta_io.write_named_datasets_delta
     write_table_delta = _delta_io.write_table_delta

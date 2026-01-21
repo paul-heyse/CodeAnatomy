@@ -9,17 +9,10 @@ def test_function_registry_merges_udf_lanes() -> None:
     """Merge function lanes from Ibis and DataFusion sources."""
     registry = default_function_registry()
     spec = registry.specs["stable_hash64"]
-    assert {
-        "ibis_builtin",
-        "ibis_pyarrow",
-        "ibis_python",
-        "df_udf",
-        "df_rust",
-    }.issubset(set(spec.lanes))
+    assert {"df_udf", "df_rust"}.issubset(set(spec.lanes))
 
 
-def test_function_registry_resolve_lane_prefers_ibis() -> None:
+def test_function_registry_resolve_lane_prefers_datafusion() -> None:
     """Resolve the preferred lane using registry precedence."""
     registry = default_function_registry()
-    assert registry.resolve_lane("stable_hash64") == "ibis_builtin"
-    assert registry.resolve_lane("normalize_span") == "df_udf"
+    assert registry.resolve_lane("stable_hash64") == "df_udf"

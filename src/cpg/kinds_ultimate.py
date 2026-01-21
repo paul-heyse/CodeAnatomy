@@ -1498,7 +1498,9 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
     ),
     DerivationRow(
         kind=NodeKind.AST_NODE,
-        provider_or_field=("python ast.parse + node walk; (lineno,col)->bytes via normalize.spans"),
+        provider_or_field=(
+            "python ast.parse + node walk; (lineno,col)->bytes via normalize.ibis_spans"
+        ),
         join_keys=("path",),
         id_recipe=(
             "ast_id = stable_id(path, bstart, bend, 'AST_NODE') when bytes available; "

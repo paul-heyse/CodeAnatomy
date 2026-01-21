@@ -122,7 +122,7 @@ def normalize_extract_output(
     return encode_table(aligned, columns=columns)
 
 
-def apply_pipeline_kernels(name: str, table: TableLike) -> TableLike:
+def apply_pipeline_kernels(_name: str, table: TableLike) -> TableLike:
     """Apply postprocess kernels for a dataset name.
 
     Returns

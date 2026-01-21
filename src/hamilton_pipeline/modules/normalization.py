@@ -9,14 +9,15 @@ from dataclasses import dataclass
 from functools import cache as memoize
 from typing import TYPE_CHECKING, Protocol, cast
 
+import ibis
 import pyarrow as pa
 import pyarrow.compute as pc
 from hamilton.function_modifiers import cache, extract_fields, tag
 from ibis.backends import BaseBackend
+from ibis.expr.types import Table
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.expr_types import ExplodeSpec
-from arrowdsl.core.ids import prefixed_hash_id
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
@@ -30,15 +31,11 @@ from datafusion_engine.compute_ops import (
     and_,
     cast_values,
     coalesce,
-    distinct_sorted,
-    drop_null,
     equal,
     fill_null,
-    flatten_list_struct_field,
     if_else,
     invert,
     is_valid,
-    list_flatten,
     struct_field,
 )
 from datafusion_engine.kernel_registry import resolve_kernel
@@ -65,7 +62,9 @@ from datafusion_engine.query_fragments import (
 )
 from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
 from extract.evidence_plan import EvidencePlan
+from ibis_engine.builtin_udfs import prefixed_hash64
 from ibis_engine.registry import datafusion_context
+from ibis_engine.sources import SourceToIbisOptions, source_to_ibis
 from normalize.catalog import IbisPlanCatalog, NormalizeCatalogInputs
 from normalize.catalog import normalize_plan_catalog as build_normalize_plan_catalog
 from normalize.ibis_api import DiagnosticsSources
@@ -74,6 +73,8 @@ from normalize.ibis_spans import (
     add_ast_byte_spans_ibis,
     add_scip_occurrence_byte_spans_ibis,
     anchor_instructions_ibis,
+    normalize_cst_defs_spans_ibis,
+    normalize_cst_imports_spans_ibis,
 )
 from normalize.registry_specs import (
     dataset_alias,
@@ -98,12 +99,6 @@ from normalize.schema_infer import (
     infer_schema_or_registry,
 )
 from normalize.span_pipeline import span_error_table
-from normalize.spans import (
-    RepoTextIndex,
-    build_repo_text_index,
-    normalize_cst_defs_spans,
-    normalize_cst_imports_spans,
-)
 from normalize.text_index import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from relspec.pipeline_policy import PipelinePolicy
 from relspec.registry.rules import RuleRegistry
@@ -255,6 +250,22 @@ def _materialize_fragment(
     return materialize_sql_fragment(backend, source)
 
 
+def _ibis_table_from_source(
+    backend: BaseBackend,
+    source: TableLike | SqlFragment,
+    *,
+    name: str,
+) -> Table:
+    if isinstance(source, SqlFragment):
+        sql_method = getattr(backend, "sql", None)
+        if not callable(sql_method):
+            msg = "Ibis backend does not support raw SQL fragments."
+            raise TypeError(msg)
+        return cast("Table", sql_method(source.sql))
+    plan = source_to_ibis(source, options=SourceToIbisOptions(backend=backend, name=name))
+    return plan.expr
+
+
 class _DatafusionQuery(Protocol):
     def schema(self) -> object: ...
 
@@ -341,7 +352,6 @@ class NormalizeBytecodeSources:
 class NormalizeSpanSources:
     """Normalize sources for span/diagnostic rules."""
 
-    repo_text_index: RepoTextIndex | None = None
     span_errors: IbisPlanSource | None = None
 
 
@@ -380,7 +390,6 @@ class SpanNormalizeContext:
 
     file_line_index: TableLike
     ibis_backend: BaseBackend
-    repo_text_index: RepoTextIndex | None
     ctx: ExecutionContext
 
 
@@ -537,7 +546,6 @@ def normalize_bytecode_sources(
 @cache()
 @tag(layer="normalize", artifact="normalize_span_sources", kind="object")
 def normalize_span_sources(
-    repo_text_index: RepoTextIndex | None = None,
     span_errors: TableLike | None = None,
 ) -> NormalizeSpanSources:
     """Bundle span-related normalize inputs.
@@ -547,7 +555,7 @@ def normalize_span_sources(
     NormalizeSpanSources
         Span-related inputs for normalize rule compilation.
     """
-    return NormalizeSpanSources(repo_text_index=repo_text_index, span_errors=span_errors)
+    return NormalizeSpanSources(span_errors=span_errors)
 
 
 @cache()
@@ -579,7 +587,6 @@ def normalize_qname_context(
 def span_normalize_context(
     file_line_index: TableLike,
     ibis_backend: BaseBackend,
-    repo_text_index: RepoTextIndex | None,
     ctx: ExecutionContext,
 ) -> SpanNormalizeContext:
     """Bundle inputs for span normalization helpers.
@@ -593,7 +600,6 @@ def span_normalize_context(
     return SpanNormalizeContext(
         file_line_index=file_line_index,
         ibis_backend=ibis_backend,
-        repo_text_index=repo_text_index,
         ctx=ctx,
     )
 
@@ -638,7 +644,6 @@ def normalize_catalog_inputs(
         py_bc_code_units=bytecode_sources.py_bc_code_units,
         py_bc_instructions=bytecode_sources.py_bc_instructions,
         span_errors=span_sources.span_errors,
-        repo_text_index=span_sources.repo_text_index,
     )
 
 
@@ -794,20 +799,6 @@ def _empty_scip_occurrences_norm(schema: pa.Schema) -> TableLike:
     table = set_or_append_column(table, "enc_bstart", pa.array([], type=pa.int64()))
     table = set_or_append_column(table, "enc_bend", pa.array([], type=pa.int64()))
     return set_or_append_column(table, "span_id", pa.array([], type=pa.string()))
-
-
-def _flatten_qname_names(table: TableLike | None, column: str) -> ArrayLike:
-    if table is None or column not in table.column_names:
-        return pa.array([], type=pa.string())
-    flattened = flatten_list_struct_field(table, list_col=column, field="name")
-    return drop_null(_string_or_null(flattened))
-
-
-def _flatten_string_list(table: TableLike | None, column: str) -> ArrayLike:
-    if table is None or column not in table.column_names:
-        return pa.array([], type=pa.string())
-    flattened = list_flatten(table[column])
-    return drop_null(_string_or_null(flattened))
 
 
 def _count_mask(values: ArrayLike) -> ArrayLike:
@@ -1030,27 +1021,44 @@ def dim_qualified_names(
     if cst_callsites is None or cst_defs is None:
         schema = infer_schema_or_registry(QNAME_DIM_NAME)
         return empty_table(schema)
-    cst_callsites_table = _materialize_fragment(backend, cst_callsites)
-    cst_defs_table = _materialize_fragment(backend, cst_defs)
-    callsite_qnames = _flatten_qname_names(cst_callsites_table, "callee_qnames")
-    callsite_fqns = _flatten_string_list(cst_callsites_table, "callee_fqns")
-    def_qnames = _flatten_qname_names(cst_defs_table, "qnames")
-    def_fqns = _flatten_string_list(cst_defs_table, "def_fqns")
-    combined = pa.chunked_array([callsite_qnames, callsite_fqns, def_qnames, def_fqns])
-    if len(combined) == 0:
+    _require_datafusion_backend(backend)
+
+    def _struct_qnames(table: Table, *, list_col: str, field: str) -> Table | None:
+        if list_col not in table.schema().names:
+            return None
+        unnested = table.unnest(list_col)
+        struct_col = unnested[list_col]
+        return unnested.select(qname=struct_col[field])
+
+    def _scalar_qnames(table: Table, *, list_col: str) -> Table | None:
+        if list_col not in table.schema().names:
+            return None
+        unnested = table.unnest(list_col)
+        return unnested.select(qname=unnested[list_col])
+
+    callsites_expr = _ibis_table_from_source(backend, cst_callsites, name="cst_callsites")
+    defs_expr = _ibis_table_from_source(backend, cst_defs, name="cst_defs")
+    sources: list[Table] = []
+    for table in (
+        _struct_qnames(callsites_expr, list_col="callee_qnames", field="name"),
+        _scalar_qnames(callsites_expr, list_col="callee_fqns"),
+        _struct_qnames(defs_expr, list_col="qnames", field="name"),
+        _scalar_qnames(defs_expr, list_col="def_fqns"),
+    ):
+        if table is not None:
+            sources.append(table)
+    if not sources:
         schema = infer_schema_or_registry(QNAME_DIM_NAME)
         return empty_table(schema)
-
-    qname_array = distinct_sorted(combined)
-    qname_ids = prefixed_hash_id([qname_array], prefix="qname")
-    out_schema = pa.schema([("qname_id", pa.string()), ("qname", pa.string())])
-    out = table_from_arrays(
-        out_schema,
-        columns={"qname_id": qname_ids, "qname": qname_array},
-        num_rows=len(qname_array),
-    )
+    combined = sources[0]
+    for table in sources[1:]:
+        combined = combined.union(table, distinct=False)
+    combined = combined.filter(combined.qname.notnull())
+    distinct_qnames = combined.distinct()
+    qname_id = prefixed_hash64(ibis.literal("qname"), distinct_qnames.qname.cast("string"))
+    result = distinct_qnames.mutate(qname_id=qname_id).select("qname_id", "qname").order_by("qname")
     schema = infer_schema_or_registry(QNAME_DIM_NAME)
-    return align_table_to_schema(out, schema)
+    return align_table_to_schema(result.to_pyarrow(), schema)
 
 
 @cache(format="delta")
@@ -1495,29 +1503,6 @@ def diagnostics_norm(
 
 
 @cache()
-@tag(layer="normalize", artifact="repo_text_index", kind="object")
-def repo_text_index(
-    repo_root: str,
-    repo_files_extract: TableLike,
-    ctx: ExecutionContext,
-    evidence_plan: EvidencePlan | None = None,
-) -> RepoTextIndex:
-    """Build a repo text index for line/column to byte offsets.
-
-    Returns
-    -------
-    RepoTextIndex
-        Repository text index for span conversion.
-    """
-    if evidence_plan is not None and not (
-        evidence_plan.requires_dataset("repo_text_index")
-        or evidence_plan.requires_dataset("diagnostics_norm")
-    ):
-        return RepoTextIndex(by_file_id={}, by_path={})
-    return build_repo_text_index(repo_root=repo_root, repo_files=repo_files_extract, ctx=ctx)
-
-
-@cache()
 @extract_fields(
     {
         "scip_occurrences_norm": TableLike,
@@ -1619,8 +1604,11 @@ def cst_imports_norm(
             fallback="py_cst_imports_v1",
         )
         return empty_table(schema)
-    table = _materialize_fragment(backend, cst_imports)
-    return normalize_cst_imports_spans(py_cst_imports=table)
+    if backend is None:
+        msg = "CST import normalization requires an Ibis backend."
+        raise ValueError(msg)
+    _require_datafusion_backend(backend)
+    return normalize_cst_imports_spans_ibis(cst_imports, backend=backend)
 
 
 @cache(format="delta")
@@ -1654,8 +1642,11 @@ def cst_defs_norm(
             fallback="py_cst_defs_v1",
         )
         return empty_table(schema)
-    table = _materialize_fragment(backend, cst_defs)
-    return normalize_cst_defs_spans(py_cst_defs=table)
+    if backend is None:
+        msg = "CST definition normalization requires an Ibis backend."
+        raise ValueError(msg)
+    _require_datafusion_backend(backend)
+    return normalize_cst_defs_spans_ibis(cst_defs, backend=backend)
 
 
 @cache()

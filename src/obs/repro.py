@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
-from sqlglot import parse_one
+from sqlglot import exp, parse_one
 from sqlglot.errors import ParseError
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
@@ -39,9 +39,8 @@ from relspec.param_deps import RuleDependencyReport
 from relspec.registry import ContractCatalog, DatasetLocation
 from relspec.rules.diagnostics import rule_diagnostics_from_table
 from schema_spec.system import (
+    dataset_table_ddl_fingerprint,
     dataset_table_definition,
-    ddl_fingerprint_from_schema,
-    table_spec_from_schema,
 )
 from sqlglot_tools.optimizer import planner_dag_snapshot
 from storage.deltalake import DeltaWriteOptions, write_dataset_delta
@@ -248,7 +247,7 @@ def serialize_contract(contract: Contract) -> JsonDict:
         "required_non_null": list(contract.required_non_null),
         "key_fields": list(contract.key_fields),
         "schema_fingerprint": schema_fingerprint(contract.schema),
-        "ddl_fingerprint": ddl_fingerprint_from_schema(contract.name, contract.schema),
+        "ddl_fingerprint": dataset_table_ddl_fingerprint(contract.name),
         "schema": cast("JsonValue", schema_to_dict(contract.schema)),
         "dedupe": dedupe_dict,
         "canonical_sort": _serialize_sort_keys(contract.canonical_sort),
@@ -945,10 +944,20 @@ def _contract_schema_asts(contracts: ContractCatalog) -> JsonDict:
     """
     payload: JsonDict = {}
     for name in contracts.names():
-        contract = contracts.get(name)
-        spec = table_spec_from_schema(name, contract.schema)
-        column_defs = spec.to_sqlglot_column_defs(dialect="datafusion")
-        payload[name] = [repr(column) for column in column_defs]
+        ddl = dataset_table_definition(name)
+        if ddl is None:
+            msg = f"Contract DDL missing from DataFusion for {name!r}."
+            raise ValueError(msg)
+        try:
+            expr = parse_one(ddl, read="datafusion")
+        except ParseError as exc:
+            msg = f"Failed to parse DataFusion DDL for {name!r}: {exc}"
+            raise ValueError(msg) from exc
+        schema_expr = expr.find(exp.Schema)
+        if schema_expr is None:
+            msg = f"DataFusion DDL missing column definitions for {name!r}."
+            raise ValueError(msg)
+        payload[name] = [repr(column) for column in schema_expr.expressions]
     return payload
 
 
@@ -1193,7 +1202,7 @@ def _write_schema_snapshot(
         "name": name,
         "rows": int(table.num_rows),
         "schema_fingerprint": schema_fingerprint(table.schema),
-        "ddl_fingerprint": ddl_fingerprint_from_schema(name, table.schema),
+        "ddl_fingerprint": dataset_table_ddl_fingerprint(name),
         "schema": cast("JsonValue", schema_to_dict(table.schema)),
     }
     files_written.append(
@@ -1269,7 +1278,7 @@ def _delta_metadata_payload(
         "name": name,
         "schema": schema_to_dict(schema),
         "schema_fingerprint": schema_fingerprint(schema),
-        "ddl_fingerprint": ddl_fingerprint_from_schema(name, schema),
+        "ddl_fingerprint": dataset_table_ddl_fingerprint(name),
     }
 
 
@@ -1403,7 +1412,7 @@ def _write_param_signatures(
                 "rows": int(artifact.rows),
                 "signature": artifact.signature,
                 "schema_fingerprint": artifact.schema_fingerprint,
-                "ddl_fingerprint": ddl_fingerprint_from_schema(name, artifact.table.schema),
+                "ddl_fingerprint": dataset_table_ddl_fingerprint(name),
             }
     if not signatures:
         return

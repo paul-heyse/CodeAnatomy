@@ -25,7 +25,6 @@ from schema_spec.system import (
     DeltaScanOptions,
     DeltaSchemaPolicy,
     DeltaWritePolicy,
-    ddl_fingerprint_from_schema,
 )
 
 try:
@@ -251,9 +250,7 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "delta_version": loc.delta_version,
                 "delta_timestamp": loc.delta_timestamp,
                 "scan": scan,
-                "ddl_fingerprint": (
-                    ddl_fingerprint_from_schema(name, schema) if schema is not None else None
-                ),
+                "ddl_fingerprint": None,
                 "schema_fingerprint": schema_fingerprint(schema) if schema is not None else None,
                 "schema": schema_to_dict(schema) if schema is not None else None,
             }
@@ -381,6 +378,9 @@ def resolve_dataset_schema(location: DatasetLocation) -> SchemaLike | None:
     SchemaLike | None
         Resolved schema when available, otherwise ``None``.
     """
+    scan = resolve_datafusion_scan_options(location)
+    if scan is not None and scan.table_schema_contract is not None:
+        return scan.table_schema_contract.file_schema
     if location.table_spec is not None:
         return location.table_spec.to_arrow_schema()
     if location.dataset_spec is not None:

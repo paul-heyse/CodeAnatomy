@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -292,6 +293,43 @@ def write_named_datasets_delta(
             storage_options=storage_options,
         )
     return results
+
+
+def write_datafusion_delta(
+    df: object,
+    *,
+    base_dir: str,
+    options: DeltaWriteOptions,
+    storage_options: StorageOptions | None = None,
+) -> DeltaWriteResult | None:
+    """Insert data into an existing Delta table using DataFusion.
+
+    Returns
+    -------
+    DeltaWriteResult | None
+        Delta write metadata when DataFusion insert succeeds, or ``None`` if
+        DataFusion insert is unsupported.
+    """
+    if not _supports_datafusion_delta_insert(options):
+        return None
+    if delta_table_version(base_dir, storage_options=storage_options) is None:
+        return None
+    write_table = getattr(df, "write_table", None)
+    if not callable(write_table):
+        return None
+    storage = dict(storage_options) if storage_options is not None else None
+    table = DeltaTable(base_dir, storage_options=storage)
+    name = f"__delta_sink_{uuid.uuid4().hex}"
+    try:
+        _register_datafusion_delta_table(df, name=name, table=table)
+    except ValueError:
+        return None
+    try:
+        write_table(name)
+    finally:
+        _deregister_datafusion_table(df, name=name)
+    version = delta_table_version(base_dir, storage_options=storage_options)
+    return DeltaWriteResult(path=base_dir, version=version)
 
 
 def upsert_dataset_partitions_delta(
@@ -849,6 +887,55 @@ def _artifact_path(base: str, suffix: str) -> str:
     return str(base_path.with_name(name))
 
 
+def _supports_datafusion_delta_insert(options: DeltaWriteOptions) -> bool:
+    disallowed = (
+        options.mode != "append",
+        options.schema_mode is not None,
+        options.predicate is not None,
+        bool(options.partition_by),
+        bool(options.configuration),
+        bool(options.commit_metadata),
+        options.target_file_size is not None,
+        options.writer_properties is not None,
+        options.retry_policy is not None,
+    )
+    return not any(disallowed)
+
+
+def _register_datafusion_delta_table(
+    df: object,
+    *,
+    name: str,
+    table: DeltaTable,
+) -> None:
+    ctx = None
+    for attr in ("_ctx", "_context", "context", "ctx", "session_context"):
+        ctx = getattr(df, attr, None)
+        if ctx is not None:
+            break
+    if ctx is None:
+        msg = "DataFusion DataFrame missing SessionContext."
+        raise ValueError(msg)
+    try:
+        ctx.register_table(name, table)
+    except TypeError as exc:
+        msg = "DataFusion failed to register Delta table provider."
+        raise ValueError(msg) from exc
+
+
+def _deregister_datafusion_table(df: object, *, name: str) -> None:
+    ctx = None
+    for attr in ("_ctx", "_context", "context", "ctx", "session_context"):
+        ctx = getattr(df, attr, None)
+        if ctx is not None:
+            break
+    if ctx is None:
+        return
+    deregister = getattr(ctx, "deregister_table", None)
+    if callable(deregister):
+        deregister(name)
+
+
 __all__ = [
     "DeltaCdfOptions",
     "DeltaSchemaMode",
@@ -876,6 +963,7 @@ __all__ = [
     "read_table_delta",
     "upsert_dataset_partitions_delta",
     "vacuum_delta",
+    "write_datafusion_delta",
     "write_dataset_delta",
     "write_finalize_result_delta",
     "write_named_datasets_delta",

@@ -214,6 +214,7 @@ def incremental_imports_resolved(
 def incremental_exported_defs(
     cst_defs_norm: TableLike,
     incremental_state_store: StateStore | None,
+    ibis_backend: BaseBackend,
     incremental_config: IncrementalConfig,
 ) -> pa.Table | None:
     """Build the exported definitions index when incremental mode is enabled.
@@ -230,7 +231,11 @@ def incremental_exported_defs(
         rel_def_dir = incremental_state_store.dataset_dir("rel_def_symbol_v1")
         if rel_def_dir.exists():
             rel_def_symbol = read_table_delta(str(rel_def_dir))
-    return build_exported_defs_index(cst_defs_norm, rel_def_symbol=rel_def_symbol)
+    return build_exported_defs_index(
+        cst_defs_norm,
+        backend=ibis_backend,
+        rel_def_symbol=rel_def_symbol,
+    )
 
 
 @tag(layer="incremental", kind="table")

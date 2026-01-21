@@ -34,13 +34,11 @@ from arrowdsl.schema.metadata import (
 from arrowdsl.schema.schema import SchemaMetadataSpec
 from datafusion_engine.bridge import datafusion_from_arrow
 from datafusion_engine.runtime import DataFusionRuntimeProfile, diagnostics_arrow_ingest_hook
-from datafusion_engine.udf_registry import (
-    _NORMALIZE_SPAN_UDF,
-    _register_kernel_udfs,
-    register_datafusion_udfs,
-)
+from datafusion_engine.udf_registry import _register_kernel_udfs, register_datafusion_udfs
 
 type KernelFn = Callable[..., TableLike]
+
+_SPAN_NUMERIC_REGEX = r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$"
 
 
 def _session_context(ctx: ExecutionContext | None) -> SessionContext:
@@ -529,7 +527,11 @@ def _interval_match_mask(
 
 
 def _normalize_span_expr(column: str) -> Expr:
-    return _NORMALIZE_SPAN_UDF(col(column).cast(pa.string()))
+    text = f.trim(col(column).cast(pa.string()))
+    is_numeric = f.regexp_like(text, lit(_SPAN_NUMERIC_REGEX))
+    normalized = text.cast(pa.int64())
+    default_value = lit(None).cast(pa.int64())
+    return f.case(lit(value=True)).when(is_numeric, normalized).otherwise(default_value).end()
 
 
 def _interval_order_exprs(

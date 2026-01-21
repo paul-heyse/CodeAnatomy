@@ -23,9 +23,40 @@ def _map_value(map_name: str, key: str) -> str:
     return f"list_extract(map_extract({map_name}, '{key}'), 1)"
 
 
+def _get_field(expr: str, field: str) -> str:
+    return f"get_field({expr}, '{field}')"
+
+
+def _get_field_path(expr: str, *fields: str) -> str:
+    value = expr
+    for field in fields:
+        value = _get_field(value, field)
+    return value
+
+
+def _union_tag(expr: str) -> str:
+    return f"union_tag({expr})"
+
+
+def _union_extract(expr: str, field: str) -> str:
+    return f"union_extract({expr}, '{field}')"
+
+
 def _named_struct(fields: Sequence[tuple[str, str]]) -> str:
     parts = ", ".join(f"'{name}', {expr}" for name, expr in fields)
     return f"named_struct({parts})"
+
+
+def _ast_span_struct(prefix: str) -> str:
+    return _named_struct(
+        (
+            ("start", f"{prefix}.span['start']"),
+            ("end", f"{prefix}.span['end']"),
+            ("byte_span", f"{prefix}.span['byte_span']"),
+            ("col_unit", f"{prefix}.span['col_unit']"),
+            ("end_exclusive", f"{prefix}.span['end_exclusive']"),
+        )
+    )
 
 
 _ARROW_CAST_TYPES: dict[str, str] = {
@@ -195,7 +226,7 @@ def libcst_refs_sql(table: str = "libcst_files_v1") -> str:
       base.inferred_type AS inferred_type,
       base.bstart AS bstart,
       base.bend AS bend,
-      base.attrs AS attrs
+      arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
 
@@ -803,6 +834,8 @@ def ast_nodes_sql(table: str = "ast_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("ast_nodes", table=table)
+    span_struct = _ast_span_struct("base")
+    record_struct = _named_struct((("span", span_struct), ("attrs", "base.attrs")))
     return f"""
     WITH base AS ({base})
     SELECT
@@ -813,15 +846,23 @@ def ast_nodes_sql(table: str = "ast_files_v1") -> str:
       base.kind AS kind,
       base.name AS name,
       base.value AS value_repr,
-      (base.span['start']['line0'] + 1) AS lineno,
-      base.span['start']['col'] AS col_offset,
-      (base.span['end']['line0'] + 1) AS end_lineno,
-      base.span['end']['col'] AS end_col_offset,
-      CAST(1 AS INT) AS line_base,
-      base.span['col_unit'] AS col_unit,
-      base.span['end_exclusive'] AS end_exclusive,
-      base.span['byte_span']['byte_start'] AS bstart,
-      (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS bend
+      {_arrow_cast("(base.span['start']['line0'] + 1)", "Int64")} AS lineno,
+      {_arrow_cast("base.span['start']['col']", "Int64")} AS col_offset,
+      {_arrow_cast("(base.span['end']['line0'] + 1)", "Int64")} AS end_lineno,
+      {_arrow_cast("base.span['end']['col']", "Int64")} AS end_col_offset,
+      {_arrow_cast("1", "Int32")} AS line_base,
+      {_arrow_cast("base.span['col_unit']", "Utf8")} AS col_unit,
+      {_arrow_cast("base.span['end_exclusive']", "Boolean")} AS end_exclusive,
+      {_arrow_cast("base.span['byte_span']['byte_start']", "Int64")} AS bstart,
+      {
+        _arrow_cast(
+            "(base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len'])",
+            "Int64",
+        )
+    } AS bend,
+      {span_struct} AS span,
+      base.attrs AS attrs,
+      {record_struct} AS ast_record
     FROM base
     """
 
@@ -844,7 +885,8 @@ def ast_edges_sql(table: str = "ast_files_v1") -> str:
       base.dst AS dst,
       base.kind AS kind,
       base.slot AS slot,
-      base.idx AS idx
+      base.idx AS idx,
+      arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
 
@@ -858,6 +900,8 @@ def ast_errors_sql(table: str = "ast_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("ast_errors", table=table)
+    span_struct = _ast_span_struct("base")
+    record_struct = _named_struct((("span", span_struct), ("attrs", "base.attrs")))
     return f"""
     WITH base AS ({base})
     SELECT
@@ -865,13 +909,16 @@ def ast_errors_sql(table: str = "ast_files_v1") -> str:
       base.path AS path,
       base.error_type AS error_type,
       base.message AS message,
-      (base.span['start']['line0'] + 1) AS lineno,
-      base.span['start']['col'] AS col_offset,
-      (base.span['end']['line0'] + 1) AS end_lineno,
-      base.span['end']['col'] AS end_col_offset,
-      CAST(1 AS INT) AS line_base,
-      base.span['col_unit'] AS col_unit,
-      base.span['end_exclusive'] AS end_exclusive
+      {_arrow_cast("(base.span['start']['line0'] + 1)", "Int64")} AS lineno,
+      {_arrow_cast("base.span['start']['col']", "Int64")} AS col_offset,
+      {_arrow_cast("(base.span['end']['line0'] + 1)", "Int64")} AS end_lineno,
+      {_arrow_cast("base.span['end']['col']", "Int64")} AS end_col_offset,
+      {_arrow_cast("1", "Int32")} AS line_base,
+      {_arrow_cast("base.span['col_unit']", "Utf8")} AS col_unit,
+      {_arrow_cast("base.span['end_exclusive']", "Boolean")} AS end_exclusive,
+      {span_struct} AS span,
+      base.attrs AS attrs,
+      {record_struct} AS ast_record
     FROM base
     """
 
@@ -885,6 +932,8 @@ def ast_docstrings_sql(table: str = "ast_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("ast_docstrings", table=table)
+    span_struct = _ast_span_struct("base")
+    record_struct = _named_struct((("span", span_struct), ("attrs", "base.attrs")))
     return f"""
     WITH base AS ({base})
     SELECT
@@ -895,13 +944,16 @@ def ast_docstrings_sql(table: str = "ast_files_v1") -> str:
       base.owner_name AS owner_name,
       base.docstring AS docstring,
       base.source AS source,
-      (base.span['start']['line0'] + 1) AS lineno,
-      base.span['start']['col'] AS col_offset,
-      (base.span['end']['line0'] + 1) AS end_lineno,
-      base.span['end']['col'] AS end_col_offset,
-      CAST(1 AS INT) AS line_base,
-      base.span['col_unit'] AS col_unit,
-      base.span['end_exclusive'] AS end_exclusive
+      {_arrow_cast("(base.span['start']['line0'] + 1)", "Int64")} AS lineno,
+      {_arrow_cast("base.span['start']['col']", "Int64")} AS col_offset,
+      {_arrow_cast("(base.span['end']['line0'] + 1)", "Int64")} AS end_lineno,
+      {_arrow_cast("base.span['end']['col']", "Int64")} AS end_col_offset,
+      {_arrow_cast("1", "Int32")} AS line_base,
+      {_arrow_cast("base.span['col_unit']", "Utf8")} AS col_unit,
+      {_arrow_cast("base.span['end_exclusive']", "Boolean")} AS end_exclusive,
+      {span_struct} AS span,
+      base.attrs AS attrs,
+      {record_struct} AS ast_record
     FROM base
     """
 
@@ -915,6 +967,8 @@ def ast_imports_sql(table: str = "ast_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("ast_imports", table=table)
+    span_struct = _ast_span_struct("base")
+    record_struct = _named_struct((("span", span_struct), ("attrs", "base.attrs")))
     return f"""
     WITH base AS ({base})
     SELECT
@@ -928,13 +982,16 @@ def ast_imports_sql(table: str = "ast_files_v1") -> str:
       base.asname AS asname,
       base.alias_index AS alias_index,
       base.level AS level,
-      (base.span['start']['line0'] + 1) AS lineno,
-      base.span['start']['col'] AS col_offset,
-      (base.span['end']['line0'] + 1) AS end_lineno,
-      base.span['end']['col'] AS end_col_offset,
-      CAST(1 AS INT) AS line_base,
-      base.span['col_unit'] AS col_unit,
-      base.span['end_exclusive'] AS end_exclusive
+      {_arrow_cast("(base.span['start']['line0'] + 1)", "Int64")} AS lineno,
+      {_arrow_cast("base.span['start']['col']", "Int64")} AS col_offset,
+      {_arrow_cast("(base.span['end']['line0'] + 1)", "Int64")} AS end_lineno,
+      {_arrow_cast("base.span['end']['col']", "Int64")} AS end_col_offset,
+      {_arrow_cast("1", "Int32")} AS line_base,
+      {_arrow_cast("base.span['col_unit']", "Utf8")} AS col_unit,
+      {_arrow_cast("base.span['end_exclusive']", "Boolean")} AS end_exclusive,
+      {span_struct} AS span,
+      base.attrs AS attrs,
+      {record_struct} AS ast_record
     FROM base
     """
 
@@ -948,6 +1005,8 @@ def ast_defs_sql(table: str = "ast_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("ast_defs", table=table)
+    span_struct = _ast_span_struct("base")
+    record_struct = _named_struct((("span", span_struct), ("attrs", "base.attrs")))
     return f"""
     WITH base AS ({base})
     SELECT
@@ -957,14 +1016,23 @@ def ast_defs_sql(table: str = "ast_files_v1") -> str:
       base.parent_ast_id AS parent_ast_id,
       base.kind AS kind,
       base.name AS name,
+      {_map_cast("base.attrs", "decorator_count", "INT")} AS decorator_count,
+      {_map_cast("base.attrs", "arg_count", "INT")} AS arg_count,
+      {_map_cast("base.attrs", "posonly_count", "INT")} AS posonly_count,
+      {_map_cast("base.attrs", "kwonly_count", "INT")} AS kwonly_count,
+      {_map_cast("base.attrs", "type_params_count", "INT")} AS type_params_count,
+      {_map_cast("base.attrs", "base_count", "INT")} AS base_count,
+      {_map_cast("base.attrs", "keyword_count", "INT")} AS keyword_count,
+      {_arrow_cast("(base.span['start']['line0'] + 1)", "Int64")} AS lineno,
+      {_arrow_cast("base.span['start']['col']", "Int64")} AS col_offset,
+      {_arrow_cast("(base.span['end']['line0'] + 1)", "Int64")} AS end_lineno,
+      {_arrow_cast("base.span['end']['col']", "Int64")} AS end_col_offset,
+      {_arrow_cast("1", "Int32")} AS line_base,
+      {_arrow_cast("base.span['col_unit']", "Utf8")} AS col_unit,
+      {_arrow_cast("base.span['end_exclusive']", "Boolean")} AS end_exclusive,
+      {span_struct} AS span,
       base.attrs AS attrs,
-      (base.span['start']['line0'] + 1) AS lineno,
-      base.span['start']['col'] AS col_offset,
-      (base.span['end']['line0'] + 1) AS end_lineno,
-      base.span['end']['col'] AS end_col_offset,
-      CAST(1 AS INT) AS line_base,
-      base.span['col_unit'] AS col_unit,
-      base.span['end_exclusive'] AS end_exclusive
+      {record_struct} AS ast_record
     FROM base
     """
 
@@ -978,6 +1046,8 @@ def ast_calls_sql(table: str = "ast_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("ast_calls", table=table)
+    span_struct = _ast_span_struct("base")
+    record_struct = _named_struct((("span", span_struct), ("attrs", "base.attrs")))
     return f"""
     WITH base AS ({base})
     SELECT
@@ -987,14 +1057,20 @@ def ast_calls_sql(table: str = "ast_files_v1") -> str:
       base.parent_ast_id AS parent_ast_id,
       base.func_kind AS func_kind,
       base.func_name AS func_name,
+      {_map_cast("base.attrs", "arg_count", "INT")} AS arg_count,
+      {_map_cast("base.attrs", "keyword_count", "INT")} AS keyword_count,
+      {_map_cast("base.attrs", "starred_count", "INT")} AS starred_count,
+      {_map_cast("base.attrs", "kw_star_count", "INT")} AS kw_star_count,
+      {_arrow_cast("(base.span['start']['line0'] + 1)", "Int64")} AS lineno,
+      {_arrow_cast("base.span['start']['col']", "Int64")} AS col_offset,
+      {_arrow_cast("(base.span['end']['line0'] + 1)", "Int64")} AS end_lineno,
+      {_arrow_cast("base.span['end']['col']", "Int64")} AS end_col_offset,
+      {_arrow_cast("1", "Int32")} AS line_base,
+      {_arrow_cast("base.span['col_unit']", "Utf8")} AS col_unit,
+      {_arrow_cast("base.span['end_exclusive']", "Boolean")} AS end_exclusive,
+      {span_struct} AS span,
       base.attrs AS attrs,
-      (base.span['start']['line0'] + 1) AS lineno,
-      base.span['start']['col'] AS col_offset,
-      (base.span['end']['line0'] + 1) AS end_lineno,
-      base.span['end']['col'] AS end_col_offset,
-      CAST(1 AS INT) AS line_base,
-      base.span['col_unit'] AS col_unit,
-      base.span['end_exclusive'] AS end_exclusive
+      {record_struct} AS ast_record
     FROM base
     """
 
@@ -1008,6 +1084,8 @@ def ast_type_ignores_sql(table: str = "ast_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("ast_type_ignores", table=table)
+    span_struct = _ast_span_struct("base")
+    record_struct = _named_struct((("span", span_struct), ("attrs", "base.attrs")))
     return f"""
     WITH base AS ({base})
     SELECT
@@ -1015,14 +1093,148 @@ def ast_type_ignores_sql(table: str = "ast_files_v1") -> str:
       base.path AS path,
       base.ast_id AS ast_id,
       base.tag AS tag,
-      (base.span['start']['line0'] + 1) AS lineno,
-      base.span['start']['col'] AS col_offset,
-      (base.span['end']['line0'] + 1) AS end_lineno,
-      base.span['end']['col'] AS end_col_offset,
-      CAST(1 AS INT) AS line_base,
-      base.span['col_unit'] AS col_unit,
-      base.span['end_exclusive'] AS end_exclusive
+      {_arrow_cast("(base.span['start']['line0'] + 1)", "Int64")} AS lineno,
+      {_arrow_cast("base.span['start']['col']", "Int64")} AS col_offset,
+      {_arrow_cast("(base.span['end']['line0'] + 1)", "Int64")} AS end_lineno,
+      {_arrow_cast("base.span['end']['col']", "Int64")} AS end_col_offset,
+      {_arrow_cast("1", "Int32")} AS line_base,
+      {_arrow_cast("base.span['col_unit']", "Utf8")} AS col_unit,
+      {_arrow_cast("base.span['end_exclusive']", "Boolean")} AS end_exclusive,
+      {span_struct} AS span,
+      base.attrs AS attrs,
+      {record_struct} AS ast_record
     FROM base
+    """
+
+
+def ast_node_attrs_sql(table: str = "ast_nodes") -> str:
+    """Return SQL for AST node attrs key/value rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    return _attrs_view_sql(
+        table,
+        cols=("file_id", "path", "ast_id", "parent_ast_id", "kind", "name"),
+    )
+
+
+def ast_def_attrs_sql(table: str = "ast_defs") -> str:
+    """Return SQL for AST definition attrs key/value rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    return _attrs_view_sql(
+        table,
+        cols=("file_id", "path", "ast_id", "parent_ast_id", "kind", "name"),
+    )
+
+
+def ast_call_attrs_sql(table: str = "ast_calls") -> str:
+    """Return SQL for AST call attrs key/value rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    return _attrs_view_sql(
+        table,
+        cols=("file_id", "path", "ast_id", "parent_ast_id", "func_kind", "func_name"),
+    )
+
+
+def ast_edge_attrs_sql(table: str = "ast_edges") -> str:
+    """Return SQL for AST edge attrs key/value rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    return _attrs_view_sql(
+        table,
+        cols=("file_id", "path", "src", "dst", "kind", "slot", "idx"),
+    )
+
+
+def ast_span_metadata_sql(table: str = "ast_files_v1") -> str:
+    """Return SQL for AST span metadata inspection.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    return f"""
+    SELECT
+      arrow_metadata(nodes.span, 'line_base') AS nodes_line_base,
+      arrow_metadata(nodes.span, 'col_unit') AS nodes_col_unit,
+      arrow_metadata(nodes.span, 'end_exclusive') AS nodes_end_exclusive,
+      arrow_metadata(errors.span, 'line_base') AS errors_line_base,
+      arrow_metadata(errors.span, 'col_unit') AS errors_col_unit,
+      arrow_metadata(errors.span, 'end_exclusive') AS errors_end_exclusive,
+      arrow_metadata(docstrings.span, 'line_base') AS docstrings_line_base,
+      arrow_metadata(docstrings.span, 'col_unit') AS docstrings_col_unit,
+      arrow_metadata(docstrings.span, 'end_exclusive') AS docstrings_end_exclusive,
+      arrow_metadata(imports.span, 'line_base') AS imports_line_base,
+      arrow_metadata(imports.span, 'col_unit') AS imports_col_unit,
+      arrow_metadata(imports.span, 'end_exclusive') AS imports_end_exclusive,
+      arrow_metadata(defs.span, 'line_base') AS defs_line_base,
+      arrow_metadata(defs.span, 'col_unit') AS defs_col_unit,
+      arrow_metadata(defs.span, 'end_exclusive') AS defs_end_exclusive,
+      arrow_metadata(calls.span, 'line_base') AS calls_line_base,
+      arrow_metadata(calls.span, 'col_unit') AS calls_col_unit,
+      arrow_metadata(calls.span, 'end_exclusive') AS calls_end_exclusive,
+      arrow_metadata(type_ignores.span, 'line_base') AS type_ignores_line_base,
+      arrow_metadata(type_ignores.span, 'col_unit') AS type_ignores_col_unit,
+      arrow_metadata(type_ignores.span, 'end_exclusive') AS type_ignores_end_exclusive
+    FROM {table}
+    LIMIT 1
+    """
+
+
+def ts_span_metadata_sql(table: str = "tree_sitter_files_v1") -> str:
+    """Return SQL for tree-sitter span metadata inspection.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    return f"""
+    SELECT
+      arrow_metadata(nodes.span, 'line_base') AS nodes_line_base,
+      arrow_metadata(nodes.span, 'col_unit') AS nodes_col_unit,
+      arrow_metadata(nodes.span, 'end_exclusive') AS nodes_end_exclusive,
+      arrow_metadata(errors.span, 'line_base') AS errors_line_base,
+      arrow_metadata(errors.span, 'col_unit') AS errors_col_unit,
+      arrow_metadata(errors.span, 'end_exclusive') AS errors_end_exclusive,
+      arrow_metadata(missing.span, 'line_base') AS missing_line_base,
+      arrow_metadata(missing.span, 'col_unit') AS missing_col_unit,
+      arrow_metadata(missing.span, 'end_exclusive') AS missing_end_exclusive,
+      arrow_metadata(captures.span, 'line_base') AS captures_line_base,
+      arrow_metadata(captures.span, 'col_unit') AS captures_col_unit,
+      arrow_metadata(captures.span, 'end_exclusive') AS captures_end_exclusive,
+      arrow_metadata(defs.span, 'line_base') AS defs_line_base,
+      arrow_metadata(defs.span, 'col_unit') AS defs_col_unit,
+      arrow_metadata(defs.span, 'end_exclusive') AS defs_end_exclusive,
+      arrow_metadata(calls.span, 'line_base') AS calls_line_base,
+      arrow_metadata(calls.span, 'col_unit') AS calls_col_unit,
+      arrow_metadata(calls.span, 'end_exclusive') AS calls_end_exclusive,
+      arrow_metadata(imports.span, 'line_base') AS imports_line_base,
+      arrow_metadata(imports.span, 'col_unit') AS imports_col_unit,
+      arrow_metadata(imports.span, 'end_exclusive') AS imports_end_exclusive,
+      arrow_metadata(docstrings.span, 'line_base') AS docstrings_line_base,
+      arrow_metadata(docstrings.span, 'col_unit') AS docstrings_col_unit,
+      arrow_metadata(docstrings.span, 'end_exclusive') AS docstrings_end_exclusive
+    FROM {table}
+    LIMIT 1
     """
 
 
@@ -1062,7 +1274,7 @@ def tree_sitter_nodes_sql(table: str = "tree_sitter_files_v1") -> str:
       base.flags['is_missing'] AS is_missing,
       base.flags['is_extra'] AS is_extra,
       base.flags['has_changes'] AS has_changes,
-      base.attrs AS attrs
+      arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
 
@@ -1093,7 +1305,7 @@ def tree_sitter_errors_sql(table: str = "tree_sitter_files_v1") -> str:
       base.span['byte_span']['byte_start'] AS start_byte,
       (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
       CAST(TRUE AS BOOLEAN) AS is_error,
-      base.attrs AS attrs
+      arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
 
@@ -1124,7 +1336,7 @@ def tree_sitter_missing_sql(table: str = "tree_sitter_files_v1") -> str:
       base.span['byte_span']['byte_start'] AS start_byte,
       (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
       CAST(TRUE AS BOOLEAN) AS is_missing,
-      base.attrs AS attrs
+      arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
 
@@ -1147,7 +1359,7 @@ def tree_sitter_edges_sql(table: str = "tree_sitter_files_v1") -> str:
       base.child_id AS child_ts_id,
       base.field_name AS field_name,
       base.child_index AS child_index,
-      base.attrs AS attrs
+      arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
 
@@ -1181,7 +1393,7 @@ def tree_sitter_captures_sql(table: str = "tree_sitter_files_v1") -> str:
       base.span['end_exclusive'] AS end_exclusive,
       base.span['byte_span']['byte_start'] AS start_byte,
       (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
-      base.attrs AS attrs
+      arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
 
@@ -1213,7 +1425,7 @@ def tree_sitter_defs_sql(table: str = "tree_sitter_files_v1") -> str:
       base.span['end_exclusive'] AS end_exclusive,
       base.span['byte_span']['byte_start'] AS start_byte,
       (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
-      base.attrs AS attrs
+      arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
 
@@ -1246,7 +1458,7 @@ def tree_sitter_calls_sql(table: str = "tree_sitter_files_v1") -> str:
       base.span['end_exclusive'] AS end_exclusive,
       base.span['byte_span']['byte_start'] AS start_byte,
       (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
-      base.attrs AS attrs
+      arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
 
@@ -1282,7 +1494,7 @@ def tree_sitter_imports_sql(table: str = "tree_sitter_files_v1") -> str:
       base.span['end_exclusive'] AS end_exclusive,
       base.span['byte_span']['byte_start'] AS start_byte,
       (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
-      base.attrs AS attrs
+      arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
 
@@ -1316,7 +1528,7 @@ def tree_sitter_docstrings_sql(table: str = "tree_sitter_files_v1") -> str:
       base.span['end_exclusive'] AS end_exclusive,
       base.span['byte_span']['byte_start'] AS start_byte,
       (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
-      base.attrs AS attrs
+      arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
 
@@ -1350,106 +1562,323 @@ def tree_sitter_stats_sql(table: str = "tree_sitter_files_v1") -> str:
 
 
 def ts_ast_defs_check_sql() -> str:
-    """Return SQL for tree-sitter vs AST def count checks."""
+    """Return SQL for tree-sitter vs AST def span checks.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return """
     WITH ts AS (
-      SELECT file_id, path, COUNT(*) AS ts_defs
+      SELECT file_id, path, start_byte, end_byte
       FROM ts_defs
-      GROUP BY file_id, path
+    ),
+    ast_base AS (
+      SELECT
+        file_id,
+        path,
+        lineno,
+        col_offset,
+        end_lineno,
+        end_col_offset,
+        line_base
+      FROM ast_defs
     ),
     ast AS (
-      SELECT file_id, path, COUNT(*) AS ast_defs
-      FROM ast_defs
-      GROUP BY file_id, path
+      SELECT
+        ast_base.file_id AS file_id,
+        ast_base.path AS path,
+        (start_idx.line_start_byte + CAST(ast_base.col_offset AS BIGINT)) AS start_byte,
+        (end_idx.line_start_byte + CAST(ast_base.end_col_offset AS BIGINT)) AS end_byte
+      FROM ast_base
+      LEFT JOIN file_line_index_v1 AS start_idx
+        ON ast_base.file_id = start_idx.file_id
+        AND ast_base.path = start_idx.path
+        AND (ast_base.lineno - ast_base.line_base) = start_idx.line_no
+      LEFT JOIN file_line_index_v1 AS end_idx
+        ON ast_base.file_id = end_idx.file_id
+        AND ast_base.path = end_idx.path
+        AND (ast_base.end_lineno - ast_base.line_base) = end_idx.line_no
+    ),
+    joined AS (
+      SELECT
+        COALESCE(ts.file_id, ast.file_id) AS file_id,
+        COALESCE(ts.path, ast.path) AS path,
+        ts.start_byte AS ts_start_byte,
+        ts.end_byte AS ts_end_byte,
+        ast.start_byte AS ast_start_byte,
+        ast.end_byte AS ast_end_byte
+      FROM ts
+      FULL OUTER JOIN ast
+        ON ts.file_id = ast.file_id
+        AND ts.path = ast.path
+        AND ts.start_byte = ast.start_byte
+        AND ts.end_byte = ast.end_byte
     )
     SELECT
-      COALESCE(ts.file_id, ast.file_id) AS file_id,
-      COALESCE(ts.path, ast.path) AS path,
-      ts.ts_defs AS ts_defs,
-      ast.ast_defs AS ast_defs,
-      (COALESCE(ts.ts_defs, 0) - COALESCE(ast.ast_defs, 0)) AS diff,
-      (COALESCE(ts.ts_defs, 0) != COALESCE(ast.ast_defs, 0)) AS mismatch
-    FROM ts
-    FULL OUTER JOIN ast
-      ON ts.file_id = ast.file_id AND ts.path = ast.path
+      file_id,
+      path,
+      SUM(CASE WHEN ts_start_byte IS NOT NULL THEN 1 ELSE 0 END) AS ts_defs,
+      SUM(CASE WHEN ast_start_byte IS NOT NULL THEN 1 ELSE 0 END) AS ast_defs,
+      SUM(
+        CASE WHEN ts_start_byte IS NOT NULL AND ast_start_byte IS NULL THEN 1 ELSE 0 END
+      ) AS ts_only,
+      SUM(
+        CASE WHEN ts_start_byte IS NULL AND ast_start_byte IS NOT NULL THEN 1 ELSE 0 END
+      ) AS ast_only,
+      SUM(
+        CASE WHEN ts_start_byte IS NOT NULL AND ast_start_byte IS NULL THEN 1 ELSE 0 END
+      )
+      + SUM(
+        CASE WHEN ts_start_byte IS NULL AND ast_start_byte IS NOT NULL THEN 1 ELSE 0 END
+      ) AS mismatch_count,
+      (
+        SUM(
+          CASE WHEN ts_start_byte IS NOT NULL AND ast_start_byte IS NULL THEN 1 ELSE 0 END
+        )
+        + SUM(
+          CASE WHEN ts_start_byte IS NULL AND ast_start_byte IS NOT NULL THEN 1 ELSE 0 END
+        )
+      ) > 0 AS mismatch
+    FROM joined
+    GROUP BY file_id, path
     """
 
 
 def ts_ast_calls_check_sql() -> str:
-    """Return SQL for tree-sitter vs AST call count checks."""
+    """Return SQL for tree-sitter vs AST call span checks.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return """
     WITH ts AS (
-      SELECT file_id, path, COUNT(*) AS ts_calls
+      SELECT file_id, path, start_byte, end_byte
       FROM ts_calls
-      GROUP BY file_id, path
+    ),
+    ast_base AS (
+      SELECT
+        file_id,
+        path,
+        lineno,
+        col_offset,
+        end_lineno,
+        end_col_offset,
+        line_base
+      FROM ast_calls
     ),
     ast AS (
-      SELECT file_id, path, COUNT(*) AS ast_calls
-      FROM ast_calls
-      GROUP BY file_id, path
+      SELECT
+        ast_base.file_id AS file_id,
+        ast_base.path AS path,
+        (start_idx.line_start_byte + CAST(ast_base.col_offset AS BIGINT)) AS start_byte,
+        (end_idx.line_start_byte + CAST(ast_base.end_col_offset AS BIGINT)) AS end_byte
+      FROM ast_base
+      LEFT JOIN file_line_index_v1 AS start_idx
+        ON ast_base.file_id = start_idx.file_id
+        AND ast_base.path = start_idx.path
+        AND (ast_base.lineno - ast_base.line_base) = start_idx.line_no
+      LEFT JOIN file_line_index_v1 AS end_idx
+        ON ast_base.file_id = end_idx.file_id
+        AND ast_base.path = end_idx.path
+        AND (ast_base.end_lineno - ast_base.line_base) = end_idx.line_no
+    ),
+    joined AS (
+      SELECT
+        COALESCE(ts.file_id, ast.file_id) AS file_id,
+        COALESCE(ts.path, ast.path) AS path,
+        ts.start_byte AS ts_start_byte,
+        ts.end_byte AS ts_end_byte,
+        ast.start_byte AS ast_start_byte,
+        ast.end_byte AS ast_end_byte
+      FROM ts
+      FULL OUTER JOIN ast
+        ON ts.file_id = ast.file_id
+        AND ts.path = ast.path
+        AND ts.start_byte = ast.start_byte
+        AND ts.end_byte = ast.end_byte
     )
     SELECT
-      COALESCE(ts.file_id, ast.file_id) AS file_id,
-      COALESCE(ts.path, ast.path) AS path,
-      ts.ts_calls AS ts_calls,
-      ast.ast_calls AS ast_calls,
-      (COALESCE(ts.ts_calls, 0) - COALESCE(ast.ast_calls, 0)) AS diff,
-      (COALESCE(ts.ts_calls, 0) != COALESCE(ast.ast_calls, 0)) AS mismatch
-    FROM ts
-    FULL OUTER JOIN ast
-      ON ts.file_id = ast.file_id AND ts.path = ast.path
+      file_id,
+      path,
+      SUM(CASE WHEN ts_start_byte IS NOT NULL THEN 1 ELSE 0 END) AS ts_calls,
+      SUM(CASE WHEN ast_start_byte IS NOT NULL THEN 1 ELSE 0 END) AS ast_calls,
+      SUM(
+        CASE WHEN ts_start_byte IS NOT NULL AND ast_start_byte IS NULL THEN 1 ELSE 0 END
+      ) AS ts_only,
+      SUM(
+        CASE WHEN ts_start_byte IS NULL AND ast_start_byte IS NOT NULL THEN 1 ELSE 0 END
+      ) AS ast_only,
+      SUM(
+        CASE WHEN ts_start_byte IS NOT NULL AND ast_start_byte IS NULL THEN 1 ELSE 0 END
+      )
+      + SUM(
+        CASE WHEN ts_start_byte IS NULL AND ast_start_byte IS NOT NULL THEN 1 ELSE 0 END
+      ) AS mismatch_count,
+      (
+        SUM(
+          CASE WHEN ts_start_byte IS NOT NULL AND ast_start_byte IS NULL THEN 1 ELSE 0 END
+        )
+        + SUM(
+          CASE WHEN ts_start_byte IS NULL AND ast_start_byte IS NOT NULL THEN 1 ELSE 0 END
+        )
+      ) > 0 AS mismatch
+    FROM joined
+    GROUP BY file_id, path
     """
 
 
 def ts_ast_imports_check_sql() -> str:
-    """Return SQL for tree-sitter vs AST import count checks."""
+    """Return SQL for tree-sitter vs AST import span checks.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return """
     WITH ts AS (
-      SELECT file_id, path, COUNT(*) AS ts_imports
+      SELECT file_id, path, start_byte, end_byte
       FROM ts_imports
-      GROUP BY file_id, path
+    ),
+    ast_base AS (
+      SELECT
+        file_id,
+        path,
+        lineno,
+        col_offset,
+        end_lineno,
+        end_col_offset,
+        line_base
+      FROM ast_imports
     ),
     ast AS (
-      SELECT file_id, path, COUNT(*) AS ast_imports
-      FROM ast_imports
-      GROUP BY file_id, path
+      SELECT
+        ast_base.file_id AS file_id,
+        ast_base.path AS path,
+        (start_idx.line_start_byte + CAST(ast_base.col_offset AS BIGINT)) AS start_byte,
+        (end_idx.line_start_byte + CAST(ast_base.end_col_offset AS BIGINT)) AS end_byte
+      FROM ast_base
+      LEFT JOIN file_line_index_v1 AS start_idx
+        ON ast_base.file_id = start_idx.file_id
+        AND ast_base.path = start_idx.path
+        AND (ast_base.lineno - ast_base.line_base) = start_idx.line_no
+      LEFT JOIN file_line_index_v1 AS end_idx
+        ON ast_base.file_id = end_idx.file_id
+        AND ast_base.path = end_idx.path
+        AND (ast_base.end_lineno - ast_base.line_base) = end_idx.line_no
+    ),
+    joined AS (
+      SELECT
+        COALESCE(ts.file_id, ast.file_id) AS file_id,
+        COALESCE(ts.path, ast.path) AS path,
+        ts.start_byte AS ts_start_byte,
+        ts.end_byte AS ts_end_byte,
+        ast.start_byte AS ast_start_byte,
+        ast.end_byte AS ast_end_byte
+      FROM ts
+      FULL OUTER JOIN ast
+        ON ts.file_id = ast.file_id
+        AND ts.path = ast.path
+        AND ts.start_byte = ast.start_byte
+        AND ts.end_byte = ast.end_byte
     )
     SELECT
-      COALESCE(ts.file_id, ast.file_id) AS file_id,
-      COALESCE(ts.path, ast.path) AS path,
-      ts.ts_imports AS ts_imports,
-      ast.ast_imports AS ast_imports,
-      (COALESCE(ts.ts_imports, 0) - COALESCE(ast.ast_imports, 0)) AS diff,
-      (COALESCE(ts.ts_imports, 0) != COALESCE(ast.ast_imports, 0)) AS mismatch
-    FROM ts
-    FULL OUTER JOIN ast
-      ON ts.file_id = ast.file_id AND ts.path = ast.path
+      file_id,
+      path,
+      SUM(CASE WHEN ts_start_byte IS NOT NULL THEN 1 ELSE 0 END) AS ts_imports,
+      SUM(CASE WHEN ast_start_byte IS NOT NULL THEN 1 ELSE 0 END) AS ast_imports,
+      SUM(
+        CASE WHEN ts_start_byte IS NOT NULL AND ast_start_byte IS NULL THEN 1 ELSE 0 END
+      ) AS ts_only,
+      SUM(
+        CASE WHEN ts_start_byte IS NULL AND ast_start_byte IS NOT NULL THEN 1 ELSE 0 END
+      ) AS ast_only,
+      SUM(
+        CASE WHEN ts_start_byte IS NOT NULL AND ast_start_byte IS NULL THEN 1 ELSE 0 END
+      )
+      + SUM(
+        CASE WHEN ts_start_byte IS NULL AND ast_start_byte IS NOT NULL THEN 1 ELSE 0 END
+      ) AS mismatch_count,
+      (
+        SUM(
+          CASE WHEN ts_start_byte IS NOT NULL AND ast_start_byte IS NULL THEN 1 ELSE 0 END
+        )
+        + SUM(
+          CASE WHEN ts_start_byte IS NULL AND ast_start_byte IS NOT NULL THEN 1 ELSE 0 END
+        )
+      ) > 0 AS mismatch
+    FROM joined
+    GROUP BY file_id, path
     """
 
 
 def ts_cst_docstrings_check_sql() -> str:
-    """Return SQL for tree-sitter vs CST docstring count checks."""
+    """Return SQL for tree-sitter vs CST docstring span checks.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
     return """
     WITH ts AS (
-      SELECT file_id, path, COUNT(*) AS ts_docstrings
+      SELECT file_id, path, start_byte, end_byte
       FROM ts_docstrings
-      GROUP BY file_id, path
     ),
     cst AS (
-      SELECT file_id, path, COUNT(*) AS cst_docstrings
+      SELECT
+        file_id,
+        path,
+        CAST(bstart AS BIGINT) AS start_byte,
+        CAST(bend AS BIGINT) AS end_byte
       FROM cst_docstrings
-      GROUP BY file_id, path
+    ),
+    joined AS (
+      SELECT
+        COALESCE(ts.file_id, cst.file_id) AS file_id,
+        COALESCE(ts.path, cst.path) AS path,
+        ts.start_byte AS ts_start_byte,
+        ts.end_byte AS ts_end_byte,
+        cst.start_byte AS cst_start_byte,
+        cst.end_byte AS cst_end_byte
+      FROM ts
+      FULL OUTER JOIN cst
+        ON ts.file_id = cst.file_id
+        AND ts.path = cst.path
+        AND ts.start_byte = cst.start_byte
+        AND ts.end_byte = cst.end_byte
     )
     SELECT
-      COALESCE(ts.file_id, cst.file_id) AS file_id,
-      COALESCE(ts.path, cst.path) AS path,
-      ts.ts_docstrings AS ts_docstrings,
-      cst.cst_docstrings AS cst_docstrings,
-      (COALESCE(ts.ts_docstrings, 0) - COALESCE(cst.cst_docstrings, 0)) AS diff,
-      (COALESCE(ts.ts_docstrings, 0) != COALESCE(cst.cst_docstrings, 0)) AS mismatch
-    FROM ts
-    FULL OUTER JOIN cst
-      ON ts.file_id = cst.file_id AND ts.path = cst.path
+      file_id,
+      path,
+      SUM(CASE WHEN ts_start_byte IS NOT NULL THEN 1 ELSE 0 END) AS ts_docstrings,
+      SUM(CASE WHEN cst_start_byte IS NOT NULL THEN 1 ELSE 0 END) AS cst_docstrings,
+      SUM(
+        CASE WHEN ts_start_byte IS NOT NULL AND cst_start_byte IS NULL THEN 1 ELSE 0 END
+      ) AS ts_only,
+      SUM(
+        CASE WHEN ts_start_byte IS NULL AND cst_start_byte IS NOT NULL THEN 1 ELSE 0 END
+      ) AS cst_only,
+      SUM(
+        CASE WHEN ts_start_byte IS NOT NULL AND cst_start_byte IS NULL THEN 1 ELSE 0 END
+      )
+      + SUM(
+        CASE WHEN ts_start_byte IS NULL AND cst_start_byte IS NOT NULL THEN 1 ELSE 0 END
+      ) AS mismatch_count,
+      (
+        SUM(
+          CASE WHEN ts_start_byte IS NOT NULL AND cst_start_byte IS NULL THEN 1 ELSE 0 END
+        )
+        + SUM(
+          CASE WHEN ts_start_byte IS NULL AND cst_start_byte IS NOT NULL THEN 1 ELSE 0 END
+        )
+      ) > 0 AS mismatch
+    FROM joined
+    GROUP BY file_id, path
     """
 
 
@@ -1500,7 +1929,11 @@ def symtable_symbols_sql(table: str = "symtable_files_v1") -> str:
       base.block_id AS table_id,
       base.scope_id AS scope_id,
       base.name AS symbol_name,
-      base.sym_symbol_id AS sym_symbol_id,
+      CASE
+        WHEN base.scope_id IS NULL OR base.name IS NULL
+        THEN NULL
+        ELSE prefixed_hash64('sym_symbol', concat_ws(':', base.scope_id, base.name))
+      END AS sym_symbol_id,
       base.flags['is_referenced'] AS is_referenced,
       base.flags['is_imported'] AS is_imported,
       base.flags['is_parameter'] AS is_parameter,
@@ -1849,7 +2282,11 @@ def bytecode_instruction_attrs_sql(table: str = "bytecode_files_v1") -> str:
       base.instr_index AS instr_index,
       base.offset AS offset,
       kv['key'] AS attr_key,
-      kv['value'] AS attr_value
+      kv['value'] AS attr_value,
+      {_union_tag("kv['value']")} AS attr_kind,
+      {_union_extract("kv['value']", "int_value")} AS attr_int,
+      {_union_extract("kv['value']", "bool_value")} AS attr_bool,
+      {_union_extract("kv['value']", "str_value")} AS attr_str
     FROM base
     CROSS JOIN unnest(map_entries(base.attrs)) AS kv
     """
@@ -1887,15 +2324,29 @@ def bytecode_instruction_attr_values_sql(table: str = "bytecode_files_v1") -> st
     """
     base = nested_base_sql("py_bc_instructions", table=table)
     return f"""
-    WITH base AS ({base})
+    WITH base AS ({base}),
+    expanded AS (
+      SELECT
+        base.file_id AS file_id,
+        base.path AS path,
+        base.code_id AS code_unit_id,
+        base.instr_index AS instr_index,
+        base.offset AS offset,
+        unnest(map_values(base.attrs)) AS attr_value
+      FROM base
+    )
     SELECT
-      base.file_id AS file_id,
-      base.path AS path,
-      base.code_id AS code_unit_id,
-      base.instr_index AS instr_index,
-      base.offset AS offset,
-      unnest(map_values(base.attrs)) AS attr_value
-    FROM base
+      expanded.file_id AS file_id,
+      expanded.path AS path,
+      expanded.code_unit_id AS code_unit_id,
+      expanded.instr_index AS instr_index,
+      expanded.offset AS offset,
+      expanded.attr_value AS attr_value,
+      {_union_tag("expanded.attr_value")} AS attr_kind,
+      {_union_extract("expanded.attr_value", "int_value")} AS attr_int,
+      {_union_extract("expanded.attr_value", "bool_value")} AS attr_bool,
+      {_union_extract("expanded.attr_value", "str_value")} AS attr_str
+    FROM expanded
     """
 
 
@@ -1908,13 +2359,23 @@ def bytecode_instructions_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("py_bc_instructions", table=table)
-    stack_depth_before = _map_cast("base.attrs", "stack_depth_before", "INT")
-    stack_depth_after = _map_cast("base.attrs", "stack_depth_after", "INT")
+    stack_depth_before = _union_extract(
+        _map_value("base.attrs", "stack_depth_before"),
+        "int_value",
+    )
+    stack_depth_after = _union_extract(
+        _map_value("base.attrs", "stack_depth_after"),
+        "int_value",
+    )
     line_base = _metadata_cast("base.span", "line_base", "INT")
     col_unit = _metadata_value("base.span", "col_unit")
     end_exclusive = _metadata_bool("base.span", "end_exclusive")
     instr_index = "base.instr_index"
     offset = "base.offset"
+    pos_start_line = _get_field_path("base.span", "start", "line0")
+    pos_end_line = _get_field_path("base.span", "end", "line0")
+    pos_start_col = _get_field_path("base.span", "start", "col")
+    pos_end_col = _get_field_path("base.span", "end", "col")
     return f"""
     WITH base AS ({base})
     SELECT
@@ -1941,10 +2402,10 @@ def bytecode_instructions_sql(table: str = "bytecode_files_v1") -> str:
       base.is_jump_target AS is_jump_target,
       base.jump_target AS jump_target_offset,
       base.cache_info AS cache_info,
-      base.span['start']['line0'] AS pos_start_line,
-      base.span['end']['line0'] AS pos_end_line,
-      base.span['start']['col'] AS pos_start_col,
-      base.span['end']['col'] AS pos_end_col,
+      {pos_start_line} AS pos_start_line,
+      {pos_end_line} AS pos_end_line,
+      {pos_start_col} AS pos_start_col,
+      {pos_end_col} AS pos_end_col,
       {line_base} AS line_base,
       {col_unit} AS col_unit,
       {end_exclusive} AS end_exclusive,
@@ -2024,35 +2485,30 @@ def bytecode_instruction_span_fields_sql(table: str = "py_bc_instruction_spans")
     str
         SQL fragment text.
     """
+    pos_start_line = _get_field_path("base.span", "start", "line0")
+    pos_start_col = _get_field_path("base.span", "start", "col")
+    pos_end_line = _get_field_path("base.span", "end", "line0")
+    pos_end_col = _get_field_path("base.span", "end", "col")
+    col_unit = _get_field("base.span", "col_unit")
+    end_exclusive = _get_field("base.span", "end_exclusive")
     return f"""
     WITH base AS (
       SELECT * FROM {table}
-    ),
-    expanded AS (
-      SELECT
-        base.file_id AS file_id,
-        base.path AS path,
-        base.code_unit_id AS code_unit_id,
-        base.instr_id AS instr_id,
-        base.instr_index AS instr_index,
-        base.offset AS offset,
-        unnest(base.span)
-      FROM base
     )
     SELECT
-      expanded.file_id AS file_id,
-      expanded.path AS path,
-      expanded.code_unit_id AS code_unit_id,
-      expanded.instr_id AS instr_id,
-      expanded.instr_index AS instr_index,
-      expanded.offset AS offset,
-      expanded."__unnest_placeholder(base.span).start"['line0'] AS pos_start_line,
-      expanded."__unnest_placeholder(base.span).start"['col'] AS pos_start_col,
-      expanded."__unnest_placeholder(base.span).end"['line0'] AS pos_end_line,
-      expanded."__unnest_placeholder(base.span).end"['col'] AS pos_end_col,
-      expanded."__unnest_placeholder(base.span).col_unit" AS col_unit,
-      expanded."__unnest_placeholder(base.span).end_exclusive" AS end_exclusive
-    FROM expanded
+      base.file_id AS file_id,
+      base.path AS path,
+      base.code_unit_id AS code_unit_id,
+      base.instr_id AS instr_id,
+      base.instr_index AS instr_index,
+      base.offset AS offset,
+      {pos_start_line} AS pos_start_line,
+      {pos_start_col} AS pos_start_col,
+      {pos_end_line} AS pos_end_line,
+      {pos_end_col} AS pos_end_col,
+      {col_unit} AS col_unit,
+      {end_exclusive} AS end_exclusive
+    FROM base
     """
 
 
@@ -2175,7 +2631,11 @@ def bytecode_cfg_edge_attrs_sql(table: str = "bytecode_files_v1") -> str:
       base.edge_key AS edge_key,
       base.kind AS kind,
       kv['key'] AS attr_key,
-      kv['value'] AS attr_value
+      kv['value'] AS attr_value,
+      {_union_tag("kv['value']")} AS attr_kind,
+      {_union_extract("kv['value']", "int_value")} AS attr_int,
+      {_union_extract("kv['value']", "bool_value")} AS attr_bool,
+      {_union_extract("kv['value']", "str_value")} AS attr_str
     FROM base
     CROSS JOIN unnest(map_entries(base.attrs)) AS kv
     """
@@ -2338,7 +2798,11 @@ def bytecode_error_attrs_sql(table: str = "bytecode_files_v1") -> str:
       base.error_type AS error_type,
       base.message AS message,
       kv['key'] AS attr_key,
-      kv['value'] AS attr_value
+      kv['value'] AS attr_value,
+      {_union_tag("kv['value']")} AS attr_kind,
+      {_union_extract("kv['value']", "int_value")} AS attr_int,
+      {_union_extract("kv['value']", "bool_value")} AS attr_bool,
+      {_union_extract("kv['value']", "str_value")} AS attr_str
     FROM base
     CROSS JOIN unnest(map_entries(base.attrs)) AS kv
     """
@@ -2408,6 +2872,12 @@ _FRAGMENT_SQL_BUILDERS: dict[str, FragmentSqlBuilder] = {
     "ast_defs": ast_defs_sql,
     "ast_calls": ast_calls_sql,
     "ast_type_ignores": ast_type_ignores_sql,
+    "ast_node_attrs": ast_node_attrs_sql,
+    "ast_def_attrs": ast_def_attrs_sql,
+    "ast_call_attrs": ast_call_attrs_sql,
+    "ast_edge_attrs": ast_edge_attrs_sql,
+    "ast_span_metadata": ast_span_metadata_sql,
+    "ts_span_metadata": ts_span_metadata_sql,
     "ts_nodes": tree_sitter_nodes_sql,
     "ts_edges": tree_sitter_edges_sql,
     "ts_errors": tree_sitter_errors_sql,
@@ -2462,34 +2932,46 @@ _FRAGMENT_SQL_BUILDERS: dict[str, FragmentSqlBuilder] = {
 }
 
 
-def fragment_view_specs(ctx: SessionContext) -> tuple[ViewSpec, ...]:
+def fragment_view_specs(
+    ctx: SessionContext,
+    *,
+    exclude: Sequence[str] | None = None,
+) -> tuple[ViewSpec, ...]:
     """Return ViewSpecs for SQL fragments using DataFusion schema inference.
 
     Parameters
     ----------
     ctx:
         DataFusion session context used to infer fragment schemas.
+    exclude:
+        Optional fragment names to skip when building view specs.
 
     Returns
     -------
     tuple[ViewSpec, ...]
         View specifications derived from fragment SQL.
     """
+    excluded = set(exclude or ())
+    names = sorted(name for name in _FRAGMENT_SQL_BUILDERS if name not in excluded)
     return tuple(
-        view_spec_from_sql(ctx, name=name, sql=_FRAGMENT_SQL_BUILDERS[name]())
-        for name in sorted(_FRAGMENT_SQL_BUILDERS)
+        view_spec_from_sql(ctx, name=name, sql=_FRAGMENT_SQL_BUILDERS[name]()) for name in names
     )
 
 
 __all__ = [
     "SqlFragment",
+    "ast_call_attrs_sql",
     "ast_calls_sql",
+    "ast_def_attrs_sql",
     "ast_defs_sql",
     "ast_docstrings_sql",
+    "ast_edge_attrs_sql",
     "ast_edges_sql",
     "ast_errors_sql",
     "ast_imports_sql",
+    "ast_node_attrs_sql",
     "ast_nodes_sql",
+    "ast_span_metadata_sql",
     "ast_type_ignores_sql",
     "bytecode_blocks_sql",
     "bytecode_cache_entries_sql",
@@ -2572,4 +3054,5 @@ __all__ = [
     "ts_ast_defs_check_sql",
     "ts_ast_imports_check_sql",
     "ts_cst_docstrings_check_sql",
+    "ts_span_metadata_sql",
 ]

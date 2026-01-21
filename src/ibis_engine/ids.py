@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import cast
 
 import ibis
+import ibis.expr.operations as ops
 from ibis.expr.types import StringValue, Value
 
 from ibis_engine.builtin_udfs import stable_hash64, stable_hash128
@@ -140,12 +141,8 @@ def _join_with_separator(parts: Sequence[StringValue]) -> StringValue:
     if len(parts) == 1:
         return parts[0]
     sep = ibis.literal(HASH_SEPARATOR)
-    pieces: list[StringValue] = []
-    for idx, part in enumerate(parts):
-        if idx:
-            pieces.append(cast("StringValue", sep))
-        pieces.append(part)
-    return _concat_values(pieces)
+    joined = ops.StringJoin(arg=tuple(parts), sep=cast("StringValue", sep))
+    return cast("StringValue", joined.to_expr())
 
 
 def _concat_values(parts: Sequence[StringValue]) -> StringValue:

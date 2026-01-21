@@ -99,7 +99,9 @@ Status: Completed
 
 ### Code pattern
 ```python
-def _iter_nodes_with_edges(root: Node) -> Iterator[tuple[Node, Node | None, str | None, int | None]]:
+def _iter_nodes_with_edges(
+    root: Node,
+) -> Iterator[tuple[Node, Node | None, str | None, int | None]]:
     cursor = root.walk()
     stack: list[tuple[str | None, int]] = []
     while True:
@@ -272,7 +274,7 @@ TREE_SITTER_FILES_SCHEMA = pa.schema(
 ---
 
 ## Scope 8: DataFusion validation and AST/CST cross-check views
-Status: In Progress
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/schema_registry.py`
@@ -295,8 +297,8 @@ def validate_ts_views(ctx: SessionContext) -> None:
 ### Implementation checklist
 - [x] Add `TS_VIEW_NAMES` and `validate_ts_views` (mirrors AST/CST patterns).
 - [x] Create SQL views to compare `ts_defs/ts_calls/ts_imports` vs AST/CST equivalents.
-- [ ] Use byte spans for joins (`byte_start`, `byte_len`, `path`).
-- [ ] Record mismatch counts in diagnostics and schema validation artifacts.
+- [x] Use byte spans for joins (`byte_start`, `byte_len`, `path`).
+- [x] Record mismatch counts in diagnostics and schema validation artifacts.
 
 ---
 
@@ -328,3 +330,19 @@ for span in old_tree.changed_ranges(new_tree):
 - [x] Apply `changed_ranges` to limit query execution.
 - [x] Gate this path behind an extraction option (`incremental=True`).
 - [x] Keep the non-incremental path as the default for batch runs.
+
+---
+
+## Scope 10: Verification and signature snapshots
+Status: Planned
+
+### Target file list
+- `tests/fixtures/rule_signatures.json`
+- `tests/integration/test_rule_semantics.py`
+
+### Implementation checklist
+- [ ] Resolve the schema registry circular import so snapshots can regenerate.
+- [ ] Refresh rule signatures snapshot after view updates.
+- [ ] Run quality gates: `uv run ruff check --fix`, `uv run pyrefly check`,
+      `uv run pyright --warnings --pythonversion=3.13`.
+- [ ] Fix any new errors in files touched by this work.

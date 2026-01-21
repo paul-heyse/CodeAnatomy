@@ -177,6 +177,20 @@ class ScipBuildInputs:
 
 
 @dataclass(frozen=True)
+class SymtableBuildInputs:
+    """Symtable inputs required for CPG node/property building."""
+
+    symtable_scopes: TableLike | DatasetSource | SqlFragment
+    symtable_symbols: TableLike | DatasetSource | SqlFragment
+    symtable_scope_edges: TableLike | DatasetSource | SqlFragment
+    symtable_bindings: TableLike | DatasetSource | SqlFragment
+    symtable_def_sites: TableLike | DatasetSource | SqlFragment
+    symtable_use_sites: TableLike | DatasetSource | SqlFragment
+    symtable_type_params: TableLike | DatasetSource | SqlFragment
+    symtable_type_param_edges: TableLike | DatasetSource | SqlFragment
+
+
+@dataclass(frozen=True)
 class CpgBaseInputs:
     """Shared inputs for CPG nodes and properties."""
 
@@ -184,6 +198,7 @@ class CpgBaseInputs:
     dim_qualified_names: TableLike | DatasetSource | SqlFragment
     cst_build_inputs: CstBuildInputs
     scip_build_inputs: ScipBuildInputs
+    symtable_build_inputs: SymtableBuildInputs
 
 
 @dataclass(frozen=True)

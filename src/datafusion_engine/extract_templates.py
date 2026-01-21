@@ -224,6 +224,9 @@ CONFIGS: dict[str, ExtractorConfigSpec] = {
             "dont_inherit": True,
             "adaptive": False,
             "include_cfg_derivations": True,
+            "max_workers": None,
+            "parallel_min_files": 8,
+            "parallel_max_bytes": 50_000_000,
             "terminator_opnames": (
                 "RETURN_VALUE",
                 "RETURN_CONST",

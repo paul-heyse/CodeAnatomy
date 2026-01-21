@@ -25,19 +25,20 @@
    ibisPlan --> dfExec[DataFusion_execution]
  ```
  
- ## Inventory of remaining non-DF schema authorities
- - `schema_spec/system.py` and `schema_spec/schema_inference.py` (dataset specs inferred from Arrow)
- - `extract/spec_tables.py`, `normalize/spec_tables.py`, `cpg/spec_tables.py` (explicit Arrow schema tables)
- - `storage/deltalake/registry_models.py` (registry diagnostics schema)
- - `ibis_engine/param_tables.py` (param table schemas)
- - `obs/diagnostics_schemas.py` (diagnostics schemas)
- - `incremental/snapshot.py` (snapshot schemas)
- - `arrowdsl/schema/*` (utility layer constructing Arrow schemas independent of DF)
+## Inventory of remaining non-DF schema authorities
+- **Resolved (removed/migrated)**: `schema_spec/schema_inference.py`, `extract/spec_tables.py`,
+  `normalize/spec_tables.py`, `cpg/spec_tables.py`, `storage/deltalake/registry_models.py`,
+  `obs/diagnostics_schemas.py`; `incremental/snapshot.py` now uses DF schemas.
+- **Resolved (constrained)**: `arrowdsl/schema/schema.py`, `arrowdsl/schema/build.py`,
+  `arrowdsl/schema/serialization.py` now avoid schema inference/creation and only align/encode
+  DataFusion‑sourced schemas.
+- **Retained (non-authoritative)**: `schema_spec/system.py` remains for contract metadata and
+  table alignment, but no longer drives schema discovery.
  
  ---
  
 ## Scope 0: Decommission legacy schema authorities (delete list)
-Status: Planned
+Status: Completed
 
 ### Objective
 Remove all Python-side schema authority modules so DataFusion is the only
@@ -46,14 +47,13 @@ source of schema truth.
 ### Legacy modules to delete or collapse
 - Delete: `src/schema_spec/schema_inference.py`
 - Delete: `src/extract/spec_tables.py`
-- Delete or replace with DF views: `src/normalize/spec_tables.py`
-- Delete or replace with DF views: `src/cpg/spec_tables.py`
-- Delete or replace with DF views: `src/storage/deltalake/registry_models.py`
-- Delete or replace with DF views: `src/obs/diagnostics_schemas.py`
+- Delete: `src/normalize/spec_tables.py`
+- Delete: `src/cpg/spec_tables.py`
+- Delete: `src/storage/deltalake/registry_models.py`
+- Delete: `src/obs/diagnostics_schemas.py`
 - Replace schema construction in: `src/incremental/snapshot.py`
 - Constrain to alignment only: `src/arrowdsl/schema/schema.py`
-- Constrain to alignment only: `src/arrowdsl/schema/build.py`
-- Constrain to alignment only: `src/arrowdsl/schema/serialization.py`
+- **Moved to Scope 6**: `src/arrowdsl/schema/build.py`, `src/arrowdsl/schema/serialization.py`
 
 ### Code pattern
 ```python
@@ -68,7 +68,7 @@ schema = ctx.table("libcst_files_v1").schema()
 ---
 
 ## Scope 1: SessionContext schema authority baseline
- Status: Planned
+ Status: Completed
  
  ### Objective
  Ensure every dataset schema is registered in DataFusion and discoverable via
@@ -80,9 +80,9 @@ schema = ctx.table("libcst_files_v1").schema()
  - `src/datafusion_engine/schema_introspection.py`
  
  ### Implementation checklist
- - [ ] Ensure all dataset schemas are registered via `SessionContext` at runtime.
- - [ ] Extend schema introspection helpers as needed (column inventory, nested paths).
- - [ ] Add a single, documented schema authority entry point in `datafusion_engine`.
+- [x] Ensure all dataset schemas are registered via `SessionContext` at runtime.
+- [x] Extend schema introspection helpers as needed (column inventory, nested paths).
+- [x] Add a single, documented schema authority entry point in `datafusion_engine`.
  
 ### Code pattern
 ```python
@@ -98,7 +98,7 @@ schema = ctx.table("libcst_files_v1").schema()
  ---
  
 ## Scope 2: Replace schema_spec inference with DataFusion introspection
- Status: Planned
+ Status: Completed
  
  ### Target files
  - `src/schema_spec/system.py`
@@ -106,10 +106,10 @@ schema = ctx.table("libcst_files_v1").schema()
  - `src/schema_spec/catalog_registry.py`
  
  ### Implementation checklist
- - [ ] Remove dataset spec inference from `schema_spec` for extract datasets.
- - [ ] Replace `SchemaInferenceHarness` to rely on `SessionContext` schemas.
- - [ ] Use `information_schema` fingerprints (or `ctx.table(name).schema()`) for validation.
- - [ ] Remove remaining extract dataset spec exports from the catalog.
+- [x] Remove dataset spec inference from `schema_spec` for extract datasets.
+- [x] Replace `SchemaInferenceHarness` to rely on `SessionContext` schemas.
+- [x] Use `information_schema` fingerprints (or `ctx.table(name).schema()`) for validation.
+- [x] Remove remaining extract dataset spec exports from the catalog.
  
 ### Code pattern
 ```python
@@ -123,7 +123,7 @@ ddl_rows = ctx.sql(f"DESCRIBE {dataset_name}").to_arrow_table().to_pylist()
  ---
  
 ## Scope 3: Replace spec tables with DataFusion registry views
- Status: Planned
+ Status: Completed
  
  ### Target files
  - `src/extract/spec_tables.py`
@@ -132,10 +132,10 @@ ddl_rows = ctx.sql(f"DESCRIBE {dataset_name}").to_arrow_table().to_pylist()
  - `src/storage/deltalake/registry_models.py`
  
  ### Implementation checklist
- - [ ] Remove Arrow spec table definitions for extract schemas.
- - [ ] Provide DataFusion views for normalize and CPG rule/spec metadata where still needed.
- - [ ] Use DataFusion catalog or dedicated registry views instead of Arrow tables.
- - [ ] Keep registry diagnostics as DataFusion tables or views sourced from `information_schema`.
+- [x] Remove Arrow spec table definitions for extract schemas.
+- [x] Remove normalize/CPG spec tables and downstream dependencies.
+- [x] Use DataFusion catalog or dedicated registry views instead of Arrow tables.
+- [x] Keep registry diagnostics as DataFusion tables or views sourced from `information_schema`.
  
 ### Code pattern
 ```python
@@ -151,7 +151,7 @@ ctx.sql(
  ---
  
 ## Scope 4: Param tables, diagnostics, and observability schemas
- Status: Planned
+ Status: Completed
  
  ### Target files
  - `src/ibis_engine/param_tables.py`
@@ -159,9 +159,9 @@ ctx.sql(
  - `src/datafusion_engine/schema_registry.py`
  
  ### Implementation checklist
- - [ ] Register param table schemas via `SessionContext` and infer via DF schema.
- - [ ] Move diagnostics schemas into the DataFusion registry, exposing them via `SessionContext`.
- - [ ] Replace Python-defined diagnostic schema checks with DataFusion introspection.
+- [x] Register param table schemas via `SessionContext` and infer via DF schema.
+- [x] Move diagnostics schemas into the DataFusion registry, exposing them via `SessionContext`.
+- [x] Replace Python-defined diagnostic schema checks with DataFusion introspection.
  
 ### Code pattern
 ```python
@@ -177,7 +177,7 @@ schema = ctx.table("params.p_file_ids").schema()
  ---
  
 ## Scope 5: Incremental snapshot schemas
- Status: Planned
+ Status: Completed
  
  ### Target files
  - `src/incremental/snapshot.py`
@@ -185,8 +185,8 @@ schema = ctx.table("params.p_file_ids").schema()
  - `src/incremental/invalidations.py`
  
  ### Implementation checklist
- - [ ] Use DataFusion-registered schemas for snapshot tables instead of `pa.schema`.
- - [ ] Validate snapshot schema via `information_schema` before write/merge operations.
+- [x] Use DataFusion-registered schemas for snapshot tables instead of `pa.schema`.
+- [x] Validate snapshot schema via `information_schema` before write/merge operations.
  
 ### Code pattern
 ```python
@@ -201,7 +201,7 @@ columns = SchemaIntrospector(ctx).table_columns("repo_files_v1")
  ---
  
 ## Scope 6: ArrowDSL schema utilities alignment
- Status: Planned
+ Status: Completed
  
  ### Target files
  - `src/arrowdsl/schema/schema.py`
@@ -209,9 +209,9 @@ columns = SchemaIntrospector(ctx).table_columns("repo_files_v1")
  - `src/arrowdsl/schema/serialization.py`
  
  ### Implementation checklist
- - [ ] Constrain helpers to accept schemas sourced from DataFusion.
- - [ ] Remove direct schema creation in ArrowDSL where DataFusion already owns the schema.
- - [ ] Keep only alignment/encoding utilities, not schema construction.
+- [x] Constrain helpers to accept schemas sourced from DataFusion (`schema.py` cleaned).
+- [x] Remove direct schema creation in ArrowDSL where DataFusion already owns the schema.
+- [x] Keep only alignment/encoding utilities, not schema construction.
  
 ### Code pattern
 ```python
@@ -226,7 +226,7 @@ aligned = align_table(table, schema=schema, safe_cast=True)
  ---
  
 ## Scope 7: Validation, tests, and documentation
- Status: Planned
+ Status: Completed
  
  ### Target files
  - `src/datafusion_engine/extract_registry.py`
@@ -234,9 +234,9 @@ aligned = align_table(table, schema=schema, safe_cast=True)
  - `docs/python_library_reference/datafusion_schema.md`
  
  ### Implementation checklist
- - [ ] Validate schema presence and columns via `information_schema` in registry checks.
- - [ ] Remove tests that assume Arrow registry tables exist for extract datasets.
- - [ ] Update docs to state SessionContext is the single schema authority.
+- [x] Validate schema presence and columns via `information_schema` in registry checks.
+- [x] Remove tests that assume Arrow registry tables exist for extract datasets.
+- [x] Update docs to state SessionContext is the single schema authority.
  
 ### Code pattern
 ```python

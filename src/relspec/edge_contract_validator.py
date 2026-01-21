@@ -28,6 +28,12 @@ DEFAULT_REL_OUTPUT_TO_EDGE_KINDS: dict[str, tuple[str, ...]] = {
     "runtime_signatures": ("RT_HAS_SIGNATURE",),
     "runtime_params": ("RT_HAS_PARAM",),
     "runtime_members": ("RT_HAS_MEMBER",),
+    "symtable_scope_parent_edges": ("SCOPE_PARENT",),
+    "symtable_scope_binds_edges": ("SCOPE_BINDS",),
+    "symtable_binding_resolves_to": ("BINDING_RESOLVES_TO",),
+    "symtable_def_site_edges": ("DEF_SITE_OF",),
+    "symtable_use_site_edges": ("USE_SITE_OF",),
+    "symtable_type_param_edges": ("TYPE_PARAM_OF",),
 }
 
 

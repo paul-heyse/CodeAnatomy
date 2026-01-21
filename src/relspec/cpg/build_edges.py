@@ -115,6 +115,10 @@ class EdgeBuildOptions:
     emit_diagnostic_edges: bool = True
     emit_type_edges: bool = True
     emit_runtime_edges: bool = True
+    emit_symtable_scope_edges: bool = True
+    emit_symtable_binding_edges: bool = True
+    emit_symtable_def_use_edges: bool = True
+    emit_symtable_type_param_edges: bool = True
 
 
 @dataclass(frozen=True)
@@ -129,6 +133,12 @@ class EdgeBuildInputs:
     rt_signatures: TableLike | DatasetSource | SqlFragment | None = None
     rt_signature_params: TableLike | DatasetSource | SqlFragment | None = None
     rt_members: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_scope_edges: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_bindings: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_def_sites: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_use_sites: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_binding_resolutions: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_type_param_edges: TableLike | DatasetSource | SqlFragment | None = None
 
 
 @dataclass(frozen=True)
@@ -258,6 +268,12 @@ def _edge_catalog(
                 "rt_signatures": inputs.rt_signatures,
                 "rt_signature_params": inputs.rt_signature_params,
                 "rt_members": inputs.rt_members,
+                "symtable_scope_edges": inputs.symtable_scope_edges,
+                "symtable_bindings": inputs.symtable_bindings,
+                "symtable_def_sites": inputs.symtable_def_sites,
+                "symtable_use_sites": inputs.symtable_use_sites,
+                "symtable_binding_resolutions": inputs.symtable_binding_resolutions,
+                "symtable_type_param_edges": inputs.symtable_type_param_edges,
             }.items()
             if table is not None
         }

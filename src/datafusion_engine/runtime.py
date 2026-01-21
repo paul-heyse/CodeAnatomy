@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -16,6 +17,7 @@ from datafusion.dataframe import DataFrame
 from datafusion.object_store import LocalFileSystem
 
 from arrowdsl.core.determinism import DeterminismTier
+from arrowdsl.schema.serialization import schema_fingerprint
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
@@ -32,8 +34,10 @@ from datafusion_engine.schema_registry import (
     nested_schema_names,
     nested_view_specs,
     register_all_schemas,
+    schema_for,
     schema_names,
     validate_bytecode_views,
+    validate_cst_views,
     validate_nested_types,
     validate_symtable_views,
 )
@@ -184,6 +188,17 @@ def _parse_major_version(version: str) -> int | None:
     if major.isdigit():
         return int(major)
     return None
+
+
+def _catalog_autoload_settings() -> dict[str, str]:
+    location = os.environ.get("CODEANATOMY_DATAFUSION_CATALOG_LOCATION", "").strip()
+    file_format = os.environ.get("CODEANATOMY_DATAFUSION_CATALOG_FORMAT", "").strip()
+    settings: dict[str, str] = {}
+    if location:
+        settings["datafusion.catalog.location"] = location
+    if file_format:
+        settings["datafusion.catalog.format"] = file_format
+    return settings
 
 
 def _ansi_mode(settings: Mapping[str, str]) -> bool | None:
@@ -570,6 +585,10 @@ DEFAULT_DF_POLICY = DataFusionConfigPolicy(
     }
 )
 
+CST_AUTOLOAD_DF_POLICY = DataFusionConfigPolicy(
+    settings={**DEFAULT_DF_POLICY.settings, **_catalog_autoload_settings()}
+)
+
 SYMTABLE_DF_POLICY = DataFusionConfigPolicy(
     settings={
         **DEFAULT_DF_POLICY.settings,
@@ -616,6 +635,7 @@ PROD_DF_POLICY = DataFusionConfigPolicy(
 )
 
 DATAFUSION_POLICY_PRESETS: Mapping[str, DataFusionConfigPolicy] = {
+    "cst_autoload": CST_AUTOLOAD_DF_POLICY,
     "dev": DEV_DF_POLICY,
     "default": DEFAULT_DF_POLICY,
     "prod": PROD_DF_POLICY,
@@ -716,19 +736,6 @@ def _apply_optional_int_config(
     if value is None:
         return config
     return _apply_config_int(config, method=method, key=key, value=int(value))
-
-
-def _apply_catalog_autoload(
-    config: SessionConfig,
-    *,
-    location: str | None,
-    file_format: str | None,
-) -> SessionConfig:
-    if location is not None:
-        config = config.set("datafusion.catalog.location", location)
-    if file_format is not None:
-        config = config.set("datafusion.catalog.format", file_format)
-    return config
 
 
 def _apply_config_policy(
@@ -1524,6 +1531,47 @@ class DataFusionRuntimeProfile:
             },
         )
 
+    def _record_catalog_autoload_snapshot(self, ctx: SessionContext) -> None:
+        if self.diagnostics_sink is None:
+            return
+        if not self.enable_information_schema:
+            return
+        if self.catalog_auto_load_location is None and self.catalog_auto_load_format is None:
+            return
+        introspector = self.schema_introspector(ctx)
+        payload: dict[str, object] = {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "catalog_auto_load_location": self.catalog_auto_load_location,
+            "catalog_auto_load_format": self.catalog_auto_load_format,
+        }
+        try:
+            tables = [
+                row
+                for row in introspector.tables_snapshot()
+                if row.get("table_schema") != "information_schema"
+            ]
+            payload["tables"] = tables
+        except (RuntimeError, TypeError, ValueError) as exc:
+            payload["error"] = str(exc)
+        self.diagnostics_sink.record_artifact("datafusion_catalog_autoload_v1", payload)
+
+    def _record_cst_schema_diagnostics(self, ctx: SessionContext) -> None:
+        if self.diagnostics_sink is None:
+            return
+        payload: dict[str, object] = {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "dataset": "libcst_files_v1",
+        }
+        try:
+            table = ctx.sql("SELECT * FROM cst_schema_diagnostics").to_arrow_table()
+            rows = table.to_pylist()
+            schema = schema_for("libcst_files_v1")
+            payload["schema_fingerprint"] = schema_fingerprint(schema)
+            payload["diagnostics"] = rows[0] if rows else None
+        except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+            payload["error"] = str(exc)
+        self.diagnostics_sink.record_artifact("datafusion_cst_schema_diagnostics_v1", payload)
+
     def _record_schema_snapshots(self, ctx: SessionContext) -> None:
         if self.diagnostics_sink is None:
             return
@@ -1552,8 +1600,10 @@ class DataFusionRuntimeProfile:
         """Register canonical nested schemas on the session context."""
         if not self.enable_schema_registry:
             return
+        self._record_catalog_autoload_snapshot(ctx)
         register_all_schemas(ctx)
         fragment_views = fragment_view_specs(ctx)
+        fragment_names = {view.name for view in fragment_views}
         if fragment_views:
             register_view_specs(
                 ctx,
@@ -1561,7 +1611,9 @@ class DataFusionRuntimeProfile:
                 runtime_profile=self,
                 validate=True,
             )
-        nested_views = nested_view_specs()
+        nested_views = tuple(
+            view for view in nested_view_specs() if view.name not in fragment_names
+        )
         if nested_views:
             register_view_specs(
                 ctx,
@@ -1569,6 +1621,8 @@ class DataFusionRuntimeProfile:
                 runtime_profile=self,
                 validate=True,
             )
+        self._record_cst_schema_diagnostics(ctx)
+        validate_cst_views(ctx)
         validate_symtable_views(ctx)
         validate_bytecode_views(ctx)
         self._record_schema_registry_validation(ctx)

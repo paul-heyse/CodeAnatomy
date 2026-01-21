@@ -8,6 +8,7 @@ from functools import cache
 
 import pyarrow as pa
 
+from datafusion_engine.schema_authority import dataset_schema_from_context
 from ibis_engine.param_tables import ParamTableSpec
 from normalize.op_specs import normalize_op_specs
 from normalize.registry_specs import dataset_name_from_alias
@@ -17,6 +18,19 @@ from schema_spec.catalog_registry import schema_registry as central_schema_regis
 from schema_spec.system import SchemaRegistry
 
 _FILE_ID_COLUMNS: tuple[str, ...] = ("edge_owner_file_id", "file_id")
+
+
+def _param_schema(name: str) -> pa.Schema:
+    schema = dataset_schema_from_context(name)
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_pyarrow = getattr(schema, "to_pyarrow", None)
+    if callable(to_pyarrow):
+        resolved = to_pyarrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    msg = f"DataFusion schema for {name!r} did not resolve to pyarrow.Schema."
+    raise TypeError(msg)
 
 
 @dataclass(frozen=True)
@@ -77,7 +91,7 @@ class RelspecIncrementalSpec:
         ParamTableSpec
             Param-table spec for file-id filtering.
         """
-        schema = pa.schema([pa.field("file_id", pa.string(), nullable=False)])
+        schema = _param_schema("param_file_ids_v1")
         return ParamTableSpec(
             logical_name=self.file_id_param_name,
             key_col="file_id",

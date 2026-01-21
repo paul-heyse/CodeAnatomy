@@ -238,6 +238,13 @@ class NodeBuildOptions:
     include_def_nodes: bool = True
     include_symbol_nodes: bool = True
     include_qname_nodes: bool = True
+    include_sym_scope_nodes: bool = True
+    include_sym_symbol_nodes: bool = True
+    include_py_scope_nodes: bool = True
+    include_py_binding_nodes: bool = True
+    include_py_def_site_nodes: bool = True
+    include_py_use_site_nodes: bool = True
+    include_type_param_nodes: bool = True
     include_tree_sitter_nodes: bool = True
     include_type_nodes: bool = True
     include_diagnostic_nodes: bool = True
@@ -299,6 +306,12 @@ class NodeInputTables:
     scip_occurrences: TableLike | DatasetSource | SqlFragment | None = None
     scip_external_symbol_information: TableLike | DatasetSource | SqlFragment | None = None
     scip_symbol_relationships: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_scopes: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_symbols: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_bindings: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_def_sites: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_use_sites: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_type_params: TableLike | DatasetSource | SqlFragment | None = None
     ts_nodes: TableLike | DatasetSource | SqlFragment | None = None
     ts_errors: TableLike | DatasetSource | SqlFragment | None = None
     ts_missing: TableLike | DatasetSource | SqlFragment | None = None
@@ -379,6 +392,12 @@ def _ibis_node_tables(
         "cst_callsites": inputs.cst_callsites,
         "cst_defs": inputs.cst_defs,
         "dim_qualified_names": inputs.dim_qualified_names,
+        "symtable_scopes": inputs.symtable_scopes,
+        "symtable_symbols": inputs.symtable_symbols,
+        "symtable_bindings": inputs.symtable_bindings,
+        "symtable_def_sites": inputs.symtable_def_sites,
+        "symtable_use_sites": inputs.symtable_use_sites,
+        "symtable_type_params": inputs.symtable_type_params,
         "ts_nodes": inputs.ts_nodes,
         "ts_errors": inputs.ts_errors,
         "ts_missing": inputs.ts_missing,

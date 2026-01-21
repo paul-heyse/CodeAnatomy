@@ -852,6 +852,7 @@ class CSTCollector(cst.CSTVisitor):
                     "def_fqns": def_fqns,
                     "docstring": docstring,
                     "decorator_count": decorator_count,
+                    "attrs": attrs_map({}),
                 }
             )
         self._record_docstring(owner_kind=def_kind, owner_def_id=def_id, node=node)
@@ -950,6 +951,7 @@ class CSTCollector(cst.CSTVisitor):
                     "def_fqns": def_fqns,
                     "docstring": docstring,
                     "decorator_count": decorator_count,
+                    "attrs": attrs_map({}),
                 }
             )
         self._record_docstring(owner_kind=def_kind, owner_def_id=def_id, node=node)
@@ -1012,6 +1014,7 @@ class CSTCollector(cst.CSTVisitor):
                 "inferred_type": inferred_type,
                 "bstart": bstart,
                 "bend": bend,
+                "attrs": attrs_map({}),
             }
         )
         return True
@@ -1057,6 +1060,7 @@ class CSTCollector(cst.CSTVisitor):
                 "inferred_type": inferred_type,
                 "bstart": bstart,
                 "bend": bend,
+                "attrs": attrs_map({}),
             }
         )
         return True
@@ -1095,6 +1099,7 @@ class CSTCollector(cst.CSTVisitor):
                     "stmt_bend": stmt_bend,
                     "alias_bstart": alias_bstart,
                     "alias_bend": alias_bend,
+                    "attrs": attrs_map({}),
                 }
             )
         return True
@@ -1135,6 +1140,7 @@ class CSTCollector(cst.CSTVisitor):
                     "stmt_bend": stmt_bend,
                     "alias_bstart": alias_bstart,
                     "alias_bend": alias_bend,
+                    "attrs": attrs_map({}),
                 }
             )
             return True
@@ -1162,6 +1168,7 @@ class CSTCollector(cst.CSTVisitor):
                     "stmt_bend": stmt_bend,
                     "alias_bstart": alias_bstart,
                     "alias_bend": alias_bend,
+                    "attrs": attrs_map({}),
                 }
             )
         return True
@@ -1212,6 +1219,7 @@ class CSTCollector(cst.CSTVisitor):
             "callee_qnames": qnames,
             "callee_fqns": callee_fqns,
             "inferred_type": inferred_type,
+            "attrs": attrs_map({}),
         }
         return call_id, row
 

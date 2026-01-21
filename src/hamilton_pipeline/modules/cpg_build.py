@@ -14,10 +14,23 @@ from ibis.expr.types import Value as IbisValue
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.ids import apply_hash_column
-from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
+from arrowdsl.core.interop import (
+    RecordBatchReaderLike,
+    SchemaLike,
+    TableLike,
+    coerce_table_like,
+)
 from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import align_table, empty_table
 from cpg.constants import CpgBuildArtifacts
+from cpg.symtable_resolution import build_binding_resolution_table
+from cpg.symtable_sql import (
+    symtable_bindings_sql,
+    symtable_def_sites_sql,
+    symtable_type_param_edges_sql,
+    symtable_type_params_sql,
+    symtable_use_sites_sql,
+)
 from datafusion_engine.extract_ids import repo_file_id_spec
 from datafusion_engine.nested_tables import materialize_sql_fragment, register_nested_table
 from datafusion_engine.query_fragments import (
@@ -27,6 +40,9 @@ from datafusion_engine.query_fragments import (
     scip_external_symbol_information_sql,
     scip_symbol_information_sql,
     scip_symbol_relationships_sql,
+    symtable_scope_edges_sql,
+    symtable_scopes_sql,
+    symtable_symbols_sql,
     tree_sitter_errors_sql,
     tree_sitter_missing_sql,
     tree_sitter_nodes_sql,
@@ -49,6 +65,7 @@ from hamilton_pipeline.pipeline_types import (
     RuntimeInputs,
     ScipBuildInputs,
     ScipOccurrenceInputs,
+    SymtableBuildInputs,
     TreeSitterInputs,
     TypeInputs,
 )
@@ -140,6 +157,7 @@ from storage.deltalake import (
 
 if TYPE_CHECKING:
     from ibis.expr.types import Table as IbisTable
+    from ibis_engine.scan_io import DatasetSource
 
 # -----------------------------
 # Relationship contracts
@@ -718,6 +736,186 @@ def ts_missing(
         table=tree_sitter_files,
     )
     return SqlFragment("ts_missing", tree_sitter_missing_sql())
+
+
+@cache()
+@tag(layer="extract", artifact="symtable_scopes", kind="object")
+def symtable_scopes(
+    symtables: TableLike | RecordBatchReaderLike,
+    engine_session: EngineSession,
+) -> SqlFragment:
+    """Return symtable scope rows from nested symtable files.
+
+    Returns
+    -------
+    SqlFragment
+        SQL fragment for symtable scopes.
+    """
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="symtable_files_v1",
+        table=symtables,
+    )
+    return SqlFragment("symtable_scopes", symtable_scopes_sql())
+
+
+@cache()
+@tag(layer="extract", artifact="symtable_symbols", kind="object")
+def symtable_symbols(
+    symtables: TableLike | RecordBatchReaderLike,
+    engine_session: EngineSession,
+) -> SqlFragment:
+    """Return symtable symbol rows from nested symtable files.
+
+    Returns
+    -------
+    SqlFragment
+        SQL fragment for symtable symbols.
+    """
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="symtable_files_v1",
+        table=symtables,
+    )
+    return SqlFragment("symtable_symbols", symtable_symbols_sql())
+
+
+@cache()
+@tag(layer="extract", artifact="symtable_scope_edges", kind="object")
+def symtable_scope_edges(
+    symtables: TableLike | RecordBatchReaderLike,
+    engine_session: EngineSession,
+) -> SqlFragment:
+    """Return symtable scope edges from nested symtable files.
+
+    Returns
+    -------
+    SqlFragment
+        SQL fragment for symtable scope edges.
+    """
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="symtable_files_v1",
+        table=symtables,
+    )
+    return SqlFragment("symtable_scope_edges", symtable_scope_edges_sql())
+
+
+@cache()
+@tag(layer="extract", artifact="symtable_bindings", kind="object")
+def symtable_bindings(
+    symtables: TableLike | RecordBatchReaderLike,
+    engine_session: EngineSession,
+) -> SqlFragment:
+    """Return symtable binding rows from nested symtable files.
+
+    Returns
+    -------
+    SqlFragment
+        SQL fragment for symtable bindings.
+    """
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="symtable_files_v1",
+        table=symtables,
+    )
+    return SqlFragment("symtable_bindings", symtable_bindings_sql())
+
+
+@cache()
+@tag(layer="extract", artifact="symtable_def_sites", kind="object")
+def symtable_def_sites(
+    symtables: TableLike | RecordBatchReaderLike,
+    libcst_files: TableLike | RecordBatchReaderLike,
+    engine_session: EngineSession,
+) -> SqlFragment:
+    """Return symtable definition sites from nested symtable files.
+
+    Returns
+    -------
+    SqlFragment
+        SQL fragment for symtable definition sites.
+    """
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="symtable_files_v1",
+        table=symtables,
+    )
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="libcst_files_v1",
+        table=libcst_files,
+    )
+    return SqlFragment("symtable_def_sites", symtable_def_sites_sql())
+
+
+@cache()
+@tag(layer="extract", artifact="symtable_use_sites", kind="object")
+def symtable_use_sites(
+    symtables: TableLike | RecordBatchReaderLike,
+    libcst_files: TableLike | RecordBatchReaderLike,
+    engine_session: EngineSession,
+) -> SqlFragment:
+    """Return symtable use sites from nested symtable files.
+
+    Returns
+    -------
+    SqlFragment
+        SQL fragment for symtable use sites.
+    """
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="symtable_files_v1",
+        table=symtables,
+    )
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="libcst_files_v1",
+        table=libcst_files,
+    )
+    return SqlFragment("symtable_use_sites", symtable_use_sites_sql())
+
+
+@cache()
+@tag(layer="extract", artifact="symtable_type_params", kind="object")
+def symtable_type_params(
+    symtables: TableLike | RecordBatchReaderLike,
+    engine_session: EngineSession,
+) -> SqlFragment:
+    """Return symtable type parameters from nested symtable files.
+
+    Returns
+    -------
+    SqlFragment
+        SQL fragment for symtable type parameters.
+    """
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="symtable_files_v1",
+        table=symtables,
+    )
+    return SqlFragment("symtable_type_params", symtable_type_params_sql())
+
+
+@cache()
+@tag(layer="extract", artifact="symtable_type_param_edges", kind="object")
+def symtable_type_param_edges(
+    symtables: TableLike | RecordBatchReaderLike,
+    engine_session: EngineSession,
+) -> SqlFragment:
+    """Return symtable type parameter edges from nested symtable files.
+
+    Returns
+    -------
+    SqlFragment
+        SQL fragment for symtable type-parameter edges.
+    """
+    register_nested_table(
+        engine_session.ibis_backend,
+        name="symtable_files_v1",
+        table=symtables,
+    )
+    return SqlFragment("symtable_type_param_edges", symtable_type_param_edges_sql())
 
 
 @tag(layer="relspec", artifact="relspec_cst_inputs", kind="bundle")
@@ -1537,12 +1735,43 @@ def scip_build_inputs(
     )
 
 
+@tag(layer="cpg", artifact="symtable_build_inputs", kind="bundle")
+def symtable_build_inputs(
+    symtable_scopes: TableLike | DatasetSource | SqlFragment,
+    symtable_symbols: TableLike | DatasetSource | SqlFragment,
+    symtable_scope_edges: TableLike | DatasetSource | SqlFragment,
+    symtable_bindings: TableLike | DatasetSource | SqlFragment,
+    symtable_def_sites: TableLike | DatasetSource | SqlFragment,
+    symtable_use_sites: TableLike | DatasetSource | SqlFragment,
+    symtable_type_params: TableLike | DatasetSource | SqlFragment,
+    symtable_type_param_edges: TableLike | DatasetSource | SqlFragment,
+) -> SymtableBuildInputs:
+    """Bundle symtable inputs for CPG builds.
+
+    Returns
+    -------
+    SymtableBuildInputs
+        Symtable build input bundle.
+    """
+    return SymtableBuildInputs(
+        symtable_scopes=symtable_scopes,
+        symtable_symbols=symtable_symbols,
+        symtable_scope_edges=symtable_scope_edges,
+        symtable_bindings=symtable_bindings,
+        symtable_def_sites=symtable_def_sites,
+        symtable_use_sites=symtable_use_sites,
+        symtable_type_params=symtable_type_params,
+        symtable_type_param_edges=symtable_type_param_edges,
+    )
+
+
 @tag(layer="cpg", artifact="cpg_base_inputs", kind="bundle")
 def cpg_base_inputs(
     repo_files: TableLike | DatasetSource | SqlFragment,
     dim_qualified_names: TableLike | DatasetSource | SqlFragment,
     cst_build_inputs: CstBuildInputs,
     scip_build_inputs: ScipBuildInputs,
+    symtable_build_inputs: SymtableBuildInputs,
 ) -> CpgBaseInputs:
     """Bundle shared inputs for CPG nodes and properties.
 
@@ -1556,6 +1785,7 @@ def cpg_base_inputs(
         dim_qualified_names=dim_qualified_names,
         cst_build_inputs=cst_build_inputs,
         scip_build_inputs=scip_build_inputs,
+        symtable_build_inputs=symtable_build_inputs,
     )
 
 
@@ -1654,6 +1884,49 @@ def cpg_extra_inputs(
     )
 
 
+@cache()
+@tag(layer="cpg", artifact="symtable_binding_resolutions", kind="table")
+def symtable_binding_resolutions(
+    cpg_base_inputs: CpgBaseInputs,
+    engine_session: EngineSession,
+) -> TableLike:
+    """Resolve symtable binding references to outer scopes.
+
+    Returns
+    -------
+    TableLike
+        Binding resolution edges with ambiguity grouping.
+    """
+    backend = engine_session.ibis_backend
+    sym_inputs = cpg_base_inputs.symtable_build_inputs
+    scopes = _materialize_symtable_source(
+        sym_inputs.symtable_scopes,
+        backend=backend,
+    )
+    scope_edges = _materialize_symtable_source(
+        sym_inputs.symtable_scope_edges,
+        backend=backend,
+    )
+    bindings = _materialize_symtable_source(
+        sym_inputs.symtable_bindings,
+        backend=backend,
+    )
+    return build_binding_resolution_table(scopes, scope_edges, bindings)
+
+
+def _materialize_symtable_source(
+    source: TableLike | DatasetSource | SqlFragment,
+    *,
+    backend: BaseBackend | None,
+) -> TableLike:
+    if isinstance(source, SqlFragment):
+        return materialize_sql_fragment(backend, source)
+    coerced = coerce_table_like(source)
+    if isinstance(coerced, RecordBatchReaderLike):
+        return coerced.read_all()
+    return cast("TableLike", coerced)
+
+
 @tag(layer="cpg", artifact="cpg_node_inputs", kind="bundle")
 def cpg_node_inputs(
     cpg_base_inputs: CpgBaseInputs,
@@ -1679,6 +1952,12 @@ def cpg_node_inputs(
             cpg_base_inputs.scip_build_inputs.scip_external_symbol_information
         ),
         scip_symbol_relationships=cpg_base_inputs.scip_build_inputs.scip_symbol_relationships,
+        symtable_scopes=cpg_base_inputs.symtable_build_inputs.symtable_scopes,
+        symtable_symbols=cpg_base_inputs.symtable_build_inputs.symtable_symbols,
+        symtable_bindings=cpg_base_inputs.symtable_build_inputs.symtable_bindings,
+        symtable_def_sites=cpg_base_inputs.symtable_build_inputs.symtable_def_sites,
+        symtable_use_sites=cpg_base_inputs.symtable_build_inputs.symtable_use_sites,
+        symtable_type_params=cpg_base_inputs.symtable_build_inputs.symtable_type_params,
         ts_nodes=cpg_extra_inputs.ts_nodes,
         ts_errors=cpg_extra_inputs.ts_errors,
         ts_missing=cpg_extra_inputs.ts_missing,
@@ -1697,6 +1976,7 @@ def cpg_edge_inputs(
     relationship_output_tables: RelationshipOutputTables,
     cpg_base_inputs: CpgBaseInputs,
     cpg_extra_inputs: CpgExtraInputs,
+    symtable_binding_resolutions: TableLike,
 ) -> EdgeBuildInputs:
     """Build edge input tables from base and optional inputs.
 
@@ -1714,6 +1994,12 @@ def cpg_edge_inputs(
         rt_signatures=cpg_extra_inputs.rt_signatures,
         rt_signature_params=cpg_extra_inputs.rt_signature_params,
         rt_members=cpg_extra_inputs.rt_members,
+        symtable_scope_edges=cpg_base_inputs.symtable_build_inputs.symtable_scope_edges,
+        symtable_bindings=cpg_base_inputs.symtable_build_inputs.symtable_bindings,
+        symtable_def_sites=cpg_base_inputs.symtable_build_inputs.symtable_def_sites,
+        symtable_use_sites=cpg_base_inputs.symtable_build_inputs.symtable_use_sites,
+        symtable_binding_resolutions=symtable_binding_resolutions,
+        symtable_type_param_edges=cpg_base_inputs.symtable_build_inputs.symtable_type_param_edges,
     )
 
 
@@ -1742,6 +2028,12 @@ def cpg_props_inputs(
         scip_external_symbol_information=(
             cpg_base_inputs.scip_build_inputs.scip_external_symbol_information
         ),
+        symtable_scopes=cpg_base_inputs.symtable_build_inputs.symtable_scopes,
+        symtable_symbols=cpg_base_inputs.symtable_build_inputs.symtable_symbols,
+        symtable_bindings=cpg_base_inputs.symtable_build_inputs.symtable_bindings,
+        symtable_def_sites=cpg_base_inputs.symtable_build_inputs.symtable_def_sites,
+        symtable_use_sites=cpg_base_inputs.symtable_build_inputs.symtable_use_sites,
+        symtable_type_params=cpg_base_inputs.symtable_build_inputs.symtable_type_params,
         ts_nodes=cpg_extra_inputs.ts_nodes,
         ts_errors=cpg_extra_inputs.ts_errors,
         ts_missing=cpg_extra_inputs.ts_missing,

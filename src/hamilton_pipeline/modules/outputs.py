@@ -2850,6 +2850,15 @@ def _datafusion_diagnostics_notes(runtime: DataFusionRuntimeProfile) -> JsonDict
     if diagnostics is None:
         return notes
     artifacts = diagnostics.artifacts_snapshot()
+    catalog_autoload = artifacts.get("datafusion_catalog_autoload_v1", [])
+    if catalog_autoload:
+        notes["datafusion_catalog_autoload"] = cast("JsonValue", catalog_autoload)
+    cst_schema_diagnostics = artifacts.get("datafusion_cst_schema_diagnostics_v1", [])
+    if cst_schema_diagnostics:
+        notes["datafusion_cst_schema_diagnostics"] = cast(
+            "JsonValue",
+            cst_schema_diagnostics,
+        )
     udf_registry = artifacts.get("datafusion_udf_registry_v1", [])
     if udf_registry:
         notes["datafusion_udf_registry"] = cast("JsonValue", udf_registry)

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from datafusion import SessionContext
 
-from datafusion_engine.schema_registry import nested_base_sql
+from datafusion_engine.schema_registry import nested_base_sql, schema_for
 from schema_spec.view_specs import ViewSpec, view_spec_from_sql
 
 
@@ -31,6 +31,21 @@ def _named_struct(fields: Sequence[tuple[str, str]]) -> str:
 _ARROW_CAST_TYPES: dict[str, str] = {
     "INT": "Int32",
 }
+
+_LIBCST_DIAGNOSTIC_FIELDS: tuple[str, ...] = (
+    "nodes",
+    "edges",
+    "parse_manifest",
+    "parse_errors",
+    "refs",
+    "imports",
+    "callsites",
+    "defs",
+    "type_exprs",
+    "docstrings",
+    "decorators",
+    "call_args",
+)
 
 
 def _arrow_cast(value: str, dtype: str) -> str:
@@ -58,6 +73,22 @@ def _map_bool(map_name: str, key: str) -> str:
 def _hash_expr(prefix: str, *values: str) -> str:
     joined = ", ".join(values)
     return f"prefixed_hash64('{prefix}', concat_ws(':', {joined}))"
+
+
+def _attrs_view_sql(base: str, *, cols: Sequence[str]) -> str:
+    select_cols = ",\n      ".join(f"base.{col} AS {col}" for col in cols)
+    return f"""
+    WITH base AS (
+      SELECT *
+      FROM {base}
+    )
+    SELECT
+      {select_cols},
+      kv['key'] AS attr_key,
+      kv['value'] AS attr_value
+    FROM base
+    CROSS JOIN unnest(map_entries(base.attrs)) AS kv
+    """
 
 
 def libcst_parse_manifest_sql(table: str = "libcst_files_v1") -> str:
@@ -125,7 +156,8 @@ def libcst_refs_sql(table: str = "libcst_files_v1") -> str:
       base.parent_kind AS parent_kind,
       base.inferred_type AS inferred_type,
       base.bstart AS bstart,
-      base.bend AS bend
+      base.bend AS bend,
+      base.attrs AS attrs
     FROM base
     """
 
@@ -155,6 +187,7 @@ def libcst_imports_sql(table: str = "libcst_files_v1") -> str:
       base.stmt_bend AS stmt_bend,
       base.alias_bstart AS alias_bstart,
       base.alias_bend AS alias_bend,
+      base.attrs AS attrs,
       {
         _hash_expr(
             "cst_import",
@@ -196,6 +229,7 @@ def libcst_callsites_sql(table: str = "libcst_files_v1") -> str:
       base.callee_qnames AS callee_qnames,
       base.callee_fqns AS callee_fqns,
       base.inferred_type AS inferred_type,
+      base.attrs AS attrs,
       {_hash_expr("span", "base.file_id", "base.call_bstart", "base.call_bend")} AS span_id
     FROM base
     """
@@ -230,6 +264,7 @@ def libcst_defs_sql(table: str = "libcst_files_v1") -> str:
       base.def_fqns AS def_fqns,
       base.docstring AS docstring,
       base.decorator_count AS decorator_count,
+      base.attrs AS attrs,
       {
         _hash_expr(
             "cst_def",
@@ -327,6 +362,194 @@ def libcst_call_args_sql(table: str = "libcst_files_v1") -> str:
     FROM base
     """
 
+
+def libcst_schema_diagnostics_sql(table: str = "libcst_files_v1") -> str:
+    """Return SQL for LibCST schema diagnostics rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    schema = schema_for(table)
+    cast_fields = {
+        name: str(schema.field(name).type) for name in _LIBCST_DIAGNOSTIC_FIELDS
+    }
+    diagnostics: list[str] = []
+    for name, dtype in cast_fields.items():
+        cast_expr = _arrow_cast(f"base.{name}", dtype)
+        diagnostics.extend(
+            [
+                f"arrow_typeof(base.{name}) AS {name}_type",
+                f"arrow_typeof({cast_expr}) AS {name}_cast_type",
+                f"arrow_metadata(base.{name}) AS {name}_meta",
+                f"arrow_metadata({cast_expr}) AS {name}_cast_meta",
+            ]
+        )
+    diagnostics.extend(
+        [
+            "arrow_typeof(base.attrs) AS attrs_type",
+            "arrow_metadata(base.attrs) AS attrs_meta",
+        ]
+    )
+    select_clause = ",\n      ".join(diagnostics)
+    return f"""
+    WITH base AS (
+      SELECT *
+      FROM {table}
+      LIMIT 1
+    )
+    SELECT
+      {select_clause}
+    FROM base
+    """
+
+
+def cst_refs_attrs_sql() -> str:
+    """Return SQL for CST reference attrs."""
+    return _attrs_view_sql("cst_refs", cols=("file_id", "path", "ref_id"))
+
+
+def cst_defs_attrs_sql() -> str:
+    """Return SQL for CST definition attrs."""
+    return _attrs_view_sql("cst_defs", cols=("file_id", "path", "def_id"))
+
+
+def cst_callsites_attrs_sql() -> str:
+    """Return SQL for CST callsite attrs."""
+    return _attrs_view_sql("cst_callsites", cols=("file_id", "path", "call_id"))
+
+
+def cst_imports_attrs_sql() -> str:
+    """Return SQL for CST import attrs."""
+    return _attrs_view_sql("cst_imports", cols=("file_id", "path", "import_id"))
+
+
+def cst_nodes_attrs_sql() -> str:
+    """Return SQL for CST node attrs."""
+    return _attrs_view_sql("cst_nodes", cols=("file_id", "path", "cst_id"))
+
+
+def cst_edges_attrs_sql() -> str:
+    """Return SQL for CST edge attrs."""
+    return _attrs_view_sql(
+        "cst_edges",
+        cols=("file_id", "path", "src", "dst", "kind", "slot", "idx"),
+    )
+
+
+def cst_ref_spans_sql() -> str:
+    """Return SQL for CST reference spans."""
+    span = _named_struct((("bstart", "base.bstart"), ("bend", "base.bend")))
+    return f"""
+    WITH base AS (
+      SELECT * FROM cst_refs
+    )
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.ref_id AS ref_id,
+      base.bstart AS bstart,
+      base.bend AS bend,
+      {span} AS span
+    FROM base
+    """
+
+
+def cst_callsite_spans_sql() -> str:
+    """Return SQL for CST callsite spans."""
+    span = _named_struct((("bstart", "base.call_bstart"), ("bend", "base.call_bend")))
+    return f"""
+    WITH base AS (
+      SELECT * FROM cst_callsites
+    )
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.call_id AS call_id,
+      base.call_bstart AS bstart,
+      base.call_bend AS bend,
+      {span} AS span
+    FROM base
+    """
+
+
+def cst_def_spans_sql() -> str:
+    """Return SQL for CST definition spans."""
+    span = _named_struct((("bstart", "base.def_bstart"), ("bend", "base.def_bend")))
+    return f"""
+    WITH base AS (
+      SELECT * FROM cst_defs
+    )
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.def_id AS def_id,
+      base.def_bstart AS bstart,
+      base.def_bend AS bend,
+      {span} AS span
+    FROM base
+    """
+
+
+def cst_ref_span_unnest_sql() -> str:
+    """Return SQL for flattened CST reference spans."""
+    span = _named_struct((("bstart", "base.bstart"), ("bend", "base.bend")))
+    return f"""
+    WITH base AS (
+      SELECT
+        base.*,
+        {span} AS span
+      FROM cst_refs base
+    )
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.ref_id AS ref_id,
+      base.span['bstart'] AS bstart,
+      base.span['bend'] AS bend
+    FROM base
+    """
+
+
+def cst_callsite_span_unnest_sql() -> str:
+    """Return SQL for flattened CST callsite spans."""
+    span = _named_struct((("bstart", "base.call_bstart"), ("bend", "base.call_bend")))
+    return f"""
+    WITH base AS (
+      SELECT
+        base.*,
+        {span} AS span
+      FROM cst_callsites base
+    )
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.call_id AS call_id,
+      base.span['bstart'] AS bstart,
+      base.span['bend'] AS bend
+    FROM base
+    """
+
+
+def cst_def_span_unnest_sql() -> str:
+    """Return SQL for flattened CST definition spans."""
+    span = _named_struct((("bstart", "base.def_bstart"), ("bend", "base.def_bend")))
+    return f"""
+    WITH base AS (
+      SELECT
+        base.*,
+        {span} AS span
+      FROM cst_defs base
+    )
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.def_id AS def_id,
+      base.span['bstart'] AS bstart,
+      base.span['bend'] AS bend
+    FROM base
+    """
 
 def libcst_type_exprs_sql(table: str = "libcst_files_v1") -> str:
     """Return SQL for LibCST type expression rows.
@@ -543,6 +766,10 @@ def symtable_scopes_sql(table: str = "symtable_files_v1") -> str:
       base.name AS scope_name,
       base.qualpath AS qualpath,
       base.lineno1 AS lineno,
+      CASE
+        WHEN base.block_type IN ('MODULE', 'FUNCTION', 'CLASS') THEN FALSE
+        ELSE TRUE
+      END AS is_meta_scope,
       base.parent_block_id AS parent_table_id
     FROM base
     """
@@ -565,6 +792,7 @@ def symtable_symbols_sql(table: str = "symtable_files_v1") -> str:
       base.block_id AS table_id,
       base.scope_id AS scope_id,
       base.name AS symbol_name,
+      {_hash_expr("sym_symbol", "base.scope_id", "base.name")} AS sym_symbol_id,
       base.flags['is_referenced'] AS is_referenced,
       base.flags['is_imported'] AS is_imported,
       base.flags['is_parameter'] AS is_parameter,
@@ -918,7 +1146,31 @@ def bytecode_code_units_sql(table: str = "bytecode_files_v1") -> str:
       base.freevars AS freevars,
       base.cellvars AS cellvars,
       base.names AS names,
+      base.consts AS consts,
       base.consts_json AS consts_json
+    FROM base
+    """
+
+
+def bytecode_consts_sql(table: str = "bytecode_files_v1") -> str:
+    """Return SQL for bytecode constant rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    base = nested_base_sql("py_bc_consts", table=table)
+    const_index = "base.const_index"
+    return f"""
+    WITH base AS ({base})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.code_id AS code_unit_id,
+      {const_index} AS const_index,
+      base.const_repr AS const_repr,
+      {_hash_expr("bc_const", "base.code_id", const_index, "base.const_repr")} AS const_id
     FROM base
     """
 
@@ -971,6 +1223,44 @@ def bytecode_instructions_sql(table: str = "bytecode_files_v1") -> str:
       {stack_depth_before} AS stack_depth_before,
       {stack_depth_after} AS stack_depth_after,
       {_hash_expr("bc_instr", "base.code_id", instr_index, offset)} AS instr_id
+    FROM base
+    """
+
+
+def bytecode_cache_entries_sql(table: str = "bytecode_files_v1") -> str:
+    """Return SQL for bytecode cache entry rows.
+
+    Returns
+    -------
+    str
+        SQL fragment text.
+    """
+    base = nested_base_sql("py_bc_cache_entries", table=table)
+    instr_index = "base.instr_index"
+    offset = "base.offset"
+    return f"""
+    WITH base AS ({base})
+    SELECT
+      base.file_id AS file_id,
+      base.path AS path,
+      base.code_id AS code_unit_id,
+      {instr_index} AS instr_index,
+      {offset} AS offset,
+      base.name AS name,
+      base.size AS size,
+      base.data_hex AS data_hex,
+      {_hash_expr("bc_instr", "base.code_id", instr_index, offset)} AS instr_id,
+      {
+        _hash_expr(
+            "bc_cache",
+            "base.code_id",
+            instr_index,
+            offset,
+            "base.name",
+            "base.size",
+            "base.data_hex",
+        )
+    } AS cache_entry_id
     FROM base
     """
 
@@ -1177,6 +1467,19 @@ _FRAGMENT_SQL_BUILDERS: dict[str, FragmentSqlBuilder] = {
     "cst_docstrings": libcst_docstrings_sql,
     "cst_decorators": libcst_decorators_sql,
     "cst_call_args": libcst_call_args_sql,
+    "cst_schema_diagnostics": libcst_schema_diagnostics_sql,
+    "cst_refs_attrs": cst_refs_attrs_sql,
+    "cst_defs_attrs": cst_defs_attrs_sql,
+    "cst_callsites_attrs": cst_callsites_attrs_sql,
+    "cst_imports_attrs": cst_imports_attrs_sql,
+    "cst_nodes_attrs": cst_nodes_attrs_sql,
+    "cst_edges_attrs": cst_edges_attrs_sql,
+    "cst_ref_spans": cst_ref_spans_sql,
+    "cst_callsite_spans": cst_callsite_spans_sql,
+    "cst_def_spans": cst_def_spans_sql,
+    "cst_ref_span_unnest": cst_ref_span_unnest_sql,
+    "cst_callsite_span_unnest": cst_callsite_span_unnest_sql,
+    "cst_def_span_unnest": cst_def_span_unnest_sql,
     "ast_nodes": ast_nodes_sql,
     "ast_edges": ast_edges_sql,
     "ast_errors": ast_errors_sql,
@@ -1198,8 +1501,10 @@ _FRAGMENT_SQL_BUILDERS: dict[str, FragmentSqlBuilder] = {
     "scip_symbol_relationships": scip_symbol_relationships_sql,
     "scip_diagnostics": scip_diagnostics_sql,
     "py_bc_code_units": bytecode_code_units_sql,
+    "py_bc_consts": bytecode_consts_sql,
     "py_bc_line_table": bytecode_line_table_sql,
     "py_bc_instructions": bytecode_instructions_sql,
+    "py_bc_cache_entries": bytecode_cache_entries_sql,
     "bytecode_exception_table": bytecode_exception_table_sql,
     "py_bc_blocks": bytecode_blocks_sql,
     "py_bc_dfg_edges": bytecode_dfg_edges_sql,
@@ -1233,14 +1538,28 @@ __all__ = [
     "ast_errors_sql",
     "ast_nodes_sql",
     "bytecode_blocks_sql",
+    "bytecode_cache_entries_sql",
     "bytecode_cfg_edges_sql",
     "bytecode_code_units_sql",
+    "bytecode_consts_sql",
     "bytecode_dfg_edges_sql",
     "bytecode_errors_sql",
     "bytecode_exception_table_sql",
     "bytecode_instructions_sql",
     "bytecode_line_table_sql",
     "fragment_view_specs",
+    "cst_callsites_attrs_sql",
+    "cst_callsite_span_unnest_sql",
+    "cst_callsite_spans_sql",
+    "cst_defs_attrs_sql",
+    "cst_def_span_unnest_sql",
+    "cst_def_spans_sql",
+    "cst_edges_attrs_sql",
+    "cst_imports_attrs_sql",
+    "cst_nodes_attrs_sql",
+    "cst_refs_attrs_sql",
+    "cst_ref_span_unnest_sql",
+    "cst_ref_spans_sql",
     "libcst_call_args_sql",
     "libcst_callsites_sql",
     "libcst_decorators_sql",
@@ -1250,6 +1569,7 @@ __all__ = [
     "libcst_parse_errors_sql",
     "libcst_parse_manifest_sql",
     "libcst_refs_sql",
+    "libcst_schema_diagnostics_sql",
     "libcst_type_exprs_sql",
     "scip_diagnostics_sql",
     "scip_documents_sql",

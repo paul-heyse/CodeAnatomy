@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping, Sequence
+from functools import cache
 from typing import cast
 
 import pyarrow as pa
@@ -11,19 +12,36 @@ import pyarrow.types as patypes
 
 from arrowdsl.core.interop import DataTypeLike, SchemaLike
 from core_types import JsonDict
+from datafusion_engine.schema_authority import dataset_schema_from_context
 from registry_common.arrow_payloads import payload_hash
 
 DATASET_FINGERPRINT_VERSION = 1
-_DATASET_FINGERPRINT_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32(), nullable=False),
-        pa.field("plan_hash", pa.string(), nullable=False),
-        pa.field("schema_fingerprint", pa.string(), nullable=False),
-        pa.field("profile_hash", pa.string(), nullable=False),
-        pa.field("writer_strategy", pa.string(), nullable=False),
-        pa.field("input_fingerprints", pa.list_(pa.string()), nullable=False),
-    ]
-)
+
+
+@cache
+def _dataset_fingerprint_schema() -> pa.Schema:
+    schema = dataset_schema_from_context("dataset_fingerprint_v1")
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_pyarrow = getattr(schema, "to_pyarrow", None)
+    if callable(to_pyarrow):
+        resolved = to_pyarrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    msg = "DataFusion schema for dataset_fingerprint_v1 is not a pyarrow.Schema."
+    raise TypeError(msg)
+
+
+def _resolve_schema(schema: SchemaLike) -> pa.Schema:
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_pyarrow = getattr(schema, "to_pyarrow", None)
+    if callable(to_pyarrow):
+        resolved = to_pyarrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    msg = "Schema must be a pyarrow.Schema derived from DataFusion."
+    raise TypeError(msg)
 
 
 def schema_to_dict(schema: SchemaLike) -> JsonDict:
@@ -34,9 +52,10 @@ def schema_to_dict(schema: SchemaLike) -> JsonDict:
     dict[str, object]
         JSON-serializable schema representation.
     """
+    resolved = _resolve_schema(schema)
     return {
-        "fields": [_field_to_dict(field) for field in schema],
-        "metadata": _decode_metadata(schema.metadata),
+        "fields": [_field_to_dict(field) for field in resolved],
+        "metadata": _decode_metadata(resolved.metadata),
     }
 
 
@@ -95,8 +114,8 @@ def schema_fingerprint(schema: SchemaLike) -> str:
     str
         SHA-256 fingerprint of the schema.
     """
-    resolved = schema if isinstance(schema, pa.Schema) else pa.schema(schema)
-    payload = cast("pa.Schema", resolved).serialize()
+    resolved = _resolve_schema(schema)
+    payload = resolved.serialize()
     return hashlib.sha256(payload.to_pybytes()).hexdigest()
 
 
@@ -123,7 +142,7 @@ def dataset_fingerprint(
         "writer_strategy": writer_strategy,
         "input_fingerprints": sorted(input_fingerprints),
     }
-    return payload_hash(payload, _DATASET_FINGERPRINT_SCHEMA)
+    return payload_hash(payload, _dataset_fingerprint_schema())
 
 
 __all__ = ["dataset_fingerprint", "schema_fingerprint", "schema_to_dict"]

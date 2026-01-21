@@ -7,7 +7,9 @@ from typing import TYPE_CHECKING, Literal, TypedDict
 
 import pyarrow as pa
 
+from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.core.schema_constants import SCHEMA_META_NAME, SCHEMA_META_VERSION
+from arrowdsl.schema.metadata import ordering_metadata_spec
 from schema_spec.view_specs import ViewSpec
 
 if TYPE_CHECKING:
@@ -210,6 +212,7 @@ CST_REF_T = pa.struct(
         ("inferred_type", pa.string()),
         ("bstart", pa.int64()),
         ("bend", pa.int64()),
+        ("attrs", ATTRS_T),
     ]
 )
 
@@ -228,6 +231,7 @@ CST_IMPORT_T = pa.struct(
         ("stmt_bend", pa.int64()),
         ("alias_bstart", pa.int64()),
         ("alias_bend", pa.int64()),
+        ("attrs", ATTRS_T),
     ]
 )
 
@@ -248,6 +252,7 @@ CST_CALLSITE_T = pa.struct(
         ("callee_qnames", pa.list_(QNAME_T)),
         ("callee_fqns", FQN_LIST),
         ("inferred_type", pa.string()),
+        ("attrs", ATTRS_T),
     ]
 )
 
@@ -270,6 +275,7 @@ CST_DEF_T = pa.struct(
         ("def_fqns", FQN_LIST),
         ("docstring", pa.string()),
         ("decorator_count", pa.int32()),
+        ("attrs", ATTRS_T),
     ]
 )
 
@@ -521,6 +527,13 @@ BYTECODE_CACHE_ENTRY_T = pa.struct(
     ]
 )
 
+BYTECODE_CONST_T = pa.struct(
+    [
+        ("const_index", pa.int32()),
+        ("const_repr", pa.string()),
+    ]
+)
+
 BYTECODE_INSTR_T = pa.struct(
     [
         ("instr_index", pa.int32()),
@@ -645,6 +658,7 @@ BYTECODE_CODE_OBJ_T = pa.struct(
         ("freevars", pa.list_(pa.string())),
         ("cellvars", pa.list_(pa.string())),
         ("names", pa.list_(pa.string())),
+        ("consts", pa.list_(BYTECODE_CONST_T)),
         ("consts_json", pa.string()),
         ("line_table", pa.list_(BYTECODE_LINE_T)),
         ("instructions", pa.list_(BYTECODE_INSTR_T)),
@@ -682,18 +696,33 @@ def _schema_version_from_name(name: str) -> int | None:
     return None
 
 
-def _schema_with_metadata(name: str, schema: pa.Schema) -> pa.Schema:
+def _schema_with_metadata(
+    name: str,
+    schema: pa.Schema,
+    *,
+    extra_metadata: Mapping[bytes, bytes] | None = None,
+) -> pa.Schema:
     metadata = dict(schema.metadata or {})
     metadata[SCHEMA_META_NAME] = name.encode("utf-8")
     version = _schema_version_from_name(name)
     if version is not None:
         metadata[SCHEMA_META_VERSION] = str(version).encode("utf-8")
+    if extra_metadata:
+        metadata.update(extra_metadata)
     return schema.with_metadata(metadata)
 
 
 AST_FILES_SCHEMA = _schema_with_metadata("ast_files_v1", AST_FILES_SCHEMA)
 BYTECODE_FILES_SCHEMA = _schema_with_metadata("bytecode_files_v1", BYTECODE_FILES_SCHEMA)
-LIBCST_FILES_SCHEMA = _schema_with_metadata("libcst_files_v1", LIBCST_FILES_SCHEMA)
+_LIBCST_ORDERING_META = ordering_metadata_spec(
+    OrderingLevel.EXPLICIT,
+    keys=(("path", "ascending"), ("file_id", "ascending")),
+)
+LIBCST_FILES_SCHEMA = _schema_with_metadata(
+    "libcst_files_v1",
+    LIBCST_FILES_SCHEMA,
+    extra_metadata=_LIBCST_ORDERING_META.schema_metadata,
+)
 SCIP_INDEX_SCHEMA = _schema_with_metadata("scip_index_v1", SCIP_INDEX_SCHEMA)
 SYMTABLE_FILES_SCHEMA = _schema_with_metadata("symtable_files_v1", SYMTABLE_FILES_SCHEMA)
 TREE_SITTER_FILES_SCHEMA = _schema_with_metadata("tree_sitter_files_v1", TREE_SITTER_FILES_SCHEMA)
@@ -796,17 +825,200 @@ CALLSITE_QNAME_CANDIDATES_SCHEMA = _schema_with_metadata(
     ),
 )
 
+REL_NAME_SYMBOL_SCHEMA = _schema_with_metadata(
+    "rel_name_symbol_v1",
+    pa.schema(
+        [
+            pa.field("ref_id", pa.string()),
+            pa.field("symbol", pa.string()),
+            pa.field("symbol_roles", pa.int32()),
+            pa.field("path", pa.string()),
+            pa.field("edge_owner_file_id", pa.string()),
+            pa.field("bstart", pa.int64()),
+            pa.field("bend", pa.int64()),
+            pa.field("resolution_method", pa.string()),
+            pa.field("confidence", pa.float32()),
+            pa.field("score", pa.float32()),
+            pa.field("rule_name", pa.string()),
+            pa.field("rule_priority", pa.int32()),
+        ]
+    ),
+)
+
+REL_IMPORT_SYMBOL_SCHEMA = _schema_with_metadata(
+    "rel_import_symbol_v1",
+    pa.schema(
+        [
+            pa.field("import_alias_id", pa.string()),
+            pa.field("symbol", pa.string()),
+            pa.field("symbol_roles", pa.int32()),
+            pa.field("path", pa.string()),
+            pa.field("edge_owner_file_id", pa.string()),
+            pa.field("bstart", pa.int64()),
+            pa.field("bend", pa.int64()),
+            pa.field("resolution_method", pa.string()),
+            pa.field("confidence", pa.float32()),
+            pa.field("score", pa.float32()),
+            pa.field("rule_name", pa.string()),
+            pa.field("rule_priority", pa.int32()),
+        ]
+    ),
+)
+
+REL_DEF_SYMBOL_SCHEMA = _schema_with_metadata(
+    "rel_def_symbol_v1",
+    pa.schema(
+        [
+            pa.field("def_id", pa.string()),
+            pa.field("symbol", pa.string()),
+            pa.field("symbol_roles", pa.int32()),
+            pa.field("path", pa.string()),
+            pa.field("edge_owner_file_id", pa.string()),
+            pa.field("bstart", pa.int64()),
+            pa.field("bend", pa.int64()),
+            pa.field("resolution_method", pa.string()),
+            pa.field("confidence", pa.float32()),
+            pa.field("score", pa.float32()),
+            pa.field("rule_name", pa.string()),
+            pa.field("rule_priority", pa.int32()),
+        ]
+    ),
+)
+
+REL_CALLSITE_SYMBOL_SCHEMA = _schema_with_metadata(
+    "rel_callsite_symbol_v1",
+    pa.schema(
+        [
+            pa.field("call_id", pa.string()),
+            pa.field("symbol", pa.string()),
+            pa.field("symbol_roles", pa.int32()),
+            pa.field("path", pa.string()),
+            pa.field("edge_owner_file_id", pa.string()),
+            pa.field("call_bstart", pa.int64()),
+            pa.field("call_bend", pa.int64()),
+            pa.field("resolution_method", pa.string()),
+            pa.field("confidence", pa.float32()),
+            pa.field("score", pa.float32()),
+            pa.field("rule_name", pa.string()),
+            pa.field("rule_priority", pa.int32()),
+        ]
+    ),
+)
+
+REL_CALLSITE_QNAME_SCHEMA = _schema_with_metadata(
+    "rel_callsite_qname_v1",
+    pa.schema(
+        [
+            pa.field("call_id", pa.string()),
+            pa.field("qname_id", pa.string()),
+            pa.field("qname_source", pa.string()),
+            pa.field("path", pa.string()),
+            pa.field("edge_owner_file_id", pa.string()),
+            pa.field("call_bstart", pa.int64()),
+            pa.field("call_bend", pa.int64()),
+            pa.field("confidence", pa.float32()),
+            pa.field("score", pa.float32()),
+            pa.field("ambiguity_group_id", pa.string()),
+            pa.field("rule_name", pa.string()),
+            pa.field("rule_priority", pa.int32()),
+        ]
+    ),
+)
+
+RELATION_OUTPUT_SCHEMA = _schema_with_metadata(
+    "relation_output_v1",
+    pa.schema(
+        [
+            pa.field("src", pa.string(), nullable=True),
+            pa.field("dst", pa.string(), nullable=True),
+            pa.field("path", pa.string(), nullable=True),
+            pa.field("edge_owner_file_id", pa.string(), nullable=True),
+            pa.field("bstart", pa.int64(), nullable=True),
+            pa.field("bend", pa.int64(), nullable=True),
+            pa.field("origin", pa.string(), nullable=True),
+            pa.field("resolution_method", pa.string(), nullable=True),
+            pa.field("binding_kind", pa.string(), nullable=True),
+            pa.field("def_site_kind", pa.string(), nullable=True),
+            pa.field("use_kind", pa.string(), nullable=True),
+            pa.field("kind", pa.string(), nullable=True),
+            pa.field("reason", pa.string(), nullable=True),
+            pa.field("confidence", pa.float32(), nullable=True),
+            pa.field("score", pa.float32(), nullable=True),
+            pa.field("symbol_roles", pa.int32(), nullable=True),
+            pa.field("qname_source", pa.string(), nullable=True),
+            pa.field("ambiguity_group_id", pa.string(), nullable=True),
+            pa.field("diag_source", pa.string(), nullable=True),
+            pa.field("severity", pa.string(), nullable=True),
+            pa.field("rule_name", pa.string(), nullable=True),
+            pa.field("rule_priority", pa.int32(), nullable=True),
+        ]
+    ),
+)
+
+SCALAR_PARAM_SIGNATURE_SCHEMA = _schema_with_metadata(
+    "scalar_param_signature_v1",
+    pa.schema(
+        [
+            pa.field("version", pa.int32(), nullable=False),
+            pa.field(
+                "entries",
+                pa.list_(
+                    pa.struct(
+                        [
+                            ("key", pa.string()),
+                            ("value", pa.string()),
+                        ]
+                    )
+                ),
+                nullable=False,
+            ),
+        ]
+    ),
+)
+
+DATASET_FINGERPRINT_SCHEMA = _schema_with_metadata(
+    "dataset_fingerprint_v1",
+    pa.schema(
+        [
+            pa.field("version", pa.int32(), nullable=False),
+            pa.field("plan_hash", pa.string(), nullable=False),
+            pa.field("schema_fingerprint", pa.string(), nullable=False),
+            pa.field("profile_hash", pa.string(), nullable=False),
+            pa.field("writer_strategy", pa.string(), nullable=False),
+            pa.field("input_fingerprints", pa.list_(pa.string()), nullable=False),
+        ]
+    ),
+)
+
+PARAM_FILE_IDS_SCHEMA = _schema_with_metadata(
+    "param_file_ids_v1",
+    pa.schema(
+        [
+            pa.field("file_id", pa.string(), nullable=False),
+        ]
+    ),
+)
+
 SCHEMA_REGISTRY: dict[str, pa.Schema] = {
     "ast_files_v1": AST_FILES_SCHEMA,
     "bytecode_files_v1": BYTECODE_FILES_SCHEMA,
     "callsite_qname_candidates_v1": CALLSITE_QNAME_CANDIDATES_SCHEMA,
+    "dataset_fingerprint_v1": DATASET_FINGERPRINT_SCHEMA,
     "datafusion_explains_v1": DATAFUSION_EXPLAINS_SCHEMA,
     "datafusion_fallbacks_v1": DATAFUSION_FALLBACKS_SCHEMA,
     "datafusion_schema_registry_validation_v1": DATAFUSION_SCHEMA_REGISTRY_VALIDATION_SCHEMA,
     "dim_qualified_names_v1": DIM_QUALIFIED_NAMES_SCHEMA,
     "feature_state_v1": FEATURE_STATE_SCHEMA,
     "libcst_files_v1": LIBCST_FILES_SCHEMA,
+    "param_file_ids_v1": PARAM_FILE_IDS_SCHEMA,
+    "rel_callsite_qname_v1": REL_CALLSITE_QNAME_SCHEMA,
+    "rel_callsite_symbol_v1": REL_CALLSITE_SYMBOL_SCHEMA,
+    "rel_def_symbol_v1": REL_DEF_SYMBOL_SCHEMA,
+    "rel_import_symbol_v1": REL_IMPORT_SYMBOL_SCHEMA,
+    "rel_name_symbol_v1": REL_NAME_SYMBOL_SCHEMA,
+    "relation_output_v1": RELATION_OUTPUT_SCHEMA,
     "repo_snapshot_v1": REPO_SNAPSHOT_SCHEMA,
+    "scalar_param_signature_v1": SCALAR_PARAM_SIGNATURE_SCHEMA,
     "scip_index_v1": SCIP_INDEX_SCHEMA,
     "symtable_files_v1": SYMTABLE_FILES_SCHEMA,
     "tree_sitter_files_v1": TREE_SITTER_FILES_SCHEMA,
@@ -1002,6 +1214,22 @@ NESTED_DATASET_INDEX: dict[str, NestedDatasetSpec] = {
         "role": "derived",
         "context": {"code_id": "code_objects.code_id"},
     },
+    "py_bc_cache_entries": {
+        "root": "bytecode_files_v1",
+        "path": "code_objects.instructions.cache_info",
+        "role": "derived",
+        "context": {
+            "code_id": "code_objects.code_id",
+            "instr_index": "code_objects.instructions.instr_index",
+            "offset": "code_objects.instructions.offset",
+        },
+    },
+    "py_bc_consts": {
+        "root": "bytecode_files_v1",
+        "path": "code_objects.consts",
+        "role": "derived",
+        "context": {"code_id": "code_objects.code_id"},
+    },
     "py_bc_blocks": {
         "root": "bytecode_files_v1",
         "path": "code_objects.blocks",
@@ -1057,11 +1285,41 @@ BYTECODE_VIEW_NAMES: tuple[str, ...] = (
     "py_bc_code_units",
     "py_bc_line_table",
     "py_bc_instructions",
+    "py_bc_cache_entries",
+    "py_bc_consts",
     "bytecode_exception_table",
     "py_bc_blocks",
     "py_bc_dfg_edges",
     "py_bc_cfg_edges",
     "bytecode_errors",
+)
+
+CST_VIEW_NAMES: tuple[str, ...] = (
+    "cst_parse_manifest",
+    "cst_parse_errors",
+    "cst_refs",
+    "cst_imports",
+    "cst_callsites",
+    "cst_defs",
+    "cst_type_exprs",
+    "cst_docstrings",
+    "cst_decorators",
+    "cst_call_args",
+    "cst_nodes",
+    "cst_edges",
+    "cst_refs_attrs",
+    "cst_defs_attrs",
+    "cst_callsites_attrs",
+    "cst_imports_attrs",
+    "cst_nodes_attrs",
+    "cst_edges_attrs",
+    "cst_ref_spans",
+    "cst_callsite_spans",
+    "cst_def_spans",
+    "cst_ref_span_unnest",
+    "cst_callsite_span_unnest",
+    "cst_def_span_unnest",
+    "cst_schema_diagnostics",
 )
 
 
@@ -1528,7 +1786,15 @@ def validate_bytecode_views(ctx: SessionContext) -> None:
             "FROM bytecode_files_v1 LIMIT 1"
         ).collect()
         ctx.sql(
+            "SELECT arrow_typeof(code_objects.instructions.cache_info) AS cache_info_type "
+            "FROM bytecode_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
             "SELECT arrow_typeof(code_objects.line_table) AS line_table_type "
+            "FROM bytecode_files_v1 LIMIT 1"
+        ).collect()
+        ctx.sql(
+            "SELECT arrow_typeof(code_objects.consts) AS consts_type "
             "FROM bytecode_files_v1 LIMIT 1"
         ).collect()
         ctx.sql(
@@ -1539,6 +1805,29 @@ def validate_bytecode_views(ctx: SessionContext) -> None:
         errors["bytecode_files_v1"] = str(exc)
     if errors:
         msg = f"Bytecode view validation failed: {errors}."
+        raise ValueError(msg)
+
+
+def validate_cst_views(ctx: SessionContext) -> None:
+    """Validate CST view schemas using DataFusion introspection.
+
+    Raises
+    ------
+    ValueError
+        Raised when view schemas fail validation.
+    """
+    errors: dict[str, str] = {}
+    for name in CST_VIEW_NAMES:
+        try:
+            ctx.sql(f"DESCRIBE SELECT * FROM {name}").collect()
+        except (RuntimeError, TypeError, ValueError) as exc:
+            errors[name] = str(exc)
+    try:
+        ctx.sql("SELECT * FROM cst_schema_diagnostics").collect()
+    except (RuntimeError, TypeError, ValueError) as exc:
+        errors["cst_schema_diagnostics"] = str(exc)
+    if errors:
+        msg = f"CST view validation failed: {errors}."
         raise ValueError(msg)
 
 
@@ -1638,8 +1927,14 @@ def register_schema(ctx: SessionContext, name: str, schema: pa.Schema) -> None:
 
 def register_all_schemas(ctx: SessionContext) -> None:
     """Register all canonical schemas in a DataFusion SessionContext."""
+    try:
+        existing = registered_table_names(ctx)
+    except (RuntimeError, TypeError, ValueError):
+        existing = set()
     for name, schema in SCHEMA_REGISTRY.items():
         validate_schema_metadata(schema)
+        if name in existing:
+            continue
         register_schema(ctx, name, schema)
     for name in nested_schema_names():
         register_schema(ctx, name, nested_schema_for(name))
@@ -1649,6 +1944,7 @@ __all__ = [
     "AST_FILES_SCHEMA",
     "BYTECODE_FILES_SCHEMA",
     "BYTECODE_VIEW_NAMES",
+    "CST_VIEW_NAMES",
     "LIBCST_FILES_SCHEMA",
     "NESTED_DATASET_INDEX",
     "SCHEMA_REGISTRY",
@@ -1679,6 +1975,7 @@ __all__ = [
     "schema_registry",
     "struct_for_path",
     "validate_bytecode_views",
+    "validate_cst_views",
     "validate_nested_types",
     "validate_schema_metadata",
     "validate_symtable_views",

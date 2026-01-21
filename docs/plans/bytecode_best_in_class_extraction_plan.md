@@ -20,7 +20,7 @@
 ---
 
 ## Scope 1: Bytecode schema expansion (v1) inside bytecode_files_v1
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/schema_registry.py`
@@ -70,20 +70,20 @@ BYTECODE_INSTR_T = pa.struct(
 ```
 
 ### Implementation checklist
-- [ ] Extend `BYTECODE_INSTR_T` with normalization fields (`baseopname`, `baseopcode`,
+- [x] Extend `BYTECODE_INSTR_T` with normalization fields (`baseopname`, `baseopcode`,
   `line_number`, `label`, `cache_info`, offset range fields).
-- [ ] Add `BYTECODE_LINE_T` and store it as a `line_table` list inside
+- [x] Add `BYTECODE_LINE_T` and store it as a `line_table` list inside
   `BYTECODE_CODE_OBJ_T` (no new root dataset).
-- [ ] Add code-unit metadata fields as nullable columns or `attrs` (e.g., `co_qualname`,
+- [x] Add code-unit metadata fields as nullable columns or `attrs` (e.g., `co_qualname`,
   `co_filename`, decoded `co_flags` booleans).
-- [ ] Update `SCHEMA_REGISTRY` and `NESTED_DATASET_INDEX` for new
+- [x] Update `SCHEMA_REGISTRY` and `NESTED_DATASET_INDEX` for new
   `code_objects.*` paths (derived views only).
-- [ ] Keep extract outputs unchanged at the root (`bytecode_files_v1` only).
+- [x] Keep extract outputs unchanged at the root (`bytecode_files_v1` only).
 
 ---
 
 ## Scope 2: Instruction extraction normalization (specialization, caches, argval)
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/extract/bytecode_extract.py`
@@ -124,17 +124,17 @@ ins_rows.append(
 ```
 
 ### Implementation checklist
-- [ ] Add `_cache_info_rows` to normalize `(name, size, data)` to stable rows.
-- [ ] Add `_argval_fields` to provide typed `argval` fields and a `argval_kind` label
+- [x] Add `_cache_info_rows` to normalize `(name, size, data)` to stable rows.
+- [x] Add `_argval_fields` to provide typed `argval` fields and a `argval_kind` label
   using `dis.hasconst/hasname/haslocal/hasfree/hascompare`.
-- [ ] Populate `baseopname/baseopcode` for deterministic opcode semantics.
-- [ ] Persist `line_number` and `label` (3.13) when available.
-- [ ] Update `bytecode_instructions_sql` to project the new fields.
+- [x] Populate `baseopname/baseopcode` for deterministic opcode semantics.
+- [x] Persist `line_number` and `label` (3.13) when available.
+- [x] Update `bytecode_instructions_sql` to project the new fields.
 
 ---
 
 ## Scope 3: Line table + code-object metadata (embedded)
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/extract/bytecode_extract.py`
@@ -161,17 +161,17 @@ def _append_line_table_rows(
 ```
 
 ### Implementation checklist
-- [ ] Add a `line_table` list inside `BYTECODE_CODE_OBJ_T` and a corresponding
+- [x] Add a `line_table` list inside `BYTECODE_CODE_OBJ_T` and a corresponding
   derived view (offset → line mapping).
-- [ ] Add code-object metadata fields (`co_qualname`, `co_filename`, decoded CO_* flags).
-- [ ] Store compiler metadata in file/code attrs (python version, magic number,
+- [x] Add code-object metadata fields (`co_qualname`, `co_filename`, decoded CO_* flags).
+- [x] Store compiler metadata in file/code attrs (python version, magic number,
   optimize, dont_inherit, adaptive flag).
-- [ ] Update `bytecode_code_units_sql` to include new metadata fields.
+- [x] Update `bytecode_code_units_sql` to include new metadata fields.
 
 ---
 
 ## Scope 4: CFG correctness + jump taxonomy
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/extract/bytecode_extract.py`
@@ -188,15 +188,15 @@ if has_jump and jump_target is not None:
 ```
 
 ### Implementation checklist
-- [ ] Prefer `dis.hasjump` and `Instruction.jump_target` over opname heuristics.
-- [ ] Keep exception edges keyed by entry index; include `depth/lasti` in edge attrs.
-- [ ] Ensure block boundaries include `dis.findlabels` plus exception table targets.
-- [ ] Update CFG edge attrs to include `jump_kind` and `jump_target_label` (if present).
+- [x] Prefer `dis.hasjump` and `Instruction.jump_target` over opname heuristics.
+- [x] Keep exception edges keyed by entry index; include `depth/lasti` in edge attrs.
+- [x] Ensure block boundaries include `dis.findlabels` plus exception table targets.
+- [x] Update CFG edge attrs to include `jump_kind` and `jump_target_label` (if present).
 
 ---
 
 ## Scope 5: Stack-effect DFG scaffolding (minimal def/use, embedded)
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/extract/bytecode_extract.py`
@@ -229,16 +229,16 @@ if delta > 0:
 ```
 
 ### Implementation checklist
-- [ ] Add a `dfg_edges` list inside `BYTECODE_CODE_OBJ_T` and schema.
-- [ ] Record `stack_depth_before/after` on instruction attrs for quick checks.
-- [ ] Emit minimal stack-use edges (`USE_STACK`) and optional store/load edges.
-- [ ] Add a DataFusion view for DFG edges keyed by `code_id` and `instr_id`.
-- [ ] Add a validation rule to assert stack depth never goes negative.
+- [x] Add a `dfg_edges` list inside `BYTECODE_CODE_OBJ_T` and schema.
+- [x] Record `stack_depth_before/after` on instruction attrs for quick checks.
+- [x] Emit minimal stack-use edges (`USE_STACK`) and optional store/load edges.
+- [x] Add a DataFusion view for DFG edges keyed by `code_id` and `instr_id`.
+- [x] Add a validation rule to assert stack depth never goes negative.
 
 ---
 
 ## Scope 6: DataFusion validation + mapping workflow
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/datafusion_engine/schema_registry.py`
@@ -257,17 +257,17 @@ LIMIT 1;
 ```
 
 ### Implementation checklist
-- [ ] Extend bytecode fragment views to project new schema fields, line table, and DFG edges.
-- [ ] Add a `validate_bytecode_views` routine that checks `arrow_typeof` for new
+- [x] Extend bytecode fragment views to project new schema fields, line table, and DFG edges.
+- [x] Add a `validate_bytecode_views` routine that checks `arrow_typeof` for new
   `code_objects.*` fields.
-- [ ] Record schema snapshot deltas after registration (information_schema tables/columns).
-- [ ] Add optional `map_entries`/`unnest` helpers for cache-info and consts expansion.
-- [ ] Update view registry snapshots in runtime to include bytecode views.
+- [x] Record schema snapshot deltas after registration (information_schema tables/columns).
+- [x] Add optional `map_entries`/`unnest` helpers for cache-info and consts expansion.
+- [x] Update view registry snapshots in runtime to include bytecode views.
 
 ---
 
 ## Scope 7: Performance, determinism, and diagnostics
-Status: Planned
+Status: Completed
 
 ### Target file list
 - `src/extract/bytecode_extract.py`
@@ -291,17 +291,17 @@ if cached is None:
 ```
 
 ### Implementation checklist
-- [ ] Add an in-memory cache for compiled code objects + disassembly results.
-- [ ] Gate parallel extraction by file count and memory budget.
-- [ ] Emit structured error rows for compile, disassembly, and analysis failures.
-- [ ] Persist `determinism` attributes (adaptive flag, Python version) for audits.
+- [x] Add an in-memory cache for compiled code objects + disassembly results.
+- [x] Gate parallel extraction by file count and memory budget.
+- [x] Emit structured error rows for compile, disassembly, and analysis failures.
+- [x] Persist `determinism` attributes (adaptive flag, Python version) for audits.
 
 ---
 
 ## Rollout order (recommended)
-1. Schema expansion + extractor updates (Scopes 1–2).
-2. Line table + code object metadata (Scope 3).
-3. CFG correctness (Scope 4).
-4. Stack-effect DFG scaffolding (Scope 5).
-5. DataFusion validation + view updates (Scope 6).
-6. Performance/diagnostics hardening (Scope 7).
+1. Schema expansion + extractor updates (Scopes 1–2). (Done)
+2. Line table + code object metadata (Scope 3). (Done)
+3. CFG correctness (Scope 4). (Done)
+4. Stack-effect DFG scaffolding (Scope 5). (Done)
+5. DataFusion validation + view updates (Scope 6). (Done, optional expansions pending)
+6. Performance/diagnostics hardening (Scope 7). (In progress)

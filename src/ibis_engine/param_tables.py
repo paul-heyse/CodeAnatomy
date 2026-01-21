@@ -8,6 +8,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
+from functools import cache
 from typing import cast
 
 import pyarrow as pa
@@ -16,21 +17,24 @@ from ibis.expr.types import Table
 
 from arrowdsl.schema.serialization import schema_fingerprint
 from datafusion_engine.compute_ops import call_function, cast_values, sort_indices, take, unique
+from datafusion_engine.schema_authority import dataset_schema_from_context
 from registry_common.arrow_payloads import payload_hash
 
 SCALAR_PARAM_SIGNATURE_VERSION = 1
-_SCALAR_PARAM_SIGNATURE_ENTRY = pa.struct(
-    [
-        pa.field("key", pa.string(), nullable=False),
-        pa.field("value", pa.string(), nullable=False),
-    ]
-)
-_SCALAR_PARAM_SIGNATURE_SCHEMA = pa.schema(
-    [
-        pa.field("version", pa.int32(), nullable=False),
-        pa.field("entries", pa.list_(_SCALAR_PARAM_SIGNATURE_ENTRY), nullable=False),
-    ]
-)
+
+
+@cache
+def _scalar_param_signature_schema() -> pa.Schema:
+    schema = dataset_schema_from_context("scalar_param_signature_v1")
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_pyarrow = getattr(schema, "to_pyarrow", None)
+    if callable(to_pyarrow):
+        resolved = to_pyarrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    msg = "DataFusion schema for scalar_param_signature_v1 is not a pyarrow.Schema."
+    raise TypeError(msg)
 
 
 class ParamTableScope(Enum):
@@ -312,7 +316,7 @@ def scalar_param_signature(values: Mapping[str, object]) -> str:
     """
     entries = [{"key": str(key), "value": str(value)} for key, value in sorted(values.items())]
     payload = {"version": SCALAR_PARAM_SIGNATURE_VERSION, "entries": entries}
-    return payload_hash(payload, _SCALAR_PARAM_SIGNATURE_SCHEMA)
+    return payload_hash(payload, _scalar_param_signature_schema())
 
 
 def _param_values_array(

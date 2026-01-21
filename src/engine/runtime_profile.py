@@ -29,6 +29,11 @@ def _settings_int(value: str | None) -> int | None:
         return None
 
 
+def _env_value(name: str) -> str | None:
+    value = os.environ.get(name, "").strip()
+    return value if value else None
+
+
 @dataclass(frozen=True)
 class RuntimeProfileSpec:
     """Runtime profile plus compiler/engine preferences."""
@@ -339,6 +344,18 @@ def _apply_profile_overrides(name: str, runtime: RuntimeProfile) -> RuntimeProfi
             memory_limit_bytes=memory_limit,
             memory_pool=memory_pool,
         )
+    policy_override = _env_value("CODEANATOMY_DATAFUSION_POLICY")
+    catalog_location = _env_value("CODEANATOMY_DATAFUSION_CATALOG_LOCATION")
+    catalog_format = _env_value("CODEANATOMY_DATAFUSION_CATALOG_FORMAT")
+    overrides: dict[str, str] = {}
+    if policy_override is not None:
+        overrides["config_policy_name"] = policy_override
+    if catalog_location is not None:
+        overrides["catalog_auto_load_location"] = catalog_location
+    if catalog_format is not None:
+        overrides["catalog_auto_load_format"] = catalog_format
+    if overrides:
+        df_profile = replace(df_profile, **overrides)
     return runtime.with_datafusion(df_profile)
 
 

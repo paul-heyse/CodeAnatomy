@@ -4,20 +4,15 @@ from __future__ import annotations
 
 from functools import cache
 
-import pyarrow as pa
-
-from schema_spec.specs import ArrowFieldSpec, call_span_bundle, span_bundle
+from datafusion_engine.schema_authority import dataset_spec_from_context
 from schema_spec.system import (
     ContractCatalogSpec,
     DatasetSpec,
     DedupeSpecSpec,
     SchemaRegistry,
     SortKeySpec,
-    TableSpecConstraints,
     VirtualFieldSpec,
     make_contract_spec,
-    make_dataset_spec,
-    make_table_spec,
 )
 
 RELATIONSHIP_SCHEMA_VERSION: int = 1
@@ -32,26 +27,7 @@ def rel_name_symbol_spec() -> DatasetSpec:
     DatasetSpec
         Dataset spec for name-to-symbol relationship rows.
     """
-    return make_dataset_spec(
-        table_spec=make_table_spec(
-            name="rel_name_symbol_v1",
-            version=RELATIONSHIP_SCHEMA_VERSION,
-            bundles=(span_bundle(),),
-            fields=[
-                ArrowFieldSpec(name="ref_id", dtype=pa.string()),
-                ArrowFieldSpec(name="symbol", dtype=pa.string()),
-                ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
-                ArrowFieldSpec(name="path", dtype=pa.string()),
-                ArrowFieldSpec(name="edge_owner_file_id", dtype=pa.string()),
-                ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
-                ArrowFieldSpec(name="confidence", dtype=pa.float32()),
-                ArrowFieldSpec(name="score", dtype=pa.float32()),
-                ArrowFieldSpec(name="rule_name", dtype=pa.string()),
-                ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
-            ],
-            constraints=TableSpecConstraints(required_non_null=("ref_id", "symbol")),
-        )
-    )
+    return dataset_spec_from_context("rel_name_symbol_v1")
 
 
 @cache
@@ -63,26 +39,7 @@ def rel_import_symbol_spec() -> DatasetSpec:
     DatasetSpec
         Dataset spec for import-to-symbol relationship rows.
     """
-    return make_dataset_spec(
-        table_spec=make_table_spec(
-            name="rel_import_symbol_v1",
-            version=RELATIONSHIP_SCHEMA_VERSION,
-            bundles=(span_bundle(),),
-            fields=[
-                ArrowFieldSpec(name="import_alias_id", dtype=pa.string()),
-                ArrowFieldSpec(name="symbol", dtype=pa.string()),
-                ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
-                ArrowFieldSpec(name="path", dtype=pa.string()),
-                ArrowFieldSpec(name="edge_owner_file_id", dtype=pa.string()),
-                ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
-                ArrowFieldSpec(name="confidence", dtype=pa.float32()),
-                ArrowFieldSpec(name="score", dtype=pa.float32()),
-                ArrowFieldSpec(name="rule_name", dtype=pa.string()),
-                ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
-            ],
-            constraints=TableSpecConstraints(required_non_null=("import_alias_id", "symbol")),
-        )
-    )
+    return dataset_spec_from_context("rel_import_symbol_v1")
 
 
 @cache
@@ -94,26 +51,7 @@ def rel_def_symbol_spec() -> DatasetSpec:
     DatasetSpec
         Dataset spec for definition-to-symbol relationship rows.
     """
-    return make_dataset_spec(
-        table_spec=make_table_spec(
-            name="rel_def_symbol_v1",
-            version=RELATIONSHIP_SCHEMA_VERSION,
-            bundles=(span_bundle(),),
-            fields=[
-                ArrowFieldSpec(name="def_id", dtype=pa.string()),
-                ArrowFieldSpec(name="symbol", dtype=pa.string()),
-                ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
-                ArrowFieldSpec(name="path", dtype=pa.string()),
-                ArrowFieldSpec(name="edge_owner_file_id", dtype=pa.string()),
-                ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
-                ArrowFieldSpec(name="confidence", dtype=pa.float32()),
-                ArrowFieldSpec(name="score", dtype=pa.float32()),
-                ArrowFieldSpec(name="rule_name", dtype=pa.string()),
-                ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
-            ],
-            constraints=TableSpecConstraints(required_non_null=("def_id", "symbol")),
-        )
-    )
+    return dataset_spec_from_context("rel_def_symbol_v1")
 
 
 @cache
@@ -125,27 +63,7 @@ def rel_callsite_symbol_spec() -> DatasetSpec:
     DatasetSpec
         Dataset spec for callsite-to-symbol relationship rows.
     """
-    return make_dataset_spec(
-        table_spec=make_table_spec(
-            name="rel_callsite_symbol_v1",
-            version=RELATIONSHIP_SCHEMA_VERSION,
-            bundles=(),
-            fields=[
-                ArrowFieldSpec(name="call_id", dtype=pa.string()),
-                ArrowFieldSpec(name="symbol", dtype=pa.string()),
-                ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
-                ArrowFieldSpec(name="path", dtype=pa.string()),
-                ArrowFieldSpec(name="edge_owner_file_id", dtype=pa.string()),
-                *call_span_bundle().fields,
-                ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
-                ArrowFieldSpec(name="confidence", dtype=pa.float32()),
-                ArrowFieldSpec(name="score", dtype=pa.float32()),
-                ArrowFieldSpec(name="rule_name", dtype=pa.string()),
-                ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
-            ],
-            constraints=TableSpecConstraints(required_non_null=("call_id", "symbol")),
-        )
-    )
+    return dataset_spec_from_context("rel_callsite_symbol_v1")
 
 
 @cache
@@ -157,27 +75,7 @@ def rel_callsite_qname_spec() -> DatasetSpec:
     DatasetSpec
         Dataset spec for callsite-to-qname relationship rows.
     """
-    return make_dataset_spec(
-        table_spec=make_table_spec(
-            name="rel_callsite_qname_v1",
-            version=RELATIONSHIP_SCHEMA_VERSION,
-            bundles=(),
-            fields=[
-                ArrowFieldSpec(name="call_id", dtype=pa.string()),
-                ArrowFieldSpec(name="qname_id", dtype=pa.string()),
-                ArrowFieldSpec(name="qname_source", dtype=pa.string()),
-                ArrowFieldSpec(name="path", dtype=pa.string()),
-                ArrowFieldSpec(name="edge_owner_file_id", dtype=pa.string()),
-                *call_span_bundle().fields,
-                ArrowFieldSpec(name="confidence", dtype=pa.float32()),
-                ArrowFieldSpec(name="score", dtype=pa.float32()),
-                ArrowFieldSpec(name="ambiguity_group_id", dtype=pa.string()),
-                ArrowFieldSpec(name="rule_name", dtype=pa.string()),
-                ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
-            ],
-            constraints=TableSpecConstraints(required_non_null=("call_id", "qname_id")),
-        )
-    )
+    return dataset_spec_from_context("rel_callsite_qname_v1")
 
 
 def relationship_dataset_specs() -> tuple[DatasetSpec, ...]:

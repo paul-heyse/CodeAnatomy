@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import contextlib
 import dis
+import functools
 import importlib.util
 import inspect
 import json
+import os
 import sys
 import types as pytypes
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
@@ -39,6 +42,7 @@ if TYPE_CHECKING:
 
 type RowValue = str | int | bool | list[str] | list[dict[str, object]] | None
 type Row = dict[str, RowValue]
+type BytecodeCacheKey = tuple[str, str, int, bool, bool, bool, tuple[str, ...]]
 
 BC_LINE_BASE = 1
 BC_COL_UNIT = "utf32"
@@ -63,6 +67,9 @@ class BytecodeExtractOptions:
     dont_inherit: bool = True
     adaptive: bool = False
     include_cfg_derivations: bool = True
+    max_workers: int | None = None
+    parallel_min_files: int = 8
+    parallel_max_bytes: int = 50_000_000
     terminator_opnames: Sequence[str] = (
         "RETURN_VALUE",
         "RETURN_CONST",
@@ -128,6 +135,14 @@ class BytecodeFileContext:
             File identity columns for row construction.
         """
         return cast("Row", file_identity_row(self.file_ctx))
+
+
+@dataclass(frozen=True)
+class BytecodeCacheResult:
+    """Cached bytecode extraction payload for a single file."""
+
+    code_objects: list[dict[str, object]]
+    errors: list[dict[str, object]]
 
 
 @dataclass(frozen=True)
@@ -211,6 +226,9 @@ class BytecodeRowBuffers:
     line_rows: list[Row]
     dfg_edge_rows: list[Row]
     error_rows: list[Row]
+
+
+_BYTECODE_CACHE: dict[BytecodeCacheKey, BytecodeCacheResult] = {}
 
 
 @dataclass(frozen=True)
@@ -314,6 +332,28 @@ def _instruction_entry(row: Mapping[str, RowValue]) -> dict[str, object]:
 def _string_list(value: object | None) -> list[str]:
     if isinstance(value, (list, tuple)):
         return [str(item) for item in value]
+    return []
+
+
+def _const_repr(value: object) -> str:
+    return repr(value)
+
+
+def _const_entries(values: Sequence[object]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for index, value in enumerate(values):
+        rows.append(
+            {
+                "const_index": int(index),
+                "const_repr": _const_repr(value),
+            }
+        )
+    return rows
+
+
+def _const_entry_list(value: object | None) -> list[dict[str, object]]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
     return []
 
 
@@ -486,6 +526,92 @@ def _append_error_row(
     )
 
 
+def _bytecode_cache_key(
+    file_ctx: FileContext,
+    *,
+    options: BytecodeExtractOptions,
+) -> BytecodeCacheKey | None:
+    if not file_ctx.file_id or file_ctx.file_sha256 is None:
+        return None
+    terminators = tuple(str(name) for name in options.terminator_opnames)
+    return (
+        file_ctx.file_id,
+        file_ctx.file_sha256,
+        int(options.optimize),
+        bool(options.dont_inherit),
+        bool(options.adaptive),
+        bool(options.include_cfg_derivations),
+        terminators,
+    )
+
+
+def _effective_max_workers(options: BytecodeExtractOptions) -> int:
+    if options.max_workers is None:
+        cpu_count = os.cpu_count() or 1
+        return max(1, min(32, cpu_count))
+    return max(1, options.max_workers)
+
+
+def _estimate_context_bytes(file_ctx: FileContext) -> int | None:
+    if file_ctx.data is not None:
+        return len(file_ctx.data)
+    if file_ctx.text is not None:
+        # Approximate bytes using decoded text length to avoid extra I/O.
+        return len(file_ctx.text)
+    return None
+
+
+def _should_parallelize(
+    contexts: Sequence[FileContext],
+    *,
+    options: BytecodeExtractOptions,
+    max_workers: int,
+) -> bool:
+    if max_workers <= 1:
+        return False
+    min_files = max(1, options.parallel_min_files)
+    if len(contexts) < min_files:
+        return False
+    if options.parallel_max_bytes <= 0:
+        return False
+    total_bytes = 0
+    for file_ctx in contexts:
+        size = _estimate_context_bytes(file_ctx)
+        if size is None:
+            return False
+        total_bytes += size
+        if total_bytes > options.parallel_max_bytes:
+            return False
+    return True
+
+
+def _bytecode_row_payload(
+    file_ctx: FileContext,
+    *,
+    options: BytecodeExtractOptions,
+    code_objects: list[dict[str, object]],
+    errors: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "repo": options.repo_id,
+        "path": file_ctx.path,
+        "file_id": file_ctx.file_id,
+        "code_objects": code_objects,
+        "errors": errors,
+        "attrs": attrs_map(
+            {
+                "file_sha256": file_ctx.file_sha256,
+                "python_version": PYTHON_VERSION,
+                "python_magic": PYTHON_MAGIC,
+                "optimize": options.optimize,
+                "dont_inherit": options.dont_inherit,
+                "adaptive": options.adaptive,
+                "include_cfg": options.include_cfg_derivations,
+            }
+        ),
+    }
+
+
 def _context_from_file_ctx(
     file_ctx: FileContext,
     options: BytecodeExtractOptions,
@@ -574,6 +700,7 @@ def _assign_code_units(
                 "freevars": list(getattr(co, "co_freevars", ())),
                 "cellvars": list(getattr(co, "co_cellvars", ())),
                 "names": list(getattr(co, "co_names", ())),
+                "consts": _const_entries(getattr(co, "co_consts", ())),
                 "consts_json": _consts_json(getattr(co, "co_consts", ())),
             }
         )
@@ -1112,6 +1239,7 @@ def _extract_code_unit_rows(
                 code_id=code_id,
             )
             instruction_data = InstructionData(instructions=[], index_by_offset={})
+        exc_entries: Sequence[object]
         try:
             exc_entries = _exception_entries(co)
         except (RuntimeError, TypeError, ValueError) as exc:
@@ -1122,7 +1250,7 @@ def _extract_code_unit_rows(
                 stage="exception_table",
                 code_id=code_id,
             )
-            exc_entries: list[object] = []
+            exc_entries = []
         unit_ctx = CodeUnitContext(
             code_unit_key=key,
             file_ctx=ctx,
@@ -1251,6 +1379,7 @@ def _code_object_entry(row: Row, groups: CodeUnitGroups) -> dict[str, object]:
         "freevars": _string_list(row.get("freevars")),
         "cellvars": _string_list(row.get("cellvars")),
         "names": _string_list(row.get("names")),
+        "consts": _const_entry_list(row.get("consts")),
         "consts_json": row.get("consts_json"),
         "line_table": line_table,
         "instructions": instructions,
@@ -1281,6 +1410,16 @@ def _bytecode_file_row(
     bc_ctx = _context_from_file_ctx(file_ctx, options)
     if bc_ctx is None:
         return None
+    cache_key = _bytecode_cache_key(file_ctx, options=options)
+    if cache_key is not None:
+        cached = _BYTECODE_CACHE.get(cache_key)
+        if cached is not None:
+            return _bytecode_row_payload(
+                file_ctx,
+                options=options,
+                code_objects=cached.code_objects,
+                errors=cached.errors,
+            )
     text = text_from_file_ctx(bc_ctx.file_ctx)
     if text is None:
         return None
@@ -1302,24 +1441,17 @@ def _bytecode_file_row(
         _extract_code_unit_rows(top, bc_ctx, code_unit_keys, buffers)
     code_objects = _code_objects_from_buffers(buffers)
     errors = [_error_entry(row) for row in buffers.error_rows]
-    return {
-        "repo": options.repo_id,
-        "path": file_ctx.path,
-        "file_id": file_ctx.file_id,
-        "code_objects": code_objects,
-        "errors": errors,
-        "attrs": attrs_map(
-            {
-                "file_sha256": file_ctx.file_sha256,
-                "python_version": PYTHON_VERSION,
-                "python_magic": PYTHON_MAGIC,
-                "optimize": options.optimize,
-                "dont_inherit": options.dont_inherit,
-                "adaptive": options.adaptive,
-                "include_cfg": options.include_cfg_derivations,
-            }
-        ),
-    }
+    if cache_key is not None:
+        _BYTECODE_CACHE[cache_key] = BytecodeCacheResult(
+            code_objects=code_objects,
+            errors=errors,
+        )
+    return _bytecode_row_payload(
+        file_ctx,
+        options=options,
+        code_objects=code_objects,
+        errors=errors,
+    )
 
 
 def _collect_bytecode_file_rows(
@@ -1328,11 +1460,23 @@ def _collect_bytecode_file_rows(
     *,
     options: BytecodeExtractOptions,
 ) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    for file_ctx in iter_contexts(repo_files, file_contexts):
-        row = _bytecode_file_row(file_ctx, options=options)
-        if row is not None:
-            rows.append(row)
+    contexts = list(iter_contexts(repo_files, file_contexts))
+    if not contexts:
+        return []
+    max_workers = _effective_max_workers(options)
+    if not _should_parallelize(contexts, options=options, max_workers=max_workers):
+        rows: list[dict[str, object]] = []
+        for file_ctx in contexts:
+            row = _bytecode_file_row(file_ctx, options=options)
+            if row is not None:
+                rows.append(row)
+        return rows
+    worker = functools.partial(_bytecode_file_row, options=options)
+    rows = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for row in executor.map(worker, contexts):
+            if row is not None:
+                rows.append(row)
     return rows
 
 

@@ -47,6 +47,18 @@ from datafusion_engine.compute_ops import (
 )
 
 
+def _resolve_schema(schema: SchemaLike) -> pa.Schema:
+    if isinstance(schema, pa.Schema):
+        return schema
+    to_pyarrow = getattr(schema, "to_pyarrow", None)
+    if callable(to_pyarrow):
+        resolved = to_pyarrow()
+        if isinstance(resolved, pa.Schema):
+            return resolved
+    msg = "Schema must be a pyarrow.Schema derived from DataFusion."
+    raise TypeError(msg)
+
+
 class ColumnExpr(Protocol):
     """Protocol for column expressions used by defaults."""
 
@@ -309,8 +321,11 @@ def table_from_schema(
     TableLike
         Table with missing columns filled as typed nulls.
     """
-    arrays = [columns.get(field.name, pa.nulls(num_rows, type=field.type)) for field in schema]
-    return pa.Table.from_arrays(arrays, schema=schema)
+    resolved = _resolve_schema(schema)
+    arrays = [
+        columns.get(field.name, pa.nulls(num_rows, type=field.type)) for field in resolved
+    ]
+    return pa.Table.from_arrays(arrays, schema=resolved)
 
 
 def table_from_rows(
@@ -324,11 +339,13 @@ def table_from_rows(
     TableLike
         Table built from row mappings.
     """
+    resolved = _resolve_schema(schema)
     row_list = [dict(row) for row in rows]
     arrays = [
-        nested_array_factory(field, [row.get(field.name) for row in row_list]) for field in schema
+        nested_array_factory(field, [row.get(field.name) for row in row_list])
+        for field in resolved
     ]
-    return pa.Table.from_arrays(arrays, schema=pa.schema(schema))
+    return pa.Table.from_arrays(arrays, schema=resolved)
 
 
 def iter_rows_from_table(table: pa.Table) -> Iterator[Mapping[str, object]]:

@@ -169,6 +169,12 @@ class PropsInputTables:
     scip_symbol_information: TableLike | DatasetSource | SqlFragment | None = None
     scip_occurrences: TableLike | DatasetSource | SqlFragment | None = None
     scip_external_symbol_information: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_scopes: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_symbols: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_bindings: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_def_sites: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_use_sites: TableLike | DatasetSource | SqlFragment | None = None
+    symtable_type_params: TableLike | DatasetSource | SqlFragment | None = None
     ts_nodes: TableLike | DatasetSource | SqlFragment | None = None
     ts_errors: TableLike | DatasetSource | SqlFragment | None = None
     ts_missing: TableLike | DatasetSource | SqlFragment | None = None
@@ -270,6 +276,12 @@ def _ibis_prop_tables(
         "dim_qualified_names": inputs.dim_qualified_names,
         "scip_symbol_information": inputs.scip_symbol_information,
         "scip_external_symbol_information": inputs.scip_external_symbol_information,
+        "symtable_scopes": inputs.symtable_scopes,
+        "symtable_symbols": inputs.symtable_symbols,
+        "symtable_bindings": inputs.symtable_bindings,
+        "symtable_def_sites": inputs.symtable_def_sites,
+        "symtable_use_sites": inputs.symtable_use_sites,
+        "symtable_type_params": inputs.symtable_type_params,
         "ts_nodes": inputs.ts_nodes,
         "ts_errors": inputs.ts_errors,
         "ts_missing": inputs.ts_missing,

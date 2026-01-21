@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from functools import cache
 
-import pyarrow as pa
-
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
-from arrowdsl.schema.metadata import merge_metadata_specs, ordering_metadata_spec
-from arrowdsl.schema.schema import SchemaMetadataSpec
+from arrowdsl.schema.metadata import ordering_metadata_spec
+from datafusion_engine.schema_authority import dataset_schema_from_context
 from schema_spec.system import Contract, DatasetSpec, dataset_spec_from_schema
 
 RELATION_OUTPUT_NAME = "relation_output_v1"
@@ -25,32 +23,10 @@ RELATION_OUTPUT_ORDERING_KEYS: tuple[tuple[str, str], ...] = (
     ("rule_name", "ascending"),
 )
 
-_RELATION_OUTPUT_BASE_SCHEMA = pa.schema(
-    [
-        pa.field("src", pa.string(), nullable=True),
-        pa.field("dst", pa.string(), nullable=True),
-        pa.field("path", pa.string(), nullable=True),
-        pa.field("edge_owner_file_id", pa.string(), nullable=True),
-        pa.field("bstart", pa.int64(), nullable=True),
-        pa.field("bend", pa.int64(), nullable=True),
-        pa.field("origin", pa.string(), nullable=True),
-        pa.field("resolution_method", pa.string(), nullable=True),
-        pa.field("confidence", pa.float32(), nullable=True),
-        pa.field("score", pa.float32(), nullable=True),
-        pa.field("symbol_roles", pa.int32(), nullable=True),
-        pa.field("qname_source", pa.string(), nullable=True),
-        pa.field("ambiguity_group_id", pa.string(), nullable=True),
-        pa.field("diag_source", pa.string(), nullable=True),
-        pa.field("severity", pa.string(), nullable=True),
-        pa.field("rule_name", pa.string(), nullable=True),
-        pa.field("rule_priority", pa.int32(), nullable=True),
-    ],
-    metadata={b"spec_kind": b"relation_output"},
-)
-RELATION_OUTPUT_SCHEMA = merge_metadata_specs(
-    SchemaMetadataSpec(schema_metadata=_RELATION_OUTPUT_BASE_SCHEMA.metadata or {}),
-    ordering_metadata_spec(OrderingLevel.EXPLICIT, keys=RELATION_OUTPUT_ORDERING_KEYS),
-).apply(_RELATION_OUTPUT_BASE_SCHEMA)
+RELATION_OUTPUT_SCHEMA = ordering_metadata_spec(
+    OrderingLevel.EXPLICIT,
+    keys=RELATION_OUTPUT_ORDERING_KEYS,
+).apply(dataset_schema_from_context(RELATION_OUTPUT_NAME))
 
 
 @cache

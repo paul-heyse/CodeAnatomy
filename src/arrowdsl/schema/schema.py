@@ -667,87 +667,6 @@ def best_fit_type(array: ArrayLike, candidates: Sequence[DataTypeLike]) -> DataT
     return array.type
 
 
-def unify_schemas(
-    schemas: Sequence[SchemaLike],
-    *,
-    promote_options: str = "permissive",
-    prefer_nested: bool = True,
-) -> SchemaLike:
-    """Unify schemas while preserving metadata from the first schema.
-
-    Returns
-    -------
-    SchemaLike
-        Unified schema with metadata preserved.
-    """
-    if not schemas:
-        return pa.schema([])
-    unified = unify_schemas_core(schemas, promote_options=promote_options)
-    if prefer_nested:
-        unified = _prefer_base_nested(schemas[0], unified)
-    metadata_module = importlib.import_module("arrowdsl.schema.metadata")
-    return metadata_module.metadata_spec_from_schema(schemas[0]).apply(unified)
-
-
-def unify_schema_with_metadata(
-    schemas: Sequence[SchemaLike],
-    *,
-    promote_options: str = "permissive",
-) -> SchemaLike:
-    """Unify schemas while preserving metadata from the first schema.
-
-    Returns
-    -------
-    SchemaLike
-        Unified schema with metadata preserved.
-    """
-    return unify_schemas(schemas, promote_options=promote_options)
-
-
-def unify_tables(
-    tables: Sequence[TableLike],
-    *,
-    promote_options: str = "permissive",
-) -> TableLike:
-    """Unify and concatenate tables with metadata-aware schema alignment.
-
-    Returns
-    -------
-    TableLike
-        Concatenated table aligned to the unified schema.
-    """
-    if not tables:
-        return pa.Table.from_arrays([], names=[])
-    schema = unify_schemas([table.schema for table in tables], promote_options=promote_options)
-    aligned: list[TableLike] = []
-    for table in tables:
-        aligned_table, _ = align_to_schema(table, schema=schema, safe_cast=True)
-        aligned.append(aligned_table)
-    combined = pa.concat_tables(aligned, promote_options="default")
-    return ChunkPolicy().apply(combined)
-
-
-def infer_schema_from_tables(
-    tables: Sequence[TableLike],
-    *,
-    promote_options: str = "permissive",
-    prefer_nested: bool = True,
-) -> SchemaLike:
-    """Infer a unified schema from tables using Arrow evolution rules.
-
-    Returns
-    -------
-    SchemaLike
-        Unified schema for the input tables.
-    """
-    schemas = [table.schema for table in tables if table is not None]
-    return unify_schemas(
-        schemas,
-        promote_options=promote_options,
-        prefer_nested=prefer_nested,
-    )
-
-
 def required_field_names(spec: _TableSchemaSpec) -> tuple[str, ...]:
     """Return required field names (explicit or non-nullable).
 
@@ -910,7 +829,6 @@ __all__ = [
     "encoding_columns_from_metadata",
     "encoding_projection",
     "extension_types_from_schema",
-    "infer_schema_from_tables",
     "missing_key_fields",
     "projection_for_schema",
     "register_extension_types",
@@ -919,8 +837,5 @@ __all__ = [
     "required_non_null_mask",
     "schema_fingerprint",
     "schema_to_dict",
-    "unify_schema_with_metadata",
-    "unify_schemas",
     "unify_schemas_core",
-    "unify_tables",
 ]

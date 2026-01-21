@@ -6,7 +6,7 @@ import importlib
 import inspect
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
@@ -21,7 +21,7 @@ from deltalake import DeltaTable
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.metadata import ordering_from_schema
-from arrowdsl.schema.serialization import schema_to_dict
+from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from core_types import ensure_path
 from datafusion_engine.listing_table_provider import (
     TableProviderCapsule,
@@ -234,6 +234,7 @@ class DataFusionRegistrationContext:
 
 
 def _schema_field_type(dataset: str, field: str) -> pa.DataType | None:
+    """Return the Arrow type for a schema field, when available."""
     schema = SCHEMA_REGISTRY.get(dataset)
     if schema is None:
         return None
@@ -246,6 +247,7 @@ def _default_scan_options_for_dataset(
     name: str,
     location: DatasetLocation,
 ) -> DataFusionScanOptions | None:
+    """Return default DataFusion scan options for supported datasets."""
     if name != _CST_EXTERNAL_TABLE_NAME:
         return None
     schema = SCHEMA_REGISTRY.get(name)
@@ -272,13 +274,30 @@ def _default_scan_options_for_dataset(
     )
 
 
+def _default_delta_scan_options_for_dataset(name: str) -> DeltaScanOptions | None:
+    if name != _CST_EXTERNAL_TABLE_NAME:
+        return None
+    schema = SCHEMA_REGISTRY.get(name)
+    if schema is None:
+        return None
+    return DeltaScanOptions(schema=schema)
+
+
 def _apply_scan_defaults(name: str, location: DatasetLocation) -> DatasetLocation:
+    """Attach default scan options to a dataset location."""
+    updated = location
     if location.datafusion_scan is not None:
-        return location
-    defaults = _default_scan_options_for_dataset(name, location)
-    if defaults is None:
-        return location
-    return replace(location, datafusion_scan=defaults)
+        defaults = None
+    else:
+        defaults = _default_scan_options_for_dataset(name, location)
+        if defaults is not None:
+            updated = replace(updated, datafusion_scan=defaults)
+    if updated.delta_scan is not None:
+        return updated
+    delta_defaults = _default_delta_scan_options_for_dataset(name)
+    if delta_defaults is None:
+        return updated
+    return replace(updated, delta_scan=delta_defaults)
 
 
 def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOptions:
@@ -399,6 +418,9 @@ def _partitioned_by(location: DatasetLocation) -> tuple[str, ...] | None:
 
 
 def _file_sort_order(location: DatasetLocation) -> tuple[str, ...] | None:
+    scan = resolve_datafusion_scan_options(location)
+    if scan is not None and scan.file_sort_order:
+        return tuple(scan.file_sort_order)
     spec = location.dataset_spec
     if spec is not None and spec.contract_spec is not None and spec.contract_spec.canonical_sort:
         return tuple(key.column for key in spec.contract_spec.canonical_sort)
@@ -789,6 +811,7 @@ def _register_delta(context: DataFusionRegistrationContext) -> DataFrame:
         table.load_as_version(context.location.delta_timestamp)
     delta_features = _delta_feature_payload(table)
     delta_protocol = _delta_protocol_payload(table)
+    delta_schema = table.schema().to_arrow()
     provider = "table"
     delta_provider = None
     if not context.location.files:
@@ -850,6 +873,8 @@ def _register_delta(context: DataFusionRegistrationContext) -> DataFrame:
                 source=table,
             )
     df = context.ctx.table(context.name)
+    provider_schema = df.schema()
+    expected_schema = SCHEMA_REGISTRY.get(context.name)
     if context.location.delta_version is not None:
         delta_version = context.location.delta_version
     else:
@@ -860,6 +885,9 @@ def _register_delta(context: DataFusionRegistrationContext) -> DataFrame:
         delta_version=delta_version,
         delta_features=delta_features,
         delta_protocol=delta_protocol,
+        expected_schema=expected_schema,
+        delta_schema=delta_schema,
+        provider_schema=provider_schema,
     )
     return _maybe_cache(context, df)
 
@@ -985,6 +1013,24 @@ def _refresh_listing_table(
     )
 
 
+def _schema_fingerprint(schema: pa.Schema | None) -> str | None:
+    if schema is None:
+        return None
+    return schema_fingerprint(schema)
+
+
+def _ddl_fingerprint(name: str, schema: pa.Schema | None) -> str | None:
+    if schema is None:
+        return None
+    return ddl_fingerprint_from_schema(name, schema)
+
+
+def _fingerprints_match(left: str | None, right: str | None) -> bool | None:
+    if left is None or right is None:
+        return None
+    return left == right
+
+
 def _record_delta_table_artifact(
     context: DataFusionRegistrationContext,
     *,
@@ -992,10 +1038,19 @@ def _record_delta_table_artifact(
     delta_version: int | None,
     delta_features: Mapping[str, str] | None,
     delta_protocol: Mapping[str, object] | None,
+    expected_schema: pa.Schema | None,
+    delta_schema: pa.Schema | None,
+    provider_schema: pa.Schema | None,
 ) -> None:
     profile = context.runtime_profile
     if profile is None or profile.diagnostics_sink is None:
         return
+    expected_fingerprint = _schema_fingerprint(expected_schema)
+    delta_fingerprint = _schema_fingerprint(delta_schema)
+    provider_fingerprint = _schema_fingerprint(provider_schema)
+    expected_ddl = _ddl_fingerprint(context.name, expected_schema)
+    delta_ddl = _ddl_fingerprint(context.name, delta_schema)
+    provider_ddl = _ddl_fingerprint(context.name, provider_schema)
     schema_payload = (
         schema_to_dict(context.options.schema) if context.options.schema is not None else None
     )
@@ -1009,6 +1064,18 @@ def _record_delta_table_artifact(
         "delta_features": dict(delta_features) if delta_features else None,
         "delta_protocol": dict(delta_protocol) if delta_protocol else None,
         "schema": schema_payload,
+        "expected_schema_fingerprint": expected_fingerprint,
+        "delta_schema_fingerprint": delta_fingerprint,
+        "provider_schema_fingerprint": provider_fingerprint,
+        "expected_ddl_fingerprint": expected_ddl,
+        "delta_ddl_fingerprint": delta_ddl,
+        "provider_ddl_fingerprint": provider_ddl,
+        "expected_matches_delta": _fingerprints_match(expected_fingerprint, delta_fingerprint),
+        "expected_matches_provider": _fingerprints_match(
+            expected_fingerprint,
+            provider_fingerprint,
+        ),
+        "delta_matches_provider": _fingerprints_match(delta_fingerprint, provider_fingerprint),
         "delta_scan": _delta_scan_payload(context.options.delta_scan),
         "read_options": dict(context.options.read_options),
         "storage_options": dict(context.location.storage_options)

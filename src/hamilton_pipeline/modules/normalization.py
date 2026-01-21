@@ -102,7 +102,6 @@ from relspec.rules.discovery import discover_bundles
 if TYPE_CHECKING:
     from relspec.rules.definitions import RuleDefinition
 
-SCHEMA_VERSION = 1
 DEFAULT_MATERIALIZE_OUTPUTS: tuple[str, ...] = ()
 
 QNAME_DIM_NAME = "dim_qualified_names_v1"

@@ -143,7 +143,9 @@ PROP_ENUMS: dict[str, tuple[str, ...]] = {
 
 PROP_SPECS: dict[str, PropSpec] = {
     "ambiguity_group_id": p_str(""),
+    "anchor_confidence": p_float(""),
     "anchor_kind": p_str(""),
+    "anchor_reason": p_str(""),
     "annotated_here": p_bool(""),
     "annotation_json": p_json(""),
     "annotation_repr": p_str(""),

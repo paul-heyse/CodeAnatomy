@@ -98,12 +98,8 @@ from relspec.rules.diagnostics import rule_diagnostics_from_table
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
 from relspec.rules.spec_tables import rule_definitions_from_table
 from relspec.runtime import RelspecRuntime
-from schema_spec.system import (
-    GLOBAL_SCHEMA_REGISTRY,
-    DatasetSpec,
-    dataset_spec_from_schema,
-    make_dataset_spec,
-)
+from schema_spec.catalog_registry import dataset_spec as catalog_spec
+from schema_spec.system import DatasetSpec, dataset_spec_from_schema, make_dataset_spec
 from sqlglot_tools.optimizer import sqlglot_policy_snapshot
 from storage.dataset_sources import (
     DatasetDiscoveryOptions,
@@ -268,10 +264,17 @@ def _default_delta_write_policy(spec: DatasetSpec | None) -> DeltaWritePolicy | 
 def _dataset_spec_for_name(name: str) -> DatasetSpec | None:
     if is_nested_dataset(name):
         return None
-    spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(name)
-    if spec is not None:
-        return spec
-    return GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(f"{name}_v1")
+    try:
+        return catalog_spec(name)
+    except KeyError:
+        return _dataset_spec_fallback(name)
+
+
+def _dataset_spec_fallback(name: str) -> DatasetSpec | None:
+    try:
+        return catalog_spec(f"{name}_v1")
+    except KeyError:
+        return None
 
 
 def _resolve_delta_write_context(

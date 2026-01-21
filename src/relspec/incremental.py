@@ -13,7 +13,8 @@ from normalize.op_specs import normalize_op_specs
 from normalize.registry_specs import dataset_name_from_alias
 from relspec.rules.cache import rule_definitions_cached
 from relspec.rules.definitions import RelationshipPayload, RuleDefinition
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, SchemaRegistry
+from schema_spec.catalog_registry import schema_registry as central_schema_registry
+from schema_spec.system import SchemaRegistry
 
 _FILE_ID_COLUMNS: tuple[str, ...] = ("edge_owner_file_id", "file_id")
 
@@ -128,7 +129,7 @@ def incremental_spec() -> RelspecIncrementalSpec:
         Cached incremental spec derived from the registry.
     """
     rules = rule_definitions_cached()
-    return build_incremental_spec(rules, registry=GLOBAL_SCHEMA_REGISTRY)
+    return build_incremental_spec(rules, registry=central_schema_registry())
 
 
 def _relationship_input_datasets(rules: Sequence[RuleDefinition]) -> set[str]:

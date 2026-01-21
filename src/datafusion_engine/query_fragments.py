@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from datafusion import SessionContext
+
 from datafusion_engine.schema_registry import nested_base_sql
+from schema_spec.view_specs import ViewSpec, view_spec_from_sql
 
 
 @dataclass(frozen=True)
@@ -893,6 +896,60 @@ def bytecode_errors_sql(table: str = "bytecode_files_v1") -> str:
     """
 
 
+type FragmentSqlBuilder = Callable[[], str]
+
+_FRAGMENT_SQL_BUILDERS: dict[str, FragmentSqlBuilder] = {
+    "cst_parse_manifest": libcst_parse_manifest_sql,
+    "cst_parse_errors": libcst_parse_errors_sql,
+    "cst_name_refs": libcst_name_refs_sql,
+    "cst_imports": libcst_imports_sql,
+    "cst_callsites": libcst_callsites_sql,
+    "cst_defs": libcst_defs_sql,
+    "cst_type_exprs": libcst_type_exprs_sql,
+    "ast_nodes": ast_nodes_sql,
+    "ast_edges": ast_edges_sql,
+    "ast_errors": ast_errors_sql,
+    "ts_nodes": tree_sitter_nodes_sql,
+    "ts_errors": tree_sitter_errors_sql,
+    "ts_missing": tree_sitter_missing_sql,
+    "symtable_scopes": symtable_scopes_sql,
+    "symtable_symbols": symtable_symbols_sql,
+    "symtable_scope_edges": symtable_scope_edges_sql,
+    "scip_metadata": scip_metadata_sql,
+    "scip_documents": scip_documents_sql,
+    "scip_occurrences": scip_occurrences_sql,
+    "scip_symbol_information": scip_symbol_information_sql,
+    "scip_external_symbol_information": scip_external_symbol_information_sql,
+    "scip_symbol_relationships": scip_symbol_relationships_sql,
+    "scip_diagnostics": scip_diagnostics_sql,
+    "py_bc_code_units": bytecode_code_units_sql,
+    "py_bc_instructions": bytecode_instructions_sql,
+    "bytecode_exception_table": bytecode_exception_table_sql,
+    "py_bc_blocks": bytecode_blocks_sql,
+    "py_bc_cfg_edges": bytecode_cfg_edges_sql,
+    "bytecode_errors": bytecode_errors_sql,
+}
+
+
+def fragment_view_specs(ctx: SessionContext) -> tuple[ViewSpec, ...]:
+    """Return ViewSpecs for SQL fragments using DataFusion schema inference.
+
+    Parameters
+    ----------
+    ctx:
+        DataFusion session context used to infer fragment schemas.
+
+    Returns
+    -------
+    tuple[ViewSpec, ...]
+        View specifications derived from fragment SQL.
+    """
+    return tuple(
+        view_spec_from_sql(ctx, name=name, sql=_FRAGMENT_SQL_BUILDERS[name]())
+        for name in sorted(_FRAGMENT_SQL_BUILDERS)
+    )
+
+
 __all__ = [
     "SqlFragment",
     "ast_edges_sql",
@@ -904,6 +961,7 @@ __all__ = [
     "bytecode_errors_sql",
     "bytecode_exception_table_sql",
     "bytecode_instructions_sql",
+    "fragment_view_specs",
     "libcst_callsites_sql",
     "libcst_defs_sql",
     "libcst_imports_sql",

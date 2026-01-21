@@ -13,7 +13,7 @@ from relspec.rules.validation import (
     SqlGlotRuleContext,
     rule_ir_metadata,
 )
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
+from schema_spec.catalog_registry import schema_registry
 
 
 def test_rule_ir_metadata_contains_decompile_and_sql() -> None:
@@ -39,7 +39,7 @@ def test_rule_ir_metadata_contains_decompile_and_sql() -> None:
     )
     diagnostics_ctx = SqlGlotDiagnosticsContext(
         backend=backend,
-        registry=GLOBAL_SCHEMA_REGISTRY,
+        registry=schema_registry(),
         ctx=ctx,
         param_specs={},
         param_policy=ParamTablePolicy(),
@@ -77,7 +77,7 @@ def test_rule_ir_metadata_is_stable() -> None:
     )
     diagnostics_ctx = SqlGlotDiagnosticsContext(
         backend=backend,
-        registry=GLOBAL_SCHEMA_REGISTRY,
+        registry=schema_registry(),
         ctx=ctx,
         param_specs={},
         param_policy=ParamTablePolicy(),

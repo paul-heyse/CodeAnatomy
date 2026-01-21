@@ -7,6 +7,15 @@ from typing import TYPE_CHECKING
 from incremental.registry_builders import build_dataset_spec
 from incremental.registry_rows import DATASET_ROWS, DatasetRow
 from registry_common.dataset_registry import DatasetAccessors, DatasetRegistry
+from schema_spec.catalog_registry import (
+    dataset_contract_spec as catalog_contract_spec,
+)
+from schema_spec.catalog_registry import (
+    dataset_schema as catalog_schema,
+)
+from schema_spec.catalog_registry import (
+    dataset_spec as catalog_spec,
+)
 
 if TYPE_CHECKING:
     from arrowdsl.core.interop import SchemaLike
@@ -35,7 +44,7 @@ def dataset_spec(name: str) -> DatasetSpec:
     DatasetSpec
         Dataset specification for the name.
     """
-    return _ACCESSORS.dataset_spec(name)
+    return catalog_spec(name)
 
 
 def dataset_schema(name: str) -> SchemaLike:
@@ -46,7 +55,7 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Arrow schema for the dataset.
     """
-    return _ACCESSORS.dataset_schema(name)
+    return catalog_schema(name)
 
 
 def dataset_contract_spec(name: str) -> ContractSpec:
@@ -57,7 +66,7 @@ def dataset_contract_spec(name: str) -> ContractSpec:
     ContractSpec
         Contract specification for the dataset.
     """
-    return _ACCESSORS.dataset_contract_spec(name)
+    return catalog_contract_spec(name)
 
 
 __all__ = [

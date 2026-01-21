@@ -253,6 +253,19 @@ class ExternalTableConfig:
 
 
 @dataclass(frozen=True)
+class ExternalTableConfigOverrides:
+    """Optional overrides for ExternalTableConfig generation."""
+
+    table_name: str | None = None
+    dialect: str | None = None
+    options: Mapping[str, object] | None = None
+    partitioned_by: Sequence[str] | None = None
+    file_sort_order: Sequence[str] | None = None
+    compression: str | None = None
+    unbounded: bool | None = None
+
+
+@dataclass(frozen=True)
 class TableSchemaSpec:
     """Specification for a table schema and associated constraints."""
 
@@ -406,6 +419,42 @@ class TableSchemaSpec:
         if options_clause:
             parts.append(options_clause)
         return "\n".join(parts)
+
+    @staticmethod
+    def external_table_config(
+        *,
+        location: str,
+        file_format: str,
+        overrides: ExternalTableConfigOverrides | None = None,
+    ) -> ExternalTableConfig:
+        """Return an ExternalTableConfig derived from this schema.
+
+        Parameters
+        ----------
+        location:
+            Dataset location for the external table.
+        file_format:
+            Storage format for the external table (e.g., parquet, csv).
+        overrides:
+            Optional overrides for table options and formatting.
+
+        Returns
+        -------
+        ExternalTableConfig
+            External table configuration for this schema.
+        """
+        resolved = overrides or ExternalTableConfigOverrides()
+        return ExternalTableConfig(
+            location=location,
+            file_format=file_format,
+            table_name=resolved.table_name,
+            dialect=resolved.dialect,
+            options=resolved.options,
+            partitioned_by=resolved.partitioned_by,
+            file_sort_order=resolved.file_sort_order,
+            compression=resolved.compression,
+            unbounded=bool(resolved.unbounded) if resolved.unbounded is not None else False,
+        )
 
     def to_transform(
         self,

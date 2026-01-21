@@ -16,14 +16,8 @@ from arrowdsl.schema.metadata import (
 )
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import EncodingPolicy, SchemaMetadataSpec
-from datafusion_engine.schema_registry import is_nested_dataset, nested_schema_for, schema_for
 from extract.evidence_specs import evidence_metadata_spec as extract_evidence_metadata_spec
-from extract.registry_builders import (
-    QueryContext,
-    build_dataset_spec,
-    build_query_spec,
-    build_row_schema,
-)
+from extract.registry_builders import QueryContext, build_query_spec, build_row_schema
 from extract.registry_pipelines import pipeline_spec
 from extract.registry_rows import DATASET_ROWS, DatasetRow
 from extract.registry_templates import config as extractor_config
@@ -32,6 +26,12 @@ from ibis_engine.query_compiler import IbisQuerySpec
 from relspec.extract.registry_policies import policy_row, template_policy_row
 from relspec.rules.definitions import RuleStage, stage_enabled
 from relspec.rules.options import RuleExecutionOptions
+from schema_spec.catalog_registry import (
+    dataset_schema as catalog_schema,
+)
+from schema_spec.catalog_registry import (
+    dataset_spec as catalog_spec,
+)
 from schema_spec.system import DatasetSpec
 
 if TYPE_CHECKING:
@@ -71,8 +71,7 @@ def dataset_spec(name: str) -> DatasetSpec:
     DatasetSpec
         Dataset specification for the name.
     """
-    row = dataset_row(name)
-    return build_dataset_spec(row)
+    return catalog_spec(name)
 
 
 @cache
@@ -84,12 +83,7 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Arrow schema for the dataset.
     """
-    if is_nested_dataset(name):
-        return nested_schema_for(name, allow_derived=True)
-    try:
-        return schema_for(name)
-    except KeyError:
-        return dataset_spec(name).schema()
+    return catalog_schema(name)
 
 
 @cache

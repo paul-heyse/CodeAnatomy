@@ -64,7 +64,7 @@ from incremental.scip_snapshot import (
 from incremental.snapshot import build_repo_snapshot, read_repo_snapshot, write_repo_snapshot
 from incremental.state_store import StateStore
 from incremental.types import IncrementalConfig, IncrementalFileChanges, IncrementalImpact
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
+from schema_spec.catalog_registry import schema_registry as central_schema_registry
 from storage.deltalake import DeltaCdfOptions, delta_table_version, read_delta_cdf, read_table_delta
 
 
@@ -131,7 +131,7 @@ def incremental_invalidation(
         return None
     return check_state_store_invalidation_with_diff(
         state_store=incremental_state_store,
-        registry=GLOBAL_SCHEMA_REGISTRY,
+        registry=central_schema_registry(),
     )
 
 

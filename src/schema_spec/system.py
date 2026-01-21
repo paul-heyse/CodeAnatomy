@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, TypedDict, Unpack, cast
 
 import ibis
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.dataset as ds
 import pyarrow.types as patypes
 from ibis.backends import BaseBackend
@@ -39,12 +40,17 @@ from arrowdsl.schema.schema import (
 )
 from arrowdsl.schema.validation import ArrowValidationOptions, validate_table
 from arrowdsl.spec.io import read_spec_table
-from datafusion_engine.schema_registry import is_nested_dataset
+from datafusion_engine.schema_registry import (
+    is_nested_dataset,
+    nested_dataset_names,
+    nested_view_spec,
+)
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisProjectionSpec, IbisQuerySpec
 from ibis_engine.scan_io import DatasetSource, PlanSource, plan_from_dataset, plan_from_source
+from schema_spec.dataset_handle import DatasetHandle
 from schema_spec.specs import (
     ENCODING_DICTIONARY,
     ENCODING_META,
@@ -66,6 +72,7 @@ if TYPE_CHECKING:
     from arrowdsl.spec.expr_ir import ExprIR
     from arrowdsl.spec.tables.schema import SchemaSpecTables
     from ibis_engine.execution import IbisExecutionContext
+    from schema_spec.view_specs import ViewSpec
 
 
 def validate_arrow_table(
@@ -147,12 +154,18 @@ class DataFusionScanOptions:
     partition_cols: tuple[tuple[str, pa.DataType], ...] = ()
     file_sort_order: tuple[str, ...] = ()
     parquet_pruning: bool = True
-    skip_metadata: bool = False
+    skip_metadata: bool = True
+    skip_arrow_metadata: bool | None = None
+    binary_as_string: bool | None = None
+    schema_force_view_types: bool | None = None
+    listing_table_factory_infer_partitions: bool | None = None
+    listing_table_ignore_subdirectory: bool | None = None
     file_extension: str | None = None
     cache: bool = False
     collect_statistics: bool | None = None
     meta_fetch_concurrency: int | None = None
     list_files_cache_ttl: str | None = None
+    list_files_cache_limit: str | None = None
     listing_mutable: bool = False
     unbounded: bool = False
 
@@ -180,6 +193,92 @@ def _ordering_metadata_spec(
     return None
 
 
+def _validate_view_specs(view_specs: Sequence[ViewSpec], *, label: str) -> None:
+    """Validate view spec invariants.
+
+    Raises
+    ------
+    ValueError
+        Raised when view specs are duplicated or unnamed.
+    """
+    names = [view.name for view in view_specs]
+    if not names:
+        return
+    if "" in names:
+        msg = f"{label} view_specs contain empty view names."
+        raise ValueError(msg)
+    duplicates = {name for name in names if names.count(name) > 1}
+    if duplicates:
+        msg = f"{label} view_specs contain duplicate names: {sorted(duplicates)}"
+        raise ValueError(msg)
+
+
+def _can_cast_type(actual: DataTypeLike, target: DataTypeLike) -> bool:
+    try:
+        pc.cast(pa.scalar(None, type=actual), target, safe=True)
+    except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pa.ArrowTypeError):
+        return False
+    return True
+
+
+def schema_evolution_compatible(
+    *,
+    expected: TableSchemaSpec,
+    actual: SchemaLike,
+    evolution_spec: SchemaEvolutionSpec,
+) -> bool:
+    """Return whether an actual schema is compatible with the expected spec.
+
+    Parameters
+    ----------
+    expected:
+        Expected table schema specification.
+    actual:
+        Actual Arrow schema discovered from the dataset.
+    evolution_spec:
+        Evolution rules to apply when comparing schemas.
+
+    Returns
+    -------
+    bool
+        True when the schemas are compatible under the evolution rules.
+    """
+    mapped_fields: list[pa.Field] = []
+    seen: set[str] = set()
+    for actual_field in actual:
+        name = evolution_spec.resolve_name(actual_field.name)
+        if name in seen:
+            return False
+        mapped_fields.append(
+            pa.field(
+                name,
+                actual_field.type,
+                actual_field.nullable,
+                metadata=actual_field.metadata,
+            )
+        )
+        seen.add(name)
+    mapped_schema = pa.schema(mapped_fields, metadata=actual.metadata)
+    actual_fields = {field.name: field for field in mapped_schema}
+    expected_names = [field.name for field in expected.fields]
+    if not evolution_spec.allow_extra:
+        extras = [name for name in actual_fields if name not in expected_names]
+        if extras:
+            return False
+    for field_spec in expected.fields:
+        actual_field = actual_fields.get(field_spec.name)
+        if actual_field is None:
+            if evolution_spec.allow_missing:
+                continue
+            return False
+        if actual_field.type == field_spec.dtype:
+            continue
+        if evolution_spec.allow_casts and _can_cast_type(actual_field.type, field_spec.dtype):
+            continue
+        return False
+    return True
+
+
 @dataclass(frozen=True)
 class ContractSpec:
     """Output contract specification."""
@@ -195,6 +294,7 @@ class ContractSpec:
     virtual_fields: tuple[str, ...] = ()
     virtual_field_docs: dict[str, str] | None = None
     validation: ArrowValidationOptions | None = None
+    view_specs: tuple[ViewSpec, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate contract spec invariants.
@@ -210,6 +310,7 @@ class ContractSpec:
         if missing:
             msg = f"virtual_field_docs keys missing in virtual_fields: {missing}"
             raise ValueError(msg)
+        _validate_view_specs(self.view_specs, label="contract")
 
     def to_contract(self) -> Contract:
         """Convert to a runtime Contract.
@@ -244,6 +345,7 @@ class DatasetSpec:
     table_spec: TableSchemaSpec
     contract_spec: ContractSpec | None = None
     query_spec: IbisQuerySpec | None = None
+    view_specs: tuple[ViewSpec, ...] = ()
     datafusion_scan: DataFusionScanOptions | None = None
     delta_scan: DeltaScanOptions | None = None
     delta_write_policy: DeltaWritePolicy | None = None
@@ -255,6 +357,10 @@ class DatasetSpec:
     evolution_spec: SchemaEvolutionSpec = field(default_factory=SchemaEvolutionSpec)
     metadata_spec: SchemaMetadataSpec = field(default_factory=SchemaMetadataSpec)
     validation: ArrowValidationOptions | None = None
+
+    def __post_init__(self) -> None:
+        """Validate dataset spec invariants."""
+        _validate_view_specs(self.view_specs, label="dataset")
 
     @property
     def name(self) -> str:
@@ -340,6 +446,41 @@ class DatasetSpec:
             Runtime contract instance.
         """
         return self.contract_spec_or_default().to_contract()
+
+    def to_handle(self) -> DatasetHandle:
+        """Return a DatasetHandle for this dataset spec.
+
+        Returns
+        -------
+        DatasetHandle
+            Dataset handle bound to this spec.
+        """
+        return DatasetHandle(spec=self)
+
+    def resolved_view_specs(self) -> tuple[ViewSpec, ...]:
+        """Return the merged view specs for this dataset.
+
+        Returns
+        -------
+        tuple[ViewSpec, ...]
+            View specs from both the dataset and its contract.
+        """
+        specs: list[ViewSpec] = []
+        seen: set[str] = set()
+        if self.contract_spec is not None:
+            for view in self.contract_spec.view_specs:
+                if view.name in seen:
+                    continue
+                specs.append(view)
+                seen.add(view.name)
+        for view in self.view_specs:
+            if view.name in seen:
+                continue
+            specs.append(view)
+            seen.add(view.name)
+        if not specs and is_nested_dataset(self.name):
+            return (nested_view_spec(self.name),)
+        return tuple(specs)
 
     def external_table_sql(self, config: ExternalTableConfig) -> str:
         """Return a CREATE EXTERNAL TABLE statement for this dataset.
@@ -697,6 +838,7 @@ class ContractSpecKwargs(TypedDict, total=False):
     virtual: VirtualFieldSpec | None
     version: int | None
     validation: ArrowValidationOptions | None
+    view_specs: Sequence[ViewSpec]
 
 
 class ContractKwargs(TypedDict):
@@ -721,6 +863,7 @@ class DatasetSpecKwargs(TypedDict, total=False):
 
     contract_spec: ContractSpec | None
     query_spec: IbisQuerySpec | None
+    view_specs: Sequence[ViewSpec]
     datafusion_scan: DataFusionScanOptions | None
     delta_scan: DeltaScanOptions | None
     delta_write_policy: DeltaWritePolicy | None
@@ -803,6 +946,7 @@ def make_contract_spec(
     virtual = kwargs.get("virtual")
     version = kwargs.get("version")
     validation = kwargs.get("validation")
+    view_specs = tuple(cast("Sequence[ViewSpec]", kwargs.get("view_specs", ())))
     virtual_fields = virtual.fields if virtual is not None else ()
     virtual_docs = dict(virtual.docs) if virtual is not None and virtual.docs is not None else None
     return ContractSpec(
@@ -815,6 +959,7 @@ def make_contract_spec(
         virtual_fields=virtual_fields,
         virtual_field_docs=virtual_docs,
         validation=validation,
+        view_specs=view_specs,
     )
 
 
@@ -830,36 +975,22 @@ def make_dataset_spec(
     DatasetSpec
         Dataset specification bundling schema, contract, and query behavior.
     """
-    contract_spec = kwargs.get("contract_spec")
-    query_spec = kwargs.get("query_spec")
-    datafusion_scan = kwargs.get("datafusion_scan")
-    delta_scan = kwargs.get("delta_scan")
-    delta_write_policy = kwargs.get("delta_write_policy")
-    delta_schema_policy = kwargs.get("delta_schema_policy")
-    delta_constraints = tuple(kwargs["delta_constraints"]) if "delta_constraints" in kwargs else ()
-    derived_fields = tuple(kwargs["derived_fields"]) if "derived_fields" in kwargs else ()
-    predicate = kwargs.get("predicate")
-    pushdown_predicate = kwargs.get("pushdown_predicate")
-    evolution_spec = kwargs.get("evolution_spec")
-    metadata_spec = kwargs.get("metadata_spec")
-    validation = kwargs.get("validation")
-    evolution = evolution_spec or SchemaEvolutionSpec()
-    metadata = metadata_spec or SchemaMetadataSpec()
     return DatasetSpec(
         table_spec=table_spec,
-        contract_spec=contract_spec,
-        query_spec=query_spec,
-        datafusion_scan=datafusion_scan,
-        delta_scan=delta_scan,
-        delta_write_policy=delta_write_policy,
-        delta_schema_policy=delta_schema_policy,
-        delta_constraints=delta_constraints,
-        derived_fields=derived_fields,
-        predicate=predicate,
-        pushdown_predicate=pushdown_predicate,
-        evolution_spec=evolution,
-        metadata_spec=metadata,
-        validation=validation,
+        contract_spec=kwargs.get("contract_spec"),
+        query_spec=kwargs.get("query_spec"),
+        view_specs=tuple(kwargs.get("view_specs", ())),
+        datafusion_scan=kwargs.get("datafusion_scan"),
+        delta_scan=kwargs.get("delta_scan"),
+        delta_write_policy=kwargs.get("delta_write_policy"),
+        delta_schema_policy=kwargs.get("delta_schema_policy"),
+        delta_constraints=tuple(kwargs.get("delta_constraints", ())),
+        derived_fields=tuple(kwargs.get("derived_fields", ())),
+        predicate=kwargs.get("predicate"),
+        pushdown_predicate=kwargs.get("pushdown_predicate"),
+        evolution_spec=kwargs.get("evolution_spec") or SchemaEvolutionSpec(),
+        metadata_spec=kwargs.get("metadata_spec") or SchemaMetadataSpec(),
+        validation=kwargs.get("validation"),
     )
 
 
@@ -1032,7 +1163,12 @@ def dataset_spec_from_schema(
     """
     table_spec = table_spec_from_schema(name, schema, version=version)
     metadata_spec = metadata_spec_from_schema(schema)
-    return make_dataset_spec(table_spec=table_spec, metadata_spec=metadata_spec)
+    evolution_spec = resolve_schema_evolution_spec(name)
+    return make_dataset_spec(
+        table_spec=table_spec,
+        metadata_spec=metadata_spec,
+        evolution_spec=evolution_spec,
+    )
 
 
 def dataset_spec_from_dataset(
@@ -1105,8 +1241,6 @@ class SchemaRegistry:
         DatasetSpec
             Registered dataset spec.
         """
-        if self is GLOBAL_SCHEMA_REGISTRY and is_nested_dataset(spec.name):
-            return spec
         existing = self.dataset_specs.get(spec.name)
         if existing is not None:
             return existing
@@ -1163,8 +1297,6 @@ class SchemaRegistry:
         )
         for spec in dataset_specs.values():
             self.register_dataset(spec)
-        if self is GLOBAL_SCHEMA_REGISTRY:
-            prune_nested_dataset_specs(self)
         return dataset_specs
 
     def register_from_paths(
@@ -1191,13 +1323,31 @@ class SchemaRegistry:
         return self.register_from_tables(tables)
 
 
-GLOBAL_SCHEMA_REGISTRY = SchemaRegistry()
+SCHEMA_EVOLUTION_PRESETS: Mapping[str, SchemaEvolutionSpec] = {
+    name: SchemaEvolutionSpec(
+        allow_missing=True,
+        allow_extra=True,
+        allow_casts=True,
+    )
+    for name in nested_dataset_names()
+}
+
+
+def resolve_schema_evolution_spec(name: str) -> SchemaEvolutionSpec:
+    """Return a canonical schema evolution spec for a dataset name.
+
+    Returns
+    -------
+    SchemaEvolutionSpec
+        Evolution rules for the dataset name.
+    """
+    return SCHEMA_EVOLUTION_PRESETS.get(name, SchemaEvolutionSpec())
 
 
 def register_dataset_spec(
     spec: DatasetSpec,
     *,
-    registry: SchemaRegistry | None = None,
+    registry: SchemaRegistry,
 ) -> DatasetSpec:
     """Register a dataset spec into the provided registry.
 
@@ -1206,8 +1356,7 @@ def register_dataset_spec(
     DatasetSpec
         Registered dataset specification.
     """
-    target = registry or GLOBAL_SCHEMA_REGISTRY
-    return target.register_dataset(spec)
+    return registry.register_dataset(spec)
 
 
 def prune_nested_dataset_specs(registry: SchemaRegistry) -> SchemaRegistry:
@@ -1269,7 +1418,7 @@ class ContractCatalogSpec:
 
 
 __all__ = [
-    "GLOBAL_SCHEMA_REGISTRY",
+    "SCHEMA_EVOLUTION_PRESETS",
     "ArrowValidationOptions",
     "ContractCatalogSpec",
     "ContractKwargs",
@@ -1299,6 +1448,8 @@ __all__ = [
     "make_table_spec",
     "prune_nested_dataset_specs",
     "register_dataset_spec",
+    "resolve_schema_evolution_spec",
+    "schema_evolution_compatible",
     "table_spec_from_schema",
     "validate_arrow_table",
 ]

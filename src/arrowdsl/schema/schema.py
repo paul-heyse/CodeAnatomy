@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol, TypedDict, cast
 
@@ -464,6 +464,10 @@ class SchemaEvolutionSpec:
     """Unify/cast/concat policy for evolving schemas."""
 
     promote_options: str = "permissive"
+    rename_map: Mapping[str, str] = field(default_factory=dict)
+    allow_missing: bool = False
+    allow_extra: bool = True
+    allow_casts: bool = True
 
     def unify_schema(self, tables: Sequence[TableLike]) -> SchemaLike:
         """Return a unified schema for the provided tables.
@@ -485,6 +489,16 @@ class SchemaEvolutionSpec:
             Unified schema for the schemas.
         """
         return unify_schemas_core(schemas, promote_options=self.promote_options)
+
+    def resolve_name(self, name: str) -> str:
+        """Return the logical name for a physical column.
+
+        Returns
+        -------
+        str
+            Logical column name after applying rename mapping.
+        """
+        return self.rename_map.get(name, name)
 
     def unify_and_cast(
         self,

@@ -50,7 +50,6 @@ if TYPE_CHECKING:
         scoped_relspec_resolver,
         upsert_relationship_outputs,
     )
-    from incremental.schemas import INCREMENTAL_SCHEMA_REGISTRY
     from incremental.scip_fingerprint import (
         read_scip_fingerprint,
         scip_fingerprint_changed,
@@ -70,7 +69,6 @@ if TYPE_CHECKING:
     from incremental.types import IncrementalConfig, IncrementalFileChanges, IncrementalImpact
 
 __all__ = [
-    "INCREMENTAL_SCHEMA_REGISTRY",
     "IncrementalConfig",
     "IncrementalFileChanges",
     "IncrementalImpact",
@@ -132,7 +130,6 @@ __all__ = [
 ]
 
 _LAZY_IMPORTS: dict[str, str] = {
-    "INCREMENTAL_SCHEMA_REGISTRY": "incremental.schemas",
     "IncrementalConfig": "incremental.types",
     "IncrementalFileChanges": "incremental.types",
     "IncrementalImpact": "incremental.types",

@@ -8,10 +8,18 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from datafusion_engine.schema_registry import is_nested_dataset, nested_schema_for, schema_for
 from ibis_engine.query_compiler import IbisQuerySpec
-from normalize.registry_builders import build_dataset_spec, build_input_schema
+from normalize.registry_builders import build_input_schema
 from normalize.registry_rows import DATASET_ROWS, DatasetRow
+from schema_spec.catalog_registry import (
+    dataset_contract_spec as catalog_contract_spec,
+)
+from schema_spec.catalog_registry import (
+    dataset_schema as catalog_schema,
+)
+from schema_spec.catalog_registry import (
+    dataset_spec as catalog_spec,
+)
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import ContractSpec, DatasetSpec
 
@@ -24,7 +32,6 @@ def _strip_version(name: str) -> str:
 
 
 _DATASET_ROWS: dict[str, DatasetRow] = {row.name: row for row in DATASET_ROWS}
-_DATASET_SPECS: dict[str, DatasetSpec] = {row.name: build_dataset_spec(row) for row in DATASET_ROWS}
 _INPUT_SCHEMAS: dict[str, SchemaLike] = {row.name: build_input_schema(row) for row in DATASET_ROWS}
 _ALIAS_OVERRIDES: dict[str, str] = {
     "py_bc_reaches_v1": "py_bc_reaching_defs",
@@ -127,7 +134,7 @@ def dataset_spec(name: str) -> DatasetSpec:
     DatasetSpec
         Registered dataset spec.
     """
-    return _DATASET_SPECS[name]
+    return catalog_spec(name)
 
 
 def dataset_specs() -> Iterable[DatasetSpec]:
@@ -138,7 +145,7 @@ def dataset_specs() -> Iterable[DatasetSpec]:
     Iterable[DatasetSpec]
         Dataset specifications.
     """
-    return _DATASET_SPECS.values()
+    return (catalog_spec(row.name) for row in DATASET_ROWS)
 
 
 def dataset_table_spec(name: str) -> TableSchemaSpec:
@@ -165,7 +172,7 @@ def dataset_contract(name: str) -> ContractSpec:
     ValueError
         Raised when the dataset does not define a contract spec.
     """
-    contract = dataset_spec(name).contract_spec
+    contract = catalog_contract_spec(name)
     if contract is None:
         msg = f"Dataset {name!r} does not define a contract spec."
         raise ValueError(msg)
@@ -202,12 +209,7 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Dataset schema with metadata.
     """
-    if is_nested_dataset(name):
-        return nested_schema_for(name, allow_derived=True)
-    try:
-        return schema_for(name)
-    except KeyError:
-        return dataset_spec(name).schema()
+    return catalog_schema(name)
 
 
 def dataset_metadata_spec(name: str) -> SchemaMetadataSpec:

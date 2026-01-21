@@ -6,7 +6,6 @@ from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_schema
 from cpg.registry_rows import SCHEMA_VERSION as _SCHEMA_VERSION
 from cpg.registry_specs import dataset_contract_spec, dataset_schema, dataset_spec
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, SchemaRegistry
 
 CPG_NODES_SPEC = dataset_spec("cpg_nodes_v1")
 CPG_EDGES_SPEC = dataset_spec("cpg_edges_v1")
@@ -36,26 +35,6 @@ CPG_PROPS_JSON_CONTRACT = CPG_PROPS_JSON_CONTRACT_SPEC.to_contract()
 CPG_PROPS_BY_FILE_ID_CONTRACT = CPG_PROPS_BY_FILE_ID_CONTRACT_SPEC.to_contract()
 CPG_PROPS_GLOBAL_CONTRACT = CPG_PROPS_GLOBAL_CONTRACT_SPEC.to_contract()
 SCHEMA_VERSION = _SCHEMA_VERSION
-
-
-def register_cpg_specs(registry: SchemaRegistry) -> SchemaRegistry:
-    """Register CPG table and contract specs into the registry.
-
-    Returns
-    -------
-    SchemaRegistry
-        Registry with CPG specs added.
-    """
-    registry.register_dataset(CPG_NODES_SPEC)
-    registry.register_dataset(CPG_EDGES_SPEC)
-    registry.register_dataset(CPG_PROPS_SPEC)
-    registry.register_dataset(CPG_PROPS_JSON_SPEC)
-    registry.register_dataset(CPG_PROPS_BY_FILE_ID_SPEC)
-    registry.register_dataset(CPG_PROPS_GLOBAL_SPEC)
-    return registry
-
-
-CPG_SCHEMA_REGISTRY = register_cpg_specs(GLOBAL_SCHEMA_REGISTRY)
 
 
 def empty_nodes() -> TableLike:

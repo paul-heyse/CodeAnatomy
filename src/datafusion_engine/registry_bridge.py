@@ -22,7 +22,7 @@ from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.serialization import schema_to_dict
 from core_types import ensure_path
 from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.schema_registry import SCHEMA_REGISTRY
+from datafusion_engine.schema_registry import SCHEMA_REGISTRY, is_nested_dataset
 from ibis_engine.registry import (
     DatasetLocation,
     IbisDatasetRegistry,
@@ -31,7 +31,7 @@ from ibis_engine.registry import (
     resolve_delta_scan_options,
 )
 from schema_spec.specs import ExternalTableConfig, TableSchemaSpec
-from schema_spec.system import DataFusionScanOptions, DeltaScanOptions
+from schema_spec.system import DataFusionScanOptions, DeltaScanOptions, ddl_fingerprint_from_schema
 from sqlglot_tools.optimizer import (
     SqlGlotSurface,
     register_datafusion_dialect,
@@ -44,7 +44,7 @@ _REGISTERED_OBJECT_STORES: dict[int, set[str]] = {}
 _CACHED_DATASETS: dict[int, set[str]] = {}
 _REGISTERED_CATALOGS: dict[int, set[str]] = {}
 _REGISTERED_SCHEMAS: dict[int, set[tuple[str, str]]] = {}
-_INPUT_PLUGIN_PREFIXES = ("artifact://", "dataset://")
+_INPUT_PLUGIN_PREFIXES = ("artifact://", "dataset://", "repo://")
 
 try:
     from datafusion.input.base import BaseInputSource as _BaseInputSource
@@ -354,6 +354,17 @@ def _merge_external_table_options(
     return merged
 
 
+def _scan_external_table_options(
+    scan: DataFusionScanOptions | None,
+) -> Mapping[str, object] | None:
+    if scan is None:
+        return None
+    options: dict[str, object] = {"skip_metadata": scan.skip_metadata}
+    if scan.schema_force_view_types is not None:
+        options["schema_force_view_types"] = scan.schema_force_view_types
+    return options
+
+
 def _external_table_options(
     read_options: Mapping[str, object],
 ) -> tuple[Mapping[str, object], str | None]:
@@ -364,6 +375,36 @@ def _external_table_options(
             compression = str(options.pop(key))
             break
     return options, compression
+
+
+def _expected_schema_fingerprint(*, location: DatasetLocation) -> str | None:
+    table_spec = location.table_spec
+    if table_spec is None and location.dataset_spec is not None:
+        table_spec = location.dataset_spec.table_spec
+    if table_spec is None:
+        return None
+    return table_spec.ddl_fingerprint()
+
+
+def _enforce_schema_handshake(
+    *,
+    ctx: SessionContext,
+    name: str,
+    location: DatasetLocation,
+) -> None:
+    if is_nested_dataset(name):
+        return
+    expected = _expected_schema_fingerprint(location=location)
+    if expected is None:
+        return
+    actual_schema = ctx.table(name).schema()
+    actual = ddl_fingerprint_from_schema(name, actual_schema)
+    if actual == expected:
+        return
+    msg = (
+        f"Dataset schema fingerprint mismatch for {name!r}: expected {expected}, observed {actual}."
+    )
+    raise ValueError(msg)
 
 
 def register_dataset_df(
@@ -409,6 +450,7 @@ def register_dataset_df(
             name=name,
             location=location,
             runtime_profile=runtime_profile,
+            options_override=_scan_external_table_options(options.scan),
         ),
         runtime_profile=runtime_profile,
     )
@@ -430,6 +472,7 @@ def register_dataset_df(
     else:
         msg = f"Unsupported DataFusion dataset format: {location.format!r}."
         raise ValueError(msg)
+    _enforce_schema_handshake(ctx=ctx, name=name, location=location)
     return df
 
 
@@ -462,6 +505,12 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
     use_listing = context.options.provider == "listing"
     if use_listing:
         _apply_scan_settings(context.ctx, scan=scan)
+        if skip_metadata is not None:
+            _set_runtime_setting(
+                context.ctx,
+                key="datafusion.execution.parquet.skip_metadata",
+                value=str(skip_metadata).lower(),
+            )
 
         def _register_listing() -> None:
             _call_register(
@@ -490,6 +539,12 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
         )
     else:
         _apply_scan_settings(context.ctx, scan=scan)
+        if skip_metadata is not None:
+            _set_runtime_setting(
+                context.ctx,
+                key="datafusion.execution.parquet.skip_metadata",
+                value=str(skip_metadata).lower(),
+            )
         _call_register(
             context.ctx.register_parquet,
             context.name,
@@ -652,7 +707,20 @@ def _register_delta(context: DataFusionRegistrationContext) -> DataFrame:
     delta_features = _delta_feature_payload(table)
     delta_protocol = _delta_protocol_payload(table)
     provider = "table"
-    if context.location.files:
+    delta_provider = None
+    if not context.location.files:
+        delta_provider = _delta_table_provider(table, delta_scan=context.options.delta_scan)
+    if delta_provider is not None:
+        context.ctx.register_table(context.name, delta_provider)
+        provider = "table_provider"
+        _record_table_provider_artifact(
+            context.runtime_profile,
+            name=context.name,
+            provider=delta_provider,
+            provider_kind=provider,
+            source=table,
+        )
+    elif context.location.files:
         dataset = _delta_dataset_from_files(context)
         context.ctx.register_table(context.name, dataset)
         provider = "dataset_files"
@@ -675,39 +743,27 @@ def _register_delta(context: DataFusionRegistrationContext) -> DataFrame:
             source=table,
         )
     else:
-        delta_provider = _delta_table_provider(table, delta_scan=context.options.delta_scan)
-        if delta_provider is not None:
-            context.ctx.register_table(context.name, delta_provider)
-            provider = "table_provider"
+        try:
+            context.ctx.register_table(context.name, table)
+        except TypeError:
+            dataset = _delta_dataset_from_table(context, table)
+            context.ctx.register_table(context.name, dataset)
+            provider = "dataset"
             _record_table_provider_artifact(
                 context.runtime_profile,
                 name=context.name,
-                provider=delta_provider,
+                provider=dataset,
                 provider_kind=provider,
                 source=table,
             )
         else:
-            try:
-                context.ctx.register_table(context.name, table)
-            except TypeError:
-                dataset = _delta_dataset_from_table(context, table)
-                context.ctx.register_table(context.name, dataset)
-                provider = "dataset"
-                _record_table_provider_artifact(
-                    context.runtime_profile,
-                    name=context.name,
-                    provider=dataset,
-                    provider_kind=provider,
-                    source=table,
-                )
-            else:
-                _record_table_provider_artifact(
-                    context.runtime_profile,
-                    name=context.name,
-                    provider=table,
-                    provider_kind=provider,
-                    source=table,
-                )
+            _record_table_provider_artifact(
+                context.runtime_profile,
+                name=context.name,
+                provider=table,
+                provider_kind=provider,
+                source=table,
+            )
     df = context.ctx.table(context.name)
     if context.location.delta_version is not None:
         delta_version = context.location.delta_version
@@ -749,9 +805,19 @@ def _record_listing_table_artifact(
         "file_sort_order": list(scan.file_sort_order) if scan is not None else None,
         "parquet_pruning": scan.parquet_pruning if scan is not None else None,
         "skip_metadata": skip_metadata,
+        "skip_arrow_metadata": scan.skip_arrow_metadata if scan is not None else None,
+        "binary_as_string": scan.binary_as_string if scan is not None else None,
+        "schema_force_view_types": scan.schema_force_view_types if scan is not None else None,
         "collect_statistics": scan.collect_statistics if scan is not None else None,
         "meta_fetch_concurrency": scan.meta_fetch_concurrency if scan is not None else None,
+        "list_files_cache_limit": scan.list_files_cache_limit if scan is not None else None,
         "list_files_cache_ttl": scan.list_files_cache_ttl if scan is not None else None,
+        "listing_table_factory_infer_partitions": (
+            scan.listing_table_factory_infer_partitions if scan is not None else None
+        ),
+        "listing_table_ignore_subdirectory": (
+            scan.listing_table_ignore_subdirectory if scan is not None else None
+        ),
         "listing_mutable": scan.listing_mutable if scan is not None else None,
         "unbounded": scan.unbounded if scan is not None else None,
         "schema": schema_payload,
@@ -764,24 +830,39 @@ def _apply_scan_settings(ctx: SessionContext, *, scan: DataFusionScanOptions | N
     """Apply per-table DataFusion scan settings via SET statements."""
     if scan is None:
         return
-    if scan.collect_statistics is not None:
-        _set_runtime_setting(
-            ctx,
-            key="datafusion.execution.collect_statistics",
-            value=str(scan.collect_statistics).lower(),
-        )
-    if scan.meta_fetch_concurrency is not None:
-        _set_runtime_setting(
-            ctx,
-            key="datafusion.execution.meta_fetch_concurrency",
-            value=str(scan.meta_fetch_concurrency),
-        )
-    if scan.list_files_cache_ttl is not None:
-        _set_runtime_setting(
-            ctx,
-            key="datafusion.runtime.list_files_cache_ttl",
-            value=str(scan.list_files_cache_ttl),
-        )
+    settings: Sequence[tuple[str, object | None, bool]] = (
+        ("datafusion.execution.collect_statistics", scan.collect_statistics, True),
+        ("datafusion.execution.meta_fetch_concurrency", scan.meta_fetch_concurrency, False),
+        ("datafusion.runtime.list_files_cache_limit", scan.list_files_cache_limit, False),
+        ("datafusion.runtime.list_files_cache_ttl", scan.list_files_cache_ttl, False),
+        (
+            "datafusion.execution.listing_table_factory_infer_partitions",
+            scan.listing_table_factory_infer_partitions,
+            True,
+        ),
+        (
+            "datafusion.execution.listing_table_ignore_subdirectory",
+            scan.listing_table_ignore_subdirectory,
+            True,
+        ),
+        (
+            "datafusion.execution.parquet.skip_arrow_metadata",
+            scan.skip_arrow_metadata,
+            True,
+        ),
+        ("datafusion.execution.parquet.binary_as_string", scan.binary_as_string, True),
+        (
+            "datafusion.execution.parquet.schema_force_view_types",
+            scan.schema_force_view_types,
+            True,
+        ),
+        ("datafusion.execution.parquet.skip_metadata", scan.skip_metadata, True),
+    )
+    for key, value, lower in settings:
+        if value is None:
+            continue
+        text = str(value).lower() if lower else str(value)
+        _set_runtime_setting(ctx, key=key, value=text)
 
 
 def _set_runtime_setting(ctx: SessionContext, *, key: str, value: str) -> None:

@@ -25,7 +25,8 @@ from relspec.rules.validation import (
     rule_sqlglot_diagnostics,
     validate_rule_definitions,
 )
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, SchemaRegistry
+from schema_spec.catalog_registry import schema_registry as central_schema_registry
+from schema_spec.system import SchemaRegistry
 
 if TYPE_CHECKING:
     from engine.session import EngineSession
@@ -192,7 +193,7 @@ class RuleRegistry:
         return self.config or RelspecConfig()
 
     def _resolved_schema_registry(self) -> SchemaRegistry:
-        return self.schema_registry or GLOBAL_SCHEMA_REGISTRY
+        return self.schema_registry or central_schema_registry()
 
     def rule_diagnostics_table(self) -> pa.Table:
         """Return a diagnostics table for rule validation.

@@ -244,7 +244,7 @@ def register_dataset(
     registry: SchemaRegistry | None = None,
     **table_kwargs: Unpack[TableSpecInputKwargs],
 ) -> DatasetSpec:
-    """Register a dataset spec with the global schema registry.
+    """Register a dataset spec with the provided schema registry.
 
     Returns
     -------
@@ -285,6 +285,8 @@ def register_dataset(
         metadata_spec=registration.metadata_spec,
         validation=registration.validation,
     )
+    if registry is None:
+        return spec
     return register_dataset_spec(spec, registry=registry)
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -24,17 +25,24 @@ from datafusion_engine.compile_options import (
 )
 from datafusion_engine.expr_planner import expr_planner_payloads, install_expr_planners
 from datafusion_engine.function_factory import function_factory_payloads, install_function_factory
+from datafusion_engine.query_fragments import fragment_view_specs
+from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_registry import (
+    is_nested_dataset,
     missing_schema_names,
     nested_schema_names,
+    nested_view_specs,
     register_all_schemas,
+    register_schema,
     schema_names,
     validate_nested_types,
 )
 from datafusion_engine.udf_registry import DataFusionUdfSnapshot, register_datafusion_udfs
 from engine.plan_cache import PlanCache
 from registry_common.arrow_payloads import payload_hash
+from schema_spec.catalog_registry import dataset_spec_catalog
 from schema_spec.policies import DataFusionWritePolicy
+from schema_spec.view_specs import ViewSpec
 
 if TYPE_CHECKING:
     from ibis.expr.types import Value as IbisValue
@@ -310,6 +318,54 @@ class DataFusionSettingsContract:
 
 
 @dataclass(frozen=True)
+class SchemaHardeningProfile:
+    """Schema-stability settings for DataFusion SessionConfig."""
+
+    enable_view_types: bool = False
+    expand_views_at_output: bool = False
+    timezone: str = "UTC"
+    show_schema_in_explain: bool = True
+    show_types_in_format: bool = True
+    strict_aggregate_schema_check: bool = True
+
+    def settings(self) -> dict[str, str]:
+        """Return DataFusion settings for schema hardening.
+
+        Returns
+        -------
+        dict[str, str]
+            Mapping of DataFusion config keys to string values.
+        """
+        return {
+            "datafusion.explain.show_schema": str(self.show_schema_in_explain).lower(),
+            "datafusion.format.types_info": str(self.show_types_in_format).lower(),
+            "datafusion.execution.time_zone": str(self.timezone),
+            "datafusion.execution.skip_physical_aggregate_schema_check": str(
+                not self.strict_aggregate_schema_check
+            ).lower(),
+            "datafusion.sql_parser.map_string_types_to_utf8view": str(
+                self.enable_view_types
+            ).lower(),
+            "datafusion.execution.parquet.schema_force_view_types": str(
+                self.enable_view_types
+            ).lower(),
+            "datafusion.optimizer.expand_views_at_output": str(self.expand_views_at_output).lower(),
+        }
+
+    def apply(self, config: SessionConfig) -> SessionConfig:
+        """Return SessionConfig with schema hardening settings applied.
+
+        Returns
+        -------
+        datafusion.SessionConfig
+            Updated session config with schema hardening settings.
+        """
+        for key, value in self.settings().items():
+            config = config.set(key, value)
+        return config
+
+
+@dataclass(frozen=True)
 class FeatureStateSnapshot:
     """Snapshot of runtime feature gates and determinism tier."""
 
@@ -557,6 +613,11 @@ DATAFUSION_POLICY_PRESETS: Mapping[str, DataFusionConfigPolicy] = {
     "prod": PROD_DF_POLICY,
 }
 
+SCHEMA_HARDENING_PRESETS: Mapping[str, SchemaHardeningProfile] = {
+    "schema_hardening": SchemaHardeningProfile(),
+    "arrow_performance": SchemaHardeningProfile(enable_view_types=True),
+}
+
 _SESSION_CONTEXT_CACHE: dict[str, SessionContext] = {}
 
 
@@ -573,6 +634,87 @@ def snapshot_plans(df: DataFrame) -> dict[str, object]:
         "optimized": df.optimized_logical_plan(),
         "physical": df.execution_plan(),
     }
+
+
+def register_view_specs(
+    ctx: SessionContext,
+    *,
+    views: Sequence[ViewSpec],
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+    validate: bool = True,
+) -> None:
+    """Register view specs and optionally record their definitions.
+
+    Parameters
+    ----------
+    ctx:
+        DataFusion session context used for registration.
+    views:
+        View specifications to register.
+    runtime_profile:
+        Optional runtime profile for recording view definitions.
+    validate:
+        Whether to validate view schemas after registration.
+    """
+    record_view = None
+    if runtime_profile is not None:
+        profile = runtime_profile
+
+        def _record_view(name: str, sql: str | None) -> None:
+            profile.record_view_definition(name=name, sql=sql)
+
+        record_view = _record_view
+    for view in views:
+        view.register(
+            ctx,
+            record_view=record_view,
+            validate=validate,
+        )
+
+
+def _register_dataset_spec_catalog(
+    ctx: SessionContext,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> None:
+    """Register dataset specs and view specs on the session context."""
+    catalog = dataset_spec_catalog()
+    view_specs: list[ViewSpec] = []
+    seen_views: set[str] = set()
+    for spec in catalog.dataset_specs():
+        if is_nested_dataset(spec.name):
+            continue
+        schema = catalog.dataset_schema_pyarrow(spec.name)
+        register_schema(ctx, spec.name, schema)
+        for view in spec.resolved_view_specs():
+            if view.name in seen_views:
+                continue
+            view_specs.append(view)
+            seen_views.add(view.name)
+    if view_specs:
+        register_view_specs(
+            ctx,
+            views=tuple(view_specs),
+            runtime_profile=runtime_profile,
+            validate=True,
+        )
+    fragment_views = tuple(view for view in fragment_view_specs(ctx) if view.name not in seen_views)
+    if fragment_views:
+        register_view_specs(
+            ctx,
+            views=fragment_views,
+            runtime_profile=runtime_profile,
+            validate=True,
+        )
+        seen_views.update(view.name for view in fragment_views)
+    nested_views = tuple(view for view in nested_view_specs() if view.name not in seen_views)
+    if nested_views:
+        register_view_specs(
+            ctx,
+            views=nested_views,
+            runtime_profile=runtime_profile,
+            validate=True,
+        )
 
 
 def _apply_config_int(
@@ -621,6 +763,15 @@ def _apply_settings_overrides(
     return config
 
 
+def _apply_schema_hardening(
+    config: SessionConfig,
+    schema_hardening: SchemaHardeningProfile | None,
+) -> SessionConfig:
+    if schema_hardening is None:
+        return config
+    return schema_hardening.apply(config)
+
+
 def _apply_feature_settings(
     config: SessionConfig,
     feature_gates: DataFusionFeatureGates | None,
@@ -636,6 +787,60 @@ def _apply_feature_settings(
                 continue
             raise
     return config
+
+
+def _load_schema_evolution_adapter_factory() -> object:
+    """Return a schema evolution adapter factory from the native extension.
+
+    Returns
+    -------
+    object
+        Adapter factory instance exposed by the native extension.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the native extension is missing.
+    TypeError
+        Raised when the adapter factory is not callable.
+    """
+    try:
+        module = importlib.import_module("datafusion_ext")
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        msg = "Schema evolution adapter requires datafusion_ext."
+        raise RuntimeError(msg) from exc
+    factory = getattr(module, "schema_evolution_adapter_factory", None)
+    if not callable(factory):
+        msg = "Schema evolution adapter factory is not available in datafusion_ext."
+        raise TypeError(msg)
+    return factory()
+
+
+def _install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
+    """Install the schema evolution adapter factory via the native extension.
+
+    Parameters
+    ----------
+    ctx:
+        DataFusion session context to update.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the native extension is missing.
+    TypeError
+        Raised when the native installer is not callable.
+    """
+    try:
+        module = importlib.import_module("datafusion_ext")
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        msg = "Schema evolution adapter requires datafusion_ext."
+        raise RuntimeError(msg) from exc
+    installer = getattr(module, "install_schema_evolution_adapter_factory", None)
+    if not callable(installer):
+        msg = "Schema evolution adapter installer is not available in datafusion_ext."
+        raise TypeError(msg)
+    installer(ctx)
 
 
 def _apply_join_settings(
@@ -1105,6 +1310,8 @@ class DataFusionRuntimeProfile:
     enable_expr_planners: bool = False
     expr_planner_names: tuple[str, ...] = ()
     expr_planner_hook: Callable[[SessionContext], None] | None = None
+    physical_expr_adapter_factory: object | None = None
+    enable_schema_evolution_adapter: bool = False
     enable_udfs: bool = True
     enable_delta_plan_codecs: bool = False
     delta_plan_codec_physical: str = "delta_physical"
@@ -1137,6 +1344,8 @@ class DataFusionRuntimeProfile:
     prepared_statements: tuple[PreparedStatementSpec, ...] = ()
     config_policy_name: str | None = "default"
     config_policy: DataFusionConfigPolicy | None = None
+    schema_hardening_name: str | None = "schema_hardening"
+    schema_hardening: SchemaHardeningProfile | None = None
     sql_policy_name: str | None = "read_only"
     sql_policy: DataFusionSqlPolicy | None = None
     param_identifier_allowlist: tuple[str, ...] = ()
@@ -1180,6 +1389,7 @@ class DataFusionRuntimeProfile:
             value=self.batch_size,
         )
         config = _apply_config_policy(config, self._resolved_config_policy())
+        config = _apply_schema_hardening(config, self._resolved_schema_hardening())
         config = _apply_settings_overrides(config, self.settings_overrides)
         config = _apply_feature_settings(config, self.feature_gates)
         config = _apply_join_settings(config, self.join_policy)
@@ -1251,6 +1461,7 @@ class DataFusionRuntimeProfile:
         self.ensure_delta_plan_codecs(ctx)
         self._install_function_factory(ctx)
         self._install_expr_planners(ctx)
+        self._install_physical_expr_adapter_factory(ctx)
         self._install_tracing()
         if self.session_context_hook is not None:
             ctx = self.session_context_hook(ctx)
@@ -1288,7 +1499,9 @@ class DataFusionRuntimeProfile:
             return
         if not self.enable_information_schema:
             return
-        missing = missing_schema_names(ctx, expected=schema_names())
+        expected_names = set(schema_names())
+        expected_names.update(dataset_spec_catalog().dataset_names())
+        missing = missing_schema_names(ctx, expected=tuple(sorted(expected_names)))
         type_errors: dict[str, str] = {}
         for name in nested_schema_names():
             try:
@@ -1306,12 +1519,38 @@ class DataFusionRuntimeProfile:
             },
         )
 
+    def _record_schema_snapshots(self, ctx: SessionContext) -> None:
+        if self.diagnostics_sink is None:
+            return
+        if not self.enable_information_schema:
+            return
+        introspector = self.schema_introspector(ctx)
+        payload: dict[str, object] = {
+            "event_time_unix_ms": int(time.time() * 1000),
+        }
+        try:
+            payload.update(
+                {
+                    "tables": introspector.tables_snapshot(),
+                    "columns": introspector.columns_snapshot(),
+                    "settings": introspector.settings_snapshot(),
+                }
+            )
+        except (RuntimeError, TypeError, ValueError) as exc:
+            payload["error"] = str(exc)
+        self.diagnostics_sink.record_artifact(
+            "datafusion_schema_introspection_v1",
+            payload,
+        )
+
     def _install_schema_registry(self, ctx: SessionContext) -> None:
         """Register canonical nested schemas on the session context."""
         if not self.enable_schema_registry:
             return
         register_all_schemas(ctx)
+        _register_dataset_spec_catalog(ctx, runtime_profile=self)
         self._record_schema_registry_validation(ctx)
+        self._record_schema_snapshots(ctx)
 
     def _prepare_statements(self, ctx: SessionContext) -> None:
         """Prepare SQL statements when configured."""
@@ -1457,6 +1696,30 @@ class DataFusionRuntimeProfile:
         if error is not None:
             msg = "ExprPlanner installation failed; native extension is required."
             raise RuntimeError(msg) from cause
+
+    def _install_physical_expr_adapter_factory(self, ctx: SessionContext) -> None:
+        """Install a physical expression adapter factory when available.
+
+        Raises
+        ------
+        TypeError
+            Raised when the SessionContext cannot accept the factory.
+        """
+        factory = self.physical_expr_adapter_factory
+        uses_default_adapter = False
+        if factory is None and self.enable_schema_evolution_adapter:
+            factory = _load_schema_evolution_adapter_factory()
+            uses_default_adapter = True
+        if factory is None:
+            return
+        register = getattr(ctx, "register_physical_expr_adapter_factory", None)
+        if not callable(register):
+            if uses_default_adapter:
+                _install_schema_evolution_adapter_factory(ctx)
+                return
+            msg = "SessionContext does not expose physical expr adapter registration."
+            raise TypeError(msg)
+        register(factory)
 
     def _record_expr_planners(
         self,
@@ -1711,6 +1974,17 @@ class DataFusionRuntimeProfile:
         return self.view_registry.snapshot()
 
     @staticmethod
+    def schema_introspector(ctx: SessionContext) -> SchemaIntrospector:
+        """Return a schema introspector for the session.
+
+        Returns
+        -------
+        SchemaIntrospector
+            Introspector bound to the provided SessionContext.
+        """
+        return SchemaIntrospector(ctx)
+
+    @staticmethod
     def settings_snapshot(ctx: SessionContext) -> pa.Table:
         """Return a snapshot of DataFusion settings when information_schema is enabled.
 
@@ -1775,6 +2049,9 @@ class DataFusionRuntimeProfile:
         payload: dict[str, str] = (
             dict(resolved_policy.settings) if resolved_policy is not None else {}
         )
+        resolved_schema_hardening = self._resolved_schema_hardening()
+        if resolved_schema_hardening is not None:
+            payload.update(resolved_schema_hardening.settings())
         if self.settings_overrides:
             payload.update({str(key): str(value) for key, value in self.settings_overrides.items()})
         payload.update(self.feature_gates.settings())
@@ -1826,6 +2103,7 @@ class DataFusionRuntimeProfile:
             "expr_planners_enabled": self.enable_expr_planners,
             "expr_planner_hook": bool(self.expr_planner_hook),
             "expr_planner_names": list(self.expr_planner_names),
+            "physical_expr_adapter_factory": bool(self.physical_expr_adapter_factory),
             "delta_plan_codecs_enabled": self.enable_delta_plan_codecs,
             "delta_plan_codec_physical": self.delta_plan_codec_physical,
             "delta_plan_codec_logical": self.delta_plan_codec_logical,
@@ -1852,6 +2130,7 @@ class DataFusionRuntimeProfile:
             "runtime_env_hook": bool(self.runtime_env_hook),
             "session_context_hook": bool(self.session_context_hook),
             "config_policy_name": self.config_policy_name,
+            "schema_hardening_name": self.schema_hardening_name,
             "config_policy": dict(resolved_policy.settings)
             if resolved_policy is not None
             else None,
@@ -1894,6 +2173,7 @@ class DataFusionRuntimeProfile:
         return {
             "version": 1,
             "profile_name": self.config_policy_name,
+            "schema_hardening_name": self.schema_hardening_name,
             "sql_policy_name": self.sql_policy_name,
             "session_config": dict(settings),
             "settings_hash": self.settings_hash(),
@@ -1938,6 +2218,8 @@ class DataFusionRuntimeProfile:
                 "delta_plan_codec_logical": self.delta_plan_codec_logical,
                 "expr_planners_enabled": self.enable_expr_planners,
                 "expr_planner_names": list(self.expr_planner_names),
+                "physical_expr_adapter_factory": bool(self.physical_expr_adapter_factory),
+                "schema_evolution_adapter_enabled": self.enable_schema_evolution_adapter,
                 "named_args_supported": self.named_args_supported(),
                 "distributed": self.distributed,
                 "distributed_context_factory": bool(self.distributed_context_factory),
@@ -1990,6 +2272,16 @@ class DataFusionRuntimeProfile:
         if self.config_policy_name is None:
             return DEFAULT_DF_POLICY
         return DATAFUSION_POLICY_PRESETS.get(self.config_policy_name, DEFAULT_DF_POLICY)
+
+    def _resolved_schema_hardening(self) -> SchemaHardeningProfile | None:
+        if self.schema_hardening is not None:
+            return self.schema_hardening
+        if self.schema_hardening_name is None:
+            return None
+        return SCHEMA_HARDENING_PRESETS.get(
+            self.schema_hardening_name,
+            SCHEMA_HARDENING_PRESETS["schema_hardening"],
+        )
 
     def _telemetry_payload_row(self) -> dict[str, object]:
         settings = self.settings_payload()
@@ -2170,6 +2462,7 @@ __all__ = [
     "DEFAULT_DF_POLICY",
     "DEV_DF_POLICY",
     "PROD_DF_POLICY",
+    "SCHEMA_HARDENING_PRESETS",
     "AdapterExecutionPolicy",
     "DataFusionConfigPolicy",
     "DataFusionExplainCollector",
@@ -2183,9 +2476,11 @@ __all__ = [
     "FeatureStateSnapshot",
     "MemoryPool",
     "PreparedStatementSpec",
+    "SchemaHardeningProfile",
     "apply_execution_label",
     "apply_execution_policy",
     "diagnostics_arrow_ingest_hook",
     "feature_state_snapshot",
+    "register_view_specs",
     "snapshot_plans",
 ]

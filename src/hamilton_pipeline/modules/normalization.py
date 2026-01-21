@@ -95,8 +95,10 @@ from normalize.spans import (
 from relspec.pipeline_policy import PipelinePolicy
 from relspec.registry.rules import RuleRegistry
 from relspec.rules.discovery import discover_bundles
-from schema_spec.specs import ArrowFieldSpec, call_span_bundle
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, make_dataset_spec, make_table_spec
+from schema_spec.normalize_derived_specs import (
+    callsite_qname_candidates_spec,
+    qname_dim_spec,
+)
 
 if TYPE_CHECKING:
     from relspec.rules.definitions import RuleDefinition
@@ -104,36 +106,8 @@ if TYPE_CHECKING:
 SCHEMA_VERSION = 1
 DEFAULT_MATERIALIZE_OUTPUTS: tuple[str, ...] = ()
 
-QNAME_DIM_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="dim_qualified_names_v1",
-            version=SCHEMA_VERSION,
-            bundles=(),
-            fields=[
-                ArrowFieldSpec(name="qname_id", dtype=pa.string()),
-                ArrowFieldSpec(name="qname", dtype=pa.string()),
-            ],
-        )
-    )
-)
-
-CALLSITE_QNAME_CANDIDATES_SPEC = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-    make_dataset_spec(
-        table_spec=make_table_spec(
-            name="callsite_qname_candidates_v1",
-            version=SCHEMA_VERSION,
-            bundles=(),
-            fields=[
-                ArrowFieldSpec(name="call_id", dtype=pa.string()),
-                ArrowFieldSpec(name="qname", dtype=pa.string()),
-                ArrowFieldSpec(name="path", dtype=pa.string()),
-                *call_span_bundle().fields,
-                ArrowFieldSpec(name="qname_source", dtype=pa.string()),
-            ],
-        )
-    )
-)
+QNAME_DIM_SPEC = qname_dim_spec()
+CALLSITE_QNAME_CANDIDATES_SPEC = callsite_qname_candidates_spec()
 
 
 def _string_or_null(values: ArrayLike | ChunkedArrayLike) -> ArrayLike:

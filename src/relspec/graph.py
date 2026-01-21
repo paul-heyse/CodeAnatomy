@@ -26,7 +26,7 @@ from relspec.model import EvidenceSpec as RelationshipEvidenceSpec
 from relspec.model import RelationshipRule
 from relspec.rules.definitions import EvidenceSpec as RuleEvidenceSpec
 from relspec.rules.evidence import EvidenceCatalog
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
+from schema_spec.catalog_registry import dataset_spec as catalog_spec
 
 RULE_GRAPH_SIGNATURE_VERSION = 1
 _RULE_GRAPH_RULE_SCHEMA = pa.struct(
@@ -446,7 +446,10 @@ def _virtual_output_schema(rule: RelationshipRule) -> SchemaLike | None:
         Schema for the rule output when available.
     """
     if rule.contract_name:
-        dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(rule.contract_name)
+        try:
+            dataset_spec = catalog_spec(rule.contract_name)
+        except KeyError:
+            dataset_spec = None
         if dataset_spec is not None:
             return dataset_spec.schema()
         if rule.contract_name == RELATION_OUTPUT_NAME:

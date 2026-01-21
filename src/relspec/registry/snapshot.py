@@ -17,7 +17,7 @@ from relspec.rules.definitions import RuleDefinition
 from relspec.rules.handlers.cpg import relationship_rule_from_definition
 from relspec.rules.rel_ops import rel_ops_signature
 from relspec.rules.spec_tables import rule_definition_table
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
+from schema_spec.catalog_registry import schema_registry as central_schema_registry
 
 
 @dataclass(frozen=True)
@@ -91,7 +91,7 @@ def _incremental_spec(
     *,
     rules: tuple[RuleDefinition, ...],
 ) -> RelspecIncrementalSpec:
-    schema_registry = registry.schema_registry or GLOBAL_SCHEMA_REGISTRY
+    schema_registry = registry.schema_registry or central_schema_registry()
     return build_incremental_spec(rules, registry=schema_registry)
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from incremental.registry_rows import DATASET_ROWS
 from incremental.registry_specs import dataset_spec
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, SchemaRegistry
+from schema_spec.system import SchemaRegistry
 
 
 def register_incremental_specs(registry: SchemaRegistry) -> SchemaRegistry:
@@ -20,7 +20,4 @@ def register_incremental_specs(registry: SchemaRegistry) -> SchemaRegistry:
     return registry
 
 
-INCREMENTAL_SCHEMA_REGISTRY = register_incremental_specs(GLOBAL_SCHEMA_REGISTRY)
-
-
-__all__ = ["INCREMENTAL_SCHEMA_REGISTRY", "register_incremental_specs"]
+__all__ = ["register_incremental_specs"]

@@ -70,7 +70,8 @@ from relspec.rules.rel_ops import (
     query_spec_from_rel_ops,
     rel_ops_signature,
 )
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, SchemaRegistry, table_spec_from_schema
+from schema_spec.catalog_registry import schema_registry as central_schema_registry
+from schema_spec.system import SchemaRegistry, table_spec_from_schema
 from sqlglot_tools.bridge import (
     IbisCompilerBackend,
     SqlGlotDiagnostics,
@@ -414,7 +415,7 @@ def build_sqlglot_context(
     else:
         msg = "SQLGlot diagnostics require an EngineSession or compiler backend."
         raise ValueError(msg)
-    registry = config.registry or GLOBAL_SCHEMA_REGISTRY
+    registry = config.registry or central_schema_registry()
     ctx = config.ctx or (config.engine_session.ctx if config.engine_session is not None else None)
     if ctx is None:
         msg = "SQLGlot diagnostics require an execution context."

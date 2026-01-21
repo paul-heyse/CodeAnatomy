@@ -10,13 +10,7 @@ from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.metadata import merge_metadata_specs, ordering_metadata_spec
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from schema_spec.system import (
-    GLOBAL_SCHEMA_REGISTRY,
-    Contract,
-    DatasetSpec,
-    dataset_spec_from_schema,
-    register_dataset_spec,
-)
+from schema_spec.system import Contract, DatasetSpec, dataset_spec_from_schema
 
 RELATION_OUTPUT_NAME = "relation_output_v1"
 
@@ -68,11 +62,7 @@ def relation_output_spec() -> DatasetSpec:
     DatasetSpec
         Dataset specification for relationship outputs.
     """
-    existing = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(RELATION_OUTPUT_NAME)
-    if existing is not None:
-        return existing
-    spec = dataset_spec_from_schema(RELATION_OUTPUT_NAME, RELATION_OUTPUT_SCHEMA, version=1)
-    return register_dataset_spec(spec)
+    return dataset_spec_from_schema(RELATION_OUTPUT_NAME, RELATION_OUTPUT_SCHEMA, version=1)
 
 
 def relation_output_schema() -> SchemaLike:

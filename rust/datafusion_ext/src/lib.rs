@@ -1,6 +1,7 @@
 //! DataFusion extension for native function registration.
 
 use std::any::Any;
+use std::ffi::CString;
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -16,10 +17,17 @@ use arrow::array::{
     StructArray,
 };
 use arrow::datatypes::DataType;
+use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::StreamReader;
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
+use datafusion::catalog::{CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider};
 use datafusion::execution::context::SessionContext;
+use datafusion::physical_expr_adapter::{
+    DefaultPhysicalExprAdapterFactory,
+    PhysicalExprAdapter,
+    PhysicalExprAdapterFactory,
+};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
     ColumnarValue,
@@ -32,7 +40,7 @@ use datafusion_expr::{
 use datafusion_python::context::PySessionContext;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
+use pyo3::types::{PyBytes, PyCapsule};
 
 const ENC_UTF8: i32 = 1;
 const ENC_UTF16: i32 = 2;
@@ -63,6 +71,20 @@ struct FunctionFactoryPolicy {
 }
 
 const POLICY_SCHEMA_VERSION: i32 = 1;
+
+#[derive(Debug, Default)]
+struct SchemaEvolutionAdapterFactory;
+
+impl PhysicalExprAdapterFactory for SchemaEvolutionAdapterFactory {
+    fn create(
+        &self,
+        logical_file_schema: SchemaRef,
+        physical_file_schema: SchemaRef,
+    ) -> Arc<dyn PhysicalExprAdapter> {
+        DefaultPhysicalExprAdapterFactory
+            .create(logical_file_schema, physical_file_schema)
+    }
+}
 
 fn policy_from_ipc(payload: &[u8]) -> Result<FunctionFactoryPolicy> {
     let mut reader = StreamReader::try_new(Cursor::new(payload), None).map_err(|err| {
@@ -278,6 +300,45 @@ fn install_function_factory(ctx: PyRef<PySessionContext>, policy_ipc: &PyBytes) 
     register_primitives(&ctx.ctx, &policy)
         .map_err(|err| PyRuntimeError::new_err(format!("FunctionFactory install failed: {err}")))?;
     Ok(())
+}
+
+#[pyfunction]
+fn schema_evolution_adapter_factory(py: Python<'_>) -> PyResult<PyObject> {
+    let factory: Arc<dyn PhysicalExprAdapterFactory> =
+        Arc::new(SchemaEvolutionAdapterFactory::default());
+    let name = CString::new("datafusion_ext.SchemaEvolutionAdapterFactory")
+        .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
+    let capsule = PyCapsule::new(py, factory, Some(name))?;
+    Ok(capsule.into_py(py))
+}
+
+#[pyfunction]
+fn install_schema_evolution_adapter_factory(ctx: PyRef<PySessionContext>) -> PyResult<()> {
+    let factory: Arc<dyn PhysicalExprAdapterFactory> =
+        Arc::new(SchemaEvolutionAdapterFactory::default());
+    ctx.ctx
+        .register_physical_expr_adapter_factory(factory)
+        .map_err(|err| {
+            PyRuntimeError::new_err(format!(
+                "Schema evolution adapter factory registration failed: {err}"
+            ))
+        })?;
+    Ok(())
+}
+
+#[pyfunction]
+fn registry_catalog_provider_factory(py: Python<'_>, schema_name: Option<String>) -> PyResult<PyObject> {
+    let schema_name = schema_name.unwrap_or_else(|| "public".to_string());
+    let schema_provider: Arc<dyn SchemaProvider> = Arc::new(MemorySchemaProvider::new());
+    let catalog = Arc::new(MemoryCatalogProvider::new());
+    catalog
+        .register_schema(schema_name, schema_provider)
+        .map_err(|err| PyRuntimeError::new_err(format!("Catalog registration failed: {err}")))?;
+    let provider: Arc<dyn CatalogProvider> = catalog;
+    let name = CString::new("datafusion_ext.RegistryCatalogProviderFactory")
+        .map_err(|err| PyValueError::new_err(format!("Invalid capsule name: {err}")))?;
+    let capsule = PyCapsule::new(py, provider, Some(name))?;
+    Ok(capsule.into_py(py))
 }
 
 fn register_primitives(ctx: &SessionContext, policy: &FunctionFactoryPolicy) -> Result<()> {
@@ -671,5 +732,8 @@ impl ScalarUDFImpl for ColToByteUdf {
 #[pymodule]
 fn datafusion_ext(_py: Python<'_>, module: &PyModule) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(install_function_factory, module)?)?;
+    module.add_function(wrap_pyfunction!(schema_evolution_adapter_factory, module)?)?;
+    module.add_function(wrap_pyfunction!(install_schema_evolution_adapter_factory, module)?)?;
+    module.add_function(wrap_pyfunction!(registry_catalog_provider_factory, module)?)?;
     Ok(())
 }

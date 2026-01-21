@@ -18,7 +18,6 @@ from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.schema.schema import align_table, empty_table
 from cpg.constants import CpgBuildArtifacts
-from cpg.schemas import register_cpg_specs
 from datafusion_engine.nested_tables import materialize_sql_fragment, register_nested_table
 from datafusion_engine.query_fragments import (
     SqlFragment,
@@ -113,21 +112,22 @@ from relspec.rules.handlers import default_rule_handlers
 from relspec.rules.validation import SqlGlotDiagnosticsConfig, rule_dependency_reports
 from relspec.runtime import RelspecRuntime, RelspecRuntimeOptions, compose_relspec
 from relspec.validate import validate_registry
-from schema_spec.specs import ArrowFieldSpec, TableSchemaSpec, call_span_bundle, span_bundle
+from schema_spec.catalog_registry import (
+    dataset_spec as catalog_spec,
+)
+from schema_spec.catalog_registry import (
+    schema_registry as central_schema_registry,
+)
+from schema_spec.relationship_specs import (
+    relationship_contract_spec as build_relationship_contract_spec,
+)
+from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import (
-    GLOBAL_SCHEMA_REGISTRY,
     ContractCatalogSpec,
     DataFusionScanOptions,
     DatasetSpec,
-    DedupeSpecSpec,
     SchemaRegistry,
-    SortKeySpec,
-    TableSpecConstraints,
-    VirtualFieldSpec,
-    make_contract_spec,
     make_dataset_spec,
-    make_table_spec,
-    prune_nested_dataset_specs,
     table_spec_from_schema,
 )
 from sqlglot_tools.bridge import IbisCompilerBackend
@@ -145,7 +145,6 @@ if TYPE_CHECKING:
 # Relationship contracts
 # -----------------------------
 
-SCHEMA_VERSION = 1
 _HOT_DATAFUSION_INPUTS = frozenset(
     {
         "callsite_qname_candidates",
@@ -333,218 +332,14 @@ def relationship_contract_spec() -> ContractCatalogSpec:
     ContractCatalogSpec
         Contract catalog specification for relationship outputs.
     """
-    rel_name_symbol_spec = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-        make_dataset_spec(
-            table_spec=make_table_spec(
-                name="rel_name_symbol_v1",
-                version=SCHEMA_VERSION,
-                bundles=(span_bundle(),),
-                fields=[
-                    ArrowFieldSpec(name="name_ref_id", dtype=pa.string()),
-                    ArrowFieldSpec(name="symbol", dtype=pa.string()),
-                    ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
-                    ArrowFieldSpec(name="path", dtype=pa.string()),
-                    ArrowFieldSpec(name="edge_owner_file_id", dtype=pa.string()),
-                    ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
-                    ArrowFieldSpec(name="confidence", dtype=pa.float32()),
-                    ArrowFieldSpec(name="score", dtype=pa.float32()),
-                    ArrowFieldSpec(name="rule_name", dtype=pa.string()),
-                    ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
-                ],
-                constraints=TableSpecConstraints(required_non_null=("name_ref_id", "symbol")),
-            )
-        )
-    )
+    return build_relationship_contract_spec()
 
-    rel_import_symbol_spec = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-        make_dataset_spec(
-            table_spec=make_table_spec(
-                name="rel_import_symbol_v1",
-                version=SCHEMA_VERSION,
-                bundles=(span_bundle(),),
-                fields=[
-                    ArrowFieldSpec(name="import_alias_id", dtype=pa.string()),
-                    ArrowFieldSpec(name="symbol", dtype=pa.string()),
-                    ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
-                    ArrowFieldSpec(name="path", dtype=pa.string()),
-                    ArrowFieldSpec(name="edge_owner_file_id", dtype=pa.string()),
-                    ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
-                    ArrowFieldSpec(name="confidence", dtype=pa.float32()),
-                    ArrowFieldSpec(name="score", dtype=pa.float32()),
-                    ArrowFieldSpec(name="rule_name", dtype=pa.string()),
-                    ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
-                ],
-                constraints=TableSpecConstraints(required_non_null=("import_alias_id", "symbol")),
-            )
-        )
-    )
 
-    rel_def_symbol_spec = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-        make_dataset_spec(
-            table_spec=make_table_spec(
-                name="rel_def_symbol_v1",
-                version=SCHEMA_VERSION,
-                bundles=(span_bundle(),),
-                fields=[
-                    ArrowFieldSpec(name="def_id", dtype=pa.string()),
-                    ArrowFieldSpec(name="symbol", dtype=pa.string()),
-                    ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
-                    ArrowFieldSpec(name="path", dtype=pa.string()),
-                    ArrowFieldSpec(name="edge_owner_file_id", dtype=pa.string()),
-                    ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
-                    ArrowFieldSpec(name="confidence", dtype=pa.float32()),
-                    ArrowFieldSpec(name="score", dtype=pa.float32()),
-                    ArrowFieldSpec(name="rule_name", dtype=pa.string()),
-                    ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
-                ],
-                constraints=TableSpecConstraints(required_non_null=("def_id", "symbol")),
-            )
-        )
-    )
-
-    rel_callsite_symbol_spec = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-        make_dataset_spec(
-            table_spec=make_table_spec(
-                name="rel_callsite_symbol_v1",
-                version=SCHEMA_VERSION,
-                bundles=(),
-                fields=[
-                    ArrowFieldSpec(name="call_id", dtype=pa.string()),
-                    ArrowFieldSpec(name="symbol", dtype=pa.string()),
-                    ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
-                    ArrowFieldSpec(name="path", dtype=pa.string()),
-                    ArrowFieldSpec(name="edge_owner_file_id", dtype=pa.string()),
-                    *call_span_bundle().fields,
-                    ArrowFieldSpec(name="resolution_method", dtype=pa.string()),
-                    ArrowFieldSpec(name="confidence", dtype=pa.float32()),
-                    ArrowFieldSpec(name="score", dtype=pa.float32()),
-                    ArrowFieldSpec(name="rule_name", dtype=pa.string()),
-                    ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
-                ],
-                constraints=TableSpecConstraints(required_non_null=("call_id", "symbol")),
-            )
-        )
-    )
-
-    rel_callsite_qname_spec = GLOBAL_SCHEMA_REGISTRY.register_dataset(
-        make_dataset_spec(
-            table_spec=make_table_spec(
-                name="rel_callsite_qname_v1",
-                version=SCHEMA_VERSION,
-                bundles=(),
-                fields=[
-                    ArrowFieldSpec(name="call_id", dtype=pa.string()),
-                    ArrowFieldSpec(name="qname_id", dtype=pa.string()),
-                    ArrowFieldSpec(name="qname_source", dtype=pa.string()),
-                    ArrowFieldSpec(name="path", dtype=pa.string()),
-                    ArrowFieldSpec(name="edge_owner_file_id", dtype=pa.string()),
-                    *call_span_bundle().fields,
-                    ArrowFieldSpec(name="confidence", dtype=pa.float32()),
-                    ArrowFieldSpec(name="score", dtype=pa.float32()),
-                    ArrowFieldSpec(name="ambiguity_group_id", dtype=pa.string()),
-                    ArrowFieldSpec(name="rule_name", dtype=pa.string()),
-                    ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
-                ],
-                constraints=TableSpecConstraints(required_non_null=("call_id", "qname_id")),
-            )
-        )
-    )
-
-    return ContractCatalogSpec(
-        contracts={
-            "rel_name_symbol_v1": make_contract_spec(
-                table_spec=rel_name_symbol_spec.table_spec,
-                virtual=VirtualFieldSpec(fields=("origin",)),
-                dedupe=DedupeSpecSpec(
-                    keys=("name_ref_id", "symbol", "path", "bstart", "bend"),
-                    tie_breakers=(
-                        SortKeySpec(column="score", order="descending"),
-                        SortKeySpec(column="confidence", order="descending"),
-                        SortKeySpec(column="rule_priority", order="ascending"),
-                    ),
-                    strategy="KEEP_FIRST_AFTER_SORT",
-                ),
-                canonical_sort=(
-                    SortKeySpec(column="path", order="ascending"),
-                    SortKeySpec(column="bstart", order="ascending"),
-                    SortKeySpec(column="name_ref_id", order="ascending"),
-                ),
-                version=SCHEMA_VERSION,
-            ),
-            "rel_import_symbol_v1": make_contract_spec(
-                table_spec=rel_import_symbol_spec.table_spec,
-                virtual=VirtualFieldSpec(fields=("origin",)),
-                dedupe=DedupeSpecSpec(
-                    keys=("import_alias_id", "symbol", "path", "bstart", "bend"),
-                    tie_breakers=(
-                        SortKeySpec(column="score", order="descending"),
-                        SortKeySpec(column="rule_priority", order="ascending"),
-                    ),
-                    strategy="KEEP_FIRST_AFTER_SORT",
-                ),
-                canonical_sort=(
-                    SortKeySpec(column="path", order="ascending"),
-                    SortKeySpec(column="bstart", order="ascending"),
-                    SortKeySpec(column="import_alias_id", order="ascending"),
-                ),
-                version=SCHEMA_VERSION,
-            ),
-            "rel_def_symbol_v1": make_contract_spec(
-                table_spec=rel_def_symbol_spec.table_spec,
-                virtual=VirtualFieldSpec(fields=("origin",)),
-                dedupe=DedupeSpecSpec(
-                    keys=("def_id", "symbol", "path", "bstart", "bend"),
-                    tie_breakers=(
-                        SortKeySpec(column="score", order="descending"),
-                        SortKeySpec(column="confidence", order="descending"),
-                        SortKeySpec(column="rule_priority", order="ascending"),
-                    ),
-                    strategy="KEEP_FIRST_AFTER_SORT",
-                ),
-                canonical_sort=(
-                    SortKeySpec(column="path", order="ascending"),
-                    SortKeySpec(column="bstart", order="ascending"),
-                    SortKeySpec(column="def_id", order="ascending"),
-                ),
-                version=SCHEMA_VERSION,
-            ),
-            "rel_callsite_symbol_v1": make_contract_spec(
-                table_spec=rel_callsite_symbol_spec.table_spec,
-                virtual=VirtualFieldSpec(fields=("origin",)),
-                dedupe=DedupeSpecSpec(
-                    keys=("call_id", "symbol", "path", "call_bstart", "call_bend"),
-                    tie_breakers=(
-                        SortKeySpec(column="score", order="descending"),
-                        SortKeySpec(column="rule_priority", order="ascending"),
-                    ),
-                    strategy="KEEP_FIRST_AFTER_SORT",
-                ),
-                canonical_sort=(
-                    SortKeySpec(column="path", order="ascending"),
-                    SortKeySpec(column="call_bstart", order="ascending"),
-                    SortKeySpec(column="call_id", order="ascending"),
-                ),
-                version=SCHEMA_VERSION,
-            ),
-            "rel_callsite_qname_v1": make_contract_spec(
-                table_spec=rel_callsite_qname_spec.table_spec,
-                virtual=VirtualFieldSpec(fields=("origin",)),
-                dedupe=DedupeSpecSpec(
-                    keys=("call_id", "qname_id"),
-                    tie_breakers=(
-                        SortKeySpec(column="score", order="descending"),
-                        SortKeySpec(column="rule_priority", order="ascending"),
-                    ),
-                    strategy="KEEP_FIRST_AFTER_SORT",
-                ),
-                canonical_sort=(
-                    SortKeySpec(column="call_id", order="ascending"),
-                    SortKeySpec(column="qname_id", order="ascending"),
-                ),
-                version=SCHEMA_VERSION,
-            ),
-        }
-    )
+def _catalog_spec_for(name: str) -> DatasetSpec | None:
+    try:
+        return catalog_spec(name)
+    except KeyError:
+        return None
 
 
 @tag(layer="relspec", artifact="relationship_contracts", kind="catalog")
@@ -574,11 +369,8 @@ def schema_registry(
     SchemaRegistry
         Registry containing table and contract specs.
     """
-    registry = GLOBAL_SCHEMA_REGISTRY
-    register_cpg_specs(registry)
-    registry = relationship_contract_spec.register_into(registry)
-    prune_nested_dataset_specs(registry)
-    return registry
+    _ = relationship_contract_spec
+    return central_schema_registry()
 
 
 # -----------------------------
@@ -690,7 +482,7 @@ def relspec_param_dependency_reports(
         rules,
         config=SqlGlotDiagnosticsConfig(
             backend=cast("IbisCompilerBackend", engine_session.ibis_backend),
-            registry=GLOBAL_SCHEMA_REGISTRY,
+            registry=central_schema_registry(),
             ctx=engine_session.ctx,
             param_table_specs=param_table_specs,
             param_table_policy=param_table_policy,
@@ -1194,9 +986,7 @@ def persist_relspec_input_datasets(
 
     # Write as Delta tables for durable filesystem-backed resolvers.
     schemas = {name: table.schema for name, table in relspec_input_datasets.items()}
-    dataset_specs = {
-        name: GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(name) for name in relspec_input_datasets
-    }
+    dataset_specs = {name: _catalog_spec_for(name) for name in relspec_input_datasets}
     encoding_policies = {}
     for name, table in relspec_input_datasets.items():
         spec = dataset_specs.get(name)
@@ -1227,7 +1017,7 @@ def persist_relspec_input_datasets(
     for name, result in results.items():
         table = relspec_input_datasets.get(name)
         table_spec = table_spec_from_schema(name, table.schema) if table is not None else None
-        dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(name)
+        dataset_spec = _catalog_spec_for(name)
         if dataset_spec is None and table_spec is not None:
             dataset_spec = make_dataset_spec(table_spec=table_spec)
         out[name] = DatasetLocation(
@@ -1339,11 +1129,11 @@ def _relationship_rule_schema(
         return None
     if contracts is not None:
         contract = contracts.get(rule.contract_name)
-        dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(contract.name)
+        dataset_spec = _catalog_spec_for(contract.name)
         if dataset_spec is not None:
             return dataset_spec.schema()
         return contract.schema
-    dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(rule.contract_name)
+    dataset_spec = _catalog_spec_for(rule.contract_name)
     if dataset_spec is not None:
         return dataset_spec.schema()
     return None

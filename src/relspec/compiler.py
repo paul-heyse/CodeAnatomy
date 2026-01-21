@@ -78,7 +78,8 @@ from relspec.policies import (
 )
 from relspec.registry import ContractCatalog, DatasetCatalog
 from relspec.rules.exec_events import RuleExecutionObserver, rule_execution_event_from_table
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY, dataset_spec_from_contract
+from schema_spec.catalog_registry import dataset_spec as catalog_spec
+from schema_spec.system import dataset_spec_from_contract
 from sqlglot_tools.bridge import IbisCompilerBackend
 
 PlanTransform = Callable[[IbisTable, ExecutionContext], IbisTable]
@@ -805,7 +806,10 @@ def _schema_for_contract(contract: Contract) -> SchemaLike:
     SchemaLike
         Schema for the contract.
     """
-    dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(contract.name)
+    try:
+        dataset_spec = catalog_spec(contract.name)
+    except KeyError:
+        dataset_spec = None
     if dataset_spec is not None:
         return dataset_spec.schema()
     return contract.schema
@@ -834,7 +838,10 @@ def _schema_for_rule(
         return None
     if contracts is not None:
         return _schema_for_contract(contracts.get(rule.contract_name))
-    dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(rule.contract_name)
+    try:
+        dataset_spec = catalog_spec(rule.contract_name)
+    except KeyError:
+        dataset_spec = None
     if dataset_spec is not None:
         return dataset_spec.schema()
     return None
@@ -1848,8 +1855,9 @@ def _finalize_output_tables(
         return result
 
     contract = contracts.get(contract_name)
-    dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(contract.name)
-    if dataset_spec is None:
+    try:
+        dataset_spec = catalog_spec(contract.name)
+    except KeyError:
         dataset_spec = dataset_spec_from_contract(contract)
     unioned = dataset_spec.unify_tables(table_parts, ctx=ctx)
     result = dataset_spec.finalize_context(ctx).run(unioned, ctx=ctx)

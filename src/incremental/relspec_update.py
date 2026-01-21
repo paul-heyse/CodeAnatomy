@@ -32,7 +32,7 @@ from incremental.types import IncrementalFileChanges, IncrementalImpact
 from normalize.registry_specs import dataset_name_from_alias
 from relspec.engine import PlanResolver
 from relspec.incremental import RelspecIncrementalSpec, incremental_spec
-from schema_spec.system import GLOBAL_SCHEMA_REGISTRY
+from schema_spec.catalog_registry import dataset_spec as catalog_spec
 from storage.dataset_sources import (
     DatasetDiscoveryOptions,
     DatasetSourceOptions,
@@ -250,7 +250,10 @@ def _read_state_dataset(
     ctx: ExecutionContext,
     file_ids: Sequence[str],
 ) -> TableLike:
-    dataset_spec = GLOBAL_SCHEMA_REGISTRY.dataset_specs.get(dataset_name)
+    try:
+        dataset_spec = catalog_spec(dataset_name)
+    except KeyError:
+        dataset_spec = None
     schema = dataset_spec.schema() if dataset_spec is not None else None
     dataset = unwrap_dataset(
         normalize_dataset_source(

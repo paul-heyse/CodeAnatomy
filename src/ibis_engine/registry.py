@@ -25,12 +25,18 @@ from schema_spec.system import (
     DeltaScanOptions,
     DeltaSchemaPolicy,
     DeltaWritePolicy,
+    ddl_fingerprint_from_schema,
 )
 
 try:
     from datafusion_engine.registry_bridge import register_dataset_df
 except ImportError:  # pragma: no cover - optional dependency
     register_dataset_df = None
+
+try:
+    from datafusion_engine.catalog_provider import register_registry_catalog
+except ImportError:  # pragma: no cover - optional dependency
+    register_registry_catalog = None
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -41,6 +47,7 @@ type DataFusionProvider = Literal["dataset", "listing", "parquet"]
 
 _REGISTERED_CATALOGS: dict[int, set[str]] = {}
 _REGISTERED_SCHEMAS: dict[int, set[tuple[str, str]]] = {}
+_REGISTERED_REGISTRY_CATALOGS: dict[int, set[str]] = {}
 
 
 class FilesystemBackend(Protocol):
@@ -183,8 +190,21 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "file_sort_order": list(loc.datafusion_scan.file_sort_order),
                 "parquet_pruning": loc.datafusion_scan.parquet_pruning,
                 "skip_metadata": loc.datafusion_scan.skip_metadata,
+                "skip_arrow_metadata": loc.datafusion_scan.skip_arrow_metadata,
+                "binary_as_string": loc.datafusion_scan.binary_as_string,
+                "schema_force_view_types": loc.datafusion_scan.schema_force_view_types,
+                "listing_table_factory_infer_partitions": (
+                    loc.datafusion_scan.listing_table_factory_infer_partitions
+                ),
+                "listing_table_ignore_subdirectory": (
+                    loc.datafusion_scan.listing_table_ignore_subdirectory
+                ),
                 "file_extension": loc.datafusion_scan.file_extension,
                 "cache": loc.datafusion_scan.cache,
+                "collect_statistics": loc.datafusion_scan.collect_statistics,
+                "meta_fetch_concurrency": loc.datafusion_scan.meta_fetch_concurrency,
+                "list_files_cache_ttl": loc.datafusion_scan.list_files_cache_ttl,
+                "list_files_cache_limit": loc.datafusion_scan.list_files_cache_limit,
                 "unbounded": loc.datafusion_scan.unbounded,
             }
         delta_scan = None
@@ -230,6 +250,9 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
                 "delta_version": loc.delta_version,
                 "delta_timestamp": loc.delta_timestamp,
                 "scan": scan,
+                "ddl_fingerprint": (
+                    ddl_fingerprint_from_schema(name, schema) if schema is not None else None
+                ),
                 "schema_fingerprint": schema_fingerprint(schema) if schema is not None else None,
                 "schema": schema_to_dict(schema) if schema is not None else None,
             }
@@ -493,6 +516,43 @@ def _ensure_backend_catalog_schema(
         schemas.add((catalog, schema))
 
 
+def _ensure_registry_catalog_provider(
+    ctx: object,
+    *,
+    registry: IbisDatasetRegistry,
+    catalog_name: str,
+    schema_name: str,
+) -> None:
+    """Register a registry-backed catalog provider once per SessionContext.
+
+    Parameters
+    ----------
+    ctx:
+        DataFusion session context used for catalog registration.
+    registry:
+        Dataset registry that backs the catalog provider.
+    catalog_name:
+        Catalog name to register.
+    schema_name:
+        Schema name to expose from the catalog provider.
+    """
+    if register_registry_catalog is None or SessionContext is None:
+        return
+    if not isinstance(ctx, SessionContext):
+        return
+    ctx_id = id(ctx)
+    registered = _REGISTERED_REGISTRY_CATALOGS.setdefault(ctx_id, set())
+    if catalog_name in registered:
+        return
+    register_registry_catalog(
+        ctx,
+        registry=registry,
+        catalog_name=catalog_name,
+        schema_name=schema_name,
+    )
+    registered.add(catalog_name)
+
+
 class IbisDatasetRegistry:
     """Register dataset locations as Ibis tables."""
 
@@ -520,6 +580,13 @@ class IbisDatasetRegistry:
             return self._tables[name]
         _ensure_backend_catalog_schema(self.backend, runtime_profile=self._runtime_profile)
         ctx = datafusion_context(self.backend)
+        if ctx is not None:
+            _ensure_registry_catalog_provider(
+                ctx,
+                registry=self,
+                catalog_name="registry",
+                schema_name="public",
+            )
         if ctx is not None and not _register_datafusion_dataset(
             ctx,
             name=name,

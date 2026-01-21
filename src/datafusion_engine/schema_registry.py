@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Literal, TypedDict
 import pyarrow as pa
 
 from arrowdsl.core.schema_constants import SCHEMA_META_NAME, SCHEMA_META_VERSION
+from schema_spec.view_specs import ViewSpec
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -1056,11 +1057,7 @@ def _resolve_nested_path(
         dtype = field.type
         prefix = ".".join(parts[: idx + 1])
         if _is_list_type(dtype):
-            list_expr = (
-                f"{current_expr}.{step}"
-                if current_is_root
-                else f"{current_expr}['{step}']"
-            )
+            list_expr = f"{current_expr}.{step}" if current_is_root else f"{current_expr}['{step}']"
             alias = f"n{idx}"
             from_clause += f"\nCROSS JOIN unnest({list_expr}) AS {alias}"
             current_expr = alias
@@ -1131,6 +1128,30 @@ def nested_base_sql(name: str, *, table: str | None = None) -> str:
         )
     select_sql = ",\n      ".join(selections)
     return f"SELECT\n      {select_sql}\n{from_clause}"
+
+
+def nested_view_spec(name: str, *, table: str | None = None) -> ViewSpec:
+    """Return a ViewSpec for a nested dataset.
+
+    Returns
+    -------
+    ViewSpec
+        View specification with schema and base SQL.
+    """
+    schema = nested_schema_for(name, allow_derived=True)
+    sql = nested_base_sql(name, table=table)
+    return ViewSpec(name=name, sql=sql, schema=schema)
+
+
+def nested_view_specs(*, table: str | None = None) -> tuple[ViewSpec, ...]:
+    """Return ViewSpecs for all nested datasets.
+
+    Returns
+    -------
+    tuple[ViewSpec, ...]
+        View specifications for nested datasets.
+    """
+    return tuple(nested_view_spec(name, table=table) for name in nested_dataset_names())
 
 
 def validate_schema_metadata(schema: pa.Schema) -> None:
@@ -1280,6 +1301,8 @@ __all__ = [
     "nested_role_for",
     "nested_schema_for",
     "nested_schema_names",
+    "nested_view_spec",
+    "nested_view_specs",
     "register_all_schemas",
     "register_schema",
     "registered_table_names",

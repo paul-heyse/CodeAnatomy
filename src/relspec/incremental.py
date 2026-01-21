@@ -8,8 +8,7 @@ from functools import cache
 
 import pyarrow as pa
 
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.schema_authority import dataset_schema_from_context
+from datafusion_engine.runtime import DataFusionRuntimeProfile, dataset_schema_from_context
 from ibis_engine.param_tables import ParamTableSpec
 from normalize.op_specs import normalize_op_specs
 from normalize.registry_specs import dataset_name_from_alias

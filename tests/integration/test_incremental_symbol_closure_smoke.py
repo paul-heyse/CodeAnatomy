@@ -13,6 +13,7 @@ from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from incremental.impact import (
+    ImpactedFileInputs,
     changed_file_impact_table,
     impacted_callers_from_changed_exports,
     impacted_importers_from_changed_exports,
@@ -158,17 +159,23 @@ def test_incremental_symbol_closure_smoke(tmp_path: Path) -> None:
     )
 
     symbol_closure = merge_impacted_files(
-        base,
-        callers,
-        importers,
-        module_importers,
+        backend,
+        ImpactedFileInputs(
+            changed_files=base,
+            callers=callers,
+            importers=importers,
+            import_closure_only=module_importers,
+        ),
         strategy="symbol_closure",
     )
     hybrid = merge_impacted_files(
-        base,
-        callers,
-        importers,
-        module_importers,
+        backend,
+        ImpactedFileInputs(
+            changed_files=base,
+            callers=callers,
+            importers=importers,
+            import_closure_only=module_importers,
+        ),
         strategy="hybrid",
     )
 

@@ -13,7 +13,7 @@ from arrowdsl.core.ordering import Ordering
 from cpg.schemas import CPG_NODES_SCHEMA
 from cpg.specs import NodeEmitSpec
 from ibis_engine.plan import IbisPlan
-from ibis_engine.schema_utils import align_table_to_schema, coalesce_columns, ibis_null_literal
+from ibis_engine.schema_utils import coalesce_columns, ibis_null_literal, validate_expr_schema
 
 
 def emit_nodes_ibis(
@@ -43,8 +43,8 @@ def emit_nodes_ibis(
         bend=bend,
         file_id=file_id,
     )
-    aligned = align_table_to_schema(output, schema=CPG_NODES_SCHEMA, keep_extra_columns=False)
-    return IbisPlan(expr=aligned, ordering=Ordering.unordered())
+    validate_expr_schema(output, expected=CPG_NODES_SCHEMA)
+    return IbisPlan(expr=output, ordering=Ordering.unordered())
 
 
 def _coalesce_cast(table: Table, cols: tuple[str, ...], *, dtype: pa.DataType) -> Value:

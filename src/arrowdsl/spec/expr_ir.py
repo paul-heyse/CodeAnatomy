@@ -18,6 +18,7 @@ from arrowdsl.core.interop import (
     ScalarLike,
     call_expression_function,
     ensure_expression,
+    pc,
 )
 from arrowdsl.schema.build import (
     dictionary_array_from_indices,
@@ -34,16 +35,6 @@ from arrowdsl.spec.codec import (
     encode_scalar_union,
 )
 from arrowdsl.spec.scalar_union import SCALAR_UNION_TYPE
-from datafusion_engine.compute_ops import (
-    cast_values,
-    function_options_type,
-    if_else,
-    is_null,
-    scalar,
-)
-from datafusion_engine.compute_ops import (
-    field as expr_field,
-)
 from registry_common.arrow_payloads import ipc_table, payload_ipc_bytes
 
 if TYPE_CHECKING:
@@ -104,7 +95,7 @@ def _coerce_int(value: object, *, label: str) -> int:
 def _deserialize_options(payload: bytes | None) -> FunctionOptionsProto | None:
     if payload is None:
         return None
-    options_type = cast("type[FunctionOptionsProto] | None", function_options_type())
+    options_type = cast("type[FunctionOptionsProto] | None", getattr(pc, "FunctionOptions", None))
     if options_type is None:
         msg = "Arrow compute FunctionOptions is unavailable."
         raise TypeError(msg)
@@ -126,12 +117,12 @@ def _ensure_arg_count(name: str, args: Sequence[object], *, expected: int) -> No
 
 def _fill_null_expression(args: Sequence[ComputeExpression]) -> ComputeExpression:
     _ensure_arg_count("fill_null", args, expected=2)
-    return ensure_expression(if_else(is_null(args[0]), args[1], args[0]))
+    return ensure_expression(pc.if_else(pc.is_null(args[0]), args[1], args[0]))
 
 
 def _fill_null_array(values: Sequence[ArrayLike]) -> ArrayLike:
     _ensure_arg_count("fill_null", values, expected=2)
-    return if_else(is_null(values[0]), values[1], values[0])
+    return pc.if_else(pc.is_null(values[0]), values[1], values[0])
 
 
 def _scalar_to_array(value: ScalarLike, *, size: int) -> ArrayLike:
@@ -219,9 +210,9 @@ class ExprIR:
             if self.name is None:
                 msg = "ExprIR field op requires name."
                 raise ValueError(msg)
-            return expr_field(self.name)
+            return pc.field(self.name)
         if self.op == "literal":
-            return scalar(self.value)
+            return pc.scalar(self.value)
         if self.op == "call":
             if self.name is None:
                 msg = "ExprIR call op requires name."
@@ -234,7 +225,7 @@ class ExprIR:
                 return _fill_null_expression(args)
             if name == "stringify":
                 _ensure_arg_count("stringify", args, expected=1)
-                return ensure_expression(cast_values(args[0], pa.string()))
+                return ensure_expression(pc.cast(args[0], pa.string()))
             return call_expression_function(name, args, options=opts)
         msg = f"Unsupported ExprIR op: {self.op}"
         raise ValueError(msg)

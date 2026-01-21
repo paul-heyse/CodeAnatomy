@@ -11,6 +11,8 @@ from sqlglot import exp
 from sqlglot.lineage import Node, lineage
 from sqlglot.optimizer import scope
 
+from datafusion_engine.schema_introspection import SchemaIntrospector
+from ibis_engine.registry import datafusion_context
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
@@ -39,6 +41,8 @@ def required_columns_by_table(
     """
     sg_expr = ibis_to_sqlglot(expr, backend=backend, params=None)
     schema = {name: dict(cols) for name, cols in schema_map.items()} if schema_map else None
+    if schema is None:
+        schema = _schema_map_from_backend(backend)
     policy = policy or default_sqlglot_policy()
     if dialect:
         policy = replace(policy, read_dialect=dialect, write_dialect=dialect)
@@ -93,6 +97,8 @@ def lineage_graph_by_output(
     """
     sg_expr = ibis_to_sqlglot(expr, backend=backend, params=None)
     schema = {name: dict(cols) for name, cols in schema_map.items()} if schema_map else None
+    if schema is None:
+        schema = _schema_map_from_backend(backend)
     policy = policy or default_sqlglot_policy()
     if dialect:
         policy = replace(policy, read_dialect=dialect, write_dialect=dialect)
@@ -150,6 +156,14 @@ def _collect_leaf_names(node: Node) -> set[str]:
             leaves.update(_collect_leaf_names(child))
         return leaves
     return {node.name} if node.name else set()
+
+
+def _schema_map_from_backend(backend: IbisCompilerBackend) -> dict[str, dict[str, str]] | None:
+    try:
+        ctx = datafusion_context(backend)
+    except (TypeError, ValueError):
+        return None
+    return SchemaIntrospector(ctx).schema_map()
 
 
 __all__ = ["lineage_graph_by_output", "required_columns_by_table"]

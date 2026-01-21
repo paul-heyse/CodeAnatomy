@@ -15,9 +15,8 @@ import pyarrow as pa
 from hamilton.function_modifiers import cache, extract_fields, tag
 
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import TableLike
+from arrowdsl.core.interop import TableLike, pc
 from arrowdsl.schema.schema import empty_table
-from datafusion_engine.compute_ops import is_in
 from datafusion_engine.extract_bundles import dataset_name_for_output, output_bundle_outputs
 from datafusion_engine.extract_registry import dataset_schema
 from extract.ast_extract import extract_ast_tables
@@ -195,7 +194,7 @@ def _filter_repo_files_by_ids(
     if not file_ids:
         return empty_table(table.schema)
     value_set = pa.array(list(file_ids), type=pa.string())
-    mask = is_in(table["file_id"], value_set=value_set)
+    mask = pc.is_in(table["file_id"], value_set=value_set)
     return table.filter(mask)
 
 

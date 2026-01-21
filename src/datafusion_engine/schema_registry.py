@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
 import pyarrow as pa
@@ -1136,23 +1137,6 @@ TREE_SITTER_FILES_SCHEMA = _schema_with_metadata(
     extra_metadata=_TREE_SITTER_SCHEMA_META,
 )
 
-DATAFUSION_FALLBACKS_SCHEMA = _schema_with_metadata(
-    "datafusion_fallbacks_v1",
-    pa.schema(
-        [
-            pa.field("event_time_unix_ms", pa.int64(), nullable=False),
-            pa.field("reason", pa.string(), nullable=False),
-            pa.field("error", pa.string(), nullable=False),
-            pa.field("expression_type", pa.string(), nullable=False),
-            pa.field("sql", pa.string(), nullable=False),
-            pa.field("dialect", pa.string(), nullable=False),
-            pa.field("policy_violations", pa.list_(pa.string()), nullable=True),
-            pa.field("sql_policy_name", pa.string(), nullable=True),
-            pa.field("param_mode", pa.string(), nullable=True),
-        ]
-    ),
-)
-
 DATAFUSION_EXPLAINS_SCHEMA = _schema_with_metadata(
     "datafusion_explains_v1",
     pa.schema(
@@ -1414,7 +1398,6 @@ SCHEMA_REGISTRY: dict[str, pa.Schema] = {
     "callsite_qname_candidates_v1": CALLSITE_QNAME_CANDIDATES_SCHEMA,
     "dataset_fingerprint_v1": DATASET_FINGERPRINT_SCHEMA,
     "datafusion_explains_v1": DATAFUSION_EXPLAINS_SCHEMA,
-    "datafusion_fallbacks_v1": DATAFUSION_FALLBACKS_SCHEMA,
     "datafusion_schema_registry_validation_v1": DATAFUSION_SCHEMA_REGISTRY_VALIDATION_SCHEMA,
     "dim_qualified_names_v1": DIM_QUALIFIED_NAMES_SCHEMA,
     "feature_state_v1": FEATURE_STATE_SCHEMA,
@@ -2107,6 +2090,7 @@ BYTECODE_REQUIRED_FUNCTIONS: tuple[str, ...] = (
     "list_extract",
     "named_struct",
     "prefixed_hash64",
+    "stable_id",
     "unnest",
 )
 
@@ -2121,6 +2105,7 @@ BYTECODE_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
     "map_values": 1,
     "named_struct": 2,
     "prefixed_hash64": 2,
+    "stable_id": 2,
     "unnest": 1,
 }
 
@@ -2133,6 +2118,7 @@ CST_REQUIRED_FUNCTIONS: tuple[str, ...] = (
     "map_extract",
     "named_struct",
     "prefixed_hash64",
+    "stable_id",
     "unnest",
 )
 
@@ -2144,6 +2130,7 @@ CST_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
     "map_extract": 2,
     "named_struct": 2,
     "prefixed_hash64": 2,
+    "stable_id": 2,
     "unnest": 1,
 }
 
@@ -2163,6 +2150,20 @@ SYMTABLE_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
     "prefixed_hash64": 2,
     "unnest": 1,
 }
+
+ENGINE_REQUIRED_FUNCTIONS: tuple[str, ...] = (
+    "array_agg",
+    "array_distinct",
+    "array_sort",
+    "array_to_string",
+    "bool_or",
+    "coalesce",
+    "concat_ws",
+    "row_number",
+    "sha256",
+    "stable_hash64",
+    "stable_hash128",
+)
 
 _STRING_TYPE_TOKENS = frozenset({"char", "string", "text", "utf8", "varchar"})
 _INT_TYPE_TOKENS = frozenset({"int", "integer", "bigint", "smallint", "tinyint", "uint"})
@@ -2229,6 +2230,7 @@ CST_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ..
     "arrow_metadata": (None, _STRING_TYPE_TOKENS),
     "map_entries": (_MAP_TYPE_TOKENS,),
     "map_extract": (_MAP_TYPE_TOKENS, _STRING_TYPE_TOKENS),
+    "stable_id": (_STRING_TYPE_TOKENS, _STRING_TYPE_TOKENS),
 }
 
 SYMTABLE_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
@@ -2244,12 +2246,16 @@ BYTECODE_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | Non
     "map_extract": (_MAP_TYPE_TOKENS, _STRING_TYPE_TOKENS),
     "map_keys": (_MAP_TYPE_TOKENS,),
     "map_values": (_MAP_TYPE_TOKENS,),
+    "stable_id": (_STRING_TYPE_TOKENS, _STRING_TYPE_TOKENS),
 }
 
 AST_VIEW_REQUIRED_NON_NULL_FIELDS: tuple[str, ...] = ("file_id", "path")
 CST_VIEW_REQUIRED_NON_NULL_FIELDS: tuple[str, ...] = ("file_id", "path")
 
-SCIP_REQUIRED_FUNCTIONS: tuple[str, ...] = ()
+SCIP_REQUIRED_FUNCTIONS: tuple[str, ...] = (
+    "concat_ws",
+    "stable_id",
+)
 
 CST_VIEW_NAMES: tuple[str, ...] = (
     "cst_parse_manifest",
@@ -2740,20 +2746,24 @@ def validate_ast_views(
     """
     resolved_views = tuple(dict.fromkeys(view_names)) if view_names is not None else AST_VIEW_NAMES
     errors: dict[str, str] = {}
+    function_catalog = _function_catalog(ctx)
     _validate_required_functions(
         ctx,
         required=_ast_required_functions(resolved_views),
         errors=errors,
+        catalog=function_catalog,
     )
     _validate_function_signatures(
         ctx,
         required=_ast_required_function_signatures(resolved_views),
         errors=errors,
+        catalog=function_catalog,
     )
     _validate_function_signature_types(
         ctx,
         required=_ast_required_function_signature_types(resolved_views),
         errors=errors,
+        catalog=function_catalog,
     )
     introspector = SchemaIntrospector(ctx)
     for name in resolved_views:
@@ -2805,16 +2815,24 @@ def validate_ts_views(ctx: SessionContext) -> None:
         Raised when view schemas fail validation.
     """
     errors: dict[str, str] = {}
-    _validate_required_functions(ctx, required=TREE_SITTER_REQUIRED_FUNCTIONS, errors=errors)
+    function_catalog = _function_catalog(ctx)
+    _validate_required_functions(
+        ctx,
+        required=TREE_SITTER_REQUIRED_FUNCTIONS,
+        errors=errors,
+        catalog=function_catalog,
+    )
     _validate_function_signatures(
         ctx,
         required=TREE_SITTER_REQUIRED_FUNCTION_SIGNATURES,
         errors=errors,
+        catalog=function_catalog,
     )
     _validate_function_signature_types(
         ctx,
         required=TREE_SITTER_REQUIRED_FUNCTION_SIGNATURE_TYPES,
         errors=errors,
+        catalog=function_catalog,
     )
     introspector = SchemaIntrospector(ctx)
     for name in TREE_SITTER_VIEW_NAMES:
@@ -2886,16 +2904,24 @@ def validate_symtable_views(ctx: SessionContext) -> None:
         Raised when view schemas fail validation.
     """
     errors: dict[str, str] = {}
-    _validate_required_functions(ctx, required=SYMTABLE_REQUIRED_FUNCTIONS, errors=errors)
+    function_catalog = _function_catalog(ctx)
+    _validate_required_functions(
+        ctx,
+        required=SYMTABLE_REQUIRED_FUNCTIONS,
+        errors=errors,
+        catalog=function_catalog,
+    )
     _validate_function_signatures(
         ctx,
         required=SYMTABLE_REQUIRED_FUNCTION_SIGNATURES,
         errors=errors,
+        catalog=function_catalog,
     )
     _validate_function_signature_types(
         ctx,
         required=SYMTABLE_REQUIRED_FUNCTION_SIGNATURE_TYPES,
         errors=errors,
+        catalog=function_catalog,
     )
     for name in SYMTABLE_VIEW_NAMES:
         try:
@@ -2951,7 +2977,13 @@ def validate_scip_views(ctx: SessionContext) -> None:
         Raised when view schemas fail validation.
     """
     errors: dict[str, str] = {}
-    _validate_required_functions(ctx, required=SCIP_REQUIRED_FUNCTIONS, errors=errors)
+    function_catalog = _function_catalog(ctx)
+    _validate_required_functions(
+        ctx,
+        required=SCIP_REQUIRED_FUNCTIONS,
+        errors=errors,
+        catalog=function_catalog,
+    )
     introspector = SchemaIntrospector(ctx)
     for view_name in SCIP_VIEW_NAMES:
         try:
@@ -2985,16 +3017,74 @@ def validate_scip_views(ctx: SessionContext) -> None:
 
 def _function_names(ctx: SessionContext) -> set[str]:
     try:
-        table = ctx.sql("SHOW FUNCTIONS").to_arrow_table()
+        table = ctx.sql(
+            "SELECT routine_name FROM information_schema.routines WHERE routine_type = 'FUNCTION'"
+        ).to_arrow_table()
     except (RuntimeError, TypeError, ValueError):
         return set()
     names: set[str] = set()
     for row in table.to_pylist():
-        for key in ("function_name", "name"):
-            value = row.get(key)
-            if isinstance(value, str):
-                names.add(value)
+        value = row.get("routine_name")
+        if isinstance(value, str):
+            names.add(value)
     return names
+
+
+@dataclass(frozen=True)
+class FunctionCatalog:
+    """Introspected function catalog for DataFusion sessions."""
+
+    function_names: frozenset[str]
+    signature_counts: Mapping[str, int]
+    parameter_signatures: Mapping[str, list[tuple[tuple[str, ...], tuple[str, ...]]]]
+    parameters_available: bool
+
+    @classmethod
+    def from_information_schema(
+        cls,
+        *,
+        routines: Sequence[Mapping[str, object]],
+        parameters: Sequence[Mapping[str, object]],
+        parameters_available: bool = True,
+    ) -> FunctionCatalog:
+        names: set[str] = set()
+        for row in routines:
+            value = row.get("routine_name") or row.get("function_name") or row.get("name")
+            if isinstance(value, str):
+                names.add(value.lower())
+        counts = _parameter_counts(parameters)
+        signatures = _parameter_signatures(parameters)
+        return cls(
+            function_names=frozenset(names),
+            signature_counts=counts,
+            parameter_signatures=signatures,
+            parameters_available=parameters_available,
+        )
+
+
+def _function_catalog(ctx: SessionContext) -> FunctionCatalog | None:
+    introspector = SchemaIntrospector(ctx)
+    routines: list[dict[str, object]]
+    parameters: list[dict[str, object]]
+    try:
+        routines = introspector.routines_snapshot()
+    except (RuntimeError, TypeError, ValueError):
+        routines = []
+    routines = list(routines)
+    try:
+        parameters = introspector.parameters_snapshot()
+        parameters_available = True
+    except (RuntimeError, TypeError, ValueError):
+        parameters = []
+        parameters_available = False
+    parameters = list(parameters)
+    if not routines:
+        return None
+    return FunctionCatalog.from_information_schema(
+        routines=routines,
+        parameters=parameters,
+        parameters_available=parameters_available,
+    )
 
 
 def _validate_required_functions(
@@ -3002,10 +3092,12 @@ def _validate_required_functions(
     *,
     required: Sequence[str],
     errors: dict[str, str],
+    catalog: FunctionCatalog | None = None,
 ) -> None:
-    available = {name.lower() for name in _function_names(ctx)}
+    resolved = catalog or _function_catalog(ctx)
+    available = resolved.function_names if resolved is not None else set()
     if not available:
-        errors["datafusion_functions"] = "SHOW FUNCTIONS returned no entries."
+        errors["datafusion_functions"] = "information_schema.routines returned no entries."
         return
     missing = sorted(name for name in required if name.lower() not in available)
     if missing:
@@ -3066,22 +3158,60 @@ def _signature_matches_hints(
     return True
 
 
+def _signature_has_input_modes(
+    entries: Sequence[tuple[tuple[str, ...], tuple[str, ...]]],
+) -> bool:
+    return any(all(mode.lower() == "in" for mode in modes) for _, modes in entries)
+
+
+def _signature_matches_required_types(
+    entries: Sequence[tuple[tuple[str, ...], tuple[str, ...]]],
+    hints: Sequence[frozenset[str] | None],
+) -> bool:
+    if not hints:
+        return True
+    return any(_signature_matches_hints(types, hints) for types, _ in entries)
+
+
+def _signature_type_validation(
+    required: Mapping[str, Sequence[frozenset[str] | None]],
+    signatures: Mapping[str, list[tuple[tuple[str, ...], tuple[str, ...]]]],
+) -> dict[str, list[str]]:
+    missing_types: list[str] = []
+    mode_mismatches: list[str] = []
+    for name, hints in required.items():
+        entries = signatures.get(name.lower())
+        if not entries:
+            continue
+        if not _signature_has_input_modes(entries):
+            mode_mismatches.append(name)
+        if not _signature_matches_required_types(entries, hints):
+            missing_types.append(name)
+    details: dict[str, list[str]] = {}
+    if missing_types:
+        details["type_mismatches"] = missing_types
+    if mode_mismatches:
+        details["mode_mismatches"] = mode_mismatches
+    return details
+
+
 def _validate_function_signatures(
     ctx: SessionContext,
     *,
     required: Mapping[str, int],
     errors: dict[str, str],
+    catalog: FunctionCatalog | None = None,
 ) -> None:
-    introspector = SchemaIntrospector(ctx)
-    try:
-        rows = introspector.parameters_snapshot()
-    except (RuntimeError, TypeError, ValueError) as exc:
-        errors["datafusion_function_signatures"] = str(exc)
-        return
-    if not rows:
+    resolved = catalog or _function_catalog(ctx)
+    if resolved is None:
         errors["datafusion_function_signatures"] = "information_schema.parameters returned no rows."
         return
-    counts = _parameter_counts(rows)
+    if not resolved.parameters_available:
+        return
+    counts = resolved.signature_counts
+    if not counts:
+        errors["datafusion_function_signatures"] = "information_schema.parameters returned no rows."
+        return
     signature_errors = _signature_errors(required, counts)
     if signature_errors:
         errors["datafusion_function_signatures"] = str(signature_errors)
@@ -3092,34 +3222,23 @@ def _validate_function_signature_types(
     *,
     required: Mapping[str, Sequence[frozenset[str] | None]],
     errors: dict[str, str],
+    catalog: FunctionCatalog | None = None,
 ) -> None:
-    introspector = SchemaIntrospector(ctx)
-    try:
-        rows = introspector.parameters_snapshot()
-    except (RuntimeError, TypeError, ValueError) as exc:
-        errors["datafusion_function_signature_types"] = str(exc)
-        return
-    if not rows:
+    resolved = catalog or _function_catalog(ctx)
+    if resolved is None:
         errors["datafusion_function_signature_types"] = (
             "information_schema.parameters returned no rows."
         )
         return
-    signatures = _parameter_signatures(rows)
-    missing_types: list[str] = []
-    mode_mismatches: list[str] = []
-    for name, hints in required.items():
-        entries = signatures.get(name.lower())
-        if not entries:
-            continue
-        if not any(all(mode.lower() == "in" for mode in modes) for _, modes in entries):
-            mode_mismatches.append(name)
-        if hints and not any(_signature_matches_hints(types, hints) for types, _ in entries):
-            missing_types.append(name)
-    details: dict[str, list[str]] = {}
-    if missing_types:
-        details["type_mismatches"] = missing_types
-    if mode_mismatches:
-        details["mode_mismatches"] = mode_mismatches
+    if not resolved.parameters_available:
+        return
+    signatures = resolved.parameter_signatures
+    if not signatures:
+        errors["datafusion_function_signature_types"] = (
+            "information_schema.parameters returned no rows."
+        )
+        return
+    details = _signature_type_validation(required, signatures)
     if details:
         errors["datafusion_function_signature_types"] = str(details)
 
@@ -3413,16 +3532,24 @@ def validate_bytecode_views(ctx: SessionContext) -> None:
         Raised when view schemas fail validation.
     """
     errors: dict[str, str] = {}
-    _validate_required_functions(ctx, required=BYTECODE_REQUIRED_FUNCTIONS, errors=errors)
+    function_catalog = _function_catalog(ctx)
+    _validate_required_functions(
+        ctx,
+        required=BYTECODE_REQUIRED_FUNCTIONS,
+        errors=errors,
+        catalog=function_catalog,
+    )
     _validate_function_signatures(
         ctx,
         required=BYTECODE_REQUIRED_FUNCTION_SIGNATURES,
         errors=errors,
+        catalog=function_catalog,
     )
     _validate_function_signature_types(
         ctx,
         required=BYTECODE_REQUIRED_FUNCTION_SIGNATURE_TYPES,
         errors=errors,
+        catalog=function_catalog,
     )
     for name in BYTECODE_VIEW_NAMES:
         try:
@@ -3557,16 +3684,24 @@ def validate_cst_views(ctx: SessionContext) -> None:
         Raised when view schemas fail validation.
     """
     errors: dict[str, str] = {}
-    _validate_required_functions(ctx, required=CST_REQUIRED_FUNCTIONS, errors=errors)
+    function_catalog = _function_catalog(ctx)
+    _validate_required_functions(
+        ctx,
+        required=CST_REQUIRED_FUNCTIONS,
+        errors=errors,
+        catalog=function_catalog,
+    )
     _validate_function_signatures(
         ctx,
         required=CST_REQUIRED_FUNCTION_SIGNATURES,
         errors=errors,
+        catalog=function_catalog,
     )
     _validate_function_signature_types(
         ctx,
         required=CST_REQUIRED_FUNCTION_SIGNATURE_TYPES,
         errors=errors,
+        catalog=function_catalog,
     )
     introspector = SchemaIntrospector(ctx)
     for name in CST_VIEW_NAMES:
@@ -3594,8 +3729,19 @@ def validate_required_cst_functions(ctx: SessionContext) -> None:
         Raised when required functions or signatures are missing.
     """
     errors: dict[str, str] = {}
-    _validate_required_functions(ctx, required=CST_REQUIRED_FUNCTIONS, errors=errors)
-    _validate_function_signatures(ctx, required=CST_REQUIRED_FUNCTION_SIGNATURES, errors=errors)
+    function_catalog = _function_catalog(ctx)
+    _validate_required_functions(
+        ctx,
+        required=CST_REQUIRED_FUNCTIONS,
+        errors=errors,
+        catalog=function_catalog,
+    )
+    _validate_function_signatures(
+        ctx,
+        required=CST_REQUIRED_FUNCTION_SIGNATURES,
+        errors=errors,
+        catalog=function_catalog,
+    )
     if errors:
         msg = f"Required CST functions validation failed: {errors}."
         raise ValueError(msg)
@@ -3610,16 +3756,24 @@ def validate_required_symtable_functions(ctx: SessionContext) -> None:
         Raised when required functions or signatures are missing.
     """
     errors: dict[str, str] = {}
-    _validate_required_functions(ctx, required=SYMTABLE_REQUIRED_FUNCTIONS, errors=errors)
+    function_catalog = _function_catalog(ctx)
+    _validate_required_functions(
+        ctx,
+        required=SYMTABLE_REQUIRED_FUNCTIONS,
+        errors=errors,
+        catalog=function_catalog,
+    )
     _validate_function_signatures(
         ctx,
         required=SYMTABLE_REQUIRED_FUNCTION_SIGNATURES,
         errors=errors,
+        catalog=function_catalog,
     )
     _validate_function_signature_types(
         ctx,
         required=SYMTABLE_REQUIRED_FUNCTION_SIGNATURE_TYPES,
         errors=errors,
+        catalog=function_catalog,
     )
     if errors:
         msg = f"Required symtable functions validation failed: {errors}."
@@ -3635,19 +3789,48 @@ def validate_required_bytecode_functions(ctx: SessionContext) -> None:
         Raised when required functions or signatures are missing.
     """
     errors: dict[str, str] = {}
-    _validate_required_functions(ctx, required=BYTECODE_REQUIRED_FUNCTIONS, errors=errors)
+    function_catalog = _function_catalog(ctx)
+    _validate_required_functions(
+        ctx,
+        required=BYTECODE_REQUIRED_FUNCTIONS,
+        errors=errors,
+        catalog=function_catalog,
+    )
     _validate_function_signatures(
         ctx,
         required=BYTECODE_REQUIRED_FUNCTION_SIGNATURES,
         errors=errors,
+        catalog=function_catalog,
     )
     _validate_function_signature_types(
         ctx,
         required=BYTECODE_REQUIRED_FUNCTION_SIGNATURE_TYPES,
         errors=errors,
+        catalog=function_catalog,
     )
     if errors:
         msg = f"Required bytecode functions validation failed: {errors}."
+        raise ValueError(msg)
+
+
+def validate_required_engine_functions(ctx: SessionContext) -> None:
+    """Validate required engine-level functions.
+
+    Raises
+    ------
+    ValueError
+        Raised when required functions are missing.
+    """
+    errors: dict[str, str] = {}
+    function_catalog = _function_catalog(ctx)
+    _validate_required_functions(
+        ctx,
+        required=ENGINE_REQUIRED_FUNCTIONS,
+        errors=errors,
+        catalog=function_catalog,
+    )
+    if errors:
+        msg = f"Required engine functions validation failed: {errors}."
         raise ValueError(msg)
 
 
@@ -3766,6 +3949,7 @@ __all__ = [
     "BYTECODE_FILES_SCHEMA",
     "BYTECODE_VIEW_NAMES",
     "CST_VIEW_NAMES",
+    "ENGINE_REQUIRED_FUNCTIONS",
     "LIBCST_FILES_SCHEMA",
     "NESTED_DATASET_INDEX",
     "SCHEMA_REGISTRY",
@@ -3816,6 +4000,7 @@ __all__ = [
     "validate_nested_types",
     "validate_required_bytecode_functions",
     "validate_required_cst_functions",
+    "validate_required_engine_functions",
     "validate_required_symtable_functions",
     "validate_schema_metadata",
     "validate_scip_views",

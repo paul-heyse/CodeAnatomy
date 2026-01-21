@@ -8,7 +8,7 @@ from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from datafusion_engine.schema_authority import (
+from datafusion_engine.runtime import (
     dataset_schema_from_context,
     dataset_spec_from_context,
 )

@@ -54,6 +54,7 @@ def test_external_table_ddl_contains_expected_clauses() -> None:
     assert "STORED AS PARQUET" in sql
     assert "LOCATION '/tmp/events'" in sql
     assert "PARTITIONED BY (day)" in sql
+    assert "PRIMARY KEY (id)" in sql
     assert "WITH ORDER (id)" in sql
     assert "COMPRESSION TYPE zstd" in sql
     assert "OPTIONS ('coalesce_batches' 'true')" in sql
@@ -93,5 +94,6 @@ def test_external_table_option_precedence() -> None:
         },
     )
     assert sql is not None
+    assert "PRIMARY KEY (metric_id)" in sql
     assert "COMPRESSION TYPE gzip" in sql
     assert "OPTIONS ('coalesce_batches' 'true', 'rows_per_page' '3000')" in sql

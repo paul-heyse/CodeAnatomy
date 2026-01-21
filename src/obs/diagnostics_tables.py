@@ -41,39 +41,6 @@ def _coerce_str_list(value: object) -> list[str]:
     return [str(value)]
 
 
-def datafusion_fallbacks_table(events: Sequence[Mapping[str, object]]) -> pa.Table:
-    """Build a DataFusion fallback diagnostics table.
-
-    Returns
-    -------
-    pyarrow.Table
-        Diagnostics table aligned to DATAFUSION_FALLBACKS_V1.
-    """
-    now = _now_ms()
-    rows = [
-        {
-            "event_time_unix_ms": _coerce_event_time(event.get("event_time_unix_ms"), default=now),
-            "reason": str(event.get("reason") or ""),
-            "error": str(event.get("error") or ""),
-            "expression_type": str(event.get("expression_type") or ""),
-            "sql": str(event.get("sql") or ""),
-            "dialect": str(event.get("dialect") or ""),
-            "policy_violations": _coerce_str_list(event.get("policy_violations")),
-            "sql_policy_name": (
-                str(event.get("sql_policy_name"))
-                if event.get("sql_policy_name") is not None
-                else None
-            ),
-            "param_mode": (
-                str(event.get("param_mode")) if event.get("param_mode") is not None else None
-            ),
-        }
-        for event in events
-    ]
-    schema = schema_for("datafusion_fallbacks_v1")
-    return table_from_rows(schema, rows)
-
-
 def datafusion_explains_table(explains: Sequence[Mapping[str, object]]) -> pa.Table:
     """Build a DataFusion explain diagnostics table.
 
@@ -208,7 +175,6 @@ def feature_state_table(events: Sequence[Mapping[str, object]]) -> pa.Table:
 
 __all__ = [
     "datafusion_explains_table",
-    "datafusion_fallbacks_table",
     "datafusion_schema_registry_validation_table",
     "feature_state_table",
 ]

@@ -27,7 +27,7 @@ SchemaMapping = Mapping[str, Mapping[str, str]]
 
 @dataclass(frozen=True)
 class DataFusionSqlPolicy:
-    """Policy for SQL execution in DataFusion fallback paths."""
+    """Policy for SQL execution in DataFusion sessions."""
 
     allow_ddl: bool = False
     allow_dml: bool = False
@@ -91,20 +91,6 @@ def resolve_sql_policy(
 
 
 @dataclass(frozen=True)
-class DataFusionFallbackEvent:
-    """Diagnostics payload for SQL fallback execution."""
-
-    reason: str
-    error: str
-    expression_type: str
-    sql: str
-    dialect: str
-    policy_violations: tuple[str, ...] = ()
-    sql_policy_name: str | None = None
-    param_mode: str | None = None
-
-
-@dataclass(frozen=True)
 class DataFusionCacheEvent:
     """Diagnostics payload for DataFusion cache decisions."""
 
@@ -152,8 +138,6 @@ class DataFusionCompileOptions:
     )
     enable_rewrites: bool = True
     rewrite_hook: Callable[[Expression], Expression] | None = None
-    force_sql: bool = False
-    fallback_hook: Callable[[DataFusionFallbackEvent], None] | None = None
     sql_ingest_hook: Callable[[Mapping[str, object]], None] | None = None
     capture_explain: bool = False
     explain_analyze: bool = False

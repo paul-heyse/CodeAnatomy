@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -14,7 +15,6 @@ from ibis.backends import BaseBackend
 from ibis.expr.types import Value as IbisValue
 
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.ids import apply_hash_column
 from arrowdsl.core.interop import (
     RecordBatchReaderLike,
     SchemaLike,
@@ -39,8 +39,7 @@ from datafusion_engine.nested_tables import (
     materialize_view_reference,
     register_nested_table,
 )
-from datafusion_engine.runtime import AdapterExecutionPolicy
-from datafusion_engine.schema_authority import dataset_spec_from_context
+from datafusion_engine.runtime import AdapterExecutionPolicy, dataset_spec_from_context
 from engine.plan_policy import ExecutionSurfacePolicy
 from engine.session import EngineSession
 from hamilton_pipeline.pipeline_types import (
@@ -62,6 +61,7 @@ from hamilton_pipeline.pipeline_types import (
     TreeSitterInputs,
     TypeInputs,
 )
+from ibis_engine.hashing import HashExprSpec
 from ibis_engine.param_tables import (
     ParamTablePolicy,
     ParamTableRegistry,
@@ -571,9 +571,6 @@ def _register_view_reference(
         msg = f"View {name!r} requires an Ibis backend."
         raise TypeError(msg)
     ctx = datafusion_context(backend)
-    if not isinstance(ctx, SessionContext):
-        msg = f"View {name!r} requires a DataFusion backend."
-        raise TypeError(msg)
     ctx.sql(f"CREATE OR REPLACE VIEW {name} AS {sql}").collect()
     return ViewReference(name)
 
@@ -1482,6 +1479,51 @@ def compiled_relationship_outputs(
     )
 
 
+_HASH_JOIN_SEPARATOR = "\x1f"
+
+
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _sql_literal(value: str) -> str:
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _coalesce_cast(name: str, *, null_sentinel: str) -> str:
+    return f"coalesce(CAST({_sql_identifier(name)} AS STRING), {_sql_literal(null_sentinel)})"
+
+
+def _hash_expr_sql(spec: HashExprSpec) -> str:
+    parts: list[str] = [_sql_literal(spec.prefix)]
+    parts.extend(_sql_literal(value) for value in spec.extra_literals)
+    parts.extend(_coalesce_cast(name, null_sentinel=spec.null_sentinel) for name in spec.cols)
+    if len(parts) == 1:
+        joined = parts[0]
+    else:
+        delimiter = _sql_literal(_HASH_JOIN_SEPARATOR)
+        joined = f"concat_ws({delimiter}, {', '.join(parts)})"
+    hash_name = "stable_hash128" if spec.as_string else "stable_hash64"
+    hashed = f"{hash_name}({joined})"
+    if spec.as_string:
+        return f"concat_ws(':', {_sql_literal(spec.prefix)}, {hashed})"
+    return hashed
+
+
+def _datafusion_context_from_exec(ctx: ExecutionContext) -> SessionContext:
+    profile = ctx.runtime.datafusion
+    if profile is None:
+        msg = "DataFusion runtime profile is required to hash edge owner file ids."
+        raise TypeError(msg)
+    try:
+        return profile.session_context()
+    except (RuntimeError, TypeError, ValueError) as exc:
+        msg = "Failed to create DataFusion SessionContext for hash computation."
+        raise RuntimeError(msg) from exc
+
+
 def _add_edge_owner_file_id(
     table: TableLike,
     *,
@@ -1492,7 +1534,29 @@ def _add_edge_owner_file_id(
     if "edge_owner_file_id" in table.column_names:
         return table
     spec = replace(repo_file_id_spec(repo_id), out_col="edge_owner_file_id")
-    updated = apply_hash_column(table, spec=spec, required=("path",))
+    if spec.out_col is None:
+        msg = "Edge owner file id spec must declare an output column."
+        raise ValueError(msg)
+    df_ctx = _datafusion_context_from_exec(ctx)
+    resolved = coerce_table_like(table)
+    if isinstance(resolved, pa.RecordBatchReader):
+        reader = cast("RecordBatchReaderLike", resolved)
+        resolved_table = pa.Table.from_batches(list(reader))
+    else:
+        resolved_table = cast("pa.Table", resolved)
+    table_name = f"_edge_owner_file_id_{uuid.uuid4().hex}"
+    df_ctx.register_record_batches(table_name, [resolved_table.to_batches()])
+    try:
+        expr_sql = _hash_expr_sql(spec)
+        sql = (
+            f"SELECT *, {expr_sql} AS {_sql_identifier(spec.out_col)} "
+            f"FROM {_sql_identifier(table_name)}"
+        )
+        updated = df_ctx.sql(sql).to_arrow_table()
+    finally:
+        deregister = getattr(df_ctx, "deregister_table", None)
+        if callable(deregister):
+            deregister(table_name)
     return align_table(
         updated,
         schema=schema,

@@ -22,6 +22,7 @@ from deltalake import DeltaTable
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
+from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
 from arrowdsl.schema.metadata import ordering_from_schema, schema_constraints_from_metadata
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from core_types import ensure_path
@@ -42,12 +43,16 @@ from ibis_engine.registry import (
     resolve_dataset_schema,
     resolve_delta_scan_options,
 )
+from schema_spec.specs import ExternalTableConfigOverrides
 from schema_spec.system import (
     DataFusionScanOptions,
+    DatasetSpec,
     DeltaScanOptions,
     ParquetColumnOptions,
     TableSchemaContract,
+    dataset_spec_from_schema,
     ddl_fingerprint_from_definition,
+    make_dataset_spec,
 )
 from storage.deltalake import DeltaCdfOptions, read_delta_cdf
 
@@ -228,7 +233,8 @@ class DataFusionRegistryOptions:
     schema: SchemaLike | None
     read_options: Mapping[str, object]
     cache: bool
-    provider: Literal["dataset", "listing", "parquet"] | None
+    provider: Literal["listing", "parquet"] | None
+    require_delta: bool
 
 
 @dataclass(frozen=True)
@@ -339,6 +345,7 @@ class _ListingTableArtifactDetails:
     skip_metadata: bool | None
     table_schema_contract: TableSchemaContract | None
     expr_adapter_factory: object | None
+    actual_schema: pa.Schema | None
 
 
 _SIMPLE_REGISTRATION_METHODS: dict[str, str] = {
@@ -456,6 +463,11 @@ def _apply_scan_defaults(name: str, location: DatasetLocation) -> DatasetLocatio
 def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOptions:
     """Resolve DataFusion registration hints for a dataset location.
 
+    Raises
+    ------
+    ValueError
+        Raised when an unsupported DataFusion provider is configured.
+
     Returns
     -------
     DataFusionRegistryOptions
@@ -465,6 +477,9 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
     delta_scan = resolve_delta_scan_options(location)
     schema = resolve_dataset_schema(location)
     provider = location.datafusion_provider
+    if provider == "dataset":
+        msg = "DataFusion dataset providers are not supported; use listing or native formats."
+        raise ValueError(msg)
     if provider is None and _prefers_listing_table(location, scan=scan):
         provider = "listing"
     return DataFusionRegistryOptions(
@@ -474,6 +489,7 @@ def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOpt
         read_options=dict(location.read_options),
         cache=bool(scan.cache) if scan is not None else False,
         provider=provider,
+        require_delta=True,
     )
 
 
@@ -485,9 +501,25 @@ def _apply_runtime_scan_hardening(
     if runtime_profile is None:
         return options
     hardened_scan = _scan_hardening_defaults(options.scan, runtime_profile=runtime_profile)
-    if hardened_scan is options.scan:
+    require_delta = runtime_profile.require_delta
+    updated = options
+    if hardened_scan is not options.scan:
+        updated = replace(updated, scan=hardened_scan)
+    if require_delta != options.require_delta:
+        updated = replace(updated, require_delta=require_delta)
+    return updated
+
+
+def _apply_delta_scan_schema(options: DataFusionRegistryOptions) -> DataFusionRegistryOptions:
+    schema = options.schema
+    if schema is None:
         return options
-    return replace(options, scan=hardened_scan)
+    delta_scan = options.delta_scan
+    if delta_scan is None:
+        return replace(options, delta_scan=DeltaScanOptions(schema=schema))
+    if delta_scan.schema is not None:
+        return options
+    return replace(options, delta_scan=replace(delta_scan, schema=schema))
 
 
 def _scan_hardening_defaults(
@@ -544,6 +576,47 @@ def _table_key_fields(context: DataFusionRegistrationContext) -> tuple[str, ...]
     return key_fields
 
 
+def _expected_column_defaults(schema: pa.Schema) -> dict[str, str]:
+    defaults: dict[str, str] = {}
+    for field in schema:
+        meta = field.metadata or {}
+        default_value = meta.get(DEFAULT_VALUE_META)
+        if default_value is None:
+            continue
+        defaults[field.name] = default_value.decode("utf-8", errors="replace")
+    return defaults
+
+
+def _validate_constraints_and_defaults(
+    context: DataFusionRegistrationContext,
+    *,
+    enable_information_schema: bool,
+) -> None:
+    if not enable_information_schema:
+        return
+    schema = context.options.schema
+    if schema is None:
+        return
+    _required, key_fields = schema_constraints_from_metadata(schema.metadata)
+    expected_defaults = _expected_column_defaults(schema)
+    if not key_fields and not expected_defaults:
+        return
+    introspector = SchemaIntrospector(context.ctx)
+    if key_fields:
+        constraints = introspector.table_constraints(context.name)
+        if not constraints:
+            msg = (
+                f"{context.name} missing DataFusion constraints for key fields {list(key_fields)}."
+            )
+            raise ValueError(msg)
+    if expected_defaults:
+        column_defaults = introspector.table_column_defaults(context.name)
+        missing = [name for name in expected_defaults if name not in column_defaults]
+        if missing:
+            msg = f"{context.name} missing column defaults for {missing}."
+            raise ValueError(msg)
+
+
 def datafusion_external_table_sql(
     *,
     name: str,
@@ -559,8 +632,71 @@ def datafusion_external_table_sql(
     str | None
         External table DDL when available, otherwise ``None``.
     """
-    _ = dialect, options_override, runtime_profile, name, location
-    return None
+    if location.format == "delta":
+        return None
+    spec = _resolve_dataset_spec(name, location)
+    if spec is None:
+        return None
+    scan = resolve_datafusion_scan_options(location)
+    partitioned_by = None
+    file_sort_order = None
+    unbounded = None
+    if scan is not None:
+        partitioned_by = tuple(col for col, _ in scan.partition_cols) or None
+        file_sort_order = scan.file_sort_order or None
+        unbounded = scan.unbounded
+    overrides = ExternalTableConfigOverrides(
+        table_name=name,
+        dialect=dialect,
+        options=_external_table_options(
+            location=location,
+            scan=scan,
+            runtime_profile=runtime_profile,
+            options_override=options_override,
+        ),
+        partitioned_by=partitioned_by,
+        file_sort_order=file_sort_order,
+        unbounded=unbounded,
+    )
+    config = spec.table_spec.external_table_config(
+        location=str(location.path),
+        file_format=location.format,
+        overrides=overrides,
+    )
+    return spec.external_table_sql(config)
+
+
+def _resolve_dataset_spec(name: str, location: DatasetLocation) -> DatasetSpec | None:
+    if location.dataset_spec is not None:
+        return location.dataset_spec
+    if location.table_spec is not None:
+        return make_dataset_spec(table_spec=location.table_spec)
+    schema = resolve_dataset_schema(location)
+    if schema is None:
+        return None
+    return dataset_spec_from_schema(name, schema)
+
+
+def _external_table_options(
+    *,
+    location: DatasetLocation,
+    scan: DataFusionScanOptions | None,
+    runtime_profile: DataFusionRuntimeProfile | None,
+    options_override: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    options: dict[str, object] = {}
+    if runtime_profile is not None and runtime_profile.external_table_options:
+        options.update(runtime_profile.external_table_options)
+    if location.read_options:
+        options.update(location.read_options)
+    if scan is not None:
+        if scan.file_extension:
+            options.setdefault("file_extension", scan.file_extension)
+        if scan.parquet_column_options is not None:
+            options.update(scan.parquet_column_options.external_table_options())
+    if options_override:
+        options.update(options_override)
+    return options or None
 
 
 def register_dataset_df(
@@ -600,6 +736,8 @@ def _build_registration_context(
     location = _apply_scan_defaults(name, location)
     _register_object_store(ctx, location)
     if runtime_profile is not None:
+        runtime_profile = _populate_schema_adapter_factories(runtime_profile)
+    if runtime_profile is not None:
         _ensure_catalog_schema(
             ctx,
             catalog=runtime_profile.default_catalog,
@@ -610,6 +748,7 @@ def _build_registration_context(
         canonical = SCHEMA_REGISTRY.get(name)
         if canonical is not None:
             options = replace(options, schema=canonical)
+    options = _apply_delta_scan_schema(options)
     options = _apply_runtime_scan_hardening(options, runtime_profile=runtime_profile)
     cache = _resolve_cache_policy(
         options,
@@ -641,8 +780,6 @@ def _register_dataset_with_context(context: DataFusionRegistrationContext) -> Da
         return _register_external_table(context)
     if context.location.format == "delta":
         return _register_delta(context)
-    if context.options.provider == "dataset":
-        return _register_dataset_provider(context)
     if context.location.format == "parquet":
         return _register_parquet(context)
     method = _SIMPLE_REGISTRATION_METHODS.get(context.location.format)
@@ -703,6 +840,7 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
             scan,
             runtime_profile=context.runtime_profile,
             dataset_name=context.name,
+            location=context.location,
         )
         key_fields = _table_key_fields(context)
         listing_provider = parquet_listing_table_provider(
@@ -743,6 +881,7 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
         else:
             _register_listing()
         df = context.ctx.table(context.name)
+        registered_schema = df.schema()
         if scan is not None and scan.projection_exprs:
             df = _apply_projection_exprs(
                 context.ctx,
@@ -759,6 +898,14 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
                 else False
             ),
         )
+        _validate_constraints_and_defaults(
+            context,
+            enable_information_schema=(
+                context.runtime_profile.enable_information_schema
+                if context.runtime_profile is not None
+                else False
+            ),
+        )
         _record_listing_table_artifact(
             context,
             details=_ListingTableArtifactDetails(
@@ -768,6 +915,7 @@ def _register_parquet(context: DataFusionRegistrationContext) -> DataFrame:
                 skip_metadata=skip_metadata,
                 table_schema_contract=table_schema_contract,
                 expr_adapter_factory=expr_adapter_factory,
+                actual_schema=registered_schema,
             ),
         )
     else:
@@ -818,10 +966,20 @@ def _register_external_table(
         msg = f"Failed to register unbounded external table: {exc}"
         raise ValueError(msg) from exc
     df = context.ctx.table(context.name)
+    registered_schema = df.schema()
     expr_adapter_factory = _resolve_expr_adapter_factory(
         scan,
         runtime_profile=context.runtime_profile,
         dataset_name=context.name,
+        location=context.location,
+    )
+    _validate_constraints_and_defaults(
+        context,
+        enable_information_schema=(
+            context.runtime_profile.enable_information_schema
+            if context.runtime_profile is not None
+            else False
+        ),
     )
     _record_listing_table_artifact(
         context,
@@ -832,6 +990,7 @@ def _register_external_table(
             skip_metadata=skip_metadata,
             table_schema_contract=table_schema_contract,
             expr_adapter_factory=expr_adapter_factory,
+            actual_schema=registered_schema,
         ),
     )
     return _maybe_cache(context, df)
@@ -986,69 +1145,33 @@ def _register_delta(context: DataFusionRegistrationContext) -> DataFrame:
     )
     if context.location.delta_timestamp is not None:
         table.load_as_version(context.location.delta_timestamp)
+    if context.location.files:
+        msg = "Delta table registration does not support explicit file lists."
+        raise ValueError(msg)
+    delta_scan = context.options.delta_scan
+    if delta_scan is None and context.options.schema is not None:
+        delta_scan = DeltaScanOptions(schema=context.options.schema)
     delta_features = _delta_feature_payload(table)
     delta_protocol = _delta_protocol_payload(table)
     delta_schema = table.schema().to_arrow()
-    provider = "table"
-    delta_provider = None
-    if not context.location.files:
-        delta_provider = _delta_rust_table_provider(context, delta_scan=context.options.delta_scan)
-        if delta_provider is None:
-            delta_provider = _delta_table_provider(table, delta_scan=context.options.delta_scan)
-    if delta_provider is not None:
-        context.ctx.register_table(context.name, delta_provider)
-        provider = "table_provider"
-        _record_table_provider_artifact(
-            context.runtime_profile,
-            name=context.name,
-            provider=delta_provider,
-            provider_kind=provider,
-            source=table,
-        )
-    elif context.location.files:
-        dataset = _delta_dataset_from_files(context)
-        context.ctx.register_table(context.name, dataset)
-        provider = "dataset_files"
-        _record_table_provider_artifact(
-            context.runtime_profile,
-            name=context.name,
-            provider=dataset,
-            provider_kind=provider,
-            source=table,
-        )
-    elif context.options.provider == "dataset":
-        dataset = _delta_dataset_from_table(context, table)
-        context.ctx.register_table(context.name, dataset)
-        provider = "dataset_forced"
-        _record_table_provider_artifact(
-            context.runtime_profile,
-            name=context.name,
-            provider=dataset,
-            provider_kind=provider,
-            source=table,
-        )
-    else:
-        try:
-            context.ctx.register_table(context.name, table)
-        except TypeError:
-            dataset = _delta_dataset_from_table(context, table)
-            context.ctx.register_table(context.name, dataset)
-            provider = "dataset"
-            _record_table_provider_artifact(
-                context.runtime_profile,
-                name=context.name,
-                provider=dataset,
-                provider_kind=provider,
-                source=table,
-            )
+    delta_provider = _delta_rust_table_provider(context, delta_scan=delta_scan)
+    if delta_provider is None:
+        delta_provider = _delta_table_provider(table, delta_scan=delta_scan)
+    if delta_provider is None:
+        if context.options.require_delta:
+            msg = f"Delta provider required for {context.name!r}."
         else:
-            _record_table_provider_artifact(
-                context.runtime_profile,
-                name=context.name,
-                provider=table,
-                provider_kind=provider,
-                source=table,
-            )
+            msg = f"Delta provider unavailable for {context.name!r}."
+        raise ValueError(msg)
+    context.ctx.register_table(context.name, delta_provider)
+    provider = "table_provider"
+    _record_table_provider_artifact(
+        context.runtime_profile,
+        name=context.name,
+        provider=delta_provider,
+        provider_kind=provider,
+        source=table,
+    )
     df = context.ctx.table(context.name)
     provider_schema = df.schema()
     expected_schema = SCHEMA_REGISTRY.get(context.name)
@@ -1088,8 +1211,20 @@ def _record_listing_table_artifact(
         name=context.name,
         enable_information_schema=profile.enable_information_schema,
     )
-    schema_payload = (
-        schema_to_dict(context.options.schema) if context.options.schema is not None else None
+    expected_schema = context.options.schema
+    schema_payload = schema_to_dict(expected_schema) if expected_schema is not None else None
+    expected_schema_fingerprint = _schema_fingerprint(expected_schema)
+    actual_schema_fingerprint = _schema_fingerprint(details.actual_schema)
+    expected_ddl_fingerprint = (
+        ddl_fingerprint_from_definition(context.external_table_sql)
+        if context.external_table_sql is not None
+        else None
+    )
+    observed_ddl_fingerprint = _ddl_fingerprint(
+        context.ctx,
+        name=context.name,
+        schema=expected_schema,
+        enable_information_schema=profile.enable_information_schema,
     )
     column_options = (
         details.scan.parquet_column_options.external_table_options()
@@ -1102,8 +1237,8 @@ def _record_listing_table_artifact(
     )
     ordering_keys: list[list[str]] | None = None
     ordering_matches_scan: bool | None = None
-    if context.options.schema is not None:
-        ordering = ordering_from_schema(context.options.schema)
+    if expected_schema is not None:
+        ordering = ordering_from_schema(expected_schema)
         if ordering.keys:
             ordering_keys = [list(key) for key in ordering.keys]
             if details.scan is not None and details.scan.file_sort_order:
@@ -1159,6 +1294,12 @@ def _record_listing_table_artifact(
         "listing_mutable": details.scan.listing_mutable if details.scan is not None else None,
         "unbounded": details.scan.unbounded if details.scan is not None else None,
         "schema": schema_payload,
+        "expected_schema_fingerprint": expected_schema_fingerprint,
+        "actual_schema_fingerprint": actual_schema_fingerprint,
+        "schema_match": _fingerprints_match(expected_schema_fingerprint, actual_schema_fingerprint),
+        "expected_ddl_fingerprint": expected_ddl_fingerprint,
+        "observed_ddl_fingerprint": observed_ddl_fingerprint,
+        "ddl_match": _fingerprints_match(expected_ddl_fingerprint, observed_ddl_fingerprint),
         "table_schema_snapshot": table_schema_snapshot,
         "table_schema_contract": _table_schema_contract_payload(details.table_schema_contract),
         "expr_adapter_factory": _adapter_factory_payload(details.expr_adapter_factory),
@@ -1344,11 +1485,40 @@ def _validate_ordering_contract(
         raise ValueError(msg)
 
 
+def _populate_schema_adapter_factories(
+    runtime_profile: DataFusionRuntimeProfile,
+) -> DataFusionRuntimeProfile:
+    if not runtime_profile.enable_schema_evolution_adapter:
+        return runtime_profile
+    if runtime_profile.schema_adapter_factories or not runtime_profile.registry_catalogs:
+        return runtime_profile
+    factories: dict[str, object] = {}
+    adapter_factory: object | None = None
+    for catalog in runtime_profile.registry_catalogs.values():
+        for name in catalog.names():
+            location = catalog.get(name)
+            spec = _resolve_dataset_spec(name, location)
+            if spec is None:
+                continue
+            if not _requires_schema_evolution_adapter(spec.evolution_spec):
+                continue
+            if adapter_factory is None:
+                adapter_factory = _schema_evolution_adapter_factory()
+            factories.setdefault(name, adapter_factory)
+    if not factories:
+        return runtime_profile
+    merged = dict(runtime_profile.schema_adapter_factories)
+    for name, factory in factories.items():
+        merged.setdefault(name, factory)
+    return replace(runtime_profile, schema_adapter_factories=merged)
+
+
 def _resolve_expr_adapter_factory(
     scan: DataFusionScanOptions | None,
     *,
     runtime_profile: DataFusionRuntimeProfile | None,
     dataset_name: str,
+    location: DatasetLocation,
 ) -> object | None:
     if scan is not None and scan.expr_adapter_factory is not None:
         return scan.expr_adapter_factory
@@ -1356,9 +1526,33 @@ def _resolve_expr_adapter_factory(
         factory = runtime_profile.schema_adapter_factories.get(dataset_name)
         if factory is not None:
             return factory
+    spec = _resolve_dataset_spec(dataset_name, location)
+    if spec is not None and _requires_schema_evolution_adapter(spec.evolution_spec):
+        return _schema_evolution_adapter_factory()
     if runtime_profile is not None and runtime_profile.physical_expr_adapter_factory is not None:
         return runtime_profile.physical_expr_adapter_factory
     return None
+
+
+def _requires_schema_evolution_adapter(evolution: object) -> bool:
+    rename_map = getattr(evolution, "rename_map", None)
+    allow_missing = bool(getattr(evolution, "allow_missing", False))
+    allow_extra = bool(getattr(evolution, "allow_extra", False))
+    allow_casts = bool(getattr(evolution, "allow_casts", False))
+    return bool(rename_map) or allow_missing or allow_extra or allow_casts
+
+
+def _schema_evolution_adapter_factory() -> object:
+    try:
+        module = importlib.import_module("datafusion_ext")
+    except ImportError as exc:
+        msg = "Schema evolution adapter requires datafusion_ext."
+        raise RuntimeError(msg) from exc
+    factory = getattr(module, "schema_evolution_adapter_factory", None)
+    if not callable(factory):
+        msg = "schema_evolution_adapter_factory is not available in datafusion_ext."
+        raise TypeError(msg)
+    return factory()
 
 
 def _ddl_fingerprint(
@@ -1398,24 +1592,23 @@ def _record_delta_table_artifact(
     expected_fingerprint = _schema_fingerprint(snapshot.expected_schema)
     delta_fingerprint = _schema_fingerprint(snapshot.delta_schema)
     provider_fingerprint = _schema_fingerprint(snapshot.provider_schema)
-    enable_info = profile.enable_information_schema
     expected_ddl = _ddl_fingerprint(
         context.ctx,
         name=context.name,
         schema=snapshot.expected_schema,
-        enable_information_schema=enable_info,
+        enable_information_schema=profile.enable_information_schema,
     )
     delta_ddl = _ddl_fingerprint(
         context.ctx,
         name=context.name,
         schema=snapshot.delta_schema,
-        enable_information_schema=enable_info,
+        enable_information_schema=profile.enable_information_schema,
     )
     provider_ddl = _ddl_fingerprint(
         context.ctx,
         name=context.name,
         schema=snapshot.provider_schema,
-        enable_information_schema=enable_info,
+        enable_information_schema=profile.enable_information_schema,
     )
     schema_payload = (
         schema_to_dict(context.options.schema) if context.options.schema is not None else None
@@ -1435,6 +1628,7 @@ def _record_delta_table_artifact(
         schema=context.options.schema,
         partition_cols=table_partition_cols,
     )
+    delta_scan = context.options.delta_scan
     payload: dict[str, object] = {
         "name": context.name,
         "path": str(context.location.path),
@@ -1459,7 +1653,7 @@ def _record_delta_table_artifact(
             provider_fingerprint,
         ),
         "delta_matches_provider": _fingerprints_match(delta_fingerprint, provider_fingerprint),
-        "delta_scan": _delta_scan_payload(context.options.delta_scan),
+        "delta_scan": _delta_scan_payload(delta_scan),
         "read_options": dict(context.options.read_options),
         "storage_options": dict(context.location.storage_options)
         if context.location.storage_options
@@ -1719,67 +1913,6 @@ def _require_partition_schema_validation(
         raise ValueError(msg)
 
 
-def _delta_dataset_from_table(
-    context: DataFusionRegistrationContext,
-    table: DeltaTable,
-) -> ds.Dataset:
-    delta_scan = context.options.delta_scan
-    schema = (
-        delta_scan.schema
-        if delta_scan is not None and delta_scan.schema is not None
-        else context.options.schema
-    )
-    parquet_read_options = _parquet_read_options(context.options.read_options)
-    return table.to_pyarrow_dataset(
-        filesystem=_delta_bulk_filesystem(context.location),
-        parquet_read_options=parquet_read_options,
-        schema=schema,
-        as_large_types=bool(delta_scan.schema_force_view_types)
-        if delta_scan is not None
-        else False,
-    )
-
-
-def _delta_dataset_from_files(context: DataFusionRegistrationContext) -> ds.Dataset:
-    delta_scan = context.options.delta_scan
-    schema = (
-        delta_scan.schema
-        if delta_scan is not None and delta_scan.schema is not None
-        else context.options.schema
-    )
-    file_paths = _resolve_delta_file_paths(context.location)
-    parquet_format = ds.ParquetFileFormat(
-        read_options=_parquet_read_options(context.options.read_options)
-    )
-    return ds.dataset(
-        file_paths,
-        format=parquet_format,
-        filesystem=_delta_filesystem_override(context.location),
-        schema=schema,
-    )
-
-
-def _resolve_delta_file_paths(location: DatasetLocation) -> list[str]:
-    files = location.files or ()
-    if not files:
-        return []
-    if location.filesystem is not None:
-        return list(files)
-    base = str(location.path)
-    return [_join_delta_path(base, name) for name in files]
-
-
-def _join_delta_path(base: str, name: str) -> str:
-    if "://" in name:
-        return name
-    parsed = urlparse(base)
-    if parsed.scheme:
-        prefix = f"{parsed.scheme}://{parsed.netloc}"
-        base_path = parsed.path.rstrip("/")
-        return f"{prefix}{base_path}/{name.lstrip('/')}"
-    return str(Path(base) / name)
-
-
 def _delta_scan_payload(options: DeltaScanOptions | None) -> dict[str, object] | None:
     if options is None:
         return None
@@ -1894,21 +2027,6 @@ def _parquet_read_options(read_options: Mapping[str, object]) -> ds.ParquetReadO
     if isinstance(option, ds.ParquetReadOptions):
         return option
     return None
-
-
-def _delta_bulk_filesystem(location: DatasetLocation) -> pafs.FileSystem | None:
-    if location.filesystem is not None:
-        return _normalize_filesystem(location.filesystem)
-    if not isinstance(location.path, str) or "://" not in location.path:
-        return None
-    raw_fs, normalized_path = pafs.FileSystem.from_uri(location.path)
-    return pafs.SubTreeFileSystem(normalized_path, raw_fs)
-
-
-def _delta_filesystem_override(location: DatasetLocation) -> pafs.FileSystem | None:
-    if location.filesystem is None:
-        return None
-    return _normalize_filesystem(location.filesystem)
 
 
 def _normalize_filesystem(filesystem: object) -> pafs.FileSystem | None:
@@ -2096,19 +2214,6 @@ def _scheme_prefix(path: str | Path) -> str | None:
     if not parsed.scheme:
         return None
     return f"{parsed.scheme}://"
-
-
-def _register_dataset_provider(context: DataFusionRegistrationContext) -> DataFrame:
-    dataset = ds.dataset(
-        context.location.path,
-        format=context.location.format,
-        schema=context.options.schema,
-        filesystem=context.location.filesystem,
-        partitioning=context.location.partitioning or "hive",
-    )
-    context.ctx.register_table(context.name, dataset)
-    df = context.ctx.table(context.name)
-    return _maybe_cache(context, df)
 
 
 def _merge_kwargs(base: Mapping[str, object], extra: Mapping[str, object]) -> dict[str, object]:

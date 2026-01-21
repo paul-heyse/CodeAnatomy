@@ -6,7 +6,7 @@ import importlib
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Literal, TypedDict, Unpack, cast
 
@@ -65,6 +65,7 @@ class SqlGlotSurface(StrEnum):
     DATAFUSION_DML = "datafusion_dml"
     DATAFUSION_EXTERNAL_TABLE = "datafusion_external_table"
     DATAFUSION_DIAGNOSTICS = "datafusion_diagnostics"
+    DATAFUSION_DDL = "datafusion_ddl"
 
 
 @dataclass(frozen=True)
@@ -325,6 +326,10 @@ DEFAULT_SURFACE_POLICIES: dict[SqlGlotSurface, SqlGlotSurfacePolicy] = {
         lane="dialect_shim",
     ),
     SqlGlotSurface.DATAFUSION_DIAGNOSTICS: SqlGlotSurfacePolicy(
+        dialect=DEFAULT_WRITE_DIALECT,
+        lane="dialect_shim",
+    ),
+    SqlGlotSurface.DATAFUSION_DDL: SqlGlotSurfacePolicy(
         dialect=DEFAULT_WRITE_DIALECT,
         lane="dialect_shim",
     ),
@@ -683,6 +688,23 @@ def sqlglot_sql(
     generator["dialect"] = policy.write_dialect
     generator["unsupported_level"] = policy.unsupported_level
     return expr.sql(**cast("GeneratorInitKwargs", generator))
+
+
+def normalize_ddl_sql(sql: str, *, surface: SqlGlotSurface = SqlGlotSurface.DATAFUSION_DDL) -> str:
+    """Return normalized DDL SQL for a given surface policy.
+
+    Returns
+    -------
+    str
+        SQL string normalized under the surface dialect policy.
+    """
+    policy = default_sqlglot_policy()
+    surface_policy = sqlglot_surface_policy(surface)
+    dialect = surface_policy.dialect
+    expr = parse_sql_strict(sql, dialect=dialect, error_level=policy.error_level)
+    transformed = apply_transforms(expr, transforms=policy.transforms)
+    policy = replace(policy, read_dialect=dialect, write_dialect=dialect)
+    return sqlglot_sql(transformed, policy=policy)
 
 
 def qualify_strict(
@@ -1207,6 +1229,7 @@ __all__ = [
     "canonical_ast_fingerprint",
     "canonicalize_expr",
     "default_sqlglot_policy",
+    "normalize_ddl_sql",
     "normalize_expr",
     "normalize_expr_with_stats",
     "optimize_expr",

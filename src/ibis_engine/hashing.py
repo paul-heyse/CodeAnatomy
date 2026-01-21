@@ -3,15 +3,119 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
-from arrowdsl.core.ids import HashSpec
 from arrowdsl.spec.expr_ir import ExprIR
+
+
+@dataclass(frozen=True)
+class HashExprSpec:
+    """Define a stable hash expression specification.
+
+    Parameters
+    ----------
+    prefix:
+        Prefix for the hashed identifier.
+    cols:
+        Column names included in the hash input.
+    extra_literals:
+        Literal values injected into the hash input.
+    as_string:
+        Whether to emit a prefixed string hash (True) or int64 hash (False).
+    null_sentinel:
+        Value used to represent nulls in the hash input.
+    out_col:
+        Optional output column name for derived identifiers.
+    """
+
+    prefix: str
+    cols: tuple[str, ...]
+    extra_literals: tuple[str, ...] = ()
+    as_string: bool = True
+    null_sentinel: str = "__NULL__"
+    out_col: str | None = None
+
+
+@dataclass(frozen=True)
+class HashExprSpecOptions:
+    """Options for building hash expression specs.
+
+    Parameters
+    ----------
+    extra_literals:
+        Literal values injected into the hash input.
+    as_string:
+        Whether to emit a prefixed string hash (True) or int64 hash (False).
+    null_sentinel:
+        Value used to represent nulls in the hash input.
+    out_col:
+        Optional output column name for derived identifiers.
+    """
+
+    extra_literals: tuple[str, ...] = ()
+    as_string: bool = True
+    null_sentinel: str = "__NULL__"
+    out_col: str | None = None
+
+
+def hash_expr_spec_factory(
+    *,
+    prefix: str,
+    cols: Sequence[str],
+    options: HashExprSpecOptions | None = None,
+    out_col: str | None = None,
+    null_sentinel: str | None = None,
+) -> HashExprSpec:
+    """Return a HashExprSpec from normalized inputs.
+
+    Parameters
+    ----------
+    prefix:
+        Prefix for the hashed identifier.
+    cols:
+        Column names included in the hash input.
+    options:
+        Hash expression options for literals, null handling, and output shape.
+    out_col:
+        Optional override for the output column name.
+    null_sentinel:
+        Optional override for the null sentinel value.
+
+    Returns
+    -------
+    HashExprSpec
+        Stable hash expression specification.
+    """
+    resolved = options or HashExprSpecOptions()
+    if out_col is not None:
+        resolved = HashExprSpecOptions(
+            extra_literals=resolved.extra_literals,
+            as_string=resolved.as_string,
+            null_sentinel=resolved.null_sentinel,
+            out_col=out_col,
+        )
+    if null_sentinel is not None:
+        resolved = HashExprSpecOptions(
+            extra_literals=resolved.extra_literals,
+            as_string=resolved.as_string,
+            null_sentinel=null_sentinel,
+            out_col=resolved.out_col,
+        )
+    return HashExprSpec(
+        prefix=prefix,
+        cols=tuple(cols),
+        extra_literals=tuple(resolved.extra_literals),
+        as_string=resolved.as_string,
+        null_sentinel=resolved.null_sentinel,
+        out_col=resolved.out_col,
+    )
+
 
 _NULL_SEPARATOR = "\x1f"
 
 
-def hash_expr_ir(*, spec: HashSpec, use_128: bool | None = None) -> ExprIR:
-    """Return an ExprIR hash expression for a HashSpec.
+def hash_expr_ir(*, spec: HashExprSpec, use_128: bool | None = None) -> ExprIR:
+    """Return an ExprIR hash expression for a HashExprSpec.
 
     Returns
     -------
@@ -28,7 +132,7 @@ def hash_expr_ir(*, spec: HashSpec, use_128: bool | None = None) -> ExprIR:
 
 def masked_hash_expr_ir(
     *,
-    spec: HashSpec,
+    spec: HashExprSpec,
     required: Sequence[str],
     use_128: bool | None = None,
 ) -> ExprIR:
@@ -76,7 +180,7 @@ def hash_expr_ir_from_parts(
     return _prefixed_hash(hashed, prefix=prefix)
 
 
-def _hash_name(spec: HashSpec, *, use_128: bool | None) -> str:
+def _hash_name(spec: HashExprSpec, *, use_128: bool | None) -> str:
     if use_128 is None:
         use_128 = spec.as_string
     return "stable_hash128" if use_128 else "stable_hash64"
@@ -88,7 +192,7 @@ def _hash_name_from_flags(*, as_string: bool, use_128: bool | None) -> str:
     return "stable_hash128" if use_128 else "stable_hash64"
 
 
-def _hash_parts(spec: HashSpec) -> list[ExprIR]:
+def _hash_parts(spec: HashExprSpec) -> list[ExprIR]:
     parts: list[ExprIR] = []
     parts.extend(ExprIR(op="literal", value=value) for value in spec.extra_literals)
     parts.extend(_coalesced_field_expr(name, spec.null_sentinel) for name in spec.cols)
@@ -149,4 +253,10 @@ def _required_mask(required: Sequence[str]) -> ExprIR:
     return mask
 
 
-__all__ = ["hash_expr_ir", "hash_expr_ir_from_parts", "masked_hash_expr_ir"]
+__all__ = [
+    "HashExprSpec",
+    "hash_expr_ir",
+    "hash_expr_ir_from_parts",
+    "hash_expr_spec_factory",
+    "masked_hash_expr_ir",
+]

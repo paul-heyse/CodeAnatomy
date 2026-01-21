@@ -31,12 +31,17 @@ from ibis_engine.ids import masked_stable_id_expr, stable_id_expr, stable_key_ex
 from ibis_engine.plan import IbisPlan
 from ibis_engine.scan_io import DatasetSource
 from ibis_engine.schema_utils import (
-    align_table_to_schema,
     coalesce_columns,
     ensure_columns,
     ibis_null_literal,
+    validate_expr_schema,
 )
-from ibis_engine.sources import SourceToIbisOptions, namespace_recorder_from_ctx, source_to_ibis
+from ibis_engine.sources import (
+    SourceToIbisOptions,
+    namespace_recorder_from_ctx,
+    register_ibis_table,
+    source_to_ibis,
+)
 from normalize.ibis_exprs import position_encoding_norm_expr
 from normalize.registry_fields import DIAG_DETAILS_TYPE
 from normalize.registry_ids import (
@@ -96,7 +101,16 @@ class IbisPlanCatalog:
         source = self.tables.get(name)
         if source is None:
             empty = empty_table(schema)
-            return ibis.memtable(empty)
+            plan = register_ibis_table(
+                empty,
+                options=SourceToIbisOptions(
+                    backend=self.backend,
+                    name=None,
+                    ordering=Ordering.unordered(),
+                    namespace_recorder=namespace_recorder_from_ctx(ctx),
+                ),
+            )
+            return plan.expr
         if isinstance(source, IbisPlan):
             return source.expr
         if isinstance(source, ViewReference):
@@ -174,12 +188,12 @@ def type_exprs_plan_ibis(
             null_sentinel=TYPE_ID_SPEC.null_sentinel,
         )
     enriched = filtered.mutate(**updates)
-    aligned = align_table_to_schema(
+    validate_expr_schema(
         enriched,
-        schema=dataset_schema(TYPE_EXPRS_NAME),
-        keep_extra_columns=ctx.debug,
+        expected=dataset_schema(TYPE_EXPRS_NAME),
+        allow_extra_columns=ctx.debug,
     )
-    return IbisPlan(expr=aligned, ordering=Ordering.unordered())
+    return IbisPlan(expr=enriched, ordering=Ordering.unordered())
 
 
 def _view_reference_expr(backend: BaseBackend, fragment: ViewReference) -> Table:
@@ -219,14 +233,14 @@ def type_nodes_plan_ibis(
     )
     combined = _prefer_type_rows(expr_rows, scip_rows)
     target_schema = dataset_schema(TYPE_NODES_NAME)
-    aligned = align_table_to_schema(
+    validate_expr_schema(
         combined,
-        schema=target_schema,
-        keep_extra_columns=ctx.debug,
+        expected=target_schema,
+        allow_extra_columns=ctx.debug,
     )
     ordering_keys = ordering_keys_for_schema(target_schema)
     ordering = Ordering.explicit(ordering_keys) if ordering_keys else Ordering.unordered()
-    return IbisPlan(expr=aligned, ordering=ordering)
+    return IbisPlan(expr=combined, ordering=ordering)
 
 
 def _expr_type_schema() -> pa.Schema:
@@ -358,8 +372,8 @@ def cfg_blocks_plan_ibis(
         )
     else:
         joined = blocks
-    aligned = align_table_to_schema(joined, schema=dataset_schema(CFG_BLOCKS_NAME))
-    return IbisPlan(expr=aligned, ordering=Ordering.unordered())
+    validate_expr_schema(joined, expected=dataset_schema(CFG_BLOCKS_NAME))
+    return IbisPlan(expr=joined, ordering=Ordering.unordered())
 
 
 def cfg_edges_plan_ibis(
@@ -409,8 +423,8 @@ def cfg_edges_plan_ibis(
         )
     else:
         joined = edges
-    aligned = align_table_to_schema(joined, schema=dataset_schema(CFG_EDGES_NAME))
-    return IbisPlan(expr=aligned, ordering=Ordering.unordered())
+    validate_expr_schema(joined, expected=dataset_schema(CFG_EDGES_NAME))
+    return IbisPlan(expr=joined, ordering=Ordering.unordered())
 
 
 def def_use_events_plan_ibis(
@@ -450,18 +464,18 @@ def def_use_events_plan_ibis(
             null_sentinel=DEF_USE_EVENT_ID_SPEC.null_sentinel,
         )
     enriched = table.filter(valid).mutate(**updates)
-    aligned = align_table_to_schema(
+    validate_expr_schema(
         enriched,
-        schema=dataset_schema(DEF_USE_NAME),
-        keep_extra_columns=ctx.debug,
+        expected=dataset_schema(DEF_USE_NAME),
+        allow_extra_columns=ctx.debug,
     )
-    return IbisPlan(expr=aligned, ordering=Ordering.unordered())
+    return IbisPlan(expr=enriched, ordering=Ordering.unordered())
 
 
 def reaching_defs_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
-    _backend: BaseBackend,
+    backend: BaseBackend,
 ) -> IbisPlan | None:
     """Build an Ibis plan for reaching-def edges.
 
@@ -474,8 +488,15 @@ def reaching_defs_plan_ibis(
     table = catalog.resolve_expr("py_bc_def_use_events_v1", ctx=ctx, schema=input_schema)
     required = {"kind", "code_unit_id", "symbol", "event_id"}
     if not required.issubset(set(table.columns)):
-        empty = ibis.memtable(empty_table(dataset_schema(REACHES_NAME)))
-        return IbisPlan(expr=empty, ordering=Ordering.unordered())
+        return register_ibis_table(
+            empty_table(dataset_schema(REACHES_NAME)),
+            options=SourceToIbisOptions(
+                backend=backend,
+                name=None,
+                ordering=Ordering.unordered(),
+                namespace_recorder=namespace_recorder_from_ctx(ctx),
+            ),
+        )
     defs = table.filter(table.kind == ibis.literal("def")).select(
         code_unit_id=table.code_unit_id,
         symbol=table.symbol,
@@ -508,12 +529,12 @@ def reaching_defs_plan_ibis(
             null_sentinel=REACH_EDGE_ID_SPEC.null_sentinel,
         )
     enriched = joined.mutate(**updates)
-    aligned = align_table_to_schema(
+    validate_expr_schema(
         enriched,
-        schema=dataset_schema(REACHES_NAME),
-        keep_extra_columns=ctx.debug,
+        expected=dataset_schema(REACHES_NAME),
+        allow_extra_columns=ctx.debug,
     )
-    return IbisPlan(expr=aligned, ordering=Ordering.unordered())
+    return IbisPlan(expr=enriched, ordering=Ordering.unordered())
 
 
 def _line_base_value(line_base: Value, *, default_base: int) -> NumericValue:
@@ -949,7 +970,7 @@ def _scip_diag_context(diags: Table, docs: Table, line_index: Table) -> _ScipDia
 def diagnostics_plan_ibis(
     catalog: IbisPlanCatalog,
     ctx: ExecutionContext,
-    _backend: BaseBackend,
+    backend: BaseBackend,
 ) -> IbisPlan | None:
     """Build an Ibis plan for normalized diagnostics.
 
@@ -965,8 +986,15 @@ def diagnostics_plan_ibis(
     exprs = _diagnostic_exprs(catalog, ctx=ctx, line_index=line_index)
 
     if not exprs:
-        empty = ibis.memtable(empty_table(diag_schema))
-        return IbisPlan(expr=empty, ordering=Ordering.unordered())
+        return register_ibis_table(
+            empty_table(diag_schema),
+            options=SourceToIbisOptions(
+                backend=backend,
+                name=None,
+                ordering=Ordering.unordered(),
+                namespace_recorder=namespace_recorder_from_ctx(ctx),
+            ),
+        )
 
     combined = exprs[0]
     for expr in exprs[1:]:
@@ -993,12 +1021,12 @@ def diagnostics_plan_ibis(
             null_sentinel=DIAG_ID_SPEC.null_sentinel,
         )
     enriched = combined.mutate(**updates)
-    aligned = align_table_to_schema(
+    validate_expr_schema(
         enriched,
-        schema=diag_schema,
-        keep_extra_columns=ctx.debug,
+        expected=diag_schema,
+        allow_extra_columns=ctx.debug,
     )
-    return IbisPlan(expr=aligned, ordering=Ordering.unordered())
+    return IbisPlan(expr=enriched, ordering=Ordering.unordered())
 
 
 def _resolve_input(
@@ -1055,8 +1083,8 @@ def span_errors_plan_ibis(
     """
     schema = dataset_schema("span_errors_v1")
     table = catalog.resolve_expr("span_errors_v1", ctx=ctx, schema=schema)
-    aligned = align_table_to_schema(table, schema=schema)
-    return IbisPlan(expr=aligned, ordering=Ordering.unordered())
+    validate_expr_schema(table, expected=schema)
+    return IbisPlan(expr=table, ordering=Ordering.unordered())
 
 
 def _def_use_kind_expr(opname: Value) -> Value:

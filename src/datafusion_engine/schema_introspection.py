@@ -92,15 +92,7 @@ class SchemaIntrospector:
             "FROM information_schema.columns "
             f"WHERE table_name = '{table_name}'"
         )
-        try:
-            return _rows_for_query(self.ctx, query)
-        except (RuntimeError, TypeError, ValueError):
-            fallback = (
-                "SELECT table_catalog, table_schema, table_name, column_name, data_type, is_nullable "
-                "FROM information_schema.columns "
-                f"WHERE table_name = '{table_name}'"
-            )
-            return _rows_for_query(self.ctx, fallback)
+        return _rows_for_query(self.ctx, query)
 
     def tables_snapshot(self) -> list[dict[str, object]]:
         """Return table inventory rows from information_schema.
@@ -147,10 +139,32 @@ class SchemaIntrospector:
             Column metadata rows for all tables.
         """
         query = (
-            "SELECT table_catalog, table_schema, table_name, column_name, data_type, is_nullable "
+            "SELECT table_catalog, table_schema, table_name, column_name, data_type, "
+            "is_nullable, column_default "
             "FROM information_schema.columns"
         )
         return _rows_for_query(self.ctx, query)
+
+    def schema_map(self) -> dict[str, dict[str, str]]:
+        """Return a SQLGlot schema mapping derived from information_schema.
+
+        Returns
+        -------
+        dict[str, dict[str, str]]
+            Mapping of table name to column/type mappings.
+        """
+        rows = self.columns_snapshot()
+        mapping: dict[str, dict[str, str]] = {}
+        for row in rows:
+            table = row.get("table_name")
+            column = row.get("column_name")
+            dtype = row.get("data_type")
+            if not isinstance(table, str) or not isinstance(column, str):
+                continue
+            if not table or not column:
+                continue
+            mapping.setdefault(table, {})[column] = str(dtype) if dtype is not None else "unknown"
+        return mapping
 
     def routines_snapshot(self) -> list[dict[str, object]]:
         """Return routine inventory rows from information_schema.

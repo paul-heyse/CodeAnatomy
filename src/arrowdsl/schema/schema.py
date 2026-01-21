@@ -15,26 +15,19 @@ from arrowdsl.core.interop import (
     ComputeExpression,
     DataTypeLike,
     FieldLike,
+    RecordBatchReaderLike,
     ScalarLike,
     SchemaLike,
     TableLike,
+    coerce_table_like,
     ensure_expression,
+    pc,
 )
 from arrowdsl.schema.build import empty_table
 from arrowdsl.schema.chunking import ChunkPolicy
 from arrowdsl.schema.encoding_policy import EncodingPolicy, EncodingSpec, apply_encoding
 from arrowdsl.schema.normalize import NormalizePolicy
-from datafusion_engine.compute_ops import (
-    call_function,
-    cast_values,
-    dictionary_encode,
-    invert,
-    is_valid,
-    scalar,
-)
-from datafusion_engine.compute_ops import (
-    field as expr_field,
-)
+from datafusion_engine.runtime import align_table_to_schema as datafusion_align_table_to_schema
 
 type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
 
@@ -42,7 +35,7 @@ type CastErrorPolicy = Literal["unsafe", "keep", "raise"]
 def _cast_expr(
     expr: ComputeExpression, dtype: DataTypeLike, *, safe: bool = True
 ) -> ComputeExpression:
-    return ensure_expression(cast_values(expr, dtype, safe=safe))
+    return ensure_expression(pc.cast(expr, dtype, safe=safe))
 
 
 def _or_exprs(exprs: Sequence[ComputeExpression]) -> ComputeExpression:
@@ -126,39 +119,6 @@ def _prefer_base_nested(base: SchemaLike, unified: SchemaLike) -> SchemaLike:
     return pa.schema(fields, metadata=unified.metadata)
 
 
-def _cast_column(
-    col: ArrayLike,
-    field: FieldLike,
-    *,
-    safe_cast: bool,
-    on_error: CastErrorPolicy,
-) -> tuple[ArrayLike, bool]:
-    """Cast a column to a field type, returning the casted flag.
-
-    Returns
-    -------
-    tuple[ArrayLike, bool]
-        Casted column and whether a cast occurred.
-
-    Raises
-    ------
-    ArrowInvalid
-        Raised when casting fails and ``on_error`` is ``"raise"``.
-    ArrowTypeError
-        Raised when casting fails and ``on_error`` is ``"raise"``.
-    """
-    if col.type == field.type:
-        return col, False
-    try:
-        return cast_values(col, field.type, safe=safe_cast), True
-    except (pa.ArrowInvalid, pa.ArrowTypeError):
-        if on_error == "unsafe":
-            return cast_values(col, field.type, safe=False), True
-        if on_error == "keep":
-            return col, False
-        raise
-
-
 def align_to_schema(
     table: TableLike,
     *,
@@ -169,49 +129,52 @@ def align_to_schema(
 ) -> tuple[TableLike, AlignmentInfo]:
     """Align and cast a table to a target schema.
 
+    Raises
+    ------
+    ValueError
+        Raised when unsupported alignment options are requested.
+
     Returns
     -------
     tuple[TableLike, AlignmentInfo]
         Aligned table and alignment metadata.
     """
+    if safe_cast:
+        msg = "safe_cast=True is not supported by DataFusion alignment."
+        raise ValueError(msg)
+    resolved_schema = pa.schema(schema)
+    resolved = coerce_table_like(table)
+    if isinstance(resolved, pa.RecordBatchReader):
+        reader = cast("RecordBatchReaderLike", resolved)
+        resolved_table = pa.Table.from_batches(list(reader))
+    else:
+        resolved_table = cast("pa.Table", resolved)
+    input_cols = list(resolved_table.column_names)
+    target_names = [field.name for field in resolved_schema]
+    missing = [name for name in target_names if name not in input_cols]
+    extra = [name for name in input_cols if name not in target_names]
+    casted = [
+        name
+        for name in target_names
+        if name in input_cols
+        and resolved_table.schema.field(name).type != resolved_schema.field(name).type
+    ]
+    aligned = datafusion_align_table_to_schema(
+        resolved_table,
+        schema=resolved_schema,
+        keep_extra_columns=keep_extra_columns,
+    )
     info: AlignmentInfo = {
-        "input_cols": list(table.column_names),
-        "input_rows": int(table.num_rows),
-        "missing_cols": [],
-        "dropped_cols": [],
-        "casted_cols": [],
-        "output_rows": 0,
+        "input_cols": input_cols,
+        "input_rows": int(resolved_table.num_rows),
+        "missing_cols": missing,
+        "dropped_cols": extra,
+        "casted_cols": casted,
+        "output_rows": int(aligned.num_rows),
     }
-
-    target_names = [field.name for field in schema]
-    missing = [name for name in target_names if name not in table.column_names]
-    extra = [name for name in table.column_names if name not in target_names]
-
-    arrays: list[ArrayLike] = []
-    for schema_field in schema:
-        if schema_field.name in table.column_names:
-            col, casted = _cast_column(
-                table[schema_field.name],
-                schema_field,
-                safe_cast=safe_cast,
-                on_error=on_error,
-            )
-            if casted:
-                info["casted_cols"].append(schema_field.name)
-            arrays.append(col)
-        else:
-            arrays.append(pa.nulls(table.num_rows, type=schema_field.type))
-
-    aligned = pa.Table.from_arrays(arrays, schema=schema)
-    info["missing_cols"] = missing
-    info["dropped_cols"] = extra
-    info["output_rows"] = int(aligned.num_rows)
-
-    if keep_extra_columns:
-        for name in table.column_names:
-            if name not in aligned.column_names:
-                aligned = aligned.append_column(name, table[name])
-
+    if on_error == "keep":
+        msg = "on_error='keep' is not supported by DataFusion alignment."
+        raise ValueError(msg)
     return aligned, info
 
 
@@ -557,8 +520,8 @@ def encode_expression(column: str) -> ComputeExpression:
     ComputeExpression
         Expression applying dictionary encoding.
     """
-    expr = expr_field(column)
-    encoded = dictionary_encode(cast("ArrayLike", expr))
+    expr = pc.field(column)
+    encoded = pc.dictionary_encode(cast("ArrayLike", expr))
     return ensure_expression(encoded)
 
 
@@ -581,13 +544,13 @@ def projection_for_schema(
     for schema_field in schema:
         if patypes.is_list_view(schema_field.type) or patypes.is_large_list_view(schema_field.type):
             if schema_field.name in available_set:
-                expr = ensure_expression(expr_field(schema_field.name))
+                expr = ensure_expression(pc.field(schema_field.name))
             else:
-                expr = ensure_expression(scalar(pa.scalar(None, type=schema_field.type)))
+                expr = ensure_expression(pc.scalar(pa.scalar(None, type=schema_field.type)))
         elif schema_field.name in available_set:
-            expr = _cast_expr(expr_field(schema_field.name), schema_field.type, safe=safe_cast)
+            expr = _cast_expr(pc.field(schema_field.name), schema_field.type, safe=safe_cast)
         else:
-            expr = _cast_expr(scalar(None), schema_field.type, safe=safe_cast)
+            expr = _cast_expr(pc.scalar(None), schema_field.type, safe=safe_cast)
         expressions.append(ensure_expression(expr))
         names.append(schema_field.name)
     return expressions, names
@@ -609,7 +572,7 @@ def encoding_projection(
     expressions: list[ComputeExpression] = []
     names: list[str] = []
     for name in available:
-        expr = encode_expression(name) if name in encode_set else expr_field(name)
+        expr = encode_expression(name) if name in encode_set else pc.field(name)
         expressions.append(expr)
         names.append(name)
     return expressions, names
@@ -655,9 +618,9 @@ def best_fit_type(array: ArrayLike, candidates: Sequence[DataTypeLike]) -> DataT
     """
     total_rows = len(array)
     for dtype in candidates:
-        casted = cast_values(array, dtype, safe=False)
-        valid = is_valid(casted)
-        total = call_function("sum", [cast_values(valid, pa.int64())])
+        casted = pc.cast(array, dtype, safe=False)
+        valid = pc.is_valid(casted)
+        total = pc.call_function("sum", [pc.cast(valid, pa.int64())])
         value = cast("int | float | bool | None", cast("ScalarLike", total).as_py())
         if value is None:
             continue
@@ -694,12 +657,12 @@ def required_non_null_mask(
         Boolean expression for invalid rows.
     """
     exprs = [
-        ensure_expression(invert(is_valid(expr_field(name))))
+        ensure_expression(pc.invert(pc.is_valid(pc.field(name))))
         for name in required
         if name in available
     ]
     if not exprs:
-        return ensure_expression(scalar(pa.scalar(value=False)))
+        return ensure_expression(pc.scalar(pa.scalar(value=False)))
     return _or_exprs(exprs)
 
 

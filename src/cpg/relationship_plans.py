@@ -31,7 +31,7 @@ from ibis_engine.expr_compiler import (
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
 from ibis_engine.scan_io import DatasetSource
-from ibis_engine.schema_utils import align_table_to_schema
+from ibis_engine.schema_utils import validate_expr_schema
 from ibis_engine.sources import (
     SourceToIbisOptions,
     namespace_recorder_from_ctx,
@@ -510,8 +510,10 @@ def _compile_relation_plans_ibis(
             if compiled.emit_rule_meta:
                 expr = _apply_rule_meta_ibis(expr, rule)
             expr = _apply_kernel_specs_ibis(expr, rule.post_kernels, registry=context.registry)
-            expr = align_table_to_schema(
-                expr, schema=context.output_schema, keep_extra_columns=True
+            validate_expr_schema(
+                expr,
+                expected=context.output_schema,
+                allow_extra_columns=True,
             )
             plan = IbisPlan(expr=expr, ordering=plan.ordering)
         if plan is None:
@@ -672,7 +674,7 @@ def _interval_align_plan_ibis(
     if rule.emit_rule_meta:
         expr = _apply_rule_meta_ibis(expr, rule)
     expr = _apply_kernel_specs_ibis(expr, rule.post_kernels, registry=context.registry)
-    expr = align_table_to_schema(expr, schema=context.output_schema, keep_extra_columns=True)
+    validate_expr_schema(expr, expected=context.output_schema, allow_extra_columns=True)
     plan = IbisPlan(expr=expr, ordering=Ordering.unordered())
     metrics_plan = (
         None if metrics is None else IbisPlan(expr=metrics, ordering=Ordering.unordered())
@@ -699,7 +701,7 @@ def _winner_select_plan_ibis(
     if rule.emit_rule_meta:
         expr = _apply_rule_meta_ibis(expr, rule)
     expr = _apply_kernel_specs_ibis(expr, rule.post_kernels, registry=context.registry)
-    expr = align_table_to_schema(expr, schema=context.output_schema, keep_extra_columns=True)
+    validate_expr_schema(expr, expected=context.output_schema, allow_extra_columns=True)
     plan = IbisPlan(expr=expr, ordering=Ordering.unordered())
     metrics_plan = (
         None if metrics is None else IbisPlan(expr=metrics, ordering=Ordering.unordered())

@@ -7,8 +7,7 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.types as patypes
 
-from arrowdsl.core.interop import ChunkedArrayLike, TableLike
-from datafusion_engine.compute_ops import cast_values, dictionary_encode
+from arrowdsl.core.interop import ChunkedArrayLike, TableLike, pc
 
 
 def normalize_dictionaries(
@@ -55,7 +54,7 @@ def normalize_dictionaries(
         if patypes.is_dictionary(field.type):
             dict_type = cast("pa.DictionaryType", field.type)
             dict_cols[field.name] = dict_type
-            col = cast("ChunkedArrayLike", cast_values(col, dict_type.value_type))
+            col = cast("ChunkedArrayLike", pc.cast(col, dict_type.value_type))
         columns.append(col)
         names.append(field.name)
     decoded_schema = schema_with_metadata(names, columns, source_schema=source_schema)
@@ -69,8 +68,8 @@ def normalize_dictionaries(
         col = decoded[field.name]
         dict_type = dict_cols.get(field.name)
         if dict_type is not None:
-            encoded = dictionary_encode(col)
-            col = cast("ChunkedArrayLike", cast_values(encoded, dict_type))
+            encoded = pc.dictionary_encode(col)
+            col = cast("ChunkedArrayLike", pc.cast(encoded, dict_type))
         columns.append(col)
     encoded_schema = schema_with_metadata(names, columns, source_schema=source_schema)
     return pa.table(columns, schema=encoded_schema)

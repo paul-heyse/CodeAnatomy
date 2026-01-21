@@ -110,15 +110,12 @@ def _apply_diagnostics_policy(
         Updated runtime profile with diagnostics settings applied.
     """
     capture_explain = policy.capture_datafusion_explains
-    capture_fallbacks = policy.capture_datafusion_fallbacks
     return replace(
         profile,
         capture_explain=capture_explain,
         explain_analyze=policy.explain_analyze,
         explain_analyze_level=policy.explain_analyze_level,
         explain_collector=profile.explain_collector if capture_explain else None,
-        capture_fallbacks=capture_fallbacks,
-        fallback_collector=profile.fallback_collector if capture_fallbacks else None,
     )
 
 

@@ -6,6 +6,9 @@ from collections.abc import Sequence
 from typing import cast
 
 import ibis
+import ibis.expr.datashape as ds
+import ibis.expr.datatypes as dt
+from ibis.expr import operations as ops
 from ibis.expr.types import StringValue, Value
 
 from ibis_engine.builtin_udfs import stable_hash64, stable_hash128
@@ -139,11 +142,9 @@ def _stringify(value: Value | str | None, *, null_sentinel: str) -> StringValue:
 def _join_with_separator(parts: Sequence[StringValue]) -> StringValue:
     if len(parts) == 1:
         return parts[0]
-    sep = ibis.literal(HASH_SEPARATOR)
-    result = parts[0]
-    for part in parts[1:]:
-        result = result.concat(cast("StringValue", sep)).concat(part)
-    return result
+    sep_value = cast("ops.Value[dt.String, ds.DataShape]", ibis.literal(HASH_SEPARATOR).op())
+    resolved_parts = tuple(cast("ops.Value[dt.String, ds.DataShape]", part.op()) for part in parts)
+    return cast("StringValue", ops.StringJoin(resolved_parts, sep_value).to_expr())
 
 
 def _concat_values(parts: Sequence[StringValue]) -> StringValue:

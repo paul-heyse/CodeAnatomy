@@ -21,7 +21,7 @@ from cpg.specs import (
     PropValueType,
 )
 from ibis_engine.plan import IbisPlan
-from ibis_engine.schema_utils import align_table_to_schema, ibis_null_literal
+from ibis_engine.schema_utils import ibis_null_literal, validate_expr_schema
 
 
 def emit_props_fast(
@@ -159,12 +159,8 @@ def _prop_field_plan(
     )
     if context.schema_version is not None:
         output = output.mutate(schema_version=ibis.literal(context.schema_version))
-    aligned = align_table_to_schema(
-        output,
-        schema=context.schema,
-        keep_extra_columns=False,
-    )
-    return IbisPlan(expr=aligned, ordering=Ordering.unordered())
+    validate_expr_schema(output, expected=context.schema)
+    return IbisPlan(expr=output, ordering=Ordering.unordered())
 
 
 def _entity_id_expr(table: Table, cols: Sequence[str]) -> Value:

@@ -16,7 +16,6 @@ from ibis_engine.io_bridge import (
     ibis_to_table,
     write_ibis_dataset_delta,
     write_ibis_named_datasets_delta,
-    write_ibis_table_delta,
 )
 from storage.deltalake import (
     DeltaCdfOptions,
@@ -135,7 +134,6 @@ __all__ = [
     "write_finalize_result_delta",
     "write_ibis_dataset_delta",
     "write_ibis_named_datasets_delta",
-    "write_ibis_table_delta",
     "write_named_datasets_delta",
     "write_table_delta",
     "write_table_ipc_file",

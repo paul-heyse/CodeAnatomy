@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-import ibis
 import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table as IbisTable
@@ -15,10 +14,11 @@ from ibis.expr.types import Value as IbisValue
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.core.ordering import Ordering, OrderingLevel
-from datafusion_engine.schema_authority import dataset_schema_from_context
+from datafusion_engine.runtime import dataset_schema_from_context
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
 from ibis_engine.expr_compiler import align_set_op_tables, union_tables
 from ibis_engine.plan import IbisPlan
+from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
 from registry_common.arrow_payloads import payload_hash
 from relspec.compiler import RelationshipRuleCompiler, RuleExecutionOptions
 from relspec.contracts import RELATION_OUTPUT_NAME, relation_output_schema
@@ -108,6 +108,11 @@ def compile_graph_plan(
     execution:
         Execution options for adapterized plan materialization.
 
+    Raises
+    ------
+    ValueError
+        Raised when no Ibis backend is configured.
+
     Returns
     -------
     GraphPlan
@@ -116,6 +121,10 @@ def compile_graph_plan(
     work = evidence.clone()
     plan_compiler = compiler.plan_compiler or IbisRelPlanCompiler()
     execution = execution or GraphExecutionOptions()
+    if execution.ibis_backend is None:
+        msg = "Ibis backend is required for graph plan compilation."
+        raise ValueError(msg)
+    ibis_backend = execution.ibis_backend
 
     def _plan_executor(
         plan: IbisPlan,
@@ -128,7 +137,7 @@ def compile_graph_plan(
             ctx=exec_ctx,
             execution_policy=execution.execution_policy,
             execution_label=execution_label,
-            ibis_backend=execution.ibis_backend,
+            ibis_backend=ibis_backend,
             params=resolved_params,
         )
         return materialize_ibis_plan(plan, execution=ibis_execution)
@@ -152,10 +161,17 @@ def compile_graph_plan(
                     params=execution.params,
                     plan_executor=_plan_executor,
                     execution_policy=execution.execution_policy,
-                    ibis_backend=execution.ibis_backend,
+                    ibis_backend=ibis_backend,
                 ),
             )
-            plan = IbisPlan(expr=ibis.memtable(table), ordering=Ordering.unordered())
+            plan = register_ibis_table(
+                table,
+                options=SourceToIbisOptions(
+                    backend=ibis_backend,
+                    name=None,
+                    ordering=Ordering.unordered(),
+                ),
+            )
         outputs.setdefault(rule.output_dataset, []).append(plan)
         work.register(rule.output_dataset, _plan_schema(plan))
     merged: dict[str, IbisPlan] = {}
@@ -345,15 +361,19 @@ def _union_plans(plans: Sequence[IbisPlan], *, label: str) -> IbisPlan:
     label
         Label used for empty plan fallbacks.
 
+    Raises
+    ------
+    ValueError
+        Raised when no plans are provided.
+
     Returns
     -------
     IbisPlan
         Unioned plan with unordered ordering metadata.
     """
     if not plans:
-        _ = label
-        empty = ibis.memtable(pa.table({}))
-        return IbisPlan(expr=empty, ordering=Ordering.unordered())
+        msg = f"{label} requires at least one plan to union."
+        raise ValueError(msg)
     _validate_set_op_ordering([plan.ordering for plan in plans], op_label="union")
     unioned = union_tables([plan.expr for plan in plans], distinct=False)
     return IbisPlan(expr=unioned, ordering=Ordering.unordered())

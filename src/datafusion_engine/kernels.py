@@ -21,7 +21,7 @@ from datafusion.expr import SortKey as DFSortKey
 from arrowdsl.core.determinism import DeterminismTier
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.expr_types import ExplodeSpec
-from arrowdsl.core.interop import SchemaLike, TableLike, pc
+from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.core.plan_ops import DedupeSpec, IntervalAlignOptions, SortKey
 from arrowdsl.core.plan_ops import SortKey as PlanSortKey
@@ -191,8 +191,8 @@ def _unique_columns(names: Sequence[str]) -> list[str]:
     return out
 
 
-def _sort_exprs(keys: Sequence[PlanSortKey]) -> list[SortExpr]:
-    out: list[SortExpr] = []
+def _sort_exprs(keys: Sequence[PlanSortKey]) -> list[DFSortKey]:
+    out: list[DFSortKey] = []
     for key in keys:
         expr = col(key.column).sort(
             ascending=key.order == "ascending",
@@ -202,7 +202,7 @@ def _sort_exprs(keys: Sequence[PlanSortKey]) -> list[SortExpr]:
     return out
 
 
-def _order_exprs_for_dedupe(spec: DedupeSpec) -> list[SortExpr]:
+def _order_exprs_for_dedupe(spec: DedupeSpec) -> list[DFSortKey]:
     if spec.tie_breakers:
         return _sort_exprs(spec.tie_breakers)
     return _sort_exprs(tuple(PlanSortKey(key, "ascending") for key in spec.keys))
@@ -420,6 +420,10 @@ class _IntervalAlignPrepared:
     left_id_col: str
     score_col: str
     right_suffix: str
+    left_path_col: str
+    right_path_col: str
+    left_start_col: str
+    left_end_col: str
 
 
 @dataclass(frozen=True)
@@ -464,19 +468,6 @@ def _prepare_interval_tables(
     for name in right_required:
         right_table = _ensure_column(right_table, name)
 
-    left_table = left_table.append_column(
-        left_key_col,
-        pc.cast(left_table[cfg.left_path_col], pa.string(), safe=False),
-    )
-    right_table = right_table.append_column(
-        right_key_col,
-        pc.cast(right_table[cfg.right_path_col], pa.string(), safe=False),
-    )
-    left_table = left_table.append_column(
-        left_id_col,
-        pa.array(range(left_table.num_rows), type=pa.int64()),
-    )
-
     return _IntervalAlignPrepared(
         left=left_table,
         right=right_table,
@@ -487,6 +478,10 @@ def _prepare_interval_tables(
         left_id_col=left_id_col,
         score_col=score_col,
         right_suffix=cfg.right_suffix,
+        left_path_col=cfg.left_path_col,
+        right_path_col=cfg.right_path_col,
+        left_start_col=cfg.left_start_col,
+        left_end_col=cfg.left_end_col,
     )
 
 
@@ -593,6 +588,21 @@ def _interval_join_frames(
         batch_size=batch_size,
         ingest_hook=None,
     )
+    left_df = left_df.with_column(
+        prepared.left_key_col,
+        col(prepared.left_path_col).cast(pa.string()),
+    )
+    left_id_order = _sort_exprs(
+        (
+            PlanSortKey(prepared.left_key_col, "ascending"),
+            PlanSortKey(prepared.left_start_col, "ascending"),
+            PlanSortKey(prepared.left_end_col, "ascending"),
+        )
+    )
+    left_df = left_df.with_column(
+        prepared.left_id_col,
+        f.row_number(order_by=left_id_order) - lit(1),
+    )
     right_df = _df_from_table(
         ctx,
         prepared.right,
@@ -605,7 +615,12 @@ def _interval_join_frames(
         left_names=set(left_df.schema().names),
         right_suffix=prepared.right_suffix,
     )
-    right_key_col = right_name_map.get(prepared.right_key_col, prepared.right_key_col)
+    right_path_col = right_name_map.get(prepared.right_path_col, prepared.right_path_col)
+    right_df = right_df.with_column(
+        prepared.right_key_col,
+        col(right_path_col).cast(pa.string()),
+    )
+    right_key_col = prepared.right_key_col
     joined = left_df.join(
         right_df,
         how="inner",

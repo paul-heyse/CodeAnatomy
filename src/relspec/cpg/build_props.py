@@ -24,8 +24,8 @@ from cpg.spec_registry import prop_table_specs
 from cpg.specs import PropFieldSpec, PropTableSpec, filter_fields, resolve_prop_include
 from cpg.table_utils import align_table_to_schema, assert_schema_metadata
 from datafusion_engine.nested_tables import ViewReference
-from datafusion_engine.runtime import AdapterExecutionPolicy
-from datafusion_engine.schema_authority import (
+from datafusion_engine.runtime import (
+    AdapterExecutionPolicy,
     dataset_schema_from_context,
     dataset_spec_from_context,
 )
@@ -38,6 +38,7 @@ from ibis_engine.scan_io import DatasetSource
 from ibis_engine.sources import (
     SourceToIbisOptions,
     namespace_recorder_from_ctx,
+    register_ibis_table,
     register_ibis_view,
     source_to_ibis,
 )
@@ -333,9 +334,16 @@ def _ibis_prop_tables(
     return tables
 
 
-def _empty_props_ibis(schema: pa.Schema) -> IbisPlan:
+def _empty_props_ibis(schema: pa.Schema, *, backend: BaseBackend) -> IbisPlan:
     table = empty_table(schema)
-    return IbisPlan(expr=ibis.memtable(table), ordering=Ordering.unordered())
+    return register_ibis_table(
+        table,
+        options=SourceToIbisOptions(
+            backend=backend,
+            name=None,
+            ordering=Ordering.unordered(),
+        ),
+    )
 
 
 def _union_props_ibis(parts: list[IbisPlan]) -> IbisPlan:
@@ -507,7 +515,6 @@ def _materialize_props_json(
     return align_table_to_schema(
         json_table,
         schema=props_json_schema,
-        safe_cast=context.execution.ctx.safe_cast,
         keep_extra_columns=context.execution.ctx.debug,
     )
 
@@ -516,10 +523,11 @@ def _raw_props_plan_from_emitted(
     emitted_fast: list[tuple[PropTableSpec, list[IbisPlan]]],
     *,
     schema: pa.Schema,
+    backend: BaseBackend,
 ) -> IbisPlan:
     parts = [plan for _, spec_plans in emitted_fast for plan in spec_plans]
     if not parts:
-        return _empty_props_ibis(schema)
+        return _empty_props_ibis(schema, backend=backend)
     return _union_props_ibis(parts)
 
 
@@ -546,7 +554,11 @@ def _build_cpg_props_ibis(
             props_json_schema=props_json_schema,
         )
     )
-    raw_plan = _raw_props_plan_from_emitted(emitted_fast, schema=context.props_schema)
+    raw_plan = _raw_props_plan_from_emitted(
+        emitted_fast,
+        schema=context.props_schema,
+        backend=backend,
+    )
     execution = IbisExecutionContext(
         ctx=context.ctx,
         execution_policy=config.execution_policy,
@@ -564,7 +576,6 @@ def _build_cpg_props_ibis(
     raw = align_table_to_schema(
         raw,
         schema=context.props_schema,
-        safe_cast=context.ctx.safe_cast,
         keep_extra_columns=context.ctx.debug,
     )
     extra_outputs: dict[str, TableLike] = {}
@@ -579,7 +590,6 @@ def _build_cpg_props_ibis(
         raw = align_table_to_schema(
             concat_tables([raw, json_table], promote_options="default"),
             schema=context.props_schema,
-            safe_cast=context.ctx.safe_cast,
             keep_extra_columns=context.ctx.debug,
         )
     quality = _ibis_props_quality_tables(
@@ -618,7 +628,7 @@ def _build_cpg_props_raw_ibis(
     )
     parts = [plan for _, spec_plans in emitted_fast for plan in spec_plans]
     if not parts:
-        return _empty_props_ibis(context.props_schema)
+        return _empty_props_ibis(context.props_schema, backend=backend)
     return _union_props_ibis(parts)
 
 

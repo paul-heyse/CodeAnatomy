@@ -7,7 +7,7 @@ from functools import cache
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.core.ordering import OrderingLevel
 from arrowdsl.schema.metadata import ordering_metadata_spec
-from datafusion_engine.schema_authority import dataset_schema_from_context
+from datafusion_engine.runtime import dataset_schema_from_context
 from schema_spec.system import (
     Contract,
     DatasetSpec,

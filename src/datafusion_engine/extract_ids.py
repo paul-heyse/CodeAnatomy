@@ -1,13 +1,13 @@
-"""HashSpec registry and extractor ID helpers."""
+"""Hash expression spec registry and extractor ID helpers."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 
-from arrowdsl.core.ids import HashSpec
-from arrowdsl.core.ids_registry import hash_spec_factory
+from ibis_engine.hashing import HashExprSpec, HashExprSpecOptions
+from ibis_engine.hashing import hash_expr_spec_factory as hash_spec_factory
 
-_HASH_SPECS: Mapping[str, HashSpec] = {
+_HASH_SPECS: Mapping[str, HashExprSpec] = {
     "span_id": hash_spec_factory(
         prefix="span",
         cols=("file_id", "bstart", "bend"),
@@ -181,29 +181,29 @@ _HASH_SPECS: Mapping[str, HashSpec] = {
 }
 
 
-def repo_file_id_spec(repo_id: str | None) -> HashSpec:
-    """Return the repo file id HashSpec with optional repo-id literal.
+def repo_file_id_spec(repo_id: str | None) -> HashExprSpec:
+    """Return the repo file id hash spec with optional repo-id literal.
 
     Returns
     -------
-    HashSpec
+    HashExprSpec
         Hash spec for repository file ids.
     """
     extra = (repo_id,) if repo_id else ()
     return hash_spec_factory(
         prefix="file",
         cols=("path",),
-        extra_literals=extra,
         out_col="file_id",
+        options=HashExprSpecOptions(extra_literals=extra),
     )
 
 
-def hash_spec(name: str, *, repo_id: str | None = None) -> HashSpec:
-    """Return the HashSpec for a known identifier.
+def hash_spec(name: str, *, repo_id: str | None = None) -> HashExprSpec:
+    """Return the hash spec for a known identifier.
 
     Returns
     -------
-    HashSpec
+    HashExprSpec
         Hash spec for the identifier name.
     """
     if name == "repo_file_id":

@@ -16,6 +16,7 @@ from datafusion_engine.schema_registry import (
     validate_ast_views,
     validate_required_bytecode_functions,
     validate_required_cst_functions,
+    validate_required_engine_functions,
     validate_required_symtable_functions,
 )
 from datafusion_engine.udf_registry import register_datafusion_udfs
@@ -78,6 +79,13 @@ def test_required_bytecode_functions_present() -> None:
     ctx = SessionContext()
     register_datafusion_udfs(ctx)
     validate_required_bytecode_functions(ctx)
+
+
+def test_required_engine_functions_present() -> None:
+    """Validate required engine function inventory."""
+    ctx = SessionContext()
+    register_datafusion_udfs(ctx)
+    validate_required_engine_functions(ctx)
 
 
 def test_validate_ast_views_smoke() -> None:

@@ -12,6 +12,30 @@ from ibis.expr.types import Table, Value
 from sqlglot import Expression
 
 
+def _normalize_arrow_dtype(dtype: pa.DataType) -> pa.DataType:
+    """Normalize Arrow types for Ibis compatibility.
+
+    Parameters
+    ----------
+    dtype:
+        Arrow dtype to normalize for Ibis conversions.
+
+    Returns
+    -------
+    pyarrow.DataType
+        Normalized Arrow dtype.
+    """
+    if pa.types.is_dictionary(dtype):
+        return dtype.value_type
+    if pa.types.is_large_string(dtype):
+        return pa.string()
+    if pa.types.is_large_binary(dtype):
+        return pa.binary()
+    if pa.types.is_large_list(dtype):
+        return pa.list_(dtype.value_type)
+    return dtype
+
+
 def ibis_dtype_from_arrow(dtype: pa.DataType) -> dt.DataType:
     """Return the Ibis dtype corresponding to a PyArrow dtype.
 
@@ -63,8 +87,22 @@ def sqlglot_column_defs(schema: pa.Schema, *, dialect: str = "datafusion") -> li
     return list(ibis_schema.to_sqlglot_column_defs(dialect=dialect))
 
 
-def validate_expr_schema(expr: Table, *, expected: pa.Schema) -> None:
+def validate_expr_schema(
+    expr: Table,
+    *,
+    expected: pa.Schema,
+    allow_extra_columns: bool = False,
+) -> None:
     """Validate that an Ibis expression matches the expected schema.
+
+    Parameters
+    ----------
+    expr:
+        Expression to validate against the expected schema.
+    expected:
+        Schema expected for the expression result.
+    allow_extra_columns:
+        Whether to allow columns not present in the expected schema.
 
     Raises
     ------
@@ -76,7 +114,9 @@ def validate_expr_schema(expr: Table, *, expected: pa.Schema) -> None:
     expected_names = cast("tuple[str, ...]", expected_ibis.names)
     actual_names = cast("tuple[str, ...]", actual.names)
     missing = [name for name in expected_names if name not in actual_names]
-    extra = [name for name in actual_names if name not in expected_names]
+    extra: list[str] = []
+    if not allow_extra_columns:
+        extra = [name for name in actual_names if name not in expected_names]
     mismatched = [
         name
         for name in expected_names
@@ -94,95 +134,6 @@ def validate_expr_schema(expr: Table, *, expected: pa.Schema) -> None:
     msg = "Ibis expression schema does not match expected contract."
     msg_full = "{} ({})".format(msg, ", ".join(details))
     raise ValueError(msg_full)
-
-
-def normalize_table_for_ibis(table: pa.Table) -> pa.Table:
-    """Return a table with Arrow view types normalized for Ibis.
-
-    Returns
-    -------
-    pyarrow.Table
-        Table with list view types normalized to list types.
-    """
-    normalized_schema = _normalize_arrow_schema(table.schema)
-    if normalized_schema == table.schema:
-        return table
-    return pa.table(table.to_pydict(), schema=normalized_schema)
-
-
-def _normalize_arrow_dtype(dtype: pa.DataType) -> pa.DataType:
-    if pa.types.is_list_view(dtype):
-        normalized = pa.list_(_normalize_arrow_dtype(dtype.value_type))
-    elif pa.types.is_large_list_view(dtype):
-        normalized = pa.large_list(_normalize_arrow_dtype(dtype.value_type))
-    elif pa.types.is_fixed_size_list(dtype):
-        normalized = pa.list_(_normalize_arrow_dtype(dtype.value_type), dtype.list_size)
-    elif pa.types.is_list(dtype):
-        normalized = pa.list_(_normalize_arrow_dtype(dtype.value_type))
-    elif pa.types.is_large_list(dtype):
-        normalized = pa.large_list(_normalize_arrow_dtype(dtype.value_type))
-    elif pa.types.is_struct(dtype):
-        fields = [
-            pa.field(
-                field.name,
-                _normalize_arrow_dtype(field.type),
-                nullable=field.nullable,
-                metadata=field.metadata,
-            )
-            for field in dtype
-        ]
-        normalized = pa.struct(fields)
-    elif pa.types.is_map(dtype):
-        normalized = pa.map_(
-            _normalize_arrow_dtype(dtype.key_type),
-            _normalize_arrow_dtype(dtype.item_type),
-            keys_sorted=dtype.keys_sorted,
-        )
-    elif pa.types.is_dictionary(dtype):
-        normalized = pa.dictionary(dtype.index_type, _normalize_arrow_dtype(dtype.value_type))
-    else:
-        normalized = dtype
-    return normalized
-
-
-def _normalize_arrow_schema(schema: pa.Schema) -> pa.Schema:
-    fields = [
-        pa.field(
-            field.name,
-            _normalize_arrow_dtype(field.type),
-            nullable=field.nullable,
-            metadata=field.metadata,
-        )
-        for field in schema
-    ]
-    return pa.schema(fields, metadata=schema.metadata)
-
-
-def align_table_to_schema(
-    table: Table,
-    *,
-    schema: pa.Schema,
-    keep_extra_columns: bool = False,
-) -> Table:
-    """Align an Ibis table to a target schema via projection and casts.
-
-    Returns
-    -------
-    ibis.expr.types.Table
-        Table aligned to the target schema.
-    """
-    cols: list[Value] = []
-    seen = set()
-    for field in schema:
-        name = field.name
-        if name in table.columns:
-            cols.append(table[name].cast(ibis_dtype_from_arrow(field.type)).name(name))
-        else:
-            cols.append(ibis_null_literal(field.type).name(name))
-        seen.add(name)
-    if keep_extra_columns:
-        cols.extend(table[name] for name in table.columns if name not in seen)
-    return table.select(cols)
 
 
 def ensure_columns(
@@ -231,13 +182,11 @@ def coalesce_columns(
 
 
 __all__ = [
-    "align_table_to_schema",
     "coalesce_columns",
     "ensure_columns",
     "ibis_dtype_from_arrow",
     "ibis_null_literal",
     "ibis_schema_from_arrow",
-    "normalize_table_for_ibis",
     "sqlglot_column_defs",
     "validate_expr_schema",
 ]

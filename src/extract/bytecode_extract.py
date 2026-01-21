@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
-from arrowdsl.core.ids import stable_id
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract_registry import normalize_options
 from extract.helpers import (
@@ -245,7 +244,7 @@ class DfgState:
     stack: list[DfgValueRef]
     dfg_rows: list[Row]
     error_rows: list[Row]
-    code_id: str
+    code_id: str | None
 
 
 @dataclass(frozen=True)
@@ -723,10 +722,6 @@ def _code_unit_key_columns(unit_ctx: CodeUnitContext) -> dict[str, RowValue]:
     }
 
 
-def _code_unit_id_from_key(key: CodeUnitKey) -> str:
-    return stable_id("code", key.qualpath, key.co_name, str(key.firstlineno))
-
-
 def _append_exception_rows(unit_ctx: CodeUnitContext, exc_rows: list[Row]) -> None:
     identity = unit_ctx.file_ctx.identity_row()
     for k, ex in enumerate(unit_ctx.exc_entries):
@@ -853,7 +848,7 @@ def _append_instruction_rows(
     error_rows: list[Row],
 ) -> None:
     identity = unit_ctx.file_ctx.identity_row()
-    code_id = _code_unit_id_from_key(unit_ctx.code_unit_key)
+    code_id = None
     state = DfgState(
         unit_ctx=unit_ctx,
         stack=[],
@@ -898,7 +893,7 @@ def _append_line_table_rows(
     error_rows: list[Row],
 ) -> None:
     identity = unit_ctx.file_ctx.identity_row()
-    code_id = _code_unit_id_from_key(unit_ctx.code_unit_key)
+    code_id = None
     try:
         line_pairs = dis.findlinestarts(unit_ctx.code)
     except (RuntimeError, TypeError, ValueError) as exc:
@@ -1219,7 +1214,7 @@ def _extract_code_unit_rows(
         key = code_unit_keys.get(id(co))
         if key is None:
             continue
-        code_id = _code_unit_id_from_key(key)
+        code_id = None
         try:
             instruction_data = _instruction_data(co, ctx.options)
         except (RuntimeError, TypeError, ValueError) as exc:
@@ -1319,12 +1314,7 @@ def _code_object_entry(row: Row, groups: CodeUnitGroups) -> dict[str, object]:
     co_filename = row.get("co_filename")
     co_name = row.get("co_name")
     firstlineno = row.get("firstlineno")
-    code_id = stable_id(
-        "code",
-        str(qualpath) if qualpath is not None else None,
-        str(co_name) if co_name is not None else None,
-        str(firstlineno) if firstlineno is not None else None,
-    )
+    code_id = None
     key = _code_unit_key(row)
     instructions = [
         _instruction_entry(item)

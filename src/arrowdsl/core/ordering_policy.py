@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from arrowdsl.core.determinism import DeterminismTier
-from arrowdsl.core.interop import SchemaLike, TableLike
+from arrowdsl.core.interop import SchemaLike, TableLike, pc
 from arrowdsl.core.ordering import Ordering, OrderingKey, OrderingLevel
 from arrowdsl.schema.metadata import (
     infer_ordering_keys,
@@ -13,7 +13,6 @@ from arrowdsl.schema.metadata import (
     ordering_metadata_spec,
 )
 from arrowdsl.schema.schema import SchemaMetadataSpec
-from datafusion_engine.compute_ops import sort_indices
 
 
 def ordering_keys_for_schema(schema: SchemaLike) -> tuple[OrderingKey, ...]:
@@ -47,7 +46,7 @@ def apply_canonical_sort(
     keys = ordering_keys_for_schema(table.schema)
     if not keys:
         return table, ()
-    indices = sort_indices(table, sort_keys=list(keys))
+    indices = pc.sort_indices(table, sort_keys=list(keys))
     return table.take(indices), tuple(keys)
 
 

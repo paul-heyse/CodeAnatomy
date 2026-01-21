@@ -26,8 +26,9 @@ from arrowdsl.core.scan_telemetry import ScanTelemetry
 from arrowdsl.finalize.finalize import Contract, FinalizeResult
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec
 from datafusion_engine.kernel_registry import resolve_kernel
-from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
-from datafusion_engine.schema_authority import (
+from datafusion_engine.runtime import (
+    AdapterExecutionPolicy,
+    ExecutionLabel,
     dataset_schema_from_context,
     dataset_spec_from_context,
 )
@@ -42,7 +43,12 @@ from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import IbisQuerySpec, apply_query_spec
 from ibis_engine.registry import IbisDatasetRegistry
 from ibis_engine.schema_utils import validate_expr_schema
-from ibis_engine.sources import SourceToIbisOptions, namespace_recorder_from_ctx, table_to_ibis
+from ibis_engine.sources import (
+    SourceToIbisOptions,
+    namespace_recorder_from_ctx,
+    register_ibis_table,
+    table_to_ibis,
+)
 from registry_common.arrow_payloads import ipc_hash
 from relspec.edge_contract_validator import (
     EdgeContractValidationConfig,
@@ -346,13 +352,13 @@ class InMemoryPlanResolver(PlanResolver[IbisPlan]):
         self,
         mapping: Mapping[str, TableLike | IbisPlan | IbisTable],
         *,
-        backend: BaseBackend | None = None,
+        backend: BaseBackend,
     ) -> None:
         self.mapping = dict(mapping)
-        self._backend: BaseBackend | None = backend
+        self._backend: BaseBackend = backend
 
     @property
-    def backend(self) -> BaseBackend | None:
+    def backend(self) -> BaseBackend:
         """Return the backend associated with this resolver."""
         return self._backend
 
@@ -414,7 +420,7 @@ def _ibis_plan_from_table_like(
     value: TableLike | RecordBatchReaderLike,
     *,
     ordering: Ordering,
-    backend: BaseBackend | None = None,
+    backend: BaseBackend,
     name: str | None = None,
 ) -> IbisPlan:
     """Build an Ibis plan from Arrow table-like inputs.
@@ -426,7 +432,7 @@ def _ibis_plan_from_table_like(
     ordering
         Ordering metadata for the resulting plan.
     backend
-        Optional Ibis backend to register the table with.
+        Ibis backend to register the table with.
     name
         Optional table name when using a backend.
 
@@ -436,17 +442,14 @@ def _ibis_plan_from_table_like(
         Plan wrapping the table-like input.
     """
     table = _ensure_table(value)
-    if backend is not None:
-        return table_to_ibis(
-            table,
-            options=SourceToIbisOptions(
-                backend=backend,
-                name=name,
-                ordering=ordering,
-            ),
-        )
-    expr = ibis.memtable(table)
-    return IbisPlan(expr=expr, ordering=ordering)
+    return table_to_ibis(
+        table,
+        options=SourceToIbisOptions(
+            backend=backend,
+            name=name,
+            ordering=ordering,
+        ),
+    )
 
 
 def _ensure_table(value: TableLike | RecordBatchReaderLike) -> pa.Table:
@@ -1083,6 +1086,8 @@ class CompiledRule:
         ------
         RuntimeError
             Raised when no execution path is available.
+        ValueError
+            Raised when no Ibis backend is configured.
         """
         options = options or RuleExecutionOptions()
         label = ExecutionLabel(
@@ -1090,6 +1095,9 @@ class CompiledRule:
             output_dataset=self.rule.output_dataset,
         )
         resolved_backend = options.ibis_backend or resolver.backend
+        if resolved_backend is None:
+            msg = "Ibis backend is required for compiled output execution."
+            raise ValueError(msg)
         if options.plan_executor is None:
             resolved_executor = _adapter_plan_executor(
                 execution_policy=options.execution_policy,
@@ -1911,9 +1919,17 @@ def _materialize_output_table(
         return
     require_explicit_ordering(result.good.schema, label=output_dataset)
     recorder = namespace_recorder_from_ctx(ctx)
-    expr = ibis.memtable(result.good)
+    plan = register_ibis_table(
+        result.good,
+        options=SourceToIbisOptions(
+            backend=backend,
+            name=None,
+            ordering=Ordering.unordered(),
+            namespace_recorder=recorder,
+        ),
+    )
     _ = materialize_table(
-        expr,
+        plan.expr,
         options=IbisMaterializeOptions(
             backend=backend,
             name=output_dataset,

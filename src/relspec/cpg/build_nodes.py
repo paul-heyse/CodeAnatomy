@@ -28,8 +28,8 @@ from cpg.spec_registry import node_plan_specs
 from cpg.specs import NodePlanSpec
 from cpg.table_utils import align_table_to_schema, assert_schema_metadata
 from datafusion_engine.nested_tables import ViewReference
-from datafusion_engine.runtime import AdapterExecutionPolicy
-from datafusion_engine.schema_authority import (
+from datafusion_engine.runtime import (
+    AdapterExecutionPolicy,
     dataset_schema_from_context,
     dataset_spec_from_context,
 )
@@ -43,6 +43,7 @@ from ibis_engine.schema_utils import ibis_null_literal
 from ibis_engine.sources import (
     SourceToIbisOptions,
     namespace_recorder_from_ctx,
+    register_ibis_table,
     register_ibis_view,
     source_to_ibis,
 )
@@ -460,9 +461,16 @@ def _ibis_node_tables(
     return tables
 
 
-def _empty_nodes_ibis(schema: SchemaLike) -> IbisPlan:
+def _empty_nodes_ibis(schema: SchemaLike, *, backend: BaseBackend) -> IbisPlan:
     table = empty_table(schema)
-    return IbisPlan(expr=ibis.memtable(table), ordering=Ordering.unordered())
+    return register_ibis_table(
+        table,
+        options=SourceToIbisOptions(
+            backend=backend,
+            name=None,
+            ordering=Ordering.unordered(),
+        ),
+    )
 
 
 def _union_nodes_ibis(parts: list[IbisPlan]) -> IbisPlan:
@@ -583,7 +591,11 @@ def _build_cpg_nodes_ibis(
     )
     emitted = _node_emitted_plans_ibis(emit_context)
     parts = [plan for _, plan in emitted]
-    raw_plan = _empty_nodes_ibis(context.nodes_schema) if not parts else _union_nodes_ibis(parts)
+    raw_plan = (
+        _empty_nodes_ibis(context.nodes_schema, backend=backend)
+        if not parts
+        else _union_nodes_ibis(parts)
+    )
     execution = IbisExecutionContext(
         ctx=context.ctx,
         execution_policy=config.execution_policy,
@@ -601,7 +613,6 @@ def _build_cpg_nodes_ibis(
     raw = align_table_to_schema(
         raw,
         schema=context.nodes_schema,
-        safe_cast=context.ctx.safe_cast,
         keep_extra_columns=context.ctx.debug,
     )
     quality = _ibis_quality_tables(raw, emitted, context=materialize_context)
@@ -659,7 +670,7 @@ def build_cpg_nodes_raw(
     )
     parts = [plan for _, plan in emitted]
     if not parts:
-        return _empty_nodes_ibis(build_context.nodes_schema)
+        return _empty_nodes_ibis(build_context.nodes_schema, backend=backend)
     return _union_nodes_ibis(parts)
 
 

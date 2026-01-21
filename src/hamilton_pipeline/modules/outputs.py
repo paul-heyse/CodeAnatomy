@@ -26,14 +26,13 @@ from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.schema.build import table_from_rows
 from arrowdsl.schema.metadata import ordering_from_schema
 from arrowdsl.schema.schema import EncodingPolicy
-from arrowdsl.schema.serialization import schema_fingerprint
+from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from arrowdsl.spec.expr_ir import ExprIR
 from core_types import JsonDict, JsonValue
 from cpg.constants import CpgBuildArtifacts
 from datafusion_engine.bridge import validate_table_constraints
 from datafusion_engine.registry_bridge import cached_dataset_names, register_dataset_df
-from datafusion_engine.runtime import DataFusionRuntimeProfile
-from datafusion_engine.schema_authority import dataset_spec_from_context
+from datafusion_engine.runtime import DataFusionRuntimeProfile, dataset_spec_from_context
 from datafusion_engine.schema_registry import is_nested_dataset
 from engine.function_registry import default_function_registry
 from engine.plan_cache import PlanCacheEntry
@@ -73,7 +72,6 @@ from normalize.utils import encoding_policy_from_schema
 from obs.diagnostics import DiagnosticsCollector
 from obs.diagnostics_tables import (
     datafusion_explains_table,
-    datafusion_fallbacks_table,
     datafusion_schema_registry_validation_table,
     feature_state_table,
 )
@@ -590,14 +588,11 @@ def _datafusion_runtime_diag_tables(
     *,
     output_dir: str | None,
     work_dir: str | None,
-) -> tuple[pa.Table | None, pa.Table | None]:
+) -> pa.Table | None:
     profile = ctx.runtime.datafusion
     if profile is None:
-        return None, None
-    fallback_events: list[dict[str, object]] = []
+        return None
     explain_events: list[dict[str, object]] = []
-    if profile.fallback_collector is not None:
-        fallback_events = profile.fallback_collector.snapshot()
     artifact_root = _diagnostics_artifact_root(output_dir, work_dir)
     if profile.explain_collector is not None:
         for idx, entry in enumerate(profile.explain_collector.snapshot()):
@@ -615,15 +610,9 @@ def _datafusion_runtime_diag_tables(
             )
             payload["explain_analyze"] = profile.explain_analyze
             explain_events.append(payload)
-    fallback_table = (
-        datafusion_fallbacks_table(fallback_events)
-        if profile.fallback_collector is not None
-        else None
-    )
-    explain_table = (
-        datafusion_explains_table(explain_events) if profile.explain_collector is not None else None
-    )
-    return fallback_table, explain_table
+    if profile.explain_collector is None:
+        return None
+    return datafusion_explains_table(explain_events)
 
 
 def _datafusion_input_plugins(
@@ -2904,25 +2893,6 @@ def _datafusion_explain_notes(runtime: DataFusionRuntimeProfile) -> JsonDict:
     return {"datafusion_explain": [_explain_note_payload(entry) for entry in explain_entries]}
 
 
-def _datafusion_fallback_notes(runtime: DataFusionRuntimeProfile) -> JsonDict:
-    notes: JsonDict = {}
-    fallback_collector = runtime.fallback_collector
-    if fallback_collector is not None:
-        fallback_entries = fallback_collector.snapshot()
-        if fallback_entries:
-            notes["datafusion_fallbacks"] = cast("JsonValue", fallback_entries)
-    if runtime.labeled_explains:
-        notes["datafusion_rule_explain"] = [
-            _explain_note_payload(entry) for entry in runtime.labeled_explains
-        ]
-    if runtime.labeled_fallbacks:
-        notes["datafusion_rule_fallbacks"] = cast(
-            "JsonValue",
-            list(runtime.labeled_fallbacks),
-        )
-    return notes
-
-
 def _datafusion_notes(ctx: ExecutionContext) -> JsonDict:
     runtime = ctx.runtime.datafusion
     if runtime is None:
@@ -2931,7 +2901,10 @@ def _datafusion_notes(ctx: ExecutionContext) -> JsonDict:
     notes.update(_datafusion_diagnostics_notes(runtime))
     notes.update(_datafusion_catalog_notes(ctx, runtime))
     notes.update(_datafusion_explain_notes(runtime))
-    notes.update(_datafusion_fallback_notes(runtime))
+    if runtime.labeled_explains:
+        notes["datafusion_rule_explain"] = [
+            _explain_note_payload(entry) for entry in runtime.labeled_explains
+        ]
     return notes
 
 
@@ -3262,7 +3235,6 @@ def run_bundle_context_inputs(
 class _RunBundleDatafusionArtifacts:
     metrics: JsonDict | None
     traces: JsonDict | None
-    fallbacks: pa.Table | None
     explains: pa.Table | None
     plan_artifacts: pa.Table | None
     plan_cache: Sequence[PlanCacheEntry] | None
@@ -3305,7 +3277,6 @@ def _run_bundle_datafusion_artifacts(
         return _RunBundleDatafusionArtifacts(
             metrics=None,
             traces=None,
-            fallbacks=None,
             explains=None,
             plan_artifacts=None,
             plan_cache=None,
@@ -3327,7 +3298,7 @@ def _run_bundle_datafusion_artifacts(
             function_catalog_hash=None,
         )
     metrics, traces = _datafusion_runtime_artifacts(ctx)
-    fallbacks, explains = _datafusion_runtime_diag_tables(
+    explains = _datafusion_runtime_diag_tables(
         ctx,
         output_dir=output_dir,
         work_dir=work_dir,
@@ -3336,7 +3307,6 @@ def _run_bundle_datafusion_artifacts(
     return _RunBundleDatafusionArtifacts(
         metrics=metrics,
         traces=traces,
-        fallbacks=fallbacks,
         explains=explains,
         plan_artifacts=_datafusion_plan_artifacts_table(
             ctx,
@@ -3439,7 +3409,6 @@ def run_bundle_context(
         compiled_relationship_outputs=run_bundle_inputs.relspec_snapshots.compiled_outputs,
         datafusion_metrics=datafusion_artifacts.metrics,
         datafusion_traces=datafusion_artifacts.traces,
-        datafusion_fallbacks=datafusion_artifacts.fallbacks,
         datafusion_explains=datafusion_artifacts.explains,
         datafusion_plan_artifacts=datafusion_artifacts.plan_artifacts,
         datafusion_plan_cache=datafusion_artifacts.plan_cache,

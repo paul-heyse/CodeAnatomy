@@ -2,25 +2,27 @@
 
 from __future__ import annotations
 
-import hashlib
+import contextlib
 import re
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import cache
 from typing import cast
 
 import pyarrow as pa
+from datafusion import SessionContext
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table
 
+from arrowdsl.core.interop import pc
 from arrowdsl.schema.serialization import schema_fingerprint
-from datafusion_engine.compute_ops import call_function, cast_values, sort_indices, take, unique
-from datafusion_engine.schema_authority import dataset_schema_from_context
+from datafusion_engine.runtime import DataFusionRuntimeProfile, dataset_schema_from_context
 from registry_common.arrow_payloads import payload_hash
 
 SCALAR_PARAM_SIGNATURE_VERSION = 1
+_PARAM_SIGNATURE_SEPARATOR = "\x1f"
 
 
 @cache
@@ -271,13 +273,28 @@ def qualified_param_table_name(
     return f"{policy.catalog}.{schema_name}.{table_name}"
 
 
-def _compute_array_fn(name: str) -> Callable[[pa.Array], pa.Array]:
-    if name == "sort_indices":
-        return cast("Callable[[pa.Array], pa.Array]", sort_indices)
-    if name == "hash":
-        return lambda values: cast("pa.Array", call_function("hash", [values]))
-    msg = f"Unsupported compute function: {name!r}."
-    raise ValueError(msg)
+def _session_context() -> SessionContext:
+    return DataFusionRuntimeProfile().session_context()
+
+
+def _sql_literal(value: str) -> str:
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _register_values(ctx: SessionContext, values: pa.Array) -> str:
+    name = f"__param_signature_{uuid.uuid4().hex}"
+    ctx.register_record_batches(name, pa.table({"value": values}).to_batches())
+    return name
+
+
+def _deregister_table(ctx: SessionContext, name: str | None) -> None:
+    if name is None:
+        return
+    deregister = getattr(ctx, "deregister_table", None)
+    if callable(deregister):
+        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+            deregister(name)
 
 
 def param_signature_from_array(
@@ -287,23 +304,46 @@ def param_signature_from_array(
 ) -> str:
     """Return a stable signature for a parameter list from Arrow values.
 
+    Raises
+    ------
+    TypeError
+        Raised when the DataFusion signature query does not return a string.
+
     Returns
     -------
     str
         Hex-encoded signature string.
     """
     normalized = values.combine_chunks() if isinstance(values, pa.ChunkedArray) else values
-    casted = cast_values(normalized, pa.large_string(), safe=False)
-    sort_indices = _compute_array_fn("sort_indices")
-    hash_fn = _compute_array_fn("hash")
-    idx = sort_indices(casted)
-    sorted_vals = take(casted, idx)
-    hashed = hash_fn(sorted_vals)
-    buf = hashed.buffers()[1]
-    digest = hashlib.sha256(logical_name.encode("utf-8"))
-    if buf is not None:
-        digest.update(buf.to_pybytes())
-    return digest.hexdigest()
+    ctx = _session_context()
+    table_name = _register_values(ctx, cast("pa.Array", normalized))
+    try:
+        logical_literal = _sql_literal(logical_name)
+        sql = f"""
+        WITH base AS (
+          SELECT array_sort(array_distinct(array_agg(CAST(value AS STRING)))) AS values
+          FROM {table_name}
+        )
+        SELECT CASE
+          WHEN values IS NULL THEN sha256({logical_literal})
+          ELSE sha256(
+            concat_ws(
+              '{_PARAM_SIGNATURE_SEPARATOR}',
+              {logical_literal},
+              array_to_string(values, '{_PARAM_SIGNATURE_SEPARATOR}')
+            )
+          )
+        END AS signature
+        FROM base
+        """
+        table = ctx.sql(sql).to_arrow_table()
+    finally:
+        _deregister_table(ctx, table_name)
+    value = table["signature"][0].as_py() if table.num_rows else None
+    if not isinstance(value, str):
+        msg = "Param signature query did not return a string signature."
+        raise TypeError(msg)
+    return value
 
 
 def scalar_param_signature(values: Mapping[str, object]) -> str:
@@ -358,7 +398,7 @@ def unique_values(values: pa.Array | pa.ChunkedArray) -> pa.Array | pa.ChunkedAr
     pyarrow.Array | pyarrow.ChunkedArray
         Unique values for the input array-like.
     """
-    return unique(values)
+    return pc.unique(values)
 
 
 def _new_scope_key() -> str:

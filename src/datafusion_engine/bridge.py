@@ -10,7 +10,6 @@ from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, TypedDict, cast
 
-import datafusion
 import pyarrow as pa
 import pyarrow.ipc as pa_ipc
 
@@ -44,7 +43,6 @@ from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
     DataFusionDmlOptions,
-    DataFusionFallbackEvent,
     DataFusionSqlPolicy,
     resolve_sql_policy,
 )
@@ -361,7 +359,12 @@ def df_from_sqlglot_or_sql(
 ) -> DataFrame:
     """Translate a SQLGlot expression into a DataFusion DataFrame.
 
-    Falls back to SQL execution when direct translation is not supported.
+    Uses DataFusion SQL when forced or when parameters are present.
+
+    Raises
+    ------
+    TranslationError
+        Raised when the SQLGlot expression cannot be translated.
 
     Returns
     -------
@@ -376,37 +379,15 @@ def df_from_sqlglot_or_sql(
             _maybe_explain(ctx, bound_expr, options=resolved)
         _maybe_collect_plan_artifacts(ctx, bound_expr, options=resolved, df=replayed)
         return replayed
-    if resolved.force_sql:
-        df = _df_from_sql(
-            ctx,
-            bound_expr,
-            options=resolved,
-            fallback=SqlFallbackContext(reason="forced_sql", emit_fallback=False),
-        )
-        _maybe_store_substrait(ctx, bound_expr, options=resolved)
-        if not (resolved.params and _contains_params(expr)):
-            _maybe_explain(ctx, bound_expr, options=resolved)
-        _maybe_collect_plan_artifacts(ctx, bound_expr, options=resolved, df=df)
-        return df
     if resolved.params and _contains_params(expr):
-        df = _df_from_sql(
-            ctx,
-            bound_expr,
-            options=resolved,
-            fallback=SqlFallbackContext(reason="params"),
-        )
+        df = _df_from_sql(ctx, bound_expr, options=resolved)
         _maybe_collect_plan_artifacts(ctx, bound_expr, options=resolved, df=df)
         return df
     try:
         df = df_from_sqlglot(ctx, bound_expr)
     except TranslationError as exc:
-        _ensure_dialect(resolved.dialect)
-        df = _df_from_sql(
-            ctx,
-            bound_expr,
-            options=resolved,
-            fallback=SqlFallbackContext(reason="translation_error", error=exc),
-        )
+        msg = f"DataFusion SQLGlot translation failed: {exc}"
+        raise TranslationError(msg) from exc
     _maybe_store_substrait(ctx, bound_expr, options=resolved)
     _maybe_explain(ctx, bound_expr, options=resolved)
     _maybe_collect_plan_artifacts(ctx, bound_expr, options=resolved, df=df)
@@ -830,15 +811,6 @@ def _validated_param_bindings(
 
 
 @dataclass(frozen=True)
-class SqlFallbackContext:
-    """Parameters controlling SQL fallback diagnostics."""
-
-    reason: str
-    error: TranslationError | None = None
-    emit_fallback: bool = True
-
-
-@dataclass(frozen=True)
 class DataFusionPlanArtifacts:
     """Captured DataFusion plan artifacts for diagnostics."""
 
@@ -897,7 +869,6 @@ def _df_from_sql(
     expr: Expression,
     *,
     options: DataFusionCompileOptions,
-    fallback: SqlFallbackContext,
 ) -> DataFrame:
     _ensure_dialect(options.dialect)
     sql = expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
@@ -905,7 +876,6 @@ def _df_from_sql(
         options.params,
         allowlist=options.param_identifier_allowlist,
     )
-    param_mode = _param_mode(options.params)
     policy = options.sql_policy or _default_sql_policy()
     sql_options = options.sql_options or policy.to_sql_options()
     violations = ()
@@ -916,21 +886,6 @@ def _df_from_sql(
                 "DataFusion SQL policy violations detected: %s",
                 ", ".join(violations),
             )
-    if fallback.emit_fallback:
-        event = DataFusionFallbackEvent(
-            reason=fallback.reason,
-            error=str(fallback.error) if fallback.error is not None else "",
-            expression_type=expr.__class__.__name__,
-            sql=sql,
-            dialect=options.dialect,
-            policy_violations=violations,
-            sql_policy_name=options.sql_policy_name,
-            param_mode=param_mode,
-        )
-        _emit_fallback_diagnostics(
-            event,
-            fallback_hook=options.fallback_hook,
-        )
     return ctx.sql_with_options(sql, sql_options, param_values=bindings)
 
 
@@ -1184,7 +1139,6 @@ def df_from_sql(
     expr: Expression,
     *,
     options: DataFusionCompileOptions,
-    fallback: SqlFallbackContext,
 ) -> DataFrame:
     """Execute a SQLGlot expression using DataFusion SQL execution.
 
@@ -1193,21 +1147,7 @@ def df_from_sql(
     datafusion.dataframe.DataFrame
         DataFusion DataFrame representing the expression.
     """
-    return _df_from_sql(ctx, expr, options=options, fallback=fallback)
-
-
-def _emit_fallback_diagnostics(
-    event: DataFusionFallbackEvent,
-    *,
-    fallback_hook: Callable[[DataFusionFallbackEvent], None] | None,
-) -> None:
-    if fallback_hook is None:
-        logger.info(
-            "DataFusion fallback used for %s.",
-            event.expression_type,
-        )
-        return
-    fallback_hook(event)
+    return _df_from_sql(ctx, expr, options=options)
 
 
 def _maybe_explain(
@@ -1437,12 +1377,7 @@ def execute_sql(
     """
     _ensure_dialect(options.dialect)
     expr = parse_sql_strict(sql, dialect=options.dialect)
-    df = _df_from_sql(
-        ctx,
-        expr,
-        options=options,
-        fallback=SqlFallbackContext(reason="execute_sql", emit_fallback=False),
-    )
+    df = _df_from_sql(ctx, expr, options=options)
     return _collect_reader(df)
 
 
@@ -1522,55 +1457,11 @@ class _ParquetWriterOptionsKwargs(TypedDict, total=False):
     max_row_group_size: int
 
 
-def register_memtable(
-    ctx: SessionContext,
-    *,
-    name: str,
-    batches: Sequence[pa.RecordBatch],
-) -> None:
-    """Register a MemTable with DataFusion using best-available APIs.
-
-    Raises
-    ------
-    RuntimeError
-        Raised when MemTable registration is unavailable.
-    """
-    register_batches = getattr(ctx, "register_record_batches", None)
-    if callable(register_batches):
-        register_batches(name, list(batches))
-        return
-    memtable_cls = getattr(datafusion, "MemTable", None)
-    if memtable_cls is None:
-        msg = "DataFusion MemTable registration is unavailable."
-        raise RuntimeError(msg)
-    table = memtable_cls.from_batches(list(batches))
-    register_table = getattr(ctx, "register_table", None)
-    if callable(register_table):
-        register_table(name, table)
-        return
-    msg = "DataFusion SessionContext missing table registration methods."
-    raise RuntimeError(msg)
-
-
-def slice_memtable_batches(
+def _record_batches(
     table: TableLike | RecordBatchReaderLike,
     *,
     batch_size: int | None,
 ) -> list[pa.RecordBatch]:
-    """Slice a table into batches for MemTable registration.
-
-    Parameters
-    ----------
-    table:
-        Arrow table or record batch reader.
-    batch_size:
-        Optional max batch size for slicing.
-
-    Returns
-    -------
-    list[pyarrow.RecordBatch]
-        Record batches sized for registration.
-    """
     if isinstance(table, RecordBatchReaderLike):
         resolved_table = cast("pa.Table", table.read_all())
     else:
@@ -1578,41 +1469,6 @@ def slice_memtable_batches(
     if batch_size is None or batch_size <= 0:
         return list(resolved_table.to_batches())
     return list(resolved_table.to_batches(max_chunksize=batch_size))
-
-
-def register_memtable_from_table(
-    ctx: SessionContext,
-    *,
-    name: str,
-    table: TableLike | RecordBatchReaderLike,
-    batch_size: int | None = None,
-) -> None:
-    """Register a MemTable from a table-like input."""
-    if isinstance(table, RecordBatchReaderLike):
-        register_memtable_from_reader(ctx, name=name, reader=table, batch_size=batch_size)
-        return
-    batches = slice_memtable_batches(table, batch_size=batch_size)
-    register_memtable(ctx, name=name, batches=batches)
-
-
-def register_memtable_from_reader(
-    ctx: SessionContext,
-    *,
-    name: str,
-    reader: RecordBatchReaderLike,
-    batch_size: int | None = None,
-) -> None:
-    """Register a MemTable from a record batch reader when supported."""
-    from_arrow = getattr(ctx, "from_arrow", None)
-    if callable(from_arrow) and (batch_size is None or batch_size <= 0):
-        try:
-            from_arrow(reader, name=name)
-        except (TypeError, ValueError):
-            pass
-        else:
-            return
-    batches = slice_memtable_batches(reader, batch_size=batch_size)
-    register_memtable(ctx, name=name, batches=batches)
 
 
 def _is_pydict_input(value: object) -> bool:
@@ -1660,6 +1516,11 @@ def datafusion_from_arrow(
 ) -> DataFrame:
     """Register Arrow-like input and return a DataFusion DataFrame.
 
+    Raises
+    ------
+    TypeError
+        Raised when the DataFusion SessionContext lacks ingestion support.
+
     Returns
     -------
     datafusion.dataframe.DataFrame
@@ -1683,8 +1544,12 @@ def datafusion_from_arrow(
             )
             return df
         table = pa.Table.from_pydict(dict(pydict))
-        batches = slice_memtable_batches(table, batch_size=batch_size)
-        register_memtable(ctx, name=name, batches=batches)
+        batches = _record_batches(table, batch_size=batch_size)
+        register_batches = getattr(ctx, "register_record_batches", None)
+        if not callable(register_batches):
+            msg = "DataFusion SessionContext missing register_record_batches."
+            raise TypeError(msg)
+        register_batches(name, batches)
         _emit_arrow_ingest(
             ingest_hook,
             ArrowIngestEvent(
@@ -1722,8 +1587,12 @@ def datafusion_from_arrow(
                 ),
             )
             return df
-    batches = slice_memtable_batches(table, batch_size=batch_size)
-    register_memtable(ctx, name=name, batches=batches)
+    batches = _record_batches(table, batch_size=batch_size)
+    register_batches = getattr(ctx, "register_record_batches", None)
+    if not callable(register_batches):
+        msg = "DataFusion SessionContext missing register_record_batches."
+        raise TypeError(msg)
+    register_batches(name, batches)
     row_count = sum(batch.num_rows for batch in batches)
     _emit_arrow_ingest(
         ingest_hook,
@@ -1797,11 +1666,9 @@ __all__ = [
     "CopyToOptions",
     "DataFusionCompileOptions",
     "DataFusionDmlOptions",
-    "DataFusionFallbackEvent",
     "DataFusionPlanArtifacts",
     "DataFusionSqlPolicy",
     "IbisCompilerBackend",
-    "SqlFallbackContext",
     "collect_plan_artifacts",
     "compile_sqlglot_expr",
     "copy_to_path",
@@ -1823,12 +1690,8 @@ __all__ = [
     "ibis_to_datafusion",
     "merge_format_options",
     "prepare_statement",
-    "register_memtable",
-    "register_memtable_from_reader",
-    "register_memtable_from_table",
     "rehydrate_plan_artifacts",
     "replay_substrait_bytes",
-    "slice_memtable_batches",
     "sqlglot_to_datafusion",
     "validate_substrait_plan",
     "validate_table_constraints",

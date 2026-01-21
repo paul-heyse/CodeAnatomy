@@ -68,7 +68,6 @@ if TYPE_CHECKING:
         resolve_normalize_rules,
         run_normalize,
     )
-    from normalize.schema_infer import SchemaInferOptions, align_table_to_schema
     from normalize.utils import add_span_id_column, span_id
     from relspec.model import AmbiguityPolicy, ConfidencePolicy
     from relspec.rules.definitions import EvidenceSpec, ExecutionMode
@@ -93,11 +92,9 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "ResolvedNormalizeRule": ("normalize.runner", "ResolvedNormalizeRule"),
     "NormalizeRuleCompilation": ("normalize.runner", "NormalizeRuleCompilation"),
     "NormalizeRunOptions": ("normalize.runner", "NormalizeRunOptions"),
-    "SchemaInferOptions": ("normalize.schema_infer", "SchemaInferOptions"),
     "add_ast_byte_spans": ("normalize.ibis_api", "add_ast_byte_spans"),
     "add_scip_occurrence_byte_spans": ("normalize.ibis_api", "add_scip_occurrence_byte_spans"),
     "add_span_id_column": ("normalize.utils", "add_span_id_column"),
-    "align_table_to_schema": ("normalize.schema_infer", "align_table_to_schema"),
     "anchor_instructions": ("normalize.ibis_api", "anchor_instructions"),
     "build_cfg_blocks": ("normalize.ibis_api", "build_cfg_blocks"),
     "build_cfg_edges": ("normalize.ibis_api", "build_cfg_edges"),
@@ -175,11 +172,9 @@ __all__ = [
     "NormalizeRuleCompilation",
     "NormalizeRunOptions",
     "ResolvedNormalizeRule",
-    "SchemaInferOptions",
     "add_ast_byte_spans",
     "add_scip_occurrence_byte_spans",
     "add_span_id_column",
-    "align_table_to_schema",
     "anchor_instructions",
     "build_cfg_blocks",
     "build_cfg_edges",

@@ -211,57 +211,13 @@ def _register_location(
     cache_policy: DataFusionCachePolicy,
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> DataFrame:
-    try:
-        return _register_with_cache_fallback(
-            ctx,
-            name=name,
-            location=location,
-            cache_policy=cache_policy,
-            runtime_profile=runtime_profile,
-        )
-    except ValueError as exc:
-        if not _should_fallback_to_dataset(exc):
-            raise
-    fallback = replace(location, datafusion_provider="dataset")
-    return _register_with_cache_fallback(
+    return register_dataset_df(
         ctx,
         name=name,
-        location=fallback,
+        location=location,
         cache_policy=cache_policy,
         runtime_profile=runtime_profile,
     )
-
-
-def _should_fallback_to_dataset(exc: Exception) -> bool:
-    message = str(exc)
-    return "pyarrow.dataset.Dataset" in message
-
-
-def _register_with_cache_fallback(
-    ctx: SessionContext,
-    *,
-    name: str,
-    location: DatasetLocation,
-    cache_policy: DataFusionCachePolicy,
-    runtime_profile: DataFusionRuntimeProfile | None,
-) -> DataFrame:
-    try:
-        return register_dataset_df(
-            ctx,
-            name=name,
-            location=location,
-            cache_policy=cache_policy,
-            runtime_profile=runtime_profile,
-        )
-    except Exception as exc:
-        if not _should_skip_cache(exc):
-            raise
-    return ctx.table(name)
-
-
-def _should_skip_cache(exc: Exception) -> bool:
-    message = str(exc)
-    return "No partitions provided" in message
 
 
 __all__ = [

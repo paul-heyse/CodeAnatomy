@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     )
     from datafusion_engine.compile_options import (
         DataFusionCompileOptions,
-        DataFusionFallbackEvent,
         DataFusionSqlPolicy,
     )
     from datafusion_engine.df_builder import df_from_sqlglot, register_dataset
@@ -72,7 +71,6 @@ __all__ = [
     "AdapterExecutionPolicy",
     "DataFusionCompileOptions",
     "DataFusionConfigPolicy",
-    "DataFusionFallbackEvent",
     "DataFusionRuntimeProfile",
     "DataFusionSqlPolicy",
     "ExecutionLabel",
@@ -121,7 +119,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "AdapterExecutionPolicy": ("datafusion_engine.runtime", "AdapterExecutionPolicy"),
     "ExecutionLabel": ("datafusion_engine.runtime", "ExecutionLabel"),
     "DataFusionCompileOptions": ("datafusion_engine.compile_options", "DataFusionCompileOptions"),
-    "DataFusionFallbackEvent": ("datafusion_engine.compile_options", "DataFusionFallbackEvent"),
     "DataFusionConfigPolicy": ("datafusion_engine.runtime", "DataFusionConfigPolicy"),
     "DataFusionRuntimeProfile": ("datafusion_engine.runtime", "DataFusionRuntimeProfile"),
     "SchemaHardeningProfile": ("datafusion_engine.runtime", "SchemaHardeningProfile"),

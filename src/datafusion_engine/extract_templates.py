@@ -506,6 +506,7 @@ def _scip_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
             "bundles": None,
             "fields": [
                 "index_id",
+                "index_path",
                 "protocol_version",
                 "tool_name",
                 "tool_version",
@@ -533,6 +534,7 @@ def _scip_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
             "bundles": None,
             "fields": [
                 "index_id",
+                "index_path",
                 "document_count",
                 "occurrence_count",
                 "diagnostic_count",
@@ -559,6 +561,7 @@ def _scip_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, ...]:
             "bundles": None,
             "fields": [
                 "index_id",
+                "index_path",
                 "document_id",
                 "path",
                 "language",

@@ -8,7 +8,7 @@ aggregation, and interval prep that can run inside DataFusion.
 ## Non-Goals
 - Changing hash algorithms or ID formats.
 - Introducing dynamic URL tables or untrusted SQL surfaces.
-- Removing non-DataFusion fallbacks where the runtime lacks built-ins.
+- Removing fallbacks when DataFusion lacks equivalent semantics (documented exceptions only).
 
 ---
 
@@ -194,6 +194,166 @@ if "array_agg" not in names:
 - [ ] Add helper to query `information_schema.routines` for gating.
 - [ ] Update gating to use `information_schema` for list/array/map built-ins.
 - [ ] Add validation tests for symtable/bytecode/interval prep built-ins.
+- [ ] Extend inventories to cover kernel/incremental/param-signature functions
+      (`row_number`, `array_agg`, `array_sort`, `array_distinct`, `array_to_string`,
+      `case`, `coalesce`, `bool_or`, `sha256`).
+
+---
+
+## Scope 7: DataFusion-native incremental diffs + change sets
+**Why**: Incremental diff/changes currently use PyArrow compute ops; push this
+logic into DataFusion SQL/DF (built-ins only) so diffing is engine-native and
+optimizer-visible.
+
+**Representative code patterns**
+```sql
+SELECT
+  file_id,
+  coalesce(path_cur, path_prev) AS path,
+  CASE
+    WHEN path_cur IS NULL THEN 'deleted'
+    WHEN path_prev IS NULL THEN 'added'
+    WHEN file_sha256_cur = file_sha256_prev AND path_cur <> path_prev THEN 'renamed'
+    WHEN file_sha256_cur <> file_sha256_prev THEN 'modified'
+    ELSE 'unchanged'
+  END AS change_kind,
+  path_prev AS prev_path,
+  path_cur AS cur_path,
+  file_sha256_prev AS prev_file_sha256,
+  file_sha256_cur AS cur_file_sha256
+FROM diff_join
+```
+
+```python
+df = ctx.table("diff_join")
+change_kind = f.case(lit(True)).when(col("path_cur").is_null(), lit("deleted")).when(
+    col("path_prev").is_null(), lit("added")
+).when(
+    (col("file_sha256_cur") == col("file_sha256_prev"))
+    & (col("path_cur") != col("path_prev")),
+    lit("renamed"),
+).when(
+    col("file_sha256_cur") != col("file_sha256_prev"),
+    lit("modified"),
+).otherwise(lit("unchanged"))
+```
+
+**Target files**
+- `src/incremental/diff.py`
+- `src/incremental/changes.py`
+- `src/datafusion_engine/schema_registry.py` (function inventories/gates)
+
+**Implementation checklist**
+- [ ] Replace compute-op masks with DataFusion SQL/DF expressions (`case`, `coalesce`).
+- [ ] Derive change sets via `SELECT DISTINCT` + `bool_or` aggregates.
+- [ ] Remove PyArrow compute fallbacks for diff/change derivation.
+- [ ] Add/extend tests to validate diff semantics match current behavior.
+
+---
+
+## Scope 8: DataFusion-native snapshot row hashing + fingerprints
+**Why**: Snapshot hashing still runs in Python/PyArrow; move row hashes and
+fingerprints into DataFusion using stable hash UDFs + built-ins.
+
+**Representative code patterns**
+```sql
+SELECT
+  stable_hash64(
+    concat_ws('\x1f', 'scip_row', file_id, path, symbol, signature)
+  ) AS row_hash
+FROM scip_snapshot
+```
+
+```sql
+SELECT
+  sha256(
+    array_to_string(array_sort(array_distinct(array_agg(row_hash))), '\x1f')
+  ) AS fingerprint
+FROM scip_snapshot
+```
+
+**Target files**
+- `src/incremental/scip_snapshot.py`
+- `src/datafusion_engine/query_fragments.py`
+- `src/datafusion_engine/schema_registry.py` (function inventories/gates)
+
+**Implementation checklist**
+- [ ] Add DataFusion view fragment(s) for snapshot row hashes.
+- [ ] Replace `hash64_from_arrays`/Python hashing with `stable_hash64` + `concat_ws`.
+- [ ] Move fingerprint aggregation to DataFusion `array_agg` + `sha256`.
+- [ ] Ensure function inventories include `array_*`, `sha256`, `stable_hash64`.
+
+---
+
+## Scope 9: DataFusion-native param signatures
+**Why**: Param-table signatures use PyArrow `hash`/`sort_indices`. Use DataFusion
+aggregates and hashing to keep signatures engine-native.
+
+**Representative code patterns**
+```sql
+WITH vals AS (
+  SELECT array_sort(array_distinct(array_agg(param_value))) AS v
+  FROM params_table
+)
+SELECT sha256(array_to_string(v, '\x1f')) AS signature
+FROM vals
+```
+
+```python
+vals = df.aggregate([], [f.array_agg(col("param_value")).alias("v")])
+vals = vals.select(f.array_sort(f.array_distinct(col("v"))).alias("v"))
+signature = vals.select(f.sha256(f.array_to_string(col("v"), lit("\x1f"))))
+```
+
+**Target files**
+- `src/ibis_engine/param_tables.py`
+- `src/datafusion_engine/schema_registry.py` (function inventories/gates)
+- `tests/unit/test_param_tables.py`
+
+**Implementation checklist**
+- [ ] Replace `sort_indices` + PyArrow `hash` with DataFusion `array_*` + `sha256`.
+- [ ] Keep signature determinism (sorted + distinct).
+- [ ] Remove PyArrow compute fallbacks for signature derivation.
+- [ ] Add coverage for deterministic signatures across param orderings.
+
+---
+
+## Scope 10: Ibis + SQLGlot alignment for DataFusion-native SQL
+**Why**: Ibis already compiles to SQLGlot and the DataFusion backend can execute
+SQLGlot ASTs directly. Use SQLGlot as the canonical SQL IR to normalize/qualify
+queries and reduce bespoke SQL string manipulation.
+
+**Representative code patterns**
+```python
+import ibis
+import sqlglot
+from sqlglot.optimizer.qualify import qualify
+
+ctx = SessionContext()
+con = ibis.datafusion.connect(ctx)
+
+ast = con.compiler.to_sqlglot(expr)
+ast = qualify(ast, dialect="datafusion", schema=sqlglot_schema)
+con.raw_sql(ast)
+```
+
+```python
+from sqlglot.optimizer.normalize import normalize
+normalized = normalize(ast, dnf=False, max_distance=128)
+con.raw_sql(normalized)
+```
+
+**Target files**
+- `src/ibis_engine/registry.py`
+- `src/ibis_engine/expr_compiler.py`
+- `src/datafusion_engine/query_fragments.py`
+- `src/normalize/ibis_plan_builders.py`
+
+**Implementation checklist**
+- [ ] Ensure Ibis uses a shared DataFusion `SessionContext` (`ibis.datafusion.connect(ctx)`).
+- [ ] Introduce SQLGlot AST checkpoints for view/query fragments.
+- [ ] Apply SQLGlot `qualify` + `normalize` with DataFusion dialect.
+- [ ] Route `raw_sql` through SQLGlot ASTs instead of string concatenation.
 
 ---
 
@@ -201,4 +361,33 @@ if "array_agg" not in names:
 1. Scope 1 (IDs in views) before any downstream consumers that expect IDs.
 2. Scope 2 (stats) before diagnostics improvements.
 3. Scope 3 (interval prep) before interval alignment changes.
-4. Scope 6 (gating) after new built-in usages are defined.
+4. Scope 5 (concat_ws in Ibis) before hash-related rewrites.
+5. Scope 7–9 (incremental/param/snapshot) before gating finalization.
+6. Scope 6 (gating) after new built-in usages are defined.
+7. Scope 10 (Ibis + SQLGlot alignment) can run in parallel with 7–9.
+
+---
+
+## Decommission list (post-scope cleanup)
+**Goal**: delete bespoke PyArrow/Python compute paths once DataFusion-native
+equivalents are the only supported execution path.
+
+**Candidates for full removal once scopes complete**
+- `src/arrowdsl/core/ids.py` hashing/ID helpers (`hash64_from_arrays`,
+  `hash64_from_parts`, `hash64_from_columns`, `hash_column_values`,
+  `prefixed_hash_id`, `prefixed_hash64`, `stable_id`, `span_id`,
+  `add_span_id_column`, `masked_prefixed_hash`) after all ID generation runs in
+  DataFusion views/UDFs (Scopes 1 & 8).
+- `src/datafusion_engine/extract_ids.py` and `src/arrowdsl/core/ids_registry.py`
+  once HashSpec-driven Python ID generation is fully replaced by DataFusion
+  view fragments.
+- `src/datafusion_engine/compute_ops.py` after all remaining call sites are
+  migrated to DataFusion built-ins and Ibis expressions (Scopes 2, 7–9, plus
+  schema validation and param signatures).
+- `src/ibis_engine/param_tables.py` compute-op helpers (`_compute_array_fn` hash
+  path) after param signatures are DataFusion-native (Scope 9).
+
+**Deletion checklist**
+- [ ] Verify all callers are migrated to DataFusion/Ibis/SQLGlot paths.
+- [ ] Remove UDF/compute fallbacks and update tests accordingly.
+- [ ] Confirm function inventories include all new built-ins.

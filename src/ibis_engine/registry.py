@@ -8,16 +8,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import ibis
+from datafusion import SessionContext
 from ibis.expr.types import Table, Value
-
-try:
-    from datafusion import SessionContext
-except ImportError:  # pragma: no cover - optional dependency
-    SessionContext = None
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
-from ibis_engine.sources import record_namespace_action
+from datafusion_engine.catalog_provider import register_registry_catalog
+from datafusion_engine.registry_bridge import register_dataset_df
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import (
     DataFusionScanOptions,
@@ -27,22 +24,12 @@ from schema_spec.system import (
     DeltaWritePolicy,
 )
 
-try:
-    from datafusion_engine.registry_bridge import register_dataset_df
-except ImportError:  # pragma: no cover - optional dependency
-    register_dataset_df = None
-
-try:
-    from datafusion_engine.catalog_provider import register_registry_catalog
-except ImportError:  # pragma: no cover - optional dependency
-    register_registry_catalog = None
-
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 type PathLike = str | Path
 type DatasetFormat = str
-type DataFusionProvider = Literal["dataset", "listing", "parquet"]
+type DataFusionProvider = Literal["listing", "parquet"]
 
 _REGISTERED_CATALOGS: dict[int, set[str]] = {}
 _REGISTERED_SCHEMAS: dict[int, set[tuple[str, str]]] = {}
@@ -440,24 +427,28 @@ def _resolve_reader(
     return cast("Callable[..., Table]", reader)
 
 
-def datafusion_context(backend: ibis.backends.BaseBackend) -> object | None:
-    """Return a DataFusion SessionContext from an Ibis backend when available.
+def datafusion_context(backend: object) -> SessionContext:
+    """Return a DataFusion SessionContext from an Ibis backend.
+
+    Raises
+    ------
+    ValueError
+        Raised when the backend does not expose a DataFusion SessionContext.
 
     Returns
     -------
-    object | None
-        DataFusion SessionContext when detected, otherwise ``None``.
+    datafusion.SessionContext
+        DataFusion SessionContext detected on the backend.
     """
-    if SessionContext is None:
-        return None
     for attr in ("con", "_context", "_ctx", "ctx", "session_context"):
         ctx = getattr(backend, attr, None)
         if isinstance(ctx, SessionContext):
             return ctx
-    return None
+    msg = "Ibis backend does not expose a DataFusion SessionContext."
+    raise ValueError(msg)
 
 
-def _datafusion_context(backend: ibis.backends.BaseBackend) -> object | None:
+def _datafusion_context(backend: ibis.backends.BaseBackend) -> SessionContext:
     """Return the DataFusion SessionContext when available.
 
     Deprecated: use ``datafusion_context`` instead.
@@ -471,16 +462,15 @@ def _datafusion_context(backend: ibis.backends.BaseBackend) -> object | None:
 
 
 def _register_datafusion_dataset(
-    ctx: object,
+    ctx: SessionContext,
     *,
     name: str,
     location: DatasetLocation,
     runtime_profile: DataFusionRuntimeProfile | None,
-) -> bool:
-    if register_dataset_df is None or SessionContext is None:
-        return False
+) -> None:
     if not isinstance(ctx, SessionContext):
-        return False
+        msg = "DataFusion SessionContext is required for dataset registration."
+        raise TypeError(msg)
     try:
         register_dataset_df(
             ctx,
@@ -488,9 +478,11 @@ def _register_datafusion_dataset(
             location=location,
             runtime_profile=runtime_profile,
         )
-    except ValueError:
-        return False
-    return True
+    except ValueError as exc:
+        if location.format == "delta":
+            msg = f"Delta provider required for {name!r}."
+            raise ValueError(msg) from exc
+        raise
 
 
 def _ensure_backend_catalog_schema(
@@ -518,7 +510,7 @@ def _ensure_backend_catalog_schema(
 
 
 def _ensure_registry_catalog_provider(
-    ctx: object,
+    ctx: SessionContext,
     *,
     registry: IbisDatasetRegistry,
     catalog_name: str,
@@ -536,11 +528,15 @@ def _ensure_registry_catalog_provider(
         Catalog name to register.
     schema_name:
         Schema name to expose from the catalog provider.
+
+    Raises
+    ------
+    TypeError
+        Raised when the session context is not a DataFusion SessionContext.
     """
-    if register_registry_catalog is None or SessionContext is None:
-        return
     if not isinstance(ctx, SessionContext):
-        return
+        msg = "DataFusion SessionContext is required for registry catalogs."
+        raise TypeError(msg)
     ctx_id = id(ctx)
     registered = _REGISTERED_REGISTRY_CATALOGS.setdefault(ctx_id, set())
     if catalog_name in registered:
@@ -581,52 +577,18 @@ class IbisDatasetRegistry:
             return self._tables[name]
         _ensure_backend_catalog_schema(self.backend, runtime_profile=self._runtime_profile)
         ctx = datafusion_context(self.backend)
-        if ctx is not None:
-            _ensure_registry_catalog_provider(
-                ctx,
-                registry=self,
-                catalog_name="registry",
-                schema_name="public",
-            )
-        if ctx is not None and not _register_datafusion_dataset(
+        _ensure_registry_catalog_provider(
+            ctx,
+            registry=self,
+            catalog_name="registry",
+            schema_name="public",
+        )
+        _register_datafusion_dataset(
             ctx,
             name=name,
             location=location,
             runtime_profile=self._runtime_profile,
-        ):
-            ctx = None
-        if ctx is None:
-            recorder = None
-            if (
-                self._runtime_profile is not None
-                and self._runtime_profile.diagnostics_sink is not None
-            ):
-                diagnostics = self._runtime_profile.diagnostics_sink
-
-                def _record(payload: Mapping[str, object]) -> None:
-                    diagnostics.record_artifact("ibis_namespace_actions_v1", payload)
-
-                recorder = _record
-            table = read_dataset(
-                self.backend,
-                params=ReadDatasetParams(
-                    path=location.path,
-                    dataset_format=location.format,
-                    read_options=location.read_options,
-                    storage_options=location.storage_options,
-                    filesystem=location.filesystem,
-                    partitioning=location.partitioning,
-                    table_name=name,
-                ),
-            )
-            self.backend.create_view(name, table, overwrite=True)
-            record_namespace_action(
-                recorder,
-                action="create_view",
-                name=name,
-                database=None,
-                overwrite=True,
-            )
+        )
         registered = self.backend.table(name)
         self._tables[name] = registered
         return registered

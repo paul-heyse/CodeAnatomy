@@ -10,13 +10,12 @@ from typing import TYPE_CHECKING, Literal, Protocol, TypedDict, Unpack, cast
 
 import ibis
 import pyarrow as pa
-import pyarrow.compute as pc
 import pyarrow.dataset as ds
 from ibis.backends import BaseBackend
 from ibis.expr.types import BooleanValue, Table
 
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.interop import DataTypeLike, SchemaLike, TableLike
+from arrowdsl.core.interop import SchemaLike, TableLike
 from arrowdsl.core.ordering import Ordering, OrderingLevel
 from arrowdsl.core.plan_ops import DedupeSpec, SortKey
 from arrowdsl.finalize.finalize import Contract, FinalizeContext
@@ -37,7 +36,6 @@ from arrowdsl.schema.schema import (
     required_field_names,
 )
 from arrowdsl.schema.validation import ArrowValidationOptions, validate_table
-from datafusion_engine.runtime import DataFusionRuntimeProfile
 from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_registry import (
     is_nested_dataset,
@@ -259,72 +257,6 @@ def _validate_view_specs(view_specs: Sequence[ViewSpec], *, label: str) -> None:
     if duplicates:
         msg = f"{label} view_specs contain duplicate names: {sorted(duplicates)}"
         raise ValueError(msg)
-
-
-def _can_cast_type(actual: DataTypeLike, target: DataTypeLike) -> bool:
-    try:
-        pc.cast(pa.scalar(None, type=actual), target, safe=True)
-    except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pa.ArrowTypeError):
-        return False
-    return True
-
-
-def schema_evolution_compatible(
-    *,
-    expected: TableSchemaSpec,
-    actual: SchemaLike,
-    evolution_spec: SchemaEvolutionSpec,
-) -> bool:
-    """Return whether an actual schema is compatible with the expected spec.
-
-    Parameters
-    ----------
-    expected:
-        Expected table schema specification.
-    actual:
-        Actual Arrow schema discovered from the dataset.
-    evolution_spec:
-        Evolution rules to apply when comparing schemas.
-
-    Returns
-    -------
-    bool
-        True when the schemas are compatible under the evolution rules.
-    """
-    mapped_fields: list[pa.Field] = []
-    seen: set[str] = set()
-    for actual_field in actual:
-        name = evolution_spec.resolve_name(actual_field.name)
-        if name in seen:
-            return False
-        mapped_fields.append(
-            pa.field(
-                name,
-                actual_field.type,
-                actual_field.nullable,
-                metadata=actual_field.metadata,
-            )
-        )
-        seen.add(name)
-    mapped_schema = pa.schema(mapped_fields, metadata=actual.metadata)
-    actual_fields = {field.name: field for field in mapped_schema}
-    expected_names = [field.name for field in expected.fields]
-    if not evolution_spec.allow_extra:
-        extras = [name for name in actual_fields if name not in expected_names]
-        if extras:
-            return False
-    for field_spec in expected.fields:
-        actual_field = actual_fields.get(field_spec.name)
-        if actual_field is None:
-            if evolution_spec.allow_missing:
-                continue
-            return False
-        if actual_field.type == field_spec.dtype:
-            continue
-        if evolution_spec.allow_casts and _can_cast_type(actual_field.type, field_spec.dtype):
-            continue
-        return False
-    return True
 
 
 @dataclass(frozen=True)
@@ -675,11 +607,6 @@ def _ibis_execution_for_ctx(ctx: ExecutionContext) -> IbisExecutionContext:
     )
 
 
-def _empty_validation_plan() -> IbisPlan:
-    empty = ibis.memtable(pa.table({}))
-    return IbisPlan(expr=empty, ordering=Ordering.unordered())
-
-
 def _invalid_rows_plan(plan: IbisPlan, *, spec: TableSchemaSpec) -> IbisPlan:
     required = required_field_names(spec)
     available = set(plan.expr.columns)
@@ -696,11 +623,13 @@ def _invalid_rows_plan(plan: IbisPlan, *, spec: TableSchemaSpec) -> IbisPlan:
 
 def _duplicate_key_rows_plan(plan: IbisPlan, *, keys: Sequence[str]) -> IbisPlan:
     if not keys:
-        return _empty_validation_plan()
+        filtered = plan.expr.filter(cast("BooleanValue", ibis.literal(value=False)))
+        return IbisPlan(expr=filtered, ordering=Ordering.unordered())
     available = set(plan.expr.columns)
     missing = missing_key_fields(keys, missing_cols=[key for key in keys if key not in available])
     if missing:
-        return _empty_validation_plan()
+        filtered = plan.expr.filter(cast("BooleanValue", ibis.literal(value=False)))
+        return IbisPlan(expr=filtered, ordering=Ordering.unordered())
     count_col = f"{keys[0]}_count"
     grouped = plan.expr.group_by([plan.expr[key] for key in keys]).aggregate(
         **{count_col: plan.expr[keys[0]].count()}
@@ -811,11 +740,19 @@ class DatasetOpenSpec:
     def open(self, path: PathLike) -> ds.Dataset:
         """Open a dataset using the stored options.
 
+        Raises
+        ------
+        ValueError
+            Raised when Delta discovery is requested without DataFusion.
+
         Returns
         -------
         ds.Dataset
             Opened dataset instance.
         """
+        if self.dataset_format == "delta":
+            msg = "Delta dataset discovery requires DataFusion; use read_ibis_table."
+            raise ValueError(msg)
         if self.schema is not None:
             register_schema_extensions(self.schema)
         return normalize_dataset_source(
@@ -1250,7 +1187,8 @@ def dataset_table_definition(name: str) -> str | None:
     str | None
         CREATE TABLE statement when available.
     """
-    ctx = DataFusionRuntimeProfile().session_context()
+    module = importlib.import_module("datafusion_engine.runtime")
+    ctx = module.DataFusionRuntimeProfile().session_context()
     return SchemaIntrospector(ctx).table_definition(name)
 
 
@@ -1267,7 +1205,8 @@ def dataset_table_constraints(name: str) -> tuple[str, ...]:
     tuple[str, ...]
         Constraint expressions or identifiers, when available.
     """
-    ctx = DataFusionRuntimeProfile().session_context()
+    module = importlib.import_module("datafusion_engine.runtime")
+    ctx = module.DataFusionRuntimeProfile().session_context()
     return SchemaIntrospector(ctx).table_constraints(name)
 
 
@@ -1284,7 +1223,8 @@ def dataset_table_column_defaults(name: str) -> dict[str, object]:
     dict[str, object]
         Mapping of column names to default expressions.
     """
-    ctx = DataFusionRuntimeProfile().session_context()
+    module = importlib.import_module("datafusion_engine.runtime")
+    ctx = module.DataFusionRuntimeProfile().session_context()
     return SchemaIntrospector(ctx).table_column_defaults(name)
 
 
@@ -1301,7 +1241,8 @@ def dataset_table_logical_plan(name: str) -> str | None:
     str | None
         Logical plan text when available.
     """
-    ctx = DataFusionRuntimeProfile().session_context()
+    module = importlib.import_module("datafusion_engine.runtime")
+    ctx = module.DataFusionRuntimeProfile().session_context()
     return SchemaIntrospector(ctx).table_logical_plan(name)
 
 
@@ -1336,6 +1277,11 @@ def dataset_spec_from_path(
         Dataset spec derived from the dataset path.
     """
     options = options or DatasetOpenSpec()
+    if options.dataset_format == "delta":
+        backend = build_backend(IbisBackendConfig())
+        table = options.read_ibis_table(path, backend=backend)
+        schema = table.schema().to_pyarrow()
+        return dataset_spec_from_schema(name, schema, version=version)
     dataset = options.open(path)
     return dataset_spec_from_dataset(name, dataset, version=version)
 
@@ -1448,7 +1394,6 @@ __all__ = [
     "make_dataset_spec",
     "make_table_spec",
     "resolve_schema_evolution_spec",
-    "schema_evolution_compatible",
     "table_spec_from_schema",
     "validate_arrow_table",
 ]

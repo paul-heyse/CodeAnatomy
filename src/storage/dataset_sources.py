@@ -10,7 +10,6 @@ from typing import Protocol, TypeGuard, runtime_checkable
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
-from deltalake import DeltaTable
 
 from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.core.streaming import to_reader
@@ -252,6 +251,9 @@ def normalize_dataset_source(
         Raised when a union dataset has no members or normalization fails.
     """
     resolved = options or DatasetSourceOptions()
+    if resolved.dataset_format == "delta":
+        msg = "Delta datasets must be registered via DataFusion TableProvider."
+        raise ValueError(msg)
     dataset: DatasetLike | None = None
     if _is_dataset_sequence(source):
         datasets = list(source)
@@ -271,14 +273,8 @@ def normalize_dataset_source(
         dataset = OneShotDataset.from_reader(reader)
     else:
         path = _coerce_pathlike(source)
-        if resolved.dataset_format == "delta":
-            if resolved.files:
-                dataset = _delta_dataset_from_files(resolved.files, options=resolved)
-            else:
-                dataset = _delta_dataset_from_path(path, options=resolved)
-        else:
-            file_format = _resolve_file_format(resolved)
-            dataset = _dataset_from_path(path, options=resolved, file_format=file_format)
+        file_format = _resolve_file_format(resolved)
+        dataset = _dataset_from_path(path, options=resolved, file_format=file_format)
     if dataset is None:
         msg = "Failed to normalize dataset source."
         raise ValueError(msg)
@@ -309,54 +305,6 @@ def _resolve_partitioning(options: DatasetSourceOptions) -> str | ds.Partitionin
             raise ValueError(msg)
         return ds.FilenamePartitioning(schema)
     return partitioning
-
-
-def _delta_dataset_from_path(source: PathLike, *, options: DatasetSourceOptions) -> ds.Dataset:
-    if options.delta_version is not None and options.delta_timestamp is not None:
-        msg = "Delta dataset open requires either delta_version or delta_timestamp."
-        raise ValueError(msg)
-    storage = _storage_dict(options.storage_options)
-    table = DeltaTable(
-        str(source),
-        version=options.delta_version,
-        storage_options=storage,
-    )
-    if options.delta_timestamp is not None:
-        table.load_as_version(options.delta_timestamp)
-    filesystem = _delta_filesystem(source, filesystem=options.filesystem)
-    return table.to_pyarrow_dataset(
-        filesystem=filesystem,
-        parquet_read_options=options.parquet_read_options,
-        schema=options.schema,
-    )
-
-
-def _delta_dataset_from_files(
-    files: Sequence[str],
-    *,
-    options: DatasetSourceOptions,
-) -> ds.Dataset:
-    if not files:
-        msg = "Delta dataset file list cannot be empty."
-        raise ValueError(msg)
-    file_format = ds.ParquetFileFormat(read_options=options.parquet_read_options)
-    filesystem = _normalize_filesystem(options.filesystem)
-    return ds.dataset(
-        list(files),
-        format=file_format,
-        filesystem=filesystem,
-        schema=options.schema,
-    )
-
-
-def _delta_filesystem(source: PathLike, *, filesystem: object | None) -> pafs.FileSystem | None:
-    resolved = _normalize_filesystem(filesystem)
-    if resolved is not None:
-        return resolved
-    if isinstance(source, str) and "://" in source:
-        raw_fs, normalized_path = pafs.FileSystem.from_uri(source)
-        return pafs.SubTreeFileSystem(normalized_path, raw_fs)
-    return None
 
 
 def _dataset_from_path(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import cast
 
 import ibis
@@ -11,8 +12,10 @@ from ibis.backends import BaseBackend
 
 from arrowdsl.core.array_iter import iter_table_rows
 from arrowdsl.core.interop import TableLike
+from arrowdsl.core.ordering import Ordering
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table, empty_table
+from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
 from incremental.registry_specs import dataset_schema
 from incremental.types import IncrementalFileChanges
 
@@ -45,7 +48,7 @@ def impacted_callers_from_changed_exports(
         return empty_table(schema)
 
     pieces: list[ibis.Table] = []
-    changed_table = ibis.memtable(changed)
+    changed_table = _table_expr(backend, changed)
     if prev_rel_callsite_qname is not None:
         rel_qname = backend.read_delta(prev_rel_callsite_qname)
         changed_qname = changed_table.filter(changed_table.qname_id.notnull())
@@ -107,7 +110,7 @@ def impacted_importers_from_changed_exports(
         return empty_table(schema)
 
     imports_resolved = backend.read_delta(prev_imports_resolved)
-    exports_table = ibis.memtable(exports)
+    exports_table = _table_expr(backend, exports)
     by_name = imports_resolved.inner_join(
         exports_table,
         predicates=[
@@ -163,7 +166,7 @@ def import_closure_only_from_changed_exports(
         return empty_table(schema)
 
     imports_resolved = backend.read_delta(prev_imports_resolved)
-    exports_table = ibis.memtable(exports)
+    exports_table = _table_expr(backend, exports)
     module_imports = imports_resolved.filter(
         imports_resolved.imported_name.isnull()
         & (imports_resolved.is_star == ibis.literal(value=False))
@@ -196,11 +199,19 @@ def import_closure_only_from_changed_exports(
     return align_table(result, schema=schema, safe_cast=True)
 
 
+@dataclass(frozen=True)
+class ImpactedFileInputs:
+    """Inputs required to merge impacted file tables."""
+
+    changed_files: TableLike
+    callers: TableLike | None
+    importers: TableLike | None
+    import_closure_only: TableLike | None
+
+
 def merge_impacted_files(
-    changed_files: TableLike,
-    callers: TableLike | None,
-    importers: TableLike | None,
-    import_closure_only: TableLike | None,
+    backend: BaseBackend,
+    inputs: ImpactedFileInputs,
     *,
     strategy: str,
 ) -> pa.Table:
@@ -212,21 +223,38 @@ def merge_impacted_files(
         Impacted files table aligned to ``inc_impacted_files_v2``.
     """
     schema = dataset_schema("inc_impacted_files_v2")
-    tables: list[pa.Table] = [align_table(cast("pa.Table", changed_files), schema=schema)]
+    tables: list[pa.Table] = [align_table(cast("pa.Table", inputs.changed_files), schema=schema)]
 
     if strategy == "symbol_closure":
-        tables.extend(_optional_tables([callers, importers], schema=schema))
+        tables.extend(_optional_tables([inputs.callers, inputs.importers], schema=schema))
     elif strategy == "import_closure":
-        tables.extend(_optional_tables([import_closure_only], schema=schema))
+        tables.extend(_optional_tables([inputs.import_closure_only], schema=schema))
     else:
-        tables.extend(_optional_tables([callers, importers, import_closure_only], schema=schema))
+        tables.extend(
+            _optional_tables(
+                [inputs.callers, inputs.importers, inputs.import_closure_only],
+                schema=schema,
+            )
+        )
 
-    ibis_tables = [ibis.memtable(table) for table in tables if table.num_rows > 0]
+    ibis_tables = [_table_expr(backend, table) for table in tables if table.num_rows > 0]
     if not ibis_tables:
         return empty_table(schema)
     combined = _union_all_tables(ibis_tables).distinct()
     result = cast("pa.Table", combined.to_pyarrow())
     return align_table(result, schema=schema, safe_cast=True)
+
+
+def _table_expr(backend: BaseBackend, table: TableLike) -> ibis.Table:
+    plan = register_ibis_table(
+        table,
+        options=SourceToIbisOptions(
+            backend=backend,
+            name=None,
+            ordering=Ordering.unordered(),
+        ),
+    )
+    return plan.expr
 
 
 def changed_file_impact_table(

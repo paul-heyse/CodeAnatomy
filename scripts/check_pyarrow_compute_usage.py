@@ -1,4 +1,4 @@
-"""Fail when pyarrow.compute is used outside datafusion_engine compute ops."""
+"""Fail when pyarrow.compute is used outside approved modules."""
 
 from __future__ import annotations
 
@@ -10,9 +10,25 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT / "src"
 
 ALLOWED_FILES = {
-    "src/datafusion_engine/compute_ops.py",
-    "src/datafusion_engine/udf_registry.py",
+    "src/arrowdsl/core/ids.py",
+    "src/arrowdsl/core/interop.py",
+    "src/arrowdsl/core/metrics.py",
+    "src/arrowdsl/core/ordering_policy.py",
+    "src/arrowdsl/finalize/finalize.py",
+    "src/arrowdsl/schema/build.py",
+    "src/arrowdsl/schema/dictionary.py",
+    "src/arrowdsl/schema/encoding_policy.py",
+    "src/arrowdsl/schema/schema.py",
+    "src/arrowdsl/spec/expr_ir.py",
+    "src/arrowdsl/spec/infra.py",
+    "src/cpg/constants.py",
     "src/datafusion_engine/kernels.py",
+    "src/datafusion_engine/udf_registry.py",
+    "src/engine/pyarrow_registry.py",
+    "src/hamilton_pipeline/modules/extraction.py",
+    "src/hamilton_pipeline/modules/normalization.py",
+    "src/ibis_engine/param_tables.py",
+    "src/incremental/props_update.py",
 }
 
 

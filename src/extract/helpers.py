@@ -9,12 +9,13 @@ from typing import TYPE_CHECKING, cast
 
 import ibis
 import pyarrow as pa
+from ibis.backends import BaseBackend
 
 from arrowdsl.core.array_iter import iter_table_rows
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
 from arrowdsl.core.interop import ScalarLike, TableLike
 from arrowdsl.core.ordering import Ordering
-from arrowdsl.schema.build import empty_table
+from arrowdsl.schema.build import empty_table, table_from_rows
 from datafusion_engine.extract_extractors import (
     ExtractorSpec,
     extractor_specs,
@@ -26,9 +27,12 @@ from engine.materialize import write_ast_outputs
 from extract.evidence_plan import EvidencePlan
 from extract.schema_ops import ExtractNormalizeOptions, normalize_extract_output
 from extract.spec_helpers import plan_requires_row, rule_execution_options
+from ibis_engine.backend import build_backend
+from ibis_engine.config import IbisBackendConfig
 from ibis_engine.plan import IbisPlan
 from ibis_engine.query_compiler import apply_query_spec
-from ibis_engine.schema_utils import align_table_to_schema
+from ibis_engine.schema_utils import validate_expr_schema
+from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
 from relspec.rules.definitions import RuleStage, stage_enabled
 
 if TYPE_CHECKING:
@@ -277,7 +281,13 @@ def iter_contexts(
     yield from file_contexts
 
 
-def empty_ibis_plan(name: str) -> IbisPlan:
+def empty_ibis_plan(
+    name: str,
+    *,
+    ctx: ExecutionContext | None = None,
+    backend: BaseBackend | None = None,
+    profile: str = "default",
+) -> IbisPlan:
     """Return an empty Ibis plan for a dataset name.
 
     Returns
@@ -285,57 +295,110 @@ def empty_ibis_plan(name: str) -> IbisPlan:
     IbisPlan
         Empty Ibis plan backed by an empty table.
     """
+    resolved = _resolve_backend(ctx=ctx, backend=backend, profile=profile)
     table = empty_table(dataset_schema(name))
-    expr = ibis.memtable(table)
-    return IbisPlan(expr=expr, ordering=Ordering.unordered())
+    return register_ibis_table(
+        table,
+        options=SourceToIbisOptions(
+            backend=resolved,
+            name=None,
+            ordering=Ordering.unordered(),
+        ),
+    )
 
 
 def ibis_plan_from_rows(
     name: str,
     rows: Iterable[Mapping[str, object]],
+    *,
+    ctx: ExecutionContext | None = None,
+    backend: BaseBackend | None = None,
+    profile: str = "default",
 ) -> IbisPlan:
     """Return an Ibis plan for row data aligned to the DataFusion schema.
 
     Returns
     -------
     IbisPlan
-        Ibis plan backed by a memtable of the provided rows.
+    Ibis plan backed by a backend-registered Arrow table.
 
     """
+    resolved = _resolve_backend(ctx=ctx, backend=backend, profile=profile)
     row_sequence = rows if isinstance(rows, Sequence) else list(rows)
     if not row_sequence:
-        return empty_ibis_plan(name)
-    expr = ibis.memtable(row_sequence)
+        return empty_ibis_plan(name, ctx=ctx, backend=resolved, profile=profile)
     schema = dataset_schema(name)
-    expr = align_table_to_schema(expr, schema=schema, keep_extra_columns=True)
-    return IbisPlan(expr=expr, ordering=Ordering.unordered())
+    aligned = table_from_rows(schema, row_sequence)
+    extra_table = pa.Table.from_pylist(row_sequence)
+    for col in extra_table.column_names:
+        if col in aligned.column_names:
+            continue
+        aligned = aligned.append_column(col, extra_table[col])
+    plan = register_ibis_table(
+        aligned,
+        options=SourceToIbisOptions(
+            backend=resolved,
+            name=None,
+            ordering=Ordering.unordered(),
+        ),
+    )
+    validate_expr_schema(plan.expr, expected=pa.schema(schema), allow_extra_columns=True)
+    return plan
 
 
 def ibis_plan_from_row_batches(
     name: str,
     row_batches: Iterable[Sequence[Mapping[str, object]]],
+    *,
+    ctx: ExecutionContext | None = None,
+    backend: BaseBackend | None = None,
+    profile: str = "default",
 ) -> IbisPlan:
     """Return an Ibis plan for batched row data aligned to the DataFusion schema.
 
     Returns
     -------
     IbisPlan
-        Ibis plan backed by a union of per-batch memtables.
+    Ibis plan backed by a backend-registered Arrow table.
     """
+    resolved = _resolve_backend(ctx=ctx, backend=backend, profile=profile)
     schema = dataset_schema(name)
-    exprs: list[IbisTable] = []
+    tables: list[pa.Table] = []
     for batch in row_batches:
         if not batch:
             continue
-        expr = ibis.memtable(batch)
-        expr = align_table_to_schema(expr, schema=schema, keep_extra_columns=True)
-        exprs.append(expr)
-    if not exprs:
-        return empty_ibis_plan(name)
-    if len(exprs) == 1:
-        return IbisPlan(expr=exprs[0], ordering=Ordering.unordered())
-    combined = ibis.union(*exprs, distinct=False)
-    return IbisPlan(expr=combined, ordering=Ordering.unordered())
+        aligned = table_from_rows(schema, batch)
+        extra_table = pa.Table.from_pylist(batch)
+        for col in extra_table.column_names:
+            if col in aligned.column_names:
+                continue
+            aligned = aligned.append_column(col, extra_table[col])
+        tables.append(aligned)
+    if not tables:
+        return empty_ibis_plan(name, ctx=ctx, backend=resolved, profile=profile)
+    combined = pa.concat_tables(tables, promote=True)
+    plan = register_ibis_table(
+        combined,
+        options=SourceToIbisOptions(
+            backend=resolved,
+            name=None,
+            ordering=Ordering.unordered(),
+        ),
+    )
+    validate_expr_schema(plan.expr, expected=pa.schema(schema), allow_extra_columns=True)
+    return plan
+
+
+def _resolve_backend(
+    *,
+    ctx: ExecutionContext | None,
+    backend: BaseBackend | None,
+    profile: str,
+) -> BaseBackend:
+    if backend is not None:
+        return backend
+    exec_ctx = ctx or execution_context_factory(profile)
+    return build_backend(IbisBackendConfig(datafusion_profile=exec_ctx.runtime.datafusion))
 
 
 def apply_query_and_project(

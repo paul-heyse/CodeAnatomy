@@ -17,12 +17,9 @@ from cpg.schemas import (
 )
 from incremental.invalidations import validate_schema_identity
 from incremental.state_store import StateStore
-from storage.dataset_sources import (
-    DatasetDiscoveryOptions,
-    DatasetSourceOptions,
-    normalize_dataset_source,
-    unwrap_dataset,
-)
+from ibis_engine.backend import build_backend
+from ibis_engine.config import IbisBackendConfig
+from ibis_engine.registry import ReadDatasetParams, read_dataset
 
 _CPG_NODES_DATASET = "cpg_nodes_v1"
 _CPG_EDGES_DATASET = "cpg_edges_v1"
@@ -126,22 +123,22 @@ def _dataset_path(
 def _read_state_dataset_optional(path: Path, *, schema: pa.Schema) -> pa.Table | None:
     if not path.exists():
         return None
-    dataset = unwrap_dataset(
-        normalize_dataset_source(
-            path,
-            options=DatasetSourceOptions(
-                schema=schema,
-                partitioning="hive",
-                discovery=DatasetDiscoveryOptions(),
-            ),
-        )
+    backend = build_backend(IbisBackendConfig())
+    table = read_dataset(
+        backend,
+        params=ReadDatasetParams(
+            path=path,
+            dataset_format="delta",
+            partitioning="hive",
+        ),
     )
+    dataset = table.to_pyarrow()
     validate_schema_identity(
         expected=schema,
         actual=dataset.schema,
         dataset_name=path.name,
     )
-    return dataset.to_table()
+    return dataset
 
 
 def _read_state_dataset(

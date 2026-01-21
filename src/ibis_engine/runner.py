@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import cast
@@ -11,12 +10,10 @@ import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 from ibis.expr.types import Table, Value
-from sqlglot import ErrorLevel
 
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.bridge import (
     IbisCompilerBackend,
-    compile_sqlglot_expr,
     datafusion_to_async_batches,
     ibis_plan_to_datafusion,
     ibis_plan_to_reader,
@@ -30,40 +27,9 @@ from datafusion_engine.runtime import (
     apply_execution_label,
     apply_execution_policy,
 )
+from datafusion_engine.schema_introspection import SchemaIntrospector
 from ibis_engine.expr_compiler import OperationSupportBackend, unsupported_operations
 from ibis_engine.plan import IbisPlan
-from ibis_engine.sql_bridge import execute_raw_sql, sql_ingest_artifacts
-
-logger = logging.getLogger(__name__)
-
-
-def _raw_sql_plan(
-    plan: IbisPlan,
-    *,
-    backend: IbisCompilerBackend,
-    options: DataFusionCompileOptions,
-) -> IbisPlan:
-    if options.params:
-        msg = "Raw SQL execution does not support parameter bindings."
-        raise ValueError(msg)
-    sg_expr = compile_sqlglot_expr(plan.expr, backend=backend, options=options)
-    sql = sg_expr.sql(dialect=options.dialect, unsupported_level=ErrorLevel.RAISE)
-    raw_expr = execute_raw_sql(
-        backend,
-        sql=sql,
-        sqlglot_expr=sg_expr,
-        schema=plan.expr.schema(),
-    )
-    if options.sql_ingest_hook is not None:
-        options.sql_ingest_hook(
-            sql_ingest_artifacts(
-                sql,
-                expr=raw_expr,
-                sqlglot_expr=sg_expr,
-                dialect=options.dialect,
-            ).payload()
-        )
-    return IbisPlan(expr=raw_expr, ordering=plan.ordering)
 
 
 def _portable_plan(plan: IbisPlan) -> IbisPlan:
@@ -75,33 +41,6 @@ def _portable_plan(plan: IbisPlan) -> IbisPlan:
     return plan
 
 
-def _try_raw_sql_table(
-    plan: IbisPlan,
-    *,
-    backend: IbisCompilerBackend,
-    options: DataFusionCompileOptions,
-) -> TableLike | None:
-    try:
-        raw_plan = _raw_sql_plan(plan, backend=backend, options=options)
-        return raw_plan.to_table(params=None)
-    except (AttributeError, TypeError, ValueError, RuntimeError):
-        return None
-
-
-def _try_raw_sql_reader(
-    plan: IbisPlan,
-    *,
-    backend: IbisCompilerBackend,
-    options: DataFusionCompileOptions,
-    batch_size: int | None,
-) -> RecordBatchReaderLike | None:
-    try:
-        raw_plan = _raw_sql_plan(plan, backend=backend, options=options)
-        return raw_plan.to_reader(batch_size=batch_size, params=None)
-    except (AttributeError, TypeError, ValueError, RuntimeError):
-        return None
-
-
 @dataclass(frozen=True)
 class DataFusionExecutionOptions:
     """Execution options for DataFusion-backed Ibis plans."""
@@ -111,7 +50,6 @@ class DataFusionExecutionOptions:
     options: DataFusionCompileOptions | None = None
     runtime_profile: DataFusionRuntimeProfile | None = None
     runtime_profile_hash: str | None = None
-    allow_fallback: bool = True
     execution_policy: AdapterExecutionPolicy | None = None
     execution_label: ExecutionLabel | None = None
     probe_capabilities: bool = True
@@ -195,17 +133,6 @@ def _materialize_plan_datafusion(
         execution=execution,
         params=params,
     )
-    if options.force_sql:
-        raw_table = _try_raw_sql_table(
-            plan,
-            backend=execution.backend,
-            options=options,
-        )
-        if raw_table is not None:
-            return raw_table
-        if not execution.allow_fallback:
-            msg = "Raw SQL execution failed and fallback is disabled."
-            raise ValueError(msg)
     portable_plan = _portable_plan(plan)
     if _force_bridge(options):
         return ibis_plan_to_table(
@@ -218,30 +145,10 @@ def _materialize_plan_datafusion(
         plan,
         execution=execution,
     )
-    if not missing:
-        try:
-            return plan.to_table(params=params)
-        except Exception as exc:
-            if not execution.allow_fallback:
-                raise
-            logger.warning(
-                "Ibis DataFusion execution failed; falling back to SQLGlot bridge: %s",
-                exc,
-            )
-    elif not execution.allow_fallback:
+    if missing:
         msg = f"Unsupported Ibis operations: {', '.join(missing)}."
         raise ValueError(msg)
-    else:
-        logger.info(
-            "Ibis backend lacks operations (%s); using SQLGlot bridge fallback.",
-            ", ".join(missing),
-        )
-    return ibis_plan_to_table(
-        portable_plan,
-        backend=execution.backend,
-        ctx=execution.ctx,
-        options=options,
-    )
+    return plan.to_table(params=params)
 
 
 def stream_plan(
@@ -375,18 +282,6 @@ def _stream_plan_datafusion(
         execution=execution,
         params=params,
     )
-    if options.force_sql:
-        raw_reader = _try_raw_sql_reader(
-            plan,
-            backend=execution.backend,
-            options=options,
-            batch_size=batch_size,
-        )
-        if raw_reader is not None:
-            return raw_reader
-        if not execution.allow_fallback:
-            msg = "Raw SQL execution failed and fallback is disabled."
-            raise ValueError(msg)
     portable_plan = _portable_plan(plan)
     if _force_bridge(options):
         return ibis_plan_to_reader(
@@ -396,30 +291,10 @@ def _stream_plan_datafusion(
             options=options,
         )
     missing = _missing_ops(plan, execution=execution)
-    if not missing:
-        try:
-            return plan.to_reader(batch_size=batch_size, params=params)
-        except Exception as exc:
-            if not execution.allow_fallback:
-                raise
-            logger.warning(
-                "Ibis DataFusion streaming failed; falling back to SQLGlot bridge: %s",
-                exc,
-            )
-    elif not execution.allow_fallback:
+    if missing:
         msg = f"Unsupported Ibis operations: {', '.join(missing)}."
         raise ValueError(msg)
-    else:
-        logger.info(
-            "Ibis backend lacks operations (%s); using SQLGlot bridge fallback.",
-            ", ".join(missing),
-        )
-    return ibis_plan_to_reader(
-        portable_plan,
-        backend=execution.backend,
-        ctx=execution.ctx,
-        options=options,
-    )
+    return plan.to_reader(batch_size=batch_size, params=params)
 
 
 def plan_to_datafusion(
@@ -457,12 +332,13 @@ def _resolve_options(
     resolved = options
     if resolved is None:
         if execution.runtime_profile is not None:
-            return execution.runtime_profile.compile_options(
+            resolved = execution.runtime_profile.compile_options(
                 params=params,
                 execution_policy=execution.execution_policy,
                 execution_label=execution.execution_label,
             )
-        resolved = DataFusionCompileOptions(params=params)
+        else:
+            resolved = DataFusionCompileOptions(params=params)
     elif params is not None and resolved.params is None:
         resolved = replace(resolved, params=params)
     if execution.runtime_profile is not None:
@@ -478,14 +354,22 @@ def _resolve_options(
         resolved = apply_execution_label(
             resolved,
             execution_label=execution.execution_label,
-            fallback_sink=execution.runtime_profile.labeled_fallbacks,
             explain_sink=execution.runtime_profile.labeled_explains,
         )
-    return apply_execution_policy(
+    resolved = apply_execution_policy(
         resolved,
         execution_policy=execution.execution_policy,
-        execution_label=execution.execution_label,
     )
+    if (
+        resolved.schema_map is None
+        and execution.runtime_profile is not None
+        and execution.runtime_profile.enable_information_schema
+    ):
+        resolved = replace(
+            resolved,
+            schema_map=SchemaIntrospector(execution.ctx).schema_map(),
+        )
+    return resolved
 
 
 def _missing_ops(
@@ -524,4 +408,4 @@ def _record_support_matrix(
 
 
 def _force_bridge(options: DataFusionCompileOptions) -> bool:
-    return options.force_sql or options.capture_explain or options.explain_hook is not None
+    return options.capture_explain or options.explain_hook is not None

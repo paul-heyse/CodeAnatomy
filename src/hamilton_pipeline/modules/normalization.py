@@ -12,8 +12,6 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 import ibis
 import pyarrow as pa
-import pyarrow.compute as pc
-from datafusion import SessionContext
 from hamilton.function_modifiers import cache, extract_fields, tag
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table
@@ -25,28 +23,22 @@ from arrowdsl.core.interop import (
     ChunkedArrayLike,
     RecordBatchReaderLike,
     TableLike,
-    coerce_table_like,
+    pc,
 )
 from arrowdsl.core.joins import JoinConfig, left_join
 from arrowdsl.schema.build import const_array, empty_table, set_or_append_column, table_from_arrays
-from datafusion_engine.compute_ops import (
-    and_,
-    cast_values,
-    coalesce,
-    equal,
-    fill_null,
-    if_else,
-    invert,
-    is_valid,
-    struct_field,
-)
 from datafusion_engine.kernel_registry import resolve_kernel
 from datafusion_engine.nested_tables import (
     ViewReference,
     materialize_view_reference,
     register_nested_table,
 )
-from datafusion_engine.runtime import AdapterExecutionPolicy, ExecutionLabel
+from datafusion_engine.runtime import (
+    AdapterExecutionPolicy,
+    ExecutionLabel,
+    align_table_to_schema,
+    dataset_schema_from_context,
+)
 from extract.evidence_plan import EvidencePlan
 from ibis_engine.builtin_udfs import prefixed_hash64
 from ibis_engine.registry import datafusion_context
@@ -79,11 +71,6 @@ from normalize.runner import (
     resolve_normalize_rules,
     run_normalize,
 )
-from normalize.schema_infer import (
-    SchemaInferOptions,
-    align_table_to_schema,
-    infer_schema_or_registry,
-)
 from normalize.span_pipeline import span_error_table
 from normalize.text_index import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from relspec.pipeline_policy import PipelinePolicy
@@ -113,9 +100,9 @@ CALLSITE_ARG_SUMMARY_SCHEMA = pa.schema(
 
 
 def _string_or_null(values: ArrayLike | ChunkedArrayLike) -> ArrayLike:
-    casted = cast_values(values, pa.string())
-    empty = equal(casted, pa.scalar(""))
-    return if_else(empty, pa.scalar(None, type=pa.string()), casted)
+    casted = pc.cast(values, pa.string())
+    empty = pc.equal(casted, pa.scalar(""))
+    return pc.if_else(empty, pa.scalar(None, type=pa.string()), casted)
 
 
 def _requires_output(plan: EvidencePlan | None, name: str) -> bool:
@@ -201,25 +188,16 @@ def _scip_position_encoding_stats(
     *,
     backend: BaseBackend,
 ) -> dict[str, object] | None:
-    if isinstance(scip_documents, ViewReference):
-        ctx = datafusion_context(backend)
-        if not isinstance(ctx, SessionContext):
-            return None
-        query = (
-            "SELECT position_encoding, COUNT(*) AS doc_count "
-            f"FROM {scip_documents.name} GROUP BY position_encoding"
-        )
-        table = ctx.sql(query).to_arrow_table()
-        return _posenc_stats_from_rows(table.to_pylist())
-    resolved = coerce_table_like(scip_documents)
-    table = resolved.read_all() if isinstance(resolved, RecordBatchReaderLike) else resolved
-    if not isinstance(table, pa.Table):
-        return None
-    if "position_encoding" not in table.column_names:
-        return None
-    counts = pc.call_function("value_counts", [table["position_encoding"]])
-    rows = counts.to_pylist()
-    return _posenc_stats_from_rows(rows)
+    if not isinstance(scip_documents, ViewReference):
+        msg = "SCIP position encoding stats require a DataFusion view reference."
+        raise TypeError(msg)
+    ctx = datafusion_context(backend)
+    query = (
+        "SELECT position_encoding, COUNT(*) AS doc_count "
+        f"FROM {scip_documents.name} GROUP BY position_encoding"
+    )
+    table = ctx.sql(query).to_arrow_table()
+    return _posenc_stats_from_rows(table.to_pylist())
 
 
 def _record_scip_position_encoding_stats(
@@ -277,8 +255,6 @@ def _schema_from_fragment(
     if backend is None:
         return None
     ctx = datafusion_context(backend)
-    if ctx is None:
-        return None
     fragment_sql = f"SELECT * FROM {fragment.name} LIMIT 0"
     df_ctx = cast("_DatafusionContext", ctx)
     return df_ctx.sql(fragment_sql).schema()
@@ -290,7 +266,7 @@ def _schema_from_source(
     backend: BaseBackend | None,
     fallback: str,
 ) -> pa.Schema:
-    fallback_schema = infer_schema_or_registry(fallback)
+    fallback_schema = dataset_schema_from_context(fallback)
     if source is None:
         return fallback_schema
     if isinstance(source, ViewReference):
@@ -803,8 +779,8 @@ def _empty_scip_occurrences_norm(schema: pa.Schema) -> TableLike:
 
 
 def _count_mask(values: ArrayLike) -> ArrayLike:
-    mask = fill_null(values, fill_value=False)
-    return cast_values(mask, pa.int32())
+    mask = pc.fill_null(values, fill_value=False)
+    return pc.cast(mask, pa.int32())
 
 
 def _callsite_arg_summary(call_args: TableLike) -> TableLike:
@@ -818,16 +794,16 @@ def _callsite_arg_summary(call_args: TableLike) -> TableLike:
         keyword_vals = _string_or_null(call_args["keyword"])
     else:
         keyword_vals = pa.nulls(num_rows, type=pa.string())
-    is_keyword = fill_null(is_valid(keyword_vals), fill_value=False)
+    is_keyword = pc.fill_null(pc.is_valid(keyword_vals), fill_value=False)
     if "star" in call_args.column_names:
         star_vals = _string_or_null(call_args["star"])
     else:
         star_vals = pa.nulls(num_rows, type=pa.string())
-    is_star_arg = fill_null(equal(star_vals, pa.scalar("*")), fill_value=False)
-    is_star_kwarg = fill_null(equal(star_vals, pa.scalar("**")), fill_value=False)
-    positional = and_(
-        invert(is_keyword),
-        and_(invert(is_star_arg), invert(is_star_kwarg)),
+    is_star_arg = pc.fill_null(pc.equal(star_vals, pa.scalar("*")), fill_value=False)
+    is_star_kwarg = pc.fill_null(pc.equal(star_vals, pa.scalar("**")), fill_value=False)
+    positional = pc.and_(
+        pc.invert(is_keyword),
+        pc.and_(pc.invert(is_star_arg), pc.invert(is_star_kwarg)),
     )
     base = table_from_arrays(
         CALLSITE_ARG_SUMMARY_SCHEMA,
@@ -841,7 +817,7 @@ def _callsite_arg_summary(call_args: TableLike) -> TableLike:
         },
         num_rows=num_rows,
     )
-    valid_mask = fill_null(is_valid(base["call_id"]), fill_value=False)
+    valid_mask = pc.fill_null(pc.is_valid(base["call_id"]), fill_value=False)
     base = base.filter(valid_mask)
     if base.num_rows == 0:
         return empty_table(CALLSITE_ARG_SUMMARY_SCHEMA)
@@ -860,11 +836,11 @@ def _callsite_arg_summary(call_args: TableLike) -> TableLike:
         CALLSITE_ARG_SUMMARY_SCHEMA,
         columns={
             "call_id": _string_or_null(grouped["call_id"]),
-            "arg_count": cast_values(grouped["arg_count_sum"], pa.int32()),
-            "keyword_count": cast_values(grouped["keyword_count_sum"], pa.int32()),
-            "star_arg_count": cast_values(grouped["star_arg_count_sum"], pa.int32()),
-            "star_kwarg_count": cast_values(grouped["star_kwarg_count_sum"], pa.int32()),
-            "positional_count": cast_values(grouped["positional_count_sum"], pa.int32()),
+            "arg_count": pc.cast(grouped["arg_count_sum"], pa.int32()),
+            "keyword_count": pc.cast(grouped["keyword_count_sum"], pa.int32()),
+            "star_arg_count": pc.cast(grouped["star_arg_count_sum"], pa.int32()),
+            "star_kwarg_count": pc.cast(grouped["star_kwarg_count_sum"], pa.int32()),
+            "positional_count": pc.cast(grouped["positional_count_sum"], pa.int32()),
         },
         num_rows=grouped.num_rows,
     )
@@ -873,8 +849,8 @@ def _callsite_arg_summary(call_args: TableLike) -> TableLike:
 def _callsite_qname_base_table(exploded: TableLike) -> TableLike:
     call_ids = _string_or_null(exploded["call_id"])
     qname_struct = exploded["qname_struct"]
-    qname_vals = _string_or_null(struct_field(qname_struct, "name"))
-    qname_sources = _string_or_null(struct_field(qname_struct, "source"))
+    qname_vals = _string_or_null(pc.struct_field(qname_struct, "name"))
+    qname_sources = _string_or_null(pc.struct_field(qname_struct, "source"))
     schema = pa.schema(
         [
             ("call_id", pa.string()),
@@ -887,8 +863,8 @@ def _callsite_qname_base_table(exploded: TableLike) -> TableLike:
         columns={"call_id": call_ids, "qname": qname_vals, "qname_source": qname_sources},
         num_rows=len(call_ids),
     )
-    mask = and_(is_valid(base["call_id"]), is_valid(base["qname"]))
-    mask = fill_null(mask, fill_value=False)
+    mask = pc.and_(pc.is_valid(base["call_id"]), pc.is_valid(base["qname"]))
+    mask = pc.fill_null(mask, fill_value=False)
     return base.filter(mask)
 
 
@@ -908,8 +884,8 @@ def _callsite_fqn_base_table(exploded: TableLike) -> TableLike:
         columns={"call_id": call_ids, "qname": fqn_vals, "qname_source": qname_sources},
         num_rows=len(call_ids),
     )
-    mask = and_(is_valid(base["call_id"]), is_valid(base["qname"]))
-    mask = fill_null(mask, fill_value=False)
+    mask = pc.and_(pc.is_valid(base["call_id"]), pc.is_valid(base["qname"]))
+    mask = pc.fill_null(mask, fill_value=False)
     return base.filter(mask)
 
 
@@ -944,7 +920,7 @@ def _join_callsite_qname_meta(base: TableLike, cst_callsites: TableLike) -> Tabl
         return joined
     primary = _string_or_null(joined["qname_source"])
     meta_source = _string_or_null(joined["qname_source__meta"])
-    merged = coalesce(primary, meta_source)
+    merged = pc.coalesce(primary, meta_source)
     joined = set_or_append_column(joined, "qname_source", merged)
     return joined.drop(["qname_source__meta"])
 
@@ -976,7 +952,7 @@ def _join_callsite_arg_summary(base: TableLike, summary: TableLike) -> TableLike
             continue
         primary = joined[arg_col]
         fallback = joined[metric] if metric in joined.column_names else None
-        merged = coalesce(primary, fallback) if fallback is not None else primary
+        merged = pc.coalesce(primary, fallback) if fallback is not None else primary
         joined = set_or_append_column(joined, metric, merged)
         joined = joined.drop([arg_col])
     return joined
@@ -1022,10 +998,10 @@ def dim_qualified_names(
         libcst_files=normalize_qname_context.libcst_files,
     )
     if not _requires_output(normalize_qname_context.evidence_plan, "dim_qualified_names"):
-        schema = infer_schema_or_registry(QNAME_DIM_NAME)
+        schema = dataset_schema_from_context(QNAME_DIM_NAME)
         return empty_table(schema)
     if cst_callsites is None or cst_defs is None:
-        schema = infer_schema_or_registry(QNAME_DIM_NAME)
+        schema = dataset_schema_from_context(QNAME_DIM_NAME)
         return empty_table(schema)
     if backend is None:
         msg = "Qualified name normalization requires an Ibis backend."
@@ -1036,15 +1012,15 @@ def dim_qualified_names(
     defs_expr = _ibis_table_from_source(backend, cst_defs, name="cst_defs")
     sources = _qname_sources(callsites_expr, defs_expr)
     if not sources:
-        schema = infer_schema_or_registry(QNAME_DIM_NAME)
+        schema = dataset_schema_from_context(QNAME_DIM_NAME)
         return empty_table(schema)
     combined = _union_tables(sources)
     combined = combined.filter(combined.qname.notnull())
     distinct_qnames = combined.distinct()
     qname_id = prefixed_hash64(ibis.literal("qname"), distinct_qnames.qname.cast("string"))
     result = distinct_qnames.mutate(qname_id=qname_id).select("qname_id", "qname").order_by("qname")
-    schema = infer_schema_or_registry(QNAME_DIM_NAME)
-    return align_table_to_schema(result.to_pyarrow(), schema)
+    schema = dataset_schema_from_context(QNAME_DIM_NAME)
+    return align_table_to_schema(result.to_pyarrow(), schema=schema)
 
 
 def _resolve_cst_sources(
@@ -1144,27 +1120,27 @@ def callsite_qname_candidates(
         Table of callsite qualified name candidates.
     """
     if not _requires_output(evidence_plan, "callsite_qname_candidates"):
-        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
+        schema = dataset_schema_from_context(CALLSITE_QNAME_CANDIDATES_NAME)
         return empty_table(schema)
     backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
     cst_callsites, cst_call_args = _resolve_callsite_sources(sources)
     register_nested_table(backend, name="libcst_files_v1", table=sources.libcst_files)
     if cst_callsites is None:
-        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
+        schema = dataset_schema_from_context(CALLSITE_QNAME_CANDIDATES_NAME)
         return empty_table(schema)
     cst_callsites_table = _materialize_fragment(backend, cst_callsites)
     if cst_callsites_table.num_rows == 0:
-        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
+        schema = dataset_schema_from_context(CALLSITE_QNAME_CANDIDATES_NAME)
         return empty_table(schema)
     tables = _callsite_candidate_tables(cst_callsites_table, ctx=ctx)
     if not tables:
-        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
+        schema = dataset_schema_from_context(CALLSITE_QNAME_CANDIDATES_NAME)
         return empty_table(schema)
     joined = _concat_tables(tables)
     joined = _maybe_join_call_args(joined, backend=backend, cst_call_args=cst_call_args)
 
-    schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_NAME)
-    return align_table_to_schema(joined, schema)
+    schema = dataset_schema_from_context(CALLSITE_QNAME_CANDIDATES_NAME)
+    return align_table_to_schema(joined, schema=schema)
 
 
 def _resolve_callsite_sources(
@@ -1293,8 +1269,8 @@ def ast_nodes_norm(
         ast_nodes,
         backend=backend,
     )
-    schema = infer_schema_or_registry("py_ast_nodes_v1")
-    return align_table_to_schema(table, schema, opts=SchemaInferOptions(keep_extra_columns=True))
+    schema = dataset_schema_from_context("py_ast_nodes_v1")
+    return align_table_to_schema(table, schema=schema, keep_extra_columns=True)
 
 
 @cache(format="delta")
@@ -1336,8 +1312,8 @@ def py_bc_instructions_norm(
         py_bc_instructions,
         backend=backend,
     )
-    schema = infer_schema_or_registry("py_bc_instructions_v1")
-    return align_table_to_schema(table, schema, opts=SchemaInferOptions(keep_extra_columns=True))
+    schema = dataset_schema_from_context("py_bc_instructions_v1")
+    return align_table_to_schema(table, schema=schema, keep_extra_columns=True)
 
 
 @cache(format="delta")
@@ -1660,8 +1636,8 @@ def scip_occurrences_norm_bundle(
         scip_occurrences,
         backend=backend,
     )
-    schema = infer_schema_or_registry("scip_occurrences_v1")
-    occ = align_table_to_schema(occ, schema, opts=SchemaInferOptions(keep_extra_columns=True))
+    schema = dataset_schema_from_context("scip_occurrences_v1")
+    occ = align_table_to_schema(occ, schema=schema, keep_extra_columns=True)
     return {"scip_occurrences_norm": occ, "scip_span_errors": errs}
 
 

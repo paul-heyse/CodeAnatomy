@@ -17,6 +17,7 @@ from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike
 from arrowdsl.finalize.finalize import FinalizeResult
 from arrowdsl.schema.encoding_policy import EncodingPolicy, apply_encoding
 from arrowdsl.schema.schema import SchemaTransform
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from storage.deltalake.config import (
     DeltaSchemaPolicy,
     DeltaWritePolicy,
@@ -220,6 +221,15 @@ def write_table_delta(
         Raised when a predicate is supplied without overwrite mode.
     """
     data = _coerce_write_input(table)
+    if _supports_datafusion_delta_insert(options):
+        existing_version = delta_table_version(path, storage_options=storage_options)
+        if existing_version is not None:
+            return _write_table_delta_datafusion(
+                data,
+                path=path,
+                options=options,
+                storage_options=storage_options,
+            )
     arrow_data = cast(
         "ArrowStreamExportable | ArrowArrayExportable | Sequence[ArrowArrayExportable]",
         data,
@@ -245,6 +255,24 @@ def write_table_delta(
         invocation=invocation,
     )
     return DeltaWriteResult(path=path, version=delta_table_version(path, storage_options=storage))
+
+
+def _write_table_delta_datafusion(
+    table: TableLike,
+    *,
+    path: str,
+    options: DeltaWriteOptions,
+    storage_options: StorageOptions | None = None,
+) -> DeltaWriteResult:
+    ctx = DataFusionRuntimeProfile().session_context()
+    arrow_data = cast("ArrowArrayExportable | ArrowStreamExportable", table)
+    df = ctx.from_arrow(arrow_data)
+    return write_datafusion_delta(
+        df,
+        base_dir=path,
+        options=options,
+        storage_options=storage_options,
+    )
 
 
 def write_dataset_delta(
@@ -301,29 +329,39 @@ def write_datafusion_delta(
     base_dir: str,
     options: DeltaWriteOptions,
     storage_options: StorageOptions | None = None,
-) -> DeltaWriteResult | None:
+) -> DeltaWriteResult:
     """Insert data into an existing Delta table using DataFusion.
 
     Returns
     -------
-    DeltaWriteResult | None
-        Delta write metadata when DataFusion insert succeeds, or ``None`` if
-        DataFusion insert is unsupported.
+    DeltaWriteResult
+        Delta write metadata when DataFusion insert succeeds.
+
+    Raises
+    ------
+    ValueError
+        Raised when the insert configuration is unsupported or the table is missing.
+    TypeError
+        Raised when the DataFusion DataFrame is missing write capabilities.
     """
     if not _supports_datafusion_delta_insert(options):
-        return None
+        msg = "DataFusion Delta inserts only support append without schema or commit options."
+        raise ValueError(msg)
     if delta_table_version(base_dir, storage_options=storage_options) is None:
-        return None
+        msg = "DataFusion Delta insert requires an existing Delta table."
+        raise ValueError(msg)
     write_table = getattr(df, "write_table", None)
     if not callable(write_table):
-        return None
+        msg = "DataFusion DataFrame is missing write_table."
+        raise TypeError(msg)
     storage = dict(storage_options) if storage_options is not None else None
     table = DeltaTable(base_dir, storage_options=storage)
     name = f"__delta_sink_{uuid.uuid4().hex}"
     try:
         _register_datafusion_delta_table(df, name=name, table=table)
-    except ValueError:
-        return None
+    except ValueError as exc:
+        msg = "DataFusion failed to register Delta table provider."
+        raise ValueError(msg) from exc
     try:
         write_table(name)
     finally:

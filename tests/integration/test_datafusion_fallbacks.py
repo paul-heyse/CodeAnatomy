@@ -1,11 +1,11 @@
-"""Regression coverage for DataFusion SQL fallback diagnostics."""
+"""Regression coverage for DataFusion SQL execution policies."""
 
 from __future__ import annotations
 
 import pytest
 from sqlglot import parse_one
 
-from datafusion_engine.bridge import SqlFallbackContext, df_from_sql
+from datafusion_engine.bridge import df_from_sql
 from datafusion_engine.compile_options import DataFusionCompileOptions
 from datafusion_engine.runtime import (
     AdapterExecutionPolicy,
@@ -15,33 +15,17 @@ from datafusion_engine.runtime import (
 
 
 @pytest.mark.integration
-def test_datafusion_fallback_event_emitted() -> None:
-    """Emit a fallback event when SQL execution is chosen."""
+def test_datafusion_sql_executes() -> None:
+    """Execute SQL through DataFusion without fallback hooks."""
     ctx = DataFusionRuntimeProfile().session_context()
     expr = parse_one("select 1 as value")
-    events = []
-
-    def _hook(event: object) -> None:
-        events.append(event)
-
-    options = DataFusionCompileOptions(fallback_hook=_hook)
-    _ = df_from_sql(ctx, expr, options=options, fallback=SqlFallbackContext(reason="test_sql"))
-    assert len(events) == 1
+    _ = df_from_sql(ctx, expr, options=DataFusionCompileOptions())
 
 
 @pytest.mark.integration
-def test_datafusion_fallback_policy_blocks() -> None:
-    """Raise when fallback execution is blocked."""
-    ctx = DataFusionRuntimeProfile().session_context()
-    expr = parse_one("select 1 as value")
-    events = []
-
-    def _hook(event: object) -> None:
-        events.append(event)
-
-    options = DataFusionCompileOptions(fallback_hook=_hook)
-    policy = AdapterExecutionPolicy(allow_fallback=False, fail_on_fallback=True)
+def test_execution_policy_forces_sql() -> None:
+    """Apply execution policy without altering options."""
+    options = DataFusionCompileOptions()
+    policy = AdapterExecutionPolicy()
     guarded = apply_execution_policy(options, execution_policy=policy)
-    with pytest.raises(ValueError, match="DataFusion fallback blocked"):
-        _ = df_from_sql(ctx, expr, options=guarded, fallback=SqlFallbackContext(reason="test_sql"))
-    assert len(events) == 1
+    assert guarded == options

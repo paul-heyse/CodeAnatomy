@@ -11,7 +11,12 @@ from cpg.schemas import CPG_EDGES_SCHEMA
 from cpg.specs import EdgeEmitSpec
 from ibis_engine.ids import stable_id_expr, stable_key_expr
 from ibis_engine.plan import IbisPlan
-from ibis_engine.schema_utils import align_table_to_schema, coalesce_columns, ibis_null_literal
+from ibis_engine.schema_utils import (
+    coalesce_columns,
+    ibis_dtype_from_arrow,
+    ibis_null_literal,
+    validate_expr_schema,
+)
 
 
 def emit_edges_ibis(
@@ -53,12 +58,12 @@ def emit_edges_ibis(
         rule_name=output.rule_name,
         rule_priority=output.rule_priority,
     )
-    aligned = align_table_to_schema(
+    validate_expr_schema(
         output,
-        schema=CPG_EDGES_SCHEMA,
-        keep_extra_columns=include_keys,
+        expected=CPG_EDGES_SCHEMA,
+        allow_extra_columns=include_keys,
     )
-    return IbisPlan(expr=aligned, ordering=Ordering.unordered())
+    return IbisPlan(expr=output, ordering=Ordering.unordered())
 
 
 def _edge_id_expr(rel: Table, *, spec: EdgeEmitSpec) -> Value:
@@ -148,7 +153,7 @@ def _normalized_relation_expr(rel: Table, *, spec: EdgeEmitSpec) -> Table:
 
 def _optional_column(rel: Table, name: str, dtype: pa.DataType) -> Value:
     if name in rel.columns:
-        return rel[name]
+        return ibis.cast(rel[name], ibis_dtype_from_arrow(dtype))
     return ibis_null_literal(dtype)
 
 

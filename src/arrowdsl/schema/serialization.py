@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 from collections.abc import Mapping, Sequence
 from functools import cache
 from typing import cast
@@ -13,7 +14,6 @@ import pyarrow.types as patypes
 from arrowdsl.core.interop import DataTypeLike, SchemaLike
 from arrowdsl.schema.semantic_types import register_semantic_extension_types
 from core_types import JsonDict
-from datafusion_engine.schema_authority import dataset_schema_from_context
 from registry_common.arrow_payloads import payload_hash
 
 DATASET_FINGERPRINT_VERSION = 1
@@ -21,7 +21,8 @@ DATASET_FINGERPRINT_VERSION = 1
 
 @cache
 def _dataset_fingerprint_schema() -> pa.Schema:
-    schema = dataset_schema_from_context("dataset_fingerprint_v1")
+    module = importlib.import_module("datafusion_engine.runtime")
+    schema = module.dataset_schema_from_context("dataset_fingerprint_v1")
     if isinstance(schema, pa.Schema):
         return schema
     to_pyarrow = getattr(schema, "to_pyarrow", None)

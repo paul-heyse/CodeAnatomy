@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, cast
 
-import ibis
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.execution_context import ExecutionContext
@@ -13,6 +12,7 @@ from arrowdsl.core.interop import TableLike
 from arrowdsl.core.ordering import Ordering
 from arrowdsl.schema.build import empty_table
 from ibis_engine.plan import IbisPlan
+from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
 from normalize.ibis_plan_builders import (
     CFG_BLOCKS_NAME,
     CFG_EDGES_NAME,
@@ -82,10 +82,16 @@ def _require_backend(backend: BaseBackend | None) -> BaseBackend:
     return backend
 
 
-def _empty_plan(output: str) -> IbisPlan:
+def _empty_plan(output: str, *, backend: BaseBackend) -> IbisPlan:
     schema = dataset_schema(output)
-    empty = ibis.memtable(empty_table(schema))
-    return IbisPlan(expr=empty, ordering=Ordering.unordered())
+    return register_ibis_table(
+        empty_table(schema),
+        options=SourceToIbisOptions(
+            backend=backend,
+            name=None,
+            ordering=Ordering.unordered(),
+        ),
+    )
 
 
 def _catalog_from_tables(
@@ -287,7 +293,7 @@ def normalize_types(
     )
     exprs_plan = type_exprs_plan_ibis(catalog, exec_ctx, ibis_backend)
     if exprs_plan is None:
-        exprs_plan = _empty_plan(TYPE_EXPRS_NAME)
+        exprs_plan = _empty_plan(TYPE_EXPRS_NAME, backend=ibis_backend)
     catalog.add(TYPE_EXPRS_NAME, exprs_plan)
     plan = type_nodes_plan_ibis(catalog, exec_ctx, ibis_backend)
     return _finalize_plan(plan, output=TYPE_NODES_NAME, ctx=exec_ctx, backend=ibis_backend)

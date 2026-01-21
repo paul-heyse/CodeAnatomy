@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Protocol, cast
 
 import ibis
+import ibis.expr.datashape as ds
 import ibis.expr.datatypes as dt
 import ibis.expr.operations as ops
 from ibis.expr.types import (
@@ -121,11 +122,10 @@ def _binary_join_element_wise_expr(*values: Value) -> Value:
         msg = "binary_join_element_wise requires at least two inputs."
         raise ValueError(msg)
     *parts, sep = values
-    result = cast("StringValue", parts[0])
-    separator = cast("StringValue", sep)
-    for part in parts[1:]:
-        result = result.concat(separator).concat(cast("StringValue", part))
-    return result
+    separator = cast("ops.Value[dt.String, ds.DataShape]", sep.op())
+    resolved_parts = tuple(cast("ops.Value[dt.String, ds.DataShape]", part.op()) for part in parts)
+    joined = ops.StringJoin(resolved_parts, separator)
+    return cast("StringValue", joined.to_expr())
 
 
 class OperationSupportBackend(Protocol):

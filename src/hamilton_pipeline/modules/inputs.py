@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -240,23 +240,22 @@ def cpg_props_options() -> PropsBuildOptions:
 
 @tag(layer="inputs", kind="runtime")
 def adapter_execution_policy(ctx: ExecutionContext) -> AdapterExecutionPolicy:
-    """Return the execution policy for adapter fallback behavior.
+    """Return the execution policy for adapter execution behavior.
+
+    Raises
+    ------
+    ValueError
+        Raised when an unsupported execution mode is configured.
 
     Returns
     -------
     AdapterExecutionPolicy
-        Policy that governs fallback and strictness behavior.
+        Policy that governs adapter execution behavior.
     """
-    policy = AdapterExecutionPolicy()
-    if ctx.mode == "strict":
-        policy = replace(policy, fail_on_fallback=True)
-    strict_flag = os.environ.get("CODEANATOMY_STRICT_FALLBACK", "").strip().lower()
-    if strict_flag in {"1", "true", "yes", "y"}:
-        policy = replace(policy, fail_on_fallback=True)
-    disable_flag = os.environ.get("CODEANATOMY_DISABLE_FALLBACK", "").strip().lower()
-    if disable_flag in {"1", "true", "yes", "y"}:
-        policy = replace(policy, allow_fallback=False)
-    return policy
+    if ctx.mode not in {"strict", "tolerant"}:
+        msg = f"Unsupported execution mode: {ctx.mode!r}."
+        raise ValueError(msg)
+    return AdapterExecutionPolicy()
 
 
 @tag(layer="inputs", kind="object")

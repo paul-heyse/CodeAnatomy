@@ -211,6 +211,10 @@ class TableLike(Protocol):
         """Return the table as column-wise Python lists."""
         ...
 
+    def to_batches(self) -> Sequence[pa.RecordBatch]:
+        """Return the table as a sequence of record batches."""
+        ...
+
     def filter(self, mask: ArrayLike) -> TableLike:
         """Filter rows by a boolean mask."""
         ...
@@ -589,6 +593,7 @@ def coerce_table_like(
 class ComputeModule(Protocol):
     """Protocol for the subset of pyarrow.compute used in this repo."""
 
+    list_functions: Callable[[], Sequence[str]]
     field: Callable[[str], ComputeExpression]
     scalar: Callable[[object], ComputeExpression]
     cast: Callable[..., ArrayLike]

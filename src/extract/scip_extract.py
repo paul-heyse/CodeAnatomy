@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Literal, cast, overload
 import pyarrow as pa
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
-from arrowdsl.core.ids import stable_id
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.schema import align_table, encode_table
 from datafusion_engine.extract_registry import extract_metadata, normalize_options
@@ -185,7 +184,7 @@ class _ResolvedScipExtraction:
     """Resolved index and context for SCIP extraction."""
 
     index: object
-    index_id: str
+    index_id: str | None
     index_path: Path
     scip_pb2: ModuleType | None
     parse_opts: SCIPParseOptions
@@ -530,9 +529,8 @@ def _int_list(values: Sequence[object]) -> list[int]:
 
 
 def _document_id(path: str | None) -> str | None:
-    if not path:
-        return None
-    return stable_id("scip_doc", path)
+    _ = path
+    return None
 
 
 def _role_flags(symbol_roles: int) -> dict[str, bool]:
@@ -574,13 +572,14 @@ def _symbol_kind_name(value: int | None, scip_pb2: ModuleType | None) -> str | N
         return None
 
 
-def _metadata_row(index: object, *, index_id: str) -> Row:
+def _metadata_row(index: object, *, index_id: str | None, index_path: Path) -> Row:
     metadata = getattr(index, "metadata", None)
     tool_info = getattr(metadata, "tool_info", None) if metadata is not None else None
     raw_args = getattr(tool_info, "arguments", []) or [] if tool_info is not None else []
     tool_args = normalize_string_items(list(raw_args))
     return {
         "index_id": index_id,
+        "index_path": str(index_path),
         "protocol_version": _int_or_none(getattr(metadata, "protocol_version", None)),
         "tool_name": _string_value(getattr(tool_info, "name", None)),
         "tool_version": _string_value(getattr(tool_info, "version", None)),
@@ -593,9 +592,10 @@ def _metadata_row(index: object, *, index_id: str) -> Row:
     }
 
 
-def _index_stats_row(counts: Mapping[str, int], *, index_id: str) -> Row:
+def _index_stats_row(counts: Mapping[str, int], *, index_id: str | None, index_path: Path) -> Row:
     return {
         "index_id": index_id,
+        "index_path": str(index_path),
         "document_count": counts.get("documents", 0),
         "occurrence_count": counts.get("occurrences", 0),
         "diagnostic_count": counts.get("diagnostics", 0),
@@ -610,7 +610,7 @@ def _index_stats_row(counts: Mapping[str, int], *, index_id: str) -> Row:
 def _record_scip_index_stats(
     ctx: ExecutionContext | None,
     *,
-    index_id: str,
+    index_id: str | None,
     index_path: Path,
     counts: Mapping[str, int],
 ) -> None:
@@ -619,9 +619,8 @@ def _record_scip_index_stats(
     runtime = ctx.runtime.datafusion
     if runtime is None or runtime.diagnostics_sink is None:
         return
-    payload = _index_stats_row(counts, index_id=index_id)
+    payload = _index_stats_row(counts, index_id=index_id, index_path=index_path)
     payload["event_time_unix_ms"] = int(time.time() * 1000)
-    payload["index_path"] = str(index_path)
     runtime.diagnostics_sink.record_artifact("scip_index_stats_v1", payload)
 
 
@@ -809,10 +808,16 @@ def _iter_document_contexts(
         yield doc, document_id, rel_path, position_encoding, col_unit
 
 
-def _iter_scip_documents(index: object, *, index_id: str) -> Iterator[Row]:
+def _iter_scip_documents(
+    index: object,
+    *,
+    index_id: str | None,
+    index_path: Path,
+) -> Iterator[Row]:
     for doc, document_id, rel_path, position_encoding, _col_unit in _iter_document_contexts(index):
         yield {
             "index_id": index_id,
+            "index_path": str(index_path),
             "document_id": document_id,
             "path": rel_path,
             "language": _string_value(getattr(doc, "language", None)),
@@ -961,7 +966,7 @@ def _resolve_scip_index(
         resolved_opts = replace(resolved_opts, build_dir=index_path.parent)
     index = parse_index_scip(index_path, parse_opts=resolved_opts)
     scip_pb2 = _load_scip_pb2(resolved_opts)
-    index_id = stable_id("scip_index", str(index_path.resolve()))
+    index_id: str | None = None
     normalize = ExtractNormalizeOptions(options=resolved_opts)
     return _ResolvedScipExtraction(
         index=index,
@@ -1099,13 +1104,29 @@ def _extract_scip_tables_streaming(
     )
     evidence_plan = options.evidence_plan
     rows_by_dataset: dict[str, Iterable[Row]] = {
-        "scip_metadata_v1": (_metadata_row(resolved.index, index_id=resolved.index_id),)
+        "scip_metadata_v1": (
+            _metadata_row(
+                resolved.index,
+                index_id=resolved.index_id,
+                index_path=resolved.index_path,
+            ),
+        )
         if _dataset_required("scip_metadata_v1", evidence_plan)
         else (),
-        "scip_index_stats_v1": (_index_stats_row(counts, index_id=resolved.index_id),)
+        "scip_index_stats_v1": (
+            _index_stats_row(
+                counts,
+                index_id=resolved.index_id,
+                index_path=resolved.index_path,
+            ),
+        )
         if _dataset_required("scip_index_stats_v1", evidence_plan)
         else (),
-        "scip_documents_v1": _iter_scip_documents(resolved.index, index_id=resolved.index_id)
+        "scip_documents_v1": _iter_scip_documents(
+            resolved.index,
+            index_id=resolved.index_id,
+            index_path=resolved.index_path,
+        )
         if _dataset_required("scip_documents_v1", evidence_plan)
         else (),
         "scip_document_texts_v1": _iter_scip_document_texts(
@@ -1182,11 +1203,22 @@ def _extract_scip_tables_in_memory(
     _log_scip_counts(counts, resolved.parse_opts)
     _ensure_scip_health(counts, resolved.parse_opts)
 
-    batcher.append("scip_metadata_v1", _metadata_row(resolved.index, index_id=resolved.index_id))
+    batcher.append(
+        "scip_metadata_v1",
+        _metadata_row(
+            resolved.index,
+            index_id=resolved.index_id,
+            index_path=resolved.index_path,
+        ),
+    )
     _append_rows(
         batcher,
         "scip_documents_v1",
-        _iter_scip_documents(resolved.index, index_id=resolved.index_id),
+        _iter_scip_documents(
+            resolved.index,
+            index_id=resolved.index_id,
+            index_path=resolved.index_path,
+        ),
     )
     _append_rows(
         batcher,
@@ -1249,7 +1281,14 @@ def _extract_scip_tables_in_memory(
         index_path=resolved.index_path,
         counts=counts,
     )
-    batcher.append("scip_index_stats_v1", _index_stats_row(counts, index_id=resolved.index_id))
+    batcher.append(
+        "scip_index_stats_v1",
+        _index_stats_row(
+            counts,
+            index_id=resolved.index_id,
+            index_path=resolved.index_path,
+        ),
+    )
 
     batches = batcher.finalize()
     plans = {

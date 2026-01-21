@@ -18,6 +18,7 @@ from arrowdsl.core.interop import (
     SchemaLike,
     TableLike,
     ensure_expression,
+    pc,
 )
 from arrowdsl.schema.nested_builders import (
     build_list,
@@ -37,14 +38,6 @@ from arrowdsl.schema.nested_builders import (
     union_array_from_values,
 )
 from arrowdsl.schema.types import list_view_type, map_type
-from datafusion_engine.compute_ops import (
-    cast_values,
-    coalesce,
-    dictionary_encode,
-    field,
-    fill_null,
-    scalar,
-)
 
 
 def _resolve_schema(schema: SchemaLike) -> pa.Schema:
@@ -83,7 +76,7 @@ class ConstExpr:
             Expression representing the constant value.
         """
         scalar_value = self.value if self.dtype is None else pa.scalar(self.value, type=self.dtype)
-        return ensure_expression(scalar(scalar_value))
+        return ensure_expression(pc.scalar(scalar_value))
 
     def materialize(self, table: TableLike) -> ArrayLike:
         """Materialize the constant as a full-length array.
@@ -112,7 +105,7 @@ class FieldExpr:
         ComputeExpression
             Expression referencing the column.
         """
-        return field(self.name)
+        return pc.field(self.name)
 
     def materialize(self, table: TableLike) -> ArrayLike:
         """Materialize the column values from the table.
@@ -142,7 +135,7 @@ class ColumnOrNullExpr:
         """
         if self.name not in table.column_names:
             return pa.nulls(table.num_rows, type=self.dtype)
-        return cast_values(table[self.name], self.dtype, safe=False)
+        return pc.cast(table[self.name], self.dtype, safe=False)
 
 
 @dataclass(frozen=True)
@@ -162,7 +155,7 @@ class CoalesceExpr:
         if not self.exprs:
             return pa.nulls(table.num_rows, type=pa.null())
         arrays = [expr.materialize(table) for expr in self.exprs]
-        return coalesce(*arrays)
+        return pc.coalesce(*arrays)
 
 
 def const_array(n: int, value: object, *, dtype: DataTypeLike | None = None) -> ArrayLike:
@@ -257,7 +250,7 @@ def maybe_dictionary(
     if patypes.is_dictionary(values.type):
         return values
     if patypes.is_dictionary(dtype):
-        return dictionary_encode(values)
+        return pc.dictionary_encode(values)
     return values
 
 
@@ -291,7 +284,7 @@ def resolve_string_col(table: TableLike, col: str, *, default_value: str) -> Arr
     arr = pick_first(table, [col], default_type=pa.string())
     if arr.null_count == 0:
         return arr
-    return fill_null(arr, fill_value=default_value)
+    return pc.fill_null(arr, fill_value=default_value)
 
 
 def resolve_float_col(table: TableLike, col: str, *, default_value: float) -> ArrayLike:
@@ -305,7 +298,7 @@ def resolve_float_col(table: TableLike, col: str, *, default_value: float) -> Ar
     arr = pick_first(table, [col], default_type=pa.float32())
     if arr.null_count == 0:
         return arr
-    return fill_null(arr, fill_value=default_value)
+    return pc.fill_null(arr, fill_value=default_value)
 
 
 def table_from_schema(

@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING
 
-from arrowdsl.core.ids_registry import hash_spec_factory
-from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike
+from arrowdsl.core.interop import ArrayLike, ChunkedArrayLike, TableLike, pc
 from arrowdsl.core.metrics import (
     QUALITY_SCHEMA,
     QualityPlanSpec,
@@ -22,10 +20,8 @@ from cpg.kinds_ultimate import (
     SCIP_ROLE_GENERATED,
     SCIP_ROLE_TEST,
 )
-from datafusion_engine.compute_ops import fill_null
-
-if TYPE_CHECKING:
-    from arrowdsl.core.ids import HashSpec
+from ibis_engine.hashing import HashExprSpec
+from ibis_engine.hashing import hash_expr_spec_factory as hash_spec_factory
 
 type ValuesLike = ArrayLike | ChunkedArrayLike
 
@@ -58,12 +54,12 @@ ROLE_FLAG_SPECS: tuple[tuple[str, int, str], ...] = (
 )
 
 
-def edge_hash_specs(edge_kind: str) -> tuple[HashSpec, HashSpec]:
+def edge_hash_specs(edge_kind: str) -> tuple[HashExprSpec, HashExprSpec]:
     """Return base + span hash specs with the edge kind literal applied.
 
     Returns
     -------
-    tuple[HashSpec, HashSpec]
+    tuple[HashExprSpec, HashExprSpec]
         Base and span hash specifications for edge IDs.
     """
     extra = (edge_kind,) if edge_kind else ()
@@ -83,7 +79,7 @@ def fill_nulls(values: ValuesLike, *, default: object) -> ValuesLike:
     """
     if values.null_count == 0:
         return values
-    return fill_null(values, fill_value=default)
+    return pc.fill_null(values, fill_value=default)
 
 
 def fill_nulls_float(values: ValuesLike, *, default: float) -> ValuesLike:

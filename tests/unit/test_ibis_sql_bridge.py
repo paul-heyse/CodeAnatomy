@@ -6,12 +6,7 @@ import ibis
 import pytest
 from sqlglot import parse_one
 
-from ibis_engine.sql_bridge import (
-    SqlIngestSpec,
-    execute_raw_sql,
-    parse_sql_table,
-    sql_ingest_artifacts,
-)
+from ibis_engine.sql_bridge import SqlIngestSpec, parse_sql_table, sql_ingest_artifacts
 
 
 def test_sql_ingest_artifacts_payload() -> None:
@@ -27,18 +22,6 @@ def test_sql_ingest_artifacts_payload() -> None:
     assert payload["sql"]
     assert payload["decompiled_sql"]
     assert payload["sqlglot_sql"] is not None
-
-
-def test_execute_raw_sql_accepts_sqlglot_expr() -> None:
-    """Execute raw SQL with SQLGlot expression support."""
-    backend = ibis.datafusion.connect()
-    table = execute_raw_sql(
-        backend,
-        sql="select 1 as a",
-        sqlglot_expr=parse_one("select 1 as a"),
-        schema=ibis.schema({"a": "int64"}),
-    )
-    assert table.schema().names == ("a",)
 
 
 def test_parse_sql_requires_schema() -> None:

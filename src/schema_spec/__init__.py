@@ -76,7 +76,6 @@ if TYPE_CHECKING:
         make_dataset_spec,
         make_table_spec,
         resolve_schema_evolution_spec,
-        schema_evolution_compatible,
         validate_arrow_table,
     )
     from schema_spec.view_specs import ViewSchemaMismatchError, ViewSpec
@@ -143,7 +142,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "make_dataset_spec": ("schema_spec.system", "make_dataset_spec"),
     "make_table_spec": ("schema_spec.system", "make_table_spec"),
     "resolve_schema_evolution_spec": ("schema_spec.system", "resolve_schema_evolution_spec"),
-    "schema_evolution_compatible": ("schema_spec.system", "schema_evolution_compatible"),
     "provenance_bundle": ("schema_spec.specs", "provenance_bundle"),
     "schema_metadata": ("schema_spec.specs", "schema_metadata"),
     "schema_metadata_for_spec": ("schema_spec.specs", "schema_metadata_for_spec"),
@@ -235,7 +233,6 @@ __all__ = [
     "make_table_spec",
     "provenance_bundle",
     "resolve_schema_evolution_spec",
-    "schema_evolution_compatible",
     "schema_metadata",
     "schema_metadata_for_spec",
     "schema_spec_tables_from_dataset_specs",

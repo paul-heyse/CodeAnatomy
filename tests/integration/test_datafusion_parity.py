@@ -11,7 +11,7 @@ import pytest
 from arrowdsl.core.execution_context import execution_context_factory
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.metadata import ordering_from_schema
-from datafusion_engine.schema_authority import dataset_schema_from_context
+from datafusion_engine.runtime import dataset_schema_from_context
 from hamilton_pipeline import build_driver
 from hamilton_pipeline.pipeline_types import ScipIndexConfig
 from tests.utils import table_digest

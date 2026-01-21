@@ -9,6 +9,7 @@ import pyarrow as pa
 from datafusion import SessionContext
 
 from datafusion_engine.schema_introspection import SchemaIntrospector
+from sqlglot_tools.optimizer import normalize_ddl_sql
 
 
 class ViewSchemaMismatchError(ValueError):
@@ -63,7 +64,8 @@ class ViewSpec:
         str
             SQL statement that creates or replaces the view.
         """
-        return f"CREATE OR REPLACE VIEW {self.name} AS {self.sql}"
+        ddl = f"CREATE OR REPLACE VIEW {self.name} AS {self.sql}"
+        return normalize_ddl_sql(ddl)
 
     def describe(
         self,

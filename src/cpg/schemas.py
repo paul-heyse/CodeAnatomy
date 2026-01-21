@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_schema
-from datafusion_engine.schema_authority import (
+from datafusion_engine.runtime import (
     dataset_schema_from_context,
     dataset_spec_from_context,
 )

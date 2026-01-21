@@ -9,8 +9,10 @@ import pyarrow as pa
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.interop import TableLike
+from arrowdsl.core.ordering import Ordering
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import align_table
+from ibis_engine.sources import SourceToIbisOptions, register_ibis_table
 from incremental.registry_specs import dataset_schema
 
 
@@ -31,11 +33,11 @@ def compute_changed_exports(
     prev: ibis.Table
     if prev_exports is None:
         empty = table_from_arrays(dataset_schema("dim_exported_defs_v1"), columns={}, num_rows=0)
-        prev = ibis.memtable(empty)
+        prev = _table_expr(backend, empty)
     else:
         prev = backend.read_delta(prev_exports)
-    curr = ibis.memtable(curr_exports)
-    changed = ibis.memtable(changed_files)
+    curr = _table_expr(backend, curr_exports)
+    changed = _table_expr(backend, changed_files)
 
     prev_f = prev.inner_join(changed, predicates=[prev.file_id == changed.file_id])
     curr_f = curr.inner_join(changed, predicates=[curr.file_id == changed.file_id])
@@ -59,6 +61,18 @@ def compute_changed_exports(
     result = cast("pa.Table", out.select(*select_exprs).to_pyarrow())
     schema = dataset_schema("inc_changed_exports_v1")
     return align_table(result, schema=schema, safe_cast=True)
+
+
+def _table_expr(backend: BaseBackend, table: TableLike) -> ibis.Table:
+    plan = register_ibis_table(
+        table,
+        options=SourceToIbisOptions(
+            backend=backend,
+            name=None,
+            ordering=Ordering.unordered(),
+        ),
+    )
+    return plan.expr
 
 
 __all__ = ["compute_changed_exports"]

@@ -10,6 +10,10 @@
 - `build/scip/` is the canonical location for `scip.proto`, `scip_pb2`, and `index.scip`.
 - Regenerate protobuf bindings with `scripts/scip_proto_codegen.py`.
 
+## DataFusion catalog autoload
+- Set `CODEANATOMY_DATAFUSION_CATALOG_LOCATION` and `CODEANATOMY_DATAFUSION_CATALOG_FORMAT` to
+  configure `datafusion.catalog.location` and `datafusion.catalog.format` for catalog autoload.
+
 ## Recommended API
 
 Use the graph product entrypoint instead of calling the pipeline directly:

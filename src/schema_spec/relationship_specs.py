@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import cache
 
-from datafusion_engine.schema_authority import dataset_spec_from_context
+from datafusion_engine.runtime import dataset_spec_from_context
 from schema_spec.system import (
     ContractCatalogSpec,
     DatasetSpec,

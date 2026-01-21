@@ -10,7 +10,7 @@ from deltalake import CommitProperties, DeltaTable
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import column_or_null, table_from_arrays
 from arrowdsl.schema.serialization import schema_fingerprint
-from datafusion_engine.schema_authority import dataset_schema_from_context
+from datafusion_engine.runtime import dataset_schema_from_context
 from incremental.state_store import StateStore
 from storage.deltalake import (
     DeltaWriteOptions,

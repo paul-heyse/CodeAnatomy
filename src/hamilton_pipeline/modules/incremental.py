@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 import pyarrow as pa
+from datafusion import SessionContext
 from hamilton.function_modifiers import tag
 from ibis.backends import BaseBackend
 
+from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import empty_table
+from datafusion_engine.registry_bridge import DeltaCdfRegistrationOptions, register_delta_cdf_df
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from hamilton_pipeline.pipeline_types import (
     IncrementalDatasetUpdates,
@@ -31,6 +34,7 @@ from incremental.exports_update import upsert_exported_defs
 from incremental.extract_update import upsert_extract_outputs
 from incremental.fingerprint_changes import read_dataset_fingerprints
 from incremental.impact import (
+    ImpactedFileInputs,
     changed_file_impact_table,
     impacted_callers_from_changed_exports,
     impacted_importers_from_changed_exports,
@@ -66,7 +70,7 @@ from incremental.snapshot import build_repo_snapshot, read_repo_snapshot, write_
 from incremental.state_store import StateStore
 from incremental.types import IncrementalConfig, IncrementalFileChanges, IncrementalImpact
 from relspec.schema_context import RelspecSchemaContext
-from storage.deltalake import DeltaCdfOptions, delta_table_version, read_delta_cdf, read_table_delta
+from storage.deltalake import DeltaCdfOptions, delta_table_version, read_table_delta
 
 
 @dataclass(frozen=True)
@@ -96,6 +100,46 @@ class IncrementalImpactClosureInputs:
     impacted_callers: pa.Table | None
     impacted_importers: pa.Table | None
     state_store: StateStore | None
+
+
+def _deregister_table(ctx: SessionContext, name: str | None) -> None:
+    if name is None:
+        return
+    deregister = getattr(ctx, "deregister_table", None)
+    if callable(deregister):
+        with suppress(KeyError, RuntimeError, TypeError, ValueError):
+            deregister(name)
+
+
+def _delta_cdf_table(
+    *,
+    path: Path,
+    start_version: int,
+    end_version: int,
+    runtime_profile: DataFusionRuntimeProfile | None,
+) -> pa.Table | None:
+    profile = runtime_profile or DataFusionRuntimeProfile()
+    ctx = profile.session_context()
+    name = f"__delta_cdf_{uuid.uuid4().hex}"
+    try:
+        df = register_delta_cdf_df(
+            ctx,
+            name=name,
+            path=str(path),
+            options=DeltaCdfRegistrationOptions(
+                cdf_options=DeltaCdfOptions(
+                    starting_version=start_version,
+                    ending_version=end_version,
+                    allow_out_of_range=True,
+                ),
+                runtime_profile=profile,
+            ),
+        )
+        return df.to_arrow_table()
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    finally:
+        _deregister_table(ctx, name)
 
 
 @tag(layer="incremental", kind="object")
@@ -408,10 +452,13 @@ def incremental_impacted_files(
             prev_imports_resolved=prev_imports,
         )
     return merge_impacted_files(
-        changed_table,
-        incremental_impact_closure_inputs.impacted_callers,
-        incremental_impact_closure_inputs.impacted_importers,
-        import_closure_only,
+        ibis_backend,
+        ImpactedFileInputs(
+            changed_files=changed_table,
+            callers=incremental_impact_closure_inputs.impacted_callers,
+            importers=incremental_impact_closure_inputs.impacted_importers,
+            import_closure_only=import_closure_only,
+        ),
         strategy=incremental_config.impact_strategy,
     )
 
@@ -487,6 +534,7 @@ def incremental_diff(
     incremental_repo_snapshot: pa.Table | None,
     incremental_state_store: StateStore | None,
     incremental_invalidation: InvalidationOutcome | None,
+    ctx: ExecutionContext | None = None,
 ) -> pa.Table | None:
     """Compute and persist the incremental diff for the latest snapshot.
 
@@ -511,19 +559,12 @@ def incremental_diff(
     if prev is not None and prev_version is not None and write_result.version is not None:
         start_version = prev_version + 1
         if start_version <= write_result.version:
-            cdf_table: pa.Table | None = None
-            with suppress(ValueError):
-                cdf_table = cast(
-                    "pa.Table",
-                    read_delta_cdf(
-                        str(snapshot_path),
-                        options=DeltaCdfOptions(
-                            starting_version=start_version,
-                            ending_version=write_result.version,
-                            allow_out_of_range=True,
-                        ),
-                    ),
-                )
+            cdf_table = _delta_cdf_table(
+                path=snapshot_path,
+                start_version=start_version,
+                end_version=write_result.version,
+                runtime_profile=ctx.runtime.datafusion if ctx is not None else None,
+            )
             if cdf_table is not None:
                 diff = diff_snapshots_with_cdf(prev, incremental_repo_snapshot, cdf_table)
     write_incremental_diff(incremental_state_store, diff)

@@ -8,6 +8,13 @@ from datafusion import SessionContext
 
 from datafusion_engine.schema_registry import nested_base_sql, schema_for
 from schema_spec.view_specs import ViewSpec, view_spec_from_sql
+from sqlglot_tools.optimizer import (
+    NormalizeExprOptions,
+    default_sqlglot_policy,
+    normalize_expr,
+    parse_sql_strict,
+    sqlglot_sql,
+)
 
 
 def _map_value(map_name: str, key: str) -> str:
@@ -59,6 +66,8 @@ _ARROW_CAST_TYPES: dict[str, str] = {
     "STRING": "Utf8",
     "UTF8": "Utf8",
 }
+_NULL_SEPARATOR = "\x1f"
+_NULL_SENTINEL = "None"
 
 _LIBCST_DIAGNOSTIC_FIELDS: tuple[str, ...] = (
     "nodes",
@@ -113,6 +122,23 @@ def _metadata_bool(expr: str, key: str) -> str:
 def _hash_expr(prefix: str, *values: str) -> str:
     joined = ", ".join(values)
     return f"prefixed_hash64('{prefix}', concat_ws(':', {joined}))"
+
+
+def _stringify_value(value: str) -> str:
+    return f"coalesce(CAST({value} AS STRING), '{_NULL_SENTINEL}')"
+
+
+def _stable_key_expr(prefix: str, *values: str) -> str:
+    parts = ", ".join([f"'{prefix}'", *(_stringify_value(value) for value in values)])
+    return f"concat_ws('{_NULL_SEPARATOR}', {parts})"
+
+
+def _stable_id_expr(prefix: str, *values: str) -> str:
+    return f"stable_id('{prefix}', {_stable_key_expr(prefix, *values)})"
+
+
+def _code_unit_id_expr(qualpath: str, co_name: str, firstlineno: str) -> str:
+    return _stable_id_expr("code", qualpath, co_name, firstlineno)
 
 
 def _attrs_view_sql(base: str, *, cols: Sequence[str]) -> str:
@@ -200,13 +226,14 @@ def libcst_refs_sql(table: str = "libcst_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("cst_refs", table=table)
+    ref_id = _stable_id_expr("cst_ref", "base.file_id", "base.bstart", "base.bend")
     return f"""
     WITH base AS ({base})
     SELECT
       base.file_id AS file_id,
       base.path AS path,
       base.file_sha256 AS file_sha256,
-      base.ref_id AS ref_id,
+      {ref_id} AS ref_id,
       base.ref_kind AS ref_kind,
       base.ref_text AS ref_text,
       base.expr_ctx AS expr_ctx,
@@ -271,13 +298,14 @@ def libcst_callsites_sql(table: str = "libcst_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("cst_callsites", table=table)
+    call_id = _stable_id_expr("cst_call", "base.file_id", "base.call_bstart", "base.call_bend")
     return f"""
     WITH base AS ({base})
     SELECT
       base.file_id AS file_id,
       base.path AS path,
       base.file_sha256 AS file_sha256,
-      base.call_id AS call_id,
+      {call_id} AS call_id,
       base.call_bstart AS call_bstart,
       base.call_bend AS call_bend,
       base.callee_bstart AS callee_bstart,
@@ -304,13 +332,27 @@ def libcst_defs_sql(table: str = "libcst_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("cst_defs", table=table)
+    def_id = _stable_id_expr(
+        "cst_def",
+        "base.file_id",
+        "base.kind",
+        "base.def_bstart",
+        "base.def_bend",
+    )
+    container_def_id = _stable_id_expr(
+        "cst_def",
+        "base.file_id",
+        "base.container_def_kind",
+        "base.container_def_bstart",
+        "base.container_def_bend",
+    )
     return f"""
     WITH base AS ({base})
     SELECT
       base.file_id AS file_id,
       base.path AS path,
       base.file_sha256 AS file_sha256,
-      base.def_id AS def_id,
+      {def_id} AS def_id,
       base.container_def_kind AS container_def_kind,
       base.container_def_bstart AS container_def_bstart,
       base.container_def_bend AS container_def_bend,
@@ -325,24 +367,10 @@ def libcst_defs_sql(table: str = "libcst_files_v1") -> str:
       base.docstring AS docstring,
       base.decorator_count AS decorator_count,
       base.attrs AS attrs,
-      {
-        _hash_expr(
-            "cst_def",
-            "base.file_id",
-            "base.kind",
-            "base.def_bstart",
-            "base.def_bend",
-        )
-    } AS def_id,
-      {
-        _hash_expr(
-            "cst_def",
-            "base.file_id",
-            "base.container_def_kind",
-            "base.container_def_bstart",
-            "base.container_def_bend",
-        )
-    } AS container_def_id,
+      CASE
+        WHEN base.container_def_kind IS NULL THEN NULL
+        ELSE {container_def_id}
+      END AS container_def_id,
       {_hash_expr("span", "base.file_id", "base.def_bstart", "base.def_bend")} AS span_id
     FROM base
     """
@@ -357,14 +385,26 @@ def libcst_docstrings_sql(table: str = "libcst_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("cst_docstrings", table=table)
+    owner_def_id = _stable_id_expr(
+        "cst_def",
+        "base.file_id",
+        "base.owner_kind",
+        "base.owner_def_bstart",
+        "base.owner_def_bend",
+    )
     return f"""
     WITH base AS ({base})
     SELECT
       base.file_id AS file_id,
       base.path AS path,
       base.file_sha256 AS file_sha256,
-      base.owner_def_id AS owner_def_id,
+      CASE
+        WHEN base.owner_def_bstart IS NULL OR base.owner_def_bend IS NULL THEN NULL
+        ELSE {owner_def_id}
+      END AS owner_def_id,
       base.owner_kind AS owner_kind,
+      base.owner_def_bstart AS owner_def_bstart,
+      base.owner_def_bend AS owner_def_bend,
       base.docstring AS docstring,
       base.bstart AS bstart,
       base.bend AS bend
@@ -381,14 +421,26 @@ def libcst_decorators_sql(table: str = "libcst_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("cst_decorators", table=table)
+    owner_def_id = _stable_id_expr(
+        "cst_def",
+        "base.file_id",
+        "base.owner_kind",
+        "base.owner_def_bstart",
+        "base.owner_def_bend",
+    )
     return f"""
     WITH base AS ({base})
     SELECT
       base.file_id AS file_id,
       base.path AS path,
       base.file_sha256 AS file_sha256,
-      base.owner_def_id AS owner_def_id,
+      CASE
+        WHEN base.owner_def_bstart IS NULL OR base.owner_def_bend IS NULL THEN NULL
+        ELSE {owner_def_id}
+      END AS owner_def_id,
       base.owner_kind AS owner_kind,
+      base.owner_def_bstart AS owner_def_bstart,
+      base.owner_def_bend AS owner_def_bend,
       base.decorator_text AS decorator_text,
       base.decorator_index AS decorator_index,
       base.bstart AS bstart,
@@ -406,13 +458,16 @@ def libcst_call_args_sql(table: str = "libcst_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("cst_call_args", table=table)
+    call_id = _stable_id_expr("cst_call", "base.file_id", "base.call_bstart", "base.call_bend")
     return f"""
     WITH base AS ({base})
     SELECT
       base.file_id AS file_id,
       base.path AS path,
       base.file_sha256 AS file_sha256,
-      base.call_id AS call_id,
+      {call_id} AS call_id,
+      base.call_bstart AS call_bstart,
+      base.call_bend AS call_bend,
       base.arg_index AS arg_index,
       base.keyword AS keyword,
       base.star AS star,
@@ -2081,7 +2136,27 @@ def scip_metadata_sql(table: str = "scip_metadata_v1") -> str:
     str
         SQL fragment text.
     """
-    return f"SELECT * FROM {table}"
+    index_id = _stable_id_expr("scip_index", "base.index_path")
+    return f"""
+    WITH base AS (
+      SELECT * FROM {table}
+    )
+    SELECT
+      CASE
+        WHEN base.index_path IS NULL OR base.index_path = '' THEN NULL
+        ELSE {index_id}
+      END AS index_id,
+      base.protocol_version AS protocol_version,
+      base.tool_name AS tool_name,
+      base.tool_version AS tool_version,
+      base.tool_arguments AS tool_arguments,
+      base.project_root AS project_root,
+      base.text_document_encoding AS text_document_encoding,
+      base.project_name AS project_name,
+      base.project_version AS project_version,
+      base.project_namespace AS project_namespace
+    FROM base
+    """
 
 
 def scip_index_stats_sql(table: str = "scip_index_stats_v1") -> str:
@@ -2092,7 +2167,26 @@ def scip_index_stats_sql(table: str = "scip_index_stats_v1") -> str:
     str
         SQL fragment text.
     """
-    return f"SELECT * FROM {table}"
+    index_id = _stable_id_expr("scip_index", "base.index_path")
+    return f"""
+    WITH base AS (
+      SELECT * FROM {table}
+    )
+    SELECT
+      CASE
+        WHEN base.index_path IS NULL OR base.index_path = '' THEN NULL
+        ELSE {index_id}
+      END AS index_id,
+      base.document_count AS document_count,
+      base.occurrence_count AS occurrence_count,
+      base.diagnostic_count AS diagnostic_count,
+      base.symbol_count AS symbol_count,
+      base.external_symbol_count AS external_symbol_count,
+      base.missing_position_encoding_count AS missing_position_encoding_count,
+      base.document_text_count AS document_text_count,
+      base.document_text_bytes AS document_text_bytes
+    FROM base
+    """
 
 
 def scip_documents_sql(table: str = "scip_documents_v1") -> str:
@@ -2103,7 +2197,26 @@ def scip_documents_sql(table: str = "scip_documents_v1") -> str:
     str
         SQL fragment text.
     """
-    return f"SELECT * FROM {table}"
+    index_id = _stable_id_expr("scip_index", "base.index_path")
+    document_id = _stable_id_expr("scip_doc", "base.path")
+    return f"""
+    WITH base AS (
+      SELECT * FROM {table}
+    )
+    SELECT
+      CASE
+        WHEN base.index_path IS NULL OR base.index_path = '' THEN NULL
+        ELSE {index_id}
+      END AS index_id,
+      CASE
+        WHEN base.path IS NULL OR base.path = '' THEN NULL
+        ELSE {document_id}
+      END AS document_id,
+      base.path AS path,
+      base.language AS language,
+      base.position_encoding AS position_encoding
+    FROM base
+    """
 
 
 def scip_document_texts_sql(table: str = "scip_document_texts_v1") -> str:
@@ -2114,7 +2227,20 @@ def scip_document_texts_sql(table: str = "scip_document_texts_v1") -> str:
     str
         SQL fragment text.
     """
-    return f"SELECT * FROM {table}"
+    document_id = _stable_id_expr("scip_doc", "base.path")
+    return f"""
+    WITH base AS (
+      SELECT * FROM {table}
+    )
+    SELECT
+      CASE
+        WHEN base.path IS NULL OR base.path = '' THEN NULL
+        ELSE {document_id}
+      END AS document_id,
+      base.path AS path,
+      base.text AS text
+    FROM base
+    """
 
 
 def scip_occurrences_sql(table: str = "scip_occurrences_v1") -> str:
@@ -2125,7 +2251,46 @@ def scip_occurrences_sql(table: str = "scip_occurrences_v1") -> str:
     str
         SQL fragment text.
     """
-    return f"SELECT * FROM {table}"
+    document_id = _stable_id_expr("scip_doc", "base.path")
+    return f"""
+    WITH base AS (
+      SELECT * FROM {table}
+    )
+    SELECT
+      CASE
+        WHEN base.path IS NULL OR base.path = '' THEN NULL
+        ELSE {document_id}
+      END AS document_id,
+      base.path AS path,
+      base.symbol AS symbol,
+      base.symbol_roles AS symbol_roles,
+      base.syntax_kind AS syntax_kind,
+      base.syntax_kind_name AS syntax_kind_name,
+      base.override_documentation AS override_documentation,
+      base.range_raw AS range_raw,
+      base.enclosing_range_raw AS enclosing_range_raw,
+      base.start_line AS start_line,
+      base.start_char AS start_char,
+      base.end_line AS end_line,
+      base.end_char AS end_char,
+      base.range_len AS range_len,
+      base.enc_start_line AS enc_start_line,
+      base.enc_start_char AS enc_start_char,
+      base.enc_end_line AS enc_end_line,
+      base.enc_end_char AS enc_end_char,
+      base.enc_range_len AS enc_range_len,
+      base.line_base AS line_base,
+      base.col_unit AS col_unit,
+      base.end_exclusive AS end_exclusive,
+      base.is_definition AS is_definition,
+      base.is_import AS is_import,
+      base.is_write AS is_write,
+      base.is_read AS is_read,
+      base.is_generated AS is_generated,
+      base.is_test AS is_test,
+      base.is_forward_definition AS is_forward_definition
+    FROM base
+    """
 
 
 def scip_symbol_information_sql(table: str = "scip_symbol_information_v1") -> str:
@@ -2147,7 +2312,27 @@ def scip_document_symbols_sql(table: str = "scip_document_symbols_v1") -> str:
     str
         SQL fragment text.
     """
-    return f"SELECT * FROM {table}"
+    document_id = _stable_id_expr("scip_doc", "base.path")
+    return f"""
+    WITH base AS (
+      SELECT * FROM {table}
+    )
+    SELECT
+      CASE
+        WHEN base.path IS NULL OR base.path = '' THEN NULL
+        ELSE {document_id}
+      END AS document_id,
+      base.path AS path,
+      base.symbol AS symbol,
+      base.display_name AS display_name,
+      base.kind AS kind,
+      base.kind_name AS kind_name,
+      base.enclosing_symbol AS enclosing_symbol,
+      base.documentation AS documentation,
+      base.signature_text AS signature_text,
+      base.signature_language AS signature_language
+    FROM base
+    """
 
 
 def scip_external_symbol_information_sql(table: str = "scip_external_symbol_information_v1") -> str:
@@ -2191,7 +2376,29 @@ def scip_diagnostics_sql(table: str = "scip_diagnostics_v1") -> str:
     str
         SQL fragment text.
     """
-    return f"SELECT * FROM {table}"
+    document_id = _stable_id_expr("scip_doc", "base.path")
+    return f"""
+    WITH base AS (
+      SELECT * FROM {table}
+    )
+    SELECT
+      CASE
+        WHEN base.path IS NULL OR base.path = '' THEN NULL
+        ELSE {document_id}
+      END AS document_id,
+      base.path AS path,
+      base.severity AS severity,
+      base.message AS message,
+      base.raw_line AS raw_line,
+      base.raw_column AS raw_column,
+      base.editor_line AS editor_line,
+      base.editor_column AS editor_column,
+      base.context AS context,
+      base.line_base AS line_base,
+      base.col_unit AS col_unit,
+      base.end_exclusive AS end_exclusive
+    FROM base
+    """
 
 
 def bytecode_code_units_sql(table: str = "bytecode_files_v1") -> str:
@@ -2203,12 +2410,13 @@ def bytecode_code_units_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("py_bc_code_units", table=table)
+    code_unit_id = _code_unit_id_expr("base.qualname", "base.name", "base.firstlineno1")
     return f"""
     WITH base AS ({base})
     SELECT
       base.file_id AS file_id,
       base.path AS path,
-      base.code_id AS code_unit_id,
+      {code_unit_id} AS code_unit_id,
       base.qualname AS qualpath,
       base.co_qualname AS co_qualname,
       base.co_filename AS co_filename,
@@ -2241,16 +2449,21 @@ def bytecode_consts_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("py_bc_consts", table=table)
+    code_unit_id = _code_unit_id_expr(
+        "base.code_unit_qualpath",
+        "base.code_unit_name",
+        "base.code_unit_firstlineno",
+    )
     const_index = "base.const_index"
     return f"""
     WITH base AS ({base})
     SELECT
       base.file_id AS file_id,
       base.path AS path,
-      base.code_id AS code_unit_id,
+      {code_unit_id} AS code_unit_id,
       {const_index} AS const_index,
       base.const_repr AS const_repr,
-      {_hash_expr("bc_const", "base.code_id", const_index, "base.const_repr")} AS const_id
+      {_hash_expr("bc_const", code_unit_id, const_index, "base.const_repr")} AS const_id
     FROM base
     """
 
@@ -2264,12 +2477,17 @@ def bytecode_instruction_attrs_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("py_bc_instructions", table=table)
+    code_unit_id = _code_unit_id_expr(
+        "base.code_unit_qualpath",
+        "base.code_unit_name",
+        "base.code_unit_firstlineno",
+    )
     return f"""
     WITH base AS ({base})
     SELECT
       base.file_id AS file_id,
       base.path AS path,
-      base.code_id AS code_unit_id,
+      {code_unit_id} AS code_unit_id,
       base.instr_index AS instr_index,
       base.offset AS offset,
       kv['key'] AS attr_key,
@@ -2292,12 +2510,17 @@ def bytecode_instruction_attr_keys_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("py_bc_instructions", table=table)
+    code_unit_id = _code_unit_id_expr(
+        "base.code_unit_qualpath",
+        "base.code_unit_name",
+        "base.code_unit_firstlineno",
+    )
     return f"""
     WITH base AS ({base})
     SELECT
       base.file_id AS file_id,
       base.path AS path,
-      base.code_id AS code_unit_id,
+      {code_unit_id} AS code_unit_id,
       base.instr_index AS instr_index,
       base.offset AS offset,
       unnest(map_keys(base.attrs)) AS attr_key
@@ -2314,13 +2537,18 @@ def bytecode_instruction_attr_values_sql(table: str = "bytecode_files_v1") -> st
         SQL fragment text.
     """
     base = nested_base_sql("py_bc_instructions", table=table)
+    code_unit_id = _code_unit_id_expr(
+        "base.code_unit_qualpath",
+        "base.code_unit_name",
+        "base.code_unit_firstlineno",
+    )
     return f"""
     WITH base AS ({base}),
     expanded AS (
       SELECT
         base.file_id AS file_id,
         base.path AS path,
-        base.code_id AS code_unit_id,
+        {code_unit_id} AS code_unit_id,
         base.instr_index AS instr_index,
         base.offset AS offset,
         unnest(map_values(base.attrs)) AS attr_value
@@ -2350,6 +2578,11 @@ def bytecode_instructions_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("py_bc_instructions", table=table)
+    code_unit_id = _code_unit_id_expr(
+        "base.code_unit_qualpath",
+        "base.code_unit_name",
+        "base.code_unit_firstlineno",
+    )
     stack_depth_before = _union_extract(
         _map_value("base.attrs", "stack_depth_before"),
         "int_value",
@@ -2372,7 +2605,7 @@ def bytecode_instructions_sql(table: str = "bytecode_files_v1") -> str:
     SELECT
       base.file_id AS file_id,
       base.path AS path,
-      base.code_id AS code_unit_id,
+      {code_unit_id} AS code_unit_id,
       {instr_index} AS instr_index,
       {offset} AS offset,
       base.start_offset AS start_offset,
@@ -2402,7 +2635,7 @@ def bytecode_instructions_sql(table: str = "bytecode_files_v1") -> str:
       {end_exclusive} AS end_exclusive,
       {stack_depth_before} AS stack_depth_before,
       {stack_depth_after} AS stack_depth_after,
-      {_hash_expr("bc_instr", "base.code_id", instr_index, offset)} AS instr_id
+      {_hash_expr("bc_instr", code_unit_id, instr_index, offset)} AS instr_id
     FROM base
     """
 
@@ -2512,6 +2745,11 @@ def bytecode_cache_entries_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("py_bc_cache_entries", table=table)
+    code_unit_id = _code_unit_id_expr(
+        "base.code_unit_qualpath",
+        "base.code_unit_name",
+        "base.code_unit_firstlineno",
+    )
     instr_index = "base.instr_index"
     offset = "base.offset"
     return f"""
@@ -2519,17 +2757,17 @@ def bytecode_cache_entries_sql(table: str = "bytecode_files_v1") -> str:
     SELECT
       base.file_id AS file_id,
       base.path AS path,
-      base.code_id AS code_unit_id,
+      {code_unit_id} AS code_unit_id,
       {instr_index} AS instr_index,
       {offset} AS offset,
       base.name AS name,
       base.size AS size,
       base.data_hex AS data_hex,
-      {_hash_expr("bc_instr", "base.code_id", instr_index, offset)} AS instr_id,
+      {_hash_expr("bc_instr", code_unit_id, instr_index, offset)} AS instr_id,
       {
         _hash_expr(
             "bc_cache",
-            "base.code_id",
+            code_unit_id,
             instr_index,
             offset,
             "base.name",
@@ -2550,6 +2788,11 @@ def bytecode_exception_table_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("bytecode_exception_table", table=table)
+    code_unit_id = _code_unit_id_expr(
+        "base.code_unit_qualpath",
+        "base.code_unit_name",
+        "base.code_unit_firstlineno",
+    )
     exc_index = "base.exc_index"
     start_offset = "base.start_offset"
     end_offset = "base.end_offset"
@@ -2559,7 +2802,7 @@ def bytecode_exception_table_sql(table: str = "bytecode_files_v1") -> str:
     SELECT
       base.file_id AS file_id,
       base.path AS path,
-      base.code_id AS code_unit_id,
+      {code_unit_id} AS code_unit_id,
       {exc_index} AS exc_index,
       {start_offset} AS start_offset,
       {end_offset} AS end_offset,
@@ -2569,7 +2812,7 @@ def bytecode_exception_table_sql(table: str = "bytecode_files_v1") -> str:
       {
         _hash_expr(
             "bc_exc",
-            "base.code_id",
+            code_unit_id,
             exc_index,
             start_offset,
             end_offset,
@@ -2589,13 +2832,18 @@ def bytecode_line_table_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("py_bc_line_table", table=table)
+    code_unit_id = _code_unit_id_expr(
+        "base.code_unit_qualpath",
+        "base.code_unit_name",
+        "base.code_unit_firstlineno",
+    )
     line_base = _metadata_cast("base.line1", "line_base", "INT")
     return f"""
     WITH base AS ({base})
     SELECT
       base.file_id AS file_id,
       base.path AS path,
-      base.code_id AS code_unit_id,
+      {code_unit_id} AS code_unit_id,
       base.offset AS offset,
       base.line1 AS line1,
       base.line0 AS line0,
@@ -2613,12 +2861,17 @@ def bytecode_cfg_edge_attrs_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("py_bc_cfg_edges", table=table)
+    code_unit_id = _code_unit_id_expr(
+        "base.code_unit_qualpath",
+        "base.code_unit_name",
+        "base.code_unit_firstlineno",
+    )
     return f"""
     WITH base AS ({base})
     SELECT
       base.file_id AS file_id,
       base.path AS path,
-      base.code_id AS code_unit_id,
+      {code_unit_id} AS code_unit_id,
       base.edge_key AS edge_key,
       base.kind AS kind,
       kv['key'] AS attr_key,
@@ -2641,6 +2894,11 @@ def bytecode_blocks_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("py_bc_blocks", table=table)
+    code_unit_id = _code_unit_id_expr(
+        "base.code_unit_qualpath",
+        "base.code_unit_name",
+        "base.code_unit_firstlineno",
+    )
     start_offset = "base.start_offset"
     end_offset = "base.end_offset"
     return f"""
@@ -2648,11 +2906,11 @@ def bytecode_blocks_sql(table: str = "bytecode_files_v1") -> str:
     SELECT
       base.file_id AS file_id,
       base.path AS path,
-      base.code_id AS code_unit_id,
+      {code_unit_id} AS code_unit_id,
       {start_offset} AS start_offset,
       {end_offset} AS end_offset,
       base.kind AS kind,
-      {_hash_expr("bc_block", "base.code_id", start_offset, end_offset)} AS block_id
+      {_hash_expr("bc_block", code_unit_id, start_offset, end_offset)} AS block_id
     FROM base
     """
 
@@ -2666,6 +2924,11 @@ def bytecode_dfg_edges_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("py_bc_dfg_edges", table=table)
+    code_unit_id = _code_unit_id_expr(
+        "base.code_unit_qualpath",
+        "base.code_unit_name",
+        "base.code_unit_firstlineno",
+    )
     src_index = "base.src_instr_index"
     dst_index = "base.dst_instr_index"
     return f"""
@@ -2673,11 +2936,11 @@ def bytecode_dfg_edges_sql(table: str = "bytecode_files_v1") -> str:
     SELECT
       base.file_id AS file_id,
       base.path AS path,
-      base.code_id AS code_unit_id,
+      {code_unit_id} AS code_unit_id,
       {src_index} AS src_instr_index,
       {dst_index} AS dst_instr_index,
       base.kind AS kind,
-      {_hash_expr("bc_dfg", "base.code_id", src_index, dst_index, "base.kind")} AS edge_id
+      {_hash_expr("bc_dfg", code_unit_id, src_index, dst_index, "base.kind")} AS edge_id
     FROM base
     """
 
@@ -2691,13 +2954,14 @@ def bytecode_flags_detail_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("py_bc_code_units", table=table)
+    code_unit_id = _code_unit_id_expr("base.qualname", "base.name", "base.firstlineno1")
     return f"""
     WITH base AS ({base}),
     expanded AS (
       SELECT
         base.file_id AS file_id,
         base.path AS path,
-        base.code_id AS code_unit_id,
+        {code_unit_id} AS code_unit_id,
         unnest(base.flags_detail) AS flags_detail
       FROM base
     )
@@ -2728,6 +2992,11 @@ def bytecode_cfg_edges_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("py_bc_cfg_edges", table=table)
+    code_unit_id = _code_unit_id_expr(
+        "base.code_unit_qualpath",
+        "base.code_unit_name",
+        "base.code_unit_firstlineno",
+    )
     src_start = "base.src_block_start"
     src_end = "base.src_block_end"
     dst_start = "base.dst_block_start"
@@ -2742,7 +3011,7 @@ def bytecode_cfg_edges_sql(table: str = "bytecode_files_v1") -> str:
     SELECT
       base.file_id AS file_id,
       base.path AS path,
-      base.code_id AS code_unit_id,
+      {code_unit_id} AS code_unit_id,
       {src_start} AS src_block_start,
       {src_end} AS src_block_end,
       {dst_start} AS dst_block_start,
@@ -2754,15 +3023,15 @@ def bytecode_cfg_edges_sql(table: str = "bytecode_files_v1") -> str:
       {cond_index} AS cond_instr_index,
       {cond_offset} AS cond_instr_offset,
       {exc_index} AS exc_index,
-      {_hash_expr("bc_block", "base.code_id", src_start, src_end)} AS src_block_id,
-      {_hash_expr("bc_block", "base.code_id", dst_start, dst_end)} AS dst_block_id,
-      {_hash_expr("bc_instr", "base.code_id", cond_index, cond_offset)} AS cond_instr_id,
+      {_hash_expr("bc_block", code_unit_id, src_start, src_end)} AS src_block_id,
+      {_hash_expr("bc_block", code_unit_id, dst_start, dst_end)} AS dst_block_id,
+      {_hash_expr("bc_instr", code_unit_id, cond_index, cond_offset)} AS cond_instr_id,
       {
         _hash_expr(
             "bc_edge",
-            "base.code_id",
-            _hash_expr("bc_block", "base.code_id", src_start, src_end),
-            _hash_expr("bc_block", "base.code_id", dst_start, dst_end),
+            code_unit_id,
+            _hash_expr("bc_block", code_unit_id, src_start, src_end),
+            _hash_expr("bc_block", code_unit_id, dst_start, dst_end),
             "base.kind",
             "base.edge_key",
             exc_index,
@@ -2945,8 +3214,23 @@ def fragment_view_specs(
     excluded = set(exclude or ())
     names = sorted(name for name in _FRAGMENT_SQL_BUILDERS if name not in excluded)
     return tuple(
-        view_spec_from_sql(ctx, name=name, sql=_FRAGMENT_SQL_BUILDERS[name]()) for name in names
+        view_spec_from_sql(
+            ctx,
+            name=name,
+            sql=_normalize_fragment_sql(_FRAGMENT_SQL_BUILDERS[name]()),
+        )
+        for name in names
     )
+
+
+def _normalize_fragment_sql(sql: str) -> str:
+    policy = default_sqlglot_policy()
+    expr = parse_sql_strict(sql, dialect="datafusion")
+    normalized = normalize_expr(
+        expr,
+        options=NormalizeExprOptions(policy=policy),
+    )
+    return sqlglot_sql(normalized, policy=policy)
 
 
 __all__ = [

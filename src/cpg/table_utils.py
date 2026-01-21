@@ -5,14 +5,14 @@ from __future__ import annotations
 import pyarrow as pa
 
 from arrowdsl.core.interop import SchemaLike, TableLike
-from arrowdsl.schema.schema import align_to_schema, encoding_columns_from_metadata
+from arrowdsl.schema.schema import encoding_columns_from_metadata
+from datafusion_engine.runtime import align_table_to_schema as datafusion_align_table_to_schema
 
 
 def align_table_to_schema(
     table: TableLike,
     *,
     schema: SchemaLike,
-    safe_cast: bool = True,
     keep_extra_columns: bool = False,
 ) -> TableLike:
     """Align a table to a target schema.
@@ -22,14 +22,11 @@ def align_table_to_schema(
     TableLike
         Table aligned to the provided schema.
     """
-    aligned, _ = align_to_schema(
+    return datafusion_align_table_to_schema(
         table,
         schema=schema,
-        safe_cast=safe_cast,
         keep_extra_columns=keep_extra_columns,
-        on_error="unsafe",
     )
-    return aligned
 
 
 def assert_schema_metadata(table: TableLike, *, schema: SchemaLike) -> None:

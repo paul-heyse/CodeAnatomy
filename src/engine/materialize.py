@@ -355,35 +355,23 @@ def _write_ast_delta(
     )
     delta_options = DeltaWriteOptions(mode="append")
     try:
-        datafusion_result = write_datafusion_delta(
-            df,
-            base_dir=path,
-            options=delta_options,
-            storage_options=storage_options,
-        )
+        try:
+            datafusion_result = write_datafusion_delta(
+                df,
+                base_dir=path,
+                options=delta_options,
+                storage_options=storage_options,
+            )
+        except (TypeError, ValueError):
+            datafusion_result = write_table_delta(
+                table,
+                path,
+                options=delta_options,
+                storage_options=storage_options,
+            )
     finally:
         _deregister_table(df_ctx, name=temp_name)
     rows = int(table.num_rows) if isinstance(table, pa.Table) else None
-    if datafusion_result is None:
-        fallback = write_table_delta(
-            table,
-            path,
-            options=delta_options,
-            storage_options=storage_options,
-        )
-        _record_ast_write(
-            runtime_profile,
-            record=_AstWriteRecord(
-                mode="delta_write",
-                path=str(path),
-                file_format="delta",
-                rows=rows,
-                write_policy=None,
-                parquet_payload=None,
-                delta_result=fallback,
-            ),
-        )
-        return
     _record_ast_write(
         runtime_profile,
         record=_AstWriteRecord(

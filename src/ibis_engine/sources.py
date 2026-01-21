@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import re
+import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol, cast
 
-import ibis
 import pyarrow as pa
 from ibis.backends import BaseBackend
 from ibis.expr.types import Table as IbisTable
@@ -15,7 +15,7 @@ from ibis.expr.types import Table as IbisTable
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.core.ordering import Ordering
 from ibis_engine.plan import IbisPlan
-from ibis_engine.schema_utils import ibis_schema_from_arrow, normalize_table_for_ibis
+from ibis_engine.schema_utils import ibis_schema_from_arrow
 from obs.diagnostics import DiagnosticsCollector
 
 DatabaseHint = tuple[str, str] | str | None
@@ -39,6 +39,33 @@ class ViewBackend(Protocol):
         ...
 
 
+class TableBackend(Protocol):
+    """Protocol for backends supporting table registration."""
+
+    def create_table(
+        self,
+        name: str,
+        obj: object | None = None,
+        *,
+        schema: object | None = None,
+        **kwargs: object,
+    ) -> IbisTable:
+        """Register a table on the backend.
+
+        Keyword arguments may include database, temp, or overwrite options.
+        """
+        ...
+
+    def table(
+        self,
+        name: str,
+        *,
+        database: DatabaseHint = None,
+    ) -> IbisTable:
+        """Return a table expression from the backend."""
+        ...
+
+
 @dataclass(frozen=True)
 class SourceToIbisOptions:
     """Options for bridging sources into Ibis plans."""
@@ -55,22 +82,54 @@ def table_to_ibis(
     *,
     options: SourceToIbisOptions,
 ) -> IbisPlan:
-    """Register a table-like value as an Ibis view and return a plan.
+    """Register a table-like value as an Ibis table and return a plan.
 
     Returns
     -------
     IbisPlan
-        Ibis plan backed by the registered view when a name is provided.
+        Ibis plan backed by the registered table.
     """
-    if isinstance(table, pa.Table):
-        normalized = normalize_table_for_ibis(table)
-        expr = ibis.memtable(normalized, schema=ibis_schema_from_arrow(normalized.schema))
-    else:
-        expr = ibis.memtable(table)
-    return register_ibis_view(
-        expr,
-        options=options,
+    return register_ibis_table(table, options=options)
+
+
+def register_ibis_table(
+    table: TableLike,
+    *,
+    options: SourceToIbisOptions,
+) -> IbisPlan:
+    """Register a table-like value as a backend table and return a plan.
+
+    Returns
+    -------
+    IbisPlan
+        Ibis plan backed by the registered table.
+    """
+    backend = cast("TableBackend", options.backend)
+    database_hint, name = _parse_database_hint(options.name)
+    table_name = name or _temporary_table_name()
+    table_value = _as_pyarrow_table(table)
+    schema = ibis_schema_from_arrow(table_value.schema)
+    temp = name is None
+    backend.create_table(
+        table_name,
+        obj=table_value,
+        schema=schema,
+        database=database_hint or _default_database_hint(options.backend),
+        temp=temp,
+        overwrite=options.overwrite,
     )
+    _record_namespace_action(
+        options.namespace_recorder,
+        action="create_table",
+        name=table_name,
+        database=database_hint or _default_database_hint(options.backend),
+        overwrite=options.overwrite,
+    )
+    if database_hint is None:
+        registered = backend.table(table_name)
+    else:
+        registered = backend.table(table_name, database=database_hint)
+    return IbisPlan(expr=registered, ordering=options.ordering or Ordering.unordered())
 
 
 def register_ibis_view(
@@ -150,6 +209,16 @@ def _ensure_table(value: TableLike | RecordBatchReaderLike) -> TableLike:
     if isinstance(value, RecordBatchReaderLike):
         return value.read_all()
     return value
+
+
+def _as_pyarrow_table(value: TableLike) -> pa.Table:
+    if isinstance(value, pa.Table):
+        return value
+    return pa.table(value)
+
+
+def _temporary_table_name() -> str:
+    return f"tmp_{uuid.uuid4().hex}"
 
 
 def _resolve_name(name: str | None) -> str | None:
@@ -295,6 +364,7 @@ __all__ = [
     "SourceToIbisOptions",
     "namespace_recorder_from_ctx",
     "record_namespace_action",
+    "register_ibis_table",
     "register_ibis_view",
     "resolve_database_hint",
     "source_to_ibis",

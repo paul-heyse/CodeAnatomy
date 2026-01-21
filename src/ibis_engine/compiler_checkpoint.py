@@ -9,6 +9,8 @@ from typing import cast
 from ibis.expr.types import Table as IbisTable
 from sqlglot import Expression
 
+from datafusion_engine.schema_introspection import SchemaIntrospector
+from ibis_engine.registry import datafusion_context
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
@@ -51,6 +53,8 @@ def compile_checkpoint(
     """
     compiled = ibis_to_sqlglot(expr, backend=backend, params=None)
     schema = {name: dict(cols) for name, cols in schema_map.items()} if schema_map else None
+    if schema is None:
+        schema = _schema_map_from_backend(backend)
     policy = default_sqlglot_policy()
     if dialect:
         policy = replace(policy, read_dialect=dialect, write_dialect=dialect)
@@ -75,6 +79,14 @@ def compile_checkpoint(
         sql=sql,
         policy_hash=policy_hash,
     )
+
+
+def _schema_map_from_backend(backend: IbisCompilerBackend) -> dict[str, dict[str, str]] | None:
+    try:
+        ctx = datafusion_context(backend)
+    except (TypeError, ValueError):
+        return None
+    return SchemaIntrospector(ctx).schema_map()
 
 
 def try_plan_hash(

@@ -43,8 +43,6 @@ def register_nested_table(
     if backend is None or table is None:
         return
     ctx = datafusion_context(backend)
-    if ctx is None:
-        return
     df_ctx = cast("_DatafusionContext", ctx)
     requested_schema = schema_for(name) if has_schema(name) else None
     resolved = coerce_table_like(table, requested_schema=requested_schema)
@@ -80,9 +78,6 @@ def materialize_view_reference(
         msg = f"View {view.name!r} requires an Ibis backend."
         raise ValueError(msg)
     ctx = datafusion_context(backend)
-    if ctx is None:
-        msg = f"View {view.name!r} requires a DataFusion backend."
-        raise ValueError(msg)
     df_ctx = cast("_DatafusionContext", ctx)
     batches = df_ctx.sql(f"SELECT * FROM {view.name}").collect()
     return pa.Table.from_batches(batches)

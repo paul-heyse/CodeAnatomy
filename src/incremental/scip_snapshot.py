@@ -2,25 +2,17 @@
 
 from __future__ import annotations
 
-import hashlib
-from collections.abc import Iterable, Mapping, Sequence
+import contextlib
+import uuid
+from collections.abc import Sequence
 from typing import cast
 
 import pyarrow as pa
+from datafusion import SessionContext
 
-from arrowdsl.core.ids import hash64_from_arrays
-from arrowdsl.core.interop import TableLike
-from arrowdsl.schema.build import column_or_null, table_from_arrays
+from arrowdsl.core.interop import RecordBatchReaderLike, Scalar, TableLike, coerce_table_like
 from arrowdsl.schema.serialization import schema_fingerprint
-from datafusion_engine.compute_ops import (
-    and_,
-    case_when,
-    filter_values,
-    if_else,
-    is_null,
-    is_valid,
-    not_equal,
-)
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from incremental.state_store import StateStore
 from storage.deltalake import (
     DeltaWriteOptions,
@@ -32,6 +24,7 @@ from storage.deltalake import (
 )
 
 _HASH_NULL_SENTINEL = "None"
+_HASH_SEPARATOR = "\x1f"
 
 _DOC_HASH_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
     ("document_id", pa.string()),
@@ -77,9 +70,57 @@ _DIAGNOSTIC_HASH_COLUMNS: tuple[tuple[str, pa.DataType], ...] = (
 )
 
 
+def _session_context() -> SessionContext:
+    return DataFusionRuntimeProfile().session_context()
+
+
+def _register_table(ctx: SessionContext, table: pa.Table, *, prefix: str) -> str:
+    name = f"__scip_snapshot_{prefix}_{uuid.uuid4().hex}"
+    ctx.register_record_batches(name, table.to_batches())
+    return name
+
+
+def _deregister_table(ctx: SessionContext, name: str | None) -> None:
+    if name is None:
+        return
+    deregister = getattr(ctx, "deregister_table", None)
+    if callable(deregister):
+        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+            deregister(name)
+
+
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _stringify_expr(column: str) -> str:
+    col_name = _sql_identifier(column)
+    return f"COALESCE(CAST({col_name} AS STRING), '{_HASH_NULL_SENTINEL}')"
+
+
+def _row_hash_expr(prefix: str, columns: Sequence[tuple[str, pa.DataType]]) -> str:
+    parts = [f"'{prefix}'"]
+    parts.extend(_stringify_expr(name) for name, _dtype in columns)
+    joined = ", ".join(parts)
+    return f"stable_hash64(concat_ws('{_HASH_SEPARATOR}', {joined}))"
+
+
+def _as_table(table: TableLike) -> pa.Table:
+    resolved = coerce_table_like(table)
+    if isinstance(resolved, pa.RecordBatchReader):
+        reader = cast("RecordBatchReaderLike", resolved)
+        return pa.Table.from_batches(list(reader))
+    return cast("pa.Table", resolved)
+
+
 def _as_py_value(value: object) -> object:
+    if isinstance(value, Scalar):
+        return value.as_py()
     as_py = getattr(value, "as_py", None)
-    return as_py() if callable(as_py) else value
+    if callable(as_py):
+        return as_py()
+    return value
 
 
 def build_scip_snapshot(
@@ -94,96 +135,122 @@ def build_scip_snapshot(
     pa.Table
         Snapshot table keyed by document_id with fingerprints and counts.
     """
-    docs = cast("pa.Table", scip_documents)
-    doc_paths, doc_fingerprint_inputs = _document_inputs(docs)
-    occ_counts, diag_counts = _occurrence_and_diagnostic_counts(
-        cast("pa.Table", scip_occurrences),
-        cast("pa.Table", scip_diagnostics),
-        doc_fingerprint_inputs,
-    )
-    doc_id_list = sorted(doc_paths)
-    schema = _snapshot_schema()
-    return table_from_arrays(
-        schema,
-        columns={
-            "document_id": pa.array(doc_id_list, type=pa.string()),
-            "path": pa.array([doc_paths[doc_id] for doc_id in doc_id_list], type=pa.string()),
-            "fingerprint": pa.array(
-                [_fingerprint(doc_fingerprint_inputs.get(doc_id, [])) for doc_id in doc_id_list],
-                type=pa.string(),
-            ),
-            "occurrence_count": pa.array(
-                [occ_counts.get(doc_id, 0) for doc_id in doc_id_list], type=pa.int64()
-            ),
-            "diagnostic_count": pa.array(
-                [diag_counts.get(doc_id, 0) for doc_id in doc_id_list], type=pa.int64()
-            ),
-        },
-        num_rows=len(doc_id_list),
-    )
-
-
-def _document_inputs(
-    docs: pa.Table,
-) -> tuple[dict[str, str | None], dict[str, list[int]]]:
-    doc_ids = column_or_null(docs, "document_id", pa.string())
-    paths = column_or_null(docs, "path", pa.string())
-    doc_hashes = _row_hashes(docs, columns=_DOC_HASH_COLUMNS, prefix="scip_doc")
-    doc_paths: dict[str, str | None] = {}
-    doc_fingerprint_inputs: dict[str, list[int]] = {}
-    _accumulate_hashes(
-        doc_ids,
-        doc_hashes,
-        doc_fingerprint_inputs,
-        counts=None,
-    )
-    for doc_id_value, path_value in zip(doc_ids, paths, strict=False):
-        doc_id = _as_py_value(doc_id_value)
-        path = _as_py_value(path_value)
-        if not isinstance(doc_id, str) or not doc_id:
-            continue
-        if doc_id in doc_paths:
-            continue
-        doc_paths[doc_id] = path if isinstance(path, str) else None
-    return doc_paths, doc_fingerprint_inputs
-
-
-def _occurrence_and_diagnostic_counts(
-    occs: pa.Table,
-    diags: pa.Table,
-    doc_fingerprint_inputs: dict[str, list[int]],
-) -> tuple[dict[str, int], dict[str, int]]:
-    occ_counts: dict[str, int] = {}
-    diag_counts: dict[str, int] = {}
-    if occs.num_rows:
-        occ_hashes = _row_hashes(occs, columns=_OCCURRENCE_HASH_COLUMNS, prefix="scip_occ")
-        _accumulate_hashes(
-            column_or_null(occs, "document_id", pa.string()),
-            occ_hashes,
-            doc_fingerprint_inputs,
-            counts=occ_counts,
+    ctx = _session_context()
+    docs_table = _as_table(scip_documents)
+    occs_table = _as_table(scip_occurrences)
+    diags_table = _as_table(scip_diagnostics)
+    docs_name = _register_table(ctx, docs_table, prefix="docs")
+    occs_name = _register_table(ctx, occs_table, prefix="occ")
+    diags_name = _register_table(ctx, diags_table, prefix="diag")
+    try:
+        doc_hash = _row_hash_expr("scip_doc", _DOC_HASH_COLUMNS)
+        occ_hash = _row_hash_expr("scip_occ", _OCCURRENCE_HASH_COLUMNS)
+        diag_hash = _row_hash_expr("scip_diag", _DIAGNOSTIC_HASH_COLUMNS)
+        sql = f"""
+        WITH docs AS (
+          SELECT
+            document_id,
+            path,
+            {doc_hash} AS row_hash
+          FROM {docs_name}
+          WHERE document_id IS NOT NULL AND document_id <> ''
+        ),
+        occ AS (
+          SELECT
+            document_id,
+            {occ_hash} AS row_hash
+          FROM {occs_name}
+          WHERE document_id IS NOT NULL AND document_id <> ''
+        ),
+        diag AS (
+          SELECT
+            document_id,
+            {diag_hash} AS row_hash
+          FROM {diags_name}
+          WHERE document_id IS NOT NULL AND document_id <> ''
+        ),
+        hashes AS (
+          SELECT document_id, CAST(row_hash AS STRING) AS row_hash FROM docs
+          UNION ALL
+          SELECT document_id, CAST(row_hash AS STRING) AS row_hash FROM occ
+          UNION ALL
+          SELECT document_id, CAST(row_hash AS STRING) AS row_hash FROM diag
+        ),
+        fingerprints AS (
+          SELECT
+            document_id,
+            sha256(
+              array_to_string(
+                array_sort(array_distinct(array_agg(row_hash))),
+                '{_HASH_SEPARATOR}'
+              )
+            ) AS fingerprint
+          FROM hashes
+          GROUP BY document_id
+        ),
+        occ_counts AS (
+          SELECT document_id, COUNT(*) AS occurrence_count
+          FROM {occs_name}
+          WHERE document_id IS NOT NULL AND document_id <> ''
+          GROUP BY document_id
+        ),
+        diag_counts AS (
+          SELECT document_id, COUNT(*) AS diagnostic_count
+          FROM {diags_name}
+          WHERE document_id IS NOT NULL AND document_id <> ''
+          GROUP BY document_id
         )
-    if diags.num_rows:
-        diag_hashes = _row_hashes(diags, columns=_DIAGNOSTIC_HASH_COLUMNS, prefix="scip_diag")
-        _accumulate_hashes(
-            column_or_null(diags, "document_id", pa.string()),
-            diag_hashes,
-            doc_fingerprint_inputs,
-            counts=diag_counts,
-        )
-    return occ_counts, diag_counts
+        SELECT
+          docs.document_id AS document_id,
+          docs.path AS path,
+          fingerprints.fingerprint AS fingerprint,
+          COALESCE(occ_counts.occurrence_count, 0) AS occurrence_count,
+          COALESCE(diag_counts.diagnostic_count, 0) AS diagnostic_count
+        FROM docs
+        LEFT JOIN fingerprints ON docs.document_id = fingerprints.document_id
+        LEFT JOIN occ_counts ON docs.document_id = occ_counts.document_id
+        LEFT JOIN diag_counts ON docs.document_id = diag_counts.document_id
+        """
+        return ctx.sql(sql).to_arrow_table()
+    finally:
+        _deregister_table(ctx, docs_name)
+        _deregister_table(ctx, occs_name)
+        _deregister_table(ctx, diags_name)
 
 
-def _snapshot_schema() -> pa.Schema:
-    return pa.schema(
-        [
-            pa.field("document_id", pa.string()),
-            pa.field("path", pa.string()),
-            pa.field("fingerprint", pa.string()),
-            pa.field("occurrence_count", pa.int64()),
-            pa.field("diagnostic_count", pa.int64()),
-        ]
-    )
+def _snapshot_added_sql(cur_table: str) -> str:
+    return f"""
+    SELECT
+      cur.document_id AS document_id,
+      cur.path AS path,
+      'added' AS change_kind,
+      CAST(NULL AS STRING) AS prev_path,
+      cur.path AS cur_path,
+      CAST(NULL AS STRING) AS prev_fingerprint,
+      cur.fingerprint AS cur_fingerprint
+    FROM {cur_table} AS cur
+    """
+
+
+def _snapshot_diff_sql(cur_table: str, prev_table: str) -> str:
+    return f"""
+    SELECT
+      COALESCE(cur.document_id, prev.document_id) AS document_id,
+      COALESCE(cur.path, prev.path) AS path,
+      CASE
+        WHEN cur.path IS NULL THEN 'deleted'
+        WHEN prev.path IS NULL THEN 'added'
+        WHEN cur.fingerprint <> prev.fingerprint THEN 'modified'
+        ELSE 'unchanged'
+      END AS change_kind,
+      prev.path AS prev_path,
+      cur.path AS cur_path,
+      prev.fingerprint AS prev_fingerprint,
+      cur.fingerprint AS cur_fingerprint
+    FROM {cur_table} AS cur
+    FULL OUTER JOIN {prev_table} AS prev
+      ON cur.document_id = prev.document_id
+    """
 
 
 def diff_scip_snapshots(prev: pa.Table | None, cur: pa.Table) -> pa.Table:
@@ -194,75 +261,19 @@ def diff_scip_snapshots(prev: pa.Table | None, cur: pa.Table) -> pa.Table:
     pa.Table
         Change records with per-document deltas.
     """
-    schema = pa.schema(
-        [
-            pa.field("document_id", pa.string()),
-            pa.field("path", pa.string()),
-            pa.field("change_kind", pa.string()),
-            pa.field("prev_path", pa.string()),
-            pa.field("cur_path", pa.string()),
-            pa.field("prev_fingerprint", pa.string()),
-            pa.field("cur_fingerprint", pa.string()),
-        ]
-    )
-    if prev is None:
-        return table_from_arrays(
-            schema,
-            columns={
-                "document_id": cur["document_id"],
-                "path": cur["path"],
-                "change_kind": pa.array(["added"] * cur.num_rows, type=pa.string()),
-                "prev_path": pa.nulls(cur.num_rows, type=pa.string()),
-                "cur_path": cur["path"],
-                "prev_fingerprint": pa.nulls(cur.num_rows, type=pa.string()),
-                "cur_fingerprint": cur["fingerprint"],
-            },
-            num_rows=cur.num_rows,
-        )
-
-    joined = cur.join(
-        prev,
-        keys=["document_id"],
-        join_type="full outer",
-        left_suffix="_cur",
-        right_suffix="_prev",
-        coalesce_keys=True,
-    )
-    cur_path = cast("pa.Array", joined["path_cur"])
-    prev_path = cast("pa.Array", joined["path_prev"])
-    cur_fingerprint = cast("pa.Array", joined["fingerprint_cur"])
-    prev_fingerprint = cast("pa.Array", joined["fingerprint_prev"])
-    missing_cur = is_null(cur_path)
-    missing_prev = is_null(prev_path)
-    modified = and_(
-        is_valid(cur_path),
-        and_(
-            is_valid(prev_path),
-            not_equal(cur_fingerprint, prev_fingerprint),
-        ),
-    )
-    change_kind = case_when(
-        [
-            (missing_cur, "deleted"),
-            (missing_prev, "added"),
-            (modified, "modified"),
-        ],
-        "unchanged",
-    )
-    path = _coalesce_str(cur_path, prev_path)
-    return table_from_arrays(
-        schema,
-        columns={
-            "document_id": joined["document_id"],
-            "path": path,
-            "change_kind": cast("pa.Array", change_kind),
-            "prev_path": prev_path,
-            "cur_path": cur_path,
-            "prev_fingerprint": prev_fingerprint,
-            "cur_fingerprint": cur_fingerprint,
-        },
-        num_rows=joined.num_rows,
-    )
+    ctx = _session_context()
+    cur_table = _as_table(cur)
+    cur_name = _register_table(ctx, cur_table, prefix="snapshot_cur")
+    prev_name: str | None = None
+    try:
+        if prev is None:
+            return ctx.sql(_snapshot_added_sql(cur_name)).to_arrow_table()
+        prev_table = _as_table(prev)
+        prev_name = _register_table(ctx, prev_table, prefix="snapshot_prev")
+        return ctx.sql(_snapshot_diff_sql(cur_name, prev_name)).to_arrow_table()
+    finally:
+        _deregister_table(ctx, cur_name)
+        _deregister_table(ctx, prev_name)
 
 
 def scip_changed_file_ids(
@@ -278,13 +289,30 @@ def scip_changed_file_ids(
     """
     if diff is None or repo_snapshot is None or diff.num_rows == 0:
         return ()
-    changed_paths = _changed_paths(diff)
-    if not changed_paths:
-        return ()
-    path_to_file_id = _path_to_file_id(repo_snapshot)
-    file_ids = [path_to_file_id.get(path) for path in changed_paths]
-    cleaned = [value for value in file_ids if isinstance(value, str) and value]
-    return tuple(sorted(set(cleaned)))
+    ctx = _session_context()
+    diff_name = _register_table(ctx, diff, prefix="diff")
+    repo_name = _register_table(ctx, repo_snapshot, prefix="repo")
+    try:
+        sql = f"""
+        WITH changed AS (
+          SELECT DISTINCT path
+          FROM {diff_name}
+          WHERE change_kind <> 'unchanged'
+            AND path IS NOT NULL
+            AND path <> ''
+        )
+        SELECT DISTINCT repo.file_id AS file_id
+        FROM {repo_name} AS repo
+        JOIN changed ON repo.path = changed.path
+        """
+        table = ctx.sql(sql).to_arrow_table()
+        values = [
+            value for value in table["file_id"].to_pylist() if isinstance(value, str) and value
+        ]
+        return tuple(sorted(set(values)))
+    finally:
+        _deregister_table(ctx, diff_name)
+        _deregister_table(ctx, repo_name)
 
 
 def read_scip_snapshot(store: StateStore) -> pa.Table | None:
@@ -353,84 +381,6 @@ def write_scip_diff(store: StateStore, diff: pa.Table) -> DeltaWriteResult:
     )
     enable_delta_features(result.path)
     return result
-
-
-def _row_hashes(
-    table: pa.Table,
-    *,
-    columns: Sequence[tuple[str, pa.DataType]],
-    prefix: str,
-) -> pa.Array:
-    arrays = [column_or_null(table, name, dtype) for name, dtype in columns]
-    return cast(
-        "pa.Array",
-        hash64_from_arrays(arrays, prefix=prefix, null_sentinel=_HASH_NULL_SENTINEL),
-    )
-
-
-def _accumulate_hashes(
-    doc_ids: pa.Array,
-    hashes: pa.Array,
-    out: dict[str, list[int]],
-    *,
-    counts: dict[str, int] | None,
-) -> None:
-    for doc_id_value, hash_value in zip(doc_ids, hashes, strict=False):
-        doc_id = _as_py_value(doc_id_value)
-        value = _as_py_value(hash_value)
-        if not isinstance(doc_id, str) or not doc_id:
-            continue
-        if value is None:
-            continue
-        if isinstance(value, int) and not isinstance(value, bool):
-            value_int = value
-        elif isinstance(value, (str, bytes, bytearray, float)):
-            try:
-                value_int = int(value)
-            except (TypeError, ValueError):
-                continue
-        else:
-            continue
-        out.setdefault(doc_id, []).append(value_int)
-        if counts is not None:
-            counts[doc_id] = counts.get(doc_id, 0) + 1
-
-
-def _fingerprint(values: Iterable[int]) -> str:
-    hasher = hashlib.sha256()
-    for item in sorted(values):
-        hasher.update(str(item).encode("utf-8"))
-        hasher.update(b"\0")
-    return hasher.hexdigest()
-
-
-def _changed_paths(diff: pa.Table) -> list[str]:
-    if diff.num_rows == 0:
-        return []
-    change_kind = diff["change_kind"]
-    paths = diff["path"]
-    mask = not_equal(change_kind, pa.scalar("unchanged", type=pa.string()))
-    filtered = filter_values(paths, mask)
-    values = [_as_py_value(value) for value in filtered]
-    return [value for value in values if isinstance(value, str) and value]
-
-
-def _path_to_file_id(snapshot: pa.Table) -> Mapping[str, str]:
-    mapping: dict[str, str] = {}
-    for path_value, file_id_value in zip(
-        snapshot["path"],
-        snapshot["file_id"],
-        strict=False,
-    ):
-        path = _as_py_value(path_value)
-        file_id = _as_py_value(file_id_value)
-        if isinstance(path, str) and path and isinstance(file_id, str) and file_id:
-            mapping.setdefault(path, file_id)
-    return mapping
-
-
-def _coalesce_str(left: pa.Array, right: pa.Array) -> pa.Array:
-    return cast("pa.Array", if_else(is_valid(left), left, right))
 
 
 __all__ = [

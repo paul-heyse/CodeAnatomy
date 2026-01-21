@@ -27,7 +27,6 @@ from libcst.metadata import (
 )
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
-from arrowdsl.core.ids import stable_id
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 from arrowdsl.schema.schema import schema_fingerprint
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
@@ -683,11 +682,6 @@ class CSTCollector(cst.CSTVisitor):
         return str(value)
 
     @staticmethod
-    def _stable_id(prefix: str, *parts: object) -> str:
-        values = [str(part) if part is not None else None for part in parts]
-        return stable_id(prefix, *values)
-
-    @staticmethod
     def _docstring_node(
         body: Sequence[cst.BaseStatement | cst.BaseSmallStatement],
     ) -> cst.CSTNode | None:
@@ -704,7 +698,8 @@ class CSTCollector(cst.CSTVisitor):
         self,
         *,
         owner_kind: str,
-        owner_def_id: str | None,
+        owner_def_bstart: int | None,
+        owner_def_bend: int | None,
         node: cst.Module | cst.ClassDef | cst.FunctionDef,
     ) -> None:
         if not self._options.include_docstrings:
@@ -724,8 +719,10 @@ class CSTCollector(cst.CSTVisitor):
         self._docstring_rows.append(
             {
                 **self._identity,
-                "owner_def_id": owner_def_id,
+                "owner_def_id": None,
                 "owner_kind": owner_kind,
+                "owner_def_bstart": owner_def_bstart,
+                "owner_def_bend": owner_def_bend,
                 "docstring": docstring,
                 "bstart": bstart,
                 "bend": bend,
@@ -736,7 +733,8 @@ class CSTCollector(cst.CSTVisitor):
         self,
         *,
         owner_kind: str,
-        owner_def_id: str | None,
+        owner_def_bstart: int | None,
+        owner_def_bend: int | None,
         decorators: Sequence[cst.Decorator],
     ) -> None:
         if not self._options.include_decorators:
@@ -747,8 +745,10 @@ class CSTCollector(cst.CSTVisitor):
             self._decorator_rows.append(
                 {
                     **self._identity,
-                    "owner_def_id": owner_def_id,
+                    "owner_def_id": None,
                     "owner_kind": owner_kind,
+                    "owner_def_bstart": owner_def_bstart,
+                    "owner_def_bend": owner_def_bend,
                     "decorator_text": decorator_text,
                     "decorator_index": idx,
                     "bstart": bstart,
@@ -792,7 +792,12 @@ class CSTCollector(cst.CSTVisitor):
         bool | None
             True to continue CST traversal.
         """
-        self._record_docstring(owner_kind="module", owner_def_id=None, node=node)
+        self._record_docstring(
+            owner_kind="module",
+            owner_def_bstart=None,
+            owner_def_bend=None,
+            node=node,
+        )
         return True
 
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool | None:
@@ -824,13 +829,7 @@ class CSTCollector(cst.CSTVisitor):
         def_key: DefKey = (def_kind, def_bstart, def_bend)
         qnames = self._qnames(node)
         def_fqns = self._fqns(node)
-        def_id = self._stable_id(
-            "cst_def",
-            self._identity["file_id"],
-            def_kind,
-            def_bstart,
-            def_bend,
-        )
+        def_id = None
         docstring = node.get_docstring()
         decorator_count = len(node.decorators)
 
@@ -855,10 +854,16 @@ class CSTCollector(cst.CSTVisitor):
                     "attrs": attrs_map(default_attrs_value()),
                 }
             )
-        self._record_docstring(owner_kind=def_kind, owner_def_id=def_id, node=node)
+        self._record_docstring(
+            owner_kind=def_kind,
+            owner_def_bstart=def_bstart,
+            owner_def_bend=def_bend,
+            node=node,
+        )
         self._record_decorators(
             owner_kind=def_kind,
-            owner_def_id=def_id,
+            owner_def_bstart=def_bstart,
+            owner_def_bend=def_bend,
             decorators=node.decorators,
         )
         if self._options.include_type_exprs:
@@ -923,13 +928,7 @@ class CSTCollector(cst.CSTVisitor):
         def_key: DefKey = (def_kind, def_bstart, def_bend)
         qnames = self._qnames(node)
         def_fqns = self._fqns(node)
-        def_id = self._stable_id(
-            "cst_def",
-            self._identity["file_id"],
-            def_kind,
-            def_bstart,
-            def_bend,
-        )
+        def_id = None
         docstring = node.get_docstring()
         decorator_count = len(node.decorators)
 
@@ -954,10 +953,16 @@ class CSTCollector(cst.CSTVisitor):
                     "attrs": attrs_map(default_attrs_value()),
                 }
             )
-        self._record_docstring(owner_kind=def_kind, owner_def_id=def_id, node=node)
+        self._record_docstring(
+            owner_kind=def_kind,
+            owner_def_bstart=def_bstart,
+            owner_def_bend=def_bend,
+            node=node,
+        )
         self._record_decorators(
             owner_kind=def_kind,
-            owner_def_id=def_id,
+            owner_def_bstart=def_bstart,
+            owner_def_bend=def_bend,
             decorators=node.decorators,
         )
         if self._options.include_defs:
@@ -993,17 +998,10 @@ class CSTCollector(cst.CSTVisitor):
         scope_type, scope_name, scope_role = self._scope_details(node)
         parent_kind = self._parent_kind(node)
         inferred_type = self._type_for_node(node)
-        ref_id = self._stable_id(
-            "cst_ref",
-            self._identity["file_id"],
-            bstart,
-            bend,
-        )
-
         self._ref_rows.append(
             {
                 **self._identity,
-                "ref_id": ref_id,
+                "ref_id": None,
                 "ref_kind": "name",
                 "ref_text": node.value,
                 "expr_ctx": expr_ctx,
@@ -1040,16 +1038,10 @@ class CSTCollector(cst.CSTVisitor):
         scope_type, scope_name, scope_role = self._scope_details(node)
         parent_kind = self._parent_kind(node)
         inferred_type = self._type_for_node(node)
-        ref_id = self._stable_id(
-            "cst_ref",
-            self._identity["file_id"],
-            bstart,
-            bend,
-        )
         self._ref_rows.append(
             {
                 **self._identity,
-                "ref_id": ref_id,
+                "ref_id": None,
                 "ref_kind": "attribute",
                 "ref_text": ref_text,
                 "expr_ctx": expr_ctx,
@@ -1183,13 +1175,13 @@ class CSTCollector(cst.CSTVisitor):
         """
         if not self._options.include_callsites:
             return True
-        call_id, row = self._callsite_row(node)
+        call_bstart, call_bend, row = self._callsite_row(node)
         self._call_rows.append(row)
         if self._options.include_call_args:
-            self._append_call_args(call_id, node)
+            self._append_call_args(call_bstart, call_bend, node)
         return True
 
-    def _callsite_row(self, node: cst.Call) -> tuple[str, dict[str, object]]:
+    def _callsite_row(self, node: cst.Call) -> tuple[int | None, int | None, dict[str, object]]:
         call_bstart, call_bend = self._span(node)
         callee_bstart, callee_bend = self._span(node.func)
         callee_dotted = helpers.get_full_name_for_node(node.func)
@@ -1199,15 +1191,9 @@ class CSTCollector(cst.CSTVisitor):
         qnames = self._qnames(node.func) or self._qnames(node)
         callee_fqns = self._fqns(node.func) or self._fqns(node)
         inferred_type = self._type_for_node(node)
-        call_id = self._stable_id(
-            "cst_call",
-            self._identity["file_id"],
-            call_bstart,
-            call_bend,
-        )
         row: dict[str, object] = {
             **self._identity,
-            "call_id": call_id,
+            "call_id": None,
             "call_bstart": call_bstart,
             "call_bend": call_bend,
             "callee_bstart": callee_bstart,
@@ -1221,9 +1207,14 @@ class CSTCollector(cst.CSTVisitor):
             "inferred_type": inferred_type,
             "attrs": attrs_map(default_attrs_value()),
         }
-        return call_id, row
+        return call_bstart, call_bend, row
 
-    def _append_call_args(self, call_id: str, node: cst.Call) -> None:
+    def _append_call_args(
+        self,
+        call_bstart: int | None,
+        call_bend: int | None,
+        node: cst.Call,
+    ) -> None:
         for idx, arg in enumerate(node.args):
             arg_text = self._code_for_node(arg.value)
             bstart, bend = self._span(arg.value)
@@ -1232,7 +1223,9 @@ class CSTCollector(cst.CSTVisitor):
             self._call_arg_rows.append(
                 {
                     **self._identity,
-                    "call_id": call_id,
+                    "call_id": None,
+                    "call_bstart": call_bstart,
+                    "call_bend": call_bend,
                     "arg_index": idx,
                     "keyword": keyword,
                     "star": star,

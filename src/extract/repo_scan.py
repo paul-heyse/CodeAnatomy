@@ -272,7 +272,7 @@ def scan_repo(
             ),
         )
 
-    plan = scan_repo_plan(repo_root, options=normalized_options)
+    plan = scan_repo_plan(repo_root, options=normalized_options, ctx=ctx)
     return materialize_extract_plan(
         "repo_files_v1",
         plan,
@@ -289,6 +289,7 @@ def scan_repo_plan(
     repo_root: PathLike,
     *,
     options: RepoScanOptions,
+    ctx: ExecutionContext,
 ) -> IbisPlan:
     """Build the plan for repository scanning.
 
@@ -311,7 +312,7 @@ def scan_repo_plan(
             if options.max_files is not None and count >= options.max_files:
                 break
 
-    raw_plan = ibis_plan_from_rows("repo_files_v1", iter_rows())
+    raw_plan = ibis_plan_from_rows("repo_files_v1", iter_rows(), ctx=ctx)
     return apply_query_and_project(
         "repo_files_v1",
         raw_plan.expr,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datafusion_engine.schema_authority import dataset_schema_from_context
+from datafusion_engine.runtime import dataset_schema_from_context
 from datafusion_engine.schema_registry import nested_schema_for
 
 

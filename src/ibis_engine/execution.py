@@ -38,7 +38,6 @@ class IbisExecutionContext:
     ibis_backend: BaseBackend | None = None
     params: Mapping[IbisValue, object] | None = None
     batch_size: int | None = None
-    allow_fallback: bool = True
     probe_capabilities: bool = True
     cache_policy: IbisCachePolicy | None = None
 
@@ -59,7 +58,6 @@ class IbisExecutionContext:
             ctx=runtime_profile.session_context(),
             runtime_profile=runtime_profile,
             runtime_profile_hash=runtime_snapshot.profile_hash,
-            allow_fallback=self.allow_fallback,
             execution_policy=self.execution_policy,
             execution_label=self.execution_label,
             probe_capabilities=self.probe_capabilities,

@@ -417,7 +417,6 @@ class RunBundleContext:
     compiled_relationship_outputs: Mapping[str, CompiledOutput] | None = None
     datafusion_metrics: JsonDict | None = None
     datafusion_traces: JsonDict | None = None
-    datafusion_fallbacks: pa.Table | None = None
     datafusion_explains: pa.Table | None = None
     datafusion_plan_artifacts: pa.Table | None = None
     datafusion_plan_cache: Sequence[PlanCacheEntry] | None = None
@@ -861,7 +860,6 @@ def _write_runtime_artifacts(
         ),
     ]
     table_artifacts = [
-        ("datafusion_fallbacks", context.datafusion_fallbacks),
         ("datafusion_explains", context.datafusion_explains),
         ("datafusion_plan_artifacts_v1", context.datafusion_plan_artifacts),
         (
@@ -1534,7 +1532,6 @@ def write_run_bundle(
         relspec/datafusion_traces.delta
         relspec/datafusion_function_catalog.delta
         relspec/datafusion_write_policy.delta
-        relspec/datafusion_fallbacks/
         relspec/datafusion_explains/
         relspec/datafusion_plan_artifacts_v1/
         relspec/datafusion_schema_registry_validation_v1/

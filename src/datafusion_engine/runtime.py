@@ -7,8 +7,10 @@ import importlib
 import logging
 import os
 import time
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import datafusion
@@ -19,13 +21,13 @@ from datafusion.object_store import LocalFileSystem
 from sqlglot.errors import ParseError
 
 from arrowdsl.core.determinism import DeterminismTier
+from arrowdsl.core.interop import RecordBatchReaderLike, SchemaLike, TableLike, coerce_table_like
 from arrowdsl.core.schema_constants import DEFAULT_VALUE_META
 from arrowdsl.schema.serialization import schema_fingerprint
 from datafusion_engine.catalog_provider import register_registry_catalogs
 from datafusion_engine.compile_options import (
     DataFusionCacheEvent,
     DataFusionCompileOptions,
-    DataFusionFallbackEvent,
     DataFusionSqlPolicy,
     resolve_sql_policy,
 )
@@ -41,7 +43,9 @@ from datafusion_engine.schema_registry import (
     SCIP_VIEW_SCHEMA_MAP,
     TREE_SITTER_CHECK_VIEWS,
     TREE_SITTER_VIEW_NAMES,
+    is_nested_dataset,
     missing_schema_names,
+    nested_schema_for,
     nested_schema_names,
     nested_view_specs,
     register_all_schemas,
@@ -51,6 +55,7 @@ from datafusion_engine.schema_registry import (
     validate_bytecode_views,
     validate_cst_views,
     validate_nested_types,
+    validate_required_engine_functions,
     validate_scip_views,
     validate_symtable_views,
     validate_ts_views,
@@ -62,16 +67,16 @@ from registry_common.arrow_payloads import payload_hash
 from schema_spec.policies import DataFusionWritePolicy
 from schema_spec.system import (
     DataFusionScanOptions,
+    DatasetSpec,
     DeltaScanOptions,
     TableSchemaContract,
+    dataset_spec_from_schema,
 )
 from schema_spec.view_specs import ViewSpec
 from sqlglot_tools.optimizer import parse_sql_strict, register_datafusion_dialect
 
 if TYPE_CHECKING:
     from ibis.expr.types import Value as IbisValue
-
-    from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
 
     ExplainRows = TableLike | RecordBatchReaderLike
 else:
@@ -544,37 +549,6 @@ class DataFusionViewRegistry:
         ]
 
 
-@dataclass
-class DataFusionFallbackCollector:
-    """Collect SQL fallback events for diagnostics."""
-
-    entries: list[dict[str, object]] = field(default_factory=list)
-
-    def hook(self, event: DataFusionFallbackEvent) -> None:
-        """Collect a fallback event payload."""
-        payload = {
-            "reason": event.reason,
-            "error": event.error,
-            "expression_type": event.expression_type,
-            "sql": event.sql,
-            "dialect": event.dialect,
-            "policy_violations": list(event.policy_violations),
-            "sql_policy_name": event.sql_policy_name,
-            "param_mode": event.param_mode,
-        }
-        self.entries.append(cast("dict[str, object]", payload))
-
-    def snapshot(self) -> list[dict[str, object]]:
-        """Return a snapshot of fallback artifacts.
-
-        Returns
-        -------
-        list[dict[str, object]]
-            Collected fallback artifacts.
-        """
-        return list(self.entries)
-
-
 @dataclass(frozen=True)
 class PreparedStatementSpec:
     """Prepared statement specification for DataFusion."""
@@ -586,11 +560,8 @@ class PreparedStatementSpec:
 
 @dataclass(frozen=True)
 class AdapterExecutionPolicy:
-    """Execution policy for adapterized fallback handling."""
+    """Execution policy for adapterized execution handling."""
 
-    allow_fallback: bool = True
-    fail_on_fallback: bool = False
-    force_sql: bool = False
 
 
 @dataclass(frozen=True)
@@ -1145,16 +1116,16 @@ def _datafusion_version(ctx: SessionContext) -> str | None:
 
 def _datafusion_function_names(ctx: SessionContext) -> set[str]:
     try:
-        table = ctx.sql("SHOW FUNCTIONS").to_arrow_table()
+        table = ctx.sql(
+            "SELECT routine_name FROM information_schema.routines WHERE routine_type = 'FUNCTION'"
+        ).to_arrow_table()
     except (RuntimeError, TypeError, ValueError):
         return set()
     names: set[str] = set()
     for row in table.to_pylist():
-        for key in ("function_name", "name"):
-            value = row.get(key)
-            if isinstance(value, str):
-                names.add(value.lower())
-                break
+        value = row.get("routine_name")
+        if isinstance(value, str):
+            names.add(value.lower())
     return names
 
 
@@ -1215,43 +1186,6 @@ def _apply_builder(
     return builder
 
 
-def _apply_fallback_policy(
-    *,
-    policy: AdapterExecutionPolicy | None,
-    fallback_hook: Callable[[DataFusionFallbackEvent], None] | None,
-    label: ExecutionLabel | None = None,
-) -> Callable[[DataFusionFallbackEvent], None] | None:
-    if policy is None:
-        return fallback_hook
-    if policy.allow_fallback and not policy.fail_on_fallback:
-        return fallback_hook
-
-    def _hook(event: DataFusionFallbackEvent) -> None:
-        if fallback_hook is not None:
-            fallback_hook(event)
-        label_info = ""
-        if label is not None:
-            label_info = f" for rule {label.rule_name!r} output {label.output_dataset!r}"
-        msg = f"DataFusion fallback blocked{label_info} ({event.reason}): {event.expression_type}"
-        raise ValueError(msg)
-
-    return _hook
-
-
-def _chain_fallback_hooks(
-    *hooks: Callable[[DataFusionFallbackEvent], None] | None,
-) -> Callable[[DataFusionFallbackEvent], None] | None:
-    active = [hook for hook in hooks if hook is not None]
-    if not active:
-        return None
-
-    def _hook(event: DataFusionFallbackEvent) -> None:
-        for hook in active:
-            hook(event)
-
-    return _hook
-
-
 def _chain_explain_hooks(
     *hooks: Callable[[str, ExplainRows], None] | None,
 ) -> Callable[[str, ExplainRows], None] | None:
@@ -1308,35 +1242,6 @@ def _chain_cache_hooks(
     return _hook
 
 
-def labeled_fallback_hook(
-    label: ExecutionLabel,
-    sink: list[dict[str, object]],
-) -> Callable[[DataFusionFallbackEvent], None]:
-    """Return a fallback hook that records rule-scoped diagnostics.
-
-    Returns
-    -------
-    Callable[[DataFusionFallbackEvent], None]
-        Hook that appends labeled fallback diagnostics to the sink.
-    """
-
-    def _hook(event: DataFusionFallbackEvent) -> None:
-        sink.append(
-            {
-                "rule": label.rule_name,
-                "output": label.output_dataset,
-                "reason": event.reason,
-                "error": event.error,
-                "expression_type": event.expression_type,
-                "sql": event.sql,
-                "dialect": event.dialect,
-                "policy_violations": list(event.policy_violations),
-            }
-        )
-
-    return _hook
-
-
 def labeled_explain_hook(
     label: ExecutionLabel,
     sink: list[dict[str, object]],
@@ -1357,36 +1262,6 @@ def labeled_explain_hook(
                 "sql": sql,
                 "rows": rows,
             }
-        )
-
-    return _hook
-
-
-def diagnostics_fallback_hook(
-    sink: DiagnosticsSink,
-) -> Callable[[DataFusionFallbackEvent], None]:
-    """Return a fallback hook that records diagnostics rows.
-
-    Returns
-    -------
-    Callable[[DataFusionFallbackEvent], None]
-        Hook that records fallback rows in the diagnostics sink.
-    """
-
-    def _hook(event: DataFusionFallbackEvent) -> None:
-        sink.record_events(
-            "datafusion_fallbacks_v1",
-            [
-                {
-                    "event_time_unix_ms": int(time.time() * 1000),
-                    "reason": event.reason,
-                    "error": event.error,
-                    "expression_type": event.expression_type,
-                    "sql": event.sql,
-                    "dialect": event.dialect,
-                    "policy_violations": list(event.policy_violations),
-                }
-            ],
         )
 
     return _hook
@@ -1528,7 +1403,6 @@ class _ResolvedCompileHooks:
     explain_hook: Callable[[str, ExplainRows], None] | None
     plan_artifacts_hook: Callable[[Mapping[str, object]], None] | None
     sql_ingest_hook: Callable[[Mapping[str, object]], None] | None
-    fallback_hook: Callable[[DataFusionFallbackEvent], None] | None
     cache_event_hook: Callable[[DataFusionCacheEvent], None] | None
 
 
@@ -1561,14 +1435,14 @@ class DataFusionRuntimeProfile:
     ast_catalog_format: str | None = None
     ast_external_location: str | None = None
     ast_external_format: str = "parquet"
-    ast_external_provider: Literal["dataset", "listing", "parquet"] | None = None
+    ast_external_provider: Literal["listing", "parquet"] | None = None
     ast_external_ordering: tuple[str, ...] = ("repo", "path")
     ast_external_partition_cols: tuple[tuple[str, pa.DataType], ...] = (
         ("repo", pa.string()),
         ("path", pa.string()),
     )
     ast_external_unbounded: bool = False
-    ast_external_schema_force_view_types: bool | None = True
+    ast_external_schema_force_view_types: bool | None = False
     ast_external_skip_arrow_metadata: bool | None = False
     ast_external_listing_table_factory_infer_partitions: bool | None = True
     ast_external_listing_table_ignore_subdirectory: bool | None = False
@@ -1585,11 +1459,11 @@ class DataFusionRuntimeProfile:
     bytecode_catalog_format: str | None = None
     bytecode_external_location: str | None = None
     bytecode_external_format: str = "parquet"
-    bytecode_external_provider: Literal["dataset", "listing", "parquet"] | None = None
+    bytecode_external_provider: Literal["listing", "parquet"] | None = None
     bytecode_external_ordering: tuple[str, ...] = ("path", "file_id")
     bytecode_external_partition_cols: tuple[tuple[str, pa.DataType], ...] = ()
     bytecode_external_unbounded: bool = False
-    bytecode_external_schema_force_view_types: bool | None = True
+    bytecode_external_schema_force_view_types: bool | None = False
     bytecode_external_skip_arrow_metadata: bool | None = False
     bytecode_external_listing_table_factory_infer_partitions: bool | None = True
     bytecode_external_listing_table_ignore_subdirectory: bool | None = False
@@ -1619,6 +1493,7 @@ class DataFusionRuntimeProfile:
     schema_adapter_factories: Mapping[str, object] = field(default_factory=dict)
     enable_schema_evolution_adapter: bool = True
     enable_udfs: bool = True
+    require_delta: bool = True
     enable_delta_plan_codecs: bool = False
     delta_plan_codec_physical: str = "delta_physical"
     delta_plan_codec_logical: str = "delta_logical"
@@ -1637,12 +1512,7 @@ class DataFusionRuntimeProfile:
     plan_collector: DataFusionPlanCollector | None = field(default_factory=DataFusionPlanCollector)
     view_registry: DataFusionViewRegistry | None = field(default_factory=DataFusionViewRegistry)
     substrait_validation: bool = False
-    capture_fallbacks: bool = True
-    fallback_collector: DataFusionFallbackCollector | None = field(
-        default_factory=DataFusionFallbackCollector
-    )
     diagnostics_sink: DiagnosticsSink | None = None
-    labeled_fallbacks: list[dict[str, object]] = field(default_factory=list)
     labeled_explains: list[dict[str, object]] = field(default_factory=list)
     plan_cache: PlanCache | None = field(default_factory=PlanCache)
     local_filesystem_root: str | None = None
@@ -1712,7 +1582,13 @@ class DataFusionRuntimeProfile:
             return self.ast_catalog_location, self.ast_catalog_format
         if self.bytecode_catalog_location is not None or self.bytecode_catalog_format is not None:
             return self.bytecode_catalog_location, self.bytecode_catalog_format
-        return self.catalog_auto_load_location, self.catalog_auto_load_format
+        if self.catalog_auto_load_location is not None or self.catalog_auto_load_format is not None:
+            return self.catalog_auto_load_location, self.catalog_auto_load_format
+        env_settings = _catalog_autoload_settings()
+        return (
+            env_settings.get("datafusion.catalog.location"),
+            env_settings.get("datafusion.catalog.format"),
+        )
 
     def runtime_env_builder(self) -> RuntimeEnvBuilder:
         """Return a RuntimeEnvBuilder configured from the profile.
@@ -2673,6 +2549,7 @@ class DataFusionRuntimeProfile:
             ("scip_views", validate_scip_views),
             ("symtable_views", validate_symtable_views),
             ("bytecode_views", validate_bytecode_views),
+            ("engine_functions", validate_required_engine_functions),
         ):
             try:
                 validator(ctx)
@@ -2994,14 +2871,7 @@ class DataFusionRuntimeProfile:
             plan_artifacts_hook = self.plan_collector.hook
         sql_ingest_hook = resolved.sql_ingest_hook
         cache_event_hook = resolved.cache_event_hook
-        fallback_hook = resolved.fallback_hook
-        if fallback_hook is None and self.capture_fallbacks and self.fallback_collector is not None:
-            fallback_hook = self.fallback_collector.hook
         if self.diagnostics_sink is not None:
-            fallback_hook = _chain_fallback_hooks(
-                fallback_hook,
-                diagnostics_fallback_hook(self.diagnostics_sink),
-            )
             if capture_explain or explain_hook is not None:
                 explain_hook = _chain_explain_hooks(
                     explain_hook,
@@ -3027,7 +2897,6 @@ class DataFusionRuntimeProfile:
             explain_hook=explain_hook,
             plan_artifacts_hook=plan_artifacts_hook,
             sql_ingest_hook=sql_ingest_hook,
-            fallback_hook=fallback_hook,
             cache_event_hook=cache_event_hook,
         )
 
@@ -3101,7 +2970,6 @@ class DataFusionRuntimeProfile:
             capture_plan_artifacts == resolved.capture_plan_artifacts,
             hooks.plan_artifacts_hook == resolved.plan_artifacts_hook,
             hooks.sql_ingest_hook == resolved.sql_ingest_hook,
-            hooks.fallback_hook == resolved.fallback_hook,
             hooks.cache_event_hook == resolved.cache_event_hook,
             sql_policy == resolved.sql_policy,
             sql_policy_name == resolved.sql_policy_name,
@@ -3122,7 +2990,6 @@ class DataFusionRuntimeProfile:
             capture_plan_artifacts=capture_plan_artifacts,
             plan_artifacts_hook=hooks.plan_artifacts_hook,
             sql_ingest_hook=hooks.sql_ingest_hook,
-            fallback_hook=hooks.fallback_hook,
             cache_event_hook=hooks.cache_event_hook,
             sql_policy=sql_policy,
             sql_policy_name=sql_policy_name,
@@ -3131,7 +2998,6 @@ class DataFusionRuntimeProfile:
             updated = apply_execution_label(
                 updated,
                 execution_label=execution_label,
-                fallback_sink=self.labeled_fallbacks,
                 explain_sink=self.labeled_explains,
             )
         if execution_policy is None:
@@ -3139,7 +3005,6 @@ class DataFusionRuntimeProfile:
         return apply_execution_policy(
             updated,
             execution_policy=execution_policy,
-            execution_label=execution_label,
         )
 
     def record_view_definition(self, *, name: str, sql: str | None) -> None:
@@ -3224,12 +3089,10 @@ class DataFusionRuntimeProfile:
         Returns
         -------
         list[dict[str, object]]
-            Sorted function catalog entries from ``SHOW FUNCTIONS``.
+            Sorted function catalog entries from ``information_schema``.
         """
-        table = ctx.sql("SHOW FUNCTIONS").to_arrow_table()
-        rows = table.to_pylist()
+        rows = _information_schema_routines(ctx)
         if include_routines:
-            rows.extend(_information_schema_routines(ctx))
             rows.extend(_information_schema_parameters(ctx))
         return sorted(rows, key=_function_catalog_sort_key)
 
@@ -3386,8 +3249,6 @@ class DataFusionRuntimeProfile:
             "capture_plan_artifacts": self.capture_plan_artifacts,
             "plan_collector": bool(self.plan_collector),
             "substrait_validation": self.substrait_validation,
-            "capture_fallbacks": self.capture_fallbacks,
-            "fallback_collector": bool(self.fallback_collector),
             "diagnostics_sink": bool(self.diagnostics_sink),
             "local_filesystem_root": self.local_filesystem_root,
             "input_plugins": len(self.input_plugins),
@@ -3649,7 +3510,6 @@ def apply_execution_label(
     options: DataFusionCompileOptions,
     *,
     execution_label: ExecutionLabel | None,
-    fallback_sink: list[dict[str, object]] | None,
     explain_sink: list[dict[str, object]] | None,
 ) -> DataFusionCompileOptions:
     """Return compile options with rule-scoped diagnostics hooks applied.
@@ -3660,8 +3520,6 @@ def apply_execution_label(
         Base compile options to update.
     execution_label:
         Optional label used to annotate diagnostics.
-    fallback_sink:
-        Destination list for labeled fallback entries.
     explain_sink:
         Destination list for labeled explain entries.
 
@@ -3672,28 +3530,21 @@ def apply_execution_label(
     """
     if execution_label is None:
         return options
-    fallback_hook = options.fallback_hook
-    if fallback_sink is not None:
-        fallback_hook = _chain_fallback_hooks(
-            fallback_hook,
-            labeled_fallback_hook(execution_label, fallback_sink),
-        )
     explain_hook = options.explain_hook
     if explain_sink is not None and (options.capture_explain or explain_hook is not None):
         explain_hook = _chain_explain_hooks(
             explain_hook,
             labeled_explain_hook(execution_label, explain_sink),
         )
-    if fallback_hook is options.fallback_hook and explain_hook is options.explain_hook:
+    if explain_hook is options.explain_hook:
         return options
-    return replace(options, fallback_hook=fallback_hook, explain_hook=explain_hook)
+    return replace(options, explain_hook=explain_hook)
 
 
 def apply_execution_policy(
     options: DataFusionCompileOptions,
     *,
     execution_policy: AdapterExecutionPolicy | None,
-    execution_label: ExecutionLabel | None = None,
 ) -> DataFusionCompileOptions:
     """Return compile options with an execution policy enforced.
 
@@ -3702,28 +3553,177 @@ def apply_execution_policy(
     options:
         Base compile options to update.
     execution_policy:
-        Optional execution policy that can block fallback usage.
-    execution_label:
-        Optional label used for fallback error context.
-    execution_label:
-        Optional label used to provide context in fallback errors.
+        Optional execution policy controls execution behaviors.
 
     Returns
     -------
     DataFusionCompileOptions
-        Options updated with fallback policy enforcement when configured.
+        Options updated with execution policy settings when configured.
     """
-    force_sql = options.force_sql
-    if execution_policy is not None and execution_policy.force_sql:
-        force_sql = True
-    fallback_hook = _apply_fallback_policy(
-        policy=execution_policy,
-        fallback_hook=options.fallback_hook,
-        label=execution_label,
+    _ = execution_policy
+    return options
+
+
+@lru_cache(maxsize=128)
+def _datafusion_type_name(dtype: pa.DataType) -> str:
+    ctx = SessionContext()
+    table = pa.Table.from_arrays([pa.array([None], type=dtype)], names=["value"])
+    ctx.register_table("t", ctx.from_arrow(table))
+    result = ctx.sql("SELECT arrow_typeof(value) AS dtype FROM t").to_arrow_table()
+    value = result["dtype"][0].as_py()
+    if not isinstance(value, str):
+        msg = "Failed to resolve DataFusion type name."
+        raise TypeError(msg)
+    return value
+
+
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _apply_table_schema_metadata(
+    table: pa.Table,
+    *,
+    schema: pa.Schema,
+    keep_extra_columns: bool,
+) -> pa.Table:
+    if not keep_extra_columns:
+        return table.cast(schema)
+    metadata = dict(table.schema.metadata or {})
+    metadata.update(schema.metadata or {})
+    fields: list[pa.Field] = []
+    for table_field in table.schema:
+        try:
+            expected = schema.field(table_field.name)
+        except KeyError:
+            fields.append(table_field)
+            continue
+        fields.append(
+            pa.field(
+                table_field.name,
+                table_field.type,
+                table_field.nullable,
+                metadata=expected.metadata,
+            )
+        )
+    return table.cast(pa.schema(fields, metadata=metadata))
+
+
+def _align_projection_exprs(
+    *,
+    schema: pa.Schema,
+    input_columns: Sequence[str],
+    keep_extra_columns: bool,
+) -> list[str]:
+    selections: list[str] = []
+    for schema_field in schema:
+        dtype_name = _datafusion_type_name(schema_field.type)
+        col_name = _sql_identifier(schema_field.name)
+        if schema_field.name in input_columns:
+            selections.append(f"arrow_cast({col_name}, '{dtype_name}') AS {col_name}")
+        else:
+            selections.append(f"arrow_cast(NULL, '{dtype_name}') AS {col_name}")
+    if keep_extra_columns:
+        for name in input_columns:
+            if name in schema.names:
+                continue
+            selections.append(_sql_identifier(name))
+    return selections
+
+
+def _deregister_table(ctx: SessionContext, *, name: str) -> None:
+    deregister = getattr(ctx, "deregister_table", None)
+    if callable(deregister):
+        deregister(name)
+
+
+def align_table_to_schema(
+    table: TableLike | RecordBatchReaderLike,
+    *,
+    schema: SchemaLike,
+    keep_extra_columns: bool = False,
+    ctx: SessionContext | None = None,
+) -> pa.Table:
+    """Align a table to a target schema using DataFusion casts.
+
+    Returns
+    -------
+    pyarrow.Table
+        Table aligned to the provided schema.
+    """
+    resolved_schema = pa.schema(schema)
+    resolved = coerce_table_like(table)
+    resolved_table: pa.Table
+    if isinstance(resolved, pa.RecordBatchReader):
+        reader = cast("pa.RecordBatchReader", resolved)
+        resolved_table = cast("pa.Table", reader.read_all())
+    else:
+        resolved_table = cast("pa.Table", resolved)
+    session = ctx or DataFusionRuntimeProfile().session_context()
+    temp_name = f"__schema_align_{uuid.uuid4().hex}"
+    session.register_record_batches(temp_name, resolved_table.to_batches())
+    try:
+        selections = _align_projection_exprs(
+            schema=resolved_schema,
+            input_columns=resolved_table.column_names,
+            keep_extra_columns=keep_extra_columns,
+        )
+        select_sql = ", ".join(selections)
+        df = session.sql(f"SELECT {select_sql} FROM {_sql_identifier(temp_name)}")
+        aligned = df.to_arrow_table()
+    finally:
+        _deregister_table(session, name=temp_name)
+    return _apply_table_schema_metadata(
+        aligned,
+        schema=resolved_schema,
+        keep_extra_columns=keep_extra_columns,
     )
-    if fallback_hook is options.fallback_hook and force_sql == options.force_sql:
-        return options
-    return replace(options, fallback_hook=fallback_hook, force_sql=force_sql)
+
+
+def dataset_schema_from_context(name: str) -> SchemaLike:
+    """Return the dataset schema from the DataFusion SessionContext.
+
+    Parameters
+    ----------
+    name : str
+        Dataset name registered in the SessionContext.
+
+    Returns
+    -------
+    SchemaLike
+        Arrow schema fetched from DataFusion.
+
+    Raises
+    ------
+    KeyError
+        Raised when the dataset is not registered in the SessionContext.
+    """
+    if is_nested_dataset(name):
+        return nested_schema_for(name, allow_derived=True)
+    ctx = DataFusionRuntimeProfile().session_context()
+    try:
+        return ctx.table(name).schema()
+    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+        msg = f"Dataset schema not registered in DataFusion: {name!r}."
+        raise KeyError(msg) from exc
+
+
+def dataset_spec_from_context(name: str) -> DatasetSpec:
+    """Return a DatasetSpec derived from the DataFusion schema.
+
+    Parameters
+    ----------
+    name : str
+        Dataset name registered in the SessionContext.
+
+    Returns
+    -------
+    DatasetSpec
+        DatasetSpec derived from the DataFusion schema.
+    """
+    schema = dataset_schema_from_context(name)
+    return dataset_spec_from_schema(name, schema)
 
 
 __all__ = [
@@ -3735,7 +3735,6 @@ __all__ = [
     "AdapterExecutionPolicy",
     "DataFusionConfigPolicy",
     "DataFusionExplainCollector",
-    "DataFusionFallbackCollector",
     "DataFusionFeatureGates",
     "DataFusionJoinPolicy",
     "DataFusionPlanCollector",
@@ -3746,8 +3745,11 @@ __all__ = [
     "MemoryPool",
     "PreparedStatementSpec",
     "SchemaHardeningProfile",
+    "align_table_to_schema",
     "apply_execution_label",
     "apply_execution_policy",
+    "dataset_schema_from_context",
+    "dataset_spec_from_context",
     "diagnostics_arrow_ingest_hook",
     "feature_state_snapshot",
     "register_view_specs",

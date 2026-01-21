@@ -15,7 +15,7 @@ from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.metadata import encoding_policy_from_schema
 from arrowdsl.schema.schema import empty_table
 from datafusion_engine.extract_bundles import dataset_name_for_output
-from datafusion_engine.schema_authority import dataset_spec_from_context
+from datafusion_engine.runtime import dataset_spec_from_context
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan
@@ -27,18 +27,13 @@ from ibis_engine.query_compiler import (
     apply_query_spec,
     dataset_query_for_file_ids,
 )
+from ibis_engine.registry import ReadDatasetParams, read_dataset
 from ibis_engine.scan_io import plan_from_source
 from incremental.invalidations import validate_schema_identity
 from incremental.types import IncrementalFileChanges, IncrementalImpact
 from normalize.registry_specs import dataset_name_from_alias
 from relspec.engine import PlanResolver
 from relspec.incremental import RelspecIncrementalSpec, incremental_spec
-from storage.dataset_sources import (
-    DatasetDiscoveryOptions,
-    DatasetSourceOptions,
-    normalize_dataset_source,
-    unwrap_dataset,
-)
 from storage.deltalake import (
     DeltaUpsertOptions,
     DeltaWriteOptions,
@@ -255,27 +250,28 @@ def _read_state_dataset(
     except KeyError:
         dataset_spec = None
     schema = dataset_spec.schema() if dataset_spec is not None else None
-    dataset = unwrap_dataset(
-        normalize_dataset_source(
-            dataset_dir,
-            options=DatasetSourceOptions(
-                schema=schema,
-                partitioning="hive",
-                discovery=DatasetDiscoveryOptions(),
-            ),
-        )
+    if ctx.runtime.datafusion is None:
+        msg = "DataFusion runtime profile is required for delta state datasets."
+        raise TypeError(msg)
+    backend = build_backend(IbisBackendConfig(datafusion_profile=ctx.runtime.datafusion))
+    table = read_dataset(
+        backend,
+        params=ReadDatasetParams(
+            path=dataset_dir,
+            dataset_format="delta",
+            partitioning="hive",
+        ),
     )
-    dataset_schema = schema or dataset.schema
+    dataset_schema = schema or table.schema().to_pyarrow()
     if schema is not None:
         validate_schema_identity(
             expected=schema,
-            actual=dataset.schema,
+            actual=dataset_schema,
             dataset_name=dataset_name,
         )
     spec = incremental_spec()
     file_id_column = spec.file_id_column_for(dataset_name, columns=dataset_schema.names)
     if file_id_column is not None:
-        backend = build_backend(IbisBackendConfig(datafusion_profile=ctx.runtime.datafusion))
         param_table = _file_id_param_table(file_ids, backend=backend, spec=spec)
         param_key_column = param_table[1] if param_table is not None else None
         query = dataset_query_for_file_ids(
@@ -288,17 +284,12 @@ def _read_state_dataset(
                 param_table_threshold=FILE_ID_PARAM_THRESHOLD,
             ),
         )
-        plan = plan_from_source(
-            dataset.to_table(),
-            ctx=ctx,
-            backend=backend,
-            name=dataset_name,
-        )
+        plan = plan_from_source(table, ctx=ctx, backend=backend, name=dataset_name)
         plan = IbisPlan(expr=apply_query_spec(plan.expr, spec=query), ordering=plan.ordering)
         execution = IbisExecutionContext(ctx=ctx, ibis_backend=backend)
         return materialize_ibis_plan(plan, execution=execution)
     if schema is None:
-        return dataset.to_table()
+        return table.to_pyarrow()
     return empty_table(schema)
 
 

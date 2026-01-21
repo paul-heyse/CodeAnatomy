@@ -2,23 +2,14 @@
 
 from __future__ import annotations
 
-from typing import cast
+import contextlib
+import uuid
 
 import pyarrow as pa
+from datafusion import SessionContext
 
-from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.serialization import schema_fingerprint
-from datafusion_engine.compute_ops import (
-    and_,
-    case_when,
-    equal,
-    if_else,
-    is_in,
-    is_null,
-    is_valid,
-    not_equal,
-    unique,
-)
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 from incremental.state_store import StateStore
 from storage.deltalake import (
     DeltaWriteOptions,
@@ -28,21 +19,67 @@ from storage.deltalake import (
 )
 
 
-def _coalesce_str(left: pa.Array, right: pa.Array) -> pa.Array:
-    return cast("pa.Array", if_else(is_valid(left), left, right))
+def _session_context() -> SessionContext:
+    return DataFusionRuntimeProfile().session_context()
 
 
-def _joined_columns(joined: pa.Table) -> dict[str, pa.Array]:
-    return {
-        "cur_path": cast("pa.Array", joined["path_cur"]),
-        "prev_path": cast("pa.Array", joined["path_prev"]),
-        "cur_sha": cast("pa.Array", joined["file_sha256_cur"]),
-        "prev_sha": cast("pa.Array", joined["file_sha256_prev"]),
-        "cur_size": cast("pa.Array", joined["size_bytes_cur"]),
-        "prev_size": cast("pa.Array", joined["size_bytes_prev"]),
-        "cur_mtime": cast("pa.Array", joined["mtime_ns_cur"]),
-        "prev_mtime": cast("pa.Array", joined["mtime_ns_prev"]),
-    }
+def _register_table(ctx: SessionContext, table: pa.Table, *, prefix: str) -> str:
+    name = f"__diff_{prefix}_{uuid.uuid4().hex}"
+    ctx.register_record_batches(name, table.to_batches())
+    return name
+
+
+def _deregister_table(ctx: SessionContext, name: str | None) -> None:
+    if name is None:
+        return
+    deregister = getattr(ctx, "deregister_table", None)
+    if callable(deregister):
+        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+            deregister(name)
+
+
+def _added_sql(cur_table: str) -> str:
+    return f"""
+    SELECT
+      cur.file_id AS file_id,
+      cur.path AS path,
+      'added' AS change_kind,
+      CAST(NULL AS STRING) AS prev_path,
+      cur.path AS cur_path,
+      CAST(NULL AS STRING) AS prev_file_sha256,
+      cur.file_sha256 AS cur_file_sha256,
+      CAST(NULL AS BIGINT) AS prev_size_bytes,
+      cur.size_bytes AS cur_size_bytes,
+      CAST(NULL AS BIGINT) AS prev_mtime_ns,
+      cur.mtime_ns AS cur_mtime_ns
+    FROM {cur_table} AS cur
+    """
+
+
+def _diff_sql(cur_table: str, prev_table: str) -> str:
+    return f"""
+    SELECT
+      COALESCE(cur.file_id, prev.file_id) AS file_id,
+      COALESCE(cur.path, prev.path) AS path,
+      CASE
+        WHEN cur.path IS NULL THEN 'deleted'
+        WHEN prev.path IS NULL THEN 'added'
+        WHEN cur.file_sha256 = prev.file_sha256 AND cur.path <> prev.path THEN 'renamed'
+        WHEN cur.file_sha256 <> prev.file_sha256 THEN 'modified'
+        ELSE 'unchanged'
+      END AS change_kind,
+      prev.path AS prev_path,
+      cur.path AS cur_path,
+      prev.file_sha256 AS prev_file_sha256,
+      cur.file_sha256 AS cur_file_sha256,
+      prev.size_bytes AS prev_size_bytes,
+      cur.size_bytes AS cur_size_bytes,
+      prev.mtime_ns AS prev_mtime_ns,
+      cur.mtime_ns AS cur_mtime_ns
+    FROM {cur_table} AS cur
+    FULL OUTER JOIN {prev_table} AS prev
+      ON cur.file_id = prev.file_id
+    """
 
 
 def diff_snapshots(prev: pa.Table | None, cur: pa.Table) -> pa.Table:
@@ -53,95 +90,17 @@ def diff_snapshots(prev: pa.Table | None, cur: pa.Table) -> pa.Table:
     pa.Table
         Change records with per-file deltas.
     """
-    schema = pa.schema(
-        [
-            pa.field("file_id", pa.string()),
-            pa.field("path", pa.string()),
-            pa.field("change_kind", pa.string()),
-            pa.field("prev_path", pa.string()),
-            pa.field("cur_path", pa.string()),
-            pa.field("prev_file_sha256", pa.string()),
-            pa.field("cur_file_sha256", pa.string()),
-            pa.field("prev_size_bytes", pa.int64()),
-            pa.field("cur_size_bytes", pa.int64()),
-            pa.field("prev_mtime_ns", pa.int64()),
-            pa.field("cur_mtime_ns", pa.int64()),
-        ]
-    )
-    if prev is None:
-        return table_from_arrays(
-            schema,
-            columns={
-                "file_id": cur["file_id"],
-                "path": cur["path"],
-                "change_kind": pa.array(["added"] * cur.num_rows, type=pa.string()),
-                "prev_path": pa.nulls(cur.num_rows, type=pa.string()),
-                "cur_path": cur["path"],
-                "prev_file_sha256": pa.nulls(cur.num_rows, type=pa.string()),
-                "cur_file_sha256": cur["file_sha256"],
-                "prev_size_bytes": pa.nulls(cur.num_rows, type=pa.int64()),
-                "cur_size_bytes": cur["size_bytes"],
-                "prev_mtime_ns": pa.nulls(cur.num_rows, type=pa.int64()),
-                "cur_mtime_ns": cur["mtime_ns"],
-            },
-            num_rows=cur.num_rows,
-        )
-
-    joined = cur.join(
-        prev,
-        keys=["file_id"],
-        join_type="full outer",
-        left_suffix="_cur",
-        right_suffix="_prev",
-        coalesce_keys=True,
-    )
-    cols = _joined_columns(joined)
-    missing_cur = is_null(cols["cur_path"])
-    missing_prev = is_null(cols["prev_path"])
-    renamed = and_(
-        is_valid(cols["cur_path"]),
-        and_(
-            is_valid(cols["prev_path"]),
-            and_(
-                equal(cols["cur_sha"], cols["prev_sha"]),
-                not_equal(cols["cur_path"], cols["prev_path"]),
-            ),
-        ),
-    )
-    modified = and_(
-        is_valid(cols["cur_path"]),
-        and_(
-            is_valid(cols["prev_path"]),
-            not_equal(cols["cur_sha"], cols["prev_sha"]),
-        ),
-    )
-    change_kind = case_when(
-        [
-            (missing_cur, "deleted"),
-            (missing_prev, "added"),
-            (renamed, "renamed"),
-            (modified, "modified"),
-        ],
-        "unchanged",
-    )
-    path = _coalesce_str(cols["cur_path"], cols["prev_path"])
-    return table_from_arrays(
-        schema,
-        columns={
-            "file_id": joined["file_id"],
-            "path": path,
-            "change_kind": cast("pa.Array", change_kind),
-            "prev_path": cols["prev_path"],
-            "cur_path": cols["cur_path"],
-            "prev_file_sha256": cols["prev_sha"],
-            "cur_file_sha256": cols["cur_sha"],
-            "prev_size_bytes": cols["prev_size"],
-            "cur_size_bytes": cols["cur_size"],
-            "prev_mtime_ns": cols["prev_mtime"],
-            "cur_mtime_ns": cols["cur_mtime"],
-        },
-        num_rows=joined.num_rows,
-    )
+    ctx = _session_context()
+    cur_name = _register_table(ctx, cur, prefix="cur")
+    prev_name: str | None = None
+    try:
+        if prev is None:
+            return ctx.sql(_added_sql(cur_name)).to_arrow_table()
+        prev_name = _register_table(ctx, prev, prefix="prev")
+        return ctx.sql(_diff_sql(cur_name, prev_name)).to_arrow_table()
+    finally:
+        _deregister_table(ctx, cur_name)
+        _deregister_table(ctx, prev_name)
 
 
 def diff_snapshots_with_cdf(
@@ -156,21 +115,34 @@ def diff_snapshots_with_cdf(
     pa.Table
         Change records derived from the filtered snapshot diff.
     """
-    if prev is None:
-        return diff_snapshots(None, cur)
-    cdf_ids = _cdf_file_ids(cdf)
-    if len(cdf_ids) == 0:
-        return diff_snapshots(prev[:0], cur[:0])
-    prev_filtered = prev.filter(is_in(prev["file_id"], value_set=cdf_ids))
-    cur_filtered = cur.filter(is_in(cur["file_id"], value_set=cdf_ids))
-    return diff_snapshots(prev_filtered, cur_filtered)
-
-
-def _cdf_file_ids(cdf: pa.Table) -> pa.Array:
-    values = cdf["file_id"]
-    if isinstance(values, pa.ChunkedArray):
-        values = values.combine_chunks()
-    return cast("pa.Array", unique(values))
+    ctx = _session_context()
+    cur_name = _register_table(ctx, cur, prefix="cur")
+    cdf_name = _register_table(ctx, cdf, prefix="cdf")
+    prev_name: str | None = None
+    try:
+        if prev is None:
+            sql = (
+                "WITH cur AS ("
+                f"SELECT * FROM {cur_name} "
+                f"WHERE file_id IN (SELECT DISTINCT file_id FROM {cdf_name})"
+                ") " + _added_sql("cur")
+            )
+            return ctx.sql(sql).to_arrow_table()
+        prev_name = _register_table(ctx, prev, prefix="prev")
+        sql = (
+            "WITH cur AS ("
+            f"SELECT * FROM {cur_name} "
+            f"WHERE file_id IN (SELECT DISTINCT file_id FROM {cdf_name})"
+            "), prev AS ("
+            f"SELECT * FROM {prev_name} "
+            f"WHERE file_id IN (SELECT DISTINCT file_id FROM {cdf_name})"
+            ") " + _diff_sql("cur", "prev")
+        )
+        return ctx.sql(sql).to_arrow_table()
+    finally:
+        _deregister_table(ctx, cur_name)
+        _deregister_table(ctx, prev_name)
+        _deregister_table(ctx, cdf_name)
 
 
 def write_incremental_diff(store: StateStore, diff: pa.Table) -> DeltaWriteResult:

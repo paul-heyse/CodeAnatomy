@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from arrowdsl.core.ids import HashSpec
-from arrowdsl.core.ids_registry import hash_spec_factory
+from ibis_engine.hashing import HashExprSpec
+from ibis_engine.hashing import hash_expr_spec_factory as hash_spec_factory
 
 TYPE_EXPR_ID_SPEC = hash_spec_factory(
     prefix="cst_type_expr",
@@ -35,7 +35,7 @@ DIAG_ID_SPEC = hash_spec_factory(
     null_sentinel="None",
 )
 
-_HASH_SPECS: dict[str, HashSpec] = {
+_HASH_SPECS: dict[str, HashExprSpec] = {
     "type_expr_id": TYPE_EXPR_ID_SPEC,
     "type_id": TYPE_ID_SPEC,
     "def_use_event_id": DEF_USE_EVENT_ID_SPEC,
@@ -44,12 +44,12 @@ _HASH_SPECS: dict[str, HashSpec] = {
 }
 
 
-def hash_spec(name: str) -> HashSpec:
-    """Return a HashSpec by registry key.
+def hash_spec(name: str) -> HashExprSpec:
+    """Return a hash spec by registry key.
 
     Returns
     -------
-    HashSpec
+    HashExprSpec
         Hash specification for the key.
     """
     return _HASH_SPECS[name]

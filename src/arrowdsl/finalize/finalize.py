@@ -15,14 +15,16 @@ from datafusion import functions as f
 
 from arrowdsl.core.array_iter import iter_array_values
 from arrowdsl.core.execution_context import ExecutionContext
-from arrowdsl.core.ids import HashSpec, hash_column_values
 from arrowdsl.core.interop import (
     ArrayLike,
     ChunkedArrayLike,
     DataTypeLike,
     ListArrayLike,
+    RecordBatchReaderLike,
     SchemaLike,
     TableLike,
+    coerce_table_like,
+    pc,
 )
 from arrowdsl.core.plan_ops import DedupeSpec, SortKey
 from arrowdsl.core.schema_constants import PROVENANCE_COLS
@@ -38,16 +40,7 @@ from arrowdsl.schema.encoding_policy import EncodingPolicy
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
 from arrowdsl.schema.schema import AlignmentInfo, SchemaMetadataSpec, align_table
 from arrowdsl.schema.validation import ArrowValidationOptions
-from datafusion_engine.compute_ops import (
-    cast_values,
-    cumulative_sum,
-    dictionary_encode,
-    fill_null,
-    invert,
-    is_null,
-    or_,
-    value_counts,
-)
+from datafusion_engine.bridge import datafusion_from_arrow
 from datafusion_engine.kernels import canonical_sort_if_canonical, dedupe_kernel
 from schema_spec.specs import TableSchemaSpec
 
@@ -302,11 +295,7 @@ class ErrorArtifactSpec:
                 names=["error_code", "count"],
             )
 
-        vc = value_counts(errors["error_code"])
-        return pa.Table.from_arrays(
-            [vc.field("values"), vc.field("counts")],
-            names=["error_code", "count"],
-        )
+        return _error_code_counts_table(errors)
 
 
 ERROR_ARTIFACT_SPEC = ErrorArtifactSpec(detail_fields=ERROR_DETAIL_FIELDS)
@@ -342,7 +331,7 @@ def _required_non_null_results(
     """
     results: list[InvariantResult] = []
     for column_name in cols:
-        mask = fill_null(is_null(table[column_name]), fill_value=False)
+        mask = pc.fill_null(pc.is_null(table[column_name]), fill_value=False)
         results.append(
             InvariantResult(
                 mask=mask,
@@ -380,7 +369,7 @@ def _collect_invariant_results(
         bad_mask, code = inv(table)
         results.append(
             InvariantResult(
-                mask=fill_null(bad_mask, fill_value=False),
+                mask=pc.fill_null(bad_mask, fill_value=False),
                 code=code,
                 message=code,
                 column=None,
@@ -410,8 +399,8 @@ def _combine_masks(masks: Sequence[ArrayLike], length: int) -> ArrayLike:
         return const_array(length, value=False, dtype=pa.bool_())
     combined = masks[0]
     for mask in masks[1:]:
-        combined = or_(combined, mask)
-    return fill_null(combined, fill_value=False)
+        combined = pc.or_(combined, mask)
+    return pc.fill_null(combined, fill_value=False)
 
 
 def _build_error_table(
@@ -449,17 +438,26 @@ def _raise_on_errors_if_strict(
 ) -> None:
     if ctx.mode != "strict" or errors.num_rows == 0:
         return
-    vc = value_counts(errors["error_code"])
+    counts = _error_code_counts_table(errors)
     pairs = [
         (value, count)
         for value, count in zip(
-            iter_array_values(vc.field("values")),
-            iter_array_values(vc.field("counts")),
+            iter_array_values(counts["error_code"]),
+            iter_array_values(counts["count"]),
             strict=True,
         )
     ]
     msg = f"Finalize(strict) failed for contract={contract.name!r}: errors={pairs}"
     raise ValueError(msg)
+
+
+def _error_code_counts_table(errors: TableLike) -> pa.Table:
+    ctx = SessionContext()
+    datafusion_from_arrow(ctx, name="errors", value=errors)
+    table = ctx.sql(
+        "SELECT error_code, COUNT(*) AS count FROM errors GROUP BY error_code"
+    ).to_arrow_table()
+    return cast("pa.Table", table)
 
 
 def _maybe_validate_with_arrow(
@@ -506,20 +504,62 @@ def _empty_error_details_table(
     )
 
 
+_HASH_JOIN_SEPARATOR = "\x1f"
+_HASH_NULL_SENTINEL = "__NULL__"
+
+
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _sql_literal(value: str) -> str:
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _coalesce_cast(name: str) -> str:
+    return f"coalesce(CAST({_sql_identifier(name)} AS STRING), {_sql_literal(_HASH_NULL_SENTINEL)})"
+
+
+def _row_id_sql(prefix: str, cols: Sequence[str]) -> str:
+    parts = [_sql_literal(prefix)]
+    parts.extend(_coalesce_cast(name) for name in cols)
+    delimiter = _sql_literal(_HASH_JOIN_SEPARATOR)
+    joined = f"concat_ws({delimiter}, {', '.join(parts)})"
+    return f"stable_hash64({joined})"
+
+
 def _row_id_for_errors(
     errors: TableLike,
     *,
+    ctx: ExecutionContext,
     contract: Contract,
     key_cols: Sequence[str],
 ) -> ArrayLike:
     if key_cols:
-        spec = HashSpec(
-            prefix=f"{contract.name}:row",
-            cols=tuple(key_cols),
-            as_string=False,
-            missing="null",
-        )
-        return hash_column_values(errors, spec=spec)
+        df_ctx = _datafusion_context(ctx)
+        if df_ctx is None:
+            msg = "DataFusion SessionContext required to compute error row ids."
+            raise TypeError(msg)
+        resolved = coerce_table_like(errors)
+        if isinstance(resolved, pa.RecordBatchReader):
+            reader = cast("RecordBatchReaderLike", resolved)
+            resolved_table = pa.Table.from_batches(list(reader))
+        else:
+            resolved_table = cast("pa.Table", resolved)
+        table_name = f"_finalize_errors_{uuid.uuid4().hex}"
+        df_ctx.register_record_batches(table_name, [resolved_table.to_batches()])
+        try:
+            prefix = f"{contract.name}:row"
+            row_sql = _row_id_sql(prefix, key_cols)
+            sql = f"SELECT {row_sql} AS row_id FROM {_sql_identifier(table_name)}"
+            result = df_ctx.sql(sql).to_arrow_table()
+        finally:
+            deregister = getattr(df_ctx, "deregister_table", None)
+            if callable(deregister):
+                deregister(table_name)
+        return result["row_id"]
     return pa.array(range(errors.num_rows), type=pa.int64())
 
 
@@ -592,7 +632,7 @@ def _aggregate_error_details(
             provenance=provenance,
         )
     key_cols = _error_detail_key_cols(contract, schema)
-    row_id = _row_id_for_errors(errors, contract=contract, key_cols=key_cols)
+    row_id = _row_id_for_errors(errors, ctx=ctx, contract=contract, key_cols=key_cols)
     errors = errors.append_column("row_id", row_id)
     group_cols = ["row_id"] + [col for col in key_cols if col in errors.column_names] + provenance
     detail_field_names = [name for name, _ in ERROR_DETAIL_FIELDS]
@@ -655,17 +695,17 @@ def _list_view_to_list_array(
         msg = "List view arrays must expose value_lengths to build offsets."
         raise TypeError(msg)
     lengths = cast("ArrayLike", lengths_method())
-    lengths = fill_null(lengths, fill_value=0)
+    lengths = pc.fill_null(lengths, fill_value=0)
     if isinstance(values, pa.LargeListViewArray):
         if lengths.type != pa.int64():
-            lengths = cast_values(lengths, pa.int64())
+            lengths = pc.cast(lengths, pa.int64())
     elif lengths.type != pa.int32():
-        lengths = cast_values(lengths, pa.int32())
-    offsets = cumulative_sum(lengths)
+        lengths = pc.cast(lengths, pa.int32())
+    offsets = pc.cumulative_sum(lengths)
     zero = pa.array([0], type=offsets.type)
     offsets = pa.concat_arrays([zero, offsets])
     flat = _list_values(values)
-    mask = is_null(values)
+    mask = pc.is_null(values)
     if isinstance(values, pa.LargeListViewArray):
         return cast("ListArrayLike", pa.LargeListArray.from_arrays(offsets, flat, mask=mask))
     return cast("ListArrayLike", pa.ListArray.from_arrays(offsets, flat, mask=mask))
@@ -690,7 +730,7 @@ def _combine_list_array(values: ArrayLike | ChunkedArrayLike) -> ListArrayLike:
                 if patypes.is_large_list(combined_type) or patypes.is_large_list_view(combined_type)
                 else pa.list_(cast("pa.DataType", value_type))
             )
-            casted = cast_values(combined, list_type)
+            casted = pc.cast(combined, list_type)
             if isinstance(casted, (pa.ListArray, pa.LargeListArray)):
                 return cast("ListArrayLike", casted)
     msg = "Expected list array for error detail aggregation."
@@ -761,7 +801,7 @@ def _decode_dictionary_columns(
         if patypes.is_dictionary(schema_field.type):
             dict_type = cast("pa.DictionaryType", schema_field.type)
             dict_cols[schema_field.name] = dict_type
-            col = cast("ChunkedArrayLike", cast_values(col, dict_type.value_type))
+            col = cast("ChunkedArrayLike", pc.cast(col, dict_type.value_type))
         columns.append(col)
         names.append(schema_field.name)
     if not dict_cols:
@@ -781,8 +821,8 @@ def _reencode_dictionary_columns(
         col = table[name]
         dict_type = dict_cols.get(name)
         if dict_type is not None:
-            encoded = dictionary_encode(col)
-            col = cast("ChunkedArrayLike", cast_values(encoded, dict_type))
+            encoded = pc.dictionary_encode(col)
+            col = cast("ChunkedArrayLike", pc.cast(encoded, dict_type))
         columns.append(col)
         names.append(name)
     return pa.table(columns, names=names)
@@ -887,7 +927,7 @@ def finalize(
     results = _collect_invariant_results(aligned, contract)
     bad_any = _combine_masks([result.mask for result in results], aligned.num_rows)
 
-    good = aligned.filter(invert(bad_any))
+    good = aligned.filter(pc.invert(bad_any))
 
     raw_errors = _build_error_table(aligned, results, error_spec=options.error_spec)
     errors = _aggregate_error_details(

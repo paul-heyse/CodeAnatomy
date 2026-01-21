@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
-import ibis
 from ibis.backends import BaseBackend
 
 from arrowdsl.core.execution_context import ExecutionContext
@@ -29,8 +28,8 @@ from cpg.table_utils import (
     encoding_columns_from_metadata,
 )
 from datafusion_engine.nested_tables import ViewReference
-from datafusion_engine.runtime import AdapterExecutionPolicy
-from datafusion_engine.schema_authority import (
+from datafusion_engine.runtime import (
+    AdapterExecutionPolicy,
     dataset_schema_from_context,
     dataset_spec_from_context,
 )
@@ -40,7 +39,7 @@ from engine.session import EngineSession
 from ibis_engine.execution import IbisExecutionContext, materialize_ibis_plan, stream_ibis_plan
 from ibis_engine.plan import IbisPlan
 from ibis_engine.scan_io import DatasetSource
-from ibis_engine.sources import SourceToIbisOptions, register_ibis_view
+from ibis_engine.sources import SourceToIbisOptions, register_ibis_table, register_ibis_view
 from relspec.rules.cache import rule_table_cached
 from relspec.rules.handlers.cpg_emit import EdgeEmitRuleHandler
 from schema_spec.system import DatasetSpec
@@ -61,9 +60,16 @@ def _materialize_table(table: TableLike | RecordBatchReaderLike) -> TableLike:
     return table
 
 
-def _empty_edges_ibis(schema: SchemaLike) -> IbisPlan:
+def _empty_edges_ibis(schema: SchemaLike, *, backend: BaseBackend) -> IbisPlan:
     table = empty_table(schema)
-    return IbisPlan(expr=ibis.memtable(table), ordering=Ordering.unordered())
+    return register_ibis_table(
+        table,
+        options=SourceToIbisOptions(
+            backend=backend,
+            name=None,
+            ordering=Ordering.unordered(),
+        ),
+    )
 
 
 def _union_edges_ibis(parts: list[IbisPlan]) -> IbisPlan:
@@ -94,7 +100,7 @@ def _build_edges_raw_ibis(edge_context: EdgeRelationContext) -> EdgePlanBundle:
         parts.append(handler.compile_ibis(rel, spec=spec, include_keys=include_keys))
     if not parts:
         return EdgePlanBundle(
-            plan=_empty_edges_ibis(edge_context.edges_schema),
+            plan=_empty_edges_ibis(edge_context.edges_schema, backend=edge_context.backend),
             telemetry=edge_context.relation_bundle.telemetry,
         )
     return EdgePlanBundle(
@@ -146,6 +152,7 @@ class EdgeRelationContext:
     """Resolved relation plan context for edge compilation."""
 
     ctx: ExecutionContext
+    backend: BaseBackend
     relation_bundle: RelationPlanBundle
     options: EdgeBuildOptions
     edges_schema: SchemaLike
@@ -191,6 +198,7 @@ def _edge_relation_context(
     )
     return EdgeRelationContext(
         ctx=ctx,
+        backend=backend,
         relation_bundle=relation_bundle,
         options=options,
         edges_schema=edges_schema,
@@ -343,7 +351,6 @@ def _finalize_edges_ibis(
     raw = align_table_to_schema(
         raw,
         schema=edges_spec.schema(),
-        safe_cast=exec_ctx.safe_cast,
         keep_extra_columns=exec_ctx.debug,
     )
     quality = quality_from_ids(

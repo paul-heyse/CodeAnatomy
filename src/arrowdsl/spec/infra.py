@@ -15,13 +15,13 @@ from arrowdsl.core.interop import (
     SchemaLike,
     TableLike,
     ensure_expression,
+    pc,
 )
 from arrowdsl.schema.schema import SchemaEvolutionSpec, SchemaMetadataSpec, SchemaTransform
 from arrowdsl.schema.validation import ArrowValidationOptions, ValidationReport, validate_table
 from arrowdsl.spec.expr_ir import ExprIR
 from arrowdsl.spec.scalar_union import SCALAR_UNION_FIELDS, SCALAR_UNION_TYPE
 from arrowdsl.spec.tables.base import SpecTableCodec
-from datafusion_engine.compute_ops import scalar
 from ibis_engine.query_compiler import IbisQuerySpec
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import ContractSpec, DatasetSpec, make_dataset_spec, make_table_spec
@@ -188,7 +188,7 @@ class SpecValidationSuite:
             Boolean expression marking invalid rows.
         """
         if not self.rules:
-            return ensure_expression(scalar(pa.scalar(value=False)))
+            return ensure_expression(pc.scalar(pa.scalar(value=False)))
         exprs = [rule.predicate for rule in self.rules]
         return _or_exprs(exprs)
 

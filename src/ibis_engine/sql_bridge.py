@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import closing
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Protocol, cast
+from typing import Protocol
 
 import ibis
 import pyarrow as pa
@@ -15,22 +14,7 @@ from ibis.expr.types import Table, Value
 from sqlglot import Expression
 from sqlglot.errors import ParseError
 
-from arrowdsl.core.interop import RecordBatchReaderLike
-from ibis_engine.schema_utils import ibis_schema_from_arrow, validate_expr_schema
-
-
-class _RawSqlResult(Protocol):
-    def fetch_arrow_table(self) -> pa.Table:
-        """Return an Arrow table result."""
-        ...
-
-    def fetchall(self) -> list[tuple[object, ...]]:
-        """Return raw row tuples."""
-        ...
-
-    def close(self) -> None:
-        """Release backend resources."""
-        ...
+from ibis_engine.schema_utils import validate_expr_schema
 
 
 class _SchemaProtocol(Protocol):
@@ -211,119 +195,10 @@ def _sql_text(expr: Expression | None, *, dialect: str | None) -> str | None:
         return str(expr)
 
 
-def execute_raw_sql(
-    backend: object,
-    *,
-    sql: str,
-    sqlglot_expr: Expression | None = None,
-    schema: _SchemaProtocol | None = None,
-) -> Table:
-    """Execute raw SQL and return an Ibis table.
-
-    Parameters
-    ----------
-    backend:
-        Backend exposing ``raw_sql``.
-    sql:
-        SQL string used for fallback execution.
-    sqlglot_expr:
-        SQLGlot expression for raw execution when supported.
-    schema:
-        Required schema for cursor-based results.
-
-    Returns
-    -------
-    ibis.expr.types.Table
-        Ibis table expression representing the raw SQL results.
-
-    Raises
-    ------
-    TypeError
-        Raised when the backend lacks raw_sql or returns an unsupported result.
-    ValueError
-        Raised when schema is required to materialize cursor results.
-    """
-    if schema is None:
-        msg = "Schema is required for raw SQL execution."
-        raise ValueError(msg)
-    raw_sql = getattr(backend, "raw_sql", None)
-    if not callable(raw_sql):
-        msg = "Backend does not expose raw_sql for SQL execution."
-        raise TypeError(msg)
-    if sqlglot_expr is not None:
-        try:
-            result = raw_sql(sqlglot_expr)
-        except TypeError:
-            result = raw_sql(sql)
-    else:
-        result = raw_sql(sql)
-    expected = schema.to_pyarrow()
-    if isinstance(result, Table):
-        validate_expr_schema(result, expected=expected)
-        return result
-    table = _table_from_raw_result(result, schema)
-    if table is None:
-        msg = "Unsupported raw_sql return type."
-        raise TypeError(msg)
-    _validate_table_schema(table, expected=expected)
-    return ibis.memtable(table, schema=ibis_schema_from_arrow(expected))
-
-
-def _validate_table_schema(table: pa.Table, *, expected: pa.Schema) -> None:
-    if table.schema.equals(expected, check_metadata=False):
-        return
-    msg = "Raw SQL output schema does not match the declared schema."
-    raise ValueError(msg)
-
-
-def _table_from_raw_result(
-    result: object,
-    schema: _SchemaProtocol,
-) -> pa.Table | None:
-    to_arrow_table = getattr(result, "to_arrow_table", None)
-    table: pa.Table | None = None
-    if callable(to_arrow_table):
-        table = cast("pa.Table", to_arrow_table())
-    elif isinstance(result, RecordBatchReaderLike):
-        table = cast("pa.Table", result.read_all())
-    elif hasattr(result, "__arrow_c_stream__"):
-        table = pa.table(result)
-    elif isinstance(result, pa.Table):
-        table = result
-    elif hasattr(result, "fetch_arrow_table"):
-        table = cast("_RawSqlResult", result).fetch_arrow_table()
-    elif hasattr(result, "fetchall"):
-        with closing(cast("_RawSqlResult", result)) as cursor:
-            rows = cursor.fetchall()
-        table = _rows_to_table(rows, schema)
-    return table
-
-
-def _rows_to_table(
-    rows: Sequence[tuple[object, ...]],
-    schema: _SchemaProtocol,
-) -> pa.Table:
-    arrow_schema = schema.to_pyarrow()
-    column_count = len(arrow_schema)
-    if not rows:
-        arrays = [pa.array([], type=field.type) for field in arrow_schema]
-        return pa.Table.from_arrays(arrays, schema=arrow_schema)
-    columns: list[list[object]] = [[] for _ in range(column_count)]
-    for row in rows:
-        if len(row) != column_count:
-            msg = "Raw SQL row width does not match the declared schema."
-            raise ValueError(msg)
-        for idx, value in enumerate(row):
-            columns[idx].append(value)
-    arrays = [pa.array(columns[idx], type=arrow_schema[idx].type) for idx in range(column_count)]
-    return pa.Table.from_arrays(arrays, schema=arrow_schema)
-
-
 __all__ = [
     "SqlIngestArtifacts",
     "SqlIngestSpec",
     "decompile_expr",
-    "execute_raw_sql",
     "parse_sql_table",
     "sql_ingest_artifacts",
 ]

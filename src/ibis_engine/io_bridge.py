@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 import ibis
 import pyarrow as pa
@@ -20,7 +21,7 @@ from arrowdsl.core.interop import (
 from arrowdsl.core.streaming import to_reader
 from core_types import PathLike
 from datafusion_engine.bridge import (
-    datafusion_to_reader,
+    datafusion_from_arrow,
     ibis_plan_to_datafusion,
     ibis_to_datafusion,
 )
@@ -45,13 +46,14 @@ from storage.deltalake import (
     StorageOptions,
     apply_delta_write_policies,
     write_datafusion_delta,
-    write_dataset_delta,
-    write_named_datasets_delta,
     write_table_delta,
 )
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
 type IbisWriteInput = TableLike | RecordBatchReaderLike | IbisPlan | IbisTable | PlanProduct
+
+if TYPE_CHECKING:
+    from datafusion import SessionContext
 
 
 class TableMaterializeBackend(Protocol):
@@ -340,31 +342,30 @@ def _resolve_writer_strategy(
         return options.writer_strategy
     if isinstance(data, PlanProduct):
         return data.writer_strategy
-    return "arrow"
+    return "datafusion"
 
 
-def write_ibis_table_delta(
-    table: IbisPlan | IbisTable,
-    path: PathLike,
+def _resolve_delta_write_input(
+    data: IbisWriteInput,
     *,
-    options: DeltaWriteOptions | None = None,
-    storage_options: StorageOptions | None = None,
-    execution: IbisExecutionContext | None = None,
-) -> DeltaWriteResult:
-    """Write an Ibis plan/table as a Delta table.
-
-    Returns
-    -------
-    DeltaWriteResult
-        Metadata about the Delta write operation.
-    """
-    resolved = options or DeltaWriteOptions()
-    return write_table_delta(
-        ibis_to_table(table, execution=execution),
-        str(path),
-        options=resolved,
-        storage_options=storage_options,
-    )
+    execution: IbisExecutionContext | None,
+    batch_size: int | None,
+    prefer_reader: bool,
+) -> TableLike | RecordBatchReaderLike:
+    if isinstance(data, PlanProduct):
+        data = data.materialize_table()
+    if isinstance(data, IbisPlan):
+        if execution is None:
+            msg = "Delta writes for Ibis plans require an execution context."
+            raise ValueError(msg)
+        if prefer_reader:
+            return ibis_plan_to_reader(data, batch_size=batch_size, execution=execution)
+        return ibis_to_table(data, execution=execution)
+    if isinstance(data, IbisTable):
+        if prefer_reader:
+            return ibis_table_to_reader(data, batch_size=batch_size)
+        return ibis_to_table(data, execution=execution)
+    return coerce_table_like(data)
 
 
 def write_ibis_dataset_delta(
@@ -395,9 +396,13 @@ def write_ibis_dataset_delta(
         schema_policy=options.delta_schema_policy,
     )
     writer_strategy = _resolve_writer_strategy(options=options, data=data)
-    if writer_strategy == "datafusion":
-        if options.execution is None or not isinstance(data, (IbisPlan, IbisTable)):
-            msg = "DataFusion writer requires an Ibis plan/table and execution context."
+    if writer_strategy != "datafusion":
+        msg = "Delta writes require the DataFusion writer strategy."
+        raise ValueError(msg)
+    datafusion_result: DeltaWriteResult | None = None
+    if isinstance(data, (IbisPlan, IbisTable)):
+        if options.execution is None:
+            msg = "DataFusion writer requires an execution context for Ibis inputs."
             raise ValueError(msg)
         runtime_profile = options.execution.ctx.runtime.datafusion
         if runtime_profile is None or options.execution.ibis_backend is None:
@@ -410,42 +415,31 @@ def write_ibis_dataset_delta(
             if isinstance(data, IbisPlan)
             else ibis_to_datafusion(data, backend=backend, ctx=df_ctx)
         )
-        datafusion_result = write_datafusion_delta(
-            df,
-            base_dir=str(base_dir),
-            options=delta_options,
-            storage_options=options.storage_options,
+        try:
+            datafusion_result = write_datafusion_delta(
+                df,
+                base_dir=str(base_dir),
+                options=delta_options,
+                storage_options=options.storage_options,
+            )
+        except (TypeError, ValueError):
+            datafusion_result = None
+    if datafusion_result is None:
+        delta_input = _resolve_delta_write_input(
+            data,
+            execution=options.execution,
+            batch_size=options.batch_size,
+            prefer_reader=options.prefer_reader,
         )
-        if datafusion_result is not None:
-            if options.delta_reporter is not None:
-                options.delta_reporter(datafusion_result)
-            return datafusion_result
-        reader = datafusion_to_reader(df)
-        result = write_table_delta(
-            reader,
+        datafusion_result = write_table_delta(
+            delta_input,
             str(base_dir),
             options=delta_options,
             storage_options=options.storage_options,
         )
-        if options.delta_reporter is not None:
-            options.delta_reporter(result)
-        return result
-    value = _coerce_write_input(
-        data,
-        batch_size=options.batch_size,
-        prefer_reader=options.prefer_reader,
-        use_async_streaming=options.use_async_streaming,
-        execution=options.execution,
-    )
-    result = write_dataset_delta(
-        value,
-        str(base_dir),
-        options=delta_options,
-        storage_options=options.storage_options,
-    )
     if options.delta_reporter is not None:
-        options.delta_reporter(result)
-    return result
+        options.delta_reporter(datafusion_result)
+    return datafusion_result
 
 
 def write_ibis_named_datasets_delta(
@@ -467,43 +461,89 @@ def write_ibis_named_datasets_delta(
         Raised when a non-Arrow writer strategy is requested.
     """
     options = options or IbisNamedDatasetWriteOptions()
-    writer_strategy = options.writer_strategy or "arrow"
-    if writer_strategy != "arrow":
-        msg = "Named dataset writes only support the Arrow writer strategy."
+    writer_strategy = options.writer_strategy or "datafusion"
+    if writer_strategy != "datafusion":
+        msg = "Named dataset writes require the DataFusion writer strategy."
         raise ValueError(msg)
-    for name, value in datasets.items():
-        if isinstance(value, PlanProduct) and value.writer_strategy != "arrow":
-            msg = (
-                "Named dataset writes do not support non-Arrow PlanProduct writer strategy "
-                f"for dataset {name!r}."
-            )
-            raise ValueError(msg)
-    converted = {
-        name: _coerce_write_input(
-            value,
-            batch_size=options.batch_size,
-            prefer_reader=options.prefer_reader,
-            use_async_streaming=options.use_async_streaming,
-            execution=options.execution,
-        )
-        for name, value in datasets.items()
-    }
+    if options.execution is None:
+        msg = "Named dataset writes require an execution context."
+        raise ValueError(msg)
+    runtime_profile = options.execution.ctx.runtime.datafusion
+    if runtime_profile is None or options.execution.ibis_backend is None:
+        msg = "Named dataset writes require a runtime profile and Ibis backend."
+        raise ValueError(msg)
+    df_ctx = runtime_profile.session_context()
+    backend = cast("IbisCompilerBackend", options.execution.ibis_backend)
     delta_options = options.delta_options or DeltaWriteOptions()
     delta_options = apply_delta_write_policies(
         delta_options,
         write_policy=options.delta_write_policy,
         schema_policy=options.delta_schema_policy,
     )
-    results = write_named_datasets_delta(
-        converted,
-        str(base_dir),
-        options=delta_options,
-        storage_options=options.storage_options,
-    )
+    results: dict[str, DeltaWriteResult] = {}
+    for name, value in datasets.items():
+        df, temp_name = _datafusion_df_for_write(
+            name=name,
+            value=value,
+            backend=backend,
+            ctx=df_ctx,
+            batch_size=options.batch_size,
+        )
+        try:
+            try:
+                result = write_datafusion_delta(
+                    df,
+                    base_dir=f"{str(base_dir).rstrip('/')}/{name}",
+                    options=delta_options,
+                    storage_options=options.storage_options,
+                )
+            except (TypeError, ValueError):
+                delta_input = _resolve_delta_write_input(
+                    value,
+                    execution=options.execution,
+                    batch_size=options.batch_size,
+                    prefer_reader=options.prefer_reader,
+                )
+                result = write_table_delta(
+                    delta_input,
+                    f"{str(base_dir).rstrip('/')}/{name}",
+                    options=delta_options,
+                    storage_options=options.storage_options,
+                )
+        finally:
+            if temp_name is not None:
+                _deregister_table(df_ctx, name=temp_name)
+        results[name] = result
     if options.delta_reporter is not None:
         for result in results.values():
             options.delta_reporter(result)
     return results
+
+
+def _datafusion_df_for_write(
+    *,
+    name: str,
+    value: IbisWriteInput,
+    backend: IbisCompilerBackend,
+    ctx: SessionContext,
+    batch_size: int | None,
+) -> tuple[object, str | None]:
+    if isinstance(value, IbisPlan):
+        return ibis_plan_to_datafusion(value, backend=backend, ctx=ctx), None
+    if isinstance(value, IbisTable):
+        return ibis_to_datafusion(value, backend=backend, ctx=ctx), None
+    if isinstance(value, PlanProduct):
+        value = value.materialize_table()
+    table = coerce_table_like(value)
+    temp_name = f"__delta_write_{name}_{uuid.uuid4().hex}"
+    df = datafusion_from_arrow(ctx, name=temp_name, value=table, batch_size=batch_size)
+    return df, temp_name
+
+
+def _deregister_table(ctx: SessionContext, *, name: str) -> None:
+    deregister = getattr(ctx, "deregister_table", None)
+    if callable(deregister):
+        deregister(name)
 
 
 __all__ = [
@@ -519,5 +559,4 @@ __all__ = [
     "materialize_table",
     "write_ibis_dataset_delta",
     "write_ibis_named_datasets_delta",
-    "write_ibis_table_delta",
 ]

@@ -17,6 +17,7 @@ from arrowdsl.core.interop import (
     ComputeExpression,
     SchemaLike,
     TableLike,
+    pc,
 )
 from arrowdsl.schema.build import (
     const_array,
@@ -29,7 +30,6 @@ from arrowdsl.schema.encoding_policy import EncodingPolicy
 from arrowdsl.schema.normalize import NormalizePolicy
 from arrowdsl.schema.serialization import schema_fingerprint, schema_to_dict
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
-from datafusion_engine.compute_ops import cast_values, equal, is_null, or_
 
 type RowValue = str | int
 type Row = dict[str, RowValue]
@@ -539,19 +539,19 @@ class QualityPlanSpec:
 def _is_zero(values: ValuesLike) -> ValuesLike:
     dtype = values.type
     if patypes.is_dictionary(dtype):
-        values = cast_values(values, pa.string(), safe=False)
+        values = pc.cast(values, pa.string(), safe=False)
         dtype = values.type
     if patypes.is_string(dtype) or patypes.is_large_string(dtype):
-        return equal(values, pa.scalar("0"))
+        return pc.equal(values, pa.scalar("0"))
     if patypes.is_integer(dtype):
-        return equal(values, pa.scalar(0, type=dtype))
+        return pc.equal(values, pa.scalar(0, type=dtype))
     if patypes.is_floating(dtype):
-        return equal(values, pa.scalar(0.0, type=dtype))
-    return equal(cast_values(values, pa.string(), safe=False), pa.scalar("0"))
+        return pc.equal(values, pa.scalar(0.0, type=dtype))
+    return pc.equal(pc.cast(values, pa.string(), safe=False), pa.scalar("0"))
 
 
 def _invalid_id_mask(values: ValuesLike) -> ValuesLike:
-    return or_(is_null(values), _is_zero(values))
+    return pc.or_(pc.is_null(values), _is_zero(values))
 
 
 def _quality_table_from_ids(
@@ -562,7 +562,7 @@ def _quality_table_from_ids(
     source_table: str | None,
 ) -> TableLike:
     if ids.null_count != 0 or not patypes.is_string(ids.type):
-        ids = cast_values(ids, pa.string(), safe=False)
+        ids = pc.cast(ids, pa.string(), safe=False)
     n = len(ids)
     kind_arr = const_array(n, entity_kind, dtype=pa.string())
     issue_arr = const_array(n, issue, dtype=pa.string())

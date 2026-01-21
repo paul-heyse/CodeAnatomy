@@ -30,7 +30,7 @@ from arrowdsl.schema.metadata import schema_constraints_from_metadata, schema_id
 from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTransform
 from registry_common.arrow_payloads import payload_hash
 from registry_common.metadata import metadata_list_bytes
-from sqlglot_tools.optimizer import register_datafusion_dialect
+from sqlglot_tools.optimizer import normalize_ddl_sql, register_datafusion_dialect
 
 DICT_STRING = interop.dictionary(interop.int32(), interop.string())
 
@@ -216,6 +216,7 @@ class ArrowFieldSpec:
     dtype: DataTypeLike
     nullable: bool = True
     metadata: dict[str, str] = field(default_factory=dict)
+    default_value: str | None = None
     encoding: Literal["dictionary"] | None = None
 
     def to_arrow_field(self) -> FieldLike:
@@ -227,6 +228,8 @@ class ArrowFieldSpec:
             Arrow field instance.
         """
         metadata = dict(self.metadata)
+        if self.default_value is not None:
+            metadata.setdefault("default_value", self.default_value)
         if self.encoding is not None:
             metadata[ENCODING_META] = self.encoding
         metadata = _field_metadata(metadata)
@@ -341,6 +344,7 @@ class TableSchemaSpec:
                     nullable=schema_field.nullable,
                     metadata=meta,
                     encoding=encoding,
+                    default_value=meta.get("default_value"),
                 )
             )
         meta_name, meta_version = schema_identity_from_metadata(schema.metadata)
@@ -439,9 +443,15 @@ class TableSchemaSpec:
         required = set(self.required_non_null) | set(self.key_fields)
         updated: list[exp.ColumnDef] = []
         for field_spec, column_def in zip(self.fields, column_defs, strict=True):
+            constraints = list(column_def.args.get("constraints") or [])
+            if field_spec.default_value is not None:
+                default_expr = exp.Literal.string(field_spec.default_value)
+                constraints.append(
+                    exp.ColumnConstraint(kind=exp.DefaultColumnConstraint(this=default_expr))
+                )
             if field_spec.name in required or not field_spec.nullable:
-                constraints = list(column_def.args.get("constraints") or [])
                 constraints.append(exp.ColumnConstraint(kind=exp.NotNullColumnConstraint()))
+            if constraints:
                 updated_column = column_def.copy()
                 updated_column.set("constraints", constraints)
             else:
@@ -483,7 +493,10 @@ class TableSchemaSpec:
         dialect_name = dialect or "datafusion"
         column_defs = self.to_sqlglot_column_defs(dialect=dialect_name)
         columns_sql = ", ".join(col.sql(dialect=dialect_name) for col in column_defs)
-        return f"CREATE TABLE {name} ({columns_sql})"
+        if self.key_fields:
+            columns_sql = f"{columns_sql}, PRIMARY KEY ({', '.join(self.key_fields)})"
+        ddl = f"CREATE TABLE {name} ({columns_sql})"
+        return normalize_ddl_sql(ddl)
 
     def to_create_external_table_sql(self, config: ExternalTableConfig) -> str:
         """Return a CREATE EXTERNAL TABLE statement for the schema.
@@ -497,6 +510,8 @@ class TableSchemaSpec:
         dialect_name = config.dialect or "datafusion"
         column_defs = self.to_sqlglot_column_defs(dialect=dialect_name)
         columns_sql = ", ".join(col.sql(dialect=dialect_name) for col in column_defs)
+        if self.key_fields:
+            columns_sql = f"{columns_sql}, PRIMARY KEY ({', '.join(self.key_fields)})"
         create_keyword = (
             "CREATE UNBOUNDED EXTERNAL TABLE" if config.unbounded else "CREATE EXTERNAL TABLE"
         )
@@ -512,7 +527,8 @@ class TableSchemaSpec:
         options_clause = _external_table_options_clause(config.options)
         if options_clause:
             parts.append(options_clause)
-        return "\n".join(parts)
+        ddl = "\n".join(parts)
+        return normalize_ddl_sql(ddl)
 
     @staticmethod
     def external_table_config(

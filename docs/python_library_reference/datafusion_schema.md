@@ -126,6 +126,15 @@ That’s a real “synergy”: expression semantics align, and improvements in D
 
 ---
 
+## Repo policy: SessionContext-first extract schemas
+
+In this codebase, extract schemas are sourced directly from the DataFusion
+`SessionContext` and `information_schema` views rather than a Python-side field
+catalog or extract registry tables. Extractors should feed row data through Ibis
+(`memtable`) and align to the DataFusion schema, and schema validation should
+query `information_schema.tables`/`information_schema.columns` for consistency.
+Extract registry Delta exports are intentionally removed.
+
 ## 4) Practical “registry + Delta + DataFusion” pattern (what I’d standardize)
 
 If you’re building a dataset registry (your earlier Hamilton-ish metastore design), Delta becomes a *high-quality physical table kind*:

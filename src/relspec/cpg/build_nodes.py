@@ -236,7 +236,7 @@ class NodeBuildOptions:
     """Configure which node families are emitted."""
 
     include_file_nodes: bool = True
-    include_name_ref_nodes: bool = True
+    include_ref_nodes: bool = True
     include_import_alias_nodes: bool = True
     include_callsite_nodes: bool = True
     include_def_nodes: bool = True
@@ -299,7 +299,7 @@ class NodeInputTables:
     """Bundle of input tables for node construction."""
 
     repo_files: TableLike | DatasetSource | SqlFragment | None = None
-    cst_name_refs: TableLike | DatasetSource | SqlFragment | None = None
+    cst_refs: TableLike | DatasetSource | SqlFragment | None = None
     cst_imports: TableLike | DatasetSource | SqlFragment | None = None
     cst_callsites: TableLike | DatasetSource | SqlFragment | None = None
     cst_defs: TableLike | DatasetSource | SqlFragment | None = None
@@ -383,7 +383,7 @@ def _ibis_node_tables(
             tables["repo_files_nodes"] = file_nodes
 
     for name, table in {
-        "cst_name_refs": inputs.cst_name_refs,
+        "cst_refs": inputs.cst_refs,
         "cst_imports": inputs.cst_imports,
         "cst_callsites": inputs.cst_callsites,
         "cst_defs": inputs.cst_defs,

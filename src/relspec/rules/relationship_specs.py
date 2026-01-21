@@ -23,13 +23,13 @@ def relationship_rule_definitions() -> tuple[RuleDefinition, ...]:
     return (
         _interval_align_rule(
             _IntervalAlignRuleSpec(
-                name="cst_name_refs__to__scip_occurrences",
+                name="cst_refs__to__scip_occurrences",
                 output_dataset="rel_name_symbol",
                 contract_name="rel_name_symbol_v1",
-                inputs=("cst_name_refs", "scip_occurrences"),
+                inputs=("cst_refs", "scip_occurrences"),
                 left_start_col="bstart",
                 left_end_col="bend",
-                select_left=("name_ref_id", "path", "bstart", "bend"),
+                select_left=("ref_id", "path", "bstart", "bend"),
             )
         ),
         _interval_align_rule(

@@ -272,8 +272,8 @@ def dataset_schema_policy(
 
 
 def validate_registry(*, repo_id: str | None = None) -> None:
-    """Validate registry wiring by building specs, schemas, and queries."""
-    """
+    """Validate registry wiring by building specs, schemas, and queries.
+
     Raises
     ------
     KeyError

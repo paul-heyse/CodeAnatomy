@@ -38,7 +38,7 @@ def rel_name_symbol_spec() -> DatasetSpec:
             version=RELATIONSHIP_SCHEMA_VERSION,
             bundles=(span_bundle(),),
             fields=[
-                ArrowFieldSpec(name="name_ref_id", dtype=pa.string()),
+                ArrowFieldSpec(name="ref_id", dtype=pa.string()),
                 ArrowFieldSpec(name="symbol", dtype=pa.string()),
                 ArrowFieldSpec(name="symbol_roles", dtype=pa.int32()),
                 ArrowFieldSpec(name="path", dtype=pa.string()),
@@ -49,7 +49,7 @@ def rel_name_symbol_spec() -> DatasetSpec:
                 ArrowFieldSpec(name="rule_name", dtype=pa.string()),
                 ArrowFieldSpec(name="rule_priority", dtype=pa.int32()),
             ],
-            constraints=TableSpecConstraints(required_non_null=("name_ref_id", "symbol")),
+            constraints=TableSpecConstraints(required_non_null=("ref_id", "symbol")),
         )
     )
 
@@ -212,7 +212,7 @@ def relationship_contract_spec() -> ContractCatalogSpec:
                 table_spec=rel_name_symbol.table_spec,
                 virtual=VirtualFieldSpec(fields=("origin",)),
                 dedupe=DedupeSpecSpec(
-                    keys=("name_ref_id", "symbol", "path", "bstart", "bend"),
+                    keys=("ref_id", "symbol", "path", "bstart", "bend"),
                     tie_breakers=(
                         SortKeySpec(column="score", order="descending"),
                         SortKeySpec(column="confidence", order="descending"),
@@ -223,7 +223,7 @@ def relationship_contract_spec() -> ContractCatalogSpec:
                 canonical_sort=(
                     SortKeySpec(column="path", order="ascending"),
                     SortKeySpec(column="bstart", order="ascending"),
-                    SortKeySpec(column="name_ref_id", order="ascending"),
+                    SortKeySpec(column="ref_id", order="ascending"),
                 ),
                 version=RELATIONSHIP_SCHEMA_VERSION,
             ),

@@ -157,7 +157,7 @@ def _symbol_role_template(spec: RuleTemplateSpec) -> tuple[RuleDefinitionSpec, .
     confidence_policy = _param_str(spec, "confidence_policy")
     option_flag = _required_param_str(spec, "option_flag")
     base_project = ProjectConfig(
-        select=("name_ref_id", "symbol", "path", "bstart", "bend", "symbol_roles")
+        select=("ref_id", "symbol", "path", "bstart", "bend", "symbol_roles")
     )
     role_specs = (
         (
@@ -185,7 +185,7 @@ def _symbol_role_template(spec: RuleTemplateSpec) -> tuple[RuleDefinitionSpec, .
             confidence_policy=confidence_policy,
             edge=EdgeDefinitionSpec(
                 edge_kind=edge_kind,
-                src_cols=("name_ref_id",),
+                src_cols=("ref_id",),
                 dst_cols=("symbol",),
                 origin="scip",
                 resolution_method="SPAN_EXACT",

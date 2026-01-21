@@ -4,27 +4,31 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, overload
 
 import libcst as cst
-import pyarrow as pa
 from libcst import helpers
 from libcst.metadata import (
     BaseMetadataProvider,
     ByteSpanPositionProvider,
     ExpressionContextProvider,
+    FullRepoManager,
+    FullyQualifiedNameProvider,
     MetadataWrapper,
+    ParentNodeProvider,
     PositionProvider,
     QualifiedName,
     QualifiedNameProvider,
+    ScopeProvider,
+    TypeInferenceProvider,
     WhitespaceInclusivePositionProvider,
 )
 
 from arrowdsl.core.execution_context import ExecutionContext, execution_context_factory
+from arrowdsl.core.ids import stable_id
 from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
-from functools import cache
-
 from datafusion_engine.extract_registry import dataset_schema, normalize_options
 from datafusion_engine.schema_introspection import find_struct_field_keys
 from extract.helpers import (
@@ -64,13 +68,19 @@ class CSTExtractOptions:
     repo_root: Path | None = None
     include_parse_manifest: bool = True
     include_parse_errors: bool = True
-    include_name_refs: bool = True
+    include_refs: bool = True
     include_imports: bool = True
     include_callsites: bool = True
     include_defs: bool = True
     include_type_exprs: bool = True
+    include_docstrings: bool = True
+    include_decorators: bool = True
+    include_call_args: bool = True
     compute_expr_context: bool = True
     compute_qualified_names: bool = True
+    compute_fully_qualified_names: bool = True
+    compute_scope: bool = True
+    compute_type_inference: bool = False
 
 
 @dataclass(frozen=True)
@@ -137,12 +147,16 @@ class CSTExtractContext:
     options: CSTExtractOptions
     manifest_rows: list[Row]
     error_rows: list[Row]
-    name_ref_rows: list[Row]
+    ref_rows: list[Row]
     import_rows: list[Row]
     call_rows: list[Row]
     def_rows: list[Row]
     type_expr_rows: list[Row]
+    docstring_rows: list[Row]
+    decorator_rows: list[Row]
+    call_arg_rows: list[Row]
     evidence_plan: EvidencePlan | None = None
+    repo_manager: FullRepoManager | None = None
 
     @classmethod
     def build(
@@ -150,6 +164,7 @@ class CSTExtractContext:
         options: CSTExtractOptions,
         *,
         evidence_plan: EvidencePlan | None = None,
+        repo_manager: FullRepoManager | None = None,
     ) -> CSTExtractContext:
         """Create an empty extraction context.
 
@@ -162,12 +177,16 @@ class CSTExtractContext:
             options=options,
             manifest_rows=[],
             error_rows=[],
-            name_ref_rows=[],
+            ref_rows=[],
             import_rows=[],
             call_rows=[],
             def_rows=[],
             type_expr_rows=[],
+            docstring_rows=[],
+            decorator_rows=[],
+            call_arg_rows=[],
             evidence_plan=evidence_plan,
+            repo_manager=repo_manager,
         )
 
 
@@ -226,6 +245,7 @@ def _parse_module(
     except cst.ParserSyntaxError as exc:
         raw_line = int(getattr(exc, "raw_line", 0) or 0)
         raw_column = int(getattr(exc, "raw_column", 0) or 0)
+        context = getattr(exc, "context", None)
         return (
             None,
             {
@@ -234,6 +254,9 @@ def _parse_module(
                 "message": str(exc),
                 "raw_line": raw_line,
                 "raw_column": raw_column,
+                "editor_line": raw_line,
+                "editor_column": raw_column,
+                "context": context,
                 "line_base": CST_LINE_BASE,
                 "col_unit": CST_COL_UNIT,
                 "end_exclusive": CST_END_EXCLUSIVE,
@@ -262,6 +285,25 @@ def _module_package_names(
     return _calculate_module_and_package(options.repo_root, abs_path_value)
 
 
+def _repo_relative_path(file_ctx: FileContext, repo_root: Path | None) -> Path | None:
+    if repo_root is None:
+        return None
+    repo_root = repo_root.resolve()
+    abs_path = file_ctx.abs_path
+    if abs_path:
+        try:
+            return Path(abs_path).resolve().relative_to(repo_root)
+        except ValueError:
+            return None
+    rel_path = Path(file_ctx.path)
+    if rel_path.is_absolute():
+        try:
+            return rel_path.resolve().relative_to(repo_root)
+        except ValueError:
+            return None
+    return rel_path
+
+
 def _parse_or_record_error(
     data: bytes,
     *,
@@ -284,6 +326,12 @@ def _manifest_row(
     package_name: str | None,
     future_imports: Sequence[str | None],
 ) -> Row:
+    config = getattr(module, "config", None)
+    python_version = getattr(config, "python_version", None)
+    parsed_python_version = None
+    if python_version:
+        parsed_python_version = ".".join(str(part) for part in python_version)
+    parser_backend = getattr(config, "parser_backend", None) or "libcst"
     return {
         **file_identity_row(ctx.file_ctx),
         "encoding": getattr(module, "encoding", None),
@@ -293,30 +341,68 @@ def _manifest_row(
         "future_imports": list(future_imports),
         "module_name": module_name,
         "package_name": package_name,
+        "libcst_version": getattr(cst, "__version__", None),
+        "parser_backend": parser_backend,
+        "parsed_python_version": parsed_python_version,
     }
 
 
 def _resolve_metadata_maps(
     wrapper: MetadataWrapper,
     options: CSTExtractOptions,
+    *,
+    repo_manager: FullRepoManager | None,
 ) -> tuple[
     Mapping[cst.CSTNode, object],
     Mapping[cst.CSTNode, object],
+    Mapping[cst.CSTNode, object],
+    Mapping[cst.CSTNode, object],
     Mapping[cst.CSTNode, QualifiedNameSet],
+    Mapping[cst.CSTNode, QualifiedNameSet],
+    Mapping[cst.CSTNode, object],
 ]:
     providers: set[type[BaseMetadataProvider[object]]] = {ByteSpanPositionProvider}
-    if options.compute_expr_context and options.include_name_refs:
+    include_refs = options.include_refs
+    if options.compute_expr_context and include_refs:
         providers.add(ExpressionContextProvider)
+    if options.compute_scope and include_refs:
+        providers.add(ScopeProvider)
+        providers.add(ParentNodeProvider)
     include_callsites = options.include_callsites
     include_defs = options.include_defs
     if options.compute_qualified_names and (include_callsites or include_defs):
         providers.add(QualifiedNameProvider)
-
-    resolved = wrapper.resolve_many(providers)
+    if (
+        repo_manager is not None
+        and options.compute_fully_qualified_names
+        and (include_callsites or include_defs or include_refs)
+    ):
+        providers.add(FullyQualifiedNameProvider)
+    if (
+        repo_manager is not None
+        and options.compute_type_inference
+        and (include_callsites or include_refs)
+    ):
+        providers.add(TypeInferenceProvider)
+    optional = {FullyQualifiedNameProvider, TypeInferenceProvider}
+    try:
+        resolved = wrapper.resolve_many(providers)
+    except (
+        cst.CSTLogicError,
+        cst.CSTValidationError,
+        cst.MetadataException,
+        cst.ParserSyntaxError,
+    ):
+        fallback = providers - optional
+        resolved = wrapper.resolve_many(fallback)
     return (
         resolved.get(ByteSpanPositionProvider, {}),
         resolved.get(ExpressionContextProvider, {}),
+        resolved.get(ScopeProvider, {}),
+        resolved.get(ParentNodeProvider, {}),
         cast("Mapping[cst.CSTNode, QualifiedNameSet]", resolved.get(QualifiedNameProvider, {})),
+        cast("Mapping[cst.CSTNode, QualifiedNameSet]", resolved.get(FullyQualifiedNameProvider, {})),
+        resolved.get(TypeInferenceProvider, {}),
     )
 
 
@@ -448,7 +534,11 @@ class CollectorMetadata:
 
     span_map: Mapping[cst.CSTNode, object]
     ctx_map: Mapping[cst.CSTNode, object]
+    scope_map: Mapping[cst.CSTNode, object]
+    parent_map: Mapping[cst.CSTNode, object]
     qn_map: Mapping[cst.CSTNode, QualifiedNameSet]
+    fqn_map: Mapping[cst.CSTNode, QualifiedNameSet]
+    type_map: Mapping[cst.CSTNode, object]
 
 
 def _visit_with_collector(
@@ -457,11 +547,35 @@ def _visit_with_collector(
     file_ctx: CSTFileContext,
     ctx: CSTExtractContext,
 ) -> None:
-    wrapper = MetadataWrapper(module, unsafe_skip_copy=True)
-    span_map, ctx_map, qn_map = _resolve_metadata_maps(wrapper, ctx.options)
+    cache: Mapping[type[BaseMetadataProvider[object]], object] | None = None
+    if ctx.repo_manager is not None:
+        rel_path = _repo_relative_path(file_ctx.file_ctx, ctx.options.repo_root)
+        if rel_path is not None:
+            try:
+                cache = ctx.repo_manager.get_cache_for_path(str(rel_path))
+            except KeyError:
+                cache = None
+    wrapper = MetadataWrapper(module, unsafe_skip_copy=True, cache=cache or {})
+    (
+        span_map,
+        ctx_map,
+        scope_map,
+        parent_map,
+        qn_map,
+        fqn_map,
+        type_map,
+    ) = _resolve_metadata_maps(wrapper, ctx.options, repo_manager=ctx.repo_manager)
     collector = CSTCollector(
         ctx=CollectorContext(module=module, file_ctx=file_ctx, extract_ctx=ctx),
-        meta=CollectorMetadata(span_map=span_map, ctx_map=ctx_map, qn_map=qn_map),
+        meta=CollectorMetadata(
+            span_map=span_map,
+            ctx_map=ctx_map,
+            scope_map=scope_map,
+            parent_map=parent_map,
+            qn_map=qn_map,
+            fqn_map=fqn_map,
+            type_map=type_map,
+        ),
     )
     wrapper.visit(collector)
 
@@ -481,12 +595,19 @@ class CSTCollector(cst.CSTVisitor):
         self._identity = file_identity_row(self._file_ctx.file_ctx)
         self._span_map = meta.span_map
         self._ctx_map = meta.ctx_map
+        self._scope_map = meta.scope_map
+        self._parent_map = meta.parent_map
         self._qn_map = meta.qn_map
-        self._name_ref_rows = ctx.extract_ctx.name_ref_rows
+        self._fqn_map = meta.fqn_map
+        self._type_map = meta.type_map
+        self._ref_rows = ctx.extract_ctx.ref_rows
         self._import_rows = ctx.extract_ctx.import_rows
         self._call_rows = ctx.extract_ctx.call_rows
         self._def_rows = ctx.extract_ctx.def_rows
         self._type_expr_rows = ctx.extract_ctx.type_expr_rows
+        self._docstring_rows = ctx.extract_ctx.docstring_rows
+        self._decorator_rows = ctx.extract_ctx.decorator_rows
+        self._call_arg_rows = ctx.extract_ctx.call_arg_rows
         self._skip_name_nodes: set[cst.Name] = set()
         self._def_stack: list[DefKey] = []
 
@@ -513,6 +634,116 @@ class CSTCollector(cst.CSTVisitor):
         qualified = sorted(qset, key=lambda q: (q.name, str(q.source)))
         keys = _qname_keys()
         return [dict(zip(keys, (q.name, str(q.source)), strict=True)) for q in qualified]
+
+    def _fqns(self, node: cst.CSTNode) -> list[str]:
+        qset = self._fqn_map.get(node)
+        if not qset:
+            return []
+        if callable(qset):
+            qset = qset()
+        return sorted({q.name for q in qset})
+
+    def _scope_details(self, node: cst.CSTNode) -> tuple[str | None, str | None, str | None]:
+        scope = self._scope_map.get(node)
+        if scope is None:
+            return None, None, None
+        scope_type = getattr(scope, "scope_type", None) or type(scope).__name__
+        scope_name = getattr(scope, "name", None)
+        scope_role = getattr(scope, "role", None)
+        return (
+            str(scope_type) if scope_type is not None else None,
+            str(scope_name) if scope_name is not None else None,
+            str(scope_role) if scope_role is not None else None,
+        )
+
+    def _parent_kind(self, node: cst.CSTNode) -> str | None:
+        parent = self._parent_map.get(node)
+        if parent is None:
+            return None
+        return type(parent).__name__
+
+    def _type_for_node(self, node: cst.CSTNode) -> str | None:
+        value = self._type_map.get(node)
+        if value is None:
+            return None
+        inferred = getattr(value, "inferred_type", None)
+        if inferred is not None:
+            return str(inferred)
+        return str(value)
+
+    @staticmethod
+    def _stable_id(prefix: str, *parts: object) -> str:
+        values = [str(part) if part is not None else None for part in parts]
+        return stable_id(prefix, *values)
+
+    @staticmethod
+    def _docstring_node(
+        body: Sequence[cst.BaseStatement | cst.BaseSmallStatement],
+    ) -> cst.CSTNode | None:
+        if not body:
+            return None
+        first = body[0]
+        if isinstance(first, cst.SimpleStatementLine) and len(first.body) == 1:
+            expr = first.body[0]
+            if isinstance(expr, cst.Expr) and isinstance(expr.value, cst.BaseString):
+                return expr.value
+        return None
+
+    def _record_docstring(
+        self,
+        *,
+        owner_kind: str,
+        owner_def_id: str | None,
+        node: cst.Module | cst.ClassDef | cst.FunctionDef,
+    ) -> None:
+        if not self._options.include_docstrings:
+            return
+        docstring = node.get_docstring()
+        if not docstring:
+            return
+        doc_node: cst.CSTNode | None = None
+        if isinstance(node, cst.Module):
+            doc_node = self._docstring_node(node.body)
+        elif isinstance(node, (cst.ClassDef, cst.FunctionDef)):
+            doc_node = self._docstring_node(node.body.body)
+        bstart: int | None = None
+        bend: int | None = None
+        if doc_node is not None:
+            bstart, bend = self._span(doc_node)
+        self._docstring_rows.append(
+            {
+                **self._identity,
+                "owner_def_id": owner_def_id,
+                "owner_kind": owner_kind,
+                "docstring": docstring,
+                "bstart": bstart,
+                "bend": bend,
+            }
+        )
+
+    def _record_decorators(
+        self,
+        *,
+        owner_kind: str,
+        owner_def_id: str | None,
+        decorators: Sequence[cst.Decorator],
+    ) -> None:
+        if not self._options.include_decorators:
+            return
+        for idx, decorator in enumerate(decorators):
+            bstart, bend = self._span(decorator)
+            decorator_text = self._code_for_node(decorator.decorator)
+            self._decorator_rows.append(
+                {
+                    **self._identity,
+                    "owner_def_id": owner_def_id,
+                    "owner_kind": owner_kind,
+                    "decorator_text": decorator_text,
+                    "decorator_index": idx,
+                    "bstart": bstart,
+                    "bend": bend,
+                }
+            )
 
     def _record_type_expr(
         self,
@@ -542,6 +773,17 @@ class CSTCollector(cst.CSTVisitor):
             }
         )
 
+    def visit_Module(self, node: cst.Module) -> bool | None:
+        """Collect module docstrings.
+
+        Returns
+        -------
+        bool | None
+            True to continue CST traversal.
+        """
+        self._record_docstring(owner_kind="module", owner_def_id=None, node=node)
+        return True
+
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool | None:
         """Collect function definition rows.
 
@@ -550,7 +792,12 @@ class CSTCollector(cst.CSTVisitor):
         bool | None
             True to continue CST traversal.
         """
-        if not self._options.include_defs:
+        if not (
+            self._options.include_defs
+            or self._options.include_docstrings
+            or self._options.include_decorators
+            or self._options.include_type_exprs
+        ):
             return True
         def_bstart, def_bend = self._span(node)
         name_bstart, name_bend = self._span(node.name)
@@ -565,46 +812,69 @@ class CSTCollector(cst.CSTVisitor):
         def_kind = "async_function" if node.asynchronous is not None else "function"
         def_key: DefKey = (def_kind, def_bstart, def_bend)
         qnames = self._qnames(node)
-
-        self._def_rows.append(
-            {
-                **self._identity,
-                "container_def_kind": container_kind,
-                "container_def_bstart": container_bstart,
-                "container_def_bend": container_bend,
-                "kind": def_kind,
-                "name": node.name.value,
-                "def_bstart": def_bstart,
-                "def_bend": def_bend,
-                "name_bstart": name_bstart,
-                "name_bend": name_bend,
-                "qnames": qnames,
-            }
+        def_fqns = self._fqns(node)
+        def_id = self._stable_id(
+            "cst_def",
+            self._identity["file_id"],
+            def_kind,
+            def_bstart,
+            def_bend,
         )
-        if node.returns is not None:
-            self._record_type_expr(
-                node.returns,
-                owner=TypeExprOwner(
-                    owner_def_kind=def_kind,
-                    owner_def_bstart=def_bstart,
-                    owner_def_bend=def_bend,
-                    expr_role="return",
-                ),
+        docstring = node.get_docstring()
+        decorator_count = len(node.decorators)
+
+        if self._options.include_defs:
+            self._def_rows.append(
+                {
+                    **self._identity,
+                    "def_id": def_id,
+                    "container_def_kind": container_kind,
+                    "container_def_bstart": container_bstart,
+                    "container_def_bend": container_bend,
+                    "kind": def_kind,
+                    "name": node.name.value,
+                    "def_bstart": def_bstart,
+                    "def_bend": def_bend,
+                    "name_bstart": name_bstart,
+                    "name_bend": name_bend,
+                    "qnames": qnames,
+                    "def_fqns": def_fqns,
+                    "docstring": docstring,
+                    "decorator_count": decorator_count,
+                }
             )
-        for param in _iter_params(node.params):
-            if param.annotation is None:
-                continue
-            self._record_type_expr(
-                param.annotation,
-                owner=TypeExprOwner(
-                    owner_def_kind=def_kind,
-                    owner_def_bstart=def_bstart,
-                    owner_def_bend=def_bend,
-                    expr_role="param",
-                    param_name=param.name.value,
-                ),
-            )
-        self._def_stack.append(def_key)
+        self._record_docstring(owner_kind=def_kind, owner_def_id=def_id, node=node)
+        self._record_decorators(
+            owner_kind=def_kind,
+            owner_def_id=def_id,
+            decorators=node.decorators,
+        )
+        if self._options.include_type_exprs:
+            if node.returns is not None:
+                self._record_type_expr(
+                    node.returns,
+                    owner=TypeExprOwner(
+                        owner_def_kind=def_kind,
+                        owner_def_bstart=def_bstart,
+                        owner_def_bend=def_bend,
+                        expr_role="return",
+                    ),
+                )
+            for param in _iter_params(node.params):
+                if param.annotation is None:
+                    continue
+                self._record_type_expr(
+                    param.annotation,
+                    owner=TypeExprOwner(
+                        owner_def_kind=def_kind,
+                        owner_def_bstart=def_bstart,
+                        owner_def_bend=def_bend,
+                        expr_role="param",
+                        param_name=param.name.value,
+                    ),
+                )
+        if self._options.include_defs:
+            self._def_stack.append(def_key)
         return True
 
     def leave_FunctionDef(self, original_node: cst.FunctionDef) -> None:
@@ -621,7 +891,11 @@ class CSTCollector(cst.CSTVisitor):
         bool | None
             True to continue CST traversal.
         """
-        if not self._options.include_defs:
+        if not (
+            self._options.include_defs
+            or self._options.include_docstrings
+            or self._options.include_decorators
+        ):
             return True
         def_bstart, def_bend = self._span(node)
         name_bstart, name_bend = self._span(node.name)
@@ -636,23 +910,45 @@ class CSTCollector(cst.CSTVisitor):
         def_kind = "class"
         def_key: DefKey = (def_kind, def_bstart, def_bend)
         qnames = self._qnames(node)
-
-        self._def_rows.append(
-            {
-                **self._identity,
-                "container_def_kind": container_kind,
-                "container_def_bstart": container_bstart,
-                "container_def_bend": container_bend,
-                "kind": def_kind,
-                "name": node.name.value,
-                "def_bstart": def_bstart,
-                "def_bend": def_bend,
-                "name_bstart": name_bstart,
-                "name_bend": name_bend,
-                "qnames": qnames,
-            }
+        def_fqns = self._fqns(node)
+        def_id = self._stable_id(
+            "cst_def",
+            self._identity["file_id"],
+            def_kind,
+            def_bstart,
+            def_bend,
         )
-        self._def_stack.append(def_key)
+        docstring = node.get_docstring()
+        decorator_count = len(node.decorators)
+
+        if self._options.include_defs:
+            self._def_rows.append(
+                {
+                    **self._identity,
+                    "def_id": def_id,
+                    "container_def_kind": container_kind,
+                    "container_def_bstart": container_bstart,
+                    "container_def_bend": container_bend,
+                    "kind": def_kind,
+                    "name": node.name.value,
+                    "def_bstart": def_bstart,
+                    "def_bend": def_bend,
+                    "name_bstart": name_bstart,
+                    "name_bend": name_bend,
+                    "qnames": qnames,
+                    "def_fqns": def_fqns,
+                    "docstring": docstring,
+                    "decorator_count": decorator_count,
+                }
+            )
+        self._record_docstring(owner_kind=def_kind, owner_def_id=def_id, node=node)
+        self._record_decorators(
+            owner_kind=def_kind,
+            owner_def_id=def_id,
+            decorators=node.decorators,
+        )
+        if self._options.include_defs:
+            self._def_stack.append(def_key)
         return True
 
     def leave_ClassDef(self, original_node: cst.ClassDef) -> None:
@@ -669,21 +965,85 @@ class CSTCollector(cst.CSTVisitor):
         bool | None
             True to continue CST traversal.
         """
-        if not self._options.include_name_refs:
+        if not self._options.include_refs:
             return True
         if node in self._skip_name_nodes:
+            return True
+        parent = self._parent_map.get(node)
+        if isinstance(parent, cst.Attribute):
             return True
         bstart, bend = self._span(node)
         expr_ctx = None
         if self._options.compute_expr_context:
             ctx = self._ctx_map.get(node)
             expr_ctx = str(ctx) if ctx is not None else None
+        scope_type, scope_name, scope_role = self._scope_details(node)
+        parent_kind = self._parent_kind(node)
+        inferred_type = self._type_for_node(node)
+        ref_id = self._stable_id(
+            "cst_ref",
+            self._identity["file_id"],
+            bstart,
+            bend,
+        )
 
-        self._name_ref_rows.append(
+        self._ref_rows.append(
             {
                 **self._identity,
-                "name": node.value,
+                "ref_id": ref_id,
+                "ref_kind": "name",
+                "ref_text": node.value,
                 "expr_ctx": expr_ctx,
+                "scope_type": scope_type,
+                "scope_name": scope_name,
+                "scope_role": scope_role,
+                "parent_kind": parent_kind,
+                "inferred_type": inferred_type,
+                "bstart": bstart,
+                "bend": bend,
+            }
+        )
+        return True
+
+    def visit_Attribute(self, node: cst.Attribute) -> bool | None:
+        """Collect attribute reference rows.
+
+        Returns
+        -------
+        bool | None
+            True to continue CST traversal.
+        """
+        if not self._options.include_refs:
+            return True
+        bstart, bend = self._span(node)
+        expr_ctx = None
+        if self._options.compute_expr_context:
+            ctx = self._ctx_map.get(node)
+            expr_ctx = str(ctx) if ctx is not None else None
+        ref_text = helpers.get_full_name_for_node(node) or self._code_for_node(node)
+        if ref_text is None:
+            return True
+        scope_type, scope_name, scope_role = self._scope_details(node)
+        parent_kind = self._parent_kind(node)
+        inferred_type = self._type_for_node(node)
+        ref_id = self._stable_id(
+            "cst_ref",
+            self._identity["file_id"],
+            bstart,
+            bend,
+        )
+        self._ref_rows.append(
+            {
+                **self._identity,
+                "ref_id": ref_id,
+                "ref_kind": "attribute",
+                "ref_text": ref_text,
+                "expr_ctx": expr_ctx,
+                "scope_type": scope_type,
+                "scope_name": scope_name,
+                "scope_role": scope_role,
+                "parent_kind": parent_kind,
+                "inferred_type": inferred_type,
                 "bstart": bstart,
                 "bend": bend,
             }
@@ -805,33 +1165,63 @@ class CSTCollector(cst.CSTVisitor):
         """
         if not self._options.include_callsites:
             return True
+        call_id, row = self._callsite_row(node)
+        self._call_rows.append(row)
+        if self._options.include_call_args:
+            self._append_call_args(call_id, node)
+        return True
+
+    def _callsite_row(self, node: cst.Call) -> tuple[str, dict[str, object]]:
         call_bstart, call_bend = self._span(node)
         callee_bstart, callee_bend = self._span(node.func)
-
         callee_dotted = helpers.get_full_name_for_node(node.func)
         callee_shape = _callee_shape(node.func)
         callee_text = self._code_for_node(node.func)
         arg_count = len(node.args)
-
-        qnames = self._qnames(node.func)
-        if not qnames:
-            qnames = self._qnames(node)
-
-        self._call_rows.append(
-            {
-                **self._identity,
-                "call_bstart": call_bstart,
-                "call_bend": call_bend,
-                "callee_bstart": callee_bstart,
-                "callee_bend": callee_bend,
-                "callee_shape": callee_shape,
-                "callee_text": callee_text,
-                "arg_count": int(arg_count),
-                "callee_dotted": callee_dotted,
-                "callee_qnames": qnames,
-            }
+        qnames = self._qnames(node.func) or self._qnames(node)
+        callee_fqns = self._fqns(node.func) or self._fqns(node)
+        inferred_type = self._type_for_node(node)
+        call_id = self._stable_id(
+            "cst_call",
+            self._identity["file_id"],
+            call_bstart,
+            call_bend,
         )
-        return True
+        row = {
+            **self._identity,
+            "call_id": call_id,
+            "call_bstart": call_bstart,
+            "call_bend": call_bend,
+            "callee_bstart": callee_bstart,
+            "callee_bend": callee_bend,
+            "callee_shape": callee_shape,
+            "callee_text": callee_text,
+            "arg_count": int(arg_count),
+            "callee_dotted": callee_dotted,
+            "callee_qnames": qnames,
+            "callee_fqns": callee_fqns,
+            "inferred_type": inferred_type,
+        }
+        return call_id, row
+
+    def _append_call_args(self, call_id: str, node: cst.Call) -> None:
+        for idx, arg in enumerate(node.args):
+            arg_text = self._code_for_node(arg.value)
+            bstart, bend = self._span(arg.value)
+            keyword = arg.keyword.value if arg.keyword is not None else None
+            star = arg.star
+            self._call_arg_rows.append(
+                {
+                    **self._identity,
+                    "call_id": call_id,
+                    "arg_index": idx,
+                    "keyword": keyword,
+                    "star": star,
+                    "arg_text": arg_text,
+                    "bstart": bstart,
+                    "bend": bend,
+                }
+            )
 
 
 def _extract_cst_for_context(
@@ -876,15 +1266,47 @@ def _extract_cst_for_context(
     return module
 
 
+def _build_repo_manager(
+    options: CSTExtractOptions,
+    file_contexts: Sequence[FileContext],
+) -> FullRepoManager | None:
+    if options.repo_root is None:
+        return None
+    if not (options.compute_fully_qualified_names or options.compute_type_inference):
+        return None
+    providers: set[type[BaseMetadataProvider[object]]] = set()
+    if options.compute_fully_qualified_names:
+        providers.add(FullyQualifiedNameProvider)
+    if options.compute_type_inference:
+        providers.add(TypeInferenceProvider)
+    if not providers:
+        return None
+    rel_paths: set[Path] = set()
+    for ctx in file_contexts:
+        rel_path = _repo_relative_path(ctx, options.repo_root)
+        if rel_path is not None:
+            rel_paths.add(rel_path)
+    if not rel_paths:
+        return None
+    manager = FullRepoManager(options.repo_root, rel_paths, providers)
+    manager.resolve_cache()
+    return manager
+
+
 def _cst_file_row(
     file_ctx: FileContext,
     *,
     options: CSTExtractOptions,
     evidence_plan: EvidencePlan | None,
+    repo_manager: FullRepoManager | None,
 ) -> dict[str, object] | None:
     if not file_ctx.file_id or not file_ctx.path:
         return None
-    ctx = CSTExtractContext.build(options, evidence_plan=evidence_plan)
+    ctx = CSTExtractContext.build(
+        options,
+        evidence_plan=evidence_plan,
+        repo_manager=repo_manager,
+    )
     module = _extract_cst_for_context(file_ctx, ctx)
     if module is None and not ctx.error_rows:
         return None
@@ -900,11 +1322,14 @@ def _cst_file_row(
         "edges": edges,
         "parse_manifest": [_row_map(row) for row in ctx.manifest_rows],
         "parse_errors": [_row_map(row) for row in ctx.error_rows],
-        "name_refs": [_row_map(row) for row in ctx.name_ref_rows],
+        "refs": [_row_map(row) for row in ctx.ref_rows],
         "imports": [_row_map(row) for row in ctx.import_rows],
         "callsites": [_row_map(row) for row in ctx.call_rows],
         "defs": [_row_map(row) for row in ctx.def_rows],
         "type_exprs": [_row_map(row) for row in ctx.type_expr_rows],
+        "docstrings": [_row_map(row) for row in ctx.docstring_rows],
+        "decorators": [_row_map(row) for row in ctx.decorator_rows],
+        "call_args": [_row_map(row) for row in ctx.call_arg_rows],
         "attrs": attrs_map({"file_sha256": file_ctx.file_sha256}),
     }
 
@@ -917,8 +1342,15 @@ def _collect_cst_file_rows(
     evidence_plan: EvidencePlan | None,
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for file_ctx in iter_contexts(repo_files, file_contexts):
-        row = _cst_file_row(file_ctx, options=options, evidence_plan=evidence_plan)
+    contexts = list(iter_contexts(repo_files, file_contexts))
+    repo_manager = _build_repo_manager(options, contexts)
+    for file_ctx in contexts:
+        row = _cst_file_row(
+            file_ctx,
+            options=options,
+            evidence_plan=evidence_plan,
+            repo_manager=repo_manager,
+        )
         if row is not None:
             rows.append(row)
     return rows

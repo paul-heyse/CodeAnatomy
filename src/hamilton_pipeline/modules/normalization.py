@@ -28,6 +28,7 @@ from datafusion_engine.compute_ops import (
     flatten_list_struct_field,
     if_else,
     is_valid,
+    list_flatten,
     struct_field,
 )
 from datafusion_engine.kernel_registry import resolve_kernel
@@ -704,6 +705,13 @@ def _flatten_qname_names(table: TableLike | None, column: str) -> ArrayLike:
     return drop_null(_string_or_null(flattened))
 
 
+def _flatten_string_list(table: TableLike | None, column: str) -> ArrayLike:
+    if table is None or column not in table.column_names:
+        return pa.array([], type=pa.string())
+    flattened = list_flatten(table[column])
+    return drop_null(_string_or_null(flattened))
+
+
 def _callsite_qname_base_table(exploded: TableLike) -> TableLike:
     call_ids = _string_or_null(exploded["call_id"])
     qname_struct = exploded["qname_struct"]
@@ -719,6 +727,27 @@ def _callsite_qname_base_table(exploded: TableLike) -> TableLike:
     base = table_from_arrays(
         schema,
         columns={"call_id": call_ids, "qname": qname_vals, "qname_source": qname_sources},
+        num_rows=len(call_ids),
+    )
+    mask = and_(is_valid(base["call_id"]), is_valid(base["qname"]))
+    mask = fill_null(mask, fill_value=False)
+    return base.filter(mask)
+
+
+def _callsite_fqn_base_table(exploded: TableLike) -> TableLike:
+    call_ids = _string_or_null(exploded["call_id"])
+    fqn_vals = _string_or_null(exploded["fqn_value"])
+    qname_sources = pa.array(["fully_qualified"] * len(call_ids), type=pa.string())
+    schema = pa.schema(
+        [
+            ("call_id", pa.string()),
+            ("qname", pa.string()),
+            ("qname_source", pa.string()),
+        ]
+    )
+    base = table_from_arrays(
+        schema,
+        columns={"call_id": call_ids, "qname": fqn_vals, "qname_source": qname_sources},
         num_rows=len(call_ids),
     )
     mask = and_(is_valid(base["call_id"]), is_valid(base["qname"]))
@@ -797,8 +826,10 @@ def dim_qualified_names(
     cst_callsites_table = _materialize_fragment(backend, cst_callsites)
     cst_defs_table = _materialize_fragment(backend, cst_defs)
     callsite_qnames = _flatten_qname_names(cst_callsites_table, "callee_qnames")
+    callsite_fqns = _flatten_string_list(cst_callsites_table, "callee_fqns")
     def_qnames = _flatten_qname_names(cst_defs_table, "qnames")
-    combined = pa.chunked_array([callsite_qnames, def_qnames])
+    def_fqns = _flatten_string_list(cst_defs_table, "def_fqns")
+    combined = pa.chunked_array([callsite_qnames, callsite_fqns, def_qnames, def_fqns])
     if len(combined) == 0:
         schema = infer_schema_or_registry(QNAME_DIM_SPEC.table_spec.name, [])
         return empty_table(schema)
@@ -852,21 +883,47 @@ def callsite_qname_candidates(
         schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
         return empty_table(schema)
     cst_callsites_table = _materialize_fragment(backend, cst_callsites)
-    if cst_callsites_table.num_rows == 0 or "callee_qnames" not in cst_callsites_table.column_names:
+    if cst_callsites_table.num_rows == 0:
+        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
+        return empty_table(schema)
+    has_qnames = "callee_qnames" in cst_callsites_table.column_names
+    has_fqns = "callee_fqns" in cst_callsites_table.column_names
+    if not has_qnames and not has_fqns:
         schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
         return empty_table(schema)
 
     kernel = resolve_kernel("explode_list", ctx=ctx)
-    spec = ExplodeSpec(
-        parent_keys=("call_id",),
-        list_col="callee_qnames",
-        value_col="qname_struct",
-        idx_col=None,
-        keep_empty=True,
-    )
-    exploded = kernel(cst_callsites_table, spec=spec, out_parent_col="call_id")
-    base = _callsite_qname_base_table(exploded)
-    joined = _join_callsite_qname_meta(base, cst_callsites_table)
+    tables: list[TableLike] = []
+    if has_qnames:
+        spec = ExplodeSpec(
+            parent_keys=("call_id",),
+            list_col="callee_qnames",
+            value_col="qname_struct",
+            idx_col=None,
+            keep_empty=True,
+        )
+        exploded = kernel(cst_callsites_table, spec=spec, out_parent_col="call_id")
+        base = _callsite_qname_base_table(exploded)
+        joined = _join_callsite_qname_meta(base, cst_callsites_table)
+        if joined.num_rows > 0:
+            tables.append(joined)
+    if has_fqns:
+        spec = ExplodeSpec(
+            parent_keys=("call_id",),
+            list_col="callee_fqns",
+            value_col="fqn_value",
+            idx_col=None,
+            keep_empty=True,
+        )
+        exploded = kernel(cst_callsites_table, spec=spec, out_parent_col="call_id")
+        base = _callsite_fqn_base_table(exploded)
+        joined = _join_callsite_qname_meta(base, cst_callsites_table)
+        if joined.num_rows > 0:
+            tables.append(joined)
+    if not tables:
+        schema = infer_schema_or_registry(CALLSITE_QNAME_CANDIDATES_SPEC.table_spec.name, [])
+        return empty_table(schema)
+    joined = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
 
     tables = [joined] if joined.num_rows > 0 else []
     schema = infer_schema_or_registry(

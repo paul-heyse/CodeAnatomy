@@ -472,15 +472,22 @@ NODE_CONTRACT_ROWS: tuple[NodeContractRow, ...] = (
         description="Literal node (CST-level).",
     ),
     NodeContractRow(
-        kind=NodeKind.CST_NAME_REF,
+        kind=NodeKind.CST_REF,
         required=(
-            "name",
-            "expr_context",
+            "ref_text",
+            "ref_kind",
         ),
-        optional=("scope_id",),
+        optional=(
+            "expr_context",
+            "scope_type",
+            "scope_name",
+            "scope_role",
+            "parent_kind",
+            "inferred_type",
+        ),
         template=NODE_T_LIBCST_ANCHOR,
-        required_overrides=(("expr_context", p_str(enum=PROP_ENUMS["expr_context"])),),
-        description="LibCST Name reference occurrence.",
+        optional_overrides=(("expr_context", p_str(enum=PROP_ENUMS["expr_context"])),),
+        description="LibCST reference occurrence.",
     ),
     NodeContractRow(
         kind=NodeKind.CST_NODE,
@@ -1657,13 +1664,13 @@ NODE_DERIVATION_ROWS: tuple[DerivationRow[NodeKind], ...] = (
         template=DERIV_T_CST,
     ),
     DerivationRow(
-        kind=NodeKind.CST_NAME_REF,
+        kind=NodeKind.CST_REF,
         provider_or_field=(
-            "LibCST Name nodes + ExpressionContextProvider + ByteSpanPositionProvider"
+            "LibCST ref nodes + ExpressionContextProvider + ByteSpanPositionProvider"
         ),
-        id_recipe=stable_span_id("name_ref_id", "CST_NAME_REF"),
+        id_recipe=stable_span_id("ref_id", "CST_REF"),
         confidence_policy=(
-            "confidence=1.0 for span/name; 0.9 for expr_context when provider yields context; "
+            "confidence=1.0 for span/ref; 0.9 for expr_context when provider yields context; "
             "else expr_context='UNKNOWN'"
         ),
         ambiguity_policy="none at syntax level; ambiguity appears in resolution edges",
@@ -2269,15 +2276,15 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
     DerivationRow(
         kind=EdgeKind.NAME_REF_CANDIDATE_QNAME,
         provider_or_field=(
-            "LibCST QualifiedNameProvider/FullyQualifiedNameProvider mapping for Name nodes"
+            "LibCST QualifiedNameProvider/FullyQualifiedNameProvider mapping for ref nodes"
         ),
         join_keys=(
-            "name_ref_id",
+            "ref_id",
             "qname",
         ),
-        id_recipe="edge_id = sha('NAME_REF_CAND_QNAME:'+name_ref_id+':'+qname_id)[:16]",
+        id_recipe="edge_id = sha('REF_CAND_QNAME:'+ref_id+':'+qname_id)[:16]",
         confidence_policy="FullyQualified=0.9, Qualified=0.7; score based on provider rank",
-        ambiguity_policy="multi-valued; ambiguity_group_id = sha(name_ref_id+':QNAME')[:16]",
+        ambiguity_policy="multi-valued; ambiguity_group_id = sha(ref_id+':QNAME')[:16]",
         status="planned",
         template=DERIV_T_CST,
     ),
@@ -2338,10 +2345,10 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         kind=EdgeKind.PY_READS_SYMBOL,
         provider_or_field="filter rel_name_symbol by symbol_roles & READ bit",
         join_keys=(
-            "name_ref_id",
+            "ref_id",
             "symbol",
         ),
-        id_recipe="edge_id = sha('PY_READS_SYMBOL:'+name_ref_id+':'+symbol+':'+span)[:16]",
+        id_recipe="edge_id = sha('PY_READS_SYMBOL:'+ref_id+':'+symbol+':'+span)[:16]",
         confidence_policy="confidence=1.0",
         ambiguity_policy="same as rel_name_symbol dedupe",
         template=DERIV_T_CPG_EDGES,
@@ -2362,10 +2369,10 @@ EDGE_DERIVATION_ROWS: tuple[DerivationRow[EdgeKind], ...] = (
         kind=EdgeKind.PY_WRITES_SYMBOL,
         provider_or_field="filter rel_name_symbol by symbol_roles & WRITE bit",
         join_keys=(
-            "name_ref_id",
+            "ref_id",
             "symbol",
         ),
-        id_recipe="edge_id = sha('PY_WRITES_SYMBOL:'+name_ref_id+':'+symbol+':'+span)[:16]",
+        id_recipe="edge_id = sha('PY_WRITES_SYMBOL:'+ref_id+':'+symbol+':'+span)[:16]",
         confidence_policy="confidence=1.0",
         ambiguity_policy="same as rel_name_symbol dedupe",
         template=DERIV_T_CPG_EDGES,

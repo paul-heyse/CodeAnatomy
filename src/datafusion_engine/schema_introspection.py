@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
-from datafusion import SessionContext
 import pyarrow as pa
+from datafusion import SessionContext
 
 
 def _rows_for_query(ctx: SessionContext, query: str) -> list[dict[str, object]]:
@@ -123,16 +123,21 @@ def _find_struct_keys_in_type(
     field_names: Iterable[str],
 ) -> tuple[str, ...] | None:
     if pa.types.is_struct(dtype):
+        result: tuple[str, ...] | None = None
         for field in dtype:
             if field.name in field_names:
-                return _extract_struct_keys(field.type)
-            nested = _find_struct_keys_in_type(field.type, field_names=field_names)
-            if nested is not None:
-                return nested
-        return None
-    if pa.types.is_list(dtype) or pa.types.is_large_list(dtype):
-        return _find_struct_keys_in_type(dtype.value_type, field_names=field_names)
-    if pa.types.is_list_view(dtype) or pa.types.is_large_list_view(dtype):
+                result = _extract_struct_keys(field.type)
+                break
+            result = _find_struct_keys_in_type(field.type, field_names=field_names)
+            if result is not None:
+                break
+        return result
+    if (
+        pa.types.is_list(dtype)
+        or pa.types.is_large_list(dtype)
+        or pa.types.is_list_view(dtype)
+        or pa.types.is_large_list_view(dtype)
+    ):
         return _find_struct_keys_in_type(dtype.value_type, field_names=field_names)
     if pa.types.is_map(dtype):
         return _find_struct_keys_in_type(dtype.item_type, field_names=field_names)

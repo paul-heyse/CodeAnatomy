@@ -170,7 +170,7 @@ class PropsInputTables:
     """Bundle of input tables for property extraction."""
 
     repo_files: TableLike | DatasetSource | SqlFragment | None = None
-    cst_name_refs: TableLike | DatasetSource | SqlFragment | None = None
+    cst_refs: TableLike | DatasetSource | SqlFragment | None = None
     cst_imports: TableLike | DatasetSource | SqlFragment | None = None
     cst_callsites: TableLike | DatasetSource | SqlFragment | None = None
     cst_defs: TableLike | DatasetSource | SqlFragment | None = None
@@ -273,7 +273,7 @@ def _ibis_prop_tables(
     tables: dict[str, IbisPlan] = {}
     for name, table in {
         "repo_files": inputs.repo_files,
-        "cst_name_refs": inputs.cst_name_refs,
+        "cst_refs": inputs.cst_refs,
         "cst_imports": inputs.cst_imports,
         "cst_callsites": inputs.cst_callsites,
         "dim_qualified_names": inputs.dim_qualified_names,

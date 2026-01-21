@@ -37,10 +37,10 @@ _HASH_SPECS: Mapping[str, HashSpec] = {
         cols=("file_id", "start_byte", "end_byte"),
         out_col="span_id",
     ),
-    "cst_name_ref_id": hash_spec_factory(
-        prefix="cst_name_ref",
+    "cst_ref_id": hash_spec_factory(
+        prefix="cst_ref",
         cols=("file_id", "bstart", "bend"),
-        out_col="name_ref_id",
+        out_col="ref_id",
     ),
     "cst_import_id": hash_spec_factory(
         prefix="cst_import",

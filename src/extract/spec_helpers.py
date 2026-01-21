@@ -78,13 +78,20 @@ def _apply_cst_derivations(
     if "compute_expr_context" not in override_keys:
         values["compute_expr_context"] = _flag_value(
             values,
-            "include_name_refs",
+            "include_refs",
             fallback=True,
         )
+    if "compute_scope" not in override_keys:
+        values["compute_scope"] = _flag_value(values, "include_refs", fallback=True)
     if "compute_qualified_names" not in override_keys:
         include_callsites = _flag_value(values, "include_callsites", fallback=True)
         include_defs = _flag_value(values, "include_defs", fallback=True)
         values["compute_qualified_names"] = include_callsites or include_defs
+    if "compute_fully_qualified_names" not in override_keys:
+        include_callsites = _flag_value(values, "include_callsites", fallback=True)
+        include_defs = _flag_value(values, "include_defs", fallback=True)
+        include_refs = _flag_value(values, "include_refs", fallback=True)
+        values["compute_fully_qualified_names"] = include_callsites or include_defs or include_refs
 
 
 def _apply_derived_options(

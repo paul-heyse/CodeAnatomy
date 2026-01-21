@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 from ibis.backends import BaseBackend
@@ -264,7 +264,6 @@ def order_rules_by_evidence[RuleT](
     *,
     evidence: EvidenceCatalog,
     selectors: RuleSelectors[RuleT],
-    allow_fallback: bool = True,
     label: str = "Rule",
 ) -> list[RuleT]:
     """Return rules ordered by dependency and priority.
@@ -294,13 +293,12 @@ def order_rules_by_evidence[RuleT](
                 inputs=selectors.inputs_for(rule),
             )
         ]
-        if allow_fallback:
-            ready = _select_by_output(
-                ready,
-                selectors.output_for,
-                selectors.priority_for,
-                selectors.name_for,
-            )
+        ready = _select_by_output(
+            ready,
+            selectors.output_for,
+            selectors.priority_for,
+            selectors.name_for,
+        )
         if not ready:
             missing = sorted(selectors.name_for(rule) for rule in pending)
             msg = f"{label} graph cannot resolve evidence for: {missing}"

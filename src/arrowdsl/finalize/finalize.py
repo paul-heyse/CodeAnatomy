@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
@@ -17,24 +17,15 @@ from arrowdsl.core.array_iter import iter_array_values
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.interop import (
     ArrayLike,
-    ChunkedArrayLike,
     DataTypeLike,
-    ListArrayLike,
     RecordBatchReaderLike,
     SchemaLike,
     TableLike,
     coerce_table_like,
-    pc,
 )
 from arrowdsl.core.plan_ops import DedupeSpec, SortKey
 from arrowdsl.core.schema_constants import PROVENANCE_COLS
-from arrowdsl.schema.build import (
-    ColumnDefaultsSpec,
-    ConstExpr,
-    build_list,
-    build_struct,
-    const_array,
-)
+from arrowdsl.schema.build import ColumnDefaultsSpec, ConstExpr
 from arrowdsl.schema.chunking import ChunkPolicy
 from arrowdsl.schema.encoding_policy import EncodingPolicy
 from arrowdsl.schema.policy import SchemaPolicyOptions, schema_policy_factory
@@ -210,18 +201,6 @@ ERROR_DETAIL_STRUCT = pa.struct([(name, dtype) for name, dtype in ERROR_DETAIL_F
 ERROR_DETAIL_LIST_DTYPE = pa.list_(ERROR_DETAIL_STRUCT)
 
 
-def _build_error_detail_list(errors: TableLike) -> ArrayLike:
-    detail_fields: dict[str, ArrayLike] = {}
-    for name, _ in ERROR_DETAIL_FIELDS:
-        column = errors[name]
-        if isinstance(column, pa.ChunkedArray):
-            column = column.combine_chunks()
-        detail_fields[name] = column
-    detail = build_struct(detail_fields, struct_type=ERROR_DETAIL_STRUCT)
-    offsets = pa.array(range(errors.num_rows + 1), type=pa.int32())
-    return build_list(offsets, detail)
-
-
 @dataclass(frozen=True)
 class ErrorArtifactSpec:
     """Specification for error artifacts emitted by finalize."""
@@ -314,62 +293,87 @@ class FinalizeOptions:
 def _required_non_null_results(
     table: TableLike,
     cols: Sequence[str],
-) -> list[InvariantResult]:
-    """Return invariant results for required non-null checks.
+    *,
+    ctx: ExecutionContext,
+) -> tuple[list[InvariantResult], ArrayLike]:
+    """Return invariant results and combined mask for required non-null checks.
 
-    Parameters
-    ----------
-    table:
-        Input table.
-    cols:
-        Columns that must be non-null.
+    Raises
+    ------
+    TypeError
+        Raised when DataFusion is required but unavailable.
 
     Returns
     -------
-    list[InvariantResult]
-        Invariant results for required non-null checks.
+    tuple[list[InvariantResult], ArrayLike]
+        Invariant results and combined bad-row mask.
     """
-    results: list[InvariantResult] = []
-    for column_name in cols:
-        mask = pc.fill_null(pc.is_null(table[column_name]), fill_value=False)
-        results.append(
-            InvariantResult(
-                mask=mask,
-                code="REQUIRED_NON_NULL",
-                message=f"{column_name} is required.",
-                column=column_name,
-                severity="ERROR",
-                source="required_non_null",
-            )
+    if not cols:
+        return [], pa.array([False] * table.num_rows, type=pa.bool_())
+    df_ctx = _datafusion_context(ctx)
+    if df_ctx is None:
+        msg = "DataFusion SessionContext required for required_non_null checks."
+        raise TypeError(msg)
+    table_name, resolved = _register_temp_table(df_ctx, table, prefix="finalize_required")
+    try:
+        mask_exprs: list[str] = []
+        combined_parts: list[str] = []
+        for column_name in cols:
+            if column_name in resolved.column_names:
+                expr = f"{_sql_identifier(column_name)} IS NULL"
+            else:
+                expr = "TRUE"
+            mask_expr = f"COALESCE({expr}, FALSE)"
+            mask_exprs.append(f"{mask_expr} AS {_sql_identifier(column_name)}")
+            combined_parts.append(mask_expr)
+        combined_expr = " OR ".join(combined_parts) if combined_parts else "FALSE"
+        sql = (
+            f"SELECT {', '.join(mask_exprs)}, {combined_expr} AS bad_any "
+            f"FROM {_sql_identifier(table_name)}"
         )
-    return results
+        result = df_ctx.sql(sql).to_arrow_table()
+    finally:
+        deregister = getattr(df_ctx, "deregister_table", None)
+        if callable(deregister):
+            deregister(table_name)
+    results = [
+        InvariantResult(
+            mask=result[column_name],
+            code="REQUIRED_NON_NULL",
+            message=f"{column_name} is required.",
+            column=column_name,
+            severity="ERROR",
+            source="required_non_null",
+        )
+        for column_name in cols
+    ]
+    return results, result["bad_any"]
 
 
 def _collect_invariant_results(
     table: TableLike,
     contract: Contract,
-) -> list[InvariantResult]:
-    """Collect invariant results and error metadata.
-
-    Parameters
-    ----------
-    table:
-        Input table.
-    contract:
-        Contract containing invariants.
+    *,
+    ctx: ExecutionContext,
+) -> tuple[list[InvariantResult], ArrayLike]:
+    """Collect invariant results and the combined bad-row mask.
 
     Returns
     -------
-    list[InvariantResult]
-        Invariant results.
+    tuple[list[InvariantResult], ArrayLike]
+        Invariant results and combined bad-row mask.
     """
-    results: list[InvariantResult] = []
-    results.extend(_required_non_null_results(table, contract.required_non_null))
+    results, required_bad_any = _required_non_null_results(
+        table,
+        contract.required_non_null,
+        ctx=ctx,
+    )
+    masks: list[ArrayLike] = [required_bad_any]
     for inv in contract.invariants:
         bad_mask, code = inv(table)
         results.append(
             InvariantResult(
-                mask=pc.fill_null(bad_mask, fill_value=False),
+                mask=bad_mask,
                 code=code,
                 message=code,
                 column=None,
@@ -377,30 +381,60 @@ def _collect_invariant_results(
                 source="invariant",
             )
         )
-    return results
+        masks.append(bad_mask)
+    df_ctx = _datafusion_context(ctx)
+    if df_ctx is None:
+        msg = "DataFusion SessionContext required to combine invariant masks."
+        raise TypeError(msg)
+    bad_any = _combine_masks_df(df_ctx, masks, table.num_rows)
+    return results, bad_any
 
 
-def _combine_masks(masks: Sequence[ArrayLike], length: int) -> ArrayLike:
-    """Combine multiple masks into a single mask.
-
-    Parameters
-    ----------
-    masks:
-        Sequence of boolean masks.
-    length:
-        Length of the output mask.
-
-    Returns
-    -------
-    pyarrow.Array
-        Combined boolean mask.
-    """
+def _combine_masks_df(
+    ctx: SessionContext,
+    masks: Sequence[ArrayLike],
+    length: int,
+) -> ArrayLike:
     if not masks:
-        return const_array(length, value=False, dtype=pa.bool_())
-    combined = masks[0]
-    for mask in masks[1:]:
-        combined = pc.or_(combined, mask)
-    return pc.fill_null(combined, fill_value=False)
+        return pa.array([False] * length, type=pa.bool_())
+    columns = {f"mask_{idx}": mask for idx, mask in enumerate(masks)}
+    table = pa.Table.from_pydict(columns)
+    table_name, _ = _register_temp_table(ctx, table, prefix="finalize_masks")
+    try:
+        parts = [f"COALESCE(mask_{idx}, FALSE)" for idx in range(len(masks))]
+        combined_expr = " OR ".join(parts) if parts else "FALSE"
+        sql = f"SELECT {combined_expr} AS bad_any FROM {_sql_identifier(table_name)}"
+        result = ctx.sql(sql).to_arrow_table()
+    finally:
+        deregister = getattr(ctx, "deregister_table", None)
+        if callable(deregister):
+            deregister(table_name)
+    return result["bad_any"]
+
+
+def _filter_good_rows(
+    table: TableLike,
+    bad_any: ArrayLike,
+    *,
+    ctx: ExecutionContext,
+) -> TableLike:
+    if table.num_rows == 0:
+        return table
+    df_ctx = _datafusion_context(ctx)
+    if df_ctx is None:
+        msg = "DataFusion SessionContext required to filter invariant failures."
+        raise TypeError(msg)
+    masked = table.append_column("_bad_any", bad_any)
+    table_name, resolved = _register_temp_table(df_ctx, masked, prefix="finalize_good")
+    try:
+        columns = [name for name in resolved.schema.names if name != "_bad_any"]
+        select_cols = ", ".join(_sql_identifier(name) for name in columns)
+        sql = f"SELECT {select_cols} FROM {_sql_identifier(table_name)} WHERE NOT _bad_any"
+        return df_ctx.sql(sql).to_arrow_table()
+    finally:
+        deregister = getattr(df_ctx, "deregister_table", None)
+        if callable(deregister):
+            deregister(table_name)
 
 
 def _build_error_table(
@@ -571,48 +605,20 @@ def _aggregate_error_detail_lists(
     detail_field_names: Sequence[str],
 ) -> TableLike:
     group_table = errors.select(list(group_cols) + list(detail_field_names))
-    group_table, dict_cols = _decode_dictionary_columns(group_table)
     df_ctx = _datafusion_context(ctx)
-    aggregated_table: pa.Table | None = None
-    if df_ctx is not None and _supports_error_detail_aggregation(df_ctx):
-        try:
-            aggregated_table = _aggregate_error_detail_lists_df(
-                df_ctx,
-                group_table,
-                group_cols=group_cols,
-                detail_field_names=detail_field_names,
-            )
-        except (RuntimeError, TypeError, ValueError):
-            aggregated_table = None
-    if aggregated_table is None:
-        aggregated_table = _aggregate_error_detail_lists_arrow(
-            group_table,
-            group_cols=group_cols,
-            detail_field_names=detail_field_names,
-        )
-    if aggregated_table is None:
-        msg = "Failed to aggregate error details."
-        raise RuntimeError(msg)
-    if dict_cols:
-        aggregated_table = _reencode_dictionary_columns(aggregated_table, dict_cols)
-    return cast("TableLike", aggregated_table)
-
-
-def _aggregate_error_detail_lists_arrow(
-    group_table: pa.Table,
-    *,
-    group_cols: Sequence[str],
-    detail_field_names: Sequence[str],
-) -> pa.Table:
-    aggregates = [(name, "list") for name in detail_field_names]
-    aggregated = cast(
-        "pa.Table",
-        group_table.group_by(list(group_cols), use_threads=True).aggregate(aggregates),
+    if df_ctx is None:
+        msg = "DataFusion SessionContext required to aggregate error details."
+        raise TypeError(msg)
+    if not _supports_error_detail_aggregation(df_ctx):
+        msg = "DataFusion array_agg/named_struct required for error aggregation."
+        raise TypeError(msg)
+    aggregated_table = _aggregate_error_detail_lists_df(
+        df_ctx,
+        group_table,
+        group_cols=group_cols,
+        detail_field_names=detail_field_names,
     )
-    list_columns = {name: aggregated[f"{name}_list"] for name in detail_field_names}
-    error_detail = _build_error_detail_from_lists(list_columns)
-    list_cols = [f"{name}_list" for name in detail_field_names]
-    return aggregated.append_column("error_detail", error_detail).drop(list_cols)
+    return cast("TableLike", aggregated_table)
 
 
 def _aggregate_error_details(
@@ -644,107 +650,6 @@ def _aggregate_error_details(
     )
 
 
-def _build_error_detail_from_lists(
-    list_columns: Mapping[str, ArrayLike | ChunkedArrayLike],
-) -> ArrayLike:
-    first = _combine_list_array(next(iter(list_columns.values())))
-    offsets = _list_offsets(first)
-    struct_fields: dict[str, ArrayLike] = {}
-    for name, list_col in list_columns.items():
-        list_array = _combine_list_array(list_col)
-        struct_fields[name] = _list_values(list_array)
-    detail_struct = build_struct(struct_fields, struct_type=ERROR_DETAIL_STRUCT)
-    return _build_list_from_offsets(offsets, detail_struct, template=first)
-
-
-def _build_list_from_offsets(
-    offsets: ArrayLike | ChunkedArrayLike,
-    values: ArrayLike | ChunkedArrayLike,
-    *,
-    template: ListArrayLike,
-) -> ListArrayLike:
-    if isinstance(template, pa.LargeListArray):
-        return pa.LargeListArray.from_arrays(offsets, values)
-    return build_list(offsets, values)
-
-
-def _list_offsets(list_array: ListArrayLike) -> ArrayLike:
-    if isinstance(list_array, pa.ListArray):
-        return cast("pa.ListArray", list_array).offsets
-    if isinstance(list_array, pa.LargeListArray):
-        return cast("pa.LargeListArray", list_array).offsets
-    msg = "Unsupported list array type for error detail aggregation."
-    raise TypeError(msg)
-
-
-def _is_list_like_type(dtype: DataTypeLike) -> bool:
-    return bool(
-        patypes.is_list(dtype)
-        or patypes.is_large_list(dtype)
-        or patypes.is_list_view(dtype)
-        or patypes.is_large_list_view(dtype)
-        or patypes.is_fixed_size_list(dtype)
-    )
-
-
-def _list_view_to_list_array(
-    values: pa.ListViewArray | pa.LargeListViewArray,
-) -> ListArrayLike:
-    lengths_method = getattr(values, "value_lengths", None)
-    if not callable(lengths_method):
-        msg = "List view arrays must expose value_lengths to build offsets."
-        raise TypeError(msg)
-    lengths = cast("ArrayLike", lengths_method())
-    lengths = pc.fill_null(lengths, fill_value=0)
-    if isinstance(values, pa.LargeListViewArray):
-        if lengths.type != pa.int64():
-            lengths = pc.cast(lengths, pa.int64())
-    elif lengths.type != pa.int32():
-        lengths = pc.cast(lengths, pa.int32())
-    offsets = pc.cumulative_sum(lengths)
-    zero = pa.array([0], type=offsets.type)
-    offsets = pa.concat_arrays([zero, offsets])
-    flat = _list_values(values)
-    mask = pc.is_null(values)
-    if isinstance(values, pa.LargeListViewArray):
-        return cast("ListArrayLike", pa.LargeListArray.from_arrays(offsets, flat, mask=mask))
-    return cast("ListArrayLike", pa.ListArray.from_arrays(offsets, flat, mask=mask))
-
-
-def _combine_list_array(values: ArrayLike | ChunkedArrayLike) -> ListArrayLike:
-    combined = values.combine_chunks() if isinstance(values, ChunkedArrayLike) else values
-    if isinstance(combined, pa.ListArray):
-        return cast("ListArrayLike", combined)
-    if isinstance(combined, pa.LargeListArray):
-        return cast("ListArrayLike", combined)
-    if isinstance(combined, pa.ListViewArray):
-        return _list_view_to_list_array(combined)
-    if isinstance(combined, pa.LargeListViewArray):
-        return _list_view_to_list_array(combined)
-    combined_type = getattr(combined, "type", None)
-    if combined_type is not None and _is_list_like_type(combined_type):
-        value_type = getattr(combined_type, "value_type", None)
-        if value_type is not None:
-            list_type = (
-                pa.large_list(cast("pa.DataType", value_type))
-                if patypes.is_large_list(combined_type) or patypes.is_large_list_view(combined_type)
-                else pa.list_(cast("pa.DataType", value_type))
-            )
-            casted = pc.cast(combined, list_type)
-            if isinstance(casted, (pa.ListArray, pa.LargeListArray)):
-                return cast("ListArrayLike", casted)
-    msg = "Expected list array for error detail aggregation."
-    raise TypeError(msg)
-
-
-def _list_values(values: ListArrayLike) -> ArrayLike:
-    resolved = getattr(values, "values", None)
-    if resolved is None:
-        msg = "Expected list arrays to expose flattened values."
-        raise TypeError(msg)
-    return cast("ArrayLike", resolved)
-
-
 def _datafusion_context(ctx: ExecutionContext) -> SessionContext | None:
     profile = ctx.runtime.datafusion
     if profile is None:
@@ -753,6 +658,40 @@ def _datafusion_context(ctx: ExecutionContext) -> SessionContext | None:
         return profile.session_context()
     except (RuntimeError, TypeError, ValueError):
         return None
+
+
+def _register_temp_table(
+    ctx: SessionContext,
+    table: TableLike,
+    *,
+    prefix: str,
+) -> tuple[str, pa.Table]:
+    resolved = coerce_table_like(table)
+    if isinstance(resolved, pa.RecordBatchReader):
+        reader = cast("RecordBatchReaderLike", resolved)
+        resolved_table = pa.Table.from_batches(list(reader))
+    else:
+        resolved_table = cast("pa.Table", resolved)
+    table_name = f"_{prefix}_{uuid.uuid4().hex}"
+    ctx.register_record_batches(table_name, [resolved_table.to_batches()])
+    return table_name, resolved_table
+
+
+def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
+    temp_name = f"_dtype_{uuid.uuid4().hex}"
+    table = pa.table({"value": pa.array([None], type=dtype)})
+    ctx.register_record_batches(temp_name, [table.to_batches()])
+    try:
+        result = ctx.sql(f"SELECT arrow_typeof(value) AS dtype FROM {temp_name}").to_arrow_table()
+        value = result["dtype"][0].as_py()
+    finally:
+        deregister = getattr(ctx, "deregister_table", None)
+        if callable(deregister):
+            deregister(temp_name)
+    if not isinstance(value, str):
+        msg = "Failed to resolve DataFusion type name."
+        raise TypeError(msg)
+    return value
 
 
 def _supports_error_detail_aggregation(ctx: SessionContext) -> bool:
@@ -775,11 +714,23 @@ def _aggregate_error_detail_lists_df(
     group_cols: Sequence[str],
     detail_field_names: Sequence[str],
 ) -> pa.Table:
-    table_name = f"_finalize_errors_{uuid.uuid4().hex}"
-    ctx.register_table(table_name, ctx.from_arrow(table))
+    table_name, resolved = _register_temp_table(ctx, table, prefix="finalize_errors")
     try:
+        selections: list[str] = []
+        for field in resolved.schema:
+            name = field.name
+            if patypes.is_dictionary(field.type):
+                dict_type = cast("pa.DictionaryType", field.type)
+                value_name = _arrow_type_name(ctx, dict_type.value_type)
+                selections.append(
+                    f"arrow_cast({_sql_identifier(name)}, '{value_name}') AS {_sql_identifier(name)}"
+                )
+            else:
+                selections.append(_sql_identifier(name))
+        select_sql = f"SELECT {', '.join(selections)} FROM {_sql_identifier(table_name)}"
+        df = ctx.sql(select_sql)
         struct_expr = f.named_struct([(name, col(name)) for name in detail_field_names])
-        aggregated = ctx.table(table_name).aggregate(
+        aggregated = df.aggregate(
             group_by=list(group_cols),
             aggs=[f.array_agg(struct_expr).alias("error_detail")],
         )
@@ -788,44 +739,6 @@ def _aggregate_error_detail_lists_df(
         deregister = getattr(ctx, "deregister_table", None)
         if callable(deregister):
             deregister(table_name)
-
-
-def _decode_dictionary_columns(
-    table: TableLike,
-) -> tuple[pa.Table, dict[str, pa.DictionaryType]]:
-    dict_cols: dict[str, pa.DictionaryType] = {}
-    columns: list[ChunkedArrayLike] = []
-    names: list[str] = []
-    for schema_field in table.schema:
-        col = table[schema_field.name]
-        if patypes.is_dictionary(schema_field.type):
-            dict_type = cast("pa.DictionaryType", schema_field.type)
-            dict_cols[schema_field.name] = dict_type
-            col = cast("ChunkedArrayLike", pc.cast(col, dict_type.value_type))
-        columns.append(col)
-        names.append(schema_field.name)
-    if not dict_cols:
-        return cast("pa.Table", table), {}
-    return pa.table(columns, names=names), dict_cols
-
-
-def _reencode_dictionary_columns(
-    table: pa.Table,
-    dict_cols: dict[str, pa.DictionaryType],
-) -> pa.Table:
-    if not dict_cols:
-        return table
-    columns: list[ChunkedArrayLike] = []
-    names: list[str] = []
-    for name in table.schema.names:
-        col = table[name]
-        dict_type = dict_cols.get(name)
-        if dict_type is not None:
-            encoded = pc.dictionary_encode(col)
-            col = cast("ChunkedArrayLike", pc.cast(encoded, dict_type))
-        columns.append(col)
-        names.append(name)
-    return pa.table(columns, names=names)
 
 
 def _build_alignment_table(
@@ -924,10 +837,9 @@ def finalize(
     )
     provenance_cols: list[str] = _provenance_columns(aligned, schema) if ctx.provenance else []
 
-    results = _collect_invariant_results(aligned, contract)
-    bad_any = _combine_masks([result.mask for result in results], aligned.num_rows)
+    results, bad_any = _collect_invariant_results(aligned, contract, ctx=ctx)
 
-    good = aligned.filter(pc.invert(bad_any))
+    good = _filter_good_rows(aligned, bad_any, ctx=ctx)
 
     raw_errors = _build_error_table(aligned, results, error_spec=options.error_spec)
     errors = _aggregate_error_details(

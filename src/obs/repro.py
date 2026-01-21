@@ -1105,6 +1105,7 @@ def _write_sqlglot_ast_payloads(
                 "raw_sql": raw_sql,
                 "optimized_sql": optimized_sql,
                 "ast_repr": metadata.get("ast_repr"),
+                "diff_script": metadata.get("diff_script"),
             }
         )
     if payloads:

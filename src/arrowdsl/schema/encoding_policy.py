@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 
 import pyarrow as pa
 import pyarrow.types as patypes
+from datafusion import SessionContext
 
-from arrowdsl.core.interop import DataTypeLike, TableLike, pc
+from arrowdsl.core.interop import DataTypeLike, TableLike, coerce_table_like
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 DEFAULT_DICTIONARY_INDEX_TYPE = pa.int32()
 
@@ -69,25 +72,85 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
     TableLike
         Table with dictionary-encoded columns applied.
     """
-    out = table
-    for name in policy.dictionary_cols:
-        if name not in out.column_names:
-            continue
-        arr = out[name]
-        if patypes.is_dictionary(arr.type):
-            continue
-        index_type = policy.dictionary_index_types.get(name, policy.dictionary_index_type)
-        ordered = policy.dictionary_ordered_flags.get(name, policy.dictionary_ordered)
-        encoded = pc.dictionary_encode(arr)
-        target_type = pa.dictionary(
-            index_type,
-            arr.type,
-            ordered=ordered,
-        )
-        encoded = pc.cast(encoded, target_type)
-        idx = out.schema.get_field_index(name)
-        out = out.set_column(idx, name, encoded)
-    return out
+    if not policy.dictionary_cols:
+        return table
+    df_ctx = _datafusion_context()
+    resolved = _ensure_table(table)
+    table_name = f"_encoding_{uuid.uuid4().hex}"
+    df_ctx.register_record_batches(table_name, [resolved.to_batches()])
+    try:
+        selections: list[str] = []
+        for field in resolved.schema:
+            name = field.name
+            identifier = _sql_identifier(name)
+            if name not in policy.dictionary_cols:
+                selections.append(identifier)
+                continue
+            if patypes.is_dictionary(field.type):
+                selections.append(identifier)
+                continue
+            index_type = policy.dictionary_index_types.get(name, policy.dictionary_index_type)
+            ordered = policy.dictionary_ordered_flags.get(name, policy.dictionary_ordered)
+            dict_type = _dictionary_type_name(
+                df_ctx,
+                index_type,
+                field.type,
+                ordered=ordered,
+            )
+            selections.append(f"arrow_cast({identifier}, '{dict_type}') AS {identifier}")
+        sql = f"SELECT {', '.join(selections)} FROM {table_name}"
+        return df_ctx.sql(sql).to_arrow_table()
+    finally:
+        deregister = getattr(df_ctx, "deregister_table", None)
+        if callable(deregister):
+            deregister(table_name)
+
+
+def _datafusion_context() -> SessionContext:
+    profile = DataFusionRuntimeProfile()
+    return profile.session_context()
+
+
+def _ensure_table(value: TableLike) -> pa.Table:
+    resolved = coerce_table_like(value)
+    if isinstance(resolved, pa.RecordBatchReader):
+        return pa.Table.from_batches(list(resolved))
+    return resolved if isinstance(resolved, pa.Table) else pa.table(resolved)
+
+
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _arrow_type_name(ctx: SessionContext, dtype: pa.DataType) -> str:
+    temp_name = f"_dtype_{uuid.uuid4().hex}"
+    table = pa.table({"value": pa.array([None], type=dtype)})
+    ctx.register_record_batches(temp_name, [table.to_batches()])
+    try:
+        result = ctx.sql(f"SELECT arrow_typeof(value) AS dtype FROM {temp_name}").to_arrow_table()
+        value = result["dtype"][0].as_py()
+    finally:
+        deregister = getattr(ctx, "deregister_table", None)
+        if callable(deregister):
+            deregister(temp_name)
+    if not isinstance(value, str):
+        msg = "Failed to resolve DataFusion type name."
+        raise TypeError(msg)
+    return value
+
+
+def _dictionary_type_name(
+    ctx: SessionContext,
+    index_type: pa.DataType,
+    value_type: pa.DataType,
+    *,
+    ordered: bool,
+) -> str:
+    index_name = _arrow_type_name(ctx, index_type)
+    value_name = _arrow_type_name(ctx, value_type)
+    _ = ordered
+    return f"Dictionary({index_name}, {value_name})"
 
 
 __all__ = [

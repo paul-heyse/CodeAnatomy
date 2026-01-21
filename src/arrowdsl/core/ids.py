@@ -5,18 +5,19 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
+from uuid import uuid4
+
+from datafusion import SessionContext
 
 import arrowdsl.core.interop as pa
 from arrowdsl.core.array_iter import iter_array_values, iter_arrays, iter_table_rows
-from arrowdsl.core.interop import pc
-from arrowdsl.core.validity import valid_mask_array
 from datafusion_engine.hash_utils import (
     hash64_from_text as _hash64_from_text,
 )
 from datafusion_engine.hash_utils import (
     hash128_from_text as _hash128_from_text,
 )
-from datafusion_engine.udf_registry import stable_hash64_values, stable_hash128_values
+from datafusion_engine.runtime import DataFusionRuntimeProfile
 
 type MissingPolicy = Literal["raise", "null"]
 
@@ -25,6 +26,91 @@ type ArrayOrScalar = pa.ArrayLike | pa.ChunkedArrayLike | pa.ScalarLike
 
 
 _NULL_SEPARATOR = "\x1f"
+
+
+def _datafusion_context() -> SessionContext:
+    profile = DataFusionRuntimeProfile()
+    return profile.session_context()
+
+
+def _register_table(ctx: SessionContext, table: pa.Table, *, prefix: str) -> str:
+    name = f"_{prefix}_{uuid4().hex}"
+    ctx.register_record_batches(name, [table.to_batches()])
+    return name
+
+
+def _deregister_table(ctx: SessionContext, name: str) -> None:
+    deregister = getattr(ctx, "deregister_table", None)
+    if callable(deregister):
+        deregister(name)
+
+
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _sql_literal(value: str) -> str:
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _coalesce_cast(expr: str, *, null_sentinel: str) -> str:
+    sentinel = _sql_literal(null_sentinel)
+    return f"COALESCE(CAST({expr} AS STRING), {sentinel})"
+
+
+def _concat_ws(parts: Sequence[str]) -> str:
+    if len(parts) == 1:
+        return parts[0]
+    separator = _sql_literal(_NULL_SEPARATOR)
+    return f"concat_ws({separator}, {', '.join(parts)})"
+
+
+def _hash_expression(
+    column_names: Sequence[str],
+    *,
+    prefix: str | None,
+    null_sentinel: str,
+    use_128: bool,
+    extra_literals: Sequence[str] = (),
+) -> str:
+    parts: list[str] = []
+    if prefix is not None:
+        parts.append(_sql_literal(prefix))
+    parts.extend(_sql_literal(value) for value in extra_literals)
+    parts.extend(
+        _coalesce_cast(_sql_identifier(name), null_sentinel=null_sentinel) for name in column_names
+    )
+    joined = _concat_ws(parts)
+    func = "stable_hash128" if use_128 else "stable_hash64"
+    return f"{func}({joined})"
+
+
+def _prefixed_hash_expression(
+    column_names: Sequence[str],
+    *,
+    prefix: str,
+    null_sentinel: str,
+    use_128: bool,
+    extra_literals: Sequence[str] = (),
+) -> str:
+    hash_expr = _hash_expression(
+        column_names,
+        prefix=prefix,
+        null_sentinel=null_sentinel,
+        use_128=use_128,
+        extra_literals=extra_literals,
+    )
+    return f"concat_ws(':', {_sql_literal(prefix)}, CAST({hash_expr} AS STRING))"
+
+
+def _ensure_table(value: pa.TableLike) -> pa.Table:
+    if isinstance(value, pa.RecordBatchReaderLike):
+        return pa.Table.from_batches(list(value))
+    if isinstance(value, pa.Table):
+        return value
+    return pa.Table.from_pydict(dict(value))
 
 
 def hash64_from_text(value: str | None) -> int | None:
@@ -38,67 +124,6 @@ def hash64_from_text(value: str | None) -> int | None:
     if value is None:
         return None
     return _hash64_from_text(value)
-
-
-def _hash64(values: pa.ArrayLike) -> pa.ArrayLike:
-    """Compute hash64 values using the shared stable hash UDF logic.
-
-    Parameters
-    ----------
-    values
-        Input array to hash.
-
-    Returns
-    -------
-    pa.ArrayLike
-        Int64 hash array.
-    """
-    result = stable_hash64_values(values)
-    if isinstance(result, pa.ScalarLike):
-        return pa.array([result.as_py()], type=pa.int64())
-    return pc.cast(result, pa.int64(), safe=False)
-
-
-def _hash128(values: pa.ArrayLike) -> pa.ArrayLike:
-    """Compute hash128 values using the shared stable hash UDF logic.
-
-    Parameters
-    ----------
-    values
-        Input array to hash.
-
-    Returns
-    -------
-    pa.ArrayLike
-        String hash array.
-    """
-    result = stable_hash128_values(values)
-    if isinstance(result, pa.ScalarLike):
-        return pa.array([result.as_py()], type=pa.string())
-    return pc.cast(result, pa.string(), safe=False)
-
-
-def _stringify(
-    array: pa.ArrayLike | pa.ChunkedArrayLike,
-    *,
-    null_sentinel: str,
-) -> pa.ArrayLike:
-    """Cast an array to string and fill nulls with a sentinel.
-
-    Parameters
-    ----------
-    array
-        Array-like input to cast.
-    null_sentinel
-        Replacement value for nulls.
-
-    Returns
-    -------
-    pa.ArrayLike
-        String array with nulls filled.
-    """
-    text = pc.cast(array, pa.string())
-    return pc.fill_null(text, fill_value=null_sentinel)
 
 
 def hash64_from_parts(
@@ -157,11 +182,23 @@ def _hash_from_arrays(
     if not arrays:
         msg = "hash_from_arrays requires at least one input array."
         raise ValueError(msg)
-    parts: list[ArrayOrScalar] = [_stringify(arr, null_sentinel=null_sentinel) for arr in arrays]
-    if prefix is not None:
-        parts.insert(0, pa.scalar(prefix))
-    joined = pc.binary_join_element_wise(*parts, _NULL_SEPARATOR)
-    return _hash128(joined) if use_128 else _hash64(joined)
+    ctx = _datafusion_context()
+    columns = {f"col_{idx}": value for idx, value in enumerate(arrays)}
+    table = pa.Table.from_pydict(columns)
+    name = _register_table(ctx, table, prefix="hash_arrays")
+    try:
+        col_names = tuple(columns.keys())
+        hash_expr = _hash_expression(
+            col_names,
+            prefix=prefix,
+            null_sentinel=null_sentinel,
+            use_128=use_128,
+        )
+        sql = f"SELECT {hash_expr} AS hash_value FROM {_sql_identifier(name)}"
+        result = ctx.sql(sql).to_arrow_table()
+    finally:
+        _deregister_table(ctx, name)
+    return result["hash_value"]
 
 
 def hash64_from_arrays(
@@ -226,15 +263,32 @@ def prefixed_hash_id(
     -------
     ArrayLike
         String array with prefixed hash IDs.
+
+    Raises
+    ------
+    ValueError
+        Raised when no input arrays are provided.
     """
-    hashed = _hash_from_arrays(
-        arrays,
-        prefix=prefix,
-        null_sentinel=null_sentinel,
-        use_128=use_128,
-    )
-    hashed_str = pc.cast(hashed, pa.string())
-    return pc.binary_join_element_wise(pa.scalar(prefix), hashed_str, ":")
+    if not arrays:
+        msg = "prefixed_hash_id requires at least one input array."
+        raise ValueError(msg)
+    ctx = _datafusion_context()
+    columns = {f"col_{idx}": value for idx, value in enumerate(arrays)}
+    table = pa.Table.from_pydict(columns)
+    name = _register_table(ctx, table, prefix="prefixed_hash")
+    try:
+        col_names = tuple(columns.keys())
+        hash_expr = _prefixed_hash_expression(
+            col_names,
+            prefix=prefix,
+            null_sentinel=null_sentinel,
+            use_128=use_128,
+        )
+        sql = f"SELECT {hash_expr} AS hash_value FROM {_sql_identifier(name)}"
+        result = ctx.sql(sql).to_arrow_table()
+    finally:
+        _deregister_table(ctx, name)
+    return result["hash_value"]
 
 
 def _arrays_from_columns(
@@ -320,12 +374,50 @@ def masked_prefixed_hash(
     -------
     ArrayLike | ChunkedArrayLike
         Prefixed hash IDs masked by required validity.
+
+    Raises
+    ------
+    ValueError
+        Raised when no input arrays are provided.
     """
-    hashed = prefixed_hash_id(arrays, prefix=prefix)
-    if not required:
-        return hashed
-    mask = valid_mask_array(required)
-    return pc.if_else(mask, hashed, pa.scalar(None, type=pa.string()))
+    if not arrays:
+        msg = "masked_prefixed_hash requires at least one input array."
+        raise ValueError(msg)
+    ctx = _datafusion_context()
+    columns: dict[str, pa.ArrayLike | pa.ChunkedArrayLike] = {
+        f"col_{idx}": value for idx, value in enumerate(arrays)
+    }
+    required_names: list[str] = []
+    for idx, value in enumerate(required):
+        name = f"req_{idx}"
+        columns[name] = value
+        required_names.append(name)
+    table = pa.Table.from_pydict(columns)
+    name = _register_table(ctx, table, prefix="masked_hash")
+    try:
+        col_names = tuple(key for key in columns if key.startswith("col_"))
+        hash_expr = _prefixed_hash_expression(
+            col_names,
+            prefix=prefix,
+            null_sentinel="None",
+            use_128=True,
+        )
+        if required_names:
+            mask_expr = " AND ".join(
+                f"{_sql_identifier(col)} IS NOT NULL" for col in required_names
+            )
+        else:
+            mask_expr = "TRUE"
+        sql = (
+            "SELECT CASE "
+            f"WHEN {mask_expr} THEN {hash_expr} "
+            "ELSE NULL END AS hash_value "
+            f"FROM {_sql_identifier(name)}"
+        )
+        result = ctx.sql(sql).to_arrow_table()
+    finally:
+        _deregister_table(ctx, name)
+    return result["hash_value"]
 
 
 def prefixed_hash64(
@@ -390,7 +482,7 @@ class SpanIdSpec:
 
 
 def add_span_id_column(table: pa.TableLike, spec: SpanIdSpec | None = None) -> pa.TableLike:
-    """Add a span_id column computed with Arrow hash kernels.
+    """Add a span_id column computed with DataFusion hash UDFs.
 
     Returns
     -------
@@ -398,35 +490,45 @@ def add_span_id_column(table: pa.TableLike, spec: SpanIdSpec | None = None) -> p
         Table with the span_id column appended.
     """
     spec = spec or SpanIdSpec()
-    path_col = spec.path_col
-    bstart_col = spec.bstart_col
-    bend_col = spec.bend_col
-    kind = spec.kind
-    out_col = spec.out_col
+    resolved = _ensure_table(table)
+    if spec.out_col in resolved.column_names:
+        return resolved
+    updated = _ensure_span_id_columns(resolved, spec=spec)
+    ctx = _datafusion_context()
+    name = _register_table(ctx, updated, prefix="span_ids")
+    try:
+        columns = (spec.path_col, spec.bstart_col, spec.bend_col)
+        hash_expr = _prefixed_hash_expression(
+            columns,
+            prefix="span",
+            null_sentinel="None",
+            use_128=True,
+            extra_literals=(spec.kind,) if spec.kind is not None else (),
+        )
+        mask_expr = " AND ".join(f"{_sql_identifier(col)} IS NOT NULL" for col in columns)
+        span_expr = f"CASE WHEN {mask_expr} THEN {hash_expr} ELSE NULL END"
+        sql = (
+            f"SELECT *, {span_expr} AS {_sql_identifier(spec.out_col)} "
+            f"FROM {_sql_identifier(name)}"
+        )
+        result = ctx.sql(sql).to_arrow_table()
+    finally:
+        _deregister_table(ctx, name)
+    return result
 
-    if out_col in table.column_names:
-        return table
-    if path_col in table.column_names:
-        path_arr = table[path_col]
-    else:
-        path_arr = pa.nulls(table.num_rows, type=pa.string())
-    if bstart_col in table.column_names:
-        bstart_arr = table[bstart_col]
-    else:
-        bstart_arr = pa.nulls(table.num_rows, type=pa.int64())
-    if bend_col in table.column_names:
-        bend_arr = table[bend_col]
-    else:
-        bend_arr = pa.nulls(table.num_rows, type=pa.int64())
 
-    arrays: list[pa.ArrayLike | pa.ChunkedArrayLike] = []
-    if kind is not None:
-        arrays.append(pa.array([kind] * table.num_rows, type=pa.string()))
-    arrays.extend((path_arr, bstart_arr, bend_arr))
-    prefixed = prefixed_hash_id(arrays, prefix="span", null_sentinel="None", use_128=True)
-    valid = valid_mask_array([path_arr, bstart_arr, bend_arr])
-    span_ids = pc.if_else(valid, prefixed, pa.scalar(None, type=pa.string()))
-    return table.append_column(out_col, span_ids)
+def _ensure_span_id_columns(table: pa.Table, *, spec: SpanIdSpec) -> pa.Table:
+    updated = table
+    required = (
+        (spec.path_col, pa.string()),
+        (spec.bstart_col, pa.int64()),
+        (spec.bend_col, pa.int64()),
+    )
+    for name, dtype in required:
+        if name in updated.column_names:
+            continue
+        updated = updated.append_column(name, pa.nulls(updated.num_rows, type=dtype))
+    return updated
 
 
 __all__ = [

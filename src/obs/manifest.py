@@ -227,6 +227,8 @@ class ManifestData:
     datafusion_traces: Mapping[str, object] | None = None
     datafusion_function_catalog: Sequence[Mapping[str, object]] | None = None
     datafusion_function_catalog_hash: str | None = None
+    datafusion_schema_map: Mapping[str, object] | None = None
+    datafusion_schema_map_hash: str | None = None
     runtime_profile_snapshot: Mapping[str, object] | None = None
     runtime_profile_hash: str | None = None
     sqlglot_policy_snapshot: Mapping[str, object] | None = None
@@ -944,6 +946,11 @@ def _manifest_notes(data: ManifestData) -> JsonDict:
             data.datafusion_function_catalog_hash,
             _to_json_value,
         ),
+        "datafusion_schema_map": _optional_note(data.datafusion_schema_map, _to_json_value),
+        "datafusion_schema_map_hash": _optional_note(
+            data.datafusion_schema_map_hash,
+            _to_json_value,
+        ),
         "runtime_profile_snapshot": _optional_note(
             data.runtime_profile_snapshot,
             _to_json_value,
@@ -1018,6 +1025,8 @@ def build_manifest(context: ManifestContext, data: ManifestData) -> Manifest:
         repro_extra["runtime_profile_hash"] = data.runtime_profile_hash
     if data.sqlglot_policy_snapshot:
         repro_extra["sqlglot_policy_snapshot"] = cast("JsonValue", data.sqlglot_policy_snapshot)
+    if data.datafusion_schema_map_hash:
+        repro_extra["datafusion_schema_map_hash"] = data.datafusion_schema_map_hash
     if data.function_registry_hash:
         repro_extra["function_registry_hash"] = data.function_registry_hash
     if data.function_registry_snapshot:

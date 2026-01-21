@@ -54,7 +54,7 @@ from schema_spec.system import (
     ddl_fingerprint_from_definition,
     make_dataset_spec,
 )
-from storage.deltalake import DeltaCdfOptions, read_delta_cdf
+from storage.deltalake import DeltaCdfOptions
 
 if TYPE_CHECKING:
     from datafusion_engine.runtime import DataFusionRuntimeProfile
@@ -632,7 +632,7 @@ def datafusion_external_table_sql(
     str | None
         External table DDL when available, otherwise ``None``.
     """
-    if location.format == "delta":
+    if location.format == "delta" and not _delta_provider_available():
         return None
     spec = _resolve_dataset_spec(name, location)
     if spec is None:
@@ -666,6 +666,17 @@ def datafusion_external_table_sql(
     return spec.external_table_sql(config)
 
 
+def _delta_provider_available() -> bool:
+    if callable(getattr(DeltaTable, "__datafusion_table_provider__", None)):
+        return True
+    try:
+        module = importlib.import_module("datafusion_ext")
+    except ImportError:  # pragma: no cover - optional dependency
+        return False
+    factory = getattr(module, "delta_table_provider", None)
+    return callable(factory)
+
+
 def _resolve_dataset_spec(name: str, location: DatasetLocation) -> DatasetSpec | None:
     if location.dataset_spec is not None:
         return location.dataset_spec
@@ -687,6 +698,8 @@ def _external_table_options(
     options: dict[str, object] = {}
     if runtime_profile is not None and runtime_profile.external_table_options:
         options.update(runtime_profile.external_table_options)
+    if location.storage_options:
+        options.update(location.storage_options)
     if location.read_options:
         options.update(location.read_options)
     if scan is not None:
@@ -1752,15 +1765,10 @@ def _partition_column_rows(
     table_name: str,
 ) -> tuple[list[dict[str, object]] | None, str | None]:
     try:
-        table = ctx.sql(
-            "SELECT column_name, data_type, ordinal_position "
-            "FROM information_schema.columns "
-            f"WHERE table_name = '{table_name}' "
-            "ORDER BY ordinal_position"
-        ).to_arrow_table()
+        table = SchemaIntrospector(ctx).table_columns_with_ordinal(table_name)
     except (RuntimeError, TypeError, ValueError) as exc:
         return None, str(exc)
-    return table.to_pylist(), None
+    return table, None
 
 
 def _partition_columns_from_rows(
@@ -2052,6 +2060,11 @@ def register_delta_cdf_df(
 ) -> DataFrame:
     """Register a Delta CDF snapshot as a DataFusion table.
 
+    Raises
+    ------
+    ValueError
+        Raised when the Delta CDF provider cannot be constructed.
+
     Returns
     -------
     datafusion.dataframe.DataFrame
@@ -2063,36 +2076,25 @@ def register_delta_cdf_df(
     runtime_profile = resolved.runtime_profile
     table = DeltaTable(path, storage_options=dict(storage_options) if storage_options else None)
     provider = _delta_cdf_provider(table, cdf_options)
-    provider_name = "arrow"
-    if provider is not None:
-        ctx.register_table(name, provider)
-        provider_name = "table_provider"
-        _record_table_provider_artifact(
-            runtime_profile,
-            name=name,
-            provider=provider,
-            provider_kind="cdf_table_provider",
-            source=None,
-        )
-    else:
-        cdf = read_delta_cdf(path, options=cdf_options, storage_options=storage_options)
-        arrow_table = _ensure_pyarrow_table(cdf)
-        ctx.register_record_batches(name, [arrow_table.to_batches()])
+    if provider is None:
+        msg = f"Delta CDF provider unavailable for {path!r}."
+        raise ValueError(msg)
+    ctx.register_table(name, provider)
+    _record_table_provider_artifact(
+        runtime_profile,
+        name=name,
+        provider=provider,
+        provider_kind="cdf_table_provider",
+        source=None,
+    )
     _record_delta_cdf_artifact(
         runtime_profile,
         name=name,
         path=path,
-        provider=provider_name,
+        provider="table_provider",
         options=cdf_options,
     )
     return ctx.table(name)
-
-
-def _ensure_pyarrow_table(value: object) -> pa.Table:
-    if isinstance(value, pa.Table):
-        return value
-    msg = f"Delta CDF read expected pyarrow.Table, got {type(value)}"
-    raise TypeError(msg)
 
 
 def _call_cdf_provider(

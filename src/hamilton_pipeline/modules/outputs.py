@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import cast
 
 import pyarrow as pa
+from datafusion import SessionContext
 from hamilton.function_modifiers import tag
 
 from arrowdsl.core.execution_context import ExecutionContext
@@ -32,7 +33,12 @@ from core_types import JsonDict, JsonValue
 from cpg.constants import CpgBuildArtifacts
 from datafusion_engine.bridge import validate_table_constraints
 from datafusion_engine.registry_bridge import cached_dataset_names, register_dataset_df
-from datafusion_engine.runtime import DataFusionRuntimeProfile, dataset_spec_from_context
+from datafusion_engine.runtime import (
+    DataFusionRuntimeProfile,
+    dataset_spec_from_context,
+    read_delta_table_from_path,
+)
+from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_registry import is_nested_dataset
 from engine.function_registry import default_function_registry
 from engine.plan_cache import PlanCacheEntry
@@ -110,7 +116,6 @@ from storage.deltalake import (
     apply_delta_write_policies,
     coerce_delta_table,
     delta_table_version,
-    read_table_delta,
     write_dataset_delta,
     write_finalize_result_delta,
     write_named_datasets_delta,
@@ -446,6 +451,19 @@ def _datafusion_function_catalog_snapshot(
         return None, None
     table = pa.Table.from_pylist(snapshot)
     return snapshot, ipc_hash(table)
+
+
+def _datafusion_schema_map_snapshot(
+    ctx: ExecutionContext,
+) -> tuple[Mapping[str, object] | None, str | None]:
+    profile = ctx.runtime.datafusion
+    if profile is None or not profile.enable_information_schema:
+        return None, None
+    session = profile.session_context()
+    introspector = SchemaIntrospector(session)
+    schema_map = introspector.schema_map()
+    schema_hash = introspector.schema_map_fingerprint()
+    return schema_map, schema_hash
 
 
 def _datafusion_write_policy_snapshot(ctx: ExecutionContext) -> Mapping[str, object] | None:
@@ -1515,7 +1533,7 @@ def _write_normalized_inputs(
 def _normalized_input_row_count(path: str | None) -> int | None:
     if not path:
         return None
-    table = read_table_delta(path)
+    table = read_delta_table_from_path(path)
     return int(table.num_rows)
 
 
@@ -2293,6 +2311,235 @@ def relspec_input_column_stats(relspec_input_datasets: dict[str, TableLike]) -> 
     return column_stats_table(relspec_input_datasets)
 
 
+@dataclass(frozen=True)
+class _ScanTelemetryInputs:
+    """Inputs required to compute scan telemetry for a dataset."""
+
+    loc: DatasetLocation
+    ctx: ExecutionContext
+    required_columns: Sequence[str]
+    scan_columns: Sequence[str]
+    scan_profile: JsonDict | None
+    discovery_policy: JsonDict | None
+
+
+def _datafusion_scan_telemetry(inputs: _ScanTelemetryInputs) -> ScanTelemetry:
+    """Return scan telemetry for Delta locations via DataFusion.
+
+    Raises
+    ------
+    TypeError
+        Raised when DataFusion runtime profile is unavailable.
+
+    Returns
+    -------
+    ScanTelemetry
+        Telemetry payload with DataFusion-derived counts and schemas.
+    """
+    runtime_profile = inputs.ctx.runtime.datafusion
+    if runtime_profile is None:
+        msg = "DataFusion runtime profile is required for Delta scan telemetry."
+        raise TypeError(msg)
+    session = runtime_profile.session_context()
+    table_name = f"scan_{uuid.uuid4().hex}"
+    register_dataset_df(
+        session,
+        name=table_name,
+        location=inputs.loc,
+        runtime_profile=runtime_profile,
+    )
+    try:
+        count_rows = _datafusion_count_rows(session, table_name)
+        schema = session.table(table_name).schema()
+    finally:
+        with suppress(KeyError, RuntimeError, TypeError, ValueError):
+            session.deregister_table(table_name)
+    schema_payload = schema_to_dict(schema)
+    return ScanTelemetry(
+        fragment_count=0,
+        row_group_count=0,
+        count_rows=count_rows,
+        estimated_rows=count_rows,
+        file_hints=(),
+        fragment_paths=(),
+        partition_expressions=(),
+        required_columns=tuple(inputs.required_columns),
+        scan_columns=tuple(inputs.scan_columns),
+        dataset_schema=schema_payload,
+        projected_schema=schema_payload,
+        discovery_policy=inputs.discovery_policy,
+        scan_profile=inputs.scan_profile,
+    )
+
+
+def _datafusion_schema_for_location(
+    *,
+    loc: DatasetLocation,
+    ctx: ExecutionContext,
+) -> pa.Schema:
+    """Return the DataFusion schema for a dataset location.
+
+    Raises
+    ------
+    TypeError
+        Raised when DataFusion runtime profile is unavailable.
+
+    Returns
+    -------
+    pyarrow.Schema
+        Schema derived from DataFusion table registration.
+    """
+    runtime_profile = ctx.runtime.datafusion
+    if runtime_profile is None:
+        msg = "DataFusion runtime profile is required for Delta schema inspection."
+        raise TypeError(msg)
+    session = runtime_profile.session_context()
+    table_name = f"schema_{uuid.uuid4().hex}"
+    register_dataset_df(
+        session,
+        name=table_name,
+        location=loc,
+        runtime_profile=runtime_profile,
+    )
+    try:
+        return session.table(table_name).schema()
+    finally:
+        with suppress(KeyError, RuntimeError, TypeError, ValueError):
+            session.deregister_table(table_name)
+
+
+def _datafusion_count_rows(ctx: SessionContext, table_name: str) -> int | None:
+    """Return a COUNT(*) for a registered table.
+
+    Returns
+    -------
+    int | None
+        Count value when rows are present, otherwise ``None``.
+    """
+    table = ctx.sql(f"SELECT COUNT(*) AS count_rows FROM {table_name}").to_arrow_table()
+    if table.num_rows < 1:
+        return None
+    value = table["count_rows"][0].as_py()
+    return int(value) if isinstance(value, int) else None
+
+
+def _scan_telemetry_for_non_delta(
+    *,
+    name: str,
+    loc: DatasetLocation,
+    ctx: ExecutionContext,
+) -> ScanTelemetry:
+    if loc.table_spec is not None:
+        dataset_spec = make_dataset_spec(table_spec=loc.table_spec)
+    elif loc.dataset_spec is not None:
+        dataset_spec = loc.dataset_spec
+    else:
+        dataset_spec = None
+    dataset_options = DatasetSourceOptions(
+        dataset_format=loc.format,
+        filesystem=loc.filesystem,
+        partitioning=loc.partitioning,
+        parquet_read_options=ctx.runtime.scan.parquet_read_options,
+        storage_options=loc.storage_options,
+        delta_version=loc.delta_version,
+        delta_timestamp=loc.delta_timestamp,
+        discovery=DatasetDiscoveryOptions(),
+    )
+    dataset = normalize_dataset_source(loc.path, options=dataset_options)
+    if dataset_spec is None:
+        dataset_spec = dataset_spec_from_schema(name=name, schema=dataset.schema)
+    query = dataset_spec.query()
+    scan_provenance = tuple(ctx.runtime.scan.scan_provenance_columns)
+    scan_column_names = list(query.projection.base)
+    for col_name in scan_provenance:
+        if col_name not in scan_column_names:
+            scan_column_names.append(col_name)
+    scan_columns = scan_column_names or None
+    required_columns = list(scan_column_names)
+    scan_profile = _scan_profile_payload(ctx)
+    predicate = None
+    if isinstance(query.pushdown_predicate, ExprIR):
+        predicate = query.pushdown_predicate.to_expression()
+    scanner = dataset.scanner(
+        columns=scan_columns,
+        filter=predicate,
+        **ctx.runtime.scan.scanner_kwargs(),
+    )
+    return fragment_telemetry(
+        dataset,
+        predicate=predicate,
+        scanner=scanner,
+        options=ScanTelemetryOptions(
+            discovery_policy=dataset_options.discovery_payload(),
+            scan_profile=scan_profile,
+            required_columns=required_columns,
+            scan_columns=scan_column_names,
+        ),
+    )
+
+
+def _scan_telemetry_for_delta(
+    *,
+    loc: DatasetLocation,
+    ctx: ExecutionContext,
+) -> ScanTelemetry:
+    dataset_options = DatasetSourceOptions(
+        dataset_format="delta",
+        filesystem=loc.filesystem,
+        storage_options=loc.storage_options,
+        delta_version=loc.delta_version,
+        delta_timestamp=loc.delta_timestamp,
+    )
+    discovery_policy = dataset_options.discovery_payload()
+    schema = _datafusion_schema_for_location(loc=loc, ctx=ctx)
+    scan_column_names = list(schema.names)
+    scan_provenance = tuple(ctx.runtime.scan.scan_provenance_columns)
+    for col_name in scan_provenance:
+        if col_name not in scan_column_names and col_name in schema.names:
+            scan_column_names.append(col_name)
+    scan_profile = _scan_profile_payload(ctx)
+    return _datafusion_scan_telemetry(
+        _ScanTelemetryInputs(
+            loc=loc,
+            ctx=ctx,
+            required_columns=scan_column_names,
+            scan_columns=scan_column_names,
+            scan_profile=scan_profile,
+            discovery_policy=discovery_policy,
+        )
+    )
+
+
+def _telemetry_row(name: str, telemetry: ScanTelemetry) -> dict[str, object]:
+    scan_profile_text = _stable_repr(_normalize_value(telemetry.scan_profile))
+    dataset_schema = (
+        _stable_repr(_normalize_value(telemetry.dataset_schema))
+        if telemetry.dataset_schema is not None
+        else None
+    )
+    projected_schema = (
+        _stable_repr(_normalize_value(telemetry.projected_schema))
+        if telemetry.projected_schema is not None
+        else None
+    )
+    return {
+        "dataset": name,
+        "fragment_count": int(telemetry.fragment_count),
+        "row_group_count": int(telemetry.row_group_count),
+        "count_rows": telemetry.count_rows,
+        "estimated_rows": telemetry.estimated_rows,
+        "file_hints": list(telemetry.file_hints),
+        "fragment_paths": list(telemetry.fragment_paths),
+        "partition_expressions": list(telemetry.partition_expressions),
+        "required_columns": list(telemetry.required_columns),
+        "scan_columns": list(telemetry.scan_columns),
+        "dataset_schema_json": dataset_schema,
+        "projected_schema_json": projected_schema,
+        "discovery_policy_json": _stable_repr(_normalize_value(telemetry.discovery_policy)),
+        "scan_profile_json": scan_profile_text,
+    }
+
+
 @tag(layer="obs", artifact="relspec_scan_telemetry", kind="table")
 def relspec_scan_telemetry(
     persist_relspec_input_datasets: dict[str, DatasetLocation],
@@ -2310,79 +2557,11 @@ def relspec_scan_telemetry(
 
     rows: list[dict[str, object]] = []
     for name, loc in persist_relspec_input_datasets.items():
-        dataset_options = DatasetSourceOptions(
-            dataset_format=loc.format,
-            filesystem=loc.filesystem,
-            partitioning=loc.partitioning,
-            parquet_read_options=ctx.runtime.scan.parquet_read_options,
-            storage_options=loc.storage_options,
-            delta_version=loc.delta_version,
-            delta_timestamp=loc.delta_timestamp,
-            discovery=DatasetDiscoveryOptions(),
-        )
-        dataset = normalize_dataset_source(loc.path, options=dataset_options)
-        if loc.table_spec is not None:
-            dataset_spec = make_dataset_spec(table_spec=loc.table_spec)
+        if loc.format == "delta":
+            telemetry = _scan_telemetry_for_delta(loc=loc, ctx=ctx)
         else:
-            dataset_spec = dataset_spec_from_schema(name=name, schema=dataset.schema)
-        query = dataset_spec.query()
-        scan_provenance = tuple(ctx.runtime.scan.scan_provenance_columns)
-        scan_column_names = list(query.projection.base)
-        for col_name in scan_provenance:
-            if col_name not in scan_column_names:
-                scan_column_names.append(col_name)
-        scan_columns = scan_column_names or None
-        required_columns = list(scan_column_names)
-        predicate = None
-        if isinstance(query.pushdown_predicate, ExprIR):
-            predicate = query.pushdown_predicate.to_expression()
-        scanner = dataset.scanner(
-            columns=scan_columns,
-            filter=predicate,
-            **ctx.runtime.scan.scanner_kwargs(),
-        )
-        telemetry = fragment_telemetry(
-            dataset,
-            predicate=predicate,
-            scanner=scanner,
-            options=ScanTelemetryOptions(
-                discovery_policy=dataset_options.discovery_payload(),
-                scan_profile=_scan_profile_payload(ctx),
-                required_columns=required_columns,
-                scan_columns=scan_column_names,
-            ),
-        )
-        scan_profile_text = _stable_repr(_normalize_value(telemetry.scan_profile))
-        dataset_schema = (
-            _stable_repr(_normalize_value(telemetry.dataset_schema))
-            if telemetry.dataset_schema is not None
-            else None
-        )
-        projected_schema = (
-            _stable_repr(_normalize_value(telemetry.projected_schema))
-            if telemetry.projected_schema is not None
-            else None
-        )
-        rows.append(
-            {
-                "dataset": name,
-                "fragment_count": int(telemetry.fragment_count),
-                "row_group_count": int(telemetry.row_group_count),
-                "count_rows": telemetry.count_rows,
-                "estimated_rows": telemetry.estimated_rows,
-                "file_hints": list(telemetry.file_hints),
-                "fragment_paths": list(telemetry.fragment_paths),
-                "partition_expressions": list(telemetry.partition_expressions),
-                "required_columns": list(telemetry.required_columns),
-                "scan_columns": list(telemetry.scan_columns),
-                "dataset_schema_json": dataset_schema,
-                "projected_schema_json": projected_schema,
-                "discovery_policy_json": _stable_repr(_normalize_value(telemetry.discovery_policy))
-                if telemetry.discovery_policy is not None
-                else None,
-                "scan_profile_json": scan_profile_text,
-            }
-        )
+            telemetry = _scan_telemetry_for_non_delta(name=name, loc=loc, ctx=ctx)
+        rows.append(_telemetry_row(name, telemetry))
     return scan_telemetry_table(rows)
 
 
@@ -2617,6 +2796,8 @@ def manifest_data(
         datafusion_traces=runtime_artifacts.datafusion_traces,
         datafusion_function_catalog=runtime_artifacts.datafusion_function_catalog,
         datafusion_function_catalog_hash=runtime_artifacts.datafusion_function_catalog_hash,
+        datafusion_schema_map=runtime_artifacts.datafusion_schema_map,
+        datafusion_schema_map_hash=runtime_artifacts.datafusion_schema_map_hash,
         runtime_profile_snapshot=runtime_artifacts.runtime_snapshot.payload(),
         runtime_profile_hash=runtime_artifacts.runtime_snapshot.profile_hash,
         sqlglot_policy_snapshot=sqlglot_policy_snapshot().payload(),
@@ -2678,6 +2859,8 @@ class _ManifestRuntimeArtifacts:
     datafusion_traces: Mapping[str, object] | None
     datafusion_function_catalog: list[dict[str, object]] | None
     datafusion_function_catalog_hash: str | None
+    datafusion_schema_map: Mapping[str, object] | None
+    datafusion_schema_map_hash: str | None
     runtime_snapshot: RuntimeProfileSnapshot
 
 
@@ -2695,6 +2878,7 @@ def _manifest_runtime_artifacts(ctx: ExecutionContext) -> _ManifestRuntimeArtifa
     datafusion_feature_gates = _datafusion_feature_gates(ctx)
     datafusion_metrics, datafusion_traces = _datafusion_runtime_artifacts(ctx)
     function_catalog, function_catalog_hash = _datafusion_function_catalog_snapshot(ctx)
+    schema_map, schema_map_hash = _datafusion_schema_map_snapshot(ctx)
     runtime_snapshot = runtime_profile_snapshot(ctx.runtime)
     return _ManifestRuntimeArtifacts(
         datafusion_settings=datafusion_settings,
@@ -2704,6 +2888,8 @@ def _manifest_runtime_artifacts(ctx: ExecutionContext) -> _ManifestRuntimeArtifa
         datafusion_traces=datafusion_traces,
         datafusion_function_catalog=function_catalog,
         datafusion_function_catalog_hash=function_catalog_hash,
+        datafusion_schema_map=schema_map,
+        datafusion_schema_map_hash=schema_map_hash,
         runtime_snapshot=runtime_snapshot,
     )
 
@@ -2756,6 +2942,7 @@ def _sqlglot_ast_payloads(manifest_inputs: ManifestInputs) -> list[JsonDict] | N
                 "raw_sql": raw_sql,
                 "optimized_sql": optimized_sql,
                 "ast_repr": metadata.get("ast_repr"),
+                "diff_script": metadata.get("diff_script"),
             }
         )
     return payloads or None

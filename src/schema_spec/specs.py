@@ -30,7 +30,13 @@ from arrowdsl.schema.metadata import schema_constraints_from_metadata, schema_id
 from arrowdsl.schema.schema import CastErrorPolicy, SchemaMetadataSpec, SchemaTransform
 from registry_common.arrow_payloads import payload_hash
 from registry_common.metadata import metadata_list_bytes
-from sqlglot_tools.optimizer import normalize_ddl_sql, register_datafusion_dialect
+from sqlglot_tools.optimizer import (
+    SqlGlotPolicy,
+    default_sqlglot_policy,
+    normalize_ddl_sql,
+    register_datafusion_dialect,
+    sqlglot_sql,
+)
 
 DICT_STRING = interop.dictionary(interop.int32(), interop.string())
 
@@ -45,6 +51,36 @@ _DDL_FINGERPRINT_SCHEMA = pa.schema(
 
 if TYPE_CHECKING:
     from arrowdsl.spec.expr_ir import ExprIR
+
+
+def _ddl_policy(dialect: str) -> SqlGlotPolicy:
+    """Return a SQLGlot policy with the given dialect pinned.
+
+    Returns
+    -------
+    SqlGlotPolicy
+        SQLGlot policy configured for the dialect.
+    """
+    policy = default_sqlglot_policy()
+    return replace(policy, read_dialect=dialect, write_dialect=dialect)
+
+
+def _table_schema_expr(
+    name: str,
+    *,
+    expressions: Sequence[exp.Expression],
+) -> exp.Schema:
+    """Return a SQLGlot schema expression for a table definition.
+
+    Returns
+    -------
+    sqlglot.exp.Schema
+        SQLGlot schema expression for a table.
+    """
+    return exp.Schema(
+        this=exp.Table(this=exp.Identifier(this=name)),
+        expressions=list(expressions),
+    )
 
 
 def schema_metadata(name: str, version: int | None) -> dict[bytes, bytes]:
@@ -491,11 +527,17 @@ class TableSchemaSpec:
         """
         name = table_name or self.name
         dialect_name = dialect or "datafusion"
+        if dialect_name in {"datafusion", "datafusion_ext"}:
+            register_datafusion_dialect()
         column_defs = self.to_sqlglot_column_defs(dialect=dialect_name)
-        columns_sql = ", ".join(col.sql(dialect=dialect_name) for col in column_defs)
+        expressions: list[exp.Expression] = list(column_defs)
         if self.key_fields:
-            columns_sql = f"{columns_sql}, PRIMARY KEY ({', '.join(self.key_fields)})"
-        ddl = f"CREATE TABLE {name} ({columns_sql})"
+            expressions.append(
+                exp.PrimaryKey(expressions=[exp.to_identifier(field) for field in self.key_fields])
+            )
+        schema_expr = _table_schema_expr(name, expressions=expressions)
+        create_expr = exp.Create(this=schema_expr, kind="TABLE")
+        ddl = sqlglot_sql(create_expr, policy=_ddl_policy(dialect_name))
         return normalize_ddl_sql(ddl)
 
     def to_create_external_table_sql(self, config: ExternalTableConfig) -> str:
@@ -508,15 +550,22 @@ class TableSchemaSpec:
         """
         name = config.table_name or self.name
         dialect_name = config.dialect or "datafusion"
+        if dialect_name in {"datafusion", "datafusion_ext"}:
+            register_datafusion_dialect()
         column_defs = self.to_sqlglot_column_defs(dialect=dialect_name)
-        columns_sql = ", ".join(col.sql(dialect=dialect_name) for col in column_defs)
+        expressions: list[exp.Expression] = list(column_defs)
         if self.key_fields:
-            columns_sql = f"{columns_sql}, PRIMARY KEY ({', '.join(self.key_fields)})"
+            expressions.append(
+                exp.PrimaryKey(expressions=[exp.to_identifier(field) for field in self.key_fields])
+            )
+        columns_sql = ", ".join(expr.sql(dialect=dialect_name) for expr in expressions)
         create_keyword = (
             "CREATE UNBOUNDED EXTERNAL TABLE" if config.unbounded else "CREATE EXTERNAL TABLE"
         )
         parts = [f"{create_keyword} {name} ({columns_sql})"]
-        parts.append(f"STORED AS {config.file_format.upper()}")
+        file_format = config.file_format
+        stored_as = "DELTATABLE" if file_format.lower() == "delta" else file_format.upper()
+        parts.append(f"STORED AS {stored_as}")
         if config.compression:
             parts.append(f"COMPRESSION TYPE {config.compression}")
         parts.append(f"LOCATION {_sql_literal(config.location)}")

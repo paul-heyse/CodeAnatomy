@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import base64
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
 import pyarrow as pa
+from sqlglot import Expression
+from sqlglot.diff import diff
+from sqlglot.serde import dump
 
 from arrowdsl.spec.io import rows_from_table, table_from_rows
 from datafusion_engine.kernel_registry import KernelCapability
@@ -236,6 +240,9 @@ def _sqlglot_metadata_payload(diagnostics: SqlGlotDiagnostics) -> dict[str, str]
         "plan_fingerprint": plan_fingerprint(diagnostics.optimized, dialect=policy.write_dialect),
         "sqlglot_policy_hash": sqlglot_policy_snapshot().policy_hash,
     }
+    diff_script = _sqlglot_diff_script(diagnostics)
+    if diff_script is not None:
+        metadata["diff_script"] = diff_script
     if diagnostics.normalization_distance is not None:
         metadata["normalization_distance"] = str(diagnostics.normalization_distance)
     if diagnostics.normalization_max_distance is not None:
@@ -262,6 +269,47 @@ def _set_joined(metadata: dict[str, str], key: str, values: Sequence[str]) -> No
     """
     if values:
         metadata[key] = ",".join(values)
+
+
+def _sqlglot_diff_script(diagnostics: SqlGlotDiagnostics) -> str | None:
+    payload = _sqlglot_diff_payload(diagnostics.expression, diagnostics.optimized)
+    if not payload:
+        return None
+    return json.dumps(payload, ensure_ascii=True)
+
+
+def _sqlglot_diff_payload(
+    source: Expression,
+    target: Expression,
+) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    for op in diff(source, target):
+        entry: dict[str, object] = {"op": op.__class__.__name__.lower()}
+        expression = getattr(op, "expression", None)
+        source_expr = getattr(op, "source", None)
+        target_expr = getattr(op, "target", None)
+        dumped = _dump_expr(expression)
+        if dumped is not None:
+            entry["expression"] = dumped
+        dumped = _dump_expr(source_expr)
+        if dumped is not None:
+            entry["source"] = dumped
+        dumped = _dump_expr(target_expr)
+        if dumped is not None:
+            entry["target"] = dumped
+        entries.append(entry)
+    return entries
+
+
+def _dump_expr(expr: object) -> object | None:
+    if expr is None:
+        return None
+    if not isinstance(expr, Expression):
+        return repr(expr)
+    try:
+        return dump(expr)
+    except (TypeError, ValueError):
+        return repr(expr)
 
 
 def _apply_diff_metadata(metadata: dict[str, str], diff: SqlGlotRelationDiff) -> None:

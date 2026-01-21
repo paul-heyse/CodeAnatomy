@@ -145,7 +145,7 @@ def _datafusion_type_name(dtype: DataTypeLike) -> str:
         names=["value"],
     )
     batches = list(table.to_batches())
-    ctx.register_record_batches("t", [batches])
+    ctx.register_record_batches("t", batches)
     result = ctx.sql("SELECT arrow_typeof(value) AS dtype FROM t").to_arrow_table()
     value = result["dtype"][0].as_py()
     if not isinstance(value, str):
@@ -167,7 +167,7 @@ def _register_temp_table(ctx: SessionContext, table: TableLike, *, prefix: str) 
     else:
         resolved_table = cast("ArrowTable", resolved)
     batches = list(resolved_table.to_batches())
-    ctx.register_record_batches(name, [batches])
+    ctx.register_record_batches(name, batches)
     return name
 
 

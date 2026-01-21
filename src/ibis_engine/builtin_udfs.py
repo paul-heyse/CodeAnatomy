@@ -92,7 +92,58 @@ def col_to_byte(_line: Value, offset: Value, _col_unit: Value) -> Value:
     return offset.cast("int64")
 
 
-IBIS_UDF_SPECS: tuple[IbisUdfSpec, ...] = ()
+IBIS_UDF_SPECS: tuple[IbisUdfSpec, ...] = (
+    IbisUdfSpec(
+        func_id="stable_hash64",
+        engine_name="stable_hash64",
+        kind="scalar",
+        input_types=(pa.string(),),
+        return_type=pa.int64(),
+        arg_names=("value",),
+        lanes=("ibis_builtin",),
+        rewrite_tags=("hash",),
+    ),
+    IbisUdfSpec(
+        func_id="stable_hash128",
+        engine_name="stable_hash128",
+        kind="scalar",
+        input_types=(pa.string(),),
+        return_type=pa.string(),
+        arg_names=("value",),
+        lanes=("ibis_builtin",),
+        rewrite_tags=("hash",),
+    ),
+    IbisUdfSpec(
+        func_id="prefixed_hash64",
+        engine_name="prefixed_hash64",
+        kind="scalar",
+        input_types=(pa.string(), pa.string()),
+        return_type=pa.string(),
+        arg_names=("prefix", "value"),
+        lanes=("ibis_builtin",),
+        rewrite_tags=("hash",),
+    ),
+    IbisUdfSpec(
+        func_id="stable_id",
+        engine_name="stable_id",
+        kind="scalar",
+        input_types=(pa.string(), pa.string()),
+        return_type=pa.string(),
+        arg_names=("prefix", "value"),
+        lanes=("ibis_builtin",),
+        rewrite_tags=("hash",),
+    ),
+    IbisUdfSpec(
+        func_id="col_to_byte",
+        engine_name="col_to_byte",
+        kind="scalar",
+        input_types=(pa.string(), pa.int64(), pa.string()),
+        return_type=pa.int64(),
+        arg_names=("line_text", "col", "col_unit"),
+        lanes=("ibis_builtin",),
+        rewrite_tags=("position_encoding",),
+    ),
+)
 
 
 def ibis_udf_specs() -> tuple[IbisUdfSpec, ...]:

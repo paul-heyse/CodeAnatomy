@@ -365,9 +365,17 @@ def _resolve_options(
         and execution.runtime_profile is not None
         and execution.runtime_profile.enable_information_schema
     ):
+        introspector = SchemaIntrospector(execution.ctx)
+        schema_map = introspector.schema_map()
+        schema_map_hash: str | None = None
+        try:
+            schema_map_hash = introspector.schema_map_fingerprint()
+        except (RuntimeError, TypeError, ValueError):
+            schema_map_hash = None
         resolved = replace(
             resolved,
-            schema_map=SchemaIntrospector(execution.ctx).schema_map(),
+            schema_map=schema_map,
+            schema_map_hash=schema_map_hash,
         )
     return resolved
 

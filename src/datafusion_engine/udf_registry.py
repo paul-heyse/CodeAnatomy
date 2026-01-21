@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from itertools import repeat
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 from weakref import WeakSet
 
 import pyarrow as pa
-from datafusion import SessionContext, udf
-from datafusion.user_defined import ScalarUDF
+import pyarrow.dataset as ds
+from datafusion import SessionContext, udaf, udf, udtf, udwf
+from datafusion.catalog import Table
+from datafusion.user_defined import (
+    Accumulator,
+    AggregateUDF,
+    ScalarUDF,
+    TableFunction,
+    WindowEvaluator,
+    WindowUDF,
+)
 
 if TYPE_CHECKING:
     from datafusion.user_defined import ScalarUDFExportable
@@ -26,6 +35,9 @@ from arrowdsl.core.array_iter import iter_array_values
 from datafusion_engine.hash_utils import hash64_from_text, hash128_from_text
 
 _KERNEL_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
+_AGGREGATE_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
+_WINDOW_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
+_TABLE_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
 _PYCAPSULE_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
 _PYCAPSULE_UDF_SPECS: dict[str, DataFusionPycapsuleUdfEntry] = {}
 
@@ -237,6 +249,88 @@ def _stable_id(
         hashed = hash128_from_text(str(value))
         out.append(f"{prefix}:{hashed}")
     return pa.array(out, type=pa.string())
+
+
+class _ListUniqueAccumulator(Accumulator):
+    """Aggregate unique string values into a list."""
+
+    def __init__(self) -> None:
+        self._values: list[str] = []
+        self._seen: set[str] = set()
+
+    def update(self, *values: object) -> None:
+        """Update the accumulator with a batch of values."""
+        if not values or not isinstance(values[0], (pa.Array, pa.ChunkedArray)):
+            return
+        for value in iter_array_values(values[0]):
+            if value is None:
+                continue
+            text = str(value)
+            if text in self._seen:
+                continue
+            self._seen.add(text)
+            self._values.append(text)
+
+    def merge(self, states: list[pa.Array]) -> None:
+        """Merge partial accumulator states."""
+        if not states:
+            return
+        for entry in iter_array_values(states[0]):
+            if entry is None:
+                continue
+            if isinstance(entry, pa.Array):
+                entry_values: Iterable[object] = iter_array_values(entry)
+            elif isinstance(entry, (list, tuple)):
+                entry_values = entry
+            else:
+                continue
+            for value in entry_values:
+                text = str(value)
+                if text in self._seen:
+                    continue
+                self._seen.add(text)
+                self._values.append(text)
+
+    def state(self) -> list[pa.Scalar]:
+        """Return the intermediate state for this accumulator."""
+        return [pa.scalar(self._values, type=pa.list_(pa.string()))]
+
+    def evaluate(self) -> pa.Scalar:
+        """Return the final aggregated list."""
+        return pa.scalar(self._values, type=pa.list_(pa.string()))
+
+
+class _RowIndexEvaluator(WindowEvaluator):
+    """Window evaluator that returns 1-based row indices."""
+
+    def evaluate_all(self, values: list[pa.Array], num_rows: int) -> pa.Array:
+        """Return 1-based indices for every row in the partition."""
+        return pa.array(range(1, num_rows + 1), type=pa.int64())
+
+
+def _literal_int(expr: object, *, label: str) -> int:
+    """Return a literal integer value from a DataFusion expression."""
+    to_python = getattr(expr, "python_value", None)
+    value = to_python() if callable(to_python) else expr
+    if isinstance(value, bool) or not isinstance(value, int):
+        msg = f"range_table {label} literal must be an int."
+        raise TypeError(msg)
+    return value
+
+
+def _range_table_udtf(*values: object) -> Table:
+    """Return a table of integer values between start and end."""
+    if len(values) != 2:
+        msg = "range_table expects exactly two literal arguments."
+        raise ValueError(msg)
+    start_value = _literal_int(values[0], label="start")
+    end_value = _literal_int(values[1], label="end")
+    if end_value < start_value:
+        range_values: list[int] = []
+    else:
+        range_values = list(range(start_value, end_value + 1))
+    table = pa.table({"value": range_values})
+    return Table(ds.dataset(table))
 
 
 def stable_hash64_values(
@@ -454,6 +548,23 @@ _STABLE_ID_UDF = udf(
     "stable_id",
 )
 
+_LIST_UNIQUE_UDAF = udaf(
+    _ListUniqueAccumulator,
+    [pa.string()],
+    pa.list_(pa.string()),
+    [pa.list_(pa.string())],
+    "stable",
+    "list_unique",
+)
+_ROW_INDEX_UDWF = udwf(
+    _RowIndexEvaluator,
+    [pa.int64()],
+    pa.int64(),
+    "stable",
+    "row_index",
+)
+_RANGE_TABLE_UDTF = udtf(cast("Callable[[], Table]", _range_table_udtf), name="range_table")
+
 _SCALAR_UDF_SPECS: tuple[tuple[DataFusionUdfSpec, ScalarUDF], ...] = (
     (
         DataFusionUdfSpec(
@@ -517,7 +628,56 @@ _SCALAR_UDF_SPECS: tuple[tuple[DataFusionUdfSpec, ScalarUDF], ...] = (
     ),
 )
 
-DATAFUSION_UDF_SPECS: tuple[DataFusionUdfSpec, ...] = tuple(spec for spec, _ in _SCALAR_UDF_SPECS)
+_AGGREGATE_UDF_SPECS: tuple[tuple[DataFusionUdfSpec, AggregateUDF], ...] = (
+    (
+        DataFusionUdfSpec(
+            func_id="list_unique",
+            engine_name="list_unique",
+            kind="aggregate",
+            input_types=(pa.string(),),
+            return_type=pa.list_(pa.string()),
+            state_type=pa.list_(pa.string()),
+            arg_names=("value",),
+            rewrite_tags=("list",),
+        ),
+        _LIST_UNIQUE_UDAF,
+    ),
+)
+
+_WINDOW_UDF_SPECS: tuple[tuple[DataFusionUdfSpec, WindowUDF], ...] = (
+    (
+        DataFusionUdfSpec(
+            func_id="row_index",
+            engine_name="row_index",
+            kind="window",
+            input_types=(pa.int64(),),
+            return_type=pa.int64(),
+            arg_names=("value",),
+            rewrite_tags=("window",),
+        ),
+        _ROW_INDEX_UDWF,
+    ),
+)
+
+_TABLE_UDF_SPECS: tuple[tuple[DataFusionUdfSpec, TableFunction], ...] = (
+    (
+        DataFusionUdfSpec(
+            func_id="range_table",
+            engine_name="range_table",
+            kind="table",
+            input_types=(pa.int64(), pa.int64()),
+            return_type=pa.struct([pa.field("value", pa.int64())]),
+            arg_names=("start", "end"),
+            rewrite_tags=("table",),
+        ),
+        _RANGE_TABLE_UDTF,
+    ),
+)
+
+DATAFUSION_UDF_SPECS: tuple[DataFusionUdfSpec, ...] = tuple(
+    spec
+    for spec, _ in (_SCALAR_UDF_SPECS + _AGGREGATE_UDF_SPECS + _WINDOW_UDF_SPECS + _TABLE_UDF_SPECS)
+)
 
 
 def datafusion_scalar_udf_map() -> dict[str, ScalarUDF]:
@@ -592,19 +752,34 @@ def _register_pycapsule_udfs(ctx: SessionContext) -> tuple[DataFusionUdfCapsuleE
 
 
 def _register_aggregate_udfs(_ctx: SessionContext) -> tuple[str, ...]:
-    return ()
+    if _ctx not in _AGGREGATE_UDF_CONTEXTS:
+        for _, udf_impl in _AGGREGATE_UDF_SPECS:
+            _ctx.register_udaf(udf_impl)
+        _AGGREGATE_UDF_CONTEXTS.add(_ctx)
+    return tuple(spec.engine_name for spec, _ in _AGGREGATE_UDF_SPECS)
 
 
 def _register_window_udfs(_ctx: SessionContext) -> tuple[str, ...]:
-    return ()
+    if _ctx not in _WINDOW_UDF_CONTEXTS:
+        for _, udf_impl in _WINDOW_UDF_SPECS:
+            _ctx.register_udwf(udf_impl)
+        _WINDOW_UDF_CONTEXTS.add(_ctx)
+    return tuple(spec.engine_name for spec, _ in _WINDOW_UDF_SPECS)
 
 
 def _register_table_udfs(_ctx: SessionContext) -> tuple[str, ...]:
-    return ()
+    if _ctx not in _TABLE_UDF_CONTEXTS:
+        for _, udf_impl in _TABLE_UDF_SPECS:
+            _ctx.register_udtf(udf_impl)
+        _TABLE_UDF_CONTEXTS.add(_ctx)
+    return tuple(spec.engine_name for spec, _ in _TABLE_UDF_SPECS)
 
 
 def _register_kernel_udfs(ctx: SessionContext) -> None:
     _ = _register_scalar_udfs(ctx)
+    _ = _register_aggregate_udfs(ctx)
+    _ = _register_window_udfs(ctx)
+    _ = _register_table_udfs(ctx)
 
 
 def register_datafusion_udfs(ctx: SessionContext) -> DataFusionUdfSnapshot:

@@ -2,26 +2,27 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import cast
 
 from ibis.expr.types import Table as IbisTable
 from sqlglot import Expression
 
-from datafusion_engine.schema_introspection import SchemaIntrospector
+from datafusion_engine.schema_introspection import (
+    SchemaIntrospector,
+    schema_map_fingerprint_from_mapping,
+)
 from ibis_engine.registry import datafusion_context
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
-    canonical_ast_fingerprint,
+    SchemaMapping,
     default_sqlglot_policy,
     normalize_expr,
-    sqlglot_policy_snapshot,
+    plan_fingerprint,
+    sqlglot_policy_snapshot_for,
     sqlglot_sql,
 )
-
-SchemaMapping = Mapping[str, Mapping[str, str]]
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,7 @@ class CompilerCheckpoint:
     plan_hash: str
     sql: str
     policy_hash: str
+    schema_map_hash: str | None
 
 
 def compile_checkpoint(
@@ -55,6 +57,7 @@ def compile_checkpoint(
     schema = {name: dict(cols) for name, cols in schema_map.items()} if schema_map else None
     if schema is None:
         schema = _schema_map_from_backend(backend)
+    schema_map_hash = schema_map_fingerprint_from_mapping(schema) if schema is not None else None
     policy = default_sqlglot_policy()
     if dialect:
         policy = replace(policy, read_dialect=dialect, write_dialect=dialect)
@@ -69,8 +72,13 @@ def compile_checkpoint(
     )
     normalized = qualified
     sql = sqlglot_sql(normalized, policy=policy)
-    plan_hash = canonical_ast_fingerprint(normalized)
-    policy_hash = sqlglot_policy_snapshot().policy_hash
+    policy_hash = sqlglot_policy_snapshot_for(policy).policy_hash
+    plan_hash = plan_fingerprint(
+        normalized,
+        dialect=policy.write_dialect,
+        policy_hash=policy_hash,
+        schema_map_hash=schema_map_hash,
+    )
     return CompilerCheckpoint(
         expression=compiled,
         qualified=qualified,
@@ -78,6 +86,7 @@ def compile_checkpoint(
         plan_hash=plan_hash,
         sql=sql,
         policy_hash=policy_hash,
+        schema_map_hash=schema_map_hash,
     )
 
 

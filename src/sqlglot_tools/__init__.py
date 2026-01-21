@@ -34,6 +34,7 @@ from sqlglot_tools.optimizer import (
     sanitize_templated_sql,
     simplify_expr,
     sqlglot_policy_snapshot,
+    sqlglot_policy_snapshot_for,
     sqlglot_sql,
     sqlglot_surface_policy,
 )
@@ -72,6 +73,7 @@ __all__ = [
     "simplify_expr",
     "sqlglot_diagnostics",
     "sqlglot_policy_snapshot",
+    "sqlglot_policy_snapshot_for",
     "sqlglot_sql",
     "sqlglot_surface_policy",
 ]

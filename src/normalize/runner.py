@@ -160,7 +160,6 @@ def _normalize_ibis_context(
         resolved_rules,
         evidence=evidence,
         selectors=selectors,
-        allow_fallback=True,
         label="Normalize rule",
     )
     execution = IbisExecutionContext(

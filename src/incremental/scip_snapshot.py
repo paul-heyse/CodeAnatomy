@@ -12,14 +12,13 @@ from datafusion import SessionContext
 
 from arrowdsl.core.interop import RecordBatchReaderLike, Scalar, TableLike, coerce_table_like
 from arrowdsl.schema.serialization import schema_fingerprint
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.runtime import DataFusionRuntimeProfile, read_delta_table_from_path
 from incremental.state_store import StateStore
 from storage.deltalake import (
     DeltaWriteOptions,
     DeltaWriteResult,
     delta_table_version,
     enable_delta_features,
-    read_table_delta,
     write_table_delta,
 )
 
@@ -326,7 +325,7 @@ def read_scip_snapshot(store: StateStore) -> pa.Table | None:
     path = store.scip_snapshot_path()
     if not path.exists() or delta_table_version(str(path)) is None:
         return None
-    return cast("pa.Table", read_table_delta(str(path)))
+    return read_delta_table_from_path(str(path))
 
 
 def write_scip_snapshot(store: StateStore, snapshot: pa.Table) -> DeltaWriteResult:

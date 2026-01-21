@@ -5,13 +5,13 @@ from __future__ import annotations
 import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
 
 import pyarrow as pa
 
 from arrowdsl.core.interop import SchemaLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.metadata import schema_identity_from_metadata
+from datafusion_engine.runtime import read_delta_table_from_path
 from ibis_engine.plan_diff import DiffOpEntry, semantic_diff_sql
 from incremental.state_store import StateStore
 from registry_common.arrow_payloads import payload_hash
@@ -27,7 +27,6 @@ from relspec.schema_context import RelspecSchemaContext
 from storage.deltalake import (
     DeltaWriteOptions,
     enable_delta_features,
-    read_table_delta,
     write_table_delta,
 )
 
@@ -159,7 +158,7 @@ def read_invalidation_snapshot(state_store: StateStore) -> InvalidationSnapshot 
     path = state_store.invalidation_snapshot_path()
     if not path.exists():
         return None
-    table = cast("pa.Table", read_table_delta(str(path)))
+    table = read_delta_table_from_path(str(path))
     rows = table.to_pylist()
     if not rows:
         return None

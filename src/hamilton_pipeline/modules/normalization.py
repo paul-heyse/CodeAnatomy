@@ -5,10 +5,11 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache as memoize
 from typing import TYPE_CHECKING, Protocol, cast
+from uuid import uuid4
 
 import ibis
 import pyarrow as pa
@@ -18,15 +19,8 @@ from ibis.expr.types import Table
 
 from arrowdsl.core.execution_context import ExecutionContext
 from arrowdsl.core.expr_types import ExplodeSpec
-from arrowdsl.core.interop import (
-    ArrayLike,
-    ChunkedArrayLike,
-    RecordBatchReaderLike,
-    TableLike,
-    pc,
-)
-from arrowdsl.core.joins import JoinConfig, left_join
-from arrowdsl.schema.build import const_array, empty_table, set_or_append_column, table_from_arrays
+from arrowdsl.core.interop import RecordBatchReaderLike, TableLike
+from arrowdsl.schema.build import empty_table, set_or_append_column
 from datafusion_engine.kernel_registry import resolve_kernel
 from datafusion_engine.nested_tables import (
     ViewReference,
@@ -97,12 +91,6 @@ CALLSITE_ARG_SUMMARY_SCHEMA = pa.schema(
         ("positional_count", pa.int32()),
     ]
 )
-
-
-def _string_or_null(values: ArrayLike | ChunkedArrayLike) -> ArrayLike:
-    casted = pc.cast(values, pa.string())
-    empty = pc.equal(casted, pa.scalar(""))
-    return pc.if_else(empty, pa.scalar(None, type=pa.string()), casted)
 
 
 def _requires_output(plan: EvidencePlan | None, name: str) -> bool:
@@ -242,9 +230,15 @@ def _ibis_table_from_source(
 class _DatafusionQuery(Protocol):
     def schema(self) -> object: ...
 
+    def to_arrow_table(self) -> pa.Table: ...
+
 
 class _DatafusionContext(Protocol):
     def sql(self, query: str) -> _DatafusionQuery: ...
+
+    def register_record_batches(self, name: str, batches: list[list[pa.RecordBatch]]) -> None: ...
+
+    def deregister_table(self, name: str) -> None: ...
 
 
 def _schema_from_fragment(
@@ -258,6 +252,43 @@ def _schema_from_fragment(
     fragment_sql = f"SELECT * FROM {fragment.name} LIMIT 0"
     df_ctx = cast("_DatafusionContext", ctx)
     return df_ctx.sql(fragment_sql).schema()
+
+
+def _sql_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _sql_literal(value: str) -> str:
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _nullif_empty(expr: str) -> str:
+    return f"NULLIF(CAST({expr} AS STRING), '')"
+
+
+def _ensure_arrow_table(value: TableLike | RecordBatchReaderLike) -> pa.Table:
+    if isinstance(value, RecordBatchReaderLike):
+        return pa.Table.from_batches(list(value))
+    return value if isinstance(value, pa.Table) else pa.table(value)
+
+
+@contextlib.contextmanager
+def _temporary_table(
+    ctx: _DatafusionContext,
+    table: TableLike | RecordBatchReaderLike,
+    *,
+    name_prefix: str,
+) -> Iterator[str]:
+    name = f"_{name_prefix}_{uuid4().hex}"
+    resolved = _ensure_arrow_table(table)
+    ctx.register_record_batches(name, [resolved.to_batches()])
+    try:
+        yield name
+    finally:
+        with contextlib.suppress(KeyError, RuntimeError, ValueError, TypeError):
+            ctx.deregister_table(name)
 
 
 def _schema_from_source(
@@ -778,118 +809,90 @@ def _empty_scip_occurrences_norm(schema: pa.Schema) -> TableLike:
     return set_or_append_column(table, "span_id", pa.array([], type=pa.string()))
 
 
-def _count_mask(values: ArrayLike) -> ArrayLike:
-    mask = pc.fill_null(values, fill_value=False)
-    return pc.cast(mask, pa.int32())
-
-
-def _callsite_arg_summary(call_args: TableLike) -> TableLike:
+def _callsite_arg_summary(call_args: TableLike, *, ctx: _DatafusionContext) -> TableLike:
     if call_args.num_rows == 0 or "call_id" not in call_args.column_names:
         return empty_table(CALLSITE_ARG_SUMMARY_SCHEMA)
-    call_ids = _string_or_null(call_args["call_id"])
-    num_rows = len(call_ids)
-    if num_rows == 0:
-        return empty_table(CALLSITE_ARG_SUMMARY_SCHEMA)
-    if "keyword" in call_args.column_names:
-        keyword_vals = _string_or_null(call_args["keyword"])
-    else:
-        keyword_vals = pa.nulls(num_rows, type=pa.string())
-    is_keyword = pc.fill_null(pc.is_valid(keyword_vals), fill_value=False)
-    if "star" in call_args.column_names:
-        star_vals = _string_or_null(call_args["star"])
-    else:
-        star_vals = pa.nulls(num_rows, type=pa.string())
-    is_star_arg = pc.fill_null(pc.equal(star_vals, pa.scalar("*")), fill_value=False)
-    is_star_kwarg = pc.fill_null(pc.equal(star_vals, pa.scalar("**")), fill_value=False)
-    positional = pc.and_(
-        pc.invert(is_keyword),
-        pc.and_(pc.invert(is_star_arg), pc.invert(is_star_kwarg)),
+    keyword_expr = (
+        _nullif_empty("keyword") if "keyword" in call_args.column_names else "CAST(NULL AS STRING)"
     )
-    base = table_from_arrays(
-        CALLSITE_ARG_SUMMARY_SCHEMA,
-        columns={
-            "call_id": call_ids,
-            "arg_count": const_array(num_rows, 1, dtype=pa.int32()),
-            "keyword_count": _count_mask(is_keyword),
-            "star_arg_count": _count_mask(is_star_arg),
-            "star_kwarg_count": _count_mask(is_star_kwarg),
-            "positional_count": _count_mask(positional),
-        },
-        num_rows=num_rows,
+    star_expr = (
+        _nullif_empty("star") if "star" in call_args.column_names else "CAST(NULL AS STRING)"
     )
-    valid_mask = pc.fill_null(pc.is_valid(base["call_id"]), fill_value=False)
-    base = base.filter(valid_mask)
-    if base.num_rows == 0:
-        return empty_table(CALLSITE_ARG_SUMMARY_SCHEMA)
-    grouped = base.group_by(["call_id"]).aggregate(
-        [
-            ("arg_count", "sum"),
-            ("keyword_count", "sum"),
-            ("star_arg_count", "sum"),
-            ("star_kwarg_count", "sum"),
-            ("positional_count", "sum"),
-        ]
+    call_id_expr = _nullif_empty("call_id")
+    positional_expr = (
+        f"CASE WHEN {keyword_expr} IS NULL "
+        f"AND COALESCE({star_expr}, '') NOT IN ('*', '**') "
+        "THEN 1 ELSE 0 END"
     )
+    with _temporary_table(ctx, call_args, name_prefix="call_args") as table_name:
+        sql = (
+            "WITH base AS ("
+            f"SELECT {call_id_expr} AS call_id, "
+            "1 AS arg_count, "
+            f"CASE WHEN {keyword_expr} IS NOT NULL THEN 1 ELSE 0 END AS keyword_count, "
+            f"CASE WHEN {star_expr} = '*' THEN 1 ELSE 0 END AS star_arg_count, "
+            f"CASE WHEN {star_expr} = '**' THEN 1 ELSE 0 END AS star_kwarg_count, "
+            f"{positional_expr} AS positional_count "
+            f"FROM {_sql_identifier(table_name)}"
+            ") "
+            "SELECT call_id, "
+            "SUM(arg_count) AS arg_count, "
+            "SUM(keyword_count) AS keyword_count, "
+            "SUM(star_arg_count) AS star_arg_count, "
+            "SUM(star_kwarg_count) AS star_kwarg_count, "
+            "SUM(positional_count) AS positional_count "
+            "FROM base "
+            "WHERE call_id IS NOT NULL "
+            "GROUP BY call_id"
+        )
+        grouped = ctx.sql(sql).to_arrow_table()
     if grouped.num_rows == 0:
         return empty_table(CALLSITE_ARG_SUMMARY_SCHEMA)
-    return table_from_arrays(
-        CALLSITE_ARG_SUMMARY_SCHEMA,
-        columns={
-            "call_id": _string_or_null(grouped["call_id"]),
-            "arg_count": pc.cast(grouped["arg_count_sum"], pa.int32()),
-            "keyword_count": pc.cast(grouped["keyword_count_sum"], pa.int32()),
-            "star_arg_count": pc.cast(grouped["star_arg_count_sum"], pa.int32()),
-            "star_kwarg_count": pc.cast(grouped["star_kwarg_count_sum"], pa.int32()),
-            "positional_count": pc.cast(grouped["positional_count_sum"], pa.int32()),
-        },
-        num_rows=grouped.num_rows,
-    )
+    return grouped
 
 
-def _callsite_qname_base_table(exploded: TableLike) -> TableLike:
-    call_ids = _string_or_null(exploded["call_id"])
-    qname_struct = exploded["qname_struct"]
-    qname_vals = _string_or_null(pc.struct_field(qname_struct, "name"))
-    qname_sources = _string_or_null(pc.struct_field(qname_struct, "source"))
-    schema = pa.schema(
-        [
-            ("call_id", pa.string()),
-            ("qname", pa.string()),
-            ("qname_source", pa.string()),
-        ]
-    )
-    base = table_from_arrays(
-        schema,
-        columns={"call_id": call_ids, "qname": qname_vals, "qname_source": qname_sources},
-        num_rows=len(call_ids),
-    )
-    mask = pc.and_(pc.is_valid(base["call_id"]), pc.is_valid(base["qname"]))
-    mask = pc.fill_null(mask, fill_value=False)
-    return base.filter(mask)
+def _callsite_qname_base_table(exploded: TableLike, *, ctx: _DatafusionContext) -> TableLike:
+    with _temporary_table(ctx, exploded, name_prefix="qname_exploded") as table_name:
+        call_id_expr = _nullif_empty("call_id")
+        qname_expr = _nullif_empty("get_field(qname_struct, 'name')")
+        source_expr = _nullif_empty("get_field(qname_struct, 'source')")
+        sql = (
+            "WITH base AS ("
+            f"SELECT {call_id_expr} AS call_id, "
+            f"{qname_expr} AS qname, "
+            f"{source_expr} AS qname_source "
+            f"FROM {_sql_identifier(table_name)}"
+            ") "
+            "SELECT call_id, qname, qname_source "
+            "FROM base WHERE call_id IS NOT NULL AND qname IS NOT NULL"
+        )
+        return ctx.sql(sql).to_arrow_table()
 
 
-def _callsite_fqn_base_table(exploded: TableLike) -> TableLike:
-    call_ids = _string_or_null(exploded["call_id"])
-    fqn_vals = _string_or_null(exploded["fqn_value"])
-    qname_sources = pa.array(["fully_qualified"] * len(call_ids), type=pa.string())
-    schema = pa.schema(
-        [
-            ("call_id", pa.string()),
-            ("qname", pa.string()),
-            ("qname_source", pa.string()),
-        ]
-    )
-    base = table_from_arrays(
-        schema,
-        columns={"call_id": call_ids, "qname": fqn_vals, "qname_source": qname_sources},
-        num_rows=len(call_ids),
-    )
-    mask = pc.and_(pc.is_valid(base["call_id"]), pc.is_valid(base["qname"]))
-    mask = pc.fill_null(mask, fill_value=False)
-    return base.filter(mask)
+def _callsite_fqn_base_table(exploded: TableLike, *, ctx: _DatafusionContext) -> TableLike:
+    qname_source = _sql_literal("fully_qualified")
+    with _temporary_table(ctx, exploded, name_prefix="fqn_exploded") as table_name:
+        call_id_expr = _nullif_empty("call_id")
+        qname_expr = _nullif_empty("fqn_value")
+        sql = (
+            "WITH base AS ("
+            f"SELECT {call_id_expr} AS call_id, "
+            f"{qname_expr} AS qname, "
+            f"{qname_source} AS qname_source "
+            f"FROM {_sql_identifier(table_name)}"
+            ") "
+            "SELECT call_id, qname, qname_source "
+            "FROM base WHERE call_id IS NOT NULL AND qname IS NOT NULL"
+        )
+        return ctx.sql(sql).to_arrow_table()
 
 
-def _join_callsite_qname_meta(base: TableLike, cst_callsites: TableLike) -> TableLike:
+def _join_callsite_qname_meta(
+    base: TableLike,
+    cst_callsites: TableLike,
+    *,
+    ctx: _DatafusionContext,
+) -> TableLike:
     meta_cols = [
         col
         for col in (
@@ -904,41 +907,45 @@ def _join_callsite_qname_meta(base: TableLike, cst_callsites: TableLike) -> Tabl
     ]
     if len(meta_cols) <= 1:
         return base
-    meta_table = cst_callsites.select(meta_cols)
-    right_cols = [col for col in meta_cols if col != "call_id"]
-    joined = left_join(
-        base,
-        meta_table,
-        config=JoinConfig.on_keys(
-            keys=("call_id",),
-            left_output=("call_id", "qname", "qname_source"),
-            right_output=right_cols,
-            output_suffix_for_right="__meta",
-        ),
-    )
-    if "qname_source__meta" not in joined.column_names:
-        return joined
-    primary = _string_or_null(joined["qname_source"])
-    meta_source = _string_or_null(joined["qname_source__meta"])
-    merged = pc.coalesce(primary, meta_source)
-    joined = set_or_append_column(joined, "qname_source", merged)
-    return joined.drop(["qname_source__meta"])
+    base_cols = base.column_names
+    if "call_id" not in base_cols or "qname" not in base_cols:
+        return base
+    with _temporary_table(ctx, base, name_prefix="qname_base") as base_name:
+        with _temporary_table(ctx, cst_callsites, name_prefix="qname_meta") as meta_name:
+            selections = [
+                "base.call_id AS call_id",
+                "base.qname AS qname",
+            ]
+            if "qname_source" in meta_cols:
+                selections.append(
+                    "COALESCE("
+                    f"{_nullif_empty('base.qname_source')}, "
+                    f"{_nullif_empty('meta.qname_source')}"
+                    ") AS qname_source"
+                )
+            else:
+                selections.append(f"{_nullif_empty('base.qname_source')} AS qname_source")
+            for col in meta_cols:
+                if col in ("call_id", "qname_source"):
+                    continue
+                selections.append(f"meta.{_sql_identifier(col)} AS {_sql_identifier(col)}")
+            sql = (
+                f"SELECT {', '.join(selections)} "
+                f"FROM {_sql_identifier(base_name)} AS base "
+                f"LEFT JOIN {_sql_identifier(meta_name)} AS meta "
+                "ON base.call_id = meta.call_id"
+            )
+            return ctx.sql(sql).to_arrow_table()
 
 
-def _join_callsite_arg_summary(base: TableLike, summary: TableLike) -> TableLike:
+def _join_callsite_arg_summary(
+    base: TableLike,
+    summary: TableLike,
+    *,
+    ctx: _DatafusionContext,
+) -> TableLike:
     if summary.num_rows == 0 or "call_id" not in summary.column_names:
         return base
-    right_cols = [col for col in summary.column_names if col != "call_id"]
-    joined = left_join(
-        base,
-        summary,
-        config=JoinConfig.on_keys(
-            keys=("call_id",),
-            left_output=tuple(base.column_names),
-            right_output=right_cols,
-            output_suffix_for_right="__args",
-        ),
-    )
     metrics = (
         "arg_count",
         "keyword_count",
@@ -946,16 +953,30 @@ def _join_callsite_arg_summary(base: TableLike, summary: TableLike) -> TableLike
         "star_kwarg_count",
         "positional_count",
     )
-    for metric in metrics:
-        arg_col = f"{metric}__args"
-        if arg_col not in joined.column_names:
-            continue
-        primary = joined[arg_col]
-        fallback = joined[metric] if metric in joined.column_names else None
-        merged = pc.coalesce(primary, fallback) if fallback is not None else primary
-        joined = set_or_append_column(joined, metric, merged)
-        joined = joined.drop([arg_col])
-    return joined
+    with _temporary_table(ctx, base, name_prefix="qname_base") as base_name:
+        with _temporary_table(ctx, summary, name_prefix="qname_summary") as summary_name:
+            selections: list[str] = []
+            base_cols = base.column_names
+            for col in base_cols:
+                if col in metrics:
+                    continue
+                selections.append(f"base.{_sql_identifier(col)} AS {_sql_identifier(col)}")
+            for metric in metrics:
+                base_has = metric in base_cols
+                summary_has = metric in summary.column_names
+                if summary_has and base_has:
+                    selections.append(f"COALESCE(summary.{metric}, base.{metric}) AS {metric}")
+                elif summary_has:
+                    selections.append(f"summary.{metric} AS {metric}")
+                elif base_has:
+                    selections.append(f"base.{metric} AS {metric}")
+            sql = (
+                f"SELECT {', '.join(selections)} "
+                f"FROM {_sql_identifier(base_name)} AS base "
+                f"LEFT JOIN {_sql_identifier(summary_name)} AS summary "
+                "ON base.call_id = summary.call_id"
+            )
+            return ctx.sql(sql).to_arrow_table()
 
 
 @cache(format="delta")
@@ -1123,6 +1144,11 @@ def callsite_qname_candidates(
         schema = dataset_schema_from_context(CALLSITE_QNAME_CANDIDATES_NAME)
         return empty_table(schema)
     backend = normalize_execution_context.ibis_backend if normalize_execution_context else None
+    if backend is None:
+        msg = "Callsite qualified-name candidates require a DataFusion backend."
+        raise ValueError(msg)
+    _require_datafusion_backend(backend)
+    df_ctx = cast("_DatafusionContext", datafusion_context(backend))
     cst_callsites, cst_call_args = _resolve_callsite_sources(sources)
     register_nested_table(backend, name="libcst_files_v1", table=sources.libcst_files)
     if cst_callsites is None:
@@ -1132,12 +1158,17 @@ def callsite_qname_candidates(
     if cst_callsites_table.num_rows == 0:
         schema = dataset_schema_from_context(CALLSITE_QNAME_CANDIDATES_NAME)
         return empty_table(schema)
-    tables = _callsite_candidate_tables(cst_callsites_table, ctx=ctx)
+    tables = _callsite_candidate_tables(cst_callsites_table, ctx=ctx, df_ctx=df_ctx)
     if not tables:
         schema = dataset_schema_from_context(CALLSITE_QNAME_CANDIDATES_NAME)
         return empty_table(schema)
     joined = _concat_tables(tables)
-    joined = _maybe_join_call_args(joined, backend=backend, cst_call_args=cst_call_args)
+    joined = _maybe_join_call_args(
+        joined,
+        backend=backend,
+        cst_call_args=cst_call_args,
+        df_ctx=df_ctx,
+    )
 
     schema = dataset_schema_from_context(CALLSITE_QNAME_CANDIDATES_NAME)
     return align_table_to_schema(joined, schema=schema)
@@ -1159,6 +1190,7 @@ def _callsite_candidate_tables(
     cst_callsites_table: TableLike,
     *,
     ctx: ExecutionContext,
+    df_ctx: _DatafusionContext,
 ) -> list[TableLike]:
     if not isinstance(cst_callsites_table, pa.Table):
         return []
@@ -1170,15 +1202,17 @@ def _callsite_candidate_tables(
     kernel = resolve_kernel("explode_list", ctx=ctx)
     tables: list[TableLike] = []
     if has_qnames:
-        tables.extend(_callsite_qname_tables(kernel, table))
+        tables.extend(_callsite_qname_tables(kernel, table, df_ctx=df_ctx))
     if has_fqns:
-        tables.extend(_callsite_fqn_tables(kernel, table))
+        tables.extend(_callsite_fqn_tables(kernel, table, df_ctx=df_ctx))
     return tables
 
 
 def _callsite_qname_tables(
     kernel: Callable[..., TableLike],
     cst_callsites_table: TableLike,
+    *,
+    df_ctx: _DatafusionContext,
 ) -> list[TableLike]:
     spec = ExplodeSpec(
         parent_keys=("call_id",),
@@ -1188,14 +1222,16 @@ def _callsite_qname_tables(
         keep_empty=True,
     )
     exploded = kernel(cst_callsites_table, spec=spec, out_parent_col="call_id")
-    base = _callsite_qname_base_table(exploded)
-    joined = _join_callsite_qname_meta(base, cst_callsites_table)
+    base = _callsite_qname_base_table(exploded, ctx=df_ctx)
+    joined = _join_callsite_qname_meta(base, cst_callsites_table, ctx=df_ctx)
     return [joined] if joined.num_rows > 0 else []
 
 
 def _callsite_fqn_tables(
     kernel: Callable[..., TableLike],
     cst_callsites_table: TableLike,
+    *,
+    df_ctx: _DatafusionContext,
 ) -> list[TableLike]:
     spec = ExplodeSpec(
         parent_keys=("call_id",),
@@ -1205,8 +1241,8 @@ def _callsite_fqn_tables(
         keep_empty=True,
     )
     exploded = kernel(cst_callsites_table, spec=spec, out_parent_col="call_id")
-    base = _callsite_fqn_base_table(exploded)
-    joined = _join_callsite_qname_meta(base, cst_callsites_table)
+    base = _callsite_fqn_base_table(exploded, ctx=df_ctx)
+    joined = _join_callsite_qname_meta(base, cst_callsites_table, ctx=df_ctx)
     return [joined] if joined.num_rows > 0 else []
 
 
@@ -1219,6 +1255,7 @@ def _maybe_join_call_args(
     *,
     backend: BaseBackend | None,
     cst_call_args: TableLike | ViewReference | None,
+    df_ctx: _DatafusionContext,
 ) -> TableLike:
     if cst_call_args is None:
         return joined
@@ -1226,8 +1263,8 @@ def _maybe_join_call_args(
         call_args_table = _materialize_fragment(backend, cst_call_args)
     except ValueError:
         return joined
-    arg_summary = _callsite_arg_summary(call_args_table)
-    return _join_callsite_arg_summary(joined, arg_summary)
+    arg_summary = _callsite_arg_summary(call_args_table, ctx=df_ctx)
+    return _join_callsite_arg_summary(joined, arg_summary, ctx=df_ctx)
 
 
 @cache(format="delta")

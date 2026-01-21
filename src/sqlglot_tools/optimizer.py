@@ -42,20 +42,36 @@ from sqlglot.transforms import (
 
 from registry_common.arrow_payloads import payload_hash
 
-SchemaMapping = Mapping[str, Mapping[str, str]]
+type SchemaMappingNode = Mapping[str, str] | Mapping[str, SchemaMappingNode]
+type SchemaMapping = Mapping[str, SchemaMappingNode]
 SqlGlotRewriteLane = Literal["transforms", "dialect_shim"]
 
 
 def _schema_requires_quoting(schema: SchemaMapping | None) -> bool:
     if not schema:
         return False
-    for table_name, columns in schema.items():
-        if table_name != table_name.lower():
+    return _schema_contains_uppercase(schema)
+
+
+def _schema_contains_uppercase(schema: SchemaMappingNode) -> bool:
+    for key, value in schema.items():
+        if isinstance(key, str) and key != key.lower():
             return True
-        for column_name in columns:
-            if column_name != column_name.lower():
+        if isinstance(value, Mapping):
+            if _is_leaf_schema(value):
+                for column_name in value:
+                    if isinstance(column_name, str) and column_name != column_name.lower():
+                        return True
+                continue
+            if _schema_contains_uppercase(value):
                 return True
     return False
+
+
+def _is_leaf_schema(value: SchemaMappingNode) -> bool:
+    if not value:
+        return False
+    return all(isinstance(dtype, str) for dtype in value.values())
 
 
 class SqlGlotSurface(StrEnum):
@@ -128,6 +144,7 @@ _PLAN_HASH_SCHEMA = pa.schema(
         pa.field("dialect", pa.string()),
         pa.field("sql", pa.string()),
         pa.field("policy_hash", pa.string()),
+        pa.field("schema_map_hash", pa.string()),
     ]
 )
 _STEP_HASH_SCHEMA = pa.schema(
@@ -508,15 +525,14 @@ def sqlglot_surface_policy(surface: SqlGlotSurface) -> SqlGlotSurfacePolicy:
     return policy
 
 
-def sqlglot_policy_snapshot() -> SqlGlotPolicySnapshot:
-    """Return the default SQLGlot policy snapshot.
+def sqlglot_policy_snapshot_for(policy: SqlGlotPolicy) -> SqlGlotPolicySnapshot:
+    """Return a SQLGlot policy snapshot for a provided policy.
 
     Returns
     -------
     SqlGlotPolicySnapshot
         Snapshot of compiler policy settings.
     """
-    policy = default_sqlglot_policy()
     rules = tuple(_rule_name(rule) for rule in policy.rules)
     rules_hash = payload_hash(
         {"version": HASH_PAYLOAD_VERSION, "rules": list(rules)},
@@ -552,6 +568,17 @@ def sqlglot_policy_snapshot() -> SqlGlotPolicySnapshot:
         identify=policy.identify,
         policy_hash=policy_hash,
     )
+
+
+def sqlglot_policy_snapshot() -> SqlGlotPolicySnapshot:
+    """Return the default SQLGlot policy snapshot.
+
+    Returns
+    -------
+    SqlGlotPolicySnapshot
+        Snapshot of compiler policy settings.
+    """
+    return sqlglot_policy_snapshot_for(default_sqlglot_policy())
 
 
 def _rule_name(rule: object) -> str:
@@ -981,7 +1008,7 @@ def _normalize_predicates_with_stats(
     distance = normalization_distance(expr, max_=max_distance)
     applied = distance <= max_distance
     if applied:
-        return normalize_predicates(expr), NormalizationStats(
+        return normalize_predicates(expr, dnf=False, max_distance=max_distance), NormalizationStats(
             distance=distance,
             max_distance=max_distance,
             applied=True,
@@ -1059,6 +1086,7 @@ def plan_fingerprint(
     *,
     dialect: str = "datafusion_ext",
     policy_hash: str | None = None,
+    schema_map_hash: str | None = None,
 ) -> str:
     """Return a stable fingerprint for a SQLGlot expression.
 
@@ -1075,6 +1103,7 @@ def plan_fingerprint(
         "dialect": dialect,
         "sql": sql_text,
         "policy_hash": policy_hash,
+        "schema_map_hash": schema_map_hash,
     }
     return payload_hash(payload, _PLAN_HASH_SCHEMA)
 
@@ -1243,6 +1272,7 @@ __all__ = [
     "sanitize_templated_sql",
     "simplify_expr",
     "sqlglot_policy_snapshot",
+    "sqlglot_policy_snapshot_for",
     "sqlglot_sql",
     "sqlglot_surface_policy",
 ]

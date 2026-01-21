@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
 
 import pyarrow as pa
 from hamilton.function_modifiers import tag
@@ -13,6 +12,7 @@ from ibis.expr.types import Table
 
 from arrowdsl.schema.serialization import schema_fingerprint
 from core_types import JsonDict
+from datafusion_engine.runtime import read_delta_table_from_path
 from engine.session import EngineSession
 from hamilton_pipeline.pipeline_types import OutputConfig, ParamBundle
 from ibis_engine.param_tables import (
@@ -33,7 +33,6 @@ from relspec.pipeline_policy import PipelinePolicy
 from storage.deltalake import (
     DeltaWriteOptions,
     apply_delta_write_policies,
-    read_table_delta,
     write_dataset_delta,
 )
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
@@ -348,7 +347,7 @@ def _coerce_list_values(name: str, value: object) -> tuple[object, ...]:
 
 
 def _artifact_from_delta(spec: ParamTableSpec, path: str) -> ParamTableArtifact:
-    table = cast("pa.Table", read_table_delta(path))
+    table = read_delta_table_from_path(path)
     if table.schema != spec.schema:
         table = table.cast(spec.schema, safe=False)
     if spec.distinct:

@@ -23,7 +23,6 @@ from ibis_engine.registry import (
     DatasetLocation,
     IbisDatasetRegistry,
     resolve_dataset_schema,
-    resolve_delta_scan_options,
 )
 
 DATASET_HANDLE_PREFIXES: tuple[str, ...] = ("dataset://", "repo://")
@@ -39,6 +38,8 @@ def _normalize_dataset_name(name: str) -> str:
 def _table_from_dataset(dataset: object) -> Table:
     if isinstance(dataset, Table):
         return dataset
+    if isinstance(dataset, DeltaTable):
+        return Table(dataset)
     if isinstance(dataset, ds.Dataset):
         return Table(dataset)
     if isinstance(dataset, DataFrame):
@@ -47,23 +48,21 @@ def _table_from_dataset(dataset: object) -> Table:
     return Table(ds.dataset(dataset))
 
 
-def _dataset_from_location(location: DatasetLocation) -> ds.Dataset:
+def _dataset_from_location(location: DatasetLocation) -> object:
     schema = resolve_dataset_schema(location)
     if location.format == "delta":
-        delta_scan = resolve_delta_scan_options(location)
         storage_options = dict(location.storage_options)
-        filesystem = location.filesystem
+        if location.delta_version is not None and location.delta_timestamp is not None:
+            msg = "Delta dataset open requires either delta_version or delta_timestamp."
+            raise ValueError(msg)
         table = DeltaTable(
             str(location.path),
             storage_options=storage_options or None,
+            version=location.delta_version,
         )
-        return table.to_pyarrow_dataset(
-            filesystem=filesystem,
-            schema=schema,
-            as_large_types=bool(delta_scan.schema_force_view_types)
-            if delta_scan is not None
-            else False,
-        )
+        if location.delta_timestamp is not None:
+            table.load_as_version(location.delta_timestamp)
+        return table
     return ds.dataset(
         location.path,
         format=location.format,

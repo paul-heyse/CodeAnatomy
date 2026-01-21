@@ -2048,6 +2048,7 @@ AST_REQUIRED_FUNCTIONS: tuple[str, ...] = (
     "arrow_cast",
     "arrow_metadata",
     "arrow_typeof",
+    "get_field",
     "list_extract",
     "map_entries",
     "map_extract",
@@ -2059,12 +2060,14 @@ TREE_SITTER_REQUIRED_FUNCTIONS: tuple[str, ...] = (
     "arrow_cast",
     "arrow_metadata",
     "arrow_typeof",
+    "get_field",
 )
 
 AST_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
     "arrow_cast": 2,
     "arrow_metadata": 1,
     "arrow_typeof": 1,
+    "get_field": 2,
     "list_extract": 2,
     "map_entries": 1,
     "map_extract": 2,
@@ -2076,6 +2079,7 @@ TREE_SITTER_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
     "arrow_cast": 2,
     "arrow_metadata": 1,
     "arrow_typeof": 1,
+    "get_field": 2,
 }
 
 BYTECODE_REQUIRED_FUNCTIONS: tuple[str, ...] = (
@@ -2083,6 +2087,7 @@ BYTECODE_REQUIRED_FUNCTIONS: tuple[str, ...] = (
     "arrow_metadata",
     "arrow_typeof",
     "concat_ws",
+    "get_field",
     "map_entries",
     "map_extract",
     "map_keys",
@@ -2098,6 +2103,7 @@ BYTECODE_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
     "arrow_cast": 2,
     "arrow_metadata": 1,
     "arrow_typeof": 1,
+    "get_field": 2,
     "list_extract": 2,
     "map_entries": 1,
     "map_extract": 2,
@@ -2114,6 +2120,7 @@ CST_REQUIRED_FUNCTIONS: tuple[str, ...] = (
     "arrow_metadata",
     "arrow_typeof",
     "concat_ws",
+    "get_field",
     "map_entries",
     "map_extract",
     "named_struct",
@@ -2126,6 +2133,7 @@ CST_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
     "arrow_cast": 2,
     "arrow_metadata": 1,
     "arrow_typeof": 1,
+    "get_field": 2,
     "map_entries": 1,
     "map_extract": 2,
     "named_struct": 2,
@@ -2138,6 +2146,7 @@ SYMTABLE_REQUIRED_FUNCTIONS: tuple[str, ...] = (
     "arrow_metadata",
     "arrow_typeof",
     "concat_ws",
+    "get_field",
     "map_entries",
     "prefixed_hash64",
     "unnest",
@@ -2146,6 +2155,7 @@ SYMTABLE_REQUIRED_FUNCTIONS: tuple[str, ...] = (
 SYMTABLE_REQUIRED_FUNCTION_SIGNATURES: dict[str, int] = {
     "arrow_metadata": 1,
     "arrow_typeof": 1,
+    "get_field": 2,
     "map_entries": 1,
     "prefixed_hash64": 2,
     "unnest": 1,
@@ -2158,11 +2168,14 @@ ENGINE_REQUIRED_FUNCTIONS: tuple[str, ...] = (
     "array_to_string",
     "bool_or",
     "coalesce",
+    "col_to_byte",
     "concat_ws",
+    "prefixed_hash64",
     "row_number",
     "sha256",
     "stable_hash64",
     "stable_hash128",
+    "stable_id",
 )
 
 _STRING_TYPE_TOKENS = frozenset({"char", "string", "text", "utf8", "varchar"})
@@ -2173,6 +2186,7 @@ _MAP_TYPE_TOKENS = frozenset({"map"})
 AST_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
     "arrow_cast": (None, _STRING_TYPE_TOKENS),
     "arrow_metadata": (None, _STRING_TYPE_TOKENS),
+    "get_field": (None, _STRING_TYPE_TOKENS),
     "list_extract": (_LIST_TYPE_TOKENS, _INT_TYPE_TOKENS),
     "map_entries": (_MAP_TYPE_TOKENS,),
     "map_extract": (_MAP_TYPE_TOKENS, _STRING_TYPE_TOKENS),
@@ -2223,11 +2237,13 @@ def _ast_required_function_signature_types(
 TREE_SITTER_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
     "arrow_cast": (None, _STRING_TYPE_TOKENS),
     "arrow_metadata": (None, _STRING_TYPE_TOKENS),
+    "get_field": (None, _STRING_TYPE_TOKENS),
 }
 
 CST_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
     "arrow_cast": (None, _STRING_TYPE_TOKENS),
     "arrow_metadata": (None, _STRING_TYPE_TOKENS),
+    "get_field": (None, _STRING_TYPE_TOKENS),
     "map_entries": (_MAP_TYPE_TOKENS,),
     "map_extract": (_MAP_TYPE_TOKENS, _STRING_TYPE_TOKENS),
     "stable_id": (_STRING_TYPE_TOKENS, _STRING_TYPE_TOKENS),
@@ -2235,12 +2251,14 @@ CST_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ..
 
 SYMTABLE_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
     "arrow_metadata": (None, _STRING_TYPE_TOKENS),
+    "get_field": (None, _STRING_TYPE_TOKENS),
     "map_entries": (_MAP_TYPE_TOKENS,),
 }
 
 BYTECODE_REQUIRED_FUNCTION_SIGNATURE_TYPES: dict[str, tuple[frozenset[str] | None, ...]] = {
     "arrow_cast": (None, _STRING_TYPE_TOKENS),
     "arrow_metadata": (None, _STRING_TYPE_TOKENS),
+    "get_field": (None, _STRING_TYPE_TOKENS),
     "list_extract": (_LIST_TYPE_TOKENS, _INT_TYPE_TOKENS),
     "map_entries": (_MAP_TYPE_TOKENS,),
     "map_extract": (_MAP_TYPE_TOKENS, _STRING_TYPE_TOKENS),
@@ -2549,6 +2567,10 @@ def _append_selection(
     selected_names.add(name)
 
 
+def _get_field_expr(expr: str, field_name: str) -> str:
+    return f"get_field({expr}, '{field_name}')"
+
+
 def _context_expr(
     *,
     root_alias: str,
@@ -2563,7 +2585,7 @@ def _context_expr(
     if prefix_expr is None:
         msg = f"Nested context path {ctx_path!r} not resolved for {dataset_name!r}."
         raise KeyError(msg)
-    return f"{prefix_expr}['{field_name}']"
+    return _get_field_expr(prefix_expr, field_name)
 
 
 def _resolve_nested_path(
@@ -2584,7 +2606,9 @@ def _resolve_nested_path(
         dtype = field.type
         prefix = ".".join(parts[: idx + 1])
         if _is_list_type(dtype):
-            list_expr = f"{current_expr}.{step}" if current_is_root else f"{current_expr}['{step}']"
+            list_expr = (
+                f"{current_expr}.{step}" if current_is_root else _get_field_expr(current_expr, step)
+            )
             alias = f"n{idx}"
             item_alias = f"{alias}_item"
             from_clause += f"\nCROSS JOIN unnest({list_expr}) AS {alias}({item_alias})"
@@ -2600,7 +2624,9 @@ def _resolve_nested_path(
         if not pa.types.is_struct(dtype):
             msg = f"Nested path {path!r} does not resolve to a struct at {step!r}."
             raise TypeError(msg)
-        current_expr = f"{current_expr}.{step}" if current_is_root else f"{current_expr}['{step}']"
+        current_expr = (
+            f"{current_expr}.{step}" if current_is_root else _get_field_expr(current_expr, step)
+        )
         current_is_root = False
         current_struct = dtype
         prefix_exprs[prefix] = current_expr
@@ -2652,7 +2678,7 @@ def nested_base_sql(name: str, *, table: str | None = None) -> str:
             selections,
             selected_names,
             name=field.name,
-            expr=f"{row_expr}['{field.name}']",
+            expr=_get_field_expr(row_expr, field.name),
         )
     select_sql = ",\n      ".join(selections)
     return f"SELECT\n      {select_sql}\n{from_clause}"
@@ -2773,12 +2799,7 @@ def validate_ast_views(
         if not expected:
             continue
         try:
-            rows = ctx.sql(
-                f"SELECT column_name FROM information_schema.columns WHERE table_name = '{name}'"
-            ).to_arrow_table()
-            actual = {
-                str(row.get("column_name")) for row in rows.to_pylist() if row.get("column_name")
-            }
+            actual = introspector.table_column_names(name)
             missing = sorted(set(expected) - actual)
             if missing:
                 errors[f"{name}_information_schema"] = f"Missing columns: {missing}."
@@ -2923,6 +2944,7 @@ def validate_symtable_views(ctx: SessionContext) -> None:
         errors=errors,
         catalog=function_catalog,
     )
+    introspector = SchemaIntrospector(ctx)
     for name in SYMTABLE_VIEW_NAMES:
         try:
             ctx.sql(f"DESCRIBE SELECT * FROM {name}").collect()
@@ -2931,12 +2953,7 @@ def validate_symtable_views(ctx: SessionContext) -> None:
     for name in SYMTABLE_VIEW_NAMES:
         try:
             expected = set(schema_for(name).names)
-            rows = ctx.sql(
-                f"SELECT column_name FROM information_schema.columns WHERE table_name = '{name}'"
-            ).to_arrow_table()
-            actual = {
-                str(row.get("column_name")) for row in rows.to_pylist() if row.get("column_name")
-            }
+            actual = introspector.table_column_names(name)
             missing = sorted(expected - actual)
             if missing:
                 errors[f"{name}_information_schema"] = f"Missing columns: {missing}."
@@ -2998,13 +3015,7 @@ def validate_scip_views(ctx: SessionContext) -> None:
     for view_name, schema_name in SCIP_VIEW_SCHEMA_MAP.items():
         try:
             expected = set(schema_for(schema_name).names)
-            rows = ctx.sql(
-                "SELECT column_name FROM information_schema.columns "
-                f"WHERE table_name = '{view_name}'"
-            ).to_arrow_table()
-            actual = {
-                str(row.get("column_name")) for row in rows.to_pylist() if row.get("column_name")
-            }
+            actual = introspector.table_column_names(view_name)
             missing = sorted(expected - actual)
             if missing:
                 errors[f"{view_name}_information_schema"] = f"Missing columns: {missing}."
@@ -3017,17 +3028,9 @@ def validate_scip_views(ctx: SessionContext) -> None:
 
 def _function_names(ctx: SessionContext) -> set[str]:
     try:
-        table = ctx.sql(
-            "SELECT routine_name FROM information_schema.routines WHERE routine_type = 'FUNCTION'"
-        ).to_arrow_table()
+        return SchemaIntrospector(ctx).function_names()
     except (RuntimeError, TypeError, ValueError):
         return set()
-    names: set[str] = set()
-    for row in table.to_pylist():
-        value = row.get("routine_name")
-        if isinstance(value, str):
-            names.add(value)
-    return names
 
 
 @dataclass(frozen=True)
@@ -3476,10 +3479,7 @@ def _validate_ts_view_outputs(
         errors[f"{name}_output_names"] = f"Invalid output column names: {invalid}"
     _validate_ts_view_dfschema(ctx, name=name, errors=errors)
     try:
-        rows = ctx.sql(
-            f"SELECT column_name FROM information_schema.columns WHERE table_name = '{name}'"
-        ).to_arrow_table()
-        actual = {str(row.get("column_name")) for row in rows.to_pylist() if row.get("column_name")}
+        actual = introspector.table_column_names(name)
         missing = sorted(set(columns) - actual)
         if missing:
             errors[f"{name}_information_schema"] = f"Missing columns: {missing}."
@@ -3842,10 +3842,7 @@ def registered_table_names(ctx: SessionContext) -> set[str]:
     set[str]
         Set of table names present in the session catalog.
     """
-    table = ctx.sql("SELECT table_name FROM information_schema.tables").to_arrow_table()
-    if "table_name" not in table.column_names:
-        return set()
-    return {str(name) for name in table["table_name"].to_pylist() if name is not None}
+    return SchemaIntrospector(ctx).table_names_snapshot()
 
 
 def missing_schema_names(

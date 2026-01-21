@@ -6,7 +6,12 @@ import ibis
 import pytest
 from sqlglot import parse_one
 
-from ibis_engine.sql_bridge import SqlIngestSpec, parse_sql_table, sql_ingest_artifacts
+from ibis_engine.sql_bridge import (
+    SqlIngestSpec,
+    SqlIngestSqlGlotContext,
+    parse_sql_table,
+    sql_ingest_artifacts,
+)
 
 
 def test_sql_ingest_artifacts_payload() -> None:
@@ -15,8 +20,10 @@ def test_sql_ingest_artifacts_payload() -> None:
     artifacts = sql_ingest_artifacts(
         "select 1 as a",
         expr=expr,
-        sqlglot_expr=parse_one("select 1 as a"),
-        dialect="datafusion",
+        context=SqlIngestSqlGlotContext(
+            sqlglot_expr=parse_one("select 1 as a"),
+            dialect="datafusion",
+        ),
     )
     payload = artifacts.payload()
     assert payload["sql"]
@@ -26,12 +33,11 @@ def test_sql_ingest_artifacts_payload() -> None:
 
 def test_parse_sql_requires_schema() -> None:
     """Require schemas for SQL ingestion."""
-    backend = ibis.datafusion.connect()
     with pytest.raises(ValueError, match="schema is required"):
         parse_sql_table(
             SqlIngestSpec(
                 sql="select 1 as a",
-                catalog=backend,
+                catalog={},
                 schema=None,
             )
         )
@@ -39,10 +45,9 @@ def test_parse_sql_requires_schema() -> None:
 
 def test_parse_sql_validates_schema() -> None:
     """Validate SQL ingestion schema matches expected shape."""
-    backend = ibis.datafusion.connect()
     spec = SqlIngestSpec(
         sql="select 1 as a",
-        catalog=backend,
+        catalog={},
         schema=ibis.schema({"a": "int64"}),
         dialect="datafusion",
     )

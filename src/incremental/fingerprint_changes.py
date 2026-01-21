@@ -4,17 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
 
 import pyarrow as pa
 
 from arrowdsl.schema.build import table_from_arrays
+from datafusion_engine.runtime import read_delta_table_from_path
 from incremental.registry_specs import dataset_schema
 from incremental.state_store import StateStore
 from storage.deltalake import (
     DeltaWriteOptions,
     enable_delta_features,
-    read_table_delta,
     write_table_delta,
 )
 
@@ -51,7 +50,7 @@ def read_dataset_fingerprints(state_store: StateStore) -> dict[str, str]:
     path = _fingerprints_path(state_store)
     if not path.exists():
         return {}
-    table = cast("pa.Table", read_table_delta(str(path)))
+    table = read_delta_table_from_path(str(path))
     results: dict[str, str] = {}
     for row in table.to_pylist():
         if not isinstance(row, Mapping):

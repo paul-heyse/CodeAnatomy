@@ -10,14 +10,13 @@ from deltalake import CommitProperties, DeltaTable
 from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import column_or_null, table_from_arrays
 from arrowdsl.schema.serialization import schema_fingerprint
-from datafusion_engine.runtime import dataset_schema_from_context
+from datafusion_engine.runtime import dataset_schema_from_context, read_delta_table_from_path
 from incremental.state_store import StateStore
 from storage.deltalake import (
     DeltaWriteOptions,
     DeltaWriteResult,
     delta_table_version,
     enable_delta_features,
-    read_table_delta,
     write_table_delta,
 )
 
@@ -63,7 +62,7 @@ def read_repo_snapshot(store: StateStore) -> pa.Table | None:
     path = store.repo_snapshot_path()
     if not path.exists() or delta_table_version(str(path)) is None:
         return None
-    return cast("pa.Table", read_table_delta(str(path)))
+    return read_delta_table_from_path(str(path))
 
 
 def write_repo_snapshot(store: StateStore, snapshot: pa.Table) -> DeltaWriteResult:

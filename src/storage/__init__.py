@@ -24,8 +24,6 @@ __all__ = (
     "delta_table_version",
     "enable_delta_features",
     "open_delta_table",
-    "read_delta_cdf",
-    "read_table_delta",
     "read_table_ipc_file",
     "read_table_parquet",
     "upsert_dataset_partitions_delta",
@@ -62,8 +60,6 @@ if TYPE_CHECKING:
     delta_table_version = _storage_io.delta_table_version
     enable_delta_features = _storage_io.enable_delta_features
     open_delta_table = _storage_io.open_delta_table
-    read_delta_cdf = _storage_io.read_delta_cdf
-    read_table_delta = _storage_io.read_table_delta
     read_table_ipc_file = _storage_io.read_table_ipc_file
     read_table_parquet = _storage_io.read_table_parquet
     upsert_dataset_partitions_delta = _storage_io.upsert_dataset_partitions_delta

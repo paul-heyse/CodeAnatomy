@@ -22,7 +22,11 @@ if TYPE_CHECKING:
 else:
     ExplainRows = object
 
-SchemaMapping = Mapping[str, Mapping[str, str]]
+SchemaMapping = (
+    Mapping[str, Mapping[str, str]]
+    | Mapping[str, Mapping[str, Mapping[str, str]]]
+    | Mapping[str, Mapping[str, Mapping[str, Mapping[str, str]]]]
+)
 
 
 @dataclass(frozen=True)
@@ -124,6 +128,7 @@ class DataFusionCompileOptions:
     """Compilation options for DataFusion bridge execution."""
 
     schema_map: SchemaMapping | None = None
+    schema_map_hash: str | None = None
     optimize: bool = True
     cache: bool | None = None
     cache_max_columns: int | None = 64

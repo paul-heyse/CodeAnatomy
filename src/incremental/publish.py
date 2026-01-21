@@ -15,11 +15,11 @@ from cpg.schemas import (
     CPG_PROPS_GLOBAL_SCHEMA,
     CPG_PROPS_SCHEMA,
 )
-from incremental.invalidations import validate_schema_identity
-from incremental.state_store import StateStore
 from ibis_engine.backend import build_backend
 from ibis_engine.config import IbisBackendConfig
 from ibis_engine.registry import ReadDatasetParams, read_dataset
+from incremental.invalidations import validate_schema_identity
+from incremental.state_store import StateStore
 
 _CPG_NODES_DATASET = "cpg_nodes_v1"
 _CPG_EDGES_DATASET = "cpg_edges_v1"

@@ -6,10 +6,12 @@ from collections.abc import Callable, Sequence
 
 from datafusion import SessionContext
 
+from datafusion_engine.schema_introspection import SchemaIntrospector
 from datafusion_engine.schema_registry import nested_base_sql, schema_for
 from schema_spec.view_specs import ViewSpec, view_spec_from_sql
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
+    SchemaMapping,
     default_sqlglot_policy,
     normalize_expr,
     parse_sql_strict,
@@ -32,6 +34,23 @@ def _get_field_path(expr: str, *fields: str) -> str:
     return value
 
 
+def _span_field_path(prefix: str, *fields: str) -> str:
+    return _get_field_path(f"{prefix}.span", *fields)
+
+
+def _span_expressions(prefix: str) -> dict[str, str]:
+    return {
+        "start_line": _span_field_path(prefix, "start", "line0"),
+        "start_col": _span_field_path(prefix, "start", "col"),
+        "end_line": _span_field_path(prefix, "end", "line0"),
+        "end_col": _span_field_path(prefix, "end", "col"),
+        "col_unit": _span_field_path(prefix, "col_unit"),
+        "end_exclusive": _span_field_path(prefix, "end_exclusive"),
+        "byte_start": _span_field_path(prefix, "byte_span", "byte_start"),
+        "byte_len": _span_field_path(prefix, "byte_span", "byte_len"),
+    }
+
+
 def _union_tag(expr: str) -> str:
     return f"union_tag({expr})"
 
@@ -46,13 +65,14 @@ def _named_struct(fields: Sequence[tuple[str, str]]) -> str:
 
 
 def _ast_span_struct(prefix: str) -> str:
+    span_expr = f"{prefix}.span"
     return _named_struct(
         (
-            ("start", f"{prefix}.span['start']"),
-            ("end", f"{prefix}.span['end']"),
-            ("byte_span", f"{prefix}.span['byte_span']"),
-            ("col_unit", f"{prefix}.span['col_unit']"),
-            ("end_exclusive", f"{prefix}.span['end_exclusive']"),
+            ("start", _get_field(span_expr, "start")),
+            ("end", _get_field(span_expr, "end")),
+            ("byte_span", _get_field(span_expr, "byte_span")),
+            ("col_unit", _get_field(span_expr, "col_unit")),
+            ("end_exclusive", _get_field(span_expr, "end_exclusive")),
         )
     )
 
@@ -143,6 +163,8 @@ def _code_unit_id_expr(qualpath: str, co_name: str, firstlineno: str) -> str:
 
 def _attrs_view_sql(base: str, *, cols: Sequence[str]) -> str:
     select_cols = ",\n      ".join(f"base.{col} AS {col}" for col in cols)
+    attr_key = _get_field("kv", "key")
+    attr_value = _get_field("kv", "value")
     return f"""
     WITH base AS (
       SELECT *
@@ -150,8 +172,8 @@ def _attrs_view_sql(base: str, *, cols: Sequence[str]) -> str:
     )
     SELECT
       {select_cols},
-      kv['key'] AS attr_key,
-      kv['value'] AS attr_value
+      {attr_key} AS attr_key,
+      {attr_value} AS attr_value
     FROM base
     CROSS JOIN unnest(map_entries(base.attrs)) AS kv
     """
@@ -764,6 +786,8 @@ def cst_ref_span_unnest_sql() -> str:
         SQL fragment text.
     """
     span = _named_struct((("bstart", "base.bstart"), ("bend", "base.bend")))
+    bstart = _get_field("base.span", "bstart")
+    bend = _get_field("base.span", "bend")
     return f"""
     WITH base AS (
       SELECT
@@ -775,8 +799,8 @@ def cst_ref_span_unnest_sql() -> str:
       base.file_id AS file_id,
       base.path AS path,
       base.ref_id AS ref_id,
-      base.span['bstart'] AS bstart,
-      base.span['bend'] AS bend
+      {bstart} AS bstart,
+      {bend} AS bend
     FROM base
     """
 
@@ -790,6 +814,8 @@ def cst_callsite_span_unnest_sql() -> str:
         SQL fragment text.
     """
     span = _named_struct((("bstart", "base.call_bstart"), ("bend", "base.call_bend")))
+    bstart = _get_field("base.span", "bstart")
+    bend = _get_field("base.span", "bend")
     return f"""
     WITH base AS (
       SELECT
@@ -801,8 +827,8 @@ def cst_callsite_span_unnest_sql() -> str:
       base.file_id AS file_id,
       base.path AS path,
       base.call_id AS call_id,
-      base.span['bstart'] AS bstart,
-      base.span['bend'] AS bend
+      {bstart} AS bstart,
+      {bend} AS bend
     FROM base
     """
 
@@ -816,6 +842,8 @@ def cst_def_span_unnest_sql() -> str:
         SQL fragment text.
     """
     span = _named_struct((("bstart", "base.def_bstart"), ("bend", "base.def_bend")))
+    bstart = _get_field("base.span", "bstart")
+    bend = _get_field("base.span", "bend")
     return f"""
     WITH base AS (
       SELECT
@@ -827,8 +855,8 @@ def cst_def_span_unnest_sql() -> str:
       base.file_id AS file_id,
       base.path AS path,
       base.def_id AS def_id,
-      base.span['bstart'] AS bstart,
-      base.span['bend'] AS bend
+      {bstart} AS bstart,
+      {bend} AS bend
     FROM base
     """
 
@@ -882,6 +910,14 @@ def ast_nodes_sql(table: str = "ast_files_v1") -> str:
     base = nested_base_sql("ast_nodes", table=table)
     span_struct = _ast_span_struct("base")
     record_struct = _named_struct((("span", span_struct), ("attrs", "base.attrs")))
+    span_start_line = _span_field_path("base", "start", "line0")
+    span_start_col = _span_field_path("base", "start", "col")
+    span_end_line = _span_field_path("base", "end", "line0")
+    span_end_col = _span_field_path("base", "end", "col")
+    span_col_unit = _span_field_path("base", "col_unit")
+    span_end_exclusive = _span_field_path("base", "end_exclusive")
+    span_byte_start = _span_field_path("base", "byte_span", "byte_start")
+    span_byte_len = _span_field_path("base", "byte_span", "byte_len")
     return f"""
     WITH base AS ({base})
     SELECT
@@ -892,17 +928,17 @@ def ast_nodes_sql(table: str = "ast_files_v1") -> str:
       base.kind AS kind,
       base.name AS name,
       base.value AS value_repr,
-      {_arrow_cast("(base.span['start']['line0'] + 1)", "Int64")} AS lineno,
-      {_arrow_cast("base.span['start']['col']", "Int64")} AS col_offset,
-      {_arrow_cast("(base.span['end']['line0'] + 1)", "Int64")} AS end_lineno,
-      {_arrow_cast("base.span['end']['col']", "Int64")} AS end_col_offset,
+      {_arrow_cast(f"({span_start_line} + 1)", "Int64")} AS lineno,
+      {_arrow_cast(span_start_col, "Int64")} AS col_offset,
+      {_arrow_cast(f"({span_end_line} + 1)", "Int64")} AS end_lineno,
+      {_arrow_cast(span_end_col, "Int64")} AS end_col_offset,
       {_arrow_cast("1", "Int32")} AS line_base,
-      {_arrow_cast("base.span['col_unit']", "Utf8")} AS col_unit,
-      {_arrow_cast("base.span['end_exclusive']", "Boolean")} AS end_exclusive,
-      {_arrow_cast("base.span['byte_span']['byte_start']", "Int64")} AS bstart,
+      {_arrow_cast(span_col_unit, "Utf8")} AS col_unit,
+      {_arrow_cast(span_end_exclusive, "Boolean")} AS end_exclusive,
+      {_arrow_cast(span_byte_start, "Int64")} AS bstart,
       {
         _arrow_cast(
-            "(base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len'])",
+            f"({span_byte_start} + {span_byte_len})",
             "Int64",
         )
     } AS bend,
@@ -948,6 +984,13 @@ def ast_errors_sql(table: str = "ast_files_v1") -> str:
     base = nested_base_sql("ast_errors", table=table)
     span_struct = _ast_span_struct("base")
     record_struct = _named_struct((("span", span_struct), ("attrs", "base.attrs")))
+    span_parts = _span_expressions("base")
+    span_start_line = span_parts["start_line"]
+    span_start_col = span_parts["start_col"]
+    span_end_line = span_parts["end_line"]
+    span_end_col = span_parts["end_col"]
+    span_col_unit = span_parts["col_unit"]
+    span_end_exclusive = span_parts["end_exclusive"]
     return f"""
     WITH base AS ({base})
     SELECT
@@ -955,13 +998,13 @@ def ast_errors_sql(table: str = "ast_files_v1") -> str:
       base.path AS path,
       base.error_type AS error_type,
       base.message AS message,
-      {_arrow_cast("(base.span['start']['line0'] + 1)", "Int64")} AS lineno,
-      {_arrow_cast("base.span['start']['col']", "Int64")} AS col_offset,
-      {_arrow_cast("(base.span['end']['line0'] + 1)", "Int64")} AS end_lineno,
-      {_arrow_cast("base.span['end']['col']", "Int64")} AS end_col_offset,
+      {_arrow_cast(f"({span_start_line} + 1)", "Int64")} AS lineno,
+      {_arrow_cast(span_start_col, "Int64")} AS col_offset,
+      {_arrow_cast(f"({span_end_line} + 1)", "Int64")} AS end_lineno,
+      {_arrow_cast(span_end_col, "Int64")} AS end_col_offset,
       {_arrow_cast("1", "Int32")} AS line_base,
-      {_arrow_cast("base.span['col_unit']", "Utf8")} AS col_unit,
-      {_arrow_cast("base.span['end_exclusive']", "Boolean")} AS end_exclusive,
+      {_arrow_cast(span_col_unit, "Utf8")} AS col_unit,
+      {_arrow_cast(span_end_exclusive, "Boolean")} AS end_exclusive,
       {span_struct} AS span,
       base.attrs AS attrs,
       {record_struct} AS ast_record
@@ -980,6 +1023,13 @@ def ast_docstrings_sql(table: str = "ast_files_v1") -> str:
     base = nested_base_sql("ast_docstrings", table=table)
     span_struct = _ast_span_struct("base")
     record_struct = _named_struct((("span", span_struct), ("attrs", "base.attrs")))
+    span_parts = _span_expressions("base")
+    span_start_line = span_parts["start_line"]
+    span_start_col = span_parts["start_col"]
+    span_end_line = span_parts["end_line"]
+    span_end_col = span_parts["end_col"]
+    span_col_unit = span_parts["col_unit"]
+    span_end_exclusive = span_parts["end_exclusive"]
     return f"""
     WITH base AS ({base})
     SELECT
@@ -990,13 +1040,13 @@ def ast_docstrings_sql(table: str = "ast_files_v1") -> str:
       base.owner_name AS owner_name,
       base.docstring AS docstring,
       base.source AS source,
-      {_arrow_cast("(base.span['start']['line0'] + 1)", "Int64")} AS lineno,
-      {_arrow_cast("base.span['start']['col']", "Int64")} AS col_offset,
-      {_arrow_cast("(base.span['end']['line0'] + 1)", "Int64")} AS end_lineno,
-      {_arrow_cast("base.span['end']['col']", "Int64")} AS end_col_offset,
+      {_arrow_cast(f"({span_start_line} + 1)", "Int64")} AS lineno,
+      {_arrow_cast(span_start_col, "Int64")} AS col_offset,
+      {_arrow_cast(f"({span_end_line} + 1)", "Int64")} AS end_lineno,
+      {_arrow_cast(span_end_col, "Int64")} AS end_col_offset,
       {_arrow_cast("1", "Int32")} AS line_base,
-      {_arrow_cast("base.span['col_unit']", "Utf8")} AS col_unit,
-      {_arrow_cast("base.span['end_exclusive']", "Boolean")} AS end_exclusive,
+      {_arrow_cast(span_col_unit, "Utf8")} AS col_unit,
+      {_arrow_cast(span_end_exclusive, "Boolean")} AS end_exclusive,
       {span_struct} AS span,
       base.attrs AS attrs,
       {record_struct} AS ast_record
@@ -1015,6 +1065,13 @@ def ast_imports_sql(table: str = "ast_files_v1") -> str:
     base = nested_base_sql("ast_imports", table=table)
     span_struct = _ast_span_struct("base")
     record_struct = _named_struct((("span", span_struct), ("attrs", "base.attrs")))
+    span_parts = _span_expressions("base")
+    span_start_line = span_parts["start_line"]
+    span_start_col = span_parts["start_col"]
+    span_end_line = span_parts["end_line"]
+    span_end_col = span_parts["end_col"]
+    span_col_unit = span_parts["col_unit"]
+    span_end_exclusive = span_parts["end_exclusive"]
     return f"""
     WITH base AS ({base})
     SELECT
@@ -1028,13 +1085,13 @@ def ast_imports_sql(table: str = "ast_files_v1") -> str:
       base.asname AS asname,
       base.alias_index AS alias_index,
       base.level AS level,
-      {_arrow_cast("(base.span['start']['line0'] + 1)", "Int64")} AS lineno,
-      {_arrow_cast("base.span['start']['col']", "Int64")} AS col_offset,
-      {_arrow_cast("(base.span['end']['line0'] + 1)", "Int64")} AS end_lineno,
-      {_arrow_cast("base.span['end']['col']", "Int64")} AS end_col_offset,
+      {_arrow_cast(f"({span_start_line} + 1)", "Int64")} AS lineno,
+      {_arrow_cast(span_start_col, "Int64")} AS col_offset,
+      {_arrow_cast(f"({span_end_line} + 1)", "Int64")} AS end_lineno,
+      {_arrow_cast(span_end_col, "Int64")} AS end_col_offset,
       {_arrow_cast("1", "Int32")} AS line_base,
-      {_arrow_cast("base.span['col_unit']", "Utf8")} AS col_unit,
-      {_arrow_cast("base.span['end_exclusive']", "Boolean")} AS end_exclusive,
+      {_arrow_cast(span_col_unit, "Utf8")} AS col_unit,
+      {_arrow_cast(span_end_exclusive, "Boolean")} AS end_exclusive,
       {span_struct} AS span,
       base.attrs AS attrs,
       {record_struct} AS ast_record
@@ -1053,6 +1110,13 @@ def ast_defs_sql(table: str = "ast_files_v1") -> str:
     base = nested_base_sql("ast_defs", table=table)
     span_struct = _ast_span_struct("base")
     record_struct = _named_struct((("span", span_struct), ("attrs", "base.attrs")))
+    span_parts = _span_expressions("base")
+    span_start_line = span_parts["start_line"]
+    span_start_col = span_parts["start_col"]
+    span_end_line = span_parts["end_line"]
+    span_end_col = span_parts["end_col"]
+    span_col_unit = span_parts["col_unit"]
+    span_end_exclusive = span_parts["end_exclusive"]
     return f"""
     WITH base AS ({base})
     SELECT
@@ -1069,13 +1133,13 @@ def ast_defs_sql(table: str = "ast_files_v1") -> str:
       {_map_cast("base.attrs", "type_params_count", "INT")} AS type_params_count,
       {_map_cast("base.attrs", "base_count", "INT")} AS base_count,
       {_map_cast("base.attrs", "keyword_count", "INT")} AS keyword_count,
-      {_arrow_cast("(base.span['start']['line0'] + 1)", "Int64")} AS lineno,
-      {_arrow_cast("base.span['start']['col']", "Int64")} AS col_offset,
-      {_arrow_cast("(base.span['end']['line0'] + 1)", "Int64")} AS end_lineno,
-      {_arrow_cast("base.span['end']['col']", "Int64")} AS end_col_offset,
+      {_arrow_cast(f"({span_start_line} + 1)", "Int64")} AS lineno,
+      {_arrow_cast(span_start_col, "Int64")} AS col_offset,
+      {_arrow_cast(f"({span_end_line} + 1)", "Int64")} AS end_lineno,
+      {_arrow_cast(span_end_col, "Int64")} AS end_col_offset,
       {_arrow_cast("1", "Int32")} AS line_base,
-      {_arrow_cast("base.span['col_unit']", "Utf8")} AS col_unit,
-      {_arrow_cast("base.span['end_exclusive']", "Boolean")} AS end_exclusive,
+      {_arrow_cast(span_col_unit, "Utf8")} AS col_unit,
+      {_arrow_cast(span_end_exclusive, "Boolean")} AS end_exclusive,
       {span_struct} AS span,
       base.attrs AS attrs,
       {record_struct} AS ast_record
@@ -1094,6 +1158,13 @@ def ast_calls_sql(table: str = "ast_files_v1") -> str:
     base = nested_base_sql("ast_calls", table=table)
     span_struct = _ast_span_struct("base")
     record_struct = _named_struct((("span", span_struct), ("attrs", "base.attrs")))
+    span_parts = _span_expressions("base")
+    span_start_line = span_parts["start_line"]
+    span_start_col = span_parts["start_col"]
+    span_end_line = span_parts["end_line"]
+    span_end_col = span_parts["end_col"]
+    span_col_unit = span_parts["col_unit"]
+    span_end_exclusive = span_parts["end_exclusive"]
     return f"""
     WITH base AS ({base})
     SELECT
@@ -1107,13 +1178,13 @@ def ast_calls_sql(table: str = "ast_files_v1") -> str:
       {_map_cast("base.attrs", "keyword_count", "INT")} AS keyword_count,
       {_map_cast("base.attrs", "starred_count", "INT")} AS starred_count,
       {_map_cast("base.attrs", "kw_star_count", "INT")} AS kw_star_count,
-      {_arrow_cast("(base.span['start']['line0'] + 1)", "Int64")} AS lineno,
-      {_arrow_cast("base.span['start']['col']", "Int64")} AS col_offset,
-      {_arrow_cast("(base.span['end']['line0'] + 1)", "Int64")} AS end_lineno,
-      {_arrow_cast("base.span['end']['col']", "Int64")} AS end_col_offset,
+      {_arrow_cast(f"({span_start_line} + 1)", "Int64")} AS lineno,
+      {_arrow_cast(span_start_col, "Int64")} AS col_offset,
+      {_arrow_cast(f"({span_end_line} + 1)", "Int64")} AS end_lineno,
+      {_arrow_cast(span_end_col, "Int64")} AS end_col_offset,
       {_arrow_cast("1", "Int32")} AS line_base,
-      {_arrow_cast("base.span['col_unit']", "Utf8")} AS col_unit,
-      {_arrow_cast("base.span['end_exclusive']", "Boolean")} AS end_exclusive,
+      {_arrow_cast(span_col_unit, "Utf8")} AS col_unit,
+      {_arrow_cast(span_end_exclusive, "Boolean")} AS end_exclusive,
       {span_struct} AS span,
       base.attrs AS attrs,
       {record_struct} AS ast_record
@@ -1132,6 +1203,13 @@ def ast_type_ignores_sql(table: str = "ast_files_v1") -> str:
     base = nested_base_sql("ast_type_ignores", table=table)
     span_struct = _ast_span_struct("base")
     record_struct = _named_struct((("span", span_struct), ("attrs", "base.attrs")))
+    span_parts = _span_expressions("base")
+    span_start_line = span_parts["start_line"]
+    span_start_col = span_parts["start_col"]
+    span_end_line = span_parts["end_line"]
+    span_end_col = span_parts["end_col"]
+    span_col_unit = span_parts["col_unit"]
+    span_end_exclusive = span_parts["end_exclusive"]
     return f"""
     WITH base AS ({base})
     SELECT
@@ -1139,13 +1217,13 @@ def ast_type_ignores_sql(table: str = "ast_files_v1") -> str:
       base.path AS path,
       base.ast_id AS ast_id,
       base.tag AS tag,
-      {_arrow_cast("(base.span['start']['line0'] + 1)", "Int64")} AS lineno,
-      {_arrow_cast("base.span['start']['col']", "Int64")} AS col_offset,
-      {_arrow_cast("(base.span['end']['line0'] + 1)", "Int64")} AS end_lineno,
-      {_arrow_cast("base.span['end']['col']", "Int64")} AS end_col_offset,
+      {_arrow_cast(f"({span_start_line} + 1)", "Int64")} AS lineno,
+      {_arrow_cast(span_start_col, "Int64")} AS col_offset,
+      {_arrow_cast(f"({span_end_line} + 1)", "Int64")} AS end_lineno,
+      {_arrow_cast(span_end_col, "Int64")} AS end_col_offset,
       {_arrow_cast("1", "Int32")} AS line_base,
-      {_arrow_cast("base.span['col_unit']", "Utf8")} AS col_unit,
-      {_arrow_cast("base.span['end_exclusive']", "Boolean")} AS end_exclusive,
+      {_arrow_cast(span_col_unit, "Utf8")} AS col_unit,
+      {_arrow_cast(span_end_exclusive, "Boolean")} AS end_exclusive,
       {span_struct} AS span,
       base.attrs AS attrs,
       {record_struct} AS ast_record
@@ -1293,6 +1371,15 @@ def tree_sitter_nodes_sql(table: str = "tree_sitter_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("ts_nodes", table=table)
+    span = _span_expressions("base")
+    flags = {
+        "is_named": _get_field("base.flags", "is_named"),
+        "has_error": _get_field("base.flags", "has_error"),
+        "is_error": _get_field("base.flags", "is_error"),
+        "is_missing": _get_field("base.flags", "is_missing"),
+        "is_extra": _get_field("base.flags", "is_extra"),
+        "has_changes": _get_field("base.flags", "has_changes"),
+    }
     return f"""
     WITH base AS ({base})
     SELECT
@@ -1305,21 +1392,21 @@ def tree_sitter_nodes_sql(table: str = "tree_sitter_files_v1") -> str:
       base.kind_id AS ts_kind_id,
       base.grammar_id AS ts_grammar_id,
       base.grammar_name AS ts_grammar_name,
-      base.span['start']['line0'] AS start_line,
-      base.span['start']['col'] AS start_col,
-      base.span['end']['line0'] AS end_line,
-      base.span['end']['col'] AS end_col,
+      {span["start_line"]} AS start_line,
+      {span["start_col"]} AS start_col,
+      {span["end_line"]} AS end_line,
+      {span["end_col"]} AS end_col,
       CAST(0 AS INT) AS line_base,
-      base.span['col_unit'] AS col_unit,
-      base.span['end_exclusive'] AS end_exclusive,
-      base.span['byte_span']['byte_start'] AS start_byte,
-      (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
-      base.flags['is_named'] AS is_named,
-      base.flags['has_error'] AS has_error,
-      base.flags['is_error'] AS is_error,
-      base.flags['is_missing'] AS is_missing,
-      base.flags['is_extra'] AS is_extra,
-      base.flags['has_changes'] AS has_changes,
+      {span["col_unit"]} AS col_unit,
+      {span["end_exclusive"]} AS end_exclusive,
+      {span["byte_start"]} AS start_byte,
+      ({span["byte_start"]} + {span["byte_len"]}) AS end_byte,
+      {flags["is_named"]} AS is_named,
+      {flags["has_error"]} AS has_error,
+      {flags["is_error"]} AS is_error,
+      {flags["is_missing"]} AS is_missing,
+      {flags["is_extra"]} AS is_extra,
+      {flags["has_changes"]} AS has_changes,
       arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
@@ -1334,6 +1421,15 @@ def tree_sitter_errors_sql(table: str = "tree_sitter_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("ts_errors", table=table)
+    span_parts = _span_expressions("base")
+    span_start_line = span_parts["start_line"]
+    span_start_col = span_parts["start_col"]
+    span_end_line = span_parts["end_line"]
+    span_end_col = span_parts["end_col"]
+    span_col_unit = span_parts["col_unit"]
+    span_end_exclusive = span_parts["end_exclusive"]
+    span_byte_start = span_parts["byte_start"]
+    span_byte_len = span_parts["byte_len"]
     return f"""
     WITH base AS ({base})
     SELECT
@@ -1341,15 +1437,15 @@ def tree_sitter_errors_sql(table: str = "tree_sitter_files_v1") -> str:
       base.path AS path,
       base.error_id AS ts_error_id,
       base.node_id AS ts_node_id,
-      base.span['start']['line0'] AS start_line,
-      base.span['start']['col'] AS start_col,
-      base.span['end']['line0'] AS end_line,
-      base.span['end']['col'] AS end_col,
+      {span_start_line} AS start_line,
+      {span_start_col} AS start_col,
+      {span_end_line} AS end_line,
+      {span_end_col} AS end_col,
       CAST(0 AS INT) AS line_base,
-      base.span['col_unit'] AS col_unit,
-      base.span['end_exclusive'] AS end_exclusive,
-      base.span['byte_span']['byte_start'] AS start_byte,
-      (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
+      {span_col_unit} AS col_unit,
+      {span_end_exclusive} AS end_exclusive,
+      {span_byte_start} AS start_byte,
+      ({span_byte_start} + {span_byte_len}) AS end_byte,
       CAST(TRUE AS BOOLEAN) AS is_error,
       arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
@@ -1365,6 +1461,15 @@ def tree_sitter_missing_sql(table: str = "tree_sitter_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("ts_missing", table=table)
+    span_parts = _span_expressions("base")
+    span_start_line = span_parts["start_line"]
+    span_start_col = span_parts["start_col"]
+    span_end_line = span_parts["end_line"]
+    span_end_col = span_parts["end_col"]
+    span_col_unit = span_parts["col_unit"]
+    span_end_exclusive = span_parts["end_exclusive"]
+    span_byte_start = span_parts["byte_start"]
+    span_byte_len = span_parts["byte_len"]
     return f"""
     WITH base AS ({base})
     SELECT
@@ -1372,15 +1477,15 @@ def tree_sitter_missing_sql(table: str = "tree_sitter_files_v1") -> str:
       base.path AS path,
       base.missing_id AS ts_missing_id,
       base.node_id AS ts_node_id,
-      base.span['start']['line0'] AS start_line,
-      base.span['start']['col'] AS start_col,
-      base.span['end']['line0'] AS end_line,
-      base.span['end']['col'] AS end_col,
+      {span_start_line} AS start_line,
+      {span_start_col} AS start_col,
+      {span_end_line} AS end_line,
+      {span_end_col} AS end_col,
       CAST(0 AS INT) AS line_base,
-      base.span['col_unit'] AS col_unit,
-      base.span['end_exclusive'] AS end_exclusive,
-      base.span['byte_span']['byte_start'] AS start_byte,
-      (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
+      {span_col_unit} AS col_unit,
+      {span_end_exclusive} AS end_exclusive,
+      {span_byte_start} AS start_byte,
+      ({span_byte_start} + {span_byte_len}) AS end_byte,
       CAST(TRUE AS BOOLEAN) AS is_missing,
       arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
@@ -1419,6 +1524,15 @@ def tree_sitter_captures_sql(table: str = "tree_sitter_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("ts_captures", table=table)
+    span_parts = _span_expressions("base")
+    span_start_line = span_parts["start_line"]
+    span_start_col = span_parts["start_col"]
+    span_end_line = span_parts["end_line"]
+    span_end_col = span_parts["end_col"]
+    span_col_unit = span_parts["col_unit"]
+    span_end_exclusive = span_parts["end_exclusive"]
+    span_byte_start = span_parts["byte_start"]
+    span_byte_len = span_parts["byte_len"]
     return f"""
     WITH base AS ({base})
     SELECT
@@ -1430,15 +1544,15 @@ def tree_sitter_captures_sql(table: str = "tree_sitter_files_v1") -> str:
       base.pattern_index AS pattern_index,
       base.node_id AS ts_node_id,
       base.node_kind AS node_kind,
-      base.span['start']['line0'] AS start_line,
-      base.span['start']['col'] AS start_col,
-      base.span['end']['line0'] AS end_line,
-      base.span['end']['col'] AS end_col,
+      {span_start_line} AS start_line,
+      {span_start_col} AS start_col,
+      {span_end_line} AS end_line,
+      {span_end_col} AS end_col,
       CAST(0 AS INT) AS line_base,
-      base.span['col_unit'] AS col_unit,
-      base.span['end_exclusive'] AS end_exclusive,
-      base.span['byte_span']['byte_start'] AS start_byte,
-      (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
+      {span_col_unit} AS col_unit,
+      {span_end_exclusive} AS end_exclusive,
+      {span_byte_start} AS start_byte,
+      ({span_byte_start} + {span_byte_len}) AS end_byte,
       arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
@@ -1453,6 +1567,15 @@ def tree_sitter_defs_sql(table: str = "tree_sitter_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("ts_defs", table=table)
+    span_parts = _span_expressions("base")
+    span_start_line = span_parts["start_line"]
+    span_start_col = span_parts["start_col"]
+    span_end_line = span_parts["end_line"]
+    span_end_col = span_parts["end_col"]
+    span_col_unit = span_parts["col_unit"]
+    span_end_exclusive = span_parts["end_exclusive"]
+    span_byte_start = span_parts["byte_start"]
+    span_byte_len = span_parts["byte_len"]
     return f"""
     WITH base AS ({base})
     SELECT
@@ -1462,15 +1585,15 @@ def tree_sitter_defs_sql(table: str = "tree_sitter_files_v1") -> str:
       base.parent_id AS parent_ts_id,
       base.kind AS kind,
       base.name AS name,
-      base.span['start']['line0'] AS start_line,
-      base.span['start']['col'] AS start_col,
-      base.span['end']['line0'] AS end_line,
-      base.span['end']['col'] AS end_col,
+      {span_start_line} AS start_line,
+      {span_start_col} AS start_col,
+      {span_end_line} AS end_line,
+      {span_end_col} AS end_col,
       CAST(0 AS INT) AS line_base,
-      base.span['col_unit'] AS col_unit,
-      base.span['end_exclusive'] AS end_exclusive,
-      base.span['byte_span']['byte_start'] AS start_byte,
-      (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
+      {span_col_unit} AS col_unit,
+      {span_end_exclusive} AS end_exclusive,
+      {span_byte_start} AS start_byte,
+      ({span_byte_start} + {span_byte_len}) AS end_byte,
       arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
@@ -1485,6 +1608,15 @@ def tree_sitter_calls_sql(table: str = "tree_sitter_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("ts_calls", table=table)
+    span_parts = _span_expressions("base")
+    span_start_line = span_parts["start_line"]
+    span_start_col = span_parts["start_col"]
+    span_end_line = span_parts["end_line"]
+    span_end_col = span_parts["end_col"]
+    span_col_unit = span_parts["col_unit"]
+    span_end_exclusive = span_parts["end_exclusive"]
+    span_byte_start = span_parts["byte_start"]
+    span_byte_len = span_parts["byte_len"]
     return f"""
     WITH base AS ({base})
     SELECT
@@ -1495,15 +1627,15 @@ def tree_sitter_calls_sql(table: str = "tree_sitter_files_v1") -> str:
       base.callee_kind AS callee_kind,
       base.callee_text AS callee_text,
       base.callee_node_id AS callee_node_id,
-      base.span['start']['line0'] AS start_line,
-      base.span['start']['col'] AS start_col,
-      base.span['end']['line0'] AS end_line,
-      base.span['end']['col'] AS end_col,
+      {span_start_line} AS start_line,
+      {span_start_col} AS start_col,
+      {span_end_line} AS end_line,
+      {span_end_col} AS end_col,
       CAST(0 AS INT) AS line_base,
-      base.span['col_unit'] AS col_unit,
-      base.span['end_exclusive'] AS end_exclusive,
-      base.span['byte_span']['byte_start'] AS start_byte,
-      (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
+      {span_col_unit} AS col_unit,
+      {span_end_exclusive} AS end_exclusive,
+      {span_byte_start} AS start_byte,
+      ({span_byte_start} + {span_byte_len}) AS end_byte,
       arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
@@ -1518,6 +1650,15 @@ def tree_sitter_imports_sql(table: str = "tree_sitter_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("ts_imports", table=table)
+    span_parts = _span_expressions("base")
+    span_start_line = span_parts["start_line"]
+    span_start_col = span_parts["start_col"]
+    span_end_line = span_parts["end_line"]
+    span_end_col = span_parts["end_col"]
+    span_col_unit = span_parts["col_unit"]
+    span_end_exclusive = span_parts["end_exclusive"]
+    span_byte_start = span_parts["byte_start"]
+    span_byte_len = span_parts["byte_len"]
     return f"""
     WITH base AS ({base})
     SELECT
@@ -1531,15 +1672,15 @@ def tree_sitter_imports_sql(table: str = "tree_sitter_files_v1") -> str:
       base.asname AS asname,
       base.alias_index AS alias_index,
       base.level AS level,
-      base.span['start']['line0'] AS start_line,
-      base.span['start']['col'] AS start_col,
-      base.span['end']['line0'] AS end_line,
-      base.span['end']['col'] AS end_col,
+      {span_start_line} AS start_line,
+      {span_start_col} AS start_col,
+      {span_end_line} AS end_line,
+      {span_end_col} AS end_col,
       CAST(0 AS INT) AS line_base,
-      base.span['col_unit'] AS col_unit,
-      base.span['end_exclusive'] AS end_exclusive,
-      base.span['byte_span']['byte_start'] AS start_byte,
-      (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
+      {span_col_unit} AS col_unit,
+      {span_end_exclusive} AS end_exclusive,
+      {span_byte_start} AS start_byte,
+      ({span_byte_start} + {span_byte_len}) AS end_byte,
       arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
@@ -1554,6 +1695,15 @@ def tree_sitter_docstrings_sql(table: str = "tree_sitter_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("ts_docstrings", table=table)
+    span_parts = _span_expressions("base")
+    span_start_line = span_parts["start_line"]
+    span_start_col = span_parts["start_col"]
+    span_end_line = span_parts["end_line"]
+    span_end_col = span_parts["end_col"]
+    span_col_unit = span_parts["col_unit"]
+    span_end_exclusive = span_parts["end_exclusive"]
+    span_byte_start = span_parts["byte_start"]
+    span_byte_len = span_parts["byte_len"]
     return f"""
     WITH base AS ({base})
     SELECT
@@ -1565,15 +1715,15 @@ def tree_sitter_docstrings_sql(table: str = "tree_sitter_files_v1") -> str:
       base.doc_node_id AS doc_node_id,
       base.docstring AS docstring,
       base.source AS source,
-      base.span['start']['line0'] AS start_line,
-      base.span['start']['col'] AS start_col,
-      base.span['end']['line0'] AS end_line,
-      base.span['end']['col'] AS end_col,
+      {span_start_line} AS start_line,
+      {span_start_col} AS start_col,
+      {span_end_line} AS end_line,
+      {span_end_col} AS end_col,
       CAST(0 AS INT) AS line_base,
-      base.span['col_unit'] AS col_unit,
-      base.span['end_exclusive'] AS end_exclusive,
-      base.span['byte_span']['byte_start'] AS start_byte,
-      (base.span['byte_span']['byte_start'] + base.span['byte_span']['byte_len']) AS end_byte,
+      {span_col_unit} AS col_unit,
+      {span_end_exclusive} AS end_exclusive,
+      {span_byte_start} AS start_byte,
+      ({span_byte_start} + {span_byte_len}) AS end_byte,
       arrow_cast(base.attrs, 'Map(Utf8, Utf8)') AS attrs
     FROM base
     """
@@ -1967,6 +2117,18 @@ def symtable_symbols_sql(table: str = "symtable_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("symtable_symbols", table=table)
+    is_referenced = _get_field("base.flags", "is_referenced")
+    is_imported = _get_field("base.flags", "is_imported")
+    is_parameter = _get_field("base.flags", "is_parameter")
+    is_type_parameter = _get_field("base.flags", "is_type_parameter")
+    is_global = _get_field("base.flags", "is_global")
+    is_nonlocal = _get_field("base.flags", "is_nonlocal")
+    is_declared_global = _get_field("base.flags", "is_declared_global")
+    is_local = _get_field("base.flags", "is_local")
+    is_annotated = _get_field("base.flags", "is_annotated")
+    is_free = _get_field("base.flags", "is_free")
+    is_assigned = _get_field("base.flags", "is_assigned")
+    is_namespace = _get_field("base.flags", "is_namespace")
     return f"""
     WITH base AS ({base})
     SELECT
@@ -1980,18 +2142,18 @@ def symtable_symbols_sql(table: str = "symtable_files_v1") -> str:
         THEN NULL
         ELSE prefixed_hash64('sym_symbol', concat_ws(':', base.scope_id, base.name))
       END AS sym_symbol_id,
-      base.flags['is_referenced'] AS is_referenced,
-      base.flags['is_imported'] AS is_imported,
-      base.flags['is_parameter'] AS is_parameter,
-      base.flags['is_type_parameter'] AS is_type_parameter,
-      base.flags['is_global'] AS is_global,
-      base.flags['is_nonlocal'] AS is_nonlocal,
-      base.flags['is_declared_global'] AS is_declared_global,
-      base.flags['is_local'] AS is_local,
-      base.flags['is_annotated'] AS is_annotated,
-      base.flags['is_free'] AS is_free,
-      base.flags['is_assigned'] AS is_assigned,
-      base.flags['is_namespace'] AS is_namespace,
+      {is_referenced} AS is_referenced,
+      {is_imported} AS is_imported,
+      {is_parameter} AS is_parameter,
+      {is_type_parameter} AS is_type_parameter,
+      {is_global} AS is_global,
+      {is_nonlocal} AS is_nonlocal,
+      {is_declared_global} AS is_declared_global,
+      {is_local} AS is_local,
+      {is_annotated} AS is_annotated,
+      {is_free} AS is_free,
+      {is_assigned} AS is_assigned,
+      {is_namespace} AS is_namespace,
       base.namespace_count AS namespace_count,
       base.namespace_block_ids AS namespace_block_ids
     FROM base
@@ -2066,6 +2228,11 @@ def symtable_function_partitions_sql(table: str = "symtable_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("symtable_scopes", table=table)
+    parameters = _get_field("base.function_partitions", "parameters")
+    locals_expr = _get_field("base.function_partitions", "locals")
+    globals_expr = _get_field("base.function_partitions", "globals")
+    nonlocals_expr = _get_field("base.function_partitions", "nonlocals")
+    frees = _get_field("base.function_partitions", "frees")
     return f"""
     WITH base AS ({base})
     SELECT
@@ -2073,11 +2240,11 @@ def symtable_function_partitions_sql(table: str = "symtable_files_v1") -> str:
       base.path AS path,
       base.scope_id AS scope_id,
       base.scope_name AS scope_name,
-      base.function_partitions['parameters'] AS parameters,
-      base.function_partitions['locals'] AS locals,
-      base.function_partitions['globals'] AS globals,
-      base.function_partitions['nonlocals'] AS nonlocals,
-      base.function_partitions['frees'] AS frees
+      {parameters} AS parameters,
+      {locals_expr} AS locals,
+      {globals_expr} AS globals,
+      {nonlocals_expr} AS nonlocals,
+      {frees} AS frees
     FROM base
     WHERE base.function_partitions IS NOT NULL
     """
@@ -2114,6 +2281,8 @@ def symtable_symbol_attrs_sql(table: str = "symtable_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("symtable_symbols", table=table)
+    attr_key = _get_field("kv", "key")
+    attr_value = _get_field("kv", "value")
     return f"""
     WITH base AS ({base})
     SELECT
@@ -2121,8 +2290,8 @@ def symtable_symbol_attrs_sql(table: str = "symtable_files_v1") -> str:
       base.path AS path,
       base.scope_id AS scope_id,
       base.name AS symbol_name,
-      kv['key'] AS attr_key,
-      kv['value'] AS attr_value
+      {attr_key} AS attr_key,
+      {attr_value} AS attr_value
     FROM base
     CROSS JOIN unnest(map_entries(base.attrs)) AS kv
     """
@@ -2482,6 +2651,8 @@ def bytecode_instruction_attrs_sql(table: str = "bytecode_files_v1") -> str:
         "base.code_unit_name",
         "base.code_unit_firstlineno",
     )
+    attr_key = _get_field("kv", "key")
+    attr_value = _get_field("kv", "value")
     return f"""
     WITH base AS ({base})
     SELECT
@@ -2490,12 +2661,12 @@ def bytecode_instruction_attrs_sql(table: str = "bytecode_files_v1") -> str:
       {code_unit_id} AS code_unit_id,
       base.instr_index AS instr_index,
       base.offset AS offset,
-      kv['key'] AS attr_key,
-      kv['value'] AS attr_value,
-      {_union_tag("kv['value']")} AS attr_kind,
-      {_union_extract("kv['value']", "int_value")} AS attr_int,
-      {_union_extract("kv['value']", "bool_value")} AS attr_bool,
-      {_union_extract("kv['value']", "str_value")} AS attr_str
+      {attr_key} AS attr_key,
+      {attr_value} AS attr_value,
+      {_union_tag(attr_value)} AS attr_kind,
+      {_union_extract(attr_value, "int_value")} AS attr_int,
+      {_union_extract(attr_value, "bool_value")} AS attr_bool,
+      {_union_extract(attr_value, "str_value")} AS attr_str
     FROM base
     CROSS JOIN unnest(map_entries(base.attrs)) AS kv
     """
@@ -2866,6 +3037,8 @@ def bytecode_cfg_edge_attrs_sql(table: str = "bytecode_files_v1") -> str:
         "base.code_unit_name",
         "base.code_unit_firstlineno",
     )
+    attr_key = _get_field("kv", "key")
+    attr_value = _get_field("kv", "value")
     return f"""
     WITH base AS ({base})
     SELECT
@@ -2874,12 +3047,12 @@ def bytecode_cfg_edge_attrs_sql(table: str = "bytecode_files_v1") -> str:
       {code_unit_id} AS code_unit_id,
       base.edge_key AS edge_key,
       base.kind AS kind,
-      kv['key'] AS attr_key,
-      kv['value'] AS attr_value,
-      {_union_tag("kv['value']")} AS attr_kind,
-      {_union_extract("kv['value']", "int_value")} AS attr_int,
-      {_union_extract("kv['value']", "bool_value")} AS attr_bool,
-      {_union_extract("kv['value']", "str_value")} AS attr_str
+      {attr_key} AS attr_key,
+      {attr_value} AS attr_value,
+      {_union_tag(attr_value)} AS attr_kind,
+      {_union_extract(attr_value, "int_value")} AS attr_int,
+      {_union_extract(attr_value, "bool_value")} AS attr_bool,
+      {_union_extract(attr_value, "str_value")} AS attr_str
     FROM base
     CROSS JOIN unnest(map_entries(base.attrs)) AS kv
     """
@@ -2955,31 +3128,34 @@ def bytecode_flags_detail_sql(table: str = "bytecode_files_v1") -> str:
     """
     base = nested_base_sql("py_bc_code_units", table=table)
     code_unit_id = _code_unit_id_expr("base.qualname", "base.name", "base.firstlineno1")
+    flags_detail = "base.flags_detail"
+    is_optimized = _get_field(flags_detail, "is_optimized")
+    is_newlocals = _get_field(flags_detail, "is_newlocals")
+    has_varargs = _get_field(flags_detail, "has_varargs")
+    has_varkeywords = _get_field(flags_detail, "has_varkeywords")
+    is_nested = _get_field(flags_detail, "is_nested")
+    is_generator = _get_field(flags_detail, "is_generator")
+    is_nofree = _get_field(flags_detail, "is_nofree")
+    is_coroutine = _get_field(flags_detail, "is_coroutine")
+    is_iterable_coroutine = _get_field(flags_detail, "is_iterable_coroutine")
+    is_async_generator = _get_field(flags_detail, "is_async_generator")
     return f"""
-    WITH base AS ({base}),
-    expanded AS (
-      SELECT
-        base.file_id AS file_id,
-        base.path AS path,
-        {code_unit_id} AS code_unit_id,
-        unnest(base.flags_detail) AS flags_detail
-      FROM base
-    )
+    WITH base AS ({base})
     SELECT
-      file_id,
-      path,
-      code_unit_id,
-      "__unnest_placeholder(flags_detail).is_optimized" AS is_optimized,
-      "__unnest_placeholder(flags_detail).is_newlocals" AS is_newlocals,
-      "__unnest_placeholder(flags_detail).has_varargs" AS has_varargs,
-      "__unnest_placeholder(flags_detail).has_varkeywords" AS has_varkeywords,
-      "__unnest_placeholder(flags_detail).is_nested" AS is_nested,
-      "__unnest_placeholder(flags_detail).is_generator" AS is_generator,
-      "__unnest_placeholder(flags_detail).is_nofree" AS is_nofree,
-      "__unnest_placeholder(flags_detail).is_coroutine" AS is_coroutine,
-      "__unnest_placeholder(flags_detail).is_iterable_coroutine" AS is_iterable_coroutine,
-      "__unnest_placeholder(flags_detail).is_async_generator" AS is_async_generator
-    FROM expanded
+      base.file_id AS file_id,
+      base.path AS path,
+      {code_unit_id} AS code_unit_id,
+      {is_optimized} AS is_optimized,
+      {is_newlocals} AS is_newlocals,
+      {has_varargs} AS has_varargs,
+      {has_varkeywords} AS has_varkeywords,
+      {is_nested} AS is_nested,
+      {is_generator} AS is_generator,
+      {is_nofree} AS is_nofree,
+      {is_coroutine} AS is_coroutine,
+      {is_iterable_coroutine} AS is_iterable_coroutine,
+      {is_async_generator} AS is_async_generator
+    FROM base
     """
 
 
@@ -3050,6 +3226,8 @@ def bytecode_error_attrs_sql(table: str = "bytecode_files_v1") -> str:
         SQL fragment text.
     """
     base = nested_base_sql("bytecode_errors", table=table)
+    attr_key = _get_field("kv", "key")
+    attr_value = _get_field("kv", "value")
     return f"""
     WITH base AS ({base})
     SELECT
@@ -3057,12 +3235,12 @@ def bytecode_error_attrs_sql(table: str = "bytecode_files_v1") -> str:
       base.path AS path,
       base.error_type AS error_type,
       base.message AS message,
-      kv['key'] AS attr_key,
-      kv['value'] AS attr_value,
-      {_union_tag("kv['value']")} AS attr_kind,
-      {_union_extract("kv['value']", "int_value")} AS attr_int,
-      {_union_extract("kv['value']", "bool_value")} AS attr_bool,
-      {_union_extract("kv['value']", "str_value")} AS attr_str
+      {attr_key} AS attr_key,
+      {attr_value} AS attr_value,
+      {_union_tag(attr_value)} AS attr_kind,
+      {_union_extract(attr_value, "int_value")} AS attr_int,
+      {_union_extract(attr_value, "bool_value")} AS attr_bool,
+      {_union_extract(attr_value, "str_value")} AS attr_str
     FROM base
     CROSS JOIN unnest(map_entries(base.attrs)) AS kv
     """
@@ -3213,22 +3391,30 @@ def fragment_view_specs(
     """
     excluded = set(exclude or ())
     names = sorted(name for name in _FRAGMENT_SQL_BUILDERS if name not in excluded)
+    schema_map = SchemaIntrospector(ctx).schema_map()
     return tuple(
         view_spec_from_sql(
             ctx,
             name=name,
-            sql=_normalize_fragment_sql(_FRAGMENT_SQL_BUILDERS[name]()),
+            sql=_normalize_fragment_sql(
+                _FRAGMENT_SQL_BUILDERS[name](),
+                schema_map=schema_map,
+            ),
         )
         for name in names
     )
 
 
-def _normalize_fragment_sql(sql: str) -> str:
+def _normalize_fragment_sql(sql: str, *, schema_map: SchemaMapping | None) -> str:
     policy = default_sqlglot_policy()
-    expr = parse_sql_strict(sql, dialect="datafusion")
+    expr = parse_sql_strict(sql, dialect=policy.read_dialect)
     normalized = normalize_expr(
         expr,
-        options=NormalizeExprOptions(policy=policy),
+        options=NormalizeExprOptions(
+            schema=schema_map,
+            policy=policy,
+            sql=sql,
+        ),
     )
     return sqlglot_sql(normalized, policy=policy)
 

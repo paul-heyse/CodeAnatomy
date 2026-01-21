@@ -198,6 +198,7 @@ def _plan_cache_key(
         expr,
         dialect=options.dialect,
         policy_hash=policy_hash,
+        schema_map_hash=options.schema_map_hash,
     )
     return PlanCacheKey(plan_hash=plan_hash, profile_hash=options.profile_hash)
 
@@ -1343,6 +1344,7 @@ def collect_plan_artifacts(
         expr,
         dialect=options.dialect,
         policy_hash=policy_hash,
+        schema_map_hash=options.schema_map_hash,
     )
     return DataFusionPlanArtifacts(
         plan_hash=plan_hash,

@@ -187,9 +187,6 @@ class IbisExprRegistry:
         fn = self.functions.get(name)
         if fn is not None:
             return fn
-        fallback = getattr(ibis, name, None)
-        if callable(fallback):
-            return cast("IbisExprFn", fallback)
         msg = f"Unsupported Ibis function: {name!r}."
         raise KeyError(msg)
 

@@ -7,9 +7,16 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 from datafusion import SessionContext
+from sqlglot import exp
 
 from datafusion_engine.schema_introspection import SchemaIntrospector
-from sqlglot_tools.optimizer import normalize_ddl_sql
+from sqlglot_tools.optimizer import (
+    default_sqlglot_policy,
+    normalize_ddl_sql,
+    parse_sql_strict,
+    register_datafusion_dialect,
+    sqlglot_sql,
+)
 
 
 class ViewSchemaMismatchError(ValueError):
@@ -64,7 +71,16 @@ class ViewSpec:
         str
             SQL statement that creates or replaces the view.
         """
-        ddl = f"CREATE OR REPLACE VIEW {self.name} AS {self.sql}"
+        policy = default_sqlglot_policy()
+        register_datafusion_dialect()
+        query = parse_sql_strict(self.sql, dialect=policy.read_dialect)
+        create_expr = exp.Create(
+            this=exp.Table(this=exp.Identifier(this=self.name)),
+            kind="VIEW",
+            replace=True,
+            expression=query,
+        )
+        ddl = sqlglot_sql(create_expr, policy=policy)
         return normalize_ddl_sql(ddl)
 
     def describe(

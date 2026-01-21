@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from arro3.core.types import ArrowArrayExportable, ArrowStreamExportable
+from datafusion import DataFrameWriteOptions, InsertOp
 from deltalake import CommitProperties, DeltaTable, WriterProperties, write_deltalake
 from deltalake.exceptions import CommitFailedError, DeltaError
 
@@ -149,56 +150,6 @@ def open_delta_table(
     elif timestamp is not None:
         table.load_as_version(timestamp)
     return table
-
-
-def read_table_delta(
-    path: str,
-    *,
-    storage_options: StorageOptions | None = None,
-    version: int | None = None,
-    timestamp: str | None = None,
-) -> TableLike:
-    """Read a Delta table snapshot into an Arrow table.
-
-    Returns
-    -------
-    TableLike
-        Arrow table snapshot of the Delta table.
-    """
-    table = open_delta_table(
-        path,
-        storage_options=storage_options,
-        version=version,
-        timestamp=timestamp,
-    )
-    return table.to_pyarrow_table()
-
-
-def read_delta_cdf(
-    path: str,
-    *,
-    options: DeltaCdfOptions | None = None,
-    storage_options: StorageOptions | None = None,
-) -> TableLike:
-    """Read the Delta change data feed as an Arrow table.
-
-    Returns
-    -------
-    TableLike
-        Arrow table of change data feed records.
-    """
-    options = options or DeltaCdfOptions()
-    table = DeltaTable(path, storage_options=_storage_dict(storage_options))
-    reader = table.load_cdf(
-        starting_version=options.starting_version,
-        ending_version=options.ending_version,
-        starting_timestamp=options.starting_timestamp,
-        ending_timestamp=options.ending_timestamp,
-        columns=options.columns,
-        predicate=options.predicate,
-        allow_out_of_range=options.allow_out_of_range,
-    )
-    return cast("TableLike", reader.read_all())
 
 
 def write_table_delta(
@@ -345,7 +296,10 @@ def write_datafusion_delta(
         Raised when the DataFusion DataFrame is missing write capabilities.
     """
     if not _supports_datafusion_delta_insert(options):
-        msg = "DataFusion Delta inserts only support append without schema or commit options."
+        msg = (
+            "DataFusion Delta inserts only support append/overwrite without schema or commit "
+            "options."
+        )
         raise ValueError(msg)
     if delta_table_version(base_dir, storage_options=storage_options) is None:
         msg = "DataFusion Delta insert requires an existing Delta table."
@@ -363,7 +317,9 @@ def write_datafusion_delta(
         msg = "DataFusion failed to register Delta table provider."
         raise ValueError(msg) from exc
     try:
-        write_table(name)
+        insert_op = _delta_insert_op(options.mode)
+        write_options = DataFrameWriteOptions(insert_operation=insert_op)
+        write_table(name, write_options=write_options)
     finally:
         _deregister_datafusion_table(df, name=name)
     version = delta_table_version(base_dir, storage_options=storage_options)
@@ -927,7 +883,7 @@ def _artifact_path(base: str, suffix: str) -> str:
 
 def _supports_datafusion_delta_insert(options: DeltaWriteOptions) -> bool:
     disallowed = (
-        options.mode != "append",
+        options.mode not in {"append", "overwrite"},
         options.schema_mode is not None,
         options.predicate is not None,
         bool(options.partition_by),
@@ -938,6 +894,15 @@ def _supports_datafusion_delta_insert(options: DeltaWriteOptions) -> bool:
         options.retry_policy is not None,
     )
     return not any(disallowed)
+
+
+def _delta_insert_op(mode: DeltaWriteMode) -> InsertOp:
+    if mode == "append":
+        return InsertOp.APPEND
+    if mode == "overwrite":
+        return InsertOp.OVERWRITE
+    msg = f"Unsupported DataFusion Delta insert mode: {mode!r}."
+    raise ValueError(msg)
 
 
 def _register_datafusion_delta_table(
@@ -997,8 +962,6 @@ __all__ = [
     "delta_table_version",
     "enable_delta_features",
     "open_delta_table",
-    "read_delta_cdf",
-    "read_table_delta",
     "upsert_dataset_partitions_delta",
     "vacuum_delta",
     "write_datafusion_delta",

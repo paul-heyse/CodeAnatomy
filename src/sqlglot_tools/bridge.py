@@ -20,11 +20,10 @@ from sqlglot_tools.optimizer import (
     DEFAULT_WRITE_DIALECT,
     CanonicalizationRules,
     NormalizeExprOptions,
+    SchemaMapping,
     SqlGlotPolicy,
     normalize_expr_with_stats,
 )
-
-SchemaMapping = Mapping[str, Mapping[str, str]]
 
 
 class SqlGlotCompiler(Protocol):

@@ -3,18 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 import ibis
 import pyarrow as pa
-import sqlglot
-from ibis.backends import BaseBackend
 from ibis.expr.types import Table, Value
 from sqlglot import Expression
 from sqlglot.errors import ParseError
+from sqlglot.serde import dump
 
 from ibis_engine.schema_utils import validate_expr_schema
+from sqlglot_tools.optimizer import (
+    NormalizeExprOptions,
+    SchemaMapping,
+    SqlGlotPolicy,
+    default_sqlglot_policy,
+    normalize_expr,
+    parse_sql_strict,
+    sqlglot_policy_snapshot_for,
+    sqlglot_sql,
+)
 
 
 class _SchemaProtocol(Protocol):
@@ -28,7 +37,7 @@ class SqlIngestSpec:
     """Specification for SQL ingestion into Ibis."""
 
     sql: str
-    catalog: BaseBackend | Mapping[str, _SchemaProtocol]
+    catalog: Mapping[str, _SchemaProtocol]
     schema: _SchemaProtocol | None = None
     dialect: str | None = None
     artifacts_hook: Callable[[Mapping[str, object]], None] | None = None
@@ -43,6 +52,10 @@ class SqlIngestArtifacts:
     schema: Mapping[str, str] | None
     dialect: str | None = None
     sqlglot_sql: str | None = None
+    normalized_sql: str | None = None
+    sqlglot_ast: object | None = None
+    sqlglot_policy_hash: str | None = None
+    sqlglot_policy_snapshot: Mapping[str, object] | None = None
 
     def payload(self) -> dict[str, object]:
         """Return a payload for diagnostics.
@@ -58,7 +71,26 @@ class SqlIngestArtifacts:
             "schema": dict(self.schema) if self.schema is not None else None,
             "dialect": self.dialect,
             "sqlglot_sql": self.sqlglot_sql,
+            "normalized_sql": self.normalized_sql,
+            "sqlglot_ast": self.sqlglot_ast,
+            "sqlglot_policy_hash": self.sqlglot_policy_hash,
+            "sqlglot_policy_snapshot": (
+                dict(self.sqlglot_policy_snapshot)
+                if self.sqlglot_policy_snapshot is not None
+                else None
+            ),
         }
+
+
+@dataclass(frozen=True)
+class SqlIngestSqlGlotContext:
+    """SQLGlot metadata captured during SQL ingestion."""
+
+    sqlglot_expr: Expression | None = None
+    normalized_sql: str | None = None
+    policy_hash: str | None = None
+    policy_snapshot: Mapping[str, object] | None = None
+    dialect: str | None = None
 
 
 def parse_sql_table(spec: SqlIngestSpec) -> Table:
@@ -77,19 +109,51 @@ def parse_sql_table(spec: SqlIngestSpec) -> Table:
     if spec.schema is None:
         msg = "SqlIngestSpec.schema is required for SQL ingestion."
         raise ValueError(msg)
-    sqlglot_expr = _parse_sqlglot_expr(spec)
     catalog = _catalog_schemas(spec.catalog)
+    schema_map = _schema_map_from_catalog(catalog)
+    policy = _sqlglot_policy_for_spec(spec)
+    policy_snapshot = sqlglot_policy_snapshot_for(policy)
+    policy_hash = policy_snapshot.policy_hash
+    context = SqlIngestSqlGlotContext(
+        policy_hash=policy_hash,
+        policy_snapshot=policy_snapshot.payload(),
+        dialect=policy.write_dialect,
+    )
     try:
-        expr = ibis.parse_sql(spec.sql, catalog, dialect=spec.dialect)
+        normalized_expr = _normalize_ingest_expr(
+            spec.sql,
+            schema_map=schema_map,
+            policy=policy,
+        )
+    except (ParseError, TypeError, ValueError) as exc:
+        _emit_sql_ingest_failure(
+            spec,
+            error=exc,
+            context=context,
+        )
+        msg = f"SQLGlot normalization failed: {exc}"
+        raise ValueError(msg) from exc
+    normalized_sql = sqlglot_sql(normalized_expr, policy=policy)
+    context = replace(context, sqlglot_expr=normalized_expr, normalized_sql=normalized_sql)
+    try:
+        expr = ibis.parse_sql(normalized_sql, catalog, dialect=policy.write_dialect)
     except (TypeError, ValueError) as exc:
-        _emit_sql_ingest_failure(spec, error=exc, sqlglot_expr=sqlglot_expr)
+        _emit_sql_ingest_failure(
+            spec,
+            error=exc,
+            context=context,
+        )
         msg = f"SQL ingestion failed: {exc}"
         raise ValueError(msg) from exc
     expected = spec.schema.to_pyarrow()
     try:
         validate_expr_schema(expr, expected=expected)
     except ValueError as exc:
-        _emit_sql_ingest_failure(spec, error=exc, sqlglot_expr=sqlglot_expr)
+        _emit_sql_ingest_failure(
+            spec,
+            error=exc,
+            context=context,
+        )
         msg = f"SQL ingestion schema mismatch: {exc}"
         raise ValueError(msg) from exc
     if spec.artifacts_hook is not None:
@@ -97,54 +161,77 @@ def parse_sql_table(spec: SqlIngestSpec) -> Table:
             sql_ingest_artifacts(
                 spec.sql,
                 expr=expr,
-                sqlglot_expr=sqlglot_expr,
-                dialect=spec.dialect,
+                context=context,
             ).payload()
         )
     return expr
 
 
 def _catalog_schemas(
-    catalog: BaseBackend | Mapping[str, _SchemaProtocol],
+    catalog: Mapping[str, _SchemaProtocol],
 ) -> Mapping[str, _SchemaProtocol]:
     if isinstance(catalog, Mapping):
         return catalog
-    if not isinstance(catalog, BaseBackend):
-        msg = "SQL ingestion catalog must be an Ibis backend or schema mapping."
-        raise TypeError(msg)
-    schemas: dict[str, _SchemaProtocol] = {}
-    for name in catalog.list_tables():
-        table = catalog.table(name)
-        schemas[name] = table.schema()
-    return schemas
+    msg = "SQL ingestion catalog must be a mapping of table schemas."
+    raise TypeError(msg)
 
 
-def _parse_sqlglot_expr(spec: SqlIngestSpec) -> Expression | None:
-    if spec.artifacts_hook is None:
-        return None
-    try:
-        return sqlglot.parse_one(spec.sql, read=spec.dialect)
-    except (ParseError, ValueError, TypeError) as exc:
-        _emit_sql_ingest_failure(spec, error=exc, sqlglot_expr=None)
-        msg = f"SQLGlot parse failed: {exc}"
-        raise ValueError(msg) from exc
+def _normalize_ingest_expr(
+    sql: str,
+    *,
+    schema_map: SchemaMapping,
+    policy: SqlGlotPolicy,
+) -> Expression:
+    expr = parse_sql_strict(sql, dialect=policy.read_dialect, error_level=policy.error_level)
+    return normalize_expr(
+        expr,
+        options=NormalizeExprOptions(
+            schema=schema_map,
+            policy=policy,
+            sql=sql,
+        ),
+    )
 
 
 def _emit_sql_ingest_failure(
     spec: SqlIngestSpec,
     *,
     error: Exception,
-    sqlglot_expr: Expression | None,
+    context: SqlIngestSqlGlotContext,
 ) -> None:
     if spec.artifacts_hook is None:
         return
+    dialect = context.dialect or spec.dialect
     payload = {
         "sql": spec.sql,
         "dialect": spec.dialect,
         "error": str(error),
-        "sqlglot_sql": _sql_text(sqlglot_expr, dialect=spec.dialect),
+        "sqlglot_sql": _sql_text(context.sqlglot_expr, dialect=dialect),
+        "normalized_sql": context.normalized_sql,
+        "sqlglot_ast": _sqlglot_ast_payload(context.sqlglot_expr),
+        "sqlglot_policy_hash": context.policy_hash,
+        "sqlglot_policy_snapshot": (
+            dict(context.policy_snapshot) if context.policy_snapshot is not None else None
+        ),
     }
     spec.artifacts_hook(payload)
+
+
+def _schema_map_from_catalog(
+    catalog: Mapping[str, _SchemaProtocol],
+) -> Mapping[str, Mapping[str, str]]:
+    mapping: dict[str, dict[str, str]] = {}
+    for name, schema in catalog.items():
+        arrow_schema = schema.to_pyarrow()
+        mapping[name] = {field.name: str(field.type) for field in arrow_schema}
+    return mapping
+
+
+def _sqlglot_policy_for_spec(spec: SqlIngestSpec) -> SqlGlotPolicy:
+    policy = default_sqlglot_policy()
+    if spec.dialect is None:
+        return policy
+    return replace(policy, read_dialect=spec.dialect, write_dialect=spec.dialect)
 
 
 def decompile_expr(expr: Table | Value) -> str:
@@ -162,8 +249,7 @@ def sql_ingest_artifacts(
     sql: str,
     *,
     expr: Table | Value,
-    sqlglot_expr: Expression | None = None,
-    dialect: str | None = None,
+    context: SqlIngestSqlGlotContext | None = None,
 ) -> SqlIngestArtifacts:
     """Return round-trip artifacts for SQL ingestion.
 
@@ -177,12 +263,17 @@ def sql_ingest_artifacts(
     if isinstance(expr, Table):
         expr_schema = expr.schema().to_pyarrow()
         schema = {field.name: str(field.type) for field in expr_schema}
+    context = context or SqlIngestSqlGlotContext()
     return SqlIngestArtifacts(
         sql=sql,
         decompiled_sql=decompiled_sql,
         schema=schema,
-        dialect=dialect,
-        sqlglot_sql=_sql_text(sqlglot_expr, dialect=dialect),
+        dialect=context.dialect,
+        sqlglot_sql=_sql_text(context.sqlglot_expr, dialect=context.dialect),
+        normalized_sql=context.normalized_sql,
+        sqlglot_ast=_sqlglot_ast_payload(context.sqlglot_expr),
+        sqlglot_policy_hash=context.policy_hash,
+        sqlglot_policy_snapshot=context.policy_snapshot,
     )
 
 
@@ -193,6 +284,15 @@ def _sql_text(expr: Expression | None, *, dialect: str | None) -> str | None:
         return expr.sql(dialect=dialect)
     except (TypeError, ValueError):
         return str(expr)
+
+
+def _sqlglot_ast_payload(expr: Expression | None) -> object | None:
+    if expr is None:
+        return None
+    try:
+        return dump(expr)
+    except (TypeError, ValueError):
+        return None
 
 
 __all__ = [

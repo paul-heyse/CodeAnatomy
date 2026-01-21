@@ -160,6 +160,7 @@ _EXECUTION_SCHEMA = pa.struct(
 _SQL_SURFACES_SCHEMA = pa.struct(
     [
         pa.field("enable_information_schema", pa.bool_()),
+        pa.field("enable_ident_normalization", pa.bool_()),
         pa.field("enable_url_table", pa.bool_()),
         pa.field("sql_parser_dialect", pa.string()),
         pa.field("ansi_mode", pa.bool_()),
@@ -563,7 +564,6 @@ class AdapterExecutionPolicy:
     """Execution policy for adapterized execution handling."""
 
 
-
 @dataclass(frozen=True)
 class ExecutionLabel:
     """Execution label for rule-scoped diagnostics."""
@@ -900,6 +900,17 @@ def _apply_catalog_autoload(
     return config
 
 
+def _apply_identifier_settings(
+    config: SessionConfig,
+    *,
+    enable_ident_normalization: bool,
+) -> SessionConfig:
+    return config.set(
+        "datafusion.sql_parser.enable_ident_normalization",
+        str(enable_ident_normalization).lower(),
+    )
+
+
 def _apply_schema_hardening(
     config: SessionConfig,
     schema_hardening: SchemaHardeningProfile | None,
@@ -1063,45 +1074,6 @@ def _stable_repr(value: object) -> str:
     return repr(value)
 
 
-def _function_catalog_sort_key(row: Mapping[str, object]) -> tuple[str, str]:
-    name = row.get("function_name")
-    func_name = str(name) if name is not None else ""
-    func_type = row.get("function_type")
-    return func_name, str(func_type) if func_type is not None else ""
-
-
-def _information_schema_routines(ctx: SessionContext) -> list[dict[str, object]]:
-    try:
-        table = ctx.sql("SELECT * FROM information_schema.routines").to_arrow_table()
-    except (RuntimeError, TypeError, ValueError):
-        return []
-    rows: list[dict[str, object]] = []
-    for row in table.to_pylist():
-        payload = dict(row)
-        if "routine_name" in payload and "function_name" not in payload:
-            payload["function_name"] = payload["routine_name"]
-        if "routine_type" in payload and "function_type" not in payload:
-            payload["function_type"] = payload["routine_type"]
-        payload.setdefault("source", "information_schema")
-        rows.append(payload)
-    return rows
-
-
-def _information_schema_parameters(ctx: SessionContext) -> list[dict[str, object]]:
-    try:
-        table = ctx.sql("SELECT * FROM information_schema.parameters").to_arrow_table()
-    except (RuntimeError, TypeError, ValueError):
-        return []
-    rows: list[dict[str, object]] = []
-    for row in table.to_pylist():
-        payload = dict(row)
-        if "routine_name" in payload and "function_name" not in payload:
-            payload["function_name"] = payload["routine_name"]
-        payload.setdefault("source", "information_schema")
-        rows.append(payload)
-    return rows
-
-
 def _datafusion_version(ctx: SessionContext) -> str | None:
     try:
         table = ctx.sql("SELECT version() AS version").to_arrow_table()
@@ -1116,17 +1088,10 @@ def _datafusion_version(ctx: SessionContext) -> str | None:
 
 def _datafusion_function_names(ctx: SessionContext) -> set[str]:
     try:
-        table = ctx.sql(
-            "SELECT routine_name FROM information_schema.routines WHERE routine_type = 'FUNCTION'"
-        ).to_arrow_table()
+        names = SchemaIntrospector(ctx).function_names()
     except (RuntimeError, TypeError, ValueError):
         return set()
-    names: set[str] = set()
-    for row in table.to_pylist():
-        value = row.get("routine_name")
-        if isinstance(value, str):
-            names.add(value.lower())
-    return names
+    return {name.lower() for name in names}
 
 
 def _default_value_entries(schema: pa.Schema) -> list[dict[str, str]]:
@@ -1478,6 +1443,7 @@ class DataFusionRuntimeProfile:
     bytecode_delta_scan: DeltaScanOptions | None = None
     scip_dataset_locations: Mapping[str, DatasetLocation] = field(default_factory=dict)
     enable_information_schema: bool = True
+    enable_ident_normalization: bool = False
     enable_url_table: bool = False  # Dev-only convenience for file-path queries.
     cache_enabled: bool = False
     cache_max_columns: int | None = 64
@@ -1552,6 +1518,10 @@ class DataFusionRuntimeProfile:
         )
         config = config.with_create_default_catalog_and_schema(enabled=True)
         config = config.with_information_schema(self.enable_information_schema)
+        config = _apply_identifier_settings(
+            config,
+            enable_ident_normalization=self.enable_ident_normalization,
+        )
         config = _apply_optional_int_config(
             config,
             method="with_target_partitions",
@@ -2195,10 +2165,7 @@ class DataFusionRuntimeProfile:
         if not self.enable_information_schema:
             return
         try:
-            ctx.sql(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'ast_files_v1' LIMIT 1"
-            ).collect()
+            SchemaIntrospector(ctx).table_column_names("ast_files_v1")
         except (RuntimeError, TypeError, ValueError) as exc:
             msg = f"AST catalog column introspection failed: {exc}."
             raise ValueError(msg) from exc
@@ -2214,10 +2181,7 @@ class DataFusionRuntimeProfile:
         if not self.enable_information_schema:
             return
         try:
-            ctx.sql(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'bytecode_files_v1' LIMIT 1"
-            ).collect()
+            SchemaIntrospector(ctx).table_column_names("bytecode_files_v1")
         except (RuntimeError, TypeError, ValueError) as exc:
             msg = f"Bytecode catalog column introspection failed: {exc}."
             raise ValueError(msg) from exc
@@ -3053,8 +3017,7 @@ class DataFusionRuntimeProfile:
         pyarrow.Table
             Table of settings from information_schema.df_settings.
         """
-        query = "SELECT name, value FROM information_schema.df_settings"
-        return ctx.sql(query).to_arrow_table()
+        return SchemaIntrospector(ctx).settings_snapshot_table()
 
     @staticmethod
     def catalog_snapshot(ctx: SessionContext) -> pa.Table:
@@ -3065,11 +3028,7 @@ class DataFusionRuntimeProfile:
         pyarrow.Table
             Table inventory from information_schema.tables.
         """
-        query = (
-            "SELECT table_catalog, table_schema, table_name, table_type "
-            "FROM information_schema.tables"
-        )
-        return ctx.sql(query).to_arrow_table()
+        return SchemaIntrospector(ctx).tables_snapshot_table()
 
     @staticmethod
     def function_catalog_snapshot(
@@ -3091,10 +3050,9 @@ class DataFusionRuntimeProfile:
         list[dict[str, object]]
             Sorted function catalog entries from ``information_schema``.
         """
-        rows = _information_schema_routines(ctx)
-        if include_routines:
-            rows.extend(_information_schema_parameters(ctx))
-        return sorted(rows, key=_function_catalog_sort_key)
+        return SchemaIntrospector(ctx).function_catalog_snapshot(
+            include_parameters=include_routines,
+        )
 
     def settings_payload(self) -> dict[str, str]:
         """Return resolved settings applied to DataFusion SessionConfig.
@@ -3111,6 +3069,9 @@ class DataFusionRuntimeProfile:
         resolved_schema_hardening = self._resolved_schema_hardening()
         if resolved_schema_hardening is not None:
             payload.update(resolved_schema_hardening.settings())
+        payload["datafusion.sql_parser.enable_ident_normalization"] = str(
+            self.enable_ident_normalization
+        ).lower()
         if self.settings_overrides:
             payload.update({str(key): str(value) for key, value in self.settings_overrides.items()})
         catalog_location, catalog_format = self._effective_catalog_autoload()
@@ -3164,6 +3125,7 @@ class DataFusionRuntimeProfile:
             "memory_limit_bytes": self.memory_limit_bytes,
             "default_catalog": self.default_catalog,
             "default_schema": self.default_schema,
+            "enable_ident_normalization": self.enable_ident_normalization,
             "catalog_auto_load_location": self.catalog_auto_load_location,
             "catalog_auto_load_format": self.catalog_auto_load_format,
             "ast_catalog_location": self.ast_catalog_location,
@@ -3337,6 +3299,7 @@ class DataFusionRuntimeProfile:
             },
             "sql_surfaces": {
                 "enable_information_schema": self.enable_information_schema,
+                "enable_ident_normalization": self.enable_ident_normalization,
                 "enable_url_table": self.enable_url_table,
                 "sql_parser_dialect": parser_dialect,
                 "ansi_mode": ansi_mode,
@@ -3458,6 +3421,7 @@ class DataFusionRuntimeProfile:
             },
             "sql_surfaces": {
                 "enable_information_schema": self.enable_information_schema,
+                "enable_ident_normalization": self.enable_ident_normalization,
                 "enable_url_table": self.enable_url_table,
                 "sql_parser_dialect": parser_dialect,
                 "ansi_mode": ansi_mode,
@@ -3709,6 +3673,41 @@ def dataset_schema_from_context(name: str) -> SchemaLike:
         raise KeyError(msg) from exc
 
 
+def read_delta_table_from_path(
+    path: str,
+    *,
+    storage_options: Mapping[str, str] | None = None,
+    delta_scan: DeltaScanOptions | None = None,
+) -> pa.Table:
+    """Return a Delta table snapshot using DataFusion providers.
+
+    Returns
+    -------
+    pyarrow.Table
+        Arrow table read via DataFusion's Delta table provider.
+    """
+    runtime = DataFusionRuntimeProfile()
+    ctx = runtime.session_context()
+    temp_name = f"__delta_read_{uuid.uuid4().hex}"
+    location = DatasetLocation(
+        path=path,
+        format="delta",
+        storage_options=dict(storage_options or {}),
+        delta_scan=delta_scan,
+    )
+    df = register_dataset_df(
+        ctx,
+        name=temp_name,
+        location=location,
+        cache_policy=None,
+        runtime_profile=runtime,
+    )
+    try:
+        return df.to_arrow_table()
+    finally:
+        _deregister_table(ctx, name=temp_name)
+
+
 def dataset_spec_from_context(name: str) -> DatasetSpec:
     """Return a DatasetSpec derived from the DataFusion schema.
 
@@ -3752,6 +3751,7 @@ __all__ = [
     "dataset_spec_from_context",
     "diagnostics_arrow_ingest_hook",
     "feature_state_snapshot",
+    "read_delta_table_from_path",
     "register_view_specs",
     "snapshot_plans",
 ]

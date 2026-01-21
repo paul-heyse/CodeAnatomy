@@ -18,7 +18,7 @@ from arrowdsl.core.interop import TableLike
 from arrowdsl.schema.build import table_from_arrays
 from arrowdsl.schema.schema import empty_table
 from datafusion_engine.registry_bridge import DeltaCdfRegistrationOptions, register_delta_cdf_df
-from datafusion_engine.runtime import DataFusionRuntimeProfile
+from datafusion_engine.runtime import DataFusionRuntimeProfile, read_delta_table_from_path
 from hamilton_pipeline.pipeline_types import (
     IncrementalDatasetUpdates,
     IncrementalImpactUpdates,
@@ -70,7 +70,7 @@ from incremental.snapshot import build_repo_snapshot, read_repo_snapshot, write_
 from incremental.state_store import StateStore
 from incremental.types import IncrementalConfig, IncrementalFileChanges, IncrementalImpact
 from relspec.schema_context import RelspecSchemaContext
-from storage.deltalake import DeltaCdfOptions, delta_table_version, read_table_delta
+from storage.deltalake import DeltaCdfOptions, delta_table_version
 
 
 @dataclass(frozen=True)
@@ -274,7 +274,7 @@ def incremental_exported_defs(
     if incremental_state_store is not None:
         rel_def_dir = incremental_state_store.dataset_dir("rel_def_symbol_v1")
         if rel_def_dir.exists():
-            rel_def_symbol = read_table_delta(str(rel_def_dir))
+            rel_def_symbol = read_delta_table_from_path(str(rel_def_dir))
     return build_exported_defs_index(
         cst_defs_norm,
         backend=ibis_backend,

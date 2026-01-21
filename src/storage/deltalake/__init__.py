@@ -32,8 +32,6 @@ __all__ = (
     "delta_write_configuration",
     "enable_delta_features",
     "open_delta_table",
-    "read_delta_cdf",
-    "read_table_delta",
     "upsert_dataset_partitions_delta",
     "vacuum_delta",
     "write_datafusion_delta",
@@ -70,8 +68,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "delta_table_version": ("storage.deltalake.delta", "delta_table_version"),
     "enable_delta_features": ("storage.deltalake.delta", "enable_delta_features"),
     "open_delta_table": ("storage.deltalake.delta", "open_delta_table"),
-    "read_delta_cdf": ("storage.deltalake.delta", "read_delta_cdf"),
-    "read_table_delta": ("storage.deltalake.delta", "read_table_delta"),
     "upsert_dataset_partitions_delta": (
         "storage.deltalake.delta",
         "upsert_dataset_partitions_delta",
@@ -114,8 +110,6 @@ if TYPE_CHECKING:
     delta_table_version = _delta_io.delta_table_version
     enable_delta_features = _delta_io.enable_delta_features
     open_delta_table = _delta_io.open_delta_table
-    read_delta_cdf = _delta_io.read_delta_cdf
-    read_table_delta = _delta_io.read_table_delta
     upsert_dataset_partitions_delta = _delta_io.upsert_dataset_partitions_delta
     vacuum_delta = _delta_io.vacuum_delta
     write_dataset_delta = _delta_io.write_dataset_delta

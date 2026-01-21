@@ -8,18 +8,14 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
-from deltalake import DeltaTable
 
-from arrowdsl.schema.union_codec import decode_union_table, schema_has_union_encoding
 from core_types import PathLike, ensure_path
 from datafusion_engine.registry_bridge import DataFusionCachePolicy, register_dataset_df
 from datafusion_engine.runtime import DataFusionRuntimeProfile
 from ibis_engine.registry import DatasetLocation
 from schema_spec.system import DataFusionScanOptions, DeltaScanOptions
-from storage.deltalake.delta import read_table_delta
 
 RegistryTarget = Literal["cpg", "relspec"]
 
@@ -33,7 +29,6 @@ class RegistryLoadOptions:
     runtime_profile: DataFusionRuntimeProfile | None = None
     storage_options: Mapping[str, str] | None = None
     cache: bool = True
-    decode_unions: bool = True
 
 
 def registry_output_dir(output_dir: PathLike, *, target: RegistryTarget) -> Path:
@@ -93,14 +88,6 @@ def register_registry_delta_tables(
         name = _registry_table_name(target, table_name)
         with suppress(KeyError, ValueError):
             ctx.deregister_table(name)
-        if resolved.decode_unions and _delta_schema_has_union_encoding(
-            path,
-            resolved.storage_options,
-        ):
-            decoded = _read_union_encoded_table(path, resolved.storage_options)
-            ctx.register_record_batches(name, [decoded.to_batches()])
-            registered[name] = ctx.table(name)
-            continue
         location = DatasetLocation(
             path=str(path),
             format="delta",
@@ -171,36 +158,6 @@ def _resolve_scan_options(
     if scan.cache:
         return scan
     return replace(scan, cache=True)
-
-
-def _delta_schema_has_union_encoding(
-    path: Path,
-    storage_options: Mapping[str, str] | None,
-) -> bool:
-    storage = dict(storage_options or {})
-    options = storage if storage else None
-    table = DeltaTable(str(path), storage_options=options)
-    schema = table.schema().to_arrow()
-    if isinstance(schema, pa.Schema):
-        return schema_has_union_encoding(schema)
-    msg = "Delta schema must resolve to a pyarrow.Schema."
-    raise TypeError(msg)
-
-
-def _read_union_encoded_table(
-    path: Path,
-    storage_options: Mapping[str, str] | None,
-) -> pa.Table:
-    table = read_table_delta(str(path), storage_options=storage_options)
-    arrow_table = _ensure_pyarrow_table(table)
-    return decode_union_table(arrow_table)
-
-
-def _ensure_pyarrow_table(value: object) -> pa.Table:
-    if isinstance(value, pa.Table):
-        return value
-    msg = f"Delta read expected pyarrow.Table, got {type(value)}"
-    raise TypeError(msg)
 
 
 def _register_location(

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import replace
 from typing import cast
 
@@ -16,12 +15,11 @@ from ibis_engine.registry import datafusion_context
 from sqlglot_tools.bridge import IbisCompilerBackend, ibis_to_sqlglot
 from sqlglot_tools.optimizer import (
     NormalizeExprOptions,
+    SchemaMapping,
     SqlGlotPolicy,
     default_sqlglot_policy,
     normalize_expr,
 )
-
-SchemaMapping = Mapping[str, Mapping[str, str]]
 
 
 def required_columns_by_table(
